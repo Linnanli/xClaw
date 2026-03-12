@@ -7,12 +7,13 @@ set -euo pipefail
 # Only run the check if relevant files are staged
 STAGED=$(git diff --cached --name-only)
 
-NEEDS_CHECK=false
+# 1. Version bump checks (specific paths)
+NEEDS_BUMP_CHECK=false
 if echo "$STAGED" | grep -qE '^wit/|^channels-src/|^tools-src/'; then
-    NEEDS_CHECK=true
+    NEEDS_BUMP_CHECK=true
 fi
 
-if $NEEDS_CHECK; then
+if $NEEDS_BUMP_CHECK; then
     echo "pre-commit: checking version bumps..."
     if ! ./scripts/check-version-bumps.sh; then
         echo ""
@@ -20,5 +21,23 @@ if $NEEDS_CHECK; then
         echo "Bump versions in the relevant registry JSON and/or WIT package declaration."
         echo "To bypass: git commit --no-verify"
         exit 1
+    fi
+fi
+
+# 2. Safety and quality checks (for all .rs files)
+if echo "$STAGED" | grep -qE '\.rs$'; then
+    echo "pre-commit: running safety checks..."
+    if ! bash scripts/pre-commit-safety.sh; then
+        echo "pre-commit: safety checks failed. Please fix before committing."
+        exit 1
+    fi
+
+    # Optional: Fast architecture boundary check
+    if [ -f scripts/check-boundaries.sh ]; then
+        echo "pre-commit: checking architecture boundaries..."
+        if ! bash scripts/check-boundaries.sh; then
+            echo "pre-commit: boundary violations found."
+            exit 1
+        fi
     fi
 fi
