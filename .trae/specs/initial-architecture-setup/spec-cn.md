@@ -1,48 +1,47 @@
 # 初始架构设置规范
 
 ## 为什么
-为了实现 `governance/architecture.md` 中定义的治理架构，将关注点分离到不同的模块中，以提高安全性、可维护性和可扩展性。管理后台需要严格分离（独立仓库）以进行安全审计和访问控制。
+为了实现 `governance/architecture.md` 中定义的治理架构，我们需要建立一个全功能的开发基础，而不仅仅是目录结构。这包括初始化项目配置文件、依赖管理、以及核心模块的代码骨架。这将确保开发团队可以直接开始业务逻辑的编写，而无需纠结于基础构建配置。
 
 ## 变更内容
-- 创建反映架构图的模块化项目结构
-- **管理后台**：在 `admin-backend/` 中初始化为 git 子模块
-- **客户端终端**：在 `client/` 中设置 Tauri 应用程序结构
-- **执行环境**：在 `execution-env/` 中创建服务结构
-- **安全微内核**：在 `client/src-tauri/src/kernel/` 中实现核心 Rust 模块
+- **项目根目录**：初始化为 Monorepo 结构（如果适用）或多语言混合项目根。
+- **管理后台 (`admin-backend/`)**：初始化为 Node.js/TypeScript 服务集合（模拟微服务结构），包含基础的 HTTP 服务入口。
+- **客户端终端 (`client/`)**：初始化为标准的 Tauri (Rust + Vue) 项目。
+    - **UI 层**：建立 Vue 组件基本路由和页面骨架。
+    - **安全微内核**：建立 Rust `kernel` 模块，并生成 `mod.rs` 及对应子模块的结构体定义。
+- **执行环境 (`execution-env/`)**：初始化 Python 环境，用于 LLM 和 MCP 桥接。
 
 ## 影响
-- **新目录**：`client/`, `admin-backend/`, `execution-env/`
-- **新配置**：`.gitmodules` 用于管理后台
-- **影响的规范**：无（初始设置）
+- **新文件**：`package.json`, `Cargo.toml`, `tsconfig.json`, `requirements.txt` 以及各个模块的入口文件（`main.rs`, `index.ts`, `main.py`）。
+- **环境要求**：需要 Node.js, Rust (Cargo), Python 环境。
 
 ## 新增需求
 
-### 需求：管理后台子模块
-系统应将管理后台代码组织在单独的 git 仓库中，并将其作为子模块包含在 `admin-backend/` 中
+### 需求：管理后台服务骨架
+系统应在 `admin-backend/` 中初始化各子系统的服务入口：
+- **技术栈**：Node.js + TypeScript (基础 Express 或类似结构)
 - **组件**：
-    - `audit-center/`：日志同步、对账引擎、审计仓库
-    - `sec-pipeline/`：供应链扫描、静态代码审计、国密签名机
-    - `iam/`：身份访问管理
-    - `store-svr/`：技能商店服务器
-    - `policy-engine/`：策略管理
+    - `audit-center/`：创建 `src/index.ts`，包含日志接收接口存根。
+    - `sec-pipeline/`：创建 `src/index.ts`，包含扫描任务触发接口存根。
+    - `iam/`：创建 `src/index.ts`，包含登录/鉴权接口存根。
+    - `store-svr/`：创建 `src/index.ts`，包含插件列表接口存根。
+    - `policy-engine/`：创建 `src/index.ts`，包含策略下发接口存根。
 
-### 需求：客户端终端结构
-系统应将客户端终端组织为位于 `client/` 的 Tauri 应用程序
+### 需求：客户端终端工程化
+系统应初始化 `client/` 为可运行的 Tauri 应用：
+- **技术栈**：Tauri v2 (Rust) + Vue (TypeScript) + Vite
 - **UI 层 (`client/src/`)**：
-    - `login/`：登录界面
-    - `chat/`：聊天界面
-    - `store/`：商店界面
-    - `approval/`：审批弹窗
+    - 配置 Vue Router。
+    - 创建 `pages/Login.vue`, `pages/Chat.vue`, `pages/Store.vue`, `components/ApprovalModal.vue` 及其基础布局。
 - **安全微内核 (`client/src-tauri/src/kernel/`)**：
-    - `validator/`：SM2 签名验证器
-    - `dlp-engine/`：数据防泄漏引擎
-    - `wasm-box/`：WASM 运行时沙箱
-    - `audit-proxy/`：离线审计代理
-    - `sync-manager/`：断点续传管理器
+    - 创建 `mod.rs` 暴露内核模块。
+    - 实现 `validator.rs`, `dlp_engine.rs`, `wasm_box.rs`, `audit_proxy.rs`, `sync_manager.rs` 的基础 `struct` 和 `impl`（空方法）。
+    - 在 `main.rs` 中注册这些模块或命令。
 
-### 需求：执行环境结构
-系统应将执行环境组织在 `execution-env/` 中
+### 需求：执行环境脚本骨架
+系统应在 `execution-env/` 中初始化 Python 项目：
+- **技术栈**：Python 3.10+
 - **组件**：
-    - `mcp-bridge/`：MCP 协议网桥
-    - `llm-gateway/`：模型代理和本地 LLM 接口
-    - `openclaw-skills/`：生态系统插件
+    - `mcp-bridge/`：创建 `main.py`，模拟 MCP 协议处理循环。
+    - `llm-gateway/`：创建 `server.py`，模拟 LLM 接口转发。
+    - `openclaw-skills/`：创建标准插件目录结构和 `manifest.json` 模板。

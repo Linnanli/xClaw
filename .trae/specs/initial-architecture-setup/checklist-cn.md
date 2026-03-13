@@ -1,8 +1,21 @@
 # 检查清单
 
-- [ ] 管理后台是独立的子模块仓库
-- [ ] 管理后台目录（`audit-center/`, `sec-pipeline/`, `iam/`, `store-svr/`, `policy-engine/`）存在于 `admin-backend/` 中
-- [ ] 客户端终端目录（`src-tauri/`, `src/`）存在于 `client/` 中
-- [ ] UI 层模块（`login/`, `chat/`, `store/`, `approval/`）存在于 `client/src/` 中
-- [ ] 安全微内核模块（`validator/`, `dlp-engine/`, `wasm-box/`, `audit-proxy/`, `sync-manager/`）存在于 `client/src-tauri/src/kernel/` 中
-- [ ] 执行环境目录（`mcp-bridge/`, `llm-gateway/`, `openclaw-skills/`）存在于 `execution-env/` 中
+- [ ] 项目根目录已初始化，包含 `.gitignore` 和基础说明文档
+- [ ] **管理后台** (`admin-backend/`)：
+  - [ ] `package.json` 存在且配置正确
+  - [ ] `src/index.ts` 存在于所有子模块 (`audit-center`, `sec-pipeline`, `iam`, `store-svr`, `policy-engine`)
+  - [ ] 每个子模块均能独立编译通过 (tsc)
+- [ ] **客户端终端** (`client/`)：
+  - [ ] `src-tauri/Cargo.toml` 包含正确的依赖
+  - [ ] `npm run tauri dev` 可以成功启动应用
+  - [ ] **UI 层**：
+    - [ ] 首页能正常渲染 Vue 组件
+    - [ ] `Login`, `Chat`, `Store` 页面路由跳转正常
+  - [ ] **Rust 内核层**：
+    - [ ] `kernel` 模块被 `main.rs` 引用
+    - [ ] `validator`, `dlp_engine`, `wasm_box`, `audit_proxy`, `sync_manager` 的 `mod.rs` 和实现文件均存在
+    - [ ] `cargo check` 无错误
+- [ ] **执行环境** (`execution-env/`)：
+  - [ ] `requirements.txt` 或环境说明文件存在
+  - [ ] `mcp-bridge/main.py` 可执行 (无语法错误)
+  - [ ] `llm-gateway/server.py` 可启动 (监听端口或打印日志)
