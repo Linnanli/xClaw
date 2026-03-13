@@ -13,7 +13,7 @@ graph TD
             Signer[国密签名机: SM2 私钥签名]
         end
         
-        IAM[身份管理: MVP(P2: SSO/UKey)]
+        IAM[身份管理: MVP（P2: SSO/UKey）]
         StoreSvr[企业 Skills 商店: 插件版本管理]
         PolicyEngine[策略引擎: RBAC权限/DLP词库]
         
