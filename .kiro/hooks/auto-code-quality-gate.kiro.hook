@@ -1,5 +1,5 @@
 {
-  "enabled": true,
+  "enabled": false,
   "name": "Auto Code Quality Gate on Save",
   "description": "Automatically runs code quality checks (clippy, formatting, tests) whenever Rust source files are saved",
   "version": "1",

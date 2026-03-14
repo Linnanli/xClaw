@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IronClaw Desktop</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked@17.0.2/lib/marked.umd.min.js"></script>
+</head>
+<body>
+  <!-- Auth Screen -->
+  <div id="auth-screen">
+    <div class="auth-card-login">
+      <div class="auth-brand">
+        <h1>IronClaw</h1>
+        <p class="auth-tagline">Secure AI Assistant</p>
+      </div>
+      <div class="auth-form">
+        <label for="master-password">Master Password</label>
+        <input type="password" id="master-password" placeholder="Enter your master password" autofocus>
+        <button onclick="authenticateDesktop()">Unlock</button>
+      </div>
+      <div id="auth-error"></div>
+      <p class="auth-hint">Enter your master password to unlock the application.</p>
+    </div>
+  </div>
+
+  <!-- Main App (hidden until authenticated) -->
+  <div id="app" style="display: none;">
+    <!-- Tab Bar -->
+    <div class="tab-bar">
+      <button class="active" data-tab="chat">Chat</button>
+      <button data-tab="memory">Memory</button>
+      <button data-tab="jobs">Jobs</button>
+      <button data-tab="routines">Routines</button>
+      <button data-tab="extensions">Extensions</button>
+      <button data-tab="skills">Skills</button>
+      <div class="spacer"></div>
+      <button class="status-logs-btn" data-tab="logs" title="Logs">Logs</button>
+      <div class="status" id="gateway-status-trigger">
+        <div class="dot" id="sse-dot"></div>
+        <span id="sse-status">Connected</span>
+      </div>
+    </div>
+
+    <!-- Chat Tab -->
+    <div class="tab-panel active" id="tab-chat">
+      <div class="thread-sidebar" id="thread-sidebar">
+        <div class="thread-sidebar-header">
+          <button class="thread-new-btn" onclick="createNewThread()" title="New thread">+</button>
+          <div class="spacer"></div>
+          <button class="thread-toggle-btn" id="thread-toggle-btn" onclick="toggleThreadSidebar()">&laquo;</button>
+        </div>
+        <div class="assistant-item" id="assistant-thread" onclick="switchToAssistant()">
+          <span class="assistant-label">Assistant</span>
+          <span class="assistant-meta" id="assistant-meta"></span>
+        </div>
+        <div class="threads-section-header">
+          <span>Conversations</span>
+        </div>
+        <div class="thread-list" id="thread-list"></div>
+      </div>
+      <div class="chat-container">
+        <div class="chat-messages" id="chat-messages"></div>
+        <div id="slash-autocomplete" class="slash-autocomplete" style="display:none"></div>
+        <div class="chat-input">
+          <div id="image-preview-strip" class="image-preview-strip"></div>
+          <textarea id="chat-input" placeholder="Message or / for commands..." rows="1"></textarea>
+          <input type="file" id="image-file-input" accept="image/*" multiple style="display:none">
+          <button id="attach-btn" class="attach-btn" title="Attach images">📎</button>
+          <button id="send-btn" onclick="sendMessage()">Send</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Approval Modal -->
+    <div id="approval-modal" class="approval-modal" style="display: none;">
+      <div class="approval-modal-overlay" onclick="closeApprovalModal()"></div>
+      <div class="approval-modal-content">
+        <div class="approval-modal-header">
+          <h2>Sensitive Operation Approval</h2>
+          <button class="approval-modal-close" onclick="closeApprovalModal()">×</button>
+        </div>
+        <div class="approval-modal-body">
+          <div id="approval-details"></div>
+        </div>
+        <div class="approval-modal-footer">
+          <button class="approval-modal-btn deny" onclick="denyApproval()">Deny</button>
+          <button class="approval-modal-btn approve" onclick="approveApproval()">Approve</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- CoT Display Modal -->
+    <div id="cot-modal" class="cot-modal" style="display: none;">
+      <div class="cot-modal-overlay" onclick="closeCoTModal()"></div>
+      <div class="cot-modal-content">
+        <div class="cot-modal-header">
+          <h2>Thinking Process</h2>
+          <button class="cot-modal-close" onclick="closeCoTModal()">×</button>
+        </div>
+        <div class="cot-modal-body">
+          <div id="cot-content"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Watermark -->
+    <div id="watermark" class="watermark"></div>
+  </div>
+
+  <div id="toasts"></div>
+  <script src="/app-desktop.js"></script>
+</body>
+</html>

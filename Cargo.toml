@@ -1,5 +1,5 @@
 [workspace]
-members = ["."]
+members = [".", "desktop-client"]
 exclude = [
     "channels-src/discord",
     "channels-src/telegram",
