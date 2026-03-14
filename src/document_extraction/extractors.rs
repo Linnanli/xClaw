@@ -65,9 +65,34 @@ pub fn extract_text(data: &[u8], mime: &str, filename: Option<&str>) -> Result<S
 }
 
 fn extract_pdf(data: &[u8]) -> Result<String, String> {
-    pdf_extract::extract_text_from_mem(data)
-        .map(|t| t.trim().to_string())
-        .map_err(|e| format!("PDF extraction failed: {e}"))
+    // Try strict PDF extraction first
+    match pdf_extract::extract_text_from_mem(data) {
+        Ok(text) => {
+            let trimmed = text.trim().to_string();
+            if !trimmed.is_empty() {
+                return Ok(trimmed);
+            }
+        }
+        Err(e) => {
+            tracing::warn!("pdf-extract failed (strict mode): {}, trying fallback", e);
+            // Fall back to binary string extraction for damaged PDFs
+            // This handles PDFs with corrupted xref tables but readable content
+            match extract_binary_strings(data) {
+                Ok(text) => {
+                    if !text.is_empty() {
+                        tracing::info!("Successfully extracted text from damaged PDF using fallback");
+                        return Ok(text);
+                    }
+                }
+                Err(_) => {
+                    // Both methods failed, return original error
+                    return Err(format!("PDF extraction failed: {e}"));
+                }
+            }
+        }
+    }
+    
+    Err("PDF extraction failed: no text content found".to_string())
 }
 
 fn extract_docx(data: &[u8]) -> Result<String, String> {
