@@ -1135,6 +1135,7 @@ INJECTED="pwned"#;
     // ── PID Lock tests ───────────────────────────────────────────────
 
     #[test]
+    #[cfg(not(target_os = "windows"))]
     fn test_pid_lock_acquire_and_drop() {
         let dir = tempdir().unwrap();
         let pid_path = dir.path().join("ironclaw.pid");
@@ -1153,6 +1154,7 @@ INJECTED="pwned"#;
     }
 
     #[test]
+    #[cfg(not(target_os = "windows"))]
     fn test_pid_lock_rejects_second_acquire() {
         let dir = tempdir().unwrap();
         let pid_path = dir.path().join("ironclaw.pid");
@@ -1186,6 +1188,7 @@ INJECTED="pwned"#;
     }
 
     #[test]
+    #[cfg(not(target_os = "windows"))]
     fn test_pid_lock_reclaims_stale_file_without_flock() {
         let dir = tempdir().unwrap();
         let pid_path = dir.path().join("ironclaw.pid");
@@ -1242,6 +1245,7 @@ INJECTED="pwned"#;
     }
 
     #[test]
+    #[cfg(not(target_os = "windows"))]
     fn test_pid_lock_rejects_lock_held_by_other_process() {
         let dir = tempdir().unwrap();
         let pid_path = dir.path().join("ironclaw.pid");

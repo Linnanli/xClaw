@@ -306,8 +306,13 @@ mod tests {
             .expect("Failed to send request");
         assert_eq!(response.status(), 200, "Server should be listening");
 
-        // Try to restart on an invalid address (port 1 typically requires elevated privileges)
-        let invalid_addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        // Try to restart on an invalid address (use a port that's likely in use or unavailable)
+        // We'll try to bind to a port that's already in use by creating a listener first
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let used_addr = listener.local_addr().unwrap();
+        
+        // Now try to bind to the same address (should fail)
+        let invalid_addr = used_addr;
 
         // Attempt bind (should fail); server state is untouched because we
         // never call install_listener on failure.

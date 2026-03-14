@@ -59,11 +59,24 @@
 //! ```
 
 mod crypto;
+mod crypto_config;
+mod crypto_provider;
+mod default_crypto;
+mod gm_crypto;
 pub mod keychain;
 mod store;
 mod types;
 
+#[cfg(test)]
+mod crypto_algorithm_consistency_tests;
+#[cfg(test)]
+mod crypto_roundtrip_tests;
+
 pub use crypto::SecretsCrypto;
+pub use crypto_config::{CryptoAlgorithmConfig, CryptoConfig};
+pub use crypto_provider::{CryptoAlgorithm, CryptoProvider, SecureBytes};
+pub use default_crypto::DefaultCryptoProvider;
+pub use gm_crypto::GMCryptoProvider;
 #[cfg(feature = "libsql")]
 pub use store::LibSqlSecretsStore;
 #[cfg(feature = "postgres")]

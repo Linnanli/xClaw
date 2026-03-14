@@ -16,13 +16,13 @@
 
 ### 第一阶段：核心基础设施（加密、DLP、沙箱）
 
-- [ ] 1. 搭建项目结构和核心加密基础设施
+- [-] 1. 搭建项目结构和核心加密基础设施
   - 创建 admin-backend、desktop-client 和共享库的工作空间结构
   - 定义 Cargo 工作空间并进行适当的依赖管理
   - 设置跨平台支持的构建配置（Windows/macOS/Linux）
   - _需求: 1.1, 1.5_
 
-  - [ ] 1.1 实现 CryptoProvider trait 和算法实现
+  - [x] 1.1 实现 CryptoProvider trait 和算法实现
     - **⚠️ 开始编码前：查看 implementation-status.md 中"需求 1: 国密算法支持"的实现状态**
     - 定义 CryptoProvider trait，包含签名验证、加密、解密、哈希和密钥派生方法
     - 使用 ring/RustCrypto 实现 DefaultCryptoProvider（AES-256-GCM、Ed25519、SHA256）
@@ -31,7 +31,7 @@
     - 实现 SecureBytes 包装器，在 drop 时自动清零内存
     - _需求: 1.1, 1.2, 1.3, 1.4, 1.5_
 
-  - [ ]* 1.2 编写 CryptoProvider 算法一致性的属性测试
+  - [x]* 1.2 编写 CryptoProvider 算法一致性的属性测试
     - **属性 1：加密算法配置一致性**
     - **验证需求: 1.1, 1.2, 1.3, 1.4**
     - 生成随机配置并验证使用了正确的算法栈
