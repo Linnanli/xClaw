@@ -138,7 +138,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_approve_invalid_code_returns_err() {
         let (store, _) = test_store();
         // Create a pending request so the pairing file exists, then approve with wrong code
@@ -156,7 +155,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_approve_valid_code_returns_ok() {
         let (store, _) = test_store();
         let r = store.upsert_request("telegram", "user1", None).unwrap();

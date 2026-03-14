@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -242,7 +242,11 @@ impl PairingStore {
 
         file.lock_exclusive()?;
 
-        let content = fs::read_to_string(&path).unwrap_or_default();
+        // Seek to start and read current content
+        file.seek(SeekFrom::Start(0))?;
+        let mut content = String::new();
+        file.read_to_string(&mut content)?;
+        
         let mut store: PairingStoreFile =
             serde_json::from_str(&content).unwrap_or(PairingStoreFile {
                 version: 1,
@@ -321,6 +325,10 @@ impl PairingStore {
         let now = now_secs();
         let cutoff = now.saturating_sub(PAIRING_APPROVE_RATE_WINDOW_SECS);
         data.failed_at.retain(|&t| t >= cutoff);
+        
+        // Debug: log the number of failed attempts
+        tracing::debug!("Rate limit check: {} attempts in window, limit is {}", data.failed_at.len(), PAIRING_APPROVE_RATE_LIMIT);
+        
         Ok(data.failed_at.len() >= PAIRING_APPROVE_RATE_LIMIT)
     }
 
@@ -333,7 +341,7 @@ impl PairingStore {
 
         // Open (or create) and lock before reading so concurrent callers
         // don't clobber each other's writes.
-        let file = fs::OpenOptions::new()
+        let mut file = fs::OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
@@ -341,9 +349,12 @@ impl PairingStore {
             .open(&path)?;
         file.lock_exclusive()?;
 
-        let mut data: ApproveAttemptsFile = fs::read_to_string(&path)
-            .ok()
-            .and_then(|c| serde_json::from_str(&c).ok())
+        // Seek to start and read current content
+        file.seek(SeekFrom::Start(0))?;
+        let mut content = String::new();
+        file.read_to_string(&mut content)?;
+        
+        let mut data: ApproveAttemptsFile = serde_json::from_str(&content)
             .unwrap_or_default();
 
         let now = now_secs();
@@ -352,7 +363,10 @@ impl PairingStore {
         data.failed_at.retain(|&t| t >= cutoff);
 
         let json = serde_json::to_string_pretty(&data)?;
-        fs::write(&path, json)?;
+        file.set_len(0)?;
+        file.seek(std::io::SeekFrom::Start(0))?;
+        file.write_all(json.as_bytes())?;
+        file.sync_all()?;
         fs4::FileExt::unlock(&file)?;
         Ok(())
     }
@@ -388,7 +402,11 @@ impl PairingStore {
 
         file.lock_exclusive()?;
 
-        let content = fs::read_to_string(&path).unwrap_or_default();
+        // Seek to start and read current content
+        file.seek(SeekFrom::Start(0))?;
+        let mut content = String::new();
+        file.read_to_string(&mut content)?;
+        
         let mut store: PairingStoreFile =
             serde_json::from_str(&content).unwrap_or(PairingStoreFile {
                 version: 1,
@@ -477,11 +495,11 @@ impl PairingStore {
         })?;
         fs::create_dir_all(parent)?;
 
-        let file = fs::OpenOptions::new()
+        let mut file = fs::OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
-            .truncate(true)
+            .truncate(false)
             .open(&path)?;
 
         file.lock_exclusive()?;
@@ -505,7 +523,10 @@ impl PairingStore {
 
         store.allow_from.push(entry);
         let json = serde_json::to_string_pretty(&store)?;
-        fs::write(&path, json)?;
+        file.set_len(0)?;
+        file.seek(std::io::SeekFrom::Start(0))?;
+        file.write_all(json.as_bytes())?;
+        file.sync_all()?;
 
         fs4::FileExt::unlock(&file)?;
         Ok(())
@@ -606,7 +627,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_upsert_request_updates_existing() {
         let (store, _) = test_store();
         let r1 = store.upsert_request("telegram", "user123", None).unwrap();
@@ -624,7 +644,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_approve_adds_to_allow_from() {
         let (store, _) = test_store();
         let r = store.upsert_request("telegram", "user456", None).unwrap();
@@ -639,7 +658,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_approve_case_insensitive_code() {
         let (store, _) = test_store();
         let r = store.upsert_request("telegram", "user789", None).unwrap();
@@ -649,7 +667,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_approve_invalid_code_returns_none() {
         let (store, _) = test_store();
         store.upsert_request("telegram", "user123", None).unwrap();
@@ -658,19 +675,36 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_approve_rate_limited_after_many_failures() {
+        use std::thread;
+        use std::time::Duration;
+        
         let (store, _) = test_store();
         store.upsert_request("telegram", "user123", None).unwrap();
-        for _ in 0..PAIRING_APPROVE_RATE_LIMIT {
-            let _ = store.approve("telegram", "WRONG01");
+        
+        // Record PAIRING_APPROVE_RATE_LIMIT failed attempts
+        for i in 0..PAIRING_APPROVE_RATE_LIMIT {
+            let result = store.approve("telegram", &format!("WRONG{:02}", i));
+            assert!(result.is_ok(), "Attempt {} should succeed", i);
+            assert!(result.unwrap().is_none(), "Attempt {} should return None", i);
+            thread::sleep(Duration::from_millis(100));
         }
-        let err = store.approve("telegram", "WRONG02").unwrap_err();
-        assert!(matches!(err, PairingStoreError::ApproveRateLimited));
+        
+        // Check if rate limited
+        match store.approve("telegram", "WRONG99") {
+            Err(PairingStoreError::ApproveRateLimited) => {
+                // Expected - test passes
+            }
+            Ok(result) => {
+                panic!("Expected ApproveRateLimited error, got Ok({:?})", result);
+            }
+            Err(e) => {
+                panic!("Expected ApproveRateLimited error, got {:?}", e);
+            }
+        }
     }
 
     #[test]
-    #[ignore]
     fn test_is_sender_allowed_by_id() {
         let (store, _) = test_store();
         let r = store.upsert_request("telegram", "user999", None).unwrap();
@@ -685,7 +719,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_is_sender_allowed_by_username() {
         let (store, _) = test_store();
         store
