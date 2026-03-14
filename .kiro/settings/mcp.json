@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "mcp-feedback-enhanced": {
+      "command": "C:\\Users\\Administrator\\.local\\bin\\uvx.exe",
+      "args": [
+        "--quiet",
+        "mcp-feedback-enhanced@latest"
+      ],
+      "env": {
+        "UV_NO_PROGRESS": "1",
+        "MCP_DEBUG": "false",
+        "MCP_LANGUAGE": "zh-CN"
+      },
+      "timeout": 600,
+      "autoApprove": [
+        "interactive_feedback"
+      ]
+    }
+  }
+}
