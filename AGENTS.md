@@ -32,4 +32,30 @@
 
 ## MCP Interactive Feedback 规则
 
-注意在任务完成前根据mcp-feedback-enhanced工具的要求进行工具调用
+**强制要求**：每次AI Agent执行完成前必须调用MCP Interactive Feedback工具。
+
+### 执行规范
+
+1. **调用时机**：
+   - 在任务开始执行时，首先调用MCP Interactive Feedback工具
+   - 在任务执行过程中，根据用户反馈调整后再次调用
+   - 在任务最终完成前，必须调用MCP Interactive Feedback工具进行确认
+
+2. **工具调用**：
+   - 使用 `mcp_mcp_feedback_enhanced_interactive_feedback` 工具（已验证可用）
+   - 必需参数：`summary`（任务执行摘要）、`project_directory`（项目目录）
+   - 可选参数：`timeout`（超时时间，默认600秒）
+   - **验证**：该工具已在当前环境中多次成功调用，确保Agent能够正常使用
+
+3. **反馈处理**：
+   - 如果用户反馈包含具体指令，必须按照指令调整执行
+   - 如果用户反馈为"好的执行"或类似确认，可以继续执行
+   - 如果用户反馈指出问题，必须修正问题后重新调用
+
+4. **验证机制**：
+   - 每次Agent执行必须包含至少一次MCP Interactive Feedback调用
+   - 未调用MCP Interactive Feedback的Agent执行视为不完整
+   - 用户可以通过检查执行日志验证是否遵循此规则
+
+### 目的
+确保AI Agent与用户保持交互，及时获取反馈，避免遗漏关键步骤，提高任务执行质量。
