@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Tauri Test</title>
+</head>
+<body>
+  <h1>Tauri API Test</h1>
+  <p>Checking if Tauri API is available...</p>
+  <div id="status">Loading...</div>
+  
+  <script>
+    console.log('Test script loaded');
+    console.log('window.__TAURI__:', window.__TAURI__);
+    
+    // Check immediately
+    if (typeof window.__TAURI__ !== 'undefined') {
+      document.getElementById('status').innerHTML = '✅ Tauri API is available!';
+    } else {
+      document.getElementById('status').innerHTML = '❌ Tauri API is NOT available';
+    }
+    
+    // Check after delay
+    setTimeout(() => {
+      console.log('After 1 second - window.__TAURI__:', window.__TAURI__);
+      if (typeof window.__TAURI__ !== 'undefined') {
+        document.getElementById('status').innerHTML += '<br>✅ Tauri API loaded after delay!';
+      }
+    }, 1000);
+  </script>
+</body>
+</html>

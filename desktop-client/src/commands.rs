@@ -46,6 +46,26 @@ impl CommandState {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetupStatus {
+    pub password_set: bool,
+}
+
+#[tauri::command]
+pub async fn check_setup_status(
+    state: tauri::State<'_, CommandState>,
+) -> Result<SetupStatus> {
+    let auth = state.auth_manager.lock().await;
+    // Check if master password is set by trying to verify an empty password
+    // If it fails with "Master password not set", then password is not set
+    let password_set = auth.verify_password("").is_ok() || 
+                       !matches!(auth.verify_password(""), Err(Error::AuthError(_)));
+    
+    Ok(SetupStatus {
+        password_set: password_set || false, // Conservative: assume not set if we can't verify
+    })
+}
+
 #[tauri::command]
 pub async fn setup_master_password(
     password: String,

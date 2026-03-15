@@ -1,5 +1,28 @@
 // IronClaw Desktop Client - Tauri Integration
 
+// Debug: Log when script loads
+console.log('app-desktop.js loaded');
+
+// Helper function to invoke Tauri commands with error handling
+// Tauri 2.0 uses __TAURI_INTERNALS__ for IPC
+async function invokeTauri(command, args = {}) {
+  // Wait for Tauri internals to be available (with timeout)
+  let attempts = 0;
+  while (typeof window.__TAURI_INTERNALS__ === 'undefined' && attempts < 50) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+    attempts++;
+  }
+  
+  console.log(`invokeTauri('${command}') - Tauri internals available:`, typeof window.__TAURI_INTERNALS__ !== 'undefined', 'attempts:', attempts);
+  
+  if (typeof window.__TAURI_INTERNALS__ === 'undefined') {
+    throw new Error('Tauri API not available. Make sure you are running this in a Tauri application.');
+  }
+  
+  // Use Tauri 2.0's invoke method
+  return await window.__TAURI_INTERNALS__.invoke(command, args);
+}
+
 let currentThreadId = null;
 let currentTab = 'chat';
 let approvalPending = null;
@@ -7,16 +30,143 @@ let cotPending = null;
 
 // --- Authentication ---
 
+async function initializeAuth() {
+  try {
+    // Check if master password is already set
+    const sessionId = sessionStorage.getItem('session_id');
+    if (sessionId) {
+      // Already authenticated
+      document.getElementById('auth-screen').style.display = 'none';
+      document.getElementById('app').style.display = 'flex';
+      initializeApp();
+      return;
+    }
+
+    // Check if we need to setup master password
+    const setupStatus = await invokeTauri('check_setup_status');
+    if (!setupStatus.password_set) {
+      // Show setup screen
+      document.getElementById('auth-setup').style.display = 'block';
+      document.getElementById('auth-login').style.display = 'none';
+      setupPasswordInputListeners();
+    } else {
+      // Show login screen
+      document.getElementById('auth-setup').style.display = 'none';
+      document.getElementById('auth-login').style.display = 'block';
+    }
+  } catch (err) {
+    console.error('Failed to initialize auth:', err);
+    // Default to login screen
+    document.getElementById('auth-setup').style.display = 'none';
+    document.getElementById('auth-login').style.display = 'block';
+  }
+}
+
+function setupPasswordInputListeners() {
+  const setupPassword = document.getElementById('setup-password');
+  const confirmPassword = document.getElementById('setup-password-confirm');
+  
+  setupPassword.addEventListener('input', updatePasswordStrength);
+  confirmPassword.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') setupMasterPassword();
+  });
+}
+
+function updatePasswordStrength() {
+  const password = document.getElementById('setup-password').value;
+  const strengthDiv = document.getElementById('password-strength');
+  
+  if (!password) {
+    strengthDiv.innerHTML = '';
+    return;
+  }
+  
+  let strength = 0;
+  let feedback = [];
+  
+  if (password.length >= 12) strength++;
+  else feedback.push('至少 12 个字符');
+  
+  if (/[a-z]/.test(password)) strength++;
+  else feedback.push('小写字母');
+  
+  if (/[A-Z]/.test(password)) strength++;
+  else feedback.push('大写字母');
+  
+  if (/[0-9]/.test(password)) strength++;
+  else feedback.push('数字');
+  
+  if (/[^a-zA-Z0-9]/.test(password)) strength++;
+  else feedback.push('特殊字符');
+  
+  let strengthText = '';
+  let strengthClass = '';
+  
+  if (strength < 3) {
+    strengthText = '弱';
+    strengthClass = 'weak';
+  } else if (strength < 4) {
+    strengthText = '中等';
+    strengthClass = 'fair';
+  } else {
+    strengthText = '强';
+    strengthClass = 'strong';
+  }
+  
+  strengthDiv.innerHTML = `
+    <div class="strength-bar">
+      <div class="strength-fill ${strengthClass}" style="width: ${(strength / 5) * 100}%"></div>
+    </div>
+    <div class="strength-text ${strengthClass}">${strengthText}</div>
+    ${feedback.length > 0 ? `<div class="strength-feedback">缺少：${feedback.join('、')}</div>` : ''}
+  `;
+}
+
+async function setupMasterPassword() {
+  const password = document.getElementById('setup-password').value;
+  const confirmPassword = document.getElementById('setup-password-confirm').value;
+  const errorDiv = document.getElementById('setup-error');
+  
+  errorDiv.textContent = '';
+  
+  if (!password || !confirmPassword) {
+    errorDiv.textContent = '请填写所有字段';
+    return;
+  }
+  
+  if (password !== confirmPassword) {
+    errorDiv.textContent = '密码不匹配';
+    return;
+  }
+  
+  try {
+    const result = await invokeTauri('setup_master_password', { password });
+    
+    if (result.success) {
+      // Switch to login screen
+      document.getElementById('auth-setup').style.display = 'none';
+      document.getElementById('auth-login').style.display = 'block';
+      document.getElementById('master-password').focus();
+      showToast('主密码设置成功', 'success');
+    } else {
+      errorDiv.textContent = result.message || '设置密码失败';
+    }
+  } catch (err) {
+    errorDiv.textContent = '错误：' + err.message;
+    console.error('Setup error:', err);
+  }
+}
+
 async function authenticateDesktop() {
   const password = document.getElementById('master-password').value.trim();
   if (!password) {
-    document.getElementById('auth-error').textContent = 'Password required';
+    document.getElementById('auth-error').textContent = '请输入密码';
     return;
   }
 
   try {
     // Call Tauri command to unlock the app
-    const result = await window.__TAURI__.invoke('unlock_app', { password });
+    const result = await invokeTauri('unlock_app', { password });
     
     if (result.success) {
       sessionStorage.setItem('session_id', result.session_id);
@@ -24,14 +174,15 @@ async function authenticateDesktop() {
       document.getElementById('app').style.display = 'flex';
       initializeApp();
     } else {
-      document.getElementById('auth-error').textContent = result.message || 'Authentication failed';
+      document.getElementById('auth-error').textContent = result.message || '认证失败';
     }
   } catch (err) {
-    document.getElementById('auth-error').textContent = 'Error: ' + err.message;
+    document.getElementById('auth-error').textContent = '错误：' + err.message;
+    console.error('Authentication error:', err);
   }
 }
 
-document.getElementById('master-password').addEventListener('keydown', (e) => {
+document.getElementById('master-password')?.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') authenticateDesktop();
 });
 
@@ -98,7 +249,7 @@ async function sendMessage() {
   
   if (!content) return;
   if (!currentThreadId) {
-    alert('Please select or create a thread first');
+    alert('请先选择或创建一个对话');
     return;
   }
 
@@ -108,12 +259,12 @@ async function sendMessage() {
 
   try {
     // Send message via Tauri command
-    await window.__TAURI__.invoke('send_message', {
+    await invokeTauri('send_message', {
       thread_id: currentThreadId,
       content: content
     });
   } catch (err) {
-    addMessage('system', 'Error: ' + err.message);
+    addMessage('system', '错误：' + err.message);
   }
 }
 
@@ -151,7 +302,7 @@ function escapeHtml(text) {
 
 async function loadThreads() {
   try {
-    const threads = await window.__TAURI__.invoke('get_threads');
+    const threads = await invokeTauri('get_threads');
     const list = document.getElementById('thread-list');
     list.innerHTML = '';
     
@@ -160,24 +311,24 @@ async function loadThreads() {
       item.className = 'thread-item';
       if (thread.id === currentThreadId) item.classList.add('active');
       
-      item.textContent = thread.title || 'Untitled';
+      item.textContent = thread.title || '未命名';
       item.addEventListener('click', () => switchThread(thread.id));
       
       list.appendChild(item);
     });
   } catch (err) {
-    console.error('Failed to load threads:', err);
+    console.error('加载对话失败：', err);
   }
 }
 
 async function createNewThread() {
   try {
-    const thread = await window.__TAURI__.invoke('create_thread');
+    const thread = await invokeTauri('create_thread');
     currentThreadId = thread.id;
     document.getElementById('chat-messages').innerHTML = '';
     loadThreads();
   } catch (err) {
-    alert('Failed to create thread: ' + err.message);
+    alert('创建对话失败：' + err.message);
   }
 }
 
@@ -217,7 +368,7 @@ async function approveApproval() {
   if (!approvalPending) return;
   
   try {
-    await window.__TAURI__.invoke('approve_operation', {
+    await invokeTauri('approve_operation', {
       operation: approvalPending.operation
     });
     closeApprovalModal();
@@ -230,7 +381,7 @@ async function denyApproval() {
   if (!approvalPending) return;
   
   try {
-    await window.__TAURI__.invoke('deny_operation', {
+    await invokeTauri('deny_operation', {
       operation: approvalPending.operation
     });
     closeApprovalModal();
@@ -283,13 +434,7 @@ function showToast(message, type = 'info') {
 
 // Initialize on load
 window.addEventListener('DOMContentLoaded', () => {
-  // Check if already authenticated
-  const sessionId = sessionStorage.getItem('session_id');
-  if (sessionId) {
-    document.getElementById('auth-screen').style.display = 'none';
-    document.getElementById('app').style.display = 'flex';
-    initializeApp();
-  }
+  initializeAuth();
 });
 
 
@@ -303,13 +448,13 @@ let selectedPlugin = null;
 
 async function loadPlugins() {
   try {
-    installedPlugins = await window.__TAURI__.invoke('get_installed_plugins');
-    availablePlugins = await window.__TAURI__.invoke('get_available_plugins');
-    pendingUpdates = await window.__TAURI__.invoke('check_plugin_updates');
+    installedPlugins = await invokeTauri('get_installed_plugins');
+    availablePlugins = await invokeTauri('get_available_plugins');
+    pendingUpdates = await invokeTauri('check_plugin_updates');
     
     renderPluginsList();
   } catch (err) {
-    showToast('Failed to load plugins: ' + err.message, 'error');
+    showToast('加载插件失败：' + err.message, 'error');
   }
 }
 
@@ -348,7 +493,7 @@ function renderPluginsList() {
   container.innerHTML = '';
   
   if (plugins.length === 0) {
-    container.innerHTML = '<p style="text-align: center; color: #999; padding: 40px;">No plugins found</p>';
+    container.innerHTML = '<p style="text-align: center; color: #999; padding: 40px;">未找到插件</p>';
     return;
   }
   
@@ -370,27 +515,27 @@ function createPluginCard(plugin) {
   let statusBadges = '';
   if (currentPluginTab === 'installed') {
     statusBadges = plugin.enabled ? 
-      '<span class="plugin-status-badge">Enabled</span>' :
-      '<span class="plugin-status-badge disabled">Disabled</span>';
+      '<span class="plugin-status-badge">已启用</span>' :
+      '<span class="plugin-status-badge disabled">已禁用</span>';
   } else if (currentPluginTab === 'updates') {
-    statusBadges = '<span class="plugin-status-badge update">Update Available</span>';
+    statusBadges = '<span class="plugin-status-badge update">有可用更新</span>';
   }
   
   let actions = '';
   if (currentPluginTab === 'installed') {
     actions = `
       <button class="plugin-action" onclick="togglePluginStatus('${plugin.metadata?.id || plugin.id}', ${plugin.enabled})">
-        ${plugin.enabled ? 'Disable' : 'Enable'}
+        ${plugin.enabled ? '禁用' : '启用'}
       </button>
-      <button class="plugin-action" onclick="uninstallPlugin('${plugin.metadata?.id || plugin.id}')">Uninstall</button>
+      <button class="plugin-action" onclick="uninstallPlugin('${plugin.metadata?.id || plugin.id}')">卸载</button>
     `;
   } else if (currentPluginTab === 'available') {
     actions = `
-      <button class="plugin-action primary" onclick="installPlugin('${plugin.id}')">Install</button>
+      <button class="plugin-action primary" onclick="installPlugin('${plugin.id}')">安装</button>
     `;
   } else if (currentPluginTab === 'updates') {
     actions = `
-      <button class="plugin-action primary" onclick="updatePlugin('${plugin.plugin_id}')">Update</button>
+      <button class="plugin-action primary" onclick="updatePlugin('${plugin.plugin_id}')">更新</button>
     `;
   }
   
@@ -475,7 +620,7 @@ function closePluginModal() {
 
 async function installPlugin(pluginId) {
   try {
-    await window.__TAURI__.invoke('install_plugin', { plugin_id: pluginId });
+    await invokeTauri('install_plugin', { plugin_id: pluginId });
     showToast('Plugin installed successfully', 'success');
     closePluginModal();
     loadPlugins();
@@ -488,7 +633,7 @@ async function uninstallPlugin(pluginId) {
   if (!confirm('Are you sure you want to uninstall this plugin?')) return;
   
   try {
-    await window.__TAURI__.invoke('uninstall_plugin', { plugin_id: pluginId });
+    await invokeTauri('uninstall_plugin', { plugin_id: pluginId });
     showToast('Plugin uninstalled successfully', 'success');
     closePluginModal();
     loadPlugins();
@@ -500,10 +645,10 @@ async function uninstallPlugin(pluginId) {
 async function togglePluginStatus(pluginId, currentlyEnabled) {
   try {
     if (currentlyEnabled) {
-      await window.__TAURI__.invoke('disable_plugin', { plugin_id: pluginId });
+      await invokeTauri('disable_plugin', { plugin_id: pluginId });
       showToast('Plugin disabled', 'success');
     } else {
-      await window.__TAURI__.invoke('enable_plugin', { plugin_id: pluginId });
+      await invokeTauri('enable_plugin', { plugin_id: pluginId });
       showToast('Plugin enabled', 'success');
     }
     closePluginModal();
@@ -515,7 +660,7 @@ async function togglePluginStatus(pluginId, currentlyEnabled) {
 
 async function updatePlugin(pluginId) {
   try {
-    await window.__TAURI__.invoke('update_plugin', { plugin_id: pluginId });
+    await invokeTauri('update_plugin', { plugin_id: pluginId });
     showToast('Plugin updated successfully', 'success');
     closePluginModal();
     loadPlugins();
@@ -541,7 +686,7 @@ let offlineMode = false;
 
 async function initializeOfflineMode() {
   try {
-    const state = await window.__TAURI__.invoke('get_offline_state');
+    const state = await invokeTauri('get_offline_state');
     offlineMode = state.is_offline;
     updateOfflineIndicator();
   } catch (err) {
@@ -568,11 +713,11 @@ function updateOfflineIndicator() {
 async function toggleOfflineMode() {
   try {
     if (offlineMode) {
-      await window.__TAURI__.invoke('disable_offline_mode');
+      await invokeTauri('disable_offline_mode');
       offlineMode = false;
       showToast('Offline mode disabled', 'success');
     } else {
-      await window.__TAURI__.invoke('enable_offline_mode');
+      await invokeTauri('enable_offline_mode');
       offlineMode = true;
       showToast('Offline mode enabled', 'info');
     }
@@ -598,10 +743,15 @@ initializeApp = function() {
 
 
 // Extensions Management
+let installedExtensionIds = [];
+
 async function loadExtensions() {
   try {
-    const installed = await window.__TAURI__.invoke('get_installed_extensions');
-    const available = await window.__TAURI__.invoke('get_available_extensions');
+    const installed = await invokeTauri('get_installed_extensions');
+    const available = await invokeTauri('get_available_extensions');
+    
+    // Store installed extension IDs for quick lookup
+    installedExtensionIds = installed.map(ext => ext.metadata.id);
     
     renderInstalledExtensions(installed);
     renderAvailableExtensions(available);
@@ -654,6 +804,7 @@ function renderAvailableExtensions(extensions) {
   }
   
   extensions.forEach(ext => {
+    const isInstalled = installedExtensionIds.includes(ext.id);
     const card = document.createElement('div');
     card.className = 'extension-card';
     card.innerHTML = `
@@ -667,7 +818,9 @@ function renderAvailableExtensions(extensions) {
         <strong>Tools:</strong> ${ext.tools.join(', ') || 'None'}
       </div>
       <div class="extension-actions">
-        <button onclick="installExtensionAction('${ext.id}')" class="btn-install">Install</button>
+        <button onclick="installExtensionAction('${ext.id}')" class="btn-install" ${isInstalled ? 'disabled' : ''}>
+          ${isInstalled ? 'Already Installed' : 'Install'}
+        </button>
       </div>
     `;
     list.appendChild(card);
@@ -678,34 +831,45 @@ function switchExtensionTab(tab) {
   document.querySelectorAll('.extension-tab-btn').forEach(btn => btn.classList.remove('active'));
   document.querySelectorAll('.extension-panel').forEach(panel => panel.classList.remove('active'));
   
-  event.target.classList.add('active');
+  // Find the button for this tab and mark it as active
+  const buttons = document.querySelectorAll('.extension-tab-btn');
+  buttons.forEach(btn => {
+    if (btn.textContent.includes(tab === 'installed' ? '已安装' : '可用')) {
+      btn.classList.add('active');
+    }
+  });
+  
   document.getElementById(`${tab}-extensions-panel`).classList.add('active');
 }
 
 async function installExtensionAction(extensionId) {
   try {
-    const available = await window.__TAURI__.invoke('get_available_extensions');
+    const available = await invokeTauri('get_available_extensions');
     const ext = available.find(e => e.id === extensionId);
     if (ext) {
-      await window.__TAURI__.invoke('install_extension', { metadata: ext });
-      showToast(`Extension ${ext.name} installed`, 'success');
-      loadExtensions();
+      await invokeTauri('install_extension', { metadata: ext });
+      showToast(`扩展 ${ext.name} 已安装`, 'success');
+      // 重新加载扩展列表以更新 UI
+      await loadExtensions();
+      // 切换到已安装标签页以显示新安装的扩展
+      switchExtensionTab('installed');
     }
   } catch (error) {
     console.error('Failed to install extension:', error);
-    showToast('Failed to install extension', 'error');
+    showToast('安装扩展失败', 'error');
   }
 }
 
 async function uninstallExtensionAction(extensionId) {
-  if (confirm('Are you sure you want to uninstall this extension?')) {
+  if (confirm('确定要卸载此扩展吗？')) {
     try {
-      await window.__TAURI__.invoke('uninstall_extension', { extensionId });
-      showToast('Extension uninstalled', 'success');
-      loadExtensions();
+      await invokeTauri('uninstall_extension', { extensionId });
+      showToast('扩展已卸载', 'success');
+      await loadExtensions();
+      switchExtensionTab('available');
     } catch (error) {
       console.error('Failed to uninstall extension:', error);
-      showToast('Failed to uninstall extension', 'error');
+      showToast('卸载扩展失败', 'error');
     }
   }
 }
@@ -713,14 +877,16 @@ async function uninstallExtensionAction(extensionId) {
 async function toggleExtensionStatus(extensionId, currentlyEnabled) {
   try {
     if (currentlyEnabled) {
-      await window.__TAURI__.invoke('disable_extension', { extensionId });
+      await invokeTauri('disable_extension', { extensionId });
+      showToast('扩展已禁用', 'success');
     } else {
-      await window.__TAURI__.invoke('enable_extension', { extensionId });
+      await invokeTauri('enable_extension', { extensionId });
+      showToast('扩展已启用', 'success');
     }
-    loadExtensions();
+    await loadExtensions();
   } catch (error) {
     console.error('Failed to toggle extension:', error);
-    showToast('Failed to toggle extension', 'error');
+    showToast('切换扩展状态失败', 'error');
   }
 }
 
@@ -731,7 +897,7 @@ async function refreshExtensions() {
 // Routines Management
 async function loadRoutines() {
   try {
-    const routines = await window.__TAURI__.invoke('get_routines');
+    const routines = await invokeTauri('get_routines');
     renderRoutines(routines);
   } catch (error) {
     console.error('Failed to load routines:', error);
@@ -820,7 +986,7 @@ async function createNewRoutine() {
       trigger = { Event: triggerValue || 'default_event' };
     }
     
-    await window.__TAURI__.invoke('create_routine', {
+    await invokeTauri('create_routine', {
       name,
       description,
       trigger,
@@ -838,7 +1004,7 @@ async function createNewRoutine() {
 
 async function triggerRoutineAction(routineId) {
   try {
-    await window.__TAURI__.invoke('trigger_routine', { routineId });
+    await invokeTauri('trigger_routine', { routineId });
     showToast('Routine triggered', 'success');
     loadRoutines();
   } catch (error) {
@@ -850,11 +1016,11 @@ async function triggerRoutineAction(routineId) {
 async function toggleRoutineStatus(routineId, currentStatus) {
   try {
     if (currentStatus === 'Active') {
-      await window.__TAURI__.invoke('pause_routine', { routineId });
+      await invokeTauri('pause_routine', { routineId });
     } else if (currentStatus === 'Paused') {
-      await window.__TAURI__.invoke('enable_routine', { routineId });
+      await invokeTauri('enable_routine', { routineId });
     } else {
-      await window.__TAURI__.invoke('enable_routine', { routineId });
+      await invokeTauri('enable_routine', { routineId });
     }
     loadRoutines();
   } catch (error) {
@@ -866,7 +1032,7 @@ async function toggleRoutineStatus(routineId, currentStatus) {
 async function deleteRoutineAction(routineId) {
   if (confirm('Are you sure you want to delete this routine?')) {
     try {
-      await window.__TAURI__.invoke('delete_routine', { routineId });
+      await invokeTauri('delete_routine', { routineId });
       showToast('Routine deleted', 'success');
       loadRoutines();
     } catch (error) {

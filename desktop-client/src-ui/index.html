@@ -10,18 +10,39 @@
 <body>
   <!-- Auth Screen -->
   <div id="auth-screen">
-    <div class="auth-card-login">
+    <!-- Setup Mode -->
+    <div id="auth-setup" class="auth-card-login" style="display: none;">
       <div class="auth-brand">
         <h1>IronClaw</h1>
-        <p class="auth-tagline">Secure AI Assistant</p>
+        <p class="auth-tagline">安全的 AI 助手</p>
       </div>
       <div class="auth-form">
-        <label for="master-password">Master Password</label>
-        <input type="password" id="master-password" placeholder="Enter your master password" autofocus>
-        <button onclick="authenticateDesktop()">Unlock</button>
+        <h2>设置主密码</h2>
+        <p class="auth-hint">创建一个强密码来保护您的数据。</p>
+        <label for="setup-password">主密码</label>
+        <input type="password" id="setup-password" placeholder="输入一个强密码" autofocus>
+        <label for="setup-password-confirm">确认密码</label>
+        <input type="password" id="setup-password-confirm" placeholder="确认您的密码">
+        <div id="password-strength" class="password-strength"></div>
+        <button onclick="setupMasterPassword()">创建密码</button>
+      </div>
+      <div id="setup-error" class="auth-error"></div>
+      <p class="auth-hint-small">密码必须至少 12 个字符，包含大小写字母和数字。</p>
+    </div>
+
+    <!-- Login Mode -->
+    <div id="auth-login" class="auth-card-login">
+      <div class="auth-brand">
+        <h1>IronClaw</h1>
+        <p class="auth-tagline">安全的 AI 助手</p>
+      </div>
+      <div class="auth-form">
+        <label for="master-password">主密码</label>
+        <input type="password" id="master-password" placeholder="输入您的主密码" autofocus>
+        <button onclick="authenticateDesktop()">解锁</button>
       </div>
       <div id="auth-error"></div>
-      <p class="auth-hint">Enter your master password to unlock the application.</p>
+      <p class="auth-hint">输入您的主密码来解锁应用程序。</p>
     </div>
   </div>
 
@@ -29,19 +50,18 @@
   <div id="app" style="display: none;">
     <!-- Tab Bar -->
     <div class="tab-bar">
-      <button class="active" data-tab="chat">Chat</button>
-      <button data-tab="memory">Memory</button>
-      <button data-tab="jobs">Jobs</button>
-      <button data-tab="routines">Routines</button>
-      <button data-tab="extensions">Extensions</button>
-      <button data-tab="skills">Skills</button>
-      <button data-tab="plugins">Plugins</button>
+      <button class="active" data-tab="chat">聊天</button>
+      <button data-tab="memory">记忆</button>
+      <button data-tab="jobs">任务</button>
+      <button data-tab="routines">日程</button>
+      <button data-tab="extensions">扩展</button>
+      <button data-tab="skills">技能</button>
       <div class="spacer"></div>
-      <button class="status-logs-btn" data-tab="logs" title="Logs">Logs</button>
+      <button class="status-logs-btn" data-tab="logs" title="日志">日志</button>
       <div class="status" id="gateway-status-trigger">
         <div class="dot" id="sse-dot"></div>
-        <span id="sse-status">Connected</span>
-        <span id="offline-indicator" class="offline-indicator" style="display: none;">Offline</span>
+        <span id="sse-status">已连接</span>
+        <span id="offline-indicator" class="offline-indicator" style="display: none;">离线</span>
       </div>
     </div>
 
@@ -49,16 +69,16 @@
     <div class="tab-panel active" id="tab-chat">
       <div class="thread-sidebar" id="thread-sidebar">
         <div class="thread-sidebar-header">
-          <button class="thread-new-btn" onclick="createNewThread()" title="New thread">+</button>
+          <button class="thread-new-btn" onclick="createNewThread()" title="新对话">+</button>
           <div class="spacer"></div>
           <button class="thread-toggle-btn" id="thread-toggle-btn" onclick="toggleThreadSidebar()">&laquo;</button>
         </div>
         <div class="assistant-item" id="assistant-thread" onclick="switchToAssistant()">
-          <span class="assistant-label">Assistant</span>
+          <span class="assistant-label">助手</span>
           <span class="assistant-meta" id="assistant-meta"></span>
         </div>
         <div class="threads-section-header">
-          <span>Conversations</span>
+          <span>对话</span>
         </div>
         <div class="thread-list" id="thread-list"></div>
       </div>
@@ -67,10 +87,10 @@
         <div id="slash-autocomplete" class="slash-autocomplete" style="display:none"></div>
         <div class="chat-input">
           <div id="image-preview-strip" class="image-preview-strip"></div>
-          <textarea id="chat-input" placeholder="Message or / for commands..." rows="1"></textarea>
+          <textarea id="chat-input" placeholder="输入消息或 / 查看命令..." rows="1"></textarea>
           <input type="file" id="image-file-input" accept="image/*" multiple style="display:none">
-          <button id="attach-btn" class="attach-btn" title="Attach images">📎</button>
-          <button id="send-btn" onclick="sendMessage()">Send</button>
+          <button id="attach-btn" class="attach-btn" title="附加图片">📎</button>
+          <button id="send-btn" onclick="sendMessage()">发送</button>
         </div>
       </div>
     </div>
@@ -80,15 +100,15 @@
       <div class="approval-modal-overlay" onclick="closeApprovalModal()"></div>
       <div class="approval-modal-content">
         <div class="approval-modal-header">
-          <h2>Sensitive Operation Approval</h2>
+          <h2>敏感操作批准</h2>
           <button class="approval-modal-close" onclick="closeApprovalModal()">×</button>
         </div>
         <div class="approval-modal-body">
           <div id="approval-details"></div>
         </div>
         <div class="approval-modal-footer">
-          <button class="approval-modal-btn deny" onclick="denyApproval()">Deny</button>
-          <button class="approval-modal-btn approve" onclick="approveApproval()">Approve</button>
+          <button class="approval-modal-btn deny" onclick="denyApproval()">拒绝</button>
+          <button class="approval-modal-btn approve" onclick="approveApproval()">批准</button>
         </div>
       </div>
     </div>
@@ -98,7 +118,7 @@
       <div class="cot-modal-overlay" onclick="closeCoTModal()"></div>
       <div class="cot-modal-content">
         <div class="cot-modal-header">
-          <h2>Thinking Process</h2>
+          <h2>思考过程</h2>
           <button class="cot-modal-close" onclick="closeCoTModal()">×</button>
         </div>
         <div class="cot-modal-body">
@@ -107,72 +127,21 @@
       </div>
     </div>
 
-    <!-- Plugins Tab -->
-    <div class="tab-panel" id="tab-plugins">
-      <div class="plugins-container">
-        <div class="plugins-header">
-          <h2>Plugin Management</h2>
-          <div class="plugins-controls">
-            <input type="text" id="plugin-search" placeholder="Search plugins..." class="plugin-search">
-            <button onclick="refreshPlugins()" class="plugin-refresh-btn">Refresh</button>
-          </div>
-        </div>
-        
-        <div class="plugins-tabs">
-          <button class="plugin-tab-btn active" onclick="switchPluginTab('installed')">Installed</button>
-          <button class="plugin-tab-btn" onclick="switchPluginTab('available')">Available</button>
-          <button class="plugin-tab-btn" onclick="switchPluginTab('updates')">Updates</button>
-        </div>
-
-        <!-- Installed Plugins -->
-        <div id="installed-plugins-panel" class="plugin-panel active">
-          <div id="installed-plugins-list" class="plugins-list"></div>
-        </div>
-
-        <!-- Available Plugins -->
-        <div id="available-plugins-panel" class="plugin-panel">
-          <div id="available-plugins-list" class="plugins-list"></div>
-        </div>
-
-        <!-- Plugin Updates -->
-        <div id="updates-plugins-panel" class="plugin-panel">
-          <div id="updates-plugins-list" class="plugins-list"></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Plugin Details Modal -->
-    <div id="plugin-modal" class="plugin-modal" style="display: none;">
-      <div class="plugin-modal-overlay" onclick="closePluginModal()"></div>
-      <div class="plugin-modal-content">
-        <div class="plugin-modal-header">
-          <h2 id="plugin-modal-title"></h2>
-          <button class="plugin-modal-close" onclick="closePluginModal()">×</button>
-        </div>
-        <div class="plugin-modal-body">
-          <div id="plugin-modal-details"></div>
-        </div>
-        <div class="plugin-modal-footer">
-          <button id="plugin-action-btn" class="plugin-action-btn" onclick="performPluginAction()"></button>
-          <button class="plugin-cancel-btn" onclick="closePluginModal()">Close</button>
-        </div>
-      </div>
-    </div>
-
     <!-- Extensions Tab -->
     <div class="tab-panel" id="tab-extensions">
       <div class="extensions-container">
         <div class="extensions-header">
-          <h2>Extensions Management</h2>
+          <h2>扩展管理</h2>
+          <p class="extensions-description">扩展提供特定的工具和功能集成。轻量级、快速安装，用于增强 AI 助手的能力。</p>
           <div class="extensions-controls">
-            <input type="text" id="extension-search" placeholder="Search extensions..." class="extension-search">
-            <button onclick="refreshExtensions()" class="extension-refresh-btn">Refresh</button>
+            <input type="text" id="extension-search" placeholder="搜索扩展..." class="extension-search">
+            <button onclick="refreshExtensions()" class="extension-refresh-btn">刷新</button>
           </div>
         </div>
         
         <div class="extensions-tabs">
-          <button class="extension-tab-btn active" onclick="switchExtensionTab('installed')">Installed</button>
-          <button class="extension-tab-btn" onclick="switchExtensionTab('available')">Available</button>
+          <button class="extension-tab-btn active" onclick="switchExtensionTab('installed')">已安装</button>
+          <button class="extension-tab-btn" onclick="switchExtensionTab('available')">可用</button>
         </div>
 
         <!-- Installed Extensions -->
@@ -191,8 +160,8 @@
     <div class="tab-panel" id="tab-routines">
       <div class="routines-container">
         <div class="routines-header">
-          <h2>Routines Management</h2>
-          <button onclick="showCreateRoutineModal()" class="routine-create-btn">+ New Routine</button>
+          <h2>日程管理</h2>
+          <button onclick="showCreateRoutineModal()" class="routine-create-btn">+ 新建日程</button>
         </div>
         
         <div class="routines-list" id="routines-list"></div>
@@ -204,34 +173,34 @@
       <div class="routine-modal-overlay" onclick="closeRoutineModal()"></div>
       <div class="routine-modal-content">
         <div class="routine-modal-header">
-          <h2>Create Routine</h2>
+          <h2>创建日程</h2>
           <button class="routine-modal-close" onclick="closeRoutineModal()">×</button>
         </div>
         <div class="routine-modal-body">
           <div class="form-group">
-            <label for="routine-name">Name</label>
-            <input type="text" id="routine-name" placeholder="Routine name">
+            <label for="routine-name">名称</label>
+            <input type="text" id="routine-name" placeholder="日程名称">
           </div>
           <div class="form-group">
-            <label for="routine-description">Description</label>
-            <textarea id="routine-description" placeholder="Routine description"></textarea>
+            <label for="routine-description">描述</label>
+            <textarea id="routine-description" placeholder="日程描述"></textarea>
           </div>
           <div class="form-group">
-            <label for="routine-trigger">Trigger Type</label>
+            <label for="routine-trigger">触发器类型</label>
             <select id="routine-trigger">
-              <option value="manual">Manual</option>
-              <option value="time">Time-based (Cron)</option>
-              <option value="event">Event-based</option>
+              <option value="manual">手动</option>
+              <option value="time">时间（Cron）</option>
+              <option value="event">事件</option>
             </select>
           </div>
           <div class="form-group" id="trigger-value-group" style="display: none;">
-            <label for="routine-trigger-value">Trigger Value</label>
-            <input type="text" id="routine-trigger-value" placeholder="e.g., 0 9 * * * for 9 AM daily">
+            <label for="routine-trigger-value">触发器值</label>
+            <input type="text" id="routine-trigger-value" placeholder="例如：0 9 * * * 表示每天 9 点">
           </div>
         </div>
         <div class="routine-modal-footer">
-          <button class="routine-modal-btn cancel" onclick="closeRoutineModal()">Cancel</button>
-          <button class="routine-modal-btn create" onclick="createNewRoutine()">Create</button>
+          <button class="routine-modal-btn cancel" onclick="closeRoutineModal()">取消</button>
+          <button class="routine-modal-btn create" onclick="createNewRoutine()">创建</button>
         </div>
       </div>
     </div>
@@ -241,6 +210,22 @@
   </div>
 
   <div id="toasts"></div>
+  
+  <!-- Tauri API initialization script -->
+  <script>
+    // Tauri 2.0 injects __TAURI_INTERNALS__ for IPC
+    window.addEventListener('load', function() {
+      console.log('Window load event fired');
+      console.log('window.__TAURI_INTERNALS__ available:', typeof window.__TAURI_INTERNALS__ !== 'undefined');
+      if (typeof window.__TAURI_INTERNALS__ !== 'undefined') {
+        console.log('Tauri API successfully loaded');
+      } else {
+        console.error('Tauri API not available - make sure to run with cargo tauri dev');
+      }
+    });
+  </script>
+  
+  <!-- Load app script -->
   <script src="/app-desktop.js"></script>
 </body>
 </html>

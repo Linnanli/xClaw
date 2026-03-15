@@ -3,6 +3,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceRequirements {
+    pub min_memory_mb: Option<u32>,
+    pub min_disk_mb: Option<u32>,
+    pub required_features: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtensionMetadata {
     pub id: String,
     pub name: String,
@@ -11,6 +18,8 @@ pub struct ExtensionMetadata {
     pub description: String,
     pub tools: Vec<String>,
     pub permissions: Vec<String>,
+    pub resource_requirements: Option<ResourceRequirements>,
+    pub auto_update: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,8 +38,72 @@ impl ExtensionManager {
     pub fn new() -> Self {
         Self {
             installed_extensions: HashMap::new(),
-            available_extensions: Vec::new(),
+            available_extensions: Self::default_available_extensions(),
         }
+    }
+
+    fn default_available_extensions() -> Vec<ExtensionMetadata> {
+        vec![
+            ExtensionMetadata {
+                id: "notion".to_string(),
+                name: "Notion".to_string(),
+                version: "1.0.0".to_string(),
+                author: "Notion".to_string(),
+                description: "连接到 Notion 以读取和写入页面、数据库和评论".to_string(),
+                tools: vec!["read_page".to_string(), "write_page".to_string(), "query_database".to_string()],
+                permissions: vec!["notion:read".to_string(), "notion:write".to_string()],
+                resource_requirements: None,
+                auto_update: Some(true),
+            },
+            ExtensionMetadata {
+                id: "github".to_string(),
+                name: "GitHub".to_string(),
+                version: "1.0.0".to_string(),
+                author: "GitHub".to_string(),
+                description: "连接到 GitHub 以进行仓库管理、问题、PR 和代码搜索".to_string(),
+                tools: vec!["read_repo".to_string(), "create_issue".to_string(), "create_pr".to_string()],
+                permissions: vec!["github:read".to_string(), "github:write".to_string()],
+                resource_requirements: None,
+                auto_update: Some(true),
+            },
+            ExtensionMetadata {
+                id: "slack".to_string(),
+                name: "Slack".to_string(),
+                version: "1.0.0".to_string(),
+                author: "Slack".to_string(),
+                description: "连接到 Slack 以进行消息传递、频道管理和团队沟通".to_string(),
+                tools: vec!["send_message".to_string(), "read_channel".to_string(), "list_users".to_string()],
+                permissions: vec!["slack:read".to_string(), "slack:write".to_string()],
+                resource_requirements: None,
+                auto_update: Some(true),
+            },
+            ExtensionMetadata {
+                id: "linear".to_string(),
+                name: "Linear".to_string(),
+                version: "1.0.0".to_string(),
+                author: "Linear".to_string(),
+                description: "连接到 Linear 以进行问题跟踪、项目管理和团队工作流".to_string(),
+                tools: vec!["create_issue".to_string(), "update_issue".to_string(), "list_issues".to_string()],
+                permissions: vec!["linear:read".to_string(), "linear:write".to_string()],
+                resource_requirements: None,
+                auto_update: Some(true),
+            },
+            ExtensionMetadata {
+                id: "stripe".to_string(),
+                name: "Stripe".to_string(),
+                version: "1.0.0".to_string(),
+                author: "Stripe".to_string(),
+                description: "连接到 Stripe 以进行支付处理、订阅和财务数据".to_string(),
+                tools: vec!["create_payment".to_string(), "list_invoices".to_string(), "manage_subscription".to_string()],
+                permissions: vec!["stripe:read".to_string(), "stripe:write".to_string()],
+                resource_requirements: Some(ResourceRequirements {
+                    min_memory_mb: Some(256),
+                    min_disk_mb: Some(100),
+                    required_features: vec!["tls".to_string()],
+                }),
+                auto_update: Some(true),
+            },
+        ]
     }
 
     pub fn install_extension(&mut self, metadata: ExtensionMetadata) -> Result<()> {

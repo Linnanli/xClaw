@@ -18,6 +18,7 @@ async fn main() {
     tauri::Builder::default()
         .manage(state)
         .invoke_handler(tauri::generate_handler![
+            check_setup_status,
             setup_master_password,
             unlock_app,
             get_session_info,

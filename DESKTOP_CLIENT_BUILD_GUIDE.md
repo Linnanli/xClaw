@@ -112,37 +112,83 @@ cargo build -p desktop-client --release
     Finished release [optimized] target(s) in XX.XXs
 ```
 
-### 4. 运行应用
+### 4. 启动应用
 
-#### 方式 1: 使用 Tauri CLI（推荐）
+有三种方式启动 desktop-client：
 
-首先安装 Tauri CLI:
+#### 方式 1: 使用 cargo run（最简单，推荐用于开发）
+
+```bash
+cargo run -p desktop-client
+```
+
+这会:
+- 自动编译（如果代码有修改）
+- 启动应用窗口
+- 显示控制台日志
+
+**首次启动时间**: 约 20-30 秒（需要编译）
+**后续启动时间**: 约 5-10 秒（增量编译）
+
+#### 方式 2: 直接运行编译好的二进制文件（最快）
+
+开发模式（需要先运行 `cargo build -p desktop-client`）:
+```bash
+./target/debug/desktop-client
+```
+
+发布模式（需要先运行 `cargo build -p desktop-client --release`）:
+```bash
+./target/release/desktop-client
+```
+
+**启动时间**: 1-2 秒
+
+#### 方式 3: 使用 Tauri CLI（用于前端开发，支持热重载）
+
+首先安装 Tauri CLI（仅需一次）:
 ```bash
 cargo install tauri-cli
 ```
 
 然后运行开发服务器:
 ```bash
-cargo tauri dev -p desktop-client
+cd desktop-client
+cargo tauri dev
 ```
 
 这会:
 - 启动 Rust 后端
-- 启动前端开发服务器
+- 监听文件变化
 - 打开应用窗口
-- 启用热重载（修改代码后自动重新加载）
+- 启用热重载（修改前端代码后自动刷新）
 
-#### 方式 2: 直接运行编译的二进制文件
+**注意**: 此方式主要用于前端开发，修改 Rust 代码仍需重新编译。
 
-开发模式:
-```bash
-./target/debug/desktop-client
-```
+### 启动后的界面
 
-发布模式:
-```bash
-./target/release/desktop-client
-```
+应用启动后会显示:
+
+1. **认证屏幕**（首次使用）
+   - 输入主密码（至少12个字符，包含大小写字母和数字）
+   - 点击 "Setup Master Password" 按钮
+
+2. **主界面**（认证后）
+   - 5个标签页: Chat, Approvals, Plugins, Extensions, Routines
+   - 左侧导航栏
+   - 右上角 Lock 按钮
+
+### 数据存储位置
+
+应用数据存储在:
+- **macOS**: `~/Library/Application Support/ironclaw/`
+- **Linux**: `~/.local/share/ironclaw/`
+- **Windows**: `%APPDATA%\ironclaw\`
+
+包含:
+- `desktop.db` - 本地数据库（加密）
+- 配置文件
+- 审计日志
 
 ## 验证编译
 
@@ -180,41 +226,108 @@ cargo test -p desktop-client --test routine_manager_property_tests
 
 ## 应用功能验证
 
-启动应用后，验证以下功能:
+启动应用后（使用 `cargo run -p desktop-client`），验证以下功能:
 
-### 1. 认证屏幕
-- [ ] 显示 "IronClaw" 品牌和 "Secure AI Assistant" 标语
+### 1. 首次启动 - 主密码设置
+- [ ] 显示 "IronClaw Desktop" 窗口标题
+- [ ] 显示 "Setup Master Password" 输入框
+- [ ] 输入密码（至少12字符，包含大小写字母和数字）
+- [ ] 点击 "Setup" 按钮成功设置密码
+
+### 2. 认证屏幕（后续启动）
+- [ ] 显示 "Unlock IronClaw" 标题
 - [ ] 主密码输入框可用
 - [ ] "Unlock" 按钮可点击
+- [ ] 输入正确密码后进入主界面
 
-### 2. 主界面标签页
-- [ ] Chat 标签页
-- [ ] Memory 标签页
-- [ ] Jobs 标签页
-- [ ] **Routines 标签页** (新增)
-- [ ] **Extensions 标签页** (新增)
-- [ ] Skills 标签页
-- [ ] Plugins 标签页
-- [ ] Logs 按钮
+### 3. 主界面标签页
+- [ ] **Chat** 标签页 - 对话界面
+- [ ] **Approvals** 标签页 - 操作审批
+- [ ] **Plugins** 标签页 - 插件管理
+- [ ] **Extensions** 标签页 - 扩展管理（新增）
+- [ ] **Routines** 标签页 - 日程管理（新增）
 
-### 3. Extensions 标签页 (新增功能)
+### 4. Extensions 标签页功能（新增）
 - [ ] 显示 "Extensions Management" 标题
-- [ ] 搜索框可用
-- [ ] Refresh 按钮可用
-- [ ] "Installed" 和 "Available" 标签页
-- [ ] 扩展卡片显示（名称、版本、作者、描述、工具列表）
-- [ ] 安装/卸载/启用/禁用按钮可用
+- [ ] 搜索框可用（输入关键词搜索扩展）
+- [ ] "Refresh" 按钮可用
+- [ ] "Installed" 和 "Available" 两个子标签页
+- [ ] 扩展卡片显示:
+  - 扩展名称和版本
+  - 作者信息
+  - 描述文本
+  - 提供的工具列表
+  - 权限列表
+- [ ] 操作按钮:
+  - Install（安装）
+  - Uninstall（卸载）
+  - Enable（启用）
+  - Disable（禁用）
 
-### 4. Routines 标签页 (新增功能)
+### 5. Routines 标签页功能（新增）
 - [ ] 显示 "Routines Management" 标题
 - [ ] "+ New Routine" 按钮可用
-- [ ] 日程列表显示（如果有日程）
-- [ ] 日程卡片显示（名称、描述、触发器、状态）
-- [ ] 触发/启用/禁用/删除按钮可用
-- [ ] 创建日程模态框可打开
-- [ ] 模态框包含：名称、描述、触发器类型、触发器值字段
+- [ ] 日程列表显示（如果已创建日程）
+- [ ] 日程卡片显示:
+  - 日程名称
+  - 描述
+  - 触发器类型（Time/Event/Manual）
+  - 状态徽章（Active/Paused/Disabled）
+- [ ] 操作按钮:
+  - Trigger（手动触发）
+  - Enable（启用）
+  - Disable（禁用）
+  - Delete（删除）
+- [ ] 创建日程模态框:
+  - 名称输入框
+  - 描述输入框
+  - 触发器类型选择（Time/Event/Manual）
+  - 触发器值输入（如 cron 表达式）
+  - Create 和 Cancel 按钮
+
+### 6. 基本操作测试
+- [ ] 切换标签页正常
+- [ ] 点击 "Lock" 按钮返回认证屏幕
+- [ ] 窗口可以调整大小（最小 800x600）
+- [ ] 窗口可以最小化/最大化/关闭
 
 ## 常见问题
+
+### Tauri API 不可用 (window.__TAURI_INTERNALS__ undefined)
+
+**问题描述:**
+应用启动后，JavaScript 控制台显示 `window.__TAURI_INTERNALS__ is undefined`，导致所有 Tauri 命令调用失败。
+
+**原因:**
+Tauri 2.0 改变了 API 注入机制。不再使用 `window.__TAURI__`，而是使用 `window.__TAURI_INTERNALS__` 进行 IPC 通信。
+
+**解决方案:**
+
+1. **必须使用 `cargo tauri dev` 启动**
+   ```bash
+   cargo tauri dev
+   ```
+   不要使用 `cargo run`，因为它不会注入 Tauri API。
+
+2. **验证 Tauri API 可用性**
+   在浏览器开发者工具（F12）中运行:
+   ```javascript
+   console.log(typeof window.__TAURI_INTERNALS__);
+   // 应该输出: "object"
+   ```
+
+3. **清除缓存并重新编译**
+   ```bash
+   cargo clean
+   cargo tauri dev
+   ```
+
+4. **检查 Tauri CLI 版本**
+   确保 Tauri CLI 已安装且版本匹配:
+   ```bash
+   cargo install tauri-cli --version "^2.0"
+   cargo tauri --version
+   ```
 
 ### 编译错误: "cannot find crate `tauri`"
 

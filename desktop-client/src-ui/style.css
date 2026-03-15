@@ -1081,6 +1081,20 @@ body {
   border-color: #f44336;
 }
 
+.btn-install:disabled {
+  background: #f0f0f0;
+  color: #999;
+  border-color: #ddd;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.btn-install:disabled:hover {
+  background: #f0f0f0;
+  color: #999;
+  border-color: #ddd;
+}
+
 .empty-state {
   text-align: center;
   color: #999;
@@ -1342,4 +1356,100 @@ body {
 
 .routine-modal-btn.create:hover {
   background: #388e3c;
+}
+
+/* Password Strength Indicator */
+.password-strength {
+  margin: 10px 0;
+}
+
+.strength-bar {
+  height: 4px;
+  background: #eee;
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.strength-fill {
+  height: 100%;
+  transition: width 0.3s, background-color 0.3s;
+}
+
+.strength-fill.weak {
+  background: #e74c3c;
+}
+
+.strength-fill.fair {
+  background: #f39c12;
+}
+
+.strength-fill.strong {
+  background: #4caf50;
+}
+
+.strength-text {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.strength-text.weak {
+  color: #e74c3c;
+}
+
+.strength-text.fair {
+  color: #f39c12;
+}
+
+.strength-text.strong {
+  color: #4caf50;
+}
+
+.strength-feedback {
+  font-size: 11px;
+  color: #999;
+  margin-top: 4px;
+}
+
+#setup-error {
+  color: #e74c3c;
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+
+.auth-hint-small {
+  color: #999;
+  font-size: 11px;
+  text-align: center;
+  margin-top: 10px;
+}
+
+#auth-setup h2 {
+  font-size: 18px;
+  margin-bottom: 10px;
+  color: #333;
+}
+
+#auth-setup .auth-hint {
+  margin-bottom: 20px;
+}
+
+/* Plugin and Extension Descriptions */
+.plugins-description,
+.extensions-description {
+  font-size: 13px;
+  color: #666;
+  margin: 10px 0 15px 0;
+  line-height: 1.5;
+  padding: 10px;
+  background: #f9f9f9;
+  border-left: 3px solid #667eea;
+  border-radius: 4px;
+}
+
+.plugins-header,
+.extensions-header {
+  padding: 15px;
+  border-bottom: 1px solid #eee;
 }

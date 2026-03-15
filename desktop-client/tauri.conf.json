@@ -20,6 +20,7 @@
       }
     ],
     "security": {
+      "csp": null,
       "assetProtocol": {
         "enable": true,
         "scope": ["$RESOURCE/**"]
@@ -30,3 +31,4 @@
     "active": false
   }
 }
+
