@@ -205,6 +205,35 @@
       </div>
     </div>
 
+    <!-- Skills Tab -->
+    <div class="tab-panel" id="tab-skills">
+      <div class="skills-container">
+        <div class="skills-header">
+          <h2>技能管理</h2>
+          <p class="skills-description">技能是可复用的工作流和工具集合，用于增强 AI 助手的能力。每个技能都包含特定的指导原则和最佳实践。</p>
+          <div class="skills-controls">
+            <input type="text" id="skill-search" placeholder="搜索技能..." class="skill-search">
+            <button onclick="refreshSkills()" class="skill-refresh-btn">刷新</button>
+          </div>
+        </div>
+        
+        <div class="skills-tabs">
+          <button class="skill-tab-btn active" onclick="switchSkillTab('available')">可用技能</button>
+          <button class="skill-tab-btn" onclick="switchSkillTab('installed')">已安装</button>
+        </div>
+
+        <!-- Available Skills -->
+        <div id="available-skills-panel" class="skill-panel active">
+          <div id="available-skills-list" class="skills-list"></div>
+        </div>
+
+        <!-- Installed Skills -->
+        <div id="installed-skills-panel" class="skill-panel">
+          <div id="installed-skills-list" class="skills-list"></div>
+        </div>
+      </div>
+    </div>
+
     <!-- Watermark -->
     <div id="watermark" class="watermark"></div>
   </div>

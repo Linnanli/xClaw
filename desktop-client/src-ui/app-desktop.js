@@ -217,6 +217,8 @@ function setupTabNavigation() {
         loadRoutines();
       } else if (tab === 'plugins') {
         loadPlugins();
+      } else if (tab === 'skills') {
+        loadSkills();
       }
     });
   });
@@ -1040,4 +1042,142 @@ async function deleteRoutineAction(routineId) {
       showToast('Failed to delete routine', 'error');
     }
   }
+}
+
+// Skills Management
+let installedSkillIds = [];
+
+async function loadSkills() {
+  try {
+    const skills = await invokeTauri('get_available_skills');
+    const installed = await invokeTauri('get_installed_skills');
+    
+    // Store installed skill IDs for quick lookup
+    installedSkillIds = installed.map(skill => skill.name);
+    
+    renderAvailableSkills(skills);
+    renderInstalledSkills(installed);
+  } catch (error) {
+    console.error('Failed to load skills:', error);
+    showToast('Failed to load skills', 'error');
+  }
+}
+
+function renderAvailableSkills(skills) {
+  const list = document.getElementById('available-skills-list');
+  list.innerHTML = '';
+  
+  if (skills.length === 0) {
+    list.innerHTML = '<p class="empty-state">No available skills</p>';
+    return;
+  }
+  
+  skills.forEach(skill => {
+    const isInstalled = installedSkillIds.includes(skill.name);
+    const card = document.createElement('div');
+    card.className = 'skill-card';
+    
+    const keywordsHtml = skill.keywords && skill.keywords.length > 0 
+      ? `<div class="skill-keywords">${skill.keywords.map(k => `<span class="keyword-tag">${k}</span>`).join('')}</div>`
+      : '';
+    
+    card.innerHTML = `
+      <div class="skill-header">
+        <h3>${skill.name}</h3>
+        <span class="skill-version">${skill.version}</span>
+      </div>
+      <p class="skill-description">${skill.description}</p>
+      <div class="skill-meta">
+        <span class="skill-trust">Trust: ${skill.trust}</span>
+        <span class="skill-source">${skill.source}</span>
+      </div>
+      ${keywordsHtml}
+      <div class="skill-actions">
+        <button onclick="installSkillAction('${skill.name}')" class="btn-activate" ${isInstalled ? 'disabled' : ''}>
+          ${isInstalled ? 'Installed' : 'Install'}
+        </button>
+      </div>
+    `;
+    list.appendChild(card);
+  });
+}
+
+function renderInstalledSkills(skills) {
+  const list = document.getElementById('installed-skills-list');
+  list.innerHTML = '';
+  
+  if (skills.length === 0) {
+    list.innerHTML = '<p class="empty-state">No skills installed</p>';
+    return;
+  }
+  
+  skills.forEach(skill => {
+    const card = document.createElement('div');
+    card.className = 'skill-card';
+    
+    const keywordsHtml = skill.keywords && skill.keywords.length > 0 
+      ? `<div class="skill-keywords">${skill.keywords.map(k => `<span class="keyword-tag">${k}</span>`).join('')}</div>`
+      : '';
+    
+    card.innerHTML = `
+      <div class="skill-header">
+        <h3>${skill.name}</h3>
+        <span class="skill-version">${skill.version}</span>
+      </div>
+      <p class="skill-description">${skill.description}</p>
+      <div class="skill-meta">
+        <span class="skill-trust">Trust: ${skill.trust}</span>
+        <span class="skill-source">${skill.source}</span>
+      </div>
+      ${keywordsHtml}
+      <div class="skill-actions">
+        <button onclick="uninstallSkillAction('${skill.name}')" class="btn-deactivate">Uninstall</button>
+      </div>
+    `;
+    list.appendChild(card);
+  });
+}
+
+function switchSkillTab(tab) {
+  document.querySelectorAll('.skill-tab-btn').forEach(btn => btn.classList.remove('active'));
+  document.querySelectorAll('.skill-panel').forEach(panel => panel.classList.remove('active'));
+  
+  const buttons = document.querySelectorAll('.skill-tab-btn');
+  buttons.forEach(btn => {
+    if (btn.textContent.includes(tab === 'installed' ? '已安装' : '可用技能')) {
+      btn.classList.add('active');
+    }
+  });
+  
+  document.getElementById(`${tab}-skills-panel`).classList.add('active');
+}
+
+async function installSkillAction(skillName) {
+  try {
+    await invokeTauri('install_skill', { name: skillName });
+    showToast(`Skill "${skillName}" installed`, 'success');
+    loadSkills();
+    switchSkillTab('installed');
+  } catch (error) {
+    console.error('Failed to install skill:', error);
+    showToast('Failed to install skill', 'error');
+  }
+}
+
+async function uninstallSkillAction(skillName) {
+  if (confirm(`Are you sure you want to uninstall "${skillName}"?`)) {
+    try {
+      await invokeTauri('uninstall_skill', { name: skillName });
+      showToast(`Skill "${skillName}" uninstalled`, 'success');
+      loadSkills();
+    } catch (error) {
+      console.error('Failed to uninstall skill:', error);
+      showToast('Failed to uninstall skill', 'error');
+    }
+  }
+}
+
+function refreshSkills() {
+  loadSkills();
+  showToast('Skills refreshed', 'success');
 }
