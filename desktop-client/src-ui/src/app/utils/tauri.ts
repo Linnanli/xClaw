@@ -1,31 +1,19 @@
 // Tauri API Integration Layer
 // This file provides a typed interface to Tauri backend commands
 
-declare global {
-  interface Window {
-    __TAURI_INTERNALS__?: {
-      invoke: (command: string, args?: Record<string, any>) => Promise<any>;
-    };
-  }
-}
+import { invoke } from '@tauri-apps/api/core';
 
 // Helper function to invoke Tauri commands with error handling
 export async function invokeTauri<T = any>(
   command: string,
   args: Record<string, any> = {}
 ): Promise<T> {
-  // Wait for Tauri internals to be available (with timeout)
-  let attempts = 0;
-  while (typeof window.__TAURI_INTERNALS__ === 'undefined' && attempts < 50) {
-    await new Promise(resolve => setTimeout(resolve, 100));
-    attempts++;
+  try {
+    return await invoke<T>(command, args);
+  } catch (error) {
+    console.error(`Tauri command '${command}' failed:`, error);
+    throw error;
   }
-
-  if (typeof window.__TAURI_INTERNALS__ === 'undefined') {
-    throw new Error('Tauri API not available. Make sure you are running this in a Tauri application.');
-  }
-
-  return await window.__TAURI_INTERNALS__.invoke(command, args);
 }
 
 // Authentication APIs
@@ -332,4 +320,65 @@ export const logApi = {
     invokeTauri<LogEntry[]>('filter_logs', { level, module, limit }),
   exportLogs: (format: string) =>
     invokeTauri<string>('export_logs', { format }),
+};
+
+// Skill APIs
+export interface Skill {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  author: string;
+  keywords: string[];
+  trust_level: string;
+  source: string;
+}
+
+export interface InstalledSkill {
+  metadata: Skill;
+  enabled: boolean;
+}
+
+export const skillApi = {
+  getAvailableSkills: () => invokeTauri<Skill[]>('get_available_skills'),
+  getInstalledSkills: () => invokeTauri<InstalledSkill[]>('get_installed_skills'),
+  installSkill: (skillId: string) =>
+    invokeTauri('install_skill', { skill_id: skillId }),
+  uninstallSkill: (skillId: string) =>
+    invokeTauri('uninstall_skill', { skill_id: skillId }),
+  enableSkill: (skillId: string) =>
+    invokeTauri('enable_skill', { skill_id: skillId }),
+  disableSkill: (skillId: string) =>
+    invokeTauri('disable_skill', { skill_id: skillId }),
+};
+
+// Message editing/deletion APIs
+export const messageApi = {
+  editMessage: (threadId: string, messageId: string, content: string) =>
+    invokeTauri('edit_message', { thread_id: threadId, message_id: messageId, content }),
+  deleteMessage: (threadId: string, messageId: string) =>
+    invokeTauri('delete_message', { thread_id: threadId, message_id: messageId }),
+};
+
+// Log clearing API
+export const logClearApi = {
+  clearLogs: () => invokeTauri('clear_logs'),
+};
+
+// Message search API
+export const messageSearchApi = {
+  searchMessages: (threadId: string, query: string) =>
+    invokeTauri<Message[]>('search_messages', { thread_id: threadId, query }),
+};
+
+// Thread export API
+export const threadExportApi = {
+  exportThread: (threadId: string, format: string) =>
+    invokeTauri<string>('export_thread', { thread_id: threadId, format }),
+};
+
+// File upload API
+export const fileApi = {
+  uploadFile: (threadId: string, filePath: string) =>
+    invokeTauri<string>('upload_file', { thread_id: threadId, file_path: filePath }),
 };

@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Filter, Search, AlertCircle, Info, AlertTriangle, XCircle, Download } from 'lucide-react';
+import { Filter, Search, AlertCircle, Info, AlertTriangle, XCircle, Download, Trash2 } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
-import { logApi, LogEntry } from '../../utils/tauri';
+import { logApi, logClearApi, LogEntry } from '../../utils/tauri';
+import { LogStreamClient } from '../../utils/sse';
 
 export function LogsTab() {
   const { theme } = useTheme();
@@ -11,6 +12,7 @@ export function LogsTab() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [streamEnabled, setStreamEnabled] = useState(false);
 
   useEffect(() => {
     const fetchLogs = async () => {
@@ -41,6 +43,19 @@ export function LogsTab() {
 
     fetchLogs();
   }, [searchQuery, filterLevel, filterModule]);
+
+  // Setup real-time log streaming
+  useEffect(() => {
+    if (!streamEnabled) return;
+
+    const streamClient = new LogStreamClient('http://localhost:8000', (logEntry) => {
+      setLogs((prevLogs) => [logEntry, ...prevLogs.slice(0, 99)]);
+    });
+
+    streamClient.connect();
+
+    return () => streamClient.disconnect();
+  }, [streamEnabled]);
 
   const getLevelIcon = (level: string) => {
     const levelLower = level.toLowerCase();
@@ -89,6 +104,19 @@ export function LogsTab() {
     } catch (err) {
       console.error('Failed to export logs:', err);
       setError('Failed to export logs');
+    }
+  };
+
+  const handleClearLogs = async () => {
+    if (confirm('确定要清空所有日志吗？此操作无法撤销。')) {
+      try {
+        await logClearApi.clearLogs();
+        setLogs([]);
+        setError(null);
+      } catch (err) {
+        console.error('Failed to clear logs:', err);
+        setError('Failed to clear logs');
+      }
     }
   };
 
@@ -187,6 +215,32 @@ export function LogsTab() {
             >
               <Download size={18} />
               导出
+            </button>
+            <button
+              onClick={handleClearLogs}
+              className={`px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-opacity ${
+                theme === 'dark'
+                  ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/30'
+                  : 'bg-red-100 text-red-600 hover:bg-red-200 shadow-md'
+              }`}
+            >
+              <Trash2 size={18} />
+              清空
+            </button>
+            <button
+              onClick={() => setStreamEnabled(!streamEnabled)}
+              className={`px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-opacity ${
+                streamEnabled
+                  ? theme === 'dark'
+                    ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                    : 'bg-green-100 text-green-600 shadow-md'
+                  : theme === 'dark'
+                    ? 'bg-gray-500/20 text-gray-400 border border-gray-500/30'
+                    : 'bg-gray-100 text-gray-600 shadow-md'
+              }`}
+            >
+              <span className={`w-2 h-2 rounded-full ${streamEnabled ? 'bg-green-400' : 'bg-gray-400'}`} />
+              {streamEnabled ? '实时流：开' : '实时流：关'}
             </button>
           </div>
         </div>

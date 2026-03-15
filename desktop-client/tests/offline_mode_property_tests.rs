@@ -1,5 +1,5 @@
 use proptest::prelude::*;
-use desktop_client::offline_mode::{OfflineModeManager, NetworkStatus, SyncItem};
+use desktop_client::offline_mode::{OfflineModeManager, SyncItem};
 
 proptest! {
     #[test]

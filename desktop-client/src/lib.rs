@@ -8,6 +8,7 @@ pub mod dlp_integration;
 pub mod offline_mode;
 pub mod extension_manager;
 pub mod routine_manager;
+pub mod skill_manager;
 pub mod api_client;
 
 pub use error::{Error, Result};

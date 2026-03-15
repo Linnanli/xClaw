@@ -19,6 +19,8 @@ prop_compose! {
             description,
             tools: (0..tools_count).map(|i| format!("tool_{}", i)).collect(),
             permissions: (0..perms_count).map(|i| format!("perm_{}", i)).collect(),
+            resource_requirements: None,
+            auto_update: Some(true),
         }
     }
 }
@@ -79,7 +81,7 @@ proptest! {
     ) {
         let mut manager = ExtensionManager::new();
         let id1 = metadata1.id.clone();
-        let id2 = metadata2.id.clone();
+        let _id2 = metadata2.id.clone();
         
         manager.install_extension(metadata1).unwrap();
         manager.install_extension(metadata2).unwrap();

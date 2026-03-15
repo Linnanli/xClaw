@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { MessageSquare, Brain, Briefcase, Calendar, Puzzle, Zap, FileText, Sun, Moon } from 'lucide-react';
+import React, { useState } from 'react';
+import { MessageSquare, Brain, Briefcase, Calendar, Puzzle, Zap, FileText, Sun, Moon, Lock, User, Settings } from 'lucide-react';
 import { ChatTab } from '../tabs/ChatTab';
 import { MemoryTab } from '../tabs/MemoryTab';
 import { JobsTab } from '../tabs/JobsTab';
@@ -8,13 +8,52 @@ import { ExtensionsTab } from '../tabs/ExtensionsTab';
 import { SkillsTab } from '../tabs/SkillsTab';
 import { LogsTab } from '../tabs/LogsTab';
 import { useTheme } from '../../contexts/ThemeContext';
+import { sessionApi } from '../../utils/tauri';
+import { ShortcutManager, SHORTCUTS } from '../../utils/shortcuts';
 
 type TabName = 'chat' | 'memory' | 'jobs' | 'routines' | 'extensions' | 'skills' | 'logs';
 
 export function MainApp() {
   const [activeTab, setActiveTab] = useState<TabName>('chat');
   const [isConnected, setIsConnected] = useState(true);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const { theme, toggleTheme } = useTheme();
+
+  // Initialize shortcuts
+  React.useEffect(() => {
+    const shortcutManager = new ShortcutManager();
+    
+    shortcutManager.register({
+      ...SHORTCUTS.LOCK_APP,
+      action: handleLock,
+    });
+
+    shortcutManager.register({
+      ...SHORTCUTS.NEW_THREAD,
+      action: () => setActiveTab('chat'),
+    });
+
+    shortcutManager.register({
+      ...SHORTCUTS.SEARCH,
+      action: () => setActiveTab('chat'),
+    });
+
+    const handleKeyDown = (e: KeyboardEvent) => shortcutManager.handleKeyDown(e);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  const handleLock = async () => {
+    try {
+      await sessionApi.lockApp();
+      // Redirect to login screen
+      window.location.reload();
+    } catch (err) {
+      console.error('Failed to lock app:', err);
+    }
+  };
 
   const tabs = [
     { id: 'chat' as const, label: '聊天', icon: MessageSquare },
@@ -110,6 +149,54 @@ export function MainApp() {
             <FileText size={18} />
             <span className="font-medium">日志</span>
           </button>
+
+          {/* Settings Button */}
+          <button
+            onClick={() => setShowSettings(!showSettings)}
+            className={`p-2 rounded-lg transition-colors ${
+              theme === 'dark'
+                ? 'hover:bg-[#0a1628] text-gray-400 hover:text-[#5ddad5]'
+                : 'hover:bg-[#f5f5f5] text-[#666] hover:text-[#667eea]'
+            }`}
+            title="设置"
+          >
+            <Settings size={20} />
+          </button>
+
+          {/* User Menu */}
+          <div className="relative">
+            <button
+              onClick={() => setShowUserMenu(!showUserMenu)}
+              className={`p-2 rounded-lg transition-colors ${
+                theme === 'dark'
+                  ? 'hover:bg-[#0a1628] text-gray-400 hover:text-[#5ddad5]'
+                  : 'hover:bg-[#f5f5f5] text-[#666] hover:text-[#667eea]'
+              }`}
+              title="用户菜单"
+            >
+              <User size={20} />
+            </button>
+            
+            {showUserMenu && (
+              <div className={`absolute right-0 mt-2 w-48 rounded-lg shadow-lg z-50 ${
+                theme === 'dark'
+                  ? 'bg-[#0f1d35] border border-[#1a2942]'
+                  : 'bg-white border border-[#ddd]'
+              }`}>
+                <button
+                  onClick={handleLock}
+                  className={`w-full text-left px-4 py-2 flex items-center gap-2 transition-colors ${
+                    theme === 'dark'
+                      ? 'hover:bg-[#1a2942] text-gray-300'
+                      : 'hover:bg-[#f5f5f5] text-[#333]'
+                  }`}
+                >
+                  <Lock size={16} />
+                  <span>锁定应用</span>
+                </button>
+              </div>
+            )}
+          </div>
 
           {/* Connection Status */}
           <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full ${

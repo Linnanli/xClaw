@@ -175,8 +175,8 @@ fn test_session_isolation() {
     let mut auth1 = AuthManager::new();
     let mut auth2 = AuthManager::new();
 
-    auth1.setup_master_password("Password1!").unwrap();
-    auth2.setup_master_password("Password2!").unwrap();
+    auth1.setup_master_password("ValidPassword123").unwrap();
+    auth2.setup_master_password("AnotherPassword456").unwrap();
 
     auth1.create_session("user1".to_string()).unwrap();
     auth2.create_session("user2".to_string()).unwrap();

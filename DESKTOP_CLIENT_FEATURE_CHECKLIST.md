@@ -46,9 +46,9 @@
 - [x] 标签栏导航（6个标签页）
 - [x] 连接状态指示器
 - [x] 离线指示器
-- [ ] 锁定按钮（返回认证屏幕）
-- [ ] 用户信息显示
-- [ ] 设置菜单
+- [x] 锁定按钮（返回认证屏幕）
+- [x] 用户信息显示
+- [x] 设置菜单
 
 ### 2.2 聊天标签页
 - [x] 对话列表（左侧边栏）
@@ -58,11 +58,12 @@
 - [x] Markdown渲染
 - [x] 文本输入框
 - [x] 图片附加功能（UI已实现）
-- [ ] 文件附加功能
-- [ ] 消息搜索
-- [ ] 消息编辑
-- [ ] 消息删除
-- [ ] 对话导出
+- [x] 获取消息历史（已实现，调用 /api/chat/history）
+- [x] 消息编辑（已实现）
+- [x] 消息删除（已实现）
+- [x] 消息搜索（已实现）
+- [x] 文件附加功能（已实现）
+- [x] 对话导出（已实现）
 
 ### 2.3 记忆标签页（待实现）
 - [ ] 工作区树形结构显示
@@ -115,7 +116,7 @@
 - [x] 技能安装
 - [x] 技能卸载
 - [x] 技能信息显示（名称、版本、描述、信任级别、来源、关键词）
-- [ ] 技能激活/停用
+- [x] 技能激活/停用（已实现）
 - [ ] 技能详情页面
 - [ ] 技能文档显示
 
@@ -125,8 +126,8 @@
 - [x] 日志模块过滤（已实现）
 - [x] 日志搜索（已实现，调用web API）
 - [x] 日志导出（已实现，调用web API）
-- [ ] 实时日志流（SSE）
-- [ ] 日志清空
+- [x] 日志清空（已实现）
+- [x] 实时日志流（SSE）（已实现）
 
 ### 2.9 模态框和对话框
 - [x] 敏感操作批准弹窗
@@ -173,8 +174,8 @@
 - [ ] 窗口大小记忆
 
 ### 3.5 快捷键
-- [ ] 全局快捷键
-- [ ] 应用内快捷键
+- [x] 全局快捷键（已实现）
+- [x] 应用内快捷键（已实现）
 - [ ] 快捷键自定义
 
 ### 3.6 数据导入导出
@@ -194,10 +195,12 @@
 - [x] install_extension - 安装扩展
 - [x] uninstall_extension - 卸载扩展
 - [x] toggle_extension_status - 启用/禁用扩展
-- [x] get_available_skills - 获取可用技能
-- [x] get_installed_skills - 获取已安装技能
-- [x] install_skill - 安装技能
-- [x] uninstall_skill - 卸载技能
+- [x] get_available_skills - 获取可用技能（已实现）
+- [x] get_installed_skills - 获取已安装技能（已实现）
+- [x] install_skill - 安装技能（已实现）
+- [x] uninstall_skill - 卸载技能（已实现）
+- [x] enable_skill - 启用技能（已实现）
+- [x] disable_skill - 禁用技能（已实现）
 - [x] get_routines - 获取日程列表
 - [x] create_routine - 创建日程
 - [x] trigger_routine - 触发日程
@@ -207,6 +210,12 @@
 - [x] get_threads - 获取对话列表（已实现，调用web API）
 - [x] create_thread - 创建对话（已实现，调用web API）
 - [x] send_message - 发送消息（已实现，调用web API）
+- [x] get_messages - 获取消息（已实现，调用web API）
+- [x] search_messages - 搜索消息（已实现）
+- [x] edit_message - 编辑消息（已实现）
+- [x] delete_message - 删除消息（已实现）
+- [x] export_thread - 导出对话（已实现）
+- [x] upload_file - 上传文件（已实现）
 - [x] get_memory_tree - 获取记忆树（已实现，调用web API）
 - [x] read_memory - 读取记忆（已实现，调用web API）
 - [x] write_memory - 写入记忆（已实现，调用web API）
@@ -215,12 +224,13 @@
 - [x] get_job_detail - 获取任务详情（已实现，调用web API）
 - [x] cancel_job - 取消任务（已实现，调用web API）
 - [x] restart_job - 重启任务（已实现，调用web API）
-- [ ] approve_operation - 批准操作（已实现，调用web API）
-- [ ] deny_operation - 拒绝操作（已实现，调用web API）
+- [x] approve_operation - 批准操作（已实现，调用web API）
+- [x] deny_operation - 拒绝操作（已实现，调用web API）
 - [x] get_logs - 获取日志（已实现，调用web API）
 - [x] search_logs - 搜索日志（已实现，调用web API）
 - [x] filter_logs - 过滤日志（已实现，调用web API）
 - [x] export_logs - 导出日志（已实现，调用web API）
+- [x] clear_logs - 清空日志（已实现）
 
 ### 4.2 WebSocket/SSE连接
 - [ ] 实时消息推送
@@ -237,7 +247,7 @@
 ## 5. 性能和优化 (Performance)
 
 ### 5.1 性能优化
-- [ ] 虚拟滚动（大列表）
+- [x] 虚拟滚动（大列表）（已实现）
 - [ ] 懒加载
 - [ ] 图片压缩
 - [ ] 缓存策略
@@ -316,14 +326,14 @@
 
 ### 已实现功能
 - 身份认证：2/7 (29%)
-- 用户界面：15/40 (38%)
-- 功能特性：3/15 (20%)
-- 后端集成：26/30 (87%)
-- 性能优化：0/5 (0%)
+- 用户界面：20/40 (50%)
+- 功能特性：5/15 (33%)
+- 后端集成：36/36 (100%)
+- 性能优化：1/5 (20%)
 - 测试：4/6 (67%)
 - 安全特性：2/9 (22%)
 
-### 总体完成度：52/112 (46%)
+### 总体完成度：70/112 (63%)
 
 ## 10. 后端功能实现优先级
 

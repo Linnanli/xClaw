@@ -39,6 +39,15 @@ pub struct SendMessageResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Message {
+    pub id: String,
+    pub thread_id: String,
+    pub role: String,
+    pub content: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApprovalRequest {
     pub request_id: String,
     pub action: String,
@@ -87,6 +96,15 @@ pub struct JobDetail {
     pub events: Vec<serde_json::Value>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogEntry {
+    pub timestamp: String,
+    pub level: String,
+    pub module: String,
+    pub message: String,
+    pub context: Option<serde_json::Value>,
+}
+
 impl ApiClient {
     pub fn new(base_url: String) -> Self {
         Self {
@@ -128,6 +146,124 @@ impl ApiClient {
             .await
             .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?
             .json::<SendMessageResponse>()
+            .await
+            .map_err(|e| crate::error::Error::SerializationError(e.to_string()))
+    }
+
+    pub async fn get_messages(&self, thread_id: &str) -> Result<Vec<Message>> {
+        let url = format!("{}/api/chat/history?thread_id={}", self.base_url, thread_id);
+        let response = self.client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?;
+        
+        // Parse the HistoryResponse and convert turns to messages
+        #[derive(Debug, Deserialize)]
+        struct TurnInfo {
+            turn_number: i32,
+            user_input: String,
+            response: Option<String>,
+            started_at: String,
+            completed_at: Option<String>,
+        }
+        
+        #[derive(Debug, Deserialize)]
+        struct HistoryResponse {
+            thread_id: String,
+            turns: Vec<TurnInfo>,
+        }
+        
+        let history: HistoryResponse = response
+            .json()
+            .await
+            .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?;
+        
+        let mut messages = Vec::new();
+        for turn in history.turns {
+            // Add user message
+            messages.push(Message {
+                id: format!("user-{}", turn.turn_number),
+                thread_id: history.thread_id.clone(),
+                role: "user".to_string(),
+                content: turn.user_input,
+                created_at: turn.started_at.clone(),
+            });
+            
+            // Add assistant message if available
+            if let Some(response) = turn.response {
+                messages.push(Message {
+                    id: format!("assistant-{}", turn.turn_number),
+                    thread_id: history.thread_id.clone(),
+                    role: "assistant".to_string(),
+                    content: response,
+                    created_at: turn.completed_at.unwrap_or_else(|| turn.started_at.clone()),
+                });
+            }
+        }
+        
+        Ok(messages)
+    }
+
+    pub async fn search_messages(&self, thread_id: &str, query: &str) -> Result<Vec<Message>> {
+        let url = format!("{}/api/chat/threads/{}/search?q={}", self.base_url, thread_id, urlencoding::encode(query));
+        self.client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?
+            .json::<Vec<Message>>()
+            .await
+            .map_err(|e| crate::error::Error::SerializationError(e.to_string()))
+    }
+
+    pub async fn edit_message(&self, thread_id: &str, message_id: &str, content: &str) -> Result<Message> {
+        let url = format!("{}/api/chat/threads/{}/messages/{}", self.base_url, thread_id, message_id);
+        self.client
+            .put(&url)
+            .json(&serde_json::json!({"content": content}))
+            .send()
+            .await
+            .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?
+            .json::<Message>()
+            .await
+            .map_err(|e| crate::error::Error::SerializationError(e.to_string()))
+    }
+
+    pub async fn delete_message(&self, thread_id: &str, message_id: &str) -> Result<()> {
+        let url = format!("{}/api/chat/threads/{}/messages/{}", self.base_url, thread_id, message_id);
+        self.client
+            .delete(&url)
+            .send()
+            .await
+            .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn export_thread(&self, thread_id: &str, format: &str) -> Result<String> {
+        let url = format!("{}/api/chat/threads/{}/export", self.base_url, thread_id);
+        self.client
+            .post(&url)
+            .json(&serde_json::json!({"format": format}))
+            .send()
+            .await
+            .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?
+            .text()
+            .await
+            .map_err(|e| crate::error::Error::SerializationError(e.to_string()))
+    }
+
+    pub async fn upload_file(&self, thread_id: &str, file_path: &str) -> Result<String> {
+        let url = format!("{}/api/chat/threads/{}/files/upload", self.base_url, thread_id);
+        let response = self.client
+            .post(&url)
+            .json(&serde_json::json!({"file_path": file_path}))
+            .send()
+            .await
+            .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?;
+        
+        response
+            .text()
             .await
             .map_err(|e| crate::error::Error::SerializationError(e.to_string()))
     }
@@ -239,7 +375,6 @@ impl ApiClient {
         Ok(())
     }
 
-    // Log APIs
     pub async fn get_logs(&self, limit: usize) -> Result<Vec<LogEntry>> {
         let url = format!("{}/api/logs", self.base_url);
         self.client
@@ -291,17 +426,17 @@ impl ApiClient {
             .await
             .map_err(|e| crate::error::Error::SerializationError(e.to_string()))
     }
-}
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LogEntry {
-    pub timestamp: String,
-    pub level: String,
-    pub module: String,
-    pub message: String,
-    pub context: Option<serde_json::Value>,
+    pub async fn clear_logs(&self) -> Result<()> {
+        let url = format!("{}/api/logs/clear", self.base_url);
+        self.client
+            .post(&url)
+            .send()
+            .await
+            .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?;
+        Ok(())
+    }
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -35,7 +35,7 @@ proptest! {
         prop_assert!(result.is_ok());
         let routine = result.unwrap();
         prop_assert_eq!(manager.get_all_routines().len(), 1);
-        prop_assert_eq!(manager.get_routine(&routine.id).unwrap().id, routine.id);
+        prop_assert_eq!(&manager.get_routine(&routine.id).unwrap().id, &routine.id);
     }
 
     #[test]
@@ -60,10 +60,10 @@ proptest! {
         let routine = manager.create_routine(name, description, trigger, vec![]).unwrap();
         
         manager.disable_routine(&routine.id).unwrap();
-        prop_assert_eq!(manager.get_routine(&routine.id).unwrap().status, desktop_client::routine_manager::RoutineStatus::Disabled);
+        prop_assert_eq!(&manager.get_routine(&routine.id).unwrap().status, &desktop_client::routine_manager::RoutineStatus::Disabled);
         
         manager.enable_routine(&routine.id).unwrap();
-        prop_assert_eq!(manager.get_routine(&routine.id).unwrap().status, desktop_client::routine_manager::RoutineStatus::Active);
+        prop_assert_eq!(&manager.get_routine(&routine.id).unwrap().status, &desktop_client::routine_manager::RoutineStatus::Active);
     }
 
     #[test]
@@ -76,7 +76,7 @@ proptest! {
         let routine = manager.create_routine(name, description, trigger, vec![]).unwrap();
         
         manager.pause_routine(&routine.id).unwrap();
-        prop_assert_eq!(manager.get_routine(&routine.id).unwrap().status, desktop_client::routine_manager::RoutineStatus::Paused);
+        prop_assert_eq!(&manager.get_routine(&routine.id).unwrap().status, &desktop_client::routine_manager::RoutineStatus::Paused);
     }
 
     #[test]
@@ -120,7 +120,7 @@ proptest! {
         manager.complete_routine_run(&run.id, true, None).unwrap();
         
         let runs = manager.get_routine_runs(&routine.id, 10);
-        prop_assert_eq!(runs[0].status, "success");
+        prop_assert_eq!(&runs[0].status, "success");
         prop_assert!(runs[0].completed_at.is_some());
     }
 
@@ -139,7 +139,7 @@ proptest! {
         
         let active = manager.get_active_routines();
         prop_assert_eq!(active.len(), 1);
-        prop_assert_eq!(active[0].id, routine2.id);
+        prop_assert_eq!(&active[0].id, &routine2.id);
     }
 
     #[test]

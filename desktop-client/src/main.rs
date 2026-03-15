@@ -43,6 +43,12 @@ async fn main() {
             get_threads,
             create_thread,
             send_message,
+            get_messages,
+            search_messages,
+            edit_message,
+            delete_message,
+            export_thread,
+            upload_file,
             approve_operation,
             deny_operation,
             get_installed_extensions,
@@ -53,6 +59,12 @@ async fn main() {
             disable_extension,
             search_extensions,
             get_enabled_tools,
+            get_available_skills,
+            get_installed_skills,
+            install_skill,
+            uninstall_skill,
+            enable_skill,
+            disable_skill,
             get_routines,
             create_routine,
             delete_routine,
@@ -73,6 +85,7 @@ async fn main() {
             search_logs,
             filter_logs,
             export_logs,
+            clear_logs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

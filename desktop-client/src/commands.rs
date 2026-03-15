@@ -33,6 +33,7 @@ pub struct CommandState {
     pub storage_manager: Arc<Mutex<Option<StorageManager>>>,
     pub extension_manager: Arc<StdMutex<ExtensionManager>>,
     pub routine_manager: Arc<StdMutex<RoutineManager>>,
+    pub skill_manager: Arc<StdMutex<crate::skill_manager::SkillManager>>,
     pub api_client: Arc<crate::api_client::ApiClient>,
 }
 
@@ -46,6 +47,7 @@ impl CommandState {
             storage_manager: Arc::new(Mutex::new(None)),
             extension_manager: Arc::new(StdMutex::new(ExtensionManager::new())),
             routine_manager: Arc::new(StdMutex::new(RoutineManager::new())),
+            skill_manager: Arc::new(StdMutex::new(crate::skill_manager::SkillManager::new())),
             api_client: Arc::new(api_client),
         }
     }
@@ -438,6 +440,14 @@ pub async fn send_message(
 }
 
 #[tauri::command]
+pub async fn get_messages(
+    thread_id: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<Vec<crate::api_client::Message>> {
+    state.api_client.get_messages(&thread_id).await
+}
+
+#[tauri::command]
 pub async fn approve_operation(
     request_id: String,
     action: String,
@@ -527,6 +537,59 @@ pub async fn get_enabled_tools(
     state: tauri::State<'_, CommandState>,
 ) -> Result<Vec<String>> {
     Ok(state.extension_manager.lock().unwrap().get_enabled_tools())
+}
+
+// Skill Management Commands
+#[tauri::command]
+pub async fn get_available_skills(
+    state: tauri::State<'_, CommandState>,
+) -> Result<Vec<crate::skill_manager::Skill>> {
+    let manager = state.skill_manager.lock().unwrap();
+    manager.get_available_skills()
+}
+
+#[tauri::command]
+pub async fn get_installed_skills(
+    state: tauri::State<'_, CommandState>,
+) -> Result<Vec<crate::skill_manager::InstalledSkill>> {
+    let manager = state.skill_manager.lock().unwrap();
+    manager.get_installed_skills()
+}
+
+#[tauri::command]
+pub async fn install_skill(
+    skill_id: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<()> {
+    let mut manager = state.skill_manager.lock().unwrap();
+    manager.install_skill(skill_id)
+}
+
+#[tauri::command]
+pub async fn uninstall_skill(
+    skill_id: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<()> {
+    let mut manager = state.skill_manager.lock().unwrap();
+    manager.uninstall_skill(skill_id)
+}
+
+#[tauri::command]
+pub async fn enable_skill(
+    skill_id: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<()> {
+    let mut manager = state.skill_manager.lock().unwrap();
+    manager.enable_skill(skill_id)
+}
+
+#[tauri::command]
+pub async fn disable_skill(
+    skill_id: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<()> {
+    let mut manager = state.skill_manager.lock().unwrap();
+    manager.disable_skill(skill_id)
 }
 
 // Routine Management Commands
@@ -701,4 +764,62 @@ pub async fn export_logs(
     state: tauri::State<'_, CommandState>,
 ) -> Result<String> {
     state.api_client.export_logs(&format).await
+}
+
+// Message editing/deletion commands
+#[tauri::command]
+pub async fn edit_message(
+    thread_id: String,
+    message_id: String,
+    content: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<crate::api_client::Message> {
+    state.api_client.edit_message(&thread_id, &message_id, &content).await
+}
+
+#[tauri::command]
+pub async fn delete_message(
+    thread_id: String,
+    message_id: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<()> {
+    state.api_client.delete_message(&thread_id, &message_id).await
+}
+
+// Log clearing command
+#[tauri::command]
+pub async fn clear_logs(
+    state: tauri::State<'_, CommandState>,
+) -> Result<()> {
+    state.api_client.clear_logs().await
+}
+
+// Message search command
+#[tauri::command]
+pub async fn search_messages(
+    thread_id: String,
+    query: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<Vec<crate::api_client::Message>> {
+    state.api_client.search_messages(&thread_id, &query).await
+}
+
+// Thread export command
+#[tauri::command]
+pub async fn export_thread(
+    thread_id: String,
+    format: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<String> {
+    state.api_client.export_thread(&thread_id, &format).await
+}
+
+// File upload command
+#[tauri::command]
+pub async fn upload_file(
+    thread_id: String,
+    file_path: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<String> {
+    state.api_client.upload_file(&thread_id, &file_path).await
 }

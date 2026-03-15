@@ -206,6 +206,8 @@ mod tests {
             description: "GitHub integration".to_string(),
             tools: vec!["read_issues".to_string(), "create_issue".to_string()],
             permissions: vec!["github:read".to_string()],
+            resource_requirements: None,
+            auto_update: Some(true),
         };
 
         assert!(manager.install_extension(metadata).is_ok());
@@ -223,6 +225,8 @@ mod tests {
             description: "GitHub integration".to_string(),
             tools: vec!["read_issues".to_string()],
             permissions: vec![],
+            resource_requirements: None,
+            auto_update: Some(true),
         };
 
         manager.install_extension(metadata).unwrap();
@@ -243,6 +247,8 @@ mod tests {
             description: "GitHub integration".to_string(),
             tools: vec!["read_issues".to_string(), "create_issue".to_string()],
             permissions: vec![],
+            resource_requirements: None,
+            auto_update: Some(true),
         };
 
         manager.install_extension(metadata).unwrap();

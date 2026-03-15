@@ -60,8 +60,8 @@ proptest! {
 
         let retrieved = manager.get_dlp_policies();
         prop_assert_eq!(retrieved.len(), 1);
-        prop_assert_eq!(retrieved[0].id, id);
-        prop_assert_eq!(retrieved[0].pattern, pattern);
+        prop_assert_eq!(&retrieved[0].id, &id);
+        prop_assert_eq!(&retrieved[0].pattern, &pattern);
     }
 
     #[test]
@@ -82,7 +82,7 @@ proptest! {
 
         let retrieved = manager.get_sensitive_ops_policies();
         prop_assert_eq!(retrieved.len(), 1);
-        prop_assert_eq!(retrieved[0].operation, operation);
+        prop_assert_eq!(&retrieved[0].operation, &operation);
         prop_assert!(retrieved[0].requires_approval);
     }
 
@@ -121,7 +121,7 @@ proptest! {
 
         let found = manager.check_sensitive_operation(&operation);
         prop_assert!(found.is_some());
-        prop_assert_eq!(found.unwrap().operation, operation);
+        prop_assert_eq!(&found.unwrap().operation, &operation);
     }
 
     #[test]
