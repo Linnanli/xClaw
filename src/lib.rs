@@ -40,7 +40,8 @@
 
 pub mod agent;
 pub mod app;
-pub mod auth;
+// TODO: Re-enable auth module after adding required dependencies (argon2, jsonwebtoken)
+// pub mod auth;
 pub mod boot_screen;
 pub mod bootstrap;
 pub mod channels;

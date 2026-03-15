@@ -1,20 +1,26 @@
-// Shared authentication module for both web gateway and admin backend
+//! Shared authentication module for JWT and password hashing.
+//!
+//! This crate provides:
+//! - Password hashing using Argon2
+//! - JWT token generation and verification
+//! - Unified authentication manager
 
-pub mod jwt;
-pub mod password;
+mod error;
+mod jwt;
+mod password;
 
+pub use error::{AuthError, Result};
 pub use jwt::{JwtManager, TokenClaims};
 pub use password::PasswordManager;
 
-use crate::error::{Error, Result};
-
-/// Unified authentication manager for the platform
+/// Unified authentication manager combining JWT and password management.
 pub struct AuthManager {
     jwt_manager: JwtManager,
     password_manager: PasswordManager,
 }
 
 impl AuthManager {
+    /// Create a new authentication manager with the given JWT secret.
     pub fn new(jwt_secret: String) -> Self {
         Self {
             jwt_manager: JwtManager::new(jwt_secret),
@@ -22,27 +28,27 @@ impl AuthManager {
         }
     }
 
-    /// Hash a password using Argon2
+    /// Hash a password using Argon2.
     pub fn hash_password(&self, password: &str) -> Result<String> {
         self.password_manager.hash(password)
     }
 
-    /// Verify a password against a hash
+    /// Verify a password against a hash.
     pub fn verify_password(&self, password: &str, hash: &str) -> Result<()> {
         self.password_manager.verify(password, hash)
     }
 
-    /// Generate an access token (1 hour expiry)
+    /// Generate an access token (1 hour expiry).
     pub fn generate_access_token(&self, user_id: &str) -> Result<String> {
         self.jwt_manager.generate_access_token(user_id)
     }
 
-    /// Generate a refresh token (7 days expiry)
+    /// Generate a refresh token (7 days expiry).
     pub fn generate_refresh_token(&self, user_id: &str) -> Result<String> {
         self.jwt_manager.generate_refresh_token(user_id)
     }
 
-    /// Verify and decode a token
+    /// Verify and decode a token.
     pub fn verify_token(&self, token: &str) -> Result<TokenClaims> {
         self.jwt_manager.verify_token(token)
     }

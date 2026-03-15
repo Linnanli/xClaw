@@ -2,6 +2,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+// Re-export TokenClaims from shared auth crate
+pub use ironclaw_auth::TokenClaims;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
     pub id: Uuid,
@@ -35,14 +38,6 @@ pub struct LoginResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RefreshTokenRequest {
     pub refresh_token: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TokenClaims {
-    pub sub: String,
-    pub exp: i64,
-    pub iat: i64,
-    pub token_type: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

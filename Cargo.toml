@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "desktop-client", "admin-backend", "crates/ironclaw_safety"]
+members = [".", "desktop-client", "admin-backend", "crates/ironclaw_safety", "crates/ironclaw_auth"]
 exclude = [
     "channels-src/discord",
     "channels-src/telegram",

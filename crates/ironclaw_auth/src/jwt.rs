@@ -1,8 +1,9 @@
-use crate::error::{Error, Result};
+use crate::error::{AuthError, Result};
 use chrono::Utc;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 
+/// JWT token claims.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenClaims {
     pub sub: String,
@@ -11,6 +12,7 @@ pub struct TokenClaims {
     pub token_type: String,
 }
 
+/// JWT token manager.
 pub struct JwtManager {
     secret: String,
     access_token_expiry: i64,
@@ -18,6 +20,7 @@ pub struct JwtManager {
 }
 
 impl JwtManager {
+    /// Create a new JWT manager with the given secret.
     pub fn new(secret: String) -> Self {
         Self {
             secret,
@@ -26,6 +29,7 @@ impl JwtManager {
         }
     }
 
+    /// Generate an access token (1 hour expiry).
     pub fn generate_access_token(&self, user_id: &str) -> Result<String> {
         let now = Utc::now().timestamp();
         let claims = TokenClaims {
@@ -40,9 +44,10 @@ impl JwtManager {
             &claims,
             &EncodingKey::from_secret(self.secret.as_bytes()),
         )
-        .map_err(|e| Error::AuthFailed(e.to_string()))
+        .map_err(|e| AuthError::AuthFailed(e.to_string()))
     }
 
+    /// Generate a refresh token (7 days expiry).
     pub fn generate_refresh_token(&self, user_id: &str) -> Result<String> {
         let now = Utc::now().timestamp();
         let claims = TokenClaims {
@@ -57,9 +62,10 @@ impl JwtManager {
             &claims,
             &EncodingKey::from_secret(self.secret.as_bytes()),
         )
-        .map_err(|e| Error::AuthFailed(e.to_string()))
+        .map_err(|e| AuthError::AuthFailed(e.to_string()))
     }
 
+    /// Verify and decode a token.
     pub fn verify_token(&self, token: &str) -> Result<TokenClaims> {
         decode::<TokenClaims>(
             token,
@@ -69,9 +75,9 @@ impl JwtManager {
         .map(|data| data.claims)
         .map_err(|e| {
             if e.to_string().contains("ExpiredSignature") {
-                Error::TokenExpired
+                AuthError::TokenExpired
             } else {
-                Error::InvalidToken
+                AuthError::InvalidToken
             }
         })
     }
