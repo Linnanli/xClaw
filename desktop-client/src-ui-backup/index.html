@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IronClaw Desktop</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked@17.0.2/lib/marked.umd.min.js"></script>
+</head>
+<body>
+  <!-- Auth Screen -->
+  <div id="auth-screen">
+    <!-- Setup Mode -->
+    <div id="auth-setup" class="auth-card-login" style="display: none;">
+      <div class="auth-brand">
+        <h1>IronClaw</h1>
+        <p class="auth-tagline">安全的 AI 助手</p>
+      </div>
+      <div class="auth-form">
+        <h2>设置主密码</h2>
+        <p class="auth-hint">创建一个强密码来保护您的数据。</p>
+        <label for="setup-password">主密码</label>
+        <input type="password" id="setup-password" placeholder="输入一个强密码" autofocus>
+        <label for="setup-password-confirm">确认密码</label>
+        <input type="password" id="setup-password-confirm" placeholder="确认您的密码">
+        <div id="password-strength" class="password-strength"></div>
+        <button onclick="setupMasterPassword()">创建密码</button>
+      </div>
+      <div id="setup-error" class="auth-error"></div>
+      <p class="auth-hint-small">密码必须至少 12 个字符，包含大小写字母和数字。</p>
+    </div>
+
+    <!-- Login Mode -->
+    <div id="auth-login" class="auth-card-login">
+      <div class="auth-brand">
+        <h1>IronClaw</h1>
+        <p class="auth-tagline">安全的 AI 助手</p>
+      </div>
+      <div class="auth-form">
+        <label for="master-password">主密码</label>
+        <input type="password" id="master-password" placeholder="输入您的主密码" autofocus>
+        <button onclick="authenticateDesktop()">解锁</button>
+      </div>
+      <div id="auth-error"></div>
+      <p class="auth-hint">输入您的主密码来解锁应用程序。</p>
+    </div>
+  </div>
+
+  <!-- Main App (hidden until authenticated) -->
+  <div id="app" style="display: none;">
+    <!-- Tab Bar -->
+    <div class="tab-bar">
+      <button class="active" data-tab="chat">聊天</button>
+      <button data-tab="memory">记忆</button>
+      <button data-tab="jobs">任务</button>
+      <button data-tab="routines">日程</button>
+      <button data-tab="extensions">扩展</button>
+      <button data-tab="skills">技能</button>
+      <div class="spacer"></div>
+      <button class="status-logs-btn" data-tab="logs" title="日志">日志</button>
+      <div class="status" id="gateway-status-trigger">
+        <div class="dot" id="sse-dot"></div>
+        <span id="sse-status">已连接</span>
+        <span id="offline-indicator" class="offline-indicator" style="display: none;">离线</span>
+      </div>
+    </div>
+
+    <!-- Chat Tab -->
+    <div class="tab-panel active" id="tab-chat">
+      <div class="thread-sidebar" id="thread-sidebar">
+        <div class="thread-sidebar-header">
+          <button class="thread-new-btn" onclick="createNewThread()" title="新对话">+</button>
+          <div class="spacer"></div>
+          <button class="thread-toggle-btn" id="thread-toggle-btn" onclick="toggleThreadSidebar()">&laquo;</button>
+        </div>
+        <div class="assistant-item" id="assistant-thread" onclick="switchToAssistant()">
+          <span class="assistant-label">助手</span>
+          <span class="assistant-meta" id="assistant-meta"></span>
+        </div>
+        <div class="threads-section-header">
+          <span>对话</span>
+        </div>
+        <div class="thread-list" id="thread-list"></div>
+      </div>
+      <div class="chat-container">
+        <div class="chat-messages" id="chat-messages"></div>
+        <div id="slash-autocomplete" class="slash-autocomplete" style="display:none"></div>
+        <div class="chat-input">
+          <div id="image-preview-strip" class="image-preview-strip"></div>
+          <textarea id="chat-input" placeholder="输入消息或 / 查看命令..." rows="1"></textarea>
+          <input type="file" id="image-file-input" accept="image/*" multiple style="display:none">
+          <button id="attach-btn" class="attach-btn" title="附加图片">📎</button>
+          <button id="send-btn" onclick="sendMessage()">发送</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Approval Modal -->
+    <div id="approval-modal" class="approval-modal" style="display: none;">
+      <div class="approval-modal-overlay" onclick="closeApprovalModal()"></div>
+      <div class="approval-modal-content">
+        <div class="approval-modal-header">
+          <h2>敏感操作批准</h2>
+          <button class="approval-modal-close" onclick="closeApprovalModal()">×</button>
+        </div>
+        <div class="approval-modal-body">
+          <div id="approval-details"></div>
+        </div>
+        <div class="approval-modal-footer">
+          <button class="approval-modal-btn deny" onclick="denyApproval()">拒绝</button>
+          <button class="approval-modal-btn approve" onclick="approveApproval()">批准</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- CoT Display Modal -->
+    <div id="cot-modal" class="cot-modal" style="display: none;">
+      <div class="cot-modal-overlay" onclick="closeCoTModal()"></div>
+      <div class="cot-modal-content">
+        <div class="cot-modal-header">
+          <h2>思考过程</h2>
+          <button class="cot-modal-close" onclick="closeCoTModal()">×</button>
+        </div>
+        <div class="cot-modal-body">
+          <div id="cot-content"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Extensions Tab -->
+    <div class="tab-panel" id="tab-extensions">
+      <div class="extensions-container">
+        <div class="extensions-header">
+          <h2>扩展管理</h2>
+          <p class="extensions-description">扩展提供特定的工具和功能集成。轻量级、快速安装，用于增强 AI 助手的能力。</p>
+          <div class="extensions-controls">
+            <input type="text" id="extension-search" placeholder="搜索扩展..." class="extension-search">
+            <button onclick="refreshExtensions()" class="extension-refresh-btn">刷新</button>
+          </div>
+        </div>
+        
+        <div class="extensions-tabs">
+          <button class="extension-tab-btn active" onclick="switchExtensionTab('installed')">已安装</button>
+          <button class="extension-tab-btn" onclick="switchExtensionTab('available')">可用</button>
+        </div>
+
+        <!-- Installed Extensions -->
+        <div id="installed-extensions-panel" class="extension-panel active">
+          <div id="installed-extensions-list" class="extensions-list"></div>
+        </div>
+
+        <!-- Available Extensions -->
+        <div id="available-extensions-panel" class="extension-panel">
+          <div id="available-extensions-list" class="extensions-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Routines Tab -->
+    <div class="tab-panel" id="tab-routines">
+      <div class="routines-container">
+        <div class="routines-header">
+          <h2>日程管理</h2>
+          <button onclick="showCreateRoutineModal()" class="routine-create-btn">+ 新建日程</button>
+        </div>
+        
+        <div class="routines-list" id="routines-list"></div>
+      </div>
+    </div>
+
+    <!-- Create Routine Modal -->
+    <div id="routine-modal" class="routine-modal" style="display: none;">
+      <div class="routine-modal-overlay" onclick="closeRoutineModal()"></div>
+      <div class="routine-modal-content">
+        <div class="routine-modal-header">
+          <h2>创建日程</h2>
+          <button class="routine-modal-close" onclick="closeRoutineModal()">×</button>
+        </div>
+        <div class="routine-modal-body">
+          <div class="form-group">
+            <label for="routine-name">名称</label>
+            <input type="text" id="routine-name" placeholder="日程名称">
+          </div>
+          <div class="form-group">
+            <label for="routine-description">描述</label>
+            <textarea id="routine-description" placeholder="日程描述"></textarea>
+          </div>
+          <div class="form-group">
+            <label for="routine-trigger">触发器类型</label>
+            <select id="routine-trigger">
+              <option value="manual">手动</option>
+              <option value="time">时间（Cron）</option>
+              <option value="event">事件</option>
+            </select>
+          </div>
+          <div class="form-group" id="trigger-value-group" style="display: none;">
+            <label for="routine-trigger-value">触发器值</label>
+            <input type="text" id="routine-trigger-value" placeholder="例如：0 9 * * * 表示每天 9 点">
+          </div>
+        </div>
+        <div class="routine-modal-footer">
+          <button class="routine-modal-btn cancel" onclick="closeRoutineModal()">取消</button>
+          <button class="routine-modal-btn create" onclick="createNewRoutine()">创建</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Skills Tab -->
+    <div class="tab-panel" id="tab-skills">
+      <div class="skills-container">
+        <div class="skills-header">
+          <h2>技能管理</h2>
+          <p class="skills-description">技能是可复用的工作流和工具集合，用于增强 AI 助手的能力。每个技能都包含特定的指导原则和最佳实践。</p>
+          <div class="skills-controls">
+            <input type="text" id="skill-search" placeholder="搜索技能..." class="skill-search">
+            <button onclick="refreshSkills()" class="skill-refresh-btn">刷新</button>
+          </div>
+        </div>
+        
+        <div class="skills-tabs">
+          <button class="skill-tab-btn active" onclick="switchSkillTab('available')">可用技能</button>
+          <button class="skill-tab-btn" onclick="switchSkillTab('installed')">已安装</button>
+        </div>
+
+        <!-- Available Skills -->
+        <div id="available-skills-panel" class="skill-panel active">
+          <div id="available-skills-list" class="skills-list"></div>
+        </div>
+
+        <!-- Installed Skills -->
+        <div id="installed-skills-panel" class="skill-panel">
+          <div id="installed-skills-list" class="skills-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Watermark -->
+    <div id="watermark" class="watermark"></div>
+  </div>
+
+  <div id="toasts"></div>
+  
+  <!-- Tauri API initialization script -->
+  <script>
+    // Tauri 2.0 injects __TAURI_INTERNALS__ for IPC
+    window.addEventListener('load', function() {
+      console.log('Window load event fired');
+      console.log('window.__TAURI_INTERNALS__ available:', typeof window.__TAURI_INTERNALS__ !== 'undefined');
+      if (typeof window.__TAURI_INTERNALS__ !== 'undefined') {
+        console.log('Tauri API successfully loaded');
+      } else {
+        console.error('Tauri API not available - make sure to run with cargo tauri dev');
+      }
+    });
+  </script>
+  
+  <!-- Load app script -->
+  <script src="/app-desktop.js"></script>
+</body>
+</html>

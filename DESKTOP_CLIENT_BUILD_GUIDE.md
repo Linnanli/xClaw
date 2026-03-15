@@ -52,18 +52,44 @@ desktop-client/
 │   ├── extension_manager.rs    # 扩展管理
 │   ├── routine_manager.rs      # 日程管理
 │   └── ...
-├── src-ui/                # 前端代码
-│   ├── index.html         # HTML 模板
-│   ├── app-desktop.js     # JavaScript 逻辑
-│   └── style.css          # 样式表
+├── src-ui-new/            # 新的 React 前端（推荐）
+│   ├── src/
+│   │   ├── app/
+│   │   │   ├── components/    # React 组件
+│   │   │   ├── contexts/      # React Context
+│   │   │   ├── utils/         # 工具函数（含 Tauri API）
+│   │   │   ├── App.tsx
+│   │   │   └── routes.tsx
+│   │   ├── styles/            # 样式文件
+│   │   └── main.tsx           # 入口文件
+│   ├── package.json
+│   ├── vite.config.ts
+│   └── tsconfig.json
+├── src-ui-backup/         # 原有前端备份
+│   ├── index.html
+│   ├── app-desktop.js
+│   └── style.css
 ├── tests/                 # 测试文件
 │   ├── extension_manager_property_tests.rs
 │   ├── routine_manager_property_tests.rs
 │   └── ...
 ├── Cargo.toml            # Rust 依赖配置
 ├── tauri.conf.json       # Tauri 应用配置
-└── build.rs              # 构建脚本
+├── build.rs              # 构建脚本
+└── UI_MIGRATION_GUIDE.md # UI 迁移指南
 ```
+
+## 前端技术栈
+
+项目已从原生 HTML/JavaScript 迁移到现代化的 React 技术栈：
+
+- **框架**: React 18 + TypeScript
+- **构建工具**: Vite 6
+- **UI 组件**: Radix UI + Tailwind CSS
+- **路由**: React Router 7
+- **主题**: 支持深色/浅色模式切换
+
+详细迁移信息请参考 `UI_MIGRATION_GUIDE.md`。
 
 ## 编译步骤
 
@@ -73,7 +99,24 @@ desktop-client/
 cd /path/to/ironclaw
 ```
 
-### 2. 检查 Rust 工具链
+### 2. 安装前端依赖
+
+项目使用 React + Vite 构建前端，需要先安装 npm 依赖：
+
+```bash
+cd desktop-client/src-ui-new
+npm install
+cd ..
+```
+
+预期输出:
+```
+added 284 packages in XXs
+```
+
+**注意**: 这一步只需要执行一次，除非 `package.json` 发生变化。
+
+### 3. 检查 Rust 工具链
 
 ```bash
 rustc --version
@@ -86,7 +129,7 @@ rustc 1.92.0 (or higher)
 cargo 1.92.0 (or higher)
 ```
 
-### 3. 编译 Rust 后端
+### 4. 编译 Rust 后端
 
 #### 开发模式编译（快速，包含调试信息）
 
@@ -112,71 +155,94 @@ cargo build -p desktop-client --release
     Finished release [optimized] target(s) in XX.XXs
 ```
 
-### 4. 启动应用
+### 5. 启动应用
 
-有三种方式启动 desktop-client：
+**重要**: 由于前端使用 Vite 构建，必须使用 `cargo tauri dev` 或 `cargo tauri build` 命令。
 
-#### 方式 1: 使用 cargo run（最简单，推荐用于开发）
+#### 方式 1: 使用 Tauri CLI 开发模式（推荐）
 
+**需要两个终端窗口：**
+
+**终端 1 - 启动 Vite 开发服务器：**
 ```bash
-cargo run -p desktop-client
+cd desktop-client/src-ui-new
+npm run dev
 ```
 
-这会:
-- 自动编译（如果代码有修改）
-- 启动应用窗口
-- 显示控制台日志
-
-**首次启动时间**: 约 20-30 秒（需要编译）
-**后续启动时间**: 约 5-10 秒（增量编译）
-
-#### 方式 2: 直接运行编译好的二进制文件（最快）
-
-开发模式（需要先运行 `cargo build -p desktop-client`）:
-```bash
-./target/debug/desktop-client
-```
-
-发布模式（需要先运行 `cargo build -p desktop-client --release`）:
-```bash
-./target/release/desktop-client
-```
-
-**启动时间**: 1-2 秒
-
-#### 方式 3: 使用 Tauri CLI（用于前端开发，支持热重载）
-
-首先安装 Tauri CLI（仅需一次）:
-```bash
-cargo install tauri-cli
-```
-
-然后运行开发服务器:
+**终端 2 - 启动 Tauri 应用：**
 ```bash
 cd desktop-client
 cargo tauri dev
 ```
 
-这会:
-- 启动 Rust 后端
-- 监听文件变化
-- 打开应用窗口
-- 启用热重载（修改前端代码后自动刷新）
+**这会自动完成以下操作：**
+1. Vite 启动开发服务器 (http://localhost:5173)
+2. Rust 后端编译
+3. 应用窗口打开
+4. **支持热重载**：
+   - 修改 React/TypeScript 代码 → 浏览器自动刷新（1-2秒）
+   - 修改 Rust 代码 → 自动重新编译并重启应用（5-10秒）
 
-**注意**: 此方式主要用于前端开发，修改 Rust 代码仍需重新编译。
+**首次启动时间**: 约 30-60 秒（需要编译 Rust 和启动 Vite）
+**后续启动时间**: 约 10-15 秒（增量编译）
+
+**开发体验：**
+- ✅ 修改 React 组件 → 立即看到效果（无需手动刷新）
+- ✅ 修改样式 → 立即更新
+- ✅ TypeScript 类型检查 → 实时提示
+- ✅ 控制台日志 → 同时显示前端和后端日志
+
+**注意事项：**
+- 需要保持两个终端窗口打开
+- 如果端口 5173 被占用，修改 `vite.config.ts` 中的端口
+- 关闭任一终端会停止相应的服务
+
+#### 方式 2: 构建生产版本
+
+```bash
+cd desktop-client
+cargo tauri build
+```
+
+这会:
+- 构建前端生产版本 (`npm run build`)
+- 编译 Rust 后端（发布模式）
+- 创建可分发的应用包
+
+**构建时间**: 约 5-10 分钟
+
+输出位置:
+- **macOS**: `target/release/bundle/macos/Ironclaw Desktop.app`
+- **Linux**: `target/release/bundle/deb/ironclaw-desktop_*.deb`
+- **Windows**: `target/release/bundle/msi/Ironclaw Desktop_*.msi`
+
+#### ~~方式 3: 直接运行二进制文件（不推荐）~~
+
+**注意**: 由于前端需要 Vite 构建，不建议直接运行 `cargo run` 或二进制文件。
+如果必须这样做，需要先手动构建前端：
+
+```bash
+cd desktop-client/src-ui-new
+npm run build
+cd ..
+cargo run -p desktop-client
+```
 
 ### 启动后的界面
 
-应用启动后会显示:
+应用启动后会显示现代化的 React UI：
 
 1. **认证屏幕**（首次使用）
-   - 输入主密码（至少12个字符，包含大小写字母和数字）
-   - 点击 "Setup Master Password" 按钮
+   - 精美的渐变背景和动画
+   - 主密码设置界面
+   - 密码强度指示器
+   - 实时验证提示
 
 2. **主界面**（认证后）
-   - 5个标签页: Chat, Approvals, Plugins, Extensions, Routines
-   - 左侧导航栏
-   - 右上角 Lock 按钮
+   - 顶部标签栏: 聊天、记忆、任务、日程、扩展、技能
+   - 右侧: 日志按钮、连接状态、主题切换
+   - 响应式布局，支持深色/浅色模式
+   - 流畅的动画和过渡效果
 
 ### 数据存储位置
 
@@ -305,9 +371,10 @@ Tauri 2.0 改变了 API 注入机制。不再使用 `window.__TAURI__`，而是�
 
 1. **必须使用 `cargo tauri dev` 启动**
    ```bash
+   cd desktop-client
    cargo tauri dev
    ```
-   不要使用 `cargo run`，因为它不会注入 Tauri API。
+   不要使用 `cargo run` 或 `npm run dev`，因为它们不会注入 Tauri API。
 
 2. **验证 Tauri API 可用性**
    在浏览器开发者工具（F12）中运行:
@@ -319,6 +386,7 @@ Tauri 2.0 改变了 API 注入机制。不再使用 `window.__TAURI__`，而是�
 3. **清除缓存并重新编译**
    ```bash
    cargo clean
+   cd src-ui-new && npm run build && cd ..
    cargo tauri dev
    ```
 
@@ -327,6 +395,70 @@ Tauri 2.0 改变了 API 注入机制。不再使用 `window.__TAURI__`，而是�
    ```bash
    cargo install tauri-cli --version "^2.0"
    cargo tauri --version
+   ```
+
+### 前端构建失败
+
+**问题描述:**
+运行 `cargo tauri dev` 时，Vite 构建失败。
+
+**解决方案:**
+
+1. **检查 Node.js 版本**
+   ```bash
+   node --version
+   # 应该是 18.0.0 或更高
+   ```
+
+2. **重新安装依赖**
+   ```bash
+   cd desktop-client/src-ui-new
+   rm -rf node_modules package-lock.json
+   npm install
+   cd ..
+   ```
+
+3. **检查 TypeScript 错误**
+   ```bash
+   cd desktop-client/src-ui-new
+   npm run build
+   # 查看详细的错误信息
+   ```
+
+### Vite 开发服务器端口被占用
+
+**问题描述:**
+`cargo tauri dev` 启动失败，提示端口 5173 已被占用。
+
+**解决方案:**
+
+1. **杀死占用端口的进程**
+   ```bash
+   # macOS/Linux
+   lsof -ti:5173 | xargs kill -9
+   
+   # Windows
+   netstat -ano | findstr :5173
+   taskkill /PID <PID> /F
+   ```
+
+2. **或修改 Vite 端口**
+   编辑 `desktop-client/src-ui-new/vite.config.ts`:
+   ```typescript
+   export default defineConfig({
+     server: {
+       port: 5174, // 改为其他端口
+     },
+   });
+   ```
+   
+   同时更新 `desktop-client/tauri.conf.json`:
+   ```json
+   {
+     "build": {
+       "devUrl": "http://localhost:5174"
+     }
+   }
    ```
 
 ### 编译错误: "cannot find crate `tauri`"
@@ -355,9 +487,11 @@ sudo apt-get install libwebkit2gtk-4.1-dev
 ### 前端不显示
 
 **解决方案:**
-1. 检查 `src-ui/` 目录中的文件是否存在
-2. 验证 `tauri.conf.json` 中的 `frontendDist` 路径正确
-3. 查看浏览器开发者工具（F12）中的错误
+1. 检查 `src-ui-new/dist/` 目录是否存在（生产构建后）
+2. 验证 `tauri.conf.json` 中的 `frontendDist` 路径: `"./src-ui-new/dist"`
+3. 确保使用 `cargo tauri dev` 而不是 `cargo run`
+4. 查看浏览器开发者工具（F12）中的错误
+5. 检查 Vite 开发服务器是否正常启动（查看控制台输出）
 
 ## 开发工作流
 
@@ -365,19 +499,87 @@ sudo apt-get install libwebkit2gtk-4.1-dev
 
 1. 编辑 `src/` 中的文件
 2. 如果使用 `cargo tauri dev`，应用会自动重新编译
-3. 否则手动运行 `cargo build -p desktop-client`
+3. 查看控制台输出中的编译结果
 
-### 修改前端代码
+### 修改前端代码（React/TypeScript）
 
-1. 编辑 `src-ui/` 中的文件（HTML/CSS/JS）
-2. 如果使用 `cargo tauri dev`，应用会自动重新加载
-3. 否则手动刷新应用窗口（Cmd+R 或 Ctrl+R）
+**开发模式下（推荐）：**
+
+1. 启动开发服务器（只需一次）:
+   ```bash
+   cd desktop-client
+   cargo tauri dev
+   ```
+
+2. 编辑 `src-ui-new/src/` 中的文件
+   - 修改 React 组件 → 浏览器自动刷新（1-2秒）
+   - 修改样式 → 立即更新
+   - 添加新文件 → 自动识别并热重载
+
+3. 查看效果
+   - 无需手动刷新
+   - 无需重新运行命令
+   - 保持 `cargo tauri dev` 运行即可
+
+**生产构建：**
+
+只有在准备发布时才需要手动构建：
+```bash
+cd desktop-client/src-ui-new
+npm run build
+```
+
+**常见问题：**
+
+Q: 修改代码后没有自动刷新？
+A: 检查：
+- `cargo tauri dev` 是否正在运行
+- 浏览器开发者工具（F12）中是否有错误
+- Vite 开发服务器是否正常（查看终端输出）
+
+Q: 热重载太慢？
+A: 这是正常的，Vite 热重载通常在 1-2 秒内完成。如果超过 5 秒，可能是：
+- TypeScript 类型检查耗时（可以暂时禁用）
+- 文件太大（考虑拆分组件）
+- 电脑性能问题
+
+### 添加新的 React 组件
+
+1. 在 `src-ui-new/src/app/components/` 中创建新组件
+2. 使用 TypeScript 编写，确保类型安全
+3. 导入并使用 Tauri API: `import { authApi } from '@/app/utils/tauri'`
+4. Vite 会自动热重载
 
 ### 添加新的 Tauri 命令
 
 1. 在 `src/commands.rs` 中添加新函数，使用 `#[tauri::command]` 属性
-2. 在 `src-ui/app-desktop.js` 中调用: `window.__TAURI__.invoke('command_name', { args })`
-3. 重新编译应用
+2. 在 `src-ui-new/src/app/utils/tauri.ts` 中添加类型定义和 API 函数
+3. 在 React 组件中调用: `await authApi.unlockApp(password)`
+4. 重新编译应用
+
+### 前端构建流程
+
+开发模式:
+```bash
+cd desktop-client
+cargo tauri dev
+# Vite 会自动启动开发服务器
+```
+
+生产构建:
+```bash
+cd desktop-client/src-ui-new
+npm run build
+# 输出到 dist/ 目录
+```
+
+手动测试前端（不启动 Tauri）:
+```bash
+cd desktop-client/src-ui-new
+npm run dev
+# 访问 http://localhost:5173
+# 注意: Tauri API 不可用
+```
 
 ## 性能优化
 
@@ -448,7 +650,10 @@ tracing::error!("Error message");
 
 ## 相关文档
 
+- [UI 迁移指南](desktop-client/UI_MIGRATION_GUIDE.md) - React UI 迁移详细说明
 - [Tauri 官方文档](https://tauri.app/)
+- [Vite 官方文档](https://vitejs.dev/)
+- [React 官方文档](https://react.dev/)
 - [Rust 官方文档](https://doc.rust-lang.org/)
 - [项目架构文档](.kiro/specs/enterprise-ai-agent-platform/ARCHITECTURE_CORRECTED.md)
 - [任务跟踪](.kiro/specs/enterprise-ai-agent-platform/tasks.md)
@@ -458,11 +663,12 @@ tracing::error!("Error message");
 如遇到问题:
 
 1. 检查本文档的"常见问题"部分
-2. 查看编译错误信息（通常包含解决方案）
-3. 检查 Tauri 官方文档
-4. 查看项目的 GitHub Issues
+2. 查看 `UI_MIGRATION_GUIDE.md` 了解前端架构
+3. 查看编译错误信息（通常包含解决方案）
+4. 检查 Tauri 和 Vite 官方文档
+5. 查看项目的 GitHub Issues
 
 ---
 
 **最后更新**: 2026-03-15
-**文档版本**: 1.0
+**文档版本**: 2.0 (React UI)
