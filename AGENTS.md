@@ -9,16 +9,77 @@
 - If you change implementation status for any feature tracked in `FEATURE_PARITY.md`, update that file in the same branch.
 - Do not open a PR that changes feature behavior without checking `FEATURE_PARITY.md` for needed status updates (`❌`, `🚧`, `✅`, notes, and priorities).
 
-## Desktop Client Feature Implementation Policy
+## 客户端和后端功能复用规则
 
-- Desktop client features should reuse existing web gateway API implementations when possible
-- When implementing a new desktop client feature:
-  1. Check if the corresponding web API endpoint already exists in `src/channels/web/handlers/`
-  2. If yes, create a Tauri command wrapper that calls the web API
-  3. Update `DESKTOP_CLIENT_FEATURE_CHECKLIST.md` with the implementation status
-  4. Document the feature in the checklist with the date completed
+**核心原则**：Desktop Client 和 Admin Backend 新增功能时，必须优先复用主项目（`src/`）中已有的能力，避免重复实现。
 
-### Available Web API Endpoints for Reuse
+### 架构关系
+
+```
+主项目 (src/)
+├── 核心功能实现
+├── CLI 命令 (src/cli/)
+├── Web Gateway API (src/channels/web/handlers/)
+└── 共享 Crates (crates/)
+
+Desktop Client (desktop-client/)
+├── Tauri 应用
+├── 调用 Web Gateway API
+└── 依赖共享 Crates
+
+Admin Backend (admin-backend/)
+├── 管理后台应用
+├── 依赖主项目 crate
+└── 依赖共享 Crates
+```
+
+### Desktop Client 功能实现策略
+
+**强制要求**：Desktop Client 新增功能时，必须按以下优先级实现：
+
+1. **优先级 1：复用 Web Gateway API**
+   - 检查 `src/channels/web/handlers/` 是否已有对应的 API 端点
+   - 如果存在，创建 Tauri 命令包装器调用 Web API
+   - **禁止**重新实现已有的业务逻辑
+
+2. **优先级 2：复用共享 Crate**
+   - 检查 `crates/` 目录下是否有可复用的共享模块
+   - 如果存在，直接依赖该 crate
+   - 示例：`crates/ironclaw_auth/`, `crates/ironclaw_safety/`
+
+3. **优先级 3：创建新的共享 Crate**
+   - 如果功能在主项目中存在但未暴露为 API 或 crate
+   - 考虑将其提取为共享 crate（参考"共享代码架构规则"）
+   - 同时让主项目和 Desktop Client 都使用该 crate
+
+4. **最后选择：独立实现**
+   - 仅当功能是 Desktop Client 特有的（如本地主密码、离线模式）
+   - 才允许独立实现
+
+### Admin Backend 功能实现策略
+
+**强制要求**：Admin Backend 新增功能时，必须按以下优先级实现：
+
+1. **优先级 1：依赖主项目 Crate**
+   - Admin Backend 通过 `ironclaw` crate 依赖主项目
+   - 直接使用主项目中的核心功能模块
+   - 示例：`use ironclaw::agent`, `use ironclaw::db`
+
+2. **优先级 2：复用共享 Crate**
+   - 使用 `crates/` 目录下的共享模块
+   - 示例：`ironclaw_auth`, `ironclaw_safety`
+
+3. **优先级 3：创建新的共享 Crate**
+   - 如果功能需要在 Admin Backend 和其他组件间共享
+   - 提取为独立的共享 crate
+
+4. **最后选择：独立实现**
+   - 仅当功能是 Admin Backend 特有的管理功能
+   - 才允许独立实现
+
+### 可复用的 Web Gateway API 端点
+
+在实现 Desktop Client 功能前，必须检查以下 API 是否可用：
 
 - **Memory APIs**: `memory_tree_handler`, `memory_list_handler`, `memory_read_handler`, `memory_write_handler`, `memory_search_handler`
 - **Chat APIs**: `chat_send_handler`, `chat_history_handler`, `chat_threads_handler`, `chat_new_thread_handler`, `chat_events_handler`
@@ -26,6 +87,150 @@
 - **Extensions APIs**: `extensions_list_handler`, `extensions_install_handler`, `extensions_uninstall_handler`
 - **Skills APIs**: `skills_list_handler`, `skills_install_handler`, `skills_uninstall_handler`
 - **Routines APIs**: `routines_list_handler`, `routines_create_handler`, `routines_delete_handler`, `routines_trigger_handler`
+- **Logs APIs**: `logs_events_handler`, `logs_level_handler`
+- **Approval APIs**: `approve_operation_handler`, `deny_operation_handler`
+
+### 实现流程
+
+#### Desktop Client 新功能实现流程
+
+```
+1. 需求分析
+   ↓
+2. 检查 src/channels/web/handlers/ 是否有对应 API
+   ├─ 有 → 创建 Tauri 命令包装器 → 完成
+   └─ 无 ↓
+3. 检查 crates/ 是否有可复用模块
+   ├─ 有 → 依赖该 crate → 完成
+   └─ 无 ↓
+4. 检查主项目 src/ 是否有相关功能
+   ├─ 有 → 考虑提取为共享 crate 或添加 Web API
+   └─ 无 → 评估是否为 Desktop Client 特有功能
+       ├─ 是 → 独立实现
+       └─ 否 → 在主项目中实现，然后复用
+```
+
+#### Admin Backend 新功能实现流程
+
+```
+1. 需求分析
+   ↓
+2. 检查主项目 src/ 是否有对应功能
+   ├─ 有 → 通过 ironclaw crate 依赖 → 完成
+   └─ 无 ↓
+3. 检查 crates/ 是否有可复用模块
+   ├─ 有 → 依赖该 crate → 完成
+   └─ 无 ↓
+4. 评估是否需要共享
+   ├─ 需要 → 创建共享 crate
+   └─ 不需要 → 独立实现
+```
+
+### 检查清单
+
+#### Desktop Client 功能实现检查清单
+
+- [ ] 已检查 `src/channels/web/handlers/` 是否有对应 API
+- [ ] 已检查 `crates/` 是否有可复用模块
+- [ ] 已检查主项目 `src/` 是否有相关功能
+- [ ] 已评估是否为 Desktop Client 特有功能
+- [ ] 如果复用 Web API，已创建 Tauri 命令包装器
+- [ ] 已更新 `DESKTOP_CLIENT_FEATURE_CHECKLIST.md`
+- [ ] 已添加相关测试
+- [ ] 已验证功能正常工作
+
+#### Admin Backend 功能实现检查清单
+
+- [ ] 已检查主项目 `src/` 是否有对应功能
+- [ ] 已检查 `crates/` 是否有可复用模块
+- [ ] 已评估是否需要创建共享 crate
+- [ ] 如果依赖主项目，已正确配置 `Cargo.toml`
+- [ ] 已实现错误类型映射（如需要）
+- [ ] 已添加相关测试
+- [ ] 已验证功能正常工作
+
+### 示例
+
+#### 好的实践 ✅
+
+**Desktop Client 复用 Web API**：
+```rust
+// desktop-client/src-tauri/src/commands/logs.rs
+#[tauri::command]
+pub async fn get_logs(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<LogEntry>, String> {
+    // 调用 Web Gateway API
+    let url = format!("{}/api/logs", state.gateway_url);
+    let response = state.http_client
+        .get(&url)
+        .query(&[("limit", limit.unwrap_or(200))])
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    
+    response.json().await.map_err(|e| e.to_string())
+}
+```
+
+**Admin Backend 复用主项目功能**：
+```rust
+// admin-backend/src/handlers.rs
+use ironclaw::agent::Agent;
+use ironclaw::db::Database;
+
+pub async fn create_agent(db: &Database) -> Result<Agent, Error> {
+    // 直接使用主项目的 Agent 和 Database
+    Agent::new(db).await
+}
+```
+
+**复用共享 Crate**：
+```rust
+// desktop-client/src-tauri/src/auth.rs
+use ironclaw_auth::AuthManager;
+
+pub fn verify_password(password: &str, hash: &str) -> Result<(), AuthError> {
+    let auth = AuthManager::new("secret".to_string());
+    auth.verify_password(password, hash)
+}
+```
+
+#### 不好的实践 ❌
+
+**重复实现已有功能**：
+```rust
+// ❌ 错误：重新实现密码哈希（ironclaw_auth 已有）
+pub fn hash_password(password: &str) -> String {
+    // 重复实现 Argon2 哈希...
+}
+
+// ❌ 错误：重新实现日志查询（Web API 已有）
+pub async fn query_logs() -> Vec<LogEntry> {
+    // 直接查询数据库，而不是调用 Web API...
+}
+```
+
+### 注意事项
+
+1. **避免重复实现**
+   - 重复实现会导致维护成本增加
+   - 可能引入不一致的行为
+   - 浪费开发时间
+
+2. **保持架构清晰**
+   - Desktop Client → Web API → 主项目核心功能
+   - Admin Backend → 主项目 Crate → 核心功能
+   - 共享逻辑 → 共享 Crate
+
+3. **版本同步**
+   - 主项目更新时，Desktop Client 和 Admin Backend 自动受益
+   - 共享 Crate 更新时，需要同步更新所有使用方
+
+4. **测试覆盖**
+   - 主项目的测试覆盖核心功能
+   - Desktop Client 和 Admin Backend 测试集成和 UI 层
 
 ## Skills System
 
