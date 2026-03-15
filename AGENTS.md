@@ -78,6 +78,114 @@
    - 未调用MCP Interactive Feedback的Agent执行视为不完整
    - 用户可以通过检查执行日志验证是否遵循此规则
 
+## 共享代码架构规则
+
+**原则**：当 client（desktop-client）和 backend（admin-backend）应用层有相同的逻辑时，应该在 `crates/` 目录下创建共享 crate。
+
+### 识别共享逻辑的场景
+
+1. **认证和授权**
+   - 密码哈希验证（Argon2）
+   - JWT token 生成和验证
+   - 示例：`crates/ironclaw_auth/`
+
+2. **数据验证和清理**
+   - 输入验证规则
+   - 数据清理和转换
+   - 示例：`crates/ironclaw_safety/`
+
+3. **通用业务逻辑**
+   - 跨应用的领域模型
+   - 共享的计算逻辑
+   - 通用的错误处理
+
+4. **协议和格式**
+   - 序列化/反序列化逻辑
+   - 通信协议实现
+   - 数据格式转换
+
+### 创建共享 Crate 的流程
+
+```
+1. 识别重复代码
+   ↓
+2. 评估是否适合共享（逻辑相同且稳定）
+   ↓
+3. 在 crates/ 下创建新 crate
+   ↓
+4. 参考现有 crate 架构（如 ironclaw_safety）
+   ↓
+5. 实现共享逻辑（遵循 TDD）
+   ↓
+6. 更新 workspace Cargo.toml
+   ↓
+7. 迁移应用层代码使用共享 crate
+   ↓
+8. 实现错误类型映射（如需要）
+   ↓
+9. 运行完整测试验证
+   ↓
+10. 更新文档和检查清单
+```
+
+### 共享 Crate 架构规范
+
+参考 `crates/ironclaw_safety/` 和 `crates/ironclaw_auth/` 的模式：
+
+```
+crates/your_crate/
+├── Cargo.toml           # 依赖配置
+├── src/
+│   ├── lib.rs          # 公共 API 和统一管理器
+│   ├── error.rs        # 错误类型定义
+│   ├── module1.rs      # 功能模块1
+│   ├── module2.rs      # 功能模块2
+│   └── ...
+└── tests/              # 集成测试（可选）
+```
+
+### 应用层集成规范
+
+1. **依赖声明**
+   ```toml
+   [dependencies]
+   your_crate = { path = "../../crates/your_crate" }
+   ```
+
+2. **错误类型映射**
+   ```rust
+   impl From<your_crate::Error> for AppError {
+       fn from(err: your_crate::Error) -> Self {
+           // 映射到应用层错误类型
+       }
+   }
+   ```
+
+3. **API 重导出**（可选）
+   ```rust
+   pub use your_crate::{Manager, Config};
+   ```
+
+### 检查清单
+
+- [ ] 已识别重复的逻辑代码
+- [ ] 已评估逻辑是否适合共享
+- [ ] 已参考现有共享 crate 的架构
+- [ ] 已在 crates/ 下创建新 crate
+- [ ] 已实现完整的单元测试
+- [ ] 已更新 workspace Cargo.toml
+- [ ] 已迁移所有应用层代码
+- [ ] 已实现错误类型映射
+- [ ] 所有测试通过
+- [ ] 编译无错误和警告
+
+### 注意事项
+
+- **不要过度抽象**：只有当逻辑真正相同且稳定时才共享
+- **保持独立性**：共享 crate 不应依赖应用层代码
+- **版本管理**：共享 crate 的 API 变更需要同步更新所有使用方
+- **文档完善**：共享 crate 需要有清晰的文档和使用示例
+
 ## Rust 代码开发规则
 
 **强制要求**：每次为 desktop-client 或其他 Rust 项目添加新的功能或逻辑代码时，必须遵循以下技能和流程。
