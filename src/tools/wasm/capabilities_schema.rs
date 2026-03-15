@@ -41,6 +41,18 @@ use crate::tools::wasm::{
 /// Root schema for a capabilities JSON file.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CapabilitiesFile {
+    /// Human-readable description of what the tool does.
+    /// Used as the `Tool::description()` return value.
+    /// If omitted, a generic fallback is used (with a warning).
+    #[serde(default)]
+    pub description: Option<String>,
+
+    /// JSON Schema for the tool's input parameters.
+    /// Used as the `Tool::parameters_schema()` return value.
+    /// If omitted, a permissive fallback is used (with a warning).
+    #[serde(default)]
+    pub parameters: Option<serde_json::Value>,
+
     /// Extension version (semver).
     #[serde(default)]
     pub version: Option<String>,
@@ -89,24 +101,77 @@ pub struct CapabilitiesFile {
     pub capabilities: Option<Box<CapabilitiesFile>>,
 }
 
+/// Maximum length for the description field to prevent memory abuse.
+const MAX_DESCRIPTION_CHARS: usize = 4096;
+/// Maximum serialized size of the parameters schema JSON.
+const MAX_PARAMETERS_SCHEMA_BYTES: usize = 64 * 1024;
+
 impl CapabilitiesFile {
     /// Parse from JSON string.
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_str::<Self>(json).map(Self::resolve_nested)
+        let mut caps = serde_json::from_str::<Self>(json).map(Self::resolve_nested)?;
+        caps.enforce_limits();
+        Ok(caps)
     }
 
     /// Parse from JSON bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, serde_json::Error> {
-        serde_json::from_slice::<Self>(bytes).map(Self::resolve_nested)
+        let mut caps = serde_json::from_slice::<Self>(bytes).map(Self::resolve_nested)?;
+        caps.enforce_limits();
+        Ok(caps)
+    }
+
+    /// Truncate oversized fields to prevent unbounded memory usage.
+    fn enforce_limits(&mut self) {
+        // Truncate oversized description (issue #976)
+        if let Some(ref desc) = self.description
+            && desc.len() > MAX_DESCRIPTION_CHARS
+        {
+            let truncated = &desc[..desc.floor_char_boundary(MAX_DESCRIPTION_CHARS)];
+            tracing::warn!(
+                "Capabilities description truncated from {} to {} chars",
+                desc.len(),
+                MAX_DESCRIPTION_CHARS,
+            );
+            self.description = Some(truncated.to_string());
+        }
+        // Drop oversized parameters schema (issue #977)
+        if let Some(ref params) = self.parameters {
+            let size = params.to_string().len();
+            if size > MAX_PARAMETERS_SCHEMA_BYTES {
+                tracing::warn!(
+                    "Capabilities parameters schema dropped ({} bytes exceeds {} limit)",
+                    size,
+                    MAX_PARAMETERS_SCHEMA_BYTES,
+                );
+                self.parameters = None;
+            }
+        }
     }
 
     /// Merge nested `capabilities` wrapper into top-level fields.
     ///
     /// Channel-level JSON nests tool capabilities under `"capabilities"`.
     /// This promotes the inner fields so callers can access them uniformly.
-    fn resolve_nested(mut self) -> Self {
+    /// Maximum nesting depth for capabilities resolution.
+    const MAX_NESTED_DEPTH: usize = 8;
+
+    fn resolve_nested(self) -> Self {
+        self.resolve_nested_inner(0)
+    }
+
+    fn resolve_nested_inner(mut self, depth: usize) -> Self {
+        if depth > Self::MAX_NESTED_DEPTH {
+            tracing::warn!(
+                "Capabilities nesting exceeds maximum depth of {}, stopping resolution",
+                Self::MAX_NESTED_DEPTH
+            );
+            return self;
+        }
         if let Some(inner) = self.capabilities.take() {
-            let inner = inner.resolve_nested();
+            let inner = inner.resolve_nested_inner(depth + 1);
+            self.description = self.description.or(inner.description);
+            self.parameters = self.parameters.or(inner.parameters);
             self.http = self.http.or(inner.http);
             self.secrets = self.secrets.or(inner.secrets);
             self.tool_invoke = self.tool_invoke.or(inner.tool_invoke);
@@ -1257,6 +1322,175 @@ mod tests {
         assert_eq!(
             http.allowlist[0].host, "preserved.example.com",
             "Empty inner capabilities should not clobber outer http"
+        );
+    }
+
+    // ── Tool description and parameters schema ──────────────────────────
+
+    #[test]
+    fn test_parse_description_and_parameters() {
+        let json = r#"{
+            "description": "Search the web using Brave Search API",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query"
+                    },
+                    "count": {
+                        "type": "integer",
+                        "description": "Number of results"
+                    }
+                },
+                "required": ["query"]
+            }
+        }"#;
+
+        let caps = CapabilitiesFile::from_json(json).unwrap();
+        assert_eq!(
+            caps.description.as_deref(),
+            Some("Search the web using Brave Search API")
+        );
+        let params = caps.parameters.unwrap();
+        assert_eq!(params["type"], "object");
+        assert!(params["properties"]["query"].is_object());
+        assert_eq!(params["required"][0], "query");
+    }
+
+    #[test]
+    fn test_parse_description_only() {
+        let json = r#"{
+            "description": "A tool without explicit parameters schema"
+        }"#;
+
+        let caps = CapabilitiesFile::from_json(json).unwrap();
+        assert_eq!(
+            caps.description.as_deref(),
+            Some("A tool without explicit parameters schema")
+        );
+        assert!(caps.parameters.is_none());
+    }
+
+    #[test]
+    fn test_parse_without_description_or_parameters() {
+        let json = r#"{
+            "http": {
+                "allowlist": [{ "host": "api.example.com" }]
+            }
+        }"#;
+
+        let caps = CapabilitiesFile::from_json(json).unwrap();
+        assert!(
+            caps.description.is_none(),
+            "description should be None when not provided"
+        );
+        assert!(
+            caps.parameters.is_none(),
+            "parameters should be None when not provided"
+        );
+    }
+
+    #[test]
+    fn test_resolve_nested_description_promoted() {
+        let json = r#"{
+            "capabilities": {
+                "description": "Inner tool description",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "input": { "type": "string" }
+                    },
+                    "required": ["input"]
+                }
+            }
+        }"#;
+
+        let caps = CapabilitiesFile::from_json(json).unwrap();
+        assert_eq!(
+            caps.description.as_deref(),
+            Some("Inner tool description"),
+            "description should be promoted from inner capabilities"
+        );
+        assert!(
+            caps.parameters.is_some(),
+            "parameters should be promoted from inner capabilities"
+        );
+    }
+
+    #[test]
+    fn test_resolve_nested_outer_description_takes_precedence() {
+        let json = r#"{
+            "description": "Outer description wins",
+            "capabilities": {
+                "description": "Inner description loses"
+            }
+        }"#;
+
+        let caps = CapabilitiesFile::from_json(json).unwrap();
+        assert_eq!(
+            caps.description.as_deref(),
+            Some("Outer description wins"),
+            "Outer description should take precedence over inner"
+        );
+    }
+
+    /// Regression test for issue #974: deeply nested capabilities wrappers
+    /// must not cause stack overflow. resolve_nested should stop at
+    /// MAX_NESTED_DEPTH and return gracefully.
+    #[test]
+    fn test_resolve_nested_depth_limit() {
+        // Build a capabilities file nested beyond MAX_NESTED_DEPTH (8).
+        // The description is at the innermost level which is beyond the limit,
+        // so it won't be resolved — the key assertion is no stack overflow.
+        let mut json = r#"{ "description": "leaf" }"#.to_string();
+        for _ in 0..20 {
+            json = format!(r#"{{ "capabilities": {json} }}"#);
+        }
+        // Should not stack overflow — this is the primary assertion.
+        let _caps = CapabilitiesFile::from_json(&json).unwrap();
+    }
+
+    /// Regression test for issue #976: oversized description strings are truncated.
+    #[test]
+    fn test_description_truncated_at_limit() {
+        let long_desc = "x".repeat(10_000);
+        let json = format!(r#"{{ "description": "{long_desc}" }}"#);
+        let caps = CapabilitiesFile::from_json(&json).unwrap();
+        let desc = caps.description.unwrap();
+        assert!(
+            desc.len() <= super::MAX_DESCRIPTION_CHARS + 50, // allow for minor overhead
+            "description should be truncated to ~{} chars, got {}",
+            super::MAX_DESCRIPTION_CHARS,
+            desc.len()
+        );
+    }
+
+    /// Regression test for issue #977: oversized parameters schema is dropped.
+    #[test]
+    fn test_oversized_parameters_schema_dropped() {
+        // Build a parameters schema larger than MAX_PARAMETERS_SCHEMA_BYTES
+        let mut properties = serde_json::Map::new();
+        for i in 0..2000 {
+            properties.insert(
+                format!("field_{i}"),
+                serde_json::json!({
+                    "type": "string",
+                    "description": "x".repeat(50)
+                }),
+            );
+        }
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": properties,
+        });
+        let json = serde_json::json!({
+            "parameters": schema,
+        });
+        let caps = CapabilitiesFile::from_json(&json.to_string()).unwrap();
+        assert!(
+            caps.parameters.is_none(),
+            "oversized parameters schema should be dropped"
         );
     }
 }

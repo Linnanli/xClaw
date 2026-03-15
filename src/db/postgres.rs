@@ -99,7 +99,7 @@ impl ConversationStore for PgBackend {
         channel: &str,
         user_id: &str,
         thread_id: Option<&str>,
-    ) -> Result<(), DatabaseError> {
+    ) -> Result<bool, DatabaseError> {
         self.store
             .ensure_conversation(id, channel, user_id, thread_id)
             .await
@@ -485,6 +485,15 @@ impl RoutineStore for PgBackend {
 
     async fn count_running_routine_runs(&self, routine_id: Uuid) -> Result<i64, DatabaseError> {
         self.store.count_running_routine_runs(routine_id).await
+    }
+
+    async fn count_running_routine_runs_batch(
+        &self,
+        routine_ids: &[Uuid],
+    ) -> Result<std::collections::HashMap<Uuid, i64>, DatabaseError> {
+        self.store
+            .count_running_routine_runs_batch(routine_ids)
+            .await
     }
 
     async fn link_routine_run_to_job(

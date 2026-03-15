@@ -207,7 +207,7 @@ pub trait ConversationStore: Send + Sync {
         channel: &str,
         user_id: &str,
         thread_id: Option<&str>,
-    ) -> Result<(), DatabaseError>;
+    ) -> Result<bool, DatabaseError>;
     async fn list_conversations_with_preview(
         &self,
         user_id: &str,
@@ -387,6 +387,10 @@ pub trait RoutineStore: Send + Sync {
         limit: i64,
     ) -> Result<Vec<RoutineRun>, DatabaseError>;
     async fn count_running_routine_runs(&self, routine_id: Uuid) -> Result<i64, DatabaseError>;
+    async fn count_running_routine_runs_batch(
+        &self,
+        routine_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, i64>, DatabaseError>;
     async fn link_routine_run_to_job(
         &self,
         run_id: Uuid,
