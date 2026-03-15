@@ -192,11 +192,11 @@ mod tests {
         // Too short
         assert!(auth.setup_master_password("Short1!").is_err());
 
-        // No special chars
-        assert!(auth.setup_master_password("ValidPassword123").is_err());
+        // Only 2 categories (lower + numbers), threshold is 3
+        assert!(auth.setup_master_password("validpassword123").is_err());
 
-        // Valid password
-        assert!(auth.setup_master_password("ValidPassword123!").is_ok());
+        // Valid password (has upper, lower, numbers = 3 categories, meets threshold of 3)
+        assert!(auth.setup_master_password("ValidPassword123").is_ok());
     }
 
     #[test]

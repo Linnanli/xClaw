@@ -1,9 +1,11 @@
 {
+  "productName": "Ironclaw Desktop",
+  "version": "0.1.0",
+  "identifier": "com.ironclaw.desktop",
   "build": {
     "beforeBuildCommand": "",
     "beforeDevCommand": "",
-    "devPath": "../src-tauri/target/debug",
-    "frontendDist": "../dist"
+    "frontendDist": "./src-ui"
   },
   "app": {
     "windows": [
@@ -18,29 +20,13 @@
       }
     ],
     "security": {
-      "csp": null
-    }
-  },
-  "package": {
-    "productName": "Ironclaw Desktop",
-    "version": "0.1.0"
-  },
-  "tauri": {
-    "allowlist": {
-      "all": false,
-      "window": {
-        "all": false,
-        "close": true,
-        "hide": true,
-        "show": true,
-        "maximize": true,
-        "minimize": true,
-        "unmaximize": true,
-        "unminimize": true
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$RESOURCE/**"]
       }
-    },
-    "security": {
-      "csp": null
     }
+  },
+  "bundle": {
+    "active": false
   }
 }

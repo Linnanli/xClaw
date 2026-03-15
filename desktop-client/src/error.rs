@@ -1,6 +1,8 @@
 use thiserror::Error;
+use serde::Serialize;
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Serialize)]
+#[serde(tag = "type", content = "message")]
 pub enum Error {
     #[error("Authentication error: {0}")]
     AuthError(String),
@@ -18,10 +20,10 @@ pub enum Error {
     CryptoError(String),
 
     #[error("IO error: {0}")]
-    IoError(#[from] std::io::Error),
+    IoError(String),
 
     #[error("Serialization error: {0}")]
-    SerializationError(#[from] serde_json::Error),
+    SerializationError(String),
 
     #[error("Invalid password")]
     InvalidPassword,
@@ -31,6 +33,18 @@ pub enum Error {
 
     #[error("Unauthorized")]
     Unauthorized,
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::IoError(err.to_string())
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(err: serde_json::Error) -> Self {
+        Error::SerializationError(err.to_string())
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
