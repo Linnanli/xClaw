@@ -5,6 +5,8 @@ pub mod error;
 pub mod commands;
 pub mod policy_sync;
 pub mod dlp_integration;
+pub mod plugin_manager;
+pub mod offline_mode;
 
 pub use error::{Error, Result};
 pub use commands::CommandState;

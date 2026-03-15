@@ -282,3 +282,307 @@ window.addEventListener('DOMContentLoaded', () => {
     initializeApp();
   }
 });
+
+
+// --- Plugin Management ---
+
+let currentPluginTab = 'installed';
+let installedPlugins = [];
+let availablePlugins = [];
+let pendingUpdates = [];
+let selectedPlugin = null;
+
+async function loadPlugins() {
+  try {
+    installedPlugins = await window.__TAURI__.invoke('get_installed_plugins');
+    availablePlugins = await window.__TAURI__.invoke('get_available_plugins');
+    pendingUpdates = await window.__TAURI__.invoke('check_plugin_updates');
+    
+    renderPluginsList();
+  } catch (err) {
+    showToast('Failed to load plugins: ' + err.message, 'error');
+  }
+}
+
+function switchPluginTab(tab) {
+  currentPluginTab = tab;
+  
+  document.querySelectorAll('.plugin-tab-btn').forEach(btn => {
+    btn.classList.remove('active');
+  });
+  event.target.classList.add('active');
+  
+  document.querySelectorAll('.plugin-panel').forEach(panel => {
+    panel.classList.remove('active');
+  });
+  document.getElementById(tab + '-plugins-panel').classList.add('active');
+  
+  renderPluginsList();
+}
+
+function renderPluginsList() {
+  let plugins = [];
+  let containerId = '';
+  
+  if (currentPluginTab === 'installed') {
+    plugins = installedPlugins;
+    containerId = 'installed-plugins-list';
+  } else if (currentPluginTab === 'available') {
+    plugins = availablePlugins;
+    containerId = 'available-plugins-list';
+  } else if (currentPluginTab === 'updates') {
+    plugins = pendingUpdates;
+    containerId = 'updates-plugins-list';
+  }
+  
+  const container = document.getElementById(containerId);
+  container.innerHTML = '';
+  
+  if (plugins.length === 0) {
+    container.innerHTML = '<p style="text-align: center; color: #999; padding: 40px;">No plugins found</p>';
+    return;
+  }
+  
+  plugins.forEach(plugin => {
+    const card = createPluginCard(plugin);
+    container.appendChild(card);
+  });
+}
+
+function createPluginCard(plugin) {
+  const card = document.createElement('div');
+  card.className = 'plugin-card';
+  
+  let version = plugin.version || plugin.new_version || 'N/A';
+  let title = plugin.name || plugin.plugin_id || 'Unknown';
+  let description = plugin.description || plugin.changelog || 'No description';
+  let author = plugin.author || 'Unknown';
+  
+  let statusBadges = '';
+  if (currentPluginTab === 'installed') {
+    statusBadges = plugin.enabled ? 
+      '<span class="plugin-status-badge">Enabled</span>' :
+      '<span class="plugin-status-badge disabled">Disabled</span>';
+  } else if (currentPluginTab === 'updates') {
+    statusBadges = '<span class="plugin-status-badge update">Update Available</span>';
+  }
+  
+  let actions = '';
+  if (currentPluginTab === 'installed') {
+    actions = `
+      <button class="plugin-action" onclick="togglePluginStatus('${plugin.metadata?.id || plugin.id}', ${plugin.enabled})">
+        ${plugin.enabled ? 'Disable' : 'Enable'}
+      </button>
+      <button class="plugin-action" onclick="uninstallPlugin('${plugin.metadata?.id || plugin.id}')">Uninstall</button>
+    `;
+  } else if (currentPluginTab === 'available') {
+    actions = `
+      <button class="plugin-action primary" onclick="installPlugin('${plugin.id}')">Install</button>
+    `;
+  } else if (currentPluginTab === 'updates') {
+    actions = `
+      <button class="plugin-action primary" onclick="updatePlugin('${plugin.plugin_id}')">Update</button>
+    `;
+  }
+  
+  card.innerHTML = `
+    <div class="plugin-card-header">
+      <div class="plugin-card-title">${escapeHtml(title)}</div>
+      <div class="plugin-card-version">${escapeHtml(version)}</div>
+    </div>
+    <div class="plugin-card-author">${escapeHtml(author)}</div>
+    <div class="plugin-card-description">${escapeHtml(description)}</div>
+    <div class="plugin-card-status">${statusBadges}</div>
+    <div class="plugin-card-actions">${actions}</div>
+  `;
+  
+  card.addEventListener('click', () => showPluginDetails(plugin));
+  
+  return card;
+}
+
+function showPluginDetails(plugin) {
+  selectedPlugin = plugin;
+  const modal = document.getElementById('plugin-modal');
+  const title = document.getElementById('plugin-modal-title');
+  const details = document.getElementById('plugin-modal-details');
+  const actionBtn = document.getElementById('plugin-action-btn');
+  
+  let pluginName = plugin.name || plugin.plugin_id || 'Unknown';
+  let pluginVersion = plugin.version || plugin.new_version || 'N/A';
+  let pluginAuthor = plugin.author || 'Unknown';
+  let pluginDescription = plugin.description || plugin.changelog || 'No description';
+  
+  title.textContent = pluginName;
+  
+  let detailsHtml = `
+    <div class="plugin-detail-section">
+      <div class="plugin-detail-label">Version</div>
+      <div class="plugin-detail-value">${escapeHtml(pluginVersion)}</div>
+    </div>
+    <div class="plugin-detail-section">
+      <div class="plugin-detail-label">Author</div>
+      <div class="plugin-detail-value">${escapeHtml(pluginAuthor)}</div>
+    </div>
+    <div class="plugin-detail-section">
+      <div class="plugin-detail-label">Description</div>
+      <div class="plugin-detail-value">${escapeHtml(pluginDescription)}</div>
+    </div>
+  `;
+  
+  if (currentPluginTab === 'installed' && plugin.metadata?.resource_requirements) {
+    const reqs = plugin.metadata.resource_requirements;
+    detailsHtml += `
+      <div class="plugin-detail-section">
+        <div class="plugin-detail-label">Resource Requirements</div>
+        <div class="plugin-detail-value">
+          Memory: ${reqs.min_memory_mb}MB<br>
+          Disk: ${reqs.min_disk_mb}MB
+        </div>
+      </div>
+    `;
+  }
+  
+  details.innerHTML = detailsHtml;
+  
+  if (currentPluginTab === 'installed') {
+    actionBtn.textContent = plugin.enabled ? 'Disable' : 'Enable';
+    actionBtn.onclick = () => togglePluginStatus(plugin.metadata?.id || plugin.id, plugin.enabled);
+  } else if (currentPluginTab === 'available') {
+    actionBtn.textContent = 'Install';
+    actionBtn.onclick = () => installPlugin(plugin.id);
+  } else if (currentPluginTab === 'updates') {
+    actionBtn.textContent = 'Update';
+    actionBtn.onclick = () => updatePlugin(plugin.plugin_id);
+  }
+  
+  modal.style.display = 'flex';
+}
+
+function closePluginModal() {
+  document.getElementById('plugin-modal').style.display = 'none';
+  selectedPlugin = null;
+}
+
+async function installPlugin(pluginId) {
+  try {
+    await window.__TAURI__.invoke('install_plugin', { plugin_id: pluginId });
+    showToast('Plugin installed successfully', 'success');
+    closePluginModal();
+    loadPlugins();
+  } catch (err) {
+    showToast('Failed to install plugin: ' + err.message, 'error');
+  }
+}
+
+async function uninstallPlugin(pluginId) {
+  if (!confirm('Are you sure you want to uninstall this plugin?')) return;
+  
+  try {
+    await window.__TAURI__.invoke('uninstall_plugin', { plugin_id: pluginId });
+    showToast('Plugin uninstalled successfully', 'success');
+    closePluginModal();
+    loadPlugins();
+  } catch (err) {
+    showToast('Failed to uninstall plugin: ' + err.message, 'error');
+  }
+}
+
+async function togglePluginStatus(pluginId, currentlyEnabled) {
+  try {
+    if (currentlyEnabled) {
+      await window.__TAURI__.invoke('disable_plugin', { plugin_id: pluginId });
+      showToast('Plugin disabled', 'success');
+    } else {
+      await window.__TAURI__.invoke('enable_plugin', { plugin_id: pluginId });
+      showToast('Plugin enabled', 'success');
+    }
+    closePluginModal();
+    loadPlugins();
+  } catch (err) {
+    showToast('Failed to toggle plugin: ' + err.message, 'error');
+  }
+}
+
+async function updatePlugin(pluginId) {
+  try {
+    await window.__TAURI__.invoke('update_plugin', { plugin_id: pluginId });
+    showToast('Plugin updated successfully', 'success');
+    closePluginModal();
+    loadPlugins();
+  } catch (err) {
+    showToast('Failed to update plugin: ' + err.message, 'error');
+  }
+}
+
+async function refreshPlugins() {
+  showToast('Refreshing plugins...', 'info');
+  await loadPlugins();
+  showToast('Plugins refreshed', 'success');
+}
+
+function performPluginAction() {
+  // This is called by the modal action button
+  // The actual action is set in showPluginDetails
+}
+
+// --- Offline Mode ---
+
+let offlineMode = false;
+
+async function initializeOfflineMode() {
+  try {
+    const state = await window.__TAURI__.invoke('get_offline_state');
+    offlineMode = state.is_offline;
+    updateOfflineIndicator();
+  } catch (err) {
+    console.error('Failed to initialize offline mode:', err);
+  }
+}
+
+function updateOfflineIndicator() {
+  const indicator = document.getElementById('offline-indicator');
+  const status = document.getElementById('sse-status');
+  const statusDiv = document.getElementById('gateway-status-trigger');
+  
+  if (offlineMode) {
+    indicator.style.display = 'inline-block';
+    status.textContent = 'Offline';
+    statusDiv.classList.add('offline');
+  } else {
+    indicator.style.display = 'none';
+    status.textContent = 'Connected';
+    statusDiv.classList.remove('offline');
+  }
+}
+
+async function toggleOfflineMode() {
+  try {
+    if (offlineMode) {
+      await window.__TAURI__.invoke('disable_offline_mode');
+      offlineMode = false;
+      showToast('Offline mode disabled', 'success');
+    } else {
+      await window.__TAURI__.invoke('enable_offline_mode');
+      offlineMode = true;
+      showToast('Offline mode enabled', 'info');
+    }
+    updateOfflineIndicator();
+  } catch (err) {
+    showToast('Failed to toggle offline mode: ' + err.message, 'error');
+  }
+}
+
+// Update initialization to include offline mode and plugins
+const originalInitializeApp = initializeApp;
+initializeApp = function() {
+  originalInitializeApp();
+  initializeOfflineMode();
+  
+  // Load plugins when plugins tab is clicked
+  document.querySelectorAll('.tab-bar button').forEach(btn => {
+    if (btn.dataset.tab === 'plugins') {
+      btn.addEventListener('click', loadPlugins);
+    }
+  });
+};

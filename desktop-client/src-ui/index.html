@@ -35,11 +35,13 @@
       <button data-tab="routines">Routines</button>
       <button data-tab="extensions">Extensions</button>
       <button data-tab="skills">Skills</button>
+      <button data-tab="plugins">Plugins</button>
       <div class="spacer"></div>
       <button class="status-logs-btn" data-tab="logs" title="Logs">Logs</button>
       <div class="status" id="gateway-status-trigger">
         <div class="dot" id="sse-dot"></div>
         <span id="sse-status">Connected</span>
+        <span id="offline-indicator" class="offline-indicator" style="display: none;">Offline</span>
       </div>
     </div>
 
@@ -101,6 +103,58 @@
         </div>
         <div class="cot-modal-body">
           <div id="cot-content"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Plugins Tab -->
+    <div class="tab-panel" id="tab-plugins">
+      <div class="plugins-container">
+        <div class="plugins-header">
+          <h2>Plugin Management</h2>
+          <div class="plugins-controls">
+            <input type="text" id="plugin-search" placeholder="Search plugins..." class="plugin-search">
+            <button onclick="refreshPlugins()" class="plugin-refresh-btn">Refresh</button>
+          </div>
+        </div>
+        
+        <div class="plugins-tabs">
+          <button class="plugin-tab-btn active" onclick="switchPluginTab('installed')">Installed</button>
+          <button class="plugin-tab-btn" onclick="switchPluginTab('available')">Available</button>
+          <button class="plugin-tab-btn" onclick="switchPluginTab('updates')">Updates</button>
+        </div>
+
+        <!-- Installed Plugins -->
+        <div id="installed-plugins-panel" class="plugin-panel active">
+          <div id="installed-plugins-list" class="plugins-list"></div>
+        </div>
+
+        <!-- Available Plugins -->
+        <div id="available-plugins-panel" class="plugin-panel">
+          <div id="available-plugins-list" class="plugins-list"></div>
+        </div>
+
+        <!-- Plugin Updates -->
+        <div id="updates-plugins-panel" class="plugin-panel">
+          <div id="updates-plugins-list" class="plugins-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Plugin Details Modal -->
+    <div id="plugin-modal" class="plugin-modal" style="display: none;">
+      <div class="plugin-modal-overlay" onclick="closePluginModal()"></div>
+      <div class="plugin-modal-content">
+        <div class="plugin-modal-header">
+          <h2 id="plugin-modal-title"></h2>
+          <button class="plugin-modal-close" onclick="closePluginModal()">×</button>
+        </div>
+        <div class="plugin-modal-body">
+          <div id="plugin-modal-details"></div>
+        </div>
+        <div class="plugin-modal-footer">
+          <button id="plugin-action-btn" class="plugin-action-btn" onclick="performPluginAction()"></button>
+          <button class="plugin-cancel-btn" onclick="closePluginModal()">Close</button>
         </div>
       </div>
     </div>

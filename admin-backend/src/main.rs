@@ -1,0 +1,48 @@
+use admin_backend::{routes, AppState};
+use deadpool_postgres::Config;
+use std::env;
+use tokio::net::TcpListener;
+use tracing_subscriber;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing
+    tracing_subscriber::fmt::init();
+
+    // Load environment variables
+    dotenvy::dotenv().ok();
+
+    // Database configuration
+    let db_host = env::var("DB_HOST").unwrap_or_else(|_| "localhost".to_string());
+    let db_port = env::var("DB_PORT").unwrap_or_else(|_| "5432".to_string());
+    let db_user = env::var("DB_USER").unwrap_or_else(|_| "postgres".to_string());
+    let db_password = env::var("DB_PASSWORD").unwrap_or_else(|_| "postgres".to_string());
+    let db_name = env::var("DB_NAME").unwrap_or_else(|_| "ironclaw".to_string());
+
+    let db_config = Config {
+        host: Some(db_host),
+        port: Some(db_port.parse()?),
+        user: Some(db_user),
+        password: Some(db_password),
+        dbname: Some(db_name),
+        ..Default::default()
+    };
+
+    let pool = db_config.create_pool(None, tokio_postgres::NoTls)?;
+
+    // Create app state
+    let state = AppState { db_pool: pool };
+
+    // Create router
+    let app = routes::create_router(state);
+
+    // Start server
+    let addr = "127.0.0.1:3000";
+    let listener = TcpListener::bind(addr).await?;
+
+    tracing::info!("Server listening on {}", addr);
+
+    axum::serve(listener, app).await?;
+
+    Ok(())
+}
