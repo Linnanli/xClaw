@@ -58,6 +58,15 @@ function setupTabNavigation() {
       if (panel) panel.classList.add('active');
       
       currentTab = tab;
+      
+      // Load data for specific tabs
+      if (tab === 'extensions') {
+        loadExtensions();
+      } else if (tab === 'routines') {
+        loadRoutines();
+      } else if (tab === 'plugins') {
+        loadPlugins();
+      }
     });
   });
 }
@@ -586,3 +595,283 @@ initializeApp = function() {
     }
   });
 };
+
+
+// Extensions Management
+async function loadExtensions() {
+  try {
+    const installed = await window.__TAURI__.invoke('get_installed_extensions');
+    const available = await window.__TAURI__.invoke('get_available_extensions');
+    
+    renderInstalledExtensions(installed);
+    renderAvailableExtensions(available);
+  } catch (error) {
+    console.error('Failed to load extensions:', error);
+    showToast('Failed to load extensions', 'error');
+  }
+}
+
+function renderInstalledExtensions(extensions) {
+  const list = document.getElementById('installed-extensions-list');
+  list.innerHTML = '';
+  
+  if (extensions.length === 0) {
+    list.innerHTML = '<p class="empty-state">No extensions installed</p>';
+    return;
+  }
+  
+  extensions.forEach(ext => {
+    const card = document.createElement('div');
+    card.className = 'extension-card';
+    card.innerHTML = `
+      <div class="extension-header">
+        <h3>${ext.metadata.name}</h3>
+        <span class="extension-version">${ext.metadata.version}</span>
+      </div>
+      <p class="extension-description">${ext.metadata.description}</p>
+      <p class="extension-author">by ${ext.metadata.author}</p>
+      <div class="extension-tools">
+        <strong>Tools:</strong> ${ext.metadata.tools.join(', ') || 'None'}
+      </div>
+      <div class="extension-actions">
+        <button onclick="toggleExtensionStatus('${ext.metadata.id}', ${ext.enabled})" class="btn-toggle">
+          ${ext.enabled ? 'Disable' : 'Enable'}
+        </button>
+        <button onclick="uninstallExtensionAction('${ext.metadata.id}')" class="btn-uninstall">Uninstall</button>
+      </div>
+    `;
+    list.appendChild(card);
+  });
+}
+
+function renderAvailableExtensions(extensions) {
+  const list = document.getElementById('available-extensions-list');
+  list.innerHTML = '';
+  
+  if (extensions.length === 0) {
+    list.innerHTML = '<p class="empty-state">No available extensions</p>';
+    return;
+  }
+  
+  extensions.forEach(ext => {
+    const card = document.createElement('div');
+    card.className = 'extension-card';
+    card.innerHTML = `
+      <div class="extension-header">
+        <h3>${ext.name}</h3>
+        <span class="extension-version">${ext.version}</span>
+      </div>
+      <p class="extension-description">${ext.description}</p>
+      <p class="extension-author">by ${ext.author}</p>
+      <div class="extension-tools">
+        <strong>Tools:</strong> ${ext.tools.join(', ') || 'None'}
+      </div>
+      <div class="extension-actions">
+        <button onclick="installExtensionAction('${ext.id}')" class="btn-install">Install</button>
+      </div>
+    `;
+    list.appendChild(card);
+  });
+}
+
+function switchExtensionTab(tab) {
+  document.querySelectorAll('.extension-tab-btn').forEach(btn => btn.classList.remove('active'));
+  document.querySelectorAll('.extension-panel').forEach(panel => panel.classList.remove('active'));
+  
+  event.target.classList.add('active');
+  document.getElementById(`${tab}-extensions-panel`).classList.add('active');
+}
+
+async function installExtensionAction(extensionId) {
+  try {
+    const available = await window.__TAURI__.invoke('get_available_extensions');
+    const ext = available.find(e => e.id === extensionId);
+    if (ext) {
+      await window.__TAURI__.invoke('install_extension', { metadata: ext });
+      showToast(`Extension ${ext.name} installed`, 'success');
+      loadExtensions();
+    }
+  } catch (error) {
+    console.error('Failed to install extension:', error);
+    showToast('Failed to install extension', 'error');
+  }
+}
+
+async function uninstallExtensionAction(extensionId) {
+  if (confirm('Are you sure you want to uninstall this extension?')) {
+    try {
+      await window.__TAURI__.invoke('uninstall_extension', { extensionId });
+      showToast('Extension uninstalled', 'success');
+      loadExtensions();
+    } catch (error) {
+      console.error('Failed to uninstall extension:', error);
+      showToast('Failed to uninstall extension', 'error');
+    }
+  }
+}
+
+async function toggleExtensionStatus(extensionId, currentlyEnabled) {
+  try {
+    if (currentlyEnabled) {
+      await window.__TAURI__.invoke('disable_extension', { extensionId });
+    } else {
+      await window.__TAURI__.invoke('enable_extension', { extensionId });
+    }
+    loadExtensions();
+  } catch (error) {
+    console.error('Failed to toggle extension:', error);
+    showToast('Failed to toggle extension', 'error');
+  }
+}
+
+async function refreshExtensions() {
+  loadExtensions();
+}
+
+// Routines Management
+async function loadRoutines() {
+  try {
+    const routines = await window.__TAURI__.invoke('get_routines');
+    renderRoutines(routines);
+  } catch (error) {
+    console.error('Failed to load routines:', error);
+    showToast('Failed to load routines', 'error');
+  }
+}
+
+function renderRoutines(routines) {
+  const list = document.getElementById('routines-list');
+  list.innerHTML = '';
+  
+  if (routines.length === 0) {
+    list.innerHTML = '<p class="empty-state">No routines created</p>';
+    return;
+  }
+  
+  routines.forEach(routine => {
+    const card = document.createElement('div');
+    card.className = 'routine-card';
+    const statusClass = routine.status.toLowerCase();
+    card.innerHTML = `
+      <div class="routine-header">
+        <h3>${routine.name}</h3>
+        <span class="routine-status ${statusClass}">${routine.status}</span>
+      </div>
+      <p class="routine-description">${routine.description}</p>
+      <div class="routine-trigger">
+        <strong>Trigger:</strong> ${JSON.stringify(routine.trigger).replace(/"/g, '')}
+      </div>
+      <div class="routine-actions">
+        <button onclick="triggerRoutineAction('${routine.id}')" class="btn-trigger">Trigger Now</button>
+        <button onclick="toggleRoutineStatus('${routine.id}', '${routine.status}')" class="btn-toggle">
+          ${routine.status === 'Active' ? 'Pause' : routine.status === 'Paused' ? 'Resume' : 'Enable'}
+        </button>
+        <button onclick="deleteRoutineAction('${routine.id}')" class="btn-delete">Delete</button>
+      </div>
+    `;
+    list.appendChild(card);
+  });
+}
+
+function showCreateRoutineModal() {
+  document.getElementById('routine-modal').style.display = 'flex';
+  document.getElementById('routine-trigger').value = 'manual';
+  document.getElementById('trigger-value-group').style.display = 'none';
+}
+
+function closeRoutineModal() {
+  document.getElementById('routine-modal').style.display = 'none';
+  document.getElementById('routine-name').value = '';
+  document.getElementById('routine-description').value = '';
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  const triggerSelect = document.getElementById('routine-trigger');
+  if (triggerSelect) {
+    triggerSelect.addEventListener('change', function() {
+      const valueGroup = document.getElementById('trigger-value-group');
+      if (this.value === 'manual') {
+        valueGroup.style.display = 'none';
+      } else {
+        valueGroup.style.display = 'block';
+      }
+    });
+  }
+});
+
+async function createNewRoutine() {
+  const name = document.getElementById('routine-name').value;
+  const description = document.getElementById('routine-description').value;
+  const triggerType = document.getElementById('routine-trigger').value;
+  const triggerValue = document.getElementById('routine-trigger-value').value;
+  
+  if (!name || !description) {
+    showToast('Please fill in all required fields', 'error');
+    return;
+  }
+  
+  try {
+    let trigger;
+    if (triggerType === 'manual') {
+      trigger = { Manual: null };
+    } else if (triggerType === 'time') {
+      trigger = { Time: triggerValue || '0 9 * * *' };
+    } else {
+      trigger = { Event: triggerValue || 'default_event' };
+    }
+    
+    await window.__TAURI__.invoke('create_routine', {
+      name,
+      description,
+      trigger,
+      actions: []
+    });
+    
+    showToast('Routine created successfully', 'success');
+    closeRoutineModal();
+    loadRoutines();
+  } catch (error) {
+    console.error('Failed to create routine:', error);
+    showToast('Failed to create routine', 'error');
+  }
+}
+
+async function triggerRoutineAction(routineId) {
+  try {
+    await window.__TAURI__.invoke('trigger_routine', { routineId });
+    showToast('Routine triggered', 'success');
+    loadRoutines();
+  } catch (error) {
+    console.error('Failed to trigger routine:', error);
+    showToast('Failed to trigger routine', 'error');
+  }
+}
+
+async function toggleRoutineStatus(routineId, currentStatus) {
+  try {
+    if (currentStatus === 'Active') {
+      await window.__TAURI__.invoke('pause_routine', { routineId });
+    } else if (currentStatus === 'Paused') {
+      await window.__TAURI__.invoke('enable_routine', { routineId });
+    } else {
+      await window.__TAURI__.invoke('enable_routine', { routineId });
+    }
+    loadRoutines();
+  } catch (error) {
+    console.error('Failed to toggle routine:', error);
+    showToast('Failed to toggle routine', 'error');
+  }
+}
+
+async function deleteRoutineAction(routineId) {
+  if (confirm('Are you sure you want to delete this routine?')) {
+    try {
+      await window.__TAURI__.invoke('delete_routine', { routineId });
+      showToast('Routine deleted', 'success');
+      loadRoutines();
+    } catch (error) {
+      console.error('Failed to delete routine:', error);
+      showToast('Failed to delete routine', 'error');
+    }
+  }
+}

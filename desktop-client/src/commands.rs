@@ -1,8 +1,10 @@
 use crate::auth::AuthManager;
 use crate::storage::StorageManager;
+use crate::extension_manager::ExtensionManager;
+use crate::routine_manager::RoutineManager;
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +31,8 @@ pub struct SessionInfo {
 pub struct CommandState {
     pub auth_manager: Arc<Mutex<AuthManager>>,
     pub storage_manager: Arc<Mutex<Option<StorageManager>>>,
+    pub extension_manager: Arc<StdMutex<ExtensionManager>>,
+    pub routine_manager: Arc<StdMutex<RoutineManager>>,
 }
 
 impl CommandState {
@@ -36,6 +40,8 @@ impl CommandState {
         Self {
             auth_manager: Arc::new(Mutex::new(AuthManager::new())),
             storage_manager: Arc::new(Mutex::new(None)),
+            extension_manager: Arc::new(StdMutex::new(ExtensionManager::new())),
+            routine_manager: Arc::new(StdMutex::new(RoutineManager::new())),
         }
     }
 }
@@ -431,4 +437,137 @@ pub async fn deny_operation(
 ) -> Result<()> {
     // Stub implementation
     Ok(())
+}
+
+// Extension Management Commands
+#[tauri::command]
+pub async fn get_installed_extensions(
+    state: tauri::State<'_, CommandState>,
+) -> Result<Vec<crate::extension_manager::InstalledExtension>> {
+    Ok(state.extension_manager.lock().unwrap().get_installed_extensions())
+}
+
+#[tauri::command]
+pub async fn get_available_extensions(
+    state: tauri::State<'_, CommandState>,
+) -> Result<Vec<crate::extension_manager::ExtensionMetadata>> {
+    Ok(state.extension_manager.lock().unwrap().get_available_extensions().to_vec())
+}
+
+#[tauri::command]
+pub async fn install_extension(
+    metadata: crate::extension_manager::ExtensionMetadata,
+    state: tauri::State<'_, CommandState>,
+) -> Result<()> {
+    state.extension_manager.lock().unwrap().install_extension(metadata)
+}
+
+#[tauri::command]
+pub async fn uninstall_extension(
+    extension_id: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<()> {
+    state.extension_manager.lock().unwrap().uninstall_extension(&extension_id)
+}
+
+#[tauri::command]
+pub async fn enable_extension(
+    extension_id: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<()> {
+    state.extension_manager.lock().unwrap().enable_extension(&extension_id)
+}
+
+#[tauri::command]
+pub async fn disable_extension(
+    extension_id: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<()> {
+    state.extension_manager.lock().unwrap().disable_extension(&extension_id)
+}
+
+#[tauri::command]
+pub async fn search_extensions(
+    query: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<Vec<crate::extension_manager::ExtensionMetadata>> {
+    let manager = state.extension_manager.lock().unwrap();
+    Ok(manager.search_extensions(&query).into_iter().cloned().collect())
+}
+
+#[tauri::command]
+pub async fn get_enabled_tools(
+    state: tauri::State<'_, CommandState>,
+) -> Result<Vec<String>> {
+    Ok(state.extension_manager.lock().unwrap().get_enabled_tools())
+}
+
+// Routine Management Commands
+#[tauri::command]
+pub async fn get_routines(
+    state: tauri::State<'_, CommandState>,
+) -> Result<Vec<crate::routine_manager::Routine>> {
+    let manager = state.routine_manager.lock().unwrap();
+    Ok(manager.get_all_routines().into_iter().cloned().collect())
+}
+
+#[tauri::command]
+pub async fn create_routine(
+    name: String,
+    description: String,
+    trigger: crate::routine_manager::RoutineTrigger,
+    actions: Vec<crate::routine_manager::RoutineAction>,
+    state: tauri::State<'_, CommandState>,
+) -> Result<crate::routine_manager::Routine> {
+    state.routine_manager.lock().unwrap().create_routine(name, description, trigger, actions)
+}
+
+#[tauri::command]
+pub async fn delete_routine(
+    routine_id: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<()> {
+    state.routine_manager.lock().unwrap().delete_routine(&routine_id)
+}
+
+#[tauri::command]
+pub async fn trigger_routine(
+    routine_id: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<crate::routine_manager::RoutineRun> {
+    state.routine_manager.lock().unwrap().trigger_routine(&routine_id)
+}
+
+#[tauri::command]
+pub async fn enable_routine(
+    routine_id: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<()> {
+    state.routine_manager.lock().unwrap().enable_routine(&routine_id)
+}
+
+#[tauri::command]
+pub async fn disable_routine(
+    routine_id: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<()> {
+    state.routine_manager.lock().unwrap().disable_routine(&routine_id)
+}
+
+#[tauri::command]
+pub async fn pause_routine(
+    routine_id: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<()> {
+    state.routine_manager.lock().unwrap().pause_routine(&routine_id)
+}
+
+#[tauri::command]
+pub async fn get_routine_runs(
+    routine_id: String,
+    limit: usize,
+    state: tauri::State<'_, CommandState>,
+) -> Result<Vec<crate::routine_manager::RoutineRun>> {
+    let manager = state.routine_manager.lock().unwrap();
+    Ok(manager.get_routine_runs(&routine_id, limit).into_iter().cloned().collect())
 }

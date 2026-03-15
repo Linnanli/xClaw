@@ -227,6 +227,70 @@
 - [x] 14. 检查点 - 确保插件管理和离线模式通过测试
   - 确保所有测试通过，如有疑问请询问用户
 
+- [x] 14.1 实现扩展管理功能
+  - [x] 14.1.1 创建 ExtensionManager 类
+    - 支持安装/卸载扩展
+    - 支持启用/禁用扩展
+    - 搜索扩展功能
+    - 获取启用的工具列表
+    - 3个单元测试
+
+  - [x] 14.1.2 添加扩展管理 Tauri 命令
+    - get_installed_extensions
+    - get_available_extensions
+    - install_extension
+    - uninstall_extension
+    - enable_extension
+    - disable_extension
+    - search_extensions
+    - get_enabled_tools
+
+  - [x] 14.1.3 构建扩展管理 UI
+    - 已安装/可用扩展标签页
+    - 扩展卡片显示（名称、版本、作者、描述、工具列表）
+    - 安装/卸载/启用/禁用按钮
+    - 搜索功能
+    - 400+行CSS样式
+
+  - [x]* 14.1.4 编写扩展管理属性测试
+    - 8个属性测试覆盖所有功能
+
+- [x] 14.2 实现日程管理功能
+  - [x] 14.2.1 创建 RoutineManager 类
+    - 支持创建/删除日程
+    - 支持手动/时间/事件触发
+    - 支持启用/禁用/暂停日程
+    - 日程运行跟踪（成功/失败）
+    - 4个单元测试
+
+  - [x] 14.2.2 添加日程管理 Tauri 命令
+    - get_routines
+    - create_routine
+    - delete_routine
+    - trigger_routine
+    - enable_routine
+    - disable_routine
+    - pause_routine
+    - get_routine_runs
+
+  - [x] 14.2.3 构建日程管理 UI
+    - 日程列表显示
+    - 日程卡片（名称、描述、触发器、状态）
+    - 创建日程模态框（名称、描述、触发器类型、触发器值）
+    - 触发/启用/禁用/删除按钮
+    - 状态徽章（Active/Paused/Disabled）
+    - 400+行CSS样式
+
+  - [x]* 14.2.4 编写日程管理属性测试
+    - 10个属性测试覆盖所有功能
+
+- [x] 14.3 集成扩展和日程到客户端
+  - [x] 更新 desktop-client/src/lib.rs - 添加模块声明
+  - [x] 更新 CommandState 结构体 - 包含管理器
+  - [x] 更新 setupTabNavigation - 加载数据时触发
+  - [x] 所有代码编译无错误
+  - [x] 25个测试（7个单元测试 + 18个属性测试）
+
 ### 第五阶段：管理后台实现（后台服务、审核流水线、审计中心）
 
 - [x] 15. 实现管理后台核心基础设施

@@ -308,6 +308,9 @@ This document tracks feature parity between IronClaw (Rust implementation) and O
 | `before_agent_start` hook | ✅ | ❌ | modelOverride/providerOverride support |
 | `before_message_write` hook | ✅ | ❌ | Pre-write message interception |
 | `llm_input`/`llm_output` hooks | ✅ | ❌ | LLM payload inspection |
+| Desktop client extension management | ❌ | ✅ | Tauri UI for install/uninstall/enable/disable extensions |
+| Extension search | ❌ | ✅ | Search extensions by name/description |
+| Extension tools listing | ❌ | ✅ | Display available tools per extension |
 
 ### Owner: _Unassigned_
 
@@ -452,6 +455,8 @@ This document tracks feature parity between IronClaw (Rust implementation) and O
 | Outbound webhooks | ✅ | ✅ | P2 | Fire-and-forget lifecycle event delivery |
 | Heartbeat system | ✅ | ✅ | - | Periodic execution |
 | Gmail pub/sub | ✅ | ❌ | P3 | |
+| Desktop client routines UI | ❌ | ✅ | - | Tauri desktop client with routine management |
+| Desktop client extensions UI | ❌ | ✅ | - | Tauri desktop client with extension management |
 
 ### Owner: _Unassigned_
 

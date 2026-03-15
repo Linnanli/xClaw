@@ -159,6 +159,83 @@
       </div>
     </div>
 
+    <!-- Extensions Tab -->
+    <div class="tab-panel" id="tab-extensions">
+      <div class="extensions-container">
+        <div class="extensions-header">
+          <h2>Extensions Management</h2>
+          <div class="extensions-controls">
+            <input type="text" id="extension-search" placeholder="Search extensions..." class="extension-search">
+            <button onclick="refreshExtensions()" class="extension-refresh-btn">Refresh</button>
+          </div>
+        </div>
+        
+        <div class="extensions-tabs">
+          <button class="extension-tab-btn active" onclick="switchExtensionTab('installed')">Installed</button>
+          <button class="extension-tab-btn" onclick="switchExtensionTab('available')">Available</button>
+        </div>
+
+        <!-- Installed Extensions -->
+        <div id="installed-extensions-panel" class="extension-panel active">
+          <div id="installed-extensions-list" class="extensions-list"></div>
+        </div>
+
+        <!-- Available Extensions -->
+        <div id="available-extensions-panel" class="extension-panel">
+          <div id="available-extensions-list" class="extensions-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Routines Tab -->
+    <div class="tab-panel" id="tab-routines">
+      <div class="routines-container">
+        <div class="routines-header">
+          <h2>Routines Management</h2>
+          <button onclick="showCreateRoutineModal()" class="routine-create-btn">+ New Routine</button>
+        </div>
+        
+        <div class="routines-list" id="routines-list"></div>
+      </div>
+    </div>
+
+    <!-- Create Routine Modal -->
+    <div id="routine-modal" class="routine-modal" style="display: none;">
+      <div class="routine-modal-overlay" onclick="closeRoutineModal()"></div>
+      <div class="routine-modal-content">
+        <div class="routine-modal-header">
+          <h2>Create Routine</h2>
+          <button class="routine-modal-close" onclick="closeRoutineModal()">×</button>
+        </div>
+        <div class="routine-modal-body">
+          <div class="form-group">
+            <label for="routine-name">Name</label>
+            <input type="text" id="routine-name" placeholder="Routine name">
+          </div>
+          <div class="form-group">
+            <label for="routine-description">Description</label>
+            <textarea id="routine-description" placeholder="Routine description"></textarea>
+          </div>
+          <div class="form-group">
+            <label for="routine-trigger">Trigger Type</label>
+            <select id="routine-trigger">
+              <option value="manual">Manual</option>
+              <option value="time">Time-based (Cron)</option>
+              <option value="event">Event-based</option>
+            </select>
+          </div>
+          <div class="form-group" id="trigger-value-group" style="display: none;">
+            <label for="routine-trigger-value">Trigger Value</label>
+            <input type="text" id="routine-trigger-value" placeholder="e.g., 0 9 * * * for 9 AM daily">
+          </div>
+        </div>
+        <div class="routine-modal-footer">
+          <button class="routine-modal-btn cancel" onclick="closeRoutineModal()">Cancel</button>
+          <button class="routine-modal-btn create" onclick="createNewRoutine()">Create</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Watermark -->
     <div id="watermark" class="watermark"></div>
   </div>
