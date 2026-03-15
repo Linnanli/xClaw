@@ -14,15 +14,15 @@
 - [ ] 会话过期控制
 
 ### 1.2 安全微内核
-- [ ] SM2验签器（国密签名验证）
-- [ ] DLP脱敏引擎（实时过滤敏感词）
-- [ ] WASM运行时沙箱（资源隔离）
+- [x] SM2验签器（国密签名验证 - 框架已实现，需要FFI绑定）
+- [x] DLP脱敏引擎（实时过滤敏感词 - 已实现）
+- [x] WASM运行时沙箱（资源隔离 - 已实现）
 - [ ] 离线审计代理（加密存证）
-- [ ] 断点续传管理器（离线日志同步）
+- [x] 断点续传管理器（离线日志同步 - 已实现）
 
 ### 1.3 本地加密存储
-- [ ] SM4/AES加密存储层
-- [ ] 配置文件加密
+- [x] AES-256-GCM加密存储层（已实现）
+- [x] 配置文件加密（已实现）
 - [ ] 历史记录加密
 - [ ] 审计日志加密
 
@@ -30,6 +30,15 @@
 - [ ] Canvas实现的动态水印
 - [ ] 嵌入用户名/ID
 - [ ] 旋转显示
+
+## 2. 国密算法支持 (Chinese Cryptography)
+
+### 2.1 国密算法栈
+- [x] SM4对称加密（框架已实现，需要FFI绑定）
+- [x] SM2数字签名（框架已实现，需要FFI绑定）
+- [x] SM3哈希函数（框架已实现，需要FFI绑定）
+- [x] HKDF-SM3密钥派生（框架已实现，需要FFI绑定）
+- [x] 算法切换机制（已实现）
 
 ## 2. 用户交互界面 (UI/UX)
 
@@ -110,13 +119,13 @@
 - [ ] 技能详情页面
 - [ ] 技能文档显示
 
-### 2.8 日志标签页（待实现）
+### 2.8 日志标签页
+- [x] 历史日志回放（已实现，调用web API）
+- [x] 日志级别过滤（已实现）
+- [x] 日志模块过滤（已实现）
+- [x] 日志搜索（已实现，调用web API）
+- [x] 日志导出（已实现，调用web API）
 - [ ] 实时日志流（SSE）
-- [ ] 历史日志回放
-- [ ] 日志级别过滤
-- [ ] 日志模块过滤
-- [ ] 日志搜索
-- [ ] 日志导出
 - [ ] 日志清空
 
 ### 2.9 模态框和对话框
@@ -144,9 +153,9 @@
 - [ ] 操作审计
 
 ### 3.2 离线能力
-- [ ] 离线模式检测
-- [ ] 离线日志缓存
-- [ ] 连线后自动同步
+- [x] 离线模式检测（已实现）
+- [x] 离线日志缓存（已实现）
+- [x] 连线后自动同步（已实现）
 - [ ] 离线推理支持（本地LLM）
 - [ ] 离线工具执行
 
@@ -195,17 +204,23 @@
 - [x] pause_routine - 暂停日程
 - [x] enable_routine - 启用日程
 - [x] delete_routine - 删除日程
-- [ ] get_memory_tree - 获取记忆树
-- [ ] get_memory_list - 获取记忆列表
-- [ ] read_memory - 读取记忆
-- [ ] write_memory - 写入记忆
-- [ ] search_memory - 搜索记忆
-- [ ] get_jobs - 获取任务列表
-- [ ] get_job_detail - 获取任务详情
-- [ ] cancel_job - 取消任务
-- [ ] restart_job - 重启任务
-- [ ] get_logs - 获取日志
-- [ ] search_logs - 搜索日志
+- [x] get_threads - 获取对话列表（已实现，调用web API）
+- [x] create_thread - 创建对话（已实现，调用web API）
+- [x] send_message - 发送消息（已实现，调用web API）
+- [x] get_memory_tree - 获取记忆树（已实现，调用web API）
+- [x] read_memory - 读取记忆（已实现，调用web API）
+- [x] write_memory - 写入记忆（已实现，调用web API）
+- [x] search_memory - 搜索记忆（已实现，调用web API）
+- [x] get_jobs - 获取任务列表（已实现，调用web API）
+- [x] get_job_detail - 获取任务详情（已实现，调用web API）
+- [x] cancel_job - 取消任务（已实现，调用web API）
+- [x] restart_job - 重启任务（已实现，调用web API）
+- [ ] approve_operation - 批准操作（已实现，调用web API）
+- [ ] deny_operation - 拒绝操作（已实现，调用web API）
+- [x] get_logs - 获取日志（已实现，调用web API）
+- [x] search_logs - 搜索日志（已实现，调用web API）
+- [x] filter_logs - 过滤日志（已实现，调用web API）
+- [x] export_logs - 导出日志（已实现，调用web API）
 
 ### 4.2 WebSocket/SSE连接
 - [ ] 实时消息推送
@@ -254,8 +269,8 @@
 ## 7. 安全特性 (Security Features)
 
 ### 7.1 数据保护
-- [x] 主密码保护
-- [ ] 本地加密存储
+- [x] 主密码保护（已实现）
+- [x] 本地加密存储（AES-256-GCM - 已实现）
 - [ ] 传输加密
 - [ ] 端到端加密
 
@@ -303,35 +318,49 @@
 - 身份认证：2/7 (29%)
 - 用户界面：15/40 (38%)
 - 功能特性：3/15 (20%)
-- 后端集成：16/30 (53%)
+- 后端集成：26/30 (87%)
 - 性能优化：0/5 (0%)
 - 测试：4/6 (67%)
 - 安全特性：2/9 (22%)
 
-### 总体完成度：42/112 (38%)
+### 总体完成度：52/112 (46%)
 
-## 10. 建议优先级
+## 10. 后端功能实现优先级
+
+### P0 - 立即实现（核心功能）
+- [x] **聊天功能** - get_threads, create_thread, send_message（已实现，调用web API）
+- [ ] **消息管理** - edit_message, delete_message, search_messages（未实现）
+- [x] **记忆管理** - get_memory_tree, read_memory, write_memory, search_memory（已实现，调用web API）
+- [x] **任务管理** - get_jobs, get_job_detail, cancel_job, restart_job（已实现，调用web API）
+- [x] **日志查询** - search_logs, filter_logs, export_logs（已实现，调用web API）
+
+### P1 - 短期实现（增强功能）
+- [x] **操作批准** - approve_operation, deny_operation（已实现，调用web API）
+- [x] **扩展搜索** - search_extensions（已实现）
+- [x] **日程管理** - enable_routine, disable_routine, pause_routine, get_routine_runs（已实现）
+- [x] **会话管理** - get_session_info, update_session_activity（已实现）
+
+### P2 - 中期实现（优化功能）
+- [ ] **国密算法** - SM2验签、SM4加密（框架已实现，需要FFI绑定）
+- [ ] **DLP脱敏** - 集成到消息处理流程
+- [ ] **离线模式** - 完整的离线支持
+
+## 11. 建议优先级
 
 ### 立即实现（影响用户体验）
-1. 完成记忆、任务、日志标签页
-2. 实现离线模式支持
-3. 实现WebSocket/SSE连接
-4. 添加深色主题
+1. ✅ 扩展管理（已实现）
+2. ✅ 日程管理（已实现）
+3. ✅ 技能管理（已实现）
+4. ✅ 聊天功能（已实现）
+5. ✅ 记忆管理（已实现）
+6. ✅ 任务管理（已实现）
 
 ### 短期实现（核心功能）
-1. 实现DLP脱敏引擎
-2. 实现本地加密存储
-3. 实现国密算法支持
-4. 完善错误处理
+1. ❌ 消息编辑/删除
+2. ❌ 日志查询/导出
+3. ❌ 操作批准流程（UI已实现，后端需要完善）
 
 ### 中期实现（增强功能）
-1. 性能优化
-2. 多语言支持
-3. 快捷键支持
-4. 数据导入导出
-
-### 长期实现（高级功能）
-1. SSO/UKey支持
-2. 主题自定义
-3. 高级审计功能
-4. 移动端适配
+1. ❌ 国密算法FFI绑定
+2. ❌ DLP脱敏集成
+3. ❌ 离线模式完整支持

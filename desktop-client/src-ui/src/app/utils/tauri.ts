@@ -124,3 +124,212 @@ export const routineApi = {
   deleteRoutine: (routineId: string) =>
     invokeTauri('delete_routine', { routine_id: routineId }),
 };
+
+// Session APIs
+export interface SessionInfo {
+  session_id: string;
+  user_id: string;
+  created_at: string;
+  last_activity: string;
+}
+
+export const sessionApi = {
+  getSessionInfo: () => invokeTauri<SessionInfo>('get_session_info'),
+  lockApp: () => invokeTauri('lock_app'),
+  updateSessionActivity: () => invokeTauri('update_session_activity'),
+};
+
+// Config APIs
+export const configApi = {
+  storeConfig: (key: string, value: string) =>
+    invokeTauri('store_config', { key, value }),
+  getConfig: (key: string) =>
+    invokeTauri<string>('get_config', { key }),
+};
+
+// Audit APIs
+export interface AuditLog {
+  id: string;
+  action: string;
+  timestamp: string;
+  details: any;
+}
+
+export const auditApi = {
+  logAuditEvent: (action: string, details?: any) =>
+    invokeTauri('log_audit_event', { action, details }),
+  getAuditLogs: (limit: number = 100) =>
+    invokeTauri<AuditLog[]>('get_audit_logs', { limit }),
+};
+
+// Plugin APIs
+export interface Plugin {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  author: string;
+  enabled: boolean;
+}
+
+export const pluginApi = {
+  getInstalledPlugins: () => invokeTauri<Plugin[]>('get_installed_plugins'),
+  getAvailablePlugins: () => invokeTauri<Plugin[]>('get_available_plugins'),
+  checkPluginUpdates: () => invokeTauri<Plugin[]>('check_plugin_updates'),
+  installPlugin: (pluginId: string) =>
+    invokeTauri('install_plugin', { plugin_id: pluginId }),
+  uninstallPlugin: (pluginId: string) =>
+    invokeTauri('uninstall_plugin', { plugin_id: pluginId }),
+  enablePlugin: (pluginId: string) =>
+    invokeTauri('enable_plugin', { plugin_id: pluginId }),
+  disablePlugin: (pluginId: string) =>
+    invokeTauri('disable_plugin', { plugin_id: pluginId }),
+  updatePlugin: (pluginId: string) =>
+    invokeTauri('update_plugin', { plugin_id: pluginId }),
+};
+
+// Offline Mode APIs
+export interface OfflineState {
+  is_offline: boolean;
+  last_sync: string;
+}
+
+export interface OfflineCapabilities {
+  can_read: boolean;
+  can_write: boolean;
+  can_sync: boolean;
+}
+
+export const offlineApi = {
+  getOfflineState: () => invokeTauri<OfflineState>('get_offline_state'),
+  enableOfflineMode: () => invokeTauri('enable_offline_mode'),
+  disableOfflineMode: () => invokeTauri('disable_offline_mode'),
+  getOfflineCapabilities: () => invokeTauri<OfflineCapabilities>('get_offline_capabilities'),
+  canPerformOperation: (operation: string) =>
+    invokeTauri<boolean>('can_perform_operation', { operation }),
+};
+
+// Approval APIs
+export const approvalApi = {
+  approveOperation: (operation: string) =>
+    invokeTauri('approve_operation', { operation }),
+  denyOperation: (operation: string) =>
+    invokeTauri('deny_operation', { operation }),
+};
+
+// Tool APIs
+export interface Tool {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+}
+
+export const toolApi = {
+  getEnabledTools: () => invokeTauri<Tool[]>('get_enabled_tools'),
+};
+
+// Routine Management Extended APIs
+export interface RoutineRun {
+  id: string;
+  routine_id: string;
+  started_at: string;
+  completed_at?: string;
+  status: string;
+}
+
+export const routineExtendedApi = {
+  enableRoutine: (routineId: string) =>
+    invokeTauri('enable_routine', { routine_id: routineId }),
+  disableRoutine: (routineId: string) =>
+    invokeTauri('disable_routine', { routine_id: routineId }),
+  pauseRoutine: (routineId: string) =>
+    invokeTauri('pause_routine', { routine_id: routineId }),
+  getRoutineRuns: (routineId: string) =>
+    invokeTauri<RoutineRun[]>('get_routine_runs', { routine_id: routineId }),
+};
+
+// Extension Search API
+export const extensionSearchApi = {
+  searchExtensions: (query: string) =>
+    invokeTauri<ExtensionMetadata[]>('search_extensions', { query }),
+};
+
+// Memory APIs
+export interface MemoryNode {
+  id: string;
+  name: string;
+  node_type: string;
+  children: MemoryNode[];
+  metadata?: any;
+}
+
+export interface MemoryTreeResponse {
+  root: MemoryNode;
+}
+
+export interface MemoryContent {
+  id: string;
+  name: string;
+  content: string;
+  updated_at: string;
+}
+
+export const memoryApi = {
+  getMemoryTree: () => invokeTauri<MemoryTreeResponse>('get_memory_tree'),
+  readMemory: (memoryId: string) =>
+    invokeTauri<MemoryContent>('read_memory', { memory_id: memoryId }),
+  writeMemory: (memoryId: string, content: string) =>
+    invokeTauri<MemoryContent>('write_memory', { memory_id: memoryId, content }),
+  searchMemory: (query: string) =>
+    invokeTauri<MemoryContent[]>('search_memory', { query }),
+};
+
+// Job APIs
+export interface JobInfo {
+  id: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  title?: string;
+}
+
+export interface JobDetail {
+  id: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  title?: string;
+  description?: string;
+  events: any[];
+}
+
+export const jobApi = {
+  getJobs: () => invokeTauri<JobInfo[]>('get_jobs'),
+  getJobDetail: (jobId: string) =>
+    invokeTauri<JobDetail>('get_job_detail', { job_id: jobId }),
+  cancelJob: (jobId: string) =>
+    invokeTauri('cancel_job', { job_id: jobId }),
+  restartJob: (jobId: string) =>
+    invokeTauri('restart_job', { job_id: jobId }),
+};
+
+// Log APIs
+export interface LogEntry {
+  timestamp: string;
+  level: string;
+  module: string;
+  message: string;
+  context?: any;
+}
+
+export const logApi = {
+  getLogs: (limit: number = 100) =>
+    invokeTauri<LogEntry[]>('get_logs', { limit }),
+  searchLogs: (query: string, limit: number = 100) =>
+    invokeTauri<LogEntry[]>('search_logs', { query, limit }),
+  filterLogs: (level: string, module: string, limit: number = 100) =>
+    invokeTauri<LogEntry[]>('filter_logs', { level, module, limit }),
+  exportLogs: (format: string) =>
+    invokeTauri<string>('export_logs', { format }),
+};

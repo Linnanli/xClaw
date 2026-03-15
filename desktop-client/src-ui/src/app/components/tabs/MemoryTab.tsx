@@ -1,37 +1,58 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Search, FileText, FolderTree } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
-
-interface MemoryEntry {
-  id: string;
-  path: string;
-  content: string;
-  updatedAt: Date;
-}
+import { memoryApi, MemoryContent } from '../../utils/tauri';
 
 export function MemoryTab() {
   const { theme } = useTheme();
   const [searchQuery, setSearchQuery] = useState('');
-  const [entries] = useState<MemoryEntry[]>([
-    {
-      id: '1',
-      path: '/projects/ironclaw/README.md',
-      content: 'IronClaw项目文档...',
-      updatedAt: new Date(),
-    },
-    {
-      id: '2',
-      path: '/notes/meeting-notes.md',
-      content: '团队会议记录...',
-      updatedAt: new Date(Date.now() - 86400000),
-    },
-    {
-      id: '3',
-      path: '/ideas/feature-requests.md',
-      content: '功能请求列表...',
-      updatedAt: new Date(Date.now() - 172800000),
-    },
-  ]);
+  const [entries, setEntries] = useState<MemoryContent[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchMemories = async () => {
+      try {
+        setLoading(true);
+        if (searchQuery.trim()) {
+          // Search for memories if query is provided
+          const results = await memoryApi.searchMemory(searchQuery);
+          setEntries(results);
+        } else {
+          // Get memory tree if no search query
+          const tree = await memoryApi.getMemoryTree();
+          // Flatten the tree into a list for display
+          const flattened: MemoryContent[] = [];
+          const traverse = (node: any) => {
+            if (node.id && node.name) {
+              flattened.push({
+                id: node.id,
+                name: node.name,
+                content: node.metadata?.content || '',
+                updated_at: node.metadata?.updated_at || new Date().toISOString(),
+              });
+            }
+            if (node.children) {
+              node.children.forEach(traverse);
+            }
+          };
+          traverse(tree.root);
+          setEntries(flattened);
+        }
+        setError(null);
+      } catch (err) {
+        console.error('Failed to fetch memories:', err);
+        setError('Failed to load memories');
+        setEntries([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchMemories();
+  }, [searchQuery]);
+
+  const filteredEntries = entries;
 
   return (
     <div className="h-full flex flex-col">
@@ -39,6 +60,11 @@ export function MemoryTab() {
         <div className="flex items-center gap-4 mb-6">
           <h2 className={`text-2xl font-bold ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>记忆管理</h2>
         </div>
+        {error && (
+          <div className="mb-4 p-3 bg-red-400/10 border border-red-400/30 rounded-lg text-red-400 text-sm">
+            {error}
+          </div>
+        )}
 
         <div className="mb-6 flex gap-3">
           <div className="flex-1 relative">
@@ -66,7 +92,7 @@ export function MemoryTab() {
         </div>
 
         <div className="space-y-3">
-          {entries.map((entry) => (
+          {filteredEntries.map((entry) => (
             <div
               key={entry.id}
               className={`border rounded-xl p-5 transition-colors cursor-pointer ${
@@ -78,10 +104,10 @@ export function MemoryTab() {
               <div className="flex items-start gap-3">
                 <FileText className={theme === 'dark' ? 'text-[#5ddad5]' : 'text-[#667eea]'} size={20} />
                 <div className="flex-1">
-                  <h3 className={`font-semibold mb-1 ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>{entry.path}</h3>
+                  <h3 className={`font-semibold mb-1 ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>{entry.name}</h3>
                   <p className={`text-sm mb-2 ${theme === 'dark' ? 'text-gray-400' : 'text-[#666]'}`}>{entry.content}</p>
                   <p className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>
-                    更新于: {entry.updatedAt.toLocaleString('zh-CN')}
+                    更新于: {new Date(entry.updated_at).toLocaleString('zh-CN')}
                   </p>
                 </div>
               </div>

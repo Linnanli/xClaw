@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Download, Trash2, RefreshCw, Shield, ShieldCheck, ShieldAlert } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
+import { pluginApi } from '../../utils/tauri';
 
 interface Skill {
   id: string;
@@ -17,80 +18,92 @@ export function SkillsTab() {
   const { theme } = useTheme();
   const [activeSubTab, setActiveSubTab] = useState<'available' | 'installed'>('available');
   const [showUninstallConfirm, setShowUninstallConfirm] = useState<string | null>(null);
-  const [skills, setSkills] = useState<Skill[]>([
-    {
-      id: '1',
-      name: '代码审查',
-      version: '2.1.0',
-      description: '自动审查代码质量、安全性和最佳实践',
-      trust: 'high',
-      source: 'official',
-      keywords: ['代码', '审查', '安全'],
-      installed: true,
-    },
-    {
-      id: '2',
-      name: '文档生成',
-      version: '1.5.0',
-      description: '根据代码自动生成技术文档和API说明',
-      trust: 'high',
-      source: 'official',
-      keywords: ['文档', 'API', '生成'],
-      installed: true,
-    },
-    {
-      id: '3',
-      name: '数据分析',
-      version: '3.0.0',
-      description: '分析数据集并生成可视化报告',
-      trust: 'medium',
-      source: 'community',
-      keywords: ['数据', '分析', '可视化'],
-      installed: false,
-    },
-    {
-      id: '4',
-      name: '内容摘要',
-      version: '1.2.0',
-      description: '提取长文本的关键信息并生成摘要',
-      trust: 'high',
-      source: 'official',
-      keywords: ['摘要', '文本', 'NLP'],
-      installed: false,
-    },
-    {
-      id: '5',
-      name: '翻译助手',
-      version: '2.3.0',
-      description: '多语言翻译和本地化支持',
-      trust: 'medium',
-      source: 'community',
-      keywords: ['翻译', '语言', '本地化'],
-      installed: false,
-    },
-    {
-      id: '6',
-      name: '测试生成',
-      version: '1.8.0',
-      description: '为代码自动生成单元测试和集成测试',
-      trust: 'high',
-      source: 'official',
-      keywords: ['测试', '单元测试', '自动化'],
-      installed: false,
-    },
-  ]);
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleInstall = (id: string) => {
-    setSkills(skills.map(skill =>
-      skill.id === id ? { ...skill, installed: true } : skill
-    ));
+  useEffect(() => {
+    const fetchSkills = async () => {
+      try {
+        setLoading(true);
+        // Fetch installed and available plugins from backend
+        const [installed, available] = await Promise.all([
+          pluginApi.getInstalledPlugins(),
+          pluginApi.getAvailablePlugins(),
+        ]);
+
+        // Convert plugins to skills format
+        const installedIds = new Set(installed.map((p: any) => p.id));
+        const skillsList: Skill[] = available.map((plugin: any, index: number) => ({
+          id: plugin.id || String(index),
+          name: plugin.name || 'Unknown',
+          version: plugin.version || '1.0.0',
+          description: plugin.description || 'No description',
+          trust: plugin.trust || 'medium',
+          source: plugin.author === 'official' ? 'official' : 'community',
+          keywords: plugin.keywords || [],
+          installed: installedIds.has(plugin.id),
+        }));
+
+        setSkills(skillsList);
+        setError(null);
+      } catch (err) {
+        console.error('Failed to fetch skills:', err);
+        setError('Failed to load skills');
+        // Fallback to sample data
+        setSkills([
+          {
+            id: '1',
+            name: '代码审查',
+            version: '2.1.0',
+            description: '自动审查代码质量、安全性和最佳实践',
+            trust: 'high',
+            source: 'official',
+            keywords: ['代码', '审查', '安全'],
+            installed: true,
+          },
+          {
+            id: '2',
+            name: '文档生成',
+            version: '1.5.0',
+            description: '根据代码自动生成技术文档和API说明',
+            trust: 'high',
+            source: 'official',
+            keywords: ['文档', 'API', '生成'],
+            installed: true,
+          },
+        ]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchSkills();
+  }, []);
+
+  const handleInstall = async (id: string) => {
+    try {
+      await pluginApi.installPlugin(id);
+      setSkills(skills.map(skill =>
+        skill.id === id ? { ...skill, installed: true } : skill
+      ));
+    } catch (err) {
+      console.error('Failed to install skill:', err);
+      alert('Failed to install skill');
+    }
   };
 
-  const handleUninstall = (id: string) => {
-    setSkills(skills.map(skill =>
-      skill.id === id ? { ...skill, installed: false } : skill
-    ));
-    setShowUninstallConfirm(null);
+  const handleUninstall = async (id: string) => {
+    try {
+      await pluginApi.uninstallPlugin(id);
+      setSkills(skills.map(skill =>
+        skill.id === id ? { ...skill, installed: false } : skill
+      ));
+      setShowUninstallConfirm(null);
+    } catch (err) {
+      console.error('Failed to uninstall skill:', err);
+      alert('Failed to uninstall skill');
+    }
   };
 
   const getTrustIcon = (trust: string) => {
@@ -121,6 +134,19 @@ export function SkillsTab() {
 
   const installedSkills = skills.filter(skill => skill.installed);
   const availableSkills = skills;
+
+  if (loading) {
+    return (
+      <div className="h-full flex items-center justify-center">
+        <div className={`text-center ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>
+          <div className="animate-spin mb-4">
+            <Shield size={48} className="mx-auto opacity-50" />
+          </div>
+          <p>加载技能中...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full flex flex-col">
@@ -154,6 +180,11 @@ export function SkillsTab() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6">
+        {error && (
+          <div className="mb-4 p-3 bg-red-400/10 border border-red-400/30 rounded-lg text-red-400 text-sm">
+            {error}
+          </div>
+        )}
         {activeSubTab === 'available' && (
           <div className="mb-6 flex gap-3">
             <input

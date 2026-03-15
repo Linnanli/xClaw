@@ -1,8 +1,7 @@
 use crate::{Error, Result};
 use argon2::{Argon2, PasswordHasher, PasswordHash, PasswordVerifier};
 use argon2::password_hash::SaltString;
-use rand::Rng;
-use sha2::{Sha256, Digest};
+use sha2::Sha256;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MIN_PASSWORD_LENGTH: usize = 12;

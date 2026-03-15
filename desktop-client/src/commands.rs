@@ -33,15 +33,20 @@ pub struct CommandState {
     pub storage_manager: Arc<Mutex<Option<StorageManager>>>,
     pub extension_manager: Arc<StdMutex<ExtensionManager>>,
     pub routine_manager: Arc<StdMutex<RoutineManager>>,
+    pub api_client: Arc<crate::api_client::ApiClient>,
 }
 
 impl CommandState {
     pub fn new() -> Self {
+        // Default to localhost:8000 for development
+        let api_client = crate::api_client::ApiClient::new("http://localhost:8000".to_string());
+        
         Self {
             auth_manager: Arc::new(Mutex::new(AuthManager::new())),
             storage_manager: Arc::new(Mutex::new(None)),
             extension_manager: Arc::new(StdMutex::new(ExtensionManager::new())),
             routine_manager: Arc::new(StdMutex::new(RoutineManager::new())),
+            api_client: Arc::new(api_client),
         }
     }
 }
@@ -404,31 +409,19 @@ pub async fn can_perform_operation(
     }
 }
 
-// --- Chat and Thread Commands (Stubs) ---
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Thread {
-    pub id: String,
-    pub title: String,
-}
-
+// --- Chat and Thread Commands ---
 #[tauri::command]
 pub async fn get_threads(
     state: tauri::State<'_, CommandState>,
-) -> Result<Vec<Thread>> {
-    // Stub implementation
-    Ok(vec![])
+) -> Result<crate::api_client::ThreadListResponse> {
+    state.api_client.get_threads().await
 }
 
 #[tauri::command]
 pub async fn create_thread(
     state: tauri::State<'_, CommandState>,
-) -> Result<Thread> {
-    // Stub implementation
-    Ok(Thread {
-        id: uuid::Uuid::new_v4().to_string(),
-        title: "New Thread".to_string(),
-    })
+) -> Result<crate::api_client::ThreadInfo> {
+    state.api_client.create_thread().await
 }
 
 #[tauri::command]
@@ -436,27 +429,41 @@ pub async fn send_message(
     thread_id: String,
     content: String,
     state: tauri::State<'_, CommandState>,
-) -> Result<()> {
-    // Stub implementation
-    Ok(())
+) -> Result<crate::api_client::SendMessageResponse> {
+    let req = crate::api_client::SendMessageRequest {
+        content,
+        thread_id: Some(thread_id),
+    };
+    state.api_client.send_message(req).await
 }
 
 #[tauri::command]
 pub async fn approve_operation(
-    operation: String,
+    request_id: String,
+    action: String,
+    thread_id: Option<String>,
     state: tauri::State<'_, CommandState>,
-) -> Result<()> {
-    // Stub implementation
-    Ok(())
+) -> Result<crate::api_client::SendMessageResponse> {
+    let req = crate::api_client::ApprovalRequest {
+        request_id,
+        action,
+        thread_id,
+    };
+    state.api_client.approve_operation(req).await
 }
 
 #[tauri::command]
 pub async fn deny_operation(
-    operation: String,
+    request_id: String,
+    thread_id: Option<String>,
     state: tauri::State<'_, CommandState>,
-) -> Result<()> {
-    // Stub implementation
-    Ok(())
+) -> Result<crate::api_client::SendMessageResponse> {
+    let req = crate::api_client::ApprovalRequest {
+        request_id,
+        action: "deny".to_string(),
+        thread_id,
+    };
+    state.api_client.approve_operation(req).await
 }
 
 // Extension Management Commands
@@ -590,4 +597,108 @@ pub async fn get_routine_runs(
 ) -> Result<Vec<crate::routine_manager::RoutineRun>> {
     let manager = state.routine_manager.lock().unwrap();
     Ok(manager.get_routine_runs(&routine_id, limit).into_iter().cloned().collect())
+}
+
+// --- Memory Management Commands ---
+
+#[tauri::command]
+pub async fn get_memory_tree(
+    state: tauri::State<'_, CommandState>,
+) -> Result<crate::api_client::MemoryTreeResponse> {
+    state.api_client.get_memory_tree().await
+}
+
+#[tauri::command]
+pub async fn read_memory(
+    memory_id: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<crate::api_client::MemoryContent> {
+    state.api_client.read_memory(&memory_id).await
+}
+
+#[tauri::command]
+pub async fn write_memory(
+    memory_id: String,
+    content: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<crate::api_client::MemoryContent> {
+    state.api_client.write_memory(&memory_id, &content).await
+}
+
+#[tauri::command]
+pub async fn search_memory(
+    query: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<Vec<crate::api_client::MemoryContent>> {
+    state.api_client.search_memory(&query).await
+}
+
+// --- Job Management Commands ---
+
+#[tauri::command]
+pub async fn get_jobs(
+    state: tauri::State<'_, CommandState>,
+) -> Result<Vec<crate::api_client::JobInfo>> {
+    state.api_client.get_jobs().await
+}
+
+#[tauri::command]
+pub async fn get_job_detail(
+    job_id: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<crate::api_client::JobDetail> {
+    state.api_client.get_job_detail(&job_id).await
+}
+
+#[tauri::command]
+pub async fn cancel_job(
+    job_id: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<()> {
+    state.api_client.cancel_job(&job_id).await
+}
+
+#[tauri::command]
+pub async fn restart_job(
+    job_id: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<()> {
+    state.api_client.restart_job(&job_id).await
+}
+
+// --- Log Management Commands ---
+
+#[tauri::command]
+pub async fn get_logs(
+    limit: usize,
+    state: tauri::State<'_, CommandState>,
+) -> Result<Vec<crate::api_client::LogEntry>> {
+    state.api_client.get_logs(limit).await
+}
+
+#[tauri::command]
+pub async fn search_logs(
+    query: String,
+    limit: usize,
+    state: tauri::State<'_, CommandState>,
+) -> Result<Vec<crate::api_client::LogEntry>> {
+    state.api_client.search_logs(&query, limit).await
+}
+
+#[tauri::command]
+pub async fn filter_logs(
+    level: String,
+    module: String,
+    limit: usize,
+    state: tauri::State<'_, CommandState>,
+) -> Result<Vec<crate::api_client::LogEntry>> {
+    state.api_client.filter_logs(&level, &module, limit).await
+}
+
+#[tauri::command]
+pub async fn export_logs(
+    format: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<String> {
+    state.api_client.export_logs(&format).await
 }

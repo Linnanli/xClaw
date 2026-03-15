@@ -1,61 +1,53 @@
-import { useState } from 'react';
-import { Filter, Search, AlertCircle, Info, AlertTriangle, XCircle } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Filter, Search, AlertCircle, Info, AlertTriangle, XCircle, Download } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
-
-interface LogEntry {
-  id: string;
-  timestamp: Date;
-  level: 'info' | 'warning' | 'error' | 'debug';
-  message: string;
-  module: string;
-}
+import { logApi, LogEntry } from '../../utils/tauri';
 
 export function LogsTab() {
   const { theme } = useTheme();
   const [searchQuery, setSearchQuery] = useState('');
   const [filterLevel, setFilterLevel] = useState<string>('all');
-  const [logs] = useState<LogEntry[]>([
-    {
-      id: '1',
-      timestamp: new Date(),
-      level: 'info',
-      message: '应用启动成功',
-      module: 'system',
-    },
-    {
-      id: '2',
-      timestamp: new Date(Date.now() - 30000),
-      level: 'info',
-      message: '用户登录成功',
-      module: 'auth',
-    },
-    {
-      id: '3',
-      timestamp: new Date(Date.now() - 60000),
-      level: 'warning',
-      message: 'API调用延迟较高',
-      module: 'network',
-    },
-    {
-      id: '4',
-      timestamp: new Date(Date.now() - 120000),
-      level: 'error',
-      message: '无法连接到远程服务器',
-      module: 'network',
-    },
-    {
-      id: '5',
-      timestamp: new Date(Date.now() - 180000),
-      level: 'debug',
-      message: '加载扩展: Notion',
-      module: 'extensions',
-    },
-  ]);
+  const [filterModule, setFilterModule] = useState<string>('all');
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchLogs = async () => {
+      try {
+        setLoading(true);
+        let fetchedLogs: LogEntry[];
+        
+        if (searchQuery.trim()) {
+          fetchedLogs = await logApi.searchLogs(searchQuery, 100);
+        } else if (filterLevel !== 'all' && filterModule !== 'all') {
+          fetchedLogs = await logApi.filterLogs(filterLevel, filterModule, 100);
+        } else if (filterLevel !== 'all') {
+          fetchedLogs = await logApi.filterLogs(filterLevel, '', 100);
+        } else {
+          fetchedLogs = await logApi.getLogs(100);
+        }
+        
+        setLogs(fetchedLogs);
+        setError(null);
+      } catch (err) {
+        console.error('Failed to fetch logs:', err);
+        setError('Failed to load logs');
+        setLogs([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchLogs();
+  }, [searchQuery, filterLevel, filterModule]);
 
   const getLevelIcon = (level: string) => {
-    switch (level) {
+    const levelLower = level.toLowerCase();
+    switch (levelLower) {
       case 'info':
         return <Info className="text-blue-400" size={18} />;
+      case 'warn':
       case 'warning':
         return <AlertTriangle className="text-yellow-400" size={18} />;
       case 'error':
@@ -68,9 +60,11 @@ export function LogsTab() {
   };
 
   const getLevelBadge = (level: string) => {
-    switch (level) {
+    const levelLower = level.toLowerCase();
+    switch (levelLower) {
       case 'info':
         return <span className="px-2 py-1 bg-blue-400/10 text-blue-400 text-xs rounded border border-blue-400/30">信息</span>;
+      case 'warn':
       case 'warning':
         return <span className="px-2 py-1 bg-yellow-400/10 text-yellow-400 text-xs rounded border border-yellow-400/30">警告</span>;
       case 'error':
@@ -82,18 +76,56 @@ export function LogsTab() {
     }
   };
 
+  const handleExport = async () => {
+    try {
+      const data = await logApi.exportLogs('json');
+      const blob = new Blob([data], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `logs-${new Date().toISOString()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Failed to export logs:', err);
+      setError('Failed to export logs');
+    }
+  };
+
   const filteredLogs = logs.filter(log => {
     const matchesSearch = log.message.toLowerCase().includes(searchQuery.toLowerCase()) ||
                          log.module.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesLevel = filterLevel === 'all' || log.level === filterLevel;
-    return matchesSearch && matchesLevel;
+    const matchesLevel = filterLevel === 'all' || log.level.toLowerCase() === filterLevel.toLowerCase();
+    const matchesModule = filterModule === 'all' || log.module === filterModule;
+    return matchesSearch && matchesLevel && matchesModule;
   });
+
+  // Extract unique modules from logs
+  const modules = Array.from(new Set(logs.map(log => log.module)));
+
+  if (loading) {
+    return (
+      <div className="h-full flex items-center justify-center">
+        <div className={`text-center ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>
+          <div className="animate-spin mb-4">
+            <AlertCircle size={48} className="mx-auto opacity-50" />
+          </div>
+          <p>加载日志中...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full flex flex-col">
       <div className="p-6">
         <div className="mb-6">
           <h2 className={`text-2xl font-bold mb-4 ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>日志</h2>
+          {error && (
+            <div className="mb-4 p-3 bg-red-400/10 border border-red-400/30 rounded-lg text-red-400 text-sm">
+              {error}
+            </div>
+          )}
           
           <div className="flex gap-3">
             <div className="flex-1 relative">
@@ -122,19 +154,47 @@ export function LogsTab() {
                 }`}
               >
                 <option value="all">所有级别</option>
-                <option value="info">信息</option>
-                <option value="warning">警告</option>
-                <option value="error">错误</option>
                 <option value="debug">调试</option>
+                <option value="info">信息</option>
+                <option value="warn">警告</option>
+                <option value="error">错误</option>
               </select>
             </div>
+            <div className="relative">
+              <Filter className={`absolute left-3 top-1/2 -translate-y-1/2 ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`} size={20} />
+              <select
+                value={filterModule}
+                onChange={(e) => setFilterModule(e.target.value)}
+                className={`pl-10 pr-4 py-2 border rounded-lg focus:outline-none ${
+                  theme === 'dark'
+                    ? 'bg-[#0f1d35] border-[#1a2942] focus:border-[#5ddad5] text-white'
+                    : 'bg-white border-[#ddd] focus:border-[#667eea] focus:ring-2 focus:ring-[#667eea]/20 text-[#333]'
+                }`}
+              >
+                <option value="all">所有模块</option>
+                {modules.map(module => (
+                  <option key={module} value={module}>{module}</option>
+                ))}
+              </select>
+            </div>
+            <button
+              onClick={handleExport}
+              className={`px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-opacity ${
+                theme === 'dark'
+                  ? 'bg-gradient-to-r from-[#5ddad5] to-[#4facf7] text-[#0a1628] hover:opacity-90'
+                  : 'bg-[#667eea] text-white hover:opacity-90 shadow-md'
+              }`}
+            >
+              <Download size={18} />
+              导出
+            </button>
           </div>
         </div>
 
         <div className="space-y-2">
-          {filteredLogs.map((log) => (
+          {filteredLogs.map((log, index) => (
             <div
-              key={log.id}
+              key={`${log.timestamp}-${index}`}
               className={`border rounded-lg p-4 transition-colors ${
                 theme === 'dark'
                   ? 'bg-[#0f1d35] border-[#1a2942] hover:border-[#5ddad5]/30'
@@ -144,7 +204,7 @@ export function LogsTab() {
               <div className="flex items-start gap-3">
                 {getLevelIcon(log.level)}
                 <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
                     {getLevelBadge(log.level)}
                     <span className={`px-2 py-1 text-xs rounded border ${
                       theme === 'dark'
@@ -154,10 +214,22 @@ export function LogsTab() {
                       {log.module}
                     </span>
                     <span className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>
-                      {log.timestamp.toLocaleString('zh-CN')}
+                      {new Date(log.timestamp).toLocaleString('zh-CN')}
                     </span>
                   </div>
                   <p className={`text-sm ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>{log.message}</p>
+                  {log.context && (
+                    <details className={`text-xs mt-2 ${theme === 'dark' ? 'text-gray-400' : 'text-[#666]'}`}>
+                      <summary className="cursor-pointer">详情</summary>
+                      <pre className={`mt-2 p-2 rounded overflow-auto ${
+                        theme === 'dark'
+                          ? 'bg-[#0a1628] text-gray-300'
+                          : 'bg-[#f5f5f5] text-[#333]'
+                      }`}>
+                        {JSON.stringify(log.context, null, 2)}
+                      </pre>
+                    </details>
+                  )}
                 </div>
               </div>
             </div>

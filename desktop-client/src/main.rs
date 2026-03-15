@@ -2,7 +2,6 @@
 
 use desktop_client::{CommandState, DesktopClientConfig};
 use desktop_client::commands::*;
-use std::path::PathBuf;
 
 #[tokio::main]
 async fn main() {
@@ -62,6 +61,18 @@ async fn main() {
             disable_routine,
             pause_routine,
             get_routine_runs,
+            get_memory_tree,
+            read_memory,
+            write_memory,
+            search_memory,
+            get_jobs,
+            get_job_detail,
+            cancel_job,
+            restart_job,
+            get_logs,
+            search_logs,
+            filter_logs,
+            export_logs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

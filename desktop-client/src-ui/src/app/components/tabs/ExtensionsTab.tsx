@@ -123,7 +123,10 @@ export function ExtensionsTab() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {(activeSubTab === 'installed' 
             ? installedExtensions.map(ext => ({ ...ext.metadata, installed: true, enabled: ext.enabled }))
-            : availableExtensions.map(ext => ({ ...ext, installed: false, enabled: false }))
+            : availableExtensions.map(ext => {
+              const isInstalled = installedExtensions.some(ie => ie.metadata.id === ext.id);
+              return { ...ext, installed: isInstalled, enabled: false };
+            })
           ).map((ext) => (
             <div
               key={ext.id}
@@ -201,15 +204,22 @@ export function ExtensionsTab() {
                 </div>
               ) : (
                 <button
+                  disabled={ext.installed}
                   onClick={() => handleInstall(ext as ExtensionMetadata)}
                   className={`w-full px-4 py-2 rounded-lg flex items-center justify-center gap-2 font-medium transition-opacity ${
-                    theme === 'dark'
-                      ? 'bg-gradient-to-r from-[#5ddad5] to-[#4facf7] text-[#0a1628] hover:opacity-90'
-                      : 'bg-[#667eea] text-white hover:opacity-90 shadow-md'
+                    ext.installed
+                      ? theme === 'dark'
+                        ? 'bg-green-400/10 text-green-400 border border-green-400/30 cursor-not-allowed'
+                        : 'bg-green-400/10 text-green-400 border border-green-400/30 cursor-not-allowed'
+                      : theme === 'dark'
+                        ? 'bg-gradient-to-r from-[#5ddad5] to-[#4facf7] text-[#0a1628] hover:opacity-90'
+                        : 'bg-[#667eea] text-white hover:opacity-90 shadow-md'
                   }`}
                 >
-                  <Download size={16} />
-                  安装
+                  {ext.installed ? '✓ 已安装' : <>
+                    <Download size={16} />
+                    安装
+                  </>}
                 </button>
               )}
             </div>
