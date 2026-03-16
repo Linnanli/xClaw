@@ -63,6 +63,8 @@ windows = { version = "0.58", features = ["Win32_Security_Credentials"] }
 tokio-test = "0.4"
 tempfile = "3"
 proptest = "1"
+# Main project for test helpers
+ironclaw = { path = "..", features = ["libsql"] }
 
 [build-dependencies]
 tauri-build = "2.0"

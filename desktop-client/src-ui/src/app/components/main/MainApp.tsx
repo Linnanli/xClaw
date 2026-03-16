@@ -7,17 +7,17 @@ import { RoutinesTab } from '../tabs/RoutinesTab';
 import { ExtensionsTab } from '../tabs/ExtensionsTab';
 import { SkillsTab } from '../tabs/SkillsTab';
 import { LogsTab } from '../tabs/LogsTab';
+import { SettingsTab } from '../tabs/SettingsTab';
 import { useTheme } from '../../contexts/ThemeContext';
 import { sessionApi } from '../../utils/tauri';
 import { ShortcutManager, SHORTCUTS } from '../../utils/shortcuts';
 
-type TabName = 'chat' | 'memory' | 'jobs' | 'routines' | 'extensions' | 'skills' | 'logs';
+type TabName = 'chat' | 'memory' | 'jobs' | 'routines' | 'extensions' | 'skills' | 'logs' | 'settings';
 
 export function MainApp() {
   const [activeTab, setActiveTab] = useState<TabName>('chat');
   const [isConnected, setIsConnected] = useState(true);
   const [showUserMenu, setShowUserMenu] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
   const { theme, toggleTheme } = useTheme();
 
   // Initialize shortcuts
@@ -80,6 +80,8 @@ export function MainApp() {
         return <SkillsTab />;
       case 'logs':
         return <LogsTab />;
+      case 'settings':
+        return <SettingsTab />;
       default:
         return null;
     }
@@ -152,15 +154,20 @@ export function MainApp() {
 
           {/* Settings Button */}
           <button
-            onClick={() => setShowSettings(!showSettings)}
-            className={`p-2 rounded-lg transition-colors ${
-              theme === 'dark'
-                ? 'hover:bg-[#0a1628] text-gray-400 hover:text-[#5ddad5]'
-                : 'hover:bg-[#f5f5f5] text-[#666] hover:text-[#667eea]'
+            onClick={() => setActiveTab('settings')}
+            className={`flex items-center gap-2 px-4 py-3 border-b-2 transition-colors ${
+              activeTab === 'settings'
+                ? theme === 'dark'
+                  ? 'border-[#5ddad5] text-white'
+                  : 'border-[#667eea] text-[#667eea]'
+                : theme === 'dark'
+                  ? 'border-transparent text-gray-400 hover:text-white'
+                  : 'border-transparent text-[#666] hover:text-[#667eea]'
             }`}
             title="设置"
           >
-            <Settings size={20} />
+            <Settings size={18} />
+            <span className="font-medium">设置</span>
           </button>
 
           {/* User Menu */}

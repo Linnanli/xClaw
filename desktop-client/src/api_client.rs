@@ -5,6 +5,7 @@ use crate::error::Result;
 pub struct ApiClient {
     base_url: String,
     client: reqwest::Client,
+    auth_token: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,25 +111,52 @@ impl ApiClient {
         Self {
             base_url,
             client: reqwest::Client::new(),
+            auth_token: "019584313e67aa648d05c243d81b104c70ad1506d9b4cb74507a62f2bb230479".to_string(),
         }
+    }
+    
+    pub fn new_with_token(base_url: String, auth_token: String) -> Self {
+        Self {
+            base_url,
+            client: reqwest::Client::new(),
+            auth_token,
+        }
+    }
+
+    fn auth_header(&self) -> String {
+        format!("Bearer {}", self.auth_token)
     }
 
     pub async fn get_threads(&self) -> Result<ThreadListResponse> {
         let url = format!("{}/api/chat/threads", self.base_url);
-        self.client
+        let response = self.client
             .get(&url)
+            .header("Authorization", format!("Bearer {}", self.auth_token))
             .send()
             .await
-            .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?
-            .json::<ThreadListResponse>()
-            .await
-            .map_err(|e| crate::error::Error::SerializationError(e.to_string()))
+            .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?;
+        
+        let status = response.status();
+        let text = response.text().await
+            .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?;
+        
+        if !status.is_success() {
+            return Err(crate::error::Error::SerializationError(
+                format!("HTTP {}: {}", status, text)
+            ));
+        }
+        
+        serde_json::from_str::<ThreadListResponse>(&text)
+            .map_err(|e| crate::error::Error::SerializationError(
+                format!("Failed to parse response: {} (body: {})", e, text)
+            ))
     }
 
     pub async fn create_thread(&self) -> Result<ThreadInfo> {
-        let url = format!("{}/api/chat/threads/new", self.base_url);
+        let url = format!("{}/api/chat/thread/new", self.base_url);
         self.client
             .post(&url)
+            .header("Authorization", self.auth_header())
             .send()
             .await
             .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?
@@ -139,21 +167,35 @@ impl ApiClient {
 
     pub async fn send_message(&self, req: SendMessageRequest) -> Result<SendMessageResponse> {
         let url = format!("{}/api/chat/send", self.base_url);
-        self.client
+        let response = self.client
             .post(&url)
+            .header("Authorization", self.auth_header())
             .json(&req)
             .send()
             .await
-            .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?
-            .json::<SendMessageResponse>()
-            .await
-            .map_err(|e| crate::error::Error::SerializationError(e.to_string()))
+            .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?;
+        
+        let status = response.status();
+        let text = response.text().await
+            .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?;
+        
+        if !status.is_success() {
+            return Err(crate::error::Error::SerializationError(
+                format!("HTTP {}: {}", status, text)
+            ));
+        }
+        
+        serde_json::from_str::<SendMessageResponse>(&text)
+            .map_err(|e| crate::error::Error::SerializationError(
+                format!("Failed to parse response: {} (body: {})", e, text)
+            ))
     }
 
     pub async fn get_messages(&self, thread_id: &str) -> Result<Vec<Message>> {
         let url = format!("{}/api/chat/history?thread_id={}", self.base_url, thread_id);
         let response = self.client
             .get(&url)
+            .header("Authorization", self.auth_header())
             .send()
             .await
             .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?;
@@ -209,6 +251,7 @@ impl ApiClient {
         let url = format!("{}/api/chat/threads/{}/search?q={}", self.base_url, thread_id, urlencoding::encode(query));
         self.client
             .get(&url)
+            .header("Authorization", self.auth_header())
             .send()
             .await
             .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?
@@ -221,6 +264,7 @@ impl ApiClient {
         let url = format!("{}/api/chat/threads/{}/messages/{}", self.base_url, thread_id, message_id);
         self.client
             .put(&url)
+            .header("Authorization", self.auth_header())
             .json(&serde_json::json!({"content": content}))
             .send()
             .await
@@ -234,6 +278,7 @@ impl ApiClient {
         let url = format!("{}/api/chat/threads/{}/messages/{}", self.base_url, thread_id, message_id);
         self.client
             .delete(&url)
+            .header("Authorization", self.auth_header())
             .send()
             .await
             .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?;
@@ -244,6 +289,7 @@ impl ApiClient {
         let url = format!("{}/api/chat/threads/{}/export", self.base_url, thread_id);
         self.client
             .post(&url)
+            .header("Authorization", self.auth_header())
             .json(&serde_json::json!({"format": format}))
             .send()
             .await
@@ -257,6 +303,7 @@ impl ApiClient {
         let url = format!("{}/api/chat/threads/{}/files/upload", self.base_url, thread_id);
         let response = self.client
             .post(&url)
+            .header("Authorization", self.auth_header())
             .json(&serde_json::json!({"file_path": file_path}))
             .send()
             .await
@@ -272,6 +319,7 @@ impl ApiClient {
         let url = format!("{}/api/chat/approval", self.base_url);
         self.client
             .post(&url)
+            .header("Authorization", self.auth_header())
             .json(&req)
             .send()
             .await
@@ -285,6 +333,7 @@ impl ApiClient {
         let url = format!("{}/api/memory/tree", self.base_url);
         self.client
             .get(&url)
+            .header("Authorization", self.auth_header())
             .send()
             .await
             .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?
@@ -297,6 +346,7 @@ impl ApiClient {
         let url = format!("{}/api/memory/read/{}", self.base_url, memory_id);
         self.client
             .get(&url)
+            .header("Authorization", self.auth_header())
             .send()
             .await
             .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?
@@ -309,6 +359,7 @@ impl ApiClient {
         let url = format!("{}/api/memory/write/{}", self.base_url, memory_id);
         self.client
             .post(&url)
+            .header("Authorization", self.auth_header())
             .json(&serde_json::json!({"content": content}))
             .send()
             .await
@@ -322,6 +373,7 @@ impl ApiClient {
         let url = format!("{}/api/memory/search", self.base_url);
         self.client
             .get(&url)
+            .header("Authorization", self.auth_header())
             .query(&[("q", query)])
             .send()
             .await
@@ -335,6 +387,7 @@ impl ApiClient {
         let url = format!("{}/api/jobs", self.base_url);
         self.client
             .get(&url)
+            .header("Authorization", self.auth_header())
             .send()
             .await
             .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?
@@ -347,6 +400,7 @@ impl ApiClient {
         let url = format!("{}/api/jobs/{}", self.base_url, job_id);
         self.client
             .get(&url)
+            .header("Authorization", self.auth_header())
             .send()
             .await
             .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?
@@ -359,6 +413,7 @@ impl ApiClient {
         let url = format!("{}/api/jobs/{}/cancel", self.base_url, job_id);
         self.client
             .post(&url)
+            .header("Authorization", self.auth_header())
             .send()
             .await
             .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?;
@@ -369,6 +424,7 @@ impl ApiClient {
         let url = format!("{}/api/jobs/{}/restart", self.base_url, job_id);
         self.client
             .post(&url)
+            .header("Authorization", self.auth_header())
             .send()
             .await
             .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?;
@@ -379,6 +435,7 @@ impl ApiClient {
         let url = format!("{}/api/logs", self.base_url);
         self.client
             .get(&url)
+            .header("Authorization", self.auth_header())
             .query(&[("limit", limit.to_string().as_str())])
             .send()
             .await
@@ -392,6 +449,7 @@ impl ApiClient {
         let url = format!("{}/api/logs/search", self.base_url);
         self.client
             .get(&url)
+            .header("Authorization", self.auth_header())
             .query(&[("q", query), ("limit", &limit.to_string())])
             .send()
             .await
@@ -405,6 +463,7 @@ impl ApiClient {
         let url = format!("{}/api/logs/filter", self.base_url);
         self.client
             .get(&url)
+            .header("Authorization", self.auth_header())
             .query(&[("level", level), ("module", module), ("limit", &limit.to_string())])
             .send()
             .await
@@ -418,6 +477,7 @@ impl ApiClient {
         let url = format!("{}/api/logs/export", self.base_url);
         self.client
             .post(&url)
+            .header("Authorization", self.auth_header())
             .json(&serde_json::json!({"format": format}))
             .send()
             .await
@@ -431,6 +491,7 @@ impl ApiClient {
         let url = format!("{}/api/logs/clear", self.base_url);
         self.client
             .post(&url)
+            .header("Authorization", self.auth_header())
             .send()
             .await
             .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?;

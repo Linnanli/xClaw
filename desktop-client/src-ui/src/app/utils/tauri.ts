@@ -48,6 +48,12 @@ export interface Thread {
   updated_at: string;
 }
 
+export interface ThreadListResponse {
+  assistant_thread?: Thread;
+  threads: Thread[];
+  active_thread?: string;
+}
+
 export interface Message {
   id: string;
   thread_id: string;
@@ -57,12 +63,12 @@ export interface Message {
 }
 
 export const threadApi = {
-  getThreads: () => invokeTauri<Thread[]>('get_threads'),
+  getThreads: () => invokeTauri<ThreadListResponse>('get_threads'),
   createThread: () => invokeTauri<Thread>('create_thread'),
   sendMessage: (threadId: string, content: string) =>
-    invokeTauri('send_message', { thread_id: threadId, content }),
+    invokeTauri('send_message', { threadId, content }),
   getMessages: (threadId: string) =>
-    invokeTauri<Message[]>('get_messages', { thread_id: threadId }),
+    invokeTauri<Message[]>('get_messages', { threadId }),
 };
 
 // Extension APIs
@@ -108,9 +114,9 @@ export const routineApi = {
   createRoutine: (name: string, description: string, trigger: any, actions: any[]) =>
     invokeTauri<Routine>('create_routine', { name, description, trigger, actions }),
   triggerRoutine: (routineId: string) =>
-    invokeTauri('trigger_routine', { routine_id: routineId }),
+    invokeTauri('trigger_routine', { routineId }),
   deleteRoutine: (routineId: string) =>
-    invokeTauri('delete_routine', { routine_id: routineId }),
+    invokeTauri('delete_routine', { routineId }),
 };
 
 // Session APIs
@@ -165,15 +171,15 @@ export const pluginApi = {
   getAvailablePlugins: () => invokeTauri<Plugin[]>('get_available_plugins'),
   checkPluginUpdates: () => invokeTauri<Plugin[]>('check_plugin_updates'),
   installPlugin: (pluginId: string) =>
-    invokeTauri('install_plugin', { plugin_id: pluginId }),
+    invokeTauri('install_plugin', { pluginId }),
   uninstallPlugin: (pluginId: string) =>
-    invokeTauri('uninstall_plugin', { plugin_id: pluginId }),
+    invokeTauri('uninstall_plugin', { pluginId }),
   enablePlugin: (pluginId: string) =>
-    invokeTauri('enable_plugin', { plugin_id: pluginId }),
+    invokeTauri('enable_plugin', { pluginId }),
   disablePlugin: (pluginId: string) =>
-    invokeTauri('disable_plugin', { plugin_id: pluginId }),
+    invokeTauri('disable_plugin', { pluginId }),
   updatePlugin: (pluginId: string) =>
-    invokeTauri('update_plugin', { plugin_id: pluginId }),
+    invokeTauri('update_plugin', { pluginId }),
 };
 
 // Offline Mode APIs
@@ -228,13 +234,13 @@ export interface RoutineRun {
 
 export const routineExtendedApi = {
   enableRoutine: (routineId: string) =>
-    invokeTauri('enable_routine', { routine_id: routineId }),
+    invokeTauri('enable_routine', { routineId }),
   disableRoutine: (routineId: string) =>
-    invokeTauri('disable_routine', { routine_id: routineId }),
+    invokeTauri('disable_routine', { routineId }),
   pauseRoutine: (routineId: string) =>
-    invokeTauri('pause_routine', { routine_id: routineId }),
+    invokeTauri('pause_routine', { routineId }),
   getRoutineRuns: (routineId: string) =>
-    invokeTauri<RoutineRun[]>('get_routine_runs', { routine_id: routineId }),
+    invokeTauri<RoutineRun[]>('get_routine_runs', { routineId }),
 };
 
 // Extension Search API
@@ -266,9 +272,9 @@ export interface MemoryContent {
 export const memoryApi = {
   getMemoryTree: () => invokeTauri<MemoryTreeResponse>('get_memory_tree'),
   readMemory: (memoryId: string) =>
-    invokeTauri<MemoryContent>('read_memory', { memory_id: memoryId }),
+    invokeTauri<MemoryContent>('read_memory', { memoryId }),
   writeMemory: (memoryId: string, content: string) =>
-    invokeTauri<MemoryContent>('write_memory', { memory_id: memoryId, content }),
+    invokeTauri<MemoryContent>('write_memory', { memoryId, content }),
   searchMemory: (query: string) =>
     invokeTauri<MemoryContent[]>('search_memory', { query }),
 };
@@ -295,11 +301,11 @@ export interface JobDetail {
 export const jobApi = {
   getJobs: () => invokeTauri<JobInfo[]>('get_jobs'),
   getJobDetail: (jobId: string) =>
-    invokeTauri<JobDetail>('get_job_detail', { job_id: jobId }),
+    invokeTauri<JobDetail>('get_job_detail', { jobId }),
   cancelJob: (jobId: string) =>
-    invokeTauri('cancel_job', { job_id: jobId }),
+    invokeTauri('cancel_job', { jobId }),
   restartJob: (jobId: string) =>
-    invokeTauri('restart_job', { job_id: jobId }),
+    invokeTauri('restart_job', { jobId }),
 };
 
 // Log APIs
@@ -343,21 +349,21 @@ export const skillApi = {
   getAvailableSkills: () => invokeTauri<Skill[]>('get_available_skills'),
   getInstalledSkills: () => invokeTauri<InstalledSkill[]>('get_installed_skills'),
   installSkill: (skillId: string) =>
-    invokeTauri('install_skill', { skill_id: skillId }),
+    invokeTauri('install_skill', { skillId }),
   uninstallSkill: (skillId: string) =>
-    invokeTauri('uninstall_skill', { skill_id: skillId }),
+    invokeTauri('uninstall_skill', { skillId }),
   enableSkill: (skillId: string) =>
-    invokeTauri('enable_skill', { skill_id: skillId }),
+    invokeTauri('enable_skill', { skillId }),
   disableSkill: (skillId: string) =>
-    invokeTauri('disable_skill', { skill_id: skillId }),
+    invokeTauri('disable_skill', { skillId }),
 };
 
 // Message editing/deletion APIs
 export const messageApi = {
   editMessage: (threadId: string, messageId: string, content: string) =>
-    invokeTauri('edit_message', { thread_id: threadId, message_id: messageId, content }),
+    invokeTauri('edit_message', { threadId, messageId, content }),
   deleteMessage: (threadId: string, messageId: string) =>
-    invokeTauri('delete_message', { thread_id: threadId, message_id: messageId }),
+    invokeTauri('delete_message', { threadId, messageId }),
 };
 
 // Log clearing API
@@ -368,17 +374,17 @@ export const logClearApi = {
 // Message search API
 export const messageSearchApi = {
   searchMessages: (threadId: string, query: string) =>
-    invokeTauri<Message[]>('search_messages', { thread_id: threadId, query }),
+    invokeTauri<Message[]>('search_messages', { threadId, query }),
 };
 
 // Thread export API
 export const threadExportApi = {
   exportThread: (threadId: string, format: string) =>
-    invokeTauri<string>('export_thread', { thread_id: threadId, format }),
+    invokeTauri<string>('export_thread', { threadId, format }),
 };
 
 // File upload API
 export const fileApi = {
   uploadFile: (threadId: string, filePath: string) =>
-    invokeTauri<string>('upload_file', { thread_id: threadId, file_path: filePath }),
+    invokeTauri<string>('upload_file', { threadId, filePath }),
 };

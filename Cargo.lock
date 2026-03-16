@@ -2419,6 +2419,7 @@ dependencies = [
  "dirs 6.0.0",
  "hex",
  "hkdf",
+ "ironclaw",
  "libsql",
  "proptest",
  "rand 0.8.5",

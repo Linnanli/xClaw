@@ -39,8 +39,8 @@ pub struct CommandState {
 
 impl CommandState {
     pub fn new() -> Self {
-        // Default to localhost:8000 for development
-        let api_client = crate::api_client::ApiClient::new("http://localhost:8000".to_string());
+        // Default to localhost:3000 for development (Web Gateway)
+        let api_client = crate::api_client::ApiClient::new("http://localhost:3000".to_string());
         
         Self {
             auth_manager: Arc::new(Mutex::new(AuthManager::new())),

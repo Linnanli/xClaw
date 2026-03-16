@@ -24,13 +24,33 @@ export function ChatTab() {
 
   const loadConversations = async () => {
     try {
-      const threads = await threadApi.getThreads();
+      const response = await threadApi.getThreads();
+      // Handle both ThreadListResponse and Thread[] formats
+      const threads = Array.isArray(response) ? response : (response.threads || []);
       setConversations(threads);
-      if (threads.length > 0 && !selectedConversation) {
+      
+      // If no conversations exist, create one automatically
+      if (threads.length === 0) {
+        try {
+          const newThread = await threadApi.createThread();
+          setConversations([newThread]);
+          setSelectedConversation(newThread.id);
+        } catch (err) {
+          console.error('Failed to create initial thread:', err);
+        }
+      } else if (!selectedConversation) {
         setSelectedConversation(threads[0].id);
       }
     } catch (err) {
       console.error('Failed to load conversations:', err);
+      // Try to create a new thread if loading fails
+      try {
+        const newThread = await threadApi.createThread();
+        setConversations([newThread]);
+        setSelectedConversation(newThread.id);
+      } catch (createErr) {
+        console.error('Failed to create thread after load error:', createErr);
+      }
     }
   };
 
@@ -55,19 +75,62 @@ export function ChatTab() {
   };
 
   const handleSend = async () => {
-    if (inputText.trim() && selectedConversation) {
-      const content = inputText.trim();
-      setInputText('');
-      setLoading(true);
-      
+    if (!inputText.trim()) return;
+    
+    // If no conversation selected, create one first
+    if (!selectedConversation) {
       try {
-        await threadApi.sendMessage(selectedConversation, content);
-        await loadMessages(selectedConversation);
+        const newThread = await threadApi.createThread();
+        setConversations([newThread, ...conversations]);
+        setSelectedConversation(newThread.id);
+        // Send message after creating thread
+        const content = inputText.trim();
+        setInputText('');
+        setLoading(true);
+        try {
+          await threadApi.sendMessage(newThread.id, content);
+          // Wait a bit for the message to be processed, then load messages
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          await loadMessages(newThread.id);
+        } catch (err) {
+          console.error('Failed to send message:', err);
+        } finally {
+          setLoading(false);
+        }
       } catch (err) {
-        console.error('Failed to send message:', err);
-      } finally {
-        setLoading(false);
+        console.error('Failed to create thread:', err);
       }
+      return;
+    }
+    
+    const content = inputText.trim();
+    setInputText('');
+    setLoading(true);
+    
+    try {
+      await threadApi.sendMessage(selectedConversation, content);
+      // Wait a bit for the message to be processed, then load messages
+      // Retry loading messages a few times to handle async processing
+      let retries = 0;
+      const maxRetries = 5;
+      let messageCount = messages.length;
+      
+      while (retries < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await loadMessages(selectedConversation);
+        retries++;
+        
+        // If we got new messages, break out of the loop
+        const newMsgs = await threadApi.getMessages(selectedConversation);
+        if (newMsgs.length > messageCount) {
+          setMessages(newMsgs);
+          break;
+        }
+      }
+    } catch (err) {
+      console.error('Failed to send message:', err);
+    } finally {
+      setLoading(false);
     }
   };
 
