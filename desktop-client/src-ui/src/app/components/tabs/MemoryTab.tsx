@@ -1,49 +1,53 @@
 import { useState, useEffect } from 'react';
-import { Search, FileText, FolderTree } from 'lucide-react';
+import { Search, FileText, FolderTree, Folder, Edit2, Save, X, ChevronRight, ChevronDown } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
-import { memoryApi, MemoryContent } from '../../utils/tauri';
+import { memoryApi, TreeEntry, SearchHit, MemoryContent } from '../../utils/tauri';
+import ReactMarkdown from 'react-markdown';
+
+interface TreeNode {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  children?: TreeNode[];
+  expanded?: boolean;
+  loaded?: boolean;
+}
 
 export function MemoryTab() {
   const { theme } = useTheme();
   const [searchQuery, setSearchQuery] = useState('');
-  const [entries, setEntries] = useState<MemoryContent[]>([]);
+  const [treeNodes, setTreeNodes] = useState<TreeNode[]>([]);
+  const [searchResults, setSearchResults] = useState<SearchHit[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
+  
+  // File viewer state
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [fileContent, setFileContent] = useState<string>('');
+  const [isEditing, setIsEditing] = useState(false);
+  const [editContent, setEditContent] = useState('');
 
   useEffect(() => {
     const fetchMemories = async () => {
       try {
         setLoading(true);
         if (searchQuery.trim()) {
-          // Search for memories if query is provided
+          setIsSearching(true);
           const results = await memoryApi.searchMemory(searchQuery);
-          setEntries(results);
+          setSearchResults(results);
         } else {
-          // Get memory tree if no search query
+          setIsSearching(false);
           const tree = await memoryApi.getMemoryTree();
-          // Flatten the tree into a list for display
-          const flattened: MemoryContent[] = [];
-          const traverse = (node: any) => {
-            if (node.id && node.name) {
-              flattened.push({
-                id: node.id,
-                name: node.name,
-                content: node.metadata?.content || '',
-                updated_at: node.metadata?.updated_at || new Date().toISOString(),
-              });
-            }
-            if (node.children) {
-              node.children.forEach(traverse);
-            }
-          };
-          traverse(tree.root);
-          setEntries(flattened);
+          const nodes = buildTreeFromEntries(tree.entries);
+          setTreeNodes(nodes);
         }
         setError(null);
       } catch (err) {
         console.error('Failed to fetch memories:', err);
         setError('Failed to load memories');
-        setEntries([]);
+        setTreeNodes([]);
+        setSearchResults([]);
       } finally {
         setLoading(false);
       }
@@ -52,73 +56,292 @@ export function MemoryTab() {
     fetchMemories();
   }, [searchQuery]);
 
-  const filteredEntries = entries;
+  const buildTreeFromEntries = (entries: TreeEntry[]): TreeNode[] => {
+    const nodes: TreeNode[] = [];
+    const pathMap = new Map<string, TreeNode>();
+
+    // Sort entries to ensure parents come before children
+    const sortedEntries = [...entries].sort((a, b) => a.path.localeCompare(b.path));
+
+    for (const entry of sortedEntries) {
+      const parts = entry.path.split('/');
+      const name = parts[parts.length - 1];
+      
+      const node: TreeNode = {
+        name,
+        path: entry.path,
+        is_dir: entry.is_dir,
+        children: entry.is_dir ? [] : undefined,
+        expanded: false,
+        loaded: false,
+      };
+
+      pathMap.set(entry.path, node);
+
+      if (parts.length === 1) {
+        // Top-level entry
+        nodes.push(node);
+      } else {
+        // Find parent
+        const parentPath = parts.slice(0, -1).join('/');
+        const parent = pathMap.get(parentPath);
+        if (parent && parent.children) {
+          parent.children.push(node);
+        }
+      }
+    }
+
+    return nodes;
+  };
+
+  const toggleFolder = (node: TreeNode) => {
+    const updateNode = (nodes: TreeNode[]): TreeNode[] => {
+      return nodes.map(n => {
+        if (n.path === node.path) {
+          return { ...n, expanded: !n.expanded };
+        }
+        if (n.children) {
+          return { ...n, children: updateNode(n.children) };
+        }
+        return n;
+      });
+    };
+
+    setTreeNodes(updateNode(treeNodes));
+  };
+
+  const handleFileClick = async (path: string) => {
+    try {
+      setSelectedFile(path);
+      setIsEditing(false);
+      const content = await memoryApi.readMemory(path);
+      setFileContent(content.content);
+      setEditContent(content.content);
+    } catch (err) {
+      console.error('Failed to read file:', err);
+      setError(`Failed to read file: ${path}`);
+    }
+  };
+
+  const handleEdit = () => {
+    setIsEditing(true);
+  };
+
+  const handleCancelEdit = () => {
+    setIsEditing(false);
+    setEditContent(fileContent);
+  };
+
+  const handleSave = async () => {
+    if (!selectedFile) return;
+    
+    try {
+      await memoryApi.writeMemory(selectedFile, editContent);
+      setFileContent(editContent);
+      setIsEditing(false);
+    } catch (err) {
+      console.error('Failed to save file:', err);
+      setError(`Failed to save file: ${selectedFile}`);
+    }
+  };
+
+  const renderTreeNode = (node: TreeNode, depth: number = 0): JSX.Element => {
+    const paddingLeft = depth * 16 + 8;
+
+    if (node.is_dir) {
+      return (
+        <div key={node.path}>
+          <div
+            className={`flex items-center gap-2 p-2 cursor-pointer hover:bg-opacity-10 hover:bg-white rounded ${
+              theme === 'dark' ? 'text-white' : 'text-[#333]'
+            }`}
+            style={{ paddingLeft: `${paddingLeft}px` }}
+            onClick={() => toggleFolder(node)}
+          >
+            {node.expanded ? (
+              <ChevronDown size={16} className={theme === 'dark' ? 'text-[#5ddad5]' : 'text-[#667eea]'} />
+            ) : (
+              <ChevronRight size={16} className={theme === 'dark' ? 'text-[#5ddad5]' : 'text-[#667eea]'} />
+            )}
+            <Folder size={16} className={theme === 'dark' ? 'text-[#5ddad5]' : 'text-[#667eea]'} />
+            <span className="text-sm">{node.name}</span>
+          </div>
+          {node.expanded && node.children && (
+            <div>
+              {node.children.map(child => renderTreeNode(child, depth + 1))}
+            </div>
+          )}
+        </div>
+      );
+    } else {
+      return (
+        <div
+          key={node.path}
+          className={`flex items-center gap-2 p-2 cursor-pointer hover:bg-opacity-10 hover:bg-white rounded ${
+            theme === 'dark' ? 'text-white' : 'text-[#333]'
+          } ${selectedFile === node.path ? (theme === 'dark' ? 'bg-[#1a2942]' : 'bg-[#f0f0f0]') : ''}`}
+          style={{ paddingLeft: `${paddingLeft + 16}px` }}
+          onClick={() => handleFileClick(node.path)}
+        >
+          <FileText size={16} className={theme === 'dark' ? 'text-[#5ddad5]' : 'text-[#667eea]'} />
+          <span className="text-sm">{node.name}</span>
+        </div>
+      );
+    }
+  };
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="p-6">
-        <div className="flex items-center gap-4 mb-6">
-          <h2 className={`text-2xl font-bold ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>记忆管理</h2>
-        </div>
-        {error && (
-          <div className="mb-4 p-3 bg-red-400/10 border border-red-400/30 rounded-lg text-red-400 text-sm">
-            {error}
-          </div>
-        )}
-
-        <div className="mb-6 flex gap-3">
-          <div className="flex-1 relative">
-            <Search className={`absolute left-3 top-1/2 -translate-y-1/2 ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`} size={20} />
+    <div className="h-full flex">
+      {/* Left sidebar - Tree view */}
+      <div className={`w-64 border-r ${theme === 'dark' ? 'border-[#1a2942]' : 'border-[#ddd]'} p-4 overflow-y-auto`}>
+        <div className="mb-4">
+          <div className="relative">
+            <Search className={`absolute left-3 top-1/2 -translate-y-1/2 ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`} size={16} />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="搜索记忆..."
-              className={`w-full pl-10 pr-4 py-2 border rounded-lg focus:outline-none ${
+              className={`w-full pl-9 pr-3 py-2 text-sm border rounded-lg focus:outline-none ${
                 theme === 'dark'
                   ? 'bg-[#0f1d35] border-[#1a2942] focus:border-[#5ddad5] text-white placeholder-gray-500'
                   : 'bg-white border-[#ddd] focus:border-[#667eea] focus:ring-2 focus:ring-[#667eea]/20 text-[#333] placeholder-gray-400'
               }`}
             />
           </div>
-          <button className={`px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-opacity ${
-            theme === 'dark'
-              ? 'bg-gradient-to-r from-[#5ddad5] to-[#4facf7] text-[#0a1628] hover:opacity-90'
-              : 'bg-[#667eea] text-white hover:opacity-90 shadow-md'
-          }`}>
-            <FolderTree size={18} />
-            查看树形结构
-          </button>
         </div>
 
-        <div className="space-y-3">
-          {filteredEntries.map((entry) => (
-            <div
-              key={entry.id}
-              className={`border rounded-xl p-5 transition-colors cursor-pointer ${
-                theme === 'dark'
-                  ? 'bg-[#0f1d35] border-[#1a2942] hover:border-[#5ddad5]/30'
-                  : 'bg-white border-[#ddd] hover:border-[#667eea]/50 shadow-sm hover:shadow-md'
-              }`}
-            >
-              <div className="flex items-start gap-3">
-                <FileText className={theme === 'dark' ? 'text-[#5ddad5]' : 'text-[#667eea]'} size={20} />
-                <div className="flex-1">
-                  <h3 className={`font-semibold mb-1 ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>{entry.name}</h3>
-                  <p className={`text-sm mb-2 ${theme === 'dark' ? 'text-gray-400' : 'text-[#666]'}`}>{entry.content}</p>
-                  <p className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>
-                    更新于: {new Date(entry.updated_at).toLocaleString('zh-CN')}
-                  </p>
+        {error && (
+          <div className="mb-4 p-2 bg-red-400/10 border border-red-400/30 rounded text-red-400 text-xs">
+            {error}
+          </div>
+        )}
+
+        {isSearching ? (
+          <div className="space-y-2">
+            {searchResults.map((result, index) => (
+              <div
+                key={index}
+                className={`p-2 border rounded cursor-pointer text-sm ${
+                  theme === 'dark'
+                    ? 'bg-[#0f1d35] border-[#1a2942] hover:border-[#5ddad5]/30'
+                    : 'bg-white border-[#ddd] hover:border-[#667eea]/50'
+                }`}
+                onClick={() => handleFileClick(result.path)}
+              >
+                <div className={`font-medium mb-1 ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>
+                  {result.path}
+                </div>
+                <div className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-[#666]'}`}>
+                  {result.content.substring(0, 100)}...
+                </div>
+                <div className={`text-xs mt-1 ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>
+                  相关度: {(result.score * 100).toFixed(0)}%
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+            {searchResults.length === 0 && !loading && (
+              <div className={`text-center py-8 text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>
+                未找到匹配的记忆
+              </div>
+            )}
+          </div>
+        ) : (
+          <div>
+            {treeNodes.map(node => renderTreeNode(node))}
+            {treeNodes.length === 0 && !loading && (
+              <div className={`text-center py-8 text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>
+                暂无记忆条目
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
-        {entries.length === 0 && (
-          <div className={`text-center py-12 ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>
-            <FileText size={48} className="mx-auto mb-4 opacity-50" />
-            <p>暂无记忆条目</p>
+      {/* Right panel - File viewer/editor */}
+      <div className="flex-1 flex flex-col">
+        {selectedFile ? (
+          <>
+            {/* File header */}
+            <div className={`flex items-center justify-between p-4 border-b ${
+              theme === 'dark' ? 'border-[#1a2942]' : 'border-[#ddd]'
+            }`}>
+              <div className={`font-medium ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>
+                {selectedFile}
+              </div>
+              <div className="flex gap-2">
+                {isEditing ? (
+                  <>
+                    <button
+                      onClick={handleSave}
+                      className={`px-3 py-1 rounded flex items-center gap-1 text-sm ${
+                        theme === 'dark'
+                          ? 'bg-[#5ddad5] text-[#0a1628] hover:opacity-90'
+                          : 'bg-[#667eea] text-white hover:opacity-90'
+                      }`}
+                    >
+                      <Save size={14} />
+                      保存
+                    </button>
+                    <button
+                      onClick={handleCancelEdit}
+                      className={`px-3 py-1 rounded flex items-center gap-1 text-sm ${
+                        theme === 'dark'
+                          ? 'bg-[#1a2942] text-white hover:bg-[#243550]'
+                          : 'bg-[#ddd] text-[#333] hover:bg-[#ccc]'
+                      }`}
+                    >
+                      <X size={14} />
+                      取消
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={handleEdit}
+                    className={`px-3 py-1 rounded flex items-center gap-1 text-sm ${
+                      theme === 'dark'
+                        ? 'bg-[#1a2942] text-white hover:bg-[#243550]'
+                        : 'bg-[#ddd] text-[#333] hover:bg-[#ccc]'
+                    }`}
+                  >
+                    <Edit2 size={14} />
+                    编辑
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* File content */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {isEditing ? (
+                <textarea
+                  value={editContent}
+                  onChange={(e) => setEditContent(e.target.value)}
+                  className={`w-full h-full p-4 font-mono text-sm border rounded resize-none focus:outline-none ${
+                    theme === 'dark'
+                      ? 'bg-[#0f1d35] border-[#1a2942] text-white'
+                      : 'bg-white border-[#ddd] text-[#333]'
+                  }`}
+                />
+              ) : (
+                <div className={theme === 'dark' ? 'text-white' : 'text-[#333]'}>
+                  {selectedFile.endsWith('.md') ? (
+                    <div className="prose prose-sm max-w-none dark:prose-invert">
+                      <ReactMarkdown>{fileContent}</ReactMarkdown>
+                    </div>
+                  ) : (
+                    <pre className="whitespace-pre-wrap font-mono text-sm">{fileContent}</pre>
+                  )}
+                </div>
+              )}
+            </div>
+          </>
+        ) : (
+          <div className={`flex-1 flex items-center justify-center ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>
+            <div className="text-center">
+              <FileText size={48} className="mx-auto mb-4 opacity-50" />
+              <p>选择一个文件查看内容</p>
+            </div>
           </div>
         )}
       </div>

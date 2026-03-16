@@ -684,7 +684,7 @@ pub async fn write_memory(
     memory_id: String,
     content: String,
     state: tauri::State<'_, CommandState>,
-) -> Result<crate::api_client::MemoryContent> {
+) -> Result<crate::api_client::MemoryWriteResponse> {
     state.api_client.write_memory(&memory_id, &content).await
 }
 
@@ -692,7 +692,7 @@ pub async fn write_memory(
 pub async fn search_memory(
     query: String,
     state: tauri::State<'_, CommandState>,
-) -> Result<Vec<crate::api_client::MemoryContent>> {
+) -> Result<Vec<crate::api_client::SearchHit>> {
     state.api_client.search_memory(&query).await
 }
 

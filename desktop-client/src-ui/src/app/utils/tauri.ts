@@ -250,33 +250,40 @@ export const extensionSearchApi = {
 };
 
 // Memory APIs
-export interface MemoryNode {
-  id: string;
-  name: string;
-  node_type: string;
-  children: MemoryNode[];
-  metadata?: any;
+export interface TreeEntry {
+  path: string;
+  is_dir: boolean;
 }
 
 export interface MemoryTreeResponse {
-  root: MemoryNode;
+  entries: TreeEntry[];
 }
 
 export interface MemoryContent {
-  id: string;
-  name: string;
+  path: string;
   content: string;
-  updated_at: string;
+  updated_at?: string;
+}
+
+export interface MemoryWriteResponse {
+  path: string;
+  status: string;
+}
+
+export interface SearchHit {
+  path: string;
+  content: string;
+  score: number;
 }
 
 export const memoryApi = {
   getMemoryTree: () => invokeTauri<MemoryTreeResponse>('get_memory_tree'),
-  readMemory: (memoryId: string) =>
-    invokeTauri<MemoryContent>('read_memory', { memoryId }),
-  writeMemory: (memoryId: string, content: string) =>
-    invokeTauri<MemoryContent>('write_memory', { memoryId, content }),
+  readMemory: (path: string) =>
+    invokeTauri<MemoryContent>('read_memory', { memoryId: path }),
+  writeMemory: (path: string, content: string) =>
+    invokeTauri<MemoryWriteResponse>('write_memory', { memoryId: path, content }),
   searchMemory: (query: string) =>
-    invokeTauri<MemoryContent[]>('search_memory', { query }),
+    invokeTauri<SearchHit[]>('search_memory', { query }),
 };
 
 // Job APIs

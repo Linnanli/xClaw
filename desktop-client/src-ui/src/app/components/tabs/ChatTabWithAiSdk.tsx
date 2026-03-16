@@ -30,9 +30,23 @@ export function ChatTabWithAiSdk() {
   useEffect(() => {
     if (selectedConversation) {
       loadMessages(selectedConversation);
-      setConnected(true);
+      // 不要在这里设置 connected，应该由 SSE 连接状态决定
+      console.log('📝 Selected conversation changed:', selectedConversation);
     }
   }, [selectedConversation]);
+
+  // 监听 SSE 连接状态
+  useEffect(() => {
+    // 检查 chat.isLoading 或其他状态来判断 SSE 是否连接
+    // 这里我们简单地假设如果有 authToken 就是连接的
+    if (authToken && selectedConversation) {
+      setConnected(true);
+      console.log('✅ SSE should be connected');
+    } else {
+      setConnected(false);
+      console.log('❌ SSE not connected (no token or no conversation)');
+    }
+  }, [authToken, selectedConversation]);
 
   const loadConversations = async () => {
     try {
@@ -83,18 +97,30 @@ export function ChatTabWithAiSdk() {
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!chat.input.trim() || !selectedConversation) return;
+    if (!chat.input.trim() || !selectedConversation) {
+      console.warn('⚠️  Cannot send message:', {
+        hasInput: !!chat.input.trim(),
+        hasConversation: !!selectedConversation,
+      });
+      return;
+    }
 
     try {
       setLoading(true);
+      console.log('📤 Sending message from ChatTab...');
+      console.log('   Input:', chat.input);
+      console.log('   Thread ID:', selectedConversation);
+      console.log('   Auth Token:', authToken ? authToken.substring(0, 20) + '...' : 'none');
+      
       // 使用 Hook 的 append 方法发送消息
       await chat.append({
         role: 'user',
         content: chat.input,
       });
       chat.setInput('');
+      console.log('✅ Message sent successfully');
     } catch (err) {
-      console.error('Failed to send message:', err);
+      console.error('❌ Failed to send message:', err);
     } finally {
       setLoading(false);
     }

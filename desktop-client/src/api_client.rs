@@ -57,24 +57,33 @@ pub struct ApprovalRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryTreeResponse {
-    pub root: MemoryNode,
+    pub entries: Vec<TreeEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemoryNode {
-    pub id: String,
-    pub name: String,
-    pub node_type: String,
-    pub children: Vec<MemoryNode>,
-    pub metadata: Option<serde_json::Value>,
+pub struct TreeEntry {
+    pub path: String,
+    pub is_dir: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryContent {
-    pub id: String,
-    pub name: String,
+    pub path: String,
     pub content: String,
-    pub updated_at: String,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryWriteResponse {
+    pub path: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchHit {
+    pub path: String,
+    pub content: String,
+    pub score: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -357,10 +366,11 @@ impl ApiClient {
     }
 
     pub async fn read_memory(&self, memory_id: &str) -> Result<MemoryContent> {
-        let url = format!("{}/api/memory/read/{}", self.base_url, memory_id);
+        let url = format!("{}/api/memory/read", self.base_url);
         self.client
             .get(&url)
             .header("Authorization", self.auth_header())
+            .query(&[("path", memory_id)])
             .send()
             .await
             .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?
@@ -369,32 +379,40 @@ impl ApiClient {
             .map_err(|e| crate::error::Error::SerializationError(e.to_string()))
     }
 
-    pub async fn write_memory(&self, memory_id: &str, content: &str) -> Result<MemoryContent> {
-        let url = format!("{}/api/memory/write/{}", self.base_url, memory_id);
+    pub async fn write_memory(&self, memory_id: &str, content: &str) -> Result<MemoryWriteResponse> {
+        let url = format!("{}/api/memory/write", self.base_url);
         self.client
             .post(&url)
             .header("Authorization", self.auth_header())
-            .json(&serde_json::json!({"content": content}))
+            .json(&serde_json::json!({"path": memory_id, "content": content}))
             .send()
             .await
             .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?
-            .json::<MemoryContent>()
+            .json::<MemoryWriteResponse>()
             .await
             .map_err(|e| crate::error::Error::SerializationError(e.to_string()))
     }
 
-    pub async fn search_memory(&self, query: &str) -> Result<Vec<MemoryContent>> {
+    pub async fn search_memory(&self, query: &str) -> Result<Vec<SearchHit>> {
         let url = format!("{}/api/memory/search", self.base_url);
-        self.client
-            .get(&url)
+        
+        #[derive(Debug, Serialize, Deserialize)]
+        struct SearchResponse {
+            results: Vec<SearchHit>,
+        }
+        
+        let response: SearchResponse = self.client
+            .post(&url)
             .header("Authorization", self.auth_header())
-            .query(&[("q", query)])
+            .json(&serde_json::json!({"query": query}))
             .send()
             .await
             .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?
-            .json::<Vec<MemoryContent>>()
+            .json()
             .await
-            .map_err(|e| crate::error::Error::SerializationError(e.to_string()))
+            .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?;
+        
+        Ok(response.results)
     }
 
     pub async fn get_jobs(&self) -> Result<Vec<JobInfo>> {
