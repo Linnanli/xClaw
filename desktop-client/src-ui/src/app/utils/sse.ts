@@ -94,8 +94,9 @@ export class SseClient {
           resolve();
         };
         
+        // 监听默认的 message 事件
         this.eventSource.onmessage = (event) => {
-          console.log('📨 SSE onmessage:', event.data.substring(0, 50));
+          console.log('📨 SSE onmessage (default):', event.data.substring(0, 100));
           try {
             const data = JSON.parse(event.data);
             const sseEvent = this.parseEventData(data);
@@ -104,6 +105,114 @@ export class SseClient {
             console.error('Failed to parse SSE event:', error);
           }
         };
+        
+        // 监听命名事件：thinking
+        this.eventSource.addEventListener('thinking', (event: any) => {
+          console.log('📨 SSE event [thinking]:', event.data.substring(0, 100));
+          // thinking 事件暂时不处理，只记录日志
+        });
+        
+        // 监听命名事件：status
+        this.eventSource.addEventListener('status', (event: any) => {
+          console.log('📨 SSE event [status]:', event.data.substring(0, 100));
+          try {
+            const data = JSON.parse(event.data);
+            console.log('   Status:', data);
+            // 检查是否是完成状态
+            if (data.message === 'Done' || data.type === 'status') {
+              const sseEvent: SseEvent = {
+                type: 'thread_state',
+                data: {
+                  thread_id: data.thread_id,
+                  state: 'completed',
+                },
+              };
+              this.eventHandlers.forEach(handler => handler(sseEvent));
+            }
+          } catch (error) {
+            console.error('Failed to parse status event:', error);
+          }
+        });
+        
+        // 监听命名事件：response（这是实际的消息内容）
+        this.eventSource.addEventListener('response', (event: any) => {
+          console.log('📨 SSE event [response]:', event.data.substring(0, 100));
+          try {
+            const data = JSON.parse(event.data);
+            console.log('   Response:', data);
+            // 将 response 事件转换为 message_update 事件
+            const sseEvent: SseEvent = {
+              type: 'message_update',
+              data: {
+                message_id: data.message_id || 'unknown',
+                content: data.content || data.message || '',
+              },
+            };
+            this.eventHandlers.forEach(handler => handler(sseEvent));
+          } catch (error) {
+            console.error('Failed to parse response event:', error);
+          }
+        });
+        
+        // 监听命名事件：message
+        this.eventSource.addEventListener('message', (event: any) => {
+          console.log('📨 SSE event [message]:', event.data.substring(0, 100));
+          try {
+            const data = JSON.parse(event.data);
+            const sseEvent = this.parseEventData(data);
+            this.eventHandlers.forEach(handler => handler(sseEvent));
+          } catch (error) {
+            console.error('Failed to parse message event:', error);
+          }
+        });
+        
+        // 监听命名事件：message_update
+        this.eventSource.addEventListener('message_update', (event: any) => {
+          console.log('📨 SSE event [message_update]:', event.data.substring(0, 100));
+          try {
+            const data = JSON.parse(event.data);
+            const sseEvent = this.parseEventData(data);
+            this.eventHandlers.forEach(handler => handler(sseEvent));
+          } catch (error) {
+            console.error('Failed to parse message_update event:', error);
+          }
+        });
+        
+        // 监听命名事件：thread_state
+        this.eventSource.addEventListener('thread_state', (event: any) => {
+          console.log('📨 SSE event [thread_state]:', event.data.substring(0, 100));
+          try {
+            const data = JSON.parse(event.data);
+            const sseEvent = this.parseEventData(data);
+            this.eventHandlers.forEach(handler => handler(sseEvent));
+          } catch (error) {
+            console.error('Failed to parse thread_state event:', error);
+          }
+        });
+        
+        // 监听命名事件：auth_required
+        this.eventSource.addEventListener('auth_required', (event: any) => {
+          console.log('📨 SSE event [auth_required]:', event.data.substring(0, 100));
+          try {
+            const data = JSON.parse(event.data);
+            const sseEvent = this.parseEventData(data);
+            this.eventHandlers.forEach(handler => handler(sseEvent));
+          } catch (error) {
+            console.error('Failed to parse auth_required event:', error);
+          }
+        });
+        
+        // 监听命名事件：auth_completed
+        this.eventSource.addEventListener('auth_completed', (event: any) => {
+          console.log('📨 SSE event [auth_completed]:', event.data.substring(0, 100));
+          try {
+            const data = JSON.parse(event.data);
+            const sseEvent = this.parseEventData(data);
+            this.eventHandlers.forEach(handler => handler(sseEvent));
+          } catch (error) {
+            console.error('Failed to parse auth_completed event:', error);
+          }
+        });
         
         this.eventSource.onerror = (error) => {
           clearTimeout(timeout);
@@ -125,19 +234,44 @@ export class SseClient {
    * 解析 SSE 事件数据
    */
   private parseEventData(data: any): SseEvent {
-    if (data.message) {
+    // 后端发送的数据格式是扁平的，例如：
+    // {"type":"thinking","message":"Processing...","thread_id":"test-thread-1773658760"}
+    // 或者可能是嵌套的，例如：
+    // {"message": {"thread_id": "...", "message_id": "...", "content": "...", "role": "..."}}
+    
+    // 检查是否是嵌套格式
+    if (data.message && typeof data.message === 'object') {
       return { type: 'message', data: data.message };
-    } else if (data.message_update) {
+    } else if (data.message_update && typeof data.message_update === 'object') {
       return { type: 'message_update', data: data.message_update };
-    } else if (data.thread_state) {
+    } else if (data.thread_state && typeof data.thread_state === 'object') {
       return { type: 'thread_state', data: data.thread_state };
-    } else if (data.auth_completed) {
+    } else if (data.auth_completed && typeof data.auth_completed === 'object') {
       return { type: 'auth_completed', data: data.auth_completed };
-    } else if (data.auth_required) {
+    } else if (data.auth_required && typeof data.auth_required === 'object') {
       return { type: 'auth_required', data: data.auth_required };
-    } else {
-      return { type: 'other', data: JSON.stringify(data) };
     }
+    
+    // 检查是否是扁平格式（有 type 字段）
+    if (data.type) {
+      switch (data.type) {
+        case 'message':
+          return { type: 'message', data: data };
+        case 'message_update':
+          return { type: 'message_update', data: data };
+        case 'thread_state':
+          return { type: 'thread_state', data: data };
+        case 'auth_completed':
+          return { type: 'auth_completed', data: data };
+        case 'auth_required':
+          return { type: 'auth_required', data: data };
+        default:
+          return { type: 'other', data: JSON.stringify(data) };
+      }
+    }
+    
+    // 如果都不是，返回 other 类型
+    return { type: 'other', data: JSON.stringify(data) };
   }
 
   /**

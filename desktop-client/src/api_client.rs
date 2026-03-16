@@ -108,10 +108,14 @@ pub struct LogEntry {
 
 impl ApiClient {
     pub fn new(base_url: String) -> Self {
+        // 优先从环境变量读取 token，如果没有则使用默认值
+        let auth_token = std::env::var("GATEWAY_AUTH_TOKEN")
+            .unwrap_or_else(|_| "59c7c863fa5bd3eeffc94533cd70a3393251c3ada49a226146a5a61ba62d6743".to_string());
+        
         Self {
             base_url,
             client: reqwest::Client::new(),
-            auth_token: "8a7f756f4179fb10a79e58a512968ad8bfb545f875524ab2ed8ce0333a2030a4".to_string(),
+            auth_token,
         }
     }
     

@@ -1025,3 +1025,159 @@ desktop-client/
 - [ ] 已检查性能指标
 - [ ] 已更新测试文档
 
+
+
+## 测试覆盖不足导致生产问题的经验教训
+
+### 问题案例：SSE 集成测试通过但客户端失败
+
+**背景**：
+- 单元测试通过 ✅
+- 集成测试通过 ✅
+- E2E 测试通过 ✅
+- 客户端使用失败 ❌
+
+**根本原因**：
+1. **测试环境与生产环境不一致**
+   - 测试使用模拟数据，未测试真实的后端事件格式
+   - 后端发送命名 SSE 事件（`event: response`）
+   - 前端只监听默认事件（`onmessage`）
+   - 测试没有验证事件名称匹配
+
+2. **缺少端到端的真实场景测试**
+   - 没有测试完整的用户流程（发送消息 → SSE 接收 → 显示回复）
+   - 没有测试前后端的实际通信
+   - 没有验证事件格式和数据结构
+
+3. **未参考已有的成熟实现**
+   - 主项目 `src/channels/web/static/app.js` 已有正确的 SSE 实现
+   - 重新实现时未参考现有代码
+   - 导致使用了错误的 API（`onmessage` vs `addEventListener`）
+
+### 预防策略
+
+#### 1. 添加真实环境的集成测试
+
+**测试真实的后端事件**：
+```bash
+#!/bin/bash
+# 测试后端实际发送的 SSE 事件
+
+# 启动真实的后端
+cargo run -- run --no-onboard &
+
+# 连接 SSE 并验证事件格式
+curl -N "http://localhost:3000/api/chat/events?token=$TOKEN" | \
+  grep -E "event: (response|thinking|status)"
+
+# 验证收到了预期的事件类型
+```
+
+#### 2. 参考已有实现作为测试基准
+
+**检查清单**：
+- [ ] 已查找主项目是否有相同功能的实现
+- [ ] 已对比新实现与现有实现的差异
+- [ ] 已验证使用相同的 API 和模式
+- [ ] 已测试与后端的实际通信
+
+**示例**：
+```javascript
+// 参考 src/channels/web/static/app.js 的实现
+eventSource.addEventListener('response', (e) => { ... });
+eventSource.addEventListener('thinking', (e) => { ... });
+eventSource.addEventListener('status', (e) => { ... });
+```
+
+#### 3. 添加契约测试
+
+**验证前后端接口匹配**：
+```javascript
+describe('SSE Contract Tests', () => {
+  it('should match backend event format', async () => {
+    // 1. 启动真实后端
+    // 2. 连接 SSE
+    // 3. 发送消息
+    // 4. 验证收到的事件格式
+    const events = await collectSseEvents();
+    expect(events).toContainEqual({
+      type: 'response',
+      data: expect.objectContaining({
+        content: expect.any(String),
+        thread_id: expect.any(String)
+      })
+    });
+  });
+});
+```
+
+#### 4. 测试覆盖检查清单
+
+**单元测试**：
+- [ ] 测试独立功能和逻辑
+- [ ] 使用模拟数据和 mock
+
+**集成测试**：
+- [ ] 测试组件间的交互
+- [ ] 使用真实的依赖（数据库、API）
+
+**E2E 测试**：
+- [ ] 测试完整的用户流程
+- [ ] 使用真实的后端和前端
+- [ ] 验证实际的网络通信
+
+**契约测试**：
+- [ ] 验证前后端接口格式匹配
+- [ ] 测试事件名称和数据结构
+- [ ] 使用真实的后端事件
+
+### 关键原则
+
+1. **优先复用已有实现**
+   - 检查主项目是否有相同功能
+   - 参考现有代码的实现方式
+   - 避免重复造轮子和踩坑
+
+2. **测试真实场景**
+   - 不要只依赖模拟数据
+   - 测试与真实后端的通信
+   - 验证实际的事件格式和数据结构
+
+3. **完整的测试覆盖**
+   - 单元测试 + 集成测试 + E2E 测试 + 契约测试
+   - 每种测试有不同的目的和覆盖范围
+   - 不能用单元测试代替集成测试
+
+4. **文档化接口规范**
+   - 明确定义事件格式和数据结构
+   - 提供示例和说明
+   - 保持文档与实现同步
+
+### 执行流程
+
+```
+新功能开发
+  ↓
+检查主项目是否有相同功能
+  ↓
+参考现有实现（如果有）
+  ↓
+编写单元测试
+  ↓
+实现功能代码
+  ↓
+编写集成测试（使用真实依赖）
+  ↓
+编写 E2E 测试（完整流程）
+  ↓
+编写契约测试（接口匹配）
+  ↓
+所有测试通过
+  ↓
+提交代码
+```
+
+### 参考文档
+
+- `SSE_INTEGRATION_ISSUE_ANALYSIS.md` - 详细的问题分析
+- `src/channels/web/static/app.js` - 主项目的 SSE 实现

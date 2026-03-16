@@ -51,6 +51,12 @@ cleanup() {
         kill $FRONTEND_PID 2>/dev/null || true
     fi
     
+    # 杀死 Tauri 进程
+    if [ ! -z "$TAURI_PID" ]; then
+        log_info "停止 Tauri 客户端 (PID: $TAURI_PID)..."
+        kill $TAURI_PID 2>/dev/null || true
+    fi
+    
     log_info "清理完成"
 }
 
@@ -188,12 +194,34 @@ if [ ! -z "$GATEWAY_URL" ]; then
 fi
 
 # ============================================
+# 提取并导出认证令牌
+# ============================================
+
+log_section "提取认证令牌"
+
+# 从后端日志中提取令牌
+GATEWAY_URL=$(grep "gateway.*http" /tmp/backend.log | tail -1 | sed 's/.*http/http/')
+if [ ! -z "$GATEWAY_URL" ]; then
+    # 从 URL 中提取令牌
+    export GATEWAY_AUTH_TOKEN=$(echo "$GATEWAY_URL" | sed 's/.*token=//')
+    log_info "认证令牌已提取并导出到环境变量"
+    log_info "GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN:0:20}..."
+else
+    log_error "无法从后端日志中提取令牌"
+    exit 1
+fi
+
+# ============================================
 # 启动前端
 # ============================================
 
 log_section "启动前端服务"
 
-cd desktop-client/src-ui
+# 获取脚本所在目录的父目录（项目根目录）
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+
+cd "$PROJECT_ROOT/desktop-client/src-ui"
 
 # 检查依赖
 if [ ! -d "node_modules" ]; then
@@ -219,8 +247,32 @@ fi
 log_info "前端已启动"
 
 # ============================================
-# 启动完成
+# 启动 Tauri 客户端
 # ============================================
+
+log_section "启动 Tauri 客户端"
+
+# 回到项目根目录
+cd "$PROJECT_ROOT/desktop-client"
+
+log_info "启动 Tauri 客户端..."
+
+# 启动 Tauri 开发服务器
+# 注意: Tauri 会自动连接到前端开发服务器 (http://localhost:5173)
+cargo tauri dev &
+TAURI_PID=$!
+
+log_info "Tauri 客户端进程 PID: $TAURI_PID"
+
+log_info "等待 Tauri 客户端启动..."
+sleep 10
+
+# 检查 Tauri 是否运行
+if ! kill -0 $TAURI_PID 2>/dev/null; then
+    log_warn "Tauri 客户端启动失败或已关闭"
+else
+    log_info "Tauri 客户端已启动"
+fi
 
 log_section "启动完成"
 
@@ -233,10 +285,40 @@ echo "  PID: $BACKEND_PID"
 echo "  日志: tail -f /tmp/backend.log"
 echo ""
 echo "前端服务:"
-echo "  URL: http://localhost:5173"
+echo "  开发服务器: http://localhost:5173"
 echo "  PID: $FRONTEND_PID"
 echo ""
-echo "打开浏览器访问: http://localhost:5173"
+if [ ! -z "$TAURI_PID" ] && kill -0 $TAURI_PID 2>/dev/null; then
+    echo "Tauri 客户端:"
+    echo "  PID: $TAURI_PID"
+    echo "  状态: 运行中"
+    echo "  说明: Tauri 会自动连接到前端开发服务器"
+    echo ""
+fi
+
+# 提取令牌
+GATEWAY_URL=$(grep "gateway.*http" /tmp/backend.log | tail -1 | sed 's/.*http/http/')
+if [ ! -z "$GATEWAY_URL" ]; then
+    # 从 URL 中提取令牌
+    TOKEN=$(echo "$GATEWAY_URL" | sed 's/.*token=//' | sed 's/$//')
+    FRONTEND_URL="http://localhost:5173?token=$TOKEN"
+    echo "前端 URL（带令牌）:"
+    echo "  $FRONTEND_URL"
+    echo ""
+    echo "💡 提示: 使用上面的 URL 访问前端，令牌会自动保存到本地存储"
+    echo ""
+    
+    # 尝试自动打开浏览器
+    if command -v open &> /dev/null; then
+        echo "🌐 正在打开浏览器..."
+        open "$FRONTEND_URL" 2>/dev/null || true
+    fi
+else
+    echo "前端 URL: http://localhost:5173"
+    echo ""
+    echo "⚠️  无法获取令牌，请手动从后端日志中获取"
+fi
+
 echo ""
 echo "停止服务: 按 Ctrl+C"
 echo ""

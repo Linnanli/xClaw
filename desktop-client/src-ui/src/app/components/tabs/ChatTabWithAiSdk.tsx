@@ -3,6 +3,7 @@ import { Plus, ChevronLeft, ChevronRight, Image, Send, Wifi, WifiOff } from 'luc
 import { useTheme } from '../../contexts/ThemeContext';
 import { threadApi, type Thread, type Message } from '../../utils/tauri';
 import { useAiChat } from '../../hooks/useAiChat';
+import { TokenManager } from '../../utils/tokenManager';
 
 export function ChatTabWithAiSdk() {
   const { theme } = useTheme();
@@ -12,11 +13,14 @@ export function ChatTabWithAiSdk() {
   const [loading, setLoading] = useState(false);
   const [connected, setConnected] = useState(false);
 
+  // 获取认证令牌
+  const authToken = TokenManager.getToken();
+
   // 使用 Vercel AI SDK 的 useAiChat Hook
   const chat = useAiChat({
     threadId: selectedConversation || '',
     apiUrl: 'http://localhost:3000',
-    authToken: 'd397b61ad5584603d5691f03e73a0a3eea6fd66d1590ddc64a6b0292c7a2f270',
+    authToken: authToken,
   });
 
   useEffect(() => {
@@ -55,13 +59,13 @@ export function ChatTabWithAiSdk() {
   const loadMessages = async (threadId: string) => {
     try {
       const msgs = await threadApi.getMessages(threadId);
-      // 将消息转换为 AI SDK 格式
+      // 将消息转换为 AI SDK 格式并设置到 chat 状态
       const aiMessages = msgs.map(msg => ({
         id: msg.id,
         role: msg.role as 'user' | 'assistant',
         content: msg.content,
       }));
-      // 注意: useAiChat 已经管理消息，这里只是初始化
+      chat.setMessages(aiMessages);
     } catch (err) {
       console.error('Failed to load messages:', err);
     }
