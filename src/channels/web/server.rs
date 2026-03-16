@@ -345,12 +345,19 @@ pub async fn start_server(
             format!("http://localhost:{}", addr.port())
                 .parse()
                 .expect("valid origin"),
+            "http://localhost:5173"
+                .parse()
+                .expect("valid origin"),
+            "http://127.0.0.1:5173"
+                .parse()
+                .expect("valid origin"),
         ])
         .allow_methods([
             axum::http::Method::GET,
             axum::http::Method::POST,
             axum::http::Method::PUT,
             axum::http::Method::DELETE,
+            axum::http::Method::OPTIONS,
         ])
         .allow_headers(AllowHeaders::list([
             header::CONTENT_TYPE,

@@ -111,7 +111,7 @@ impl ApiClient {
         Self {
             base_url,
             client: reqwest::Client::new(),
-            auth_token: "019584313e67aa648d05c243d81b104c70ad1506d9b4cb74507a62f2bb230479".to_string(),
+            auth_token: "8a7f756f4179fb10a79e58a512968ad8bfb545f875524ab2ed8ce0333a2030a4".to_string(),
         }
     }
     
@@ -121,6 +121,16 @@ impl ApiClient {
             client: reqwest::Client::new(),
             auth_token,
         }
+    }
+
+    /// 获取基础 URL
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    /// 获取认证令牌
+    pub fn auth_token(&self) -> &str {
+        &self.auth_token
     }
 
     fn auth_header(&self) -> String {

@@ -10,9 +10,13 @@ pub mod extension_manager;
 pub mod routine_manager;
 pub mod skill_manager;
 pub mod api_client;
+pub mod sse_client;
+pub mod environment_checker;
 
 pub use error::{Error, Result};
 pub use commands::CommandState;
+pub use sse_client::{SseClient, SseEvent};
+pub use environment_checker::{EnvironmentChecker, EnvironmentConfig, Environment};
 
 #[derive(Debug, Clone)]
 pub struct DesktopClientConfig {

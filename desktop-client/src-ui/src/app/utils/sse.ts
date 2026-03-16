@@ -1,99 +1,224 @@
-// Server-Sent Events (SSE) client for real-time updates
+/**
+ * SSE (Server-Sent Events) 客户端
+ * 用于连接到后端的 SSE 事件流，接收实时消息和事件
+ */
 
-export interface SSEOptions {
-  url: string;
-  onMessage: (data: any) => void;
-  onError?: (error: Error) => void;
-  onOpen?: () => void;
-  onClose?: () => void;
+export interface SseMessage {
+  thread_id: string;
+  message_id: string;
+  content: string;
+  role: string;
 }
 
-export class SSEClient {
-  private eventSource: EventSource | null = null;
-  private options: SSEOptions;
-  private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
-  private reconnectDelay = 1000;
+export interface SseThreadState {
+  thread_id: string;
+  state: string;
+}
 
-  constructor(options: SSEOptions) {
-    this.options = options;
+export interface SseAuthCompleted {
+  extension_name: string;
+  success: boolean;
+}
+
+export interface SseAuthRequired {
+  extension_name: string;
+  instructions?: string;
+}
+
+export type SseEvent = 
+  | { type: 'message'; data: SseMessage }
+  | { type: 'message_update'; data: { message_id: string; content: string } }
+  | { type: 'thread_state'; data: SseThreadState }
+  | { type: 'auth_completed'; data: SseAuthCompleted }
+  | { type: 'auth_required'; data: SseAuthRequired }
+  | { type: 'other'; data: string };
+
+export type EventHandler = (event: SseEvent) => void;
+
+/**
+ * SSE 客户端
+ */
+export class SseClient {
+  private baseUrl: string;
+  private authToken: string;
+  private eventSource: EventSource | null = null;
+  private eventHandlers: Set<EventHandler> = new Set();
+  private isConnected = false;
+
+  constructor(baseUrl: string, authToken: string) {
+    this.baseUrl = baseUrl;
+    this.authToken = authToken;
   }
 
-  connect() {
-    try {
-      this.eventSource = new EventSource(this.options.url);
+  /**
+   * 注册事件处理器
+   */
+  public onEvent(handler: EventHandler): void {
+    this.eventHandlers.add(handler);
+  }
 
-      this.eventSource.onopen = () => {
-        this.reconnectAttempts = 0;
-        this.options.onOpen?.();
-      };
+  /**
+   * 移除事件处理器
+   */
+  public offEvent(handler: EventHandler): void {
+    this.eventHandlers.delete(handler);
+  }
 
-      this.eventSource.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          this.options.onMessage(data);
-        } catch (err) {
-          console.error('Failed to parse SSE message:', err);
-        }
-      };
+  /**
+   * 连接到 SSE 事件流
+   */
+  public connect(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      try {
+        const url = `${this.baseUrl}/api/chat/events?token=${encodeURIComponent(this.authToken)}`;
+        
+        // 使用 EventSource API
+        this.eventSource = new EventSource(url);
+        
+        this.eventSource.onopen = () => {
+          console.log('SSE connected');
+          this.isConnected = true;
+          resolve();
+        };
+        
+        this.eventSource.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            const sseEvent = this.parseEventData(data);
+            this.eventHandlers.forEach(handler => handler(sseEvent));
+          } catch (error) {
+            console.error('Failed to parse SSE event:', error);
+          }
+        };
+        
+        this.eventSource.onerror = (error) => {
+          console.error('SSE error:', error);
+          this.isConnected = false;
+          if (this.eventSource?.readyState === EventSource.CLOSED) {
+            reject(new Error('SSE connection closed'));
+          }
+        };
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
 
-      this.eventSource.onerror = (error) => {
-        console.error('SSE error:', error);
-        this.handleError(error as Error);
-      };
-    } catch (err) {
-      this.handleError(err as Error);
+  /**
+   * 解析 SSE 事件数据
+   */
+  private parseEventData(data: any): SseEvent {
+    if (data.message) {
+      return { type: 'message', data: data.message };
+    } else if (data.message_update) {
+      return { type: 'message_update', data: data.message_update };
+    } else if (data.thread_state) {
+      return { type: 'thread_state', data: data.thread_state };
+    } else if (data.auth_completed) {
+      return { type: 'auth_completed', data: data.auth_completed };
+    } else if (data.auth_required) {
+      return { type: 'auth_required', data: data.auth_required };
+    } else {
+      return { type: 'other', data: JSON.stringify(data) };
     }
   }
 
-  disconnect() {
+  /**
+   * 检查是否已连接
+   */
+  public getIsConnected(): boolean {
+    return this.isConnected;
+  }
+
+  /**
+   * 断开连接
+   */
+  public disconnect(): void {
     if (this.eventSource) {
       this.eventSource.close();
       this.eventSource = null;
     }
+    this.isConnected = false;
+  }
+}
+
+/**
+ * 创建 SSE 客户端
+ */
+export function createSseClient(baseUrl: string, authToken: string): SseClient {
+  return new SseClient(baseUrl, authToken);
+}
+
+/**
+ * 日志条目接口
+ */
+export interface LogStreamEntry {
+  timestamp: string;
+  level: string;
+  module: string;
+  message: string;
+  context?: Record<string, any>;
+}
+
+/**
+ * 日志流客户端 - 用于接收实时日志事件
+ */
+export class LogStreamClient {
+  private baseUrl: string;
+  private eventSource: EventSource | null = null;
+  private isConnected = false;
+  private onLogEntry: (entry: LogStreamEntry) => void;
+
+  constructor(baseUrl: string, onLogEntry: (entry: LogStreamEntry) => void) {
+    this.baseUrl = baseUrl;
+    this.onLogEntry = onLogEntry;
   }
 
-  private handleError(error: Error) {
-    this.options.onError?.(error);
+  /**
+   * 连接到日志流
+   */
+  public connect(): void {
+    try {
+      const url = `${this.baseUrl}/api/logs/events`;
+      this.eventSource = new EventSource(url);
 
-    // Attempt to reconnect
-    if (this.reconnectAttempts < this.maxReconnectAttempts) {
-      this.reconnectAttempts++;
-      const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
-      console.log(`Reconnecting in ${delay}ms...`);
-      setTimeout(() => this.connect(), delay);
-    } else {
-      this.options.onClose?.();
+      this.eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          this.onLogEntry(data);
+        } catch (error) {
+          console.error('Failed to parse log event:', error);
+        }
+      };
+
+      this.eventSource.onerror = (error) => {
+        console.error('Log stream error:', error);
+        this.isConnected = false;
+        this.eventSource?.close();
+      };
+
+      this.isConnected = true;
+    } catch (error) {
+      console.error('Failed to connect to log stream:', error);
+      this.isConnected = false;
     }
   }
 
-  isConnected(): boolean {
-    return this.eventSource !== null && this.eventSource.readyState === EventSource.OPEN;
+  /**
+   * 断开连接
+   */
+  public disconnect(): void {
+    if (this.eventSource) {
+      this.eventSource.close();
+      this.eventSource = null;
+    }
+    this.isConnected = false;
   }
-}
 
-// Log streaming client
-export class LogStreamClient extends SSEClient {
-  constructor(baseUrl: string, onLogEntry: (entry: any) => void) {
-    super({
-      url: `${baseUrl}/api/logs/events`,
-      onMessage: onLogEntry,
-      onOpen: () => console.log('Log stream connected'),
-      onClose: () => console.log('Log stream closed'),
-      onError: (err) => console.error('Log stream error:', err),
-    });
-  }
-}
-
-// Chat events streaming client
-export class ChatStreamClient extends SSEClient {
-  constructor(baseUrl: string, threadId: string, onEvent: (event: any) => void) {
-    super({
-      url: `${baseUrl}/api/chat/threads/${threadId}/events`,
-      onMessage: onEvent,
-      onOpen: () => console.log('Chat stream connected'),
-      onClose: () => console.log('Chat stream closed'),
-      onError: (err) => console.error('Chat stream error:', err),
-    });
+  /**
+   * 检查是否已连接
+   */
+  public getIsConnected(): boolean {
+    return this.isConnected;
   }
 }

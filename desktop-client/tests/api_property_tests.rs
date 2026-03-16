@@ -197,3 +197,103 @@ async fn prop_special_characters_in_message() {
         assert!(result.is_ok(), "should handle special characters: {}", msg);
     }
 }
+
+// ==================== 属性 1: 记忆接口数据序列化 Round-trip ====================
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 50,
+        max_shrink_iters: 1000,
+        ..ProptestConfig::default()
+    })]
+
+    #[test]
+    fn prop_memory_node_round_trip(node in arb_memory_node()) {
+        // Feature: api-integration-tests, Property 1: 数据序列化 Round-trip
+        // 验证需求: 2.5, 9.1, 9.2
+        // 验证 MemoryNode 的序列化和反序列化
+        
+        let json = serde_json::to_string(&node).expect("serialization should succeed");
+        let deserialized: desktop_client::api_client::MemoryNode = 
+            serde_json::from_str(&json).expect("deserialization should succeed");
+        
+        assert_eq!(node.id, deserialized.id);
+        assert_eq!(node.name, deserialized.name);
+    }
+}
+
+// ==================== 属性 1: 任务接口数据序列化 Round-trip ====================
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 50,
+        max_shrink_iters: 1000,
+        ..ProptestConfig::default()
+    })]
+
+    #[test]
+    fn prop_job_detail_round_trip(job in arb_job_info()) {
+        // Feature: api-integration-tests, Property 1: 数据序列化 Round-trip
+        // 验证需求: 3.5, 9.1, 9.2
+        // 验证 JobDetail 的序列化和反序列化
+        
+        let json = serde_json::to_string(&job).expect("serialization should succeed");
+        let deserialized: desktop_client::api_client::JobInfo = 
+            serde_json::from_str(&json).expect("deserialization should succeed");
+        
+        assert_eq!(job.id, deserialized.id);
+        assert_eq!(job.status, deserialized.status);
+    }
+}
+
+// ==================== 属性 1: 日志接口数据序列化 Round-trip ====================
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 50,
+        max_shrink_iters: 1000,
+        ..ProptestConfig::default()
+    })]
+
+    #[test]
+    fn prop_log_list_round_trip(logs in prop::collection::vec(arb_log_entry(), 1..10)) {
+        // Feature: api-integration-tests, Property 1: 数据序列化 Round-trip
+        // 验证需求: 4.6, 9.1, 9.2
+        // 验证日志列表的序列化和反序列化
+        
+        let json = serde_json::to_string(&logs).expect("serialization should succeed");
+        let deserialized: Vec<desktop_client::api_client::LogEntry> = 
+            serde_json::from_str(&json).expect("deserialization should succeed");
+        
+        assert_eq!(logs.len(), deserialized.len());
+        for (original, deserialized) in logs.iter().zip(deserialized.iter()) {
+            assert_eq!(original.timestamp, deserialized.timestamp);
+            assert_eq!(original.level, deserialized.level);
+        }
+    }
+}
+
+// ==================== 属性 1: 批准接口数据序列化 Round-trip ====================
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 50,
+        max_shrink_iters: 1000,
+        ..ProptestConfig::default()
+    })]
+
+    #[test]
+    fn prop_approval_request_round_trip(req in arb_approval_request()) {
+        // Feature: api-integration-tests, Property 1: 数据序列化 Round-trip
+        // 验证需求: 5.3, 9.1, 9.2
+        // 验证 ApprovalRequest 的序列化和反序列化
+        
+        let json = serde_json::to_string(&req).expect("serialization should succeed");
+        let deserialized: desktop_client::api_client::ApprovalRequest = 
+            serde_json::from_str(&json).expect("deserialization should succeed");
+        
+        assert_eq!(req.request_id, deserialized.request_id);
+        assert_eq!(req.action, deserialized.action);
+        assert_eq!(req.thread_id, deserialized.thread_id);
+    }
+}
