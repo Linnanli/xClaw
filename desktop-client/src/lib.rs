@@ -12,11 +12,21 @@ pub mod skill_manager;
 pub mod api_client;
 pub mod sse_client;
 pub mod environment_checker;
+pub mod platform_utils;
+pub mod auth_token_manager;
+pub mod database_config;
+pub mod config_manager;
+pub mod network_config;
 
 pub use error::{Error, Result};
 pub use commands::CommandState;
 pub use sse_client::{SseClient, SseEvent};
 pub use environment_checker::{EnvironmentChecker, EnvironmentConfig, Environment};
+pub use platform_utils::{get_app_data_dir, get_config_dir, get_cache_dir, get_os, get_os_name};
+pub use auth_token_manager::{AuthTokenManager, TokenError};
+pub use database_config::{DatabaseBackend, DatabaseError};
+pub use config_manager::{AppConfig, ConfigError};
+pub use network_config::{NetworkConfig, NetworkError, RetryPolicy};
 
 #[derive(Debug, Clone)]
 pub struct DesktopClientConfig {

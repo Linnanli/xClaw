@@ -823,3 +823,165 @@ pub async fn upload_file(
 ) -> Result<String> {
     state.api_client.upload_file(&thread_id, &file_path).await
 }
+
+// ============================================
+// 环境和配置管理命令
+// ============================================
+
+use serde::{Deserialize, Serialize};
+
+/// 应用初始化信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppInitInfo {
+    /// 认证令牌（前8个字符）
+    pub auth_token: String,
+    /// API 基础 URL
+    pub api_base_url: String,
+    /// 数据库类型
+    pub database_type: String,
+    /// 操作系统
+    pub os: String,
+    /// 日志级别
+    pub log_level: String,
+    /// 环境类型
+    pub environment: String,
+}
+
+/// 获取应用初始化信息
+#[tauri::command]
+pub async fn get_app_init_info() -> Result<AppInitInfo> {
+    use crate::{AuthTokenManager, AppConfig, platform_utils};
+    
+    let token_manager = AuthTokenManager::new();
+    let token = token_manager.load_or_generate()
+        .map_err(|e| crate::Error::ConfigError(e.to_string()))?;
+    
+    let config = AppConfig::load_or_default();
+    
+    Ok(AppInitInfo {
+        auth_token: token[..8].to_string(),
+        api_base_url: config.api_base_url,
+        database_type: config.database_type,
+        os: platform_utils::get_os_name().to_string(),
+        log_level: config.log_level,
+        environment: "development".to_string(), // TODO: 从环境变量读取
+    })
+}
+
+/// 获取认证令牌
+#[tauri::command]
+pub async fn get_auth_token() -> Result<String> {
+    use crate::AuthTokenManager;
+    
+    let token_manager = AuthTokenManager::new();
+    token_manager.load_or_generate()
+        .map_err(|e| crate::Error::ConfigError(e.to_string()))
+}
+
+/// 刷新认证令牌
+#[tauri::command]
+pub async fn refresh_auth_token() -> Result<String> {
+    use crate::AuthTokenManager;
+    
+    let token_manager = AuthTokenManager::new();
+    let new_token = crate::auth_token_manager::generate_random_token();
+    token_manager.save(&new_token)
+        .map_err(|e| crate::Error::ConfigError(e.to_string()))?;
+    
+    Ok(new_token)
+}
+
+/// 获取应用配置
+#[tauri::command]
+pub async fn get_app_config() -> Result<AppConfig> {
+    use crate::AppConfig;
+    
+    Ok(AppConfig::load_or_default())
+}
+
+/// 获取网络配置
+#[tauri::command]
+pub async fn get_network_config() -> Result<NetworkConfigInfo> {
+    use crate::NetworkConfig;
+    
+    let config = NetworkConfig::from_env();
+    
+    Ok(NetworkConfigInfo {
+        connect_timeout_secs: config.connect_timeout.as_secs(),
+        request_timeout_secs: config.request_timeout.as_secs(),
+        max_retries: config.max_retries,
+        retry_delay_ms: config.retry_delay_ms,
+        max_connections: config.max_connections,
+        verify_ssl: config.verify_ssl,
+    })
+}
+
+/// 网络配置信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkConfigInfo {
+    pub connect_timeout_secs: u64,
+    pub request_timeout_secs: u64,
+    pub max_retries: u32,
+    pub retry_delay_ms: u64,
+    pub max_connections: usize,
+    pub verify_ssl: bool,
+}
+
+/// 检查环境一致性
+#[tauri::command]
+pub async fn check_environment_consistency() -> Result<EnvironmentCheckResult> {
+    use crate::EnvironmentChecker;
+    
+    let mut checker = EnvironmentChecker::new();
+    let all_passed = checker.run_all_checks();
+    
+    let checks: Vec<_> = checker.get_checks()
+        .iter()
+        .map(|check| EnvironmentCheckItem {
+            name: check.name.clone(),
+            passed: check.passed,
+            message: check.message.clone(),
+        })
+        .collect();
+    
+    Ok(EnvironmentCheckResult {
+        all_passed,
+        checks,
+    })
+}
+
+/// 环境检查项
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnvironmentCheckItem {
+    pub name: String,
+    pub passed: bool,
+    pub message: String,
+}
+
+/// 环境检查结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnvironmentCheckResult {
+    pub all_passed: bool,
+    pub checks: Vec<EnvironmentCheckItem>,
+}
+
+// 辅助函数：生成随机令牌（用于刷新）
+fn generate_random_token() -> String {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    
+    let mut hasher = RandomState::new().build_hasher();
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    
+    hasher.write_u128(timestamp);
+    let hash1 = hasher.finish();
+    
+    let mut hasher = RandomState::new().build_hasher();
+    hasher.write_u64(hash1);
+    let hash2 = hasher.finish();
+    
+    format!("{:016x}{:016x}{:016x}{:016x}", hash1, hash2, hash1 ^ hash2, hash2 ^ hash1)
+}

@@ -520,3 +520,365 @@ crates/your_crate/
 - [ ] 已使用 cargo build 完整编译验证
 - [ ] 编译通过且无错误（警告可接受）
 - [ ] 对于新增功能，已按照"Rust 代码开发规则"执行 TDD 和单元测试
+
+
+## 浏览器端到端（E2E）测试规则
+
+**强制要求**：前端代码编写完成后，必须按照本规则编写 E2E 测试，确保浏览器环境中的功能正常运行。
+
+### 适用范围
+
+- SSE 连接和消息接收
+- UI 交互和状态管理
+- 本地存储和 Cookie 管理
+- 网络请求和错误处理
+- 跨浏览器兼容性
+
+### 推荐的测试框架
+
+#### 1. Cypress（推荐用于 UI 测试）
+
+**优点**：
+- 最简单的 API
+- 优秀的调试工具
+- 自动等待
+- 实时重新加载
+
+**使用场景**：
+- UI 交互测试
+- 表单验证
+- 页面导航
+- 状态管理
+
+**示例**：
+```javascript
+describe('Chat UI Tests', () => {
+  beforeEach(() => {
+    cy.visit('http://localhost:5173');
+  });
+
+  it('should display chat interface', () => {
+    cy.get('.chat-container').should('be.visible');
+    cy.get('.message-input').should('be.visible');
+  });
+
+  it('should send message', () => {
+    cy.get('.message-input').type('Hello');
+    cy.get('.send-button').click();
+    cy.get('.message-item').should('contain', 'Hello');
+  });
+});
+```
+
+#### 2. Playwright（推荐用于 SSE 测试）
+
+**优点**：
+- 完整的浏览器自动化
+- 支持多个浏览器
+- 可以测试 SSE 连接
+- 支持截图和录制
+
+**使用场景**：
+- SSE 连接测试
+- 网络中断模拟
+- 跨浏览器测试
+- 性能测试
+
+**示例**：
+```rust
+#[tokio::test]
+async fn test_sse_connection() {
+    let playwright = Playwright::new();
+    let browser = playwright.chromium().launch().await.unwrap();
+    let page = browser.new_page().await.unwrap();
+    
+    page.goto("http://localhost:5173").await.unwrap();
+    
+    // 等待 SSE 连接
+    page.wait_for_selector(".sse-connected").await.unwrap();
+    
+    // 验证连接状态
+    let status = page.text_content(".sse-status").await.unwrap();
+    assert_eq!(status, Some("Connected".to_string()));
+}
+```
+
+### 测试编写流程
+
+#### 第一步：准备测试环境
+
+```bash
+# 1. 启动后端服务
+cargo run -- run --cli-only --no-onboard &
+
+# 2. 启动前端开发服务器
+cd desktop-client/src-ui
+npm run dev &
+
+# 3. 运行测试
+npm run test:e2e
+```
+
+#### 第二步：编写测试用例
+
+```javascript
+// cypress/e2e/feature.cy.js
+
+describe('Feature Tests', () => {
+  beforeEach(() => {
+    cy.visit('http://localhost:5173');
+    cy.get('.app-container').should('be.visible');
+  });
+
+  it('should work correctly', () => {
+    // 测试逻辑
+  });
+});
+```
+
+#### 第三步：验证测试通过
+
+```bash
+# 运行所有 E2E 测试
+npm run test:e2e
+
+# 运行特定测试
+npm run test:e2e -- --spec "cypress/e2e/feature.cy.js"
+
+# 调试模式
+npm run test:e2e -- --headed
+```
+
+### 测试检查清单
+
+#### 功能测试
+
+- [ ] 页面加载正确
+- [ ] UI 元素显示正确
+- [ ] 用户交互有效
+- [ ] 数据显示正确
+- [ ] 错误处理正确
+
+#### SSE 测试
+
+- [ ] SSE 连接建立
+- [ ] 消息接收正确
+- [ ] 消息显示正确
+- [ ] 重连机制工作
+- [ ] 错误处理正确
+
+#### 性能测试
+
+- [ ] 页面加载时间 < 3s
+- [ ] 消息显示延迟 < 100ms
+- [ ] 内存使用稳定
+- [ ] CPU 使用合理
+
+#### 兼容性测试
+
+- [ ] Chrome 浏览器
+- [ ] Firefox 浏览器
+- [ ] Safari 浏览器
+- [ ] Edge 浏览器
+
+### 常见测试模式
+
+#### 1. 等待元素出现
+
+```javascript
+// 等待元素出现（最多 5 秒）
+cy.get('.message-item', { timeout: 5000 }).should('be.visible');
+
+// 等待元素包含特定文本
+cy.get('.status').should('contain', 'Connected');
+```
+
+#### 2. 模拟用户交互
+
+```javascript
+// 输入文本
+cy.get('.input').type('Hello World');
+
+// 点击按钮
+cy.get('.button').click();
+
+// 选择下拉菜单
+cy.get('.select').select('Option 1');
+```
+
+#### 3. 验证网络请求
+
+```javascript
+// 拦截 API 请求
+cy.intercept('GET', '**/api/messages', {
+  statusCode: 200,
+  body: [{ id: 1, content: 'Test' }]
+});
+
+// 验证请求被发送
+cy.intercept('POST', '**/api/messages').as('sendMessage');
+cy.get('.send-button').click();
+cy.wait('@sendMessage');
+```
+
+#### 4. 模拟网络错误
+
+```javascript
+// 模拟网络中断
+cy.intercept('GET', '**/api/events', { forceNetworkError: true });
+
+// 模拟服务器错误
+cy.intercept('GET', '**/api/events', {
+  statusCode: 500,
+  body: 'Internal Server Error'
+});
+```
+
+#### 5. 测试 SSE 连接
+
+```javascript
+// 等待 SSE 连接建立
+cy.get('.sse-status').should('contain', 'Connected');
+
+// 等待消息接收
+cy.get('.message-item').should('have.length.greaterThan', 0);
+
+// 模拟网络中断
+cy.intercept('GET', '**/api/events', { forceNetworkError: true });
+
+// 等待重连
+cy.get('.sse-status').should('contain', 'Reconnecting');
+```
+
+### 最佳实践
+
+#### 1. 使用 Page Objects 模式
+
+```javascript
+// cypress/support/pages/ChatPage.js
+export class ChatPage {
+  visit() {
+    cy.visit('http://localhost:5173');
+  }
+
+  sendMessage(text) {
+    cy.get('.message-input').type(text);
+    cy.get('.send-button').click();
+  }
+
+  getMessages() {
+    return cy.get('.message-item');
+  }
+}
+
+// cypress/e2e/chat.cy.js
+import { ChatPage } from '../support/pages/ChatPage';
+
+describe('Chat Tests', () => {
+  const page = new ChatPage();
+
+  it('should send message', () => {
+    page.visit();
+    page.sendMessage('Hello');
+    page.getMessages().should('contain', 'Hello');
+  });
+});
+```
+
+#### 2. 使用测试数据工厂
+
+```javascript
+// cypress/support/factories.js
+export function createMessage(overrides = {}) {
+  return {
+    id: Math.random(),
+    content: 'Test message',
+    timestamp: new Date(),
+    ...overrides
+  };
+}
+
+// cypress/e2e/messages.cy.js
+it('should display messages', () => {
+  const messages = [
+    createMessage({ content: 'First' }),
+    createMessage({ content: 'Second' })
+  ];
+  
+  cy.intercept('GET', '**/api/messages', messages);
+  cy.visit('http://localhost:5173');
+  cy.get('.message-item').should('have.length', 2);
+});
+```
+
+#### 3. 使用自定义命令
+
+```javascript
+// cypress/support/commands.js
+Cypress.Commands.add('login', (username, password) => {
+  cy.get('.username-input').type(username);
+  cy.get('.password-input').type(password);
+  cy.get('.login-button').click();
+  cy.get('.app-container').should('be.visible');
+});
+
+// cypress/e2e/auth.cy.js
+it('should login successfully', () => {
+  cy.login('user@example.com', 'password');
+  cy.get('.user-menu').should('be.visible');
+});
+```
+
+### 文件结构
+
+```
+desktop-client/
+├── cypress/
+│   ├── e2e/
+│   │   ├── chat.cy.js           # 聊天功能测试
+│   │   ├── sse_connection.cy.js # SSE 连接测试
+│   │   ├── auth.cy.js           # 认证测试
+│   │   └── performance.cy.js    # 性能测试
+│   ├── support/
+│   │   ├── commands.js          # 自定义命令
+│   │   ├── pages/               # Page Objects
+│   │   └── factories.js         # 测试数据工厂
+│   └── cypress.config.js        # Cypress 配置
+├── tests/
+│   └── e2e_sse_browser_tests.rs # Rust E2E 测试
+└── scripts/
+    └── run-e2e-tests.sh         # E2E 测试启动脚本
+```
+
+### 参考资源
+
+- `E2E_TESTING_BROWSER_ENVIRONMENT.md` - 详细的 E2E 测试方案
+- `desktop-client/cypress/e2e/sse_connection.cy.js` - Cypress 测试示例
+- `desktop-client/tests/e2e_sse_browser_tests.rs` - Rust E2E 测试示例
+- `scripts/run-e2e-tests.sh` - E2E 测试启动脚本
+
+### 执行流程
+
+```
+前端功能开发完成
+  ↓
+编写 E2E 测试用例
+  ↓
+启动测试环境
+  ↓
+运行 E2E 测试
+  ↓
+验证测试通过
+  ↓
+提交代码
+```
+
+### 检查清单
+
+- [ ] 已编写 E2E 测试用例
+- [ ] 已启动测试环境（后端 + 前端）
+- [ ] 已运行 E2E 测试
+- [ ] 所有测试通过
+- [ ] 已验证跨浏览器兼容性
+- [ ] 已检查性能指标
+- [ ] 已更新测试文档
