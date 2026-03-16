@@ -5,9 +5,58 @@ use desktop_client::commands::*;
 use desktop_client::{
     AuthTokenManager, AppConfig, NetworkConfig, EnvironmentChecker, platform_utils,
 };
+use config::{Config, Environment, File};
+use std::env;
 
 #[tokio::main]
 async fn main() {
+    // 第零步：使用 config-rs 加载环境变量文件
+    println!("📦 Loading configuration...");
+    
+    // 检测环境
+    let environment = env::var("ENVIRONMENT")
+        .unwrap_or_else(|_| {
+            // 根据启动命令检测环境
+            let args: Vec<String> = env::args().collect();
+            if args.iter().any(|arg| arg == "test") {
+                "testing".to_string()
+            } else if args.iter().any(|arg| arg == "--release") {
+                "production".to_string()
+            } else {
+                "development".to_string()
+            }
+        });
+    
+    println!("🔧 Environment: {}", environment);
+    
+    // 使用 config-rs 加载配置
+    let config_builder = Config::builder()
+        // 加载默认配置
+        .add_source(File::with_name("desktop-client/.env").required(false))
+        // 加载环境特定的配置
+        .add_source(File::with_name(&format!("desktop-client/.env.{}", environment)).required(false))
+        // 加载系统环境变量
+        .add_source(Environment::default().try_parsing(true).separator("_"));
+    
+    match config_builder.build() {
+        Ok(config) => {
+            // 将配置加载到环境变量
+            if let Ok(settings) = config.try_deserialize::<std::collections::HashMap<String, String>>() {
+                for (key, value) in settings {
+                    env::set_var(&key, &value);
+                }
+            }
+            println!("✅ Configuration loaded");
+        }
+        Err(e) => {
+            eprintln!("⚠️  Warning: Failed to load configuration: {}", e);
+        }
+    }
+    
+    // 设置 ENVIRONMENT 环境变量
+    env::set_var("ENVIRONMENT", &environment);
+    println!();
+    
     // 第一步：检查环境一致性
     println!("🔍 Checking environment consistency...");
     let mut checker = EnvironmentChecker::new();
@@ -21,7 +70,7 @@ async fn main() {
     // 第二步：初始化认证令牌
     println!("🔐 Initializing authentication token...");
     let token_manager = AuthTokenManager::new();
-    let auth_token = match token_manager.load_or_generate() {
+    let _auth_token = match token_manager.load_or_generate() {
         Ok(token) => {
             println!("✅ Auth token initialized: {}", &token[..8]);
             token

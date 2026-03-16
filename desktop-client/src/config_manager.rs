@@ -3,13 +3,14 @@
 //! 支持从 TOML 文件和环境变量加载配置
 
 use crate::platform_utils;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 
 /// 应用配置
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     /// API 基础 URL
     pub api_base_url: String,
@@ -47,8 +48,11 @@ impl AppConfig {
                 .unwrap_or(3),
             cors_origins: env::var("CORS_ORIGINS")
                 .ok()
-                .map(|s| s.split(',').map(|o| o.trim().to_string()).collect())
-                .unwrap_or_else(|_| vec![
+                .and_then(|s| {
+                    let origins: Vec<String> = s.split(',').map(|o| o.trim().to_string()).collect();
+                    if origins.is_empty() { None } else { Some(origins) }
+                })
+                .unwrap_or_else(|| vec![
                     "http://localhost:5173".to_string(),
                     "http://127.0.0.1:5173".to_string(),
                 ]),

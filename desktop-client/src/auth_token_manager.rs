@@ -99,6 +99,13 @@ impl AuthTokenManager {
     pub fn get_token_file_path(&self) -> &PathBuf {
         &self.token_file
     }
+    
+    /// 生成新的随机令牌（不保存）
+    /// 
+    /// 用于刷新令牌或测试目的
+    pub fn generate_new_token() -> String {
+        generate_random_token()
+    }
 }
 
 impl Default for AuthTokenManager {
@@ -135,25 +142,16 @@ impl std::error::Error for TokenError {}
 
 /// 生成随机令牌
 /// 
-/// 生成 64 字符的十六进制字符串
+/// 使用 UUID v4 生成 64 字符的十六进制字符串
+/// 这比自定义哈希更安全、更标准
 fn generate_random_token() -> String {
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
+    use uuid::Uuid;
     
-    let mut hasher = RandomState::new().build_hasher();
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    
-    hasher.write_u128(timestamp);
-    let hash1 = hasher.finish();
-    
-    let mut hasher = RandomState::new().build_hasher();
-    hasher.write_u64(hash1);
-    let hash2 = hasher.finish();
-    
-    format!("{:016x}{:016x}{:016x}{:016x}", hash1, hash2, hash1 ^ hash2, hash2 ^ hash1)
+    // 生成 UUID v4 并移除连字符，得到 32 字符的十六进制字符串
+    // 然后重复两次得到 64 字符
+    let uuid1 = Uuid::new_v4().to_string().replace("-", "");
+    let uuid2 = Uuid::new_v4().to_string().replace("-", "");
+    format!("{}{}", uuid1, uuid2)
 }
 
 /// 验证令牌格式

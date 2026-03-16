@@ -25,6 +25,12 @@ pub enum Error {
     #[error("Serialization error: {0}")]
     SerializationError(String),
 
+    #[error("Token error: {0}")]
+    TokenError(String),
+
+    #[error("Config error: {0}")]
+    ConfigError(String),
+
     #[error("Invalid password")]
     InvalidPassword,
 

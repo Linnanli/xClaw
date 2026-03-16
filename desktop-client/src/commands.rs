@@ -828,8 +828,6 @@ pub async fn upload_file(
 // 环境和配置管理命令
 // ============================================
 
-use serde::{Deserialize, Serialize};
-
 /// 应用初始化信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppInitInfo {
@@ -884,19 +882,17 @@ pub async fn refresh_auth_token() -> Result<String> {
     use crate::AuthTokenManager;
     
     let token_manager = AuthTokenManager::new();
-    let new_token = crate::auth_token_manager::generate_random_token();
+    let new_token = AuthTokenManager::generate_new_token();
     token_manager.save(&new_token)
-        .map_err(|e| crate::Error::ConfigError(e.to_string()))?;
+        .map_err(|e| crate::Error::TokenError(e.to_string()))?;
     
     Ok(new_token)
 }
 
 /// 获取应用配置
 #[tauri::command]
-pub async fn get_app_config() -> Result<AppConfig> {
-    use crate::AppConfig;
-    
-    Ok(AppConfig::load_or_default())
+pub async fn get_app_config() -> Result<crate::AppConfig> {
+    Ok(crate::AppConfig::load_or_default())
 }
 
 /// 获取网络配置

@@ -2,7 +2,6 @@
 //! 
 //! 用于检查开发、测试、生产环境的一致性
 
-use std::collections::HashMap;
 use std::env;
 
 #[derive(Debug, Clone, PartialEq)]

@@ -521,6 +521,148 @@ crates/your_crate/
 - [ ] 编译通过且无错误（警告可接受）
 - [ ] 对于新增功能，已按照"Rust 代码开发规则"执行 TDD 和单元测试
 
+## 复用已有库和能力规则
+
+**核心原则**：优先复用已有的成熟库和能力，避免重复造轮子。自己写的代码往往不如社区库成熟，浪费时间且容易引入 bug。
+
+### 优先级
+
+1. **优先级 1：使用成熟的社区库**
+   - 检查 crates.io 是否有现成的库
+   - 优先选择下载量大、维护活跃的库
+   - 示例：使用 `config-rs` 而不是自己写配置加载器
+
+2. **优先级 2：复用项目内已有的能力**
+   - 检查项目中是否已有类似的实现
+   - 复用现有的模块和函数
+   - 示例：复用 `platform_utils` 而不是重新实现路径处理
+
+3. **优先级 3：复用共享 Crate**
+   - 检查 `crates/` 目录下是否有可复用的模块
+   - 示例：`crates/ironclaw_auth/`, `crates/ironclaw_safety/`
+
+4. **最后选择：自己实现**
+   - 仅当以上都不适用时才自己实现
+   - 确保实现质量和测试覆盖
+
+### 常见场景
+
+#### 场景 1：环境变量加载
+
+❌ **错误做法**：自己写 env_loader
+```rust
+// 自己写的 env_loader.rs - 不成熟，功能有限
+pub struct EnvLoader { ... }
+```
+
+✅ **正确做法**：使用 `config-rs`
+```rust
+// 使用成熟的 config-rs 库 - 58.9M 下载，功能完整
+use config::{Config, File, Environment};
+
+let config = Config::builder()
+    .add_source(File::with_name(".env"))
+    .add_source(Environment::default())
+    .build()?;
+```
+
+#### 场景 2：配置管理
+
+❌ **错误做法**：自己写 TOML 解析
+```rust
+// 自己写的配置解析 - 容易出错
+pub fn parse_toml(content: &str) -> Result<Config> { ... }
+```
+
+✅ **正确做法**：使用 `serde` + `toml`
+```rust
+// 使用成熟的库 - 类型安全，经过充分测试
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize, Serialize)]
+struct Config { ... }
+
+let config: Config = toml::from_str(&content)?;
+```
+
+#### 场景 3：HTTP 客户端
+
+❌ **错误做法**：自己写 HTTP 请求
+```rust
+// 自己写的 HTTP 客户端 - 功能不完整
+pub async fn http_get(url: &str) -> Result<String> { ... }
+```
+
+✅ **正确做法**：使用 `reqwest`
+```rust
+// 使用成熟的 reqwest 库 - 功能完整，性能优化
+use reqwest::Client;
+
+let client = Client::new();
+let response = client.get(url).send().await?;
+```
+
+### 查找库的方法
+
+1. **crates.io** - https://crates.io
+   - 搜索关键词
+   - 查看下载量和维护状态
+
+2. **lib.rs** - https://lib.rs
+   - 分类浏览
+   - 查看库的评分和文档
+
+3. **Rust 官方文档** - https://docs.rs
+   - 查看 API 文档
+   - 查看使用示例
+
+4. **GitHub** - 查看源代码和 issue
+   - 了解库的活跃度
+   - 查看是否有已知问题
+
+### 评估库的标准
+
+| 标准 | 说明 |
+|------|------|
+| 下载量 | 越多越好，说明使用广泛 |
+| 维护状态 | 最近更新时间，是否活跃 |
+| 文档 | 是否有完整的文档和示例 |
+| 测试覆盖 | 是否有充分的测试 |
+| 依赖 | 依赖越少越好 |
+| License | 是否与项目兼容 |
+
+### 常用库推荐
+
+| 功能 | 推荐库 | 下载量 |
+|------|--------|--------|
+| 配置管理 | `config-rs` | 58.9M |
+| 环境变量 | `dotenv` | 广泛使用 |
+| 日志 | `tracing` / `log` | 广泛使用 |
+| HTTP 客户端 | `reqwest` | 广泛使用 |
+| JSON | `serde_json` | 广泛使用 |
+| TOML | `toml` | 广泛使用 |
+| 错误处理 | `anyhow` / `thiserror` | 广泛使用 |
+| 异步运行时 | `tokio` | 广泛使用 |
+| 测试 | `proptest` / `quickcheck` | 广泛使用 |
+
+### 检查清单
+
+- [ ] 已在 crates.io 搜索相关库
+- [ ] 已评估库的下载量和维护状态
+- [ ] 已查看库的文档和示例
+- [ ] 已检查库的依赖和 License
+- [ ] 已确认库适合项目需求
+- [ ] 已在 Cargo.toml 中添加依赖
+- [ ] 已验证库的功能正常工作
+
+### 注意事项
+
+1. **不要过度依赖** - 避免添加过多不必要的依赖
+2. **定期更新** - 及时更新库到最新版本
+3. **了解库的 API** - 充分理解库的使用方式
+4. **查看 CHANGELOG** - 了解库的更新内容
+5. **贡献回馈** - 如果发现问题，考虑提交 PR
+
 
 ## 浏览器端到端（E2E）测试规则
 
@@ -882,3 +1024,4 @@ desktop-client/
 - [ ] 已验证跨浏览器兼容性
 - [ ] 已检查性能指标
 - [ ] 已更新测试文档
+

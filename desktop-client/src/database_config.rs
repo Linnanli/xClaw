@@ -73,16 +73,23 @@ impl DatabaseBackend {
     }
     
     /// 从连接字符串解析数据库配置
-    pub fn from_url(url: &str) -> Result<Self, DatabaseError> {
-        if url.starts_with("sqlite://") {
-            let path = url.strip_prefix("sqlite://")
-                .ok_or(DatabaseError::InvalidUrl)?
-                .to_string();
-            Ok(DatabaseBackend::SQLite(path))
-        } else if url.starts_with("postgresql://") || url.starts_with("postgres://") {
-            Ok(DatabaseBackend::PostgreSQL(url.to_string()))
-        } else {
-            Err(DatabaseError::InvalidUrl)
+    /// 
+    /// 使用 url crate 进行标准的 URL 解析和验证
+    pub fn from_url(url_str: &str) -> Result<Self, DatabaseError> {
+        use url::Url;
+        
+        let url = Url::parse(url_str)
+            .map_err(|_| DatabaseError::InvalidUrl)?;
+        
+        match url.scheme() {
+            "sqlite" => {
+                let path = url.path().to_string();
+                Ok(DatabaseBackend::SQLite(path))
+            }
+            "postgresql" | "postgres" => {
+                Ok(DatabaseBackend::PostgreSQL(url_str.to_string()))
+            }
+            scheme => Err(DatabaseError::UnsupportedBackend(scheme.to_string()))
         }
     }
     
