@@ -93,6 +93,7 @@ export function ChatTabWithSSE() {
       reconnectAttempts.current = 0;
       reconnectDelay.current = 1000;
       
+      console.log('🔗 Connecting to SSE...');
       const client = createSseClient(
         'http://localhost:3000',
         '8a7f756f4179fb10a79e58a512968ad8bfb545f875524ab2ed8ce0333a2030a4'
@@ -100,16 +101,19 @@ export function ChatTabWithSSE() {
       
       // 注册事件处理器
       client.onEvent((event: SseEvent) => {
+        console.log('📨 SSE Event received:', event.type);
         handleSseEvent(event, threadId);
       });
       
       // 连接到 SSE 流
+      console.log('⏳ Awaiting SSE connection...');
       await client.connect();
+      console.log('✅ SSE connected successfully');
       setSseConnected(true);
       setSseClient(client);
       setSseError(null);
     } catch (err) {
-      console.error('Failed to connect to SSE:', err);
+      console.error('❌ Failed to connect to SSE:', err);
       setSseConnected(false);
       setSseError(err instanceof Error ? err.message : 'SSE connection failed');
       attemptReconnect(threadId);

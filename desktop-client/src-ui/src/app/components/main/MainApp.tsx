@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { MessageSquare, Brain, Briefcase, Calendar, Puzzle, Zap, FileText, Sun, Moon, Lock, User, Settings } from 'lucide-react';
-import { ChatTabWithSSE } from '../tabs/ChatTabWithSSE';
+import { ChatTabWithAiSdk } from '../tabs/ChatTabWithAiSdk';
 import { MemoryTab } from '../tabs/MemoryTab';
 import { JobsTab } from '../tabs/JobsTab';
 import { RoutinesTab } from '../tabs/RoutinesTab';
@@ -67,7 +67,7 @@ export function MainApp() {
   const renderTabContent = () => {
     switch (activeTab) {
       case 'chat':
-        return <ChatTabWithSSE />;
+        return <ChatTabWithAiSdk />;
       case 'memory':
         return <MemoryTab />;
       case 'jobs':

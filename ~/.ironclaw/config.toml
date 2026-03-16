@@ -1,0 +1,10 @@
+# IronClaw 配置文件
+# 自动生成 - 将 Qwen 设置为默认 LLM 提供商
+
+# LLM 配置
+llm_backend = "openai_compatible"
+openai_compatible_base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+selected_model = "qwen-max"
+
+# 其他配置
+onboarding_completed = true

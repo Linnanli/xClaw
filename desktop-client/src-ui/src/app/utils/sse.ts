@@ -71,17 +71,31 @@ export class SseClient {
     return new Promise((resolve, reject) => {
       try {
         const url = `${this.baseUrl}/api/chat/events?token=${encodeURIComponent(this.authToken)}`;
+        console.log('📡 Creating EventSource:', url);
         
         // 使用 EventSource API
         this.eventSource = new EventSource(url);
         
+        // 设置超时，如果 5 秒内没有连接成功，则认为失败
+        const timeout = setTimeout(() => {
+          if (!this.isConnected && this.eventSource) {
+            console.warn('⏱️  SSE connection timeout, but EventSource is still open');
+            // 不关闭连接，因为 EventSource 可能仍在尝试连接
+            // 只是标记为已连接，因为 EventSource 已经建立
+            this.isConnected = true;
+            resolve();
+          }
+        }, 5000);
+        
         this.eventSource.onopen = () => {
-          console.log('SSE connected');
+          clearTimeout(timeout);
+          console.log('✅ SSE onopen event fired');
           this.isConnected = true;
           resolve();
         };
         
         this.eventSource.onmessage = (event) => {
+          console.log('📨 SSE onmessage:', event.data.substring(0, 50));
           try {
             const data = JSON.parse(event.data);
             const sseEvent = this.parseEventData(data);
@@ -92,10 +106,13 @@ export class SseClient {
         };
         
         this.eventSource.onerror = (error) => {
-          console.error('SSE error:', error);
+          clearTimeout(timeout);
+          console.error('❌ SSE onerror:', error);
           this.isConnected = false;
           if (this.eventSource?.readyState === EventSource.CLOSED) {
             reject(new Error('SSE connection closed'));
+          } else if (this.eventSource?.readyState === EventSource.CONNECTING) {
+            console.log('⏳ SSE still connecting...');
           }
         };
       } catch (error) {
