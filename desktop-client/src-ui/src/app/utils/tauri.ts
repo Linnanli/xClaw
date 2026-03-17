@@ -276,14 +276,39 @@ export interface SearchHit {
   score: number;
 }
 
+export interface DeleteResult {
+  success: boolean;
+  message: string;
+  is_protected: boolean;
+}
+
 export const memoryApi = {
   getMemoryTree: () => invokeTauri<MemoryTreeResponse>('get_memory_tree'),
   readMemory: (path: string) =>
     invokeTauri<MemoryContent>('read_memory', { memoryId: path }),
   writeMemory: (path: string, content: string) =>
     invokeTauri<MemoryWriteResponse>('write_memory', { memoryId: path, content }),
+  deleteMemoryLocal: (path: string, force: boolean = false) =>
+    invokeTauri<DeleteResult>('delete_memory_local', { path, force }),
+  isMemoryFileProtected: (path: string) =>
+    invokeTauri<boolean>('is_memory_file_protected', { path }),
   searchMemory: (query: string) =>
     invokeTauri<SearchHit[]>('search_memory', { query }),
+};
+
+// 扩展 MemoryContent 以支持删除状态检查
+export const memoryContentUtils = {
+  isDeleted: (content: MemoryContent): boolean => {
+    return content.content.trim() === '<!-- DELETED -->';
+  },
+  
+  getActualContent: (content: MemoryContent): string => {
+    return memoryContentUtils.isDeleted(content) ? '' : content.content;
+  },
+  
+  shouldShowInTree: (content: MemoryContent): boolean => {
+    return !memoryContentUtils.isDeleted(content);
+  }
 };
 
 // Job APIs

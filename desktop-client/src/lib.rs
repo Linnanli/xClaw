@@ -17,6 +17,7 @@ pub mod auth_token_manager;
 pub mod database_config;
 pub mod config_manager;
 pub mod network_config;
+pub mod memory_manager;
 
 pub use error::{Error, Result};
 pub use commands::CommandState;

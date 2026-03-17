@@ -185,6 +185,9 @@ async fn test_memory_read_write_flow() {
     
     // 3. 写入内存
     let _ = fixture.client().write_memory("test-id", "content").await;
+    
+    // 4. 搜索内存
+    let _ = fixture.client().search_memory("test query").await;
 }
 
 #[tokio::test]

@@ -2,6 +2,7 @@ use crate::auth::AuthManager;
 use crate::storage::StorageManager;
 use crate::extension_manager::ExtensionManager;
 use crate::routine_manager::RoutineManager;
+use crate::memory_manager::{is_protected_file, DeleteResult, MemoryApiExtensions};
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -759,6 +760,22 @@ pub async fn search_memory(
     state: tauri::State<'_, CommandState>,
 ) -> Result<Vec<crate::api_client::SearchHit>> {
     state.api_client.search_memory(&query).await
+}
+
+#[tauri::command]
+pub async fn delete_memory_local(
+    path: String,
+    force: bool,
+    state: tauri::State<'_, CommandState>,
+) -> Result<DeleteResult> {
+    state.api_client.delete_memory_safe(&path, force).await
+}
+
+#[tauri::command]
+pub async fn is_memory_file_protected(
+    path: String,
+) -> Result<bool> {
+    Ok(is_protected_file(&path))
 }
 
 // --- Job Management Commands ---

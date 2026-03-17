@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::Result;
 
 /// API client for communicating with the main server
+#[derive(Clone)]
 pub struct ApiClient {
     base_url: String,
     client: reqwest::Client,
@@ -669,40 +670,15 @@ mod tests {
     #[test]
     fn test_memory_content_deserialization() {
         let json = r#"{
-            "id": "mem-123",
-            "name": "Project Notes",
+            "path": "notes/project.md",
             "content": "Important project information",
             "updated_at": "2024-01-01T12:00:00Z"
         }"#;
 
         let memory: MemoryContent = serde_json::from_str(json).unwrap();
-        assert_eq!(memory.id, "mem-123");
-        assert_eq!(memory.name, "Project Notes");
+        assert_eq!(memory.path, "notes/project.md");
         assert_eq!(memory.content, "Important project information");
-    }
-
-    #[test]
-    fn test_memory_node_deserialization() {
-        let json = r#"{
-            "id": "root",
-            "name": "Root",
-            "node_type": "directory",
-            "children": [
-                {
-                    "id": "child-1",
-                    "name": "Child 1",
-                    "node_type": "file",
-                    "children": [],
-                    "metadata": null
-                }
-            ],
-            "metadata": null
-        }"#;
-
-        let node: MemoryNode = serde_json::from_str(json).unwrap();
-        assert_eq!(node.id, "root");
-        assert_eq!(node.children.len(), 1);
-        assert_eq!(node.children[0].name, "Child 1");
+        assert_eq!(memory.updated_at, Some("2024-01-01T12:00:00Z".to_string()));
     }
 
     #[test]

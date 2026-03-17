@@ -183,6 +183,8 @@ async fn main() {
             get_memory_tree,
             read_memory,
             write_memory,
+            delete_memory_local,
+            is_memory_file_protected,
             search_memory,
             get_jobs,
             get_job_detail,

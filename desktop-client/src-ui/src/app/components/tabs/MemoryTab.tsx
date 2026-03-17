@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Search, FileText, FolderTree, Folder, Edit2, Save, X, ChevronRight, ChevronDown } from 'lucide-react';
+import { Search, FileText, FolderTree, Folder, Edit2, Save, X, ChevronRight, ChevronDown, Trash2 } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
-import { memoryApi, TreeEntry, SearchHit, MemoryContent } from '../../utils/tauri';
+import { memoryApi, memoryContentUtils, TreeEntry, SearchHit, MemoryContent } from '../../utils/tauri';
+import { DeleteConfirmDialog } from '../common/DeleteConfirmDialog';
 import ReactMarkdown from 'react-markdown';
 
 interface TreeNode {
@@ -27,6 +28,17 @@ export function MemoryTab() {
   const [fileContent, setFileContent] = useState<string>('');
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
+  const [isProtectedFile, setIsProtectedFile] = useState(false);
+  
+  // Delete confirmation state
+  const [deleteConfirmDialog, setDeleteConfirmDialog] = useState<{
+    isOpen: boolean;
+    filePath: string | null;
+  }>({
+    isOpen: false,
+    filePath: null,
+  });
+  const [operationLoading, setOperationLoading] = useState(false);
 
   useEffect(() => {
     const fetchMemories = async () => {
@@ -114,12 +126,29 @@ export function MemoryTab() {
     try {
       setSelectedFile(path);
       setIsEditing(false);
+      
+      // 检查文件是否受保护
+      const isProtected = await memoryApi.isMemoryFileProtected(path);
+      setIsProtectedFile(isProtected);
+      
       const content = await memoryApi.readMemory(path);
-      setFileContent(content.content);
-      setEditContent(content.content);
+      
+      // 检查文件是否已被删除
+      if (memoryContentUtils.isDeleted(content)) {
+        setFileContent('');
+        setEditContent('');
+        setError(`文件 ${path} 已被删除`);
+        return;
+      }
+      
+      const actualContent = memoryContentUtils.getActualContent(content);
+      setFileContent(actualContent);
+      setEditContent(actualContent);
+      setError(null);
     } catch (err) {
       console.error('Failed to read file:', err);
-      setError(`Failed to read file: ${path}`);
+      const errorMessage = err instanceof Error ? err.message : '未知错误';
+      setError(`读取文件失败: ${errorMessage}`);
     }
   };
 
@@ -139,10 +168,69 @@ export function MemoryTab() {
       await memoryApi.writeMemory(selectedFile, editContent);
       setFileContent(editContent);
       setIsEditing(false);
+      setError(null);
     } catch (err) {
       console.error('Failed to save file:', err);
-      setError(`Failed to save file: ${selectedFile}`);
+      const errorMessage = err instanceof Error ? err.message : '未知错误';
+      setError(`保存文件失败: ${errorMessage}`);
     }
+  };
+
+  const handleDelete = () => {
+    if (!selectedFile) return;
+    setDeleteConfirmDialog({
+      isOpen: true,
+      filePath: selectedFile,
+    });
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteConfirmDialog.filePath) return;
+
+    try {
+      setOperationLoading(true);
+      
+      // 执行删除（不需要再次检查保护状态，因为受保护文件不会显示删除按钮）
+      const result = await memoryApi.deleteMemoryLocal(deleteConfirmDialog.filePath, false);
+      
+      if (result.success) {
+        // 如果删除的是当前选中的文件，清空选择
+        if (selectedFile === deleteConfirmDialog.filePath) {
+          setSelectedFile(null);
+          setFileContent('');
+          setEditContent('');
+          setIsEditing(false);
+          setIsProtectedFile(false);
+        }
+        
+        // 刷新文件树
+        if (searchQuery.trim()) {
+          const results = await memoryApi.searchMemory(searchQuery);
+          setSearchResults(results);
+        } else {
+          const tree = await memoryApi.getMemoryTree();
+          const nodes = buildTreeFromEntries(tree.entries);
+          setTreeNodes(nodes);
+        }
+        
+        console.log('✅ 文件删除成功:', result.message);
+        setError(null);
+      } else {
+        setError(result.message);
+      }
+      
+      setDeleteConfirmDialog({ isOpen: false, filePath: null });
+    } catch (err) {
+      console.error('❌ 删除文件失败:', err);
+      const errorMessage = err instanceof Error ? err.message : '未知错误';
+      setError(`删除文件失败: ${errorMessage}`);
+    } finally {
+      setOperationLoading(false);
+    }
+  };
+
+  const handleCancelDelete = () => {
+    setDeleteConfirmDialog({ isOpen: false, filePath: null });
   };
 
   const renderTreeNode = (node: TreeNode, depth: number = 0): JSX.Element => {
@@ -296,17 +384,32 @@ export function MemoryTab() {
                     </button>
                   </>
                 ) : (
-                  <button
-                    onClick={handleEdit}
-                    className={`px-3 py-1 rounded flex items-center gap-1 text-sm ${
-                      theme === 'dark'
-                        ? 'bg-[#1a2942] text-white hover:bg-[#243550]'
-                        : 'bg-[#ddd] text-[#333] hover:bg-[#ccc]'
-                    }`}
-                  >
-                    <Edit2 size={14} />
-                    编辑
-                  </button>
+                  <>
+                    <button
+                      onClick={handleEdit}
+                      className={`px-3 py-1 rounded flex items-center gap-1 text-sm ${
+                        theme === 'dark'
+                          ? 'bg-[#1a2942] text-white hover:bg-[#243550]'
+                          : 'bg-[#ddd] text-[#333] hover:bg-[#ccc]'
+                      }`}
+                    >
+                      <Edit2 size={14} />
+                      编辑
+                    </button>
+                    {!isProtectedFile && (
+                      <button
+                        onClick={handleDelete}
+                        className={`px-3 py-1 rounded flex items-center gap-1 text-sm ${
+                          theme === 'dark'
+                            ? 'bg-red-600 text-white hover:bg-red-700'
+                            : 'bg-red-500 text-white hover:bg-red-600'
+                        }`}
+                      >
+                        <Trash2 size={14} />
+                        删除
+                      </button>
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -345,6 +448,18 @@ export function MemoryTab() {
           </div>
         )}
       </div>
+
+      {/* 删除确认对话框 */}
+      <DeleteConfirmDialog
+        isOpen={deleteConfirmDialog.isOpen}
+        title="删除文件"
+        message={`确定要删除文件 "${deleteConfirmDialog.filePath}" 吗？此操作无法撤销。`}
+        confirmText="删除"
+        cancelText="取消"
+        loading={operationLoading}
+        onConfirm={handleConfirmDelete}
+        onCancel={handleCancelDelete}
+      />
     </div>
   );
 }

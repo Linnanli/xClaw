@@ -9,8 +9,10 @@ import { SkillsTab } from '../tabs/SkillsTab';
 import { LogsTab } from '../tabs/LogsTab';
 import { SettingsTab } from '../tabs/SettingsTab';
 import { ConnectionStatus } from '../common/ConnectionStatus';
+import { DynamicWatermark } from '../common/DynamicWatermark';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useSSEConnection } from '../../hooks/useSSEConnection';
+import { useWatermark } from '../../hooks/useWatermark';
 import { sessionApi } from '../../utils/tauri';
 import { ShortcutManager, SHORTCUTS } from '../../utils/shortcuts';
 import { tracing } from '../../utils/tracing';
@@ -21,8 +23,9 @@ export function MainApp() {
   const [activeTab, setActiveTab] = useState<TabName>('chat');
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showThemeMenu, setShowThemeMenu] = useState(false);
-  const { theme, themeMode, toggleTheme, setTheme } = useTheme();
-  const { connect, disconnect, error } = useSSEConnection();
+  const { theme, themeMode, setTheme } = useTheme();
+  const { connect, disconnect } = useSSEConnection();
+  const { config: watermarkConfig, loading: watermarkLoading } = useWatermark();
 
   // Initialize SSE connection
   useEffect(() => {
@@ -333,6 +336,18 @@ export function MainApp() {
       <div className="flex-1 overflow-hidden">
         {renderTabContent()}
       </div>
+
+      {/* Dynamic Watermark */}
+      {!watermarkLoading && (
+        <DynamicWatermark
+          text={watermarkConfig.text}
+          enabled={watermarkConfig.enabled}
+          opacity={watermarkConfig.opacity}
+          fontSize={watermarkConfig.fontSize}
+          rotation={watermarkConfig.rotation}
+          spacing={watermarkConfig.spacing}
+        />
+      )}
     </div>
   );
 }

@@ -4,7 +4,7 @@
 
 use proptest::prelude::*;
 use desktop_client::api_client::{
-    SendMessageRequest, ThreadInfo, Message, MemoryNode, MemoryContent,
+    SendMessageRequest, ThreadInfo, Message, MemoryContent,
     JobInfo, LogEntry, ApprovalRequest,
 };
 
@@ -115,14 +115,12 @@ pub fn arb_memory_node() -> impl Strategy<Value = MemoryNode> {
 /// 生成随机 MemoryContent
 pub fn arb_memory_content() -> impl Strategy<Value = MemoryContent> {
     (
-        arb_memory_id(),
-        r"[A-Za-z0-9_-]{3,20}",
-        r"[A-Za-z0-9 .,!?-]{20,200}",
-        arb_timestamp(),
+        r"[a-z0-9_/-]{5,50}\.md",  // 文件路径
+        r"[A-Za-z0-9 .,!?-]{20,200}",  // 内容
+        prop::option::of(arb_timestamp()),  // 可选的更新时间
     )
-        .prop_map(|(id, name, content, updated_at)| MemoryContent {
-            id,
-            name: name.to_string(),
+        .prop_map(|(path, content, updated_at)| MemoryContent {
+            path,
             content,
             updated_at,
         })
@@ -134,7 +132,7 @@ pub fn arb_job_info() -> impl Strategy<Value = JobInfo> {
         arb_job_id(),
         r"(pending|in_progress|completed|failed)",
         arb_timestamp(),
-        arb_timestamp(),
+        prop::option::of(arb_timestamp()),  // 可选的更新时间
         prop::option::of(r"[A-Za-z0-9 ]{5,50}"),
     )
         .prop_map(|(id, status, created_at, updated_at, title)| JobInfo {
