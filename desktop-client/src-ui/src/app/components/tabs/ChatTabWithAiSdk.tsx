@@ -1,9 +1,12 @@
 import { useState, useEffect } from 'react';
 import { Plus, ChevronLeft, ChevronRight, Image, Send, Wifi, WifiOff } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
-import { threadApi, type Thread, type Message } from '../../utils/tauri';
+import { threadApi, messageApi, type Thread, type Message } from '../../utils/tauri';
 import { useAiChat } from '../../hooks/useAiChat';
 import { TokenManager } from '../../utils/tokenManager';
+import { MessageActions } from '../common/MessageActions';
+import { MessageEditor } from '../common/MessageEditor';
+import { DeleteConfirmDialog } from '../common/DeleteConfirmDialog';
 
 export function ChatTabWithAiSdk() {
   const { theme } = useTheme();
@@ -13,6 +16,19 @@ export function ChatTabWithAiSdk() {
   const [loading, setLoading] = useState(false);
   const [connected, setConnected] = useState(false);
   const [authToken, setAuthToken] = useState<string>('');
+  
+  // 消息编辑/删除状态
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [deleteConfirmDialog, setDeleteConfirmDialog] = useState<{
+    isOpen: boolean;
+    messageId: string | null;
+    content: string;
+  }>({
+    isOpen: false,
+    messageId: null,
+    content: '',
+  });
+  const [operationLoading, setOperationLoading] = useState(false);
 
   // 获取认证令牌（异步）
   useEffect(() => {
@@ -142,6 +158,81 @@ export function ChatTabWithAiSdk() {
     }
   };
 
+  // 消息操作处理函数
+  const handleEditMessage = (messageId: string) => {
+    setEditingMessageId(messageId);
+  };
+
+  const handleDeleteMessage = (messageId: string) => {
+    const message = chat.messages.find(m => m.id === messageId);
+    if (message) {
+      setDeleteConfirmDialog({
+        isOpen: true,
+        messageId,
+        content: message.content,
+      });
+    }
+  };
+
+  const handleCopyMessage = async (content: string) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      console.log('✅ Message copied to clipboard');
+    } catch (err) {
+      console.error('❌ Failed to copy message:', err);
+    }
+  };
+
+  const handleSaveEdit = async (messageId: string, newContent: string) => {
+    if (!selectedConversation) return;
+
+    try {
+      setOperationLoading(true);
+      await messageApi.editMessage(selectedConversation, messageId, newContent);
+      
+      // 更新本地消息状态
+      const updatedMessages = chat.messages.map(msg =>
+        msg.id === messageId ? { ...msg, content: newContent } : msg
+      );
+      chat.setMessages(updatedMessages);
+      
+      setEditingMessageId(null);
+      console.log('✅ Message edited successfully');
+    } catch (err) {
+      console.error('❌ Failed to edit message:', err);
+    } finally {
+      setOperationLoading(false);
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setEditingMessageId(null);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!selectedConversation || !deleteConfirmDialog.messageId) return;
+
+    try {
+      setOperationLoading(true);
+      await messageApi.deleteMessage(selectedConversation, deleteConfirmDialog.messageId);
+      
+      // 更新本地消息状态
+      const updatedMessages = chat.messages.filter(msg => msg.id !== deleteConfirmDialog.messageId);
+      chat.setMessages(updatedMessages);
+      
+      setDeleteConfirmDialog({ isOpen: false, messageId: null, content: '' });
+      console.log('✅ Message deleted successfully');
+    } catch (err) {
+      console.error('❌ Failed to delete message:', err);
+    } finally {
+      setOperationLoading(false);
+    }
+  };
+
+  const handleCancelDelete = () => {
+    setDeleteConfirmDialog({ isOpen: false, messageId: null, content: '' });
+  };
+
   return (
     <div className={`flex h-full ${theme === 'dark' ? 'bg-gray-900' : 'bg-white'}`}>
       {/* 侧边栏 */}
@@ -254,18 +345,45 @@ export function ChatTabWithAiSdk() {
                 key={msg.id}
                 className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
               >
-                <div
-                  className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
-                    msg.role === 'user'
-                      ? theme === 'dark'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-blue-500 text-white'
-                      : theme === 'dark'
-                      ? 'bg-gray-700 text-gray-100'
-                      : 'bg-gray-200 text-gray-900'
-                  }`}
-                >
-                  <p className="text-sm">{msg.content}</p>
+                <div className="relative group max-w-xs lg:max-w-md">
+                  {/* 消息操作按钮 */}
+                  {msg.role === 'user' && (
+                    <div className="absolute -top-2 -right-2 z-10">
+                      <MessageActions
+                        messageId={msg.id}
+                        content={msg.content}
+                        canEdit={true}
+                        canDelete={true}
+                        onEdit={handleEditMessage}
+                        onDelete={handleDeleteMessage}
+                        onCopy={handleCopyMessage}
+                      />
+                    </div>
+                  )}
+                  
+                  {/* 消息内容 */}
+                  {editingMessageId === msg.id ? (
+                    <MessageEditor
+                      initialContent={msg.content}
+                      onSave={(content) => handleSaveEdit(msg.id, content)}
+                      onCancel={handleCancelEdit}
+                      loading={operationLoading}
+                    />
+                  ) : (
+                    <div
+                      className={`px-4 py-2 rounded-lg ${
+                        msg.role === 'user'
+                          ? theme === 'dark'
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-blue-500 text-white'
+                          : theme === 'dark'
+                          ? 'bg-gray-700 text-gray-100'
+                          : 'bg-gray-200 text-gray-900'
+                      }`}
+                    >
+                      <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                    </div>
+                  )}
                 </div>
               </div>
             ))
@@ -324,6 +442,18 @@ export function ChatTabWithAiSdk() {
           </form>
         </div>
       </div>
+
+      {/* 删除确认对话框 */}
+      <DeleteConfirmDialog
+        isOpen={deleteConfirmDialog.isOpen}
+        title="删除消息"
+        message={`确定要删除这条消息吗？此操作无法撤销。\n\n消息内容：${deleteConfirmDialog.content.length > 50 ? deleteConfirmDialog.content.substring(0, 50) + '...' : deleteConfirmDialog.content}`}
+        confirmText="删除"
+        cancelText="取消"
+        loading={operationLoading}
+        onConfirm={handleConfirmDelete}
+        onCancel={handleCancelDelete}
+      />
     </div>
   );
 }
