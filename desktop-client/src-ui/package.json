@@ -8,7 +8,13 @@
     "dev": "vite",
     "test": "vitest",
     "test:ui": "vitest --ui",
-    "test:coverage": "vitest --coverage"
+    "test:coverage": "vitest --coverage",
+    "cypress:open": "cypress open",
+    "cypress:run": "cypress run",
+    "cypress:run:headed": "cypress run --headed",
+    "cypress:run:chrome": "cypress run --browser chrome",
+    "cypress:run:firefox": "cypress run --browser firefox",
+    "e2e": "npm run cypress:run"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",
@@ -77,6 +83,8 @@
     "@testing-library/user-event": "^14.5.2",
     "@vitejs/plugin-react": "4.7.0",
     "@vitest/ui": "^3.0.0",
+    "cross-env": "^10.1.0",
+    "cypress": "^15.12.0",
     "happy-dom": "^15.11.0",
     "jsdom": "^26.0.0",
     "tailwindcss": "4.1.12",
@@ -99,5 +107,10 @@
     "overrides": {
       "vite": "6.3.5"
     }
-  }
+  },
+  "description": "This is a code bundle for Generate Page from Document. The original project is available at https://www.figma.com/design/UlYUaddXXhCjpYCwybml6C/Generate-Page-from-Document.",
+  "main": "index.js",
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
 }
