@@ -5,6 +5,67 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { createSseClient, type SseClient, type SseEvent } from '../utils/sse';
+import { TokenManager } from '../utils/tokenManager';
+
+interface Message {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+interface UseAiChatOptions {
+  threadId: string;
+  apiUrl?: string;
+  authToken?: string;
+}
+
+// 延迟函数
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// 带重试的fetch函数
+async function fetchWithRetry(
+  url: string, 
+  options: RequestInit, 
+  maxRetries: number = 3
+): Promise<Response> {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const response = await fetch(url, options);
+      
+      if (response.status === 401) {
+        console.warn(`🔄 Token expired (attempt ${i + 1}/${maxRetries}), refreshing...`);
+        
+        // 刷新Token
+        const newToken = await TokenManager.refreshToken();
+        
+        // 更新Authorization header
+        const newOptions = {
+          ...options,
+          headers: {
+            ...options.headers,
+            'Authorization': `Bearer ${newToken}`
+          }
+        };
+        
+        // 重试请求
+        continue;
+      }
+      
+      return response;
+    } catch (err) {
+      console.warn(`🔄 Request failed (attempt ${i + 1}/${maxRetries}):`, err);
+      
+      if (i === maxRetries - 1) {
+        throw err;
+      }
+      
+      // 指数退避
+      await delay(1000 * Math.pow(2, i));
+    }
+  }
+  
+  throw new Error('Max retries exceeded');
+}
 
 interface Message {
   id: string;
@@ -150,7 +211,7 @@ export function useAiChat(options: UseAiChatOptions) {
         const url = `${apiUrl}/api/chat/send`;
         console.log('   POST URL:', url);
         
-        const response = await fetch(url, {
+        const response = await fetchWithRetry(url, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

@@ -4,10 +4,118 @@
 
 **所有回答必须用中文。** (All responses must be in Chinese.)
 
-## Feature Parity Update Policy
+## 测试覆盖率评估和实施方案
 
-- If you change implementation status for any feature tracked in `FEATURE_PARITY.md`, update that file in the same branch.
-- Do not open a PR that changes feature behavior without checking `FEATURE_PARITY.md` for needed status updates (`❌`, `🚧`, `✅`, notes, and priorities).
+**核心原则**：为关键模块（如认证、安全、核心业务逻辑）实施多维度测试覆盖率，确保代码质量和系统可靠性。
+
+### 适用的测试覆盖率维度
+
+#### 🔴 高优先级（必须实施）
+
+1. **单元测试覆盖率** - 目标：>90%
+   - 覆盖所有公共函数和方法
+   - 包含边界条件和异常路径
+   - 验证核心业务逻辑正确性
+
+2. **安全覆盖率** - 目标：100%
+   - 恶意输入防护测试
+   - 时序攻击和侧信道攻击防护
+   - 权限验证和访问控制测试
+
+3. **集成测试覆盖率** - 目标：>80%
+   - 端到端业务流程测试
+   - 组件间交互验证
+   - API接口一致性测试
+
+#### 🟡 中优先级（建议实施）
+
+4. **需求级覆盖率** - 目标：>85%
+   - 每个功能需求对应测试用例
+   - 业务场景完整覆盖
+   - 需求追溯矩阵验证
+
+5. **可靠性覆盖率** - 目标：>75%
+   - 故障恢复和容错测试
+   - 并发访问和压力测试
+   - 网络中断和异常处理
+
+6. **变更覆盖率** - 目标：>70%
+   - 向后兼容性验证
+   - 重构前后行为一致性
+   - 回归测试防护
+
+#### 🟢 低优先级（可选实施）
+
+7. **代码级覆盖率** - 目标：>95%
+   - 代码行和分支覆盖监控
+   - 作为单元测试的补充指标
+
+8. **数据级覆盖率** - 目标：>60%
+   - 数据类型和枚举值测试
+   - 边界值和异常数据处理
+
+### 实施策略
+
+#### 测试文件组织
+```
+tests/
+├── {module}_unit_tests.rs        # 单元测试 + 安全测试
+├── {module}_integration_tests.rs # 集成测试
+├── {module}_reliability_tests.rs # 可靠性测试
+├── {module}_requirements_tests.rs # 需求级测试
+└── {module}_regression_tests.rs   # 变更覆盖测试
+```
+
+#### 测试命名规范
+- **需求测试**: `req_{module}_{id}_{description}` (如: `req_auth_001_token_format`)
+- **安全测试**: `test_security_{attack_type}` (如: `test_security_malicious_input`)
+- **可靠性测试**: `test_{failure_scenario}_recovery` (如: `test_network_failure_recovery`)
+- **回归测试**: `test_{feature}_backward_compatibility`
+
+#### 覆盖率验证命令
+```bash
+# 运行所有测试
+cargo test --test {module}_*_tests
+
+# 生成覆盖率报告
+cargo tarpaulin --out Html --output-dir coverage/
+
+# 验证特定维度
+cargo test --test {module}_requirements_tests  # 需求覆盖
+cargo test --test {module}_regression_tests    # 变更覆盖
+```
+
+### 质量门禁标准
+
+#### 代码提交要求
+- [ ] 单元测试覆盖率 >90%
+- [ ] 安全测试覆盖率 100%
+- [ ] 集成测试覆盖率 >80%
+- [ ] 所有测试通过（100%通过率）
+- [ ] 0编译错误，0编译警告
+
+#### 发布前验证
+- [ ] 需求级覆盖率 >85%
+- [ ] 可靠性覆盖率 >75%
+- [ ] 变更覆盖率 >70%
+- [ ] 性能基准测试通过
+- [ ] 安全扫描无高危漏洞
+
+### 最佳实践
+
+1. **测试优先开发**：先写测试用例，再实现功能
+2. **分层测试策略**：单元测试 → 集成测试 → 端到端测试
+3. **持续集成验证**：每次提交自动运行全量测试
+4. **定期覆盖率审查**：每周检查覆盖率趋势和质量指标
+5. **安全测试强制**：安全相关模块必须100%安全测试覆盖
+
+### 工具和框架
+
+- **Rust测试**: `cargo test`, `proptest`（属性测试）
+- **覆盖率工具**: `tarpaulin`, `grcov`
+- **性能测试**: `criterion`（基准测试）
+- **安全测试**: 自定义恶意输入测试套件
+- **并发测试**: `tokio::test`（异步测试）
 
 ## 客户端和后端功能复用规则
 

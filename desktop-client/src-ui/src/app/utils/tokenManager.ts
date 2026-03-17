@@ -38,6 +38,7 @@ export class TokenManager {
       }
     } catch (err) {
       console.warn('⚠️  无法从 Tauri 命令获取令牌:', err);
+      // 继续尝试其他方式，不要立即抛出错误
     }
 
     // 3. 尝试从本地存储获取
@@ -48,8 +49,8 @@ export class TokenManager {
       return storedToken;
     }
 
-    // 4. 如果都失败了，抛出错误
-    throw new Error('无法获取认证令牌，请确保后端已启动');
+    // 4. 如果都失败了，抛出详细的错误信息
+    throw new Error('Failed to get auth token: No token available from URL, backend database, or local storage. Please ensure the backend is running and properly configured.');
   }
 
   /**
@@ -77,9 +78,8 @@ export class TokenManager {
       return storedToken;
     }
 
-    // 4. 返回空字符串（调用方需要处理）
-    console.warn('⚠️  无法同步获取令牌，请使用 getToken() 异步方法');
-    return '';
+    // 4. 抛出错误而不是返回空字符串
+    throw new Error('Token not available synchronously. Please ensure backend is running or use getToken() async method.');
   }
 
   /**
@@ -137,7 +137,62 @@ export class TokenManager {
    * 检查令牌是否有效
    */
   static isTokenValid(token: string): boolean {
-    return token && token.length > 0;
+    return token && token.length === 64 && /^[0-9a-fA-F]+$/.test(token);
+  }
+
+  /**
+   * 刷新令牌（从后端重新获取）
+   */
+  static async refreshToken(): Promise<string> {
+    console.log('🔄 刷新令牌...');
+    
+    // 清除缓存，强制重新获取
+    this.cachedToken = null;
+    
+    try {
+      // 尝试从 Tauri 命令获取新令牌
+      const newToken = await invoke<string>('get_auth_token');
+      if (newToken && this.isTokenValid(newToken)) {
+        console.log('✅ 令牌刷新成功');
+        this.cachedToken = newToken;
+        this.saveToken(newToken);
+        return newToken;
+      } else {
+        throw new Error('Invalid token received from backend');
+      }
+    } catch (err) {
+      console.error('❌ 令牌刷新失败:', err);
+      throw new Error(`Failed to refresh token: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * 尝试获取令牌的内部方法（用于重试逻辑）
+   */
+  private static async tryGetToken(): Promise<string | null> {
+    // 1. 尝试从 URL 参数获取
+    const urlToken = this.getTokenFromUrl();
+    if (urlToken && this.isTokenValid(urlToken)) {
+      return urlToken;
+    }
+
+    // 2. 尝试从 Tauri 命令获取
+    try {
+      const tauriToken = await invoke<string>('get_auth_token');
+      if (tauriToken && this.isTokenValid(tauriToken)) {
+        return tauriToken;
+      }
+    } catch (err) {
+      console.warn('Failed to get token from Tauri command:', err);
+    }
+
+    // 3. 尝试从本地存储获取
+    const storedToken = this.getTokenFromStorage();
+    if (storedToken && this.isTokenValid(storedToken)) {
+      return storedToken;
+    }
+
+    return null;
   }
 
   /**
