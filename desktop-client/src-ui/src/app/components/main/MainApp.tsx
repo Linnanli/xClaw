@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { MessageSquare, Brain, Briefcase, Calendar, Puzzle, Zap, FileText, Sun, Moon, Lock, User, Settings } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { MessageSquare, Brain, Briefcase, Calendar, Puzzle, Zap, FileText, Sun, Moon, Monitor, Lock, User, Settings } from 'lucide-react';
 import { ChatTabWithAiSdk } from '../tabs/ChatTabWithAiSdk';
 import { MemoryTab } from '../tabs/MemoryTab';
 import { JobsTab } from '../tabs/JobsTab';
@@ -8,17 +8,65 @@ import { ExtensionsTab } from '../tabs/ExtensionsTab';
 import { SkillsTab } from '../tabs/SkillsTab';
 import { LogsTab } from '../tabs/LogsTab';
 import { SettingsTab } from '../tabs/SettingsTab';
+import { ConnectionStatus } from '../common/ConnectionStatus';
 import { useTheme } from '../../contexts/ThemeContext';
+import { useSSEConnection } from '../../hooks/useSSEConnection';
 import { sessionApi } from '../../utils/tauri';
 import { ShortcutManager, SHORTCUTS } from '../../utils/shortcuts';
+import { tracing } from '../../utils/tracing';
 
 type TabName = 'chat' | 'memory' | 'jobs' | 'routines' | 'extensions' | 'skills' | 'logs' | 'settings';
 
 export function MainApp() {
   const [activeTab, setActiveTab] = useState<TabName>('chat');
-  const [isConnected, setIsConnected] = useState(true);
   const [showUserMenu, setShowUserMenu] = useState(false);
-  const { theme, toggleTheme } = useTheme();
+  const [showThemeMenu, setShowThemeMenu] = useState(false);
+  const { theme, themeMode, toggleTheme, setTheme } = useTheme();
+  const { connect, disconnect, error } = useSSEConnection();
+
+  // Initialize SSE connection
+  useEffect(() => {
+    const initializeConnection = async () => {
+      try {
+        // TODO: 获取实际的token和baseUrl
+        // 这里应该从认证状态或配置中获取
+        const token = 'placeholder-token'; // 临时占位符
+        const baseUrl = 'http://localhost:3000'; // 临时占位符
+        
+        await connect(token, baseUrl);
+        tracing.info('SSE connection initialized in MainApp');
+      } catch (err) {
+        tracing.error('Failed to initialize SSE connection', { error: err });
+      }
+    };
+
+    initializeConnection();
+
+    // 清理连接
+    return () => {
+      disconnect();
+    };
+  }, [connect, disconnect]);
+
+  // Close menus when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Element;
+      
+      // Close theme menu if clicking outside
+      if (showThemeMenu && !target.closest('[data-theme-menu]')) {
+        setShowThemeMenu(false);
+      }
+      
+      // Close user menu if clicking outside
+      if (showUserMenu && !target.closest('[data-user-menu]')) {
+        setShowUserMenu(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showThemeMenu, showUserMenu]);
 
   // Initialize shortcuts
   React.useEffect(() => {
@@ -123,17 +171,88 @@ export function MainApp() {
 
         <div className="flex items-center gap-6">
           {/* Theme Toggle */}
-          <button
-            onClick={toggleTheme}
-            className={`p-2 rounded-lg transition-colors ${
-              theme === 'dark'
-                ? 'hover:bg-[#0a1628] text-gray-400 hover:text-[#5ddad5]'
-                : 'hover:bg-[#f5f5f5] text-[#666] hover:text-[#667eea]'
-            }`}
-            title={theme === 'dark' ? '切换到日间模式' : '切换到夜间模式'}
-          >
-            {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
-          </button>
+          <div className="relative" data-theme-menu>
+            <button
+              onClick={() => setShowThemeMenu(!showThemeMenu)}
+              className={`p-2 rounded-lg transition-colors ${
+                theme === 'dark'
+                  ? 'hover:bg-[#0a1628] text-gray-400 hover:text-[#5ddad5]'
+                  : 'hover:bg-[#f5f5f5] text-[#666] hover:text-[#667eea]'
+              }`}
+              title="主题设置"
+            >
+              {themeMode === 'system' ? (
+                <Monitor size={20} />
+              ) : theme === 'dark' ? (
+                <Moon size={20} />
+              ) : (
+                <Sun size={20} />
+              )}
+            </button>
+            
+            {showThemeMenu && (
+              <div className={`absolute right-0 mt-2 w-40 rounded-lg shadow-lg z-50 ${
+                theme === 'dark'
+                  ? 'bg-[#0f1d35] border border-[#1a2942]'
+                  : 'bg-white border border-[#ddd]'
+              }`}>
+                <button
+                  onClick={() => {
+                    setTheme('light');
+                    setShowThemeMenu(false);
+                  }}
+                  className={`w-full text-left px-4 py-2 flex items-center gap-2 transition-colors ${
+                    themeMode === 'light'
+                      ? theme === 'dark'
+                        ? 'bg-[#1a2942] text-[#5ddad5]'
+                        : 'bg-[#f0f0f0] text-[#667eea]'
+                      : theme === 'dark'
+                        ? 'hover:bg-[#1a2942] text-gray-300'
+                        : 'hover:bg-[#f5f5f5] text-[#333]'
+                  }`}
+                >
+                  <Sun size={16} />
+                  <span>浅色</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setTheme('dark');
+                    setShowThemeMenu(false);
+                  }}
+                  className={`w-full text-left px-4 py-2 flex items-center gap-2 transition-colors ${
+                    themeMode === 'dark'
+                      ? theme === 'dark'
+                        ? 'bg-[#1a2942] text-[#5ddad5]'
+                        : 'bg-[#f0f0f0] text-[#667eea]'
+                      : theme === 'dark'
+                        ? 'hover:bg-[#1a2942] text-gray-300'
+                        : 'hover:bg-[#f5f5f5] text-[#333]'
+                  }`}
+                >
+                  <Moon size={16} />
+                  <span>深色</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setTheme('system');
+                    setShowThemeMenu(false);
+                  }}
+                  className={`w-full text-left px-4 py-2 flex items-center gap-2 transition-colors ${
+                    themeMode === 'system'
+                      ? theme === 'dark'
+                        ? 'bg-[#1a2942] text-[#5ddad5]'
+                        : 'bg-[#f0f0f0] text-[#667eea]'
+                      : theme === 'dark'
+                        ? 'hover:bg-[#1a2942] text-gray-300'
+                        : 'hover:bg-[#f5f5f5] text-[#333]'
+                  }`}
+                >
+                  <Monitor size={16} />
+                  <span>跟随系统</span>
+                </button>
+              </div>
+            )}
+          </div>
 
           {/* Logs Tab (right side) */}
           <button
@@ -171,7 +290,7 @@ export function MainApp() {
           </button>
 
           {/* User Menu */}
-          <div className="relative">
+          <div className="relative" data-user-menu>
             <button
               onClick={() => setShowUserMenu(!showUserMenu)}
               className={`p-2 rounded-lg transition-colors ${
@@ -206,16 +325,7 @@ export function MainApp() {
           </div>
 
           {/* Connection Status */}
-          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full ${
-            theme === 'dark'
-              ? 'bg-[#0a1628] border border-[#1a2942]'
-              : 'bg-[#f5f5f5] border border-[#ddd]'
-          }`}>
-            <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-400' : 'bg-red-400'}`} />
-            <span className={`text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-[#666]'}`}>
-              {isConnected ? '已连接' : '已断开'}
-            </span>
-          </div>
+          <ConnectionStatus />
         </div>
       </div>
 
