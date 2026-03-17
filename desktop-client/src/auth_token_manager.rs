@@ -21,14 +21,26 @@ impl AuthTokenManager {
     
     /// 加载或生成令牌
     /// 
-    /// 如果令牌文件存在，则加载；否则生成新令牌并保存
+    /// 优先级：
+    /// 1. 从后端数据库读取 gateway_auth_token
+    /// 2. 从本地文件加载
+    /// 3. 生成新令牌并保存
     pub fn load_or_generate(&self) -> Result<String, TokenError> {
-        // 确保目录存在
+        // 1. 尝试从后端数据库读取 gateway_auth_token
+        if let Ok(token) = self.load_from_backend_db() {
+            if !token.is_empty() && is_valid_token(&token) {
+                // 保存到本地文件以便下次快速加载
+                let _ = self.save(&token);
+                return Ok(token);
+            }
+        }
+        
+        // 2. 确保目录存在
         let dir = self.token_file.parent().ok_or(TokenError::InvalidPath)?;
         platform_utils::create_dir_if_not_exists(dir)
             .map_err(|e| TokenError::IoError(e.to_string()))?;
         
-        // 尝试加载现有令牌
+        // 3. 尝试加载现有令牌
         if platform_utils::file_exists(&self.token_file) {
             let token = fs::read_to_string(&self.token_file)
                 .map_err(|e| TokenError::IoError(e.to_string()))?;
@@ -39,10 +51,55 @@ impl AuthTokenManager {
             }
         }
         
-        // 生成新令牌
+        // 4. 生成新令牌
         let token = generate_random_token();
         fs::write(&self.token_file, &token)
             .map_err(|e| TokenError::IoError(e.to_string()))?;
+        
+        Ok(token)
+    }
+    
+    /// 从后端数据库读取 gateway_auth_token
+    /// 
+    /// 读取 ~/.ironclaw/ironclaw.db 中的 channels.gateway_auth_token 配置
+    fn load_from_backend_db(&self) -> Result<String, TokenError> {
+        use std::env;
+        
+        // 获取后端数据库路径
+        let home_dir = env::var("HOME")
+            .or_else(|_| env::var("USERPROFILE"))
+            .map_err(|_| TokenError::IoError("Cannot determine home directory".to_string()))?;
+        
+        let db_path = PathBuf::from(home_dir)
+            .join(".ironclaw")
+            .join("ironclaw.db");
+        
+        if !db_path.exists() {
+            return Err(TokenError::TokenNotFound);
+        }
+        
+        // 使用 rusqlite 读取数据库
+        let conn = rusqlite::Connection::open(&db_path)
+            .map_err(|e| TokenError::IoError(format!("Failed to open database: {}", e)))?;
+        
+        let token: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'channels.gateway_auth_token' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| TokenError::IoError(format!("Failed to query token: {}", e)))?;
+        
+        // 移除 JSON 字符串的引号和空白字符
+        let token = token
+            .trim()
+            .trim_matches('"')
+            .trim()
+            .to_string();
+        
+        if token.is_empty() {
+            return Err(TokenError::TokenNotFound);
+        }
         
         Ok(token)
     }
@@ -186,8 +243,8 @@ mod tests {
         let invalid_token_chars = "g".repeat(64);
         
         assert!(is_valid_token(&valid_token));
-        assert!(!is_valid_token(invalid_token_short));
-        assert!(!is_valid_token(invalid_token_chars));
+        assert!(!is_valid_token(&invalid_token_short));
+        assert!(!is_valid_token(&invalid_token_chars));
     }
     
     #[test]
@@ -207,5 +264,46 @@ mod tests {
         assert_eq!(TokenError::TokenNotFound.to_string(), "Token not found");
         assert_eq!(TokenError::InvalidToken.to_string(), "Invalid token format");
         assert_eq!(TokenError::InvalidPath.to_string(), "Invalid token file path");
+    }
+    
+    #[test]
+    fn test_token_cleaning_from_db_format() {
+        // 模拟从数据库读取的 JSON 字符串格式
+        let db_value = r#""ca66c45dfd3cbfbff339e1c9fb628ec0686dd3ca0d699970c5656ae62f253e6e""#;
+        
+        // 清理逻辑
+        let cleaned = db_value
+            .trim()
+            .trim_matches('"')
+            .trim()
+            .to_string();
+        
+        println!("Original: {:?} (len={})", db_value, db_value.len());
+        println!("Cleaned:  {:?} (len={})", cleaned, cleaned.len());
+        
+        // 验证
+        assert_eq!(cleaned.len(), 64, "Token should be 64 characters after cleaning");
+        assert!(cleaned.chars().all(|c| c.is_ascii_hexdigit()), "Token should only contain hex digits");
+        assert!(!cleaned.contains('"'), "Token should not contain quotes");
+        assert!(!cleaned.contains('\n'), "Token should not contain newlines");
+        assert!(!cleaned.contains('\r'), "Token should not contain carriage returns");
+    }
+    
+    #[test]
+    fn test_token_with_newlines() {
+        // 测试包含换行符的情况
+        let db_value = "\"ca66c45dfd3cbfbff339e1c9fb628ec0686dd3ca0d699970\nc5656ae62f253e6e\"";
+        
+        let cleaned = db_value
+            .trim()
+            .trim_matches('"')
+            .trim()
+            .to_string();
+        
+        println!("With newline - Original: {:?}", db_value);
+        println!("With newline - Cleaned:  {:?}", cleaned);
+        
+        // 这个应该失败，因为包含换行符
+        assert!(cleaned.contains('\n'), "This test should detect newline in token");
     }
 }

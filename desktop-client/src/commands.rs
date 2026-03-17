@@ -51,6 +51,23 @@ impl CommandState {
             api_client: Arc::new(api_client),
         }
     }
+    
+    pub fn new_with_token(auth_token: String) -> Self {
+        // 使用提供的 token 创建 ApiClient
+        let api_client = crate::api_client::ApiClient::new_with_token(
+            "http://localhost:3000".to_string(),
+            auth_token
+        );
+        
+        Self {
+            auth_manager: Arc::new(Mutex::new(AuthManager::new())),
+            storage_manager: Arc::new(Mutex::new(None)),
+            extension_manager: Arc::new(StdMutex::new(ExtensionManager::new())),
+            routine_manager: Arc::new(StdMutex::new(RoutineManager::new())),
+            skill_manager: Arc::new(StdMutex::new(crate::skill_manager::SkillManager::new())),
+            api_client: Arc::new(api_client),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -416,6 +433,54 @@ pub async fn can_perform_operation(
 pub async fn get_threads(
     state: tauri::State<'_, CommandState>,
 ) -> Result<crate::api_client::ThreadListResponse> {
+    // 诊断日志
+    tracing::info!("🔍 get_threads called");
+    
+    // 检查 ApiClient 的 token
+    let token = state.api_client.auth_token();
+    let token_len = token.len();
+    tracing::info!("   ApiClient token length: {}", token_len);
+    
+    if token_len == 0 {
+        tracing::error!("❌ ApiClient has empty token!");
+        return Err(crate::Error::ConfigError("Empty auth token".to_string()));
+    }
+    
+    if token_len != 64 {
+        tracing::error!("❌ ApiClient token length is {} (expected 64)", token_len);
+        tracing::error!("   Token (first 16): {}", &token[..token_len.min(16)]);
+        tracing::error!("   Token (last 16): {}", &token[token_len.saturating_sub(16)..]);
+    } else {
+        tracing::info!("✅ ApiClient token length is correct (64)");
+        tracing::debug!("   Token (first 16): {}", &token[..16]);
+        tracing::debug!("   Token (last 16): {}", &token[48..]);
+    }
+    
+    // 测试 HTTP header 构建
+    let auth_header = format!("Bearer {}", token);
+    tracing::info!("   Auth header: {:?}", auth_header);
+    
+    // 检查 header 中的字符
+    for (i, ch) in auth_header.chars().enumerate() {
+        if ch.is_control() {
+            tracing::error!("   控制字符在位置 {}: {:?} (代码: {})", i, ch, ch as u32);
+        }
+        if !ch.is_ascii() {
+            tracing::error!("   非ASCII字符在位置 {}: {:?} (代码: {})", i, ch, ch as u32);
+        }
+    }
+    
+    // 测试 HeaderValue 创建
+    match reqwest::header::HeaderValue::from_str(&auth_header) {
+        Ok(header_value) => {
+            tracing::info!("✅ HeaderValue 创建成功: {:?}", header_value);
+        }
+        Err(e) => {
+            tracing::error!("❌ HeaderValue 创建失败: {}", e);
+            return Err(crate::Error::SerializationError(format!("Invalid header value: {}", e)));
+        }
+    }
+    
     state.api_client.get_threads().await
 }
 
@@ -872,8 +937,27 @@ pub async fn get_auth_token() -> Result<String> {
     use crate::AuthTokenManager;
     
     let token_manager = AuthTokenManager::new();
-    token_manager.load_or_generate()
-        .map_err(|e| crate::Error::ConfigError(e.to_string()))
+    let token = token_manager.load_or_generate()
+        .map_err(|e| crate::Error::ConfigError(e.to_string()))?;
+    
+    // 验证 token 格式
+    if token.len() != 64 {
+        tracing::error!("❌ Token length is {} (expected 64)", token.len());
+        return Err(crate::Error::ConfigError(format!("Invalid token length: {}", token.len())));
+    }
+    
+    if !token.chars().all(|c| c.is_ascii_hexdigit()) {
+        tracing::error!("❌ Token contains non-hex characters");
+        for (i, ch) in token.chars().enumerate() {
+            if !ch.is_ascii_hexdigit() {
+                tracing::error!("   Position {}: {:?} (code: {})", i, ch, ch as u32);
+            }
+        }
+        return Err(crate::Error::ConfigError("Token contains non-hex characters".to_string()));
+    }
+    
+    tracing::info!("✅ Token validation passed");
+    Ok(token)
 }
 
 /// 刷新认证令牌

@@ -127,9 +127,35 @@ pub struct LogEntry {
 
 impl ApiClient {
     pub fn new(base_url: String) -> Self {
-        // 优先从环境变量读取 token，如果没有则使用默认值
+        // 从环境变量读取 token，如果没有则使用 AuthTokenManager 加载
         let auth_token = std::env::var("GATEWAY_AUTH_TOKEN")
-            .unwrap_or_else(|_| "59c7c863fa5bd3eeffc94533cd70a3393251c3ada49a226146a5a61ba62d6743".to_string());
+            .ok()
+            .or_else(|| {
+                // 尝试从 AuthTokenManager 加载
+                use crate::AuthTokenManager;
+                let token_manager = AuthTokenManager::new();
+                match token_manager.load_or_generate() {
+                    Ok(token) => {
+                        tracing::info!("✅ Token loaded from AuthTokenManager");
+                        tracing::debug!("   Token length: {}", token.len());
+                        tracing::debug!("   Token (first 16): {}", &token[..token.len().min(16)]);
+                        tracing::debug!("   Token (last 16): {}", &token[token.len().saturating_sub(16)..]);
+                        Some(token)
+                    }
+                    Err(e) => {
+                        tracing::error!("❌ Failed to load token from AuthTokenManager: {}", e);
+                        None
+                    }
+                }
+            })
+            .unwrap_or_else(|| {
+                tracing::warn!("⚠️  无法获取 Gateway Auth Token，API 调用可能失败");
+                String::new()
+            });
+        
+        let auth_token = auth_token.trim().to_string();  // 移除前后空白字符和换行符
+        
+        tracing::info!("ApiClient initialized with token length: {}", auth_token.len());
         
         Self {
             base_url,
@@ -142,7 +168,7 @@ impl ApiClient {
         Self {
             base_url,
             client: reqwest::Client::new(),
-            auth_token,
+            auth_token: auth_token.trim().to_string(),  // 移除前后空白字符和换行符
         }
     }
 
@@ -157,14 +183,29 @@ impl ApiClient {
     }
 
     fn auth_header(&self) -> String {
-        format!("Bearer {}", self.auth_token)
+        // 确保令牌不包含任何空白字符
+        let token = self.auth_token.trim();
+        
+        // 调试日志
+        tracing::debug!("Auth token length: {}", token.len());
+        tracing::debug!("Auth token (first 16 chars): {}", &token[..token.len().min(16)]);
+        tracing::debug!("Auth token (last 16 chars): {}", &token[token.len().saturating_sub(16)..]);
+        
+        // 检查是否包含非法字符
+        for (i, ch) in token.chars().enumerate() {
+            if !ch.is_ascii_hexdigit() {
+                tracing::warn!("Non-hex character at position {}: {:?} (code: {})", i, ch, ch as u32);
+            }
+        }
+        
+        format!("Bearer {}", token)
     }
 
     pub async fn get_threads(&self) -> Result<ThreadListResponse> {
         let url = format!("{}/api/chat/threads", self.base_url);
         let response = self.client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", self.auth_token))
+            .header("Authorization", self.auth_header())
             .send()
             .await
             .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?;

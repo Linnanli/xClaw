@@ -92,32 +92,66 @@ log_info "npm 已安装"
 
 log_section "检查环境变量"
 
-if [ -z "$LLM_API_KEY" ]; then
-    log_error "LLM_API_KEY 环境变量未设置"
+# 先从项目 .env 加载配置（优先级更高）
+if [ -f .env ]; then
+    log_info "从项目 .env 加载配置..."
+    set -a
+    source .env
+    set +a
+fi
+
+# 再从 ~/.ironclaw/.env 加载配置（作为后备，只设置未定义的变量）
+if [ -f ~/.ironclaw/.env ]; then
+    log_info "从 ~/.ironclaw/.env 加载后备配置..."
+    # 只加载未设置的变量
+    while IFS='=' read -r key value; do
+        # 跳过注释和空行
+        [[ $key =~ ^[[:space:]]*# ]] && continue
+        [[ -z $key ]] && continue
+        
+        # 移除引号
+        value=$(echo "$value" | sed 's/^"//;s/"$//')
+        
+        # 只有当变量未设置时才设置
+        if [ -z "${!key}" ]; then
+            export "$key"="$value"
+        fi
+    done < ~/.ironclaw/.env
+fi
+
+# 检查是否有有效的 LLM 配置
+if [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$OPENAI_API_KEY" ] && [ -z "$LLM_API_KEY" ] && [ -z "$NEARAI_API_KEY" ]; then
+    log_error "未找到任何 LLM API 密钥配置"
     echo ""
-    echo "请先设置 Qwen API 密钥:"
-    echo "  export LLM_API_KEY=\"sk-...\""
+    echo "请先设置以下之一:"
+    echo "  export ANTHROPIC_API_KEY=\"sk-ant-...\""
+    echo "  export OPENAI_API_KEY=\"sk-...\""
+    echo "  export LLM_API_KEY=\"sk-...\" (for Qwen/OpenAI-compatible)"
+    echo "  export NEARAI_API_KEY=\"...\" (for NEAR AI)"
     echo ""
-    echo "获取 API 密钥: https://dashscope.console.aliyun.com/api-key"
     exit 1
 fi
 
-log_info "LLM_API_KEY 已设置"
+log_info "LLM 配置已检测"
 
 # ============================================
-# 设置环境变量
+# 设置环境变量（仅当未设置时）
 # ============================================
 
 log_section "设置环境变量"
 
-export LLM_BACKEND="openai_compatible"
-export LLM_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
-export LLM_MODEL="qwen-max"
-
-log_info "LLM_BACKEND=$LLM_BACKEND"
-log_info "LLM_BASE_URL=$LLM_BASE_URL"
-log_info "LLM_MODEL=$LLM_MODEL"
-log_info "LLM_API_KEY=sk-..."
+log_info "使用配置:"
+log_info "✅ LLM_BACKEND=$LLM_BACKEND"
+if [ ! -z "$LLM_BASE_URL" ]; then
+    log_info "✅ LLM_BASE_URL=$LLM_BASE_URL"
+fi
+if [ ! -z "$LLM_MODEL" ]; then
+    log_info "✅ LLM_MODEL=$LLM_MODEL"
+fi
+if [ ! -z "$ANTHROPIC_MODEL" ]; then
+    log_info "✅ ANTHROPIC_MODEL=$ANTHROPIC_MODEL"
+fi
+log_info "✅ LLM API 密钥已设置"
 
 # ============================================
 # 清理旧进程和端口
@@ -153,36 +187,65 @@ log_info "所有端口已清理"
 log_section "启动后端服务"
 
 log_info "启动后端..."
-# 关键修复: 使用 < /dev/null 重定向 stdin 来禁用 REPL 交互模式
-# 这样后端就不会等待用户输入，HTTP 服务器可以正常响应
-nohup cargo run -- run --no-onboard < /dev/null > /tmp/backend.log 2>&1 &
+# 关键修复: 在后台启动后端，避免 REPL 阻塞
+# 使用 exec 和 stdin 重定向确保进程不会等待输入
+(exec cargo run -- run --no-onboard < /dev/null > /tmp/backend.log 2>&1) &
 BACKEND_PID=$!
 
 log_info "后端进程 PID: $BACKEND_PID"
 
-log_info "等待后端启动..."
-sleep 15
+log_info "等待后端编译和启动（这可能需要几分钟）..."
 
-# 检查后端是否运行
-if ! kill -0 $BACKEND_PID 2>/dev/null; then
-    log_error "后端启动失败"
-    echo ""
-    echo "查看后端日志:"
-    echo "  tail -50 /tmp/backend.log"
-    exit 1
-fi
+# 智能等待：检查编译是否完成并且服务器启动
+COMPILE_TIMEOUT=600  # 10 分钟超时
+COMPILE_CHECK_INTERVAL=5
+COMPILE_START_TIME=$(date +%s)
 
-log_info "后端已启动"
+echo -n "编译进度: "
+while true; do
+    # 检查进程是否还在运行
+    if ! kill -0 $BACKEND_PID 2>/dev/null; then
+        echo ""
+        log_error "后端进程已退出，检查编译错误"
+        echo ""
+        echo "查看后端日志:"
+        echo "  tail -50 /tmp/backend.log"
+        exit 1
+    fi
+    
+    # 检查健康端点是否响应
+    if curl -s http://localhost:3000/api/health > /dev/null 2>&1; then
+        echo ""
+        log_info "后端编译完成并启动成功"
+        break
+    fi
+    
+    # 检查超时
+    CURRENT_TIME=$(date +%s)
+    ELAPSED=$((CURRENT_TIME - COMPILE_START_TIME))
+    if [ $ELAPSED -gt $COMPILE_TIMEOUT ]; then
+        echo ""
+        log_error "后端编译超时（${COMPILE_TIMEOUT}秒）"
+        echo ""
+        echo "查看后端日志:"
+        echo "  tail -100 /tmp/backend.log"
+        exit 1
+    fi
+    
+    # 显示进度
+    echo -n "."
+    sleep $COMPILE_CHECK_INTERVAL
+done
 
-# 检查后端健康状态
-log_info "检查后端健康状态..."
-if curl -s http://localhost:3000/api/health > /dev/null; then
+# 验证后端健康状态（快速检查，因为我们已经确认启动成功）
+log_info "验证后端健康状态..."
+if curl -s http://localhost:3000/api/health > /dev/null 2>&1; then
     log_info "后端健康检查通过"
 else
-    log_error "后端健康检查失败"
+    log_error "后端健康检查失败（这不应该发生）"
     echo ""
     echo "查看后端日志:"
-    echo "  tail -50 /tmp/backend.log"
+    echo "  tail -100 /tmp/backend.log"
     exit 1
 fi
 

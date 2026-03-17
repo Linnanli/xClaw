@@ -70,7 +70,7 @@ async fn main() {
     // 第二步：初始化认证令牌
     println!("🔐 Initializing authentication token...");
     let token_manager = AuthTokenManager::new();
-    let _auth_token = match token_manager.load_or_generate() {
+    let auth_token = match token_manager.load_or_generate() {
         Ok(token) => {
             println!("✅ Auth token initialized: {}", &token[..8]);
             token
@@ -119,7 +119,7 @@ async fn main() {
     println!("   OS: {}", platform_utils::get_os_name());
     println!("   Log Level: {}\n", app_config.log_level);
 
-    let state = CommandState::new();
+    let state = CommandState::new_with_token(auth_token);
 
     tauri::Builder::default()
         .manage(state)

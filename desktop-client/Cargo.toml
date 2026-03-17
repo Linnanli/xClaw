@@ -35,6 +35,9 @@ argon2 = "0.5"
 # Database - libSQL for local encrypted storage
 libsql = { version = "0.6", default-features = false, features = ["core", "replication"] }
 
+# SQLite for reading backend database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
 # Additional dependencies
 uuid = { version = "1", features = ["v4", "serde"] }
 hex = "0.4"

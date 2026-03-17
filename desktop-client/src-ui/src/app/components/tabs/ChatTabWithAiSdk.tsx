@@ -12,9 +12,21 @@ export function ChatTabWithAiSdk() {
   const [conversations, setConversations] = useState<Thread[]>([]);
   const [loading, setLoading] = useState(false);
   const [connected, setConnected] = useState(false);
+  const [authToken, setAuthToken] = useState<string>('');
 
-  // 获取认证令牌
-  const authToken = TokenManager.getToken();
+  // 获取认证令牌（异步）
+  useEffect(() => {
+    const loadToken = async () => {
+      try {
+        const token = await TokenManager.getToken();
+        setAuthToken(token);
+        console.log('✅ 令牌已加载:', TokenManager.getTokenSummary(token));
+      } catch (err) {
+        console.error('❌ 无法加载令牌:', err);
+      }
+    };
+    loadToken();
+  }, []);
 
   // 使用 Vercel AI SDK 的 useAiChat Hook
   const chat = useAiChat({
@@ -23,9 +35,13 @@ export function ChatTabWithAiSdk() {
     authToken: authToken,
   });
 
+  // 只在 token 加载完成后才加载对话列表
   useEffect(() => {
-    loadConversations();
-  }, []);
+    if (authToken) {
+      console.log('🔄 Token loaded, loading conversations...');
+      loadConversations();
+    }
+  }, [authToken]);
 
   useEffect(() => {
     if (selectedConversation) {
