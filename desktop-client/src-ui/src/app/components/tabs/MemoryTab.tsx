@@ -40,6 +40,38 @@ export function MemoryTab() {
   });
   const [operationLoading, setOperationLoading] = useState(false);
 
+  // 过滤已删除文件的函数
+  const filterDeletedFiles = async (nodes: TreeNode[]): Promise<TreeNode[]> => {
+    const filteredNodes: TreeNode[] = [];
+    
+    for (const node of nodes) {
+      if (node.is_dir) {
+        // 对于文件夹，递归过滤子文件
+        const filteredChildren = node.children ? await filterDeletedFiles(node.children) : undefined;
+        // 只有当文件夹不为空或者是顶级文件夹时才保留
+        if (!filteredChildren || filteredChildren.length > 0 || node.path.split('/').length === 1) {
+          filteredNodes.push({
+            ...node,
+            children: filteredChildren,
+          });
+        }
+      } else {
+        // 对于文件，检查是否已被删除
+        try {
+          const content = await memoryApi.readMemory(node.path);
+          if (!memoryContentUtils.isDeleted(content)) {
+            filteredNodes.push(node);
+          }
+        } catch (error) {
+          // 如果读取失败，保留文件（可能是权限问题）
+          filteredNodes.push(node);
+        }
+      }
+    }
+    
+    return filteredNodes;
+  };
+
   useEffect(() => {
     const fetchMemories = async () => {
       try {
@@ -47,12 +79,27 @@ export function MemoryTab() {
         if (searchQuery.trim()) {
           setIsSearching(true);
           const results = await memoryApi.searchMemory(searchQuery);
-          setSearchResults(results);
+          // 过滤搜索结果中的已删除文件
+          const filteredResults = [];
+          for (const result of results) {
+            try {
+              const content = await memoryApi.readMemory(result.path);
+              if (!memoryContentUtils.isDeleted(content)) {
+                filteredResults.push(result);
+              }
+            } catch (error) {
+              // 如果读取失败，保留结果
+              filteredResults.push(result);
+            }
+          }
+          setSearchResults(filteredResults);
         } else {
           setIsSearching(false);
           const tree = await memoryApi.getMemoryTree();
           const nodes = buildTreeFromEntries(tree.entries);
-          setTreeNodes(nodes);
+          // 过滤已删除的文件
+          const filteredNodes = await filterDeletedFiles(nodes);
+          setTreeNodes(filteredNodes);
         }
         setError(null);
       } catch (err) {
@@ -206,11 +253,26 @@ export function MemoryTab() {
         // 刷新文件树
         if (searchQuery.trim()) {
           const results = await memoryApi.searchMemory(searchQuery);
-          setSearchResults(results);
+          // 过滤搜索结果中的已删除文件
+          const filteredResults = [];
+          for (const result of results) {
+            try {
+              const content = await memoryApi.readMemory(result.path);
+              if (!memoryContentUtils.isDeleted(content)) {
+                filteredResults.push(result);
+              }
+            } catch (error) {
+              // 如果读取失败，保留结果
+              filteredResults.push(result);
+            }
+          }
+          setSearchResults(filteredResults);
         } else {
           const tree = await memoryApi.getMemoryTree();
           const nodes = buildTreeFromEntries(tree.entries);
-          setTreeNodes(nodes);
+          // 过滤已删除的文件
+          const filteredNodes = await filterDeletedFiles(nodes);
+          setTreeNodes(filteredNodes);
         }
         
         console.log('✅ 文件删除成功:', result.message);

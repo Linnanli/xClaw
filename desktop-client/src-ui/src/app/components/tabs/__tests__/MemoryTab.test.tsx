@@ -418,6 +418,158 @@ describe('MemoryTab', () => {
     });
   });
 
+  describe('已删除文件过滤', () => {
+    it('应该从文件树中过滤掉已删除的文件', async () => {
+      // 设置一个文件为已删除状态
+      mockMemoryApi.readMemory.mockImplementation(async (path: string) => {
+        if (path === 'deleted.md') {
+          return {
+            path: 'deleted.md',
+            content: '<!-- DELETED -->',
+            updated_at: null,
+          };
+        }
+        return {
+          path: path,
+          content: 'Normal content',
+          updated_at: null,
+        };
+      });
+
+      // 设置 memoryContentUtils 来识别已删除文件
+      const { memoryContentUtils } = await import('../../../utils/tauri');
+      (memoryContentUtils.isDeleted as any).mockImplementation((content: any) => {
+        return content.content.trim() === '<!-- DELETED -->';
+      });
+
+      // 设置文件树包含已删除文件
+      mockMemoryApi.getMemoryTree.mockResolvedValue({
+        entries: [
+          { path: 'normal.md', is_dir: false },
+          { path: 'deleted.md', is_dir: false },
+        ],
+      });
+
+      renderMemoryTab();
+
+      // 等待文件树加载并过滤
+      await waitFor(() => {
+        expect(screen.getByText('normal.md')).toBeInTheDocument();
+      });
+
+      // 已删除的文件不应该出现在树中
+      expect(screen.queryByText('deleted.md')).not.toBeInTheDocument();
+    });
+
+    it('应该从搜索结果中过滤掉已删除的文件', async () => {
+      // 设置搜索结果包含已删除文件
+      mockMemoryApi.searchMemory.mockResolvedValue([
+        {
+          path: 'normal.md',
+          content: 'Normal search result',
+          score: 0.9,
+        },
+        {
+          path: 'deleted.md',
+          content: 'Deleted search result',
+          score: 0.8,
+        },
+      ]);
+
+      // 设置读取文件的响应
+      mockMemoryApi.readMemory.mockImplementation(async (path: string) => {
+        if (path === 'deleted.md') {
+          return {
+            path: 'deleted.md',
+            content: '<!-- DELETED -->',
+            updated_at: null,
+          };
+        }
+        return {
+          path: path,
+          content: 'Normal content',
+          updated_at: null,
+        };
+      });
+
+      // 设置 memoryContentUtils
+      const { memoryContentUtils } = await import('../../../utils/tauri');
+      (memoryContentUtils.isDeleted as any).mockImplementation((content: any) => {
+        return content.content.trim() === '<!-- DELETED -->';
+      });
+
+      renderMemoryTab();
+
+      // 执行搜索
+      const searchInput = screen.getByPlaceholderText('搜索记忆...');
+      fireEvent.change(searchInput, { target: { value: 'search' } });
+
+      // 等待搜索结果加载并过滤
+      await waitFor(() => {
+        expect(screen.getByText('normal.md')).toBeInTheDocument();
+      });
+
+      // 已删除的文件不应该出现在搜索结果中
+      expect(screen.queryByText('deleted.md')).not.toBeInTheDocument();
+    });
+
+    it('应该在删除文件后自动从树中移除', async () => {
+      mockMemoryApi.deleteMemoryLocal.mockResolvedValue({
+        success: true,
+        message: '文件删除成功',
+        is_protected: false,
+      });
+
+      // 初始状态：文件存在
+      mockMemoryApi.getMemoryTree.mockResolvedValue({
+        entries: [
+          { path: 'test.md', is_dir: false },
+        ],
+      });
+
+      mockMemoryApi.readMemory.mockResolvedValue({
+        path: 'test.md',
+        content: 'Normal content',
+        updated_at: null,
+      });
+
+      const { memoryContentUtils } = await import('../../../utils/tauri');
+      (memoryContentUtils.isDeleted as any).mockReturnValue(false);
+
+      renderMemoryTab();
+
+      // 验证文件最初存在
+      await waitFor(() => {
+        expect(screen.getByText('test.md')).toBeInTheDocument();
+      });
+
+      // 选择并删除文件
+      fireEvent.click(screen.getByText('test.md'));
+
+      await waitFor(() => {
+        fireEvent.click(screen.getByText('删除'));
+      });
+
+      // 模拟删除后的状态：文件被标记为已删除
+      (memoryContentUtils.isDeleted as any).mockReturnValue(true);
+      mockMemoryApi.readMemory.mockResolvedValue({
+        path: 'test.md',
+        content: '<!-- DELETED -->',
+        updated_at: null,
+      });
+
+      // 确认删除
+      await waitFor(() => {
+        fireEvent.click(screen.getAllByText('删除')[1]);
+      });
+
+      // 等待文件从树中消失
+      await waitFor(() => {
+        expect(screen.queryByText('test.md')).not.toBeInTheDocument();
+      });
+    });
+  });
+
   describe('主题支持', () => {
     it('应该在深色主题下正确渲染', () => {
       renderMemoryTab('dark');
