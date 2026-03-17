@@ -289,17 +289,17 @@ export const memoryApi = {
 // Job APIs
 export interface JobInfo {
   id: string;
-  status: string;
+  status: string;  // 后端字段名是 state，但通过 serde alias 映射为 status
   created_at: string;
-  updated_at: string;
+  updated_at?: string;  // 后端字段名是 started_at，通过 serde alias 映射
   title?: string;
 }
 
 export interface JobDetail {
   id: string;
-  status: string;
+  status: string;  // 后端字段名是 state
   created_at: string;
-  updated_at: string;
+  updated_at?: string;  // 后端字段名是 started_at
   title?: string;
   description?: string;
   events: any[];

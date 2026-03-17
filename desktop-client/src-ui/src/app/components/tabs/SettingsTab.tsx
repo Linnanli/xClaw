@@ -5,7 +5,7 @@ import { configApi } from '../../utils/tauri';
 
 export function SettingsTab() {
   const { theme } = useTheme();
-  const [apiUrl, setApiUrl] = useState('http://localhost:8000');
+  const [apiUrl, setApiUrl] = useState('http://localhost:3000');
   const [logLevel, setLogLevel] = useState('info');
   const [autoSave, setAutoSave] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -49,7 +49,7 @@ export function SettingsTab() {
 
   const handleReset = async () => {
     if (confirm('确定要重置所有设置吗？')) {
-      setApiUrl('http://localhost:8000');
+      setApiUrl('http://localhost:3000');
       setLogLevel('info');
       setAutoSave(true);
       await handleSave();
@@ -115,7 +115,7 @@ export function SettingsTab() {
                   type="text"
                   value={apiUrl}
                   onChange={(e) => setApiUrl(e.target.value)}
-                  placeholder="http://localhost:8000"
+                  placeholder="http://localhost:3000"
                   className={`w-full px-4 py-2 border rounded-lg focus:outline-none ${
                     theme === 'dark'
                       ? 'bg-[#0a1628] border-[#1a2942] focus:border-[#5ddad5] text-white'
@@ -125,7 +125,7 @@ export function SettingsTab() {
                 <p className={`text-xs mt-2 ${
                   theme === 'dark' ? 'text-gray-500' : 'text-[#999]'
                 }`}>
-                  后端服务的地址。默认为 http://localhost:8000
+                  后端服务的地址。默认为 http://localhost:3000
                 </p>
               </div>
             </div>

@@ -48,7 +48,7 @@ export function LogsTab() {
   useEffect(() => {
     if (!streamEnabled) return;
 
-    const streamClient = new LogStreamClient('http://localhost:8000', (logEntry) => {
+    const streamClient = new LogStreamClient('http://localhost:3000', (logEntry) => {
       setLogs((prevLogs) => [logEntry, ...prevLogs.slice(0, 99)]);
     });
 

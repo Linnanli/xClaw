@@ -89,20 +89,30 @@ pub struct SearchHit {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobInfo {
     pub id: String,
+    #[serde(alias = "state")]
     pub status: String,
     pub created_at: String,
-    pub updated_at: String,
+    #[serde(alias = "started_at")]
+    pub updated_at: Option<String>,
     pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobListResponse {
+    pub jobs: Vec<JobInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobDetail {
     pub id: String,
+    #[serde(alias = "state")]
     pub status: String,
     pub created_at: String,
-    pub updated_at: String,
+    #[serde(alias = "started_at")]
+    pub updated_at: Option<String>,
     pub title: Option<String>,
     pub description: Option<String>,
+    #[serde(default)]
     pub events: Vec<serde_json::Value>,
 }
 
@@ -417,15 +427,17 @@ impl ApiClient {
 
     pub async fn get_jobs(&self) -> Result<Vec<JobInfo>> {
         let url = format!("{}/api/jobs", self.base_url);
-        self.client
+        let response = self.client
             .get(&url)
             .header("Authorization", self.auth_header())
             .send()
             .await
             .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?
-            .json::<Vec<JobInfo>>()
+            .json::<JobListResponse>()
             .await
-            .map_err(|e| crate::error::Error::SerializationError(e.to_string()))
+            .map_err(|e| crate::error::Error::SerializationError(e.to_string()))?;
+        
+        Ok(response.jobs)
     }
 
     pub async fn get_job_detail(&self, job_id: &str) -> Result<JobDetail> {
