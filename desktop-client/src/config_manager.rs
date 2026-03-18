@@ -285,9 +285,11 @@ database_url = "postgresql://localhost/mydb"
         let config = AppConfig::from_env();
         let toml = config.to_toml();
         
-        assert!(toml.contains("api_base_url"));
-        assert!(toml.contains("database"));
-        assert!(toml.contains("logging"));
+        // 验证包含正确的section和字段
+        assert!(toml.contains("[api]"));
+        assert!(toml.contains("base_url"));
+        assert!(toml.contains("[database]"));
+        assert!(toml.contains("[logging]"));
     }
     
     #[test]

@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "desktop-client", "admin-backend", "crates/ironclaw_auth"]
+members = [".", "desktop-client", "admin-backend", "crates/ironclaw_safety", "crates/ironclaw_auth"]
 exclude = [
     "channels-src/discord",
     "channels-src/telegram",
@@ -15,7 +15,7 @@ exclude = [
     "tools-src/slack",
     "tools-src/telegram",
     "fuzz",
-    "ironclaw",
+    "crates/ironclaw_safety/fuzz",
 ]
 
 [package]
@@ -101,7 +101,7 @@ tower-http = { version = "0.6", features = ["trace", "cors", "set-header"] }
 cron = "0.13"
 
 # Safety/sanitization
-ironclaw_safety = { path = "ironclaw/crates/ironclaw_safety", version = "0.1.0" }
+ironclaw_safety = { path = "crates/ironclaw_safety", version = "0.1.0" }
 regex = "1"
 aho-corasick = "1"
 

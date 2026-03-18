@@ -353,7 +353,7 @@ mod tests {
             " ",
             "b".repeat(16),
             "\n",
-        ) + &"c".repeat(31);
+        ) + &"c".repeat(32);
         assert_eq!(
             clean_token(&token_with_spaces).unwrap(),
             format!("{}{}{}", "a".repeat(16), "b".repeat(16), "c".repeat(32))
@@ -434,11 +434,14 @@ mod tests {
         // 测试包含换行符的情况 - 现在应该能够清理
         let db_value = "\"ca66c45dfd3cbfbff339e1c9fb628ec0686dd3ca0d699970\nc5656ae62f253e6e\"";
         
-        // 这个现在应该能够成功清理
+        // 中间的换行符应该能够被清理
         let result = clean_token(db_value);
-        assert!(result.is_err(), "Token with newline in middle should still be invalid after cleaning");
+        assert!(result.is_ok(), "Token with newline in middle should be cleaned successfully");
+        let cleaned = result.unwrap();
+        assert_eq!(cleaned.len(), 64);
+        assert!(is_valid_token(&cleaned));
         
-        // 但是末尾的换行符应该能够清理
+        // 末尾的换行符也应该能够清理
         let db_value_with_trailing_newline = "\"ca66c45dfd3cbfbff339e1c9fb628ec0686dd3ca0d699970c5656ae62f253e6e\"\n";
         let cleaned = clean_token(db_value_with_trailing_newline).unwrap();
         assert_eq!(cleaned.len(), 64);

@@ -806,10 +806,12 @@ mod tests {
     #[test]
     fn test_current_timestamp() {
         let timestamp1 = current_timestamp();
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        // Sleep 至少1秒,因为 current_timestamp 返回秒级时间戳
+        std::thread::sleep(std::time::Duration::from_secs(1));
         let timestamp2 = current_timestamp();
         
         assert!(timestamp2 > timestamp1);
+        assert_eq!(timestamp2 - timestamp1, 1); // 应该正好相差1秒
     }
 
     #[test]
