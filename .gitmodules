@@ -1,0 +1,3 @@
+[submodule "ironclaw"]
+	path = ironclaw
+	url = https://github.com/nearai/ironclaw.git
