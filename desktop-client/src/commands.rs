@@ -3,6 +3,7 @@ use crate::storage::StorageManager;
 use crate::extension_manager::ExtensionManager;
 use crate::routine_manager::RoutineManager;
 use crate::memory_manager::{is_protected_file, DeleteResult, MemoryApiExtensions};
+use crate::dlp::{DlpIntegration, DlpIntegrationConfig, DlpStatistics, SanitizationResult};
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -36,12 +37,21 @@ pub struct CommandState {
     pub routine_manager: Arc<StdMutex<RoutineManager>>,
     pub skill_manager: Arc<StdMutex<crate::skill_manager::SkillManager>>,
     pub api_client: Arc<crate::api_client::ApiClient>,
+    pub dlp_integration: Arc<Mutex<DlpIntegration>>,
 }
 
 impl CommandState {
     pub fn new() -> Self {
         // Default to localhost:3000 for development (Web Gateway)
         let api_client = crate::api_client::ApiClient::new("http://localhost:3000".to_string());
+        
+        // 初始化 DLP 集成（使用 blocking 方式）
+        let dlp_integration = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                DlpIntegration::with_default_config().await
+                    .expect("Failed to initialize DLP integration")
+            })
+        });
         
         Self {
             auth_manager: Arc::new(Mutex::new(AuthManager::new())),
@@ -50,6 +60,7 @@ impl CommandState {
             routine_manager: Arc::new(StdMutex::new(RoutineManager::new())),
             skill_manager: Arc::new(StdMutex::new(crate::skill_manager::SkillManager::new())),
             api_client: Arc::new(api_client),
+            dlp_integration: Arc::new(Mutex::new(dlp_integration)),
         }
     }
     
@@ -60,6 +71,14 @@ impl CommandState {
             auth_token
         );
         
+        // 初始化 DLP 集成（使用 blocking 方式）
+        let dlp_integration = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                DlpIntegration::with_default_config().await
+                    .expect("Failed to initialize DLP integration")
+            })
+        });
+        
         Self {
             auth_manager: Arc::new(Mutex::new(AuthManager::new())),
             storage_manager: Arc::new(Mutex::new(None)),
@@ -67,6 +86,7 @@ impl CommandState {
             routine_manager: Arc::new(StdMutex::new(RoutineManager::new())),
             skill_manager: Arc::new(StdMutex::new(crate::skill_manager::SkillManager::new())),
             api_client: Arc::new(api_client),
+            dlp_integration: Arc::new(Mutex::new(dlp_integration)),
         }
     }
 }
@@ -1081,4 +1101,84 @@ fn generate_random_token() -> String {
     let hash2 = hasher.finish();
     
     format!("{:016x}{:016x}{:016x}{:016x}", hash1, hash2, hash1 ^ hash2, hash2 ^ hash1)
+}
+
+// ============================================
+// DLP 管理命令
+// ============================================
+
+/// 扫描用户输入的敏感信息
+#[tauri::command]
+pub async fn scan_user_input(
+    content: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<SanitizationResult> {
+    let dlp = state.dlp_integration.lock().await;
+    dlp.scan_user_input(&content).await
+        .map_err(|e| Error::DlpError(e.to_string()))
+}
+
+/// 扫描出站请求的敏感信息
+#[tauri::command]
+pub async fn scan_outbound_request(
+    body: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<SanitizationResult> {
+    let dlp = state.dlp_integration.lock().await;
+    dlp.scan_outbound_request(&body).await
+        .map_err(|e| Error::DlpError(e.to_string()))
+}
+
+/// 为存储脱敏内容
+#[tauri::command]
+pub async fn sanitize_for_storage(
+    content: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<String> {
+    let dlp = state.dlp_integration.lock().await;
+    dlp.sanitize_for_storage(&content).await
+        .map_err(|e| Error::DlpError(e.to_string()))
+}
+
+/// 检查HTTP请求是否包含敏感信息
+#[tauri::command]
+pub async fn check_http_request(
+    url: String,
+    headers: Vec<(String, String)>,
+    body: Option<Vec<u8>>,
+    state: tauri::State<'_, CommandState>,
+) -> Result<()> {
+    let dlp = state.dlp_integration.lock().await;
+    let body_ref = body.as_deref();
+    dlp.check_http_request(&url, &headers, body_ref).await
+        .map_err(|e| Error::DlpError(e.to_string()))
+}
+
+/// 获取 DLP 配置
+#[tauri::command]
+pub async fn get_dlp_config(
+    state: tauri::State<'_, CommandState>,
+) -> Result<DlpIntegrationConfig> {
+    let dlp = state.dlp_integration.lock().await;
+    Ok(dlp.get_config().await)
+}
+
+/// 更新 DLP 配置
+#[tauri::command]
+pub async fn update_dlp_config(
+    config: DlpIntegrationConfig,
+    state: tauri::State<'_, CommandState>,
+) -> Result<()> {
+    let dlp = state.dlp_integration.lock().await;
+    dlp.update_config(config).await
+        .map_err(|e| Error::DlpError(e.to_string()))
+}
+
+/// 获取 DLP 统计信息
+#[tauri::command]
+pub async fn get_dlp_statistics(
+    state: tauri::State<'_, CommandState>,
+) -> Result<DlpStatistics> {
+    let dlp = state.dlp_integration.lock().await;
+    Ok(dlp.get_statistics().await)
 }

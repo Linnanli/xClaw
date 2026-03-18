@@ -31,7 +31,7 @@ pub mod data_coverage_tests;
 pub use detector::{DlpDetector, DlpDetectionResult, DlpMatch, DlpSeverity, DlpAction};
 pub use patterns::{ChinesePatterns, ApiKeyPatterns, CustomPattern};
 pub use sanitizer::{DlpSanitizer, SanitizationConfig, SanitizationResult};
-pub use integration::DlpIntegration;
+pub use integration::{DlpIntegration, DlpIntegrationConfig, DlpStatistics};
 
 use thiserror::Error;
 

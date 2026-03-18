@@ -7,6 +7,8 @@ import { TokenManager } from '../../utils/tokenManager';
 import { MessageActions } from '../common/MessageActions';
 import { MessageEditor } from '../common/MessageEditor';
 import { DeleteConfirmDialog } from '../common/DeleteConfirmDialog';
+import { DlpWarningToast } from '../DlpWarningToast';
+import { DlpStatusIndicator } from '../DlpStatusIndicator';
 
 export function ChatTabWithAiSdk() {
   const { theme } = useTheme();
@@ -364,6 +366,7 @@ export function ChatTabWithAiSdk() {
                   {/* 消息内容 */}
                   {editingMessageId === msg.id ? (
                     <MessageEditor
+                      messageId={msg.id}
                       initialContent={msg.content}
                       onSave={(content) => handleSaveEdit(msg.id, content)}
                       onCancel={handleCancelEdit}
@@ -424,6 +427,7 @@ export function ChatTabWithAiSdk() {
               }`}
               disabled={loading || !selectedConversation}
             />
+            <DlpStatusIndicator />
             <button
               type="submit"
               disabled={loading || !chat.input.trim() || !selectedConversation}
@@ -442,6 +446,15 @@ export function ChatTabWithAiSdk() {
           </form>
         </div>
       </div>
+
+      {/* DLP 警告 Toast */}
+      {chat.dlpWarning && (
+        <DlpWarningToast
+          redactedCount={chat.dlpWarning.redacted}
+          blockedCount={chat.dlpWarning.blocked}
+          onClose={() => chat.setDlpWarning(null)}
+        />
+      )}
 
       {/* 删除确认对话框 */}
       <DeleteConfirmDialog

@@ -1,11 +1,13 @@
 /**
  * AI Chat Hook - 与后端 SSE 端点集成
  * 直接调用后端 API，并通过 SSE 接收响应
+ * 集成 DLP 扫描功能，在发送消息前检测敏感信息
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { createSseClient, type SseClient, type SseEvent } from '../utils/sse';
 import { TokenManager } from '../utils/tokenManager';
+import { useDlpScan } from './useDlpScan';
 
 interface Message {
   id: string;
@@ -86,10 +88,14 @@ export function useAiChat(options: UseAiChatOptions) {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const [dlpWarning, setDlpWarning] = useState<{ redacted: number; blocked: number } | null>(null);
   
   const messageIdRef = useRef(0);
   const sseClientRef = useRef<SseClient | null>(null);
   const currentAssistantMessageIdRef = useRef<string | null>(null);
+  
+  // 初始化 DLP 扫描
+  const { scanUserInput } = useDlpScan();
 
   // 初始化 SSE 连接
   useEffect(() => {
@@ -198,6 +204,72 @@ export function useAiChat(options: UseAiChatOptions) {
         setError(null);
         setIsLoading(true);
         
+        // DLP 扫描用户输入
+        console.log('🔍 Scanning message for sensitive data...');
+        console.log('   Original content:', message.content);
+        
+        // 验证 scanUserInput 是否可用
+        if (typeof scanUserInput !== 'function') {
+          console.error('❌ CRITICAL: scanUserInput is not a function!');
+          console.error('   Type:', typeof scanUserInput);
+          setIsLoading(false);
+          throw new Error('DLP 扫描功能未初始化，无法发送消息');
+        }
+        
+        try {
+          const scanResult = await scanUserInput(message.content);
+          
+          console.log('✅ DLP scan completed:', {
+            had_sensitive_data: scanResult.had_sensitive_data,
+            was_blocked: scanResult.was_blocked,
+            redacted_count: scanResult.sanitization_stats.redacted_count,
+            original_length: message.content.length,
+            sanitized_length: scanResult.sanitized_content.length,
+          });
+          
+          if (scanResult.was_blocked) {
+            // 消息被阻止
+            console.error('❌ Message blocked by DLP:', scanResult.block_reason);
+            setIsLoading(false);
+            throw new Error(`消息包含敏感信息已被阻止: ${scanResult.block_reason || '未知原因'}`);
+          }
+          
+          if (scanResult.had_sensitive_data) {
+            // 消息包含敏感信息，使用脱敏后的内容
+            console.warn('⚠️  Sensitive data detected, using sanitized content');
+            console.log('   Original:', message.content);
+            console.log('   Sanitized:', scanResult.sanitized_content);
+            console.log('   Redacted count:', scanResult.sanitization_stats.redacted_count);
+            
+            // 显示 DLP 警告
+            setDlpWarning({
+              redacted: scanResult.sanitization_stats.redacted_count,
+              blocked: scanResult.sanitization_stats.blocked_count,
+            });
+            
+            // 3秒后自动关闭警告
+            setTimeout(() => setDlpWarning(null), 3000);
+            
+            // 使用脱敏后的内容
+            message = {
+              ...message,
+              content: scanResult.sanitized_content,
+            };
+          } else {
+            console.log('✅ No sensitive data detected');
+          }
+        } catch (dlpError) {
+          console.error('❌ DLP scan failed - BLOCKING MESSAGE SEND');
+          console.error('   Error:', dlpError);
+          console.error('   Error type:', typeof dlpError);
+          console.error('   Error message:', dlpError instanceof Error ? dlpError.message : String(dlpError));
+          
+          setIsLoading(false);
+          
+          // 🚨 关键修复：DLP 扫描失败时，阻止消息发送
+          throw new Error(`DLP 扫描失败，无法发送消息: ${dlpError instanceof Error ? dlpError.message : String(dlpError)}`);
+        }
+        
         // 添加用户消息到本地状态
         const userMessage: Message = {
           id: `msg-${messageIdRef.current++}`,
@@ -262,7 +334,7 @@ export function useAiChat(options: UseAiChatOptions) {
         setMessages(prev => prev.slice(0, -1));
       }
     },
-    [threadId, apiUrl, authToken]
+    [threadId, apiUrl, authToken, scanUserInput]
   );
 
   // 重新加载消息
@@ -288,6 +360,8 @@ export function useAiChat(options: UseAiChatOptions) {
     setMessages, // 暴露 setMessages 用于初始化消息
     isLoading,
     error,
+    dlpWarning, // 暴露 DLP 警告状态
+    setDlpWarning, // 暴露设置 DLP 警告的方法
     append,
     reload,
     stop,

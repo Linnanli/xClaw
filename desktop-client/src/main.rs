@@ -202,6 +202,14 @@ async fn main() {
             get_app_config,
             get_network_config,
             check_environment_consistency,
+            // DLP 管理命令
+            scan_user_input,
+            scan_outbound_request,
+            sanitize_for_storage,
+            check_http_request,
+            get_dlp_config,
+            update_dlp_config,
+            get_dlp_statistics,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

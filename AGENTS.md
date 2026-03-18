@@ -117,6 +117,452 @@ cargo test --test {module}_regression_tests    # 变更覆盖
 - **安全测试**: 自定义恶意输入测试套件
 - **并发测试**: `tokio::test`（异步测试）
 
+## 测试质量原则：覆盖率 ≠ 质量
+
+**核心教训**：高测试覆盖率不等于高测试质量。
+
+### 真实案例：DLP 模块
+
+**测试情况**：
+- ✅ 142 个测试全部通过
+- ✅ 95% 代码覆盖率
+- ✅ 包含单元、集成、E2E、安全、可靠性测试
+
+**生产问题**：
+- ❌ 用户输入身份证号，聊天中没有脱敏
+- ❌ 大模型能看到原始敏感数据
+
+**根本原因**：测试只覆盖了成功路径，忽略了失败路径。
+
+### 5 个测试盲区
+
+#### 盲区 1：失败路径测试缺失 🎯
+
+**问题**：
+- 测试了 DLP 扫描成功的场景
+- 没测试 DLP 扫描失败会发生什么
+- 代码中有降级逻辑：`if (!dlpScanSucceeded) { /* 允许原始消息发送 */ }`
+
+**教训**：
+> **测试不仅要覆盖"应该如何工作"，更要覆盖"不应该如何失败"**
+
+**实践**：
+- 为每个功能编写失败路径测试
+- 测试所有可能的错误场景
+- 验证错误处理不会引入安全问题
+
+#### 盲区 2：真实环境测试不足 🎯
+
+**问题**：
+- E2E 测试使用模拟的后端响应
+- 没测试真实的 Tauri 命令调用
+- 没测试完整的调用链（前端 → Tauri → 后端 → DLP）
+
+**教训**：
+> **模拟测试只能验证逻辑，无法验证集成**
+
+**实践**：
+- 添加真实环境的集成测试
+- 测试完整的调用链
+- 使用真实的服务和依赖
+
+#### 盲区 3：降级逻辑安全审计缺失 🎯
+
+**问题**：
+- 为了提高可用性添加了降级处理
+- 降级逻辑允许 DLP 失败时发送原始消息
+- 没有测试降级场景的安全性
+
+**教训**：
+> **安全功能应该"故障安全"（Fail-Safe），而不是"故障开放"（Fail-Open）**
+
+**对比**：
+- ❌ 故障开放：失败时允许操作（不安全）
+- ✅ 故障安全：失败时拒绝操作（安全）
+
+**实践**：
+- 安全功能不应该有降级逻辑
+- 如果必须降级，需要明确的安全审计
+- 降级行为需要专门的测试覆盖
+
+#### 盲区 4：契约测试缺失 🎯
+
+**问题**：
+- 前端假设 `scanUserInput()` 总是返回结果
+- 后端可能返回错误
+- 没有测试接口契约
+
+**教训**：
+> **前后端接口需要契约测试，验证错误处理一致性**
+
+**实践**：
+- 定义明确的接口契约
+- 测试所有可能的返回值（成功、失败、异常）
+- 验证错误格式和错误处理
+
+#### 盲区 5：安全审计测试缺失 🎯
+
+**问题**：
+- 没有测试敏感信息是否会泄露
+- 没有验证日志中是否包含原始敏感数据
+- 没有验证错误信息中是否包含敏感数据
+
+**教训**：
+> **安全功能需要专门的审计测试，验证敏感信息永远不会泄露**
+
+**实践**：
+- 测试所有可能的泄露路径（日志、错误、网络）
+- 验证敏感信息在任何情况下都被脱敏
+- 定期运行安全审计测试
+
+### 改进的测试策略
+
+#### 测试维度矩阵（更新）
+
+| 测试维度 | 正常路径 | 错误路径 | 降级逻辑 | 真实环境 | 契约测试 | 安全审计 |
+|---------|---------|---------|---------|---------|---------|---------|
+| 单元测试 | ✅ 必须 | ✅ 必须 | ⚠️ 如有 | N/A | N/A | ✅ 必须 |
+| 集成测试 | ✅ 必须 | ✅ 必须 | ⚠️ 如有 | ✅ 推荐 | ✅ 必须 | ✅ 必须 |
+| E2E 测试 | ✅ 必须 | ✅ 推荐 | ⚠️ 如有 | ✅ 必须 | N/A | ✅ 推荐 |
+
+**说明**：
+- ✅ 必须：强制要求
+- ✅ 推荐：强烈建议
+- ⚠️ 如有：如果代码中有降级逻辑，必须测试
+
+#### 测试文件组织（更新）
+
+```
+tests/
+├── {module}_unit_tests.rs           # 单元测试（正常路径）
+├── {module}_failure_tests.rs        # 失败路径测试 ✨ 新增
+├── {module}_integration_tests.rs    # 集成测试
+├── {module}_contract_tests.rs       # 契约测试 ✨ 新增
+├── {module}_security_audit_tests.rs # 安全审计测试 ✨ 新增
+├── {module}_reliability_tests.rs    # 可靠性测试
+├── {module}_requirements_tests.rs   # 需求级测试
+└── {module}_regression_tests.rs     # 变更覆盖测试
+
+cypress/e2e/
+├── {module}_integration.cy.js       # E2E 测试（模拟环境）
+├── {module}_failure_paths.cy.js     # 失败路径测试 ✨ 新增
+├── {module}_security_audit.cy.js    # 安全审计测试 ✨ 新增
+└── {module}_real_environment.cy.js  # 真实环境测试 ✨ 新增
+```
+
+#### 测试命名规范（更新）
+
+- **需求测试**: `req_{module}_{id}_{description}`
+- **安全测试**: `test_security_{attack_type}`
+- **失败路径测试**: `test_failure_{scenario}` ✨ 新增
+- **契约测试**: `test_contract_{interface}_{case}` ✨ 新增
+- **审计测试**: `test_audit_{security_concern}` ✨ 新增
+- **可靠性测试**: `test_{failure_scenario}_recovery`
+- **回归测试**: `test_{feature}_backward_compatibility`
+
+### 质量门禁标准（更新）
+
+#### 代码提交要求
+
+- [ ] 单元测试覆盖率 >90%（正常路径 + 错误路径）
+- [ ] 失败路径测试覆盖率 >80% ✨ 新增
+- [ ] 安全测试覆盖率 100%
+- [ ] 集成测试覆盖率 >80%
+- [ ] 所有测试通过（100%通过率）
+- [ ] 0编译错误，0编译警告
+
+#### 安全功能额外要求 ✨ 新增
+
+- [ ] 失败路径测试覆盖率 100%
+- [ ] 契约测试覆盖率 >90%
+- [ ] 安全审计测试覆盖率 100%
+- [ ] 真实环境测试通过
+- [ ] 降级逻辑安全审计通过（如有）
+- [ ] 敏感信息泄露审计通过
+
+#### 发布前验证
+
+- [ ] 需求级覆盖率 >85%
+- [ ] 可靠性覆盖率 >75%
+- [ ] 变更覆盖率 >70%
+- [ ] 真实环境集成测试通过 ✨ 新增
+- [ ] 性能基准测试通过
+- [ ] 安全扫描无高危漏洞
+
+### 核心原则
+
+#### 原则 1：测试失败路径和成功路径一样重要 🎯
+
+**反例**：
+```rust
+// 只测试成功路径
+#[test]
+fn test_dlp_scan_success() {
+    let result = dlp.scan("330326199408015618");
+    assert!(result.is_ok());
+}
+```
+
+**正例**：
+```rust
+// 同时测试成功路径和失败路径
+#[test]
+fn test_dlp_scan_success() {
+    let result = dlp.scan("330326199408015618");
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_dlp_scan_failure() {
+    // 模拟服务不可用
+    let result = dlp.scan_with_unavailable_service("test");
+    assert!(result.is_err());
+    
+    // 验证错误处理不会泄露敏感信息
+    let error_msg = result.unwrap_err().to_string();
+    assert!(!error_msg.contains("sensitive_data"));
+}
+```
+
+#### 原则 2：安全功能必须"故障安全" 🎯
+
+**反例**：
+```typescript
+// 故障开放（Fail-Open）- 不安全
+try {
+  const result = await scanUserInput(content);
+  // 处理结果
+} catch (error) {
+  // 降级处理：允许原始消息发送 ❌
+  console.warn('DLP scan failed, allowing message');
+  return content; // 返回原始内容
+}
+```
+
+**正例**：
+```typescript
+// 故障安全（Fail-Safe）- 安全
+try {
+  const result = await scanUserInput(content);
+  // 处理结果
+} catch (error) {
+  // 拒绝操作：阻止消息发送 ✅
+  console.error('DLP scan failed, blocking message');
+  throw new Error('DLP 扫描失败，无法发送消息');
+}
+```
+
+#### 原则 3：真实环境测试不可或缺 🎯
+
+**反例**：
+```javascript
+// 只使用模拟环境
+cy.intercept('POST', '**/scan', { success: true });
+cy.get('.send-button').click();
+```
+
+**正例**：
+```javascript
+// 同时使用模拟环境和真实环境
+
+// 模拟环境测试（快速反馈）
+describe('DLP Tests (Mocked)', () => {
+  it('should sanitize', () => {
+    cy.intercept('POST', '**/scan', { sanitized: true });
+    // 测试逻辑
+  });
+});
+
+// 真实环境测试（验证集成）
+describe('DLP Tests (Real)', () => {
+  it('should sanitize in real environment', () => {
+    // 使用真实的后端和 Tauri 命令
+    cy.window().then(async (win) => {
+      const result = await win.__TAURI__.core.invoke('scan_user_input', {
+        content: '330326199408015618'
+      });
+      expect(result.sanitized_content).to.contain('330************618');
+    });
+  });
+});
+```
+
+#### 原则 4：契约测试验证接口一致性 🎯
+
+**实践**：
+```rust
+// 契约测试：验证前后端接口格式一致
+#[test]
+fn test_contract_sanitization_result() {
+    let result = SanitizationResult {
+        had_sensitive_data: true,
+        sanitized_content: "test".to_string(),
+        was_blocked: false,
+        block_reason: None,
+        sanitization_stats: SanitizationStats {
+            total_matches: 1,
+            redacted_count: 1,
+            blocked_count: 0,
+            warned_count: 0,
+        },
+    };
+    
+    // 验证可以序列化为 JSON
+    let json = serde_json::to_string(&result).unwrap();
+    
+    // 验证前端可以反序列化
+    let parsed: SanitizationResult = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed.had_sensitive_data, result.had_sensitive_data);
+}
+```
+
+#### 原则 5：安全审计测试验证无泄露 🎯
+
+**实践**：
+```rust
+// 安全审计测试：验证敏感信息永远不会泄露
+#[test]
+fn test_audit_no_sensitive_data_leak() {
+    let sensitive_data = "330326199408015618";
+    let result = dlp.scan(sensitive_data).unwrap();
+    
+    // 验证结果中没有原始敏感信息
+    assert!(!result.sanitized_content.contains(sensitive_data));
+    
+    // 验证日志中没有原始敏感信息
+    let logs = capture_logs();
+    assert!(!logs.contains(sensitive_data));
+    
+    // 验证错误信息中没有原始敏感信息
+    if let Err(e) = dlp.scan_with_error(sensitive_data) {
+        assert!(!e.to_string().contains(sensitive_data));
+    }
+}
+```
+
+### 更新的测试覆盖率目标
+
+#### 功能模块
+
+| 维度 | 正常路径 | 错误路径 | 真实环境 | 契约测试 | 目标 |
+|------|---------|---------|---------|---------|------|
+| 单元测试 | >90% | >80% | N/A | N/A | 必须 |
+| 集成测试 | >80% | >70% | >60% | >90% | 必须 |
+| E2E 测试 | >75% | >50% | >70% | N/A | 必须 |
+
+#### 安全模块（更严格）
+
+| 维度 | 正常路径 | 错误路径 | 真实环境 | 契约测试 | 安全审计 | 目标 |
+|------|---------|---------|---------|---------|---------|------|
+| 单元测试 | 100% | 100% | N/A | N/A | 100% | 必须 |
+| 集成测试 | 100% | 100% | >80% | 100% | 100% | 必须 |
+| E2E 测试 | >90% | >80% | >90% | N/A | >90% | 必须 |
+
+### 测试检查清单（更新）
+
+#### 功能开发检查清单
+
+- [ ] 已实现功能代码
+- [ ] 已编写单元测试（正常路径）
+- [ ] 已编写单元测试（错误路径）✨ 新增
+- [ ] 已编写失败路径测试 ✨ 新增
+- [ ] 已编写集成测试
+- [ ] 已编写契约测试 ✨ 新增
+- [ ] 已编写 E2E 测试（模拟环境）
+- [ ] 已编写 E2E 测试（真实环境）✨ 新增
+- [ ] 所有测试通过
+- [ ] 代码审查通过
+
+#### 安全功能检查清单（更严格）
+
+- [ ] 已实现安全功能
+- [ ] 已编写单元测试（正常路径）
+- [ ] 已编写单元测试（错误路径）
+- [ ] 已编写单元测试（攻击场景）
+- [ ] 已编写失败路径测试 ✨ 新增
+- [ ] 已编写集成测试
+- [ ] 已编写契约测试 ✨ 新增
+- [ ] 已编写安全审计测试 ✨ 新增
+- [ ] 已编写 E2E 测试（模拟环境）
+- [ ] 已编写 E2E 测试（真实环境）✨ 新增
+- [ ] 已验证降级逻辑的安全性（如有）✨ 新增
+- [ ] 已验证错误处理不会泄露敏感信息 ✨ 新增
+- [ ] 已验证日志不包含敏感信息 ✨ 新增
+- [ ] 所有测试通过
+- [ ] 安全审查通过
+
+### 快速参考
+
+#### 测试类型优先级
+
+**P0（必须）**：
+- 单元测试（正常路径 + 错误路径）
+- 集成测试（组件交互 + 契约）
+- E2E 测试（用户流程）
+
+**P1（安全功能必须，其他推荐）**：
+- 失败路径测试 ✨
+- 契约测试 ✨
+- 真实环境测试 ✨
+- 安全审计测试 ✨
+
+**P2（推荐）**：
+- 性能测试
+- 压力测试
+- 兼容性测试
+
+#### 测试执行顺序
+
+```bash
+# 1. 单元测试（快速反馈）
+cargo test --lib {module}
+
+# 2. 失败路径测试
+cargo test --test {module}_failure_tests
+
+# 3. 集成测试
+cargo test --test {module}_integration_tests
+
+# 4. 契约测试
+cargo test --test {module}_contract_tests
+
+# 5. 安全审计测试
+cargo test --test {module}_security_audit_tests
+
+# 6. E2E 测试（模拟环境）
+npm run test:e2e
+
+# 7. E2E 测试（真实环境）
+./tests/real_environment_integration_test.sh
+```
+
+### 核心原则总结
+
+> **测试的目标不是追求高覆盖率，而是确保系统在所有情况下都是安全的**
+
+**关键要点**：
+1. 测试正常路径 + 错误路径
+2. 测试模拟环境 + 真实环境
+3. 测试功能逻辑 + 安全审计
+4. 测试单个组件 + 集成契约
+5. 安全功能采用"故障安全"设计
+6. 测试质量比测试数量更重要
+
+### 参考案例
+
+详细的案例分析和补充测试计划，请参考：
+- `desktop-client/DLP_LESSONS_SUMMARY.md` - 核心教训总结
+- `desktop-client/DLP_TESTING_LESSONS_LEARNED.md` - 详细经验教训
+- `desktop-client/DLP_SUPPLEMENTARY_TEST_PLAN.md` - 补充测试计划
+
+### 工具和框架
+
+- **Rust测试**: `cargo test`, `proptest`（属性测试）
+- **覆盖率工具**: `tarpaulin`, `grcov`
+- **性能测试**: `criterion`（基准测试）
+- **安全测试**: 自定义恶意输入测试套件
+- **并发测试**: `tokio::test`（异步测试）
+
 ## 客户端和后端功能复用规则
 
 **核心原则**：Desktop Client 和 Admin Backend 新增功能时，必须优先复用主项目（`src/`）中已有的能力，避免重复实现。

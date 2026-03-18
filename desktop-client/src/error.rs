@@ -31,6 +31,9 @@ pub enum Error {
     #[error("Config error: {0}")]
     ConfigError(String),
 
+    #[error("DLP error: {0}")]
+    DlpError(String),
+
     #[error("Invalid password")]
     InvalidPassword,
 

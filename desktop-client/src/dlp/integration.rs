@@ -52,6 +52,7 @@ impl Default for DlpIntegrationConfig {
 pub struct DlpIntegration {
     sanitizer: Arc<RwLock<DlpSanitizer>>,
     config: Arc<RwLock<DlpIntegrationConfig>>,
+    statistics: Arc<RwLock<DlpStatistics>>,
 }
 
 impl DlpIntegration {
@@ -77,6 +78,7 @@ impl DlpIntegration {
         Ok(Self {
             sanitizer: Arc::new(RwLock::new(sanitizer)),
             config: Arc::new(RwLock::new(config)),
+            statistics: Arc::new(RwLock::new(DlpStatistics::default())),
         })
     }
 
@@ -88,6 +90,12 @@ impl DlpIntegration {
     /// 扫描用户输入
     #[instrument(skip(self, content), fields(content_len = content.len()))]
     pub async fn scan_user_input(&self, content: &str) -> DlpResult<SanitizationResult> {
+        // 更新统计
+        {
+            let mut stats = self.statistics.write().await;
+            stats.total_scans += 1;
+        }
+        
         let config = self.config.read().await;
         if !config.enabled {
             debug!("DLP disabled, skipping scan");
@@ -106,6 +114,17 @@ impl DlpIntegration {
         let result = sanitizer.sanitize(content);
         
         if result.had_sensitive_data {
+            // 更新统计
+            {
+                let mut stats = self.statistics.write().await;
+                stats.sensitive_data_detected += 1;
+                if result.was_blocked {
+                    stats.content_blocked += 1;
+                } else {
+                    stats.content_sanitized += 1;
+                }
+            }
+            
             warn!(
                 total_matches = result.sanitization_stats.total_matches,
                 was_blocked = result.was_blocked,
@@ -122,6 +141,12 @@ impl DlpIntegration {
     /// 扫描出站请求
     #[instrument(skip(self, request_body), fields(body_len = request_body.len()))]
     pub async fn scan_outbound_request(&self, request_body: &str) -> DlpResult<SanitizationResult> {
+        // 更新统计
+        {
+            let mut stats = self.statistics.write().await;
+            stats.total_scans += 1;
+        }
+        
         let config = self.config.read().await;
         if !config.enabled {
             return Ok(SanitizationResult {
@@ -139,6 +164,17 @@ impl DlpIntegration {
         let result = sanitizer.sanitize(request_body);
         
         if result.had_sensitive_data {
+            // 更新统计
+            {
+                let mut stats = self.statistics.write().await;
+                stats.sensitive_data_detected += 1;
+                if result.was_blocked {
+                    stats.content_blocked += 1;
+                } else {
+                    stats.content_sanitized += 1;
+                }
+            }
+            
             warn!(
                 total_matches = result.sanitization_stats.total_matches,
                 was_blocked = result.was_blocked,
@@ -188,6 +224,12 @@ impl DlpIntegration {
         headers: &[(String, String)],
         body: Option<&[u8]>,
     ) -> DlpResult<()> {
+        // 更新统计
+        {
+            let mut stats = self.statistics.write().await;
+            stats.total_scans += 1;
+        }
+        
         let config = self.config.read().await;
         if !config.enabled {
             return Ok(());
@@ -204,6 +246,12 @@ impl DlpIntegration {
                 Ok(())
             }
             Err(e) => {
+                // 更新统计
+                {
+                    let mut stats = self.statistics.write().await;
+                    stats.http_requests_blocked += 1;
+                }
+                
                 error!(error = %e, "HTTP request blocked by DLP");
                 
                 // 记录审计日志
@@ -246,8 +294,14 @@ impl DlpIntegration {
 
     /// 获取统计信息
     pub async fn get_statistics(&self) -> DlpStatistics {
-        // TODO: 实现统计信息收集
-        DlpStatistics::default()
+        let stats = self.statistics.read().await;
+        DlpStatistics {
+            total_scans: stats.total_scans,
+            sensitive_data_detected: stats.sensitive_data_detected,
+            content_blocked: stats.content_blocked,
+            content_sanitized: stats.content_sanitized,
+            http_requests_blocked: stats.http_requests_blocked,
+        }
     }
 
     /// 构建检测模式
@@ -520,3 +574,23 @@ mod tests {
         assert_eq!(result.sanitized_content, content); // 原样返回
     }
 }
+
+    #[tokio::test]
+    async fn test_real_id_card_330326199408015618() {
+        let integration = DlpIntegration::with_default_config().await.unwrap();
+        let content = "我的身份证号是 330326199408015618";
+        
+        let result = integration.scan_user_input(content).await.unwrap();
+        
+        println!("扫描结果:");
+        println!("  had_sensitive_data: {}", result.had_sensitive_data);
+        println!("  was_blocked: {}", result.was_blocked);
+        println!("  sanitized_content: {}", result.sanitized_content);
+        println!("  total_matches: {}", result.sanitization_stats.total_matches);
+        println!("  redacted_count: {}", result.sanitization_stats.redacted_count);
+        
+        assert!(result.had_sensitive_data, "应该检测到敏感数据");
+        assert!(!result.was_blocked, "不应该被阻止");
+        assert!(result.sanitized_content.contains("330************618"), 
+                "应该脱敏为 330************618，实际: {}", result.sanitized_content);
+    }

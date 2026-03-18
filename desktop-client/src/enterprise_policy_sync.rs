@@ -88,6 +88,14 @@ pub enum PolicyChangeType {
     Disabled,
 }
 
+/// 远程策略响应
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RemotePoliciesResponse {
+    dlp_policies: Vec<DlpPolicy>,
+    sensitive_ops_policies: Vec<SensitiveOpPolicy>,
+    version: PolicyVersion,
+}
+
 /// 策略同步统计
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct PolicySyncStats {
@@ -338,61 +346,105 @@ impl EnterprisePolicySyncManager {
         Ok(())
     }
 
-    /// 从远程服务器获取策略（模拟实现）
+    /// 从远程服务器获取策略
     async fn fetch_remote_policies(&self) -> DlpResult<(Vec<DlpPolicy>, Vec<SensitiveOpPolicy>, PolicyVersion)> {
-        // TODO: 实际实现中这里会调用HTTP API
         debug!("Fetching policies from remote server");
         
-        // 模拟网络延迟
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        // 模拟返回一些示例策略
-        let dlp_policies = vec![
-            DlpPolicy {
-                id: "chinese_id_card".to_string(),
-                pattern: r"[1-9]\d{5}(19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{3}[\dXx]".to_string(),
-                replacement: "[身份证号]".to_string(),
-                severity: "high".to_string(),
-            },
-            DlpPolicy {
-                id: "chinese_mobile".to_string(),
-                pattern: r"1[3-9]\d{9}".to_string(),
-                replacement: "[手机号]".to_string(),
-                severity: "medium".to_string(),
-            },
-        ];
-
-        let sensitive_ops_policies = vec![
-            SensitiveOpPolicy {
-                id: "file_delete".to_string(),
-                operation: "delete_file".to_string(),
-                requires_approval: true,
-                risk_level: "high".to_string(),
-            },
-        ];
-
-        let version = PolicyVersion {
-            dlp_rules_version: 1,
-            sensitive_ops_version: 1,
-            last_sync: current_timestamp(),
-        };
-
-        Ok((dlp_policies, sensitive_ops_policies, version))
+        let config = self.remote_config.read().await;
+        let url = format!("{}/api/policies", config.server_url);
+        
+        // 创建 HTTP 客户端
+        let client = reqwest::Client::builder()
+            .timeout(config.connection_timeout)
+            .build()
+            .map_err(|e| crate::dlp::DlpError::Sanitization(format!("Failed to create HTTP client: {}", e)))?;
+        
+        // 发送请求（带重试）
+        let mut last_error = None;
+        for attempt in 0..config.max_retries {
+            match client
+                .get(&url)
+                .header("Authorization", format!("Bearer {}", config.auth_token))
+                .send()
+                .await
+            {
+                Ok(response) => {
+                    if !response.status().is_success() {
+                        let status = response.status();
+                        let error_text = response.text().await.unwrap_or_default();
+                        last_error = Some(format!("HTTP {}: {}", status, error_text));
+                        
+                        if attempt < config.max_retries - 1 {
+                            warn!(
+                                attempt = attempt + 1,
+                                max_retries = config.max_retries,
+                                status = %status,
+                                "Policy fetch failed, retrying..."
+                            );
+                            tokio::time::sleep(Duration::from_secs(2u64.pow(attempt))).await;
+                            continue;
+                        }
+                    } else {
+                        // 解析响应
+                        let policies: RemotePoliciesResponse = response.json().await
+                            .map_err(|e| crate::dlp::DlpError::Sanitization(format!("Failed to parse response: {}", e)))?;
+                        
+                        return Ok((
+                            policies.dlp_policies,
+                            policies.sensitive_ops_policies,
+                            policies.version,
+                        ));
+                    }
+                }
+                Err(e) => {
+                    last_error = Some(e.to_string());
+                    
+                    if attempt < config.max_retries - 1 {
+                        warn!(
+                            attempt = attempt + 1,
+                            max_retries = config.max_retries,
+                            error = %e,
+                            "Policy fetch failed, retrying..."
+                        );
+                        tokio::time::sleep(Duration::from_secs(2u64.pow(attempt))).await;
+                        continue;
+                    }
+                }
+            }
+        }
+        
+        Err(crate::dlp::DlpError::Sanitization(
+            last_error.unwrap_or_else(|| "Failed to fetch policies".to_string())
+        ))
     }
 
-    /// 获取远程版本信息（模拟实现）
+    /// 获取远程版本信息
     async fn fetch_remote_version(&self) -> DlpResult<PolicyVersion> {
-        // TODO: 实际实现中这里会调用HTTP API
         debug!("Fetching remote policy version");
         
-        // 模拟网络延迟
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
-        Ok(PolicyVersion {
-            dlp_rules_version: 1,
-            sensitive_ops_version: 1,
-            last_sync: current_timestamp(),
-        })
+        let config = self.remote_config.read().await;
+        let url = format!("{}/api/policies/version", config.server_url);
+        
+        let client = reqwest::Client::builder()
+            .timeout(config.connection_timeout)
+            .build()
+            .map_err(|e| crate::dlp::DlpError::Sanitization(format!("Failed to create HTTP client: {}", e)))?;
+        
+        let response = client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", config.auth_token))
+            .send()
+            .await
+            .map_err(|e| crate::dlp::DlpError::Sanitization(format!("Failed to fetch version: {}", e)))?;
+        
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(crate::dlp::DlpError::Sanitization(format!("HTTP {}: {}", status, error_text)));
+        }
+        
+        response.json().await
+            .map_err(|e| crate::dlp::DlpError::Sanitization(format!("Failed to parse version: {}", e)))
     }
 
     /// 记录同步事件
