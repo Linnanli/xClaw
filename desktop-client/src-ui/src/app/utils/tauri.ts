@@ -420,3 +420,17 @@ export const fileApi = {
   uploadFile: (threadId: string, filePath: string) =>
     invokeTauri<string>('upload_file', { threadId, filePath }),
 };
+
+// App initialization and auth token APIs
+export interface AppInitInfo {
+  auth_token: string;
+  api_base_url: string;
+  database_type: string;
+  log_level: string;
+}
+
+export const appApi = {
+  getAppInitInfo: () => invokeTauri<AppInitInfo>('get_app_init_info'),
+  getAuthToken: () => invokeTauri<string>('get_auth_token'),
+  refreshAuthToken: () => invokeTauri<string>('refresh_auth_token'),
+};

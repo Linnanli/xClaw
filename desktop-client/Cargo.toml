@@ -45,6 +45,9 @@ toml = "0.8"
 dirs = "6"
 regex = "1"
 
+# Safety and DLP
+ironclaw_safety = { path = "../crates/ironclaw_safety" }
+
 # HTTP client for API calls
 reqwest = { version = "0.11", features = ["json"] }
 

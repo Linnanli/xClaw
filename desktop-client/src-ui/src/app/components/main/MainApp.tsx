@@ -13,7 +13,7 @@ import { DynamicWatermark } from '../common/DynamicWatermark';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useSSEConnection } from '../../hooks/useSSEConnection';
 import { useWatermark } from '../../hooks/useWatermark';
-import { sessionApi } from '../../utils/tauri';
+import { sessionApi, appApi } from '../../utils/tauri';
 import { ShortcutManager, SHORTCUTS } from '../../utils/shortcuts';
 import { tracing } from '../../utils/tracing';
 
@@ -31,13 +31,15 @@ export function MainApp() {
   useEffect(() => {
     const initializeConnection = async () => {
       try {
-        // TODO: 获取实际的token和baseUrl
-        // 这里应该从认证状态或配置中获取
-        const token = 'placeholder-token'; // 临时占位符
-        const baseUrl = 'http://localhost:3000'; // 临时占位符
+        // 获取实际的认证信息
+        const appInfo = await appApi.getAppInitInfo();
+        const fullToken = await appApi.getAuthToken();
         
-        await connect(token, baseUrl);
-        tracing.info('SSE connection initialized in MainApp');
+        await connect(fullToken, appInfo.api_base_url);
+        tracing.info('SSE connection initialized in MainApp', { 
+          baseUrl: appInfo.api_base_url,
+          tokenLength: fullToken.length 
+        });
       } catch (err) {
         tracing.error('Failed to initialize SSE connection', { error: err });
       }

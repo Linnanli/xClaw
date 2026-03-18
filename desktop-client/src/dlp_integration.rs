@@ -71,7 +71,7 @@ impl DlpIntegration {
     }
 
     pub fn get_policy_version(&self) -> u64 {
-        self.policy_manager.get_local_version().dlp_rules_version
+        self.policy_manager.get_version().dlp_rules_version
     }
 }
 

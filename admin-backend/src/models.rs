@@ -72,16 +72,41 @@ pub struct AuditLog {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DlpRule {
     pub id: Uuid,
+    pub name: String,
     pub pattern: String,
     pub replacement: String,
     pub severity: String,
+    pub description: Option<String>,
+    pub enabled: bool,
+    pub category: String,
+    pub created_by: Uuid,
+    pub updated_by: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SensitiveOperationRule {
     pub id: Uuid,
+    pub name: String,
     pub operation_type: String,
     pub requires_approval: bool,
+    pub risk_level: String,
+    pub description: Option<String>,
+    pub enabled: bool,
+    pub created_by: Uuid,
+    pub updated_by: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyChangeRecord {
+    pub id: Uuid,
+    pub rule_id: Uuid,
+    pub change_type: String,
+    pub old_value: Option<serde_json::Value>,
+    pub new_value: Option<serde_json::Value>,
+    pub changed_by: Uuid,
+    pub changed_at: DateTime<Utc>,
+    pub reason: Option<String>,
 }

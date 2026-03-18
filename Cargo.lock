@@ -2465,6 +2465,7 @@ dependencies = [
  "hex",
  "hkdf",
  "ironclaw",
+ "ironclaw_safety",
  "libsql",
  "proptest",
  "rand 0.8.5",

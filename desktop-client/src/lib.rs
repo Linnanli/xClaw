@@ -4,6 +4,8 @@ pub mod config;
 pub mod error;
 pub mod commands;
 pub mod policy_sync;
+pub mod enterprise_policy_sync;
+pub mod dlp;
 pub mod dlp_integration;
 pub mod offline_mode;
 pub mod extension_manager;
