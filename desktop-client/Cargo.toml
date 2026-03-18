@@ -77,8 +77,8 @@ tokio-test = "0.4"
 tempfile = "3"
 mockito = "1.5"
 serial_test = "3"
-# Main project for test helpers
-ironclaw = { path = "..", features = ["libsql"] }
+# IronClaw submodule for test helpers
+ironclaw = { path = "../ironclaw", features = ["libsql"] }
 
 [build-dependencies]
 tauri-build = "2.0"
