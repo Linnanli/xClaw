@@ -21,6 +21,14 @@ pub mod config_manager;
 pub mod network_config;
 pub mod memory_manager;
 
+// 测试模块（仅在测试时编译）
+#[cfg(test)]
+mod tests {
+    pub mod dlp_policy_sync_integration_tests {
+        include!("dlp/policy_sync_integration_tests.rs");
+    }
+}
+
 pub use error::{Error, Result};
 pub use commands::CommandState;
 pub use sse_client::{SseClient, SseEvent};

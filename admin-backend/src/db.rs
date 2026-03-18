@@ -189,90 +189,59 @@ impl Database {
 
         let now = Utc::now();
 
-        // 构建动态更新查询
-        let mut set_clauses = Vec::new();
-        let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
-        let mut param_index = 1;
-
-        if let Some(ref name) = request.name {
-            set_clauses.push(format!("name = ${}", param_index));
-            params.push(name);
-            param_index += 1;
+        // 简化实现：分别处理每个字段
+        if let Some(name) = request.name {
+            client.execute(
+                "UPDATE dlp_rules SET name = $1, updated_by = $2, updated_at = $3 WHERE id = $4",
+                &[&name, &updated_by, &now, &rule_id],
+            ).await.map_err(|e| Error::Database(e.to_string()))?;
         }
 
-        if let Some(ref pattern) = request.pattern {
-            set_clauses.push(format!("pattern = ${}", param_index));
-            params.push(pattern);
-            param_index += 1;
+        if let Some(pattern) = request.pattern {
+            client.execute(
+                "UPDATE dlp_rules SET pattern = $1, updated_by = $2, updated_at = $3 WHERE id = $4",
+                &[&pattern, &updated_by, &now, &rule_id],
+            ).await.map_err(|e| Error::Database(e.to_string()))?;
         }
 
-        if let Some(ref replacement) = request.replacement {
-            set_clauses.push(format!("replacement = ${}", param_index));
-            params.push(replacement);
-            param_index += 1;
+        if let Some(replacement) = request.replacement {
+            client.execute(
+                "UPDATE dlp_rules SET replacement = $1, updated_by = $2, updated_at = $3 WHERE id = $4",
+                &[&replacement, &updated_by, &now, &rule_id],
+            ).await.map_err(|e| Error::Database(e.to_string()))?;
         }
 
-        if let Some(ref severity) = request.severity {
-            set_clauses.push(format!("severity = ${}", param_index));
-            params.push(severity);
-            param_index += 1;
+        if let Some(severity) = request.severity {
+            client.execute(
+                "UPDATE dlp_rules SET severity = $1, updated_by = $2, updated_at = $3 WHERE id = $4",
+                &[&severity, &updated_by, &now, &rule_id],
+            ).await.map_err(|e| Error::Database(e.to_string()))?;
         }
 
-        if let Some(ref description) = request.description {
-            set_clauses.push(format!("description = ${}", param_index));
-            params.push(description);
-            param_index += 1;
+        if let Some(description) = request.description {
+            client.execute(
+                "UPDATE dlp_rules SET description = $1, updated_by = $2, updated_at = $3 WHERE id = $4",
+                &[&description, &updated_by, &now, &rule_id],
+            ).await.map_err(|e| Error::Database(e.to_string()))?;
         }
 
         if let Some(enabled) = request.enabled {
-            set_clauses.push(format!("enabled = ${}", param_index));
-            params.push(&enabled);
-            param_index += 1;
+            client.execute(
+                "UPDATE dlp_rules SET enabled = $1, updated_by = $2, updated_at = $3 WHERE id = $4",
+                &[&enabled, &updated_by, &now, &rule_id],
+            ).await.map_err(|e| Error::Database(e.to_string()))?;
         }
 
-        if let Some(ref category) = request.category {
-            set_clauses.push(format!("category = ${}", param_index));
-            params.push(category);
-            param_index += 1;
+        if let Some(category) = request.category {
+            client.execute(
+                "UPDATE dlp_rules SET category = $1, updated_by = $2, updated_at = $3 WHERE id = $4",
+                &[&category, &updated_by, &now, &rule_id],
+            ).await.map_err(|e| Error::Database(e.to_string()))?;
         }
 
-        // 添加 updated_by 和 updated_at
-        set_clauses.push(format!("updated_by = ${}", param_index));
-        params.push(&updated_by);
-        param_index += 1;
-
-        set_clauses.push(format!("updated_at = ${}", param_index));
-        params.push(&now);
-        param_index += 1;
-
-        // 添加 WHERE 条件
-        params.push(&rule_id);
-
-        let query = format!(
-            "UPDATE dlp_rules SET {} WHERE id = ${} RETURNING id, name, pattern, replacement, severity, description, enabled, category, created_by, updated_by, created_at, updated_at",
-            set_clauses.join(", "),
-            param_index
-        );
-
-        let row = client
-            .query_one(&query, &params)
-            .await
-            .map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(DlpRule {
-            id: row.get(0),
-            name: row.get(1),
-            pattern: row.get(2),
-            replacement: row.get(3),
-            severity: row.get(4),
-            description: row.get(5),
-            enabled: row.get(6),
-            category: row.get(7),
-            created_by: row.get(8),
-            updated_by: row.get(9),
-            created_at: row.get(10),
-            updated_at: row.get(11),
-        })
+        // 获取更新后的规则
+        self.get_dlp_rule_by_id(rule_id).await?
+            .ok_or_else(|| Error::NotFound("DLP rule not found after update".to_string()))
     }
 
     pub async fn delete_dlp_rule(&self, rule_id: Uuid) -> Result<()> {
@@ -401,83 +370,52 @@ impl Database {
 
         let now = Utc::now();
 
-        // 构建动态更新查询
-        let mut set_clauses = Vec::new();
-        let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
-        let mut param_index = 1;
-
-        if let Some(ref name) = request.name {
-            set_clauses.push(format!("name = ${}", param_index));
-            params.push(name);
-            param_index += 1;
+        // 简化实现：分别处理每个字段
+        if let Some(name) = request.name {
+            client.execute(
+                "UPDATE sensitive_operation_rules SET name = $1, updated_by = $2, updated_at = $3 WHERE id = $4",
+                &[&name, &updated_by, &now, &rule_id],
+            ).await.map_err(|e| Error::Database(e.to_string()))?;
         }
 
-        if let Some(ref operation_type) = request.operation_type {
-            set_clauses.push(format!("operation_type = ${}", param_index));
-            params.push(operation_type);
-            param_index += 1;
+        if let Some(operation_type) = request.operation_type {
+            client.execute(
+                "UPDATE sensitive_operation_rules SET operation_type = $1, updated_by = $2, updated_at = $3 WHERE id = $4",
+                &[&operation_type, &updated_by, &now, &rule_id],
+            ).await.map_err(|e| Error::Database(e.to_string()))?;
         }
 
         if let Some(requires_approval) = request.requires_approval {
-            set_clauses.push(format!("requires_approval = ${}", param_index));
-            params.push(&requires_approval);
-            param_index += 1;
+            client.execute(
+                "UPDATE sensitive_operation_rules SET requires_approval = $1, updated_by = $2, updated_at = $3 WHERE id = $4",
+                &[&requires_approval, &updated_by, &now, &rule_id],
+            ).await.map_err(|e| Error::Database(e.to_string()))?;
         }
 
-        if let Some(ref risk_level) = request.risk_level {
-            set_clauses.push(format!("risk_level = ${}", param_index));
-            params.push(risk_level);
-            param_index += 1;
+        if let Some(risk_level) = request.risk_level {
+            client.execute(
+                "UPDATE sensitive_operation_rules SET risk_level = $1, updated_by = $2, updated_at = $3 WHERE id = $4",
+                &[&risk_level, &updated_by, &now, &rule_id],
+            ).await.map_err(|e| Error::Database(e.to_string()))?;
         }
 
-        if let Some(ref description) = request.description {
-            set_clauses.push(format!("description = ${}", param_index));
-            params.push(description);
-            param_index += 1;
+        if let Some(description) = request.description {
+            client.execute(
+                "UPDATE sensitive_operation_rules SET description = $1, updated_by = $2, updated_at = $3 WHERE id = $4",
+                &[&description, &updated_by, &now, &rule_id],
+            ).await.map_err(|e| Error::Database(e.to_string()))?;
         }
 
         if let Some(enabled) = request.enabled {
-            set_clauses.push(format!("enabled = ${}", param_index));
-            params.push(&enabled);
-            param_index += 1;
+            client.execute(
+                "UPDATE sensitive_operation_rules SET enabled = $1, updated_by = $2, updated_at = $3 WHERE id = $4",
+                &[&enabled, &updated_by, &now, &rule_id],
+            ).await.map_err(|e| Error::Database(e.to_string()))?;
         }
 
-        // 添加 updated_by 和 updated_at
-        set_clauses.push(format!("updated_by = ${}", param_index));
-        params.push(&updated_by);
-        param_index += 1;
-
-        set_clauses.push(format!("updated_at = ${}", param_index));
-        params.push(&now);
-        param_index += 1;
-
-        // 添加 WHERE 条件
-        params.push(&rule_id);
-
-        let query = format!(
-            "UPDATE sensitive_operation_rules SET {} WHERE id = ${} RETURNING id, name, operation_type, requires_approval, risk_level, description, enabled, created_by, updated_by, created_at, updated_at",
-            set_clauses.join(", "),
-            param_index
-        );
-
-        let row = client
-            .query_one(&query, &params)
-            .await
-            .map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(SensitiveOperationRule {
-            id: row.get(0),
-            name: row.get(1),
-            operation_type: row.get(2),
-            requires_approval: row.get(3),
-            risk_level: row.get(4),
-            description: row.get(5),
-            enabled: row.get(6),
-            created_by: row.get(7),
-            updated_by: row.get(8),
-            created_at: row.get(9),
-            updated_at: row.get(10),
-        })
+        // 获取更新后的规则
+        self.get_sensitive_op_rule_by_id(rule_id).await?
+            .ok_or_else(|| Error::NotFound("Sensitive operation rule not found after update".to_string()))
     }
 
     pub async fn delete_sensitive_op_rule(&self, rule_id: Uuid) -> Result<()> {
@@ -552,7 +490,6 @@ impl Database {
         }))
     }
 
-impl Database {
     // Policy version and change tracking operations
     pub async fn get_dlp_rules_version(&self) -> Result<u64> {
         let client = self.pool.get().await
@@ -707,25 +644,29 @@ impl Database {
             .collect();
         let in_clause = placeholders.join(", ");
 
-        // 构建参数列表
-        let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
-        for rule_id in &rule_ids {
-            params.push(rule_id);
+        // 构建参数列表 - 使用 Box 来延长生命周期
+        let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync>> = Vec::new();
+        for rule_id in rule_ids {
+            params.push(Box::new(rule_id));
         }
-        params.push(&enabled);
-        params.push(&updated_by);
-        params.push(&now);
+        params.push(Box::new(enabled));
+        params.push(Box::new(updated_by));
+        params.push(Box::new(now));
+
+        // 转换为引用
+        let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = 
+            params.iter().map(|p| p.as_ref()).collect();
 
         let query = format!(
             "UPDATE dlp_rules SET enabled = ${}, updated_by = ${}, updated_at = ${} WHERE id IN ({})",
-            rule_ids.len() + 1,
-            rule_ids.len() + 2,
-            rule_ids.len() + 3,
+            params.len() - 2,
+            params.len() - 1,
+            params.len(),
             in_clause
         );
 
         let updated_count = client
-            .execute(&query, &params)
+            .execute(&query, &param_refs[..])
             .await
             .map_err(|e| Error::Database(e.to_string()))?;
 

@@ -1,10 +1,14 @@
 use crate::auth::AuthManager;
 use crate::db::Database;
 use crate::error::{Error, Result};
+use crate::handlers::{
+    get_dlp_policies_handler, get_policies_handler, get_policy_version_handler,
+    get_sensitive_ops_policies_handler,
+};
 use crate::models::{CreateUserRequest, LoginRequest, LoginResponse, RefreshTokenRequest};
 use crate::AppState;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
@@ -23,6 +27,11 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/audit-logs", get(get_audit_logs))
         .route("/api/dlp-rules", get(get_dlp_rules))
         .route("/api/sensitive-operations", get(get_sensitive_operations))
+        // 新增：策略查询 API（供 Desktop Client 使用）
+        .route("/api/policies", get(get_policies_handler))
+        .route("/api/policies/dlp", get(get_dlp_policies_handler))
+        .route("/api/policies/sensitive-ops", get(get_sensitive_ops_policies_handler))
+        .route("/api/policies/version", get(get_policy_version_handler))
         .with_state(state)
 }
 

@@ -14,6 +14,64 @@
       "autoApprove": [
         "interactive_feedback"
       ]
+    },
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp@latest"],
+      "env": {},
+      "disabled": false,
+      "autoApprove": ["resolve-library-id", "get-library-docs", "query-docs"]
+    },
+    "chrome-devtools": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "chrome-devtools-mcp@latest",
+        "--channel=stable",
+        "--headless=false",
+        "--isolated=true",
+        "--viewport=1920x1080",
+        "--chromeArg=--incognito"
+      ],
+      "env": {
+        "SystemRoot": "C:\\Windows",
+        "PROGRAMFILES": "C:\\Program Files"
+      },
+      "disabled": false,
+      "autoApprove": [
+        "list_pages", "select_page", "new_page", "close_page", "navigate_page",
+        "take_snapshot", "take_screenshot", "click", "fill", "fill_form",
+        "hover", "press_key", "drag", "upload_file", "handle_dialog",
+        "evaluate_script", "wait_for", "resize_page", "emulate",
+        "list_network_requests", "get_network_request",
+        "list_console_messages", "get_console_message",
+        "performance_start_trace", "performance_stop_trace", "performance_analyze_insight"
+      ]
+    },
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "env": {},
+      "disabled": false,
+      "autoApprove": [
+        "create_entities", "create_relations", "add_observations",
+        "delete_entities", "delete_observations", "delete_relations",
+        "read_graph", "search_nodes", "open_nodes"
+      ]
+    },
+    "thinking": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "env": {},
+      "disabled": false,
+      "autoApprove": ["sequentialthinking"]
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"],
+      "env": {},
+      "disabled": false,
+      "autoApprove": ["fetch"]
     }
   }
 }

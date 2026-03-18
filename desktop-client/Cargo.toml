@@ -75,6 +75,7 @@ wiremock = "0.6"
 proptest = "1.0"
 tokio-test = "0.4"
 tempfile = "3"
+mockito = "1.5"
 # Main project for test helpers
 ironclaw = { path = "..", features = ["libsql"] }
 

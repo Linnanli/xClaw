@@ -4,7 +4,7 @@
 
 use crate::db::Database;
 use crate::error::{Error, Result};
-use crate::models::{DlpRule, SensitiveOperationRule};
+use crate::models::{DlpRule, SensitiveOperationRule, PolicyChangeRecord};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -74,19 +74,6 @@ pub struct PolicyStatistics {
     pub rules_by_category: HashMap<String, usize>,
     pub rules_by_severity: HashMap<String, usize>,
     pub recent_changes: Vec<PolicyChangeRecord>,
-}
-
-/// 策略变更记录
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PolicyChangeRecord {
-    pub id: Uuid,
-    pub rule_id: Uuid,
-    pub change_type: String,
-    pub old_value: Option<serde_json::Value>,
-    pub new_value: Option<serde_json::Value>,
-    pub changed_by: String,
-    pub changed_at: chrono::DateTime<Utc>,
-    pub reason: Option<String>,
 }
 
 /// 策略管理服务
@@ -425,7 +412,7 @@ impl PolicyManagementService {
             .map_err(|e| Error::Validation(format!("Invalid regex pattern: {}", e)))?;
 
         let matches: Vec<DlpTestMatch> = regex.find_iter(test_content)
-            .map(|m| DlpTestMatch {
+            .map(|m: regex::Match| DlpTestMatch {
                 start: m.start(),
                 end: m.end(),
                 matched_text: m.as_str().to_string(),
@@ -435,12 +422,14 @@ impl PolicyManagementService {
 
         let sanitized_content = regex.replace_all(test_content, &rule.replacement).to_string();
 
+        let has_matches = !matches.is_empty();
+
         Ok(DlpTestResult {
             rule_id: rule.id,
             rule_name: rule.name.clone(),
             matches,
             sanitized_content,
-            has_matches: !matches.is_empty(),
+            has_matches,
         })
     }
 
@@ -558,13 +547,15 @@ mod tests {
 
     #[test]
     fn test_policy_change_record_serialization() {
+        use crate::models::PolicyChangeRecord;
+        
         let record = PolicyChangeRecord {
             id: Uuid::new_v4(),
             rule_id: Uuid::new_v4(),
             change_type: "created".to_string(),
             old_value: None,
             new_value: Some(serde_json::json!({"name": "test"})),
-            changed_by: "admin".to_string(),
+            changed_by: Uuid::new_v4(),
             changed_at: Utc::now(),
             reason: Some("Initial creation".to_string()),
         };
