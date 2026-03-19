@@ -1,0 +1,34 @@
+.dashboard-container {
+  padding: 0;
+}
+
+.dashboard-container h2 {
+  margin-bottom: 24px;
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.stats-row {
+  margin-bottom: 24px;
+}
+
+.charts-row {
+  margin-bottom: 24px;
+}
+
+.activity-logs-card {
+  margin-bottom: 0;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .dashboard-container h2 {
+    font-size: 20px;
+    margin-bottom: 16px;
+  }
+
+  .stats-row,
+  .charts-row {
+    margin-bottom: 16px;
+  }
+}

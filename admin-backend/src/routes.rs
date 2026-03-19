@@ -23,7 +23,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/auth/register", post(register))
         .route("/api/auth/login", post(login))
         .route("/api/auth/refresh", post(refresh_token))
-        .route("/api/users/:id", get(get_user))
+        .route("/api/users/{id}", get(get_user))
         .route("/api/audit-logs", get(get_audit_logs))
         .route("/api/dlp-rules", get(get_dlp_rules))
         .route("/api/sensitive-operations", get(get_sensitive_operations))
