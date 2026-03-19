@@ -110,3 +110,53 @@ pub struct PolicyChangeRecord {
     pub changed_at: DateTime<Utc>,
     pub reason: Option<String>,
 }
+
+
+// Role models
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Role {
+    pub id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateRoleRequest {
+    pub name: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateRoleRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssignPermissionsRequest {
+    pub permission_ids: Vec<Uuid>,
+}
+
+// Permission models
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Permission {
+    pub id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+    pub resource: String,
+    pub action: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoleWithPermissions {
+    pub id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+    pub permissions: Vec<Permission>,
+    pub user_count: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}

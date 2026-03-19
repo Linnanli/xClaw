@@ -1,16 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { Table, Button, Space, Modal, message, Popconfirm, Tag } from 'antd';
-import { PlusOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
+import { PlusOutlined, DeleteOutlined, ReloadOutlined, TeamOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { CreateUserModal } from '../../components/Users/CreateUserModal';
+import { AssignRolesModal } from '../../components/Users/AssignRolesModal';
 import { apiClient } from '../../api/client';
 import type { User } from '../../types';
 import '../../styles/UserList.css';
 
+interface UserWithRoles extends User {
+  roles?: Array<{ id: string; name: string }>;
+}
+
 export const UserList: React.FC = () => {
-  const [users, setUsers] = useState<User[]>([]);
+  const [users, setUsers] = useState<UserWithRoles[]>([]);
   const [loading, setLoading] = useState(false);
   const [createModalVisible, setCreateModalVisible] = useState(false);
+  const [assignRolesModalVisible, setAssignRolesModalVisible] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<UserWithRoles | null>(null);
 
   // 加载用户列表
   const loadUsers = async () => {
@@ -23,6 +30,19 @@ export const UserList: React.FC = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  // 打开分配角色模态框
+  const handleAssignRoles = (user: UserWithRoles) => {
+    setSelectedUser(user);
+    setAssignRolesModalVisible(true);
+  };
+
+  // 分配角色成功回调
+  const handleAssignRolesSuccess = () => {
+    setAssignRolesModalVisible(false);
+    setSelectedUser(null);
+    loadUsers();
   };
 
   // 删除用户
@@ -47,7 +67,7 @@ export const UserList: React.FC = () => {
   }, []);
 
   // 表格列配置
-  const columns: ColumnsType<User> = [
+  const columns: ColumnsType<UserWithRoles> = [
     {
       title: '用户名',
       dataIndex: 'username',
@@ -59,6 +79,25 @@ export const UserList: React.FC = () => {
       dataIndex: 'email',
       key: 'email',
       width: 200,
+    },
+    {
+      title: '角色',
+      dataIndex: 'roles',
+      key: 'roles',
+      width: 200,
+      render: (roles: Array<{ id: string; name: string }>) => (
+        <>
+          {roles && roles.length > 0 ? (
+            roles.map((role) => (
+              <Tag key={role.id} color="blue">
+                {role.name}
+              </Tag>
+            ))
+          ) : (
+            <Tag color="default">未分配</Tag>
+          )}
+        </>
+      ),
     },
     {
       title: '创建时间',
@@ -77,10 +116,18 @@ export const UserList: React.FC = () => {
     {
       title: '操作',
       key: 'action',
-      width: 150,
+      width: 200,
       fixed: 'right',
       render: (_, record) => (
         <Space size="small">
+          <Button
+            type="link"
+            size="small"
+            icon={<TeamOutlined />}
+            onClick={() => handleAssignRoles(record)}
+          >
+            分配角色
+          </Button>
           <Popconfirm
             title="确认删除"
             description={`确定要删除用户 "${record.username}" 吗？`}
@@ -142,6 +189,20 @@ export const UserList: React.FC = () => {
         onCancel={() => setCreateModalVisible(false)}
         onSuccess={handleCreateSuccess}
       />
+
+      {selectedUser && (
+        <AssignRolesModal
+          visible={assignRolesModalVisible}
+          userId={selectedUser.id}
+          username={selectedUser.username}
+          currentRoles={selectedUser.roles?.map((r) => r.id) || []}
+          onCancel={() => {
+            setAssignRolesModalVisible(false);
+            setSelectedUser(null);
+          }}
+          onSuccess={handleAssignRolesSuccess}
+        />
+      )}
     </div>
   );
 };

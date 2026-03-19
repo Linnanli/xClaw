@@ -23,6 +23,9 @@ pub enum Error {
     #[error("User already exists")]
     UserExists,
 
+    #[error("Conflict: {0}")]
+    Conflict(String),
+
     #[error("Invalid token")]
     InvalidToken,
 
@@ -52,6 +55,7 @@ impl IntoResponse for Error {
             Error::InvalidCredentials => (StatusCode::UNAUTHORIZED, "Invalid credentials"),
             Error::UserNotFound => (StatusCode::NOT_FOUND, "User not found"),
             Error::UserExists => (StatusCode::CONFLICT, "User already exists"),
+            Error::Conflict(_) => (StatusCode::CONFLICT, "Resource conflict"),
             Error::InvalidToken => (StatusCode::UNAUTHORIZED, "Invalid token"),
             Error::TokenExpired => (StatusCode::UNAUTHORIZED, "Token expired"),
             Error::Unauthorized => (StatusCode::FORBIDDEN, "Unauthorized"),

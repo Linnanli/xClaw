@@ -23,10 +23,15 @@ export interface LoginResponse {
 export interface Role {
   id: string;
   name: string;
-  description: string;
-  permissions: string[];
+  description?: string;
+  permission_count: number;
   user_count: number;
   created_at: string;
+  updated_at: string;
+}
+
+export interface RoleWithPermissions extends Role {
+  permissions: Permission[];
 }
 
 // Permission types

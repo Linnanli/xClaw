@@ -4,6 +4,8 @@ import { Login } from '../pages/Login';
 import { Dashboard } from '../pages/Dashboard';
 import { ComingSoon } from '../pages/ComingSoon';
 import { UserList } from '../pages/Users/UserList';
+import { RoleList } from '../pages/Users/RoleList';
+import { PermissionList } from '../pages/Users/PermissionList';
 import { MainLayout } from '../components/Layout/MainLayout';
 import { useAuthStore } from '../store/authStore';
 
@@ -61,11 +63,11 @@ export const router = createBrowserRouter([
       },
       {
         path: 'users/roles',
-        element: <ComingSoon title="角色管理" />,
+        element: <RoleList />,
       },
       {
         path: 'users/permissions',
-        element: <ComingSoon title="权限管理" />,
+        element: <PermissionList />,
       },
       // 安全策略
       {

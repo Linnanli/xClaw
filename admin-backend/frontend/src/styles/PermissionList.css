@@ -1,0 +1,17 @@
+.permission-list-container {
+  padding: 24px;
+}
+
+.page-header {
+  margin-bottom: 24px;
+}
+
+.page-header h2 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.permission-groups {
+  max-width: 1400px;
+}

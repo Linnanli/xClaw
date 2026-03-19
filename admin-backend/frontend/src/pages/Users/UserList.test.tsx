@@ -52,6 +52,7 @@ describe('UserList Component', () => {
           id: '1',
           username: 'testuser',
           email: 'test@example.com',
+          roles: [{ id: 'role-1', name: 'admin' }],
           created_at: '2026-03-19T10:00:00Z',
           updated_at: '2026-03-19T10:00:00Z',
         },
@@ -67,6 +68,56 @@ describe('UserList Component', () => {
 
       await waitFor(() => {
         expect(apiClient.get).toHaveBeenCalledWith('/users');
+      });
+    });
+
+    it('should display user roles', async () => {
+      const mockUsers = [
+        {
+          id: '1',
+          username: 'testuser',
+          email: 'test@example.com',
+          roles: [{ id: 'role-1', name: 'admin' }],
+          created_at: '2026-03-19T10:00:00Z',
+          updated_at: '2026-03-19T10:00:00Z',
+        },
+      ];
+
+      (apiClient.get as any).mockResolvedValue({ data: { users: mockUsers } });
+
+      render(
+        <BrowserRouter>
+          <UserList />
+        </BrowserRouter>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('admin')).toBeInTheDocument();
+      });
+    });
+
+    it('should display "未分配" for users without roles', async () => {
+      const mockUsers = [
+        {
+          id: '1',
+          username: 'testuser',
+          email: 'test@example.com',
+          roles: [],
+          created_at: '2026-03-19T10:00:00Z',
+          updated_at: '2026-03-19T10:00:00Z',
+        },
+      ];
+
+      (apiClient.get as any).mockResolvedValue({ data: { users: mockUsers } });
+
+      render(
+        <BrowserRouter>
+          <UserList />
+        </BrowserRouter>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('未分配')).toBeInTheDocument();
       });
     });
   });
