@@ -50,11 +50,30 @@ export interface DlpRule {
   pattern: string;
   replacement?: string;
   severity: 'low' | 'medium' | 'high' | 'critical';
-  action: 'redact' | 'block' | 'warn';
   description?: string;
-  status: 'enabled' | 'disabled';
+  enabled: boolean;
+  category: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface CreateDlpRuleRequest {
+  name: string;
+  pattern: string;
+  replacement?: string;
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  description?: string;
+  category: string;
+}
+
+export interface UpdateDlpRuleRequest {
+  name?: string;
+  pattern?: string;
+  replacement?: string;
+  severity?: 'low' | 'medium' | 'high' | 'critical';
+  description?: string;
+  enabled?: boolean;
+  category?: string;
 }
 
 export interface DlpTestRequest {

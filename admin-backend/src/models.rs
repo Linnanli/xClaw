@@ -112,6 +112,28 @@ pub struct PolicyChangeRecord {
 }
 
 
+// DLP Rule request models
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateDlpRuleRequest {
+    pub name: String,
+    pub pattern: String,
+    pub replacement: Option<String>,
+    pub severity: String,
+    pub description: Option<String>,
+    pub category: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateDlpRuleRequest {
+    pub name: Option<String>,
+    pub pattern: Option<String>,
+    pub replacement: Option<String>,
+    pub severity: Option<String>,
+    pub description: Option<String>,
+    pub enabled: Option<bool>,
+    pub category: Option<String>,
+}
+
 // Role models
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Role {

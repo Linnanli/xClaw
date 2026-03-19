@@ -6,6 +6,7 @@ import { ComingSoon } from '../pages/ComingSoon';
 import { UserList } from '../pages/Users/UserList';
 import { RoleList } from '../pages/Users/RoleList';
 import { PermissionList } from '../pages/Users/PermissionList';
+import { DlpRuleList } from '../pages/Security/DlpRuleList';
 import { MainLayout } from '../components/Layout/MainLayout';
 import { useAuthStore } from '../store/authStore';
 
@@ -72,7 +73,7 @@ export const router = createBrowserRouter([
       // 安全策略
       {
         path: 'security/dlp-rules',
-        element: <ComingSoon title="DLP 规则" />,
+        element: <DlpRuleList />,
       },
       {
         path: 'security/sensitive-ops',

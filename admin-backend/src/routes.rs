@@ -4,13 +4,13 @@ use crate::handlers::{
     get_dlp_policies_handler, get_policies_handler, get_policy_version_handler,
     get_sensitive_ops_policies_handler,
 };
-use crate::models::{CreateUserRequest, LoginRequest, LoginResponse, RefreshTokenRequest, CreateRoleRequest, UpdateRoleRequest, AssignPermissionsRequest};
+use crate::models::{CreateUserRequest, LoginRequest, LoginResponse, RefreshTokenRequest, CreateRoleRequest, UpdateRoleRequest, AssignPermissionsRequest, CreateDlpRuleRequest, UpdateDlpRuleRequest};
 use crate::AppState;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use serde_json::json;
@@ -29,8 +29,9 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/roles/{id}", get(get_role).put(update_role).delete(delete_role))
         .route("/api/roles/{id}/permissions", post(assign_permissions))
         .route("/api/permissions", get(get_permissions))
+        .route("/api/dlp-rules", get(get_dlp_rules).post(create_dlp_rule))
+        .route("/api/dlp-rules/{id}", put(update_dlp_rule).delete(delete_dlp_rule))
         .route("/api/audit-logs", get(get_audit_logs))
-        .route("/api/dlp-rules", get(get_dlp_rules))
         .route("/api/sensitive-operations", get(get_sensitive_operations))
         // 新增：策略查询 API（供 Desktop Client 使用）
         .route("/api/policies", get(get_policies_handler))
@@ -273,7 +274,9 @@ async fn get_dlp_rules(
 
     let rows = client
         .query(
-            "SELECT id, pattern, replacement, severity, created_at FROM dlp_rules",
+            "SELECT id, name, pattern, replacement, severity, description, enabled, category, created_at, updated_at 
+             FROM dlp_rules 
+             ORDER BY created_at DESC",
             &[],
         )
         .await
@@ -284,15 +287,167 @@ async fn get_dlp_rules(
         .map(|r| {
             json!({
                 "id": r.get::<_, Uuid>(0),
-                "pattern": r.get::<_, String>(1),
-                "replacement": r.get::<_, String>(2),
-                "severity": r.get::<_, String>(3),
-                "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(4),
+                "name": r.get::<_, String>(1),
+                "pattern": r.get::<_, String>(2),
+                "replacement": r.get::<_, Option<String>>(3),
+                "severity": r.get::<_, String>(4),
+                "description": r.get::<_, Option<String>>(5),
+                "enabled": r.get::<_, bool>(6),
+                "category": r.get::<_, String>(7),
+                "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(8),
+                "updated_at": r.get::<_, chrono::DateTime<chrono::Utc>>(9),
             })
         })
         .collect();
 
     Ok(Json(json!({ "rules": rules })))
+}
+
+async fn create_dlp_rule(
+    State(state): State<AppState>,
+    Json(payload): Json<CreateDlpRuleRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>)> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let rule_id = Uuid::new_v4();
+    let now = chrono::Utc::now();
+
+    client
+        .execute(
+            "INSERT INTO dlp_rules (id, name, pattern, replacement, severity, description, enabled, category, created_at, updated_at) 
+             VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8, $9)",
+            &[&rule_id, &payload.name, &payload.pattern, &payload.replacement, &payload.severity, &payload.description, &payload.category, &now, &now],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "id": rule_id,
+            "name": payload.name,
+            "pattern": payload.pattern,
+            "replacement": payload.replacement,
+            "severity": payload.severity,
+            "description": payload.description,
+            "enabled": true,
+            "category": payload.category,
+            "created_at": now,
+            "updated_at": now,
+        })),
+    ))
+}
+
+async fn update_dlp_rule(
+    State(state): State<AppState>,
+    Path(rule_id): Path<Uuid>,
+    Json(payload): Json<UpdateDlpRuleRequest>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // Check if rule exists
+    let existing = client
+        .query_opt("SELECT id FROM dlp_rules WHERE id = $1", &[&rule_id])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    if existing.is_none() {
+        return Err(Error::NotFound("DLP rule not found".to_string()));
+    }
+
+    let now = chrono::Utc::now();
+    let mut updates = vec!["updated_at = $1".to_string()];
+    let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&now];
+    let mut param_count = 2;
+
+    if let Some(ref name) = payload.name {
+        updates.push(format!("name = ${}", param_count));
+        params.push(name);
+        param_count += 1;
+    }
+
+    if let Some(ref pattern) = payload.pattern {
+        updates.push(format!("pattern = ${}", param_count));
+        params.push(pattern);
+        param_count += 1;
+    }
+
+    if let Some(ref replacement) = payload.replacement {
+        updates.push(format!("replacement = ${}", param_count));
+        params.push(replacement);
+        param_count += 1;
+    }
+
+    if let Some(ref severity) = payload.severity {
+        updates.push(format!("severity = ${}", param_count));
+        params.push(severity);
+        param_count += 1;
+    }
+
+    if let Some(ref description) = payload.description {
+        updates.push(format!("description = ${}", param_count));
+        params.push(description);
+        param_count += 1;
+    }
+
+    if let Some(ref enabled) = payload.enabled {
+        updates.push(format!("enabled = ${}", param_count));
+        params.push(enabled);
+        param_count += 1;
+    }
+
+    if let Some(ref category) = payload.category {
+        updates.push(format!("category = ${}", param_count));
+        params.push(category);
+        param_count += 1;
+    }
+
+    params.push(&rule_id);
+
+    let query = format!(
+        "UPDATE dlp_rules SET {} WHERE id = ${} RETURNING id, name, pattern, replacement, severity, description, enabled, category, created_at, updated_at",
+        updates.join(", "),
+        param_count
+    );
+
+    let row = client
+        .query_one(&query, &params)
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    Ok(Json(json!({
+        "id": row.get::<_, Uuid>(0),
+        "name": row.get::<_, String>(1),
+        "pattern": row.get::<_, String>(2),
+        "replacement": row.get::<_, Option<String>>(3),
+        "severity": row.get::<_, String>(4),
+        "description": row.get::<_, Option<String>>(5),
+        "enabled": row.get::<_, bool>(6),
+        "category": row.get::<_, String>(7),
+        "created_at": row.get::<_, chrono::DateTime<chrono::Utc>>(8),
+        "updated_at": row.get::<_, chrono::DateTime<chrono::Utc>>(9),
+    })))
+}
+
+async fn delete_dlp_rule(
+    State(state): State<AppState>,
+    Path(rule_id): Path<Uuid>,
+) -> Result<StatusCode> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let result = client
+        .execute("DELETE FROM dlp_rules WHERE id = $1", &[&rule_id])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    if result == 0 {
+        return Err(Error::NotFound("DLP rule not found".to_string()));
+    }
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn get_sensitive_operations(
