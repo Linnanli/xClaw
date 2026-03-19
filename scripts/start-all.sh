@@ -160,7 +160,8 @@ log_info "✅ LLM API 密钥已设置"
 log_section "清理旧进程和端口"
 
 log_info "停止旧的后端进程..."
-pkill -f "cargo run" || true
+# 清理 ironclaw 进程
+pkill -f "ironclaw.*run" || true
 sleep 1
 
 log_info "清理 PID 文件..."
@@ -189,7 +190,8 @@ log_section "启动后端服务"
 log_info "启动后端..."
 # 关键修复: 在后台启动后端，避免 REPL 阻塞
 # 使用 exec 和 stdin 重定向确保进程不会等待输入
-(exec cargo run -- run --no-onboard < /dev/null > /tmp/backend.log 2>&1) &
+# 注意: 主项目在 ironclaw/ 子模块中
+(cd ironclaw && exec cargo run -- run --no-onboard < /dev/null > /tmp/backend.log 2>&1) &
 BACKEND_PID=$!
 
 log_info "后端进程 PID: $BACKEND_PID"
