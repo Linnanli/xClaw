@@ -3,6 +3,7 @@ import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { Login } from '../pages/Login';
 import { Dashboard } from '../pages/Dashboard';
 import { ComingSoon } from '../pages/ComingSoon';
+import { UserList } from '../pages/Users/UserList';
 import { MainLayout } from '../components/Layout/MainLayout';
 import { useAuthStore } from '../store/authStore';
 
@@ -56,7 +57,7 @@ export const router = createBrowserRouter([
       // 用户管理
       {
         path: 'users/list',
-        element: <ComingSoon title="用户列表" />,
+        element: <UserList />,
       },
       {
         path: 'users/roles',

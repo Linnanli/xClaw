@@ -1,5 +1,4 @@
 use crate::auth::AuthManager;
-use crate::db::Database;
 use crate::error::{Error, Result};
 use crate::handlers::{
     get_dlp_policies_handler, get_policies_handler, get_policy_version_handler,
@@ -8,10 +7,10 @@ use crate::handlers::{
 use crate::models::{CreateUserRequest, LoginRequest, LoginResponse, RefreshTokenRequest};
 use crate::AppState;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde_json::json;
@@ -23,7 +22,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/auth/register", post(register))
         .route("/api/auth/login", post(login))
         .route("/api/auth/refresh", post(refresh_token))
-        .route("/api/users/{id}", get(get_user))
+        .route("/api/users", get(get_users))
+        .route("/api/users/{id}", get(get_user).delete(delete_user))
         .route("/api/audit-logs", get(get_audit_logs))
         .route("/api/dlp-rules", get(get_dlp_rules))
         .route("/api/sensitive-operations", get(get_sensitive_operations))
@@ -115,7 +115,7 @@ async fn login(
 }
 
 async fn refresh_token(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(payload): Json<RefreshTokenRequest>,
 ) -> Result<Json<LoginResponse>> {
     let auth = AuthManager::new(std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string()));
@@ -129,6 +129,55 @@ async fn refresh_token(
         refresh_token: new_refresh_token,
         expires_in: 3600,
     }))
+}
+
+async fn get_users(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let rows = client
+        .query(
+            "SELECT id, username, email, created_at, updated_at FROM users ORDER BY created_at DESC",
+            &[],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let users: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<_, Uuid>(0),
+                "username": r.get::<_, String>(1),
+                "email": r.get::<_, String>(2),
+                "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(3),
+                "updated_at": r.get::<_, chrono::DateTime<chrono::Utc>>(4),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({ "users": users })))
+}
+
+async fn delete_user(
+    State(state): State<AppState>,
+    Path(user_id): Path<Uuid>,
+) -> Result<StatusCode> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let result = client
+        .execute("DELETE FROM users WHERE id = $1", &[&user_id])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    if result == 0 {
+        return Err(Error::UserNotFound);
+    }
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn get_user(
