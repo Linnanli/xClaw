@@ -1944,6 +1944,7 @@ dependencies = [
  "argon2",
  "config",
  "dirs 6.0.0",
+ "dotenvy",
  "hex",
  "hkdf",
  "ironclaw",

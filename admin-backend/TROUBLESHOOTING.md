@@ -557,3 +557,50 @@ npm run dev
 cd admin-backend
 docker-compose down
 ```
+
+
+## Desktop Client 启动问题
+
+### 问题：Tauri 客户端启动超时
+
+**症状**：
+```
+⚠️  Tauri 启动超时，继续启动其他服务
+⚠️  内嵌后端服务可能未启动，请检查 Tauri 日志
+```
+
+**原因**：
+1. `desktop-client/src/embedded_server.rs` 使用了过时的 IronClaw API
+2. 编译错误导致 Tauri 无法启动
+3. 缺少 `dotenvy` 依赖
+
+**解决方案**：
+
+1. 添加缺失的依赖到 `desktop-client/Cargo.toml`：
+```toml
+dotenvy = "0.15"
+```
+
+2. 简化 `embedded_server.rs` 的实现，使用 CLI 方式启动 IronClaw：
+```rust
+// 使用 tokio::process::Command 启动 IronClaw CLI
+let mut child = tokio::process::Command::new("cargo")
+    .args(&["run", "--manifest-path", "../ironclaw/Cargo.toml", "--", "run", "--no-onboard"])
+    .spawn()?;
+```
+
+3. 验证编译：
+```bash
+cd desktop-client
+cargo build --no-default-features
+```
+
+4. 查看 Tauri 日志：
+```bash
+tail -f /tmp/tauri.log
+```
+
+**预防措施**：
+- 遵循"外部库API使用验证策略"规则
+- 在使用 IronClaw API 前，先查看主项目 `ironclaw/src/main.rs` 的实现
+- 使用 `cargo build` 完整验证编译，不要只依赖 `getDiagnostics`

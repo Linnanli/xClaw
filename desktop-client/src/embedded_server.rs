@@ -108,47 +108,39 @@ impl Drop for EmbeddedServer {
 
 /// Build and run the IronClaw application
 async fn build_ironclaw_app() -> Result<(), Box<dyn std::error::Error>> {
-    use ironclaw::{
-        agent::{Agent, AgentDeps},
-        app::{AppBuilder, AppBuilderFlags},
-        channels::{ChannelManager, GatewayChannel, HttpChannel},
-        config::Config,
-        llm::create_session_manager,
-    };
-
-    // Load configuration
-    let config = Config::load(None).await?;
-
-    // Create session manager
-    let session_manager = create_session_manager(&config).await?;
-
-    // Build agent dependencies
-    let deps = AgentDeps::build(&config, session_manager.clone()).await?;
-
-    // Create agent
-    let agent = Agent::new(deps).await?;
-    let agent = Arc::new(agent);
-
-    // Create channel manager
-    let mut channel_manager = ChannelManager::new(agent.clone());
-
-    // Add HTTP channel (Web Gateway)
-    let http_channel = HttpChannel::new(
-        format!("127.0.0.1:{}", EMBEDDED_SERVER_PORT),
-        agent.clone(),
-    );
-    channel_manager.add_channel(Box::new(http_channel));
-
-    // Add Gateway channel
-    let gateway_channel = GatewayChannel::new(agent.clone());
-    channel_manager.add_channel(Box::new(gateway_channel));
-
-    // Start all channels
-    channel_manager.start_all().await?;
-
-    // Keep running until shutdown
-    tokio::signal::ctrl_c().await?;
-
+    // 简化方案：直接使用 IronClaw 的 CLI 启动
+    // 这样可以避免重复实现复杂的启动逻辑
+    
+    // 设置环境变量
+    std::env::set_var("SERVER_PORT", EMBEDDED_SERVER_PORT.to_string());
+    std::env::set_var("SERVER_HOST", "127.0.0.1");
+    std::env::set_var("GATEWAY_PORT", EMBEDDED_SERVER_PORT.to_string());
+    std::env::set_var("GATEWAY_HOST", "127.0.0.1");
+    
+    // 使用 tokio::process::Command 启动 IronClaw CLI
+    let mut child = tokio::process::Command::new("cargo")
+        .args(&[
+            "run",
+            "--manifest-path",
+            "../ironclaw/Cargo.toml",
+            "--",
+            "run",
+            "--no-onboard",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    
+    info!("IronClaw server process started");
+    
+    // 等待进程结束
+    let status = child.wait().await?;
+    
+    if !status.success() {
+        error!("IronClaw server exited with status: {}", status);
+        return Err("IronClaw server failed".into());
+    }
+    
     Ok(())
 }
 
