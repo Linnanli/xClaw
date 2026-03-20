@@ -34,6 +34,12 @@ pub enum Error {
     #[error("DLP error: {0}")]
     DlpError(String),
 
+    #[error("API error: {0}")]
+    ApiError(String),
+
+    #[error("Invalid operation: {0}")]
+    InvalidOperation(String),
+
     #[error("Invalid password")]
     InvalidPassword,
 

@@ -25,7 +25,27 @@
       "assetProtocol": {
         "enable": true,
         "scope": ["$RESOURCE/**"]
-      }
+      },
+      "capabilities": [
+        {
+          "identifier": "main-capability",
+          "description": "Main application capabilities",
+          "windows": ["main"],
+          "permissions": [
+            "core:event:allow-listen",
+            "core:event:allow-emit",
+            "core:window:allow-create",
+            "core:window:allow-close",
+            "core:window:allow-set-title",
+            "core:window:allow-set-size",
+            "core:window:allow-set-position",
+            "core:window:allow-center",
+            "core:window:allow-show",
+            "core:window:allow-hide",
+            "core:default"
+          ]
+        }
+      ]
     }
   },
   "bundle": {

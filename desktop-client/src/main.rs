@@ -7,6 +7,8 @@ use desktop_client::{
 };
 use config::{Config, Environment, File};
 use std::env;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() {
@@ -145,8 +147,12 @@ async fn main() {
 
     let state = CommandState::new_with_token(auth_token);
 
+    // 初始化 SSE 订阅管理器
+    let sse_manager = Arc::new(Mutex::new(desktop_client::commands::SseSubscriptionManager::new()));
+
     tauri::Builder::default()
         .manage(state)
+        .manage(sse_manager)
         .invoke_handler(tauri::generate_handler![
             check_setup_status,
             setup_master_password,
@@ -234,6 +240,10 @@ async fn main() {
             get_dlp_config,
             update_dlp_config,
             get_dlp_statistics,
+            // 聊天命令 (Tauri IPC)
+            send_chat_message,
+            subscribe_chat_events,
+            unsubscribe_chat_events,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

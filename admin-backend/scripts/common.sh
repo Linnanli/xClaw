@@ -42,84 +42,35 @@ check_docker_dependencies() {
     fi
     log_info "Docker 已安装"
     
-    # 检查 Docker daemon 是否运行
-    if ! docker ps &> /dev/null; then
-        log_warn "Docker daemon 未就绪"
+    # 检查 Docker daemon 是否运行（使用 docker info 更可靠）
+    if ! docker info &> /dev/null; then
+        log_error "Docker daemon 未运行或无法连接"
         echo ""
-        echo "正在尝试启动 Docker..."
-        
-        # macOS: 尝试启动 Docker Desktop
+        echo "请先手动启动 Docker:"
+        echo ""
         if [[ "$OSTYPE" == "darwin"* ]]; then
-            if pgrep -x "Docker" > /dev/null; then
-                log_info "Docker Desktop 应用正在运行，等待 Docker Engine 启动..."
-                
-                # 等待 Docker Engine 就绪（最多 30 秒）
-                local MAX_WAIT=30
-                local WAIT_COUNT=0
-                while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
-                    if docker ps &> /dev/null; then
-                        echo ""
-                        log_info "Docker Engine 已就绪"
-                        break
-                    fi
-                    echo -n "."
-                    sleep 1
-                    WAIT_COUNT=$((WAIT_COUNT + 1))
-                done
-                
-                if [ $WAIT_COUNT -ge $MAX_WAIT ]; then
-                    echo ""
-                    log_error "Docker Engine 启动超时"
-                    echo ""
-                    echo "请尝试手动重启 Docker Desktop:"
-                    echo "  1. 点击菜单栏的 Docker 图标"
-                    echo "  2. 选择 'Restart'"
-                    echo "  3. 等待 Docker 图标变为绿色"
-                    echo ""
-                    exit 1
-                fi
-            else
-                log_info "正在启动 Docker Desktop..."
-                open -a Docker
-                
-                # 等待 Docker 启动
-                local MAX_WAIT=60
-                local WAIT_COUNT=0
-                echo -n "等待 Docker 启动: "
-                while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
-                    if docker ps &> /dev/null; then
-                        echo ""
-                        log_info "Docker 已启动"
-                        break
-                    fi
-                    echo -n "."
-                    sleep 2
-                    WAIT_COUNT=$((WAIT_COUNT + 2))
-                done
-                
-                if [ $WAIT_COUNT -ge $MAX_WAIT ]; then
-                    echo ""
-                    log_error "Docker 启动超时"
-                    echo ""
-                    echo "请手动启动 Docker Desktop:"
-                    echo "  打开 Applications 文件夹，启动 Docker 应用"
-                    echo ""
-                    exit 1
-                fi
-            fi
-        else
-            # Linux/Windows
-            log_error "Docker daemon 未运行"
+            echo "  macOS: 打开 Applications 文件夹，启动 Docker Desktop 应用"
+            echo "        或使用命令: open -a Docker"
             echo ""
-            echo "请启动 Docker:"
-            echo "  Windows: 打开开始菜单，搜索并启动 Docker Desktop"
+            echo "  如果 Docker Desktop 已打开但仍报错，请完全重启："
+            echo "    osascript -e 'quit app \"Docker\"'"
+            echo "    sleep 5"
+            echo "    open -a Docker"
+            echo "    sleep 30  # 等待 Docker Engine 启动"
+        elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
             echo "  Linux: sudo systemctl start docker"
-            echo ""
-            exit 1
+        else
+            echo "  Windows: 打开开始菜单，搜索并启动 Docker Desktop"
         fi
-    else
-        log_info "Docker daemon 正在运行"
+        echo ""
+        echo "启动 Docker 后，请重新运行此脚本"
+        echo ""
+        echo "详细修复指南: cat DOCKER_CONNECTION_FIX.md"
+        echo ""
+        exit 1
     fi
+    
+    log_info "Docker daemon 正在运行"
     
     if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
         log_error "Docker Compose 未找到，请先安装 Docker Compose"
@@ -137,8 +88,18 @@ start_postgres_db() {
     
     cd "$ADMIN_BACKEND_DIR"
     
+    # 先检查 Docker daemon 是否可用
+    if ! docker info > /dev/null 2>&1; then
+        log_error "Docker daemon 不可用或已断开连接"
+        echo ""
+        echo "请先确保 Docker Desktop 正常运行："
+        echo "  ./scripts/check-docker-stability.sh"
+        echo ""
+        return 1
+    fi
+    
     # 检查数据库容器是否已运行
-    if docker ps | grep -q admin-backend-postgres; then
+    if docker ps 2>/dev/null | grep -q admin-backend-postgres; then
         log_info "PostgreSQL 容器已在运行"
         return 0
     fi
@@ -173,6 +134,63 @@ start_postgres_db() {
     log_error "PostgreSQL 启动超时"
     echo ""
     echo "查看日志: docker logs admin-backend-postgres"
+    return 1
+}
+
+# 检查 PostgreSQL 数据库是否运行
+# 参数: $1 - admin-backend 目录路径
+check_postgres_db() {
+    local ADMIN_BACKEND_DIR="$1"
+    
+    log_section "检查 PostgreSQL 数据库"
+    
+    cd "$ADMIN_BACKEND_DIR"
+    
+    # 先检查 Docker daemon 是否可用
+    if ! docker info > /dev/null 2>&1; then
+        log_error "Docker daemon 不可用或已断开连接"
+        echo ""
+        echo "Docker daemon 似乎不稳定，请尝试："
+        echo ""
+        echo "1. 完全重启 Docker Desktop："
+        echo "   osascript -e 'quit app \"Docker\"'"
+        echo "   sleep 5"
+        echo "   open -a Docker"
+        echo "   sleep 30"
+        echo ""
+        echo "2. 或查看详细修复指南："
+        echo "   cat DOCKER_CONNECTION_FIX.md"
+        echo ""
+        return 1
+    fi
+    
+    # 检查数据库容器是否已运行
+    if docker ps 2>/dev/null | grep -q admin-backend-postgres; then
+        log_info "PostgreSQL 容器已在运行"
+        
+        # 验证数据库是否就绪
+        if docker exec admin-backend-postgres pg_isready -U postgres > /dev/null 2>&1; then
+            log_info "PostgreSQL 已就绪"
+            return 0
+        else
+            log_error "PostgreSQL 容器运行中但未就绪"
+            echo ""
+            echo "查看日志: docker logs admin-backend-postgres"
+            return 1
+        fi
+    fi
+    
+    # 数据库未运行，报错并提示手动启动
+    log_error "PostgreSQL 容器未运行"
+    echo ""
+    echo "请先手动启动 PostgreSQL 数据库:"
+    echo ""
+    echo "  cd admin-backend && docker-compose up -d postgres"
+    echo ""
+    echo "或使用专用脚本:"
+    echo ""
+    echo "  ./admin-backend/scripts/start-db.sh"
+    echo ""
     return 1
 }
 
@@ -230,7 +248,30 @@ clean_port() {
     local SERVICE_NAME=$2
     
     log_info "清理 ${PORT} 端口（${SERVICE_NAME}）..."
-    lsof -i :${PORT} | grep -v COMMAND | awk '{print $2}' | xargs kill -9 2>/dev/null || true
+    
+    # 获取使用该端口的进程
+    local PIDS=$(lsof -ti :${PORT} 2>/dev/null || true)
+    
+    if [ -z "$PIDS" ]; then
+        # 端口未被占用
+        return 0
+    fi
+    
+    # 检查是否是 Docker 相关进程
+    for PID in $PIDS; do
+        local PROCESS_NAME=$(ps -p $PID -o comm= 2>/dev/null || true)
+        
+        # 跳过 Docker 相关进程
+        if echo "$PROCESS_NAME" | grep -qi "docker\|com.docker"; then
+            log_warn "跳过 Docker 进程 (PID: $PID, 进程: $PROCESS_NAME)"
+            continue
+        fi
+        
+        # 杀死非 Docker 进程
+        log_info "终止进程 PID: $PID ($PROCESS_NAME)"
+        kill -9 $PID 2>/dev/null || true
+    done
+    
     sleep 1
 }
 
@@ -340,4 +381,141 @@ start_admin_frontend() {
     log_info "前端已启动"
     
     echo "$FRONTEND_PID"
+}
+
+
+# ============================================
+# 串行启动模式函数
+# ============================================
+
+# 启动 Tauri 并等待编译完成（串行模式）
+# 参数: $1 - desktop-client 目录路径
+start_tauri_serial() {
+    local DESKTOP_CLIENT_DIR="$1"
+    
+    log_section "启动 Tauri 客户端（串行模式 - 实时显示编译进度）"
+    
+    cd "$DESKTOP_CLIENT_DIR"
+    
+    log_info "启动 Tauri 客户端（内嵌 IronClaw 核心服务）..."
+    log_info "内嵌后端将在端口 38080 启动"
+    echo ""
+    
+    # 启动 Tauri 开发服务器
+    cargo tauri dev > /tmp/tauri.log 2>&1 &
+    local TAURI_PID=$!
+    
+    log_info "Tauri 客户端进程 PID: $TAURI_PID"
+    log_info "正在编译，实时显示进度..."
+    echo ""
+    
+    # 等待编译开始
+    sleep 2
+    
+    # 实时显示编译进度
+    local TIMEOUT=600  # 10 分钟超时
+    local START_TIME=$(date +%s)
+    local LAST_LINE=""
+    
+    while true; do
+        # 检查进程是否还在运行
+        if ! kill -0 $TAURI_PID 2>/dev/null; then
+            echo ""
+            log_warn "Tauri 客户端进程已退出"
+            return 1
+        fi
+        
+        # 检查是否编译完成并启动
+        if curl -s http://localhost:38080/api/health > /dev/null 2>&1; then
+            echo ""
+            log_info "✅ Tauri 客户端和内嵌后端已启动"
+            echo "$TAURI_PID"
+            return 0
+        fi
+        
+        # 显示最新的编译进度
+        local NEW_LINE=$(tail -1 /tmp/tauri.log 2>/dev/null)
+        if [ "$NEW_LINE" != "$LAST_LINE" ]; then
+            if echo "$NEW_LINE" | grep -q "Compiling\|Building\|Finished"; then
+                echo "$NEW_LINE"
+                LAST_LINE="$NEW_LINE"
+            fi
+        fi
+        
+        # 检查超时
+        local CURRENT_TIME=$(date +%s)
+        local ELAPSED=$((CURRENT_TIME - START_TIME))
+        if [ $ELAPSED -gt $TIMEOUT ]; then
+            echo ""
+            log_error "Tauri 启动超时（${TIMEOUT}秒）"
+            return 1
+        fi
+        
+        sleep 1
+    done
+}
+
+# 启动 Admin Backend 并等待编译完成（串行模式）
+# 参数: $1 - admin-backend 目录路径
+start_admin_backend_serial() {
+    local ADMIN_BACKEND_DIR="$1"
+    
+    log_section "启动 Admin Backend 后端（串行模式 - 实时显示编译进度）"
+    
+    cd "$ADMIN_BACKEND_DIR"
+    
+    log_info "启动后端..."
+    echo ""
+    
+    cargo run > /tmp/admin-backend.log 2>&1 &
+    local BACKEND_PID=$!
+    
+    log_info "后端进程 PID: $BACKEND_PID"
+    log_info "正在编译，实时显示进度..."
+    echo ""
+    
+    # 等待编译开始
+    sleep 2
+    
+    # 实时显示编译进度
+    local TIMEOUT=300  # 5 分钟超时
+    local START_TIME=$(date +%s)
+    local LAST_LINE=""
+    
+    while true; do
+        # 检查进程是否还在运行
+        if ! kill -0 $BACKEND_PID 2>/dev/null; then
+            echo ""
+            log_error "后端进程已退出，检查编译错误"
+            return 1
+        fi
+        
+        # 检查端口是否监听
+        if lsof -i :3000 | grep -q LISTEN; then
+            echo ""
+            log_info "✅ 后端编译完成并启动成功"
+            echo "$BACKEND_PID"
+            return 0
+        fi
+        
+        # 显示最新的编译进度
+        local NEW_LINE=$(tail -1 /tmp/admin-backend.log 2>/dev/null)
+        if [ "$NEW_LINE" != "$LAST_LINE" ]; then
+            if echo "$NEW_LINE" | grep -q "Compiling\|Building\|Finished"; then
+                echo "$NEW_LINE"
+                LAST_LINE="$NEW_LINE"
+            fi
+        fi
+        
+        # 检查超时
+        local CURRENT_TIME=$(date +%s)
+        local ELAPSED=$((CURRENT_TIME - START_TIME))
+        if [ $ELAPSED -gt $TIMEOUT ]; then
+            echo ""
+            log_error "后端编译超时（${TIMEOUT}秒）"
+            return 1
+        fi
+        
+        sleep 1
+    done
 }

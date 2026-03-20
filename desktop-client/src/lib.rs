@@ -33,7 +33,7 @@ mod tests {
 }
 
 pub use error::{Error, Result};
-pub use commands::CommandState;
+pub use commands::{CommandState, SseSubscriptionManager};
 pub use sse_client::{SseClient, SseEvent};
 pub use environment_checker::{EnvironmentChecker, EnvironmentConfig, Environment};
 pub use platform_utils::{get_app_data_dir, get_config_dir, get_cache_dir, get_os, get_os_name};

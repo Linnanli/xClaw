@@ -52,7 +52,8 @@ ironclaw_safety = { path = "../ironclaw/crates/ironclaw_safety" }
 ironclaw = { path = "../ironclaw", features = ["libsql"] }
 
 # HTTP client for API calls
-reqwest = { version = "0.11", features = ["json"] }
+reqwest = { version = "0.11", features = ["json", "stream"] }
+futures = "0.3"
 
 # URL encoding and parsing
 urlencoding = "2"
@@ -83,6 +84,10 @@ tokio-test = "0.4"
 tempfile = "3"
 mockito = "1.5"
 serial_test = "3"
+# Tauri test support
+tauri = { version = "2.0", features = ["test"] }
+# reqwest with blocking for tests
+reqwest = { version = "0.11", features = ["json", "stream", "blocking"] }
 
 [build-dependencies]
 tauri-build = "2.0"

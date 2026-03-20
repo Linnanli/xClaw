@@ -8,6 +8,7 @@ use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::Mutex;
+use tauri::Emitter; // 添加 Emitter trait
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetupResponse {
@@ -30,6 +31,7 @@ pub struct SessionInfo {
     pub is_expired: bool,
 }
 
+#[derive(Clone)]
 pub struct CommandState {
     pub auth_manager: Arc<Mutex<AuthManager>>,
     pub storage_manager: Arc<Mutex<Option<StorageManager>>>,
@@ -1183,4 +1185,544 @@ pub async fn get_dlp_statistics(
 ) -> Result<DlpStatistics> {
     let dlp = state.dlp_integration.lock().await;
     Ok(dlp.get_statistics().await)
+}
+
+// ============================================================================
+// 聊天命令 (Chat Commands)
+// ============================================================================
+
+use tauri::{AppHandle, Manager, Window};
+use tokio::sync::oneshot;
+
+/// 聊天事件类型
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ChatEvent {
+    /// AI 响应消息
+    Response {
+        message_id: String,
+        content: String,
+        thread_id: String,
+    },
+    /// AI 思考状态
+    Thinking {
+        message: String,
+    },
+    /// 状态更新
+    Status {
+        message: String,
+        level: String,
+    },
+    /// 错误事件
+    Error {
+        message: String,
+        code: Option<String>,
+    },
+    /// 连接状态
+    ConnectionStatus {
+        connected: bool,
+        message: String,
+    },
+}
+
+/// SSE 事件订阅管理器
+pub struct SseSubscriptionManager {
+    /// 是否正在订阅
+    is_subscribed: Arc<Mutex<bool>>,
+    /// 取消订阅的通知通道
+    cancel_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+}
+
+impl SseSubscriptionManager {
+    pub fn new() -> Self {
+        Self {
+            is_subscribed: Arc::new(Mutex::new(false)),
+            cancel_tx: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// 检查是否正在订阅
+    pub async fn is_subscribed(&self) -> bool {
+        *self.is_subscribed.lock().await
+    }
+
+    /// 设置订阅状态
+    pub async fn set_subscribed(&self, subscribed: bool) {
+        *self.is_subscribed.lock().await = subscribed;
+    }
+
+    /// 设置取消通道
+    pub async fn set_cancel_tx(&self, tx: oneshot::Sender<()>) {
+        *self.cancel_tx.lock().await = Some(tx);
+    }
+
+    /// 取消订阅
+    pub async fn cancel(&self) {
+        if let Some(tx) = self.cancel_tx.lock().await.take() {
+            let _ = tx.send(());
+        }
+        self.set_subscribed(false).await;
+    }
+}
+
+/// 发送聊天消息
+/// 
+/// 使用 Tauri IPC 替代 HTTP API,提供类型安全的消息发送
+/// 
+/// # 参数
+/// - `thread_id`: 会话 ID
+/// - `content`: 消息内容
+/// 
+/// # 返回
+/// - `SendMessageResponse`: 消息发送响应
+/// 
+/// # 示例
+/// ```typescript
+/// const response = await invoke('send_chat_message', {
+///   threadId: 'thread-123',
+///   content: 'Hello, AI!'
+/// });
+/// ```
+#[tauri::command]
+pub async fn send_chat_message(
+    thread_id: String,
+    content: String,
+    state: tauri::State<'_, CommandState>,
+) -> Result<crate::api_client::SendMessageResponse> {
+    tracing::info!("📤 Sending chat message to thread: {}", thread_id);
+    tracing::debug!("   Content length: {} chars", content.len());
+
+    // 调用 API 客户端发送消息
+    let response = state
+        .api_client
+        .send_message(crate::api_client::SendMessageRequest {
+            thread_id: Some(thread_id.clone()),
+            content,
+        })
+        .await
+        .map_err(|e| {
+            tracing::error!("❌ Failed to send message: {}", e);
+            Error::ApiError(e.to_string())
+        })?;
+
+    tracing::info!("✅ Message sent successfully: {}", response.message_id);
+    Ok(response)
+}
+
+/// 订阅聊天事件
+/// 
+/// 使用 SSE 连接到后端,接收实时消息并通过 Tauri 事件系统推送到前端
+/// 
+/// # 架构
+/// ```
+/// 前端 ──invoke──► subscribe_chat_events
+///                      │
+///                      ▼
+///                  SSE 连接
+///                      │
+///                      ▼
+///                  解析事件
+///                      │
+///                      ▼
+///  前端 ◄──emit──  Tauri 事件
+/// ```
+/// 
+/// # 参数
+/// - `window`: Tauri 窗口句柄,用于发送事件
+/// - `app_handle`: 应用句柄,用于访问全局状态
+/// 
+/// # 返回
+/// - `Ok(())`: 订阅成功启动
+/// 
+/// # 错误
+/// - 如果已经在订阅中,返回错误
+/// 
+/// # 示例
+/// ```typescript
+/// await invoke('subscribe_chat_events');
+/// 
+/// // 监听事件
+/// await listen('chat-event', (event) => {
+///   console.log('Received:', event.payload);
+/// });
+/// ```
+#[tauri::command]
+pub async fn subscribe_chat_events(
+    window: Window,
+    app_handle: AppHandle,
+    state: tauri::State<'_, CommandState>,
+) -> Result<()> {
+    tracing::info!("🔗 Subscribing to chat events");
+
+    // 检查是否已经在订阅
+    let manager = app_handle
+        .state::<Arc<Mutex<SseSubscriptionManager>>>()
+        .inner()
+        .clone();
+
+    if manager.lock().await.is_subscribed().await {
+        tracing::info!("ℹ️  Already subscribed to chat events, returning success");
+        return Ok(()); // 幂等操作：已订阅时直接返回成功
+    }
+
+    // 创建取消通道
+    let (cancel_tx, mut cancel_rx) = oneshot::channel();
+    manager.lock().await.set_cancel_tx(cancel_tx).await;
+    manager.lock().await.set_subscribed(true).await;
+
+    // 获取 API 客户端
+    let api_client = state.api_client.clone();
+    let base_url = api_client.base_url().to_string();
+    let auth_token = api_client.auth_token().to_string();
+
+    // 在后台任务中订阅 SSE 事件
+    tokio::spawn(async move {
+        tracing::info!("🚀 Starting SSE subscription task");
+
+        // 构建 SSE URL
+        let sse_url = format!("{}/api/chat/events", base_url);
+        tracing::debug!("   SSE URL: {}", sse_url);
+
+        // 创建 HTTP 客户端
+        let client = reqwest::Client::new();
+
+        loop {
+            // 检查是否需要取消
+            if cancel_rx.try_recv().is_ok() {
+                tracing::info!("🛑 SSE subscription cancelled");
+                break;
+            }
+
+            // 连接 SSE
+            match client
+                .get(&sse_url)
+                .header("Authorization", format!("Bearer {}", auth_token))
+                .header("Accept", "text/event-stream")
+                .send()
+                .await
+            {
+                Ok(response) => {
+                    tracing::info!("✅ SSE connection established");
+
+                    // 发送连接成功事件
+                    let _ = window.emit(
+                        "chat-event",
+                        ChatEvent::ConnectionStatus {
+                            connected: true,
+                            message: "Connected to chat events".to_string(),
+                        },
+                    );
+
+                    // 读取 SSE 流
+                    let mut stream = response.bytes_stream();
+                    use futures::StreamExt;
+
+                    while let Some(chunk) = stream.next().await {
+                        // 检查是否需要取消
+                        if cancel_rx.try_recv().is_ok() {
+                            tracing::info!("🛑 SSE subscription cancelled");
+                            break;
+                        }
+
+                        match chunk {
+                            Ok(bytes) => {
+                                // 解析 SSE 事件
+                                if let Ok(text) = String::from_utf8(bytes.to_vec()) {
+                                    tracing::debug!("📨 Received SSE data: {}", text);
+
+                                    // 解析事件类型和数据
+                                    if let Some(event) = parse_sse_event(&text) {
+                                        // 发送事件到前端
+                                        if let Err(e) = window.emit("chat-event", event) {
+                                            tracing::error!("❌ Failed to emit chat event: {}", e);
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("❌ Error reading SSE stream: {}", e);
+                                break;
+                            }
+                        }
+                    }
+
+                    // 连接断开
+                    tracing::warn!("⚠️  SSE connection closed");
+                    let _ = window.emit(
+                        "chat-event",
+                        ChatEvent::ConnectionStatus {
+                            connected: false,
+                            message: "Disconnected from chat events".to_string(),
+                        },
+                    );
+                }
+                Err(e) => {
+                    tracing::error!("❌ Failed to connect to SSE: {}", e);
+
+                    // 发送连接失败事件
+                    let _ = window.emit(
+                        "chat-event",
+                        ChatEvent::Error {
+                            message: format!("Failed to connect: {}", e),
+                            code: Some("CONNECTION_ERROR".to_string()),
+                        },
+                    );
+                }
+            }
+
+            // 等待一段时间后重连
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+        }
+
+        tracing::info!("🏁 SSE subscription task ended");
+    });
+
+    tracing::info!("✅ Chat events subscription started");
+    Ok(())
+}
+
+/// 取消订阅聊天事件
+/// 
+/// # 返回
+/// - `Ok(())`: 取消订阅成功
+/// 
+/// # 示例
+/// ```typescript
+/// await invoke('unsubscribe_chat_events');
+/// ```
+#[tauri::command]
+pub async fn unsubscribe_chat_events(app_handle: AppHandle) -> Result<()> {
+    tracing::info!("🛑 Unsubscribing from chat events");
+
+    let manager = app_handle
+        .state::<Arc<Mutex<SseSubscriptionManager>>>()
+        .inner()
+        .clone();
+
+    manager.lock().await.cancel().await;
+
+    tracing::info!("✅ Chat events unsubscribed");
+    Ok(())
+}
+
+/// 解析 SSE 事件
+/// 
+/// SSE 格式:
+/// ```
+/// event: response
+/// data: {"message_id": "123", "content": "Hello"}
+/// 
+/// ```
+/// 
+/// # 参数
+/// - `text`: SSE 文本数据
+/// 
+/// # 返回
+/// - `Some(ChatEvent)`: 解析成功的事件
+/// - `None`: 解析失败或不支持的事件类型
+fn parse_sse_event(text: &str) -> Option<ChatEvent> {
+    let lines: Vec<&str> = text.lines().collect();
+
+    let mut event_type: Option<&str> = None;
+    let mut data: Option<&str> = None;
+
+    for line in lines {
+        if line.starts_with("event:") {
+            event_type = line.strip_prefix("event:").map(|s| s.trim());
+        } else if line.starts_with("data:") {
+            data = line.strip_prefix("data:").map(|s| s.trim());
+        }
+    }
+
+    // 解析事件
+    match (event_type, data) {
+        (Some("response"), Some(json_data)) => {
+            // 解析响应事件
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_data) {
+                Some(ChatEvent::Response {
+                    message_id: value["message_id"]
+                        .as_str()
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    content: value["content"].as_str().unwrap_or("").to_string(),
+                    thread_id: value["thread_id"]
+                        .as_str()
+                        .unwrap_or("unknown")
+                        .to_string(),
+                })
+            } else {
+                None
+            }
+        }
+        (Some("thinking"), Some(json_data)) => {
+            // 解析思考事件
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_data) {
+                Some(ChatEvent::Thinking {
+                    message: value["message"].as_str().unwrap_or("").to_string(),
+                })
+            } else {
+                None
+            }
+        }
+        (Some("status"), Some(json_data)) => {
+            // 解析状态事件
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_data) {
+                Some(ChatEvent::Status {
+                    message: value["message"].as_str().unwrap_or("").to_string(),
+                    level: value["level"].as_str().unwrap_or("info").to_string(),
+                })
+            } else {
+                None
+            }
+        }
+        (Some("error"), Some(json_data)) => {
+            // 解析错误事件
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_data) {
+                Some(ChatEvent::Error {
+                    message: value["message"].as_str().unwrap_or("").to_string(),
+                    code: value["code"].as_str().map(|s| s.to_string()),
+                })
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+// ============================================================================
+// 聊天命令测试 (Chat Commands Tests)
+// ============================================================================
+
+#[cfg(test)]
+mod chat_tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_sse_response_event() {
+        let text = r#"event: response
+data: {"message_id": "msg-123", "content": "Hello, world!", "thread_id": "thread-456"}
+
+"#;
+
+        let event = parse_sse_event(text);
+        assert!(event.is_some());
+
+        if let Some(ChatEvent::Response {
+            message_id,
+            content,
+            thread_id,
+        }) = event
+        {
+            assert_eq!(message_id, "msg-123");
+            assert_eq!(content, "Hello, world!");
+            assert_eq!(thread_id, "thread-456");
+        } else {
+            panic!("Expected Response event");
+        }
+    }
+
+    #[test]
+    fn test_parse_sse_thinking_event() {
+        let text = r#"event: thinking
+data: {"message": "Processing your request..."}
+
+"#;
+
+        let event = parse_sse_event(text);
+        assert!(event.is_some());
+
+        if let Some(ChatEvent::Thinking { message }) = event {
+            assert_eq!(message, "Processing your request...");
+        } else {
+            panic!("Expected Thinking event");
+        }
+    }
+
+    #[test]
+    fn test_parse_sse_status_event() {
+        let text = r#"event: status
+data: {"message": "Agent started", "level": "info"}
+
+"#;
+
+        let event = parse_sse_event(text);
+        assert!(event.is_some());
+
+        if let Some(ChatEvent::Status { message, level }) = event {
+            assert_eq!(message, "Agent started");
+            assert_eq!(level, "info");
+        } else {
+            panic!("Expected Status event");
+        }
+    }
+
+    #[test]
+    fn test_parse_sse_error_event() {
+        let text = r#"event: error
+data: {"message": "Something went wrong", "code": "INTERNAL_ERROR"}
+
+"#;
+
+        let event = parse_sse_event(text);
+        assert!(event.is_some());
+
+        if let Some(ChatEvent::Error { message, code }) = event {
+            assert_eq!(message, "Something went wrong");
+            assert_eq!(code, Some("INTERNAL_ERROR".to_string()));
+        } else {
+            panic!("Expected Error event");
+        }
+    }
+
+    #[test]
+    fn test_parse_sse_invalid_event() {
+        let text = r#"event: unknown
+data: {"foo": "bar"}
+
+"#;
+
+        let event = parse_sse_event(text);
+        assert!(event.is_none());
+    }
+
+    #[test]
+    fn test_parse_sse_malformed_json() {
+        let text = r#"event: response
+data: {invalid json}
+
+"#;
+
+        let event = parse_sse_event(text);
+        assert!(event.is_none());
+    }
+
+    #[test]
+    fn test_chat_event_serialization() {
+        let event = ChatEvent::Response {
+            message_id: "msg-123".to_string(),
+            content: "Hello".to_string(),
+            thread_id: "thread-456".to_string(),
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"type\":\"response\""));
+        assert!(json.contains("\"message_id\":\"msg-123\""));
+    }
+
+    #[tokio::test]
+    async fn test_sse_subscription_manager() {
+        let manager = SseSubscriptionManager::new();
+
+        // 初始状态
+        assert!(!manager.is_subscribed().await);
+
+        // 设置订阅状态
+        manager.set_subscribed(true).await;
+        assert!(manager.is_subscribed().await);
+
+        // 取消订阅
+        manager.cancel().await;
+        assert!(!manager.is_subscribed().await);
+    }
 }

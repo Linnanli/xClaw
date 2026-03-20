@@ -2,18 +2,37 @@
 
 # 完整开发环境启动脚本
 # 
+# 前置条件：
+# 1. Docker 必须已手动启动（macOS: Docker Desktop, Linux: systemctl start docker）
+# 2. PostgreSQL 数据库容器必须已手动启动（运行 ./admin-backend/scripts/start-db.sh）
+# 
 # 此脚本启动所有开发服务：
-# 1. PostgreSQL 数据库（端口 5432）
+# 1. 检查 PostgreSQL 数据库（端口 5432）- 如未运行则报错
 # 2. Desktop Client 前端（端口 5173）
 # 3. Tauri 客户端（内嵌 IronClaw 核心服务，端口 38080）
 # 4. Admin Backend 后端（端口 3000）
 # 5. Admin Backend 前端（端口 5174）
+#
+# 启动模式：
+# - 默认：并行启动（快速，但看不到编译进度）
+#   ./scripts/start-all.sh
+# 
+# - 串行：逐个启动服务，实时显示编译进度（推荐首次运行使用）
+#   ./scripts/start-all.sh --serial
+#   或
+#   ./scripts/start-all.sh -s
 
 set -e
 
 # 获取项目根目录
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+
+# 检查启动模式
+SERIAL_MODE=false
+if [ "$1" = "--serial" ] || [ "$1" = "-s" ]; then
+    SERIAL_MODE=true
+fi
 
 # 加载 Admin Backend 的共享函数
 source "$PROJECT_ROOT/admin-backend/scripts/common.sh"
@@ -143,15 +162,16 @@ clean_port 5173 "Desktop Client 前端"
 clean_port 38080 "Tauri 内嵌后端"
 clean_port 3000 "Admin Backend"
 clean_port 5174 "Admin Frontend"
-clean_port 5432 "PostgreSQL"
+# 注意: 不清理 5432 端口，因为这是 Docker 容器的端口
+# 清理容器端口可能导致 Docker daemon 不稳定
 
-log_info "所有端口已清理"
+log_info "所有应用端口已清理"
 
 # ============================================
-# 启动 PostgreSQL 数据库
+# 检查 PostgreSQL 数据库
 # ============================================
 
-if ! start_postgres_db "$PROJECT_ROOT/admin-backend"; then
+if ! check_postgres_db "$PROJECT_ROOT/admin-backend"; then
     exit 1
 fi
 
@@ -261,85 +281,126 @@ log_info "Desktop Client 前端已启动"
 # 启动 Tauri 客户端
 # ============================================
 
-log_section "启动 Tauri 客户端"
-
-cd "$PROJECT_ROOT/desktop-client"
-
-log_info "启动 Tauri 客户端（内嵌 IronClaw 核心服务）..."
-log_info "内嵌后端将在端口 38080 启动"
-
-# 启动 Tauri 开发服务器
-# 注意: 
-# 1. Tauri 会自动连接到前端开发服务器 (http://localhost:5173)
-# 2. Tauri 会自动启动内嵌的 IronClaw 核心服务（端口 38080）
-cargo tauri dev > /tmp/tauri.log 2>&1 &
-TAURI_PID=$!
-
-log_info "Tauri 客户端进程 PID: $TAURI_PID"
-
-log_info "等待 Tauri 客户端和内嵌后端启动（这可能需要几分钟）..."
-
-# 智能等待 Tauri 编译完成
-TAURI_TIMEOUT=600  # 10 分钟超时
-TAURI_CHECK_INTERVAL=3
-TAURI_START_TIME=$(date +%s)
-
-echo -n "Tauri 编译进度: "
-while true; do
-    # 检查 Tauri 是否还在运行
-    if ! kill -0 $TAURI_PID 2>/dev/null; then
-        echo ""
-        log_warn "Tauri 客户端进程已退出"
-        break
+if [ "$SERIAL_MODE" = true ]; then
+    # 串行模式：等待 Tauri 完全启动后再继续
+    TAURI_PID=$(start_tauri_serial "$PROJECT_ROOT/desktop-client")
+    if [ -z "$TAURI_PID" ]; then
+        log_error "Tauri 启动失败"
+        exit 1
     fi
-    
-    # 检查内嵌后端是否启动
-    if curl -s http://localhost:38080/api/health > /dev/null 2>&1; then
-        echo ""
-        log_info "Tauri 客户端和内嵌后端已启动"
-        break
-    fi
-    
-    # 检查超时
-    CURRENT_TIME=$(date +%s)
-    ELAPSED=$((CURRENT_TIME - TAURI_START_TIME))
-    if [ $ELAPSED -gt $TAURI_TIMEOUT ]; then
-        echo ""
-        log_warn "Tauri 启动超时，继续启动其他服务"
-        break
-    fi
-    
-    # 显示进度
-    echo -n "."
-    sleep $TAURI_CHECK_INTERVAL
-done
-
-# 检查 Tauri 是否运行
-if ! kill -0 $TAURI_PID 2>/dev/null; then
-    log_warn "Tauri 客户端启动失败或已关闭"
-    echo ""
-    echo "查看日志:"
-    echo "  tail -50 /tmp/tauri.log"
 else
-    # 检查内嵌后端是否运行
-    if curl -s http://localhost:38080/api/health > /dev/null 2>&1; then
-        log_info "内嵌 IronClaw 核心服务已启动并健康"
+    # 并行模式：后台启动 Tauri
+    log_section "启动 Tauri 客户端"
+
+    cd "$PROJECT_ROOT/desktop-client"
+
+    log_info "启动 Tauri 客户端（内嵌 IronClaw 核心服务）..."
+    log_info "内嵌后端将在端口 38080 启动"
+
+    # 启动 Tauri 开发服务器
+    # 注意: 
+    # 1. Tauri 会自动连接到前端开发服务器 (http://localhost:5173)
+    # 2. Tauri 会自动启动内嵌的 IronClaw 核心服务（端口 38080）
+    cargo tauri dev > /tmp/tauri.log 2>&1 &
+    TAURI_PID=$!
+
+    log_info "Tauri 客户端进程 PID: $TAURI_PID"
+
+    log_info "等待 Tauri 客户端和内嵌后端启动（这可能需要几分钟）..."
+
+    # 智能等待 Tauri 编译完成
+    TAURI_TIMEOUT=600  # 10 分钟超时
+    TAURI_CHECK_INTERVAL=3
+    TAURI_START_TIME=$(date +%s)
+
+    echo -n "Tauri 编译进度: "
+    while true; do
+        # 检查 Tauri 是否还在运行
+        if ! kill -0 $TAURI_PID 2>/dev/null; then
+            echo ""
+            log_warn "Tauri 客户端进程已退出"
+            break
+        fi
+        
+        # 检查内嵌后端是否启动
+        if curl -s http://localhost:38080/api/health > /dev/null 2>&1; then
+            echo ""
+            log_info "Tauri 客户端和内嵌后端已启动"
+            break
+        fi
+        
+        # 检查超时
+        CURRENT_TIME=$(date +%s)
+        ELAPSED=$((CURRENT_TIME - TAURI_START_TIME))
+        if [ $ELAPSED -gt $TAURI_TIMEOUT ]; then
+            echo ""
+            log_warn "Tauri 启动超时，继续启动其他服务"
+            break
+        fi
+        
+        # 显示进度
+        echo -n "."
+        sleep $TAURI_CHECK_INTERVAL
+    done
+
+    # 检查 Tauri 是否运行
+    if ! kill -0 $TAURI_PID 2>/dev/null; then
+        log_warn "Tauri 客户端启动失败或已关闭"
+        echo ""
+        echo "查看日志:"
+        echo "  tail -50 /tmp/tauri.log"
     else
-        log_warn "内嵌后端服务可能未启动，请检查 Tauri 日志"
+        # 检查内嵌后端是否运行
+        if curl -s http://localhost:38080/api/health > /dev/null 2>&1; then
+            log_info "内嵌 IronClaw 核心服务已启动并健康"
+        else
+            log_warn "内嵌后端服务可能未启动，请检查 Tauri 日志"
+        fi
+    fi
+
+    # 等待 Cargo 文件锁释放
+    log_info "等待 Tauri 编译完成（确保 Admin Backend 可以编译）..."
+
+    # 智能等待：检查 Cargo 锁文件
+    MAX_WAIT=60
+    WAIT_COUNT=0
+    echo -n "等待进度: "
+
+    while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
+        # 检查是否有其他 cargo 进程在运行
+        if ! pgrep -f "cargo.*tauri" > /dev/null 2>&1; then
+            echo ""
+            log_info "Tauri 编译已完成，可以启动 Admin Backend"
+            break
+        fi
+        
+        echo -n "."
+        sleep 1
+        WAIT_COUNT=$((WAIT_COUNT + 1))
+    done
+
+    if [ $WAIT_COUNT -ge $MAX_WAIT ]; then
+        echo ""
+        log_warn "等待超时，继续启动 Admin Backend（可能会遇到 Cargo 锁冲突）"
     fi
 fi
-
-# 等待 Cargo 文件锁释放
-log_info "等待 Cargo 文件锁释放（确保 Admin Backend 可以编译）..."
-sleep 5
 
 # ============================================
 # 启动 Admin Backend 后端
 # ============================================
 
-ADMIN_BACKEND_PID=$(start_admin_backend "$PROJECT_ROOT/admin-backend")
-if [ -z "$ADMIN_BACKEND_PID" ]; then
-    exit 1
+if [ "$SERIAL_MODE" = true ]; then
+    # 串行模式：等待 Admin Backend 完全启动后再继续
+    ADMIN_BACKEND_PID=$(start_admin_backend_serial "$PROJECT_ROOT/admin-backend")
+    if [ -z "$ADMIN_BACKEND_PID" ]; then
+        exit 1
+    fi
+else
+    # 并行模式：后台启动 Admin Backend
+    ADMIN_BACKEND_PID=$(start_admin_backend "$PROJECT_ROOT/admin-backend")
+    if [ -z "$ADMIN_BACKEND_PID" ]; then
+        exit 1
+    fi
 fi
 
 # ============================================
@@ -413,6 +474,12 @@ echo -e "${YELLOW}💡 快速访问${NC}"
 echo "   Desktop Client: Tauri 窗口会自动打开"
 echo "   Admin Backend:  http://localhost:5174"
 echo ""
+if [ "$SERIAL_MODE" = true ]; then
+    echo -e "${YELLOW}🔄 启动模式${NC}"
+    echo "   串行模式：已逐个启动服务并显示编译进度"
+    echo "   下次可使用并行模式加快启动: ./scripts/start-all.sh"
+    echo ""
+fi
 echo -e "${YELLOW}📊 服务架构${NC}"
 echo "   Desktop Client 前端 (5173) → Tauri → IronClaw 服务器 (38080)"
 echo "   Admin Backend 前端 (5174) → Admin Backend 后端 (3000) → PostgreSQL (5432)"
