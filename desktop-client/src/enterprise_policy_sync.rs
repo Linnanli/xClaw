@@ -90,6 +90,7 @@ pub enum PolicyChangeType {
 
 /// 远程策略响应
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 struct RemotePoliciesResponse {
     dlp_policies: Vec<DlpPolicy>,
     sensitive_ops_policies: Vec<SensitiveOpPolicy>,

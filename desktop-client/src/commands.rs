@@ -1087,6 +1087,7 @@ pub struct EnvironmentCheckResult {
 }
 
 // 辅助函数：生成随机令牌（用于刷新）
+#[allow(dead_code)]
 fn generate_random_token() -> String {
     use std::collections::hash_map::RandomState;
     use std::hash::{BuildHasher, Hasher};

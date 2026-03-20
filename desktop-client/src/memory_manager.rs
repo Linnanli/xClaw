@@ -21,7 +21,7 @@ pub fn is_protected_file(path: &str) -> bool {
 /// 扩展记忆API以支持删除操作
 pub trait MemoryApiExtensions {
     /// 安全删除记忆文件
-    async fn delete_memory_safe(&self, path: &str, force: bool) -> Result<DeleteResult, crate::error::Error>;
+    fn delete_memory_safe(&self, path: &str, force: bool) -> impl std::future::Future<Output = Result<DeleteResult, crate::error::Error>> + Send;
 }
 
 impl MemoryApiExtensions for crate::api_client::ApiClient {

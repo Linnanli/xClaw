@@ -28,7 +28,6 @@ impl DlpIntegration {
 
     pub async fn scan_user_input(&self, text: &str) -> Result<DlpScanResult> {
         let mut matches = Vec::new();
-        let mut sanitized = text.to_string();
 
         for policy in self.policy_manager.get_dlp_policies() {
             if let Ok(re) = regex::Regex::new(&policy.pattern) {
@@ -45,7 +44,7 @@ impl DlpIntegration {
             }
         }
 
-        sanitized = self.policy_manager.apply_dlp_policy(text);
+        let sanitized = self.policy_manager.apply_dlp_policy(text);
 
         Ok(DlpScanResult {
             is_clean: matches.is_empty(),

@@ -21,6 +21,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { useDlpScan } from './useDlpScan';
+import { tracing } from '@utils/tracing';
 
 // ============================================================================
 // 类型定义
@@ -132,7 +133,7 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
    * 注意: 使用 useRef 存储回调函数引用，避免频繁重新订阅
    */
   const handleChatEventRef = useRef((event: ChatEvent) => {
-    console.log('📨 Received chat event:', event);
+    tracing.debug('Received chat event', { type: event.type });
 
     switch (event.type) {
       case 'response':
@@ -158,7 +159,7 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
 
       case 'status':
         // 更新状态
-        console.log(`📊 Status [${event.level}]:`, event.message);
+        tracing.debug('Status update', { level: event.level, message: event.message });
         onStatusChange?.(event.message);
         break;
 
@@ -176,8 +177,8 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
       case 'connection_status':
         // 更新连接状态
         setIsConnected(event.connected);
-        console.log(
-          event.connected ? '✅ Connected to chat events' : '⚠️  Disconnected from chat events'
+        tracing.info(
+          event.connected ? 'Connected to chat events' : 'Disconnected from chat events'
         );
         break;
     }
@@ -186,7 +187,7 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
   // 更新 ref 以使用最新的回调
   useEffect(() => {
     handleChatEventRef.current = (event: ChatEvent) => {
-      console.log('📨 Received chat event:', event);
+      tracing.debug('Received chat event', { type: event.type });
 
       switch (event.type) {
         case 'response':
@@ -209,7 +210,7 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
           break;
 
         case 'status':
-          console.log(`📊 Status [${event.level}]:`, event.message);
+          tracing.debug('Status update', { level: event.level, message: event.message });
           onStatusChange?.(event.message);
           break;
 
@@ -225,8 +226,8 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
 
         case 'connection_status':
           setIsConnected(event.connected);
-          console.log(
-            event.connected ? '✅ Connected to chat events' : '⚠️  Disconnected from chat events'
+          tracing.info(
+            event.connected ? 'Connected to chat events' : 'Disconnected from chat events'
           );
           break;
       }
@@ -249,7 +250,7 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
 
     const setupEventListener = async () => {
       try {
-        console.log('🔗 Setting up chat event listener...');
+        tracing.debug('Setting up chat event listener');
 
         // 监听聊天事件
         const unlisten = await listen<ChatEvent>('chat-event', (event) => {
@@ -263,18 +264,18 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
         // 订阅聊天事件（幂等操作，已订阅时会直接返回成功）
         try {
           await invoke('subscribe_chat_events');
-          console.log('✅ Chat events subscribed');
+          tracing.info('Chat events subscribed');
         } catch (err) {
           // 如果是"已订阅"错误，忽略它
           const errorMsg = err instanceof Error ? err.message : String(err);
           if (errorMsg.includes('Already subscribed')) {
-            console.log('ℹ️  Already subscribed to chat events');
+            tracing.debug('Already subscribed to chat events');
           } else {
             throw err;
           }
         }
       } catch (err) {
-        console.error('❌ Failed to setup chat events:', err);
+        tracing.error('Failed to setup chat events', { error: err });
         const errorMsg = err instanceof Error ? err.message : String(err);
         setError(errorMsg);
         onError?.(errorMsg);
@@ -286,29 +287,29 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
     // 清理函数
     return () => {
       if (cleanupExecuted) {
-        console.log('⚠️  Cleanup already executed, skipping...');
+        tracing.warn('Cleanup already executed, skipping');
         return;
       }
 
       cleanupExecuted = true;
       mounted = false;
 
-      console.log('🧹 Cleaning up chat event listener...');
+      tracing.debug('Cleaning up chat event listener');
 
       // 取消监听
       if (unlistenRef.current) {
         unlistenRef.current();
         unlistenRef.current = null;
-        console.log('✅ Event listener removed');
+        tracing.debug('Event listener removed');
       }
 
       // 取消订阅 (异步但不等待，避免阻塞清理)
       invoke('unsubscribe_chat_events')
         .then(() => {
-          console.log('✅ Chat events unsubscribed');
+          tracing.info('Chat events unsubscribed');
         })
         .catch((err) => {
-          console.error('❌ Failed to unsubscribe:', err);
+          tracing.error('Failed to unsubscribe', { error: err });
         });
     };
   }, []); // 空依赖数组，只在挂载/卸载时执行
@@ -328,13 +329,13 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
   const sendMessage = useCallback(
     async (content: string) => {
       try {
-        console.log('📤 Sending message...');
+        tracing.debug('Sending message', { threadId, contentLength: content.length });
         setIsLoading(true);
         setError(null);
         setThinkingMessage(null);
 
         // 步骤 1: DLP 扫描
-        console.log('   Step 1: DLP scanning...');
+        tracing.debug('Step 1: DLP scanning');
         const dlpResult = await scanUserInput(content);
 
         if (dlpResult.was_blocked) {
@@ -345,7 +346,7 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
 
         // 使用脱敏后的内容
         const sanitizedContent = dlpResult.sanitized_content;
-        console.log('   ✅ DLP scan passed');
+        tracing.debug('DLP scan passed');
 
         // 步骤 2: 添加用户消息到本地状态
         const userMessage: Message = {
@@ -356,22 +357,22 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
         };
 
         setMessages((prev) => [...prev, userMessage]);
-        console.log('   ✅ User message added to local state');
+        tracing.debug('User message added to local state');
 
         // 步骤 3: 调用 Tauri 命令发送消息
-        console.log('   Step 3: Invoking send_chat_message...');
+        tracing.debug('Step 3: Invoking send_chat_message');
         const response = await invoke<SendMessageResponse>('send_chat_message', {
           threadId,
           content: sanitizedContent,
         });
 
-        console.log('   ✅ Message sent:', response.message_id);
+        tracing.info('Message sent', { messageId: response.message_id });
 
         // 步骤 4: 等待 SSE 事件接收 AI 响应
         // (响应会通过 handleChatEvent 处理)
-        console.log('   Step 4: Waiting for AI response via SSE...');
+        tracing.debug('Step 4: Waiting for AI response via SSE');
       } catch (err) {
-        console.error('❌ Failed to send message:', err);
+        tracing.error('Failed to send message', { error: err });
         const errorMsg = err instanceof Error ? err.message : String(err);
         setError(errorMsg);
         setIsLoading(false);

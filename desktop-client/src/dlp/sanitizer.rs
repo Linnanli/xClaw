@@ -2,7 +2,7 @@
 //!
 //! 提供灵活的脱敏配置和处理功能
 
-use crate::dlp::{DlpError, DlpDetector, DlpDetectionResult, DlpAction};
+use crate::dlp::{DlpDetector, DlpDetectionResult, DlpAction};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, instrument, warn};

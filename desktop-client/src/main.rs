@@ -15,32 +15,28 @@ async fn main() {
     // 第零步：使用 config-rs 加载环境变量文件
     println!("📦 Loading configuration...");
     
-    // 检测环境
-    let environment = env::var("ENVIRONMENT")
-        .unwrap_or_else(|_| {
-            // 根据启动命令检测环境
-            let args: Vec<String> = env::args().collect();
-            if args.iter().any(|arg| arg == "test") {
-                "testing".to_string()
-            } else if args.iter().any(|arg| arg == "--release") {
-                "production".to_string()
-            } else {
-                "development".to_string()
-            }
-        });
+    // 检测环境 (优先级: 环境变量 > 编译配置 > 默认值)
+    let environment = env::var("ENVIRONMENT").unwrap_or_else(|_| {
+        if cfg!(debug_assertions) {
+            "development".to_string()
+        } else {
+            "production".to_string()
+        }
+    });
     
     println!("🔧 Environment: {}", environment);
     
     // 使用 config-rs 加载配置
-    let config_builder = Config::builder()
-        // 加载默认配置
+    let config_result = Config::builder()
+        // 1. 加载默认配置文件
         .add_source(File::with_name("desktop-client/.env").required(false))
-        // 加载环境特定的配置
+        // 2. 加载环境特定的配置文件 (覆盖默认配置)
         .add_source(File::with_name(&format!("desktop-client/.env.{}", environment)).required(false))
-        // 加载系统环境变量
-        .add_source(Environment::default().try_parsing(true).separator("_"));
+        // 3. 加载系统环境变量 (最高优先级)
+        .add_source(Environment::default().try_parsing(true).separator("_"))
+        .build();
     
-    match config_builder.build() {
+    match config_result {
         Ok(config) => {
             // 将配置加载到环境变量
             if let Ok(settings) = config.try_deserialize::<std::collections::HashMap<String, String>>() {
@@ -52,10 +48,11 @@ async fn main() {
         }
         Err(e) => {
             eprintln!("⚠️  Warning: Failed to load configuration: {}", e);
+            eprintln!("   Continuing with default settings...");
         }
     }
     
-    // 设置 ENVIRONMENT 环境变量
+    // 确保 ENVIRONMENT 环境变量已设置
     env::set_var("ENVIRONMENT", &environment);
     println!();
     
@@ -114,26 +111,16 @@ async fn main() {
     println!("✅ Data directories ready");
     
     // 第六步：检查外部 IronClaw 服务器
-    // 注意：Desktop Client 现在使用外部 IronClaw 实例，而不是内嵌服务器
+    // 注意：Desktop Client 使用外部 IronClaw 实例，不内嵌服务器
     // 请确保 IronClaw 服务器已经在运行（端口 38080）
     println!("🔍 Checking external IronClaw server...");
-    let server_url = desktop_client::embedded_server::get_server_url();
-    match reqwest::Client::new()
-        .get(format!("{}/api/health", server_url))
-        .timeout(std::time::Duration::from_secs(2))
-        .send()
-        .await
-    {
-        Ok(response) if response.status().is_success() => {
+    match desktop_client::embedded_server::check_server_health().await {
+        Ok(()) => {
             println!("✅ External IronClaw server is running on port {}", 
                 desktop_client::embedded_server::EMBEDDED_SERVER_PORT);
         }
-        _ => {
-            eprintln!("⚠️  Warning: External IronClaw server is not running on port {}", 
-                desktop_client::embedded_server::EMBEDDED_SERVER_PORT);
-            eprintln!("   Please start IronClaw server first:");
-            eprintln!("   cargo run --manifest-path ironclaw/Cargo.toml -- run --no-onboard");
-            eprintln!("   The application will continue, but some features may not work.");
+        Err(_) => {
+            desktop_client::embedded_server::print_server_instructions();
         }
     }
     

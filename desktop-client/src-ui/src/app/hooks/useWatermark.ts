@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { sessionApi } from '../utils/tauri';
+import { tracing } from '@utils/tracing';
 
 export interface WatermarkConfig {
   enabled: boolean;
@@ -53,9 +54,9 @@ export function useWatermark() {
           text: watermarkText,
         }));
         
-        console.log('✅ Watermark initialized:', watermarkText);
+        tracing.info('Watermark initialized', { text: watermarkText });
       } catch (err) {
-        console.warn('⚠️ Failed to load user info for watermark, using fallback:', err);
+        tracing.warn('Failed to load user info for watermark, using fallback', { error: err });
         
         // 如果无法获取用户信息，使用默认文本
         const now = new Date();
@@ -111,7 +112,7 @@ export function useWatermark() {
         text: watermarkText,
       }));
     } catch (err) {
-      console.warn('Failed to refresh watermark text:', err);
+      tracing.warn('Failed to refresh watermark text', { error: err });
     }
   };
 

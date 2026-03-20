@@ -2,10 +2,9 @@
 //!
 //! 提供基础的策略同步功能
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use uuid::Uuid;
 
 /// DLP策略
 #[derive(Debug, Clone, Serialize, Deserialize)]

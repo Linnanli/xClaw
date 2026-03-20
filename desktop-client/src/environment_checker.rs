@@ -272,7 +272,7 @@ mod tests {
     #[test]
     fn test_run_checks() {
         let mut checker = EnvironmentChecker::new();
-        let all_passed = checker.run_all_checks();
+        let _all_passed = checker.run_all_checks();
         assert!(!checker.get_checks().is_empty());
     }
 }

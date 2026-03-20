@@ -5,6 +5,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { API_BASE_URL } from '@config/api';
+import { tracing } from '@utils/tracing';
 
 export interface SanitizationStats {
   total_matches: number;
@@ -59,7 +60,7 @@ export function useDlpScan() {
     try {
       return await invoke<SanitizationResult>('scan_user_input', { content });
     } catch (error) {
-      console.error('❌ DLP scan failed:', error);
+      tracing.error('DLP scan failed', { error });
       throw error;
     }
   };
@@ -71,7 +72,7 @@ export function useDlpScan() {
     try {
       return await invoke<SanitizationResult>('scan_outbound_request', { body });
     } catch (error) {
-      console.error('❌ DLP scan failed:', error);
+      tracing.error('DLP scan failed', { error });
       throw error;
     }
   };
@@ -83,7 +84,7 @@ export function useDlpScan() {
     try {
       return await invoke<string>('sanitize_for_storage', { content });
     } catch (error) {
-      console.error('❌ DLP sanitization failed:', error);
+      tracing.error('DLP sanitization failed', { error });
       throw error;
     }
   };
@@ -103,7 +104,7 @@ export function useDlpScan() {
         body: body ? Array.from(body) : undefined
       });
     } catch (error) {
-      console.error('❌ HTTP request blocked by DLP:', error);
+      tracing.error('HTTP request blocked by DLP', { error });
       throw error;
     }
   };
@@ -115,7 +116,7 @@ export function useDlpScan() {
     try {
       return await invoke<DlpConfig>('get_dlp_config');
     } catch (error) {
-      console.error('❌ Failed to get DLP config:', error);
+      tracing.error('Failed to get DLP config', { error });
       throw error;
     }
   };
@@ -127,7 +128,7 @@ export function useDlpScan() {
     try {
       await invoke('update_dlp_config', { config });
     } catch (error) {
-      console.error('❌ Failed to update DLP config:', error);
+      tracing.error('Failed to update DLP config', { error });
       throw error;
     }
   };
@@ -139,7 +140,7 @@ export function useDlpScan() {
     try {
       return await invoke<DlpStatistics>('get_dlp_statistics');
     } catch (error) {
-      console.error('❌ Failed to get DLP statistics:', error);
+      tracing.error('Failed to get DLP statistics', { error });
       throw error;
     }
   };

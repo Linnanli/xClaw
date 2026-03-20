@@ -7,7 +7,7 @@ use crate::session_config::SessionConfig;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::interval;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 /// 令牌刷新服务
 pub struct TokenRefreshService {

@@ -11,6 +11,7 @@ const SESSION_TIMEOUT_SECS: u64 = 30 * 60; // 30 minutes
 #[derive(Debug, Clone)]
 pub struct MasterPassword {
     hash: String,
+    #[allow(dead_code)]
     salt: Vec<u8>,
 }
 
