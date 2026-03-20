@@ -2,16 +2,17 @@
 
 ## 脚本概述
 
-### `start-admin.sh` - Admin Backend 专用启动脚本
+### `start-admin.sh` - Admin Backend 完整启动脚本
 
-**用途**: 启动 Admin Backend 管理后台
+**用途**: 启动 Admin Backend 管理后台的所有服务
 
 **启动的服务**:
+- PostgreSQL 数据库（端口 5432）
 - Admin Backend 后端服务（端口 3000）
 - Admin Frontend 前端服务（端口 5174）
 
 **使用场景**:
-- 开发和测试 Admin Backend 功能
+- 仅开发和测试 Admin Backend 功能
 - 管理用户、角色、权限
 - 配置 DLP 规则
 - 查看审计日志
@@ -25,23 +26,54 @@ cd admin-backend
 **访问地址**:
 - 前端: http://localhost:5174
 - 后端 API: http://localhost:3000
+- 数据库: localhost:5432
 - 测试账号: admin / admin123
 
 ---
 
-### `../scripts/start-all.sh` - Desktop Client 启动脚本
+### `start-db.sh` - 数据库启动脚本
 
-**用途**: 启动 Desktop Client 桌面客户端
+**用途**: 仅启动 PostgreSQL 数据库容器
 
 **启动的服务**:
-- Ironclaw 主项目后端（端口 3000）
-- Desktop Client 前端（端口 5173）
-- Tauri 桌面应用
+- PostgreSQL 数据库（端口 5432）
 
 **使用场景**:
-- 开发和测试 Desktop Client 功能
-- 与 AI Agent 交互
-- 使用聊天、记忆、任务等功能
+- 单独启动数据库进行调试
+- 修复数据库连接问题
+- 手动启动后端前先启动数据库
+
+**启动方式**:
+```bash
+cd admin-backend
+./scripts/start-db.sh
+```
+
+**数据库信息**:
+- 容器名: admin-backend-postgres
+- 端口: localhost:5432
+- 用户: postgres
+- 密码: postgres
+- 数据库: ironclaw
+- 连接字符串: postgresql://postgres:postgres@localhost:5432/ironclaw
+
+---
+
+### `../scripts/start-all.sh` - 完整开发环境启动脚本 ⭐
+
+**用途**: 启动所有开发服务（Desktop Client + Admin Backend）
+
+**启动的服务**:
+- PostgreSQL 数据库（端口 5432）
+- Desktop Client 前端（端口 5173）
+- Tauri 客户端（内嵌 IronClaw 核心服务，端口 38080）
+- Admin Backend 后端（端口 3000）
+- Admin Backend 前端（端口 5174）
+
+**使用场景**:
+- 完整的开发环境
+- 同时开发 Desktop Client 和 Admin Backend
+- 测试两个系统的集成
 
 **启动方式**:
 ```bash
@@ -50,23 +82,61 @@ cd <project-root>
 ```
 
 **访问地址**:
-- 前端: http://localhost:5173
-- 后端 API: http://localhost:3000
-- Tauri 应用: 自动启动
+- Desktop Client 前端: http://localhost:5173
+- Desktop Client 后端: http://localhost:38080
+- Admin Backend 前端: http://localhost:5174
+- Admin Backend 后端: http://localhost:3000
+- PostgreSQL 数据库: localhost:5432
+
+**注意**: 
+- 此脚本会自动启动 PostgreSQL 数据库
+- 无需单独运行 `start-db.sh` 或 `start-admin.sh`
+- 一键启动所有服务
 
 ---
 
-## 端口冲突说明
+## 常见问题解决
 
-### 问题
+### 问题 1: 数据库连接错误 ⚠️
 
-两个项目都使用 3000 端口作为后端 API 端口，因此**不能同时运行**。
+**错误信息**:
+```
+Database error: Error occurred while creating a new object: error connecting to server
+```
 
-### 解决方案
+**原因**: PostgreSQL 数据库未启动
 
-#### 方案 1: 分时运行（推荐）
+**解决方案**:
+```bash
+# 方案 1: 使用完整启动脚本（推荐）
+cd admin-backend
+./scripts/start-admin.sh
 
-根据需要选择启动哪个项目：
+# 方案 2: 单独启动数据库
+cd admin-backend
+./scripts/start-db.sh
+
+# 方案 3: 手动启动数据库
+cd admin-backend
+docker-compose up -d postgres
+```
+
+**验证数据库是否运行**:
+```bash
+# 检查容器状态
+docker ps | grep admin-backend-postgres
+
+# 测试数据库连接
+docker exec admin-backend-postgres pg_isready -U postgres
+```
+
+---
+
+### 问题 2: 端口冲突
+
+**问题**: Admin Backend 和 Desktop Client 都使用 3000 端口，因此**不能同时运行**。
+
+**解决方案**: 分时运行（推荐）
 
 **开发 Admin Backend 时**:
 ```bash
@@ -92,23 +162,78 @@ cd <project-root>
 ./scripts/start-all.sh
 ```
 
-#### 方案 2: 修改端口（不推荐）
+---
 
-如果确实需要同时运行，可以修改 Admin Backend 的端口：
+### 问题 3: 后端编译失败
 
-1. 修改 `admin-backend/.env`:
-   ```env
-   SERVER_PORT=3001
-   ```
+**查看日志**:
+```bash
+tail -f /tmp/admin-backend.log
+```
 
-2. 修改 `admin-backend/frontend/.env`:
-   ```env
-   VITE_API_BASE_URL=http://localhost:3001
-   ```
+**常见原因**:
+- 依赖未安装: `cargo build`
+- 数据库未启动: 先运行 `./scripts/start-db.sh`
+- 端口被占用: 清理 3000 端口
 
-3. 重启服务
+---
 
-**注意**: 修改端口后需要更新所有相关配置和文档。
+### 问题 4: 前端启动失败
+
+**查看日志**:
+```bash
+tail -f /tmp/admin-frontend.log
+```
+
+**常见原因**:
+- 依赖未安装: `cd frontend && npm install`
+- 端口被占用: 清理 5174 端口
+
+---
+
+## 数据库管理
+
+### 连接数据库
+
+```bash
+# 使用 psql 连接
+docker exec -it admin-backend-postgres psql -U postgres -d ironclaw
+
+# 或使用任何 PostgreSQL 客户端
+# Host: localhost
+# Port: 5432
+# User: postgres
+# Password: postgres
+# Database: ironclaw
+```
+
+### 查看数据库日志
+
+```bash
+docker logs admin-backend-postgres
+docker logs -f admin-backend-postgres  # 实时查看
+```
+
+### 停止数据库
+
+```bash
+cd admin-backend
+docker-compose down
+```
+
+### 重启数据库
+
+```bash
+cd admin-backend
+docker-compose restart postgres
+```
+
+### 清理数据库数据
+
+```bash
+cd admin-backend
+docker-compose down -v  # 删除数据卷
+```
 
 ---
 
@@ -125,6 +250,9 @@ lsof -i :5173
 
 # 检查 5174 端口（Admin Frontend）
 lsof -i :5174
+
+# 检查 5432 端口（PostgreSQL）
+lsof -i :5432
 ```
 
 ### 停止服务
@@ -135,6 +263,9 @@ pkill -f "admin-backend"
 
 # 停止 Ironclaw
 pkill -f "ironclaw.*run"
+
+# 停止数据库
+cd admin-backend && docker-compose down
 
 # 强制清理 3000 端口
 lsof -i :3000 | grep -v COMMAND | awk '{print $2}' | xargs kill -9
@@ -149,42 +280,55 @@ tail -f /tmp/admin-backend.log
 # Admin Frontend 日志
 tail -f /tmp/admin-frontend.log
 
+# 数据库日志
+docker logs -f admin-backend-postgres
+
 # Ironclaw 日志
 tail -f /tmp/backend.log
 ```
 
 ---
 
-## 常见问题
+## 开发工作流
 
-### Q: 为什么不能同时运行两个项目？
+### 首次启动
 
-A: 两个项目都使用 3000 端口作为后端 API 端口，端口冲突导致无法同时运行。
-
-### Q: 如何知道当前运行的是哪个项目？
-
-A: 检查 3000 端口的进程名：
 ```bash
-lsof -i :3000 | grep LISTEN
+# 1. 启动所有服务
+cd admin-backend
+./scripts/start-admin.sh
+
+# 2. 等待编译完成（可能需要几分钟）
+
+# 3. 浏览器自动打开 http://localhost:5174
 ```
-- 如果显示 `admin-backend`，则是 Admin Backend
-- 如果显示 `ironclaw`，则是 Desktop Client
 
-### Q: 启动脚本失败怎么办？
+### 日常开发
 
-A: 按以下步骤排查：
-1. 检查日志文件（`/tmp/admin-backend.log` 或 `/tmp/backend.log`）
-2. 确认端口未被占用（`lsof -i :3000`）
-3. 确认依赖已安装（`cargo --version`, `node --version`）
-4. 尝试手动启动服务进行调试
+```bash
+# 1. 启动数据库（如果未运行）
+./scripts/start-db.sh
 
-### Q: Admin Backend 需要 ironclaw 服务吗？
+# 2. 启动后端（在一个终端）
+cd admin-backend
+cargo run
 
-A: **不需要**。Admin Backend 是独立的管理后台应用，有自己的后端服务和数据库。它不依赖 ironclaw 主项目的运行时服务。
+# 3. 启动前端（在另一个终端）
+cd admin-backend/frontend
+npm run dev
+```
 
-### Q: 什么时候使用 start-all.sh？
+---
 
-A: 仅当你需要开发或测试 Desktop Client 功能时使用。如果只是开发 Admin Backend，使用 `admin-backend/scripts/start-admin.sh`。
+## 服务端口
+
+| 服务 | 端口 | 说明 |
+|------|------|------|
+| PostgreSQL | 5432 | 数据库 |
+| Admin Backend | 3000 | 后端 API |
+| Admin Frontend | 5174 | 前端开发服务器 |
+| Desktop Client Backend | 3000 | 后端 API（与 Admin Backend 冲突） |
+| Desktop Client Frontend | 5173 | 前端开发服务器 |
 
 ---
 
@@ -200,8 +344,11 @@ A: 仅当你需要开发或测试 Desktop Client 功能时使用。如果只是�
 ├── admin-backend/               # 管理后台（独立）
 │   ├── src/                     # 后端服务（端口 3000）
 │   ├── frontend/                # 前端（端口 5174）
+│   ├── migrations/              # 数据库迁移
+│   ├── docker-compose.yml       # 数据库配置
 │   └── scripts/
-│       └── start-admin.sh       # Admin Backend 启动脚本
+│       ├── start-admin.sh       # 完整启动脚本
+│       └── start-db.sh          # 数据库启动脚本
 └── scripts/
     └── start-all.sh             # Desktop Client 启动脚本
 ```
@@ -209,6 +356,7 @@ A: 仅当你需要开发或测试 Desktop Client 功能时使用。如果只是�
 **关键点**:
 - Admin Backend 和 Desktop Client 是两个独立的应用
 - 它们共享相同的后端端口（3000），因此不能同时运行
+- Admin Backend 需要 PostgreSQL 数据库
 - Admin Backend 用于管理和配置
 - Desktop Client 用于与 AI Agent 交互
 
@@ -217,6 +365,8 @@ A: 仅当你需要开发或测试 Desktop Client 功能时使用。如果只是�
 ## 总结
 
 - **开发 Admin Backend**: 使用 `admin-backend/scripts/start-admin.sh`
+- **仅启动数据库**: 使用 `admin-backend/scripts/start-db.sh`
 - **开发 Desktop Client**: 使用 `scripts/start-all.sh`
 - **不能同时运行**: 端口冲突
-- **Admin Backend 不需要 ironclaw 服务**: 完全独立
+- **Admin Backend 需要数据库**: 必须先启动 PostgreSQL
+- **数据库连接错误**: 使用 `start-db.sh` 启动数据库

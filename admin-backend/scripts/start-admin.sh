@@ -5,31 +5,12 @@
 
 set -e
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+# 获取脚本所在目录
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+ADMIN_BACKEND_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
 
-log_info() {
-    echo -e "${GREEN}✅ $1${NC}"
-}
-
-log_error() {
-    echo -e "${RED}❌ $1${NC}"
-}
-
-log_warn() {
-    echo -e "${YELLOW}⚠️  $1${NC}"
-}
-
-log_section() {
-    echo ""
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${BLUE}$1${NC}"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-}
+# 加载共享函数
+source "$SCRIPT_DIR/common.sh"
 
 cleanup() {
     log_info "清理资源..."
@@ -46,6 +27,9 @@ cleanup() {
         kill $FRONTEND_PID 2>/dev/null || true
     fi
     
+    # 注意：不停止数据库容器，以便保留数据
+    # 如需停止数据库，请手动运行: docker-compose down
+    
     log_info "清理完成"
 }
 
@@ -55,25 +39,8 @@ trap cleanup EXIT
 # 检查依赖
 # ============================================
 
-log_section "检查依赖"
-
-if ! command -v cargo &> /dev/null; then
-    log_error "Rust/Cargo 未找到，请先安装 Rust"
-    exit 1
-fi
-log_info "Rust/Cargo 已安装"
-
-if ! command -v node &> /dev/null; then
-    log_error "Node.js 未找到，请先安装 Node.js"
-    exit 1
-fi
-log_info "Node.js 已安装"
-
-if ! command -v npm &> /dev/null; then
-    log_error "npm 未找到，请先安装 npm"
-    exit 1
-fi
-log_info "npm 已安装"
+check_dev_dependencies
+check_docker_dependencies
 
 # ============================================
 # 清理旧进程和端口
@@ -81,124 +48,36 @@ log_info "npm 已安装"
 
 log_section "清理旧进程和端口"
 
-log_info "清理 3000 端口（admin-backend）..."
-lsof -i :3000 | grep -v COMMAND | awk '{print $2}' | xargs kill -9 2>/dev/null || true
-sleep 1
-
-log_info "清理 5174 端口（admin-frontend）..."
-lsof -i :5174 | grep -v COMMAND | awk '{print $2}' | xargs kill -9 2>/dev/null || true
-sleep 1
+clean_port 3000 "admin-backend"
+clean_port 5174 "admin-frontend"
 
 log_info "所有端口已清理"
 
 # ============================================
-# 获取脚本所在目录
+# 启动数据库
 # ============================================
 
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-ADMIN_BACKEND_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+if ! start_postgres_db "$ADMIN_BACKEND_ROOT"; then
+    exit 1
+fi
 
 # ============================================
 # 启动后端
 # ============================================
 
-log_section "启动 Admin Backend 服务"
-
-cd "$ADMIN_BACKEND_ROOT"
-
-log_info "启动后端..."
-cargo run > /tmp/admin-backend.log 2>&1 &
-BACKEND_PID=$!
-
-log_info "后端进程 PID: $BACKEND_PID"
-
-log_info "等待后端编译和启动（这可能需要几分钟）..."
-
-# 智能等待：检查编译是否完成并且服务器启动
-COMPILE_TIMEOUT=300  # 5 分钟超时
-COMPILE_CHECK_INTERVAL=3
-COMPILE_START_TIME=$(date +%s)
-
-echo -n "编译进度: "
-while true; do
-    # 检查进程是否还在运行
-    if ! kill -0 $BACKEND_PID 2>/dev/null; then
-        echo ""
-        log_error "后端进程已退出，检查编译错误"
-        echo ""
-        echo "查看后端日志:"
-        echo "  tail -50 /tmp/admin-backend.log"
-        exit 1
-    fi
-    
-    # 检查端口是否监听
-    if lsof -i :3000 | grep -q LISTEN; then
-        echo ""
-        log_info "后端编译完成并启动成功"
-        break
-    fi
-    
-    # 检查超时
-    CURRENT_TIME=$(date +%s)
-    ELAPSED=$((CURRENT_TIME - COMPILE_START_TIME))
-    if [ $ELAPSED -gt $COMPILE_TIMEOUT ]; then
-        echo ""
-        log_error "后端编译超时（${COMPILE_TIMEOUT}秒）"
-        echo ""
-        echo "查看后端日志:"
-        echo "  tail -100 /tmp/admin-backend.log"
-        exit 1
-    fi
-    
-    # 显示进度
-    echo -n "."
-    sleep $COMPILE_CHECK_INTERVAL
-done
-
-# 验证后端是否响应
-log_info "验证后端服务..."
-sleep 2
-if curl -s http://localhost:3000/api/auth/login -X POST \
-    -H "Content-Type: application/json" \
-    -d '{"username":"test","password":"test"}' > /dev/null 2>&1; then
-    log_info "后端服务验证通过"
-else
-    log_warn "后端服务可能未完全启动，但端口已监听"
+BACKEND_PID=$(start_admin_backend "$ADMIN_BACKEND_ROOT")
+if [ -z "$BACKEND_PID" ]; then
+    exit 1
 fi
 
 # ============================================
 # 启动前端
 # ============================================
 
-log_section "启动 Admin Frontend 服务"
-
-cd "$ADMIN_BACKEND_ROOT/frontend"
-
-# 检查依赖
-if [ ! -d "node_modules" ]; then
-    log_info "安装前端依赖..."
-    npm install
-fi
-
-log_info "启动前端..."
-npm run dev > /tmp/admin-frontend.log 2>&1 &
-FRONTEND_PID=$!
-
-log_info "前端进程 PID: $FRONTEND_PID"
-
-log_info "等待前端启动..."
-sleep 5
-
-# 检查前端是否运行
-if ! kill -0 $FRONTEND_PID 2>/dev/null; then
-    log_error "前端启动失败"
-    echo ""
-    echo "查看前端日志:"
-    echo "  tail -50 /tmp/admin-frontend.log"
+FRONTEND_PID=$(start_admin_frontend "$ADMIN_BACKEND_ROOT/frontend")
+if [ -z "$FRONTEND_PID" ]; then
     exit 1
 fi
-
-log_info "前端已启动"
 
 # ============================================
 # 启动完成
@@ -208,6 +87,14 @@ log_section "启动完成"
 
 echo ""
 echo -e "${GREEN}✅ Admin Backend 所有服务已启动${NC}"
+echo ""
+echo "数据库服务:"
+echo "  容器: admin-backend-postgres"
+echo "  端口: localhost:5432"
+echo "  用户: postgres"
+echo "  密码: postgres"
+echo "  数据库: ironclaw"
+echo "  查看日志: docker logs admin-backend-postgres"
 echo ""
 echo "后端服务:"
 echo "  URL: http://localhost:3000"
@@ -233,7 +120,9 @@ if command -v open &> /dev/null; then
 fi
 
 echo ""
-echo "停止服务: 按 Ctrl+C"
+echo "停止服务:"
+echo "  - 按 Ctrl+C 停止后端和前端"
+echo "  - 停止数据库: cd admin-backend && docker-compose down"
 echo ""
 
 # 等待用户中断

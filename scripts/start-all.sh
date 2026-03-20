@@ -1,61 +1,52 @@
 #!/bin/bash
 
-# 整合启动脚本 - 启动后端和前端
+# 完整开发环境启动脚本
 # 
-# 此脚本解决了以下问题:
-# 1. 后端 REPL 模式阻塞 HTTP 服务器 - 使用 stdin 重定向解决
-# 2. 旧进程仍在运行导致启动失败 - 清理旧进程和 PID 文件
-# 3. 认证令牌过期 - 每次启动生成新令牌
-# 4. 环境变量未设置 - 检查并设置所有必需的环境变量
+# 此脚本启动所有开发服务：
+# 1. PostgreSQL 数据库（端口 5432）
+# 2. Desktop Client 前端（端口 5173）
+# 3. Tauri 客户端（内嵌 IronClaw 核心服务，端口 38080）
+# 4. Admin Backend 后端（端口 3000）
+# 5. Admin Backend 前端（端口 5174）
 
 set -e
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+# 获取项目根目录
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
 
-log_info() {
-    echo -e "${GREEN}✅ $1${NC}"
-}
-
-log_error() {
-    echo -e "${RED}❌ $1${NC}"
-}
-
-log_warn() {
-    echo -e "${YELLOW}⚠️  $1${NC}"
-}
-
-log_section() {
-    echo ""
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${BLUE}$1${NC}"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-}
+# 加载 Admin Backend 的共享函数
+source "$PROJECT_ROOT/admin-backend/scripts/common.sh"
 
 cleanup() {
     log_info "清理资源..."
     
-    # 杀死后端进程
-    if [ ! -z "$BACKEND_PID" ]; then
-        log_info "停止后端服务 (PID: $BACKEND_PID)..."
-        kill $BACKEND_PID 2>/dev/null || true
+    # 杀死 Desktop Client 前端进程
+    if [ ! -z "$DESKTOP_FRONTEND_PID" ]; then
+        log_info "停止 Desktop Client 前端 (PID: $DESKTOP_FRONTEND_PID)..."
+        kill $DESKTOP_FRONTEND_PID 2>/dev/null || true
     fi
     
-    # 杀死前端进程
-    if [ ! -z "$FRONTEND_PID" ]; then
-        log_info "停止前端服务 (PID: $FRONTEND_PID)..."
-        kill $FRONTEND_PID 2>/dev/null || true
-    fi
-    
-    # 杀死 Tauri 进程
+    # 杀死 Tauri 进程（会自动停止内嵌的后端服务）
     if [ ! -z "$TAURI_PID" ]; then
         log_info "停止 Tauri 客户端 (PID: $TAURI_PID)..."
         kill $TAURI_PID 2>/dev/null || true
     fi
+    
+    # 杀死 Admin Backend 后端进程
+    if [ ! -z "$ADMIN_BACKEND_PID" ]; then
+        log_info "停止 Admin Backend 后端 (PID: $ADMIN_BACKEND_PID)..."
+        kill $ADMIN_BACKEND_PID 2>/dev/null || true
+    fi
+    
+    # 杀死 Admin Backend 前端进程
+    if [ ! -z "$ADMIN_FRONTEND_PID" ]; then
+        log_info "停止 Admin Backend 前端 (PID: $ADMIN_FRONTEND_PID)..."
+        kill $ADMIN_FRONTEND_PID 2>/dev/null || true
+    fi
+    
+    # 注意：不停止数据库容器，以便保留数据
+    # 如需停止数据库，请手动运行: cd admin-backend && docker-compose down
     
     log_info "清理完成"
 }
@@ -66,25 +57,8 @@ trap cleanup EXIT
 # 检查依赖
 # ============================================
 
-log_section "检查依赖"
-
-if ! command -v cargo &> /dev/null; then
-    log_error "Rust/Cargo 未找到，请先安装 Rust"
-    exit 1
-fi
-log_info "Rust/Cargo 已安装"
-
-if ! command -v node &> /dev/null; then
-    log_error "Node.js 未找到，请先安装 Node.js"
-    exit 1
-fi
-log_info "Node.js 已安装"
-
-if ! command -v npm &> /dev/null; then
-    log_error "npm 未找到，请先安装 npm"
-    exit 1
-fi
-log_info "npm 已安装"
+check_dev_dependencies
+check_docker_dependencies
 
 # ============================================
 # 检查环境变量
@@ -135,7 +109,7 @@ fi
 log_info "LLM 配置已检测"
 
 # ============================================
-# 设置环境变量（仅当未设置时）
+# 设置环境变量
 # ============================================
 
 log_section "设置环境变量"
@@ -159,157 +133,55 @@ log_info "✅ LLM API 密钥已设置"
 
 log_section "清理旧进程和端口"
 
-log_info "停止旧的后端进程..."
-# 清理 ironclaw 进程
-pkill -f "ironclaw.*run" || true
-sleep 1
-
-log_info "清理 PID 文件..."
-rm -f ~/.ironclaw/ironclaw.pid
-
-log_info "清理 3000 端口..."
-lsof -i :3000 | grep -v COMMAND | awk '{print $2}' | xargs kill -9 2>/dev/null || true
-sleep 1
-
-log_info "清理 5173 端口..."
-lsof -i :5173 | grep -v COMMAND | awk '{print $2}' | xargs kill -9 2>/dev/null || true
-sleep 1
-
-log_info "清理 8080 端口..."
-lsof -i :8080 | grep -v COMMAND | awk '{print $2}' | xargs kill -9 2>/dev/null || true
-sleep 1
+clean_port 5173 "Desktop Client 前端"
+clean_port 38080 "Tauri 内嵌后端"
+clean_port 3000 "Admin Backend"
+clean_port 5174 "Admin Frontend"
+clean_port 5432 "PostgreSQL"
 
 log_info "所有端口已清理"
 
 # ============================================
-# 启动后端
+# 启动 PostgreSQL 数据库
 # ============================================
 
-log_section "启动后端服务"
-
-log_info "启动后端..."
-# 关键修复: 在后台启动后端，避免 REPL 阻塞
-# 使用 exec 和 stdin 重定向确保进程不会等待输入
-# 注意: 主项目在 ironclaw/ 子模块中
-(cd ironclaw && exec cargo run -- run --no-onboard < /dev/null > /tmp/backend.log 2>&1) &
-BACKEND_PID=$!
-
-log_info "后端进程 PID: $BACKEND_PID"
-
-log_info "等待后端编译和启动（这可能需要几分钟）..."
-
-# 智能等待：检查编译是否完成并且服务器启动
-COMPILE_TIMEOUT=600  # 10 分钟超时
-COMPILE_CHECK_INTERVAL=5
-COMPILE_START_TIME=$(date +%s)
-
-echo -n "编译进度: "
-while true; do
-    # 检查进程是否还在运行
-    if ! kill -0 $BACKEND_PID 2>/dev/null; then
-        echo ""
-        log_error "后端进程已退出，检查编译错误"
-        echo ""
-        echo "查看后端日志:"
-        echo "  tail -50 /tmp/backend.log"
-        exit 1
-    fi
-    
-    # 检查健康端点是否响应
-    if curl -s http://localhost:3000/api/health > /dev/null 2>&1; then
-        echo ""
-        log_info "后端编译完成并启动成功"
-        break
-    fi
-    
-    # 检查超时
-    CURRENT_TIME=$(date +%s)
-    ELAPSED=$((CURRENT_TIME - COMPILE_START_TIME))
-    if [ $ELAPSED -gt $COMPILE_TIMEOUT ]; then
-        echo ""
-        log_error "后端编译超时（${COMPILE_TIMEOUT}秒）"
-        echo ""
-        echo "查看后端日志:"
-        echo "  tail -100 /tmp/backend.log"
-        exit 1
-    fi
-    
-    # 显示进度
-    echo -n "."
-    sleep $COMPILE_CHECK_INTERVAL
-done
-
-# 验证后端健康状态（快速检查，因为我们已经确认启动成功）
-log_info "验证后端健康状态..."
-if curl -s http://localhost:3000/api/health > /dev/null 2>&1; then
-    log_info "后端健康检查通过"
-else
-    log_error "后端健康检查失败（这不应该发生）"
-    echo ""
-    echo "查看后端日志:"
-    echo "  tail -100 /tmp/backend.log"
-    exit 1
-fi
-
-# 获取并显示认证令牌
-log_info "获取认证令牌..."
-GATEWAY_URL=$(grep "gateway.*http" /tmp/backend.log | tail -1 | sed 's/.*http/http/')
-if [ ! -z "$GATEWAY_URL" ]; then
-    log_info "网关 URL: $GATEWAY_URL"
-fi
-
-# ============================================
-# 提取并导出认证令牌
-# ============================================
-
-log_section "提取认证令牌"
-
-# 从后端日志中提取令牌
-GATEWAY_URL=$(grep "gateway.*http" /tmp/backend.log | tail -1 | sed 's/.*http/http/')
-if [ ! -z "$GATEWAY_URL" ]; then
-    # 从 URL 中提取令牌
-    export GATEWAY_AUTH_TOKEN=$(echo "$GATEWAY_URL" | sed 's/.*token=//')
-    log_info "认证令牌已提取并导出到环境变量"
-    log_info "GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN:0:20}..."
-else
-    log_error "无法从后端日志中提取令牌"
+if ! start_postgres_db "$PROJECT_ROOT/admin-backend"; then
     exit 1
 fi
 
 # ============================================
-# 启动前端
+# 启动 Desktop Client 前端
 # ============================================
 
-log_section "启动前端服务"
-
-# 获取脚本所在目录的父目录（项目根目录）
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+log_section "启动 Desktop Client 前端"
 
 cd "$PROJECT_ROOT/desktop-client/src-ui"
 
 # 检查依赖
 if [ ! -d "node_modules" ]; then
-    log_info "安装前端依赖..."
+    log_info "安装 Desktop Client 前端依赖..."
     npm install
 fi
 
-log_info "启动前端..."
-npm run dev &
-FRONTEND_PID=$!
+log_info "启动 Desktop Client 前端（端口 5173）..."
+npm run dev > /tmp/desktop-frontend.log 2>&1 &
+DESKTOP_FRONTEND_PID=$!
 
-log_info "前端进程 PID: $FRONTEND_PID"
+log_info "Desktop Client 前端进程 PID: $DESKTOP_FRONTEND_PID"
 
-log_info "等待前端启动..."
+log_info "等待 Desktop Client 前端启动..."
 sleep 5
 
 # 检查前端是否运行
-if ! kill -0 $FRONTEND_PID 2>/dev/null; then
-    log_error "前端启动失败"
+if ! kill -0 $DESKTOP_FRONTEND_PID 2>/dev/null; then
+    log_error "Desktop Client 前端启动失败"
+    echo ""
+    echo "查看日志:"
+    echo "  tail -50 /tmp/desktop-frontend.log"
     exit 1
 fi
 
-log_info "前端已启动"
+log_info "Desktop Client 前端已启动"
 
 # ============================================
 # 启动 Tauri 客户端
@@ -317,76 +189,171 @@ log_info "前端已启动"
 
 log_section "启动 Tauri 客户端"
 
-# 回到项目根目录
 cd "$PROJECT_ROOT/desktop-client"
 
-log_info "启动 Tauri 客户端..."
+log_info "启动 Tauri 客户端（内嵌 IronClaw 核心服务）..."
+log_info "内嵌后端将在端口 38080 启动"
 
 # 启动 Tauri 开发服务器
-# 注意: Tauri 会自动连接到前端开发服务器 (http://localhost:5173)
-cargo tauri dev &
+# 注意: 
+# 1. Tauri 会自动连接到前端开发服务器 (http://localhost:5173)
+# 2. Tauri 会自动启动内嵌的 IronClaw 核心服务（端口 38080）
+cargo tauri dev > /tmp/tauri.log 2>&1 &
 TAURI_PID=$!
 
 log_info "Tauri 客户端进程 PID: $TAURI_PID"
 
-log_info "等待 Tauri 客户端启动..."
-sleep 10
+log_info "等待 Tauri 客户端和内嵌后端启动（这可能需要几分钟）..."
+
+# 智能等待 Tauri 编译完成
+TAURI_TIMEOUT=600  # 10 分钟超时
+TAURI_CHECK_INTERVAL=3
+TAURI_START_TIME=$(date +%s)
+
+echo -n "Tauri 编译进度: "
+while true; do
+    # 检查 Tauri 是否还在运行
+    if ! kill -0 $TAURI_PID 2>/dev/null; then
+        echo ""
+        log_warn "Tauri 客户端进程已退出"
+        break
+    fi
+    
+    # 检查内嵌后端是否启动
+    if curl -s http://localhost:38080/api/health > /dev/null 2>&1; then
+        echo ""
+        log_info "Tauri 客户端和内嵌后端已启动"
+        break
+    fi
+    
+    # 检查超时
+    CURRENT_TIME=$(date +%s)
+    ELAPSED=$((CURRENT_TIME - TAURI_START_TIME))
+    if [ $ELAPSED -gt $TAURI_TIMEOUT ]; then
+        echo ""
+        log_warn "Tauri 启动超时，继续启动其他服务"
+        break
+    fi
+    
+    # 显示进度
+    echo -n "."
+    sleep $TAURI_CHECK_INTERVAL
+done
 
 # 检查 Tauri 是否运行
 if ! kill -0 $TAURI_PID 2>/dev/null; then
     log_warn "Tauri 客户端启动失败或已关闭"
+    echo ""
+    echo "查看日志:"
+    echo "  tail -50 /tmp/tauri.log"
 else
-    log_info "Tauri 客户端已启动"
+    # 检查内嵌后端是否运行
+    if curl -s http://localhost:38080/api/health > /dev/null 2>&1; then
+        log_info "内嵌 IronClaw 核心服务已启动并健康"
+    else
+        log_warn "内嵌后端服务可能未启动，请检查 Tauri 日志"
+    fi
 fi
 
-log_section "启动完成"
+# 等待 Cargo 文件锁释放
+log_info "等待 Cargo 文件锁释放（确保 Admin Backend 可以编译）..."
+sleep 5
+
+# ============================================
+# 启动 Admin Backend 后端
+# ============================================
+
+ADMIN_BACKEND_PID=$(start_admin_backend "$PROJECT_ROOT/admin-backend")
+if [ -z "$ADMIN_BACKEND_PID" ]; then
+    exit 1
+fi
+
+# ============================================
+# 启动 Admin Backend 前端
+# ============================================
+
+ADMIN_FRONTEND_PID=$(start_admin_frontend "$PROJECT_ROOT/admin-backend/frontend")
+if [ -z "$ADMIN_FRONTEND_PID" ]; then
+    exit 1
+fi
+
+# ============================================
+# 启动完成
+# ============================================
+
+log_section "🎉 所有服务启动完成"
 
 echo ""
-echo -e "${GREEN}✅ 所有服务已启动${NC}"
+echo -e "${CYAN}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${CYAN}║                         开发环境已就绪                                      ║${NC}"
+echo -e "${CYAN}╚════════════════════════════════════════════════════════════════════════════╝${NC}"
 echo ""
-echo "后端服务:"
-echo "  URL: http://localhost:3000"
-echo "  PID: $BACKEND_PID"
-echo "  日志: tail -f /tmp/backend.log"
-echo ""
-echo "前端服务:"
-echo "  开发服务器: http://localhost:5173"
-echo "  PID: $FRONTEND_PID"
+
+echo -e "${GREEN}📱 Desktop Client (桌面客户端)${NC}"
+echo "   前端开发服务器:"
+echo "     URL: http://localhost:5173"
+echo "     PID: $DESKTOP_FRONTEND_PID"
+echo "     日志: tail -f /tmp/desktop-frontend.log"
 echo ""
 if [ ! -z "$TAURI_PID" ] && kill -0 $TAURI_PID 2>/dev/null; then
-    echo "Tauri 客户端:"
-    echo "  PID: $TAURI_PID"
-    echo "  状态: 运行中"
-    echo "  说明: Tauri 会自动连接到前端开发服务器"
+    echo "   Tauri 客户端:"
+    echo "     PID: $TAURI_PID"
+    echo "     状态: 运行中"
+    echo "     日志: tail -f /tmp/tauri.log"
+    echo ""
+    echo "   内嵌 IronClaw 核心服务:"
+    echo "     URL: http://localhost:38080"
+    echo "     健康检查: http://localhost:38080/api/health"
+    echo "     说明: 由 Tauri 自动管理"
     echo ""
 fi
 
-# 提取令牌
-GATEWAY_URL=$(grep "gateway.*http" /tmp/backend.log | tail -1 | sed 's/.*http/http/')
-if [ ! -z "$GATEWAY_URL" ]; then
-    # 从 URL 中提取令牌
-    TOKEN=$(echo "$GATEWAY_URL" | sed 's/.*token=//' | sed 's/$//')
-    FRONTEND_URL="http://localhost:5173?token=$TOKEN"
-    echo "前端 URL（带令牌）:"
-    echo "  $FRONTEND_URL"
-    echo ""
-    echo "💡 提示: 使用上面的 URL 访问前端，令牌会自动保存到本地存储"
-    echo ""
-    
-    # 尝试自动打开浏览器
-    if command -v open &> /dev/null; then
-        echo "🌐 正在打开浏览器..."
-        open "$FRONTEND_URL" 2>/dev/null || true
-    fi
-else
-    echo "前端 URL: http://localhost:5173"
-    echo ""
-    echo "⚠️  无法获取令牌，请手动从后端日志中获取"
-fi
+echo -e "${GREEN}🔧 Admin Backend (管理后台)${NC}"
+echo "   数据库服务:"
+echo "     容器: admin-backend-postgres"
+echo "     端口: localhost:5432"
+echo "     用户: postgres"
+echo "     密码: postgres"
+echo "     数据库: ironclaw"
+echo "     查看日志: docker logs admin-backend-postgres"
+echo ""
+echo "   后端服务:"
+echo "     URL: http://localhost:3000"
+echo "     PID: $ADMIN_BACKEND_PID"
+echo "     日志: tail -f /tmp/admin-backend.log"
+echo ""
+echo "   前端服务:"
+echo "     URL: http://localhost:5174"
+echo "     PID: $ADMIN_FRONTEND_PID"
+echo "     日志: tail -f /tmp/admin-frontend.log"
+echo ""
+echo "   测试账号:"
+echo "     用户名: admin"
+echo "     密码: admin123"
+echo ""
 
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
-echo "停止服务: 按 Ctrl+C"
+echo -e "${YELLOW}💡 快速访问${NC}"
+echo "   Desktop Client: Tauri 窗口会自动打开"
+echo "   Admin Backend:  http://localhost:5174"
 echo ""
+echo -e "${YELLOW}📊 服务架构${NC}"
+echo "   Desktop Client 前端 (5173) → Tauri → 内嵌后端 (38080)"
+echo "   Admin Backend 前端 (5174) → Admin Backend 后端 (3000) → PostgreSQL (5432)"
+echo ""
+echo -e "${YELLOW}🛑 停止服务${NC}"
+echo "   按 Ctrl+C 停止所有服务（数据库会继续运行）"
+echo "   停止数据库: cd admin-backend && docker-compose down"
+echo ""
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+
+# 尝试自动打开 Admin Backend 浏览器
+if command -v open &> /dev/null; then
+    log_info "正在打开 Admin Backend 浏览器..."
+    open "http://localhost:5174" 2>/dev/null || true
+fi
 
 # 等待用户中断
 wait
