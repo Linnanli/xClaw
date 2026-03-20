@@ -111,10 +111,20 @@ async fn main() {
     let _ = platform_utils::create_dir_if_not_exists(&platform_utils::get_cache_dir());
     println!("✅ Data directories ready");
     
-    // 第六步：打印启动信息
+    // 第六步：启动嵌入式 IronClaw 服务器
+    println!("🚀 Starting embedded IronClaw server...");
+    if let Err(e) = desktop_client::embedded_server::start_global_server().await {
+        eprintln!("❌ Failed to start embedded server: {}", e);
+        eprintln!("   The application will continue, but some features may not work.");
+    } else {
+        println!("✅ Embedded IronClaw server started on port {}", 
+            desktop_client::embedded_server::EMBEDDED_SERVER_PORT);
+    }
+    
+    // 第七步：打印启动信息
     println!("\n🚀 Starting Ironclaw Desktop Client");
     println!("   Environment: {:?}", checker.get_config().environment);
-    println!("   API URL: {}", app_config.api_base_url);
+    println!("   API URL: {}", desktop_client::embedded_server::get_server_url());
     println!("   Database: {}", app_config.database_type);
     println!("   OS: {}", platform_utils::get_os_name());
     println!("   Log Level: {}\n", app_config.log_level);

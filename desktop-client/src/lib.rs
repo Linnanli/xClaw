@@ -22,6 +22,7 @@ pub mod network_config;
 pub mod memory_manager;
 pub mod session_config;
 pub mod token_refresh_service;
+pub mod embedded_server;
 
 // 测试模块（仅在测试时编译）
 #[cfg(test)]

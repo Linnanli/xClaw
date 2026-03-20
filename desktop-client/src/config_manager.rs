@@ -37,7 +37,7 @@ impl AppConfig {
     pub fn from_env() -> Self {
         Self {
             api_base_url: env::var("API_BASE_URL")
-                .unwrap_or_else(|_| "http://localhost:3000".to_string()),
+                .unwrap_or_else(|_| format!("http://localhost:{}", crate::embedded_server::EMBEDDED_SERVER_PORT)),
             api_timeout_secs: env::var("API_TIMEOUT_SECS")
                 .ok()
                 .and_then(|s| s.parse().ok())

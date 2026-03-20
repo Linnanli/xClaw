@@ -66,7 +66,7 @@ impl EnvironmentChecker {
         match environment {
             Environment::Development => EnvironmentConfig {
                 environment: Environment::Development,
-                api_base_url: "http://localhost:3000".to_string(),
+                api_base_url: format!("http://localhost:{}", crate::embedded_server::EMBEDDED_SERVER_PORT),
                 api_timeout_secs: 30,
                 api_retry_count: 3,
                 cors_origins: vec![

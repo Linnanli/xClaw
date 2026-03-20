@@ -42,8 +42,10 @@ pub struct CommandState {
 
 impl CommandState {
     pub fn new() -> Self {
-        // Default to localhost:3000 for development (Web Gateway)
-        let api_client = crate::api_client::ApiClient::new("http://localhost:3000".to_string());
+        // Default to embedded server port for development
+        let api_client = crate::api_client::ApiClient::new(
+            format!("http://localhost:{}", crate::embedded_server::EMBEDDED_SERVER_PORT)
+        );
         
         // 初始化 DLP 集成（使用 blocking 方式）
         let dlp_integration = tokio::task::block_in_place(|| {
@@ -67,7 +69,7 @@ impl CommandState {
     pub fn new_with_token(auth_token: String) -> Self {
         // 使用提供的 token 创建 ApiClient
         let api_client = crate::api_client::ApiClient::new_with_token(
-            "http://localhost:3000".to_string(),
+            format!("http://localhost:{}", crate::embedded_server::EMBEDDED_SERVER_PORT),
             auth_token
         );
         
