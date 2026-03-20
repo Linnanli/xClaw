@@ -364,9 +364,9 @@ Rust 后端
 
 **优先级**: 🟡 P1  
 **预计时间**: 4-6 小时  
-**状态**: ⏳ 进行中 (20% 完成)
+**状态**: ⏳ 进行中 (40% 完成)
 
-#### 完成情况 (20%)
+#### 完成情况 (40%)
 
 **已创建的文档结构**:
 ```
@@ -381,14 +381,29 @@ desktop-client/docs/
     └── testing.md (测试指南) ✅
 ```
 
-**已整合的原始文档** (5 个):
-- ✅ `ARCHITECTURE_EVOLUTION.md` → `docs/architecture/evolution.md`
-- ✅ `SIMPLIFIED_CHAT_ARCHITECTURE.md` → `docs/architecture/evolution.md`
-- ✅ `TAURI_IPC_QUICK_REFERENCE.md` → `docs/architecture/tauri-ipc.md`
-- ✅ `QUICK_START.md` → `docs/guides/quick-start.md`
-- ✅ 测试相关文档 → `docs/guides/testing.md`
+**已整合并删除的文档** (20 个):
+- ✅ `ARCHITECTURE_EVOLUTION.md` → `docs/architecture/evolution.md` (已删除)
+- ✅ `SIMPLIFIED_CHAT_ARCHITECTURE.md` → `docs/architecture/evolution.md` (已删除)
+- ✅ `TAURI_IPC_QUICK_REFERENCE.md` → `docs/architecture/tauri-ipc.md` (已删除)
+- ✅ `QUICK_START.md` → `docs/guides/quick-start.md` (已删除)
+- ✅ `TESTING_GUIDE.md` → `docs/guides/testing.md` (已删除)
+- ✅ `TEST_SUMMARY.md` → `docs/guides/testing.md` (已删除)
+- ✅ `MIGRATE_TO_TAURI_IPC.md` (迁移已完成，已删除)
+- ✅ `SWITCH_TO_TAURI_IPC.md` (迁移已完成，已删除)
+- ✅ `TAURI_IPC_MIGRATION_COMPLETE.md` (临时文档，已删除)
+- ✅ `TAURI_IPC_SWITCH_COMPLETE.md` (临时文档，已删除)
+- ✅ `MIGRATION_COMPLETE.md` (临时文档，已删除)
+- ✅ `DIRECT_SSE_MIGRATION.md` (已废弃，已删除)
+- ✅ `PATH_ALIAS_MIGRATION.md` (迁移已完成，已删除)
+- ✅ `UI_MIGRATION_GUIDE.md` (迁移已完成，已删除)
+- ✅ `IMPLEMENTATION_COMPLETE.md` (临时文档，已删除)
+- ✅ `SSE_INTEGRATION_GUIDE.md` (已被 Tauri IPC 替代，已删除)
+- ✅ `verify-dlp-fix.sh` (临时脚本，已删除)
+- ✅ `verify-implementation.sh` (临时脚本，已删除)
+- ✅ `test_token_debug` (临时文件，已删除)
+- ✅ `dev.sh` (临时脚本，已删除)
 
-**待整合的文档** (44 个原始文档):
+**待整合的文档** (24 个原始文档):
 
 **DLP 相关文档** (16 个):
 - [ ] `DLP_BACKEND_POLICY_COMPLETE_ANALYSIS.md`
@@ -408,27 +423,10 @@ desktop-client/docs/
 - [ ] `DLP_TESTING_LESSONS_LEARNED.md`
 - [ ] `DLP_USER_TEST_GUIDE.md`
 
-**迁移相关文档** (8 个):
-- [ ] `DIRECT_SSE_MIGRATION.md`
-- [ ] `MIGRATE_TO_TAURI_IPC.md`
-- [ ] `MIGRATION_COMPLETE.md`
-- [ ] `PATH_ALIAS_MIGRATION.md`
-- [ ] `SWITCH_TO_TAURI_IPC.md`
-- [ ] `TAURI_IPC_MIGRATION_COMPLETE.md`
-- [ ] `TAURI_IPC_SWITCH_COMPLETE.md`
-- [ ] `UI_MIGRATION_GUIDE.md`
-
-**环境和配置文档** (4 个):
+**环境和配置文档** (3 个):
 - [ ] `ENVIRONMENT_CONSISTENCY_STRATEGY.md`
 - [ ] `ENVIRONMENT_INCONSISTENCY_ANALYSIS.md`
 - [ ] `ENVIRONMENT_ISSUES_CHECKLIST.md`
-- [ ] `AUTH_REFACTOR_PLAN.md`
-
-**测试相关文档** (4 个):
-- [ ] `TEST_COVERAGE_REPORT.md`
-- [ ] `TEST_SUMMARY.md`
-- [ ] `TESTING_GUIDE.md`
-- [ ] `SSE_TESTING_BEST_PRACTICES.md`
 
 **故障排查文档** (4 个):
 - [ ] `API_PORT_FIX.md`
@@ -436,27 +434,22 @@ desktop-client/docs/
 - [ ] `SETUP_AND_TROUBLESHOOTING.md`
 - [ ] `TAURI_PERMISSIONS_FIX.md`
 
-**实现完成文档** (3 个):
-- [ ] `IMPLEMENTATION_COMPLETE.md`
-- [ ] `SSE_INTEGRATION_GUIDE.md`
-- [ ] `QUICK_DLP_TEST.md`
+**测试相关文档** (1 个):
+- [ ] `TEST_COVERAGE_REPORT.md`
+- [ ] `SSE_TESTING_BEST_PRACTICES.md`
 
-**其他文档** (5 个):
-- [ ] `verify-dlp-fix.sh`
-- [ ] `verify-implementation.sh`
-- [ ] `test_token_debug`
-- [ ] `dev.sh`
-- [ ] `.env.example`
+**其他文档** (2 个):
+- [ ] `AUTH_REFACTOR_PLAN.md`
+- [ ] `QUICK_DLP_TEST.md`
 
 #### 下一步
 
 1. 创建 DLP 功能文档目录 (整合 16 个 DLP 相关文档)
-2. 创建迁移指南 (整合 8 个迁移文档)
-3. 整合测试相关文档 (4 个) 到 `docs/guides/testing.md`
-4. 创建故障排查指南 (整合 4 个故障排查文档)
-5. 整合环境和配置文档 (4 个)
-6. 删除已整合的原始文档
-7. 更新主 README.md
+2. 整合环境和配置文档 (3 个)
+3. 创建故障排查指南 (整合 4 个故障排查文档)
+4. 整合测试相关文档 (2 个) 到 `docs/guides/testing.md`
+5. 更新主 README.md
+6. 最终文档数量: ~15 个 (从 44 个减少到 15 个)
 
 #### 解决方案
 
