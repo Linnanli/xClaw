@@ -1,5 +1,39 @@
 # Admin Backend 启动脚本说明
 
+## 脚本架构
+
+本项目的启动脚本采用**共享函数库**架构，所有脚本都复用 `common.sh` 中的核心函数。
+
+### 架构图
+
+```
+common.sh (共享函数库)
+    ↑
+    │ source
+    │
+    ├─── start-db.sh          ✅ 自动获得所有改进
+    ├─── start-admin.sh       ✅ 自动获得所有改进
+    └─── ../scripts/start-all.sh  ✅ 自动获得所有改进
+```
+
+### 优势
+
+1. **一次改进，全部受益** - 修改 `common.sh` 中的函数，所有脚本自动获得改进
+2. **行为一致** - 所有脚本使用相同的 Docker 检查、日志格式、错误处理
+3. **易于维护** - 核心逻辑集中管理，减少代码重复
+
+### 最近改进
+
+✅ **Docker Engine 智能等待** (2026-03-20)
+- 自动检测 Docker Desktop 是否运行
+- 自动等待 Docker Engine 就绪（最多 30 秒）
+- 自动启动 Docker Desktop（如果未运行）
+- 所有脚本自动支持此改进
+
+详细架构说明: [ARCHITECTURE.md](./ARCHITECTURE.md)
+
+---
+
 ## 脚本概述
 
 ### `start-admin.sh` - Admin Backend 完整启动脚本
@@ -95,7 +129,48 @@ cd <project-root>
 
 ---
 
+## 快速诊断
+
+如果遇到问题，首先运行诊断脚本:
+
+```bash
+cd admin-backend
+./scripts/diagnose.sh
+```
+
+诊断脚本会检查:
+- Docker 是否安装和运行 ⭐
+- PostgreSQL 容器状态
+- 后端服务状态 (端口 3000)
+- 前端服务状态 (端口 5174)
+- Rust 和 Node.js 环境
+- 日志文件位置
+
+---
+
 ## 常见问题解决
+
+### 问题 0: Docker 未运行 🔴
+
+**错误信息**:
+```
+Cannot connect to the Docker daemon
+❌ PostgreSQL 启动超时
+```
+
+**原因**: Docker Desktop 应用未启动
+
+**解决方案**:
+- **macOS**: 打开 Applications 文件夹，启动 Docker 应用
+- **Windows**: 打开开始菜单，搜索并启动 Docker Desktop
+- **Linux**: `sudo systemctl start docker`
+
+**验证**:
+```bash
+docker ps  # 应该能看到容器列表
+```
+
+---
 
 ### 问题 1: 数据库连接错误 ⚠️
 

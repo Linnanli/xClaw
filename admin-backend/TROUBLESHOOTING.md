@@ -24,6 +24,69 @@ docker logs admin-backend-postgres
 
 ## 常见错误及解决方案
 
+### 0. Docker 未运行 🔴
+
+**错误信息**:
+```
+Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?
+```
+
+或
+
+```
+❌ PostgreSQL 启动超时
+查看日志: docker logs admin-backend-postgres
+```
+
+**原因**: Docker Desktop 应用未启动
+
+**诊断步骤**:
+```bash
+# 检查 Docker 是否运行
+docker ps
+
+# 如果看到 "Cannot connect to the Docker daemon"，说明 Docker 未运行
+```
+
+**解决方案**:
+
+**macOS**:
+1. 打开 Launchpad 或 Applications 文件夹
+2. 找到并点击 "Docker" 应用
+3. 等待 Docker Desktop 启动（菜单栏会出现 Docker 图标）
+4. 确认 Docker 图标显示为绿色（运行中）
+5. 重新运行启动脚本
+
+**Windows**:
+1. 打开开始菜单
+2. 搜索并启动 "Docker Desktop"
+3. 等待 Docker Desktop 启动
+4. 确认系统托盘中的 Docker 图标显示为绿色
+5. 重新运行启动脚本
+
+**Linux**:
+```bash
+# 启动 Docker 服务
+sudo systemctl start docker
+
+# 设置开机自启
+sudo systemctl enable docker
+
+# 检查状态
+sudo systemctl status docker
+```
+
+**验证修复**:
+```bash
+# 应该能看到 Docker 容器列表（可能为空）
+docker ps
+
+# 应该能看到 Docker 版本信息
+docker --version
+```
+
+---
+
 ### 1. 数据库连接错误 ⚠️
 
 **错误信息**:

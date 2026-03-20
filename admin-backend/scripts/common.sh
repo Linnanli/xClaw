@@ -42,6 +42,85 @@ check_docker_dependencies() {
     fi
     log_info "Docker 已安装"
     
+    # 检查 Docker daemon 是否运行
+    if ! docker ps &> /dev/null; then
+        log_warn "Docker daemon 未就绪"
+        echo ""
+        echo "正在尝试启动 Docker..."
+        
+        # macOS: 尝试启动 Docker Desktop
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            if pgrep -x "Docker" > /dev/null; then
+                log_info "Docker Desktop 应用正在运行，等待 Docker Engine 启动..."
+                
+                # 等待 Docker Engine 就绪（最多 30 秒）
+                local MAX_WAIT=30
+                local WAIT_COUNT=0
+                while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
+                    if docker ps &> /dev/null; then
+                        echo ""
+                        log_info "Docker Engine 已就绪"
+                        break
+                    fi
+                    echo -n "."
+                    sleep 1
+                    WAIT_COUNT=$((WAIT_COUNT + 1))
+                done
+                
+                if [ $WAIT_COUNT -ge $MAX_WAIT ]; then
+                    echo ""
+                    log_error "Docker Engine 启动超时"
+                    echo ""
+                    echo "请尝试手动重启 Docker Desktop:"
+                    echo "  1. 点击菜单栏的 Docker 图标"
+                    echo "  2. 选择 'Restart'"
+                    echo "  3. 等待 Docker 图标变为绿色"
+                    echo ""
+                    exit 1
+                fi
+            else
+                log_info "正在启动 Docker Desktop..."
+                open -a Docker
+                
+                # 等待 Docker 启动
+                local MAX_WAIT=60
+                local WAIT_COUNT=0
+                echo -n "等待 Docker 启动: "
+                while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
+                    if docker ps &> /dev/null; then
+                        echo ""
+                        log_info "Docker 已启动"
+                        break
+                    fi
+                    echo -n "."
+                    sleep 2
+                    WAIT_COUNT=$((WAIT_COUNT + 2))
+                done
+                
+                if [ $WAIT_COUNT -ge $MAX_WAIT ]; then
+                    echo ""
+                    log_error "Docker 启动超时"
+                    echo ""
+                    echo "请手动启动 Docker Desktop:"
+                    echo "  打开 Applications 文件夹，启动 Docker 应用"
+                    echo ""
+                    exit 1
+                fi
+            fi
+        else
+            # Linux/Windows
+            log_error "Docker daemon 未运行"
+            echo ""
+            echo "请启动 Docker:"
+            echo "  Windows: 打开开始菜单，搜索并启动 Docker Desktop"
+            echo "  Linux: sudo systemctl start docker"
+            echo ""
+            exit 1
+        fi
+    else
+        log_info "Docker daemon 正在运行"
+    fi
+    
     if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
         log_error "Docker Compose 未找到，请先安装 Docker Compose"
         exit 1
