@@ -4,6 +4,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
+import { API_BASE_URL } from '@config/api';
 
 export interface SanitizationStats {
   total_matches: number;

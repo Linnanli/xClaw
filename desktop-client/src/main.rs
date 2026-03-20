@@ -111,14 +111,28 @@ async fn main() {
     let _ = platform_utils::create_dir_if_not_exists(&platform_utils::get_cache_dir());
     println!("✅ Data directories ready");
     
-    // 第六步：启动嵌入式 IronClaw 服务器
-    println!("🚀 Starting embedded IronClaw server...");
-    if let Err(e) = desktop_client::embedded_server::start_global_server().await {
-        eprintln!("❌ Failed to start embedded server: {}", e);
-        eprintln!("   The application will continue, but some features may not work.");
-    } else {
-        println!("✅ Embedded IronClaw server started on port {}", 
-            desktop_client::embedded_server::EMBEDDED_SERVER_PORT);
+    // 第六步：检查外部 IronClaw 服务器
+    // 注意：Desktop Client 现在使用外部 IronClaw 实例，而不是内嵌服务器
+    // 请确保 IronClaw 服务器已经在运行（端口 38080）
+    println!("🔍 Checking external IronClaw server...");
+    let server_url = desktop_client::embedded_server::get_server_url();
+    match reqwest::Client::new()
+        .get(format!("{}/api/health", server_url))
+        .timeout(std::time::Duration::from_secs(2))
+        .send()
+        .await
+    {
+        Ok(response) if response.status().is_success() => {
+            println!("✅ External IronClaw server is running on port {}", 
+                desktop_client::embedded_server::EMBEDDED_SERVER_PORT);
+        }
+        _ => {
+            eprintln!("⚠️  Warning: External IronClaw server is not running on port {}", 
+                desktop_client::embedded_server::EMBEDDED_SERVER_PORT);
+            eprintln!("   Please start IronClaw server first:");
+            eprintln!("   cargo run --manifest-path ironclaw/Cargo.toml -- run --no-onboard");
+            eprintln!("   The application will continue, but some features may not work.");
+        }
     }
     
     // 第七步：打印启动信息

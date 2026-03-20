@@ -5,9 +5,10 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { createSseClient, type SseClient, type SseEvent } from '../utils/sse';
-import { TokenManager } from '../utils/tokenManager';
-import { useDlpScan } from './useDlpScan';
+import { createSseClient, type SseClient, type SseEvent } from '@utils/sse';
+import { TokenManager } from '@utils/tokenManager';
+import { useDlpScan } from '@hooks/useDlpScan';
+import { API_BASE_URL } from '@config/api';
 
 interface Message {
   id: string;
@@ -82,7 +83,7 @@ interface UseAiChatOptions {
 }
 
 export function useAiChat(options: UseAiChatOptions) {
-  const { threadId, apiUrl = 'http://localhost:3000', authToken = '' } = options;
+  const { threadId, apiUrl = API_BASE_URL, authToken = '' } = options;
   
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');

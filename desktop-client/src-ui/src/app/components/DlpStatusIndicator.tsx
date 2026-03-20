@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { useDlpScan } from '../hooks/useDlpScan';
+import { useDlpScan } from '@hooks/useDlpScan';
 
 export const DlpStatusIndicator: React.FC = () => {
   const [enabled, setEnabled] = useState(true);
@@ -24,7 +24,8 @@ export const DlpStatusIndicator: React.FC = () => {
     };
 
     loadConfig();
-  }, [getDlpConfig]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // 只在组件挂载时加载一次
 
   if (loading) {
     return null;

@@ -561,6 +561,48 @@ docker-compose down
 
 ## Desktop Client 启动问题
 
+### 问题：连接被拒绝（Connection refused）
+
+**症状**：
+```
+error sending request for url (http://localhost:38080/api/chat/threads): 
+error trying to connect: tcp connect error: Connection refused (os error 61)
+```
+
+**原因**：
+- IronClaw 服务器（端口 38080）未启动
+- Desktop Client 现在使用外部 IronClaw 服务器，而不是内嵌服务器
+
+**解决方案**：
+
+1. 检查 IronClaw 服务器是否运行：
+```bash
+lsof -i :38080
+curl http://localhost:38080/api/health
+```
+
+2. 如果没有运行，启动 IronClaw 服务器：
+```bash
+export GATEWAY_PORT=38080
+export GATEWAY_HOST=127.0.0.1
+export GATEWAY_ENABLED=true
+cargo run --manifest-path ironclaw/Cargo.toml -- run --no-onboard
+```
+
+3. 或使用完整启动脚本（推荐）：
+```bash
+./scripts/start-all.sh
+```
+
+**架构说明**：
+- 旧架构：Desktop Client 前端 → Tauri → 内嵌后端
+- 新架构：Desktop Client 前端 → Tauri → 外部 IronClaw 服务器
+
+**优点**：
+- 避免复杂的内嵌启动逻辑
+- 更容易调试和维护
+- 与主项目保持一致的 API
+
 ### 问题：Tauri 客户端启动超时
 
 **症状**：

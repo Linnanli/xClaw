@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import { Save, RotateCcw } from 'lucide-react';
-import { useTheme } from '../../contexts/ThemeContext';
-import { configApi } from '../../utils/tauri';
+import { useTheme } from '@contexts/ThemeContext';
+import { configApi } from '@utils/tauri';
+import { API_BASE_URL } from '@config/api';
 
 export function SettingsTab() {
   const { theme } = useTheme();
-  const [apiUrl, setApiUrl] = useState('http://localhost:3000');
+  const [apiUrl, setApiUrl] = useState(API_BASE_URL);
   const [logLevel, setLogLevel] = useState('info');
   const [autoSave, setAutoSave] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -49,7 +50,7 @@ export function SettingsTab() {
 
   const handleReset = async () => {
     if (confirm('确定要重置所有设置吗？')) {
-      setApiUrl('http://localhost:3000');
+      setApiUrl(API_BASE_URL);
       setLogLevel('info');
       setAutoSave(true);
       await handleSave();
@@ -115,7 +116,7 @@ export function SettingsTab() {
                   type="text"
                   value={apiUrl}
                   onChange={(e) => setApiUrl(e.target.value)}
-                  placeholder="http://localhost:3000"
+                  placeholder={API_BASE_URL}
                   className={`w-full px-4 py-2 border rounded-lg focus:outline-none ${
                     theme === 'dark'
                       ? 'bg-[#0a1628] border-[#1a2942] focus:border-[#5ddad5] text-white'
@@ -125,7 +126,7 @@ export function SettingsTab() {
                 <p className={`text-xs mt-2 ${
                   theme === 'dark' ? 'text-gray-500' : 'text-[#999]'
                 }`}>
-                  后端服务的地址。默认为 http://localhost:3000
+                  后端服务的地址。默认为 {API_BASE_URL}
                 </p>
               </div>
             </div>

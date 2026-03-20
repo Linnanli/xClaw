@@ -9,6 +9,7 @@ import { MessageEditor } from '../common/MessageEditor';
 import { DeleteConfirmDialog } from '../common/DeleteConfirmDialog';
 import { DlpWarningToast } from '../DlpWarningToast';
 import { DlpStatusIndicator } from '../DlpStatusIndicator';
+import { API_BASE_URL } from '@config/api';
 
 export function ChatTabWithAiSdk() {
   const { theme } = useTheme();
@@ -49,7 +50,7 @@ export function ChatTabWithAiSdk() {
   // 使用 Vercel AI SDK 的 useAiChat Hook
   const chat = useAiChat({
     threadId: selectedConversation || '',
-    apiUrl: 'http://localhost:3000',
+    apiUrl: API_BASE_URL,
     authToken: authToken,
   });
 

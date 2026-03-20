@@ -21,13 +21,19 @@ source "$PROJECT_ROOT/admin-backend/scripts/common.sh"
 cleanup() {
     log_info "清理资源..."
     
+    # 杀死 IronClaw 服务器进程
+    if [ ! -z "$IRONCLAW_SERVER_PID" ]; then
+        log_info "停止 IronClaw 服务器 (PID: $IRONCLAW_SERVER_PID)..."
+        kill $IRONCLAW_SERVER_PID 2>/dev/null || true
+    fi
+    
     # 杀死 Desktop Client 前端进程
     if [ ! -z "$DESKTOP_FRONTEND_PID" ]; then
         log_info "停止 Desktop Client 前端 (PID: $DESKTOP_FRONTEND_PID)..."
         kill $DESKTOP_FRONTEND_PID 2>/dev/null || true
     fi
     
-    # 杀死 Tauri 进程（会自动停止内嵌的后端服务）
+    # 杀死 Tauri 进程
     if [ ! -z "$TAURI_PID" ]; then
         log_info "停止 Tauri 客户端 (PID: $TAURI_PID)..."
         kill $TAURI_PID 2>/dev/null || true
@@ -147,6 +153,74 @@ log_info "所有端口已清理"
 
 if ! start_postgres_db "$PROJECT_ROOT/admin-backend"; then
     exit 1
+fi
+
+# ============================================
+# 启动外部 IronClaw 服务器（用于 Desktop Client）
+# ============================================
+
+log_section "启动外部 IronClaw 服务器"
+
+cd "$PROJECT_ROOT"
+
+log_info "启动 IronClaw 服务器（端口 38080）..."
+
+# 设置环境变量
+export GATEWAY_PORT=38080
+export GATEWAY_HOST=127.0.0.1
+export GATEWAY_ENABLED=true
+
+# 启动 IronClaw 服务器
+cargo run --manifest-path ironclaw/Cargo.toml -- run --no-onboard > /tmp/ironclaw-server.log 2>&1 &
+IRONCLAW_SERVER_PID=$!
+
+log_info "IronClaw 服务器进程 PID: $IRONCLAW_SERVER_PID"
+
+log_info "等待 IronClaw 服务器启动..."
+
+# 等待服务器启动（最多 60 秒）
+IRONCLAW_TIMEOUT=60
+IRONCLAW_CHECK_INTERVAL=2
+IRONCLAW_START_TIME=$(date +%s)
+
+echo -n "IronClaw 启动进度: "
+while true; do
+    # 检查进程是否还在运行
+    if ! kill -0 $IRONCLAW_SERVER_PID 2>/dev/null; then
+        echo ""
+        log_warn "IronClaw 服务器进程已退出"
+        break
+    fi
+    
+    # 检查服务器是否启动
+    if curl -s http://localhost:38080/api/health > /dev/null 2>&1; then
+        echo ""
+        log_info "IronClaw 服务器已启动"
+        break
+    fi
+    
+    # 检查超时
+    CURRENT_TIME=$(date +%s)
+    ELAPSED=$((CURRENT_TIME - IRONCLAW_START_TIME))
+    if [ $ELAPSED -gt $IRONCLAW_TIMEOUT ]; then
+        echo ""
+        log_warn "IronClaw 服务器启动超时"
+        break
+    fi
+    
+    # 显示进度
+    echo -n "."
+    sleep $IRONCLAW_CHECK_INTERVAL
+done
+
+# 检查服务器是否运行
+if curl -s http://localhost:38080/api/health > /dev/null 2>&1; then
+    log_info "IronClaw 服务器健康检查通过"
+else
+    log_warn "IronClaw 服务器可能未启动，请检查日志"
+    echo ""
+    echo "查看日志:"
+    echo "  tail -50 /tmp/ironclaw-server.log"
 fi
 
 # ============================================
@@ -290,6 +364,12 @@ echo -e "${CYAN}╚════════════════════�
 echo ""
 
 echo -e "${GREEN}📱 Desktop Client (桌面客户端)${NC}"
+echo "   IronClaw 服务器:"
+echo "     URL: http://localhost:38080"
+echo "     PID: $IRONCLAW_SERVER_PID"
+echo "     健康检查: http://localhost:38080/api/health"
+echo "     日志: tail -f /tmp/ironclaw-server.log"
+echo ""
 echo "   前端开发服务器:"
 echo "     URL: http://localhost:5173"
 echo "     PID: $DESKTOP_FRONTEND_PID"
@@ -300,11 +380,6 @@ if [ ! -z "$TAURI_PID" ] && kill -0 $TAURI_PID 2>/dev/null; then
     echo "     PID: $TAURI_PID"
     echo "     状态: 运行中"
     echo "     日志: tail -f /tmp/tauri.log"
-    echo ""
-    echo "   内嵌 IronClaw 核心服务:"
-    echo "     URL: http://localhost:38080"
-    echo "     健康检查: http://localhost:38080/api/health"
-    echo "     说明: 由 Tauri 自动管理"
     echo ""
 fi
 
@@ -339,7 +414,7 @@ echo "   Desktop Client: Tauri 窗口会自动打开"
 echo "   Admin Backend:  http://localhost:5174"
 echo ""
 echo -e "${YELLOW}📊 服务架构${NC}"
-echo "   Desktop Client 前端 (5173) → Tauri → 内嵌后端 (38080)"
+echo "   Desktop Client 前端 (5173) → Tauri → IronClaw 服务器 (38080)"
 echo "   Admin Backend 前端 (5174) → Admin Backend 后端 (3000) → PostgreSQL (5432)"
 echo ""
 echo -e "${YELLOW}🛑 停止服务${NC}"

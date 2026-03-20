@@ -14,6 +14,20 @@ export default defineConfig({
     alias: {
       // Alias @ to the src directory
       '@': path.resolve(__dirname, './src'),
+      // Alias @app to the app directory
+      '@app': path.resolve(__dirname, './src/app'),
+      // Alias @config to the config directory
+      '@config': path.resolve(__dirname, './src/app/config'),
+      // Alias @components to the components directory
+      '@components': path.resolve(__dirname, './src/app/components'),
+      // Alias @hooks to the hooks directory
+      '@hooks': path.resolve(__dirname, './src/app/hooks'),
+      // Alias @utils to the utils directory
+      '@utils': path.resolve(__dirname, './src/app/utils'),
+      // Alias @contexts to the contexts directory
+      '@contexts': path.resolve(__dirname, './src/app/contexts'),
+      // Alias @services to the services directory
+      '@services': path.resolve(__dirname, './src/app/services'),
     },
   },
   server: {

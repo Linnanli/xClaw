@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { Filter, Search, AlertCircle, Info, AlertTriangle, XCircle, Download, Trash2 } from 'lucide-react';
-import { useTheme } from '../../contexts/ThemeContext';
-import { logApi, logClearApi, LogEntry } from '../../utils/tauri';
-import { LogStreamClient } from '../../utils/sse';
+import { useTheme } from '@contexts/ThemeContext';
+import { logApi, logClearApi, LogEntry } from '@utils/tauri';
+import { LogStreamClient } from '@utils/sse';
+import { API_BASE_URL } from '@config/api';
 
 export function LogsTab() {
   const { theme } = useTheme();
@@ -48,7 +49,7 @@ export function LogsTab() {
   useEffect(() => {
     if (!streamEnabled) return;
 
-    const streamClient = new LogStreamClient('http://localhost:3000', (logEntry) => {
+    const streamClient = new LogStreamClient(API_BASE_URL, (logEntry) => {
       setLogs((prevLogs) => [logEntry, ...prevLogs.slice(0, 99)]);
     });
 
