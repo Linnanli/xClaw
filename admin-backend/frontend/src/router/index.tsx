@@ -8,6 +8,7 @@ import { RoleList } from '../pages/Users/RoleList';
 import { PermissionList } from '../pages/Users/PermissionList';
 import { DlpRuleList } from '../pages/Security/DlpRuleList';
 import { DlpDictionaryList } from '../pages/Security/DlpDictionaryList';
+import { SensitiveOpList } from '../pages/Security/SensitiveOpList';
 import { AuditLog } from '../pages/AuditLog';
 import { MainLayout } from '../components/Layout/MainLayout';
 import { useAuthStore } from '../store/authStore';
@@ -83,7 +84,7 @@ export const router = createBrowserRouter([
       },
       {
         path: 'security/sensitive-ops',
-        element: <ComingSoon title="敏感操作" />,
+        element: <SensitiveOpList />,
       },
       {
         path: 'security/policy-versions',

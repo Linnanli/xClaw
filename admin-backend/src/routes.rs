@@ -4,7 +4,7 @@ use crate::handlers::{
     get_dlp_policies_handler, get_policies_handler, get_policy_version_handler,
     get_sensitive_ops_policies_handler,
 };
-use crate::models::{CreateUserRequest, LoginRequest, LoginResponse, RefreshTokenRequest, CreateRoleRequest, UpdateRoleRequest, AssignPermissionsRequest, CreateDlpRuleRequest, UpdateDlpRuleRequest, CreateDictionaryRequest, UpdateDictionaryRequest};
+use crate::models::{self, CreateUserRequest, LoginRequest, LoginResponse, RefreshTokenRequest, CreateRoleRequest, UpdateRoleRequest, AssignPermissionsRequest, CreateDlpRuleRequest, UpdateDlpRuleRequest, CreateDictionaryRequest, UpdateDictionaryRequest};
 use crate::AppState;
 use axum::{
     extract::{Path, Query, State},
@@ -40,7 +40,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/dlp-dictionaries/{id}", get(get_dictionary).put(update_dictionary).delete(delete_dictionary))
         .route("/api/audit-logs", get(get_audit_logs))
         .route("/api/audit-logs/report", post(report_audit_event))
-        .route("/api/sensitive-operations", get(get_sensitive_operations))
+        .route("/api/sensitive-operations", get(get_sensitive_operations).post(create_sensitive_operation))
+        .route("/api/sensitive-operations/{id}", put(update_sensitive_operation).delete(delete_sensitive_operation))
         // 新增：策略查询 API（供 Desktop Client 使用）
         .route("/api/policies", get(get_policies_handler))
         .route("/api/policies/dlp", get(get_dlp_policies_handler))
@@ -755,7 +756,8 @@ async fn get_sensitive_operations(
 
     let rows = client
         .query(
-            "SELECT id, operation_type, requires_approval, created_at FROM sensitive_operation_rules",
+            "SELECT id, name, operation_type, requires_approval, risk_level, description, enabled, approver_roles, created_at, updated_at
+             FROM sensitive_operation_rules ORDER BY created_at DESC",
             &[],
         )
         .await
@@ -764,16 +766,176 @@ async fn get_sensitive_operations(
     let operations: Vec<_> = rows
         .iter()
         .map(|r| {
+            let approver_roles: Vec<String> = r.try_get::<_, Vec<String>>(7).unwrap_or_default();
             json!({
                 "id": r.get::<_, Uuid>(0),
-                "operation_type": r.get::<_, String>(1),
-                "requires_approval": r.get::<_, bool>(2),
-                "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(3),
+                "name": r.get::<_, String>(1),
+                "operation_type": r.get::<_, String>(2),
+                "requires_approval": r.get::<_, bool>(3),
+                "risk_level": r.try_get::<_, String>(4).unwrap_or_else(|_| "medium".to_string()),
+                "description": r.try_get::<_, Option<String>>(5).unwrap_or(None),
+                "enabled": r.try_get::<_, bool>(6).unwrap_or(true),
+                "approver_roles": approver_roles,
+                "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(8),
+                "updated_at": r.try_get::<_, chrono::DateTime<chrono::Utc>>(9).unwrap_or_else(|_| r.get::<_, chrono::DateTime<chrono::Utc>>(8)),
             })
         })
         .collect();
 
     Ok(Json(json!({ "operations": operations })))
+}
+
+async fn create_sensitive_operation(
+    State(state): State<AppState>,
+    Json(payload): Json<models::CreateSensitiveOperationRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>)> {
+    // 验证
+    if payload.name.trim().is_empty() || payload.name.len() < 2 || payload.name.len() > 100 {
+        return Err(Error::Validation("名称长度必须在 2-100 字符之间".to_string()));
+    }
+    if payload.operation_type.trim().is_empty() {
+        return Err(Error::Validation("操作类型不能为空".to_string()));
+    }
+
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let id = Uuid::new_v4();
+    let now = chrono::Utc::now();
+    let risk_level = payload.risk_level.unwrap_or_else(|| "medium".to_string());
+    let approver_roles = payload.approver_roles.unwrap_or_default();
+
+    client
+        .execute(
+            "INSERT INTO sensitive_operation_rules (id, name, operation_type, requires_approval, risk_level, description, enabled, approver_roles, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+            &[&id, &payload.name, &payload.operation_type, &payload.requires_approval.unwrap_or(true),
+              &risk_level, &payload.description, &true, &approver_roles, &now, &now],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "id": id,
+            "name": payload.name,
+            "operation_type": payload.operation_type,
+            "requires_approval": payload.requires_approval.unwrap_or(true),
+            "risk_level": risk_level,
+            "description": payload.description,
+            "enabled": true,
+            "approver_roles": approver_roles,
+            "created_at": now,
+            "updated_at": now,
+        })),
+    ))
+}
+
+async fn update_sensitive_operation(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<models::UpdateSensitiveOperationRequest>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 检查是否存在
+    let existing = client
+        .query_opt("SELECT id FROM sensitive_operation_rules WHERE id = $1", &[&id])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    if existing.is_none() {
+        return Err(Error::NotFound("敏感操作规则不存在".to_string()));
+    }
+
+    // 验证名称
+    if let Some(ref name) = payload.name {
+        if name.trim().is_empty() || name.len() < 2 || name.len() > 100 {
+            return Err(Error::Validation("名称长度必须在 2-100 字符之间".to_string()));
+        }
+    }
+
+    let now = chrono::Utc::now();
+
+    // 动态构建 UPDATE 语句
+    let mut set_clauses = vec!["updated_at = $2".to_string()];
+    let mut param_idx = 3u32;
+    let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync>> = vec![
+        Box::new(id),
+        Box::new(now),
+    ];
+
+    if let Some(ref name) = payload.name {
+        set_clauses.push(format!("name = ${}", param_idx));
+        params.push(Box::new(name.clone()));
+        param_idx += 1;
+    }
+    if let Some(ref op_type) = payload.operation_type {
+        set_clauses.push(format!("operation_type = ${}", param_idx));
+        params.push(Box::new(op_type.clone()));
+        param_idx += 1;
+    }
+    if let Some(requires_approval) = payload.requires_approval {
+        set_clauses.push(format!("requires_approval = ${}", param_idx));
+        params.push(Box::new(requires_approval));
+        param_idx += 1;
+    }
+    if let Some(ref risk_level) = payload.risk_level {
+        set_clauses.push(format!("risk_level = ${}", param_idx));
+        params.push(Box::new(risk_level.clone()));
+        param_idx += 1;
+    }
+    if let Some(ref description) = payload.description {
+        set_clauses.push(format!("description = ${}", param_idx));
+        params.push(Box::new(description.clone()));
+        param_idx += 1;
+    }
+    if let Some(enabled) = payload.enabled {
+        set_clauses.push(format!("enabled = ${}", param_idx));
+        params.push(Box::new(enabled));
+        param_idx += 1;
+    }
+    if let Some(ref approver_roles) = payload.approver_roles {
+        set_clauses.push(format!("approver_roles = ${}", param_idx));
+        params.push(Box::new(approver_roles.clone()));
+        let _ = param_idx;
+    }
+
+    let sql = format!(
+        "UPDATE sensitive_operation_rules SET {} WHERE id = $1",
+        set_clauses.join(", ")
+    );
+
+    let params_ref: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+        params.iter().map(|p| p.as_ref()).collect();
+
+    client
+        .execute(&sql, &params_ref)
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    Ok(Json(json!({ "message": "更新成功", "updated_at": now })))
+}
+
+async fn delete_sensitive_operation(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let result = client
+        .execute("DELETE FROM sensitive_operation_rules WHERE id = $1", &[&id])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    if result == 0 {
+        return Err(Error::NotFound("敏感操作规则不存在".to_string()));
+    }
+
+    Ok(Json(json!({ "message": "删除成功" })))
 }
 
 // ============================================================================

@@ -160,6 +160,28 @@ pub struct UpdateDictionaryRequest {
     pub keywords: Option<Vec<String>>,
 }
 
+// Sensitive Operation request models
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateSensitiveOperationRequest {
+    pub name: String,
+    pub operation_type: String,
+    pub requires_approval: Option<bool>,
+    pub risk_level: Option<String>,
+    pub description: Option<String>,
+    pub approver_roles: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateSensitiveOperationRequest {
+    pub name: Option<String>,
+    pub operation_type: Option<String>,
+    pub requires_approval: Option<bool>,
+    pub risk_level: Option<String>,
+    pub description: Option<String>,
+    pub enabled: Option<bool>,
+    pub approver_roles: Option<Vec<String>>,
+}
+
 // Role models
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Role {

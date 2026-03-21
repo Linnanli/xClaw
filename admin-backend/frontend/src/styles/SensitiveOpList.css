@@ -1,0 +1,30 @@
+.sensitive-op-list-container {
+  padding: 0;
+}
+
+.sensitive-op-list-container .page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.sensitive-op-list-container .page-header h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.sensitive-op-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.sensitive-op-filter-summary {
+  color: #999;
+  font-size: 13px;
+  margin-left: auto;
+}

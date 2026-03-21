@@ -134,15 +134,38 @@ export interface DlpTestResponse {
 }
 
 // Sensitive Operation types
+export type SensitiveOperationType = 'file_operation' | 'system_command' | 'network_access' | 'data_export' | 'config_change';
+
 export interface SensitiveOperation {
   id: string;
-  operation_type: 'file_delete' | 'system_command' | 'network_access';
+  name: string;
+  operation_type: SensitiveOperationType;
   requires_approval: boolean;
+  risk_level: 'low' | 'medium' | 'high' | 'critical';
   approver_roles: string[];
   description?: string;
-  status: 'enabled' | 'disabled';
+  enabled: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface CreateSensitiveOperationRequest {
+  name: string;
+  operation_type: SensitiveOperationType;
+  requires_approval?: boolean;
+  risk_level?: string;
+  description?: string;
+  approver_roles?: string[];
+}
+
+export interface UpdateSensitiveOperationRequest {
+  name?: string;
+  operation_type?: SensitiveOperationType;
+  requires_approval?: boolean;
+  risk_level?: string;
+  description?: string;
+  enabled?: boolean;
+  approver_roles?: string[];
 }
 
 // Audit Log types
