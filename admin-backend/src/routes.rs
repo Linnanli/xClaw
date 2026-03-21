@@ -4,7 +4,7 @@ use crate::handlers::{
     get_dlp_policies_handler, get_policies_handler, get_policy_version_handler,
     get_sensitive_ops_policies_handler,
 };
-use crate::models::{CreateUserRequest, LoginRequest, LoginResponse, RefreshTokenRequest, CreateRoleRequest, UpdateRoleRequest, AssignPermissionsRequest, CreateDlpRuleRequest, UpdateDlpRuleRequest};
+use crate::models::{CreateUserRequest, LoginRequest, LoginResponse, RefreshTokenRequest, CreateRoleRequest, UpdateRoleRequest, AssignPermissionsRequest, CreateDlpRuleRequest, UpdateDlpRuleRequest, CreateDictionaryRequest, UpdateDictionaryRequest};
 use crate::AppState;
 use axum::{
     extract::{Path, State},
@@ -14,6 +14,7 @@ use axum::{
     Json, Router,
 };
 use serde_json::json;
+use serde::Deserialize;
 use uuid::Uuid;
 
 pub fn create_router(state: AppState) -> Router {
@@ -30,8 +31,15 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/roles/{id}/permissions", post(assign_permissions))
         .route("/api/permissions", get(get_permissions))
         .route("/api/dlp-rules", get(get_dlp_rules).post(create_dlp_rule))
+        .route("/api/dlp-rules/batch/status", post(batch_update_dlp_status))
+        .route("/api/dlp-rules/batch/delete", post(batch_delete_dlp_rules))
+        .route("/api/dlp-rules/export", get(export_dlp_rules))
+        .route("/api/dlp-rules/import", post(import_dlp_rules))
         .route("/api/dlp-rules/{id}", put(update_dlp_rule).delete(delete_dlp_rule))
+        .route("/api/dlp-dictionaries", get(get_dictionaries).post(create_dictionary))
+        .route("/api/dlp-dictionaries/{id}", get(get_dictionary).put(update_dictionary).delete(delete_dictionary))
         .route("/api/audit-logs", get(get_audit_logs))
+        .route("/api/audit-logs/report", post(report_audit_event))
         .route("/api/sensitive-operations", get(get_sensitive_operations))
         // 新增：策略查询 API（供 Desktop Client 使用）
         .route("/api/policies", get(get_policies_handler))
@@ -43,6 +51,26 @@ pub fn create_router(state: AppState) -> Router {
 
 async fn health_check() -> impl IntoResponse {
     Json(json!({ "status": "ok" }))
+}
+
+/// 写入审计日志的辅助函数（不阻塞主流程，失败仅打印日志）
+async fn write_audit_log(
+    client: &deadpool_postgres::Object,
+    user_id: Uuid,
+    action: &str,
+    details: &str,
+) {
+    let id = Uuid::new_v4();
+    let now = chrono::Utc::now();
+    if let Err(e) = client
+        .execute(
+            "INSERT INTO audit_logs (id, user_id, action, details, created_at) VALUES ($1, $2, $3, $4, $5)",
+            &[&id, &user_id, &action, &details, &now],
+        )
+        .await
+    {
+        eprintln!("Failed to write audit log: {}", e);
+    }
 }
 
 async fn register(
@@ -112,6 +140,9 @@ async fn login(
 
     let access_token = auth.generate_access_token(&user_id.to_string())?;
     let refresh_token = auth.generate_refresh_token(&user_id.to_string())?;
+
+    // 记录登录审计日志
+    write_audit_log(&client, user_id, "login", &format!("用户 {} 登录成功", payload.username)).await;
 
     Ok(Json(LoginResponse {
         access_token,
@@ -274,7 +305,7 @@ async fn get_dlp_rules(
 
     let rows = client
         .query(
-            "SELECT id, name, pattern, replacement, severity, description, enabled, category, created_at, updated_at 
+            "SELECT id, name, pattern, replacement, severity, description, enabled, category, created_at, updated_at, rule_type, rule_config 
              FROM dlp_rules 
              ORDER BY created_at DESC",
             &[],
@@ -296,6 +327,8 @@ async fn get_dlp_rules(
                 "category": r.get::<_, String>(7),
                 "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(8),
                 "updated_at": r.get::<_, chrono::DateTime<chrono::Utc>>(9),
+                "rule_type": r.get::<_, String>(10),
+                "rule_config": r.get::<_, Option<serde_json::Value>>(11),
             })
         })
         .collect();
@@ -315,12 +348,16 @@ async fn create_dlp_rule(
 
     client
         .execute(
-            "INSERT INTO dlp_rules (id, name, pattern, replacement, severity, description, enabled, category, created_at, updated_at) 
-             VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8, $9)",
-            &[&rule_id, &payload.name, &payload.pattern, &payload.replacement, &payload.severity, &payload.description, &payload.category, &now, &now],
+            "INSERT INTO dlp_rules (id, name, pattern, replacement, severity, description, enabled, category, rule_type, rule_config, created_at, updated_at) 
+             VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8, $9, $10, $11)",
+            &[&rule_id, &payload.name, &payload.pattern, &payload.replacement, &payload.severity, &payload.description, &payload.category, &payload.rule_type, &payload.rule_config, &now, &now],
         )
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 记录审计日志
+    let system_user = Uuid::nil();
+    write_audit_log(&client, system_user, "create_dlp_rule", &format!("创建 DLP 规则: {} (类型: {})", payload.name, payload.rule_type)).await;
 
     Ok((
         StatusCode::CREATED,
@@ -333,6 +370,8 @@ async fn create_dlp_rule(
             "description": payload.description,
             "enabled": true,
             "category": payload.category,
+            "rule_type": payload.rule_type,
+            "rule_config": payload.rule_config,
             "created_at": now,
             "updated_at": now,
         })),
@@ -404,10 +443,22 @@ async fn update_dlp_rule(
         param_count += 1;
     }
 
+    if let Some(ref rule_type) = payload.rule_type {
+        updates.push(format!("rule_type = ${}", param_count));
+        params.push(rule_type);
+        param_count += 1;
+    }
+
+    if let Some(ref rule_config) = payload.rule_config {
+        updates.push(format!("rule_config = ${}", param_count));
+        params.push(rule_config);
+        param_count += 1;
+    }
+
     params.push(&rule_id);
 
     let query = format!(
-        "UPDATE dlp_rules SET {} WHERE id = ${} RETURNING id, name, pattern, replacement, severity, description, enabled, category, created_at, updated_at",
+        "UPDATE dlp_rules SET {} WHERE id = ${} RETURNING id, name, pattern, replacement, severity, description, enabled, category, created_at, updated_at, rule_type, rule_config",
         updates.join(", "),
         param_count
     );
@@ -416,6 +467,10 @@ async fn update_dlp_rule(
         .query_one(&query, &params)
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 记录审计日志
+    let system_user = Uuid::nil();
+    write_audit_log(&client, system_user, "update_dlp_rule", &format!("更新 DLP 规则: {} ({})", row.get::<_, String>(1), rule_id)).await;
 
     Ok(Json(json!({
         "id": row.get::<_, Uuid>(0),
@@ -428,6 +483,8 @@ async fn update_dlp_rule(
         "category": row.get::<_, String>(7),
         "created_at": row.get::<_, chrono::DateTime<chrono::Utc>>(8),
         "updated_at": row.get::<_, chrono::DateTime<chrono::Utc>>(9),
+        "rule_type": row.get::<_, String>(10),
+        "rule_config": row.get::<_, Option<serde_json::Value>>(11),
     })))
 }
 
@@ -447,7 +504,216 @@ async fn delete_dlp_rule(
         return Err(Error::NotFound("DLP rule not found".to_string()));
     }
 
+    // 记录审计日志
+    let system_user = Uuid::nil();
+    write_audit_log(&client, system_user, "delete_dlp_rule", &format!("删除 DLP 规则: {}", rule_id)).await;
+
     Ok(StatusCode::NO_CONTENT)
+}
+
+// --- 批量操作和导入导出 ---
+
+#[derive(Debug, Deserialize)]
+struct BatchStatusRequest {
+    ids: Vec<Uuid>,
+    enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct BatchDeleteRequest {
+    ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ImportDlpRulesRequest {
+    rules: Vec<CreateDlpRuleRequest>,
+}
+
+async fn batch_update_dlp_status(
+    State(state): State<AppState>,
+    Json(payload): Json<BatchStatusRequest>,
+) -> Result<Json<serde_json::Value>> {
+    if payload.ids.is_empty() {
+        return Err(Error::Validation("ids 不能为空".to_string()));
+    }
+
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let now = chrono::Utc::now();
+    let mut updated = 0u64;
+
+    for id in &payload.ids {
+        let result = client
+            .execute(
+                "UPDATE dlp_rules SET enabled = $1, updated_at = $2 WHERE id = $3",
+                &[&payload.enabled, &now, id],
+            )
+            .await
+            .map_err(|e| Error::Database(e.to_string()))?;
+        updated += result;
+    }
+
+    // 记录审计日志
+    let system_user = Uuid::nil();
+    let action_text = if payload.enabled { "批量启用" } else { "批量禁用" };
+    write_audit_log(&client, system_user, "batch_update_dlp_status", &format!("{} {} 条 DLP 规则", action_text, updated)).await;
+
+    Ok(Json(json!({
+        "updated": updated,
+        "message": format!("成功更新 {} 条规则", updated),
+    })))
+}
+
+async fn batch_delete_dlp_rules(
+    State(state): State<AppState>,
+    Json(payload): Json<BatchDeleteRequest>,
+) -> Result<Json<serde_json::Value>> {
+    if payload.ids.is_empty() {
+        return Err(Error::Validation("ids 不能为空".to_string()));
+    }
+
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let mut deleted = 0u64;
+
+    for id in &payload.ids {
+        let result = client
+            .execute("DELETE FROM dlp_rules WHERE id = $1", &[id])
+            .await
+            .map_err(|e| Error::Database(e.to_string()))?;
+        deleted += result;
+    }
+
+    // 记录审计日志
+    let system_user = Uuid::nil();
+    write_audit_log(&client, system_user, "batch_delete_dlp_rules", &format!("批量删除 {} 条 DLP 规则", deleted)).await;
+
+    Ok(Json(json!({
+        "deleted": deleted,
+        "message": format!("成功删除 {} 条规则", deleted),
+    })))
+}
+
+async fn export_dlp_rules(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let rows = client
+        .query(
+            "SELECT name, pattern, replacement, severity, description, enabled, category, rule_type, rule_config FROM dlp_rules ORDER BY created_at DESC",
+            &[],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let rules: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "name": r.get::<_, String>(0),
+                "pattern": r.get::<_, String>(1),
+                "replacement": r.get::<_, Option<String>>(2),
+                "severity": r.get::<_, String>(3),
+                "description": r.get::<_, Option<String>>(4),
+                "enabled": r.get::<_, bool>(5),
+                "category": r.get::<_, String>(6),
+                "rule_type": r.get::<_, String>(7),
+                "rule_config": r.get::<_, Option<serde_json::Value>>(8),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "version": "1.0",
+        "exported_at": chrono::Utc::now(),
+        "count": rules.len(),
+        "rules": rules,
+    })))
+}
+
+async fn import_dlp_rules(
+    State(state): State<AppState>,
+    Json(payload): Json<ImportDlpRulesRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>)> {
+    if payload.rules.is_empty() {
+        return Err(Error::Validation("rules 不能为空".to_string()));
+    }
+
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let now = chrono::Utc::now();
+    let mut imported = 0u64;
+    let mut errors: Vec<String> = Vec::new();
+
+    for rule in &payload.rules {
+        let rule_id = Uuid::new_v4();
+        match client
+            .execute(
+                "INSERT INTO dlp_rules (id, name, pattern, replacement, severity, description, enabled, category, rule_type, rule_config, created_at, updated_at) 
+                 VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8, $9, $10, $11)",
+                &[&rule_id, &rule.name, &rule.pattern, &rule.replacement, &rule.severity, &rule.description, &rule.category, &rule.rule_type, &rule.rule_config, &now, &now],
+            )
+            .await
+        {
+            Ok(_) => imported += 1,
+            Err(e) => errors.push(format!("规则 '{}': {}", rule.name, e)),
+        }
+    }
+
+    // 记录审计日志
+    let system_user = Uuid::nil();
+    write_audit_log(&client, system_user, "import_dlp_rules", &format!("导入 {} 条 DLP 规则，{} 条失败", imported, errors.len())).await;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "imported": imported,
+            "errors": errors,
+            "message": format!("成功导入 {} 条规则", imported),
+        })),
+    ))
+}
+
+// --- 客户端审计事件上报 ---
+
+#[derive(Debug, Deserialize)]
+struct ReportAuditEventRequest {
+    action: String,
+    details: String,
+    user_id: Option<String>,
+}
+
+async fn report_audit_event(
+    State(state): State<AppState>,
+    Json(payload): Json<ReportAuditEventRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>)> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let user_id = payload.user_id
+        .and_then(|s| Uuid::parse_str(&s).ok())
+        .unwrap_or_else(Uuid::nil);
+
+    let id = Uuid::new_v4();
+    let now = chrono::Utc::now();
+
+    client
+        .execute(
+            "INSERT INTO audit_logs (id, user_id, action, details, created_at) VALUES ($1, $2, $3, $4, $5)",
+            &[&id, &user_id, &payload.action, &payload.details, &now],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "id": id, "created_at": now })),
+    ))
 }
 
 async fn get_sensitive_operations(
@@ -477,6 +743,224 @@ async fn get_sensitive_operations(
         .collect();
 
     Ok(Json(json!({ "operations": operations })))
+}
+
+// ============================================================================
+// 字典管理 (Dictionary Management)
+// ============================================================================
+
+async fn get_dictionaries(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let rows = client
+        .query(
+            "SELECT id, name, description, keywords, keyword_count, created_at, updated_at
+             FROM dlp_dictionaries ORDER BY created_at DESC",
+            &[],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let dictionaries: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<_, Uuid>(0),
+                "name": r.get::<_, String>(1),
+                "description": r.get::<_, Option<String>>(2),
+                "keywords": r.get::<_, Vec<String>>(3),
+                "keyword_count": r.get::<_, i32>(4),
+                "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(5),
+                "updated_at": r.get::<_, chrono::DateTime<chrono::Utc>>(6),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({ "dictionaries": dictionaries })))
+}
+
+async fn get_dictionary(
+    State(state): State<AppState>,
+    Path(dict_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let row = client
+        .query_opt(
+            "SELECT id, name, description, keywords, keyword_count, created_at, updated_at
+             FROM dlp_dictionaries WHERE id = $1",
+            &[&dict_id],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
+        .ok_or(Error::NotFound("Dictionary not found".to_string()))?;
+
+    Ok(Json(json!({
+        "id": row.get::<_, Uuid>(0),
+        "name": row.get::<_, String>(1),
+        "description": row.get::<_, Option<String>>(2),
+        "keywords": row.get::<_, Vec<String>>(3),
+        "keyword_count": row.get::<_, i32>(4),
+        "created_at": row.get::<_, chrono::DateTime<chrono::Utc>>(5),
+        "updated_at": row.get::<_, chrono::DateTime<chrono::Utc>>(6),
+    })))
+}
+
+async fn create_dictionary(
+    State(state): State<AppState>,
+    Json(payload): Json<CreateDictionaryRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>)> {
+    if payload.name.trim().is_empty() {
+        return Err(Error::Validation("字典名称不能为空".to_string()));
+    }
+    if payload.keywords.is_empty() {
+        return Err(Error::Validation("关键字列表不能为空".to_string()));
+    }
+
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 去重并过滤空字符串
+    let keywords: Vec<String> = payload.keywords.iter()
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    let keyword_count = keywords.len() as i32;
+    let dict_id = Uuid::new_v4();
+    let now = chrono::Utc::now();
+
+    client
+        .execute(
+            "INSERT INTO dlp_dictionaries (id, name, description, keywords, keyword_count, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            &[&dict_id, &payload.name, &payload.description, &keywords, &keyword_count, &now, &now],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let system_user = Uuid::nil();
+    write_audit_log(&client, system_user, "create_dictionary", &format!("创建字典: {} ({} 个关键字)", payload.name, keyword_count)).await;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "id": dict_id,
+            "name": payload.name,
+            "description": payload.description,
+            "keywords": keywords,
+            "keyword_count": keyword_count,
+            "created_at": now,
+            "updated_at": now,
+        })),
+    ))
+}
+
+async fn update_dictionary(
+    State(state): State<AppState>,
+    Path(dict_id): Path<Uuid>,
+    Json(payload): Json<UpdateDictionaryRequest>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let existing = client
+        .query_opt("SELECT id FROM dlp_dictionaries WHERE id = $1", &[&dict_id])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    if existing.is_none() {
+        return Err(Error::NotFound("Dictionary not found".to_string()));
+    }
+
+    let now = chrono::Utc::now();
+    let mut updates = vec!["updated_at = $1".to_string()];
+    let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = vec![Box::new(now)];
+    let mut param_count = 2;
+
+    if let Some(ref name) = payload.name {
+        updates.push(format!("name = ${}", param_count));
+        params.push(Box::new(name.clone()));
+        param_count += 1;
+    }
+
+    if let Some(ref description) = payload.description {
+        updates.push(format!("description = ${}", param_count));
+        params.push(Box::new(description.clone()));
+        param_count += 1;
+    }
+
+    if let Some(ref keywords) = payload.keywords {
+        let deduped: Vec<String> = keywords.iter()
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        let count = deduped.len() as i32;
+        updates.push(format!("keywords = ${}", param_count));
+        params.push(Box::new(deduped));
+        param_count += 1;
+        updates.push(format!("keyword_count = ${}", param_count));
+        params.push(Box::new(count));
+        param_count += 1;
+    }
+
+    params.push(Box::new(dict_id));
+
+    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params.iter().map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+
+    let query = format!(
+        "UPDATE dlp_dictionaries SET {} WHERE id = ${} RETURNING id, name, description, keywords, keyword_count, created_at, updated_at",
+        updates.join(", "),
+        param_count
+    );
+
+    let row = client
+        .query_one(&query, &param_refs)
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let system_user = Uuid::nil();
+    write_audit_log(&client, system_user, "update_dictionary", &format!("更新字典: {}", row.get::<_, String>(1))).await;
+
+    Ok(Json(json!({
+        "id": row.get::<_, Uuid>(0),
+        "name": row.get::<_, String>(1),
+        "description": row.get::<_, Option<String>>(2),
+        "keywords": row.get::<_, Vec<String>>(3),
+        "keyword_count": row.get::<_, i32>(4),
+        "created_at": row.get::<_, chrono::DateTime<chrono::Utc>>(5),
+        "updated_at": row.get::<_, chrono::DateTime<chrono::Utc>>(6),
+    })))
+}
+
+async fn delete_dictionary(
+    State(state): State<AppState>,
+    Path(dict_id): Path<Uuid>,
+) -> Result<StatusCode> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let result = client
+        .execute("DELETE FROM dlp_dictionaries WHERE id = $1", &[&dict_id])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    if result == 0 {
+        return Err(Error::NotFound("Dictionary not found".to_string()));
+    }
+
+    let system_user = Uuid::nil();
+    write_audit_log(&client, system_user, "delete_dictionary", &format!("删除字典: {}", dict_id)).await;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 

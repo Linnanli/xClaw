@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Table, Button, Space, message, Popconfirm, Tag, Switch, Input, Select, Empty } from 'antd';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { Table, Button, Space, message, Popconfirm, Tag, Switch, Input, Select, Empty, Modal } from 'antd';
 import {
   PlusOutlined,
   DeleteOutlined,
@@ -7,6 +7,10 @@ import {
   ReloadOutlined,
   SearchOutlined,
   SafetyCertificateOutlined,
+  ExportOutlined,
+  ImportOutlined,
+  CheckCircleOutlined,
+  StopOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { DlpRuleFormModal, type DlpRuleFormMode } from '../../components/Security/DlpRuleFormModal';
@@ -35,6 +39,11 @@ export const DlpRuleList: React.FC = () => {
   const [severityFilter, setSeverityFilter] = useState<string | undefined>(undefined);
   const [categoryFilter, setCategoryFilter] = useState<string | undefined>(undefined);
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
+  const [ruleTypeFilter, setRuleTypeFilter] = useState<string | undefined>(undefined);
+
+  // 批量选择状态
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 加载规则列表
   const loadRules = useCallback(async () => {
@@ -98,6 +107,109 @@ export const DlpRuleList: React.FC = () => {
     setEditingRule(null);
   }, []);
 
+  // --- 批量操作 ---
+  const handleBatchEnable = useCallback(async () => {
+    if (selectedRowKeys.length === 0) return;
+    try {
+      await apiClient.post('/dlp-rules/batch/status', { ids: selectedRowKeys, enabled: true });
+      message.success(`成功启用 ${selectedRowKeys.length} 条规则`);
+      setSelectedRowKeys([]);
+      loadRules();
+    } catch (error: any) {
+      message.error(error.response?.data?.error || '批量启用失败');
+    }
+  }, [selectedRowKeys, loadRules]);
+
+  const handleBatchDisable = useCallback(async () => {
+    if (selectedRowKeys.length === 0) return;
+    try {
+      await apiClient.post('/dlp-rules/batch/status', { ids: selectedRowKeys, enabled: false });
+      message.success(`成功禁用 ${selectedRowKeys.length} 条规则`);
+      setSelectedRowKeys([]);
+      loadRules();
+    } catch (error: any) {
+      message.error(error.response?.data?.error || '批量禁用失败');
+    }
+  }, [selectedRowKeys, loadRules]);
+
+  const handleBatchDelete = useCallback(async () => {
+    if (selectedRowKeys.length === 0) return;
+    try {
+      await apiClient.post('/dlp-rules/batch/delete', { ids: selectedRowKeys });
+      message.success(`成功删除 ${selectedRowKeys.length} 条规则`);
+      setSelectedRowKeys([]);
+      loadRules();
+    } catch (error: any) {
+      message.error(error.response?.data?.error || '批量删除失败');
+    }
+  }, [selectedRowKeys, loadRules]);
+
+  // --- 导入导出 ---
+  const handleExport = useCallback(async () => {
+    try {
+      const response = await apiClient.get('/dlp-rules/export');
+      const data = JSON.stringify(response.data, null, 2);
+      const blob = new Blob([data], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `dlp-rules-export-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      message.success(`成功导出 ${response.data.count} 条规则`);
+    } catch (error: any) {
+      message.error(error.response?.data?.error || '导出失败');
+    }
+  }, []);
+
+  const handleImportFile = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      const rulesToImport = data.rules || data;
+
+      if (!Array.isArray(rulesToImport) || rulesToImport.length === 0) {
+        message.error('文件格式无效：未找到规则数据');
+        return;
+      }
+
+      Modal.confirm({
+        title: '确认导入',
+        content: `将导入 ${rulesToImport.length} 条规则，是否继续？`,
+        okText: '导入',
+        cancelText: '取消',
+        onOk: async () => {
+          try {
+            const response = await apiClient.post('/dlp-rules/import', { rules: rulesToImport });
+            const { imported, errors } = response.data;
+            if (errors && errors.length > 0) {
+              message.warning(`导入 ${imported} 条成功，${errors.length} 条失败`);
+            } else {
+              message.success(`成功导入 ${imported} 条规则`);
+            }
+            loadRules();
+          } catch (err: any) {
+            message.error(err.response?.data?.error || '导入失败');
+          }
+        },
+      });
+    } catch {
+      message.error('文件解析失败，请确保是有效的 JSON 文件');
+    } finally {
+      // 重置 input 以允许重复选择同一文件
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }, [loadRules]);
+
+  // 行选择配置
+  const rowSelection = {
+    selectedRowKeys,
+    onChange: (keys: React.Key[]) => setSelectedRowKeys(keys),
+  };
+
   useEffect(() => {
     loadRules();
   }, [loadRules]);
@@ -121,12 +233,14 @@ export const DlpRuleList: React.FC = () => {
       // 状态筛选
       if (statusFilter === 'enabled' && !rule.enabled) return false;
       if (statusFilter === 'disabled' && rule.enabled) return false;
+      // 规则类型筛选
+      if (ruleTypeFilter && (rule.rule_type || 'regex') !== ruleTypeFilter) return false;
       return true;
     });
-  }, [rules, searchText, severityFilter, categoryFilter, statusFilter]);
+  }, [rules, searchText, severityFilter, categoryFilter, statusFilter, ruleTypeFilter]);
 
   // 是否有活跃的筛选条件
-  const hasActiveFilters = searchText || severityFilter || categoryFilter || statusFilter;
+  const hasActiveFilters = searchText || severityFilter || categoryFilter || statusFilter || ruleTypeFilter;
 
   // 清除所有筛选
   const clearFilters = useCallback(() => {
@@ -134,6 +248,7 @@ export const DlpRuleList: React.FC = () => {
     setSeverityFilter(undefined);
     setCategoryFilter(undefined);
     setStatusFilter(undefined);
+    setRuleTypeFilter(undefined);
   }, []);
 
   // 表格列配置
@@ -150,14 +265,44 @@ export const DlpRuleList: React.FC = () => {
       ),
     },
     {
+      title: '类型',
+      dataIndex: 'rule_type',
+      key: 'rule_type',
+      width: 90,
+      render: (ruleType: string) => (
+        <Tag color={ruleType === 'keyword' ? 'cyan' : ruleType === 'dictionary' ? 'green' : 'geekblue'}>
+          {ruleType === 'keyword' ? '关键字' : ruleType === 'dictionary' ? '字典' : '正则'}
+        </Tag>
+      ),
+    },
+    {
       title: '匹配模式',
       dataIndex: 'pattern',
       key: 'pattern',
       width: 240,
       ellipsis: true,
-      render: (pattern: string) => (
-        <code className="dlp-pattern-cell">{pattern}</code>
-      ),
+      render: (pattern: string, record) => {
+        if (record.rule_type === 'keyword' && record.rule_config && 'keywords' in record.rule_config) {
+          const kws = (record.rule_config as any).keywords as string[];
+          return (
+            <span>
+              {kws.slice(0, 3).map((kw, i) => (
+                <Tag key={i} style={{ marginBottom: 2 }}>{kw}</Tag>
+              ))}
+              {kws.length > 3 && (
+                <Tag>+{kws.length - 3}</Tag>
+              )}
+            </span>
+          );
+        }
+        if (record.rule_type === 'dictionary' && record.rule_config) {
+          const dictName = (record.rule_config as any).dictionary_name;
+          return (
+            <Tag color="green">{dictName || '字典'}</Tag>
+          );
+        }
+        return <code className="dlp-pattern-cell">{pattern}</code>;
+      },
     },
     {
       title: '替换文本',
@@ -271,6 +416,26 @@ export const DlpRuleList: React.FC = () => {
         <h2>DLP 规则管理</h2>
         <Space>
           <Button
+            icon={<ExportOutlined />}
+            onClick={handleExport}
+            disabled={rules.length === 0}
+          >
+            导出
+          </Button>
+          <Button
+            icon={<ImportOutlined />}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            导入
+          </Button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json"
+            style={{ display: 'none' }}
+            onChange={handleImportFile}
+          />
+          <Button
             icon={<ReloadOutlined />}
             onClick={loadRules}
             loading={loading}
@@ -286,6 +451,36 @@ export const DlpRuleList: React.FC = () => {
           </Button>
         </Space>
       </div>
+
+      {/* 批量操作栏 */}
+      {selectedRowKeys.length > 0 && (
+        <div className="dlp-batch-bar">
+          <span className="dlp-batch-info">已选择 {selectedRowKeys.length} 条规则</span>
+          <Space>
+            <Button size="small" icon={<CheckCircleOutlined />} onClick={handleBatchEnable}>
+              批量启用
+            </Button>
+            <Button size="small" icon={<StopOutlined />} onClick={handleBatchDisable}>
+              批量禁用
+            </Button>
+            <Popconfirm
+              title="确认批量删除"
+              description={`确定要删除选中的 ${selectedRowKeys.length} 条规则吗？`}
+              onConfirm={handleBatchDelete}
+              okText="确定"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+            >
+              <Button size="small" danger icon={<DeleteOutlined />}>
+                批量删除
+              </Button>
+            </Popconfirm>
+            <Button size="small" type="link" onClick={() => setSelectedRowKeys([])}>
+              取消选择
+            </Button>
+          </Space>
+        </div>
+      )}
 
       {/* 搜索和筛选栏 */}
       <div className="dlp-filter-bar">
@@ -331,6 +526,17 @@ export const DlpRuleList: React.FC = () => {
           <Option value="enabled">已启用</Option>
           <Option value="disabled">已禁用</Option>
         </Select>
+        <Select
+          placeholder="规则类型"
+          value={ruleTypeFilter}
+          onChange={setRuleTypeFilter}
+          allowClear
+          style={{ width: 130 }}
+        >
+          <Option value="regex">正则表达式</Option>
+          <Option value="keyword">关键字</Option>
+          <Option value="dictionary">字典</Option>
+        </Select>
         {hasActiveFilters && (
           <Button type="link" onClick={clearFilters} size="small">
             清除筛选
@@ -348,6 +554,7 @@ export const DlpRuleList: React.FC = () => {
         dataSource={filteredRules}
         rowKey="id"
         loading={loading}
+        rowSelection={rowSelection}
         locale={{ emptyText: emptyContent }}
         pagination={filteredRules.length > 10 ? {
           pageSize: 10,

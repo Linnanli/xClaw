@@ -7,6 +7,8 @@ import { UserList } from '../pages/Users/UserList';
 import { RoleList } from '../pages/Users/RoleList';
 import { PermissionList } from '../pages/Users/PermissionList';
 import { DlpRuleList } from '../pages/Security/DlpRuleList';
+import { DlpDictionaryList } from '../pages/Security/DlpDictionaryList';
+import { AuditLog } from '../pages/AuditLog';
 import { MainLayout } from '../components/Layout/MainLayout';
 import { useAuthStore } from '../store/authStore';
 
@@ -76,6 +78,10 @@ export const router = createBrowserRouter([
         element: <DlpRuleList />,
       },
       {
+        path: 'security/dictionaries',
+        element: <DlpDictionaryList />,
+      },
+      {
         path: 'security/sensitive-ops',
         element: <ComingSoon title="敏感操作" />,
       },
@@ -86,7 +92,7 @@ export const router = createBrowserRouter([
       // 审计日志
       {
         path: 'audit',
-        element: <ComingSoon title="审计日志" />,
+        element: <AuditLog />,
       },
       // 客户端管理
       {

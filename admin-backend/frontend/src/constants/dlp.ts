@@ -3,6 +3,24 @@
  */
 
 /**
+ * 规则类型选项
+ */
+export const DLP_RULE_TYPE_OPTIONS = [
+  { value: 'regex', label: '正则表达式', description: '使用正则表达式匹配文本模式' },
+  { value: 'keyword', label: '关键字匹配', description: '使用关键字列表匹配文本内容' },
+  { value: 'dictionary', label: '字典匹配', description: '使用预定义字典中的关键字匹配' },
+] as const;
+
+/**
+ * 关键字匹配模式选项
+ */
+export const KEYWORD_MATCH_MODE_OPTIONS = [
+  { value: 'exact', label: '精确匹配', description: '完全匹配关键字' },
+  { value: 'contains', label: '包含匹配', description: '文本中包含关键字即匹配' },
+  { value: 'whole_word', label: '全词匹配', description: '匹配完整的词（前后有边界）' },
+] as const;
+
+/**
  * 严重级别选项
  */
 export const DLP_SEVERITY_OPTIONS = [

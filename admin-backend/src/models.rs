@@ -121,6 +121,15 @@ pub struct CreateDlpRuleRequest {
     pub severity: String,
     pub description: Option<String>,
     pub category: String,
+    /// 规则类型: "regex"（默认）或 "keyword"
+    #[serde(default = "default_rule_type")]
+    pub rule_type: String,
+    /// 规则额外配置（JSON），keyword 类型包含 keywords, match_mode, case_sensitive
+    pub rule_config: Option<serde_json::Value>,
+}
+
+fn default_rule_type() -> String {
+    "regex".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,6 +141,23 @@ pub struct UpdateDlpRuleRequest {
     pub description: Option<String>,
     pub enabled: Option<bool>,
     pub category: Option<String>,
+    pub rule_type: Option<String>,
+    pub rule_config: Option<serde_json::Value>,
+}
+
+// Dictionary models
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateDictionaryRequest {
+    pub name: String,
+    pub description: Option<String>,
+    pub keywords: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateDictionaryRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub keywords: Option<Vec<String>>,
 }
 
 // Role models

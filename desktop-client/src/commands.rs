@@ -1119,8 +1119,34 @@ pub async fn scan_user_input(
     state: tauri::State<'_, CommandState>,
 ) -> Result<SanitizationResult> {
     let dlp = state.dlp_integration.lock().await;
-    dlp.scan_user_input(&content).await
-        .map_err(|e| Error::DlpError(e.to_string()))
+    let result = dlp.scan_user_input(&content).await
+        .map_err(|e| Error::DlpError(e.to_string()))?;
+
+    // 异步上报 DLP 扫描事件到 admin backend（不阻塞主流程）
+    if result.had_sensitive_data {
+        let stats = result.sanitization_stats.clone();
+        let was_blocked = result.was_blocked;
+        tokio::spawn(async move {
+            let admin_url = std::env::var("ADMIN_BACKEND_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
+            let details = if was_blocked {
+                format!("DLP 阻止发送: 匹配 {} 处, 阻止 {} 处", stats.total_matches, stats.blocked_count)
+            } else {
+                format!("DLP 脱敏: 匹配 {} 处, 脱敏 {} 处", stats.total_matches, stats.redacted_count)
+            };
+            let action = if was_blocked { "dlp_block" } else { "dlp_redact" };
+            let _ = reqwest::Client::new()
+                .post(format!("{}/api/audit-logs/report", admin_url))
+                .json(&serde_json::json!({
+                    "action": action,
+                    "details": details,
+                }))
+                .send()
+                .await;
+        });
+    }
+
+    Ok(result)
 }
 
 /// 扫描出站请求的敏感信息
@@ -1256,17 +1282,90 @@ pub async fn sync_dlp_rules_from_admin(
         let severity = rule["severity"].as_str().unwrap_or("Medium").to_string();
         let description = rule["description"].as_str().map(|s| s.to_string());
         let replacement = rule["replacement"].as_str().map(|s| s.to_string());
+        let rule_type = rule["rule_type"].as_str().unwrap_or("regex");
 
         if raw_pattern.is_empty() {
             tracing::warn!("Skipping DLP rule '{}': empty pattern", name);
             continue;
         }
 
-        // 处理 /pattern/ 格式：去掉前后的斜杠
-        let pattern = if raw_pattern.starts_with('/') && raw_pattern.ends_with('/') && raw_pattern.len() > 2 {
-            raw_pattern[1..raw_pattern.len() - 1].to_string()
+        // 根据规则类型构建正则表达式
+        let pattern = if rule_type == "keyword" {
+            // 关键字规则：从 rule_config 中读取关键字列表，转换为正则
+            let rule_config = &rule["rule_config"];
+            let keywords: Vec<String> = if let Some(kw_arr) = rule_config.get("keywords").and_then(|v| v.as_array()) {
+                kw_arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            } else {
+                // 回退：从 pattern 字段按逗号分割
+                raw_pattern.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+            };
+
+            if keywords.is_empty() {
+                tracing::warn!("Skipping keyword DLP rule '{}': no keywords", name);
+                continue;
+            }
+
+            let match_mode = rule_config.get("match_mode").and_then(|v| v.as_str()).unwrap_or("contains");
+            let case_sensitive = rule_config.get("case_sensitive").and_then(|v| v.as_bool()).unwrap_or(false);
+
+            // 转义关键字中的正则特殊字符，然后用 | 连接
+            let escaped: Vec<String> = keywords.iter()
+                .map(|kw| regex::escape(kw))
+                .collect();
+
+            let joined = escaped.join("|");
+            let regex_pattern = match match_mode {
+                "whole_word" => format!(r"\b(?:{})\b", joined),
+                "exact" | "contains" | _ => format!(r"(?:{})", joined),
+            };
+
+            // 如果不区分大小写，添加 (?i) 标志
+            if !case_sensitive {
+                format!("(?i){}", regex_pattern)
+            } else {
+                regex_pattern
+            }
+        } else if rule_type == "dictionary" {
+            // 字典规则：从 pattern 字段读取逗号分隔的关键字（后端同步时已展开）
+            let rule_config = &rule["rule_config"];
+            let keywords: Vec<String> = raw_pattern.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            if keywords.is_empty() {
+                tracing::warn!("Skipping dictionary DLP rule '{}': no keywords in pattern", name);
+                continue;
+            }
+
+            let match_mode = rule_config.get("match_mode").and_then(|v| v.as_str()).unwrap_or("contains");
+            let case_sensitive = rule_config.get("case_sensitive").and_then(|v| v.as_bool()).unwrap_or(false);
+
+            let escaped: Vec<String> = keywords.iter()
+                .map(|kw| regex::escape(kw))
+                .collect();
+
+            let joined = escaped.join("|");
+            let regex_pattern = match match_mode {
+                "whole_word" => format!(r"\b(?:{})\b", joined),
+                "exact" | "contains" | _ => format!(r"(?:{})", joined),
+            };
+
+            if !case_sensitive {
+                format!("(?i){}", regex_pattern)
+            } else {
+                regex_pattern
+            }
         } else {
-            raw_pattern
+            // 正则表达式规则：处理 /pattern/ 格式
+            if raw_pattern.starts_with('/') && raw_pattern.ends_with('/') && raw_pattern.len() > 2 {
+                raw_pattern[1..raw_pattern.len() - 1].to_string()
+            } else {
+                raw_pattern
+            }
         };
 
         // 验证正则表达式是否有效

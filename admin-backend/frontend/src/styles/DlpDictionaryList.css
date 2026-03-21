@@ -1,0 +1,22 @@
+.dlp-dictionary-list-container {
+  padding: 0;
+}
+
+.dlp-dictionary-list-container .page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.dlp-dictionary-list-container .page-header h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.dict-keyword-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #8c8c8c;
+}

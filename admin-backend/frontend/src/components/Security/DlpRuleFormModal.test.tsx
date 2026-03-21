@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { DlpRuleFormModal, validateRegex, testPattern } from './DlpRuleFormModal';
+import { DlpRuleFormModal, validateRegex, testPattern, testKeywords } from './DlpRuleFormModal';
 import type { TestResult } from './DlpRuleFormModal';
 import { apiClient } from '../../api/client';
 import type { DlpRule } from '../../types';
@@ -36,6 +36,8 @@ const mockRule: DlpRule = {
   description: '匹配18位身份证号',
   enabled: true,
   category: 'pii',
+  rule_type: 'regex',
+  rule_config: null,
   created_at: '2026-03-19T10:00:00Z',
   updated_at: '2026-03-19T10:00:00Z',
 };
@@ -608,6 +610,273 @@ describe('DlpRuleFormModal', () => {
         />
       );
       expect(screen.getByText('编辑 DLP 规则')).toBeInTheDocument();
+    });
+  });
+
+  // ============================================================
+  // 关键字匹配：单元测试
+  // ============================================================
+  describe('Unit Tests - testKeywords', () => {
+    it('should match keywords with contains mode', () => {
+      const result = testKeywords(['机密', '绝密'], '这是机密文件', '***', 'contains', false);
+      expect(result).not.toBeNull();
+      expect(result!.matched).toBe(true);
+      expect(result!.matches).toEqual(['机密']);
+      expect(result!.replaced).toBe('这是***文件');
+    });
+
+    it('should match multiple keywords', () => {
+      const result = testKeywords(['机密', '绝密'], '这是机密和绝密文件', '***', 'contains', false);
+      expect(result).not.toBeNull();
+      expect(result!.matched).toBe(true);
+      expect(result!.matches).toContain('机密');
+      expect(result!.matches).toContain('绝密');
+    });
+
+    it('should match case-insensitively by default', () => {
+      const result = testKeywords(['password'], 'My PASSWORD is secret', '***', 'contains', false);
+      expect(result).not.toBeNull();
+      expect(result!.matched).toBe(true);
+    });
+
+    it('should respect case sensitivity', () => {
+      const result = testKeywords(['password'], 'My PASSWORD is secret', '***', 'contains', true);
+      expect(result).not.toBeNull();
+      expect(result!.matched).toBe(false);
+    });
+
+    it('should match whole words only', () => {
+      const result = testKeywords(['pass'], 'my password is pass', '***', 'whole_word', false);
+      expect(result).not.toBeNull();
+      expect(result!.matched).toBe(true);
+      // 'whole_word' 只匹配独立的 'pass'，不匹配 'password' 中的 'pass'
+      expect(result!.matches).toEqual(['pass']);
+    });
+
+    it('should return null for empty keywords', () => {
+      const result = testKeywords([], 'test text', '***', 'contains', false);
+      expect(result).toBeNull();
+    });
+
+    it('should return null for empty test text', () => {
+      const result = testKeywords(['test'], '', '***', 'contains', false);
+      expect(result).toBeNull();
+    });
+
+    it('should handle no matches', () => {
+      const result = testKeywords(['xyz'], 'hello world', '***', 'contains', false);
+      expect(result).not.toBeNull();
+      expect(result!.matched).toBe(false);
+      expect(result!.matches).toEqual([]);
+    });
+  });
+
+  // ============================================================
+  // 关键字匹配：组件渲染测试
+  // ============================================================
+  describe('Keyword Rule - Component Rendering', () => {
+    it('should render rule type selector', () => {
+      render(
+        <DlpRuleFormModal
+          visible={true}
+          mode="create"
+          onCancel={mockOnCancel}
+          onSuccess={mockOnSuccess}
+        />
+      );
+      expect(screen.getByText('规则类型')).toBeInTheDocument();
+    });
+
+    it('should render keyword form when editing keyword rule', () => {
+      const keywordRule: DlpRule = {
+        ...mockRule,
+        rule_type: 'keyword',
+        rule_config: {
+          keywords: ['机密', '绝密'],
+          match_mode: 'contains',
+          case_sensitive: false,
+        },
+        pattern: '机密,绝密',
+      };
+
+      render(
+        <DlpRuleFormModal
+          visible={true}
+          mode="edit"
+          rule={keywordRule}
+          onCancel={mockOnCancel}
+          onSuccess={mockOnSuccess}
+        />
+      );
+
+      expect(screen.getByText('关键字列表')).toBeInTheDocument();
+      expect(screen.getByText('机密')).toBeInTheDocument();
+      expect(screen.getByText('绝密')).toBeInTheDocument();
+    });
+  });
+
+  // ============================================================
+  // 关键字匹配：契约测试
+  // ============================================================
+  describe('Keyword Rule - Contract Tests', () => {
+    it('test_contract_keyword_rule_config_format: should include rule_config in request', async () => {
+      const keywordRule: DlpRule = {
+        ...mockRule,
+        id: 'kw-1',
+        rule_type: 'keyword',
+        rule_config: {
+          keywords: ['机密'],
+          match_mode: 'contains',
+          case_sensitive: false,
+        },
+        pattern: '机密',
+      };
+
+      const user = userEvent.setup();
+
+      render(
+        <DlpRuleFormModal
+          visible={true}
+          mode="edit"
+          rule={keywordRule}
+          onCancel={mockOnCancel}
+          onSuccess={mockOnSuccess}
+        />
+      );
+
+      const submitButton = screen.getByRole('button', { name: /保\s*存/ });
+      await user.click(submitButton);
+
+      await waitFor(() => {
+        const call = vi.mocked(apiClient.put).mock.calls[0];
+        expect(call[0]).toBe('/dlp-rules/kw-1');
+        const body = call[1] as any;
+        expect(body.rule_type).toBe('keyword');
+        expect(body.rule_config).toBeDefined();
+        expect(body.rule_config.keywords).toContain('机密');
+        expect(body.rule_config.match_mode).toBe('contains');
+      }, { timeout: 10000 });
+    }, 15000);
+  });
+
+  // ============================================================
+  // 字典匹配：组件渲染测试
+  // ============================================================
+  describe('Dictionary Rule - Component Rendering', () => {
+    it('should show dictionary option in rule type selector', () => {
+      render(
+        <DlpRuleFormModal
+          visible={true}
+          mode="create"
+          onCancel={mockOnCancel}
+          onSuccess={mockOnSuccess}
+        />
+      );
+      expect(screen.getByText('规则类型')).toBeInTheDocument();
+    });
+
+    it('should render dictionary form when editing dictionary rule', () => {
+      vi.mocked(apiClient.get).mockResolvedValue({ data: { dictionaries: [] } });
+
+      const dictRule: DlpRule = {
+        ...mockRule,
+        rule_type: 'dictionary',
+        rule_config: {
+          dictionary_id: 'dict-1',
+          dictionary_name: '测试字典',
+          match_mode: 'contains',
+          case_sensitive: false,
+        },
+        pattern: '机密,绝密',
+      };
+
+      render(
+        <DlpRuleFormModal
+          visible={true}
+          mode="edit"
+          rule={dictRule}
+          onCancel={mockOnCancel}
+          onSuccess={mockOnSuccess}
+        />
+      );
+
+      expect(screen.getByText('选择字典')).toBeInTheDocument();
+    });
+  });
+
+  // ============================================================
+  // 字典匹配：契约测试
+  // ============================================================
+  describe('Dictionary Rule - Contract Tests', () => {
+    it('test_contract_dictionary_rule_loads_dictionaries: should call dictionaries API', async () => {
+      vi.mocked(apiClient.get).mockImplementation((url: string) => {
+        if (url === '/dlp-dictionaries') {
+          return Promise.resolve({ data: { dictionaries: [{ id: 'dict-1', name: '测试字典', keywords: ['机密'], keyword_count: 1 }] } });
+        }
+        return Promise.resolve({ data: {} });
+      });
+
+      const dictRule: DlpRule = {
+        ...mockRule,
+        rule_type: 'dictionary',
+        rule_config: {
+          dictionary_id: 'dict-1',
+          dictionary_name: '测试字典',
+          match_mode: 'contains',
+          case_sensitive: false,
+        },
+        pattern: '机密',
+      };
+
+      render(
+        <DlpRuleFormModal
+          visible={true}
+          mode="edit"
+          rule={dictRule}
+          onCancel={mockOnCancel}
+          onSuccess={mockOnSuccess}
+        />
+      );
+
+      await waitFor(() => {
+        expect(apiClient.get).toHaveBeenCalledWith('/dlp-dictionaries');
+      });
+    });
+  });
+
+  // ============================================================
+  // 字典匹配：失败路径测试
+  // ============================================================
+  describe('Dictionary Rule - Failure Path Tests', () => {
+    it('test_failure_dictionary_api_error: should handle dictionary load error gracefully', async () => {
+      const { message: antdMessage } = await import('antd');
+      vi.mocked(apiClient.get).mockRejectedValue(new Error('Network Error'));
+
+      const dictRule: DlpRule = {
+        ...mockRule,
+        rule_type: 'dictionary',
+        rule_config: {
+          dictionary_id: 'dict-1',
+          dictionary_name: '测试字典',
+          match_mode: 'contains',
+          case_sensitive: false,
+        },
+        pattern: '机密',
+      };
+
+      render(
+        <DlpRuleFormModal
+          visible={true}
+          mode="edit"
+          rule={dictRule}
+          onCancel={mockOnCancel}
+          onSuccess={mockOnSuccess}
+        />
+      );
+
+      await waitFor(() => {
+        expect(antdMessage.error).toHaveBeenCalledWith('加载字典列表失败');
+      });
     });
   });
 });

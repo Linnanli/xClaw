@@ -44,6 +44,46 @@ export interface Permission {
 }
 
 // DLP Rule types
+export type DlpRuleType = 'regex' | 'keyword' | 'dictionary';
+
+export type KeywordMatchMode = 'exact' | 'contains' | 'whole_word';
+
+export interface KeywordRuleConfig {
+  keywords: string[];
+  match_mode: KeywordMatchMode;
+  case_sensitive: boolean;
+}
+
+export interface DictionaryRuleConfig {
+  dictionary_id: string;
+  dictionary_name?: string;
+  match_mode: KeywordMatchMode;
+  case_sensitive: boolean;
+}
+
+// Dictionary types
+export interface DlpDictionary {
+  id: string;
+  name: string;
+  description?: string;
+  keywords: string[];
+  keyword_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateDictionaryRequest {
+  name: string;
+  description?: string;
+  keywords: string[];
+}
+
+export interface UpdateDictionaryRequest {
+  name?: string;
+  description?: string;
+  keywords?: string[];
+}
+
 export interface DlpRule {
   id: string;
   name: string;
@@ -53,6 +93,8 @@ export interface DlpRule {
   description?: string;
   enabled: boolean;
   category: string;
+  rule_type: DlpRuleType;
+  rule_config?: KeywordRuleConfig | DictionaryRuleConfig | null;
   created_at: string;
   updated_at: string;
 }
@@ -64,6 +106,8 @@ export interface CreateDlpRuleRequest {
   severity: 'low' | 'medium' | 'high' | 'critical';
   description?: string;
   category: string;
+  rule_type?: DlpRuleType;
+  rule_config?: KeywordRuleConfig | DictionaryRuleConfig | null;
 }
 
 export interface UpdateDlpRuleRequest {
@@ -74,6 +118,8 @@ export interface UpdateDlpRuleRequest {
   description?: string;
   enabled?: boolean;
   category?: string;
+  rule_type?: DlpRuleType;
+  rule_config?: KeywordRuleConfig | DictionaryRuleConfig | null;
 }
 
 export interface DlpTestRequest {

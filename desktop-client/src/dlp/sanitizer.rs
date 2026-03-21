@@ -76,7 +76,7 @@ pub struct SanitizationResult {
 }
 
 /// 脱敏统计
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SanitizationStats {
     /// 检测到的敏感信息总数
     pub total_matches: usize,

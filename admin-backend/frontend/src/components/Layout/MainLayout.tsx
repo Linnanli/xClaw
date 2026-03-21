@@ -49,6 +49,7 @@ export const MainLayout: React.FC = () => {
       label: '安全策略',
       children: [
         { key: '/security/dlp-rules', label: 'DLP 规则' },
+        { key: '/security/dictionaries', label: '字典管理' },
         { key: '/security/sensitive-ops', label: '敏感操作' },
         { key: '/security/policy-versions', label: '策略版本' },
       ],
@@ -144,6 +145,7 @@ export const MainLayout: React.FC = () => {
       '/users/permissions': '权限管理',
       '/security': '安全策略',
       '/security/dlp-rules': 'DLP 规则',
+      '/security/dictionaries': '字典管理',
       '/security/sensitive-ops': '敏感操作',
       '/security/policy-versions': '策略版本',
       '/audit': '审计日志',

@@ -57,3 +57,21 @@
   border-radius: 6px;
   padding: 12px;
 }
+
+/* 批量操作栏 */
+.dlp-batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 16px;
+  margin-bottom: 12px;
+  background: #e6f4ff;
+  border: 1px solid #91caff;
+  border-radius: 6px;
+}
+
+.dlp-batch-info {
+  font-size: 13px;
+  color: #1677ff;
+  font-weight: 500;
+}
