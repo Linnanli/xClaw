@@ -182,6 +182,33 @@ pub struct UpdateSensitiveOperationRequest {
     pub approver_roles: Option<Vec<String>>,
 }
 
+// Plugin model
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Plugin {
+    pub id: Uuid,
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    pub author: String,
+    pub enabled: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+// System settings request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemConfigRequest {
+    pub dlp_enabled: Option<bool>,
+    pub dlp_scan_timeout_ms: Option<i64>,
+    pub dlp_fail_open: Option<bool>,
+    pub audit_retention_days: Option<i64>,
+    pub audit_enabled: Option<bool>,
+    pub client_heartbeat_interval_s: Option<i64>,
+    pub client_offline_threshold_s: Option<i64>,
+    pub policy_sync_interval_s: Option<i64>,
+    pub policy_auto_push: Option<bool>,
+}
+
 // Role models
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Role {

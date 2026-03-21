@@ -42,11 +42,24 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/audit-logs/report", post(report_audit_event))
         .route("/api/sensitive-operations", get(get_sensitive_operations).post(create_sensitive_operation))
         .route("/api/sensitive-operations/{id}", put(update_sensitive_operation).delete(delete_sensitive_operation))
+        // 策略变更记录 API
+        .route("/api/policy-changes", get(get_policy_changes))
+        .route("/api/policy-changes/stats", get(get_policy_change_stats))
+        // 客户端管理 API
+        .route("/api/clients", get(get_clients))
+        .route("/api/clients/stats", get(get_client_stats))
+        .route("/api/clients/{id}", get(get_client_detail).delete(delete_client_record))
         // 新增：策略查询 API（供 Desktop Client 使用）
         .route("/api/policies", get(get_policies_handler))
         .route("/api/policies/dlp", get(get_dlp_policies_handler))
         .route("/api/policies/sensitive-ops", get(get_sensitive_ops_policies_handler))
         .route("/api/policies/version", get(get_policy_version_handler))
+        // 技能管理 API
+        .route("/api/skills", get(get_skills))
+        // 插件管理 API
+        .route("/api/plugins", get(get_plugins))
+        // 系统配置 API
+        .route("/api/settings", get(get_settings).put(update_settings))
         .with_state(state)
 }
 
@@ -862,7 +875,7 @@ async fn update_sensitive_operation(
     // 动态构建 UPDATE 语句
     let mut set_clauses = vec!["updated_at = $2".to_string()];
     let mut param_idx = 3u32;
-    let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync>> = vec![
+    let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = vec![
         Box::new(id),
         Box::new(now),
     ];
@@ -909,7 +922,7 @@ async fn update_sensitive_operation(
     );
 
     let params_ref: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-        params.iter().map(|p| p.as_ref()).collect();
+        params.iter().map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
 
     client
         .execute(&sql, &params_ref)
@@ -1595,4 +1608,510 @@ async fn create_user(
             "created_at": now
         })),
     ))
+}
+
+// ============================================================================
+// 策略变更记录 (Policy Change Records)
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+struct PolicyChangeQuery {
+    /// 规则类型筛选: dlp_rule, sensitive_op, dictionary
+    rule_type: Option<String>,
+    /// 变更类型筛选: create, update, delete, enable, disable, import
+    change_type: Option<String>,
+    /// 开始日期 (ISO 8601)
+    start_date: Option<String>,
+    /// 结束日期 (ISO 8601)
+    end_date: Option<String>,
+    /// 搜索关键字（匹配规则名称或操作人）
+    search: Option<String>,
+    /// 每页数量，默认 20
+    page_size: Option<i64>,
+    /// 页码，默认 1
+    page: Option<i64>,
+}
+
+async fn get_policy_changes(
+    State(state): State<AppState>,
+    Query(params): Query<PolicyChangeQuery>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let page_size = params.page_size.unwrap_or(20).min(100).max(1);
+    let page = params.page.unwrap_or(1).max(1);
+    let offset = (page - 1) * page_size;
+
+    // 动态构建 WHERE 子句
+    let mut conditions: Vec<String> = vec![];
+    let mut query_params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = vec![];
+    let mut param_idx = 1u32;
+
+    if let Some(ref rule_type) = params.rule_type {
+        conditions.push(format!("rule_type = ${}", param_idx));
+        query_params.push(Box::new(rule_type.clone()));
+        param_idx += 1;
+    }
+
+    if let Some(ref change_type) = params.change_type {
+        conditions.push(format!("change_type = ${}", param_idx));
+        query_params.push(Box::new(change_type.clone()));
+        param_idx += 1;
+    }
+
+    if let Some(ref start_date) = params.start_date {
+        if let Ok(dt) = chrono::NaiveDate::parse_from_str(start_date, "%Y-%m-%d") {
+            let start = dt.and_hms_opt(0, 0, 0).unwrap();
+            let start_utc = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(start, chrono::Utc);
+            conditions.push(format!("changed_at >= ${}", param_idx));
+            query_params.push(Box::new(start_utc));
+            param_idx += 1;
+        }
+    }
+
+    if let Some(ref end_date) = params.end_date {
+        if let Ok(dt) = chrono::NaiveDate::parse_from_str(end_date, "%Y-%m-%d") {
+            let end = dt.and_hms_opt(23, 59, 59).unwrap();
+            let end_utc = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(end, chrono::Utc);
+            conditions.push(format!("changed_at <= ${}", param_idx));
+            query_params.push(Box::new(end_utc));
+            param_idx += 1;
+        }
+    }
+
+    if let Some(ref search) = params.search {
+        let pattern = format!("%{}%", search);
+        conditions.push(format!("(rule_name ILIKE ${0} OR changed_by_name ILIKE ${0})", param_idx));
+        query_params.push(Box::new(pattern));
+        param_idx += 1;
+    }
+
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    };
+
+    // 查询总数
+    let count_sql = format!("SELECT COUNT(*) FROM policy_change_records {}", where_clause);
+    let count_params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+        query_params.iter().map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+    let count_row = client
+        .query_one(&count_sql, &count_params)
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+    let total: i64 = count_row.get(0);
+
+    // 查询数据
+    query_params.push(Box::new(page_size));
+    let limit_idx = param_idx;
+    param_idx += 1;
+    query_params.push(Box::new(offset));
+    let offset_idx = param_idx;
+
+    let data_sql = format!(
+        "SELECT id, rule_id, rule_type, rule_name, change_type, field_changed, old_value, new_value, changed_by, changed_by_name, changed_at, reason
+         FROM policy_change_records {}
+         ORDER BY changed_at DESC
+         LIMIT ${} OFFSET ${}",
+        where_clause, limit_idx, offset_idx
+    );
+
+    let data_params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+        query_params.iter().map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+    let rows = client
+        .query(&data_sql, &data_params)
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let records: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<_, Uuid>(0),
+                "rule_id": r.get::<_, Uuid>(1),
+                "rule_type": r.get::<_, String>(2),
+                "rule_name": r.try_get::<_, Option<String>>(3).unwrap_or(None),
+                "change_type": r.get::<_, String>(4),
+                "field_changed": r.try_get::<_, Option<String>>(5).unwrap_or(None),
+                "old_value": r.try_get::<_, Option<serde_json::Value>>(6).unwrap_or(None),
+                "new_value": r.try_get::<_, Option<serde_json::Value>>(7).unwrap_or(None),
+                "changed_by": r.try_get::<_, Option<Uuid>>(8).unwrap_or(None),
+                "changed_by_name": r.try_get::<_, Option<String>>(9).unwrap_or(Some("system".to_string())),
+                "changed_at": r.get::<_, chrono::DateTime<chrono::Utc>>(10),
+                "reason": r.try_get::<_, Option<String>>(11).unwrap_or(None),
+            })
+        })
+        .collect();
+
+    let total_pages = (total as f64 / page_size as f64).ceil() as i64;
+
+    Ok(Json(json!({
+        "records": records,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    })))
+}
+
+async fn get_policy_change_stats(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 按变更类型统计
+    let type_rows = client
+        .query(
+            "SELECT change_type, COUNT(*) as count FROM policy_change_records GROUP BY change_type ORDER BY count DESC",
+            &[],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let by_change_type: Vec<_> = type_rows.iter().map(|r| {
+        json!({ "type": r.get::<_, String>(0), "count": r.get::<_, i64>(1) })
+    }).collect();
+
+    // 按规则类型统计
+    let rule_rows = client
+        .query(
+            "SELECT rule_type, COUNT(*) as count FROM policy_change_records GROUP BY rule_type ORDER BY count DESC",
+            &[],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let by_rule_type: Vec<_> = rule_rows.iter().map(|r| {
+        json!({ "type": r.get::<_, String>(0), "count": r.get::<_, i64>(1) })
+    }).collect();
+
+    // 最近 7 天趋势
+    let trend_rows = client
+        .query(
+            "SELECT DATE(changed_at) as date, COUNT(*) as count
+             FROM policy_change_records
+             WHERE changed_at >= NOW() - INTERVAL '7 days'
+             GROUP BY DATE(changed_at)
+             ORDER BY date",
+            &[],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let trend: Vec<_> = trend_rows.iter().map(|r| {
+        json!({
+            "date": r.get::<_, chrono::NaiveDate>(0).to_string(),
+            "count": r.get::<_, i64>(1),
+        })
+    }).collect();
+
+    // 总数
+    let total_row = client
+        .query_one("SELECT COUNT(*) FROM policy_change_records", &[])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+    let total: i64 = total_row.get(0);
+
+    Ok(Json(json!({
+        "total": total,
+        "by_change_type": by_change_type,
+        "by_rule_type": by_rule_type,
+        "trend_7d": trend,
+    })))
+}
+
+
+// ============================================================================
+// 客户端管理 (Client Management)
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+struct ClientQuery {
+    search: Option<String>,
+    online: Option<bool>,
+    os: Option<String>,
+}
+
+async fn get_clients(
+    State(state): State<AppState>,
+    Query(params): Query<ClientQuery>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let mut conditions: Vec<String> = vec![];
+    let mut query_params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = vec![];
+    let mut idx = 1u32;
+
+    if let Some(ref search) = params.search {
+        let pattern = format!("%{}%", search);
+        conditions.push(format!("(username ILIKE ${0} OR client_name ILIKE ${0} OR ip_address ILIKE ${0})", idx));
+        query_params.push(Box::new(pattern));
+        idx += 1;
+    }
+
+    if let Some(online) = params.online {
+        conditions.push(format!("online = ${}", idx));
+        query_params.push(Box::new(online));
+        idx += 1;
+    }
+
+    if let Some(ref os) = params.os {
+        conditions.push(format!("os ILIKE ${}", idx));
+        query_params.push(Box::new(format!("%{}%", os)));
+        let _ = idx;
+    }
+
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    };
+
+    let sql = format!(
+        "SELECT id, user_id, username, client_name, version, os, ip_address, last_activity, online, policy_version, registered_at, updated_at
+         FROM registered_clients {} ORDER BY last_activity DESC",
+        where_clause
+    );
+
+    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+        query_params.iter().map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+
+    let rows = client.query(&sql, &param_refs).await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let clients: Vec<_> = rows.iter().map(|r| {
+        json!({
+            "id": r.get::<_, Uuid>(0),
+            "user_id": r.try_get::<_, Option<Uuid>>(1).unwrap_or(None),
+            "username": r.try_get::<_, Option<String>>(2).unwrap_or(None),
+            "client_name": r.try_get::<_, Option<String>>(3).unwrap_or(None),
+            "version": r.try_get::<_, Option<String>>(4).unwrap_or(None),
+            "os": r.try_get::<_, Option<String>>(5).unwrap_or(None),
+            "ip_address": r.try_get::<_, Option<String>>(6).unwrap_or(None),
+            "last_activity": r.get::<_, chrono::DateTime<chrono::Utc>>(7),
+            "online": r.get::<_, bool>(8),
+            "policy_version": r.try_get::<_, Option<String>>(9).unwrap_or(None),
+            "registered_at": r.get::<_, chrono::DateTime<chrono::Utc>>(10),
+            "updated_at": r.get::<_, chrono::DateTime<chrono::Utc>>(11),
+        })
+    }).collect();
+
+    Ok(Json(json!({ "clients": clients })))
+}
+
+async fn get_client_detail(
+    State(state): State<AppState>,
+    Path(client_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let row = client
+        .query_opt(
+            "SELECT id, user_id, username, client_name, version, os, ip_address, last_activity, online, policy_version, registered_at, updated_at
+             FROM registered_clients WHERE id = $1",
+            &[&client_id],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
+        .ok_or(Error::NotFound("客户端不存在".to_string()))?;
+
+    Ok(Json(json!({
+        "id": row.get::<_, Uuid>(0),
+        "user_id": row.try_get::<_, Option<Uuid>>(1).unwrap_or(None),
+        "username": row.try_get::<_, Option<String>>(2).unwrap_or(None),
+        "client_name": row.try_get::<_, Option<String>>(3).unwrap_or(None),
+        "version": row.try_get::<_, Option<String>>(4).unwrap_or(None),
+        "os": row.try_get::<_, Option<String>>(5).unwrap_or(None),
+        "ip_address": row.try_get::<_, Option<String>>(6).unwrap_or(None),
+        "last_activity": row.get::<_, chrono::DateTime<chrono::Utc>>(7),
+        "online": row.get::<_, bool>(8),
+        "policy_version": row.try_get::<_, Option<String>>(9).unwrap_or(None),
+        "registered_at": row.get::<_, chrono::DateTime<chrono::Utc>>(10),
+        "updated_at": row.get::<_, chrono::DateTime<chrono::Utc>>(11),
+    })))
+}
+
+async fn delete_client_record(
+    State(state): State<AppState>,
+    Path(client_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let result = client
+        .execute("DELETE FROM registered_clients WHERE id = $1", &[&client_id])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    if result == 0 {
+        return Err(Error::NotFound("客户端不存在".to_string()));
+    }
+
+    Ok(Json(json!({ "message": "删除成功" })))
+}
+
+async fn get_client_stats(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let total_row = client.query_one("SELECT COUNT(*) FROM registered_clients", &[]).await
+        .map_err(|e| Error::Database(e.to_string()))?;
+    let total: i64 = total_row.get(0);
+
+    let online_row = client.query_one("SELECT COUNT(*) FROM registered_clients WHERE online = true", &[]).await
+        .map_err(|e| Error::Database(e.to_string()))?;
+    let online: i64 = online_row.get(0);
+
+    let os_rows = client.query(
+        "SELECT COALESCE(os, 'Unknown') as os, COUNT(*) as count FROM registered_clients GROUP BY os ORDER BY count DESC",
+        &[],
+    ).await.map_err(|e| Error::Database(e.to_string()))?;
+
+    let by_os: Vec<_> = os_rows.iter().map(|r| {
+        json!({ "os": r.get::<_, String>(0), "count": r.get::<_, i64>(1) })
+    }).collect();
+
+    let version_rows = client.query(
+        "SELECT COALESCE(version, 'Unknown') as version, COUNT(*) as count FROM registered_clients GROUP BY version ORDER BY count DESC",
+        &[],
+    ).await.map_err(|e| Error::Database(e.to_string()))?;
+
+    let by_version: Vec<_> = version_rows.iter().map(|r| {
+        json!({ "version": r.get::<_, String>(0), "count": r.get::<_, i64>(1) })
+    }).collect();
+
+    Ok(Json(json!({
+        "total": total,
+        "online": online,
+        "offline": total - online,
+        "by_os": by_os,
+        "by_version": by_version,
+    })))
+}
+
+// ==================== 技能管理 API ====================
+
+async fn get_skills(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let rows = client.query(
+        "SELECT id, name, COALESCE(description, '') as description, version, COALESCE(author, '') as author, enabled, created_at, updated_at FROM skills ORDER BY name ASC",
+        &[],
+    ).await.map_err(|e| Error::Database(e.to_string()))?;
+
+    let skills: Vec<serde_json::Value> = rows.iter().map(|r| {
+        json!({
+            "id": r.get::<_, uuid::Uuid>(0).to_string(),
+            "name": r.get::<_, String>(1),
+            "description": r.get::<_, String>(2),
+            "version": r.get::<_, String>(3),
+            "author": r.get::<_, String>(4),
+            "enabled": r.get::<_, bool>(5),
+            "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(6).to_rfc3339(),
+            "updated_at": r.get::<_, chrono::DateTime<chrono::Utc>>(7).to_rfc3339(),
+        })
+    }).collect();
+
+    Ok(Json(json!({ "skills": skills })))
+}
+
+// ==================== 插件管理 API ====================
+
+async fn get_plugins(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let rows = client.query(
+        "SELECT id, name, COALESCE(description, '') as description, version, COALESCE(author, '') as author, enabled, created_at, updated_at FROM plugins ORDER BY name ASC",
+        &[],
+    ).await.map_err(|e| Error::Database(e.to_string()))?;
+
+    let plugins: Vec<serde_json::Value> = rows.iter().map(|r| {
+        json!({
+            "id": r.get::<_, uuid::Uuid>(0).to_string(),
+            "name": r.get::<_, String>(1),
+            "description": r.get::<_, String>(2),
+            "version": r.get::<_, String>(3),
+            "author": r.get::<_, String>(4),
+            "enabled": r.get::<_, bool>(5),
+            "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(6).to_rfc3339(),
+            "updated_at": r.get::<_, chrono::DateTime<chrono::Utc>>(7).to_rfc3339(),
+        })
+    }).collect();
+
+    Ok(Json(json!({ "plugins": plugins })))
+}
+
+// ==================== 系统配置 API ====================
+
+async fn get_settings(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let rows = client.query(
+        "SELECT key, value FROM system_settings",
+        &[],
+    ).await.map_err(|e| Error::Database(e.to_string()))?;
+
+    let mut config = json!({
+        "dlp_enabled": true,
+        "dlp_scan_timeout_ms": 5000,
+        "dlp_fail_open": false,
+        "audit_retention_days": 90,
+        "audit_enabled": true,
+        "client_heartbeat_interval_s": 30,
+        "client_offline_threshold_s": 120,
+        "policy_sync_interval_s": 300,
+        "policy_auto_push": true,
+    });
+
+    for row in &rows {
+        let key: String = row.get(0);
+        let value: serde_json::Value = row.get(1);
+        config[&key] = value;
+    }
+
+    Ok(Json(config))
+}
+
+async fn update_settings(
+    State(state): State<AppState>,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let valid_keys = [
+        "dlp_enabled", "dlp_scan_timeout_ms", "dlp_fail_open",
+        "audit_retention_days", "audit_enabled",
+        "client_heartbeat_interval_s", "client_offline_threshold_s",
+        "policy_sync_interval_s", "policy_auto_push",
+    ];
+
+    if let Some(obj) = payload.as_object() {
+        for (key, value) in obj {
+            if valid_keys.contains(&key.as_str()) {
+                client.execute(
+                    "INSERT INTO system_settings (key, value, updated_at) VALUES ($1, $2, NOW()) ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()",
+                    &[&key, &value],
+                ).await.map_err(|e| Error::Database(e.to_string()))?;
+            }
+        }
+    }
+
+    Ok(Json(json!({ "message": "配置保存成功" })))
 }

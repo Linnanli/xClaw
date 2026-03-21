@@ -2,14 +2,19 @@ import React from 'react';
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { Login } from '../pages/Login';
 import { Dashboard } from '../pages/Dashboard';
-import { ComingSoon } from '../pages/ComingSoon';
 import { UserList } from '../pages/Users/UserList';
 import { RoleList } from '../pages/Users/RoleList';
 import { PermissionList } from '../pages/Users/PermissionList';
 import { DlpRuleList } from '../pages/Security/DlpRuleList';
 import { DlpDictionaryList } from '../pages/Security/DlpDictionaryList';
 import { SensitiveOpList } from '../pages/Security/SensitiveOpList';
+import { PolicyVersionList } from '../pages/Security/PolicyVersionList';
+import { ClientList } from '../pages/ClientList';
+import { Reports } from '../pages/Reports';
 import { AuditLog } from '../pages/AuditLog';
+import { SkillList } from '../pages/Extensions/SkillList';
+import { PluginList } from '../pages/Extensions/PluginList';
+import { Settings } from '../pages/Settings';
 import { MainLayout } from '../components/Layout/MainLayout';
 import { useAuthStore } from '../store/authStore';
 
@@ -88,7 +93,7 @@ export const router = createBrowserRouter([
       },
       {
         path: 'security/policy-versions',
-        element: <ComingSoon title="策略版本" />,
+        element: <PolicyVersionList />,
       },
       // 审计日志
       {
@@ -98,26 +103,26 @@ export const router = createBrowserRouter([
       // 客户端管理
       {
         path: 'clients',
-        element: <ComingSoon title="客户端管理" />,
+        element: <ClientList />,
       },
       // 扩展管理
       {
         path: 'extensions/skills',
-        element: <ComingSoon title="技能管理" />,
+        element: <SkillList />,
       },
       {
         path: 'extensions/plugins',
-        element: <ComingSoon title="插件管理" />,
+        element: <PluginList />,
       },
       // 系统配置
       {
         path: 'settings',
-        element: <ComingSoon title="系统配置" />,
+        element: <Settings />,
       },
       // 统计报表
       {
         path: 'reports',
-        element: <ComingSoon title="统计报表" />,
+        element: <Reports />,
       },
     ],
   },

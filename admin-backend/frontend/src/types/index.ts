@@ -187,14 +187,25 @@ export interface AuditLog {
 // Client types
 export interface Client {
   id: string;
-  user_id: string;
-  username: string;
-  version: string;
-  os: string;
-  ip_address: string;
+  user_id?: string;
+  username?: string;
+  client_name?: string;
+  version?: string;
+  os?: string;
+  ip_address?: string;
   last_activity: string;
   online: boolean;
   policy_version?: string;
+  registered_at: string;
+  updated_at: string;
+}
+
+export interface ClientStats {
+  total: number;
+  online: number;
+  offline: number;
+  by_os: Array<{ os: string; count: number }>;
+  by_version: Array<{ version: string; count: number }>;
 }
 
 // Policy Version types
@@ -205,6 +216,32 @@ export interface PolicyVersion {
   signed: boolean;
   signature?: string;
   created_at: string;
+}
+
+// Policy Change Record types
+export type PolicyChangeRuleType = 'dlp_rule' | 'sensitive_op' | 'dictionary';
+export type PolicyChangeType = 'create' | 'update' | 'delete' | 'enable' | 'disable' | 'import';
+
+export interface PolicyChangeRecord {
+  id: string;
+  rule_id: string;
+  rule_type: PolicyChangeRuleType;
+  rule_name?: string;
+  change_type: PolicyChangeType;
+  field_changed?: string;
+  old_value?: any;
+  new_value?: any;
+  changed_by?: string;
+  changed_by_name?: string;
+  changed_at: string;
+  reason?: string;
+}
+
+export interface PolicyChangeStats {
+  total: number;
+  by_change_type: Array<{ type: string; count: number }>;
+  by_rule_type: Array<{ type: string; count: number }>;
+  trend_7d: Array<{ date: string; count: number }>;
 }
 
 // Statistics types
