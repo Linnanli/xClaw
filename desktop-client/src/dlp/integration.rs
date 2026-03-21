@@ -33,6 +33,7 @@ pub struct CustomPatternConfig {
     pub severity: String, // "Low", "Medium", "High", "Critical"
     pub action: String,   // "Warn", "Redact", "Block"
     pub description: Option<String>,
+    pub replacement: Option<String>, // 自定义替换文本，None 则使用默认值
     pub enabled: bool,
 }
 
@@ -63,6 +64,7 @@ impl DlpIntegrationConfig {
             severity,
             action,
             description,
+            replacement: None,
             enabled: true,
         }
     }
@@ -87,7 +89,11 @@ impl DlpIntegration {
         // 添加自定义模式到检测器
         detector.add_patterns(patterns);
         
-        let sanitizer = DlpSanitizer::new(detector, config.sanitization.clone());
+        // 将自定义模式的 replacement 注入 sanitization config
+        let mut sanitization = config.sanitization.clone();
+        Self::inject_custom_replacements(&config.custom_patterns, &mut sanitization);
+        
+        let sanitizer = DlpSanitizer::new(detector, sanitization);
         
         debug!(
             enabled = config.enabled,
@@ -290,7 +296,12 @@ impl DlpIntegration {
         // 重新构建检测模式
         let patterns = Self::build_patterns(&new_config).await?;
         let detector = DlpDetector::with_custom_patterns(patterns);
-        let new_sanitizer = DlpSanitizer::new(detector, new_config.sanitization.clone());
+        
+        // 将自定义模式的 replacement 注入 sanitization config
+        let mut sanitization = new_config.sanitization.clone();
+        Self::inject_custom_replacements(&new_config.custom_patterns, &mut sanitization);
+        
+        let new_sanitizer = DlpSanitizer::new(detector, sanitization);
         
         // 更新配置和脱敏器
         {
@@ -389,6 +400,23 @@ impl DlpIntegration {
         }
         
         Ok(patterns)
+    }
+
+    /// 将自定义模式的 replacement 注入 SanitizationConfig 的 replacement_map
+    fn inject_custom_replacements(
+        custom_patterns: &[CustomPatternConfig],
+        sanitization: &mut SanitizationConfig,
+    ) {
+        for cp in custom_patterns {
+            if !cp.enabled {
+                continue;
+            }
+            if let Some(ref replacement) = cp.replacement {
+                if !replacement.is_empty() {
+                    sanitization.replacement_map.insert(cp.name.clone(), replacement.clone());
+                }
+            }
+        }
     }
 
     /// 记录审计事件
@@ -567,6 +595,7 @@ mod tests {
             severity: "High".to_string(),
             action: "Redact".to_string(),
             description: Some("Test pattern".to_string()),
+            replacement: None,
             enabled: true,
         });
         

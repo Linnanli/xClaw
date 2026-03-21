@@ -49,6 +49,7 @@ mod change_coverage_tests {
                     severity: "medium".to_string(),
                     action: "redact".to_string(),
                     description: Some("Legacy test pattern".to_string()),
+                    replacement: None,
                     enabled: true,
                 }
             ],

@@ -138,6 +138,7 @@ mod integration_tests {
             severity: "high".to_string(),
             action: "block".to_string(),
             description: None,
+            replacement: None,
             enabled: true,
         });
         
@@ -242,6 +243,7 @@ mod component_interaction_tests {
             severity: "medium".to_string(),
             action: "redact".to_string(),
             description: Some("测试模式".to_string()),
+            replacement: None,
             enabled: true,
         });
         

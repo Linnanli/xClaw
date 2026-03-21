@@ -192,6 +192,7 @@ mod requirements_tests {
             severity: "medium".to_string(),
             action: "redact".to_string(),
             description: Some("员工工号".to_string()),
+            replacement: None,
             enabled: true,
         });
         
@@ -202,6 +203,72 @@ mod requirements_tests {
         assert!(result.had_sensitive_data);
         assert!(!result.was_blocked); // 应该是脱敏
         assert!(result.sanitized_content.contains("[敏感信息]"));
+    }
+
+    /// REQ-DLP-008b: 自定义规则支持自定义替换文本
+    #[tokio::test]
+    async fn req_dlp_008b_custom_rules_with_replacement() {
+        use crate::dlp::integration::{DlpIntegrationConfig, CustomPatternConfig};
+        
+        // 需求：自定义规则应支持自定义替换文本（如管理后台配置的 "***"）
+        let mut config = DlpIntegrationConfig::default();
+        config.custom_patterns.push(CustomPatternConfig {
+            name: "political_celebrity".to_string(),
+            pattern: r"毛泽东".to_string(),
+            severity: "low".to_string(),
+            action: "Redact".to_string(),
+            description: Some("政治名人".to_string()),
+            replacement: Some("***".to_string()),
+            enabled: true,
+        });
+        
+        let integration = DlpIntegration::new(config).await.unwrap();
+        
+        // 测试自定义替换文本生效
+        let result = integration.scan_user_input("请问毛泽东是谁？").await.unwrap();
+        assert!(result.had_sensitive_data, "应该检测到自定义模式");
+        assert!(!result.was_blocked, "low severity 不应该阻止");
+        assert!(
+            result.sanitized_content.contains("***"),
+            "应该使用自定义替换文本 '***'，实际: {}",
+            result.sanitized_content
+        );
+        assert!(
+            !result.sanitized_content.contains("毛泽东"),
+            "原始敏感内容不应该出现在脱敏结果中"
+        );
+        assert!(
+            !result.sanitized_content.contains("[敏感信息]"),
+            "不应该使用默认替换文本 '[敏感信息]'，应该使用自定义的 '***'"
+        );
+    }
+
+    /// REQ-DLP-008c: 无自定义替换文本时使用默认值
+    #[tokio::test]
+    async fn req_dlp_008c_custom_rules_default_replacement() {
+        use crate::dlp::integration::{DlpIntegrationConfig, CustomPatternConfig};
+        
+        // 需求：未设置 replacement 的自定义规则应使用默认替换文本
+        let mut config = DlpIntegrationConfig::default();
+        config.custom_patterns.push(CustomPatternConfig {
+            name: "custom_no_replacement".to_string(),
+            pattern: r"SECRET-\d{4}".to_string(),
+            severity: "medium".to_string(),
+            action: "Redact".to_string(),
+            description: Some("无自定义替换".to_string()),
+            replacement: None,
+            enabled: true,
+        });
+        
+        let integration = DlpIntegration::new(config).await.unwrap();
+        
+        let result = integration.scan_user_input("代码：SECRET-1234").await.unwrap();
+        assert!(result.had_sensitive_data);
+        assert!(
+            result.sanitized_content.contains("[敏感信息]"),
+            "未设置 replacement 时应使用默认值 '[敏感信息]'，实际: {}",
+            result.sanitized_content
+        );
     }
 
     /// REQ-DLP-009: 性能要求

@@ -3,7 +3,7 @@ use crate::storage::StorageManager;
 use crate::extension_manager::ExtensionManager;
 use crate::routine_manager::RoutineManager;
 use crate::memory_manager::{is_protected_file, DeleteResult, MemoryApiExtensions};
-use crate::dlp::{DlpIntegration, DlpIntegrationConfig, DlpStatistics, SanitizationResult};
+use crate::dlp::{DlpIntegration, DlpIntegrationConfig, DlpStatistics, SanitizationResult, CustomPatternConfig};
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -1255,6 +1255,7 @@ pub async fn sync_dlp_rules_from_admin(
         let raw_pattern = rule["pattern"].as_str().unwrap_or("").to_string();
         let severity = rule["severity"].as_str().unwrap_or("Medium").to_string();
         let description = rule["description"].as_str().map(|s| s.to_string());
+        let replacement = rule["replacement"].as_str().map(|s| s.to_string());
 
         if raw_pattern.is_empty() {
             tracing::warn!("Skipping DLP rule '{}': empty pattern", name);
@@ -1283,13 +1284,15 @@ pub async fn sync_dlp_rules_from_admin(
             _ => "Redact",
         };
 
-        custom_patterns.push(DlpIntegrationConfig::custom_pattern(
+        custom_patterns.push(CustomPatternConfig {
             name,
             pattern,
             severity,
-            action.to_string(),
+            action: action.to_string(),
             description,
-        ));
+            replacement,
+            enabled: true,
+        });
     }
 
     let synced_count = custom_patterns.len();

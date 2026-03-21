@@ -259,6 +259,7 @@ mod data_coverage_tests {
                     severity: severity_str.to_string(),
                     action: action_str.to_string(),
                     description: Some(format!("Test pattern {} {}", severity_str, action_str)),
+                    replacement: None,
                     enabled: true,
                 };
                 
