@@ -7,7 +7,7 @@ use crate::handlers::{
 use crate::models::{CreateUserRequest, LoginRequest, LoginResponse, RefreshTokenRequest, CreateRoleRequest, UpdateRoleRequest, AssignPermissionsRequest, CreateDlpRuleRequest, UpdateDlpRuleRequest, CreateDictionaryRequest, UpdateDictionaryRequest};
 use crate::AppState;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{delete, get, post, put},
@@ -267,16 +267,40 @@ async fn get_user(
     })))
 }
 
+/// 审计日志查询参数
+#[derive(Debug, Deserialize)]
+struct AuditLogQuery {
+    page: Option<i64>,
+    page_size: Option<i64>,
+}
+
 async fn get_audit_logs(
     State(state): State<AppState>,
+    Query(params): Query<AuditLogQuery>,
 ) -> Result<Json<serde_json::Value>> {
     let client = state.db_pool.get().await
         .map_err(|e| Error::Database(e.to_string()))?;
 
+    let page = params.page.unwrap_or(1).max(1);
+    let page_size = params.page_size.unwrap_or(50).clamp(1, 200);
+    let offset = (page - 1) * page_size;
+
+    // 查询总数
+    let count_row = client
+        .query_one("SELECT COUNT(*) FROM audit_logs", &[])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+    let total: i64 = count_row.get(0);
+
+    // LEFT JOIN users 获取用户名
     let rows = client
         .query(
-            "SELECT id, user_id, action, details, created_at FROM audit_logs ORDER BY created_at DESC LIMIT 100",
-            &[],
+            "SELECT a.id, a.user_id, u.username, a.action, a.details, a.created_at
+             FROM audit_logs a
+             LEFT JOIN users u ON a.user_id = u.id
+             ORDER BY a.created_at DESC
+             LIMIT $1 OFFSET $2",
+            &[&page_size, &offset],
         )
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
@@ -286,15 +310,22 @@ async fn get_audit_logs(
         .map(|r| {
             json!({
                 "id": r.get::<_, Uuid>(0),
-                "user_id": r.get::<_, Uuid>(1),
-                "action": r.get::<_, String>(2),
-                "details": r.get::<_, String>(3),
-                "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(4),
+                "user_id": r.get::<_, Option<Uuid>>(1),
+                "username": r.get::<_, Option<String>>(2),
+                "action": r.get::<_, String>(3),
+                "details": r.get::<_, String>(4),
+                "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(5),
             })
         })
         .collect();
 
-    Ok(Json(json!({ "logs": logs })))
+    Ok(Json(json!({
+        "logs": logs,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total as f64 / page_size as f64).ceil() as i64,
+    })))
 }
 
 async fn get_dlp_rules(

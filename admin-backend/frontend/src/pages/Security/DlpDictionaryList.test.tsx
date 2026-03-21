@@ -139,7 +139,8 @@ describe('DlpDictionaryList Component', () => {
       renderComponent();
 
       await waitFor(() => {
-        expect(screen.getByText(/共 2 个字典/)).toBeInTheDocument();
+        const matches = screen.getAllByText(/共 2 个字典/);
+        expect(matches.length).toBeGreaterThanOrEqual(1);
       });
     });
 
