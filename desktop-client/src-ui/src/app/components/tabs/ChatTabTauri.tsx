@@ -12,6 +12,7 @@
 
 import { useState, useEffect } from 'react';
 import { Plus, ChevronLeft, ChevronRight, Send, Wifi, WifiOff } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import { useTheme } from '../../contexts/ThemeContext';
 import { threadApi, type Thread } from '../../utils/tauri';
 import { useAiChatTauri } from '../../hooks/useAiChatTauri';
@@ -54,6 +55,15 @@ export function ChatTabTauri() {
       }
     };
     loadToken();
+
+    // 启动时同步 DLP 规则
+    invoke('sync_dlp_rules_from_admin')
+      .then((result: unknown) => {
+        console.log('✅ DLP rules synced:', result);
+      })
+      .catch((err: unknown) => {
+        console.warn('⚠️ DLP rules sync failed (admin backend may be offline):', err);
+      });
   }, []);
 
   // 使用 Tauri IPC 的 useAiChatTauri Hook
@@ -230,10 +240,15 @@ export function ChatTabTauri() {
                   <span className="text-sm text-green-500">已连接</span>
                 </>
               ) : (
-                <>
+                <div className="flex items-center gap-2 cursor-pointer" title="点击重试连接"
+                  onClick={() => {
+                    // 重新订阅
+                    invoke('subscribe_chat_events').catch(console.error);
+                  }}
+                >
                   <WifiOff size={16} className="text-red-500" />
                   <span className="text-sm text-red-500">未连接</span>
-                </>
+                </div>
               )}
             </div>
           </div>

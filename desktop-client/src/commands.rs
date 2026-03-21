@@ -1188,6 +1188,136 @@ pub async fn get_dlp_statistics(
     Ok(dlp.get_statistics().await)
 }
 
+/// 从后台管理系统同步 DLP 规则
+///
+/// 调用 admin-backend 的 /api/dlp-rules API 获取规则，
+/// 然后更新本地 DLP 引擎的自定义规则配置
+#[tauri::command]
+pub async fn sync_dlp_rules_from_admin(
+    state: tauri::State<'_, CommandState>,
+) -> Result<SyncDlpResult> {
+    tracing::info!("🔄 Syncing DLP rules from admin backend");
+
+    // 后台管理系统的地址（默认 localhost:3000）
+    let admin_url = std::env::var("ADMIN_BACKEND_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| Error::ApiError(format!("Failed to create HTTP client: {}", e)))?;
+
+    // 获取 admin-backend 的 JWT token（如果需要认证）
+    let admin_token = std::env::var("ADMIN_AUTH_TOKEN").ok();
+
+    let mut request = client.get(format!("{}/api/dlp-rules", admin_url));
+    if let Some(token) = &admin_token {
+        request = request.header("Authorization", format!("Bearer {}", token));
+    }
+
+    let response = request.send().await.map_err(|e| {
+        tracing::warn!("⚠️  Failed to connect to admin backend: {}", e);
+        Error::ApiError(format!("Admin backend unreachable: {}", e))
+    })?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        tracing::warn!("⚠️  Admin backend returned {}: {}", status, body);
+        return Err(Error::ApiError(format!(
+            "Admin backend returned {}: {}",
+            status, body
+        )));
+    }
+
+    let rules_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| Error::ApiError(format!("Failed to parse DLP rules: {}", e)))?;
+
+    // 解析规则（支持 {"rules": [...]} 和 [...] 两种格式）
+    let rules = if let Some(arr) = rules_response.as_array() {
+        arr.clone()
+    } else if let Some(arr) = rules_response.get("rules").and_then(|v| v.as_array()) {
+        arr.clone()
+    } else {
+        return Err(Error::ApiError("Expected array of DLP rules".to_string()));
+    };
+
+    let mut custom_patterns = Vec::new();
+    for rule in &rules {
+        let enabled = rule["enabled"].as_bool().unwrap_or(true);
+        if !enabled {
+            continue;
+        }
+
+        let name = rule["name"].as_str().unwrap_or("").to_string();
+        let raw_pattern = rule["pattern"].as_str().unwrap_or("").to_string();
+        let severity = rule["severity"].as_str().unwrap_or("Medium").to_string();
+        let description = rule["description"].as_str().map(|s| s.to_string());
+
+        if raw_pattern.is_empty() {
+            tracing::warn!("Skipping DLP rule '{}': empty pattern", name);
+            continue;
+        }
+
+        // 处理 /pattern/ 格式：去掉前后的斜杠
+        let pattern = if raw_pattern.starts_with('/') && raw_pattern.ends_with('/') && raw_pattern.len() > 2 {
+            raw_pattern[1..raw_pattern.len() - 1].to_string()
+        } else {
+            raw_pattern
+        };
+
+        // 验证正则表达式是否有效
+        if regex::Regex::new(&pattern).is_err() {
+            tracing::warn!("Skipping DLP rule '{}': invalid regex pattern '{}'", name, pattern);
+            continue;
+        }
+
+        // 根据 severity 决定 action
+        let action = match severity.as_str() {
+            "critical" | "Critical" => "Block",
+            "high" | "High" => "Redact",
+            "medium" | "Medium" => "Redact",
+            "low" | "Low" => "Redact",
+            _ => "Redact",
+        };
+
+        custom_patterns.push(DlpIntegrationConfig::custom_pattern(
+            name,
+            pattern,
+            severity,
+            action.to_string(),
+            description,
+        ));
+    }
+
+    let synced_count = custom_patterns.len();
+    tracing::info!("📋 Synced {} DLP rules from admin backend", synced_count);
+
+    // 更新 DLP 配置
+    let dlp = state.dlp_integration.lock().await;
+    let mut config = dlp.get_config().await;
+    config.custom_patterns = custom_patterns;
+
+    dlp.update_config(config)
+        .await
+        .map_err(|e| Error::DlpError(format!("Failed to update DLP config: {}", e)))?;
+
+    tracing::info!("✅ DLP rules synced successfully");
+
+    Ok(SyncDlpResult {
+        synced_count,
+        message: format!("Successfully synced {} DLP rules", synced_count),
+    })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncDlpResult {
+    pub synced_count: usize,
+    pub message: String,
+}
+
 // ============================================================================
 // 聊天命令 (Chat Commands)
 // ============================================================================
@@ -1230,6 +1360,8 @@ pub enum ChatEvent {
 pub struct SseSubscriptionManager {
     /// 是否正在订阅
     is_subscribed: Arc<Mutex<bool>>,
+    /// SSE 是否实际连接成功
+    is_connected: Arc<Mutex<bool>>,
     /// 取消订阅的通知通道
     cancel_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
 }
@@ -1238,6 +1370,7 @@ impl SseSubscriptionManager {
     pub fn new() -> Self {
         Self {
             is_subscribed: Arc::new(Mutex::new(false)),
+            is_connected: Arc::new(Mutex::new(false)),
             cancel_tx: Arc::new(Mutex::new(None)),
         }
     }
@@ -1247,9 +1380,19 @@ impl SseSubscriptionManager {
         *self.is_subscribed.lock().await
     }
 
+    /// 检查 SSE 是否实际连接
+    pub async fn is_connected(&self) -> bool {
+        *self.is_connected.lock().await
+    }
+
     /// 设置订阅状态
     pub async fn set_subscribed(&self, subscribed: bool) {
         *self.is_subscribed.lock().await = subscribed;
+    }
+
+    /// 设置连接状态
+    pub async fn set_connected(&self, connected: bool) {
+        *self.is_connected.lock().await = connected;
     }
 
     /// 设置取消通道
@@ -1263,6 +1406,7 @@ impl SseSubscriptionManager {
             let _ = tx.send(());
         }
         self.set_subscribed(false).await;
+        self.set_connected(false).await;
     }
 }
 
@@ -1362,8 +1506,21 @@ pub async fn subscribe_chat_events(
         .clone();
 
     if manager.lock().await.is_subscribed().await {
-        tracing::info!("ℹ️  Already subscribed to chat events, returning success");
-        return Ok(()); // 幂等操作：已订阅时直接返回成功
+        let connected = manager.lock().await.is_connected().await;
+        tracing::info!("ℹ️  Already subscribed to chat events, connected={}", connected);
+        // 幂等操作：已订阅时重新发送当前连接状态，确保前端状态同步
+        let _ = window.emit(
+            "chat-event",
+            ChatEvent::ConnectionStatus {
+                connected,
+                message: if connected {
+                    "Already connected to chat events".to_string()
+                } else {
+                    "Reconnecting to chat events...".to_string()
+                },
+            },
+        );
+        return Ok(());
     }
 
     // 创建取消通道
@@ -1375,6 +1532,7 @@ pub async fn subscribe_chat_events(
     let api_client = state.api_client.clone();
     let base_url = api_client.base_url().to_string();
     let auth_token = api_client.auth_token().to_string();
+    let manager_clone = manager.clone();
 
     // 在后台任务中订阅 SSE 事件
     tokio::spawn(async move {
@@ -1403,7 +1561,33 @@ pub async fn subscribe_chat_events(
                 .await
             {
                 Ok(response) => {
-                    tracing::info!("✅ SSE connection established");
+                    // 检查 HTTP 状态码
+                    let status = response.status();
+                    if !status.is_success() {
+                        let body = response.text().await.unwrap_or_default();
+                        tracing::error!("❌ SSE connection rejected: {} - {}", status, body);
+
+                        let _ = window.emit(
+                            "chat-event",
+                            ChatEvent::Error {
+                                message: format!(
+                                    "SSE connection rejected ({}): {}",
+                                    status.as_u16(),
+                                    if body.is_empty() { status.canonical_reason().unwrap_or("Unknown error").to_string() } else { body }
+                                ),
+                                code: Some(format!("HTTP_{}", status.as_u16())),
+                            },
+                        );
+
+                        // 等待后重试
+                        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                        continue;
+                    }
+
+                    tracing::info!("✅ SSE connection established (HTTP {})", status.as_u16());
+
+                    // 更新连接状态
+                    manager_clone.lock().await.set_connected(true).await;
 
                     // 发送连接成功事件
                     let _ = window.emit(
@@ -1449,6 +1633,7 @@ pub async fn subscribe_chat_events(
 
                     // 连接断开
                     tracing::warn!("⚠️  SSE connection closed");
+                    manager_clone.lock().await.set_connected(false).await;
                     let _ = window.emit(
                         "chat-event",
                         ChatEvent::ConnectionStatus {
@@ -1459,6 +1644,7 @@ pub async fn subscribe_chat_events(
                 }
                 Err(e) => {
                     tracing::error!("❌ Failed to connect to SSE: {}", e);
+                    manager_clone.lock().await.set_connected(false).await;
 
                     // 发送连接失败事件
                     let _ = window.emit(
@@ -1717,13 +1903,19 @@ data: {invalid json}
 
         // 初始状态
         assert!(!manager.is_subscribed().await);
+        assert!(!manager.is_connected().await);
 
         // 设置订阅状态
         manager.set_subscribed(true).await;
         assert!(manager.is_subscribed().await);
 
-        // 取消订阅
+        // 设置连接状态
+        manager.set_connected(true).await;
+        assert!(manager.is_connected().await);
+
+        // 取消订阅（应同时重置连接状态）
         manager.cancel().await;
         assert!(!manager.is_subscribed().await);
+        assert!(!manager.is_connected().await);
     }
 }

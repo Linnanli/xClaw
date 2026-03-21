@@ -168,9 +168,18 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
         const errorMsg = event.code
           ? `${event.message} (${event.code})`
           : event.message;
-        setError(errorMsg);
-        setIsLoading(false);
-        setThinkingMessage(null);
+        
+        // SSE 连接错误不应该清除 loading 状态（可能是后台重连）
+        // 只有非连接错误才清除 loading
+        if (!event.code?.startsWith('HTTP_') && !event.code?.startsWith('CONNECTION_')) {
+          setError(errorMsg);
+          setIsLoading(false);
+          setThinkingMessage(null);
+        } else {
+          // 连接错误：更新连接状态
+          setIsConnected(false);
+          tracing.warn('SSE connection error', { code: event.code, message: event.message });
+        }
         onError?.(errorMsg);
         break;
 
@@ -218,9 +227,15 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
           const errorMsg = event.code
             ? `${event.message} (${event.code})`
             : event.message;
-          setError(errorMsg);
-          setIsLoading(false);
-          setThinkingMessage(null);
+          
+          if (!event.code?.startsWith('HTTP_') && !event.code?.startsWith('CONNECTION_')) {
+            setError(errorMsg);
+            setIsLoading(false);
+            setThinkingMessage(null);
+          } else {
+            setIsConnected(false);
+            tracing.warn('SSE connection error', { code: event.code, message: event.message });
+          }
           onError?.(errorMsg);
           break;
 

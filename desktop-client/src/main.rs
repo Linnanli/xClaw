@@ -134,6 +134,96 @@ async fn main() {
 
     let state = CommandState::new_with_token(auth_token);
 
+    // 尝试从后台管理系统同步 DLP 规则
+    println!("🔄 Syncing DLP rules from admin backend...");
+    {
+        let admin_url = std::env::var("ADMIN_BACKEND_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
+        
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(3))
+            .build()
+            .ok();
+        
+        if let Some(client) = client {
+            match client.get(format!("{}/api/dlp-rules", admin_url)).send().await {
+                Ok(response) if response.status().is_success() => {
+                    if let Ok(rules) = response.json::<serde_json::Value>().await {
+                        // 支持 {"rules": [...]} 和 [...] 两种格式
+                        let rules_array = if let Some(arr) = rules.as_array() {
+                            arr.clone()
+                        } else if let Some(arr) = rules.get("rules").and_then(|v| v.as_array()) {
+                            arr.clone()
+                        } else {
+                            Vec::new()
+                        };
+                        
+                        if !rules_array.is_empty() {
+                            let mut custom_patterns = Vec::new();
+                            for rule in &rules_array {
+                                let enabled = rule["enabled"].as_bool().unwrap_or(true);
+                                if !enabled { continue; }
+                                
+                                let name = rule["name"].as_str().unwrap_or("").to_string();
+                                let raw_pattern = rule["pattern"].as_str().unwrap_or("").to_string();
+                                let severity = rule["severity"].as_str().unwrap_or("Medium").to_string();
+                                let description = rule["description"].as_str().map(|s| s.to_string());
+                                
+                                if raw_pattern.is_empty() { continue; }
+                                
+                                // 处理 /pattern/ 格式
+                                let pattern = if raw_pattern.starts_with('/') && raw_pattern.ends_with('/') && raw_pattern.len() > 2 {
+                                    raw_pattern[1..raw_pattern.len() - 1].to_string()
+                                } else {
+                                    raw_pattern
+                                };
+                                
+                                // 验证正则表达式
+                                if regex::Regex::new(&pattern).is_err() {
+                                    eprintln!("⚠️  Skipping invalid DLP rule '{}': bad regex", name);
+                                    continue;
+                                }
+                                
+                                let action = match severity.as_str() {
+                                    "critical" | "Critical" => "Block",
+                                    "high" | "High" => "Redact",
+                                    _ => "Redact",
+                                };
+                                
+                                custom_patterns.push(
+                                    desktop_client::dlp::DlpIntegrationConfig::custom_pattern(
+                                        name, pattern, severity, action.to_string(), description,
+                                    )
+                                );
+                            }
+                            
+                            if !custom_patterns.is_empty() {
+                                let dlp = state.dlp_integration.lock().await;
+                                let mut config = dlp.get_config().await;
+                                config.custom_patterns = custom_patterns.clone();
+                                if let Err(e) = dlp.update_config(config).await {
+                                    eprintln!("⚠️  Failed to apply DLP rules: {}", e);
+                                } else {
+                                    println!("✅ Synced {} DLP rules from admin backend", custom_patterns.len());
+                                }
+                            } else {
+                                println!("ℹ️  No enabled DLP rules found in admin backend");
+                            }
+                        } else {
+                            println!("ℹ️  No DLP rules found in admin backend");
+                        }
+                    }
+                }
+                Ok(response) => {
+                    eprintln!("⚠️  Admin backend returned {}, DLP rules not synced", response.status());
+                }
+                Err(e) => {
+                    eprintln!("⚠️  Admin backend unreachable ({}), using default DLP rules", e);
+                }
+            }
+        }
+    }
+
     // 初始化 SSE 订阅管理器
     let sse_manager = Arc::new(Mutex::new(desktop_client::commands::SseSubscriptionManager::new()));
 
@@ -227,6 +317,7 @@ async fn main() {
             get_dlp_config,
             update_dlp_config,
             get_dlp_statistics,
+            sync_dlp_rules_from_admin,
             // 聊天命令 (Tauri IPC)
             send_chat_message,
             subscribe_chat_events,

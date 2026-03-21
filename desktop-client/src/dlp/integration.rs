@@ -48,6 +48,26 @@ impl Default for DlpIntegrationConfig {
     }
 }
 
+impl DlpIntegrationConfig {
+    /// 创建自定义模式配置的辅助方法
+    pub fn custom_pattern(
+        name: String,
+        pattern: String,
+        severity: String,
+        action: String,
+        description: Option<String>,
+    ) -> CustomPatternConfig {
+        CustomPatternConfig {
+            name,
+            pattern,
+            severity,
+            action,
+            description,
+            enabled: true,
+        }
+    }
+}
+
 /// DLP 集成服务
 pub struct DlpIntegration {
     sanitizer: Arc<RwLock<DlpSanitizer>>,
@@ -315,10 +335,10 @@ impl DlpIntegration {
             }
             
             let severity = match custom_config.severity.as_str() {
-                "Low" => ironclaw_safety::LeakSeverity::Low,
-                "Medium" => ironclaw_safety::LeakSeverity::Medium,
-                "High" => ironclaw_safety::LeakSeverity::High,
-                "Critical" => ironclaw_safety::LeakSeverity::Critical,
+                "Low" | "low" => ironclaw_safety::LeakSeverity::Low,
+                "Medium" | "medium" => ironclaw_safety::LeakSeverity::Medium,
+                "High" | "high" => ironclaw_safety::LeakSeverity::High,
+                "Critical" | "critical" => ironclaw_safety::LeakSeverity::Critical,
                 _ => {
                     warn!(
                         pattern_name = custom_config.name,
@@ -573,7 +593,6 @@ mod tests {
         assert!(!result.had_sensitive_data);
         assert_eq!(result.sanitized_content, content); // 原样返回
     }
-}
 
     #[tokio::test]
     async fn test_real_id_card_330326199408015618() {
@@ -594,3 +613,4 @@ mod tests {
         assert!(result.sanitized_content.contains("330************618"), 
                 "应该脱敏为 330************618，实际: {}", result.sanitized_content);
     }
+}
