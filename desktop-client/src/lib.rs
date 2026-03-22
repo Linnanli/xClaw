@@ -24,7 +24,27 @@ pub mod session_config;
 pub mod token_refresh_service;
 pub mod embedded_server;
 
+// ── IronClaw 嵌入模块 ──────────────────────────────────────────────
+pub mod tauri_channel;
+pub mod state;
+pub mod engine;
+pub mod ipc;
+pub mod admin_sync;
+pub mod data_reporter;
+
 // 测试模块（仅在测试时编译）
+#[cfg(test)]
+#[path = "tauri_channel_tests.rs"]
+mod tauri_channel_tests;
+
+#[cfg(test)]
+#[path = "admin_sync_tests.rs"]
+mod admin_sync_tests;
+
+#[cfg(test)]
+#[path = "data_reporter_tests.rs"]
+mod data_reporter_tests;
+
 #[cfg(test)]
 mod tests {
     pub mod dlp_policy_sync_integration_tests {

@@ -30,7 +30,11 @@ async fn create_test_pool() -> Pool {
 /// 创建测试用的应用状态
 async fn create_test_state() -> Arc<AppState> {
     let pool = create_test_pool().await;
-    Arc::new(AppState { db_pool: pool })
+    Arc::new(AppState {
+        db_pool: pool,
+        http_client: reqwest::Client::new(),
+        gateway_url: "http://localhost:3000".to_string(),
+    })
 }
 
 #[tokio::test]

@@ -10,11 +10,13 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{delete, get, post, put},
+    routing::{get, post, put},
     Json, Router,
 };
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
-use serde::Deserialize;
+use tracing::{debug, info, instrument};
 use uuid::Uuid;
 
 pub fn create_router(state: AppState) -> Router {
@@ -60,6 +62,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/plugins", get(get_plugins))
         // 系统配置 API
         .route("/api/settings", get(get_settings).put(update_settings))
+        // 客户端配置下发 API（供 Desktop Client 使用）
+        .route("/api/client-config", get(get_client_config))
+        // 客户端数据上报 API（供 Desktop Client 使用）
+        .route("/api/client-reports", post(post_client_reports))
         .with_state(state)
 }
 
@@ -2168,3 +2174,167 @@ async fn update_settings(
 
     Ok(Json(json!({ "message": "配置保存成功" })))
 }
+
+// =========================================================================
+// 客户端配置下发 API
+// =========================================================================
+
+/// 客户端配置响应。
+#[derive(Debug, Serialize, Deserialize)]
+struct ClientConfigResponse {
+    llm_backend: Option<String>,
+    llm_api_key: Option<String>,
+    llm_model: Option<String>,
+    llm_base_url: Option<String>,
+    safety_enabled: Option<bool>,
+    skills_enabled: Option<bool>,
+    extensions_enabled: Option<bool>,
+    max_cost_per_day_cents: Option<i64>,
+    config_version: i64,
+    updated_at: String,
+}
+
+/// GET /api/client-config — 返回客户端应使用的配置。
+///
+/// 查找顺序：
+/// 1. 特定客户端配置（通过 `client_id` 查询参数）
+/// 2. 全局默认配置（`client_id IS NULL`）
+/// 3. 如果都没有，返回空配置
+#[instrument(skip(state))]
+async fn get_client_config(
+    State(state): State<AppState>,
+    Query(params): Query<ClientConfigQuery>,
+) -> Result<Json<ClientConfigResponse>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 尝试查找特定客户端配置，否则使用全局默认
+    let row = if let Some(ref cid) = params.client_id {
+        let uuid = Uuid::parse_str(cid)
+            .map_err(|_| Error::Validation("Invalid client_id format".into()))?;
+        client.query_opt(
+            "SELECT llm_backend, llm_api_key, llm_model, llm_base_url, \
+             safety_enabled, skills_enabled, extensions_enabled, \
+             max_cost_per_day_cents, config_version, updated_at \
+             FROM client_configs WHERE client_id = $1",
+            &[&uuid],
+        ).await.map_err(|e| Error::Database(e.to_string()))?
+    } else {
+        None
+    };
+
+    // 如果没有特定配置，查找全局默认
+    let row = match row {
+        Some(r) => Some(r),
+        None => client.query_opt(
+            "SELECT llm_backend, llm_api_key, llm_model, llm_base_url, \
+             safety_enabled, skills_enabled, extensions_enabled, \
+             max_cost_per_day_cents, config_version, updated_at \
+             FROM client_configs WHERE client_id IS NULL",
+            &[],
+        ).await.map_err(|e| Error::Database(e.to_string()))?,
+    };
+
+    let response = match row {
+        Some(r) => {
+            let updated_at: DateTime<Utc> = r.get(9);
+            ClientConfigResponse {
+                llm_backend: r.get(0),
+                llm_api_key: r.get(1),
+                llm_model: r.get(2),
+                llm_base_url: r.get(3),
+                safety_enabled: r.get(4),
+                skills_enabled: r.get(5),
+                extensions_enabled: r.get(6),
+                max_cost_per_day_cents: r.get(7),
+                config_version: r.get(8),
+                updated_at: updated_at.to_rfc3339(),
+            }
+        }
+        None => ClientConfigResponse {
+            llm_backend: None,
+            llm_api_key: None,
+            llm_model: None,
+            llm_base_url: None,
+            safety_enabled: None,
+            skills_enabled: None,
+            extensions_enabled: None,
+            max_cost_per_day_cents: None,
+            config_version: 0,
+            updated_at: Utc::now().to_rfc3339(),
+        },
+    };
+
+    debug!(version = response.config_version, "Client config served");
+    Ok(Json(response))
+}
+
+#[derive(Debug, Deserialize)]
+struct ClientConfigQuery {
+    client_id: Option<String>,
+}
+
+// =========================================================================
+// 客户端数据上报 API
+// =========================================================================
+
+/// 客户端上报事件。
+#[derive(Debug, Deserialize)]
+struct ClientReportPayload {
+    #[serde(rename = "type")]
+    report_type: String,
+    #[serde(flatten)]
+    data: serde_json::Value,
+}
+
+/// POST /api/client-reports — 接收客户端上报的事件。
+///
+/// 请求体为 JSON 数组，每个元素包含 `type` 字段标识事件类型。
+/// 支持的类型：`audit_log`, `dlp_event`, `usage_stats`, `health_status`。
+#[instrument(skip(state, payload))]
+async fn post_client_reports(
+    State(state): State<AppState>,
+    Json(payload): Json<Vec<ClientReportPayload>>,
+) -> Result<(StatusCode, Json<serde_json::Value>)> {
+    if payload.is_empty() {
+        return Ok((
+            StatusCode::OK,
+            Json(json!({ "received": 0 })),
+        ));
+    }
+
+    if payload.len() > 1000 {
+        return Err(Error::Validation("Too many reports in batch (max 1000)".into()));
+    }
+
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let now = Utc::now();
+    let mut inserted = 0u64;
+
+    for report in &payload {
+        let valid_types = ["audit_log", "dlp_event", "usage_stats", "health_status"];
+        if !valid_types.contains(&report.report_type.as_str()) {
+            tracing::warn!(report_type = %report.report_type, "Unknown report type, skipping");
+            continue;
+        }
+
+        let id = Uuid::new_v4();
+        client.execute(
+            "INSERT INTO client_reports (id, report_type, payload, received_at) \
+             VALUES ($1, $2, $3, $4)",
+            &[&id, &report.report_type, &report.data, &now],
+        ).await.map_err(|e| Error::Database(e.to_string()))?;
+
+        inserted += 1;
+    }
+
+    info!(count = inserted, "Client reports received");
+
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "received": inserted })),
+    ))
+}
+

@@ -1531,7 +1531,7 @@ impl SseSubscriptionManager {
 /// });
 /// ```
 #[tauri::command]
-pub async fn send_chat_message(
+pub async fn legacy_send_chat_message(
     thread_id: String,
     content: String,
     state: tauri::State<'_, CommandState>,
@@ -1594,7 +1594,7 @@ pub async fn send_chat_message(
 /// });
 /// ```
 #[tauri::command]
-pub async fn subscribe_chat_events(
+pub async fn legacy_subscribe_chat_events(
     window: Window,
     app_handle: AppHandle,
     state: tauri::State<'_, CommandState>,
@@ -1780,7 +1780,7 @@ pub async fn subscribe_chat_events(
 /// await invoke('unsubscribe_chat_events');
 /// ```
 #[tauri::command]
-pub async fn unsubscribe_chat_events(app_handle: AppHandle) -> Result<()> {
+pub async fn legacy_unsubscribe_chat_events(app_handle: AppHandle) -> Result<()> {
     tracing::info!("🛑 Unsubscribing from chat events");
 
     let manager = app_handle
