@@ -342,11 +342,14 @@ start_admin_backend() {
         log_warn "后端服务可能未完全启动，但端口已监听"
     fi
     
+    # 将 PID 写入文件，供外部脚本读取
+    echo "$BACKEND_PID" > /tmp/admin-backend.pid
     echo "$BACKEND_PID"
 }
 
 # 启动 Admin Frontend 前端
 # 参数: $1 - admin-backend/frontend 目录路径
+# PID 通过 /tmp/admin-frontend.pid 文件传递，不通过 stdout（避免彩色日志污染捕获）
 start_admin_frontend() {
     local FRONTEND_DIR="$1"
     
@@ -360,27 +363,38 @@ start_admin_frontend() {
         npm install
     fi
     
-    log_info "启动前端..."
+    log_info "启动前端 dev server..."
     npm run dev > /tmp/admin-frontend.log 2>&1 &
     local FRONTEND_PID=$!
     
+    # 将 PID 写入文件（不通过 stdout，避免被调用方的命令替换捕获）
+    echo "$FRONTEND_PID" > /tmp/admin-frontend.pid
+    
     log_info "前端进程 PID: $FRONTEND_PID"
+    log_info "等待 http://localhost:5174 就绪（最多 60 秒）..."
     
-    log_info "等待前端启动..."
-    sleep 5
+    local READY=false
+    for i in $(seq 1 60); do
+        # 检查进程是否还活着
+        if ! kill -0 "$FRONTEND_PID" 2>/dev/null; then
+            log_error "前端 dev server 意外退出，查看日志: tail -30 /tmp/admin-frontend.log"
+            return 1
+        fi
+        # 检查端口是否就绪
+        if curl -sf http://localhost:5174 > /dev/null 2>&1; then
+            log_info "Admin Frontend 已就绪 (${i}s)"
+            READY=true
+            break
+        fi
+        sleep 1
+    done
     
-    # 检查前端是否运行
-    if ! kill -0 $FRONTEND_PID 2>/dev/null; then
-        log_error "前端启动失败"
-        echo ""
-        echo "查看前端日志:"
-        echo "  tail -50 /tmp/admin-frontend.log"
+    if [ "$READY" = false ]; then
+        log_error "Admin Frontend 启动超时（60s），查看日志: tail -30 /tmp/admin-frontend.log"
         return 1
     fi
     
-    log_info "前端已启动"
-    
-    echo "$FRONTEND_PID"
+    log_info "Admin Frontend 已启动: http://localhost:5174"
 }
 
 
@@ -395,15 +409,46 @@ start_tauri_serial() {
     
     log_section "启动 Tauri 客户端（串行模式 - 实时显示编译进度）"
     
+    # ── 第一步：启动前端 dev server ──────────────────────────────
+    log_info "启动前端 dev server..."
+    (cd "$DESKTOP_CLIENT_DIR/src-ui" && npm run dev) > /tmp/desktop-frontend.log 2>&1 &
+    local FRONTEND_PID=$!
+
+    log_info "等待前端 http://localhost:5173 就绪..."
+    local FRONTEND_READY=false
+    for i in $(seq 1 30); do
+        if curl -sf http://localhost:5173 > /dev/null 2>&1; then
+            log_info "前端已就绪 (${i}s)"
+            FRONTEND_READY=true
+            break
+        fi
+        if ! kill -0 "$FRONTEND_PID" 2>/dev/null; then
+            log_error "前端 dev server 意外退出，查看日志: tail -20 /tmp/desktop-frontend.log"
+            return 1
+        fi
+        sleep 1
+    done
+
+    if [ "$FRONTEND_READY" = false ]; then
+        log_error "前端 dev server 启动超时（30s）"
+        kill "$FRONTEND_PID" 2>/dev/null || true
+        return 1
+    fi
+
+    # ── 第二步：启动 Tauri ────────────────────────────────────────
     cd "$DESKTOP_CLIENT_DIR"
     
-    log_info "启动 Tauri 客户端（内嵌 IronClaw 核心服务）..."
-    log_info "内嵌后端将在端口 38080 启动"
+    log_info "启动 Tauri 客户端（IronClaw 引擎嵌入式运行）..."
     echo ""
     
-    # 启动 Tauri 开发服务器
     cargo tauri dev > /tmp/tauri.log 2>&1 &
     local TAURI_PID=$!
+    
+    # 将 PID 写入文件，供外部脚本读取（避免 stdout 捕获污染）
+    echo "$TAURI_PID" > /tmp/tauri.pid
+    
+    # 同时记录前端 PID，供 cleanup 使用
+    echo "$FRONTEND_PID" > /tmp/desktop-frontend.pid
     
     log_info "Tauri 客户端进程 PID: $TAURI_PID"
     log_info "正在编译，实时显示进度..."
@@ -418,19 +463,19 @@ start_tauri_serial() {
     local LAST_LINE=""
     
     while true; do
-        # 检查进程是否还在运行
-        if ! kill -0 $TAURI_PID 2>/dev/null; then
+        # 嵌入式模式：通过日志判断引擎是否就绪（最可靠，不依赖进程 PID）
+        if grep -q "Agent ironclaw ready and listening" /tmp/tauri.log 2>/dev/null; then
             echo ""
-            log_warn "Tauri 客户端进程已退出"
-            return 1
-        fi
-        
-        # 检查是否编译完成并启动
-        if curl -s http://localhost:38080/api/health > /dev/null 2>&1; then
-            echo ""
-            log_info "✅ Tauri 客户端和内嵌后端已启动"
+            log_info "✅ Tauri 客户端和 IronClaw 引擎已就绪"
             echo "$TAURI_PID"
             return 0
+        fi
+
+        # 检查编译是否失败
+        if grep -qE "^error\[" /tmp/tauri.log 2>/dev/null; then
+            echo ""
+            log_error "Tauri 编译失败，查看日志: tail -50 /tmp/tauri.log"
+            return 1
         fi
         
         # 显示最新的编译进度
@@ -469,6 +514,9 @@ start_admin_backend_serial() {
     
     cargo run > /tmp/admin-backend.log 2>&1 &
     local BACKEND_PID=$!
+    
+    # 将 PID 写入文件，供外部脚本读取
+    echo "$BACKEND_PID" > /tmp/admin-backend.pid
     
     log_info "后端进程 PID: $BACKEND_PID"
     log_info "正在编译，实时显示进度..."

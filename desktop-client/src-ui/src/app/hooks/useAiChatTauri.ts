@@ -112,7 +112,9 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [isConnected, setIsConnected] = useState(false);
+  // Tauri 嵌入式架构：引擎在进程内运行，默认视为已连接
+  // 只有收到明确的断连事件时才设为 false
+  const [isConnected, setIsConnected] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [thinkingMessage, setThinkingMessage] = useState<string | null>(null);
 

@@ -51,48 +51,10 @@ impl SessionConfig {
     
     /// 从后端配置加载
     /// 
-    /// 尝试从后端数据库读取 SESSION_IDLE_TIMEOUT_SECS 配置
+    /// 嵌入式架构下不再读取旧路径 ~/.ironclaw/ironclaw.db，
+    /// 直接 fallback 到 from_env()。
     pub fn from_backend() -> Result<Self, String> {
-        use std::env;
-        use std::path::PathBuf;
-        
-        // 获取后端数据库路径
-        let home_dir = env::var("HOME")
-            .or_else(|_| env::var("USERPROFILE"))
-            .map_err(|_| "Cannot determine home directory".to_string())?;
-        
-        let db_path = PathBuf::from(home_dir)
-            .join(".ironclaw")
-            .join("ironclaw.db");
-        
-        if !db_path.exists() {
-            return Ok(Self::from_env());
-        }
-        
-        // 使用 rusqlite 读取数据库
-        let conn = rusqlite::Connection::open(&db_path)
-            .map_err(|e| format!("Failed to open database: {}", e))?;
-        
-        let session_timeout_secs: Option<u64> = conn
-            .query_row(
-                "SELECT value FROM settings WHERE key = 'agent.session_idle_timeout_secs' LIMIT 1",
-                [],
-                |row| {
-                    let value: String = row.get(0)?;
-                    Ok(value.trim_matches('"').parse().ok())
-                },
-            )
-            .ok()
-            .flatten();
-        
-        let session_timeout_secs = session_timeout_secs.unwrap_or(30 * 60);
-        let token_refresh_interval_secs = session_timeout_secs.saturating_sub(5 * 60);
-        
-        Ok(Self {
-            session_timeout_secs,
-            token_refresh_interval_secs,
-            auto_refresh_enabled: true,
-        })
+        Ok(Self::from_env())
     }
     
     /// 获取会话超时时长

@@ -15,7 +15,7 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use tracing;
 
 use ironclaw::agent::{Agent, AgentDeps};
@@ -125,6 +125,37 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     app_handle.manage(app_state);
 
     tracing::info!("AppState injected into Tauri");
+
+    // ── 启动时同步 Admin Backend DLP 规则 ─────────────────────────
+    // 非阻塞：同步失败不影响引擎启动，仅使用内置规则
+    {
+        let app_handle_clone = app_handle.clone();
+        tauri::async_runtime::spawn(async move {
+            // 等待引擎完全就绪后再同步
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            let state = app_handle_clone.state::<crate::state::AppState>();
+            match crate::ipc::dlp::sync_dlp_rules_from_admin(state).await {
+                Ok(result) => tracing::info!(
+                    rules = result.rules_synced,
+                    "DLP rules synced from admin backend on startup"
+                ),
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    "Failed to sync DLP rules from admin backend (using built-in rules)"
+                ),
+            }
+        });
+    }
+
+    // 通知前端引擎已就绪
+    use tauri::Emitter;
+    let _ = app_handle.emit(
+        "chat-event",
+        ChatEvent::ConnectionStatus {
+            connected: true,
+            message: "IronClaw engine ready".to_string(),
+        },
+    );
 
     // ── Phase 7: 注册消息工具 ─────────────────────────────────────
     components

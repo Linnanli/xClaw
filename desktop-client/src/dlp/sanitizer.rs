@@ -215,8 +215,23 @@ impl DlpSanitizer {
                 let replacement = self.get_replacement_text(dlp_match, content);
                 
                 // 替换敏感内容
-                if dlp_match.location.end <= result.len() {
-                    result.replace_range(dlp_match.location.clone(), &replacement);
+                // 使用 is_char_boundary 确保字节偏移在 UTF-8 字符边界上，
+                // 避免多字节字符（如中文）导致 panic
+                let start = dlp_match.location.start;
+                let end = dlp_match.location.end;
+                if end <= result.len()
+                    && result.is_char_boundary(start)
+                    && result.is_char_boundary(end)
+                {
+                    result.replace_range(start..end, &replacement);
+                } else {
+                    tracing::warn!(
+                        pattern = %dlp_match.pattern_name,
+                        start = start,
+                        end = end,
+                        len = result.len(),
+                        "Skipping replacement: byte range not on char boundary"
+                    );
                 }
             }
         }
@@ -250,7 +265,17 @@ impl DlpSanitizer {
         original_content: &str,
         fallback_replacement: &str,
     ) -> String {
-        let original_text = &original_content[dlp_match.location.clone()];
+        let start = dlp_match.location.start;
+        let end = dlp_match.location.end;
+        // 安全地获取原始文本，避免多字节字符导致 panic
+        let original_text = if end <= original_content.len()
+            && original_content.is_char_boundary(start)
+            && original_content.is_char_boundary(end)
+        {
+            &original_content[start..end]
+        } else {
+            return fallback_replacement.to_string();
+        };
         let preserve_config = &self.config.format_preservation;
         
         match dlp_match.pattern_name.as_str() {

@@ -61,43 +61,10 @@ impl AuthTokenManager {
     
     /// 从后端数据库读取 gateway_auth_token
     /// 
-    /// 读取 ~/.ironclaw/ironclaw.db 中的 channels.gateway_auth_token 配置
+    /// 嵌入式架构下不再读取旧路径 ~/.ironclaw/ironclaw.db，
+    /// 直接返回 TokenNotFound，由调用方 fallback 到本地文件。
     fn load_from_backend_db(&self) -> Result<String, TokenError> {
-        use std::env;
-        
-        // 获取后端数据库路径
-        let home_dir = env::var("HOME")
-            .or_else(|_| env::var("USERPROFILE"))
-            .map_err(|_| TokenError::IoError("Cannot determine home directory".to_string()))?;
-        
-        let db_path = PathBuf::from(home_dir)
-            .join(".ironclaw")
-            .join("ironclaw.db");
-        
-        if !db_path.exists() {
-            return Err(TokenError::TokenNotFound);
-        }
-        
-        // 使用 rusqlite 读取数据库
-        let conn = rusqlite::Connection::open(&db_path)
-            .map_err(|e| TokenError::IoError(format!("Failed to open database: {}", e)))?;
-        
-        let raw_token: String = conn
-            .query_row(
-                "SELECT value FROM settings WHERE key = 'channels.gateway_auth_token' LIMIT 1",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|e| TokenError::IoError(format!("Failed to query token: {}", e)))?;
-        
-        // 使用新的清理函数
-        let token = clean_token(&raw_token)?;
-        
-        if token.is_empty() {
-            return Err(TokenError::TokenNotFound);
-        }
-        
-        Ok(token)
+        Err(TokenError::TokenNotFound)
     }
     
     /// 保存令牌

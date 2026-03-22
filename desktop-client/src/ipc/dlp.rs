@@ -235,15 +235,158 @@ pub async fn get_dlp_statistics(
 
 /// 从 Admin Backend 同步 DLP 规则。
 ///
-/// 新架构下 DLP 规则在引擎启动时通过 `admin_sync` 模块同步，
-/// 此命令保留为兼容前端调用，返回成功状态。
+/// 从 Admin Backend `/api/dlp-rules` 拉取规则，转换为 `LeakPattern`，
+/// 并通过 `SafetyBridge::reload_patterns` 热更新 DLP 检测器。
+///
+/// 支持三种规则类型：
+/// - `regex`：直接使用 `pattern` 字段作为正则表达式
+/// - `keyword`：从 `rule_config.keywords` 读取关键字列表，转换为正则
+/// - `dictionary`：从 `pattern` 字段读取逗号分隔的关键字，转换为正则
 #[tauri::command]
-pub async fn sync_dlp_rules_from_admin() -> Result<SyncDlpResult, String> {
-    tracing::debug!("sync_dlp_rules_from_admin called (handled by admin_sync in embedded mode)");
+pub async fn sync_dlp_rules_from_admin(
+    state: State<'_, AppState>,
+) -> Result<SyncDlpResult, String> {
+    tracing::info!("Syncing DLP rules from admin backend");
+
+    let admin_url = std::env::var("ADMIN_BACKEND_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let mut request = client.get(format!("{}/api/dlp-rules", admin_url));
+    if let Ok(token) = std::env::var("ADMIN_AUTH_TOKEN") {
+        request = request.header("Authorization", format!("Bearer {}", token));
+    }
+
+    let response = request.send().await.map_err(|e| {
+        tracing::warn!("Failed to connect to admin backend: {}", e);
+        format!("Admin backend unreachable: {}", e)
+    })?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Admin backend returned {}: {}", status, body));
+    }
+
+    let rules_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse DLP rules: {}", e))?;
+
+    let rules = if let Some(arr) = rules_response.as_array() {
+        arr.clone()
+    } else if let Some(arr) = rules_response.get("rules").and_then(|v| v.as_array()) {
+        arr.clone()
+    } else {
+        return Err("Expected array of DLP rules".to_string());
+    };
+
+    let mut patterns = Vec::new();
+    for rule in &rules {
+        let enabled = rule["enabled"].as_bool().unwrap_or(true);
+        if !enabled {
+            continue;
+        }
+
+        let name = rule["name"].as_str().unwrap_or("").to_string();
+        let raw_pattern = rule["pattern"].as_str().unwrap_or("").to_string();
+        let severity_str = rule["severity"].as_str().unwrap_or("Medium");
+        let rule_type = rule["rule_type"].as_str().unwrap_or("regex");
+
+        // 根据规则类型构建正则表达式
+        let regex_str = match rule_type {
+            "keyword" => {
+                let rule_config = &rule["rule_config"];
+                let keywords: Vec<String> = if let Some(arr) = rule_config.get("keywords").and_then(|v| v.as_array()) {
+                    arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).filter(|s| !s.is_empty()).collect()
+                } else {
+                    raw_pattern.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+                };
+                if keywords.is_empty() {
+                    tracing::warn!("Skipping keyword rule '{}': no keywords", name);
+                    continue;
+                }
+                let case_sensitive = rule_config.get("case_sensitive").and_then(|v| v.as_bool()).unwrap_or(false);
+                let match_mode = rule_config.get("match_mode").and_then(|v| v.as_str()).unwrap_or("contains");
+                let escaped: Vec<String> = keywords.iter().map(|kw| regex::escape(kw)).collect();
+                let joined = escaped.join("|");
+                let pat = match match_mode {
+                    "whole_word" => format!(r"\b(?:{})\b", joined),
+                    _ => format!(r"(?:{})", joined),
+                };
+                if case_sensitive { pat } else { format!("(?i){}", pat) }
+            }
+            "dictionary" => {
+                let rule_config = &rule["rule_config"];
+                let keywords: Vec<String> = raw_pattern.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+                if keywords.is_empty() {
+                    tracing::warn!("Skipping dictionary rule '{}': no keywords", name);
+                    continue;
+                }
+                let case_sensitive = rule_config.get("case_sensitive").and_then(|v| v.as_bool()).unwrap_or(false);
+                let match_mode = rule_config.get("match_mode").and_then(|v| v.as_str()).unwrap_or("contains");
+                let escaped: Vec<String> = keywords.iter().map(|kw| regex::escape(kw)).collect();
+                let joined = escaped.join("|");
+                let pat = match match_mode {
+                    "whole_word" => format!(r"\b(?:{})\b", joined),
+                    _ => format!(r"(?:{})", joined),
+                };
+                if case_sensitive { pat } else { format!("(?i){}", pat) }
+            }
+            _ => {
+                // regex 类型：处理 /pattern/ 格式
+                if raw_pattern.starts_with('/') && raw_pattern.ends_with('/') && raw_pattern.len() > 2 {
+                    raw_pattern[1..raw_pattern.len() - 1].to_string()
+                } else {
+                    raw_pattern.clone()
+                }
+            }
+        };
+
+        if regex_str.is_empty() {
+            tracing::warn!("Skipping rule '{}': empty pattern", name);
+            continue;
+        }
+
+        let compiled = match regex::Regex::new(&regex_str) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("Skipping rule '{}': invalid regex '{}': {}", name, regex_str, e);
+                continue;
+            }
+        };
+
+        let severity = match severity_str.to_lowercase().as_str() {
+            "critical" => ironclaw_safety::LeakSeverity::Critical,
+            "high" => ironclaw_safety::LeakSeverity::High,
+            "low" => ironclaw_safety::LeakSeverity::Low,
+            _ => ironclaw_safety::LeakSeverity::Medium,
+        };
+
+        let action = match severity_str.to_lowercase().as_str() {
+            "critical" => ironclaw_safety::LeakAction::Block,
+            _ => ironclaw_safety::LeakAction::Redact,
+        };
+
+        patterns.push(ironclaw_safety::LeakPattern {
+            name,
+            regex: compiled,
+            severity,
+            action,
+        });
+    }
+
+    let rules_synced = patterns.len();
+    state.safety_bridge.reload_patterns(patterns);
+    tracing::info!("DLP rules synced: {} rules loaded", rules_synced);
 
     Ok(SyncDlpResult {
         success: true,
-        rules_synced: 0,
-        message: "DLP rules managed by embedded SafetyBridge".to_string(),
+        rules_synced,
+        message: format!("Successfully synced {} DLP rules from admin backend", rules_synced),
     })
 }

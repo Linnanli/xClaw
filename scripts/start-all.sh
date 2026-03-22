@@ -44,26 +44,28 @@ source "$PROJECT_ROOT/admin-backend/scripts/common.sh"
 cleanup() {
     log_info "清理资源..."
     
-    # 杀死 Desktop Client 前端进程
-    if [ ! -z "$DESKTOP_FRONTEND_PID" ]; then
+    # 杀死前端 dev server
+    if [ ! -z "${DESKTOP_FRONTEND_PID:-}" ]; then
         log_info "停止 Desktop Client 前端 (PID: $DESKTOP_FRONTEND_PID)..."
         kill $DESKTOP_FRONTEND_PID 2>/dev/null || true
     fi
-    
-    # 杀死 Tauri 进程（IronClaw 引擎随之停止）
-    if [ ! -z "$TAURI_PID" ]; then
+
+    # 杀死 Tauri 进程（cargo tauri dev 及其子进程）
+    if [ ! -z "${TAURI_PID:-}" ]; then
         log_info "停止 Tauri 客户端 (PID: $TAURI_PID)..."
         kill $TAURI_PID 2>/dev/null || true
+        # 同时清理可能残留的 Tauri 应用进程
+        pkill -f "desktop-client" 2>/dev/null || true
     fi
     
     # 杀死 Admin Backend 后端进程
-    if [ ! -z "$ADMIN_BACKEND_PID" ]; then
+    if [ ! -z "${ADMIN_BACKEND_PID:-}" ]; then
         log_info "停止 Admin Backend 后端 (PID: $ADMIN_BACKEND_PID)..."
         kill $ADMIN_BACKEND_PID 2>/dev/null || true
     fi
     
     # 杀死 Admin Backend 前端进程
-    if [ ! -z "$ADMIN_FRONTEND_PID" ]; then
+    if [ ! -z "${ADMIN_FRONTEND_PID:-}" ]; then
         log_info "停止 Admin Backend 前端 (PID: $ADMIN_FRONTEND_PID)..."
         kill $ADMIN_FRONTEND_PID 2>/dev/null || true
     fi
@@ -172,80 +174,84 @@ fi
 log_info "Desktop Client 使用嵌入式模式，跳过外部 IronClaw 服务器启动"
 
 # ============================================
-# 启动 Desktop Client 前端
+# 启动 Desktop Client
 # ============================================
+# 前端 dev server 由脚本显式管理（先启动前端，再启动 Tauri），
+# 避免 nvm 等工具安装的 node/npm 在 Tauri 内部 shell 中找不到的问题。
 
-log_section "启动 Desktop Client 前端"
+log_section "启动 Desktop Client"
 
-cd "$PROJECT_ROOT/desktop-client/src-ui"
-
-# 检查依赖
-if [ ! -d "node_modules" ]; then
+# 检查前端依赖（Tauri 不会自动 npm install）
+if [ ! -d "$PROJECT_ROOT/desktop-client/src-ui/node_modules" ]; then
     log_info "安装 Desktop Client 前端依赖..."
-    npm install
+    (cd "$PROJECT_ROOT/desktop-client/src-ui" && npm install)
 fi
 
-log_info "启动 Desktop Client 前端（端口 5173）..."
-npm run dev > /tmp/desktop-frontend.log 2>&1 &
-DESKTOP_FRONTEND_PID=$!
-
-log_info "Desktop Client 前端进程 PID: $DESKTOP_FRONTEND_PID"
-
-log_info "等待 Desktop Client 前端启动..."
-sleep 5
-
-# 检查前端是否运行
-if ! kill -0 $DESKTOP_FRONTEND_PID 2>/dev/null; then
-    log_error "Desktop Client 前端启动失败"
-    echo ""
-    echo "查看日志:"
-    echo "  tail -50 /tmp/desktop-frontend.log"
-    exit 1
-fi
-
-log_info "Desktop Client 前端已启动"
-
-# ============================================
-# 启动 Tauri 客户端
-# ============================================
+# ── Tauri 启动（含嵌入式 IronClaw 引擎）──────────────────────────
 
 if [ "$SERIAL_MODE" = true ]; then
     # 串行模式：等待 Tauri 完全启动后再继续
-    TAURI_PID=$(start_tauri_serial "$PROJECT_ROOT/desktop-client")
+    # 函数通过 /tmp/tauri.pid 传递 PID（避免 stdout 捕获污染）
+    start_tauri_serial "$PROJECT_ROOT/desktop-client"
+    TAURI_PID=$(cat /tmp/tauri.pid 2>/dev/null || echo "")
+    DESKTOP_FRONTEND_PID=$(cat /tmp/desktop-frontend.pid 2>/dev/null || echo "")
     if [ -z "$TAURI_PID" ]; then
         log_error "Tauri 启动失败"
         exit 1
     fi
 else
-    # 并行模式：后台启动 Tauri
+    # 并行模式：先启动前端，再启动 Tauri
     log_section "启动 Tauri 客户端"
 
     cd "$PROJECT_ROOT/desktop-client"
 
-    log_info "启动 Tauri 客户端（IronClaw 引擎嵌入式运行）..."
+    # ── 第一步：启动前端 dev server ──────────────────────────────
+    # tauri.conf.json 中已移除 beforeDevCommand，由脚本显式管理前端生命周期，
+    # 避免 nvm 等工具安装的 node/npm 在 Tauri 内部 shell 中找不到的问题。
+    log_info "启动前端 dev server..."
+    (cd "$PROJECT_ROOT/desktop-client/src-ui" && npm run dev) > /tmp/desktop-frontend.log 2>&1 &
+    DESKTOP_FRONTEND_PID=$!
 
-    # 启动 Tauri 开发服务器
-    # IronClaw 引擎在 Tauri 进程内启动，通过 Tauri IPC 与前端通信
+    # 等待前端就绪（最多 30 秒）
+    log_info "等待前端 http://localhost:5173 就绪..."
+    FRONTEND_READY=false
+    for i in $(seq 1 30); do
+        if curl -sf http://localhost:5173 > /dev/null 2>&1; then
+            log_info "前端已就绪 (${i}s)"
+            FRONTEND_READY=true
+            break
+        fi
+        if ! kill -0 "$DESKTOP_FRONTEND_PID" 2>/dev/null; then
+            log_error "前端 dev server 意外退出，查看日志: tail -20 /tmp/desktop-frontend.log"
+            exit 1
+        fi
+        sleep 1
+    done
+
+    if [ "$FRONTEND_READY" = false ]; then
+        log_error "前端 dev server 启动超时（30s），查看日志: tail -20 /tmp/desktop-frontend.log"
+        exit 1
+    fi
+
+    # ── 第二步：启动 Tauri（前端已就绪，不会再等待 5173）──────────
+    log_info "启动 Tauri 客户端（IronClaw 引擎嵌入式运行）..."
     cargo tauri dev > /tmp/tauri.log 2>&1 &
     TAURI_PID=$!
 
     log_info "Tauri 客户端进程 PID: $TAURI_PID"
     log_info "等待 Tauri 客户端编译启动（首次编译可能需要几分钟）..."
 
-    # 等待 Tauri 进程存活并完成初始编译
+    # 等待 Tauri 完成初始编译并就绪
+    # 注意：cargo tauri dev 会 fork 出真正的 Tauri 应用进程后，父进程可能退出。
+    # 因此不能用 kill -0 $TAURI_PID 判断 Tauri 是否在运行，
+    # 而应通过日志关键字判断引擎是否就绪，通过 pgrep 判断应用是否存活。
     TAURI_TIMEOUT=600  # 10 分钟超时
     TAURI_CHECK_INTERVAL=3
     TAURI_START_TIME=$(date +%s)
+    TAURI_READY=false
 
     echo -n "Tauri 编译进度: "
     while true; do
-        # 检查 Tauri 是否还在运行
-        if ! kill -0 $TAURI_PID 2>/dev/null; then
-            echo ""
-            log_warn "Tauri 客户端进程已退出"
-            break
-        fi
-
         # 检查超时
         CURRENT_TIME=$(date +%s)
         ELAPSED=$((CURRENT_TIME - TAURI_START_TIME))
@@ -255,10 +261,18 @@ else
             break
         fi
 
-        # 嵌入式模式：通过日志判断引擎是否就绪
-        if grep -q "AppState injected into Tauri" /tmp/tauri.log 2>/dev/null; then
+        # 嵌入式模式：通过日志判断引擎是否就绪（最可靠的方式）
+        if grep -q "Agent ironclaw ready and listening" /tmp/tauri.log 2>/dev/null; then
             echo ""
             log_info "Tauri 客户端和 IronClaw 引擎已就绪"
+            TAURI_READY=true
+            break
+        fi
+
+        # 检查编译是否失败（cargo 报错）
+        if grep -qE "^error\[" /tmp/tauri.log 2>/dev/null; then
+            echo ""
+            log_error "Tauri 编译失败，查看日志: tail -50 /tmp/tauri.log"
             break
         fi
 
@@ -266,40 +280,19 @@ else
         sleep $TAURI_CHECK_INTERVAL
     done
 
-    # 检查 Tauri 是否运行
-    if ! kill -0 $TAURI_PID 2>/dev/null; then
-        log_warn "Tauri 客户端启动失败或已关闭"
-        echo ""
-        echo "查看日志:"
-        echo "  tail -50 /tmp/tauri.log"
-    else
+    # 用 pgrep 检测真正的 Tauri 应用进程（而非 cargo tauri dev 包装进程）
+    if [ "$TAURI_READY" = true ] || pgrep -f "desktop-client" > /dev/null 2>&1; then
         log_info "Tauri 客户端运行中（IronClaw 引擎嵌入式）"
     fi
 
-    # 等待 Cargo 文件锁释放
-    log_info "等待 Tauri 编译完成（确保 Admin Backend 可以编译）..."
-
-    # 智能等待：检查 Cargo 锁文件
-    MAX_WAIT=60
-    WAIT_COUNT=0
-    echo -n "等待进度: "
-
-    while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
-        # 检查是否有其他 cargo 进程在运行
-        if ! pgrep -f "cargo.*tauri" > /dev/null 2>&1; then
-            echo ""
-            log_info "Tauri 编译已完成，可以启动 Admin Backend"
-            break
-        fi
-        
-        echo -n "."
-        sleep 1
-        WAIT_COUNT=$((WAIT_COUNT + 1))
-    done
-
-    if [ $WAIT_COUNT -ge $MAX_WAIT ]; then
-        echo ""
-        log_warn "等待超时，继续启动 Admin Backend（可能会遇到 Cargo 锁冲突）"
+    # Tauri 就绪后，编译阶段已完成，Cargo 锁已释放，可以直接启动 Admin Backend
+    # （cargo tauri dev 在 watch 模式下会持续运行，但不再持有编译锁）
+    if [ "$TAURI_READY" = true ]; then
+        log_info "Tauri 编译已完成，可以启动 Admin Backend"
+    else
+        # 引擎未就绪时，等待一小段时间让 Cargo 锁释放
+        log_info "等待 Cargo 锁释放（5s）..."
+        sleep 5
     fi
 fi
 
@@ -309,7 +302,8 @@ fi
 
 if [ "$SERIAL_MODE" = true ]; then
     # 串行模式：等待 Admin Backend 完全启动后再继续
-    ADMIN_BACKEND_PID=$(start_admin_backend_serial "$PROJECT_ROOT/admin-backend")
+    start_admin_backend_serial "$PROJECT_ROOT/admin-backend"
+    ADMIN_BACKEND_PID=$(cat /tmp/admin-backend.pid 2>/dev/null || echo "")
     if [ -z "$ADMIN_BACKEND_PID" ]; then
         exit 1
     fi
@@ -325,7 +319,8 @@ fi
 # 启动 Admin Backend 前端
 # ============================================
 
-ADMIN_FRONTEND_PID=$(start_admin_frontend "$PROJECT_ROOT/admin-backend/frontend")
+start_admin_frontend "$PROJECT_ROOT/admin-backend/frontend"
+ADMIN_FRONTEND_PID=$(cat /tmp/admin-frontend.pid 2>/dev/null || echo "")
 if [ -z "$ADMIN_FRONTEND_PID" ]; then
     exit 1
 fi
@@ -343,18 +338,15 @@ echo -e "${CYAN}╚════════════════════�
 echo ""
 
 echo -e "${GREEN}📱 Desktop Client (桌面客户端)${NC}"
-echo "   前端开发服务器:"
-echo "     URL: http://localhost:5173"
-echo "     PID: $DESKTOP_FRONTEND_PID"
-echo "     日志: tail -f /tmp/desktop-frontend.log"
-echo ""
-if [ ! -z "$TAURI_PID" ] && kill -0 $TAURI_PID 2>/dev/null; then
-    echo "   Tauri 客户端（IronClaw 嵌入式引擎）:"
+echo "   Tauri 客户端（IronClaw 嵌入式引擎 + 前端 dev server）:"
+if [ ! -z "${TAURI_PID:-}" ] && kill -0 $TAURI_PID 2>/dev/null; then
     echo "     PID: $TAURI_PID"
     echo "     状态: 运行中"
-    echo "     日志: tail -f /tmp/tauri.log"
-    echo ""
 fi
+echo "     前端: http://localhost:5173"
+echo "     前端日志: tail -f /tmp/desktop-frontend.log"
+echo "     Tauri 日志: tail -f /tmp/tauri.log"
+echo ""
 
 echo -e "${GREEN}🔧 Admin Backend (管理后台)${NC}"
 echo "   数据库服务:"
@@ -409,5 +401,8 @@ if command -v open &> /dev/null; then
     open "http://localhost:5174" 2>/dev/null || true
 fi
 
-# 等待用户中断
-wait
+# 等待用户中断（阻塞直到 Ctrl+C）
+# 用 tail -f /dev/null 替代 wait，确保在串行/并行模式下都能正确阻塞
+# wait 只等待当前 shell 的直接子进程，串行模式下子函数启动的进程不在其中
+log_info "所有服务运行中，按 Ctrl+C 停止..."
+tail -f /dev/null

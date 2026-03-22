@@ -100,7 +100,8 @@ pub struct SafetyBridge {
     /// IronClaw 安全层（密钥检测、注入防护、策略执行）。
     safety: Arc<SafetyLayer>,
     /// DLP 脱敏器（PII 格式保留脱敏）。
-    sanitizer: DlpSanitizer,
+    /// 使用 RwLock 支持运行时热更新规则（sync_dlp_rules_from_admin）。
+    sanitizer: std::sync::RwLock<DlpSanitizer>,
     /// 数据上报器（审计事件上报到 Admin Backend）。
     reporter: Option<Arc<DataReporter>>,
     /// 累计统计。
@@ -126,10 +127,27 @@ impl SafetyBridge {
 
         Self {
             safety,
-            sanitizer,
+            sanitizer: std::sync::RwLock::new(sanitizer),
             reporter,
             cumulative: std::sync::Mutex::new(BridgeCumulativeStats::default()),
         }
+    }
+
+    /// 热更新 DLP 规则。
+    ///
+    /// 用新的 `LeakPattern` 列表替换当前 DlpDetector 中的自定义规则，
+    /// 内置规则（中文手机号、身份证等）保留。
+    pub fn reload_patterns(&self, patterns: Vec<ironclaw_safety::LeakPattern>) {
+        let config = {
+            let r = self.sanitizer.read().unwrap_or_else(|p| p.into_inner());
+            r.config().clone()
+        };
+        let mut detector = DlpDetector::new(); // 重新加载内置规则
+        detector.add_patterns(patterns);
+        let new_sanitizer = DlpSanitizer::new(detector, config);
+        let mut w = self.sanitizer.write().unwrap_or_else(|p| p.into_inner());
+        *w = new_sanitizer;
+        tracing::info!("DLP patterns reloaded");
     }
 
     /// 扫描用户输入。
@@ -165,7 +183,7 @@ impl SafetyBridge {
         }
 
         // ── Step 2: DLP PII 格式保留脱敏 ──────────────────────────
-        let dlp_result = self.sanitizer.sanitize(content);
+        let dlp_result = self.sanitizer.read().unwrap_or_else(|p| p.into_inner()).sanitize(content);
         self.update_pii_stats(&dlp_result);
 
         if dlp_result.had_sensitive_data {
@@ -225,7 +243,7 @@ impl SafetyBridge {
         }
 
         // PII 脱敏
-        let dlp_result = self.sanitizer.sanitize(body);
+        let dlp_result = self.sanitizer.read().unwrap_or_else(|p| p.into_inner()).sanitize(body);
         self.update_pii_stats(&dlp_result);
 
         if dlp_result.had_sensitive_data {
@@ -269,9 +287,9 @@ impl SafetyBridge {
         }
     }
 
-    /// 获取 DLP 脱敏配置引用。
-    pub fn sanitization_config(&self) -> &SanitizationConfig {
-        self.sanitizer.config()
+    /// 获取 DLP 脱敏配置引用（克隆）。
+    pub fn sanitization_config(&self) -> SanitizationConfig {
+        self.sanitizer.read().unwrap_or_else(|p| p.into_inner()).config().clone()
     }
 
     // ── 内部统计方法 ──────────────────────────────────────────────

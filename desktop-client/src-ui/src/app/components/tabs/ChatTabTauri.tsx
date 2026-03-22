@@ -112,9 +112,13 @@ export function ChatTabTauri() {
   const loadMessages = async (threadId: string) => {
     try {
       setLoading(true);
-      // TODO: 实现从后端加载历史消息
-      // const messages = await messageApi.getMessages(threadId);
-      // chat.setMessages(messages);
+      const messages = await threadApi.getMessages(threadId);
+      chat.setMessages(messages.map(m => ({
+        id: m.id,
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+        timestamp: new Date(m.created_at).getTime(),
+      })));
     } catch (err) {
       console.error('Failed to load messages:', err);
     } finally {

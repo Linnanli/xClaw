@@ -95,10 +95,30 @@ pub async fn send_chat_message(
 ///
 /// 新架构下 TauriChannel 在引擎启动时自动推送事件到前端，
 /// 前端的 `listen('chat-event')` 天然就是订阅。
-/// 此命令保留仅为兼容现有前端代码，实际为 no-op。
+///
+/// 如果引擎已就绪（AppState 已注入），立即发送 connection_status: true。
+/// 如果引擎还未就绪，返回成功但不发送事件（引擎启动后会自动发送）。
 #[tauri::command]
-pub async fn subscribe_chat_events() -> Result<(), String> {
-    tracing::debug!("subscribe_chat_events called (no-op in embedded mode)");
+pub async fn subscribe_chat_events(
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    tracing::debug!("subscribe_chat_events called");
+
+    use tauri::{Emitter, Manager};
+    use crate::tauri_channel::ChatEvent;
+
+    // 检查引擎是否已就绪
+    if app_handle.try_state::<crate::state::AppState>().is_some() {
+        app_handle
+            .emit("chat-event", ChatEvent::ConnectionStatus {
+                connected: true,
+                message: "IronClaw engine ready".to_string(),
+            })
+            .map_err(|e| format!("Failed to emit connection status: {}", e))?;
+    } else {
+        tracing::debug!("Engine not ready yet, connection_status will be sent after startup");
+    }
+
     Ok(())
 }
 

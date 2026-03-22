@@ -70,44 +70,7 @@ fn main() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            // ── 聊天 ────────────────────────────────────────────
-            desktop_client::ipc::send_chat_message,
-            desktop_client::ipc::subscribe_chat_events,
-            desktop_client::ipc::unsubscribe_chat_events,
-            // ── 线程管理 ────────────────────────────────────────
-            desktop_client::ipc::ic_list_threads,
-            desktop_client::ipc::ic_create_thread,
-            desktop_client::ipc::ic_get_thread_history,
-            // ── 记忆/工作空间 ───────────────────────────────────
-            desktop_client::ipc::ic_memory_list,
-            desktop_client::ipc::ic_memory_read,
-            desktop_client::ipc::ic_memory_write,
-            desktop_client::ipc::ic_memory_delete,
-            desktop_client::ipc::ic_memory_search,
-            // ── 技能管理 ────────────────────────────────────────
-            desktop_client::ipc::ic_list_skills,
-            desktop_client::ipc::ic_search_skills,
-            desktop_client::ipc::ic_install_skill,
-            desktop_client::ipc::ic_uninstall_skill,
-            // ── 扩展管理 ────────────────────────────────────────
-            desktop_client::ipc::ic_list_extensions,
-            desktop_client::ipc::ic_install_extension,
-            desktop_client::ipc::ic_uninstall_extension,
-            desktop_client::ipc::ic_search_extensions,
-            // ── 工具审批 ────────────────────────────────────────
-            desktop_client::ipc::ic_approve_tool,
-            desktop_client::ipc::ic_deny_tool,
-            // ── DLP 桥接 ────────────────────────────────────────
-            desktop_client::ipc::scan_user_input,
-            desktop_client::ipc::scan_outbound_request,
-            desktop_client::ipc::sanitize_for_storage,
-            desktop_client::ipc::check_http_request,
-            desktop_client::ipc::get_dlp_config,
-            desktop_client::ipc::update_dlp_config,
-            desktop_client::ipc::get_dlp_statistics,
-            desktop_client::ipc::sync_dlp_rules_from_admin,
-        ])
+        .invoke_handler(desktop_client::all_tauri_commands!())
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

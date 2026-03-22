@@ -24,6 +24,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 APP_DATA_DIR="${HOME}/Library/Application Support/ironclaw-desktop"
 
+FRONTEND_PID=""
+
+cleanup() {
+    if [ -n "$FRONTEND_PID" ] && kill -0 "$FRONTEND_PID" 2>/dev/null; then
+        echo ""
+        echo "🛑 停止前端 dev server (PID $FRONTEND_PID)..."
+        kill "$FRONTEND_PID" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT INT TERM
+
 echo "╔══════════════════════════════════════════════╗"
 echo "║  IronClaw Desktop Client — 嵌入式模式       ║"
 echo "╚══════════════════════════════════════════════╝"
@@ -71,11 +82,40 @@ if [ ! -d "$PROJECT_DIR/src-ui/node_modules" ]; then
     (cd "$PROJECT_DIR/src-ui" && npm install)
 fi
 
-# ── 启动 Tauri 开发模式 ────────────────────────────────────────
-# cargo tauri dev 会自动启动前端 dev server（beforeDevCommand）
+# ── 启动前端 dev server ────────────────────────────────────────
+# 在脚本中显式启动，避免 Tauri beforeDevCommand 的 PATH 问题
+# （nvm 等工具安装的 node/npm 在 Tauri 的 shell 中可能找不到）
 echo ""
-echo "🚀 启动 Tauri 开发模式..."
-echo "   前端: http://localhost:5173（Tauri 自动启动）"
+echo "🌐 启动前端 dev server..."
+(cd "$PROJECT_DIR/src-ui" && npm run dev) &
+FRONTEND_PID=$!
+
+# 等待前端就绪（最多 30 秒）
+echo "   等待 http://localhost:5173 就绪..."
+READY=false
+for i in $(seq 1 30); do
+    if curl -sf http://localhost:5173 > /dev/null 2>&1; then
+        echo "   ✅ 前端已就绪 (${i}s)"
+        READY=true
+        break
+    fi
+    if ! kill -0 "$FRONTEND_PID" 2>/dev/null; then
+        echo "   ❌ 前端 dev server 意外退出"
+        exit 1
+    fi
+    sleep 1
+done
+
+if [ "$READY" = false ]; then
+    echo "   ❌ 前端 dev server 启动超时（30s）"
+    exit 1
+fi
+
+# ── 启动 Tauri ────────────────────────────────────────────────
+# tauri.conf.json 中的 beforeDevCommand 已移除，前端由本脚本管理
+echo ""
+echo "🚀 启动 Tauri..."
+echo "   前端: http://localhost:5173"
 echo "   引擎: IronClaw 嵌入式（无需外部服务）"
 echo ""
 

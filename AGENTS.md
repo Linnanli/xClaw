@@ -1218,6 +1218,128 @@ let response = client.get(url).send().await?;
 5. **贡献回馈** - 如果发现问题，考虑提交 PR
 
 
+## Tauri 命令注册契约测试规则
+
+**背景**：Tauri IPC 命令注册表（`invoke_handler`）与前端 `invoke('xxx')` 调用之间的不一致，只会在运行时暴露为 "Command xxx not found" 错误，普通单元测试无法捕获（因为单元测试直接调用 Rust 函数，绕过了 IPC 路由层）。
+
+**强制要求**：所有 Tauri 命令必须通过以下机制管理，确保注册表完整性在 CI 阶段就能被验证。
+
+### 实施方案
+
+#### 1. 集中注册表宏（`all_tauri_commands!`）
+
+在 `src/lib.rs` 中定义 `all_tauri_commands!()` 宏，`main.rs` 和测试共用同一份注册表：
+
+```rust
+// src/lib.rs
+#[macro_export]
+macro_rules! all_tauri_commands {
+    () => {
+        tauri::generate_handler![
+            desktop_client::ipc::send_chat_message,
+            desktop_client::ipc::subscribe_chat_events,
+            // ... 所有命令
+            desktop_client::commands::get_auth_token,
+        ]
+    };
+}
+```
+
+```rust
+// src/main.rs
+.invoke_handler(desktop_client::all_tauri_commands!())
+```
+
+**新增命令时只需在宏中添加一行**，`main.rs` 和契约测试自动同步。
+
+#### 2. 契约测试（`tests/tauri_command_contract_tests.rs`）
+
+使用 Tauri 测试运行时，通过真实 IPC 调用验证每个命令可路由：
+
+```rust
+#[test]
+fn test_all_frontend_commands_are_registered() {
+    let app = tauri::test::mock_builder()
+        .invoke_handler(desktop_client::all_tauri_commands!())
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .expect("Failed to build test app");
+
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .expect("Failed to create test webview");
+
+    for &cmd_name in FRONTEND_INVOKED_COMMANDS {
+        let response = tauri::test::get_ipc_response(
+            &webview,
+            tauri::webview::InvokeRequest {
+                cmd: cmd_name.to_string(),
+                // ...
+            },
+        );
+        // 如果返回 "Command not found"，测试失败
+        if let Err(e) = &response {
+            let err_str = format!("{:?}", e);
+            if err_str.contains("not found") || err_str.contains("Command") {
+                unregistered.push(cmd_name);
+            }
+        }
+    }
+}
+```
+
+**关键点**：
+- 命令因缺少参数或 AppState 返回业务错误 → 视为通过（命令可路由）
+- 命令返回 "Command not found" → 测试失败，说明注册表缺失
+
+#### 3. 前端命令列表维护
+
+在契约测试文件中维护 `FRONTEND_INVOKED_COMMANDS` 列表，与前端 `invoke()` 调用保持同步：
+
+```bash
+# 从前端源码自动提取所有 invoke() 调用
+grep -rh "invoke(['\"]" desktop-client/src-ui/src \
+  | grep -oP "(?<=invoke\(['\"])[^'\"]+" | sort -u
+```
+
+### 新增 Tauri 命令的操作流程
+
+```
+1. 在 src/ipc.rs 或 src/commands.rs 中实现命令函数
+   ↓
+2. 在 src/lib.rs 的 all_tauri_commands!() 宏中添加命令
+   ↓
+3. 在 tests/tauri_command_contract_tests.rs 的
+   FRONTEND_INVOKED_COMMANDS 列表中添加命令名
+   ↓
+4. 运行契约测试验证
+   cargo test --test tauri_command_contract_tests
+   ↓
+5. 在前端添加对应的 invoke() 调用
+```
+
+### 检查清单
+
+- [ ] 新命令已添加到 `src/lib.rs` 的 `all_tauri_commands!()` 宏
+- [ ] 新命令已添加到 `tests/tauri_command_contract_tests.rs` 的 `FRONTEND_INVOKED_COMMANDS`
+- [ ] `cargo test --test tauri_command_contract_tests` 通过
+- [ ] 前端 `invoke('命令名')` 与注册表中的命令名完全一致（大小写敏感）
+
+### 根本原因（为什么普通测试无法捕获）
+
+```
+普通单元测试路径：
+  测试代码 → 直接调用 Rust 函数 → 绕过 IPC 路由
+
+真实运行时路径：
+  前端 invoke('cmd') → Tauri IPC → invoke_handler 路由表 → Rust 函数
+
+契约测试路径：
+  测试代码 → Tauri 测试运行时 IPC → invoke_handler 路由表 → Rust 函数
+```
+
+契约测试是唯一能在 CI 阶段验证 IPC 路由完整性的方法。
+
+
 ## 浏览器端到端（E2E）测试规则
 
 **强制要求**：前端代码编写完成后，必须按照本规则编写 E2E 测试，确保浏览器环境中的功能正常运行。
