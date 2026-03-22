@@ -11,7 +11,6 @@ import { SettingsTab } from '../tabs/SettingsTab';
 import { ConnectionStatus } from '../common/ConnectionStatus';
 import { DynamicWatermark } from '../common/DynamicWatermark';
 import { useTheme } from '../../contexts/ThemeContext';
-import { useSSEConnection } from '../../hooks/useSSEConnection';
 import { useWatermark } from '../../hooks/useWatermark';
 import { sessionApi, appApi } from '../../utils/tauri';
 import { ShortcutManager, SHORTCUTS } from '../../utils/shortcuts';
@@ -24,34 +23,14 @@ export function MainApp() {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showThemeMenu, setShowThemeMenu] = useState(false);
   const { theme, themeMode, setTheme } = useTheme();
-  const { connect, disconnect } = useSSEConnection();
   const { config: watermarkConfig, loading: watermarkLoading } = useWatermark();
 
-  // Initialize SSE connection
+  // 嵌入式模式：不需要 HTTP SSE 连接。
+  // 聊天事件通过 Tauri IPC `listen('chat-event')` 接收（useAiChatTauri 处理）。
+  // SSE 连接保留为 no-op，避免无意义的连接尝试。
   useEffect(() => {
-    const initializeConnection = async () => {
-      try {
-        // 获取实际的认证信息
-        const appInfo = await appApi.getAppInitInfo();
-        const fullToken = await appApi.getAuthToken();
-        
-        await connect(fullToken, appInfo.api_base_url);
-        tracing.info('SSE connection initialized in MainApp', { 
-          baseUrl: appInfo.api_base_url,
-          tokenLength: fullToken.length 
-        });
-      } catch (err) {
-        tracing.error('Failed to initialize SSE connection', { error: err });
-      }
-    };
-
-    initializeConnection();
-
-    // 清理连接
-    return () => {
-      disconnect();
-    };
-  }, [connect, disconnect]);
+    tracing.info('Embedded mode: SSE connection skipped, using Tauri IPC');
+  }, []);
 
   // Close menus when clicking outside
   useEffect(() => {

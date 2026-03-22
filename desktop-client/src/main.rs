@@ -2,34 +2,47 @@
 
 //! IronClaw Desktop Client — 嵌入式架构入口。
 //!
-//! IronClaw 作为库直接嵌入客户端进程，无需外部服务。
-//! 启动流程：
+//! # 配置加载架构
 //!
-//! 1. 加载本地缓存配置 + 管理端配置 → 注入环境变量
-//! 2. Tauri Builder setup → spawn `start_ironclaw_engine()`
-//! 3. 引擎初始化 → AppState 注入 Tauri 全局状态
-//! 4. 前端通过 Tauri IPC 与 Agent 交互
+//! 客户端配置与全局 IronClaw CLI (`~/.ironclaw/`) 完全隔离。
+//! 所有数据存储在 `~/Library/Application Support/ironclaw-desktop/` 下。
+//!
+//! ## 配置优先级（高 → 低）
+//!
+//! 1. **管理端下发** — `admin_config.json` 缓存，`set_var` 强制覆盖
+//! 2. **显式环境变量** — shell `export` 或命令行传入
+//! 3. **本地 .env** — `desktop-client/.env`（dotenvy 不覆盖已有变量）
+//! 4. **客户端默认值** — `ensure_client_defaults()` 兜底
+//!
+//! ## 启动流程
+//!
+//! ```text
+//! init_logging()
+//!   → load_client_env()        // .env 文件 + 客户端隔离默认值
+//!   → apply_admin_overrides()  // 管理端配置覆盖（最高优先级）
+//!   → Tauri::setup()
+//!     → start_ironclaw_engine()  // Config::from_env() → AppBuilder
+//! ```
 
 use std::env;
+use std::path::{Path, PathBuf};
 
 use tracing_subscriber::EnvFilter;
 
+// ── 应用级常量 ────────────────────────────────────────────────────
+
+/// 客户端数据根目录名（位于系统 Application Support 下）。
+const APP_DATA_DIR: &str = "ironclaw-desktop";
+
+/// IronClaw 引擎数据子目录（数据库、.env 等）。
+const ENGINE_SUBDIR: &str = "ironclaw";
+
 fn main() {
-    // ── 初始化日志 ────────────────────────────────────────────────
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,desktop_client=debug,ironclaw=info")),
-        )
-        .init();
+    init_logging();
 
-    // ── 加载 .env 文件 ────────────────────────────────────────────
-    // 使用 config-rs 加载环境变量，与旧架构保持一致
-    load_dotenv();
-
-    // ── 注入管理端配置到环境变量 ──────────────────────────────────
-    // ⚠️ 必须在 Tokio runtime 启动前执行（set_var 在多线程中不安全）
-    inject_admin_config_to_env();
+    // ── 配置加载（必须在 Tokio runtime 启动前完成）─────────────
+    load_client_env();
+    apply_admin_overrides();
 
     tracing::info!("Starting IronClaw Desktop Client (embedded mode)");
 
@@ -38,14 +51,12 @@ fn main() {
         .setup(|app| {
             let app_handle = app.handle().clone();
 
-            // 在 Tauri 异步上下文中启动 IronClaw 引擎
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = desktop_client::engine::start_ironclaw_engine(app_handle.clone())
                     .await
                 {
                     tracing::error!(error = %e, "IronClaw engine failed to start");
 
-                    // 通知前端引擎启动失败
                     use tauri::Emitter;
                     let _ = app_handle.emit(
                         "chat-event",
@@ -60,7 +71,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // ── 聊天（嵌入式 IronClaw）──────────────────────────
+            // ── 聊天 ────────────────────────────────────────────
             desktop_client::ipc::send_chat_message,
             desktop_client::ipc::subscribe_chat_events,
             desktop_client::ipc::unsubscribe_chat_events,
@@ -87,7 +98,7 @@ fn main() {
             // ── 工具审批 ────────────────────────────────────────
             desktop_client::ipc::ic_approve_tool,
             desktop_client::ipc::ic_deny_tool,
-            // ── DLP 桥接（兼容前端 useDlpScan.ts）──────────────
+            // ── DLP 桥接 ────────────────────────────────────────
             desktop_client::ipc::scan_user_input,
             desktop_client::ipc::scan_outbound_request,
             desktop_client::ipc::sanitize_for_storage,
@@ -101,96 +112,193 @@ fn main() {
         .expect("error while running tauri application");
 }
 
-/// 加载 .env 文件到环境变量。
-fn load_dotenv() {
+// ═══════════════════════════════════════════════════════════════════
+// 配置加载
+// ═══════════════════════════════════════════════════════════════════
+
+/// 客户端应用数据根目录。
+///
+/// macOS: `~/Library/Application Support/ironclaw-desktop/`
+/// Linux: `~/.local/share/ironclaw-desktop/`
+fn app_data_dir() -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(APP_DATA_DIR)
+}
+
+/// IronClaw 引擎数据目录（数据库、配置等）。
+///
+/// 等价于 IronClaw CLI 的 `~/.ironclaw/`，但隔离到客户端专属路径。
+fn engine_data_dir() -> PathBuf {
+    app_data_dir().join(ENGINE_SUBDIR)
+}
+
+/// 初始化日志系统。
+fn init_logging() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info,desktop_client=debug,ironclaw=info")),
+        )
+        .init();
+}
+
+/// 加载客户端环境变量。
+///
+/// 1. 从 `desktop-client/.env` 加载用户配置
+/// 2. 设置客户端隔离默认值（`IRONCLAW_BASE_DIR`、`DATABASE_BACKEND` 等）
+///
+/// dotenvy 不覆盖已有环境变量，所以显式 `export` 的变量优先级更高。
+fn load_client_env() {
+    // ── 加载 .env 文件 ────────────────────────────────────────────
+    load_env_file("desktop-client/.env");
+
     let environment = env::var("ENVIRONMENT").unwrap_or_else(|_| {
-        if cfg!(debug_assertions) {
-            "development".to_string()
-        } else {
-            "production".to_string()
-        }
+        if cfg!(debug_assertions) { "development" } else { "production" }.into()
     });
+    load_env_file(&format!("desktop-client/.env.{}", environment));
+    env::set_var("ENVIRONMENT", &environment);
 
-    let config_result = config::Config::builder()
-        .add_source(config::File::with_name("desktop-client/.env").required(false))
-        .add_source(
-            config::File::with_name(&format!("desktop-client/.env.{}", environment))
-                .required(false),
-        )
-        .add_source(
-            config::Environment::default()
-                .try_parsing(true)
-                .separator("_"),
-        )
-        .build();
+    // ── 客户端隔离默认值 ──────────────────────────────────────────
+    ensure_client_defaults();
+}
 
-    if let Ok(config) = config_result {
-        if let Ok(settings) =
-            config.try_deserialize::<std::collections::HashMap<String, String>>()
-        {
-            for (key, value) in settings {
-                env::set_var(&key, &value);
-            }
+/// 加载指定路径的 .env 文件（存在则加载，不存在则跳过）。
+fn load_env_file(path: &str) {
+    let path = Path::new(path);
+    if path.exists() {
+        match dotenvy::from_path(path) {
+            Ok(_) => tracing::info!("Loaded {}", path.display()),
+            Err(e) => tracing::warn!("Failed to load {}: {}", path.display(), e),
         }
     }
-
-    env::set_var("ENVIRONMENT", &environment);
 }
+
+/// 设置客户端隔离默认值。
+///
+/// 这些默认值确保 IronClaw 引擎的数据完全隔离在客户端专属目录下，
+/// 不会读取或写入全局 `~/.ironclaw/` 目录。
+///
+/// 只在对应环境变量未设置时生效（`set_if_absent`），
+/// 所以 `.env` 文件和显式环境变量可以覆盖这些默认值。
+///
+/// # 隔离策略
+///
+/// | 变量 | 默认值 | 作用 |
+/// |------|--------|------|
+/// | `IRONCLAW_BASE_DIR` | `~/...App Support/ironclaw-desktop/ironclaw/` | 引擎根目录，阻止加载 `~/.ironclaw/.env` |
+/// | `DATABASE_BACKEND` | `libsql` | 使用本地 libSQL，跳过 IronClaw 的 `~/.ironclaw/ironclaw.db` 自动检测 |
+/// | `LIBSQL_PATH` | `<engine_data_dir>/ironclaw.db` | 数据库文件路径，隔离到客户端目录 |
+fn ensure_client_defaults() {
+    let engine_dir = engine_data_dir();
+
+    // IRONCLAW_BASE_DIR: 重定向引擎根目录，阻止 load_ironclaw_env() 加载 ~/.ironclaw/.env
+    set_if_absent("IRONCLAW_BASE_DIR", &engine_dir.to_string_lossy());
+
+    // DATABASE_BACKEND: 显式设置，跳过 load_ironclaw_env() 中硬编码的
+    // ~/.ironclaw/ironclaw.db 自动检测逻辑
+    set_if_absent("DATABASE_BACKEND", "libsql");
+
+    // LIBSQL_PATH: 数据库文件存储在客户端专属目录
+    let db_path = engine_dir.join("ironclaw.db");
+    set_if_absent("LIBSQL_PATH", &db_path.to_string_lossy());
+
+    tracing::debug!(
+        ironclaw_base_dir = %engine_dir.display(),
+        db_path = %db_path.display(),
+        "Client isolation defaults applied"
+    );
+}
+
+/// 设置环境变量（仅当未设置时）。
+fn set_if_absent(key: &str, value: &str) {
+    if env::var(key).is_err() {
+        env::set_var(key, value);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 管理端配置
+// ═══════════════════════════════════════════════════════════════════
+
+/// 管理端配置 JSON key → 环境变量的映射表。
+///
+/// 后续新增管理端下发的配置项，只需在此表中添加一行。
+const ADMIN_CONFIG_MAPPINGS: &[(&str, &str)] = &[
+    ("llm_backend", "LLM_BACKEND"),
+    ("llm_api_key", "LLM_API_KEY"),
+    ("llm_model", "LLM_MODEL"),
+    ("llm_base_url", "LLM_BASE_URL"),
+    // ── 后续扩展 ──────────────────────────────────────────────
+    // ("safety_max_output_length", "SAFETY_MAX_OUTPUT_LENGTH"),
+    // ("safety_injection_check", "SAFETY_INJECTION_CHECK_ENABLED"),
+    // ("admin_api_url", "ADMIN_API_URL"),
+    // ("admin_api_key", "ADMIN_API_KEY"),
+];
+
+/// 敏感字段（日志中不打印值）。
+const ADMIN_CONFIG_SENSITIVE_KEYS: &[&str] = &["LLM_API_KEY", "ADMIN_API_KEY"];
 
 /// 从本地缓存加载管理端配置并注入环境变量。
 ///
 /// 管理端可下发 LLM API Key、模型名称、安全策略等配置。
-/// 这些配置被注入为环境变量，供 `Config::from_env()` 读取。
+/// 使用 `set_var` 强制覆盖，确保管理端配置拥有最高优先级。
+///
+/// # 配置文件路径
+///
+/// `~/Library/Application Support/ironclaw-desktop/admin_config.json`
 ///
 /// # 安全
 ///
-/// - 配置文件本地加密存储
-/// - API Key 不写入日志
+/// - API Key 等敏感字段不写入日志
 /// - 此函数必须在 Tokio runtime 启动前调用（`set_var` 线程安全要求）
-fn inject_admin_config_to_env() {
-    let cache_path = dirs::data_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("ironclaw-desktop")
-        .join("admin_config.json");
+///
+/// # 后续改造
+///
+/// 当前从本地 JSON 缓存读取。后续改为管理端下发时，只需：
+/// 1. `admin_sync.rs` 定期从管理端拉取配置并写入缓存文件
+/// 2. 此函数无需修改 — 它只负责"缓存 → 环境变量"这一步
+fn apply_admin_overrides() {
+    let cache_path = app_data_dir().join("admin_config.json");
 
     if !cache_path.exists() {
-        tracing::debug!("No admin config cache found, using defaults");
+        tracing::debug!("No admin config cache at {}", cache_path.display());
         return;
     }
 
-    match std::fs::read_to_string(&cache_path) {
-        Ok(content) => {
-            if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
-                let mappings = [
-                    ("llm_backend", "LLM_BACKEND"),
-                    ("llm_api_key", "LLM_API_KEY"),
-                    ("llm_model", "LLM_MODEL"),
-                    ("llm_base_url", "LLM_BASE_URL"),
-                ];
+    let content = match std::fs::read_to_string(&cache_path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("Failed to read admin config: {}", e);
+            return;
+        }
+    };
 
-                let mut injected = 0;
-                for (json_key, env_key) in &mappings {
-                    if let Some(val) = config.get(json_key).and_then(|v| v.as_str()) {
-                        if !val.is_empty() {
-                            env::set_var(env_key, val);
-                            // ⚠️ 不记录 API Key 的值
-                            if *env_key == "LLM_API_KEY" {
-                                tracing::info!("Injected {} from admin config (***)", env_key);
-                            } else {
-                                tracing::info!("Injected {}={} from admin config", env_key, val);
-                            }
-                            injected += 1;
-                        }
-                    }
-                }
+    let config: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("Failed to parse admin config: {}", e);
+            return;
+        }
+    };
 
-                if injected > 0 {
-                    tracing::info!("Injected {} admin config values", injected);
+    let mut injected = 0u32;
+    for &(json_key, env_key) in ADMIN_CONFIG_MAPPINGS {
+        if let Some(val) = config.get(json_key).and_then(|v| v.as_str()) {
+            if !val.is_empty() {
+                env::set_var(env_key, val);
+                injected += 1;
+
+                if ADMIN_CONFIG_SENSITIVE_KEYS.contains(&env_key) {
+                    tracing::info!("Admin override: {}=***", env_key);
+                } else {
+                    tracing::info!("Admin override: {}={}", env_key, val);
                 }
             }
         }
-        Err(e) => {
-            tracing::warn!("Failed to read admin config cache: {}", e);
-        }
+    }
+
+    if injected > 0 {
+        tracing::info!("Applied {} admin config overrides", injected);
     }
 }

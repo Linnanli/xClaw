@@ -1,5 +1,7 @@
-// Tauri API Integration Layer
-// This file provides a typed interface to Tauri backend commands
+// Tauri API Integration Layer — 嵌入式 IronClaw 架构
+//
+// 命令映射：前端 API → 新 IPC 命令（ic_* 前缀）
+// 暂无对应新命令的 API 返回 stub 默认值
 
 import { invoke } from '@tauri-apps/api/core';
 
@@ -16,7 +18,10 @@ export async function invokeTauri<T = any>(
   }
 }
 
-// Authentication APIs
+// ============================================================================
+// Authentication APIs (stub — 嵌入式模式无需主密码认证)
+// ============================================================================
+
 export interface SetupResult {
   success: boolean;
   message?: string;
@@ -33,14 +38,22 @@ export interface SetupStatus {
 }
 
 export const authApi = {
-  checkSetupStatus: () => invokeTauri<SetupStatus>('check_setup_status'),
-  setupMasterPassword: (password: string) => 
-    invokeTauri<SetupResult>('setup_master_password', { password }),
-  unlockApp: (password: string) => 
-    invokeTauri<UnlockResult>('unlock_app', { password }),
+  checkSetupStatus: async (): Promise<SetupStatus> => {
+    // 嵌入式模式：跳过主密码，直接标记已设置
+    return { password_set: true };
+  },
+  setupMasterPassword: async (_password: string): Promise<SetupResult> => {
+    return { success: true, message: 'Embedded mode: no password needed' };
+  },
+  unlockApp: async (_password: string): Promise<UnlockResult> => {
+    return { success: true, session_id: 'embedded-session', message: 'Embedded mode' };
+  },
 };
 
-// Thread/Conversation APIs
+// ============================================================================
+// Thread/Conversation APIs → ic_list_threads, ic_create_thread, ic_get_thread_history
+// ============================================================================
+
 export interface Thread {
   id: string;
   title: string;
@@ -62,16 +75,58 @@ export interface Message {
   created_at: string;
 }
 
+// 后端 ic_list_threads 返回的类型
+interface ThreadSummaryBackend {
+  id: string;
+  title: string | null;
+  message_count: number;
+  started_at: string;
+  last_activity: string;
+  channel: string;
+}
+
 export const threadApi = {
-  getThreads: () => invokeTauri<ThreadListResponse>('get_threads'),
-  createThread: () => invokeTauri<Thread>('create_thread'),
-  sendMessage: (threadId: string, content: string) =>
-    invokeTauri('send_message', { threadId, content }),
-  getMessages: (threadId: string) =>
-    invokeTauri<Message[]>('get_messages', { threadId }),
+  getThreads: async (): Promise<ThreadListResponse> => {
+    const summaries = await invokeTauri<ThreadSummaryBackend[]>('ic_list_threads');
+    const threads: Thread[] = summaries.map(s => ({
+      id: s.id,
+      title: s.title || '新对话',
+      created_at: s.started_at,
+      updated_at: s.last_activity,
+    }));
+    return { threads };
+  },
+
+  createThread: async (): Promise<Thread> => {
+    const id = await invokeTauri<string>('ic_create_thread');
+    const now = new Date().toISOString();
+    return { id, title: '新对话', created_at: now, updated_at: now };
+  },
+
+  sendMessage: async (threadId: string, content: string): Promise<void> => {
+    // 聊天消息通过 send_chat_message 发送（useAiChatTauri 已处理）
+    await invokeTauri('send_chat_message', { threadId, content });
+  },
+
+  getMessages: async (threadId: string): Promise<Message[]> => {
+    const messages = await invokeTauri<Array<{
+      id: string;
+      role: string;
+      content: string;
+      created_at: string;
+    }>>('ic_get_thread_history', { threadId });
+    return messages.map(m => ({
+      ...m,
+      thread_id: threadId,
+      role: m.role as 'user' | 'assistant' | 'system',
+    }));
+  },
 };
 
-// Extension APIs
+// ============================================================================
+// Extension APIs → ic_list_extensions, ic_install_extension, etc.
+// ============================================================================
+
 export interface ExtensionMetadata {
   id: string;
   name: string;
@@ -87,39 +142,27 @@ export interface InstalledExtension {
 }
 
 export const extensionApi = {
-  getInstalledExtensions: () => invokeTauri<InstalledExtension[]>('get_installed_extensions'),
-  getAvailableExtensions: () => invokeTauri<ExtensionMetadata[]>('get_available_extensions'),
+  getInstalledExtensions: () => invokeTauri<InstalledExtension[]>('ic_list_extensions'),
+  getAvailableExtensions: () => invokeTauri<ExtensionMetadata[]>('ic_search_extensions', { query: '' }),
   installExtension: (metadata: ExtensionMetadata) =>
-    invokeTauri('install_extension', { metadata }),
+    invokeTauri('ic_install_extension', { name: metadata.id }),
   uninstallExtension: (extensionId: string) =>
-    invokeTauri('uninstall_extension', { extensionId }),
-  enableExtension: (extensionId: string) =>
-    invokeTauri('enable_extension', { extensionId }),
-  disableExtension: (extensionId: string) =>
-    invokeTauri('disable_extension', { extensionId }),
+    invokeTauri('ic_uninstall_extension', { name: extensionId }),
+  // enable/disable 暂无对应新命令
+  enableExtension: async (_extensionId: string): Promise<void> => {},
+  disableExtension: async (_extensionId: string): Promise<void> => {},
 };
 
-// Routine APIs
-export interface Routine {
-  id: string;
-  name: string;
-  description: string;
-  trigger: any;
-  status: string;
-  actions: any[];
-}
-
-export const routineApi = {
-  getRoutines: () => invokeTauri<Routine[]>('get_routines'),
-  createRoutine: (name: string, description: string, trigger: any, actions: any[]) =>
-    invokeTauri<Routine>('create_routine', { name, description, trigger, actions }),
-  triggerRoutine: (routineId: string) =>
-    invokeTauri('trigger_routine', { routineId }),
-  deleteRoutine: (routineId: string) =>
-    invokeTauri('delete_routine', { routineId }),
+// Extension Search API
+export const extensionSearchApi = {
+  searchExtensions: (query: string) =>
+    invokeTauri<ExtensionMetadata[]>('ic_search_extensions', { query }),
 };
 
-// Session APIs
+// ============================================================================
+// Session APIs (stub — 嵌入式模式无 session 管理)
+// ============================================================================
+
 export interface SessionInfo {
   session_id: string;
   user_id: string;
@@ -128,20 +171,40 @@ export interface SessionInfo {
 }
 
 export const sessionApi = {
-  getSessionInfo: () => invokeTauri<SessionInfo>('get_session_info'),
-  lockApp: () => invokeTauri('lock_app'),
-  updateSessionActivity: () => invokeTauri('update_session_activity'),
+  getSessionInfo: async (): Promise<SessionInfo> => {
+    const now = new Date().toISOString();
+    return {
+      session_id: 'embedded-session',
+      user_id: 'default',
+      created_at: now,
+      last_activity: now,
+    };
+  },
+  lockApp: async (): Promise<void> => {
+    console.warn('lockApp is no-op in embedded mode');
+  },
+  updateSessionActivity: async (): Promise<void> => {
+    // no-op
+  },
 };
 
-// Config APIs
+// ============================================================================
+// Config APIs (stub)
+// ============================================================================
+
 export const configApi = {
-  storeConfig: (key: string, value: string) =>
-    invokeTauri('store_config', { key, value }),
-  getConfig: (key: string) =>
-    invokeTauri<string>('get_config', { key }),
+  storeConfig: async (_key: string, _value: string): Promise<void> => {
+    console.warn('storeConfig is no-op in embedded mode');
+  },
+  getConfig: async (_key: string): Promise<string> => {
+    return '';
+  },
 };
 
-// Audit APIs
+// ============================================================================
+// Audit APIs (stub)
+// ============================================================================
+
 export interface AuditLog {
   id: string;
   action: string;
@@ -150,13 +213,14 @@ export interface AuditLog {
 }
 
 export const auditApi = {
-  logAuditEvent: (action: string, details?: any) =>
-    invokeTauri('log_audit_event', { action, details }),
-  getAuditLogs: (limit: number = 100) =>
-    invokeTauri<AuditLog[]>('get_audit_logs', { limit }),
+  logAuditEvent: async (_action: string, _details?: any): Promise<void> => {},
+  getAuditLogs: async (_limit: number = 100): Promise<AuditLog[]> => [],
 };
 
-// Plugin APIs
+// ============================================================================
+// Plugin APIs (stub — 嵌入式模式使用 Skills/Extensions 替代)
+// ============================================================================
+
 export interface Plugin {
   id: string;
   name: string;
@@ -167,22 +231,20 @@ export interface Plugin {
 }
 
 export const pluginApi = {
-  getInstalledPlugins: () => invokeTauri<Plugin[]>('get_installed_plugins'),
-  getAvailablePlugins: () => invokeTauri<Plugin[]>('get_available_plugins'),
-  checkPluginUpdates: () => invokeTauri<Plugin[]>('check_plugin_updates'),
-  installPlugin: (pluginId: string) =>
-    invokeTauri('install_plugin', { pluginId }),
-  uninstallPlugin: (pluginId: string) =>
-    invokeTauri('uninstall_plugin', { pluginId }),
-  enablePlugin: (pluginId: string) =>
-    invokeTauri('enable_plugin', { pluginId }),
-  disablePlugin: (pluginId: string) =>
-    invokeTauri('disable_plugin', { pluginId }),
-  updatePlugin: (pluginId: string) =>
-    invokeTauri('update_plugin', { pluginId }),
+  getInstalledPlugins: async (): Promise<Plugin[]> => [],
+  getAvailablePlugins: async (): Promise<Plugin[]> => [],
+  checkPluginUpdates: async (): Promise<Plugin[]> => [],
+  installPlugin: async (_pluginId: string): Promise<void> => {},
+  uninstallPlugin: async (_pluginId: string): Promise<void> => {},
+  enablePlugin: async (_pluginId: string): Promise<void> => {},
+  disablePlugin: async (_pluginId: string): Promise<void> => {},
+  updatePlugin: async (_pluginId: string): Promise<void> => {},
 };
 
-// Offline Mode APIs
+// ============================================================================
+// Offline Mode APIs (stub — 嵌入式模式始终离线可用)
+// ============================================================================
+
 export interface OfflineState {
   is_offline: boolean;
   last_sync: string;
@@ -195,23 +257,35 @@ export interface OfflineCapabilities {
 }
 
 export const offlineApi = {
-  getOfflineState: () => invokeTauri<OfflineState>('get_offline_state'),
-  enableOfflineMode: () => invokeTauri('enable_offline_mode'),
-  disableOfflineMode: () => invokeTauri('disable_offline_mode'),
-  getOfflineCapabilities: () => invokeTauri<OfflineCapabilities>('get_offline_capabilities'),
-  canPerformOperation: (operation: string) =>
-    invokeTauri<boolean>('can_perform_operation', { operation }),
+  getOfflineState: async (): Promise<OfflineState> => ({
+    is_offline: false,
+    last_sync: new Date().toISOString(),
+  }),
+  enableOfflineMode: async (): Promise<void> => {},
+  disableOfflineMode: async (): Promise<void> => {},
+  getOfflineCapabilities: async (): Promise<OfflineCapabilities> => ({
+    can_read: true,
+    can_write: true,
+    can_sync: false,
+  }),
+  canPerformOperation: async (_operation: string): Promise<boolean> => true,
 };
 
-// Approval APIs
+// ============================================================================
+// Approval APIs → ic_approve_tool, ic_deny_tool
+// ============================================================================
+
 export const approvalApi = {
-  approveOperation: (operation: string) =>
-    invokeTauri('approve_operation', { operation }),
-  denyOperation: (operation: string) =>
-    invokeTauri('deny_operation', { operation }),
+  approveOperation: (requestId: string, threadId: string = 'default') =>
+    invokeTauri('ic_approve_tool', { requestId, threadId }),
+  denyOperation: (requestId: string, threadId: string = 'default') =>
+    invokeTauri('ic_deny_tool', { requestId, threadId }),
 };
 
-// Tool APIs
+// ============================================================================
+// Tool APIs (stub)
+// ============================================================================
+
 export interface Tool {
   id: string;
   name: string;
@@ -220,10 +294,31 @@ export interface Tool {
 }
 
 export const toolApi = {
-  getEnabledTools: () => invokeTauri<Tool[]>('get_enabled_tools'),
+  getEnabledTools: async (): Promise<Tool[]> => [],
 };
 
-// Routine Management Extended APIs
+// ============================================================================
+// Routine APIs (stub — 暂无对应新命令)
+// ============================================================================
+
+export interface Routine {
+  id: string;
+  name: string;
+  description: string;
+  trigger: any;
+  status: string;
+  actions: any[];
+}
+
+export const routineApi = {
+  getRoutines: async (): Promise<Routine[]> => [],
+  createRoutine: async (_name: string, _description: string, _trigger: any, _actions: any[]): Promise<Routine> => {
+    throw new Error('Routines not yet supported in embedded mode');
+  },
+  triggerRoutine: async (_routineId: string): Promise<void> => {},
+  deleteRoutine: async (_routineId: string): Promise<void> => {},
+};
+
 export interface RoutineRun {
   id: string;
   routine_id: string;
@@ -233,23 +328,16 @@ export interface RoutineRun {
 }
 
 export const routineExtendedApi = {
-  enableRoutine: (routineId: string) =>
-    invokeTauri('enable_routine', { routineId }),
-  disableRoutine: (routineId: string) =>
-    invokeTauri('disable_routine', { routineId }),
-  pauseRoutine: (routineId: string) =>
-    invokeTauri('pause_routine', { routineId }),
-  getRoutineRuns: (routineId: string) =>
-    invokeTauri<RoutineRun[]>('get_routine_runs', { routineId }),
+  enableRoutine: async (_routineId: string): Promise<void> => {},
+  disableRoutine: async (_routineId: string): Promise<void> => {},
+  pauseRoutine: async (_routineId: string): Promise<void> => {},
+  getRoutineRuns: async (_routineId: string): Promise<RoutineRun[]> => [],
 };
 
-// Extension Search API
-export const extensionSearchApi = {
-  searchExtensions: (query: string) =>
-    invokeTauri<ExtensionMetadata[]>('search_extensions', { query }),
-};
+// ============================================================================
+// Memory APIs → ic_memory_list, ic_memory_read, ic_memory_write, etc.
+// ============================================================================
 
-// Memory APIs
 export interface TreeEntry {
   path: string;
   is_dir: boolean;
@@ -282,18 +370,57 @@ export interface DeleteResult {
   is_protected: boolean;
 }
 
+// 后端 ic_memory_list 返回的类型
+interface MemoryEntryBackend {
+  name: string;
+  path: string;
+  is_directory: boolean;
+  content_preview: string | null;
+}
+
 export const memoryApi = {
-  getMemoryTree: () => invokeTauri<MemoryTreeResponse>('get_memory_tree'),
-  readMemory: (path: string) =>
-    invokeTauri<MemoryContent>('read_memory', { memoryId: path }),
-  writeMemory: (path: string, content: string) =>
-    invokeTauri<MemoryWriteResponse>('write_memory', { memoryId: path, content }),
-  deleteMemoryLocal: (path: string, force: boolean = false) =>
-    invokeTauri<DeleteResult>('delete_memory_local', { path, force }),
-  isMemoryFileProtected: (path: string) =>
-    invokeTauri<boolean>('is_memory_file_protected', { path }),
-  searchMemory: (query: string) =>
-    invokeTauri<SearchHit[]>('search_memory', { query }),
+  getMemoryTree: async (): Promise<MemoryTreeResponse> => {
+    const entries = await invokeTauri<MemoryEntryBackend[]>('ic_memory_list');
+    return {
+      entries: entries.map(e => ({
+        path: e.path,
+        is_dir: e.is_directory,
+      })),
+    };
+  },
+
+  readMemory: async (path: string): Promise<MemoryContent> => {
+    const doc = await invokeTauri<{ path: string; content: string }>('ic_memory_read', { path });
+    return { path: doc.path, content: doc.content };
+  },
+
+  writeMemory: async (path: string, content: string): Promise<MemoryWriteResponse> => {
+    await invokeTauri('ic_memory_write', { path, content });
+    return { path, status: 'success' };
+  },
+
+  deleteMemoryLocal: async (path: string, _force: boolean = false): Promise<DeleteResult> => {
+    try {
+      await invokeTauri('ic_memory_delete', { path });
+      return { success: true, message: 'Deleted', is_protected: false };
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : String(error),
+        is_protected: false,
+      };
+    }
+  },
+
+  isMemoryFileProtected: async (path: string): Promise<boolean> => {
+    // 保护系统文件
+    const fileName = path.split('/').pop() || '';
+    return ['SOUL.md', 'IDENTITY.md', 'AGENTS.md'].includes(fileName);
+  },
+
+  searchMemory: async (query: string): Promise<SearchHit[]> => {
+    return invokeTauri<SearchHit[]>('ic_memory_search', { query });
+  },
 };
 
 // 扩展 MemoryContent 以支持删除状态检查
@@ -311,56 +438,10 @@ export const memoryContentUtils = {
   }
 };
 
-// Job APIs
-export interface JobInfo {
-  id: string;
-  status: string;  // 后端字段名是 state，但通过 serde alias 映射为 status
-  created_at: string;
-  updated_at?: string;  // 后端字段名是 started_at，通过 serde alias 映射
-  title?: string;
-}
+// ============================================================================
+// Skill APIs → ic_list_skills, ic_search_skills, ic_install_skill, etc.
+// ============================================================================
 
-export interface JobDetail {
-  id: string;
-  status: string;  // 后端字段名是 state
-  created_at: string;
-  updated_at?: string;  // 后端字段名是 started_at
-  title?: string;
-  description?: string;
-  events: any[];
-}
-
-export const jobApi = {
-  getJobs: () => invokeTauri<JobInfo[]>('get_jobs'),
-  getJobDetail: (jobId: string) =>
-    invokeTauri<JobDetail>('get_job_detail', { jobId }),
-  cancelJob: (jobId: string) =>
-    invokeTauri('cancel_job', { jobId }),
-  restartJob: (jobId: string) =>
-    invokeTauri('restart_job', { jobId }),
-};
-
-// Log APIs
-export interface LogEntry {
-  timestamp: string;
-  level: string;
-  module: string;
-  message: string;
-  context?: any;
-}
-
-export const logApi = {
-  getLogs: (limit: number = 100) =>
-    invokeTauri<LogEntry[]>('get_logs', { limit }),
-  searchLogs: (query: string, limit: number = 100) =>
-    invokeTauri<LogEntry[]>('search_logs', { query, limit }),
-  filterLogs: (level: string, module: string, limit: number = 100) =>
-    invokeTauri<LogEntry[]>('filter_logs', { level, module, limit }),
-  exportLogs: (format: string) =>
-    invokeTauri<string>('export_logs', { format }),
-};
-
-// Skill APIs
 export interface Skill {
   id: string;
   name: string;
@@ -378,50 +459,104 @@ export interface InstalledSkill {
 }
 
 export const skillApi = {
-  getAvailableSkills: () => invokeTauri<Skill[]>('get_available_skills'),
-  getInstalledSkills: () => invokeTauri<InstalledSkill[]>('get_installed_skills'),
+  getAvailableSkills: () => invokeTauri<Skill[]>('ic_search_skills', { query: '' }),
+  getInstalledSkills: () => invokeTauri<InstalledSkill[]>('ic_list_skills'),
   installSkill: (skillId: string) =>
-    invokeTauri('install_skill', { skillId }),
+    invokeTauri('ic_install_skill', { name: skillId }),
   uninstallSkill: (skillId: string) =>
-    invokeTauri('uninstall_skill', { skillId }),
-  enableSkill: (skillId: string) =>
-    invokeTauri('enable_skill', { skillId }),
-  disableSkill: (skillId: string) =>
-    invokeTauri('disable_skill', { skillId }),
+    invokeTauri('ic_uninstall_skill', { name: skillId }),
+  // enable/disable 暂无对应新命令
+  enableSkill: async (_skillId: string): Promise<void> => {},
+  disableSkill: async (_skillId: string): Promise<void> => {},
 };
 
-// Message editing/deletion APIs
+// ============================================================================
+// Job APIs (stub — 暂无对应新命令)
+// ============================================================================
+
+export interface JobInfo {
+  id: string;
+  status: string;
+  created_at: string;
+  updated_at?: string;
+  title?: string;
+}
+
+export interface JobDetail {
+  id: string;
+  status: string;
+  created_at: string;
+  updated_at?: string;
+  title?: string;
+  description?: string;
+  events: any[];
+}
+
+export const jobApi = {
+  getJobs: async (): Promise<JobInfo[]> => [],
+  getJobDetail: async (_jobId: string): Promise<JobDetail> => {
+    throw new Error('Jobs not yet supported in embedded mode');
+  },
+  cancelJob: async (_jobId: string): Promise<void> => {},
+  restartJob: async (_jobId: string): Promise<void> => {},
+};
+
+// ============================================================================
+// Log APIs (stub)
+// ============================================================================
+
+export interface LogEntry {
+  timestamp: string;
+  level: string;
+  module: string;
+  message: string;
+  context?: any;
+}
+
+export const logApi = {
+  getLogs: async (_limit: number = 100): Promise<LogEntry[]> => [],
+  searchLogs: async (_query: string, _limit: number = 100): Promise<LogEntry[]> => [],
+  filterLogs: async (_level: string, _module: string, _limit: number = 100): Promise<LogEntry[]> => [],
+  exportLogs: async (_format: string): Promise<string> => '',
+};
+
+// ============================================================================
+// Message editing/deletion APIs (stub)
+// ============================================================================
+
 export const messageApi = {
-  editMessage: (threadId: string, messageId: string, content: string) =>
-    invokeTauri('edit_message', { threadId, messageId, content }),
-  deleteMessage: (threadId: string, messageId: string) =>
-    invokeTauri('delete_message', { threadId, messageId }),
+  editMessage: async (_threadId: string, _messageId: string, _content: string): Promise<void> => {
+    console.warn('editMessage not yet supported in embedded mode');
+  },
+  deleteMessage: async (_threadId: string, _messageId: string): Promise<void> => {
+    console.warn('deleteMessage not yet supported in embedded mode');
+  },
 };
 
 // Log clearing API
 export const logClearApi = {
-  clearLogs: () => invokeTauri('clear_logs'),
+  clearLogs: async (): Promise<void> => {},
 };
 
 // Message search API
 export const messageSearchApi = {
-  searchMessages: (threadId: string, query: string) =>
-    invokeTauri<Message[]>('search_messages', { threadId, query }),
+  searchMessages: async (_threadId: string, _query: string): Promise<Message[]> => [],
 };
 
 // Thread export API
 export const threadExportApi = {
-  exportThread: (threadId: string, format: string) =>
-    invokeTauri<string>('export_thread', { threadId, format }),
+  exportThread: async (_threadId: string, _format: string): Promise<string> => '',
 };
 
 // File upload API
 export const fileApi = {
-  uploadFile: (threadId: string, filePath: string) =>
-    invokeTauri<string>('upload_file', { threadId, filePath }),
+  uploadFile: async (_threadId: string, _filePath: string): Promise<string> => '',
 };
 
-// App initialization and auth token APIs
+// ============================================================================
+// App initialization APIs (stub)
+// ============================================================================
+
 export interface AppInitInfo {
   auth_token: string;
   api_base_url: string;
@@ -430,7 +565,12 @@ export interface AppInitInfo {
 }
 
 export const appApi = {
-  getAppInitInfo: () => invokeTauri<AppInitInfo>('get_app_init_info'),
-  getAuthToken: () => invokeTauri<string>('get_auth_token'),
-  refreshAuthToken: () => invokeTauri<string>('refresh_auth_token'),
+  getAppInitInfo: async (): Promise<AppInitInfo> => ({
+    auth_token: 'embedded-token',
+    api_base_url: 'embedded://local',
+    database_type: 'libsql',
+    log_level: 'info',
+  }),
+  getAuthToken: async (): Promise<string> => 'embedded-token',
+  refreshAuthToken: async (): Promise<string> => 'embedded-token',
 };

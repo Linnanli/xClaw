@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "identifier": "com.ironclaw.desktop",
   "build": {
-    "beforeBuildCommand": "",
-    "beforeDevCommand": "",
+    "beforeBuildCommand": { "script": "npm run build", "cwd": "./src-ui" },
+    "beforeDevCommand": { "script": "npm run dev", "cwd": "./src-ui" },
     "frontendDist": "./src-ui/dist",
     "devUrl": "http://localhost:5173"
   },

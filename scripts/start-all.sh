@@ -9,9 +9,13 @@
 # 此脚本启动所有开发服务：
 # 1. 检查 PostgreSQL 数据库（端口 5432）- 如未运行则报错
 # 2. Desktop Client 前端（端口 5173）
-# 3. Tauri 客户端（内嵌 IronClaw 核心服务，端口 38080）
+# 3. Tauri 客户端（IronClaw 引擎嵌入式运行，无独立端口）
 # 4. Admin Backend 后端（端口 3000）
 # 5. Admin Backend 前端（端口 5174）
+#
+# 架构说明：
+# - Desktop Client 使用嵌入式模式：IronClaw 引擎直接运行在 Tauri 进程内
+# - 前端通过 Tauri IPC 与引擎通信，不再需要外部 IronClaw 服务器（端口 38080）
 #
 # 启动模式：
 # - 默认：并行启动（快速，但看不到编译进度）
@@ -40,19 +44,13 @@ source "$PROJECT_ROOT/admin-backend/scripts/common.sh"
 cleanup() {
     log_info "清理资源..."
     
-    # 杀死 IronClaw 服务器进程
-    if [ ! -z "$IRONCLAW_SERVER_PID" ]; then
-        log_info "停止 IronClaw 服务器 (PID: $IRONCLAW_SERVER_PID)..."
-        kill $IRONCLAW_SERVER_PID 2>/dev/null || true
-    fi
-    
     # 杀死 Desktop Client 前端进程
     if [ ! -z "$DESKTOP_FRONTEND_PID" ]; then
         log_info "停止 Desktop Client 前端 (PID: $DESKTOP_FRONTEND_PID)..."
         kill $DESKTOP_FRONTEND_PID 2>/dev/null || true
     fi
     
-    # 杀死 Tauri 进程
+    # 杀死 Tauri 进程（IronClaw 引擎随之停止）
     if [ ! -z "$TAURI_PID" ]; then
         log_info "停止 Tauri 客户端 (PID: $TAURI_PID)..."
         kill $TAURI_PID 2>/dev/null || true
@@ -91,7 +89,8 @@ check_docker_dependencies
 
 log_section "检查环境变量"
 
-# 先从项目 .env 加载配置（优先级更高）
+# Desktop Client 的 LLM 配置由 main.rs 自行加载（desktop-client/.env + admin_config.json）。
+# start-all.sh 只需要为 Admin Backend 和 IronClaw CLI 加载项目根 .env。
 if [ -f .env ]; then
     log_info "从项目 .env 加载配置..."
     set -a
@@ -99,39 +98,30 @@ if [ -f .env ]; then
     set +a
 fi
 
-# 再从 ~/.ironclaw/.env 加载配置（作为后备，只设置未定义的变量）
-if [ -f ~/.ironclaw/.env ]; then
-    log_info "从 ~/.ironclaw/.env 加载后备配置..."
-    # 只加载未设置的变量
-    while IFS='=' read -r key value; do
-        # 跳过注释和空行
-        [[ $key =~ ^[[:space:]]*# ]] && continue
-        [[ -z $key ]] && continue
-        
-        # 移除引号
-        value=$(echo "$value" | sed 's/^"//;s/"$//')
-        
-        # 只有当变量未设置时才设置
-        if [ -z "${!key}" ]; then
-            export "$key"="$value"
-        fi
-    done < ~/.ironclaw/.env
-fi
+# ⚠️ 不再从 ~/.ironclaw/.env 加载配置
+# Desktop Client 使用独立的配置隔离机制（IRONCLAW_BASE_DIR 重定向）
 
-# 检查是否有有效的 LLM 配置
-if [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$OPENAI_API_KEY" ] && [ -z "$LLM_API_KEY" ] && [ -z "$NEARAI_API_KEY" ]; then
-    log_error "未找到任何 LLM API 密钥配置"
-    echo ""
-    echo "请先设置以下之一:"
-    echo "  export ANTHROPIC_API_KEY=\"sk-ant-...\""
-    echo "  export OPENAI_API_KEY=\"sk-...\""
-    echo "  export LLM_API_KEY=\"sk-...\" (for Qwen/OpenAI-compatible)"
-    echo "  export NEARAI_API_KEY=\"...\" (for NEAR AI)"
-    echo ""
-    exit 1
-fi
+# 检查是否有有效的 LLM 配置（Desktop Client 可通过 admin_config.json 获取，此处仅检查项目级配置）
+APP_DATA_DIR="${HOME}/Library/Application Support/ironclaw-desktop"
+HAS_ADMIN_CONFIG=false
+[ -f "$APP_DATA_DIR/admin_config.json" ] && HAS_ADMIN_CONFIG=true
 
-log_info "LLM 配置已检测"
+if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${OPENAI_API_KEY:-}" ] && [ -z "${LLM_API_KEY:-}" ] && [ -z "${NEARAI_API_KEY:-}" ]; then
+    if [ "$HAS_ADMIN_CONFIG" = true ]; then
+        log_info "LLM 配置将由管理端下发 (admin_config.json)"
+    else
+        log_warn "未找到 LLM API 密钥（Desktop Client 可能无法正常工作）"
+        echo ""
+        echo "配置方式:"
+        echo "  1. 编辑 desktop-client/.env 设置 LLM_BACKEND + LLM_API_KEY"
+        echo "  2. 或等待管理端下发配置"
+        echo "  3. 或设置环境变量: export LLM_API_KEY=\"sk-...\""
+        echo ""
+        echo "继续启动其他服务..."
+    fi
+else
+    log_info "LLM 配置已检测"
+fi
 
 # ============================================
 # 设置环境变量
@@ -159,11 +149,10 @@ log_info "✅ LLM API 密钥已设置"
 log_section "清理旧进程和端口"
 
 clean_port 5173 "Desktop Client 前端"
-clean_port 38080 "Tauri 内嵌后端"
 clean_port 3000 "Admin Backend"
 clean_port 5174 "Admin Frontend"
 # 注意: 不清理 5432 端口，因为这是 Docker 容器的端口
-# 清理容器端口可能导致 Docker daemon 不稳定
+# 嵌入式模式下 38080 端口不再使用
 
 log_info "所有应用端口已清理"
 
@@ -176,72 +165,11 @@ if ! check_postgres_db "$PROJECT_ROOT/admin-backend"; then
 fi
 
 # ============================================
-# 启动外部 IronClaw 服务器（用于 Desktop Client）
+# Desktop Client 使用嵌入式模式，无需外部 IronClaw 服务器
+# IronClaw 引擎直接运行在 Tauri 进程内，通过 Tauri IPC 通信
 # ============================================
 
-log_section "启动外部 IronClaw 服务器"
-
-cd "$PROJECT_ROOT"
-
-log_info "启动 IronClaw 服务器（端口 38080）..."
-
-# 设置环境变量
-export GATEWAY_PORT=38080
-export GATEWAY_HOST=127.0.0.1
-export GATEWAY_ENABLED=true
-
-# 启动 IronClaw 服务器
-cargo run --manifest-path ironclaw/Cargo.toml -- run --no-onboard > /tmp/ironclaw-server.log 2>&1 &
-IRONCLAW_SERVER_PID=$!
-
-log_info "IronClaw 服务器进程 PID: $IRONCLAW_SERVER_PID"
-
-log_info "等待 IronClaw 服务器启动..."
-
-# 等待服务器启动（最多 60 秒）
-IRONCLAW_TIMEOUT=60
-IRONCLAW_CHECK_INTERVAL=2
-IRONCLAW_START_TIME=$(date +%s)
-
-echo -n "IronClaw 启动进度: "
-while true; do
-    # 检查进程是否还在运行
-    if ! kill -0 $IRONCLAW_SERVER_PID 2>/dev/null; then
-        echo ""
-        log_warn "IronClaw 服务器进程已退出"
-        break
-    fi
-    
-    # 检查服务器是否启动
-    if curl -s http://localhost:38080/api/health > /dev/null 2>&1; then
-        echo ""
-        log_info "IronClaw 服务器已启动"
-        break
-    fi
-    
-    # 检查超时
-    CURRENT_TIME=$(date +%s)
-    ELAPSED=$((CURRENT_TIME - IRONCLAW_START_TIME))
-    if [ $ELAPSED -gt $IRONCLAW_TIMEOUT ]; then
-        echo ""
-        log_warn "IronClaw 服务器启动超时"
-        break
-    fi
-    
-    # 显示进度
-    echo -n "."
-    sleep $IRONCLAW_CHECK_INTERVAL
-done
-
-# 检查服务器是否运行
-if curl -s http://localhost:38080/api/health > /dev/null 2>&1; then
-    log_info "IronClaw 服务器健康检查通过"
-else
-    log_warn "IronClaw 服务器可能未启动，请检查日志"
-    echo ""
-    echo "查看日志:"
-    echo "  tail -50 /tmp/ironclaw-server.log"
-fi
+log_info "Desktop Client 使用嵌入式模式，跳过外部 IronClaw 服务器启动"
 
 # ============================================
 # 启动 Desktop Client 前端
@@ -294,21 +222,17 @@ else
 
     cd "$PROJECT_ROOT/desktop-client"
 
-    log_info "启动 Tauri 客户端（内嵌 IronClaw 核心服务）..."
-    log_info "内嵌后端将在端口 38080 启动"
+    log_info "启动 Tauri 客户端（IronClaw 引擎嵌入式运行）..."
 
     # 启动 Tauri 开发服务器
-    # 注意: 
-    # 1. Tauri 会自动连接到前端开发服务器 (http://localhost:5173)
-    # 2. Tauri 会自动启动内嵌的 IronClaw 核心服务（端口 38080）
+    # IronClaw 引擎在 Tauri 进程内启动，通过 Tauri IPC 与前端通信
     cargo tauri dev > /tmp/tauri.log 2>&1 &
     TAURI_PID=$!
 
     log_info "Tauri 客户端进程 PID: $TAURI_PID"
+    log_info "等待 Tauri 客户端编译启动（首次编译可能需要几分钟）..."
 
-    log_info "等待 Tauri 客户端和内嵌后端启动（这可能需要几分钟）..."
-
-    # 智能等待 Tauri 编译完成
+    # 等待 Tauri 进程存活并完成初始编译
     TAURI_TIMEOUT=600  # 10 分钟超时
     TAURI_CHECK_INTERVAL=3
     TAURI_START_TIME=$(date +%s)
@@ -321,14 +245,7 @@ else
             log_warn "Tauri 客户端进程已退出"
             break
         fi
-        
-        # 检查内嵌后端是否启动
-        if curl -s http://localhost:38080/api/health > /dev/null 2>&1; then
-            echo ""
-            log_info "Tauri 客户端和内嵌后端已启动"
-            break
-        fi
-        
+
         # 检查超时
         CURRENT_TIME=$(date +%s)
         ELAPSED=$((CURRENT_TIME - TAURI_START_TIME))
@@ -337,8 +254,14 @@ else
             log_warn "Tauri 启动超时，继续启动其他服务"
             break
         fi
-        
-        # 显示进度
+
+        # 嵌入式模式：通过日志判断引擎是否就绪
+        if grep -q "AppState injected into Tauri" /tmp/tauri.log 2>/dev/null; then
+            echo ""
+            log_info "Tauri 客户端和 IronClaw 引擎已就绪"
+            break
+        fi
+
         echo -n "."
         sleep $TAURI_CHECK_INTERVAL
     done
@@ -350,12 +273,7 @@ else
         echo "查看日志:"
         echo "  tail -50 /tmp/tauri.log"
     else
-        # 检查内嵌后端是否运行
-        if curl -s http://localhost:38080/api/health > /dev/null 2>&1; then
-            log_info "内嵌 IronClaw 核心服务已启动并健康"
-        else
-            log_warn "内嵌后端服务可能未启动，请检查 Tauri 日志"
-        fi
+        log_info "Tauri 客户端运行中（IronClaw 引擎嵌入式）"
     fi
 
     # 等待 Cargo 文件锁释放
@@ -425,19 +343,13 @@ echo -e "${CYAN}╚════════════════════�
 echo ""
 
 echo -e "${GREEN}📱 Desktop Client (桌面客户端)${NC}"
-echo "   IronClaw 服务器:"
-echo "     URL: http://localhost:38080"
-echo "     PID: $IRONCLAW_SERVER_PID"
-echo "     健康检查: http://localhost:38080/api/health"
-echo "     日志: tail -f /tmp/ironclaw-server.log"
-echo ""
 echo "   前端开发服务器:"
 echo "     URL: http://localhost:5173"
 echo "     PID: $DESKTOP_FRONTEND_PID"
 echo "     日志: tail -f /tmp/desktop-frontend.log"
 echo ""
 if [ ! -z "$TAURI_PID" ] && kill -0 $TAURI_PID 2>/dev/null; then
-    echo "   Tauri 客户端:"
+    echo "   Tauri 客户端（IronClaw 嵌入式引擎）:"
     echo "     PID: $TAURI_PID"
     echo "     状态: 运行中"
     echo "     日志: tail -f /tmp/tauri.log"
@@ -481,7 +393,7 @@ if [ "$SERIAL_MODE" = true ]; then
     echo ""
 fi
 echo -e "${YELLOW}📊 服务架构${NC}"
-echo "   Desktop Client 前端 (5173) → Tauri → IronClaw 服务器 (38080)"
+echo "   Desktop Client 前端 (5173) → Tauri IPC → IronClaw 引擎（嵌入式）"
 echo "   Admin Backend 前端 (5174) → Admin Backend 后端 (3000) → PostgreSQL (5432)"
 echo ""
 echo -e "${YELLOW}🛑 停止服务${NC}"

@@ -20,10 +20,21 @@ export function PasswordLogin() {
       return;
     }
 
-    // Check if setup is needed
-    authApi.checkSetupStatus().then(status => {
+    // Check setup status — 嵌入式模式下自动跳转
+    authApi.checkSetupStatus().then(async (status) => {
       if (!status.password_set) {
         navigate('/setup');
+        return;
+      }
+      // 嵌入式模式：authApi.unlockApp 返回 stub 成功，自动解锁
+      try {
+        const result = await authApi.unlockApp('');
+        if (result.success && result.session_id) {
+          sessionStorage.setItem('session_id', result.session_id);
+          navigate('/app');
+        }
+      } catch {
+        // 非嵌入式模式：保持密码输入页面
       }
     }).catch(err => {
       console.error('Failed to check setup status:', err);

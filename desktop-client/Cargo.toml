@@ -63,8 +63,8 @@ futures = "0.3"
 urlencoding = "2"
 url = "2.5"
 
-# Configuration management
-config = "0.14"
+# Configuration / env loading
+dotenvy = "0.15"
 
 # OS Keychain integration
 [target.'cfg(target_os = "macos")'.dependencies]

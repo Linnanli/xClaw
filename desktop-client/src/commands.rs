@@ -1112,9 +1112,9 @@ fn generate_random_token() -> String {
 // DLP 管理命令
 // ============================================
 
-/// 扫描用户输入的敏感信息
+/// 扫描用户输入的敏感信息（旧实现，已被 ipc/dlp.rs 替代）
 #[tauri::command]
-pub async fn scan_user_input(
+pub async fn legacy_scan_user_input(
     content: String,
     state: tauri::State<'_, CommandState>,
 ) -> Result<SanitizationResult> {
@@ -1149,9 +1149,9 @@ pub async fn scan_user_input(
     Ok(result)
 }
 
-/// 扫描出站请求的敏感信息
+/// 扫描出站请求的敏感信息（旧实现，已被 ipc/dlp.rs 替代）
 #[tauri::command]
-pub async fn scan_outbound_request(
+pub async fn legacy_scan_outbound_request(
     body: String,
     state: tauri::State<'_, CommandState>,
 ) -> Result<SanitizationResult> {
@@ -1160,9 +1160,9 @@ pub async fn scan_outbound_request(
         .map_err(|e| Error::DlpError(e.to_string()))
 }
 
-/// 为存储脱敏内容
+/// 为存储脱敏内容（旧实现，已被 ipc/dlp.rs 替代）
 #[tauri::command]
-pub async fn sanitize_for_storage(
+pub async fn legacy_sanitize_for_storage(
     content: String,
     state: tauri::State<'_, CommandState>,
 ) -> Result<String> {
@@ -1171,9 +1171,9 @@ pub async fn sanitize_for_storage(
         .map_err(|e| Error::DlpError(e.to_string()))
 }
 
-/// 检查HTTP请求是否包含敏感信息
+/// 检查HTTP请求是否包含敏感信息（旧实现，已被 ipc/dlp.rs 替代）
 #[tauri::command]
-pub async fn check_http_request(
+pub async fn legacy_check_http_request(
     url: String,
     headers: Vec<(String, String)>,
     body: Option<Vec<u8>>,
@@ -1185,18 +1185,18 @@ pub async fn check_http_request(
         .map_err(|e| Error::DlpError(e.to_string()))
 }
 
-/// 获取 DLP 配置
+/// 获取 DLP 配置（旧实现，已被 ipc/dlp.rs 替代）
 #[tauri::command]
-pub async fn get_dlp_config(
+pub async fn legacy_get_dlp_config(
     state: tauri::State<'_, CommandState>,
 ) -> Result<DlpIntegrationConfig> {
     let dlp = state.dlp_integration.lock().await;
     Ok(dlp.get_config().await)
 }
 
-/// 更新 DLP 配置
+/// 更新 DLP 配置（旧实现，已被 ipc/dlp.rs 替代）
 #[tauri::command]
-pub async fn update_dlp_config(
+pub async fn legacy_update_dlp_config(
     config: DlpIntegrationConfig,
     state: tauri::State<'_, CommandState>,
 ) -> Result<()> {
@@ -1205,21 +1205,21 @@ pub async fn update_dlp_config(
         .map_err(|e| Error::DlpError(e.to_string()))
 }
 
-/// 获取 DLP 统计信息
+/// 获取 DLP 统计信息（旧实现，已被 ipc/dlp.rs 替代）
 #[tauri::command]
-pub async fn get_dlp_statistics(
+pub async fn legacy_get_dlp_statistics(
     state: tauri::State<'_, CommandState>,
 ) -> Result<DlpStatistics> {
     let dlp = state.dlp_integration.lock().await;
     Ok(dlp.get_statistics().await)
 }
 
-/// 从后台管理系统同步 DLP 规则
+/// 从后台管理系统同步 DLP 规则（旧实现，已被 ipc/dlp.rs 替代）
 ///
 /// 调用 admin-backend 的 /api/dlp-rules API 获取规则，
 /// 然后更新本地 DLP 引擎的自定义规则配置
 #[tauri::command]
-pub async fn sync_dlp_rules_from_admin(
+pub async fn legacy_sync_dlp_rules_from_admin(
     state: tauri::State<'_, CommandState>,
 ) -> Result<SyncDlpResult> {
     tracing::info!("🔄 Syncing DLP rules from admin backend");

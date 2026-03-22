@@ -1,104 +1,89 @@
 import { useState, useEffect } from 'react';
-import { Wifi, WifiOff, RotateCcw } from 'lucide-react';
+import { Cpu, AlertCircle } from 'lucide-react';
+import { listen } from '@tauri-apps/api/event';
 import { useTheme } from '../../contexts/ThemeContext';
-import { sseService, ConnectionStatus as ConnectionStatusType } from '../../services/sseService';
+
+type EngineStatus = 'starting' | 'running' | 'error';
 
 /**
- * 连接状态指示器组件
- * 
- * 显示SSE连接的实时状态，包括：
- * - 连接状态指示灯
- * - 状态文本
- * - 连接图标
+ * 引擎状态指示器 — 嵌入式模式
+ *
+ * 监听 Tauri IPC `chat-event` 判断引擎是否就绪。
+ * 收到任何非 Error 事件即视为引擎运行中。
  */
 export function ConnectionStatus() {
   const { theme } = useTheme();
-  const [status, setStatus] = useState<ConnectionStatusType>(sseService.getConnectionStatus());
+  const [status, setStatus] = useState<EngineStatus>('starting');
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    // 监听连接状态变化
-    const handleStatusChange = (newStatus: ConnectionStatusType) => {
-      setStatus(newStatus);
-    };
+    // 监听引擎事件判断状态
+    const unlisten = listen<any>('chat-event', (event) => {
+      const payload = event.payload;
+      if (payload && typeof payload === 'object' && 'Error' in payload) {
+        const err = payload.Error as { message: string; code?: string };
+        if (err.code === 'ENGINE_STARTUP_FAILED' || err.code === 'ENGINE_ERROR') {
+          setStatus('error');
+          setErrorMsg(err.message);
+          return;
+        }
+      }
+      // 收到任何非错误事件 → 引擎运行中
+      setStatus('running');
+    });
 
-    sseService.onStatusChange(handleStatusChange);
+    // 5 秒后如果还在 starting，也切换到 running（引擎可能已就绪但无事件）
+    const timer = setTimeout(() => {
+      setStatus((prev) => (prev === 'starting' ? 'running' : prev));
+    }, 5000);
 
-    // 清理监听器
     return () => {
-      sseService.offStatusChange(handleStatusChange);
+      unlisten.then((fn) => fn());
+      clearTimeout(timer);
     };
   }, []);
 
-  const getStatusConfig = () => {
+  const config = (() => {
     switch (status) {
-      case 'connected':
+      case 'running':
         return {
-          text: '已连接',
+          text: '引擎运行中',
           dotColor: 'bg-green-400',
-          icon: <Wifi size={16} className="text-green-400" />,
-          animate: false
+          icon: <Cpu size={16} className="text-green-400" />,
+          animate: false,
         };
-      case 'connecting':
+      case 'starting':
         return {
-          text: '连接中',
+          text: '引擎启动中',
           dotColor: 'bg-yellow-400',
-          icon: <RotateCcw size={16} className="text-yellow-400 animate-spin" />,
-          animate: true
+          icon: <Cpu size={16} className="text-yellow-400 animate-spin" />,
+          animate: true,
         };
-      case 'reconnecting':
+      case 'error':
         return {
-          text: '重连中',
-          dotColor: 'bg-yellow-400',
-          icon: <RotateCcw size={16} className="text-yellow-400 animate-spin" />,
-          animate: true
-        };
-      case 'disconnected':
-        return {
-          text: '已断开',
+          text: '引擎异常',
           dotColor: 'bg-red-400',
-          icon: <WifiOff size={16} className="text-red-400" />,
-          animate: false
-        };
-      case 'failed':
-        return {
-          text: '连接失败',
-          dotColor: 'bg-red-400',
-          icon: <WifiOff size={16} className="text-red-400" />,
-          animate: false
-        };
-      default:
-        return {
-          text: '未知状态',
-          dotColor: 'bg-gray-400',
-          icon: <WifiOff size={16} className="text-gray-400" />,
-          animate: false
+          icon: <AlertCircle size={16} className="text-red-400" />,
+          animate: false,
         };
     }
-  };
-
-  const config = getStatusConfig();
+  })();
 
   return (
-    <div className="flex items-center gap-2">
-      {/* 状态指示灯 */}
+    <div className="flex items-center gap-2" title={errorMsg || undefined}>
       <div className="relative">
-        <div 
+        <div
           data-testid="connection-dot"
           className={`w-3 h-3 rounded-full ${config.dotColor} ${
             config.animate ? 'animate-pulse' : ''
           }`}
         />
-        {/* 连接成功时的光晕效果 */}
-        {status === 'connected' && (
+        {status === 'running' && (
           <div className="absolute inset-0 w-3 h-3 rounded-full bg-green-400 animate-ping opacity-20" />
         )}
       </div>
-
-      {/* 连接图标 */}
       {config.icon}
-
-      {/* 状态文本 */}
-      <span 
+      <span
         className={`text-sm font-medium ${
           theme === 'dark' ? 'text-white' : 'text-[#333]'
         }`}

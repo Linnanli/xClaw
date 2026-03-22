@@ -35,6 +35,10 @@ mod extensions_tests;
 #[path = "approval_tests.rs"]
 mod approval_tests;
 
+#[cfg(test)]
+#[path = "dlp_tests.rs"]
+mod dlp_tests;
+
 // 统一 re-export 所有 Tauri Command
 pub use approval::*;
 pub use chat::*;
