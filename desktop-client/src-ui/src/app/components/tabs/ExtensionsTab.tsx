@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Download, Trash2, Power, PowerOff, RefreshCw } from 'lucide-react';
+import { Download, Trash2, Power, PowerOff, RefreshCw, Settings } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
-import { extensionApi, type ExtensionMetadata, type InstalledExtension } from '../../utils/tauri';
+import { extensionApi, extensionSetupApi, type ExtensionMetadata, type InstalledExtension, type ExtensionSetupField, type ExtensionSetupSubmitResponse } from '../../utils/tauri';
 
 export function ExtensionsTab() {
   const { theme } = useTheme();
@@ -9,6 +9,11 @@ export function ExtensionsTab() {
   const [installedExtensions, setInstalledExtensions] = useState<InstalledExtension[]>([]);
   const [availableExtensions, setAvailableExtensions] = useState<ExtensionMetadata[]>([]);
   const [loading, setLoading] = useState(false);
+  const [setupExtName, setSetupExtName] = useState<string | null>(null);
+  const [setupFields, setSetupFields] = useState<ExtensionSetupField[]>([]);
+  const [setupValues, setSetupValues] = useState<Record<string, string>>({});
+  const [setupLoading, setSetupLoading] = useState(false);
+  const [setupResult, setSetupResult] = useState<ExtensionSetupSubmitResponse | null>(null);
 
   useEffect(() => {
     loadExtensions();
@@ -60,6 +65,44 @@ export function ExtensionsTab() {
       await loadExtensions();
     } catch (err) {
       console.error('Failed to toggle extension:', err);
+    }
+  };
+
+  const handleSetup = async (name: string) => {
+    setSetupExtName(name);
+    setSetupResult(null);
+    setSetupLoading(true);
+    try {
+      const schema = await extensionSetupApi.getSetupSchema(name);
+      setSetupFields(schema.secrets);
+      const initial: Record<string, string> = {};
+      schema.secrets.forEach(f => { initial[f.name] = ''; });
+      setSetupValues(initial);
+    } catch (err) {
+      console.error('Failed to load setup schema:', err);
+      setSetupFields([]);
+    } finally {
+      setSetupLoading(false);
+    }
+  };
+
+  const handleSetupSubmit = async () => {
+    if (!setupExtName) return;
+    setSetupLoading(true);
+    try {
+      const result = await extensionSetupApi.submitSetup(setupExtName, setupValues);
+      setSetupResult(result);
+      if (result.activated) {
+        await loadExtensions();
+      }
+      if (result.auth_url) {
+        window.open(result.auth_url, '_blank');
+      }
+    } catch (err) {
+      console.error('Failed to submit setup:', err);
+      setSetupResult({ success: false, message: String(err), activated: false, auth_url: null });
+    } finally {
+      setSetupLoading(false);
     }
   };
 
@@ -180,6 +223,17 @@ export function ExtensionsTab() {
               {ext.installed ? (
                 <div className="flex gap-2">
                   <button
+                    onClick={() => handleSetup(ext.id)}
+                    className={`px-3 py-2 rounded-lg flex items-center gap-1 transition-opacity border text-sm ${
+                      theme === 'dark'
+                        ? 'bg-[#0a1628] hover:opacity-80 text-gray-400 border-[#1a2942]'
+                        : 'bg-[#f5f5f5] hover:opacity-80 text-[#666] border-[#ddd]'
+                    }`}
+                    title="配置"
+                  >
+                    <Settings size={14} />
+                  </button>
+                  <button
                     onClick={() => handleToggle(ext.id, ext.enabled || false)}
                     className={`flex-1 px-4 py-2 rounded-lg flex items-center justify-center gap-2 font-medium transition-opacity ${
                       ext.enabled
@@ -226,6 +280,87 @@ export function ExtensionsTab() {
           ))}
         </div>
       </div>
+
+      {/* Setup Modal */}
+      {setupExtName && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className={`border rounded-xl p-6 max-w-md w-full mx-4 ${
+            theme === 'dark'
+              ? 'bg-[#0f1d35] border-[#1a2942]'
+              : 'bg-white border-[#ddd] shadow-lg'
+          }`}>
+            <h3 className={`text-lg font-semibold mb-4 flex items-center gap-2 ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>
+              <Settings size={18} />
+              配置 {setupExtName}
+            </h3>
+
+            {setupLoading && setupFields.length === 0 ? (
+              <p className={`text-sm py-4 ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>加载配置...</p>
+            ) : setupFields.length === 0 ? (
+              <p className={`text-sm py-4 ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>此扩展无需配置</p>
+            ) : (
+              <div className="space-y-4">
+                {setupFields.map((field) => (
+                  <div key={field.name}>
+                    <label className={`block text-sm font-medium mb-1 ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>
+                      {field.prompt}
+                      {field.optional && <span className={`ml-1 text-xs ${theme === 'dark' ? 'text-gray-500' : 'text-[#999]'}`}>(可选)</span>}
+                      {field.provided && <span className="ml-1 text-xs text-green-400">✓ 已配置</span>}
+                    </label>
+                    <input
+                      type="password"
+                      value={setupValues[field.name] || ''}
+                      onChange={(e) => setSetupValues(prev => ({ ...prev, [field.name]: e.target.value }))}
+                      placeholder={field.auto_generate ? '留空自动生成' : field.provided ? '留空保持不变' : '请输入...'}
+                      className={`w-full px-3 py-2 text-sm border rounded-lg focus:outline-none ${
+                        theme === 'dark'
+                          ? 'bg-[#0a1628] border-[#1a2942] focus:border-[#5ddad5] text-white placeholder-gray-500'
+                          : 'bg-white border-[#ddd] focus:border-[#667eea] text-[#333] placeholder-gray-400'
+                      }`}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {setupResult && (
+              <div className={`mt-4 p-3 rounded-lg text-sm ${
+                setupResult.success
+                  ? 'bg-green-400/10 text-green-400 border border-green-400/30'
+                  : 'bg-red-400/10 text-red-400 border border-red-400/30'
+              }`}>
+                {setupResult.message}
+              </div>
+            )}
+
+            <div className="flex gap-3 justify-end mt-6">
+              <button
+                onClick={() => { setSetupExtName(null); setSetupResult(null); }}
+                className={`px-4 py-2 rounded-lg transition-opacity border ${
+                  theme === 'dark'
+                    ? 'bg-[#0a1628] hover:opacity-80 text-gray-400 border-[#1a2942]'
+                    : 'bg-[#f5f5f5] hover:opacity-80 text-[#666] border-[#ddd]'
+                }`}
+              >
+                关闭
+              </button>
+              {setupFields.length > 0 && (
+                <button
+                  onClick={handleSetupSubmit}
+                  disabled={setupLoading}
+                  className={`px-4 py-2 rounded-lg font-medium transition-opacity disabled:opacity-50 ${
+                    theme === 'dark'
+                      ? 'bg-gradient-to-r from-[#5ddad5] to-[#4facf7] text-[#0a1628] hover:opacity-90'
+                      : 'bg-[#667eea] text-white hover:opacity-90 shadow-md'
+                  }`}
+                >
+                  {setupLoading ? '提交中...' : '保存配置'}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

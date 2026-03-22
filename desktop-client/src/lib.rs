@@ -55,6 +55,10 @@ mod safety_bridge_tests;
 mod integration_tests;
 
 #[cfg(test)]
+#[path = "engine_startup_tests.rs"]
+mod engine_startup_tests;
+
+#[cfg(test)]
 mod tests {
     pub mod dlp_policy_sync_integration_tests {
         include!("dlp/policy_sync_integration_tests.rs");
@@ -109,6 +113,13 @@ macro_rules! all_tauri_commands {
             desktop_client::ipc::ic_install_extension,
             desktop_client::ipc::ic_uninstall_extension,
             desktop_client::ipc::ic_search_extensions,
+            desktop_client::ipc::ic_extension_setup,
+            desktop_client::ipc::ic_extension_setup_submit,
+            // ── 任务管理 ────────────────────────────────────────
+            desktop_client::ipc::ic_job_events,
+            desktop_client::ipc::ic_job_prompt,
+            // ── 日程管理 ────────────────────────────────────────
+            desktop_client::ipc::ic_routine_runs,
             // ── 工具审批 ────────────────────────────────────────
             desktop_client::ipc::ic_approve_tool,
             desktop_client::ipc::ic_deny_tool,

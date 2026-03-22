@@ -26,6 +26,7 @@ export function MemoryTab() {
   // File viewer state
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState<string>('');
+  const [fileUpdatedAt, setFileUpdatedAt] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
   const [isProtectedFile, setIsProtectedFile] = useState(false);
@@ -191,6 +192,7 @@ export function MemoryTab() {
       const actualContent = memoryContentUtils.getActualContent(content);
       setFileContent(actualContent);
       setEditContent(actualContent);
+      setFileUpdatedAt(content.updated_at || null);
       setError(null);
     } catch (err) {
       console.error('Failed to read file:', err);
@@ -416,8 +418,15 @@ export function MemoryTab() {
             <div className={`flex items-center justify-between p-4 border-b ${
               theme === 'dark' ? 'border-[#1a2942]' : 'border-[#ddd]'
             }`}>
-              <div className={`font-medium ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>
-                {selectedFile}
+              <div>
+                <div className={`font-medium ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>
+                  {selectedFile}
+                </div>
+                {fileUpdatedAt && (
+                  <div className={`text-xs mt-1 ${theme === 'dark' ? 'text-gray-500' : 'text-[#999]'}`}>
+                    最后更新: {new Date(fileUpdatedAt).toLocaleString('zh-CN')}
+                  </div>
+                )}
               </div>
               <div className="flex gap-2">
                 {isEditing ? (

@@ -7,7 +7,9 @@ pub mod approval;
 pub mod chat;
 pub mod dlp;
 pub mod extensions;
+pub mod jobs;
 pub mod memory;
+pub mod routines;
 pub mod skills;
 pub mod threads;
 
@@ -39,11 +41,21 @@ mod approval_tests;
 #[path = "dlp_tests.rs"]
 mod dlp_tests;
 
+#[cfg(test)]
+#[path = "jobs_tests.rs"]
+mod jobs_tests;
+
+#[cfg(test)]
+#[path = "routines_tests.rs"]
+mod routines_tests;
+
 // 统一 re-export 所有 Tauri Command
 pub use approval::*;
 pub use chat::*;
 pub use dlp::*;
 pub use extensions::*;
+pub use jobs::*;
 pub use memory::*;
+pub use routines::*;
 pub use skills::*;
 pub use threads::*;

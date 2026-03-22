@@ -159,6 +159,35 @@ export const extensionSearchApi = {
     invokeTauri<ExtensionMetadata[]>('ic_search_extensions', { query }),
 };
 
+// Extension Setup API
+export interface ExtensionSetupField {
+  name: string;
+  prompt: string;
+  optional: boolean;
+  provided: boolean;
+  auto_generate: boolean;
+}
+
+export interface ExtensionSetupResponse {
+  name: string;
+  kind: string;
+  secrets: ExtensionSetupField[];
+}
+
+export interface ExtensionSetupSubmitResponse {
+  success: boolean;
+  message: string;
+  activated: boolean;
+  auth_url: string | null;
+}
+
+export const extensionSetupApi = {
+  getSetupSchema: (name: string) =>
+    invokeTauri<ExtensionSetupResponse>('ic_extension_setup', { name }),
+  submitSetup: (name: string, secrets: Record<string, string>) =>
+    invokeTauri<ExtensionSetupSubmitResponse>('ic_extension_setup_submit', { name, secrets }),
+};
+
 // ============================================================================
 // Session APIs (stub — 嵌入式模式无 session 管理)
 // ============================================================================
@@ -321,17 +350,26 @@ export const routineApi = {
 
 export interface RoutineRun {
   id: string;
-  routine_id: string;
+  trigger_type: string;
   started_at: string;
   completed_at?: string;
   status: string;
+  result_summary?: string;
+  tokens_used?: number;
+  job_id?: string;
+}
+
+export interface RoutineRunsResponse {
+  routine_id: string;
+  runs: RoutineRun[];
 }
 
 export const routineExtendedApi = {
   enableRoutine: async (_routineId: string): Promise<void> => {},
   disableRoutine: async (_routineId: string): Promise<void> => {},
   pauseRoutine: async (_routineId: string): Promise<void> => {},
-  getRoutineRuns: async (_routineId: string): Promise<RoutineRun[]> => [],
+  getRoutineRuns: (routineId: string) =>
+    invokeTauri<RoutineRunsResponse>('ic_routine_runs', { routineId }),
 };
 
 // ============================================================================
@@ -390,8 +428,8 @@ export const memoryApi = {
   },
 
   readMemory: async (path: string): Promise<MemoryContent> => {
-    const doc = await invokeTauri<{ path: string; content: string }>('ic_memory_read', { path });
-    return { path: doc.path, content: doc.content };
+    const doc = await invokeTauri<{ path: string; content: string; updated_at?: string }>('ic_memory_read', { path });
+    return { path: doc.path, content: doc.content, updated_at: doc.updated_at };
   },
 
   writeMemory: async (path: string, content: string): Promise<MemoryWriteResponse> => {
@@ -499,7 +537,29 @@ export const jobApi = {
   },
   cancelJob: async (_jobId: string): Promise<void> => {},
   restartJob: async (_jobId: string): Promise<void> => {},
+  getJobEvents: (jobId: string) =>
+    invokeTauri<JobEventsResponse>('ic_job_events', { jobId }),
+  sendJobPrompt: (jobId: string, content: string) =>
+    invokeTauri<JobPromptResponse>('ic_job_prompt', { jobId, content }),
 };
+
+// Job Events types
+export interface JobEvent {
+  id: number;
+  event_type: string;
+  data: any;
+  created_at: string;
+}
+
+export interface JobEventsResponse {
+  job_id: string;
+  events: JobEvent[];
+}
+
+export interface JobPromptResponse {
+  status: string;
+  job_id: string;
+}
 
 // ============================================================================
 // Log APIs (stub)

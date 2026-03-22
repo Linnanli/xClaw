@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Plus, Play, Trash2, Pause, PlayCircle } from 'lucide-react';
+import { Plus, Play, Trash2, Pause, PlayCircle, History, X } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
-import { routineApi, type Routine } from '../../utils/tauri';
+import { routineApi, routineExtendedApi, type Routine, type RoutineRun } from '../../utils/tauri';
 
 export function RoutinesTab() {
   const { theme } = useTheme();
@@ -15,6 +15,9 @@ export function RoutinesTab() {
     trigger: 'manual' as const,
     triggerValue: '',
   });
+  const [selectedRoutineId, setSelectedRoutineId] = useState<string | null>(null);
+  const [routineRuns, setRoutineRuns] = useState<RoutineRun[]>([]);
+  const [runsLoading, setRunsLoading] = useState(false);
 
   useEffect(() => {
     loadRoutines();
@@ -76,6 +79,34 @@ export function RoutinesTab() {
       await routineApi.triggerRoutine(id);
     } catch (err) {
       console.error('Failed to trigger routine:', err);
+    }
+  };
+
+  const handleTogglePause = async (id: string) => {
+    try {
+      const routine = routines.find(r => r.id === id);
+      if (routine?.status === 'active') {
+        await routineExtendedApi.pauseRoutine(id);
+      } else {
+        await routineExtendedApi.enableRoutine(id);
+      }
+      await loadRoutines();
+    } catch (err) {
+      console.error('Failed to toggle routine:', err);
+    }
+  };
+
+  const handleViewRuns = async (id: string) => {
+    setSelectedRoutineId(id);
+    setRunsLoading(true);
+    try {
+      const resp = await routineExtendedApi.getRoutineRuns(id);
+      setRoutineRuns(resp.runs);
+    } catch (err) {
+      console.error('Failed to load routine runs:', err);
+      setRoutineRuns([]);
+    } finally {
+      setRunsLoading(false);
     }
   };
 
@@ -158,6 +189,17 @@ export function RoutinesTab() {
                 >
                   <PlayCircle size={16} />
                   触发
+                </button>
+                <button
+                  onClick={() => handleViewRuns(routine.id)}
+                  className={`px-3 py-2 rounded-lg transition-opacity border ${
+                    theme === 'dark'
+                      ? 'bg-[#0a1628] hover:opacity-80 text-gray-400 border-[#1a2942]'
+                      : 'bg-[#f5f5f5] hover:opacity-80 text-[#666] border-[#ddd]'
+                  }`}
+                  title="执行历史"
+                >
+                  <History size={16} />
                 </button>
                 <button
                   onClick={() => handleTogglePause(routine.id)}
@@ -288,6 +330,82 @@ export function RoutinesTab() {
               >
                 创建
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Runs History Modal */}
+      {selectedRoutineId && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className={`border rounded-xl max-w-lg w-full mx-4 max-h-[70vh] flex flex-col ${
+            theme === 'dark'
+              ? 'bg-[#0f1d35] border-[#1a2942]'
+              : 'bg-white border-[#ddd] shadow-lg'
+          }`}>
+            <div className={`flex items-center justify-between p-4 border-b ${
+              theme === 'dark' ? 'border-[#1a2942]' : 'border-[#eee]'
+            }`}>
+              <h3 className={`text-lg font-semibold flex items-center gap-2 ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>
+                <History size={18} />
+                执行历史
+              </h3>
+              <button
+                onClick={() => setSelectedRoutineId(null)}
+                className={`p-1 rounded transition-colors ${
+                  theme === 'dark' ? 'hover:bg-[#1a2942] text-gray-400' : 'hover:bg-gray-100 text-[#999]'
+                }`}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4">
+              {runsLoading ? (
+                <p className={`text-center py-8 text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>加载中...</p>
+              ) : routineRuns.length === 0 ? (
+                <p className={`text-center py-8 text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>暂无执行记录</p>
+              ) : (
+                <div className="space-y-3">
+                  {routineRuns.map((run) => (
+                    <div
+                      key={run.id}
+                      className={`p-3 rounded-lg border ${
+                        theme === 'dark' ? 'bg-[#0a1628] border-[#1a2942]' : 'bg-[#f9f9f9] border-[#eee]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <span className={`text-sm font-medium ${
+                          run.status === 'Completed' ? 'text-green-400' :
+                          run.status === 'Failed' ? 'text-red-400' :
+                          run.status === 'Running' ? 'text-yellow-400' :
+                          theme === 'dark' ? 'text-gray-300' : 'text-[#333]'
+                        }`}>
+                          {run.status}
+                        </span>
+                        <span className={`text-xs px-2 py-0.5 rounded ${
+                          theme === 'dark' ? 'bg-[#1a2942] text-gray-400' : 'bg-[#eee] text-[#666]'
+                        }`}>
+                          {run.trigger_type}
+                        </span>
+                      </div>
+                      <div className={`text-xs space-y-1 ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>
+                        <div>开始: {new Date(run.started_at).toLocaleString('zh-CN')}</div>
+                        {run.completed_at && (
+                          <div>结束: {new Date(run.completed_at).toLocaleString('zh-CN')}</div>
+                        )}
+                        {run.tokens_used != null && (
+                          <div>Token 用量: {run.tokens_used}</div>
+                        )}
+                        {run.result_summary && (
+                          <div className={`mt-1 ${theme === 'dark' ? 'text-gray-300' : 'text-[#666]'}`}>
+                            {run.result_summary}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>

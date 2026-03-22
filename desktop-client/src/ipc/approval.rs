@@ -7,7 +7,7 @@
 use ironclaw::channels::IncomingMessage;
 use tauri::State;
 
-use crate::state::AppState;
+use crate::state::EngineState;
 
 /// 审批工具执行请求。
 ///
@@ -15,10 +15,11 @@ use crate::state::AppState;
 /// Agent 的 SubmissionParser 会识别 `!approve <request_id>` 格式。
 #[tauri::command]
 pub async fn ic_approve_tool(
-    state: State<'_, AppState>,
+    state: State<'_, EngineState>,
     request_id: String,
     thread_id: String,
 ) -> Result<(), String> {
+    let state = state.get()?;
     let content = format!("!approve {}", request_id);
 
     let msg = IncomingMessage::new("tauri", &state.owner_id, &content)
@@ -38,10 +39,11 @@ pub async fn ic_approve_tool(
 /// 拒绝工具执行请求。
 #[tauri::command]
 pub async fn ic_deny_tool(
-    state: State<'_, AppState>,
+    state: State<'_, EngineState>,
     request_id: String,
     thread_id: String,
 ) -> Result<(), String> {
+    let state = state.get()?;
     let content = format!("!deny {}", request_id);
 
     let msg = IncomingMessage::new("tauri", &state.owner_id, &content)

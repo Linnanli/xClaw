@@ -1857,3 +1857,158 @@ describe('SSE Contract Tests', () => {
 
 - `SSE_INTEGRATION_ISSUE_ANALYSIS.md` - 详细的问题分析
 - `src/channels/web/static/app.js` - 主项目的 SSE 实现
+
+
+## 启动时序和进程冒烟测试规则
+
+**背景**：Tauri 桌面应用中，引擎异步启动与前端命令调用之间存在竞态条件。传统的单元测试和集成测试直接构造依赖，绕过了 Tauri 的 `manage()` → `State<>` 注入链路，无法捕获以下问题：
+
+- 引擎异步启动未完成时，前端调用 Tauri 命令导致 "state not managed" panic
+- `EngineState` 未初始化时的错误处理不友好
+- 重复初始化 `EngineState` 的防护缺失
+- 高并发场景下的线程安全问题
+
+### 问题案例
+
+**Desktop Client "state not managed" 运行时错误**：
+
+- `main.rs` 中 `start_ironclaw_engine()` 在 `tauri::async_runtime::spawn` 中异步执行
+- `app_handle.manage(AppState)` 在引擎 Phase 6 才调用
+- 前端窗口可能在引擎就绪前就调用命令，导致竞态条件
+- 593 个单元测试全部通过，但运行时仍然 panic
+
+**根本原因**：单元测试直接调用 Rust 函数，绕过了 Tauri 的状态注入机制，无法覆盖"状态未注册"的场景。
+
+### 测试维度
+
+#### 1. 启动时序测试
+
+验证 `EngineState` 的生命周期状态转换：
+
+```rust
+#[test]
+fn test_timing_engine_state_starts_unready() {
+    let engine = EngineState::new();
+    assert!(!engine.is_ready(), "新创建的 EngineState 应该未就绪");
+}
+
+#[test]
+fn test_timing_engine_state_becomes_ready_after_initialize() {
+    let engine = EngineState::new();
+    engine.initialize(create_minimal_app_state()).unwrap();
+    assert!(engine.is_ready());
+}
+
+#[test]
+fn test_timing_double_initialize_rejected() {
+    let engine = EngineState::new();
+    engine.initialize(create_minimal_app_state()).unwrap();
+    let result = engine.initialize(create_minimal_app_state());
+    assert!(result.is_err(), "重复初始化应该被拒绝");
+}
+```
+
+#### 2. 失败路径测试
+
+验证引擎未就绪时返回友好错误而非 panic：
+
+```rust
+#[test]
+fn test_failure_get_before_initialize_returns_friendly_error() {
+    let engine = EngineState::new();
+    let result = engine.get();
+    assert!(result.is_err());
+    let err_msg = result.err().expect("已断言 is_err");
+    assert!(err_msg.contains("启动中") || err_msg.contains("稍后"));
+}
+```
+
+#### 3. 并发安全测试
+
+验证多线程同时访问 `EngineState` 的安全性：
+
+```rust
+#[test]
+fn test_concurrent_initialize_only_one_succeeds() {
+    let engine = Arc::new(EngineState::new());
+    let success_count = Arc::new(AtomicUsize::new(0));
+    // 10 个线程同时尝试初始化，只有 1 个应该成功
+    // ...
+    assert_eq!(success_count.load(Ordering::SeqCst), 1);
+}
+```
+
+#### 4. 契约测试
+
+验证 `EngineState` API 行为一致性：
+
+- `is_ready()` 与 `get()` 的返回值一致
+- 多次 `get()` 返回同一个 `AppState`
+- 初始化后所有字段可访问
+
+#### 5. 冒烟测试（模拟真实启动流程）
+
+模拟 `main.rs` 的完整启动时序：
+
+```rust
+#[tokio::test]
+async fn test_smoke_simulated_startup_sequence() {
+    // Phase 1: 创建空壳状态（模拟 setup）
+    let engine = Arc::new(EngineState::new());
+    
+    // Phase 2: 前端立即调用命令（应该返回友好错误）
+    assert!(engine.get().is_err());
+    
+    // Phase 3: 异步启动引擎
+    let engine_clone = Arc::clone(&engine);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        engine_clone.initialize(create_minimal_app_state()).unwrap();
+    });
+    
+    // Phase 4: 前端重试直到成功
+    // ...
+}
+```
+
+### 测试文件组织
+
+```
+desktop-client/src/
+├── engine_startup_tests.rs    # 启动时序 + 冒烟测试
+├── state.rs                   # EngineState 定义
+└── engine.rs                  # 引擎启动逻辑
+```
+
+### 强制要求
+
+1. **任何涉及 Tauri 状态管理的改动**，必须运行启动时序测试：
+   ```bash
+   cargo test -p desktop-client --lib engine_startup_tests
+   ```
+
+2. **新增 `EngineState` 方法时**，必须同步添加对应的时序测试和失败路径测试。
+
+3. **修改引擎启动流程时**，必须验证冒烟测试仍然通过。
+
+4. **`AppState` 字段变更时**，必须更新 `create_minimal_app_state()` 测试辅助函数和契约测试。
+
+### 检查清单
+
+- [ ] 已运行 `cargo test -p desktop-client --lib engine_startup_tests` 且全部通过
+- [ ] 新增的 EngineState 方法有对应的时序测试
+- [ ] 新增的 EngineState 方法有对应的失败路径测试
+- [ ] 并发安全测试覆盖了新的访问模式
+- [ ] 冒烟测试模拟了真实的启动时序
+- [ ] `create_minimal_app_state()` 与 `AppState` 字段保持同步
+
+### 核心原则
+
+> **单元测试通过 ≠ 运行时安全。涉及异步状态注入的场景，必须用时序测试和冒烟测试覆盖真实的启动流程。**
+
+### 参考文件
+
+- `desktop-client/src/engine_startup_tests.rs` — 完整的启动时序测试
+- `desktop-client/src/state.rs` — `EngineState` 定义
+- `desktop-client/src/engine.rs` — 引擎启动逻辑
+- `desktop-client/src/main.rs` — Tauri 应用入口

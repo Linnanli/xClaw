@@ -48,6 +48,7 @@ fn main() {
 
     // ── 启动 Tauri ────────────────────────────────────────────────
     tauri::Builder::default()
+        .manage(desktop_client::state::EngineState::new())
         .setup(|app| {
             let app_handle = app.handle().clone();
 
@@ -55,13 +56,19 @@ fn main() {
                 if let Err(e) = desktop_client::engine::start_ironclaw_engine(app_handle.clone())
                     .await
                 {
-                    tracing::error!(error = %e, "IronClaw engine failed to start");
+                    let err_msg = format!("{:#}", e);
+                    tracing::error!(error = %err_msg, "IronClaw engine failed to start");
+
+                    // 标记引擎启动失败，让 IPC 命令返回具体错误而非"正在启动中"
+                    use tauri::Manager;
+                    let engine_state = app_handle.state::<desktop_client::state::EngineState>();
+                    engine_state.set_failed(err_msg.clone());
 
                     use tauri::Emitter;
                     let _ = app_handle.emit(
                         "chat-event",
                         desktop_client::tauri_channel::ChatEvent::Error {
-                            message: format!("Engine startup failed: {}", e),
+                            message: format!("Engine startup failed: {}", err_msg),
                             code: Some("ENGINE_STARTUP_FAILED".into()),
                         },
                     );

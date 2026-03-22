@@ -14,7 +14,7 @@ use ironclaw::channels::IncomingMessage;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::state::AppState;
+use crate::state::EngineState;
 
 /// 发送消息的响应。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,10 +37,11 @@ pub struct SendMessageResponse {
 /// - 仅记录 message_id 和 thread_id 用于追踪
 #[tauri::command]
 pub async fn send_chat_message(
-    state: State<'_, AppState>,
+    state: State<'_, EngineState>,
     thread_id: String,
     content: String,
 ) -> Result<SendMessageResponse, String> {
+    let state = state.get()?;
     let message_id = uuid::Uuid::new_v4().to_string();
 
     // ── SafetyBridge 扫描：密钥检测 + PII 脱敏 ────────────────────
@@ -108,7 +109,9 @@ pub async fn subscribe_chat_events(
     use crate::tauri_channel::ChatEvent;
 
     // 检查引擎是否已就绪
-    if app_handle.try_state::<crate::state::AppState>().is_some() {
+    if app_handle.try_state::<crate::state::EngineState>()
+        .map_or(false, |es| es.is_ready())
+    {
         app_handle
             .emit("chat-event", ChatEvent::ConnectionStatus {
                 connected: true,

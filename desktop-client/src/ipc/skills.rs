@@ -12,7 +12,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::state::AppState;
+use crate::state::EngineState;
 
 /// 技能信息（前端展示用）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,8 +35,9 @@ pub struct CatalogSearchResult {
 /// 列出已安装技能。
 #[tauri::command]
 pub async fn ic_list_skills(
-    state: State<'_, AppState>,
+    state: State<'_, EngineState>,
 ) -> Result<Vec<SkillInfo>, String> {
+    let state = state.get()?;
     let registry = state
         .skill_registry
         .as_ref()
@@ -61,9 +62,10 @@ pub async fn ic_list_skills(
 /// 搜索技能目录。
 #[tauri::command]
 pub async fn ic_search_skills(
-    state: State<'_, AppState>,
+    state: State<'_, EngineState>,
     query: String,
 ) -> Result<Vec<CatalogSearchResult>, String> {
+    let state = state.get()?;
     let catalog = state
         .skill_catalog
         .as_ref()
@@ -91,9 +93,10 @@ pub async fn ic_search_skills(
 /// 2. `commit_install()` — 更新内存注册表（短锁，同步）
 #[tauri::command]
 pub async fn ic_install_skill(
-    state: State<'_, AppState>,
+    state: State<'_, EngineState>,
     content: String,
 ) -> Result<String, String> {
+    let state = state.get()?;
     let registry = state
         .skill_registry
         .as_ref()
@@ -133,9 +136,10 @@ pub async fn ic_install_skill(
 /// 3. `commit_remove()` — 更新内存注册表（短锁，同步）
 #[tauri::command]
 pub async fn ic_uninstall_skill(
-    state: State<'_, AppState>,
+    state: State<'_, EngineState>,
     name: String,
 ) -> Result<(), String> {
+    let state = state.get()?;
     let registry = state
         .skill_registry
         .as_ref()

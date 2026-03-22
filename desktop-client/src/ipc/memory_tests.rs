@@ -48,10 +48,12 @@ mod tests {
         let doc = MemoryDocument {
             path: "/notes/todo.md".into(),
             content: "- Buy milk\n- Fix bug #42".into(),
+            updated_at: Some("2025-03-22T10:00:00+00:00".into()),
         };
         let json = serde_json::to_value(&doc).unwrap();
         assert_eq!(json["path"], "/notes/todo.md");
         assert!(json["content"].as_str().unwrap().contains("Fix bug #42"));
+        assert_eq!(json["updated_at"], "2025-03-22T10:00:00+00:00");
     }
 
     #[test]
@@ -130,6 +132,7 @@ mod tests {
     /// interface MemoryDocument {
     ///   path: string;
     ///   content: string;
+    ///   updated_at: string | null;
     /// }
     /// ```
     #[test]
@@ -137,14 +140,16 @@ mod tests {
         let doc = MemoryDocument {
             path: "/test.md".into(),
             content: "hello".into(),
+            updated_at: Some("2025-01-01T00:00:00+00:00".into()),
         };
         let json: serde_json::Value = serde_json::to_value(&doc).unwrap();
 
         assert!(json["path"].is_string());
         assert!(json["content"].is_string());
+        assert!(json["updated_at"].is_string());
 
         let obj = json.as_object().unwrap();
-        assert_eq!(obj.len(), 2, "MemoryDocument should have exactly 2 fields");
+        assert_eq!(obj.len(), 3, "MemoryDocument should have exactly 3 fields");
     }
 
     /// 前端 MemorySearchResult 类型定义：
@@ -232,6 +237,7 @@ mod tests {
         let doc = MemoryDocument {
             path: "/empty.md".into(),
             content: "".into(),
+            updated_at: None,
         };
         let json = serde_json::to_string(&doc).unwrap();
         let parsed: MemoryDocument = serde_json::from_str(&json).unwrap();
@@ -258,6 +264,7 @@ mod tests {
         let doc = MemoryDocument {
             path: "/large.md".into(),
             content: long_content.clone(),
+            updated_at: None,
         };
         let json = serde_json::to_string(&doc).unwrap();
         let parsed: MemoryDocument = serde_json::from_str(&json).unwrap();
@@ -304,6 +311,7 @@ mod tests {
         let doc = MemoryDocument {
             path: "/multi.md".into(),
             content: "line1\nline2\r\nline3\ttab".into(),
+            updated_at: None,
         };
         let json = serde_json::to_string(&doc).unwrap();
         let parsed: MemoryDocument = serde_json::from_str(&json).unwrap();

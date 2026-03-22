@@ -9,7 +9,9 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::ipc::extensions::ExtensionInfo;
+    use crate::ipc::extensions::{
+        ExtensionInfo, ExtensionSetupField, ExtensionSetupResponse, ExtensionSetupSubmitResponse,
+    };
 
     // =========================================================================
     // 单元测试 — 正常路径
@@ -332,5 +334,208 @@ mod tests {
         assert_eq!(parsed.tools[0], "create_or_update_file");
         assert_eq!(parsed.tools[1], "search-code");
         assert_eq!(parsed.tools[2], "get.user.info");
+    }
+
+    // =========================================================================
+    // 扩展配置（Setup）— 单元测试
+    // =========================================================================
+
+    #[test]
+    fn test_setup_field_serialization() {
+        let field = ExtensionSetupField {
+            name: "api_key".into(),
+            prompt: "Enter your API key".into(),
+            optional: false,
+            provided: false,
+            auto_generate: false,
+        };
+        let json = serde_json::to_value(&field).unwrap();
+        assert_eq!(json["name"], "api_key");
+        assert_eq!(json["prompt"], "Enter your API key");
+        assert_eq!(json["optional"], false);
+        assert_eq!(json["provided"], false);
+        assert_eq!(json["auto_generate"], false);
+    }
+
+    #[test]
+    fn test_setup_field_roundtrip() {
+        let original = ExtensionSetupField {
+            name: "webhook_secret".into(),
+            prompt: "Webhook secret (auto-generated if empty)".into(),
+            optional: true,
+            provided: true,
+            auto_generate: true,
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let parsed: ExtensionSetupField = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.name, original.name);
+        assert_eq!(parsed.optional, original.optional);
+        assert_eq!(parsed.auto_generate, original.auto_generate);
+    }
+
+    #[test]
+    fn test_setup_response_serialization() {
+        let resp = ExtensionSetupResponse {
+            name: "telegram".into(),
+            kind: "WasmChannel".into(),
+            secrets: vec![
+                ExtensionSetupField {
+                    name: "bot_token".into(),
+                    prompt: "Telegram Bot Token".into(),
+                    optional: false,
+                    provided: false,
+                    auto_generate: false,
+                },
+                ExtensionSetupField {
+                    name: "webhook_secret".into(),
+                    prompt: "Webhook Secret".into(),
+                    optional: true,
+                    provided: false,
+                    auto_generate: true,
+                },
+            ],
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["name"], "telegram");
+        assert_eq!(json["kind"], "WasmChannel");
+        assert_eq!(json["secrets"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_setup_submit_response_serialization() {
+        let resp = ExtensionSetupSubmitResponse {
+            success: true,
+            message: "Extension configured successfully".into(),
+            activated: true,
+            auth_url: None,
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["success"], true);
+        assert_eq!(json["activated"], true);
+        assert!(json["auth_url"].is_null());
+    }
+
+    #[test]
+    fn test_setup_submit_response_with_auth_url() {
+        let resp = ExtensionSetupSubmitResponse {
+            success: true,
+            message: "OAuth flow started".into(),
+            activated: false,
+            auth_url: Some("https://oauth.example.com/authorize?client_id=xxx".into()),
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["success"], true);
+        assert_eq!(json["activated"], false);
+        assert!(json["auth_url"].is_string());
+    }
+
+    // =========================================================================
+    // 扩展配置（Setup）— 契约测试
+    // =========================================================================
+
+    /// 前端 ExtensionSetupField 类型定义：
+    /// ```typescript
+    /// interface ExtensionSetupField {
+    ///   name: string;
+    ///   prompt: string;
+    ///   optional: boolean;
+    ///   provided: boolean;
+    ///   auto_generate: boolean;
+    /// }
+    /// ```
+    #[test]
+    fn test_contract_setup_field_matches_frontend() {
+        let field = ExtensionSetupField {
+            name: "test".into(),
+            prompt: "Test prompt".into(),
+            optional: false,
+            provided: true,
+            auto_generate: false,
+        };
+        let json = serde_json::to_value(&field).unwrap();
+
+        assert!(json.get("name").is_some());
+        assert!(json.get("prompt").is_some());
+        assert!(json.get("optional").is_some());
+        assert!(json.get("provided").is_some());
+        assert!(json.get("auto_generate").is_some());
+
+        assert!(json["name"].is_string());
+        assert!(json["prompt"].is_string());
+        assert!(json["optional"].is_boolean());
+        assert!(json["provided"].is_boolean());
+        assert!(json["auto_generate"].is_boolean());
+
+        let obj = json.as_object().unwrap();
+        assert_eq!(obj.len(), 5, "ExtensionSetupField should have exactly 5 fields");
+    }
+
+    /// 前端 ExtensionSetupSubmitResponse 类型定义：
+    /// ```typescript
+    /// interface ExtensionSetupSubmitResponse {
+    ///   success: boolean;
+    ///   message: string;
+    ///   activated: boolean;
+    ///   auth_url: string | null;
+    /// }
+    /// ```
+    #[test]
+    fn test_contract_setup_submit_response_matches_frontend() {
+        let resp = ExtensionSetupSubmitResponse {
+            success: true,
+            message: "OK".into(),
+            activated: true,
+            auth_url: None,
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+
+        assert!(json["success"].is_boolean());
+        assert!(json["message"].is_string());
+        assert!(json["activated"].is_boolean());
+        assert!(json["auth_url"].is_null());
+
+        let obj = json.as_object().unwrap();
+        assert_eq!(obj.len(), 4, "ExtensionSetupSubmitResponse should have exactly 4 fields");
+    }
+
+    // =========================================================================
+    // 扩展配置（Setup）— 安全审计测试
+    // =========================================================================
+
+    /// 验证 setup response 不泄露实际 secret 值。
+    #[test]
+    fn test_audit_setup_response_no_secret_values() {
+        let resp = ExtensionSetupResponse {
+            name: "github-mcp".into(),
+            kind: "Mcp".into(),
+            secrets: vec![ExtensionSetupField {
+                name: "api_key".into(),
+                prompt: "GitHub API Key".into(),
+                optional: false,
+                provided: true, // 已配置，但不应包含实际值
+                auto_generate: false,
+            }],
+        };
+        let json_str = serde_json::to_string(&resp).unwrap();
+
+        // 不应包含实际的 secret 值
+        assert!(!json_str.contains("ghp_"));
+        assert!(!json_str.contains("sk-"));
+        assert!(!json_str.contains("Bearer"));
+    }
+
+    /// 验证 submit response 不泄露 OAuth client_secret。
+    #[test]
+    fn test_audit_setup_submit_no_client_secret() {
+        let resp = ExtensionSetupSubmitResponse {
+            success: true,
+            message: "Configured".into(),
+            activated: true,
+            auth_url: Some("https://oauth.example.com/authorize?client_id=public_id".into()),
+        };
+        let json_str = serde_json::to_string(&resp).unwrap();
+
+        assert!(!json_str.contains("client_secret"));
+        assert!(!json_str.contains("secret"));
     }
 }

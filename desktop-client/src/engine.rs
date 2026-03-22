@@ -26,7 +26,7 @@ use ironclaw::config::Config;
 use ironclaw::hooks::bootstrap_hooks;
 use ironclaw::llm::create_session_manager;
 
-use crate::state::AppState;
+use crate::state::{AppState, EngineState};
 use crate::safety_bridge::SafetyBridge;
 use crate::tauri_channel::{ChatEvent, TauriChannel};
 
@@ -122,9 +122,13 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         context_manager: Arc::clone(&components.context_manager),
         owner_id: config.owner_id.clone(),
     };
-    app_handle.manage(app_state);
+    // 从 Tauri managed state 获取 EngineState 并填充
+    let engine_state = app_handle.state::<EngineState>();
+    engine_state
+        .initialize(app_state)
+        .map_err(|e| anyhow::anyhow!(e))?;
 
-    tracing::info!("AppState injected into Tauri");
+    tracing::info!("AppState injected into EngineState");
 
     // ── 启动时同步 Admin Backend DLP 规则 ─────────────────────────
     // 非阻塞：同步失败不影响引擎启动，仅使用内置规则
@@ -133,16 +137,21 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         tauri::async_runtime::spawn(async move {
             // 等待引擎完全就绪后再同步
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            let state = app_handle_clone.state::<crate::state::AppState>();
-            match crate::ipc::dlp::sync_dlp_rules_from_admin(state).await {
-                Ok(result) => tracing::info!(
-                    rules = result.rules_synced,
-                    "DLP rules synced from admin backend on startup"
-                ),
-                Err(e) => tracing::warn!(
-                    error = %e,
-                    "Failed to sync DLP rules from admin backend (using built-in rules)"
-                ),
+            let engine_state = app_handle_clone.state::<EngineState>();
+            match engine_state.get() {
+                Ok(state) => {
+                    match crate::ipc::dlp::do_sync_dlp_rules(&state.safety_bridge).await {
+                        Ok(result) => tracing::info!(
+                            rules = result.rules_synced,
+                            "DLP rules synced from admin backend on startup"
+                        ),
+                        Err(e) => tracing::warn!(
+                            error = %e,
+                            "Failed to sync DLP rules from admin backend (using built-in rules)"
+                        ),
+                    }
+                }
+                Err(e) => tracing::warn!("Engine not ready for DLP sync: {}", e),
             }
         });
     }

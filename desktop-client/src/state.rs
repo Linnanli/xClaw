@@ -1,9 +1,35 @@
 //! Tauri 全局状态 — 持有 IronClaw 组件的引用。
 //!
-//! `AppState` 在引擎启动后通过 `app_handle.manage()` 注入 Tauri，
-//! 所有 Tauri Command 通过 `tauri::State<'_, AppState>` 访问 IronClaw 组件。
+//! ## 架构
+//!
+//! `EngineState` 在 Tauri `setup()` 中**同步**注入（`manage()`），
+//! 内部使用 `OnceLock<AppState>` 延迟填充。引擎异步启动完成后，
+//! 通过 `EngineState::initialize()` 设置真正的 `AppState`。
+//!
+//! 所有 Tauri Command 通过 `State<'_, EngineState>` 访问，
+//! 调用 `engine_state.get()` 获取 `&AppState`。如果引擎尚未就绪，
+//! 返回友好的错误信息而非 panic。
+//!
+//! ## 三态模型
+//!
+//! ```text
+//! Starting ──initialize()──→ Ready
+//!    │
+//!    └──set_failed()──→ Failed(reason)
+//! ```
+//!
+//! ## 启动时序
+//!
+//! ```text
+//! main.rs setup()
+//!   → app_handle.manage(EngineState::new())   // 同步注入（空壳）
+//!   → spawn(start_ironclaw_engine)            // 异步启动
+//!     → 成功: engine_state.initialize(app_state)
+//!     → 失败: engine_state.set_failed(error_msg)
+//!     → 前端收到 "engine ready" 或 "engine error" 事件
+//! ```
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, RwLock};
 
 use ironclaw::channels::IncomingMessage;
 use ironclaw::context::ContextManager;
@@ -18,7 +44,7 @@ use tokio::sync::mpsc;
 
 use crate::safety_bridge::SafetyBridge;
 
-/// Tauri 全局状态。
+/// IronClaw 引擎内部状态。
 ///
 /// 持有 IronClaw `AppComponents` 中各组件的 `Arc` 引用，
 /// 供 Tauri Command 直接调用，无需 HTTP 转发。
@@ -45,4 +71,84 @@ pub struct AppState {
     pub context_manager: Arc<ContextManager>,
     /// 实例 owner ID。
     pub owner_id: String,
+}
+
+/// Tauri managed state — 引擎就绪前安全的包装器。
+///
+/// 在 `setup()` 中同步注入 Tauri，解决引擎异步启动导致的
+/// "state not managed" 竞态条件。
+///
+/// ## 三态模型
+///
+/// - `Starting` — 引擎正在启动（`inner` 为空，`failure` 为空）
+/// - `Ready` — 引擎就绪（`inner` 已填充）
+/// - `Failed` — 引擎启动失败（`failure` 已填充）
+pub struct EngineState {
+    inner: OnceLock<AppState>,
+    /// 引擎启动失败的原因。
+    failure: RwLock<Option<String>>,
+}
+
+impl EngineState {
+    /// 创建空的引擎状态（引擎尚未就绪）。
+    pub fn new() -> Self {
+        Self {
+            inner: OnceLock::new(),
+            failure: RwLock::new(None),
+        }
+    }
+
+    /// 引擎启动完成后填充真正的状态。
+    ///
+    /// 只能调用一次，重复调用返回 `Err`。
+    pub fn initialize(&self, state: AppState) -> Result<(), String> {
+        self.inner
+            .set(state)
+            .map_err(|_| "EngineState already initialized".to_string())
+    }
+
+    /// 标记引擎启动失败。
+    ///
+    /// 后续所有 `get()` 调用将返回失败原因，而非"正在启动中"。
+    pub fn set_failed(&self, reason: String) {
+        if let Ok(mut f) = self.failure.write() {
+            *f = Some(reason);
+        }
+    }
+
+    /// 获取引擎状态引用。
+    ///
+    /// 返回值：
+    /// - `Ok(&AppState)` — 引擎就绪
+    /// - `Err("引擎启动失败: ...")` — 引擎启动失败
+    /// - `Err("引擎正在启动中，请稍后重试")` — 引擎正在启动
+    pub fn get(&self) -> Result<&AppState, String> {
+        // 优先检查是否已就绪
+        if let Some(state) = self.inner.get() {
+            return Ok(state);
+        }
+
+        // 检查是否启动失败
+        if let Ok(guard) = self.failure.read() {
+            if let Some(reason) = guard.as_ref() {
+                return Err(format!("引擎启动失败: {}", reason));
+            }
+        }
+
+        // 仍在启动中
+        Err("引擎正在启动中，请稍后重试".to_string())
+    }
+
+    /// 引擎是否已就绪。
+    pub fn is_ready(&self) -> bool {
+        self.inner.get().is_some()
+    }
+
+    /// 引擎是否启动失败。
+    pub fn is_failed(&self) -> bool {
+        self.failure
+            .read()
+            .map(|f| f.is_some())
+            .unwrap_or(false)
+    }
 }

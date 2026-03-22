@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Briefcase, Clock, CheckCircle, XCircle, AlertCircle, RefreshCw, X, Play, StopCircle } from 'lucide-react';
+import { Briefcase, Clock, CheckCircle, XCircle, AlertCircle, RefreshCw, X, Play, StopCircle, Send, History } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
-import { jobApi, JobInfo, JobDetail } from '../../utils/tauri';
+import { jobApi, JobInfo, JobDetail, JobEvent, JobEventsResponse } from '../../utils/tauri';
 
 type StatusFilter = 'all' | 'pending' | 'in_progress' | 'completed' | 'failed' | 'stuck';
 
@@ -13,6 +13,10 @@ export function JobsTab() {
   const [selectedJob, setSelectedJob] = useState<JobDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [jobEvents, setJobEvents] = useState<JobEvent[]>([]);
+  const [eventsLoading, setEventsLoading] = useState(false);
+  const [promptContent, setPromptContent] = useState('');
+  const [promptSending, setPromptSending] = useState(false);
 
   const fetchJobs = async () => {
     try {
@@ -38,6 +42,16 @@ export function JobsTab() {
       setDetailLoading(true);
       const detail = await jobApi.getJobDetail(jobId);
       setSelectedJob(detail);
+      // 加载事件历史
+      setEventsLoading(true);
+      try {
+        const eventsResp = await jobApi.getJobEvents(jobId);
+        setJobEvents(eventsResp.events);
+      } catch {
+        setJobEvents([]);
+      } finally {
+        setEventsLoading(false);
+      }
     } catch (err) {
       console.error('Failed to fetch job detail:', err);
       setError('Failed to load job detail');
@@ -65,6 +79,23 @@ export function JobsTab() {
     } catch (err) {
       console.error('Failed to restart job:', err);
       setError('Failed to restart job');
+    }
+  };
+
+  const handleSendPrompt = async (jobId: string) => {
+    if (!promptContent.trim()) return;
+    try {
+      setPromptSending(true);
+      await jobApi.sendJobPrompt(jobId, promptContent);
+      setPromptContent('');
+      // 刷新事件列表
+      const eventsResp = await jobApi.getJobEvents(jobId);
+      setJobEvents(eventsResp.events);
+    } catch (err) {
+      console.error('Failed to send prompt:', err);
+      setError('Failed to send prompt');
+    } finally {
+      setPromptSending(false);
     }
   };
 
@@ -394,6 +425,85 @@ export function JobsTab() {
                         <Play size={16} />
                         重启任务
                       </button>
+                    )}
+                  </div>
+
+                  {/* 后续提示 */}
+                  {(selectedJob.status === 'in_progress' || selectedJob.status === 'pending') && (
+                    <div className={`mt-6 pt-4 border-t ${theme === 'dark' ? 'border-[#1a2942]' : 'border-[#eee]'}`}>
+                      <h4 className={`text-sm font-medium mb-2 ${theme === 'dark' ? 'text-gray-400' : 'text-[#666]'}`}>
+                        <Send size={14} className="inline mr-1" />
+                        发送后续提示
+                      </h4>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={promptContent}
+                          onChange={(e) => setPromptContent(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && handleSendPrompt(selectedJob.id)}
+                          placeholder="输入提示内容..."
+                          className={`flex-1 px-3 py-2 text-sm border rounded-lg focus:outline-none ${
+                            theme === 'dark'
+                              ? 'bg-[#0a1628] border-[#1a2942] focus:border-[#5ddad5] text-white placeholder-gray-500'
+                              : 'bg-white border-[#ddd] focus:border-[#667eea] text-[#333] placeholder-gray-400'
+                          }`}
+                        />
+                        <button
+                          onClick={() => handleSendPrompt(selectedJob.id)}
+                          disabled={promptSending || !promptContent.trim()}
+                          className={`px-4 py-2 rounded-lg text-sm font-medium transition-opacity disabled:opacity-50 ${
+                            theme === 'dark'
+                              ? 'bg-[#5ddad5] text-[#0f1d35] hover:opacity-90'
+                              : 'bg-[#667eea] text-white hover:opacity-90'
+                          }`}
+                        >
+                          {promptSending ? '发送中...' : '发送'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 事件历史 */}
+                  <div className={`mt-6 pt-4 border-t ${theme === 'dark' ? 'border-[#1a2942]' : 'border-[#eee]'}`}>
+                    <h4 className={`text-sm font-medium mb-3 flex items-center gap-2 ${theme === 'dark' ? 'text-gray-400' : 'text-[#666]'}`}>
+                      <History size={14} />
+                      事件历史
+                    </h4>
+                    {eventsLoading ? (
+                      <p className={`text-sm ${theme === 'dark' ? 'text-gray-500' : 'text-[#999]'}`}>加载中...</p>
+                    ) : jobEvents.length === 0 ? (
+                      <p className={`text-sm ${theme === 'dark' ? 'text-gray-500' : 'text-[#999]'}`}>暂无事件</p>
+                    ) : (
+                      <div className="space-y-2 max-h-60 overflow-y-auto">
+                        {jobEvents.map((event) => (
+                          <div
+                            key={event.id}
+                            className={`p-3 rounded-lg text-sm ${
+                              theme === 'dark' ? 'bg-[#0a1628]' : 'bg-[#f5f5f5]'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-1">
+                              <span className={`font-medium ${
+                                event.event_type === 'error' ? 'text-red-400' :
+                                event.event_type === 'completed' ? 'text-green-400' :
+                                theme === 'dark' ? 'text-[#5ddad5]' : 'text-[#667eea]'
+                              }`}>
+                                {event.event_type}
+                              </span>
+                              <span className={`text-xs ${theme === 'dark' ? 'text-gray-500' : 'text-[#999]'}`}>
+                                {new Date(event.created_at).toLocaleString('zh-CN')}
+                              </span>
+                            </div>
+                            {event.data && typeof event.data === 'object' && Object.keys(event.data).length > 0 && (
+                              <pre className={`text-xs mt-1 whitespace-pre-wrap break-all ${
+                                theme === 'dark' ? 'text-gray-400' : 'text-[#666]'
+                              }`}>
+                                {JSON.stringify(event.data, null, 2).substring(0, 200)}
+                              </pre>
+                            )}
+                          </div>
+                        ))}
+                      </div>
                     )}
                   </div>
                 </>

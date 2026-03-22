@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::state::AppState;
+use crate::state::EngineState;
 
 /// 线程摘要（前端展示用）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,9 +30,10 @@ pub struct ThreadMessage {
 /// 列出对话线程。
 #[tauri::command]
 pub async fn ic_list_threads(
-    state: State<'_, AppState>,
+    state: State<'_, EngineState>,
     limit: Option<i64>,
 ) -> Result<Vec<ThreadSummary>, String> {
+    let state = state.get()?;
     let db = state.db.as_ref().ok_or("Database not available")?;
 
     let conversations = db
@@ -55,7 +56,8 @@ pub async fn ic_list_threads(
 
 /// 创建新对话线程。
 #[tauri::command]
-pub async fn ic_create_thread(state: State<'_, AppState>) -> Result<String, String> {
+pub async fn ic_create_thread(state: State<'_, EngineState>) -> Result<String, String> {
+    let state = state.get()?;
     let db = state.db.as_ref().ok_or("Database not available")?;
 
     let id = db
@@ -70,10 +72,11 @@ pub async fn ic_create_thread(state: State<'_, AppState>) -> Result<String, Stri
 /// 获取线程消息历史。
 #[tauri::command]
 pub async fn ic_get_thread_history(
-    state: State<'_, AppState>,
+    state: State<'_, EngineState>,
     thread_id: String,
     limit: Option<i64>,
 ) -> Result<Vec<ThreadMessage>, String> {
+    let state = state.get()?;
     let db = state.db.as_ref().ok_or("Database not available")?;
 
     let uuid = uuid::Uuid::parse_str(&thread_id)

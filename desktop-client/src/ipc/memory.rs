@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::state::AppState;
+use crate::state::EngineState;
 
 /// 记忆条目（目录列表用）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,6 +21,7 @@ pub struct MemoryEntry {
 pub struct MemoryDocument {
     pub path: String,
     pub content: String,
+    pub updated_at: Option<String>,
 }
 
 /// 搜索结果。
@@ -34,9 +35,10 @@ pub struct MemorySearchResult {
 /// 列出记忆目录。
 #[tauri::command]
 pub async fn ic_memory_list(
-    state: State<'_, AppState>,
+    state: State<'_, EngineState>,
     path: Option<String>,
 ) -> Result<Vec<MemoryEntry>, String> {
+    let state = state.get()?;
     let ws = state
         .workspace
         .as_ref()
@@ -62,9 +64,10 @@ pub async fn ic_memory_list(
 /// 读取记忆文档。
 #[tauri::command]
 pub async fn ic_memory_read(
-    state: State<'_, AppState>,
+    state: State<'_, EngineState>,
     path: String,
 ) -> Result<MemoryDocument, String> {
+    let state = state.get()?;
     let ws = state
         .workspace
         .as_ref()
@@ -78,16 +81,18 @@ pub async fn ic_memory_read(
     Ok(MemoryDocument {
         path,
         content: doc.content,
+        updated_at: Some(doc.updated_at.to_rfc3339()),
     })
 }
 
 /// 写入记忆文档。
 #[tauri::command]
 pub async fn ic_memory_write(
-    state: State<'_, AppState>,
+    state: State<'_, EngineState>,
     path: String,
     content: String,
 ) -> Result<(), String> {
+    let state = state.get()?;
     let ws = state
         .workspace
         .as_ref()
@@ -104,9 +109,10 @@ pub async fn ic_memory_write(
 /// 删除记忆文档。
 #[tauri::command]
 pub async fn ic_memory_delete(
-    state: State<'_, AppState>,
+    state: State<'_, EngineState>,
     path: String,
 ) -> Result<(), String> {
+    let state = state.get()?;
     let ws = state
         .workspace
         .as_ref()
@@ -123,10 +129,11 @@ pub async fn ic_memory_delete(
 /// 搜索记忆。
 #[tauri::command]
 pub async fn ic_memory_search(
-    state: State<'_, AppState>,
+    state: State<'_, EngineState>,
     query: String,
     limit: Option<usize>,
 ) -> Result<Vec<MemorySearchResult>, String> {
+    let state = state.get()?;
     let ws = state
         .workspace
         .as_ref()

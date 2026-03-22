@@ -18,8 +18,8 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::safety_bridge::BridgeScanResult;
-use crate::state::AppState;
+use crate::safety_bridge::{BridgeScanResult, SafetyBridge};
+use crate::state::EngineState;
 
 // ============================================================================
 // 前端兼容类型
@@ -109,9 +109,10 @@ pub struct SyncDlpResult {
 /// 前端 `useDlpScan.ts` 的 `scanUserInput()` 调用此命令。
 #[tauri::command]
 pub async fn scan_user_input(
-    state: State<'_, AppState>,
+    state: State<'_, EngineState>,
     content: String,
 ) -> Result<DlpScanResponse, String> {
+    let state = state.get()?;
     let result = state.safety_bridge.scan_user_input(&content);
     Ok(DlpScanResponse::from(result))
 }
@@ -121,9 +122,10 @@ pub async fn scan_user_input(
 /// 前端 `useDlpScan.ts` 的 `scanOutboundRequest()` 调用此命令。
 #[tauri::command]
 pub async fn scan_outbound_request(
-    state: State<'_, AppState>,
+    state: State<'_, EngineState>,
     body: String,
 ) -> Result<DlpScanResponse, String> {
+    let state = state.get()?;
     let result = state.safety_bridge.scan_outbound(&body);
     Ok(DlpScanResponse::from(result))
 }
@@ -133,9 +135,10 @@ pub async fn scan_outbound_request(
 /// 前端 `useDlpScan.ts` 的 `sanitizeForStorage()` 调用此命令。
 #[tauri::command]
 pub async fn sanitize_for_storage(
-    state: State<'_, AppState>,
+    state: State<'_, EngineState>,
     content: String,
 ) -> Result<String, String> {
+    let state = state.get()?;
     state.safety_bridge.sanitize_for_storage(&content)
 }
 
@@ -145,11 +148,12 @@ pub async fn sanitize_for_storage(
 /// 新架构下复用 `scan_outbound` 扫描请求体。
 #[tauri::command]
 pub async fn check_http_request(
-    state: State<'_, AppState>,
+    state: State<'_, EngineState>,
     url: String,
     headers: Vec<(String, String)>,
     body: Option<Vec<u8>>,
 ) -> Result<(), String> {
+    let state = state.get()?;
     // 扫描 URL
     let url_result = state.safety_bridge.scan_outbound(&url);
     if url_result.was_blocked {
@@ -186,8 +190,9 @@ pub async fn check_http_request(
 /// 从 SafetyBridge 的脱敏配置构建前端期望的格式。
 #[tauri::command]
 pub async fn get_dlp_config(
-    state: State<'_, AppState>,
+    state: State<'_, EngineState>,
 ) -> Result<DlpConfigResponse, String> {
+    let state = state.get()?;
     let config = state.safety_bridge.sanitization_config();
 
     Ok(DlpConfigResponse {
@@ -220,8 +225,9 @@ pub async fn update_dlp_config(
 /// 前端 `useDlpScan.ts` 的 `getDlpStatistics()` 调用此命令。
 #[tauri::command]
 pub async fn get_dlp_statistics(
-    state: State<'_, AppState>,
+    state: State<'_, EngineState>,
 ) -> Result<DlpStatisticsResponse, String> {
+    let state = state.get()?;
     let stats = state.safety_bridge.cumulative_stats();
 
     Ok(DlpStatisticsResponse {
@@ -244,7 +250,15 @@ pub async fn get_dlp_statistics(
 /// - `dictionary`：从 `pattern` 字段读取逗号分隔的关键字，转换为正则
 #[tauri::command]
 pub async fn sync_dlp_rules_from_admin(
-    state: State<'_, AppState>,
+    state: State<'_, EngineState>,
+) -> Result<SyncDlpResult, String> {
+    let state = state.get()?;
+    do_sync_dlp_rules(&state.safety_bridge).await
+}
+
+/// 内部同步逻辑（不依赖 Tauri State，可从 engine.rs 直接调用）。
+pub async fn do_sync_dlp_rules(
+    safety_bridge: &SafetyBridge,
 ) -> Result<SyncDlpResult, String> {
     tracing::info!("Syncing DLP rules from admin backend");
 
@@ -381,7 +395,7 @@ pub async fn sync_dlp_rules_from_admin(
     }
 
     let rules_synced = patterns.len();
-    state.safety_bridge.reload_patterns(patterns);
+    safety_bridge.reload_patterns(patterns);
     tracing::info!("DLP rules synced: {} rules loaded", rules_synced);
 
     Ok(SyncDlpResult {
