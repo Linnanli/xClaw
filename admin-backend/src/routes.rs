@@ -1997,61 +1997,114 @@ async fn get_client_stats(
 }
 
 // ==================== 技能管理 API ====================
+// 代理到 IronClaw Web Gateway 的 /api/skills 端点
 
 async fn get_skills(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
-        .map_err(|e| Error::Database(e.to_string()))?;
+    let url = format!("{}/api/skills", state.gateway_url);
+    match state.http_client.get(&url).send().await {
+        Ok(resp) => {
+            if resp.status().is_success() {
+                let body: serde_json::Value = resp.json().await
+                    .map_err(|e| Error::Internal(format!("解析 Gateway 响应失败: {}", e)))?;
+                Ok(Json(body))
+            } else {
+                // Gateway 返回错误，返回空列表
+                Ok(Json(json!({ "skills": [], "count": 0 })))
+            }
+        }
+        Err(_) => {
+            // Gateway 不可用，从本地数据库回退查询
+            let client = state.db_pool.get().await
+                .map_err(|e| Error::Database(e.to_string()))?;
 
-    let rows = client.query(
-        "SELECT id, name, COALESCE(description, '') as description, version, COALESCE(author, '') as author, enabled, created_at, updated_at FROM skills ORDER BY name ASC",
-        &[],
-    ).await.map_err(|e| Error::Database(e.to_string()))?;
+            let rows = client.query(
+                "SELECT id, name, COALESCE(description, '') as description, version, COALESCE(author, '') as author, enabled, created_at, updated_at FROM skills ORDER BY name ASC",
+                &[],
+            ).await.map_err(|e| Error::Database(e.to_string()))?;
 
-    let skills: Vec<serde_json::Value> = rows.iter().map(|r| {
-        json!({
-            "id": r.get::<_, uuid::Uuid>(0).to_string(),
-            "name": r.get::<_, String>(1),
-            "description": r.get::<_, String>(2),
-            "version": r.get::<_, String>(3),
-            "author": r.get::<_, String>(4),
-            "enabled": r.get::<_, bool>(5),
-            "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(6).to_rfc3339(),
-            "updated_at": r.get::<_, chrono::DateTime<chrono::Utc>>(7).to_rfc3339(),
-        })
-    }).collect();
+            let skills: Vec<serde_json::Value> = rows.iter().map(|r| {
+                json!({
+                    "id": r.get::<_, uuid::Uuid>(0).to_string(),
+                    "name": r.get::<_, String>(1),
+                    "description": r.get::<_, String>(2),
+                    "version": r.get::<_, String>(3),
+                    "author": r.get::<_, String>(4),
+                    "enabled": r.get::<_, bool>(5),
+                    "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(6).to_rfc3339(),
+                    "updated_at": r.get::<_, chrono::DateTime<chrono::Utc>>(7).to_rfc3339(),
+                })
+            }).collect();
 
-    Ok(Json(json!({ "skills": skills })))
+            Ok(Json(json!({ "skills": skills, "count": skills.len() })))
+        }
+    }
 }
 
 // ==================== 插件管理 API ====================
+// 代理到 IronClaw Web Gateway 的 /api/extensions 端点
 
 async fn get_plugins(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
-        .map_err(|e| Error::Database(e.to_string()))?;
+    let url = format!("{}/api/extensions", state.gateway_url);
+    match state.http_client.get(&url).send().await {
+        Ok(resp) => {
+            if resp.status().is_success() {
+                let body: serde_json::Value = resp.json().await
+                    .map_err(|e| Error::Internal(format!("解析 Gateway 响应失败: {}", e)))?;
+                // 将 extensions 格式转换为前端期望的 plugins 格式
+                let extensions = body.get("extensions").cloned().unwrap_or(json!([]));
+                let plugins: Vec<serde_json::Value> = if let Some(arr) = extensions.as_array() {
+                    arr.iter().map(|ext| {
+                        json!({
+                            "id": ext.get("name").and_then(|n| n.as_str()).unwrap_or(""),
+                            "name": ext.get("display_name").and_then(|n| n.as_str())
+                                .or_else(|| ext.get("name").and_then(|n| n.as_str()))
+                                .unwrap_or(""),
+                            "description": ext.get("description").and_then(|n| n.as_str()).unwrap_or(""),
+                            "version": ext.get("version").and_then(|n| n.as_str()).unwrap_or("1.0.0"),
+                            "author": "",
+                            "enabled": ext.get("active").and_then(|n| n.as_bool()).unwrap_or(false),
+                            "created_at": chrono::Utc::now().to_rfc3339(),
+                            "updated_at": chrono::Utc::now().to_rfc3339(),
+                        })
+                    }).collect()
+                } else {
+                    vec![]
+                };
+                Ok(Json(json!({ "plugins": plugins })))
+            } else {
+                Ok(Json(json!({ "plugins": [] })))
+            }
+        }
+        Err(_) => {
+            // Gateway 不可用，从本地数据库回退查询
+            let client = state.db_pool.get().await
+                .map_err(|e| Error::Database(e.to_string()))?;
 
-    let rows = client.query(
-        "SELECT id, name, COALESCE(description, '') as description, version, COALESCE(author, '') as author, enabled, created_at, updated_at FROM plugins ORDER BY name ASC",
-        &[],
-    ).await.map_err(|e| Error::Database(e.to_string()))?;
+            let rows = client.query(
+                "SELECT id, name, COALESCE(description, '') as description, version, COALESCE(author, '') as author, enabled, created_at, updated_at FROM plugins ORDER BY name ASC",
+                &[],
+            ).await.map_err(|e| Error::Database(e.to_string()))?;
 
-    let plugins: Vec<serde_json::Value> = rows.iter().map(|r| {
-        json!({
-            "id": r.get::<_, uuid::Uuid>(0).to_string(),
-            "name": r.get::<_, String>(1),
-            "description": r.get::<_, String>(2),
-            "version": r.get::<_, String>(3),
-            "author": r.get::<_, String>(4),
-            "enabled": r.get::<_, bool>(5),
-            "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(6).to_rfc3339(),
-            "updated_at": r.get::<_, chrono::DateTime<chrono::Utc>>(7).to_rfc3339(),
-        })
-    }).collect();
+            let plugins: Vec<serde_json::Value> = rows.iter().map(|r| {
+                json!({
+                    "id": r.get::<_, uuid::Uuid>(0).to_string(),
+                    "name": r.get::<_, String>(1),
+                    "description": r.get::<_, String>(2),
+                    "version": r.get::<_, String>(3),
+                    "author": r.get::<_, String>(4),
+                    "enabled": r.get::<_, bool>(5),
+                    "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(6).to_rfc3339(),
+                    "updated_at": r.get::<_, chrono::DateTime<chrono::Utc>>(7).to_rfc3339(),
+                })
+            }).collect();
 
-    Ok(Json(json!({ "plugins": plugins })))
+            Ok(Json(json!({ "plugins": plugins })))
+        }
+    }
 }
 
 // ==================== 系统配置 API ====================

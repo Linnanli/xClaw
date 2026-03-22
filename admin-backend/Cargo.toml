@@ -20,6 +20,9 @@ dotenvy = "0.15"
 async-trait = "0.1"
 regex = "1"
 
+# HTTP client for proxying to IronClaw Gateway
+reqwest = { version = "0.12", features = ["json"] }
+
 # Shared authentication
 ironclaw_auth = { path = "../crates/ironclaw_auth" }
 

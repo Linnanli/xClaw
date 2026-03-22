@@ -30,8 +30,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let pool = db_config.create_pool(None, tokio_postgres::NoTls)?;
 
+    // IronClaw Gateway URL
+    let gateway_url = env::var("IRONCLAW_GATEWAY_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:38080".to_string());
+
+    // HTTP client for proxying requests to IronClaw Gateway
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+
     // Create app state
-    let state = AppState { db_pool: pool };
+    let state = AppState {
+        db_pool: pool,
+        http_client,
+        gateway_url,
+    };
 
     // Create router
     let app = routes::create_router(state);

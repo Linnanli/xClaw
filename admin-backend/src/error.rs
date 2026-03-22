@@ -38,6 +38,9 @@ pub enum Error {
     #[error("Internal server error")]
     InternalError,
 
+    #[error("Internal error: {0}")]
+    Internal(String),
+
     #[error("Not found: {0}")]
     NotFound(String),
 
@@ -60,6 +63,7 @@ impl IntoResponse for Error {
             Error::TokenExpired => (StatusCode::UNAUTHORIZED, "Token expired"),
             Error::Unauthorized => (StatusCode::FORBIDDEN, "Unauthorized"),
             Error::InternalError => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
+            Error::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
             Error::NotFound(_) => (StatusCode::NOT_FOUND, "Resource not found"),
             Error::Validation(_) => (StatusCode::BAD_REQUEST, "Validation error"),
         };

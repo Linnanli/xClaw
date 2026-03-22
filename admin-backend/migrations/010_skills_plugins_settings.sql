@@ -1,14 +1,5 @@
--- 技能表
-CREATE TABLE IF NOT EXISTS skills (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name VARCHAR(255) NOT NULL UNIQUE,
-    description TEXT DEFAULT '',
-    version VARCHAR(50) NOT NULL DEFAULT '1.0.0',
-    author VARCHAR(255) DEFAULT '',
-    enabled BOOLEAN NOT NULL DEFAULT true,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+-- 技能表（可能已存在，补充 enabled 列）
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT true;
 
 -- 插件表
 CREATE TABLE IF NOT EXISTS plugins (
