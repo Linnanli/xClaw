@@ -87,6 +87,15 @@ fn main() {
             // ── 工具审批 ────────────────────────────────────────
             desktop_client::ipc::ic_approve_tool,
             desktop_client::ipc::ic_deny_tool,
+            // ── DLP 桥接（兼容前端 useDlpScan.ts）──────────────
+            desktop_client::ipc::scan_user_input,
+            desktop_client::ipc::scan_outbound_request,
+            desktop_client::ipc::sanitize_for_storage,
+            desktop_client::ipc::check_http_request,
+            desktop_client::ipc::get_dlp_config,
+            desktop_client::ipc::update_dlp_config,
+            desktop_client::ipc::get_dlp_statistics,
+            desktop_client::ipc::sync_dlp_rules_from_admin,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

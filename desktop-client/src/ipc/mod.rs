@@ -5,6 +5,7 @@
 
 pub mod approval;
 pub mod chat;
+pub mod dlp;
 pub mod extensions;
 pub mod memory;
 pub mod skills;
@@ -37,6 +38,7 @@ mod approval_tests;
 // 统一 re-export 所有 Tauri Command
 pub use approval::*;
 pub use chat::*;
+pub use dlp::*;
 pub use extensions::*;
 pub use memory::*;
 pub use skills::*;

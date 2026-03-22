@@ -16,6 +16,8 @@ use ironclaw::tools::ToolRegistry;
 use ironclaw::workspace::Workspace;
 use tokio::sync::mpsc;
 
+use crate::safety_bridge::SafetyBridge;
+
 /// Tauri 全局状态。
 ///
 /// 持有 IronClaw `AppComponents` 中各组件的 `Arc` 引用，
@@ -37,6 +39,8 @@ pub struct AppState {
     pub skill_catalog: Option<Arc<SkillCatalog>>,
     /// 安全层（DLP / 内容过滤）。
     pub safety: Arc<SafetyLayer>,
+    /// 安全桥接器（统一 SafetyLayer + DLP 格式保留脱敏）。
+    pub safety_bridge: Arc<SafetyBridge>,
     /// 上下文管理器（任务审批等）。
     pub context_manager: Arc<ContextManager>,
     /// 实例 owner ID。

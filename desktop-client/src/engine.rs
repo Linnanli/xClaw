@@ -27,6 +27,7 @@ use ironclaw::hooks::bootstrap_hooks;
 use ironclaw::llm::create_session_manager;
 
 use crate::state::AppState;
+use crate::safety_bridge::SafetyBridge;
 use crate::tauri_channel::{ChatEvent, TauriChannel};
 
 /// 启动 IronClaw 引擎。
@@ -102,6 +103,12 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     .await;
 
     // ── Phase 6: 注入 Tauri 全局状态 ──────────────────────────────
+    let safety_bridge = Arc::new(SafetyBridge::new(
+        Arc::clone(&components.safety),
+        None, // 使用默认 DLP 脱敏配置
+        None, // DataReporter 在 admin_sync 阶段注入
+    ));
+
     let app_state = AppState {
         msg_sender,
         db: components.db.clone(),
@@ -111,6 +118,7 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         skill_registry: components.skill_registry.clone(),
         skill_catalog: components.skill_catalog.clone(),
         safety: Arc::clone(&components.safety),
+        safety_bridge,
         context_manager: Arc::clone(&components.context_manager),
         owner_id: config.owner_id.clone(),
     };

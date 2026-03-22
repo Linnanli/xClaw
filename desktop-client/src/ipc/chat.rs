@@ -28,13 +28,11 @@ pub struct SendMessageResponse {
 /// 构造 `IncomingMessage` 并通过 `msg_sender` 注入 Agent 消息循环。
 /// AI 回复通过 `chat-event` Tauri 事件异步推送到前端。
 ///
-/// # 参数
-///
-/// - `thread_id`: 对话线程 ID
-/// - `content`: 消息内容（应已经过前端 DLP 扫描）
-///
 /// # 安全
 ///
+/// - 消息内容先经过 SafetyBridge 扫描（密钥检测 + PII 脱敏）
+/// - 检测到密钥时**故障安全**拒绝发送
+/// - PII 信息格式保留脱敏后再发送给 Agent
 /// - 消息内容不写入日志（防止敏感信息泄露）
 /// - 仅记录 message_id 和 thread_id 用于追踪
 #[tauri::command]
@@ -45,7 +43,33 @@ pub async fn send_chat_message(
 ) -> Result<SendMessageResponse, String> {
     let message_id = uuid::Uuid::new_v4().to_string();
 
-    let msg = IncomingMessage::new("tauri", &state.owner_id, &content)
+    // ── SafetyBridge 扫描：密钥检测 + PII 脱敏 ────────────────────
+    let scan_result = state.safety_bridge.scan_user_input(&content);
+
+    if scan_result.was_blocked {
+        tracing::warn!(
+            message_id = %message_id,
+            thread_id = %thread_id,
+            "Message blocked by SafetyBridge"
+        );
+        return Err(scan_result.block_reason.unwrap_or_else(|| {
+            "消息包含敏感信息，已被安全策略拦截".to_string()
+        }));
+    }
+
+    // 使用脱敏后的内容构造消息
+    let safe_content = if scan_result.had_sensitive_data {
+        tracing::debug!(
+            message_id = %message_id,
+            pii_matches = scan_result.stats.pii_matches,
+            "Message sanitized by SafetyBridge"
+        );
+        scan_result.sanitized_content
+    } else {
+        content
+    };
+
+    let msg = IncomingMessage::new("tauri", &state.owner_id, &safe_content)
         .with_thread(&thread_id)
         .with_owner_id(&state.owner_id);
 

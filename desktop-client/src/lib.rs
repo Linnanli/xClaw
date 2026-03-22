@@ -31,6 +31,7 @@ pub mod engine;
 pub mod ipc;
 pub mod admin_sync;
 pub mod data_reporter;
+pub mod safety_bridge;
 
 // 测试模块（仅在测试时编译）
 #[cfg(test)]
@@ -44,6 +45,14 @@ mod admin_sync_tests;
 #[cfg(test)]
 #[path = "data_reporter_tests.rs"]
 mod data_reporter_tests;
+
+#[cfg(test)]
+#[path = "safety_bridge_tests.rs"]
+mod safety_bridge_tests;
+
+#[cfg(test)]
+#[path = "integration_tests.rs"]
+mod integration_tests;
 
 #[cfg(test)]
 mod tests {
