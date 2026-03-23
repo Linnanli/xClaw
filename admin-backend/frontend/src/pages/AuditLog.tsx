@@ -177,20 +177,21 @@ export const AuditLog: React.FC = () => {
     setDetailVisible(true);
   }, []);
 
-  // 导出
+  // 导出（使用后端 API）
   const handleExport = useCallback(async () => {
     try {
-      // 导出当前筛选后的数据为 CSV
-      const csvHeader = '时间,操作人,操作类型,详情\n';
-      const csvRows = filteredLogs.map((log) => {
-        const time = formatTime(log.created_at);
-        const user = log.username || '系统';
-        const action = getActionLabel(log.action);
-        const details = log.details.replace(/"/g, '""');
-        return `"${time}","${user}","${action}","${details}"`;
-      }).join('\n');
-      const csvContent = '\uFEFF' + csvHeader + csvRows; // BOM for Excel
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
+      const params: Record<string, string> = {};
+      if (dateRange && dateRange[0]) params.start_time = dateRange[0].toISOString();
+      if (dateRange && dateRange[1]) params.end_time = dateRange[1].toISOString();
+      if (actionFilter) params.action = actionFilter;
+      if (searchText) params.username = searchText;
+
+      const response = await apiClient.get('/audit-logs/export', {
+        params,
+        responseType: 'blob',
+      });
+
+      const blob = new Blob([response.data], { type: 'text/csv;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -201,7 +202,7 @@ export const AuditLog: React.FC = () => {
     } catch {
       message.error('导出失败');
     }
-  }, [filteredLogs]);
+  }, [dateRange, actionFilter, searchText]);
 
   // 分页变化
   const handleTableChange = useCallback((pagination: TablePaginationConfig) => {

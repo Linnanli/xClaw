@@ -4,13 +4,13 @@ use crate::handlers::{
     get_dlp_policies_handler, get_policies_handler, get_policy_version_handler,
     get_sensitive_ops_policies_handler,
 };
-use crate::models::{self, CreateUserRequest, LoginRequest, LoginResponse, RefreshTokenRequest, CreateRoleRequest, UpdateRoleRequest, AssignPermissionsRequest, CreateDlpRuleRequest, UpdateDlpRuleRequest, CreateDictionaryRequest, UpdateDictionaryRequest};
+use crate::models::{self, CreateUserRequest, LoginRequest, LoginResponse, RefreshTokenRequest, CreateRoleRequest, UpdateRoleRequest, AssignPermissionsRequest, CreateDlpRuleRequest, UpdateDlpRuleRequest, CreateDictionaryRequest, UpdateDictionaryRequest, UpdateUserRequest, CreateDepartmentRequest, UpdateDepartmentRequest, AuditLogExportQuery, UpdateClientConfigRequest};
 use crate::AppState;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -26,7 +26,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/auth/login", post(login))
         .route("/api/auth/refresh", post(refresh_token))
         .route("/api/users", get(get_users).post(create_user))
-        .route("/api/users/{id}", get(get_user).delete(delete_user))
+        .route("/api/users/{id}", get(get_user).put(update_user).delete(delete_user))
         .route("/api/users/{id}/roles", get(get_user_roles).post(assign_user_roles))
         .route("/api/roles", get(get_roles).post(create_role))
         .route("/api/roles/{id}", get(get_role).put(update_role).delete(delete_role))
@@ -40,6 +40,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/dlp-rules/{id}", put(update_dlp_rule).delete(delete_dlp_rule))
         .route("/api/dlp-dictionaries", get(get_dictionaries).post(create_dictionary))
         .route("/api/dlp-dictionaries/{id}", get(get_dictionary).put(update_dictionary).delete(delete_dictionary))
+        .route("/api/audit-logs/export", get(export_audit_logs))
         .route("/api/audit-logs", get(get_audit_logs))
         .route("/api/audit-logs/report", post(report_audit_event))
         .route("/api/sensitive-operations", get(get_sensitive_operations).post(create_sensitive_operation))
@@ -47,10 +48,13 @@ pub fn create_router(state: AppState) -> Router {
         // 策略变更记录 API
         .route("/api/policy-changes", get(get_policy_changes))
         .route("/api/policy-changes/stats", get(get_policy_change_stats))
-        // 客户端管理 API
-        .route("/api/clients", get(get_clients))
+        // 客户端管理 API（注意：push-policy-all 必须在 {id} 之前注册）
+        .route("/api/clients/push-policy-all", post(push_policy_all))
         .route("/api/clients/stats", get(get_client_stats))
+        .route("/api/clients", get(get_clients))
         .route("/api/clients/{id}", get(get_client_detail).delete(delete_client_record))
+        .route("/api/clients/{id}/disconnect", post(disconnect_client))
+        .route("/api/clients/{id}/push-policy", post(push_policy_to_client))
         // 新增：策略查询 API（供 Desktop Client 使用）
         .route("/api/policies", get(get_policies_handler))
         .route("/api/policies/dlp", get(get_dlp_policies_handler))
@@ -58,14 +62,25 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/policies/version", get(get_policy_version_handler))
         // 技能管理 API
         .route("/api/skills", get(get_skills))
+        .route("/api/skills/{id}/enable", post(enable_skill))
+        .route("/api/skills/{id}/disable", post(disable_skill))
         // 插件管理 API
         .route("/api/plugins", get(get_plugins))
+        .route("/api/plugins/{id}/enable", post(enable_plugin))
+        .route("/api/plugins/{id}/disable", post(disable_plugin))
         // 系统配置 API
         .route("/api/settings", get(get_settings).put(update_settings))
-        // 客户端配置下发 API（供 Desktop Client 使用）
-        .route("/api/client-config", get(get_client_config))
+        // 客户端配置下发 API
+        .route("/api/client-config", get(get_client_config).put(update_client_config))
         // 客户端数据上报 API（供 Desktop Client 使用）
         .route("/api/client-reports", post(post_client_reports))
+        // 仪表盘 API
+        .route("/api/dashboard/stats", get(get_dashboard_stats))
+        .route("/api/dashboard/activity", get(get_dashboard_activity))
+        .route("/api/dashboard/trends", get(get_dashboard_trends))
+        // 部门管理 API
+        .route("/api/departments", get(get_departments).post(create_department))
+        .route("/api/departments/{id}", put(update_department).delete(delete_department))
         .with_state(state)
 }
 
@@ -196,8 +211,9 @@ async fn get_users(
 
     let rows = client
         .query(
-            "SELECT u.id, u.username, u.email, u.created_at, u.updated_at
+            "SELECT u.id, u.username, u.email, u.created_at, u.updated_at, u.department_id, d.name as dept_name
              FROM users u
+             LEFT JOIN departments d ON u.department_id = d.id
              ORDER BY u.created_at DESC",
             &[],
         )
@@ -230,6 +246,14 @@ async fn get_users(
             })
             .collect();
 
+        let department = match row.get::<_, Option<Uuid>>(5) {
+            Some(dept_id) => json!({
+                "id": dept_id,
+                "name": row.get::<_, Option<String>>(6),
+            }),
+            None => json!(null),
+        };
+
         users.push(json!({
             "id": user_id,
             "username": row.get::<_, String>(1),
@@ -237,6 +261,7 @@ async fn get_users(
             "created_at": row.get::<_, chrono::DateTime<chrono::Utc>>(3),
             "updated_at": row.get::<_, chrono::DateTime<chrono::Utc>>(4),
             "roles": roles,
+            "department": department,
         }));
     }
 
@@ -2240,7 +2265,7 @@ async fn get_client_config(
             let updated_at: DateTime<Utc> = r.get(9);
             ClientConfigResponse {
                 llm_backend: r.get(0),
-                llm_api_key: r.get(1),
+                llm_api_key: r.get::<_, Option<String>>(1).map(|k| mask_api_key(&k)),
                 llm_model: r.get(2),
                 llm_base_url: r.get(3),
                 safety_enabled: r.get(4),
@@ -2338,3 +2363,1124 @@ async fn post_client_reports(
     ))
 }
 
+
+
+// ============================================================================
+// 辅助函数
+// ============================================================================
+
+/// API Key 脱敏：保留前 4 位，其余替换为 ****
+fn mask_api_key(key: &str) -> String {
+    if key.len() <= 4 {
+        "****".to_string()
+    } else {
+        format!("{}****", &key[..4])
+    }
+}
+
+/// CSV 字段转义：包含逗号、换行或双引号时用双引号包裹
+fn escape_csv_field(s: &str) -> String {
+    if s.contains(',') || s.contains('\n') || s.contains('\r') || s.contains('"') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+/// 邮箱格式验证
+fn is_valid_email(email: &str) -> bool {
+    let re = regex::Regex::new(r"^[^@\s]+@[^@\s]+\.[^@\s]+$").unwrap();
+    re.is_match(email)
+}
+
+// ============================================================================
+// 用户编辑 (PUT /api/users/{id})
+// ============================================================================
+
+async fn update_user(
+    State(state): State<AppState>,
+    Path(user_id): Path<Uuid>,
+    Json(payload): Json<UpdateUserRequest>,
+) -> Result<Json<serde_json::Value>> {
+    // 验证 email 格式
+    if let Some(ref email) = payload.email {
+        if !is_valid_email(email) {
+            return Err(Error::Validation("邮箱格式不正确".to_string()));
+        }
+    }
+
+    // 验证密码长度
+    if let Some(ref password) = payload.password {
+        if password.len() < 8 || password.len() > 128 {
+            return Err(Error::Validation("密码长度必须在 8-128 字符之间".to_string()));
+        }
+    }
+
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 检查用户是否存在
+    let existing = client
+        .query_opt("SELECT id FROM users WHERE id = $1", &[&user_id])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    if existing.is_none() {
+        return Err(Error::UserNotFound);
+    }
+
+    let now = chrono::Utc::now();
+    let mut set_clauses = vec!["updated_at = $1".to_string()];
+    let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = vec![Box::new(now)];
+    let mut param_idx = 2u32;
+    let mut changed_fields: Vec<String> = vec![];
+
+    if let Some(ref email) = payload.email {
+        set_clauses.push(format!("email = ${}", param_idx));
+        params.push(Box::new(email.clone()));
+        param_idx += 1;
+        changed_fields.push("email".to_string());
+    }
+
+    if let Some(ref password) = payload.password {
+        let auth = AuthManager::new(
+            std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string()),
+        );
+        let password_hash = auth.hash_password(password)?;
+        set_clauses.push(format!("password_hash = ${}", param_idx));
+        params.push(Box::new(password_hash));
+        param_idx += 1;
+        changed_fields.push("password".to_string());
+    }
+
+    if let Some(ref dept_id_opt) = payload.department_id {
+        set_clauses.push(format!("department_id = ${}", param_idx));
+        params.push(Box::new(*dept_id_opt));
+        param_idx += 1;
+        changed_fields.push("department_id".to_string());
+    }
+
+    // 如果没有任何字段需要更新
+    if changed_fields.is_empty() {
+        return Err(Error::Validation("至少需要提供一个要更新的字段".to_string()));
+    }
+
+    params.push(Box::new(user_id));
+
+    let sql = format!(
+        "UPDATE users SET {} WHERE id = ${} RETURNING id, username, email, created_at, updated_at",
+        set_clauses.join(", "),
+        param_idx
+    );
+
+    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+        params.iter().map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+
+    let row = client
+        .query_one(&sql, &param_refs)
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 写入审计日志
+    let details = format!("更新用户 {}，修改字段: {}", row.get::<_, String>(1), changed_fields.join(", "));
+    write_audit_log(&client, user_id, "update_user", &details).await;
+
+    Ok(Json(json!({
+        "id": row.get::<_, Uuid>(0),
+        "username": row.get::<_, String>(1),
+        "email": row.get::<_, String>(2),
+        "created_at": row.get::<_, chrono::DateTime<chrono::Utc>>(3),
+        "updated_at": row.get::<_, chrono::DateTime<chrono::Utc>>(4),
+    })))
+}
+
+
+// ============================================================================
+// 仪表盘 API (Dashboard)
+// ============================================================================
+
+async fn get_dashboard_stats(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let total_users: i64 = client
+        .query_one("SELECT COUNT(*) FROM users", &[])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
+        .get(0);
+
+    let online_clients: i64 = client
+        .query_one("SELECT COUNT(*) FROM registered_clients WHERE online = true", &[])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
+        .get(0);
+
+    let dlp_blocked_today: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM audit_logs WHERE action = 'dlp_block' AND created_at >= CURRENT_DATE",
+            &[],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
+        .get(0);
+
+    let sensitive_ops_today: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM audit_logs WHERE action LIKE 'sensitive_%' AND created_at >= CURRENT_DATE",
+            &[],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
+        .get(0);
+
+    Ok(Json(json!({
+        "total_users": total_users,
+        "online_clients": online_clients,
+        "dlp_blocked_today": dlp_blocked_today,
+        "sensitive_ops_today": sensitive_ops_today,
+    })))
+}
+
+async fn get_dashboard_activity(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let rows = client
+        .query(
+            "SELECT a.id, u.username, a.action, a.details, a.created_at
+             FROM audit_logs a
+             LEFT JOIN users u ON a.user_id = u.id
+             ORDER BY a.created_at DESC
+             LIMIT 20",
+            &[],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let logs: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<_, Uuid>(0),
+                "username": r.get::<_, Option<String>>(1),
+                "action": r.get::<_, String>(2),
+                "details": r.get::<_, String>(3),
+                "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(4),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({ "logs": logs })))
+}
+
+async fn get_dashboard_trends(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 近 7 天用户活跃度（按审计日志中不同 user_id 计数）
+    let user_activity_rows = client
+        .query(
+            "SELECT d::date as date, COUNT(DISTINCT a.user_id) as count
+             FROM generate_series(CURRENT_DATE - INTERVAL '6 days', CURRENT_DATE, '1 day') d
+             LEFT JOIN audit_logs a ON DATE(a.created_at) = d::date
+             GROUP BY d::date
+             ORDER BY d::date",
+            &[],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let user_activity: Vec<_> = user_activity_rows
+        .iter()
+        .map(|r| {
+            json!({
+                "date": r.get::<_, chrono::NaiveDate>(0).to_string(),
+                "count": r.get::<_, i64>(1),
+            })
+        })
+        .collect();
+
+    // 近 7 天 DLP 拦截次数
+    let dlp_blocks_rows = client
+        .query(
+            "SELECT d::date as date, COUNT(a.id) as count
+             FROM generate_series(CURRENT_DATE - INTERVAL '6 days', CURRENT_DATE, '1 day') d
+             LEFT JOIN audit_logs a ON DATE(a.created_at) = d::date AND a.action = 'dlp_block'
+             GROUP BY d::date
+             ORDER BY d::date",
+            &[],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let dlp_blocks: Vec<_> = dlp_blocks_rows
+        .iter()
+        .map(|r| {
+            json!({
+                "date": r.get::<_, chrono::NaiveDate>(0).to_string(),
+                "count": r.get::<_, i64>(1),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "user_activity": user_activity,
+        "dlp_blocks": dlp_blocks,
+    })))
+}
+
+
+// ============================================================================
+// 技能/插件启用禁用 (Skill/Plugin Enable/Disable)
+// ============================================================================
+
+async fn toggle_skill(
+    state: &AppState,
+    skill_id: Uuid,
+    enabled: bool,
+) -> Result<Json<serde_json::Value>> {
+    let db = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 检查技能是否存在（先查本地数据库）
+    let row = db
+        .query_opt("SELECT id, name FROM skills WHERE id = $1", &[&skill_id])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    if row.is_none() {
+        return Err(Error::SkillNotFound);
+    }
+    let skill_name: String = row.unwrap().get(1);
+
+    // 尝试代理到 Gateway
+    let action = if enabled { "enable" } else { "disable" };
+    let gateway_url = format!("{}/api/skills/{}/{}", state.gateway_url, skill_id, action);
+    let gateway_synced = match state.http_client.post(&gateway_url).send().await {
+        Ok(resp) if resp.status().is_success() => true,
+        _ => false,
+    };
+
+    // 更新本地数据库
+    let now = chrono::Utc::now();
+    db.execute(
+        "UPDATE skills SET enabled = $1, updated_at = $2 WHERE id = $3",
+        &[&enabled, &now, &skill_id],
+    )
+    .await
+    .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 审计日志
+    let audit_action = if enabled { "enable_skill" } else { "disable_skill" };
+    let system_user = Uuid::nil();
+    write_audit_log(&db, system_user, audit_action, &format!("{}: {}", audit_action, skill_name)).await;
+
+    Ok(Json(json!({
+        "id": skill_id,
+        "name": skill_name,
+        "enabled": enabled,
+        "gateway_synced": gateway_synced,
+    })))
+}
+
+async fn enable_skill(
+    State(state): State<AppState>,
+    Path(skill_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>> {
+    toggle_skill(&state, skill_id, true).await
+}
+
+async fn disable_skill(
+    State(state): State<AppState>,
+    Path(skill_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>> {
+    toggle_skill(&state, skill_id, false).await
+}
+
+async fn toggle_plugin(
+    state: &AppState,
+    plugin_id: Uuid,
+    enabled: bool,
+) -> Result<Json<serde_json::Value>> {
+    let db = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let row = db
+        .query_opt("SELECT id, name FROM plugins WHERE id = $1", &[&plugin_id])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    if row.is_none() {
+        return Err(Error::PluginNotFound);
+    }
+    let plugin_name: String = row.unwrap().get(1);
+
+    let action = if enabled { "enable" } else { "disable" };
+    let gateway_url = format!("{}/api/extensions/{}/{}", state.gateway_url, plugin_id, action);
+    let gateway_synced = match state.http_client.post(&gateway_url).send().await {
+        Ok(resp) if resp.status().is_success() => true,
+        _ => false,
+    };
+
+    let now = chrono::Utc::now();
+    db.execute(
+        "UPDATE plugins SET enabled = $1, updated_at = $2 WHERE id = $3",
+        &[&enabled, &now, &plugin_id],
+    )
+    .await
+    .map_err(|e| Error::Database(e.to_string()))?;
+
+    let audit_action = if enabled { "enable_plugin" } else { "disable_plugin" };
+    let system_user = Uuid::nil();
+    write_audit_log(&db, system_user, audit_action, &format!("{}: {}", audit_action, plugin_name)).await;
+
+    Ok(Json(json!({
+        "id": plugin_id,
+        "name": plugin_name,
+        "enabled": enabled,
+        "gateway_synced": gateway_synced,
+    })))
+}
+
+async fn enable_plugin(
+    State(state): State<AppState>,
+    Path(plugin_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>> {
+    toggle_plugin(&state, plugin_id, true).await
+}
+
+async fn disable_plugin(
+    State(state): State<AppState>,
+    Path(plugin_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>> {
+    toggle_plugin(&state, plugin_id, false).await
+}
+
+
+// ============================================================================
+// 客户端配置更新 (PUT /api/client-config)
+// ============================================================================
+
+async fn update_client_config(
+    State(state): State<AppState>,
+    Json(payload): Json<UpdateClientConfigRequest>,
+) -> Result<Json<serde_json::Value>> {
+    // 验证 max_cost_per_day_cents
+    if let Some(cost) = payload.max_cost_per_day_cents {
+        if cost < 0 {
+            return Err(Error::Validation("max_cost_per_day_cents 必须 >= 0".to_string()));
+        }
+    }
+
+    // 验证 llm_base_url
+    if let Some(ref url) = payload.llm_base_url {
+        if !url.is_empty() && !url.starts_with("http://") && !url.starts_with("https://") {
+            return Err(Error::Validation("llm_base_url 格式不正确，需以 http:// 或 https:// 开头".to_string()));
+        }
+    }
+
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let now = chrono::Utc::now();
+
+    // 检查全局配置是否存在
+    let existing = client
+        .query_opt("SELECT id, config_version FROM client_configs WHERE client_id IS NULL", &[])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let config_version: i64;
+
+    if let Some(row) = existing {
+        let current_version: i64 = row.get(1);
+        config_version = current_version + 1;
+        let config_id: Uuid = row.get(0);
+
+        // 动态构建 UPDATE
+        let mut set_clauses = vec![
+            "config_version = $1".to_string(),
+            "updated_at = $2".to_string(),
+        ];
+        let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = vec![
+            Box::new(config_version),
+            Box::new(now),
+        ];
+        let mut param_idx = 3u32;
+        let mut changed_fields: Vec<String> = vec![];
+
+        if let Some(ref v) = payload.llm_backend {
+            set_clauses.push(format!("llm_backend = ${}", param_idx));
+            params.push(Box::new(v.clone()));
+            param_idx += 1;
+            changed_fields.push("llm_backend".to_string());
+        }
+        if let Some(ref v) = payload.llm_api_key {
+            set_clauses.push(format!("llm_api_key = ${}", param_idx));
+            params.push(Box::new(v.clone()));
+            param_idx += 1;
+            changed_fields.push("llm_api_key".to_string());
+        }
+        if let Some(ref v) = payload.llm_model {
+            set_clauses.push(format!("llm_model = ${}", param_idx));
+            params.push(Box::new(v.clone()));
+            param_idx += 1;
+            changed_fields.push("llm_model".to_string());
+        }
+        if let Some(ref v) = payload.llm_base_url {
+            set_clauses.push(format!("llm_base_url = ${}", param_idx));
+            params.push(Box::new(v.clone()));
+            param_idx += 1;
+            changed_fields.push("llm_base_url".to_string());
+        }
+        if let Some(v) = payload.safety_enabled {
+            set_clauses.push(format!("safety_enabled = ${}", param_idx));
+            params.push(Box::new(v));
+            param_idx += 1;
+            changed_fields.push("safety_enabled".to_string());
+        }
+        if let Some(v) = payload.skills_enabled {
+            set_clauses.push(format!("skills_enabled = ${}", param_idx));
+            params.push(Box::new(v));
+            param_idx += 1;
+            changed_fields.push("skills_enabled".to_string());
+        }
+        if let Some(v) = payload.extensions_enabled {
+            set_clauses.push(format!("extensions_enabled = ${}", param_idx));
+            params.push(Box::new(v));
+            param_idx += 1;
+            changed_fields.push("extensions_enabled".to_string());
+        }
+        if let Some(v) = payload.max_cost_per_day_cents {
+            set_clauses.push(format!("max_cost_per_day_cents = ${}", param_idx));
+            params.push(Box::new(v));
+            param_idx += 1;
+            changed_fields.push("max_cost_per_day_cents".to_string());
+        }
+
+        params.push(Box::new(config_id));
+
+        let sql = format!(
+            "UPDATE client_configs SET {} WHERE id = ${}",
+            set_clauses.join(", "),
+            param_idx
+        );
+
+        let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+            params.iter().map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+
+        client.execute(&sql, &param_refs).await
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        // 审计日志（不记录 api_key 值）
+        let system_user = Uuid::nil();
+        write_audit_log(
+            &client,
+            system_user,
+            "update_client_config",
+            &format!("更新客户端配置 v{}，变更字段: {}", config_version, changed_fields.join(", ")),
+        ).await;
+    } else {
+        // 不存在全局配置，创建一条
+        config_version = 1;
+        let id = Uuid::new_v4();
+        client.execute(
+            "INSERT INTO client_configs (id, client_id, llm_backend, llm_api_key, llm_model, llm_base_url, safety_enabled, skills_enabled, extensions_enabled, max_cost_per_day_cents, config_version, updated_at, created_at)
+             VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+            &[
+                &id,
+                &payload.llm_backend, &payload.llm_api_key, &payload.llm_model, &payload.llm_base_url,
+                &payload.safety_enabled, &payload.skills_enabled, &payload.extensions_enabled,
+                &payload.max_cost_per_day_cents, &config_version, &now, &now,
+            ],
+        ).await.map_err(|e| Error::Database(e.to_string()))?;
+
+        let system_user = Uuid::nil();
+        write_audit_log(&client, system_user, "update_client_config", "创建全局客户端配置 v1").await;
+    }
+
+    Ok(Json(json!({
+        "message": "配置保存成功",
+        "config_version": config_version,
+        "updated_at": now,
+    })))
+}
+
+
+// ============================================================================
+// 审计日志导出 (GET /api/audit-logs/export)
+// ============================================================================
+
+async fn export_audit_logs(
+    State(state): State<AppState>,
+    Query(params): Query<AuditLogExportQuery>,
+) -> Result<axum::response::Response> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let mut conditions: Vec<String> = vec![];
+    let mut query_params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = vec![];
+    let mut idx = 1u32;
+
+    if let Some(ref start_time) = params.start_time {
+        let dt = chrono::DateTime::parse_from_rfc3339(start_time)
+            .or_else(|_| chrono::NaiveDateTime::parse_from_str(start_time, "%Y-%m-%dT%H:%M:%S")
+                .map(|ndt| ndt.and_utc().fixed_offset()))
+            .map_err(|_| Error::Validation("start_time 格式不正确，需为 ISO 8601 格式".to_string()))?;
+        conditions.push(format!("a.created_at >= ${}", idx));
+        query_params.push(Box::new(dt.with_timezone(&chrono::Utc)));
+        idx += 1;
+    }
+
+    if let Some(ref end_time) = params.end_time {
+        let dt = chrono::DateTime::parse_from_rfc3339(end_time)
+            .or_else(|_| chrono::NaiveDateTime::parse_from_str(end_time, "%Y-%m-%dT%H:%M:%S")
+                .map(|ndt| ndt.and_utc().fixed_offset()))
+            .map_err(|_| Error::Validation("end_time 格式不正确，需为 ISO 8601 格式".to_string()))?;
+        conditions.push(format!("a.created_at <= ${}", idx));
+        query_params.push(Box::new(dt.with_timezone(&chrono::Utc)));
+        idx += 1;
+    }
+
+    if let Some(ref action) = params.action {
+        conditions.push(format!("a.action = ${}", idx));
+        query_params.push(Box::new(action.clone()));
+        idx += 1;
+    }
+
+    if let Some(ref username) = params.username {
+        let pattern = format!("%{}%", username);
+        conditions.push(format!("u.username ILIKE ${}", idx));
+        query_params.push(Box::new(pattern));
+        let _ = idx;
+    }
+
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    };
+
+    let sql = format!(
+        "SELECT a.id, u.username, a.action, a.details, a.created_at
+         FROM audit_logs a
+         LEFT JOIN users u ON a.user_id = u.id
+         {}
+         ORDER BY a.created_at DESC",
+        where_clause
+    );
+
+    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+        query_params.iter().map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+
+    let rows = client.query(&sql, &param_refs).await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 构建 CSV
+    let bom = "\u{FEFF}";
+    let header = "时间,操作人,操作类型,详情,日志ID\n";
+    let mut csv = format!("{}{}", bom, header);
+
+    for row in &rows {
+        let id: Uuid = row.get(0);
+        let username: Option<String> = row.get(1);
+        let action: String = row.get(2);
+        let details: String = row.get(3);
+        let created_at: chrono::DateTime<chrono::Utc> = row.get(4);
+
+        csv.push_str(&format!(
+            "{},{},{},{},{}\n",
+            escape_csv_field(&created_at.to_rfc3339()),
+            escape_csv_field(username.as_deref().unwrap_or("系统")),
+            escape_csv_field(&action),
+            escape_csv_field(&details),
+            escape_csv_field(&id.to_string()),
+        ));
+    }
+
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let filename = format!("audit-logs-{}.csv", today);
+
+    Ok(axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/csv; charset=utf-8")
+        .header("Content-Disposition", format!("attachment; filename=\"{}\"", filename))
+        .body(axum::body::Body::from(csv))
+        .unwrap())
+}
+
+
+// ============================================================================
+// 客户端强制下线与策略推送 (Client Operations)
+// ============================================================================
+
+/// POST /api/clients/{id}/disconnect — 强制客户端下线
+///
+/// 将客户端标记为离线状态，并记录审计日志。
+async fn disconnect_client(
+    State(state): State<AppState>,
+    Path(client_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 检查客户端是否存在
+    let existing = client
+        .query_opt(
+            "SELECT id, username, online FROM registered_clients WHERE id = $1",
+            &[&client_id],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
+        .ok_or(Error::ClientNotFound)?;
+
+    let username: Option<String> = existing.try_get::<_, Option<String>>(1).unwrap_or(None);
+    let was_online: bool = existing.get(2);
+
+    if !was_online {
+        return Ok(Json(json!({
+            "message": "客户端已处于离线状态",
+            "client_id": client_id,
+            "was_online": false,
+        })));
+    }
+
+    let now = chrono::Utc::now();
+    client
+        .execute(
+            "UPDATE registered_clients SET online = false, updated_at = $1 WHERE id = $2",
+            &[&now, &client_id],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 审计日志
+    let system_user = Uuid::nil();
+    let details = format!(
+        "强制下线客户端: {} (用户: {})",
+        client_id,
+        username.as_deref().unwrap_or("未知")
+    );
+    write_audit_log(&client, system_user, "disconnect_client", &details).await;
+
+    Ok(Json(json!({
+        "message": "客户端已强制下线",
+        "client_id": client_id,
+        "was_online": true,
+        "disconnected_at": now,
+    })))
+}
+
+/// POST /api/clients/{id}/push-policy — 向指定客户端推送策略
+///
+/// 更新客户端的 policy_version 字段，标记需要同步最新策略。
+async fn push_policy_to_client(
+    State(state): State<AppState>,
+    Path(client_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 检查客户端是否存在
+    let existing = client
+        .query_opt(
+            "SELECT id, username FROM registered_clients WHERE id = $1",
+            &[&client_id],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
+        .ok_or(Error::ClientNotFound)?;
+
+    let username: Option<String> = existing.try_get::<_, Option<String>>(1).unwrap_or(None);
+
+    // 生成新的策略版本号（时间戳格式）
+    let now = chrono::Utc::now();
+    let policy_version = now.format("%Y%m%d%H%M%S").to_string();
+
+    client
+        .execute(
+            "UPDATE registered_clients SET policy_version = $1, updated_at = $2 WHERE id = $3",
+            &[&policy_version, &now, &client_id],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 审计日志
+    let system_user = Uuid::nil();
+    let details = format!(
+        "推送策略到客户端: {} (用户: {}, 版本: {})",
+        client_id,
+        username.as_deref().unwrap_or("未知"),
+        policy_version
+    );
+    write_audit_log(&client, system_user, "push_policy", &details).await;
+
+    Ok(Json(json!({
+        "message": "策略推送成功",
+        "client_id": client_id,
+        "policy_version": policy_version,
+        "pushed_at": now,
+    })))
+}
+
+/// POST /api/clients/push-policy-all — 向所有在线客户端推送策略
+async fn push_policy_all(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let now = chrono::Utc::now();
+    let policy_version = now.format("%Y%m%d%H%M%S").to_string();
+
+    let result = client
+        .execute(
+            "UPDATE registered_clients SET policy_version = $1, updated_at = $2 WHERE online = true",
+            &[&policy_version, &now],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 审计日志
+    let system_user = Uuid::nil();
+    let details = format!(
+        "批量推送策略到所有在线客户端: {} 台 (版本: {})",
+        result, policy_version
+    );
+    write_audit_log(&client, system_user, "push_policy_all", &details).await;
+
+    Ok(Json(json!({
+        "message": format!("策略已推送到 {} 台在线客户端", result),
+        "updated_count": result,
+        "policy_version": policy_version,
+        "pushed_at": now,
+    })))
+}
+
+
+// ============================================================================
+// 部门管理 CRUD (Department Management)
+// ============================================================================
+
+/// GET /api/departments — 获取部门列表
+///
+/// LEFT JOIN 计算每个部门的成员数量。
+/// 当 token_quota_enabled = false 时，token_quota_per_day 返回 null。
+async fn get_departments(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let rows = client
+        .query(
+            "SELECT d.id, d.name, d.description, d.token_quota_enabled, d.token_quota_per_day,
+                    d.created_at, d.updated_at,
+                    COUNT(u.id) as member_count
+             FROM departments d
+             LEFT JOIN users u ON u.department_id = d.id
+             GROUP BY d.id, d.name, d.description, d.token_quota_enabled, d.token_quota_per_day,
+                      d.created_at, d.updated_at
+             ORDER BY d.name ASC",
+            &[],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let departments: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            let quota_enabled: bool = r.get(3);
+            let quota_per_day: Option<i32> = if quota_enabled {
+                r.get(4)
+            } else {
+                None
+            };
+
+            json!({
+                "id": r.get::<_, Uuid>(0),
+                "name": r.get::<_, String>(1),
+                "description": r.get::<_, Option<String>>(2),
+                "token_quota_enabled": quota_enabled,
+                "token_quota_per_day": quota_per_day,
+                "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(5),
+                "updated_at": r.get::<_, chrono::DateTime<chrono::Utc>>(6),
+                "member_count": r.get::<_, i64>(7),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({ "departments": departments })))
+}
+
+/// POST /api/departments — 创建部门
+///
+/// 验证：
+/// - name 长度 2-100 字符
+/// - name 唯一性（409 Conflict）
+/// - token_quota 一致性：启用限额时必须提供 token_quota_per_day
+async fn create_department(
+    State(state): State<AppState>,
+    Json(payload): Json<CreateDepartmentRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>)> {
+    // 验证名称长度
+    let name = payload.name.trim().to_string();
+    if name.len() < 2 || name.len() > 100 {
+        return Err(Error::Validation("部门名称长度必须在 2-100 字符之间".to_string()));
+    }
+
+    // 验证 token_quota 一致性
+    let quota_enabled = payload.token_quota_enabled.unwrap_or(false);
+    if quota_enabled && payload.token_quota_per_day.is_none() {
+        return Err(Error::Validation(
+            "启用 Token 限额时必须提供 token_quota_per_day".to_string(),
+        ));
+    }
+    if let Some(quota) = payload.token_quota_per_day {
+        if quota < 0 {
+            return Err(Error::Validation("token_quota_per_day 不能为负数".to_string()));
+        }
+    }
+
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 检查名称唯一性
+    let existing = client
+        .query_opt("SELECT id FROM departments WHERE name = $1", &[&name])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    if existing.is_some() {
+        return Err(Error::Conflict(format!("部门名称 '{}' 已存在", name)));
+    }
+
+    let dept_id = Uuid::new_v4();
+    let now = chrono::Utc::now();
+    let quota_per_day = if quota_enabled {
+        payload.token_quota_per_day
+    } else {
+        None
+    };
+
+    client
+        .execute(
+            "INSERT INTO departments (id, name, description, token_quota_enabled, token_quota_per_day, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            &[&dept_id, &name, &payload.description, &quota_enabled, &quota_per_day, &now, &now],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 审计日志
+    let system_user = Uuid::nil();
+    write_audit_log(
+        &client,
+        system_user,
+        "create_department",
+        &format!("创建部门: {} (限额: {})", name, if quota_enabled { "启用" } else { "关闭" }),
+    )
+    .await;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "id": dept_id,
+            "name": name,
+            "description": payload.description,
+            "token_quota_enabled": quota_enabled,
+            "token_quota_per_day": quota_per_day,
+            "created_at": now,
+            "updated_at": now,
+            "member_count": 0,
+        })),
+    ))
+}
+
+/// PUT /api/departments/{id} — 更新部门
+async fn update_department(
+    State(state): State<AppState>,
+    Path(dept_id): Path<Uuid>,
+    Json(payload): Json<UpdateDepartmentRequest>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 检查部门是否存在
+    let existing = client
+        .query_opt("SELECT id FROM departments WHERE id = $1", &[&dept_id])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    if existing.is_none() {
+        return Err(Error::DepartmentNotFound);
+    }
+
+    // 验证名称
+    if let Some(ref name) = payload.name {
+        let trimmed = name.trim();
+        if trimmed.len() < 2 || trimmed.len() > 100 {
+            return Err(Error::Validation("部门名称长度必须在 2-100 字符之间".to_string()));
+        }
+        // 检查名称唯一性（排除自身）
+        let dup = client
+            .query_opt(
+                "SELECT id FROM departments WHERE name = $1 AND id != $2",
+                &[&trimmed.to_string(), &dept_id],
+            )
+            .await
+            .map_err(|e| Error::Database(e.to_string()))?;
+        if dup.is_some() {
+            return Err(Error::Conflict(format!("部门名称 '{}' 已存在", trimmed)));
+        }
+    }
+
+    let now = chrono::Utc::now();
+    let mut set_clauses = vec!["updated_at = $1".to_string()];
+    let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = vec![Box::new(now)];
+    let mut param_idx = 2u32;
+    let mut changed_fields: Vec<String> = vec![];
+
+    if let Some(ref name) = payload.name {
+        set_clauses.push(format!("name = ${}", param_idx));
+        params.push(Box::new(name.trim().to_string()));
+        param_idx += 1;
+        changed_fields.push("name".to_string());
+    }
+
+    if let Some(ref description) = payload.description {
+        set_clauses.push(format!("description = ${}", param_idx));
+        params.push(Box::new(description.clone()));
+        param_idx += 1;
+        changed_fields.push("description".to_string());
+    }
+
+    if let Some(quota_enabled) = payload.token_quota_enabled {
+        set_clauses.push(format!("token_quota_enabled = ${}", param_idx));
+        params.push(Box::new(quota_enabled));
+        param_idx += 1;
+        changed_fields.push("token_quota_enabled".to_string());
+    }
+
+    if let Some(ref quota_per_day) = payload.token_quota_per_day {
+        set_clauses.push(format!("token_quota_per_day = ${}", param_idx));
+        params.push(Box::new(*quota_per_day));
+        param_idx += 1;
+        changed_fields.push("token_quota_per_day".to_string());
+    }
+
+    if changed_fields.is_empty() {
+        return Err(Error::Validation("至少需要提供一个要更新的字段".to_string()));
+    }
+
+    params.push(Box::new(dept_id));
+
+    let sql = format!(
+        "UPDATE departments SET {} WHERE id = ${}
+         RETURNING id, name, description, token_quota_enabled, token_quota_per_day, created_at, updated_at",
+        set_clauses.join(", "),
+        param_idx
+    );
+
+    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+        params.iter().map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+
+    let row = client
+        .query_one(&sql, &param_refs)
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 审计日志
+    let system_user = Uuid::nil();
+    write_audit_log(
+        &client,
+        system_user,
+        "update_department",
+        &format!("更新部门 {}，修改字段: {}", row.get::<_, String>(1), changed_fields.join(", ")),
+    )
+    .await;
+
+    // 查询成员数
+    let count_row = client
+        .query_one(
+            "SELECT COUNT(*) FROM users WHERE department_id = $1",
+            &[&dept_id],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+    let member_count: i64 = count_row.get(0);
+
+    let quota_enabled: bool = row.get(3);
+    let quota_per_day: Option<i32> = if quota_enabled { row.get(4) } else { None };
+
+    Ok(Json(json!({
+        "id": row.get::<_, Uuid>(0),
+        "name": row.get::<_, String>(1),
+        "description": row.get::<_, Option<String>>(2),
+        "token_quota_enabled": quota_enabled,
+        "token_quota_per_day": quota_per_day,
+        "created_at": row.get::<_, chrono::DateTime<chrono::Utc>>(5),
+        "updated_at": row.get::<_, chrono::DateTime<chrono::Utc>>(6),
+        "member_count": member_count,
+    })))
+}
+
+/// DELETE /api/departments/{id} — 删除部门
+///
+/// 如果部门下还有用户，返回 400 错误。
+async fn delete_department(
+    State(state): State<AppState>,
+    Path(dept_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 检查部门是否存在
+    let existing = client
+        .query_opt(
+            "SELECT id, name FROM departments WHERE id = $1",
+            &[&dept_id],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
+        .ok_or(Error::DepartmentNotFound)?;
+
+    let dept_name: String = existing.get(1);
+
+    // 检查是否有用户属于该部门
+    let user_count: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM users WHERE department_id = $1",
+            &[&dept_id],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
+        .get(0);
+
+    if user_count > 0 {
+        return Err(Error::DepartmentHasUsers);
+    }
+
+    client
+        .execute("DELETE FROM departments WHERE id = $1", &[&dept_id])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 审计日志
+    let system_user = Uuid::nil();
+    write_audit_log(
+        &client,
+        system_user,
+        "delete_department",
+        &format!("删除部门: {}", dept_name),
+    )
+    .await;
+
+    Ok(Json(json!({ "message": "删除成功" })))
+}

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Table, Button, Tag, Input, Empty, Card, Row, Col, Statistic } from 'antd';
+import { Table, Button, Tag, Input, Empty, Card, Row, Col, Statistic, Switch, message } from 'antd';
 import {
   ReloadOutlined,
   SearchOutlined,
@@ -47,6 +47,17 @@ export const PluginList: React.FC = () => {
     return p.name.toLowerCase().includes(kw) || (p.description || '').toLowerCase().includes(kw);
   });
 
+  const handleToggle = useCallback(async (plugin: Plugin) => {
+    const action = plugin.enabled ? 'disable' : 'enable';
+    try {
+      await apiClient.post(`/plugins/${plugin.id}/${action}`);
+      message.success(`${plugin.name} 已${plugin.enabled ? '禁用' : '启用'}`);
+      loadPlugins();
+    } catch {
+      message.error(`操作失败`);
+    }
+  }, [loadPlugins]);
+
   const columns: ColumnsType<Plugin> = [
     {
       title: '插件名称',
@@ -75,6 +86,15 @@ export const PluginList: React.FC = () => {
       key: 'author',
       width: 120,
       render: (author: string | undefined) => author || <span style={{ color: '#bfbfbf' }}>-</span>,
+    },
+    {
+      title: '状态',
+      dataIndex: 'enabled',
+      key: 'enabled',
+      width: 100,
+      render: (enabled: boolean, record: Plugin) => (
+        <Switch checked={enabled} onChange={() => handleToggle(record)} checkedChildren="启用" unCheckedChildren="禁用" />
+      ),
     },
     {
       title: '更新时间',

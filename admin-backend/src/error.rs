@@ -46,6 +46,21 @@ pub enum Error {
 
     #[error("Validation error: {0}")]
     Validation(String),
+
+    #[error("Department has users")]
+    DepartmentHasUsers,
+
+    #[error("Department not found")]
+    DepartmentNotFound,
+
+    #[error("Skill not found")]
+    SkillNotFound,
+
+    #[error("Plugin not found")]
+    PluginNotFound,
+
+    #[error("Client not found")]
+    ClientNotFound,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -66,6 +81,11 @@ impl IntoResponse for Error {
             Error::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
             Error::NotFound(_) => (StatusCode::NOT_FOUND, "Resource not found"),
             Error::Validation(_) => (StatusCode::BAD_REQUEST, "Validation error"),
+            Error::DepartmentHasUsers => (StatusCode::BAD_REQUEST, "该部门下还有用户，无法删除"),
+            Error::DepartmentNotFound => (StatusCode::NOT_FOUND, "Department not found"),
+            Error::SkillNotFound => (StatusCode::NOT_FOUND, "Skill not found"),
+            Error::PluginNotFound => (StatusCode::NOT_FOUND, "Plugin not found"),
+            Error::ClientNotFound => (StatusCode::NOT_FOUND, "Client not found"),
         };
 
         let body = Json(json!({

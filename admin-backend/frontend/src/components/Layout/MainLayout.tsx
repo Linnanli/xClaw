@@ -12,6 +12,7 @@ import {
   LogoutOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  ApartmentOutlined,
 } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../../store/authStore';
@@ -65,6 +66,11 @@ export const MainLayout: React.FC = () => {
       label: '客户端管理',
     },
     {
+      key: '/departments',
+      icon: <ApartmentOutlined />,
+      label: '部门管理',
+    },
+    {
       key: '/extensions',
       icon: <AppstoreOutlined />,
       label: '扩展管理',
@@ -74,9 +80,13 @@ export const MainLayout: React.FC = () => {
       ],
     },
     {
-      key: '/settings',
+      key: '/settings-group',
       icon: <SettingOutlined />,
       label: '系统配置',
+      children: [
+        { key: '/settings', label: '系统设置' },
+        { key: '/client-config', label: '客户端配置' },
+      ],
     },
     {
       key: '/reports',
@@ -150,10 +160,13 @@ export const MainLayout: React.FC = () => {
       '/security/policy-versions': '策略版本',
       '/audit': '审计日志',
       '/clients': '客户端管理',
+      '/departments': '部门管理',
       '/extensions': '扩展管理',
       '/extensions/skills': '技能管理',
       '/extensions/plugins': '插件管理',
       '/settings': '系统配置',
+      '/settings-group': '系统配置',
+      '/client-config': '客户端配置',
       '/reports': '统计报表',
     };
 

@@ -1,15 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Button, Space, Modal, message, Popconfirm, Tag } from 'antd';
-import { PlusOutlined, DeleteOutlined, ReloadOutlined, TeamOutlined } from '@ant-design/icons';
+import { Table, Button, Space, Popconfirm, Tag, message } from 'antd';
+import { PlusOutlined, DeleteOutlined, ReloadOutlined, TeamOutlined, EditOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { CreateUserModal } from '../../components/Users/CreateUserModal';
 import { AssignRolesModal } from '../../components/Users/AssignRolesModal';
+import { EditUserModal } from '../../components/Users/EditUserModal';
 import { apiClient } from '../../api/client';
 import type { User } from '../../types';
 import '../../styles/UserList.css';
 
 interface UserWithRoles extends User {
   roles?: Array<{ id: string; name: string }>;
+  department?: { id: string; name: string } | null;
 }
 
 export const UserList: React.FC = () => {
@@ -17,6 +19,7 @@ export const UserList: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [createModalVisible, setCreateModalVisible] = useState(false);
   const [assignRolesModalVisible, setAssignRolesModalVisible] = useState(false);
+  const [editModalVisible, setEditModalVisible] = useState(false);
   const [selectedUser, setSelectedUser] = useState<UserWithRoles | null>(null);
 
   // 加载用户列表
@@ -30,6 +33,19 @@ export const UserList: React.FC = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  // 打开编辑模态框
+  const handleEdit = (user: UserWithRoles) => {
+    setSelectedUser(user);
+    setEditModalVisible(true);
+  };
+
+  // 编辑成功回调
+  const handleEditSuccess = () => {
+    setEditModalVisible(false);
+    setSelectedUser(null);
+    loadUsers();
   };
 
   // 打开分配角色模态框
@@ -100,6 +116,16 @@ export const UserList: React.FC = () => {
       ),
     },
     {
+      title: '部门',
+      key: 'department',
+      width: 120,
+      render: (_, record) => record.department ? (
+        <Tag color="cyan">{record.department.name}</Tag>
+      ) : (
+        <Tag color="default">未分配</Tag>
+      ),
+    },
+    {
       title: '创建时间',
       dataIndex: 'created_at',
       key: 'created_at',
@@ -120,6 +146,14 @@ export const UserList: React.FC = () => {
       fixed: 'right',
       render: (_, record) => (
         <Space size="small">
+          <Button
+            type="link"
+            size="small"
+            icon={<EditOutlined />}
+            onClick={() => handleEdit(record)}
+          >
+            编辑
+          </Button>
           <Button
             type="link"
             size="small"
@@ -203,6 +237,16 @@ export const UserList: React.FC = () => {
           onSuccess={handleAssignRolesSuccess}
         />
       )}
+
+      <EditUserModal
+        visible={editModalVisible}
+        user={selectedUser}
+        onCancel={() => {
+          setEditModalVisible(false);
+          setSelectedUser(null);
+        }}
+        onSuccess={handleEditSuccess}
+      />
     </div>
   );
 };

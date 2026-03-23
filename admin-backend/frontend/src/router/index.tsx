@@ -15,7 +15,9 @@ import { AuditLog } from '../pages/AuditLog';
 import { SkillList } from '../pages/Extensions/SkillList';
 import { PluginList } from '../pages/Extensions/PluginList';
 import { Settings } from '../pages/Settings';
+import { ClientConfig } from '../pages/ClientConfig';
 import { MainLayout } from '../components/Layout/MainLayout';
+import { DepartmentList } from '../pages/Departments/DepartmentList';
 import { useAuthStore } from '../store/authStore';
 
 // 路由守卫：保护需要认证的路由
@@ -119,10 +121,19 @@ export const router = createBrowserRouter([
         path: 'settings',
         element: <Settings />,
       },
+      {
+        path: 'client-config',
+        element: <ClientConfig />,
+      },
       // 统计报表
       {
         path: 'reports',
         element: <Reports />,
+      },
+      // 部门管理
+      {
+        path: 'departments',
+        element: <DepartmentList />,
       },
     ],
   },

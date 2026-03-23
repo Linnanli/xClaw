@@ -289,3 +289,30 @@ export interface ApiResponse<T> {
   data?: T;
   error?: ApiError;
 }
+
+
+// Department types
+export interface Department {
+  id: string;
+  name: string;
+  description?: string;
+  token_quota_enabled: boolean;
+  token_quota_per_day?: number | null;
+  created_at: string;
+  updated_at: string;
+  member_count: number;
+}
+
+export interface CreateDepartmentRequest {
+  name: string;
+  description?: string;
+  token_quota_enabled?: boolean;
+  token_quota_per_day?: number;
+}
+
+export interface UpdateDepartmentRequest {
+  name?: string;
+  description?: string;
+  token_quota_enabled?: boolean;
+  token_quota_per_day?: number | null;
+}

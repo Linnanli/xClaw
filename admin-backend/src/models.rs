@@ -257,3 +257,74 @@ pub struct RoleWithPermissions {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
+
+// ============================================================================
+// 用户编辑请求
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateUserRequest {
+    pub email: Option<String>,
+    pub password: Option<String>,
+    /// None = 不修改, Some(None) = 清除部门, Some(Some(id)) = 设置部门
+    #[serde(default, deserialize_with = "deserialize_optional_uuid")]
+    pub department_id: Option<Option<Uuid>>,
+}
+
+/// 自定义反序列化：支持 null（清除）、缺失（不修改）、UUID 值（设置）
+fn deserialize_optional_uuid<'de, D>(deserializer: D) -> std::result::Result<Option<Option<Uuid>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt: Option<Option<Uuid>> = Option::deserialize(deserializer)?;
+    Ok(Some(opt.unwrap_or(None)))
+}
+
+// ============================================================================
+// 部门管理请求
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateDepartmentRequest {
+    pub name: String,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub token_quota_enabled: Option<bool>,
+    pub token_quota_per_day: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateDepartmentRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub token_quota_enabled: Option<bool>,
+    pub token_quota_per_day: Option<Option<i32>>,
+}
+
+// ============================================================================
+// 审计日志导出查询参数
+// ============================================================================
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuditLogExportQuery {
+    pub start_time: Option<String>,
+    pub end_time: Option<String>,
+    pub action: Option<String>,
+    pub username: Option<String>,
+}
+
+// ============================================================================
+// 客户端配置更新请求
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateClientConfigRequest {
+    pub llm_backend: Option<String>,
+    pub llm_api_key: Option<String>,
+    pub llm_model: Option<String>,
+    pub llm_base_url: Option<String>,
+    pub safety_enabled: Option<bool>,
+    pub skills_enabled: Option<bool>,
+    pub extensions_enabled: Option<bool>,
+    pub max_cost_per_day_cents: Option<i64>,
+}

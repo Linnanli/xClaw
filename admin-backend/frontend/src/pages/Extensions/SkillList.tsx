@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Table, Button, Tag, Input, Empty, Card, Row, Col, Statistic } from 'antd';
+import { Table, Button, Tag, Input, Empty, Card, Row, Col, Statistic, Switch, message } from 'antd';
 import {
   ReloadOutlined,
   SearchOutlined,
@@ -49,6 +49,17 @@ export const SkillList: React.FC = () => {
     return s.name.toLowerCase().includes(kw) || (s.description || '').toLowerCase().includes(kw);
   });
 
+  const handleToggle = useCallback(async (skill: Skill) => {
+    const action = skill.enabled ? 'disable' : 'enable';
+    try {
+      await apiClient.post(`/skills/${skill.id}/${action}`);
+      message.success(`${skill.name} 已${skill.enabled ? '禁用' : '启用'}`);
+      loadSkills();
+    } catch {
+      message.error(`操作失败`);
+    }
+  }, [loadSkills]);
+
   const columns: ColumnsType<Skill> = [
     {
       title: '技能名称',
@@ -77,6 +88,15 @@ export const SkillList: React.FC = () => {
       key: 'author',
       width: 120,
       render: (author: string | undefined) => author || <span style={{ color: '#bfbfbf' }}>-</span>,
+    },
+    {
+      title: '状态',
+      dataIndex: 'enabled',
+      key: 'enabled',
+      width: 100,
+      render: (enabled: boolean, record: Skill) => (
+        <Switch checked={enabled} onChange={() => handleToggle(record)} checkedChildren="启用" unCheckedChildren="禁用" />
+      ),
     },
     {
       title: '更新时间',

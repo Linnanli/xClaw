@@ -99,6 +99,37 @@ export const ClientList: React.FC = () => {
     }
   }, [loadClients, loadStats]);
 
+  const handleDisconnect = useCallback(async (id: string) => {
+    try {
+      await apiClient.post(`/clients/${id}/disconnect`);
+      message.success('客户端已强制下线');
+      loadClients();
+      loadStats();
+    } catch (error: any) {
+      message.error(error.response?.data?.error || '操作失败');
+    }
+  }, [loadClients, loadStats]);
+
+  const handlePushPolicy = useCallback(async (id: string) => {
+    try {
+      const res = await apiClient.post(`/clients/${id}/push-policy`);
+      message.success(`策略推送成功，版本: ${res.data.policy_version}`);
+      loadClients();
+    } catch (error: any) {
+      message.error(error.response?.data?.error || '推送失败');
+    }
+  }, [loadClients]);
+
+  const handlePushPolicyAll = useCallback(async () => {
+    try {
+      const res = await apiClient.post('/clients/push-policy-all');
+      message.success(res.data.message);
+      loadClients();
+    } catch (error: any) {
+      message.error(error.response?.data?.error || '批量推送失败');
+    }
+  }, [loadClients]);
+
   const hasActiveFilters = searchText || onlineFilter || osFilter;
 
   const clearFilters = useCallback(() => {
@@ -192,20 +223,34 @@ export const ClientList: React.FC = () => {
     {
       title: '操作',
       key: 'action',
-      width: 80,
+      width: 200,
       render: (_, record) => (
-        <Popconfirm
-          title="确认删除"
-          description="确定要删除此客户端记录吗？"
-          onConfirm={() => handleDelete(record.id)}
-          okText="确定"
-          cancelText="取消"
-          okButtonProps={{ danger: true }}
-        >
-          <Button type="link" danger size="small" icon={<DeleteOutlined />}>
-            删除
-          </Button>
-        </Popconfirm>
+        <Space size="small">
+          {record.online && (
+            <Popconfirm
+              title="确认下线"
+              description="确定要强制下线此客户端吗？"
+              onConfirm={() => handleDisconnect(record.id)}
+              okText="确定"
+              cancelText="取消"
+            >
+              <Button type="link" size="small">下线</Button>
+            </Popconfirm>
+          )}
+          <Button type="link" size="small" onClick={() => handlePushPolicy(record.id)}>推送策略</Button>
+          <Popconfirm
+            title="确认删除"
+            description="确定要删除此客户端记录吗？"
+            onConfirm={() => handleDelete(record.id)}
+            okText="确定"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+          >
+            <Button type="link" danger size="small" icon={<DeleteOutlined />}>
+              删除
+            </Button>
+          </Popconfirm>
+        </Space>
       ),
     },
   ];
@@ -227,9 +272,14 @@ export const ClientList: React.FC = () => {
     <div className="client-list-container">
       <div className="page-header">
         <h2>客户端管理</h2>
-        <Button icon={<ReloadOutlined />} onClick={() => { loadClients(); loadStats(); }} loading={loading}>
-          刷新
-        </Button>
+        <Space>
+          <Popconfirm title="确认推送" description="确定要向所有在线客户端推送策略吗？" onConfirm={handlePushPolicyAll} okText="确定" cancelText="取消">
+            <Button type="primary">批量推送策略</Button>
+          </Popconfirm>
+          <Button icon={<ReloadOutlined />} onClick={() => { loadClients(); loadStats(); }} loading={loading}>
+            刷新
+          </Button>
+        </Space>
       </div>
 
       {/* 统计卡片 */}
