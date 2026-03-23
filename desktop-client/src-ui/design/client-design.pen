@@ -2517,7 +2517,8 @@
                                   "fill": "#1A1918",
                                   "content": "查看详情",
                                   "fontFamily": "Outfit",
-                                  "fontSize": 13
+                                  "fontSize": 13,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             },
@@ -2560,7 +2561,8 @@
                                   "fill": "#C8C7C5",
                                   "content": "移除技能",
                                   "fontFamily": "Outfit",
-                                  "fontSize": 13
+                                  "fontSize": 13,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "icon_font",
@@ -4985,7 +4987,8 @@
                           "fill": "#9D9C9A",
                           "content": "管理你的账户信息和应用偏好设置",
                           "fontFamily": "Outfit",
-                          "fontSize": 13
+                          "fontSize": 13,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -9058,7 +9061,8 @@
                           "fill": "#9D9C9A",
                           "content": "智能 AI 助手，让工作更高效",
                           "fontFamily": "Outfit",
-                          "fontSize": 13
+                          "fontSize": 13,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -9101,7 +9105,8 @@
                               "fill": "#6D6C6A",
                               "content": "v0.1.0",
                               "fontFamily": "Outfit",
-                              "fontSize": 14
+                              "fontSize": 14,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -10818,7 +10823,8 @@
                                   "fill": "#6D6C6A",
                                   "content": "NOTES.md",
                                   "fontFamily": "Outfit",
-                                  "fontSize": 12
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             },
@@ -10860,7 +10866,8 @@
                                   "fill": "#6D6C6A",
                                   "content": "notes",
                                   "fontFamily": "Outfit",
-                                  "fontSize": 13
+                                  "fontSize": 13,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             },
@@ -10924,7 +10931,8 @@
                                   "fill": "#9D9C9A",
                                   "content": "SOUL.md",
                                   "fontFamily": "Outfit",
-                                  "fontSize": 12
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             },
@@ -10957,7 +10965,8 @@
                                   "fill": "#9D9C9A",
                                   "content": "IDENTITY.md",
                                   "fontFamily": "Outfit",
-                                  "fontSize": 12
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             }
@@ -29023,7 +29032,8 @@
                                   "fill": "#6D6C6A",
                                   "content": "NOTES.md",
                                   "fontFamily": "Outfit",
-                                  "fontSize": 12
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             },
@@ -29065,7 +29075,8 @@
                                   "fill": "#6D6C6A",
                                   "content": "notes",
                                   "fontFamily": "Outfit",
-                                  "fontSize": 13
+                                  "fontSize": 13,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             },
@@ -29129,7 +29140,8 @@
                                   "fill": "#9D9C9A",
                                   "content": "SOUL.md",
                                   "fontFamily": "Outfit",
-                                  "fontSize": 12
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             },
@@ -29162,7 +29174,8 @@
                                   "fill": "#9D9C9A",
                                   "content": "IDENTITY.md",
                                   "fontFamily": "Outfit",
-                                  "fontSize": 12
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             }
