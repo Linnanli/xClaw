@@ -22,7 +22,7 @@
         "@upstash/context7-mcp@latest"
       ],
       "env": {},
-      "disabled": false,
+      "disabled": true,
       "autoApprove": [
         "resolve-library-id",
         "get-library-docs",
@@ -44,7 +44,7 @@
         "SystemRoot": "C:\\Windows",
         "PROGRAMFILES": "C:\\Program Files"
       },
-      "disabled": false,
+      "disabled": true,
       "autoApprove": [
         "list_pages",
         "select_page",
