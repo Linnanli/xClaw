@@ -1,0 +1,78 @@
+/**
+ * AppHeader - 主内容区顶部栏
+ *
+ * 设计稿：56px 高度，左侧面包屑标题，右侧任务状态 + 通知铃铛。
+ */
+
+import { Bell, Briefcase } from 'lucide-react';
+import { Button } from '../ui/button';
+import { cn } from '../ui/utils';
+
+interface AppHeaderProps {
+  title: string;
+  /** 正在运行的任务数 */
+  runningJobs?: number;
+  /** 未读通知数 */
+  unreadCount?: number;
+  onJobsClick?: () => void;
+  onNotificationsClick?: () => void;
+  className?: string;
+}
+
+export function AppHeader({
+  title,
+  runningJobs = 0,
+  unreadCount = 0,
+  onJobsClick,
+  onNotificationsClick,
+  className,
+}: AppHeaderProps) {
+  return (
+    <header
+      className={cn(
+        'flex h-14 items-center justify-between border-b border-border bg-background px-6',
+        className,
+      )}
+    >
+      {/* Left: breadcrumb / title */}
+      <div className="flex items-center gap-2">
+        <h1 className="text-base font-bold text-foreground">{title}</h1>
+      </div>
+
+      {/* Right: actions */}
+      <div className="flex items-center gap-3">
+        {/* Jobs button */}
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 gap-1.5 rounded-lg border-border bg-secondary text-sm font-medium"
+          onClick={onJobsClick}
+        >
+          <Briefcase className="size-3.5" />
+          <span>任务</span>
+          {runningJobs > 0 && (
+            <span className="ml-0.5 flex size-5 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
+              {runningJobs}
+            </span>
+          )}
+        </Button>
+
+        {/* Notification bell */}
+        <Button
+          variant="outline"
+          size="icon"
+          className="relative size-8 rounded-lg border-border bg-secondary"
+          onClick={onNotificationsClick}
+          aria-label="通知"
+        >
+          <Bell className="size-4" />
+          {unreadCount > 0 && (
+            <span className="absolute -right-1 -top-1 flex size-4 items-center justify-center rounded-full bg-destructive text-[9px] font-bold text-destructive-foreground">
+              {unreadCount > 9 ? '9+' : unreadCount}
+            </span>
+          )}
+        </Button>
+      </div>
+    </header>
+  );
+}

@@ -1,124 +1,101 @@
 /**
- * Chat Tab - Tauri IPC 版本
- * 
- * 使用 Tauri IPC 通信替代 HTTP API
- * 
- * 主要改进:
- * - 使用 useAiChatTauri Hook (Tauri IPC)
- * - 更快的响应速度（无网络开销）
- * - 更安全（无需暴露 HTTP 端口）
- * - 更好的类型安全
+ * ChatTabTauri - 聊天主界面
+ *
+ * 设计稿：无对话时显示欢迎页（标题 + 快捷操作 + 输入框），
+ * 有对话时显示消息列表 + 底部输入框。
+ * 输入框：圆角 16px 卡片，底部模型选择器 + 附件/发送按钮。
  */
 
-import { useState, useEffect } from 'react';
-import { Plus, ChevronLeft, ChevronRight, Send, Wifi, WifiOff } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import {
+  MessageSquare,
+  TrendingUp,
+  FileText,
+  Zap,
+  Paperclip,
+  Image,
+  ArrowUp,
+  Sparkles,
+  ChevronDown,
+} from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { useTheme } from '../../contexts/ThemeContext';
-import { threadApi, type Thread } from '../../utils/tauri';
+import { threadApi } from '../../utils/tauri';
 import { useAiChatTauri } from '../../hooks/useAiChatTauri';
 import { TokenManager } from '../../utils/tokenManager';
 import { MessageActions } from '../common/MessageActions';
 import { MessageEditor } from '../common/MessageEditor';
 import { DeleteConfirmDialog } from '../common/DeleteConfirmDialog';
-import { DlpStatusIndicator } from '../DlpStatusIndicator';
+import { ScrollArea } from '../ui/scroll-area';
+import { Button } from '../ui/button';
+import { cn } from '../ui/utils';
 
-export function ChatTabTauri() {
-  const { theme } = useTheme();
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [selectedConversation, setSelectedConversation] = useState<string | null>(null);
-  const [conversations, setConversations] = useState<Thread[]>([]);
+const QUICK_ACTIONS = [
+  { icon: MessageSquare, label: '智能对话' },
+  { icon: TrendingUp, label: '数据分析' },
+  { icon: FileText, label: '文档处理' },
+  { icon: Zap, label: '技能助手' },
+];
+
+interface ChatTabTauriProps {
+  selectedThreadId?: string | null;
+  onThreadSelect?: (threadId: string) => void;
+}
+
+export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriProps) {
   const [loading, setLoading] = useState(false);
-  const [authToken, setAuthToken] = useState<string>('');
-  
+  const [selectedModel] = useState('GPT-4o');
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
   // 消息编辑/删除状态
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [deleteConfirmDialog, setDeleteConfirmDialog] = useState<{
     isOpen: boolean;
     messageId: string | null;
     content: string;
-  }>({
-    isOpen: false,
-    messageId: null,
-    content: '',
-  });
+  }>({ isOpen: false, messageId: null, content: '' });
   const [operationLoading, setOperationLoading] = useState(false);
 
-  // 获取认证令牌
+  // 初始化
   useEffect(() => {
-    const loadToken = async () => {
-      try {
-        const token = await TokenManager.getToken();
-        setAuthToken(token);
-        console.log('✅ Token loaded');
-      } catch (err) {
-        console.error('❌ Failed to load token:', err);
-      }
-    };
-    loadToken();
+    TokenManager.getToken().catch((err) => {
+      console.error('Failed to load token:', err);
+    });
 
-    // 启动时同步 DLP 规则
-    invoke('sync_dlp_rules_from_admin')
-      .then((result: unknown) => {
-        console.log('✅ DLP rules synced:', result);
-      })
-      .catch((err: unknown) => {
-        console.warn('⚠️ DLP rules sync failed (admin backend may be offline):', err);
-      });
+    invoke('sync_dlp_rules_from_admin').catch((err: unknown) => {
+      console.warn('DLP rules sync failed:', err);
+    });
   }, []);
 
-  // 使用 Tauri IPC 的 useAiChatTauri Hook
   const chat = useAiChatTauri({
-    threadId: selectedConversation || '',
-    onError: (error) => {
-      console.error('Chat error:', error);
-    },
-    onStatusChange: (status) => {
-      console.log('Chat status:', status);
-    },
+    threadId: selectedThreadId || '',
+    onError: (error) => console.error('Chat error:', error),
+    onStatusChange: (status) => console.log('Chat status:', status),
   });
-
-  // 加载对话列表
-  useEffect(() => {
-    if (authToken) {
-      loadConversations();
-    }
-  }, [authToken]);
 
   // 选择对话时加载消息
   useEffect(() => {
-    if (selectedConversation) {
-      loadMessages(selectedConversation);
+    if (selectedThreadId) {
+      loadMessages(selectedThreadId);
     }
-  }, [selectedConversation]);
+  }, [selectedThreadId]);
 
-  const loadConversations = async () => {
-    try {
-      const response = await threadApi.getThreads();
-      const threads = Array.isArray(response) ? response : (response.threads || []);
-      setConversations(threads);
-      
-      if (threads.length === 0) {
-        const newThread = await threadApi.createThread();
-        setConversations([newThread]);
-        setSelectedConversation(newThread.id);
-      } else if (!selectedConversation) {
-        setSelectedConversation(threads[0].id);
-      }
-    } catch (err) {
-      console.error('Failed to load conversations:', err);
-    }
-  };
+  // 自动滚动到底部
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chat.messages]);
 
   const loadMessages = async (threadId: string) => {
     try {
       setLoading(true);
       const messages = await threadApi.getMessages(threadId);
-      chat.setMessages(messages.map(m => ({
-        id: m.id,
-        role: m.role as 'user' | 'assistant',
-        content: m.content,
-        timestamp: new Date(m.created_at).getTime(),
-      })));
+      chat.setMessages(
+        messages.map((m) => ({
+          id: m.id,
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+          timestamp: new Date(m.created_at).getTime(),
+        })),
+      );
     } catch (err) {
       console.error('Failed to load messages:', err);
     } finally {
@@ -126,22 +103,28 @@ export function ChatTabTauri() {
     }
   };
 
-  const handleNewConversation = async () => {
-    try {
-      const newThread = await threadApi.createThread();
-      setConversations(prev => [newThread, ...prev]);
-      setSelectedConversation(newThread.id);
-      chat.clearMessages();
-    } catch (err) {
-      console.error('Failed to create conversation:', err);
+  const handleSend = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chat.input.trim() || chat.isLoading) return;
+
+    // 如果没有选中对话，先创建一个
+    if (!selectedThreadId) {
+      try {
+        const newThread = await threadApi.createThread();
+        onThreadSelect?.(newThread.id);
+      } catch (err) {
+        console.error('Failed to create thread:', err);
+        return;
+      }
     }
+
+    chat.handleSubmit(e);
   };
 
   const handleDeleteMessage = async (messageId: string) => {
     setOperationLoading(true);
     try {
-      // TODO: 实现删除消息
-      chat.setMessages(prev => prev.filter(m => m.id !== messageId));
+      chat.setMessages((prev) => prev.filter((m) => m.id !== messageId));
       setDeleteConfirmDialog({ isOpen: false, messageId: null, content: '' });
     } catch (err) {
       console.error('Failed to delete message:', err);
@@ -153,9 +136,8 @@ export function ChatTabTauri() {
   const handleSaveMessage = async (messageId: string, newContent: string) => {
     setOperationLoading(true);
     try {
-      // TODO: 实现保存消息
-      chat.setMessages(prev =>
-        prev.map(m => (m.id === messageId ? { ...m, content: newContent } : m))
+      chat.setMessages((prev) =>
+        prev.map((m) => (m.id === messageId ? { ...m, content: newContent } : m)),
       );
       setEditingMessageId(null);
     } catch (err) {
@@ -165,231 +147,247 @@ export function ChatTabTauri() {
     }
   };
 
+  const hasMessages = chat.messages.length > 0;
+
   return (
-    <div className="flex h-full">
-      {/* 侧边栏 */}
-      <div
-        className={`${
-          sidebarOpen ? 'w-64' : 'w-0'
-        } transition-all duration-300 border-r ${
-          theme === 'dark' ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-white'
-        } overflow-hidden`}
-      >
-        <div className="p-4">
-          <button
-            onClick={handleNewConversation}
-            className={`w-full flex items-center gap-2 px-4 py-2 rounded-lg ${
-              theme === 'dark'
-                ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                : 'bg-blue-500 hover:bg-blue-600 text-white'
-            }`}
-          >
-            <Plus size={20} />
-            <span>新对话</span>
-          </button>
-
-          <div className="mt-4 space-y-2">
-            {conversations.map((conv) => (
-              <button
-                key={conv.id}
-                onClick={() => setSelectedConversation(conv.id)}
-                className={`w-full text-left px-4 py-2 rounded-lg transition-colors ${
-                  selectedConversation === conv.id
-                    ? theme === 'dark'
-                      ? 'bg-gray-700 text-white'
-                      : 'bg-gray-100 text-gray-900'
-                    : theme === 'dark'
-                    ? 'hover:bg-gray-700 text-gray-300'
-                    : 'hover:bg-gray-50 text-gray-700'
-                }`}
-              >
-                <div className="truncate">{conv.title || '新对话'}</div>
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* 主聊天区域 */}
-      <div className="flex-1 flex flex-col">
-        {/* 顶部栏 */}
-        <div
-          className={`flex items-center justify-between px-4 py-3 border-b ${
-            theme === 'dark' ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-white'
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setSidebarOpen(!sidebarOpen)}
-              className={`p-2 rounded-lg ${
-                theme === 'dark' ? 'hover:bg-gray-700' : 'hover:bg-gray-100'
-              }`}
-            >
-              {sidebarOpen ? <ChevronLeft size={20} /> : <ChevronRight size={20} />}
-            </button>
-            <h2 className="text-lg font-semibold">
-              {conversations.find((c) => c.id === selectedConversation)?.title || '新对话'}
-            </h2>
-          </div>
-
-          <div className="flex items-center gap-3">
-            {/* DLP 状态指示器 */}
-            <DlpStatusIndicator />
-
-            {/* 连接状态 */}
-            <div className="flex items-center gap-2">
-              {chat.isConnected ? (
-                <>
-                  <Wifi size={16} className="text-green-500" />
-                  <span className="text-sm text-green-500">已连接</span>
-                </>
+    <div className="flex h-full flex-col bg-background">
+      {hasMessages ? (
+        /* ===== 消息列表模式 ===== */
+        <>
+          <ScrollArea className="flex-1 px-6 py-4">
+            <div className="mx-auto max-w-3xl space-y-4">
+              {loading ? (
+                <div className="py-20 text-center text-muted-foreground">加载中...</div>
               ) : (
-                <div className="flex items-center gap-2 cursor-pointer" title="点击重试连接"
-                  onClick={() => {
-                    // 重新订阅
-                    invoke('subscribe_chat_events').catch(console.error);
-                  }}
-                >
-                  <WifiOff size={16} className="text-red-500" />
-                  <span className="text-sm text-red-500">未连接</span>
+                chat.messages.map((message) => (
+                  <div
+                    key={message.id}
+                    className={cn(
+                      'flex',
+                      message.role === 'user' ? 'justify-end' : 'justify-start',
+                    )}
+                  >
+                    <div
+                      className={cn(
+                        'max-w-[70%] rounded-2xl px-4 py-3',
+                        message.role === 'user'
+                          ? 'bg-primary text-primary-foreground'
+                          : 'bg-secondary text-foreground',
+                      )}
+                    >
+                      {editingMessageId === message.id ? (
+                        <MessageEditor
+                          messageId={message.id}
+                          initialContent={message.content}
+                          onSave={handleSaveMessage}
+                          onCancel={() => setEditingMessageId(null)}
+                          loading={operationLoading}
+                        />
+                      ) : (
+                        <>
+                          <div className="whitespace-pre-wrap text-sm">{message.content}</div>
+                          {message.role === 'user' && (
+                            <MessageActions
+                              messageId={message.id}
+                              content={message.content}
+                              onEdit={() => setEditingMessageId(message.id)}
+                              onDelete={() =>
+                                setDeleteConfirmDialog({
+                                  isOpen: true,
+                                  messageId: message.id,
+                                  content: message.content,
+                                })
+                              }
+                              onCopy={(content) => navigator.clipboard.writeText(content)}
+                            />
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+
+              {/* 思考状态 */}
+              {chat.thinkingMessage && (
+                <div className="flex justify-start">
+                  <div className="max-w-[70%] rounded-2xl bg-secondary px-4 py-3 text-muted-foreground">
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="animate-pulse">💭</span>
+                      <span>{chat.thinkingMessage}</span>
+                    </div>
+                  </div>
                 </div>
               )}
+
+              {/* 错误提示 */}
+              {chat.error && (
+                <div className="flex justify-center">
+                  <div className="rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive">
+                    {chat.error}
+                  </div>
+                </div>
+              )}
+
+              <div ref={messagesEndRef} />
+            </div>
+          </ScrollArea>
+
+          {/* 底部输入框 */}
+          <div className="border-t border-border px-6 py-4">
+            <div className="mx-auto max-w-3xl">
+              <ChatInput
+                value={chat.input}
+                onChange={chat.setInput}
+                onSubmit={handleSend}
+                isLoading={chat.isLoading}
+                selectedModel={selectedModel}
+              />
+            </div>
+          </div>
+        </>
+      ) : (
+        /* ===== 欢迎页模式 ===== */
+        <div className="flex flex-1 flex-col items-center justify-center px-10 py-10">
+          <div className="flex flex-col items-center gap-5">
+            <p className="text-[15px] font-medium text-text-secondary">
+              你的专属 AI 团队已就绪
+            </p>
+            <h2 className="text-[26px] font-bold tracking-tight text-foreground">
+              今天需要我帮你做些什么？
+            </h2>
+
+            {/* 快捷操作 */}
+            <div className="flex items-center gap-2.5">
+              {QUICK_ACTIONS.map((action) => (
+                <button
+                  key={action.label}
+                  className="flex items-center gap-1.5 rounded-full border border-border bg-background px-4 py-2 text-[13px] font-medium text-foreground transition-colors hover:bg-secondary"
+                >
+                  <action.icon className="size-3.5 text-primary" />
+                  {action.label}
+                </button>
+              ))}
+            </div>
+
+            {/* 输入框 */}
+            <div className="w-[720px] max-w-full">
+              <ChatInput
+                value={chat.input}
+                onChange={chat.setInput}
+                onSubmit={handleSend}
+                isLoading={chat.isLoading}
+                selectedModel={selectedModel}
+              />
             </div>
           </div>
         </div>
-
-        {/* 消息列表 */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {loading ? (
-            <div className="text-center text-gray-500">加载中...</div>
-          ) : chat.messages.length === 0 ? (
-            <div className="text-center text-gray-500">开始新对话</div>
-          ) : (
-            chat.messages.map((message) => (
-              <div
-                key={message.id}
-                className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-              >
-                <div
-                  className={`max-w-[70%] rounded-lg p-4 ${
-                    message.role === 'user'
-                      ? theme === 'dark'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-blue-500 text-white'
-                      : theme === 'dark'
-                      ? 'bg-gray-700 text-gray-100'
-                      : 'bg-gray-100 text-gray-900'
-                  }`}
-                >
-                  {editingMessageId === message.id ? (
-                    <MessageEditor
-                      messageId={message.id}
-                      initialContent={message.content}
-                      onSave={handleSaveMessage}
-                      onCancel={() => setEditingMessageId(null)}
-                      disabled={operationLoading}
-                    />
-                  ) : (
-                    <>
-                      <div className="whitespace-pre-wrap">{message.content}</div>
-                      {message.role === 'user' && (
-                        <MessageActions
-                          messageId={message.id}
-                          content={message.content}
-                          onEdit={() => setEditingMessageId(message.id)}
-                          onDelete={() =>
-                            setDeleteConfirmDialog({
-                              isOpen: true,
-                              messageId: message.id,
-                              content: message.content,
-                            })
-                          }
-                        />
-                      )}
-                    </>
-                  )}
-                </div>
-              </div>
-            ))
-          )}
-
-          {/* 思考状态 */}
-          {chat.thinkingMessage && (
-            <div className="flex justify-start">
-              <div
-                className={`max-w-[70%] rounded-lg p-4 ${
-                  theme === 'dark' ? 'bg-gray-700 text-gray-300' : 'bg-gray-100 text-gray-600'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <div className="animate-pulse">💭</div>
-                  <span>{chat.thinkingMessage}</span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* 错误提示 */}
-          {chat.error && (
-            <div className="flex justify-center">
-              <div className="bg-red-100 text-red-700 px-4 py-2 rounded-lg">
-                {chat.error}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* 输入区域 */}
-        <div
-          className={`border-t p-4 ${
-            theme === 'dark' ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-white'
-          }`}
-        >
-          <form onSubmit={chat.handleSubmit} className="flex gap-2">
-            <input
-              type="text"
-              value={chat.input}
-              onChange={(e) => chat.setInput(e.target.value)}
-              placeholder="输入消息..."
-              disabled={chat.isLoading || !chat.isConnected}
-              className={`flex-1 px-4 py-2 rounded-lg border ${
-                theme === 'dark'
-                  ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400'
-                  : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'
-              } focus:outline-none focus:ring-2 focus:ring-blue-500`}
-            />
-            <button
-              type="submit"
-              disabled={chat.isLoading || !chat.input.trim() || !chat.isConnected}
-              className={`px-6 py-2 rounded-lg flex items-center gap-2 ${
-                chat.isLoading || !chat.input.trim() || !chat.isConnected
-                  ? 'bg-gray-400 cursor-not-allowed'
-                  : theme === 'dark'
-                  ? 'bg-blue-600 hover:bg-blue-700'
-                  : 'bg-blue-500 hover:bg-blue-600'
-              } text-white transition-colors`}
-            >
-              <Send size={16} />
-              <span>{chat.isLoading ? '发送中...' : '发送'}</span>
-            </button>
-          </form>
-        </div>
-      </div>
+      )}
 
       {/* 删除确认对话框 */}
       <DeleteConfirmDialog
         isOpen={deleteConfirmDialog.isOpen}
-        messageContent={deleteConfirmDialog.content}
+        title="删除消息"
+        message={`确定要删除这条消息吗？\n\n"${deleteConfirmDialog.content.slice(0, 50)}${deleteConfirmDialog.content.length > 50 ? '...' : ''}"`}
         onConfirm={() => {
           if (deleteConfirmDialog.messageId) {
             handleDeleteMessage(deleteConfirmDialog.messageId);
           }
         }}
-        onCancel={() =>
-          setDeleteConfirmDialog({ isOpen: false, messageId: null, content: '' })
-        }
+        onCancel={() => setDeleteConfirmDialog({ isOpen: false, messageId: null, content: '' })}
         loading={operationLoading}
       />
     </div>
+  );
+}
+
+/* ===== ChatInput 子组件 ===== */
+
+interface ChatInputProps {
+  value: string;
+  onChange: (value: string) => void;
+  onSubmit: (e: React.FormEvent) => void;
+  isLoading: boolean;
+  selectedModel: string;
+}
+
+function ChatInput({ value, onChange, onSubmit, isLoading, selectedModel }: ChatInputProps) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // 自动调整高度
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (el) {
+      el.style.height = 'auto';
+      el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+    }
+  }, [value]);
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      onSubmit(e);
+    }
+  };
+
+  return (
+    <form onSubmit={onSubmit}>
+      <div className="rounded-2xl border border-border bg-background p-4 shadow-sm">
+        {/* 输入行 */}
+        <div className="flex items-start gap-2">
+          <span className="mt-0.5 text-base font-semibold text-muted-foreground">@</span>
+          <textarea
+            ref={textareaRef}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="请输入您的需求，或上传文件，AI 将为您解决问题。"
+            disabled={isLoading}
+            rows={1}
+            className="flex-1 resize-none bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none disabled:opacity-50"
+          />
+        </div>
+
+        {/* 底部操作栏 */}
+        <div className="mt-3 flex items-center justify-between">
+          {/* 模型选择器 */}
+          <button
+            type="button"
+            className="flex items-center gap-1.5 rounded-lg border border-border bg-secondary px-2.5 py-1 text-xs font-semibold transition-colors hover:bg-accent"
+          >
+            <Sparkles className="size-3.5 text-primary" />
+            <span>{selectedModel}</span>
+            <ChevronDown className="size-3.5 text-muted-foreground" />
+          </button>
+
+          {/* 右侧操作 */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="text-muted-foreground transition-colors hover:text-foreground"
+              aria-label="附件"
+            >
+              <Paperclip className="size-[18px]" />
+            </button>
+            <button
+              type="button"
+              className="text-muted-foreground transition-colors hover:text-foreground"
+              aria-label="图片"
+            >
+              <Image className="size-[18px]" />
+            </button>
+            <Button
+              type="submit"
+              size="sm"
+              disabled={isLoading || !value.trim()}
+              className="size-8 rounded-[10px] p-0"
+              aria-label="发送"
+            >
+              <ArrowUp className="size-4" />
+            </Button>
+          </div>
+        </div>
+      </div>
+    </form>
   );
 }

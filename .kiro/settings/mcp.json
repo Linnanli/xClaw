@@ -22,7 +22,7 @@
         "@upstash/context7-mcp@latest"
       ],
       "env": {},
-      "disabled": true,
+      "disabled": false,
       "autoApprove": [
         "resolve-library-id",
         "get-library-docs",
@@ -44,7 +44,7 @@
         "SystemRoot": "C:\\Windows",
         "PROGRAMFILES": "C:\\Program Files"
       },
-      "disabled": true,
+      "disabled": false,
       "autoApprove": [
         "list_pages",
         "select_page",
@@ -81,7 +81,7 @@
         "@modelcontextprotocol/server-memory"
       ],
       "env": {},
-      "disabled": true,
+      "disabled": false,
       "autoApprove": [
         "create_entities",
         "create_relations",
@@ -101,7 +101,7 @@
         "@modelcontextprotocol/server-sequential-thinking"
       ],
       "env": {},
-      "disabled": true,
+      "disabled": false,
       "autoApprove": [
         "sequentialthinking"
       ]

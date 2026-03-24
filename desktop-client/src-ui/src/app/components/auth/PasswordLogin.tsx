@@ -1,56 +1,65 @@
+/**
+ * PasswordLogin - 登录页面
+ *
+ * 设计稿：左侧绿色品牌面板（560px）+ 右侧白色登录表单。
+ * 左侧：Shield 图标 + X-Claw 标题 + 标语。
+ * 右侧：欢迎登录 + 邮箱/密码表单 + 登录按钮 + SSO 登录。
+ */
+
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router';
-import { Eye, EyeOff, Lock } from 'lucide-react';
-import { useTheme } from '../../contexts/ThemeContext';
+import { Eye, EyeOff, LogIn, Building2, Shield } from 'lucide-react';
+import { Button } from '../ui/button';
+import { Input } from '../ui/input';
+import { Label } from '../ui/label';
 import { authApi } from '../../utils/tauri';
 
 export function PasswordLogin() {
   const navigate = useNavigate();
-  const { theme } = useTheme();
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    // Check if already authenticated
     const sessionId = sessionStorage.getItem('session_id');
     if (sessionId) {
       navigate('/app');
       return;
     }
 
-    // Check setup status — 嵌入式模式下自动跳转
-    authApi.checkSetupStatus().then(async (status) => {
-      if (!status.password_set) {
-        navigate('/setup');
-        return;
-      }
-      // 嵌入式模式：authApi.unlockApp 返回 stub 成功，自动解锁
-      try {
-        const result = await authApi.unlockApp('');
-        if (result.success && result.session_id) {
-          sessionStorage.setItem('session_id', result.session_id);
-          navigate('/app');
+    authApi
+      .checkSetupStatus()
+      .then(async (status) => {
+        if (!status.password_set) {
+          navigate('/setup');
+          return;
         }
-      } catch {
-        // 非嵌入式模式：保持密码输入页面
-      }
-    }).catch(err => {
-      console.error('Failed to check setup status:', err);
-    });
+        try {
+          const result = await authApi.unlockApp('');
+          if (result.success && result.session_id) {
+            sessionStorage.setItem('session_id', result.session_id);
+            navigate('/app');
+          }
+        } catch {
+          // 非嵌入式模式：保持密码输入页面
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to check setup status:', err);
+      });
   }, [navigate]);
 
   const handleUnlock = async () => {
     setError('');
     setLoading(true);
-    
+
     if (!password) {
       setError('请输入密码');
       setLoading(false);
       return;
     }
-    
+
     try {
       const result = await authApi.unlockApp(password);
       if (result.success && result.session_id) {
@@ -66,108 +75,98 @@ export function PasswordLogin() {
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      handleUnlock();
-    }
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') handleUnlock();
   };
 
   return (
-    <div className={`min-h-screen flex items-center justify-center ${
-      theme === 'dark' ? 'bg-[#0a1628]' : 'bg-[#f5f5f5]'
-    }`}>
-      <div className={`p-8 rounded-2xl w-full max-w-md ${
-        theme === 'dark' 
-          ? 'bg-[#0f1d35] border border-[#1a2942]'
-          : 'bg-white border border-[#ddd] shadow-lg'
-      }`}>
-        <div className="text-center mb-8">
-          <div className={`inline-flex items-center justify-center w-20 h-20 rounded-2xl mb-4 ${
-            theme === 'dark'
-              ? 'bg-gradient-to-br from-[#5ddad5]/20 to-[#4facf7]/20'
-              : 'bg-[#667eea]/10'
-          }`}>
-            <Lock className={theme === 'dark' ? 'text-white' : 'text-[#667eea]'} size={40} />
-          </div>
-          <h1 className={`text-4xl font-bold mb-2 ${
-            theme === 'dark'
-              ? 'bg-gradient-to-r from-[#5ddad5] to-[#4facf7] bg-clip-text text-transparent'
-              : 'text-[#667eea]'
-          }`}>
-            IronClaw
-          </h1>
-          <p className={theme === 'dark' ? 'text-gray-400' : 'text-[#666]'}>您的安全AI助手</p>
+    <div className="flex h-screen w-screen">
+      {/* 左侧品牌面板 */}
+      <div className="hidden w-[560px] shrink-0 flex-col items-center justify-center gap-6 bg-primary p-[60px] lg:flex">
+        <div className="flex items-center gap-3">
+          <Shield className="size-9 text-primary-foreground" />
+          <span className="text-[32px] font-extrabold text-primary-foreground">X-Claw</span>
         </div>
+        <p className="text-lg font-medium text-primary-foreground/90">政企级 AI 智能助手</p>
+        <div className="h-0.5 w-10 rounded-full bg-primary-foreground/30" />
+        <p className="text-sm text-primary-foreground/70">安全 · 合规 · 可控</p>
+      </div>
 
-        <div className="space-y-6">
+      {/* 右侧登录表单 */}
+      <div className="flex flex-1 items-center justify-center bg-background px-[120px] py-[60px]">
+        <div className="flex w-full max-w-[400px] flex-col gap-6">
           <div>
-            <label className={`block text-sm font-medium mb-2 ${
-              theme === 'dark' ? 'text-white' : 'text-[#333]'
-            }`}>
-              主密码
-            </label>
+            <h1 className="text-[28px] font-bold text-foreground">欢迎登录</h1>
+            <p className="mt-1 text-sm text-muted-foreground">请使用企业账号登录 X-Claw</p>
+          </div>
+
+          {/* 邮箱字段 */}
+          <div className="space-y-1.5">
+            <Label className="text-[13px] font-semibold text-foreground/80">企业邮箱</Label>
+            <Input
+              type="email"
+              placeholder="name@company.com"
+              className="h-11 rounded-[10px] border-border bg-background px-3.5"
+            />
+          </div>
+
+          {/* 密码字段 */}
+          <div className="space-y-1.5">
+            <Label className="text-[13px] font-semibold text-foreground/80">密码</Label>
             <div className="relative">
-              <input
+              <Input
                 type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                onKeyPress={handleKeyPress}
-                className={`w-full px-4 py-3 border rounded-lg focus:outline-none transition-colors pr-12 ${
-                  theme === 'dark'
-                    ? 'bg-[#0a1628] border-[#1a2942] focus:border-[#5ddad5] text-white placeholder-gray-500'
-                    : 'bg-white border-[#ddd] focus:border-[#667eea] focus:ring-2 focus:ring-[#667eea]/20 text-[#333] placeholder-gray-400'
-                }`}
-                placeholder="输入您的主密码"
+                onKeyDown={handleKeyDown}
+                placeholder="输入您的密码"
+                className="h-11 rounded-[10px] border-border bg-background px-3.5 pr-10"
                 autoFocus
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className={`absolute right-3 top-1/2 -translate-y-1/2 transition-colors ${
-                  theme === 'dark'
-                    ? 'text-gray-400 hover:text-[#5ddad5]'
-                    : 'text-gray-400 hover:text-[#667eea]'
-                }`}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+                aria-label={showPassword ? '隐藏密码' : '显示密码'}
               >
-                {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                {showPassword ? <EyeOff className="size-5" /> : <Eye className="size-5" />}
               </button>
             </div>
           </div>
 
+          {/* 错误提示 */}
           {error && (
-            <div className={`px-4 py-3 rounded-lg ${
-              theme === 'dark'
-                ? 'bg-red-400/10 border border-red-400/30 text-red-400'
-                : 'bg-red-50 border border-red-200 text-red-600'
-            }`}>
+            <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
               {error}
             </div>
           )}
 
-          <button
+          {/* 登录按钮 */}
+          <Button
             onClick={handleUnlock}
             disabled={loading}
-            className={`w-full font-medium py-3 rounded-lg transition-opacity ${
-              theme === 'dark'
-                ? 'bg-gradient-to-r from-[#5ddad5] to-[#4facf7] text-[#0a1628] hover:opacity-90 disabled:opacity-50'
-                : 'bg-[#667eea] text-white hover:opacity-90 shadow-md hover:shadow-lg disabled:opacity-50'
-            }`}
+            className="h-11 w-full rounded-[10px] gap-2 text-[15px] font-semibold"
           >
-            {loading ? '解锁中...' : '解锁'}
-          </button>
+            <LogIn className="size-4" />
+            {loading ? '登录中...' : '登录'}
+          </Button>
 
-          <div className="text-center">
-            <button
-              onClick={() => navigate('/setup')}
-              className={`text-sm transition-opacity hover:opacity-80 ${
-                theme === 'dark'
-                  ? 'bg-gradient-to-r from-[#5ddad5] to-[#4facf7] bg-clip-text text-transparent'
-                  : 'text-[#667eea]'
-              }`}
-            >
-              首次使用？设置密码
-            </button>
+          {/* 分隔线 */}
+          <div className="flex items-center gap-3">
+            <div className="h-px flex-1 bg-border" />
+            <span className="text-xs text-muted-foreground">或</span>
+            <div className="h-px flex-1 bg-border" />
           </div>
+
+          {/* SSO 登录 */}
+          <Button
+            variant="outline"
+            className="h-11 w-full rounded-[10px] gap-2 text-sm font-medium"
+            onClick={() => navigate('/setup')}
+          >
+            <Building2 className="size-4" />
+            企业 SSO 登录
+          </Button>
         </div>
       </div>
     </div>
