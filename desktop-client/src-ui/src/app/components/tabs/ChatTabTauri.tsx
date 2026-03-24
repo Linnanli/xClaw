@@ -161,7 +161,7 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
       {hasMessages ? (
         /* ===== 消息列表模式 ===== */
         <>
-          <ScrollArea className="flex-1 px-6 py-4">
+          <ScrollArea className="min-h-0 flex-1 px-6 py-4">
             <div className="mx-auto max-w-3xl space-y-4">
               {loading ? (
                 <div className="py-20 text-center text-muted-foreground">加载中...</div>

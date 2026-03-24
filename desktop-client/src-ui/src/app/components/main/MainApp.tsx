@@ -125,7 +125,7 @@ export function MainApp() {
           theme={themeMode}
           onThemeChange={setTheme}
         />
-        <div className="flex-1 overflow-hidden">{renderContent()}</div>
+        <div className="min-h-0 flex-1 overflow-hidden">{renderContent()}</div>
       </SidebarInset>
 
       {/* Settings Modal */}
