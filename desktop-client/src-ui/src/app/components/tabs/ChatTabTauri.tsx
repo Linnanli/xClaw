@@ -261,7 +261,7 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
             <p className="text-[15px] font-medium text-text-secondary">
               你的专属 AI 团队已就绪
             </p>
-            <h2 className="text-[26px] font-bold tracking-tight text-foreground">
+            <h2 className="text-[26px] font-bold tracking-[-0.5px] text-foreground">
               今天需要我帮你做些什么？
             </h2>
 
@@ -344,7 +344,7 @@ function ChatInput({ value, onChange, onSubmit, isLoading, selectedModel, onMode
 
   return (
     <form onSubmit={onSubmit}>
-      <div className="rounded-2xl border border-border bg-background p-4 shadow-sm">
+      <div className="rounded-2xl border border-border bg-background p-4 shadow-[0_2px_12px_#1A191808]">
         {/* 输入行 */}
         <div className="flex items-start gap-2">
           <span className="mt-0.5 text-base font-semibold text-muted-foreground">@</span>
@@ -367,11 +367,11 @@ function ChatInput({ value, onChange, onSubmit, isLoading, selectedModel, onMode
             <button
               type="button"
               onClick={() => setModelOpen(!modelOpen)}
-              className="flex items-center gap-1.5 rounded-lg border border-border bg-secondary px-2.5 py-1 text-xs font-semibold transition-colors hover:bg-accent"
+              className="flex h-7 items-center gap-1.5 rounded-lg border border-border bg-secondary px-2.5 text-xs font-semibold transition-colors hover:bg-accent"
             >
-              <Sparkles className="size-3.5 text-primary" />
+              <Sparkles className="size-[13px] text-primary" />
               <span>{selectedModel}</span>
-              <ChevronDown className="size-3.5 text-muted-foreground" />
+              <ChevronDown className="size-[13px] text-muted-foreground" />
             </button>
             {modelOpen && (
               <div className="absolute bottom-full left-0 z-50 mb-1 w-56 rounded-lg border border-border bg-popover p-1 shadow-lg">
@@ -416,7 +416,7 @@ function ChatInput({ value, onChange, onSubmit, isLoading, selectedModel, onMode
               type="submit"
               size="sm"
               disabled={isLoading || !value.trim()}
-              className="size-8 rounded-[10px] p-0"
+              className="h-auto !px-3 !py-1.5 rounded-[10px] [&>svg]:!size-4"
               aria-label="发送"
             >
               <ArrowUp className="size-4" />

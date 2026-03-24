@@ -153,7 +153,9 @@ export function AppSidebar({
       {/* Logo + New Chat */}
       <SidebarHeader className="h-14 flex-row items-center justify-between px-5">
         <div className="flex items-center gap-2.5">
-          <Shield className="size-5 text-primary" />
+          <div className="flex size-7 items-center justify-center rounded-lg bg-primary">
+            <Shield className="size-4 text-primary-foreground" />
+          </div>
           <span className="text-base font-bold text-foreground">X-Claw</span>
         </div>
         <Tooltip>
@@ -161,7 +163,7 @@ export function AppSidebar({
             <Button
               variant="outline"
               size="icon"
-              className="size-7 border-primary/20 bg-primary/5 hover:bg-primary/10"
+              className="size-7 rounded-lg border-[#C8F0D8] bg-[#F0F9F4] hover:bg-[#e0f3e8] dark:border-primary/30 dark:bg-primary/10 dark:hover:bg-primary/20"
               onClick={onNewChat}
               aria-label="新建聊天"
             >
@@ -207,7 +209,7 @@ export function AppSidebar({
 
       {/* Bottom Nav (SideBottom) - compact, no extra spacing */}
       <SidebarSeparator />
-      <SidebarFooter className="shrink-0 px-3 pb-2 pt-1">
+      <SidebarFooter className="shrink-0 px-3 pb-2 pt-2">
         <SidebarMenu className="gap-0.5">
           <SidebarMenuItem>
             <SidebarMenuButton
@@ -240,7 +242,7 @@ export function AppSidebar({
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
-            <div className="flex h-12 items-center gap-2.5 rounded-[10px] px-2">
+            <div className="flex h-12 items-center gap-2.5 rounded-[10px] px-3">
               <div className="flex size-8 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
                 U
               </div>

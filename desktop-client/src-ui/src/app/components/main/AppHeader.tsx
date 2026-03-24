@@ -53,7 +53,7 @@ export function AppHeader({
         <Button
           variant="outline"
           size="sm"
-          className="h-8 gap-1.5 rounded-lg border-border bg-secondary text-sm font-medium"
+          className="h-8 gap-1.5 rounded-lg border-border bg-secondary text-xs font-medium"
           onClick={onJobsClick}
         >
           <Briefcase className="size-3.5" />
@@ -75,9 +75,7 @@ export function AppHeader({
         >
           <Bell className="size-4" />
           {unreadCount > 0 && (
-            <span className="absolute -right-1 -top-1 flex size-4 items-center justify-center rounded-full bg-destructive text-[9px] font-bold text-destructive-foreground">
-              {unreadCount > 9 ? '9+' : unreadCount}
-            </span>
+            <span className="absolute -right-0.5 -top-0.5 flex size-2 items-center justify-center rounded-full bg-[#D94040]" />
           )}
         </Button>
 

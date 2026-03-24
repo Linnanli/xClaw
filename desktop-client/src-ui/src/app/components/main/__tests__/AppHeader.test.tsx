@@ -36,14 +36,17 @@ describe('AppHeader', () => {
     expect(screen.queryByText('0')).not.toBeInTheDocument();
   });
 
-  it('有未读通知时应显示计数', () => {
-    render(<AppHeader title="聊天" unreadCount={5} />);
-    expect(screen.getByText('5')).toBeInTheDocument();
+  it('有未读通知时应显示红点', () => {
+    const { container } = render(<AppHeader title="聊天" unreadCount={5} />);
+    // 设计稿：8x8 红点指示器（无数字）
+    const badge = container.querySelector('.bg-\\[\\#D94040\\]');
+    expect(badge).toBeInTheDocument();
   });
 
-  it('未读通知超过9时显示9+', () => {
-    render(<AppHeader title="聊天" unreadCount={15} />);
-    expect(screen.getByText('9+')).toBeInTheDocument();
+  it('无未读通知时不显示红点', () => {
+    const { container } = render(<AppHeader title="聊天" unreadCount={0} />);
+    const badge = container.querySelector('.bg-\\[\\#D94040\\]');
+    expect(badge).not.toBeInTheDocument();
   });
 
   it('点击任务按钮应触发回调', () => {
