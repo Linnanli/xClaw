@@ -126,7 +126,8 @@
       "env": {},
       "disabled": false,
       "autoApprove": [
-        "search_items_in_registries"
+        "search_items_in_registries",
+        "list_items_in_registries"
       ]
     },
     "pencil": {

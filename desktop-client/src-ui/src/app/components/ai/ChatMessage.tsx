@@ -19,7 +19,9 @@ import { cn } from '../ui/utils';
 import { Button } from '../ui/button';
 import { Avatar, AvatarFallback } from '../ui/avatar';
 import { DlpMessageBadge } from './DlpMessageBadge';
+import { ThinkingProcess } from './ThinkingProcess';
 import type { SanitizationStats } from '../../hooks/useDlpScan';
+import type { ThinkingStep } from '../../hooks/useAiChatTauri';
 
 export interface ChatMessageProps {
   id: string;
@@ -29,6 +31,8 @@ export interface ChatMessageProps {
   isLoading?: boolean;
   /** DLP 脱敏统计（仅用户消息） */
   dlpStats?: SanitizationStats;
+  /** AI 思考步骤（仅 assistant 消息，嵌入消息自身） */
+  thinkingSteps?: ThinkingStep[];
   /** 用户显示名称，默认 "你" */
   userName?: string;
   /** AI 显示名称，默认 "X-Claw" */
@@ -44,6 +48,7 @@ export function ChatMessage({
   content,
   isLoading,
   dlpStats,
+  thinkingSteps,
   userName = '你',
   aiName = 'X-Claw',
   onEdit,
@@ -105,6 +110,11 @@ export function ChatMessage({
           isUser ? 'items-end pr-[42px]' : 'items-start pl-[42px]',
         )}
       >
+        {/* assistant 消息：先渲染思考过程（折叠），再渲染回复气泡 */}
+        {!isUser && thinkingSteps && thinkingSteps.length > 0 && (
+          <ThinkingProcess steps={thinkingSteps} isActive={false} hideAvatar />
+        )}
+
         {/* 消息气泡 */}
         <div
           className={cn(

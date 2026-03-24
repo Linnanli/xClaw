@@ -144,6 +144,7 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
     value: chat.input,
     onChange: chat.setInput,
     onSubmit: handleSend,
+    onStop: chat.stop,
     isLoading: chat.isLoading,
     models: AVAILABLE_MODELS,
     selectedModel,

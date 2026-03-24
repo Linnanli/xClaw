@@ -1,0 +1,53 @@
+/* Aurora Glow 极光动画 - AI 运行时输入框边框效果
+ *
+ * 设计稿规范 (Pencil node: Mp2lu "AuroraGlow"):
+ * - angular gradient 9色: #00FFD1 → #00C9FF → #7B61FF → #C850FF → #FF6EC7 → #FFB347 → #00E676 → #00BCD4 → #00FFD1
+ * - padding:2 形成 2px 渐变边框
+ * - cornerRadius:19 (内层 InputBox cornerRadius:17)
+ * - 多层彩色外阴影营造发光效果
+ */
+
+@keyframes aurora-rotate {
+  0% {
+    --aurora-angle: 0deg;
+  }
+  100% {
+    --aurora-angle: 360deg;
+  }
+}
+
+@property --aurora-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.aurora-glow {
+  --aurora-angle: 0deg;
+  position: relative;
+  padding: 2px;
+  border-radius: 19px;
+  background: conic-gradient(
+    from var(--aurora-angle),
+    #00FFD1 0%,
+    #00C9FF 12%,
+    #7B61FF 25%,
+    #C850FF 37%,
+    #FF6EC7 50%,
+    #FFB347 60%,
+    #00E676 72%,
+    #00BCD4 85%,
+    #00FFD1 100%
+  );
+  animation: aurora-rotate 4s linear infinite;
+  box-shadow:
+    0 0 16px 3px rgba(0, 255, 209, 0.33),
+    4px 0 24px 2px rgba(123, 97, 255, 0.27),
+    -4px 0 24px 2px rgba(0, 201, 255, 0.27),
+    0 4px 20px 2px rgba(200, 80, 255, 0.2),
+    0 -2px 14px 1px rgba(0, 230, 118, 0.2);
+}
+
+.aurora-glow > .aurora-inner {
+  border-radius: 17px;
+}

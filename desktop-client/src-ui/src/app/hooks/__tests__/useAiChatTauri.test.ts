@@ -28,7 +28,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 // Mock DLP Hook
 const mockScanUserInput = vi.fn();
 
-vi.mock('./useDlpScan', () => ({
+vi.mock('../useDlpScan', () => ({
   useDlpScan: () => ({
     scanUserInput: mockScanUserInput,
     isScanning: false,
@@ -65,6 +65,7 @@ const createMockSendMessageResponse = () => ({
 describe('useAiChatTauri', () => {
   let mockInvoke: ReturnType<typeof vi.fn>;
   let mockListen: ReturnType<typeof vi.fn>;
+  let mockUnlisten: ReturnType<typeof vi.fn>;
   
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -77,7 +78,7 @@ describe('useAiChatTauri', () => {
     mockListen = vi.mocked(listen);
     
     // 默认 mock 行为
-    const mockUnlisten = vi.fn();
+    mockUnlisten = vi.fn();
     mockListen.mockResolvedValue(mockUnlisten);
     mockInvoke.mockResolvedValue(undefined);
     mockScanUserInput.mockResolvedValue(createMockDlpResult());
@@ -101,7 +102,7 @@ describe('useAiChatTauri', () => {
 
     expect(result.current.messages).toEqual([]);
     expect(result.current.isLoading).toBe(false);
-    expect(result.current.isConnected).toBe(false);
+    expect(result.current.isConnected).toBe(true);
     expect(result.current.error).toBeNull();
     expect(result.current.thinkingMessage).toBeNull();
   });
@@ -146,7 +147,10 @@ describe('useAiChatTauri', () => {
     // 需求: REQ-HOOK-004 - 用户应该能够发送消息
     // 覆盖: 单元测试 - 正常路径
     
-    mockInvoke.mockResolvedValueOnce(createMockSendMessageResponse());
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'send_chat_message') return Promise.resolve(createMockSendMessageResponse());
+      return Promise.resolve(undefined);
+    });
 
     const { result } = renderHook(() =>
       useAiChatTauri({ threadId: 'thread-123' })
@@ -186,19 +190,25 @@ describe('useAiChatTauri', () => {
       await result.current.sendMessage('My SSN is 123-45-6789');
     });
 
-    // 验证错误被设置
-    expect(result.current.error).toContain('Sensitive data detected');
-    expect(onError).toHaveBeenCalledWith(expect.stringContaining('Sensitive data detected'));
+    // 验证 DLP 警告被设置（blocked 类型）
+    expect(result.current.dlpWarning).not.toBeNull();
+    expect(result.current.dlpWarning?.type).toBe('blocked');
 
     // 验证消息没有被发送
     expect(mockInvoke).not.toHaveBeenCalledWith('send_chat_message', expect.anything());
+
+    // 验证 loading 被重置
+    expect(result.current.isLoading).toBe(false);
   });
 
   it('should handle send message error', async () => {
     // 需求: REQ-HOOK-006 - 系统应该优雅地处理发送错误
     // 覆盖: 错误路径测试
     
-    mockInvoke.mockRejectedValueOnce(new Error('Network error'));
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'send_chat_message') return Promise.reject(new Error('Network error'));
+      return Promise.resolve(undefined);
+    });
 
     const onError = vi.fn();
     const { result } = renderHook(() =>
@@ -232,7 +242,10 @@ describe('useAiChatTauri', () => {
       },
     });
 
-    mockInvoke.mockResolvedValueOnce(createMockSendMessageResponse());
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'send_chat_message') return Promise.resolve(createMockSendMessageResponse());
+      return Promise.resolve(undefined);
+    });
 
     const { result } = renderHook(() =>
       useAiChatTauri({ threadId: 'thread-123' })
@@ -494,7 +507,10 @@ describe('useAiChatTauri', () => {
     // 需求: REQ-HOOK-015 - 系统应该处理空消息
     // 覆盖: 边界条件测试
     
-    mockInvoke.mockResolvedValueOnce(createMockSendMessageResponse());
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'send_chat_message') return Promise.resolve(createMockSendMessageResponse());
+      return Promise.resolve(undefined);
+    });
 
     const { result } = renderHook(() =>
       useAiChatTauri({ threadId: 'thread-123' })
@@ -505,14 +521,17 @@ describe('useAiChatTauri', () => {
     });
 
     // 空消息应该被发送(由后端决定是否接受)
-    expect(mockInvoke).toHaveBeenCalled();
+    expect(mockInvoke).toHaveBeenCalledWith('send_chat_message', expect.anything());
   });
 
   it('should handle very long message', async () => {
     // 需求: REQ-HOOK-016 - 系统应该处理长消息
     // 覆盖: 边界条件测试
     
-    mockInvoke.mockResolvedValueOnce(createMockSendMessageResponse());
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'send_chat_message') return Promise.resolve(createMockSendMessageResponse());
+      return Promise.resolve(undefined);
+    });
 
     const { result } = renderHook(() =>
       useAiChatTauri({ threadId: 'thread-123' })
@@ -524,7 +543,7 @@ describe('useAiChatTauri', () => {
       await result.current.sendMessage(longMessage);
     });
 
-    expect(mockInvoke).toHaveBeenCalled();
+    expect(mockInvoke).toHaveBeenCalledWith('send_chat_message', expect.anything());
   });
 
   // ==========================================================================

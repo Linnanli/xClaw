@@ -33,10 +33,12 @@ export interface ThinkingProcessProps {
   steps: ThinkingStep[];
   /** 是否正在思考中（控制脉冲动画和自动展开） */
   isActive: boolean;
+  /** 隐藏头像和名称（嵌入 ChatMessage 时使用，避免重复渲染头像） */
+  hideAvatar?: boolean;
   className?: string;
 }
 
-export function ThinkingProcess({ steps, isActive, className }: ThinkingProcessProps) {
+export function ThinkingProcess({ steps, isActive, hideAvatar, className }: ThinkingProcessProps) {
   const [isOpen, setIsOpen] = useState(false);
 
   // 思考进行中时自动展开，完成后自动折叠
@@ -50,18 +52,20 @@ export function ThinkingProcess({ steps, isActive, className }: ThinkingProcessP
 
   return (
     <div className={cn('flex flex-col items-start gap-1.5', className)}>
-      {/* AI 头像 + 名称 */}
-      <div className="flex items-center gap-2.5">
-        <Avatar className="size-8">
-          <AvatarFallback className="bg-[#2D6B45] text-xs font-medium text-white">
-            XC
-          </AvatarFallback>
-        </Avatar>
-        <span className="text-[11px] font-semibold text-[#9D9C9A]">X-Claw</span>
-      </div>
+      {/* AI 头像 + 名称（嵌入 ChatMessage 时隐藏） */}
+      {!hideAvatar && (
+        <div className="flex items-center gap-2.5">
+          <Avatar className="size-8">
+            <AvatarFallback className="bg-[#2D6B45] text-xs font-medium text-white">
+              XC
+            </AvatarFallback>
+          </Avatar>
+          <span className="text-[11px] font-semibold text-[#9D9C9A]">X-Claw</span>
+        </div>
+      )}
 
-      {/* 思考气泡（偏移 42px 对齐头像下方，设计稿 thinkingWrap padding [0,0,0,42]） */}
-      <div className="w-full pl-[42px]">
+      {/* 思考气泡（独立渲染时偏移 42px，嵌入 ChatMessage 时不偏移） */}
+      <div className={cn('w-full', !hideAvatar && 'pl-[42px]')}>
         <Collapsible open={isOpen} onOpenChange={setIsOpen}>
           <div className="overflow-hidden rounded-tl rounded-tr-2xl rounded-br-2xl rounded-bl-2xl border border-[#E5E4E1] bg-white">
             {/* 触发器：设计稿 trigger padding [12,16] gap 8 */}

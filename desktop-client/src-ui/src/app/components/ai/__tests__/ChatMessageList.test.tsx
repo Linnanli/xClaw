@@ -6,10 +6,9 @@
  * - 契约测试（props 接口、内联 DLP 警告）
  * - 安全审计（DLP 警告内容安全性）
  *
- * 设计规范验证：
- * - 消息间距 space-y-5 (20px)
- * - 内联 DLP 警告样式（#FFF8E6 背景，#F0D060 边框，#C8960A 图标）
- * - 思考状态使用 AI 头像样式
+ * 重构说明：
+ * thinkingSteps 已嵌入 assistant 消息自身（参考 Vercel AI SDK message.parts 模式），
+ * ChatMessageList 不再接收独立的 thinkingSteps prop。
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -24,23 +23,20 @@ vi.mock('react-markdown', () => ({
   default: ({ children }: { children: string }) => <div data-testid="markdown">{children}</div>,
 }));
 
-// Mock ScrollArea（Radix ScrollArea 在 jsdom 中可能不渲染 viewport 内容）
 vi.mock('../ui/scroll-area', () => ({
   ScrollArea: ({ children, className }: { children: React.ReactNode; className?: string }) => (
     <div data-testid="scroll-area" className={className}>{children}</div>
   ),
 }));
 
-// Mock ThinkingProcess 组件（隔离测试）
 vi.mock('../ThinkingProcess', () => ({
-  ThinkingProcess: ({ steps, isActive, className }: { steps: unknown[]; isActive: boolean; className?: string }) => (
-    <div data-testid="thinking-process" data-active={isActive} data-steps={steps.length} className={className}>
+  ThinkingProcess: ({ steps, isActive, hideAvatar }: { steps: unknown[]; isActive: boolean; hideAvatar?: boolean }) => (
+    <div data-testid="thinking-process" data-active={isActive} data-steps={steps.length} data-hide-avatar={hideAvatar ?? false}>
       {isActive ? '思考中...' : `思考完成（${steps.length} 步）`}
     </div>
   ),
 }));
 
-// jsdom 不支持 scrollIntoView
 Element.prototype.scrollIntoView = vi.fn();
 
 /* ===== 测试数据 ===== */
@@ -70,17 +66,49 @@ describe('ChatMessageList - 正常路径', () => {
     expect(container.querySelector('.space-y-5')).toBeInTheDocument();
   });
 
-  it('思考状态应渲染 ThinkingProcess 组件', () => {
-    const steps = [
-      { id: 'step-1', message: '正在思考...', timestamp: Date.now() },
-    ];
-    render(
-      <ChatMessageList messages={[]} thinkingMessage="正在思考..." thinkingSteps={steps} />,
-    );
+  it('thinkingMessage 应渲染实时思考指示器', () => {
+    render(<ChatMessageList messages={[]} thinkingMessage="正在思考..." />);
     const tp = screen.getByTestId('thinking-process');
     expect(tp).toBeInTheDocument();
     expect(tp.getAttribute('data-active')).toBe('true');
-    expect(tp.getAttribute('data-steps')).toBe('1');
+  });
+
+  it('assistant 消息自带 thinkingSteps 应渲染折叠的思考过程', () => {
+    const messagesWithThinking = [
+      { id: '1', role: 'user' as const, content: '你好' },
+      {
+        id: '2',
+        role: 'assistant' as const,
+        content: '回复',
+        thinkingSteps: [
+          { id: 'step-1', message: 'Processing...', timestamp: Date.now() },
+          { id: 'step-2', message: 'Calling LLM...', timestamp: Date.now() },
+        ],
+      },
+    ];
+    render(<ChatMessageList messages={messagesWithThinking} />);
+    const tp = screen.getByTestId('thinking-process');
+    expect(tp).toBeInTheDocument();
+    expect(tp.getAttribute('data-active')).toBe('false');
+    expect(tp.getAttribute('data-steps')).toBe('2');
+    expect(tp.getAttribute('data-hide-avatar')).toBe('true');
+  });
+
+  it('思考过程应在 AI 回复之前渲染（顺序正确）', () => {
+    const messagesWithThinking = [
+      { id: '1', role: 'user' as const, content: '你好' },
+      {
+        id: '2',
+        role: 'assistant' as const,
+        content: 'AI 回复',
+        thinkingSteps: [{ id: 'step-1', message: 'Thinking...', timestamp: Date.now() }],
+      },
+    ];
+    const { container } = render(<ChatMessageList messages={messagesWithThinking} />);
+    const html = container.innerHTML;
+    const thinkingIdx = html.indexOf('thinking-process');
+    const replyIdx = html.indexOf('AI 回复');
+    expect(thinkingIdx).toBeLessThan(replyIdx);
   });
 
   it('加载状态应显示加载指示器', () => {
@@ -118,19 +146,24 @@ describe('ChatMessageList - 错误路径', () => {
   });
 
   it('test_failure_loading_with_thinking_shows_thinking_process', () => {
-    const steps = [{ id: 'step-1', message: '思考中...', timestamp: Date.now() }];
     render(
-      <ChatMessageList messages={mockMessages} loading thinkingMessage="思考中..." thinkingSteps={steps} />,
+      <ChatMessageList messages={mockMessages} loading thinkingMessage="思考中..." />,
     );
-    // ThinkingProcess 组件应可见
     expect(screen.getByTestId('thinking-process')).toBeInTheDocument();
-    // 不应有额外的加载指示器（思考状态优先）
   });
 
   it('test_failure_empty_error_string_not_rendered', () => {
     const { container } = render(<ChatMessageList messages={[]} error="" />);
-    // 空字符串是 falsy，不应渲染错误区域
     expect(container.querySelector('.text-destructive')).toBeNull();
+  });
+
+  it('test_failure_assistant_without_thinkingSteps_no_thinking_process', () => {
+    const msgs = [
+      { id: '1', role: 'user' as const, content: '你好' },
+      { id: '2', role: 'assistant' as const, content: '回复' },
+    ];
+    render(<ChatMessageList messages={msgs} />);
+    expect(screen.queryByTestId('thinking-process')).toBeNull();
   });
 });
 
@@ -144,7 +177,6 @@ describe('ChatMessageList - 契约测试', () => {
 
   it('test_contract_message_spacing_is_20px', () => {
     const { container } = render(<ChatMessageList messages={mockMessages} />);
-    // space-y-5 = 20px 间距
     expect(container.querySelector('.space-y-5')).toBeInTheDocument();
   });
 
@@ -152,8 +184,7 @@ describe('ChatMessageList - 契约测试', () => {
     const { container } = render(
       <ChatMessageList messages={[]} dlpWarning={mockDlpWarning} />,
     );
-    const alert = container.querySelector('[role="alert"]');
-    expect(alert).toBeInTheDocument();
+    expect(container.querySelector('[role="alert"]')).toBeInTheDocument();
   });
 
   it('test_contract_dlp_warning_has_design_colors', () => {
@@ -166,10 +197,7 @@ describe('ChatMessageList - 契约测试', () => {
   });
 
   it('test_contract_thinking_state_renders_thinking_process', () => {
-    const steps = [{ id: 'step-1', message: '思考中...', timestamp: Date.now() }];
-    render(
-      <ChatMessageList messages={[]} thinkingMessage="思考中..." thinkingSteps={steps} />,
-    );
+    render(<ChatMessageList messages={[]} thinkingMessage="思考中..." />);
     const tp = screen.getByTestId('thinking-process');
     expect(tp).toBeInTheDocument();
   });
@@ -195,8 +223,29 @@ describe('ChatMessageList - 契约测试', () => {
         onDeleteMessage={onDelete}
       />,
     );
-    // 删除按钮应存在于用户消息中
     expect(screen.getByLabelText('删除')).toBeInTheDocument();
+  });
+
+  it('test_contract_multiple_assistant_messages_each_with_own_thinking', () => {
+    const msgs = [
+      { id: '1', role: 'user' as const, content: '问题1' },
+      {
+        id: '2',
+        role: 'assistant' as const,
+        content: '回复1',
+        thinkingSteps: [{ id: 's1', message: 'Step A', timestamp: 1 }],
+      },
+      { id: '3', role: 'user' as const, content: '问题2' },
+      {
+        id: '4',
+        role: 'assistant' as const,
+        content: '回复2',
+        thinkingSteps: [{ id: 's2', message: 'Step B', timestamp: 2 }],
+      },
+    ];
+    render(<ChatMessageList messages={msgs} />);
+    const tps = screen.getAllByTestId('thinking-process');
+    expect(tps).toHaveLength(2);
   });
 });
 
@@ -213,7 +262,6 @@ describe('ChatMessageList - 安全审计', () => {
       <ChatMessageList messages={[]} dlpWarning={warning} />,
     );
     const html = container.innerHTML;
-    // 不应包含任何身份证号模式
     expect(html).not.toMatch(/\d{18}/);
     expect(html).not.toMatch(/\d{15}/);
   });
@@ -229,7 +277,6 @@ describe('ChatMessageList - 安全审计', () => {
     const { container } = render(
       <ChatMessageList messages={[]} dlpWarning={mockDlpWarning} />,
     );
-    const alert = container.querySelector('[aria-live="polite"]');
-    expect(alert).toBeInTheDocument();
+    expect(container.querySelector('[aria-live="polite"]')).toBeInTheDocument();
   });
 });

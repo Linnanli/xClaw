@@ -1,7 +1,9 @@
 /**
  * ChatMessageList - 消息列表容器
  *
- * 自动滚动到底部，支持思考状态、错误提示和内联 DLP 警告。
+ * 参考 shadcn.io AI 组件架构（Vercel AI SDK message.parts 模式）：
+ * 思考步骤嵌入在 assistant 消息自身（message.thinkingSteps），
+ * 而非作为独立的全局状态，确保渲染顺序始终正确。
  *
  * 设计规范（client-design.pen → X-Claw DLP Warning）：
  * - 消息间距 gap: 20px (space-y-5)
@@ -23,6 +25,8 @@ interface Message {
   content: string;
   timestamp?: number;
   dlpStats?: SanitizationStats;
+  /** AI 思考步骤（仅 assistant 消息） */
+  thinkingSteps?: ThinkingStep[];
 }
 
 /** 内联 DLP 警告信息 */
@@ -35,8 +39,9 @@ export interface InlineDlpWarning {
 export interface ChatMessageListProps {
   messages: Message[];
   loading?: boolean;
+  /** 当前正在思考的消息（非 null 表示思考进行中） */
   thinkingMessage?: string | null;
-  /** AI 思考步骤列表（配合 ThinkingProcess 组件） */
+  /** 实时思考步骤（思考进行中时传入） */
   thinkingSteps?: ThinkingStep[];
   error?: string | null;
   /** 内联 DLP 警告（显示在消息流末尾） */
@@ -74,19 +79,20 @@ export function ChatMessageList({
             content={msg.content}
             timestamp={msg.timestamp}
             dlpStats={msg.dlpStats}
+            thinkingSteps={msg.thinkingSteps}
             onEdit={onEditMessage}
             onDelete={onDeleteMessage}
             onRegenerate={msg.role === 'assistant' ? onRegenerate : undefined}
           />
         ))}
 
-        {/* 思考过程 - 使用 ThinkingProcess 可折叠组件 */}
-        {(thinkingSteps && thinkingSteps.length > 0) || thinkingMessage ? (
+        {/* 思考进行中 → 显示在消息列表末尾（尚未生成 assistant 消息） */}
+        {thinkingMessage && (
           <ThinkingProcess
-            steps={thinkingSteps || []}
-            isActive={!!thinkingMessage}
+            steps={thinkingSteps ?? []}
+            isActive
           />
-        ) : null}
+        )}
 
         {/* 加载指示器 */}
         {loading && !thinkingMessage && (
