@@ -22037,38 +22037,86 @@
                       "alignItems": "end",
                       "children": [
                         {
-                          "type": "text",
-                          "id": "zSg1x",
-                          "fill": "#9D9C9A",
-                          "content": "你",
-                          "fontFamily": "Outfit",
-                          "fontSize": 11,
-                          "fontWeight": "600"
-                        },
-                        {
                           "type": "frame",
-                          "id": "KMtL3",
-                          "name": "bubble1",
-                          "fill": "#3D8A5A",
-                          "cornerRadius": [
-                            16,
-                            16,
-                            4,
-                            16
-                          ],
-                          "padding": [
-                            12,
-                            16
-                          ],
+                          "id": "NBj4n",
+                          "name": "userHeader",
+                          "width": "fill_container",
+                          "gap": 10,
+                          "justifyContent": "end",
+                          "alignItems": "center",
                           "children": [
                             {
                               "type": "text",
-                              "id": "li6WK",
-                              "fill": "#FFFFFF",
-                              "content": "帮我查一下张三的身份证号码是多少",
+                              "id": "zSg1x",
+                              "fill": "#9D9C9A",
+                              "content": "你",
                               "fontFamily": "Outfit",
-                              "fontSize": 14,
-                              "fontWeight": "normal"
+                              "fontSize": 11,
+                              "fontWeight": "600"
+                            },
+                            {
+                              "id": "iw2IP",
+                              "type": "ref",
+                              "ref": "0:vP6oo",
+                              "width": 32,
+                              "height": 32,
+                              "fill": "#3D8A5A",
+                              "name": "userAvatar",
+                              "x": 1088,
+                              "y": 0,
+                              "descendants": {
+                                "0:ELfku": {
+                                  "content": "你",
+                                  "fontSize": 12,
+                                  "fill": "#FFFFFF",
+                                  "x": 9.5,
+                                  "y": 7.5
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "0ucJc",
+                          "name": "userWrap",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 6,
+                          "padding": [
+                            0,
+                            42,
+                            0,
+                            0
+                          ],
+                          "alignItems": "end",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "KMtL3",
+                              "name": "bubble1",
+                              "fill": "#3D8A5A",
+                              "cornerRadius": [
+                                16,
+                                16,
+                                4,
+                                16
+                              ],
+                              "padding": [
+                                12,
+                                16
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "li6WK",
+                                  "fill": "#FFFFFF",
+                                  "content": "帮我查一下张三的身份证号码是多少",
+                                  "fontFamily": "Outfit",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                }
+                              ]
                             }
                           ]
                         }
@@ -22083,55 +22131,100 @@
                       "gap": 6,
                       "children": [
                         {
-                          "type": "text",
-                          "id": "m5FlH",
-                          "fill": "#9D9C9A",
-                          "content": "X-Claw",
-                          "fontFamily": "Outfit",
-                          "fontSize": 11,
-                          "fontWeight": "600"
-                        },
-                        {
                           "type": "frame",
-                          "id": "mk3WD",
-                          "name": "aiBubble1",
-                          "fill": "#FFFFFF",
-                          "cornerRadius": [
-                            16,
-                            16,
-                            16,
-                            4
-                          ],
-                          "stroke": {
-                            "align": "inside",
-                            "thickness": 1,
-                            "fill": "#E5E4E1"
-                          },
-                          "layout": "vertical",
-                          "gap": 8,
-                          "padding": [
-                            12,
-                            16
-                          ],
+                          "id": "V7bqT",
+                          "name": "aiHeader",
+                          "gap": 10,
+                          "alignItems": "center",
                           "children": [
                             {
-                              "type": "text",
-                              "id": "HpNi3",
-                              "fill": "#4A4947",
-                              "content": "好的，张三的身份证号码是：",
-                              "fontFamily": "Outfit",
-                              "fontSize": 14,
-                              "fontWeight": "normal"
+                              "id": "1qrcc",
+                              "type": "ref",
+                              "ref": "0:vP6oo",
+                              "width": 32,
+                              "height": 32,
+                              "name": "aiAvatar",
+                              "x": 0,
+                              "y": 0,
+                              "fill": "#2D6B45",
+                              "descendants": {
+                                "0:ELfku": {
+                                  "content": "XC",
+                                  "fontSize": 11,
+                                  "x": 8,
+                                  "y": 8,
+                                  "fill": "#FFFFFF"
+                                }
+                              }
                             },
                             {
                               "type": "text",
-                              "id": "pupsy",
-                              "fill": "#4A4947",
-                              "content": "330326****0156**",
+                              "id": "m5FlH",
+                              "fill": "#9D9C9A",
+                              "content": "X-Claw",
                               "fontFamily": "Outfit",
-                              "fontSize": 14,
-                              "fontWeight": "600",
-                              "letterSpacing": 1
+                              "fontSize": 11,
+                              "fontWeight": "600"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "YcPGt",
+                          "name": "aiWrap",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 6,
+                          "padding": [
+                            0,
+                            0,
+                            0,
+                            42
+                          ],
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "mk3WD",
+                              "name": "aiBubble1",
+                              "fill": "#FFFFFF",
+                              "cornerRadius": [
+                                16,
+                                16,
+                                16,
+                                4
+                              ],
+                              "stroke": {
+                                "align": "inside",
+                                "thickness": 1,
+                                "fill": "#E5E4E1"
+                              },
+                              "layout": "vertical",
+                              "gap": 8,
+                              "padding": [
+                                12,
+                                16
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "HpNi3",
+                                  "fill": "#4A4947",
+                                  "content": "好的，张三的身份证号码是：",
+                                  "fontFamily": "Outfit",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "pupsy",
+                                  "fill": "#4A4947",
+                                  "content": "330326****0156**",
+                                  "fontFamily": "Outfit",
+                                  "fontSize": 14,
+                                  "fontWeight": "600",
+                                  "letterSpacing": 1
+                                }
+                              ]
                             }
                           ]
                         }
@@ -23233,38 +23326,86 @@
                       "alignItems": "end",
                       "children": [
                         {
-                          "type": "text",
-                          "id": "s0PVb",
-                          "fill": "#9D9C9A",
-                          "content": "你",
-                          "fontFamily": "Outfit",
-                          "fontSize": 11,
-                          "fontWeight": "600"
-                        },
-                        {
                           "type": "frame",
-                          "id": "GHdWL",
-                          "name": "bubble",
-                          "fill": "#3D8A5A",
-                          "cornerRadius": [
-                            16,
-                            16,
-                            4,
-                            16
-                          ],
-                          "padding": [
-                            12,
-                            16
-                          ],
+                          "id": "EBdEE",
+                          "name": "uHdr1",
+                          "width": "fill_container",
+                          "gap": 10,
+                          "justifyContent": "end",
+                          "alignItems": "center",
                           "children": [
                             {
                               "type": "text",
-                              "id": "9R4Uw",
-                              "fill": "#FFFFFF",
-                              "content": "帮我把上个月的销售数据导出为 Excel 发给李总",
+                              "id": "s0PVb",
+                              "fill": "#9D9C9A",
+                              "content": "你",
                               "fontFamily": "Outfit",
-                              "fontSize": 14,
-                              "fontWeight": "normal"
+                              "fontSize": 11,
+                              "fontWeight": "600"
+                            },
+                            {
+                              "id": "8Qymr",
+                              "type": "ref",
+                              "ref": "0:vP6oo",
+                              "width": 32,
+                              "height": 32,
+                              "fill": "#3D8A5A",
+                              "name": "uAv1",
+                              "x": 1088,
+                              "y": 0,
+                              "descendants": {
+                                "0:ELfku": {
+                                  "content": "你",
+                                  "fontSize": 12,
+                                  "fill": "#FFFFFF",
+                                  "x": 9.5,
+                                  "y": 7.5
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "QV4x2",
+                          "name": "uWrap1",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 6,
+                          "padding": [
+                            0,
+                            42,
+                            0,
+                            0
+                          ],
+                          "alignItems": "end",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "GHdWL",
+                              "name": "bubble",
+                              "fill": "#3D8A5A",
+                              "cornerRadius": [
+                                16,
+                                16,
+                                4,
+                                16
+                              ],
+                              "padding": [
+                                12,
+                                16
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "9R4Uw",
+                                  "fill": "#FFFFFF",
+                                  "content": "帮我把上个月的销售数据导出为 Excel 发给李总",
+                                  "fontFamily": "Outfit",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                }
+                              ]
                             }
                           ]
                         }
@@ -23279,282 +23420,327 @@
                       "gap": 6,
                       "children": [
                         {
-                          "type": "text",
-                          "id": "EE5U0",
-                          "fill": "#9D9C9A",
-                          "content": "X-Claw",
-                          "fontFamily": "Outfit",
-                          "fontSize": 11,
-                          "fontWeight": "600"
+                          "type": "frame",
+                          "id": "iHDoU",
+                          "name": "aiHdr1",
+                          "gap": 10,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "id": "DRaZO",
+                              "type": "ref",
+                              "ref": "0:vP6oo",
+                              "width": 32,
+                              "height": 32,
+                              "fill": "#2D6B45",
+                              "name": "aiAv1",
+                              "x": 0,
+                              "y": 0,
+                              "descendants": {
+                                "0:ELfku": {
+                                  "content": "XC",
+                                  "fontSize": 11,
+                                  "fill": "#FFFFFF",
+                                  "x": 8,
+                                  "y": 8
+                                }
+                              }
+                            },
+                            {
+                              "type": "text",
+                              "id": "EE5U0",
+                              "fill": "#9D9C9A",
+                              "content": "X-Claw",
+                              "fontFamily": "Outfit",
+                              "fontSize": 11,
+                              "fontWeight": "600"
+                            }
+                          ]
                         },
                         {
                           "type": "frame",
-                          "id": "9Qcvk",
-                          "name": "aiBubble",
-                          "width": 480,
-                          "fill": "#FFFFFF",
-                          "cornerRadius": [
-                            16,
-                            16,
-                            16,
-                            4
-                          ],
-                          "stroke": {
-                            "align": "inside",
-                            "thickness": 1,
-                            "fill": "#E5E4E1"
-                          },
+                          "id": "6xqzv",
+                          "name": "aiWrap1",
+                          "width": "fill_container",
                           "layout": "vertical",
-                          "gap": 16,
+                          "gap": 6,
                           "padding": [
-                            16,
-                            20
+                            0,
+                            0,
+                            0,
+                            42
                           ],
                           "children": [
                             {
-                              "type": "text",
-                              "id": "7ITrl",
-                              "fill": "#4A4947",
-                              "content": "此操作涉及敏感数据导出，需要您确认以下审批：",
-                              "fontFamily": "Outfit",
-                              "fontSize": 14,
-                              "fontWeight": "normal"
-                            },
-                            {
                               "type": "frame",
-                              "id": "YIQhN",
-                              "name": "approvalCard",
-                              "width": "fill_container",
-                              "fill": "#FAFAF8",
-                              "cornerRadius": 12,
+                              "id": "9Qcvk",
+                              "name": "aiBubble",
+                              "width": 480,
+                              "fill": "#FFFFFF",
+                              "cornerRadius": [
+                                16,
+                                16,
+                                16,
+                                4
+                              ],
                               "stroke": {
                                 "align": "inside",
                                 "thickness": 1,
                                 "fill": "#E5E4E1"
                               },
                               "layout": "vertical",
-                              "gap": 12,
-                              "padding": 16,
+                              "gap": 16,
+                              "padding": [
+                                16,
+                                20
+                              ],
                               "children": [
                                 {
-                                  "type": "frame",
-                                  "id": "WsUCx",
-                                  "name": "cardHeader",
-                                  "width": "fill_container",
-                                  "gap": 10,
-                                  "alignItems": "center",
-                                  "children": [
-                                    {
-                                      "type": "icon_font",
-                                      "id": "3Iw0V",
-                                      "width": 18,
-                                      "height": 18,
-                                      "iconFontName": "triangle-alert",
-                                      "iconFontFamily": "lucide",
-                                      "fill": "#E8960A"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "HU8KR",
-                                      "fill": "#C8960A",
-                                      "content": "高风险操作审批",
-                                      "fontFamily": "Outfit",
-                                      "fontSize": 13,
-                                      "fontWeight": "700"
-                                    },
-                                    {
-                                      "type": "frame",
-                                      "id": "8yrdB",
-                                      "name": "riskTag",
-                                      "fill": "#FFF0F0",
-                                      "cornerRadius": 100,
-                                      "padding": [
-                                        3,
-                                        8
-                                      ],
-                                      "alignItems": "center",
-                                      "children": [
-                                        {
-                                          "type": "text",
-                                          "id": "U9KWC",
-                                          "fill": "#D94040",
-                                          "content": "风险等级：高",
-                                          "fontFamily": "Outfit",
-                                          "fontSize": 10,
-                                          "fontWeight": "600"
-                                        }
-                                      ]
-                                    }
-                                  ]
+                                  "type": "text",
+                                  "id": "7ITrl",
+                                  "fill": "#4A4947",
+                                  "content": "此操作涉及敏感数据导出，需要您确认以下审批：",
+                                  "fontFamily": "Outfit",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "frame",
-                                  "id": "PWgrb",
-                                  "name": "detailRow1",
+                                  "id": "YIQhN",
+                                  "name": "approvalCard",
                                   "width": "fill_container",
-                                  "gap": 8,
-                                  "alignItems": "center",
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "xkyDm",
-                                      "fill": "#9D9C9A",
-                                      "content": "操作类型：",
-                                      "fontFamily": "Outfit",
-                                      "fontSize": 12,
-                                      "fontWeight": "500"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "5fOLy",
-                                      "fill": "#4A4947",
-                                      "content": "数据导出（Excel）",
-                                      "fontFamily": "Outfit",
-                                      "fontSize": 12,
-                                      "fontWeight": "600"
-                                    }
-                                  ]
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "4mQnD",
-                                  "name": "detailRow2",
-                                  "width": "fill_container",
-                                  "gap": 8,
-                                  "alignItems": "center",
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "4KNuJ",
-                                      "fill": "#9D9C9A",
-                                      "content": "数据范围：",
-                                      "fontFamily": "Outfit",
-                                      "fontSize": 12,
-                                      "fontWeight": "500"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "7WhIU",
-                                      "fill": "#4A4947",
-                                      "content": "2026年2月销售数据（1,247条记录）",
-                                      "fontFamily": "Outfit",
-                                      "fontSize": 12,
-                                      "fontWeight": "600"
-                                    }
-                                  ]
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "D9VpI",
-                                  "name": "detailRow3",
-                                  "width": "fill_container",
-                                  "gap": 8,
-                                  "alignItems": "center",
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "Q0ytV",
-                                      "fill": "#9D9C9A",
-                                      "content": "发送目标：",
-                                      "fontFamily": "Outfit",
-                                      "fontSize": 12,
-                                      "fontWeight": "500"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "02sQs",
-                                      "fill": "#4A4947",
-                                      "content": "李总（li@company.com）",
-                                      "fontFamily": "Outfit",
-                                      "fontSize": 12,
-                                      "fontWeight": "600"
-                                    }
-                                  ]
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "T4Ri7",
-                                  "name": "cardDiv",
-                                  "width": "fill_container",
-                                  "height": 1,
-                                  "fill": "#E5E4E1"
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "Tyd93",
-                                  "name": "btnRow",
-                                  "width": "fill_container",
-                                  "gap": 8,
-                                  "justifyContent": "end",
+                                  "fill": "#FAFAF8",
+                                  "cornerRadius": 12,
+                                  "stroke": {
+                                    "align": "inside",
+                                    "thickness": 1,
+                                    "fill": "#E5E4E1"
+                                  },
+                                  "layout": "vertical",
+                                  "gap": 12,
+                                  "padding": 16,
                                   "children": [
                                     {
                                       "type": "frame",
-                                      "id": "fKEu6",
-                                      "name": "denyBtn",
-                                      "fill": "#FFFFFF",
-                                      "cornerRadius": 8,
-                                      "stroke": {
-                                        "align": "inside",
-                                        "thickness": 1,
-                                        "fill": "#E5E4E1"
-                                      },
-                                      "gap": 6,
-                                      "padding": [
-                                        8,
-                                        16
-                                      ],
+                                      "id": "WsUCx",
+                                      "name": "cardHeader",
+                                      "width": "fill_container",
+                                      "gap": 10,
                                       "alignItems": "center",
                                       "children": [
                                         {
                                           "type": "icon_font",
-                                          "id": "Eanga",
-                                          "width": 14,
-                                          "height": 14,
-                                          "iconFontName": "x",
+                                          "id": "3Iw0V",
+                                          "width": 18,
+                                          "height": 18,
+                                          "iconFontName": "triangle-alert",
                                           "iconFontFamily": "lucide",
-                                          "fill": "#D94040"
+                                          "fill": "#E8960A"
                                         },
                                         {
                                           "type": "text",
-                                          "id": "mgVYp",
-                                          "fill": "#D94040",
-                                          "content": "拒绝",
+                                          "id": "HU8KR",
+                                          "fill": "#C8960A",
+                                          "content": "高风险操作审批",
                                           "fontFamily": "Outfit",
                                           "fontSize": 13,
+                                          "fontWeight": "700"
+                                        },
+                                        {
+                                          "type": "frame",
+                                          "id": "8yrdB",
+                                          "name": "riskTag",
+                                          "fill": "#FFF0F0",
+                                          "cornerRadius": 100,
+                                          "padding": [
+                                            3,
+                                            8
+                                          ],
+                                          "alignItems": "center",
+                                          "children": [
+                                            {
+                                              "type": "text",
+                                              "id": "U9KWC",
+                                              "fill": "#D94040",
+                                              "content": "风险等级：高",
+                                              "fontFamily": "Outfit",
+                                              "fontSize": 10,
+                                              "fontWeight": "600"
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "frame",
+                                      "id": "PWgrb",
+                                      "name": "detailRow1",
+                                      "width": "fill_container",
+                                      "gap": 8,
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "text",
+                                          "id": "xkyDm",
+                                          "fill": "#9D9C9A",
+                                          "content": "操作类型：",
+                                          "fontFamily": "Outfit",
+                                          "fontSize": 12,
                                           "fontWeight": "500"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "5fOLy",
+                                          "fill": "#4A4947",
+                                          "content": "数据导出（Excel）",
+                                          "fontFamily": "Outfit",
+                                          "fontSize": 12,
+                                          "fontWeight": "600"
                                         }
                                       ]
                                     },
                                     {
                                       "type": "frame",
-                                      "id": "gbgwc",
-                                      "name": "approveBtn",
-                                      "fill": "#3D8A5A",
-                                      "cornerRadius": 8,
-                                      "gap": 6,
-                                      "padding": [
-                                        8,
-                                        16
-                                      ],
+                                      "id": "4mQnD",
+                                      "name": "detailRow2",
+                                      "width": "fill_container",
+                                      "gap": 8,
                                       "alignItems": "center",
                                       "children": [
                                         {
-                                          "type": "icon_font",
-                                          "id": "lTKl9",
-                                          "width": 14,
-                                          "height": 14,
-                                          "iconFontName": "check",
-                                          "iconFontFamily": "lucide",
-                                          "fill": "#FFFFFF"
+                                          "type": "text",
+                                          "id": "4KNuJ",
+                                          "fill": "#9D9C9A",
+                                          "content": "数据范围：",
+                                          "fontFamily": "Outfit",
+                                          "fontSize": 12,
+                                          "fontWeight": "500"
                                         },
                                         {
                                           "type": "text",
-                                          "id": "dRmiU",
-                                          "fill": "#FFFFFF",
-                                          "content": "批准执行",
+                                          "id": "7WhIU",
+                                          "fill": "#4A4947",
+                                          "content": "2026年2月销售数据（1,247条记录）",
                                           "fontFamily": "Outfit",
-                                          "fontSize": 13,
+                                          "fontSize": 12,
                                           "fontWeight": "600"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "frame",
+                                      "id": "D9VpI",
+                                      "name": "detailRow3",
+                                      "width": "fill_container",
+                                      "gap": 8,
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "text",
+                                          "id": "Q0ytV",
+                                          "fill": "#9D9C9A",
+                                          "content": "发送目标：",
+                                          "fontFamily": "Outfit",
+                                          "fontSize": 12,
+                                          "fontWeight": "500"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "02sQs",
+                                          "fill": "#4A4947",
+                                          "content": "李总（li@company.com）",
+                                          "fontFamily": "Outfit",
+                                          "fontSize": 12,
+                                          "fontWeight": "600"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "frame",
+                                      "id": "T4Ri7",
+                                      "name": "cardDiv",
+                                      "width": "fill_container",
+                                      "height": 1,
+                                      "fill": "#E5E4E1"
+                                    },
+                                    {
+                                      "type": "frame",
+                                      "id": "Tyd93",
+                                      "name": "btnRow",
+                                      "width": "fill_container",
+                                      "gap": 8,
+                                      "justifyContent": "end",
+                                      "children": [
+                                        {
+                                          "type": "frame",
+                                          "id": "fKEu6",
+                                          "name": "denyBtn",
+                                          "fill": "#FFFFFF",
+                                          "cornerRadius": 8,
+                                          "stroke": {
+                                            "align": "inside",
+                                            "thickness": 1,
+                                            "fill": "#E5E4E1"
+                                          },
+                                          "gap": 6,
+                                          "padding": [
+                                            8,
+                                            16
+                                          ],
+                                          "alignItems": "center",
+                                          "children": [
+                                            {
+                                              "type": "icon_font",
+                                              "id": "Eanga",
+                                              "width": 14,
+                                              "height": 14,
+                                              "iconFontName": "x",
+                                              "iconFontFamily": "lucide",
+                                              "fill": "#D94040"
+                                            },
+                                            {
+                                              "type": "text",
+                                              "id": "mgVYp",
+                                              "fill": "#D94040",
+                                              "content": "拒绝",
+                                              "fontFamily": "Outfit",
+                                              "fontSize": 13,
+                                              "fontWeight": "500"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "type": "frame",
+                                          "id": "gbgwc",
+                                          "name": "approveBtn",
+                                          "fill": "#3D8A5A",
+                                          "cornerRadius": 8,
+                                          "gap": 6,
+                                          "padding": [
+                                            8,
+                                            16
+                                          ],
+                                          "alignItems": "center",
+                                          "children": [
+                                            {
+                                              "type": "icon_font",
+                                              "id": "lTKl9",
+                                              "width": 14,
+                                              "height": 14,
+                                              "iconFontName": "check",
+                                              "iconFontFamily": "lucide",
+                                              "fill": "#FFFFFF"
+                                            },
+                                            {
+                                              "type": "text",
+                                              "id": "dRmiU",
+                                              "fill": "#FFFFFF",
+                                              "content": "批准执行",
+                                              "fontFamily": "Outfit",
+                                              "fontSize": 13,
+                                              "fontWeight": "600"
+                                            }
+                                          ]
                                         }
                                       ]
                                     }
@@ -26216,38 +26402,86 @@
                       "alignItems": "end",
                       "children": [
                         {
-                          "type": "text",
-                          "id": "xeAzB",
-                          "fill": "#9D9C9A",
-                          "content": "你",
-                          "fontFamily": "Outfit",
-                          "fontSize": 11,
-                          "fontWeight": "600"
-                        },
-                        {
                           "type": "frame",
-                          "id": "lyMMA",
-                          "name": "bubble",
-                          "fill": "#3D8A5A",
-                          "cornerRadius": [
-                            16,
-                            16,
-                            4,
-                            16
-                          ],
-                          "padding": [
-                            12,
-                            16
-                          ],
+                          "id": "qMNxG",
+                          "name": "uHdr3",
+                          "width": "fill_container",
+                          "gap": 10,
+                          "justifyContent": "end",
+                          "alignItems": "center",
                           "children": [
                             {
                               "type": "text",
-                              "id": "S2esp",
-                              "fill": "#FFFFFF",
-                              "content": "公司的年假政策是怎样的？新员工入职多久可以请年假？",
+                              "id": "xeAzB",
+                              "fill": "#9D9C9A",
+                              "content": "你",
                               "fontFamily": "Outfit",
-                              "fontSize": 14,
-                              "fontWeight": "normal"
+                              "fontSize": 11,
+                              "fontWeight": "600"
+                            },
+                            {
+                              "id": "eacAk",
+                              "type": "ref",
+                              "ref": "0:vP6oo",
+                              "width": 32,
+                              "height": 32,
+                              "fill": "#3D8A5A",
+                              "name": "uAv3",
+                              "x": 1088,
+                              "y": 0,
+                              "descendants": {
+                                "0:ELfku": {
+                                  "content": "你",
+                                  "fontSize": 12,
+                                  "fill": "#FFFFFF",
+                                  "x": 9.5,
+                                  "y": 7.5
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "3Tj0W",
+                          "name": "uWrap3",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 6,
+                          "padding": [
+                            0,
+                            42,
+                            0,
+                            0
+                          ],
+                          "alignItems": "end",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "lyMMA",
+                              "name": "bubble",
+                              "fill": "#3D8A5A",
+                              "cornerRadius": [
+                                16,
+                                16,
+                                4,
+                                16
+                              ],
+                              "padding": [
+                                12,
+                                16
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "S2esp",
+                                  "fill": "#FFFFFF",
+                                  "content": "公司的年假政策是怎样的？新员工入职多久可以请年假？",
+                                  "fontFamily": "Outfit",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                }
+                              ]
                             }
                           ]
                         }
@@ -26262,169 +26496,214 @@
                       "gap": 6,
                       "children": [
                         {
-                          "type": "text",
-                          "id": "xVJK2",
-                          "fill": "#9D9C9A",
-                          "content": "X-Claw",
-                          "fontFamily": "Outfit",
-                          "fontSize": 11,
-                          "fontWeight": "600"
+                          "type": "frame",
+                          "id": "zL4kp",
+                          "name": "aiHdr3",
+                          "gap": 10,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "id": "cb3s1",
+                              "type": "ref",
+                              "ref": "0:vP6oo",
+                              "width": 32,
+                              "height": 32,
+                              "fill": "#2D6B45",
+                              "name": "aiAv3",
+                              "x": 0,
+                              "y": 0,
+                              "descendants": {
+                                "0:ELfku": {
+                                  "content": "XC",
+                                  "fontSize": 11,
+                                  "fill": "#FFFFFF",
+                                  "x": 8,
+                                  "y": 8
+                                }
+                              }
+                            },
+                            {
+                              "type": "text",
+                              "id": "xVJK2",
+                              "fill": "#9D9C9A",
+                              "content": "X-Claw",
+                              "fontFamily": "Outfit",
+                              "fontSize": 11,
+                              "fontWeight": "600"
+                            }
+                          ]
                         },
                         {
                           "type": "frame",
-                          "id": "zhOvl",
-                          "name": "aiBubble",
-                          "width": 560,
-                          "fill": "#FFFFFF",
-                          "cornerRadius": [
-                            16,
-                            16,
-                            16,
-                            4
-                          ],
-                          "stroke": {
-                            "align": "inside",
-                            "thickness": 1,
-                            "fill": "#E5E4E1"
-                          },
+                          "id": "jBV3l",
+                          "name": "aiWrap3",
+                          "width": "fill_container",
                           "layout": "vertical",
-                          "gap": 12,
+                          "gap": 6,
                           "padding": [
-                            16,
-                            20
+                            0,
+                            0,
+                            0,
+                            42
                           ],
                           "children": [
                             {
-                              "type": "text",
-                              "id": "aYNIK",
-                              "fill": "#4A4947",
-                              "content": "根据公司《员工手册 v3.2》，年假政策如下：",
-                              "fontFamily": "Outfit",
-                              "fontSize": 14,
-                              "fontWeight": "normal"
-                            },
-                            {
-                              "type": "text",
-                              "id": "3wf3v",
-                              "fill": "#4A4947",
-                              "content": "• 入职满 1 年：5 天带薪年假\n• 入职满 3 年：10 天带薪年假\n• 入职满 10 年：15 天带薪年假\n\n新员工需入职满 6 个月后方可申请年假，试用期内不可使用。",
-                              "lineHeight": 1.6,
-                              "fontFamily": "Outfit",
-                              "fontSize": 13,
-                              "fontWeight": "normal"
-                            },
-                            {
                               "type": "frame",
-                              "id": "tzRMq",
-                              "name": "sourceCard",
-                              "width": "fill_container",
-                              "fill": "#F5F4F1",
-                              "cornerRadius": 10,
+                              "id": "zhOvl",
+                              "name": "aiBubble",
+                              "width": 560,
+                              "fill": "#FFFFFF",
+                              "cornerRadius": [
+                                16,
+                                16,
+                                16,
+                                4
+                              ],
                               "stroke": {
                                 "align": "inside",
                                 "thickness": 1,
                                 "fill": "#E5E4E1"
                               },
                               "layout": "vertical",
-                              "gap": 6,
+                              "gap": 12,
                               "padding": [
-                                10,
-                                14
+                                16,
+                                20
                               ],
                               "children": [
                                 {
-                                  "type": "frame",
-                                  "id": "tCCwc",
-                                  "name": "srcHeader",
-                                  "width": "fill_container",
-                                  "gap": 6,
-                                  "alignItems": "center",
-                                  "children": [
-                                    {
-                                      "type": "icon_font",
-                                      "id": "5MgYj",
-                                      "width": 14,
-                                      "height": 14,
-                                      "iconFontName": "book-open",
-                                      "iconFontFamily": "lucide",
-                                      "fill": "#3D8A5A"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "wXudI",
-                                      "fill": "#3D8A5A",
-                                      "content": "来源：企业知识库",
-                                      "fontFamily": "Outfit",
-                                      "fontSize": 12,
-                                      "fontWeight": "600"
-                                    }
-                                  ]
+                                  "type": "text",
+                                  "id": "aYNIK",
+                                  "fill": "#4A4947",
+                                  "content": "根据公司《员工手册 v3.2》，年假政策如下：",
+                                  "fontFamily": "Outfit",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "3wf3v",
+                                  "fill": "#4A4947",
+                                  "content": "• 入职满 1 年：5 天带薪年假\n• 入职满 3 年：10 天带薪年假\n• 入职满 10 年：15 天带薪年假\n\n新员工需入职满 6 个月后方可申请年假，试用期内不可使用。",
+                                  "lineHeight": 1.6,
+                                  "fontFamily": "Outfit",
+                                  "fontSize": 13,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "frame",
-                                  "id": "hVcwU",
-                                  "name": "src1",
+                                  "id": "tzRMq",
+                                  "name": "sourceCard",
                                   "width": "fill_container",
+                                  "fill": "#F5F4F1",
+                                  "cornerRadius": 10,
+                                  "stroke": {
+                                    "align": "inside",
+                                    "thickness": 1,
+                                    "fill": "#E5E4E1"
+                                  },
+                                  "layout": "vertical",
                                   "gap": 6,
                                   "padding": [
-                                    0,
-                                    0,
-                                    0,
-                                    20
+                                    10,
+                                    14
                                   ],
-                                  "alignItems": "center",
                                   "children": [
                                     {
-                                      "type": "icon_font",
-                                      "id": "ThEKo",
-                                      "width": 12,
-                                      "height": 12,
-                                      "iconFontName": "file-text",
-                                      "iconFontFamily": "lucide",
-                                      "fill": "#9D9C9A"
+                                      "type": "frame",
+                                      "id": "tCCwc",
+                                      "name": "srcHeader",
+                                      "width": "fill_container",
+                                      "gap": 6,
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "icon_font",
+                                          "id": "5MgYj",
+                                          "width": 14,
+                                          "height": 14,
+                                          "iconFontName": "book-open",
+                                          "iconFontFamily": "lucide",
+                                          "fill": "#3D8A5A"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "wXudI",
+                                          "fill": "#3D8A5A",
+                                          "content": "来源：企业知识库",
+                                          "fontFamily": "Outfit",
+                                          "fontSize": 12,
+                                          "fontWeight": "600"
+                                        }
+                                      ]
                                     },
                                     {
-                                      "type": "text",
-                                      "id": "mEWth",
-                                      "fill": "#6D6C6A",
-                                      "content": "员工手册 v3.2 — 第四章 休假制度",
-                                      "fontFamily": "Outfit",
-                                      "fontSize": 11,
-                                      "fontWeight": "normal"
-                                    }
-                                  ]
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "1BpqF",
-                                  "name": "src2",
-                                  "width": "fill_container",
-                                  "gap": 6,
-                                  "padding": [
-                                    0,
-                                    0,
-                                    0,
-                                    20
-                                  ],
-                                  "alignItems": "center",
-                                  "children": [
-                                    {
-                                      "type": "icon_font",
-                                      "id": "RPsPT",
-                                      "width": 12,
-                                      "height": 12,
-                                      "iconFontName": "file-text",
-                                      "iconFontFamily": "lucide",
-                                      "fill": "#9D9C9A"
+                                      "type": "frame",
+                                      "id": "hVcwU",
+                                      "name": "src1",
+                                      "width": "fill_container",
+                                      "gap": 6,
+                                      "padding": [
+                                        0,
+                                        0,
+                                        0,
+                                        20
+                                      ],
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "icon_font",
+                                          "id": "ThEKo",
+                                          "width": 12,
+                                          "height": 12,
+                                          "iconFontName": "file-text",
+                                          "iconFontFamily": "lucide",
+                                          "fill": "#9D9C9A"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "mEWth",
+                                          "fill": "#6D6C6A",
+                                          "content": "员工手册 v3.2 — 第四章 休假制度",
+                                          "fontFamily": "Outfit",
+                                          "fontSize": 11,
+                                          "fontWeight": "normal"
+                                        }
+                                      ]
                                     },
                                     {
-                                      "type": "text",
-                                      "id": "SDziI",
-                                      "fill": "#6D6C6A",
-                                      "content": "HR 政策更新通知 2025-12",
-                                      "fontFamily": "Outfit",
-                                      "fontSize": 11,
-                                      "fontWeight": "normal"
+                                      "type": "frame",
+                                      "id": "1BpqF",
+                                      "name": "src2",
+                                      "width": "fill_container",
+                                      "gap": 6,
+                                      "padding": [
+                                        0,
+                                        0,
+                                        0,
+                                        20
+                                      ],
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "icon_font",
+                                          "id": "RPsPT",
+                                          "width": 12,
+                                          "height": 12,
+                                          "iconFontName": "file-text",
+                                          "iconFontFamily": "lucide",
+                                          "fill": "#9D9C9A"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "SDziI",
+                                          "fill": "#6D6C6A",
+                                          "content": "HR 政策更新通知 2025-12",
+                                          "fontFamily": "Outfit",
+                                          "fontSize": 11,
+                                          "fontWeight": "normal"
+                                        }
+                                      ]
                                     }
                                   ]
                                 }
@@ -43261,38 +43540,86 @@
                       "alignItems": "end",
                       "children": [
                         {
-                          "type": "text",
-                          "id": "FIuj1",
-                          "fill": "#9D9C9A",
-                          "content": "你",
-                          "fontFamily": "Outfit",
-                          "fontSize": 11,
-                          "fontWeight": "600"
-                        },
-                        {
                           "type": "frame",
-                          "id": "I09jA",
-                          "name": "bubble1",
-                          "fill": "#3D8A5A",
-                          "cornerRadius": [
-                            16,
-                            16,
-                            4,
-                            16
-                          ],
-                          "padding": [
-                            12,
-                            16
-                          ],
+                          "id": "m8dFb",
+                          "name": "uHdr2",
+                          "width": "fill_container",
+                          "gap": 10,
+                          "justifyContent": "end",
+                          "alignItems": "center",
                           "children": [
                             {
                               "type": "text",
-                              "id": "mqnUx",
-                              "fill": "#FFFFFF",
-                              "content": "帮我查一下张三的身份证号码是多少",
+                              "id": "FIuj1",
+                              "fill": "#9D9C9A",
+                              "content": "你",
                               "fontFamily": "Outfit",
-                              "fontSize": 14,
-                              "fontWeight": "normal"
+                              "fontSize": 11,
+                              "fontWeight": "600"
+                            },
+                            {
+                              "id": "rsoY2",
+                              "type": "ref",
+                              "ref": "0:vP6oo",
+                              "width": 32,
+                              "height": 32,
+                              "fill": "#3D8A5A",
+                              "name": "uAv2",
+                              "x": 1088,
+                              "y": 0,
+                              "descendants": {
+                                "0:ELfku": {
+                                  "content": "你",
+                                  "fontSize": 12,
+                                  "fill": "#FFFFFF",
+                                  "x": 9.5,
+                                  "y": 7.5
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "nKCCm",
+                          "name": "uWrap2",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 6,
+                          "padding": [
+                            0,
+                            42,
+                            0,
+                            0
+                          ],
+                          "alignItems": "end",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "I09jA",
+                              "name": "bubble1",
+                              "fill": "#3D8A5A",
+                              "cornerRadius": [
+                                16,
+                                16,
+                                4,
+                                16
+                              ],
+                              "padding": [
+                                12,
+                                16
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "mqnUx",
+                                  "fill": "#FFFFFF",
+                                  "content": "帮我查一下张三的身份证号码是多少",
+                                  "fontFamily": "Outfit",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                }
+                              ]
                             }
                           ]
                         }
@@ -43307,55 +43634,100 @@
                       "gap": 6,
                       "children": [
                         {
-                          "type": "text",
-                          "id": "9uc85",
-                          "fill": "#9D9C9A",
-                          "content": "X-Claw",
-                          "fontFamily": "Outfit",
-                          "fontSize": 11,
-                          "fontWeight": "600"
-                        },
-                        {
                           "type": "frame",
-                          "id": "KMHpU",
-                          "name": "aiBubble1",
-                          "fill": "#FFFFFF",
-                          "cornerRadius": [
-                            16,
-                            16,
-                            16,
-                            4
-                          ],
-                          "stroke": {
-                            "align": "inside",
-                            "thickness": 1,
-                            "fill": "#E5E4E1"
-                          },
-                          "layout": "vertical",
-                          "gap": 8,
-                          "padding": [
-                            12,
-                            16
-                          ],
+                          "id": "1FxL8",
+                          "name": "aiHdr2",
+                          "gap": 10,
+                          "alignItems": "center",
                           "children": [
                             {
-                              "type": "text",
-                              "id": "DzZDS",
-                              "fill": "#4A4947",
-                              "content": "好的，张三的身份证号码是：",
-                              "fontFamily": "Outfit",
-                              "fontSize": 14,
-                              "fontWeight": "normal"
+                              "id": "zIl3p",
+                              "type": "ref",
+                              "ref": "0:vP6oo",
+                              "width": 32,
+                              "height": 32,
+                              "fill": "#2D6B45",
+                              "name": "aiAv2",
+                              "x": 0,
+                              "y": 0,
+                              "descendants": {
+                                "0:ELfku": {
+                                  "content": "XC",
+                                  "fontSize": 11,
+                                  "fill": "#FFFFFF",
+                                  "x": 8,
+                                  "y": 8
+                                }
+                              }
                             },
                             {
                               "type": "text",
-                              "id": "jL62Y",
-                              "fill": "#4A4947",
-                              "content": "330326****0156**",
+                              "id": "9uc85",
+                              "fill": "#9D9C9A",
+                              "content": "X-Claw",
                               "fontFamily": "Outfit",
-                              "fontSize": 14,
-                              "fontWeight": "600",
-                              "letterSpacing": 1
+                              "fontSize": 11,
+                              "fontWeight": "600"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "fRFWU",
+                          "name": "aiWrap2",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 6,
+                          "padding": [
+                            0,
+                            0,
+                            0,
+                            42
+                          ],
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "KMHpU",
+                              "name": "aiBubble1",
+                              "fill": "#FFFFFF",
+                              "cornerRadius": [
+                                16,
+                                16,
+                                16,
+                                4
+                              ],
+                              "stroke": {
+                                "align": "inside",
+                                "thickness": 1,
+                                "fill": "#E5E4E1"
+                              },
+                              "layout": "vertical",
+                              "gap": 8,
+                              "padding": [
+                                12,
+                                16
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "DzZDS",
+                                  "fill": "#4A4947",
+                                  "content": "好的，张三的身份证号码是：",
+                                  "fontFamily": "Outfit",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "jL62Y",
+                                  "fill": "#4A4947",
+                                  "content": "330326****0156**",
+                                  "fontFamily": "Outfit",
+                                  "fontSize": 14,
+                                  "fontWeight": "600",
+                                  "letterSpacing": 1
+                                }
+                              ]
                             }
                           ]
                         }
@@ -47746,38 +48118,86 @@
                       "alignItems": "end",
                       "children": [
                         {
-                          "type": "text",
-                          "id": "QNSkv",
-                          "fill": "#9D9C9A",
-                          "content": "你",
-                          "fontFamily": "Outfit",
-                          "fontSize": 11,
-                          "fontWeight": "600"
-                        },
-                        {
                           "type": "frame",
-                          "id": "jnOZz",
-                          "name": "bubble",
-                          "fill": "#3D8A5A",
-                          "cornerRadius": [
-                            16,
-                            16,
-                            4,
-                            16
-                          ],
-                          "padding": [
-                            12,
-                            16
-                          ],
+                          "id": "aHA7n",
+                          "name": "uHdr4",
+                          "width": "fill_container",
+                          "gap": 10,
+                          "justifyContent": "end",
+                          "alignItems": "center",
                           "children": [
                             {
                               "type": "text",
-                              "id": "BO7ar",
-                              "fill": "#FFFFFF",
-                              "content": "公司的年假政策是怎样的？新员工入职多久可以请年假？",
+                              "id": "QNSkv",
+                              "fill": "#9D9C9A",
+                              "content": "你",
                               "fontFamily": "Outfit",
-                              "fontSize": 14,
-                              "fontWeight": "normal"
+                              "fontSize": 11,
+                              "fontWeight": "600"
+                            },
+                            {
+                              "id": "yjLM4",
+                              "type": "ref",
+                              "ref": "0:vP6oo",
+                              "width": 32,
+                              "height": 32,
+                              "fill": "#3D8A5A",
+                              "name": "uAv4",
+                              "x": 1088,
+                              "y": 0,
+                              "descendants": {
+                                "0:ELfku": {
+                                  "content": "你",
+                                  "fontSize": 12,
+                                  "fill": "#FFFFFF",
+                                  "x": 9.5,
+                                  "y": 7.5
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "of7iX",
+                          "name": "uWrap4",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 6,
+                          "padding": [
+                            0,
+                            42,
+                            0,
+                            0
+                          ],
+                          "alignItems": "end",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "jnOZz",
+                              "name": "bubble",
+                              "fill": "#3D8A5A",
+                              "cornerRadius": [
+                                16,
+                                16,
+                                4,
+                                16
+                              ],
+                              "padding": [
+                                12,
+                                16
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "BO7ar",
+                                  "fill": "#FFFFFF",
+                                  "content": "公司的年假政策是怎样的？新员工入职多久可以请年假？",
+                                  "fontFamily": "Outfit",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                }
+                              ]
                             }
                           ]
                         }
@@ -47792,169 +48212,214 @@
                       "gap": 6,
                       "children": [
                         {
-                          "type": "text",
-                          "id": "wBsWH",
-                          "fill": "#9D9C9A",
-                          "content": "X-Claw",
-                          "fontFamily": "Outfit",
-                          "fontSize": 11,
-                          "fontWeight": "600"
+                          "type": "frame",
+                          "id": "0TId3",
+                          "name": "aiHdr4",
+                          "gap": 10,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "id": "Xr86S",
+                              "type": "ref",
+                              "ref": "0:vP6oo",
+                              "width": 32,
+                              "height": 32,
+                              "fill": "#2D6B45",
+                              "name": "aiAv4",
+                              "x": 0,
+                              "y": 0,
+                              "descendants": {
+                                "0:ELfku": {
+                                  "content": "XC",
+                                  "fontSize": 11,
+                                  "fill": "#FFFFFF",
+                                  "x": 8,
+                                  "y": 8
+                                }
+                              }
+                            },
+                            {
+                              "type": "text",
+                              "id": "wBsWH",
+                              "fill": "#9D9C9A",
+                              "content": "X-Claw",
+                              "fontFamily": "Outfit",
+                              "fontSize": 11,
+                              "fontWeight": "600"
+                            }
+                          ]
                         },
                         {
                           "type": "frame",
-                          "id": "Nn6eB",
-                          "name": "aiBubble",
-                          "width": 560,
-                          "fill": "#FFFFFF",
-                          "cornerRadius": [
-                            16,
-                            16,
-                            16,
-                            4
-                          ],
-                          "stroke": {
-                            "align": "inside",
-                            "thickness": 1,
-                            "fill": "#E5E4E1"
-                          },
+                          "id": "vXFHo",
+                          "name": "aiWrap4",
+                          "width": "fill_container",
                           "layout": "vertical",
-                          "gap": 12,
+                          "gap": 6,
                           "padding": [
-                            16,
-                            20
+                            0,
+                            0,
+                            0,
+                            42
                           ],
                           "children": [
                             {
-                              "type": "text",
-                              "id": "6Z7eh",
-                              "fill": "#4A4947",
-                              "content": "根据公司《员工手册 v3.2》，年假政策如下：",
-                              "fontFamily": "Outfit",
-                              "fontSize": 14,
-                              "fontWeight": "normal"
-                            },
-                            {
-                              "type": "text",
-                              "id": "uiYy8",
-                              "fill": "#4A4947",
-                              "content": "• 入职满 1 年：5 天带薪年假\n• 入职满 3 年：10 天带薪年假\n• 入职满 10 年：15 天带薪年假\n\n新员工需入职满 6 个月后方可申请年假，试用期内不可使用。",
-                              "lineHeight": 1.6,
-                              "fontFamily": "Outfit",
-                              "fontSize": 13,
-                              "fontWeight": "normal"
-                            },
-                            {
                               "type": "frame",
-                              "id": "w2USV",
-                              "name": "sourceCard",
-                              "width": "fill_container",
-                              "fill": "#F5F4F1",
-                              "cornerRadius": 10,
+                              "id": "Nn6eB",
+                              "name": "aiBubble",
+                              "width": 560,
+                              "fill": "#FFFFFF",
+                              "cornerRadius": [
+                                16,
+                                16,
+                                16,
+                                4
+                              ],
                               "stroke": {
                                 "align": "inside",
                                 "thickness": 1,
                                 "fill": "#E5E4E1"
                               },
                               "layout": "vertical",
-                              "gap": 6,
+                              "gap": 12,
                               "padding": [
-                                10,
-                                14
+                                16,
+                                20
                               ],
                               "children": [
                                 {
-                                  "type": "frame",
-                                  "id": "AhtqR",
-                                  "name": "srcHeader",
-                                  "width": "fill_container",
-                                  "gap": 6,
-                                  "alignItems": "center",
-                                  "children": [
-                                    {
-                                      "type": "icon_font",
-                                      "id": "zbYm0",
-                                      "width": 14,
-                                      "height": 14,
-                                      "iconFontName": "book-open",
-                                      "iconFontFamily": "lucide",
-                                      "fill": "#3D8A5A"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "KScEe",
-                                      "fill": "#3D8A5A",
-                                      "content": "来源：企业知识库",
-                                      "fontFamily": "Outfit",
-                                      "fontSize": 12,
-                                      "fontWeight": "600"
-                                    }
-                                  ]
+                                  "type": "text",
+                                  "id": "6Z7eh",
+                                  "fill": "#4A4947",
+                                  "content": "根据公司《员工手册 v3.2》，年假政策如下：",
+                                  "fontFamily": "Outfit",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "uiYy8",
+                                  "fill": "#4A4947",
+                                  "content": "• 入职满 1 年：5 天带薪年假\n• 入职满 3 年：10 天带薪年假\n• 入职满 10 年：15 天带薪年假\n\n新员工需入职满 6 个月后方可申请年假，试用期内不可使用。",
+                                  "lineHeight": 1.6,
+                                  "fontFamily": "Outfit",
+                                  "fontSize": 13,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "frame",
-                                  "id": "CPC6k",
-                                  "name": "src1",
+                                  "id": "w2USV",
+                                  "name": "sourceCard",
                                   "width": "fill_container",
+                                  "fill": "#F5F4F1",
+                                  "cornerRadius": 10,
+                                  "stroke": {
+                                    "align": "inside",
+                                    "thickness": 1,
+                                    "fill": "#E5E4E1"
+                                  },
+                                  "layout": "vertical",
                                   "gap": 6,
                                   "padding": [
-                                    0,
-                                    0,
-                                    0,
-                                    20
+                                    10,
+                                    14
                                   ],
-                                  "alignItems": "center",
                                   "children": [
                                     {
-                                      "type": "icon_font",
-                                      "id": "5CRaM",
-                                      "width": 12,
-                                      "height": 12,
-                                      "iconFontName": "file-text",
-                                      "iconFontFamily": "lucide",
-                                      "fill": "#9D9C9A"
+                                      "type": "frame",
+                                      "id": "AhtqR",
+                                      "name": "srcHeader",
+                                      "width": "fill_container",
+                                      "gap": 6,
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "icon_font",
+                                          "id": "zbYm0",
+                                          "width": 14,
+                                          "height": 14,
+                                          "iconFontName": "book-open",
+                                          "iconFontFamily": "lucide",
+                                          "fill": "#3D8A5A"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "KScEe",
+                                          "fill": "#3D8A5A",
+                                          "content": "来源：企业知识库",
+                                          "fontFamily": "Outfit",
+                                          "fontSize": 12,
+                                          "fontWeight": "600"
+                                        }
+                                      ]
                                     },
                                     {
-                                      "type": "text",
-                                      "id": "vutrn",
-                                      "fill": "#6D6C6A",
-                                      "content": "员工手册 v3.2 — 第四章 休假制度",
-                                      "fontFamily": "Outfit",
-                                      "fontSize": 11,
-                                      "fontWeight": "normal"
-                                    }
-                                  ]
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "d5NKo",
-                                  "name": "src2",
-                                  "width": "fill_container",
-                                  "gap": 6,
-                                  "padding": [
-                                    0,
-                                    0,
-                                    0,
-                                    20
-                                  ],
-                                  "alignItems": "center",
-                                  "children": [
-                                    {
-                                      "type": "icon_font",
-                                      "id": "HHLHp",
-                                      "width": 12,
-                                      "height": 12,
-                                      "iconFontName": "file-text",
-                                      "iconFontFamily": "lucide",
-                                      "fill": "#9D9C9A"
+                                      "type": "frame",
+                                      "id": "CPC6k",
+                                      "name": "src1",
+                                      "width": "fill_container",
+                                      "gap": 6,
+                                      "padding": [
+                                        0,
+                                        0,
+                                        0,
+                                        20
+                                      ],
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "icon_font",
+                                          "id": "5CRaM",
+                                          "width": 12,
+                                          "height": 12,
+                                          "iconFontName": "file-text",
+                                          "iconFontFamily": "lucide",
+                                          "fill": "#9D9C9A"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "vutrn",
+                                          "fill": "#6D6C6A",
+                                          "content": "员工手册 v3.2 — 第四章 休假制度",
+                                          "fontFamily": "Outfit",
+                                          "fontSize": 11,
+                                          "fontWeight": "normal"
+                                        }
+                                      ]
                                     },
                                     {
-                                      "type": "text",
-                                      "id": "OMvMm",
-                                      "fill": "#6D6C6A",
-                                      "content": "HR 政策更新通知 2025-12",
-                                      "fontFamily": "Outfit",
-                                      "fontSize": 11,
-                                      "fontWeight": "normal"
+                                      "type": "frame",
+                                      "id": "d5NKo",
+                                      "name": "src2",
+                                      "width": "fill_container",
+                                      "gap": 6,
+                                      "padding": [
+                                        0,
+                                        0,
+                                        0,
+                                        20
+                                      ],
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "icon_font",
+                                          "id": "HHLHp",
+                                          "width": 12,
+                                          "height": 12,
+                                          "iconFontName": "file-text",
+                                          "iconFontFamily": "lucide",
+                                          "fill": "#9D9C9A"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "OMvMm",
+                                          "fill": "#6D6C6A",
+                                          "content": "HR 政策更新通知 2025-12",
+                                          "fontFamily": "Outfit",
+                                          "fontSize": 11,
+                                          "fontWeight": "normal"
+                                        }
+                                      ]
                                     }
                                   ]
                                 }
@@ -51022,38 +51487,86 @@
                       "alignItems": "end",
                       "children": [
                         {
-                          "type": "text",
-                          "id": "yqjey",
-                          "fill": "#6D6C6A",
-                          "content": "你",
-                          "fontFamily": "Outfit",
-                          "fontSize": 11,
-                          "fontWeight": "600"
-                        },
-                        {
                           "type": "frame",
-                          "id": "5eUkv",
-                          "name": "bubble1",
-                          "fill": "#4EA872",
-                          "cornerRadius": [
-                            16,
-                            16,
-                            4,
-                            16
-                          ],
-                          "padding": [
-                            12,
-                            16
-                          ],
+                          "id": "Frcna",
+                          "name": "uHdr5",
+                          "width": "fill_container",
+                          "gap": 10,
+                          "justifyContent": "end",
+                          "alignItems": "center",
                           "children": [
                             {
                               "type": "text",
-                              "id": "utXv2",
-                              "fill": "#FFFFFF",
-                              "content": "帮我查一下张三的身份证号码是多少",
+                              "id": "yqjey",
+                              "fill": "#6D6C6A",
+                              "content": "你",
                               "fontFamily": "Outfit",
-                              "fontSize": 14,
-                              "fontWeight": "normal"
+                              "fontSize": 11,
+                              "fontWeight": "600"
+                            },
+                            {
+                              "id": "iouAG",
+                              "type": "ref",
+                              "ref": "0:vP6oo",
+                              "width": 32,
+                              "height": 32,
+                              "fill": "#4EA872",
+                              "name": "uAv5",
+                              "x": 1088,
+                              "y": 0,
+                              "descendants": {
+                                "0:ELfku": {
+                                  "content": "你",
+                                  "fontSize": 12,
+                                  "fill": "#FFFFFF",
+                                  "x": 9.5,
+                                  "y": 7.5
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "95gqD",
+                          "name": "uWrap5",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 6,
+                          "padding": [
+                            0,
+                            42,
+                            0,
+                            0
+                          ],
+                          "alignItems": "end",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "5eUkv",
+                              "name": "bubble1",
+                              "fill": "#4EA872",
+                              "cornerRadius": [
+                                16,
+                                16,
+                                4,
+                                16
+                              ],
+                              "padding": [
+                                12,
+                                16
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "utXv2",
+                                  "fill": "#FFFFFF",
+                                  "content": "帮我查一下张三的身份证号码是多少",
+                                  "fontFamily": "Outfit",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                }
+                              ]
                             }
                           ]
                         }
@@ -51068,55 +51581,100 @@
                       "gap": 6,
                       "children": [
                         {
-                          "type": "text",
-                          "id": "61CEP",
-                          "fill": "#6D6C6A",
-                          "content": "X-Claw",
-                          "fontFamily": "Outfit",
-                          "fontSize": 11,
-                          "fontWeight": "600"
-                        },
-                        {
                           "type": "frame",
-                          "id": "vWNwi",
-                          "name": "aiBubble1",
-                          "fill": "#2A2928",
-                          "cornerRadius": [
-                            16,
-                            16,
-                            16,
-                            4
-                          ],
-                          "stroke": {
-                            "align": "inside",
-                            "thickness": 1,
-                            "fill": "#3A3938"
-                          },
-                          "layout": "vertical",
-                          "gap": 8,
-                          "padding": [
-                            12,
-                            16
-                          ],
+                          "id": "7gveL",
+                          "name": "aiHdr5",
+                          "gap": 10,
+                          "alignItems": "center",
                           "children": [
                             {
-                              "type": "text",
-                              "id": "0gL5M",
-                              "fill": "#C8C7C5",
-                              "content": "好的，张三的身份证号码是：",
-                              "fontFamily": "Outfit",
-                              "fontSize": 14,
-                              "fontWeight": "normal"
+                              "id": "1XsAm",
+                              "type": "ref",
+                              "ref": "0:vP6oo",
+                              "width": 32,
+                              "height": 32,
+                              "fill": "#2D6B45",
+                              "name": "aiAv5",
+                              "x": 0,
+                              "y": 0,
+                              "descendants": {
+                                "0:ELfku": {
+                                  "content": "XC",
+                                  "fontSize": 11,
+                                  "fill": "#FFFFFF",
+                                  "x": 8,
+                                  "y": 8
+                                }
+                              }
                             },
                             {
                               "type": "text",
-                              "id": "qiI3w",
-                              "fill": "#C8C7C5",
-                              "content": "330326****0156**",
+                              "id": "61CEP",
+                              "fill": "#6D6C6A",
+                              "content": "X-Claw",
                               "fontFamily": "Outfit",
-                              "fontSize": 14,
-                              "fontWeight": "600",
-                              "letterSpacing": 1
+                              "fontSize": 11,
+                              "fontWeight": "600"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "s9m9X",
+                          "name": "aiWrap5",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 6,
+                          "padding": [
+                            0,
+                            0,
+                            0,
+                            42
+                          ],
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "vWNwi",
+                              "name": "aiBubble1",
+                              "fill": "#2A2928",
+                              "cornerRadius": [
+                                16,
+                                16,
+                                16,
+                                4
+                              ],
+                              "stroke": {
+                                "align": "inside",
+                                "thickness": 1,
+                                "fill": "#3A3938"
+                              },
+                              "layout": "vertical",
+                              "gap": 8,
+                              "padding": [
+                                12,
+                                16
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "0gL5M",
+                                  "fill": "#C8C7C5",
+                                  "content": "好的，张三的身份证号码是：",
+                                  "fontFamily": "Outfit",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "qiI3w",
+                                  "fill": "#C8C7C5",
+                                  "content": "330326****0156**",
+                                  "fontFamily": "Outfit",
+                                  "fontSize": 14,
+                                  "fontWeight": "600",
+                                  "letterSpacing": 1
+                                }
+                              ]
                             }
                           ]
                         }

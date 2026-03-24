@@ -116,6 +116,32 @@
       "autoApprove": [
         "fetch"
       ]
+    },
+    "shadcn": {
+      "command": "npx",
+      "args": [
+        "shadcn@latest",
+        "mcp"
+      ],
+      "env": {},
+      "disabled": false,
+      "autoApprove": []
+    },
+    "pencil": {
+      "command": "/Users/nallylin/.kiro/extensions/highagency.pencildev-0.6.35-universal/out/mcp-server-darwin-x64",
+      "args": [
+        "--app",
+        "kiro"
+      ],
+      "env": {},
+      "autoApprove": [
+        "get_editor_state",
+        "batch_get",
+        "get_screenshot",
+        "get_variables",
+        "batch_design",
+        "snapshot_layout"
+      ]
     }
   }
 }
