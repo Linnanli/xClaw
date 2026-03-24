@@ -325,6 +325,7 @@ interface ChatInputProps {
 function ChatInput({ value, onChange, onSubmit, isLoading, selectedModel, onModelChange }: ChatInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [modelOpen, setModelOpen] = useState(false);
+  const modelRef = useRef<HTMLDivElement>(null);
 
   // 自动调整高度
   useEffect(() => {
@@ -334,6 +335,18 @@ function ChatInput({ value, onChange, onSubmit, isLoading, selectedModel, onMode
       el.style.height = Math.min(el.scrollHeight, 160) + 'px';
     }
   }, [value]);
+
+  // 点击外部关闭模型选择器
+  useEffect(() => {
+    if (!modelOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (modelRef.current && !modelRef.current.contains(e.target as Node)) {
+        setModelOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [modelOpen]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -363,7 +376,7 @@ function ChatInput({ value, onChange, onSubmit, isLoading, selectedModel, onMode
         {/* 底部操作栏 */}
         <div className="mt-3 flex items-center justify-between">
           {/* 模型选择器 */}
-          <div className="relative">
+          <div className="relative" ref={modelRef}>
             <button
               type="button"
               onClick={() => setModelOpen(!modelOpen)}

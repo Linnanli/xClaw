@@ -185,7 +185,7 @@ export function AppSidebar({
                 className={cn(
                   'rounded-[10px] font-semibold',
                   activeNav === 'chat' &&
-                    'bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground',
+                    'data-[active=true]:!bg-primary data-[active=true]:!text-primary-foreground hover:!bg-primary/90 hover:!text-primary-foreground',
                 )}
               >
                 <MessageCircle className="size-[18px]" />
@@ -215,7 +215,11 @@ export function AppSidebar({
             <SidebarMenuButton
               isActive={activeNav === 'logs'}
               onClick={() => onNavChange('logs')}
-              className="h-10 rounded-[10px]"
+              className={cn(
+                'h-10 rounded-[10px]',
+                activeNav === 'logs' &&
+                  'data-[active=true]:!bg-primary data-[active=true]:!text-primary-foreground hover:!bg-primary/90 hover:!text-primary-foreground',
+              )}
             >
               <FileText className="size-[18px]" />
               <span>日志</span>
@@ -225,7 +229,11 @@ export function AppSidebar({
             <SidebarMenuButton
               isActive={activeNav === 'routines'}
               onClick={() => onNavChange('routines')}
-              className="h-10 rounded-[10px]"
+              className={cn(
+                'h-10 rounded-[10px]',
+                activeNav === 'routines' &&
+                  'data-[active=true]:!bg-primary data-[active=true]:!text-primary-foreground hover:!bg-primary/90 hover:!text-primary-foreground',
+              )}
             >
               <Timer className="size-[18px]" />
               <span>定时任务</span>
@@ -235,7 +243,11 @@ export function AppSidebar({
             <SidebarMenuButton
               isActive={activeNav === 'settings'}
               onClick={() => onNavChange('settings')}
-              className="h-10 rounded-[10px]"
+              className={cn(
+                'h-10 rounded-[10px]',
+                activeNav === 'settings' &&
+                  'data-[active=true]:!bg-primary data-[active=true]:!text-primary-foreground hover:!bg-primary/90 hover:!text-primary-foreground',
+              )}
             >
               <Settings className="size-[18px]" />
               <span>设置</span>
