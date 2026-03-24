@@ -8,7 +8,6 @@
 import { useState, useEffect } from 'react';
 import {
   Plus,
-  X,
   List,
   CirclePlay,
   CirclePause,
@@ -190,7 +189,7 @@ export function RoutinesTab({ open = true, onOpenChange }: RoutinesTabProps) {
         {/* Right Content */}
         <div className="flex flex-1 flex-col overflow-hidden">
           {/* Header */}
-          <div className="flex h-[60px] items-center justify-between border-b border-border px-6">
+          <div className="flex h-[60px] items-center justify-between border-b border-border px-6 pr-14">
             <div className="flex items-center gap-2">
               <span className="text-[15px] font-bold text-foreground">{filterLabel}</span>
               <span className="text-[13px] text-muted-foreground">
@@ -206,14 +205,6 @@ export function RoutinesTab({ open = true, onOpenChange }: RoutinesTabProps) {
                 <Plus className="size-3.5" />
                 新建定时任务
               </Button>
-              {onOpenChange && (
-                <button
-                  onClick={() => onOpenChange(false)}
-                  className="flex size-7 items-center justify-center rounded-md bg-secondary text-muted-foreground hover:text-foreground"
-                >
-                  <X className="size-4" />
-                </button>
-              )}
             </div>
           </div>
 

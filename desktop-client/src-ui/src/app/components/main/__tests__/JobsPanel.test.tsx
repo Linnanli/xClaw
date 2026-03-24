@@ -64,10 +64,11 @@ describe('JobsPanel', () => {
     });
   });
 
-  it('应该显示刷新按钮', async () => {
+  it('应该显示关闭按钮', async () => {
     render(<JobsPanel {...defaultProps} />);
     await waitFor(() => {
-      expect(screen.getByLabelText('刷新任务')).toBeTruthy();
+      const closeBtn = screen.getByRole('button', { name: /close/i });
+      expect(closeBtn).toBeTruthy();
     });
   });
 

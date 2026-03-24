@@ -11,7 +11,6 @@ import {
   CheckCircle,
   XCircle,
   Loader2,
-  RefreshCw,
 } from 'lucide-react';
 import {
   Sheet,
@@ -21,7 +20,6 @@ import {
   SheetDescription,
 } from '../ui/sheet';
 import { ScrollArea } from '../ui/scroll-area';
-import { Button } from '../ui/button';
 import { cn } from '../ui/utils';
 import { jobApi, type JobInfo } from '../../utils/tauri';
 
@@ -75,21 +73,9 @@ export function JobsPanel({ open, onOpenChange }: JobsPanelProps) {
       <SheetContent side="right" className="w-[380px] p-0 sm:max-w-[380px]">
         {/* Header */}
         <SheetHeader className="border-b border-border px-5 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Briefcase className="size-4 text-foreground" />
-              <SheetTitle className="text-base">任务列表</SheetTitle>
-            </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-7"
-              onClick={fetchJobs}
-              disabled={loading}
-              aria-label="刷新任务"
-            >
-              <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
-            </Button>
+          <div className="flex items-center gap-2">
+            <Briefcase className="size-4 text-foreground" />
+            <SheetTitle className="text-base">任务列表</SheetTitle>
           </div>
           <SheetDescription className="sr-only">查看和管理任务</SheetDescription>
         </SheetHeader>

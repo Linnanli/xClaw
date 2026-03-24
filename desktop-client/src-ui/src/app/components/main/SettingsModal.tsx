@@ -119,7 +119,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
         {/* Right Content */}
         <div className="flex flex-1 flex-col overflow-hidden">
           {/* Header */}
-          <div className="flex items-center justify-between border-b border-border px-6 py-4">
+          <div className="flex items-center justify-between border-b border-border px-6 pr-14 py-4">
             <div>
               <h3 className="text-base font-bold text-foreground">
                 {currentNav?.label}

@@ -60,7 +60,7 @@ describe('SettingsModal', () => {
     const aboutBtns = screen.getAllByText('关于我们');
     // Click the nav button (first one)
     fireEvent.click(aboutBtns[0]);
-    expect(screen.getByText('企业级 AI 安全助手')).toBeTruthy();
+    expect(screen.getByText('智能 AI 助手，让工作更高效')).toBeTruthy();
   });
 
   it('点击用量统计应显示统计卡片', () => {
