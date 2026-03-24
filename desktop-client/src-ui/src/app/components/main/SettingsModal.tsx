@@ -30,6 +30,7 @@ import { cn } from '../ui/utils';
 import { SkillsTab } from '../tabs/SkillsTab';
 import { ExtensionsTab } from '../tabs/ExtensionsTab';
 import { MemoryTab } from '../tabs/MemoryTab';
+import { AboutTab } from '../tabs/AboutTab';
 
 type SettingsNav =
   | 'general'
@@ -77,7 +78,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
       case 'memory':
         return <MemoryTab />;
       case 'about':
-        return <AboutSection />;
+        return <AboutTab />;
       default:
         return null;
     }
@@ -242,23 +243,4 @@ function StatCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-/* ── 关于我们 ── */
-function AboutSection() {
-  return (
-    <div className="space-y-4">
-      <div className="rounded-xl border border-border bg-card p-6 text-center">
-        <Shield className="mx-auto mb-3 size-10 text-primary" />
-        <h4 className="text-lg font-bold text-foreground">X-Claw</h4>
-        <p className="mt-1 text-sm text-muted-foreground">
-          企业级 AI 安全助手
-        </p>
-        <p className="mt-3 text-xs text-muted-foreground">版本 0.1.0</p>
-      </div>
-      <div className="rounded-xl border border-border bg-card p-4">
-        <p className="text-xs text-muted-foreground">
-          © 2024 X-Claw Team. All rights reserved.
-        </p>
-      </div>
-    </div>
-  );
-}
+/* ── 关于我们（已迁移到 AboutTab.tsx） ── */
