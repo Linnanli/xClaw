@@ -144,7 +144,7 @@ function getSubtitle(nav: SettingsNav): string {
   switch (nav) {
     case 'general': return '管理账户、安全和系统偏好';
     case 'usage': return '查看资源使用情况和统计数据';
-    case 'skills': return '管理已安装的技能和插件';
+    case 'skills': return '为您的智能体提供预装且可重复的最佳实践与工具';
     case 'extensions': return '浏览和管理扩展';
     case 'memory': return '查看和管理记忆数据';
     case 'about': return '关于 X-Claw 桌面客户端';

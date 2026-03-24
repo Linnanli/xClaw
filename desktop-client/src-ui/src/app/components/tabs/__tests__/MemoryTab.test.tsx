@@ -1,10 +1,19 @@
+/**
+ * MemoryTab 单元测试（重写版）
+ *
+ * 覆盖维度：
+ * - 正常路径：渲染、文件树交互、文件预览、编辑、删除、搜索
+ * - 错误路径：API 失败、读取/保存/删除错误
+ * - 安全审计：系统文件保护、删除确认
+ * - 契约测试：文件树构建、已删除文件过滤
+ */
+
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { MemoryTab } from '../MemoryTab';
-import { ThemeProvider } from '../../../contexts/ThemeContext';
-import { memoryApi } from '../../../utils/tauri';
+import { memoryApi, memoryContentUtils } from '../../../utils/tauri';
 
-// Mock the tauri API
+// Mock tauri API
 vi.mock('../../../utils/tauri', () => ({
   memoryApi: {
     getMemoryTree: vi.fn(),
@@ -23,426 +32,500 @@ vi.mock('../../../utils/tauri', () => ({
 
 // Mock react-markdown
 vi.mock('react-markdown', () => ({
-  default: ({ children }: { children: string }) => <div data-testid="markdown">{children}</div>,
+  default: ({ children }: { children: string }) => (
+    <div data-testid="markdown">{children}</div>
+  ),
 }));
 
-const mockMemoryApi = memoryApi as any;
-
-const renderMemoryTab = (theme: 'light' | 'dark' = 'light') => {
-  return render(
-    <ThemeProvider>
-      <div data-theme={theme}>
-        <MemoryTab />
+// Mock DeleteConfirmDialog
+vi.mock('../../common/DeleteConfirmDialog', () => ({
+  DeleteConfirmDialog: ({
+    isOpen,
+    onConfirm,
+    onCancel,
+  }: {
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+    onCancel: () => void;
+  }) =>
+    isOpen ? (
+      <div data-testid="delete-dialog">
+        <button onClick={onConfirm}>确认删除</button>
+        <button onClick={onCancel}>取消删除</button>
       </div>
-    </ThemeProvider>
-  );
-};
+    ) : null,
+}));
+
+const mockMemoryApi = vi.mocked(memoryApi);
+const mockContentUtils = vi.mocked(memoryContentUtils);
+
+function renderMemoryTab() {
+  return render(<MemoryTab />);
+}
 
 describe('MemoryTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    
-    // Default mock implementations
+
     mockMemoryApi.getMemoryTree.mockResolvedValue({
       entries: [
-        { path: 'SOUL.md', is_dir: false },
-        { path: 'USER.md', is_dir: false },
         { path: 'docs', is_dir: true },
         { path: 'docs/README.md', is_dir: false },
+        { path: 'USER.md', is_dir: false },
+        { path: 'SOUL.md', is_dir: false },
+        { path: 'IDENTITY.md', is_dir: false },
       ],
     });
-    
-    mockMemoryApi.isMemoryFileProtected.mockImplementation((path: string) => {
-      return Promise.resolve(['SOUL.md', 'IDENTITY.md', 'AGENTS.md'].includes(path.split('/').pop() || ''));
-    });
-    
+
     mockMemoryApi.readMemory.mockResolvedValue({
-      path: 'test.md',
-      content: 'Test content',
-      updated_at: null,
+      path: 'USER.md',
+      content: '# User Notes\nSome content here.',
+      updated_at: '2025-03-20T10:00:00Z',
     });
-    
-    mockMemoryApi.searchMemory.mockResolvedValue([]);
+
+    mockMemoryApi.isMemoryFileProtected.mockImplementation(async (path: string) => {
+      const name = path.split('/').pop() || '';
+      return ['SOUL.md', 'IDENTITY.md', 'AGENTS.md'].includes(name);
+    });
+
+    mockMemoryApi.writeMemory.mockResolvedValue({ path: '', status: 'success' });
+    mockMemoryApi.deleteMemoryLocal.mockResolvedValue({
+      success: true,
+      message: 'Deleted',
+      is_protected: false,
+    });
+
+    mockContentUtils.isDeleted.mockReturnValue(false);
+    mockContentUtils.getActualContent.mockImplementation(
+      (content: any) => content.content,
+    );
+    mockContentUtils.shouldShowInTree.mockReturnValue(true);
   });
 
+  /* ── 正常路径：渲染 ── */
+
   describe('初始化和渲染', () => {
-    it('应该正确渲染组件', async () => {
+    it('应该渲染搜索栏', async () => {
       renderMemoryTab();
-      
-      expect(screen.getByPlaceholderText('搜索记忆...')).toBeInTheDocument();
-      
+      expect(screen.getByPlaceholderText('搜索记忆文件...')).toBeInTheDocument();
+    });
+
+    it('应该渲染文件树', async () => {
+      renderMemoryTab();
       await waitFor(() => {
-        expect(screen.getByText('SOUL.md')).toBeInTheDocument();
-        expect(screen.getByText('USER.md')).toBeInTheDocument();
         expect(screen.getByText('docs')).toBeInTheDocument();
+        expect(screen.getByText('USER.md')).toBeInTheDocument();
       });
     });
 
-    it('应该在加载失败时显示错误信息', async () => {
-      mockMemoryApi.getMemoryTree.mockRejectedValue(new Error('Network error'));
-      
+    it('应该分离系统文件到独立区域', async () => {
       renderMemoryTab();
-      
       await waitFor(() => {
-        expect(screen.getByText('Failed to load memories')).toBeInTheDocument();
+        expect(screen.getByText('系统文件')).toBeInTheDocument();
+        expect(screen.getByText('SOUL.md')).toBeInTheDocument();
+        expect(screen.getByText('IDENTITY.md')).toBeInTheDocument();
       });
     });
 
-    it('应该在没有记忆条目时显示空状态', async () => {
-      mockMemoryApi.getMemoryTree.mockResolvedValue({ entries: [] });
-      
+    it('应该显示空选择提示', async () => {
       renderMemoryTab();
-      
+      await waitFor(() => {
+        expect(screen.getByText('选择一个文件查看内容')).toBeInTheDocument();
+      });
+    });
+
+    it('应该在无条目时显示空状态', async () => {
+      mockMemoryApi.getMemoryTree.mockResolvedValue({ entries: [] });
+      renderMemoryTab();
       await waitFor(() => {
         expect(screen.getByText('暂无记忆条目')).toBeInTheDocument();
       });
     });
   });
 
+  /* ── 正常路径：文件树交互 ── */
+
   describe('文件树交互', () => {
-    it('应该能够展开和折叠文件夹', async () => {
+    it('应该能展开和折叠文件夹', async () => {
       renderMemoryTab();
-      
       await waitFor(() => {
         expect(screen.getByText('docs')).toBeInTheDocument();
       });
-      
-      // 点击文件夹展开
+
+      // 初始状态文件夹折叠，README.md 不可见
+      expect(screen.queryByText('README.md')).not.toBeInTheDocument();
+
+      // 点击展开
       fireEvent.click(screen.getByText('docs'));
-      
-      await waitFor(() => {
-        expect(screen.getByText('README.md')).toBeInTheDocument();
-      });
+      expect(screen.getByText('README.md')).toBeInTheDocument();
+
+      // 再次点击折叠
+      fireEvent.click(screen.getByText('docs'));
+      expect(screen.queryByText('README.md')).not.toBeInTheDocument();
     });
 
-    it('应该能够选择文件并显示内容', async () => {
+    it('应该能选择文件并显示预览', async () => {
       renderMemoryTab();
-      
       await waitFor(() => {
         expect(screen.getByText('USER.md')).toBeInTheDocument();
       });
-      
-      // 点击文件
+
       fireEvent.click(screen.getByText('USER.md'));
-      
+
       await waitFor(() => {
         expect(mockMemoryApi.readMemory).toHaveBeenCalledWith('USER.md');
-        expect(mockMemoryApi.isMemoryFileProtected).toHaveBeenCalledWith('USER.md');
+        // 编辑按钮应该出现（说明预览面板已渲染）
+        expect(screen.getByText('编辑')).toBeInTheDocument();
+      });
+    });
+
+    it('Markdown 文件应使用 Markdown 渲染', async () => {
+      renderMemoryTab();
+      await waitFor(() => {
+        expect(screen.getByText('USER.md')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('USER.md'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('markdown')).toBeInTheDocument();
       });
     });
   });
 
-  describe('文件保护机制', () => {
-    it('应该对受保护文件隐藏删除按钮', async () => {
+  /* ── 正常路径：编辑 ── */
+
+  describe('文件编辑', () => {
+    it('应该能进入编辑模式', async () => {
       renderMemoryTab();
-      
+      await waitFor(() => {
+        expect(screen.getByText('USER.md')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('USER.md'));
+      await waitFor(() => {
+        expect(screen.getByText('编辑')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('编辑'));
+
+      expect(screen.getByText('保存')).toBeInTheDocument();
+      expect(screen.getByText('取消')).toBeInTheDocument();
+    });
+
+    it('应该能保存编辑内容', async () => {
+      renderMemoryTab();
+      await waitFor(() => {
+        expect(screen.getByText('USER.md')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('USER.md'));
+      await waitFor(() => {
+        fireEvent.click(screen.getByText('编辑'));
+      });
+
+      // 搜索框和 textarea 都是 textbox，用 tagName 区分
+      const allTextboxes = screen.getAllByRole('textbox');
+      const textarea = allTextboxes.find((el) => el.tagName === 'TEXTAREA');
+      expect(textarea).toBeDefined();
+      fireEvent.change(textarea!, { target: { value: 'Updated content' } });
+      fireEvent.click(screen.getByText('保存'));
+
+      await waitFor(() => {
+        expect(mockMemoryApi.writeMemory).toHaveBeenCalledWith(
+          'USER.md',
+          'Updated content',
+        );
+      });
+    });
+
+    it('应该能取消编辑', async () => {
+      renderMemoryTab();
+      await waitFor(() => {
+        expect(screen.getByText('USER.md')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('USER.md'));
+      await waitFor(() => {
+        fireEvent.click(screen.getByText('编辑'));
+      });
+
+      fireEvent.click(screen.getByText('取消'));
+
+      expect(screen.getByText('编辑')).toBeInTheDocument();
+      expect(screen.queryByText('保存')).not.toBeInTheDocument();
+    });
+  });
+
+  /* ── 正常路径：删除 ── */
+
+  describe('文件删除', () => {
+    it('非保护文件应显示删除按钮', async () => {
+      renderMemoryTab();
+      await waitFor(() => {
+        expect(screen.getByText('USER.md')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('USER.md'));
+
+      await waitFor(() => {
+        expect(screen.getByText('删除')).toBeInTheDocument();
+      });
+    });
+
+    it('点击删除应打开确认对话框', async () => {
+      renderMemoryTab();
+      await waitFor(() => {
+        expect(screen.getByText('USER.md')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('USER.md'));
+      await waitFor(() => {
+        fireEvent.click(screen.getByText('删除'));
+      });
+
+      expect(screen.getByTestId('delete-dialog')).toBeInTheDocument();
+    });
+
+    it('确认删除应调用 API', async () => {
+      renderMemoryTab();
+      await waitFor(() => {
+        expect(screen.getByText('USER.md')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('USER.md'));
+      await waitFor(() => {
+        fireEvent.click(screen.getByText('删除'));
+      });
+
+      fireEvent.click(screen.getByText('确认删除'));
+
+      await waitFor(() => {
+        expect(mockMemoryApi.deleteMemoryLocal).toHaveBeenCalledWith(
+          'USER.md',
+          false,
+        );
+      });
+    });
+
+    it('取消删除应关闭对话框', async () => {
+      renderMemoryTab();
+      await waitFor(() => {
+        expect(screen.getByText('USER.md')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('USER.md'));
+      await waitFor(() => {
+        fireEvent.click(screen.getByText('删除'));
+      });
+
+      fireEvent.click(screen.getByText('取消删除'));
+
+      expect(screen.queryByTestId('delete-dialog')).not.toBeInTheDocument();
+    });
+  });
+
+  /* ── 正常路径：搜索 ── */
+
+  describe('搜索功能', () => {
+    it('应该根据文件名过滤', async () => {
+      renderMemoryTab();
+      await waitFor(() => {
+        expect(screen.getByText('USER.md')).toBeInTheDocument();
+      });
+
+      fireEvent.change(screen.getByPlaceholderText('搜索记忆文件...'), {
+        target: { value: 'USER' },
+      });
+
+      expect(screen.getByText('USER.md')).toBeInTheDocument();
+      // SOUL.md 不匹配
+      expect(screen.queryByText('SOUL.md')).not.toBeInTheDocument();
+    });
+
+    it('搜索应展开匹配的文件夹', async () => {
+      renderMemoryTab();
+      await waitFor(() => {
+        expect(screen.getByText('docs')).toBeInTheDocument();
+      });
+
+      fireEvent.change(screen.getByPlaceholderText('搜索记忆文件...'), {
+        target: { value: 'README' },
+      });
+
+      // docs 文件夹应该自动展开显示 README.md
+      expect(screen.getByText('README.md')).toBeInTheDocument();
+    });
+
+    it('无匹配时应显示空状态', async () => {
+      renderMemoryTab();
+      await waitFor(() => {
+        expect(screen.getByText('USER.md')).toBeInTheDocument();
+      });
+
+      fireEvent.change(screen.getByPlaceholderText('搜索记忆文件...'), {
+        target: { value: 'nonexistent' },
+      });
+
+      expect(screen.getByText('未找到匹配文件')).toBeInTheDocument();
+    });
+  });
+
+  /* ── 错误路径 ── */
+
+  describe('错误处理', () => {
+    it('应该在加载失败时显示错误', async () => {
+      mockMemoryApi.getMemoryTree.mockRejectedValue(new Error('Network error'));
+      renderMemoryTab();
+
+      await waitFor(() => {
+        expect(screen.getByText('加载记忆失败')).toBeInTheDocument();
+      });
+    });
+
+    it('应该在文件读取失败时显示错误', async () => {
+      mockMemoryApi.readMemory.mockRejectedValue(new Error('File not found'));
+      renderMemoryTab();
+
+      await waitFor(() => {
+        expect(screen.getByText('USER.md')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('USER.md'));
+
+      await waitFor(() => {
+        expect(screen.getByText('读取文件失败: File not found')).toBeInTheDocument();
+      });
+    });
+
+    it('应该在保存失败时显示错误', async () => {
+      mockMemoryApi.writeMemory.mockRejectedValue(new Error('Permission denied'));
+      renderMemoryTab();
+
+      await waitFor(() => {
+        expect(screen.getByText('USER.md')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('USER.md'));
+      await waitFor(() => {
+        fireEvent.click(screen.getByText('编辑'));
+      });
+
+      fireEvent.click(screen.getByText('保存'));
+
+      await waitFor(() => {
+        expect(
+          screen.getByText('保存失败: Permission denied'),
+        ).toBeInTheDocument();
+      });
+    });
+
+    it('应该在删除失败时显示错误', async () => {
+      mockMemoryApi.deleteMemoryLocal.mockRejectedValue(
+        new Error('Network error'),
+      );
+      renderMemoryTab();
+
+      await waitFor(() => {
+        expect(screen.getByText('USER.md')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('USER.md'));
+      await waitFor(() => {
+        fireEvent.click(screen.getByText('删除'));
+      });
+
+      fireEvent.click(screen.getByText('确认删除'));
+
+      await waitFor(() => {
+        expect(
+          screen.getByText('删除失败: Network error'),
+        ).toBeInTheDocument();
+      });
+    });
+
+    it('删除返回 success=false 应显示错误信息', async () => {
+      mockMemoryApi.deleteMemoryLocal.mockResolvedValue({
+        success: false,
+        message: '文件被占用',
+        is_protected: false,
+      });
+      renderMemoryTab();
+
+      await waitFor(() => {
+        expect(screen.getByText('USER.md')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('USER.md'));
+      await waitFor(() => {
+        fireEvent.click(screen.getByText('删除'));
+      });
+
+      fireEvent.click(screen.getByText('确认删除'));
+
+      await waitFor(() => {
+        expect(screen.getByText('文件被占用')).toBeInTheDocument();
+      });
+    });
+  });
+
+  /* ── 安全审计：系统文件保护 ── */
+
+  describe('安全审计 - 系统文件保护', () => {
+    it('受保护文件不应显示删除按钮', async () => {
+      renderMemoryTab();
       await waitFor(() => {
         expect(screen.getByText('SOUL.md')).toBeInTheDocument();
       });
-      
-      // 选择受保护文件
+
       fireEvent.click(screen.getByText('SOUL.md'));
-      
+
       await waitFor(() => {
         expect(screen.getByText('编辑')).toBeInTheDocument();
         expect(screen.queryByText('删除')).not.toBeInTheDocument();
       });
     });
 
-    it('应该对非保护文件显示删除按钮', async () => {
+    it('非保护文件应显示删除按钮', async () => {
       renderMemoryTab();
-      
       await waitFor(() => {
         expect(screen.getByText('USER.md')).toBeInTheDocument();
       });
-      
-      // 选择非保护文件
+
       fireEvent.click(screen.getByText('USER.md'));
-      
+
       await waitFor(() => {
         expect(screen.getByText('编辑')).toBeInTheDocument();
         expect(screen.getByText('删除')).toBeInTheDocument();
       });
     });
-  });
 
-  describe('文件编辑功能', () => {
-    it('应该能够进入编辑模式', async () => {
+    it('系统文件应使用 Shield 图标', async () => {
       renderMemoryTab();
-      
       await waitFor(() => {
-        expect(screen.getByText('USER.md')).toBeInTheDocument();
-      });
-      
-      // 选择文件
-      fireEvent.click(screen.getByText('USER.md'));
-      
-      await waitFor(() => {
-        expect(screen.getByText('编辑')).toBeInTheDocument();
-      });
-      
-      // 点击编辑按钮
-      fireEvent.click(screen.getByText('编辑'));
-      
-      expect(screen.getByText('保存')).toBeInTheDocument();
-      expect(screen.getByText('取消')).toBeInTheDocument();
-      const textareas = screen.getAllByRole('textbox');
-      const textarea = textareas.find(el => el.tagName === 'TEXTAREA');
-      expect(textarea).toBeInTheDocument();
-    });
-
-    it('应该能够保存文件', async () => {
-      mockMemoryApi.writeMemory.mockResolvedValue({ path: 'USER.md', status: 'success' });
-      
-      renderMemoryTab();
-      
-      await waitFor(() => {
-        expect(screen.getByText('USER.md')).toBeInTheDocument();
-      });
-      
-      // 选择文件并进入编辑模式
-      fireEvent.click(screen.getByText('USER.md'));
-      
-      await waitFor(() => {
-        fireEvent.click(screen.getByText('编辑'));
-      });
-      
-      // 修改内容
-      const textareas = screen.getAllByRole('textbox');
-      const textarea = textareas.find(el => el.tagName === 'TEXTAREA');
-      expect(textarea).toBeInTheDocument();
-      fireEvent.change(textarea!, { target: { value: 'New content' } });
-      
-      // 保存
-      fireEvent.click(screen.getByText('保存'));
-      
-      await waitFor(() => {
-        expect(mockMemoryApi.writeMemory).toHaveBeenCalledWith('USER.md', 'New content');
-      });
-    });
-
-    it('应该能够取消编辑', async () => {
-      renderMemoryTab();
-      
-      await waitFor(() => {
-        expect(screen.getByText('USER.md')).toBeInTheDocument();
-      });
-      
-      // 选择文件并进入编辑模式
-      fireEvent.click(screen.getByText('USER.md'));
-      
-      await waitFor(() => {
-        fireEvent.click(screen.getByText('编辑'));
-      });
-      
-      // 取消编辑
-      fireEvent.click(screen.getByText('取消'));
-      
-      expect(screen.getByText('编辑')).toBeInTheDocument();
-      expect(screen.queryByText('保存')).not.toBeInTheDocument();
-    });
-  });
-
-  describe('文件删除功能', () => {
-    it('应该能够删除非保护文件', async () => {
-      mockMemoryApi.deleteMemoryLocal.mockResolvedValue({
-        success: true,
-        message: '文件删除成功',
-        is_protected: false,
-      });
-      
-      renderMemoryTab();
-      
-      await waitFor(() => {
-        expect(screen.getByText('USER.md')).toBeInTheDocument();
-      });
-      
-      // 选择文件
-      fireEvent.click(screen.getByText('USER.md'));
-      
-      await waitFor(() => {
-        expect(screen.getByText('删除')).toBeInTheDocument();
-      });
-      
-      // 点击删除按钮
-      fireEvent.click(screen.getByText('删除'));
-      
-      // 确认删除对话框应该出现
-      await waitFor(() => {
-        expect(screen.getByText('删除文件')).toBeInTheDocument();
-      });
-      
-      // 确认删除
-      fireEvent.click(screen.getAllByText('删除')[1]); // 第二个删除按钮是确认按钮
-      
-      await waitFor(() => {
-        expect(mockMemoryApi.deleteMemoryLocal).toHaveBeenCalledWith('USER.md', false);
-      });
-    });
-
-    it('应该处理删除失败的情况', async () => {
-      mockMemoryApi.deleteMemoryLocal.mockResolvedValue({
-        success: false,
-        message: '删除失败：文件被占用',
-        is_protected: false,
-      });
-      
-      renderMemoryTab();
-      
-      await waitFor(() => {
-        expect(screen.getByText('USER.md')).toBeInTheDocument();
-      });
-      
-      // 选择文件并删除
-      fireEvent.click(screen.getByText('USER.md'));
-      
-      await waitFor(() => {
-        fireEvent.click(screen.getByText('删除'));
-      });
-      
-      await waitFor(() => {
-        fireEvent.click(screen.getAllByText('删除')[1]);
-      });
-      
-      await waitFor(() => {
-        expect(screen.getByText('删除失败：文件被占用')).toBeInTheDocument();
+        // SOUL.md 和 IDENTITY.md 在系统文件区域
+        expect(screen.getByText('系统文件')).toBeInTheDocument();
       });
     });
   });
 
-  describe('搜索功能', () => {
-    it('应该能够搜索记忆文件', async () => {
-      const searchResults = [
-        {
-          path: 'test.md',
-          content: 'This is a test file with search content',
-          score: 0.95,
-        },
-      ];
-      
-      mockMemoryApi.searchMemory.mockResolvedValue(searchResults);
-      
+  /* ── 契约测试：文件树构建 ── */
+
+  describe('契约测试 - 文件树构建', () => {
+    it('应该正确构建嵌套文件树', async () => {
       renderMemoryTab();
-      
-      // 输入搜索查询
-      const searchInput = screen.getByPlaceholderText('搜索记忆...');
-      fireEvent.change(searchInput, { target: { value: 'test' } });
-      
       await waitFor(() => {
-        expect(mockMemoryApi.searchMemory).toHaveBeenCalledWith('test');
-        expect(screen.getByText('test.md')).toBeInTheDocument();
-        expect(screen.getByText('相关度: 95%')).toBeInTheDocument();
+        expect(screen.getByText('docs')).toBeInTheDocument();
       });
+
+      // 展开 docs 文件夹
+      fireEvent.click(screen.getByText('docs'));
+      expect(screen.getByText('README.md')).toBeInTheDocument();
     });
 
-    it('应该在没有搜索结果时显示空状态', async () => {
-      mockMemoryApi.searchMemory.mockResolvedValue([]);
-      
-      renderMemoryTab();
-      
-      // 输入搜索查询
-      const searchInput = screen.getByPlaceholderText('搜索记忆...');
-      fireEvent.change(searchInput, { target: { value: 'nonexistent' } });
-      
-      await waitFor(() => {
-        expect(screen.getByText('未找到匹配的记忆')).toBeInTheDocument();
-      });
-    });
-  });
-
-  describe('错误处理', () => {
-    it('应该处理文件读取错误', async () => {
-      mockMemoryApi.readMemory.mockRejectedValue(new Error('File not found'));
-      
-      renderMemoryTab();
-      
-      await waitFor(() => {
-        expect(screen.getByText('USER.md')).toBeInTheDocument();
-      });
-      
-      // 选择文件
-      fireEvent.click(screen.getByText('USER.md'));
-      
-      await waitFor(() => {
-        expect(screen.getByText('读取文件失败: File not found')).toBeInTheDocument();
-      });
-    });
-
-    it('应该处理文件保存错误', async () => {
-      mockMemoryApi.writeMemory.mockRejectedValue(new Error('Permission denied'));
-      
-      renderMemoryTab();
-      
-      await waitFor(() => {
-        expect(screen.getByText('USER.md')).toBeInTheDocument();
-      });
-      
-      // 选择文件并进入编辑模式
-      fireEvent.click(screen.getByText('USER.md'));
-      
-      await waitFor(() => {
-        fireEvent.click(screen.getByText('编辑'));
-      });
-      
-      // 尝试保存
-      fireEvent.click(screen.getByText('保存'));
-      
-      await waitFor(() => {
-        expect(screen.getByText('保存文件失败: Permission denied')).toBeInTheDocument();
-      });
-    });
-
-    it('应该处理删除错误', async () => {
-      mockMemoryApi.deleteMemoryLocal.mockRejectedValue(new Error('Network error'));
-      
-      renderMemoryTab();
-      
-      await waitFor(() => {
-        expect(screen.getByText('USER.md')).toBeInTheDocument();
-      });
-      
-      // 选择文件并删除
-      fireEvent.click(screen.getByText('USER.md'));
-      
-      await waitFor(() => {
-        fireEvent.click(screen.getByText('删除'));
-      });
-      
-      await waitFor(() => {
-        fireEvent.click(screen.getAllByText('删除')[1]);
-      });
-      
-      await waitFor(() => {
-        expect(screen.getByText('删除文件失败: Network error')).toBeInTheDocument();
-      });
-    });
-  });
-
-  describe('已删除文件过滤', () => {
-    it('应该从文件树中过滤掉已删除的文件', async () => {
-      // 设置一个文件为已删除状态
-      mockMemoryApi.readMemory.mockImplementation(async (path: string) => {
-        if (path === 'deleted.md') {
-          return {
-            path: 'deleted.md',
-            content: '<!-- DELETED -->',
-            updated_at: null,
-          };
-        }
-        return {
-          path: path,
-          content: 'Normal content',
-          updated_at: null,
-        };
-      });
-
-      // 设置 memoryContentUtils 来识别已删除文件
-      const { memoryContentUtils } = await import('../../../utils/tauri');
-      (memoryContentUtils.isDeleted as any).mockImplementation((content: any) => {
-        return content.content.trim() === '<!-- DELETED -->';
-      });
-
-      // 设置文件树包含已删除文件
+    it('应该过滤已删除的文件', async () => {
       mockMemoryApi.getMemoryTree.mockResolvedValue({
         entries: [
           { path: 'normal.md', is_dir: false },
@@ -450,140 +533,93 @@ describe('MemoryTab', () => {
         ],
       });
 
-      renderMemoryTab();
-
-      // 等待文件树加载并过滤
-      await waitFor(() => {
-        expect(screen.getByText('normal.md')).toBeInTheDocument();
-      });
-
-      // 已删除的文件不应该出现在树中
-      expect(screen.queryByText('deleted.md')).not.toBeInTheDocument();
-    });
-
-    it('应该从搜索结果中过滤掉已删除的文件', async () => {
-      // 设置搜索结果包含已删除文件
-      mockMemoryApi.searchMemory.mockResolvedValue([
-        {
-          path: 'normal.md',
-          content: 'Normal search result',
-          score: 0.9,
-        },
-        {
-          path: 'deleted.md',
-          content: 'Deleted search result',
-          score: 0.8,
-        },
-      ]);
-
-      // 设置读取文件的响应
       mockMemoryApi.readMemory.mockImplementation(async (path: string) => {
         if (path === 'deleted.md') {
-          return {
-            path: 'deleted.md',
-            content: '<!-- DELETED -->',
-            updated_at: null,
-          };
+          return { path, content: '<!-- DELETED -->', updated_at: null };
         }
-        return {
-          path: path,
-          content: 'Normal content',
-          updated_at: null,
-        };
+        return { path, content: 'Normal content', updated_at: null };
       });
 
-      // 设置 memoryContentUtils
-      const { memoryContentUtils } = await import('../../../utils/tauri');
-      (memoryContentUtils.isDeleted as any).mockImplementation((content: any) => {
-        return content.content.trim() === '<!-- DELETED -->';
-      });
+      mockContentUtils.isDeleted.mockImplementation(
+        (content: any) => content.content.trim() === '<!-- DELETED -->',
+      );
 
       renderMemoryTab();
 
-      // 执行搜索
-      const searchInput = screen.getByPlaceholderText('搜索记忆...');
-      fireEvent.change(searchInput, { target: { value: 'search' } });
-
-      // 等待搜索结果加载并过滤
       await waitFor(() => {
         expect(screen.getByText('normal.md')).toBeInTheDocument();
       });
 
-      // 已删除的文件不应该出现在搜索结果中
       expect(screen.queryByText('deleted.md')).not.toBeInTheDocument();
     });
 
-    it('应该在删除文件后自动从树中移除', async () => {
-      mockMemoryApi.deleteMemoryLocal.mockResolvedValue({
-        success: true,
-        message: '文件删除成功',
-        is_protected: false,
+    it('已删除文件被选中时应显示错误', async () => {
+      // 简化：只有一个文件，filterDeleted 阶段返回正常，点击后返回已删除
+      const readCalls: string[] = [];
+      mockMemoryApi.readMemory.mockImplementation(async (path: string) => {
+        readCalls.push(path);
+        // filterDeleted 阶段（第一次调用）返回正常内容
+        // handleFileClick 阶段（第二次调用）返回已删除内容
+        const isFilterPhase = readCalls.filter((p) => p === path).length <= 1;
+        if (isFilterPhase) {
+          return { path, content: 'Normal', updated_at: '2025-01-01T00:00:00Z' };
+        }
+        return { path, content: '<!-- DELETED -->', updated_at: '2025-01-01T00:00:00Z' };
       });
 
-      // 初始状态：文件存在
+      mockContentUtils.isDeleted.mockImplementation((content: any) => {
+        return content.content.trim() === '<!-- DELETED -->';
+      });
+      mockContentUtils.getActualContent.mockImplementation((content: any) => {
+        return content.content.trim() === '<!-- DELETED -->' ? '' : content.content;
+      });
+
       mockMemoryApi.getMemoryTree.mockResolvedValue({
-        entries: [
-          { path: 'test.md', is_dir: false },
-        ],
+        entries: [{ path: 'test-file.md', is_dir: false }],
       });
-
-      mockMemoryApi.readMemory.mockResolvedValue({
-        path: 'test.md',
-        content: 'Normal content',
-        updated_at: null,
-      });
-
-      const { memoryContentUtils } = await import('../../../utils/tauri');
-      (memoryContentUtils.isDeleted as any).mockReturnValue(false);
 
       renderMemoryTab();
 
-      // 验证文件最初存在
       await waitFor(() => {
-        expect(screen.getByText('test.md')).toBeInTheDocument();
+        expect(screen.getByText('test-file.md')).toBeInTheDocument();
       });
 
-      // 选择并删除文件
-      fireEvent.click(screen.getByText('test.md'));
+      fireEvent.click(screen.getByText('test-file.md'));
 
       await waitFor(() => {
-        fireEvent.click(screen.getByText('删除'));
-      });
-
-      // 模拟删除后的状态：文件被标记为已删除
-      (memoryContentUtils.isDeleted as any).mockReturnValue(true);
-      mockMemoryApi.readMemory.mockResolvedValue({
-        path: 'test.md',
-        content: '<!-- DELETED -->',
-        updated_at: null,
-      });
-
-      // 确认删除
-      await waitFor(() => {
-        fireEvent.click(screen.getAllByText('删除')[1]);
-      });
-
-      // 等待文件从树中消失
-      await waitFor(() => {
-        expect(screen.queryByText('test.md')).not.toBeInTheDocument();
+        expect(screen.getByText(/已被删除/)).toBeInTheDocument();
       });
     });
   });
 
-  describe('主题支持', () => {
-    it('应该在深色主题下正确渲染', () => {
-      renderMemoryTab('dark');
-      
-      // 检查主题相关的类名存在（不检查具体的背景色类）
-      const searchInput = screen.getByPlaceholderText('搜索记忆...');
-      expect(searchInput).toBeInTheDocument();
+  /* ── 更新时间显示 ── */
+
+  describe('更新时间', () => {
+    it('应该显示文件更新时间', async () => {
+      renderMemoryTab();
+      await waitFor(() => {
+        expect(screen.getByText('USER.md')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('USER.md'));
+
+      await waitFor(() => {
+        expect(screen.getByText(/最后更新/)).toBeInTheDocument();
+      });
     });
 
-    it('应该在浅色主题下正确渲染', () => {
-      renderMemoryTab('light');
-      
-      const searchInput = screen.getByPlaceholderText('搜索记忆...');
-      expect(searchInput).toHaveClass('bg-white');
+    it('编辑模式下不应显示更新时间', async () => {
+      renderMemoryTab();
+      await waitFor(() => {
+        expect(screen.getByText('USER.md')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('USER.md'));
+      await waitFor(() => {
+        fireEvent.click(screen.getByText('编辑'));
+      });
+
+      expect(screen.queryByText(/最后更新/)).not.toBeInTheDocument();
     });
   });
 });

@@ -1,9 +1,36 @@
-import { useState, useEffect } from 'react';
-import { Search, FileText, FolderTree, Folder, Edit2, Save, X, ChevronRight, ChevronDown, Trash2 } from 'lucide-react';
-import { useTheme } from '../../contexts/ThemeContext';
-import { memoryApi, memoryContentUtils, TreeEntry, SearchHit, MemoryContent } from '../../utils/tauri';
+/**
+ * MemoryTab - 记忆管理面板
+ *
+ * 设计稿：搜索栏 + 左侧200px文件树 + 右侧预览面板
+ * 文件树：文件夹展开/折叠、文件选中高亮、系统文件分区
+ * 预览面板：文件路径 + 编辑/删除按钮 + Markdown渲染 + 更新时间
+ */
+
+import { useState, useEffect, useCallback } from 'react';
+import {
+  Search,
+  FolderOpen,
+  Folder,
+  FileText,
+  ChevronDown,
+  ChevronRight,
+  Pencil,
+  Trash2,
+  Shield,
+  Timer,
+  Save,
+  X,
+} from 'lucide-react';
+import { cn } from '../ui/utils';
+import {
+  memoryApi,
+  memoryContentUtils,
+  type TreeEntry,
+} from '../../utils/tauri';
 import { DeleteConfirmDialog } from '../common/DeleteConfirmDialog';
 import ReactMarkdown from 'react-markdown';
+
+/* ── 类型定义 ── */
 
 interface TreeNode {
   name: string;
@@ -11,525 +38,462 @@ interface TreeNode {
   is_dir: boolean;
   children?: TreeNode[];
   expanded?: boolean;
-  loaded?: boolean;
 }
 
+/* ── 主组件 ── */
+
 export function MemoryTab() {
-  const { theme } = useTheme();
   const [searchQuery, setSearchQuery] = useState('');
   const [treeNodes, setTreeNodes] = useState<TreeNode[]>([]);
-  const [searchResults, setSearchResults] = useState<SearchHit[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isSearching, setIsSearching] = useState(false);
-  
-  // File viewer state
+
+  // 文件预览状态
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const [fileContent, setFileContent] = useState<string>('');
+  const [fileContent, setFileContent] = useState('');
   const [fileUpdatedAt, setFileUpdatedAt] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
   const [isProtectedFile, setIsProtectedFile] = useState(false);
-  
-  // Delete confirmation state
-  const [deleteConfirmDialog, setDeleteConfirmDialog] = useState<{
+
+  // 删除确认
+  const [deleteDialog, setDeleteDialog] = useState<{
     isOpen: boolean;
     filePath: string | null;
-  }>({
-    isOpen: false,
-    filePath: null,
-  });
-  const [operationLoading, setOperationLoading] = useState(false);
+  }>({ isOpen: false, filePath: null });
+  const [opLoading, setOpLoading] = useState(false);
 
-  // 过滤已删除文件的函数
-  const filterDeletedFiles = async (nodes: TreeNode[]): Promise<TreeNode[]> => {
-    const filteredNodes: TreeNode[] = [];
-    
-    for (const node of nodes) {
-      if (node.is_dir) {
-        // 对于文件夹，递归过滤子文件
-        const filteredChildren = node.children ? await filterDeletedFiles(node.children) : undefined;
-        // 只有当文件夹不为空或者是顶级文件夹时才保留
-        if (!filteredChildren || filteredChildren.length > 0 || node.path.split('/').length === 1) {
-          filteredNodes.push({
-            ...node,
-            children: filteredChildren,
-          });
-        }
-      } else {
-        // 对于文件，检查是否已被删除
-        try {
-          const content = await memoryApi.readMemory(node.path);
-          if (!memoryContentUtils.isDeleted(content)) {
-            filteredNodes.push(node);
-          }
-        } catch (error) {
-          // 如果读取失败，保留文件（可能是权限问题）
-          filteredNodes.push(node);
-        }
-      }
-    }
-    
-    return filteredNodes;
-  };
+  /* ── 数据加载 ── */
 
-  useEffect(() => {
-    const fetchMemories = async () => {
-      try {
-        setLoading(true);
-        if (searchQuery.trim()) {
-          setIsSearching(true);
-          const results = await memoryApi.searchMemory(searchQuery);
-          // 过滤搜索结果中的已删除文件
-          const filteredResults = [];
-          for (const result of results) {
-            try {
-              const content = await memoryApi.readMemory(result.path);
-              if (!memoryContentUtils.isDeleted(content)) {
-                filteredResults.push(result);
-              }
-            } catch (error) {
-              // 如果读取失败，保留结果
-              filteredResults.push(result);
-            }
-          }
-          setSearchResults(filteredResults);
-        } else {
-          setIsSearching(false);
-          const tree = await memoryApi.getMemoryTree();
-          const nodes = buildTreeFromEntries(tree.entries);
-          // 过滤已删除的文件
-          const filteredNodes = await filterDeletedFiles(nodes);
-          setTreeNodes(filteredNodes);
-        }
-        setError(null);
-      } catch (err) {
-        console.error('Failed to fetch memories:', err);
-        setError('Failed to load memories');
-        setTreeNodes([]);
-        setSearchResults([]);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchMemories();
-  }, [searchQuery]);
-
-  const buildTreeFromEntries = (entries: TreeEntry[]): TreeNode[] => {
+  const buildTree = useCallback((entries: TreeEntry[]): TreeNode[] => {
     const nodes: TreeNode[] = [];
     const pathMap = new Map<string, TreeNode>();
+    const sorted = [...entries].sort((a, b) => a.path.localeCompare(b.path));
 
-    // Sort entries to ensure parents come before children
-    const sortedEntries = [...entries].sort((a, b) => a.path.localeCompare(b.path));
-
-    for (const entry of sortedEntries) {
+    for (const entry of sorted) {
       const parts = entry.path.split('/');
-      const name = parts[parts.length - 1];
-      
       const node: TreeNode = {
-        name,
+        name: parts[parts.length - 1],
         path: entry.path,
         is_dir: entry.is_dir,
         children: entry.is_dir ? [] : undefined,
         expanded: false,
-        loaded: false,
       };
-
       pathMap.set(entry.path, node);
 
       if (parts.length === 1) {
-        // Top-level entry
         nodes.push(node);
       } else {
-        // Find parent
         const parentPath = parts.slice(0, -1).join('/');
         const parent = pathMap.get(parentPath);
-        if (parent && parent.children) {
-          parent.children.push(node);
-        }
+        parent?.children?.push(node);
       }
     }
-
     return nodes;
-  };
+  }, []);
 
-  const toggleFolder = (node: TreeNode) => {
-    const updateNode = (nodes: TreeNode[]): TreeNode[] => {
-      return nodes.map(n => {
-        if (n.path === node.path) {
-          return { ...n, expanded: !n.expanded };
+  const filterDeleted = useCallback(
+    async (nodes: TreeNode[]): Promise<TreeNode[]> => {
+      const result: TreeNode[] = [];
+      for (const node of nodes) {
+        if (node.is_dir) {
+          const children = node.children
+            ? await filterDeleted(node.children)
+            : undefined;
+          if (!children || children.length > 0 || node.path.split('/').length === 1) {
+            result.push({ ...node, children });
+          }
+        } else {
+          try {
+            const content = await memoryApi.readMemory(node.path);
+            if (!memoryContentUtils.isDeleted(content)) {
+              result.push(node);
+            }
+          } catch {
+            result.push(node);
+          }
         }
-        if (n.children) {
-          return { ...n, children: updateNode(n.children) };
-        }
-        return n;
-      });
-    };
+      }
+      return result;
+    },
+    [],
+  );
 
-    setTreeNodes(updateNode(treeNodes));
+  const loadTree = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const tree = await memoryApi.getMemoryTree();
+      const nodes = buildTree(tree.entries);
+      const filtered = await filterDeleted(nodes);
+      setTreeNodes(filtered);
+    } catch (err) {
+      console.error('Failed to load memory tree:', err);
+      setError('加载记忆失败');
+      setTreeNodes([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [buildTree, filterDeleted]);
+
+  useEffect(() => {
+    loadTree();
+  }, [loadTree]);
+
+  /* ── 文件树操作 ── */
+
+  const toggleFolder = (path: string) => {
+    const update = (nodes: TreeNode[]): TreeNode[] =>
+      nodes.map((n) =>
+        n.path === path
+          ? { ...n, expanded: !n.expanded }
+          : n.children
+            ? { ...n, children: update(n.children) }
+            : n,
+      );
+    setTreeNodes(update(treeNodes));
   };
 
   const handleFileClick = async (path: string) => {
     try {
       setSelectedFile(path);
       setIsEditing(false);
-      
-      // 检查文件是否受保护
+      setError(null);
+
       const isProtected = await memoryApi.isMemoryFileProtected(path);
       setIsProtectedFile(isProtected);
-      
+
       const content = await memoryApi.readMemory(path);
-      
-      // 检查文件是否已被删除
       if (memoryContentUtils.isDeleted(content)) {
         setFileContent('');
         setEditContent('');
         setError(`文件 ${path} 已被删除`);
         return;
       }
-      
-      const actualContent = memoryContentUtils.getActualContent(content);
-      setFileContent(actualContent);
-      setEditContent(actualContent);
+
+      const actual = memoryContentUtils.getActualContent(content);
+      setFileContent(actual);
+      setEditContent(actual);
       setFileUpdatedAt(content.updated_at || null);
-      setError(null);
     } catch (err) {
       console.error('Failed to read file:', err);
-      const errorMessage = err instanceof Error ? err.message : '未知错误';
-      setError(`读取文件失败: ${errorMessage}`);
+      setError(`读取文件失败: ${err instanceof Error ? err.message : '未知错误'}`);
     }
   };
 
-  const handleEdit = () => {
-    setIsEditing(true);
-  };
-
-  const handleCancelEdit = () => {
-    setIsEditing(false);
-    setEditContent(fileContent);
-  };
+  /* ── 编辑操作 ── */
 
   const handleSave = async () => {
     if (!selectedFile) return;
-    
     try {
       await memoryApi.writeMemory(selectedFile, editContent);
       setFileContent(editContent);
       setIsEditing(false);
       setError(null);
     } catch (err) {
-      console.error('Failed to save file:', err);
-      const errorMessage = err instanceof Error ? err.message : '未知错误';
-      setError(`保存文件失败: ${errorMessage}`);
+      setError(`保存失败: ${err instanceof Error ? err.message : '未知错误'}`);
     }
   };
 
-  const handleDelete = () => {
-    if (!selectedFile) return;
-    setDeleteConfirmDialog({
-      isOpen: true,
-      filePath: selectedFile,
-    });
-  };
+  /* ── 删除操作 ── */
 
   const handleConfirmDelete = async () => {
-    if (!deleteConfirmDialog.filePath) return;
-
+    if (!deleteDialog.filePath) return;
     try {
-      setOperationLoading(true);
-      
-      // 执行删除（不需要再次检查保护状态，因为受保护文件不会显示删除按钮）
-      const result = await memoryApi.deleteMemoryLocal(deleteConfirmDialog.filePath, false);
-      
+      setOpLoading(true);
+      const result = await memoryApi.deleteMemoryLocal(deleteDialog.filePath, false);
       if (result.success) {
-        // 如果删除的是当前选中的文件，清空选择
-        if (selectedFile === deleteConfirmDialog.filePath) {
+        if (selectedFile === deleteDialog.filePath) {
           setSelectedFile(null);
           setFileContent('');
           setEditContent('');
           setIsEditing(false);
           setIsProtectedFile(false);
         }
-        
-        // 刷新文件树
-        if (searchQuery.trim()) {
-          const results = await memoryApi.searchMemory(searchQuery);
-          // 过滤搜索结果中的已删除文件
-          const filteredResults = [];
-          for (const result of results) {
-            try {
-              const content = await memoryApi.readMemory(result.path);
-              if (!memoryContentUtils.isDeleted(content)) {
-                filteredResults.push(result);
-              }
-            } catch (error) {
-              // 如果读取失败，保留结果
-              filteredResults.push(result);
-            }
-          }
-          setSearchResults(filteredResults);
-        } else {
-          const tree = await memoryApi.getMemoryTree();
-          const nodes = buildTreeFromEntries(tree.entries);
-          // 过滤已删除的文件
-          const filteredNodes = await filterDeletedFiles(nodes);
-          setTreeNodes(filteredNodes);
-        }
-        
-        console.log('✅ 文件删除成功:', result.message);
-        setError(null);
+        await loadTree();
       } else {
         setError(result.message);
       }
-      
-      setDeleteConfirmDialog({ isOpen: false, filePath: null });
+      setDeleteDialog({ isOpen: false, filePath: null });
     } catch (err) {
-      console.error('❌ 删除文件失败:', err);
-      const errorMessage = err instanceof Error ? err.message : '未知错误';
-      setError(`删除文件失败: ${errorMessage}`);
+      setError(`删除失败: ${err instanceof Error ? err.message : '未知错误'}`);
     } finally {
-      setOperationLoading(false);
+      setOpLoading(false);
     }
   };
 
-  const handleCancelDelete = () => {
-    setDeleteConfirmDialog({ isOpen: false, filePath: null });
-  };
+  /* ── 搜索过滤 ── */
 
-  const renderTreeNode = (node: TreeNode, depth: number = 0): JSX.Element => {
-    const paddingLeft = depth * 16 + 8;
+  const filterBySearch = useCallback(
+    (nodes: TreeNode[]): TreeNode[] => {
+      if (!searchQuery.trim()) return nodes;
+      const q = searchQuery.toLowerCase();
+      const result: TreeNode[] = [];
+      for (const node of nodes) {
+        if (node.is_dir) {
+          const children = node.children ? filterBySearch(node.children) : [];
+          if (children.length > 0) {
+            result.push({ ...node, children, expanded: true });
+          }
+        } else if (node.name.toLowerCase().includes(q)) {
+          result.push(node);
+        }
+      }
+      return result;
+    },
+    [searchQuery],
+  );
+
+  const displayNodes = filterBySearch(treeNodes);
+
+  /* ── 判断系统文件 ── */
+
+  const isSystemFile = (name: string) =>
+    ['SOUL.md', 'IDENTITY.md'].includes(name);
+
+  /* ── 渲染文件树节点 ── */
+
+  const renderNode = (node: TreeNode, depth: number = 0) => {
+    const isSelected = selectedFile === node.path;
+    const isSys = isSystemFile(node.name);
 
     if (node.is_dir) {
       return (
         <div key={node.path}>
-          <div
-            className={`flex items-center gap-2 p-2 cursor-pointer hover:bg-opacity-10 hover:bg-white rounded ${
-              theme === 'dark' ? 'text-white' : 'text-[#333]'
-            }`}
-            style={{ paddingLeft: `${paddingLeft}px` }}
-            onClick={() => toggleFolder(node)}
+          <button
+            onClick={() => toggleFolder(node.path)}
+            className={cn(
+              'flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-[13px] font-medium transition-colors hover:bg-accent',
+            )}
+            style={{ paddingLeft: `${depth * 16 + 8}px` }}
           >
             {node.expanded ? (
-              <ChevronDown size={16} className={theme === 'dark' ? 'text-[#5ddad5]' : 'text-[#667eea]'} />
+              <ChevronDown className="size-3 text-muted-foreground" />
             ) : (
-              <ChevronRight size={16} className={theme === 'dark' ? 'text-[#5ddad5]' : 'text-[#667eea]'} />
+              <ChevronRight className="size-3 text-muted-foreground" />
             )}
-            <Folder size={16} className={theme === 'dark' ? 'text-[#5ddad5]' : 'text-[#667eea]'} />
-            <span className="text-sm">{node.name}</span>
-          </div>
-          {node.expanded && node.children && (
-            <div>
-              {node.children.map(child => renderTreeNode(child, depth + 1))}
-            </div>
-          )}
-        </div>
-      );
-    } else {
-      return (
-        <div
-          key={node.path}
-          className={`flex items-center gap-2 p-2 cursor-pointer hover:bg-opacity-10 hover:bg-white rounded ${
-            theme === 'dark' ? 'text-white' : 'text-[#333]'
-          } ${selectedFile === node.path ? (theme === 'dark' ? 'bg-[#1a2942]' : 'bg-[#f0f0f0]') : ''}`}
-          style={{ paddingLeft: `${paddingLeft + 16}px` }}
-          onClick={() => handleFileClick(node.path)}
-        >
-          <FileText size={16} className={theme === 'dark' ? 'text-[#5ddad5]' : 'text-[#667eea]'} />
-          <span className="text-sm">{node.name}</span>
+            {node.expanded ? (
+              <FolderOpen className="size-3.5 text-primary" />
+            ) : (
+              <Folder className="size-3.5 text-muted-foreground" />
+            )}
+            <span className={cn(node.expanded ? 'text-foreground' : 'text-muted-foreground')}>
+              {node.name}
+            </span>
+          </button>
+          {node.expanded &&
+            node.children?.map((child) => renderNode(child, depth + 1))}
         </div>
       );
     }
+
+    return (
+      <button
+        key={node.path}
+        onClick={() => handleFileClick(node.path)}
+        className={cn(
+          'flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs transition-colors',
+          isSelected
+            ? 'bg-primary/10 font-medium text-primary'
+            : 'text-muted-foreground hover:bg-accent',
+        )}
+        style={{ paddingLeft: `${depth * 16 + 24}px` }}
+      >
+        {isSys ? (
+          <Shield className="size-[13px] text-[#C8A84B]" />
+        ) : (
+          <FileText
+            className={cn(
+              'size-[13px]',
+              isSelected ? 'text-primary' : 'text-muted-foreground',
+            )}
+          />
+        )}
+        <span>{node.name}</span>
+      </button>
+    );
   };
 
+  /* ── 分离系统文件 ── */
+
+  const { userNodes, systemNodes } = (() => {
+    const user: TreeNode[] = [];
+    const sys: TreeNode[] = [];
+    for (const node of displayNodes) {
+      if (!node.is_dir && isSystemFile(node.name)) {
+        sys.push(node);
+      } else {
+        user.push(node);
+      }
+    }
+    return { userNodes: user, systemNodes: sys };
+  })();
+
   return (
-    <div className="h-full flex">
-      {/* Left sidebar - Tree view */}
-      <div className={`w-64 border-r ${theme === 'dark' ? 'border-[#1a2942]' : 'border-[#ddd]'} p-4 overflow-y-auto`}>
-        <div className="mb-4">
-          <div className="relative">
-            <Search className={`absolute left-3 top-1/2 -translate-y-1/2 ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`} size={16} />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="搜索记忆..."
-              className={`w-full pl-9 pr-3 py-2 text-sm border rounded-lg focus:outline-none ${
-                theme === 'dark'
-                  ? 'bg-[#0f1d35] border-[#1a2942] focus:border-[#5ddad5] text-white placeholder-gray-500'
-                  : 'bg-white border-[#ddd] focus:border-[#667eea] focus:ring-2 focus:ring-[#667eea]/20 text-[#333] placeholder-gray-400'
-              }`}
-            />
-          </div>
-        </div>
-
-        {error && (
-          <div className="mb-4 p-2 bg-red-400/10 border border-red-400/30 rounded text-red-400 text-xs">
-            {error}
-          </div>
-        )}
-
-        {isSearching ? (
-          <div className="space-y-2">
-            {searchResults.map((result, index) => (
-              <div
-                key={index}
-                className={`p-2 border rounded cursor-pointer text-sm ${
-                  theme === 'dark'
-                    ? 'bg-[#0f1d35] border-[#1a2942] hover:border-[#5ddad5]/30'
-                    : 'bg-white border-[#ddd] hover:border-[#667eea]/50'
-                }`}
-                onClick={() => handleFileClick(result.path)}
-              >
-                <div className={`font-medium mb-1 ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>
-                  {result.path}
-                </div>
-                <div className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-[#666]'}`}>
-                  {result.content.substring(0, 100)}...
-                </div>
-                <div className={`text-xs mt-1 ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>
-                  相关度: {(result.score * 100).toFixed(0)}%
-                </div>
-              </div>
-            ))}
-            {searchResults.length === 0 && !loading && (
-              <div className={`text-center py-8 text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>
-                未找到匹配的记忆
-              </div>
-            )}
-          </div>
-        ) : (
-          <div>
-            {treeNodes.map(node => renderTreeNode(node))}
-            {treeNodes.length === 0 && !loading && (
-              <div className={`text-center py-8 text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>
-                暂无记忆条目
-              </div>
-            )}
-          </div>
-        )}
+    <div className="flex flex-col gap-4">
+      {/* 搜索栏 */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="搜索记忆文件..."
+          className="h-9 w-full rounded-lg border border-border bg-secondary/30 pl-9 pr-3 text-[13px] text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-primary/30"
+        />
       </div>
 
-      {/* Right panel - File viewer/editor */}
-      <div className="flex-1 flex flex-col">
-        {selectedFile ? (
-          <>
-            {/* File header */}
-            <div className={`flex items-center justify-between p-4 border-b ${
-              theme === 'dark' ? 'border-[#1a2942]' : 'border-[#ddd]'
-            }`}>
-              <div>
-                <div className={`font-medium ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>
-                  {selectedFile}
+      {error && (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          {error}
+        </div>
+      )}
+
+      {/* 主区域：文件树 + 预览 */}
+      <div className="flex min-h-[460px] overflow-hidden">
+        {/* 左侧文件树 */}
+        <div className="w-[200px] shrink-0 overflow-y-auto border-r border-border py-1 pr-0">
+          {loading ? (
+            <div className="py-8 text-center text-xs text-muted-foreground">
+              加载中...
+            </div>
+          ) : (
+            <>
+              {userNodes.map((node) => renderNode(node))}
+              {systemNodes.length > 0 && (
+                <>
+                  <div className="mx-2 my-2 h-px bg-border" />
+                  <div className="px-2 py-1 text-[11px] font-medium text-muted-foreground/60">
+                    系统文件
+                  </div>
+                  {systemNodes.map((node) => renderNode(node))}
+                </>
+              )}
+              {displayNodes.length === 0 && (
+                <div className="py-8 text-center text-xs text-muted-foreground">
+                  {searchQuery ? '未找到匹配文件' : '暂无记忆条目'}
                 </div>
-                {fileUpdatedAt && (
-                  <div className={`text-xs mt-1 ${theme === 'dark' ? 'text-gray-500' : 'text-[#999]'}`}>
-                    最后更新: {new Date(fileUpdatedAt).toLocaleString('zh-CN')}
+              )}
+            </>
+          )}
+        </div>
+
+        {/* 右侧预览面板 */}
+        <div className="flex flex-1 flex-col pl-4">
+          {selectedFile ? (
+            <>
+              {/* 预览头部 */}
+              <div className="flex items-center justify-between pb-2.5">
+                <div className="flex items-center gap-2">
+                  <FileText className="size-3.5 text-primary" />
+                  <span className="text-[13px] font-semibold text-foreground">
+                    {selectedFile}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {isEditing ? (
+                    <>
+                      <button
+                        onClick={handleSave}
+                        className="flex items-center gap-1 rounded-md border border-primary/30 px-2.5 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/5"
+                      >
+                        <Save className="size-3" />
+                        保存
+                      </button>
+                      <button
+                        onClick={() => {
+                          setIsEditing(false);
+                          setEditContent(fileContent);
+                        }}
+                        className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent"
+                      >
+                        <X className="size-3" />
+                        取消
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => setIsEditing(true)}
+                        className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent"
+                      >
+                        <Pencil className="size-3" />
+                        编辑
+                      </button>
+                      {!isProtectedFile && (
+                        <button
+                          onClick={() =>
+                            setDeleteDialog({
+                              isOpen: true,
+                              filePath: selectedFile,
+                            })
+                          }
+                          className="flex items-center gap-1 rounded-md border border-destructive/30 px-2.5 py-1 text-xs font-medium text-destructive transition-colors hover:bg-destructive/5"
+                        >
+                          <Trash2 className="size-3" />
+                          删除
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* 分割线 */}
+              <div className="h-px bg-border" />
+
+              {/* 内容区 */}
+              <div className="flex-1 overflow-y-auto pt-4">
+                {isEditing ? (
+                  <textarea
+                    value={editContent}
+                    onChange={(e) => setEditContent(e.target.value)}
+                    className="h-full min-h-[360px] w-full resize-none rounded-lg border border-border bg-secondary/20 p-3 font-mono text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/30"
+                  />
+                ) : (
+                  <div className="text-foreground">
+                    {selectedFile.endsWith('.md') ? (
+                      <div className="prose prose-sm max-w-none dark:prose-invert">
+                        <ReactMarkdown>{fileContent}</ReactMarkdown>
+                      </div>
+                    ) : (
+                      <pre className="whitespace-pre-wrap font-mono text-sm">
+                        {fileContent}
+                      </pre>
+                    )}
+                  </div>
+                )}
+
+                {/* 更新时间 */}
+                {fileUpdatedAt && !isEditing && (
+                  <div className="mt-4 flex items-center gap-1.5 text-[11px] text-muted-foreground/60">
+                    <Timer className="size-3" />
+                    最后更新：{new Date(fileUpdatedAt).toLocaleString('zh-CN')}
                   </div>
                 )}
               </div>
-              <div className="flex gap-2">
-                {isEditing ? (
-                  <>
-                    <button
-                      onClick={handleSave}
-                      className={`px-3 py-1 rounded flex items-center gap-1 text-sm ${
-                        theme === 'dark'
-                          ? 'bg-[#5ddad5] text-[#0a1628] hover:opacity-90'
-                          : 'bg-[#667eea] text-white hover:opacity-90'
-                      }`}
-                    >
-                      <Save size={14} />
-                      保存
-                    </button>
-                    <button
-                      onClick={handleCancelEdit}
-                      className={`px-3 py-1 rounded flex items-center gap-1 text-sm ${
-                        theme === 'dark'
-                          ? 'bg-[#1a2942] text-white hover:bg-[#243550]'
-                          : 'bg-[#ddd] text-[#333] hover:bg-[#ccc]'
-                      }`}
-                    >
-                      <X size={14} />
-                      取消
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      onClick={handleEdit}
-                      className={`px-3 py-1 rounded flex items-center gap-1 text-sm ${
-                        theme === 'dark'
-                          ? 'bg-[#1a2942] text-white hover:bg-[#243550]'
-                          : 'bg-[#ddd] text-[#333] hover:bg-[#ccc]'
-                      }`}
-                    >
-                      <Edit2 size={14} />
-                      编辑
-                    </button>
-                    {!isProtectedFile && (
-                      <button
-                        onClick={handleDelete}
-                        className={`px-3 py-1 rounded flex items-center gap-1 text-sm ${
-                          theme === 'dark'
-                            ? 'bg-red-600 text-white hover:bg-red-700'
-                            : 'bg-red-500 text-white hover:bg-red-600'
-                        }`}
-                      >
-                        <Trash2 size={14} />
-                        删除
-                      </button>
-                    )}
-                  </>
-                )}
+            </>
+          ) : (
+            <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+              <div className="text-center">
+                <FileText className="mx-auto mb-3 size-10 opacity-30" />
+                <p>选择一个文件查看内容</p>
               </div>
             </div>
-
-            {/* File content */}
-            <div className="flex-1 overflow-y-auto p-6">
-              {isEditing ? (
-                <textarea
-                  value={editContent}
-                  onChange={(e) => setEditContent(e.target.value)}
-                  className={`w-full h-full p-4 font-mono text-sm border rounded resize-none focus:outline-none ${
-                    theme === 'dark'
-                      ? 'bg-[#0f1d35] border-[#1a2942] text-white'
-                      : 'bg-white border-[#ddd] text-[#333]'
-                  }`}
-                />
-              ) : (
-                <div className={theme === 'dark' ? 'text-white' : 'text-[#333]'}>
-                  {selectedFile.endsWith('.md') ? (
-                    <div className="prose prose-sm max-w-none dark:prose-invert">
-                      <ReactMarkdown>{fileContent}</ReactMarkdown>
-                    </div>
-                  ) : (
-                    <pre className="whitespace-pre-wrap font-mono text-sm">{fileContent}</pre>
-                  )}
-                </div>
-              )}
-            </div>
-          </>
-        ) : (
-          <div className={`flex-1 flex items-center justify-center ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>
-            <div className="text-center">
-              <FileText size={48} className="mx-auto mb-4 opacity-50" />
-              <p>选择一个文件查看内容</p>
-            </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
-      {/* 删除确认对话框 */}
+      {/* 删除确认 */}
       <DeleteConfirmDialog
-        isOpen={deleteConfirmDialog.isOpen}
+        isOpen={deleteDialog.isOpen}
         title="删除文件"
-        message={`确定要删除文件 "${deleteConfirmDialog.filePath}" 吗？此操作无法撤销。`}
+        message={`确定要删除文件 "${deleteDialog.filePath}" 吗？此操作无法撤销。`}
         confirmText="删除"
         cancelText="取消"
-        loading={operationLoading}
+        loading={opLoading}
         onConfirm={handleConfirmDelete}
-        onCancel={handleCancelDelete}
+        onCancel={() => setDeleteDialog({ isOpen: false, filePath: null })}
       />
     </div>
   );

@@ -1,323 +1,351 @@
-import { useState, useEffect } from 'react';
-import { Download, Trash2, RefreshCw, Shield, ShieldCheck, ShieldAlert } from 'lucide-react';
-import { useTheme } from '../../contexts/ThemeContext';
-import { pluginApi } from '../../utils/tauri';
+/**
+ * SkillsTab - 技能管理面板
+ *
+ * 设计稿：搜索栏 + 添加技能按钮 + 2列卡片网格
+ * 每张卡片：图标 + 名称 + 描述 + 开关 + 标签（内置技能/安全审核）+ 更多菜单
+ */
 
-interface Skill {
+import { useState, useEffect, useCallback, useRef } from 'react';
+import {
+  Search,
+  Plus,
+  Puzzle,
+  ShieldCheck,
+  MoreHorizontal,
+  Info,
+  Trash2,
+  Lock,
+} from 'lucide-react';
+import { Switch } from '../ui/switch';
+import { cn } from '../ui/utils';
+import { skillApi, type Skill, type InstalledSkill } from '../../utils/tauri';
+
+/* ── 类型定义 ── */
+
+interface SkillCardData {
   id: string;
   name: string;
-  version: string;
   description: string;
-  trust: 'high' | 'medium' | 'low';
-  source: string;
-  keywords: string[];
-  installed: boolean;
+  enabled: boolean;
+  source: 'builtin' | 'community';
+  trustLevel: 'high' | 'medium' | 'low';
 }
 
+/* ── 主组件 ── */
+
 export function SkillsTab() {
-  const { theme } = useTheme();
-  const [activeSubTab, setActiveSubTab] = useState<'available' | 'installed'>('available');
-  const [showUninstallConfirm, setShowUninstallConfirm] = useState<string | null>(null);
-  const [skills, setSkills] = useState<Skill[]>([]);
+  const [skills, setSkills] = useState<SkillCardData[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    const fetchSkills = async () => {
-      try {
-        setLoading(true);
-        // Fetch installed and available plugins from backend
-        const [installed, available] = await Promise.all([
-          pluginApi.getInstalledPlugins(),
-          pluginApi.getAvailablePlugins(),
-        ]);
+  const loadSkills = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const [installed, available] = await Promise.all([
+        skillApi.getInstalledSkills(),
+        skillApi.getAvailableSkills(),
+      ]);
 
-        // Convert plugins to skills format
-        const installedIds = new Set(installed.map((p: any) => p.id));
-        const skillsList: Skill[] = available.map((plugin: any, index: number) => ({
-          id: plugin.id || String(index),
-          name: plugin.name || 'Unknown',
-          version: plugin.version || '1.0.0',
-          description: plugin.description || 'No description',
-          trust: plugin.trust || 'medium',
-          source: plugin.author === 'official' ? 'official' : 'community',
-          keywords: plugin.keywords || [],
-          installed: installedIds.has(plugin.id),
-        }));
+      const installedMap = new Map(
+        installed.map((s: InstalledSkill) => [s.metadata.id, s]),
+      );
 
-        setSkills(skillsList);
-        setError(null);
-      } catch (err) {
-        console.error('Failed to fetch skills:', err);
-        setError('Failed to load skills');
-        // Fallback to sample data
-        setSkills([
-          {
-            id: '1',
-            name: '代码审查',
-            version: '2.1.0',
-            description: '自动审查代码质量、安全性和最佳实践',
-            trust: 'high',
-            source: 'official',
-            keywords: ['代码', '审查', '安全'],
-            installed: true,
-          },
-          {
-            id: '2',
-            name: '文档生成',
-            version: '1.5.0',
-            description: '根据代码自动生成技术文档和API说明',
-            trust: 'high',
-            source: 'official',
-            keywords: ['文档', 'API', '生成'],
-            installed: true,
-          },
-        ]);
-      } finally {
-        setLoading(false);
+      const merged: SkillCardData[] = available.map((s: Skill) => {
+        const inst = installedMap.get(s.id);
+        return {
+          id: s.id,
+          name: s.name,
+          description: s.description,
+          enabled: inst?.enabled ?? false,
+          source: s.source === 'builtin' ? 'builtin' : 'community',
+          trustLevel:
+            s.trust_level === 'high'
+              ? 'high'
+              : s.trust_level === 'low'
+                ? 'low'
+                : 'medium',
+        } satisfies SkillCardData;
+      });
+
+      // 补充已安装但不在 available 列表中的
+      for (const [id, inst] of installedMap) {
+        if (!merged.some((m) => m.id === id)) {
+          merged.push({
+            id,
+            name: inst.metadata.name,
+            description: inst.metadata.description,
+            enabled: inst.enabled,
+            source:
+              inst.metadata.source === 'builtin' ? 'builtin' : 'community',
+            trustLevel:
+              inst.metadata.trust_level === 'high'
+                ? 'high'
+                : inst.metadata.trust_level === 'low'
+                  ? 'low'
+                  : 'medium',
+          });
+        }
       }
-    };
 
-    fetchSkills();
+      setSkills(merged);
+    } catch (err) {
+      console.error('Failed to load skills:', err);
+      setError('加载技能失败');
+      // fallback 示例数据
+      setSkills([
+        {
+          id: 'agent-mbti',
+          name: 'agent-mbti',
+          description:
+            'AI Agent personality diagnosis and configuration system bas...',
+          enabled: true,
+          source: 'builtin',
+          trustLevel: 'high',
+        },
+        {
+          id: 'algorithmic-art',
+          name: 'algorithmic-art',
+          description:
+            'Creating algorithmic art using p5.js with seeded randomnes...',
+          enabled: true,
+          source: 'builtin',
+          trustLevel: 'high',
+        },
+        {
+          id: 'analytics-dashboard',
+          name: 'analytics-dashboard',
+          description:
+            '数据看板。业务数据看板生成器。自动搭建KPI监控看板、实时指...',
+          enabled: true,
+          source: 'builtin',
+          trustLevel: 'high',
+        },
+        {
+          id: 'arxiv-reader',
+          name: 'arxiv-reader',
+          description:
+            'arXiv论文智能阅读助手。通过对话式交互阅读和分析学术论文。...',
+          enabled: true,
+          source: 'builtin',
+          trustLevel: 'high',
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  const handleInstall = async (id: string) => {
+  useEffect(() => {
+    loadSkills();
+  }, [loadSkills]);
+
+  // 点击外部关闭菜单
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpenId(null);
+      }
+    };
+    if (menuOpenId) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [menuOpenId]);
+
+  const handleToggle = async (id: string, currentEnabled: boolean) => {
+    // 乐观更新
+    setSkills((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, enabled: !currentEnabled } : s)),
+    );
     try {
-      await pluginApi.installPlugin(id);
-      setSkills(skills.map(skill =>
-        skill.id === id ? { ...skill, installed: true } : skill
-      ));
-    } catch (err) {
-      console.error('Failed to install skill:', err);
-      alert('Failed to install skill');
+      if (currentEnabled) {
+        await skillApi.disableSkill(id);
+      } else {
+        await skillApi.enableSkill(id);
+      }
+    } catch {
+      // 回滚
+      setSkills((prev) =>
+        prev.map((s) =>
+          s.id === id ? { ...s, enabled: currentEnabled } : s,
+        ),
+      );
     }
   };
 
   const handleUninstall = async (id: string) => {
+    setMenuOpenId(null);
     try {
-      await pluginApi.uninstallPlugin(id);
-      setSkills(skills.map(skill =>
-        skill.id === id ? { ...skill, installed: false } : skill
-      ));
-      setShowUninstallConfirm(null);
+      await skillApi.uninstallSkill(id);
+      await loadSkills();
     } catch (err) {
       console.error('Failed to uninstall skill:', err);
-      alert('Failed to uninstall skill');
     }
   };
 
-  const getTrustIcon = (trust: string) => {
-    switch (trust) {
-      case 'high':
-        return <ShieldCheck className="text-green-400" size={20} />;
-      case 'medium':
-        return <Shield className="text-yellow-400" size={20} />;
-      case 'low':
-        return <ShieldAlert className="text-red-400" size={20} />;
-      default:
-        return <Shield className="text-gray-400" size={20} />;
-    }
-  };
+  const filtered = skills.filter(
+    (s) =>
+      !searchQuery.trim() ||
+      s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      s.description.toLowerCase().includes(searchQuery.toLowerCase()),
+  );
 
-  const getTrustLabel = (trust: string) => {
-    switch (trust) {
-      case 'high':
-        return '高信任';
-      case 'medium':
-        return '中等信任';
-      case 'low':
-        return '低信任';
-      default:
-        return '未知';
-    }
-  };
-
-  const installedSkills = skills.filter(skill => skill.installed);
-  const availableSkills = skills;
-
-  if (loading) {
-    return (
-      <div className="h-full flex items-center justify-center">
-        <div className={`text-center ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>
-          <div className="animate-spin mb-4">
-            <Shield size={48} className="mx-auto opacity-50" />
-          </div>
-          <p>加载技能中...</p>
-        </div>
-      </div>
-    );
+  // 两列分组
+  const rows: SkillCardData[][] = [];
+  for (let i = 0; i < filtered.length; i += 2) {
+    rows.push(filtered.slice(i, i + 2));
   }
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Sub-tabs */}
-      <div className={`border-b ${
-        theme === 'dark' ? 'bg-[#0f1d35] border-[#1a2942]' : 'bg-white border-[#ddd]'
-      }`}>
-        <div className="flex gap-4 px-6">
-          <button
-            onClick={() => setActiveSubTab('available')}
-            className={`px-4 py-3 border-b-2 transition-colors ${
-              activeSubTab === 'available'
-                ? theme === 'dark' ? 'border-[#5ddad5] text-white font-medium' : 'border-[#667eea] text-[#667eea] font-medium'
-                : theme === 'dark' ? 'border-transparent text-gray-400 hover:text-white' : 'border-transparent text-[#666] hover:text-[#667eea]'
-            }`}
-          >
-            可用技能
-          </button>
-          <button
-            onClick={() => setActiveSubTab('installed')}
-            className={`px-4 py-3 border-b-2 transition-colors ${
-              activeSubTab === 'installed'
-                ? theme === 'dark' ? 'border-[#5ddad5] text-white font-medium' : 'border-[#667eea] text-[#667eea] font-medium'
-                : theme === 'dark' ? 'border-transparent text-gray-400 hover:text-white' : 'border-transparent text-[#666] hover:text-[#667eea]'
-            }`}
-          >
-            已安装 ({installedSkills.length})
-          </button>
+    <div className="flex flex-col gap-4">
+      {error && (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          {error}
         </div>
+      )}
+
+      {/* 搜索栏 + 添加按钮 */}
+      <div className="flex items-center gap-3">
+        <div className="relative flex-1">
+          <Search className="absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="搜索已经安装的技能"
+            className="h-10 w-full rounded-[10px] border border-border bg-secondary/50 pl-10 pr-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/30"
+          />
+        </div>
+        <button className="flex h-10 items-center gap-1.5 rounded-[10px] bg-primary px-4 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90">
+          <Plus className="size-4" />
+          添加技能
+        </button>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto p-6">
-        {error && (
-          <div className="mb-4 p-3 bg-red-400/10 border border-red-400/30 rounded-lg text-red-400 text-sm">
-            {error}
-          </div>
-        )}
-        {activeSubTab === 'available' && (
-          <div className="mb-6 flex gap-3">
-            <input
-              type="text"
-              placeholder="搜索技能..."
-              className={`flex-1 px-4 py-2 border rounded-lg focus:outline-none ${
-                theme === 'dark'
-                  ? 'bg-[#0f1d35] border-[#1a2942] focus:border-[#5ddad5] text-white placeholder-gray-500'
-                  : 'bg-white border-[#ddd] focus:border-[#667eea] focus:ring-2 focus:ring-[#667eea]/20 text-[#333] placeholder-gray-400'
-              }`}
-            />
-            <button className={`px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-opacity ${
-              theme === 'dark'
-                ? 'bg-gradient-to-r from-[#5ddad5] to-[#4facf7] text-[#0a1628] hover:opacity-90'
-                : 'bg-[#667eea] text-white hover:opacity-90 shadow-md'
-            }`}>
-              <RefreshCw size={18} />
-              刷新
-            </button>
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {(activeSubTab === 'installed' ? installedSkills : availableSkills).map((skill) => (
-            <div
-              key={skill.id}
-              className={`border rounded-xl p-5 transition-colors ${
-                theme === 'dark'
-                  ? 'bg-[#0f1d35] border-[#1a2942] hover:border-[#5ddad5]/30'
-                  : 'bg-white border-[#ddd] hover:border-[#667eea]/50 shadow-sm hover:shadow-md'
-              }`}
-            >
-              <div className="flex items-start justify-between mb-3">
-                <div>
-                  <h3 className={`font-semibold text-lg ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>{skill.name}</h3>
-                  <p className={`text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>v{skill.version}</p>
-                </div>
-                {skill.installed && (
-                  <span className="px-2 py-1 bg-green-400/10 text-green-400 text-xs rounded-full border border-green-400/30">
-                    已安装
-                  </span>
-                )}
-              </div>
-
-              <p className={`text-sm mb-3 ${theme === 'dark' ? 'text-gray-400' : 'text-[#666]'}`}>{skill.description}</p>
-
-              <div className="flex items-center gap-2 mb-3">
-                {getTrustIcon(skill.trust)}
-                <span className={`text-sm font-medium ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>
-                  {getTrustLabel(skill.trust)}
-                </span>
-              </div>
-
-              <div className={`text-xs mb-4 ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>
-                来源: {skill.source === 'official' ? '官方' : '社区'}
-              </div>
-
-              <div className="mb-4">
-                <div className="flex flex-wrap gap-1">
-                  {skill.keywords.map((keyword, index) => (
-                    <span
-                      key={index}
-                      className={`px-2 py-1 text-xs rounded border ${
-                        theme === 'dark'
-                          ? 'bg-[#0a1628] text-gray-400 border-[#1a2942]'
-                          : 'bg-[#f5f5f5] text-[#666] border-[#eee]'
-                      }`}
-                    >
-                      {keyword}
-                    </span>
-                  ))}
-                </div>
-              </div>
-
-              {skill.installed ? (
-                <button
-                  onClick={() => setShowUninstallConfirm(skill.id)}
-                  className="w-full px-4 py-2 bg-red-400/10 hover:bg-red-400/20 text-red-400 rounded-lg flex items-center justify-center gap-2 transition-colors border border-red-400/30"
-                >
-                  <Trash2 size={16} />
-                  卸载
-                </button>
-              ) : (
-                <button
-                  onClick={() => handleInstall(skill.id)}
-                  className={`w-full px-4 py-2 rounded-lg flex items-center justify-center gap-2 font-medium transition-opacity ${
-                    theme === 'dark'
-                      ? 'bg-gradient-to-r from-[#5ddad5] to-[#4facf7] text-[#0a1628] hover:opacity-90'
-                      : 'bg-[#667eea] text-white hover:opacity-90 shadow-md'
-                  }`}
-                >
-                  <Download size={16} />
-                  安装
-                </button>
-              )}
+      {/* 技能卡片网格 */}
+      {loading ? (
+        <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
+          加载中...
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
+          {searchQuery ? '未找到匹配的技能' : '暂无技能'}
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {rows.map((row, ri) => (
+            <div key={ri} className="flex gap-3">
+              {row.map((skill) => (
+                <SkillCard
+                  key={skill.id}
+                  skill={skill}
+                  menuOpen={menuOpenId === skill.id}
+                  onToggle={() => handleToggle(skill.id, skill.enabled)}
+                  onMenuToggle={() =>
+                    setMenuOpenId(menuOpenId === skill.id ? null : skill.id)
+                  }
+                  onUninstall={() => handleUninstall(skill.id)}
+                  menuRef={menuOpenId === skill.id ? menuRef : undefined}
+                />
+              ))}
+              {/* 占位保持两列对齐 */}
+              {row.length === 1 && <div className="flex-1" />}
             </div>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+/* ── 技能卡片 ── */
+
+function SkillCard({
+  skill,
+  menuOpen,
+  onToggle,
+  onMenuToggle,
+  onUninstall,
+  menuRef,
+}: {
+  skill: SkillCardData;
+  menuOpen: boolean;
+  onToggle: () => void;
+  onMenuToggle: () => void;
+  onUninstall: () => void;
+  menuRef?: React.RefObject<HTMLDivElement | null>;
+}) {
+  return (
+    <div className="relative flex flex-1 flex-col gap-3 rounded-xl border border-border p-4">
+      {/* 顶部：图标 + 信息 + 开关 */}
+      <div className="flex items-start justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex size-10 items-center justify-center rounded-[10px] bg-[#FEF0E8]">
+            <Puzzle className="size-[22px] text-[#D89575]" />
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-sm font-semibold text-foreground">
+              {skill.name}
+            </span>
+            <span className="line-clamp-2 max-w-[160px] text-xs text-muted-foreground">
+              {skill.description}
+            </span>
+          </div>
+        </div>
+        <Switch checked={skill.enabled} onCheckedChange={onToggle} />
       </div>
 
-      {/* Uninstall Confirmation Modal */}
-      {showUninstallConfirm && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className={`border rounded-xl p-6 max-w-md w-full mx-4 ${
-            theme === 'dark'
-              ? 'bg-[#0f1d35] border-[#1a2942]'
-              : 'bg-white border-[#ddd] shadow-lg'
-          }`}>
-            <h3 className={`text-lg font-semibold mb-3 ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>
-              确认卸载
-            </h3>
-            <p className={`mb-6 ${theme === 'dark' ? 'text-gray-400' : 'text-[#666]'}`}>
-              您确定要卸载这个技能吗？此操作无法撤销。
-            </p>
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => setShowUninstallConfirm(null)}
-                className={`px-4 py-2 rounded-lg transition-opacity border ${
-                  theme === 'dark'
-                    ? 'bg-[#0a1628] hover:opacity-80 text-gray-400 border-[#1a2942]'
-                    : 'bg-[#f5f5f5] hover:opacity-80 text-[#666] border-[#ddd]'
-                }`}
-              >
-                取消
-              </button>
-              <button
-                onClick={() => handleUninstall(showUninstallConfirm)}
-                className="px-4 py-2 bg-gradient-to-r from-red-400 to-red-500 hover:opacity-90 text-white rounded-lg transition-opacity"
-              >
-                确认卸载
-              </button>
-            </div>
-          </div>
+      {/* 底部：标签 + 更多 */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <span className="rounded-md bg-secondary px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+            {skill.source === 'builtin' ? '内置技能' : '社区技能'}
+          </span>
+          {skill.trustLevel === 'high' && (
+            <span className="flex items-center gap-1 rounded-md bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary">
+              <ShieldCheck className="size-[11px]" />
+              安全审核
+            </span>
+          )}
+        </div>
+        <button
+          onClick={onMenuToggle}
+          className="text-muted-foreground transition-colors hover:text-foreground"
+          aria-label="更多操作"
+        >
+          <MoreHorizontal className="size-[18px]" />
+        </button>
+      </div>
+
+      {/* 弹出菜单 */}
+      {menuOpen && (
+        <div
+          ref={menuRef}
+          className="absolute right-4 top-full z-10 mt-1 w-[140px] rounded-[10px] border border-border bg-background p-1.5 shadow-lg"
+        >
+          <button className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-foreground transition-colors hover:bg-accent">
+            <Info className="size-3.5 text-muted-foreground" />
+            查看详情
+          </button>
+          <div className="my-1 h-px bg-border" />
+          <button
+            onClick={onUninstall}
+            className={cn(
+              'flex w-full items-center gap-2 rounded-md bg-destructive/5 px-2.5 py-2 text-[13px] transition-colors',
+              skill.source === 'builtin'
+                ? 'cursor-not-allowed text-muted-foreground/50'
+                : 'text-muted-foreground hover:bg-destructive/10',
+            )}
+            disabled={skill.source === 'builtin'}
+          >
+            <Trash2 className="size-3.5" />
+            移除技能
+            {skill.source === 'builtin' && <Lock className="size-[11px]" />}
+          </button>
         </div>
       )}
     </div>

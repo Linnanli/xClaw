@@ -1,74 +1,177 @@
-import { useState, useEffect } from 'react';
-import { Download, Trash2, Power, PowerOff, RefreshCw, Settings } from 'lucide-react';
-import { useTheme } from '../../contexts/ThemeContext';
-import { extensionApi, extensionSetupApi, type ExtensionMetadata, type InstalledExtension, type ExtensionSetupField, type ExtensionSetupSubmitResponse } from '../../utils/tauri';
+/**
+ * ExtensionsTab - 扩展管理面板
+ *
+ * 设计风格与 SkillsTab 一致：搜索栏 + 2列卡片网格
+ * 每张卡片：图标 + 名称 + 描述 + 开关 + 标签 + 更多菜单
+ */
+
+import { useState, useEffect, useCallback, useRef } from 'react';
+import {
+  Search,
+  Plus,
+  Puzzle,
+  ShieldCheck,
+  MoreHorizontal,
+  Info,
+  Trash2,
+  Settings,
+} from 'lucide-react';
+import { Switch } from '../ui/switch';
+import { cn } from '../ui/utils';
+import {
+  extensionApi,
+  extensionSetupApi,
+  type ExtensionMetadata,
+  type InstalledExtension,
+  type ExtensionSetupField,
+  type ExtensionSetupSubmitResponse,
+} from '../../utils/tauri';
+
+/* ── 类型定义 ── */
+
+interface ExtCardData {
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  author: string;
+  enabled: boolean;
+  installed: boolean;
+  tools: string[];
+}
+
+/* ── 主组件 ── */
 
 export function ExtensionsTab() {
-  const { theme } = useTheme();
-  const [activeSubTab, setActiveSubTab] = useState<'installed' | 'available'>('installed');
-  const [installedExtensions, setInstalledExtensions] = useState<InstalledExtension[]>([]);
-  const [availableExtensions, setAvailableExtensions] = useState<ExtensionMetadata[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [extensions, setExtensions] = useState<ExtCardData[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Setup modal state
   const [setupExtName, setSetupExtName] = useState<string | null>(null);
   const [setupFields, setSetupFields] = useState<ExtensionSetupField[]>([]);
   const [setupValues, setSetupValues] = useState<Record<string, string>>({});
   const [setupLoading, setSetupLoading] = useState(false);
   const [setupResult, setSetupResult] = useState<ExtensionSetupSubmitResponse | null>(null);
 
-  useEffect(() => {
-    loadExtensions();
-  }, []);
-
-  const loadExtensions = async () => {
-    setLoading(true);
+  const loadExtensions = useCallback(async () => {
     try {
+      setLoading(true);
+      setError(null);
       const [installed, available] = await Promise.all([
         extensionApi.getInstalledExtensions(),
         extensionApi.getAvailableExtensions(),
       ]);
-      setInstalledExtensions(installed);
-      setAvailableExtensions(available);
+
+      const installedMap = new Map(
+        installed.map((e: InstalledExtension) => [e.metadata.id, e]),
+      );
+
+      const merged: ExtCardData[] = available.map((e: ExtensionMetadata) => {
+        const inst = installedMap.get(e.id);
+        return {
+          id: e.id,
+          name: e.name,
+          description: e.description,
+          version: e.version,
+          author: e.author,
+          enabled: inst?.enabled ?? false,
+          installed: !!inst,
+          tools: e.tools,
+        };
+      });
+
+      // 补充已安装但不在 available 列表中的
+      for (const [id, inst] of installedMap) {
+        if (!merged.some((m) => m.id === id)) {
+          merged.push({
+            id,
+            name: inst.metadata.name,
+            description: inst.metadata.description,
+            version: inst.metadata.version,
+            author: inst.metadata.author,
+            enabled: inst.enabled,
+            installed: true,
+            tools: inst.metadata.tools,
+          });
+        }
+      }
+
+      setExtensions(merged);
     } catch (err) {
       console.error('Failed to load extensions:', err);
+      setError('加载扩展失败');
+      setExtensions([]);
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  useEffect(() => {
+    loadExtensions();
+  }, [loadExtensions]);
+
+  // 点击外部关闭菜单
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpenId(null);
+      }
+    };
+    if (menuOpenId) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [menuOpenId]);
+
+  const handleToggle = async (id: string, currentEnabled: boolean) => {
+    setExtensions((prev) =>
+      prev.map((e) => (e.id === id ? { ...e, enabled: !currentEnabled } : e)),
+    );
+    try {
+      if (currentEnabled) {
+        await extensionApi.disableExtension(id);
+      } else {
+        await extensionApi.enableExtension(id);
+      }
+    } catch {
+      setExtensions((prev) =>
+        prev.map((e) => (e.id === id ? { ...e, enabled: currentEnabled } : e)),
+      );
+    }
   };
 
-  const handleInstall = async (metadata: ExtensionMetadata) => {
+  const handleInstall = async (ext: ExtCardData) => {
     try {
-      await extensionApi.installExtension(metadata);
+      await extensionApi.installExtension({
+        id: ext.id,
+        name: ext.name,
+        description: ext.description,
+        version: ext.version,
+        author: ext.author,
+        tools: ext.tools,
+      } as ExtensionMetadata);
       await loadExtensions();
     } catch (err) {
       console.error('Failed to install extension:', err);
     }
   };
 
-  const handleUninstall = async (extensionId: string) => {
-    if (confirm('确定要卸载此扩展吗？')) {
-      try {
-        await extensionApi.uninstallExtension(extensionId);
-        await loadExtensions();
-      } catch (err) {
-        console.error('Failed to uninstall extension:', err);
-      }
-    }
-  };
-
-  const handleToggle = async (extensionId: string, currentlyEnabled: boolean) => {
+  const handleUninstall = async (id: string) => {
+    setMenuOpenId(null);
     try {
-      if (currentlyEnabled) {
-        await extensionApi.disableExtension(extensionId);
-      } else {
-        await extensionApi.enableExtension(extensionId);
-      }
+      await extensionApi.uninstallExtension(id);
       await loadExtensions();
     } catch (err) {
-      console.error('Failed to toggle extension:', err);
+      console.error('Failed to uninstall extension:', err);
     }
   };
 
   const handleSetup = async (name: string) => {
+    setMenuOpenId(null);
     setSetupExtName(name);
     setSetupResult(null);
     setSetupLoading(true);
@@ -76,10 +179,9 @@ export function ExtensionsTab() {
       const schema = await extensionSetupApi.getSetupSchema(name);
       setSetupFields(schema.secrets);
       const initial: Record<string, string> = {};
-      schema.secrets.forEach(f => { initial[f.name] = ''; });
+      schema.secrets.forEach((f) => { initial[f.name] = ''; });
       setSetupValues(initial);
-    } catch (err) {
-      console.error('Failed to load setup schema:', err);
+    } catch {
       setSetupFields([]);
     } finally {
       setSetupLoading(false);
@@ -92,231 +194,135 @@ export function ExtensionsTab() {
     try {
       const result = await extensionSetupApi.submitSetup(setupExtName, setupValues);
       setSetupResult(result);
-      if (result.activated) {
-        await loadExtensions();
-      }
-      if (result.auth_url) {
-        window.open(result.auth_url, '_blank');
-      }
+      if (result.activated) await loadExtensions();
+      if (result.auth_url) window.open(result.auth_url, '_blank');
     } catch (err) {
-      console.error('Failed to submit setup:', err);
-      setSetupResult({ success: false, message: String(err), activated: false, auth_url: null });
+      setSetupResult({
+        success: false,
+        message: String(err),
+        activated: false,
+        auth_url: null,
+      });
     } finally {
       setSetupLoading(false);
     }
   };
 
+  const filtered = extensions.filter(
+    (e) =>
+      !searchQuery.trim() ||
+      e.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      e.description.toLowerCase().includes(searchQuery.toLowerCase()),
+  );
+
+  const rows: ExtCardData[][] = [];
+  for (let i = 0; i < filtered.length; i += 2) {
+    rows.push(filtered.slice(i, i + 2));
+  }
+
   return (
-    <div className="h-full flex flex-col">
-      {/* Sub-tabs */}
-      <div className={`border-b ${
-        theme === 'dark' ? 'bg-[#0f1d35] border-[#1a2942]' : 'bg-white border-[#ddd]'
-      }`}>
-        <div className="flex gap-4 px-6">
-          <button
-            onClick={() => setActiveSubTab('installed')}
-            className={`px-4 py-3 border-b-2 transition-colors ${
-              activeSubTab === 'installed'
-                ? theme === 'dark' ? 'border-[#5ddad5] text-white font-medium' : 'border-[#667eea] text-[#667eea] font-medium'
-                : theme === 'dark' ? 'border-transparent text-gray-400 hover:text-white' : 'border-transparent text-[#666] hover:text-[#667eea]'
-            }`}
-          >
-            已安装 ({installedExtensions.length})
-          </button>
-          <button
-            onClick={() => setActiveSubTab('available')}
-            className={`px-4 py-3 border-b-2 transition-colors ${
-              activeSubTab === 'available'
-                ? theme === 'dark' ? 'border-[#5ddad5] text-white font-medium' : 'border-[#667eea] text-[#667eea] font-medium'
-                : theme === 'dark' ? 'border-transparent text-gray-400 hover:text-white' : 'border-transparent text-[#666] hover:text-[#667eea]'
-            }`}
-          >
-            可用扩展
-          </button>
+    <div className="flex flex-col gap-4">
+      {error && (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          {error}
         </div>
+      )}
+
+      {/* 搜索栏 + 添加按钮 */}
+      <div className="flex items-center gap-3">
+        <div className="relative flex-1">
+          <Search className="absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="搜索已安装的扩展"
+            className="h-10 w-full rounded-[10px] border border-border bg-secondary/50 pl-10 pr-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/30"
+          />
+        </div>
+        <button className="flex h-10 items-center gap-1.5 rounded-[10px] bg-primary px-4 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90">
+          <Plus className="size-4" />
+          添加扩展
+        </button>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto p-6">
-        {activeSubTab === 'available' && (
-          <div className="mb-6 flex gap-3">
-            <input
-              type="text"
-              placeholder="搜索扩展..."
-              className={`flex-1 px-4 py-2 border rounded-lg focus:outline-none ${
-                theme === 'dark'
-                  ? 'bg-[#0f1d35] border-[#1a2942] focus:border-[#5ddad5] text-white placeholder-gray-500'
-                  : 'bg-white border-[#ddd] focus:border-[#667eea] focus:ring-2 focus:ring-[#667eea]/20 text-[#333] placeholder-gray-400'
-              }`}
-            />
-            <button 
-              onClick={loadExtensions}
-              disabled={loading}
-              className={`px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-opacity ${
-              theme === 'dark'
-                ? 'bg-gradient-to-r from-[#5ddad5] to-[#4facf7] text-[#0a1628] hover:opacity-90 disabled:opacity-50'
-                : 'bg-[#667eea] text-white hover:opacity-90 shadow-md disabled:opacity-50'
-            }`}>
-              <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
-              刷新
-            </button>
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {(activeSubTab === 'installed' 
-            ? installedExtensions.map(ext => ({ ...ext.metadata, installed: true, enabled: ext.enabled }))
-            : availableExtensions.map(ext => {
-              const isInstalled = installedExtensions.some(ie => ie.metadata.id === ext.id);
-              return { ...ext, installed: isInstalled, enabled: false };
-            })
-          ).map((ext) => (
-            <div
-              key={ext.id}
-              className={`border rounded-xl p-5 transition-colors ${
-                theme === 'dark'
-                  ? 'bg-[#0f1d35] border-[#1a2942] hover:border-[#5ddad5]/30'
-                  : 'bg-white border-[#ddd] hover:border-[#667eea]/50 shadow-sm hover:shadow-md'
-              }`}
-            >
-              <div className="flex items-start justify-between mb-3">
-                <div>
-                  <h3 className={`font-semibold text-lg ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>{ext.name}</h3>
-                  <p className={`text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>v{ext.version}</p>
-                </div>
-                {ext.installed && ext.enabled && (
-                  <span className="px-2 py-1 bg-green-400/10 text-green-400 text-xs rounded-full border border-green-400/30">
-                    已启用
-                  </span>
-                )}
-                {ext.installed && !ext.enabled && (
-                  <span className="px-2 py-1 bg-gray-400/10 text-gray-400 text-xs rounded-full border border-gray-400/30">
-                    已禁用
-                  </span>
-                )}
-              </div>
-
-              <p className={`text-sm mb-3 ${theme === 'dark' ? 'text-gray-400' : 'text-[#666]'}`}>{ext.description}</p>
-
-              <div className={`text-xs mb-3 ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>
-                作者: {ext.author}
-              </div>
-
-              <div className="mb-4">
-                <div className={`text-xs font-medium mb-2 ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>提供的工具:</div>
-                <div className="flex flex-wrap gap-1">
-                  {ext.tools.map((tool, index) => (
-                    <span
-                      key={index}
-                      className={`px-2 py-1 text-xs rounded border ${
-                        theme === 'dark'
-                          ? 'bg-[#0a1628] text-gray-400 border-[#1a2942]'
-                          : 'bg-[#f5f5f5] text-[#666] border-[#eee]'
-                      }`}
-                    >
-                      {tool}
-                    </span>
-                  ))}
-                </div>
-              </div>
-
-              {ext.installed ? (
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleSetup(ext.id)}
-                    className={`px-3 py-2 rounded-lg flex items-center gap-1 transition-opacity border text-sm ${
-                      theme === 'dark'
-                        ? 'bg-[#0a1628] hover:opacity-80 text-gray-400 border-[#1a2942]'
-                        : 'bg-[#f5f5f5] hover:opacity-80 text-[#666] border-[#ddd]'
-                    }`}
-                    title="配置"
-                  >
-                    <Settings size={14} />
-                  </button>
-                  <button
-                    onClick={() => handleToggle(ext.id, ext.enabled || false)}
-                    className={`flex-1 px-4 py-2 rounded-lg flex items-center justify-center gap-2 font-medium transition-opacity ${
-                      ext.enabled
-                        ? theme === 'dark'
-                          ? 'bg-[#0a1628] hover:opacity-80 text-gray-400 border border-[#1a2942]'
-                          : 'bg-[#f5f5f5] hover:opacity-80 text-[#666] border border-[#ddd]'
-                        : theme === 'dark'
-                          ? 'bg-gradient-to-r from-[#5ddad5] to-[#4facf7] hover:opacity-90 text-[#0a1628]'
-                          : 'bg-[#667eea] hover:opacity-90 text-white shadow-md'
-                    }`}
-                  >
-                    {ext.enabled ? <PowerOff size={16} /> : <Power size={16} />}
-                    {ext.enabled ? '禁用' : '启用'}
-                  </button>
-                  <button
-                    onClick={() => handleUninstall(ext.id)}
-                    className="px-4 py-2 bg-red-400/10 hover:bg-red-400/20 text-red-400 rounded-lg flex items-center gap-2 transition-colors border border-red-400/30"
-                  >
-                    <Trash2 size={16} />
-                    卸载
-                  </button>
-                </div>
-              ) : (
-                <button
-                  disabled={ext.installed}
-                  onClick={() => handleInstall(ext as ExtensionMetadata)}
-                  className={`w-full px-4 py-2 rounded-lg flex items-center justify-center gap-2 font-medium transition-opacity ${
-                    ext.installed
-                      ? theme === 'dark'
-                        ? 'bg-green-400/10 text-green-400 border border-green-400/30 cursor-not-allowed'
-                        : 'bg-green-400/10 text-green-400 border border-green-400/30 cursor-not-allowed'
-                      : theme === 'dark'
-                        ? 'bg-gradient-to-r from-[#5ddad5] to-[#4facf7] text-[#0a1628] hover:opacity-90'
-                        : 'bg-[#667eea] text-white hover:opacity-90 shadow-md'
-                  }`}
-                >
-                  {ext.installed ? '✓ 已安装' : <>
-                    <Download size={16} />
-                    安装
-                  </>}
-                </button>
-              )}
+      {/* 扩展卡片网格 */}
+      {loading ? (
+        <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
+          加载中...
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
+          {searchQuery ? '未找到匹配的扩展' : '暂无扩展'}
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {rows.map((row, ri) => (
+            <div key={ri} className="flex gap-3">
+              {row.map((ext) => (
+                <ExtCard
+                  key={ext.id}
+                  ext={ext}
+                  menuOpen={menuOpenId === ext.id}
+                  onToggle={() => handleToggle(ext.id, ext.enabled)}
+                  onMenuToggle={() =>
+                    setMenuOpenId(menuOpenId === ext.id ? null : ext.id)
+                  }
+                  onInstall={() => handleInstall(ext)}
+                  onUninstall={() => handleUninstall(ext.id)}
+                  onSetup={() => handleSetup(ext.id)}
+                  menuRef={menuOpenId === ext.id ? menuRef : undefined}
+                />
+              ))}
+              {row.length === 1 && <div className="flex-1" />}
             </div>
           ))}
         </div>
-      </div>
+      )}
 
       {/* Setup Modal */}
       {setupExtName && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className={`border rounded-xl p-6 max-w-md w-full mx-4 ${
-            theme === 'dark'
-              ? 'bg-[#0f1d35] border-[#1a2942]'
-              : 'bg-white border-[#ddd] shadow-lg'
-          }`}>
-            <h3 className={`text-lg font-semibold mb-4 flex items-center gap-2 ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>
-              <Settings size={18} />
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="mx-4 w-full max-w-md rounded-2xl border border-border bg-background p-6 shadow-xl">
+            <h3 className="mb-4 flex items-center gap-2 text-base font-semibold text-foreground">
+              <Settings className="size-4" />
               配置 {setupExtName}
             </h3>
 
             {setupLoading && setupFields.length === 0 ? (
-              <p className={`text-sm py-4 ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>加载配置...</p>
+              <p className="py-4 text-sm text-muted-foreground">加载配置...</p>
             ) : setupFields.length === 0 ? (
-              <p className={`text-sm py-4 ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>此扩展无需配置</p>
+              <p className="py-4 text-sm text-muted-foreground">此扩展无需配置</p>
             ) : (
-              <div className="space-y-4">
+              <div className="space-y-3">
                 {setupFields.map((field) => (
                   <div key={field.name}>
-                    <label className={`block text-sm font-medium mb-1 ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>
+                    <label className="mb-1 block text-sm font-medium text-foreground">
                       {field.prompt}
-                      {field.optional && <span className={`ml-1 text-xs ${theme === 'dark' ? 'text-gray-500' : 'text-[#999]'}`}>(可选)</span>}
-                      {field.provided && <span className="ml-1 text-xs text-green-400">✓ 已配置</span>}
+                      {field.optional && (
+                        <span className="ml-1 text-xs text-muted-foreground">(可选)</span>
+                      )}
+                      {field.provided && (
+                        <span className="ml-1 text-xs text-primary">✓ 已配置</span>
+                      )}
                     </label>
                     <input
                       type="password"
                       value={setupValues[field.name] || ''}
-                      onChange={(e) => setSetupValues(prev => ({ ...prev, [field.name]: e.target.value }))}
-                      placeholder={field.auto_generate ? '留空自动生成' : field.provided ? '留空保持不变' : '请输入...'}
-                      className={`w-full px-3 py-2 text-sm border rounded-lg focus:outline-none ${
-                        theme === 'dark'
-                          ? 'bg-[#0a1628] border-[#1a2942] focus:border-[#5ddad5] text-white placeholder-gray-500'
-                          : 'bg-white border-[#ddd] focus:border-[#667eea] text-[#333] placeholder-gray-400'
-                      }`}
+                      onChange={(e) =>
+                        setSetupValues((prev) => ({
+                          ...prev,
+                          [field.name]: e.target.value,
+                        }))
+                      }
+                      placeholder={
+                        field.auto_generate
+                          ? '留空自动生成'
+                          : field.provided
+                            ? '留空保持不变'
+                            : '请输入...'
+                      }
+                      className="w-full rounded-lg border border-border bg-secondary/30 px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/30"
                     />
                   </div>
                 ))}
@@ -324,23 +330,25 @@ export function ExtensionsTab() {
             )}
 
             {setupResult && (
-              <div className={`mt-4 p-3 rounded-lg text-sm ${
-                setupResult.success
-                  ? 'bg-green-400/10 text-green-400 border border-green-400/30'
-                  : 'bg-red-400/10 text-red-400 border border-red-400/30'
-              }`}>
+              <div
+                className={cn(
+                  'mt-4 rounded-lg border p-3 text-sm',
+                  setupResult.success
+                    ? 'border-primary/30 bg-primary/5 text-primary'
+                    : 'border-destructive/30 bg-destructive/5 text-destructive',
+                )}
+              >
                 {setupResult.message}
               </div>
             )}
 
-            <div className="flex gap-3 justify-end mt-6">
+            <div className="mt-6 flex justify-end gap-3">
               <button
-                onClick={() => { setSetupExtName(null); setSetupResult(null); }}
-                className={`px-4 py-2 rounded-lg transition-opacity border ${
-                  theme === 'dark'
-                    ? 'bg-[#0a1628] hover:opacity-80 text-gray-400 border-[#1a2942]'
-                    : 'bg-[#f5f5f5] hover:opacity-80 text-[#666] border-[#ddd]'
-                }`}
+                onClick={() => {
+                  setSetupExtName(null);
+                  setSetupResult(null);
+                }}
+                className="rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent"
               >
                 关闭
               </button>
@@ -348,17 +356,118 @@ export function ExtensionsTab() {
                 <button
                   onClick={handleSetupSubmit}
                   disabled={setupLoading}
-                  className={`px-4 py-2 rounded-lg font-medium transition-opacity disabled:opacity-50 ${
-                    theme === 'dark'
-                      ? 'bg-gradient-to-r from-[#5ddad5] to-[#4facf7] text-[#0a1628] hover:opacity-90'
-                      : 'bg-[#667eea] text-white hover:opacity-90 shadow-md'
-                  }`}
+                  className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
                 >
                   {setupLoading ? '提交中...' : '保存配置'}
                 </button>
               )}
             </div>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── 扩展卡片 ── */
+
+function ExtCard({
+  ext,
+  menuOpen,
+  onToggle,
+  onMenuToggle,
+  onInstall,
+  onUninstall,
+  onSetup,
+  menuRef,
+}: {
+  ext: ExtCardData;
+  menuOpen: boolean;
+  onToggle: () => void;
+  onMenuToggle: () => void;
+  onInstall: () => void;
+  onUninstall: () => void;
+  onSetup: () => void;
+  menuRef?: React.RefObject<HTMLDivElement | null>;
+}) {
+  return (
+    <div className="relative flex flex-1 flex-col gap-3 rounded-xl border border-border p-4">
+      {/* 顶部：图标 + 信息 + 开关 */}
+      <div className="flex items-start justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex size-10 items-center justify-center rounded-[10px] bg-[#EDE8FE]">
+            <Puzzle className="size-[22px] text-[#8B6FC0]" />
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-sm font-semibold text-foreground">
+              {ext.name}
+            </span>
+            <span className="line-clamp-2 max-w-[160px] text-xs text-muted-foreground">
+              {ext.description}
+            </span>
+          </div>
+        </div>
+        {ext.installed ? (
+          <Switch checked={ext.enabled} onCheckedChange={onToggle} />
+        ) : (
+          <button
+            onClick={onInstall}
+            className="rounded-lg bg-primary px-3 py-1 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90"
+          >
+            安装
+          </button>
+        )}
+      </div>
+
+      {/* 底部：标签 + 更多 */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <span className="rounded-md bg-secondary px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+            v{ext.version}
+          </span>
+          {ext.installed && ext.enabled && (
+            <span className="flex items-center gap-1 rounded-md bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary">
+              <ShieldCheck className="size-[11px]" />
+              已启用
+            </span>
+          )}
+        </div>
+        {ext.installed && (
+          <button
+            onClick={onMenuToggle}
+            className="text-muted-foreground transition-colors hover:text-foreground"
+            aria-label="更多操作"
+          >
+            <MoreHorizontal className="size-[18px]" />
+          </button>
+        )}
+      </div>
+
+      {/* 弹出菜单 */}
+      {menuOpen && (
+        <div
+          ref={menuRef}
+          className="absolute right-4 top-full z-10 mt-1 w-[140px] rounded-[10px] border border-border bg-background p-1.5 shadow-lg"
+        >
+          <button
+            onClick={onSetup}
+            className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-foreground transition-colors hover:bg-accent"
+          >
+            <Settings className="size-3.5 text-muted-foreground" />
+            配置
+          </button>
+          <button className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-foreground transition-colors hover:bg-accent">
+            <Info className="size-3.5 text-muted-foreground" />
+            查看详情
+          </button>
+          <div className="my-1 h-px bg-border" />
+          <button
+            onClick={onUninstall}
+            className="flex w-full items-center gap-2 rounded-md bg-destructive/5 px-2.5 py-2 text-[13px] text-muted-foreground transition-colors hover:bg-destructive/10"
+          >
+            <Trash2 className="size-3.5" />
+            卸载扩展
+          </button>
         </div>
       )}
     </div>
