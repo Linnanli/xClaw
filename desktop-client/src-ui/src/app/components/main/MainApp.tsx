@@ -17,6 +17,7 @@ import { JobsPanel } from './JobsPanel';
 import { NotificationsPanel } from './NotificationsPanel';
 import { DynamicWatermark } from '../common/DynamicWatermark';
 import { useWatermark } from '../../hooks/useWatermark';
+import { useTheme } from '../../hooks/useTheme';
 import { sessionApi } from '../../utils/tauri';
 import { ShortcutManager, SHORTCUTS } from '../../utils/shortcuts';
 import { tracing } from '../../utils/tracing';
@@ -36,6 +37,7 @@ export function MainApp() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [routinesOpen, setRoutinesOpen] = useState(false);
   const { config: watermarkConfig, loading: watermarkLoading } = useWatermark();
+  const { theme, setTheme } = useTheme();
 
   // 嵌入式模式：SSE 连接跳过，使用 Tauri IPC
   useEffect(() => {
@@ -120,6 +122,8 @@ export function MainApp() {
           title={NAV_TITLES[activeNav]}
           onJobsClick={() => setJobsOpen(true)}
           onNotificationsClick={() => setNotificationsOpen(true)}
+          theme={theme}
+          onThemeChange={setTheme}
         />
         <div className="flex-1 overflow-hidden">{renderContent()}</div>
       </SidebarInset>

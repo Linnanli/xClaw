@@ -1,12 +1,14 @@
 /**
  * AppHeader - 主内容区顶部栏
  *
- * 设计稿：56px 高度，左侧面包屑标题，右侧任务状态 + 通知铃铛。
+ * 设计稿：56px 高度，左侧面包屑标题，右侧任务状态 + 通知铃铛 + 主题切换。
  */
 
 import { Bell, Briefcase } from 'lucide-react';
 import { Button } from '../ui/button';
 import { cn } from '../ui/utils';
+import { ThemeToggle } from './ThemeToggle';
+import { type ThemeMode } from '../../hooks/useTheme';
 
 interface AppHeaderProps {
   title: string;
@@ -16,6 +18,10 @@ interface AppHeaderProps {
   unreadCount?: number;
   onJobsClick?: () => void;
   onNotificationsClick?: () => void;
+  /** 当前主题模式 */
+  theme?: ThemeMode;
+  /** 主题切换回调 */
+  onThemeChange?: (mode: ThemeMode) => void;
   className?: string;
 }
 
@@ -25,6 +31,8 @@ export function AppHeader({
   unreadCount = 0,
   onJobsClick,
   onNotificationsClick,
+  theme = 'system',
+  onThemeChange,
   className,
 }: AppHeaderProps) {
   return (
@@ -72,6 +80,11 @@ export function AppHeader({
             </span>
           )}
         </Button>
+
+        {/* Theme toggle */}
+        {onThemeChange && (
+          <ThemeToggle theme={theme} onThemeChange={onThemeChange} />
+        )}
       </div>
     </header>
   );
