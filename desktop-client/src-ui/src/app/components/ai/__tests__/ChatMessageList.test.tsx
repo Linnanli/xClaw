@@ -129,6 +129,7 @@ describe('ChatMessageList - 契约测试', () => {
 
   it('test_contract_message_spacing_is_20px', () => {
     const { container } = render(<ChatMessageList messages={mockMessages} />);
+    // space-y-5 = 20px 间距
     expect(container.querySelector('.space-y-5')).toBeInTheDocument();
   });
 

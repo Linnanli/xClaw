@@ -177,9 +177,9 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
             />
           )}
 
-          {/* 底部输入框 */}
-          <div className="border-t border-border px-6 py-4">
-            <div className="mx-auto max-w-3xl">
+          {/* 底部输入框 - 设计稿 InputArea 720px 居中 */}
+          <div className="border-t border-border px-10 py-4">
+            <div className="mx-auto max-w-[720px]">
               <ChatInput {...inputProps} />
             </div>
           </div>

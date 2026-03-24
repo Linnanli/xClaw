@@ -72,7 +72,7 @@ export function ChatMessage({
   return (
     <div
       className={cn(
-        'group flex flex-col gap-1.5',
+        'group flex w-full flex-col gap-1.5',
         isUser ? 'items-end' : 'items-start',
       )}
     >
@@ -98,20 +98,20 @@ export function ChatMessage({
         </span>
       </div>
 
-      {/* 气泡区域（偏移 42px 对齐头像下方） */}
+      {/* 气泡区域（偏移 42px 对齐头像下方，设计稿 fill_container） */}
       <div
         className={cn(
-          'flex max-w-[70%] flex-col gap-1',
-          isUser ? 'pr-[42px]' : 'pl-[42px]',
+          'flex w-full flex-col gap-1',
+          isUser ? 'items-end pr-[42px]' : 'items-start pl-[42px]',
         )}
       >
         {/* 消息气泡 */}
         <div
           className={cn(
-            'px-4 py-3 text-sm leading-relaxed',
+            'max-w-[80%] px-4 py-3 text-sm leading-relaxed',
             isUser
-              ? 'rounded-tl-2xl rounded-tr-2xl rounded-br rounded-bl-2xl bg-[#3D8A5A] text-white'
-              : 'rounded-tl-2xl rounded-tr-2xl rounded-br-2xl rounded-bl border border-[#E5E4E1] bg-white text-[#4A4947]',
+              ? 'rounded-tl-2xl rounded-tr rounded-br-2xl rounded-bl-2xl bg-[#3D8A5A] text-white'
+              : 'rounded-tl rounded-tr-2xl rounded-br-2xl rounded-bl-2xl border border-[#E5E4E1] bg-white text-[#4A4947]',
           )}
         >
           {isLoading ? (

@@ -66,18 +66,18 @@ describe('ChatMessage - 正常路径', () => {
     expect(bordered).toBeInTheDocument();
   });
 
-  it('用户消息气泡应有非对称圆角（右下角小）', () => {
+  it('用户消息气泡应有非对称圆角（右上角小，指向头像）', () => {
     const { container } = render(<ChatMessage id="1" role="user" content="测试" />);
-    const bubble = container.querySelector('.rounded-br');
+    const bubble = container.querySelector('.rounded-tr');
     expect(bubble).toBeInTheDocument();
-    // 确认不是 rounded-br-2xl
-    const largeBr = container.querySelector('.rounded-br-2xl');
-    expect(largeBr).toBeNull();
+    // 确认不是 rounded-tr-2xl
+    const largeTr = container.querySelector('.rounded-tr-2xl');
+    expect(largeTr).toBeNull();
   });
 
-  it('AI 消息气泡应有非对称圆角（左下角小）', () => {
+  it('AI 消息气泡应有非对称圆角（左上角小，指向头像）', () => {
     const { container } = render(<ChatMessage id="2" role="assistant" content="回复" />);
-    const bubble = container.querySelector('.rounded-bl');
+    const bubble = container.querySelector('.rounded-tl');
     expect(bubble).toBeInTheDocument();
   });
 
@@ -226,6 +226,8 @@ describe('ChatMessage - 契约测试', () => {
     const { container } = render(<ChatMessage id="1" role="user" content="测试" />);
     const bubbleWrap = container.querySelector('.pr-\\[42px\\]');
     expect(bubbleWrap).toBeInTheDocument();
+    // 气泡区域应占满宽度
+    expect(bubbleWrap?.className).toContain('w-full');
   });
 
   it('test_contract_ai_bubble_offset_matches_avatar_width', () => {
@@ -233,6 +235,7 @@ describe('ChatMessage - 契约测试', () => {
     const { container } = render(<ChatMessage id="2" role="assistant" content="回复" />);
     const bubbleWrap = container.querySelector('.pl-\\[42px\\]');
     expect(bubbleWrap).toBeInTheDocument();
+    expect(bubbleWrap?.className).toContain('w-full');
   });
 });
 

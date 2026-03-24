@@ -22098,8 +22098,8 @@
                               "fill": "#3D8A5A",
                               "cornerRadius": [
                                 16,
-                                16,
                                 4,
+                                16,
                                 16
                               ],
                               "padding": [
@@ -22188,10 +22188,10 @@
                               "name": "aiBubble1",
                               "fill": "#FFFFFF",
                               "cornerRadius": [
+                                4,
                                 16,
                                 16,
-                                16,
-                                4
+                                16
                               ],
                               "stroke": {
                                 "align": "inside",
@@ -23387,8 +23387,8 @@
                               "fill": "#3D8A5A",
                               "cornerRadius": [
                                 16,
-                                16,
                                 4,
+                                16,
                                 16
                               ],
                               "padding": [
@@ -23478,10 +23478,10 @@
                               "width": 480,
                               "fill": "#FFFFFF",
                               "cornerRadius": [
+                                4,
                                 16,
                                 16,
-                                16,
-                                4
+                                16
                               ],
                               "stroke": {
                                 "align": "inside",
@@ -26463,8 +26463,8 @@
                               "fill": "#3D8A5A",
                               "cornerRadius": [
                                 16,
-                                16,
                                 4,
+                                16,
                                 16
                               ],
                               "padding": [
@@ -26554,10 +26554,10 @@
                               "width": 560,
                               "fill": "#FFFFFF",
                               "cornerRadius": [
+                                4,
                                 16,
                                 16,
-                                16,
-                                4
+                                16
                               ],
                               "stroke": {
                                 "align": "inside",
@@ -43601,8 +43601,8 @@
                               "fill": "#3D8A5A",
                               "cornerRadius": [
                                 16,
-                                16,
                                 4,
+                                16,
                                 16
                               ],
                               "padding": [
@@ -43691,10 +43691,10 @@
                               "name": "aiBubble1",
                               "fill": "#FFFFFF",
                               "cornerRadius": [
+                                4,
                                 16,
                                 16,
-                                16,
-                                4
+                                16
                               ],
                               "stroke": {
                                 "align": "inside",
@@ -44997,8 +44997,8 @@
                           "fill": "#3D8A5A",
                           "cornerRadius": [
                             16,
-                            16,
                             4,
+                            16,
                             16
                           ],
                           "padding": [
@@ -45043,10 +45043,10 @@
                           "width": 480,
                           "fill": "#FFFFFF",
                           "cornerRadius": [
+                            4,
                             16,
                             16,
-                            16,
-                            4
+                            16
                           ],
                           "stroke": {
                             "align": "inside",
@@ -48179,8 +48179,8 @@
                               "fill": "#3D8A5A",
                               "cornerRadius": [
                                 16,
-                                16,
                                 4,
+                                16,
                                 16
                               ],
                               "padding": [
@@ -48270,10 +48270,10 @@
                               "width": 560,
                               "fill": "#FFFFFF",
                               "cornerRadius": [
+                                4,
                                 16,
                                 16,
-                                16,
-                                4
+                                16
                               ],
                               "stroke": {
                                 "align": "inside",
@@ -51548,8 +51548,8 @@
                               "fill": "#4EA872",
                               "cornerRadius": [
                                 16,
-                                16,
                                 4,
+                                16,
                                 16
                               ],
                               "padding": [
@@ -51638,10 +51638,10 @@
                               "name": "aiBubble1",
                               "fill": "#2A2928",
                               "cornerRadius": [
+                                4,
                                 16,
                                 16,
-                                16,
-                                4
+                                16
                               ],
                               "stroke": {
                                 "align": "inside",

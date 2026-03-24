@@ -59,8 +59,8 @@ export function ChatMessageList({
   }, [messages, thinkingMessage, dlpWarning]);
 
   return (
-    <ScrollArea className="min-h-0 flex-1 px-6 py-4">
-      <div className="mx-auto max-w-3xl space-y-5">
+    <ScrollArea className="min-h-0 flex-1 px-10 py-6">
+      <div className="space-y-5">
         {messages.map((msg) => (
           <ChatMessage
             key={msg.id}
@@ -85,7 +85,7 @@ export function ChatMessageList({
               <span className="text-[11px] font-semibold text-[#9D9C9A]">X-Claw</span>
             </div>
             <div className="pl-[42px]">
-              <div className="rounded-tl-2xl rounded-tr-2xl rounded-br-2xl rounded-bl border border-[#E5E4E1] bg-white px-4 py-3">
+              <div className="rounded-tl rounded-tr-2xl rounded-br-2xl rounded-bl-2xl border border-[#E5E4E1] bg-white px-4 py-3">
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <span className="animate-pulse">💭</span>
                   <span>{thinkingMessage}</span>
