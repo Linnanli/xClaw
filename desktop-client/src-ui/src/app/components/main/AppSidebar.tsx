@@ -172,8 +172,8 @@ export function AppSidebar({
         </Tooltip>
       </SidebarHeader>
 
-      {/* Main Nav + Chat History */}
-      <SidebarContent>
+      {/* Main Nav + Chat History (SideTop) */}
+      <SidebarContent className="flex-1 overflow-hidden">
         <SidebarGroup className="px-3 pt-2">
           <SidebarMenu>
             <SidebarMenuItem>
@@ -193,10 +193,10 @@ export function AppSidebar({
           </SidebarMenu>
         </SidebarGroup>
 
-        {/* Chat History */}
-        <SidebarGroup className="flex-1 px-3">
+        {/* Chat History - fills remaining space */}
+        <SidebarGroup className="min-h-0 flex-1 px-3">
           <ScrollArea className="h-full">
-            <SidebarGroupContent className="space-y-1">
+            <SidebarGroupContent className="space-y-1 py-1">
               {renderThreadGroup('今天', 'today', grouped.today)}
               {renderThreadGroup('昨天', 'yesterday', grouped.yesterday)}
               {renderThreadGroup('更早', 'older', grouped.older)}
@@ -205,15 +205,15 @@ export function AppSidebar({
         </SidebarGroup>
       </SidebarContent>
 
-      {/* Bottom Nav */}
+      {/* Bottom Nav (SideBottom) - compact, no extra spacing */}
       <SidebarSeparator />
-      <SidebarFooter className="px-3 pb-3">
-        <SidebarMenu>
+      <SidebarFooter className="shrink-0 px-3 pb-2 pt-1">
+        <SidebarMenu className="gap-0.5">
           <SidebarMenuItem>
             <SidebarMenuButton
               isActive={activeNav === 'logs'}
               onClick={() => onNavChange('logs')}
-              className="rounded-[10px]"
+              className="h-10 rounded-[10px]"
             >
               <FileText className="size-[18px]" />
               <span>日志</span>
@@ -223,7 +223,7 @@ export function AppSidebar({
             <SidebarMenuButton
               isActive={activeNav === 'routines'}
               onClick={() => onNavChange('routines')}
-              className="rounded-[10px]"
+              className="h-10 rounded-[10px]"
             >
               <Timer className="size-[18px]" />
               <span>定时任务</span>
@@ -233,14 +233,14 @@ export function AppSidebar({
             <SidebarMenuButton
               isActive={activeNav === 'settings'}
               onClick={() => onNavChange('settings')}
-              className="rounded-[10px]"
+              className="h-10 rounded-[10px]"
             >
               <Settings className="size-[18px]" />
               <span>设置</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
-            <div className="flex items-center gap-2.5 rounded-[10px] px-2 py-2">
+            <div className="flex h-12 items-center gap-2.5 rounded-[10px] px-2">
               <div className="flex size-8 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
                 U
               </div>

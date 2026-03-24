@@ -34,6 +34,7 @@ export function MainApp() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [jobsOpen, setJobsOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [routinesOpen, setRoutinesOpen] = useState(false);
   const { config: watermarkConfig, loading: watermarkLoading } = useWatermark();
 
   // 嵌入式模式：SSE 连接跳过，使用 Tauri IPC
@@ -82,6 +83,8 @@ export function MainApp() {
   const handleNavChange = (nav: NavItem) => {
     if (nav === 'settings') {
       setSettingsOpen(true);
+    } else if (nav === 'routines') {
+      setRoutinesOpen(true);
     } else {
       setActiveNav(nav);
     }
@@ -98,8 +101,6 @@ export function MainApp() {
         );
       case 'logs':
         return <LogsTab />;
-      case 'routines':
-        return <RoutinesTab />;
       default:
         return null;
     }
@@ -125,6 +126,9 @@ export function MainApp() {
 
       {/* Settings Modal */}
       <SettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} />
+
+      {/* Routines Modal */}
+      <RoutinesTab open={routinesOpen} onOpenChange={setRoutinesOpen} />
 
       {/* Jobs Panel */}
       <JobsPanel open={jobsOpen} onOpenChange={setJobsOpen} />

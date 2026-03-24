@@ -1,27 +1,69 @@
-import { useState, useEffect } from 'react';
-import { Plus, Play, Trash2, Pause, PlayCircle, History, X } from 'lucide-react';
-import { useTheme } from '../../contexts/ThemeContext';
-import { routineApi, routineExtendedApi, type Routine, type RoutineRun } from '../../utils/tauri';
+/**
+ * RoutinesTab - 定时任务管理
+ *
+ * 设计稿：960x680 模态框，左侧 200px 导航（全部/已启用/已禁用）+ 右侧任务卡片列表。
+ * 每张卡片包含：名称 + 标签 + 开关 + 运行按钮 + 描述 + 元信息（触发方式/上次执行/执行次数）。
+ */
 
-export function RoutinesTab() {
-  const { theme } = useTheme();
-  const [showCreateModal, setShowCreateModal] = useState(false);
+import { useState, useEffect } from 'react';
+import {
+  Plus,
+  X,
+  List,
+  CirclePlay,
+  CirclePause,
+  Clock3,
+  CircleCheck,
+  Hash,
+  Play,
+} from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogDescription,
+} from '../ui/dialog';
+import { Switch } from '../ui/switch';
+import { ScrollArea } from '../ui/scroll-area';
+import { Button } from '../ui/button';
+import { cn } from '../ui/utils';
+import { routineApi, routineExtendedApi, type Routine } from '../../utils/tauri';
+
+type FilterKey = 'all' | 'enabled' | 'disabled';
+
+interface RoutinesTabProps {
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}
+
+const TRIGGER_LABELS: Record<string, string> = {
+  manual: '手动触发',
+  time: '时间触发',
+  event: '事件触发',
+  Manual: '手动触发',
+  Time: '时间触发',
+  Event: '事件触发',
+};
+
+const TAG_COLORS: Record<string, { bg: string; text: string }> = {
+  time: { bg: 'bg-blue-50', text: 'text-blue-600' },
+  event: { bg: 'bg-amber-50', text: 'text-amber-600' },
+  manual: { bg: 'bg-secondary', text: 'text-muted-foreground' },
+};
+
+export function RoutinesTab({ open = true, onOpenChange }: RoutinesTabProps) {
+  const [filter, setFilter] = useState<FilterKey>('all');
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [loading, setLoading] = useState(false);
-
-  const [newRoutine, setNewRoutine] = useState({
-    name: '',
-    description: '',
-    trigger: 'manual' as const,
-    triggerValue: '',
-  });
-  const [selectedRoutineId, setSelectedRoutineId] = useState<string | null>(null);
-  const [routineRuns, setRoutineRuns] = useState<RoutineRun[]>([]);
-  const [runsLoading, setRunsLoading] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newDesc, setNewDesc] = useState('');
+  const [newTrigger, setNewTrigger] = useState<'manual' | 'time' | 'event'>('manual');
+  const [newCron, setNewCron] = useState('');
 
   useEffect(() => {
-    loadRoutines();
-  }, []);
+    if (open) loadRoutines();
+  }, [open]);
 
   const loadRoutines = async () => {
     setLoading(true);
@@ -35,42 +77,28 @@ export function RoutinesTab() {
     }
   };
 
-  const handleCreate = async () => {
-    if (newRoutine.name && newRoutine.description) {
-      try {
-        let trigger;
-        if (newRoutine.trigger === 'manual') {
-          trigger = { Manual: null };
-        } else if (newRoutine.trigger === 'time') {
-          trigger = { Time: newRoutine.triggerValue || '0 9 * * *' };
-        } else {
-          trigger = { Event: newRoutine.triggerValue || 'default_event' };
-        }
+  const filtered = routines.filter((r) => {
+    if (filter === 'enabled') return r.status === 'active';
+    if (filter === 'disabled') return r.status !== 'active';
+    return true;
+  });
 
-        await routineApi.createRoutine(
-          newRoutine.name,
-          newRoutine.description,
-          trigger,
-          []
-        );
-        
-        setNewRoutine({ name: '', description: '', trigger: 'manual', triggerValue: '' });
-        setShowCreateModal(false);
-        await loadRoutines();
-      } catch (err) {
-        console.error('Failed to create routine:', err);
-      }
-    }
+  const counts = {
+    all: routines.length,
+    enabled: routines.filter((r) => r.status === 'active').length,
+    disabled: routines.filter((r) => r.status !== 'active').length,
   };
 
-  const handleDelete = async (id: string) => {
-    if (confirm('确定要删除此日程吗？')) {
-      try {
-        await routineApi.deleteRoutine(id);
-        await loadRoutines();
-      } catch (err) {
-        console.error('Failed to delete routine:', err);
+  const handleToggle = async (id: string, currentStatus: string) => {
+    try {
+      if (currentStatus === 'active') {
+        await routineExtendedApi.pauseRoutine(id);
+      } else {
+        await routineExtendedApi.enableRoutine(id);
       }
+      await loadRoutines();
+    } catch (err) {
+      console.error('Failed to toggle routine:', err);
     }
   };
 
@@ -82,334 +110,250 @@ export function RoutinesTab() {
     }
   };
 
-  const handleTogglePause = async (id: string) => {
+  const handleCreate = async () => {
+    if (!newName.trim() || !newDesc.trim()) return;
     try {
-      const routine = routines.find(r => r.id === id);
-      if (routine?.status === 'active') {
-        await routineExtendedApi.pauseRoutine(id);
-      } else {
-        await routineExtendedApi.enableRoutine(id);
-      }
+      let trigger;
+      if (newTrigger === 'manual') trigger = { Manual: null };
+      else if (newTrigger === 'time') trigger = { Time: newCron || '0 9 * * *' };
+      else trigger = { Event: 'default_event' };
+
+      await routineApi.createRoutine(newName, newDesc, trigger, []);
+      setNewName('');
+      setNewDesc('');
+      setNewTrigger('manual');
+      setNewCron('');
+      setShowCreate(false);
       await loadRoutines();
     } catch (err) {
-      console.error('Failed to toggle routine:', err);
+      console.error('Failed to create routine:', err);
     }
   };
 
-  const handleViewRuns = async (id: string) => {
-    setSelectedRoutineId(id);
-    setRunsLoading(true);
-    try {
-      const resp = await routineExtendedApi.getRoutineRuns(id);
-      setRoutineRuns(resp.runs);
-    } catch (err) {
-      console.error('Failed to load routine runs:', err);
-      setRoutineRuns([]);
-    } finally {
-      setRunsLoading(false);
+  const getTriggerType = (r: Routine): string => {
+    if (typeof r.trigger === 'string') return r.trigger;
+    if (typeof r.trigger === 'object' && r.trigger) {
+      const keys = Object.keys(r.trigger);
+      return keys[0]?.toLowerCase() || 'manual';
     }
+    return 'manual';
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'active':
-        return <span className="px-3 py-1 bg-green-400/10 text-green-400 text-sm rounded-full border border-green-400/30">活跃</span>;
-      case 'paused':
-        return <span className="px-3 py-1 bg-yellow-400/10 text-yellow-400 text-sm rounded-full border border-yellow-400/30">暂停</span>;
-      case 'disabled':
-        return <span className="px-3 py-1 bg-gray-400/10 text-gray-400 text-sm rounded-full border border-gray-400/30">禁用</span>;
-      default:
-        return null;
-    }
-  };
+  const NAV_ITEMS: { key: FilterKey; label: string; icon: React.ElementType }[] = [
+    { key: 'all', label: '全部任务', icon: List },
+    { key: 'enabled', label: '已启用', icon: CirclePlay },
+    { key: 'disabled', label: '已禁用', icon: CirclePause },
+  ];
 
-  const getTriggerLabel = (trigger: string) => {
-    switch (trigger) {
-      case 'manual':
-        return '手动';
-      case 'time':
-        return '时间';
-      case 'event':
-        return '事件';
-      default:
-        return trigger;
-    }
-  };
+  const filterLabel = NAV_ITEMS.find((n) => n.key === filter)?.label || '全部任务';
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="p-6">
-        <div className="flex justify-between items-center mb-6">
-          <h2 className={`text-2xl font-bold ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>日程管理</h2>
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-opacity ${
-              theme === 'dark'
-                ? 'bg-gradient-to-r from-[#5ddad5] to-[#4facf7] text-[#0a1628] hover:opacity-90'
-                : 'bg-[#667eea] text-white hover:opacity-90 shadow-md'
-            }`}
-          >
-            <Plus size={18} />
-            创建日程
-          </button>
-        </div>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex h-[680px] max-h-[85vh] w-[960px] max-w-[95vw] flex-row gap-0 overflow-hidden rounded-2xl border-border p-0 sm:max-w-[960px]">
+        <DialogTitle className="sr-only">定时任务</DialogTitle>
+        <DialogDescription className="sr-only">管理定时任务</DialogDescription>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {routines.map((routine) => (
-            <div
-              key={routine.id}
-              className={`border rounded-xl p-5 transition-colors ${
-                theme === 'dark'
-                  ? 'bg-[#0f1d35] border-[#1a2942] hover:border-[#5ddad5]/30'
-                  : 'bg-white border-[#ddd] hover:border-[#667eea]/50 shadow-sm hover:shadow-md'
-              }`}
-            >
-              <div className="flex items-start justify-between mb-3">
-                <h3 className={`font-semibold text-lg ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>{routine.name}</h3>
-                {getStatusBadge(routine.status)}
-              </div>
-
-              <p className={`text-sm mb-3 ${theme === 'dark' ? 'text-gray-400' : 'text-[#666]'}`}>{routine.description}</p>
-
-              <div className={`text-sm mb-3 ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>
-                <span className="font-medium">触发器:</span> {getTriggerLabel(routine.trigger)}
-                {routine.triggerValue && (
-                  <span className="ml-2">({routine.triggerValue})</span>
+        {/* Left Nav - 200px */}
+        <nav className="flex w-[200px] shrink-0 flex-col border-r border-border bg-[#FAFAF8] p-3 pt-6 dark:bg-secondary/50">
+          <p className="mb-2 px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            定时任务
+          </p>
+          <div className="flex flex-col gap-0.5">
+            {NAV_ITEMS.map(({ key, label, icon: Icon }) => (
+              <button
+                key={key}
+                onClick={() => setFilter(key)}
+                className={cn(
+                  'flex items-center gap-2 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors',
+                  filter === key
+                    ? 'bg-primary/10 text-primary font-semibold'
+                    : 'text-text-secondary hover:bg-accent',
                 )}
-              </div>
+              >
+                <Icon className="size-[15px]" />
+                <span className="flex-1 text-left">{label}</span>
+                <span
+                  className={cn(
+                    'flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1.5 text-[11px] font-semibold',
+                    filter === key
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-border text-text-secondary',
+                  )}
+                >
+                  {counts[key]}
+                </span>
+              </button>
+            ))}
+          </div>
+        </nav>
 
-              <div className="flex gap-2">
-                <button
-                  onClick={() => handleTrigger(routine.id)}
-                  className={`flex-1 px-3 py-2 rounded-lg flex items-center justify-center gap-2 transition-opacity ${
-                    theme === 'dark'
-                      ? 'bg-gradient-to-r from-[#5ddad5] to-[#4facf7] text-[#0a1628] hover:opacity-90'
-                      : 'bg-[#667eea] text-white hover:opacity-90 shadow-sm'
-                  }`}
-                >
-                  <PlayCircle size={16} />
-                  触发
-                </button>
-                <button
-                  onClick={() => handleViewRuns(routine.id)}
-                  className={`px-3 py-2 rounded-lg transition-opacity border ${
-                    theme === 'dark'
-                      ? 'bg-[#0a1628] hover:opacity-80 text-gray-400 border-[#1a2942]'
-                      : 'bg-[#f5f5f5] hover:opacity-80 text-[#666] border-[#ddd]'
-                  }`}
-                  title="执行历史"
-                >
-                  <History size={16} />
-                </button>
-                <button
-                  onClick={() => handleTogglePause(routine.id)}
-                  className={`px-3 py-2 rounded-lg transition-opacity border ${
-                    theme === 'dark'
-                      ? 'bg-[#0a1628] hover:opacity-80 text-gray-400 border-[#1a2942]'
-                      : 'bg-[#f5f5f5] hover:opacity-80 text-[#666] border-[#ddd]'
-                  }`}
-                >
-                  {routine.status === 'active' ? <Pause size={16} /> : <Play size={16} />}
-                </button>
-                <button
-                  onClick={() => handleDelete(routine.id)}
-                  className="px-3 py-2 bg-red-400/10 hover:bg-red-400/20 text-red-400 rounded-lg transition-colors border border-red-400/30"
-                >
-                  <Trash2 size={16} />
-                </button>
-              </div>
+        {/* Right Content */}
+        <div className="flex flex-1 flex-col overflow-hidden">
+          {/* Header */}
+          <div className="flex h-[60px] items-center justify-between border-b border-border px-6">
+            <div className="flex items-center gap-2">
+              <span className="text-[15px] font-bold text-foreground">{filterLabel}</span>
+              <span className="text-[13px] text-muted-foreground">
+                {filtered.length} 个定时任务
+              </span>
             </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Create Modal */}
-      {showCreateModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className={`border rounded-xl p-6 max-w-md w-full mx-4 ${
-            theme === 'dark'
-              ? 'bg-[#0f1d35] border-[#1a2942]'
-              : 'bg-white border-[#ddd] shadow-lg'
-          }`}>
-            <h3 className={`text-lg font-semibold mb-4 ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>
-              创建新日程
-            </h3>
-
-            <div className="space-y-4">
-              <div>
-                <label className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>
-                  日程名称
-                </label>
-                <input
-                  type="text"
-                  value={newRoutine.name}
-                  onChange={(e) => setNewRoutine({ ...newRoutine, name: e.target.value })}
-                  className={`w-full px-4 py-2 border rounded-lg focus:outline-none ${
-                    theme === 'dark'
-                      ? 'bg-[#0a1628] border-[#1a2942] focus:border-[#5ddad5] text-white placeholder-gray-500'
-                      : 'bg-white border-[#ddd] focus:border-[#667eea] focus:ring-2 focus:ring-[#667eea]/20 text-[#333] placeholder-gray-400'
-                  }`}
-                  placeholder="输入日程名称"
-                />
-              </div>
-
-              <div>
-                <label className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>
-                  描述
-                </label>
-                <textarea
-                  value={newRoutine.description}
-                  onChange={(e) => setNewRoutine({ ...newRoutine, description: e.target.value })}
-                  className={`w-full px-4 py-2 border rounded-lg focus:outline-none resize-none ${
-                    theme === 'dark'
-                      ? 'bg-[#0a1628] border-[#1a2942] focus:border-[#5ddad5] text-white placeholder-gray-500'
-                      : 'bg-white border-[#ddd] focus:border-[#667eea] focus:ring-2 focus:ring-[#667eea]/20 text-[#333] placeholder-gray-400'
-                  }`}
-                  rows={3}
-                  placeholder="输入日程描述"
-                />
-              </div>
-
-              <div>
-                <label className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>
-                  触发器类型
-                </label>
-                <select
-                  value={newRoutine.trigger}
-                  onChange={(e) => setNewRoutine({ ...newRoutine, trigger: e.target.value as 'manual' | 'time' | 'event' })}
-                  className={`w-full px-4 py-2 border rounded-lg focus:outline-none ${
-                    theme === 'dark'
-                      ? 'bg-[#0a1628] border-[#1a2942] focus:border-[#5ddad5] text-white'
-                      : 'bg-white border-[#ddd] focus:border-[#667eea] focus:ring-2 focus:ring-[#667eea]/20 text-[#333]'
-                  }`}
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                className="h-8 gap-1.5 rounded-lg text-[13px]"
+                onClick={() => setShowCreate(true)}
+              >
+                <Plus className="size-3.5" />
+                新建定时任务
+              </Button>
+              {onOpenChange && (
+                <button
+                  onClick={() => onOpenChange(false)}
+                  className="flex size-7 items-center justify-center rounded-md bg-secondary text-muted-foreground hover:text-foreground"
                 >
-                  <option value="manual">手动</option>
-                  <option value="time">时间</option>
-                  <option value="event">事件</option>
-                </select>
-              </div>
-
-              {newRoutine.trigger === 'time' && (
-                <div>
-                  <label className={`block text-sm font-medium mb-2 ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>
-                    Cron表达式
-                  </label>
-                  <input
-                    type="text"
-                    value={newRoutine.triggerValue}
-                    onChange={(e) => setNewRoutine({ ...newRoutine, triggerValue: e.target.value })}
-                    className={`w-full px-4 py-2 border rounded-lg focus:outline-none ${
-                      theme === 'dark'
-                        ? 'bg-[#0a1628] border-[#1a2942] focus:border-[#5ddad5] text-white placeholder-gray-500'
-                        : 'bg-white border-[#ddd] focus:border-[#667eea] focus:ring-2 focus:ring-[#667eea]/20 text-[#333] placeholder-gray-400'
-                    }`}
-                    placeholder="例如: 0 9 * * *"
-                  />
-                </div>
+                  <X className="size-4" />
+                </button>
               )}
             </div>
-
-            <div className="flex gap-3 justify-end mt-6">
-              <button
-                onClick={() => setShowCreateModal(false)}
-                className={`px-4 py-2 rounded-lg transition-opacity border ${
-                  theme === 'dark'
-                    ? 'bg-[#0a1628] hover:opacity-80 text-gray-400 border-[#1a2942]'
-                    : 'bg-[#f5f5f5] hover:opacity-80 text-[#666] border-[#ddd]'
-                }`}
-              >
-                取消
-              </button>
-              <button
-                onClick={handleCreate}
-                className={`px-4 py-2 rounded-lg font-medium transition-opacity ${
-                  theme === 'dark'
-                    ? 'bg-gradient-to-r from-[#5ddad5] to-[#4facf7] text-[#0a1628] hover:opacity-90'
-                    : 'bg-[#667eea] text-white hover:opacity-90 shadow-md'
-                }`}
-              >
-                创建
-              </button>
-            </div>
           </div>
-        </div>
-      )}
 
-      {/* Runs History Modal */}
-      {selectedRoutineId && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className={`border rounded-xl max-w-lg w-full mx-4 max-h-[70vh] flex flex-col ${
-            theme === 'dark'
-              ? 'bg-[#0f1d35] border-[#1a2942]'
-              : 'bg-white border-[#ddd] shadow-lg'
-          }`}>
-            <div className={`flex items-center justify-between p-4 border-b ${
-              theme === 'dark' ? 'border-[#1a2942]' : 'border-[#eee]'
-            }`}>
-              <h3 className={`text-lg font-semibold flex items-center gap-2 ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>
-                <History size={18} />
-                执行历史
-              </h3>
-              <button
-                onClick={() => setSelectedRoutineId(null)}
-                className={`p-1 rounded transition-colors ${
-                  theme === 'dark' ? 'hover:bg-[#1a2942] text-gray-400' : 'hover:bg-gray-100 text-[#999]'
-                }`}
-              >
-                <X size={18} />
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-4">
-              {runsLoading ? (
-                <p className={`text-center py-8 text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>加载中...</p>
-              ) : routineRuns.length === 0 ? (
-                <p className={`text-center py-8 text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>暂无执行记录</p>
-              ) : (
-                <div className="space-y-3">
-                  {routineRuns.map((run) => (
-                    <div
-                      key={run.id}
-                      className={`p-3 rounded-lg border ${
-                        theme === 'dark' ? 'bg-[#0a1628] border-[#1a2942]' : 'bg-[#f9f9f9] border-[#eee]'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <span className={`text-sm font-medium ${
-                          run.status === 'Completed' ? 'text-green-400' :
-                          run.status === 'Failed' ? 'text-red-400' :
-                          run.status === 'Running' ? 'text-yellow-400' :
-                          theme === 'dark' ? 'text-gray-300' : 'text-[#333]'
-                        }`}>
-                          {run.status}
+          {/* Card List */}
+          <ScrollArea className="flex-1">
+            <div className="space-y-2 p-5">
+              {loading && filtered.length === 0 && (
+                <p className="py-12 text-center text-sm text-muted-foreground">加载中...</p>
+              )}
+              {!loading && filtered.length === 0 && (
+                <p className="py-12 text-center text-sm text-muted-foreground">暂无定时任务</p>
+              )}
+              {filtered.map((routine) => {
+                const triggerType = getTriggerType(routine);
+                const tagColor = TAG_COLORS[triggerType] || TAG_COLORS.manual;
+                return (
+                  <div
+                    key={routine.id}
+                    className="rounded-[10px] border border-border bg-card p-4 transition-colors hover:border-primary/20"
+                  >
+                    {/* Top row: name + tag | toggle + run */}
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-foreground">
+                          {routine.name}
                         </span>
-                        <span className={`text-xs px-2 py-0.5 rounded ${
-                          theme === 'dark' ? 'bg-[#1a2942] text-gray-400' : 'bg-[#eee] text-[#666]'
-                        }`}>
-                          {run.trigger_type}
+                        <span
+                          className={cn(
+                            'rounded-full px-2 py-0.5 text-[11px] font-medium',
+                            tagColor.bg,
+                            tagColor.text,
+                          )}
+                        >
+                          {TRIGGER_LABELS[triggerType] || triggerType}
                         </span>
                       </div>
-                      <div className={`text-xs space-y-1 ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>
-                        <div>开始: {new Date(run.started_at).toLocaleString('zh-CN')}</div>
-                        {run.completed_at && (
-                          <div>结束: {new Date(run.completed_at).toLocaleString('zh-CN')}</div>
-                        )}
-                        {run.tokens_used != null && (
-                          <div>Token 用量: {run.tokens_used}</div>
-                        )}
-                        {run.result_summary && (
-                          <div className={`mt-1 ${theme === 'dark' ? 'text-gray-300' : 'text-[#666]'}`}>
-                            {run.result_summary}
-                          </div>
-                        )}
+                      <div className="flex items-center gap-2">
+                        <Switch
+                          checked={routine.status === 'active'}
+                          onCheckedChange={() => handleToggle(routine.id, routine.status)}
+                        />
+                        <button
+                          onClick={() => handleTrigger(routine.id)}
+                          className="flex h-7 items-center gap-1 rounded-md bg-secondary px-2.5 text-[12px] font-medium text-text-secondary transition-colors hover:bg-accent"
+                        >
+                          <Play className="size-3" />
+                          运行
+                        </button>
                       </div>
                     </div>
-                  ))}
+
+                    {/* Description */}
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {routine.description}
+                    </p>
+
+                    {/* Meta row */}
+                    <div className="mt-3 flex items-center gap-4">
+                      <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                        <Clock3 className="size-3 text-text-tertiary" />
+                        {TRIGGER_LABELS[triggerType] || triggerType}
+                        {routine.triggerValue && ` ${routine.triggerValue}`}
+                      </span>
+                      <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                        <CircleCheck className="size-3 text-primary" />
+                        上次执行：-
+                      </span>
+                      <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                        <Hash className="size-3 text-text-tertiary" />
+                        已执行 0 次
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </ScrollArea>
+        </div>
+
+        {/* Create Dialog (inline overlay) */}
+        {showCreate && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/30">
+            <div className="w-[400px] rounded-2xl border border-border bg-card p-6 shadow-xl">
+              <h3 className="mb-4 text-base font-bold text-foreground">新建定时任务</h3>
+              <div className="space-y-3">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-foreground">名称</label>
+                  <input
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    placeholder="输入任务名称"
+                    className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+                  />
                 </div>
-              )}
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-foreground">描述</label>
+                  <textarea
+                    value={newDesc}
+                    onChange={(e) => setNewDesc(e.target.value)}
+                    placeholder="输入任务描述"
+                    rows={2}
+                    className="w-full resize-none rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-foreground">触发方式</label>
+                  <select
+                    value={newTrigger}
+                    onChange={(e) => setNewTrigger(e.target.value as 'manual' | 'time' | 'event')}
+                    className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+                  >
+                    <option value="manual">手动</option>
+                    <option value="time">时间（Cron）</option>
+                    <option value="event">事件</option>
+                  </select>
+                </div>
+                {newTrigger === 'time' && (
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-foreground">Cron 表达式</label>
+                    <input
+                      value={newCron}
+                      onChange={(e) => setNewCron(e.target.value)}
+                      placeholder="例如: 0 9 * * *"
+                      className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+                    />
+                  </div>
+                )}
+              </div>
+              <div className="mt-5 flex justify-end gap-2">
+                <Button variant="outline" size="sm" onClick={() => setShowCreate(false)}>
+                  取消
+                </Button>
+                <Button size="sm" onClick={handleCreate} disabled={!newName.trim()}>
+                  创建
+                </Button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
-    </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }

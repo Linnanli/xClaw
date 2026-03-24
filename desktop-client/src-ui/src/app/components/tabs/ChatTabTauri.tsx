@@ -30,10 +30,10 @@ import { Button } from '../ui/button';
 import { cn } from '../ui/utils';
 
 const QUICK_ACTIONS = [
-  { icon: MessageSquare, label: '智能对话' },
-  { icon: TrendingUp, label: '数据分析' },
-  { icon: FileText, label: '文档处理' },
-  { icon: Zap, label: '技能助手' },
+  { icon: MessageSquare, label: '智能对话', prompt: '请帮我进行一次智能对话' },
+  { icon: TrendingUp, label: '数据分析', prompt: '请帮我分析以下数据' },
+  { icon: FileText, label: '文档处理', prompt: '请帮我处理以下文档' },
+  { icon: Zap, label: '技能助手', prompt: '请展示可用的技能列表' },
 ];
 
 interface ChatTabTauriProps {
@@ -41,9 +41,16 @@ interface ChatTabTauriProps {
   onThreadSelect?: (threadId: string) => void;
 }
 
+const AVAILABLE_MODELS = [
+  { id: 'gpt-4o', name: 'GPT-4o', desc: '最强大的多模态模型' },
+  { id: 'gpt-4o-mini', name: 'GPT-4o Mini', desc: '快速且经济' },
+  { id: 'claude-3.5', name: 'Claude 3.5', desc: 'Anthropic 旗舰模型' },
+  { id: 'deepseek-v3', name: 'DeepSeek V3', desc: '高性价比推理模型' },
+];
+
 export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriProps) {
   const [loading, setLoading] = useState(false);
-  const [selectedModel] = useState('GPT-4o');
+  const [selectedModel, setSelectedModel] = useState('GPT-4o');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // 消息编辑/删除状态
@@ -242,6 +249,7 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
                 onSubmit={handleSend}
                 isLoading={chat.isLoading}
                 selectedModel={selectedModel}
+                onModelChange={setSelectedModel}
               />
             </div>
           </div>
@@ -262,6 +270,7 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
               {QUICK_ACTIONS.map((action) => (
                 <button
                   key={action.label}
+                  onClick={() => chat.setInput(action.prompt)}
                   className="flex items-center gap-1.5 rounded-full border border-border bg-background px-4 py-2 text-[13px] font-medium text-foreground transition-colors hover:bg-secondary"
                 >
                   <action.icon className="size-3.5 text-primary" />
@@ -278,6 +287,7 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
                 onSubmit={handleSend}
                 isLoading={chat.isLoading}
                 selectedModel={selectedModel}
+                onModelChange={setSelectedModel}
               />
             </div>
           </div>
@@ -309,10 +319,12 @@ interface ChatInputProps {
   onSubmit: (e: React.FormEvent) => void;
   isLoading: boolean;
   selectedModel: string;
+  onModelChange?: (model: string) => void;
 }
 
-function ChatInput({ value, onChange, onSubmit, isLoading, selectedModel }: ChatInputProps) {
+function ChatInput({ value, onChange, onSubmit, isLoading, selectedModel, onModelChange }: ChatInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [modelOpen, setModelOpen] = useState(false);
 
   // 自动调整高度
   useEffect(() => {
@@ -351,14 +363,38 @@ function ChatInput({ value, onChange, onSubmit, isLoading, selectedModel }: Chat
         {/* 底部操作栏 */}
         <div className="mt-3 flex items-center justify-between">
           {/* 模型选择器 */}
-          <button
-            type="button"
-            className="flex items-center gap-1.5 rounded-lg border border-border bg-secondary px-2.5 py-1 text-xs font-semibold transition-colors hover:bg-accent"
-          >
-            <Sparkles className="size-3.5 text-primary" />
-            <span>{selectedModel}</span>
-            <ChevronDown className="size-3.5 text-muted-foreground" />
-          </button>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setModelOpen(!modelOpen)}
+              className="flex items-center gap-1.5 rounded-lg border border-border bg-secondary px-2.5 py-1 text-xs font-semibold transition-colors hover:bg-accent"
+            >
+              <Sparkles className="size-3.5 text-primary" />
+              <span>{selectedModel}</span>
+              <ChevronDown className="size-3.5 text-muted-foreground" />
+            </button>
+            {modelOpen && (
+              <div className="absolute bottom-full left-0 z-50 mb-1 w-56 rounded-lg border border-border bg-popover p-1 shadow-lg">
+                {AVAILABLE_MODELS.map((model) => (
+                  <button
+                    key={model.id}
+                    type="button"
+                    onClick={() => {
+                      onModelChange?.(model.name);
+                      setModelOpen(false);
+                    }}
+                    className={cn(
+                      'flex w-full flex-col rounded-md px-3 py-2 text-left transition-colors hover:bg-accent',
+                      selectedModel === model.name && 'bg-primary/10',
+                    )}
+                  >
+                    <span className="text-xs font-semibold text-foreground">{model.name}</span>
+                    <span className="text-[11px] text-muted-foreground">{model.desc}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
 
           {/* 右侧操作 */}
           <div className="flex items-center gap-2">
