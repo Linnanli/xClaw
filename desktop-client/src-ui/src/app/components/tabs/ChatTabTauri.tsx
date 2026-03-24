@@ -163,6 +163,7 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
               messages={chat.messages}
               loading={chat.isLoading && !chat.thinkingMessage}
               thinkingMessage={chat.thinkingMessage}
+              thinkingSteps={chat.thinkingSteps}
               error={chat.error}
               dlpWarning={inlineDlpWarning}
               onDeleteMessage={(id) => {

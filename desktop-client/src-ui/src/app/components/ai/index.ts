@@ -7,3 +7,4 @@ export { ChatWelcome, type ChatWelcomeProps } from './ChatWelcome';
 export { DlpWarningBanner, type DlpWarningBannerProps } from './DlpWarningBanner';
 export { DlpBlockedDialog, type DlpBlockedDialogProps } from './DlpBlockedDialog';
 export { DlpMessageBadge, type DlpMessageBadgeProps } from './DlpMessageBadge';
+export { ThinkingProcess, type ThinkingProcessProps } from './ThinkingProcess';

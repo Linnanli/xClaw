@@ -50,6 +50,13 @@ interface SendMessageResponse {
   success: boolean;
 }
 
+/** 单个思考步骤 */
+export interface ThinkingStep {
+  id: string;
+  message: string;
+  timestamp: number;
+}
+
 /**
  * 聊天事件类型
  * 
@@ -128,6 +135,8 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
   const [isConnected, setIsConnected] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [thinkingMessage, setThinkingMessage] = useState<string | null>(null);
+  /** 思考步骤历史（按时间顺序累积） */
+  const [thinkingSteps, setThinkingSteps] = useState<ThinkingStep[]>([]);
   const [dlpWarning, setDlpWarning] = useState<DlpWarningEvent | null>(null);
 
   // 使用 ref 跟踪消息 ID,避免重复
@@ -163,11 +172,16 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
         ]);
         setIsLoading(false);
         setThinkingMessage(null);
+        setThinkingSteps([]);
         break;
 
       case 'thinking':
-        // 显示思考状态
+        // 显示思考状态并累积步骤
         setThinkingMessage(event.message);
+        setThinkingSteps((prev) => [
+          ...prev,
+          { id: `step-${Date.now()}`, message: event.message, timestamp: Date.now() },
+        ]);
         setIsLoading(true);
         break;
 
@@ -189,6 +203,7 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
           setError(errorMsg);
           setIsLoading(false);
           setThinkingMessage(null);
+          setThinkingSteps([]);
         } else {
           // 连接错误：更新连接状态
           setIsConnected(false);
@@ -225,10 +240,15 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
           ]);
           setIsLoading(false);
           setThinkingMessage(null);
+          setThinkingSteps([]);
           break;
 
         case 'thinking':
           setThinkingMessage(event.message);
+          setThinkingSteps((prev) => [
+            ...prev,
+            { id: `step-${Date.now()}`, message: event.message, timestamp: Date.now() },
+          ]);
           setIsLoading(true);
           break;
 
@@ -246,6 +266,7 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
             setError(errorMsg);
             setIsLoading(false);
             setThinkingMessage(null);
+            setThinkingSteps([]);
           } else {
             setIsConnected(false);
             tracing.warn('SSE connection error', { code: event.code, message: event.message });
@@ -362,6 +383,7 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
         setIsLoading(true);
         setError(null);
         setThinkingMessage(null);
+        setThinkingSteps([]);
 
         // 步骤 1: DLP 扫描
         tracing.debug('Step 1: DLP scanning');
@@ -423,6 +445,7 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
         setError(errorMsg);
         setIsLoading(false);
         setThinkingMessage(null);
+        setThinkingSteps([]);
         onError?.(errorMsg);
       }
     },
@@ -473,6 +496,7 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
   const stop = useCallback(() => {
     setIsLoading(false);
     setThinkingMessage(null);
+    setThinkingSteps([]);
   }, []);
 
   return {
@@ -482,6 +506,7 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
     isConnected,
     error,
     thinkingMessage,
+    thinkingSteps,
     input,
     dlpWarning,
 

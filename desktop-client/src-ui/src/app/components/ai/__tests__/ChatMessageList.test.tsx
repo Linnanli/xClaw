@@ -31,6 +31,15 @@ vi.mock('../ui/scroll-area', () => ({
   ),
 }));
 
+// Mock ThinkingProcess 组件（隔离测试）
+vi.mock('../ThinkingProcess', () => ({
+  ThinkingProcess: ({ steps, isActive, className }: { steps: unknown[]; isActive: boolean; className?: string }) => (
+    <div data-testid="thinking-process" data-active={isActive} data-steps={steps.length} className={className}>
+      {isActive ? '思考中...' : `思考完成（${steps.length} 步）`}
+    </div>
+  ),
+}));
+
 // jsdom 不支持 scrollIntoView
 Element.prototype.scrollIntoView = vi.fn();
 
@@ -61,11 +70,17 @@ describe('ChatMessageList - 正常路径', () => {
     expect(container.querySelector('.space-y-5')).toBeInTheDocument();
   });
 
-  it('思考状态应显示 AI 头像和消息', () => {
-    render(<ChatMessageList messages={[]} thinkingMessage="正在思考..." />);
-    expect(screen.getByText('正在思考...')).toBeInTheDocument();
-    expect(screen.getByText('XC')).toBeInTheDocument(); // AI 头像
-    expect(screen.getByText('X-Claw')).toBeInTheDocument(); // AI 名称
+  it('思考状态应渲染 ThinkingProcess 组件', () => {
+    const steps = [
+      { id: 'step-1', message: '正在思考...', timestamp: Date.now() },
+    ];
+    render(
+      <ChatMessageList messages={[]} thinkingMessage="正在思考..." thinkingSteps={steps} />,
+    );
+    const tp = screen.getByTestId('thinking-process');
+    expect(tp).toBeInTheDocument();
+    expect(tp.getAttribute('data-active')).toBe('true');
+    expect(tp.getAttribute('data-steps')).toBe('1');
   });
 
   it('加载状态应显示加载指示器', () => {
@@ -102,14 +117,14 @@ describe('ChatMessageList - 错误路径', () => {
     expect(dots.length).toBe(3);
   });
 
-  it('test_failure_loading_with_thinking_hides_dots', () => {
+  it('test_failure_loading_with_thinking_shows_thinking_process', () => {
+    const steps = [{ id: 'step-1', message: '思考中...', timestamp: Date.now() }];
     render(
-      <ChatMessageList messages={mockMessages} loading thinkingMessage="思考中..." />,
+      <ChatMessageList messages={mockMessages} loading thinkingMessage="思考中..." thinkingSteps={steps} />,
     );
-    // 思考消息可见
-    expect(screen.getByText('思考中...')).toBeInTheDocument();
+    // ThinkingProcess 组件应可见
+    expect(screen.getByTestId('thinking-process')).toBeInTheDocument();
     // 不应有额外的加载指示器（思考状态优先）
-    // 加载指示器只在 loading && !thinkingMessage 时显示
   });
 
   it('test_failure_empty_error_string_not_rendered', () => {
@@ -150,13 +165,13 @@ describe('ChatMessageList - 契约测试', () => {
     expect(alert?.className).toContain('border-[#F0D060]');
   });
 
-  it('test_contract_thinking_state_has_ai_avatar_style', () => {
-    const { container } = render(
-      <ChatMessageList messages={[]} thinkingMessage="思考中..." />,
+  it('test_contract_thinking_state_renders_thinking_process', () => {
+    const steps = [{ id: 'step-1', message: '思考中...', timestamp: Date.now() }];
+    render(
+      <ChatMessageList messages={[]} thinkingMessage="思考中..." thinkingSteps={steps} />,
     );
-    // AI 头像应使用深绿色
-    const avatar = container.querySelector('.bg-\\[\\#2D6B45\\]');
-    expect(avatar).toBeInTheDocument();
+    const tp = screen.getByTestId('thinking-process');
+    expect(tp).toBeInTheDocument();
   });
 
   it('test_contract_passes_dlpStats_to_messages', () => {

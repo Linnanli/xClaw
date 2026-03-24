@@ -13,7 +13,9 @@ import { useEffect, useRef } from 'react';
 import { ShieldAlert } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
 import { ChatMessage } from './ChatMessage';
+import { ThinkingProcess } from './ThinkingProcess';
 import type { SanitizationStats } from '../../hooks/useDlpScan';
+import type { ThinkingStep } from '../../hooks/useAiChatTauri';
 
 interface Message {
   id: string;
@@ -34,6 +36,8 @@ export interface ChatMessageListProps {
   messages: Message[];
   loading?: boolean;
   thinkingMessage?: string | null;
+  /** AI 思考步骤列表（配合 ThinkingProcess 组件） */
+  thinkingSteps?: ThinkingStep[];
   error?: string | null;
   /** 内联 DLP 警告（显示在消息流末尾） */
   dlpWarning?: InlineDlpWarning | null;
@@ -46,6 +50,7 @@ export function ChatMessageList({
   messages,
   loading,
   thinkingMessage,
+  thinkingSteps,
   error,
   dlpWarning,
   onEditMessage,
@@ -75,25 +80,13 @@ export function ChatMessageList({
           />
         ))}
 
-        {/* 思考状态 - 使用 AI 头像样式 */}
-        {thinkingMessage && (
-          <div className="flex flex-col items-start gap-1.5">
-            <div className="flex items-center gap-2.5">
-              <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-[#2D6B45] text-xs font-medium text-white">
-                XC
-              </div>
-              <span className="text-[11px] font-semibold text-[#9D9C9A]">X-Claw</span>
-            </div>
-            <div className="pl-[42px]">
-              <div className="rounded-tl rounded-tr-2xl rounded-br-2xl rounded-bl-2xl border border-[#E5E4E1] bg-white px-4 py-3">
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <span className="animate-pulse">💭</span>
-                  <span>{thinkingMessage}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* 思考过程 - 使用 ThinkingProcess 可折叠组件 */}
+        {(thinkingSteps && thinkingSteps.length > 0) || thinkingMessage ? (
+          <ThinkingProcess
+            steps={thinkingSteps || []}
+            isActive={!!thinkingMessage}
+          />
+        ) : null}
 
         {/* 加载指示器 */}
         {loading && !thinkingMessage && (
