@@ -20,7 +20,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
-import { useDlpScan } from './useDlpScan';
+import { useDlpScan, type SanitizationResult, type SanitizationStats } from './useDlpScan';
 import { tracing } from '@utils/tracing';
 
 // ============================================================================
@@ -32,6 +32,17 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   timestamp?: number;
+  /** DLP 脱敏统计（仅用户消息，且经过脱敏处理时存在） */
+  dlpStats?: SanitizationStats;
+}
+
+/** DLP 警告事件，供 UI 层消费 */
+export interface DlpWarningEvent {
+  type: 'redacted' | 'blocked';
+  stats: SanitizationStats;
+  blockReason?: string;
+  /** 事件时间戳，用于去重 */
+  timestamp: number;
 }
 
 interface SendMessageResponse {
@@ -117,6 +128,7 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
   const [isConnected, setIsConnected] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [thinkingMessage, setThinkingMessage] = useState<string | null>(null);
+  const [dlpWarning, setDlpWarning] = useState<DlpWarningEvent | null>(null);
 
   // 使用 ref 跟踪消息 ID,避免重复
   const messageIdRef = useRef(1);
@@ -356,14 +368,30 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
         const dlpResult = await scanUserInput(content);
 
         if (dlpResult.was_blocked) {
-          throw new Error(
-            dlpResult.block_reason || 'Message blocked by DLP policy'
-          );
+          // 设置 DLP 阻止警告，供 UI 层显示对话框
+          setDlpWarning({
+            type: 'blocked',
+            stats: dlpResult.sanitization_stats,
+            blockReason: dlpResult.block_reason || undefined,
+            timestamp: Date.now(),
+          });
+          setIsLoading(false);
+          return; // 不抛出错误，由 UI 层通过 dlpWarning 处理
         }
 
         // 使用脱敏后的内容
         const sanitizedContent = dlpResult.sanitized_content;
-        tracing.debug('DLP scan passed');
+        const hadSensitiveData = dlpResult.had_sensitive_data;
+        tracing.debug('DLP scan passed', { hadSensitiveData });
+
+        // 如果有脱敏，设置 DLP 警告
+        if (hadSensitiveData) {
+          setDlpWarning({
+            type: 'redacted',
+            stats: dlpResult.sanitization_stats,
+            timestamp: Date.now(),
+          });
+        }
 
         // 步骤 2: 添加用户消息到本地状态
         const userMessage: Message = {
@@ -371,6 +399,7 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
           role: 'user',
           content: sanitizedContent,
           timestamp: Date.now(),
+          dlpStats: hadSensitiveData ? dlpResult.sanitization_stats : undefined,
         };
 
         setMessages((prev) => [...prev, userMessage]);
@@ -454,6 +483,7 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
     error,
     thinkingMessage,
     input,
+    dlpWarning,
 
     // 操作
     sendMessage,
@@ -469,5 +499,6 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
     // 工具方法
     clearError: () => setError(null),
     clearMessages: () => setMessages([]),
+    clearDlpWarning: () => setDlpWarning(null),
   };
 }

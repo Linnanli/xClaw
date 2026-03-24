@@ -30,6 +30,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '../ui/alert-dialog';
+import { DlpBlockedDialog } from '../ai/DlpBlockedDialog';
+import type { InlineDlpWarning } from '../ai/ChatMessageList';
 
 /* ===== 常量 ===== */
 
@@ -127,6 +129,16 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
 
   const hasMessages = chat.messages.length > 0;
 
+  /* ===== 内联 DLP 警告（显示在消息流中） ===== */
+  const inlineDlpWarning: InlineDlpWarning | null =
+    chat.dlpWarning?.type === 'redacted' && chat.dlpWarning.stats
+      ? {
+          type: 'redacted',
+          title: 'DLP 安全提示：检测到敏感信息已自动脱敏',
+          description: `已按企业安全策略脱敏处理 ${chat.dlpWarning.stats.redacted_count} 处敏感信息`,
+        }
+      : null;
+
   /* ===== 共享的输入框 props ===== */
   const inputProps = {
     value: chat.input,
@@ -152,6 +164,7 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
               loading={chat.isLoading && !chat.thinkingMessage}
               thinkingMessage={chat.thinkingMessage}
               error={chat.error}
+              dlpWarning={inlineDlpWarning}
               onDeleteMessage={(id) => {
                 const msg = chat.messages.find((m) => m.id === id);
                 setDeleteDialog({
@@ -211,6 +224,18 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* DLP 阻止对话框 */}
+      <DlpBlockedDialog
+        open={chat.dlpWarning?.type === 'blocked'}
+        onClose={chat.clearDlpWarning}
+        onEdit={() => {
+          chat.clearDlpWarning();
+          // 输入框保留原始内容，用户可以编辑后重新发送
+        }}
+        blockReason={chat.dlpWarning?.blockReason}
+        stats={chat.dlpWarning?.stats}
+      />
     </div>
   );
 }
