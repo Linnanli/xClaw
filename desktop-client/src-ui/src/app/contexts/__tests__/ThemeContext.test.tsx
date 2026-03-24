@@ -164,7 +164,7 @@ describe('ThemeContext', () => {
 
       await user.click(screen.getByTestId('set-dark'));
 
-      expect(localStorageMock.setItem).toHaveBeenCalledWith('theme', 'dark');
+      expect(localStorageMock.setItem).toHaveBeenCalledWith('xclaw-theme', 'dark');
     });
 
     it('应该保存系统主题偏好', async () => {
@@ -176,7 +176,7 @@ describe('ThemeContext', () => {
 
       await user.click(screen.getByTestId('set-system'));
 
-      expect(localStorageMock.setItem).toHaveBeenCalledWith('theme', 'system');
+      expect(localStorageMock.setItem).toHaveBeenCalledWith('xclaw-theme', 'system');
     });
   });
 

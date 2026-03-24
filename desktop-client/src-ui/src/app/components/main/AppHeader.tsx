@@ -8,7 +8,7 @@ import { Bell, Briefcase } from 'lucide-react';
 import { Button } from '../ui/button';
 import { cn } from '../ui/utils';
 import { ThemeToggle } from './ThemeToggle';
-import { type ThemeMode } from '../../hooks/useTheme';
+import { type ThemeMode } from '../../contexts/ThemeContext';
 
 interface AppHeaderProps {
   title: string;

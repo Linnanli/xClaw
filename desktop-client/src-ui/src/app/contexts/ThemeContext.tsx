@@ -13,7 +13,7 @@ interface ThemeContextType {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
-const THEME_STORAGE_KEY = 'theme';
+const THEME_STORAGE_KEY = 'xclaw-theme';
 
 /**
  * 检测系统是否使用深色主题
@@ -109,14 +109,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const root = document.documentElement;
     
-    // 移除之前的主题类
-    root.classList.remove('light', 'dark');
-    
-    // 添加当前主题类
-    root.classList.add(theme);
-    
-    // 设置CSS变量（可选，用于更复杂的主题系统）
-    root.style.setProperty('--theme', theme);
+    // 使用 .dark class 控制暗色模式（与 Tailwind @custom-variant 和 CSS 变量一致）
+    if (theme === 'dark') {
+      root.classList.add('dark');
+    } else {
+      root.classList.remove('dark');
+    }
     
     tracing.debug('Theme applied to document', { theme });
   }, [theme]);

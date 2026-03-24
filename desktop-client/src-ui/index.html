@@ -4,7 +4,29 @@
     <head>
       <meta charset="UTF-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <title>Generate Page from Document</title>
+      <title>X-Claw</title>
+      <!--
+        主题初始化脚本：在 React 挂载前同步读取 localStorage 并应用主题，
+        防止首屏闪烁（FOUC）。必须是内联脚本，不能 defer/async。
+      -->
+      <script>
+        (function () {
+          try {
+            var stored = localStorage.getItem('xclaw-theme');
+            if (stored === 'dark') {
+              document.documentElement.classList.add('dark');
+            } else if (stored === 'light') {
+              // 显式移除，防止系统暗色模式干扰
+              document.documentElement.classList.remove('dark');
+            } else {
+              // system 或未设置：跟随系统
+              if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                document.documentElement.classList.add('dark');
+              }
+            }
+          } catch (e) {}
+        })();
+      </script>
     </head>
 
     <body>

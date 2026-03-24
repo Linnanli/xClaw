@@ -12,7 +12,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { ThemeToggle } from '../ThemeToggle';
-import { type ThemeMode } from '../../../hooks/useTheme';
+import { type ThemeMode } from '../../../contexts/ThemeContext';
 
 // 使用真实 timer 控制
 beforeEach(() => {
@@ -110,7 +110,7 @@ describe('ThemeToggle', () => {
     renderToggle({ ...defaultProps, theme: 'light' });
     hoverIn();
     const activeBtn = screen.getByTestId('theme-option-light');
-    expect(activeBtn.className).toContain('bg-[#F0F9F4]');
+    expect(activeBtn.className).toContain('bg-theme-option-active-bg');
   });
 
   it('当前选中项应显示 check 图标', () => {
@@ -128,7 +128,7 @@ describe('ThemeToggle', () => {
     renderToggle({ ...defaultProps, theme: 'light' });
     hoverIn();
     const darkBtn = screen.getByTestId('theme-option-dark');
-    expect(darkBtn.className).not.toContain('bg-[#F0F9F4]');
+    expect(darkBtn.className).not.toContain('bg-theme-option-active-bg');
   });
 
   // ===== 失败路径测试 =====

@@ -11,7 +11,7 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { Sun, Moon, Monitor, Check } from 'lucide-react';
 import { cn } from '../ui/utils';
-import { type ThemeMode } from '../../hooks/useTheme';
+import { type ThemeMode } from '../../contexts/ThemeContext';
 
 interface ThemeOption {
   value: ThemeMode;
@@ -94,7 +94,7 @@ export function ThemeToggle({ theme, onThemeChange }: ThemeToggleProps) {
           aria-label="主题选项"
           className={cn(
             'absolute right-0 top-full z-50 mt-2 w-[200px] overflow-hidden rounded-[10px] border border-border bg-popover py-1.5',
-            'shadow-[0_4px_16px_rgba(0,0,0,0.10)]',
+            'shadow-[0_4px_16px_var(--shadow-color,rgba(0,0,0,0.10))]',
           )}
           data-testid="theme-menu"
         >
@@ -110,7 +110,7 @@ export function ThemeToggle({ theme, onThemeChange }: ThemeToggleProps) {
                 className={cn(
                   'flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium transition-colors',
                   isActive
-                    ? 'bg-[#F0F9F4] text-primary'
+                    ? 'bg-theme-option-active-bg text-primary'
                     : 'text-foreground hover:bg-secondary',
                 )}
                 data-testid={`theme-option-${value}`}

@@ -43,6 +43,8 @@
   --sidebar-muted: #9D9C9A;
   --text-secondary: #6D6C6A;
   --text-tertiary: #9D9C9A;
+  --theme-option-active-bg: #F0F9F4;
+  --shadow-color: rgba(0, 0, 0, 0.10);
 }
 
 .dark {
@@ -83,6 +85,8 @@
   --sidebar-muted: #6D6C6A;
   --text-secondary: #9D9C9A;
   --text-tertiary: #6D6C6A;
+  --theme-option-active-bg: #1B3A28;
+  --shadow-color: rgba(0, 0, 0, 0.25);
 }
 
 @theme inline {
@@ -128,6 +132,7 @@
   --color-sidebar-muted: var(--sidebar-muted);
   --color-text-secondary: var(--text-secondary);
   --color-text-tertiary: var(--text-tertiary);
+  --color-theme-option-active-bg: var(--theme-option-active-bg);
 }
 
 @layer base {

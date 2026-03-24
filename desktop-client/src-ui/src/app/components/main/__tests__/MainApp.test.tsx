@@ -76,6 +76,15 @@ vi.mock('../../../utils/tracing', () => ({
   tracing: { info: vi.fn(), debug: vi.fn(), warn: vi.fn() },
 }));
 
+vi.mock('../../../contexts/ThemeContext', () => ({
+  useTheme: () => ({
+    theme: 'light' as const,
+    themeMode: 'light' as const,
+    toggleTheme: vi.fn(),
+    setTheme: vi.fn(),
+  }),
+}));
+
 describe('MainApp', () => {
   beforeEach(() => {
     vi.clearAllMocks();
