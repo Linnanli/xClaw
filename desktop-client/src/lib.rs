@@ -132,6 +132,13 @@ macro_rules! all_tauri_commands {
             desktop_client::ipc::update_dlp_config,
             desktop_client::ipc::get_dlp_statistics,
             desktop_client::ipc::sync_dlp_rules_from_admin,
+            // ── 模型配置 ─────────────────────────────────────────
+            desktop_client::ipc::get_available_models,
+            desktop_client::ipc::get_custom_models,
+            desktop_client::ipc::create_custom_model,
+            desktop_client::ipc::update_custom_model,
+            desktop_client::ipc::delete_custom_model,
+            desktop_client::ipc::test_model_connection,
             // ── 认证 ────────────────────────────────────────────
             desktop_client::commands::get_auth_token,
         ]

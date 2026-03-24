@@ -63,6 +63,9 @@ url = "2.5"
 # Configuration / env loading
 dotenvy = "0.15"
 
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
 # OS Keychain integration
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"

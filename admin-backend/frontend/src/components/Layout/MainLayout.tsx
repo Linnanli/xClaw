@@ -13,6 +13,7 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   ApartmentOutlined,
+  RobotOutlined,
 } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../../store/authStore';
@@ -86,6 +87,7 @@ export const MainLayout: React.FC = () => {
       children: [
         { key: '/settings', label: '系统设置' },
         { key: '/client-config', label: '客户端配置' },
+        { key: '/model-configs', label: '模型配置' },
       ],
     },
     {
@@ -167,6 +169,7 @@ export const MainLayout: React.FC = () => {
       '/settings': '系统配置',
       '/settings-group': '系统配置',
       '/client-config': '客户端配置',
+      '/model-configs': '模型配置',
       '/reports': '统计报表',
     };
 

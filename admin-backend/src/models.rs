@@ -328,3 +328,75 @@ pub struct UpdateClientConfigRequest {
     pub extensions_enabled: Option<bool>,
     pub max_cost_per_day_cents: Option<i64>,
 }
+
+// ============================================================================
+// 模型配置
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelConfig {
+    pub id: Uuid,
+    pub model_id: String,
+    pub display_name: String,
+    pub description: Option<String>,
+    pub provider: String,
+    pub api_base_url: Option<String>,
+    /// API Key — 列表接口返回脱敏值，详情接口可选返回原文
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    pub enabled: bool,
+    pub is_default: bool,
+    pub sort_order: i32,
+    pub capabilities: serde_json::Value,
+    pub extra_config: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateModelConfigRequest {
+    pub model_id: String,
+    pub display_name: String,
+    pub description: Option<String>,
+    #[serde(default = "default_provider")]
+    pub provider: String,
+    pub api_base_url: Option<String>,
+    pub api_key: Option<String>,
+    #[serde(default = "default_sort_order")]
+    pub sort_order: i32,
+    pub capabilities: Option<serde_json::Value>,
+    pub extra_config: Option<serde_json::Value>,
+}
+
+fn default_provider() -> String {
+    "custom".to_string()
+}
+
+fn default_sort_order() -> i32 {
+    100
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateModelConfigRequest {
+    pub display_name: Option<String>,
+    pub description: Option<String>,
+    pub provider: Option<String>,
+    pub api_base_url: Option<String>,
+    pub api_key: Option<String>,
+    pub enabled: Option<bool>,
+    pub is_default: Option<bool>,
+    pub sort_order: Option<i32>,
+    pub capabilities: Option<serde_json::Value>,
+    pub extra_config: Option<serde_json::Value>,
+}
+
+/// 客户端侧模型配置（精简版，不含敏感字段）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientModelConfig {
+    pub model_id: String,
+    pub display_name: String,
+    pub description: Option<String>,
+    pub provider: String,
+    pub is_default: bool,
+    pub capabilities: serde_json::Value,
+}

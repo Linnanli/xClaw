@@ -614,6 +614,96 @@ export const fileApi = {
 };
 
 // ============================================================================
+// Model Config APIs → get_available_models, get_custom_models, etc.
+// ============================================================================
+
+export interface ModelConfigItem {
+  model_id: string;
+  display_name: string;
+  description: string | null;
+  provider: string;
+  is_default: boolean;
+  capabilities: string[];
+  source: string; // 'admin' | 'custom' | 'builtin'
+}
+
+export interface CustomModelItem {
+  model_id: string;
+  display_name: string;
+  description: string | null;
+  provider: string;
+  api_base_url: string;
+  api_key: string;
+  capabilities: string[];
+  extra_config: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TestConnectionResult {
+  success: boolean;
+  message: string;
+  status?: number;
+  error?: string;
+}
+
+export const modelApi = {
+  getAvailableModels: () =>
+    invokeTauri<ModelConfigItem[]>('get_available_models'),
+
+  getCustomModels: () =>
+    invokeTauri<CustomModelItem[]>('get_custom_models'),
+
+  createCustomModel: (params: {
+    model_id: string;
+    display_name: string;
+    description?: string;
+    provider: string;
+    api_base_url: string;
+    api_key: string;
+  }) =>
+    invokeTauri<CustomModelItem>('create_custom_model', {
+      modelId: params.model_id,
+      displayName: params.display_name,
+      description: params.description ?? null,
+      provider: params.provider,
+      apiBaseUrl: params.api_base_url,
+      apiKey: params.api_key,
+    }),
+
+  updateCustomModel: (params: {
+    model_id: string;
+    display_name?: string;
+    description?: string;
+    provider?: string;
+    api_base_url?: string;
+    api_key?: string;
+  }) =>
+    invokeTauri<CustomModelItem>('update_custom_model', {
+      modelId: params.model_id,
+      displayName: params.display_name ?? null,
+      description: params.description ?? null,
+      provider: params.provider ?? null,
+      apiBaseUrl: params.api_base_url ?? null,
+      apiKey: params.api_key ?? null,
+    }),
+
+  deleteCustomModel: (modelId: string) =>
+    invokeTauri<void>('delete_custom_model', { modelId }),
+
+  testConnection: (params: {
+    api_base_url: string;
+    api_key: string;
+    model_id: string;
+  }) =>
+    invokeTauri<TestConnectionResult>('test_model_connection', {
+      apiBaseUrl: params.api_base_url,
+      apiKey: params.api_key,
+      modelId: params.model_id,
+    }),
+};
+
+// ============================================================================
 // App initialization APIs (stub)
 // ============================================================================
 

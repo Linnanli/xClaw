@@ -9,6 +9,7 @@ pub mod dlp;
 pub mod extensions;
 pub mod jobs;
 pub mod memory;
+pub mod models;
 pub mod routines;
 pub mod skills;
 pub mod threads;
@@ -46,6 +47,10 @@ mod dlp_tests;
 mod jobs_tests;
 
 #[cfg(test)]
+#[path = "models_tests.rs"]
+mod models_tests;
+
+#[cfg(test)]
 #[path = "routines_tests.rs"]
 mod routines_tests;
 
@@ -56,6 +61,7 @@ pub use dlp::*;
 pub use extensions::*;
 pub use jobs::*;
 pub use memory::*;
+pub use models::*;
 pub use routines::*;
 pub use skills::*;
 pub use threads::*;

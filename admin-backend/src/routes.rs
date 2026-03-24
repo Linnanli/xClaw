@@ -81,6 +81,11 @@ pub fn create_router(state: AppState) -> Router {
         // 部门管理 API
         .route("/api/departments", get(get_departments).post(create_department))
         .route("/api/departments/{id}", put(update_department).delete(delete_department))
+        // 模型配置 API
+        .route("/api/model-configs", get(get_model_configs).post(create_model_config))
+        .route("/api/model-configs/{id}", put(update_model_config).delete(delete_model_config))
+        // 客户端模型列表（精简版，供 Desktop Client 拉取）
+        .route("/api/client-models", get(get_client_models))
         .with_state(state)
 }
 
@@ -3483,4 +3488,298 @@ async fn delete_department(
     .await;
 
     Ok(Json(json!({ "message": "删除成功" })))
+}
+
+// ============================================================================
+// 模型配置 API
+// ============================================================================
+
+/// GET /api/model-configs — 获取所有模型配置（管理端）
+#[instrument(skip(state))]
+async fn get_model_configs(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<serde_json::Value>>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let rows = client
+        .query(
+            "SELECT id, model_id, display_name, description, provider, \
+             api_base_url, api_key, enabled, is_default, sort_order, \
+             capabilities, extra_config, created_at, updated_at \
+             FROM model_configs ORDER BY sort_order, display_name",
+            &[],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let configs: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| {
+            let api_key: Option<String> = row.get(6);
+            json!({
+                "id": row.get::<_, Uuid>(0),
+                "model_id": row.get::<_, String>(1),
+                "display_name": row.get::<_, String>(2),
+                "description": row.get::<_, Option<String>>(3),
+                "provider": row.get::<_, String>(4),
+                "api_base_url": row.get::<_, Option<String>>(5),
+                "api_key": api_key.as_deref().map(mask_api_key),
+                "enabled": row.get::<_, bool>(7),
+                "is_default": row.get::<_, bool>(8),
+                "sort_order": row.get::<_, i32>(9),
+                "capabilities": row.get::<_, serde_json::Value>(10),
+                "extra_config": row.get::<_, serde_json::Value>(11),
+                "created_at": row.get::<_, DateTime<Utc>>(12),
+                "updated_at": row.get::<_, DateTime<Utc>>(13),
+            })
+        })
+        .collect();
+
+    Ok(Json(configs))
+}
+
+/// POST /api/model-configs — 创建模型配置
+#[instrument(skip(state, body))]
+async fn create_model_config(
+    State(state): State<AppState>,
+    Json(body): Json<models::CreateModelConfigRequest>,
+) -> Result<Json<serde_json::Value>> {
+    // 验证必填字段
+    if body.model_id.trim().is_empty() {
+        return Err(Error::Validation("model_id 不能为空".into()));
+    }
+    if body.display_name.trim().is_empty() {
+        return Err(Error::Validation("display_name 不能为空".into()));
+    }
+
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 检查 model_id 唯一性
+    let existing = client
+        .query_opt(
+            "SELECT id FROM model_configs WHERE model_id = $1",
+            &[&body.model_id],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    if existing.is_some() {
+        return Err(Error::Validation(format!(
+            "model_id '{}' 已存在",
+            body.model_id
+        )));
+    }
+
+    let id = Uuid::new_v4();
+    let capabilities = body.capabilities.unwrap_or(json!([]));
+    let extra_config = body.extra_config.unwrap_or(json!({}));
+
+    client
+        .execute(
+            "INSERT INTO model_configs \
+             (id, model_id, display_name, description, provider, api_base_url, \
+              api_key, sort_order, capabilities, extra_config) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+            &[
+                &id,
+                &body.model_id,
+                &body.display_name,
+                &body.description,
+                &body.provider,
+                &body.api_base_url,
+                &body.api_key,
+                &body.sort_order,
+                &capabilities,
+                &extra_config,
+            ],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 审计日志
+    let system_user = Uuid::nil();
+    write_audit_log(
+        &client,
+        system_user,
+        "create_model_config",
+        &format!("创建模型配置: {} ({})", body.display_name, body.model_id),
+    )
+    .await;
+
+    Ok(Json(json!({
+        "id": id,
+        "model_id": body.model_id,
+        "display_name": body.display_name,
+        "message": "创建成功"
+    })))
+}
+
+/// PUT /api/model-configs/{id} — 更新模型配置
+#[instrument(skip(state, body))]
+async fn update_model_config(
+    State(state): State<AppState>,
+    Path(config_id): Path<Uuid>,
+    Json(body): Json<models::UpdateModelConfigRequest>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 检查是否存在
+    let existing = client
+        .query_opt(
+            "SELECT model_id, display_name FROM model_configs WHERE id = $1",
+            &[&config_id],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
+        .ok_or(Error::Validation("模型配置不存在".into()))?;
+
+    let old_name: String = existing.get(1);
+
+    // 如果设为默认，先清除其他默认
+    if body.is_default == Some(true) {
+        client
+            .execute(
+                "UPDATE model_configs SET is_default = false WHERE is_default = true AND id != $1",
+                &[&config_id],
+            )
+            .await
+            .map_err(|e| Error::Database(e.to_string()))?;
+    }
+
+    // 动态构建 UPDATE 语句
+    let mut sets = Vec::new();
+    let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync>> = Vec::new();
+    let mut idx = 1;
+
+    macro_rules! add_field {
+        ($field:expr, $col:expr) => {
+            if let Some(ref val) = $field {
+                idx += 1;
+                sets.push(format!("{} = ${}", $col, idx));
+                params.push(Box::new(val.clone()));
+            }
+        };
+    }
+
+    add_field!(body.display_name, "display_name");
+    add_field!(body.description, "description");
+    add_field!(body.provider, "provider");
+    add_field!(body.api_base_url, "api_base_url");
+    add_field!(body.api_key, "api_key");
+    add_field!(body.enabled, "enabled");
+    add_field!(body.is_default, "is_default");
+    add_field!(body.sort_order, "sort_order");
+    add_field!(body.capabilities, "capabilities");
+    add_field!(body.extra_config, "extra_config");
+
+    if sets.is_empty() {
+        return Ok(Json(json!({ "message": "无更新字段" })));
+    }
+
+    sets.push("updated_at = NOW()".to_string());
+
+    let sql = format!(
+        "UPDATE model_configs SET {} WHERE id = $1",
+        sets.join(", ")
+    );
+
+    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+        std::iter::once(&config_id as &(dyn tokio_postgres::types::ToSql + Sync))
+            .chain(params.iter().map(|p| p.as_ref()))
+            .collect();
+
+    client
+        .execute(&sql, &param_refs)
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 审计日志
+    let system_user = Uuid::nil();
+    write_audit_log(
+        &client,
+        system_user,
+        "update_model_config",
+        &format!("更新模型配置: {}", old_name),
+    )
+    .await;
+
+    Ok(Json(json!({ "message": "更新成功" })))
+}
+
+/// DELETE /api/model-configs/{id} — 删除模型配置
+#[instrument(skip(state))]
+async fn delete_model_config(
+    State(state): State<AppState>,
+    Path(config_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let existing = client
+        .query_opt(
+            "SELECT display_name, is_default FROM model_configs WHERE id = $1",
+            &[&config_id],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
+        .ok_or(Error::Validation("模型配置不存在".into()))?;
+
+    let name: String = existing.get(0);
+    let is_default: bool = existing.get(1);
+
+    if is_default {
+        return Err(Error::Validation("不能删除默认模型".into()));
+    }
+
+    client
+        .execute("DELETE FROM model_configs WHERE id = $1", &[&config_id])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    // 审计日志
+    let system_user = Uuid::nil();
+    write_audit_log(
+        &client,
+        system_user,
+        "delete_model_config",
+        &format!("删除模型配置: {}", name),
+    )
+    .await;
+
+    Ok(Json(json!({ "message": "删除成功" })))
+}
+
+/// GET /api/client-models — 客户端拉取可用模型列表（精简版，不含敏感字段）
+#[instrument(skip(state))]
+async fn get_client_models(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<models::ClientModelConfig>>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let rows = client
+        .query(
+            "SELECT model_id, display_name, description, provider, is_default, capabilities \
+             FROM model_configs WHERE enabled = true ORDER BY sort_order, display_name",
+            &[],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let models: Vec<models::ClientModelConfig> = rows
+        .iter()
+        .map(|row| models::ClientModelConfig {
+            model_id: row.get(0),
+            display_name: row.get(1),
+            description: row.get(2),
+            provider: row.get(3),
+            is_default: row.get(4),
+            capabilities: row.get(5),
+        })
+        .collect();
+
+    Ok(Json(models))
 }

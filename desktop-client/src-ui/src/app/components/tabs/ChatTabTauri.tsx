@@ -14,10 +14,12 @@ import { MessageSquare, TrendingUp, FileText, Zap } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { threadApi } from '../../utils/tauri';
 import { useAiChatTauri } from '../../hooks/useAiChatTauri';
+import { useModelConfig } from '../../hooks/useModelConfig';
 import { TokenManager } from '../../utils/tokenManager';
 import { ChatMessageList } from '../ai/ChatMessageList';
 import { ChatInput } from '../ai/ChatInput';
 import { ChatWelcome } from '../ai/ChatWelcome';
+import { CustomModelModal } from '../ai/CustomModelModal';
 import type { QuickAction } from '../ai/QuickActions';
 import type { ModelOption } from '../ai/ModelSelector';
 import {
@@ -42,13 +44,6 @@ const QUICK_ACTIONS: QuickAction[] = [
   { icon: Zap, label: '技能助手', prompt: '请展示可用的技能列表' },
 ];
 
-const AVAILABLE_MODELS: ModelOption[] = [
-  { id: 'gpt-4o', name: 'GPT-4o', desc: '最强大的多模态模型' },
-  { id: 'gpt-4o-mini', name: 'GPT-4o Mini', desc: '快速且经济' },
-  { id: 'claude-3.5', name: 'Claude 3.5', desc: 'Anthropic 旗舰模型' },
-  { id: 'deepseek-v3', name: 'DeepSeek V3', desc: '高性价比推理模型' },
-];
-
 /* ===== 组件 ===== */
 
 interface ChatTabTauriProps {
@@ -58,12 +53,24 @@ interface ChatTabTauriProps {
 
 export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriProps) {
   const [loading, setLoading] = useState(false);
-  const [selectedModel, setSelectedModel] = useState('GPT-4o');
+  const [customModelOpen, setCustomModelOpen] = useState(false);
   const [deleteDialog, setDeleteDialog] = useState<{
     open: boolean;
     messageId: string | null;
     preview: string;
   }>({ open: false, messageId: null, preview: '' });
+
+  // 模型配置
+  const modelConfig = useModelConfig();
+
+  // 将 ModelConfigItem[] 转换为 ModelOption[]
+  const modelOptions: ModelOption[] = modelConfig.models.map((m) => ({
+    id: m.model_id,
+    name: m.display_name,
+    desc: m.description || '',
+    source: m.source,
+    isDefault: m.is_default,
+  }));
 
   // 初始化
   useEffect(() => {
@@ -146,9 +153,10 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
     onSubmit: handleSend,
     onStop: chat.stop,
     isLoading: chat.isLoading,
-    models: AVAILABLE_MODELS,
-    selectedModel,
-    onModelChange: setSelectedModel,
+    models: modelOptions,
+    selectedModel: modelConfig.selectedModelId,
+    onModelChange: modelConfig.selectModel,
+    onCustomModelClick: () => setCustomModelOpen(true),
   };
 
   return (
@@ -237,6 +245,32 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
         }}
         blockReason={chat.dlpWarning?.blockReason}
         stats={chat.dlpWarning?.stats}
+      />
+
+      {/* 自定义模型弹窗 */}
+      <CustomModelModal
+        open={customModelOpen}
+        onClose={() => setCustomModelOpen(false)}
+        customModels={modelConfig.customModels}
+        onSave={async (params) => {
+          await modelConfig.createModel({
+            model_id: params.model_id,
+            display_name: params.display_name,
+            provider: 'custom',
+            api_base_url: params.api_base_url,
+            api_key: params.api_key,
+          });
+        }}
+        onUpdate={async (params) => {
+          await modelConfig.updateModel({
+            model_id: params.original_model_id,
+            display_name: params.display_name,
+            api_base_url: params.api_base_url,
+            api_key: params.api_key,
+          });
+        }}
+        onDelete={modelConfig.deleteModel}
+        onTestConnection={modelConfig.testConnection}
       />
     </div>
   );

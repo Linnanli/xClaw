@@ -26,6 +26,7 @@ export interface ChatInputProps {
   models: ModelOption[];
   selectedModel: string;
   onModelChange: (model: string) => void;
+  onCustomModelClick?: () => void;
   className?: string;
 }
 
@@ -38,6 +39,7 @@ export function ChatInput({
   models,
   selectedModel,
   onModelChange,
+  onCustomModelClick,
   className,
 }: ChatInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -93,6 +95,7 @@ export function ChatInput({
           models={models}
           value={selectedModel}
           onChange={onModelChange}
+          onCustomModelClick={onCustomModelClick}
         />
 
         <div className="flex items-center gap-2">

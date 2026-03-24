@@ -16,6 +16,7 @@ import { SkillList } from '../pages/Extensions/SkillList';
 import { PluginList } from '../pages/Extensions/PluginList';
 import { Settings } from '../pages/Settings';
 import { ClientConfig } from '../pages/ClientConfig';
+import { ModelConfigs } from '../pages/ModelConfigs';
 import { MainLayout } from '../components/Layout/MainLayout';
 import { DepartmentList } from '../pages/Departments/DepartmentList';
 import { useAuthStore } from '../store/authStore';
@@ -124,6 +125,10 @@ export const router = createBrowserRouter([
       {
         path: 'client-config',
         element: <ClientConfig />,
+      },
+      {
+        path: 'model-configs',
+        element: <ModelConfigs />,
       },
       // 统计报表
       {
