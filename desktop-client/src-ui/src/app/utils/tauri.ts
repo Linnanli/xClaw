@@ -622,6 +622,7 @@ export interface ModelConfigItem {
   display_name: string;
   description: string | null;
   provider: string;
+  provider_display_name?: string;
   is_default: boolean;
   capabilities: string[];
   source: string; // 'admin' | 'custom' | 'builtin'

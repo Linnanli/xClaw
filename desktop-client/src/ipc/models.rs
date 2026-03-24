@@ -10,14 +10,20 @@ use tracing::{debug, error, warn};
 
 use crate::state::EngineState;
 
-/// 客户端模型配置（与 Admin Backend ClientModelConfig 对齐）
+/// 客户端模型配置（与 Admin Backend ClientModel 对齐）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
     pub model_id: String,
     pub display_name: String,
-    pub description: Option<String>,
     pub provider: String,
+    #[serde(default)]
+    pub provider_display_name: Option<String>,
+    /// 兼容旧字段
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
     pub is_default: bool,
+    #[serde(default = "default_capabilities")]
     pub capabilities: serde_json::Value,
     /// 标记来源：admin（后台下发）或 custom（本地自定义）
     #[serde(default = "default_source")]
@@ -26,6 +32,10 @@ pub struct ModelConfig {
 
 fn default_source() -> String {
     "admin".to_string()
+}
+
+fn default_capabilities() -> serde_json::Value {
+    serde_json::json!([])
 }
 
 /// 本地自定义模型（含 API 配置）
@@ -105,6 +115,7 @@ pub async fn get_available_models(
             display_name: cm.display_name.clone(),
             description: cm.description.clone(),
             provider: cm.provider.clone(),
+            provider_display_name: None,
             is_default: false,
             capabilities: cm.capabilities.clone(),
             source: "custom".to_string(),
@@ -275,7 +286,7 @@ pub async fn test_model_connection(
 }
 
 /// 从 Admin Backend 拉取模型列表
-async fn fetch_admin_models(engine: &EngineState) -> Result<Vec<ModelConfig>, String> {
+async fn fetch_admin_models(_engine: &EngineState) -> Result<Vec<ModelConfig>, String> {
     // 从环境变量获取 admin backend URL
     let admin_url = std::env::var("ADMIN_BACKEND_URL")
         .unwrap_or_else(|_| "http://localhost:3001".to_string());
@@ -312,6 +323,7 @@ fn builtin_models() -> Vec<ModelConfig> {
             display_name: "GPT-4o".to_string(),
             description: Some("最强大的多模态模型".to_string()),
             provider: "openai".to_string(),
+            provider_display_name: Some("OpenAI".to_string()),
             is_default: true,
             capabilities: serde_json::json!(["chat", "vision"]),
             source: "builtin".to_string(),
@@ -321,6 +333,7 @@ fn builtin_models() -> Vec<ModelConfig> {
             display_name: "GPT-4o Mini".to_string(),
             description: Some("快速且经济".to_string()),
             provider: "openai".to_string(),
+            provider_display_name: Some("OpenAI".to_string()),
             is_default: false,
             capabilities: serde_json::json!(["chat"]),
             source: "builtin".to_string(),

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table, Button, Tag, Input, Empty, Card, Row, Col, Statistic,
-  Switch, message, Modal, Form, Space, Popconfirm, Tooltip,
+  Switch, message, Modal, Form, Space, Popconfirm, Tooltip, InputNumber, Select, Radio,
 } from 'antd';
 import {
   ReloadOutlined,
@@ -12,10 +12,50 @@ import {
   RobotOutlined,
   StarOutlined,
   EyeInvisibleOutlined,
-  CopyOutlined,
+  ApiOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { apiClient } from '../api/client';
+
+// 提供商配置
+interface ProviderOption {
+  value: string;
+  label: string;
+  color: string;
+  icon: string; // emoji 或文字图标
+  bgColor: string;
+}
+
+const PROVIDER_OPTIONS: ProviderOption[] = [
+  { value: 'deepseek', label: 'DeepSeek', color: '#1677ff', bgColor: '#e6f4ff', icon: '🐋' },
+  { value: 'moonshot', label: 'Moonshot', color: '#722ed1', bgColor: '#f9f0ff', icon: '🌙' },
+  { value: 'qwen', label: 'Qwen', color: '#9254de', bgColor: '#f0e6ff', icon: '✦' },
+  { value: 'zhipu', label: 'Zhipu', color: '#2f54eb', bgColor: '#e8f0ff', icon: '⬡' },
+  { value: 'minimax', label: 'MiniMax', color: '#f5222d', bgColor: '#fff1f0', icon: '〰' },
+  { value: 'xiaomi', label: 'Xiaomi', color: '#fa8c16', bgColor: '#fff7e6', icon: '小' },
+  { value: 'volcengine', label: 'Volcengine', color: '#13c2c2', bgColor: '#e6fffb', icon: '🔥' },
+  { value: 'ollama', label: 'Ollama', color: '#595959', bgColor: '#f5f5f5', icon: '🦙' },
+  { value: 'openai', label: 'OpenAI', color: '#52c41a', bgColor: '#f6ffed', icon: '◎' },
+  { value: 'anthropic', label: 'Anthropic', color: '#722ed1', bgColor: '#f9f0ff', icon: '◈' },
+  { value: 'custom', label: 'Custom', color: '#fa8c16', bgColor: '#fff7e6', icon: '✏' },
+];
+
+const PROVIDER_MAP = Object.fromEntries(PROVIDER_OPTIONS.map((p) => [p.value, p]));
+
+// 各提供商的默认 API Base URL（openai 兼容 / anthropic 兼容）
+const PROVIDER_BASE_URLS: Record<string, { openai?: string; anthropic?: string }> = {
+  deepseek:    { openai: 'https://api.deepseek.com',                                    anthropic: 'https://api.deepseek.com/anthropic' },
+  moonshot:    { openai: 'https://api.moonshot.cn/v1',                                  anthropic: 'https://api.moonshot.cn/anthropic' },
+  qwen:        { openai: 'https://dashscope.aliyuncs.com/compatible-mode/v1',           anthropic: 'https://dashscope.aliyuncs.com/apps/anthropic' },
+  zhipu:       { openai: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',       anthropic: 'https://open.bigmodel.cn/api/paas/v4/chat/completions' },
+  minimax:     { openai: 'https://api.minimaxi.com/v1',                                 anthropic: 'https://api.minimaxi.com/anthropic' },
+  xiaomi:      { openai: 'https://api.xiaomimimo.com/v1/chat/completions',              anthropic: 'https://api.xiaomimimo.com/anthropic' },
+  volcengine:  { openai: 'https://ark.cn-beijing.volces.com/api/v3',                    anthropic: 'https://ark.cn-beijing.volces.com/api/compatible' },
+  ollama:      { openai: 'http://localhost:11434/v1',                                   anthropic: 'http://localhost:11434' },
+  openai:      { openai: 'https://api.openai.com/v1',                                  anthropic: 'https://api.openai.com' },
+  anthropic:   { openai: 'https://api.anthropic.com/v1',                               anthropic: 'https://api.anthropic.com' },
+  custom:      {},
+};
 
 interface ModelConfig {
   id: string;
@@ -41,15 +81,39 @@ interface ModelFormValues {
   provider: string;
   api_base_url?: string;
   api_key?: string;
+  api_format?: 'anthropic' | 'openai';
   sort_order?: number;
   capabilities?: string;
 }
 
-const PROVIDER_COLORS: Record<string, string> = {
-  openai: 'green',
-  anthropic: 'purple',
-  deepseek: 'blue',
-  custom: 'orange',
+// 提供商选择器组件
+const ProviderSelector: React.FC<{
+  value?: string;
+  onChange?: (val: string) => void;
+}> = ({ value, onChange }) => {
+  return (
+    <Select
+      value={value}
+      onChange={onChange}
+      style={{ width: '100%' }}
+      placeholder="请选择提供商"
+      optionLabelProp="label"
+    >
+      {PROVIDER_OPTIONS.map((p) => (
+        <Select.Option key={p.value} value={p.value} label={
+          <Space size={6}>
+            <span>{p.icon}</span>
+            <span>{p.label}</span>
+          </Space>
+        }>
+          <Space size={8}>
+            <span style={{ fontSize: 16 }}>{p.icon}</span>
+            <span>{p.label}</span>
+          </Space>
+        </Select.Option>
+      ))}
+    </Select>
+  );
 };
 
 export const ModelConfigs: React.FC = () => {
@@ -59,6 +123,8 @@ export const ModelConfigs: React.FC = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingModel, setEditingModel] = useState<ModelConfig | null>(null);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [form] = Form.useForm<ModelFormValues>();
 
   const loadModels = useCallback(async () => {
@@ -90,6 +156,11 @@ export const ModelConfigs: React.FC = () => {
   const handleCreate = () => {
     setEditingModel(null);
     form.resetFields();
+    form.setFieldsValue({
+      provider: 'deepseek',
+      api_format: 'openai',
+      api_base_url: PROVIDER_BASE_URLS.deepseek.openai,
+    });
     setModalOpen(true);
   };
 
@@ -144,6 +215,26 @@ export const ModelConfigs: React.FC = () => {
     }
   };
 
+  const handleTestConnection = async () => {
+    try {
+      const values = await form.validateFields(['provider', 'api_base_url', 'api_key']);
+      setTesting(true);
+      setTestResult(null);
+      const payload: Record<string, unknown> = {
+        provider: values.provider,
+        api_base_url: values.api_base_url || null,
+      };
+      if (values.api_key) payload.api_key = values.api_key;
+      await apiClient.post('/model-configs/test-connection', payload);
+      setTestResult({ ok: true, msg: '连接成功' });
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.message || '连接失败';
+      setTestResult({ ok: false, msg });
+    } finally {
+      setTesting(false);
+    }
+  };
+
   const handleSave = async () => {
     try {
       const values = await form.validateFields();
@@ -155,6 +246,7 @@ export const ModelConfigs: React.FC = () => {
         description: values.description || null,
         provider: values.provider,
         api_base_url: values.api_base_url || null,
+        api_format: values.api_format || 'openai',
         sort_order: values.sort_order ?? 0,
         capabilities: values.capabilities
           ? values.capabilities.split(',').map((s: string) => s.trim()).filter(Boolean)
@@ -225,9 +317,12 @@ export const ModelConfigs: React.FC = () => {
       dataIndex: 'provider',
       key: 'provider',
       width: 120,
-      render: (provider: string) => (
-        <Tag color={PROVIDER_COLORS[provider] || 'default'}>{provider}</Tag>
-      ),
+      render: (provider: string) => {
+        const p = PROVIDER_MAP[provider];
+        return p
+          ? <Tag color={p.color} style={{ borderColor: p.color }}>{p.icon} {p.label}</Tag>
+          : <Tag>{provider}</Tag>;
+      },
     },
     {
       title: 'API Endpoint',
@@ -399,22 +494,69 @@ export const ModelConfigs: React.FC = () => {
       <Modal
         title={editingModel ? '编辑模型配置' : '添加模型配置'}
         open={modalOpen}
-        onCancel={() => { setModalOpen(false); form.resetFields(); }}
-        onOk={handleSave}
-        confirmLoading={saving}
-        okText={editingModel ? '保存' : '创建'}
-        cancelText="取消"
+        onCancel={() => { setModalOpen(false); form.resetFields(); setTestResult(null); }}
         width={560}
         destroyOnClose
+        footer={
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            {/* 左侧：测试连接 */}
+            <Space size={8}>
+              <Button
+                icon={<ApiOutlined />}
+                loading={testing}
+                onClick={handleTestConnection}
+              >
+                测试连接
+              </Button>
+              {testResult && (
+                <span style={{ fontSize: 13, color: testResult.ok ? '#52c41a' : '#ff4d4f' }}>
+                  {testResult.ok ? '✓' : '✗'} {testResult.msg}
+                </span>
+              )}
+            </Space>
+            {/* 右侧：取消 + 保存 */}
+            <Space>
+              <Button onClick={() => { setModalOpen(false); form.resetFields(); setTestResult(null); }}>
+                取消
+              </Button>
+              <Button type="primary" loading={saving} onClick={handleSave}>
+                {editingModel ? '保存' : '创建'}
+              </Button>
+            </Space>
+          </div>
+        }
       >
-        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+        <Form
+          form={form}
+          layout="vertical"
+          style={{ marginTop: 16 }}
+          onValuesChange={(changed) => {
+            const provider = changed.provider ?? form.getFieldValue('provider');
+            const format = changed.api_format ?? form.getFieldValue('api_format') ?? 'openai';
+            // 只要 provider 或 api_format 变化，就自动填充 URL（不覆盖用户手动修改的情况仅在切换时填）
+            if ('provider' in changed || 'api_format' in changed) {
+              const urls = PROVIDER_BASE_URLS[provider] ?? {};
+              const url = urls[format as 'openai' | 'anthropic'] ?? '';
+              form.setFieldValue('api_base_url', url);
+            }
+          }}
+        >
+          {/* 提供商选择器 — 置顶 */}
+          <Form.Item
+            name="provider"
+            label="模型提供商"
+            rules={[{ required: true, message: '请选择提供商' }]}
+          >
+            <ProviderSelector />
+          </Form.Item>
+
           <Form.Item
             name="model_id"
             label="模型 ID"
             rules={[{ required: true, message: '请输入模型 ID' }]}
-            extra="模型提供商的标识符，如 gpt-4o、claude-3-5-sonnet-20241022"
+            extra="模型提供商的标识符，如 deepseek-chat、gpt-4o"
           >
-            <Input placeholder="gpt-4o" disabled={!!editingModel} />
+            <Input placeholder="deepseek-chat" disabled={!!editingModel} />
           </Form.Item>
 
           <Form.Item
@@ -422,23 +564,15 @@ export const ModelConfigs: React.FC = () => {
             label="显示名称"
             rules={[{ required: true, message: '请输入显示名称' }]}
           >
-            <Input placeholder="GPT-4o" />
+            <Input placeholder="DeepSeek Chat" />
           </Form.Item>
 
           <Form.Item name="description" label="描述">
             <Input.TextArea placeholder="模型描述（可选）" rows={2} />
           </Form.Item>
 
-          <Form.Item
-            name="provider"
-            label="提供商"
-            rules={[{ required: true, message: '请输入提供商' }]}
-          >
-            <Input placeholder="openai" />
-          </Form.Item>
-
-          <Form.Item name="api_base_url" label="API Endpoint">
-            <Input placeholder="https://api.openai.com/v1" />
+          <Form.Item name="api_base_url" label="API Base URL">
+            <Input placeholder="https://api.deepseek.com/v1" />
           </Form.Item>
 
           <Form.Item
@@ -447,6 +581,18 @@ export const ModelConfigs: React.FC = () => {
             extra={editingModel ? '留空则保持原有 Key 不变' : undefined}
           >
             <Input.Password placeholder="sk-..." />
+          </Form.Item>
+
+          <Form.Item
+            name="api_format"
+            label="API 格式"
+            initialValue="openai"
+            extra="请选择 API 协议兼容格式：Anthropic 兼容或 OpenAI 兼容"
+          >
+            <Radio.Group>
+              <Radio value="anthropic">Anthropic 兼容</Radio>
+              <Radio value="openai">OpenAI 兼容</Radio>
+            </Radio.Group>
           </Form.Item>
 
           <Row gutter={16}>
