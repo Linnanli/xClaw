@@ -58,10 +58,10 @@ Desktop Client 和 Admin Backend 新增功能时，**禁止重复实现**主项�
 
 ### 技能参考
 
-详细的编码规范见 `.trae/skills/` 下的技能文档：
-- `engineer-mindset-coding` — 工程最佳实践
-- `tdd-practitioner` — TDD 方法论
-- `code-quality-gate` — 代码质量门禁
+详细的编码规范见 `.kiro/steering/` 下的技能文档：
+- `engineer-mindset-coding.md` — 工程最佳实践
+- `tdd-practitioner.md` — TDD 方法论
+- `code-quality-gate.md` — 代码质量门禁
 
 ---
 
@@ -232,4 +232,4 @@ cargo test -p desktop-client --lib engine_startup_tests
 - `admin-backend/tests/integration_smoke_tests.rs` — 冒烟测试
 - `desktop-client/tests/tauri_command_contract_tests.rs` — Tauri 命令契约测试
 - `admin-backend/frontend/cypress/` — Cypress E2E 测试
-- `.trae/skills/` — 编码技能文档（TDD、工程实践、质量门禁）
+- `.kiro/steering/` — 编码技能文档（TDD、工程实践、质量门禁）
