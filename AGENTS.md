@@ -260,6 +260,86 @@ async fn test_http_get_model_configs_not_404() {
 
 **强制要求**：每次新增迁移文件时，必须同步在 `integration_smoke_tests.rs` 的 `required` 列表中追加对应条目。
 
+#### 盲区 7：测试主动验证了错误行为，把错误设计固化为"规范" 🎯
+
+**真实案例**：`/api/client-models` 不返回 `api_base_url` 和 `api_key`，导致客户端拿到模型列表后无法实际调用 LLM。但所有测试全部通过。
+
+**根本原因**：
+
+```rust
+// model_config_unit_tests.rs — 测试主动断言"不应该有这两个字段"
+assert!(!json_str.contains("api_key"), "ClientModelConfig 不应包含 api_key");
+assert!(!json_str.contains("api_base_url"), "ClientModelConfig 不应包含 api_base_url");
+
+// model_config_contract_tests.rs — 契约结构体缺少关键字段
+struct ClientExpectedModelConfig {
+    model_id: String,
+    display_name: String,
+    provider: String,
+    is_default: bool,
+    capabilities: serde_json::Value,
+    // ← api_base_url、api_key、api_format 全部缺失，但测试通过了
+}
+```
+
+错误的设计决策被写进测试 → 测试通过 → 被当成正确规范 → 实现也按此来。
+
+**五个层面的失效**：
+
+1. **需求理解错误被测试固化**：测试不只是没覆盖，而是主动断言了错误行为
+2. **契约测试只验证"能解析"，没验证"够用"**：数据格式正确 ≠ 业务目标可达成
+3. **端到端链路从未被测试**：`管理端配置 → 下发 → 客户端接收 → 实际调用 LLM` 整条链路断了
+4. **环境配置从未被测试**：`ADMIN_BACKEND_URL` 默认值错误，客户端静默降级到 builtin 模型
+5. **降级逻辑掩盖问题**：连接失败时返回 builtin 模型，用户看到"正常工作"，问题不可见
+
+**教训**：
+
+> **测试通过不代表设计正确。契约测试必须从业务目标出发定义"够用"的标准，而不只是"能解析"。**
+
+**实践**：
+
+```rust
+// ❌ 错误：只验证格式
+#[test]
+fn test_contract_client_models_response_format() {
+    let models: Vec<ClientExpectedModelConfig> =
+        serde_json::from_value(response).expect("能解析就行");
+}
+
+// ✅ 正确：验证业务目标可达成
+#[test]
+fn test_contract_client_models_sufficient_for_llm_call() {
+    let models: Vec<ClientExpectedModelConfig> =
+        serde_json::from_value(response).unwrap();
+    
+    for model in &models {
+        // 客户端拿到这个模型后，必须能构造出一个完整的 LLM 请求
+        assert!(model.api_base_url.is_some(), 
+            "模型 {} 缺少 api_base_url，客户端无法调用", model.model_id);
+        assert!(model.api_format.is_some(),
+            "模型 {} 缺少 api_format，客户端不知道用哪种协议", model.model_id);
+    }
+}
+```
+
+**降级逻辑的正确处理**：
+
+```rust
+// ❌ 错误：静默降级，问题不可见
+Err(e) => {
+    warn!("获取失败，使用 builtin 模型");
+    models.extend(builtin_models());
+}
+
+// ✅ 正确：降级时明确标记，并有测试验证降级场景
+Err(e) => {
+    error!("无法从 admin backend 获取模型列表: {}，请检查 ADMIN_BACKEND_URL 配置", e);
+    // 降级模型明确标记为 builtin，前端可以提示用户
+    models.extend(builtin_models());
+    // 同时记录到可观测系统，而不是只打 warn
+}
+```
+
 ### 改进的测试策略
 
 #### 测试维度矩阵（更新）

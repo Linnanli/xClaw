@@ -1,15 +1,15 @@
 /**
  * ChatTabTauri - 聊天主界面
  *
- * 使用 shadcn/ui AI 组件重构。
- * 设计稿：无对话时显示欢迎页（标题 + 快捷操作 + 输入框），
- * 有对话时显示消息列表 + 底部输入框。
+ * 架构（参考 ChatGPT/Claude 行业惯例）：
  *
- * 架构：ChatTabTauri (UI) → useAiChatTauri (状态) → Tauri IPC
- * 状态层 useAiChatTauri 保持不变，仅替换 UI 层。
+ * 欢迎页（入口）：只负责收集用户输入，点发送后立即切换到对话页
+ * 对话页（主体）：拿到 pendingMessage 后自己负责 thread 创建、DLP、发送、接收
+ *
+ * 两个视图职责完全分离，切换零延迟。
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { MessageSquare, TrendingUp, FileText, Zap } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { threadApi } from '../../utils/tauri';
@@ -60,10 +60,31 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
     preview: string;
   }>({ open: false, messageId: null, preview: '' });
 
+  // ── 核心状态：待发送消息，欢迎页写入，对话页消费 ──
+  const [pendingMessage, setPendingMessage] = useState<string | null>(null);
+
+  // 视图状态：是否显示对话视图
+  // 有 selectedThreadId（历史对话）或有 pendingMessage（新对话）时进入对话视图
+  const isConversationView = !!(selectedThreadId || pendingMessage);
+
+  // 入场动画控制
+  const [animateIn, setAnimateIn] = useState(false);
+  const prevIsConversation = useRef(false);
+
+  useEffect(() => {
+    if (isConversationView && !prevIsConversation.current) {
+      // 刚从欢迎页切过来，触发入场动画
+      requestAnimationFrame(() => setAnimateIn(true));
+    } else if (isConversationView) {
+      setAnimateIn(true);
+    } else {
+      setAnimateIn(false);
+    }
+    prevIsConversation.current = isConversationView;
+  }, [isConversationView]);
+
   // 模型配置
   const modelConfig = useModelConfig();
-
-  // 将 ModelConfigItem[] 转换为 ModelOption[]
   const modelOptions: ModelOption[] = modelConfig.models.map((m) => ({
     id: m.model_id,
     name: m.display_name,
@@ -86,9 +107,15 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
     onStatusChange: (status) => console.log('Chat status:', status),
   });
 
-  // 选择对话时加载消息
+  // 选择历史对话时加载消息（pendingMessage 触发的新 thread 不加载，避免覆盖乐观更新的消息）
+  const isNewThreadFromPending = useRef(false);
   useEffect(() => {
     if (selectedThreadId) {
+      if (isNewThreadFromPending.current) {
+        // 这是 pendingMessage 流程创建的新 thread，跳过加载（消息已在列表里）
+        isNewThreadFromPending.current = false;
+        return;
+      }
       loadMessages(selectedThreadId);
     }
   }, [selectedThreadId]);
@@ -112,31 +139,99 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
     }
   };
 
-  const handleSend = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!chat.input.trim() || chat.isLoading) return;
+  // ── 对话页消费 pendingMessage：创建 thread + 发送 ──
+  const pendingConsumed = useRef(false);
+  useEffect(() => {
+    if (!pendingMessage || pendingConsumed.current) return;
+    pendingConsumed.current = true;
 
-    if (!selectedThreadId) {
-      try {
-        const newThread = await threadApi.createThread();
-        onThreadSelect?.(newThread.id);
-      } catch (err) {
-        console.error('Failed to create thread:', err);
-        return;
+    const processPending = async () => {
+      const content = pendingMessage;
+
+      // 立即把用户消息加到列表（对话页已经显示了）
+      const tempId = `temp-${Date.now()}`;
+      chat.setMessages((prev) => [
+        ...prev,
+        { id: tempId, role: 'user' as const, content, timestamp: Date.now() },
+      ]);
+
+      // 创建 thread
+      let threadId = selectedThreadId;
+      if (!threadId) {
+        try {
+          const newThread = await threadApi.createThread();
+          threadId = newThread.id;
+          isNewThreadFromPending.current = true; // 标记：不要在 useEffect 里 loadMessages
+          onThreadSelect?.(newThread.id);
+        } catch (err) {
+          console.error('Failed to create thread:', err);
+          chat.setMessages((prev) => prev.filter((m) => m.id !== tempId));
+          setPendingMessage(null);
+          pendingConsumed.current = false;
+          return;
+        }
       }
-    }
 
-    chat.handleSubmit(e);
-  };
+      // DLP + 发送
+      await chat.sendMessageAfterOptimistic(threadId, content, tempId);
+      setPendingMessage(null);
+      pendingConsumed.current = false;
+    };
+
+    processPending();
+  }, [pendingMessage, selectedThreadId, onThreadSelect, chat]);
+
+  // ── 欢迎页的发送：只设置 pendingMessage，立即切换 ──
+  const handleWelcomeSend = useCallback(
+    (e: React.FormEvent) => {
+      e.preventDefault();
+      const content = chat.input.trim();
+      if (!content) return;
+      chat.setInput('');
+      setPendingMessage(content);
+    },
+    [chat],
+  );
+
+  // ── 对话页的发送：直接走完整流程 ──
+  const handleConversationSend = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      const content = chat.input.trim();
+      if (!content || chat.isLoading) return;
+
+      chat.setInput('');
+      const tempId = `temp-${Date.now()}`;
+      chat.setMessages((prev) => [
+        ...prev,
+        { id: tempId, role: 'user' as const, content, timestamp: Date.now() },
+      ]);
+
+      let threadId = selectedThreadId;
+      if (!threadId) {
+        try {
+          const newThread = await threadApi.createThread();
+          threadId = newThread.id;
+          isNewThreadFromPending.current = true;
+          onThreadSelect?.(newThread.id);
+        } catch (err) {
+          console.error('Failed to create thread:', err);
+          chat.setMessages((prev) => prev.filter((m) => m.id !== tempId));
+          return;
+        }
+      }
+
+      await chat.sendMessageAfterOptimistic(threadId, content, tempId);
+    },
+    [chat, selectedThreadId, onThreadSelect],
+  );
 
   const handleDeleteMessage = (messageId: string) => {
     chat.setMessages((prev) => prev.filter((m) => m.id !== messageId));
     setDeleteDialog({ open: false, messageId: null, preview: '' });
   };
 
-  const hasMessages = chat.messages.length > 0;
-
-  /* ===== 内联 DLP 警告（显示在消息流中） ===== */
+  /* ===== DLP 警告 ===== */
   const inlineDlpWarning: InlineDlpWarning | null =
     chat.dlpWarning?.type === 'redacted' && chat.dlpWarning.stats
       ? {
@@ -146,11 +241,24 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
         }
       : null;
 
-  /* ===== 共享的输入框 props ===== */
-  const inputProps = {
+  /* ===== 欢迎页输入框 props ===== */
+  const welcomeInputProps = {
     value: chat.input,
     onChange: chat.setInput,
-    onSubmit: handleSend,
+    onSubmit: handleWelcomeSend,
+    onStop: chat.stop,
+    isLoading: false, // 欢迎页不显示 loading
+    models: modelOptions,
+    selectedModel: modelConfig.selectedModelId,
+    onModelChange: modelConfig.selectModel,
+    onCustomModelClick: () => setCustomModelOpen(true),
+  };
+
+  /* ===== 对话页输入框 props ===== */
+  const conversationInputProps = {
+    value: chat.input,
+    onChange: chat.setInput,
+    onSubmit: handleConversationSend,
     onStop: chat.stop,
     isLoading: chat.isLoading,
     models: modelOptions,
@@ -160,9 +268,34 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
   };
 
   return (
-    <div className="flex h-full flex-col bg-background">
-      {hasMessages ? (
-        <>
+    <div className="relative flex h-full flex-col bg-background overflow-hidden">
+      {/* ── 欢迎页：只是入口 ── */}
+      <div
+        className={`absolute inset-0 z-10 flex flex-col transition-all duration-300 ease-out ${
+          isConversationView
+            ? 'pointer-events-none scale-[0.98] opacity-0'
+            : 'scale-100 opacity-100'
+        }`}
+      >
+        <ChatWelcome
+          quickActions={QUICK_ACTIONS}
+          onQuickAction={(prompt) => {
+            chat.setInput('');
+            setPendingMessage(prompt);
+          }}
+          {...welcomeInputProps}
+        />
+      </div>
+
+      {/* ── 对话页：所有逻辑在这里执行 ── */}
+      {isConversationView && (
+        <div
+          className={`flex flex-1 flex-col transition-all duration-300 ease-out ${
+            animateIn
+              ? 'translate-y-0 opacity-100'
+              : 'translate-y-3 opacity-0'
+          }`}
+        >
           {loading ? (
             <div className="flex flex-1 items-center justify-center text-muted-foreground">
               加载中...
@@ -187,22 +320,16 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
             />
           )}
 
-          {/* 底部输入框 - 设计稿 InputArea 720px 居中 */}
+          {/* 底部输入框 */}
           <div className="border-t border-border px-10 py-4">
             <div className="mx-auto max-w-[720px]">
-              <ChatInput {...inputProps} />
+              <ChatInput {...conversationInputProps} />
             </div>
           </div>
-        </>
-      ) : (
-        <ChatWelcome
-          quickActions={QUICK_ACTIONS}
-          onQuickAction={(prompt) => chat.setInput(prompt)}
-          {...inputProps}
-        />
+        </div>
       )}
 
-      {/* 删除确认 - 使用 shadcn/ui AlertDialog */}
+      {/* 删除确认 */}
       <AlertDialog
         open={deleteDialog.open}
         onOpenChange={(open) => {
@@ -216,7 +343,7 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
               确定要删除这条消息吗？
               {deleteDialog.preview && (
                 <span className="mt-2 block rounded bg-muted p-2 text-xs">
-                  "{deleteDialog.preview}{deleteDialog.preview.length >= 50 ? '...' : ''}"
+                  &quot;{deleteDialog.preview}{deleteDialog.preview.length >= 50 ? '...' : ''}&quot;
                 </span>
               )}
             </AlertDialogDescription>
@@ -241,7 +368,6 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
         onClose={chat.clearDlpWarning}
         onEdit={() => {
           chat.clearDlpWarning();
-          // 输入框保留原始内容，用户可以编辑后重新发送
         }}
         blockReason={chat.dlpWarning?.blockReason}
         stats={chat.dlpWarning?.stats}

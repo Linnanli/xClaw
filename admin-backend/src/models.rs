@@ -399,4 +399,15 @@ pub struct ClientModelConfig {
     pub provider: String,
     pub is_default: bool,
     pub capabilities: serde_json::Value,
+    /// API Base URL（客户端直连时使用）
+    pub api_base_url: Option<String>,
+    /// API Key（客户端直连时使用，脱敏后下发）
+    pub api_key: Option<String>,
+    /// API 格式：openai / anthropic
+    #[serde(default = "default_api_format")]
+    pub api_format: String,
+}
+
+fn default_api_format() -> String {
+    "openai".to_string()
 }

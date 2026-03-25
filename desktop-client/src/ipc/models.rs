@@ -18,16 +18,28 @@ pub struct ModelConfig {
     pub provider: String,
     #[serde(default)]
     pub provider_display_name: Option<String>,
-    /// 兼容旧字段
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
     pub is_default: bool,
     #[serde(default = "default_capabilities")]
     pub capabilities: serde_json::Value,
-    /// 标记来源：admin（后台下发）或 custom（本地自定义）
+    /// API Base URL（后台下发，客户端直连时使用）
+    #[serde(default)]
+    pub api_base_url: Option<String>,
+    /// API Key（脱敏，仅用于判断是否已配置）
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// API 格式：openai / anthropic
+    #[serde(default = "default_api_format")]
+    pub api_format: String,
+    /// 标记来源：admin（后台下发）/ custom（本地自定义）/ builtin（内置兜底）
     #[serde(default = "default_source")]
     pub source: String,
+}
+
+fn default_api_format() -> String {
+    "openai".to_string()
 }
 
 fn default_source() -> String {
@@ -118,6 +130,9 @@ pub async fn get_available_models(
             provider_display_name: None,
             is_default: false,
             capabilities: cm.capabilities.clone(),
+            api_base_url: Some(cm.api_base_url.clone()),
+            api_key: Some("****".to_string()), // 本地自定义模型 key 不回显
+            api_format: "openai".to_string(),
             source: "custom".to_string(),
         });
     }
@@ -326,6 +341,9 @@ fn builtin_models() -> Vec<ModelConfig> {
             provider_display_name: Some("OpenAI".to_string()),
             is_default: true,
             capabilities: serde_json::json!(["chat", "vision"]),
+            api_base_url: Some("https://api.openai.com/v1".to_string()),
+            api_key: None,
+            api_format: "openai".to_string(),
             source: "builtin".to_string(),
         },
         ModelConfig {
@@ -336,6 +354,9 @@ fn builtin_models() -> Vec<ModelConfig> {
             provider_display_name: Some("OpenAI".to_string()),
             is_default: false,
             capabilities: serde_json::json!(["chat"]),
+            api_base_url: Some("https://api.openai.com/v1".to_string()),
+            api_key: None,
+            api_format: "openai".to_string(),
             source: "builtin".to_string(),
         },
     ]

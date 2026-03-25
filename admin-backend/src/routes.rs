@@ -3748,7 +3748,8 @@ async fn get_client_models(
 
     let rows = client
         .query(
-            "SELECT model_id, display_name, description, provider, is_default, capabilities \
+            "SELECT model_id, display_name, description, provider, is_default, capabilities, \
+             api_base_url, api_key, COALESCE(extra_config->>'api_format', 'openai') \
              FROM model_configs WHERE enabled = true ORDER BY sort_order, display_name",
             &[],
         )
@@ -3757,13 +3758,23 @@ async fn get_client_models(
 
     let models: Vec<models::ClientModelConfig> = rows
         .iter()
-        .map(|row| models::ClientModelConfig {
-            model_id: row.get(0),
-            display_name: row.get(1),
-            description: row.get(2),
-            provider: row.get(3),
-            is_default: row.get(4),
-            capabilities: row.get(5),
+        .map(|row| {
+            // api_key 脱敏：只传前4位，客户端用于判断是否已配置
+            let raw_key: Option<String> = row.get(7);
+            let masked_key = raw_key.as_deref().map(|k| {
+                if k.len() > 4 { format!("{}****", &k[..4]) } else { "****".to_string() }
+            });
+            models::ClientModelConfig {
+                model_id: row.get(0),
+                display_name: row.get(1),
+                description: row.get(2),
+                provider: row.get(3),
+                is_default: row.get(4),
+                capabilities: row.get(5),
+                api_base_url: row.get(6),
+                api_key: masked_key,
+                api_format: row.get::<_, Option<String>>(8).unwrap_or_else(|| "openai".to_string()),
+            }
         })
         .collect();
 

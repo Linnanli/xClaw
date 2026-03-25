@@ -391,20 +391,25 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
    */
   const sendMessage = useCallback(
     async (content: string) => {
+      // 立即添加用户消息，让 UI 瞬间切换
+      const tempMsgId = `msg-${messageIdRef.current++}`;
+      setMessages((prev) => [
+        ...prev,
+        { id: tempMsgId, role: 'user', content, timestamp: Date.now() },
+      ]);
+      setIsLoading(true);
+      setError(null);
+      setThinkingMessage(null);
+      thinkingStepsRef.current = [];
+      setThinkingSteps([]);
+
       try {
         tracing.debug('Sending message', { threadId, contentLength: content.length });
-        setIsLoading(true);
-        setError(null);
-        setThinkingMessage(null);
-        thinkingStepsRef.current = [];
-        setThinkingSteps([]);
 
-        // 步骤 1: DLP 扫描
-        tracing.debug('Step 1: DLP scanning');
         const dlpResult = await scanUserInput(content);
 
         if (dlpResult.was_blocked) {
-          // 设置 DLP 阻止警告，供 UI 层显示对话框
+          setMessages((prev) => prev.filter((m) => m.id !== tempMsgId));
           setDlpWarning({
             type: 'blocked',
             stats: dlpResult.sanitization_stats,
@@ -412,16 +417,18 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
             timestamp: Date.now(),
           });
           setIsLoading(false);
-          return; // 不抛出错误，由 UI 层通过 dlpWarning 处理
+          return;
         }
 
-        // 使用脱敏后的内容
         const sanitizedContent = dlpResult.sanitized_content;
-        const hadSensitiveData = dlpResult.had_sensitive_data;
-        tracing.debug('DLP scan passed', { hadSensitiveData });
-
-        // 如果有脱敏，设置 DLP 警告
-        if (hadSensitiveData) {
+        if (dlpResult.had_sensitive_data) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === tempMsgId
+                ? { ...m, content: sanitizedContent, dlpStats: dlpResult.sanitization_stats }
+                : m,
+            ),
+          );
           setDlpWarning({
             type: 'redacted',
             stats: dlpResult.sanitization_stats,
@@ -429,30 +436,12 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
           });
         }
 
-        // 步骤 2: 添加用户消息到本地状态
-        const userMessage: Message = {
-          id: `msg-${messageIdRef.current++}`,
-          role: 'user',
-          content: sanitizedContent,
-          timestamp: Date.now(),
-          dlpStats: hadSensitiveData ? dlpResult.sanitization_stats : undefined,
-        };
-
-        setMessages((prev) => [...prev, userMessage]);
-        tracing.debug('User message added to local state');
-
-        // 步骤 3: 调用 Tauri 命令发送消息
-        tracing.debug('Step 3: Invoking send_chat_message');
         const response = await invoke<SendMessageResponse>('send_chat_message', {
           threadId,
           content: sanitizedContent,
         });
 
         tracing.info('Message sent', { messageId: response.message_id });
-
-        // 步骤 4: 等待 SSE 事件接收 AI 响应
-        // (响应会通过 handleChatEvent 处理)
-        tracing.debug('Step 4: Waiting for AI response via SSE');
       } catch (err) {
         tracing.error('Failed to send message', { error: err });
         const errorMsg = err instanceof Error ? err.message : String(err);
@@ -513,6 +502,148 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
     setThinkingMessage(null);
   }, []);
 
+  // 用指定的 threadId 发送消息（解决新建对话时 state 更新时机问题）
+  const sendMessageWithThread = useCallback(
+    async (overrideThreadId: string, content: string) => {
+      // 立即添加用户消息到列表，让 UI 瞬间切换到对话视图
+      const tempMsgId = `msg-${messageIdRef.current++}`;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: tempMsgId,
+          role: 'user',
+          content,
+          timestamp: Date.now(),
+        },
+      ]);
+      setIsLoading(true);
+      setError(null);
+      setThinkingMessage(null);
+      thinkingStepsRef.current = [];
+      setThinkingSteps([]);
+
+      try {
+        tracing.debug('Sending message with thread', { threadId: overrideThreadId });
+
+        // DLP 扫描（异步，但用户消息已经在列表里了）
+        const dlpResult = await scanUserInput(content);
+
+        if (dlpResult.was_blocked) {
+          // 被阻止：移除刚才加的临时消息
+          setMessages((prev) => prev.filter((m) => m.id !== tempMsgId));
+          setDlpWarning({
+            type: 'blocked',
+            stats: dlpResult.sanitization_stats,
+            blockReason: dlpResult.block_reason || undefined,
+            timestamp: Date.now(),
+          });
+          setIsLoading(false);
+          return;
+        }
+
+        const sanitizedContent = dlpResult.sanitized_content;
+        const hadSensitiveData = dlpResult.had_sensitive_data;
+
+        // 如果有脱敏，更新消息内容为脱敏后的版本
+        if (hadSensitiveData) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === tempMsgId
+                ? { ...m, content: sanitizedContent, dlpStats: dlpResult.sanitization_stats }
+                : m,
+            ),
+          );
+          setDlpWarning({
+            type: 'redacted',
+            stats: dlpResult.sanitization_stats,
+            timestamp: Date.now(),
+          });
+        }
+
+        // 发送到后端
+        const response = await invoke<SendMessageResponse>('send_chat_message', {
+          threadId: overrideThreadId,
+          content: sanitizedContent,
+        });
+
+        tracing.info('Message sent', { messageId: response.message_id });
+      } catch (err) {
+        tracing.error('Failed to send message', { error: err });
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        setError(errorMsg);
+        setIsLoading(false);
+        setThinkingMessage(null);
+        thinkingStepsRef.current = [];
+        setThinkingSteps([]);
+        onError?.(errorMsg);
+      }
+    },
+    [scanUserInput, onError],
+  );
+
+  /**
+   * 乐观更新版发送：消息已由调用方提前加到列表里，
+   * 这里只做 DLP 扫描 + 后端发送，不再重复 setMessages。
+   */
+  const sendMessageAfterOptimistic = useCallback(
+    async (overrideThreadId: string, content: string, tempMsgId: string) => {
+      setIsLoading(true);
+      setError(null);
+      setThinkingMessage(null);
+      thinkingStepsRef.current = [];
+      setThinkingSteps([]);
+
+      try {
+        const dlpResult = await scanUserInput(content);
+
+        if (dlpResult.was_blocked) {
+          // 被阻止：移除临时消息
+          setMessages((prev) => prev.filter((m) => m.id !== tempMsgId));
+          setDlpWarning({
+            type: 'blocked',
+            stats: dlpResult.sanitization_stats,
+            blockReason: dlpResult.block_reason || undefined,
+            timestamp: Date.now(),
+          });
+          setIsLoading(false);
+          return;
+        }
+
+        const sanitizedContent = dlpResult.sanitized_content;
+        if (dlpResult.had_sensitive_data) {
+          // 脱敏：原地更新消息内容
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === tempMsgId
+                ? { ...m, content: sanitizedContent, dlpStats: dlpResult.sanitization_stats }
+                : m,
+            ),
+          );
+          setDlpWarning({
+            type: 'redacted',
+            stats: dlpResult.sanitization_stats,
+            timestamp: Date.now(),
+          });
+        }
+
+        await invoke<SendMessageResponse>('send_chat_message', {
+          threadId: overrideThreadId,
+          content: sanitizedContent,
+        });
+      } catch (err) {
+        tracing.error('Failed to send message', { error: err });
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        setError(errorMsg);
+        setIsLoading(false);
+        setThinkingMessage(null);
+        thinkingStepsRef.current = [];
+        setThinkingSteps([]);
+        onError?.(errorMsg);
+      }
+    },
+    [scanUserInput, onError],
+  );
+
   return {
     // 状态
     messages,
@@ -526,6 +657,8 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
 
     // 操作
     sendMessage,
+    sendMessageWithThread,
+    sendMessageAfterOptimistic,
     setInput,
     setMessages,
 
