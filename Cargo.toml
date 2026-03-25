@@ -1,5 +1,5 @@
 [workspace]
-members = ["desktop-client", "admin-backend", "crates/ironclaw_auth"]
+members = ["desktop-client", "admin-backend", "crates/ironclaw_auth", "crates/ironclaw_llm"]
 exclude = ["ironclaw"]
 resolver = "2"
 

@@ -3,18 +3,16 @@
 //! 提供策略查询和管理的 HTTP API 端点
 
 use crate::db::Database;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::models::{DlpRule, SensitiveOperationRule};
 use crate::policy_management::{PolicyManagementService, PolicyVersionInfo};
 use crate::AppState;
 use axum::{
-    extract::{Path, Query, State},
-    http::StatusCode,
+    extract::{Query, State},
     Json,
 };
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument};
-use uuid::Uuid;
 
 /// 策略查询请求参数
 #[derive(Debug, Deserialize)]

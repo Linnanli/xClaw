@@ -2,6 +2,8 @@
 @import './tailwind.css';
 @import './theme.css';
 @import './aurora.css';
+@import './assistant-ui.css';
+@import "tw-shimmer";
 
 /* DLP Toast 动画 */
 @keyframes slide-in {

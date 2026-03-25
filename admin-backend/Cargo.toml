@@ -21,10 +21,21 @@ async-trait = "0.1"
 regex = "1"
 
 # HTTP client for proxying to IronClaw Gateway
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# SSE support
+axum-extra = { version = "0.10", features = ["typed-header"] }
+tokio-stream = "0.1"
+futures-util = "0.3"
 
 # Shared authentication
 ironclaw_auth = { path = "../crates/ironclaw_auth" }
+
+# Shared LLM provider
+ironclaw_llm = { path = "../crates/ironclaw_llm" }
+
+# Secret management (for API keys)
+secrecy = { version = "0.10", features = ["serde"] }
 
 # Database
 tokio-postgres = { version = "0.7", features = ["with-uuid-1", "with-chrono-0_4", "with-serde_json-1"] }

@@ -13,7 +13,8 @@
       "timeout": 600,
       "autoApprove": [
         "interactive_feedback"
-      ]
+      ],
+      "disabled": true
     },
     "context7": {
       "command": "npx",
@@ -129,6 +130,18 @@
         "search_items_in_registries",
         "list_items_in_registries",
         "get_project_registries"
+      ]
+    },
+    "assistant-ui": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@assistant-ui/mcp-docs-server"
+      ],
+      "env": {},
+      "disabled": false,
+      "autoApprove": [
+        "assistantUIDocs"
       ]
     },
     "pencil": {

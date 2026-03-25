@@ -8,7 +8,7 @@ use crate::models::{DlpRule, SensitiveOperationRule, PolicyChangeRecord};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
 /// 策略管理请求

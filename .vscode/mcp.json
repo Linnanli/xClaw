@@ -1,0 +1,12 @@
+{
+  "servers": {
+    "assistant-ui": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@assistant-ui/mcp-docs-server"
+      ],
+      "type": "stdio"
+    }
+  }
+}

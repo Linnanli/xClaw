@@ -1,0 +1,67 @@
+/**
+ * assistant-ui 主题覆盖
+ *
+ * 保留 X-Claw 设计稿的绿色主题（#3D8A5A）和气泡样式，
+ * 覆盖 assistant-ui 默认的中性色调。
+ *
+ * 设计稿参考：client-design.pen
+ * - 用户消息：bg #3D8A5A, 白色文字, 圆角 [16,16,4,16]
+ * - AI 消息：bg #FFFFFF, 边框 #E5E4E1, 圆角 [16,16,16,4]
+ * - 输入框：720px 居中, 圆角 17px, aurora 动画
+ */
+
+/* ── 用户消息气泡：绿色背景 ── */
+[data-role="user"] .aui-user-message-content {
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+  border-radius: 16px 16px 4px 16px;
+}
+
+/* ── AI 消息：白色背景 + 边框 ── */
+[data-role="assistant"] .aui-assistant-message-content {
+  background-color: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px 16px 16px 4px;
+  padding: 12px 16px;
+}
+
+/* ── 输入框：720px 居中 ── */
+.aui-thread-viewport-footer {
+  --thread-max-width: 720px;
+}
+
+/* ── 欢迎页居中 ── */
+.aui-thread-welcome-root {
+  padding: 0 2.5rem;
+}
+
+/* ── Composer 发送按钮：绿色 ── */
+.aui-composer-send {
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+}
+.aui-composer-send:hover {
+  background-color: color-mix(in srgb, var(--primary) 90%, black);
+}
+
+/* ── Composer 停止按钮：橙红色 ── */
+.aui-composer-cancel {
+  background-color: #E05A2B;
+  color: white;
+}
+.aui-composer-cancel:hover {
+  background-color: #C94D24;
+}
+
+/* ── 滚动到底部按钮 ── */
+.aui-thread-scroll-to-bottom {
+  background-color: var(--card);
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 8px var(--shadow-color);
+}
+
+/* ── 操作栏按钮 hover ── */
+.aui-assistant-action-bar-root button:hover,
+.aui-user-action-bar-root button:hover {
+  color: var(--primary);
+}

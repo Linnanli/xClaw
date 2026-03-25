@@ -49,6 +49,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create router
     let app = routes::create_router(state);
 
+    // CORS — 允许 Desktop Client 前端跨域访问
+    use tower_http::cors::{CorsLayer, Any};
+    use axum::http::Method;
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
+        .allow_headers(Any);
+    let app = app.layer(cors);
+
     // Start server
     let addr = "127.0.0.1:3000";
     let listener = TcpListener::bind(addr).await?;
