@@ -304,7 +304,7 @@ pub async fn test_model_connection(
 async fn fetch_admin_models(_engine: &EngineState) -> Result<Vec<ModelConfig>, String> {
     // 从环境变量获取 admin backend URL
     let admin_url = std::env::var("ADMIN_BACKEND_URL")
-        .unwrap_or_else(|_| "http://localhost:3001".to_string());
+        .unwrap_or_else(|_| "http://localhost:3000".to_string());
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))

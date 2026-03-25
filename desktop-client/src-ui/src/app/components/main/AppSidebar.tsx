@@ -44,6 +44,7 @@ interface AppSidebarProps {
   selectedThreadId: string | null;
   onThreadSelect: (threadId: string) => void;
   onNewChat: () => void;
+  refreshKey?: number; // 外部递增触发重新加载线程列表
 }
 
 interface GroupedThreads {
@@ -78,6 +79,7 @@ export function AppSidebar({
   selectedThreadId,
   onThreadSelect,
   onNewChat,
+  refreshKey = 0,
 }: AppSidebarProps) {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [expandedGroups, setExpandedGroups] = useState({
@@ -88,7 +90,7 @@ export function AppSidebar({
 
   useEffect(() => {
     loadThreads();
-  }, []);
+  }, [refreshKey]); // refreshKey 变化时重新加载
 
   const loadThreads = async () => {
     try {

@@ -32,6 +32,7 @@ const NAV_TITLES: Record<NavItem, string> = {
 export function MainApp() {
   const [activeNav, setActiveNav] = useState<NavItem>('chat');
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
+  const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [jobsOpen, setJobsOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -98,7 +99,10 @@ export function MainApp() {
         return (
           <ChatTabTauri
             selectedThreadId={selectedThreadId}
-            onThreadSelect={setSelectedThreadId}
+            onThreadSelect={(id) => {
+              setSelectedThreadId(id);
+              setSidebarRefreshKey((k) => k + 1);
+            }}
           />
         );
       case 'logs':
@@ -114,8 +118,12 @@ export function MainApp() {
         activeNav={activeNav}
         onNavChange={handleNavChange}
         selectedThreadId={selectedThreadId}
-        onThreadSelect={setSelectedThreadId}
+        onThreadSelect={(id) => {
+          setSelectedThreadId(id);
+          setSidebarRefreshKey((k) => k + 1);
+        }}
         onNewChat={handleNewChat}
+        refreshKey={sidebarRefreshKey}
       />
       <SidebarInset>
         <AppHeader

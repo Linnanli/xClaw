@@ -127,7 +127,8 @@
       "disabled": false,
       "autoApprove": [
         "search_items_in_registries",
-        "list_items_in_registries"
+        "list_items_in_registries",
+        "get_project_registries"
       ]
     },
     "pencil": {
