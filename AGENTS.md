@@ -56,12 +56,9 @@ Desktop Client 和 Admin Backend 新增功能时，**禁止重复实现**主项�
 - 检查 `Cargo.toml` 中的依赖版本，注意 breaking changes
 - 分阶段实现，先验证核心功能编译通过
 
-### 技能参考
+### 编码标准参考
 
-详细的编码规范见 `.kiro/steering/` 下的技能文档：
-- `engineer-mindset-coding.md` — 工程最佳实践
-- `tdd-practitioner.md` — TDD 方法论
-- `code-quality-gate.md` — 代码质量门禁
+详细的 Rust 编码规范、错误处理模式、测试代码示例和质量门禁脚本用法见 `.kiro/steering/rust-coding-standards.md`（手动引用）。
 
 ---
 
@@ -96,6 +93,24 @@ Desktop Client 和 Admin Backend 新增功能时，**禁止重复实现**主项�
 | 失败路径 | >80% | 100% |
 | 契约测试 | >90% | 100% |
 | 安全审计 | — | 100% |
+
+### 覆盖率验证
+
+```bash
+# 全量覆盖率报告（需要 cargo-llvm-cov）
+./scripts/coverage.sh
+
+# 按模块过滤
+./scripts/coverage.sh safety
+
+# 输出 lcov 格式（CI 集成用）
+COV_FORMAT=lcov ./scripts/coverage.sh
+
+# 包含集成测试
+COV_ALL_TARGETS=1 ./scripts/coverage.sh
+```
+
+安装：`cargo install cargo-llvm-cov`
 
 ### 测试文件组织
 
@@ -232,4 +247,4 @@ cargo test -p desktop-client --lib engine_startup_tests
 - `admin-backend/tests/integration_smoke_tests.rs` — 冒烟测试
 - `desktop-client/tests/tauri_command_contract_tests.rs` — Tauri 命令契约测试
 - `admin-backend/frontend/cypress/` — Cypress E2E 测试
-- `.kiro/steering/` — 编码技能文档（TDD、工程实践、质量门禁）
+- `.kiro/steering/rust-coding-standards.md` — Rust 编码标准、错误处理模式、测试代码示例、质量门禁脚本

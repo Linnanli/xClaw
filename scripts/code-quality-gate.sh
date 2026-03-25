@@ -93,7 +93,7 @@ if check_command "cargo"; then
     fi
 fi
 
-# 4. Custom Safety Checks (Reusing pre-commit-safety.sh logic)
+# 4. Custom Safety Checks
 log_header "Step 4: Running Custom Safety Checks"
 if bash scripts/pre-commit-safety.sh; then
     log_success "Custom safety checks passed"
