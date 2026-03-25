@@ -27,6 +27,7 @@ dependencies = [
  "chrono",
  "deadpool-postgres",
  "dotenvy",
+ "http-body-util",
  "ironclaw_auth",
  "postgres-types",
  "proptest",

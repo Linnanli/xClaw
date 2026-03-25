@@ -215,6 +215,51 @@ cargo test --test {module}_regression_tests    # 变更覆盖
 - 验证敏感信息在任何情况下都被脱敏
 - 定期运行安全审计测试
 
+#### 盲区 6：编译成功 ≠ 运行时正确，迁移存在 ≠ 迁移已执行 🎯
+
+**真实案例**：`/api/model-configs` 返回 404，但所有测试全部通过。
+
+**根本原因**：
+1. `update_model_config` handler 使用了 `Vec<Box<dyn ToSql + Sync>>`（非 `Send`），导致编译失败
+2. 测试文件没有引用 `routes.rs` 里的任何函数，编译错误被完全绕过
+3. `cargo test` 通过，但后端跑的是上一次能编译的旧 binary
+4. 迁移文件 `013_model_configs.sql` 存在，但从未被执行，表不存在
+
+**三层防护方案**（见 `admin-backend/tests/integration_smoke_tests.rs`）：
+
+**层 1 — 编译检查**：直接调用 `create_router()`，强制编译所有 handler
+```rust
+#[tokio::test]
+async fn test_compile_all_handlers_via_create_router() {
+    let _app = create_router(state); // 只要能编译，所有 handler 都通过了编译
+}
+```
+
+**层 2 — 迁移完整性**：查询 `information_schema` 验证每个迁移对应的表存在
+```rust
+// 新增迁移时必须在这里追加一行
+let required: &[(&str, &str)] = &[
+    ("013_model", "model_configs"),  // 迁移名 → 表名
+    // ...
+];
+```
+
+**层 3 — HTTP 路由冒烟**：用 `tower::ServiceExt::oneshot` 通过真实 axum router 发请求
+```rust
+#[tokio::test]
+async fn test_http_get_model_configs_not_404() {
+    let resp = get(build_app(pool), "/api/model-configs").await;
+    assert_ne!(resp.status(), StatusCode::NOT_FOUND);
+}
+```
+
+**教训**：
+- `cargo test` 通过 ≠ `cargo build` 通过（测试可能绕过有问题的代码）
+- 迁移文件存在 ≠ 迁移已执行（需要显式验证表存在）
+- 契约测试必须调用真实代码，而不是手写镜像结构体
+
+**强制要求**：每次新增迁移文件时，必须同步在 `integration_smoke_tests.rs` 的 `required` 列表中追加对应条目。
+
 ### 改进的测试策略
 
 #### 测试维度矩阵（更新）
@@ -241,7 +286,8 @@ tests/
 ├── {module}_security_audit_tests.rs # 安全审计测试 ✨ 新增
 ├── {module}_reliability_tests.rs    # 可靠性测试
 ├── {module}_requirements_tests.rs   # 需求级测试
-└── {module}_regression_tests.rs     # 变更覆盖测试
+├── {module}_regression_tests.rs     # 变更覆盖测试
+└── integration_smoke_tests.rs       # 编译+迁移+路由冒烟测试 ✨ 新增（全局唯一）
 
 cypress/e2e/
 ├── {module}_integration.cy.js       # E2E 测试（模拟环境）
@@ -269,6 +315,9 @@ cypress/e2e/
 - [ ] 安全测试覆盖率 100%
 - [ ] 集成测试覆盖率 >80%
 - [ ] 所有测试通过（100%通过率）
+- [ ] `cargo build` 编译通过（不只是 `cargo test`）✨ 新增
+- [ ] `integration_smoke_tests` 全部通过 ✨ 新增
+- [ ] 新增迁移时已在 `integration_smoke_tests.rs` 追加表名验证 ✨ 新增
 - [ ] 0编译错误，0编译警告
 
 #### 安全功能额外要求 ✨ 新增

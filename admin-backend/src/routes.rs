@@ -3617,7 +3617,7 @@ async fn create_model_config(
 }
 
 /// PUT /api/model-configs/{id} — 更新模型配置
-#[instrument(skip(state, body))]
+#[instrument(skip_all)]
 async fn update_model_config(
     State(state): State<AppState>,
     Path(config_id): Path<Uuid>,
@@ -3629,14 +3629,14 @@ async fn update_model_config(
     // 检查是否存在
     let existing = client
         .query_opt(
-            "SELECT model_id, display_name FROM model_configs WHERE id = $1",
+            "SELECT display_name FROM model_configs WHERE id = $1",
             &[&config_id],
         )
         .await
         .map_err(|e| Error::Database(e.to_string()))?
         .ok_or(Error::Validation("模型配置不存在".into()))?;
 
-    let old_name: String = existing.get(1);
+    let old_name: String = existing.get(0);
 
     // 如果设为默认，先清除其他默认
     if body.is_default == Some(true) {
@@ -3649,50 +3649,36 @@ async fn update_model_config(
             .map_err(|e| Error::Database(e.to_string()))?;
     }
 
-    // 动态构建 UPDATE 语句
-    let mut sets = Vec::new();
-    let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync>> = Vec::new();
-    let mut idx = 1;
-
-    macro_rules! add_field {
-        ($field:expr, $col:expr) => {
-            if let Some(ref val) = $field {
-                idx += 1;
-                sets.push(format!("{} = ${}", $col, idx));
-                params.push(Box::new(val.clone()));
-            }
-        };
-    }
-
-    add_field!(body.display_name, "display_name");
-    add_field!(body.description, "description");
-    add_field!(body.provider, "provider");
-    add_field!(body.api_base_url, "api_base_url");
-    add_field!(body.api_key, "api_key");
-    add_field!(body.enabled, "enabled");
-    add_field!(body.is_default, "is_default");
-    add_field!(body.sort_order, "sort_order");
-    add_field!(body.capabilities, "capabilities");
-    add_field!(body.extra_config, "extra_config");
-
-    if sets.is_empty() {
-        return Ok(Json(json!({ "message": "无更新字段" })));
-    }
-
-    sets.push("updated_at = NOW()".to_string());
-
-    let sql = format!(
-        "UPDATE model_configs SET {} WHERE id = $1",
-        sets.join(", ")
-    );
-
-    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-        std::iter::once(&config_id as &(dyn tokio_postgres::types::ToSql + Sync))
-            .chain(params.iter().map(|p| p.as_ref()))
-            .collect();
-
+    // 用 COALESCE 保留未传字段的原值，避免动态 SQL + Box<dyn ToSql> 的 Send 问题
     client
-        .execute(&sql, &param_refs)
+        .execute(
+            "UPDATE model_configs SET \
+                display_name  = COALESCE($2, display_name), \
+                description   = COALESCE($3, description), \
+                provider      = COALESCE($4, provider), \
+                api_base_url  = COALESCE($5, api_base_url), \
+                api_key       = COALESCE($6, api_key), \
+                enabled       = COALESCE($7, enabled), \
+                is_default    = COALESCE($8, is_default), \
+                sort_order    = COALESCE($9, sort_order), \
+                capabilities  = COALESCE($10, capabilities), \
+                extra_config  = COALESCE($11, extra_config), \
+                updated_at    = NOW() \
+             WHERE id = $1",
+            &[
+                &config_id,
+                &body.display_name,
+                &body.description,
+                &body.provider,
+                &body.api_base_url,
+                &body.api_key,
+                &body.enabled,
+                &body.is_default,
+                &body.sort_order,
+                &body.capabilities,
+                &body.extra_config,
+            ],
+        )
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
