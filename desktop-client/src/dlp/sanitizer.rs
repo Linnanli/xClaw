@@ -204,19 +204,27 @@ impl DlpSanitizer {
 
     /// 应用脱敏处理
     fn apply_sanitization(&self, content: &str, detection_result: &DlpDetectionResult) -> String {
-        // 优先使用 LeakDetector 已经处理好的脱敏内容（字节边界安全）
-        if let Some(ref already_redacted) = detection_result.sanitized_content {
-            // LeakDetector 已经做了脱敏，但我们需要应用格式保留规则
-            // 检查是否有需要格式保留的模式（身份证、手机号、银行卡）
-            let needs_format_preservation = detection_result.matches.iter().any(|m| {
-                matches!(
-                    m.pattern_name.as_str(),
-                    "chinese_id_card_18" | "chinese_id_card_15" | "chinese_mobile" | "chinese_bank_card"
-                )
-            });
+        // 检查是否有自定义替换需求（replacement_map 中有匹配的 pattern_name，
+        // 或者 default_redaction 不是 LeakDetector 的默认值 "[REDACTED]"）
+        let has_custom_replacements = detection_result.matches.iter().any(|m| {
+            self.config.replacement_map.contains_key(&m.pattern_name)
+        }) || self.config.default_redaction != "[REDACTED]";
 
-            if self.config.preserve_format && needs_format_preservation {
-                // 用格式保留替换重新处理原始内容
+        if let Some(ref already_redacted) = detection_result.sanitized_content {
+            // LeakDetector 已经做了脱敏，判断是否需要重新处理
+            let needs_format_preservation = self.config.preserve_format
+                && detection_result.matches.iter().any(|m| {
+                    matches!(
+                        m.pattern_name.as_str(),
+                        "chinese_id_card_18"
+                            | "chinese_id_card_15"
+                            | "chinese_mobile"
+                            | "chinese_bank_card"
+                    )
+                });
+
+            if needs_format_preservation || has_custom_replacements {
+                // 用自定义替换/格式保留重新处理原始内容
                 return self.apply_format_preserving_replacement(content, detection_result);
             }
 

@@ -7,13 +7,16 @@
  *   TauriRuntimeProvider（本文件）
  *       ↕ Tauri IPC (invoke / listen)
  *   Rust 后端 (send_chat_message / subscribe_chat_events)
+ *       ↕ 内嵌 IronClaw Agent（skills + 工具 + 多步推理）
+ *       ↕ LLM API（直连，无需 Admin Backend 中转）
  *
  * 职责：
  * - 管理消息状态（messages, isRunning）
  * - 将 assistant-ui 的 onNew 转换为 Tauri IPC 调用
- * - 监听 SSE chat-event 并更新消息列表
- * - DLP 扫描集成（发送前拦截）
+ * - 监听 chat-event 并更新消息列表（含流式、思考链、工具状态）
+ * - DLP 扫描集成（发送前拦截，Fail-Safe 设计）
  * - 线程管理（创建、切换、历史加载）
+ * - 模型动态切换（通过 model_override metadata 传递给 Agent）
  */
 
 import { type ReactNode, useState, useCallback, useEffect, useRef, createContext, useContext } from 'react';
@@ -27,6 +30,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { threadApi } from '@utils/tauri';
 import { useDlpScan } from '@hooks/useDlpScan';
+import type { SanitizationStats } from '@hooks/useDlpScan';
 import { tracing } from '@utils/tracing';
 
 // ============================================================================
@@ -38,7 +42,6 @@ interface TauriMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
-  /** 思考链内容（仅 assistant 消息） */
   reasoning?: string;
 }
 
@@ -58,6 +61,10 @@ interface SendMessageResponse {
 type ChatEvent =
   | { type: 'response'; message_id: string; content: string; thread_id: string }
   | { type: 'thinking'; message: string }
+  | { type: 'stream_chunk'; content: string }
+  | { type: 'tool_started'; name: string }
+  | { type: 'tool_completed'; name: string; success: boolean; error?: string }
+  | { type: 'approval_needed'; request_id: string; tool_name: string; description: string }
   | { type: 'status'; message: string; level: string }
   | { type: 'error'; message: string; code?: string }
   | { type: 'connection_status'; connected: boolean; message: string };
@@ -66,22 +73,31 @@ interface TauriRuntimeProviderProps {
   children: ReactNode;
   threadId: string | null;
   onThreadCreated?: (threadId: string) => void;
+  modelId?: string;
 }
 
 // ============================================================================
-// DLP Context — 暴露 DLP 状态给外层组件（弹窗等）
+// DLP Context — 完整版，与 ChatRuntimeProvider 接口对齐
 // ============================================================================
 
 interface DlpState {
   blocked: boolean;
   blockReason: string | null;
   clearBlock: () => void;
+  redactedStats: SanitizationStats | null;
+  clearRedacted: () => void;
+  onBlocked: (reason: string) => void;
+  onRedacted: (stats: SanitizationStats) => void;
 }
 
 const DlpContext = createContext<DlpState>({
   blocked: false,
   blockReason: null,
   clearBlock: () => {},
+  redactedStats: null,
+  clearRedacted: () => {},
+  onBlocked: () => {},
+  onRedacted: () => {},
 });
 
 export const useDlpState = () => useContext(DlpContext);
@@ -93,16 +109,12 @@ export const useDlpState = () => useContext(DlpContext);
 function convertMessage(msg: TauriMessage): ThreadMessageLike {
   const parts: Array<{ type: 'text'; text: string } | { type: 'reasoning'; text: string }> = [];
 
-  // 思考链放在文本前面（和 Claude/ChatGPT 的展示顺序一致）
   if (msg.reasoning) {
     parts.push({ type: 'reasoning', text: msg.reasoning });
   }
-
   if (msg.content) {
     parts.push({ type: 'text', text: msg.content });
   }
-
-  // 至少有一个 part
   if (parts.length === 0) {
     parts.push({ type: 'text', text: '' });
   }
@@ -116,6 +128,22 @@ function convertMessage(msg: TauriMessage): ThreadMessageLike {
 }
 
 // ============================================================================
+// 系统状态过滤（非 AI 推理内容，不显示在思考链中）
+// ============================================================================
+
+const SYSTEM_STATUS_PREFIXES = [
+  'Processing',
+  'Calling LLM',
+  'Waiting for',
+  'Connecting',
+  'Retrying',
+];
+
+function isSystemStatus(message: string): boolean {
+  return SYSTEM_STATUS_PREFIXES.some((p) => message.startsWith(p));
+}
+
+// ============================================================================
 // Provider 组件
 // ============================================================================
 
@@ -123,26 +151,37 @@ export function TauriRuntimeProvider({
   children,
   threadId,
   onThreadCreated,
+  modelId,
 }: TauriRuntimeProviderProps) {
   const [messages, setMessages] = useState<TauriMessage[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const threadIdRef = useRef(threadId);
+  const modelIdRef = useRef(modelId);
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const msgIdCounter = useRef(1);
   const { scanUserInput } = useDlpScan();
 
-  // DLP 阻止状态
+  // DLP 状态（完整版）
   const [dlpBlocked, setDlpBlocked] = useState(false);
   const [dlpBlockReason, setDlpBlockReason] = useState<string | null>(null);
+  const [dlpRedactedStats, setDlpRedactedStats] = useState<SanitizationStats | null>(null);
+
   const clearDlpBlock = useCallback(() => {
     setDlpBlocked(false);
     setDlpBlockReason(null);
   }, []);
+  const clearDlpRedacted = useCallback(() => setDlpRedactedStats(null), []);
+  const onBlockedCb = useCallback((reason: string) => {
+    setDlpBlocked(true);
+    setDlpBlockReason(reason);
+  }, []);
+  const onRedactedCb = useCallback((stats: SanitizationStats) => {
+    setDlpRedactedStats(stats);
+  }, []);
 
-  // 同步 threadId ref
-  useEffect(() => {
-    threadIdRef.current = threadId;
-  }, [threadId]);
+  // 同步 refs
+  useEffect(() => { threadIdRef.current = threadId; }, [threadId]);
+  useEffect(() => { modelIdRef.current = modelId; }, [modelId]);
 
   // ── 加载历史消息 ──
   useEffect(() => {
@@ -171,7 +210,7 @@ export function TauriRuntimeProvider({
     }
   };
 
-  // ── SSE 事件监听 ──
+  // ── chat-event 监听 ──
   useEffect(() => {
     let mounted = true;
 
@@ -198,36 +237,16 @@ export function TauriRuntimeProvider({
     };
   }, []);
 
-  // ── 处理 SSE 事件 ──
-  // 临时 assistant 消息 ID（thinking 阶段创建，response 阶段更新）
+  // ── 处理 chat-event（思考链 + 流式 + 工具 + 响应）──
   const pendingAssistantId = useRef<string | null>(null);
   const thinkingBuffer = useRef<string>('');
-
-  /** 系统状态消息（非 AI 推理），不显示在思考链中 */
-  const SYSTEM_STATUS_PATTERNS = [
-    'Processing',
-    'Calling LLM',
-    'Waiting for',
-    'Connecting',
-    'Retrying',
-  ];
-
-  function isSystemStatus(message: string): boolean {
-    return SYSTEM_STATUS_PATTERNS.some((p) => message.startsWith(p));
-  }
 
   const handleChatEvent = useCallback((event: ChatEvent) => {
     switch (event.type) {
       case 'thinking': {
         setIsRunning(true);
+        if (isSystemStatus(event.message)) break;
 
-        // 过滤系统状态消息，只保留 AI 推理内容
-        if (isSystemStatus(event.message)) {
-          tracing.debug('Filtered system status from thinking', { message: event.message });
-          break;
-        }
-
-        // 累积真正的思考内容
         thinkingBuffer.current += (thinkingBuffer.current ? '\n' : '') + event.message;
 
         if (!pendingAssistantId.current) {
@@ -235,50 +254,66 @@ export function TauriRuntimeProvider({
           pendingAssistantId.current = tempId;
           setMessages((prev) => [
             ...prev,
-            {
-              id: tempId,
-              role: 'assistant',
-              content: '',
-              reasoning: thinkingBuffer.current,
-              timestamp: Date.now(),
-            },
+            { id: tempId, role: 'assistant', content: '', reasoning: thinkingBuffer.current, timestamp: Date.now() },
           ]);
         } else {
           const tempId = pendingAssistantId.current;
           setMessages((prev) =>
-            prev.map((m) =>
-              m.id === tempId ? { ...m, reasoning: thinkingBuffer.current } : m,
-            ),
+            prev.map((m) => (m.id === tempId ? { ...m, reasoning: thinkingBuffer.current } : m)),
           );
         }
         break;
       }
 
-      case 'response': {
-        if (pendingAssistantId.current) {
-          // 有思考链：更新临时消息，加上最终回复内容
-          const tempId = pendingAssistantId.current;
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === tempId
-                ? { ...m, id: event.message_id, content: event.content }
-                : m,
-            ),
-          );
-        } else {
-          // 没有思考链：直接添加 assistant 消息
+      case 'stream_chunk': {
+        setIsRunning(true);
+        if (!pendingAssistantId.current) {
+          const tempId = `stream-${Date.now()}`;
+          pendingAssistantId.current = tempId;
           setMessages((prev) => [
             ...prev,
-            {
-              id: event.message_id,
-              role: 'assistant',
-              content: event.content,
-              timestamp: Date.now(),
-            },
+            { id: tempId, role: 'assistant', content: event.content, timestamp: Date.now() },
+          ]);
+        } else {
+          const tempId = pendingAssistantId.current;
+          setMessages((prev) =>
+            prev.map((m) => (m.id === tempId ? { ...m, content: m.content + event.content } : m)),
+          );
+        }
+        break;
+      }
+
+      case 'tool_started': {
+        setIsRunning(true);
+        tracing.debug('Tool started', { name: event.name });
+        break;
+      }
+
+      case 'tool_completed': {
+        if (!event.success) {
+          tracing.warn('Tool failed', { name: event.name, error: event.error });
+        }
+        break;
+      }
+
+      case 'approval_needed': {
+        tracing.info('Tool approval needed', { tool: event.tool_name, requestId: event.request_id });
+        // TODO: 弹出审批对话框，调用 ic_approve_tool / ic_deny_tool
+        break;
+      }
+
+      case 'response': {
+        if (pendingAssistantId.current) {
+          const tempId = pendingAssistantId.current;
+          setMessages((prev) =>
+            prev.map((m) => (m.id === tempId ? { ...m, id: event.message_id, content: event.content } : m)),
+          );
+        } else {
+          setMessages((prev) => [
+            ...prev,
+            { id: event.message_id, role: 'assistant', content: event.content, timestamp: Date.now() },
           ]);
         }
-
-        // 重置状态
         pendingAssistantId.current = null;
         thinkingBuffer.current = '';
         setIsRunning(false);
@@ -291,6 +326,10 @@ export function TauriRuntimeProvider({
         setIsRunning(false);
         tracing.error('Chat event error', { message: event.message, code: event.code });
         break;
+
+      case 'connection_status':
+        tracing.info('Connection status', { connected: event.connected, message: event.message });
+        break;
     }
   }, []);
 
@@ -302,22 +341,22 @@ export function TauriRuntimeProvider({
 
       const rawContent = textPart.text;
 
-      // 1. DLP 扫描
+      // 1. DLP 扫描（Fail-Safe：扫描失败时阻止发送）
       let content = rawContent;
       try {
         const dlpResult = await scanUserInput(rawContent);
         if (dlpResult.was_blocked) {
           tracing.warn('DLP blocked message');
-          setDlpBlocked(true);
-          setDlpBlockReason(dlpResult.block_reason || '内容包含敏感信息');
+          onBlockedCb(dlpResult.block_reason || '内容包含敏感信息');
           return;
         }
-        content = dlpResult.sanitized_content;
+        if (dlpResult.had_sensitive_data) {
+          onRedactedCb(dlpResult.sanitization_stats);
+          content = dlpResult.sanitized_content;
+        }
       } catch {
-        // DLP 扫描失败时 Fail-Safe：阻止发送
-        tracing.error('DLP scan failed, blocking message');
-        setDlpBlocked(true);
-        setDlpBlockReason('安全扫描失败，无法发送消息');
+        tracing.error('DLP scan failed, blocking message (fail-safe)');
+        onBlockedCb('安全扫描失败，无法发送消息');
         return;
       }
 
@@ -345,21 +384,21 @@ export function TauriRuntimeProvider({
       setMessages((prev) => [...prev, userMsg]);
       setIsRunning(true);
 
-      // 4. 发送到后端
+      // 4. 发送到 Agent（含可选 modelId）
       try {
         await invoke<SendMessageResponse>('send_chat_message', {
           threadId: tid,
           content,
+          modelId: modelIdRef.current ?? null,
         });
       } catch (err) {
         tracing.error('Failed to send message', { error: err });
         setIsRunning(false);
       }
     },
-    [scanUserInput, onThreadCreated],
+    [scanUserInput, onThreadCreated, onBlockedCb, onRedactedCb],
   );
 
-  // ── 取消生成 ──
   const onCancel = useCallback(async () => {
     setIsRunning(false);
   }, []);
@@ -380,7 +419,17 @@ export function TauriRuntimeProvider({
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <DlpContext.Provider value={{ blocked: dlpBlocked, blockReason: dlpBlockReason, clearBlock: clearDlpBlock }}>
+      <DlpContext.Provider
+        value={{
+          blocked: dlpBlocked,
+          blockReason: dlpBlockReason,
+          clearBlock: clearDlpBlock,
+          redactedStats: dlpRedactedStats,
+          clearRedacted: clearDlpRedacted,
+          onBlocked: onBlockedCb,
+          onRedacted: onRedactedCb,
+        }}
+      >
         {children}
       </DlpContext.Provider>
     </AssistantRuntimeProvider>

@@ -9,7 +9,7 @@ import { ToolFallback } from "@/app/components/assistant-ui/tool-fallback";
 import { TooltipIconButton } from "@/app/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/app/components/ui/button";
 import { cn } from "@/app/components/ui/utils";
-import { useDlpState } from "@/app/runtime/ChatRuntimeProvider";
+import { useDlpState } from "@/app/runtime/TauriRuntimeProvider";
 import {
   ActionBarMorePrimitive,
   ActionBarPrimitive,

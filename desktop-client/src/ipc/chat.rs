@@ -40,6 +40,7 @@ pub async fn send_chat_message(
     state: State<'_, EngineState>,
     thread_id: String,
     content: String,
+    model_id: Option<String>,
 ) -> Result<SendMessageResponse, String> {
     let state = state.get()?;
     let message_id = uuid::Uuid::new_v4().to_string();
@@ -70,9 +71,23 @@ pub async fn send_chat_message(
         content
     };
 
+    // 构造 metadata，包含可选的模型覆盖
+    let metadata = match &model_id {
+        Some(id) => {
+            tracing::debug!(
+                message_id = %message_id,
+                model_id = %id,
+                "Model override requested"
+            );
+            serde_json::json!({ "model_override": id })
+        }
+        None => serde_json::Value::Null,
+    };
+
     let msg = IncomingMessage::new("tauri", &state.owner_id, &safe_content)
         .with_thread(&thread_id)
-        .with_owner_id(&state.owner_id);
+        .with_owner_id(&state.owner_id)
+        .with_metadata(metadata);
 
     state
         .msg_sender
@@ -83,6 +98,7 @@ pub async fn send_chat_message(
     tracing::debug!(
         message_id = %message_id,
         thread_id = %thread_id,
+        model_override = ?model_id,
         "Message injected into agent loop"
     );
 

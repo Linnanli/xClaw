@@ -84,4 +84,58 @@ mod tests {
         assert!(!json_str.contains("thread_id"));
         assert!(!json_str.contains("owner_id"));
     }
+
+    // =========================================================================
+    // model_id 参数测试
+    // =========================================================================
+
+    /// 验证 model_override 正确注入到 IncomingMessage metadata。
+    #[test]
+    fn test_model_override_metadata_injection() {
+        use ironclaw::channels::IncomingMessage;
+
+        let model_id = Some("deepseek-chat".to_string());
+        let metadata = match &model_id {
+            Some(id) => serde_json::json!({ "model_override": id }),
+            None => serde_json::Value::Null,
+        };
+
+        let msg = IncomingMessage::new("tauri", "user1", "hello")
+            .with_metadata(metadata);
+
+        assert_eq!(
+            msg.metadata.get("model_override").and_then(|v| v.as_str()),
+            Some("deepseek-chat"),
+        );
+    }
+
+    /// 验证 model_id 为 None 时 metadata 保持 Null。
+    #[test]
+    fn test_no_model_override_metadata_is_null() {
+        use ironclaw::channels::IncomingMessage;
+
+        let model_id: Option<String> = None;
+        let metadata = match &model_id {
+            Some(id) => serde_json::json!({ "model_override": id }),
+            None => serde_json::Value::Null,
+        };
+
+        let msg = IncomingMessage::new("tauri", "user1", "hello")
+            .with_metadata(metadata);
+
+        assert!(msg.metadata.is_null());
+    }
+
+    /// 安全审计：model_id 不应出现在 SendMessageResponse 中。
+    #[test]
+    fn test_audit_model_id_not_in_response() {
+        let resp = SendMessageResponse {
+            message_id: "msg-001".into(),
+            success: true,
+        };
+        let json_str = serde_json::to_string(&resp).unwrap();
+
+        assert!(!json_str.contains("model"), "model info should not leak in response");
+        assert!(!json_str.contains("deepseek"), "model name should not leak in response");
+    }
 }
