@@ -7,7 +7,7 @@ use proptest::prelude::*;
 #[test]
 fn test_policy_version_initialization() {
     let manager = PolicySyncManager::new();
-    let version = manager.get_local_version();
+    let version = manager.get_version();
 
     assert_eq!(version.dlp_rules_version, 0);
     assert_eq!(version.sensitive_ops_version, 0);
@@ -119,7 +119,10 @@ proptest! {
 
         manager.update_sensitive_ops_policies(policies, 1).unwrap();
 
-        let found = manager.check_sensitive_operation(&operation);
+        let found = manager.get_sensitive_ops_policies()
+            .iter()
+            .find(|p| p.operation == operation)
+            .cloned();
         prop_assert!(found.is_some());
         prop_assert_eq!(&found.unwrap().operation, &operation);
     }
@@ -133,11 +136,11 @@ proptest! {
         let policies = vec![];
 
         manager.update_dlp_policies(policies.clone(), version1).unwrap();
-        let v1 = manager.get_local_version().dlp_rules_version;
+        let v1 = manager.get_version().dlp_rules_version;
         prop_assert_eq!(v1, version1);
 
         manager.update_dlp_policies(policies, version2).unwrap();
-        let v2 = manager.get_local_version().dlp_rules_version;
+        let v2 = manager.get_version().dlp_rules_version;
         prop_assert_eq!(v2, version2);
     }
 }
@@ -213,9 +216,9 @@ fn test_policy_sync_timestamp() {
     let mut manager = PolicySyncManager::new();
     let policies = vec![];
 
-    let before = manager.get_local_version().last_sync;
+    let before = manager.get_version().last_sync;
     manager.update_dlp_policies(policies, 1).unwrap();
-    let after = manager.get_local_version().last_sync;
+    let after = manager.get_version().last_sync;
 
     assert!(after >= before);
 }

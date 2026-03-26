@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::State;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
 use crate::state::EngineState;
 

@@ -36,10 +36,6 @@ vi.mock('../../tabs/RoutinesTab', () => ({
   RoutinesTab: () => <div data-testid="routines-tab">Routines Content</div>,
 }));
 
-vi.mock('../../tabs/SettingsTab', () => ({
-  SettingsTab: () => <div data-testid="settings-tab">Settings Content</div>,
-}));
-
 vi.mock('../../common/DynamicWatermark', () => ({
   DynamicWatermark: () => null,
 }));
