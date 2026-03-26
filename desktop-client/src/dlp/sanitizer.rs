@@ -204,90 +204,105 @@ impl DlpSanitizer {
 
     /// 应用脱敏处理
     fn apply_sanitization(&self, content: &str, detection_result: &DlpDetectionResult) -> String {
-        let mut result = content.to_string();
-        
-        // 按位置倒序排序，避免替换时位置偏移
-        let mut matches = detection_result.matches.clone();
-        matches.sort_by(|a, b| b.location.start.cmp(&a.location.start));
-        
-        for dlp_match in &matches {
-            if dlp_match.action == DlpAction::Redact {
-                let replacement = self.get_replacement_text(dlp_match, content);
-                
-                // 替换敏感内容
-                // 使用 is_char_boundary 确保字节偏移在 UTF-8 字符边界上，
-                // 避免多字节字符（如中文）导致 panic
-                let start = dlp_match.location.start;
-                let end = dlp_match.location.end;
-                if end <= result.len()
-                    && result.is_char_boundary(start)
-                    && result.is_char_boundary(end)
-                {
-                    result.replace_range(start..end, &replacement);
-                } else {
-                    tracing::warn!(
-                        pattern = %dlp_match.pattern_name,
-                        start = start,
-                        end = end,
-                        len = result.len(),
-                        "Skipping replacement: byte range not on char boundary"
-                    );
-                }
+        // 优先使用 LeakDetector 已经处理好的脱敏内容（字节边界安全）
+        if let Some(ref already_redacted) = detection_result.sanitized_content {
+            // LeakDetector 已经做了脱敏，但我们需要应用格式保留规则
+            // 检查是否有需要格式保留的模式（身份证、手机号、银行卡）
+            let needs_format_preservation = detection_result.matches.iter().any(|m| {
+                matches!(
+                    m.pattern_name.as_str(),
+                    "chinese_id_card_18" | "chinese_id_card_15" | "chinese_mobile" | "chinese_bank_card"
+                )
+            });
+
+            if self.config.preserve_format && needs_format_preservation {
+                // 用格式保留替换重新处理原始内容
+                return self.apply_format_preserving_replacement(content, detection_result);
             }
+
+            return already_redacted.clone();
         }
-        
-        result
+
+        // 回退：手动替换（字节边界安全版本）
+        self.apply_format_preserving_replacement(content, detection_result)
     }
 
-    /// 获取替换文本
-    fn get_replacement_text(&self, dlp_match: &crate::dlp::DlpMatch, original_content: &str) -> String {
-        // 首先检查是否有自定义替换文本
+    /// 格式保留替换（字节边界安全）
+    fn apply_format_preserving_replacement(&self, content: &str, detection_result: &DlpDetectionResult) -> String {
+        // 转为 char 数组操作，避免字节偏移问题
+        let chars: Vec<char> = content.chars().collect();
+        
+        // 构建字节偏移 → char 索引的映射
+        let mut byte_to_char: Vec<usize> = vec![0; content.len() + 1];
+        let mut char_idx = 0;
+        for (byte_idx, _ch) in content.char_indices() {
+            byte_to_char[byte_idx] = char_idx;
+            char_idx += 1;
+        }
+        byte_to_char[content.len()] = char_idx;
+
+        // 按 char 位置倒序排序，避免替换时偏移
+        let mut replacements: Vec<(usize, usize, String)> = Vec::new();
+        for dlp_match in &detection_result.matches {
+            if dlp_match.action != DlpAction::Redact {
+                continue;
+            }
+            let start_byte = dlp_match.location.start;
+            let end_byte = dlp_match.location.end;
+            if end_byte > content.len() {
+                continue;
+            }
+            let start_char = byte_to_char[start_byte];
+            let end_char = byte_to_char[end_byte];
+            let original: String = chars[start_char..end_char].iter().collect();
+            let replacement = self.get_replacement_for_match(dlp_match, &original);
+            replacements.push((start_char, end_char, replacement));
+        }
+
+        // 倒序替换
+        replacements.sort_by(|a, b| b.0.cmp(&a.0));
+        let mut result_chars = chars;
+        for (start_char, end_char, replacement) in replacements {
+            let replacement_chars: Vec<char> = replacement.chars().collect();
+            result_chars.splice(start_char..end_char, replacement_chars);
+        }
+
+        result_chars.iter().collect()
+    }
+
+    /// 根据匹配获取替换文本
+    fn get_replacement_for_match(&self, dlp_match: &crate::dlp::DlpMatch, original_text: &str) -> String {
         if let Some(replacement) = self.config.replacement_map.get(&dlp_match.pattern_name) {
             if self.config.preserve_format {
-                return self.apply_format_preservation(dlp_match, original_content, replacement);
-            } else {
-                return replacement.clone();
+                return self.apply_format_preservation_for_text(dlp_match, original_text, replacement);
             }
+            return replacement.clone();
         }
-        
-        // 使用默认脱敏文本
         if self.config.preserve_format {
-            self.apply_format_preservation(dlp_match, original_content, &self.config.default_redaction)
+            self.apply_format_preservation_for_text(dlp_match, original_text, &self.config.default_redaction)
         } else {
             self.config.default_redaction.clone()
         }
     }
 
-    /// 应用格式保留脱敏
-    fn apply_format_preservation(
+    /// 对已提取的原始文本应用格式保留
+    fn apply_format_preservation_for_text(
         &self,
         dlp_match: &crate::dlp::DlpMatch,
-        original_content: &str,
+        original_text: &str,
         fallback_replacement: &str,
     ) -> String {
-        let start = dlp_match.location.start;
-        let end = dlp_match.location.end;
-        // 安全地获取原始文本，避免多字节字符导致 panic
-        let original_text = if end <= original_content.len()
-            && original_content.is_char_boundary(start)
-            && original_content.is_char_boundary(end)
-        {
-            &original_content[start..end]
-        } else {
-            return fallback_replacement.to_string();
-        };
         let preserve_config = &self.config.format_preservation;
-        
         match dlp_match.pattern_name.as_str() {
             "chinese_id_card_18" | "chinese_id_card_15" => {
                 self.preserve_format_generic(original_text, preserve_config.id_card_preserve_chars, preserve_config.mask_char)
-            },
+            }
             "chinese_mobile" => {
                 self.preserve_format_mobile(original_text, preserve_config.mobile_preserve_chars, preserve_config.mask_char)
-            },
+            }
             "chinese_bank_card" => {
                 self.preserve_format_generic(original_text, preserve_config.bank_card_preserve_chars, preserve_config.mask_char)
-            },
+            }
             _ => fallback_replacement.to_string(),
         }
     }

@@ -18,6 +18,8 @@ import {
 } from '@assistant-ui/react';
 import { ExportedMessageRepository } from '@assistant-ui/core/runtime/utils/message-repository';
 import { threadApi } from '../utils/tauri';
+import { invoke } from '@tauri-apps/api/core';
+import type { SanitizationResult, SanitizationStats } from '../hooks/useDlpScan';
 
 // ============================================================================
 // DLP Context
@@ -27,12 +29,17 @@ interface DlpState {
   blocked: boolean;
   blockReason: string | null;
   clearBlock: () => void;
+  /** 脱敏警告（type='redacted'） */
+  redactedStats: SanitizationStats | null;
+  clearRedacted: () => void;
 }
 
 const DlpContext = createContext<DlpState>({
   blocked: false,
   blockReason: null,
   clearBlock: () => {},
+  redactedStats: null,
+  clearRedacted: () => {},
 });
 
 export const useDlpState = () => useContext(DlpContext);
@@ -83,9 +90,53 @@ async function* parseOpenAISse(
 // ChatModelAdapter 工厂
 // ============================================================================
 
-function createChatModelAdapter(apiUrl: string, modelId: string): ChatModelAdapter {
+interface DlpCallbacks {
+  onBlocked: (reason: string) => void;
+  onRedacted: (stats: SanitizationStats) => void;
+}
+
+function createChatModelAdapter(
+  apiUrl: string,
+  modelId: string,
+  dlp: DlpCallbacks,
+): ChatModelAdapter {
   return {
     async *run({ messages, abortSignal }: ChatModelRunOptions) {
+      // ── DLP 扫描最后一条用户消息 ──────────────────────────────
+      const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
+      if (lastUserMsg) {
+        const rawText = lastUserMsg.content
+          .filter((p) => p.type === 'text')
+          .map((p) => (p as { type: 'text'; text: string }).text)
+          .join('\n');
+
+        let dlpResult: SanitizationResult;
+        try {
+          dlpResult = await invoke<SanitizationResult>('scan_user_input', { content: rawText });
+        } catch (err) {
+          // Fail-Safe：扫描失败时阻止发送
+          dlp.onBlocked(`DLP 扫描失败，消息已被阻止: ${String(err)}`);
+          return;
+        }
+
+        if (dlpResult.was_blocked) {
+          dlp.onBlocked(dlpResult.block_reason ?? '消息包含高危敏感信息，已被安全策略阻止。');
+          return;
+        }
+
+        if (dlpResult.had_sensitive_data) {
+          dlp.onRedacted(dlpResult.sanitization_stats);
+          // 用脱敏后的内容替换最后一条用户消息
+          const sanitized = dlpResult.sanitized_content;
+          const idx = messages.length - 1 - [...messages].reverse().findIndex((m) => m.role === 'user');
+          messages = messages.map((m, i) =>
+            i === idx
+              ? { ...m, content: [{ type: 'text' as const, text: sanitized }] }
+              : m,
+          );
+        }
+      }
+
       // 转换消息格式
       const openaiMessages = messages.map((m) => ({
         role: m.role,
@@ -139,12 +190,28 @@ export function ChatRuntimeProvider({
 }: ChatRuntimeProviderProps) {
   const [dlpBlocked, setDlpBlocked] = useState(false);
   const [dlpBlockReason, setDlpBlockReason] = useState<string | null>(null);
+  const [dlpRedactedStats, setDlpRedactedStats] = useState<SanitizationStats | null>(null);
+
   const clearDlpBlock = useCallback(() => {
     setDlpBlocked(false);
     setDlpBlockReason(null);
   }, []);
 
-  const adapter = createChatModelAdapter(apiUrl, modelId);
+  const clearDlpRedacted = useCallback(() => {
+    setDlpRedactedStats(null);
+  }, []);
+
+  const dlpCallbacks: DlpCallbacks = {
+    onBlocked: useCallback((reason: string) => {
+      setDlpBlocked(true);
+      setDlpBlockReason(reason);
+    }, []),
+    onRedacted: useCallback((stats: SanitizationStats) => {
+      setDlpRedactedStats(stats);
+    }, []),
+  };
+
+  const adapter = createChatModelAdapter(apiUrl, modelId, dlpCallbacks);
   const runtime = useLocalRuntime(adapter);
 
   // 加载历史消息（切换线程时触发）
@@ -173,7 +240,13 @@ export function ChatRuntimeProvider({
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <DlpContext.Provider
-        value={{ blocked: dlpBlocked, blockReason: dlpBlockReason, clearBlock: clearDlpBlock }}
+        value={{
+          blocked: dlpBlocked,
+          blockReason: dlpBlockReason,
+          clearBlock: clearDlpBlock,
+          redactedStats: dlpRedactedStats,
+          clearRedacted: clearDlpRedacted,
+        }}
       >
         {children}
       </DlpContext.Provider>

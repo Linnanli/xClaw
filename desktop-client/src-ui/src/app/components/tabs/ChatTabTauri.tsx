@@ -52,7 +52,7 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect: _onThreadSelect
       modelId={modelConfig.selectedModelId}
       threadId={selectedThreadId ?? undefined}
     >
-      <div className="flex h-full flex-col bg-background">
+      <div className="relative flex h-full flex-col bg-background">
         <Thread />
       </div>
 

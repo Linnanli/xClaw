@@ -9,6 +9,7 @@ import { ToolFallback } from "@/app/components/assistant-ui/tool-fallback";
 import { TooltipIconButton } from "@/app/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/app/components/ui/button";
 import { cn } from "@/app/components/ui/utils";
+import { useDlpState } from "@/app/runtime/ChatRuntimeProvider";
 import {
   ActionBarMorePrimitive,
   ActionBarPrimitive,
@@ -32,6 +33,7 @@ import {
   MoreHorizontalIcon,
   PencilIcon,
   RefreshCwIcon,
+  ShieldCheck,
   SquareIcon,
 } from "lucide-react";
 import type { FC } from "react";
@@ -298,6 +300,9 @@ const AssistantActionBar: FC = () => {
 };
 
 const UserMessage: FC = () => {
+  const dlp = useDlpState();
+  const isLast = useAuiState((s) => s.message.isLast);
+
   return (
     <MessagePrimitive.Root
       className="aui-user-message-root fade-in slide-in-from-bottom-1 mx-auto grid w-full max-w-(--thread-max-width) animate-in auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 py-3 duration-150 [&:where(>*)]:col-start-2"
@@ -313,6 +318,20 @@ const UserMessage: FC = () => {
           <UserActionBar />
         </div>
       </div>
+
+      {/* DLP 紧凑提示条 — 仅最后一条用户消息且有脱敏时显示 */}
+      {isLast && dlp.redactedStats && (
+        <div className="col-start-2 flex justify-end">
+          <div
+            className="flex items-center gap-1.5 rounded-[4px] border-l-[3px] border-[#f59e0b] bg-[#fffbeb] px-2 py-0 text-[12px] text-[#92400e]"
+            style={{ height: 28 }}
+          >
+            <ShieldCheck size={12} className="text-[#d97706]" />
+            <span className="font-medium">DLP 安全提示：</span>
+            <span>检测到敏感信息，已自动脱敏 {dlp.redactedStats.redacted_count} 处</span>
+          </div>
+        </div>
+      )}
 
       <BranchPicker className="aui-user-branch-picker col-span-full col-start-1 row-start-3 -mr-1 justify-end" />
     </MessagePrimitive.Root>

@@ -22215,74 +22215,60 @@
                                   "fontWeight": "normal"
                                 },
                                 {
-                                  "type": "text",
-                                  "id": "pupsy",
-                                  "fill": "#4A4947",
-                                  "content": "330326****0156**",
-                                  "fontFamily": "Outfit",
-                                  "fontSize": 14,
-                                  "fontWeight": "600",
-                                  "letterSpacing": 1
+                                  "type": "frame",
+                                  "id": "1zfUu",
+                                  "name": "row",
+                                  "gap": 6,
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "pupsy",
+                                      "fill": "#4A4947",
+                                      "content": "330326****0156**",
+                                      "fontFamily": "Outfit",
+                                      "fontSize": 14,
+                                      "fontWeight": "600",
+                                      "letterSpacing": 1
+                                    },
+                                    {
+                                      "type": "frame",
+                                      "id": "FgFma",
+                                      "name": "tag",
+                                      "fill": "#dcfce7",
+                                      "cornerRadius": 4,
+                                      "gap": 3,
+                                      "padding": [
+                                        2,
+                                        6
+                                      ],
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "icon_font",
+                                          "id": "au5z4",
+                                          "name": "icon",
+                                          "width": 10,
+                                          "height": 10,
+                                          "iconFontName": "shield-check",
+                                          "iconFontFamily": "lucide",
+                                          "fill": "#16a34a"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "caxVC",
+                                          "name": "tagText",
+                                          "fill": "#16a34a",
+                                          "content": "已脱敏",
+                                          "fontFamily": "Inter",
+                                          "fontSize": 10,
+                                          "fontWeight": "500"
+                                        }
+                                      ]
+                                    }
+                                  ]
                                 }
                               ]
-                            }
-                          ]
-                        }
-                      ]
-                    },
-                    {
-                      "type": "frame",
-                      "id": "T0iIM",
-                      "name": "dlpAlert",
-                      "width": "fill_container",
-                      "fill": "#FFF8E6",
-                      "cornerRadius": 12,
-                      "stroke": {
-                        "align": "inside",
-                        "thickness": 1,
-                        "fill": "#F0D060"
-                      },
-                      "gap": 10,
-                      "padding": [
-                        12,
-                        16
-                      ],
-                      "alignItems": "center",
-                      "children": [
-                        {
-                          "type": "icon_font",
-                          "id": "Sdmjy",
-                          "width": 18,
-                          "height": 18,
-                          "iconFontName": "shield-alert",
-                          "iconFontFamily": "lucide",
-                          "fill": "#C8960A"
-                        },
-                        {
-                          "type": "frame",
-                          "id": "bUoBn",
-                          "name": "dlpTextWrap",
-                          "width": "fill_container",
-                          "layout": "vertical",
-                          "gap": 2,
-                          "children": [
-                            {
-                              "type": "text",
-                              "id": "OFlVW",
-                              "fill": "#8B6914",
-                              "content": "DLP 安全提示：检测到敏感信息已自动脱敏",
-                              "fontFamily": "Outfit",
-                              "fontSize": 13,
-                              "fontWeight": "600"
-                            },
-                            {
-                              "type": "text",
-                              "id": "s72iS",
-                              "fill": "#A68520",
-                              "content": "身份证号码已按企业安全策略进行部分遮蔽处理",
-                              "fontFamily": "Outfit",
-                              "fontSize": 12,
-                              "fontWeight": "normal"
                             }
                           ]
                         }
