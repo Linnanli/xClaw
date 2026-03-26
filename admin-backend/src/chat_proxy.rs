@@ -49,52 +49,67 @@ pub struct ChatCompletionRequest {
 
 fn default_true() -> bool { true }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 pub struct ChatMessage {
     pub role: String,
-    /// AI SDK 发送的 content 可能是字符串或 parts 数组
-    #[serde(deserialize_with = "deserialize_content")]
     pub content: String,
 }
 
-/// 兼容 AI SDK 的 content 格式：
-/// - 字符串：`"hello"`
-/// - 数组：`[{"type":"text","text":"hello"}]`
-fn deserialize_content<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::de;
+/// 自定义反序列化：兼容 OpenAI 格式（`content` 字段）和 Vercel AI SDK 格式（`parts` 字段）
+///
+/// 支持的格式：
+/// - `{"role":"user","content":"hello"}`                          — OpenAI 字符串
+/// - `{"role":"user","content":[{"type":"text","text":"hello"}]}` — OpenAI parts 数组
+/// - `{"role":"user","parts":[{"type":"text","text":"hello"}]}`   — Vercel AI SDK UIMessage
+impl<'de> Deserialize<'de> for ChatMessage {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de;
 
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Content {
-        Text(String),
-        Parts(Vec<ContentPart>),
-    }
-
-    #[derive(Deserialize)]
-    struct ContentPart {
-        #[serde(rename = "type")]
-        part_type: Option<String>,
-        text: Option<String>,
-    }
-
-    match Content::deserialize(deserializer)? {
-        Content::Text(s) => Ok(s),
-        Content::Parts(parts) => {
-            let text = parts
-                .iter()
-                .filter(|p| p.part_type.as_deref() == Some("text"))
-                .filter_map(|p| p.text.as_deref())
-                .collect::<Vec<_>>()
-                .join("\n");
-            if text.is_empty() {
-                Err(de::Error::custom("no text content in message parts"))
-            } else {
-                Ok(text)
-            }
+        #[derive(Deserialize)]
+        struct RawMessage {
+            role: String,
+            content: Option<serde_json::Value>,
+            parts: Option<serde_json::Value>,
         }
+
+        let raw = RawMessage::deserialize(deserializer)?;
+
+        let content = if let Some(content_val) = raw.content {
+            parse_content_value(content_val).map_err(de::Error::custom)?
+        } else if let Some(parts_val) = raw.parts {
+            parse_parts_value(parts_val).map_err(de::Error::custom)?
+        } else {
+            return Err(de::Error::custom("message must have 'content' or 'parts' field"));
+        };
+
+        Ok(ChatMessage { role: raw.role, content })
+    }
+}
+
+/// 解析 content 字段（字符串或 parts 数组）
+fn parse_content_value(val: serde_json::Value) -> std::result::Result<String, String> {
+    match val {
+        serde_json::Value::String(s) => Ok(s),
+        serde_json::Value::Array(_) => parse_parts_value(val),
+        _ => Err("content must be string or array".to_string()),
+    }
+}
+
+/// 从 parts 数组提取文本
+fn parse_parts_value(val: serde_json::Value) -> std::result::Result<String, String> {
+    let arr = val.as_array().ok_or("parts must be an array")?;
+    let text: String = arr.iter()
+        .filter(|p| p.get("type").and_then(|t| t.as_str()) == Some("text"))
+        .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.is_empty() {
+        Err("no text content in message parts".to_string())
+    } else {
+        Ok(text)
     }
 }
 
@@ -103,11 +118,21 @@ where
 // ============================================================================
 
 /// POST /api/chat/completions — 调用 LLM 并返回 Data Stream 格式
-#[instrument(skip_all, fields(model = %body.model))]
+#[instrument(skip_all)]
 pub async fn chat_completions_handler(
     State(state): State<AppState>,
-    Json(body): Json<ChatCompletionRequest>,
+    body_bytes: axum::body::Bytes,
 ) -> Result<Response> {
+    // 调试：打印原始请求体
+    let raw_str = String::from_utf8_lossy(&body_bytes);
+    tracing::info!(raw_body = %raw_str, "Received chat completion request");
+
+    let body: ChatCompletionRequest = serde_json::from_slice(&body_bytes)
+        .map_err(|e| {
+            tracing::error!(error = %e, raw_body = %raw_str, "Failed to deserialize request");
+            Error::Validation(format!("Failed to deserialize the JSON body into the target type: {}", e))
+        })?;
+
     let client = state.db_pool.get().await
         .map_err(|e| Error::Database(e.to_string()))?;
 
@@ -184,43 +209,38 @@ pub async fn chat_completions_handler(
     let response = llm.complete(request).await
         .map_err(|e| Error::Validation(format!("LLM 调用失败: {}", e)))?;
 
-    // 6. 编码为 OpenAI 兼容 SSE 格式（前端 ChatModelAdapter 解析）
+    // 6. 编码为 Vercel AI SDK Data Stream 格式（UIMessageChunk JSON 事件流）
+    //
+    // 协议：每行一个 JSON 对象，用 \n 分隔
+    // 前端 DefaultChatTransport.processResponseStream 用 parseJsonEventStream 解析
+    let msg_id = format!("msg-{}", uuid::Uuid::new_v4());
     let mut output = String::new();
 
-    // 模拟 OpenAI streaming 格式
-    let chunk = serde_json::json!({
-        "id": format!("chatcmpl-{}", uuid::Uuid::new_v4()),
-        "object": "chat.completion.chunk",
-        "model": body.model,
-        "choices": [{
-            "index": 0,
-            "delta": { "content": response.content },
-            "finish_reason": null
-        }]
-    });
-    output.push_str(&format!("data: {}\n\n", chunk));
+    // text-start 事件
+    output.push_str(&serde_json::to_string(&serde_json::json!({
+        "type": "text-start",
+        "id": msg_id,
+    })).unwrap());
+    output.push('\n');
 
-    let finish_chunk = serde_json::json!({
-        "id": format!("chatcmpl-{}", uuid::Uuid::new_v4()),
-        "object": "chat.completion.chunk",
-        "model": body.model,
-        "choices": [{
-            "index": 0,
-            "delta": {},
-            "finish_reason": "stop"
-        }],
-        "usage": {
-            "prompt_tokens": response.input_tokens,
-            "completion_tokens": response.output_tokens,
-            "total_tokens": response.input_tokens + response.output_tokens
-        }
-    });
-    output.push_str(&format!("data: {}\n\n", finish_chunk));
-    output.push_str("data: [DONE]\n\n");
+    // text-delta 事件（完整内容作为一个 delta）
+    output.push_str(&serde_json::to_string(&serde_json::json!({
+        "type": "text-delta",
+        "id": msg_id,
+        "delta": response.content,
+    })).unwrap());
+    output.push('\n');
+
+    // text-end 事件
+    output.push_str(&serde_json::to_string(&serde_json::json!({
+        "type": "text-end",
+        "id": msg_id,
+    })).unwrap());
+    output.push('\n');
 
     Ok(Response::builder()
         .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "text/event-stream; charset=utf-8")
+        .header(header::CONTENT_TYPE, "application/json")
         .header(header::CACHE_CONTROL, "no-cache")
         .body(Body::from(output))
         .unwrap())
@@ -245,7 +265,6 @@ mod tests {
 
     #[test]
     fn test_deserialize_content_parts_array() {
-        // AI SDK 发送的 parts 数组格式
         let json = r#"{"role":"user","content":[{"type":"text","text":"你好世界"}]}"#;
         let msg: ChatMessage = serde_json::from_str(json).unwrap();
         assert_eq!(msg.content, "你好世界");
@@ -260,42 +279,165 @@ mod tests {
 
     #[test]
     fn test_deserialize_content_filters_non_text_parts() {
-        // 非 text 类型的 part 应该被过滤
         let json = r#"{"role":"user","content":[{"type":"image","url":"http://..."},{"type":"text","text":"描述图片"}]}"#;
         let msg: ChatMessage = serde_json::from_str(json).unwrap();
         assert_eq!(msg.content, "描述图片");
     }
 
-    // ── 单元测试：OpenAI SSE 格式 ──
+    #[test]
+    fn test_deserialize_vercel_ai_sdk_parts_field() {
+        // Vercel AI SDK UIMessage 格式：parts 字段而不是 content
+        let json = r#"{"role":"user","parts":[{"type":"text","text":"你好AI"}]}"#;
+        let msg: ChatMessage = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.content, "你好AI");
+    }
 
     #[test]
-    fn test_openai_sse_chunk_format() {
-        let chunk = serde_json::json!({
-            "object": "chat.completion.chunk",
+    fn test_deserialize_vercel_ai_sdk_multiple_parts() {
+        let json = r#"{"role":"user","parts":[{"type":"text","text":"第一段"},{"type":"text","text":"第二段"}]}"#;
+        let msg: ChatMessage = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.content, "第一段\n第二段");
+    }
+
+    #[test]
+    fn test_deserialize_content_takes_priority_over_parts() {
+        // 如果同时有 content 和 parts，content 优先
+        let json = r#"{"role":"user","content":"from content","parts":[{"type":"text","text":"from parts"}]}"#;
+        let msg: ChatMessage = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.content, "from content");
+    }
+
+    #[test]
+    fn test_deserialize_ignores_extra_fields() {
+        // UIMessage 有 id、createdAt 等额外字段，应该被忽略
+        let json = r#"{"role":"user","parts":[{"type":"text","text":"hi"}],"id":"msg-1","createdAt":"2024-01-01"}"#;
+        let msg: ChatMessage = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.content, "hi");
+    }
+
+    // ── 契约测试：模拟 useChatRuntime 实际发送的完整请求体 ──
+
+    #[test]
+    fn test_contract_full_usechat_runtime_request() {
+        // 模拟 useChatRuntime + AssistantChatTransport 实际发送的 JSON
+        let json = r#"{
             "model": "deepseek-chat",
-            "choices": [{"index": 0, "delta": {"content": "Hello"}, "finish_reason": null}]
-        });
-        let line = format!("data: {}\n\n", chunk);
-        assert!(line.starts_with("data: "));
-        assert!(line.contains("chat.completion.chunk"));
+            "messages": [
+                {
+                    "id": "msg-abc123",
+                    "role": "user",
+                    "parts": [{"type": "text", "text": "你好"}],
+                    "createdAt": "2024-01-01T00:00:00.000Z"
+                }
+            ],
+            "trigger": "submit-message",
+            "messageId": "msg-abc123"
+        }"#;
+        let req: ChatCompletionRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.model, "deepseek-chat");
+        assert_eq!(req.messages.len(), 1);
+        assert_eq!(req.messages[0].role, "user");
+        assert_eq!(req.messages[0].content, "你好");
+    }
+
+    #[test]
+    fn test_contract_usechat_runtime_multi_turn() {
+        // 多轮对话：user + assistant + user
+        let json = r#"{
+            "model": "deepseek-chat",
+            "messages": [
+                {"role": "user", "parts": [{"type": "text", "text": "你好"}], "id": "m1"},
+                {"role": "assistant", "parts": [{"type": "text", "text": "你好！有什么可以帮你的？"}], "id": "m2"},
+                {"role": "user", "parts": [{"type": "text", "text": "今天天气怎么样"}], "id": "m3"}
+            ]
+        }"#;
+        let req: ChatCompletionRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.messages.len(), 3);
+        assert_eq!(req.messages[0].content, "你好");
+        assert_eq!(req.messages[1].content, "你好！有什么可以帮你的？");
+        assert_eq!(req.messages[2].content, "今天天气怎么样");
+    }
+
+    #[test]
+    fn test_contract_usechat_runtime_with_extra_body_fields() {
+        // useChatRuntime 可能在 body 里加 callSettings、system、tools 等字段
+        let json = r#"{
+            "model": "deepseek-chat",
+            "messages": [{"role": "user", "parts": [{"type": "text", "text": "hi"}], "id": "m1"}],
+            "callSettings": {},
+            "system": null,
+            "tools": {},
+            "trigger": "submit-message"
+        }"#;
+        let req: ChatCompletionRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.messages[0].content, "hi");
+    }
+
+    // ── 失败路径测试 ──
+
+    #[test]
+    fn test_failure_message_no_content_no_parts() {
+        let json = r#"{"role":"user"}"#;
+        let result: std::result::Result<ChatMessage, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("content") || err.contains("parts"));
+    }
+
+    #[test]
+    fn test_failure_parts_empty_array() {
+        let json = r#"{"role":"user","parts":[]}"#;
+        let result: std::result::Result<ChatMessage, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_failure_parts_no_text_type() {
+        let json = r#"{"role":"user","parts":[{"type":"image","url":"http://..."}]}"#;
+        let result: std::result::Result<ChatMessage, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    // ── 单元测试：Data Stream 格式 ──
+
+    #[test]
+    fn test_data_stream_text_start_format() {
+        let event = serde_json::json!({"type": "text-start", "id": "msg-1"});
+        let line = serde_json::to_string(&event).unwrap();
+        assert!(line.contains("text-start"));
+        assert!(line.contains("msg-1"));
+    }
+
+    #[test]
+    fn test_data_stream_text_delta_format() {
+        let event = serde_json::json!({"type": "text-delta", "id": "msg-1", "delta": "Hello"});
+        let line = serde_json::to_string(&event).unwrap();
+        assert!(line.contains("text-delta"));
         assert!(line.contains("Hello"));
     }
 
     #[test]
-    fn test_openai_sse_done_marker() {
-        let done = "data: [DONE]\n\n";
-        assert_eq!(done, "data: [DONE]\n\n");
+    fn test_data_stream_text_end_format() {
+        let event = serde_json::json!({"type": "text-end", "id": "msg-1"});
+        let line = serde_json::to_string(&event).unwrap();
+        assert!(line.contains("text-end"));
     }
 
     #[test]
-    fn test_openai_sse_finish_chunk_has_usage() {
-        let finish = serde_json::json!({
-            "object": "chat.completion.chunk",
-            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
-        });
-        assert_eq!(finish["usage"]["total_tokens"], 15);
-        assert_eq!(finish["choices"][0]["finish_reason"], "stop");
+    fn test_data_stream_complete_sequence() {
+        let msg_id = "msg-test";
+        let events = vec![
+            serde_json::json!({"type": "text-start", "id": msg_id}),
+            serde_json::json!({"type": "text-delta", "id": msg_id, "delta": "你好"}),
+            serde_json::json!({"type": "text-end", "id": msg_id}),
+        ];
+        let output: String = events.iter()
+            .map(|e| format!("{}\n", serde_json::to_string(e).unwrap()))
+            .collect();
+        assert_eq!(output.lines().count(), 3);
+        assert!(output.contains("text-start"));
+        assert!(output.contains("text-delta"));
+        assert!(output.contains("text-end"));
     }
 
     // ── 契约测试：请求格式 ──
@@ -327,16 +469,25 @@ mod tests {
     }
 
     #[test]
-    fn test_contract_openai_sse_sequence() {
-        // 完整的 OpenAI SSE 序列格式
-        let sequence = vec![
-            r#"data: {"choices":[{"delta":{"content":"你好"},"finish_reason":null}]}"#,
-            r#"data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}"#,
-            "data: [DONE]",
+    fn test_contract_data_stream_sequence() {
+        let msg_id = "msg-contract";
+        let events = vec![
+            serde_json::to_string(&serde_json::json!({"type": "text-start", "id": msg_id})).unwrap(),
+            serde_json::to_string(&serde_json::json!({"type": "text-delta", "id": msg_id, "delta": "你好"})).unwrap(),
+            serde_json::to_string(&serde_json::json!({"type": "text-end", "id": msg_id})).unwrap(),
         ];
-        assert!(sequence[0].starts_with("data: "));
-        assert!(sequence[1].contains("finish_reason"));
-        assert_eq!(sequence[2], "data: [DONE]");
+        // 每个事件都是合法 JSON
+        for event in &events {
+            assert!(serde_json::from_str::<serde_json::Value>(event).is_ok());
+        }
+        // 序列完整：start → delta → end
+        assert!(events[0].contains("text-start"));
+        assert!(events[1].contains("text-delta"));
+        assert!(events[2].contains("text-end"));
+        // 所有事件共享同一个 id
+        for event in &events {
+            assert!(event.contains(msg_id));
+        }
     }
 
     // ── 失败路径测试 ──
@@ -379,11 +530,9 @@ mod tests {
     // ── 安全审计测试 ──
 
     #[test]
-    fn test_audit_api_key_not_in_sse_response() {
-        let chunk = serde_json::json!({
-            "choices": [{"delta": {"content": "Hello"}, "finish_reason": null}]
-        });
-        let line = format!("data: {}\n\n", chunk);
+    fn test_audit_api_key_not_in_data_stream() {
+        let event = serde_json::json!({"type": "text-delta", "id": "msg-1", "delta": "Hello"});
+        let line = serde_json::to_string(&event).unwrap();
         assert!(!line.contains("sk-"));
         assert!(!line.contains("api_key"));
         assert!(!line.contains("Authorization"));

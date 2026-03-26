@@ -45,12 +45,16 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect: _onThreadSelect
     ? 'http://localhost:11434/v1/chat/completions'
     : 'http://localhost:3000/api/chat/completions';
 
+  // 模型列表未加载完成时不渲染，避免 modelId 为空导致后端报错
+  if (modelConfig.loading || !modelConfig.selectedModelId) {
+    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">加载中...</div>;
+  }
+
   return (
     <ChatRuntimeProvider
       key={selectedThreadId ?? 'new'}
       apiUrl={apiUrl}
       modelId={modelConfig.selectedModelId}
-      threadId={selectedThreadId ?? undefined}
     >
       <div className="relative flex h-full flex-col bg-background">
         <Thread />
