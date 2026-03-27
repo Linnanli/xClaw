@@ -9,7 +9,6 @@ import { ToolFallback } from "@/app/components/assistant-ui/tool-fallback";
 import { TooltipIconButton } from "@/app/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/app/components/ui/button";
 import { cn } from "@/app/components/ui/utils";
-import { useDlpState } from "@/app/runtime/TauriRuntimeProvider";
 import {
   ActionBarMorePrimitive,
   ActionBarPrimitive,
@@ -23,8 +22,7 @@ import {
   useAuiState,
   useComposerRuntime,
 } from "@assistant-ui/react";
-import { invoke } from "@tauri-apps/api/core";
-import type { SanitizationResult } from "@/app/hooks/useDlpScan";
+import type { SanitizationStats } from "@/app/hooks/useDlpScan";
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -39,7 +37,15 @@ import {
   ShieldCheck,
   SquareIcon,
 } from "lucide-react";
-import { type FC, useCallback, useState } from "react";
+import { type FC, useCallback } from "react";
+
+// ── 类型守卫：从消息 metadata.custom 安全提取 dlpStats ──
+function extractDlpStats(custom: unknown): SanitizationStats | undefined {
+  if (custom && typeof custom === 'object' && 'dlpStats' in custom) {
+    return (custom as { dlpStats: SanitizationStats }).dlpStats;
+  }
+  return undefined;
+}
 
 export const Thread: FC = () => {
   return (
@@ -141,52 +147,24 @@ const ThreadSuggestionItem: FC = () => {
 const Composer: FC = () => {
   const isRunning = useAuiState((s) => s.thread.isRunning);
   const composerRuntime = useComposerRuntime();
-  const dlp = useDlpState();
-  const [scanning, setScanning] = useState(false);
 
-  /** DLP 感知的发送：扫描 → 脱敏/阻止 → 发送 */
-  const handleDlpSend = useCallback(async () => {
+  /**
+   * 发送消息。
+   *
+   * DLP 扫描统一在 TauriRuntimeProvider.onNew 中处理（Fail-Safe 设计）。
+   * Composer 只负责触发发送，不重复做 DLP。
+   */
+  const handleSend = useCallback(() => {
     const text = composerRuntime.getState().text.trim();
-    console.log('[DLP-Composer] handleDlpSend called, text length:', text.length, 'text:', text.substring(0, 80));
-    if (!text || scanning) {
-      console.log('[DLP-Composer] Skipped: empty text or already scanning');
-      return;
-    }
+    if (!text) return;
+    composerRuntime.send();
+  }, [composerRuntime]);
 
-    setScanning(true);
-    try {
-      console.log('[DLP-Composer] Calling scan_user_input...');
-      const dlpResult = await invoke<SanitizationResult>('scan_user_input', { content: text });
-      console.log('[DLP-Composer] DLP result:', JSON.stringify(dlpResult));
-
-      if (dlpResult.was_blocked) {
-        console.log('[DLP-Composer] BLOCKED:', dlpResult.block_reason);
-        dlp.onBlocked(dlpResult.block_reason ?? '消息包含高危敏感信息，已被安全策略阻止。');
-        return;
-      }
-
-      if (dlpResult.had_sensitive_data) {
-        console.log('[DLP-Composer] REDACTED, setting sanitized text:', dlpResult.sanitized_content.substring(0, 80));
-        dlp.onRedacted(dlpResult.sanitization_stats);
-        composerRuntime.setText(dlpResult.sanitized_content);
-      }
-
-      console.log('[DLP-Composer] Calling composerRuntime.send()');
-      composerRuntime.send();
-    } catch (err) {
-      console.error('[DLP-Composer] Error:', err);
-      dlp.onBlocked(`DLP 扫描失败，消息已被阻止: ${String(err)}`);
-    } finally {
-      setScanning(false);
-    }
-  }, [composerRuntime, dlp, scanning]);
-
-  /** 拦截 form 提交（Enter 键），走 DLP 发送 */
+  /** 拦截 form 提交（Enter 键） */
   const handleFormSubmit = useCallback((e: React.FormEvent) => {
     e.preventDefault();
-    console.log('[DLP-Composer] Form submit intercepted (Enter key)');
-    handleDlpSend();
-  }, [handleDlpSend]);
+    handleSend();
+  }, [handleSend]);
 
   const shell = (
     <div
@@ -207,7 +185,7 @@ const Composer: FC = () => {
         autoFocus
         aria-label="聊天输入"
       />
-      <ComposerSendButton scanning={scanning} onSend={handleDlpSend} />
+      <ComposerSendButton onSend={handleSend} />
     </div>
   );
 
@@ -223,7 +201,7 @@ const Composer: FC = () => {
 };
 
 /** 发送/停止按钮 */
-const ComposerSendButton: FC<{ scanning: boolean; onSend: () => void }> = ({ scanning, onSend }) => {
+const ComposerSendButton: FC<{ onSend: () => void }> = ({ onSend }) => {
   return (
     <div className="aui-composer-action-wrapper relative flex items-center justify-between">
       <ComposerAddAttachment />
@@ -237,7 +215,6 @@ const ComposerSendButton: FC<{ scanning: boolean; onSend: () => void }> = ({ sca
             size="icon"
             className="aui-composer-send size-8 rounded-[10px] bg-primary text-primary-foreground hover:bg-primary/90"
             aria-label="发送消息"
-            disabled={scanning}
             onClick={onSend}
           >
             <ArrowUpIcon className="aui-composer-send-icon size-4" />
@@ -349,8 +326,10 @@ const AssistantActionBar: FC = () => {
 };
 
 const UserMessage: FC = () => {
-  const dlp = useDlpState();
-  const isLast = useAuiState((s) => s.message.isLast);
+  // 从消息级 metadata 读取 dlpStats（绑定到具体消息，不受 isLast 影响）
+  const messageDlpStats = useAuiState(
+    (s) => extractDlpStats(s.message.metadata?.custom)
+  );
 
   return (
     <MessagePrimitive.Root
@@ -368,8 +347,8 @@ const UserMessage: FC = () => {
         </div>
       </div>
 
-      {/* DLP 已脱敏 badge — 对应设计图 mk3WD/FgFma */}
-      {isLast && dlp.redactedStats && (
+      {/* DLP 已脱敏 badge — 绑定到消息级 dlpStats，不依赖全局 context */}
+      {messageDlpStats && (
         <div className="col-start-2 flex justify-end">
           <span
             className="inline-flex items-center gap-1 rounded bg-[#dcfce7] px-1.5 py-0.5 text-[10px] font-medium text-[#16a34a]"

@@ -43,6 +43,8 @@ interface TauriMessage {
   content: string;
   timestamp: number;
   reasoning?: string;
+  /** DLP 脱敏统计，仅用户消息有值 */
+  dlpStats?: SanitizationStats;
 }
 
 /** 后端可能返回的所有 role 类型 */
@@ -124,6 +126,8 @@ function convertMessage(msg: TauriMessage): ThreadMessageLike {
     content: parts,
     id: msg.id,
     createdAt: new Date(msg.timestamp),
+    // dlpStats 存入 metadata.custom，供 UserMessage 组件读取
+    ...(msg.dlpStats ? { metadata: { custom: { dlpStats: msg.dlpStats } } } : {}),
   };
 }
 
@@ -343,8 +347,9 @@ export function TauriRuntimeProvider({
 
       // 1. DLP 扫描（Fail-Safe：扫描失败时阻止发送）
       let content = rawContent;
+      let dlpResult: Awaited<ReturnType<typeof scanUserInput>> | null = null;
       try {
-        const dlpResult = await scanUserInput(rawContent);
+        dlpResult = await scanUserInput(rawContent);
         if (dlpResult.was_blocked) {
           tracing.warn('DLP blocked message');
           onBlockedCb(dlpResult.block_reason || '内容包含敏感信息');
@@ -374,12 +379,13 @@ export function TauriRuntimeProvider({
         }
       }
 
-      // 3. 乐观更新：立即添加用户消息
+      // 3. 乐观更新：立即添加用户消息（含 DLP 脱敏统计）
       const userMsg: TauriMessage = {
         id: `msg-${msgIdCounter.current++}`,
         role: 'user',
         content,
         timestamp: Date.now(),
+        dlpStats: dlpResult?.had_sensitive_data ? dlpResult.sanitization_stats : undefined,
       };
       setMessages((prev) => [...prev, userMsg]);
       setIsRunning(true);
