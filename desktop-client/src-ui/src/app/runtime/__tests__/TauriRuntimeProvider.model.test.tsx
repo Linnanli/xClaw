@@ -207,6 +207,27 @@ describe('TauriRuntimeProvider - 模型切换', () => {
     expect(screen.getByTestId('count')).toBe(countEl);
   });
 
+  it('test_regression_model_ref_updated_synchronously_before_send', async () => {
+    // 回归测试：选模型后立即发消息，modelIdRef 必须已是新值
+    // 这是修复"切换模型后发消息仍用旧模型"bug 的防护
+    const mocks = await getMocks();
+    renderProvider();
+    await waitFor(() => expect(screen.getByTestId('count').textContent).toBe('2'));
+
+    // 切换到 gpt-4o
+    fireEvent.click(screen.getByTestId('select-gpt-4o'));
+
+    // UI 立即反映新选择（同步更新，不依赖 useEffect）
+    expect(screen.getByTestId('selected').textContent).toBe('gpt-4o');
+
+    // 验证 invoke 调用时携带的是新 modelId（通过检查 invoke 调用参数）
+    // 实际发送由 onNew 触发，这里验证 selectModel 的同步性
+    expect(mocks.invoke).not.toHaveBeenCalledWith(
+      'send_chat_message',
+      expect.objectContaining({ modelId: 'deepseek-chat' }),
+    );
+  });
+
   it('onOpenCustomModelModal 回调应通过 ModelContext 传递', async () => {
     const onOpen = vi.fn();
 

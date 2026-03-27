@@ -193,9 +193,8 @@ export function TauriRuntimeProvider({
     setDlpRedactedStats(stats);
   }, []);
 
-  // 同步 refs
+  // 同步 threadId ref
   useEffect(() => { threadIdRef.current = threadId; }, [threadId]);
-  useEffect(() => { modelIdRef.current = selectedModelId; }, [selectedModelId]);
 
   // ── 加载模型列表 ──
   useEffect(() => {
@@ -209,7 +208,9 @@ export function TauriRuntimeProvider({
         setSelectedModelId((prev) => {
           if (prev && allModels.some((m) => m.model_id === prev)) return prev;
           const defaultModel = allModels.find((m) => m.is_default) ?? allModels[0];
-          return defaultModel?.model_id ?? prev;
+          const resolved = defaultModel?.model_id ?? prev;
+          modelIdRef.current = resolved; // 同步 ref，确保首次发消息使用正确模型
+          return resolved;
         });
       } catch (err) {
         tracing.error('Failed to load model list', { error: err });
@@ -223,7 +224,8 @@ export function TauriRuntimeProvider({
 
   const selectModel = useCallback((modelId: string) => {
     setSelectedModelId(modelId);
-    // modelIdRef 通过上面的 useEffect 同步，下一次发送时自动使用新模型
+    // 同步写 ref：不依赖 useEffect，避免选模型后立即发消息时读到旧值
+    modelIdRef.current = modelId;
   }, []);
 
   // ── 加载历史消息 ──
