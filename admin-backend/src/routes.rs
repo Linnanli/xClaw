@@ -86,8 +86,6 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/model-configs/{id}", put(update_model_config).delete(delete_model_config))
         // 客户端模型列表（精简版，供 Desktop Client 拉取）
         .route("/api/client-models", get(get_client_models))
-        // Chat Proxy API（代理 LLM 请求，SSE 流式响应）
-        .route("/api/chat/completions", post(crate::chat_proxy::chat_completions_handler))
         .with_state(state)
 }
 

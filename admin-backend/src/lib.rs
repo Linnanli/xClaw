@@ -1,5 +1,4 @@
 pub mod auth;
-pub mod chat_proxy;
 pub mod db;
 pub mod error;
 pub mod handlers;

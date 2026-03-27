@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Cpu, AlertCircle } from 'lucide-react';
-import { listen } from '@tauri-apps/api/event';
+import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { useTheme } from '../../contexts/ThemeContext';
 
 type EngineStatus = 'starting' | 'running' | 'error';
@@ -15,10 +15,13 @@ export function ConnectionStatus() {
   const { theme } = useTheme();
   const [status, setStatus] = useState<EngineStatus>('starting');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const unlistenRef = useRef<UnlistenFn | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+
     // 监听引擎事件判断状态
-    const unlisten = listen<any>('chat-event', (event) => {
+    listen<any>('chat-event', (event) => {
       const payload = event.payload;
       if (payload && typeof payload === 'object' && 'Error' in payload) {
         const err = payload.Error as { message: string; code?: string };
@@ -30,6 +33,12 @@ export function ConnectionStatus() {
       }
       // 收到任何非错误事件 → 引擎运行中
       setStatus('running');
+    }).then((fn) => {
+      if (cancelled) {
+        fn();
+      } else {
+        unlistenRef.current = fn;
+      }
     });
 
     // 5 秒后如果还在 starting，也切换到 running（引擎可能已就绪但无事件）
@@ -38,7 +47,8 @@ export function ConnectionStatus() {
     }, 5000);
 
     return () => {
-      unlisten.then((fn) => fn());
+      cancelled = true;
+      unlistenRef.current?.();
       clearTimeout(timer);
     };
   }, []);

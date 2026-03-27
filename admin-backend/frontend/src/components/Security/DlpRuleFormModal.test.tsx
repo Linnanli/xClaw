@@ -578,20 +578,29 @@ describe('DlpRuleFormModal', () => {
     });
 
     it('should handle all category types', () => {
-      const categories = ['pii', 'financial', 'health', 'credential', 'confidential', 'other'];
-      categories.forEach(category => {
-        const rule = { ...mockRule, category };
-        const { unmount } = render(
-          <DlpRuleFormModal
-            visible={true}
-            mode="edit"
-            rule={rule}
-            onCancel={mockOnCancel}
-            onSuccess={mockOnSuccess}
-          />
-        );
-        unmount();
-      });
+      // 业务目标：DLP_CATEGORY_OPTIONS 必须包含所有预期分类
+      // 用纯函数验证，避免循环 render/unmount 导致 jsdom portal 污染
+      const { DLP_CATEGORY_OPTIONS } = require('../../constants/dlp');
+      const supportedValues = DLP_CATEGORY_OPTIONS.map((o: { value: string }) => o.value);
+      const expectedCategories = ['pii', 'financial', 'health', 'credential', 'confidential', 'other'];
+
+      for (const category of expectedCategories) {
+        expect(supportedValues).toContain(category);
+      }
+
+      // 验证组件能正常渲染任意合法 category（用一次 render 覆盖）
+      const rule = { ...mockRule, category: 'confidential' };
+      const { unmount } = render(
+        <DlpRuleFormModal
+          visible={true}
+          mode="edit"
+          rule={rule}
+          onCancel={mockOnCancel}
+          onSuccess={mockOnSuccess}
+        />
+      );
+      expect(screen.getByText('编辑 DLP 规则')).toBeInTheDocument();
+      unmount();
     });
 
     it('should handle rule with no optional fields', () => {

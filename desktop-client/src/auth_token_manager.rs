@@ -12,11 +12,16 @@ pub struct AuthTokenManager {
 }
 
 impl AuthTokenManager {
-    /// 创建新的令牌管理器
+    /// 创建新的令牌管理器（使用默认系统路径）
     pub fn new() -> Self {
         Self {
             token_file: platform_utils::get_auth_token_path(),
         }
+    }
+
+    /// 创建使用指定路径的令牌管理器（用于测试隔离）
+    pub fn new_with_path(token_file: PathBuf) -> Self {
+        Self { token_file }
     }
     
     /// 加载或生成令牌

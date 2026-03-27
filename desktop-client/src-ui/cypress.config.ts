@@ -8,8 +8,7 @@ export default defineConfig({
     defaultCommandTimeout: 10000,
     requestTimeout: 10000,
     responseTimeout: 10000,
-    setupNodeEvents(on, config) {
-      // 实现node事件监听器
+    setupNodeEvents(on) {
       on('task', {
         log(message) {
           console.log(message);

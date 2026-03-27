@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { BrowserRouter } from 'react-router-dom';
 import { DlpDictionaryList } from './DlpDictionaryList';
 import { apiClient } from '../../api/client';
+import { clickPopconfirmOk } from '../../test/setup';
 
 vi.mock('../../api/client', () => ({
   apiClient: {
@@ -321,10 +322,7 @@ describe('DlpDictionaryList Component', () => {
         expect(screen.getByText('确认删除')).toBeInTheDocument();
       });
 
-      const popconfirmOkBtn = document.querySelector('.ant-popconfirm-buttons .ant-btn-primary') as HTMLElement;
-      if (popconfirmOkBtn) {
-        await user.click(popconfirmOkBtn);
-      }
+      await clickPopconfirmOk();
 
       await waitFor(() => {
         expect(apiClient.delete).toHaveBeenCalledWith('/dlp-dictionaries/dict-1');
@@ -381,10 +379,7 @@ describe('DlpDictionaryList Component', () => {
         expect(screen.getByText('确认删除')).toBeInTheDocument();
       });
 
-      const popconfirmOkBtn = document.querySelector('.ant-popconfirm-buttons .ant-btn-primary') as HTMLElement;
-      if (popconfirmOkBtn) {
-        await user.click(popconfirmOkBtn);
-      }
+      await clickPopconfirmOk();
 
       await waitFor(() => {
         expect(message.error).toHaveBeenCalled();
@@ -485,14 +480,17 @@ describe('DlpDictionaryList Component', () => {
       const deleteButtons = screen.getAllByText('删除');
       await user.click(deleteButtons[0]);
 
+      // Popconfirm 必须渲染确认按钮，否则测试本身有问题
       await waitFor(() => {
         expect(screen.getByText('确认删除')).toBeInTheDocument();
       });
 
-      const popconfirmOkBtn = document.querySelector('.ant-popconfirm-buttons .ant-btn-primary') as HTMLElement;
-      if (popconfirmOkBtn) {
-        await user.click(popconfirmOkBtn);
-      }
+      const popconfirmOkBtn = await waitFor(() => {
+        const btn = document.querySelector('.ant-popconfirm-buttons .ant-btn-primary') as HTMLElement;
+        expect(btn).not.toBeNull();
+        return btn;
+      });
+      await user.click(popconfirmOkBtn);
 
       await waitFor(() => {
         expect(apiClient.delete).toHaveBeenCalledWith('/dlp-dictionaries/dict-1');

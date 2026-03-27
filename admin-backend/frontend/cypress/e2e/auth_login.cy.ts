@@ -13,9 +13,9 @@
  */
 
 describe('认证登录 E2E 测试', () => {
-  const apiUrl = Cy.env('apiUrl');
-  const testUsername = Cy.env('testUsername');
-  const testPassword = Cy.env('testPassword');
+  const apiUrl = Cypress.env('apiUrl');
+  const testUsername = Cypress.env('testUsername');
+  const testPassword = Cypress.env('testPassword');
 
   beforeEach(() => {
     // 清除本地存储

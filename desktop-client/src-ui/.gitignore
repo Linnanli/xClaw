@@ -1,2 +1,9 @@
 /node_modules/
 /dist/
+
+# Cypress
+cypress/screenshots
+cypress/videos
+
+# Test coverage
+/coverage/

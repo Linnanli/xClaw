@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { BrowserRouter } from 'react-router-dom';
 import { DlpRuleList } from './DlpRuleList';
 import { apiClient } from '../../api/client';
+import { clickPopconfirmOk } from '../../test/setup';
 
 vi.mock('../../api/client', () => ({
   apiClient: {
@@ -360,11 +361,7 @@ describe('DlpRuleList Component', () => {
         expect(screen.getByText('确认删除')).toBeInTheDocument();
       });
 
-      // Popconfirm 使用 ant-btn-primary 或 ant-popconfirm-buttons 中的按钮
-      const popconfirmOkBtn = document.querySelector('.ant-popconfirm-buttons .ant-btn-primary') as HTMLElement;
-      if (popconfirmOkBtn) {
-        await user.click(popconfirmOkBtn);
-      }
+      await clickPopconfirmOk();
 
       await waitFor(() => {
         expect(apiClient.delete).toHaveBeenCalledWith('/dlp-rules/1');
@@ -421,10 +418,13 @@ describe('DlpRuleList Component', () => {
         expect(screen.getByText('确认删除')).toBeInTheDocument();
       });
 
-      const popconfirmOkBtn = document.querySelector('.ant-popconfirm-buttons .ant-btn-primary') as HTMLElement;
-      if (popconfirmOkBtn) {
-        await user.click(popconfirmOkBtn);
-      }
+      // Popconfirm 确认按钮必须存在，否则测试本身有问题
+      const popconfirmOkBtn = await waitFor(() => {
+        const btn = document.querySelector('.ant-popconfirm-buttons .ant-btn-primary') as HTMLElement;
+        expect(btn).not.toBeNull();
+        return btn;
+      });
+      await user.click(popconfirmOkBtn);
 
       await waitFor(() => {
         expect(message.error).toHaveBeenCalled();
@@ -591,10 +591,13 @@ describe('DlpRuleList Component', () => {
         expect(screen.getByText('确认删除')).toBeInTheDocument();
       });
 
-      const popconfirmOkBtn = document.querySelector('.ant-popconfirm-buttons .ant-btn-primary') as HTMLElement;
-      if (popconfirmOkBtn) {
-        await user.click(popconfirmOkBtn);
-      }
+      // Popconfirm 确认按钮必须存在，否则测试本身有问题
+      const popconfirmOkBtn = await waitFor(() => {
+        const btn = document.querySelector('.ant-popconfirm-buttons .ant-btn-primary') as HTMLElement;
+        expect(btn).not.toBeNull();
+        return btn;
+      });
+      await user.click(popconfirmOkBtn);
 
       await waitFor(() => {
         expect(apiClient.delete).toHaveBeenCalledWith('/dlp-rules/1');
@@ -1362,10 +1365,7 @@ describe('DlpRuleList Component', () => {
         expect(screen.getByText('确认删除')).toBeInTheDocument();
       });
 
-      const popconfirmOkBtn = document.querySelector('.ant-popconfirm-buttons .ant-btn-primary') as HTMLElement;
-      if (popconfirmOkBtn) {
-        await user.click(popconfirmOkBtn);
-      }
+      await clickPopconfirmOk();
 
       await waitFor(() => {
         expect(apiClient.delete).toHaveBeenCalledWith('/dlp-rules/14');
@@ -1535,10 +1535,7 @@ describe('DlpRuleList Component', () => {
         expect(screen.getByText('确认删除')).toBeInTheDocument();
       });
 
-      const popconfirmOkBtn = document.querySelector('.ant-popconfirm-buttons .ant-btn-primary') as HTMLElement;
-      if (popconfirmOkBtn) {
-        await user.click(popconfirmOkBtn);
-      }
+      await clickPopconfirmOk();
 
       await waitFor(() => {
         expect(apiClient.delete).toHaveBeenCalledWith('/dlp-rules/24');

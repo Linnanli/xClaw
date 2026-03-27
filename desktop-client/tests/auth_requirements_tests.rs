@@ -139,11 +139,14 @@ async fn req_auth_005_token_cleaning() {
 #[tokio::test]
 async fn req_auth_006_concurrent_safety() {
     // 测试并发访问安全要求
+    // 使用隔离的临时目录，避免与其他并行测试共享同一 token 文件
     
     use std::sync::Arc;
     use tokio::sync::Mutex;
-    
-    let token_manager = Arc::new(Mutex::new(AuthTokenManager::new()));
+
+    let temp_dir = TempDir::new().unwrap();
+    let token_file = temp_dir.path().join(".auth_token");
+    let token_manager = Arc::new(Mutex::new(AuthTokenManager::new_with_path(token_file)));
     let mut handles = Vec::new();
     
     // 启动多个并发任务
@@ -166,7 +169,7 @@ async fn req_auth_006_concurrent_safety() {
         results.push(result.unwrap());
     }
     
-    // 验证所有Token相同（因为是同一个管理器）
+    // 验证所有Token相同（Mutex 保证串行，同一文件路径保证幂等）
     let first_token = &results[0];
     for (i, token) in results.iter().enumerate().skip(1) {
         assert_eq!(first_token, token, "REQ-AUTH-006: Concurrent token {} should be consistent", i);
@@ -245,8 +248,6 @@ async fn req_auth_009_performance_requirements() {
     // 测试性能要求
     
     use std::time::Instant;
-    
-    let token_manager = AuthTokenManager::new();
     
     // 1. 测试Token生成性能
     let start = Instant::now();

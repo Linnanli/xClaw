@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { BrowserRouter } from 'react-router-dom';
 import { SensitiveOpList } from './SensitiveOpList';
 import { apiClient } from '../../api/client';
+import { clickPopconfirmOk } from '../../test/setup';
 
 vi.mock('../../api/client', () => ({
   apiClient: {
@@ -348,10 +349,7 @@ describe('SensitiveOpList Component', () => {
         expect(screen.getByText('确认删除')).toBeInTheDocument();
       });
 
-      const popconfirmOkBtn = document.querySelector('.ant-popconfirm-buttons .ant-btn-primary') as HTMLElement;
-      if (popconfirmOkBtn) {
-        await user.click(popconfirmOkBtn);
-      }
+      await clickPopconfirmOk();
 
       await waitFor(() => {
         expect(apiClient.delete).toHaveBeenCalledWith('/sensitive-operations/1');
@@ -408,10 +406,7 @@ describe('SensitiveOpList Component', () => {
         expect(screen.getByText('确认删除')).toBeInTheDocument();
       });
 
-      const popconfirmOkBtn = document.querySelector('.ant-popconfirm-buttons .ant-btn-primary') as HTMLElement;
-      if (popconfirmOkBtn) {
-        await user.click(popconfirmOkBtn);
-      }
+      await clickPopconfirmOk();
 
       await waitFor(() => {
         expect(message.error).toHaveBeenCalled();
@@ -590,10 +585,7 @@ describe('SensitiveOpList Component', () => {
         expect(screen.getByText('确认删除')).toBeInTheDocument();
       });
 
-      const popconfirmOkBtn = document.querySelector('.ant-popconfirm-buttons .ant-btn-primary') as HTMLElement;
-      if (popconfirmOkBtn) {
-        await user.click(popconfirmOkBtn);
-      }
+      await clickPopconfirmOk();
 
       await waitFor(() => {
         expect(apiClient.delete).toHaveBeenCalledWith('/sensitive-operations/1');

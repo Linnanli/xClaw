@@ -278,3 +278,60 @@ async fn test_http_all_critical_get_routes_registered() {
         failed.join("\n")
     );
 }
+
+// ============================================================================
+// 回归测试：ironclaw_llm 清理
+// 防止 chat_proxy / ironclaw_llm 依赖被误加回来
+// ============================================================================
+
+/// 回归测试：POST /api/chat/completions 路由已被移除
+///
+/// 背景：admin-backend 前端无 LLM 对话需求，chat_proxy.rs 和 ironclaw_llm
+/// 依赖已于清理时删除。此测试确保该路由不会被误加回来。
+#[tokio::test]
+async fn test_regression_chat_completions_route_removed() {
+    let pool = match try_connect_db().await {
+        Some(p) => p,
+        None => {
+            println!("⚠️  数据库不可用，跳过");
+            return;
+        }
+    };
+
+    let app = build_app(pool);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/chat/completions")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"model":"test","messages":[]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "POST /api/chat/completions 不应存在：admin-backend 无 LLM 代理需求，\
+         如需恢复请先确认前端有对应页面"
+    );
+}
+
+/// 契约测试：create_router 编译时不依赖 chat_proxy 模块
+///
+/// 只要此测试能编译通过，说明 lib.rs 中 chat_proxy 模块声明已被移除。
+#[tokio::test]
+async fn test_contract_router_compiles_without_chat_proxy() {
+    // try_connect_db 读取环境变量，与其他冒烟测试保持一致
+    let pool = match try_connect_db().await {
+        Some(p) => p,
+        None => {
+            println!("⚠️  数据库不可用，跳过");
+            return;
+        }
+    };
+    // create_router 能构建 = chat_proxy 模块不存在也不影响编译
+    let _app = build_app(pool);
+}

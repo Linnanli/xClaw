@@ -97,12 +97,15 @@ describe('UserList Component', () => {
     });
 
     it('should display "未分配" for users without roles', async () => {
+      // 用户无角色且无部门时，角色列和部门列各渲染一个"未分配"Tag
+      // 使用 getAllByText 断言至少有一个，避免 getByText 因多个匹配报错
       const mockUsers = [
         {
           id: '1',
           username: 'testuser',
           email: 'test@example.com',
           roles: [],
+          department: null,
           created_at: '2026-03-19T10:00:00Z',
           updated_at: '2026-03-19T10:00:00Z',
         },
@@ -117,7 +120,9 @@ describe('UserList Component', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByText('未分配')).toBeInTheDocument();
+        // 角色列显示"未分配"
+        const tags = screen.getAllByText('未分配');
+        expect(tags.length).toBeGreaterThanOrEqual(1);
       });
     });
   });

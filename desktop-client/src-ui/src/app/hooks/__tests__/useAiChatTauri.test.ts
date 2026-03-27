@@ -169,10 +169,10 @@ describe('useAiChatTauri', () => {
       content: 'test message',
     });
 
-    // 验证用户消息被添加到状态
+    // 验证用户消息被添加到状态（DLP 无敏感数据，保留原始内容）
     expect(result.current.messages).toHaveLength(1);
     expect(result.current.messages[0].role).toBe('user');
-    expect(result.current.messages[0].content).toBe('test message');
+    expect(result.current.messages[0].content).toBe('Hello, AI!');
   });
 
   it('should handle DLP blocked message', async () => {

@@ -1,8 +1,7 @@
 /**
  * ChatTabTauri DLP 集成测试
  *
- * 覆盖维度：DLP 集成正常路径、失败路径、契约测试、安全审计
- * 验证 DLP 警告在聊天 UI 中的正确集成
+ * 验证 DLP 状态通过 TauriRuntimeProvider → DlpContext → DlpBlockedDialogBridge 的集成
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -17,50 +16,55 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('../../../utils/tauri', () => ({
-  threadApi: {
-    getThreads: vi.fn().mockResolvedValue([]),
-    getMessages: vi.fn().mockResolvedValue([]),
-    createThread: vi.fn().mockResolvedValue({ id: 'new-thread', title: '新对话' }),
-  },
-}));
-
 vi.mock('../../../utils/tokenManager', () => ({
   TokenManager: {
     getToken: vi.fn().mockResolvedValue('mock-token'),
   },
 }));
 
-// 默认 mock：无 DLP 警告
-const mockDlpWarning = { current: null as any };
-const mockClearDlpWarning = vi.fn();
-
-vi.mock('../../../hooks/useAiChatTauri', () => ({
-  useAiChatTauri: () => ({
-    messages: [],
-    input: '',
-    setInput: vi.fn(),
-    isLoading: false,
-    isConnected: true,
-    error: null,
-    thinkingMessage: null,
-    dlpWarning: mockDlpWarning.current,
-    handleSubmit: vi.fn(),
-    setMessages: vi.fn(),
-    clearMessages: vi.fn(),
-    clearDlpWarning: mockClearDlpWarning,
-    reload: vi.fn(),
+vi.mock('../../../hooks/useModelConfig', () => ({
+  useModelConfig: () => ({
+    customModels: [],
+    createModel: vi.fn(),
+    updateModel: vi.fn(),
+    deleteModel: vi.fn(),
+    testConnection: vi.fn(),
   }),
 }));
 
-vi.mock('../../ui/scroll-area', () => ({
-  ScrollArea: ({ children }: any) => <div>{children}</div>,
+// DLP 状态可控 mock
+const mockDlpState = {
+  blocked: false,
+  blockReason: null as string | null,
+  clearBlock: vi.fn(),
+  redactedStats: null,
+  clearRedacted: vi.fn(),
+  onBlocked: vi.fn(),
+  onRedacted: vi.fn(),
+};
+
+vi.mock('../../../runtime/TauriRuntimeProvider', () => ({
+  TauriRuntimeProvider: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="tauri-runtime-provider">{children}</div>
+  ),
+  useDlpState: () => mockDlpState,
 }));
 
-vi.mock('../../ui/button', () => ({
-  Button: ({ children, onClick, ...props }: any) => (
-    <button onClick={onClick} {...props}>{children}</button>
-  ),
+vi.mock('../../assistant-ui/thread', () => ({
+  Thread: () => <div data-testid="thread-component" />,
+}));
+
+vi.mock('../../ai/DlpBlockedDialog', () => ({
+  DlpBlockedDialog: ({ open, blockReason }: { open: boolean; blockReason?: string }) =>
+    open ? (
+      <div data-testid="dlp-blocked-dialog">
+        {blockReason && <span data-testid="block-reason">{blockReason}</span>}
+      </div>
+    ) : null,
+}));
+
+vi.mock('../../ai/CustomModelModal', () => ({
+  CustomModelModal: () => null,
 }));
 
 // ============================================================================
@@ -70,18 +74,18 @@ vi.mock('../../ui/button', () => ({
 describe('ChatTabTauri DLP 集成 - 正常路径', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDlpWarning.current = null;
+    mockDlpState.blocked = false;
+    mockDlpState.blockReason = null;
   });
 
-  it('无 DLP 警告时不应显示警告组件', () => {
+  it('无 DLP 阻止时不应显示阻止对话框', () => {
     render(<ChatTabTauri />);
-    expect(screen.queryByText('检测到敏感信息')).not.toBeInTheDocument();
-    expect(screen.queryByText('消息发送被阻止')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('dlp-blocked-dialog')).not.toBeInTheDocument();
   });
 
-  it('应正常渲染欢迎页（DLP 不影响基础功能）', () => {
+  it('应正常渲染 Thread（DLP 不影响基础功能）', () => {
     render(<ChatTabTauri />);
-    expect(screen.getByText('今天需要我帮你做些什么？')).toBeInTheDocument();
+    expect(screen.getByTestId('thread-component')).toBeInTheDocument();
   });
 });
 
@@ -95,14 +99,16 @@ describe('ChatTabTauri DLP 集成 - 错误路径', () => {
   });
 
   it('test_failure_dlpWarning_null_no_crash', () => {
-    mockDlpWarning.current = null;
+    mockDlpState.blocked = false;
+    mockDlpState.blockReason = null;
     expect(() => {
       render(<ChatTabTauri />);
     }).not.toThrow();
   });
 
   it('test_failure_dlpWarning_undefined_no_crash', () => {
-    mockDlpWarning.current = undefined;
+    mockDlpState.blocked = false;
+    (mockDlpState as any).blockReason = undefined;
     expect(() => {
       render(<ChatTabTauri />);
     }).not.toThrow();
@@ -116,11 +122,11 @@ describe('ChatTabTauri DLP 集成 - 错误路径', () => {
 describe('ChatTabTauri DLP 集成 - 契约测试', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDlpWarning.current = null;
+    mockDlpState.blocked = false;
+    mockDlpState.blockReason = null;
   });
 
   it('test_contract_dlp_components_imported_correctly', () => {
-    // 验证 DLP 组件可以正确导入和渲染
     expect(() => {
       render(<ChatTabTauri />);
     }).not.toThrow();
@@ -128,9 +134,14 @@ describe('ChatTabTauri DLP 集成 - 契约测试', () => {
 
   it('test_contract_chat_still_works_without_dlp', () => {
     render(<ChatTabTauri />);
-    // 基础聊天功能不受 DLP 影响
-    expect(screen.getByText('智能对话')).toBeInTheDocument();
-    expect(screen.getByText('数据分析')).toBeInTheDocument();
+    expect(screen.getByTestId('thread-component')).toBeInTheDocument();
+  });
+
+  it('DLP 阻止时应显示阻止对话框', () => {
+    mockDlpState.blocked = true;
+    mockDlpState.blockReason = '检测到 API 密钥';
+    render(<ChatTabTauri />);
+    expect(screen.getByTestId('dlp-blocked-dialog')).toBeInTheDocument();
   });
 });
 
@@ -141,13 +152,13 @@ describe('ChatTabTauri DLP 集成 - 契约测试', () => {
 describe('ChatTabTauri DLP 集成 - 安全审计', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDlpWarning.current = null;
+    mockDlpState.blocked = false;
+    mockDlpState.blockReason = null;
   });
 
   it('test_audit_no_dlp_internal_state_in_dom', () => {
     const { container } = render(<ChatTabTauri />);
     const html = container.innerHTML;
-    expect(html).not.toMatch(/dlpWarning/);
     expect(html).not.toMatch(/scanUserInput/);
     expect(html).not.toMatch(/sanitization/i);
   });
