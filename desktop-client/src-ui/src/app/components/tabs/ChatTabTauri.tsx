@@ -4,22 +4,22 @@
  * 架构：
  *   ChatTabTauri（容器）
  *     └─ TauriRuntimeProvider（Tauri IPC ↔ 内嵌 Agent ↔ LLM 直连）
+ *         ├─ ModelContext（模型列表 + 选择，供 Composer 内 ModelSelector 消费）
  *         └─ Thread（assistant-ui 官方组件）
  *
- * 数据流：
- *   前端 → Tauri IPC → Agent 消息循环 → LLM API → chat-event → 前端
- *   DLP：发送前通过 Tauri IPC scan_user_input 扫描（保留在客户端）
- *   Skills：Agent 根据消息内容自动激活匹配的 skills
+ * 模型切换流程：
+ *   用户点击 ModelSelector → ModelContext.selectModel → modelIdRef 同步 →
+ *   下一次 onNew 调用时自动使用新 modelId（无需 key 重置 runtime）
  */
 
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Thread } from '@components/assistant-ui/thread';
 import { TauriRuntimeProvider, useDlpState } from '../../runtime/TauriRuntimeProvider';
-import { useModelConfig } from '@hooks/useModelConfig';
 import { TokenManager } from '@utils/tokenManager';
 import { CustomModelModal } from '../ai/CustomModelModal';
 import { DlpBlockedDialog } from '../ai/DlpBlockedDialog';
+import { useModelConfig } from '@hooks/useModelConfig';
 
 interface ChatTabTauriProps {
   selectedThreadId?: string | null;
@@ -28,7 +28,9 @@ interface ChatTabTauriProps {
 
 export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriProps) {
   const [customModelOpen, setCustomModelOpen] = useState(false);
-  const modelConfig = useModelConfig();
+  // useModelConfig 仅用于 CustomModelModal 的 CRUD 操作，
+  // 模型列表和选择状态由 TauriRuntimeProvider 内部的 ModelContext 管理
+  const { customModels, createModel, updateModel, deleteModel, testConnection } = useModelConfig();
 
   useEffect(() => {
     TokenManager.getToken().catch((err) => console.error('Failed to load token:', err));
@@ -37,16 +39,12 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
     );
   }, []);
 
-  if (modelConfig.loading || !modelConfig.selectedModelId) {
-    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">加载中...</div>;
-  }
-
   return (
     <TauriRuntimeProvider
       key={selectedThreadId ?? 'new'}
       threadId={selectedThreadId ?? null}
       onThreadCreated={(tid) => onThreadSelect?.(tid)}
-      modelId={modelConfig.selectedModelId}
+      onOpenCustomModelModal={() => setCustomModelOpen(true)}
     >
       <div className="relative flex h-full flex-col bg-background">
         <Thread />
@@ -57,9 +55,9 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
       <CustomModelModal
         open={customModelOpen}
         onClose={() => setCustomModelOpen(false)}
-        customModels={modelConfig.customModels}
+        customModels={customModels}
         onSave={async (params) => {
-          await modelConfig.createModel({
+          await createModel({
             model_id: params.model_id,
             display_name: params.display_name,
             provider: 'custom',
@@ -68,15 +66,15 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
           });
         }}
         onUpdate={async (params) => {
-          await modelConfig.updateModel({
+          await updateModel({
             model_id: params.original_model_id,
             display_name: params.display_name,
             api_base_url: params.api_base_url,
             api_key: params.api_key,
           });
         }}
-        onDelete={modelConfig.deleteModel}
-        onTestConnection={modelConfig.testConnection}
+        onDelete={deleteModel}
+        onTestConnection={testConnection}
       />
     </TauriRuntimeProvider>
   );

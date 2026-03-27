@@ -28,10 +28,11 @@ import {
 } from '@assistant-ui/react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { threadApi } from '@utils/tauri';
+import { threadApi, modelApi, type ModelConfigItem } from '@utils/tauri';
 import { useDlpScan } from '@hooks/useDlpScan';
 import type { SanitizationStats } from '@hooks/useDlpScan';
 import { tracing } from '@utils/tracing';
+import { ModelContext } from '@contexts/ModelContext';
 
 // ============================================================================
 // 类型定义
@@ -75,7 +76,10 @@ interface TauriRuntimeProviderProps {
   children: ReactNode;
   threadId: string | null;
   onThreadCreated?: (threadId: string) => void;
-  modelId?: string;
+  /** 初始模型 ID，后续切换通过 ModelContext 完成 */
+  initialModelId?: string;
+  /** 打开自定义模型弹窗的回调（由 ChatTabTauri 提供） */
+  onOpenCustomModelModal?: () => void;
 }
 
 // ============================================================================
@@ -155,15 +159,21 @@ export function TauriRuntimeProvider({
   children,
   threadId,
   onThreadCreated,
-  modelId,
+  initialModelId,
+  onOpenCustomModelModal,
 }: TauriRuntimeProviderProps) {
   const [messages, setMessages] = useState<TauriMessage[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const threadIdRef = useRef(threadId);
-  const modelIdRef = useRef(modelId);
+  const modelIdRef = useRef(initialModelId);
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const msgIdCounter = useRef(1);
   const { scanUserInput } = useDlpScan();
+
+  // ── 模型列表状态（由本 Provider 管理，通过 ModelContext 向下传递）──
+  const [models, setModels] = useState<ModelConfigItem[]>([]);
+  const [selectedModelId, setSelectedModelId] = useState<string>(initialModelId ?? '');
+  const [modelsLoading, setModelsLoading] = useState(true);
 
   // DLP 状态（完整版）
   const [dlpBlocked, setDlpBlocked] = useState(false);
@@ -185,7 +195,36 @@ export function TauriRuntimeProvider({
 
   // 同步 refs
   useEffect(() => { threadIdRef.current = threadId; }, [threadId]);
-  useEffect(() => { modelIdRef.current = modelId; }, [modelId]);
+  useEffect(() => { modelIdRef.current = selectedModelId; }, [selectedModelId]);
+
+  // ── 加载模型列表 ──
+  useEffect(() => {
+    let mounted = true;
+    const load = async () => {
+      try {
+        const allModels = await modelApi.getAvailableModels();
+        if (!mounted) return;
+        setModels(allModels);
+        // 如果初始 modelId 无效或未设置，选默认模型
+        setSelectedModelId((prev) => {
+          if (prev && allModels.some((m) => m.model_id === prev)) return prev;
+          const defaultModel = allModels.find((m) => m.is_default) ?? allModels[0];
+          return defaultModel?.model_id ?? prev;
+        });
+      } catch (err) {
+        tracing.error('Failed to load model list', { error: err });
+      } finally {
+        if (mounted) setModelsLoading(false);
+      }
+    };
+    load();
+    return () => { mounted = false; };
+  }, []);
+
+  const selectModel = useCallback((modelId: string) => {
+    setSelectedModelId(modelId);
+    // modelIdRef 通过上面的 useEffect 同步，下一次发送时自动使用新模型
+  }, []);
 
   // ── 加载历史消息 ──
   useEffect(() => {
@@ -425,19 +464,29 @@ export function TauriRuntimeProvider({
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <DlpContext.Provider
+      <ModelContext.Provider
         value={{
-          blocked: dlpBlocked,
-          blockReason: dlpBlockReason,
-          clearBlock: clearDlpBlock,
-          redactedStats: dlpRedactedStats,
-          clearRedacted: clearDlpRedacted,
-          onBlocked: onBlockedCb,
-          onRedacted: onRedactedCb,
+          selectedModelId,
+          models,
+          selectModel,
+          openCustomModelModal: onOpenCustomModelModal ?? (() => {}),
+          loading: modelsLoading,
         }}
       >
-        {children}
-      </DlpContext.Provider>
+        <DlpContext.Provider
+          value={{
+            blocked: dlpBlocked,
+            blockReason: dlpBlockReason,
+            clearBlock: clearDlpBlock,
+            redactedStats: dlpRedactedStats,
+            clearRedacted: clearDlpRedacted,
+            onBlocked: onBlockedCb,
+            onRedacted: onRedactedCb,
+          }}
+        >
+          {children}
+        </DlpContext.Provider>
+      </ModelContext.Provider>
     </AssistantRuntimeProvider>
   );
 }

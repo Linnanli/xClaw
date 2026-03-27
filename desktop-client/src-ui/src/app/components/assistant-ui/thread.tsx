@@ -9,6 +9,7 @@ import { ToolFallback } from "@/app/components/assistant-ui/tool-fallback";
 import { TooltipIconButton } from "@/app/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/app/components/ui/button";
 import { cn } from "@/app/components/ui/utils";
+import { ModelSelector } from "@/app/components/ai/ModelSelector";
 import {
   ActionBarMorePrimitive,
   ActionBarPrimitive,
@@ -200,11 +201,17 @@ const Composer: FC = () => {
   );
 };
 
-/** 发送/停止按钮 */
+/** Composer 底部工具栏：左侧模型选择器 + 右侧发送/停止按钮 */
 const ComposerSendButton: FC<{ onSend: () => void }> = ({ onSend }) => {
   return (
     <div className="aui-composer-action-wrapper relative flex items-center justify-between">
-      <ComposerAddAttachment />
+      {/* 左侧：附件 + 模型选择器 */}
+      <div className="flex items-center gap-2">
+        <ComposerAddAttachment />
+        <ModelSelector />
+      </div>
+
+      {/* 右侧：发送 / 停止 */}
       <div className="flex items-center gap-2">
         <AuiIf condition={(s) => !s.thread.isRunning}>
           <TooltipIconButton
