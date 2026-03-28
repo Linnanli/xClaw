@@ -10,6 +10,9 @@
  * - 名称标签：fontSize 11, fontWeight 600, fill #9D9C9A
  * - 气泡 padding: [12,16]，文字 fontSize 14
  * - 气泡区域偏移 42px（头像 32px + gap 10px）
+ *
+ * TODO: 此组件目前未被主 UI 入口（thread.tsx）使用，属于待清理的遗留代码。
+ * 主 UI 使用 assistant-ui 的 Thread 组件体系（thread.tsx）。
  */
 
 import { useState, useCallback } from 'react';

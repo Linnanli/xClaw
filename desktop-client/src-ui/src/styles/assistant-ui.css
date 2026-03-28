@@ -6,7 +6,7 @@
  *
  * 设计稿参考：client-design.pen
  * - 用户消息：bg #3D8A5A, 白色文字, 圆角 [16,16,4,16]
- * - AI 消息：bg #FFFFFF, 边框 #E5E4E1, 圆角 [16,16,16,4]
+ * - AI 消息：文档流布局，无气泡/无背景/无边框
  * - 输入框：720px 居中, 圆角 17px, aurora 动画
  */
 
@@ -17,12 +17,12 @@
   border-radius: 16px 16px 4px 16px;
 }
 
-/* ── AI 消息：白色背景 + 边框 ── */
+/* ── AI 消息：文档流布局，移除气泡样式 ── */
 [data-role="assistant"] .aui-assistant-message-content {
-  background-color: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 16px 16px 16px 4px;
-  padding: 12px 16px;
+  background-color: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
 }
 
 /* ── 输入框：720px 居中 ── */

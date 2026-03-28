@@ -263,7 +263,16 @@ const AssistantMessage: FC = () => {
       className="aui-assistant-message-root fade-in slide-in-from-bottom-1 relative mx-auto w-full max-w-(--thread-max-width) animate-in py-3 duration-150"
       data-role="assistant"
     >
-      <div className="aui-assistant-message-content wrap-break-word px-2 text-foreground leading-relaxed">
+      {/* 头像 + 名称标签 */}
+      <div className="mb-1.5 flex items-center gap-2.5 px-2">
+        <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-[#2D6B45] text-xs font-medium text-white">
+          XC
+        </div>
+        <span className="text-[11px] font-semibold text-[#9D9C9A]">X-Claw</span>
+      </div>
+
+      {/* 文档流内容区域：左偏移 42px 与头像对齐，无气泡 */}
+      <div className="aui-assistant-message-content wrap-break-word pl-[42px] pr-2 text-foreground leading-relaxed">
         <MessagePrimitive.Parts>
           {({ part }) => {
             if (part.type === "reasoning") return <Reasoning {...part} />;
@@ -276,7 +285,7 @@ const AssistantMessage: FC = () => {
         <MessageError />
       </div>
 
-      <div className="aui-assistant-message-footer mt-1 ml-2 flex min-h-6 items-center">
+      <div className="aui-assistant-message-footer mt-1 ml-[42px] flex min-h-6 items-center">
         <BranchPicker />
         <AssistantActionBar />
       </div>
