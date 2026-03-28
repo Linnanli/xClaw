@@ -68,7 +68,7 @@ fn main() {
                     let _ = app_handle.emit(
                         "chat-event",
                         desktop_client::tauri_channel::ChatEvent::Error {
-                            message: format!("Engine startup failed: {}", err_msg),
+                            message: desktop_client::error::friendly_engine_error(&err_msg),
                             code: Some("ENGINE_STARTUP_FAILED".into()),
                         },
                     );

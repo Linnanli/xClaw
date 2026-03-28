@@ -164,90 +164,11 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
 
   /**
    * 处理聊天事件
-   * 
-   * 注意: 使用 useRef 存储回调函数引用，避免频繁重新订阅
+   *
+   * 使用 useRef 存储回调函数引用，避免频繁重新订阅。
+   * 初始值为空函数，useEffect 中更新为包含最新闭包的实现。
    */
-  const handleChatEventRef = useRef((event: ChatEvent) => {
-    tracing.debug('Received chat event', { type: event.type });
-
-    switch (event.type) {
-      case 'response':
-        // 添加 AI 响应消息，将累积的 thinkingSteps 嵌入消息自身
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: event.message_id,
-            role: 'assistant',
-            content: event.content,
-            timestamp: Date.now(),
-            thinkingSteps: thinkingStepsRef.current.length > 0
-              ? [...thinkingStepsRef.current]
-              : undefined,
-            activeSkills: activeSkillsRef.current.length > 0
-              ? [...activeSkillsRef.current]
-              : undefined,
-          },
-        ]);
-        thinkingStepsRef.current = [];
-        activeSkillsRef.current = [];
-        setThinkingSteps([]);
-        setIsLoading(false);
-        setThinkingMessage(null);
-        break;
-
-      case 'thinking':
-        // 显示思考状态并累积步骤
-        setThinkingMessage(event.message);
-        {
-          const newStep = { id: `step-${Date.now()}`, message: event.message, timestamp: Date.now() };
-          thinkingStepsRef.current = [...thinkingStepsRef.current, newStep];
-          setThinkingSteps((prev) => [...prev, newStep]);
-        }
-        setIsLoading(true);
-        break;
-
-      case 'status':
-        // 更新状态
-        tracing.debug('Status update', { level: event.level, message: event.message });
-        onStatusChange?.(event.message);
-        break;
-
-      case 'error':
-        // 显示错误
-        const errorMsg = event.code
-          ? `${event.message} (${event.code})`
-          : event.message;
-        
-        // SSE 连接错误不应该清除 loading 状态（可能是后台重连）
-        // 只有非连接错误才清除 loading
-        if (!event.code?.startsWith('HTTP_') && !event.code?.startsWith('CONNECTION_')) {
-          setError(errorMsg);
-          setIsLoading(false);
-          setThinkingMessage(null);
-          // 错误时也保留 thinkingStepsRef 供用户查看
-        } else {
-          // 连接错误：更新连接状态
-          setIsConnected(false);
-          tracing.warn('SSE connection error', { code: event.code, message: event.message });
-        }
-        onError?.(errorMsg);
-        break;
-
-      case 'connection_status':
-        // 更新连接状态
-        setIsConnected(event.connected);
-        tracing.info(
-          event.connected ? 'Connected to chat events' : 'Disconnected from chat events'
-        );
-        break;
-
-      case 'skills_activated':
-        // 暂存激活的技能，等 response 事件到来时嵌入消息
-        activeSkillsRef.current = event.skills;
-        tracing.debug('Skills activated', { skills: event.skills });
-        break;
-    }
-  });
+  const handleChatEventRef = useRef((_event: ChatEvent) => {});
 
   // 更新 ref 以使用最新的回调
   useEffect(() => {

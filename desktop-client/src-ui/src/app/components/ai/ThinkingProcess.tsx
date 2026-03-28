@@ -1,39 +1,32 @@
 /**
  * ThinkingProcess - AI 思考过程展示组件
  *
- * 使用 shadcn/ui Collapsible 实现可折叠的思考步骤列表。
- * 思考进行中时自动展开并显示脉冲指示器；完成后折叠，可手动展开查看。
+ * 复用 assistant-ui 的 Reasoning 子组件（ReasoningRoot/Trigger/Content/Text），
+ * 保持与 thread.tsx 中 reasoning part 渲染一致的视觉语言。
  *
  * 视觉规范（设计稿 client-design.pen → X-Claw Thinking Process / Thinking Complete）：
  * - AI 头像：#2D6B45 32×32，fallback "XC"
- * - 气泡：#FFFFFF 背景 + #E5E4E1 1px 边框，圆角 [4,16,16,16]
- * - 气泡偏移 42px（头像 32px + gap 10px）
- * - 名称标签：fontSize 11, fontWeight 600, fill #9D9C9A, fontFamily Outfit
- * - 触发器：padding [12,16], gap 8, fontSize 14, fill #4A4947
- * - 脉冲指示器：8×8, active=#2D6B45(带 ping), inactive=#9D9C9A
- * - 步骤区域：padding [8,16,12,16], gap 6, border-top #E5E4E1
  * - 步骤编号：16×16 圆形, bg #F0EFED, fontSize 10, fill #9D9C9A
  * - 步骤文字：fontSize 12, fill #6B6A68
- * - 等待指示：4×4 圆点 #2D6B45 + "..." #9D9C9A
  */
 
 import { useEffect, useState } from 'react';
-import { ChevronDown } from 'lucide-react';
-import { cn } from '../ui/utils';
+import { WrenchIcon } from 'lucide-react';
 import { Avatar, AvatarFallback } from '../ui/avatar';
 import {
-  Collapsible,
+  ReasoningRoot,
+  ReasoningContent,
+  ReasoningText,
+} from '../assistant-ui/reasoning';
+import {
   CollapsibleTrigger,
-  CollapsibleContent,
 } from '../ui/collapsible';
+import { cn } from '../ui/utils';
 import type { ThinkingStep } from '../../hooks/useAiChatTauri';
 
 export interface ThinkingProcessProps {
-  /** 思考步骤列表 */
   steps: ThinkingStep[];
-  /** 是否正在思考中（控制脉冲动画和自动展开） */
   isActive: boolean;
-  /** 隐藏头像和名称（嵌入 ChatMessage 时使用，避免重复渲染头像） */
   hideAvatar?: boolean;
   className?: string;
 }
@@ -41,7 +34,6 @@ export interface ThinkingProcessProps {
 export function ThinkingProcess({ steps, isActive, hideAvatar, className }: ThinkingProcessProps) {
   const [isOpen, setIsOpen] = useState(false);
 
-  // 思考进行中时自动展开，完成后自动折叠
   useEffect(() => {
     setIsOpen(isActive);
   }, [isActive]);
@@ -49,10 +41,12 @@ export function ThinkingProcess({ steps, isActive, hideAvatar, className }: Thin
   if (steps.length === 0 && !isActive) return null;
 
   const latestStep = steps[steps.length - 1];
+  const triggerLabel = isActive
+    ? (latestStep?.message ?? '正在思考...')
+    : `思考完成（${steps.length} 步）`;
 
   return (
     <div className={cn('flex flex-col items-start gap-1.5', className)}>
-      {/* AI 头像 + 名称（嵌入 ChatMessage 时隐藏） */}
       {!hideAvatar && (
         <div className="flex items-center gap-2.5">
           <Avatar className="size-8">
@@ -64,72 +58,60 @@ export function ThinkingProcess({ steps, isActive, hideAvatar, className }: Thin
         </div>
       )}
 
-      {/* 思考气泡（独立渲染时偏移 42px，嵌入 ChatMessage 时不偏移） */}
       <div className={cn('w-full', !hideAvatar && 'pl-[42px]')}>
-        <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-          <div className="overflow-hidden rounded-tl rounded-tr-2xl rounded-br-2xl rounded-bl-2xl border border-[#E5E4E1] bg-white">
-            {/* 触发器：设计稿 trigger padding [12,16] gap 8 */}
-            <CollapsibleTrigger asChild>
-              <button
-                type="button"
-                className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm text-[#4A4947] hover:bg-[#FAFAF9] transition-colors"
-                aria-label={isOpen ? '收起思考过程' : '展开思考过程'}
-              >
-                {/* 脉冲指示器 */}
-                {isActive ? (
-                  <span className="relative flex size-2 shrink-0" aria-hidden="true">
-                    <span className="absolute inline-flex size-full animate-ping rounded-full bg-[#2D6B45] opacity-75" />
-                    <span className="relative inline-flex size-2 rounded-full bg-[#2D6B45]" />
-                  </span>
-                ) : (
-                  <span className="flex size-2 shrink-0 rounded-full bg-[#9D9C9A]" aria-hidden="true" />
-                )}
-
-                <span className="flex-1 truncate">
-                  {isActive
-                    ? latestStep?.message || '正在思考...'
-                    : `思考完成（${steps.length} 步）`}
+        <ReasoningRoot
+          open={isOpen}
+          onOpenChange={setIsOpen}
+          variant="outline"
+        >
+          <CollapsibleTrigger
+            data-slot="reasoning-trigger"
+            className="aui-reasoning-trigger group/trigger flex max-w-full items-center gap-2 py-1 text-muted-foreground text-sm transition-colors hover:text-foreground w-full"
+          >
+            <WrenchIcon
+              data-slot="reasoning-trigger-icon"
+              className="aui-reasoning-trigger-icon size-4 shrink-0"
+            />
+            <span
+              data-slot="reasoning-trigger-label"
+              className="aui-reasoning-trigger-label-wrapper relative inline-block leading-none flex-1 text-left truncate"
+            >
+              <span>{triggerLabel}</span>
+              {isActive && (
+                <span
+                  aria-hidden
+                  data-slot="reasoning-trigger-shimmer"
+                  className="aui-reasoning-trigger-shimmer shimmer pointer-events-none absolute inset-0 motion-reduce:animate-none"
+                >
+                  {triggerLabel}
                 </span>
+              )}
+            </span>
+          </CollapsibleTrigger>
 
-                <ChevronDown
-                  className={cn(
-                    'size-4 shrink-0 text-[#9D9C9A] transition-transform duration-200',
-                    isOpen && 'rotate-180',
-                  )}
-                  aria-hidden="true"
-                />
-              </button>
-            </CollapsibleTrigger>
-
-            {/* 展开内容：设计稿 stepsContent padding [8,16,12,16] gap 6 border-top */}
-            <CollapsibleContent>
-              <div className="border-t border-[#E5E4E1] px-4 pt-2 pb-3">
-                <ol className="space-y-1.5" aria-label="思考步骤">
-                  {steps.map((step, index) => (
-                    <li
-                      key={step.id}
-                      className="flex items-start gap-2 text-xs text-[#6B6A68]"
-                    >
-                      <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full bg-[#F0EFED] text-[10px] font-medium text-[#9D9C9A]">
-                        {index + 1}
-                      </span>
-                      <span className="leading-relaxed">{step.message}</span>
-                    </li>
-                  ))}
-                  {/* 活跃状态下的等待指示 */}
-                  {isActive && (
-                    <li className="flex items-center gap-2 text-xs text-[#9D9C9A]" aria-label="等待下一步">
-                      <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center">
-                        <span className="inline-block size-1 animate-pulse rounded-full bg-[#2D6B45]" />
-                      </span>
-                      <span className="animate-pulse">...</span>
-                    </li>
-                  )}
-                </ol>
-              </div>
-            </CollapsibleContent>
-          </div>
-        </Collapsible>
+          <ReasoningContent aria-busy={isActive}>
+            <ReasoningText>
+              <ol className="space-y-1.5" aria-label="思考步骤">
+                {steps.map((step, index) => (
+                  <li key={step.id} className="flex items-start gap-2 text-xs text-[#6B6A68]">
+                    <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full bg-[#F0EFED] text-[10px] font-medium text-[#9D9C9A]">
+                      {index + 1}
+                    </span>
+                    <span className="leading-relaxed">{step.message}</span>
+                  </li>
+                ))}
+                {isActive && (
+                  <li className="flex items-center gap-2 text-xs text-[#9D9C9A]" aria-label="等待下一步">
+                    <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center">
+                      <span className="inline-block size-1 animate-pulse rounded-full bg-[#2D6B45]" />
+                    </span>
+                    <span className="animate-pulse">...</span>
+                  </li>
+                )}
+              </ol>
+            </ReasoningText>
+          </ReasoningContent>
+        </ReasoningRoot>
       </div>
     </div>
   );

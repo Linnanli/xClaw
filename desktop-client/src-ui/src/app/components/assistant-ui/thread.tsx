@@ -37,6 +37,8 @@ import {
   RefreshCwIcon,
   ShieldCheck,
   SquareIcon,
+  SettingsIcon,
+  XCircleIcon,
 } from "lucide-react";
 import { type FC, useCallback } from "react";
 
@@ -53,14 +55,14 @@ export const Thread: FC = () => {
     <ThreadPrimitive.Root
       className="aui-root aui-thread-root @container flex h-full flex-col bg-background"
       style={{
-        ["--thread-max-width" as string]: "44rem",
+        ["--thread-max-width" as string]: "56rem",
         ["--composer-radius" as string]: "24px",
         ["--composer-padding" as string]: "10px",
       }}
     >
       <ThreadPrimitive.Viewport
         turnAnchor="top"
-        className="aui-thread-viewport relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll scroll-smooth px-4 pt-4"
+        className="aui-thread-viewport relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll scroll-smooth px-10 pt-6"
       >
         <AuiIf condition={(s) => s.thread.isEmpty}>
           <ThreadWelcome />
@@ -250,8 +252,23 @@ const ComposerSendButton: FC<{ onSend: () => void }> = ({ onSend }) => {
 const MessageError: FC = () => {
   return (
     <MessagePrimitive.Error>
-      <ErrorPrimitive.Root className="aui-message-error-root mt-2 rounded-md border border-destructive bg-destructive/10 p-3 text-destructive text-sm dark:bg-destructive/5 dark:text-red-200">
-        <ErrorPrimitive.Message className="aui-message-error-message line-clamp-2" />
+      <ErrorPrimitive.Root className="aui-message-error-root mt-2 flex max-w-[600px] flex-col gap-2 rounded-tl rounded-tr-2xl rounded-br-2xl rounded-bl-2xl border border-[#FCCDC7] bg-[#FFFAF9] px-4 py-3.5">
+        {/* 标题行：图标 + 标题 */}
+        <div className="flex items-center gap-2.5">
+          <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-[#FFF0EE]">
+            <XCircleIcon className="size-[18px] text-[#CC3314]" />
+          </div>
+          <span className="text-[13px] font-semibold text-[#B52A14]">模型调用失败</span>
+        </div>
+        {/* 错误正文 */}
+        <ErrorPrimitive.Message className="aui-message-error-message text-[13px] leading-[1.55] text-[#5A5856]" />
+        {/* 分割线 */}
+        <div className="h-px bg-[#FCCDC7]" />
+        {/* 底部提示 */}
+        <div className="flex items-center gap-1.5 text-[11px] text-[#9D9C9A]">
+          <SettingsIcon className="size-[11px] shrink-0" />
+          <span>如需帮助，请前往设置检查模型配置</span>
+        </div>
       </ErrorPrimitive.Root>
     </MessagePrimitive.Error>
   );
@@ -264,15 +281,15 @@ const AssistantMessage: FC = () => {
       data-role="assistant"
     >
       {/* 头像 + 名称标签 */}
-      <div className="mb-1.5 flex items-center gap-2.5 px-2">
+      <div className="mb-1.5 flex items-center gap-2.5">
         <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-[#2D6B45] text-xs font-medium text-white">
           XC
         </div>
         <span className="text-[11px] font-semibold text-[#9D9C9A]">X-Claw</span>
       </div>
 
-      {/* 文档流内容区域：左偏移 42px 与头像对齐，无气泡 */}
-      <div className="aui-assistant-message-content wrap-break-word pl-[42px] pr-2 text-foreground leading-relaxed">
+      {/* 内容区：左偏移 42px（头像 32px + gap 10px），与头像右侧对齐 */}
+      <div className="aui-assistant-message-content wrap-break-word ml-[42px] text-foreground leading-relaxed">
         <MessagePrimitive.Parts>
           {({ part }) => {
             if (part.type === "reasoning") return <Reasoning {...part} />;
@@ -349,7 +366,7 @@ const UserMessage: FC = () => {
 
   return (
     <MessagePrimitive.Root
-      className="aui-user-message-root fade-in slide-in-from-bottom-1 mx-auto grid w-full max-w-(--thread-max-width) animate-in auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 py-3 duration-150 [&:where(>*)]:col-start-2"
+      className="aui-user-message-root fade-in slide-in-from-bottom-1 mx-auto grid w-full max-w-(--thread-max-width) animate-in auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 py-3 duration-150 [&:where(>*)]:col-start-2"
       data-role="user"
     >
       <UserMessageAttachments />

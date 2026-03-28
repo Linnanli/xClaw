@@ -33,6 +33,7 @@ import { useDlpScan } from '@hooks/useDlpScan';
 import type { SanitizationStats } from '@hooks/useDlpScan';
 import { tracing } from '@utils/tracing';
 import { ModelContext } from '@contexts/ModelContext';
+import { isErrorResponse, friendlyErrorMessage } from '@utils/friendlyError';
 
 // ============================================================================
 // 类型定义
@@ -46,6 +47,8 @@ interface TauriMessage {
   reasoning?: string;
   /** DLP 脱敏统计，仅用户消息有值 */
   dlpStats?: SanitizationStats;
+  /** 错误消息，assistant 消息出错时设置 */
+  error?: string;
 }
 
 /** 后端可能返回的所有 role 类型 */
@@ -115,24 +118,35 @@ export const useDlpState = () => useContext(DlpContext);
 function convertMessage(msg: TauriMessage): ThreadMessageLike {
   const parts: Array<{ type: 'text'; text: string } | { type: 'reasoning'; text: string }> = [];
 
-  if (msg.reasoning) {
-    parts.push({ type: 'reasoning', text: msg.reasoning });
-  }
-  if (msg.content) {
-    parts.push({ type: 'text', text: msg.content });
-  }
-  if (parts.length === 0) {
-    parts.push({ type: 'text', text: '' });
+  // ironclaw agent loop 在 handle_message 失败时发送 `"Error: {chain}"` 格式的普通 response，
+  // 检测后转换为 error 状态，由 ErrorPrimitive 渲染友好提示。
+  if (msg.role === 'assistant' && isErrorResponse(msg.content)) {
+    return {
+      role: msg.role,
+      content: [{ type: 'text', text: '' }],
+      id: msg.id,
+      createdAt: new Date(msg.timestamp),
+      status: { type: 'incomplete', reason: 'error', error: friendlyErrorMessage(msg.content) },
+    };
   }
 
-  return {
+  if (msg.reasoning) parts.push({ type: 'reasoning', text: msg.reasoning });
+  if (msg.content) parts.push({ type: 'text', text: msg.content });
+  if (parts.length === 0) parts.push({ type: 'text', text: '' });
+
+  const base = {
     role: msg.role,
     content: parts,
     id: msg.id,
     createdAt: new Date(msg.timestamp),
-    // dlpStats 存入 metadata.custom，供 UserMessage 组件读取
     ...(msg.dlpStats ? { metadata: { custom: { dlpStats: msg.dlpStats } } } : {}),
   };
+
+  if (msg.error) {
+    return { ...base, status: { type: 'incomplete', reason: 'error', error: msg.error } };
+  }
+
+  return base;
 }
 
 // ============================================================================
@@ -370,6 +384,26 @@ export function TauriRuntimeProvider({
         thinkingBuffer.current = '';
         setIsRunning(false);
         tracing.error('Chat event error', { message: event.message, code: event.code });
+        setMessages((prev) => {
+          // 如果已有 pending assistant 消息，更新它为错误状态
+          const lastMsg = prev[prev.length - 1];
+          if (lastMsg?.role === 'assistant' && !lastMsg.error) {
+            return prev.map((m, i) =>
+              i === prev.length - 1 ? { ...m, error: event.message } : m,
+            );
+          }
+          // 否则新增一条错误消息
+          return [
+            ...prev,
+            {
+              id: `error-${Date.now()}`,
+              role: 'assistant',
+              content: '',
+              timestamp: Date.now(),
+              error: event.message,
+            },
+          ];
+        });
         break;
 
       case 'connection_status':
