@@ -12,9 +12,10 @@
 
 use ironclaw::channels::IncomingMessage;
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{Emitter, Manager, State};
 
 use crate::state::EngineState;
+use crate::tauri_channel::ChatEvent;
 
 /// 发送消息的响应。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +29,18 @@ pub struct SendMessageResponse {
 /// 构造 `IncomingMessage` 并通过 `msg_sender` 注入 Agent 消息循环。
 /// AI 回复通过 `chat-event` Tauri 事件异步推送到前端。
 ///
+/// # 模型切换
+///
+/// `model_id` 通过 `AppState.model_override` 共享状态传递给
+/// `ModelOverrideLlmProvider`，后者在每次 LLM 调用时注入到
+/// `CompletionRequest.model` / `ToolCompletionRequest.model`。
+/// 这是纯 desktop-client 侧的扩展，不修改 ironclaw 任何代码。
+///
+/// # Skill 激活通知
+///
+/// 在消息注入 Agent 前，先用 ironclaw 的 `prefilter_skills` 做本地匹配。
+/// 若有 skill 被激活，通过 `chat-event` 发出 `skills_activated` 事件。
+///
 /// # 安全
 ///
 /// - 消息内容先经过 SafetyBridge 扫描（密钥检测 + PII 脱敏）
@@ -37,6 +50,7 @@ pub struct SendMessageResponse {
 /// - 仅记录 message_id 和 thread_id 用于追踪
 #[tauri::command]
 pub async fn send_chat_message(
+    app_handle: tauri::AppHandle,
     state: State<'_, EngineState>,
     thread_id: String,
     content: String,
@@ -59,7 +73,6 @@ pub async fn send_chat_message(
         }));
     }
 
-    // 使用脱敏后的内容构造消息
     let safe_content = if scan_result.had_sensitive_data {
         tracing::debug!(
             message_id = %message_id,
@@ -71,23 +84,20 @@ pub async fn send_chat_message(
         content
     };
 
-    // 构造 metadata，包含可选的模型覆盖
-    let metadata = match &model_id {
-        Some(id) => {
-            tracing::debug!(
-                message_id = %message_id,
-                model_id = %id,
-                "Model override requested"
-            );
-            serde_json::json!({ "model_override": id })
-        }
-        None => serde_json::Value::Null,
-    };
+    // ── 模型切换（desktop-client 侧扩展）─────────────────────────
+    // 更新共享的 model override，ModelOverrideLlmProvider 会在下次
+    // LLM 调用时读取并注入到 CompletionRequest.model。
+    if let Some(ref id) = model_id {
+        state.model_override.set(Some(id.clone()));
+        tracing::debug!(model_id = %id, "Model override updated");
+    }
+
+    // ── Skill 激活通知（desktop-client 侧扩展）────────────────────
+    emit_skills_activated_if_any(&app_handle, state, &safe_content);
 
     let msg = IncomingMessage::new("tauri", &state.owner_id, &safe_content)
         .with_thread(&thread_id)
-        .with_owner_id(&state.owner_id)
-        .with_metadata(metadata);
+        .with_owner_id(&state.owner_id);
 
     state
         .msg_sender
@@ -108,43 +118,68 @@ pub async fn send_chat_message(
     })
 }
 
+/// 在消息发送前做 skill 关键词匹配，若有激活则 emit `skills_activated` 事件。
+///
+/// 使用 ironclaw 已有的 `prefilter_skills` 函数，不修改 ironclaw 任何代码。
+/// 失败时静默跳过（skill 通知是 best-effort，不影响消息发送）。
+fn emit_skills_activated_if_any(
+    app_handle: &tauri::AppHandle,
+    state: &crate::state::AppState,
+    content: &str,
+) {
+
+    let Some(registry) = state.skill_registry.as_ref() else {
+        return;
+    };
+    let Ok(guard) = registry.read() else {
+        return;
+    };
+
+    let skills_cfg = &state.skills_config;
+    let selected = ironclaw::skills::prefilter_skills(
+        content,
+        guard.skills(),
+        skills_cfg.max_active_skills,
+        skills_cfg.max_context_tokens,
+    );
+
+    if selected.is_empty() {
+        return;
+    }
+
+    let skill_names: Vec<String> = selected.iter().map(|s| s.name().to_string()).collect();
+    tracing::debug!(skills = ?skill_names, "Skills activated (client-side detection)");
+
+    let _ = app_handle.emit(
+        "chat-event",
+        crate::tauri_channel::ChatEvent::SkillsActivated { skills: skill_names },
+    );
+}
+
 /// 订阅聊天事件（兼容命令）。
-///
-/// 新架构下 TauriChannel 在引擎启动时自动推送事件到前端，
-/// 前端的 `listen('chat-event')` 天然就是订阅。
-///
-/// 如果引擎已就绪（AppState 已注入），立即发送 connection_status: true。
-/// 如果引擎还未就绪，返回成功但不发送事件（引擎启动后会自动发送）。
 #[tauri::command]
-pub async fn subscribe_chat_events(
-    app_handle: tauri::AppHandle,
-) -> Result<(), String> {
+pub async fn subscribe_chat_events(app_handle: tauri::AppHandle) -> Result<(), String> {
     tracing::debug!("subscribe_chat_events called");
 
-    use tauri::{Emitter, Manager};
-    use crate::tauri_channel::ChatEvent;
-
-    // 检查引擎是否已就绪
-    if app_handle.try_state::<crate::state::EngineState>()
+    if app_handle
+        .try_state::<crate::state::EngineState>()
         .map_or(false, |es| es.is_ready())
     {
         app_handle
-            .emit("chat-event", ChatEvent::ConnectionStatus {
-                connected: true,
-                message: "IronClaw engine ready".to_string(),
-            })
+            .emit(
+                "chat-event",
+                ChatEvent::ConnectionStatus {
+                    connected: true,
+                    message: "IronClaw engine ready".to_string(),
+                },
+            )
             .map_err(|e| format!("Failed to emit connection status: {}", e))?;
-    } else {
-        tracing::debug!("Engine not ready yet, connection_status will be sent after startup");
     }
 
     Ok(())
 }
 
-/// 取消订阅聊天事件（兼容命令）。
-///
-/// 新架构下无需手动取消订阅，前端 `unlisten()` 即可停止接收事件。
-/// 此命令保留仅为兼容现有前端代码，实际为 no-op。
+/// 取消订阅聊天事件（兼容命令，no-op）。
 #[tauri::command]
 pub async fn unsubscribe_chat_events() -> Result<(), String> {
     tracing::debug!("unsubscribe_chat_events called (no-op in embedded mode)");

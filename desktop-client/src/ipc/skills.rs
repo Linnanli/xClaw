@@ -20,6 +20,12 @@ pub struct SkillInfo {
     pub name: String,
     pub version: String,
     pub description: String,
+    /// 技能来源：`"workspace"` | `"user"` | `"installed"`
+    pub source: String,
+    /// 信任级别：`"trusted"` | `"installed"`
+    pub trust: String,
+    /// 激活关键词列表（供前端展示触发条件）
+    pub keywords: Vec<String>,
 }
 
 /// 技能目录搜索结果。
@@ -48,14 +54,27 @@ pub async fn ic_list_skills(
     let result = guard
         .skills()
         .iter()
-        .map(|s| SkillInfo {
-            name: s.manifest.name.clone(),
-            version: s.manifest.version.clone(),
-            description: s.manifest.description.clone(),
+        .map(|s| {
+            let source = match &s.source {
+                ironclaw::skills::SkillSource::Workspace(_)
+                | ironclaw::skills::SkillSource::Bundled(_) => "workspace",
+                ironclaw::skills::SkillSource::User(_) => "user",
+            };
+            let trust = match s.trust {
+                ironclaw::skills::SkillTrust::Trusted => "trusted",
+                ironclaw::skills::SkillTrust::Installed => "installed",
+            };
+            SkillInfo {
+                name: s.manifest.name.clone(),
+                version: s.manifest.version.clone(),
+                description: s.manifest.description.clone(),
+                source: source.to_string(),
+                trust: trust.to_string(),
+                keywords: s.manifest.activation.keywords.iter().take(5).cloned().collect(),
+            }
         })
         .collect();
 
-    // guard 在此处自动释放（不跨 await）
     Ok(result)
 }
 

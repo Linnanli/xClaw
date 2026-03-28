@@ -21,11 +21,17 @@ mod tests {
             name: "code-review".into(),
             version: "1.0.0".into(),
             description: "Automated code review skill".into(),
+            source: "workspace".into(),
+            trust: "trusted".into(),
+            keywords: vec!["review".into(), "code".into()],
         };
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["name"], "code-review");
         assert_eq!(json["version"], "1.0.0");
         assert_eq!(json["description"], "Automated code review skill");
+        assert_eq!(json["source"], "workspace");
+        assert_eq!(json["trust"], "trusted");
+        assert!(json["keywords"].is_array());
     }
 
     #[test]
@@ -33,11 +39,15 @@ mod tests {
         let json = r#"{
             "name": "tdd-practitioner",
             "version": "2.1.0",
-            "description": "TDD methodology skill"
+            "description": "TDD methodology skill",
+            "source": "user",
+            "trust": "trusted",
+            "keywords": ["tdd", "test"]
         }"#;
         let info: SkillInfo = serde_json::from_str(json).unwrap();
         assert_eq!(info.name, "tdd-practitioner");
         assert_eq!(info.version, "2.1.0");
+        assert_eq!(info.source, "user");
     }
 
     #[test]
@@ -78,6 +88,9 @@ mod tests {
     ///   name: string;
     ///   version: string;
     ///   description: string;
+    ///   source: 'workspace' | 'user' | 'installed';
+    ///   trust: 'trusted' | 'installed';
+    ///   keywords: string[];
     /// }
     /// ```
     #[test]
@@ -86,15 +99,21 @@ mod tests {
             name: "test".into(),
             version: "1.0.0".into(),
             description: "desc".into(),
+            source: "workspace".into(),
+            trust: "trusted".into(),
+            keywords: vec!["review".into()],
         };
         let json: serde_json::Value = serde_json::to_value(&info).unwrap();
 
         assert!(json["name"].is_string());
         assert!(json["version"].is_string());
         assert!(json["description"].is_string());
+        assert!(json["source"].is_string());
+        assert!(json["trust"].is_string());
+        assert!(json["keywords"].is_array());
 
         let obj = json.as_object().unwrap();
-        assert_eq!(obj.len(), 3, "SkillInfo should have exactly 3 fields");
+        assert_eq!(obj.len(), 6, "SkillInfo should have exactly 6 fields");
     }
 
     /// 前端 CatalogSearchResult 类型定义：
@@ -156,6 +175,9 @@ mod tests {
             name: "secret-skill".into(),
             version: "1.0.0".into(),
             description: "A skill with secrets".into(),
+            source: "workspace".into(),
+            trust: "trusted".into(),
+            keywords: vec![],
         };
         let json_str = serde_json::to_string(&info).unwrap();
 
@@ -173,13 +195,17 @@ mod tests {
             name: "test".into(),
             version: "1.0.0".into(),
             description: "test".into(),
+            source: "user".into(),
+            trust: "trusted".into(),
+            keywords: vec![],
         };
         let json_str = serde_json::to_string(&info).unwrap();
 
         assert!(!json_str.contains("activation"));
-        assert!(!json_str.contains("keywords"));
         assert!(!json_str.contains("metadata"));
-        assert!(!json_str.contains("trust"));
+        // trust 字段是预期的，但不应包含内部 trust 枚举的原始值
+        assert!(!json_str.contains("prompt_content"));
+        assert!(!json_str.contains("content_hash"));
     }
 
     /// 验证 CatalogSearchResult 不包含 owner 个人信息。
@@ -210,6 +236,9 @@ mod tests {
             name: "minimal".into(),
             version: "0.0.1".into(),
             description: "".into(),
+            source: "user".into(),
+            trust: "installed".into(),
+            keywords: vec![],
         };
         let json = serde_json::to_string(&info).unwrap();
         let parsed: SkillInfo = serde_json::from_str(&json).unwrap();
@@ -222,6 +251,9 @@ mod tests {
             name: "代码审查".into(),
             version: "1.0.0".into(),
             description: "自动化代码审查技能".into(),
+            source: "workspace".into(),
+            trust: "trusted".into(),
+            keywords: vec!["审查".into()],
         };
         let json = serde_json::to_string(&info).unwrap();
         let parsed: SkillInfo = serde_json::from_str(&json).unwrap();
@@ -234,6 +266,9 @@ mod tests {
             name: "beta-skill".into(),
             version: "2.0.0-beta.1".into(),
             description: "Beta version".into(),
+            source: "user".into(),
+            trust: "trusted".into(),
+            keywords: vec![],
         };
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["version"], "2.0.0-beta.1");
@@ -285,6 +320,9 @@ mod tests {
             name: "verbose".into(),
             version: "1.0.0".into(),
             description: long_desc.clone(),
+            source: "user".into(),
+            trust: "trusted".into(),
+            keywords: vec![],
         };
         let json = serde_json::to_string(&info).unwrap();
         let parsed: SkillInfo = serde_json::from_str(&json).unwrap();
@@ -297,9 +335,44 @@ mod tests {
             name: "md-skill".into(),
             version: "1.0.0".into(),
             description: "# Title\n\n- item 1\n- item 2\n\n```rust\nfn main() {}\n```".into(),
+            source: "workspace".into(),
+            trust: "trusted".into(),
+            keywords: vec![],
         };
         let json = serde_json::to_string(&info).unwrap();
         let parsed: SkillInfo = serde_json::from_str(&json).unwrap();
         assert!(parsed.description.contains("```rust"));
+    }
+
+    /// 验证 source 字段只包含合法值。
+    #[test]
+    fn test_contract_skill_info_source_values() {
+        for source in &["workspace", "user", "installed"] {
+            let info = SkillInfo {
+                name: "test".into(),
+                version: "1.0.0".into(),
+                description: "".into(),
+                source: source.to_string(),
+                trust: "trusted".into(),
+                keywords: vec![],
+            };
+            let json = serde_json::to_value(&info).unwrap();
+            assert_eq!(json["source"], *source);
+        }
+    }
+
+    /// 验证 keywords 最多 5 个（ic_list_skills 截断逻辑的契约）。
+    #[test]
+    fn test_contract_skill_info_keywords_max_5() {
+        let info = SkillInfo {
+            name: "test".into(),
+            version: "1.0.0".into(),
+            description: "".into(),
+            source: "workspace".into(),
+            trust: "trusted".into(),
+            keywords: vec!["a".into(), "b".into(), "c".into(), "d".into(), "e".into()],
+        };
+        let json = serde_json::to_value(&info).unwrap();
+        assert!(json["keywords"].as_array().unwrap().len() <= 5);
     }
 }

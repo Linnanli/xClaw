@@ -86,6 +86,15 @@ pub enum ChatEvent {
     /// 建议的后续消息。
     #[serde(rename = "suggestions")]
     Suggestions { suggestions: Vec<String> },
+    /// 本轮对话激活的技能列表（desktop-client 侧检测，不依赖 ironclaw 事件）。
+    ///
+    /// 在 `send_chat_message` 中通过 `prefilter_skills` 本地匹配后发出，
+    /// 供前端在 AI 回复前展示"正在使用技能 X"的提示。
+    #[serde(rename = "skills_activated")]
+    SkillsActivated {
+        /// 激活的技能名称列表（按匹配分数排序）。
+        skills: Vec<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------

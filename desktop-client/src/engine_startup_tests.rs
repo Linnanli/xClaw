@@ -54,10 +54,12 @@ mod engine_state_timing_tests {
             extension_manager: None,
             skill_registry: None,
             skill_catalog: None,
+            skills_config: ironclaw::config::SkillsConfig::default(),
             safety,
             safety_bridge,
             context_manager,
             owner_id: "test-owner".to_string(),
+            model_override: crate::model_override::ModelOverrideState::new(),
         }
     }
 

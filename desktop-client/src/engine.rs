@@ -27,6 +27,7 @@ use ironclaw::hooks::bootstrap_hooks;
 use ironclaw::llm::create_session_manager;
 
 use crate::state::{AppState, EngineState};
+use crate::model_override::{ModelOverrideLlmProvider, ModelOverrideState};
 use crate::safety_bridge::SafetyBridge;
 use crate::tauri_channel::{ChatEvent, TauriChannel};
 
@@ -55,6 +56,11 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         owner_id = %config.owner_id,
         "Configuration loaded"
     );
+
+    // ── Phase 1.5: 种植内置 Skills ────────────────────────────────
+    // 在 AppBuilder 之前执行，确保 discover_all() 能找到内置 skills。
+    // 利用 ironclaw 已有的 installed_dir 机制，不修改 ironclaw 任何代码。
+    seed_builtin_skills(&app_handle, &config.skills.installed_dir).await;
 
     // ── Phase 2: 构建所有组件 ──────────────────────────────────────
     let flags = AppBuilderFlags { no_db: false };
@@ -109,6 +115,15 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         None, // DataReporter 在 admin_sync 阶段注入
     ));
 
+    // ── 模型切换扩展：创建共享状态 + 包装 LLM provider ────────────
+    // ModelOverrideState 在 AppState 和 ModelOverrideLlmProvider 之间共享。
+    // send_chat_message 写入 model_override，provider 在每次 LLM 调用时读取。
+    let model_override = ModelOverrideState::new();
+    let wrapped_llm = Arc::new(ModelOverrideLlmProvider::new(
+        Arc::clone(&components.llm),
+        model_override.clone(),
+    ));
+
     let app_state = AppState {
         msg_sender,
         db: components.db.clone(),
@@ -117,10 +132,12 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         extension_manager: components.extension_manager.clone(),
         skill_registry: components.skill_registry.clone(),
         skill_catalog: components.skill_catalog.clone(),
+        skills_config: config.skills.clone(),
         safety: Arc::clone(&components.safety),
         safety_bridge,
         context_manager: Arc::clone(&components.context_manager),
         owner_id: config.owner_id.clone(),
+        model_override,
     };
     // 从 Tauri managed state 获取 EngineState 并填充
     let engine_state = app_handle.state::<EngineState>();
@@ -178,7 +195,7 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     let deps = AgentDeps {
         owner_id: config.owner_id.clone(),
         store: components.db,
-        llm: components.llm,
+        llm: wrapped_llm, // 使用包装后的 provider，支持运行时模型切换
         cheap_llm: components.cheap_llm,
         safety: components.safety,
         tools: components.tools,
@@ -232,4 +249,88 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
 
     tracing::info!("IronClaw engine shut down gracefully");
     Ok(())
+}
+
+// ── 内部辅助函数 ──────────────────────────────────────────────────
+
+/// 将内置 skills 种植到 ironclaw 的 `installed_dir`。
+///
+/// 在 `Config::from_env()` 之后调用，此时 `installed_dir` 路径已确定。
+/// 对每个内置 SKILL.md，若目标目录中不存在同名 skill，则复制过去。
+/// 已存在的 skill 不覆盖（用户可以卸载内置 skill）。
+///
+/// 这是纯 desktop-client 侧的扩展，不修改 ironclaw 任何代码。
+/// ironclaw 的 `installed_dir` 机制本来就支持外部写入，这里只是利用它。
+pub(crate) async fn seed_builtin_skills(app_handle: &AppHandle, installed_dir: &std::path::Path) {
+    let Some(source_dir) = find_builtin_skills_source(app_handle) else {
+        tracing::debug!("No builtin skills source directory found, skipping seed");
+        return;
+    };
+
+    let mut read_dir = match tokio::fs::read_dir(&source_dir).await {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::debug!("Cannot read builtin skills dir {:?}: {}", source_dir, e);
+            return;
+        }
+    };
+
+    let mut seeded = 0u32;
+    while let Ok(Some(entry)) = read_dir.next_entry().await {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let skill_md = path.join("SKILL.md");
+        if !skill_md.exists() {
+            continue;
+        }
+        let Some(skill_name) = path.file_name().and_then(|n| n.to_str()).map(String::from) else {
+            continue;
+        };
+
+        let dest_dir = installed_dir.join(&skill_name);
+        // 已存在则跳过（不覆盖用户修改或已安装版本）
+        if dest_dir.join("SKILL.md").exists() {
+            continue;
+        }
+
+        if let Err(e) = tokio::fs::create_dir_all(&dest_dir).await {
+            tracing::warn!("Failed to create skill dir {:?}: {}", dest_dir, e);
+            continue;
+        }
+        if let Err(e) = tokio::fs::copy(&skill_md, dest_dir.join("SKILL.md")).await {
+            tracing::warn!("Failed to copy builtin skill {:?}: {}", skill_name, e);
+            continue;
+        }
+        seeded += 1;
+        tracing::info!(skill = %skill_name, "Seeded builtin skill to installed_dir");
+    }
+
+    if seeded > 0 {
+        tracing::info!(count = seeded, "Builtin skills seeded");
+    }
+}
+
+/// 查找内置 skills 源目录（按优先级）。
+fn find_builtin_skills_source(app_handle: &AppHandle) -> Option<std::path::PathBuf> {
+    let mut candidates = Vec::new();
+
+    // 1. Tauri resource dir（打包后）
+    if let Ok(resource_dir) = app_handle.path().resource_dir() {
+        candidates.push(resource_dir.join("skills"));
+    }
+    // 2. 开发时相对路径
+    candidates.push(std::path::PathBuf::from("ironclaw/skills"));
+    // 3. 可执行文件目录向上查找（CI / 非标准工作目录）
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            candidates.push(exe_dir.join("../../../ironclaw/skills"));
+        }
+    }
+
+    candidates
+        .into_iter()
+        .find(|p| p.is_dir())
+        .map(|p| p.canonicalize().unwrap_or(p))
 }

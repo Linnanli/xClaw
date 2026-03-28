@@ -32,6 +32,7 @@
 use std::sync::{Arc, OnceLock, RwLock};
 
 use ironclaw::channels::IncomingMessage;
+use ironclaw::config::SkillsConfig;
 use ironclaw::context::ContextManager;
 use ironclaw::db::Database;
 use ironclaw::extensions::ExtensionManager;
@@ -42,6 +43,7 @@ use ironclaw::tools::ToolRegistry;
 use ironclaw::workspace::Workspace;
 use tokio::sync::mpsc;
 
+use crate::model_override::ModelOverrideState;
 use crate::safety_bridge::SafetyBridge;
 
 /// IronClaw 引擎内部状态。
@@ -63,6 +65,8 @@ pub struct AppState {
     pub skill_registry: Option<Arc<std::sync::RwLock<SkillRegistry>>>,
     /// 技能目录。
     pub skill_catalog: Option<Arc<SkillCatalog>>,
+    /// 技能系统配置（用于 skill 匹配参数）。
+    pub skills_config: SkillsConfig,
     /// 安全层（DLP / 内容过滤）。
     pub safety: Arc<SafetyLayer>,
     /// 安全桥接器（统一 SafetyLayer + DLP 格式保留脱敏）。
@@ -71,6 +75,11 @@ pub struct AppState {
     pub context_manager: Arc<ContextManager>,
     /// 实例 owner ID。
     pub owner_id: String,
+    /// 当前选择的模型覆盖（desktop-client 侧扩展，不修改 ironclaw）。
+    ///
+    /// `ModelOverrideLlmProvider` 在每次 LLM 调用时读取此状态并注入到
+    /// `CompletionRequest.model` / `ToolCompletionRequest.model`。
+    pub model_override: ModelOverrideState,
 }
 
 /// Tauri managed state — 引擎就绪前安全的包装器。

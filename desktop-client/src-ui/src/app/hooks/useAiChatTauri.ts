@@ -36,6 +36,8 @@ export interface Message {
   dlpStats?: SanitizationStats;
   /** AI 思考步骤（仅 assistant 消息，嵌入到消息自身，参考 Vercel AI SDK message.parts 模式） */
   thinkingSteps?: ThinkingStep[];
+  /** 本轮激活的技能名称（仅 assistant 消息，在 LLM 调用前收到） */
+  activeSkills?: string[];
 }
 
 /** DLP 警告事件，供 UI 层消费 */
@@ -89,6 +91,11 @@ type ChatEvent =
       type: 'connection_status';
       connected: boolean;
       message: string;
+    }
+  | {
+      /** 本轮对话激活的技能列表，在 LLM 调用前发出 */
+      type: 'skills_activated';
+      skills: string[];
     };
 
 interface UseAiChatTauriOptions {
@@ -141,6 +148,8 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
   const [thinkingSteps, setThinkingSteps] = useState<ThinkingStep[]>([]);
   const thinkingStepsRef = useRef<ThinkingStep[]>([]);
   const [dlpWarning, setDlpWarning] = useState<DlpWarningEvent | null>(null);
+  /** 当前轮次激活的技能（在 response 事件到来前暂存，嵌入到 assistant 消息） */
+  const activeSkillsRef = useRef<string[]>([]);
 
   // 使用 ref 跟踪消息 ID,避免重复
   const messageIdRef = useRef(1);
@@ -174,9 +183,13 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
             thinkingSteps: thinkingStepsRef.current.length > 0
               ? [...thinkingStepsRef.current]
               : undefined,
+            activeSkills: activeSkillsRef.current.length > 0
+              ? [...activeSkillsRef.current]
+              : undefined,
           },
         ]);
         thinkingStepsRef.current = [];
+        activeSkillsRef.current = [];
         setThinkingSteps([]);
         setIsLoading(false);
         setThinkingMessage(null);
@@ -227,6 +240,12 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
           event.connected ? 'Connected to chat events' : 'Disconnected from chat events'
         );
         break;
+
+      case 'skills_activated':
+        // 暂存激活的技能，等 response 事件到来时嵌入消息
+        activeSkillsRef.current = event.skills;
+        tracing.debug('Skills activated', { skills: event.skills });
+        break;
     }
   });
 
@@ -247,9 +266,13 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
               thinkingSteps: thinkingStepsRef.current.length > 0
                 ? [...thinkingStepsRef.current]
                 : undefined,
+              activeSkills: activeSkillsRef.current.length > 0
+                ? [...activeSkillsRef.current]
+                : undefined,
             },
           ]);
           thinkingStepsRef.current = [];
+          activeSkillsRef.current = [];
           setThinkingSteps([]);
           setIsLoading(false);
           setThinkingMessage(null);
@@ -292,6 +315,11 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
           tracing.info(
             event.connected ? 'Connected to chat events' : 'Disconnected from chat events'
           );
+          break;
+
+        case 'skills_activated':
+          activeSkillsRef.current = event.skills;
+          tracing.debug('Skills activated', { skills: event.skills });
           break;
       }
     };

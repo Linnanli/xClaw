@@ -48,6 +48,9 @@ dotenvy = "0.15"
 # Date/time
 chrono = { version = "0.4", features = ["serde"] }
 
+# Decimal (shared with ironclaw for LlmProvider::cost_per_token)
+rust_decimal = "1"
+
 # OS Keychain integration
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
