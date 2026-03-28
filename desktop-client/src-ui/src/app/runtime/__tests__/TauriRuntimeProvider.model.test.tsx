@@ -382,3 +382,63 @@ describe('TauriRuntimeProvider - 安全审计', () => {
     expect(selectedId).not.toMatch(/^Bearer /);
   });
 });
+
+// ============================================================================
+// 回归测试 — 模型切换在组件重新挂载后保持
+// ============================================================================
+
+describe('TauriRuntimeProvider - 模型切换持久性（回归）', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const mocks = await getMocks();
+    mocks.getAvailableModels.mockResolvedValue(mockModels);
+    mocks.getMessages.mockResolvedValue([]);
+    mocks.listen.mockResolvedValue(() => {});
+    mocks.invoke.mockResolvedValue(undefined);
+  });
+
+  it('test_regression_model_survives_remount_via_initialModelId', async () => {
+    // 回归测试：用户选了 gpt-4o，组件因 key 变化重新挂载后，
+    // 通过 initialModelId 恢复选择，不应回退到默认模型。
+    // 这是修复"发送消息后模型切回默认"bug 的防护。
+    const { unmount } = renderProvider({ initialModelId: 'gpt-4o' });
+    await waitFor(() => {
+      expect(screen.getByTestId('selected').textContent).toBe('gpt-4o');
+    });
+
+    // 模拟组件重新挂载（key 变化）
+    unmount();
+    renderProvider({ initialModelId: 'gpt-4o' });
+    await waitFor(() => {
+      expect(screen.getByTestId('selected').textContent).toBe('gpt-4o');
+    });
+  });
+
+  it('test_regression_onModelChange_called_on_select', async () => {
+    // 回归测试：selectModel 必须通知父组件，否则重新挂载时 initialModelId 为空
+    const onModelChange = vi.fn();
+    renderProvider({ onModelChange });
+    await waitFor(() => expect(screen.getByTestId('count').textContent).toBe('2'));
+
+    fireEvent.click(screen.getByTestId('select-gpt-4o'));
+    expect(onModelChange).toHaveBeenCalledWith('gpt-4o');
+  });
+
+  it('test_regression_onModelChange_called_on_default_selection', async () => {
+    // 回归测试：首次加载选默认模型时也要通知父组件
+    const onModelChange = vi.fn();
+    renderProvider({ onModelChange });
+    await waitFor(() => {
+      expect(screen.getByTestId('selected').textContent).toBe('deepseek-chat');
+    });
+    expect(onModelChange).toHaveBeenCalledWith('deepseek-chat');
+  });
+
+  it('test_failure_remount_without_initialModelId_falls_back_to_default', async () => {
+    // 失败路径：如果父组件没有传 initialModelId，应回退到默认模型
+    renderProvider();
+    await waitFor(() => {
+      expect(screen.getByTestId('selected').textContent).toBe('deepseek-chat');
+    });
+  });
+});

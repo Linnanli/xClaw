@@ -28,6 +28,8 @@ interface ChatTabTauriProps {
 
 export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriProps) {
   const [customModelOpen, setCustomModelOpen] = useState(false);
+  // 模型选择状态提升到此层，避免 TauriRuntimeProvider 因 key 变化重新挂载时丢失
+  const [selectedModelId, setSelectedModelId] = useState<string | undefined>(undefined);
   // useModelConfig 仅用于 CustomModelModal 的 CRUD 操作，
   // 模型列表和选择状态由 TauriRuntimeProvider 内部的 ModelContext 管理
   const { customModels, createModel, updateModel, deleteModel, testConnection } = useModelConfig();
@@ -43,7 +45,9 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect }: ChatTabTauriP
     <TauriRuntimeProvider
       key={selectedThreadId ?? 'new'}
       threadId={selectedThreadId ?? null}
+      initialModelId={selectedModelId}
       onThreadCreated={(tid) => onThreadSelect?.(tid)}
+      onModelChange={setSelectedModelId}
       onOpenCustomModelModal={() => setCustomModelOpen(true)}
     >
       <div className="relative flex h-full flex-col bg-background">

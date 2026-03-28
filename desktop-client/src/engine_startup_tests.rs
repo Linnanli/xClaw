@@ -59,7 +59,33 @@ mod engine_state_timing_tests {
             safety_bridge,
             context_manager,
             owner_id: "test-owner".to_string(),
-            model_override: crate::model_override::ModelOverrideState::new(),
+            llm: Arc::new(StubLlmProvider),
+            model_override: Arc::new(std::sync::RwLock::new(None)),
+        }
+    }
+
+    /// 最小 LLM provider stub（仅用于启动时序测试）。
+    struct StubLlmProvider;
+
+    #[async_trait::async_trait]
+    impl ironclaw::llm::LlmProvider for StubLlmProvider {
+        fn model_name(&self) -> &str { "stub-model" }
+        fn cost_per_token(&self) -> (rust_decimal::Decimal, rust_decimal::Decimal) {
+            (rust_decimal::Decimal::ZERO, rust_decimal::Decimal::ZERO)
+        }
+        async fn complete(
+            &self, _req: ironclaw::llm::CompletionRequest,
+        ) -> Result<ironclaw::llm::CompletionResponse, ironclaw::error::LlmError> {
+            Err(ironclaw::error::LlmError::RequestFailed {
+                provider: "stub".into(), reason: "not implemented".into(),
+            })
+        }
+        async fn complete_with_tools(
+            &self, _req: ironclaw::llm::ToolCompletionRequest,
+        ) -> Result<ironclaw::llm::ToolCompletionResponse, ironclaw::error::LlmError> {
+            Err(ironclaw::error::LlmError::RequestFailed {
+                provider: "stub".into(), reason: "not implemented".into(),
+            })
         }
     }
 

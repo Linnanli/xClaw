@@ -19,7 +19,7 @@ pub mod engine;
 pub mod ipc;
 pub mod admin_sync;
 pub mod data_reporter;
-pub mod model_override;
+pub mod model_switch;
 
 // ── 测试模块（仅在测试时编译）──────────────────────────────────────
 #[cfg(test)]
@@ -49,6 +49,10 @@ mod engine_startup_tests;
 #[cfg(test)]
 #[path = "engine_skills_tests.rs"]
 mod engine_skills_tests;
+
+#[cfg(test)]
+#[path = "model_switch_tests.rs"]
+mod model_switch_tests;
 
 #[cfg(test)]
 mod tests {

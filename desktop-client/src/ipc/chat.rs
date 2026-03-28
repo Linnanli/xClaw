@@ -31,10 +31,10 @@ pub struct SendMessageResponse {
 ///
 /// # 模型切换
 ///
-/// `model_id` 通过 `AppState.model_override` 共享状态传递给
-/// `ModelOverrideLlmProvider`，后者在每次 LLM 调用时注入到
-/// `CompletionRequest.model` / `ToolCompletionRequest.model`。
-/// 这是纯 desktop-client 侧的扩展，不修改 ironclaw 任何代码。
+/// 双重机制，统一在此函数中处理：
+/// 1. `set_model()` — 对支持的 provider 直接切换活跃模型
+/// 2. `model_override` — 对不支持 `set_model` 的 provider（如 rig-core），
+///    由 `ModelSwitchProvider` 在每次 LLM 调用时注入 `request.model`
 ///
 /// # Skill 激活通知
 ///
@@ -84,12 +84,28 @@ pub async fn send_chat_message(
         content
     };
 
-    // ── 模型切换（desktop-client 侧扩展）─────────────────────────
-    // 更新共享的 model override，ModelOverrideLlmProvider 会在下次
-    // LLM 调用时读取并注入到 CompletionRequest.model。
+    // ── 模型切换 ──────────────────────────────────────────────────
+    // set_model() 优先；不支持时回退到 per-request override。
     if let Some(ref id) = model_id {
-        state.model_override.set(Some(id.clone()));
-        tracing::debug!(model_id = %id, "Model override updated");
+        let before = state.llm.active_model_name();
+        match state.llm.set_model(id) {
+            Ok(()) => {
+                if let Ok(mut guard) = state.model_override.write() {
+                    *guard = None;
+                }
+                tracing::debug!(
+                    requested = %id, before = %before,
+                    after = %state.llm.active_model_name(),
+                    "Model switched via set_model"
+                );
+            }
+            Err(_) => {
+                if let Ok(mut guard) = state.model_override.write() {
+                    *guard = Some(id.clone());
+                }
+                tracing::debug!(requested = %id, "Using per-request model override");
+            }
+        }
     }
 
     // ── Skill 激活通知（desktop-client 侧扩展）────────────────────
@@ -108,7 +124,7 @@ pub async fn send_chat_message(
     tracing::debug!(
         message_id = %message_id,
         thread_id = %thread_id,
-        model_override = ?model_id,
+        model_id = ?model_id,
         "Message injected into agent loop"
     );
 

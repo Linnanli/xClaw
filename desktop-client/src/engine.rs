@@ -27,7 +27,7 @@ use ironclaw::hooks::bootstrap_hooks;
 use ironclaw::llm::create_session_manager;
 
 use crate::state::{AppState, EngineState};
-use crate::model_override::{ModelOverrideLlmProvider, ModelOverrideState};
+use crate::model_switch::ModelSwitchProvider;
 use crate::safety_bridge::SafetyBridge;
 use crate::tauri_channel::{ChatEvent, TauriChannel};
 
@@ -115,14 +115,12 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         None, // DataReporter 在 admin_sync 阶段注入
     ));
 
-    // ── 模型切换扩展：创建共享状态 + 包装 LLM provider ────────────
-    // ModelOverrideState 在 AppState 和 ModelOverrideLlmProvider 之间共享。
-    // send_chat_message 写入 model_override，provider 在每次 LLM 调用时读取。
-    let model_override = ModelOverrideState::new();
-    let wrapped_llm = Arc::new(ModelOverrideLlmProvider::new(
-        Arc::clone(&components.llm),
-        model_override.clone(),
-    ));
+    // ── 模型切换 ──────────────────────────────────────────────────
+    // model_override 在 AppState 和 ModelSwitchProvider 之间共享。
+    let model_override = Arc::new(std::sync::RwLock::new(None::<String>));
+    let wrapped_llm: Arc<dyn ironclaw::llm::LlmProvider> = Arc::new(
+        ModelSwitchProvider::new(Arc::clone(&components.llm), Arc::clone(&model_override)),
+    );
 
     let app_state = AppState {
         msg_sender,
@@ -137,7 +135,8 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         safety_bridge,
         context_manager: Arc::clone(&components.context_manager),
         owner_id: config.owner_id.clone(),
-        model_override,
+        llm: Arc::clone(&wrapped_llm),
+        model_override: Arc::clone(&model_override),
     };
     // 从 Tauri managed state 获取 EngineState 并填充
     let engine_state = app_handle.state::<EngineState>();
@@ -195,7 +194,7 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     let deps = AgentDeps {
         owner_id: config.owner_id.clone(),
         store: components.db,
-        llm: wrapped_llm, // 使用包装后的 provider，支持运行时模型切换
+        llm: wrapped_llm,
         cheap_llm: components.cheap_llm,
         safety: components.safety,
         tools: components.tools,

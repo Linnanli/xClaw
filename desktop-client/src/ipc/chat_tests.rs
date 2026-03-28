@@ -89,41 +89,13 @@ mod tests {
     // model_id 参数测试
     // =========================================================================
 
-    /// 验证 model_override 正确注入到 IncomingMessage metadata。
+    /// 验证 set_model 切换模型的正常路径（编译即验证 — LlmProvider::set_model 签名）。
+    /// 实际的 set_model 行为由 ironclaw provider 测试覆盖，这里只验证调用契约。
     #[test]
-    fn test_model_override_metadata_injection() {
-        use ironclaw::channels::IncomingMessage;
-
-        let model_id = Some("deepseek-chat".to_string());
-        let metadata = match &model_id {
-            Some(id) => serde_json::json!({ "model_override": id }),
-            None => serde_json::Value::Null,
-        };
-
-        let msg = IncomingMessage::new("tauri", "user1", "hello")
-            .with_metadata(metadata);
-
-        assert_eq!(
-            msg.metadata.get("model_override").and_then(|v| v.as_str()),
-            Some("deepseek-chat"),
-        );
-    }
-
-    /// 验证 model_id 为 None 时 metadata 保持 Null。
-    #[test]
-    fn test_no_model_override_metadata_is_null() {
-        use ironclaw::channels::IncomingMessage;
-
-        let model_id: Option<String> = None;
-        let metadata = match &model_id {
-            Some(id) => serde_json::json!({ "model_override": id }),
-            None => serde_json::Value::Null,
-        };
-
-        let msg = IncomingMessage::new("tauri", "user1", "hello")
-            .with_metadata(metadata);
-
-        assert!(msg.metadata.is_null());
+    fn test_contract_set_model_api_exists() {
+        // 编译即验证：LlmProvider trait 有 set_model 方法
+        fn assert_has_set_model<T: ironclaw::llm::LlmProvider + ?Sized>() {}
+        assert_has_set_model::<dyn ironclaw::llm::LlmProvider>();
     }
 
     /// 安全审计：model_id 不应出现在 SendMessageResponse 中。

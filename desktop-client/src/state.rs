@@ -43,7 +43,6 @@ use ironclaw::tools::ToolRegistry;
 use ironclaw::workspace::Workspace;
 use tokio::sync::mpsc;
 
-use crate::model_override::ModelOverrideState;
 use crate::safety_bridge::SafetyBridge;
 
 /// IronClaw 引擎内部状态。
@@ -75,11 +74,19 @@ pub struct AppState {
     pub context_manager: Arc<ContextManager>,
     /// 实例 owner ID。
     pub owner_id: String,
-    /// 当前选择的模型覆盖（desktop-client 侧扩展，不修改 ironclaw）。
+    /// LLM provider 引用（用于模型切换和查询可用模型列表）。
     ///
-    /// `ModelOverrideLlmProvider` 在每次 LLM 调用时读取此状态并注入到
-    /// `CompletionRequest.model` / `ToolCompletionRequest.model`。
-    pub model_override: ModelOverrideState,
+    /// 模型切换策略：
+    /// 1. 优先 `set_model()` — 对支持的 provider（NearAI、Anthropic）直接切换
+    /// 2. 失败时回退到 `model_override` — 通过 per-request `request.model` 注入
+    ///
+    /// 两种机制统一在 `send_chat_message` 中处理。
+    pub llm: Arc<dyn ironclaw::llm::LlmProvider>,
+    /// Per-request 模型覆盖（`set_model()` 不支持时的回退机制）。
+    ///
+    /// `send_chat_message` 写入，`ModelSwitchProvider` 读取。
+    /// 使用 `Arc` 共享，`engine.rs` 中 `ModelSwitchProvider` 持有同一个引用。
+    pub model_override: Arc<std::sync::RwLock<Option<String>>>,
 }
 
 /// Tauri managed state — 引擎就绪前安全的包装器。

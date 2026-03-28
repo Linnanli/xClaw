@@ -81,6 +81,8 @@ interface TauriRuntimeProviderProps {
   onThreadCreated?: (threadId: string) => void;
   /** 初始模型 ID，后续切换通过 ModelContext 完成 */
   initialModelId?: string;
+  /** 模型切换时通知父组件，使选择状态在组件重新挂载后保持 */
+  onModelChange?: (modelId: string) => void;
   /** 打开自定义模型弹窗的回调（由 ChatTabTauri 提供） */
   onOpenCustomModelModal?: () => void;
 }
@@ -174,6 +176,7 @@ export function TauriRuntimeProvider({
   threadId,
   onThreadCreated,
   initialModelId,
+  onModelChange,
   onOpenCustomModelModal,
 }: TauriRuntimeProviderProps) {
   const [messages, setMessages] = useState<TauriMessage[]>([]);
@@ -223,7 +226,8 @@ export function TauriRuntimeProvider({
           if (prev && allModels.some((m) => m.model_id === prev)) return prev;
           const defaultModel = allModels.find((m) => m.is_default) ?? allModels[0];
           const resolved = defaultModel?.model_id ?? prev;
-          modelIdRef.current = resolved; // 同步 ref，确保首次发消息使用正确模型
+          modelIdRef.current = resolved;
+          onModelChange?.(resolved);
           return resolved;
         });
       } catch (err) {
@@ -238,9 +242,9 @@ export function TauriRuntimeProvider({
 
   const selectModel = useCallback((modelId: string) => {
     setSelectedModelId(modelId);
-    // 同步写 ref：不依赖 useEffect，避免选模型后立即发消息时读到旧值
     modelIdRef.current = modelId;
-  }, []);
+    onModelChange?.(modelId);
+  }, [onModelChange]);
 
   // ── 加载历史消息 ──
   useEffect(() => {

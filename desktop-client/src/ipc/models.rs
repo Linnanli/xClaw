@@ -113,9 +113,9 @@ pub async fn get_available_models(
             models.extend(admin_models);
         }
         Err(e) => {
-            warn!("从后台获取模型列表失败，使用本地缓存: {}", e);
-            // 使用内置默认模型
-            models.extend(builtin_models());
+            warn!("从后台获取模型列表失败，从 LLM provider 查询: {}", e);
+            // 从实际的 LLM provider 查询可用模型，而非硬编码列表
+            models.extend(query_provider_models(&engine).await);
         }
     }
 
@@ -301,6 +301,52 @@ pub async fn test_model_connection(
 }
 
 /// 从 Admin Backend 拉取模型列表
+/// 从实际的 LLM provider 查询可用模型列表。
+///
+/// 优先使用 `list_models()` 获取完整列表；若 provider 不支持（返回空列表），
+/// 则用 `active_model_name()` 作为唯一可用模型。
+/// 失败时回退到 `builtin_models()` 兜底。
+async fn query_provider_models(engine: &EngineState) -> Vec<ModelConfig> {
+    let state = match engine.get() {
+        Ok(s) => s,
+        Err(_) => return builtin_models(),
+    };
+
+    let llm = &state.llm;
+    let active = llm.active_model_name();
+
+    // 从 provider 获取模型列表，确保当前活跃模型始终在列表中
+    let mut model_ids = match llm.list_models().await {
+        Ok(models) if !models.is_empty() => models,
+        _ => Vec::new(),
+    };
+
+    // 活跃模型可能是通过 set_model() 切换到的，不在 list_models() 中
+    if !model_ids.iter().any(|id| id == &active) {
+        model_ids.insert(0, active.clone());
+    }
+
+    model_ids
+        .into_iter()
+        .map(|id| {
+            let is_active = id == active;
+            ModelConfig {
+                display_name: id.clone(),
+                model_id: id,
+                description: None,
+                provider: llm.model_name().to_string(),
+                provider_display_name: None,
+                is_default: is_active,
+                capabilities: default_capabilities(),
+                api_base_url: None,
+                api_key: None,
+                api_format: default_api_format(),
+                source: "provider".to_string(),
+            }
+        })
+        .collect()
+}
+
 async fn fetch_admin_models(_engine: &EngineState) -> Result<Vec<ModelConfig>, String> {
     // 从环境变量获取 admin backend URL
     let admin_url = std::env::var("ADMIN_BACKEND_URL")
