@@ -390,7 +390,20 @@ pub struct UpdateModelConfigRequest {
     pub extra_config: Option<serde_json::Value>,
 }
 
-/// 客户端侧模型配置（精简版，不含敏感字段）
+/// 测试模型连接请求
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestConnectionRequest {
+    pub provider: String,
+    pub api_base_url: Option<String>,
+    pub api_key: Option<String>,
+}
+
+/// 客户端侧模型配置（供 Desktop Client 拉取，包含直连 LLM API 所需的全部信息）。
+///
+/// 与管理端 `ModelConfigResponse` 的区别：
+/// - 包含完整 `api_key`（Desktop Client 直连 LLM API 需要真实 key，传输安全由 HTTPS 保证）
+/// - 包含 `source` 字段标记来源（"admin"），客户端合并本地自定义模型时用于区分
+/// - `capabilities` 使用 `Vec<String>` 强类型，避免前端收到非数组值
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientModelConfig {
     pub model_id: String,
@@ -398,16 +411,23 @@ pub struct ClientModelConfig {
     pub description: Option<String>,
     pub provider: String,
     pub is_default: bool,
-    pub capabilities: serde_json::Value,
+    pub capabilities: Vec<String>,
     /// API Base URL（客户端直连时使用）
     pub api_base_url: Option<String>,
-    /// API Key（客户端直连时使用，脱敏后下发）
+    /// API Key（完整下发，客户端直连 LLM API 需要真实 key）
     pub api_key: Option<String>,
     /// API 格式：openai / anthropic
     #[serde(default = "default_api_format")]
     pub api_format: String,
+    /// 来源标记：admin（后台下发）
+    #[serde(default = "default_source")]
+    pub source: String,
 }
 
 fn default_api_format() -> String {
     "openai".to_string()
+}
+
+fn default_source() -> String {
+    "admin".to_string()
 }

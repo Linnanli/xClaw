@@ -10,6 +10,8 @@
 //! - `subscribe_chat_events` — 订阅事件（新架构下为 no-op）
 //! - `unsubscribe_chat_events` — 取消订阅（新架构下为 no-op）
 
+use std::sync::Arc;
+
 use ironclaw::channels::IncomingMessage;
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
@@ -55,6 +57,8 @@ pub async fn send_chat_message(
     thread_id: String,
     content: String,
     model_id: Option<String>,
+    api_base_url: Option<String>,
+    api_key: Option<String>,
 ) -> Result<SendMessageResponse, String> {
     let state = state.get()?;
     let message_id = uuid::Uuid::new_v4().to_string();
@@ -85,25 +89,14 @@ pub async fn send_chat_message(
     };
 
     // ── 模型切换 ──────────────────────────────────────────────────
-    // set_model() 优先；不支持时回退到 per-request override。
     if let Some(ref id) = model_id {
-        let before = state.llm.active_model_name();
-        match state.llm.set_model(id) {
-            Ok(()) => {
-                if let Ok(mut guard) = state.model_override.write() {
-                    *guard = None;
-                }
-                tracing::debug!(
-                    requested = %id, before = %before,
-                    after = %state.llm.active_model_name(),
-                    "Model switched via set_model"
-                );
+        match classify_switch(state, api_base_url.as_deref()) {
+            SwitchKind::InPlace => switch_model_in_place(state, id),
+            SwitchKind::CrossProvider => {
+                switch_provider(state, id, api_base_url.as_deref(), api_key.as_deref())?;
             }
-            Err(_) => {
-                if let Ok(mut guard) = state.model_override.write() {
-                    *guard = Some(id.clone());
-                }
-                tracing::debug!(requested = %id, "Using per-request model override");
+            SwitchKind::RestoreInitial => {
+                restore_initial_provider(state, id);
             }
         }
     }
@@ -200,4 +193,147 @@ pub async fn subscribe_chat_events(app_handle: tauri::AppHandle) -> Result<(), S
 pub async fn unsubscribe_chat_events() -> Result<(), String> {
     tracing::debug!("unsubscribe_chat_events called (no-op in embedded mode)");
     Ok(())
+}
+
+// ── 模型切换辅助函数 ─────────────────────────────────────────────
+
+/// 模型切换类型。
+enum SwitchKind {
+    /// 模型在当前 provider 内，用 set_model 切换
+    InPlace,
+    /// 模型需要不同的 base_url，创建新 provider
+    CrossProvider,
+    /// 模型回到初始 provider（恢复 .env 配置的 provider）
+    RestoreInitial,
+}
+
+/// 根据目标模型的 api_base_url 判断切换类型。
+fn classify_switch(state: &crate::state::AppState, api_base_url: Option<&str>) -> SwitchKind {
+    let new_url = match api_base_url.filter(|u| !u.is_empty()) {
+        Some(u) => normalize_base_url(u),
+        None => return SwitchKind::InPlace,
+    };
+
+    let current = state
+        .provider_base_url
+        .read()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+
+    if current == new_url {
+        return SwitchKind::InPlace;
+    }
+
+    if !state.initial_base_url.is_empty()
+        && normalize_base_url(&state.initial_base_url) == new_url
+    {
+        return SwitchKind::RestoreInitial;
+    }
+
+    SwitchKind::CrossProvider
+}
+
+/// 跨 provider 切换：用新的 base_url + api_key 重建 provider。
+fn switch_provider(
+    state: &crate::state::AppState,
+    model_id: &str,
+    api_base_url: Option<&str>,
+    api_key: Option<&str>,
+) -> Result<(), String> {
+    let base_url = api_base_url
+        .filter(|u| !u.is_empty())
+        .ok_or("跨 provider 切换需要 api_base_url")?;
+    let key = api_key
+        .filter(|k| !k.is_empty() && *k != "****")
+        .ok_or("跨 provider 切换需要有效的 api_key（非脱敏值）")?;
+
+    // 规范化 base_url：去掉尾部的 /chat/completions 等路径，
+    // rig-core 会自动拼接 /chat/completions。
+    let normalized_url = normalize_base_url(base_url);
+
+    let before = state.llm.active_model_name();
+
+    let new_provider = ironclaw::llm::create_openai_provider(&normalized_url, key, model_id)
+        .map_err(|e| format!("创建新 provider 失败: {}", e))?;
+
+    state.model_switch.replace_inner(new_provider);
+
+    if let Ok(mut guard) = state.provider_base_url.write() {
+        *guard = normalized_url.clone();
+    }
+
+    tracing::info!(
+        model = %model_id,
+        base_url = %normalized_url,
+        before = %before,
+        key_len = key.len(),
+        "Provider switched (cross-provider)"
+    );
+    Ok(())
+}
+
+/// 规范化 API base URL：去掉 rig-core 会自动拼接的路径后缀。
+///
+/// 与 `admin-backend/src/routes.rs` 中的 `normalize_api_base_url` 职责不同：
+/// - admin 端：保存时剥离 SDK 自动拼接的路径（`/chat/completions`、`/v1/messages`），
+///   但保留 `/v1`（它是 base URL 的一部分，不是 SDK 拼接的）。
+/// - 客户端：provider 比较时额外剥离 `/v1`，用于容错匹配
+///   （.env 配置可能带 `/v1`，admin 配置可能不带，两者应视为同一 provider）。
+fn normalize_base_url(url: &str) -> String {
+    let trimmed = url.trim_end_matches('/');
+    for suffix in &[
+        "/v1/chat/completions",
+        "/chat/completions",
+        "/completions",
+        "/v1",
+    ] {
+        if let Some(base) = trimmed.strip_suffix(suffix) {
+            return base.to_string();
+        }
+    }
+    trimmed.to_string()
+}
+
+/// 恢复到初始 provider（.env 配置的 provider）。
+///
+/// 跨 provider 切换后，用户选回初始 provider 的模型时调用。
+/// 用保存的初始 provider 引用恢复，然后 set_model 切换模型名。
+fn restore_initial_provider(state: &crate::state::AppState, model_id: &str) {
+    state.model_switch.replace_inner(Arc::clone(&state.initial_provider));
+
+    if let Ok(mut guard) = state.provider_base_url.write() {
+        *guard = state.initial_base_url.clone();
+    }
+
+    // 在恢复的初始 provider 上切换模型名
+    switch_model_in_place(state, model_id);
+
+    tracing::info!(
+        model = %model_id,
+        base_url = %state.initial_base_url,
+        "Restored to initial provider"
+    );
+}
+
+/// 同 provider 内模型切换：set_model 优先，回退到 per-request override。
+fn switch_model_in_place(state: &crate::state::AppState, model_id: &str) {
+    let before = state.llm.active_model_name();
+    match state.llm.set_model(model_id) {
+        Ok(()) => {
+            if let Ok(mut guard) = state.model_override.write() {
+                *guard = None;
+            }
+            tracing::debug!(
+                requested = %model_id, before = %before,
+                after = %state.llm.active_model_name(),
+                "Model switched via set_model"
+            );
+        }
+        Err(_) => {
+            if let Ok(mut guard) = state.model_override.write() {
+                *guard = Some(model_id.to_string());
+            }
+            tracing::debug!(requested = %model_id, "Using per-request model override");
+        }
+    }
 }

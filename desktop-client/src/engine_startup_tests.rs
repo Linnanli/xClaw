@@ -46,6 +46,13 @@ mod engine_state_timing_tests {
         let tools = Arc::new(ToolRegistry::new());
         let context_manager = Arc::new(ContextManager::new(5));
 
+        let model_override = Arc::new(std::sync::RwLock::new(None));
+        let stub_llm: Arc<dyn ironclaw::llm::LlmProvider> = Arc::new(StubLlmProvider);
+        let model_switch = Arc::new(crate::model_switch::ModelSwitchProvider::new(
+            Arc::clone(&stub_llm),
+            Arc::clone(&model_override),
+        ));
+
         AppState {
             msg_sender: tx,
             db: None,
@@ -59,8 +66,12 @@ mod engine_state_timing_tests {
             safety_bridge,
             context_manager,
             owner_id: "test-owner".to_string(),
-            llm: Arc::new(StubLlmProvider),
-            model_override: Arc::new(std::sync::RwLock::new(None)),
+            llm: Arc::clone(&model_switch) as _,
+            model_override,
+            model_switch,
+            provider_base_url: std::sync::RwLock::new(String::new()),
+            initial_provider: Arc::clone(&stub_llm),
+            initial_base_url: String::new(),
         }
     }
 

@@ -87,6 +87,14 @@ pub struct AppState {
     /// `send_chat_message` 写入，`ModelSwitchProvider` 读取。
     /// 使用 `Arc` 共享，`engine.rs` 中 `ModelSwitchProvider` 持有同一个引用。
     pub model_override: Arc<std::sync::RwLock<Option<String>>>,
+    /// ModelSwitchProvider 引用（用于跨 provider 切换时替换底层 provider）。
+    pub model_switch: Arc<crate::model_switch::ModelSwitchProvider>,
+    /// 当前 provider 的 base URL（用于检测跨 provider 切换）。
+    pub provider_base_url: std::sync::RwLock<String>,
+    /// 初始 provider 引用（跨 provider 切换后恢复用）。
+    pub initial_provider: Arc<dyn ironclaw::llm::LlmProvider>,
+    /// 初始 provider 的 base URL（用于检测"切回初始 provider"）。
+    pub initial_base_url: String,
 }
 
 /// Tauri managed state — 引擎就绪前安全的包装器。

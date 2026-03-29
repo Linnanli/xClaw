@@ -118,9 +118,18 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     // ── 模型切换 ──────────────────────────────────────────────────
     // model_override 在 AppState 和 ModelSwitchProvider 之间共享。
     let model_override = Arc::new(std::sync::RwLock::new(None::<String>));
-    let wrapped_llm: Arc<dyn ironclaw::llm::LlmProvider> = Arc::new(
+    let model_switch = Arc::new(
         ModelSwitchProvider::new(Arc::clone(&components.llm), Arc::clone(&model_override)),
     );
+    let wrapped_llm: Arc<dyn ironclaw::llm::LlmProvider> = Arc::clone(&model_switch) as _;
+
+    // 记录初始 provider 的 base URL（用于跨 provider 切换检测）。
+    let initial_base_url = config
+        .llm
+        .provider
+        .as_ref()
+        .map(|p| p.base_url.clone())
+        .unwrap_or_default();
 
     let app_state = AppState {
         msg_sender,
@@ -137,6 +146,10 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         owner_id: config.owner_id.clone(),
         llm: Arc::clone(&wrapped_llm),
         model_override: Arc::clone(&model_override),
+        model_switch: Arc::clone(&model_switch),
+        provider_base_url: std::sync::RwLock::new(initial_base_url.clone()),
+        initial_provider: Arc::clone(&components.llm),
+        initial_base_url,
     };
     // 从 Tauri managed state 获取 EngineState 并填充
     let engine_state = app_handle.state::<EngineState>();

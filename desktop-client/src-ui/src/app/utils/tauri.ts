@@ -626,6 +626,8 @@ export interface ModelConfigItem {
   is_default: boolean;
   capabilities: string[];
   source: string; // 'admin' | 'custom' | 'builtin'
+  api_base_url?: string;
+  api_key?: string;
 }
 
 export interface CustomModelItem {

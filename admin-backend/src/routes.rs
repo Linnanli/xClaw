@@ -84,6 +84,7 @@ pub fn create_router(state: AppState) -> Router {
         // 模型配置 API
         .route("/api/model-configs", get(get_model_configs).post(create_model_config))
         .route("/api/model-configs/{id}", put(update_model_config).delete(delete_model_config))
+        .route("/api/model-configs/test-connection", post(test_model_connection))
         // 客户端模型列表（精简版，供 Desktop Client 拉取）
         .route("/api/client-models", get(get_client_models))
         .with_state(state)
@@ -3575,6 +3576,7 @@ async fn create_model_config(
     let id = Uuid::new_v4();
     let capabilities = body.capabilities.unwrap_or(json!([]));
     let extra_config = body.extra_config.unwrap_or(json!({}));
+    let normalized_url = body.api_base_url.as_deref().map(normalize_api_base_url);
 
     client
         .execute(
@@ -3588,7 +3590,7 @@ async fn create_model_config(
                 &body.display_name,
                 &body.description,
                 &body.provider,
-                &body.api_base_url,
+                &normalized_url,
                 &body.api_key,
                 &body.sort_order,
                 &capabilities,
@@ -3650,6 +3652,7 @@ async fn update_model_config(
     }
 
     // 用 COALESCE 保留未传字段的原值，避免动态 SQL + Box<dyn ToSql> 的 Send 问题
+    let normalized_url = body.api_base_url.as_deref().map(normalize_api_base_url);
     client
         .execute(
             "UPDATE model_configs SET \
@@ -3670,7 +3673,7 @@ async fn update_model_config(
                 &body.display_name,
                 &body.description,
                 &body.provider,
-                &body.api_base_url,
+                &normalized_url,
                 &body.api_key,
                 &body.enabled,
                 &body.is_default,
@@ -3738,6 +3741,52 @@ async fn delete_model_config(
     Ok(Json(json!({ "message": "删除成功" })))
 }
 
+/// POST /api/model-configs/test-connection — 测试模型 API 连接
+#[instrument(skip(state, body))]
+async fn test_model_connection(
+    State(state): State<AppState>,
+    Json(body): Json<models::TestConnectionRequest>,
+) -> Result<Json<serde_json::Value>> {
+    let base_url = body.api_base_url.as_deref().unwrap_or_default();
+    if base_url.is_empty() {
+        return Err(Error::Validation("api_base_url 不能为空".to_string()));
+    }
+
+    let api_key = body.api_key.as_deref().unwrap_or_default();
+
+    // 发送一个最小的 chat completion 请求验证连接
+    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+    let client = state.http_client.clone();
+
+    let test_body = serde_json::json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 1,
+    });
+
+    let mut req = client.post(&url).json(&test_body);
+    if !api_key.is_empty() {
+        req = req.header("Authorization", format!("Bearer {}", api_key));
+    }
+
+    let response = req.send().await.map_err(|e| {
+        Error::Internal(format!("连接失败: {}", e))
+    })?;
+
+    let status = response.status().as_u16();
+    // 2xx 或 4xx（认证通过但模型不存在等）都算连接成功
+    if status < 500 {
+        Ok(Json(serde_json::json!({
+            "success": true,
+            "message": "连接成功",
+            "status": status,
+        })))
+    } else {
+        let error_text = response.text().await.unwrap_or_default();
+        Err(Error::Internal(format!("服务端错误 ({}): {}", status, error_text)))
+    }
+}
+
 /// GET /api/client-models — 客户端拉取可用模型列表（精简版，不含敏感字段）
 #[instrument(skip(state))]
 async fn get_client_models(
@@ -3759,24 +3808,54 @@ async fn get_client_models(
     let models: Vec<models::ClientModelConfig> = rows
         .iter()
         .map(|row| {
-            // api_key 脱敏：只传前4位，客户端用于判断是否已配置
-            let raw_key: Option<String> = row.get(7);
-            let masked_key = raw_key.as_deref().map(|k| {
-                if k.len() > 4 { format!("{}****", &k[..4]) } else { "****".to_string() }
-            });
+            let caps_json: serde_json::Value = row.get(5);
+            let capabilities = caps_json
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+
             models::ClientModelConfig {
                 model_id: row.get(0),
                 display_name: row.get(1),
                 description: row.get(2),
                 provider: row.get(3),
                 is_default: row.get(4),
-                capabilities: row.get(5),
+                capabilities,
                 api_base_url: row.get(6),
-                api_key: masked_key,
+                // 完整 key 下发：Desktop Client 直连 LLM API 需要真实 key。
+                // 传输安全由 HTTPS 保证，客户端侧不持久化 key。
+                api_key: row.get(7),
                 api_format: row.get::<_, Option<String>>(8).unwrap_or_else(|| "openai".to_string()),
+                source: "admin".to_string(),
             }
         })
         .collect();
 
     Ok(Json(models))
+}
+
+/// 规范化 API base URL：去掉 LLM SDK 会自动拼接的路径后缀。
+///
+/// 用户在 admin 后台输入 base URL 时可能带上完整路径（如
+/// `https://api.example.com/v1/chat/completions`），但 rig-core 等 SDK
+/// 会自动拼接 `/chat/completions`，导致路径重复。
+/// 在保存到数据库前统一剥离，避免运行时出错。
+fn normalize_api_base_url(url: &str) -> String {
+    let trimmed = url.trim_end_matches('/');
+    // 顺序重要：先匹配不含 /v1 的后缀，保留 /v1（它是 base URL 的一部分）。
+    // 例如 https://api.openai.com/v1/chat/completions → https://api.openai.com/v1
+    for suffix in &[
+        "/chat/completions",
+        "/completions",
+        "/messages",
+    ] {
+        if let Some(base) = trimmed.strip_suffix(suffix) {
+            return base.to_string();
+        }
+    }
+    trimmed.to_string()
 }

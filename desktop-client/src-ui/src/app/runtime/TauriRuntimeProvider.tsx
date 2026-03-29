@@ -183,6 +183,7 @@ export function TauriRuntimeProvider({
   const [isRunning, setIsRunning] = useState(false);
   const threadIdRef = useRef(threadId);
   const modelIdRef = useRef(initialModelId);
+  const selectedModelRef = useRef<ModelConfigItem | null>(null);
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const msgIdCounter = useRef(1);
   const { scanUserInput } = useDlpScan();
@@ -223,12 +224,14 @@ export function TauriRuntimeProvider({
         setModels(allModels);
         // 如果初始 modelId 无效或未设置，选默认模型
         setSelectedModelId((prev) => {
-          if (prev && allModels.some((m) => m.model_id === prev)) return prev;
-          const defaultModel = allModels.find((m) => m.is_default) ?? allModels[0];
-          const resolved = defaultModel?.model_id ?? prev;
-          modelIdRef.current = resolved;
-          onModelChange?.(resolved);
-          return resolved;
+          const resolvedId = (prev && allModels.some((m) => m.model_id === prev))
+            ? prev
+            : (allModels.find((m) => m.is_default) ?? allModels[0])?.model_id ?? prev;
+          // 同步 ref，确保首次发消息时 apiBaseUrl/apiKey 一致
+          modelIdRef.current = resolvedId;
+          selectedModelRef.current = allModels.find((m) => m.model_id === resolvedId) ?? null;
+          if (resolvedId !== prev) onModelChange?.(resolvedId);
+          return resolvedId;
         });
       } catch (err) {
         tracing.error('Failed to load model list', { error: err });
@@ -243,8 +246,9 @@ export function TauriRuntimeProvider({
   const selectModel = useCallback((modelId: string) => {
     setSelectedModelId(modelId);
     modelIdRef.current = modelId;
+    selectedModelRef.current = models.find((m) => m.model_id === modelId) ?? null;
     onModelChange?.(modelId);
-  }, [onModelChange]);
+  }, [onModelChange, models]);
 
   // ── 加载历史消息 ──
   useEffect(() => {
@@ -475,6 +479,8 @@ export function TauriRuntimeProvider({
           threadId: tid,
           content,
           modelId: modelIdRef.current ?? null,
+          apiBaseUrl: selectedModelRef.current?.api_base_url ?? null,
+          apiKey: selectedModelRef.current?.api_key ?? null,
         });
       } catch (err) {
         tracing.error('Failed to send message', { error: err });
