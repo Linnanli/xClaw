@@ -396,6 +396,7 @@ pub struct TestConnectionRequest {
     pub provider: String,
     pub api_base_url: Option<String>,
     pub api_key: Option<String>,
+    pub model_id: Option<String>,
 }
 
 /// 客户端侧模型配置（供 Desktop Client 拉取，包含直连 LLM API 所需的全部信息）。

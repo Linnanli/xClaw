@@ -124,7 +124,6 @@ export const ModelConfigs: React.FC = () => {
   const [editingModel, setEditingModel] = useState<ModelConfig | null>(null);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [form] = Form.useForm<ModelFormValues>();
 
   const loadModels = useCallback(async () => {
@@ -217,19 +216,23 @@ export const ModelConfigs: React.FC = () => {
 
   const handleTestConnection = async () => {
     try {
-      const values = await form.validateFields(['provider', 'api_base_url', 'api_key']);
+      const values = await form.validateFields(['provider', 'api_base_url', 'api_key', 'model_id']);
+      if (!values.api_key?.trim()) {
+        message.warning('请先填写 API Key');
+        return;
+      }
       setTesting(true);
-      setTestResult(null);
-      const payload: Record<string, unknown> = {
+      const payload = {
         provider: values.provider,
         api_base_url: values.api_base_url || null,
+        api_key: values.api_key.trim(),
+        model_id: values.model_id || null,
       };
-      if (values.api_key) payload.api_key = values.api_key;
-      await apiClient.post('/model-configs/test-connection', payload);
-      setTestResult({ ok: true, msg: '连接成功' });
+      const resp = await apiClient.post('/model-configs/test-connection', payload);
+      message.success(resp.data?.message || '连接成功');
     } catch (err: any) {
-      const msg = err?.response?.data?.error || err?.message || '连接失败';
-      setTestResult({ ok: false, msg });
+      const msg = err?.response?.data?.details || err?.response?.data?.error || err?.message || '连接失败';
+      message.error(msg);
     } finally {
       setTesting(false);
     }
@@ -253,7 +256,7 @@ export const ModelConfigs: React.FC = () => {
           : [],
       };
 
-      // 仅在填写了 API Key 时才发送
+      // 编辑时留空表示保持原值；新建时 form rules 已强制必填
       if (values.api_key) {
         payload.api_key = values.api_key;
       }
@@ -494,7 +497,7 @@ export const ModelConfigs: React.FC = () => {
       <Modal
         title={editingModel ? '编辑模型配置' : '添加模型配置'}
         open={modalOpen}
-        onCancel={() => { setModalOpen(false); form.resetFields(); setTestResult(null); }}
+        onCancel={() => { setModalOpen(false); form.resetFields(); }}
         width={560}
         destroyOnClose
         footer={
@@ -508,15 +511,10 @@ export const ModelConfigs: React.FC = () => {
               >
                 测试连接
               </Button>
-              {testResult && (
-                <span style={{ fontSize: 13, color: testResult.ok ? '#52c41a' : '#ff4d4f' }}>
-                  {testResult.ok ? '✓' : '✗'} {testResult.msg}
-                </span>
-              )}
             </Space>
             {/* 右侧：取消 + 保存 */}
             <Space>
-              <Button onClick={() => { setModalOpen(false); form.resetFields(); setTestResult(null); }}>
+              <Button onClick={() => { setModalOpen(false); form.resetFields(); }}>
                 取消
               </Button>
               <Button type="primary" loading={saving} onClick={handleSave}>
@@ -578,6 +576,7 @@ export const ModelConfigs: React.FC = () => {
           <Form.Item
             name="api_key"
             label="API Key"
+            rules={editingModel ? [] : [{ required: true, message: '请输入 API Key' }]}
             extra={editingModel ? '留空则保持原有 Key 不变' : undefined}
           >
             <Input.Password placeholder="sk-..." />

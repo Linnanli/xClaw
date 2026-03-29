@@ -3553,6 +3553,9 @@ async fn create_model_config(
     if body.display_name.trim().is_empty() {
         return Err(Error::Validation("display_name 不能为空".into()));
     }
+    if body.api_key.as_deref().unwrap_or("").trim().is_empty() {
+        return Err(Error::Validation("api_key 不能为空".into()));
+    }
 
     let client = state.db_pool.get().await
         .map_err(|e| Error::Database(e.to_string()))?;
@@ -3742,9 +3745,9 @@ async fn delete_model_config(
 }
 
 /// POST /api/model-configs/test-connection — 测试模型 API 连接
-#[instrument(skip(state, body))]
+#[instrument(skip(_state, body))]
 async fn test_model_connection(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(body): Json<models::TestConnectionRequest>,
 ) -> Result<Json<serde_json::Value>> {
     let base_url = body.api_base_url.as_deref().unwrap_or_default();
@@ -3753,37 +3756,65 @@ async fn test_model_connection(
     }
 
     let api_key = body.api_key.as_deref().unwrap_or_default();
+    if api_key.is_empty() {
+        return Err(Error::Validation("api_key 不能为空".to_string()));
+    }
 
-    // 发送一个最小的 chat completion 请求验证连接
+    // 测试连接用独立 client，超时比全局 http_client 更宽裕
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-    let client = state.http_client.clone();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| Error::Internal(format!("创建 HTTP 客户端失败: {}", e)))?;
+
+    // 用真实 model_id 测试（部分 provider 如智谱对不存在的模型返回 403）
+    let model_id = body.model_id.as_deref().unwrap_or("test");
 
     let test_body = serde_json::json!({
-        "model": "test",
+        "model": model_id,
         "messages": [{"role": "user", "content": "hi"}],
         "max_tokens": 1,
     });
 
-    let mut req = client.post(&url).json(&test_body);
-    if !api_key.is_empty() {
-        req = req.header("Authorization", format!("Bearer {}", api_key));
-    }
-
-    let response = req.send().await.map_err(|e| {
-        Error::Internal(format!("连接失败: {}", e))
-    })?;
+    let response = client
+        .post(&url)
+        .json(&test_body)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .send()
+        .await
+        .map_err(|e| Error::Internal(format!("连接失败: {}", e)))?;
 
     let status = response.status().as_u16();
-    // 2xx 或 4xx（认证通过但模型不存在等）都算连接成功
-    if status < 500 {
-        Ok(Json(serde_json::json!({
+    match status {
+        // 2xx: 完全成功（LLM 正常返回）
+        200..=299 => Ok(Json(serde_json::json!({
             "success": true,
             "message": "连接成功",
             "status": status,
-        })))
-    } else {
-        let error_text = response.text().await.unwrap_or_default();
-        Err(Error::Internal(format!("服务端错误 ({}): {}", status, error_text)))
+        }))),
+        // 401: 认证失败，API Key 无效
+        401 => Err(Error::Validation(format!(
+            "认证失败 ({}): API Key 无效",
+            status
+        ))),
+        // 400/403/404/422: 认证可能通过但模型/请求有误，视为连接成功
+        // 注意：部分 provider（如智谱）对不存在的模型返回 403 而非 404
+        400 | 403 | 404 | 422 => Ok(Json(serde_json::json!({
+            "success": true,
+            "message": "连接成功（API 可达，模型或请求参数可能需要调整）",
+            "status": status,
+        }))),
+        // 429: 限流（连接和认证正常，只是请求过于频繁）
+        429 => Ok(Json(serde_json::json!({
+            "success": true,
+            "message": "连接成功（当前被限流，请稍后再正式使用）",
+            "status": status,
+        }))),
+        // 其他: 服务端错误
+        _ => {
+            let error_text = response.text().await.unwrap_or_default();
+            Err(Error::Internal(format!("服务端错误 ({}): {}", status, error_text)))
+        }
     }
 }
 
