@@ -10,6 +10,14 @@ import ConversationsPage from '@/pages/conversations'
 import KnowledgeBasesPage from '@/pages/knowledge-bases'
 import QuotaPage from '@/pages/quota'
 import ApprovalsPage from '@/pages/approvals'
+import CompliancePage from '@/pages/compliance'
+import WatermarkPage from '@/pages/watermark'
+import SettingsPage from '@/pages/settings'
+import DepartmentsPage from '@/pages/departments'
+import ReportsPage from '@/pages/reports'
+import ModelConfigsPage from '@/pages/model-configs'
+import AuditLogsPage from '@/pages/audit-logs'
+import ExtensionsPage from '@/pages/extensions'
 import { useAuthStore } from '@/stores/auth'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -50,6 +58,14 @@ export const router = createBrowserRouter([
       { path: 'knowledge-bases', element: <KnowledgeBasesPage /> },
       { path: 'quota', element: <QuotaPage /> },
       { path: 'approvals', element: <ApprovalsPage /> },
+      { path: 'compliance', element: <CompliancePage /> },
+      { path: 'watermark', element: <WatermarkPage /> },
+      { path: 'settings', element: <SettingsPage /> },
+      { path: 'departments', element: <DepartmentsPage /> },
+      { path: 'reports', element: <ReportsPage /> },
+      { path: 'model-configs', element: <ModelConfigsPage /> },
+      { path: 'audit-logs', element: <AuditLogsPage /> },
+      { path: 'extensions', element: <ExtensionsPage /> },
     ],
   },
 ])
