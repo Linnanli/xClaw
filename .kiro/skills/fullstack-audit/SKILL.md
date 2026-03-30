@@ -73,6 +73,8 @@ description: >
 
 读取 `references/cross-module-dependencies.md` 获取已知的跨模块依赖关系图。
 
+对于涉及客户端的功能，先读实际代码确认数据流方向——是后端代理（客户端→后端→外部 API）还是客户端直连（客户端拿凭据直接调外部 API）。这两种架构下安全模型完全不同，不要只看 spec 推断。比如 IronClaw 的 AI 对话是客户端直连模式：后台下发 API Key 给客户端，客户端直接调 LLM API。
+
 ### 第三步：检查设计图
 
 1. 打开 Pencil 设计文件 `admin-backend/frontend/design/backend-design.pen`

@@ -91,20 +91,21 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 
 ### 需求 4：部门与组织架构管理 `[已实现 + 扩展]`
 
-**用户故事：** 作为管理员，我希望管理组织的部门架构和 Token 配额，以实现按部门的资源管控。
+**用户故事：** 作为管理员，我希望管理组织的部门架构和费用配额，以实现按部门的资源和成本管控。
 
 #### 验收标准
 
-1. `[已实现]` THE Admin_Platform SHALL 展示部门列表，包含部门名称、描述、成员数、Token 限额状态和创建时间
-2. `[已实现]` WHEN Admin 创建部门, THE Admin_Platform SHALL 要求填写部门名称，并允许配置描述和 Token 限额
-3. `[已实现]` WHEN Admin 编辑部门, THE Admin_Platform SHALL 允许修改名称、描述和 Token 限额配置
-4. `[已实现]` WHEN Admin 删除部门, THE Admin_Platform SHALL 检查部门下是否有成员，有成员时禁止删除
-5. `[已实现]` WHERE 部门启用了 Token 限额, THE Quota_Service SHALL 按每日限额控制该部门的 AI 模型调用量
-6. `[新增]` THE Admin_Platform SHALL 支持树形组织架构展示，允许部门嵌套形成多级层级
-7. `[新增]` WHEN 部门的 Token 消耗达到限额的 80%, THE Alert_Service SHALL 向部门管理员发送预警通知
-8. `[新增]` THE Admin_Platform SHALL 展示各部门的 Token 消耗排行和趋势图
+1. `[已实现]` THE Admin_Platform SHALL 展示部门列表，包含部门名称、描述、成员数、费用限额状态和创建时间
+2. `[已实现]` WHEN Admin 创建部门, THE Admin_Platform SHALL 要求填写部门名称，并允许配置描述和每日费用限额（单位：分）
+3. `[已实现]` WHEN Admin 编辑部门, THE Admin_Platform SHALL 允许修改名称、描述和费用限额配置
+4. `[已实现]` WHEN Admin 删除部门, THE Admin_Platform SHALL 检查部门下是否有成员或子部门，有成员或子部门时禁止删除并提示原因；删除时自动清理该部门的费用配额配置和模型白名单，但保留历史费用消耗记录（department_id 置空）
+5. `[已实现]` WHERE 部门启用了费用限额, THE Quota_Service SHALL 根据每次 AI 请求的实际费用（基于模型单价×Token 消耗量）累计，达到每日限额时拒绝后续请求
+6. `[新增]` THE Admin_Platform SHALL 支持树形组织架构展示，允许部门嵌套形成多级层级。子部门独立配置费用限额和模型白名单，不继承父部门的配置
+7. `[新增]` WHEN 部门的费用消耗达到限额的 80%, THE Alert_Service SHALL 向部门管理员发送预警通知
+8. `[新增]` THE Admin_Platform SHALL 展示各部门的费用消耗排行和趋势图
 9. `[新增]` THE Admin_Platform SHALL 支持为部门配置可用模型白名单，限定该部门成员可使用的 AI 模型范围
 10. `[新增]` WHEN Desktop_Client 发起 AI 对话, THE Client_Manager SHALL 根据用户所属部门的模型白名单返回可用模型列表，未配置白名单的部门默认可使用所有已启用模型
+11. `[新增]` THE Admin_Platform SHALL 支持按部门名称搜索和按费用限额状态（已启用/未启用）筛选部门列表
 
 ---
 
@@ -209,6 +210,8 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 9. `[新增]` WHEN 模型 API 连续调用失败达到阈值, THE Alert_Service SHALL 生成模型服务异常告警
 10. `[新增]` THE Admin_Platform SHALL 支持为不同部门或角色配置可用模型白名单
 11. `[新增]` WHEN Desktop_Client 请求可用模型列表, THE Model_Config_Service SHALL 根据用户所属部门的模型白名单过滤并返回该用户可用的模型配置（脱敏后），未配置白名单的部门返回所有已启用模型
+12. `[新增]` THE Admin_Platform SHALL 允许为每个模型配置输入单价和输出单价（单位：分/千Token），用于费用计算
+13. `[新增]` WHEN Admin 点击"获取官方定价", THE Model_Config_Service SHALL 尝试从对应提供商的公开定价接口拉取当前模型的单价并自动填充，拉取失败时提示手动输入
 
 ---
 
@@ -334,20 +337,21 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 
 ---
 
-### 需求 18：Token 配额与费用管理 `[新增]`
+### 需求 18：费用配额管理 `[新增]`
 
-**用户故事：** 作为管理员，我希望管理 AI 模型的使用配额和费用，以控制企业的 AI 使用成本。
+**用户故事：** 作为管理员，我希望管理 AI 模型的使用费用配额，以控制企业的 AI 使用成本。
 
 #### 验收标准
 
-1. `[新增]` THE Admin_Platform SHALL 展示全局 Token 使用概览，包含今日消耗、本月消耗、本月预算和预算使用率
-2. `[新增]` THE Quota_Service SHALL 支持按组织、部门和个人三个层级设置 Token 配额
-3. `[新增]` WHEN Employee 的 Token 消耗达到个人配额上限, THE Quota_Service SHALL 拒绝后续 AI 请求并通知该用户
-4. `[新增]` WHEN 部门的 Token 消耗达到部门配额上限, THE Quota_Service SHALL 拒绝该部门所有用户的后续 AI 请求
-5. `[新增]` THE Admin_Platform SHALL 展示 Token 消耗的明细记录，包含用户、模型、Token 数量、费用和时间
-6. `[新增]` THE Admin_Platform SHALL 展示按用户和部门维度的 Token 消耗排行
-7. `[新增]` WHEN 月度费用达到预算的 90%, THE Alert_Service SHALL 向管理员发送费用预警通知
-8. `[新增]` THE Quota_Service SHALL 在每日零点重置日配额计数器，在每月一日重置月配额计数器
+1. `[新增]` THE Admin_Platform SHALL 展示全局费用概览，包含今日费用、本月费用、本月预算和预算使用率
+2. `[新增]` THE Quota_Service SHALL 支持按组织、部门和个人三个层级设置每日费用限额（单位：分）
+3. `[新增]` WHEN Desktop_Client 发起 AI 请求, THE Quota_Service SHALL 先执行预检：查询用户所属部门和个人的当日已消耗费用，若已超过限额则直接拒绝请求并返回超额提示
+4. `[新增]` WHEN AI 请求完成后, THE Quota_Service SHALL 根据模型响应中的 usage（input_tokens、output_tokens）乘以该模型配置的单价，计算本次实际费用并累加到对应的部门和个人计数器
+5. `[新增]` WHEN 部门的费用消耗达到部门限额, THE Quota_Service SHALL 拒绝该部门所有用户的后续 AI 请求
+6. `[新增]` THE Admin_Platform SHALL 展示费用消耗的明细记录，包含用户、模型、Token 数量、费用和时间
+7. `[新增]` THE Admin_Platform SHALL 展示按用户和部门维度的费用消耗排行
+8. `[新增]` WHEN 月度费用达到预算的 90%, THE Alert_Service SHALL 向管理员发送费用预警通知
+9. `[新增]` THE Quota_Service SHALL 在每日零点重置日费用计数器，在每月一日重置月费用计数器
 
 ---
 
