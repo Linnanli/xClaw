@@ -69,3 +69,100 @@ export interface PaginatedResponse<T> {
   page: number
   page_size: number
 }
+
+// DLP 规则
+export interface DlpRule {
+  id: string
+  name: string
+  pattern: string
+  severity: 'low' | 'medium' | 'high' | 'critical'
+  classification_level?: string
+  scan_direction: 'input' | 'output' | 'both'
+  rule_type: 'regex' | 'keyword' | 'dictionary'
+  hit_count: number
+  enabled: boolean
+  created_at: string
+}
+
+// 客户端
+export interface Client {
+  id: string
+  name: string
+  username: string
+  status: 'online' | 'offline'
+  os: string
+  ip_address: string
+  policy_version: string
+  device_fingerprint_verified: boolean
+  needs_upgrade: boolean
+  last_active_at: string
+}
+
+export interface ClientStats {
+  total: number
+  online: number
+  offline: number
+  needs_upgrade: number
+}
+
+// 告警
+export interface AlertEvent {
+  id: string
+  time: string
+  severity: 'low' | 'medium' | 'high' | 'critical'
+  rule_name: string
+  trigger_detail: string
+  status: 'pending' | 'acknowledged' | 'in_progress' | 'closed'
+  created_at: string
+}
+
+// 对话
+export interface Conversation {
+  id: string
+  username: string
+  topic: string
+  message_count: number
+  token_usage: number
+  model: string
+  dlp_flagged: boolean
+  time: string
+}
+
+// 知识库
+export interface KnowledgeBase {
+  id: string
+  name: string
+  description: string
+  document_count: number
+  chunk_count: number
+  access: string
+  enabled: boolean
+}
+
+export interface KBDocument {
+  id: string
+  filename: string
+  file_type: string
+  file_size: string
+  chunk_count: number
+  status: 'completed' | 'processing' | 'failed'
+  uploaded_at: string
+}
+
+// 配额
+export interface QuotaOverview {
+  today_tokens: string
+  month_tokens: string
+  month_budget: string
+  active_models: number
+}
+
+// 审批
+export interface ApprovalTicket {
+  id: string
+  applicant: string
+  operation: string
+  apply_time: string
+  expire_time: string
+  status: 'pending' | 'approved' | 'rejected' | 'expired'
+}
