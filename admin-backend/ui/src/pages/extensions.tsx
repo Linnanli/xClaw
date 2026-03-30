@@ -1,27 +1,47 @@
-import { useState } from 'react'
+import { Loader2 } from 'lucide-react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { api } from '@/lib/api'
 import { TablePagination } from '@/components/ui/table-pagination'
 import { ToggleSwitch } from '@/components/ui/toggle-switch'
 
-/* ── Mock 数据 ── */
+/* ── 类型 ── */
 
-const tabs = ['技能管理', '插件管理']
+interface ExtensionItem {
+  id: string
+  name: string
+  description?: string
+  version: string
+  author?: string
+  enabled: boolean
+  updated_at: string
+}
 
-const mockSkills = [
-  { name: '网页搜索', description: '搜索互联网获取最新信息', version: 'v1.2.0', author: 'IronClaw', enabled: true, updatedAt: '2024-07-08' },
-  { name: '代码执行', description: '在沙箱环境中执行代码片段', version: 'v2.0.1', author: 'IronClaw', enabled: true, updatedAt: '2024-07-05' },
-  { name: '文件分析', description: '解析和分析上传的文档内容', version: 'v1.5.3', author: 'IronClaw', enabled: true, updatedAt: '2024-07-01' },
-  { name: '图片生成', description: '基于文本描述生成图片', version: 'v0.9.0', author: 'Community', enabled: false, updatedAt: '2024-06-28' },
-]
+/* ── Tab 定义 ── */
 
-const mockPlugins = [
-  { name: 'Slack 集成', description: '将 AI 助手接入 Slack 工作区', version: 'v1.0.2', author: 'IronClaw', enabled: true, updatedAt: '2024-07-06' },
-  { name: '飞书集成', description: '将 AI 助手接入飞书', version: 'v0.8.1', author: 'Community', enabled: false, updatedAt: '2024-06-25' },
-  { name: 'Jira 集成', description: '自动创建和更新 Jira 工单', version: 'v1.1.0', author: 'IronClaw', enabled: true, updatedAt: '2024-07-03' },
-]
+const tabs = ['技能管理', '插件管理'] as const
+type TabKey = typeof tabs[number]
 
 /* ── 表格组件 ── */
 
-function ExtensionTable({ data, total, currentPage, onPageChange }: { data: typeof mockSkills; total: number; currentPage: number; onPageChange: (page: number) => void }) {
+function ExtensionTable({
+  items,
+  loading,
+  onToggle,
+  currentPage,
+  onPageChange,
+}: {
+  items: ExtensionItem[]
+  loading: boolean
+  onToggle: (item: ExtensionItem) => void
+  currentPage: number
+  onPageChange: (page: number) => void
+}) {
+  const pageSize = 10
+  const paged = useMemo(() => {
+    const start = (currentPage - 1) * pageSize
+    return items.slice(start, start + pageSize)
+  }, [items, currentPage])
+
   return (
     <div className="bg-white" style={{ border: '1px solid #E8E8E8' }}>
       <div className="grid grid-cols-6 px-4 py-2.5" style={{ borderBottom: '1px solid #E8E8E8' }}>
@@ -29,26 +49,98 @@ function ExtensionTable({ data, total, currentPage, onPageChange }: { data: type
           <span key={h} className="font-mono text-[9px] font-semibold tracking-[0.5px] text-[#999999]">{h}</span>
         ))}
       </div>
-      {data.map((s, i) => (
-        <div key={s.name} className="grid grid-cols-6 items-center px-4 py-3" style={{ borderBottom: i < data.length - 1 ? '1px solid #E8E8E8' : 'none' }}>
-          <span className="font-mono text-[10px] font-semibold text-[#1A1A1A]">{s.name}</span>
-          <span className="font-mono text-[10px] font-medium text-[#999999]">{s.description}</span>
-          <span className="font-mono text-[10px] font-medium text-[#999999]">{s.version}</span>
-          <span className="font-mono text-[10px] font-medium text-[#999999]">{s.author}</span>
-          <div><ToggleSwitch on={s.enabled} /></div>
-          <span className="font-mono text-[10px] font-medium text-[#999999]">{s.updatedAt}</span>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-10">
+          <Loader2 className="h-5 w-5 animate-spin text-[#999999]" />
         </div>
-      ))}
-      <TablePagination current={currentPage} total={total} pageSize={10} onChange={onPageChange} />
+      ) : paged.length === 0 ? (
+        <div className="flex items-center justify-center py-10">
+          <span className="font-mono text-[10px] text-[#CCCCCC]">暂无数据</span>
+        </div>
+      ) : (
+        paged.map((s, i) => (
+          <div key={s.id} className="grid grid-cols-6 items-center px-4 py-3" style={{ borderBottom: i < paged.length - 1 ? '1px solid #E8E8E8' : 'none' }}>
+            <span className="font-mono text-[10px] font-semibold text-[#1A1A1A]">{s.name}</span>
+            <span className="font-mono text-[10px] font-medium text-[#999999]">{s.description || '—'}</span>
+            <span className="font-mono text-[10px] font-medium text-[#999999]">{s.version}</span>
+            <span className="font-mono text-[10px] font-medium text-[#999999]">{s.author || '—'}</span>
+            <div><ToggleSwitch on={s.enabled} onChange={() => onToggle(s)} /></div>
+            <span className="font-mono text-[10px] font-medium text-[#999999]">
+              {new Date(s.updated_at).toLocaleDateString('zh-CN')}
+            </span>
+          </div>
+        ))
+      )}
+      <TablePagination current={currentPage} total={items.length} pageSize={pageSize} onChange={onPageChange} />
     </div>
   )
 }
 
-/* ── 组件 ── */
+/* ── 主组件 ── */
 
 export default function ExtensionsPage() {
-  const [activeTab, setActiveTab] = useState('技能管理')
+  const [activeTab, setActiveTab] = useState<TabKey>('技能管理')
   const [currentPage, setCurrentPage] = useState(1)
+  const [skills, setSkills] = useState<ExtensionItem[]>([])
+  const [plugins, setPlugins] = useState<ExtensionItem[]>([])
+  const [loadingSkills, setLoadingSkills] = useState(false)
+  const [loadingPlugins, setLoadingPlugins] = useState(false)
+
+  const loadSkills = useCallback(async () => {
+    setLoadingSkills(true)
+    try {
+      const res = await api.get('/skills')
+      setSkills(res.data.skills || [])
+    } catch (err) {
+      console.error('加载技能列表失败', err)
+    } finally {
+      setLoadingSkills(false)
+    }
+  }, [])
+
+  const loadPlugins = useCallback(async () => {
+    setLoadingPlugins(true)
+    try {
+      const res = await api.get('/plugins')
+      setPlugins(res.data.plugins || [])
+    } catch (err) {
+      console.error('加载插件列表失败', err)
+    } finally {
+      setLoadingPlugins(false)
+    }
+  }, [])
+
+  /* Tab 切换时加载对应数据 */
+  useEffect(() => {
+    if (activeTab === '技能管理') loadSkills()
+    else loadPlugins()
+  }, [activeTab, loadSkills, loadPlugins])
+
+  const handleToggleSkill = useCallback(async (item: ExtensionItem) => {
+    const action = item.enabled ? 'disable' : 'enable'
+    try {
+      await api.post(`/skills/${item.id}/${action}`)
+      loadSkills()
+    } catch (err) {
+      console.error('切换技能状态失败', err)
+    }
+  }, [loadSkills])
+
+  const handleTogglePlugin = useCallback(async (item: ExtensionItem) => {
+    const action = item.enabled ? 'disable' : 'enable'
+    try {
+      await api.post(`/plugins/${item.id}/${action}`)
+      loadPlugins()
+    } catch (err) {
+      console.error('切换插件状态失败', err)
+    }
+  }, [loadPlugins])
+
+  const handleTabChange = useCallback((tab: TabKey) => {
+    setActiveTab(tab)
+    setCurrentPage(1)
+  }, [])
 
   return (
     <div className="flex flex-col gap-6">
@@ -68,7 +160,7 @@ export default function ExtensionsPage() {
         {tabs.map((tab) => (
           <button
             key={tab}
-            onClick={() => setActiveTab(tab)}
+            onClick={() => handleTabChange(tab)}
             className="px-5 py-3 font-mono text-[10px] font-semibold"
             style={{
               color: activeTab === tab ? '#0A6B3A' : '#999999',
@@ -81,8 +173,24 @@ export default function ExtensionsPage() {
       </div>
 
       {/* Tab 内容区 */}
-      {activeTab === '技能管理' && <ExtensionTable data={mockSkills} total={12} currentPage={currentPage} onPageChange={setCurrentPage} />}
-      {activeTab === '插件管理' && <ExtensionTable data={mockPlugins} total={8} currentPage={currentPage} onPageChange={setCurrentPage} />}
+      {activeTab === '技能管理' && (
+        <ExtensionTable
+          items={skills}
+          loading={loadingSkills}
+          onToggle={handleToggleSkill}
+          currentPage={currentPage}
+          onPageChange={setCurrentPage}
+        />
+      )}
+      {activeTab === '插件管理' && (
+        <ExtensionTable
+          items={plugins}
+          loading={loadingPlugins}
+          onToggle={handleTogglePlugin}
+          currentPage={currentPage}
+          onPageChange={setCurrentPage}
+        />
+      )}
     </div>
   )
 }

@@ -1,16 +1,25 @@
-import { TrendingUp, RefreshCw, Download, Bell } from 'lucide-react'
+import { TrendingUp, RefreshCw, Download, Loader2 } from 'lucide-react'
+import { useState, useEffect, useCallback } from 'react'
+import { api } from '@/lib/api'
 
-/* ── Mock 数据（开发阶段，后续替换为 API 调用）── */
+/* ── 类型 ── */
 
-const stats = [
-  { label: '总用户数', value: '1,284', change: '+8.2%', changeColor: '#0A6B3A', borderColor: '#E8E8E8' },
-  { label: '在线客户端', value: '47', change: '今日 +3', changeColor: '#0A6B3A', borderColor: '#E8E8E8' },
-  { label: 'DLP 拦截', value: '128', change: '今日 +24', changeColor: '#CF1322', borderColor: '#E8E8E8' },
-  { label: '今日 AI 对话', value: '342', change: '1.2M Token', changeColor: '#999999', borderColor: 'rgba(10,107,58,0.25)', valueColor: '#0A6B3A' },
-  { label: '敏感操作', value: '36', change: '今日 +5', changeColor: '#D48700', borderColor: 'rgba(212,135,0,0.25)' },
-]
+interface DashboardStats {
+  total_users: number
+  online_clients: number
+  dlp_blocked_today: number
+  sensitive_ops_today: number
+}
 
-const alertStat = { value: 7, sub: '3 严重' }
+interface ActivityLog {
+  id: string
+  username: string | null
+  action: string
+  details: string
+  created_at: string
+}
+
+/* ── 图表 mock（API 无此数据） ── */
 
 const activityBars = [
   { label: '周一', h: 50 }, { label: '周二', h: 75 }, { label: '周三', h: 40 },
@@ -22,16 +31,51 @@ const dlpBars = [
   { label: '周四', h: 75 }, { label: '周五', h: 55 }, { label: '周六', h: 15 }, { label: '周日', h: 10 },
 ]
 
-const logs = [
-  { time: '14:32:01', user: 'zhang.wei', action: 'DLP_拦截', status: '已拦截', color: '#CF1322', bg: 'rgba(207,19,34,0.13)' },
-  { time: '14:28:45', user: 'li.ming', action: '用户登录', status: '成功', color: '#0A6B3A', bg: 'rgba(10,107,58,0.13)' },
-  { time: '14:21:17', user: '系统', action: '策略推送', status: '已推送', color: '#1677FF', bg: 'rgba(22,119,255,0.13)' },
-  { time: '14:15:03', user: 'wang.fang', action: 'AI 对话', status: 'DLP 标记', color: '#D48700', bg: 'rgba(212,135,0,0.13)' },
-]
+/* ── 状态标签颜色映射 ── */
+
+function getStatusStyle(action: string): { color: string; bg: string } {
+  const lower = action.toLowerCase()
+  if (lower.includes('拦截') || lower.includes('block') || lower.includes('delete')) return { color: '#CF1322', bg: 'rgba(207,19,34,0.13)' }
+  if (lower.includes('登录') || lower.includes('login') || lower.includes('create')) return { color: '#0A6B3A', bg: 'rgba(10,107,58,0.13)' }
+  if (lower.includes('推送') || lower.includes('push') || lower.includes('update')) return { color: '#1677FF', bg: 'rgba(22,119,255,0.13)' }
+  if (lower.includes('标记') || lower.includes('warn')) return { color: '#D48700', bg: 'rgba(212,135,0,0.13)' }
+  return { color: '#999999', bg: 'rgba(153,153,153,0.13)' }
+}
 
 /* ── 组件 ── */
 
 export default function DashboardPage() {
+  const [stats, setStats] = useState<DashboardStats | null>(null)
+  const [logs, setLogs] = useState<ActivityLog[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const loadDashboard = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [statsRes, activityRes] = await Promise.allSettled([
+        api.get('/dashboard/stats'),
+        api.get('/dashboard/activity'),
+      ])
+      if (statsRes.status === 'fulfilled') setStats(statsRes.value.data)
+      if (activityRes.status === 'fulfilled') setLogs(activityRes.value.data.logs || [])
+    } catch (err) {
+      console.error('加载仪表盘数据失败', err)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { loadDashboard() }, [loadDashboard])
+
+  const statCards = [
+    { label: '总用户数', value: stats ? stats.total_users.toLocaleString() : '—', change: '', changeColor: '#999999', borderColor: '#E8E8E8' },
+    { label: '在线客户端', value: stats ? String(stats.online_clients) : '—', change: '', changeColor: '#0A6B3A', borderColor: '#E8E8E8' },
+    { label: 'DLP 拦截', value: stats ? String(stats.dlp_blocked_today) : '—', change: '今日', changeColor: '#CF1322', borderColor: '#E8E8E8' },
+    { label: '敏感操作', value: stats ? String(stats.sensitive_ops_today) : '—', change: '今日', changeColor: '#D48700', borderColor: 'rgba(212,135,0,0.25)' },
+    { label: '今日 AI 对话', value: '342', change: '1.2M Token', changeColor: '#999999', borderColor: 'rgba(10,107,58,0.25)', valueColor: '#0A6B3A' },
+    { label: '系统健康度', value: '99.8%', change: '正常', changeColor: '#0A6B3A', borderColor: '#E8E8E8' },
+  ]
+
   return (
     <div className="flex flex-col gap-6">
 
@@ -44,8 +88,11 @@ export default function DashboardPage() {
           <p className="font-mono text-xs text-[#999999]">监控 DLP、客户端、AI 使用与安全指标</p>
         </div>
         <div className="flex gap-2">
-          <button className="flex items-center gap-2 border border-[#E8E8E8] bg-white px-4 py-2.5 font-mono text-[9px] font-semibold text-[#1A1A1A]">
-            <RefreshCw className="h-3 w-3 text-[#6a6a6a]" />
+          <button
+            className="flex items-center gap-2 border border-[#E8E8E8] bg-white px-4 py-2.5 font-mono text-[9px] font-semibold text-[#1A1A1A]"
+            onClick={loadDashboard}
+          >
+            {loading ? <Loader2 className="h-3 w-3 animate-spin text-[#6a6a6a]" /> : <RefreshCw className="h-3 w-3 text-[#6a6a6a]" />}
             刷新
           </button>
           <button className="flex items-center gap-2 bg-[#0A6B3A] px-4 py-2.5 font-mono text-[9px] font-semibold text-white">
@@ -57,35 +104,24 @@ export default function DashboardPage() {
 
       {/* 统计卡片 — 6 列 */}
       <div className="grid grid-cols-6 gap-2.5">
-        {stats.map((s) => (
+        {statCards.map((s) => (
           <div key={s.label} className="flex flex-col gap-4 bg-white p-4" style={{ border: `1px solid ${s.borderColor}` }}>
             <span className="font-mono text-[9px] font-semibold tracking-[0.5px] text-[#999999]">{s.label}</span>
-            <span className="text-[28px] font-bold tracking-tight" style={{ fontFamily: 'Space Grotesk, sans-serif', letterSpacing: '-1px', color: s.valueColor ?? '#1A1A1A' }}>
-              {s.value}
+            <span className="text-[28px] font-bold tracking-tight" style={{ fontFamily: 'Space Grotesk, sans-serif', letterSpacing: '-1px', color: (s as any).valueColor ?? '#1A1A1A' }}>
+              {loading && !stats ? '—' : s.value}
             </span>
-            <div className="flex items-center gap-1.5">
-              {s.changeColor !== '#999999' && <TrendingUp className="h-3 w-3" style={{ color: s.changeColor }} />}
-              <span className="font-mono text-[10px] font-semibold" style={{ color: s.changeColor }}>{s.change}</span>
-            </div>
+            {s.change && (
+              <div className="flex items-center gap-1.5">
+                {s.changeColor !== '#999999' && <TrendingUp className="h-3 w-3" style={{ color: s.changeColor }} />}
+                <span className="font-mono text-[10px] font-semibold" style={{ color: s.changeColor }}>{s.change}</span>
+              </div>
+            )}
           </div>
         ))}
-
-        {/* 未处理告警 — 特殊样式 */}
-        <div className="flex flex-col gap-4 bg-white p-4" style={{ border: '1px solid rgba(207,19,34,0.25)' }}>
-          <span className="font-mono text-[9px] font-semibold tracking-[0.5px] text-[#999999]">未处理告警</span>
-          <div className="flex items-center gap-2">
-            <div className="h-2 w-2 rounded-full bg-[#CF1322]" />
-            <span className="text-[28px] font-bold tracking-tight text-[#CF1322]" style={{ fontFamily: 'Space Grotesk, sans-serif', letterSpacing: '-1px' }}>
-              {alertStat.value}
-            </span>
-          </div>
-          <span className="font-mono text-[10px] font-semibold text-[#CF1322]">{alertStat.sub}</span>
-        </div>
       </div>
 
-      {/* 图表区 — 2 列 */}
+      {/* 图表区 — 2 列（保持占位） */}
       <div className="grid grid-cols-2 gap-4">
-        {/* 用户活动趋势 */}
         <div className="flex flex-col gap-5 bg-white p-5" style={{ border: '1px solid #E8E8E8' }}>
           <div className="flex items-center justify-between">
             <div className="flex flex-col gap-1.5">
@@ -104,7 +140,6 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* DLP 拦截趋势 */}
         <div className="flex flex-col gap-5 bg-white p-5" style={{ border: '1px solid #E8E8E8' }}>
           <div className="flex items-center justify-between">
             <div className="flex flex-col gap-1.5">
@@ -135,33 +170,46 @@ export default function DashboardPage() {
         </div>
 
         <div className="bg-white" style={{ border: '1px solid #E8E8E8' }}>
-          {/* 表头 */}
           <div className="grid grid-cols-4 px-4 py-2.5" style={{ borderBottom: '1px solid #E8E8E8' }}>
             {['时间', '操作人', '操作类型', '状态'].map((h) => (
               <span key={h} className="font-mono text-[9px] font-semibold tracking-[0.5px] text-[#999999]">{h}</span>
             ))}
           </div>
 
-          {/* 数据行 */}
-          {logs.map((log, i) => (
-            <div
-              key={i}
-              className="grid grid-cols-4 items-center px-4 py-3"
-              style={{ borderBottom: i < logs.length - 1 ? '1px solid #E8E8E8' : 'none' }}
-            >
-              <span className="font-mono text-[10px] font-medium text-[#999999]">{log.time}</span>
-              <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">{log.user}</span>
-              <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">{log.action}</span>
-              <div>
-                <span
-                  className="inline-block rounded-none px-2 py-0.5 font-mono text-[9px] font-semibold"
-                  style={{ color: log.color, backgroundColor: log.bg, border: `1px solid ${log.color}` }}
-                >
-                  {log.status}
-                </span>
-              </div>
+          {loading && logs.length === 0 ? (
+            <div className="flex items-center justify-center py-10">
+              <Loader2 className="h-5 w-5 animate-spin text-[#999999]" />
             </div>
-          ))}
+          ) : logs.length === 0 ? (
+            <div className="flex items-center justify-center py-10">
+              <span className="font-mono text-[10px] text-[#CCCCCC]">暂无操作记录</span>
+            </div>
+          ) : (
+            logs.map((log, i) => {
+              const style = getStatusStyle(log.action)
+              return (
+                <div
+                  key={log.id}
+                  className="grid grid-cols-4 items-center px-4 py-3"
+                  style={{ borderBottom: i < logs.length - 1 ? '1px solid #E8E8E8' : 'none' }}
+                >
+                  <span className="font-mono text-[10px] font-medium text-[#999999]">
+                    {new Date(log.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  </span>
+                  <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">{log.username || '系统'}</span>
+                  <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">{log.action}</span>
+                  <div>
+                    <span
+                      className="inline-block rounded-none px-2 py-0.5 font-mono text-[9px] font-semibold"
+                      style={{ color: style.color, backgroundColor: style.bg, border: `1px solid ${style.color}` }}
+                    >
+                      {log.details?.slice(0, 20) || log.action}
+                    </span>
+                  </div>
+                </div>
+              )
+            })
+          )}
         </div>
       </div>
     </div>

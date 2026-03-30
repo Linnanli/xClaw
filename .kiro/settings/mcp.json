@@ -129,7 +129,10 @@
       "autoApprove": [
         "search_items_in_registries",
         "list_items_in_registries",
-        "get_project_registries"
+        "get_project_registries",
+        "view_items_in_registries",
+        "get_item_examples_from_registries",
+        "get_add_command_for_items"
       ]
     },
     "assistant-ui": {

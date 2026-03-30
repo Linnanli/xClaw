@@ -49,6 +49,8 @@ const PROVIDER_LIST: ProviderConfig[] = [
 
 const PROVIDERS = Object.fromEntries(PROVIDER_LIST.map((p) => [p.value, p]))
 
+import { FormLabel, FormHint, StatusMessage } from '@/components/ui/form-helpers'
+
 /* ── API Key 脱敏 ── */
 
 function maskApiKey(key: string | null): string {
@@ -74,23 +76,6 @@ function CapabilityTag({ label }: { label: string }) {
     <span className="inline-block px-1.5 py-0.5 font-mono text-[8px] font-semibold" style={{ color: '#0A6B3A', backgroundColor: 'rgba(10,107,58,0.1)', border: '1px solid rgba(10,107,58,0.3)' }}>
       {label}
     </span>
-  )
-}
-
-function FormLabel({ children, required }: { children: React.ReactNode; required?: boolean }) {
-  return <label className="font-mono text-[10px] font-semibold text-[#1A1A1A]">{children}{required && <span className="ml-0.5 text-[#CF1322]">*</span>}</label>
-}
-
-function FormHint({ children }: { children: React.ReactNode }) {
-  return <span className="font-mono text-[9px] font-medium text-[#999999]">{children}</span>
-}
-
-function StatusMessage({ type, message }: { type: 'success' | 'error'; message: string }) {
-  const color = type === 'success' ? '#0A6B3A' : '#CF1322'
-  return (
-    <div className="px-6 py-2" style={{ backgroundColor: `${color}08`, borderBottom: '1px solid #E8E8E8' }}>
-      <span className="font-mono text-[10px] font-medium" style={{ color }}>{message}</span>
-    </div>
   )
 }
 
