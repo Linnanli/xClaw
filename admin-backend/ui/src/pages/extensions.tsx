@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { TablePagination } from '@/components/ui/table-pagination'
+import { ToggleSwitch } from '@/components/ui/toggle-switch'
 
 /* ── Mock 数据 ── */
 
@@ -11,18 +13,33 @@ const mockSkills = [
   { name: '图片生成', description: '基于文本描述生成图片', version: 'v0.9.0', author: 'Community', enabled: false, updatedAt: '2024-06-28' },
 ]
 
-/* ── Toggle 组件 ── */
+const mockPlugins = [
+  { name: 'Slack 集成', description: '将 AI 助手接入 Slack 工作区', version: 'v1.0.2', author: 'IronClaw', enabled: true, updatedAt: '2024-07-06' },
+  { name: '飞书集成', description: '将 AI 助手接入飞书', version: 'v0.8.1', author: 'Community', enabled: false, updatedAt: '2024-06-25' },
+  { name: 'Jira 集成', description: '自动创建和更新 Jira 工单', version: 'v1.1.0', author: 'IronClaw', enabled: true, updatedAt: '2024-07-03' },
+]
 
-function Toggle({ on }: { on: boolean }) {
+/* ── 表格组件 ── */
+
+function ExtensionTable({ data, total, currentPage, onPageChange }: { data: typeof mockSkills; total: number; currentPage: number; onPageChange: (page: number) => void }) {
   return (
-    <div
-      className="relative h-5 w-9 cursor-pointer"
-      style={{ backgroundColor: on ? '#0A6B3A' : '#D9D9D9', borderRadius: 10 }}
-    >
-      <div
-        className="absolute top-0.5 h-4 w-4 bg-white"
-        style={{ borderRadius: 8, left: on ? 18 : 2, transition: 'left 0.2s' }}
-      />
+    <div className="bg-white" style={{ border: '1px solid #E8E8E8' }}>
+      <div className="grid grid-cols-6 px-4 py-2.5" style={{ borderBottom: '1px solid #E8E8E8' }}>
+        {['名称', '描述', '版本', '作者', '状态', '更新时间'].map((h) => (
+          <span key={h} className="font-mono text-[9px] font-semibold tracking-[0.5px] text-[#999999]">{h}</span>
+        ))}
+      </div>
+      {data.map((s, i) => (
+        <div key={s.name} className="grid grid-cols-6 items-center px-4 py-3" style={{ borderBottom: i < data.length - 1 ? '1px solid #E8E8E8' : 'none' }}>
+          <span className="font-mono text-[10px] font-semibold text-[#1A1A1A]">{s.name}</span>
+          <span className="font-mono text-[10px] font-medium text-[#999999]">{s.description}</span>
+          <span className="font-mono text-[10px] font-medium text-[#999999]">{s.version}</span>
+          <span className="font-mono text-[10px] font-medium text-[#999999]">{s.author}</span>
+          <div><ToggleSwitch on={s.enabled} /></div>
+          <span className="font-mono text-[10px] font-medium text-[#999999]">{s.updatedAt}</span>
+        </div>
+      ))}
+      <TablePagination current={currentPage} total={total} pageSize={10} onChange={onPageChange} />
     </div>
   )
 }
@@ -31,6 +48,7 @@ function Toggle({ on }: { on: boolean }) {
 
 export default function ExtensionsPage() {
   const [activeTab, setActiveTab] = useState('技能管理')
+  const [currentPage, setCurrentPage] = useState(1)
 
   return (
     <div className="flex flex-col gap-6">
@@ -62,31 +80,9 @@ export default function ExtensionsPage() {
         ))}
       </div>
 
-      {/* 表格 */}
-      <div className="bg-white" style={{ border: '1px solid #E8E8E8' }}>
-        {/* 表头 */}
-        <div className="grid grid-cols-6 px-4 py-2.5" style={{ borderBottom: '1px solid #E8E8E8' }}>
-          {['名称', '描述', '版本', '作者', '状态', '更新时间'].map((h) => (
-            <span key={h} className="font-mono text-[9px] font-semibold tracking-[0.5px] text-[#999999]">{h}</span>
-          ))}
-        </div>
-
-        {/* 数据行 */}
-        {mockSkills.map((s, i) => (
-          <div
-            key={s.name}
-            className="grid grid-cols-6 items-center px-4 py-3"
-            style={{ borderBottom: i < mockSkills.length - 1 ? '1px solid #E8E8E8' : 'none' }}
-          >
-            <span className="font-mono text-[10px] font-semibold text-[#1A1A1A]">{s.name}</span>
-            <span className="font-mono text-[10px] font-medium text-[#999999]">{s.description}</span>
-            <span className="font-mono text-[10px] font-medium text-[#999999]">{s.version}</span>
-            <span className="font-mono text-[10px] font-medium text-[#999999]">{s.author}</span>
-            <div><Toggle on={s.enabled} /></div>
-            <span className="font-mono text-[10px] font-medium text-[#999999]">{s.updatedAt}</span>
-          </div>
-        ))}
-      </div>
+      {/* Tab 内容区 */}
+      {activeTab === '技能管理' && <ExtensionTable data={mockSkills} total={12} currentPage={currentPage} onPageChange={setCurrentPage} />}
+      {activeTab === '插件管理' && <ExtensionTable data={mockPlugins} total={8} currentPage={currentPage} onPageChange={setCurrentPage} />}
     </div>
   )
 }

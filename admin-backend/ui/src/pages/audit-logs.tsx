@@ -1,4 +1,6 @@
 import { Search, ChevronDown, Download } from 'lucide-react'
+import { useState } from 'react'
+import { TablePagination } from '@/components/ui/table-pagination'
 
 /* ── Mock 数据 ── */
 
@@ -21,6 +23,8 @@ const mockLogs = [
 /* ── 组件 ── */
 
 export default function AuditLogsPage() {
+  const [currentPage, setCurrentPage] = useState(1)
+
   return (
     <div className="flex flex-col gap-6">
 
@@ -85,18 +89,7 @@ export default function AuditLogsPage() {
             <button className="font-mono text-[10px] font-semibold text-[#0A6B3A] text-left">详情</button>
           </div>
         ))}
-      </div>
-
-      {/* 分页 */}
-      <div className="flex items-center justify-between">
-        <span className="font-mono text-[10px] font-medium text-[#999999]">共 1,284 条记录</span>
-        <div className="flex items-center gap-2">
-          <button className="border border-[#E8E8E8] bg-white px-3 py-1.5 font-mono text-[9px] font-medium text-[#999999]">上一页</button>
-          <span className="flex h-7 w-7 items-center justify-center bg-[#0A6B3A] font-mono text-[9px] font-semibold text-white">1</span>
-          <button className="flex h-7 w-7 items-center justify-center border border-[#E8E8E8] bg-white font-mono text-[9px] font-medium text-[#999999]">2</button>
-          <button className="flex h-7 w-7 items-center justify-center border border-[#E8E8E8] bg-white font-mono text-[9px] font-medium text-[#999999]">3</button>
-          <button className="border border-[#E8E8E8] bg-white px-3 py-1.5 font-mono text-[9px] font-medium text-[#999999]">下一页</button>
-        </div>
+        <TablePagination current={currentPage} total={1284} pageSize={10} onChange={setCurrentPage} />
       </div>
     </div>
   )

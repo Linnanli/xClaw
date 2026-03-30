@@ -37,9 +37,8 @@ describe('审计日志', () => {
     })
 
     it('应渲染分页和记录总数', () => {
-      cy.contains('共 1,284 条记录').should('be.visible')
-      cy.contains('上一页').should('be.visible')
-      cy.contains('下一页').should('be.visible')
+      cy.get('[data-testid="table-pagination"]').should('be.visible')
+      cy.get('[data-testid="table-pagination"]').contains('共 1,284 条记录').should('be.visible')
     })
   })
 })

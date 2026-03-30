@@ -2,7 +2,8 @@ import { Link, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, Monitor, Users, Shield, Bell,
   MessageSquare, BookOpen, Coins, ShieldCheck, Scan,
-  SquareCheck, Settings,
+  SquareCheck, Settings, Building2, BarChart3, Bot,
+  FileText, Puzzle,
 } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth'
 
@@ -10,14 +11,19 @@ const navItems = [
   { title: '总览', icon: LayoutDashboard, href: '/' },
   { title: '客户端', icon: Monitor, href: '/clients' },
   { title: '用户管理', icon: Users, href: '/users' },
+  { title: '部门管理', icon: Building2, href: '/departments' },
   { title: '安全策略', icon: Shield, href: '/security' },
   { title: '告警中心', icon: Bell, href: '/alerts' },
   { title: '对话审计', icon: MessageSquare, href: '/conversations' },
   { title: '知识库', icon: BookOpen, href: '/knowledge-bases' },
   { title: '配额管理', icon: Coins, href: '/quota' },
+  { title: '模型配置', icon: Bot, href: '/model-configs' },
+  { title: '扩展管理', icon: Puzzle, href: '/extensions' },
   { title: '合规管理', icon: ShieldCheck, href: '/compliance' },
   { title: '水印追踪', icon: Scan, href: '/watermark' },
   { title: '审批工单', icon: SquareCheck, href: '/approvals' },
+  { title: '审计日志', icon: FileText, href: '/audit-logs' },
+  { title: '统计报表', icon: BarChart3, href: '/reports' },
   { title: '系统设置', icon: Settings, href: '/settings' },
 ]
 

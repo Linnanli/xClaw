@@ -1,4 +1,7 @@
 import { Plus, ChevronDown, ChevronRight } from 'lucide-react'
+import { useState } from 'react'
+import { TablePagination } from '@/components/ui/table-pagination'
+import { StatusTag } from '@/components/ui/status-tag'
 
 /* ── Mock 数据 ── */
 
@@ -32,22 +35,11 @@ const mockMembers = [
   { username: 'li.ming', role: '高级工程师', department: '后端组', todayToken: '28,400', status: 'active' },
 ]
 
-/* ── 辅助：渲染彩色标签 ── */
-
-function StatusTag({ label, color }: { label: string; color: string }) {
-  return (
-    <span
-      className="inline-block px-2 py-0.5 font-mono text-[9px] font-semibold"
-      style={{ color, backgroundColor: `${color}1A`, border: `1px solid ${color}` }}
-    >
-      {label}
-    </span>
-  )
-}
-
 /* ── 组件 ── */
 
 export default function DepartmentsPage() {
+  const [currentPage, setCurrentPage] = useState(1)
+
   return (
     <div className="flex flex-col gap-6">
 
@@ -193,6 +185,7 @@ export default function DepartmentsPage() {
             </div>
           )
         })}
+        <TablePagination current={currentPage} total={24} pageSize={10} onChange={setCurrentPage} />
       </div>
     </div>
   )

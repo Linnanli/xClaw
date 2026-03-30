@@ -1,4 +1,6 @@
 import { Search, ChevronDown, Download } from 'lucide-react'
+import { useState } from 'react'
+import { TablePagination } from '@/components/ui/table-pagination'
 
 /* ── Mock 数据 ── */
 
@@ -19,6 +21,8 @@ const mockConversations = [
 /* ── 组件 ── */
 
 export default function ConversationsPage() {
+  const [currentPage, setCurrentPage] = useState(1)
+
   return (
     <div className="flex flex-col gap-6">
 
@@ -114,6 +118,7 @@ export default function ConversationsPage() {
             <span className="font-mono text-[10px] font-medium text-[#999999]">{c.time}</span>
           </div>
         ))}
+        <TablePagination current={currentPage} total={1284} pageSize={10} onChange={setCurrentPage} />
       </div>
     </div>
   )

@@ -1,4 +1,7 @@
 import { Plus, Upload, Search } from 'lucide-react'
+import { useState } from 'react'
+import { TablePagination } from '@/components/ui/table-pagination'
+import { StatusTag } from '@/components/ui/status-tag'
 
 /* ── Mock 数据 ── */
 
@@ -28,22 +31,11 @@ const mockDocuments = [
   { filename: '部署运维手册.txt', file_type: 'TXT', file_size: '128 KB', chunk_count: 0, status: 'failed', uploaded_at: '2024-01-13' },
 ]
 
-/* ── 辅助：渲染彩色标签 ── */
-
-function StatusTag({ label, color }: { label: string; color: string }) {
-  return (
-    <span
-      className="inline-block px-2 py-0.5 font-mono text-[9px] font-semibold"
-      style={{ color, backgroundColor: `${color}1A`, border: `1px solid ${color}` }}
-    >
-      {label}
-    </span>
-  )
-}
-
 /* ── 组件 ── */
 
 export default function KnowledgeBasesPage() {
+  const [currentPage, setCurrentPage] = useState(1)
+
   return (
     <div className="flex flex-col gap-6">
 
@@ -145,6 +137,7 @@ export default function KnowledgeBasesPage() {
             </div>
           )
         })}
+        <TablePagination current={currentPage} total={48} pageSize={10} onChange={setCurrentPage} />
       </div>
     </div>
   )

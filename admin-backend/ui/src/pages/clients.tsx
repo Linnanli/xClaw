@@ -1,4 +1,6 @@
 import { Search, Send, Monitor, LogOut, Trash2, ChevronDown } from 'lucide-react'
+import { useState } from 'react'
+import { TablePagination } from '@/components/ui/table-pagination'
 
 /* ── Mock 数据 ── */
 
@@ -45,6 +47,8 @@ const mockClients = [
 /* ── 组件 ── */
 
 export default function ClientsPage() {
+  const [currentPage, setCurrentPage] = useState(1)
+
   return (
     <div className="flex flex-col gap-6">
 
@@ -179,6 +183,7 @@ export default function ClientsPage() {
             </div>
           </div>
         ))}
+        <TablePagination current={currentPage} total={156} pageSize={10} onChange={setCurrentPage} />
       </div>
     </div>
   )

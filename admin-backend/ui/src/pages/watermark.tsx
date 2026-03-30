@@ -1,4 +1,8 @@
 import { Scan } from 'lucide-react'
+import { useState } from 'react'
+import { TablePagination } from '@/components/ui/table-pagination'
+import { ToggleSwitch } from '@/components/ui/toggle-switch'
+import { StatusTag } from '@/components/ui/status-tag'
 
 /* ── Mock 数据 ── */
 
@@ -12,38 +16,11 @@ const resultMap: Record<string, { label: string; color: string }> = {
   failed: { label: '提取失败', color: '#CF1322' },
 }
 
-/* ── 辅助：渲染彩色标签 ── */
-
-function StatusTag({ label, color }: { label: string; color: string }) {
-  return (
-    <span
-      className="inline-block px-2 py-0.5 font-mono text-[9px] font-semibold"
-      style={{ color, backgroundColor: `${color}1A`, border: `1px solid ${color}` }}
-    >
-      {label}
-    </span>
-  )
-}
-
-/* ── Toggle 组件 ── */
-
-function Toggle({ on }: { on: boolean }) {
-  return (
-    <div
-      className="relative h-5 w-9 cursor-pointer"
-      style={{ backgroundColor: on ? '#0A6B3A' : '#D9D9D9', borderRadius: 10 }}
-    >
-      <div
-        className="absolute top-0.5 h-4 w-4 bg-white"
-        style={{ borderRadius: 8, left: on ? 18 : 2, transition: 'left 0.2s' }}
-      />
-    </div>
-  )
-}
-
 /* ── 组件 ── */
 
 export default function WatermarkPage() {
+  const [currentPage, setCurrentPage] = useState(1)
+
   return (
     <div className="flex flex-col gap-6">
 
@@ -70,7 +47,7 @@ export default function WatermarkPage() {
           </span>
           <div className="flex items-center justify-between">
             <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">启用水印</span>
-            <Toggle on />
+            <ToggleSwitch on />
           </div>
           <div className="flex flex-col gap-1.5">
             <span className="font-mono text-[10px] font-medium text-[#999999]">水印类型</span>
@@ -129,6 +106,7 @@ export default function WatermarkPage() {
             </div>
           )
         })}
+        <TablePagination current={currentPage} total={32} pageSize={10} onChange={setCurrentPage} />
       </div>
     </div>
   )

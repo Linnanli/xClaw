@@ -1,5 +1,6 @@
 import { RotateCcw, Save } from 'lucide-react'
 import { useState } from 'react'
+import { ToggleSwitch } from '@/components/ui/toggle-switch'
 
 /* ── Mock 数据 ── */
 
@@ -13,19 +14,31 @@ const tabs = [
   { label: '水印配置', badge: true },
 ]
 
-/* ── Toggle 组件 ── */
+/* ── 设置项行 ── */
 
-function Toggle({ on }: { on: boolean }) {
+function SettingRow({ label, value, warning }: { label: string; value: React.ReactNode; warning?: string }) {
   return (
-    <div
-      className="relative h-5 w-9 cursor-pointer"
-      style={{ backgroundColor: on ? '#0A6B3A' : '#D9D9D9', borderRadius: 10 }}
-      data-testid={`toggle-${on ? 'on' : 'off'}`}
-    >
-      <div
-        className="absolute top-0.5 h-4 w-4 bg-white"
-        style={{ borderRadius: 8, left: on ? 18 : 2, transition: 'left 0.2s' }}
-      />
+    <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-1">
+        <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">{label}</span>
+        {warning && <span className="font-mono text-[9px] font-medium text-[#CF1322]">{warning}</span>}
+      </div>
+      {value}
+    </div>
+  )
+}
+
+function SettingValue({ text }: { text: string }) {
+  return <span className="font-mono text-[10px] font-semibold text-[#1A1A1A]">{text}</span>
+}
+
+/* ── 设置卡片 ── */
+
+function SettingCard({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-4 bg-white p-5" style={{ border: '1px solid #E8E8E8' }}>
+      <span className="text-sm font-semibold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{title}</span>
+      {children}
     </div>
   )
 }
@@ -72,10 +85,7 @@ export default function SettingsPage() {
           >
             {tab.label}
             {tab.badge && (
-              <span
-                className="px-1.5 py-0.5 font-mono text-[8px] font-semibold"
-                style={{ color: '#0A6B3A', backgroundColor: 'rgba(10,107,58,0.13)', border: '1px solid #0A6B3A' }}
-              >
+              <span className="px-1.5 py-0.5 font-mono text-[8px] font-semibold" style={{ color: '#0A6B3A', backgroundColor: 'rgba(10,107,58,0.13)', border: '1px solid #0A6B3A' }}>
                 新增
               </span>
             )}
@@ -83,92 +93,73 @@ export default function SettingsPage() {
         ))}
       </div>
 
-      {/* 2 列布局 */}
-      <div className="grid grid-cols-2 gap-4">
-        {/* 左列 */}
-        <div className="flex flex-col gap-4">
-          {/* DLP 数据防泄漏 */}
-          <div className="flex flex-col gap-4 bg-white p-5" style={{ border: '1px solid #E8E8E8' }}>
-            <span className="text-sm font-semibold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
-              DLP 数据防泄漏
-            </span>
-            <div className="flex items-center justify-between">
-              <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">启用 DLP 扫描</span>
-              <Toggle on />
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">双向扫描</span>
-              <Toggle on />
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">扫描超时</span>
-              <span className="font-mono text-[10px] font-semibold text-[#1A1A1A]">5000ms</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <div className="flex flex-col gap-1">
-                <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">故障开放模式</span>
-                <span className="font-mono text-[9px] font-medium text-[#CF1322]">⚠ 启用后 DLP 故障时将放行请求，存在安全风险</span>
-              </div>
-              <Toggle on={false} />
-            </div>
-          </div>
+      {/* Tab 内容区 */}
+      {activeTab === 'DLP 防泄漏' && (
+        <SettingCard title="DLP 数据防泄漏">
+          <SettingRow label="启用 DLP 扫描" value={<ToggleSwitch on />} />
+          <SettingRow label="双向扫描" value={<ToggleSwitch on />} />
+          <SettingRow label="扫描超时" value={<SettingValue text="5000ms" />} />
+          <SettingRow label="故障开放模式" value={<ToggleSwitch on={false} />} warning="⚠ 启用后 DLP 故障时将放行请求，存在安全风险" />
+        </SettingCard>
+      )}
 
-          {/* 审计日志 */}
-          <div className="flex flex-col gap-4 bg-white p-5" style={{ border: '1px solid #E8E8E8' }}>
-            <span className="text-sm font-semibold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
-              审计日志
-            </span>
-            <div className="flex items-center justify-between">
-              <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">启用审计</span>
-              <Toggle on />
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">保留天数</span>
-              <span className="font-mono text-[10px] font-semibold text-[#1A1A1A]">90 天</span>
-            </div>
-          </div>
-        </div>
+      {activeTab === '审计日志' && (
+        <SettingCard title="审计日志">
+          <SettingRow label="启用审计" value={<ToggleSwitch on />} />
+          <SettingRow label="保留天数" value={<SettingValue text="90 天" />} />
+          <SettingRow label="记录请求体" value={<ToggleSwitch on={false} />} />
+          <SettingRow label="记录响应体" value={<ToggleSwitch on={false} />} />
+        </SettingCard>
+      )}
 
-        {/* 右列 */}
-        <div className="flex flex-col gap-4">
-          {/* 安全策略 */}
-          <div className="flex flex-col gap-4 bg-white p-5" style={{ border: '1px solid #E8E8E8' }}>
-            <span className="text-sm font-semibold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
-              安全策略
-            </span>
-            <div className="flex items-center justify-between">
-              <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">密码最小长度</span>
-              <span className="font-mono text-[10px] font-semibold text-[#1A1A1A]">8 位</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">会话超时</span>
-              <span className="font-mono text-[10px] font-semibold text-[#1A1A1A]">480 分钟</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">登录失败锁定</span>
-              <span className="font-mono text-[10px] font-semibold text-[#1A1A1A]">5 次 / 15 分钟</span>
-            </div>
-          </div>
+      {activeTab === '客户端' && (
+        <SettingCard title="客户端配置">
+          <SettingRow label="自动更新" value={<ToggleSwitch on />} />
+          <SettingRow label="最低版本要求" value={<SettingValue text="v2.1.0" />} />
+          <SettingRow label="离线模式" value={<ToggleSwitch on={false} />} />
+          <SettingRow label="心跳间隔" value={<SettingValue text="30 秒" />} />
+        </SettingCard>
+      )}
 
-          {/* 告警通知渠道 */}
-          <div className="flex flex-col gap-4 bg-white p-5" style={{ border: '1px solid #E8E8E8' }}>
-            <span className="text-sm font-semibold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
-              告警通知渠道
-            </span>
-            {[
-              { name: '邮件', on: true },
-              { name: '企微', on: true },
-              { name: '钉钉', on: false },
-              { name: '飞书', on: false },
-            ].map((ch) => (
-              <div key={ch.name} className="flex items-center justify-between">
-                <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">{ch.name}</span>
-                <Toggle on={ch.on} />
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+      {activeTab === '策略同步' && (
+        <SettingCard title="策略同步">
+          <SettingRow label="自动同步" value={<ToggleSwitch on />} />
+          <SettingRow label="同步间隔" value={<SettingValue text="5 分钟" />} />
+          <SettingRow label="增量同步" value={<ToggleSwitch on />} />
+          <SettingRow label="同步失败重试" value={<SettingValue text="3 次" />} />
+        </SettingCard>
+      )}
+
+      {activeTab === '告警通知' && (
+        <SettingCard title="告警通知渠道">
+          {[
+            { name: '邮件', on: true },
+            { name: '企微', on: true },
+            { name: '钉钉', on: false },
+            { name: '飞书', on: false },
+          ].map((ch) => (
+            <SettingRow key={ch.name} label={ch.name} value={<ToggleSwitch on={ch.on} />} />
+          ))}
+        </SettingCard>
+      )}
+
+      {activeTab === '安全策略' && (
+        <SettingCard title="安全策略">
+          <SettingRow label="密码最小长度" value={<SettingValue text="8 位" />} />
+          <SettingRow label="会话超时" value={<SettingValue text="480 分钟" />} />
+          <SettingRow label="登录失败锁定" value={<SettingValue text="5 次 / 15 分钟" />} />
+          <SettingRow label="强制 MFA" value={<ToggleSwitch on={false} />} />
+        </SettingCard>
+      )}
+
+      {activeTab === '水印配置' && (
+        <SettingCard title="水印配置">
+          <SettingRow label="启用水印" value={<ToggleSwitch on />} />
+          <SettingRow label="水印类型" value={<SettingValue text="文本水印" />} />
+          <SettingRow label="水印透明度" value={<SettingValue text="15%" />} />
+          <SettingRow label="包含用户信息" value={<ToggleSwitch on />} />
+        </SettingCard>
+      )}
     </div>
   )
 }

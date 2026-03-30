@@ -1,4 +1,7 @@
 import { FileText } from 'lucide-react'
+import { useState } from 'react'
+import { TablePagination } from '@/components/ui/table-pagination'
+import { StatusTag } from '@/components/ui/status-tag'
 
 /* ── Mock 数据 ── */
 
@@ -21,22 +24,11 @@ const mockReports = [
   { name: '2023年度合规报告', type: 'annual', range: '2023-01-01 ~ 2023-12-31', generated: '2024-01-15 10:00' },
 ]
 
-/* ── 辅助：渲染彩色标签 ── */
-
-function StatusTag({ label, color }: { label: string; color: string }) {
-  return (
-    <span
-      className="inline-block px-2 py-0.5 font-mono text-[9px] font-semibold"
-      style={{ color, backgroundColor: `${color}1A`, border: `1px solid ${color}` }}
-    >
-      {label}
-    </span>
-  )
-}
-
 /* ── 组件 ── */
 
 export default function CompliancePage() {
+  const [currentPage, setCurrentPage] = useState(1)
+
   return (
     <div className="flex flex-col gap-6">
 
@@ -102,6 +94,7 @@ export default function CompliancePage() {
             </div>
           )
         })}
+        <TablePagination current={currentPage} total={15} pageSize={10} onChange={setCurrentPage} />
       </div>
     </div>
   )

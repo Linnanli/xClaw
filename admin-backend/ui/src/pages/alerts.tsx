@@ -1,4 +1,7 @@
 import { Search, ChevronDown, Bell, Plus } from 'lucide-react'
+import { useState } from 'react'
+import { TablePagination } from '@/components/ui/table-pagination'
+import { StatusTag } from '@/components/ui/status-tag'
 
 /* ── Mock 数据 ── */
 
@@ -29,22 +32,11 @@ const mockAlerts = [
   { time: '09:45:17', severity: 'critical', rule_name: '模型服务异常', trigger_detail: 'DeepSeek API 连续失败 5 次', status: 'pending' },
 ]
 
-/* ── 辅助：渲染彩色标签 ── */
-
-function StatusTag({ label, color }: { label: string; color: string }) {
-  return (
-    <span
-      className="inline-block px-2 py-0.5 font-mono text-[9px] font-semibold"
-      style={{ color, backgroundColor: `${color}1A`, border: `1px solid ${color}` }}
-    >
-      {label}
-    </span>
-  )
-}
-
 /* ── 组件 ── */
 
 export default function AlertsPage() {
+  const [currentPage, setCurrentPage] = useState(1)
+
   return (
     <div className="flex flex-col gap-6">
 
@@ -137,6 +129,7 @@ export default function AlertsPage() {
             </div>
           )
         })}
+        <TablePagination current={currentPage} total={47} pageSize={10} onChange={setCurrentPage} />
       </div>
     </div>
   )
