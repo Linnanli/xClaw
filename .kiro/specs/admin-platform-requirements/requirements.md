@@ -103,6 +103,8 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 6. `[新增]` THE Admin_Platform SHALL 支持树形组织架构展示，允许部门嵌套形成多级层级
 7. `[新增]` WHEN 部门的 Token 消耗达到限额的 80%, THE Alert_Service SHALL 向部门管理员发送预警通知
 8. `[新增]` THE Admin_Platform SHALL 展示各部门的 Token 消耗排行和趋势图
+9. `[新增]` THE Admin_Platform SHALL 支持为部门配置可用模型白名单，限定该部门成员可使用的 AI 模型范围
+10. `[新增]` WHEN Desktop_Client 发起 AI 对话, THE Client_Manager SHALL 根据用户所属部门的模型白名单返回可用模型列表，未配置白名单的部门默认可使用所有已启用模型
 
 ---
 
@@ -206,6 +208,7 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 8. `[新增]` THE Admin_Platform SHALL 展示各模型的调用量统计和平均响应延迟
 9. `[新增]` WHEN 模型 API 连续调用失败达到阈值, THE Alert_Service SHALL 生成模型服务异常告警
 10. `[新增]` THE Admin_Platform SHALL 支持为不同部门或角色配置可用模型白名单
+11. `[新增]` WHEN Desktop_Client 请求可用模型列表, THE Model_Config_Service SHALL 根据用户所属部门的模型白名单过滤并返回该用户可用的模型配置（脱敏后），未配置白名单的部门返回所有已启用模型
 
 ---
 

@@ -229,6 +229,9 @@ admin-backend/src/
 | GET | `/api/audit-logs` | 新增 `ip_address`, `user_agent` 字段；新增全文搜索参数 `q` | 11.7-11.8 |
 | POST | `/api/users/import` | 新增批量导入端点 | 3.8 |
 | GET | `/api/departments` | 新增树形结构支持 `?tree=true` 参数 | 4.6 |
+| PUT | `/api/departments/:id/model-whitelist` | 新增部门模型白名单配置 | 4.9 |
+| GET | `/api/departments/:id/model-whitelist` | 获取部门模型白名单 | 4.9 |
+| GET | `/api/client-models` | 扩展：根据用户所属部门的模型白名单过滤返回可用模型（供 Desktop Client 使用） | 4.10, 10.11 |
 | GET | `/api/reports/ai-usage` | 新增 AI 使用量报表 | 12.5-12.7 |
 | PUT | `/api/settings` | 新增告警、安全、水印配置项 | 13.7-13.9 |
 
@@ -528,9 +531,10 @@ ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS ip_address TEXT;
 ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS user_agent TEXT;
 ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS is_immutable BOOLEAN NOT NULL DEFAULT TRUE;
 
--- departments 表扩展：树形结构
+-- departments 表扩展：树形结构 + 模型白名单
 ALTER TABLE departments ADD COLUMN IF NOT EXISTS parent_id UUID REFERENCES departments(id);
 ALTER TABLE departments ADD COLUMN IF NOT EXISTS path TEXT NOT NULL DEFAULT '';
+ALTER TABLE departments ADD COLUMN IF NOT EXISTS allowed_model_ids JSONB NOT NULL DEFAULT '[]';
 
 -- dlp_rules 表扩展：数据分级关联
 ALTER TABLE dlp_rules ADD COLUMN IF NOT EXISTS classification_level TEXT;
