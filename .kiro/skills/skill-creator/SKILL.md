@@ -1,6 +1,9 @@
-# Skill Creator
+---
+name: skill-creator
+description: 创建新的 Kiro Skill，改进已有 Skill，并验证 Skill 质量。当用户想要从零创建 skill、把工作流固化成 skill、更新或优化现有 skill、测试 skill 效果时，激活此 skill。即使用户没有明确说"创建 skill"，只要他们在描述一个重复性工作流并希望自动化，也应该考虑激活。
+---
 
-创建新的 Kiro Skill，改进已有 Skill，并验证 Skill 质量。当用户想要从零创建 skill、把工作流固化成 skill、更新或优化现有 skill、测试 skill 效果时，激活此 skill。即使用户没有明确说"创建 skill"，只要他们在描述一个重复性工作流并希望自动化，也应该考虑激活。
+# Skill Creator
 
 > 本 skill 基于 Anthropic 官方 skill-creator 插件转换，适配 Kiro 环境。
 > 原版依赖 Claude Code 的 subagents、`claude -p` CLI、浏览器 eval viewer 等能力。
@@ -13,7 +16,7 @@
 创建 skill 的过程是一个迭代循环，不是一次性交付：
 
 1. 搞清楚 skill 要做什么，大致怎么做
-2. 写一份草稿
+2. 写一份草稿s
 3. 设计 2-3 个测试用例，用 skill 执行它们
 4. 帮用户评估结果（定性 + 定量）
 5. 根据反馈改写 skill
