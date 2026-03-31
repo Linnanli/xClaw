@@ -1,36 +1,163 @@
+import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, Monitor, Users, Shield, Bell,
   MessageSquare, BookOpen, Coins, ShieldCheck, Scan,
   SquareCheck, Settings, Building2, BarChart3, Bot,
-  FileText, Puzzle,
+  FileText, Puzzle, ChevronDown,
 } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth'
+import type { LucideIcon } from 'lucide-react'
 
-const navItems = [
+// --- 菜单数据结构 ---
+
+interface NavLink {
+  title: string
+  icon: LucideIcon
+  href: string
+}
+
+interface NavGroup {
+  label: string
+  icon: LucideIcon
+  children: NavLink[]
+}
+
+type NavEntry = NavLink | NavGroup
+
+function isGroup(entry: NavEntry): entry is NavGroup {
+  return 'children' in entry
+}
+
+const navEntries: NavEntry[] = [
   { title: '总览', icon: LayoutDashboard, href: '/' },
   { title: '客户端', icon: Monitor, href: '/clients' },
-  { title: '用户管理', icon: Users, href: '/users' },
-  { title: '部门管理', icon: Building2, href: '/departments' },
-  { title: '安全策略', icon: Shield, href: '/security' },
-  { title: '告警中心', icon: Bell, href: '/alerts' },
-  { title: '对话审计', icon: MessageSquare, href: '/conversations' },
-  { title: '知识库', icon: BookOpen, href: '/knowledge-bases' },
-  { title: '模型配置', icon: Bot, href: '/model-configs' },
-  { title: '费用管理', icon: Coins, href: '/quota' },
-  { title: '扩展管理', icon: Puzzle, href: '/extensions' },
-  { title: '合规管理', icon: ShieldCheck, href: '/compliance' },
-  { title: '水印追踪', icon: Scan, href: '/watermark' },
-  { title: '审批工单', icon: SquareCheck, href: '/approvals' },
-  { title: '审计日志', icon: FileText, href: '/audit-logs' },
-  { title: '统计报表', icon: BarChart3, href: '/reports' },
+  {
+    label: '组织管理',
+    icon: Building2,
+    children: [
+      { title: '用户管理', icon: Users, href: '/users' },
+      { title: '部门管理', icon: Building2, href: '/departments' },
+    ],
+  },
+  {
+    label: '安全与合规',
+    icon: Shield,
+    children: [
+      { title: '安全策略', icon: Shield, href: '/security' },
+      { title: '合规管理', icon: ShieldCheck, href: '/compliance' },
+      { title: '水印追踪', icon: Scan, href: '/watermark' },
+    ],
+  },
+  {
+    label: '运营监控',
+    icon: Bell,
+    children: [
+      { title: '告警中心', icon: Bell, href: '/alerts' },
+      { title: '对话审计', icon: MessageSquare, href: '/conversations' },
+      { title: '审批工单', icon: SquareCheck, href: '/approvals' },
+    ],
+  },
+  {
+    label: 'AI 与知识',
+    icon: Bot,
+    children: [
+      { title: '模型配置', icon: Bot, href: '/model-configs' },
+      { title: '知识库', icon: BookOpen, href: '/knowledge-bases' },
+      { title: '扩展管理', icon: Puzzle, href: '/extensions' },
+      { title: '费用管理', icon: Coins, href: '/quota' },
+    ],
+  },
+  {
+    label: '审计与报表',
+    icon: FileText,
+    children: [
+      { title: '审计日志', icon: FileText, href: '/audit-logs' },
+      { title: '统计报表', icon: BarChart3, href: '/reports' },
+    ],
+  },
   { title: '系统设置', icon: Settings, href: '/settings' },
 ]
+
+// --- 工具函数 ---
 
 function isActive(pathname: string, href: string): boolean {
   if (href === '/') return pathname === '/'
   return pathname.startsWith(href)
 }
+
+/** 判断分组内是否有子项命中当前路径 */
+function isGroupActive(pathname: string, group: NavGroup): boolean {
+  return group.children.some((child) => isActive(pathname, child.href))
+}
+
+// --- 子组件 ---
+
+function NavLinkItem({ item, pathname, indent = false }: { item: NavLink; pathname: string; indent?: boolean }) {
+  const active = isActive(pathname, item.href)
+  return (
+    <Link
+      to={item.href}
+      className="flex items-center gap-3 py-2.5"
+      style={{
+        paddingLeft: indent ? 44 : 20,
+        paddingRight: 20,
+        backgroundColor: active ? 'rgba(10,107,58,0.06)' : 'transparent',
+        borderLeft: active ? '2px solid #0A6B3A' : '2px solid transparent',
+      }}
+    >
+      <item.icon className="h-4 w-4" style={{ color: active ? '#0A6B3A' : '#6a6a6a' }} />
+      <span
+        className="font-mono text-[11px] tracking-[0.5px]"
+        style={{ color: active ? '#1A1A1A' : '#999999', fontWeight: active ? 600 : 500 }}
+      >
+        {item.title}
+      </span>
+    </Link>
+  )
+}
+
+function NavGroupItem({ group, pathname }: { group: NavGroup; pathname: string }) {
+  const groupActive = isGroupActive(pathname, group)
+  const [open, setOpen] = useState(groupActive)
+
+  return (
+    <div>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-3 px-5 py-2.5"
+        style={{
+          borderLeft: groupActive ? '2px solid #0A6B3A' : '2px solid transparent',
+          backgroundColor: groupActive && !open ? 'rgba(10,107,58,0.03)' : 'transparent',
+        }}
+      >
+        <group.icon className="h-4 w-4" style={{ color: groupActive ? '#0A6B3A' : '#6a6a6a' }} />
+        <span
+          className="flex-1 text-left font-mono text-[11px] tracking-[0.5px]"
+          style={{ color: groupActive ? '#1A1A1A' : '#999999', fontWeight: groupActive ? 600 : 500 }}
+        >
+          {group.label}
+        </span>
+        <ChevronDown
+          className="h-3 w-3 transition-transform duration-200"
+          style={{
+            color: '#999999',
+            transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
+          }}
+        />
+      </button>
+      {open && (
+        <div className="flex flex-col gap-0.5">
+          {group.children.map((child) => (
+            <NavLinkItem key={child.href} item={child} pathname={pathname} indent />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// --- 主组件 ---
 
 export function AppSidebar() {
   const location = useLocation()
@@ -43,7 +170,7 @@ export function AppSidebar() {
       style={{ backgroundColor: '#FAFAFA', borderRight: '1px solid #E8E8E8' }}
     >
       {/* 上部 */}
-      <div className="flex flex-col gap-8">
+      <div className="flex flex-col gap-8 overflow-y-auto">
         {/* Logo */}
         <Link to="/" className="flex items-center gap-3 px-5">
           <div className="flex h-8 w-8 items-center justify-center bg-[#0A6B3A]">
@@ -73,34 +200,13 @@ export function AppSidebar() {
 
         {/* 导航菜单 */}
         <nav className="flex flex-col gap-0.5">
-          {navItems.map((item) => {
-            const active = isActive(location.pathname, item.href)
-            return (
-              <Link
-                key={item.href}
-                to={item.href}
-                className="flex items-center gap-3 px-5 py-3"
-                style={{
-                  backgroundColor: active ? 'rgba(10,107,58,0.06)' : 'transparent',
-                  borderLeft: active ? '2px solid #0A6B3A' : '2px solid transparent',
-                }}
-              >
-                <item.icon
-                  className="h-4 w-4"
-                  style={{ color: active ? '#0A6B3A' : '#6a6a6a' }}
-                />
-                <span
-                  className="font-mono text-[11px] tracking-[0.5px]"
-                  style={{
-                    color: active ? '#1A1A1A' : '#999999',
-                    fontWeight: active ? 600 : 500,
-                  }}
-                >
-                  {item.title}
-                </span>
-              </Link>
-            )
-          })}
+          {navEntries.map((entry) =>
+            isGroup(entry) ? (
+              <NavGroupItem key={entry.label} group={entry} pathname={location.pathname} />
+            ) : (
+              <NavLinkItem key={entry.href} item={entry} pathname={location.pathname} />
+            ),
+          )}
         </nav>
       </div>
 
