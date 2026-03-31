@@ -8,12 +8,11 @@ import SecurityPage from '@/pages/security'
 import AlertsPage from '@/pages/alerts'
 import ConversationsPage from '@/pages/conversations'
 import KnowledgeBasesPage from '@/pages/knowledge-bases'
-import QuotaPage from '@/pages/quota'
+import DepartmentsPage from '@/pages/departments'
 import ApprovalsPage from '@/pages/approvals'
 import CompliancePage from '@/pages/compliance'
 import WatermarkPage from '@/pages/watermark'
 import SettingsPage from '@/pages/settings'
-import DepartmentsPage from '@/pages/departments'
 import ReportsPage from '@/pages/reports'
 import ModelConfigsPage from '@/pages/model-configs'
 import AuditLogsPage from '@/pages/audit-logs'
@@ -56,7 +55,6 @@ export const router = createBrowserRouter([
       { path: 'alerts', element: <AlertsPage /> },
       { path: 'conversations', element: <ConversationsPage /> },
       { path: 'knowledge-bases', element: <KnowledgeBasesPage /> },
-      { path: 'quota', element: <QuotaPage /> },
       { path: 'approvals', element: <ApprovalsPage /> },
       { path: 'compliance', element: <CompliancePage /> },
       { path: 'watermark', element: <WatermarkPage /> },

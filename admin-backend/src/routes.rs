@@ -84,12 +84,20 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/departments/{id}", get(handlers::departments::get_department_detail).put(update_department).delete(delete_department))
         .route("/api/departments/{id}/members", get(handlers::departments::get_department_members))
         .route("/api/departments/{id}/model-whitelist", get(handlers::departments::get_model_whitelist).put(handlers::departments::update_model_whitelist))
+        .route("/api/departments/{id}/quota-summary", get(handlers::quota::department_quota_summary))
         // 模型配置 API
         .route("/api/model-configs", get(get_model_configs).post(create_model_config))
         .route("/api/model-configs/{id}", put(update_model_config).delete(delete_model_config))
         .route("/api/model-configs/test-connection", post(test_model_connection))
         // 客户端模型列表（精简版，供 Desktop Client 拉取）
         .route("/api/client-models", get(get_client_models))
+        // 费用配额管理 API
+        .route("/api/quota/check", post(handlers::quota::quota_check))
+        .route("/api/quota/report-usage", post(handlers::quota::report_usage))
+        .route("/api/quota/overview", get(handlers::quota::quota_overview))
+        .route("/api/quota/config", get(handlers::quota::get_quota_config).put(handlers::quota::update_quota_config))
+        .route("/api/quota/department-ranking", get(handlers::quota::department_ranking))
+        .route("/api/quota/model-ranking", get(handlers::quota::model_ranking))
         .with_state(state)
 }
 
@@ -3908,19 +3916,26 @@ async fn test_model_connection(
     }
 }
 
-/// GET /api/client-models — 客户端拉取可用模型列表（精简版，不含敏感字段）
+/// GET /api/client-models — 客户端拉取可用模型列表
+///
+/// 支持通过 user_id 查询参数按部门白名单过滤。
+/// 未传 user_id 或用户无部门或部门无白名单时，返回所有已启用模型。
 #[instrument(skip(state))]
 async fn get_client_models(
     State(state): State<AppState>,
+    Query(params): Query<ClientModelsQuery>,
 ) -> Result<Json<Vec<models::ClientModelConfig>>> {
     let client = state.db_pool.get().await
         .map_err(|e| Error::Database(e.to_string()))?;
 
+    // 确定白名单过滤条件
+    let whitelist_model_ids = resolve_whitelist(&client, params.user_id).await?;
+
     let rows = client
         .query(
-            "SELECT model_id, display_name, description, provider, is_default, capabilities, \
-             api_base_url, api_key, COALESCE(extra_config->>'api_format', 'openai') \
-             FROM model_configs WHERE enabled = true ORDER BY sort_order, display_name",
+            "SELECT mc.id, mc.model_id, mc.display_name, mc.description, mc.provider, mc.is_default, \
+             mc.capabilities, mc.api_base_url, mc.api_key, COALESCE(mc.extra_config->>'api_format', 'openai') \
+             FROM model_configs mc WHERE mc.enabled = true ORDER BY mc.sort_order, mc.display_name",
             &[],
         )
         .await
@@ -3928,35 +3943,77 @@ async fn get_client_models(
 
     let models: Vec<models::ClientModelConfig> = rows
         .iter()
+        .filter(|row| {
+            // 如果有白名单，只返回白名单中的模型
+            match &whitelist_model_ids {
+                Some(ids) => ids.contains(&row.get::<_, Uuid>(0)),
+                None => true,
+            }
+        })
         .map(|row| {
-            let caps_json: serde_json::Value = row.get(5);
+            let caps_json: serde_json::Value = row.get(6);
             let capabilities = caps_json
                 .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                 .unwrap_or_default();
 
             models::ClientModelConfig {
-                model_id: row.get(0),
-                display_name: row.get(1),
-                description: row.get(2),
-                provider: row.get(3),
-                is_default: row.get(4),
+                model_id: row.get(1),
+                display_name: row.get(2),
+                description: row.get(3),
+                provider: row.get(4),
+                is_default: row.get(5),
                 capabilities,
-                api_base_url: row.get(6),
-                // 完整 key 下发：Desktop Client 直连 LLM API 需要真实 key。
-                // 传输安全由 HTTPS 保证，客户端侧不持久化 key。
-                api_key: row.get(7),
-                api_format: row.get::<_, Option<String>>(8).unwrap_or_else(|| "openai".to_string()),
+                api_base_url: row.get(7),
+                api_key: row.get(8),
+                api_format: row.get::<_, Option<String>>(9).unwrap_or_else(|| "openai".to_string()),
                 source: "admin".to_string(),
             }
         })
         .collect();
 
     Ok(Json(models))
+}
+
+#[derive(Debug, Deserialize)]
+struct ClientModelsQuery {
+    user_id: Option<Uuid>,
+}
+
+/// 查询用户所属部门的模型白名单。
+/// 返回 None 表示不过滤（无部门或部门无白名单）。
+async fn resolve_whitelist(
+    client: &deadpool_postgres::Object,
+    user_id: Option<Uuid>,
+) -> Result<Option<Vec<Uuid>>> {
+    let uid = match user_id {
+        Some(id) => id,
+        None => return Ok(None),
+    };
+
+    // 查用户部门
+    let dept_row = client.query_opt(
+        "SELECT department_id FROM users WHERE id = $1",
+        &[&uid],
+    ).await.map_err(|e| Error::Database(e.to_string()))?;
+
+    let dept_id: Option<Uuid> = dept_row.and_then(|r| r.get(0));
+    let dept_id = match dept_id {
+        Some(id) => id,
+        None => return Ok(None),
+    };
+
+    // 查白名单
+    let rows = client.query(
+        "SELECT model_config_id FROM department_model_whitelist WHERE department_id = $1",
+        &[&dept_id],
+    ).await.map_err(|e| Error::Database(e.to_string()))?;
+
+    if rows.is_empty() {
+        return Ok(None); // 无白名单 = 不过滤
+    }
+
+    Ok(Some(rows.iter().map(|r| r.get(0)).collect()))
 }
 
 /// 规范化 API base URL：去掉 LLM SDK 会自动拼接的路径后缀。

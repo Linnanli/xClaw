@@ -114,6 +114,7 @@ async fn test_migration_all_tables_exist() {
         ("012_dept",      "departments"),
         ("013_model",     "model_configs"),   // ← 本次问题根因
         ("014_dept_ext",  "department_model_whitelist"),
+        ("015_quota",     "usage_records"),
     ];
 
     let mut missing = Vec::new();
@@ -254,6 +255,7 @@ async fn test_http_all_critical_get_routes_registered() {
         "/api/dlp-rules",
         "/api/audit-logs",
         "/api/departments",
+        "/api/quota/overview",
         "/api/skills",
         "/api/plugins",
         "/api/settings",

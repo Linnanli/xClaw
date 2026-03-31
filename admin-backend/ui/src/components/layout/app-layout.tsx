@@ -10,7 +10,6 @@ const routeTitles: Record<string, string> = {
   '/alerts': '告警中心',
   '/conversations': '对话审计',
   '/knowledge-bases': '知识库',
-  '/quota': '配额管理',
   '/compliance': '合规管理',
   '/watermark': '水印追踪',
   '/approvals': '审批工单',

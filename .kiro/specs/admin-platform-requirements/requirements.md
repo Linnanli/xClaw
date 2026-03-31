@@ -67,6 +67,7 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 5. `[新增]` THE Admin_Platform SHALL 在仪表盘页面展示今日 AI 对话总数和 Token 消耗总量统计
 6. `[新增]` THE Admin_Platform SHALL 在仪表盘页面展示未处理告警数量，并以醒目颜色标识高危告警
 7. `[新增]` THE Admin_Platform SHALL 在仪表盘页面展示系统健康状态指标，包括 API 响应延迟和数据库连接状态
+8. `[已实现]` THE Admin_Platform SHALL 在仪表盘页面提供"费用统计" Tab，展示今日/本月费用消耗、月度预算使用率进度条、部门费用消耗排行和模型调用量排行。原独立配额管理页面已合并至此
 
 ---
 
@@ -95,11 +96,11 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 
 #### 验收标准
 
-1. `[已实现]` THE Admin_Platform SHALL 展示部门列表，包含部门名称、描述、成员数、费用限额状态和创建时间
+1. `[已实现]` THE Admin_Platform SHALL 展示部门列表，包含部门名称、描述、成员数、费用限额状态和创建时间。部门详情页统计卡片展示成员数、每日消耗（分）、每日配额（分）和模型白名单数量
 2. `[已实现]` WHEN Admin 创建部门, THE Admin_Platform SHALL 要求填写部门名称，并允许配置描述和每日费用限额（单位：分）
 3. `[已实现]` WHEN Admin 编辑部门, THE Admin_Platform SHALL 允许修改名称、描述和费用限额配置
 4. `[已实现]` WHEN Admin 删除部门, THE Admin_Platform SHALL 检查部门下是否有成员或子部门，有成员或子部门时禁止删除并提示原因；删除时自动清理该部门的费用配额配置和模型白名单，但保留历史费用消耗记录（department_id 置空）
-5. `[已实现]` WHERE 部门启用了费用限额, THE Quota_Service SHALL 根据每次 AI 请求的实际费用（基于模型单价×Token 消耗量）累计，达到每日限额时拒绝后续请求
+5. `[已实现]` WHERE 部门启用了费用限额, THE Quota_Service SHALL 根据每次 AI 请求的实际费用（基于模型单价×Token 消耗量）累计，达到每日限额时拒绝后续请求。所有限额统一使用费用（分）作为单位，配置存储在 quota_configs 表中
 6. `[新增]` THE Admin_Platform SHALL 支持树形组织架构展示，允许部门嵌套形成多级层级。子部门独立配置费用限额和模型白名单，不继承父部门的配置
 7. `[新增]` WHEN 部门的费用消耗达到限额的 80%, THE Alert_Service SHALL 向部门管理员发送预警通知
 8. `[新增]` THE Admin_Platform SHALL 展示各部门的费用消耗排行和趋势图
@@ -337,21 +338,29 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 
 ---
 
-### 需求 18：费用配额管理 `[新增]`
+### 需求 18：费用配额管理 `[已实现 + 扩展]`
 
 **用户故事：** 作为管理员，我希望管理 AI 模型的使用费用配额，以控制企业的 AI 使用成本。
 
+> 设计决策：独立配额管理页面已移除，费用统计合并到仪表盘"费用统计" Tab；配额配置（每日限额、月度预算）统一在部门管理页面的根部门配额卡片中设置。所有限额统一使用费用（分）作为单位，不再使用 Token 数量。
+
 #### 验收标准
 
-1. `[新增]` THE Admin_Platform SHALL 展示全局费用概览，包含今日费用、本月费用、本月预算和预算使用率
-2. `[新增]` THE Quota_Service SHALL 支持按组织、部门和个人三个层级设置每日费用限额（单位：分）
-3. `[新增]` WHEN Desktop_Client 发起 AI 请求, THE Quota_Service SHALL 先执行预检：查询用户所属部门和个人的当日已消耗费用，若已超过限额则直接拒绝请求并返回超额提示
-4. `[新增]` WHEN AI 请求完成后, THE Quota_Service SHALL 根据模型响应中的 usage（input_tokens、output_tokens）乘以该模型配置的单价，计算本次实际费用并累加到对应的部门和个人计数器
-5. `[新增]` WHEN 部门的费用消耗达到部门限额, THE Quota_Service SHALL 拒绝该部门所有用户的后续 AI 请求
-6. `[新增]` THE Admin_Platform SHALL 展示费用消耗的明细记录，包含用户、模型、Token 数量、费用和时间
-7. `[新增]` THE Admin_Platform SHALL 展示按用户和部门维度的费用消耗排行
+1. `[已实现]` THE Admin_Platform SHALL 在仪表盘"费用统计" Tab 中展示全局费用概览，包含今日费用、本月费用、本月预算和预算使用率、部门费用消耗排行和模型调用量排行
+2. `[已实现]` THE Quota_Service SHALL 支持按部门层级设置每日费用限额（单位：分），配置统一存储在 quota_configs 表中
+3. `[已实现]` WHEN Desktop_Client 发起 AI 请求, THE Quota_Service SHALL 先执行预检：查询用户所属部门的当日已消耗费用，若已超过限额则直接拒绝请求并返回超额提示
+4. `[已实现]` WHEN AI 请求完成后, THE Quota_Service SHALL 根据模型响应中的 usage（input_tokens、output_tokens）乘以该模型配置的单价，计算本次实际费用并写入 usage_records 表
+5. `[已实现]` WHEN 部门的费用消耗达到部门限额, THE Quota_Service SHALL 拒绝该部门所有用户的后续 AI 请求
+6. `[新增]` THE Admin_Platform SHALL 在仪表盘"费用统计" Tab 中展示费用消耗的明细记录，包含用户、模型、Token 数量、费用和时间
+7. `[已实现]` THE Admin_Platform SHALL 在仪表盘"费用统计" Tab 中展示按部门和模型维度的费用消耗排行
 8. `[新增]` WHEN 月度费用达到预算的 90%, THE Alert_Service SHALL 向管理员发送费用预警通知
-9. `[新增]` THE Quota_Service SHALL 在每日零点重置日费用计数器，在每月一日重置月费用计数器
+9. `[已实现]` THE Quota_Service SHALL 使用时间窗口查询（`WHERE created_at >= today_start`）计算当日消耗，而非定时清零计数器，以避免零点前后并发请求导致的数据不一致
+10. `[已实现]` IF Quota_Service 预检接口不可用（数据库故障、网络超时）, THEN THE Quota_Service SHALL 采用 Fail-Safe 策略拒绝请求，而非放行（政企场景安全优先）
+11. `[已实现]` WHERE 模型未配置单价（input_price 或 output_price 为 NULL）, THE Quota_Service SHALL 按 0 计费（免费），Admin_Platform SHALL 在模型列表中标记"未定价"警告
+12. `[已实现]` WHEN Desktop_Client 请求可用模型列表, THE Model_Config_Service SHALL 根据用户所属部门的模型白名单过滤并返回该用户可用的模型配置（脱敏后），未配置白名单的部门返回所有已启用模型
+13. `[已实现]` WHEN Quota_Service 执行预检, THE Quota_Service SHALL 同时检查用户直属部门限额和根部门（公司级）限额，任一超额即拒绝请求。不递归检查中间层级部门。根部门消耗通过全表当日 SUM(usage_records WHERE created_at >= today) 计算（利用已有时间索引），不使用递归 CTE。直属部门即根部门时只检查一次
+14. `[已实现]` THE Admin_Platform SHALL 在根部门（parent_id 为 NULL）的配额卡片中默认展示所有子部门限额的累加值，并提供"自定义限额"切换按钮和月度预算设置。开启自定义后管理员可手动设置公司级限额（可低于累加值，用于更严格的总量控制）。自定义限额和月度预算存入 quota_configs 表
+15. `[已实现]` THE Admin_Platform SHALL 在部门详情页的统计卡片中展示"每日消耗"和"每日配额"（单位：分），替代原有的 Token 配额展示
 
 ---
 

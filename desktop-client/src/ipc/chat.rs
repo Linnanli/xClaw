@@ -63,6 +63,12 @@ pub async fn send_chat_message(
     let state = state.get()?;
     let message_id = uuid::Uuid::new_v4().to_string();
 
+    // ── 配额预检：调用 Admin Backend 检查是否超额 ─────────────────
+    if let Err(reason) = quota_precheck(state).await {
+        tracing::warn!(message_id = %message_id, "Quota precheck rejected: {}", reason);
+        return Err(reason);
+    }
+
     // ── SafetyBridge 扫描：密钥检测 + PII 脱敏 ────────────────────
     let scan_result = state.safety_bridge.scan_user_input(&content);
 
@@ -336,4 +342,51 @@ fn switch_model_in_place(state: &crate::state::AppState, model_id: &str) {
             tracing::debug!(requested = %model_id, "Using per-request model override");
         }
     }
+}
+
+// ── 配额预检 ─────────────────────────────────────────────────────
+
+/// 调用 Admin Backend 的 /api/quota/check 接口进行费用预检。
+///
+/// Fail-Safe 设计：如果预检接口不可用（网络错误、超时），拒绝请求。
+/// 政企场景下安全优先，宁可暂时不可用也不能超额使用。
+async fn quota_precheck(state: &crate::state::AppState) -> Result<(), String> {
+    let admin_url = std::env::var("ADMIN_API_URL").unwrap_or_default();
+    if admin_url.is_empty() {
+        // 未配置 Admin Backend URL，跳过预检（本地开发模式）
+        return Ok(());
+    }
+
+    let user_id = &state.owner_id;
+    let url = format!("{}/api/quota/check", admin_url);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("配额服务不可用: {}", e))?;
+
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({ "user_id": user_id }))
+        .send()
+        .await
+        .map_err(|_| "配额服务暂时不可用，请稍后重试".to_string())?;
+
+    if !resp.status().is_success() {
+        return Err("配额服务暂时不可用，请稍后重试".to_string());
+    }
+
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|_| "配额服务响应异常".to_string())?;
+
+    if body["allowed"].as_bool() == Some(false) {
+        let reason = body["reason"]
+            .as_str()
+            .unwrap_or("当日费用已达限额");
+        return Err(reason.to_string());
+    }
+
+    Ok(())
 }

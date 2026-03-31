@@ -98,13 +98,17 @@ description: >
 
 对照 design.md 中的 API 接口设计表，逐个确认每个端点的实现状态。
 
-#### 4b. 后台前端（React + Ant Design）
-- `admin-backend/ui/src/router/` — 路由注册
+#### 4b. 后台前端（React + Tailwind + shadcn/ui）
+- `admin-backend/ui/src/router.tsx` — 路由注册
 - `admin-backend/ui/src/pages/` — 页面组件
-- `admin-backend/ui/src/api/client.ts` — API 调用函数
+- `admin-backend/ui/src/lib/api.ts` — API 调用函数
 - `admin-backend/ui/src/types/` — TypeScript 类型
 
 对照设计图检查 UI 实现是否一致。
+
+对于已有页面组件，还要检查交互完整性——页面上每个按钮、表单、开关是否都绑定了事件处理器。
+从设计图转换来的页面经常只有视觉样式没有交互逻辑（mock 页面的典型特征：`<button>` 没有 `onClick`）。
+发现 mock 按钮时，在审查报告中标注为 ⚠️ 并列入待办。
 
 #### 4c. 桌面客户端（Tauri）
 - `desktop-client/src/` — Tauri 命令
