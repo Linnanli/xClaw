@@ -102,6 +102,11 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/conversations/stats", get(handlers::conversations::get_conversation_stats))
         .route("/api/conversations", get(handlers::conversations::get_conversations))
         .route("/api/conversations/{id}", get(handlers::conversations::get_conversation_detail))
+        // 审批流 API
+        .route("/api/approvals/stats", get(handlers::approvals::get_approval_stats))
+        .route("/api/approvals", get(handlers::approvals::get_approvals).post(handlers::approvals::create_approval))
+        .route("/api/approvals/{id}/review", put(handlers::approvals::review_approval))
+        .route("/api/approvals/{id}/check", get(handlers::approvals::check_approval))
         // 费用配额管理 API
         .route("/api/quota/check", post(handlers::quota::quota_check))
         .route("/api/quota/report-usage", post(handlers::quota::report_usage))

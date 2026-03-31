@@ -559,3 +559,29 @@ pub struct ConversationQuery {
     pub dlp_flagged: Option<bool>,
     pub search: Option<String>,
 }
+
+// ============================================================================
+// 操作审批流
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateApprovalRequest {
+    pub applicant_id: Uuid,
+    pub operation_rule_id: Option<Uuid>,
+    pub operation_type: String,
+    pub operation_name: String,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReviewApprovalRequest {
+    pub action: String, // "approve" | "reject"
+    pub comment: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApprovalQuery {
+    pub page: Option<i64>,
+    pub page_size: Option<i64>,
+    pub status: Option<String>,
+}

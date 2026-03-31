@@ -208,8 +208,19 @@ export interface QuotaOverview {
 export interface ApprovalTicket {
   id: string
   applicant: string
-  operation: string
-  apply_time: string
-  expire_time: string
+  operation_type: string
+  operation_name: string
+  reason?: string
   status: 'pending' | 'approved' | 'rejected' | 'expired'
+  review_comment?: string
+  reviewed_at?: string
+  expires_at: string
+  created_at: string
+}
+
+export interface ApprovalStats {
+  pending: number
+  approved: number
+  rejected: number
+  expired: number
 }

@@ -3,6 +3,7 @@
 //! 提供策略查询和管理的 HTTP API 端点
 
 pub mod alerts;
+pub mod approvals;
 pub mod conversations;
 pub mod departments;
 pub mod quota;
