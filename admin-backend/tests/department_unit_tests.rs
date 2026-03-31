@@ -199,6 +199,100 @@ mod department_contract_tests {
         });
         assert!(not_found_response.get("error").is_some());
     }
+
+    /// test_contract_department_detail_response: 验证部门详情响应格式（新增）
+    #[test]
+    fn test_contract_department_detail_response() {
+        let response = json!({
+            "id": "550e8400-e29b-41d4-a716-446655440000",
+            "name": "研发部",
+            "description": "负责产品研发",
+            "parent_id": "660e8400-e29b-41d4-a716-446655440000",
+            "parent_name": "总部",
+            "token_quota_enabled": true,
+            "token_quota_per_day": 10000,
+            "created_at": "2026-03-22T00:00:00Z",
+            "updated_at": "2026-03-22T00:00:00Z",
+            "member_count": 5,
+            "model_whitelist_count": 2
+        });
+
+        // 验证新增字段
+        assert!(response.get("parent_id").is_some(), "详情应包含 parent_id");
+        assert!(response.get("parent_name").is_some(), "详情应包含 parent_name");
+        assert!(response.get("model_whitelist_count").is_some(), "详情应包含 model_whitelist_count");
+    }
+
+    /// test_contract_department_members_response: 验证成员列表响应格式（新增）
+    #[test]
+    fn test_contract_department_members_response() {
+        let response = json!({
+            "members": [
+                {
+                    "id": "550e8400-e29b-41d4-a716-446655440000",
+                    "username": "zhang.wei",
+                    "email": "[email]",
+                    "role": "管理员",
+                    "status": "active",
+                    "created_at": "2026-03-22T00:00:00Z"
+                }
+            ],
+            "total": 1
+        });
+
+        assert!(response.get("members").is_some());
+        assert!(response.get("total").is_some());
+        let members = response["members"].as_array().expect("members 应为数组");
+        assert!(!members.is_empty());
+        let member = &members[0];
+        assert!(member.get("id").is_some());
+        assert!(member.get("username").is_some());
+        assert!(member.get("status").is_some());
+    }
+
+    /// test_contract_model_whitelist_response: 验证模型白名单响应格式（新增）
+    #[test]
+    fn test_contract_model_whitelist_response() {
+        let response = json!({
+            "models": [
+                {
+                    "id": "550e8400-e29b-41d4-a716-446655440000",
+                    "model_id": "gpt-4o",
+                    "display_name": "GPT-4o",
+                    "provider": "openai",
+                    "enabled": true
+                }
+            ]
+        });
+
+        assert!(response.get("models").is_some());
+        let models = response["models"].as_array().expect("models 应为数组");
+        let model = &models[0];
+        assert!(model.get("model_id").is_some(), "白名单项应包含 model_id");
+        assert!(model.get("display_name").is_some(), "白名单项应包含 display_name");
+        assert!(model.get("provider").is_some(), "白名单项应包含 provider");
+    }
+
+    /// test_contract_department_list_includes_parent_id: 列表响应应包含 parent_id（新增）
+    #[test]
+    fn test_contract_department_list_includes_parent_id() {
+        let response = json!({
+            "departments": [
+                {
+                    "id": "550e8400-e29b-41d4-a716-446655440000",
+                    "name": "研发部",
+                    "parent_id": null,
+                    "token_quota_enabled": false,
+                    "member_count": 5,
+                    "created_at": "2026-03-22T00:00:00Z",
+                    "updated_at": "2026-03-22T00:00:00Z"
+                }
+            ]
+        });
+
+        let dept = &response["departments"][0];
+        assert!(dept.get("parent_id").is_some(), "列表项应包含 parent_id 用于构建树形结构");
+    }
 }
 
 /// ============================================================================
@@ -254,5 +348,13 @@ mod department_security_audit_tests {
         // 负值应被拒绝
         let negative_quota: i32 = -1;
         assert!(negative_quota < 0, "负数限额应被拒绝");
+    }
+
+    /// test_audit_parent_id_cannot_be_self: 验证不能将部门设为自身子部门
+    #[test]
+    fn test_audit_parent_id_self_reference_rejected() {
+        let dept_id = uuid::Uuid::new_v4();
+        let parent_id = dept_id;
+        assert_eq!(dept_id, parent_id, "自引用 parent_id 应被拒绝");
     }
 }

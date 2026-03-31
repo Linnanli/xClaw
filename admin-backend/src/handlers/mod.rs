@@ -2,6 +2,8 @@
 //!
 //! 提供策略查询和管理的 HTTP API 端点
 
+pub mod departments;
+
 use crate::db::Database;
 use crate::error::Result;
 use crate::models::{DlpRule, SensitiveOperationRule};

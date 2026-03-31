@@ -77,7 +77,7 @@ description: >
 
 ### 第三步：检查设计图
 
-1. 打开 Pencil 设计文件 `admin-backend/frontend/design/backend-design.pen`
+1. 打开 Pencil 设计文件 `admin-backend/ui/design/backend-design.pen`
 2. 查找与该模块相关的页面设计
 3. 记录 UI 布局、组件样式、交互细节
 4. 如果设计图中没有该模块的设计，告知用户并询问是否需要先设计
@@ -99,10 +99,10 @@ description: >
 对照 design.md 中的 API 接口设计表，逐个确认每个端点的实现状态。
 
 #### 4b. 后台前端（React + Ant Design）
-- `admin-backend/frontend/src/router/` — 路由注册
-- `admin-backend/frontend/src/pages/` — 页面组件
-- `admin-backend/frontend/src/api/client.ts` — API 调用函数
-- `admin-backend/frontend/src/types/` — TypeScript 类型
+- `admin-backend/ui/src/router/` — 路由注册
+- `admin-backend/ui/src/pages/` — 页面组件
+- `admin-backend/ui/src/api/client.ts` — API 调用函数
+- `admin-backend/ui/src/types/` — TypeScript 类型
 
 对照设计图检查 UI 实现是否一致。
 
@@ -247,10 +247,36 @@ IronClaw 是政企产品，安全不是可选项。问自己：
 3. 新增迁移文件时同步更新 `integration_smoke_tests.rs`
 4. 新增 Tauri 命令时同步更新契约测试
 5. 安全模块必须同时写失败路径测试
+6. **新增迁移后必须连数据库执行冒烟测试**：`cargo build` 和 `cargo test` 无法验证 SQL 是否匹配数据库 schema。新增或修改迁移文件后，必须执行 `docker exec -i <postgres容器> psql -U postgres -d ironclaw < admin-backend/migrations/<file>.sql` 应用迁移，然后运行 `DB_HOST=localhost DB_USER=postgres DB_PASSWORD=postgres DB_NAME=ironclaw cargo test -p admin-backend --test integration_smoke_tests` 验证。跳过这一步会导致"编译通过、测试通过、但真实环境 INSERT/SELECT 失败"的问题（部门管理 parent_id 教训）。
+
+#### 测试类型决策清单
+
+每写完一个 handler 或模块，过一遍这个清单。不是每个模块都需要所有类型——但必须有意识地判断，而不是默认跳过。
+
+| 测试类型 | 什么时候需要 | 文件命名 |
+|---------|------------|---------|
+| 单元测试 | 所有新增函数/模块 | `{module}_unit_tests.rs` |
+| 失败路径测试 | 所有有输入验证或错误处理的功能 | `{module}_failure_tests.rs` |
+| 契约测试 | 所有 API 端点（验证响应格式满足前端/客户端需求） | `{module}_contract_tests.rs` |
+| 安全审计测试 | 涉及敏感数据（API Key、密码、Token）或权限边界的模块 | `{module}_security_audit_tests.rs` |
+| 集成冒烟测试 | 新增迁移或新增路由时，更新 `integration_smoke_tests.rs` | — |
+| 真实数据库测试 | 新增/修改迁移文件后，连数据库跑冒烟测试 | — |
+
+判断原则：如果不确定要不要写某类测试，问自己"如果这个场景出了问题，用户会看到什么？"——如果答案是"数据丢失"或"安全漏洞"，那就必须写。
 
 ### 第八步：完成后自检
 
-开发完成后，重新执行第四步的扫描，确认所有待办事项都已完成。输出最终状态报告。
+开发完成后，重新执行第四步的扫描，确认所有待办事项都已完成。
+
+自检清单（在输出最终状态报告前逐项确认）：
+1. `cargo build -p admin-backend` — 0 错误 0 警告
+2. `cargo test -p admin-backend` — 所有单元测试通过
+3. 如果新增了迁移：已执行迁移 + 连数据库跑 `integration_smoke_tests` 通过
+4. 前端修改的是 **实际运行的前端目录**（检查 `project-map.md` 中的路径映射，注意项目可能有多套前端）
+5. 前端 TypeScript 编译无错误（`getDiagnostics` 检查）
+6. 如果涉及客户端（第二步消费方分析判定）：`cargo build -p desktop-client` 编译通过，新增 Tauri 命令已注册到 `all_tauri_commands!()` 并更新契约测试
+
+输出最终状态报告。
 
 ## 参考资源
 

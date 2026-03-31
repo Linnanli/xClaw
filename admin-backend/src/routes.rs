@@ -1,6 +1,7 @@
 use crate::auth::AuthManager;
 use crate::error::{Error, Result};
 use crate::handlers::{
+    self,
     get_dlp_policies_handler, get_policies_handler, get_policy_version_handler,
     get_sensitive_ops_policies_handler,
 };
@@ -80,7 +81,9 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/dashboard/trends", get(get_dashboard_trends))
         // 部门管理 API
         .route("/api/departments", get(get_departments).post(create_department))
-        .route("/api/departments/{id}", put(update_department).delete(delete_department))
+        .route("/api/departments/{id}", get(handlers::departments::get_department_detail).put(update_department).delete(delete_department))
+        .route("/api/departments/{id}/members", get(handlers::departments::get_department_members))
+        .route("/api/departments/{id}/model-whitelist", get(handlers::departments::get_model_whitelist).put(handlers::departments::update_model_whitelist))
         // 模型配置 API
         .route("/api/model-configs", get(get_model_configs).post(create_model_config))
         .route("/api/model-configs/{id}", put(update_model_config).delete(delete_model_config))
@@ -95,7 +98,7 @@ async fn health_check() -> impl IntoResponse {
 }
 
 /// 写入审计日志的辅助函数（不阻塞主流程，失败仅打印日志）
-async fn write_audit_log(
+pub async fn write_audit_log(
     client: &deadpool_postgres::Object,
     user_id: Uuid,
     action: &str,
@@ -3180,49 +3183,81 @@ async fn push_policy_all(
 /// 当 token_quota_enabled = false 时，token_quota_per_day 返回 null。
 async fn get_departments(
     State(state): State<AppState>,
+    Query(params): Query<models::DepartmentQuery>,
 ) -> Result<Json<serde_json::Value>> {
     let client = state.db_pool.get().await
         .map_err(|e| Error::Database(e.to_string()))?;
 
-    let rows = client
-        .query(
-            "SELECT d.id, d.name, d.description, d.token_quota_enabled, d.token_quota_per_day,
-                    d.created_at, d.updated_at,
-                    COUNT(u.id) as member_count
-             FROM departments d
-             LEFT JOIN users u ON u.department_id = d.id
-             GROUP BY d.id, d.name, d.description, d.token_quota_enabled, d.token_quota_per_day,
-                      d.created_at, d.updated_at
-             ORDER BY d.name ASC",
-            &[],
-        )
-        .await
+    let (sql, query_params) = build_departments_query(&params);
+    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+        query_params.iter().map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+
+    let rows = client.query(&sql, &param_refs).await
         .map_err(|e| Error::Database(e.to_string()))?;
 
-    let departments: Vec<_> = rows
-        .iter()
-        .map(|r| {
-            let quota_enabled: bool = r.get(3);
-            let quota_per_day: Option<i32> = if quota_enabled {
-                r.get(4)
-            } else {
-                None
-            };
-
-            json!({
-                "id": r.get::<_, Uuid>(0),
-                "name": r.get::<_, String>(1),
-                "description": r.get::<_, Option<String>>(2),
-                "token_quota_enabled": quota_enabled,
-                "token_quota_per_day": quota_per_day,
-                "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(5),
-                "updated_at": r.get::<_, chrono::DateTime<chrono::Utc>>(6),
-                "member_count": r.get::<_, i64>(7),
-            })
+    let departments: Vec<_> = rows.iter().map(|r| {
+        let quota_enabled: bool = r.get(3);
+        json!({
+            "id": r.get::<_, Uuid>(0),
+            "name": r.get::<_, String>(1),
+            "description": r.get::<_, Option<String>>(2),
+            "token_quota_enabled": quota_enabled,
+            "token_quota_per_day": if quota_enabled { r.get::<_, Option<i32>>(4) } else { None },
+            "parent_id": r.get::<_, Option<Uuid>>(5),
+            "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(6),
+            "updated_at": r.get::<_, chrono::DateTime<chrono::Utc>>(7),
+            "member_count": r.get::<_, i64>(8),
         })
-        .collect();
+    }).collect();
 
     Ok(Json(json!({ "departments": departments })))
+}
+
+/// 构建部门列表查询 SQL（支持搜索 + 筛选）
+fn build_departments_query(
+    params: &models::DepartmentQuery,
+) -> (String, Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>>) {
+    let mut sql = String::from(
+        "SELECT d.id, d.name, d.description, d.token_quota_enabled, d.token_quota_per_day,
+                d.parent_id, d.created_at, d.updated_at,
+                COUNT(u.id) as member_count
+         FROM departments d
+         LEFT JOIN users u ON u.department_id = d.id"
+    );
+    let mut conditions: Vec<String> = Vec::new();
+    let mut query_params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = Vec::new();
+    let mut idx = 1u32;
+
+    if let Some(ref search) = params.search {
+        let trimmed = search.trim();
+        if !trimmed.is_empty() {
+            conditions.push(format!("d.name ILIKE ${}", idx));
+            query_params.push(Box::new(format!("%{}%", trimmed)));
+            idx += 1;
+        }
+    }
+
+    if let Some(ref status) = params.quota_status {
+        match status.as_str() {
+            "enabled" => conditions.push("d.token_quota_enabled = true".to_string()),
+            "disabled" => conditions.push("d.token_quota_enabled = false".to_string()),
+            _ => {} // 忽略无效值
+        }
+    }
+
+    if !conditions.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&conditions.join(" AND "));
+    }
+
+    sql.push_str(
+        " GROUP BY d.id, d.name, d.description, d.token_quota_enabled, d.token_quota_per_day,
+                   d.parent_id, d.created_at, d.updated_at
+          ORDER BY d.name ASC"
+    );
+
+    let _ = idx; // suppress unused warning
+    (sql, query_params)
 }
 
 /// POST /api/departments — 创建部门
@@ -3231,6 +3266,7 @@ async fn get_departments(
 /// - name 长度 2-100 字符
 /// - name 唯一性（409 Conflict）
 /// - token_quota 一致性：启用限额时必须提供 token_quota_per_day
+/// - parent_id 有效性（如果提供）
 async fn create_department(
     State(state): State<AppState>,
     Json(payload): Json<CreateDepartmentRequest>,
@@ -3267,6 +3303,17 @@ async fn create_department(
         return Err(Error::Conflict(format!("部门名称 '{}' 已存在", name)));
     }
 
+    // 验证 parent_id 有效性
+    if let Some(ref parent_id) = payload.parent_id {
+        let parent_exists = client
+            .query_opt("SELECT id FROM departments WHERE id = $1", &[parent_id])
+            .await
+            .map_err(|e| Error::Database(e.to_string()))?;
+        if parent_exists.is_none() {
+            return Err(Error::Validation("指定的父部门不存在".to_string()));
+        }
+    }
+
     let dept_id = Uuid::new_v4();
     let now = chrono::Utc::now();
     let quota_per_day = if quota_enabled {
@@ -3277,9 +3324,9 @@ async fn create_department(
 
     client
         .execute(
-            "INSERT INTO departments (id, name, description, token_quota_enabled, token_quota_per_day, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
-            &[&dept_id, &name, &payload.description, &quota_enabled, &quota_per_day, &now, &now],
+            "INSERT INTO departments (id, name, description, parent_id, token_quota_enabled, token_quota_per_day, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            &[&dept_id, &name, &payload.description, &payload.parent_id, &quota_enabled, &quota_per_day, &now, &now],
         )
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
@@ -3300,6 +3347,7 @@ async fn create_department(
             "id": dept_id,
             "name": name,
             "description": payload.description,
+            "parent_id": payload.parent_id,
             "token_quota_enabled": quota_enabled,
             "token_quota_per_day": quota_per_day,
             "created_at": now,
@@ -3347,6 +3395,22 @@ async fn update_department(
         }
     }
 
+    // 验证 parent_id（不能设为自身，不能形成循环）
+    if let Some(ref parent_opt) = payload.parent_id {
+        if let Some(ref parent_id) = parent_opt {
+            if *parent_id == dept_id {
+                return Err(Error::Validation("部门不能设为自身的子部门".to_string()));
+            }
+            let parent_exists = client
+                .query_opt("SELECT id FROM departments WHERE id = $1", &[parent_id])
+                .await
+                .map_err(|e| Error::Database(e.to_string()))?;
+            if parent_exists.is_none() {
+                return Err(Error::Validation("指定的父部门不存在".to_string()));
+            }
+        }
+    }
+
     let now = chrono::Utc::now();
     let mut set_clauses = vec!["updated_at = $1".to_string()];
     let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = vec![Box::new(now)];
@@ -3365,6 +3429,13 @@ async fn update_department(
         params.push(Box::new(description.clone()));
         param_idx += 1;
         changed_fields.push("description".to_string());
+    }
+
+    if let Some(ref parent_id) = payload.parent_id {
+        set_clauses.push(format!("parent_id = ${}", param_idx));
+        params.push(Box::new(*parent_id));
+        param_idx += 1;
+        changed_fields.push("parent_id".to_string());
     }
 
     if let Some(quota_enabled) = payload.token_quota_enabled {
@@ -3389,7 +3460,7 @@ async fn update_department(
 
     let sql = format!(
         "UPDATE departments SET {} WHERE id = ${}
-         RETURNING id, name, description, token_quota_enabled, token_quota_per_day, created_at, updated_at",
+         RETURNING id, name, description, parent_id, token_quota_enabled, token_quota_per_day, created_at, updated_at",
         set_clauses.join(", "),
         param_idx
     );
@@ -3422,24 +3493,26 @@ async fn update_department(
         .map_err(|e| Error::Database(e.to_string()))?;
     let member_count: i64 = count_row.get(0);
 
-    let quota_enabled: bool = row.get(3);
-    let quota_per_day: Option<i32> = if quota_enabled { row.get(4) } else { None };
+    let quota_enabled: bool = row.get(4);
+    let quota_per_day: Option<i32> = if quota_enabled { row.get(5) } else { None };
 
     Ok(Json(json!({
         "id": row.get::<_, Uuid>(0),
         "name": row.get::<_, String>(1),
         "description": row.get::<_, Option<String>>(2),
+        "parent_id": row.get::<_, Option<Uuid>>(3),
         "token_quota_enabled": quota_enabled,
         "token_quota_per_day": quota_per_day,
-        "created_at": row.get::<_, chrono::DateTime<chrono::Utc>>(5),
-        "updated_at": row.get::<_, chrono::DateTime<chrono::Utc>>(6),
+        "created_at": row.get::<_, chrono::DateTime<chrono::Utc>>(6),
+        "updated_at": row.get::<_, chrono::DateTime<chrono::Utc>>(7),
         "member_count": member_count,
     })))
 }
 
 /// DELETE /api/departments/{id} — 删除部门
 ///
-/// 如果部门下还有用户，返回 400 错误。
+/// 验证：有成员或子部门时禁止删除。
+/// 清理：删除关联的模型白名单（由 ON DELETE CASCADE 处理）。
 async fn delete_department(
     State(state): State<AppState>,
     Path(dept_id): Path<Uuid>,
@@ -3473,6 +3546,23 @@ async fn delete_department(
         return Err(Error::DepartmentHasUsers);
     }
 
+    // 检查是否有子部门
+    let child_count: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM departments WHERE parent_id = $1",
+            &[&dept_id],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
+        .get(0);
+
+    if child_count > 0 {
+        return Err(Error::Validation(
+            format!("部门 '{}' 下有 {} 个子部门，请先删除或移动子部门", dept_name, child_count),
+        ));
+    }
+
+    // 删除部门（模型白名单由 ON DELETE CASCADE 自动清理）
     client
         .execute("DELETE FROM departments WHERE id = $1", &[&dept_id])
         .await

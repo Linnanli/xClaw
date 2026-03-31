@@ -7,12 +7,12 @@
 ### 需求与设计文档
 - 需求规格：`.kiro/specs/admin-platform-requirements/requirements.md`
 - 技术设计：`.kiro/specs/admin-platform-requirements/design.md`
-- 设计图：`admin-backend/frontend/design/backend-design.pen`
+- 设计图：`admin-backend/ui/design/backend-design.pen`
 
 ### 后台服务端（Rust + Axum）
 - 入口：`admin-backend/src/main.rs`
 - 路由注册：`admin-backend/src/routes.rs`（`create_router` 函数）
-- Handler：`admin-backend/src/handlers.rs`（已有）+ `admin-backend/src/handlers/`（新增模块）
+- Handler：`admin-backend/src/handlers/mod.rs`（策略查询）+ `admin-backend/src/handlers/departments.rs`（部门扩展）+ `admin-backend/src/routes.rs`（其余 handler，TODO: 逐步迁移到 handlers/）
 - 数据模型：`admin-backend/src/models.rs`
 - 数据库层：`admin-backend/src/db.rs`
 - 认证：`admin-backend/src/auth.rs`
@@ -22,15 +22,20 @@
 - 迁移文件：`admin-backend/migrations/`
 - AppState：`admin-backend/src/lib.rs`
 
-### 后台前端（React + Ant Design + TypeScript）
-- 路由：`admin-backend/frontend/src/router/index.tsx`
-- 页面组件：`admin-backend/frontend/src/pages/`
-- 公共组件：`admin-backend/frontend/src/components/`
-- API 客户端：`admin-backend/frontend/src/api/client.ts`
-- 状态管理：`admin-backend/frontend/src/store/`
-- 类型定义：`admin-backend/frontend/src/types/`
-- 常量：`admin-backend/frontend/src/constants/`
-- 工具函数：`admin-backend/frontend/src/utils/`
+### 后台前端（React + Tailwind + shadcn/ui）
+
+> ⚠️ `admin-backend/ui/` 是当前实际运行的前端（shadcn + tailwind + zustand）。
+> `admin-backend/frontend/` 是旧版（Ant Design），已废弃。所有前端修改必须在 `ui/` 目录下进行。
+
+- 路由：`admin-backend/ui/src/router.tsx`
+- 页面组件：`admin-backend/ui/src/pages/`
+- 公共组件：`admin-backend/ui/src/components/`（shadcn/ui）
+- API 客户端：`admin-backend/ui/src/lib/api.ts`
+- 状态管理：`admin-backend/ui/src/stores/`（zustand）
+- 类型定义：`admin-backend/ui/src/types/`
+- 工具函数：`admin-backend/ui/src/lib/`
+- 表单辅助：`admin-backend/ui/src/components/ui/form-helpers.tsx`
+- 弹窗组件：`admin-backend/ui/src/components/ui/dialog.tsx`（shadcn Dialog）
 
 ### 桌面客户端（Tauri）
 - Rust 源码：`desktop-client/src/`
@@ -41,8 +46,8 @@
 ### 测试
 - 后端测试：`admin-backend/tests/`
 - 冒烟测试：`admin-backend/tests/integration_smoke_tests.rs`
-- 前端测试：`admin-backend/frontend/src/**/*.test.ts(x)`
-- E2E 测试：`admin-backend/frontend/cypress/`
+- 前端测试：`admin-backend/ui/src/**/*.test.ts(x)`
+- E2E 测试：`admin-backend/ui/cypress/`
 - 客户端测试：`desktop-client/tests/`
 - 客户端契约测试：`desktop-client/tests/tauri_command_contract_tests.rs`
 

@@ -288,6 +288,7 @@ where
 pub struct CreateDepartmentRequest {
     pub name: String,
     pub description: Option<String>,
+    pub parent_id: Option<Uuid>,
     #[serde(default)]
     pub token_quota_enabled: Option<bool>,
     pub token_quota_per_day: Option<i32>,
@@ -297,8 +298,30 @@ pub struct CreateDepartmentRequest {
 pub struct UpdateDepartmentRequest {
     pub name: Option<String>,
     pub description: Option<String>,
+    pub parent_id: Option<Option<Uuid>>,
     pub token_quota_enabled: Option<bool>,
     pub token_quota_per_day: Option<Option<i32>>,
+}
+
+/// 部门查询参数（搜索 + 筛选）
+#[derive(Debug, Clone, Deserialize)]
+pub struct DepartmentQuery {
+    pub search: Option<String>,
+    /// "enabled" | "disabled" | 不传则不筛选
+    pub quota_status: Option<String>,
+}
+
+/// 部门模型白名单更新请求
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateModelWhitelistRequest {
+    /// 模型配置 ID 列表（全量替换）
+    pub model_config_ids: Vec<Uuid>,
+}
+
+/// 部门成员查询参数
+#[derive(Debug, Clone, Deserialize)]
+pub struct DepartmentMembersQuery {
+    pub search: Option<String>,
 }
 
 // ============================================================================
