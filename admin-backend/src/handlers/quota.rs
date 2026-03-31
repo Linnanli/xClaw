@@ -12,6 +12,8 @@
 //! - GET  /api/departments/{id}/quota-summary — 根部门配额摘要（验收标准15）
 
 use crate::error::{Error, Result};
+use crate::handlers::alerts;
+use crate::models::AlertTrigger;
 use crate::AppState;
 use axum::{extract::{Path, Query, State}, Json};
 use chrono::{Datelike, Utc};
@@ -135,6 +137,14 @@ pub async fn report_usage(
         &[&payload.user_id, &dept_id, &model_config_id, &payload.model_id,
           &payload.input_tokens, &payload.output_tokens, &cost_cents],
     ).await.map_err(|e| Error::Database(e.to_string()))?;
+
+    // 异步检查费用预警（不阻塞响应，失败静默）
+    if let Some(did) = dept_id {
+        let pool = state.db_pool.clone();
+        tokio::spawn(async move {
+            let _ = check_quota_warning(&pool, did).await;
+        });
+    }
 
     Ok(Json(json!({
         "cost_cents": cost_cents,
@@ -613,4 +623,64 @@ async fn calculate_cost(
               + output_tokens as i64 * output_price as i64 / 1000) as i32;
 
     Ok((config_id, cost))
+}
+
+// ============================================================================
+// 费用预警检查（需求 4#7：部门费用达到限额 80% 时触发告警）
+// ============================================================================
+
+const QUOTA_WARNING_THRESHOLD: f64 = 0.8;
+
+/// 检查部门当日费用是否达到限额的 80%，达到则触发告警。
+///
+/// 设计决策：
+/// - 独立函数，不污染 report_usage 的主流程
+/// - 查询失败时静默返回（预警是增强功能，不应阻塞计费）
+/// - 使用已有的 query_dept_daily_usage 和 query_department_daily_limit 复用查询逻辑
+async fn check_quota_warning(
+    pool: &deadpool_postgres::Pool,
+    dept_id: Uuid,
+) -> std::result::Result<(), String> {
+    let client = pool.get().await.map_err(|e| e.to_string())?;
+    let today = today_start_utc();
+
+    let limit = match query_department_daily_limit(&client, dept_id).await {
+        Ok(Some(l)) if l > 0 => l,
+        _ => return Ok(()), // 无限额或查询失败，跳过
+    };
+
+    let usage = query_dept_daily_usage(&client, dept_id, &today).await
+        .map_err(|e| e.to_string())?;
+
+    let ratio = usage as f64 / limit as f64;
+    if ratio < QUOTA_WARNING_THRESHOLD {
+        return Ok(());
+    }
+
+    let dept_name = client
+        .query_opt("SELECT name FROM departments WHERE id = $1", &[&dept_id])
+        .await
+        .map_err(|e| e.to_string())?
+        .map(|r| r.get::<_, String>(0))
+        .unwrap_or_else(|| "未知部门".into());
+
+    let pct = (ratio * 100.0) as i32;
+    let trigger = AlertTrigger {
+        event_type: "quota_exceeded".into(),
+        severity: if ratio >= 1.0 { "critical".into() } else { "high".into() },
+        detail: format!(
+            "{} 当日费用消耗已达限额 {}%（{} / {} 分）",
+            dept_name, pct, usage, limit
+        ),
+        event_data: Some(json!({
+            "department_id": dept_id,
+            "department_name": dept_name,
+            "usage_cents": usage,
+            "limit_cents": limit,
+            "ratio_pct": pct,
+        })),
+    };
+
+    alerts::trigger_alert(pool, &trigger).await?;
+    Ok(())
 }

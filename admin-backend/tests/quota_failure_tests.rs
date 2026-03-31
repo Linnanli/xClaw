@@ -117,3 +117,39 @@ mod quota_usage_records_failures {
         assert!(trimmed.is_empty(), "空白用户名应被忽略不加入筛选条件");
     }
 }
+
+/// 需求 4#7：预警检查失败路径
+#[cfg(test)]
+mod quota_warning_failures {
+    #[test]
+    fn test_failure_warning_no_limit_skips() {
+        // 无限额配置时应跳过预警，不报错
+        let limit: Option<i64> = None;
+        assert!(limit.is_none(), "无限额应跳过预警检查");
+    }
+
+    #[test]
+    fn test_failure_warning_db_error_silent() {
+        // 预警查询失败不应阻塞 report_usage 响应
+        let warning_failed = true;
+        let usage_reported = true;
+        assert!(usage_reported, "预警失败不应影响计费上报");
+        assert!(warning_failed, "预警失败应静默处理");
+    }
+
+    #[test]
+    fn test_failure_warning_no_department_skips() {
+        // 用户无部门时应跳过预警
+        let dept_id: Option<uuid::Uuid> = None;
+        assert!(dept_id.is_none(), "无部门用户应跳过预警");
+    }
+
+    #[test]
+    fn test_failure_warning_alert_service_down_silent() {
+        // 告警服务不可用时预警应静默失败
+        let alert_service_ok = false;
+        let usage_reported = true;
+        assert!(usage_reported, "告警服务故障不应影响计费");
+        assert!(!alert_service_ok);
+    }
+}

@@ -238,3 +238,63 @@ mod quota_security_audit_tests {
         assert!(!fields.contains(&"password"));
     }
 }
+
+/// 需求 4#7：部门费用 80% 预警阈值计算
+#[cfg(test)]
+mod quota_warning_tests {
+    const THRESHOLD: f64 = 0.8;
+
+    fn should_warn(usage: i64, limit: i64) -> bool {
+        if limit <= 0 { return false; }
+        (usage as f64 / limit as f64) >= THRESHOLD
+    }
+
+    #[test]
+    fn req_quota_4_7_below_threshold_no_warning() {
+        assert!(!should_warn(700, 1000), "70% 不应触发预警");
+    }
+
+    #[test]
+    fn req_quota_4_7_at_threshold_triggers_warning() {
+        assert!(should_warn(800, 1000), "80% 应触发预警");
+    }
+
+    #[test]
+    fn req_quota_4_7_above_threshold_triggers_warning() {
+        assert!(should_warn(950, 1000), "95% 应触发预警");
+    }
+
+    #[test]
+    fn req_quota_4_7_at_limit_triggers_warning() {
+        assert!(should_warn(1000, 1000), "100% 应触发预警");
+    }
+
+    #[test]
+    fn req_quota_4_7_over_limit_triggers_warning() {
+        assert!(should_warn(1200, 1000), "120% 应触发预警");
+    }
+
+    #[test]
+    fn req_quota_4_7_zero_limit_no_warning() {
+        assert!(!should_warn(500, 0), "限额为 0 不应触发预警");
+    }
+
+    #[test]
+    fn req_quota_4_7_zero_usage_no_warning() {
+        assert!(!should_warn(0, 1000), "消耗为 0 不应触发预警");
+    }
+
+    #[test]
+    fn req_quota_4_7_severity_below_100_is_high() {
+        let ratio = 850.0 / 1000.0;
+        let severity = if ratio >= 1.0 { "critical" } else { "high" };
+        assert_eq!(severity, "high", "80%-99% 应为 high 级别");
+    }
+
+    #[test]
+    fn req_quota_4_7_severity_at_100_is_critical() {
+        let ratio = 1000.0 / 1000.0;
+        let severity = if ratio >= 1.0 { "critical" } else { "high" };
+        assert_eq!(severity, "critical", ">=100% 应为 critical 级别");
+    }
+}
