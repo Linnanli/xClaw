@@ -126,6 +126,8 @@ pub struct CreateDlpRuleRequest {
     pub rule_type: String,
     /// 规则额外配置（JSON），keyword 类型包含 keywords, match_mode, case_sensitive
     pub rule_config: Option<serde_json::Value>,
+    /// 数据分级标签: public / internal / confidential / top_secret
+    pub classification_level: Option<String>,
 }
 
 fn default_rule_type() -> String {
@@ -143,6 +145,7 @@ pub struct UpdateDlpRuleRequest {
     pub category: Option<String>,
     pub rule_type: Option<String>,
     pub rule_config: Option<serde_json::Value>,
+    pub classification_level: Option<String>,
 }
 
 // Dictionary models
@@ -584,4 +587,21 @@ pub struct ApprovalQuery {
     pub page: Option<i64>,
     pub page_size: Option<i64>,
     pub status: Option<String>,
+}
+
+// ============================================================================
+// 数据分类分级与合规
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerateReportRequest {
+    pub name: String,
+    pub report_type: Option<String>,
+    pub start_date: String,
+    pub end_date: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateRetentionPolicyRequest {
+    pub retention_days: i32,
 }

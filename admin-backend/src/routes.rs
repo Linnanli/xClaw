@@ -107,6 +107,11 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/approvals", get(handlers::approvals::get_approvals).post(handlers::approvals::create_approval))
         .route("/api/approvals/{id}/review", put(handlers::approvals::review_approval))
         .route("/api/approvals/{id}/check", get(handlers::approvals::check_approval))
+        // 合规管理 API
+        .route("/api/compliance/overview", get(handlers::compliance::get_compliance_overview))
+        .route("/api/compliance/reports", get(handlers::compliance::get_compliance_reports).post(handlers::compliance::generate_compliance_report))
+        .route("/api/compliance/retention", get(handlers::compliance::get_retention_policies))
+        .route("/api/compliance/retention/{level}", put(handlers::compliance::update_retention_policy))
         // 费用配额管理 API
         .route("/api/quota/check", post(handlers::quota::quota_check))
         .route("/api/quota/report-usage", post(handlers::quota::report_usage))
@@ -415,7 +420,7 @@ async fn get_dlp_rules(
 
     let rows = client
         .query(
-            "SELECT id, name, pattern, replacement, severity, description, enabled, category, created_at, updated_at, rule_type, rule_config 
+            "SELECT id, name, pattern, replacement, severity, description, enabled, category, created_at, updated_at, rule_type, rule_config, classification_level 
              FROM dlp_rules 
              ORDER BY created_at DESC",
             &[],
@@ -439,6 +444,7 @@ async fn get_dlp_rules(
                 "updated_at": r.get::<_, chrono::DateTime<chrono::Utc>>(9),
                 "rule_type": r.get::<_, String>(10),
                 "rule_config": r.get::<_, Option<serde_json::Value>>(11),
+                "classification_level": r.get::<_, Option<String>>(12),
             })
         })
         .collect();
@@ -458,9 +464,9 @@ async fn create_dlp_rule(
 
     client
         .execute(
-            "INSERT INTO dlp_rules (id, name, pattern, replacement, severity, description, enabled, category, rule_type, rule_config, created_at, updated_at) 
-             VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8, $9, $10, $11)",
-            &[&rule_id, &payload.name, &payload.pattern, &payload.replacement, &payload.severity, &payload.description, &payload.category, &payload.rule_type, &payload.rule_config, &now, &now],
+            "INSERT INTO dlp_rules (id, name, pattern, replacement, severity, description, enabled, category, rule_type, rule_config, classification_level, created_at, updated_at) 
+             VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8, $9, $10, $11, $12)",
+            &[&rule_id, &payload.name, &payload.pattern, &payload.replacement, &payload.severity, &payload.description, &payload.category, &payload.rule_type, &payload.rule_config, &payload.classification_level, &now, &now],
         )
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
@@ -482,6 +488,7 @@ async fn create_dlp_rule(
             "category": payload.category,
             "rule_type": payload.rule_type,
             "rule_config": payload.rule_config,
+            "classification_level": payload.classification_level,
             "created_at": now,
             "updated_at": now,
         })),
@@ -565,10 +572,16 @@ async fn update_dlp_rule(
         param_count += 1;
     }
 
+    if let Some(ref classification_level) = payload.classification_level {
+        updates.push(format!("classification_level = ${}", param_count));
+        params.push(classification_level);
+        param_count += 1;
+    }
+
     params.push(&rule_id);
 
     let query = format!(
-        "UPDATE dlp_rules SET {} WHERE id = ${} RETURNING id, name, pattern, replacement, severity, description, enabled, category, created_at, updated_at, rule_type, rule_config",
+        "UPDATE dlp_rules SET {} WHERE id = ${} RETURNING id, name, pattern, replacement, severity, description, enabled, category, created_at, updated_at, rule_type, rule_config, classification_level",
         updates.join(", "),
         param_count
     );
@@ -595,6 +608,7 @@ async fn update_dlp_rule(
         "updated_at": row.get::<_, chrono::DateTime<chrono::Utc>>(9),
         "rule_type": row.get::<_, String>(10),
         "rule_config": row.get::<_, Option<serde_json::Value>>(11),
+        "classification_level": row.get::<_, Option<String>>(12),
     })))
 }
 

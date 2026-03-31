@@ -4,6 +4,7 @@
 
 pub mod alerts;
 pub mod approvals;
+pub mod compliance;
 pub mod conversations;
 pub mod departments;
 pub mod quota;

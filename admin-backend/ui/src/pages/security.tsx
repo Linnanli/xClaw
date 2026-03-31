@@ -111,6 +111,7 @@ function DlpRuleFormDialog({ open, editingRule, onClose, onSaved }: DlpRuleFormD
   const [regexError, setRegexError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [classificationLevel, setClassificationLevel] = useState('')
 
   useEffect(() => {
     if (!open) return
@@ -120,10 +121,12 @@ function DlpRuleFormDialog({ open, editingRule, onClose, onSaved }: DlpRuleFormD
       setPattern(editingRule.pattern); setReplacement(editingRule.replacement ?? '')
       setSeverity(editingRule.severity); setCategory(editingRule.category)
       setDescription(editingRule.description ?? '')
+      setClassificationLevel(editingRule.classification_level ?? '')
     } else {
       setName(''); setRuleType('regex'); setPattern(''); setReplacement('')
       setSeverity('medium'); setCategory('pii'); setDescription('')
       setKeywords([]); setKeywordInput(''); setSelectedDictId(''); setMatchMode('contains'); setCaseSensitive(false)
+      setClassificationLevel('')
     }
   }, [open, editingRule])
 
@@ -189,7 +192,7 @@ function DlpRuleFormDialog({ open, editingRule, onClose, onSaved }: DlpRuleFormD
         finalPattern = dict?.keywords.join(',') ?? ''
         ruleConfig = { dictionary_id: selectedDictId, dictionary_name: dict?.name ?? '', match_mode: matchMode, case_sensitive: caseSensitive }
       }
-      const payload = { name: name.trim(), pattern: finalPattern, replacement: replacement.trim() || undefined, severity, category, description: description.trim() || undefined, rule_type: ruleType, rule_config: ruleConfig }
+      const payload = { name: name.trim(), pattern: finalPattern, replacement: replacement.trim() || undefined, severity, category, description: description.trim() || undefined, rule_type: ruleType, rule_config: ruleConfig, classification_level: classificationLevel || undefined }
       if (isEditing) { await api.put(`/dlp-rules/${editingRule.id}`, payload); setMsg({ type: 'success', text: '规则更新成功' }) }
       else { await api.post('/dlp-rules', payload); setMsg({ type: 'success', text: '规则创建成功' }) }
       setTimeout(() => { onSaved(); onClose() }, 500)
@@ -222,6 +225,7 @@ function DlpRuleFormDialog({ open, editingRule, onClose, onSaved }: DlpRuleFormD
           {ruleType === 'dictionary' && <div className="flex flex-col gap-2"><label className="font-mono text-[10px] font-semibold text-[#1A1A1A]">选择字典 <span className="text-[#CF1322]">*</span></label><DropdownSelect label={dictionaries.find((d) => d.id === selectedDictId)?.name ?? '请选择字典'} options={dictionaries.map((d) => ({ value: d.id, label: `${d.name} (${d.keyword_count} 个关键字)` }))} value={selectedDictId} onChange={setSelectedDictId} /></div>}
           {(ruleType === 'keyword' || ruleType === 'dictionary') && <div className="grid grid-cols-2 gap-3"><div className="flex flex-col gap-2"><label className="font-mono text-[10px] font-semibold text-[#1A1A1A]">匹配模式</label><DropdownSelect label={MATCH_MODE_OPTIONS.find((o) => o.value === matchMode)?.label ?? '包含匹配'} options={MATCH_MODE_OPTIONS} value={matchMode} onChange={setMatchMode} /></div><div className="flex flex-col gap-2"><label className="font-mono text-[10px] font-semibold text-[#1A1A1A]">区分大小写</label><div className="flex items-center gap-2 py-1.5"><ToggleSwitch on={caseSensitive} onChange={() => setCaseSensitive(!caseSensitive)} /><span className="font-mono text-[10px] font-medium text-[#999999]">{caseSensitive ? '是' : '否'}</span></div></div></div>}
           <div className="grid grid-cols-2 gap-3"><div className="flex flex-col gap-2"><label className="font-mono text-[10px] font-semibold text-[#1A1A1A]">替换文本</label><input value={replacement} onChange={(e) => setReplacement(e.target.value)} placeholder="默认: ***" className={inputCls} style={inputBorder} /></div><div className="flex flex-col gap-2"><label className="font-mono text-[10px] font-semibold text-[#1A1A1A]">分类 <span className="text-[#CF1322]">*</span></label><DropdownSelect label={CATEGORY_MAP[category] ?? 'PII'} options={CATEGORY_OPTIONS} value={category} onChange={setCategory} /></div></div>
+          <div className="flex flex-col gap-2"><label className="font-mono text-[10px] font-semibold text-[#1A1A1A]">数据分级</label><select value={classificationLevel} onChange={(e) => setClassificationLevel(e.target.value)} className={inputCls} style={inputBorder}><option value="">未分级</option><option value="public">公开</option><option value="internal">内部</option><option value="confidential">机密</option><option value="top_secret">绝密</option></select></div>
           <div className="flex flex-col gap-2"><label className="font-mono text-[10px] font-semibold text-[#1A1A1A]">描述</label><textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="规则描述（可选）" rows={2} className="w-full resize-none bg-[#F5F5F5] px-3.5 py-2.5 font-mono text-[10px] font-medium text-[#1A1A1A] outline-none placeholder:text-[#CCCCCC]" style={inputBorder} /></div>
           {!showTest ? <button onClick={() => setShowTest(true)} className="w-full border border-dashed border-[#E8E8E8] bg-white py-2.5 font-mono text-[10px] font-medium text-[#999999] hover:border-[#0A6B3A] hover:text-[#0A6B3A]">🧪 测试此规则</button> : (
             <div className="flex flex-col gap-2 border border-[#E8E8E8] bg-[#FAFAFA] p-3">
