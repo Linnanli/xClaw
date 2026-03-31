@@ -386,15 +386,15 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 
 ### 需求 20：水印与追踪 `[新增]`
 
-**用户故事：** 作为安全管理员，我希望为 AI 助手的输出内容添加追踪水印，以便在数据泄露时追溯来源。
+**用户故事：** 作为安全管理员，我希望为 AI 助手的输出内容添加可见水印，以威慑数据泄露行为。
+
+> 设计决策：简化为可见水印配置，不实现隐写术水印。水印配置集成在系统设置中，客户端通过 `/api/client-config` 拉取水印配置，导出文件时渲染可见水印（用户名 + 部门 + 时间）。隐式水印提取和追溯功能暂不实现。
 
 #### 验收标准
 
-1. `[新增]` WHERE 水印功能已启用, THE Watermark_Service SHALL 为 AI 对话导出的文件添加包含用户标识和时间戳的隐式水印
-2. `[新增]` THE Admin_Platform SHALL 提供水印配置页面，允许设置水印内容模板（支持用户名、部门、时间等变量）
-3. `[新增]` THE Watermark_Service SHALL 支持文本水印和图片水印两种形式
-4. `[新增]` WHEN Admin 提供疑似泄露的文件, THE Watermark_Service SHALL 提取水印信息以追溯文件来源用户和导出时间
-5. `[新增]` THE Admin_Platform SHALL 展示水印提取记录，包含提取时间、文件信息和追溯结果
+1. `[新增]` THE Admin_Platform SHALL 在系统设置中提供水印配置区域，包含启用开关、内容模板（支持 {username}、{department}、{datetime} 变量）、字体大小、透明度和位置
+2. `[新增]` WHEN 水印功能已启用, THE Desktop_Client SHALL 在 AI 对话导出的文件上渲染包含用户标识和时间戳的可见水印
+3. `[新增]` THE Admin_Platform SHALL 在水印管理页面展示当前水印配置和预览效果
 
 ---
 

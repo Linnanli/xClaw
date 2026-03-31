@@ -2209,6 +2209,12 @@ async fn get_settings(
         "client_offline_threshold_s": 120,
         "policy_sync_interval_s": 300,
         "policy_auto_push": true,
+        "watermark_enabled": false,
+        "watermark_template": "{username} · {department} · {datetime}",
+        "watermark_font_size": 14,
+        "watermark_opacity": 0.15,
+        "watermark_position": "diagonal",
+        "watermark_color": "#000000",
     });
 
     for row in &rows {
@@ -2232,6 +2238,8 @@ async fn update_settings(
         "audit_retention_days", "audit_enabled",
         "client_heartbeat_interval_s", "client_offline_threshold_s",
         "policy_sync_interval_s", "policy_auto_push",
+        "watermark_enabled", "watermark_template", "watermark_font_size",
+        "watermark_opacity", "watermark_position", "watermark_color",
     ];
 
     if let Some(obj) = payload.as_object() {
@@ -2265,6 +2273,13 @@ struct ClientConfigResponse {
     max_cost_per_day_cents: Option<i64>,
     config_version: i64,
     updated_at: String,
+    // 水印配置（从 system_settings 读取）
+    watermark_enabled: Option<bool>,
+    watermark_template: Option<String>,
+    watermark_font_size: Option<i64>,
+    watermark_opacity: Option<f64>,
+    watermark_position: Option<String>,
+    watermark_color: Option<String>,
 }
 
 /// GET /api/client-config — 返回客户端应使用的配置。
@@ -2322,24 +2337,55 @@ async fn get_client_config(
                 max_cost_per_day_cents: r.get(7),
                 config_version: r.get(8),
                 updated_at: updated_at.to_rfc3339(),
+                watermark_enabled: None, watermark_template: None,
+                watermark_font_size: None, watermark_opacity: None,
+                watermark_position: None, watermark_color: None,
             }
         }
         None => ClientConfigResponse {
-            llm_backend: None,
-            llm_api_key: None,
-            llm_model: None,
-            llm_base_url: None,
-            safety_enabled: None,
-            skills_enabled: None,
-            extensions_enabled: None,
-            max_cost_per_day_cents: None,
-            config_version: 0,
+            llm_backend: None, llm_api_key: None, llm_model: None, llm_base_url: None,
+            safety_enabled: None, skills_enabled: None, extensions_enabled: None,
+            max_cost_per_day_cents: None, config_version: 0,
             updated_at: Utc::now().to_rfc3339(),
+            watermark_enabled: None, watermark_template: None,
+            watermark_font_size: None, watermark_opacity: None,
+            watermark_position: None, watermark_color: None,
         },
     };
 
+    // 合并水印配置
+    let mut response = response;
+    merge_watermark_settings(&client, &mut response).await;
+
     debug!(version = response.config_version, "Client config served");
     Ok(Json(response))
+}
+
+/// 从 system_settings 读取水印配置并合并到 ClientConfigResponse
+async fn merge_watermark_settings(
+    client: &deadpool_postgres::Object,
+    response: &mut ClientConfigResponse,
+) {
+    let rows = match client.query(
+        "SELECT key, value FROM system_settings WHERE key LIKE 'watermark_%'", &[],
+    ).await {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+
+    for r in &rows {
+        let key: String = r.get(0);
+        let val: serde_json::Value = r.get(1);
+        match key.as_str() {
+            "watermark_enabled" => response.watermark_enabled = val.as_bool(),
+            "watermark_template" => response.watermark_template = val.as_str().map(String::from),
+            "watermark_font_size" => response.watermark_font_size = val.as_i64(),
+            "watermark_opacity" => response.watermark_opacity = val.as_f64(),
+            "watermark_position" => response.watermark_position = val.as_str().map(String::from),
+            "watermark_color" => response.watermark_color = val.as_str().map(String::from),
+            _ => {}
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

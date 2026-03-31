@@ -56,6 +56,20 @@ pub struct AdminClientConfig {
     /// 每日最大花费（美分）
     pub max_cost_per_day_cents: Option<u64>,
 
+    // === 水印 ===
+    /// 是否启用水印
+    pub watermark_enabled: Option<bool>,
+    /// 水印内容模板
+    pub watermark_template: Option<String>,
+    /// 水印字体大小
+    pub watermark_font_size: Option<u32>,
+    /// 水印透明度
+    pub watermark_opacity: Option<f64>,
+    /// 水印位置
+    pub watermark_position: Option<String>,
+    /// 水印颜色
+    pub watermark_color: Option<String>,
+
     // === 版本 ===
     /// 配置版本号（用于增量更新检测）
     pub config_version: Option<u64>,
