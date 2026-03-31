@@ -1,4 +1,4 @@
-import { Plus, ChevronRight, Building2, Folder, Coins, KeyRound, Save, Trash2, Loader2 } from 'lucide-react'
+import { Plus, ChevronRight, Building2, Folder, Coins, KeyRound, Save, Trash2, Loader2, Pencil, Search, Check } from 'lucide-react'
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api } from '@/lib/api'
 import { TablePagination } from '@/components/ui/table-pagination'
@@ -30,8 +30,6 @@ interface DeptMember {
   id: string
   username: string
   email?: string
-  role?: string
-  status?: string
   created_at: string
 }
 
@@ -192,6 +190,152 @@ function CreateDeptDialog({ open, departments, onClose, onCreated }: {
   )
 }
 
+/* ── 编辑部门弹窗 ── */
+
+function EditDeptDialog({ open, dept, departments, onClose, onSaved }: {
+  open: boolean; dept: DepartmentDetail; departments: Department[]; onClose: () => void; onSaved: () => void
+}) {
+  const [name, setName] = useState(dept.name)
+  const [description, setDescription] = useState(dept.description || '')
+  const [parentId, setParentId] = useState(dept.parent_id || '')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    setName(dept.name); setDescription(dept.description || ''); setParentId(dept.parent_id || ''); setError('')
+  }, [dept, open])
+
+  // 排除自身和自身的子孙部门，防止循环引用
+  const availableParents = departments.filter(d => d.id !== dept.id)
+
+  const handleSave = async () => {
+    if (name.trim().length < 2) { setError('部门名称至少 2 个字符'); return }
+    setSaving(true); setError('')
+    try {
+      await api.put(`/departments/${dept.id}`, {
+        name: name.trim(),
+        description: description || null,
+        parent_id: parentId || null,
+      })
+      onSaved()
+    } catch (err: any) {
+      setError(err.response?.data?.details || err.response?.data?.error || '更新失败')
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
+      <DialogContent className="sm:max-w-[520px] rounded-none p-0 gap-0 ring-0" style={{ border: '1px solid #E8E8E8' }} showCloseButton={false}>
+        {error && <StatusMessage type="error" message={error} />}
+        <div className="flex items-center justify-between px-6 py-5" style={{ borderBottom: '1px solid #E8E8E8' }}>
+          <span className="font-mono text-xs font-semibold text-[#1A1A1A]">编辑部门</span>
+        </div>
+        <div className="flex flex-col gap-4 px-6 py-5">
+          <div className="flex flex-col gap-1.5">
+            <FormLabel required>部门名称</FormLabel>
+            <input value={name} onChange={e => setName(e.target.value)} className="border border-[#E8E8E8] bg-[#F5F5F5] px-3 py-2 font-mono text-[10px] text-[#1A1A1A] outline-none focus:border-[#0A6B3A]" />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <FormLabel>上级部门</FormLabel>
+            <select value={parentId} onChange={e => setParentId(e.target.value)} className="border border-[#E8E8E8] bg-[#F5F5F5] px-3 py-2 font-mono text-[10px] text-[#1A1A1A] outline-none">
+              <option value="">无（顶级部门）</option>
+              {availableParents.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <FormLabel>描述</FormLabel>
+            <textarea value={description} onChange={e => setDescription(e.target.value)} rows={2} className="border border-[#E8E8E8] bg-[#F5F5F5] px-3 py-2 font-mono text-[10px] text-[#1A1A1A] outline-none resize-none" />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 px-6 py-4" style={{ borderTop: '1px solid #E8E8E8' }}>
+          <button onClick={onClose} className="border border-[#E8E8E8] bg-white px-4 py-2 font-mono text-[9px] font-semibold text-[#1A1A1A]">取消</button>
+          <button onClick={handleSave} disabled={saving} className="flex items-center gap-1.5 bg-[#0A6B3A] px-4 py-2 font-mono text-[9px] font-semibold text-white disabled:opacity-50">
+            {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+            保存
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/* ── 模型白名单编辑弹窗 ── */
+
+interface ModelOption { id: string; model_id: string; display_name: string; provider: string }
+
+function ModelWhitelistDialog({ open, deptId, deptName, currentWhitelist, onClose, onSaved }: {
+  open: boolean; deptId: string; deptName: string; currentWhitelist: WhitelistModel[]; onClose: () => void; onSaved: () => void
+}) {
+  const [allModels, setAllModels] = useState<ModelOption[]>([])
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!open) return
+    setSelected(new Set(currentWhitelist.map(m => m.id)))
+    setError('')
+    api.get('/model-configs').then(res => {
+      const models = (res.data || []).map((m: any) => ({ id: m.id, model_id: m.model_id, display_name: m.display_name, provider: m.provider }))
+      setAllModels(models)
+    }).catch(() => setError('加载模型列表失败'))
+  }, [open, currentWhitelist])
+
+  const toggle = (id: string) => {
+    const next = new Set(selected)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    setSelected(next)
+  }
+
+  const handleSave = async () => {
+    setSaving(true); setError('')
+    try {
+      await api.put(`/departments/${deptId}/model-whitelist`, { model_config_ids: Array.from(selected) })
+      onSaved()
+    } catch (err: any) {
+      setError(err.response?.data?.error || '保存失败')
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
+      <DialogContent className="sm:max-w-[520px] rounded-none p-0 gap-0 ring-0" style={{ border: '1px solid #E8E8E8' }} showCloseButton={false}>
+        {error && <StatusMessage type="error" message={error} />}
+        <div className="flex items-center justify-between px-6 py-5" style={{ borderBottom: '1px solid #E8E8E8' }}>
+          <span className="font-mono text-xs font-semibold text-[#1A1A1A]">编辑模型白名单 — {deptName}</span>
+        </div>
+        <div className="px-6 py-4">
+          <p className="mb-3 font-mono text-[9px] text-[#999]">不选择任何模型 = 该部门可使用所有已启用模型</p>
+          <div className="flex flex-col gap-1.5 max-h-[300px] overflow-y-auto">
+            {allModels.map(m => (
+              <button key={m.id} onClick={() => toggle(m.id)} className="flex items-center gap-3 px-3 py-2 text-left" style={{ border: `1px solid ${selected.has(m.id) ? '#0A6B3A' : '#E8E8E8'}`, background: selected.has(m.id) ? '#0A6B3A08' : '#fff' }}>
+                <div className={`flex h-4 w-4 shrink-0 items-center justify-center border ${selected.has(m.id) ? 'border-[#0A6B3A] bg-[#0A6B3A]' : 'border-[#D9D9D9]'}`}>
+                  {selected.has(m.id) && <Check className="h-2.5 w-2.5 text-white" />}
+                </div>
+                <div className="flex flex-col">
+                  <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">{m.display_name}</span>
+                  <span className="font-mono text-[9px] text-[#999]">{m.provider} · {m.model_id}</span>
+                </div>
+              </button>
+            ))}
+            {allModels.length === 0 && <span className="py-4 text-center font-mono text-[10px] text-[#999]">暂无可用模型</span>}
+          </div>
+        </div>
+        <div className="flex items-center justify-between px-6 py-4" style={{ borderTop: '1px solid #E8E8E8' }}>
+          <span className="font-mono text-[9px] text-[#999]">已选 {selected.size} / {allModels.length}</span>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="border border-[#E8E8E8] bg-white px-4 py-2 font-mono text-[9px] font-semibold text-[#1A1A1A]">取消</button>
+            <button onClick={handleSave} disabled={saving} className="flex items-center gap-1.5 bg-[#0A6B3A] px-4 py-2 font-mono text-[9px] font-semibold text-white disabled:opacity-50">
+              {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+              保存白名单
+            </button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 /* ── 配额卡片（接入 API） ── */
 
 function QuotaCard({ dept, onSaved }: { dept: DepartmentDetail; onSaved: () => void }) {
@@ -261,7 +405,7 @@ function QuotaCard({ dept, onSaved }: { dept: DepartmentDetail; onSaved: () => v
 
 /* ── 白名单卡片（接入 API） ── */
 
-function AccessCard({ whitelist }: { whitelist: WhitelistModel[] }) {
+function AccessCard({ whitelist, onEdit }: { whitelist: WhitelistModel[]; onEdit: () => void }) {
   return (
     <div className="flex flex-1 flex-col gap-3 bg-white p-5" style={{ border: '1px solid #E8E8E8' }}>
       <div className="flex items-center gap-2.5 pb-3" style={{ borderBottom: '1px solid #E8E8E8' }}>
@@ -274,6 +418,10 @@ function AccessCard({ whitelist }: { whitelist: WhitelistModel[] }) {
           <span className="font-mono text-[10px] font-medium text-[#0A6B3A]">
             {whitelist.length > 0 ? `${whitelist.length} 个模型` : '全部可用'}
           </span>
+          <button onClick={onEdit} className="flex items-center gap-1.5 border border-[#0A6B3A] bg-white px-2 py-0.5 font-mono text-[8px] font-semibold text-[#0A6B3A]">
+            <Pencil className="h-2.5 w-2.5" />
+            编辑
+          </button>
         </div>
       </div>
       {whitelist.length > 0 && (
@@ -293,9 +441,8 @@ function AccessCard({ whitelist }: { whitelist: WhitelistModel[] }) {
 
 const memberColumns = [
   { key: 'username', label: '用户名', width: 'flex-1' },
-  { key: 'role', label: '角色', width: 'w-[100px]' },
-  { key: 'email', label: '邮箱', width: 'w-[160px]' },
-  { key: 'status', label: '状态', width: 'w-[60px]' },
+  { key: 'email', label: '邮箱', width: 'w-[200px]' },
+  { key: 'created_at', label: '加入时间', width: 'w-[160px]' },
 ] as const
 
 function MemberTable({ dept, members, onDelete }: {
@@ -372,14 +519,8 @@ function MemberTable({ dept, members, onDelete }: {
         ) : paged.map((m, i) => (
           <div key={m.id} className="flex items-center px-4 py-2.5" style={{ borderBottom: i < paged.length - 1 ? '1px solid #E8E8E8' : 'none' }}>
             <span className="flex-1 font-mono text-[10px] font-medium text-[#1A1A1A]">{m.username}</span>
-            <span className="w-[100px] font-mono text-[10px] font-medium" style={{ color: m.role === '管理员' ? '#0A6B3A' : '#999' }}>{m.role || '-'}</span>
-            <span className="w-[160px] font-mono text-[10px] font-medium text-[#1A1A1A] truncate">{m.email || '-'}</span>
-            <div className="flex w-[60px] items-center gap-1.5">
-              <div className={`h-1.5 w-1.5 rounded-full ${m.status === 'active' ? 'bg-[#0A6B3A]' : 'bg-[#999]'}`} />
-              <span className={`font-mono text-[9px] font-semibold ${m.status === 'active' ? 'text-[#0A6B3A]' : 'text-[#999]'}`}>
-                {m.status === 'active' ? '在线' : '离线'}
-              </span>
-            </div>
+            <span className="w-[200px] font-mono text-[10px] font-medium text-[#1A1A1A] truncate">{m.email || '-'}</span>
+            <span className="w-[160px] font-mono text-[10px] font-medium text-[#999]">{new Date(m.created_at).toLocaleDateString('zh-CN')}</span>
           </div>
         ))}
         {members.length > pageSize && <TablePagination current={currentPage} total={members.length} pageSize={pageSize} onChange={setCurrentPage} />}
@@ -395,6 +536,10 @@ export default function DepartmentsPage() {
   const [loading, setLoading] = useState(true)
   const [selectedId, setSelectedId] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
+  const [editOpen, setEditOpen] = useState(false)
+  const [whitelistOpen, setWhitelistOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [quotaFilter, setQuotaFilter] = useState('')
 
   // 选中部门的详情数据
   const [detail, setDetail] = useState<DepartmentDetail | null>(null)
@@ -405,12 +550,15 @@ export default function DepartmentsPage() {
   const loadDepartments = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await api.get('/departments')
+      const params: Record<string, string> = {}
+      if (searchQuery.trim()) params.search = searchQuery.trim()
+      if (quotaFilter) params.quota_status = quotaFilter
+      const res = await api.get('/departments', { params })
       setDepartments(res.data.departments || [])
     } catch (err) {
       console.error('加载部门列表失败', err)
     } finally { setLoading(false) }
-  }, [])
+  }, [searchQuery, quotaFilter])
 
   const loadDetail = useCallback(async (id: string) => {
     setDetailLoading(true)
@@ -446,6 +594,8 @@ export default function DepartmentsPage() {
   const handleCreated = () => { setCreateOpen(false); loadDepartments() }
   const handleDeleted = () => { setSelectedId(''); loadDepartments() }
   const handleQuotaSaved = () => { loadDepartments(); if (selectedId) loadDetail(selectedId) }
+  const handleEditSaved = () => { setEditOpen(false); loadDepartments(); if (selectedId) loadDetail(selectedId) }
+  const handleWhitelistSaved = () => { setWhitelistOpen(false); if (selectedId) loadDetail(selectedId) }
 
   return (
     <div className="flex flex-col gap-6">
@@ -471,6 +621,27 @@ export default function DepartmentsPage() {
             <Building2 className="h-3.5 w-3.5 text-[#0A6B3A]" />
             <span className="font-mono text-[11px] font-semibold tracking-[0.5px] text-[#1A1A1A]">组织架构</span>
           </div>
+          {/* 搜索 + 筛选 */}
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-1.5 border border-[#E8E8E8] bg-[#F5F5F5] px-2.5 py-1.5">
+              <Search className="h-3 w-3 text-[#999]" />
+              <input
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="搜索部门..."
+                className="flex-1 bg-transparent font-mono text-[10px] text-[#1A1A1A] outline-none placeholder:text-[#CCCCCC]"
+              />
+            </div>
+            <select
+              value={quotaFilter}
+              onChange={e => setQuotaFilter(e.target.value)}
+              className="border border-[#E8E8E8] bg-[#F5F5F5] px-2.5 py-1.5 font-mono text-[10px] text-[#1A1A1A] outline-none"
+            >
+              <option value="">全部状态</option>
+              <option value="enabled">已启用限额</option>
+              <option value="disabled">未启用限额</option>
+            </select>
+          </div>
           {loading ? (
             <div className="flex justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-[#999]" /></div>
           ) : tree.length === 0 ? (
@@ -490,6 +661,18 @@ export default function DepartmentsPage() {
             <div className="flex justify-center py-32"><Loader2 className="h-5 w-5 animate-spin text-[#999]" /></div>
           ) : detail ? (
             <>
+              {/* 部门名称 + 编辑按钮 */}
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-lg font-bold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{detail.name}</span>
+                  {detail.description && <p className="mt-1 font-mono text-[10px] text-[#999]">{detail.description}</p>}
+                </div>
+                <button onClick={() => setEditOpen(true)} className="flex items-center gap-1.5 border border-[#E8E8E8] px-3 py-1.5 font-mono text-[9px] font-semibold text-[#1A1A1A]">
+                  <Pencil className="h-3 w-3" />
+                  编辑部门
+                </button>
+              </div>
+
               {/* 统计卡片 */}
               <div className="flex gap-3">
                 {[
@@ -507,7 +690,7 @@ export default function DepartmentsPage() {
               {/* 配额 + 白名单 */}
               <div className="flex gap-4">
                 <QuotaCard dept={detail} onSaved={handleQuotaSaved} />
-                <AccessCard whitelist={whitelist} />
+                <AccessCard whitelist={whitelist} onEdit={() => setWhitelistOpen(true)} />
               </div>
 
               {/* 成员表格 */}
@@ -518,6 +701,8 @@ export default function DepartmentsPage() {
       </div>
 
       <CreateDeptDialog open={createOpen} departments={departments} onClose={() => setCreateOpen(false)} onCreated={handleCreated} />
+      {detail && <EditDeptDialog open={editOpen} dept={detail} departments={departments} onClose={() => setEditOpen(false)} onSaved={handleEditSaved} />}
+      {detail && <ModelWhitelistDialog open={whitelistOpen} deptId={detail.id} deptName={detail.name} currentWhitelist={whitelist} onClose={() => setWhitelistOpen(false)} onSaved={handleWhitelistSaved} />}
     </div>
   )
 }

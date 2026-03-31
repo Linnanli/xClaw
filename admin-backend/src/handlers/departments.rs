@@ -64,9 +64,7 @@ pub async fn get_department_members(
             "id": r.get::<_, Uuid>(0),
             "username": r.get::<_, String>(1),
             "email": r.get::<_, Option<String>>(2),
-            "role": r.get::<_, Option<String>>(3),
-            "status": r.get::<_, Option<String>>(4),
-            "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(5),
+            "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(3),
         })
     }).collect();
 
@@ -176,9 +174,9 @@ async fn query_department_by_id(
          FROM departments d
          LEFT JOIN users u ON u.department_id = d.id
          LEFT JOIN departments p ON p.id = d.parent_id
+         WHERE d.id = $1
          GROUP BY d.id, d.name, d.description, d.parent_id, d.token_quota_enabled,
-                  d.token_quota_per_day, d.created_at, d.updated_at, p.name
-         HAVING d.id = $1",
+                  d.token_quota_per_day, d.created_at, d.updated_at, p.name",
         &[&dept_id],
     ).await.map_err(|e| Error::Database(e.to_string()))?
      .ok_or(Error::DepartmentNotFound)?;
@@ -215,14 +213,11 @@ async fn verify_department_exists(
     client: &deadpool_postgres::Object,
     dept_id: Uuid,
 ) -> Result<()> {
-    let exists = client.query_opt(
+    client.query_opt(
         "SELECT 1 FROM departments WHERE id = $1",
         &[&dept_id],
-    ).await.map_err(|e| Error::Database(e.to_string()))?;
-
-    if exists.is_none() {
-        return Err(Error::DepartmentNotFound);
-    }
+    ).await.map_err(|e| Error::Database(e.to_string()))?
+     .ok_or(Error::DepartmentNotFound)?;
     Ok(())
 }
 
@@ -245,7 +240,7 @@ fn build_members_query(
     params: &DepartmentMembersQuery,
 ) -> (String, Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>>) {
     let mut sql = String::from(
-        "SELECT u.id, u.username, u.email, u.role, u.status, u.created_at
+        "SELECT u.id, u.username, u.email, u.created_at
          FROM users u WHERE u.department_id = $1"
     );
     let mut query_params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> =
