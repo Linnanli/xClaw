@@ -15,8 +15,9 @@ import WatermarkPage from '@/pages/watermark'
 import SettingsPage from '@/pages/settings'
 import ReportsPage from '@/pages/reports'
 import ModelConfigsPage from '@/pages/model-configs'
-import AuditLogsPage from '@/pages/audit-logs'
+import QuotaPage from '@/pages/quota'
 import ExtensionsPage from '@/pages/extensions'
+import AuditLogsPage from '@/pages/audit-logs'
 import { useAuthStore } from '@/stores/auth'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -64,6 +65,7 @@ export const router = createBrowserRouter([
       { path: 'model-configs', element: <ModelConfigsPage /> },
       { path: 'audit-logs', element: <AuditLogsPage /> },
       { path: 'extensions', element: <ExtensionsPage /> },
+      { path: 'quota', element: <QuotaPage /> },
     ],
   },
 ])

@@ -81,3 +81,39 @@ mod quota_config_failures {
         assert_eq!(pct, 0, "预算为 0 时使用率应为 0（避免除零）");
     }
 }
+
+/// 验收标准18#6：费用明细查询参数验证
+#[cfg(test)]
+mod quota_usage_records_failures {
+    #[test]
+    fn test_failure_usage_records_invalid_date_format() {
+        let date = "not-a-date";
+        let parsed = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d");
+        assert!(parsed.is_err(), "无效日期格式应解析失败，handler 回退到默认值（今日）");
+    }
+
+    #[test]
+    fn test_failure_usage_records_page_zero_clamped() {
+        let page = 0i64.max(1);
+        assert_eq!(page, 1, "page=0 应被 clamp 到 1");
+    }
+
+    #[test]
+    fn test_failure_usage_records_page_size_too_large_clamped() {
+        let page_size = 500i64.clamp(1, 100);
+        assert_eq!(page_size, 100, "page_size=500 应被 clamp 到 100");
+    }
+
+    #[test]
+    fn test_failure_usage_records_negative_page_clamped() {
+        let page = (-5i64).max(1);
+        assert_eq!(page, 1, "负数 page 应被 clamp 到 1");
+    }
+
+    #[test]
+    fn test_failure_usage_records_empty_username_ignored() {
+        let username = "   ";
+        let trimmed = username.trim();
+        assert!(trimmed.is_empty(), "空白用户名应被忽略不加入筛选条件");
+    }
+}

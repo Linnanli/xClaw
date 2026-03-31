@@ -98,6 +98,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/quota/config", get(handlers::quota::get_quota_config).put(handlers::quota::update_quota_config))
         .route("/api/quota/department-ranking", get(handlers::quota::department_ranking))
         .route("/api/quota/model-ranking", get(handlers::quota::model_ranking))
+        .route("/api/quota/usage-records", get(handlers::quota::usage_records))
         .with_state(state)
 }
 

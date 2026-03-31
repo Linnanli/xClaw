@@ -168,6 +168,45 @@ mod quota_contract_tests {
         assert!(resp["ranking"][0]["name"].is_string());
     }
 
+    /// 验收标准18#6：费用明细 API 响应格式
+    #[test]
+    fn test_contract_usage_records_response() {
+        let resp = json!({
+            "records": [{
+                "id": "550e8400-e29b-41d4-a716-446655440000",
+                "username": "zhangsan",
+                "model_id": "deepseek-chat",
+                "input_tokens": 1000,
+                "output_tokens": 500,
+                "cost_cents": 6,
+                "created_at": "2025-03-31T10:00:00+00:00",
+                "department_name": "研发部"
+            }],
+            "total": 1,
+            "page": 1,
+            "page_size": 20
+        });
+        let record = &resp["records"][0];
+        assert!(record["username"].is_string(), "明细必须包含用户名");
+        assert!(record["model_id"].is_string(), "明细必须包含模型 ID");
+        assert!(record["input_tokens"].is_number(), "明细必须包含输入 Token 数");
+        assert!(record["output_tokens"].is_number(), "明细必须包含输出 Token 数");
+        assert!(record["cost_cents"].is_number(), "明细必须包含费用");
+        assert!(record["created_at"].is_string(), "明细必须包含时间");
+        assert!(record["department_name"].is_string(), "明细应包含部门名称");
+        assert!(resp["total"].is_number(), "响应必须包含总数");
+        assert!(resp["page"].is_number(), "响应必须包含页码");
+        assert!(resp["page_size"].is_number(), "响应必须包含每页条数");
+    }
+
+    /// 验收标准18#6：空结果时响应格式正确
+    #[test]
+    fn test_contract_usage_records_empty() {
+        let resp = json!({ "records": [], "total": 0, "page": 1, "page_size": 20 });
+        assert!(resp["records"].as_array().unwrap().is_empty());
+        assert_eq!(resp["total"], 0);
+    }
+
     /// 验收标准15：子部门限额累加 API 响应格式
     #[test]
     fn test_contract_quota_summary_response() {

@@ -342,17 +342,17 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 
 **用户故事：** 作为管理员，我希望管理 AI 模型的使用费用配额，以控制企业的 AI 使用成本。
 
-> 设计决策：独立配额管理页面已移除，费用统计合并到仪表盘"费用统计" Tab；配额配置（每日限额、月度预算）统一在部门管理页面的根部门配额卡片中设置。所有限额统一使用费用（分）作为单位，不再使用 Token 数量。
+> 设计决策：费用配额管理恢复为独立菜单页面（`/quota`），不再作为仪表盘的 Tab。原因：随着费用明细记录、筛选、分页等功能的加入，复杂度已超出仪表盘 Tab 能承载的范围。仪表盘保留轻量的费用摘要卡片（今日/本月费用），点击可跳转至费用管理页面。配额配置（每日限额、月度预算）统一在部门管理页面的根部门配额卡片中设置。所有限额统一使用费用（分）作为单位，不再使用 Token 数量。
 
 #### 验收标准
 
-1. `[已实现]` THE Admin_Platform SHALL 在仪表盘"费用统计" Tab 中展示全局费用概览，包含今日费用、本月费用、本月预算和预算使用率、部门费用消耗排行和模型调用量排行
+1. `[已实现]` THE Admin_Platform SHALL 在独立的费用管理页面中展示全局费用概览，包含今日费用、本月费用、本月预算和预算使用率、部门费用消耗排行和模型调用量排行
 2. `[已实现]` THE Quota_Service SHALL 支持按部门层级设置每日费用限额（单位：分），配置统一存储在 quota_configs 表中
 3. `[已实现]` WHEN Desktop_Client 发起 AI 请求, THE Quota_Service SHALL 先执行预检：查询用户所属部门的当日已消耗费用，若已超过限额则直接拒绝请求并返回超额提示
 4. `[已实现]` WHEN AI 请求完成后, THE Quota_Service SHALL 根据模型响应中的 usage（input_tokens、output_tokens）乘以该模型配置的单价，计算本次实际费用并写入 usage_records 表
 5. `[已实现]` WHEN 部门的费用消耗达到部门限额, THE Quota_Service SHALL 拒绝该部门所有用户的后续 AI 请求
-6. `[新增]` THE Admin_Platform SHALL 在仪表盘"费用统计" Tab 中展示费用消耗的明细记录，包含用户、模型、Token 数量、费用和时间
-7. `[已实现]` THE Admin_Platform SHALL 在仪表盘"费用统计" Tab 中展示按部门和模型维度的费用消耗排行
+6. `[新增]` THE Admin_Platform SHALL 在费用管理页面中展示费用消耗的明细记录表格，包含用户、模型、Token 数量、费用和时间，支持按时间范围、用户、模型、部门筛选和分页
+7. `[已实现]` THE Admin_Platform SHALL 在费用管理页面中展示按部门和模型维度的费用消耗排行
 8. `[新增]` WHEN 月度费用达到预算的 90%, THE Alert_Service SHALL 向管理员发送费用预警通知
 9. `[已实现]` THE Quota_Service SHALL 使用时间窗口查询（`WHERE created_at >= today_start`）计算当日消耗，而非定时清零计数器，以避免零点前后并发请求导致的数据不一致
 10. `[已实现]` IF Quota_Service 预检接口不可用（数据库故障、网络超时）, THEN THE Quota_Service SHALL 采用 Fail-Safe 策略拒绝请求，而非放行（政企场景安全优先）

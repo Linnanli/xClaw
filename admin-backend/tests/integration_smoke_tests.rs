@@ -256,6 +256,7 @@ async fn test_http_all_critical_get_routes_registered() {
         "/api/audit-logs",
         "/api/departments",
         "/api/quota/overview",
+        "/api/quota/usage-records",
         "/api/skills",
         "/api/plugins",
         "/api/settings",

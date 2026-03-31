@@ -25,9 +25,9 @@ describe('仪表盘', () => {
       cy.contains('总用户数').should('be.visible')
       cy.contains('在线客户端').should('be.visible')
       cy.contains('DLP 拦截').should('be.visible')
-      cy.contains('今日 AI 对话').should('be.visible')
+      cy.contains('今日费用').should('be.visible')
       cy.contains('敏感操作').should('be.visible')
-      cy.contains('未处理告警').should('be.visible')
+      cy.contains('系统健康度').should('be.visible')
     })
 
     it('应渲染图表区域', () => {
@@ -62,7 +62,7 @@ describe('仪表盘', () => {
     it('应渲染 17 个导航项', () => {
       const items = [
         '总览', '客户端', '用户管理', '部门管理', '安全策略', '告警中心',
-        '对话审计', '知识库', '配额管理', '模型配置', '扩展管理', '合规管理',
+        '对话审计', '知识库', '模型配置', '费用管理', '扩展管理', '合规管理',
         '水印追踪', '审批工单', '审计日志', '统计报表', '系统设置',
       ]
       cy.get('aside').within(() => {

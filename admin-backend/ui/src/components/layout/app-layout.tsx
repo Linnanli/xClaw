@@ -17,6 +17,7 @@ const routeTitles: Record<string, string> = {
   '/audit-logs': '审计日志',
   '/reports': '统计报表',
   '/departments': '部门管理',
+  '/quota': '费用管理',
 }
 
 function getPageTitle(pathname: string): string {

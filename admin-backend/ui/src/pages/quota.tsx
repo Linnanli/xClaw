@@ -1,4 +1,4 @@
-import { Settings, Loader2, Save } from 'lucide-react'
+import { Settings, Loader2, Save, RefreshCw, Search } from 'lucide-react'
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/api'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
@@ -21,6 +21,17 @@ interface RankingItem {
   model_id?: string
   cost_cents: number
   tokens: number
+}
+
+interface UsageRecord {
+  id: string
+  username: string
+  model_id: string
+  input_tokens: number
+  output_tokens: number
+  cost_cents: number
+  created_at: string
+  department_name: string | null
 }
 
 /* ── 格式化辅助 ── */
@@ -121,7 +132,125 @@ export default function QuotaPage() {
         <RankingCard title="模型调用量" items={modelRanking} nameKey="model_id" />
       </div>
 
+      {/* 费用明细记录（验收标准18#6） */}
+      <UsageRecordsTable />
+
       <QuotaConfigDialog open={configOpen} onClose={() => setConfigOpen(false)} onSaved={loadData} />
+    </div>
+  )
+}
+
+/* ── 费用明细表格（验收标准18#6） ── */
+
+function renderRecordsBody(loading: boolean, records: UsageRecord[]) {
+  if (loading && records.length === 0) {
+    return <div className="flex justify-center py-10"><Loader2 className="h-5 w-5 animate-spin text-[#999]" /></div>
+  }
+  if (records.length === 0) {
+    return <div className="flex justify-center py-10"><span className="font-mono text-[10px] text-[#CCC]">暂无明细记录</span></div>
+  }
+  return records.map((r, i) => (
+    <div key={r.id} className="grid grid-cols-7 items-center px-4 py-3" style={{ borderBottom: i < records.length - 1 ? '1px solid #E8E8E8' : 'none' }}>
+      <span className="font-mono text-[10px] text-[#999]">
+        {new Date(r.created_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+      </span>
+      <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">{r.username}</span>
+      <span className="font-mono text-[10px] text-[#999]">{r.department_name ?? '-'}</span>
+      <span className="font-mono text-[10px] text-[#1A1A1A]">{r.model_id}</span>
+      <span className="font-mono text-[10px] text-[#999]">{formatTokens(r.input_tokens)}</span>
+      <span className="font-mono text-[10px] text-[#999]">{formatTokens(r.output_tokens)}</span>
+      <span className="font-mono text-[10px] font-semibold text-[#0A6B3A]">{formatCents(r.cost_cents)}</span>
+    </div>
+  ))
+}
+
+function UsageRecordsTable() {
+  const [records, setRecords] = useState<UsageRecord[]>([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [loading, setLoading] = useState(false)
+  const [search, setSearch] = useState('')
+  const [modelFilter, setModelFilter] = useState('')
+  const pageSize = 20
+
+  const loadRecords = useCallback(async (p: number) => {
+    setLoading(true)
+    try {
+      const params: Record<string, string> = { page: String(p), page_size: String(pageSize) }
+      if (search.trim()) params.username = search.trim()
+      if (modelFilter.trim()) params.model_id = modelFilter.trim()
+      const res = await api.get('/quota/usage-records', { params })
+      setRecords(res.data.records || [])
+      setTotal(res.data.total || 0)
+      setPage(p)
+    } catch (err) {
+      console.error('加载费用明细失败', err)
+    } finally { setLoading(false) }
+  }, [search, modelFilter])
+
+  useEffect(() => { loadRecords(1) }, [loadRecords])
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-semibold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>费用明细</span>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 border border-[#E8E8E8] bg-white px-3 py-1.5">
+            <Search className="h-3 w-3 text-[#999]" />
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="搜索用户"
+              className="w-[100px] bg-transparent font-mono text-[10px] text-[#1A1A1A] outline-none placeholder:text-[#CCC]"
+            />
+          </div>
+          <input
+            value={modelFilter}
+            onChange={e => setModelFilter(e.target.value)}
+            placeholder="模型 ID"
+            className="w-[120px] border border-[#E8E8E8] bg-white px-3 py-1.5 font-mono text-[10px] text-[#1A1A1A] outline-none placeholder:text-[#CCC]"
+          />
+          <button
+            onClick={() => loadRecords(1)}
+            className="flex items-center gap-1.5 border border-[#E8E8E8] bg-white px-3 py-1.5 font-mono text-[9px] font-semibold text-[#1A1A1A]"
+          >
+            {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3 text-[#6a6a6a]" />}
+            查询
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-white" style={{ border: '1px solid #E8E8E8' }}>
+        <div className="grid grid-cols-7 px-4 py-2.5" style={{ borderBottom: '1px solid #E8E8E8' }}>
+          {['时间', '用户', '部门', '模型', '输入 Token', '输出 Token', '费用'].map(h => (
+            <span key={h} className="font-mono text-[9px] font-semibold tracking-[0.5px] text-[#999]">{h}</span>
+          ))}
+        </div>
+
+        {renderRecordsBody(loading, records)}
+      </div>
+
+      {/* 分页 */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between">
+          <span className="font-mono text-[9px] text-[#999]">共 {total} 条</span>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => loadRecords(page - 1)}
+              disabled={page <= 1}
+              className="border border-[#E8E8E8] bg-white px-2.5 py-1 font-mono text-[9px] font-semibold text-[#1A1A1A] disabled:opacity-30"
+            >上一页</button>
+            <span className="px-2 font-mono text-[9px] text-[#999]">{page} / {totalPages}</span>
+            <button
+              onClick={() => loadRecords(page + 1)}
+              disabled={page >= totalPages}
+              className="border border-[#E8E8E8] bg-white px-2.5 py-1 font-mono text-[9px] font-semibold text-[#1A1A1A] disabled:opacity-30"
+            >下一页</button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

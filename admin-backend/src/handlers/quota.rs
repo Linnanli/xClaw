@@ -8,11 +8,12 @@
 //! - PUT  /api/quota/config             — 更新配额配置
 //! - GET  /api/quota/department-ranking  — 部门消耗排行
 //! - GET  /api/quota/model-ranking      — 模型消耗排行
+//! - GET  /api/quota/usage-records      — 费用消耗明细（验收标准18#6）
 //! - GET  /api/departments/{id}/quota-summary — 根部门配额摘要（验收标准15）
 
 use crate::error::{Error, Result};
 use crate::AppState;
-use axum::{extract::{Path, State}, Json};
+use axum::{extract::{Path, Query, State}, Json};
 use chrono::{Datelike, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -295,6 +296,126 @@ pub async fn model_ranking(
     })).collect();
 
     Ok(Json(json!({ "ranking": ranking })))
+}
+
+// ============================================================================
+// GET /api/quota/usage-records — 费用消耗明细（验收标准18#6）
+//
+// 支持筛选：时间范围、用户名、模型 ID、部门 ID
+// 支持分页：page + page_size（默认 page=1, page_size=20）
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct UsageRecordsQuery {
+    pub page: Option<i64>,
+    pub page_size: Option<i64>,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+    pub username: Option<String>,
+    pub model_id: Option<String>,
+    pub department_id: Option<Uuid>,
+}
+
+pub async fn usage_records(
+    State(state): State<AppState>,
+    Query(q): Query<UsageRecordsQuery>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let page = q.page.unwrap_or(1).max(1);
+    let page_size = q.page_size.unwrap_or(20).clamp(1, 100);
+    let offset = (page - 1) * page_size;
+
+    // 默认时间范围：今日
+    let start = q.start_date
+        .as_deref()
+        .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+        .map(|d| d.and_hms_opt(0, 0, 0).expect("valid midnight").and_utc())
+        .unwrap_or_else(today_start_utc);
+
+    let end = q.end_date
+        .as_deref()
+        .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+        .map(|d| d.succ_opt().expect("valid next day").and_hms_opt(0, 0, 0).expect("valid midnight").and_utc());
+
+    // 构建动态 WHERE 子句（复用项目中 build_departments_query 的 Box 模式）
+    let mut conditions = vec!["ur.created_at >= $1".to_string()];
+    let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = vec![Box::new(start)];
+    let mut idx = 2u32;
+
+    if let Some(e) = end {
+        conditions.push(format!("ur.created_at < ${idx}"));
+        params.push(Box::new(e));
+        idx += 1;
+    }
+    if let Some(ref u) = q.username {
+        let trimmed = u.trim();
+        if !trimmed.is_empty() {
+            conditions.push(format!("u.username ILIKE ${idx}"));
+            params.push(Box::new(format!("%{trimmed}%")));
+            idx += 1;
+        }
+    }
+    if let Some(ref m) = q.model_id {
+        conditions.push(format!("ur.model_id = ${idx}"));
+        params.push(Box::new(m.clone()));
+        idx += 1;
+    }
+    if let Some(d) = q.department_id {
+        conditions.push(format!("ur.department_id = ${idx}"));
+        params.push(Box::new(d));
+        idx += 1;
+    }
+    let _ = idx;
+
+    let where_clause = format!("WHERE {}", conditions.join(" AND "));
+    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+        params.iter().map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+
+    // 总数查询
+    let count_sql = format!(
+        "SELECT COUNT(*) FROM usage_records ur \
+         JOIN users u ON u.id = ur.user_id \
+         LEFT JOIN departments d ON d.id = ur.department_id {where_clause}"
+    );
+    let total: i64 = client.query_one(&count_sql, &param_refs)
+        .await.map_err(|e| Error::Database(e.to_string()))?.get(0);
+
+    // 明细查询
+    let data_sql = format!(
+        "SELECT ur.id, u.username, ur.model_id, ur.input_tokens, ur.output_tokens, \
+                ur.cost_cents, ur.created_at, d.name as dept_name \
+         FROM usage_records ur \
+         JOIN users u ON u.id = ur.user_id \
+         LEFT JOIN departments d ON d.id = ur.department_id \
+         {where_clause} ORDER BY ur.created_at DESC LIMIT {page_size} OFFSET {offset}"
+    );
+    let rows = client.query(&data_sql, &param_refs)
+        .await.map_err(|e| Error::Database(e.to_string()))?;
+
+    let records: Vec<_> = rows.iter().map(row_to_usage_record).collect();
+
+    Ok(Json(json!({
+        "records": records,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    })))
+}
+
+/// 将数据库行映射为 usage_record JSON
+fn row_to_usage_record(r: &tokio_postgres::Row) -> serde_json::Value {
+    json!({
+        "id": r.get::<_, Uuid>(0).to_string(),
+        "username": r.get::<_, String>(1),
+        "model_id": r.get::<_, String>(2),
+        "input_tokens": r.get::<_, i32>(3),
+        "output_tokens": r.get::<_, i32>(4),
+        "cost_cents": r.get::<_, i32>(5),
+        "created_at": r.get::<_, chrono::DateTime<Utc>>(6).to_rfc3339(),
+        "department_name": r.get::<_, Option<String>>(7),
+    })
 }
 
 // ============================================================================

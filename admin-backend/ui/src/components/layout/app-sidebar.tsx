@@ -17,6 +17,7 @@ const navItems = [
   { title: '对话审计', icon: MessageSquare, href: '/conversations' },
   { title: '知识库', icon: BookOpen, href: '/knowledge-bases' },
   { title: '模型配置', icon: Bot, href: '/model-configs' },
+  { title: '费用管理', icon: Coins, href: '/quota' },
   { title: '扩展管理', icon: Puzzle, href: '/extensions' },
   { title: '合规管理', icon: ShieldCheck, href: '/compliance' },
   { title: '水印追踪', icon: Scan, href: '/watermark' },

@@ -1,5 +1,6 @@
-import { TrendingUp, RefreshCw, Download, Loader2, Coins } from 'lucide-react'
+import { TrendingUp, RefreshCw, Download, Loader2 } from 'lucide-react'
 import { useState, useEffect, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
 
 /* ── 类型 ── */
@@ -17,23 +18,6 @@ interface ActivityLog {
   action: string
   details: string
   created_at: string
-}
-
-interface QuotaOverview {
-  today_cost_cents: number
-  today_tokens: number
-  month_cost_cents: number
-  month_tokens: number
-  monthly_budget_cents: number | null
-  budget_usage_pct: number | null
-  active_models: number
-}
-
-interface RankingItem {
-  name?: string
-  model_id?: string
-  cost_cents: number
-  tokens: number
 }
 
 /* ── 图表 mock（API 无此数据） ── */
@@ -61,12 +45,6 @@ function getStatusStyle(action: string): { color: string; bg: string } {
 
 /* ── 格式化辅助 ── */
 
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-  return String(n)
-}
-
 function formatCents(cents: number): string {
   return `¥${(cents / 100).toLocaleString('zh-CN', { minimumFractionDigits: 0 })}`
 }
@@ -74,26 +52,29 @@ function formatCents(cents: number): string {
 /* ── 组件 ── */
 
 export default function DashboardPage() {
-  const [tab, setTab] = useState<'overview' | 'quota'>('overview')
+  const navigate = useNavigate()
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [logs, setLogs] = useState<ActivityLog[]>([])
   const [loading, setLoading] = useState(true)
 
-  // 配额数据
-  const [quotaOverview, setQuotaOverview] = useState<QuotaOverview | null>(null)
-  const [deptRanking, setDeptRanking] = useState<RankingItem[]>([])
-  const [modelRanking, setModelRanking] = useState<RankingItem[]>([])
-  const [quotaLoading, setQuotaLoading] = useState(false)
+  // 费用摘要（轻量加载）
+  const [todayCost, setTodayCost] = useState<number | null>(null)
+  const [monthCost, setMonthCost] = useState<number | null>(null)
 
   const loadDashboard = useCallback(async () => {
     setLoading(true)
     try {
-      const [statsRes, activityRes] = await Promise.allSettled([
+      const [statsRes, activityRes, quotaRes] = await Promise.allSettled([
         api.get('/dashboard/stats'),
         api.get('/dashboard/activity'),
+        api.get('/quota/overview'),
       ])
       if (statsRes.status === 'fulfilled') setStats(statsRes.value.data)
       if (activityRes.status === 'fulfilled') setLogs(activityRes.value.data.logs || [])
+      if (quotaRes.status === 'fulfilled') {
+        setTodayCost(quotaRes.value.data.today_cost_cents)
+        setMonthCost(quotaRes.value.data.month_cost_cents)
+      }
     } catch (err) {
       console.error('加载仪表盘数据失败', err)
     } finally {
@@ -103,30 +84,12 @@ export default function DashboardPage() {
 
   useEffect(() => { loadDashboard() }, [loadDashboard])
 
-  const loadQuota = useCallback(async () => {
-    setQuotaLoading(true)
-    try {
-      const [ovRes, deptRes, modelRes] = await Promise.all([
-        api.get('/quota/overview'),
-        api.get('/quota/department-ranking'),
-        api.get('/quota/model-ranking'),
-      ])
-      setQuotaOverview(ovRes.data)
-      setDeptRanking(deptRes.data.ranking || [])
-      setModelRanking(modelRes.data.ranking || [])
-    } catch (err) {
-      console.error('加载配额数据失败', err)
-    } finally { setQuotaLoading(false) }
-  }, [])
-
-  useEffect(() => { if (tab === 'quota' && !quotaOverview) loadQuota() }, [tab, quotaOverview, loadQuota])
-
   const statCards = [
     { label: '总用户数', value: stats ? stats.total_users.toLocaleString() : '—', change: '', changeColor: '#999999', borderColor: '#E8E8E8' },
     { label: '在线客户端', value: stats ? String(stats.online_clients) : '—', change: '', changeColor: '#0A6B3A', borderColor: '#E8E8E8' },
     { label: 'DLP 拦截', value: stats ? String(stats.dlp_blocked_today) : '—', change: '今日', changeColor: '#CF1322', borderColor: '#E8E8E8' },
     { label: '敏感操作', value: stats ? String(stats.sensitive_ops_today) : '—', change: '今日', changeColor: '#D48700', borderColor: 'rgba(212,135,0,0.25)' },
-    { label: '今日 AI 对话', value: '342', change: '1.2M Token', changeColor: '#999999', borderColor: 'rgba(10,107,58,0.25)', valueColor: '#0A6B3A' },
+    { label: '今日费用', value: todayCost != null ? formatCents(todayCost) : '—', change: '本月 ' + (monthCost != null ? formatCents(monthCost) : '—'), changeColor: '#999999', borderColor: 'rgba(10,107,58,0.25)', valueColor: '#0A6B3A', clickable: true },
     { label: '系统健康度', value: '99.8%', change: '正常', changeColor: '#0A6B3A', borderColor: '#E8E8E8' },
   ]
 
@@ -144,9 +107,9 @@ export default function DashboardPage() {
         <div className="flex gap-2">
           <button
             className="flex items-center gap-2 border border-[#E8E8E8] bg-white px-4 py-2.5 font-mono text-[9px] font-semibold text-[#1A1A1A]"
-            onClick={tab === 'overview' ? loadDashboard : loadQuota}
+            onClick={loadDashboard}
           >
-            {(loading || quotaLoading) ? <Loader2 className="h-3 w-3 animate-spin text-[#6a6a6a]" /> : <RefreshCw className="h-3 w-3 text-[#6a6a6a]" />}
+            {loading ? <Loader2 className="h-3 w-3 animate-spin text-[#6a6a6a]" /> : <RefreshCw className="h-3 w-3 text-[#6a6a6a]" />}
             刷新
           </button>
           <button className="flex items-center gap-2 bg-[#0A6B3A] px-4 py-2.5 font-mono text-[9px] font-semibold text-white">
@@ -156,45 +119,29 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Tab 栏 */}
-      <div className="flex gap-0" style={{ borderBottom: '1px solid #E8E8E8' }}>
-        {([['overview', '系统概览'], ['quota', '费用统计']] as const).map(([key, label]) => (
-          <button
-            key={key}
-            onClick={() => setTab(key)}
-            className="px-5 py-2.5 font-mono text-[10px] font-semibold transition-colors"
-            style={{
-              color: tab === key ? '#0A6B3A' : '#999',
-              borderBottom: tab === key ? '2px solid #0A6B3A' : '2px solid transparent',
-              marginBottom: '-1px',
-            }}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {tab === 'overview' ? (
-        <OverviewTab stats={stats} logs={logs} loading={loading} statCards={statCards} />
-      ) : (
-        <QuotaTab overview={quotaOverview} deptRanking={deptRanking} modelRanking={modelRanking} loading={quotaLoading} />
-      )}
+      <OverviewTab stats={stats} logs={logs} loading={loading} statCards={statCards} onCostClick={() => navigate('/quota')} />
     </div>
   )
 }
 
 /* ── 系统概览 Tab ── */
 
-function OverviewTab({ stats, logs, loading, statCards }: {
+function OverviewTab({ stats, logs, loading, statCards, onCostClick }: {
   stats: DashboardStats | null; logs: ActivityLog[]; loading: boolean
-  statCards: { label: string; value: string; change: string; changeColor: string; borderColor: string; valueColor?: string }[]
+  statCards: { label: string; value: string; change: string; changeColor: string; borderColor: string; valueColor?: string; clickable?: boolean }[]
+  onCostClick: () => void
 }) {
   return (
     <>
       {/* 统计卡片 — 6 列 */}
       <div className="grid grid-cols-6 gap-2.5">
         {statCards.map((s) => (
-          <div key={s.label} className="flex flex-col gap-4 bg-white p-4" style={{ border: `1px solid ${s.borderColor}` }}>
+          <div
+            key={s.label}
+            className="flex flex-col gap-4 bg-white p-4"
+            style={{ border: `1px solid ${s.borderColor}`, cursor: s.clickable ? 'pointer' : 'default' }}
+            onClick={s.clickable ? onCostClick : undefined}
+          >
             <span className="font-mono text-[9px] font-semibold tracking-[0.5px] text-[#999999]">{s.label}</span>
             <span className="text-[28px] font-bold tracking-tight" style={{ fontFamily: 'Space Grotesk, sans-serif', letterSpacing: '-1px', color: s.valueColor ?? '#1A1A1A' }}>
               {loading && !stats ? '—' : s.value}
@@ -302,82 +249,5 @@ function OverviewTab({ stats, logs, loading, statCards }: {
         </div>
       </div>
     </>
-  )
-}
-
-/* ── 费用统计 Tab ── */
-
-function QuotaTab({ overview, deptRanking, modelRanking, loading }: {
-  overview: QuotaOverview | null; deptRanking: RankingItem[]; modelRanking: RankingItem[]; loading: boolean
-}) {
-  if (loading && !overview) {
-    return <div className="flex justify-center py-16"><Loader2 className="h-5 w-5 animate-spin text-[#999]" /></div>
-  }
-
-  const ov = overview ?? { today_cost_cents: 0, today_tokens: 0, month_cost_cents: 0, month_tokens: 0, monthly_budget_cents: null, budget_usage_pct: null, active_models: 0 }
-
-  const stats = [
-    { label: '今日消耗', value: formatTokens(ov.today_tokens), sub: formatCents(ov.today_cost_cents), color: '#1A1A1A' },
-    { label: '本月消耗', value: formatTokens(ov.month_tokens), sub: formatCents(ov.month_cost_cents), color: '#0A6B3A' },
-    { label: '本月预算', value: ov.monthly_budget_cents != null ? formatCents(ov.monthly_budget_cents) : '未设置', sub: ov.budget_usage_pct != null ? `已用 ${ov.budget_usage_pct}%` : '', color: '#1A1A1A', subColor: (ov.budget_usage_pct ?? 0) > 80 ? '#CF1322' : '#D48700' },
-    { label: '活跃模型', value: String(ov.active_models), sub: '个', color: '#1A1A1A' },
-  ]
-
-  const budgetPct = ov.budget_usage_pct ?? 0
-
-  return (
-    <>
-      <div className="grid grid-cols-4 gap-2.5">
-        {stats.map(s => (
-          <div key={s.label} className="flex flex-col gap-4 bg-white p-4" style={{ border: '1px solid #E8E8E8' }}>
-            <span className="font-mono text-[9px] font-semibold tracking-[0.5px] text-[#999]">{s.label}</span>
-            <span className="text-[28px] font-bold tracking-tight" style={{ fontFamily: 'Space Grotesk, sans-serif', letterSpacing: '-1px', color: s.color }}>{s.value}</span>
-            <span className="font-mono text-[10px] font-semibold" style={{ color: s.subColor ?? '#999' }}>{s.sub}</span>
-          </div>
-        ))}
-      </div>
-
-      {ov.monthly_budget_cents != null && (
-        <div className="flex flex-col gap-3 bg-white p-5" style={{ border: '1px solid #E8E8E8' }}>
-          <div className="flex items-center justify-between">
-            <span className="text-sm font-semibold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>月度预算使用率</span>
-            <span className="font-mono text-[10px] font-medium text-[#999]">{formatCents(ov.month_cost_cents)} / {formatCents(ov.monthly_budget_cents)}</span>
-          </div>
-          <div className="h-3 w-full overflow-hidden bg-[#F0F0F0]">
-            <div className="h-full" style={{ width: `${Math.min(budgetPct, 100)}%`, background: budgetPct > 90 ? '#CF1322' : 'linear-gradient(90deg, #0A6B3A 0%, #D48700 100%)' }} />
-          </div>
-          <span className="font-mono text-[10px] font-semibold" style={{ color: budgetPct > 90 ? '#CF1322' : '#D48700' }}>{budgetPct}% 已使用</span>
-        </div>
-      )}
-
-      <div className="grid grid-cols-2 gap-4">
-        <RankingCard title="部门费用消耗" items={deptRanking} nameKey="name" />
-        <RankingCard title="模型调用量" items={modelRanking} nameKey="model_id" />
-      </div>
-    </>
-  )
-}
-
-function RankingCard({ title, items, nameKey }: { title: string; items: RankingItem[]; nameKey: 'name' | 'model_id' }) {
-  return (
-    <div className="flex flex-col gap-4 bg-white p-5" style={{ border: '1px solid #E8E8E8' }}>
-      <span className="text-sm font-semibold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{title}</span>
-      <div className="flex flex-col gap-0">
-        {items.length === 0 ? (
-          <div className="py-4 text-center font-mono text-[10px] text-[#999]">暂无数据</div>
-        ) : items.map((item, i) => (
-          <div key={item[nameKey] ?? i} className="flex items-center justify-between px-2 py-3" style={{ borderBottom: i < items.length - 1 ? '1px solid #E8E8E8' : 'none' }}>
-            <div className="flex items-center gap-3">
-              <span className="font-mono text-[10px] font-bold text-[#0A6B3A]">{String(i + 1).padStart(2, '0')}</span>
-              <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">{item[nameKey] ?? '-'}</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="font-mono text-[10px] font-medium text-[#999]">{formatTokens(item.tokens)}</span>
-              <span className="font-mono text-[10px] font-semibold text-[#0A6B3A]">{formatCents(item.cost_cents)}</span>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
   )
 }
