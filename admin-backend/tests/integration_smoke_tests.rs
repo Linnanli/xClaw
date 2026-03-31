@@ -116,6 +116,7 @@ async fn test_migration_all_tables_exist() {
         ("014_dept_ext",  "department_model_whitelist"),
         ("015_quota",     "usage_records"),
         ("016_alerts",    "alert_rules"),
+        ("017_convs",     "conversations"),
     ];
 
     let mut missing = Vec::new();
@@ -265,6 +266,8 @@ async fn test_http_all_critical_get_routes_registered() {
         "/api/alert-rules",
         "/api/alerts",
         "/api/alerts/stats",
+        "/api/conversations",
+        "/api/conversations/stats",
     ];
 
     let mut failed = Vec::new();

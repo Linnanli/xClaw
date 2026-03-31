@@ -523,3 +523,39 @@ fn default_silence_minutes() -> i32 {
 fn default_true() -> bool {
     true
 }
+
+// ============================================================================
+// 对话审计
+// ============================================================================
+
+/// 客户端上报对话的 payload 结构（嵌入 client-reports 的 data 字段）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationReportPayload {
+    pub client_conversation_id: String,
+    pub user_id: Uuid,
+    pub topic: Option<String>,
+    pub model_id: Option<String>,
+    pub dlp_flagged: Option<bool>,
+    pub dlp_details: Option<String>,
+    pub messages: Vec<ConversationMessagePayload>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationMessagePayload {
+    pub role: String,
+    pub content: String,
+    pub model_id: Option<String>,
+    #[serde(default)]
+    pub input_tokens: i32,
+    #[serde(default)]
+    pub output_tokens: i32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ConversationQuery {
+    pub page: Option<i64>,
+    pub page_size: Option<i64>,
+    pub username: Option<String>,
+    pub dlp_flagged: Option<bool>,
+    pub search: Option<String>,
+}

@@ -147,10 +147,32 @@ export interface Conversation {
   username: string
   topic: string
   message_count: number
-  token_usage: number
-  model: string
+  total_tokens: number
+  model_id?: string
   dlp_flagged: boolean
-  time: string
+  created_at: string
+}
+
+export interface ConversationDetail extends Conversation {
+  dlp_details?: string
+  messages: ConversationMessage[]
+}
+
+export interface ConversationMessage {
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  model_id?: string
+  input_tokens: number
+  output_tokens: number
+  created_at: string
+}
+
+export interface ConversationStats {
+  today_count: number
+  today_tokens: number
+  today_dlp_flagged: number
+  today_active_users: number
 }
 
 // 知识库

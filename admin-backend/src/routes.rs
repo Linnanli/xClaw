@@ -98,6 +98,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/alerts/stats", get(handlers::alerts::get_alert_stats))
         .route("/api/alerts/trigger", post(handlers::alerts::manual_trigger_alert))
         .route("/api/alerts/{id}/status", put(handlers::alerts::update_alert_event_status))
+        // 对话审计 API
+        .route("/api/conversations/stats", get(handlers::conversations::get_conversation_stats))
+        .route("/api/conversations", get(handlers::conversations::get_conversations))
+        .route("/api/conversations/{id}", get(handlers::conversations::get_conversation_detail))
         // 费用配额管理 API
         .route("/api/quota/check", post(handlers::quota::quota_check))
         .route("/api/quota/report-usage", post(handlers::quota::report_usage))
@@ -2364,9 +2368,26 @@ async fn post_client_reports(
     let mut inserted = 0u64;
 
     for report in &payload {
-        let valid_types = ["audit_log", "dlp_event", "usage_stats", "health_status"];
+        let valid_types = ["audit_log", "dlp_event", "usage_stats", "health_status", "conversation"];
         if !valid_types.contains(&report.report_type.as_str()) {
             tracing::warn!(report_type = %report.report_type, "Unknown report type, skipping");
+            continue;
+        }
+
+        // conversation 类型走专用处理逻辑（幂等写入 conversations 表）
+        if report.report_type == "conversation" {
+            match serde_json::from_value::<crate::models::ConversationReportPayload>(report.data.clone()) {
+                Ok(conv_payload) => {
+                    match handlers::conversations::ingest_conversation(&client, &conv_payload).await {
+                        Ok(true) => { inserted += 1; }
+                        Ok(false) => { /* 幂等跳过 */ }
+                        Err(e) => { tracing::warn!(error = %e, "Failed to ingest conversation"); }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Invalid conversation payload");
+                }
+            }
             continue;
         }
 

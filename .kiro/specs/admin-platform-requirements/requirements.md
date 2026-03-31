@@ -309,6 +309,8 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 
 **用户故事：** 作为安全管理员，我希望审计所有员工与 AI 助手的对话记录，以确保 AI 使用符合企业安全策略。
 
+> 架构决策：IronClaw 采用客户端直连 LLM API 模式，对话内容不经过后端。因此对话数据通过客户端批量上报机制（复用已有的 `POST /api/client-reports`，新增 `report_type = "conversation"`）写入后端。客户端本地先存对话，定期（或心跳时）批量上报，网络中断时不丢数据。后端接收后解析 JSON payload 写入 conversations + conversation_messages 表。
+
 #### 验收标准
 
 1. `[新增]` THE Admin_Platform SHALL 展示对话记录列表，包含用户、对话主题、消息数、Token 消耗、开始时间和 DLP 标记状态
@@ -318,6 +320,9 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 5. `[新增]` THE Conversation_Service SHALL 记录每条消息的 Token 消耗量和使用的模型信息
 6. `[新增]` THE Admin_Platform SHALL 支持导出指定时间范围的对话审计报告
 7. `[新增]` THE Conversation_Service SHALL 按系统配置的保留策略自动归档或清理过期对话记录
+8. `[新增]` WHEN Desktop_Client 完成一轮对话, THE Desktop_Client SHALL 将对话摘要和消息记录通过 `POST /api/client-reports`（report_type="conversation"）批量上报至后端，使用 client_conversation_id 做幂等去重
+9. `[新增]` THE Conversation_Service SHALL 解析 client-reports 中 report_type="conversation" 的 payload，写入 conversations 和 conversation_messages 表
+10. `[新增]` THE Admin_Platform SHALL 在对话列表 API 中仅返回对话摘要（主题、消息数、Token 消耗），不返回完整消息内容；完整消息仅在详情 API 中返回
 
 ---
 

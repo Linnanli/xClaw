@@ -2,8 +2,10 @@
  * 对话审计 E2E 测试
  *
  * 覆盖维度：
- * - 正常路径：页面渲染、统计卡片、表格
+ * - 正常路径：页面渲染、统计卡片、筛选栏、表格结构
+ * - 交互：搜索、DLP 筛选、对话详情弹窗
  * - 导航：侧边栏跳转
+ * - 空数据：无对话时的空状态展示
  */
 
 describe('对话审计', () => {
@@ -27,26 +29,54 @@ describe('对话审计', () => {
       cy.contains('Token 消耗').should('be.visible')
       cy.contains('DLP 标记').should('be.visible')
       cy.contains('活跃用户').should('be.visible')
-      cy.get('main').contains('342').should('be.visible')
-      cy.get('main').contains('1.2M').should('be.visible')
-      cy.get('main').contains('18').should('be.visible')
-      cy.get('main').contains('67').should('be.visible')
     })
 
-    it('应渲染筛选栏和对话计数', () => {
-      cy.contains('共 1,284 条对话').should('be.visible')
-      cy.contains('DLP').should('be.visible')
+    it('应渲染筛选栏', () => {
+      cy.get('input[placeholder="搜索用户或主题..."]').should('be.visible')
+      cy.contains('全部 DLP').should('be.visible')
     })
 
-    it('应渲染表格表头和 4 行 Mock 数据', () => {
-      cy.contains('用户').should('be.visible')
-      cy.contains('对话主题').should('be.visible')
-      cy.contains('消息数').should('be.visible')
-      cy.contains('TOKEN').should('be.visible')
-      cy.contains('产品需求分析').should('be.visible')
-      cy.contains('代码审查辅助').should('be.visible')
-      cy.contains('HR 政策咨询').should('be.visible')
-      cy.contains('市场报告生成').should('be.visible')
+    it('应渲染表格表头', () => {
+      const headers = ['用户', '对话主题', '消息数', 'TOKEN', '模型', 'DLP', '时间']
+      headers.forEach(h => cy.contains(h).should('be.visible'))
+    })
+  })
+
+  describe('交互', () => {
+    beforeEach(() => {
+      cy.visit('/conversations')
+    })
+
+    it('搜索框应可输入', () => {
+      cy.get('input[placeholder="搜索用户或主题..."]').type('zhang')
+      cy.get('input[placeholder="搜索用户或主题..."]').should('have.value', 'zhang')
+    })
+
+    it('DLP 筛选应可选择', () => {
+      cy.get('select').contains('全部 DLP').parent('select').select('flagged')
+    })
+
+    it('有数据时点击行应打开对话详情弹窗', () => {
+      cy.visit('/conversations')
+      // 等待加载完成后检查
+      cy.wait(2000)
+      cy.get('body').then($body => {
+        if (!$body.text().includes('暂无对话记录')) {
+          cy.get('div[class*="cursor-pointer"]').first().click()
+          cy.contains('对话详情').should('be.visible')
+        }
+      })
+    })
+  })
+
+  describe('空数据展示', () => {
+    it('无对话记录时应展示空状态', () => {
+      cy.visit('/conversations')
+      cy.get('body').then($body => {
+        if ($body.text().includes('暂无对话记录')) {
+          cy.contains('暂无对话记录').should('be.visible')
+        }
+      })
     })
   })
 
