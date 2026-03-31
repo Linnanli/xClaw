@@ -7,6 +7,12 @@ import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { FormLabel } from '@/components/ui/form-helpers'
 import { StatusMessage } from '@/components/ui/form-helpers'
 
+/* ── 格式化辅助 ── */
+
+function formatCents(cents: number): string {
+  return `¥${(cents / 100).toFixed(2)}`
+}
+
 /* ── 类型 ── */
 
 interface Department {
@@ -360,8 +366,8 @@ function RootQuotaCard({ dept, onSaved }: { dept: DepartmentDetail; onSaved: () 
     api.get(`/departments/${dept.id}/quota-summary`).then(res => {
       setSummary(res.data)
       setIsCustom(res.data.is_custom)
-      setCustomLimit(res.data.custom_limit_cents != null ? String(res.data.custom_limit_cents) : '')
-      setMonthlyBudget(res.data.monthly_budget_cents != null ? String(res.data.monthly_budget_cents) : '')
+      setCustomLimit(res.data.custom_limit_cents != null ? String(res.data.custom_limit_cents / 100) : '')
+      setMonthlyBudget(res.data.monthly_budget_cents != null ? String(res.data.monthly_budget_cents / 100) : '')
     }).catch(() => setSummary(null))
   }, [dept.id])
 
@@ -369,8 +375,8 @@ function RootQuotaCard({ dept, onSaved }: { dept: DepartmentDetail; onSaved: () 
     setSaving(true); setMsg(null)
     try {
       await api.put('/quota/config', {
-        org_daily_limit_cents: isCustom ? (Number(customLimit) || null) : null,
-        monthly_budget_cents: monthlyBudget ? Number(monthlyBudget) : null,
+        org_daily_limit_cents: isCustom && customLimit ? Math.round(Number(customLimit) * 100) : null,
+        monthly_budget_cents: monthlyBudget ? Math.round(Number(monthlyBudget) * 100) : null,
       })
       setMsg({ type: 'success', text: '公司级配额已保存' })
       onSaved()
@@ -380,7 +386,7 @@ function RootQuotaCard({ dept, onSaved }: { dept: DepartmentDetail; onSaved: () 
   }
 
   const displayLimit = summary
-    ? (isCustom ? (customLimit || '未设置') : `${summary.children_limit_sum_cents} (累加)`)
+    ? (isCustom ? (customLimit ? formatCents(Number(customLimit)) : '未设置') : `${formatCents(summary.children_limit_sum_cents)} (累加)`)
     : '加载中...'
 
   const budgetPct = summary && summary.monthly_budget_cents
@@ -398,17 +404,17 @@ function RootQuotaCard({ dept, onSaved }: { dept: DepartmentDetail; onSaved: () 
         <div className="flex gap-2">
           <div className="flex flex-1 items-center justify-between bg-[#F5F5F5] px-3 py-2" style={{ border: '1px solid #E8E8E8' }}>
             <span className="font-mono text-[9px] text-[#999]">今日消耗</span>
-            <span className="font-mono text-[10px] font-semibold text-[#1A1A1A]">{summary.today_total_used_cents} 分</span>
+            <span className="font-mono text-[10px] font-semibold text-[#1A1A1A]">{formatCents(summary.today_total_used_cents)}</span>
           </div>
           <div className="flex flex-1 items-center justify-between bg-[#F5F5F5] px-3 py-2" style={{ border: '1px solid #E8E8E8' }}>
             <span className="font-mono text-[9px] text-[#999]">本月消耗</span>
-            <span className="font-mono text-[10px] font-semibold text-[#1A1A1A]">{summary.month_total_used_cents} 分</span>
+            <span className="font-mono text-[10px] font-semibold text-[#1A1A1A]">{formatCents(summary.month_total_used_cents)}</span>
           </div>
         </div>
       )}
       <div className="flex items-center justify-between">
         <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">每日限额</span>
-        <span className="font-mono text-[10px] font-medium text-[#0A6B3A]">{displayLimit} 分</span>
+        <span className="font-mono text-[10px] font-medium text-[#0A6B3A]">{displayLimit}</span>
       </div>
       <div className="flex items-center justify-between">
         <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">自定义限额</span>
@@ -417,22 +423,22 @@ function RootQuotaCard({ dept, onSaved }: { dept: DepartmentDetail; onSaved: () 
         </button>
       </div>
       {!isCustom && summary && (
-        <p className="font-mono text-[9px] text-[#999]">默认使用子部门限额累加值 ({summary.children_limit_sum_cents} 分)。开启自定义后可手动设置更严格的总量控制。</p>
+        <p className="font-mono text-[9px] text-[#999]">默认使用子部门限额累加值 ({formatCents(summary.children_limit_sum_cents)})。开启自定义后可手动设置更严格的总量控制。</p>
       )}
       {isCustom && (
         <div className="flex items-center justify-between">
           <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">日限额</span>
           <div className="flex items-center gap-2 bg-[#F5F5F5] px-2.5 py-1.5" style={{ border: '1px solid #E8E8E8' }}>
-            <input type="number" value={customLimit} onChange={e => setCustomLimit(e.target.value)} min={0} className="w-24 bg-transparent font-mono text-[10px] text-[#1A1A1A] outline-none" />
-            <span className="font-mono text-[9px] text-[#999]">分</span>
+            <input type="number" value={customLimit} onChange={e => setCustomLimit(e.target.value)} min={0} step="0.01" className="w-24 bg-transparent font-mono text-[10px] text-[#1A1A1A] outline-none" />
+            <span className="font-mono text-[9px] text-[#999]">元</span>
           </div>
         </div>
       )}
       <div className="flex items-center justify-between pt-2" style={{ borderTop: '1px solid #E8E8E8' }}>
         <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">月度预算</span>
         <div className="flex items-center gap-2 bg-[#F5F5F5] px-2.5 py-1.5" style={{ border: '1px solid #E8E8E8' }}>
-          <input type="number" value={monthlyBudget} onChange={e => setMonthlyBudget(e.target.value)} min={0} className="w-24 bg-transparent font-mono text-[10px] text-[#1A1A1A] outline-none" placeholder="不填则不限" />
-          <span className="font-mono text-[9px] text-[#999]">分</span>
+          <input type="number" value={monthlyBudget} onChange={e => setMonthlyBudget(e.target.value)} min={0} step="0.01" className="w-24 bg-transparent font-mono text-[10px] text-[#1A1A1A] outline-none" placeholder="不填则不限" />
+          <span className="font-mono text-[9px] text-[#999]">元</span>
         </div>
       </div>
       {budgetPct != null && (
@@ -465,7 +471,7 @@ function DeptQuotaCard({ dept, onSaved }: { dept: DepartmentDetail; onSaved: () 
     api.get(`/departments/${dept.id}/quota-summary`).then(res => {
       const limit = res.data.custom_limit_cents
       setLimitEnabled(limit != null)
-      setLimitCents(limit != null ? String(limit) : '')
+      setLimitCents(limit != null ? String(limit / 100) : '')
     }).catch(() => {
       setLimitEnabled(dept.token_quota_enabled)
       setLimitCents('')
@@ -484,7 +490,7 @@ function DeptQuotaCard({ dept, onSaved }: { dept: DepartmentDetail; onSaved: () 
       }
       await api.put(`/departments/${dept.id}`, {
         token_quota_enabled: limitEnabled,
-        token_quota_per_day: limitEnabled ? (Number(limitCents) || null) : null,
+        token_quota_per_day: limitEnabled && limitCents ? Math.round(Number(limitCents) * 100) : null,
       })
       setMsg({ type: 'success', text: '配额已保存' })
       onSaved()
@@ -498,7 +504,7 @@ function DeptQuotaCard({ dept, onSaved }: { dept: DepartmentDetail; onSaved: () 
     api.get(`/departments/${dept.id}/quota-summary`).then(res => {
       const limit = res.data.custom_limit_cents
       setLimitEnabled(limit != null)
-      setLimitCents(limit != null ? String(limit) : '')
+      setLimitCents(limit != null ? String(limit / 100) : '')
     }).catch(() => {})
   }
 
@@ -519,8 +525,8 @@ function DeptQuotaCard({ dept, onSaved }: { dept: DepartmentDetail; onSaved: () 
         <div className="flex items-center justify-between">
           <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">每日限额</span>
           <div className="flex items-center gap-2 bg-[#F5F5F5] px-2.5 py-1.5" style={{ border: '1px solid #E8E8E8' }}>
-            <input type="number" value={limitCents} onChange={e => setLimitCents(e.target.value)} min={0} className="w-24 bg-transparent font-mono text-[10px] text-[#1A1A1A] outline-none" />
-            <span className="font-mono text-[9px] text-[#999]">分</span>
+            <input type="number" value={limitCents} onChange={e => setLimitCents(e.target.value)} min={0} step="0.01" className="w-24 bg-transparent font-mono text-[10px] text-[#1A1A1A] outline-none" />
+            <span className="font-mono text-[9px] text-[#999]">元</span>
           </div>
         </div>
       )}
@@ -812,8 +818,8 @@ export default function DepartmentsPage() {
               <div className="flex gap-3">
                 {[
                   { label: '成员数', value: String(detail.member_count), color: '#1A1A1A', border: '#E8E8E8' },
-                  { label: '每日消耗', value: quotaSummary ? `${quotaSummary.today_total_used_cents} 分` : '—', color: '#0A6B3A', border: '#0A6B3A40' },
-                  { label: '每日配额', value: quotaSummary ? (quotaSummary.custom_limit_cents != null ? `${quotaSummary.custom_limit_cents} 分` : (!detail.parent_id ? `${quotaSummary.children_limit_sum_cents} 分 (累加)` : '未设置')) : '—', color: '#1A1A1A', border: '#E8E8E8' },
+                  { label: '每日消耗', value: quotaSummary ? formatCents(quotaSummary.today_total_used_cents) : '—', color: '#0A6B3A', border: '#0A6B3A40' },
+                  { label: '每日配额', value: quotaSummary ? (quotaSummary.custom_limit_cents != null ? formatCents(quotaSummary.custom_limit_cents) : (!detail.parent_id ? `${formatCents(quotaSummary.children_limit_sum_cents)} (累加)` : '未设置')) : '—', color: '#1A1A1A', border: '#E8E8E8' },
                   { label: '模型白名单', value: whitelist.length > 0 ? `${whitelist.length} 个` : '全部', color: '#1A1A1A', border: '#E8E8E8' },
                 ].map(c => (
                   <div key={c.label} className="flex flex-1 flex-col gap-2 bg-white p-4" style={{ border: `1px solid ${c.border}` }}>
