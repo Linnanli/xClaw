@@ -106,14 +106,39 @@ export interface ClientStats {
 }
 
 // 告警
+export interface AlertRule {
+  id: string
+  name: string
+  description?: string
+  event_type: string
+  condition: Record<string, unknown>
+  severity: 'low' | 'medium' | 'high' | 'critical'
+  notify_channels: string[]
+  silence_minutes: number
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
 export interface AlertEvent {
   id: string
-  time: string
-  severity: 'low' | 'medium' | 'high' | 'critical'
+  rule_id?: string
   rule_name: string
+  event_type: string
+  severity: 'low' | 'medium' | 'high' | 'critical'
   trigger_detail: string
+  event_data?: Record<string, unknown>
   status: 'pending' | 'acknowledged' | 'in_progress' | 'closed'
+  resolved_note?: string
+  resolved_at?: string
   created_at: string
+}
+
+export interface AlertStats {
+  pending: number
+  in_progress: number
+  today: number
+  closed: number
 }
 
 // 对话

@@ -455,3 +455,71 @@ fn default_api_format() -> String {
 fn default_source() -> String {
     "admin".to_string()
 }
+
+// ============================================================================
+// 告警与通知系统
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateAlertRuleRequest {
+    pub name: String,
+    pub description: Option<String>,
+    pub event_type: String,
+    #[serde(default = "default_empty_json")]
+    pub condition: serde_json::Value,
+    pub severity: String,
+    #[serde(default)]
+    pub notify_channels: Vec<String>,
+    #[serde(default = "default_silence_minutes")]
+    pub silence_minutes: i32,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateAlertRuleRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub event_type: Option<String>,
+    pub condition: Option<serde_json::Value>,
+    pub severity: Option<String>,
+    pub notify_channels: Option<Vec<String>>,
+    pub silence_minutes: Option<i32>,
+    pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AlertEventQuery {
+    pub page: Option<i64>,
+    pub page_size: Option<i64>,
+    pub severity: Option<String>,
+    pub status: Option<String>,
+    pub search: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateAlertEventStatusRequest {
+    pub status: String,
+    pub note: Option<String>,
+}
+
+/// trigger_alert 的输入参数
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlertTrigger {
+    pub event_type: String,
+    pub severity: String,
+    pub detail: String,
+    pub event_data: Option<serde_json::Value>,
+}
+
+fn default_empty_json() -> serde_json::Value {
+    serde_json::json!({})
+}
+
+fn default_silence_minutes() -> i32 {
+    60
+}
+
+fn default_true() -> bool {
+    true
+}

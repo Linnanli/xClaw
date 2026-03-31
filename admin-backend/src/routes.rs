@@ -91,6 +91,13 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/model-configs/test-connection", post(test_model_connection))
         // 客户端模型列表（精简版，供 Desktop Client 拉取）
         .route("/api/client-models", get(get_client_models))
+        // 告警与通知 API
+        .route("/api/alert-rules", get(handlers::alerts::get_alert_rules).post(handlers::alerts::create_alert_rule))
+        .route("/api/alert-rules/{id}", put(handlers::alerts::update_alert_rule).delete(handlers::alerts::delete_alert_rule))
+        .route("/api/alerts", get(handlers::alerts::get_alert_events))
+        .route("/api/alerts/stats", get(handlers::alerts::get_alert_stats))
+        .route("/api/alerts/trigger", post(handlers::alerts::manual_trigger_alert))
+        .route("/api/alerts/{id}/status", put(handlers::alerts::update_alert_event_status))
         // 费用配额管理 API
         .route("/api/quota/check", post(handlers::quota::quota_check))
         .route("/api/quota/report-usage", post(handlers::quota::report_usage))
@@ -2553,11 +2560,22 @@ async fn get_dashboard_stats(
         .map_err(|e| Error::Database(e.to_string()))?
         .get(0);
 
+    // 未处理告警数（alert_events 表可能尚未创建，查询失败时返回 0）
+    let unhandled_alerts: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM alert_events WHERE status IN ('pending', 'in_progress')",
+            &[],
+        )
+        .await
+        .map(|r| r.get(0))
+        .unwrap_or(0);
+
     Ok(Json(json!({
         "total_users": total_users,
         "online_clients": online_clients,
         "dlp_blocked_today": dlp_blocked_today,
         "sensitive_ops_today": sensitive_ops_today,
+        "unhandled_alerts": unhandled_alerts,
     })))
 }
 
