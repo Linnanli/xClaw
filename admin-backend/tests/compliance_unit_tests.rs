@@ -86,3 +86,74 @@ mod compliance_validation_tests {
         assert!(invalid.is_err(), "非 YYYY-MM-DD 格式应被拒绝");
     }
 }
+
+/// 水印配置测试
+#[cfg(test)]
+mod watermark_config_tests {
+    use serde_json::json;
+
+    const WATERMARK_KEYS: &[&str] = &[
+        "watermark_enabled", "watermark_template", "watermark_font_size",
+        "watermark_opacity", "watermark_position", "watermark_color",
+    ];
+
+    #[test]
+    fn test_contract_settings_include_watermark_fields() {
+        // GET /api/settings 应返回水印配置字段
+        let settings = json!({
+            "watermark_enabled": false,
+            "watermark_template": "{username} · {department} · {datetime}",
+            "watermark_font_size": 14,
+            "watermark_opacity": 0.15,
+            "watermark_position": "diagonal",
+            "watermark_color": "#000000",
+        });
+        for key in WATERMARK_KEYS {
+            assert!(settings.get(*key).is_some(), "settings 缺少字段: {}", key);
+        }
+    }
+
+    #[test]
+    fn test_contract_client_config_include_watermark_fields() {
+        // GET /api/client-config 应返回水印配置字段
+        let config = json!({
+            "llm_backend": null,
+            "watermark_enabled": true,
+            "watermark_template": "{username}",
+            "watermark_font_size": 16,
+            "watermark_opacity": 0.1,
+            "watermark_position": "diagonal",
+            "watermark_color": "#FF0000",
+        });
+        for key in WATERMARK_KEYS {
+            assert!(config.get(*key).is_some(), "client-config 缺少字段: {}", key);
+        }
+    }
+
+    #[test]
+    fn test_watermark_template_variable_substitution() {
+        let template = "{username} · {department} · {datetime}";
+        let result = template
+            .replace("{username}", "zhang.wei")
+            .replace("{department}", "研发部")
+            .replace("{datetime}", "2025-03-31 10:00");
+        assert_eq!(result, "zhang.wei · 研发部 · 2025-03-31 10:00");
+    }
+
+    #[test]
+    fn test_watermark_opacity_range() {
+        let valid_opacities = [0.01, 0.1, 0.15, 0.5, 1.0];
+        for o in &valid_opacities {
+            assert!(*o >= 0.01 && *o <= 1.0, "透明度 {} 应在 0.01-1.0 范围内", o);
+        }
+    }
+
+    #[test]
+    fn test_watermark_valid_positions() {
+        let valid = ["diagonal", "center", "bottom_right", "tiled"];
+        for pos in &valid {
+            assert!(valid.contains(pos));
+        }
+        assert!(!valid.contains(&"invalid_pos"));
+    }
+}

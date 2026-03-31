@@ -65,6 +65,8 @@ const FRONTEND_INVOKED_COMMANDS: &[&str] = &[
     "test_model_connection",
     // ── 认证 ────────────────────────────────────────────────────
     "get_auth_token",
+    // ── 水印配置 ────────────────────────────────────────────────
+    "get_watermark_config",
 ];
 
 /// `all_tauri_commands!()` 宏中注册的所有命令名（必须与 lib.rs 保持同步）。
@@ -110,6 +112,8 @@ const REGISTERED_COMMANDS: &[&str] = &[
     "delete_custom_model",
     "test_model_connection",
     "get_auth_token",
+    // ── 水印配置 ────────────────────────────────────────────────
+    "get_watermark_config",
 ];
 
 #[test]

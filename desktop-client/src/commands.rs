@@ -33,3 +33,38 @@ pub async fn get_auth_token() -> Result<String> {
 
     Ok(token)
 }
+
+/// 获取水印配置（从 Admin Backend API 读取）。
+///
+/// 通过 HTTP 调用 `/api/settings` 接口，提取水印相关字段返回给前端。
+/// Admin Backend 不可用时返回默认值。
+#[tauri::command]
+pub async fn get_watermark_config() -> Result<serde_json::Value> {
+    let admin_url = std::env::var("ADMIN_BACKEND_URL")
+        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| Error::ConfigError(e.to_string()))?;
+
+    let mut request = client.get(format!("{}/api/settings", admin_url));
+    if let Ok(token) = std::env::var("ADMIN_AUTH_TOKEN") {
+        request = request.header("Authorization", format!("Bearer {}", token));
+    }
+
+    let response = request.send().await
+        .map_err(|e| Error::ConfigError(format!("Failed to fetch settings: {}", e)))?;
+
+    let settings: serde_json::Value = response.json().await
+        .map_err(|e| Error::ConfigError(format!("Failed to parse settings: {}", e)))?;
+
+    Ok(serde_json::json!({
+        "watermark_enabled": settings.get("watermark_enabled").and_then(|v| v.as_bool()).unwrap_or(false),
+        "watermark_template": settings.get("watermark_template").and_then(|v| v.as_str()).unwrap_or("{username} | {datetime}"),
+        "watermark_font_size": settings.get("watermark_font_size").and_then(|v| v.as_i64()).unwrap_or(16),
+        "watermark_opacity": settings.get("watermark_opacity").and_then(|v| v.as_f64()).unwrap_or(0.1),
+        "watermark_position": settings.get("watermark_position").and_then(|v| v.as_str()).unwrap_or("diagonal"),
+        "watermark_color": settings.get("watermark_color").and_then(|v| v.as_str()).unwrap_or("#000000"),
+    }))
+}

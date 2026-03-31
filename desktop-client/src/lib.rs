@@ -132,6 +132,8 @@ macro_rules! all_tauri_commands {
             desktop_client::ipc::test_model_connection,
             // ── 认证 ────────────────────────────────────────────
             desktop_client::commands::get_auth_token,
+            // ── 水印配置 ────────────────────────────────────────
+            desktop_client::commands::get_watermark_config,
         ]
     };
 }

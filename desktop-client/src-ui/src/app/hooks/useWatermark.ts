@@ -28,7 +28,7 @@ export function useWatermark() {
 
   const [loading, setLoading] = useState(true);
 
-  // 获取用户信息并生成水印文本
+  // 获取用户信息并生成水印文本，同时读取后台水印配置
   useEffect(() => {
     const loadUserInfo = async () => {
       try {
@@ -37,7 +37,23 @@ export function useWatermark() {
         // 尝试获取会话信息
         const sessionInfo = await sessionApi.getSessionInfo();
         
-        // 生成水印文本：用户ID + 当前时间
+        // 尝试从后台配置读取水印模板和样式
+        let template = '{username} | {datetime}';
+        let adminEnabled = true;
+        let adminOpacity = 0.1;
+        let adminFontSize = 16;
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const wm = await invoke<Record<string, unknown>>('get_watermark_config');
+          if (typeof wm.watermark_enabled === 'boolean') adminEnabled = wm.watermark_enabled;
+          if (typeof wm.watermark_template === 'string' && wm.watermark_template) template = wm.watermark_template;
+          if (typeof wm.watermark_opacity === 'number') adminOpacity = wm.watermark_opacity;
+          if (typeof wm.watermark_font_size === 'number') adminFontSize = wm.watermark_font_size;
+        } catch {
+          // 后台配置不可用时使用默认值
+        }
+        
+        // 用模板生成水印文本
         const now = new Date();
         const timeStr = now.toLocaleString('zh-CN', {
           year: 'numeric',
@@ -47,12 +63,19 @@ export function useWatermark() {
           minute: '2-digit',
         });
         
-        const watermarkText = `${sessionInfo.user_id} | ${timeStr}`;
+        const watermarkText = template
+          .replace('{username}', sessionInfo.user_id || 'unknown')
+          .replace('{department}', '')
+          .replace('{datetime}', timeStr);
         
-        setConfig(prev => ({
-          ...prev,
+        setConfig({
+          enabled: adminEnabled,
           text: watermarkText,
-        }));
+          opacity: adminOpacity,
+          fontSize: adminFontSize,
+          rotation: -20,
+          spacing: 200,
+        });
         
         tracing.info('Watermark initialized', { text: watermarkText });
       } catch (err) {
