@@ -114,6 +114,8 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 
 **用户故事：** 作为安全管理员，我希望配置和管理 DLP 规则，以防止敏感数据通过 AI 对话泄露。
 
+> **架构说明**：DLP 扫描在客户端执行（输入扫描在发送前，输出扫描在 LLM 返回后），后台下发规则配置。客户端通过 `SafetyBridge`（链式处理：SafetyLayer 密钥检测 → DLP PII 格式保留脱敏）执行扫描，支持从 Admin Backend 热更新规则（`POST /api/dlp-rules`）。
+
 #### 验收标准
 
 1. `[已实现]` THE Admin_Platform SHALL 展示 DLP 规则列表，包含规则名称、模式、严重级别、类别、类型和启用状态
@@ -124,9 +126,12 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 6. `[已实现]` THE Admin_Platform SHALL 支持 DLP 规则的导入和导出功能
 7. `[已实现]` THE Admin_Platform SHALL 展示敏感词典列表，支持创建、编辑和删除词典及其关键词
 8. `[已实现]` IF DLP_Engine 扫描超时, THEN THE DLP_Engine SHALL 根据系统配置的故障模式（开放或安全）决定是否放行消息
-9. `[新增]` THE DLP_Engine SHALL 支持对 AI 对话的输入和输出双向扫描
-10. `[新增]` WHEN DLP_Engine 检测到严重级别为 critical 的违规, THE Alert_Service SHALL 立即生成高优先级告警
-11. `[新增]` THE Admin_Platform SHALL 展示 DLP 拦截事件的详细记录，包含触发规则、原始内容摘要、用户和时间
+9. `[已实现]` THE Desktop_Client SHALL 在用户输入发送前执行 DLP 扫描（`SafetyBridge::scan_user_input`），检测到密钥时故障安全拒绝，检测到 PII 时格式保留脱敏（如 `330***618`）
+10. `[已实现]` THE Desktop_Client SHALL 在 LLM 返回后执行防提示词攻击扫描（`SafetyBridge::scan_tool_output`），包含截断、注入检测和密钥清理
+11. `[已实现]` WHEN Admin 发布新 DLP 规则, THE Desktop_Client SHALL 通过 `sync_dlp_rules_from_admin` 命令从 `/api/dlp-rules` 拉取规则并热更新 DLP 检测器，无需重启客户端
+12. `[新增]` WHEN DLP_Engine 检测到严重级别为 critical 的违规, THE Alert_Service SHALL 立即生成高优先级告警
+13. `[新增]` THE Admin_Platform SHALL 展示 DLP 拦截事件的详细记录，包含触发规则、原始内容摘要、用户和时间
+14. `[未来需求]` THE DLP_Engine SHOULD 考虑使用成熟的 DLP 库以支持文件扫描和更高性能的大规模文本扫描
 
 ---
 
@@ -287,42 +292,47 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 
 ---
 
-### 需求 15：告警与通知系统 `[新增]`
+### 需求 15：告警与通知系统 `[已实现 + 扩展]`
 
 **用户故事：** 作为安全管理员，我希望系统能自动检测安全事件并通过多渠道发送告警通知，以便及时响应安全威胁。
 
+> **架构说明**：告警规则在后台配置，包含触发条件（如 DLP 拦截次数阈值、费用超限百分比等）、严重级别和通知渠道。告警触发时生成告警记录并通过配置的 Notification_Channel 发送通知。费用预警的接收方先使用系统管理员。
+
 #### 验收标准
 
-1. `[新增]` THE Admin_Platform SHALL 展示告警规则列表，包含规则名称、触发条件、严重级别、通知渠道和启用状态
-2. `[新增]` WHEN Admin 创建告警规则, THE Admin_Platform SHALL 允许配置触发条件（DLP 拦截次数阈值、异常登录、配额超限、模型服务异常等）、严重级别和通知渠道
-3. `[新增]` WHEN 安全事件匹配告警规则的触发条件, THE Alert_Service SHALL 生成告警记录并通过配置的 Notification_Channel 发送通知
+1. `[已实现]` THE Admin_Platform SHALL 展示告警规则列表，包含规则名称、触发条件、严重级别、通知渠道和启用状态（后端 API 已实现，前端 UI 待开发）
+2. `[已实现]` WHEN Admin 创建告警规则, THE Admin_Platform SHALL 允许配置触发条件（DLP 拦截次数阈值、异常登录、配额超限百分比、模型服务异常等）、严重级别和通知渠道。告警触发阈值在新建规则时可配置，不是硬编码
+3. `[已实现]` WHEN 安全事件匹配告警规则的触发条件, THE Alert_Service SHALL 生成告警记录并通过配置的 Notification_Channel 发送通知（后端逻辑已实现）
 4. `[新增]` THE Alert_Service SHALL 支持邮件、企业微信 Webhook、钉钉 Webhook 和飞书 Webhook 四种通知渠道
-5. `[新增]` THE Admin_Platform SHALL 展示告警事件列表，包含告警时间、规则名称、严重级别、触发详情和处理状态
+5. `[已实现]` THE Admin_Platform SHALL 展示告警事件列表，包含告警时间、规则名称、严重级别、触发详情和处理状态（后端 API 已实现，前端 UI 待开发）
 6. `[新增]` WHEN Admin 处理告警事件, THE Admin_Platform SHALL 允许标记为"已确认"、"处理中"或"已关闭"，并记录处理备注
 7. `[新增]` THE Alert_Service SHALL 对同一规则在配置的静默期内仅发送一次通知，避免告警风暴
 8. `[新增]` THE Admin_Platform SHALL 在仪表盘和导航栏展示未处理告警的数量徽标
 9. `[新增]` IF Alert_Service 发送通知失败, THEN THE Alert_Service SHALL 记录发送失败日志并在下一个周期重试，重试 3 次后标记为发送失败
+10. `[新增]` WHEN 月度费用达到预算的 90%, THE Alert_Service SHALL 向系统管理员发送费用预警通知
 
 ---
 
-### 需求 16：AI 对话审计 `[新增]`
+### 需求 16：AI 对话审计 `[部分实现 + 扩展]`
 
 **用户故事：** 作为安全管理员，我希望审计所有员工与 AI 助手的对话记录，以确保 AI 使用符合企业安全策略。
 
-> 架构决策：IronClaw 采用客户端直连 LLM API 模式，对话内容不经过后端。因此对话数据通过客户端批量上报机制（复用已有的 `POST /api/client-reports`，新增 `report_type = "conversation"`）写入后端。客户端本地先存对话，定期（或心跳时）批量上报，网络中断时不丢数据。后端接收后解析 JSON payload 写入 conversations + conversation_messages 表。
+> **架构决策**：IronClaw 采用客户端直连 LLM API 模式，对话内容不经过后端。因此对话数据通过客户端批量上报机制（复用已有的 `POST /api/client-reports`，新增 `report_type = "conversation"`）写入后端。客户端本地先存对话，定期（或心跳时）批量上报，网络中断时不丢数据。后端接收后解析 JSON payload 写入 conversations + conversation_messages 表。
+>
+> **当前状态**：后端已实现 conversations 表结构（migration 017）和基础 handler，客户端已有 `DataReporter` 框架但缺少 `ClientReport::Conversation` 类型和对话上报逻辑。
 
 #### 验收标准
 
-1. `[新增]` THE Admin_Platform SHALL 展示对话记录列表，包含用户、对话主题、消息数、Token 消耗、开始时间和 DLP 标记状态
-2. `[新增]` WHEN Admin 点击对话记录, THE Conversation_Service SHALL 展示完整的对话消息流，包含用户输入和 AI 回复
-3. `[新增]` THE Admin_Platform SHALL 支持按用户、时间范围、DLP 标记状态和关键词搜索对话记录
+1. `[已实现]` THE Admin_Platform SHALL 展示对话记录列表，包含用户、对话主题、消息数、Token 消耗、开始时间和 DLP 标记状态（后端 API 已实现，前端 UI 待开发）
+2. `[已实现]` WHEN Admin 点击对话记录, THE Conversation_Service SHALL 展示完整的对话消息流，包含用户输入和 AI 回复（后端 API 已实现，前端 UI 待开发）
+3. `[已实现]` THE Admin_Platform SHALL 支持按用户、时间范围、DLP 标记状态和关键词搜索对话记录（后端 API 已实现，前端 UI 待开发）
 4. `[新增]` WHEN DLP_Engine 在对话中检测到敏感内容, THE Conversation_Service SHALL 在对话记录上标记 DLP 告警标签
 5. `[新增]` THE Conversation_Service SHALL 记录每条消息的 Token 消耗量和使用的模型信息
 6. `[新增]` THE Admin_Platform SHALL 支持导出指定时间范围的对话审计报告
 7. `[新增]` THE Conversation_Service SHALL 按系统配置的保留策略自动归档或清理过期对话记录
-8. `[新增]` WHEN Desktop_Client 完成一轮对话, THE Desktop_Client SHALL 将对话摘要和消息记录通过 `POST /api/client-reports`（report_type="conversation"）批量上报至后端，使用 client_conversation_id 做幂等去重
-9. `[新增]` THE Conversation_Service SHALL 解析 client-reports 中 report_type="conversation" 的 payload，写入 conversations 和 conversation_messages 表
-10. `[新增]` THE Admin_Platform SHALL 在对话列表 API 中仅返回对话摘要（主题、消息数、Token 消耗），不返回完整消息内容；完整消息仅在详情 API 中返回
+8. `[待实现]` WHEN Desktop_Client 完成一轮对话, THE Desktop_Client SHALL 将对话摘要和消息记录通过 `POST /api/client-reports`（report_type="conversation"）批量上报至后端，使用 client_conversation_id 做幂等去重。需要在 `DataReporter` 中新增 `ClientReport::Conversation` 类型，并在对话结束时调用 `reporter.enqueue()`
+9. `[已实现]` THE Conversation_Service SHALL 解析 client-reports 中 report_type="conversation" 的 payload，写入 conversations 和 conversation_messages 表（后端 handler 已实现）
+10. `[已实现]` THE Admin_Platform SHALL 在对话列表 API 中仅返回对话摘要（主题、消息数、Token 消耗），不返回完整消息内容；完整消息仅在详情 API 中返回
 
 ---
 
@@ -398,19 +408,24 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 
 ---
 
-### 需求 21：操作审批流 `[新增]`
+### 需求 21：操作审批流 `[部分实现 + 扩展]`
 
 **用户故事：** 作为管理员，我希望对高风险操作实施审批流程，以确保关键操作经过授权。
 
+> **架构说明**：IronClaw 的审批机制基于消息系统。当工具需要审批时，Agent 发送 `ApprovalNeeded` 事件到前端，用户通过 `!approve <request_id>` 或 `!deny <request_id>` 消息响应，Agent 的 SubmissionParser 解析后执行审批操作。审批流在对话中进行，等待审批时任务保持运行中状态，审批通过后任务自动继续执行。
+>
+> **当前状态**：客户端已实现审批命令（`ic_approve_tool`, `ic_deny_tool`）和 `ApprovalNeeded` 事件，后端已有 approvals 表结构（migration 018）和基础 handler。需要补充：审批工单持久化、超时催办、审批历史查询等管理端功能。
+
 #### 验收标准
 
-1. `[新增]` WHEN Employee 触发配置为需要审批的敏感操作, THE Admin_Platform SHALL 创建审批工单并通知指定审批角色
-2. `[新增]` THE Admin_Platform SHALL 展示待审批工单列表，包含申请人、操作类型、申请时间和当前状态
-3. `[新增]` WHEN Admin 审批工单, THE Admin_Platform SHALL 允许选择"批准"或"拒绝"并填写审批意见
-4. `[新增]` WHEN 工单被批准, THE Admin_Platform SHALL 允许申请人在有效期内执行该操作
-5. `[新增]` WHEN 工单被拒绝, THE Admin_Platform SHALL 通知申请人并记录拒绝原因
+1. `[已实现]` WHEN Desktop_Client 中的工具需要审批, THE Agent SHALL 发送 `ApprovalNeeded` 事件到前端，包含 request_id、tool_name 和 description
+2. `[已实现]` WHEN Employee 在对话中批准或拒绝操作, THE Desktop_Client SHALL 通过 `ic_approve_tool` 或 `ic_deny_tool` 命令发送格式化的审批消息（`!approve <request_id>` 或 `!deny <request_id>`）到 Agent
+3. `[已实现]` WHEN 审批消息到达 Agent, THE Agent 的 SubmissionParser SHALL 解析审批指令并执行对应操作，审批通过后任务自动继续执行
+4. `[已实现]` THE Admin_Platform SHALL 展示审批记录列表，包含申请人、工具名称、申请时间、审批状态和审批人（后端 API 已实现，前端 UI 待开发）
+5. `[新增]` WHEN Admin 在管理端审批工单, THE Admin_Platform SHALL 允许选择"批准"或"拒绝"并填写审批意见，审批结果通过 WebSocket/SSE 推送到客户端
 6. `[新增]` IF 审批工单在 24 小时内未处理, THEN THE Alert_Service SHALL 向审批人发送催办通知
 7. `[新增]` THE Audit_Service SHALL 记录审批流程的完整生命周期，包含申请、审批和执行环节
+8. `[新增]` THE Admin_Platform SHALL 支持按申请人、工具类型、审批状态和时间范围筛选审批记录
 
 ---
 
@@ -428,4 +443,50 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 6. `[新增]` THE Admin_Platform SHALL 确保 API Key、密码等敏感字段在日志、错误响应和网络传输中不以明文形式出现
 7. `[新增]` THE Auth_Service SHALL 支持管理员配置会话超时时间，超时后自动注销
 8. `[新增]` THE Audit_Service SHALL 记录所有认证失败事件，包含来源 IP、尝试的用户名和失败原因
+
+---
+
+## 附录：客户端直连架构的安全边界 `[低优先级 - 未来改进]`
+
+### 背景
+
+IronClaw 采用客户端直连 LLM API 模式（后台下发配置，客户端直连 LLM，客户端批量上报数据），这种架构在降低后端负载和提升响应速度的同时，也引入了一些安全边界问题。
+
+### 已知安全边界
+
+1. **API Key 暴露风险**
+   - 现状：LLM API Key 通过客户端配置下发，存储在客户端本地
+   - 风险：恶意用户可能提取 API Key 用于非授权调用
+   - 缓解措施：使用客户端加密存储、定期轮换 API Key、监控异常调用模式
+
+2. **配额绕过风险**
+   - 现状：配额预检在客户端执行，客户端可能被篡改绕过检查
+   - 风险：恶意用户可能绕过配额限制无限调用 LLM
+   - 缓解措施：后端通过上报数据事后审计、异常检测告警、账户封禁机制
+
+3. **DLP 规则绕过风险**
+   - 现状：DLP 扫描在客户端执行，客户端可能被篡改禁用 DLP
+   - 风险：恶意用户可能绕过 DLP 检查发送敏感数据
+   - 缓解措施：后端通过对话审计事后检测、DLP 事件上报监控、异常行为告警
+
+4. **对话内容完整性风险**
+   - 现状：对话内容由客户端批量上报，客户端可能篡改或不上报
+   - 风险：审计日志可能不完整或被篡改
+   - 缓解措施：客户端签名上报数据、后端验证签名、异常检测（如长时间未上报）
+
+### 未来改进方向（低优先级）
+
+1. **混合架构**：关键操作（如高价值模型调用、敏感数据处理）通过后端代理，普通操作保持客户端直连
+2. **零知识证明**：客户端生成操作证明，后端验证而不需要看到原始数据
+3. **可信执行环境（TEE）**：在支持的平台上使用 TEE 保护 API Key 和 DLP 规则
+4. **区块链审计**：将关键审计日志写入不可篡改的区块链
+
+### 当前优先级
+
+这些安全边界问题在政企场景中需要关注，但考虑到：
+- 客户端部署在企业内网，物理隔离降低了攻击面
+- 员工设备通常有 MDM 管理，篡改难度较高
+- 事后审计和异常检测可以发现大部分违规行为
+
+因此将这些改进标记为**低优先级**，优先完成核心功能和已知高优先级需求。在产品成熟后，根据客户反馈和实际安全事件再决定是否投入资源改进。
 
