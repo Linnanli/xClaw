@@ -2444,8 +2444,14 @@ async fn post_client_reports(
             match serde_json::from_value::<crate::models::ConversationReportPayload>(report.data.clone()) {
                 Ok(conv_payload) => {
                     match handlers::conversations::ingest_conversation(&client, &conv_payload).await {
-                        Ok(true) => { inserted += 1; }
-                        Ok(false) => { /* 幂等跳过 */ }
+                        Ok(Some(summary)) => {
+                            inserted += 1;
+                            // 异步触发费用上报，不阻塞响应
+                            let pool = state.db_pool.clone();
+                            let user_id = conv_payload.user_id;
+                            tokio::spawn(report_conversation_usage(pool, user_id, summary));
+                        }
+                        Ok(None) => { /* 幂等跳过 */ }
                         Err(e) => { tracing::warn!(error = %e, "Failed to ingest conversation"); }
                     }
                 }
@@ -2479,6 +2485,25 @@ async fn post_client_reports(
 // ============================================================================
 // 辅助函数
 // ============================================================================
+
+/// 异步上报对话中各模型的 Token 消耗（由 post_client_reports 在 tokio::spawn 中调用）。
+async fn report_conversation_usage(
+    pool: deadpool_postgres::Pool,
+    user_id: uuid::Uuid,
+    summary: handlers::conversations::TokenSummary,
+) {
+    for (model_id, input_tokens, output_tokens) in summary.by_model {
+        let req = handlers::quota::UsageReportRequest {
+            user_id,
+            model_id,
+            input_tokens,
+            output_tokens,
+        };
+        if let Err(e) = handlers::quota::report_usage_internal(&pool, req).await {
+            tracing::warn!(error = %e, "Failed to report usage from conversation");
+        }
+    }
+}
 
 /// API Key 脱敏：保留前 4 位，其余替换为 ****
 fn mask_api_key(key: &str) -> String {

@@ -123,7 +123,18 @@ pub async fn report_usage(
     State(state): State<AppState>,
     Json(payload): Json<UsageReportRequest>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let cost_cents = report_usage_internal(&state.db_pool, payload).await?;
+    Ok(Json(json!({ "cost_cents": cost_cents })))
+}
+
+/// 内部费用上报逻辑，供 HTTP handler 和对话摄取后的异步触发共用。
+///
+/// 返回计算出的费用（分）。
+pub async fn report_usage_internal(
+    pool: &deadpool_postgres::Pool,
+    payload: UsageReportRequest,
+) -> Result<i32> {
+    let client = pool.get().await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let dept_id = query_user_department(&client, payload.user_id).await?;
@@ -140,17 +151,13 @@ pub async fn report_usage(
 
     // 异步检查费用预警（不阻塞响应，失败静默）
     if let Some(did) = dept_id {
-        let pool = state.db_pool.clone();
+        let pool = pool.clone();
         tokio::spawn(async move {
             let _ = check_quota_warning(&pool, did).await;
         });
     }
 
-    Ok(Json(json!({
-        "cost_cents": cost_cents,
-        "input_tokens": payload.input_tokens,
-        "output_tokens": payload.output_tokens,
-    })))
+    Ok(cost_cents)
 }
 
 // ============================================================================

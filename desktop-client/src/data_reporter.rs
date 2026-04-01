@@ -73,6 +73,53 @@ pub enum ClientReport {
         uptime_secs: u64,
         active_extensions: Vec<String>,
     },
+
+    /// 对话记录：AI 对话审计。
+    ///
+    /// 对话结束时上报，包含完整的消息流和 Token 消耗。
+    /// 后端用于对话审计和费用统计。
+    ///
+    /// 注意：后端会从 messages 中提取 Token 信息并自动调用费用上报接口，
+    /// 因此客户端无需单独调用 `report_usage_to_admin()`。
+    #[serde(rename = "conversation")]
+    Conversation {
+        /// 客户端生成的对话 ID（用于幂等去重）
+        client_conversation_id: String,
+        /// 用户 ID
+        user_id: String,
+        /// 对话主题/标题
+        #[serde(skip_serializing_if = "Option::is_none")]
+        topic: Option<String>,
+        /// 使用的模型 ID
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model_id: Option<String>,
+        /// 是否被 DLP 标记
+        #[serde(skip_serializing_if = "Option::is_none")]
+        dlp_flagged: Option<bool>,
+        /// DLP 详情
+        #[serde(skip_serializing_if = "Option::is_none")]
+        dlp_details: Option<String>,
+        /// 消息列表
+        messages: Vec<ConversationMessage>,
+    },
+}
+
+/// 对话消息。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationMessage {
+    /// 角色：user / assistant / system
+    pub role: String,
+    /// 消息内容
+    pub content: String,
+    /// 使用的模型 ID（仅 assistant 消息有值）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    /// 输入 Token 数（仅 assistant 消息有值）
+    #[serde(default)]
+    pub input_tokens: i32,
+    /// 输出 Token 数（仅 assistant 消息有值）
+    #[serde(default)]
+    pub output_tokens: i32,
 }
 
 /// 数据上报器。
@@ -153,6 +200,16 @@ impl DataReporter {
             .lock()
             .map(|q| q.len())
             .unwrap_or(0)
+    }
+
+    /// 取出队列中所有事件（仅用于测试）。
+    #[cfg(test)]
+    pub fn drain_for_test(&self) -> Vec<ClientReport> {
+        let mut queue = match self.queue.lock() {
+            Ok(q) => q,
+            Err(p) => p.into_inner(),
+        };
+        std::mem::take(&mut *queue)
     }
 
     /// 执行一次批量上报。

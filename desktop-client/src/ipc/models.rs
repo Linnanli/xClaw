@@ -347,17 +347,22 @@ async fn query_provider_models(engine: &EngineState) -> Vec<ModelConfig> {
         .collect()
 }
 
-async fn fetch_admin_models(_engine: &EngineState) -> Result<Vec<ModelConfig>, String> {
+async fn fetch_admin_models(engine: &EngineState) -> Result<Vec<ModelConfig>, String> {
     // 从环境变量获取 admin backend URL
     let admin_url = std::env::var("ADMIN_BACKEND_URL")
         .unwrap_or_else(|_| "http://localhost:3000".to_string());
+
+    // 获取当前用户 ID，用于部门白名单过滤
+    let state = engine.get().map_err(|e| format!("引擎未就绪: {}", e))?;
+    let user_id = &state.owner_id;
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
 
-    let url = format!("{}/api/client-models", admin_url);
+    // 传递 user_id 参数，后端根据用户所属部门的模型白名单过滤
+    let url = format!("{}/api/client-models?user_id={}", admin_url, user_id);
     let response = client
         .get(&url)
         .send()

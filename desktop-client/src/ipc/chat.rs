@@ -390,3 +390,61 @@ async fn quota_precheck(state: &crate::state::AppState) -> Result<(), String> {
 
     Ok(())
 }
+
+// ── 费用上报 ─────────────────────────────────────────────────────
+
+/// 向 Admin Backend 上报 LLM 调用的 Token 消耗。
+///
+/// 上报失败不阻塞主流程，仅记录警告日志。
+/// 后端根据模型单价计算实际费用并写入 usage_records 表。
+pub async fn report_usage_to_admin(
+    state: &crate::state::AppState,
+    model_id: &str,
+    input_tokens: u32,
+    output_tokens: u32,
+) {
+    let admin_url = std::env::var("ADMIN_API_URL").unwrap_or_default();
+    if admin_url.is_empty() {
+        return; // 未配置后台，跳过上报
+    }
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("创建 HTTP 客户端失败: {}", e);
+            return;
+        }
+    };
+
+    let url = format!("{}/api/quota/report-usage", admin_url);
+    let payload = serde_json::json!({
+        "user_id": state.owner_id,
+        "model_id": model_id,
+        "input_tokens": input_tokens as i64,
+        "output_tokens": output_tokens as i64,
+    });
+
+    match client.post(&url).json(&payload).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            tracing::debug!(
+                model = %model_id,
+                input = input_tokens,
+                output = output_tokens,
+                "费用上报成功"
+            );
+        }
+        Ok(resp) => {
+            tracing::warn!(
+                status = %resp.status(),
+                "费用上报失败"
+            );
+        }
+        Err(e) => {
+            tracing::warn!("费用上报请求失败: {}", e);
+        }
+    }
+}
+

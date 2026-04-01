@@ -19,6 +19,7 @@ pub mod engine;
 pub mod ipc;
 pub mod admin_sync;
 pub mod data_reporter;
+pub mod conversation_tracker;
 pub mod model_switch;
 
 // ── 测试模块（仅在测试时编译）──────────────────────────────────────

@@ -156,12 +156,14 @@ pub async fn get_conversation_stats(
 
 use crate::models::ConversationReportPayload;
 
-/// 处理 report_type="conversation" 的上报数据
-/// 由 post_client_reports 调用，幂等：client_conversation_id 重复时跳过
+/// 处理 report_type="conversation" 的上报数据。
+///
+/// 由 post_client_reports 调用，幂等：client_conversation_id 重复时跳过。
+/// 写入成功后，返回 assistant 消息的 Token 汇总，供调用方触发费用上报。
 pub async fn ingest_conversation(
     client: &deadpool_postgres::Object,
     payload: &ConversationReportPayload,
-) -> std::result::Result<bool, String> {
+) -> std::result::Result<Option<TokenSummary>, String> {
     // 幂等检查
     let existing = client
         .query_opt(
@@ -172,7 +174,7 @@ pub async fn ingest_conversation(
         .map_err(|e| e.to_string())?;
 
     if existing.is_some() {
-        return Ok(false); // 已存在，跳过
+        return Ok(None); // 已存在，跳过
     }
 
     let total_tokens: i32 = payload.messages.iter()
@@ -216,7 +218,41 @@ pub async fn ingest_conversation(
             .map_err(|e| e.to_string())?;
     }
 
-    Ok(true)
+    // 汇总 assistant 消息的 Token，供调用方触发费用上报
+    let summary = aggregate_assistant_tokens(payload);
+    Ok(Some(summary))
+}
+
+/// assistant 消息的 Token 汇总（按模型分组）。
+#[derive(Debug)]
+pub struct TokenSummary {
+    /// (model_id, input_tokens, output_tokens)
+    pub by_model: Vec<(String, i32, i32)>,
+}
+
+/// 将 assistant 消息的 Token 按模型 ID 汇总。
+fn aggregate_assistant_tokens(payload: &ConversationReportPayload) -> TokenSummary {
+    use std::collections::HashMap;
+
+    let mut map: HashMap<String, (i32, i32)> = HashMap::new();
+    let fallback_model = payload.model_id.clone().unwrap_or_default();
+
+    for msg in &payload.messages {
+        if msg.role != "assistant" {
+            continue;
+        }
+        let model = msg.model_id.as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&fallback_model)
+            .to_string();
+        let entry = map.entry(model).or_default();
+        entry.0 += msg.input_tokens;
+        entry.1 += msg.output_tokens;
+    }
+
+    TokenSummary {
+        by_model: map.into_iter().map(|(m, (i, o))| (m, i, o)).collect(),
+    }
 }
 
 // ============================================================================

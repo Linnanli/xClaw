@@ -20,8 +20,11 @@ use ironclaw::channels::{
 };
 use ironclaw::error::ChannelError;
 use serde::Serialize;
+use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, Mutex};
+
+use crate::conversation_tracker::ConversationTracker;
 
 // ---------------------------------------------------------------------------
 // ChatEvent — 前端接收的聊天事件
@@ -112,6 +115,8 @@ pub struct TauriChannel {
     incoming_tx: mpsc::Sender<IncomingMessage>,
     /// `start()` 只能调用一次，取走 receiver。
     incoming_rx: Mutex<Option<mpsc::Receiver<IncomingMessage>>>,
+    /// 对话追踪器，用于收集 Token 消耗并在对话结束时上报。
+    pub conversation_tracker: Option<Arc<ConversationTracker>>,
 }
 
 impl TauriChannel {
@@ -129,7 +134,13 @@ impl TauriChannel {
             app_handle,
             incoming_tx: tx,
             incoming_rx: Mutex::new(Some(rx)),
+            conversation_tracker: None,
         }
+    }
+
+    /// 注入对话追踪器（引擎启动后调用）。
+    pub fn set_conversation_tracker(&mut self, tracker: Arc<ConversationTracker>) {
+        self.conversation_tracker = Some(tracker);
     }
 
     /// 获取消息发送端。
@@ -230,6 +241,8 @@ impl TauriChannel {
             StatusUpdate::Suggestions { suggestions } => ChatEvent::Suggestions {
                 suggestions: suggestions.clone(),
             },
+            // TokenUsage 由 send_status() 拦截处理，不会到达此处
+            StatusUpdate::TokenUsage { .. } => unreachable!("TokenUsage is handled in send_status"),
         }
     }
 }
@@ -270,10 +283,17 @@ impl Channel for TauriChannel {
         msg: &IncomingMessage,
         response: OutgoingResponse,
     ) -> Result<(), ChannelError> {
+        let thread_id = msg.thread_id.clone().unwrap_or_default();
+
+        // 记录 assistant 消息到对话追踪器（Token 数在后续 TokenUsage 事件中更新）
+        if let Some(tracker) = &self.conversation_tracker {
+            tracker.record_assistant_message(&thread_id, &response.content, None, 0, 0);
+        }
+
         let event = ChatEvent::Response {
             message_id: msg.id.to_string(),
             content: response.content,
-            thread_id: msg.thread_id.clone().unwrap_or_default(),
+            thread_id,
         };
         self.emit_event(&event)
     }
@@ -281,8 +301,20 @@ impl Channel for TauriChannel {
     async fn send_status(
         &self,
         status: StatusUpdate,
-        _metadata: &serde_json::Value,
+        metadata: &serde_json::Value,
     ) -> Result<(), ChannelError> {
+        // TokenUsage 不推送到前端，只更新对话追踪器
+        if let StatusUpdate::TokenUsage { ref model, input_tokens, output_tokens } = status {
+            if let Some(tracker) = &self.conversation_tracker {
+                let thread_id = metadata
+                    .get("notify_thread_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                tracker.update_last_assistant_tokens(thread_id, model, input_tokens as i32, output_tokens as i32);
+            }
+            return Ok(());
+        }
+
         let event = Self::status_to_event(&status);
         self.emit_event(&event)
     }
@@ -370,6 +402,11 @@ mod tests {
             },
             StatusUpdate::Suggestions {
                 suggestions: vec!["try this".into()],
+            },
+            StatusUpdate::TokenUsage {
+                model: "gpt-4o".into(),
+                input_tokens: 100,
+                output_tokens: 50,
             },
         ];
 
