@@ -162,3 +162,62 @@ mod alert_silence_period_tests {
         assert!(!in_silence, "静默期为 0 应始终发送通知");
     }
 }
+
+#[cfg(test)]
+mod alert_field_validation_tests {
+    const VALID_EVENT_TYPES: &[&str] = &[
+        "dlp_violation",
+        "quota_exceeded",
+        "model_error",
+        "abnormal_login",
+        "approval_timeout",
+    ];
+
+    const VALID_SEVERITIES: &[&str] = &["low", "medium", "high", "critical"];
+
+    #[test]
+    fn test_validate_event_type_valid() {
+        for et in VALID_EVENT_TYPES {
+            assert!(
+                VALID_EVENT_TYPES.contains(et),
+                "合法事件类型 {} 应通过验证",
+                et
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_event_type_invalid() {
+        let invalid_types = ["invalid_type", "unknown", "", "DLP_VIOLATION", "dlp violation"];
+        for et in &invalid_types {
+            assert!(
+                !VALID_EVENT_TYPES.contains(et),
+                "非法事件类型 '{}' 应返回错误",
+                et
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_severity_valid() {
+        for sev in VALID_SEVERITIES {
+            assert!(
+                VALID_SEVERITIES.contains(sev),
+                "合法严重级别 {} 应通过验证",
+                sev
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_severity_invalid() {
+        let invalid_severities = ["extreme", "urgent", "", "HIGH", "super_critical"];
+        for sev in &invalid_severities {
+            assert!(
+                !VALID_SEVERITIES.contains(sev),
+                "非法严重级别 '{}' 应返回错误",
+                sev
+            );
+        }
+    }
+}

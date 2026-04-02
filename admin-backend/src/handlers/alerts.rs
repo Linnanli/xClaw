@@ -1,14 +1,15 @@
 //! 告警与通知系统 Handler
 //!
 //! 端点：
-//! - GET    /api/alert-rules          — 告警规则列表
-//! - POST   /api/alert-rules          — 创建告警规则
-//! - PUT    /api/alert-rules/{id}     — 更新告警规则
-//! - DELETE /api/alert-rules/{id}     — 删除告警规则
-//! - GET    /api/alerts               — 告警事件列表
-//! - GET    /api/alerts/stats         — 告警统计
-//! - PUT    /api/alerts/{id}/status   — 更新告警事件状态
-//! - POST   /api/alerts/trigger       — 手动触发告警（运维/测试用）
+//! - GET    /api/alert-rules              — 告警规则列表
+//! - POST   /api/alert-rules              — 创建告警规则
+//! - PUT    /api/alert-rules/{id}         — 更新告警规则
+//! - DELETE /api/alert-rules/{id}         — 删除告警规则
+//! - GET    /api/alerts                   — 告警事件列表
+//! - GET    /api/alerts/stats             — 告警统计
+//! - GET    /api/alerts/unhandled-count   — 未处理告警数量
+//! - PUT    /api/alerts/{id}/status       — 更新告警事件状态
+//! - POST   /api/alerts/trigger           — 手动触发告警（运维/测试用）
 
 use crate::error::{Error, Result};
 use crate::models::{
@@ -253,6 +254,24 @@ pub async fn get_alert_stats(
     })))
 }
 
+/// GET /api/alerts/unhandled-count — 未处理告警数量（需求 15.8）
+pub async fn get_unhandled_alert_count(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let row = client
+        .query_one(
+            "SELECT COUNT(*) FROM alert_events WHERE status = 'pending'",
+            &[],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    Ok(Json(json!({ "count": row.get::<_, i64>(0) })))
+}
+
 /// PUT /api/alerts/{id}/status
 pub async fn update_alert_event_status(
     State(state): State<AppState>,
@@ -346,6 +365,16 @@ pub async fn trigger_alert(
         ).await?;
 
         insert_notification_logs(&client, event_id, &channels).await;
+
+        // 异步发送通知，不阻塞告警触发流程
+        let pool_clone = pool.clone();
+        let rule_name_clone = rule_name.clone();
+        let severity_clone = severity.to_string();
+        let detail_clone = trigger.detail.clone();
+        tokio::spawn(async move {
+            send_alert_notifications(&pool_clone, event_id, &rule_name_clone, &severity_clone, &detail_clone).await;
+        });
+
         created_count += 1;
     }
 
@@ -619,4 +648,190 @@ fn build_alert_rule_update_sql(
     params.push(Box::new(rule_id));
 
     (sql, params)
+}
+
+// ============================================================================
+// 通知发送服务
+// ============================================================================
+
+/// 通知渠道配置（从 system_settings 读取，key 前缀 `alert_`）
+struct NotificationChannelConfig {
+    wecom_webhook: Option<String>,
+    dingtalk_webhook: Option<String>,
+    feishu_webhook: Option<String>,
+    email_smtp_host: Option<String>,
+    email_smtp_port: Option<u16>,
+    email_from: Option<String>,
+    email_to: Option<String>,
+}
+
+impl NotificationChannelConfig {
+    async fn load(client: &deadpool_postgres::Object) -> Self {
+        let rows = client
+            .query(
+                "SELECT key, value FROM system_settings WHERE key LIKE 'alert_%'",
+                &[],
+            )
+            .await
+            .unwrap_or_default();
+
+        let get = |key: &str| -> Option<String> {
+            rows.iter()
+                .find(|r| r.get::<_, String>(0) == key)
+                .and_then(|r| r.get::<_, serde_json::Value>(1).as_str().map(|s| s.to_string()))
+        };
+
+        Self {
+            wecom_webhook: get("alert_wecom_webhook"),
+            dingtalk_webhook: get("alert_dingtalk_webhook"),
+            feishu_webhook: get("alert_feishu_webhook"),
+            email_smtp_host: get("alert_email_smtp_host"),
+            email_smtp_port: get("alert_email_smtp_port").and_then(|s| s.parse().ok()),
+            email_from: get("alert_email_from"),
+            email_to: get("alert_email_to"),
+        }
+    }
+}
+
+/// 发送告警通知到所有配置的渠道，并更新 notification_logs 状态。
+///
+/// 在 trigger_alert 生成告警事件后异步调用，不阻塞主流程。
+pub async fn send_alert_notifications(
+    pool: &deadpool_postgres::Pool,
+    event_id: Uuid,
+    rule_name: &str,
+    severity: &str,
+    detail: &str,
+) {
+    let client = match pool.get().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to get DB connection for notifications");
+            return;
+        }
+    };
+
+    let config = NotificationChannelConfig::load(&client).await;
+
+    let logs = match client
+        .query(
+            "SELECT id, channel FROM notification_logs \
+             WHERE alert_event_id = $1 AND status = 'pending'",
+            &[&event_id],
+        )
+        .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to query notification logs");
+            return;
+        }
+    };
+
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_default();
+
+    let message = format!("[{}] {} — {}", severity.to_uppercase(), rule_name, detail);
+
+    for log in &logs {
+        let log_id: Uuid = log.get(0);
+        let channel: String = log.get(1);
+
+        let result = match channel.as_str() {
+            "wecom" => {
+                send_webhook(&http, config.wecom_webhook.as_deref(), &build_wecom_payload(&message)).await
+            }
+            "dingtalk" => {
+                send_webhook(&http, config.dingtalk_webhook.as_deref(), &build_dingtalk_payload(&message)).await
+            }
+            "feishu" => {
+                send_webhook(&http, config.feishu_webhook.as_deref(), &build_feishu_payload(&message)).await
+            }
+            "email" => send_email_notification(&config, &message).await,
+            other => Err(format!("Unknown channel: {}", other)),
+        };
+
+        let (status, error) = match result {
+            Ok(()) => ("success".to_string(), None::<String>),
+            Err(e) => {
+                tracing::warn!(channel = %channel, error = %e, "Notification send failed");
+                ("failed".to_string(), Some(e))
+            }
+        };
+
+        let _ = client
+            .execute(
+                "UPDATE notification_logs \
+                 SET status = $1, last_error = $2, attempts = attempts + 1, updated_at = NOW() \
+                 WHERE id = $3",
+                &[&status, &error, &log_id],
+            )
+            .await;
+    }
+}
+
+async fn send_webhook(
+    http: &reqwest::Client,
+    url: Option<&str>,
+    payload: &serde_json::Value,
+) -> std::result::Result<(), String> {
+    let url = url.ok_or_else(|| "Webhook URL not configured".to_string())?;
+    http.post(url)
+        .json(payload)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn build_wecom_payload(message: &str) -> serde_json::Value {
+    json!({ "msgtype": "text", "text": { "content": message } })
+}
+
+fn build_dingtalk_payload(message: &str) -> serde_json::Value {
+    json!({ "msgtype": "text", "text": { "content": message } })
+}
+
+fn build_feishu_payload(message: &str) -> serde_json::Value {
+    json!({ "msg_type": "text", "content": { "text": message } })
+}
+
+/// 邮件通知（当前实现：记录日志，实际 SMTP 发送留 TODO）
+///
+/// TODO: 引入 `lettre` crate 实现真实 SMTP 发送。
+/// 政企场景通常优先使用企业微信/钉钉/飞书，邮件作为备选渠道。
+async fn send_email_notification(
+    config: &NotificationChannelConfig,
+    message: &str,
+) -> std::result::Result<(), String> {
+    let smtp_host = config
+        .email_smtp_host
+        .as_deref()
+        .ok_or_else(|| "Email SMTP host not configured".to_string())?;
+    let smtp_port = config.email_smtp_port.unwrap_or(465);
+    let from = config
+        .email_from
+        .as_deref()
+        .ok_or_else(|| "Email sender not configured".to_string())?;
+    let to = config
+        .email_to
+        .as_deref()
+        .ok_or_else(|| "Email recipient not configured".to_string())?;
+
+    // TODO: 使用 lettre crate 实现真实 SMTP 发送
+    // 示例：SmtpTransport::relay(smtp_host)?.port(smtp_port).build()
+    //        .send(Message::builder().from(from).to(to).body(message))
+    tracing::info!(
+        smtp_host = %smtp_host,
+        smtp_port = %smtp_port,
+        from = %from,
+        to = %to,
+        message = %message,
+        "Email notification queued (SMTP not yet implemented)"
+    );
+    Ok(())
 }

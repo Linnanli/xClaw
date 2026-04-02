@@ -306,12 +306,15 @@ pub struct UpdateDepartmentRequest {
     pub token_quota_per_day: Option<Option<i32>>,
 }
 
-/// 部门查询参数（搜索 + 筛选）
+/// 部门查询参数（搜索 + 筛选 + 树形）
 #[derive(Debug, Clone, Deserialize)]
 pub struct DepartmentQuery {
     pub search: Option<String>,
     /// "enabled" | "disabled" | 不传则不筛选
     pub quota_status: Option<String>,
+    /// true 时返回嵌套树形结构，false（默认）返回扁平列表
+    #[serde(default)]
+    pub tree: Option<bool>,
 }
 
 /// 部门模型白名单更新请求
@@ -392,6 +395,9 @@ pub struct CreateModelConfigRequest {
     pub sort_order: i32,
     pub capabilities: Option<serde_json::Value>,
     pub extra_config: Option<serde_json::Value>,
+    /// 单价（分/千Token）
+    pub input_price_per_1k_cents: Option<i32>,
+    pub output_price_per_1k_cents: Option<i32>,
 }
 
 fn default_provider() -> String {
@@ -414,6 +420,12 @@ pub struct UpdateModelConfigRequest {
     pub sort_order: Option<i32>,
     pub capabilities: Option<serde_json::Value>,
     pub extra_config: Option<serde_json::Value>,
+    /// 调用统计（可由外部写入）
+    pub total_calls: Option<i64>,
+    pub avg_latency_ms: Option<f64>,
+    /// 单价（分/千Token）
+    pub input_price_per_1k_cents: Option<i32>,
+    pub output_price_per_1k_cents: Option<i32>,
 }
 
 /// 测试模型连接请求

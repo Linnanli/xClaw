@@ -1,13 +1,15 @@
 {
   "enabled": true,
   "name": "Spec Task Fullstack Audit Gate",
-  "description": "在每个 Spec 任务开始前，自动激活 fullstack-audit skill，分析当前任务的跨模块依赖、配置方-消费方链路完整性和需求盲区，展示理解后等待确认再执行。",
+  "description": "在每个 Spec 任务开始前，强制激活 fullstack-audit skill，分析当前任务的跨模块依赖、配置方-消费方链路完整性和需求盲区，展示报告后等待用户确认本条task分析才能继续。",
   "version": "1",
   "when": {
     "type": "preTaskExecution"
   },
   "then": {
     "type": "askAgent",
-    "prompt": "在开始执行这个 Spec 任务之前，先激活 fullstack-audit skill，对当前任务做一轮完整的分析：\n1. 用配置方-消费方模型检查跨模块依赖链路是否完整\n2. 扫描各层实现状态（后台 API、前端、客户端、测试）\n3. 发现需求盲区（安全、业务闭环、边界情况）\n4. 输出标准的\"需求理解\"报告，标注所有 🔴/🟡/🟢 级问题\n\n分析完成后，展示报告并等待用户确认，确认后再开始实现。"
-  }
+    "prompt": "⛔ 强制前置步骤，必须完成才能继续执行任务。\n\n立即调用 discloseContext 工具激活 \"fullstack-audit\" skill，然后对当前 Spec 任务执行完整分析：\n1. 用配置方-消费方模型检查跨模块依赖链路是否完整\n2. 扫描各层实现状态（后台 API、前端、客户端、测试）\n3. 发现需求盲区（安全、业务闭环、边界情况）\n4. 输出标准的\"需求理解\"报告，标注所有 🔴/🟡/🟢 级问题\n\n每条报告输出完毕后，你的回复必须以'✋ 以上是分析报告，请确认后我再开始实现。'结尾。在用户明确回复针对该条task分析结果确认之前，禁止输出任何实现代码、文件修改或执行任何写操作工具。"
+  },
+  "workspaceFolderName": "x-claw",
+  "shortName": "spec-fullstack-audit-gate"
 }

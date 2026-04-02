@@ -5,11 +5,15 @@ use crate::handlers::{
     get_dlp_policies_handler, get_policies_handler, get_policy_version_handler,
     get_sensitive_ops_policies_handler,
 };
+use crate::middleware::{
+    rate_limit::RateLimitLayer,
+    security_headers::SecurityHeadersLayer,
+};
 use crate::models::{self, CreateUserRequest, LoginRequest, LoginResponse, RefreshTokenRequest, CreateRoleRequest, UpdateRoleRequest, AssignPermissionsRequest, CreateDlpRuleRequest, UpdateDlpRuleRequest, CreateDictionaryRequest, UpdateDictionaryRequest, UpdateUserRequest, CreateDepartmentRequest, UpdateDepartmentRequest, AuditLogExportQuery, UpdateClientConfigRequest};
 use crate::AppState;
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post, put},
     Json, Router,
@@ -96,6 +100,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/alert-rules/{id}", put(handlers::alerts::update_alert_rule).delete(handlers::alerts::delete_alert_rule))
         .route("/api/alerts", get(handlers::alerts::get_alert_events))
         .route("/api/alerts/stats", get(handlers::alerts::get_alert_stats))
+        .route("/api/alerts/unhandled-count", get(handlers::alerts::get_unhandled_alert_count))
         .route("/api/alerts/trigger", post(handlers::alerts::manual_trigger_alert))
         .route("/api/alerts/{id}/status", put(handlers::alerts::update_alert_event_status))
         // 对话审计 API
@@ -121,6 +126,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/quota/model-ranking", get(handlers::quota::model_ranking))
         .route("/api/quota/usage-records", get(handlers::quota::usage_records))
         .with_state(state)
+        .layer(RateLimitLayer::new())
+        .layer(SecurityHeadersLayer)
 }
 
 async fn health_check() -> impl IntoResponse {
@@ -134,12 +141,25 @@ pub async fn write_audit_log(
     action: &str,
     details: &str,
 ) {
+    write_audit_log_with_context(client, user_id, action, details, None, None).await;
+}
+
+/// 写入带 IP 和 User-Agent 的审计日志
+pub async fn write_audit_log_with_context(
+    client: &deadpool_postgres::Object,
+    user_id: Uuid,
+    action: &str,
+    details: &str,
+    ip_address: Option<&str>,
+    user_agent: Option<&str>,
+) {
     let id = Uuid::new_v4();
     let now = chrono::Utc::now();
     if let Err(e) = client
         .execute(
-            "INSERT INTO audit_logs (id, user_id, action, details, created_at) VALUES ($1, $2, $3, $4, $5)",
-            &[&id, &user_id, &action, &details, &now],
+            "INSERT INTO audit_logs (id, user_id, action, details, ip_address, user_agent, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            &[&id, &user_id, &action, &details, &ip_address, &user_agent, &now],
         )
         .await
     {
@@ -192,14 +212,25 @@ async fn register(
 
 async fn login(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>> {
     let client = state.db_pool.get().await
         .map_err(|e| Error::Database(e.to_string()))?;
 
+    let ip = crate::middleware::extract_client_ip(&headers);
+    let ip_str = ip.as_deref();
+    let ua = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_owned());
+    let ua_str = ua.as_deref();
+
+    // 查询用户，包含锁定字段
     let row = client
         .query_opt(
-            "SELECT id, password_hash FROM users WHERE username = $1",
+            "SELECT id, password_hash, login_fail_count, locked_until \
+             FROM users WHERE username = $1",
             &[&payload.username],
         )
         .await
@@ -208,15 +239,91 @@ async fn login(
 
     let user_id: Uuid = row.get(0);
     let password_hash: String = row.get(1);
+    let fail_count: i32 = row.get(2);
+    let locked_until: Option<chrono::DateTime<chrono::Utc>> = row.get(3);
+
+    // 检查账户是否被锁定
+    if let Some(until) = locked_until {
+        if until > chrono::Utc::now() {
+            return Err(Error::AccountLocked);
+        }
+    }
 
     let auth = AuthManager::new(std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string()));
-    auth.verify_password(&payload.password, &password_hash)?;
+
+    // 验证密码
+    if auth.verify_password(&payload.password, &password_hash).is_err() {
+        let new_fail_count = fail_count + 1;
+        if new_fail_count >= 5 {
+            // 锁定 15 分钟
+            let lock_until = chrono::Utc::now() + chrono::Duration::minutes(15);
+            client
+                .execute(
+                    "UPDATE users SET login_fail_count = $1, locked_until = $2 WHERE id = $3",
+                    &[&new_fail_count, &lock_until, &user_id],
+                )
+                .await
+                .map_err(|e| Error::Database(e.to_string()))?;
+            // 账户锁定：触发异常登录告警
+            let pool = state.db_pool.clone();
+            let username = payload.username.clone();
+            let ip = ip.clone();
+            tokio::spawn(async move {
+                let trigger = crate::models::AlertTrigger {
+                    event_type: "abnormal_login".into(),
+                    severity: "high".into(),
+                    detail: format!("用户 {} 连续登录失败 {} 次，账户已锁定 15 分钟（IP: {}）",
+                        username, new_fail_count, ip.as_deref().unwrap_or("unknown")),
+                    event_data: None,
+                };
+                if let Err(e) = crate::handlers::alerts::trigger_alert(&pool, &trigger).await {
+                    tracing::warn!(error = %e, "Failed to trigger abnormal login alert");
+                }
+            });
+        } else {
+            client
+                .execute(
+                    "UPDATE users SET login_fail_count = $1 WHERE id = $2",
+                    &[&new_fail_count, &user_id],
+                )
+                .await
+                .map_err(|e| Error::Database(e.to_string()))?;
+        }
+        // 记录失败审计日志
+        write_audit_log_with_context(
+            &client,
+            user_id,
+            "login_failed",
+            &format!("用户 {} 登录失败（第 {} 次）", payload.username, new_fail_count),
+            ip_str,
+            ua_str,
+        )
+        .await;
+        return Err(Error::InvalidCredentials);
+    }
+
+    // 密码正确：重置失败计数
+    client
+        .execute(
+            "UPDATE users SET login_fail_count = 0, locked_until = NULL WHERE id = $1",
+            &[&user_id],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
 
     let access_token = auth.generate_access_token(&user_id.to_string())?;
     let refresh_token = auth.generate_refresh_token(&user_id.to_string())?;
 
-    // 记录登录审计日志
-    write_audit_log(&client, user_id, "login", &format!("用户 {} 登录成功", payload.username)).await;
+    // 记录成功审计日志
+    write_audit_log_with_context(
+        &client,
+        user_id,
+        "login_success",
+        &format!("用户 {} 登录成功", payload.username),
+        ip_str,
+        ua_str,
+    )
+    .await;
 
     Ok(Json(LoginResponse {
         access_token,
@@ -356,6 +463,8 @@ async fn get_user(
 struct AuditLogQuery {
     page: Option<i64>,
     page_size: Option<i64>,
+    /// 全文搜索：匹配 action 或 details 字段（ILIKE）
+    q: Option<String>,
 }
 
 async fn get_audit_logs(
@@ -369,25 +478,51 @@ async fn get_audit_logs(
     let page_size = params.page_size.unwrap_or(50).clamp(1, 200);
     let offset = (page - 1) * page_size;
 
-    // 查询总数
-    let count_row = client
-        .query_one("SELECT COUNT(*) FROM audit_logs", &[])
-        .await
-        .map_err(|e| Error::Database(e.to_string()))?;
-    let total: i64 = count_row.get(0);
+    // 根据是否有搜索词构建不同的查询
+    let (total, rows) = if let Some(ref q) = params.q {
+        let pattern = format!("%{}%", q.trim());
+        let count_row = client
+            .query_one(
+                "SELECT COUNT(*) FROM audit_logs WHERE (action ILIKE $1 OR details ILIKE $1)",
+                &[&pattern],
+            )
+            .await
+            .map_err(|e| Error::Database(e.to_string()))?;
+        let total: i64 = count_row.get(0);
 
-    // LEFT JOIN users 获取用户名
-    let rows = client
-        .query(
-            "SELECT a.id, a.user_id, u.username, a.action, a.details, a.created_at
-             FROM audit_logs a
-             LEFT JOIN users u ON a.user_id = u.id
-             ORDER BY a.created_at DESC
-             LIMIT $1 OFFSET $2",
-            &[&page_size, &offset],
-        )
-        .await
-        .map_err(|e| Error::Database(e.to_string()))?;
+        let rows = client
+            .query(
+                "SELECT a.id, a.user_id, u.username, a.action, a.details, a.created_at
+                 FROM audit_logs a
+                 LEFT JOIN users u ON a.user_id = u.id
+                 WHERE (a.action ILIKE $1 OR a.details ILIKE $1)
+                 ORDER BY a.created_at DESC
+                 LIMIT $2 OFFSET $3",
+                &[&pattern, &page_size, &offset],
+            )
+            .await
+            .map_err(|e| Error::Database(e.to_string()))?;
+        (total, rows)
+    } else {
+        let count_row = client
+            .query_one("SELECT COUNT(*) FROM audit_logs", &[])
+            .await
+            .map_err(|e| Error::Database(e.to_string()))?;
+        let total: i64 = count_row.get(0);
+
+        let rows = client
+            .query(
+                "SELECT a.id, a.user_id, u.username, a.action, a.details, a.created_at
+                 FROM audit_logs a
+                 LEFT JOIN users u ON a.user_id = u.id
+                 ORDER BY a.created_at DESC
+                 LIMIT $1 OFFSET $2",
+                &[&page_size, &offset],
+            )
+            .await
+            .map_err(|e| Error::Database(e.to_string()))?;
+        (total, rows)
+    };
 
     let logs: Vec<_> = rows
         .iter()
@@ -2433,9 +2568,34 @@ async fn post_client_reports(
     let mut inserted = 0u64;
 
     for report in &payload {
-        let valid_types = ["audit_log", "dlp_event", "usage_stats", "health_status", "conversation"];
+        let valid_types = ["audit_log", "dlp_event", "usage_stats", "health_status", "conversation", "usage", "model_error"];
         if !valid_types.contains(&report.report_type.as_str()) {
             tracing::warn!(report_type = %report.report_type, "Unknown report type, skipping");
+            continue;
+        }
+
+        // usage 类型：写入 usage_records 并更新 model_configs 统计
+        if report.report_type == "usage" {
+            if let Err(e) = handle_usage_report(&client, &report.data).await {
+                tracing::warn!(error = %e, "Failed to handle usage report");
+            } else {
+                inserted += 1;
+            }
+            continue;
+        }
+
+        // model_error 类型：递增 consecutive_failures，超阈值触发告警
+        if report.report_type == "model_error" {
+            let pool = state.db_pool.clone();
+            let model_id = report.data["model_id"].as_str().unwrap_or("").to_string();
+            let error_msg = report.data["error"].as_str().unwrap_or("unknown error").to_string();
+            let data = report.data.clone();
+            tokio::spawn(async move {
+                if let Err(e) = handle_model_error_report(&pool, &model_id, &error_msg, data).await {
+                    tracing::warn!(error = %e, "Failed to handle model error report");
+                }
+            });
+            inserted += 1;
             continue;
         }
 
@@ -2468,6 +2628,25 @@ async fn post_client_reports(
              VALUES ($1, $2, $3, $4)",
             &[&id, &report.report_type, &report.data, &now],
         ).await.map_err(|e| Error::Database(e.to_string()))?;
+
+        // DLP 事件：异步触发告警（不阻塞响应）
+        if report.report_type == "dlp_event" {
+            let pool = state.db_pool.clone();
+            let severity = report.data["severity"].as_str().unwrap_or("medium").to_string();
+            let rule_name = report.data["rule_name"].as_str().unwrap_or("unknown").to_string();
+            let event_data = report.data.clone();
+            tokio::spawn(async move {
+                let trigger = crate::models::AlertTrigger {
+                    event_type: "dlp_violation".into(),
+                    severity,
+                    detail: format!("DLP 规则触发: {}", rule_name),
+                    event_data: Some(event_data),
+                };
+                if let Err(e) = crate::handlers::alerts::trigger_alert(&pool, &trigger).await {
+                    tracing::warn!(error = %e, "Failed to trigger DLP alert");
+                }
+            });
+        }
 
         inserted += 1;
     }
@@ -2503,6 +2682,119 @@ async fn report_conversation_usage(
             tracing::warn!(error = %e, "Failed to report usage from conversation");
         }
     }
+}
+
+/// 处理 usage 类型上报：写入 usage_records 并更新 model_configs 统计
+async fn handle_usage_report(
+    client: &deadpool_postgres::Object,
+    data: &serde_json::Value,
+) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let user_id: Uuid = data["user_id"]
+        .as_str()
+        .and_then(|s| s.parse().ok())
+        .ok_or("missing user_id")?;
+    let model_id = data["model_id"].as_str().unwrap_or("").to_string();
+    let input_tokens = data["input_tokens"].as_i64().unwrap_or(0) as i32;
+    let output_tokens = data["output_tokens"].as_i64().unwrap_or(0) as i32;
+    let cost_cents = data["cost_cents"].as_i64().unwrap_or(0) as i32;
+    let latency_ms: Option<f64> = data["latency_ms"].as_f64();
+
+    // 查找对应的 model_config_id
+    let model_config_row = client
+        .query_opt(
+            "SELECT id FROM model_configs WHERE model_id = $1",
+            &[&model_id],
+        )
+        .await?;
+    let model_config_id: Option<Uuid> = model_config_row.as_ref().map(|r| r.get(0));
+
+    // 写入 usage_records
+    let record_id = Uuid::new_v4();
+    client
+        .execute(
+            "INSERT INTO usage_records \
+             (id, user_id, model_config_id, model_id, input_tokens, output_tokens, cost_cents) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            &[
+                &record_id,
+                &user_id,
+                &model_config_id,
+                &model_id,
+                &input_tokens,
+                &output_tokens,
+                &cost_cents,
+            ],
+        )
+        .await?;
+
+    // 更新 model_configs 统计（仅当能找到对应配置时）
+    if let Some(config_id) = model_config_id {
+        if let Some(lat) = latency_ms {
+            client
+                .execute(
+                    "UPDATE model_configs \
+                     SET total_calls = total_calls + 1, \
+                         avg_latency_ms = COALESCE(avg_latency_ms, 0.0) \
+                             * total_calls::DOUBLE PRECISION / (total_calls + 1)::DOUBLE PRECISION \
+                             + $1 / (total_calls + 1)::DOUBLE PRECISION, \
+                         consecutive_failures = 0 \
+                     WHERE id = $2",
+                    &[&lat, &config_id],
+                )
+                .await?;
+        } else {
+            client
+                .execute(
+                    "UPDATE model_configs SET total_calls = total_calls + 1, consecutive_failures = 0 WHERE id = $1",
+                    &[&config_id],
+                )
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// 处理模型错误上报：递增 consecutive_failures，超过阈值时触发告警。
+///
+/// 阈值：连续失败 3 次触发 model_error 告警。
+async fn handle_model_error_report(
+    pool: &deadpool_postgres::Pool,
+    model_id: &str,
+    error_msg: &str,
+    event_data: serde_json::Value,
+) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let client = pool.get().await.map_err(|e| e.to_string())?;
+
+    // 递增 consecutive_failures 并返回新值
+    let row = client
+        .query_opt(
+            "UPDATE model_configs \
+             SET consecutive_failures = consecutive_failures + 1, last_error_at = NOW() \
+             WHERE model_id = $1 \
+             RETURNING consecutive_failures, display_name",
+            &[&model_id],
+        )
+        .await?;
+
+    if let Some(row) = row {
+        let failures: i32 = row.get(0);
+        let display_name: String = row.get(1);
+        const FAILURE_THRESHOLD: i32 = 3;
+        if failures >= FAILURE_THRESHOLD {
+            let trigger = crate::models::AlertTrigger {
+                event_type: "model_error".into(),
+                severity: "high".into(),
+                detail: format!("模型 {} 连续失败 {} 次: {}", display_name, failures, error_msg),
+                event_data: Some(event_data),
+            };
+            if let Err(e) = crate::handlers::alerts::trigger_alert(pool, &trigger).await {
+                tracing::warn!(error = %e, "Failed to trigger model error alert");
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// API Key 脱敏：保留前 4 位，其余替换为 ****
@@ -2674,7 +2966,27 @@ async fn get_dashboard_stats(
     // 未处理告警数（alert_events 表可能尚未创建，查询失败时返回 0）
     let unhandled_alerts: i64 = client
         .query_one(
-            "SELECT COUNT(*) FROM alert_events WHERE status IN ('pending', 'in_progress')",
+            "SELECT COUNT(*) FROM alert_events WHERE status = 'pending'",
+            &[],
+        )
+        .await
+        .map(|r| r.get(0))
+        .unwrap_or(0);
+
+    // 今日 AI 对话数
+    let ai_conversations_today: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM conversations WHERE created_at >= CURRENT_DATE",
+            &[],
+        )
+        .await
+        .map(|r| r.get(0))
+        .unwrap_or(0);
+
+    // 今日 Token 消耗（input_tokens + output_tokens 总和）
+    let token_usage_today: i64 = client
+        .query_one(
+            "SELECT COALESCE(SUM(input_tokens + output_tokens), 0) FROM usage_records WHERE created_at >= CURRENT_DATE",
             &[],
         )
         .await
@@ -2687,6 +2999,8 @@ async fn get_dashboard_stats(
         "dlp_blocked_today": dlp_blocked_today,
         "sensitive_ops_today": sensitive_ops_today,
         "unhandled_alerts": unhandled_alerts,
+        "ai_conversations_today": ai_conversations_today,
+        "token_usage_today": token_usage_today,
     })))
 }
 
@@ -3319,6 +3633,7 @@ async fn push_policy_all(
 ///
 /// LEFT JOIN 计算每个部门的成员数量。
 /// 当 token_quota_enabled = false 时，token_quota_per_day 返回 null。
+/// 支持 ?tree=true 返回嵌套树形结构。
 async fn get_departments(
     State(state): State<AppState>,
     Query(params): Query<models::DepartmentQuery>,
@@ -3333,7 +3648,7 @@ async fn get_departments(
     let rows = client.query(&sql, &param_refs).await
         .map_err(|e| Error::Database(e.to_string()))?;
 
-    let departments: Vec<_> = rows.iter().map(|r| {
+    let departments: Vec<serde_json::Value> = rows.iter().map(|r| {
         let quota_enabled: bool = r.get(3);
         json!({
             "id": r.get::<_, Uuid>(0),
@@ -3348,7 +3663,73 @@ async fn get_departments(
         })
     }).collect();
 
+    if params.tree == Some(true) {
+        let tree = build_department_tree(&departments);
+        return Ok(Json(json!({ "tree": tree })));
+    }
+
     Ok(Json(json!({ "departments": departments })))
+}
+
+/// 在内存中将扁平部门列表构建为嵌套树形结构
+fn build_department_tree(departments: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    use std::collections::HashMap;
+
+    // 收集所有节点，附加 children 字段
+    let mut nodes: HashMap<String, serde_json::Value> = departments
+        .iter()
+        .map(|d| {
+            let id = d["id"].as_str().unwrap_or("").to_string();
+            let mut node = d.clone();
+            node["children"] = json!([]);
+            (id, node)
+        })
+        .collect();
+
+    // 找出根节点 ID（parent_id 为 null 或 parent_id 不在列表中）
+    let all_ids: std::collections::HashSet<String> = nodes.keys().cloned().collect();
+    let root_ids: Vec<String> = departments
+        .iter()
+        .filter(|d| {
+            let parent = d["parent_id"].as_str();
+            parent.is_none() || !all_ids.contains(parent.unwrap_or(""))
+        })
+        .map(|d| d["id"].as_str().unwrap_or("").to_string())
+        .collect();
+
+    // 按 parent_id 分组子节点
+    let mut children_map: HashMap<String, Vec<String>> = HashMap::new();
+    for d in departments {
+        if let Some(parent_id) = d["parent_id"].as_str() {
+            if all_ids.contains(parent_id) {
+                children_map
+                    .entry(parent_id.to_string())
+                    .or_default()
+                    .push(d["id"].as_str().unwrap_or("").to_string());
+            }
+        }
+    }
+
+    // 递归构建树（迭代实现，避免递归借用问题）
+    fn attach_children(
+        id: &str,
+        nodes: &mut HashMap<String, serde_json::Value>,
+        children_map: &HashMap<String, Vec<String>>,
+    ) -> serde_json::Value {
+        let children_ids = children_map.get(id).cloned().unwrap_or_default();
+        let children: Vec<serde_json::Value> = children_ids
+            .iter()
+            .map(|child_id| attach_children(child_id, nodes, children_map))
+            .collect();
+        let mut node = nodes.get(id).cloned().unwrap_or(json!({}));
+        node["children"] = json!(children);
+        node
+    }
+
+    root_ids
+        .iter()
+        .map(|id| attach_children(id, &mut nodes, &children_map))
+        .collect()
 }
 
 /// 构建部门列表查询 SQL（支持搜索 + 筛选）
@@ -3735,7 +4116,9 @@ async fn get_model_configs(
         .query(
             "SELECT id, model_id, display_name, description, provider, \
              api_base_url, api_key, enabled, is_default, sort_order, \
-             capabilities, extra_config, created_at, updated_at \
+             capabilities, extra_config, created_at, updated_at, \
+             total_calls, avg_latency_ms, \
+             input_price_per_1k_cents, output_price_per_1k_cents \
              FROM model_configs ORDER BY sort_order, display_name",
             &[],
         )
@@ -3761,6 +4144,10 @@ async fn get_model_configs(
                 "extra_config": row.get::<_, serde_json::Value>(11),
                 "created_at": row.get::<_, DateTime<Utc>>(12),
                 "updated_at": row.get::<_, DateTime<Utc>>(13),
+                "total_calls": row.get::<_, i64>(14),
+                "avg_latency_ms": row.get::<_, Option<f64>>(15),
+                "input_price_per_1k_cents": row.get::<_, Option<i32>>(16),
+                "output_price_per_1k_cents": row.get::<_, Option<i32>>(17),
             })
         })
         .collect();
@@ -3813,8 +4200,9 @@ async fn create_model_config(
         .execute(
             "INSERT INTO model_configs \
              (id, model_id, display_name, description, provider, api_base_url, \
-              api_key, sort_order, capabilities, extra_config) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+              api_key, sort_order, capabilities, extra_config, \
+              input_price_per_1k_cents, output_price_per_1k_cents) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
             &[
                 &id,
                 &body.model_id,
@@ -3826,6 +4214,8 @@ async fn create_model_config(
                 &body.sort_order,
                 &capabilities,
                 &extra_config,
+                &body.input_price_per_1k_cents,
+                &body.output_price_per_1k_cents,
             ],
         )
         .await
@@ -3897,6 +4287,10 @@ async fn update_model_config(
                 sort_order    = COALESCE($9, sort_order), \
                 capabilities  = COALESCE($10, capabilities), \
                 extra_config  = COALESCE($11, extra_config), \
+                total_calls   = COALESCE($12, total_calls), \
+                avg_latency_ms = COALESCE($13, avg_latency_ms), \
+                input_price_per_1k_cents  = COALESCE($14, input_price_per_1k_cents), \
+                output_price_per_1k_cents = COALESCE($15, output_price_per_1k_cents), \
                 updated_at    = NOW() \
              WHERE id = $1",
             &[
@@ -3911,6 +4305,10 @@ async fn update_model_config(
                 &body.sort_order,
                 &body.capabilities,
                 &body.extra_config,
+                &body.total_calls,
+                &body.avg_latency_ms,
+                &body.input_price_per_1k_cents,
+                &body.output_price_per_1k_cents,
             ],
         )
         .await

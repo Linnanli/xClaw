@@ -87,10 +87,26 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     );
 
     // ── Phase 3: 创建 TauriChannel ────────────────────────────────
-    let tauri_channel = TauriChannel::new(app_handle.clone());
+    let mut tauri_channel = TauriChannel::new(app_handle.clone());
     let msg_sender = tauri_channel.sender();
 
     // ── Phase 4: 注册到 ChannelManager ────────────────────────────
+    // ConversationTracker 在此处创建并注入 TauriChannel，
+    // 使对话消息能被追踪并定期上报（需求 16.16）。
+    let admin_url = std::env::var("ADMIN_BACKEND_URL")
+        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let client_token = std::env::var("ADMIN_AUTH_TOKEN").unwrap_or_default();
+
+    let tracker = Arc::new(crate::conversation_tracker::ConversationTracker::new(
+        config.owner_id.clone(),
+    ));
+    let reporter = Arc::new(crate::data_reporter::DataReporter::new(
+        admin_url.clone(),
+        client_token.clone(),
+    ));
+
+    tauri_channel.set_conversation_tracker(Arc::clone(&tracker));
+
     let channels = ChannelManager::new();
     channels.add(Box::new(tauri_channel)).await;
     let channels = Arc::new(channels);
@@ -185,9 +201,39 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         });
     }
 
+    // ── 启动 Admin 配置同步（版本感知）────────────────────────────
+    // 每 30 秒检查配置版本，版本变化时立即应用新配置。
+    // 实现需求 9.10：Admin 保存配置后客户端主动拉取，无需等待 5 分钟周期。
+    {
+        if !client_token.is_empty() {
+            let sync = crate::admin_sync::AdminConfigSync::new(admin_url.clone(), client_token.clone());
+            tauri::async_runtime::spawn(async move {
+                sync.run_sync_loop_with_version_check().await;
+            });
+            tracing::info!("Admin config sync loop started (version-aware, 30s interval)");
+        } else {
+            tracing::debug!("ADMIN_AUTH_TOKEN not set, skipping admin config sync");
+        }
+    }
+
+    // ── 启动 ConversationTracker 定期 flush（需求 16.16）──────────
+    // 每 5 分钟检查一次空闲 thread（超过 30 分钟无活动），触发上报。
+    {
+        let tracker_clone = Arc::clone(&tracker);
+        let reporter_clone = Arc::clone(&reporter);
+        tauri::async_runtime::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5 * 60));
+            loop {
+                interval.tick().await;
+                tracker_clone.flush_idle_threads(&reporter_clone);
+                tracing::debug!("ConversationTracker: flushed idle threads");
+            }
+        });
+        tracing::info!("ConversationTracker flush loop started (5min interval)");
+    }
+
     // 通知前端引擎已就绪
-    use tauri::Emitter;
-    let _ = app_handle.emit(
+    use tauri::Emitter;    let _ = app_handle.emit(
         "chat-event",
         ChatEvent::ConnectionStatus {
             connected: true,

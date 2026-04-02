@@ -207,7 +207,7 @@ cargo test -p desktop-client --lib engine_startup_tests
 - 新功能先检查主项目是否有相同实现（如 `src/channels/web/static/app.js`）
 - 验证前后端实际通信格式，不只依赖 mock
 
-参考：`admin-backend/frontend/cypress/`、`docs/testing-guide.md`
+参考：`admin-backend/ui/cypress/`、`docs/testing-guide.md`
 
 ---
 
@@ -251,5 +251,5 @@ cargo test -p desktop-client --lib engine_startup_tests
 - `desktop-client/src/engine_startup_tests.rs` — 启动时序测试
 - `admin-backend/tests/integration_smoke_tests.rs` — 冒烟测试
 - `desktop-client/tests/tauri_command_contract_tests.rs` — Tauri 命令契约测试
-- `admin-backend/frontend/cypress/` — Cypress E2E 测试
+- `admin-backend/ui/cypress/` — Cypress E2E 测试
 - `.kiro/steering/rust-coding-standards.md` — Rust 编码标准、错误处理模式、测试代码示例、质量门禁脚本

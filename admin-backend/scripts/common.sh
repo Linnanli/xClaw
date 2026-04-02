@@ -348,7 +348,7 @@ start_admin_backend() {
 }
 
 # 启动 Admin Frontend 前端
-# 参数: $1 - admin-backend/frontend 目录路径
+# 参数: $1 - admin-backend/ui 目录路径
 # PID 通过 /tmp/admin-frontend.pid 文件传递，不通过 stdout（避免彩色日志污染捕获）
 start_admin_frontend() {
     local FRONTEND_DIR="$1"

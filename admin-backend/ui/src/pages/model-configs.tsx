@@ -22,6 +22,10 @@ interface ModelConfig {
   extra_config: Record<string, unknown>
   created_at: string
   updated_at: string
+  total_calls: number
+  avg_latency_ms: number | null
+  input_price_per_1k_cents: number | null
+  output_price_per_1k_cents: number | null
 }
 
 /* ── 提供商配置 ── */
@@ -81,8 +85,8 @@ function CapabilityTag({ label }: { label: string }) {
 
 /* ── 表格列定义 ── */
 
-const tableColumns = ['#', '模型名称', '模型 ID', '提供商', 'API Endpoint', 'API Key', '能力', '状态', '操作']
-const colWidths = [40, 'fill', 'fill', 100, 'fill', 120, 100, 60, 80]
+const tableColumns = ['#', '模型名称', '模型 ID', '提供商', 'API Endpoint', 'API Key', '能力', '调用量', '延迟', '状态', '操作']
+const colWidths = [40, 'fill', 'fill', 100, 'fill', 120, 100, 80, 70, 60, 80]
 
 function colStyle(w: number | string) {
   return w === 'fill' ? { flex: '1 1 0%', minWidth: 0 } : { width: w, flexShrink: 0 }
@@ -111,6 +115,8 @@ function ModelFormDialog({ open, editingModel, onClose, onSaved }: ModelFormDial
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [inputPrice, setInputPrice] = useState('')
+  const [outputPrice, setOutputPrice] = useState('')
 
   // 初始化表单（创建 vs 编辑）
   useEffect(() => {
@@ -125,6 +131,8 @@ function ModelFormDialog({ open, editingModel, onClose, onSaved }: ModelFormDial
       setApiKey('')
       setSortOrder(editingModel.sort_order)
       setCapabilities(editingModel.capabilities?.join(', ') ?? '')
+      setInputPrice(editingModel.input_price_per_1k_cents != null ? String(editingModel.input_price_per_1k_cents / 100) : '')
+      setOutputPrice(editingModel.output_price_per_1k_cents != null ? String(editingModel.output_price_per_1k_cents / 100) : '')
     } else {
       setProvider('deepseek')
       setModelId('')
@@ -135,6 +143,8 @@ function ModelFormDialog({ open, editingModel, onClose, onSaved }: ModelFormDial
       setApiFormat('openai')
       setSortOrder(0)
       setCapabilities('')
+      setInputPrice('')
+      setOutputPrice('')
     }
   }, [open, editingModel])
 
@@ -188,6 +198,8 @@ function ModelFormDialog({ open, editingModel, onClose, onSaved }: ModelFormDial
         api_format: apiFormat,
         sort_order: sortOrder,
         capabilities: capabilities ? capabilities.split(',').map((s) => s.trim()).filter(Boolean) : [],
+        input_price_per_1k_cents: inputPrice ? Math.round(Number(inputPrice) * 100) : null,
+        output_price_per_1k_cents: outputPrice ? Math.round(Number(outputPrice) * 100) : null,
       }
       if (apiKey.trim()) payload.api_key = apiKey.trim()
 
@@ -313,6 +325,19 @@ function ModelFormDialog({ open, editingModel, onClose, onSaved }: ModelFormDial
               <FormLabel>能力标签</FormLabel>
               <input value={capabilities} onChange={(e) => setCapabilities(e.target.value)} placeholder="chat, vision" className="w-full bg-[#F5F5F5] px-3.5 py-2.5 font-mono text-[10px] font-medium text-[#1A1A1A] outline-none placeholder:text-[#CCCCCC]" style={{ border: '1px solid #E8E8E8' }} />
               <FormHint>逗号分隔，如 chat, vision, code</FormHint>
+            </div>
+          </div>
+
+          {/* 单价配置 */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-2">
+              <FormLabel>输入单价（分/千Token）</FormLabel>
+              <input type="number" value={inputPrice} onChange={(e) => setInputPrice(e.target.value)} min={0} step="0.01" placeholder="0" className="w-full bg-[#F5F5F5] px-3.5 py-2.5 font-mono text-[10px] font-medium text-[#1A1A1A] outline-none placeholder:text-[#CCCCCC]" style={{ border: '1px solid #E8E8E8' }} />
+              <FormHint>未填写则按 0 计费（免费）</FormHint>
+            </div>
+            <div className="flex flex-col gap-2">
+              <FormLabel>输出单价（分/千Token）</FormLabel>
+              <input type="number" value={outputPrice} onChange={(e) => setOutputPrice(e.target.value)} min={0} step="0.01" placeholder="0" className="w-full bg-[#F5F5F5] px-3.5 py-2.5 font-mono text-[10px] font-medium text-[#1A1A1A] outline-none placeholder:text-[#CCCCCC]" style={{ border: '1px solid #E8E8E8' }} />
             </div>
           </div>
         </div>
@@ -482,6 +507,9 @@ export default function ModelConfigsPage() {
               <div className="flex items-center gap-1.5" style={colStyle('fill')}>
                 <span className="font-mono text-[10px] font-semibold text-[#1A1A1A]">{m.display_name}</span>
                 {m.is_default && <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 font-mono text-[8px] font-semibold" style={{ color: '#D48700', backgroundColor: '#D4870015', border: '1px solid #D48700' }}>⭐ 默认</span>}
+                {m.input_price_per_1k_cents == null && (
+                  <span className="inline-block px-1.5 py-0.5 font-mono text-[8px] font-semibold" style={{ color: '#D48700', backgroundColor: '#D4870015', border: '1px solid #D48700' }}>未定价</span>
+                )}
               </div>
               <span className="font-mono text-[10px] font-medium text-[#999999]" style={colStyle('fill')}>{m.model_id}</span>
               <div style={colStyle(100)}><ProviderTag provider={m.provider} /></div>
@@ -492,6 +520,12 @@ export default function ModelConfigsPage() {
               <div className="flex flex-wrap gap-1" style={colStyle(100)}>
                 {m.capabilities?.length ? m.capabilities.map((c) => <CapabilityTag key={c} label={c} />) : <span className="font-mono text-[10px] text-[#CCCCCC]">—</span>}
               </div>
+              <span className="font-mono text-[10px] font-medium text-[#1A1A1A]" style={colStyle(80)}>
+                {m.total_calls.toLocaleString()} 次
+              </span>
+              <span className="font-mono text-[10px] font-medium text-[#1A1A1A]" style={colStyle(70)}>
+                {m.avg_latency_ms != null ? `${m.avg_latency_ms}ms` : '—'}
+              </span>
               <div style={colStyle(60)}><ToggleSwitch on={m.enabled} onChange={() => handleToggleEnabled(m)} /></div>
               <div className="flex items-center gap-2" style={colStyle(80)}>
                 {!m.is_default && <button onClick={() => handleSetDefault(m)} className="text-[#6a6a6a] hover:text-[#D48700]" title="设为默认"><Star className="h-3.5 w-3.5" /></button>}

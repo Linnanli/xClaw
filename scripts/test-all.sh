@@ -54,7 +54,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DESKTOP_RUST="$ROOT/desktop-client"
 DESKTOP_UI="$ROOT/desktop-client/src-ui"
 ADMIN_RUST="$ROOT/admin-backend"
-ADMIN_UI="$ROOT/admin-backend/frontend"
+ADMIN_UI="$ROOT/admin-backend/ui"
 
 cd "$ROOT"
 
@@ -248,14 +248,14 @@ run_admin_fe() {
 
     if [[ ! -d "$ADMIN_UI/node_modules" ]]; then
         warn "node_modules 不存在，先安装依赖..."
-        run_step "admin-backend/frontend: npm install" \
+        run_step "admin-backend/ui: npm install" \
             npm install --prefix "$ADMIN_UI"
     fi
 
     # 单元测试
-    run_step "admin-backend/frontend: vitest 单元测试" \
+    run_step "admin-backend/ui: vitest 单元测试" \
         npm run test --prefix "$ADMIN_UI" -- --run 2>/dev/null || \
-        warn "admin-backend/frontend 暂无 vitest 配置，跳过"
+        warn "admin-backend/ui 暂无 vitest 配置，跳过"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -274,10 +274,10 @@ run_e2e() {
 
     # Admin Backend E2E
     if [[ -f "$ADMIN_UI/cypress.config.ts" ]]; then
-        run_step "admin-backend/frontend: cypress e2e" \
+        run_step "admin-backend/ui: cypress e2e" \
             npm run e2e --prefix "$ADMIN_UI"
     else
-        warn "admin-backend/frontend: 无 cypress.config.ts，跳过"
+        warn "admin-backend/ui: 无 cypress.config.ts，跳过"
     fi
 }
 

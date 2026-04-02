@@ -7,6 +7,8 @@ import {
   FileText, Puzzle, ChevronDown,
 } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth'
+import { useEffect, useRef, useCallback } from 'react'
+import { api } from '@/lib/api'
 import type { LucideIcon } from 'lucide-react'
 
 // --- 菜单数据结构 ---
@@ -117,7 +119,7 @@ function NavLinkItem({ item, pathname, indent = false }: { item: NavLink; pathna
   )
 }
 
-function NavGroupItem({ group, pathname }: { group: NavGroup; pathname: string }) {
+function NavGroupItem({ group, pathname, alertBadge = 0 }: { group: NavGroup; pathname: string; alertBadge?: number }) {
   const groupActive = isGroupActive(pathname, group)
   const [open, setOpen] = useState(groupActive)
 
@@ -138,6 +140,14 @@ function NavGroupItem({ group, pathname }: { group: NavGroup; pathname: string }
         >
           {group.label}
         </span>
+        {alertBadge > 0 && (
+          <span
+            className="flex h-4 min-w-4 items-center justify-center px-1 font-mono text-[9px] font-bold text-white"
+            style={{ backgroundColor: '#CF1322', borderRadius: 2 }}
+          >
+            {alertBadge > 99 ? '99+' : alertBadge}
+          </span>
+        )}
         <ChevronDown
           className="h-3 w-3 transition-transform duration-200"
           style={{
@@ -163,6 +173,23 @@ export function AppSidebar() {
   const location = useLocation()
   const user = useAuthStore((s) => s.user)
   const logout = useAuthStore((s) => s.logout)
+  const [unhandledAlerts, setUnhandledAlerts] = useState(0)
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const fetchUnhandledCount = useCallback(async () => {
+    try {
+      const { data } = await api.get('/alerts/unhandled-count')
+      setUnhandledAlerts(data?.count ?? 0)
+    } catch { /* 静默失败，不影响主界面 */ }
+  }, [])
+
+  useEffect(() => {
+    fetchUnhandledCount()
+    timerRef.current = setInterval(fetchUnhandledCount, 30_000)
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current)
+    }
+  }, [fetchUnhandledCount])
 
   return (
     <aside
@@ -202,7 +229,7 @@ export function AppSidebar() {
         <nav className="flex flex-col gap-0.5">
           {navEntries.map((entry) =>
             isGroup(entry) ? (
-              <NavGroupItem key={entry.label} group={entry} pathname={location.pathname} />
+              <NavGroupItem key={entry.label} group={entry} pathname={location.pathname} alertBadge={entry.label === '运营监控' ? unhandledAlerts : 0} />
             ) : (
               <NavLinkItem key={entry.href} item={entry} pathname={location.pathname} />
             ),

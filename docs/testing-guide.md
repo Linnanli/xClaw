@@ -206,4 +206,4 @@ npm run test:e2e
 - `desktop-client/src/engine_startup_tests.rs` — 启动时序测试
 - `admin-backend/tests/integration_smoke_tests.rs` — 冒烟测试
 - `desktop-client/tests/tauri_command_contract_tests.rs` — Tauri 命令契约测试
-- `admin-backend/frontend/cypress/` — Cypress E2E 测试
+- `admin-backend/ui/cypress/` — Cypress E2E 测试

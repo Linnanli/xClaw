@@ -30,7 +30,7 @@ async fn try_connect_db() -> Option<deadpool_postgres::Pool> {
     cfg.password = Some(std::env::var("DB_PASSWORD").unwrap_or("postgres".to_string()));
     cfg.dbname = Some(std::env::var("DB_NAME").unwrap_or("ironclaw".to_string()));
     let pool = cfg.create_pool(None, NoTls).ok()?;
-    pool.get().await.ok()?;
+    let _ = pool.get().await.ok()?;
     Some(pool)
 }
 
@@ -119,6 +119,8 @@ async fn test_migration_all_tables_exist() {
         ("017_convs",     "conversations"),
         ("018_approvals", "approval_tickets"),
         ("019_compliance", "compliance_reports"),
+        ("021_knowledge", "knowledge_bases"),
+        // 020 是字段扩展迁移，表已存在，列级验证见 test_migration_020_security_fields_columns
     ];
 
     let mut missing = Vec::new();
@@ -142,6 +144,80 @@ async fn test_migration_all_tables_exist() {
         "以下迁移未执行：\n{}\n\n执行命令：\n  docker exec -i <postgres> psql -U postgres -d ironclaw < admin-backend/migrations/<file>.sql",
         missing.join("\n")
     );
+}
+
+/// 验证 020_security_fields 迁移新增的列
+#[tokio::test]
+async fn test_migration_020_security_fields_columns() {
+    let pool = match try_connect_db().await {
+        Some(p) => p,
+        None => { println!("⚠️  数据库不可用，跳过"); return; }
+    };
+    let client = pool.get().await.unwrap();
+
+    // users 表新增字段
+    for col in &["mfa_enabled", "login_fail_count", "locked_until"] {
+        let row = client
+            .query_one(
+                "SELECT COUNT(*) FROM information_schema.columns \
+                 WHERE table_name = 'users' AND column_name = $1 AND table_schema = 'public'",
+                &[col],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            row.get::<_, i64>(0), 1,
+            "users 表缺少列 `{}`，请执行迁移 020_security_fields.sql", col
+        );
+    }
+
+    // audit_logs 表新增字段
+    for col in &["ip_address", "user_agent", "is_immutable"] {
+        let row = client
+            .query_one(
+                "SELECT COUNT(*) FROM information_schema.columns \
+                 WHERE table_name = 'audit_logs' AND column_name = $1 AND table_schema = 'public'",
+                &[col],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            row.get::<_, i64>(0), 1,
+            "audit_logs 表缺少列 `{}`，请执行迁移 020_security_fields.sql", col
+        );
+    }
+
+    // registered_clients 表新增字段
+    for col in &["device_fingerprint", "needs_upgrade"] {
+        let row = client
+            .query_one(
+                "SELECT COUNT(*) FROM information_schema.columns \
+                 WHERE table_name = 'registered_clients' AND column_name = $1 AND table_schema = 'public'",
+                &[col],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            row.get::<_, i64>(0), 1,
+            "registered_clients 表缺少列 `{}`，请执行迁移 020_security_fields.sql", col
+        );
+    }
+
+    // model_configs 表新增字段
+    for col in &["total_calls", "avg_latency_ms", "consecutive_failures", "last_error_at"] {
+        let row = client
+            .query_one(
+                "SELECT COUNT(*) FROM information_schema.columns \
+                 WHERE table_name = 'model_configs' AND column_name = $1 AND table_schema = 'public'",
+                &[col],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            row.get::<_, i64>(0), 1,
+            "model_configs 表缺少列 `{}`，请执行迁移 020_security_fields.sql", col
+        );
+    }
 }
 
 /// 验证 model_configs 表的列结构
@@ -245,7 +321,7 @@ async fn test_http_put_model_config_route_exists() {
 /// 批量验证所有关键 GET 路由都已注册
 #[tokio::test]
 async fn test_http_all_critical_get_routes_registered() {
-    let pool = match try_connect_db().await {
+    let _pool = match try_connect_db().await {
         Some(p) => p,
         None => { println!("⚠️  数据库不可用，跳过"); return; }
     };

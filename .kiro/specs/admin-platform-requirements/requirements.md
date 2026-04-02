@@ -6,6 +6,8 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 
 文档中每条需求标注 `[已实现]` 或 `[新增]`，以区分现有功能和待开发功能。
 
+> **文档范围说明**：本文档同时覆盖 Admin Backend（管理后台）和 Desktop Client（桌面客户端）两侧的验收标准。对于涉及客户端消费的功能，在对应需求下设有独立的"**客户端验收标准**"小节，描述客户端侧的实现状态和行为要求。这样 fullstack-audit skill 在分析任意需求时，能在同一文档中找到完整的配置方（Admin Backend）和消费方（Desktop Client）链路。
+
 ## 术语表
 
 - **Admin_Platform**：IronClaw 管理后台 Web 应用，供管理员使用
@@ -108,6 +110,15 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 10. `[新增]` WHEN Desktop_Client 发起 AI 对话, THE Client_Manager SHALL 根据用户所属部门的模型白名单返回可用模型列表，未配置白名单的部门默认可使用所有已启用模型
 11. `[新增]` THE Admin_Platform SHALL 支持按部门名称搜索和按费用限额状态（已启用/未启用）筛选部门列表
 
+> **客户端侧实现说明**：部门模型白名单的消费方是 Desktop_Client。客户端通过 `GET /api/client-models?user_id={id}` 拉取经白名单过滤后的可用模型列表。
+
+#### 客户端验收标准
+
+12. `[已实现]` WHEN Desktop_Client 启动或用户切换模型, THE Desktop_Client SHALL 调用 `get_available_models` 命令，优先从 `GET /api/client-models?user_id={owner_id}` 拉取后台下发的可用模型列表；owner_id 非合法 UUID 时不传 user_id 参数，后端返回所有已启用模型
+13. `[已实现]` WHEN Admin Backend 不可用, THE Desktop_Client SHALL 降级查询本地 LLM provider 的 `list_models()`，并将当前活跃模型始终包含在列表中
+14. `[已实现]` THE Desktop_Client SHALL 支持本地自定义模型（`create_custom_model` / `update_custom_model` / `delete_custom_model`），自定义模型与后台下发模型合并展示，来源标记为 `custom`
+15. `[已实现]` THE Desktop_Client SHALL 对本地自定义模型的 API Key 不回显（展示为 `****`），防止 Key 泄露
+
 ---
 
 ### 需求 5：DLP 数据防泄漏 `[已实现 + 扩展]`
@@ -132,6 +143,16 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 12. `[新增]` WHEN DLP_Engine 检测到严重级别为 critical 的违规, THE Alert_Service SHALL 立即生成高优先级告警
 13. `[新增]` THE Admin_Platform SHALL 展示 DLP 拦截事件的详细记录，包含触发规则、原始内容摘要、用户和时间
 14. `[未来需求]` THE DLP_Engine SHOULD 考虑使用成熟的 DLP 库以支持文件扫描和更高性能的大规模文本扫描
+
+> **客户端侧实现说明**：DLP 扫描链路：`SafetyBridge::scan_user_input`（密钥检测 → PII 脱敏）→ 发送消息 → LLM 返回 → `SafetyBridge::scan_tool_output`（截断/注入检测/密钥清理）。引擎启动时自动执行一次 DLP 规则同步（`do_sync_dlp_rules`），同步失败时使用内置规则，不阻塞启动。
+
+#### 客户端验收标准
+
+15. `[已实现]` THE Desktop_Client 引擎启动后 2 秒内 SHALL 自动调用 `do_sync_dlp_rules` 从 Admin Backend 同步 DLP 规则；同步失败时使用内置规则，不阻塞引擎启动
+16. `[已实现]` THE Desktop_Client SHALL 支持三种规则类型的转换：`regex`（直接使用 pattern）、`keyword`（从 rule_config.keywords 构建正则）、`dictionary`（从 pattern 逗号分隔关键字构建正则）；无效正则跳过并记录警告
+17. `[已实现]` WHEN DLP 规则 severity 为 `critical`, THE Desktop_Client SHALL 将对应 LeakPattern 的 action 设为 `Block`（故障安全拒绝）；其他级别设为 `Redact`（格式保留脱敏）
+18. `[已实现]` THE Desktop_Client SHALL 通过 `DataReporter` 将 DLP 事件（`ClientReport::DlpEvent`）上报到 Admin Backend，仅上报统计信息（规则名称、是否拦截），不上报原始内容
+19. `[已实现]` WHEN DLP 扫描检测到密钥泄露, THE Desktop_Client SHALL 采用 Fail-Safe 策略拒绝发送，不降级为允许发送
 
 ---
 
@@ -181,6 +202,15 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 9. `[新增]` WHEN Desktop_Client 版本低于管理员设定的最低版本, THE Client_Manager SHALL 标记该客户端为"需要升级"并通知用户
 10. `[新增]` THE Admin_Platform SHALL 展示客户端的设备指纹信息，包含硬件标识、操作系统版本和安全补丁级别
 
+> **客户端侧实现说明**：Desktop_Client 通过 `AdminConfigSync` 模块（`GET /api/client-config`）拉取配置，每 5 分钟定时刷新，支持离线缓存（`admin_config.json`）。客户端 token 由 `AuthTokenManager` 管理，64 位十六进制格式，通过 `get_auth_token` 命令暴露给前端。
+
+#### 客户端验收标准
+
+11. `[已实现]` THE Desktop_Client SHALL 通过 `AdminConfigSync` 在启动时从 `GET /api/client-config` 拉取配置，并注入为环境变量（LLM_BACKEND、LLM_API_KEY、LLM_MODEL、LLM_BASE_URL、SAFETY_ENABLED 等）；API Key 注入时不写入日志
+12. `[已实现]` WHEN Admin Backend 不可用, THE Desktop_Client SHALL 从本地缓存文件（`admin_config.json`）加载上次成功拉取的配置，支持离线启动
+13. `[已实现]` THE Desktop_Client SHALL 每 5 分钟定时刷新配置；刷新失败时静默重试，不影响客户端运行
+14. `[已实现]` THE Desktop_Client SHALL 通过 `get_auth_token` 命令向前端提供 64 位十六进制客户端 token，用于与 Admin Backend 的认证通信
+
 ---
 
 ### 需求 9：客户端配置下发 `[已实现 + 扩展]`
@@ -196,6 +226,14 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 5. `[已实现]` WHEN Admin 保存配置, THE Admin_Platform SHALL 递增配置版本号并展示当前版本
 6. `[新增]` THE Admin_Platform SHALL 支持按部门或用户组下发差异化的客户端配置
 7. `[新增]` WHEN 客户端配置更新, THE Client_Manager SHALL 通过心跳机制通知在线客户端拉取最新配置
+
+> **客户端侧实现说明**：`AdminClientConfig` 包含 LLM 配置、安全策略开关、功能开关、费用限制和水印配置，通过 `inject_to_env()` 注入环境变量后由 IronClaw 引擎读取。
+
+#### 客户端验收标准
+
+8. `[已实现]` THE Desktop_Client SHALL 从 `AdminClientConfig` 中读取水印配置（`watermark_enabled`、`watermark_template`、`watermark_font_size`、`watermark_opacity`、`watermark_position`、`watermark_color`），并通过 `get_watermark_config` 命令暴露给前端
+9. `[已实现]` THE Desktop_Client SHALL 从 `AdminClientConfig` 中读取功能开关（`safety_enabled`、`skills_enabled`、`extensions_enabled`）并注入为环境变量，IronClaw 引擎据此决定是否启用对应功能
+10. `[待实现]` WHEN Admin Backend 推送配置更新通知, THE Desktop_Client SHALL 主动触发一次 `AdminConfigSync::fetch_once()` 拉取最新配置，而非等待下一个 5 分钟定时周期
 
 ---
 
@@ -218,6 +256,13 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 11. `[新增]` WHEN Desktop_Client 请求可用模型列表, THE Model_Config_Service SHALL 根据用户所属部门的模型白名单过滤并返回该用户可用的模型配置（脱敏后），未配置白名单的部门返回所有已启用模型
 12. `[新增]` THE Admin_Platform SHALL 允许为每个模型配置输入单价和输出单价（单位：分/千Token），用于费用计算
 13. `[新增]` WHEN Admin 点击"获取官方定价", THE Model_Config_Service SHALL 尝试从对应提供商的公开定价接口拉取当前模型的单价并自动填充，拉取失败时提示手动输入
+
+> **客户端侧实现说明**：模型配置的消费方是 Desktop_Client。客户端通过 `get_available_models` 命令拉取模型列表，支持后台下发、本地自定义和内置兜底三个来源。`test_model_connection` 命令用于验证自定义模型的 API 连通性。
+
+#### 客户端验收标准
+
+14. `[已实现]` THE Desktop_Client SHALL 通过 `test_model_connection` 命令向指定 API Base URL 发送最小化 chat completion 请求（max_tokens=5），验证自定义模型的 API 连通性，返回成功/失败状态和 HTTP 状态码
+15. `[已实现]` THE Desktop_Client SHALL 支持运行时模型切换（`ModelSwitchProvider`），同 provider 内切换通过 `model_override` 注入，跨 provider 切换通过 `replace_inner()` 替换底层 provider；切换时清除 model_override
 
 ---
 
@@ -334,6 +379,17 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 9. `[已实现]` THE Conversation_Service SHALL 解析 client-reports 中 report_type="conversation" 的 payload，写入 conversations 和 conversation_messages 表（后端 handler 已实现）
 10. `[已实现]` THE Admin_Platform SHALL 在对话列表 API 中仅返回对话摘要（主题、消息数、Token 消耗），不返回完整消息内容；完整消息仅在详情 API 中返回
 
+> **客户端侧实现说明（已完成，需更新状态）**：`ClientReport::Conversation` 类型已在 `data_reporter.rs` 中实现，`ConversationTracker` 已实现按 thread_id 分组的消息缓冲、超时自动 flush（30 分钟）、DLP 标记传递和 Token 回填（`update_last_assistant_tokens`）。上报时使用 `{user_id}-{thread_id}` 作为 `client_conversation_id` 做幂等去重。
+
+#### 客户端验收标准
+
+11. `[已实现]` THE Desktop_Client SHALL 通过 `ConversationTracker` 按 thread_id 分组缓冲对话消息，记录用户消息（`record_user_message`）和 assistant 回复（`record_assistant_message`），Token 信息通过 `update_last_assistant_tokens` 在 TurnCost 事件到达后回填
+12. `[已实现]` WHEN 对话 thread 超过 30 分钟无新消息, THE Desktop_Client SHALL 自动将该 thread 的消息缓冲通过 `DataReporter::enqueue(ClientReport::Conversation)` 加入上报队列
+13. `[已实现]` WHEN 用户显式切换 thread 或关闭应用, THE Desktop_Client SHALL 调用 `finish_thread()` 立即 flush 当前 thread 的消息缓冲
+14. `[已实现]` THE Desktop_Client SHALL 通过 `DataReporter` 每 30 秒批量上报队列中的事件到 `POST /api/client-reports`；上报失败时事件放回队列头部，下次重试；队列超过 10000 条时丢弃最旧的 10% 事件
+15. `[已实现]` THE Desktop_Client SHALL 在对话上报中传递 DLP 标记状态（`dlp_flagged`），当任意消息触发 DLP 时整个对话标记为 `dlp_flagged=true`
+16. `[待实现]` THE Desktop_Client SHALL 在 `ConversationTracker` 中集成 `DataReporter` 的定期 flush 调用，确保后台每 5 分钟检查一次空闲 thread 并触发 `flush_idle_threads()`
+
 ---
 
 ### 需求 17：知识库管理 `[新增]`
@@ -406,6 +462,13 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 2. `[新增]` WHEN 水印功能已启用, THE Desktop_Client SHALL 在 AI 对话导出的文件上渲染包含用户标识和时间戳的可见水印
 3. `[新增]` THE Admin_Platform SHALL 在水印管理页面展示当前水印配置和预览效果
 
+> **客户端侧实现说明**：水印配置通过 `AdminClientConfig` 下发，客户端通过 `get_watermark_config` 命令读取并暴露给前端。前端在导出文件时根据配置渲染可见水印。
+
+#### 客户端验收标准
+
+4. `[已实现]` THE Desktop_Client SHALL 通过 `get_watermark_config` 命令从 `GET /api/settings` 拉取水印配置，返回 `watermark_enabled`、`watermark_template`、`watermark_font_size`、`watermark_opacity`、`watermark_position`、`watermark_color` 字段；Admin Backend 不可用时返回默认值（禁用状态）
+5. `[待实现]` WHEN `watermark_enabled=true`, THE Desktop_Client 前端 SHALL 在导出对话内容时将水印模板中的 `{username}`、`{department}`、`{datetime}` 变量替换为当前用户信息，并渲染为可见水印叠加在导出文件上
+
 ---
 
 ### 需求 21：操作审批流 `[部分实现 + 扩展]`
@@ -427,6 +490,14 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 7. `[新增]` THE Audit_Service SHALL 记录审批流程的完整生命周期，包含申请、审批和执行环节
 8. `[新增]` THE Admin_Platform SHALL 支持按申请人、工具类型、审批状态和时间范围筛选审批记录
 
+> **客户端侧实现说明**：`ic_approve_tool` 和 `ic_deny_tool` 通过向 Agent 发送 `!approve <request_id>` / `!deny <request_id>` 格式消息实现审批，消息经 `IncomingMessage` 路由到 Agent 的 SubmissionParser 处理。两个命令均已注册到 `all_tauri_commands!()` 宏。
+
+#### 客户端验收标准
+
+9. `[已实现]` THE Desktop_Client SHALL 通过 `ic_approve_tool(request_id, thread_id)` 命令向 Agent 发送 `!approve {request_id}` 格式的审批消息，消息携带正确的 thread_id 和 owner_id
+10. `[已实现]` THE Desktop_Client SHALL 通过 `ic_deny_tool(request_id, thread_id)` 命令向 Agent 发送 `!deny {request_id}` 格式的拒绝消息
+11. `[待实现]` WHEN Admin 在管理端通过 SSE/WebSocket 推送审批结果, THE Desktop_Client SHALL 接收推送并通过 `chat-event` 通知前端更新审批状态，无需用户手动刷新
+
 ---
 
 ### 需求 23：对话流异步审批任务 `[新增]`
@@ -446,6 +517,15 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 7. `[新增]` THE Desktop_Client SHALL 在对话界面显示审批任务的实时状态（待审批 / 已批准 / 已拒绝 / 已过期），状态更新不刷新整个对话历史
 8. `[新增]` WHEN Desktop_Client 重启时, THE Desktop_Client SHALL 恢复所有未完成的审批轮询任务（通过本地持久化 pending ticket_id 列表实现）
 9. `[新增]` THE Admin_Platform SHALL 在审批工单列表中显示来源标记（"对话流提交"），以区分手动创建的工单和对话流自动提交的工单
+
+> **客户端侧实现说明**：本需求的后台轮询任务通过 `tokio::spawn` 创建独立异步任务，不依赖 IronClaw Job 系统，不阻塞对话线程。轮询结果通过 Tauri 的 `app_handle.emit("chat-event", ...)` 推送到前端。重启恢复通过本地持久化 pending ticket_id 列表实现。
+
+#### 客户端验收标准
+
+10. `[待实现]` THE Desktop_Client SHALL 实现 `submit_approval_ticket(content, thread_id)` Tauri 命令，调用 `POST /api/approvals` 创建工单，并通过 `tokio::spawn` 启动独立后台轮询任务，返回 ticket_id 给前端
+11. `[待实现]` THE Desktop_Client 后台轮询任务 SHALL 每 30 秒调用 `GET /api/approvals/{id}/check`，检测到 `status` 变更时通过 `chat-event` 推送结果并终止轮询；网络错误时继续重试，不终止任务
+12. `[待实现]` THE Desktop_Client SHALL 在本地持久化 pending ticket_id 列表（JSON 文件），应用启动时读取列表并为每个 pending ticket 重新启动轮询任务
+13. `[待实现]` THE Desktop_Client SHALL 将 `submit_approval_ticket` 命令注册到 `all_tauri_commands!()` 宏，并在 `tauri_command_contract_tests.rs` 的 `FRONTEND_INVOKED_COMMANDS` 中添加对应条目
 
 ---
 

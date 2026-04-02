@@ -258,14 +258,14 @@ Error: Cannot find module 'vite'
 tail -100 /tmp/admin-frontend.log
 
 # 检查 node_modules
-ls admin-backend/frontend/node_modules
+ls admin-backend/ui/node_modules
 ```
 
 **解决方案**:
 
 **重新安装依赖**:
 ```bash
-cd admin-backend/frontend
+cd admin-backend/ui
 rm -rf node_modules package-lock.json
 npm install
 ```
@@ -278,7 +278,7 @@ npm --version
 
 **手动启动前端**:
 ```bash
-cd admin-backend/frontend
+cd admin-backend/ui
 npm run dev
 ```
 
@@ -373,20 +373,20 @@ ERR_CONNECTION_REFUSED
 lsof -i :3000
 
 # 2. 检查前端配置
-cat admin-backend/frontend/.env
+cat admin-backend/ui/.env
 ```
 
 **解决方案**:
 
 **检查 API 基础 URL**:
 ```bash
-# admin-backend/frontend/.env
+# admin-backend/ui/.env
 VITE_API_BASE_URL=http://localhost:3000
 ```
 
 **重启前端**:
 ```bash
-cd admin-backend/frontend
+cd admin-backend/ui
 npm run dev
 ```
 

@@ -170,8 +170,10 @@ pub struct AdminConfigSync {
     http_client: reqwest::Client,
     /// 当前配置（内存缓存）
     current_config: Arc<RwLock<AdminClientConfig>>,
-    /// 同步间隔
+    /// 同步间隔（用于 run_sync_loop）
     sync_interval: Duration,
+    /// 版本检查间隔（用于 run_sync_loop_with_version_check）
+    version_check_interval: Duration,
 }
 
 impl AdminConfigSync {
@@ -186,12 +188,19 @@ impl AdminConfigSync {
                 .unwrap_or_default(),
             current_config: Arc::new(RwLock::new(AdminClientConfig::default())),
             sync_interval: Duration::from_secs(300), // 5 分钟
+            version_check_interval: Duration::from_secs(30), // 30 秒
         }
     }
 
     /// 设置同步间隔。
     pub fn with_interval(mut self, interval: Duration) -> Self {
         self.sync_interval = interval;
+        self
+    }
+
+    /// 设置版本检查间隔（用于 run_sync_loop_with_version_check）。
+    pub fn with_version_check_interval(mut self, interval: Duration) -> Self {
+        self.version_check_interval = interval;
         self
     }
 
@@ -261,6 +270,51 @@ impl AdminConfigSync {
                 }
                 Err(e) => {
                     tracing::debug!("Config sync failed (will retry): {}", e);
+                }
+            }
+        }
+    }
+
+    /// 启动带版本检测的同步循环。
+    ///
+    /// 每 `version_check_interval`（默认 30 秒）检查一次配置版本，
+    /// 版本变化时立即拉取完整配置并注入环境变量。
+    ///
+    /// 这实现了"推送感知"效果：Admin 保存配置后，
+    /// 客户端在下一个检查周期内（最多 30 秒）自动应用新配置，
+    /// 无需等待 5 分钟定时周期（需求 9.10）。
+    ///
+    /// # 首次拉取
+    ///
+    /// 首次拉取时仅记录版本号，不调用 `inject_to_env()`，
+    /// 因为启动时已通过 `apply_admin_overrides()` 完成注入。
+    pub async fn run_sync_loop_with_version_check(&self) {
+        let mut interval = tokio::time::interval(self.version_check_interval);
+        let mut last_version: Option<u64> = None;
+
+        loop {
+            interval.tick().await;
+
+            match self.fetch_once().await {
+                Ok(config) => {
+                    let current_version = config.config_version.unwrap_or(0);
+                    let version_changed = last_version
+                        .map(|v| v != current_version)
+                        .unwrap_or(false); // 首次拉取不视为变化，避免重复注入
+
+                    if version_changed {
+                        tracing::info!(
+                            prev_version = last_version,
+                            new_version = current_version,
+                            "Config version changed, applying new config"
+                        );
+                        config.inject_to_env();
+                    }
+
+                    last_version = Some(current_version);
+                }
+                Err(e) => {
+                    tracing::debug!("Config version check failed (will retry): {}", e);
                 }
             }
         }

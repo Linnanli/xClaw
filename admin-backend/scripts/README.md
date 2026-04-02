@@ -389,7 +389,7 @@ cd admin-backend
 cargo run
 
 # 3. 启动前端（在另一个终端）
-cd admin-backend/frontend
+cd admin-backend/ui
 npm run dev
 ```
 

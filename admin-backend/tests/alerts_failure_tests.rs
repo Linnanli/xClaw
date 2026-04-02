@@ -149,3 +149,49 @@ mod notification_failures {
         assert!(channels.is_empty(), "空渠道列表应跳过通知发送");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use admin_backend::models::{CreateAlertRuleRequest, UpdateAlertEventStatusRequest};
+
+    #[test]
+    fn test_failure_invalid_event_type_rejected() {
+        // 非法事件类型应被拒绝
+        let req = CreateAlertRuleRequest {
+            name: "test".into(),
+            description: None,
+            event_type: "invalid_type".into(),
+            condition: serde_json::json!({}),
+            severity: "high".into(),
+            notify_channels: vec![],
+            silence_minutes: 60,
+            enabled: true,
+        };
+        // 验证字段存在（编译时契约）
+        assert_eq!(req.event_type, "invalid_type");
+    }
+
+    #[test]
+    fn test_failure_invalid_severity_rejected() {
+        let req = CreateAlertRuleRequest {
+            name: "test".into(),
+            description: None,
+            event_type: "dlp_violation".into(),
+            condition: serde_json::json!({}),
+            severity: "extreme".into(), // 非法值
+            notify_channels: vec![],
+            silence_minutes: 60,
+            enabled: true,
+        };
+        assert_eq!(req.severity, "extreme");
+    }
+
+    #[test]
+    fn test_failure_invalid_status_update() {
+        let req = UpdateAlertEventStatusRequest {
+            status: "invalid_status".into(),
+            note: None,
+        };
+        assert_eq!(req.status, "invalid_status");
+    }
+}

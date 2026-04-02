@@ -297,11 +297,15 @@ fn build_conversations_filter(
     if let Some(ref search) = params.search {
         let trimmed = search.trim();
         if !trimmed.is_empty() {
-            conditions.push(format!("(c.topic ILIKE ${} OR u.username ILIKE ${})", idx, idx));
-            query_params.push(Box::new(format!("%{}%", trimmed)));
-            let _ = idx; // suppress unused
+            // 同一参数用于两个 ILIKE 条件，需要 push 两次
+            conditions.push(format!("(c.topic ILIKE ${} OR u.username ILIKE ${})", idx, idx + 1));
+            let pattern = format!("%{}%", trimmed);
+            query_params.push(Box::new(pattern.clone()));
+            query_params.push(Box::new(pattern));
+            idx += 2;
         }
     }
+    let _ = idx; // 最后一次赋值后不再使用，显式忽略
 
     let where_clause = if conditions.is_empty() {
         String::new()

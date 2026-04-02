@@ -10,6 +10,9 @@ interface DashboardStats {
   online_clients: number
   dlp_blocked_today: number
   sensitive_ops_today: number
+  ai_conversations_today: number
+  token_usage_today: number
+  unhandled_alerts: number
 }
 
 interface ActivityLog {
@@ -89,6 +92,8 @@ export default function DashboardPage() {
     { label: '在线客户端', value: stats ? String(stats.online_clients) : '—', change: '', changeColor: '#0A6B3A', borderColor: '#E8E8E8' },
     { label: 'DLP 拦截', value: stats ? String(stats.dlp_blocked_today) : '—', change: '今日', changeColor: '#CF1322', borderColor: '#E8E8E8' },
     { label: '敏感操作', value: stats ? String(stats.sensitive_ops_today) : '—', change: '今日', changeColor: '#D48700', borderColor: 'rgba(212,135,0,0.25)' },
+    { label: 'AI 对话', value: stats ? stats.ai_conversations_today.toLocaleString() : '—', change: '今日', changeColor: '#0A6B3A', borderColor: '#E8E8E8' },
+    { label: 'Token 消耗', value: stats ? stats.token_usage_today.toLocaleString() : '—', change: '今日', changeColor: '#999999', borderColor: '#E8E8E8' },
     { label: '今日费用', value: todayCost != null ? formatCents(todayCost) : '—', change: '本月 ' + (monthCost != null ? formatCents(monthCost) : '—'), changeColor: '#999999', borderColor: 'rgba(10,107,58,0.25)', valueColor: '#0A6B3A', clickable: true },
     { label: '系统健康度', value: '99.8%', change: '正常', changeColor: '#0A6B3A', borderColor: '#E8E8E8' },
   ]
@@ -133,8 +138,8 @@ function OverviewTab({ stats, logs, loading, statCards, onCostClick }: {
 }) {
   return (
     <>
-      {/* 统计卡片 — 6 列 */}
-      <div className="grid grid-cols-6 gap-2.5">
+      {/* 统计卡片 — 4 列 × 2 行 */}
+      <div className="grid grid-cols-4 gap-2.5">
         {statCards.map((s) => (
           <div
             key={s.label}

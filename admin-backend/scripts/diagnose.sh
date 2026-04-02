@@ -73,7 +73,7 @@ if lsof -i :5174 &> /dev/null; then
     echo -e "${GREEN}✅ 前端服务正在运行 (端口 5174)${NC}"
 else
     echo -e "${RED}❌ 前端服务未运行${NC}"
-    echo -e "${YELLOW}   解决方案: cd admin-backend/frontend && npm run dev${NC}"
+    echo -e "${YELLOW}   解决方案: cd admin-backend/ui && npm run dev${NC}"
 fi
 echo ""
 
@@ -160,7 +160,7 @@ fi
 # 前端未运行
 if ! lsof -i :5174 &> /dev/null; then
     echo -e "${RED}4. 启动前端服务${NC}"
-    echo "   cd admin-backend/frontend && npm run dev"
+    echo "   cd admin-backend/ui && npm run dev"
     echo ""
 fi
 

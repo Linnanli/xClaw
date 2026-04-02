@@ -61,6 +61,9 @@ pub enum Error {
 
     #[error("Client not found")]
     ClientNotFound,
+
+    #[error("账户已锁定，请稍后再试")]
+    AccountLocked,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -86,6 +89,7 @@ impl IntoResponse for Error {
             Error::SkillNotFound => (StatusCode::NOT_FOUND, "Skill not found"),
             Error::PluginNotFound => (StatusCode::NOT_FOUND, "Plugin not found"),
             Error::ClientNotFound => (StatusCode::NOT_FOUND, "Client not found"),
+            Error::AccountLocked => (StatusCode::LOCKED, "账户已锁定，请稍后再试"),
         };
 
         let body = Json(json!({

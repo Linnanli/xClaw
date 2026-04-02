@@ -86,7 +86,7 @@
 ## 项目结构
 
 ```
-admin-backend/frontend/
+admin-backend/ui/
 ├── cypress/
 │   ├── e2e/
 │   │   └── auth_login.cy.ts        # 登录功能 E2E 测试
@@ -114,7 +114,7 @@ admin-backend/frontend/
 
 2. **前端开发服务器运行**
    ```bash
-   cd admin-backend/frontend
+   cd admin-backend/ui
    npm run dev
    ```
 
@@ -127,7 +127,7 @@ admin-backend/frontend/
 #### 方式 1：使用测试脚本（推荐）
 
 ```bash
-cd admin-backend/frontend
+cd admin-backend/ui
 ./scripts/run-e2e-tests.sh
 ```
 
@@ -161,7 +161,7 @@ npm run test:e2e:headed
 
 ## 参考资源
 
-- `admin-backend/frontend/cypress/e2e/auth_login.cy.ts` - 登录测试
-- `admin-backend/frontend/cypress/support/commands.ts` - 自定义命令
-- `admin-backend/frontend/scripts/run-e2e-tests.sh` - 测试脚本
+- `admin-backend/ui/cypress/e2e/auth_login.cy.ts` - 登录测试
+- `admin-backend/ui/cypress/support/commands.ts` - 自定义命令
+- `admin-backend/ui/scripts/run-e2e-tests.sh` - 测试脚本
 - `desktop-client/src-ui/cypress/e2e/dlp_integration.cy.js` - 参考示例

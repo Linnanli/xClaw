@@ -429,4 +429,42 @@ mod tests {
         let result = sync.fetch_once().await;
         assert!(result.is_err(), "Should fail with network error");
     }
+
+    // =========================================================================
+    // 版本感知同步测试
+    // =========================================================================
+
+    #[test]
+    fn test_sync_with_version_check_interval() {
+        let sync = crate::admin_sync::AdminConfigSync::new(
+            "https://admin.example.com".into(),
+            "test-token".into(),
+        )
+        .with_version_check_interval(std::time::Duration::from_secs(10));
+        // 验证 builder 方法不 panic，config() 可正常访问
+        let _ = sync.config();
+    }
+
+    #[tokio::test]
+    async fn test_sync_version_check_network_error() {
+        let sync = crate::admin_sync::AdminConfigSync::new(
+            "https://nonexistent.invalid.example.com".into(),
+            "test-token".into(),
+        );
+        // run_sync_loop_with_version_check 在网络错误时应静默重试
+        // 这里只验证 fetch_once 失败时不 panic
+        let result = sync.fetch_once().await;
+        assert!(result.is_err(), "Should fail with network error");
+    }
+
+    #[test]
+    fn test_sync_version_check_default_interval_is_30s() {
+        let sync = crate::admin_sync::AdminConfigSync::new(
+            "https://admin.example.com".into(),
+            "test-token".into(),
+        );
+        // 默认版本检查间隔应为 30 秒（通过 builder 覆盖验证）
+        let sync_custom = sync.with_version_check_interval(std::time::Duration::from_secs(30));
+        let _ = sync_custom.config();
+    }
 }

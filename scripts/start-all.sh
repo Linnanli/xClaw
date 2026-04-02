@@ -319,7 +319,7 @@ fi
 # 启动 Admin Backend 前端
 # ============================================
 
-start_admin_frontend "$PROJECT_ROOT/admin-backend/frontend"
+start_admin_frontend "$PROJECT_ROOT/admin-backend/ui"
 ADMIN_FRONTEND_PID=$(cat /tmp/admin-frontend.pid 2>/dev/null || echo "")
 if [ -z "$ADMIN_FRONTEND_PID" ]; then
     exit 1
