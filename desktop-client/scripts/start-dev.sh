@@ -85,6 +85,15 @@ fi
 # ── 启动前端 dev server ────────────────────────────────────────
 # 在脚本中显式启动，避免 Tauri beforeDevCommand 的 PATH 问题
 # （nvm 等工具安装的 node/npm 在 Tauri 的 shell 中可能找不到）
+
+# 清理可能残留的 5173 端口进程
+if lsof -ti:5173 > /dev/null 2>&1; then
+    echo ""
+    echo "🧹 清理 5173 端口残留进程..."
+    lsof -ti:5173 | xargs kill -9 2>/dev/null || true
+    sleep 1
+fi
+
 echo ""
 echo "🌐 启动前端 dev server..."
 (cd "$PROJECT_DIR/src-ui" && npm run dev) &

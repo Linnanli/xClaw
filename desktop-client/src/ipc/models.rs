@@ -353,16 +353,21 @@ async fn fetch_admin_models(engine: &EngineState) -> Result<Vec<ModelConfig>, St
         .unwrap_or_else(|_| "http://localhost:3000".to_string());
 
     // 获取当前用户 ID，用于部门白名单过滤
+    // owner_id 可能是非 UUID 值（如 "default"），此时不传 user_id 参数
     let state = engine.get().map_err(|e| format!("引擎未就绪: {}", e))?;
-    let user_id = &state.owner_id;
+    let owner_id = &state.owner_id;
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
 
-    // 传递 user_id 参数，后端根据用户所属部门的模型白名单过滤
-    let url = format!("{}/api/client-models?user_id={}", admin_url, user_id);
+    // 仅当 owner_id 是合法 UUID 时才传 user_id，否则后端返回所有已启用模型
+    let url = if uuid::Uuid::parse_str(owner_id).is_ok() {
+        format!("{}/api/client-models?user_id={}", admin_url, owner_id)
+    } else {
+        format!("{}/api/client-models", admin_url)
+    };
     let response = client
         .get(&url)
         .send()

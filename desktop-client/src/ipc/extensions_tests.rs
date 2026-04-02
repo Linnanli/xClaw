@@ -347,14 +347,14 @@ mod tests {
             prompt: "Enter your API key".into(),
             optional: false,
             provided: false,
-            auto_generate: false,
+            input_type: "Text".into(),
         };
         let json = serde_json::to_value(&field).unwrap();
         assert_eq!(json["name"], "api_key");
         assert_eq!(json["prompt"], "Enter your API key");
         assert_eq!(json["optional"], false);
         assert_eq!(json["provided"], false);
-        assert_eq!(json["auto_generate"], false);
+        assert_eq!(json["input_type"], "Text");
     }
 
     #[test]
@@ -364,13 +364,13 @@ mod tests {
             prompt: "Webhook secret (auto-generated if empty)".into(),
             optional: true,
             provided: true,
-            auto_generate: true,
+            input_type: "AutoGenerate".into(),
         };
         let json = serde_json::to_string(&original).unwrap();
         let parsed: ExtensionSetupField = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.name, original.name);
         assert_eq!(parsed.optional, original.optional);
-        assert_eq!(parsed.auto_generate, original.auto_generate);
+        assert_eq!(parsed.input_type, original.input_type);
     }
 
     #[test]
@@ -384,14 +384,14 @@ mod tests {
                     prompt: "Telegram Bot Token".into(),
                     optional: false,
                     provided: false,
-                    auto_generate: false,
+                    input_type: "Text".into(),
                 },
                 ExtensionSetupField {
                     name: "webhook_secret".into(),
                     prompt: "Webhook Secret".into(),
                     optional: true,
                     provided: false,
-                    auto_generate: true,
+                    input_type: "AutoGenerate".into(),
                 },
             ],
         };
@@ -440,7 +440,7 @@ mod tests {
     ///   prompt: string;
     ///   optional: boolean;
     ///   provided: boolean;
-    ///   auto_generate: boolean;
+    ///   input_type: boolean;
     /// }
     /// ```
     #[test]
@@ -450,7 +450,7 @@ mod tests {
             prompt: "Test prompt".into(),
             optional: false,
             provided: true,
-            auto_generate: false,
+            input_type: "Text".into(),
         };
         let json = serde_json::to_value(&field).unwrap();
 
@@ -458,13 +458,13 @@ mod tests {
         assert!(json.get("prompt").is_some());
         assert!(json.get("optional").is_some());
         assert!(json.get("provided").is_some());
-        assert!(json.get("auto_generate").is_some());
+        assert!(json.get("input_type").is_some());
 
         assert!(json["name"].is_string());
         assert!(json["prompt"].is_string());
         assert!(json["optional"].is_boolean());
         assert!(json["provided"].is_boolean());
-        assert!(json["auto_generate"].is_boolean());
+        assert!(json["input_type"].is_string());
 
         let obj = json.as_object().unwrap();
         assert_eq!(obj.len(), 5, "ExtensionSetupField should have exactly 5 fields");
@@ -513,7 +513,7 @@ mod tests {
                 prompt: "GitHub API Key".into(),
                 optional: false,
                 provided: true, // 已配置，但不应包含实际值
-                auto_generate: false,
+                input_type: "Text".into(),
             }],
         };
         let json_str = serde_json::to_string(&resp).unwrap();

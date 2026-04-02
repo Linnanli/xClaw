@@ -32,7 +32,7 @@ pub async fn ic_list_extensions(
         .ok_or("Extension manager not available")?;
 
     let extensions = ext_mgr
-        .list(None, include_available.unwrap_or(false))
+        .list(None, include_available.unwrap_or(false), &state.owner_id)
         .await
         .map_err(|e| format!("Failed to list extensions: {}", e))?;
 
@@ -64,7 +64,7 @@ pub async fn ic_install_extension(
         .ok_or("Extension manager not available")?;
 
     let result = ext_mgr
-        .install(&name, url.as_deref(), None)
+        .install(&name, url.as_deref(), None, &state.owner_id)
         .await
         .map_err(|e| format!("Failed to install extension: {}", e))?;
 
@@ -85,7 +85,7 @@ pub async fn ic_uninstall_extension(
         .ok_or("Extension manager not available")?;
 
     let message = ext_mgr
-        .remove(&name)
+        .remove(&name, &state.owner_id)
         .await
         .map_err(|e| format!("Failed to uninstall extension: {}", e))?;
 
@@ -102,7 +102,7 @@ pub struct ExtensionSetupField {
     pub prompt: String,
     pub optional: bool,
     pub provided: bool,
-    pub auto_generate: bool,
+    pub input_type: String,
 }
 
 /// 扩展配置 Schema 响应。
@@ -140,12 +140,12 @@ pub async fn ic_extension_setup(
         .ok_or("Extension manager not available")?;
 
     let secrets = ext_mgr
-        .get_setup_schema(&name)
+        .get_setup_schema(&name, &state.owner_id)
         .await
         .map_err(|e| format!("Failed to get setup schema: {}", e))?;
 
     let kind = ext_mgr
-        .list(None, false)
+        .list(None, false, &state.owner_id)
         .await
         .ok()
         .and_then(|list| list.into_iter().find(|e| e.name == name))
@@ -153,13 +153,14 @@ pub async fn ic_extension_setup(
         .unwrap_or_default();
 
     let fields: Vec<ExtensionSetupField> = secrets
+        .fields
         .into_iter()
         .map(|s| ExtensionSetupField {
             name: s.name,
             prompt: s.prompt,
             optional: s.optional,
             provided: s.provided,
-            auto_generate: s.auto_generate,
+            input_type: format!("{:?}", s.input_type),
         })
         .collect();
 
@@ -188,7 +189,7 @@ pub async fn ic_extension_setup_submit(
         .ok_or("Extension manager not available")?;
 
     let result = ext_mgr
-        .configure(&name, &secrets)
+        .configure(&name, &secrets, &std::collections::HashMap::new(), &state.owner_id)
         .await
         .map_err(|e| format!("Failed to configure extension: {}", e))?;
 

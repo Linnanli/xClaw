@@ -218,6 +218,7 @@ mod tests {
                 "path": "/etc/shadow",
                 "content": "root:$6$secret_hash:19000:0:99999:7:::"
             }),
+            allow_always: false,
         };
         let event = crate::tauri_channel::TauriChannel::status_to_event(&status);
         let json_str = serde_json::to_string(&event).unwrap();
@@ -383,6 +384,7 @@ mod tests {
                 tool_name: "test".into(),
                 description: "test".into(),
                 parameters: serde_json::json!({}),
+                allow_always: true,
             },
             StatusUpdate::AuthRequired {
                 extension_name: "test".into(),

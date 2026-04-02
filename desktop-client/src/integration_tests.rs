@@ -371,6 +371,7 @@ mod admin_reporter_integration {
             max_cost_per_day_cents: Some(1000),
             config_version: Some(1),
             updated_at: Some("2026-03-22T00:00:00Z".to_string()),
+            ..Default::default()
         };
 
         let json = serde_json::to_string(&config).unwrap();

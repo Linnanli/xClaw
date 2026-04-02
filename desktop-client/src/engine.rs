@@ -226,10 +226,14 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         transcription: config
             .transcription
             .create_provider()
-            .map(|p| Arc::new(ironclaw::transcription::TranscriptionMiddleware::new(p))),
+            .map(|p| Arc::new(ironclaw::llm::transcription::TranscriptionMiddleware::new(p))),
         document_extraction: Some(Arc::new(
             ironclaw::document_extraction::DocumentExtractionMiddleware::new(),
         )),
+        sandbox_readiness: ironclaw::agent::routine_engine::SandboxReadiness::DisabledByConfig,
+        builder: None,
+        llm_backend: config.llm.backend.clone(),
+        tenant_rates: Arc::new(ironclaw::tenant::TenantRateRegistry::new(4, 4)),
     };
 
     let agent = Agent::new(

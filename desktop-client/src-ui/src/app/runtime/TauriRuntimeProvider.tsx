@@ -223,16 +223,15 @@ export function TauriRuntimeProvider({
         if (!mounted) return;
         setModels(allModels);
         // 如果初始 modelId 无效或未设置，选默认模型
-        setSelectedModelId((prev) => {
-          const resolvedId = (prev && allModels.some((m) => m.model_id === prev))
-            ? prev
-            : (allModels.find((m) => m.is_default) ?? allModels[0])?.model_id ?? prev;
-          // 同步 ref，确保首次发消息时 apiBaseUrl/apiKey 一致
-          modelIdRef.current = resolvedId;
-          selectedModelRef.current = allModels.find((m) => m.model_id === resolvedId) ?? null;
-          if (resolvedId !== prev) onModelChange?.(resolvedId);
-          return resolvedId;
-        });
+        const prevId = modelIdRef.current ?? '';
+        const resolvedId = (prevId && allModels.some((m) => m.model_id === prevId))
+          ? prevId
+          : (allModels.find((m) => m.is_default) ?? allModels[0])?.model_id ?? prevId;
+        // 同步 ref，确保首次发消息时 apiBaseUrl/apiKey 一致
+        modelIdRef.current = resolvedId;
+        selectedModelRef.current = allModels.find((m) => m.model_id === resolvedId) ?? null;
+        setSelectedModelId(resolvedId);
+        if (resolvedId !== prevId) onModelChange?.(resolvedId);
       } catch (err) {
         tracing.error('Failed to load model list', { error: err });
       } finally {

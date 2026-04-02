@@ -115,8 +115,9 @@ impl ConversationTracker {
 
     /// 回填最后一条 assistant 消息的 Token 信息。
     ///
-    /// 由 `TauriChannel::send_status(TokenUsage)` 调用：
-    /// `respond()` 先记录消息（Token 为 0），`TokenUsage` 事件到达后再更新。
+    /// 由 `TauriChannel::send_status(TurnCost)` 调用：
+    /// `respond()` 先记录消息（Token 为 0），`TurnCost` 事件到达后再更新。
+    /// `model_id` 为空字符串时不更新模型字段。
     pub fn update_last_assistant_tokens(
         &self,
         thread_id: &str,
@@ -129,10 +130,12 @@ impl ConversationTracker {
             return;
         };
         if let Some(msg) = buf.messages.iter_mut().rev().find(|m| m.role == "assistant") {
-            msg.model_id = Some(model_id.to_string());
+            if !model_id.is_empty() {
+                msg.model_id = Some(model_id.to_string());
+                buf.model_id = Some(model_id.to_string());
+            }
             msg.input_tokens = input_tokens;
             msg.output_tokens = output_tokens;
-            buf.model_id = Some(model_id.to_string());
         }
     }
 

@@ -62,7 +62,7 @@ fi
 # ============================================
 
 # start_admin_frontend 通过 /tmp/admin-frontend.pid 传递 PID
-start_admin_frontend "$ADMIN_BACKEND_ROOT/frontend"
+start_admin_frontend "$ADMIN_BACKEND_ROOT/ui"
 FRONTEND_PID=$(cat /tmp/admin-frontend.pid 2>/dev/null || echo "")
 if [ -z "$FRONTEND_PID" ]; then
     exit 1

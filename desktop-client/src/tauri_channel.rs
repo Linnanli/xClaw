@@ -241,8 +241,13 @@ impl TauriChannel {
             StatusUpdate::Suggestions { suggestions } => ChatEvent::Suggestions {
                 suggestions: suggestions.clone(),
             },
-            // TokenUsage 由 send_status() 拦截处理，不会到达此处
-            StatusUpdate::TokenUsage { .. } => unreachable!("TokenUsage is handled in send_status"),
+            // ReasoningUpdate 和 TurnCost 不推送到前端，返回空 debug 事件
+            StatusUpdate::ReasoningUpdate { .. } | StatusUpdate::TurnCost { .. } => {
+                ChatEvent::Status {
+                    message: String::new(),
+                    level: "debug".into(),
+                }
+            }
         }
     }
 }
@@ -303,14 +308,19 @@ impl Channel for TauriChannel {
         status: StatusUpdate,
         metadata: &serde_json::Value,
     ) -> Result<(), ChannelError> {
-        // TokenUsage 不推送到前端，只更新对话追踪器
-        if let StatusUpdate::TokenUsage { ref model, input_tokens, output_tokens } = status {
+        // TurnCost 不推送到前端，只更新对话追踪器（汇总整轮 Token 消耗）
+        if let StatusUpdate::TurnCost { input_tokens, output_tokens, .. } = status {
             if let Some(tracker) = &self.conversation_tracker {
                 let thread_id = metadata
                     .get("notify_thread_id")
                     .and_then(|v| v.as_str())
                     .unwrap_or_default();
-                tracker.update_last_assistant_tokens(thread_id, model, input_tokens as i32, output_tokens as i32);
+                tracker.update_last_assistant_tokens(
+                    thread_id,
+                    "",
+                    input_tokens.min(i32::MAX as u64) as i32,
+                    output_tokens.min(i32::MAX as u64) as i32,
+                );
             }
             return Ok(());
         }
@@ -384,6 +394,7 @@ mod tests {
                 tool_name: "rm".into(),
                 description: "delete file".into(),
                 parameters: serde_json::json!({}),
+                allow_always: true,
             },
             StatusUpdate::AuthRequired {
                 extension_name: "github".into(),
@@ -403,10 +414,14 @@ mod tests {
             StatusUpdate::Suggestions {
                 suggestions: vec!["try this".into()],
             },
-            StatusUpdate::TokenUsage {
-                model: "gpt-4o".into(),
+            StatusUpdate::ReasoningUpdate {
+                narrative: "Choosing search tool".into(),
+                decisions: vec![],
+            },
+            StatusUpdate::TurnCost {
                 input_tokens: 100,
                 output_tokens: 50,
+                cost_usd: "$0.0010".into(),
             },
         ];
 

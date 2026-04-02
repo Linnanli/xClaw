@@ -96,7 +96,18 @@ pub async fn send_chat_message(
 
     // ── 模型切换 ──────────────────────────────────────────────────
     if let Some(ref id) = model_id {
-        match classify_switch(state, api_base_url.as_deref()) {
+        let switch_kind = classify_switch(state, api_base_url.as_deref());
+        tracing::info!(
+            message_id = %message_id,
+            model_id = %id,
+            api_base_url = ?api_base_url,
+            switch_kind = ?switch_kind,
+            current_provider_url = %state.provider_base_url.read().map(|g| g.clone()).unwrap_or_default(),
+            initial_base_url = %state.initial_base_url,
+            active_model = %state.llm.active_model_name(),
+            "Model switch decision"
+        );
+        match switch_kind {
             SwitchKind::InPlace => switch_model_in_place(state, id),
             SwitchKind::CrossProvider => {
                 switch_provider(state, id, api_base_url.as_deref(), api_key.as_deref())?;
@@ -105,6 +116,11 @@ pub async fn send_chat_message(
                 restore_initial_provider(state, id);
             }
         }
+        tracing::info!(
+            message_id = %message_id,
+            active_model_after = %state.llm.active_model_name(),
+            "Model switch complete"
+        );
     }
 
     // ── Skill 激活通知（desktop-client 侧扩展）────────────────────
@@ -204,6 +220,7 @@ pub async fn unsubscribe_chat_events() -> Result<(), String> {
 // ── 模型切换辅助函数 ─────────────────────────────────────────────
 
 /// 模型切换类型。
+#[derive(Debug)]
 enum SwitchKind {
     /// 模型在当前 provider 内，用 set_model 切换
     InPlace,
@@ -215,9 +232,10 @@ enum SwitchKind {
 
 /// 根据目标模型的 api_base_url 判断切换类型。
 fn classify_switch(state: &crate::state::AppState, api_base_url: Option<&str>) -> SwitchKind {
+    // api_base_url 为空时，目标是初始 provider（DashScope 等 .env 配置的 provider）
     let new_url = match api_base_url.filter(|u| !u.is_empty()) {
         Some(u) => normalize_base_url(u),
-        None => return SwitchKind::InPlace,
+        None => normalize_base_url(&state.initial_base_url),
     };
 
     let current = state
@@ -226,17 +244,15 @@ fn classify_switch(state: &crate::state::AppState, api_base_url: Option<&str>) -
         .map(|g| g.clone())
         .unwrap_or_default();
 
-    if current == new_url {
-        return SwitchKind::InPlace;
-    }
+    let initial = normalize_base_url(&state.initial_base_url);
 
-    if !state.initial_base_url.is_empty()
-        && normalize_base_url(&state.initial_base_url) == new_url
-    {
-        return SwitchKind::RestoreInitial;
+    if new_url == current {
+        SwitchKind::InPlace
+    } else if !initial.is_empty() && new_url == initial {
+        SwitchKind::RestoreInitial
+    } else {
+        SwitchKind::CrossProvider
     }
-
-    SwitchKind::CrossProvider
 }
 
 /// 跨 provider 切换：用新的 base_url + api_key 重建 provider。

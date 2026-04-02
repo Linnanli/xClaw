@@ -213,4 +213,67 @@ mod tests {
         assert_eq!(input, Decimal::ZERO);
         assert_eq!(output, Decimal::ZERO);
     }
+
+    // ── 并发安全测试（RwLock 改造后）──
+
+    #[tokio::test]
+    async fn test_concurrent_complete_and_replace_inner() {
+        // 验证 replace_inner 和 complete 并发执行不会 panic
+        let inner = Arc::new(CapturingProvider::with_name("model-a"));
+        let ovr = Arc::new(RwLock::new(None));
+        let provider = Arc::new(ModelSwitchProvider::new(inner.clone(), ovr));
+
+        let p1 = Arc::clone(&provider);
+        let h1 = tokio::spawn(async move {
+            for _ in 0..10 {
+                let req = CompletionRequest {
+                    messages: vec![],
+                    temperature: None,
+                    max_tokens: None,
+                    model: None,
+                    metadata: Default::default(),
+                    stop_sequences: None,
+                };
+                let _ = p1.complete(req).await;
+            }
+        });
+
+        let replacement = Arc::new(CapturingProvider::with_name("model-b"));
+        let p2 = Arc::clone(&provider);
+        let h2 = tokio::spawn(async move {
+            for _ in 0..10 {
+                p2.replace_inner(replacement.clone());
+                tokio::task::yield_now().await;
+            }
+        });
+
+        // 两个 task 都不应该 panic
+        h1.await.expect("complete task panicked");
+        h2.await.expect("replace_inner task panicked");
+    }
+
+    #[tokio::test]
+    async fn test_failure_replace_inner_during_active_request() {
+        // replace_inner 在请求进行中调用，不应导致死锁或 panic
+        let inner = Arc::new(CapturingProvider::with_name("original"));
+        let ovr = Arc::new(RwLock::new(None));
+        let provider = Arc::new(ModelSwitchProvider::new(inner, ovr));
+
+        let replacement = Arc::new(CapturingProvider::with_name("replaced"));
+        provider.replace_inner(replacement);
+
+        // 替换后应该能正常 complete
+        let req = ToolCompletionRequest {
+            messages: vec![],
+            tools: vec![],
+            temperature: None,
+            max_tokens: None,
+            tool_choice: None,
+            model: None,
+            metadata: Default::default(),
+            stop_sequences: None,
+        };
+        let result = provider.complete_with_tools(req).await;
+        assert!(result.is_ok());
+    }
 }

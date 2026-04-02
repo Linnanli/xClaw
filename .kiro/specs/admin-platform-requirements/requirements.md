@@ -429,6 +429,26 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 
 ---
 
+### 需求 23：对话流异步审批任务 `[新增]`
+
+**用户故事：** 作为员工，我希望在对话中生成报告或执行高风险操作后，能够一键提交审批，审批过程在后台独立进行，不阻塞我继续使用对话功能；作为管理员，我希望在管理平台审批后，系统自动完成后续操作并通知员工。
+
+> **架构说明**：本需求与需求 21（操作审批流）的区别在于：需求 21 的审批是对话内即时确认（用户就在聊天界面等待），本需求的审批是异步的（管理员可能数小时后才处理）。实现上，点击确认按钮后在 Desktop Client 创建一个独立的后台轮询任务（`tokio::spawn`），不依赖 IronClaw 的 Job 系统，不阻塞对话线程。
+
+#### 验收标准
+
+1. `[新增]` WHEN Agent 在对话中生成需要审批才能发送的内容（如报告、敏感文件）, THE Desktop_Client SHALL 在消息气泡旁显示"提交审批"确认按钮，而非自动发送
+2. `[新增]` WHEN Employee 点击"提交审批"按钮, THE Desktop_Client SHALL 立即向 Admin_Platform 创建审批工单（`POST /api/approvals`），并在后台启动独立轮询任务，对话流不阻塞、不进入等待状态
+3. `[新增]` WHILE 审批工单处于 pending 状态, THE Desktop_Client 后台任务 SHALL 每 30 秒轮询一次 `GET /api/approvals/{id}/check`，直到状态变更或超时
+4. `[新增]` WHEN Admin 在管理平台批准审批工单, THE Desktop_Client 后台任务 SHALL 检测到 `status=approved` 后自动执行发送操作，并通过 `chat-event` 通知前端任务完成
+5. `[新增]` WHEN Admin 在管理平台拒绝审批工单, THE Desktop_Client 后台任务 SHALL 检测到 `status=rejected` 后终止任务，并通过 `chat-event` 通知前端审批被拒绝（含拒绝原因）
+6. `[新增]` IF 审批工单在 24 小时内未处理（`status=expired`）, THE Desktop_Client 后台任务 SHALL 终止轮询并通过 `chat-event` 通知前端工单已过期
+7. `[新增]` THE Desktop_Client SHALL 在对话界面显示审批任务的实时状态（待审批 / 已批准 / 已拒绝 / 已过期），状态更新不刷新整个对话历史
+8. `[新增]` WHEN Desktop_Client 重启时, THE Desktop_Client SHALL 恢复所有未完成的审批轮询任务（通过本地持久化 pending ticket_id 列表实现）
+9. `[新增]` THE Admin_Platform SHALL 在审批工单列表中显示来源标记（"对话流提交"），以区分手动创建的工单和对话流自动提交的工单
+
+---
+
 ### 需求 22：系统安全加固 `[新增]`
 
 **用户故事：** 作为安全管理员，我希望平台自身具备完善的安全防护能力，以抵御常见的安全威胁。

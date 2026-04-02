@@ -44,6 +44,7 @@ mod tests {
             max_cost_per_day_cents: Some(1000),
             config_version: Some(42),
             updated_at: Some("2025-06-01T00:00:00Z".into()),
+            ..Default::default()
         };
         let json = serde_json::to_value(&config).unwrap();
         assert_eq!(json["llm_backend"], "openai");
@@ -86,6 +87,7 @@ mod tests {
             max_cost_per_day_cents: Some(500),
             config_version: Some(1),
             updated_at: Some("2025-01-01T00:00:00Z".into()),
+            ..Default::default()
         };
         let json = serde_json::to_string(&original).unwrap();
         let parsed: AdminClientConfig = serde_json::from_str(&json).unwrap();
