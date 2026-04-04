@@ -214,33 +214,31 @@ export function TauriRuntimeProvider({
   // 同步 threadId ref
   useEffect(() => { threadIdRef.current = threadId; }, [threadId]);
 
-  // ── 加载模型列表 ──
+  // ── 加载模型列表（可被引擎就绪事件重新触发）──
+  const loadModels = useCallback(async () => {
+    try {
+      const allModels = await modelApi.getAvailableModels();
+      setModels(allModels);
+      // 如果初始 modelId 无效或未设置，选默认模型
+      const prevId = modelIdRef.current ?? '';
+      const resolvedId = (prevId && allModels.some((m) => m.model_id === prevId))
+        ? prevId
+        : (allModels.find((m) => m.is_default) ?? allModels[0])?.model_id ?? prevId;
+      // 同步 ref，确保首次发消息时 apiBaseUrl/apiKey 一致
+      modelIdRef.current = resolvedId;
+      selectedModelRef.current = allModels.find((m) => m.model_id === resolvedId) ?? null;
+      setSelectedModelId(resolvedId);
+      if (resolvedId !== prevId) onModelChange?.(resolvedId);
+    } catch (err) {
+      tracing.error('Failed to load model list', { error: err });
+    } finally {
+      setModelsLoading(false);
+    }
+  }, [onModelChange]);
+
   useEffect(() => {
-    let mounted = true;
-    const load = async () => {
-      try {
-        const allModels = await modelApi.getAvailableModels();
-        if (!mounted) return;
-        setModels(allModels);
-        // 如果初始 modelId 无效或未设置，选默认模型
-        const prevId = modelIdRef.current ?? '';
-        const resolvedId = (prevId && allModels.some((m) => m.model_id === prevId))
-          ? prevId
-          : (allModels.find((m) => m.is_default) ?? allModels[0])?.model_id ?? prevId;
-        // 同步 ref，确保首次发消息时 apiBaseUrl/apiKey 一致
-        modelIdRef.current = resolvedId;
-        selectedModelRef.current = allModels.find((m) => m.model_id === resolvedId) ?? null;
-        setSelectedModelId(resolvedId);
-        if (resolvedId !== prevId) onModelChange?.(resolvedId);
-      } catch (err) {
-        tracing.error('Failed to load model list', { error: err });
-      } finally {
-        if (mounted) setModelsLoading(false);
-      }
-    };
-    load();
-    return () => { mounted = false; };
-  }, []);
+    loadModels();
+  }, [loadModels]);
 
   const selectModel = useCallback((modelId: string) => {
     setSelectedModelId(modelId);
@@ -415,9 +413,15 @@ export function TauriRuntimeProvider({
 
       case 'connection_status':
         tracing.info('Connection status', { connected: event.connected, message: event.message });
+        // 引擎就绪时重新加载模型列表，解决启动时序竞态问题：
+        // 前端 mount 时引擎可能还未就绪，此时 get_available_models 会失败。
+        // 收到 connected=true 说明引擎已初始化完成，此时重载可以拿到真实模型列表。
+        if (event.connected) {
+          loadModels();
+        }
         break;
     }
-  }, []);
+  }, [loadModels]);
 
   // ── 发送新消息（assistant-ui onNew 回调）──
   const onNew = useCallback(
