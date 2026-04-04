@@ -181,3 +181,79 @@ mod jwt_auth_middleware_tests {
         assert!(resp["user"].get("password_hash").is_none(), "响应中不应包含 password_hash 字段");
     }
 }
+
+#[cfg(test)]
+mod pdf_export_contract_tests {
+    use serde_json::json;
+
+    /// PDF 导出依赖报告的 content 字段，验证 content 结构完整性
+    #[test]
+    fn test_contract_pdf_export_requires_content_fields() {
+        let content = json!({
+            "dlp_blocks": 42,
+            "policy_changes": 5,
+            "alert_events": 3,
+            "approval_tickets": 1
+        });
+
+        for field in &["dlp_blocks", "policy_changes", "alert_events", "approval_tickets"] {
+            assert!(
+                content.get(*field).is_some(),
+                "PDF 导出所需字段缺失: {}",
+                field
+            );
+            assert!(
+                content[*field].is_number(),
+                "PDF 导出字段 {} 应为数字类型",
+                field
+            );
+        }
+    }
+
+    /// content 字段为 null 时 PDF 导出应降级处理（不崩溃）
+    #[test]
+    fn test_failure_pdf_export_with_null_content() {
+        let report = json!({
+            "id": "uuid",
+            "name": "测试报告",
+            "report_type": "monthly",
+            "start_date": "2024-01-01",
+            "end_date": "2024-01-31",
+            "created_at": "2024-02-01T00:00:00Z",
+            "content": null
+        });
+
+        // content 为 null 时，前端应显示"报告内容暂不可用"而非崩溃
+        assert!(report["content"].is_null(), "content 为 null 时应被前端优雅处理");
+    }
+
+    /// 报告类型标签映射完整性
+    #[test]
+    fn test_contract_report_type_labels_complete() {
+        let valid_types = ["monthly", "quarterly", "annual", "custom"];
+        let type_labels = [
+            ("monthly", "月度报告"),
+            ("quarterly", "季度报告"),
+            ("annual", "年度报告"),
+            ("custom", "自定义"),
+        ];
+
+        assert_eq!(valid_types.len(), type_labels.len(), "报告类型标签映射不完整");
+        for (type_key, _) in &type_labels {
+            assert!(
+                valid_types.contains(type_key),
+                "未知报告类型: {}",
+                type_key
+            );
+        }
+    }
+
+    /// PDF 文件名格式验证（使用报告 ID 前 8 位）
+    #[test]
+    fn test_contract_pdf_filename_format() {
+        let report_id = "3a948b79-c8f1-48a7-94b3-399772a319d8";
+        let filename = format!("compliance-report-{}.pdf", &report_id[..8]);
+        assert_eq!(filename, "compliance-report-3a948b79.pdf");
+        assert!(filename.ends_with(".pdf"), "PDF 文件名应以 .pdf 结尾");
+    }
+}

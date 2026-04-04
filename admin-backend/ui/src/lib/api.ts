@@ -1,6 +1,9 @@
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios'
+import { navigate } from '@/lib/navigation'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
+
+export const TOKEN_KEY = 'auth_token'
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
@@ -9,7 +12,7 @@ export const api = axios.create({
 })
 
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  const token = localStorage.getItem('auth_token')
+  const token = localStorage.getItem(TOKEN_KEY)
   if (token && config.headers) {
     config.headers.Authorization = `Bearer ${token}`
   }
@@ -19,12 +22,14 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 api.interceptors.response.use(
   (response) => response,
   (error: AxiosError) => {
-    // 登录接口本身的 401 不触发重定向，由页面自己处理错误
     const isLoginRequest = error.config?.url?.includes('/auth/login')
-    if (error.response?.status === 401 && !isLoginRequest) {
-      localStorage.removeItem('auth_token')
-      window.location.href = '/login'
+    const isAlreadyOnLogin = window.location.pathname === '/login'
+
+    if (error.response?.status === 401 && !isLoginRequest && !isAlreadyOnLogin) {
+      localStorage.removeItem(TOKEN_KEY)
+      navigate('/login', { replace: true })
     }
+
     return Promise.reject(error)
   }
 )

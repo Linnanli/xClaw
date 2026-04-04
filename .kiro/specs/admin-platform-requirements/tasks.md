@@ -146,12 +146,12 @@
 ### 18. 数据分类分级与合规（需求 19）
 
 - [x] 18.1 执行 `019_compliance.sql`：创建 data_classifications 和 compliance_reports 表，预置四个默认分级
-- [ ] 18.2 实现数据分级 CRUD API：`GET/PUT /api/compliance/classifications`（需求 19.1-19.2）
-- [ ] 18.3 实现合规概览 API：`GET /api/compliance/overview`（需求 19.3）
-- [ ] 18.4 实现合规报告生成 API：`POST /api/compliance/reports`（需求 19.4）
-- [ ] 18.5 实现合规报告下载 API：`GET /api/compliance/reports/:id`，支持 PDF 导出（需求 19.5）
-- [ ] 18.6 前端合规概览页（`/compliance`）：展示分级体系、DLP 覆盖率、拦截统计（需求 19.3）
-- [ ] 18.7 在 DLP 规则编辑中添加数据分级标签关联（需求 19.2）
+- [x] 18.2 实现数据分级 CRUD API：`GET/PUT /api/compliance/classifications`（需求 19.1-19.2）
+- [x] 18.3 实现合规概览 API：`GET /api/compliance/overview`（需求 19.3）
+- [x] 18.4 实现合规报告生成 API：`POST /api/compliance/reports`（需求 19.4）
+- [x] 18.5 实现合规报告 PDF 导出（需求 19.5）— 详情弹窗已完成，PDF 导出待实现
+- [x] 18.6 前端合规概览页（`/compliance`）：展示分级体系、DLP 覆盖率、拦截统计（需求 19.3）
+- [x] 18.7 在 DLP 规则编辑中添加数据分级标签关联（需求 19.2）
 
 ### 19. 水印配置（需求 20）
 

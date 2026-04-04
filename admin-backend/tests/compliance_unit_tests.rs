@@ -40,13 +40,31 @@ mod compliance_contract_tests {
     #[test]
     fn test_contract_reports_list_response() {
         let resp = json!({
-            "reports": [{"id": "uuid", "name": "Q1报告", "report_type": "quarterly", "start_date": "2024-01-01", "end_date": "2024-03-31", "created_at": "2024-04-01T00:00:00Z"}],
+            "reports": [{
+                "id": "uuid",
+                "name": "Q1报告",
+                "report_type": "quarterly",
+                "start_date": "2024-01-01",
+                "end_date": "2024-03-31",
+                "created_at": "2024-04-01T00:00:00Z",
+                "content": {
+                    "dlp_blocks": 42,
+                    "policy_changes": 5,
+                    "alert_events": 3,
+                    "approval_tickets": 1
+                }
+            }],
             "total": 1
         });
         assert!(resp["reports"].is_array());
         let r = &resp["reports"][0];
         for f in &["id", "name", "report_type", "start_date", "end_date", "created_at"] {
             assert!(r.get(*f).is_some(), "报告响应缺少字段: {}", f);
+        }
+        // PDF 导出依赖 content 字段
+        let content = &r["content"];
+        for f in &["dlp_blocks", "policy_changes", "alert_events", "approval_tickets"] {
+            assert!(content.get(*f).is_some(), "content 缺少 PDF 导出所需字段: {}", f);
         }
     }
 

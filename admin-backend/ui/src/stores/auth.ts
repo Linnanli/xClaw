@@ -1,6 +1,6 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
 import { api } from '@/lib/api'
+import { TOKEN_KEY } from '@/lib/api'
 import type { AuthState, LoginRequest, LoginResponse } from '@/types'
 
 function toStoreUser(resp: LoginResponse) {
@@ -15,37 +15,27 @@ function toStoreUser(resp: LoginResponse) {
   }
 }
 
-export const useAuthStore = create<AuthState>()(
-  persist(
-    (set) => ({
-      token: null,
-      user: null,
-      isAuthenticated: false,
+const initialToken = localStorage.getItem(TOKEN_KEY)
 
-      login: async (data: LoginRequest) => {
-        const response = await api.post<LoginResponse>('/auth/login', data)
-        const token = response.data.access_token
-        localStorage.setItem('auth_token', token)
-        set({ token, user: toStoreUser(response.data), isAuthenticated: true })
-      },
+export const useAuthStore = create<AuthState>()((set) => ({
+  token: initialToken,
+  user: null,
+  isAuthenticated: !!initialToken,
 
-      logout: () => {
-        localStorage.removeItem('auth_token')
-        set({ token: null, user: null, isAuthenticated: false })
-      },
+  login: async (data: LoginRequest) => {
+    const response = await api.post<LoginResponse>('/auth/login', data)
+    const token = response.data.access_token
+    localStorage.setItem(TOKEN_KEY, token)
+    set({ token, user: toStoreUser(response.data), isAuthenticated: true })
+  },
 
-      setToken: (token: string) => {
-        localStorage.setItem('auth_token', token)
-        set({ token, isAuthenticated: true })
-      },
-    }),
-    {
-      name: 'ironclaw-auth',
-      partialize: (state) => ({
-        token: state.token,
-        user: state.user,
-        isAuthenticated: state.isAuthenticated,
-      }),
-    }
-  )
-)
+  logout: () => {
+    localStorage.removeItem(TOKEN_KEY)
+    set({ token: null, user: null, isAuthenticated: false })
+  },
+
+  setToken: (token: string) => {
+    localStorage.setItem(TOKEN_KEY, token)
+    set({ token, isAuthenticated: true })
+  },
+}))

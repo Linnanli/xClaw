@@ -83,6 +83,16 @@ describe('合规管理', () => {
       })
     })
 
+    it('详情弹窗应显示导出 PDF 按钮', () => {
+      cy.get('body').then($body => {
+        if ($body.find('button:contains("查看")').length > 0) {
+          cy.contains('查看').first().click()
+          cy.contains('安全事件汇总').should('be.visible')
+          cy.contains('button', '导出 PDF').should('be.visible')
+        }
+      })
+    })
+
     it('详情弹窗关闭按钮应关闭弹窗', () => {
       cy.get('body').then($body => {
         if ($body.find('button:contains("查看")').length > 0) {
