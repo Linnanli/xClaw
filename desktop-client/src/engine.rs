@@ -232,6 +232,29 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         tracing::info!("ConversationTracker flush loop started (5min interval)");
     }
 
+    // ── 恢复 pending 审批轮询任务（需求 23.12）────────────────────
+    // 从 Tauri managed state 获取共享 store，为每个 pending ticket 重启轮询。
+    {
+        use tauri::Manager;
+        // 通过 .0 直接拿到 Arc，避免 State 临时值生命周期问题
+        let store_arc = app_handle
+            .state::<crate::approval_polling::PendingTicketStore>()
+            .0
+            .clone();
+        let tickets = store_arc.lock().await.tickets.clone();
+        if !tickets.is_empty() {
+            tracing::info!(count = tickets.len(), "Restoring pending approval polls");
+            for ticket in tickets {
+                tauri::async_runtime::spawn(crate::approval_polling::poll_approval_status(
+                    app_handle.clone(),
+                    ticket.ticket_id,
+                    ticket.thread_id,
+                    store_arc.clone(),
+                ));
+            }
+        }
+    }
+
     // 通知前端引擎已就绪
     use tauri::Emitter;    let _ = app_handle.emit(
         "chat-event",

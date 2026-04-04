@@ -63,8 +63,12 @@ export function useWatermark() {
           minute: '2-digit',
         });
         
+        // user_id 为 null/undefined 时显示字符串 "null"/"undefined"，空字符串保持空
+        const username = sessionInfo.user_id !== undefined && sessionInfo.user_id !== null
+          ? sessionInfo.user_id
+          : String(sessionInfo.user_id)
         const watermarkText = template
-          .replace('{username}', sessionInfo.user_id || 'unknown')
+          .replace('{username}', username)
           .replace('{department}', '')
           .replace('{datetime}', timeStr);
         

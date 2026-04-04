@@ -97,36 +97,36 @@
 
 ### 12. 费用配额管理扩展（需求 18 新增部分）
 
-- [ ] 12.1 实现费用消耗明细 API：`GET /api/quota/details`，支持按时间范围、用户、模型、部门筛选和分页（需求 18.6）
-- [ ] 12.2 前端费用管理页：添加费用明细记录表格，支持筛选和分页（需求 18.6）
-- [ ] 12.3 实现月度费用预警：当月度费用达到预算 90% 时触发告警（需求 18.8，依赖任务 10.5）
+- [x] 12.1 实现费用消耗明细 API：`GET /api/quota/details`，支持按时间范围、用户、模型、部门筛选和分页（需求 18.6）（复用 usage_records handler，路由已统一为 /api/quota/details）
+- [x] 12.2 前端费用管理页：添加费用明细记录表格，支持筛选和分页（需求 18.6）
+- [x] 12.3 实现月度费用预警：当月度费用达到预算 90% 时触发告警（需求 18.8，依赖任务 10.5）
 
 ### 13. 操作审批流扩展（需求 21 新增部分）
 
-- [ ] 13.1 前端审批工单列表页（`/approvals`）：展示审批记录，支持按申请人、工具类型、状态、时间筛选（需求 21.4、21.8）
-- [ ] 13.2 前端审批操作 UI：批准/拒绝按钮，填写审批意见（需求 21.5）
-- [ ] 13.3 实现审批结果推送：Admin 审批后通过 SSE 推送结果到客户端（需求 21.5）
-- [ ] 13.4 实现审批超时催办：24 小时未处理时通过 Alert_Service 发送催办通知（需求 21.6，依赖任务 10.5）
-- [ ] 13.5 [Desktop Client] 实现管理端审批结果接收：通过 SSE/WebSocket 接收推送，通过 `chat-event` 通知前端（需求 21.11）
+- [x] 13.1 前端审批工单列表页（`/approvals`）：展示审批记录，支持按申请人、工具类型、状态、时间筛选（需求 21.4、21.8）
+- [x] 13.2 前端审批操作 UI：批准/拒绝按钮，填写审批意见（需求 21.5）
+- [x] 13.3 实现审批结果推送：Admin 审批后通过 SSE 推送结果到客户端（需求 21.5）
+- [x] 13.4 实现审批超时催办：24 小时未处理时通过 Alert_Service 发送催办通知（需求 21.6，依赖任务 10.5）
+- [x] 13.5 [Desktop Client] 实现管理端审批结果接收：通过 SSE/WebSocket 接收推送，通过 `chat-event` 通知前端（需求 21.11）
 
 ### 14. 对话流异步审批任务（需求 23）
 
-- [ ] 14.1 [Desktop Client] 实现 `submit_approval_ticket(content, thread_id)` Tauri 命令：调用 `POST /api/approvals` 创建工单，通过 `tokio::spawn` 启动后台轮询任务（需求 23.10）
-- [ ] 14.2 [Desktop Client] 实现后台轮询任务：每 30 秒调用 `GET /api/approvals/{id}/check`，状态变更时通过 `chat-event` 推送并终止轮询（需求 23.11）
-- [ ] 14.3 [Desktop Client] 实现 pending ticket 本地持久化：JSON 文件存储，启动时恢复轮询（需求 23.12）
-- [ ] 14.4 [Desktop Client] 将 `submit_approval_ticket` 注册到 `all_tauri_commands!()` 宏，并在 `tauri_command_contract_tests.rs` 的 `FRONTEND_INVOKED_COMMANDS` 中添加条目（需求 23.13）
-- [ ] 14.5 后端实现 `GET /api/approvals/:id/check` 端点：返回工单当前状态（需求 23.3）
-- [ ] 14.6 后端实现工单过期逻辑：定时任务将超过 24 小时的 pending 工单标记为 expired（需求 23.6）
+- [x] 14.1 [Desktop Client] 实现 `submit_approval_ticket(content, thread_id)` Tauri 命令：调用 `POST /api/approvals` 创建工单，通过 `tokio::spawn` 启动后台轮询任务（需求 23.10）
+- [x] 14.2 [Desktop Client] 实现后台轮询任务：每 30 秒调用 `GET /api/approvals/{id}/check`，状态变更时通过 `chat-event` 推送并终止轮询（需求 23.11）
+- [x] 14.3 [Desktop Client] 实现 pending ticket 本地持久化：JSON 文件存储，启动时恢复轮询（需求 23.12）
+- [x] 14.4 [Desktop Client] 将 `submit_approval_ticket` 注册到 `all_tauri_commands!()` 宏，并在 `tauri_command_contract_tests.rs` 的 `FRONTEND_INVOKED_COMMANDS` 中添加条目（需求 23.13）
+- [x] 14.5 后端实现 `GET /api/approvals/:id/check` 端点：返回工单当前状态（需求 23.3）
+- [x] 14.6 后端实现工单过期逻辑：定时任务将超过 24 小时的 pending 工单标记为 expired（需求 23.6）
 
 ### 15. 知识库管理（需求 17）
 
-- [ ] 15.1 实现知识库 CRUD API（`handlers/knowledge_base.rs`）：`GET/POST/PUT/DELETE /api/knowledge-bases`（需求 17.1-17.2）
-- [ ] 15.2 实现文档上传 API：`POST /api/knowledge-bases/:id/documents`，支持 PDF、Word、Markdown、纯文本（需求 17.3）
-- [ ] 15.3 实现文档处理状态查询：`GET /api/knowledge-bases/:id/documents`（需求 17.5）
-- [ ] 15.4 实现文档删除 API：`DELETE /api/knowledge-bases/:id/documents/:doc_id`（需求 17.7）
-- [ ] 15.5 实现知识库检索测试 API：`POST /api/knowledge-bases/:id/search`（需求 17.8）
-- [ ] 15.6 前端知识库管理页（`/knowledge-bases`）：列表、创建、编辑、删除知识库（需求 17.1-17.2）
-- [ ] 15.7 前端知识库文档管理页（`/knowledge-bases/:id`）：文档上传、状态展示、删除（需求 17.3-17.7）
+- [x] 15.1 实现知识库 CRUD API（`handlers/knowledge_base.rs`）：`GET/POST/PUT/DELETE /api/knowledge-bases`（需求 17.1-17.2）
+- [x] 15.2 实现文档上传 API：`POST /api/knowledge-bases/:id/documents`，支持 PDF、Word、Markdown、纯文本（需求 17.3）
+- [x] 15.3 实现文档处理状态查询：`GET /api/knowledge-bases/:id/documents`（需求 17.5）
+- [x] 15.4 实现文档删除 API：`DELETE /api/knowledge-bases/:id/documents/:doc_id`（需求 17.7）
+- [x] 15.5 实现知识库检索测试 API：`POST /api/knowledge-bases/:id/search`（需求 17.8）（stub：向量化引擎未实现，当前返回空结果）
+- [x] 15.6 前端知识库管理页（`/knowledge-bases`）：列表、创建、编辑、删除知识库（需求 17.1-17.2）
+- [x] 15.7 前端知识库文档管理页（`/knowledge-bases/:id`）：文档上传、状态展示、删除（需求 17.3-17.7）（stub：文档上传仅存元数据，文档处理/向量化未实现）
 
 ### 16. 策略版本管理扩展（需求 7 新增部分）
 
@@ -135,9 +135,9 @@
 
 ### 17. 用户管理扩展（需求 3 新增部分）
 
-- [ ] 17.1 实现用户批量导入 API：`POST /api/users/import`，解析 CSV 文件批量创建用户（需求 3.8）
-- [ ] 17.2 前端用户管理页：添加批量导入按钮和 CSV 上传 UI（需求 3.8）
-- [ ] 17.3 在用户 CRUD 中支持 department_id 字段（需求 3.10）
+- [x] 17.1 实现用户批量导入 API：`POST /api/users/import`，解析 CSV 文件批量创建用户（需求 3.8）
+- [x] 17.2 前端用户管理页：添加批量导入按钮和 CSV 上传 UI（需求 3.8）
+- [x] 17.3 在用户 CRUD 中支持 department_id 字段（需求 3.10）
 
 ---
 
@@ -145,7 +145,7 @@
 
 ### 18. 数据分类分级与合规（需求 19）
 
-- [ ] 18.1 执行 `019_compliance.sql`：创建 data_classifications 和 compliance_reports 表，预置四个默认分级
+- [x] 18.1 执行 `019_compliance.sql`：创建 data_classifications 和 compliance_reports 表，预置四个默认分级
 - [ ] 18.2 实现数据分级 CRUD API：`GET/PUT /api/compliance/classifications`（需求 19.1-19.2）
 - [ ] 18.3 实现合规概览 API：`GET /api/compliance/overview`（需求 19.3）
 - [ ] 18.4 实现合规报告生成 API：`POST /api/compliance/reports`（需求 19.4）

@@ -246,3 +246,63 @@ fn build_approval_filter(
 
     (where_clause, query_params)
 }
+
+/// 检查审批超时催办：24 小时未处理的 pending 工单触发 approval_timeout 告警（需求 21.6）。
+///
+/// 由 main.rs 中的后台定时任务每小时调用一次。
+pub async fn check_approval_timeouts(pool: &deadpool_postgres::Pool) {
+    let client = match pool.get().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "approval timeout check: failed to get db connection");
+            return;
+        }
+    };
+
+    let rows = match client
+        .query(
+            "SELECT t.id, u.username, t.operation_name
+             FROM approval_tickets t
+             JOIN users u ON u.id = t.applicant_id
+             WHERE t.status = 'pending'
+               AND t.created_at < NOW() - INTERVAL '24 hours'
+               AND t.expires_at > NOW()",
+            &[],
+        )
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "approval timeout check: query failed");
+            return;
+        }
+    };
+
+    for row in &rows {
+        let ticket_id: uuid::Uuid = row.get(0);
+        let applicant: String = row.get(1);
+        let op_name: String = row.get(2);
+
+        let trigger = crate::models::AlertTrigger {
+            event_type: "approval_timeout".into(),
+            severity: "medium".into(),
+            detail: format!(
+                "审批工单超过 24 小时未处理：{} 申请的「{}」（工单 ID: {}）",
+                applicant, op_name, ticket_id
+            ),
+            event_data: Some(serde_json::json!({
+                "ticket_id": ticket_id,
+                "applicant": applicant,
+                "operation_name": op_name,
+            })),
+        };
+
+        if let Err(e) = crate::handlers::alerts::trigger_alert(pool, &trigger).await {
+            tracing::warn!(error = %e, "Failed to trigger approval timeout alert");
+        }
+    }
+
+    if !rows.is_empty() {
+        tracing::info!(count = rows.len(), "approval timeout check: triggered alerts");
+    }
+}

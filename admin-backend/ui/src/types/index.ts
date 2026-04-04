@@ -179,21 +179,28 @@ export interface ConversationStats {
 export interface KnowledgeBase {
   id: string
   name: string
-  description: string
+  description: string | null
   document_count: number
-  chunk_count: number
-  access: string
   enabled: boolean
+  allowed_departments: string[]
+  allowed_roles: string[]
+  created_at: string
+  updated_at: string
 }
 
 export interface KBDocument {
   id: string
+  knowledge_base_id: string
   filename: string
   file_type: string
-  file_size: string
+  /** 字节数，展示时用 formatFileSize 转换 */
+  file_size: number
   chunk_count: number
-  status: 'completed' | 'processing' | 'failed'
+  status: 'pending' | 'processing' | 'completed' | 'failed'
+  error_message: string | null
+  storage_path: string | null
   uploaded_at: string
+  processed_at: string | null
 }
 
 // 配额

@@ -21,6 +21,7 @@ pub mod admin_sync;
 pub mod data_reporter;
 pub mod conversation_tracker;
 pub mod model_switch;
+pub mod approval_polling;
 
 // ── 测试模块（仅在测试时编译）──────────────────────────────────────
 #[cfg(test)]
@@ -135,6 +136,8 @@ macro_rules! all_tauri_commands {
             desktop_client::commands::get_auth_token,
             // ── 水印配置 ────────────────────────────────────────
             desktop_client::commands::get_watermark_config,
+            // ── 审批工单 ────────────────────────────────────────
+            desktop_client::commands::submit_approval_ticket,
         ]
     };
 }

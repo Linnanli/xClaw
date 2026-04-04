@@ -49,6 +49,7 @@ fn main() {
     // ── 启动 Tauri ────────────────────────────────────────────────
     tauri::Builder::default()
         .manage(desktop_client::state::EngineState::new())
+        .manage(desktop_client::approval_polling::PendingTicketStore::init())
         .setup(|app| {
             let app_handle = app.handle().clone();
 

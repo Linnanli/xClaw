@@ -157,6 +157,14 @@ pub async fn report_usage_internal(
         });
     }
 
+    // 异步检查月度预算预警（需求 18.8：达到 90% 时触发告警）
+    {
+        let pool = pool.clone();
+        tokio::spawn(async move {
+            let _ = check_monthly_budget_warning(&pool).await;
+        });
+    }
+
     Ok(cost_cents)
 }
 
@@ -684,6 +692,61 @@ async fn check_quota_warning(
             "department_name": dept_name,
             "usage_cents": usage,
             "limit_cents": limit,
+            "ratio_pct": pct,
+        })),
+    };
+
+    alerts::trigger_alert(pool, &trigger).await?;
+    Ok(())
+}
+
+/// 检查月度预算预警（需求 18.8）。
+///
+/// 当月度费用达到预算 90% 时触发 quota_exceeded 告警。
+/// 使用静默期（60 分钟）避免重复告警。
+async fn check_monthly_budget_warning(
+    pool: &deadpool_postgres::Pool,
+) -> std::result::Result<(), String> {
+    let client = pool.get().await.map_err(|e| e.to_string())?;
+    let month_start = month_start_utc();
+
+    // 查询月度预算
+    let budget_row = client
+        .query_opt(
+            "SELECT monthly_budget_cents FROM quota_configs WHERE scope = 'org' AND scope_id IS NULL",
+            &[],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let monthly_budget: i64 = match budget_row.and_then(|r| r.get::<_, Option<i64>>(0)) {
+        Some(b) if b > 0 => b,
+        _ => return Ok(()), // 未设置预算，跳过
+    };
+
+    // 查询本月消耗
+    let (month_cost, _) = query_period_usage(&client, &month_start)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let ratio = month_cost as f64 / monthly_budget as f64;
+    const MONTHLY_WARNING_THRESHOLD: f64 = 0.9;
+    if ratio < MONTHLY_WARNING_THRESHOLD {
+        return Ok(());
+    }
+
+    let pct = (ratio * 100.0) as i32;
+    let trigger = AlertTrigger {
+        event_type: "quota_exceeded".into(),
+        severity: if ratio >= 1.0 { "critical".into() } else { "high".into() },
+        detail: format!(
+            "月度费用已达预算 {}%（{} / {} 分），请关注费用控制",
+            pct, month_cost, monthly_budget
+        ),
+        event_data: Some(json!({
+            "type": "monthly_budget",
+            "month_cost_cents": month_cost,
+            "monthly_budget_cents": monthly_budget,
             "ratio_pct": pct,
         })),
     };

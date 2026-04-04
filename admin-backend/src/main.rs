@@ -120,6 +120,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // 启动审批超时催办后台任务（每小时扫描，24 小时未处理时发送催办告警）
+    let approval_pool = state.db_pool.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+        loop {
+            interval.tick().await;
+            admin_backend::handlers::approvals::check_approval_timeouts(&approval_pool).await;
+        }
+    });
+
     axum::serve(listener, app).await?;
 
     Ok(())

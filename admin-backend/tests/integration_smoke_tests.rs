@@ -120,6 +120,7 @@ async fn test_migration_all_tables_exist() {
         ("018_approvals", "approval_tickets"),
         ("019_compliance", "compliance_reports"),
         ("021_knowledge", "knowledge_bases"),
+        ("021_knowledge_docs", "kb_documents"),
         // 020 是字段扩展迁移，表已存在，列级验证见 test_migration_020_security_fields_columns
     ];
 
@@ -351,6 +352,7 @@ async fn test_http_all_critical_get_routes_registered() {
         "/api/compliance/overview",
         "/api/compliance/reports",
         "/api/compliance/retention",
+        "/api/knowledge-bases",
     ];
 
     let mut failed = Vec::new();

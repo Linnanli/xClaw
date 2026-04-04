@@ -68,3 +68,81 @@ pub async fn get_watermark_config() -> Result<serde_json::Value> {
         "watermark_color": settings.get("watermark_color").and_then(|v| v.as_str()).unwrap_or("#000000"),
     }))
 }
+
+/// 提交审批工单并启动后台轮询任务（需求 23.10）。
+///
+/// 调用 `POST /api/approvals` 创建工单，通过 `tokio::spawn` 启动独立后台轮询，
+/// 不阻塞对话线程。返回 ticket_id 给前端。
+///
+/// `store` 从 Tauri managed state 注入，确保所有轮询任务共用同一个持久化实例。
+#[tauri::command]
+pub async fn submit_approval_ticket(
+    app_handle: tauri::AppHandle,
+    store: tauri::State<'_, crate::approval_polling::PendingTicketStore>,
+    content: String,
+    thread_id: String,
+) -> Result<String> {
+    // 在进入 async 前提取 Arc，避免 State 生命周期跨 await 的问题
+    let store_arc = store.0.clone();
+    let admin_url = std::env::var("ADMIN_BACKEND_URL")
+        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let client_token = std::env::var("ADMIN_AUTH_TOKEN").unwrap_or_default();
+
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| Error::ConfigError(e.to_string()))?;
+
+    let payload = serde_json::json!({
+        "operation_type": "conversation_submit",
+        "operation_name": content.chars().take(100).collect::<String>(),
+        "reason": content,
+        "applicant_id": "00000000-0000-0000-0000-000000000000",
+    });
+
+    let resp = http
+        .post(format!("{}/api/approvals", admin_url))
+        .bearer_auth(&client_token)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| Error::ConfigError(format!("Failed to create approval: {}", e)))?;
+
+    if !resp.status().is_success() {
+        return Err(Error::ConfigError(format!("Server returned {}", resp.status())));
+    }
+
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| Error::ConfigError(format!("Failed to parse response: {}", e)))?;
+
+    let ticket_id = data["id"]
+        .as_str()
+        .ok_or_else(|| Error::ConfigError("Missing ticket id in response".into()))?
+        .to_string();
+
+    // 持久化到共享 store（managed state，全局唯一）
+    store_arc.lock().await.add(crate::approval_polling::PendingTicket {
+        ticket_id: ticket_id.clone(),
+        thread_id: thread_id.clone(),
+        content: content.chars().take(200).collect(),
+    });
+
+    // 启动后台轮询任务，传入共享 store 的 Arc
+    let store_arc2 = store_arc.clone();
+    tokio::spawn(crate::approval_polling::poll_approval_status(
+        app_handle,
+        ticket_id.clone(),
+        thread_id.clone(),
+        store_arc2,
+    ));
+
+    tracing::info!(
+        ticket_id = %ticket_id,
+        thread_id = %thread_id,
+        "Approval ticket submitted, polling started"
+    );
+
+    Ok(ticket_id)
+}

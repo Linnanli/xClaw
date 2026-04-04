@@ -15,7 +15,7 @@ use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    routing::{get, post, put},
+    routing::{get, post, put, delete},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -31,6 +31,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/auth/login", post(login))
         .route("/api/auth/refresh", post(refresh_token))
         .route("/api/users", get(get_users).post(create_user))
+        .route("/api/users/import", post(import_users))
         .route("/api/users/{id}", get(get_user).put(update_user).delete(delete_user))
         .route("/api/users/{id}/roles", get(get_user_roles).post(assign_user_roles))
         .route("/api/roles", get(get_roles).post(create_role))
@@ -112,6 +113,12 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/approvals", get(handlers::approvals::get_approvals).post(handlers::approvals::create_approval))
         .route("/api/approvals/{id}/review", put(handlers::approvals::review_approval))
         .route("/api/approvals/{id}/check", get(handlers::approvals::check_approval))
+        // 知识库管理 API
+        .route("/api/knowledge-bases", get(handlers::knowledge_base::list_knowledge_bases).post(handlers::knowledge_base::create_knowledge_base))
+        .route("/api/knowledge-bases/{id}", put(handlers::knowledge_base::update_knowledge_base).delete(handlers::knowledge_base::delete_knowledge_base))
+        .route("/api/knowledge-bases/{id}/documents", get(handlers::knowledge_base::list_documents).post(handlers::knowledge_base::upload_document))
+        .route("/api/knowledge-bases/{id}/documents/{doc_id}", delete(handlers::knowledge_base::delete_document))
+        .route("/api/knowledge-bases/{id}/search", post(handlers::knowledge_base::search_knowledge_base))
         // 合规管理 API
         .route("/api/compliance/overview", get(handlers::compliance::get_compliance_overview))
         .route("/api/compliance/reports", get(handlers::compliance::get_compliance_reports).post(handlers::compliance::generate_compliance_report))
@@ -124,7 +131,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/quota/config", get(handlers::quota::get_quota_config).put(handlers::quota::update_quota_config))
         .route("/api/quota/department-ranking", get(handlers::quota::department_ranking))
         .route("/api/quota/model-ranking", get(handlers::quota::model_ranking))
-        .route("/api/quota/usage-records", get(handlers::quota::usage_records))
+        .route("/api/quota/details", get(handlers::quota::usage_records))
         .with_state(state)
         .layer(RateLimitLayer::new())
         .layer(SecurityHeadersLayer)
@@ -1822,6 +1829,102 @@ async fn create_user(
             "created_at": now
         })),
     ))
+}
+
+/// POST /api/users/import — 批量导入用户（CSV 格式，需求 3.8）
+///
+/// CSV 格式（首行为表头）：
+/// ```
+/// username,email,password,department_id
+/// alice,alice@example.com,Pass123!,
+/// bob,bob@example.com,Pass456!,dept-uuid
+/// ```
+/// - `department_id` 列可选，留空表示不分配部门
+/// - 单行失败不影响其他行，返回成功/失败汇总
+/// - 最多支持 1000 行（防止 DoS）
+async fn import_users(
+    State(state): State<AppState>,
+    body: String,
+) -> Result<Json<serde_json::Value>> {
+    const MAX_ROWS: usize = 1000;
+
+    let client = state.db_pool.get().await
+        .map_err(|e| Error::Database(e.to_string()))?;
+    let auth = AuthManager::new(
+        std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string())
+    );
+
+    let mut lines = body.lines();
+    let _header = lines.next(); // 跳过表头
+
+    let mut succeeded = 0u32;
+    let mut failed: Vec<serde_json::Value> = Vec::new();
+
+    for (line_num, line) in lines.enumerate().take(MAX_ROWS) {
+        let row_num = line_num + 2; // 1-indexed，表头是第 1 行
+        match import_single_user(&client, &auth, line, row_num).await {
+            Ok(()) => succeeded += 1,
+            Err(reason) => failed.push(json!({ "row": row_num, "reason": reason })),
+        }
+    }
+
+    Ok(Json(json!({
+        "succeeded": succeeded,
+        "failed_count": failed.len(),
+        "failures": failed,
+    })))
+}
+
+/// 解析并创建单个用户，返回 Ok(()) 或失败原因字符串。
+async fn import_single_user(
+    client: &tokio_postgres::Client,
+    auth: &AuthManager,
+    line: &str,
+    row_num: usize,
+) -> std::result::Result<(), String> {
+    let cols: Vec<&str> = line.splitn(4, ',').collect();
+    if cols.len() < 3 {
+        return Err("列数不足，需要 username,email,password".into());
+    }
+
+    let username = cols[0].trim();
+    let email = cols[1].trim();
+    let password = cols[2].trim();
+    let dept_id_str = cols.get(3).map(|s| s.trim()).unwrap_or("");
+
+    if username.is_empty() || email.is_empty() || password.is_empty() {
+        return Err("username/email/password 不能为空".into());
+    }
+
+    let dept_id: Option<Uuid> = if dept_id_str.is_empty() {
+        None
+    } else {
+        Uuid::parse_str(dept_id_str)
+            .map(Some)
+            .map_err(|_| format!("department_id 格式无效: {}", dept_id_str))?
+    };
+
+    let exists = client
+        .query_opt("SELECT id FROM users WHERE username = $1", &[&username])
+        .await
+        .map_err(|e| e.to_string())?;
+    if exists.is_some() {
+        return Err(format!("用户名 '{}' 已存在", username));
+    }
+
+    let password_hash = auth.hash_password(password)
+        .map_err(|_| "密码哈希失败".to_string())?;
+
+    let user_id = Uuid::new_v4();
+    let now = chrono::Utc::now();
+    client.execute(
+        "INSERT INTO users (id, username, email, password_hash, department_id, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        &[&user_id, &username, &email, &password_hash, &dept_id, &now, &now],
+    ).await.map_err(|e| e.to_string())?;
+
+    tracing::debug!(row = row_num, username = %username, "User imported");
+    Ok(())
 }
 
 // ============================================================================

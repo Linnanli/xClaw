@@ -158,6 +158,7 @@ type TabKey = (typeof tabs)[number]
 export default function UsersPage() {
   const [activeTab, setActiveTab] = useState<TabKey>('用户列表')
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
 
   // 用户列表状态
   const [users, setUsers] = useState<User[]>([])
@@ -285,7 +286,10 @@ export default function UsersPage() {
           <p className="font-mono text-xs text-[#999999]">用户账户、角色与权限管理</p>
         </div>
         <div className="flex gap-2">
-          <button className="flex items-center gap-2 border border-[#E8E8E8] bg-white px-4 py-2.5 font-mono text-[9px] font-semibold text-[#1A1A1A]">
+          <button
+            className="flex items-center gap-2 border border-[#E8E8E8] bg-white px-4 py-2.5 font-mono text-[9px] font-semibold text-[#1A1A1A]"
+            onClick={() => setImportDialogOpen(true)}
+          >
             <Upload className="h-3 w-3 text-[#6a6a6a]" />
             批量导入
           </button>
@@ -484,6 +488,114 @@ export default function UsersPage() {
 
       {/* 新建用户弹窗 */}
       <CreateUserDialog open={createDialogOpen} onClose={() => setCreateDialogOpen(false)} onCreated={loadUsers} />
+
+      {/* 批量导入弹窗 */}
+      <ImportUsersDialog open={importDialogOpen} onClose={() => setImportDialogOpen(false)} onImported={loadUsers} />
     </div>
+  )
+}
+
+/* ── 批量导入用户弹窗（需求 3.8） ── */
+
+interface ImportResult {
+  succeeded: number
+  failed_count: number
+  failures: Array<{ row: number; reason: string }>
+}
+
+function ImportUsersDialog({ open, onClose, onImported }: {
+  open: boolean; onClose: () => void; onImported: () => void
+}) {
+  const [csvText, setCsvText] = useState('')
+  const [importing, setImporting] = useState(false)
+  const [result, setResult] = useState<ImportResult | null>(null)
+
+  const TEMPLATE = 'username,email,password,department_id\nalice,alice@example.com,Pass123!,\nbob,bob@example.com,Pass456!,'
+
+  const handleClose = () => {
+    setCsvText(''); setResult(null)
+    onClose()
+  }
+
+  const handleImport = async () => {
+    if (!csvText.trim()) return
+    setImporting(true)
+    setResult(null)
+    try {
+      const resp = await api.post('/users/import', csvText, {
+        headers: { 'Content-Type': 'text/plain' },
+      })
+      setResult(resp.data)
+      if (resp.data.succeeded > 0) onImported()
+    } catch { /* 静默 */ }
+    setImporting(false)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) handleClose() }}>
+      <DialogContent className="sm:max-w-[560px] rounded-none p-0 gap-0 ring-0" style={{ border: '1px solid #E8E8E8' }} showCloseButton={false}>
+        <div className="flex items-center justify-between px-6 py-5" style={{ borderBottom: '1px solid #E8E8E8' }}>
+          <div className="flex items-center gap-2.5">
+            <Upload className="h-4 w-4 text-[#0A6B3A]" />
+            <span className="text-base font-semibold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>批量导入用户</span>
+          </div>
+          <button onClick={handleClose} className="font-mono text-sm font-semibold text-[#999999] hover:text-[#1A1A1A]">✕</button>
+        </div>
+
+        <div className="flex flex-col gap-4 px-6 py-5">
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between">
+              <span className="font-mono text-[9px] font-semibold tracking-[0.5px] text-[#999999]">CSV 内容</span>
+              <button
+                className="font-mono text-[9px] font-semibold text-[#0A6B3A]"
+                onClick={() => setCsvText(TEMPLATE)}
+              >
+                填入示例
+              </button>
+            </div>
+            <textarea
+              className="h-40 resize-none border border-[#E8E8E8] bg-[#F5F5F5] px-3 py-2.5 font-mono text-[10px] text-[#1A1A1A] outline-none placeholder:text-[#CCCCCC]"
+              placeholder={`粘贴 CSV 内容，格式：\nusername,email,password,department_id\nalice,alice@example.com,Pass123!,`}
+              value={csvText}
+              onChange={(e) => setCsvText(e.target.value)}
+            />
+            <span className="font-mono text-[9px] text-[#999]">首行为表头，department_id 列可选</span>
+          </div>
+
+          {result && (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-4 border border-[#E8E8E8] bg-[#FAFAFA] px-4 py-3">
+                <span className="font-mono text-[10px] font-semibold text-[#0A6B3A]">成功 {result.succeeded} 条</span>
+                {result.failed_count > 0 && (
+                  <span className="font-mono text-[10px] font-semibold text-[#CF1322]">失败 {result.failed_count} 条</span>
+                )}
+              </div>
+              {result.failures.length > 0 && (
+                <div className="max-h-32 overflow-y-auto border border-[#E8E8E8]">
+                  {result.failures.map((f, i) => (
+                    <div key={i} className="flex items-start gap-3 px-3 py-2" style={{ borderBottom: i < result.failures.length - 1 ? '1px solid #E8E8E8' : 'none' }}>
+                      <span className="font-mono text-[9px] text-[#999]">第 {f.row} 行</span>
+                      <span className="font-mono text-[9px] text-[#CF1322]">{f.reason}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-end gap-3 px-6 py-4" style={{ borderTop: '1px solid #E8E8E8' }}>
+          <button onClick={handleClose} className="border border-[#E8E8E8] bg-white px-5 py-2.5 font-mono text-[10px] font-semibold text-[#1A1A1A]">关闭</button>
+          <button
+            onClick={handleImport}
+            disabled={!csvText.trim() || importing}
+            className="flex items-center gap-2 bg-[#0A6B3A] px-5 py-2.5 font-mono text-[10px] font-semibold text-white disabled:opacity-50"
+          >
+            {importing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />}
+            开始导入
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }
