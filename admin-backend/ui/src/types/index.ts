@@ -20,8 +20,15 @@ export interface LoginRequest {
 }
 
 export interface LoginResponse {
-  token: string
-  user: User
+  access_token: string
+  refresh_token: string
+  expires_in: number
+  user: {
+    id: string
+    username: string
+    email: string
+    roles: string[]
+  }
 }
 
 export interface AuthState {

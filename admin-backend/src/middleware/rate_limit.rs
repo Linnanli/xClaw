@@ -1,8 +1,14 @@
-//! 基于 IP 的滑动窗口限流中间件
+//! 基于 IP + 路径分组的滑动窗口限流中间件
 //!
-//! - `/api/auth/login`：每分钟最多 10 次
-//! - 其他接口：每分钟最多 100 次
-//! - 超限返回 429 `{"error": "Too Many Requests"}`
+//! 限流分组：
+//! - `/api/auth/login`：每 IP 每分钟最多 30 次（防暴力破解，不影响正常使用）
+//! - 其他接口：每 IP 每分钟最多 300 次
+//!
+//! key = `{ip}:{group}`，登录和普通接口独立计数，互不影响。
+//!
+//! 可通过环境变量覆盖：
+//! - `RATE_LIMIT_LOGIN`：登录接口限制
+//! - `RATE_LIMIT_DEFAULT`：其他接口限制
 
 use crate::middleware::extract_client_ip;
 use axum::{
@@ -21,21 +27,39 @@ use std::{
 use tower::{Layer, Service};
 
 const WINDOW: Duration = Duration::from_secs(60);
-const LOGIN_LIMIT: usize = 10;
-const DEFAULT_LIMIT: usize = 100;
+const LOGIN_LIMIT: usize = 30;
+const DEFAULT_LIMIT: usize = 300;
 
-/// 每个 IP 的请求时间戳队列
+/// 启动时读取一次限流配置，避免每次请求都读环境变量
+fn get_limits() -> (usize, usize) {
+    let login = std::env::var("RATE_LIMIT_LOGIN")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(LOGIN_LIMIT);
+    let default = std::env::var("RATE_LIMIT_DEFAULT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_LIMIT);
+    (login, default)
+}
+
+/// key = `{ip}:{group}`，不同分组独立计数
 type WindowMap = Arc<Mutex<HashMap<String, VecDeque<Instant>>>>;
 
 #[derive(Clone)]
 pub struct RateLimitLayer {
     windows: WindowMap,
+    login_limit: usize,
+    default_limit: usize,
 }
 
 impl RateLimitLayer {
     pub fn new() -> Self {
+        let (login_limit, default_limit) = get_limits();
         Self {
             windows: Arc::new(Mutex::new(HashMap::new())),
+            login_limit,
+            default_limit,
         }
     }
 }
@@ -53,6 +77,8 @@ impl<S> Layer<S> for RateLimitLayer {
         RateLimitMiddleware {
             inner,
             windows: self.windows.clone(),
+            login_limit: self.login_limit,
+            default_limit: self.default_limit,
         }
     }
 }
@@ -61,6 +87,8 @@ impl<S> Layer<S> for RateLimitLayer {
 pub struct RateLimitMiddleware<S> {
     inner: S,
     windows: WindowMap,
+    login_limit: usize,
+    default_limit: usize,
 }
 
 impl<S> Service<Request<Body>> for RateLimitMiddleware<S>
@@ -80,21 +108,19 @@ where
     }
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
-        let path = req.uri().path().to_owned();
-        let limit = if path == "/api/auth/login" {
-            LOGIN_LIMIT
-        } else {
-            DEFAULT_LIMIT
-        };
+        let path = req.uri().path();
+        let is_login = path == "/api/auth/login";
+        let limit = if is_login { self.login_limit } else { self.default_limit };
 
         let ip = extract_request_ip(&req);
+        let group = if is_login { "login" } else { "default" };
+        let key = format!("{}:{}", ip, group);
 
         let now = Instant::now();
         let allowed = {
             let mut map = self.windows.lock().expect("rate limit mutex poisoned");
-            let queue = map.entry(ip).or_default();
+            let queue = map.entry(key).or_default();
 
-            // 清除窗口外的旧记录
             while queue.front().map(|t| now.duration_since(*t) >= WINDOW).unwrap_or(false) {
                 queue.pop_front();
             }
@@ -108,6 +134,14 @@ where
         };
 
         if !allowed {
+            let group_label = if is_login { "login" } else { "api" };
+            tracing::warn!(
+                ip = %ip,
+                path = %path,
+                group = %group_label,
+                limit = %limit,
+                "rate limit exceeded"
+            );
             let body = axum::Json(json!({"error": "Too Many Requests"}));
             let resp = (StatusCode::TOO_MANY_REQUESTS, body).into_response();
             return Box::pin(async move { Ok(resp) });
@@ -118,8 +152,6 @@ where
     }
 }
 
-/// 从请求中提取客户端 IP，优先使用共享的 header 提取逻辑，
-/// 最后 fallback 到 ConnectInfo（axum 注入的连接地址）。
 fn extract_request_ip(req: &Request<Body>) -> String {
     if let Some(ip) = extract_client_ip(req.headers()) {
         return ip;

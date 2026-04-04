@@ -1,8 +1,13 @@
 import { defineConfig } from 'cypress'
 
+/**
+ * E2E 测试说明：
+ * 后端需要以较高的限流阈值启动，否则测试会触发 429：
+ *   RATE_LIMIT_DEFAULT=1000 cargo run -p admin-backend
+ */
 export default defineConfig({
   e2e: {
-    baseUrl: 'http://localhost:5176',
+    baseUrl: 'http://localhost:5174',
     viewportWidth: 1920,
     viewportHeight: 1080,
     defaultCommandTimeout: 10000,

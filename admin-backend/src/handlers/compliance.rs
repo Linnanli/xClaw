@@ -81,7 +81,7 @@ pub async fn get_compliance_reports(
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let rows = client.query(
-        "SELECT r.id, r.name, r.report_type, r.start_date, r.end_date, r.created_at, u.username
+        "SELECT r.id, r.name, r.report_type, r.start_date, r.end_date, r.created_at, u.username, r.content
          FROM compliance_reports r
          LEFT JOIN users u ON u.id = r.generated_by
          ORDER BY r.created_at DESC
@@ -97,6 +97,7 @@ pub async fn get_compliance_reports(
         "end_date": r.get::<_, chrono::NaiveDate>(4).to_string(),
         "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(5),
         "generated_by": r.get::<_, Option<String>>(6),
+        "content": r.get::<_, serde_json::Value>(7),
     })).collect();
 
     Ok(Json(json!({ "reports": reports, "total": reports.len() })))

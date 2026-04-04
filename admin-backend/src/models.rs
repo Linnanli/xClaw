@@ -33,6 +33,18 @@ pub struct LoginResponse {
     pub access_token: String,
     pub refresh_token: String,
     pub expires_in: i64,
+    /// 登录用户基本信息（供前端展示和权限判断）
+    pub user: LoginUserInfo,
+}
+
+/// 登录响应中携带的用户基本信息（不含敏感字段）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoginUserInfo {
+    pub id: Uuid,
+    pub username: String,
+    pub email: String,
+    /// 用户的角色名称列表
+    pub roles: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

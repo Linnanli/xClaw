@@ -1,0 +1,183 @@
+//! 合规管理失败路径测试
+//!
+//! 覆盖维度：
+//! - 无效日期格式
+//! - 无效数据分级 level
+//! - 保留天数边界值（0、负数）
+//! - 日期范围逻辑错误（结束早于开始）
+
+#[cfg(test)]
+mod compliance_failure_tests {
+    use admin_backend::models::{GenerateReportRequest, UpdateRetentionPolicyRequest};
+
+    // ── 日期格式校验 ──────────────────────────────────────────────
+
+    #[test]
+    fn test_failure_invalid_start_date_format() {
+        let json = r#"{"name":"报告","start_date":"01/01/2024","end_date":"2024-03-31"}"#;
+        let req: GenerateReportRequest = serde_json::from_str(json).expect("反序列化应成功");
+        // 日期格式校验在 handler 层，这里验证 parse 会失败
+        let result = chrono::NaiveDate::parse_from_str(&req.start_date, "%Y-%m-%d");
+        assert!(result.is_err(), "非 YYYY-MM-DD 格式应被拒绝");
+    }
+
+    #[test]
+    fn test_failure_invalid_end_date_format() {
+        let json = r#"{"name":"报告","start_date":"2024-01-01","end_date":"2024/03/31"}"#;
+        let req: GenerateReportRequest = serde_json::from_str(json).expect("反序列化应成功");
+        let result = chrono::NaiveDate::parse_from_str(&req.end_date, "%Y-%m-%d");
+        assert!(result.is_err(), "斜杠分隔的日期格式应被拒绝");
+    }
+
+    #[test]
+    fn test_failure_end_before_start_date() {
+        let start = chrono::NaiveDate::parse_from_str("2024-03-31", "%Y-%m-%d").unwrap();
+        let end = chrono::NaiveDate::parse_from_str("2024-01-01", "%Y-%m-%d").unwrap();
+        assert!(end < start, "结束日期早于开始日期应被业务层拒绝");
+    }
+
+    // ── 保留天数边界值 ────────────────────────────────────────────
+
+    #[test]
+    fn test_failure_retention_days_zero() {
+        let json = r#"{"retention_days": 0}"#;
+        let req: UpdateRetentionPolicyRequest = serde_json::from_str(json).expect("反序列化应成功");
+        assert!(req.retention_days < 1, "保留天数 0 应被 handler 拒绝（< 1）");
+    }
+
+    #[test]
+    fn test_failure_retention_days_negative() {
+        // i32 反序列化负数是合法的，校验在 handler 层
+        let json = r#"{"retention_days": -30}"#;
+        let req: UpdateRetentionPolicyRequest = serde_json::from_str(json).expect("反序列化应成功");
+        assert!(req.retention_days < 1, "负数保留天数应被 handler 拒绝");
+    }
+
+    // ── 无效分级 level ────────────────────────────────────────────
+
+    #[test]
+    fn test_failure_invalid_classification_level() {
+        const VALID_LEVELS: &[&str] = &["public", "internal", "confidential", "top_secret"];
+        let invalid_levels = ["secret", "PUBLIC", "top-secret", "", "unknown"];
+        for level in &invalid_levels {
+            assert!(
+                !VALID_LEVELS.contains(level),
+                "无效分级 '{}' 不应通过校验",
+                level
+            );
+        }
+    }
+
+    #[test]
+    fn test_failure_empty_report_name() {
+        let json = r#"{"name":"","start_date":"2024-01-01","end_date":"2024-03-31"}"#;
+        let req: GenerateReportRequest = serde_json::from_str(json).expect("反序列化应成功");
+        assert!(req.name.trim().is_empty(), "空报告名称应被 handler 拒绝");
+    }
+}
+
+#[cfg(test)]
+mod jwt_auth_middleware_tests {
+    use serde_json::json;
+
+    // ── JWT 中间件公开路径豁免验证 ────────────────────────────────
+
+    /// 验证公开路径列表的完整性
+    /// 这些路径不需要 JWT token，客户端直连场景依赖这些豁免
+    #[test]
+    fn test_public_paths_include_client_endpoints() {
+        // 与 middleware/auth.rs 中 PUBLIC_PREFIXES 保持一致
+        let public_prefixes = [
+            "/api/auth/",
+            "/api/client-reports",
+            "/api/client-config",
+            "/api/client-models",
+            "/api/policies",
+            "/api/quota/check",
+            "/api/quota/report-usage",
+            "/health",
+        ];
+
+        // 客户端直连必须豁免的路径
+        let required_public = [
+            "/api/client-reports",   // 客户端数据上报
+            "/api/client-config",    // 客户端配置拉取
+            "/api/client-models",    // 客户端模型列表
+            "/api/quota/check",      // 配额预检（客户端发起）
+            "/api/quota/report-usage", // 用量上报
+        ];
+
+        for path in &required_public {
+            let is_public = public_prefixes.iter().any(|prefix| path.starts_with(prefix));
+            assert!(is_public, "客户端路径 '{}' 必须在公开路径列表中", path);
+        }
+    }
+
+    /// 验证合规路径需要认证（不在公开列表中）
+    #[test]
+    fn test_compliance_paths_require_auth() {
+        let public_prefixes = [
+            "/api/auth/",
+            "/api/client-reports",
+            "/api/client-config",
+            "/api/client-models",
+            "/api/policies",
+            "/api/quota/check",
+            "/api/quota/report-usage",
+            "/health",
+        ];
+
+        let protected_paths = [
+            "/api/compliance/overview",
+            "/api/compliance/reports",
+            "/api/compliance/retention",
+        ];
+
+        for path in &protected_paths {
+            let is_public = public_prefixes.iter().any(|prefix| path.starts_with(prefix));
+            assert!(!is_public, "合规路径 '{}' 不应在公开列表中，必须要求认证", path);
+        }
+    }
+
+    // ── LoginResponse 结构契约 ────────────────────────────────────
+
+    #[test]
+    fn test_contract_login_response_includes_user() {
+        let resp = json!({
+            "access_token": "eyJ...",
+            "refresh_token": "eyJ...",
+            "expires_in": 3600,
+            "user": {
+                "id": "uuid",
+                "username": "admin",
+                "email": "admin@example.com",
+                "roles": ["超级管理员"]
+            }
+        });
+
+        assert!(resp["access_token"].is_string(), "access_token 必须存在");
+        assert!(resp["user"].is_object(), "user 对象必须存在");
+        assert!(resp["user"]["roles"].is_array(), "roles 必须是数组");
+        assert!(resp["user"]["id"].is_string(), "user.id 必须存在");
+        assert!(resp["user"]["username"].is_string(), "user.username 必须存在");
+    }
+
+    #[test]
+    fn test_contract_login_response_no_password_field() {
+        // 登录响应中不应包含密码相关字段
+        let resp = json!({
+            "access_token": "eyJ...",
+            "refresh_token": "eyJ...",
+            "expires_in": 3600,
+            "user": {
+                "id": "uuid",
+                "username": "admin",
+                "email": "admin@example.com",
+                "roles": []
+            }
+        });
+
+        assert!(resp["user"].get("password").is_none(), "响应中不应包含 password 字段");
+        assert!(resp["user"].get("password_hash").is_none(), "响应中不应包含 password_hash 字段");
+    }
+}

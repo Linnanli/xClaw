@@ -133,6 +133,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/quota/model-ranking", get(handlers::quota::model_ranking))
         .route("/api/quota/details", get(handlers::quota::usage_records))
         .with_state(state)
+        .layer(axum::middleware::from_fn(crate::middleware::auth::jwt_auth))
         .layer(RateLimitLayer::new())
         .layer(SecurityHeadersLayer)
 }
@@ -332,28 +333,53 @@ async fn login(
     )
     .await;
 
+    // 查询用户角色列表
+    let role_rows = client
+        .query(
+            "SELECT r.name FROM roles r \
+             INNER JOIN user_roles ur ON r.id = ur.role_id \
+             WHERE ur.user_id = $1",
+            &[&user_id],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+    let roles: Vec<String> = role_rows.iter().map(|r| r.get(0)).collect();
+
+    // 查询用户邮箱
+    let email: String = client
+        .query_one("SELECT email FROM users WHERE id = $1", &[&user_id])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
+        .get(0);
+
     Ok(Json(LoginResponse {
         access_token,
         refresh_token,
         expires_in: 3600,
+        user: models::LoginUserInfo {
+            id: user_id,
+            username: payload.username,
+            email,
+            roles,
+        },
     }))
 }
 
 async fn refresh_token(
     State(_state): State<AppState>,
     Json(payload): Json<RefreshTokenRequest>,
-) -> Result<Json<LoginResponse>> {
+) -> Result<Json<serde_json::Value>> {
     let auth = AuthManager::new(std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string()));
     let claims = auth.verify_token(&payload.refresh_token)?;
 
     let access_token = auth.generate_access_token(&claims.sub)?;
     let new_refresh_token = auth.generate_refresh_token(&claims.sub)?;
 
-    Ok(Json(LoginResponse {
-        access_token,
-        refresh_token: new_refresh_token,
-        expires_in: 3600,
-    }))
+    Ok(Json(serde_json::json!({
+        "access_token": access_token,
+        "refresh_token": new_refresh_token,
+        "expires_in": 3600,
+    })))
 }
 
 async fn get_users(

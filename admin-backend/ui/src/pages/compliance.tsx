@@ -1,4 +1,4 @@
-import { FileText, Loader2, X } from 'lucide-react'
+import { FileText, Loader2, X, BarChart2 } from 'lucide-react'
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/api'
 import { TablePagination } from '@/components/ui/table-pagination'
@@ -24,7 +24,8 @@ const typeMap: Record<string, { label: string; color: string }> = {
 
 interface LevelInfo { key: string; label: string }
 interface Overview { levels: LevelInfo[]; rule_counts: Record<string, number>; total_rules: number; blocks_last_30d: number }
-interface Report { id: string; name: string; report_type: string; start_date: string; end_date: string; created_at: string; generated_by?: string }
+interface ReportContent { dlp_blocks: number; policy_changes: number; alert_events: number; approval_tickets: number }
+interface Report { id: string; name: string; report_type: string; start_date: string; end_date: string; created_at: string; generated_by?: string; content?: ReportContent }
 interface RetentionPolicy { classification_level: string; label: string; retention_days: number }
 
 export default function CompliancePage() {
@@ -33,6 +34,7 @@ export default function CompliancePage() {
   const [policies, setPolicies] = useState<RetentionPolicy[]>([])
   const [loading, setLoading] = useState(true)
   const [generateOpen, setGenerateOpen] = useState(false)
+  const [detailReport, setDetailReport] = useState<Report | null>(null)
   const [page, setPage] = useState(1)
 
   const fetchAll = useCallback(async () => {
@@ -99,6 +101,7 @@ export default function CompliancePage() {
       {policies.length > 0 && (
         <div className="bg-white p-5" style={{ border: '1px solid #E8E8E8' }}>
           <span className="text-sm font-semibold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>数据保留策略</span>
+          {/* TODO: 保留策略执行逻辑待实现 — 需明确各表数据与分级的映射关系后，添加后台定时清理任务 */}
           <div className="mt-3 flex flex-col gap-2">
             {policies.map((p) => (
               <div key={p.classification_level} className="flex items-center justify-between py-2" style={{ borderBottom: '1px solid #F0F0F0' }}>
@@ -140,7 +143,12 @@ export default function CompliancePage() {
                 <div><StatusTag label={t.label} color={t.color} /></div>
                 <span className="font-mono text-[10px] font-medium text-[#999999]">{r.start_date} ~ {r.end_date}</span>
                 <span className="font-mono text-[10px] font-medium text-[#999999]">{new Date(r.created_at).toLocaleString('zh-CN')}</span>
-                <button className="font-mono text-[10px] font-semibold text-[#0A6B3A] text-left">查看</button>
+                <button
+                  onClick={() => setDetailReport(r)}
+                  className="font-mono text-[10px] font-semibold text-[#0A6B3A] text-left hover:underline"
+                >
+                  查看
+                </button>
               </div>
             )
           })
@@ -149,9 +157,91 @@ export default function CompliancePage() {
       </div>
 
       <GenerateReportDialog open={generateOpen} onClose={() => setGenerateOpen(false)} onGenerated={() => { setGenerateOpen(false); fetchAll() }} />
+      <ReportDetailDialog report={detailReport} onClose={() => setDetailReport(null)} />
     </div>
   )
 }
+
+// ============================================================================
+// 报告详情弹窗
+// ============================================================================
+
+function ReportDetailDialog({ report, onClose }: { report: Report | null; onClose: () => void }) {
+  if (!report) return null
+
+  const t = typeMap[report.report_type] ?? { label: report.report_type, color: '#999' }
+  const c = report.content
+
+  const stats = c ? [
+    { label: 'DLP 拦截次数', value: c.dlp_blocks, color: '#CF1322' },
+    { label: '策略变更次数', value: c.policy_changes, color: '#D48700' },
+    { label: '告警事件数', value: c.alert_events, color: '#1677FF' },
+    { label: '审批工单数', value: c.approval_tickets, color: '#0A6B3A' },
+  ] : []
+
+  return (
+    <Dialog open={!!report} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-[520px] p-0">
+        <div className="flex items-center justify-between border-b border-[#E8E8E8] px-6 py-4">
+          <div className="flex flex-col gap-0.5">
+            <span className="font-mono text-xs font-bold text-[#1A1A1A]">{report.name}</span>
+            <span className="font-mono text-[9px] text-[#999]">{report.start_date} ~ {report.end_date}</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <StatusTag label={t.label} color={t.color} />
+            <button onClick={onClose}><X className="h-4 w-4 text-[#999]" /></button>
+          </div>
+        </div>
+
+        <div className="px-6 py-5">
+          {c ? (
+            <>
+              <div className="mb-4 flex items-center gap-1.5">
+                <BarChart2 className="h-3.5 w-3.5 text-[#0A6B3A]" />
+                <span className="font-mono text-[10px] font-semibold text-[#1A1A1A]">安全事件汇总</span>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                {stats.map((s) => (
+                  <div key={s.label} className="flex flex-col gap-2 bg-[#F9F9F9] p-3" style={{ border: '1px solid #F0F0F0' }}>
+                    <span className="font-mono text-[9px] text-[#999]">{s.label}</span>
+                    <span className="text-[24px] font-bold tracking-tight" style={{ fontFamily: 'Space Grotesk, sans-serif', letterSpacing: '-1px', color: s.color }}>
+                      {s.value}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="flex items-center justify-center py-8">
+              <span className="font-mono text-[10px] text-[#999]">报告内容暂不可用</span>
+            </div>
+          )}
+
+          <div className="mt-4 flex flex-col gap-1.5 border-t border-[#F0F0F0] pt-4">
+            <div className="flex justify-between">
+              <span className="font-mono text-[9px] text-[#999]">生成时间</span>
+              <span className="font-mono text-[9px] text-[#1A1A1A]">{new Date(report.created_at).toLocaleString('zh-CN')}</span>
+            </div>
+            {report.generated_by && (
+              <div className="flex justify-between">
+                <span className="font-mono text-[9px] text-[#999]">生成人</span>
+                <span className="font-mono text-[9px] text-[#1A1A1A]">{report.generated_by}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="flex justify-end border-t border-[#E8E8E8] px-6 py-4">
+          <button onClick={onClose} className="border border-[#E8E8E8] px-4 py-2 font-mono text-[10px] font-semibold text-[#999]">关闭</button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ============================================================================
+// 生成报告弹窗
+// ============================================================================
 
 function GenerateReportDialog({ open, onClose, onGenerated }: { open: boolean; onClose: () => void; onGenerated: () => void }) {
   const [form, setForm] = useState({ name: '', report_type: 'monthly', start_date: '', end_date: '' })
