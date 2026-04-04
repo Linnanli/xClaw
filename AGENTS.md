@@ -65,6 +65,33 @@ Desktop Client 和 Admin Backend 新增功能时，**禁止重复实现**主项�
 
 详细的 Rust 编码规范、错误处理模式、测试代码示例和质量门禁脚本用法见 `.kiro/steering/rust-coding-standards.md`（手动引用）。
 
+### 数据库访问层迁移策略（Admin Backend）
+
+Admin Backend 正在从 `tokio-postgres + deadpool-postgres` 逐步迁移到 **SQLx**。
+
+**规则：**
+- **新模块**必须使用 `sqlx`，通过 `state.sqlx_pool` 访问数据库
+- **存量模块**维持 `tokio-postgres`，按需迁移，不强制一次性重写
+- 两套连接池在 `AppState` 中并存：`db_pool`（legacy）和 `sqlx_pool`（新）
+
+**SQLx 使用模式：**
+```rust
+// 1. 定义强类型结果结构体
+#[derive(sqlx::FromRow, serde::Serialize)]
+struct MyRow { field: String, count: i64 }
+
+// 2. 用 query_as 绑定参数（$1 占位符）
+let rows = sqlx::query_as::<_, MyRow>("SELECT field, COUNT(*) AS count FROM t WHERE id = $1")
+    .bind(id)
+    .fetch_all(&state.sqlx_pool)
+    .await
+    .map_err(|e| Error::Database(e.to_string()))?;
+```
+
+**DATE_TRUNC / INTERVAL 的处理：**
+这两类 SQL 片段无法通过 `$1` 参数化（pg 协议限制）。必须用枚举白名单替代字符串，
+参考 `admin-backend/src/handlers/reports.rs` 中的 `Period` 枚举模式。
+
 ---
 
 ## 测试规则

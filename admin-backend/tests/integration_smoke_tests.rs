@@ -353,6 +353,9 @@ async fn test_http_all_critical_get_routes_registered() {
         "/api/compliance/reports",
         "/api/compliance/retention",
         "/api/knowledge-bases",
+        "/api/reports/ai-usage",
+        "/api/reports/model-cost",
+        "/api/reports/dept-ranking",
     ];
 
     let mut failed = Vec::new();

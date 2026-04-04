@@ -12,23 +12,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load environment variables
     dotenvy::dotenv().ok();
 
-    // Database configuration
-    let db_host = env::var("DB_HOST").unwrap_or_else(|_| "localhost".to_string());
-    let db_port = env::var("DB_PORT").unwrap_or_else(|_| "5432".to_string());
-    let db_user = env::var("DB_USER").unwrap_or_else(|_| "postgres".to_string());
+    // Database configuration — 变量读取一次，同时供 legacy pool 和 sqlx pool 使用
+    let db_host     = env::var("DB_HOST").unwrap_or_else(|_| "localhost".to_string());
+    let db_port     = env::var("DB_PORT").unwrap_or_else(|_| "5432".to_string());
+    let db_user     = env::var("DB_USER").unwrap_or_else(|_| "postgres".to_string());
     let db_password = env::var("DB_PASSWORD").unwrap_or_else(|_| "postgres".to_string());
-    let db_name = env::var("DB_NAME").unwrap_or_else(|_| "ironclaw".to_string());
+    let db_name     = env::var("DB_NAME").unwrap_or_else(|_| "ironclaw".to_string());
 
     let db_config = Config {
-        host: Some(db_host),
+        host: Some(db_host.clone()),
         port: Some(db_port.parse()?),
-        user: Some(db_user),
-        password: Some(db_password),
-        dbname: Some(db_name),
+        user: Some(db_user.clone()),
+        password: Some(db_password.clone()),
+        dbname: Some(db_name.clone()),
         ..Default::default()
     };
-
     let pool = db_config.create_pool(None, tokio_postgres::NoTls)?;
+
+    // SQLx 连接池 — 新模块使用；优先读 DATABASE_URL，否则从各分项变量拼接
+    let database_url = env::var("DATABASE_URL")
+        .unwrap_or_else(|_| format!("postgres://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"));
+    let sqlx_pool = sqlx::PgPool::connect(&database_url).await?;
 
     // IronClaw Gateway URL
     let gateway_url = env::var("IRONCLAW_GATEWAY_URL")
@@ -42,6 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create app state
     let state = AppState {
         db_pool: pool,
+        sqlx_pool,
         http_client,
         gateway_url,
     };

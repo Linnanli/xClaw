@@ -132,6 +132,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/quota/department-ranking", get(handlers::quota::department_ranking))
         .route("/api/quota/model-ranking", get(handlers::quota::model_ranking))
         .route("/api/quota/details", get(handlers::quota::usage_records))
+        // 统计报表 API
+        .route("/api/reports/ai-usage", get(handlers::reports::get_ai_usage))
+        .route("/api/reports/model-cost", get(handlers::reports::get_model_cost))
+        .route("/api/reports/dept-ranking", get(handlers::reports::get_dept_ranking))
         .with_state(state)
         .layer(axum::middleware::from_fn(crate::middleware::auth::jwt_auth))
         .layer(RateLimitLayer::new())
@@ -2506,6 +2510,7 @@ async fn update_settings(
         "watermark_opacity", "watermark_position", "watermark_color",
     ];
 
+    let mut changed_keys: Vec<String> = Vec::new();
     if let Some(obj) = payload.as_object() {
         for (key, value) in obj {
             if valid_keys.contains(&key.as_str()) {
@@ -2513,8 +2518,18 @@ async fn update_settings(
                     "INSERT INTO system_settings (key, value, updated_at) VALUES ($1, $2, NOW()) ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()",
                     &[&key, &value],
                 ).await.map_err(|e| Error::Database(e.to_string()))?;
+                changed_keys.push(key.clone());
             }
         }
+    }
+
+    if !changed_keys.is_empty() {
+        write_audit_log(
+            &client,
+            Uuid::nil(),
+            "update_settings",
+            &format!("更新系统配置: {}", changed_keys.join(", ")),
+        ).await;
     }
 
     Ok(Json(json!({ "message": "配置保存成功" })))

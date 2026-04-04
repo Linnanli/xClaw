@@ -9,6 +9,7 @@ pub mod conversations;
 pub mod departments;
 pub mod knowledge_base;
 pub mod quota;
+pub mod reports;
 
 use crate::db::Database;
 use crate::error::Result;

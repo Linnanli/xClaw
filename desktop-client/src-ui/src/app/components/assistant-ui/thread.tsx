@@ -24,6 +24,7 @@ import {
   useComposerRuntime,
 } from "@assistant-ui/react";
 import type { SanitizationStats } from "@/app/hooks/useDlpScan";
+import { useWatermark } from "@/app/hooks/useWatermark";
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -311,6 +312,22 @@ const AssistantMessage: FC = () => {
 };
 
 const AssistantActionBar: FC = () => {
+  const { config: watermark } = useWatermark();
+
+  const handleExport = useCallback((content: string) => {
+    const watermarkedContent = watermark.enabled && watermark.text
+      ? `${content}\n\n---\n\n*${watermark.text}*`
+      : content;
+
+    const blob = new Blob([watermarkedContent], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `message-${Date.now()}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [watermark.enabled, watermark.text]);
+
   return (
     <ActionBarPrimitive.Root
       hideWhenRunning
@@ -346,7 +363,7 @@ const AssistantActionBar: FC = () => {
           align="start"
           className="aui-action-bar-more-content z-50 min-w-32 overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
         >
-          <ActionBarPrimitive.ExportMarkdown asChild>
+          <ActionBarPrimitive.ExportMarkdown onExport={handleExport} asChild>
             <ActionBarMorePrimitive.Item className="aui-action-bar-more-item flex cursor-pointer select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground">
               <DownloadIcon className="size-4" />
               导出为 Markdown
