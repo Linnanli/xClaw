@@ -136,6 +136,9 @@ macro_rules! all_tauri_commands {
             desktop_client::commands::get_auth_token,
             // ── 水印配置 ────────────────────────────────────────
             desktop_client::commands::get_watermark_config,
+            // ── 应用信息 ────────────────────────────────────────
+            desktop_client::commands::get_app_version,
+            desktop_client::commands::check_for_updates,
             // ── 审批工单 ────────────────────────────────────────
             desktop_client::commands::submit_approval_ticket,
         ]

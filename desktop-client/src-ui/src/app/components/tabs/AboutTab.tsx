@@ -1,26 +1,38 @@
 /**
  * AboutTab - 关于我们面板
  *
- * 设计稿：垂直居中布局
- * - LogoSection: 88px 圆形绿色背景 + shield-check 图标 + 应用名 + 副标题
- * - VersionRow: 圆角灰色背景条，左侧版本号 + 右侧绿色"检查更新"按钮
+ * - 版本号：通过 `get_app_version` Tauri 命令从 Cargo.toml 读取
+ * - 检查更新：通过 `check_for_updates` 命令查询 Admin Backend 的 needs_upgrade 字段
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ShieldCheck, RefreshCw } from 'lucide-react';
+import { invokeTauri } from '@utils/tauri';
+
+interface CheckUpdateResult {
+  needs_upgrade: boolean;
+  current_version: string;
+}
 
 export function AboutTab() {
+  const [version, setVersion] = useState<string>('...');
   const [checking, setChecking] = useState(false);
   const [checkResult, setCheckResult] = useState<string | null>(null);
 
+  useEffect(() => {
+    invokeTauri<string>('get_app_version')
+      .then((v) => setVersion(`v${v}`))
+      .catch(() => setVersion('v0.1.0'));
+  }, []);
+
   const handleCheckUpdate = async () => {
     setChecking(true);
+    setCheckResult(null);
     try {
-      // 模拟检查更新
-      await new Promise((r) => setTimeout(r, 1500));
-      setCheckResult('当前已是最新版本');
+      const { needs_upgrade } = await invokeTauri<CheckUpdateResult>('check_for_updates');
+      setCheckResult(needs_upgrade ? '发现新版本，请前往官网下载更新' : '当前已是最新版本');
     } catch {
-      setCheckResult('检查更新失败');
+      setCheckResult('检查更新失败，请检查网络连接');
     } finally {
       setChecking(false);
     }
@@ -48,7 +60,7 @@ export function AboutTab() {
       <div className="flex h-14 w-full items-center justify-between rounded-xl bg-[#F5F4F1] px-5">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold text-foreground">当前版本</span>
-          <span className="text-sm text-[#6D6C6A]">v0.1.0</span>
+          <span className="text-sm text-[#6D6C6A]">{version}</span>
         </div>
         <button
           onClick={handleCheckUpdate}

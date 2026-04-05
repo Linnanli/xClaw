@@ -5,6 +5,22 @@
 use crate::auth_token_manager::AuthTokenManager;
 use crate::{Error, Result};
 
+/// 构建带超时的 HTTP 客户端。
+fn build_http_client(timeout_secs: u64) -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .build()
+        .map_err(|e| Error::ConfigError(e.to_string()))
+}
+
+/// 从环境变量读取 Admin Backend 地址和认证 token。
+fn admin_env() -> (String, String) {
+    let url = std::env::var("ADMIN_BACKEND_URL")
+        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let token = std::env::var("ADMIN_AUTH_TOKEN").unwrap_or_default();
+    (url, token)
+}
+
 /// 获取认证令牌。
 ///
 /// 从本地文件加载或自动生成 64 位十六进制 token，
@@ -34,29 +50,68 @@ pub async fn get_auth_token() -> Result<String> {
     Ok(token)
 }
 
+/// 获取应用版本号。
+///
+/// 从 Cargo.toml 编译期注入的 `CARGO_PKG_VERSION` 读取，格式为 `x.y.z`。
+#[tauri::command]
+pub fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// 检查是否需要升级（需求 8.9 / 23.3）。
+///
+/// 调用 `GET /api/client-config` 读取 `needs_upgrade` 字段。
+/// Admin Backend 不可用时返回 `false`（不强制升级，Fail-Safe 对用户友好）。
+#[tauri::command]
+pub async fn check_for_updates() -> Result<serde_json::Value> {
+    let (admin_url, client_token) = admin_env();
+    let http = build_http_client(5)?;
+
+    // client_id 参数让后端返回该客户端的 needs_upgrade 状态
+    let url = if client_token.is_empty() {
+        format!("{}/api/client-config", admin_url)
+    } else {
+        format!("{}/api/client-config?client_id={}", admin_url, client_token)
+    };
+
+    let config: serde_json::Value = http
+        .get(&url)
+        .bearer_auth(&client_token)
+        .send()
+        .await
+        .map_err(|_| Error::ConfigError("Admin Backend 不可用".into()))?
+        .json()
+        .await
+        .map_err(|e| Error::ConfigError(format!("Failed to parse config: {}", e)))?;
+
+    let needs_upgrade = config
+        .get("needs_upgrade")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    Ok(serde_json::json!({
+        "needs_upgrade": needs_upgrade,
+        "current_version": env!("CARGO_PKG_VERSION"),
+    }))
+}
+
 /// 获取水印配置（从 Admin Backend API 读取）。
 ///
 /// 通过 HTTP 调用 `/api/settings` 接口，提取水印相关字段返回给前端。
 /// Admin Backend 不可用时返回默认值。
 #[tauri::command]
 pub async fn get_watermark_config() -> Result<serde_json::Value> {
-    let admin_url = std::env::var("ADMIN_BACKEND_URL")
-        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let (admin_url, token) = admin_env();
+    let http = build_http_client(5)?;
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .map_err(|e| Error::ConfigError(e.to_string()))?;
-
-    let mut request = client.get(format!("{}/api/settings", admin_url));
-    if let Ok(token) = std::env::var("ADMIN_AUTH_TOKEN") {
-        request = request.header("Authorization", format!("Bearer {}", token));
-    }
-
-    let response = request.send().await
-        .map_err(|e| Error::ConfigError(format!("Failed to fetch settings: {}", e)))?;
-
-    let settings: serde_json::Value = response.json().await
+    let settings: serde_json::Value = http
+        .get(format!("{}/api/settings", admin_url))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|e| Error::ConfigError(format!("Failed to fetch settings: {}", e)))?
+        .json()
+        .await
         .map_err(|e| Error::ConfigError(format!("Failed to parse settings: {}", e)))?;
 
     Ok(serde_json::json!({
@@ -84,14 +139,8 @@ pub async fn submit_approval_ticket(
 ) -> Result<String> {
     // 在进入 async 前提取 Arc，避免 State 生命周期跨 await 的问题
     let store_arc = store.0.clone();
-    let admin_url = std::env::var("ADMIN_BACKEND_URL")
-        .unwrap_or_else(|_| "http://localhost:3000".to_string());
-    let client_token = std::env::var("ADMIN_AUTH_TOKEN").unwrap_or_default();
-
-    let http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| Error::ConfigError(e.to_string()))?;
+    let (admin_url, client_token) = admin_env();
+    let http = build_http_client(10)?;
 
     let payload = serde_json::json!({
         "operation_type": "conversation_submit",

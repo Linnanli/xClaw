@@ -67,6 +67,9 @@ const FRONTEND_INVOKED_COMMANDS: &[&str] = &[
     "get_auth_token",
     // ── 水印配置 ────────────────────────────────────────────────
     "get_watermark_config",
+    // ── 应用信息 ────────────────────────────────────────────────
+    "get_app_version",
+    "check_for_updates",
     // ── 审批工单 ────────────────────────────────────────────────
     "submit_approval_ticket",
 ];
@@ -116,6 +119,9 @@ const REGISTERED_COMMANDS: &[&str] = &[
     "get_auth_token",
     // ── 水印配置 ────────────────────────────────────────────────
     "get_watermark_config",
+    // ── 应用信息 ────────────────────────────────────────────────
+    "get_app_version",
+    "check_for_updates",
     // ── 审批工单 ────────────────────────────────────────────────
     "submit_approval_ticket",
 ];
