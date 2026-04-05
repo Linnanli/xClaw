@@ -7,6 +7,7 @@ pub mod approvals;
 pub mod compliance;
 pub mod conversations;
 pub mod departments;
+pub mod extensions;
 pub mod knowledge_base;
 pub mod quota;
 pub mod reports;

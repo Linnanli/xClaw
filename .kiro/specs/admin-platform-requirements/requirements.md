@@ -321,19 +321,61 @@ IronClaw 是一个面向政企级场景的 AI 办公助手管理平台（Admin B
 
 ---
 
-### 需求 14：扩展管理（技能与插件） `[已实现 + 扩展]`
+### 需求 14：扩展管理（技能与插件） `[重新设计]`
 
-**用户故事：** 作为管理员，我希望管理 AI 助手可用的技能和插件，以控制助手的能力范围。
+**用户故事：** 作为管理员，我希望管理 AI 助手可用的技能和插件，控制能力范围与安全边界；作为员工，我希望在客户端浏览和安装管理端审核通过的技能，按需扩展 AI 助手能力。
+
+> **架构说明**：
+>
+> **技能（Skills）**：SKILL.md 格式的提示词文件，不含可执行代码。内置技能随客户端安装包打包，不可删除；管理端上传的技能需经格式校验和安全审核后才能下发。
+>
+> **插件（Extensions/MCP）**：MCP Server 协议的扩展，支持 HTTP 模式（远程服务）和 Stdio 模式（本地进程，通过 Docker 沙箱执行）。插件包含可执行代码，安全审核要求更严格。
+>
+> **分发机制**：Admin Backend 实现兼容 ClawHub 格式的私有注册表 API（`/registry/v1/`），客户端通过 `CLAWHUB_REGISTRY` 环境变量（由 `client_config` 下发）指向 Admin，ironclaw 引擎零改动地使用 Admin 作为私有注册表进行搜索和下载。
+>
+> **沙箱**：Stdio 模式插件（Python/Node）通过 ironclaw 内置的 Docker 沙箱（`ContainerJobManager`，使用 `bollard` crate）执行，不直接在宿主机运行。
 
 #### 验收标准
 
-1. `[已实现]` THE Admin_Platform SHALL 展示技能列表，包含名称、描述、版本、作者、启用状态和更新时间
-2. `[已实现]` WHEN Admin 切换技能的启用状态, THE Admin_Platform SHALL 调用后端 API 启用或禁用该技能
-3. `[已实现]` THE Admin_Platform SHALL 展示插件列表，包含名称、描述、版本、作者、启用状态和更新时间
-4. `[已实现]` WHEN Admin 切换插件的启用状态, THE Admin_Platform SHALL 调用后端 API 启用或禁用该插件
-5. `[新增]` THE Admin_Platform SHALL 支持按部门或角色配置可用技能和插件的白名单
-6. `[新增]` WHEN 技能或插件执行涉及敏感操作, THE DLP_Engine SHALL 对技能和插件的输入输出执行 DLP 扫描
-7. `[新增]` THE Admin_Platform SHALL 展示各技能和插件的调用频次统计
+**管理端 — 技能管理**
+
+1. `[重写]` THE Admin_Platform SHALL 展示技能列表，包含名称、描述、版本、来源（内置/管理端上传）、状态（已启用/已禁用/待审核）和安全审核状态
+2. `[重写]` WHEN Admin 切换技能启用状态, THE Admin_Platform SHALL 更新 Admin DB 中的 `skills.enabled` 字段，禁用后客户端无法下载和执行该技能
+3. `[新增]` WHEN Admin 上传技能包（SKILL.md 格式）, THE Admin_Platform SHALL 执行格式校验（YAML frontmatter 合法性、必填字段检查）和安全扫描（提示词注入关键词检测），校验通过后状态置为"待审核"
+4. `[新增]` WHEN Admin 审核通过技能包, THE Admin_Platform SHALL 将技能状态置为"已启用"，客户端可通过私有注册表 API 搜索和下载
+5. `[新增]` WHEN Admin 拒绝技能包, THE Admin_Platform SHALL 将技能状态置为"已拒绝"并记录拒绝原因
+6. `[新增]` THE Admin_Platform SHALL 支持将技能标记为"内置"，内置技能在客户端安装时自动预装，不可被用户卸载
+7. `[新增]` THE Admin_Platform SHALL 支持按部门配置技能白名单，限定该部门成员可搜索和安装的技能范围
+
+**管理端 — 插件管理**
+
+8. `[重写]` THE Admin_Platform SHALL 展示插件列表，包含名称、描述、版本、类型（HTTP/Stdio）、来源、状态和安全审核状态
+9. `[重写]` WHEN Admin 切换插件启用状态, THE Admin_Platform SHALL 更新 Admin DB，禁用后客户端无法激活该插件
+10. `[新增]` WHEN Admin 上传插件包, THE Admin_Platform SHALL 执行格式校验（capabilities.json 合法性、能力声明审查）和文件大小限制（WASM ≤ 10MB，配置包 ≤ 1MB）
+11. `[新增]` THE Admin_Platform SHALL 对 Stdio 模式插件（Python/Node）标注"需要 Docker 沙箱"，并在审核时验证 Docker 镜像声明合法性
+12. `[新增]` THE Admin_Platform SHALL 展示各技能和插件的调用频次统计（来自客户端上报）
+
+**客户端 — 技能与扩展页面**
+
+13. `[新增]` THE Desktop_Client SHALL 展示技能与扩展页面，分"技能"和"扩展（MCP）"两个 Tab
+14. `[新增]` THE Desktop_Client SHALL 在"已安装"区域展示本地已安装的技能，标注来源（内置/管理端/用户安装）和启用状态开关
+15. `[新增]` THE Desktop_Client SHALL 在"可用技能"区域展示管理端私有注册表中已审核通过且在部门白名单内的技能，支持一键安装
+16. `[新增]` WHEN 技能被管理端禁用, THE Desktop_Client SHALL 在可用列表中将该技能显示为"已禁用"状态，不提供安装按钮
+17. `[新增]` WHEN Desktop_Client 启动时, THE Desktop_Client SHALL 从 `client_config` 读取 `skill_registry_url`，注入为 `CLAWHUB_REGISTRY` 环境变量，ironclaw 引擎据此使用 Admin 私有注册表
+
+**安全**
+
+18. `[新增]` THE Admin_Platform SHALL 对所有上传的技能/插件包记录完整的审核日志，包含上传人、审核人、审核结论和时间
+19. `[新增]` WHEN Stdio 模式插件执行时, THE Desktop_Client SHALL 通过 Docker 沙箱（`ContainerJobManager`）运行插件进程，不允许直接在宿主机执行
+20. `[新增]` THE Admin_Platform SHALL 在技能/插件详情页展示"安全审核"标签，标注审核状态（待审核/已通过/已拒绝）和审核摘要
+
+> **客户端侧实现说明**：内置技能通过 `seed_builtin_skills` 在启动时从 Tauri 资源目录复制到 `installed_dir`，不可删除（已存在时跳过）。管理端下发的技能通过 ironclaw 的 `skills_install_handler` 从私有注册表下载安装。`CLAWHUB_REGISTRY` 环境变量由 `AdminClientConfig.skill_registry_url` 注入。
+
+#### 客户端验收标准
+
+21. `[新增]` THE Desktop_Client SHALL 通过 `get_extensions_page_data` Tauri 命令获取已安装技能列表（来自 `SkillRegistry`）和可用技能列表（来自私有注册表搜索），合并展示
+22. `[新增]` WHEN Desktop_Client 用户点击安装技能, THE Desktop_Client SHALL 调用 ironclaw 的 `skills_install_handler`，从 `CLAWHUB_REGISTRY` 下载 SKILL.md 并安装到 `installed_dir`
+23. `[新增]` THE Desktop_Client SHALL 通过 `DataReporter` 上报技能调用事件（`ClientReport::SkillInvocation`），包含技能名称、调用结果和耗时，不上报调用内容
 
 ---
 

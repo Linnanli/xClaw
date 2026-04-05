@@ -66,14 +66,22 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/policies/dlp", get(get_dlp_policies_handler))
         .route("/api/policies/sensitive-ops", get(get_sensitive_ops_policies_handler))
         .route("/api/policies/version", get(get_policy_version_handler))
-        // 技能管理 API
-        .route("/api/skills", get(get_skills))
-        .route("/api/skills/{id}/enable", post(enable_skill))
-        .route("/api/skills/{id}/disable", post(disable_skill))
-        // 插件管理 API
-        .route("/api/plugins", get(get_plugins))
-        .route("/api/plugins/{id}/enable", post(enable_plugin))
-        .route("/api/plugins/{id}/disable", post(disable_plugin))
+        // 技能管理 API（重构：直查 Admin DB，不再代理 Gateway）
+        .route("/api/skills", get(handlers::extensions::list_skills))
+        .route("/api/skills/upload", post(handlers::extensions::upload_skill))
+        .route("/api/skills/{id}/enable", post(handlers::extensions::set_skill_enabled))
+        .route("/api/skills/{id}/disable", post(handlers::extensions::set_skill_enabled))
+        .route("/api/skills/{id}/review", post(handlers::extensions::review_skill))
+        // 插件管理 API（重构：直查 Admin DB，不再代理 Gateway）
+        .route("/api/plugins", get(handlers::extensions::list_plugins))
+        .route("/api/plugins/upload", post(handlers::extensions::upload_plugin))
+        .route("/api/plugins/{id}/enable", post(handlers::extensions::set_plugin_enabled))
+        .route("/api/plugins/{id}/disable", post(handlers::extensions::set_plugin_enabled))
+        .route("/api/plugins/{id}/review", post(handlers::extensions::review_plugin))
+        // 私有注册表 API（兼容 ClawHub /api/v1/ 格式，供 ironclaw 引擎使用）
+        .route("/api/v1/search", get(handlers::extensions::registry_search))
+        .route("/api/v1/download", get(handlers::extensions::registry_download))
+        .route("/api/v1/skills/{slug}", get(handlers::extensions::registry_skill_detail))
         // 系统配置 API
         .route("/api/settings", get(get_settings).put(update_settings))
         // 客户端配置下发 API
@@ -90,6 +98,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/departments/{id}/members", get(handlers::departments::get_department_members))
         .route("/api/departments/{id}/model-whitelist", get(handlers::departments::get_model_whitelist).put(handlers::departments::update_model_whitelist))
         .route("/api/departments/{id}/quota-summary", get(handlers::quota::department_quota_summary))
+        .route("/api/departments/{id}/skill-whitelist", get(handlers::extensions::get_skill_whitelist).put(handlers::extensions::update_skill_whitelist))
         // 模型配置 API
         .route("/api/model-configs", get(get_model_configs).post(create_model_config))
         .route("/api/model-configs/{id}", put(update_model_config).delete(delete_model_config))
@@ -2219,7 +2228,7 @@ async fn get_clients(
     };
 
     let sql = format!(
-        "SELECT id, user_id, username, client_name, version, os, ip_address, last_activity, online, policy_version, registered_at, updated_at
+        "SELECT id, user_id, username, client_name, version, os, ip_address, last_activity, online, policy_version, registered_at, updated_at, device_fingerprint, needs_upgrade
          FROM registered_clients {} ORDER BY last_activity DESC",
         where_clause
     );
@@ -2244,6 +2253,8 @@ async fn get_clients(
             "policy_version": r.try_get::<_, Option<String>>(9).unwrap_or(None),
             "registered_at": r.get::<_, chrono::DateTime<chrono::Utc>>(10),
             "updated_at": r.get::<_, chrono::DateTime<chrono::Utc>>(11),
+            "device_fingerprint": r.try_get::<_, Option<serde_json::Value>>(12).unwrap_or(None),
+            "needs_upgrade": r.try_get::<_, bool>(13).unwrap_or(false),
         })
     }).collect();
 
@@ -2259,7 +2270,7 @@ async fn get_client_detail(
 
     let row = client
         .query_opt(
-            "SELECT id, user_id, username, client_name, version, os, ip_address, last_activity, online, policy_version, registered_at, updated_at
+            "SELECT id, user_id, username, client_name, version, os, ip_address, last_activity, online, policy_version, registered_at, updated_at, device_fingerprint, needs_upgrade
              FROM registered_clients WHERE id = $1",
             &[&client_id],
         )
@@ -2280,6 +2291,8 @@ async fn get_client_detail(
         "policy_version": row.try_get::<_, Option<String>>(9).unwrap_or(None),
         "registered_at": row.get::<_, chrono::DateTime<chrono::Utc>>(10),
         "updated_at": row.get::<_, chrono::DateTime<chrono::Utc>>(11),
+        "device_fingerprint": row.try_get::<_, Option<serde_json::Value>>(12).unwrap_or(None),
+        "needs_upgrade": row.try_get::<_, bool>(13).unwrap_or(false),
     })))
 }
 
@@ -2343,117 +2356,6 @@ async fn get_client_stats(
     })))
 }
 
-// ==================== 技能管理 API ====================
-// 代理到 IronClaw Web Gateway 的 /api/skills 端点
-
-async fn get_skills(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>> {
-    let url = format!("{}/api/skills", state.gateway_url);
-    match state.http_client.get(&url).send().await {
-        Ok(resp) => {
-            if resp.status().is_success() {
-                let body: serde_json::Value = resp.json().await
-                    .map_err(|e| Error::Internal(format!("解析 Gateway 响应失败: {}", e)))?;
-                Ok(Json(body))
-            } else {
-                // Gateway 返回错误，返回空列表
-                Ok(Json(json!({ "skills": [], "count": 0 })))
-            }
-        }
-        Err(_) => {
-            // Gateway 不可用，从本地数据库回退查询
-            let client = state.db_pool.get().await
-                .map_err(|e| Error::Database(e.to_string()))?;
-
-            let rows = client.query(
-                "SELECT id, name, COALESCE(description, '') as description, version, COALESCE(author, '') as author, enabled, created_at, updated_at FROM skills ORDER BY name ASC",
-                &[],
-            ).await.map_err(|e| Error::Database(e.to_string()))?;
-
-            let skills: Vec<serde_json::Value> = rows.iter().map(|r| {
-                json!({
-                    "id": r.get::<_, uuid::Uuid>(0).to_string(),
-                    "name": r.get::<_, String>(1),
-                    "description": r.get::<_, String>(2),
-                    "version": r.get::<_, String>(3),
-                    "author": r.get::<_, String>(4),
-                    "enabled": r.get::<_, bool>(5),
-                    "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(6).to_rfc3339(),
-                    "updated_at": r.get::<_, chrono::DateTime<chrono::Utc>>(7).to_rfc3339(),
-                })
-            }).collect();
-
-            Ok(Json(json!({ "skills": skills, "count": skills.len() })))
-        }
-    }
-}
-
-// ==================== 插件管理 API ====================
-// 代理到 IronClaw Web Gateway 的 /api/extensions 端点
-
-async fn get_plugins(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>> {
-    let url = format!("{}/api/extensions", state.gateway_url);
-    match state.http_client.get(&url).send().await {
-        Ok(resp) => {
-            if resp.status().is_success() {
-                let body: serde_json::Value = resp.json().await
-                    .map_err(|e| Error::Internal(format!("解析 Gateway 响应失败: {}", e)))?;
-                // 将 extensions 格式转换为前端期望的 plugins 格式
-                let extensions = body.get("extensions").cloned().unwrap_or(json!([]));
-                let plugins: Vec<serde_json::Value> = if let Some(arr) = extensions.as_array() {
-                    arr.iter().map(|ext| {
-                        json!({
-                            "id": ext.get("name").and_then(|n| n.as_str()).unwrap_or(""),
-                            "name": ext.get("display_name").and_then(|n| n.as_str())
-                                .or_else(|| ext.get("name").and_then(|n| n.as_str()))
-                                .unwrap_or(""),
-                            "description": ext.get("description").and_then(|n| n.as_str()).unwrap_or(""),
-                            "version": ext.get("version").and_then(|n| n.as_str()).unwrap_or("1.0.0"),
-                            "author": "",
-                            "enabled": ext.get("active").and_then(|n| n.as_bool()).unwrap_or(false),
-                            "created_at": chrono::Utc::now().to_rfc3339(),
-                            "updated_at": chrono::Utc::now().to_rfc3339(),
-                        })
-                    }).collect()
-                } else {
-                    vec![]
-                };
-                Ok(Json(json!({ "plugins": plugins })))
-            } else {
-                Ok(Json(json!({ "plugins": [] })))
-            }
-        }
-        Err(_) => {
-            // Gateway 不可用，从本地数据库回退查询
-            let client = state.db_pool.get().await
-                .map_err(|e| Error::Database(e.to_string()))?;
-
-            let rows = client.query(
-                "SELECT id, name, COALESCE(description, '') as description, version, COALESCE(author, '') as author, enabled, created_at, updated_at FROM plugins ORDER BY name ASC",
-                &[],
-            ).await.map_err(|e| Error::Database(e.to_string()))?;
-
-            let plugins: Vec<serde_json::Value> = rows.iter().map(|r| {
-                json!({
-                    "id": r.get::<_, uuid::Uuid>(0).to_string(),
-                    "name": r.get::<_, String>(1),
-                    "description": r.get::<_, String>(2),
-                    "version": r.get::<_, String>(3),
-                    "author": r.get::<_, String>(4),
-                    "enabled": r.get::<_, bool>(5),
-                    "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(6).to_rfc3339(),
-                    "updated_at": r.get::<_, chrono::DateTime<chrono::Utc>>(7).to_rfc3339(),
-                })
-            }).collect();
-
-            Ok(Json(json!({ "plugins": plugins })))
-        }
-    }
-}
-
 // ==================== 系统配置 API ====================
 
 async fn get_settings(
@@ -2508,6 +2410,7 @@ async fn update_settings(
         "policy_sync_interval_s", "policy_auto_push",
         "watermark_enabled", "watermark_template", "watermark_font_size",
         "watermark_opacity", "watermark_position", "watermark_color",
+        "minimum_client_version",
     ];
 
     let mut changed_keys: Vec<String> = Vec::new();
@@ -2559,6 +2462,14 @@ struct ClientConfigResponse {
     watermark_opacity: Option<f64>,
     watermark_position: Option<String>,
     watermark_color: Option<String>,
+    // 客户端升级提示（需求 8.9）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    needs_upgrade: Option<bool>,
+    // 私有技能注册表地址（需求 14.17）
+    // 格式："{admin_base_url}/api/v1?client_token={token}"
+    // ironclaw 引擎通过 CLAWHUB_REGISTRY 环境变量读取此值
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skill_registry_url: Option<String>,
 }
 
 /// GET /api/client-config — 返回客户端应使用的配置。
@@ -2619,6 +2530,8 @@ async fn get_client_config(
                 watermark_enabled: None, watermark_template: None,
                 watermark_font_size: None, watermark_opacity: None,
                 watermark_position: None, watermark_color: None,
+                needs_upgrade: None,
+                skill_registry_url: None,
             }
         }
         None => ClientConfigResponse {
@@ -2629,12 +2542,47 @@ async fn get_client_config(
             watermark_enabled: None, watermark_template: None,
             watermark_font_size: None, watermark_opacity: None,
             watermark_position: None, watermark_color: None,
+            needs_upgrade: None,
+            skill_registry_url: None,
         },
     };
 
     // 合并水印配置
     let mut response = response;
     merge_watermark_settings(&client, &mut response).await;
+
+    // 如果请求携带了 client_id，查询该客户端的 needs_upgrade 状态
+    if let Some(ref cid) = params.client_id {
+        if let Ok(uuid) = Uuid::parse_str(cid) {
+            if let Ok(Some(row)) = client
+                .query_opt(
+                    "SELECT needs_upgrade FROM registered_clients WHERE id = $1",
+                    &[&uuid],
+                )
+                .await
+            {
+                response.needs_upgrade = row.try_get::<_, bool>(0).ok();
+            }
+        }
+    }
+
+    // 填充私有注册表地址（需求 14.17）
+    // 从 system_settings 读取 admin_base_url，拼接 client_token 作为身份标识
+    if let Ok(rows) = client
+        .query("SELECT value FROM system_settings WHERE key = 'admin_base_url'", &[])
+        .await
+    {
+        if let Some(row) = rows.first() {
+            let val: serde_json::Value = row.get(0);
+            if let Some(base_url) = val.as_str() {
+                let token_suffix = params.client_id
+                    .as_deref()
+                    .map(|id| format!("?client_token={}", id))
+                    .unwrap_or_default();
+                response.skill_registry_url = Some(format!("{}/api/v1{}", base_url.trim_end_matches('/'), token_suffix));
+            }
+        }
+    }
 
     debug!(version = response.config_version, "Client config served");
     Ok(Json(response))
@@ -3238,133 +3186,6 @@ async fn get_dashboard_trends(
         "user_activity": user_activity,
         "dlp_blocks": dlp_blocks,
     })))
-}
-
-
-// ============================================================================
-// 技能/插件启用禁用 (Skill/Plugin Enable/Disable)
-// ============================================================================
-
-async fn toggle_skill(
-    state: &AppState,
-    skill_id: Uuid,
-    enabled: bool,
-) -> Result<Json<serde_json::Value>> {
-    let db = state.db_pool.get().await
-        .map_err(|e| Error::Database(e.to_string()))?;
-
-    // 检查技能是否存在（先查本地数据库）
-    let row = db
-        .query_opt("SELECT id, name FROM skills WHERE id = $1", &[&skill_id])
-        .await
-        .map_err(|e| Error::Database(e.to_string()))?;
-
-    if row.is_none() {
-        return Err(Error::SkillNotFound);
-    }
-    let skill_name: String = row.unwrap().get(1);
-
-    // 尝试代理到 Gateway
-    let action = if enabled { "enable" } else { "disable" };
-    let gateway_url = format!("{}/api/skills/{}/{}", state.gateway_url, skill_id, action);
-    let gateway_synced = match state.http_client.post(&gateway_url).send().await {
-        Ok(resp) if resp.status().is_success() => true,
-        _ => false,
-    };
-
-    // 更新本地数据库
-    let now = chrono::Utc::now();
-    db.execute(
-        "UPDATE skills SET enabled = $1, updated_at = $2 WHERE id = $3",
-        &[&enabled, &now, &skill_id],
-    )
-    .await
-    .map_err(|e| Error::Database(e.to_string()))?;
-
-    // 审计日志
-    let audit_action = if enabled { "enable_skill" } else { "disable_skill" };
-    let system_user = Uuid::nil();
-    write_audit_log(&db, system_user, audit_action, &format!("{}: {}", audit_action, skill_name)).await;
-
-    Ok(Json(json!({
-        "id": skill_id,
-        "name": skill_name,
-        "enabled": enabled,
-        "gateway_synced": gateway_synced,
-    })))
-}
-
-async fn enable_skill(
-    State(state): State<AppState>,
-    Path(skill_id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>> {
-    toggle_skill(&state, skill_id, true).await
-}
-
-async fn disable_skill(
-    State(state): State<AppState>,
-    Path(skill_id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>> {
-    toggle_skill(&state, skill_id, false).await
-}
-
-async fn toggle_plugin(
-    state: &AppState,
-    plugin_id: Uuid,
-    enabled: bool,
-) -> Result<Json<serde_json::Value>> {
-    let db = state.db_pool.get().await
-        .map_err(|e| Error::Database(e.to_string()))?;
-
-    let row = db
-        .query_opt("SELECT id, name FROM plugins WHERE id = $1", &[&plugin_id])
-        .await
-        .map_err(|e| Error::Database(e.to_string()))?;
-
-    if row.is_none() {
-        return Err(Error::PluginNotFound);
-    }
-    let plugin_name: String = row.unwrap().get(1);
-
-    let action = if enabled { "enable" } else { "disable" };
-    let gateway_url = format!("{}/api/extensions/{}/{}", state.gateway_url, plugin_id, action);
-    let gateway_synced = match state.http_client.post(&gateway_url).send().await {
-        Ok(resp) if resp.status().is_success() => true,
-        _ => false,
-    };
-
-    let now = chrono::Utc::now();
-    db.execute(
-        "UPDATE plugins SET enabled = $1, updated_at = $2 WHERE id = $3",
-        &[&enabled, &now, &plugin_id],
-    )
-    .await
-    .map_err(|e| Error::Database(e.to_string()))?;
-
-    let audit_action = if enabled { "enable_plugin" } else { "disable_plugin" };
-    let system_user = Uuid::nil();
-    write_audit_log(&db, system_user, audit_action, &format!("{}: {}", audit_action, plugin_name)).await;
-
-    Ok(Json(json!({
-        "id": plugin_id,
-        "name": plugin_name,
-        "enabled": enabled,
-        "gateway_synced": gateway_synced,
-    })))
-}
-
-async fn enable_plugin(
-    State(state): State<AppState>,
-    Path(plugin_id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>> {
-    toggle_plugin(&state, plugin_id, true).await
-}
-
-async fn disable_plugin(
-    State(state): State<AppState>,
-    Path(plugin_id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>> {
-    toggle_plugin(&state, plugin_id, false).await
 }
 
 

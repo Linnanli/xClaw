@@ -20,7 +20,7 @@ use serde_json::json;
 ///
 /// DATE_TRUNC 关键字和 INTERVAL 字面量无法通过 `$1` 参数化（pg 协议限制），
 /// 用枚举确保拼入 SQL 的值只能来自编译期常量，不受用户输入影响。
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Period {
     Day,

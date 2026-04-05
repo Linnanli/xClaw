@@ -173,12 +173,30 @@
 - [ ] 21.1 在系统设置页添加告警配置 Tab：通知渠道选择和连接参数（需求 13.7）
 - [ ] 21.2 在系统设置页添加安全配置 Tab：密码复杂度策略、会话超时、登录失败锁定阈值（需求 13.8）
 
-### 22. 扩展管理扩展（需求 14 新增部分）
+### 22. 扩展管理重构（需求 14）
 
-- [ ] 22.1* 实现技能/插件按部门白名单配置（需求 14.5）
-- [ ] 22.2* 实现技能/插件调用频次统计展示（需求 14.7）
+- [x] 22.0 执行 `023_extensions_v2.sql`：为 skills 和 plugins 表新增 source、review_status、file_path、is_builtin、invoke_count 等字段；创建 department_skill_whitelist 表；在 `integration_smoke_tests.rs` 中添加新字段和新表的存在性验证
+- [x] 22.1 重写 `get_skills` handler：删除 Gateway 代理逻辑，改为直接查 Admin DB，返回包含 source、review_status、is_builtin 字段的完整列表（需求 14.1）
+- [x] 22.2 重写 `get_plugins` handler：同上，删除 Gateway 代理逻辑（需求 14.8）
+- [x] 22.3 实现技能包上传 API：`POST /api/skills/upload`，执行 YAML frontmatter 格式校验和提示词注入关键词扫描，通过后状态置为 `pending`（需求 14.3）
+- [x] 22.4 实现技能审核 API：`POST /api/skills/:id/review`（approved 字段区分通过/拒绝），记录审核时间（需求 14.4、14.5）
+- [x] 22.5 实现私有注册表 API（ClawHub 兼容格式）：`GET /api/v1/search`（按部门白名单过滤）、`GET /api/v1/download`（检查 enabled 状态）、`GET /api/v1/skills/{slug}`（需求 14.17）
+- [x] 22.6 实现部门技能白名单 API：`GET/PUT /api/departments/:id/skill-whitelist`（需求 14.7）
+- [x] 22.7 实现插件包上传 API：`POST /api/plugins/upload`，执行 plugin_type 格式校验，Stdio 类型自动标记 `requires_sandbox=true`（需求 14.10、14.11）
+- [x] 22.8 实现插件审核 API：`POST /api/plugins/:id/review`（approved 字段区分通过/拒绝）（需求 14.10）
+- [x] 22.9 在 `GET /api/client-config` 响应中新增 `skill_registry_url` 字段，值为 `{admin_base_url}/api/v1?client_token={id}`（需求 14.17）
+- [x] 22.10 前端扩展管理页重写：技能列表含来源徽标、审核状态徽标、调用次数、上传入口、审核操作（通过/拒绝）（需求 14.1-14.5）
+- [x] 22.11 前端插件管理 Tab：展示插件列表，标注类型（HTTP/Stdio/WASM）和沙箱要求（需求 14.8-14.11）
+- [x] 22.12 [Desktop Client] 在 `AdminClientConfig` 中新增 `skill_registry_url: Option<String>` 字段，`inject_to_env()` 中注入为 `CLAWHUB_REGISTRY` 环境变量（需求 14.17）
+- [ ] 22.13 [Desktop Client] 实现技能与扩展页面（`/extensions`）：已安装技能列表 + 可用技能列表（来自私有注册表搜索），支持一键安装，禁用技能显示"已禁用"状态（需求 14.13-14.16）
+- [ ] 22.14* [Desktop Client] 实现 `DataReporter::SkillInvocation` 上报类型，技能调用时上报名称、结果和耗时（需求 14.23）
 
 ### 23. 客户端管理扩展（需求 8 新增部分）
 
-- [ ] 23.1 实现客户端在线状态自动更新：基于心跳间隔和离线判定阈值定时更新 clients 表的在线状态（需求 8.8）
-- [ ] 23.2* 实现客户端版本管控：检测低于最低版本的客户端并标记 needs_upgrade（需求 8.9）
+- [x] 23.1 实现客户端在线状态自动更新：基于心跳间隔和离线判定阈值定时更新 clients 表的在线状态（需求 8.8）
+- [x] 23.1.1 在 system_settings 中新增 minimum_client_version 配置项（迁移 022）
+- [x] 23.1.2 实现 needs_upgrade 标记逻辑：定时任务比较客户端版本与最低版本，标记 needs_upgrade=true（需求 8.9）
+- [x] 23.1.3 在 GET /api/client-config 响应中新增 needs_upgrade 字段，客户端拉取配置时可感知升级需求（需求 8.9）
+- [x] 23.1.4 在 get_clients 和 get_client_detail 查询中包含 device_fingerprint 和 needs_upgrade 字段（需求 8.10）
+- [ ] 23.2* 实现客户端版本管控前端：系统设置页添加最低版本配置入口（需求 8.9）
+- [ ] 23.3* [Desktop Client] 拉取 client_config 时检查 needs_upgrade 字段，显示升级提示（需求 8.9）

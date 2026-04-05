@@ -215,10 +215,12 @@ admin-backend/src/
 | GET | `/api/dashboard/*` | 仪表盘数据 | 2.1-2.4 |
 | GET | `/api/reports/*` | 统计报表 | 12.1-12.4 |
 | GET/PUT | `/api/settings` | 系统设置 | 13.1-13.6 |
-| GET | `/api/skills` | 技能列表 | 14.1 |
-| PUT | `/api/skills/:id/toggle` | 切换技能状态 | 14.2 |
-| GET | `/api/plugins` | 插件列表 | 14.3 |
-| PUT | `/api/plugins/:id/toggle` | 切换插件状态 | 14.4 |
+| GET | `/api/skills` | 技能列表（查 Admin DB，不再代理到 38080） | 14.1 |
+| POST | `/api/skills/:id/enable` | 启用技能 | 14.2 |
+| POST | `/api/skills/:id/disable` | 禁用技能 | 14.2 |
+| GET | `/api/plugins` | 插件列表（查 Admin DB） | 14.8 |
+| POST | `/api/plugins/:id/enable` | 启用插件 | 14.9 |
+| POST | `/api/plugins/:id/disable` | 禁用插件 | 14.9 |
 | GET/POST/PUT/DELETE | `/api/departments/*` | 部门 CRUD | 4.1-4.4 |
 
 #### 已有 API 扩展（新增字段或参数）
@@ -307,6 +309,23 @@ admin-backend/src/
 | POST | `/api/approvals` | 创建审批工单 |
 | PUT | `/api/approvals/:id` | 审批操作（批准/拒绝） |
 | GET | `/api/approvals/pending-count` | 待审批数量 |
+
+**扩展管理 — 私有注册表 (需求 14)**
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/registry/v1/search` | 技能搜索（ClawHub 兼容格式，按部门白名单过滤） |
+| GET | `/registry/v1/download` | 技能包下载（检查 enabled 状态，禁用返回 403） |
+| GET | `/registry/v1/skills/:slug` | 技能详情（ClawHub 兼容格式） |
+| GET | `/registry/v1/builtin` | 内置技能列表（客户端启动时拉取） |
+| POST | `/api/skills/upload` | 上传技能包（格式校验 + 安全扫描） |
+| POST | `/api/skills/:id/approve` | 审核通过技能 |
+| POST | `/api/skills/:id/reject` | 拒绝技能（附拒绝原因） |
+| GET | `/api/departments/:id/skill-whitelist` | 获取部门技能白名单 |
+| PUT | `/api/departments/:id/skill-whitelist` | 更新部门技能白名单 |
+| POST | `/api/plugins/upload` | 上传插件包（格式校验 + 能力声明审查） |
+| POST | `/api/plugins/:id/approve` | 审核通过插件 |
+| POST | `/api/plugins/:id/reject` | 拒绝插件 |
 
 ### 前端页面与组件结构
 
@@ -830,6 +849,47 @@ INSERT INTO session_config (session_timeout_minutes, password_min_length) VALUES
 CREATE INDEX idx_rate_limit_lookup ON rate_limit_records(ip_address, endpoint, window_start);
 ```
 
+#### 迁移 023：扩展管理重构 (需求 14)
+
+```sql
+-- 023_extensions_v2.sql
+
+-- 扩展 skills 表：新增来源、审核状态、文件路径等字段
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'builtin';
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS review_status TEXT NOT NULL DEFAULT 'approved';
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS review_note TEXT;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS reviewed_by UUID REFERENCES users(id);
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS file_path TEXT;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS file_size BIGINT;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS checksum TEXT;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS is_builtin BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS invoke_count BIGINT NOT NULL DEFAULT 0;
+
+-- 扩展 plugins 表：新增类型、审核状态、沙箱标记等字段
+ALTER TABLE plugins ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'builtin';
+ALTER TABLE plugins ADD COLUMN IF NOT EXISTS plugin_type TEXT NOT NULL DEFAULT 'http';
+ALTER TABLE plugins ADD COLUMN IF NOT EXISTS review_status TEXT NOT NULL DEFAULT 'approved';
+ALTER TABLE plugins ADD COLUMN IF NOT EXISTS review_note TEXT;
+ALTER TABLE plugins ADD COLUMN IF NOT EXISTS reviewed_by UUID REFERENCES users(id);
+ALTER TABLE plugins ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+ALTER TABLE plugins ADD COLUMN IF NOT EXISTS file_path TEXT;
+ALTER TABLE plugins ADD COLUMN IF NOT EXISTS file_size BIGINT;
+ALTER TABLE plugins ADD COLUMN IF NOT EXISTS requires_sandbox BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE plugins ADD COLUMN IF NOT EXISTS capabilities JSONB;
+ALTER TABLE plugins ADD COLUMN IF NOT EXISTS invoke_count BIGINT NOT NULL DEFAULT 0;
+
+-- 部门技能白名单（NULL 表示不限制，允许所有已审核技能）
+CREATE TABLE IF NOT EXISTS department_skill_whitelist (
+    department_id UUID NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
+    skill_id UUID NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (department_id, skill_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dept_skill_whitelist ON department_skill_whitelist(department_id);
+```
+
 ### 数据模型关系图
 
 ```mermaid
@@ -842,6 +902,7 @@ erDiagram
     
     departments ||--o{ quota_configs : "配额"
     departments }o--o| departments : "上级"
+    departments ||--o{ department_skill_whitelist : "技能白名单"
     
     conversations ||--o{ conversation_messages : "包含"
     conversations ||--o{ token_usage_records : "关联"
@@ -855,6 +916,8 @@ erDiagram
     sensitive_operation_rules ||--o{ approval_tickets : "关联"
     
     quota_configs ||--o{ quota_counters : "计数"
+    
+    skills ||--o{ department_skill_whitelist : "白名单关联"
 ```
 
 ### 后端 Rust 数据模型 (models.rs 扩展)

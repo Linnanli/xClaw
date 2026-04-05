@@ -75,6 +75,10 @@ pub struct AdminClientConfig {
     pub config_version: Option<u64>,
     /// 最后更新时间
     pub updated_at: Option<String>,
+    /// 私有技能注册表地址（需求 14.17）
+    /// 格式："{admin_base_url}/api/v1?client_token={token}"
+    /// inject_to_env() 将其注入为 CLAWHUB_REGISTRY，ironclaw 引擎据此使用 Admin 私有注册表
+    pub skill_registry_url: Option<String>,
 }
 
 impl AdminClientConfig {
@@ -117,6 +121,14 @@ impl AdminClientConfig {
         }
         if let Some(cost) = self.max_cost_per_day_cents {
             std::env::set_var("MAX_COST_PER_DAY_CENTS", cost.to_string());
+        }
+        // 注入私有注册表地址（需求 14.17）
+        // ironclaw 的 SkillCatalog::new() 读取 CLAWHUB_REGISTRY 环境变量
+        if let Some(ref url) = self.skill_registry_url {
+            if !url.is_empty() {
+                std::env::set_var("CLAWHUB_REGISTRY", url);
+                tracing::info!("Injected CLAWHUB_REGISTRY from admin config");
+            }
         }
     }
 }

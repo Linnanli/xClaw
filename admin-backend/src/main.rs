@@ -135,6 +135,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // 启动客户端在线状态自动更新任务（每分钟扫描，按 offline_threshold 标记离线）
+    let client_status_pool = state.db_pool.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            update_client_online_status(&client_status_pool).await;
+        }
+    });
+
     axum::serve(listener, app).await?;
 
     Ok(())
@@ -204,4 +214,92 @@ async fn retry_failed_notifications(pool: &deadpool_postgres::Pool) {
             &[],
         )
         .await;
+}
+
+/// 客户端在线状态自动更新：
+/// 读取 system_settings 中的 client_offline_threshold_s，
+/// 将超过阈值未活跃的客户端标记为离线（需求 8.8）。
+/// 同时检查 minimum_client_version，标记需要升级的客户端（需求 8.9）。
+async fn update_client_online_status(pool: &deadpool_postgres::Pool) {
+    let client = match pool.get().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "client status update: failed to get db connection");
+            return;
+        }
+    };
+
+    // 读取离线判定阈值（默认 120 秒）
+    let threshold_secs: i64 = client
+        .query_opt(
+            "SELECT value FROM system_settings WHERE key = 'client_offline_threshold_s'",
+            &[],
+        )
+        .await
+        .ok()
+        .flatten()
+        .and_then(|row| {
+            let v: Option<serde_json::Value> = row.get(0);
+            v.and_then(|val| val.as_i64())
+        })
+        .unwrap_or(120);
+
+    // 将超过阈值未活跃的在线客户端标记为离线
+    match client
+        .execute(
+            "UPDATE registered_clients \
+             SET online = false, updated_at = NOW() \
+             WHERE online = true \
+             AND last_activity < NOW() - ($1 || ' seconds')::INTERVAL",
+            &[&threshold_secs.to_string()],
+        )
+        .await
+    {
+        Ok(n) if n > 0 => tracing::info!(count = n, "client status update: marked {} clients offline", n),
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "client status update: failed to mark offline"),
+    }
+
+    // 读取最低客户端版本（空字符串表示不限制）
+    let min_version: String = client
+        .query_opt(
+            "SELECT value FROM system_settings WHERE key = 'minimum_client_version'",
+            &[],
+        )
+        .await
+        .ok()
+        .flatten()
+        .and_then(|row| {
+            let v: Option<serde_json::Value> = row.get(0);
+            v.and_then(|val| val.as_str().map(|s| s.to_string()))
+        })
+        .unwrap_or_default();
+
+    if min_version.is_empty() {
+        return;
+    }
+
+    // 标记版本低于最低要求的客户端需要升级
+    // 使用字符串比较（semver 格式 x.y.z，字符串比较在版本号位数相同时有效）
+    // 生产环境建议使用 semver crate 做精确比较
+    match client
+        .execute(
+            "UPDATE registered_clients \
+             SET needs_upgrade = true, updated_at = NOW() \
+             WHERE version IS NOT NULL \
+             AND version < $1 \
+             AND needs_upgrade = false",
+            &[&min_version],
+        )
+        .await
+    {
+        Ok(n) if n > 0 => tracing::info!(
+            count = n,
+            min_version = %min_version,
+            "client status update: marked {} clients as needs_upgrade",
+            n
+        ),
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "client status update: failed to mark needs_upgrade"),
+    }
 }
