@@ -114,6 +114,30 @@ const DlpContext = createContext<DlpState>({
 export const useDlpState = () => useContext(DlpContext);
 
 // ============================================================================
+// Approval Context — 即时工具授权
+// ============================================================================
+
+export interface PendingApproval {
+  request_id: string;
+  tool_name: string;
+  description: string;
+}
+
+interface ApprovalState {
+  pendingApprovals: PendingApproval[];
+  approve: (requestId: string, threadId: string) => Promise<void>;
+  deny: (requestId: string, threadId: string) => Promise<void>;
+}
+
+const ApprovalContext = createContext<ApprovalState>({
+  pendingApprovals: [],
+  approve: async () => {},
+  deny: async () => {},
+});
+
+export const useApprovalState = () => useContext(ApprovalContext);
+
+// ============================================================================
 // 消息转换：TauriMessage → assistant-ui ThreadMessageLike
 // ============================================================================
 
@@ -198,6 +222,9 @@ export function TauriRuntimeProvider({
   const [dlpBlockReason, setDlpBlockReason] = useState<string | null>(null);
   const [dlpRedactedStats, setDlpRedactedStats] = useState<SanitizationStats | null>(null);
 
+  // 即时工具授权状态
+  const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
+
   const clearDlpBlock = useCallback(() => {
     setDlpBlocked(false);
     setDlpBlockReason(null);
@@ -210,6 +237,22 @@ export function TauriRuntimeProvider({
   const onRedactedCb = useCallback((stats: SanitizationStats) => {
     setDlpRedactedStats(stats);
   }, []);
+
+  // 即时工具授权：approve / deny 通过 IPC 发送消息给 Agent
+  const sendApprovalDecision = useCallback(async (command: 'ic_approve_tool' | 'ic_deny_tool', requestId: string, tid: string) => {
+    try {
+      await invoke(command, { requestId, threadId: tid });
+      setPendingApprovals((prev) => prev.filter((a) => a.request_id !== requestId));
+    } catch (err) {
+      tracing.error(`Failed to ${command}`, { requestId, error: err });
+    }
+  }, []);
+
+  const approve = useCallback((requestId: string, tid: string) =>
+    sendApprovalDecision('ic_approve_tool', requestId, tid), [sendApprovalDecision]);
+
+  const deny = useCallback((requestId: string, tid: string) =>
+    sendApprovalDecision('ic_deny_tool', requestId, tid), [sendApprovalDecision]);
 
   // 同步 threadId ref
   useEffect(() => { threadIdRef.current = threadId; }, [threadId]);
@@ -362,7 +405,11 @@ export function TauriRuntimeProvider({
 
       case 'approval_needed': {
         tracing.info('Tool approval needed', { tool: event.tool_name, requestId: event.request_id });
-        // TODO: 弹出审批对话框，调用 ic_approve_tool / ic_deny_tool
+        setPendingApprovals((prev) => {
+          // 去重：同一 request_id 不重复添加
+          if (prev.some((a) => a.request_id === event.request_id)) return prev;
+          return [...prev, { request_id: event.request_id, tool_name: event.tool_name, description: event.description }];
+        });
         break;
       }
 
@@ -533,7 +580,15 @@ export function TauriRuntimeProvider({
             onRedacted: onRedactedCb,
           }}
         >
-          {children}
+          <ApprovalContext.Provider
+            value={{
+              pendingApprovals,
+              approve: (requestId) => approve(requestId, threadIdRef.current ?? ''),
+              deny: (requestId) => deny(requestId, threadIdRef.current ?? ''),
+            }}
+          >
+            {children}
+          </ApprovalContext.Provider>
         </DlpContext.Provider>
       </ModelContext.Provider>
     </AssistantRuntimeProvider>

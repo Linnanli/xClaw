@@ -17,6 +17,8 @@ import {
   Trash2,
   Radio,
 } from 'lucide-react';
+import { save } from '@tauri-apps/plugin-dialog';
+import { writeTextFile } from '@tauri-apps/plugin-fs';
 import { Button } from '../ui/button';
 import { ScrollArea } from '../ui/scroll-area';
 import { cn } from '../ui/utils';
@@ -67,17 +69,17 @@ export function LogsTab() {
 
   const handleExport = async () => {
     try {
-      const data = await logApi.exportLogs('json');
-      const blob = new Blob([data], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `logs-${new Date().toISOString()}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
+      const json = await logApi.exportLogs();
+      // 弹出系统保存对话框，让用户选择保存路径
+      const path = await save({
+        defaultPath: `ironclaw-logs-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}.json`,
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+      });
+      if (!path) return; // 用户取消
+      await writeTextFile(path, json);
     } catch (err) {
       console.error('Failed to export logs:', err);
-      setError('导出失败');
+      setError(`导出失败：${err instanceof Error ? err.message : String(err)}`);
     }
   };
 

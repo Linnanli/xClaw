@@ -72,6 +72,12 @@ const FRONTEND_INVOKED_COMMANDS: &[&str] = &[
     "check_for_updates",
     // ── 审批工单 ────────────────────────────────────────────────
     "submit_approval_ticket",
+    // ── 日志查询 ────────────────────────────────────────────────
+    "ic_get_logs",
+    "ic_search_logs",
+    "ic_filter_logs",
+    "ic_export_logs",
+    "ic_clear_logs",
 ];
 
 /// `all_tauri_commands!()` 宏中注册的所有命令名（必须与 lib.rs 保持同步）。
@@ -124,6 +130,12 @@ const REGISTERED_COMMANDS: &[&str] = &[
     "check_for_updates",
     // ── 审批工单 ────────────────────────────────────────────────
     "submit_approval_ticket",
+    // ── 日志查询 ────────────────────────────────────────────────
+    "ic_get_logs",
+    "ic_search_logs",
+    "ic_filter_logs",
+    "ic_export_logs",
+    "ic_clear_logs",
 ];
 
 #[test]

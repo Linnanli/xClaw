@@ -240,9 +240,12 @@ export function ExtensionsTab() {
             className="h-10 w-full rounded-[10px] border border-border bg-secondary/50 pl-10 pr-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/30"
           />
         </div>
-        <button className="flex h-10 items-center gap-1.5 rounded-[10px] bg-primary px-4 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90">
+        <button
+          onClick={loadExtensions}
+          className="flex h-10 items-center gap-1.5 rounded-[10px] bg-primary px-4 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90"
+        >
           <Plus className="size-4" />
-          添加扩展
+          刷新扩展
         </button>
       </div>
 

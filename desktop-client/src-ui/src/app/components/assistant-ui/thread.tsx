@@ -25,6 +25,7 @@ import {
 } from "@assistant-ui/react";
 import type { SanitizationStats } from "@/app/hooks/useDlpScan";
 import { useWatermark } from "@/app/hooks/useWatermark";
+import { useApprovalState } from "@/app/runtime/TauriRuntimeProvider";
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -40,6 +41,7 @@ import {
   SquareIcon,
   SettingsIcon,
   XCircleIcon,
+  ShieldAlert,
 } from "lucide-react";
 import { type FC, useCallback } from "react";
 
@@ -276,6 +278,8 @@ const MessageError: FC = () => {
 };
 
 const AssistantMessage: FC = () => {
+  const { pendingApprovals, approve, deny } = useApprovalState();
+
   return (
     <MessagePrimitive.Root
       className="aui-assistant-message-root fade-in slide-in-from-bottom-1 relative mx-auto w-full max-w-(--thread-max-width) animate-in py-3 duration-150"
@@ -302,6 +306,20 @@ const AssistantMessage: FC = () => {
         </MessagePrimitive.Parts>
         <MessageError />
       </div>
+
+      {/* 即时工具授权按钮 */}
+      {pendingApprovals.length > 0 && (
+        <div className="ml-[42px] mt-3 flex flex-col gap-2">
+          {pendingApprovals.map((approval) => (
+            <ApprovalCard
+              key={approval.request_id}
+              approval={approval}
+              onApprove={() => approve(approval.request_id, '')}
+              onDeny={() => deny(approval.request_id, '')}
+            />
+          ))}
+        </div>
+      )}
 
       <div className="aui-assistant-message-footer mt-1 ml-[42px] flex min-h-6 items-center">
         <BranchPicker />
@@ -482,3 +500,43 @@ const BranchPicker: FC<BranchPickerPrimitive.Root.Props> = ({
     </BranchPickerPrimitive.Root>
   );
 };
+
+// ── 即时工具授权卡片 ──────────────────────────────────────────────
+
+interface ApprovalCardProps {
+  approval: { request_id: string; tool_name: string; description: string };
+  onApprove: () => void;
+  onDeny: () => void;
+}
+
+const ApprovalCard: FC<ApprovalCardProps> = ({ approval, onApprove, onDeny }) => (
+  <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3 dark:border-amber-800/40 dark:bg-amber-950/20">
+    <ShieldAlert className="mt-0.5 size-4 shrink-0 text-amber-500" />
+    <div className="flex flex-1 flex-col gap-2">
+      <div>
+        <p className="text-xs font-semibold text-foreground">
+          工具执行需要授权：<code className="rounded bg-amber-100 px-1 dark:bg-amber-900/40">{approval.tool_name}</code>
+        </p>
+        {approval.description && (
+          <p className="mt-0.5 text-xs text-muted-foreground">{approval.description}</p>
+        )}
+      </div>
+      <div className="flex gap-2">
+        <button
+          onClick={onApprove}
+          className="flex items-center gap-1 rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90"
+        >
+          <CheckIcon className="size-3" />
+          批准
+        </button>
+        <button
+          onClick={onDeny}
+          className="flex items-center gap-1 rounded-md border border-border px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+        >
+          <XCircleIcon className="size-3" />
+          拒绝
+        </button>
+      </div>
+    </div>
+  </div>
+);

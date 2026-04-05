@@ -41,7 +41,10 @@
             "core:window:allow-center",
             "core:window:allow-show",
             "core:window:allow-hide",
-            "core:default"
+            "core:default",
+            "dialog:allow-save",
+            "fs:allow-write-text-file",
+            "fs:allow-app-write"
           ]
         }
       ]

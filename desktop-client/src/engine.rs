@@ -25,12 +25,13 @@ use ironclaw::channels::web::log_layer::LogBroadcaster;
 use ironclaw::config::Config;
 use ironclaw::hooks::bootstrap_hooks;
 use ironclaw::llm::create_session_manager;
+use tauri::Emitter;
+use tauri::Manager;
 
 use crate::state::{AppState, EngineState};
 use crate::model_switch::ModelSwitchProvider;
 use crate::safety_bridge::SafetyBridge;
 use crate::tauri_channel::{ChatEvent, TauriChannel};
-
 /// 启动 IronClaw 引擎。
 ///
 /// 在 Tauri `setup` 回调中通过 `tauri::async_runtime::spawn` 调用。
@@ -49,7 +50,13 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         .context("Failed to load IronClaw configuration")?;
 
     let session = create_session_manager(config.llm.session.clone()).await;
-    let log_broadcaster = Arc::new(LogBroadcaster::new());
+
+    // LogBroadcaster 由 main.rs 创建并通过 managed state 传入，
+    // 确保 WebLogLayer 在引擎启动前就已注册到 tracing，不丢失早期日志。
+    let log_broadcaster = {
+        let shared = app_handle.state::<crate::state::SharedLogBroadcaster>();
+        Arc::clone(&shared.0)
+    };
 
     tracing::info!(
         backend = %config.llm.backend,
@@ -166,10 +173,11 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         provider_base_url: std::sync::RwLock::new(initial_base_url.clone()),
         initial_provider: Arc::clone(&components.llm),
         initial_base_url,
+        log_broadcaster: Arc::clone(&log_broadcaster),
+        log_clear_offset: std::sync::atomic::AtomicUsize::new(0),
     };
     // 从 Tauri managed state 获取 EngineState 并填充
-    let engine_state = app_handle.state::<EngineState>();
-    engine_state
+    let engine_state = app_handle.state::<EngineState>();    engine_state
         .initialize(app_state)
         .map_err(|e| anyhow::anyhow!(e))?;
 
@@ -235,7 +243,6 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     // ── 恢复 pending 审批轮询任务（需求 23.12）────────────────────
     // 从 Tauri managed state 获取共享 store，为每个 pending ticket 重启轮询。
     {
-        use tauri::Manager;
         // 通过 .0 直接拿到 Arc，避免 State 临时值生命周期问题
         let store_arc = app_handle
             .state::<crate::approval_polling::PendingTicketStore>()
@@ -256,7 +263,7 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     }
 
     // 通知前端引擎已就绪
-    use tauri::Emitter;    let _ = app_handle.emit(
+    let _ = app_handle.emit(
         "chat-event",
         ChatEvent::ConnectionStatus {
             connected: true,

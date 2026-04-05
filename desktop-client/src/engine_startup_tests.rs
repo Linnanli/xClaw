@@ -72,6 +72,8 @@ mod engine_state_timing_tests {
             provider_base_url: std::sync::RwLock::new(String::new()),
             initial_provider: Arc::clone(&stub_llm),
             initial_base_url: String::new(),
+            log_broadcaster: Arc::new(ironclaw::channels::web::log_layer::LogBroadcaster::new()),
+            log_clear_offset: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 

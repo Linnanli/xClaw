@@ -32,6 +32,7 @@
 use std::sync::{Arc, OnceLock, RwLock};
 
 use ironclaw::channels::IncomingMessage;
+use ironclaw::channels::web::log_layer::LogBroadcaster;
 use ironclaw::config::SkillsConfig;
 use ironclaw::context::ContextManager;
 use ironclaw::db::Database;
@@ -95,7 +96,17 @@ pub struct AppState {
     pub initial_provider: Arc<dyn ironclaw::llm::LlmProvider>,
     /// 初始 provider 的 base URL（用于检测"切回初始 provider"）。
     pub initial_base_url: String,
+    /// 日志广播器（用于 LogsTab 读取运行时日志）。
+    pub log_broadcaster: Arc<LogBroadcaster>,
+    /// 日志清空偏移量：`ic_clear_logs` 时记录当前日志数，后续查询跳过此前的条目。
+    pub log_clear_offset: std::sync::atomic::AtomicUsize,
 }
+
+/// `main.rs` 中创建的 `LogBroadcaster` 的 Tauri managed state 包装。
+///
+/// 在 `main()` 最开始创建，通过 `init_tracing` 注册 `WebLogLayer`，
+/// 确保引擎启动前的日志也能被捕获。引擎启动时从此处取出，存入 `AppState`。
+pub struct SharedLogBroadcaster(pub Arc<LogBroadcaster>);
 
 /// Tauri managed state — 引擎就绪前安全的包装器。
 ///

@@ -141,6 +141,12 @@ macro_rules! all_tauri_commands {
             desktop_client::commands::check_for_updates,
             // ── 审批工单 ────────────────────────────────────────
             desktop_client::commands::submit_approval_ticket,
+            // ── 日志查询 ────────────────────────────────────────
+            desktop_client::ipc::ic_get_logs,
+            desktop_client::ipc::ic_search_logs,
+            desktop_client::ipc::ic_filter_logs,
+            desktop_client::ipc::ic_export_logs,
+            desktop_client::ipc::ic_clear_logs,
         ]
     };
 }

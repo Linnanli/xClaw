@@ -26,8 +26,10 @@
 
 use std::env;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use tracing_subscriber::EnvFilter;
+use ironclaw::channels::web::log_layer::{LogBroadcaster, init_tracing};
+use tauri::{Emitter, Manager};
 
 // ── 应用级常量 ────────────────────────────────────────────────────
 
@@ -38,7 +40,10 @@ const APP_DATA_DIR: &str = "ironclaw-desktop";
 const ENGINE_SUBDIR: &str = "ironclaw";
 
 fn main() {
-    init_logging();
+    // LogBroadcaster 在 main 最开始创建，通过 init_tracing 注册 WebLogLayer，
+    // 确保引擎启动前的所有日志也能被捕获到内存缓冲区。
+    let log_broadcaster = Arc::new(LogBroadcaster::new());
+    let _log_level_handle = init_tracing(Arc::clone(&log_broadcaster));
 
     // ── 配置加载（必须在 Tokio runtime 启动前完成）─────────────
     load_client_env();
@@ -48,8 +53,12 @@ fn main() {
 
     // ── 启动 Tauri ────────────────────────────────────────────────
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .manage(desktop_client::state::EngineState::new())
         .manage(desktop_client::approval_polling::PendingTicketStore::init())
+        // LogBroadcaster 作为 managed state 传给引擎，避免重复创建
+        .manage(desktop_client::state::SharedLogBroadcaster(log_broadcaster))
         .setup(|app| {
             let app_handle = app.handle().clone();
 
@@ -61,11 +70,9 @@ fn main() {
                     tracing::error!(error = %err_msg, "IronClaw engine failed to start");
 
                     // 标记引擎启动失败，让 IPC 命令返回具体错误而非"正在启动中"
-                    use tauri::Manager;
                     let engine_state = app_handle.state::<desktop_client::state::EngineState>();
                     engine_state.set_failed(err_msg.clone());
 
-                    use tauri::Emitter;
                     let _ = app_handle.emit(
                         "chat-event",
                         desktop_client::tauri_channel::ChatEvent::Error {
@@ -102,16 +109,6 @@ fn app_data_dir() -> PathBuf {
 /// 等价于 IronClaw CLI 的 `~/.ironclaw/`，但隔离到客户端专属路径。
 fn engine_data_dir() -> PathBuf {
     app_data_dir().join(ENGINE_SUBDIR)
-}
-
-/// 初始化日志系统。
-fn init_logging() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,desktop_client=debug,ironclaw=info")),
-        )
-        .init();
 }
 
 /// 加载客户端环境变量。

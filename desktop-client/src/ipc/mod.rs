@@ -8,6 +8,7 @@ pub mod chat;
 pub mod dlp;
 pub mod extensions;
 pub mod jobs;
+pub mod logs;
 pub mod memory;
 pub mod models;
 pub mod routines;
@@ -43,6 +44,10 @@ mod approval_tests;
 mod dlp_tests;
 
 #[cfg(test)]
+#[path = "logs_tests.rs"]
+mod logs_tests;
+
+#[cfg(test)]
 #[path = "jobs_tests.rs"]
 mod jobs_tests;
 
@@ -60,6 +65,7 @@ pub use chat::*;
 pub use dlp::*;
 pub use extensions::*;
 pub use jobs::*;
+pub use logs::*;
 pub use memory::*;
 pub use models::*;
 pub use routines::*;

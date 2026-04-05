@@ -574,10 +574,14 @@ export interface LogEntry {
 }
 
 export const logApi = {
-  getLogs: async (_limit: number = 100): Promise<LogEntry[]> => [],
-  searchLogs: async (_query: string, _limit: number = 100): Promise<LogEntry[]> => [],
-  filterLogs: async (_level: string, _module: string, _limit: number = 100): Promise<LogEntry[]> => [],
-  exportLogs: async (_format: string): Promise<string> => '',
+  getLogs: async (limit: number = 100): Promise<LogEntry[]> =>
+    invokeTauri<LogEntry[]>('ic_get_logs', { limit }),
+  searchLogs: async (query: string, limit: number = 100): Promise<LogEntry[]> =>
+    invokeTauri<LogEntry[]>('ic_search_logs', { query, limit }),
+  filterLogs: async (level: string, module: string, limit: number = 100): Promise<LogEntry[]> =>
+    invokeTauri<LogEntry[]>('ic_filter_logs', { level, module, limit }),
+  exportLogs: async (): Promise<string> =>
+    invokeTauri<string>('ic_export_logs'),
 };
 
 // ============================================================================
@@ -595,7 +599,7 @@ export const messageApi = {
 
 // Log clearing API
 export const logClearApi = {
-  clearLogs: async (): Promise<void> => {},
+  clearLogs: async (): Promise<void> => invokeTauri('ic_clear_logs'),
 };
 
 // Message search API

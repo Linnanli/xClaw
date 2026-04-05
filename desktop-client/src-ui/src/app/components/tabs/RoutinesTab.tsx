@@ -39,9 +39,6 @@ const TRIGGER_LABELS: Record<string, string> = {
   manual: '手动触发',
   time: '时间触发',
   event: '事件触发',
-  Manual: '手动触发',
-  Time: '时间触发',
-  Event: '事件触发',
 };
 
 const TAG_COLORS: Record<string, { bg: string; text: string }> = {
@@ -58,6 +55,8 @@ export function RoutinesTab({ open = true, onOpenChange }: RoutinesTabProps) {
   const [newName, setNewName] = useState('');
   const [newDesc, setNewDesc] = useState('');
   const [newTrigger, setNewTrigger] = useState<'manual' | 'time' | 'event'>('manual');
+  // 执行历史：key 为 routine.id，value 为 { lastRun, runCount }
+  const [runStats, setRunStats] = useState<Record<string, { lastRun: string | null; runCount: number }>>({});
   const [newCron, setNewCron] = useState('');
 
   useEffect(() => {
@@ -69,6 +68,22 @@ export function RoutinesTab({ open = true, onOpenChange }: RoutinesTabProps) {
     try {
       const data = await routineApi.getRoutines();
       setRoutines(data);
+      // 并发加载每个任务的执行历史
+      const stats: Record<string, { lastRun: string | null; runCount: number }> = {};
+      await Promise.allSettled(
+        data.map(async (r) => {
+          try {
+            const res = await routineExtendedApi.getRoutineRuns(r.id);
+            stats[r.id] = {
+              lastRun: res.runs[0]?.started_at ?? null,
+              runCount: res.runs.length,
+            };
+          } catch {
+            stats[r.id] = { lastRun: null, runCount: 0 };
+          }
+        }),
+      );
+      setRunStats(stats);
     } catch (err) {
       console.error('Failed to load routines:', err);
     } finally {
@@ -270,11 +285,13 @@ export function RoutinesTab({ open = true, onOpenChange }: RoutinesTabProps) {
                       </span>
                       <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
                         <CircleCheck className="size-3 text-primary" />
-                        上次执行：-
+                        上次执行：{runStats[routine.id]?.lastRun
+                          ? new Date(runStats[routine.id].lastRun!).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+                          : '-'}
                       </span>
                       <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
                         <Hash className="size-3 text-text-tertiary" />
-                        已执行 0 次
+                        已执行 {runStats[routine.id]?.runCount ?? 0} 次
                       </span>
                     </div>
                   </div>
