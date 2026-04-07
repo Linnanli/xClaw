@@ -24,6 +24,7 @@ import { ScrollArea } from '../ui/scroll-area';
 import { cn } from '../ui/utils';
 import { logApi, logClearApi, type LogEntry } from '../../utils/tauri';
 import { ConfirmDialog } from '../common/ConfirmDialog';
+import { useEngineReady } from '../../hooks/useEngineReady';
 
 const LEVEL_CONFIG: Record<string, { icon: React.ElementType; color: string; bg: string; label: string }> = {
   info: { icon: Info, color: 'text-blue-500', bg: 'bg-blue-50 dark:bg-blue-950/30', label: '信息' },
@@ -42,10 +43,11 @@ export function LogsTab() {
   const [error, setError] = useState<string | null>(null);
   const [streamEnabled, setStreamEnabled] = useState(false);
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
+  const { readyKey } = useEngineReady();
 
   useEffect(() => {
     fetchLogs();
-  }, [searchQuery, filterLevel, filterModule]);
+  }, [searchQuery, filterLevel, filterModule, readyKey]);
 
   const fetchLogs = async () => {
     try {

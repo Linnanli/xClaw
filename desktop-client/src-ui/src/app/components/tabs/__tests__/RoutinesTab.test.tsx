@@ -8,6 +8,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { RoutinesTab } from '../RoutinesTab';
 
+// Mock tauri event（useEngineReady 内部使用）
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn().mockResolvedValue(() => {}),
+}));
+
 // Mock tauri APIs
 vi.mock('../../../utils/tauri', () => ({
   routineApi: {
@@ -137,7 +142,7 @@ describe('RoutinesTab', () => {
   it('应该显示运行按钮', async () => {
     render(<RoutinesTab open onOpenChange={mockOnOpenChange} />);
     await waitFor(() => {
-      const runButtons = screen.getAllByText('运行');
+      const runButtons = screen.getAllByText('立即运行');
       expect(runButtons.length).toBeGreaterThan(0);
     });
   });
@@ -149,7 +154,8 @@ describe('RoutinesTab', () => {
     vi.mocked(routineApi.getRoutines).mockRejectedValueOnce(new Error('Network error'));
     render(<RoutinesTab open onOpenChange={mockOnOpenChange} />);
     await waitFor(() => {
-      expect(screen.getByText('暂无定时任务')).toBeInTheDocument();
+      // API 错误时显示错误信息（不再显示"暂无定时任务"）
+      expect(screen.getByText(/加载失败/)).toBeInTheDocument();
     });
   });
 
@@ -173,10 +179,10 @@ describe('RoutinesTab', () => {
   it('test_contract_card_structure_matches_design', async () => {
     render(<RoutinesTab open onOpenChange={mockOnOpenChange} />);
     await waitFor(() => {
-      // 每张卡片应有：名称、描述、运行按钮
+      // 每张卡片应有：名称、描述、立即运行按钮
       expect(screen.getByText('每日工作汇报')).toBeInTheDocument();
       expect(screen.getByText('每天早上总结昨日工作进展')).toBeInTheDocument();
-      expect(screen.getAllByText('运行').length).toBe(3);
+      expect(screen.getAllByText('立即运行').length).toBe(3);
     });
   });
 

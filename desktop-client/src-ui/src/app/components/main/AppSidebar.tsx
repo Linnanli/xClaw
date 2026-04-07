@@ -35,6 +35,7 @@ import { ScrollArea } from '../ui/scroll-area';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { cn } from '../ui/utils';
 import { threadApi, type Thread } from '../../utils/tauri';
+import { useEngineReady } from '../../hooks/useEngineReady';
 
 export type NavItem = 'chat' | 'logs' | 'routines' | 'settings';
 
@@ -87,10 +88,11 @@ export function AppSidebar({
     yesterday: true,
     older: false,
   });
+  const { readyKey } = useEngineReady();
 
   useEffect(() => {
     loadThreads();
-  }, [refreshKey]); // refreshKey 变化时重新加载
+  }, [refreshKey, readyKey]); // refreshKey 或引擎就绪时重新加载
 
   const loadThreads = async () => {
     try {

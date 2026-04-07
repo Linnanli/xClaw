@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Briefcase, Clock, CheckCircle, XCircle, AlertCircle, RefreshCw, X, Play, StopCircle, Send, History } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import { jobApi, JobInfo, JobDetail, JobEvent, JobEventsResponse } from '../../utils/tauri';
+import { useEngineReady } from '../../hooks/useEngineReady';
 
 type StatusFilter = 'all' | 'pending' | 'in_progress' | 'completed' | 'failed' | 'stuck';
 
@@ -17,6 +18,7 @@ export function JobsTab() {
   const [eventsLoading, setEventsLoading] = useState(false);
   const [promptContent, setPromptContent] = useState('');
   const [promptSending, setPromptSending] = useState(false);
+  const { readyKey } = useEngineReady();
 
   const fetchJobs = async () => {
     try {
@@ -35,7 +37,7 @@ export function JobsTab() {
 
   useEffect(() => {
     fetchJobs();
-  }, []);
+  }, [readyKey]);
 
   const handleJobClick = async (jobId: string) => {
     try {

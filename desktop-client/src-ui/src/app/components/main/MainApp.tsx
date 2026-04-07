@@ -23,6 +23,7 @@ import { sessionApi } from '../../utils/tauri';
 import { ShortcutManager, SHORTCUTS } from '../../utils/shortcuts';
 import { tracing } from '../../utils/tracing';
 import { useChatNavigation } from '../../hooks/useChatNavigation';
+import { EngineReadyProvider } from '../../hooks/useEngineReady';
 
 const NAV_TITLES: Record<NavItem, string> = {
   chat: '聊天',
@@ -134,56 +135,53 @@ export function MainApp() {
   };
 
   return (
-    <SidebarProvider defaultOpen>
-      <AppSidebar
-        activeNav={activeNav}
-        onNavChange={handleNavChange}
-        selectedThreadId={selectedThreadId}
-        onThreadSelect={selectThread}
-        onNewChat={handleNewChat}
-        refreshKey={sidebarRefreshKey}
-      />
-      <SidebarInset>
-        <AppHeader
-          title={NAV_TITLES[activeNav]}
-          onJobsClick={() => setJobsOpen(true)}
-          onNotificationsClick={() => setNotificationsOpen(true)}
-          theme={themeMode}
-          onThemeChange={setTheme}
+    <EngineReadyProvider>
+      <SidebarProvider defaultOpen>
+        <AppSidebar
+          activeNav={activeNav}
+          onNavChange={handleNavChange}
+          selectedThreadId={selectedThreadId}
+          onThreadSelect={selectThread}
+          onNewChat={handleNewChat}
+          refreshKey={sidebarRefreshKey}
         />
-        <div className="min-h-0 flex-1 overflow-hidden">{renderContent()}</div>
-      </SidebarInset>
+        <SidebarInset>
+          <AppHeader
+            title={NAV_TITLES[activeNav]}
+            onJobsClick={() => setJobsOpen(true)}
+            onNotificationsClick={() => setNotificationsOpen(true)}
+            theme={themeMode}
+            onThemeChange={setTheme}
+          />
+          <div className="min-h-0 flex-1 overflow-hidden">{renderContent()}</div>
+        </SidebarInset>
 
-      {/* Settings Modal */}
-      <SettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} />
+        <SettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} />
 
-      {/* Routines Modal */}
-      <RoutinesTab
-        open={routinesOpen}
-        onOpenChange={setRoutinesOpen}
-        onRoutineFired={(threadId, prompt) => {
-          setActiveNav('chat');
-          openRoutineThread(threadId, prompt);
-        }}
-      />
-
-      {/* Jobs Panel */}
-      <JobsPanel open={jobsOpen} onOpenChange={setJobsOpen} />
-
-      {/* Notifications Panel */}
-      <NotificationsPanel open={notificationsOpen} onOpenChange={setNotificationsOpen} />
-
-      {/* Dynamic Watermark */}
-      {!watermarkLoading && (
-        <DynamicWatermark
-          text={watermarkConfig.text}
-          enabled={watermarkConfig.enabled}
-          opacity={watermarkConfig.opacity}
-          fontSize={watermarkConfig.fontSize}
-          rotation={watermarkConfig.rotation}
-          spacing={watermarkConfig.spacing}
+        <RoutinesTab
+          open={routinesOpen}
+          onOpenChange={setRoutinesOpen}
+          onRoutineFired={(threadId, prompt) => {
+            setActiveNav('chat');
+            openRoutineThread(threadId, prompt);
+          }}
         />
-      )}
-    </SidebarProvider>
+
+        <JobsPanel open={jobsOpen} onOpenChange={setJobsOpen} />
+
+        <NotificationsPanel open={notificationsOpen} onOpenChange={setNotificationsOpen} />
+
+        {!watermarkLoading && (
+          <DynamicWatermark
+            text={watermarkConfig.text}
+            enabled={watermarkConfig.enabled}
+            opacity={watermarkConfig.opacity}
+            fontSize={watermarkConfig.fontSize}
+            rotation={watermarkConfig.rotation}
+            spacing={watermarkConfig.spacing}
+          />
+        )}
+      </SidebarProvider>
+    </EngineReadyProvider>
   );
 }

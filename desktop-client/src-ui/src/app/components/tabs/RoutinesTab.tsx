@@ -27,8 +27,8 @@ import { Switch } from '../ui/switch';
 import { ScrollArea } from '../ui/scroll-area';
 import { Button } from '../ui/button';
 import { cn } from '../ui/utils';
-import { listen } from '@tauri-apps/api/event';
 import { routineApi, routineExtendedApi, type Routine } from '../../utils/tauri';
+import { useEngineReady } from '../../hooks/useEngineReady';
 import {
   Select,
   SelectContent,
@@ -80,6 +80,7 @@ export function RoutinesTab({ open = true, onOpenChange, onRoutineFired }: Routi
   const [newPattern, setNewPattern] = useState('');
   const [createError, setCreateError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const { readyKey } = useEngineReady();
 
   const loadRoutines = useCallback(async () => {
     setLoading(true);
@@ -113,17 +114,7 @@ export function RoutinesTab({ open = true, onOpenChange, onRoutineFired }: Routi
 
   useEffect(() => {
     if (open) loadRoutines();
-  }, [open, loadRoutines]);
-
-  // 引擎就绪后自动重载（处理面板打开时引擎尚未就绪的情况）
-  useEffect(() => {
-    const unlisten = listen<{ type: string; connected?: boolean }>('chat-event', (event) => {
-      if (event.payload.type === 'connection_status' && event.payload.connected && open) {
-        loadRoutines();
-      }
-    });
-    return () => { unlisten.then((fn) => fn()); };
-  }, [open, loadRoutines]);
+  }, [open, loadRoutines, readyKey]);
 
   const filtered = routines.filter((r) => {
     if (filter === 'enabled') return r.status === 'active';

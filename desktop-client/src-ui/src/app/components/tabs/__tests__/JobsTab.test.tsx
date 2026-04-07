@@ -4,6 +4,11 @@ import { JobsTab } from '../JobsTab';
 import { ThemeProvider } from '../../../contexts/ThemeContext';
 import * as tauri from '../../../utils/tauri';
 
+// Mock tauri event（useEngineReady 内部使用）
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn().mockResolvedValue(() => {}),
+}));
+
 // Mock Tauri API
 vi.mock('../../../utils/tauri', () => ({
   jobApi: {

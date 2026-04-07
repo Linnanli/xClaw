@@ -8,6 +8,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { LogsTab } from '../LogsTab';
 
+// Mock tauri event（useEngineReady 内部使用）
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn().mockResolvedValue(() => {}),
+}));
+
 // Mock tauri APIs
 vi.mock('../../../utils/tauri', () => ({
   logApi: {
@@ -166,13 +171,14 @@ describe('LogsTab', () => {
   });
 
   it('test_audit_clear_requires_confirmation', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
     render(<LogsTab />);
     await waitFor(() => {
       expect(screen.getByText('清空')).toBeInTheDocument();
     });
     fireEvent.click(screen.getByText('清空'));
-    expect(confirmSpy).toHaveBeenCalled();
-    confirmSpy.mockRestore();
+    // LogsTab 使用 ConfirmDialog 组件而非 window.confirm
+    await waitFor(() => {
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+    });
   });
 });
