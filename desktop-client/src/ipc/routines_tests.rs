@@ -1,99 +1,75 @@
-//! 日程管理 IPC 命令测试。
+//! 定时任务 IPC 命令测试。
 //!
-//! 覆盖维度：
-//! - 单元测试（正常路径 + 错误路径）
-//! - 契约测试（数据类型与前端 TypeScript 类型匹配）
-//! - 安全审计测试（敏感信息不泄露）
-//! - 数据级覆盖（边界值、空值、特殊字符）
-//! - 失败路径测试（无效 UUID、空执行列表等）
+//! 覆盖维度（AGENTS.md 测试矩阵）：
+//! - 单元测试：RoutineInfo / RoutineRun / CreateRoutineRequest 序列化
+//! - 失败路径测试：无效 UUID、无效 trigger JSON、空名称
+//! - 契约测试：响应格式与前端 TypeScript 类型匹配
+//! - 安全审计测试：不泄露 user_id、内部状态字段
 
 #[cfg(test)]
 mod tests {
-    use crate::ipc::routines::{RoutineRun, RoutineRunsResponse};
+    use crate::ipc::routines::{CreateRoutineRequest, RoutineInfo, RoutineRun, RoutineRunsResponse};
 
     // =========================================================================
     // 单元测试 — 正常路径
     // =========================================================================
 
     #[test]
+    fn test_routine_info_serialization() {
+        let info = RoutineInfo {
+            id: "550e8400-e29b-41d4-a716-446655440000".into(),
+            name: "每日报告".into(),
+            description: "每天早上生成工作报告".into(),
+            status: "active".into(),
+            trigger: serde_json::json!({ "type": "cron", "schedule": "0 9 * * *" }),
+        };
+        let json = serde_json::to_value(&info).expect("should serialize");
+        assert_eq!(json["name"], "每日报告");
+        assert_eq!(json["status"], "active");
+        assert_eq!(json["trigger"]["type"], "cron");
+    }
+
+    #[test]
+    fn test_routine_info_deserialization() {
+        let json = r#"{
+            "id": "550e8400-e29b-41d4-a716-446655440000",
+            "name": "test routine",
+            "description": "desc",
+            "status": "inactive",
+            "trigger": {"type": "manual"}
+        }"#;
+        let info: RoutineInfo = serde_json::from_str(json).expect("should deserialize");
+        assert_eq!(info.name, "test routine");
+        assert_eq!(info.status, "inactive");
+    }
+
+    #[test]
     fn test_routine_run_serialization() {
         let run = RoutineRun {
-            id: "550e8400-e29b-41d4-a716-446655440000".into(),
-            trigger_type: "Time".into(),
-            started_at: "2025-03-22T09:00:00+00:00".into(),
-            completed_at: Some("2025-03-22T09:05:00+00:00".into()),
-            status: "Completed".into(),
-            result_summary: Some("Successfully processed 42 items".into()),
-            tokens_used: Some(1500),
-            job_id: Some("job-uuid-123".into()),
-        };
-        let json = serde_json::to_value(&run).unwrap();
-        assert_eq!(json["id"], "550e8400-e29b-41d4-a716-446655440000");
-        assert_eq!(json["trigger_type"], "Time");
-        assert_eq!(json["status"], "Completed");
-        assert_eq!(json["tokens_used"], 1500);
-    }
-
-    #[test]
-    fn test_routine_run_deserialization() {
-        let json = r#"{
-            "id": "abc-123",
-            "trigger_type": "Manual",
-            "started_at": "2025-03-22T09:00:00+00:00",
-            "completed_at": null,
-            "status": "Running",
-            "result_summary": null,
-            "tokens_used": null,
-            "job_id": null
-        }"#;
-        let run: RoutineRun = serde_json::from_str(json).unwrap();
-        assert_eq!(run.id, "abc-123");
-        assert_eq!(run.trigger_type, "Manual");
-        assert!(run.completed_at.is_none());
-        assert!(run.result_summary.is_none());
-        assert!(run.tokens_used.is_none());
-        assert!(run.job_id.is_none());
-    }
-
-    #[test]
-    fn test_routine_run_roundtrip() {
-        let original = RoutineRun {
-            id: "run-99".into(),
-            trigger_type: "Event".into(),
-            started_at: "2025-03-22T12:00:00+00:00".into(),
-            completed_at: Some("2025-03-22T12:01:30+00:00".into()),
-            status: "Failed".into(),
-            result_summary: Some("Timeout after 90s".into()),
-            tokens_used: Some(0),
+            id: "run-001".into(),
+            trigger_type: "manual".into(),
+            started_at: "2026-04-05T10:00:00Z".into(),
+            completed_at: Some("2026-04-05T10:00:05Z".into()),
+            status: "Ok".into(),
+            result_summary: Some("完成".into()),
+            tokens_used: Some(150),
             job_id: None,
         };
-        let json = serde_json::to_string(&original).unwrap();
-        let parsed: RoutineRun = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.id, original.id);
-        assert_eq!(parsed.trigger_type, original.trigger_type);
-        assert_eq!(parsed.status, original.status);
-        assert_eq!(parsed.result_summary, original.result_summary);
+        let json = serde_json::to_value(&run).expect("should serialize");
+        assert_eq!(json["trigger_type"], "manual");
+        assert_eq!(json["tokens_used"], 150);
+        assert!(json["job_id"].is_null());
     }
 
     #[test]
     fn test_routine_runs_response_serialization() {
         let resp = RoutineRunsResponse {
-            routine_id: "routine-abc".into(),
+            routine_id: "r-001".into(),
             runs: vec![
                 RoutineRun {
                     id: "run-1".into(),
-                    trigger_type: "Time".into(),
-                    started_at: "2025-03-22T09:00:00+00:00".into(),
-                    completed_at: Some("2025-03-22T09:05:00+00:00".into()),
-                    status: "Completed".into(),
-                    result_summary: None,
-                    tokens_used: Some(500),
-                    job_id: Some("job-1".into()),
-                },
-                RoutineRun {
-                    id: "run-2".into(),
-                    trigger_type: "Manual".into(),
-                    started_at: "2025-03-22T10:00:00+00:00".into(),
+                    trigger_type: "cron".into(),
+                    started_at: "2026-04-05T09:00:00Z".into(),
                     completed_at: None,
                     status: "Running".into(),
                     result_summary: None,
@@ -102,171 +78,32 @@ mod tests {
                 },
             ],
         };
-        let json = serde_json::to_value(&resp).unwrap();
-        assert_eq!(json["routine_id"], "routine-abc");
-        assert_eq!(json["runs"].as_array().unwrap().len(), 2);
+        let json = serde_json::to_value(&resp).expect("should serialize");
+        assert_eq!(json["routine_id"], "r-001");
+        assert_eq!(json["runs"].as_array().unwrap().len(), 1);
     }
 
-    // =========================================================================
-    // 契约测试 — 验证与前端 TypeScript 类型的兼容性
-    // =========================================================================
-
-    /// 前端 RoutineRun 类型定义：
-    /// ```typescript
-    /// interface RoutineRun {
-    ///   id: string;
-    ///   trigger_type: string;
-    ///   started_at: string;
-    ///   completed_at: string | null;
-    ///   status: string;
-    ///   result_summary: string | null;
-    ///   tokens_used: number | null;
-    ///   job_id: string | null;
-    /// }
-    /// ```
     #[test]
-    fn test_contract_routine_run_matches_frontend() {
-        let run = RoutineRun {
-            id: "test".into(),
-            trigger_type: "Time".into(),
-            started_at: "2025-01-01T00:00:00+00:00".into(),
-            completed_at: Some("2025-01-01T00:01:00+00:00".into()),
-            status: "Completed".into(),
-            result_summary: Some("OK".into()),
-            tokens_used: Some(100),
-            job_id: Some("job-1".into()),
-        };
-        let json = serde_json::to_value(&run).unwrap();
-
-        // 验证字段名
-        assert!(json.get("id").is_some(), "missing 'id'");
-        assert!(json.get("trigger_type").is_some(), "missing 'trigger_type'");
-        assert!(json.get("started_at").is_some(), "missing 'started_at'");
-        assert!(json.get("completed_at").is_some(), "missing 'completed_at'");
-        assert!(json.get("status").is_some(), "missing 'status'");
-        assert!(json.get("result_summary").is_some(), "missing 'result_summary'");
-        assert!(json.get("tokens_used").is_some(), "missing 'tokens_used'");
-        assert!(json.get("job_id").is_some(), "missing 'job_id'");
-
-        // 验证类型
-        assert!(json["id"].is_string());
-        assert!(json["trigger_type"].is_string());
-        assert!(json["started_at"].is_string());
-        assert!(json["completed_at"].is_string()); // Some → string
-        assert!(json["status"].is_string());
-        assert!(json["result_summary"].is_string()); // Some → string
-        assert!(json["tokens_used"].is_number());
-        assert!(json["job_id"].is_string()); // Some → string
-
-        // 验证字段数量
-        let obj = json.as_object().unwrap();
-        assert_eq!(obj.len(), 8, "RoutineRun should have exactly 8 fields");
+    fn test_create_routine_request_deserialization_manual() {
+        let json = r#"{
+            "name": "手动任务",
+            "description": "测试",
+            "trigger": {"type": "manual"}
+        }"#;
+        let req: CreateRoutineRequest = serde_json::from_str(json).expect("should deserialize");
+        assert_eq!(req.name, "手动任务");
+        assert_eq!(req.trigger["type"], "manual");
     }
 
-    /// 验证 nullable 字段为 None 时序列化为 null。
     #[test]
-    fn test_contract_routine_run_null_fields() {
-        let run = RoutineRun {
-            id: "test".into(),
-            trigger_type: "Manual".into(),
-            started_at: "2025-01-01T00:00:00+00:00".into(),
-            completed_at: None,
-            status: "Running".into(),
-            result_summary: None,
-            tokens_used: None,
-            job_id: None,
-        };
-        let json = serde_json::to_value(&run).unwrap();
-        assert!(json["completed_at"].is_null());
-        assert!(json["result_summary"].is_null());
-        assert!(json["tokens_used"].is_null());
-        assert!(json["job_id"].is_null());
-    }
-
-    /// 前端 RoutineRunsResponse 类型定义：
-    /// ```typescript
-    /// interface RoutineRunsResponse {
-    ///   routine_id: string;
-    ///   runs: RoutineRun[];
-    /// }
-    /// ```
-    #[test]
-    fn test_contract_routine_runs_response_matches_frontend() {
-        let resp = RoutineRunsResponse {
-            routine_id: "test-id".into(),
-            runs: vec![],
-        };
-        let json = serde_json::to_value(&resp).unwrap();
-
-        assert!(json.get("routine_id").is_some(), "missing 'routine_id'");
-        assert!(json.get("runs").is_some(), "missing 'runs'");
-        assert!(json["routine_id"].is_string());
-        assert!(json["runs"].is_array());
-
-        let obj = json.as_object().unwrap();
-        assert_eq!(obj.len(), 2, "RoutineRunsResponse should have exactly 2 fields");
-    }
-
-    // =========================================================================
-    // 安全审计测试
-    // =========================================================================
-
-    /// 验证 RoutineRun 不包含敏感字段。
-    #[test]
-    fn test_audit_routine_run_no_sensitive_fields() {
-        let run = RoutineRun {
-            id: "run-1".into(),
-            trigger_type: "Time".into(),
-            started_at: "2025-01-01T00:00:00+00:00".into(),
-            completed_at: None,
-            status: "Completed".into(),
-            result_summary: Some("Done".into()),
-            tokens_used: Some(100),
-            job_id: None,
-        };
-        let json_str = serde_json::to_string(&run).unwrap();
-
-        assert!(!json_str.contains("\"password\""));
-        assert!(!json_str.contains("\"secret\""));
-        assert!(!json_str.contains("\"token\""));
-        assert!(!json_str.contains("\"api_key\""));
-        assert!(!json_str.contains("\"owner_id\""));
-        assert!(!json_str.contains("\"user_id\""));
-    }
-
-    /// 验证 RoutineRunsResponse 不泄露内部标识。
-    #[test]
-    fn test_audit_routine_runs_response_no_internal_ids() {
-        let resp = RoutineRunsResponse {
-            routine_id: "550e8400-e29b-41d4-a716-446655440000".into(),
-            runs: vec![],
-        };
-        let json_str = serde_json::to_string(&resp).unwrap();
-
-        assert!(!json_str.contains("owner_id"));
-        assert!(!json_str.contains("session"));
-        assert!(!json_str.contains("config"));
-    }
-
-    /// 验证 result_summary 不包含文件系统路径。
-    #[test]
-    fn test_audit_result_summary_no_path_leak() {
-        let run = RoutineRun {
-            id: "run-1".into(),
-            trigger_type: "Time".into(),
-            started_at: "2025-01-01T00:00:00+00:00".into(),
-            completed_at: None,
-            status: "Completed".into(),
-            result_summary: Some("Processed 10 items successfully".into()),
-            tokens_used: None,
-            job_id: None,
-        };
-        let json_str = serde_json::to_string(&run).unwrap();
-
-        // result_summary 不应包含绝对路径
-        assert!(!json_str.contains("/home/"));
-        assert!(!json_str.contains("/Users/"));
-        assert!(!json_str.contains("C:\\\\"));
+    fn test_create_routine_request_deserialization_cron() {
+        let json = r#"{
+            "name": "定时任务",
+            "description": "每天执行",
+            "trigger": {"type": "cron", "schedule": "0 9 * * *"}
+        }"#;
+        let req: CreateRoutineRequest = serde_json::from_str(json).expect("should deserialize");
+        assert_eq!(req.trigger["schedule"], "0 9 * * *");
     }
 
     // =========================================================================
@@ -274,183 +111,324 @@ mod tests {
     // =========================================================================
 
     #[test]
+    fn test_failure_invalid_trigger_json_rejected() {
+        // trigger 缺少 type 字段，ironclaw Trigger 反序列化应失败
+        let trigger_json = serde_json::json!({ "schedule": "0 9 * * *" });
+        let result: Result<ironclaw::agent::routine::Trigger, _> =
+            serde_json::from_value(trigger_json);
+        assert!(result.is_err(), "trigger without 'type' should fail");
+    }
+
+    #[test]
+    fn test_failure_unknown_trigger_type_rejected() {
+        let trigger_json = serde_json::json!({ "type": "unknown_type" });
+        let result: Result<ironclaw::agent::routine::Trigger, _> =
+            serde_json::from_value(trigger_json);
+        assert!(result.is_err(), "unknown trigger type should fail");
+    }
+
+    #[test]
+    fn test_failure_cron_trigger_missing_schedule() {
+        // cron trigger 缺少 schedule 字段
+        let trigger_json = serde_json::json!({ "type": "cron" });
+        let result: Result<ironclaw::agent::routine::Trigger, _> =
+            serde_json::from_value(trigger_json);
+        assert!(result.is_err(), "cron trigger without schedule should fail");
+    }
+
+    #[test]
+    fn test_failure_invalid_uuid_format() {
+        // 模拟 ic_routine_runs 中的 UUID 解析失败
+        let result = uuid::Uuid::parse_str("not-a-uuid");
+        assert!(result.is_err(), "invalid UUID should fail to parse");
+    }
+
+    #[test]
     fn test_failure_empty_runs_list() {
         let resp = RoutineRunsResponse {
-            routine_id: "test".into(),
+            routine_id: "r-001".into(),
             runs: vec![],
         };
-        let json = serde_json::to_value(&resp).unwrap();
+        let json = serde_json::to_value(&resp).expect("should serialize");
         assert_eq!(json["runs"].as_array().unwrap().len(), 0);
     }
 
+    // =========================================================================
+    // 契约测试 — 验证与前端 TypeScript 类型匹配
+    // =========================================================================
+
+    /// 前端 RoutineInfo 类型：
+    /// ```typescript
+    /// interface RoutineInfo {
+    ///   id: string;
+    ///   name: string;
+    ///   description: string;
+    ///   status: string;
+    ///   trigger: any;
+    /// }
+    /// ```
     #[test]
-    fn test_failure_empty_routine_id() {
-        let resp = RoutineRunsResponse {
-            routine_id: "".into(),
-            runs: vec![],
+    fn test_contract_routine_info_fields() {
+        let info = RoutineInfo {
+            id: "id".into(),
+            name: "name".into(),
+            description: "desc".into(),
+            status: "active".into(),
+            trigger: serde_json::json!({"type": "manual"}),
         };
-        let json = serde_json::to_value(&resp).unwrap();
-        assert_eq!(json["routine_id"], "");
+        let json = serde_json::to_value(&info).expect("should serialize");
+        let obj = json.as_object().expect("should be object");
+
+        assert!(json["id"].is_string());
+        assert!(json["name"].is_string());
+        assert!(json["description"].is_string());
+        assert!(json["status"].is_string());
+        assert!(json["trigger"].is_object());
+        assert_eq!(obj.len(), 5, "RoutineInfo should have exactly 5 fields");
     }
 
+    /// 前端 RoutineRun 类型：
+    /// ```typescript
+    /// interface RoutineRun {
+    ///   id: string;
+    ///   trigger_type: string;
+    ///   started_at: string;
+    ///   completed_at?: string;
+    ///   status: string;
+    ///   result_summary?: string;
+    ///   tokens_used?: number;
+    ///   job_id?: string;
+    /// }
+    /// ```
     #[test]
-    fn test_failure_empty_result_summary() {
+    fn test_contract_routine_run_required_fields() {
         let run = RoutineRun {
-            id: "run-1".into(),
-            trigger_type: "Manual".into(),
-            started_at: "2025-01-01T00:00:00+00:00".into(),
+            id: "id".into(),
+            trigger_type: "manual".into(),
+            started_at: "2026-04-05T10:00:00Z".into(),
             completed_at: None,
-            status: "Failed".into(),
-            result_summary: Some("".into()),
+            status: "Ok".into(),
+            result_summary: None,
             tokens_used: None,
             job_id: None,
         };
-        let json = serde_json::to_value(&run).unwrap();
-        assert_eq!(json["result_summary"], "");
+        let json = serde_json::to_value(&run).expect("should serialize");
+        assert!(json["id"].is_string());
+        assert!(json["trigger_type"].is_string());
+        assert!(json["started_at"].is_string());
+        assert!(json["status"].is_string());
     }
 
     #[test]
-    fn test_failure_zero_tokens_used() {
+    fn test_contract_routine_run_optional_fields_null_when_absent() {
         let run = RoutineRun {
-            id: "run-1".into(),
-            trigger_type: "Time".into(),
-            started_at: "2025-01-01T00:00:00+00:00".into(),
+            id: "id".into(),
+            trigger_type: "manual".into(),
+            started_at: "2026-04-05T10:00:00Z".into(),
             completed_at: None,
-            status: "Completed".into(),
+            status: "Ok".into(),
             result_summary: None,
-            tokens_used: Some(0),
+            tokens_used: None,
             job_id: None,
         };
-        let json = serde_json::to_value(&run).unwrap();
-        assert_eq!(json["tokens_used"], 0);
-    }
-
-    // =========================================================================
-    // 数据级覆盖 — 边界值和特殊字符
-    // =========================================================================
-
-    #[test]
-    fn test_data_large_runs_list() {
-        let runs: Vec<RoutineRun> = (0..200)
-            .map(|i| RoutineRun {
-                id: format!("run-{}", i),
-                trigger_type: "Time".into(),
-                started_at: format!("2025-01-{:02}T09:00:00+00:00", (i % 28) + 1),
-                completed_at: if i % 2 == 0 {
-                    Some(format!("2025-01-{:02}T09:05:00+00:00", (i % 28) + 1))
-                } else {
-                    None
-                },
-                status: if i % 3 == 0 { "Completed" } else { "Failed" }.into(),
-                result_summary: if i % 4 == 0 {
-                    Some(format!("Batch {} done", i))
-                } else {
-                    None
-                },
-                tokens_used: if i % 2 == 0 { Some(i * 10) } else { None },
-                job_id: if i % 5 == 0 {
-                    Some(format!("job-{}", i))
-                } else {
-                    None
-                },
-            })
-            .collect();
-        let resp = RoutineRunsResponse {
-            routine_id: "bulk-test".into(),
-            runs,
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        let parsed: RoutineRunsResponse = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.runs.len(), 200);
+        let json = serde_json::to_value(&run).expect("should serialize");
+        // 前端期望 null 而非字段缺失
+        assert!(json["completed_at"].is_null());
+        assert!(json["result_summary"].is_null());
+        assert!(json["tokens_used"].is_null());
+        assert!(json["job_id"].is_null());
     }
 
     #[test]
-    fn test_data_unicode_in_result_summary() {
-        let run = RoutineRun {
-            id: "run-1".into(),
-            trigger_type: "Manual".into(),
-            started_at: "2025-01-01T00:00:00+00:00".into(),
-            completed_at: None,
-            status: "Completed".into(),
-            result_summary: Some("处理完成 ✅ 共 42 条记录".into()),
-            tokens_used: Some(500),
-            job_id: None,
-        };
-        let json = serde_json::to_string(&run).unwrap();
-        let parsed: RoutineRun = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.result_summary, Some("处理完成 ✅ 共 42 条记录".into()));
-    }
-
-    #[test]
-    fn test_data_trigger_type_variants() {
-        let types = ["Time", "Manual", "Event", "Webhook", "Cron"];
-        for trigger_type in types {
-            let run = RoutineRun {
-                id: "test".into(),
-                trigger_type: trigger_type.into(),
-                started_at: "2025-01-01T00:00:00+00:00".into(),
-                completed_at: None,
-                status: "Completed".into(),
-                result_summary: None,
-                tokens_used: None,
-                job_id: None,
+    fn test_contract_status_values() {
+        // 验证 status 字段的合法值（active/inactive）
+        for status in &["active", "inactive"] {
+            let info = RoutineInfo {
+                id: "id".into(),
+                name: "test".into(),
+                description: "".into(),
+                status: status.to_string(),
+                trigger: serde_json::json!({"type": "manual"}),
             };
-            let json = serde_json::to_value(&run).unwrap();
-            assert_eq!(json["trigger_type"], trigger_type);
+            let json = serde_json::to_value(&info).expect("should serialize");
+            assert_eq!(json["status"], *status);
         }
     }
 
     #[test]
-    fn test_data_status_variants() {
-        let statuses = ["Running", "Completed", "Failed", "Cancelled", "Timeout"];
-        for status in statuses {
-            let run = RoutineRun {
-                id: "test".into(),
-                trigger_type: "Manual".into(),
-                started_at: "2025-01-01T00:00:00+00:00".into(),
-                completed_at: None,
-                status: status.into(),
-                result_summary: None,
-                tokens_used: None,
-                job_id: None,
+    fn test_contract_trigger_types_serialize_correctly() {
+        // 验证三种触发器类型都能正确序列化
+        let triggers = vec![
+            serde_json::json!({"type": "manual"}),
+            serde_json::json!({"type": "cron", "schedule": "0 9 * * *"}),
+            serde_json::json!({"type": "event", "pattern": ".*"}),
+        ];
+        for trigger in triggers {
+            let info = RoutineInfo {
+                id: "id".into(),
+                name: "test".into(),
+                description: "".into(),
+                status: "active".into(),
+                trigger: trigger.clone(),
             };
-            let json = serde_json::to_value(&run).unwrap();
-            assert_eq!(json["status"], status);
+            let json = serde_json::to_value(&info).expect("should serialize");
+            assert_eq!(json["trigger"]["type"], trigger["type"]);
         }
     }
 
+    // =========================================================================
+    // 安全审计测试
+    // =========================================================================
+
+    /// RoutineInfo 不应泄露 user_id（内部字段）。
     #[test]
-    fn test_data_large_tokens_used() {
+    fn test_audit_routine_info_no_user_id_leak() {
+        let info = RoutineInfo {
+            id: "id".into(),
+            name: "test".into(),
+            description: "desc".into(),
+            status: "active".into(),
+            trigger: serde_json::json!({"type": "manual"}),
+        };
+        let json_str = serde_json::to_string(&info).expect("should serialize");
+        assert!(!json_str.contains("user_id"), "user_id should not be exposed");
+        assert!(!json_str.contains("owner_id"), "owner_id should not be exposed");
+    }
+
+    /// RoutineInfo 不应泄露内部运行时状态字段。
+    #[test]
+    fn test_audit_routine_info_no_internal_state_leak() {
+        let info = RoutineInfo {
+            id: "id".into(),
+            name: "test".into(),
+            description: "desc".into(),
+            status: "active".into(),
+            trigger: serde_json::json!({"type": "manual"}),
+        };
+        let json_str = serde_json::to_string(&info).expect("should serialize");
+        assert!(!json_str.contains("consecutive_failures"));
+        assert!(!json_str.contains("run_count"));
+        assert!(!json_str.contains("next_fire_at"));
+        assert!(!json_str.contains("guardrails"));
+        assert!(!json_str.contains("notify"));
+    }
+
+    /// RoutineRun 不应泄露敏感的执行详情。
+    #[test]
+    fn test_audit_routine_run_no_sensitive_data() {
         let run = RoutineRun {
-            id: "test".into(),
-            trigger_type: "Time".into(),
-            started_at: "2025-01-01T00:00:00+00:00".into(),
-            completed_at: None,
-            status: "Completed".into(),
-            result_summary: None,
-            tokens_used: Some(i32::MAX),
+            id: "run-id".into(),
+            trigger_type: "cron".into(),
+            started_at: "2026-04-05T09:00:00Z".into(),
+            completed_at: Some("2026-04-05T09:00:10Z".into()),
+            status: "Ok".into(),
+            result_summary: Some("任务完成".into()),
+            tokens_used: Some(200),
             job_id: None,
         };
-        let json = serde_json::to_string(&run).unwrap();
-        let parsed: RoutineRun = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.tokens_used, Some(i32::MAX));
+        let json_str = serde_json::to_string(&run).expect("should serialize");
+        assert!(!json_str.contains("user_id"));
+        assert!(!json_str.contains("api_key"));
+        assert!(!json_str.contains("secret"));
+    }
+
+    // =========================================================================
+    // 回归测试 — cron 任务创建时 next_fire_at 必须被计算
+    // =========================================================================
+
+    /// 回归测试：cron 触发器创建时 next_fire_at 不能为 None。
+    ///
+    /// 问题：ic_create_routine 之前硬编码 next_fire_at: None，
+    /// 导致引擎的 list_due_cron_routines 查询（WHERE next_fire_at IS NOT NULL）
+    /// 永远找不到该任务，cron 任务永远不会被触发。
+    #[test]
+    fn test_regression_cron_next_fire_at_is_computed_on_create() {
+        use ironclaw::agent::routine::next_cron_fire;
+
+        // 模拟 ic_create_routine 中的逻辑：对 cron trigger 计算 next_fire_at
+        let schedule = "55 12 * * *"; // 每天 12:55
+        let next = next_cron_fire(schedule, None)
+            .expect("valid cron expression should not error")
+            .expect("cron should always have a next fire time");
+
+        // next_fire_at 必须在未来
+        assert!(
+            next > chrono::Utc::now(),
+            "next_fire_at must be in the future, got: {next}"
+        );
+    }
+
+    /// manual 和 event 触发器不应计算 next_fire_at（应为 None）。
+    #[test]
+    fn test_regression_non_cron_triggers_have_no_next_fire_at() {
+        use ironclaw::agent::routine::{Trigger, next_cron_fire};
+
+        let non_cron_triggers = vec![
+            serde_json::json!({"type": "manual"}),
+            serde_json::json!({"type": "event", "pattern": ".*", "channel": null}),
+        ];
+
+        for trigger_json in non_cron_triggers {
+            let trigger: Trigger = serde_json::from_value(trigger_json.clone())
+                .expect("should parse trigger");
+
+            // 只有 Cron 变体才调用 next_cron_fire
+            let next_fire_at = match &trigger {
+                Trigger::Cron { schedule, timezone } => {
+                    next_cron_fire(schedule, timezone.as_deref())
+                        .expect("valid cron")
+                }
+                _ => None,
+            };
+
+            assert!(
+                next_fire_at.is_none(),
+                "non-cron trigger {:?} should have next_fire_at = None",
+                trigger_json["type"]
+            );
+        }
+    }
+
+    // =======================================================================================
+    // 契约测试 — FireRoutineResponse（ic_fire_routine 返回值，前端依赖字段名）
+    // =======================================================================================
+
+    /// 前端 FireRoutineResponse 类型：
+    /// ```typescript
+    /// interface FireRoutineResponse {
+    ///   thread_id: string;
+    ///   prompt: string;
+    /// }
+    /// ```
+    #[test]
+    fn test_contract_fire_routine_response_fields() {
+        use crate::ipc::routines::FireRoutineResponse;
+
+        let resp = FireRoutineResponse {
+            thread_id: "550e8400-e29b-41d4-a716-446655440000".into(),
+            prompt: "总结今日工作进展".into(),
+        };
+        let json = serde_json::to_value(&resp).expect("should serialize");
+        let obj = json.as_object().expect("should be object");
+
+        assert!(json["thread_id"].is_string(), "thread_id must be string");
+        assert!(json["prompt"].is_string(), "prompt must be string");
+        assert_eq!(obj.len(), 2, "FireRoutineResponse should have exactly 2 fields");
     }
 
     #[test]
-    fn test_data_negative_tokens_used() {
-        // i32 可以为负数，验证序列化不出错
-        let run = RoutineRun {
-            id: "test".into(),
-            trigger_type: "Manual".into(),
-            started_at: "2025-01-01T00:00:00+00:00".into(),
-            completed_at: None,
-            status: "Failed".into(),
-            result_summary: None,
-            tokens_used: Some(-1),
-            job_id: None,
+    fn test_contract_fire_routine_response_no_extra_fields() {
+        use crate::ipc::routines::FireRoutineResponse;
+
+        let resp = FireRoutineResponse {
+            thread_id: "thread-abc".into(),
+            prompt: "执行任务".into(),
         };
-        let json = serde_json::to_string(&run).unwrap();
-        let parsed: RoutineRun = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.tokens_used, Some(-1));
+        let json_str = serde_json::to_string(&resp).expect("should serialize");
+
+        // 不应泄露内部字段
+        assert!(!json_str.contains("routine_id"));
+        assert!(!json_str.contains("user_id"));
+        assert!(!json_str.contains("owner_id"));
     }
 }

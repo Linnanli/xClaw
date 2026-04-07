@@ -15,6 +15,7 @@
 const FRONTEND_INVOKED_COMMANDS: &[&str] = &[
     // ── 聊天 ────────────────────────────────────────────────────
     "send_chat_message",
+    "ic_activate_model",
     "subscribe_chat_events",
     "unsubscribe_chat_events",
     // ── 线程管理 ────────────────────────────────────────────────
@@ -40,10 +41,16 @@ const FRONTEND_INVOKED_COMMANDS: &[&str] = &[
     "ic_extension_setup",
     "ic_extension_setup_submit",
     // ── 任务管理 ────────────────────────────────────────────────
+    "ic_list_jobs",
     "ic_job_events",
     "ic_job_prompt",
     // ── 日程管理 ────────────────────────────────────────────────
     "ic_routine_runs",
+    "ic_list_routines",
+    "ic_create_routine",
+    "ic_toggle_routine",
+    "ic_delete_routine",
+    "ic_fire_routine",
     // ── 工具审批 ────────────────────────────────────────────────
     "ic_approve_tool",
     "ic_deny_tool",
@@ -83,6 +90,7 @@ const FRONTEND_INVOKED_COMMANDS: &[&str] = &[
 /// `all_tauri_commands!()` 宏中注册的所有命令名（必须与 lib.rs 保持同步）。
 const REGISTERED_COMMANDS: &[&str] = &[
     "send_chat_message",
+    "ic_activate_model",
     "subscribe_chat_events",
     "unsubscribe_chat_events",
     "ic_list_threads",
@@ -103,9 +111,15 @@ const REGISTERED_COMMANDS: &[&str] = &[
     "ic_search_extensions",
     "ic_extension_setup",
     "ic_extension_setup_submit",
+    "ic_list_jobs",
     "ic_job_events",
     "ic_job_prompt",
     "ic_routine_runs",
+    "ic_list_routines",
+    "ic_create_routine",
+    "ic_toggle_routine",
+    "ic_delete_routine",
+    "ic_fire_routine",
     "ic_approve_tool",
     "ic_deny_tool",
     "scan_user_input",

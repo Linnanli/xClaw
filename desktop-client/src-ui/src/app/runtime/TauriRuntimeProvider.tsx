@@ -65,7 +65,7 @@ interface SendMessageResponse {
 }
 
 type ChatEvent =
-  | { type: 'response'; message_id: string; content: string; thread_id: string }
+  | { type: 'response'; message_id: string; content: string; thread_id: string; source?: string }
   | { type: 'thinking'; message: string }
   | { type: 'stream_chunk'; content: string }
   | { type: 'tool_started'; name: string }
@@ -85,6 +85,9 @@ interface TauriRuntimeProviderProps {
   onModelChange?: (modelId: string) => void;
   /** 打开自定义模型弹窗的回调（由 ChatTabTauri 提供） */
   onOpenCustomModelModal?: () => void;
+  /** 定时任务手动触发时的提示词，挂载后自动发送 */
+  pendingPrompt?: string | null;
+  onPendingPromptSent?: () => void;
 }
 
 // ============================================================================
@@ -202,7 +205,10 @@ export function TauriRuntimeProvider({
   initialModelId,
   onModelChange,
   onOpenCustomModelModal,
+  pendingPrompt,
+  onPendingPromptSent,
 }: TauriRuntimeProviderProps) {
+  // 若有 pendingMessage，表示有任务正在执行，初始 isRunning = true
   const [messages, setMessages] = useState<TauriMessage[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const threadIdRef = useRef(threadId);
@@ -286,36 +292,85 @@ export function TauriRuntimeProvider({
   const selectModel = useCallback((modelId: string) => {
     setSelectedModelId(modelId);
     modelIdRef.current = modelId;
-    selectedModelRef.current = models.find((m) => m.model_id === modelId) ?? null;
+    const model = models.find((m) => m.model_id === modelId) ?? null;
+    selectedModelRef.current = model;
     onModelChange?.(modelId);
+    // 立即激活 provider，确保定时任务等后台操作也使用新模型
+    modelApi.activateModel({
+      model_id: modelId,
+      api_base_url: model?.api_base_url,
+      api_key: model?.api_key,
+    }).catch((err) => {
+      console.warn('[selectModel] ic_activate_model failed:', err);
+    });
   }, [onModelChange, models]);
 
   // ── 加载历史消息 ──
+  const pendingPromptSent = useRef(false);
+  const onPendingPromptSentRef = useRef(onPendingPromptSent);
+  onPendingPromptSentRef.current = onPendingPromptSent;
+
   useEffect(() => {
     if (!threadId) {
       setMessages([]);
       return;
     }
-    loadHistory(threadId);
-  }, [threadId]);
 
-  const loadHistory = async (tid: string) => {
-    try {
-      const history = await threadApi.getMessages(tid);
-      setMessages(
-        history
+    // pendingPrompt 已发送过，跳过重新加载（避免 clearPendingPrompt 触发的
+    // 依赖变化导致 setMessages(loaded) 覆盖掉本地添加的 user 气泡）
+    if (pendingPromptSent.current) return;
+
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        const history = await threadApi.getMessages(threadId);
+        if (cancelled) return;
+
+        const loaded = history
           .filter((m) => isDisplayableRole(m.role))
           .map((m) => ({
             id: m.id,
             role: m.role as 'user' | 'assistant',
             content: m.content,
             timestamp: new Date(m.created_at).getTime(),
-          })),
-      );
-    } catch (err) {
-      tracing.error('Failed to load thread history', { error: err });
-    }
-  };
+          }));
+
+        if (pendingPrompt && !pendingPromptSent.current) {
+          pendingPromptSent.current = true;
+          const userMsg: TauriMessage = {
+            id: `routine-${msgIdCounter.current++}`,
+            role: 'user',
+            content: pendingPrompt,
+            timestamp: Date.now(),
+          };
+          setMessages([...loaded, userMsg]);
+          setIsRunning(true);
+          invoke('send_chat_message', {
+            threadId,
+            content: pendingPrompt,
+            modelId: modelIdRef.current ?? null,
+            apiBaseUrl: selectedModelRef.current?.api_base_url ?? null,
+            apiKey: selectedModelRef.current?.api_key ?? null,
+          }).catch((err) => {
+            tracing.error('Failed to send routine prompt', { error: err });
+            setIsRunning(false);
+          });
+          onPendingPromptSentRef.current?.();
+        } else {
+          setMessages(loaded);
+        }
+      } catch (err) {
+        if (!cancelled) tracing.error('Failed to load thread history', { error: err });
+      }
+    };
+
+    load();
+    return () => { cancelled = true; };
+    // onPendingPromptSent 通过 ref 引用，不放入依赖数组，
+    // 避免 clearPendingPrompt 触发 effect 重跑覆盖 user 消息。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadId, pendingPrompt]);
 
   // ── chat-event 监听 ──
   useEffect(() => {
@@ -422,7 +477,7 @@ export function TauriRuntimeProvider({
         } else {
           setMessages((prev) => [
             ...prev,
-            { id: event.message_id, role: 'assistant', content: event.content, timestamp: Date.now() },
+            { id: event.message_id, role: 'assistant' as const, content: event.content, timestamp: Date.now() },
           ]);
         }
         pendingAssistantId.current = null;

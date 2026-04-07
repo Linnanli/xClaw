@@ -6,6 +6,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import { SidebarProvider, SidebarInset } from '../ui/sidebar';
 import { AppSidebar, type NavItem } from './AppSidebar';
 import { AppHeader } from './AppHeader';
@@ -21,6 +22,7 @@ import { useTheme } from '../../contexts/ThemeContext';
 import { sessionApi } from '../../utils/tauri';
 import { ShortcutManager, SHORTCUTS } from '../../utils/shortcuts';
 import { tracing } from '../../utils/tracing';
+import { useChatNavigation } from '../../hooks/useChatNavigation';
 
 const NAV_TITLES: Record<NavItem, string> = {
   chat: '聊天',
@@ -31,14 +33,34 @@ const NAV_TITLES: Record<NavItem, string> = {
 
 export function MainApp() {
   const [activeNav, setActiveNav] = useState<NavItem>('chat');
-  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
-  const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
+  const {
+    selectedThreadId,
+    sidebarRefreshKey,
+    pendingPrompt,
+    selectThread,
+    clearThread,
+    openRoutineThread,
+    completeRoutineThread,
+    clearPendingPrompt,
+  } = useChatNavigation();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [jobsOpen, setJobsOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [routinesOpen, setRoutinesOpen] = useState(false);
   const { config: watermarkConfig, loading: watermarkLoading } = useWatermark();
   const { themeMode, setTheme } = useTheme();
+
+  // 监听定时任务完成通知，自动跳转到对应对话
+  useEffect(() => {
+    const unlisten = listen<{ type: string; thread_id?: string; source?: string }>('chat-event', (event) => {
+      const { type, thread_id, source } = event.payload;
+      if (type === 'response' && source === 'routine' && thread_id?.trim()) {
+        setActiveNav('chat');
+        completeRoutineThread(thread_id);
+      }
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, [completeRoutineThread]);
 
   // 嵌入式模式：SSE 连接跳过，使用 Tauri IPC
   useEffect(() => {
@@ -79,7 +101,7 @@ export function MainApp() {
   };
 
   const handleNewChat = () => {
-    setSelectedThreadId(null);
+    clearThread();
     setActiveNav('chat');
   };
 
@@ -99,10 +121,9 @@ export function MainApp() {
         return (
           <ChatTabTauri
             selectedThreadId={selectedThreadId}
-            onThreadSelect={(id) => {
-              setSelectedThreadId(id);
-              setSidebarRefreshKey((k) => k + 1);
-            }}
+            onThreadSelect={selectThread}
+            pendingPrompt={pendingPrompt}
+            onPendingPromptSent={clearPendingPrompt}
           />
         );
       case 'logs':
@@ -118,10 +139,7 @@ export function MainApp() {
         activeNav={activeNav}
         onNavChange={handleNavChange}
         selectedThreadId={selectedThreadId}
-        onThreadSelect={(id) => {
-          setSelectedThreadId(id);
-          setSidebarRefreshKey((k) => k + 1);
-        }}
+        onThreadSelect={selectThread}
         onNewChat={handleNewChat}
         refreshKey={sidebarRefreshKey}
       />
@@ -140,7 +158,14 @@ export function MainApp() {
       <SettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} />
 
       {/* Routines Modal */}
-      <RoutinesTab open={routinesOpen} onOpenChange={setRoutinesOpen} />
+      <RoutinesTab
+        open={routinesOpen}
+        onOpenChange={setRoutinesOpen}
+        onRoutineFired={(threadId, prompt) => {
+          setActiveNav('chat');
+          openRoutineThread(threadId, prompt);
+        }}
+      />
 
       {/* Jobs Panel */}
       <JobsPanel open={jobsOpen} onOpenChange={setJobsOpen} />

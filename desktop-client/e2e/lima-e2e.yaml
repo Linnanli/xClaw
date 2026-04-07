@@ -1,0 +1,69 @@
+# Lima VM 配置 — IronClaw Desktop E2E 测试环境
+#
+# 用法：
+#   limactl start desktop-client/e2e/lima-e2e.yaml --name ironclaw-e2e
+#   limactl shell ironclaw-e2e
+#
+# 首次启动约 5-10 分钟（下载镜像 + 安装依赖）
+# 后续启动约 5-10 秒
+
+vmType: qemu
+os: Linux
+arch: default
+
+# Ubuntu 24.04 LTS
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
+    arch: aarch64
+  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
+    arch: x86_64
+
+# 资源配置
+cpus: 4
+memory: "6GiB"
+disk: "20GiB"
+
+# 挂载配置：
+# - home 只读（保护其他文件）
+# - 项目目录可写（Tauri build script 需要写 capabilities 文件，cargo 需要写 target/）
+mounts:
+  - location: "~"
+    writable: false
+  - location: "~/Documents/code/x-claw"
+    writable: true
+
+# 端口转发（tauri-driver 默认 4444）
+portForwards:
+  - guestPort: 4444
+    hostPort: 4444
+
+# 启动时自动安装依赖
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -e
+      apt-get update -qq
+      apt-get install -y --no-install-recommends \
+        curl git build-essential pkg-config \
+        libssl-dev libgtk-3-dev libayatana-appindicator3-dev \
+        librsvg2-dev patchelf \
+        xvfb \
+        webkit2gtk-driver \
+        libwebkit2gtk-4.1-dev \
+        libjavascriptcoregtk-4.1-dev
+      curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+      apt-get install -y nodejs
+      echo "System dependencies installed."
+
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -e
+      if ! command -v cargo &>/dev/null; then
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+        source "$HOME/.cargo/env"
+      fi
+      source "$HOME/.cargo/env"
+      cargo install tauri-driver --locked
+      echo "User dependencies installed."

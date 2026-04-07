@@ -11,6 +11,17 @@ use crate::state::EngineState;
 
 // ─── 数据类型 ────────────────────────────────────────────────────────
 
+/// 任务概要（前端列表展示用）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobInfoResponse {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub created_at: String,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+}
+
 /// 任务事件（前端展示用）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobEvent {
@@ -43,6 +54,32 @@ pub struct JobPromptResponse {
 }
 
 // ─── Tauri Commands ──────────────────────────────────────────────────
+
+/// 列出当前用户的所有任务。
+#[tauri::command]
+pub async fn ic_list_jobs(
+    state: State<'_, EngineState>,
+) -> Result<Vec<JobInfoResponse>, String> {
+    let state = state.get()?;
+    let db = state.db.as_ref().ok_or("Database not available")?;
+
+    let jobs = db
+        .list_agent_jobs_for_user(&state.owner_id)
+        .await
+        .map_err(|e| format!("Failed to list jobs: {}", e))?;
+
+    Ok(jobs
+        .into_iter()
+        .map(|j| JobInfoResponse {
+            id: j.id.to_string(),
+            title: j.title,
+            status: j.status,
+            created_at: j.created_at.to_rfc3339(),
+            started_at: j.started_at.map(|t| t.to_rfc3339()),
+            completed_at: j.completed_at.map(|t| t.to_rfc3339()),
+        })
+        .collect())
+}
 
 /// 获取任务事件历史。
 ///

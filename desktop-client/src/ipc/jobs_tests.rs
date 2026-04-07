@@ -405,4 +405,76 @@ mod tests {
         let parsed: JobEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.id, -1);
     }
+
+    // =======================================================================================
+    // JobInfoResponse 契约测试（ic_list_jobs 新增类型）
+    // =======================================================================================
+
+    /// 前端 JobInfo 类型：
+    /// ```typescript
+    /// interface JobInfo {
+    ///   id: string;
+    ///   title: string;
+    ///   status: string;
+    ///   created_at: string;
+    ///   started_at?: string;
+    ///   completed_at?: string;
+    /// }
+    /// ```
+    #[test]
+    fn test_contract_job_info_response_fields() {
+        use crate::ipc::jobs::JobInfoResponse;
+
+        let info = JobInfoResponse {
+            id: "550e8400-e29b-41d4-a716-446655440000".into(),
+            title: "分析季度报告".into(),
+            status: "completed".into(),
+            created_at: "2026-04-05T09:00:00Z".into(),
+            started_at: Some("2026-04-05T09:00:01Z".into()),
+            completed_at: Some("2026-04-05T09:05:00Z".into()),
+        };
+        let json = serde_json::to_value(&info).expect("should serialize");
+        let obj = json.as_object().expect("should be object");
+
+        assert!(json["id"].is_string());
+        assert!(json["title"].is_string());
+        assert!(json["status"].is_string());
+        assert!(json["created_at"].is_string());
+        assert_eq!(obj.len(), 6, "JobInfoResponse should have exactly 6 fields");
+    }
+
+    #[test]
+    fn test_contract_job_info_response_optional_fields_null_when_absent() {
+        use crate::ipc::jobs::JobInfoResponse;
+
+        let info = JobInfoResponse {
+            id: "job-001".into(),
+            title: "待执行任务".into(),
+            status: "pending".into(),
+            created_at: "2026-04-05T09:00:00Z".into(),
+            started_at: None,
+            completed_at: None,
+        };
+        let json = serde_json::to_value(&info).expect("should serialize");
+        assert!(json["started_at"].is_null(), "started_at should be null when absent");
+        assert!(json["completed_at"].is_null(), "completed_at should be null when absent");
+    }
+
+    #[test]
+    fn test_audit_job_info_response_no_sensitive_fields() {
+        use crate::ipc::jobs::JobInfoResponse;
+
+        let info = JobInfoResponse {
+            id: "job-001".into(),
+            title: "任务标题".into(),
+            status: "running".into(),
+            created_at: "2026-04-05T09:00:00Z".into(),
+            started_at: None,
+            completed_at: None,
+        };
+        let json_str = serde_json::to_string(&info).expect("should serialize");
+        assert!(!json_str.contains("user_id"), "user_id should not be exposed");
+        assert!(!json_str.contains("owner_id"), "owner_id should not be exposed");
+        assert!(!json_str.contains("api_key"), "api_key should not be exposed");
+    }
 }

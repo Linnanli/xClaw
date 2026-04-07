@@ -74,6 +74,7 @@ mod engine_state_timing_tests {
             initial_base_url: String::new(),
             log_broadcaster: Arc::new(ironclaw::channels::web::log_layer::LogBroadcaster::new()),
             log_clear_offset: std::sync::atomic::AtomicUsize::new(0),
+            routine_engine_slot: Arc::new(tokio::sync::RwLock::new(None)),
         }
     }
 

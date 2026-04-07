@@ -327,7 +327,7 @@ export const toolApi = {
 };
 
 // ============================================================================
-// Routine APIs (stub — 暂无对应新命令)
+// Routine APIs
 // ============================================================================
 
 export interface Routine {
@@ -339,13 +339,36 @@ export interface Routine {
   actions: any[];
 }
 
+/** ic_list_routines / ic_create_routine 返回的精简类型 */
+interface RoutineInfo {
+  id: string;
+  name: string;
+  description: string;
+  status: string;
+  trigger: any;
+}
+
 export const routineApi = {
-  getRoutines: async (): Promise<Routine[]> => [],
-  createRoutine: async (_name: string, _description: string, _trigger: any, _actions: any[]): Promise<Routine> => {
-    throw new Error('Routines not yet supported in embedded mode');
+  getRoutines: async (): Promise<Routine[]> => {
+    const items = await invokeTauri<RoutineInfo[]>('ic_list_routines');
+    return items.map((r) => ({
+      id: r.id,
+      name: r.name,
+      description: r.description,
+      trigger: r.trigger,
+      status: r.status,
+      actions: [],
+    }));
   },
-  triggerRoutine: async (_routineId: string): Promise<void> => {},
-  deleteRoutine: async (_routineId: string): Promise<void> => {},
+  createRoutine: async (name: string, description: string, trigger: any, _actions: any[], prompt: string): Promise<Routine> => {
+    const info = await invokeTauri<RoutineInfo>('ic_create_routine', { request: { name, description, trigger, prompt } });
+    return { id: info.id, name: info.name, description: info.description, trigger: info.trigger, status: info.status, actions: [] };
+  },
+  triggerRoutine: async (routineId: string): Promise<{ thread_id: string; prompt: string }> => {
+    return invokeTauri('ic_fire_routine', { routineId });
+  },
+  deleteRoutine: async (routineId: string): Promise<void> =>
+    invokeTauri('ic_delete_routine', { routineId }),
 };
 
 export interface RoutineRun {
@@ -365,9 +388,12 @@ export interface RoutineRunsResponse {
 }
 
 export const routineExtendedApi = {
-  enableRoutine: async (_routineId: string): Promise<void> => {},
-  disableRoutine: async (_routineId: string): Promise<void> => {},
-  pauseRoutine: async (_routineId: string): Promise<void> => {},
+  enableRoutine: async (routineId: string): Promise<void> =>
+    invokeTauri('ic_toggle_routine', { routineId, enabled: true }),
+  disableRoutine: async (routineId: string): Promise<void> =>
+    invokeTauri('ic_toggle_routine', { routineId, enabled: false }),
+  pauseRoutine: async (routineId: string): Promise<void> =>
+    invokeTauri('ic_toggle_routine', { routineId, enabled: false }),
   getRoutineRuns: (routineId: string) =>
     invokeTauri<RoutineRunsResponse>('ic_routine_runs', { routineId }),
 };
@@ -531,7 +557,24 @@ export interface JobDetail {
 }
 
 export const jobApi = {
-  getJobs: async (): Promise<JobInfo[]> => [],
+  getJobs: async (): Promise<JobInfo[]> => {
+    const items = await invokeTauri<Array<{
+      id: string;
+      title: string;
+      status: string;
+      created_at: string;
+      started_at?: string;
+      completed_at?: string;
+    }>>('ic_list_jobs');
+    return items.map((j) => ({
+      id: j.id,
+      title: j.title,
+      status: j.status,
+      created_at: j.created_at,
+      started_at: j.started_at,
+      completed_at: j.completed_at,
+    }));
+  },
   getJobDetail: async (_jobId: string): Promise<JobDetail> => {
     throw new Error('Jobs not yet supported in embedded mode');
   },
@@ -707,6 +750,13 @@ export const modelApi = {
       apiBaseUrl: params.api_base_url,
       apiKey: params.api_key,
       modelId: params.model_id,
+    }),
+
+  activateModel: (params: { model_id: string; api_base_url?: string; api_key?: string }) =>
+    invokeTauri<void>('ic_activate_model', {
+      modelId: params.model_id,
+      apiBaseUrl: params.api_base_url ?? null,
+      apiKey: params.api_key ?? null,
     }),
 };
 

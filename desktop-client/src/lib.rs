@@ -84,6 +84,7 @@ macro_rules! all_tauri_commands {
         tauri::generate_handler![
             // ── 聊天 ────────────────────────────────────────────
             desktop_client::ipc::send_chat_message,
+            desktop_client::ipc::ic_activate_model,
             desktop_client::ipc::subscribe_chat_events,
             desktop_client::ipc::unsubscribe_chat_events,
             // ── 线程管理 ────────────────────────────────────────
@@ -109,10 +110,16 @@ macro_rules! all_tauri_commands {
             desktop_client::ipc::ic_extension_setup,
             desktop_client::ipc::ic_extension_setup_submit,
             // ── 任务管理 ────────────────────────────────────────
+            desktop_client::ipc::ic_list_jobs,
             desktop_client::ipc::ic_job_events,
             desktop_client::ipc::ic_job_prompt,
             // ── 日程管理 ────────────────────────────────────────
             desktop_client::ipc::ic_routine_runs,
+            desktop_client::ipc::ic_list_routines,
+            desktop_client::ipc::ic_create_routine,
+            desktop_client::ipc::ic_toggle_routine,
+            desktop_client::ipc::ic_delete_routine,
+            desktop_client::ipc::ic_fire_routine,
             // ── 工具审批 ────────────────────────────────────────
             desktop_client::ipc::ic_approve_tool,
             desktop_client::ipc::ic_deny_tool,

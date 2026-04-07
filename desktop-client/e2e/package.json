@@ -1,0 +1,26 @@
+{
+  "name": "ironclaw-desktop-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "WebdriverIO E2E tests for IronClaw Desktop Client (tauri-driver)",
+  "scripts": {
+    "test": "wdio run wdio.conf.js",
+    "test:routines": "wdio run wdio.conf.js --spec tests/routines.spec.js",
+    "test:logs": "wdio run wdio.conf.js --spec tests/logs.spec.js",
+    "test:lima": "./run-in-lima.sh",
+    "test:lima:routines": "./run-in-lima.sh routines",
+    "test:lima:logs": "./run-in-lima.sh logs",
+    "lima:start": "limactl start lima-e2e.yaml --name ironclaw-e2e",
+    "lima:stop": "limactl stop ironclaw-e2e",
+    "lima:shell": "limactl shell ironclaw-e2e"
+  },
+  "dependencies": {
+    "@wdio/cli": "^9.0.0"
+  },
+  "devDependencies": {
+    "@wdio/local-runner": "^9.0.0",
+    "@wdio/mocha-framework": "^9.0.0",
+    "@wdio/spec-reporter": "^9.0.0"
+  }
+}

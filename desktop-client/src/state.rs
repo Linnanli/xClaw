@@ -37,6 +37,7 @@ use ironclaw::config::SkillsConfig;
 use ironclaw::context::ContextManager;
 use ironclaw::db::Database;
 use ironclaw::extensions::ExtensionManager;
+use ironclaw::agent::routine_engine::RoutineEngine;
 use ironclaw::safety::SafetyLayer;
 use ironclaw::skills::catalog::SkillCatalog;
 use ironclaw::skills::SkillRegistry;
@@ -100,6 +101,8 @@ pub struct AppState {
     pub log_broadcaster: Arc<LogBroadcaster>,
     /// 日志清空偏移量：`ic_clear_logs` 时记录当前日志数，后续查询跳过此前的条目。
     pub log_clear_offset: std::sync::atomic::AtomicUsize,
+    /// Routine engine slot — 引擎就绪后填充，供 ic_fire_routine 使用。
+    pub routine_engine_slot: Arc<tokio::sync::RwLock<Option<Arc<RoutineEngine>>>>,
 }
 
 /// `main.rs` 中创建的 `LogBroadcaster` 的 Tauri managed state 包装。

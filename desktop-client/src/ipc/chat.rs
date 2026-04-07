@@ -256,7 +256,7 @@ fn classify_switch(state: &crate::state::AppState, api_base_url: Option<&str>) -
 }
 
 /// 跨 provider 切换：用新的 base_url + api_key 重建 provider。
-fn switch_provider(
+pub(crate) fn switch_provider(
     state: &crate::state::AppState,
     model_id: &str,
     api_base_url: Option<&str>,
@@ -301,7 +301,7 @@ fn switch_provider(
 ///   但保留 `/v1`（它是 base URL 的一部分，不是 SDK 拼接的）。
 /// - 客户端：provider 比较时额外剥离 `/v1`，用于容错匹配
 ///   （.env 配置可能带 `/v1`，admin 配置可能不带，两者应视为同一 provider）。
-fn normalize_base_url(url: &str) -> String {
+pub(crate) fn normalize_base_url(url: &str) -> String {
     let trimmed = url.trim_end_matches('/');
     for suffix in &[
         "/v1/chat/completions",
@@ -464,3 +464,33 @@ pub async fn report_usage_to_admin(
     }
 }
 
+
+/// 立即激活指定模型，不需要发送消息。
+///
+/// 解决"切换模型后定时任务仍用旧 provider"的问题：
+/// 原来模型切换只在 send_chat_message 时触发，现在选择模型时立即调用此命令。
+#[tauri::command]
+pub async fn ic_activate_model(
+    state: State<'_, EngineState>,
+    model_id: String,
+    api_base_url: Option<String>,
+    api_key: Option<String>,
+) -> Result<(), String> {
+    let state = state.get()?;
+    let switch_kind = classify_switch(state, api_base_url.as_deref());
+    match switch_kind {
+        SwitchKind::InPlace => switch_model_in_place(state, &model_id),
+        SwitchKind::CrossProvider => {
+            switch_provider(state, &model_id, api_base_url.as_deref(), api_key.as_deref())?;
+        }
+        SwitchKind::RestoreInitial => {
+            restore_initial_provider(state, &model_id);
+        }
+    }
+    tracing::info!(
+        model = %model_id,
+        active = %state.llm.active_model_name(),
+        "Model activated immediately via ic_activate_model"
+    );
+    Ok(())
+}

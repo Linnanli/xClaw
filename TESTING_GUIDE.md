@@ -248,7 +248,88 @@ window.__TAURI__.core.invoke('submit_approval_ticket', {
 
 ---
 
-## 常见问题
+## 第七步：WebdriverIO E2E 测试（真实 Tauri 环境）
+
+> ⚠️ **平台限制**：`tauri-driver` 仅支持 **Linux** 和 **Windows**。macOS 上通过 **Lima**（轻量 Linux VM）在本地运行真实测试。
+
+### 方案 A：macOS 本地（Lima VM）
+
+Lima 是专为 macOS 设计的轻量 Linux VM，Apple Silicon 原生支持，启动约 5 秒。
+
+**安装 Lima（一次性）**：
+
+```bash
+brew install lima
+```
+
+**首次创建 VM（约 3-5 分钟）**：
+
+```bash
+cd desktop-client/e2e
+npm run lima:start
+```
+
+**运行测试**：
+
+```bash
+npm run test:lima              # 全部测试
+npm run test:lima:routines     # 仅定时任务
+npm run test:lima:logs         # 仅日志
+```
+
+脚本会自动：
+1. 检查/启动 Lima VM
+2. 在 VM 内启动 `Xvfb` 虚拟显示
+3. 编译 Linux 版 Tauri 应用
+4. 运行 WebdriverIO 测试
+
+**VM 管理**：
+
+```bash
+npm run lima:shell    # 进入 VM shell
+npm run lima:stop     # 停止 VM（释放内存）
+```
+
+### 方案 B：Linux CI（GitHub Actions）
+
+```yaml
+- name: Install dependencies
+  run: |
+    sudo apt-get install -y webkit2gtk-driver xvfb libwebkit2gtk-4.1-dev
+
+- name: Install tauri-driver
+  run: cargo install tauri-driver --locked
+
+- name: Run E2E tests
+  run: xvfb-run npm test
+  working-directory: desktop-client/e2e
+```
+
+### 预期结果
+
+```
+定时任务面板
+  ✓ 点击定时任务按钮应打开面板
+  ✓ 填写名称和描述后创建按钮应可点击
+  ✓ 创建手动触发任务后应出现在列表中
+  ✓ 创建 Cron 触发任务后应出现在列表中
+  ✓ 点击取消应关闭创建弹窗且不创建任务
+  ✓ 只填名称不填描述时创建按钮应为 disabled
+  ✓ 点击开关应切换任务启用状态
+  ✓ 任务卡片应显示执行历史元信息
+  ✓ 点击已启用筛选应只显示启用的任务
+
+日志 Tab
+  ✓ 打开日志 Tab 应显示引擎启动日志
+  ✓ 搜索框输入关键词应过滤日志
+  ✓ 选择错误级别应只显示 error 日志
+  ✓ 点击清空后确认应清空日志列表
+  ✓ 点击导出应弹出系统保存对话框
+```
+
+---
+
+
 
 **日志 Tab 仍然是空的**
 

@@ -146,6 +146,29 @@
       "autoApprove": [
         "assistantUIDocs"
       ]
+    },
+    "pencil": {
+      "command": "/Users/nallylin/.pencil/mcp/kiro/out/mcp-server-darwin-x64",
+      "args": [
+        "--app",
+        "kiro"
+      ],
+      "env": {},
+      "autoApprove": [
+        "get_editor_state",
+        "open_document",
+        "batch_get",
+        "batch_design",
+        "get_screenshot",
+        "snapshot_layout",
+        "find_empty_space_on_canvas",
+        "export_nodes",
+        "get_variables",
+        "set_variables",
+        "get_guidelines",
+        "search_all_unique_properties",
+        "replace_all_matching_properties"
+      ]
     }
   }
 }

@@ -15,18 +15,16 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tracing;
 
 use ironclaw::agent::{Agent, AgentDeps};
+use ironclaw::agent::routine_engine::RoutineEngine;
 use ironclaw::app::{AppBuilder, AppBuilderFlags};
 use ironclaw::channels::ChannelManager;
-use ironclaw::channels::web::log_layer::LogBroadcaster;
 use ironclaw::config::Config;
 use ironclaw::hooks::bootstrap_hooks;
 use ironclaw::llm::create_session_manager;
-use tauri::Emitter;
-use tauri::Manager;
 
 use crate::state::{AppState, EngineState};
 use crate::model_switch::ModelSwitchProvider;
@@ -154,6 +152,10 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         .map(|p| p.base_url.clone())
         .unwrap_or_default();
 
+    // 创建共享 routine engine slot，AppState 和 Agent 共用同一个引用
+    let routine_engine_slot: Arc<tokio::sync::RwLock<Option<Arc<RoutineEngine>>>> =
+        Arc::new(tokio::sync::RwLock::new(None));
+
     let app_state = AppState {
         msg_sender,
         db: components.db.clone(),
@@ -175,6 +177,7 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         initial_base_url,
         log_broadcaster: Arc::clone(&log_broadcaster),
         log_clear_offset: std::sync::atomic::AtomicUsize::new(0),
+        routine_engine_slot: Arc::clone(&routine_engine_slot),
     };
     // 从 Tauri managed state 获取 EngineState 并填充
     let engine_state = app_handle.state::<EngineState>();    engine_state
@@ -182,6 +185,16 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         .map_err(|e| anyhow::anyhow!(e))?;
 
     tracing::info!("AppState injected into EngineState");
+
+    // ── 初始化默认 LLM Provider ───────────────────────────────────
+    // 从 Admin Backend 拉取默认模型，覆盖 .env 里的 fallback 配置。
+    // 确保定时任务和聊天使用相同的默认模型。
+    {
+        let engine_state = app_handle.state::<EngineState>();
+        if let Ok(state) = engine_state.get() {
+            init_default_provider(state).await;
+        }
+    }
 
     // ── 启动时同步 Admin Backend DLP 规则 ─────────────────────────
     // 非阻塞：同步失败不影响引擎启动，仅使用内置规则
@@ -312,7 +325,7 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         tenant_rates: Arc::new(ironclaw::tenant::TenantRateRegistry::new(4, 4)),
     };
 
-    let agent = Agent::new(
+    let mut agent = Agent::new(
         config.agent.clone(),
         deps,
         channels,
@@ -322,6 +335,7 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         Some(components.context_manager),
         Some(session_manager),
     );
+    agent.set_routine_engine_slot(routine_engine_slot);
 
     tracing::info!("Agent constructed, starting message loop...");
 
@@ -427,4 +441,88 @@ fn find_builtin_skills_source(app_handle: &AppHandle) -> Option<std::path::PathB
         .into_iter()
         .find(|p| p.is_dir())
         .map(|p| p.canonicalize().unwrap_or(p))
+}
+
+/// 从 Admin Backend 拉取默认模型配置，初始化 LLM provider。
+///
+/// 在引擎就绪后调用，确保定时任务和聊天使用相同的默认模型，
+/// 而不是 .env 里的 fallback 配置。
+///
+/// 失败时静默降级（继续使用 .env 配置），不影响引擎正常运行。
+pub(crate) async fn init_default_provider(state: &AppState) {
+    match fetch_default_model(&state.owner_id).await {
+        Ok(Some(model)) => apply_default_model(state, &model),
+        Ok(None) => tracing::debug!("No models returned from admin backend"),
+        Err(e) => tracing::debug!(error = %e, "Skipping default provider init"),
+    }
+}
+
+/// 从 Admin Backend 拉取模型列表，返回默认模型（is_default 优先，否则取第一个）。
+async fn fetch_default_model(
+    owner_id: &str,
+) -> Result<Option<crate::ipc::models::ModelConfig>, String> {
+    let admin_url = std::env::var("ADMIN_BACKEND_URL")
+        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+
+    let url = if uuid::Uuid::parse_str(owner_id).is_ok() {
+        format!("{}/api/client-models?user_id={}", admin_url, owner_id)
+    } else {
+        format!("{}/api/client-models", admin_url)
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch model list: {e}"))?;
+
+    if !resp.status().is_success() {
+        tracing::debug!(status = %resp.status(), "Admin backend returned non-success for model list");
+        return Ok(None);
+    }
+
+    let mut models: Vec<crate::ipc::models::ModelConfig> = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse model list: {e}"))?;
+
+    if models.is_empty() {
+        return Ok(None);
+    }
+
+    // is_default 优先；没有标记时取第一个
+    let idx = models.iter().position(|m| m.is_default).unwrap_or(0);
+    Ok(Some(models.swap_remove(idx)))
+}
+
+/// 将拉取到的模型配置应用为当前活跃 provider。
+fn apply_default_model(state: &AppState, model: &crate::ipc::models::ModelConfig) {
+    let (Some(base_url), Some(api_key)) = (&model.api_base_url, &model.api_key) else {
+        tracing::debug!(
+            model = %model.model_id,
+            "Default model missing api_base_url or api_key, skipping provider init"
+        );
+        return;
+    };
+
+    if let Err(e) = crate::ipc::chat::switch_provider(
+        state,
+        &model.model_id,
+        Some(base_url.as_str()),
+        Some(api_key.as_str()),
+    ) {
+        tracing::warn!(model = %model.model_id, error = %e, "Failed to init default provider");
+        return;
+    }
+
+    tracing::info!(
+        model = %model.model_id,
+        base_url = %crate::ipc::chat::normalize_base_url(base_url),
+        "Default LLM provider initialized from admin backend"
+    );
 }

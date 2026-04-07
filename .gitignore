@@ -40,3 +40,4 @@ __pycache__/
 *.pyo
 *.pyd
 claude-code-main
+*/**/node_modules/

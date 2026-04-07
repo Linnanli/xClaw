@@ -23,6 +23,7 @@ import { Button } from '../ui/button';
 import { ScrollArea } from '../ui/scroll-area';
 import { cn } from '../ui/utils';
 import { logApi, logClearApi, type LogEntry } from '../../utils/tauri';
+import { ConfirmDialog } from '../common/ConfirmDialog';
 
 const LEVEL_CONFIG: Record<string, { icon: React.ElementType; color: string; bg: string; label: string }> = {
   info: { icon: Info, color: 'text-blue-500', bg: 'bg-blue-50 dark:bg-blue-950/30', label: '信息' },
@@ -40,6 +41,7 @@ export function LogsTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [streamEnabled, setStreamEnabled] = useState(false);
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
 
   useEffect(() => {
     fetchLogs();
@@ -84,15 +86,13 @@ export function LogsTab() {
   };
 
   const handleClear = async () => {
-    if (confirm('确定要清空所有日志吗？此操作无法撤销。')) {
-      try {
-        await logClearApi.clearLogs();
-        setLogs([]);
-        setError(null);
-      } catch (err) {
-        console.error('Failed to clear logs:', err);
-        setError('清空失败');
-      }
+    try {
+      await logClearApi.clearLogs();
+      setLogs([]);
+      setError(null);
+    } catch (err) {
+      console.error('Failed to clear logs:', err);
+      setError('清空失败');
     }
   };
 
@@ -186,7 +186,7 @@ export function LogsTab() {
             <Download className="size-3.5" />
             导出
           </Button>
-          <Button variant="outline" size="sm" className="h-9 gap-1.5 border-destructive/30 text-destructive hover:bg-destructive/5" onClick={handleClear}>
+          <Button variant="outline" size="sm" className="h-9 gap-1.5 border-destructive/30 text-destructive hover:bg-destructive/5" onClick={() => setClearConfirmOpen(true)}>
             <Trash2 className="size-3.5" />
             清空
           </Button>
@@ -241,6 +241,15 @@ export function LogsTab() {
           })}
         </div>
       </ScrollArea>
+
+      <ConfirmDialog
+        open={clearConfirmOpen}
+        onOpenChange={setClearConfirmOpen}
+        title="清空日志？"
+        description="此操作将清空当前所有日志记录，清空后无法恢复。请确认是否继续。"
+        confirmText="确认清空"
+        onConfirm={() => { setClearConfirmOpen(false); handleClear(); }}
+      />
     </div>
   );
 }

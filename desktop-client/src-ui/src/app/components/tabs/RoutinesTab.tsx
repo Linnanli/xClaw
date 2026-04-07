@@ -5,7 +5,7 @@
  * 每张卡片包含：名称 + 标签 + 开关 + 运行按钮 + 描述 + 元信息（触发方式/上次执行/执行次数）。
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Plus,
   List,
@@ -15,6 +15,7 @@ import {
   CircleCheck,
   Hash,
   Play,
+  Trash2,
 } from 'lucide-react';
 import {
   Dialog,
@@ -26,13 +27,28 @@ import { Switch } from '../ui/switch';
 import { ScrollArea } from '../ui/scroll-area';
 import { Button } from '../ui/button';
 import { cn } from '../ui/utils';
+import { listen } from '@tauri-apps/api/event';
 import { routineApi, routineExtendedApi, type Routine } from '../../utils/tauri';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '../ui/select';
+import {
+  CronSchedulePicker,
+  DEFAULT_CRON_SCHEDULE,
+  toCronExpression,
+  type CronSchedule,
+} from '../ui/CronSchedulePicker';
 
 type FilterKey = 'all' | 'enabled' | 'disabled';
 
 interface RoutinesTabProps {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  onRoutineFired?: (threadId: string, prompt: string) => void;
 }
 
 const TRIGGER_LABELS: Record<string, string> = {
@@ -47,28 +63,30 @@ const TAG_COLORS: Record<string, { bg: string; text: string }> = {
   manual: { bg: 'bg-secondary', text: 'text-muted-foreground' },
 };
 
-export function RoutinesTab({ open = true, onOpenChange }: RoutinesTabProps) {
+export function RoutinesTab({ open = true, onOpenChange, onRoutineFired }: RoutinesTabProps) {
   const [filter, setFilter] = useState<FilterKey>('all');
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [loading, setLoading] = useState(false);
+  const [firingId, setFiringId] = useState<string | null>(null);
+  const [firingError, setFiringError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
   const [newDesc, setNewDesc] = useState('');
   const [newTrigger, setNewTrigger] = useState<'manual' | 'time' | 'event'>('manual');
   // 执行历史：key 为 routine.id，value 为 { lastRun, runCount }
   const [runStats, setRunStats] = useState<Record<string, { lastRun: string | null; runCount: number }>>({});
-  const [newCron, setNewCron] = useState('');
+  const [newCronSchedule, setNewCronSchedule] = useState<CronSchedule>(DEFAULT_CRON_SCHEDULE);
+  const [newPrompt, setNewPrompt] = useState('');
+  const [newPattern, setNewPattern] = useState('');
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (open) loadRoutines();
-  }, [open]);
-
-  const loadRoutines = async () => {
+  const loadRoutines = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const data = await routineApi.getRoutines();
       setRoutines(data);
-      // 并发加载每个任务的执行历史
       const stats: Record<string, { lastRun: string | null; runCount: number }> = {};
       await Promise.allSettled(
         data.map(async (r) => {
@@ -85,11 +103,27 @@ export function RoutinesTab({ open = true, onOpenChange }: RoutinesTabProps) {
       );
       setRunStats(stats);
     } catch (err) {
-      console.error('Failed to load routines:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('Failed to load routines:', msg);
+      setLoadError(msg);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (open) loadRoutines();
+  }, [open, loadRoutines]);
+
+  // 引擎就绪后自动重载（处理面板打开时引擎尚未就绪的情况）
+  useEffect(() => {
+    const unlisten = listen<{ type: string; connected?: boolean }>('chat-event', (event) => {
+      if (event.payload.type === 'connection_status' && event.payload.connected && open) {
+        loadRoutines();
+      }
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, [open, loadRoutines]);
 
   const filtered = routines.filter((r) => {
     if (filter === 'enabled') return r.status === 'active';
@@ -117,38 +151,64 @@ export function RoutinesTab({ open = true, onOpenChange }: RoutinesTabProps) {
   };
 
   const handleTrigger = async (id: string) => {
+    setFiringId(id);
+    setFiringError(null);
     try {
-      await routineApi.triggerRoutine(id);
+      const result = await routineApi.triggerRoutine(id);
+      onOpenChange?.(false);
+      onRoutineFired?.(result.thread_id, result.prompt);
     } catch (err) {
-      console.error('Failed to trigger routine:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      // 并发限制：任务正在运行中
+      if (msg.includes('max concurrent')) {
+        setFiringError('任务正在运行中，请等待当前执行完成后再触发');
+      } else {
+        setFiringError(msg);
+      }
+    } finally {
+      setFiringId(null);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await routineApi.deleteRoutine(id);
+      await loadRoutines();
+    } catch (err) {
+      console.error('Failed to delete routine:', err);
     }
   };
 
   const handleCreate = async () => {
-    if (!newName.trim() || !newDesc.trim()) return;
+    if (!newName.trim() || !newDesc.trim() || !newPrompt.trim()) return;
+    setCreateError(null);
     try {
-      let trigger;
-      if (newTrigger === 'manual') trigger = { Manual: null };
-      else if (newTrigger === 'time') trigger = { Time: newCron || '0 9 * * *' };
-      else trigger = { Event: 'default_event' };
+      let trigger: Record<string, unknown>;
+      if (newTrigger === 'manual') trigger = { type: 'manual' };
+      else if (newTrigger === 'time') trigger = { type: 'cron', schedule: toCronExpression(newCronSchedule) };
+      else trigger = { type: 'event', pattern: newPattern || '.*', channel: null };
 
-      await routineApi.createRoutine(newName, newDesc, trigger, []);
+      await routineApi.createRoutine(newName, newDesc, trigger, [], newPrompt);
       setNewName('');
       setNewDesc('');
       setNewTrigger('manual');
-      setNewCron('');
+      setNewCronSchedule(DEFAULT_CRON_SCHEDULE);
+      setNewPrompt('');
+      setNewPattern('');
       setShowCreate(false);
       await loadRoutines();
     } catch (err) {
       console.error('Failed to create routine:', err);
+      setCreateError(err instanceof Error ? err.message : String(err));
     }
   };
 
   const getTriggerType = (r: Routine): string => {
     if (typeof r.trigger === 'string') return r.trigger;
     if (typeof r.trigger === 'object' && r.trigger) {
-      const keys = Object.keys(r.trigger);
-      return keys[0]?.toLowerCase() || 'manual';
+      // 后端返回 { type: "manual" | "cron" | "event" | ... }
+      const t = (r.trigger as Record<string, unknown>).type;
+      if (typeof t === 'string') return t.toLowerCase();
     }
     return 'manual';
   };
@@ -229,7 +289,17 @@ export function RoutinesTab({ open = true, onOpenChange }: RoutinesTabProps) {
               {loading && filtered.length === 0 && (
                 <p className="py-12 text-center text-sm text-muted-foreground">加载中...</p>
               )}
-              {!loading && filtered.length === 0 && (
+              {!loading && loadError && (
+                <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-xs text-destructive">
+                  加载失败：{loadError}
+                </div>
+              )}
+              {firingError && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-400">
+                  {firingError}
+                </div>
+              )}
+              {!loading && !loadError && filtered.length === 0 && (
                 <p className="py-12 text-center text-sm text-muted-foreground">暂无定时任务</p>
               )}
               {filtered.map((routine) => {
@@ -261,13 +331,23 @@ export function RoutinesTab({ open = true, onOpenChange }: RoutinesTabProps) {
                           checked={routine.status === 'active'}
                           onCheckedChange={() => handleToggle(routine.id, routine.status)}
                         />
-                        <button
+                        <Button
+                          variant="outline"
+                          size="xs"
                           onClick={() => handleTrigger(routine.id)}
-                          className="flex h-7 items-center gap-1 rounded-md bg-secondary px-2.5 text-[12px] font-medium text-text-secondary transition-colors hover:bg-accent"
+                          disabled={firingId === routine.id}
                         >
-                          <Play className="size-3" />
-                          运行
-                        </button>
+                          <Play className={cn('size-3', firingId === routine.id && 'animate-pulse')} />
+                          {firingId === routine.id ? '运行中' : '立即运行'}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          onClick={() => handleDelete(routine.id)}
+                          title="删除任务"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </Button>
                       </div>
                     </div>
 
@@ -281,7 +361,7 @@ export function RoutinesTab({ open = true, onOpenChange }: RoutinesTabProps) {
                       <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
                         <Clock3 className="size-3 text-text-tertiary" />
                         {TRIGGER_LABELS[triggerType] || triggerType}
-                        {routine.triggerValue && ` ${routine.triggerValue}`}
+                        {routine.trigger?.schedule && ` ${routine.trigger.schedule}`}
                       </span>
                       <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
                         <CircleCheck className="size-3 text-primary" />
@@ -306,6 +386,11 @@ export function RoutinesTab({ open = true, onOpenChange }: RoutinesTabProps) {
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/30">
             <div className="w-[400px] rounded-2xl border border-border bg-card p-6 shadow-xl">
               <h3 className="mb-4 text-base font-bold text-foreground">新建定时任务</h3>
+              {createError && (
+                <div className="mb-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                  {createError}
+                </div>
+              )}
               <div className="space-y-3">
                 <div>
                   <label className="mb-1 block text-xs font-medium text-foreground">名称</label>
@@ -328,33 +413,58 @@ export function RoutinesTab({ open = true, onOpenChange }: RoutinesTabProps) {
                 </div>
                 <div>
                   <label className="mb-1 block text-xs font-medium text-foreground">触发方式</label>
-                  <select
+                  <Select
                     value={newTrigger}
-                    onChange={(e) => setNewTrigger(e.target.value as 'manual' | 'time' | 'event')}
-                    className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+                    onValueChange={(v) => setNewTrigger(v as 'manual' | 'time' | 'event')}
                   >
-                    <option value="manual">手动</option>
-                    <option value="time">时间（Cron）</option>
-                    <option value="event">事件</option>
-                  </select>
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="manual">手动</SelectItem>
+                      <SelectItem value="time">时间（Cron）</SelectItem>
+                      <SelectItem value="event">事件</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 {newTrigger === 'time' && (
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-foreground">Cron 表达式</label>
+                    <label className="mb-1 block text-xs font-medium text-foreground">执行频率</label>
+                    <CronSchedulePicker
+                      value={newCronSchedule}
+                      onChange={setNewCronSchedule}
+                    />
+                  </div>
+                )}
+                {newTrigger === 'event' && (
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-foreground">触发正则（匹配消息内容）</label>
                     <input
-                      value={newCron}
-                      onChange={(e) => setNewCron(e.target.value)}
-                      placeholder="例如: 0 9 * * *"
+                      value={newPattern}
+                      onChange={(e) => setNewPattern(e.target.value)}
+                      placeholder="例如: .*报告.*（留空则匹配所有消息）"
                       className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
                     />
                   </div>
                 )}
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-foreground">
+                    执行提示词 <span className="text-destructive">*</span>
+                  </label>
+                  <textarea
+                    value={newPrompt}
+                    onChange={(e) => setNewPrompt(e.target.value)}
+                    placeholder="任务触发时发给 AI 的指令，例如：总结今日工作进展并发送通知"
+                    rows={3}
+                    className="w-full resize-none rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+                  />
+                </div>
               </div>
               <div className="mt-5 flex justify-end gap-2">
                 <Button variant="outline" size="sm" onClick={() => setShowCreate(false)}>
                   取消
                 </Button>
-                <Button size="sm" onClick={handleCreate} disabled={!newName.trim()}>
+                <Button size="sm" onClick={handleCreate} disabled={!newName.trim() || !newDesc.trim() || !newPrompt.trim()}>
                   创建
                 </Button>
               </div>

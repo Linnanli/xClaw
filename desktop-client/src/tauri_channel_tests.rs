@@ -34,6 +34,7 @@ mod tests {
             message_id: "m-1".into(),
             content: "Hello".into(),
             thread_id: "t-1".into(),
+            source: "chat".into(),
         };
         let json: serde_json::Value = serde_json::to_value(&event).unwrap();
 
@@ -255,13 +256,14 @@ mod tests {
             message_id: "m-1".into(),
             content: "Here is the result".into(),
             thread_id: "t-1".into(),
+            source: "chat".into(),
         };
         let json: serde_json::Value = serde_json::to_value(&event).unwrap();
 
         // 验证 Response 事件只包含预期字段
         let obj = json.as_object().unwrap();
         let expected_fields: std::collections::HashSet<&str> =
-            ["type", "message_id", "content", "thread_id"]
+            ["type", "message_id", "content", "thread_id", "source"]
                 .iter()
                 .copied()
                 .collect();
@@ -280,6 +282,7 @@ mod tests {
             message_id: "".into(),
             content: "".into(),
             thread_id: "".into(),
+            source: "chat".into(),
         };
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains(r#""content":"""#));
@@ -291,6 +294,7 @@ mod tests {
             message_id: "m-1".into(),
             content: "你好世界 🌍 مرحبا".into(),
             thread_id: "t-1".into(),
+            source: "chat".into(),
         };
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("你好世界"));
@@ -303,6 +307,7 @@ mod tests {
             message_id: "m-1".into(),
             content: r#"He said "hello" and <script>alert('xss')</script>"#.into(),
             thread_id: "t-1".into(),
+            source: "chat".into(),
         };
         // 序列化不应 panic
         let json = serde_json::to_string(&event).unwrap();
@@ -321,6 +326,7 @@ mod tests {
             message_id: "m-1".into(),
             content: long_content.clone(),
             thread_id: "t-1".into(),
+            source: "chat".into(),
         };
         let json = serde_json::to_string(&event).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();

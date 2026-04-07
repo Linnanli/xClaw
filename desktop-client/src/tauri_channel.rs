@@ -43,6 +43,10 @@ pub enum ChatEvent {
         message_id: String,
         content: String,
         thread_id: String,
+        /// 消息来源，用于前端区分普通聊天和定时任务通知。
+        /// "chat" = 普通聊天回复，"routine" = 定时任务通知。
+        #[serde(default)]
+        source: String,
     },
     /// Agent 正在思考。
     #[serde(rename = "thinking")]
@@ -299,6 +303,7 @@ impl Channel for TauriChannel {
             message_id: msg.id.to_string(),
             content: response.content,
             thread_id,
+            source: "chat".to_string(),
         };
         self.emit_event(&event)
     }
@@ -338,6 +343,7 @@ impl Channel for TauriChannel {
             message_id: uuid::Uuid::new_v4().to_string(),
             content: response.content,
             thread_id: response.thread_id.unwrap_or_default(),
+            source: "routine".to_string(),
         };
         self.emit_event(&event)
     }
@@ -440,12 +446,14 @@ mod tests {
             message_id: "msg-1".into(),
             content: "Hello".into(),
             thread_id: "t-1".into(),
+            source: "chat".into(),
         };
         let json: serde_json::Value = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "response");
         assert_eq!(json["message_id"], "msg-1");
         assert_eq!(json["content"], "Hello");
         assert_eq!(json["thread_id"], "t-1");
+        assert_eq!(json["source"], "chat");
     }
 
     /// 验证 thinking 事件格式。

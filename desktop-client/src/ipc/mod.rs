@@ -44,6 +44,10 @@ mod approval_tests;
 mod dlp_tests;
 
 #[cfg(test)]
+#[path = "routines_tests.rs"]
+mod routines_tests;
+
+#[cfg(test)]
 #[path = "logs_tests.rs"]
 mod logs_tests;
 
@@ -54,10 +58,6 @@ mod jobs_tests;
 #[cfg(test)]
 #[path = "models_tests.rs"]
 mod models_tests;
-
-#[cfg(test)]
-#[path = "routines_tests.rs"]
-mod routines_tests;
 
 // 统一 re-export 所有 Tauri Command
 pub use approval::*;
