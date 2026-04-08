@@ -2,10 +2,50 @@
   "servers": {
     "assistant-ui": {
       "command": "npx",
+      "args": ["-y", "@assistant-ui/mcp-docs-server"],
+      "type": "stdio"
+    },
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp@latest"],
+      "type": "stdio"
+    },
+    "chrome-devtools": {
+      "command": "npx",
       "args": [
         "-y",
-        "@assistant-ui/mcp-docs-server"
+        "chrome-devtools-mcp@latest",
+        "--channel=stable",
+        "--headless=false",
+        "--isolated=true",
+        "--viewport=1920x1080",
+        "--chromeArg=--incognito"
       ],
+      "type": "stdio"
+    },
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "type": "stdio"
+    },
+    "thinking": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "type": "stdio"
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"],
+      "type": "stdio"
+    },
+    "shadcn": {
+      "command": "npx",
+      "args": ["shadcn@latest", "mcp"],
+      "type": "stdio"
+    },
+    "pencil": {
+      "command": "/Users/nallylin/.pencil/mcp/kiro/out/mcp-server-darwin-x64",
+      "args": ["--app", "kiro"],
       "type": "stdio"
     }
   }
