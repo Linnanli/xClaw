@@ -401,7 +401,7 @@ const UserMessage: FC = () => {
 
   return (
     <MessagePrimitive.Root
-      className="aui-user-message-root fade-in slide-in-from-bottom-1 mx-auto grid w-full max-w-(--thread-max-width) animate-in auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 py-3 duration-150 [&:where(>*)]:col-start-2"
+      className="aui-user-message-root fade-in slide-in-from-bottom-1 grid w-full max-w-(--thread-max-width) animate-in auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 py-3 duration-150 [&:where(>*)]:col-start-2"
       data-role="user"
     >
       <UserMessageAttachments />

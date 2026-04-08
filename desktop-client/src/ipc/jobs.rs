@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 use uuid::Uuid;
 
+use ironclaw::context::JobState;
 use crate::state::EngineState;
 
 // ─── 数据类型 ────────────────────────────────────────────────────────
@@ -20,6 +21,8 @@ pub struct JobInfoResponse {
     pub created_at: String,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
+    /// 关联的对话 thread ID，用于前端点击任务时跳转到对应对话
+    pub conversation_id: Option<String>,
 }
 
 /// 任务事件（前端展示用）。
@@ -35,6 +38,26 @@ pub struct JobEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobEventsResponse {
     pub job_id: String,
+    pub events: Vec<JobEvent>,
+}
+
+/// 任务详情（点击任务卡片时加载）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobDetailResponse {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub source: String,
+    pub created_at: String,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub conversation_id: Option<String>,
+    /// 失败原因（手动/定时/事件任务失败时存在）
+    pub failure_reason: Option<String>,
+    /// Token 消耗（agent 任务）
+    pub total_tokens_used: Option<u64>,
+    /// 事件历史（手动/定时/事件均覆盖）
     pub events: Vec<JobEvent>,
 }
 
@@ -61,24 +84,99 @@ pub async fn ic_list_jobs(
     state: State<'_, EngineState>,
 ) -> Result<Vec<JobInfoResponse>, String> {
     let state = state.get()?;
-    let db = state.db.as_ref().ok_or("Database not available")?;
+    let db = state.db.as_ref().ok_or("Database not available")?.clone();
 
     let jobs = db
         .list_agent_jobs_for_user(&state.owner_id)
         .await
         .map_err(|e| format!("Failed to list jobs: {}", e))?;
 
-    Ok(jobs
+    let mut tasks = tokio::task::JoinSet::new();
+    for j in jobs {
+        let db = db.clone();
+        tasks.spawn(async move {
+            let conversation_id = db
+                .get_job(j.id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|ctx| ctx.conversation_id)
+                .map(|id| id.to_string());
+            JobInfoResponse {
+                id: j.id.to_string(),
+                title: j.title,
+                status: j.status,
+                created_at: j.created_at.to_rfc3339(),
+                started_at: j.started_at.map(|t| t.to_rfc3339()),
+                completed_at: j.completed_at.map(|t| t.to_rfc3339()),
+                conversation_id,
+            }
+        });
+    }
+
+    let mut responses = Vec::new();
+    while let Some(res) = tasks.join_next().await {
+        responses.push(res.map_err(|e| format!("Task join error: {e}"))?);
+    }
+    Ok(responses)
+}
+
+/// 获取任务详情（含运行结果、失败原因、事件历史）。
+///
+/// 聚合多个数据库查询，供前端任务详情视图使用。
+/// 适用于手动、定时、事件三种任务类型。
+#[tauri::command]
+pub async fn ic_get_job_detail(
+    state: State<'_, EngineState>,
+    job_id: String,
+) -> Result<JobDetailResponse, String> {
+    let state = state.get()?;
+    let uuid = Uuid::parse_str(&job_id)
+        .map_err(|_| format!("Invalid job ID: {}", job_id))?;
+
+    let db = state.db.as_ref().ok_or("Database not available")?;
+
+    let ctx = db
+        .get_job(uuid)
+        .await
+        .map_err(|e| format!("Failed to load job: {}", e))?
+        .ok_or_else(|| format!("Job not found: {}", job_id))?;
+
+    let failure_reason = if ctx.state == JobState::Failed {
+        db.get_agent_job_failure_reason(uuid)
+            .await
+            .unwrap_or(None)
+    } else {
+        None
+    };
+
+    let events = db
+        .list_job_events(uuid, None)
+        .await
+        .unwrap_or_default()
         .into_iter()
-        .map(|j| JobInfoResponse {
-            id: j.id.to_string(),
-            title: j.title,
-            status: j.status,
-            created_at: j.created_at.to_rfc3339(),
-            started_at: j.started_at.map(|t| t.to_rfc3339()),
-            completed_at: j.completed_at.map(|t| t.to_rfc3339()),
+        .map(|e| JobEvent {
+            id: e.id,
+            event_type: e.event_type,
+            data: e.data,
+            created_at: e.created_at.to_rfc3339(),
         })
-        .collect())
+        .collect();
+
+    Ok(JobDetailResponse {
+        id: job_id,
+        title: ctx.title,
+        description: ctx.description,
+        status: ctx.state.to_string(),
+        source: "direct".to_string(),
+        created_at: ctx.created_at.to_rfc3339(),
+        started_at: ctx.started_at.map(|t| t.to_rfc3339()),
+        completed_at: ctx.completed_at.map(|t| t.to_rfc3339()),
+        conversation_id: ctx.conversation_id.map(|id| id.to_string()),
+        failure_reason,
+        total_tokens_used: (ctx.total_tokens_used > 0).then_some(ctx.total_tokens_used),
+        events,
+    })
 }
 
 /// 获取任务事件历史。

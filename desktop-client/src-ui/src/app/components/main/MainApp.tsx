@@ -23,7 +23,8 @@ import { sessionApi } from '../../utils/tauri';
 import { ShortcutManager, SHORTCUTS } from '../../utils/shortcuts';
 import { tracing } from '../../utils/tracing';
 import { useChatNavigation } from '../../hooks/useChatNavigation';
-import { EngineReadyProvider } from '../../hooks/useEngineReady';
+import { EngineReadyProvider, useEngineReady } from '../../hooks/useEngineReady';
+import { useRunningJobs } from '../../hooks/useRunningJobs';
 
 const NAV_TITLES: Record<NavItem, string> = {
   chat: '聊天',
@@ -33,6 +34,14 @@ const NAV_TITLES: Record<NavItem, string> = {
 };
 
 export function MainApp() {
+  return (
+    <EngineReadyProvider>
+      <MainAppContent />
+    </EngineReadyProvider>
+  );
+}
+
+function MainAppContent() {
   const [activeNav, setActiveNav] = useState<NavItem>('chat');
   const {
     selectedThreadId,
@@ -48,8 +57,10 @@ export function MainApp() {
   const [jobsOpen, setJobsOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [routinesOpen, setRoutinesOpen] = useState(false);
+  const { readyKey: engineReadyKey } = useEngineReady();
   const { config: watermarkConfig, loading: watermarkLoading } = useWatermark();
   const { themeMode, setTheme } = useTheme();
+  const runningJobs = useRunningJobs();
 
   // 监听定时任务完成通知，自动跳转到对应对话
   useEffect(() => {
@@ -125,6 +136,7 @@ export function MainApp() {
             onThreadSelect={selectThread}
             pendingPrompt={pendingPrompt}
             onPendingPromptSent={clearPendingPrompt}
+            engineReadyKey={engineReadyKey}
           />
         );
       case 'logs':
@@ -135,24 +147,24 @@ export function MainApp() {
   };
 
   return (
-    <EngineReadyProvider>
-      <SidebarProvider defaultOpen>
-        <AppSidebar
-          activeNav={activeNav}
-          onNavChange={handleNavChange}
-          selectedThreadId={selectedThreadId}
-          onThreadSelect={selectThread}
-          onNewChat={handleNewChat}
-          refreshKey={sidebarRefreshKey}
+    <SidebarProvider defaultOpen>
+      <AppSidebar
+        activeNav={activeNav}
+        onNavChange={handleNavChange}
+        selectedThreadId={selectedThreadId}
+        onThreadSelect={selectThread}
+        onNewChat={handleNewChat}
+        refreshKey={sidebarRefreshKey}
+      />
+      <SidebarInset>
+        <AppHeader
+          title={NAV_TITLES[activeNav]}
+          runningJobs={runningJobs}
+          onJobsClick={() => setJobsOpen(true)}
+          onNotificationsClick={() => setNotificationsOpen(true)}
+          theme={themeMode}
+          onThemeChange={setTheme}
         />
-        <SidebarInset>
-          <AppHeader
-            title={NAV_TITLES[activeNav]}
-            onJobsClick={() => setJobsOpen(true)}
-            onNotificationsClick={() => setNotificationsOpen(true)}
-            theme={themeMode}
-            onThemeChange={setTheme}
-          />
           <div className="min-h-0 flex-1 overflow-hidden">{renderContent()}</div>
         </SidebarInset>
 
@@ -167,7 +179,15 @@ export function MainApp() {
           }}
         />
 
-        <JobsPanel open={jobsOpen} onOpenChange={setJobsOpen} />
+        <JobsPanel
+          open={jobsOpen}
+          onOpenChange={setJobsOpen}
+          onJobClick={(conversationId, prompt) => {
+            setJobsOpen(false);
+            setActiveNav('chat');
+            openRoutineThread(conversationId, prompt);
+          }}
+        />
 
         <NotificationsPanel open={notificationsOpen} onOpenChange={setNotificationsOpen} />
 
@@ -181,7 +201,6 @@ export function MainApp() {
             spacing={watermarkConfig.spacing}
           />
         )}
-      </SidebarProvider>
-    </EngineReadyProvider>
+    </SidebarProvider>
   );
 }

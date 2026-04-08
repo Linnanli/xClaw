@@ -93,6 +93,16 @@ pub enum ChatEvent {
     /// 建议的后续消息。
     #[serde(rename = "suggestions")]
     Suggestions { suggestions: Vec<String> },
+    /// 后台任务状态变更（job 创建/完成时推送）。
+    ///
+    /// 前端用于实时更新任务列表和头部运行中计数，无需轮询。
+    #[serde(rename = "job_status")]
+    JobStatus {
+        job_id: String,
+        title: String,
+        /// "in_progress" | "completed" | "failed"
+        status: String,
+    },
     /// 本轮对话激活的技能列表（desktop-client 侧检测，不依赖 ironclaw 事件）。
     ///
     /// 在 `send_chat_message` 中通过 `prefilter_skills` 本地匹配后发出，
@@ -102,6 +112,51 @@ pub enum ChatEvent {
         /// 激活的技能名称列表（按匹配分数排序）。
         skills: Vec<String>,
     },
+}
+
+// ---------------------------------------------------------------------------
+// TauriJobEventSink — Worker 事件广播到 Tauri IPC
+// ---------------------------------------------------------------------------
+
+/// 实现 `JobEventSink` trait，将 Worker 的 job 事件转为 `ChatEvent::JobStatus` 推送到前端。
+///
+/// 只关注 `"result"` 和 `"status"` 事件类型（任务完成/状态变更），
+/// 其他事件（tool_use、reasoning 等）在桌面客户端不需要实时推送。
+pub struct TauriJobEventSink {
+    app_handle: AppHandle,
+}
+
+impl TauriJobEventSink {
+    pub fn new(app_handle: AppHandle) -> Self {
+        Self { app_handle }
+    }
+}
+
+impl ironclaw::worker::JobEventSink for TauriJobEventSink {
+    fn send_job_event(&self, job_id: uuid::Uuid, event_type: &str, data: &serde_json::Value) {
+        let event = match event_type {
+            "result" | "status" => {
+                let status = data
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| data.get("message").and_then(|v| v.as_str()))
+                    .unwrap_or("unknown")
+                    .to_string();
+                let title = data
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                ChatEvent::JobStatus {
+                    job_id: job_id.to_string(),
+                    title,
+                    status,
+                }
+            }
+            _ => return, // tool_use、reasoning 等不推送
+        };
+        let _ = self.app_handle.emit("chat-event", &event);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -195,10 +250,11 @@ impl TauriChannel {
             StatusUpdate::JobStarted {
                 job_id,
                 title,
-                browse_url,
-            } => ChatEvent::Status {
-                message: format!("Job started: {} ({}) — {}", title, job_id, browse_url),
-                level: "info".into(),
+                ..
+            } => ChatEvent::JobStatus {
+                job_id: job_id.clone(),
+                title: title.clone(),
+                status: "in_progress".into(),
             },
             StatusUpdate::ApprovalNeeded {
                 request_id,
@@ -505,5 +561,45 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         // parameters 不应出现在前端事件中（TauriChannel 不转发 parameters）
         assert!(!json.contains("REDACTED"));
+    }
+
+    /// 契约测试：JobStarted → job_status 事件，字段与前端 TypeScript 类型匹配。
+    ///
+    /// 前端类型：
+    /// ```typescript
+    /// { type: 'job_status'; job_id: string; title: string; status: string }
+    /// ```
+    #[test]
+    fn test_contract_job_started_maps_to_job_status_event() {
+        let status = StatusUpdate::JobStarted {
+            job_id: "550e8400-e29b-41d4-a716-446655440000".into(),
+            title: "分析代码库".into(),
+            browse_url: "http://localhost".into(),
+        };
+        let event = TauriChannel::status_to_event(&status);
+        let json = serde_json::to_value(&event).expect("should serialize");
+
+        assert_eq!(json["type"], "job_status");
+        assert_eq!(json["job_id"], "550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(json["title"], "分析代码库");
+        assert_eq!(json["status"], "in_progress");
+
+        let obj = json.as_object().expect("should be object");
+        assert_eq!(obj.len(), 4, "job_status should have exactly 4 fields (type + 3)");
+    }
+
+    /// 安全审计：job_status 事件不应泄露 user_id 或内部字段。
+    #[test]
+    fn test_audit_job_status_no_sensitive_fields() {
+        let status = StatusUpdate::JobStarted {
+            job_id: "job-001".into(),
+            title: "任务标题".into(),
+            browse_url: "http://localhost".into(),
+        };
+        let event = TauriChannel::status_to_event(&status);
+        let json_str = serde_json::to_string(&event).expect("should serialize");
+
+        assert!(!json_str.contains("user_id"), "user_id should not be exposed");
+        assert!(!json_str.contains("browse_url"), "browse_url should not be forwarded to frontend");
     }
 }

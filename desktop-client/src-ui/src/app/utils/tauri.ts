@@ -544,16 +544,23 @@ export interface JobInfo {
   created_at: string;
   updated_at?: string;
   title?: string;
+  /** 关联的对话 thread ID，点击任务时用于跳转 */
+  conversation_id?: string;
 }
 
 export interface JobDetail {
   id: string;
+  title: string;
+  description: string;
   status: string;
+  source: string;
   created_at: string;
-  updated_at?: string;
-  title?: string;
-  description?: string;
-  events: any[];
+  started_at?: string;
+  completed_at?: string;
+  conversation_id?: string;
+  failure_reason?: string;
+  total_tokens_used?: number;
+  events: JobEvent[];
 }
 
 export const jobApi = {
@@ -565,6 +572,7 @@ export const jobApi = {
       created_at: string;
       started_at?: string;
       completed_at?: string;
+      conversation_id?: string;
     }>>('ic_list_jobs');
     return items.map((j) => ({
       id: j.id,
@@ -573,11 +581,11 @@ export const jobApi = {
       created_at: j.created_at,
       started_at: j.started_at,
       completed_at: j.completed_at,
+      conversation_id: j.conversation_id,
     }));
   },
-  getJobDetail: async (_jobId: string): Promise<JobDetail> => {
-    throw new Error('Jobs not yet supported in embedded mode');
-  },
+  getJobDetail: (jobId: string): Promise<JobDetail> =>
+    invokeTauri<JobDetail>('ic_get_job_detail', { jobId }),
   cancelJob: async (_jobId: string): Promise<void> => {},
   restartJob: async (_jobId: string): Promise<void> => {},
   getJobEvents: (jobId: string) =>

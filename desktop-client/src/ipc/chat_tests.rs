@@ -110,4 +110,55 @@ mod tests {
         assert!(!json_str.contains("model"), "model info should not leak in response");
         assert!(!json_str.contains("deepseek"), "model name should not leak in response");
     }
+
+    // =========================================================================
+    // normalize_base_url 测试 — 验证 /v1 不被剥掉（修复 404 bug）
+    // =========================================================================
+
+    #[test]
+    fn test_normalize_base_url_preserves_v1() {
+        use crate::ipc::chat::normalize_base_url;
+
+        // /v1 是 base URL 的一部分，不能剥掉
+        assert_eq!(
+            normalize_base_url("https://dashscope.aliyuncs.com/compatible-mode/v1"),
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "/v1 should be preserved"
+        );
+        assert_eq!(
+            normalize_base_url("https://api.openai.com/v1"),
+            "https://api.openai.com/v1",
+            "/v1 should be preserved for OpenAI"
+        );
+    }
+
+    #[test]
+    fn test_normalize_base_url_strips_completions_suffix() {
+        use crate::ipc::chat::normalize_base_url;
+
+        // /chat/completions 是 rig-core 自动拼接的，应该剥掉
+        assert_eq!(
+            normalize_base_url("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"),
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        );
+        assert_eq!(
+            normalize_base_url("https://api.openai.com/v1/chat/completions"),
+            "https://api.openai.com/v1",
+        );
+        assert_eq!(
+            normalize_base_url("https://api.openai.com/v1/chat/completions/"),
+            "https://api.openai.com/v1",
+            "trailing slash should also be handled"
+        );
+    }
+
+    #[test]
+    fn test_normalize_base_url_strips_trailing_slash() {
+        use crate::ipc::chat::normalize_base_url;
+
+        assert_eq!(
+            normalize_base_url("https://api.openai.com/v1/"),
+            "https://api.openai.com/v1",
+        );
+    }
 }

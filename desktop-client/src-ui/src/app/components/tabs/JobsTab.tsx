@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Briefcase, Clock, CheckCircle, XCircle, AlertCircle, RefreshCw, X, Play, StopCircle, Send, History } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
-import { jobApi, JobInfo, JobDetail, JobEvent, JobEventsResponse } from '../../utils/tauri';
+import { jobApi, JobInfo, JobDetail, JobEvent } from '../../utils/tauri';
 import { useEngineReady } from '../../hooks/useEngineReady';
 
 type StatusFilter = 'all' | 'pending' | 'in_progress' | 'completed' | 'failed' | 'stuck';
@@ -400,7 +400,7 @@ export function JobsTab() {
                     <div>
                       <div className={`text-xs mb-1 ${theme === 'dark' ? 'text-gray-400' : 'text-[#999]'}`}>更新时间</div>
                       <div className={`text-sm ${theme === 'dark' ? 'text-white' : 'text-[#333]'}`}>
-                        {selectedJob.updated_at ? new Date(selectedJob.updated_at).toLocaleString('zh-CN') : '-'}
+                      {selectedJob.completed_at ? new Date(selectedJob.completed_at).toLocaleString('zh-CN') : '-'}
                       </div>
                     </div>
                   </div>

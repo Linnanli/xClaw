@@ -156,6 +156,11 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     let routine_engine_slot: Arc<tokio::sync::RwLock<Option<Arc<RoutineEngine>>>> =
         Arc::new(tokio::sync::RwLock::new(None));
 
+    // 创建共享 scheduler slot — Agent 构建完成后填充，
+    // 使 CreateJobTool 能通过 Scheduler 调度本地任务并写入 agent_jobs 表。
+    let scheduler_slot: ironclaw::tools::builtin::SchedulerSlot =
+        Arc::new(tokio::sync::RwLock::new(None));
+
     let app_state = AppState {
         msg_sender,
         db: components.db.clone(),
@@ -284,11 +289,24 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         },
     );
 
-    // ── Phase 7: 注册消息工具 ─────────────────────────────────────
+    // ── Phase 7: 注册工具 ─────────────────────────────────────────
     components
         .tools
         .register_message_tools(Arc::clone(&channels), components.extension_manager.clone())
         .await;
+
+    // 注册 job 管理工具，传入 scheduler_slot 使 CreateJobTool 能真正调度任务。
+    // store 和 prompt_queue 在桌面客户端不需要（无 sandbox、无 job_event_tx）。
+    components.tools.register_job_tools(
+        Arc::clone(&components.context_manager),
+        Some(scheduler_slot.clone()),
+        None,  // job_manager: 无 sandbox
+        components.db.clone(),
+        None,  // job_event_tx: 无 SSE 广播
+        None,  // inject_tx: 无需注入
+        None,  // prompt_queue: 无 sandbox prompt
+        None,  // secrets_store: 无 sandbox credentials
+    );
 
     // ── Phase 8: 构建 Agent ───────────────────────────────────────
     let session_manager = Arc::clone(&components.agent_session_manager);
@@ -308,6 +326,10 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         hooks: components.hooks,
         cost_guard: components.cost_guard,
         sse_tx: None, // 不使用 SSE — TauriChannel 直接推送
+        job_event_sink: Some(Arc::new(
+            crate::tauri_channel::TauriJobEventSink::new(app_handle.clone()),
+        )),
+        channels_for_jobs: Some(Arc::clone(&channels)),
         http_interceptor: components
             .recording_handle
             .as_ref()
@@ -336,6 +358,9 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         Some(session_manager),
     );
     agent.set_routine_engine_slot(routine_engine_slot);
+
+    // 填充 scheduler slot — Agent 构建完成后 Scheduler 才存在
+    *scheduler_slot.write().await = Some(agent.scheduler());
 
     tracing::info!("Agent constructed, starting message loop...");
 

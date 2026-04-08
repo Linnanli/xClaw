@@ -361,6 +361,7 @@ mod tests {
             "approval_needed",
             "image_generated",
             "suggestions",
+            "job_status",
         ];
 
         let cases: Vec<StatusUpdate> = vec![

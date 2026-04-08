@@ -88,8 +88,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .ok()
                         .flatten()
                         .and_then(|row| {
-                            let v: Option<String> = row.get(0);
-                            v.and_then(|s| s.parse::<i64>().ok())
+                            let v: Option<serde_json::Value> = row.get(0);
+                            v.and_then(|j| match j {
+                                serde_json::Value::Number(n) => n.as_i64(),
+                                serde_json::Value::String(s) => s.parse::<i64>().ok(),
+                                _ => None,
+                            })
                         })
                         .unwrap_or(90);
 

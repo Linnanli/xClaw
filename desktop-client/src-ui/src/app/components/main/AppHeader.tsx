@@ -4,7 +4,7 @@
  * 设计稿：56px 高度，左侧面包屑标题，右侧任务状态 + 通知铃铛 + 主题切换。
  */
 
-import { Bell, Briefcase } from 'lucide-react';
+import { Bell, Briefcase, Loader2 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { cn } from '../ui/utils';
 import { ThemeToggle } from './ThemeToggle';
@@ -50,20 +50,26 @@ export function AppHeader({
       {/* Right: actions */}
       <div className="flex items-center gap-3">
         {/* Jobs button */}
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-8 gap-1.5 rounded-lg border-border bg-secondary text-xs font-medium"
-          onClick={onJobsClick}
-        >
-          <Briefcase className="size-3.5" />
-          <span>任务</span>
-          {runningJobs > 0 && (
-            <span className="ml-0.5 flex size-5 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
-              {runningJobs}
-            </span>
-          )}
-        </Button>
+        {runningJobs > 0 ? (
+          <button
+            onClick={onJobsClick}
+            className="flex h-8 items-center gap-1.5 rounded-lg border border-[#E5E4E1] bg-[#F5F4F1] px-3 text-xs font-medium text-[#3D8A5A]"
+          >
+            <Loader2 className="size-3.5 animate-spin text-[#3D8A5A]" />
+            <span>{runningJobs} 个任务运行中</span>
+            <span className="size-1.5 rounded-full bg-[#3D8A5A]" />
+          </button>
+        ) : (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1.5 rounded-lg border-border bg-secondary text-xs font-medium"
+            onClick={onJobsClick}
+          >
+            <Briefcase className="size-3.5" />
+            <span>任务</span>
+          </Button>
+        )}
 
         {/* Notification bell */}
         <Button

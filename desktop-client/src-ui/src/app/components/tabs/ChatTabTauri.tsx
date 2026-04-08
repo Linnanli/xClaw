@@ -27,9 +27,11 @@ interface ChatTabTauriProps {
   /** 待发送的 routine 提示词，挂载后自动通过 send_chat_message 发送 */
   pendingPrompt?: string | null;
   onPendingPromptSent?: () => void;
+  /** 引擎就绪计数器，变化时重新加载历史消息 */
+  engineReadyKey?: number;
 }
 
-export function ChatTabTauri({ selectedThreadId, onThreadSelect, pendingPrompt, onPendingPromptSent }: ChatTabTauriProps) {
+export function ChatTabTauri({ selectedThreadId, onThreadSelect, pendingPrompt, onPendingPromptSent, engineReadyKey }: ChatTabTauriProps) {
   const [customModelOpen, setCustomModelOpen] = useState(false);
   // 模型选择状态提升到此层，避免 TauriRuntimeProvider 因 key 变化重新挂载时丢失
   const [selectedModelId, setSelectedModelId] = useState<string | undefined>(undefined);
@@ -54,6 +56,7 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect, pendingPrompt, 
       onOpenCustomModelModal={() => setCustomModelOpen(true)}
       pendingPrompt={pendingPrompt}
       onPendingPromptSent={onPendingPromptSent}
+      engineReadyKey={engineReadyKey}
     >
       <div className="relative flex h-full flex-col bg-background">
         <Thread />

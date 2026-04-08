@@ -73,7 +73,8 @@ type ChatEvent =
   | { type: 'approval_needed'; request_id: string; tool_name: string; description: string }
   | { type: 'status'; message: string; level: string }
   | { type: 'error'; message: string; code?: string }
-  | { type: 'connection_status'; connected: boolean; message: string };
+  | { type: 'connection_status'; connected: boolean; message: string }
+  | { type: 'job_status'; job_id: string; title: string; status: string };
 
 interface TauriRuntimeProviderProps {
   children: ReactNode;
@@ -88,6 +89,8 @@ interface TauriRuntimeProviderProps {
   /** 定时任务手动触发时的提示词，挂载后自动发送 */
   pendingPrompt?: string | null;
   onPendingPromptSent?: () => void;
+  /** 引擎就绪计数器，变化时重新加载历史消息 */
+  engineReadyKey?: number;
 }
 
 // ============================================================================
@@ -207,6 +210,7 @@ export function TauriRuntimeProvider({
   onOpenCustomModelModal,
   pendingPrompt,
   onPendingPromptSent,
+  engineReadyKey,
 }: TauriRuntimeProviderProps) {
   // 若有 pendingMessage，表示有任务正在执行，初始 isRunning = true
   const [messages, setMessages] = useState<TauriMessage[]>([]);
@@ -370,7 +374,7 @@ export function TauriRuntimeProvider({
     // onPendingPromptSent 通过 ref 引用，不放入依赖数组，
     // 避免 clearPendingPrompt 触发 effect 重跑覆盖 user 消息。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadId, pendingPrompt]);
+  }, [threadId, pendingPrompt, engineReadyKey]);
 
   // ── chat-event 监听 ──
   useEffect(() => {
@@ -521,6 +525,10 @@ export function TauriRuntimeProvider({
         if (event.connected) {
           loadModels();
         }
+        break;
+
+      case 'job_status':
+        // 由 useRunningJobs 直接监听处理，此处无需额外操作
         break;
     }
   }, [loadModels]);

@@ -48,8 +48,8 @@ const mockJobDetail = {
   title: 'Test Job 1',
   status: 'pending',
   description: 'Test job description',
+  source: 'direct',
   created_at: '2024-01-01T00:00:00Z',
-  updated_at: '2024-01-01T00:00:00Z',
   events: [],
 };
 

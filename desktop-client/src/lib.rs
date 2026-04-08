@@ -113,6 +113,7 @@ macro_rules! all_tauri_commands {
             desktop_client::ipc::ic_list_jobs,
             desktop_client::ipc::ic_job_events,
             desktop_client::ipc::ic_job_prompt,
+            desktop_client::ipc::ic_get_job_detail,
             // ── 日程管理 ────────────────────────────────────────
             desktop_client::ipc::ic_routine_runs,
             desktop_client::ipc::ic_list_routines,

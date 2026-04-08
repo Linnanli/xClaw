@@ -95,32 +95,36 @@ pub async fn send_chat_message(
     };
 
     // ── 模型切换 ──────────────────────────────────────────────────
-    if let Some(ref id) = model_id {
-        let switch_kind = classify_switch(state, api_base_url.as_deref());
-        tracing::info!(
-            message_id = %message_id,
-            model_id = %id,
-            api_base_url = ?api_base_url,
-            switch_kind = ?switch_kind,
-            current_provider_url = %state.provider_base_url.read().map(|g| g.clone()).unwrap_or_default(),
-            initial_base_url = %state.initial_base_url,
-            active_model = %state.llm.active_model_name(),
-            "Model switch decision"
-        );
-        match switch_kind {
-            SwitchKind::InPlace => switch_model_in_place(state, id),
-            SwitchKind::CrossProvider => {
-                switch_provider(state, id, api_base_url.as_deref(), api_key.as_deref())?;
+    // 命令（以 / 开头）不需要 LLM，跳过模型切换避免 api_key 脱敏值导致失败
+    let is_command = safe_content.starts_with('/');
+    if !is_command {
+        if let Some(ref id) = model_id {
+            let switch_kind = classify_switch(state, api_base_url.as_deref());
+            tracing::info!(
+                message_id = %message_id,
+                model_id = %id,
+                api_base_url = ?api_base_url,
+                switch_kind = ?switch_kind,
+                current_provider_url = %state.provider_base_url.read().map(|g| g.clone()).unwrap_or_default(),
+                initial_base_url = %state.initial_base_url,
+                active_model = %state.llm.active_model_name(),
+                "Model switch decision"
+            );
+            match switch_kind {
+                SwitchKind::InPlace => switch_model_in_place(state, id),
+                SwitchKind::CrossProvider => {
+                    switch_provider(state, id, api_base_url.as_deref(), api_key.as_deref())?;
+                }
+                SwitchKind::RestoreInitial => {
+                    restore_initial_provider(state, id);
+                }
             }
-            SwitchKind::RestoreInitial => {
-                restore_initial_provider(state, id);
-            }
+            tracing::info!(
+                message_id = %message_id,
+                active_model_after = %state.llm.active_model_name(),
+                "Model switch complete"
+            );
         }
-        tracing::info!(
-            message_id = %message_id,
-            active_model_after = %state.llm.active_model_name(),
-            "Model switch complete"
-        );
     }
 
     // ── Skill 激活通知（desktop-client 侧扩展）────────────────────
@@ -246,9 +250,15 @@ fn classify_switch(state: &crate::state::AppState, api_base_url: Option<&str>) -
 
     let initial = normalize_base_url(&state.initial_base_url);
 
-    if new_url == current {
+    // 容错比较：`https://host/v1` 和 `https://host` 视为同一 provider
+    let urls_match = |a: &str, b: &str| -> bool {
+        a == b
+            || a.trim_end_matches("/v1") == b.trim_end_matches("/v1")
+    };
+
+    if urls_match(&new_url, &current) {
         SwitchKind::InPlace
-    } else if !initial.is_empty() && new_url == initial {
+    } else if !initial.is_empty() && urls_match(&new_url, &initial) {
         SwitchKind::RestoreInitial
     } else {
         SwitchKind::CrossProvider
@@ -296,18 +306,19 @@ pub(crate) fn switch_provider(
 
 /// 规范化 API base URL：去掉 rig-core 会自动拼接的路径后缀。
 ///
-/// 与 `admin-backend/src/routes.rs` 中的 `normalize_api_base_url` 职责不同：
-/// - admin 端：保存时剥离 SDK 自动拼接的路径（`/chat/completions`、`/v1/messages`），
-///   但保留 `/v1`（它是 base URL 的一部分，不是 SDK 拼接的）。
-/// - 客户端：provider 比较时额外剥离 `/v1`，用于容错匹配
-///   （.env 配置可能带 `/v1`，admin 配置可能不带，两者应视为同一 provider）。
+/// rig-core 的 `CompletionsClient` 发请求时会在 base_url 后拼接 `/chat/completions`，
+/// 所以这里只剥掉用户可能多填的 `/chat/completions` 后缀。
+///
+/// `/v1` 是 base URL 的一部分（如 `https://dashscope.aliyuncs.com/compatible-mode/v1`），
+/// 不能剥掉，否则最终 URL 会缺少 `/v1` 路径段导致 404。
+///
+/// provider 比较时的容错匹配（带 `/v1` vs 不带）由 `classify_switch` 单独处理。
 pub(crate) fn normalize_base_url(url: &str) -> String {
     let trimmed = url.trim_end_matches('/');
     for suffix in &[
         "/v1/chat/completions",
         "/chat/completions",
         "/completions",
-        "/v1",
     ] {
         if let Some(base) = trimmed.strip_suffix(suffix) {
             return base.to_string();
