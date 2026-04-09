@@ -194,7 +194,6 @@ fn test_failure_unicode_in_display_name() {
     assert!(validate_create_request(&body).is_ok());
 }
 
-
 // ============================================================================
 // 测试连接失败路径
 // ============================================================================
@@ -266,7 +265,10 @@ fn test_failure_test_connection_401_rejected() {
 fn test_failure_test_connection_403_accepted_as_model_issue() {
     // 403 可能是模型级别权限问题（如智谱对不存在模型返回 403），不应视为 API Key 无效
     let result = classify_test_connection_status(403);
-    assert!(result.is_ok(), "403 应视为连接成功（模型或权限问题，非 API Key 无效）");
+    assert!(
+        result.is_ok(),
+        "403 应视为连接成功（模型或权限问题，非 API Key 无效）"
+    );
 }
 
 #[test]

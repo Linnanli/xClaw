@@ -92,19 +92,13 @@ mod tests {
 
     #[test]
     fn test_reporter_creation() {
-        let reporter = DataReporter::new(
-            "https://admin.example.com".into(),
-            "test-token".into(),
-        );
+        let reporter = DataReporter::new("https://admin.example.com".into(), "test-token".into());
         assert_eq!(reporter.queue_len(), 0);
     }
 
     #[test]
     fn test_reporter_enqueue() {
-        let reporter = DataReporter::new(
-            "https://admin.example.com".into(),
-            "test-token".into(),
-        );
+        let reporter = DataReporter::new("https://admin.example.com".into(), "test-token".into());
 
         reporter.enqueue(ClientReport::AuditLog {
             timestamp: "2025-01-01T00:00:00Z".into(),
@@ -117,10 +111,7 @@ mod tests {
 
     #[test]
     fn test_reporter_enqueue_multiple() {
-        let reporter = DataReporter::new(
-            "https://admin.example.com".into(),
-            "test-token".into(),
-        );
+        let reporter = DataReporter::new("https://admin.example.com".into(), "test-token".into());
 
         for i in 0..100 {
             reporter.enqueue(ClientReport::AuditLog {
@@ -135,11 +126,8 @@ mod tests {
 
     #[test]
     fn test_reporter_queue_overflow_drops_oldest() {
-        let reporter = DataReporter::new(
-            "https://admin.example.com".into(),
-            "test-token".into(),
-        )
-        .with_max_queue_size(10);
+        let reporter = DataReporter::new("https://admin.example.com".into(), "test-token".into())
+            .with_max_queue_size(10);
 
         // 填满队列
         for i in 0..10 {
@@ -164,11 +152,8 @@ mod tests {
 
     #[test]
     fn test_reporter_with_flush_interval() {
-        let reporter = DataReporter::new(
-            "https://admin.example.com".into(),
-            "test-token".into(),
-        )
-        .with_flush_interval(std::time::Duration::from_secs(60));
+        let reporter = DataReporter::new("https://admin.example.com".into(), "test-token".into())
+            .with_flush_interval(std::time::Duration::from_secs(60));
         assert_eq!(reporter.queue_len(), 0);
     }
 
@@ -460,10 +445,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_failure_flush_empty_queue() {
-        let reporter = DataReporter::new(
-            "https://admin.example.com".into(),
-            "test-token".into(),
-        );
+        let reporter = DataReporter::new("https://admin.example.com".into(), "test-token".into());
         let result = reporter.flush().await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 0);

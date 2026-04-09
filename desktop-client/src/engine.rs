@@ -18,17 +18,17 @@ use anyhow::Context;
 use tauri::{AppHandle, Emitter, Manager};
 use tracing;
 
-use ironclaw::agent::{Agent, AgentDeps};
 use ironclaw::agent::routine_engine::RoutineEngine;
+use ironclaw::agent::{Agent, AgentDeps};
 use ironclaw::app::{AppBuilder, AppBuilderFlags};
 use ironclaw::channels::ChannelManager;
 use ironclaw::config::Config;
 use ironclaw::hooks::bootstrap_hooks;
 use ironclaw::llm::create_session_manager;
 
-use crate::state::{AppState, EngineState};
 use crate::model_switch::ModelSwitchProvider;
 use crate::safety_bridge::SafetyBridge;
+use crate::state::{AppState, EngineState};
 use crate::tauri_channel::{ChatEvent, TauriChannel};
 /// 启动 IronClaw 引擎。
 ///
@@ -98,8 +98,8 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     // ── Phase 4: 注册到 ChannelManager ────────────────────────────
     // ConversationTracker 在此处创建并注入 TauriChannel，
     // 使对话消息能被追踪并定期上报（需求 16.16）。
-    let admin_url = std::env::var("ADMIN_BACKEND_URL")
-        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let admin_url =
+        std::env::var("ADMIN_BACKEND_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
     let client_token = std::env::var("ADMIN_AUTH_TOKEN").unwrap_or_default();
 
     let tracker = Arc::new(crate::conversation_tracker::ConversationTracker::new(
@@ -139,9 +139,10 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     // ── 模型切换 ──────────────────────────────────────────────────
     // model_override 在 AppState 和 ModelSwitchProvider 之间共享。
     let model_override = Arc::new(std::sync::RwLock::new(None::<String>));
-    let model_switch = Arc::new(
-        ModelSwitchProvider::new(Arc::clone(&components.llm), Arc::clone(&model_override)),
-    );
+    let model_switch = Arc::new(ModelSwitchProvider::new(
+        Arc::clone(&components.llm),
+        Arc::clone(&model_override),
+    ));
     let wrapped_llm: Arc<dyn ironclaw::llm::LlmProvider> = Arc::clone(&model_switch) as _;
 
     // 记录初始 provider 的 base URL（用于跨 provider 切换检测）。
@@ -185,7 +186,8 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         routine_engine_slot: Arc::clone(&routine_engine_slot),
     };
     // 从 Tauri managed state 获取 EngineState 并填充
-    let engine_state = app_handle.state::<EngineState>();    engine_state
+    let engine_state = app_handle.state::<EngineState>();
+    engine_state
         .initialize(app_state)
         .map_err(|e| anyhow::anyhow!(e))?;
 
@@ -210,18 +212,16 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             let engine_state = app_handle_clone.state::<EngineState>();
             match engine_state.get() {
-                Ok(state) => {
-                    match crate::ipc::dlp::do_sync_dlp_rules(&state.safety_bridge).await {
-                        Ok(result) => tracing::info!(
-                            rules = result.rules_synced,
-                            "DLP rules synced from admin backend on startup"
-                        ),
-                        Err(e) => tracing::warn!(
-                            error = %e,
-                            "Failed to sync DLP rules from admin backend (using built-in rules)"
-                        ),
-                    }
-                }
+                Ok(state) => match crate::ipc::dlp::do_sync_dlp_rules(&state.safety_bridge).await {
+                    Ok(result) => tracing::info!(
+                        rules = result.rules_synced,
+                        "DLP rules synced from admin backend on startup"
+                    ),
+                    Err(e) => tracing::warn!(
+                        error = %e,
+                        "Failed to sync DLP rules from admin backend (using built-in rules)"
+                    ),
+                },
                 Err(e) => tracing::warn!("Engine not ready for DLP sync: {}", e),
             }
         });
@@ -232,7 +232,8 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     // 实现需求 9.10：Admin 保存配置后客户端主动拉取，无需等待 5 分钟周期。
     {
         if !client_token.is_empty() {
-            let sync = crate::admin_sync::AdminConfigSync::new(admin_url.clone(), client_token.clone());
+            let sync =
+                crate::admin_sync::AdminConfigSync::new(admin_url.clone(), client_token.clone());
             tauri::async_runtime::spawn(async move {
                 sync.run_sync_loop_with_version_check().await;
             });
@@ -300,12 +301,12 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     components.tools.register_job_tools(
         Arc::clone(&components.context_manager),
         Some(scheduler_slot.clone()),
-        None,  // job_manager: 无 sandbox
+        None, // job_manager: 无 sandbox
         components.db.clone(),
-        None,  // job_event_tx: 无 SSE 广播
-        None,  // inject_tx: 无需注入
-        None,  // prompt_queue: 无 sandbox prompt
-        None,  // secrets_store: 无 sandbox credentials
+        None, // job_event_tx: 无 SSE 广播
+        None, // inject_tx: 无需注入
+        None, // prompt_queue: 无 sandbox prompt
+        None, // secrets_store: 无 sandbox credentials
     );
 
     // ── Phase 8: 构建 Agent ───────────────────────────────────────
@@ -326,18 +327,19 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         hooks: components.hooks,
         cost_guard: components.cost_guard,
         sse_tx: None, // 不使用 SSE — TauriChannel 直接推送
-        job_event_sink: Some(Arc::new(
-            crate::tauri_channel::TauriJobEventSink::new(app_handle.clone()),
-        )),
+        job_event_sink: Some(Arc::new(crate::tauri_channel::TauriJobEventSink::new(
+            app_handle.clone(),
+        ))),
         channels_for_jobs: Some(Arc::clone(&channels)),
         http_interceptor: components
             .recording_handle
             .as_ref()
             .map(|r| r.http_interceptor()),
-        transcription: config
-            .transcription
-            .create_provider()
-            .map(|p| Arc::new(ironclaw::llm::transcription::TranscriptionMiddleware::new(p))),
+        transcription: config.transcription.create_provider().map(|p| {
+            Arc::new(ironclaw::llm::transcription::TranscriptionMiddleware::new(
+                p,
+            ))
+        }),
         document_extraction: Some(Arc::new(
             ironclaw::document_extraction::DocumentExtractionMiddleware::new(),
         )),
@@ -486,8 +488,8 @@ pub(crate) async fn init_default_provider(state: &AppState) {
 async fn fetch_default_model(
     owner_id: &str,
 ) -> Result<Option<crate::ipc::models::ModelConfig>, String> {
-    let admin_url = std::env::var("ADMIN_BACKEND_URL")
-        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let admin_url =
+        std::env::var("ADMIN_BACKEND_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
 
     let url = if uuid::Uuid::parse_str(owner_id).is_ok() {
         format!("{}/api/client-models?user_id={}", admin_url, owner_id)

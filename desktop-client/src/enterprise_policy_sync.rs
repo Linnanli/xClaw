@@ -3,7 +3,7 @@
 //! 提供集中化策略管理、实时同步、审计追踪等企业级功能
 
 use crate::dlp::DlpResult;
-use crate::policy_sync::{PolicySyncManager, DlpPolicy, SensitiveOpPolicy, PolicyVersion};
+use crate::policy_sync::{DlpPolicy, PolicySyncManager, PolicyVersion, SensitiveOpPolicy};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
@@ -139,7 +139,7 @@ impl EnterprisePolicySyncManager {
     #[instrument]
     pub fn new(remote_config: RemotePolicyConfig) -> Self {
         info!("Initializing enterprise policy sync manager");
-        
+
         Self {
             local_manager: RwLock::new(PolicySyncManager::new()),
             remote_config: RwLock::new(remote_config),
@@ -159,7 +159,7 @@ impl EnterprisePolicySyncManager {
     #[instrument(skip(self))]
     pub async fn start_sync_service(&self) -> DlpResult<()> {
         info!("Starting policy sync service");
-        
+
         // 设置同步状态
         {
             let mut status = self.sync_status.write().await;
@@ -180,7 +180,7 @@ impl EnterprisePolicySyncManager {
     #[instrument(skip(self))]
     pub async fn stop_sync_service(&self) -> DlpResult<()> {
         info!("Stopping policy sync service");
-        
+
         // 停止定时器
         {
             let mut timer = self.sync_timer.write().await;
@@ -201,7 +201,7 @@ impl EnterprisePolicySyncManager {
     #[instrument(skip(self))]
     pub async fn sync_policies(&self) -> DlpResult<()> {
         debug!("Starting manual policy sync");
-        
+
         // 更新统计
         {
             let mut stats = self.sync_stats.write().await;
@@ -216,7 +216,10 @@ impl EnterprisePolicySyncManager {
                 {
                     let mut local = self.local_manager.write().await;
                     local.update_dlp_policies(dlp_policies.clone(), version.dlp_rules_version)?;
-                    local.update_sensitive_ops_policies(sensitive_ops_policies.clone(), version.sensitive_ops_version)?;
+                    local.update_sensitive_ops_policies(
+                        sensitive_ops_policies.clone(),
+                        version.sensitive_ops_version,
+                    )?;
                 }
 
                 // 更新统计
@@ -236,14 +239,15 @@ impl EnterprisePolicySyncManager {
                 }
 
                 // 记录变更事件
-                self.record_sync_event(dlp_policies.len(), sensitive_ops_policies.len()).await;
+                self.record_sync_event(dlp_policies.len(), sensitive_ops_policies.len())
+                    .await;
 
                 info!(
                     dlp_count = dlp_policies.len(),
                     sensitive_ops_count = sensitive_ops_policies.len(),
                     "Policy sync completed successfully"
                 );
-                
+
                 Ok(())
             }
             Err(e) => {
@@ -303,7 +307,7 @@ impl EnterprisePolicySyncManager {
     #[instrument(skip(self, config))]
     pub async fn update_remote_config(&self, config: RemotePolicyConfig) -> DlpResult<()> {
         info!("Updating remote policy configuration");
-        
+
         {
             let mut remote_config = self.remote_config.write().await;
             *remote_config = config;
@@ -333,7 +337,7 @@ impl EnterprisePolicySyncManager {
 
         // 启动定时同步
         let timer = interval(sync_interval);
-        
+
         {
             let mut sync_timer = self.sync_timer.write().await;
             *sync_timer = Some(timer);
@@ -348,14 +352,16 @@ impl EnterprisePolicySyncManager {
     }
 
     /// 从远程服务器获取策略
-    async fn fetch_remote_policies(&self) -> DlpResult<(Vec<DlpPolicy>, Vec<SensitiveOpPolicy>, PolicyVersion)> {
+    async fn fetch_remote_policies(
+        &self,
+    ) -> DlpResult<(Vec<DlpPolicy>, Vec<SensitiveOpPolicy>, PolicyVersion)> {
         debug!("Fetching policies from remote server");
-        
+
         #[cfg(test)]
         {
             // 测试环境：返回模拟数据
-            use crate::policy_sync::{DlpPolicy, SensitiveOpPolicy, PolicyVersion};
-            
+            use crate::policy_sync::{DlpPolicy, PolicyVersion, SensitiveOpPolicy};
+
             let dlp_policies = vec![
                 DlpPolicy {
                     id: "test-dlp-1".to_string(),
@@ -370,36 +376,39 @@ impl EnterprisePolicySyncManager {
                     severity: "medium".to_string(),
                 },
             ];
-            
-            let sensitive_ops_policies = vec![
-                SensitiveOpPolicy {
-                    id: "test-ops-1".to_string(),
-                    operation: "file_upload".to_string(),
-                    requires_approval: true,
-                    risk_level: "high".to_string(),
-                },
-            ];
-            
+
+            let sensitive_ops_policies = vec![SensitiveOpPolicy {
+                id: "test-ops-1".to_string(),
+                operation: "file_upload".to_string(),
+                requires_approval: true,
+                risk_level: "high".to_string(),
+            }];
+
             let version = PolicyVersion {
                 dlp_rules_version: 1,
                 sensitive_ops_version: 1,
                 last_sync: current_timestamp(),
             };
-            
+
             return Ok((dlp_policies, sensitive_ops_policies, version));
         }
-        
+
         #[cfg(not(test))]
         {
             // 生产环境：真实的 HTTP 调用
             let config = self.remote_config.read().await;
-            
+
             // 创建 HTTP 客户端
             let client = reqwest::Client::builder()
                 .timeout(config.connection_timeout)
                 .build()
-                .map_err(|e| crate::dlp::DlpError::Sanitization(format!("Failed to create HTTP client: {}", e)))?;
-            
+                .map_err(|e| {
+                    crate::dlp::DlpError::Sanitization(format!(
+                        "Failed to create HTTP client: {}",
+                        e
+                    ))
+                })?;
+
             // 发送请求（带重试）
             let mut last_error = None;
             for attempt in 0..config.max_retries {
@@ -407,7 +416,7 @@ impl EnterprisePolicySyncManager {
                     Ok(result) => return Ok(result),
                     Err(e) => {
                         last_error = Some(e);
-                        
+
                         if attempt < config.max_retries - 1 {
                             warn!(
                                 attempt = attempt + 1,
@@ -421,10 +430,10 @@ impl EnterprisePolicySyncManager {
                     }
                 }
             }
-            
-            Err(last_error.unwrap_or_else(|| 
+
+            Err(last_error.unwrap_or_else(|| {
                 crate::dlp::DlpError::Sanitization("Failed to fetch policies".to_string())
-            ))
+            }))
         }
     }
 
@@ -441,16 +450,22 @@ impl EnterprisePolicySyncManager {
             .header("Authorization", format!("Bearer {}", config.auth_token))
             .send()
             .await
-            .map_err(|e| crate::dlp::DlpError::Sanitization(format!("Failed to fetch DLP policies: {}", e)))?;
+            .map_err(|e| {
+                crate::dlp::DlpError::Sanitization(format!("Failed to fetch DLP policies: {}", e))
+            })?;
 
         if !dlp_response.status().is_success() {
             let status = dlp_response.status();
             let error_text = dlp_response.text().await.unwrap_or_default();
-            return Err(crate::dlp::DlpError::Sanitization(format!("HTTP {}: {}", status, error_text)));
+            return Err(crate::dlp::DlpError::Sanitization(format!(
+                "HTTP {}: {}",
+                status, error_text
+            )));
         }
 
-        let dlp_rules_raw: Vec<serde_json::Value> = dlp_response.json().await
-            .map_err(|e| crate::dlp::DlpError::Sanitization(format!("Failed to parse DLP response: {}", e)))?;
+        let dlp_rules_raw: Vec<serde_json::Value> = dlp_response.json().await.map_err(|e| {
+            crate::dlp::DlpError::Sanitization(format!("Failed to parse DLP response: {}", e))
+        })?;
 
         // 2. 获取敏感操作规则
         let sensitive_ops_url = format!("{}/api/policies/sensitive-ops", config.server_url);
@@ -459,16 +474,29 @@ impl EnterprisePolicySyncManager {
             .header("Authorization", format!("Bearer {}", config.auth_token))
             .send()
             .await
-            .map_err(|e| crate::dlp::DlpError::Sanitization(format!("Failed to fetch sensitive ops policies: {}", e)))?;
+            .map_err(|e| {
+                crate::dlp::DlpError::Sanitization(format!(
+                    "Failed to fetch sensitive ops policies: {}",
+                    e
+                ))
+            })?;
 
         if !sensitive_ops_response.status().is_success() {
             let status = sensitive_ops_response.status();
             let error_text = sensitive_ops_response.text().await.unwrap_or_default();
-            return Err(crate::dlp::DlpError::Sanitization(format!("HTTP {}: {}", status, error_text)));
+            return Err(crate::dlp::DlpError::Sanitization(format!(
+                "HTTP {}: {}",
+                status, error_text
+            )));
         }
 
-        let sensitive_ops_raw: Vec<serde_json::Value> = sensitive_ops_response.json().await
-            .map_err(|e| crate::dlp::DlpError::Sanitization(format!("Failed to parse sensitive ops response: {}", e)))?;
+        let sensitive_ops_raw: Vec<serde_json::Value> =
+            sensitive_ops_response.json().await.map_err(|e| {
+                crate::dlp::DlpError::Sanitization(format!(
+                    "Failed to parse sensitive ops response: {}",
+                    e
+                ))
+            })?;
 
         // 3. 获取版本信息
         let version_url = format!("{}/api/policies/version", config.server_url);
@@ -477,16 +505,22 @@ impl EnterprisePolicySyncManager {
             .header("Authorization", format!("Bearer {}", config.auth_token))
             .send()
             .await
-            .map_err(|e| crate::dlp::DlpError::Sanitization(format!("Failed to fetch version: {}", e)))?;
+            .map_err(|e| {
+                crate::dlp::DlpError::Sanitization(format!("Failed to fetch version: {}", e))
+            })?;
 
         if !version_response.status().is_success() {
             let status = version_response.status();
             let error_text = version_response.text().await.unwrap_or_default();
-            return Err(crate::dlp::DlpError::Sanitization(format!("HTTP {}: {}", status, error_text)));
+            return Err(crate::dlp::DlpError::Sanitization(format!(
+                "HTTP {}: {}",
+                status, error_text
+            )));
         }
 
-        let version_info: serde_json::Value = version_response.json().await
-            .map_err(|e| crate::dlp::DlpError::Sanitization(format!("Failed to parse version: {}", e)))?;
+        let version_info: serde_json::Value = version_response.json().await.map_err(|e| {
+            crate::dlp::DlpError::Sanitization(format!("Failed to parse version: {}", e))
+        })?;
 
         // 4. 转换为本地格式
         let dlp_policies = self.convert_dlp_rules(dlp_rules_raw)?;
@@ -503,80 +537,103 @@ impl EnterprisePolicySyncManager {
     /// 转换 Admin Backend 的 DLP 规则格式为本地格式
     fn convert_dlp_rules(&self, rules_raw: Vec<serde_json::Value>) -> DlpResult<Vec<DlpPolicy>> {
         let mut policies = Vec::new();
-        
+
         for rule_raw in rules_raw {
             let policy = DlpPolicy {
                 id: rule_raw["id"].as_str().unwrap_or("").to_string(),
                 pattern: rule_raw["pattern"].as_str().unwrap_or("").to_string(),
                 replacement: rule_raw["replacement"].as_str().unwrap_or("").to_string(),
-                severity: rule_raw["severity"].as_str().unwrap_or("medium").to_string(),
+                severity: rule_raw["severity"]
+                    .as_str()
+                    .unwrap_or("medium")
+                    .to_string(),
             };
             policies.push(policy);
         }
-        
+
         Ok(policies)
     }
 
     /// 转换 Admin Backend 的敏感操作规则格式为本地格式
-    fn convert_sensitive_ops_rules(&self, rules_raw: Vec<serde_json::Value>) -> DlpResult<Vec<SensitiveOpPolicy>> {
+    fn convert_sensitive_ops_rules(
+        &self,
+        rules_raw: Vec<serde_json::Value>,
+    ) -> DlpResult<Vec<SensitiveOpPolicy>> {
         let mut policies = Vec::new();
-        
+
         for rule_raw in rules_raw {
             let policy = SensitiveOpPolicy {
                 id: rule_raw["id"].as_str().unwrap_or("").to_string(),
-                operation: rule_raw["operation_type"].as_str().unwrap_or("").to_string(),
+                operation: rule_raw["operation_type"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string(),
                 requires_approval: rule_raw["requires_approval"].as_bool().unwrap_or(false),
-                risk_level: rule_raw["risk_level"].as_str().unwrap_or("medium").to_string(),
+                risk_level: rule_raw["risk_level"]
+                    .as_str()
+                    .unwrap_or("medium")
+                    .to_string(),
             };
             policies.push(policy);
         }
-        
+
         Ok(policies)
     }
 
     /// 获取远程版本信息
     async fn fetch_remote_version(&self) -> DlpResult<PolicyVersion> {
         debug!("Fetching remote policy version");
-        
+
         #[cfg(test)]
         {
             // 测试环境：返回模拟版本
             use crate::policy_sync::PolicyVersion;
-            
+
             return Ok(PolicyVersion {
                 dlp_rules_version: 1,
                 sensitive_ops_version: 1,
                 last_sync: current_timestamp(),
             });
         }
-        
+
         #[cfg(not(test))]
         {
             // 生产环境：真实的 HTTP 调用
             let config = self.remote_config.read().await;
             let url = format!("{}/api/policies/version", config.server_url);
-            
+
             let client = reqwest::Client::builder()
                 .timeout(config.connection_timeout)
                 .build()
-                .map_err(|e| crate::dlp::DlpError::Sanitization(format!("Failed to create HTTP client: {}", e)))?;
-            
+                .map_err(|e| {
+                    crate::dlp::DlpError::Sanitization(format!(
+                        "Failed to create HTTP client: {}",
+                        e
+                    ))
+                })?;
+
             let response = client
                 .get(&url)
                 .header("Authorization", format!("Bearer {}", config.auth_token))
                 .send()
                 .await
-                .map_err(|e| crate::dlp::DlpError::Sanitization(format!("Failed to fetch version: {}", e)))?;
-            
+                .map_err(|e| {
+                    crate::dlp::DlpError::Sanitization(format!("Failed to fetch version: {}", e))
+                })?;
+
             if !response.status().is_success() {
                 let status = response.status();
                 let error_text = response.text().await.unwrap_or_default();
-                return Err(crate::dlp::DlpError::Sanitization(format!("HTTP {}: {}", status, error_text)));
+                return Err(crate::dlp::DlpError::Sanitization(format!(
+                    "HTTP {}: {}",
+                    status, error_text
+                )));
             }
-            
-            let version_info: serde_json::Value = response.json().await
-                .map_err(|e| crate::dlp::DlpError::Sanitization(format!("Failed to parse version: {}", e)))?;
-            
+
+            let version_info: serde_json::Value = response.json().await.map_err(|e| {
+                crate::dlp::DlpError::Sanitization(format!("Failed to parse version: {}", e))
+            })?;
+
             Ok(PolicyVersion {
                 dlp_rules_version: version_info["dlp_rules_version"].as_u64().unwrap_or(0),
                 sensitive_ops_version: version_info["sensitive_ops_version"].as_u64().unwrap_or(0),
@@ -628,10 +685,10 @@ mod tests {
     async fn test_enterprise_policy_sync_manager_creation() {
         let config = RemotePolicyConfig::default();
         let manager = EnterprisePolicySyncManager::new(config);
-        
+
         let status = manager.get_sync_status().await;
         assert!(matches!(status, PolicySyncStatus::NotInitialized));
-        
+
         let stats = manager.get_sync_stats().await;
         assert_eq!(stats.total_syncs, 0);
         assert_eq!(stats.successful_syncs, 0);
@@ -641,13 +698,13 @@ mod tests {
     #[tokio::test]
     async fn test_sync_policies() {
         let manager = EnterprisePolicySyncManager::with_default_config();
-        
+
         let result = manager.sync_policies().await;
         assert!(result.is_ok());
-        
+
         let status = manager.get_sync_status().await;
         assert!(matches!(status, PolicySyncStatus::Success));
-        
+
         let stats = manager.get_sync_stats().await;
         assert_eq!(stats.total_syncs, 1);
         assert_eq!(stats.successful_syncs, 1);
@@ -662,13 +719,13 @@ mod tests {
     #[tokio::test]
     async fn test_get_change_events() {
         let manager = EnterprisePolicySyncManager::with_default_config();
-        
+
         // 执行同步以生成事件
         manager.sync_policies().await.unwrap();
-        
+
         let events = manager.get_change_events(None).await;
         assert_eq!(events.len(), 1);
-        
+
         let event = &events[0];
         assert!(matches!(event.event_type, PolicyChangeType::Updated));
         assert_eq!(event.policy_id, "sync_all");
@@ -678,15 +735,15 @@ mod tests {
     #[tokio::test]
     async fn test_get_change_events_with_limit() {
         let manager = EnterprisePolicySyncManager::with_default_config();
-        
+
         // 执行多次同步
         for _ in 0..3 {
             manager.sync_policies().await.unwrap();
         }
-        
+
         let events = manager.get_change_events(Some(2)).await;
         assert_eq!(events.len(), 2);
-        
+
         // 应该返回最新的2个事件（倒序）
         assert!(events[0].timestamp >= events[1].timestamp);
     }
@@ -694,11 +751,11 @@ mod tests {
     #[tokio::test]
     async fn test_needs_sync() {
         let manager = EnterprisePolicySyncManager::with_default_config();
-        
+
         // 初始状态应该需要同步
         let needs_sync = manager.needs_sync().await.unwrap();
         assert!(needs_sync);
-        
+
         // 同步后应该不需要同步
         manager.sync_policies().await.unwrap();
         let needs_sync = manager.needs_sync().await.unwrap();
@@ -708,7 +765,7 @@ mod tests {
     #[tokio::test]
     async fn test_update_remote_config() {
         let manager = EnterprisePolicySyncManager::with_default_config();
-        
+
         let new_config = RemotePolicyConfig {
             server_url: "https://new-server.example.com".to_string(),
             sync_interval: Duration::from_secs(600),
@@ -717,10 +774,10 @@ mod tests {
             connection_timeout: Duration::from_secs(60),
             max_retries: 5,
         };
-        
+
         let result = manager.update_remote_config(new_config.clone()).await;
         assert!(result.is_ok());
-        
+
         // 验证配置已更新
         let current_config = manager.remote_config.read().await;
         assert_eq!(current_config.server_url, new_config.server_url);
@@ -732,18 +789,18 @@ mod tests {
     #[tokio::test]
     async fn test_start_and_stop_sync_service() {
         let manager = EnterprisePolicySyncManager::with_default_config();
-        
+
         // 启动服务
         let result = manager.start_sync_service().await;
         assert!(result.is_ok());
-        
+
         let status = manager.get_sync_status().await;
         assert!(matches!(status, PolicySyncStatus::Success));
-        
+
         // 停止服务
         let result = manager.stop_sync_service().await;
         assert!(result.is_ok());
-        
+
         let status = manager.get_sync_status().await;
         assert!(matches!(status, PolicySyncStatus::Disconnected));
     }
@@ -751,10 +808,10 @@ mod tests {
     #[tokio::test]
     async fn test_get_local_manager() {
         let manager = EnterprisePolicySyncManager::with_default_config();
-        
+
         // 执行同步以填充策略
         manager.sync_policies().await.unwrap();
-        
+
         let local = manager.get_local_manager().await;
         assert_eq!(local.get_dlp_policies().len(), 2);
         assert_eq!(local.get_sensitive_ops_policies().len(), 1);
@@ -763,18 +820,18 @@ mod tests {
     #[tokio::test]
     async fn test_multiple_sync_operations() {
         let manager = EnterprisePolicySyncManager::with_default_config();
-        
+
         // 执行多次同步
         for i in 0..5 {
             let result = manager.sync_policies().await;
             assert!(result.is_ok(), "Sync {} failed", i + 1);
         }
-        
+
         let stats = manager.get_sync_stats().await;
         assert_eq!(stats.total_syncs, 5);
         assert_eq!(stats.successful_syncs, 5);
         assert_eq!(stats.failed_syncs, 0);
-        
+
         let events = manager.get_change_events(None).await;
         assert_eq!(events.len(), 5);
     }
@@ -782,23 +839,21 @@ mod tests {
     #[tokio::test]
     async fn test_concurrent_sync_operations() {
         let manager = std::sync::Arc::new(EnterprisePolicySyncManager::with_default_config());
-        
+
         // 并发执行同步操作
         let mut handles = Vec::new();
         for _ in 0..3 {
             let manager_clone = manager.clone();
-            let handle = tokio::spawn(async move {
-                manager_clone.sync_policies().await
-            });
+            let handle = tokio::spawn(async move { manager_clone.sync_policies().await });
             handles.push(handle);
         }
-        
+
         // 等待所有操作完成
         for handle in handles {
             let result = handle.await.unwrap();
             assert!(result.is_ok());
         }
-        
+
         let stats = manager.get_sync_stats().await;
         assert_eq!(stats.total_syncs, 3);
         assert_eq!(stats.successful_syncs, 3);
@@ -810,7 +865,7 @@ mod tests {
         // Sleep 至少1秒,因为 current_timestamp 返回秒级时间戳
         std::thread::sleep(std::time::Duration::from_secs(1));
         let timestamp2 = current_timestamp();
-        
+
         assert!(timestamp2 > timestamp1);
         assert_eq!(timestamp2 - timestamp1, 1); // 应该正好相差1秒
     }
@@ -818,7 +873,7 @@ mod tests {
     #[test]
     fn test_remote_policy_config_default() {
         let config = RemotePolicyConfig::default();
-        
+
         assert_eq!(config.server_url, "https://policy.example.com");
         assert_eq!(config.sync_interval, Duration::from_secs(300));
         assert!(config.auth_token.is_empty());
@@ -830,7 +885,7 @@ mod tests {
     #[test]
     fn test_policy_sync_stats_default() {
         let stats = PolicySyncStats::default();
-        
+
         assert_eq!(stats.total_syncs, 0);
         assert_eq!(stats.successful_syncs, 0);
         assert_eq!(stats.failed_syncs, 0);

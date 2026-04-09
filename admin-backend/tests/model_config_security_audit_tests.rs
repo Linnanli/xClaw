@@ -31,9 +31,18 @@ fn test_audit_client_models_endpoint_excludes_api_key() {
     }]);
 
     let response_str = serde_json::to_string(&client_response).unwrap();
-    assert!(!response_str.contains("api_key"), "客户端 API 响应不应包含 api_key 字段");
-    assert!(!response_str.contains("api_base_url"), "客户端 API 响应不应包含 api_base_url 字段");
-    assert!(!response_str.contains("sk-"), "客户端 API 响应不应包含 API Key 值");
+    assert!(
+        !response_str.contains("api_key"),
+        "客户端 API 响应不应包含 api_key 字段"
+    );
+    assert!(
+        !response_str.contains("api_base_url"),
+        "客户端 API 响应不应包含 api_base_url 字段"
+    );
+    assert!(
+        !response_str.contains("sk-"),
+        "客户端 API 响应不应包含 API Key 值"
+    );
 }
 
 #[test]
@@ -54,7 +63,10 @@ fn test_audit_empty_api_key_masking() {
 #[test]
 fn test_audit_short_api_key_masking() {
     let masked = mask_api_key("sk");
-    assert!(!masked.contains("sk") || masked.len() <= 6, "短 key 应被完全脱敏");
+    assert!(
+        !masked.contains("sk") || masked.len() <= 6,
+        "短 key 应被完全脱敏"
+    );
 }
 
 // ============================================================================
@@ -92,7 +104,10 @@ fn test_audit_create_request_validation_no_key_in_error() {
         errors.push("display_name 不能为空".to_string());
     }
     for error in &errors {
-        assert!(!error.contains("sk-super-secret"), "验证错误不应包含 API Key");
+        assert!(
+            !error.contains("sk-super-secret"),
+            "验证错误不应包含 API Key"
+        );
     }
 }
 
@@ -105,8 +120,14 @@ fn test_audit_test_connection_auth_error_no_key_leak() {
     let api_key = "sk-super-secret-key-12345";
     let status = 401;
     let error_msg = format!("认证失败 ({}): API Key 无效或权限不足", status);
-    assert!(!error_msg.contains(api_key), "认证失败错误信息不应包含原始 API Key");
-    assert!(!error_msg.contains("sk-super"), "认证失败错误信息不应包含 API Key 前缀");
+    assert!(
+        !error_msg.contains(api_key),
+        "认证失败错误信息不应包含原始 API Key"
+    );
+    assert!(
+        !error_msg.contains("sk-super"),
+        "认证失败错误信息不应包含 API Key 前缀"
+    );
 }
 
 #[test]

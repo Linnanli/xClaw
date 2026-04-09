@@ -1,27 +1,27 @@
 // ── 核心模块 ────────────────────────────────────────────────────────
-pub mod error;
-pub mod commands;
-pub mod platform_utils;
 pub mod auth_token_manager;
+pub mod commands;
 pub mod embedded_server;
+pub mod error;
+pub mod platform_utils;
 
 // ── DLP / 安全 ──────────────────────────────────────────────────────
 pub mod dlp;
 pub mod dlp_integration;
-pub mod policy_sync;
 pub mod enterprise_policy_sync;
+pub mod policy_sync;
 pub mod safety_bridge;
 
 // ── IronClaw 嵌入模块 ──────────────────────────────────────────────
-pub mod tauri_channel;
-pub mod state;
+pub mod admin_sync;
+pub mod approval_polling;
+pub mod conversation_tracker;
+pub mod data_reporter;
 pub mod engine;
 pub mod ipc;
-pub mod admin_sync;
-pub mod data_reporter;
-pub mod conversation_tracker;
 pub mod model_switch;
-pub mod approval_polling;
+pub mod state;
+pub mod tauri_channel;
 
 // ── 测试模块（仅在测试时编译）──────────────────────────────────────
 #[cfg(test)]
@@ -64,9 +64,9 @@ mod tests {
 }
 
 // ── Re-exports ──────────────────────────────────────────────────────
+pub use auth_token_manager::{clean_token, is_valid_token, AuthTokenManager, TokenError};
 pub use error::{Error, Result};
-pub use platform_utils::{get_app_data_dir, get_config_dir, get_cache_dir, get_os, get_os_name};
-pub use auth_token_manager::{AuthTokenManager, TokenError, is_valid_token, clean_token};
+pub use platform_utils::{get_app_data_dir, get_cache_dir, get_config_dir, get_os, get_os_name};
 
 /// 所有注册到 Tauri invoke_handler 的命令列表。
 ///

@@ -109,7 +109,10 @@ mod tests {
         assert!(json.get("kind").is_some(), "missing 'kind'");
         assert!(json.get("installed").is_some(), "missing 'installed'");
         assert!(json.get("active").is_some(), "missing 'active'");
-        assert!(json.get("authenticated").is_some(), "missing 'authenticated'");
+        assert!(
+            json.get("authenticated").is_some(),
+            "missing 'authenticated'"
+        );
         assert!(json.get("tools").is_some(), "missing 'tools'");
 
         // 验证类型
@@ -467,7 +470,11 @@ mod tests {
         assert!(json["input_type"].is_string());
 
         let obj = json.as_object().unwrap();
-        assert_eq!(obj.len(), 5, "ExtensionSetupField should have exactly 5 fields");
+        assert_eq!(
+            obj.len(),
+            5,
+            "ExtensionSetupField should have exactly 5 fields"
+        );
     }
 
     /// 前端 ExtensionSetupSubmitResponse 类型定义：
@@ -495,7 +502,11 @@ mod tests {
         assert!(json["auth_url"].is_null());
 
         let obj = json.as_object().unwrap();
-        assert_eq!(obj.len(), 4, "ExtensionSetupSubmitResponse should have exactly 4 fields");
+        assert_eq!(
+            obj.len(),
+            4,
+            "ExtensionSetupSubmitResponse should have exactly 4 fields"
+        );
     }
 
     // =========================================================================

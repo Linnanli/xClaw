@@ -66,31 +66,39 @@ pub async fn list_knowledge_bases(
     State(state): State<AppState>,
     Query(params): Query<KnowledgeBaseSearch>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let rows = match params.search.as_deref().filter(|s| !s.trim().is_empty()) {
         Some(keyword) => {
             let pattern = format!("%{}%", keyword);
-            client.query(
-                "SELECT id, name, description, document_count, enabled, \
+            client
+                .query(
+                    "SELECT id, name, description, document_count, enabled, \
                         allowed_departments, allowed_roles, created_at, updated_at \
                  FROM knowledge_bases \
                  WHERE name ILIKE $1 \
                  ORDER BY created_at DESC",
-                &[&pattern],
-            ).await
+                    &[&pattern],
+                )
+                .await
         }
         None => {
-            client.query(
-                "SELECT id, name, description, document_count, enabled, \
+            client
+                .query(
+                    "SELECT id, name, description, document_count, enabled, \
                         allowed_departments, allowed_roles, created_at, updated_at \
                  FROM knowledge_bases \
                  ORDER BY created_at DESC",
-                &[],
-            ).await
+                    &[],
+                )
+                .await
         }
-    }.map_err(|e| Error::Database(e.to_string()))?;
+    }
+    .map_err(|e| Error::Database(e.to_string()))?;
 
     let data: Vec<_> = rows.iter().map(row_to_knowledge_base).collect();
     Ok(Json(json!({ "data": data, "total": data.len() })))
@@ -105,16 +113,22 @@ pub async fn create_knowledge_base(
         return Err(Error::Validation("知识库名称不能为空".into()));
     }
 
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
-    let row = client.query_one(
-        "INSERT INTO knowledge_bases (name, description) \
+    let row = client
+        .query_one(
+            "INSERT INTO knowledge_bases (name, description) \
          VALUES ($1, $2) \
          RETURNING id, name, description, document_count, enabled, \
                    allowed_departments, allowed_roles, created_at, updated_at",
-        &[&payload.name.trim(), &payload.description],
-    ).await.map_err(|e| Error::Database(e.to_string()))?;
+            &[&payload.name.trim(), &payload.description],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
 
     Ok(Json(row_to_knowledge_base(&row)))
 }
@@ -125,15 +139,18 @@ pub async fn update_knowledge_base(
     Path(kb_id): Path<Uuid>,
     Json(payload): Json<UpdateKnowledgeBaseRequest>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // 先确认存在
-    let existing = client.query_opt(
-        "SELECT id FROM knowledge_bases WHERE id = $1",
-        &[&kb_id],
-    ).await.map_err(|e| Error::Database(e.to_string()))?
-     .ok_or_else(|| Error::NotFound("知识库不存在".into()))?;
+    let existing = client
+        .query_opt("SELECT id FROM knowledge_bases WHERE id = $1", &[&kb_id])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
+        .ok_or_else(|| Error::NotFound("知识库不存在".into()))?;
     let _ = existing;
 
     // 动态构建 SET 子句，只更新提供的字段
@@ -177,10 +194,14 @@ pub async fn update_knowledge_base(
         param_idx
     );
 
-    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-        params.iter().map(|p| &**p as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
+        .iter()
+        .map(|p| &**p as &(dyn tokio_postgres::types::ToSql + Sync))
+        .collect();
 
-    let row = client.query_one(&sql, &param_refs).await
+    let row = client
+        .query_one(&sql, &param_refs)
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     Ok(Json(row_to_knowledge_base(&row)))
@@ -191,13 +212,16 @@ pub async fn delete_knowledge_base(
     State(state): State<AppState>,
     Path(kb_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
-    let affected = client.execute(
-        "DELETE FROM knowledge_bases WHERE id = $1",
-        &[&kb_id],
-    ).await.map_err(|e| Error::Database(e.to_string()))?;
+    let affected = client
+        .execute("DELETE FROM knowledge_bases WHERE id = $1", &[&kb_id])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
 
     if affected == 0 {
         return Err(Error::NotFound("知识库不存在".into()));
@@ -214,21 +238,34 @@ pub async fn upload_document(
 ) -> Result<Json<serde_json::Value>> {
     validate_file_type(&payload.file_type)?;
 
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // 确认知识库存在
-    client.query_opt("SELECT id FROM knowledge_bases WHERE id = $1", &[&kb_id])
-        .await.map_err(|e| Error::Database(e.to_string()))?
+    client
+        .query_opt("SELECT id FROM knowledge_bases WHERE id = $1", &[&kb_id])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
         .ok_or_else(|| Error::NotFound("知识库不存在".into()))?;
 
-    let row = client.query_one(
-        "INSERT INTO kb_documents (knowledge_base_id, filename, file_type, file_size, status) \
+    let row = client
+        .query_one(
+            "INSERT INTO kb_documents (knowledge_base_id, filename, file_type, file_size, status) \
          VALUES ($1, $2, $3, $4, 'pending') \
          RETURNING id, knowledge_base_id, filename, file_type, file_size, \
                    status, chunk_count, error_message, storage_path, uploaded_at, processed_at",
-        &[&kb_id, &payload.filename, &payload.file_type, &payload.file_size],
-    ).await.map_err(|e| Error::Database(e.to_string()))?;
+            &[
+                &kb_id,
+                &payload.filename,
+                &payload.file_type,
+                &payload.file_size,
+            ],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
 
     // 更新文档计数
     let _ = client.execute(
@@ -244,22 +281,30 @@ pub async fn list_documents(
     State(state): State<AppState>,
     Path(kb_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // 确认知识库存在
-    client.query_opt("SELECT id FROM knowledge_bases WHERE id = $1", &[&kb_id])
-        .await.map_err(|e| Error::Database(e.to_string()))?
+    client
+        .query_opt("SELECT id FROM knowledge_bases WHERE id = $1", &[&kb_id])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
         .ok_or_else(|| Error::NotFound("知识库不存在".into()))?;
 
-    let rows = client.query(
-        "SELECT id, knowledge_base_id, filename, file_type, file_size, \
+    let rows = client
+        .query(
+            "SELECT id, knowledge_base_id, filename, file_type, file_size, \
                 status, chunk_count, error_message, storage_path, uploaded_at, processed_at \
          FROM kb_documents \
          WHERE knowledge_base_id = $1 \
          ORDER BY uploaded_at DESC",
-        &[&kb_id],
-    ).await.map_err(|e| Error::Database(e.to_string()))?;
+            &[&kb_id],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
 
     let data: Vec<_> = rows.iter().map(row_to_document).collect();
     Ok(Json(json!({ "data": data, "total": data.len() })))
@@ -270,25 +315,33 @@ pub async fn delete_document(
     State(state): State<AppState>,
     Path((kb_id, doc_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
-    let affected = client.execute(
-        "DELETE FROM kb_documents WHERE id = $1 AND knowledge_base_id = $2",
-        &[&doc_id, &kb_id],
-    ).await.map_err(|e| Error::Database(e.to_string()))?;
+    let affected = client
+        .execute(
+            "DELETE FROM kb_documents WHERE id = $1 AND knowledge_base_id = $2",
+            &[&doc_id, &kb_id],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
 
     if affected == 0 {
         return Err(Error::NotFound("文档不存在".into()));
     }
 
     // 更新文档计数（不低于 0）
-    let _ = client.execute(
-        "UPDATE knowledge_bases \
+    let _ = client
+        .execute(
+            "UPDATE knowledge_bases \
          SET document_count = GREATEST(document_count - 1, 0), updated_at = NOW() \
          WHERE id = $1",
-        &[&kb_id],
-    ).await;
+            &[&kb_id],
+        )
+        .await;
 
     Ok(Json(json!({ "message": "文档已删除" })))
 }
@@ -306,12 +359,17 @@ pub async fn search_knowledge_base(
     Path(kb_id): Path<Uuid>,
     Json(_payload): Json<SearchRequest>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // 确认知识库存在
-    client.query_opt("SELECT id FROM knowledge_bases WHERE id = $1", &[&kb_id])
-        .await.map_err(|e| Error::Database(e.to_string()))?
+    client
+        .query_opt("SELECT id FROM knowledge_bases WHERE id = $1", &[&kb_id])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
         .ok_or_else(|| Error::NotFound("知识库不存在".into()))?;
 
     Ok(Json(json!({
@@ -328,7 +386,8 @@ fn validate_file_type(file_type: &str) -> Result<()> {
     match file_type {
         "pdf" | "docx" | "md" | "txt" => Ok(()),
         _ => Err(Error::Validation(format!(
-            "不支持的文件类型 '{}'，仅支持 pdf/docx/md/txt", file_type
+            "不支持的文件类型 '{}'，仅支持 pdf/docx/md/txt",
+            file_type
         ))),
     }
 }

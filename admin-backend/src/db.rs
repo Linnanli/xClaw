@@ -1,5 +1,5 @@
 use crate::error::{Error, Result};
-use crate::models::{User, AuditLog, DlpRule, SensitiveOperationRule, PolicyChangeRecord};
+use crate::models::{AuditLog, DlpRule, PolicyChangeRecord, SensitiveOperationRule, User};
 use crate::policy_management::{UpdateDlpRuleRequest, UpdateSensitiveOpRuleRequest};
 use chrono::{DateTime, Utc};
 use deadpool_postgres::Pool;
@@ -15,8 +15,16 @@ impl Database {
     }
 
     // User operations
-    pub async fn create_user(&self, username: &str, email: &str, password_hash: &str) -> Result<User> {
-        let client = self.pool.get().await
+    pub async fn create_user(
+        &self,
+        username: &str,
+        email: &str,
+        password_hash: &str,
+    ) -> Result<User> {
+        let client = self
+            .pool
+            .get()
+            .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         let id = Uuid::new_v4();
@@ -42,7 +50,10 @@ impl Database {
     }
 
     pub async fn get_user_by_username(&self, username: &str) -> Result<Option<User>> {
-        let client = self.pool.get().await
+        let client = self
+            .pool
+            .get()
+            .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         let row = client
@@ -64,7 +75,10 @@ impl Database {
     }
 
     pub async fn get_user_by_id(&self, id: Uuid) -> Result<Option<User>> {
-        let client = self.pool.get().await
+        let client = self
+            .pool
+            .get()
+            .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         let row = client
@@ -86,8 +100,16 @@ impl Database {
     }
 
     // Audit log operations
-    pub async fn add_audit_log(&self, user_id: Uuid, action: &str, details: &str) -> Result<AuditLog> {
-        let client = self.pool.get().await
+    pub async fn add_audit_log(
+        &self,
+        user_id: Uuid,
+        action: &str,
+        details: &str,
+    ) -> Result<AuditLog> {
+        let client = self
+            .pool
+            .get()
+            .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         let id = Uuid::new_v4();
@@ -112,7 +134,10 @@ impl Database {
     }
 
     pub async fn get_audit_logs(&self, limit: i64) -> Result<Vec<AuditLog>> {
-        let client = self.pool.get().await
+        let client = self
+            .pool
+            .get()
+            .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         let rows = client
@@ -147,7 +172,10 @@ impl Database {
         category: &str,
         created_by: Uuid,
     ) -> Result<DlpRule> {
-        let client = self.pool.get().await
+        let client = self
+            .pool
+            .get()
+            .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         let id = Uuid::new_v4();
@@ -184,7 +212,10 @@ impl Database {
         request: UpdateDlpRuleRequest,
         updated_by: Uuid,
     ) -> Result<DlpRule> {
-        let client = self.pool.get().await
+        let client = self
+            .pool
+            .get()
+            .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         let now = Utc::now();
@@ -240,12 +271,16 @@ impl Database {
         }
 
         // 获取更新后的规则
-        self.get_dlp_rule_by_id(rule_id).await?
+        self.get_dlp_rule_by_id(rule_id)
+            .await?
             .ok_or_else(|| Error::NotFound("DLP rule not found after update".to_string()))
     }
 
     pub async fn delete_dlp_rule(&self, rule_id: Uuid) -> Result<()> {
-        let client = self.pool.get().await
+        let client = self
+            .pool
+            .get()
+            .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         client
@@ -257,7 +292,10 @@ impl Database {
     }
 
     pub async fn get_dlp_rules(&self, include_disabled: bool) -> Result<Vec<DlpRule>> {
-        let client = self.pool.get().await
+        let client = self
+            .pool
+            .get()
+            .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         let query = if include_disabled {
@@ -291,7 +329,10 @@ impl Database {
     }
 
     pub async fn get_dlp_rule_by_id(&self, rule_id: Uuid) -> Result<Option<DlpRule>> {
-        let client = self.pool.get().await
+        let client = self
+            .pool
+            .get()
+            .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         let row = client
@@ -329,7 +370,10 @@ impl Database {
         enabled: bool,
         created_by: Uuid,
     ) -> Result<SensitiveOperationRule> {
-        let client = self.pool.get().await
+        let client = self
+            .pool
+            .get()
+            .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         let id = Uuid::new_v4();
@@ -365,7 +409,10 @@ impl Database {
         request: UpdateSensitiveOpRuleRequest,
         updated_by: Uuid,
     ) -> Result<SensitiveOperationRule> {
-        let client = self.pool.get().await
+        let client = self
+            .pool
+            .get()
+            .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         let now = Utc::now();
@@ -414,24 +461,39 @@ impl Database {
         }
 
         // 获取更新后的规则
-        self.get_sensitive_op_rule_by_id(rule_id).await?
-            .ok_or_else(|| Error::NotFound("Sensitive operation rule not found after update".to_string()))
+        self.get_sensitive_op_rule_by_id(rule_id)
+            .await?
+            .ok_or_else(|| {
+                Error::NotFound("Sensitive operation rule not found after update".to_string())
+            })
     }
 
     pub async fn delete_sensitive_op_rule(&self, rule_id: Uuid) -> Result<()> {
-        let client = self.pool.get().await
+        let client = self
+            .pool
+            .get()
+            .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         client
-            .execute("DELETE FROM sensitive_operation_rules WHERE id = $1", &[&rule_id])
+            .execute(
+                "DELETE FROM sensitive_operation_rules WHERE id = $1",
+                &[&rule_id],
+            )
             .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         Ok(())
     }
 
-    pub async fn get_sensitive_op_rules(&self, include_disabled: bool) -> Result<Vec<SensitiveOperationRule>> {
-        let client = self.pool.get().await
+    pub async fn get_sensitive_op_rules(
+        &self,
+        include_disabled: bool,
+    ) -> Result<Vec<SensitiveOperationRule>> {
+        let client = self
+            .pool
+            .get()
+            .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         let query = if include_disabled {
@@ -463,8 +525,14 @@ impl Database {
             .collect())
     }
 
-    pub async fn get_sensitive_op_rule_by_id(&self, rule_id: Uuid) -> Result<Option<SensitiveOperationRule>> {
-        let client = self.pool.get().await
+    pub async fn get_sensitive_op_rule_by_id(
+        &self,
+        rule_id: Uuid,
+    ) -> Result<Option<SensitiveOperationRule>> {
+        let client = self
+            .pool
+            .get()
+            .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         let row = client
@@ -492,11 +560,17 @@ impl Database {
 
     // Policy version and change tracking operations
     pub async fn get_dlp_rules_version(&self) -> Result<u64> {
-        let client = self.pool.get().await
+        let client = self
+            .pool
+            .get()
+            .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         let row = client
-            .query_opt("SELECT version FROM policy_versions WHERE policy_type = 'dlp_rules'", &[])
+            .query_opt(
+                "SELECT version FROM policy_versions WHERE policy_type = 'dlp_rules'",
+                &[],
+            )
             .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
@@ -504,11 +578,17 @@ impl Database {
     }
 
     pub async fn get_sensitive_ops_version(&self) -> Result<u64> {
-        let client = self.pool.get().await
+        let client = self
+            .pool
+            .get()
+            .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         let row = client
-            .query_opt("SELECT version FROM policy_versions WHERE policy_type = 'sensitive_ops'", &[])
+            .query_opt(
+                "SELECT version FROM policy_versions WHERE policy_type = 'sensitive_ops'",
+                &[],
+            )
             .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
@@ -516,7 +596,10 @@ impl Database {
     }
 
     pub async fn increment_dlp_rules_version(&self) -> Result<u64> {
-        let client = self.pool.get().await
+        let client = self
+            .pool
+            .get()
+            .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         let now = Utc::now();
@@ -536,7 +619,10 @@ impl Database {
     }
 
     pub async fn increment_sensitive_ops_version(&self) -> Result<u64> {
-        let client = self.pool.get().await
+        let client = self
+            .pool
+            .get()
+            .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         let now = Utc::now();
@@ -556,14 +642,14 @@ impl Database {
     }
 
     pub async fn get_last_policy_update_time(&self) -> Result<Option<DateTime<Utc>>> {
-        let client = self.pool.get().await
+        let client = self
+            .pool
+            .get()
+            .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         let row = client
-            .query_opt(
-                "SELECT MAX(updated_at) FROM policy_versions",
-                &[],
-            )
+            .query_opt("SELECT MAX(updated_at) FROM policy_versions", &[])
             .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
@@ -579,7 +665,10 @@ impl Database {
         changed_by: Uuid,
         reason: Option<String>,
     ) -> Result<()> {
-        let client = self.pool.get().await
+        let client = self
+            .pool
+            .get()
+            .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         let id = Uuid::new_v4();
@@ -598,7 +687,10 @@ impl Database {
     }
 
     pub async fn get_recent_policy_changes(&self, limit: i64) -> Result<Vec<PolicyChangeRecord>> {
-        let client = self.pool.get().await
+        let client = self
+            .pool
+            .get()
+            .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         let rows = client
@@ -633,15 +725,16 @@ impl Database {
         enabled: bool,
         updated_by: Uuid,
     ) -> Result<usize> {
-        let client = self.pool.get().await
+        let client = self
+            .pool
+            .get()
+            .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         let now = Utc::now();
 
         // 构建 IN 子句的占位符
-        let placeholders: Vec<String> = (1..=rule_ids.len())
-            .map(|i| format!("${}", i))
-            .collect();
+        let placeholders: Vec<String> = (1..=rule_ids.len()).map(|i| format!("${}", i)).collect();
         let in_clause = placeholders.join(", ");
 
         // 构建参数列表 - 使用 Box 来延长生命周期
@@ -654,7 +747,7 @@ impl Database {
         params.push(Box::new(now));
 
         // 转换为引用
-        let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = 
+        let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
             params.iter().map(|p| p.as_ref()).collect();
 
         let query = format!(

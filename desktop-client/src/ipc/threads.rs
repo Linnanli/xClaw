@@ -79,8 +79,8 @@ pub async fn ic_get_thread_history(
     let state = state.get()?;
     let db = state.db.as_ref().ok_or("Database not available")?;
 
-    let uuid = uuid::Uuid::parse_str(&thread_id)
-        .map_err(|e| format!("Invalid thread ID: {}", e))?;
+    let uuid =
+        uuid::Uuid::parse_str(&thread_id).map_err(|e| format!("Invalid thread ID: {}", e))?;
 
     // 权限检查：确认线程属于当前用户
     let belongs = db

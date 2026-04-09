@@ -33,7 +33,9 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument, warn};
 
 use crate::data_reporter::{ClientReport, DataReporter};
-use crate::dlp::sanitizer::{DlpSanitizer, SanitizationConfig, SanitizationResult, SanitizationStats};
+use crate::dlp::sanitizer::{
+    DlpSanitizer, SanitizationConfig, SanitizationResult, SanitizationStats,
+};
 use crate::dlp::DlpDetector;
 
 /// SafetyBridge 扫描结果。
@@ -183,7 +185,11 @@ impl SafetyBridge {
         }
 
         // ── Step 2: DLP PII 格式保留脱敏 ──────────────────────────
-        let dlp_result = self.sanitizer.read().unwrap_or_else(|p| p.into_inner()).sanitize(content);
+        let dlp_result = self
+            .sanitizer
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .sanitize(content);
         self.update_pii_stats(&dlp_result);
 
         if dlp_result.had_sensitive_data {
@@ -211,7 +217,11 @@ impl SafetyBridge {
     /// 委托给 SafetyLayer 处理（截断、注入检测、密钥清理）。
     /// DLP PII 脱敏不应用于工具输出（工具输出发给 LLM，不发给用户）。
     #[instrument(skip(self, output), fields(output_len = output.len()))]
-    pub fn scan_tool_output(&self, tool_name: &str, output: &str) -> ironclaw::safety::SanitizedOutput {
+    pub fn scan_tool_output(
+        &self,
+        tool_name: &str,
+        output: &str,
+    ) -> ironclaw::safety::SanitizedOutput {
         debug!(tool_name = tool_name, "Scanning tool output");
         self.safety.sanitize_tool_output(tool_name, output)
     }
@@ -243,7 +253,11 @@ impl SafetyBridge {
         }
 
         // PII 脱敏
-        let dlp_result = self.sanitizer.read().unwrap_or_else(|p| p.into_inner()).sanitize(body);
+        let dlp_result = self
+            .sanitizer
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .sanitize(body);
         self.update_pii_stats(&dlp_result);
 
         if dlp_result.had_sensitive_data {
@@ -268,7 +282,9 @@ impl SafetyBridge {
     pub fn sanitize_for_storage(&self, content: &str) -> Result<String, String> {
         let result = self.scan_user_input(content);
         if result.was_blocked {
-            Err(result.block_reason.unwrap_or_else(|| "Content blocked".to_string()))
+            Err(result
+                .block_reason
+                .unwrap_or_else(|| "Content blocked".to_string()))
         } else {
             Ok(result.sanitized_content)
         }
@@ -289,7 +305,11 @@ impl SafetyBridge {
 
     /// 获取 DLP 脱敏配置引用（克隆）。
     pub fn sanitization_config(&self) -> SanitizationConfig {
-        self.sanitizer.read().unwrap_or_else(|p| p.into_inner()).config().clone()
+        self.sanitizer
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .config()
+            .clone()
     }
 
     // ── 内部统计方法 ──────────────────────────────────────────────

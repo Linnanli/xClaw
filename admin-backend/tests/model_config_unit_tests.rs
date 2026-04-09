@@ -108,11 +108,7 @@ fn test_client_model_config_with_all_capabilities() {
 /// 镜像 `admin-backend/src/routes.rs::normalize_api_base_url`
 fn normalize_api_base_url(url: &str) -> String {
     let trimmed = url.trim_end_matches('/');
-    for suffix in &[
-        "/chat/completions",
-        "/completions",
-        "/messages",
-    ] {
+    for suffix in &["/chat/completions", "/completions", "/messages"] {
         if let Some(base) = trimmed.strip_suffix(suffix) {
             return base.to_string();
         }

@@ -174,7 +174,11 @@ mod tests {
         assert!(json["score"].is_number());
 
         let obj = json.as_object().unwrap();
-        assert_eq!(obj.len(), 3, "MemorySearchResult should have exactly 3 fields");
+        assert_eq!(
+            obj.len(),
+            3,
+            "MemorySearchResult should have exactly 3 fields"
+        );
     }
 
     // =========================================================================

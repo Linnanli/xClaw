@@ -49,7 +49,9 @@ where
             let headers = resp.headers_mut();
             headers.insert(
                 "content-security-policy",
-                "default-src 'self'".parse().expect("valid CSP header value"),
+                "default-src 'self'"
+                    .parse()
+                    .expect("valid CSP header value"),
             );
             headers.insert(
                 "x-frame-options",
@@ -57,7 +59,9 @@ where
             );
             headers.insert(
                 "x-content-type-options",
-                "nosniff".parse().expect("valid X-Content-Type-Options value"),
+                "nosniff"
+                    .parse()
+                    .expect("valid X-Content-Type-Options value"),
             );
             Ok(resp)
         })

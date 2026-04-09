@@ -8,6 +8,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { JobsPanel } from '../JobsPanel';
 
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn().mockResolvedValue(() => {}),
+}));
+
 const mockJobs = [
   { id: '1', title: '代码审查', status: 'in_progress', created_at: '2024-01-01T00:00:00Z', updated_at: null },
   { id: '2', title: '安全扫描', status: 'completed', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T01:00:00Z' },

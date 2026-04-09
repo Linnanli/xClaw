@@ -141,18 +141,14 @@ mod audit_export_failure_tests {
         let invalid_times = vec![
             "not-a-date",
             "2026/03/22",
-            "2026-13-01T00:00:00Z",  // 月份超范围
+            "2026-13-01T00:00:00Z", // 月份超范围
             "",
         ];
 
         for time_str in &invalid_times {
             let parsed = chrono::DateTime::parse_from_rfc3339(time_str);
             if !time_str.is_empty() {
-                assert!(
-                    parsed.is_err(),
-                    "无效时间 '{}' 应该解析失败",
-                    time_str
-                );
+                assert!(parsed.is_err(), "无效时间 '{}' 应该解析失败", time_str);
             }
         }
     }
@@ -181,10 +177,7 @@ mod audit_export_security_tests {
 
         for detail in &audit_details {
             // 详情中可以包含字段名 "password"，但不应包含实际密码值
-            assert!(
-                !detail.contains("P@ssw0rd"),
-                "审计日志不应包含实际密码值"
-            );
+            assert!(!detail.contains("P@ssw0rd"), "审计日志不应包含实际密码值");
         }
     }
 

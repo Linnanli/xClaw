@@ -48,7 +48,7 @@ type FilterKey = 'all' | 'enabled' | 'disabled';
 interface RoutinesTabProps {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
-  onRoutineFired?: (threadId: string, prompt: string) => void;
+  onRoutineFired?: () => void;
 }
 
 const TRIGGER_LABELS: Record<string, string> = {
@@ -145,9 +145,9 @@ export function RoutinesTab({ open = true, onOpenChange, onRoutineFired }: Routi
     setFiringId(id);
     setFiringError(null);
     try {
-      const result = await routineApi.triggerRoutine(id);
+      await routineApi.triggerRoutine(id);
       onOpenChange?.(false);
-      onRoutineFired?.(result.thread_id, result.prompt);
+      onRoutineFired?.();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       // 并发限制：任务正在运行中

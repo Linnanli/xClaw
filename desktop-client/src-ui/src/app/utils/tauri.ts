@@ -348,6 +348,12 @@ interface RoutineInfo {
   trigger: any;
 }
 
+interface TriggerRoutineResponse {
+  status: string;
+  routine_id: string;
+  run_id: string;
+}
+
 export const routineApi = {
   getRoutines: async (): Promise<Routine[]> => {
     const items = await invokeTauri<RoutineInfo[]>('ic_list_routines');
@@ -364,9 +370,8 @@ export const routineApi = {
     const info = await invokeTauri<RoutineInfo>('ic_create_routine', { request: { name, description, trigger, prompt } });
     return { id: info.id, name: info.name, description: info.description, trigger: info.trigger, status: info.status, actions: [] };
   },
-  triggerRoutine: async (routineId: string): Promise<{ thread_id: string; prompt: string }> => {
-    return invokeTauri('ic_fire_routine', { routineId });
-  },
+  triggerRoutine: async (routineId: string): Promise<TriggerRoutineResponse> =>
+    invokeTauri('ic_fire_routine', { routineId }),
   deleteRoutine: async (routineId: string): Promise<void> =>
     invokeTauri('ic_delete_routine', { routineId }),
 };

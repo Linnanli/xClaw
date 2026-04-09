@@ -27,10 +27,7 @@ mod alert_rule_failures {
             "abnormal_login",
             "approval_timeout",
         ];
-        assert!(
-            !valid.contains(&event_type),
-            "无效事件类型应被拒绝"
-        );
+        assert!(!valid.contains(&event_type), "无效事件类型应被拒绝");
     }
 
     #[test]

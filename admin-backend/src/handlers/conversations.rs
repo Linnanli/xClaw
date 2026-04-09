@@ -20,7 +20,10 @@ pub async fn get_conversations(
     State(state): State<AppState>,
     Query(params): Query<ConversationQuery>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let page = params.page.unwrap_or(1).max(1);
@@ -28,8 +31,10 @@ pub async fn get_conversations(
     let offset = (page - 1) * page_size;
 
     let (where_clause, query_params) = build_conversations_filter(&params);
-    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-        query_params.iter().map(|p| &**p as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = query_params
+        .iter()
+        .map(|p| &**p as &(dyn tokio_postgres::types::ToSql + Sync))
+        .collect();
 
     let count_sql = format!(
         "SELECT COUNT(*) FROM conversations c JOIN users u ON u.id = c.user_id {}",
@@ -69,7 +74,10 @@ pub async fn get_conversation_detail(
     State(state): State<AppState>,
     Path(conv_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let conv = client
@@ -96,17 +104,20 @@ pub async fn get_conversation_detail(
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
-    let msgs: Vec<_> = messages.iter().map(|r| {
-        json!({
-            "id": r.get::<_, Uuid>(0),
-            "role": r.get::<_, String>(1),
-            "content": r.get::<_, String>(2),
-            "model_id": r.get::<_, Option<String>>(3),
-            "input_tokens": r.get::<_, i32>(4),
-            "output_tokens": r.get::<_, i32>(5),
-            "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(6),
+    let msgs: Vec<_> = messages
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<_, Uuid>(0),
+                "role": r.get::<_, String>(1),
+                "content": r.get::<_, String>(2),
+                "model_id": r.get::<_, Option<String>>(3),
+                "input_tokens": r.get::<_, i32>(4),
+                "output_tokens": r.get::<_, i32>(5),
+                "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(6),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({
         "id": conv.get::<_, Uuid>(0),
@@ -126,7 +137,10 @@ pub async fn get_conversation_detail(
 pub async fn get_conversation_stats(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let row = client
@@ -177,7 +191,9 @@ pub async fn ingest_conversation(
         return Ok(None); // 已存在，跳过
     }
 
-    let total_tokens: i32 = payload.messages.iter()
+    let total_tokens: i32 = payload
+        .messages
+        .iter()
         .map(|m| m.input_tokens + m.output_tokens)
         .sum();
 
@@ -241,7 +257,9 @@ fn aggregate_assistant_tokens(payload: &ConversationReportPayload) -> TokenSumma
         if msg.role != "assistant" {
             continue;
         }
-        let model = msg.model_id.as_deref()
+        let model = msg
+            .model_id
+            .as_deref()
             .filter(|s| !s.is_empty())
             .unwrap_or(&fallback_model)
             .to_string();
@@ -274,7 +292,10 @@ fn row_to_conversation_summary(row: &tokio_postgres::Row) -> serde_json::Value {
 
 fn build_conversations_filter(
     params: &ConversationQuery,
-) -> (String, Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>>) {
+) -> (
+    String,
+    Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>>,
+) {
     let mut conditions: Vec<String> = Vec::new();
     let mut query_params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = Vec::new();
     let mut idx = 1;
@@ -298,7 +319,11 @@ fn build_conversations_filter(
         let trimmed = search.trim();
         if !trimmed.is_empty() {
             // 同一参数用于两个 ILIKE 条件，需要 push 两次
-            conditions.push(format!("(c.topic ILIKE ${} OR u.username ILIKE ${})", idx, idx + 1));
+            conditions.push(format!(
+                "(c.topic ILIKE ${} OR u.username ILIKE ${})",
+                idx,
+                idx + 1
+            ));
             let pattern = format!("%{}%", trimmed);
             query_params.push(Box::new(pattern.clone()));
             query_params.push(Box::new(pattern));

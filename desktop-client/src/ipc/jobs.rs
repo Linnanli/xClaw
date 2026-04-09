@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 use uuid::Uuid;
 
-use ironclaw::context::JobState;
 use crate::state::EngineState;
+use ironclaw::context::JobState;
 
 // ─── 数据类型 ────────────────────────────────────────────────────────
 
@@ -80,9 +80,7 @@ pub struct JobPromptResponse {
 
 /// 列出当前用户的所有任务。
 #[tauri::command]
-pub async fn ic_list_jobs(
-    state: State<'_, EngineState>,
-) -> Result<Vec<JobInfoResponse>, String> {
+pub async fn ic_list_jobs(state: State<'_, EngineState>) -> Result<Vec<JobInfoResponse>, String> {
     let state = state.get()?;
     let db = state.db.as_ref().ok_or("Database not available")?.clone();
 
@@ -92,7 +90,7 @@ pub async fn ic_list_jobs(
         .map_err(|e| format!("Failed to list jobs: {}", e))?;
 
     let mut tasks = tokio::task::JoinSet::new();
-    for j in jobs {
+    for (idx, j) in jobs.into_iter().enumerate() {
         let db = db.clone();
         tasks.spawn(async move {
             let conversation_id = db
@@ -102,23 +100,29 @@ pub async fn ic_list_jobs(
                 .flatten()
                 .and_then(|ctx| ctx.conversation_id)
                 .map(|id| id.to_string());
-            JobInfoResponse {
-                id: j.id.to_string(),
-                title: j.title,
-                status: j.status,
-                created_at: j.created_at.to_rfc3339(),
-                started_at: j.started_at.map(|t| t.to_rfc3339()),
-                completed_at: j.completed_at.map(|t| t.to_rfc3339()),
-                conversation_id,
-            }
+            (
+                idx,
+                JobInfoResponse {
+                    id: j.id.to_string(),
+                    title: j.title,
+                    status: j.status,
+                    created_at: j.created_at.to_rfc3339(),
+                    started_at: j.started_at.map(|t| t.to_rfc3339()),
+                    completed_at: j.completed_at.map(|t| t.to_rfc3339()),
+                    conversation_id,
+                },
+            )
         });
     }
 
-    let mut responses = Vec::new();
+    let mut ordered: Vec<Option<JobInfoResponse>> = vec![None; tasks.len()];
     while let Some(res) = tasks.join_next().await {
-        responses.push(res.map_err(|e| format!("Task join error: {e}"))?);
+        let (idx, item) = res.map_err(|e| format!("Task join error: {e}"))?;
+        if idx < ordered.len() {
+            ordered[idx] = Some(item);
+        }
     }
-    Ok(responses)
+    Ok(ordered.into_iter().flatten().collect())
 }
 
 /// 获取任务详情（含运行结果、失败原因、事件历史）。
@@ -131,8 +135,7 @@ pub async fn ic_get_job_detail(
     job_id: String,
 ) -> Result<JobDetailResponse, String> {
     let state = state.get()?;
-    let uuid = Uuid::parse_str(&job_id)
-        .map_err(|_| format!("Invalid job ID: {}", job_id))?;
+    let uuid = Uuid::parse_str(&job_id).map_err(|_| format!("Invalid job ID: {}", job_id))?;
 
     let db = state.db.as_ref().ok_or("Database not available")?;
 
@@ -143,9 +146,7 @@ pub async fn ic_get_job_detail(
         .ok_or_else(|| format!("Job not found: {}", job_id))?;
 
     let failure_reason = if ctx.state == JobState::Failed {
-        db.get_agent_job_failure_reason(uuid)
-            .await
-            .unwrap_or(None)
+        db.get_agent_job_failure_reason(uuid).await.unwrap_or(None)
     } else {
         None
     };
@@ -188,13 +189,9 @@ pub async fn ic_job_events(
     job_id: String,
 ) -> Result<JobEventsResponse, String> {
     let state = state.get()?;
-    let uuid = Uuid::parse_str(&job_id)
-        .map_err(|_| format!("Invalid job ID: {}", job_id))?;
+    let uuid = Uuid::parse_str(&job_id).map_err(|_| format!("Invalid job ID: {}", job_id))?;
 
-    let db = state
-        .db
-        .as_ref()
-        .ok_or("Database not available")?;
+    let db = state.db.as_ref().ok_or("Database not available")?;
 
     let events = db
         .list_job_events(uuid, None)
@@ -233,18 +230,13 @@ pub async fn ic_job_prompt(
     content: String,
 ) -> Result<JobPromptResponse, String> {
     let state = state.get()?;
-    let uuid = Uuid::parse_str(&job_id)
-        .map_err(|_| format!("Invalid job ID: {}", job_id))?;
+    let uuid = Uuid::parse_str(&job_id).map_err(|_| format!("Invalid job ID: {}", job_id))?;
 
     // 通过消息系统发送后续提示
     let prompt_content = format!("!prompt {} {}", uuid, content);
 
-    let msg = ironclaw::channels::IncomingMessage::new(
-        "tauri",
-        &state.owner_id,
-        &prompt_content,
-    )
-    .with_owner_id(&state.owner_id);
+    let msg = ironclaw::channels::IncomingMessage::new("tauri", &state.owner_id, &prompt_content)
+        .with_owner_id(&state.owner_id);
 
     state
         .msg_sender

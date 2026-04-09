@@ -189,7 +189,12 @@ pub async fn ic_extension_setup_submit(
         .ok_or("Extension manager not available")?;
 
     let result = ext_mgr
-        .configure(&name, &secrets, &std::collections::HashMap::new(), &state.owner_id)
+        .configure(
+            &name,
+            &secrets,
+            &std::collections::HashMap::new(),
+            &state.owner_id,
+        )
         .await
         .map_err(|e| format!("Failed to configure extension: {}", e))?;
 

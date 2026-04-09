@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 mod conversation_payload_tests {
-    use admin_backend::models::{ConversationReportPayload, ConversationMessagePayload};
+    use admin_backend::models::{ConversationMessagePayload, ConversationReportPayload};
 
     #[test]
     fn req_conv_8_report_payload_deserializes() {
@@ -41,10 +41,25 @@ mod conversation_payload_tests {
     #[test]
     fn req_conv_5_token_calculation() {
         let messages = vec![
-            ConversationMessagePayload { role: "user".into(), content: "hi".into(), model_id: None, input_tokens: 10, output_tokens: 0 },
-            ConversationMessagePayload { role: "assistant".into(), content: "hello".into(), model_id: Some("gpt".into()), input_tokens: 0, output_tokens: 20 },
+            ConversationMessagePayload {
+                role: "user".into(),
+                content: "hi".into(),
+                model_id: None,
+                input_tokens: 10,
+                output_tokens: 0,
+            },
+            ConversationMessagePayload {
+                role: "assistant".into(),
+                content: "hello".into(),
+                model_id: Some("gpt".into()),
+                input_tokens: 0,
+                output_tokens: 20,
+            },
         ];
-        let total: i32 = messages.iter().map(|m| m.input_tokens + m.output_tokens).sum();
+        let total: i32 = messages
+            .iter()
+            .map(|m| m.input_tokens + m.output_tokens)
+            .sum();
         assert_eq!(total, 30);
     }
 }
@@ -53,7 +68,15 @@ mod conversation_payload_tests {
 mod conversation_contract_tests {
     use serde_json::json;
 
-    const REQUIRED_LIST_FIELDS: &[&str] = &["id", "username", "topic", "message_count", "total_tokens", "dlp_flagged", "created_at"];
+    const REQUIRED_LIST_FIELDS: &[&str] = &[
+        "id",
+        "username",
+        "topic",
+        "message_count",
+        "total_tokens",
+        "dlp_flagged",
+        "created_at",
+    ];
 
     #[test]
     fn test_contract_conversation_list_response() {
@@ -93,7 +116,12 @@ mod conversation_contract_tests {
     #[test]
     fn test_contract_conversation_stats_response() {
         let resp = json!({"today_count": 342, "today_tokens": 1200000, "today_dlp_flagged": 18, "today_active_users": 67});
-        for f in &["today_count", "today_tokens", "today_dlp_flagged", "today_active_users"] {
+        for f in &[
+            "today_count",
+            "today_tokens",
+            "today_dlp_flagged",
+            "today_active_users",
+        ] {
             assert!(resp[*f].is_number(), "统计响应缺少字段: {}", f);
         }
     }
@@ -104,7 +132,16 @@ mod conversation_security_tests {
     #[test]
     fn test_audit_conversation_list_no_content_leak() {
         // 列表 API 返回的字段不应包含对话原文
-        let list_fields = ["id", "username", "topic", "message_count", "total_tokens", "model_id", "dlp_flagged", "created_at"];
+        let list_fields = [
+            "id",
+            "username",
+            "topic",
+            "message_count",
+            "total_tokens",
+            "model_id",
+            "dlp_flagged",
+            "created_at",
+        ];
         assert!(!list_fields.contains(&"content"), "列表不应泄露对话内容");
         assert!(!list_fields.contains(&"messages"), "列表不应包含消息数组");
     }

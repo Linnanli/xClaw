@@ -125,10 +125,7 @@ fn test_get_logs_empty_broadcaster() {
 
 #[test]
 fn test_clear_hides_existing_entries() {
-    let b = broadcaster_with(&[
-        ("INFO", "m", "old 1"),
-        ("INFO", "m", "old 2"),
-    ]);
+    let b = broadcaster_with(&[("INFO", "m", "old 1"), ("INFO", "m", "old 2")]);
     // 模拟 ic_clear_logs：offset = 当前条目数
     let offset = b.recent_entries().len();
     assert_eq!(offset, 2);
@@ -140,10 +137,7 @@ fn test_clear_hides_existing_entries() {
 
 #[test]
 fn test_new_entries_visible_after_clear() {
-    let b = broadcaster_with(&[
-        ("INFO", "m", "old 1"),
-        ("INFO", "m", "old 2"),
-    ]);
+    let b = broadcaster_with(&[("INFO", "m", "old 1"), ("INFO", "m", "old 2")]);
     let offset = b.recent_entries().len(); // 清空点
 
     // 清空后写入新日志
@@ -205,10 +199,7 @@ fn test_search_no_match_returns_empty() {
 
 #[test]
 fn test_search_respects_offset() {
-    let b = broadcaster_with(&[
-        ("INFO", "mod", "engine old"),
-        ("INFO", "mod", "engine new"),
-    ]);
+    let b = broadcaster_with(&[("INFO", "mod", "engine old"), ("INFO", "mod", "engine new")]);
     // 清空后只有第 2 条可见
     let result = search_pure(&b, 1, "engine", 100);
     assert_eq!(result.len(), 1);
@@ -263,10 +254,7 @@ fn test_filter_level_and_module_combined() {
 
 #[test]
 fn test_filter_empty_strings_returns_all() {
-    let b = broadcaster_with(&[
-        ("INFO", "mod_a", "a"),
-        ("WARN", "mod_b", "b"),
-    ]);
+    let b = broadcaster_with(&[("INFO", "mod_a", "a"), ("WARN", "mod_b", "b")]);
     // level="" module="" 不过滤
     let result = filter_pure(&b, 0, "", "", 100);
     assert_eq!(result.len(), 2);
@@ -274,10 +262,7 @@ fn test_filter_empty_strings_returns_all() {
 
 #[test]
 fn test_filter_respects_offset() {
-    let b = broadcaster_with(&[
-        ("ERROR", "mod", "old error"),
-        ("ERROR", "mod", "new error"),
-    ]);
+    let b = broadcaster_with(&[("ERROR", "mod", "old error"), ("ERROR", "mod", "new error")]);
     let result = filter_pure(&b, 1, "error", "", 100);
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].message, "new error");
@@ -287,10 +272,7 @@ fn test_filter_respects_offset() {
 
 #[test]
 fn test_export_produces_valid_json() {
-    let b = broadcaster_with(&[
-        ("INFO", "mod", "hello"),
-        ("ERROR", "mod", "world"),
-    ]);
+    let b = broadcaster_with(&[("INFO", "mod", "hello"), ("ERROR", "mod", "world")]);
     let entries: Vec<LogEntryDto> = b.recent_entries().into_iter().map(Into::into).collect();
     let json = serde_json::to_string_pretty(&entries).expect("should serialize");
 
@@ -324,10 +306,7 @@ fn test_log_entry_dto_field_mapping() {
 
 #[test]
 fn test_export_logs_json_is_valid_and_contains_all_entries() {
-    let b = broadcaster_with(&[
-        ("INFO", "mod", "hello"),
-        ("ERROR", "mod", "world"),
-    ]);
+    let b = broadcaster_with(&[("INFO", "mod", "hello"), ("ERROR", "mod", "world")]);
     let entries: Vec<LogEntryDto> = b.recent_entries().into_iter().map(Into::into).collect();
     let json = serde_json::to_string_pretty(&entries).expect("should serialize");
 
@@ -339,10 +318,7 @@ fn test_export_logs_json_is_valid_and_contains_all_entries() {
 
 #[test]
 fn test_export_logs_respects_clear_offset() {
-    let b = broadcaster_with(&[
-        ("INFO", "mod", "old"),
-        ("INFO", "mod", "new"),
-    ]);
+    let b = broadcaster_with(&[("INFO", "mod", "old"), ("INFO", "mod", "new")]);
     let offset = 1; // 清空后只有第 2 条可见
     let entries: Vec<LogEntryDto> = b
         .recent_entries()

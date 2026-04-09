@@ -38,11 +38,7 @@ mod engine_state_timing_tests {
             injection_check_enabled: true,
         };
         let safety = Arc::new(SafetyLayer::new(&safety_config));
-        let safety_bridge = Arc::new(SafetyBridge::new(
-            Arc::clone(&safety),
-            None,
-            None,
-        ));
+        let safety_bridge = Arc::new(SafetyBridge::new(Arc::clone(&safety), None, None));
         let tools = Arc::new(ToolRegistry::new());
         let context_manager = Arc::new(ContextManager::new(5));
 
@@ -83,22 +79,28 @@ mod engine_state_timing_tests {
 
     #[async_trait::async_trait]
     impl ironclaw::llm::LlmProvider for StubLlmProvider {
-        fn model_name(&self) -> &str { "stub-model" }
+        fn model_name(&self) -> &str {
+            "stub-model"
+        }
         fn cost_per_token(&self) -> (rust_decimal::Decimal, rust_decimal::Decimal) {
             (rust_decimal::Decimal::ZERO, rust_decimal::Decimal::ZERO)
         }
         async fn complete(
-            &self, _req: ironclaw::llm::CompletionRequest,
+            &self,
+            _req: ironclaw::llm::CompletionRequest,
         ) -> Result<ironclaw::llm::CompletionResponse, ironclaw::error::LlmError> {
             Err(ironclaw::error::LlmError::RequestFailed {
-                provider: "stub".into(), reason: "not implemented".into(),
+                provider: "stub".into(),
+                reason: "not implemented".into(),
             })
         }
         async fn complete_with_tools(
-            &self, _req: ironclaw::llm::ToolCompletionRequest,
+            &self,
+            _req: ironclaw::llm::ToolCompletionRequest,
         ) -> Result<ironclaw::llm::ToolCompletionResponse, ironclaw::error::LlmError> {
             Err(ironclaw::error::LlmError::RequestFailed {
-                provider: "stub".into(), reason: "not implemented".into(),
+                provider: "stub".into(),
+                reason: "not implemented".into(),
             })
         }
     }
@@ -524,11 +526,7 @@ mod engine_state_timing_tests {
         // Phase 3: 前端再次调用，应该得到具体的失败原因
         let err = engine.get().err().expect("应该返回错误");
         assert!(err.contains("启动失败"), "应包含'启动失败': {}", err);
-        assert!(
-            err.contains("LLM_API_KEY"),
-            "应包含具体原因: {}",
-            err
-        );
+        assert!(err.contains("LLM_API_KEY"), "应包含具体原因: {}", err);
     }
 
     /// 模拟高并发场景：引擎启动的同时大量命令涌入。

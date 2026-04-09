@@ -7,6 +7,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import {
   Briefcase,
   CheckCircle,
@@ -31,8 +32,10 @@ import { useEngineReady } from '../../hooks/useEngineReady';
 interface JobsPanelProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** 点击"查看任务结果"按钮时回调 */
-  onJobClick?: (conversationId: string, prompt: string) => void;
+  /** 在当前对话中发起“查看任务结果”提问 */
+  onAskJobResult?: (question: string) => void;
+  /** 点击任务对话入口时回调 */
+  onJobClick?: (conversationId: string) => void;
 }
 
 type StatusKey = 'running' | 'completed' | 'failed';
@@ -55,7 +58,7 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
   progress: '进度',
 };
 
-export function JobsPanel({ open, onOpenChange, onJobClick }: JobsPanelProps) {
+export function JobsPanel({ open, onOpenChange, onAskJobResult, onJobClick }: JobsPanelProps) {
   const [jobs, setJobs] = useState<JobInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedJob, setSelectedJob] = useState<JobInfo | null>(null);
@@ -77,13 +80,56 @@ export function JobsPanel({ open, onOpenChange, onJobClick }: JobsPanelProps) {
     try {
       setLoading(true);
       const list = await jobApi.getJobs();
-      setJobs(list);
+      const sorted = [...list].sort((a, b) => {
+        const ta = Date.parse(a.created_at);
+        const tb = Date.parse(b.created_at);
+        if (Number.isFinite(ta) && Number.isFinite(tb) && ta !== tb) {
+          return tb - ta;
+        }
+        return b.id.localeCompare(a.id);
+      });
+      setJobs(sorted);
     } catch (err) {
       console.error('Failed to fetch jobs:', err);
     } finally {
       setLoading(false);
     }
   };
+
+  // 抽屉打开时监听任务事件，自动刷新列表，避免“刚触发看不到任务”的竞态。
+  useEffect(() => {
+    if (!open) return;
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleRefresh = () => {
+      if (timer) return;
+      timer = setTimeout(() => {
+        timer = null;
+        void fetchJobs();
+      }, 300);
+    };
+
+    const JOB_EVENT_TYPES = new Set(['job_status', 'job_started', 'job_updated', 'job_completed', 'job_failed']);
+    const unlistenPromise = listen<{ type?: string }>('chat-event', (event) => {
+      if (JOB_EVENT_TYPES.has(event.payload?.type ?? '')) {
+        scheduleRefresh();
+      }
+    });
+
+    return () => {
+      if (timer) clearTimeout(timer);
+      unlistenPromise.then((fn) => fn()).catch(() => {});
+    };
+  }, [open]);
+
+  // 打开抽屉时兜底轮询，避免事件丢失导致新任务不可见。
+  useEffect(() => {
+    if (!open) return;
+    const interval = setInterval(() => {
+      void fetchJobs();
+    }, 1500);
+    return () => clearInterval(interval);
+  }, [open]);
 
   const handleJobClick = async (job: JobInfo) => {
     setSelectedJob(job);
@@ -106,12 +152,24 @@ export function JobsPanel({ open, onOpenChange, onJobClick }: JobsPanelProps) {
 
   const handleGoToConversation = () => {
     if (!jobDetail?.conversation_id) return;
-    const title = jobDetail.title || selectedJob?.id || '该任务';
-    const prompt =
-      jobDetail.status === 'failed'
-        ? `请分析任务「${title}」的失败原因，并给出修复建议。`
-        : `请总结任务「${title}」的执行结果。`;
-    onJobClick?.(jobDetail.conversation_id, prompt);
+    onJobClick?.(jobDetail.conversation_id);
+  };
+
+  const handleAskJobResult = () => {
+    if (!jobDetail) return;
+    const title = jobDetail.title || selectedJob?.title || selectedJob?.id || jobDetail.id;
+    const summaryHint = jobDetail.description?.trim() ? `任务描述：${jobDetail.description.trim()}\n` : '';
+    const question = [
+      `请基于任务执行记录总结这个任务的运行结果：`,
+      `任务ID：${jobDetail.id}`,
+      `任务标题：${title}`,
+      `当前状态：${jobDetail.status}`,
+      summaryHint,
+      '请输出：1) 执行结论 2) 关键步骤 3) 若失败请给出修复建议。',
+    ]
+      .filter(Boolean)
+      .join('\n');
+    onAskJobResult?.(question);
   };
 
   const counts = {
@@ -171,7 +229,7 @@ export function JobsPanel({ open, onOpenChange, onJobClick }: JobsPanelProps) {
               className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
             >
               <MessageSquare className="size-3.5" />
-              {jobDetail.status === 'failed' ? '分析失败原因' : '查看任务结果'}
+              打开任务对话
             </button>
           )}
         </div>
@@ -187,12 +245,22 @@ export function JobsPanel({ open, onOpenChange, onJobClick }: JobsPanelProps) {
           {!detailLoading && jobDetail && (
             <div className="p-4 space-y-4">
               {/* 任务描述 */}
-              {jobDetail.description && (
-                <div>
-                  <p className="mb-1 text-xs font-medium text-muted-foreground">任务描述</p>
-                  <p className="text-sm text-foreground">{jobDetail.description}</p>
-                </div>
-              )}
+              <div className="space-y-2">
+                {jobDetail.description && (
+                  <>
+                    <p className="mb-1 text-xs font-medium text-muted-foreground">任务描述</p>
+                    <p className="text-sm text-foreground">{jobDetail.description}</p>
+                  </>
+                )}
+                <button
+                  type="button"
+                  onClick={handleAskJobResult}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
+                >
+                  <MessageSquare className="size-3.5" />
+                  查看任务结果
+                </button>
+              </div>
 
               {/* 失败原因 */}
               {jobDetail.failure_reason && (

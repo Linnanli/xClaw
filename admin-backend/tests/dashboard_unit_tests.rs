@@ -89,16 +89,17 @@ mod dashboard_security_tests {
     #[test]
     fn test_security_dashboard_no_sensitive_data() {
         // 仪表盘统计数据只包含聚合数字，不包含个人信息
-        let stats_fields = vec!["total_users", "online_clients", "dlp_blocked_today", "sensitive_ops_today"];
+        let stats_fields = vec![
+            "total_users",
+            "online_clients",
+            "dlp_blocked_today",
+            "sensitive_ops_today",
+        ];
         let sensitive_fields = vec!["password", "password_hash", "token", "api_key", "secret"];
 
         for field in &stats_fields {
             for sensitive in &sensitive_fields {
-                assert_ne!(
-                    field, sensitive,
-                    "仪表盘不应包含敏感字段: {}",
-                    sensitive
-                );
+                assert_ne!(field, sensitive, "仪表盘不应包含敏感字段: {}", sensitive);
             }
         }
     }
@@ -107,13 +108,7 @@ mod dashboard_security_tests {
     #[test]
     fn test_security_activity_log_no_password() {
         let log_details = "用户 admin 登录成功";
-        assert!(
-            !log_details.contains("password"),
-            "日志详情不应包含密码"
-        );
-        assert!(
-            !log_details.contains("secret"),
-            "日志详情不应包含密钥"
-        );
+        assert!(!log_details.contains("password"), "日志详情不应包含密码");
+        assert!(!log_details.contains("secret"), "日志详情不应包含密钥");
     }
 }

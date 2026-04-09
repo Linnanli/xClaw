@@ -11,7 +11,7 @@ mod model_whitelist_tests {
         let user_id = "test-user-123";
         let admin_url = "http://localhost:3000";
         let expected_url = format!("{}/api/client-models?user_id={}", admin_url, user_id);
-        
+
         // 这个测试验证 URL 格式正确
         assert!(expected_url.contains("user_id="));
         assert!(expected_url.contains(user_id));
@@ -20,7 +20,7 @@ mod model_whitelist_tests {
     #[test]
     fn test_conversation_report_structure() {
         use desktop_client::data_reporter::{ClientReport, ConversationMessage};
-        
+
         // 验证 Conversation 类型可以正确序列化
         let report = ClientReport::Conversation {
             client_conversation_id: "conv-123".to_string(),
@@ -73,7 +73,13 @@ mod conversation_tracker_tests {
         let reporter = make_reporter();
 
         tracker.record_user_message("thread-1", "你好", false);
-        tracker.record_assistant_message("thread-1", "你好！有什么可以帮你？", Some("gpt-4o"), 15, 20);
+        tracker.record_assistant_message(
+            "thread-1",
+            "你好！有什么可以帮你？",
+            Some("gpt-4o"),
+            15,
+            20,
+        );
         tracker.finish_thread("thread-1", &reporter);
 
         assert_eq!(reporter.queue_len(), 1);

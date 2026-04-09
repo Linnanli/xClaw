@@ -166,13 +166,18 @@ fn test_all_frontend_commands_are_registered() {
         missing.is_empty(),
         "\n❌ 以下命令在前端被调用，但未注册到 invoke_handler:\n{}\n\n\
          修复方法：在 lib.rs 的 all_tauri_commands!() 宏中添加这些命令。",
-        missing.iter().map(|c| format!("   - {}", c)).collect::<Vec<_>>().join("\n")
+        missing
+            .iter()
+            .map(|c| format!("   - {}", c))
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 }
 
 #[test]
 fn test_no_ghost_commands_in_handler() {
-    let frontend: std::collections::HashSet<&str> = FRONTEND_INVOKED_COMMANDS.iter().copied().collect();
+    let frontend: std::collections::HashSet<&str> =
+        FRONTEND_INVOKED_COMMANDS.iter().copied().collect();
 
     let ghost: Vec<&str> = REGISTERED_COMMANDS
         .iter()
@@ -183,7 +188,11 @@ fn test_no_ghost_commands_in_handler() {
     if !ghost.is_empty() {
         println!(
             "⚠️  以下命令已注册但前端未调用（可能是废弃命令）:\n{}",
-            ghost.iter().map(|c| format!("   - {}", c)).collect::<Vec<_>>().join("\n")
+            ghost
+                .iter()
+                .map(|c| format!("   - {}", c))
+                .collect::<Vec<_>>()
+                .join("\n")
         );
     }
 }

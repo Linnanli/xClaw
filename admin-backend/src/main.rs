@@ -13,11 +13,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
 
     // Database configuration — 变量读取一次，同时供 legacy pool 和 sqlx pool 使用
-    let db_host     = env::var("DB_HOST").unwrap_or_else(|_| "localhost".to_string());
-    let db_port     = env::var("DB_PORT").unwrap_or_else(|_| "5432".to_string());
-    let db_user     = env::var("DB_USER").unwrap_or_else(|_| "postgres".to_string());
+    let db_host = env::var("DB_HOST").unwrap_or_else(|_| "localhost".to_string());
+    let db_port = env::var("DB_PORT").unwrap_or_else(|_| "5432".to_string());
+    let db_user = env::var("DB_USER").unwrap_or_else(|_| "postgres".to_string());
     let db_password = env::var("DB_PASSWORD").unwrap_or_else(|_| "postgres".to_string());
-    let db_name     = env::var("DB_NAME").unwrap_or_else(|_| "ironclaw".to_string());
+    let db_name = env::var("DB_NAME").unwrap_or_else(|_| "ironclaw".to_string());
 
     let db_config = Config {
         host: Some(db_host.clone()),
@@ -30,13 +30,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = db_config.create_pool(None, tokio_postgres::NoTls)?;
 
     // SQLx 连接池 — 新模块使用；优先读 DATABASE_URL，否则从各分项变量拼接
-    let database_url = env::var("DATABASE_URL")
-        .unwrap_or_else(|_| format!("postgres://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"));
+    let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| {
+        format!("postgres://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}")
+    });
     let sqlx_pool = sqlx::PgPool::connect(&database_url).await?;
 
     // IronClaw Gateway URL
-    let gateway_url = env::var("IRONCLAW_GATEWAY_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:38080".to_string());
+    let gateway_url =
+        env::var("IRONCLAW_GATEWAY_URL").unwrap_or_else(|_| "http://127.0.0.1:38080".to_string());
 
     // HTTP client for proxying requests to IronClaw Gateway
     let http_client = reqwest::Client::builder()
@@ -55,11 +56,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = routes::create_router(state.clone());
 
     // CORS — 允许 Desktop Client 前端跨域访问
-    use tower_http::cors::{CorsLayer, Any};
     use axum::http::Method;
+    use tower_http::cors::{Any, CorsLayer};
     let cors = CorsLayer::new()
         .allow_origin(Any)
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
         .allow_headers(Any);
     let app = app.layer(cors);
 
@@ -187,7 +194,10 @@ async fn retry_failed_notifications(pool: &deadpool_postgres::Pool) {
         return;
     }
 
-    tracing::info!(count = rows.len(), "notification retry: retrying failed notifications");
+    tracing::info!(
+        count = rows.len(),
+        "notification retry: retrying failed notifications"
+    );
 
     for row in &rows {
         let log_id: uuid::Uuid = row.get(0);
@@ -259,7 +269,11 @@ async fn update_client_online_status(pool: &deadpool_postgres::Pool) {
         )
         .await
     {
-        Ok(n) if n > 0 => tracing::info!(count = n, "client status update: marked {} clients offline", n),
+        Ok(n) if n > 0 => tracing::info!(
+            count = n,
+            "client status update: marked {} clients offline",
+            n
+        ),
         Ok(_) => {}
         Err(e) => tracing::warn!(error = %e, "client status update: failed to mark offline"),
     }

@@ -5,8 +5,7 @@
 #[cfg(test)]
 mod alert_validation_tests {
     use admin_backend::models::{
-        AlertTrigger, CreateAlertRuleRequest, UpdateAlertEventStatusRequest,
-        UpdateAlertRuleRequest,
+        AlertTrigger, CreateAlertRuleRequest, UpdateAlertEventStatusRequest, UpdateAlertRuleRequest,
     };
 
     #[test]
@@ -44,8 +43,7 @@ mod alert_validation_tests {
     #[test]
     fn req_alerts_6_update_status_request_deserializes() {
         let json = r#"{"status": "closed", "note": "已处理完毕"}"#;
-        let req: UpdateAlertEventStatusRequest =
-            serde_json::from_str(json).expect("应能反序列化");
+        let req: UpdateAlertEventStatusRequest = serde_json::from_str(json).expect("应能反序列化");
         assert_eq!(req.status, "closed");
         assert_eq!(req.note.as_deref(), Some("已处理完毕"));
     }
@@ -53,8 +51,7 @@ mod alert_validation_tests {
     #[test]
     fn req_alerts_6_update_status_without_note() {
         let json = r#"{"status": "acknowledged"}"#;
-        let req: UpdateAlertEventStatusRequest =
-            serde_json::from_str(json).expect("应能反序列化");
+        let req: UpdateAlertEventStatusRequest = serde_json::from_str(json).expect("应能反序列化");
         assert_eq!(req.status, "acknowledged");
         assert!(req.note.is_none());
     }
@@ -98,22 +95,14 @@ mod alert_event_type_tests {
     #[test]
     fn req_alerts_2_all_event_types_recognized() {
         for et in VALID_EVENT_TYPES {
-            assert!(
-                VALID_EVENT_TYPES.contains(et),
-                "事件类型 {} 应被识别",
-                et
-            );
+            assert!(VALID_EVENT_TYPES.contains(et), "事件类型 {} 应被识别", et);
         }
     }
 
     #[test]
     fn req_alerts_2_all_severities_recognized() {
         for sev in VALID_SEVERITIES {
-            assert!(
-                VALID_SEVERITIES.contains(sev),
-                "严重级别 {} 应被识别",
-                sev
-            );
+            assert!(VALID_SEVERITIES.contains(sev), "严重级别 {} 应被识别", sev);
         }
     }
 
@@ -129,10 +118,7 @@ mod alert_event_type_tests {
     #[test]
     fn req_alerts_2_invalid_severity_rejected() {
         let invalid = "extreme";
-        assert!(
-            !VALID_SEVERITIES.contains(&invalid),
-            "无效严重级别应被拒绝"
-        );
+        assert!(!VALID_SEVERITIES.contains(&invalid), "无效严重级别应被拒绝");
     }
 }
 
@@ -188,7 +174,13 @@ mod alert_field_validation_tests {
 
     #[test]
     fn test_validate_event_type_invalid() {
-        let invalid_types = ["invalid_type", "unknown", "", "DLP_VIOLATION", "dlp violation"];
+        let invalid_types = [
+            "invalid_type",
+            "unknown",
+            "",
+            "DLP_VIOLATION",
+            "dlp violation",
+        ];
         for et in &invalid_types {
             assert!(
                 !VALID_EVENT_TYPES.contains(et),

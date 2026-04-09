@@ -1,5 +1,5 @@
 //! Qwen E2E 测试 - 诊断客户端和后端集成问题
-//! 
+//!
 //! 这个测试验证：
 //! 1. 后端是否正确配置了 Qwen
 //! 2. 客户端是否能正确发送消息
@@ -34,7 +34,7 @@ impl QwenE2ETest {
     /// 检查后端是否运行
     async fn check_backend_health(&self) -> Result<(), String> {
         println!("🔍 检查后端健康状态...");
-        
+
         let response = self
             .client
             .get(&format!("{}/api/health", self.backend_url))
@@ -54,7 +54,7 @@ impl QwenE2ETest {
     /// 创建新的对话线程
     async fn create_thread(&self) -> Result<String, String> {
         println!("🔍 创建新的对话线程...");
-        
+
         let response = self
             .client
             .post(&format!("{}/api/chat/thread/new", self.backend_url))
@@ -92,7 +92,7 @@ impl QwenE2ETest {
         println!("🔍 发送消息到后端...");
         println!("   线程 ID: {}", thread_id);
         println!("   消息内容: {}", content);
-        
+
         let response = self
             .client
             .post(&format!("{}/api/chat/send", self.backend_url))
@@ -121,8 +121,11 @@ impl QwenE2ETest {
             .map_err(|e| format!("❌ 解析响应失败: {}", e))?;
 
         println!("✅ 消息发送成功");
-        println!("   响应: {}", serde_json::to_string_pretty(&data).unwrap_or_default());
-        
+        println!(
+            "   响应: {}",
+            serde_json::to_string_pretty(&data).unwrap_or_default()
+        );
+
         Ok(data)
     }
 
@@ -130,7 +133,7 @@ impl QwenE2ETest {
     async fn get_messages(&self, thread_id: &str) -> Result<Vec<Value>, String> {
         println!("🔍 获取消息历史...");
         println!("   线程 ID: {}", thread_id);
-        
+
         let response = self
             .client
             .get(&format!("{}/api/chat/history", self.backend_url))
@@ -168,16 +171,24 @@ impl QwenE2ETest {
 
         println!("✅ 获取消息成功: {} 条消息", messages.len());
         for (i, msg) in messages.iter().enumerate() {
-            println!("   消息 {}: {}", i + 1, serde_json::to_string_pretty(msg).unwrap_or_default());
+            println!(
+                "   消息 {}: {}",
+                i + 1,
+                serde_json::to_string_pretty(msg).unwrap_or_default()
+            );
         }
-        
+
         Ok(messages)
     }
 
     /// 等待消息响应
-    async fn wait_for_response(&self, thread_id: &str, timeout_secs: u64) -> Result<String, String> {
+    async fn wait_for_response(
+        &self,
+        thread_id: &str,
+        timeout_secs: u64,
+    ) -> Result<String, String> {
         println!("🔍 等待 AI 响应 (超时: {} 秒)...", timeout_secs);
-        
+
         let start = std::time::Instant::now();
         let mut last_count = 0;
 
@@ -185,7 +196,7 @@ impl QwenE2ETest {
             sleep(Duration::from_secs(1)).await;
 
             let messages = self.get_messages(thread_id).await?;
-            
+
             if messages.len() > last_count {
                 // 检查是否有新的助手消息
                 for msg in messages.iter().skip(last_count) {
@@ -251,7 +262,7 @@ impl QwenE2ETest {
 #[ignore] // 需要手动启动后端
 async fn test_qwen_backend_health() {
     let test = QwenE2ETest::new();
-    
+
     match test.check_backend_health().await {
         Ok(_) => println!("✅ 后端健康检查通过"),
         Err(e) => {
@@ -265,7 +276,7 @@ async fn test_qwen_backend_health() {
 #[ignore] // 需要手动启动后端
 async fn test_qwen_create_thread() {
     let test = QwenE2ETest::new();
-    
+
     // 先检查后端
     if let Err(e) = test.check_backend_health().await {
         eprintln!("{}", e);
@@ -286,7 +297,7 @@ async fn test_qwen_create_thread() {
 #[ignore] // 需要手动启动后端
 async fn test_qwen_send_message() {
     let test = QwenE2ETest::new();
-    
+
     // 先检查后端
     if let Err(e) = test.check_backend_health().await {
         eprintln!("{}", e);
@@ -316,7 +327,7 @@ async fn test_qwen_send_message() {
 #[ignore] // 需要手动启动后端
 async fn test_qwen_full_flow() {
     let test = QwenE2ETest::new();
-    
+
     match test.run_full_test().await {
         Ok(_) => println!("✅ 完整流程测试通过"),
         Err(e) => {
@@ -398,7 +409,9 @@ async fn diagnose_qwen_setup() {
             println!("   💡 解决方案:");
             println!("      - 检查环境变量:");
             println!("        export LLM_BACKEND=\"openai_compatible\"");
-            println!("        export LLM_BASE_URL=\"https://dashscope.aliyuncs.com/compatible-mode/v1\"");
+            println!(
+                "        export LLM_BASE_URL=\"https://dashscope.aliyuncs.com/compatible-mode/v1\""
+            );
             println!("        export LLM_API_KEY=\"sk-...\"");
             println!("        export LLM_MODEL=\"qwen-max\"");
             println!("      - 重启后端服务");

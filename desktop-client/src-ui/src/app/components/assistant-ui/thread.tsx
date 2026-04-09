@@ -53,12 +53,19 @@ function extractDlpStats(custom: unknown): SanitizationStats | undefined {
   return undefined;
 }
 
+function extractRoutineTriggerCount(custom: unknown): number {
+  if (custom && typeof custom === 'object' && 'routineTriggerCount' in custom) {
+    const value = (custom as { routineTriggerCount?: unknown }).routineTriggerCount;
+    return typeof value === 'number' && value > 0 ? value : 0;
+  }
+  return 0;
+}
+
 export const Thread: FC = () => {
   return (
     <ThreadPrimitive.Root
       className="aui-root aui-thread-root @container flex h-full flex-col bg-background"
       style={{
-        ["--thread-max-width" as string]: "56rem",
         ["--composer-radius" as string]: "24px",
         ["--composer-padding" as string]: "10px",
       }}
@@ -75,7 +82,7 @@ export const Thread: FC = () => {
           {() => <ThreadMessage />}
         </ThreadPrimitive.Messages>
 
-        <ThreadPrimitive.ViewportFooter className="aui-thread-viewport-footer sticky bottom-0 mx-auto mt-auto flex w-full max-w-(--thread-max-width) flex-col gap-4 overflow-visible rounded-t-(--composer-radius) bg-background pb-4 md:pb-6">
+        <ThreadPrimitive.ViewportFooter className="aui-thread-viewport-footer sticky bottom-0 mt-auto flex w-full flex-col gap-4 overflow-visible rounded-t-(--composer-radius) bg-background pb-4 md:pb-6">
           <ThreadScrollToBottom />
           <Composer />
         </ThreadPrimitive.ViewportFooter>
@@ -282,7 +289,7 @@ const AssistantMessage: FC = () => {
 
   return (
     <MessagePrimitive.Root
-      className="aui-assistant-message-root fade-in slide-in-from-bottom-1 relative mx-auto w-full max-w-(--thread-max-width) animate-in py-3 duration-150"
+      className="aui-assistant-message-root fade-in slide-in-from-bottom-1 relative w-full animate-in py-3 duration-150"
       data-role="assistant"
     >
       {/* 头像 + 名称标签 */}
@@ -398,6 +405,12 @@ const UserMessage: FC = () => {
   const messageDlpStats = useAuiState(
     (s) => extractDlpStats(s.message.metadata?.custom)
   );
+  const routineTriggerCount = useAuiState(
+    (s) => extractRoutineTriggerCount(s.message.metadata?.custom)
+  );
+  const handleOpenJobsPanel = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('open-jobs-panel'));
+  }, []);
 
   return (
     <MessagePrimitive.Root
@@ -424,6 +437,18 @@ const UserMessage: FC = () => {
             <ShieldCheck size={10} />
             已脱敏
           </span>
+        </div>
+      )}
+
+      {routineTriggerCount > 0 && (
+        <div className="col-start-2 flex justify-end">
+          <button
+            type="button"
+            onClick={handleOpenJobsPanel}
+            className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-700 transition-colors hover:bg-amber-100"
+          >
+            已触发 {routineTriggerCount} 个事件任务，点击查看
+          </button>
         </div>
       )}
 

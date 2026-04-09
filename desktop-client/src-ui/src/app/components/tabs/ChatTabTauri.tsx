@@ -20,18 +20,24 @@ import { TokenManager } from '@utils/tokenManager';
 import { CustomModelModal } from '../ai/CustomModelModal';
 import { DlpBlockedDialog } from '../ai/DlpBlockedDialog';
 import { useModelConfig } from '@hooks/useModelConfig';
+import type { ChatCommand } from '../../types/chatCommand';
 
 interface ChatTabTauriProps {
   selectedThreadId?: string | null;
   onThreadSelect?: (threadId: string) => void;
-  /** 待发送的 routine 提示词，挂载后自动通过 send_chat_message 发送 */
-  pendingPrompt?: string | null;
-  onPendingPromptSent?: () => void;
+  outboundCommand?: ChatCommand | null;
+  onOutboundCommandHandled?: (commandId: string) => void;
   /** 引擎就绪计数器，变化时重新加载历史消息 */
   engineReadyKey?: number;
 }
 
-export function ChatTabTauri({ selectedThreadId, onThreadSelect, pendingPrompt, onPendingPromptSent, engineReadyKey }: ChatTabTauriProps) {
+export function ChatTabTauri({
+  selectedThreadId,
+  onThreadSelect,
+  outboundCommand,
+  onOutboundCommandHandled,
+  engineReadyKey,
+}: ChatTabTauriProps) {
   const [customModelOpen, setCustomModelOpen] = useState(false);
   // 模型选择状态提升到此层，避免 TauriRuntimeProvider 因 key 变化重新挂载时丢失
   const [selectedModelId, setSelectedModelId] = useState<string | undefined>(undefined);
@@ -48,14 +54,13 @@ export function ChatTabTauri({ selectedThreadId, onThreadSelect, pendingPrompt, 
 
   return (
     <TauriRuntimeProvider
-      key={selectedThreadId ?? 'new'}
       threadId={selectedThreadId ?? null}
       initialModelId={selectedModelId}
       onThreadCreated={(tid) => onThreadSelect?.(tid)}
       onModelChange={setSelectedModelId}
       onOpenCustomModelModal={() => setCustomModelOpen(true)}
-      pendingPrompt={pendingPrompt}
-      onPendingPromptSent={onPendingPromptSent}
+      outboundCommand={outboundCommand}
+      onOutboundCommandHandled={onOutboundCommandHandled}
       engineReadyKey={engineReadyKey}
     >
       <div className="relative flex h-full flex-col bg-background">

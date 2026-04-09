@@ -1,5 +1,5 @@
-use desktop_client::policy_sync::{PolicySyncManager, DlpPolicy, SensitiveOpPolicy, PolicyVersion};
 use desktop_client::dlp_integration::DlpIntegration;
+use desktop_client::policy_sync::{DlpPolicy, PolicySyncManager, PolicyVersion, SensitiveOpPolicy};
 use proptest::prelude::*;
 
 // Property tests for policy sync and DLP integration

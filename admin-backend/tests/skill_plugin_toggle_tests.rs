@@ -179,11 +179,7 @@ mod skill_plugin_security_tests {
 
         for field in &response_fields {
             for sensitive in &sensitive_fields {
-                assert_ne!(
-                    field, sensitive,
-                    "响应不应包含敏感字段: {}",
-                    sensitive
-                );
+                assert_ne!(field, sensitive, "响应不应包含敏感字段: {}", sensitive);
             }
         }
     }
@@ -201,11 +197,7 @@ mod skill_plugin_security_tests {
 
         for uuid_str in &invalid_uuids {
             let parsed = uuid::Uuid::parse_str(uuid_str);
-            assert!(
-                parsed.is_err(),
-                "无效 UUID '{}' 应该解析失败",
-                uuid_str
-            );
+            assert!(parsed.is_err(), "无效 UUID '{}' 应该解析失败", uuid_str);
         }
     }
 }

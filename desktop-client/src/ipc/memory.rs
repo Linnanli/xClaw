@@ -39,10 +39,7 @@ pub async fn ic_memory_list(
     path: Option<String>,
 ) -> Result<Vec<MemoryEntry>, String> {
     let state = state.get()?;
-    let ws = state
-        .workspace
-        .as_ref()
-        .ok_or("Workspace not available")?;
+    let ws = state.workspace.as_ref().ok_or("Workspace not available")?;
 
     let dir = path.as_deref().unwrap_or("/");
     let entries = ws
@@ -68,10 +65,7 @@ pub async fn ic_memory_read(
     path: String,
 ) -> Result<MemoryDocument, String> {
     let state = state.get()?;
-    let ws = state
-        .workspace
-        .as_ref()
-        .ok_or("Workspace not available")?;
+    let ws = state.workspace.as_ref().ok_or("Workspace not available")?;
 
     let doc = ws
         .read(&path)
@@ -93,10 +87,7 @@ pub async fn ic_memory_write(
     content: String,
 ) -> Result<(), String> {
     let state = state.get()?;
-    let ws = state
-        .workspace
-        .as_ref()
-        .ok_or("Workspace not available")?;
+    let ws = state.workspace.as_ref().ok_or("Workspace not available")?;
 
     ws.write(&path, &content)
         .await
@@ -108,15 +99,9 @@ pub async fn ic_memory_write(
 
 /// 删除记忆文档。
 #[tauri::command]
-pub async fn ic_memory_delete(
-    state: State<'_, EngineState>,
-    path: String,
-) -> Result<(), String> {
+pub async fn ic_memory_delete(state: State<'_, EngineState>, path: String) -> Result<(), String> {
     let state = state.get()?;
-    let ws = state
-        .workspace
-        .as_ref()
-        .ok_or("Workspace not available")?;
+    let ws = state.workspace.as_ref().ok_or("Workspace not available")?;
 
     ws.delete(&path)
         .await
@@ -134,10 +119,7 @@ pub async fn ic_memory_search(
     limit: Option<usize>,
 ) -> Result<Vec<MemorySearchResult>, String> {
     let state = state.get()?;
-    let ws = state
-        .workspace
-        .as_ref()
-        .ok_or("Workspace not available")?;
+    let ws = state.workspace.as_ref().ok_or("Workspace not available")?;
 
     let results = ws
         .search(&query, limit.unwrap_or(10))

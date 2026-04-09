@@ -38,7 +38,8 @@ mod tests {
             if !skill_md.exists() {
                 continue;
             }
-            let Some(skill_name) = path.file_name().and_then(|n| n.to_str()).map(String::from) else {
+            let Some(skill_name) = path.file_name().and_then(|n| n.to_str()).map(String::from)
+            else {
                 continue;
             };
 
@@ -48,7 +49,9 @@ mod tests {
             }
 
             tokio::fs::create_dir_all(&dest_dir).await.unwrap();
-            tokio::fs::copy(&skill_md, dest_dir.join("SKILL.md")).await.unwrap();
+            tokio::fs::copy(&skill_md, dest_dir.join("SKILL.md"))
+                .await
+                .unwrap();
         }
     }
 
@@ -62,12 +65,20 @@ mod tests {
         let source = TempDir::new().unwrap();
         let installed = TempDir::new().unwrap();
 
-        write_skill_md(source.path(), "review-checklist", "---\nname: review-checklist\n---\n\nPrompt.\n");
+        write_skill_md(
+            source.path(),
+            "review-checklist",
+            "---\nname: review-checklist\n---\n\nPrompt.\n",
+        );
 
         seed_skills(source.path(), installed.path()).await;
 
         assert!(
-            installed.path().join("review-checklist").join("SKILL.md").exists(),
+            installed
+                .path()
+                .join("review-checklist")
+                .join("SKILL.md")
+                .exists(),
             "SKILL.md should be copied to installed_dir"
         );
     }
@@ -100,9 +111,8 @@ mod tests {
 
         seed_skills(source.path(), installed.path()).await;
 
-        let copied = fs::read_to_string(
-            installed.path().join("local-test").join("SKILL.md")
-        ).unwrap();
+        let copied =
+            fs::read_to_string(installed.path().join("local-test").join("SKILL.md")).unwrap();
         assert_eq!(copied, content);
     }
 
@@ -116,12 +126,20 @@ mod tests {
         let source = TempDir::new().unwrap();
         let installed = TempDir::new().unwrap();
 
-        write_skill_md(source.path(), "my-skill", "---\nname: my-skill\n---\n\nSource version.\n");
+        write_skill_md(
+            source.path(),
+            "my-skill",
+            "---\nname: my-skill\n---\n\nSource version.\n",
+        );
 
         // 预先在 installed_dir 放一个不同内容的版本
         let existing_dir = installed.path().join("my-skill");
         fs::create_dir_all(&existing_dir).unwrap();
-        fs::write(existing_dir.join("SKILL.md"), "---\nname: my-skill\n---\n\nUser version.\n").unwrap();
+        fs::write(
+            existing_dir.join("SKILL.md"),
+            "---\nname: my-skill\n---\n\nUser version.\n",
+        )
+        .unwrap();
 
         seed_skills(source.path(), installed.path()).await;
 
@@ -148,7 +166,10 @@ mod tests {
 
         // installed_dir 应为空
         let entries: Vec<_> = fs::read_dir(installed.path()).unwrap().collect();
-        assert!(entries.is_empty(), "No skills should be seeded from nonexistent source");
+        assert!(
+            entries.is_empty(),
+            "No skills should be seeded from nonexistent source"
+        );
     }
 
     /// 验证：源目录为空时，installed_dir 保持为空。
@@ -175,7 +196,10 @@ mod tests {
         seed_skills(source.path(), installed.path()).await;
 
         let entries: Vec<_> = fs::read_dir(installed.path()).unwrap().collect();
-        assert!(entries.is_empty(), "Non-directory entries should be skipped");
+        assert!(
+            entries.is_empty(),
+            "Non-directory entries should be skipped"
+        );
     }
 
     // =========================================================================
@@ -188,13 +212,20 @@ mod tests {
         let source = TempDir::new().unwrap();
         let installed = TempDir::new().unwrap();
 
-        write_skill_md(source.path(), "safe-skill", "---\nname: safe-skill\n---\n\nSafe.\n");
+        write_skill_md(
+            source.path(),
+            "safe-skill",
+            "---\nname: safe-skill\n---\n\nSafe.\n",
+        );
 
         seed_skills(source.path(), installed.path()).await;
 
         let dest = installed.path().join("safe-skill").join("SKILL.md");
         let path_str = dest.to_string_lossy();
-        assert!(!path_str.contains(".."), "Seeded path should not contain '..'");
+        assert!(
+            !path_str.contains(".."),
+            "Seeded path should not contain '..'"
+        );
     }
 
     // =========================================================================

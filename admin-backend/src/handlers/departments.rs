@@ -25,7 +25,10 @@ pub async fn get_department_detail(
     State(state): State<AppState>,
     Path(dept_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let dept = query_department_by_id(&client, dept_id).await?;
@@ -46,27 +49,37 @@ pub async fn get_department_members(
     Path(dept_id): Path<Uuid>,
     Query(params): Query<DepartmentMembersQuery>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // 验证部门存在
     verify_department_exists(&client, dept_id).await?;
 
     let (sql, query_params) = build_members_query(dept_id, &params);
-    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-        query_params.iter().map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = query_params
+        .iter()
+        .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+        .collect();
 
-    let rows = client.query(&sql, &param_refs).await
+    let rows = client
+        .query(&sql, &param_refs)
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
-    let members: Vec<_> = rows.iter().map(|r| {
-        json!({
-            "id": r.get::<_, Uuid>(0),
-            "username": r.get::<_, String>(1),
-            "email": r.get::<_, Option<String>>(2),
-            "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(3),
+    let members: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<_, Uuid>(0),
+                "username": r.get::<_, String>(1),
+                "email": r.get::<_, Option<String>>(2),
+                "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(3),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({ "members": members, "total": members.len() })))
 }
@@ -79,29 +92,38 @@ pub async fn get_model_whitelist(
     State(state): State<AppState>,
     Path(dept_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     verify_department_exists(&client, dept_id).await?;
 
-    let rows = client.query(
-        "SELECT mc.id, mc.model_id, mc.display_name, mc.provider, mc.enabled
+    let rows = client
+        .query(
+            "SELECT mc.id, mc.model_id, mc.display_name, mc.provider, mc.enabled
          FROM department_model_whitelist dmw
          JOIN model_configs mc ON mc.id = dmw.model_config_id
          WHERE dmw.department_id = $1
          ORDER BY mc.sort_order, mc.display_name",
-        &[&dept_id],
-    ).await.map_err(|e| Error::Database(e.to_string()))?;
+            &[&dept_id],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
 
-    let models: Vec<_> = rows.iter().map(|r| {
-        json!({
-            "id": r.get::<_, Uuid>(0),
-            "model_id": r.get::<_, String>(1),
-            "display_name": r.get::<_, String>(2),
-            "provider": r.get::<_, String>(3),
-            "enabled": r.get::<_, bool>(4),
+    let models: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<_, Uuid>(0),
+                "model_id": r.get::<_, String>(1),
+                "display_name": r.get::<_, String>(2),
+                "provider": r.get::<_, String>(3),
+                "enabled": r.get::<_, bool>(4),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({ "models": models })))
 }
@@ -115,29 +137,40 @@ pub async fn update_model_whitelist(
     Path(dept_id): Path<Uuid>,
     Json(payload): Json<UpdateModelWhitelistRequest>,
 ) -> Result<Json<serde_json::Value>> {
-    let mut client = state.db_pool.get().await
+    let mut client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let dept_name = verify_department_exists_returning_name(&client, dept_id).await?;
 
     // 事务：先删后插，保证原子性
-    let tx = client.transaction().await
+    let tx = client
+        .transaction()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     tx.execute(
         "DELETE FROM department_model_whitelist WHERE department_id = $1",
         &[&dept_id],
-    ).await.map_err(|e| Error::Database(e.to_string()))?;
+    )
+    .await
+    .map_err(|e| Error::Database(e.to_string()))?;
 
     for model_id in &payload.model_config_ids {
         tx.execute(
             "INSERT INTO department_model_whitelist (department_id, model_config_id)
              VALUES ($1, $2) ON CONFLICT DO NOTHING",
             &[&dept_id, model_id],
-        ).await.map_err(|e| Error::Database(e.to_string()))?;
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
     }
 
-    tx.commit().await.map_err(|e| Error::Database(e.to_string()))?;
+    tx.commit()
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
 
     // 审计日志
     write_audit_log(
@@ -149,7 +182,8 @@ pub async fn update_model_whitelist(
             dept_name,
             payload.model_config_ids.len()
         ),
-    ).await;
+    )
+    .await;
 
     Ok(Json(json!({
         "message": "模型白名单已更新",
@@ -166,8 +200,9 @@ async fn query_department_by_id(
     client: &deadpool_postgres::Object,
     dept_id: Uuid,
 ) -> Result<serde_json::Value> {
-    let row = client.query_opt(
-        "SELECT d.id, d.name, d.description, d.parent_id, d.token_quota_enabled,
+    let row = client
+        .query_opt(
+            "SELECT d.id, d.name, d.description, d.parent_id, d.token_quota_enabled,
                 d.token_quota_per_day, d.created_at, d.updated_at,
                 COUNT(u.id) as member_count,
                 p.name as parent_name
@@ -177,9 +212,11 @@ async fn query_department_by_id(
          WHERE d.id = $1
          GROUP BY d.id, d.name, d.description, d.parent_id, d.token_quota_enabled,
                   d.token_quota_per_day, d.created_at, d.updated_at, p.name",
-        &[&dept_id],
-    ).await.map_err(|e| Error::Database(e.to_string()))?
-     .ok_or(Error::DepartmentNotFound)?;
+            &[&dept_id],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
+        .ok_or(Error::DepartmentNotFound)?;
 
     let quota_enabled: bool = row.get(4);
     Ok(json!({
@@ -197,27 +234,24 @@ async fn query_department_by_id(
 }
 
 /// 查询部门模型白名单数量
-async fn query_whitelist_count(
-    client: &deadpool_postgres::Object,
-    dept_id: Uuid,
-) -> Result<i64> {
-    let row = client.query_one(
-        "SELECT COUNT(*) FROM department_model_whitelist WHERE department_id = $1",
-        &[&dept_id],
-    ).await.map_err(|e| Error::Database(e.to_string()))?;
+async fn query_whitelist_count(client: &deadpool_postgres::Object, dept_id: Uuid) -> Result<i64> {
+    let row = client
+        .query_one(
+            "SELECT COUNT(*) FROM department_model_whitelist WHERE department_id = $1",
+            &[&dept_id],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
     Ok(row.get(0))
 }
 
 /// 验证部门存在，不存在则返回 DepartmentNotFound
-async fn verify_department_exists(
-    client: &deadpool_postgres::Object,
-    dept_id: Uuid,
-) -> Result<()> {
-    client.query_opt(
-        "SELECT 1 FROM departments WHERE id = $1",
-        &[&dept_id],
-    ).await.map_err(|e| Error::Database(e.to_string()))?
-     .ok_or(Error::DepartmentNotFound)?;
+async fn verify_department_exists(client: &deadpool_postgres::Object, dept_id: Uuid) -> Result<()> {
+    client
+        .query_opt("SELECT 1 FROM departments WHERE id = $1", &[&dept_id])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
+        .ok_or(Error::DepartmentNotFound)?;
     Ok(())
 }
 
@@ -226,11 +260,11 @@ async fn verify_department_exists_returning_name(
     client: &deadpool_postgres::Object,
     dept_id: Uuid,
 ) -> Result<String> {
-    let row = client.query_opt(
-        "SELECT name FROM departments WHERE id = $1",
-        &[&dept_id],
-    ).await.map_err(|e| Error::Database(e.to_string()))?
-     .ok_or(Error::DepartmentNotFound)?;
+    let row = client
+        .query_opt("SELECT name FROM departments WHERE id = $1", &[&dept_id])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
+        .ok_or(Error::DepartmentNotFound)?;
     Ok(row.get(0))
 }
 
@@ -238,10 +272,13 @@ async fn verify_department_exists_returning_name(
 fn build_members_query(
     dept_id: Uuid,
     params: &DepartmentMembersQuery,
-) -> (String, Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>>) {
+) -> (
+    String,
+    Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>>,
+) {
     let mut sql = String::from(
         "SELECT u.id, u.username, u.email, u.created_at
-         FROM users u WHERE u.department_id = $1"
+         FROM users u WHERE u.department_id = $1",
     );
     let mut query_params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> =
         vec![Box::new(dept_id)];

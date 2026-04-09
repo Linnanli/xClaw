@@ -21,14 +21,20 @@ mod registry_contract {
             ]
         });
 
-        assert!(response.get("results").is_some(), "注册表搜索响应必须包含 results 字段");
+        assert!(
+            response.get("results").is_some(),
+            "注册表搜索响应必须包含 results 字段"
+        );
         let results = response["results"].as_array().unwrap();
         assert!(!results.is_empty());
 
         let entry = &results[0];
         // ironclaw CatalogSearchResult 期望的字段
         assert!(entry.get("slug").is_some(), "缺少 slug 字段");
-        assert!(entry.get("display_name").is_some(), "缺少 display_name 字段");
+        assert!(
+            entry.get("display_name").is_some(),
+            "缺少 display_name 字段"
+        );
         assert!(entry.get("summary").is_some(), "缺少 summary 字段");
     }
 
@@ -93,7 +99,15 @@ mod skill_list_contract {
         });
 
         // 前端需要的字段
-        for field in &["id", "name", "enabled", "source", "review_status", "is_builtin", "invoke_count"] {
+        for field in &[
+            "id",
+            "name",
+            "enabled",
+            "source",
+            "review_status",
+            "is_builtin",
+            "invoke_count",
+        ] {
             assert!(skill.get(field).is_some(), "技能响应缺少字段: {}", field);
         }
     }
@@ -103,8 +117,11 @@ mod skill_list_contract {
         // 前端 ReviewBadge 组件期望的状态值
         let valid_statuses = ["pending", "approved", "rejected"];
         for s in &valid_statuses {
-            assert!(matches!(*s, "pending" | "approved" | "rejected"),
-                "无效的 review_status: {}", s);
+            assert!(
+                matches!(*s, "pending" | "approved" | "rejected"),
+                "无效的 review_status: {}",
+                s
+            );
         }
     }
 
@@ -112,8 +129,11 @@ mod skill_list_contract {
     fn test_source_values() {
         let valid_sources = ["builtin", "admin_upload"];
         for s in &valid_sources {
-            assert!(matches!(*s, "builtin" | "admin_upload"),
-                "无效的 source: {}", s);
+            assert!(
+                matches!(*s, "builtin" | "admin_upload"),
+                "无效的 source: {}",
+                s
+            );
         }
     }
 }
@@ -131,12 +151,17 @@ mod client_config_contract {
             "skill_registry_url": "https://admin.corp.com?client_token=abc123"
         });
 
-        assert!(config.get("skill_registry_url").is_some(),
-            "client-config 响应必须包含 skill_registry_url 字段");
+        assert!(
+            config.get("skill_registry_url").is_some(),
+            "client-config 响应必须包含 skill_registry_url 字段"
+        );
 
         let url = config["skill_registry_url"].as_str().unwrap();
-        assert!(url.contains("/api/v1") || url.contains("client_token"),
-            "skill_registry_url 格式不正确: {}", url);
+        assert!(
+            url.contains("/api/v1") || url.contains("client_token"),
+            "skill_registry_url 格式不正确: {}",
+            url
+        );
     }
 }
 
@@ -175,19 +200,42 @@ mod builtin_entries_contract {
             "review_status": "approved"
         });
 
-        assert!(plugin.get("plugin_type").is_some(), "插件响应缺少 plugin_type 字段");
-        assert!(plugin.get("requires_sandbox").is_some(), "插件响应缺少 requires_sandbox 字段");
-        assert!(plugin.get("is_builtin").is_some(), "插件响应缺少 is_builtin 字段");
+        assert!(
+            plugin.get("plugin_type").is_some(),
+            "插件响应缺少 plugin_type 字段"
+        );
+        assert!(
+            plugin.get("requires_sandbox").is_some(),
+            "插件响应缺少 requires_sandbox 字段"
+        );
+        assert!(
+            plugin.get("is_builtin").is_some(),
+            "插件响应缺少 is_builtin 字段"
+        );
     }
 
     #[test]
     fn test_builtin_skill_names_match_ironclaw_registry() {
         // 验证种子数据中的技能名称与 ironclaw/skills/ 目录一致
         // local-test 和 web-ui-test 是测试用技能，不种入生产 DB
-        let seeded = ["delegation", "review-checklist", "routine-advisor", "ironclaw-workflow-orchestrator"];
-        let ironclaw = ["delegation", "review-checklist", "routine-advisor", "ironclaw-workflow-orchestrator"];
+        let seeded = [
+            "delegation",
+            "review-checklist",
+            "routine-advisor",
+            "ironclaw-workflow-orchestrator",
+        ];
+        let ironclaw = [
+            "delegation",
+            "review-checklist",
+            "routine-advisor",
+            "ironclaw-workflow-orchestrator",
+        ];
         for name in &ironclaw {
-            assert!(seeded.contains(name), "ironclaw 内置技能 '{}' 未在种子数据中", name);
+            assert!(
+                seeded.contains(name),
+                "ironclaw 内置技能 '{}' 未在种子数据中",
+                name
+            );
         }
     }
 
@@ -195,15 +243,49 @@ mod builtin_entries_contract {
     fn test_builtin_plugin_names_match_ironclaw_registry() {
         // 验证种子数据覆盖了 ironclaw/registry/ 下所有生产插件
         let seeded = [
-            "notion", "linear", "stripe", "sentry", "cloudflare", "intercom", "asana",
-            "github", "gmail", "google-calendar", "google-drive", "google-docs",
-            "google-sheets", "google-slides", "web-search", "slack",
+            "notion",
+            "linear",
+            "stripe",
+            "sentry",
+            "cloudflare",
+            "intercom",
+            "asana",
+            "github",
+            "gmail",
+            "google-calendar",
+            "google-drive",
+            "google-docs",
+            "google-sheets",
+            "google-slides",
+            "web-search",
+            "slack",
         ];
-        let ironclaw_mcp = ["notion", "linear", "stripe", "sentry", "cloudflare", "intercom", "asana"];
-        let ironclaw_tools = ["github", "gmail", "google-calendar", "google-drive",
-                              "google-docs", "google-sheets", "google-slides", "web-search", "slack"];
+        let ironclaw_mcp = [
+            "notion",
+            "linear",
+            "stripe",
+            "sentry",
+            "cloudflare",
+            "intercom",
+            "asana",
+        ];
+        let ironclaw_tools = [
+            "github",
+            "gmail",
+            "google-calendar",
+            "google-drive",
+            "google-docs",
+            "google-sheets",
+            "google-slides",
+            "web-search",
+            "slack",
+        ];
         for name in ironclaw_mcp.iter().chain(ironclaw_tools.iter()) {
-            assert!(seeded.contains(name), "ironclaw 内置插件 '{}' 未在种子数据中", name);
+            assert!(
+                seeded.contains(name),
+                "ironclaw 内置插件 '{}' 未在种子数据中",
+                name
+            );
         }
     }
 }

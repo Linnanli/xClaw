@@ -15,8 +15,8 @@ use axum::{
 };
 use deadpool_postgres::Config;
 use http_body_util::BodyExt;
-use tower::ServiceExt; // oneshot
 use tokio_postgres::NoTls;
+use tower::ServiceExt; // oneshot
 
 // ============================================================================
 // 辅助函数
@@ -77,7 +77,11 @@ async fn get(app: axum::Router, path: &str) -> axum::response::Response {
     .unwrap()
 }
 
-async fn put_json(app: axum::Router, path: &str, body: serde_json::Value) -> axum::response::Response {
+async fn put_json(
+    app: axum::Router,
+    path: &str,
+    body: serde_json::Value,
+) -> axum::response::Response {
     let token = make_auth_token();
     app.oneshot(
         Request::builder()
@@ -92,7 +96,11 @@ async fn put_json(app: axum::Router, path: &str, body: serde_json::Value) -> axu
     .unwrap()
 }
 
-async fn post_json(app: axum::Router, path: &str, body: serde_json::Value) -> axum::response::Response {
+async fn post_json(
+    app: axum::Router,
+    path: &str,
+    body: serde_json::Value,
+) -> axum::response::Response {
     let token = make_auth_token();
     app.oneshot(
         Request::builder()
@@ -133,29 +141,32 @@ async fn test_compile_all_handlers_via_create_router() {
 async fn test_migration_all_tables_exist() {
     let pool = match try_connect_db().await {
         Some(p) => p,
-        None => { println!("⚠️  数据库不可用，跳过"); return; }
+        None => {
+            println!("⚠️  数据库不可用，跳过");
+            return;
+        }
     };
     let client = pool.get().await.unwrap();
 
     // 每个迁移 → 对应必须存在的表
     // 新增迁移时在这里追加一行
     let required: &[(&str, &str)] = &[
-        ("001_init",      "users"),
-        ("002_rbac",      "roles"),
-        ("003_dlp",       "dlp_rules"),
-        ("004_audit",     "audit_logs"),
-        ("006_dict",      "dlp_dictionaries"),
+        ("001_init", "users"),
+        ("002_rbac", "roles"),
+        ("003_dlp", "dlp_rules"),
+        ("004_audit", "audit_logs"),
+        ("006_dict", "dlp_dictionaries"),
         ("007_sensitive", "sensitive_operation_rules"),
-        ("008_policy",    "policy_change_records"),
-        ("009_client",    "registered_clients"),
-        ("010_skills",    "plugins"),
-        ("011_reports",   "client_configs"),
-        ("012_dept",      "departments"),
-        ("013_model",     "model_configs"),   // ← 本次问题根因
-        ("014_dept_ext",  "department_model_whitelist"),
-        ("015_quota",     "usage_records"),
-        ("016_alerts",    "alert_rules"),
-        ("017_convs",     "conversations"),
+        ("008_policy", "policy_change_records"),
+        ("009_client", "registered_clients"),
+        ("010_skills", "plugins"),
+        ("011_reports", "client_configs"),
+        ("012_dept", "departments"),
+        ("013_model", "model_configs"), // ← 本次问题根因
+        ("014_dept_ext", "department_model_whitelist"),
+        ("015_quota", "usage_records"),
+        ("016_alerts", "alert_rules"),
+        ("017_convs", "conversations"),
         ("018_approvals", "approval_tickets"),
         ("019_compliance", "compliance_reports"),
         ("021_knowledge", "knowledge_bases"),
@@ -194,7 +205,10 @@ async fn test_migration_all_tables_exist() {
 async fn test_migration_020_security_fields_columns() {
     let pool = match try_connect_db().await {
         Some(p) => p,
-        None => { println!("⚠️  数据库不可用，跳过"); return; }
+        None => {
+            println!("⚠️  数据库不可用，跳过");
+            return;
+        }
     };
     let client = pool.get().await.unwrap();
 
@@ -209,8 +223,10 @@ async fn test_migration_020_security_fields_columns() {
             .await
             .unwrap();
         assert_eq!(
-            row.get::<_, i64>(0), 1,
-            "users 表缺少列 `{}`，请执行迁移 020_security_fields.sql", col
+            row.get::<_, i64>(0),
+            1,
+            "users 表缺少列 `{}`，请执行迁移 020_security_fields.sql",
+            col
         );
     }
 
@@ -225,8 +241,10 @@ async fn test_migration_020_security_fields_columns() {
             .await
             .unwrap();
         assert_eq!(
-            row.get::<_, i64>(0), 1,
-            "audit_logs 表缺少列 `{}`，请执行迁移 020_security_fields.sql", col
+            row.get::<_, i64>(0),
+            1,
+            "audit_logs 表缺少列 `{}`，请执行迁移 020_security_fields.sql",
+            col
         );
     }
 
@@ -241,13 +259,20 @@ async fn test_migration_020_security_fields_columns() {
             .await
             .unwrap();
         assert_eq!(
-            row.get::<_, i64>(0), 1,
-            "registered_clients 表缺少列 `{}`，请执行迁移 020_security_fields.sql", col
+            row.get::<_, i64>(0),
+            1,
+            "registered_clients 表缺少列 `{}`，请执行迁移 020_security_fields.sql",
+            col
         );
     }
 
     // model_configs 表新增字段
-    for col in &["total_calls", "avg_latency_ms", "consecutive_failures", "last_error_at"] {
+    for col in &[
+        "total_calls",
+        "avg_latency_ms",
+        "consecutive_failures",
+        "last_error_at",
+    ] {
         let row = client
             .query_one(
                 "SELECT COUNT(*) FROM information_schema.columns \
@@ -257,8 +282,10 @@ async fn test_migration_020_security_fields_columns() {
             .await
             .unwrap();
         assert_eq!(
-            row.get::<_, i64>(0), 1,
-            "model_configs 表缺少列 `{}`，请执行迁移 020_security_fields.sql", col
+            row.get::<_, i64>(0),
+            1,
+            "model_configs 表缺少列 `{}`，请执行迁移 020_security_fields.sql",
+            col
         );
     }
 }
@@ -268,7 +295,10 @@ async fn test_migration_020_security_fields_columns() {
 async fn test_migration_013_model_configs_columns() {
     let pool = match try_connect_db().await {
         Some(p) => p,
-        None => { println!("⚠️  数据库不可用，跳过"); return; }
+        None => {
+            println!("⚠️  数据库不可用，跳过");
+            return;
+        }
     };
     let client = pool.get().await.unwrap();
 
@@ -283,9 +313,20 @@ async fn test_migration_013_model_configs_columns() {
 
     let cols: Vec<String> = rows.iter().map(|r| r.get::<_, String>(0)).collect();
 
-    for required_col in &["id", "model_id", "display_name", "provider",
-                           "api_base_url", "api_key", "enabled", "is_default",
-                           "sort_order", "capabilities", "created_at", "updated_at"] {
+    for required_col in &[
+        "id",
+        "model_id",
+        "display_name",
+        "provider",
+        "api_base_url",
+        "api_key",
+        "enabled",
+        "is_default",
+        "sort_order",
+        "capabilities",
+        "created_at",
+        "updated_at",
+    ] {
         assert!(
             cols.contains(&required_col.to_string()),
             "model_configs 表缺少列 `{}`，迁移 013 可能未完整执行",
@@ -303,7 +344,10 @@ async fn test_migration_013_model_configs_columns() {
 async fn test_http_health_check_200() {
     let pool = match try_connect_db().await {
         Some(p) => p,
-        None => { println!("⚠️  数据库不可用，跳过"); return; }
+        None => {
+            println!("⚠️  数据库不可用，跳过");
+            return;
+        }
     };
     let resp = get(build_app(pool), "/health").await;
     assert_eq!(resp.status(), StatusCode::OK);
@@ -314,22 +358,35 @@ async fn test_http_health_check_200() {
 async fn test_http_get_model_configs_not_404() {
     let pool = match try_connect_db().await {
         Some(p) => p,
-        None => { println!("⚠️  数据库不可用，跳过"); return; }
+        None => {
+            println!("⚠️  数据库不可用，跳过");
+            return;
+        }
     };
     let resp = get(build_app(pool), "/api/model-configs").await;
-    assert_ne!(resp.status(), StatusCode::NOT_FOUND,
-        "GET /api/model-configs 返回 404：路由未注册或 handler 编译失败");
+    assert_ne!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "GET /api/model-configs 返回 404：路由未注册或 handler 编译失败"
+    );
 }
 
 #[tokio::test]
 async fn test_http_get_model_configs_returns_json_array() {
     let pool = match try_connect_db().await {
         Some(p) => p,
-        None => { println!("⚠️  数据库不可用，跳过"); return; }
+        None => {
+            println!("⚠️  数据库不可用，跳过");
+            return;
+        }
     };
     let resp = get(build_app(pool), "/api/model-configs").await;
-    assert_eq!(resp.status(), StatusCode::OK,
-        "GET /api/model-configs 应返回 200，实际返回 {}", resp.status());
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "GET /api/model-configs 应返回 200，实际返回 {}",
+        resp.status()
+    );
 
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&bytes).expect("响应不是合法 JSON");
@@ -341,16 +398,23 @@ async fn test_http_get_model_configs_returns_json_array() {
 async fn test_http_put_model_config_route_exists() {
     let pool = match try_connect_db().await {
         Some(p) => p,
-        None => { println!("⚠️  数据库不可用，跳过"); return; }
+        None => {
+            println!("⚠️  数据库不可用，跳过");
+            return;
+        }
     };
     let resp = put_json(
         build_app(pool),
         "/api/model-configs/00000000-0000-0000-0000-000000000000",
         serde_json::json!({ "enabled": true }),
-    ).await;
+    )
+    .await;
     // 路由存在时返回 200/400/404（记录不存在）/422，不会是方法不允许 405
-    assert_ne!(resp.status(), StatusCode::METHOD_NOT_ALLOWED,
-        "PUT /api/model-configs/:id 路由未注册");
+    assert_ne!(
+        resp.status(),
+        StatusCode::METHOD_NOT_ALLOWED,
+        "PUT /api/model-configs/:id 路由未注册"
+    );
 }
 
 /// 批量验证所有关键 GET 路由都已注册
@@ -358,7 +422,10 @@ async fn test_http_put_model_config_route_exists() {
 async fn test_http_all_critical_get_routes_registered() {
     let _pool = match try_connect_db().await {
         Some(p) => p,
-        None => { println!("⚠️  数据库不可用，跳过"); return; }
+        None => {
+            println!("⚠️  数据库不可用，跳过");
+            return;
+        }
     };
 
     let routes = [
@@ -422,16 +489,24 @@ async fn test_http_all_critical_get_routes_registered() {
 async fn test_regression_chat_completions_route_removed() {
     let pool = match try_connect_db().await {
         Some(p) => p,
-        None => { println!("⚠️  数据库不可用，跳过"); return; }
+        None => {
+            println!("⚠️  数据库不可用，跳过");
+            return;
+        }
     };
     // 带 token 发请求：路由存在返回 200/400/422，路由不存在返回 404
     let resp = post_json(
         build_app(pool),
         "/api/chat/completions",
         serde_json::json!({ "model": "test", "messages": [] }),
-    ).await;
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND,
-        "POST /api/chat/completions 不应存在，实际返回 {}", resp.status());
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "POST /api/chat/completions 不应存在，实际返回 {}",
+        resp.status()
+    );
 }
 
 /// 契约测试：create_router 编译时不依赖 chat_proxy 模块
@@ -451,17 +526,25 @@ async fn test_contract_router_compiles_without_chat_proxy() {
     let _app = build_app(pool);
 }
 
-
 /// 验证 023_extensions_v2 迁移新增的列
 #[tokio::test]
 async fn test_migration_023_extensions_v2_columns() {
     let pool = match try_connect_db().await {
         Some(p) => p,
-        None => { println!("⚠️  数据库不可用，跳过"); return; }
+        None => {
+            println!("⚠️  数据库不可用，跳过");
+            return;
+        }
     };
     let client = pool.get().await.unwrap();
 
-    for col in &["source", "review_status", "is_builtin", "invoke_count", "reviewed_by"] {
+    for col in &[
+        "source",
+        "review_status",
+        "is_builtin",
+        "invoke_count",
+        "reviewed_by",
+    ] {
         let row = client
             .query_one(
                 "SELECT COUNT(*) FROM information_schema.columns \
@@ -470,11 +553,21 @@ async fn test_migration_023_extensions_v2_columns() {
             )
             .await
             .unwrap();
-        assert_eq!(row.get::<_, i64>(0), 1,
-            "skills 表缺少列 `{}`，请执行迁移 023_extensions_v2.sql", col);
+        assert_eq!(
+            row.get::<_, i64>(0),
+            1,
+            "skills 表缺少列 `{}`，请执行迁移 023_extensions_v2.sql",
+            col
+        );
     }
 
-    for col in &["source", "review_status", "plugin_type", "requires_sandbox", "invoke_count"] {
+    for col in &[
+        "source",
+        "review_status",
+        "plugin_type",
+        "requires_sandbox",
+        "invoke_count",
+    ] {
         let row = client
             .query_one(
                 "SELECT COUNT(*) FROM information_schema.columns \
@@ -483,8 +576,12 @@ async fn test_migration_023_extensions_v2_columns() {
             )
             .await
             .unwrap();
-        assert_eq!(row.get::<_, i64>(0), 1,
-            "plugins 表缺少列 `{}`，请执行迁移 023_extensions_v2.sql", col);
+        assert_eq!(
+            row.get::<_, i64>(0),
+            1,
+            "plugins 表缺少列 `{}`，请执行迁移 023_extensions_v2.sql",
+            col
+        );
     }
 }
 
@@ -522,12 +619,20 @@ async fn test_http_extensions_v2_routes_registered() {
 async fn test_migration_023_builtin_skills_seeded() {
     let pool = match try_connect_db().await {
         Some(p) => p,
-        None => { println!("⚠️  数据库不可用，跳过"); return; }
+        None => {
+            println!("⚠️  数据库不可用，跳过");
+            return;
+        }
     };
     let client = pool.get().await.unwrap();
 
     // 验证内置技能存在
-    let builtin_skills = ["delegation", "review-checklist", "routine-advisor", "ironclaw-workflow-orchestrator"];
+    let builtin_skills = [
+        "delegation",
+        "review-checklist",
+        "routine-advisor",
+        "ironclaw-workflow-orchestrator",
+    ];
     for name in &builtin_skills {
         let row = client
             .query_one(
@@ -537,8 +642,10 @@ async fn test_migration_023_builtin_skills_seeded() {
             .await
             .unwrap();
         assert_eq!(
-            row.get::<_, i64>(0), 1,
-            "内置技能 '{}' 未在 DB 中找到，请执行迁移 023_extensions_v2.sql", name
+            row.get::<_, i64>(0),
+            1,
+            "内置技能 '{}' 未在 DB 中找到，请执行迁移 023_extensions_v2.sql",
+            name
         );
     }
 
@@ -553,8 +660,10 @@ async fn test_migration_023_builtin_skills_seeded() {
             .await
             .unwrap();
         assert_eq!(
-            row.get::<_, i64>(0), 1,
-            "内置插件 '{}' 未在 DB 中找到，请执行迁移 023_extensions_v2.sql", name
+            row.get::<_, i64>(0),
+            1,
+            "内置插件 '{}' 未在 DB 中找到，请执行迁移 023_extensions_v2.sql",
+            name
         );
     }
 }
@@ -564,7 +673,10 @@ async fn test_migration_023_builtin_skills_seeded() {
 async fn test_migration_023_builtin_entries_auto_approved() {
     let pool = match try_connect_db().await {
         Some(p) => p,
-        None => { println!("⚠️  数据库不可用，跳过"); return; }
+        None => {
+            println!("⚠️  数据库不可用，跳过");
+            return;
+        }
     };
     let client = pool.get().await.unwrap();
 
@@ -576,7 +688,8 @@ async fn test_migration_023_builtin_entries_auto_approved() {
         .await
         .unwrap();
     assert_eq!(
-        row.get::<_, i64>(0), 0,
+        row.get::<_, i64>(0),
+        0,
         "存在 is_builtin=true 但 review_status != 'approved' 的技能，内置条目应自动通过审核"
     );
 
@@ -588,7 +701,8 @@ async fn test_migration_023_builtin_entries_auto_approved() {
         .await
         .unwrap();
     assert_eq!(
-        row.get::<_, i64>(0), 0,
+        row.get::<_, i64>(0),
+        0,
         "存在 is_builtin=true 但 review_status != 'approved' 的插件，内置条目应自动通过审核"
     );
 }

@@ -113,8 +113,7 @@ fn test_contract_client_models_capabilities_is_string_array() {
         }
     ]);
 
-    let models: Vec<ClientExpectedModelConfig> =
-        serde_json::from_value(response).unwrap();
+    let models: Vec<ClientExpectedModelConfig> = serde_json::from_value(response).unwrap();
 
     assert_eq!(models[0].capabilities, vec!["chat", "vision", "code"]);
     assert!(models[1].capabilities.is_empty());
@@ -133,8 +132,7 @@ fn test_failure_capabilities_non_array_rejected() {
         "api_format": "openai", "source": "admin"
     }]);
 
-    let result: Result<Vec<ClientExpectedModelConfig>, _> =
-        serde_json::from_value(response);
+    let result: Result<Vec<ClientExpectedModelConfig>, _> = serde_json::from_value(response);
     assert!(result.is_err(), "capabilities 为非数组时应反序列化失败");
 }
 
@@ -149,7 +147,6 @@ fn test_failure_missing_source_field() {
         "api_format": "openai"
     }]);
 
-    let result: Result<Vec<ClientExpectedModelConfig>, _> =
-        serde_json::from_value(response);
+    let result: Result<Vec<ClientExpectedModelConfig>, _> = serde_json::from_value(response);
     assert!(result.is_err(), "缺少 source 字段时应反序列化失败");
 }

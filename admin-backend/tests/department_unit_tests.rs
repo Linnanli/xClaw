@@ -28,24 +28,15 @@ mod department_validation_tests {
 
         // 错误路径：名称过短
         let short_name = "A";
-        assert!(
-            short_name.len() < 2,
-            "单字符名称应该被拒绝"
-        );
+        assert!(short_name.len() < 2, "单字符名称应该被拒绝");
 
         // 错误路径：名称过长
         let long_name = "A".repeat(101);
-        assert!(
-            long_name.len() > 100,
-            "超过100字符的名称应该被拒绝"
-        );
+        assert!(long_name.len() > 100, "超过100字符的名称应该被拒绝");
 
         // 边界值：空字符串
         let empty_name = "";
-        assert!(
-            empty_name.len() < 2,
-            "空名称应该被拒绝"
-        );
+        assert!(empty_name.len() < 2, "空名称应该被拒绝");
 
         // 边界值：仅空格
         let whitespace_name = "   ";
@@ -83,10 +74,7 @@ mod department_validation_tests {
 
         // 错误路径：负数限额
         let quota_per_day = Some(-100);
-        assert!(
-            quota_per_day.unwrap() < 0,
-            "负数限额应该被拒绝"
-        );
+        assert!(quota_per_day.unwrap() < 0, "负数限额应该被拒绝");
     }
 
     /// REQ-DEPT-003: Token 限额显示逻辑
@@ -219,8 +207,14 @@ mod department_contract_tests {
 
         // 验证新增字段
         assert!(response.get("parent_id").is_some(), "详情应包含 parent_id");
-        assert!(response.get("parent_name").is_some(), "详情应包含 parent_name");
-        assert!(response.get("model_whitelist_count").is_some(), "详情应包含 model_whitelist_count");
+        assert!(
+            response.get("parent_name").is_some(),
+            "详情应包含 parent_name"
+        );
+        assert!(
+            response.get("model_whitelist_count").is_some(),
+            "详情应包含 model_whitelist_count"
+        );
     }
 
     /// test_contract_department_members_response: 验证成员列表响应格式（新增）
@@ -269,7 +263,10 @@ mod department_contract_tests {
         let models = response["models"].as_array().expect("models 应为数组");
         let model = &models[0];
         assert!(model.get("model_id").is_some(), "白名单项应包含 model_id");
-        assert!(model.get("display_name").is_some(), "白名单项应包含 display_name");
+        assert!(
+            model.get("display_name").is_some(),
+            "白名单项应包含 display_name"
+        );
         assert!(model.get("provider").is_some(), "白名单项应包含 provider");
     }
 
@@ -291,7 +288,10 @@ mod department_contract_tests {
         });
 
         let dept = &response["departments"][0];
-        assert!(dept.get("parent_id").is_some(), "列表项应包含 parent_id 用于构建树形结构");
+        assert!(
+            dept.get("parent_id").is_some(),
+            "列表项应包含 parent_id 用于构建树形结构"
+        );
     }
 }
 

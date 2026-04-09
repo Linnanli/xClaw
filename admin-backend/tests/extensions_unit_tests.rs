@@ -22,7 +22,8 @@ mod injection_scan {
 
     #[test]
     fn test_clean_skill_passes() {
-        let content = "---\nname: my-skill\ndescription: 帮助写作\n---\n# 技能说明\n请帮我写一封邮件。";
+        let content =
+            "---\nname: my-skill\ndescription: 帮助写作\n---\n# 技能说明\n请帮我写一封邮件。";
         assert!(!scan(content));
     }
 
@@ -150,7 +151,11 @@ mod builtin_entries {
 
     #[test]
     fn test_builtin_plugins_count() {
-        assert_eq!(BUILTIN_PLUGINS.len(), 16, "内置插件数量应为 16（7 MCP + 9 WASM）");
+        assert_eq!(
+            BUILTIN_PLUGINS.len(),
+            16,
+            "内置插件数量应为 16（7 MCP + 9 WASM）"
+        );
     }
 
     #[test]
@@ -158,7 +163,9 @@ mod builtin_entries {
         for (name, plugin_type) in BUILTIN_PLUGINS {
             assert!(
                 matches!(*plugin_type, "http" | "wasm" | "stdio"),
-                "内置插件 '{}' 的类型 '{}' 无效", name, plugin_type
+                "内置插件 '{}' 的类型 '{}' 无效",
+                name,
+                plugin_type
             );
         }
     }

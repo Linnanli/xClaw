@@ -2,9 +2,9 @@
 //!
 //! 包含中国特色敏感信息检测模式和API密钥检测模式
 
-use ironclaw_safety::{LeakPattern, LeakSeverity, LeakAction};
-use regex::Regex;
 use crate::dlp::{DlpError, DlpResult};
+use ironclaw_safety::{LeakAction, LeakPattern, LeakSeverity};
+use regex::Regex;
 
 /// 中国特色敏感信息检测模式
 pub struct ChinesePatterns;
@@ -16,8 +16,10 @@ impl ChinesePatterns {
             // 18位身份证号码（使用单词边界）
             LeakPattern {
                 name: "chinese_id_card_18".to_string(),
-                regex: Regex::new(r"\b[1-9]\d{5}(19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{3}[\dXx]\b")
-                    .map_err(|e| DlpError::PatternCompilation(e.to_string()))?,
+                regex: Regex::new(
+                    r"\b[1-9]\d{5}(19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{3}[\dXx]\b",
+                )
+                .map_err(|e| DlpError::PatternCompilation(e.to_string()))?,
                 severity: LeakSeverity::High,
                 action: LeakAction::Redact,
             },
@@ -151,12 +153,7 @@ pub struct CustomPattern {
 
 impl CustomPattern {
     /// 创建新的自定义模式
-    pub fn new(
-        name: String,
-        pattern: String,
-        severity: LeakSeverity,
-        action: LeakAction,
-    ) -> Self {
+    pub fn new(name: String, pattern: String, severity: LeakSeverity, action: LeakAction) -> Self {
         Self {
             name,
             pattern,
@@ -176,7 +173,7 @@ impl CustomPattern {
     pub fn to_leak_pattern(self) -> DlpResult<LeakPattern> {
         let regex = Regex::new(&self.pattern)
             .map_err(|e| DlpError::PatternCompilation(format!("Pattern '{}': {}", self.name, e)))?;
-        
+
         Ok(LeakPattern {
             name: self.name,
             regex,
@@ -189,13 +186,13 @@ impl CustomPattern {
 /// 获取所有内置检测模式
 pub fn get_all_builtin_patterns() -> DlpResult<Vec<LeakPattern>> {
     let mut patterns = Vec::new();
-    
+
     // 添加中国特色模式
     patterns.extend(ChinesePatterns::all_chinese_patterns()?);
-    
+
     // 添加API密钥模式
     patterns.extend(ApiKeyPatterns::all_api_key_patterns()?);
-    
+
     Ok(patterns)
 }
 
@@ -207,14 +204,14 @@ mod tests {
     fn test_chinese_id_card_18_digit_pattern() {
         let patterns = ChinesePatterns::chinese_id_card_patterns().unwrap();
         let pattern = &patterns[0]; // 18位身份证
-        
+
         // 有效的18位身份证号码
         let valid_ids = [
             "110101199003071234",
             "320106198506234567",
             "440301199912315678",
         ];
-        
+
         for id in &valid_ids {
             assert!(
                 pattern.regex.is_match(id),
@@ -222,14 +219,14 @@ mod tests {
                 id
             );
         }
-        
+
         // 在中文句子中的身份证号码
         let chinese_content = "我的身份证号是 110101199003071234 ，请保密。";
         assert!(
             pattern.regex.is_match(chinese_content),
             "ID in Chinese sentence should match"
         );
-        
+
         // 无效的身份证号码
         let invalid_ids = [
             "000000199003071234", // 地区码无效
@@ -237,18 +234,16 @@ mod tests {
             "110101199003321234", // 日期无效
             "11010119900307123",  // 位数不足
         ];
-        
+
         for id in &invalid_ids {
             // 注意：移除单词边界后，某些无效ID可能仍然匹配部分内容
             // 这里我们主要测试完整的无效ID不应该匹配
-            let full_match = pattern.regex.find(id)
+            let full_match = pattern
+                .regex
+                .find(id)
                 .map(|m| m.as_str() == *id)
                 .unwrap_or(false);
-            assert!(
-                !full_match,
-                "Invalid ID {} should not fully match",
-                id
-            );
+            assert!(!full_match, "Invalid ID {} should not fully match", id);
         }
     }
 
@@ -256,13 +251,10 @@ mod tests {
     fn test_chinese_id_card_15_digit_pattern() {
         let patterns = ChinesePatterns::chinese_id_card_patterns().unwrap();
         let pattern = &patterns[1]; // 15位身份证
-        
+
         // 有效的15位身份证号码
-        let valid_ids = [
-            "110101901231123",
-            "320106850623456",
-        ];
-        
+        let valid_ids = ["110101901231123", "320106850623456"];
+
         for id in &valid_ids {
             assert!(
                 pattern.regex.is_match(id),
@@ -276,15 +268,10 @@ mod tests {
     fn test_chinese_mobile_pattern() {
         let patterns = ChinesePatterns::chinese_mobile_patterns().unwrap();
         let pattern = &patterns[0]; // 中国手机号
-        
+
         // 有效的手机号码
-        let valid_mobiles = [
-            "13800138000",
-            "15912345678",
-            "18612345678",
-            "19912345678",
-        ];
-        
+        let valid_mobiles = ["13800138000", "15912345678", "18612345678", "19912345678"];
+
         for mobile in &valid_mobiles {
             assert!(
                 pattern.regex.is_match(mobile),
@@ -292,17 +279,19 @@ mod tests {
                 mobile
             );
         }
-        
+
         // 无效的手机号码
         let invalid_mobiles = [
-            "12812345678", // 不是1[3-9]开头
-            "1381234567",  // 位数不足
+            "12812345678",  // 不是1[3-9]开头
+            "1381234567",   // 位数不足
             "138123456789", // 位数过多
         ];
-        
+
         for mobile in &invalid_mobiles {
             // 测试完整匹配，不应该匹配整个字符串
-            let full_match = pattern.regex.find(mobile)
+            let full_match = pattern
+                .regex
+                .find(mobile)
                 .map(|m| m.as_str() == *mobile)
                 .unwrap_or(false);
             assert!(
@@ -317,14 +306,14 @@ mod tests {
     fn test_chinese_mobile_with_country_code_pattern() {
         let patterns = ChinesePatterns::chinese_mobile_patterns().unwrap();
         let pattern = &patterns[0]; // 带国际区号的手机号
-        
+
         // 有效的带区号手机号码
         let valid_mobiles = [
             "+86 13800138000",
             "+86-13800138000",
             " 13800138000 ", // 不带区号也应该匹配
         ];
-        
+
         for mobile in &valid_mobiles {
             assert!(
                 pattern.regex.is_match(mobile),
@@ -337,16 +326,14 @@ mod tests {
     #[test]
     fn test_aliyun_access_key_pattern() {
         let patterns = ApiKeyPatterns::chinese_cloud_api_patterns().unwrap();
-        let aliyun_pattern = patterns.iter()
+        let aliyun_pattern = patterns
+            .iter()
             .find(|p| p.name == "aliyun_access_key")
             .unwrap();
-        
+
         // 有效的阿里云AccessKey
-        let valid_keys = [
-            "LTAI4G8aB9cD2eFgH3iJ",
-            "LTAI5K6mN7oP8qR9sT0u",
-        ];
-        
+        let valid_keys = ["LTAI4G8aB9cD2eFgH3iJ", "LTAI5K6mN7oP8qR9sT0u"];
+
         for key in &valid_keys {
             assert!(
                 aliyun_pattern.regex.is_match(key),
@@ -354,13 +341,13 @@ mod tests {
                 key
             );
         }
-        
+
         // 无效的AccessKey
         let invalid_keys = [
-            "LTAI123", // 太短
+            "LTAI123",              // 太短
             "XTAI4G8aB9cD2eFgH3iJ", // 不是LTAI开头
         ];
-        
+
         for key in &invalid_keys {
             assert!(
                 !aliyun_pattern.regex.is_match(key),
@@ -373,15 +360,14 @@ mod tests {
     #[test]
     fn test_tencent_cloud_secret_id_pattern() {
         let patterns = ApiKeyPatterns::chinese_cloud_api_patterns().unwrap();
-        let tencent_pattern = patterns.iter()
+        let tencent_pattern = patterns
+            .iter()
             .find(|p| p.name == "tencent_cloud_secret_id")
             .unwrap();
-        
+
         // 有效的腾讯云SecretId
-        let valid_ids = [
-            "AKIDabcdefghijklmnopqrstuvwxyz123456",
-        ];
-        
+        let valid_ids = ["AKIDabcdefghijklmnopqrstuvwxyz123456"];
+
         for id in &valid_ids {
             assert!(
                 tencent_pattern.regex.is_match(id),
@@ -398,14 +384,15 @@ mod tests {
             r"\bTEST-\d{4}\b".to_string(),
             LeakSeverity::Medium,
             LeakAction::Redact,
-        ).with_description("Test pattern for unit tests".to_string());
-        
+        )
+        .with_description("Test pattern for unit tests".to_string());
+
         let leak_pattern = custom.to_leak_pattern().unwrap();
-        
+
         assert_eq!(leak_pattern.name, "test_pattern");
         assert_eq!(leak_pattern.severity, LeakSeverity::Medium);
         assert_eq!(leak_pattern.action, LeakAction::Redact);
-        
+
         // 测试模式匹配
         assert!(leak_pattern.regex.is_match("TEST-1234"));
         assert!(!leak_pattern.regex.is_match("TEST-123"));
@@ -419,19 +406,22 @@ mod tests {
             LeakSeverity::Low,
             LeakAction::Warn,
         );
-        
+
         let result = custom.to_leak_pattern();
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Pattern 'invalid_pattern'"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Pattern 'invalid_pattern'"));
     }
 
     #[test]
     fn test_get_all_builtin_patterns() {
         let patterns = get_all_builtin_patterns().unwrap();
-        
+
         // 应该包含中国身份证、手机号、银行卡和API密钥模式
         assert!(patterns.len() > 5);
-        
+
         // 检查是否包含关键模式
         let pattern_names: Vec<&str> = patterns.iter().map(|p| p.name.as_str()).collect();
         assert!(pattern_names.contains(&"chinese_id_card_18"));
@@ -443,19 +433,22 @@ mod tests {
     fn test_pattern_severity_and_action_assignment() {
         let chinese_patterns = ChinesePatterns::all_chinese_patterns().unwrap();
         let api_patterns = ApiKeyPatterns::all_api_key_patterns().unwrap();
-        
+
         // 身份证和手机号应该是脱敏处理
         for pattern in &chinese_patterns {
             if pattern.name.contains("id_card") || pattern.name.contains("mobile") {
                 assert_eq!(pattern.action, LeakAction::Redact);
             }
         }
-        
+
         // API密钥应该是阻止处理（除了华为云的宽泛模式）
         for pattern in &api_patterns {
             if pattern.name != "huawei_cloud_access_key" {
                 assert_eq!(pattern.action, LeakAction::Block);
-                assert!(pattern.severity >= LeakSeverity::Critical || pattern.severity >= LeakSeverity::High);
+                assert!(
+                    pattern.severity >= LeakSeverity::Critical
+                        || pattern.severity >= LeakSeverity::High
+                );
             }
         }
     }

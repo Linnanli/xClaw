@@ -77,7 +77,11 @@ mod quota_config_failures {
     fn test_failure_config_zero_budget() {
         let monthly_budget: i64 = 0;
         let month_cost: i64 = 100;
-        let pct = if monthly_budget > 0 { (month_cost as f64 / monthly_budget as f64 * 100.0) as i32 } else { 0 };
+        let pct = if monthly_budget > 0 {
+            (month_cost as f64 / monthly_budget as f64 * 100.0) as i32
+        } else {
+            0
+        };
         assert_eq!(pct, 0, "预算为 0 时使用率应为 0（避免除零）");
     }
 }
@@ -89,7 +93,10 @@ mod quota_usage_records_failures {
     fn test_failure_usage_records_invalid_date_format() {
         let date = "not-a-date";
         let parsed = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d");
-        assert!(parsed.is_err(), "无效日期格式应解析失败，handler 回退到默认值（今日）");
+        assert!(
+            parsed.is_err(),
+            "无效日期格式应解析失败，handler 回退到默认值（今日）"
+        );
     }
 
     #[test]

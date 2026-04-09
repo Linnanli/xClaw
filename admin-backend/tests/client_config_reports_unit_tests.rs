@@ -264,7 +264,10 @@ fn test_config_response_missing_required_field() {
     }"#;
 
     let result: Result<ClientConfigResponse, _> = serde_json::from_str(json_str);
-    assert!(result.is_err(), "Should fail when config_version is missing");
+    assert!(
+        result.is_err(),
+        "Should fail when config_version is missing"
+    );
 }
 
 #[test]
@@ -283,7 +286,10 @@ fn test_config_response_wrong_type_for_version() {
     }"#;
 
     let result: Result<ClientConfigResponse, _> = serde_json::from_str(json_str);
-    assert!(result.is_err(), "Should fail when config_version is a string");
+    assert!(
+        result.is_err(),
+        "Should fail when config_version is a string"
+    );
 }
 
 #[test]
@@ -302,7 +308,10 @@ fn test_config_response_wrong_type_for_boolean() {
     }"#;
 
     let result: Result<ClientConfigResponse, _> = serde_json::from_str(json_str);
-    assert!(result.is_err(), "Should fail when safety_enabled is a string");
+    assert!(
+        result.is_err(),
+        "Should fail when safety_enabled is a string"
+    );
 }
 
 #[test]

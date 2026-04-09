@@ -123,7 +123,10 @@ fn test_config_roundtrip_integrity() {
         current = serde_json::from_str(&json_str).unwrap();
     }
 
-    assert_eq!(current, original, "Config should be identical after 10 roundtrips");
+    assert_eq!(
+        current, original,
+        "Config should be identical after 10 roundtrips"
+    );
 }
 
 #[test]
@@ -142,7 +145,10 @@ fn test_report_roundtrip_integrity() {
     let parsed: ClientReportPayload = serde_json::from_str(&json_str).unwrap();
 
     assert_eq!(parsed.report_type, original.report_type);
-    assert_eq!(parsed.data["total_messages"], original.data["total_messages"]);
+    assert_eq!(
+        parsed.data["total_messages"],
+        original.data["total_messages"]
+    );
     assert_eq!(parsed.data["total_tokens"], original.data["total_tokens"]);
 }
 

@@ -64,10 +64,15 @@ impl PolicySyncManager {
     }
 
     /// 更新敏感操作策略
-    pub fn update_sensitive_ops_policies(&mut self, policies: Vec<SensitiveOpPolicy>, version: u64) -> Result<()> {
+    pub fn update_sensitive_ops_policies(
+        &mut self,
+        policies: Vec<SensitiveOpPolicy>,
+        version: u64,
+    ) -> Result<()> {
         self.sensitive_ops_policies.clear();
         for policy in policies {
-            self.sensitive_ops_policies.insert(policy.id.clone(), policy);
+            self.sensitive_ops_policies
+                .insert(policy.id.clone(), policy);
         }
         self.version.sensitive_ops_version = version;
         Ok(())
@@ -85,8 +90,8 @@ impl PolicySyncManager {
 
     /// 检查是否需要同步
     pub fn needs_sync(&self, remote_version: &PolicyVersion) -> bool {
-        self.version.dlp_rules_version < remote_version.dlp_rules_version ||
-        self.version.sensitive_ops_version < remote_version.sensitive_ops_version
+        self.version.dlp_rules_version < remote_version.dlp_rules_version
+            || self.version.sensitive_ops_version < remote_version.sensitive_ops_version
     }
 
     /// 获取当前版本
@@ -98,14 +103,14 @@ impl PolicySyncManager {
     pub fn apply_dlp_policy(&self, text: &str) -> String {
         // 简化的DLP策略应用
         let mut result = text.to_string();
-        
+
         // 应用所有DLP策略
         for policy in self.dlp_policies.values() {
             if let Ok(regex) = regex::Regex::new(&policy.pattern) {
                 result = regex.replace_all(&result, &policy.replacement).to_string();
             }
         }
-        
+
         result
     }
 }

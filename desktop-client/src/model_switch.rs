@@ -32,10 +32,7 @@ pub struct ModelSwitchProvider {
 }
 
 impl ModelSwitchProvider {
-    pub fn new(
-        inner: Arc<dyn LlmProvider>,
-        override_source: Arc<RwLock<Option<String>>>,
-    ) -> Self {
+    pub fn new(inner: Arc<dyn LlmProvider>, override_source: Arc<RwLock<Option<String>>>) -> Self {
         Self {
             inner: Mutex::new(inner),
             override_source,
@@ -103,7 +100,8 @@ impl LlmProvider for ModelSwitchProvider {
     }
 
     fn calculate_cost(&self, input_tokens: u32, output_tokens: u32) -> Decimal {
-        self.current_inner().calculate_cost(input_tokens, output_tokens)
+        self.current_inner()
+            .calculate_cost(input_tokens, output_tokens)
     }
 
     async fn complete(

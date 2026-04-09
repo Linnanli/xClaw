@@ -22,7 +22,10 @@ async fn test_network_failure_recovery() {
 
     // 模拟"网络中断"：删除 token 文件
     token_manager.delete().unwrap();
-    assert!(token_manager.load().is_err(), "Should fail when token file is missing");
+    assert!(
+        token_manager.load().is_err(),
+        "Should fail when token file is missing"
+    );
 
     // 模拟"网络恢复"：重新生成
     let recovered = token_manager.load_or_generate().unwrap();
@@ -37,9 +40,9 @@ async fn test_concurrent_token_access_stress() {
     let temp_dir = TempDir::new().unwrap();
     let token_file = temp_dir.path().join(".auth_token");
 
-    let token_manager = Arc::new(tokio::sync::Mutex::new(
-        AuthTokenManager::new_with_path(token_file),
-    ));
+    let token_manager = Arc::new(tokio::sync::Mutex::new(AuthTokenManager::new_with_path(
+        token_file,
+    )));
     let num_tasks = 50;
     let mut handles = Vec::new();
 
@@ -62,7 +65,10 @@ async fn test_concurrent_token_access_stress() {
 
     for handle in handles {
         match handle.await {
-            Ok(Ok(token)) => { tokens.push(token); success_count += 1; }
+            Ok(Ok(token)) => {
+                tokens.push(token);
+                success_count += 1;
+            }
             Ok(Err(e)) => println!("Task failed: {:?}", e),
             Err(e) => println!("Task panicked: {:?}", e),
         }
@@ -71,20 +77,30 @@ async fn test_concurrent_token_access_stress() {
     assert!(
         success_count > num_tasks * 8 / 10,
         "At least 80% of tasks should succeed, got {}/{}",
-        success_count, num_tasks
+        success_count,
+        num_tasks
     );
 
     // load_or_generate 必须幂等：同一文件路径所有调用返回相同 token
     if tokens.len() > 1 {
         let first = &tokens[0];
         for (i, token) in tokens[1..].iter().enumerate() {
-            assert_eq!(first, token, "Task {} returned different token — load_or_generate not idempotent", i + 1);
+            assert_eq!(
+                first,
+                token,
+                "Task {} returned different token — load_or_generate not idempotent",
+                i + 1
+            );
         }
     }
 
     println!("✅ Concurrent token access stress test passed");
-    println!("   Success rate: {}/{} ({:.1}%)", success_count, num_tasks,
-             (success_count as f64 / num_tasks as f64) * 100.0);
+    println!(
+        "   Success rate: {}/{} ({:.1}%)",
+        success_count,
+        num_tasks,
+        (success_count as f64 / num_tasks as f64) * 100.0
+    );
 }
 
 #[tokio::test]
@@ -114,11 +130,19 @@ async fn test_token_corruption_recovery() {
         // 每次用同一个隔离路径的 manager
         let manager = AuthTokenManager::new_with_path(token_file.clone());
         let result = manager.load_or_generate();
-        assert!(result.is_ok(), "Should recover from corruption case {}: {:?}", i, corrupted);
+        assert!(
+            result.is_ok(),
+            "Should recover from corruption case {}: {:?}",
+            i,
+            corrupted
+        );
 
         let token = result.unwrap();
         assert_eq!(token.len(), 64, "Recovered token should be 64 chars");
-        assert!(token.chars().all(|c| c.is_ascii_hexdigit()), "Recovered token should be hex");
+        assert!(
+            token.chars().all(|c| c.is_ascii_hexdigit()),
+            "Recovered token should be hex"
+        );
     }
 
     println!("✅ Token corruption recovery test passed");
@@ -158,10 +182,19 @@ async fn test_high_frequency_operations() {
     }
 
     let success_rate = success_count as f64 / operations as f64;
-    assert!(success_rate > 0.95, "Success rate should be > 95%, got {:.2}%", success_rate * 100.0);
+    assert!(
+        success_rate > 0.95,
+        "Success rate should be > 95%, got {:.2}%",
+        success_rate * 100.0
+    );
 
     println!("✅ High frequency operations test passed");
-    println!("   Success rate: {}/{} ({:.1}%)", success_count, operations, success_rate * 100.0);
+    println!(
+        "   Success rate: {}/{} ({:.1}%)",
+        success_count,
+        operations,
+        success_rate * 100.0
+    );
 }
 
 #[tokio::test]
@@ -182,7 +215,10 @@ async fn test_memory_pressure_resilience() {
         }
     }
 
-    assert!(tokens.len() > 90, "Most managers should succeed under memory pressure");
+    assert!(
+        tokens.len() > 90,
+        "Most managers should succeed under memory pressure"
+    );
 
     // 所有 manager 指向同一文件，token 必须一致
     if tokens.len() > 1 {

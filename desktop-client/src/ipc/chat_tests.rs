@@ -54,16 +54,26 @@ mod tests {
         let json: serde_json::Value = serde_json::to_value(&resp).unwrap();
 
         // 验证字段名完全匹配前端 TypeScript 接口
-        assert!(json.get("message_id").is_some(), "missing 'message_id' field");
+        assert!(
+            json.get("message_id").is_some(),
+            "missing 'message_id' field"
+        );
         assert!(json.get("success").is_some(), "missing 'success' field");
 
         // 验证类型
-        assert!(json["message_id"].is_string(), "message_id should be string");
+        assert!(
+            json["message_id"].is_string(),
+            "message_id should be string"
+        );
         assert!(json["success"].is_boolean(), "success should be boolean");
 
         // 验证没有多余字段
         let obj = json.as_object().unwrap();
-        assert_eq!(obj.len(), 2, "SendMessageResponse should have exactly 2 fields");
+        assert_eq!(
+            obj.len(),
+            2,
+            "SendMessageResponse should have exactly 2 fields"
+        );
     }
 
     // =========================================================================
@@ -107,8 +117,14 @@ mod tests {
         };
         let json_str = serde_json::to_string(&resp).unwrap();
 
-        assert!(!json_str.contains("model"), "model info should not leak in response");
-        assert!(!json_str.contains("deepseek"), "model name should not leak in response");
+        assert!(
+            !json_str.contains("model"),
+            "model info should not leak in response"
+        );
+        assert!(
+            !json_str.contains("deepseek"),
+            "model name should not leak in response"
+        );
     }
 
     // =========================================================================
@@ -138,7 +154,9 @@ mod tests {
 
         // /chat/completions 是 rig-core 自动拼接的，应该剥掉
         assert_eq!(
-            normalize_base_url("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"),
+            normalize_base_url(
+                "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+            ),
             "https://dashscope.aliyuncs.com/compatible-mode/v1",
         );
         assert_eq!(

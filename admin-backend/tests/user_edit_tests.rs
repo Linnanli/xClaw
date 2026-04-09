@@ -10,11 +10,7 @@ mod user_edit_validation_tests {
     /// test_email_validation: 邮箱格式验证
     #[test]
     fn test_email_validation() {
-        let valid_emails = vec![
-            "user@example.com",
-            "test.user@domain.org",
-            "a@b.co",
-        ];
+        let valid_emails = vec!["user@example.com", "test.user@domain.org", "a@b.co"];
 
         let invalid_emails = vec![
             "",
@@ -42,9 +38,9 @@ mod user_edit_validation_tests {
         // 正常路径
         let long_valid = "a".repeat(128);
         let valid_passwords: Vec<&str> = vec![
-            "12345678",           // 最短有效密码
-            &long_valid,          // 最长有效密码
-            "P@ssw0rd!123",       // 常规密码
+            "12345678",     // 最短有效密码
+            &long_valid,    // 最长有效密码
+            "P@ssw0rd!123", // 常规密码
         ];
 
         for pwd in &valid_passwords {
@@ -58,9 +54,9 @@ mod user_edit_validation_tests {
         // 错误路径
         let long_invalid = "a".repeat(129);
         let invalid_passwords: Vec<&str> = vec![
-            "1234567",            // 太短（7字符）
-            &long_invalid,        // 太长（129字符）
-            "",                   // 空密码
+            "1234567",     // 太短（7字符）
+            &long_invalid, // 太长（129字符）
+            "",            // 空密码
         ];
 
         for pwd in &invalid_passwords {
@@ -76,16 +72,10 @@ mod user_edit_validation_tests {
     #[test]
     fn test_update_requires_at_least_one_field() {
         let changed_fields: Vec<String> = vec![];
-        assert!(
-            changed_fields.is_empty(),
-            "空更新应该被拒绝"
-        );
+        assert!(changed_fields.is_empty(), "空更新应该被拒绝");
 
         let changed_fields = vec!["email".to_string()];
-        assert!(
-            !changed_fields.is_empty(),
-            "有字段更新应该被接受"
-        );
+        assert!(!changed_fields.is_empty(), "有字段更新应该被接受");
     }
 }
 
@@ -162,11 +152,7 @@ mod user_edit_security_tests {
 
         for field in &response_fields {
             for sensitive in &sensitive_fields {
-                assert_ne!(
-                    field, sensitive,
-                    "响应不应包含敏感字段: {}",
-                    sensitive
-                );
+                assert_ne!(field, sensitive, "响应不应包含敏感字段: {}", sensitive);
             }
         }
     }
@@ -177,17 +163,14 @@ mod user_edit_security_tests {
         let audit_details = "更新用户 admin，修改字段: email, password";
         // 审计日志记录了修改了哪些字段，但不记录具体值
         assert!(audit_details.contains("password")); // 字段名可以出现
-        // 但不应包含实际密码值
+                                                     // 但不应包含实际密码值
         assert!(!audit_details.contains("P@ssw0rd"));
     }
 
     /// test_security_email_xss_prevention: 邮箱字段 XSS 防护
     #[test]
     fn test_security_email_xss_prevention() {
-        let malicious_emails = vec![
-            "<script>alert(1)</script>@evil.com",
-            "user@<img src=x>.com",
-        ];
+        let malicious_emails = vec!["<script>alert(1)</script>@evil.com", "user@<img src=x>.com"];
 
         let email_regex = regex::Regex::new(r"^[^@\s]+@[^@\s]+\.[^@\s]+$").unwrap();
 

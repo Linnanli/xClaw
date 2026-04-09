@@ -58,13 +58,29 @@ mod compliance_contract_tests {
         });
         assert!(resp["reports"].is_array());
         let r = &resp["reports"][0];
-        for f in &["id", "name", "report_type", "start_date", "end_date", "created_at"] {
+        for f in &[
+            "id",
+            "name",
+            "report_type",
+            "start_date",
+            "end_date",
+            "created_at",
+        ] {
             assert!(r.get(*f).is_some(), "报告响应缺少字段: {}", f);
         }
         // PDF 导出依赖 content 字段
         let content = &r["content"];
-        for f in &["dlp_blocks", "policy_changes", "alert_events", "approval_tickets"] {
-            assert!(content.get(*f).is_some(), "content 缺少 PDF 导出所需字段: {}", f);
+        for f in &[
+            "dlp_blocks",
+            "policy_changes",
+            "alert_events",
+            "approval_tickets",
+        ] {
+            assert!(
+                content.get(*f).is_some(),
+                "content 缺少 PDF 导出所需字段: {}",
+                f
+            );
         }
     }
 
@@ -111,8 +127,12 @@ mod watermark_config_tests {
     use serde_json::json;
 
     const WATERMARK_KEYS: &[&str] = &[
-        "watermark_enabled", "watermark_template", "watermark_font_size",
-        "watermark_opacity", "watermark_position", "watermark_color",
+        "watermark_enabled",
+        "watermark_template",
+        "watermark_font_size",
+        "watermark_opacity",
+        "watermark_position",
+        "watermark_color",
     ];
 
     #[test]
@@ -144,7 +164,11 @@ mod watermark_config_tests {
             "watermark_color": "#FF0000",
         });
         for key in WATERMARK_KEYS {
-            assert!(config.get(*key).is_some(), "client-config 缺少字段: {}", key);
+            assert!(
+                config.get(*key).is_some(),
+                "client-config 缺少字段: {}",
+                key
+            );
         }
     }
 

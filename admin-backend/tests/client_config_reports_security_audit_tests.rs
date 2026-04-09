@@ -124,10 +124,10 @@ fn test_audit_dlp_event_no_raw_content() {
 
     // 验证不包含常见的敏感数据模式
     let sensitive_patterns = [
-        "330326",          // 身份证号前缀
-        "13800138000",     // 手机号
+        "330326",           // 身份证号前缀
+        "13800138000",      // 手机号
         "4111111111111111", // 信用卡号
-        "password",        // 密码
+        "password",         // 密码
     ];
 
     for pattern in &sensitive_patterns {
@@ -213,8 +213,10 @@ fn test_audit_xss_in_report_data() {
 
     // 序列化应该正常工作（数据原样存储）
     let json_str = serde_json::to_string(&report).unwrap();
-    assert!(json_str.contains("&lt;") || json_str.contains("<script>"),
-        "XSS content should be stored as-is (escaped by JSON) or sanitized");
+    assert!(
+        json_str.contains("&lt;") || json_str.contains("<script>"),
+        "XSS content should be stored as-is (escaped by JSON) or sanitized"
+    );
 }
 
 #[test]
@@ -357,7 +359,8 @@ fn test_audit_error_no_internal_details() {
     use admin_backend::error::Error;
 
     // 数据库错误不应暴露连接字符串
-    let db_error = Error::Database("connection refused to postgres://user:pass@host:5432/db".into());
+    let db_error =
+        Error::Database("connection refused to postgres://user:pass@host:5432/db".into());
     let error_str = db_error.to_string();
 
     // IntoResponse 实现应该返回通用错误消息

@@ -40,16 +40,13 @@ pub struct CatalogSearchResult {
 
 /// 列出已安装技能。
 #[tauri::command]
-pub async fn ic_list_skills(
-    state: State<'_, EngineState>,
-) -> Result<Vec<SkillInfo>, String> {
+pub async fn ic_list_skills(state: State<'_, EngineState>) -> Result<Vec<SkillInfo>, String> {
     let state = state.get()?;
-    let registry = state
-        .skill_registry
-        .as_ref()
-        .ok_or("Skills not enabled")?;
+    let registry = state.skill_registry.as_ref().ok_or("Skills not enabled")?;
 
-    let guard = registry.read().map_err(|e| format!("Lock poisoned: {}", e))?;
+    let guard = registry
+        .read()
+        .map_err(|e| format!("Lock poisoned: {}", e))?;
 
     let result = guard
         .skills()
@@ -70,7 +67,14 @@ pub async fn ic_list_skills(
                 description: s.manifest.description.clone(),
                 source: source.to_string(),
                 trust: trust.to_string(),
-                keywords: s.manifest.activation.keywords.iter().take(5).cloned().collect(),
+                keywords: s
+                    .manifest
+                    .activation
+                    .keywords
+                    .iter()
+                    .take(5)
+                    .cloned()
+                    .collect(),
             }
         })
         .collect();
@@ -116,22 +120,24 @@ pub async fn ic_install_skill(
     content: String,
 ) -> Result<String, String> {
     let state = state.get()?;
-    let registry = state
-        .skill_registry
-        .as_ref()
-        .ok_or("Skills not enabled")?;
+    let registry = state.skill_registry.as_ref().ok_or("Skills not enabled")?;
 
     // 获取安装目标目录（短锁，立即释放）
     let install_dir = {
-        let guard = registry.read().map_err(|e| format!("Lock poisoned: {}", e))?;
+        let guard = registry
+            .read()
+            .map_err(|e| format!("Lock poisoned: {}", e))?;
         guard.install_target_dir().to_path_buf()
     };
 
     // Phase 1: 写入文件系统（无锁，可 await）
-    let (name, loaded) =
-        ironclaw::skills::SkillRegistry::prepare_install_to_disk(&install_dir, "_pending", &content)
-            .await
-            .map_err(|e| format!("Failed to install skill: {}", e))?;
+    let (name, loaded) = ironclaw::skills::SkillRegistry::prepare_install_to_disk(
+        &install_dir,
+        "_pending",
+        &content,
+    )
+    .await
+    .map_err(|e| format!("Failed to install skill: {}", e))?;
 
     // Phase 2: 更新内存注册表（短锁，同步）
     {
@@ -154,19 +160,15 @@ pub async fn ic_install_skill(
 /// 2. `delete_skill_files()` — 删除文件（无锁，可 await）
 /// 3. `commit_remove()` — 更新内存注册表（短锁，同步）
 #[tauri::command]
-pub async fn ic_uninstall_skill(
-    state: State<'_, EngineState>,
-    name: String,
-) -> Result<(), String> {
+pub async fn ic_uninstall_skill(state: State<'_, EngineState>, name: String) -> Result<(), String> {
     let state = state.get()?;
-    let registry = state
-        .skill_registry
-        .as_ref()
-        .ok_or("Skills not enabled")?;
+    let registry = state.skill_registry.as_ref().ok_or("Skills not enabled")?;
 
     // Phase 1: 验证并获取路径（短锁，同步）
     let path = {
-        let guard = registry.read().map_err(|e| format!("Lock poisoned: {}", e))?;
+        let guard = registry
+            .read()
+            .map_err(|e| format!("Lock poisoned: {}", e))?;
         guard
             .validate_remove(&name)
             .map_err(|e| format!("Failed to validate removal: {}", e))?

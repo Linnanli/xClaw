@@ -148,15 +148,12 @@ mod client_config_failure_tests {
     /// test_failure_invalid_base_url: 无效的 Base URL
     #[test]
     fn test_failure_invalid_base_url() {
-        let invalid_urls = vec![
-            "not-a-url",
-            "ftp://invalid-scheme.com",
-            "://missing-scheme",
-        ];
+        let invalid_urls = vec!["not-a-url", "ftp://invalid-scheme.com", "://missing-scheme"];
 
         for url in &invalid_urls {
             // 简单的 URL 验证：应以 http:// 或 https:// 开头
-            let is_valid = url.starts_with("http://") || url.starts_with("https://") || url.is_empty();
+            let is_valid =
+                url.starts_with("http://") || url.starts_with("https://") || url.is_empty();
             assert!(!is_valid, "无效 URL '{}' 应被拒绝", url);
         }
     }

@@ -13,7 +13,7 @@ use ironclaw::safety::{SafetyConfig, SafetyLayer};
 
 use crate::data_reporter::DataReporter;
 use crate::dlp::sanitizer::SanitizationConfig;
-use crate::safety_bridge::{SafetyBridge, BridgeScanResult, BridgeStats, BridgeCumulativeStats};
+use crate::safety_bridge::{BridgeCumulativeStats, BridgeScanResult, BridgeStats, SafetyBridge};
 
 // ═══════════════════════════════════════════════════════════════════
 // 辅助函数
@@ -99,9 +99,8 @@ mod unit_tests {
     #[test]
     fn test_scan_multiple_pii() {
         let bridge = create_bridge();
-        let result = bridge.scan_user_input(
-            "用户信息：身份证 110101199003071234 ，手机 13800138000 "
-        );
+        let result =
+            bridge.scan_user_input("用户信息：身份证 110101199003071234 ，手机 13800138000 ");
 
         assert!(result.had_sensitive_data);
         assert!(!result.was_blocked);
@@ -408,7 +407,10 @@ mod security_audit_tests {
         let (bridge, reporter) = create_bridge_with_reporter();
         bridge.scan_user_input("ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
 
-        assert!(reporter.queue_len() >= 1, "Reporter should have at least 1 event");
+        assert!(
+            reporter.queue_len() >= 1,
+            "Reporter should have at least 1 event"
+        );
     }
 
     #[test]
@@ -416,7 +418,10 @@ mod security_audit_tests {
         let (bridge, reporter) = create_bridge_with_reporter();
         bridge.scan_user_input("身份证 110101199003071234");
 
-        assert!(reporter.queue_len() >= 1, "Reporter should have at least 1 PII event");
+        assert!(
+            reporter.queue_len() >= 1,
+            "Reporter should have at least 1 PII event"
+        );
     }
 
     #[test]
@@ -497,7 +502,10 @@ mod security_audit_tests {
         );
 
         // SafetyLayer 应该检测到密钥并修改输出
-        assert!(output.was_modified, "Tool output with secret should be modified");
+        assert!(
+            output.was_modified,
+            "Tool output with secret should be modified"
+        );
     }
 
     #[test]
@@ -683,10 +691,16 @@ mod contract_tests {
         let outbound_result = bridge.scan_outbound(content);
 
         // 两者应该有相同的安全行为
-        assert_eq!(input_result.had_sensitive_data, outbound_result.had_sensitive_data);
+        assert_eq!(
+            input_result.had_sensitive_data,
+            outbound_result.had_sensitive_data
+        );
         assert_eq!(input_result.was_blocked, outbound_result.was_blocked);
         // 脱敏内容应该相同
-        assert_eq!(input_result.sanitized_content, outbound_result.sanitized_content);
+        assert_eq!(
+            input_result.sanitized_content,
+            outbound_result.sanitized_content
+        );
     }
 
     #[test]
@@ -744,7 +758,11 @@ mod reliability_tests {
         for handle in handles {
             let result = handle.join().expect("Thread should not panic");
             // 所有结果都应该是有效的
-            assert!(!result.sanitized_content.is_empty() || result.was_blocked || !result.had_sensitive_data);
+            assert!(
+                !result.sanitized_content.is_empty()
+                    || result.was_blocked
+                    || !result.had_sensitive_data
+            );
         }
     }
 
@@ -777,9 +795,8 @@ mod reliability_tests {
         let content = "身份证 110101199003071234";
 
         // 多次扫描同一内容应该得到一致的结果
-        let results: Vec<BridgeScanResult> = (0..5)
-            .map(|_| bridge.scan_user_input(content))
-            .collect();
+        let results: Vec<BridgeScanResult> =
+            (0..5).map(|_| bridge.scan_user_input(content)).collect();
 
         for result in &results {
             assert_eq!(result.had_sensitive_data, results[0].had_sensitive_data);
@@ -843,7 +860,10 @@ mod reliability_tests {
         }
 
         // reporter 应该收到所有事件
-        assert!(reporter.queue_len() >= 50, "Reporter should have at least 50 events");
+        assert!(
+            reporter.queue_len() >= 50,
+            "Reporter should have at least 50 events"
+        );
     }
 
     #[test]

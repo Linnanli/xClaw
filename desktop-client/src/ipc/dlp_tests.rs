@@ -233,7 +233,10 @@ mod tests {
         assert_eq!(original.had_sensitive_data, deserialized.had_sensitive_data);
         assert_eq!(original.sanitized_content, deserialized.sanitized_content);
         assert_eq!(original.was_blocked, deserialized.was_blocked);
-        assert_eq!(original.sanitization_stats.total_matches, deserialized.sanitization_stats.total_matches);
+        assert_eq!(
+            original.sanitization_stats.total_matches,
+            deserialized.sanitization_stats.total_matches
+        );
     }
 
     // ========================================================================

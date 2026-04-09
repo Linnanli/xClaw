@@ -31,13 +31,13 @@
 
 use std::sync::{Arc, OnceLock, RwLock};
 
-use ironclaw::channels::IncomingMessage;
+use ironclaw::agent::routine_engine::RoutineEngine;
 use ironclaw::channels::web::log_layer::LogBroadcaster;
+use ironclaw::channels::IncomingMessage;
 use ironclaw::config::SkillsConfig;
 use ironclaw::context::ContextManager;
 use ironclaw::db::Database;
 use ironclaw::extensions::ExtensionManager;
-use ironclaw::agent::routine_engine::RoutineEngine;
 use ironclaw::safety::SafetyLayer;
 use ironclaw::skills::catalog::SkillCatalog;
 use ironclaw::skills::SkillRegistry;
@@ -184,9 +184,6 @@ impl EngineState {
 
     /// 引擎是否启动失败。
     pub fn is_failed(&self) -> bool {
-        self.failure
-            .read()
-            .map(|f| f.is_some())
-            .unwrap_or(false)
+        self.failure.read().map(|f| f.is_some()).unwrap_or(false)
     }
 }

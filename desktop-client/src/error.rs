@@ -200,7 +200,9 @@ mod tests {
             Some(403)
         );
         assert_eq!(
-            extract_http_status("HttpError: Invalid status code 429 Too Many Requests with message: ..."),
+            extract_http_status(
+                "HttpError: Invalid status code 429 Too Many Requests with message: ..."
+            ),
             Some(429)
         );
     }

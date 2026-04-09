@@ -46,7 +46,9 @@ mod audit_completeness_tests {
         for action in &required_audit_actions {
             assert!(!action.is_empty(), "审计操作类型不应为空");
             assert!(
-                action.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+                action
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_'),
                 "审计操作类型应只包含字母数字和下划线: {}",
                 action
             );

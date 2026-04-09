@@ -204,8 +204,14 @@ mod tests {
         let json_str = serde_json::to_string(&event).unwrap();
 
         assert!(!json_str.contains("s3cret"), "password leaked to frontend");
-        assert!(!json_str.contains("internal.db"), "internal host leaked to frontend");
-        assert!(!json_str.contains("parameters"), "parameters field leaked to frontend");
+        assert!(
+            !json_str.contains("internal.db"),
+            "internal host leaked to frontend"
+        );
+        assert!(
+            !json_str.contains("parameters"),
+            "parameters field leaked to frontend"
+        );
     }
 
     /// 验证 ApprovalNeeded 事件不泄露 parameters 字段。
@@ -225,9 +231,18 @@ mod tests {
         let json_str = serde_json::to_string(&event).unwrap();
 
         // parameters 中的敏感内容不应出现在前端事件中
-        assert!(!json_str.contains("/etc/shadow"), "sensitive path from parameters leaked");
-        assert!(!json_str.contains("secret_hash"), "sensitive content from parameters leaked");
-        assert!(!json_str.contains("parameters"), "parameters field itself leaked");
+        assert!(
+            !json_str.contains("/etc/shadow"),
+            "sensitive path from parameters leaked"
+        );
+        assert!(
+            !json_str.contains("secret_hash"),
+            "sensitive content from parameters leaked"
+        );
+        assert!(
+            !json_str.contains("parameters"),
+            "parameters field itself leaked"
+        );
     }
 
     /// 验证 AuthRequired 事件不泄露 auth_url 和 setup_url。
@@ -313,10 +328,7 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         // 反序列化应保持原始内容
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert!(parsed["content"]
-            .as_str()
-            .unwrap()
-            .contains("<script>"));
+        assert!(parsed["content"].as_str().unwrap().contains("<script>"));
     }
 
     #[test]

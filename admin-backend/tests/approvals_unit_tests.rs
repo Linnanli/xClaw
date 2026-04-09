@@ -48,7 +48,15 @@ mod approval_contract_tests {
         });
         assert!(resp["data"].is_array());
         let item = &resp["data"][0];
-        for f in &["id", "applicant", "operation_type", "operation_name", "status", "expires_at", "created_at"] {
+        for f in &[
+            "id",
+            "applicant",
+            "operation_type",
+            "operation_name",
+            "status",
+            "expires_at",
+            "created_at",
+        ] {
             assert!(item.get(*f).is_some(), "列表响应缺少字段: {}", f);
         }
     }
@@ -63,7 +71,8 @@ mod approval_contract_tests {
 
     #[test]
     fn test_contract_approval_check_response() {
-        let resp = json!({"status": "approved", "expires_at": "2025-01-16T14:32:00Z", "is_valid": true});
+        let resp =
+            json!({"status": "approved", "expires_at": "2025-01-16T14:32:00Z", "is_valid": true});
         assert!(resp["is_valid"].is_boolean());
         assert!(resp["status"].is_string());
     }

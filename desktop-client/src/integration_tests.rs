@@ -69,7 +69,11 @@ mod bridge_reporter_integration {
 
         bridge.scan_user_input("普通文本");
 
-        assert_eq!(reporter.queue_len(), 0, "Clean content should not be reported");
+        assert_eq!(
+            reporter.queue_len(),
+            0,
+            "Clean content should not be reported"
+        );
     }
 
     #[test]
@@ -83,7 +87,11 @@ mod bridge_reporter_integration {
         bridge.scan_user_input("普通文本"); // 干净
 
         // 应该有 3 个事件（密钥 + 2 个 PII，干净内容不上报）
-        assert!(reporter.queue_len() >= 3, "Should have at least 3 events, got {}", reporter.queue_len());
+        assert!(
+            reporter.queue_len() >= 3,
+            "Should have at least 3 events, got {}",
+            reporter.queue_len()
+        );
     }
 
     #[test]
@@ -140,7 +148,10 @@ mod safety_dlp_chain_integration {
         let result = bridge.scan_user_input(content);
 
         // SafetyLayer 密钥检测在 DLP PII 检测之前
-        assert!(result.was_blocked, "Secret should block before PII processing");
+        assert!(
+            result.was_blocked,
+            "Secret should block before PII processing"
+        );
         assert!(result.stats.secret_detected);
     }
 
@@ -256,7 +267,11 @@ mod e2e_security_audit {
 
         for secret in &secrets {
             let result = bridge.scan_user_input(secret);
-            assert!(result.was_blocked, "Secret should be blocked: {}...", &secret[..10]);
+            assert!(
+                result.was_blocked,
+                "Secret should be blocked: {}...",
+                &secret[..10]
+            );
         }
 
         // 所有密钥阻止事件都应该上报
@@ -271,7 +286,10 @@ mod e2e_security_audit {
         let result = bridge.scan_user_input("ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
 
         assert!(result.was_blocked);
-        assert!(result.sanitized_content.is_empty(), "Blocked content must be empty");
+        assert!(
+            result.sanitized_content.is_empty(),
+            "Blocked content must be empty"
+        );
         assert!(result.block_reason.is_some(), "Must have block reason");
     }
 
@@ -280,7 +298,8 @@ mod e2e_security_audit {
         let (bridge, _) = create_bridge_with_reporter();
 
         // 存储脱敏应该完整处理
-        let result = bridge.sanitize_for_storage("用户手机 13800138000 和身份证 110101199003071234");
+        let result =
+            bridge.sanitize_for_storage("用户手机 13800138000 和身份证 110101199003071234");
 
         assert!(result.is_ok());
         let sanitized = result.unwrap();
@@ -317,25 +336,23 @@ mod e2e_security_audit {
         // 并发扫描不同类型的内容
         for i in 0..20 {
             let bridge = Arc::clone(&bridge);
-            handles.push(thread::spawn(move || {
-                match i % 4 {
-                    0 => {
-                        let r = bridge.scan_user_input("普通文本");
-                        assert!(!r.was_blocked);
-                    }
-                    1 => {
-                        let r = bridge.scan_user_input("身份证 110101199003071234");
-                        assert!(r.had_sensitive_data);
-                        assert!(!r.was_blocked);
-                    }
-                    2 => {
-                        let r = bridge.scan_user_input("ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
-                        assert!(r.was_blocked);
-                    }
-                    _ => {
-                        let r = bridge.scan_outbound(r#"{"phone": "13800138000"}"#);
-                        assert!(r.had_sensitive_data);
-                    }
+            handles.push(thread::spawn(move || match i % 4 {
+                0 => {
+                    let r = bridge.scan_user_input("普通文本");
+                    assert!(!r.was_blocked);
+                }
+                1 => {
+                    let r = bridge.scan_user_input("身份证 110101199003071234");
+                    assert!(r.had_sensitive_data);
+                    assert!(!r.was_blocked);
+                }
+                2 => {
+                    let r = bridge.scan_user_input("ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+                    assert!(r.was_blocked);
+                }
+                _ => {
+                    let r = bridge.scan_outbound(r#"{"phone": "13800138000"}"#);
+                    assert!(r.had_sensitive_data);
                 }
             }));
         }
@@ -447,7 +464,7 @@ mod admin_reporter_integration {
 #[cfg(test)]
 mod cross_module_contract {
     use super::*;
-    use crate::safety_bridge::{BridgeScanResult, BridgeStats, BridgeCumulativeStats};
+    use crate::safety_bridge::{BridgeCumulativeStats, BridgeScanResult, BridgeStats};
 
     #[test]
     fn test_contract_bridge_result_json_compatible_with_frontend() {

@@ -104,9 +104,15 @@ mod tests {
         // 验证字段名完全匹配
         assert!(json.get("id").is_some(), "missing 'id'");
         assert!(json.get("title").is_some(), "missing 'title'");
-        assert!(json.get("message_count").is_some(), "missing 'message_count'");
+        assert!(
+            json.get("message_count").is_some(),
+            "missing 'message_count'"
+        );
         assert!(json.get("started_at").is_some(), "missing 'started_at'");
-        assert!(json.get("last_activity").is_some(), "missing 'last_activity'");
+        assert!(
+            json.get("last_activity").is_some(),
+            "missing 'last_activity'"
+        );
         assert!(json.get("channel").is_some(), "missing 'channel'");
 
         // 验证类型
@@ -134,7 +140,10 @@ mod tests {
             channel: "tauri".into(),
         };
         let json: serde_json::Value = serde_json::to_value(&summary).unwrap();
-        assert!(json["title"].is_null(), "None title should serialize to null");
+        assert!(
+            json["title"].is_null(),
+            "None title should serialize to null"
+        );
     }
 
     /// 前端 ThreadMessage 类型定义：

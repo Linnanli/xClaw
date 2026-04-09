@@ -5,6 +5,7 @@
  */
 
 import { useState, useCallback, useEffect } from 'react';
+import type { ChatCommand } from '../types/chatCommand';
 
 const STORAGE_KEY = 'ironclaw:selectedThreadId';
 
@@ -31,25 +32,20 @@ function writeStoredThreadId(id: string | null): void {
 export interface ChatNavigationState {
   selectedThreadId: string | null;
   sidebarRefreshKey: number;
-  /** 待发送的 routine 提示词，ChatTabTauri 挂载后自动发送并清除 */
-  pendingPrompt: string | null;
+  pendingCommand: ChatCommand | null;
 }
 
 export interface ChatNavigationActions {
   selectThread: (threadId: string) => void;
   clearThread: () => void;
-  /** 手动触发定时任务：跳转到 thread 并暂存 prompt，等 ChatTabTauri 挂载后发送 */
-  openRoutineThread: (threadId: string, prompt: string) => void;
-  completeRoutineThread: (threadId: string) => void;
-  clearPendingPrompt: () => void;
-  /** 在新对话里发送一条命令（不需要特定 thread） */
-  sendCommand: (command: string) => void;
+  queueSendTextCommand: (text: string) => string;
+  consumeCommand: (commandId: string) => void;
 }
 
 export function useChatNavigation(): ChatNavigationState & ChatNavigationActions {
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(readStoredThreadId);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
-  const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
+  const [pendingCommand, setPendingCommand] = useState<ChatCommand | null>(null);
 
   // selectedThreadId 变化时同步到 localStorage
   useEffect(() => {
@@ -67,37 +63,28 @@ export function useChatNavigation(): ChatNavigationState & ChatNavigationActions
 
   const clearThread = useCallback(() => {
     setSelectedThreadId(null);
-    setPendingPrompt(null);
   }, []);
 
-  const openRoutineThread = useCallback((threadId: string, prompt: string) => {
-    navigateToThread(threadId);
-    setPendingPrompt(prompt);
-  }, [navigateToThread]);
-
-  /** 在当前对话（或新对话）里发送一条命令 */
-  const sendCommand = useCallback((command: string) => {
-    // 保持当前 thread，避免重新挂载 TauriRuntimeProvider 导致模型配置丢失
-    setPendingPrompt(command);
+  const queueSendTextCommand = useCallback((text: string): string => {
+    const commandId = `cmd-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setPendingCommand({ id: commandId, kind: 'send_text', text });
+    return commandId;
   }, []);
 
-  const completeRoutineThread = useCallback((threadId: string) => {
-    navigateToThread(threadId);
-  }, [navigateToThread]);
-
-  const clearPendingPrompt = useCallback(() => {
-    setPendingPrompt(null);
+  const consumeCommand = useCallback((commandId: string) => {
+    setPendingCommand((current) => {
+      if (!current || current.id !== commandId) return current;
+      return null;
+    });
   }, []);
 
   return {
     selectedThreadId,
     sidebarRefreshKey,
-    pendingPrompt,
+    pendingCommand,
     selectThread,
     clearThread,
-    openRoutineThread,
-    completeRoutineThread,
-    clearPendingPrompt,
-    sendCommand,
+    queueSendTextCommand,
+    consumeCommand,
   };
 }

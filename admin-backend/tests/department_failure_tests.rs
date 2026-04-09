@@ -108,7 +108,8 @@ mod department_tree_edge_cases {
     #[test]
     fn test_failure_tree_build_with_empty_list() {
         let departments: Vec<(Uuid, Option<Uuid>)> = vec![];
-        let roots: Vec<_> = departments.iter()
+        let roots: Vec<_> = departments
+            .iter()
             .filter(|(_, parent)| parent.is_none())
             .collect();
         assert!(roots.is_empty(), "空列表应产生空树");

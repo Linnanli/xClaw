@@ -144,7 +144,11 @@ mod tests {
         assert!(json["score"].is_number());
 
         let obj = json.as_object().unwrap();
-        assert_eq!(obj.len(), 5, "CatalogSearchResult should have exactly 5 fields");
+        assert_eq!(
+            obj.len(),
+            5,
+            "CatalogSearchResult should have exactly 5 fields"
+        );
     }
 
     /// 验证 score 字段序列化为 JSON number（不是 string）。

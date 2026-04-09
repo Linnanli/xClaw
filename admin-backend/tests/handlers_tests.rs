@@ -23,8 +23,10 @@ async fn create_test_pool() -> Pool {
     config.user = Some("postgres".to_string());
     config.password = Some("postgres".to_string());
     config.dbname = Some("ironclaw_test".to_string());
-    
-    config.create_pool(None, NoTls).expect("Failed to create test pool")
+
+    config
+        .create_pool(None, NoTls)
+        .expect("Failed to create test pool")
 }
 
 /// 创建测试用的应用状态
@@ -45,7 +47,7 @@ async fn test_get_policies_handler_success() {
     });
 
     let result = get_policies_handler(State((*state).clone()), params).await;
-    
+
     // 正常路径测试：应该返回策略列表
     match result {
         Ok(Json(response)) => {
@@ -68,7 +70,7 @@ async fn test_get_policies_handler_with_disabled() {
     });
 
     let result = get_policies_handler(State((*state).clone()), params).await;
-    
+
     // 测试包含禁用规则的情况
     match result {
         Ok(Json(response)) => {
@@ -90,13 +92,13 @@ async fn test_get_dlp_policies_handler_success() {
     });
 
     let result = get_dlp_policies_handler(State((*state).clone()), params).await;
-    
+
     // 正常路径测试：应该返回 DLP 规则列表
     match result {
         Ok(Json(rules)) => {
             // 验证返回的是 Vec<DlpRule>
             assert!(rules.len() >= 0);
-            
+
             // 如果有规则，验证规则结构
             if let Some(rule) = rules.first() {
                 assert!(!rule.name.is_empty());
@@ -119,12 +121,12 @@ async fn test_get_sensitive_ops_policies_handler_success() {
     });
 
     let result = get_sensitive_ops_policies_handler(State((*state).clone()), params).await;
-    
+
     // 正常路径测试：应该返回敏感操作规则列表
     match result {
         Ok(Json(rules)) => {
             assert!(rules.len() >= 0);
-            
+
             // 如果有规则，验证规则结构
             if let Some(rule) = rules.first() {
                 assert!(!rule.name.is_empty());
@@ -143,7 +145,7 @@ async fn test_get_policy_version_handler_success() {
     let state = create_test_state().await;
 
     let result = get_policy_version_handler(State((*state).clone())).await;
-    
+
     // 正常路径测试：应该返回版本信息
     match result {
         Ok(Json(version)) => {
@@ -177,7 +179,7 @@ fn test_policy_query_params_contract() {
 #[test]
 fn test_policies_response_contract() {
     use admin_backend::policy_management::PolicyVersionInfo;
-    
+
     let response = PoliciesResponse {
         dlp_rules: vec![],
         sensitive_ops_rules: vec![],
@@ -215,7 +217,7 @@ async fn test_handlers_database_failure() {
     config.user = Some("invalid_user".to_string());
     config.password = Some("invalid_password".to_string());
     config.dbname = Some("invalid_db".to_string());
-    
+
     // 这应该会失败，但我们要优雅地处理
     if let Ok(pool) = config.create_pool(None, NoTls) {
         let state = create_test_state().await;
@@ -224,7 +226,7 @@ async fn test_handlers_database_failure() {
         });
 
         let result = get_policies_handler(State((*state).clone()), params).await;
-        
+
         // 失败路径测试：应该返回错误
         assert!(result.is_err());
     }
@@ -234,10 +236,10 @@ async fn test_handlers_database_failure() {
 #[test]
 fn test_error_messages_no_sensitive_data() {
     use admin_backend::error::Error;
-    
+
     let sensitive_data = "password123";
     let error = Error::Database(format!("Connection failed with {}", sensitive_data));
-    
+
     // 错误消息不应该包含敏感数据
     let error_string = error.to_string();
     assert!(error_string.contains("Database error"));
@@ -257,5 +259,9 @@ async fn test_handler_performance() {
     let duration = start.elapsed();
 
     // 版本查询应该在 500ms 内完成（包含数据库连接建立时间）
-    assert!(duration.as_millis() < 500, "Handler took too long: {:?}", duration);
+    assert!(
+        duration.as_millis() < 500,
+        "Handler took too long: {:?}",
+        duration
+    );
 }

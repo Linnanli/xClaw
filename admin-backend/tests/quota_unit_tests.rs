@@ -164,7 +164,8 @@ mod quota_contract_tests {
 
     #[test]
     fn test_contract_ranking_response() {
-        let resp = json!({ "ranking": [{ "name": "研发部", "cost_cents": 1820, "tokens": 450000 }] });
+        let resp =
+            json!({ "ranking": [{ "name": "研发部", "cost_cents": 1820, "tokens": 450000 }] });
         assert!(resp["ranking"][0]["name"].is_string());
     }
 
@@ -189,8 +190,14 @@ mod quota_contract_tests {
         let record = &resp["records"][0];
         assert!(record["username"].is_string(), "明细必须包含用户名");
         assert!(record["model_id"].is_string(), "明细必须包含模型 ID");
-        assert!(record["input_tokens"].is_number(), "明细必须包含输入 Token 数");
-        assert!(record["output_tokens"].is_number(), "明细必须包含输出 Token 数");
+        assert!(
+            record["input_tokens"].is_number(),
+            "明细必须包含输入 Token 数"
+        );
+        assert!(
+            record["output_tokens"].is_number(),
+            "明细必须包含输出 Token 数"
+        );
         assert!(record["cost_cents"].is_number(), "明细必须包含费用");
         assert!(record["created_at"].is_string(), "明细必须包含时间");
         assert!(record["department_name"].is_string(), "明细应包含部门名称");
@@ -225,15 +232,28 @@ mod quota_contract_tests {
 mod quota_security_audit_tests {
     #[test]
     fn test_audit_usage_record_no_message_content() {
-        let fields = ["user_id", "department_id", "model_id", "input_tokens", "output_tokens", "cost_cents"];
+        let fields = [
+            "user_id",
+            "department_id",
+            "model_id",
+            "input_tokens",
+            "output_tokens",
+            "cost_cents",
+        ];
         assert!(!fields.contains(&"content"));
         assert!(!fields.contains(&"message"));
     }
 
     #[test]
     fn test_audit_quota_check_no_api_key_leak() {
-        let fields = ["allowed", "reason", "daily_used_cents", "daily_limit_cents",
-                       "root_daily_used_cents", "root_daily_limit_cents"];
+        let fields = [
+            "allowed",
+            "reason",
+            "daily_used_cents",
+            "daily_limit_cents",
+            "root_daily_used_cents",
+            "root_daily_limit_cents",
+        ];
         assert!(!fields.contains(&"api_key"));
         assert!(!fields.contains(&"password"));
     }
@@ -245,7 +265,9 @@ mod quota_warning_tests {
     const THRESHOLD: f64 = 0.8;
 
     fn should_warn(usage: i64, limit: i64) -> bool {
-        if limit <= 0 { return false; }
+        if limit <= 0 {
+            return false;
+        }
         (usage as f64 / limit as f64) >= THRESHOLD
     }
 

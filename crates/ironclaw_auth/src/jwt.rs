@@ -1,6 +1,6 @@
 use crate::error::{AuthError, Result};
 use chrono::Utc;
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 
 /// JWT token claims.
@@ -24,8 +24,8 @@ impl JwtManager {
     pub fn new(secret: String) -> Self {
         Self {
             secret,
-            access_token_expiry: 3600,      // 1 hour
-            refresh_token_expiry: 604800,   // 7 days
+            access_token_expiry: 3600,    // 1 hour
+            refresh_token_expiry: 604800, // 7 days
         }
     }
 

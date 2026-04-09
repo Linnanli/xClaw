@@ -1,15 +1,15 @@
 //! 跨平台工具库
-//! 
+//!
 //! 处理不同操作系统的差异，包括：
 //! - 文件路径处理
 //! - 权限管理
 //! - 系统调用
 
-use std::path::{Path, PathBuf};
 use std::env;
+use std::path::{Path, PathBuf};
 
 /// 获取应用数据目录
-/// 
+///
 /// 不同操作系统的路径：
 /// - macOS: ~/Library/Application Support/ironclaw
 /// - Windows: C:\Users\<user>\AppData\Local\ironclaw
@@ -21,21 +21,21 @@ pub fn get_app_data_dir() -> PathBuf {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("ironclaw")
     }
-    
+
     #[cfg(target_os = "windows")]
     {
         dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("ironclaw")
     }
-    
+
     #[cfg(target_os = "linux")]
     {
         dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("ironclaw")
     }
-    
+
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         PathBuf::from(".ironclaw")
@@ -50,21 +50,21 @@ pub fn get_config_dir() -> PathBuf {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("ironclaw")
     }
-    
+
     #[cfg(target_os = "windows")]
     {
         dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("ironclaw")
     }
-    
+
     #[cfg(target_os = "linux")]
     {
         dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("ironclaw")
     }
-    
+
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         PathBuf::from(".config/ironclaw")
@@ -79,21 +79,21 @@ pub fn get_cache_dir() -> PathBuf {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("ironclaw")
     }
-    
+
     #[cfg(target_os = "windows")]
     {
         dirs::cache_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("ironclaw")
     }
-    
+
     #[cfg(target_os = "linux")]
     {
         dirs::cache_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("ironclaw")
     }
-    
+
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         PathBuf::from(".cache/ironclaw")
@@ -121,11 +121,11 @@ pub fn get_log_file_path() -> PathBuf {
 }
 
 /// 规范化路径
-/// 
+///
 /// 处理不同操作系统的路径差异
 pub fn normalize_path(path: &str) -> PathBuf {
     let path = path.replace("\\", "/");
-    
+
     if path.starts_with("~/") {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -149,17 +149,17 @@ pub fn get_os() -> OperatingSystem {
     {
         OperatingSystem::MacOS
     }
-    
+
     #[cfg(target_os = "windows")]
     {
         OperatingSystem::Windows
     }
-    
+
     #[cfg(target_os = "linux")]
     {
         OperatingSystem::Linux
     }
-    
+
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         OperatingSystem::Unknown
@@ -182,7 +182,7 @@ pub fn get_path_separator() -> &'static str {
     {
         "\\"
     }
-    
+
     #[cfg(not(target_os = "windows"))]
     {
         "/"
@@ -214,69 +214,67 @@ pub fn get_home_dir() -> Option<PathBuf> {
 
 /// 获取用户名
 pub fn get_username() -> Option<String> {
-    env::var("USER")
-        .ok()
-        .or_else(|| env::var("USERNAME").ok())
+    env::var("USER").ok().or_else(|| env::var("USERNAME").ok())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_get_app_data_dir() {
         let dir = get_app_data_dir();
         assert!(dir.to_string_lossy().contains("ironclaw"));
     }
-    
+
     #[test]
     fn test_get_config_dir() {
         let dir = get_config_dir();
         assert!(dir.to_string_lossy().contains("ironclaw"));
     }
-    
+
     #[test]
     fn test_get_cache_dir() {
         let dir = get_cache_dir();
         assert!(dir.to_string_lossy().contains("ironclaw"));
     }
-    
+
     #[test]
     fn test_get_database_path() {
         let path = get_database_path();
         assert!(path.to_string_lossy().contains("ironclaw.db"));
     }
-    
+
     #[test]
     fn test_normalize_path() {
         let path = normalize_path("~/test/file.txt");
         assert!(path.to_string_lossy().contains("test"));
     }
-    
+
     #[test]
     fn test_get_os() {
         let os = get_os();
         assert_ne!(os, OperatingSystem::Unknown);
     }
-    
+
     #[test]
     fn test_get_os_name() {
         let name = get_os_name();
         assert!(!name.is_empty());
     }
-    
+
     #[test]
     fn test_get_path_separator() {
         let sep = get_path_separator();
         assert!(!sep.is_empty());
     }
-    
+
     #[test]
     fn test_get_home_dir() {
         let home = get_home_dir();
         assert!(home.is_some());
     }
-    
+
     #[test]
     fn test_get_username() {
         let username = get_username();

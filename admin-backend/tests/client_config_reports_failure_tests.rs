@@ -55,11 +55,7 @@ fn test_failure_config_malformed_json() {
 
     for input in &malformed_inputs {
         let result: Result<ClientConfigResponse, _> = serde_json::from_str(input);
-        assert!(
-            result.is_err(),
-            "Should reject malformed JSON: '{}'",
-            input
-        );
+        assert!(result.is_err(), "Should reject malformed JSON: '{}'", input);
     }
 }
 
@@ -279,7 +275,7 @@ fn test_failure_config_fallback_is_safe() {
         llm_api_key: None,
         llm_model: None,
         llm_base_url: None,
-        safety_enabled: None,  // None 意味着使用客户端默认值
+        safety_enabled: None, // None 意味着使用客户端默认值
         skills_enabled: None,
         extensions_enabled: None,
         max_cost_per_day_cents: None,
@@ -322,22 +318,40 @@ fn test_failure_concurrent_config_version_ordering() {
     // 验证配置版本号的单调递增性
     let configs = vec![
         ClientConfigResponse {
-            llm_backend: None, llm_api_key: None, llm_model: None,
-            llm_base_url: None, safety_enabled: None, skills_enabled: None,
-            extensions_enabled: None, max_cost_per_day_cents: None,
-            config_version: 1, updated_at: "t1".into(),
+            llm_backend: None,
+            llm_api_key: None,
+            llm_model: None,
+            llm_base_url: None,
+            safety_enabled: None,
+            skills_enabled: None,
+            extensions_enabled: None,
+            max_cost_per_day_cents: None,
+            config_version: 1,
+            updated_at: "t1".into(),
         },
         ClientConfigResponse {
-            llm_backend: None, llm_api_key: None, llm_model: None,
-            llm_base_url: None, safety_enabled: None, skills_enabled: None,
-            extensions_enabled: None, max_cost_per_day_cents: None,
-            config_version: 3, updated_at: "t3".into(),
+            llm_backend: None,
+            llm_api_key: None,
+            llm_model: None,
+            llm_base_url: None,
+            safety_enabled: None,
+            skills_enabled: None,
+            extensions_enabled: None,
+            max_cost_per_day_cents: None,
+            config_version: 3,
+            updated_at: "t3".into(),
         },
         ClientConfigResponse {
-            llm_backend: None, llm_api_key: None, llm_model: None,
-            llm_base_url: None, safety_enabled: None, skills_enabled: None,
-            extensions_enabled: None, max_cost_per_day_cents: None,
-            config_version: 2, updated_at: "t2".into(),
+            llm_backend: None,
+            llm_api_key: None,
+            llm_model: None,
+            llm_base_url: None,
+            safety_enabled: None,
+            skills_enabled: None,
+            extensions_enabled: None,
+            max_cost_per_day_cents: None,
+            config_version: 2,
+            updated_at: "t2".into(),
         },
     ];
 

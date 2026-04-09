@@ -15,9 +15,7 @@
 //! ```
 
 use async_trait::async_trait;
-use ironclaw::channels::{
-    Channel, IncomingMessage, MessageStream, OutgoingResponse, StatusUpdate,
-};
+use ironclaw::channels::{Channel, IncomingMessage, MessageStream, OutgoingResponse, StatusUpdate};
 use ironclaw::error::ChannelError;
 use serde::Serialize;
 use std::sync::Arc;
@@ -111,6 +109,14 @@ pub enum ChatEvent {
     SkillsActivated {
         /// 激活的技能名称列表（按匹配分数排序）。
         skills: Vec<String>,
+    },
+    /// 当前对话消息触发了事件任务（仅用于在用户气泡下显示 UI 提示）。
+    #[serde(rename = "routine_triggered")]
+    RoutineTriggered {
+        /// 触发来源的对话线程 ID（用于前端过滤当前线程）。
+        thread_id: String,
+        /// 本次命中的事件任务数量。
+        fired: u64,
     },
 }
 
@@ -247,11 +253,7 @@ impl TauriChannel {
                 message: msg.clone(),
                 level: "info".into(),
             },
-            StatusUpdate::JobStarted {
-                job_id,
-                title,
-                ..
-            } => ChatEvent::JobStatus {
+            StatusUpdate::JobStarted { job_id, title, .. } => ChatEvent::JobStatus {
                 job_id: job_id.clone(),
                 title: title.clone(),
                 status: "in_progress".into(),
@@ -323,15 +325,15 @@ impl Channel for TauriChannel {
     }
 
     async fn start(&self) -> Result<MessageStream, ChannelError> {
-        let rx = self
-            .incoming_rx
-            .lock()
-            .await
-            .take()
-            .ok_or_else(|| ChannelError::StartupFailed {
-                name: "tauri".into(),
-                reason: "Channel already started (start() called twice)".into(),
-            })?;
+        let rx =
+            self.incoming_rx
+                .lock()
+                .await
+                .take()
+                .ok_or_else(|| ChannelError::StartupFailed {
+                    name: "tauri".into(),
+                    reason: "Channel already started (start() called twice)".into(),
+                })?;
 
         // 通知前端引擎就绪
         let _ = self.emit_event(&ChatEvent::ConnectionStatus {
@@ -369,8 +371,29 @@ impl Channel for TauriChannel {
         status: StatusUpdate,
         metadata: &serde_json::Value,
     ) -> Result<(), ChannelError> {
+        if metadata
+            .get("routine_triggered")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            let event = ChatEvent::RoutineTriggered {
+                thread_id: metadata
+                    .get("thread_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                fired: metadata.get("fired").and_then(|v| v.as_u64()).unwrap_or(1),
+            };
+            return self.emit_event(&event);
+        }
+
         // TurnCost 不推送到前端，只更新对话追踪器（汇总整轮 Token 消耗）
-        if let StatusUpdate::TurnCost { input_tokens, output_tokens, .. } = status {
+        if let StatusUpdate::TurnCost {
+            input_tokens,
+            output_tokens,
+            ..
+        } = status
+        {
             if let Some(tracker) = &self.conversation_tracker {
                 let thread_id = metadata
                     .get("notify_thread_id")
@@ -585,7 +608,11 @@ mod tests {
         assert_eq!(json["status"], "in_progress");
 
         let obj = json.as_object().expect("should be object");
-        assert_eq!(obj.len(), 4, "job_status should have exactly 4 fields (type + 3)");
+        assert_eq!(
+            obj.len(),
+            4,
+            "job_status should have exactly 4 fields (type + 3)"
+        );
     }
 
     /// 安全审计：job_status 事件不应泄露 user_id 或内部字段。
@@ -599,7 +626,13 @@ mod tests {
         let event = TauriChannel::status_to_event(&status);
         let json_str = serde_json::to_string(&event).expect("should serialize");
 
-        assert!(!json_str.contains("user_id"), "user_id should not be exposed");
-        assert!(!json_str.contains("browse_url"), "browse_url should not be forwarded to frontend");
+        assert!(
+            !json_str.contains("user_id"),
+            "user_id should not be exposed"
+        );
+        assert!(
+            !json_str.contains("browse_url"),
+            "browse_url should not be forwarded to frontend"
+        );
     }
 }

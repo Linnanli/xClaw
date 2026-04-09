@@ -42,7 +42,10 @@ mod compliance_failure_tests {
     fn test_failure_retention_days_zero() {
         let json = r#"{"retention_days": 0}"#;
         let req: UpdateRetentionPolicyRequest = serde_json::from_str(json).expect("反序列化应成功");
-        assert!(req.retention_days < 1, "保留天数 0 应被 handler 拒绝（< 1）");
+        assert!(
+            req.retention_days < 1,
+            "保留天数 0 应被 handler 拒绝（< 1）"
+        );
     }
 
     #[test]
@@ -100,15 +103,17 @@ mod jwt_auth_middleware_tests {
 
         // 客户端直连必须豁免的路径
         let required_public = [
-            "/api/client-reports",   // 客户端数据上报
-            "/api/client-config",    // 客户端配置拉取
-            "/api/client-models",    // 客户端模型列表
-            "/api/quota/check",      // 配额预检（客户端发起）
+            "/api/client-reports",     // 客户端数据上报
+            "/api/client-config",      // 客户端配置拉取
+            "/api/client-models",      // 客户端模型列表
+            "/api/quota/check",        // 配额预检（客户端发起）
             "/api/quota/report-usage", // 用量上报
         ];
 
         for path in &required_public {
-            let is_public = public_prefixes.iter().any(|prefix| path.starts_with(prefix));
+            let is_public = public_prefixes
+                .iter()
+                .any(|prefix| path.starts_with(prefix));
             assert!(is_public, "客户端路径 '{}' 必须在公开路径列表中", path);
         }
     }
@@ -134,8 +139,14 @@ mod jwt_auth_middleware_tests {
         ];
 
         for path in &protected_paths {
-            let is_public = public_prefixes.iter().any(|prefix| path.starts_with(prefix));
-            assert!(!is_public, "合规路径 '{}' 不应在公开列表中，必须要求认证", path);
+            let is_public = public_prefixes
+                .iter()
+                .any(|prefix| path.starts_with(prefix));
+            assert!(
+                !is_public,
+                "合规路径 '{}' 不应在公开列表中，必须要求认证",
+                path
+            );
         }
     }
 
@@ -159,7 +170,10 @@ mod jwt_auth_middleware_tests {
         assert!(resp["user"].is_object(), "user 对象必须存在");
         assert!(resp["user"]["roles"].is_array(), "roles 必须是数组");
         assert!(resp["user"]["id"].is_string(), "user.id 必须存在");
-        assert!(resp["user"]["username"].is_string(), "user.username 必须存在");
+        assert!(
+            resp["user"]["username"].is_string(),
+            "user.username 必须存在"
+        );
     }
 
     #[test]
@@ -177,8 +191,14 @@ mod jwt_auth_middleware_tests {
             }
         });
 
-        assert!(resp["user"].get("password").is_none(), "响应中不应包含 password 字段");
-        assert!(resp["user"].get("password_hash").is_none(), "响应中不应包含 password_hash 字段");
+        assert!(
+            resp["user"].get("password").is_none(),
+            "响应中不应包含 password 字段"
+        );
+        assert!(
+            resp["user"].get("password_hash").is_none(),
+            "响应中不应包含 password_hash 字段"
+        );
     }
 }
 
@@ -196,7 +216,12 @@ mod pdf_export_contract_tests {
             "approval_tickets": 1
         });
 
-        for field in &["dlp_blocks", "policy_changes", "alert_events", "approval_tickets"] {
+        for field in &[
+            "dlp_blocks",
+            "policy_changes",
+            "alert_events",
+            "approval_tickets",
+        ] {
             assert!(
                 content.get(*field).is_some(),
                 "PDF 导出所需字段缺失: {}",
@@ -224,7 +249,10 @@ mod pdf_export_contract_tests {
         });
 
         // content 为 null 时，前端应显示"报告内容暂不可用"而非崩溃
-        assert!(report["content"].is_null(), "content 为 null 时应被前端优雅处理");
+        assert!(
+            report["content"].is_null(),
+            "content 为 null 时应被前端优雅处理"
+        );
     }
 
     /// 报告类型标签映射完整性
@@ -238,13 +266,13 @@ mod pdf_export_contract_tests {
             ("custom", "自定义"),
         ];
 
-        assert_eq!(valid_types.len(), type_labels.len(), "报告类型标签映射不完整");
+        assert_eq!(
+            valid_types.len(),
+            type_labels.len(),
+            "报告类型标签映射不完整"
+        );
         for (type_key, _) in &type_labels {
-            assert!(
-                valid_types.contains(type_key),
-                "未知报告类型: {}",
-                type_key
-            );
+            assert!(valid_types.contains(type_key), "未知报告类型: {}", type_key);
         }
     }
 

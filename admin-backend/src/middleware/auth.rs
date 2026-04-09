@@ -32,7 +32,10 @@ const PUBLIC_PREFIXES: &[&str] = &[
 pub async fn jwt_auth(request: Request<Body>, next: Next) -> Response {
     let path = request.uri().path();
 
-    if PUBLIC_PREFIXES.iter().any(|prefix| path.starts_with(prefix)) {
+    if PUBLIC_PREFIXES
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
+    {
         return next.run(request).await;
     }
 

@@ -89,13 +89,25 @@ fn load_custom_models() -> CustomModelStore {
     }
 }
 
+/// 从本地自定义模型存储中查找指定 model_id 的真实 API key。
+///
+/// 供 `switch_provider` 在收到脱敏值（`"****"`）时回退调用，
+/// 避免因前端不回显 key 而导致跨 provider 切换失败。
+pub(crate) fn lookup_custom_api_key(model_id: &str) -> Option<String> {
+    let store = load_custom_models();
+    store
+        .models
+        .into_iter()
+        .find(|m| m.model_id == model_id)
+        .map(|m| m.api_key)
+        .filter(|k| !k.is_empty())
+}
+
 /// 保存本地自定义模型
 fn save_custom_models(store: &CustomModelStore) -> Result<(), String> {
     let path = custom_models_path();
-    let content = serde_json::to_string_pretty(store)
-        .map_err(|e| format!("序列化失败: {}", e))?;
-    std::fs::write(&path, content)
-        .map_err(|e| format!("写入文件失败: {}", e))?;
+    let content = serde_json::to_string_pretty(store).map_err(|e| format!("序列化失败: {}", e))?;
+    std::fs::write(&path, content).map_err(|e| format!("写入文件失败: {}", e))?;
     Ok(())
 }
 
@@ -349,8 +361,8 @@ async fn query_provider_models(engine: &EngineState) -> Vec<ModelConfig> {
 
 async fn fetch_admin_models(engine: &EngineState) -> Result<Vec<ModelConfig>, String> {
     // 从环境变量获取 admin backend URL
-    let admin_url = std::env::var("ADMIN_BACKEND_URL")
-        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let admin_url =
+        std::env::var("ADMIN_BACKEND_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
 
     // 获取当前用户 ID，用于部门白名单过滤
     // owner_id 可能是非 UUID 值（如 "default"），此时不传 user_id 参数

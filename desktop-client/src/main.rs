@@ -28,7 +28,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use ironclaw::channels::web::log_layer::{LogBroadcaster, init_tracing};
+use ironclaw::channels::web::log_layer::{init_tracing, LogBroadcaster};
 use tauri::{Emitter, Manager};
 
 // ── 应用级常量 ────────────────────────────────────────────────────
@@ -63,8 +63,8 @@ fn main() {
             let app_handle = app.handle().clone();
 
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = desktop_client::engine::start_ironclaw_engine(app_handle.clone())
-                    .await
+                if let Err(e) =
+                    desktop_client::engine::start_ironclaw_engine(app_handle.clone()).await
                 {
                     let err_msg = format!("{:#}", e);
                     tracing::error!(error = %err_msg, "IronClaw engine failed to start");
@@ -122,7 +122,12 @@ fn load_client_env() {
     load_env_file("desktop-client/.env");
 
     let environment = env::var("ENVIRONMENT").unwrap_or_else(|_| {
-        if cfg!(debug_assertions) { "development" } else { "production" }.into()
+        if cfg!(debug_assertions) {
+            "development"
+        } else {
+            "production"
+        }
+        .into()
     });
     load_env_file(&format!("desktop-client/.env.{}", environment));
     env::set_var("ENVIRONMENT", &environment);

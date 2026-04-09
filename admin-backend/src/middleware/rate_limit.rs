@@ -98,7 +98,8 @@ where
 {
     type Response = Response;
     type Error = S::Error;
-    type Future = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response, S::Error>> + Send>>;
+    type Future =
+        std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response, S::Error>> + Send>>;
 
     fn poll_ready(
         &mut self,
@@ -110,7 +111,11 @@ where
     fn call(&mut self, req: Request<Body>) -> Self::Future {
         let path = req.uri().path();
         let is_login = path == "/api/auth/login";
-        let limit = if is_login { self.login_limit } else { self.default_limit };
+        let limit = if is_login {
+            self.login_limit
+        } else {
+            self.default_limit
+        };
 
         let ip = extract_request_ip(&req);
         let group = if is_login { "login" } else { "default" };
@@ -121,7 +126,11 @@ where
             let mut map = self.windows.lock().expect("rate limit mutex poisoned");
             let queue = map.entry(key).or_default();
 
-            while queue.front().map(|t| now.duration_since(*t) >= WINDOW).unwrap_or(false) {
+            while queue
+                .front()
+                .map(|t| now.duration_since(*t) >= WINDOW)
+                .unwrap_or(false)
+            {
                 queue.pop_front();
             }
 

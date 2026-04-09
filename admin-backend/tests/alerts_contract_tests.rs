@@ -38,11 +38,7 @@ mod alert_rules_contract {
 
         let obj = response.as_object().expect("应为 JSON 对象");
         for field in REQUIRED_RULE_FIELDS {
-            assert!(
-                obj.contains_key(*field),
-                "告警规则响应缺少字段: {}",
-                field
-            );
+            assert!(obj.contains_key(*field), "告警规则响应缺少字段: {}", field);
         }
     }
 
@@ -55,10 +51,7 @@ mod alert_rules_contract {
         });
         assert!(response.get("rules").is_some(), "应包含 rules 字段");
         assert!(response.get("total").is_some(), "应包含 total 字段");
-        assert!(
-            response["rules"].is_array(),
-            "rules 应为数组"
-        );
+        assert!(response["rules"].is_array(), "rules 应为数组");
     }
 
     #[test]
@@ -113,11 +106,7 @@ mod alert_events_contract {
 
         let obj = response.as_object().expect("应为 JSON 对象");
         for field in REQUIRED_EVENT_FIELDS {
-            assert!(
-                obj.contains_key(*field),
-                "告警事件响应缺少字段: {}",
-                field
-            );
+            assert!(obj.contains_key(*field), "告警事件响应缺少字段: {}", field);
         }
     }
 
@@ -151,11 +140,7 @@ mod alert_events_contract {
                 "告警统计响应缺少字段: {}",
                 field
             );
-            assert!(
-                response[*field].is_number(),
-                "{} 应为数字",
-                field
-            );
+            assert!(response[*field].is_number(), "{} 应为数字", field);
         }
     }
 

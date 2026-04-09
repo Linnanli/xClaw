@@ -15,8 +15,8 @@ fn build_http_client(timeout_secs: u64) -> Result<reqwest::Client> {
 
 /// 从环境变量读取 Admin Backend 地址和认证 token。
 fn admin_env() -> (String, String) {
-    let url = std::env::var("ADMIN_BACKEND_URL")
-        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let url =
+        std::env::var("ADMIN_BACKEND_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
     let token = std::env::var("ADMIN_AUTH_TOKEN").unwrap_or_default();
     (url, token)
 }
@@ -158,7 +158,10 @@ pub async fn submit_approval_ticket(
         .map_err(|e| Error::ConfigError(format!("Failed to create approval: {}", e)))?;
 
     if !resp.status().is_success() {
-        return Err(Error::ConfigError(format!("Server returned {}", resp.status())));
+        return Err(Error::ConfigError(format!(
+            "Server returned {}",
+            resp.status()
+        )));
     }
 
     let data: serde_json::Value = resp
@@ -172,11 +175,14 @@ pub async fn submit_approval_ticket(
         .to_string();
 
     // 持久化到共享 store（managed state，全局唯一）
-    store_arc.lock().await.add(crate::approval_polling::PendingTicket {
-        ticket_id: ticket_id.clone(),
-        thread_id: thread_id.clone(),
-        content: content.chars().take(200).collect(),
-    });
+    store_arc
+        .lock()
+        .await
+        .add(crate::approval_polling::PendingTicket {
+            ticket_id: ticket_id.clone(),
+            thread_id: thread_id.clone(),
+            content: content.chars().take(200).collect(),
+        });
 
     // 启动后台轮询任务，传入共享 store 的 Arc
     let store_arc2 = store_arc.clone();

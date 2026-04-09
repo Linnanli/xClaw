@@ -38,8 +38,10 @@ mod approval_review_failures {
 mod approval_create_failures {
     #[test]
     fn test_failure_create_missing_operation_name() {
-        let json = r#"{"applicant_id": "550e8400-e29b-41d4-a716-446655440000", "operation_type": "test"}"#;
-        let result: Result<admin_backend::models::CreateApprovalRequest, _> = serde_json::from_str(json);
+        let json =
+            r#"{"applicant_id": "550e8400-e29b-41d4-a716-446655440000", "operation_type": "test"}"#;
+        let result: Result<admin_backend::models::CreateApprovalRequest, _> =
+            serde_json::from_str(json);
         assert!(result.is_err(), "缺少 operation_name 应反序列化失败");
     }
 

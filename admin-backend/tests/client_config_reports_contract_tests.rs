@@ -126,7 +126,10 @@ fn test_contract_config_server_to_client_full() {
     assert_eq!(client_config.llm_base_url, server_resp.llm_base_url);
     assert_eq!(client_config.safety_enabled, server_resp.safety_enabled);
     assert_eq!(client_config.skills_enabled, server_resp.skills_enabled);
-    assert_eq!(client_config.extensions_enabled, server_resp.extensions_enabled);
+    assert_eq!(
+        client_config.extensions_enabled,
+        server_resp.extensions_enabled
+    );
     assert_eq!(client_config.updated_at, Some(server_resp.updated_at));
 
     // 类型兼容性：i64 → u64（正数时兼容）
@@ -224,8 +227,7 @@ fn test_contract_config_extra_fields_ignored() {
         "future_field_2": 42
     });
 
-    let result: Result<ClientAdminConfig, _> =
-        serde_json::from_value(json_with_extra);
+    let result: Result<ClientAdminConfig, _> = serde_json::from_value(json_with_extra);
     assert!(result.is_ok(), "Client should ignore unknown fields");
 }
 
@@ -416,8 +418,5 @@ fn test_contract_report_large_numbers() {
     let json_str = serde_json::to_string(&client_report).unwrap();
     let server_payload: ServerReportPayload = serde_json::from_str(&json_str).unwrap();
 
-    assert_eq!(
-        server_payload.data["total_messages"],
-        u64::MAX / 2
-    );
+    assert_eq!(server_payload.data["total_messages"], u64::MAX / 2);
 }

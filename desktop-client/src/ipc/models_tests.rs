@@ -134,7 +134,10 @@ fn test_contract_model_config_default_source() {
 
     let config: ModelConfig = serde_json::from_str(json).unwrap();
     assert_eq!(config.source, "admin", "缺少 source 字段时应默认为 admin");
-    assert_eq!(config.api_format, "openai", "缺少 api_format 字段时应默认为 openai");
+    assert_eq!(
+        config.api_format, "openai",
+        "缺少 api_format 字段时应默认为 openai"
+    );
 }
 
 // ============================================================================
@@ -170,10 +173,7 @@ fn test_audit_model_config_no_api_key_in_source() {
     };
 
     let json = serde_json::to_string(&config).unwrap();
-    assert!(
-        !json.contains("sk-"),
-        "内置模型不应包含 API Key 前缀"
-    );
+    assert!(!json.contains("sk-"), "内置模型不应包含 API Key 前缀");
 }
 
 #[test]

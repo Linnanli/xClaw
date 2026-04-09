@@ -3,7 +3,10 @@
 //! 基于 ironclaw_safety crate 的 LeakDetector，扩展支持中国特色敏感信息检测
 
 use crate::dlp::{DlpError, DlpResult};
-use ironclaw_safety::{LeakDetector, LeakScanResult, LeakMatch as SafetyLeakMatch, LeakSeverity as SafetyLeakSeverity, LeakAction as SafetyLeakAction};
+use ironclaw_safety::{
+    LeakAction as SafetyLeakAction, LeakDetector, LeakMatch as SafetyLeakMatch, LeakScanResult,
+    LeakSeverity as SafetyLeakSeverity,
+};
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
 use tracing::{debug, instrument, warn};
@@ -99,7 +102,7 @@ impl From<LeakScanResult> for DlpDetectionResult {
     fn from(scan_result: LeakScanResult) -> Self {
         let matches: Vec<DlpMatch> = scan_result.matches.into_iter().map(Into::into).collect();
         let max_severity = matches.iter().map(|m| m.severity).max();
-        
+
         Self {
             has_sensitive_data: !matches.is_empty(),
             should_block: scan_result.should_block,
@@ -120,20 +123,20 @@ impl DlpDetector {
     /// 创建新的 DLP 检测器
     pub fn new() -> Self {
         // 获取所有内置模式（包括中国特色模式）
-        let custom_patterns = crate::dlp::patterns::get_all_builtin_patterns()
-            .unwrap_or_else(|e| {
+        let custom_patterns =
+            crate::dlp::patterns::get_all_builtin_patterns().unwrap_or_else(|e| {
                 tracing::warn!("Failed to load builtin patterns: {}, using empty list", e);
                 Vec::new()
             });
-        
+
         // 创建默认检测器并添加我们的自定义模式
         let mut leak_detector = LeakDetector::new(); // 包含默认模式
-        
+
         // 添加我们的自定义模式
         for pattern in custom_patterns {
             leak_detector.add_pattern(pattern);
         }
-        
+
         Self { leak_detector }
     }
 
@@ -148,10 +151,10 @@ impl DlpDetector {
     #[instrument(skip(self, content), fields(content_len = content.len()))]
     pub fn scan(&self, content: &str) -> DlpDetectionResult {
         debug!("Starting DLP scan");
-        
+
         let scan_result = self.leak_detector.scan(content);
         let result = DlpDetectionResult::from(scan_result);
-        
+
         if result.has_sensitive_data {
             warn!(
                 matches_count = result.matches.len(),
@@ -162,7 +165,7 @@ impl DlpDetector {
         } else {
             debug!("No sensitive data detected");
         }
-        
+
         result
     }
 
@@ -170,7 +173,7 @@ impl DlpDetector {
     #[instrument(skip(self, content), fields(content_len = content.len()))]
     pub fn scan_and_clean(&self, content: &str) -> DlpResult<String> {
         debug!("Starting DLP scan and clean");
-        
+
         self.leak_detector
             .scan_and_clean(content)
             .map_err(|e| DlpError::Sanitization(e.to_string()))
@@ -185,7 +188,7 @@ impl DlpDetector {
         body: Option<&[u8]>,
     ) -> DlpResult<()> {
         debug!("Scanning HTTP request for sensitive data");
-        
+
         self.leak_detector
             .scan_http_request(url, headers, body)
             .map_err(|e| DlpError::Sanitization(e.to_string()))
@@ -225,23 +228,27 @@ mod tests {
     fn test_scan_chinese_id_card_in_sentence() {
         let detector = DlpDetector::new();
         let content = "我的身份证号是 110101199003071234 ，请保密。";
-        
+
         let result = detector.scan(content);
-        
+
         println!("Matches found: {}", result.matches.len());
         for (i, m) in result.matches.iter().enumerate() {
-            println!("Match {}: pattern={}, severity={:?}, action={:?}, location={:?}, preview={}", 
-                i, m.pattern_name, m.severity, m.action, m.location, m.masked_preview);
+            println!(
+                "Match {}: pattern={}, severity={:?}, action={:?}, location={:?}, preview={}",
+                i, m.pattern_name, m.severity, m.action, m.location, m.masked_preview
+            );
         }
-        
+
         assert!(result.has_sensitive_data);
         assert!(!result.should_block);
         assert!(!result.matches.is_empty());
-        
-        let id_match = result.matches.iter()
+
+        let id_match = result
+            .matches
+            .iter()
             .find(|m| m.pattern_name.contains("chinese_id_card"));
         assert!(id_match.is_some(), "Should find chinese_id_card match");
-        
+
         let id_match = id_match.unwrap();
         assert_eq!(id_match.severity, DlpSeverity::High);
         assert_eq!(id_match.action, DlpAction::Redact);
@@ -251,13 +258,13 @@ mod tests {
     fn test_scan_openai_api_key() {
         let detector = DlpDetector::new();
         let content = "My API key is sk-proj-abc123def456ghi789jkl012mno345pqrT3BlbkFJtest123";
-        
+
         let result = detector.scan(content);
-        
+
         assert!(result.has_sensitive_data);
         assert!(result.should_block);
         assert!(!result.matches.is_empty());
-        
+
         let first_match = &result.matches[0];
         assert_eq!(first_match.pattern_name, "openai_api_key");
         assert_eq!(first_match.severity, DlpSeverity::Critical);
@@ -270,13 +277,15 @@ mod tests {
     fn test_scan_github_token() {
         let detector = DlpDetector::new();
         let content = "GitHub token: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
-        
+
         let result = detector.scan(content);
-        
+
         assert!(result.has_sensitive_data);
         assert!(result.should_block);
-        
-        let github_match = result.matches.iter()
+
+        let github_match = result
+            .matches
+            .iter()
             .find(|m| m.pattern_name == "github_token");
         assert!(github_match.is_some());
     }
@@ -285,13 +294,15 @@ mod tests {
     fn test_scan_aws_access_key() {
         let detector = DlpDetector::new();
         let content = "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE";
-        
+
         let result = detector.scan(content);
-        
+
         assert!(result.has_sensitive_data);
         assert!(result.should_block);
-        
-        let aws_match = result.matches.iter()
+
+        let aws_match = result
+            .matches
+            .iter()
             .find(|m| m.pattern_name == "aws_access_key");
         assert!(aws_match.is_some());
     }
@@ -300,13 +311,15 @@ mod tests {
     fn test_scan_bearer_token_redaction() {
         let detector = DlpDetector::new();
         let content = "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9_longtokenvalue";
-        
+
         let result = detector.scan(content);
-        
+
         assert!(result.has_sensitive_data);
         assert!(!result.should_block); // Bearer tokens are redacted, not blocked
-        
-        let bearer_match = result.matches.iter()
+
+        let bearer_match = result
+            .matches
+            .iter()
             .find(|m| m.pattern_name == "bearer_token");
         assert!(bearer_match.is_some());
         assert_eq!(bearer_match.unwrap().action, DlpAction::Redact);
@@ -316,9 +329,9 @@ mod tests {
     fn test_scan_and_clean_blocks_critical_secrets() {
         let detector = DlpDetector::new();
         let content = "API key: sk-proj-test1234567890abcdefghij";
-        
+
         let result = detector.scan_and_clean(content);
-        
+
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("blocked"));
     }
@@ -327,9 +340,9 @@ mod tests {
     fn test_scan_and_clean_passes_clean_content() {
         let detector = DlpDetector::new();
         let content = "This is just regular text with no secrets.";
-        
+
         let result = detector.scan_and_clean(content);
-        
+
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), content);
     }
@@ -337,33 +350,33 @@ mod tests {
     #[test]
     fn test_scan_http_request_clean() {
         let detector = DlpDetector::new();
-        
+
         let result = detector.scan_http_request(
             "https://api.example.com/data",
             &[("Content-Type".to_string(), "application/json".to_string())],
             Some(b"{\"query\": \"hello\"}"),
         );
-        
+
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_scan_http_request_blocks_secret_in_url() {
         let detector = DlpDetector::new();
-        
+
         let result = detector.scan_http_request(
             "https://evil.com/steal?key=AKIAIOSFODNN7EXAMPLE",
             &[],
             None,
         );
-        
+
         assert!(result.is_err());
     }
 
     #[test]
     fn test_scan_http_request_blocks_secret_in_header() {
         let detector = DlpDetector::new();
-        
+
         let result = detector.scan_http_request(
             "https://api.example.com/data",
             &[(
@@ -372,17 +385,18 @@ mod tests {
             )],
             None,
         );
-        
+
         assert!(result.is_err());
     }
 
     #[test]
     fn test_multiple_secrets_detection() {
         let detector = DlpDetector::new();
-        let content = "AWS: AKIAIOSFODNN7EXAMPLE and GitHub: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
-        
+        let content =
+            "AWS: AKIAIOSFODNN7EXAMPLE and GitHub: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+
         let result = detector.scan(content);
-        
+
         assert!(result.has_sensitive_data);
         assert!(result.should_block);
         assert!(result.matches.len() >= 2);

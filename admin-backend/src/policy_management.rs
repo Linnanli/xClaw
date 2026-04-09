@@ -4,7 +4,7 @@
 
 use crate::db::Database;
 use crate::error::{Error, Result};
-use crate::models::{DlpRule, SensitiveOperationRule, PolicyChangeRecord};
+use crate::models::{DlpRule, PolicyChangeRecord, SensitiveOperationRule};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -89,7 +89,11 @@ impl PolicyManagementService {
 
     /// 创建DLP规则
     #[instrument(skip(self, request), fields(rule_name = %request.name))]
-    pub async fn create_dlp_rule(&self, request: CreateDlpRuleRequest, created_by: Uuid) -> Result<DlpRule> {
+    pub async fn create_dlp_rule(
+        &self,
+        request: CreateDlpRuleRequest,
+        created_by: Uuid,
+    ) -> Result<DlpRule> {
         info!("Creating new DLP rule: {}", request.name);
 
         // 验证正则表达式
@@ -103,16 +107,19 @@ impl PolicyManagementService {
             return Err(Error::Validation("Invalid severity level".to_string()));
         }
 
-        let rule = self.db.create_dlp_rule(
-            &request.name,
-            &request.pattern,
-            &request.replacement,
-            &request.severity,
-            request.description.as_deref(),
-            request.enabled,
-            &request.category,
-            created_by,
-        ).await?;
+        let rule = self
+            .db
+            .create_dlp_rule(
+                &request.name,
+                &request.pattern,
+                &request.replacement,
+                &request.severity,
+                request.description.as_deref(),
+                request.enabled,
+                &request.category,
+                created_by,
+            )
+            .await?;
 
         // 记录变更
         self.record_policy_change(
@@ -122,7 +129,8 @@ impl PolicyManagementService {
             Some(serde_json::to_value(&rule).unwrap()),
             created_by,
             Some("Initial creation".to_string()),
-        ).await?;
+        )
+        .await?;
 
         info!(rule_id = %rule.id, "DLP rule created successfully");
         Ok(rule)
@@ -139,7 +147,10 @@ impl PolicyManagementService {
         info!("Updating DLP rule: {}", rule_id);
 
         // 获取现有规则
-        let existing_rule = self.db.get_dlp_rule_by_id(rule_id).await?
+        let existing_rule = self
+            .db
+            .get_dlp_rule_by_id(rule_id)
+            .await?
             .ok_or_else(|| Error::NotFound("DLP rule not found".to_string()))?;
 
         // 验证新的正则表达式（如果提供）
@@ -157,7 +168,10 @@ impl PolicyManagementService {
             }
         }
 
-        let updated_rule = self.db.update_dlp_rule(rule_id, request, updated_by).await?;
+        let updated_rule = self
+            .db
+            .update_dlp_rule(rule_id, request, updated_by)
+            .await?;
 
         // 记录变更
         self.record_policy_change(
@@ -167,7 +181,8 @@ impl PolicyManagementService {
             Some(serde_json::to_value(&updated_rule).unwrap()),
             updated_by,
             None,
-        ).await?;
+        )
+        .await?;
 
         info!(rule_id = %rule_id, "DLP rule updated successfully");
         Ok(updated_rule)
@@ -179,7 +194,10 @@ impl PolicyManagementService {
         info!("Deleting DLP rule: {}", rule_id);
 
         // 获取现有规则用于记录
-        let existing_rule = self.db.get_dlp_rule_by_id(rule_id).await?
+        let existing_rule = self
+            .db
+            .get_dlp_rule_by_id(rule_id)
+            .await?
             .ok_or_else(|| Error::NotFound("DLP rule not found".to_string()))?;
 
         self.db.delete_dlp_rule(rule_id).await?;
@@ -192,7 +210,8 @@ impl PolicyManagementService {
             None,
             deleted_by,
             None,
-        ).await?;
+        )
+        .await?;
 
         info!(rule_id = %rule_id, "DLP rule deleted successfully");
         Ok(())
@@ -226,15 +245,18 @@ impl PolicyManagementService {
             return Err(Error::Validation("Invalid risk level".to_string()));
         }
 
-        let rule = self.db.create_sensitive_op_rule(
-            &request.name,
-            &request.operation_type,
-            request.requires_approval,
-            &request.risk_level,
-            request.description.as_deref(),
-            request.enabled,
-            created_by,
-        ).await?;
+        let rule = self
+            .db
+            .create_sensitive_op_rule(
+                &request.name,
+                &request.operation_type,
+                request.requires_approval,
+                &request.risk_level,
+                request.description.as_deref(),
+                request.enabled,
+                created_by,
+            )
+            .await?;
 
         // 记录变更
         self.record_policy_change(
@@ -244,7 +266,8 @@ impl PolicyManagementService {
             Some(serde_json::to_value(&rule).unwrap()),
             created_by,
             Some("Initial creation".to_string()),
-        ).await?;
+        )
+        .await?;
 
         info!(rule_id = %rule.id, "Sensitive operation rule created successfully");
         Ok(rule)
@@ -261,7 +284,10 @@ impl PolicyManagementService {
         info!("Updating sensitive operation rule: {}", rule_id);
 
         // 获取现有规则
-        let existing_rule = self.db.get_sensitive_op_rule_by_id(rule_id).await?
+        let existing_rule = self
+            .db
+            .get_sensitive_op_rule_by_id(rule_id)
+            .await?
             .ok_or_else(|| Error::NotFound("Sensitive operation rule not found".to_string()))?;
 
         // 验证风险级别（如果提供）
@@ -271,7 +297,10 @@ impl PolicyManagementService {
             }
         }
 
-        let updated_rule = self.db.update_sensitive_op_rule(rule_id, request, updated_by).await?;
+        let updated_rule = self
+            .db
+            .update_sensitive_op_rule(rule_id, request, updated_by)
+            .await?;
 
         // 记录变更
         self.record_policy_change(
@@ -281,7 +310,8 @@ impl PolicyManagementService {
             Some(serde_json::to_value(&updated_rule).unwrap()),
             updated_by,
             None,
-        ).await?;
+        )
+        .await?;
 
         info!(rule_id = %rule_id, "Sensitive operation rule updated successfully");
         Ok(updated_rule)
@@ -293,7 +323,10 @@ impl PolicyManagementService {
         info!("Deleting sensitive operation rule: {}", rule_id);
 
         // 获取现有规则用于记录
-        let existing_rule = self.db.get_sensitive_op_rule_by_id(rule_id).await?
+        let existing_rule = self
+            .db
+            .get_sensitive_op_rule_by_id(rule_id)
+            .await?
             .ok_or_else(|| Error::NotFound("Sensitive operation rule not found".to_string()))?;
 
         self.db.delete_sensitive_op_rule(rule_id).await?;
@@ -306,7 +339,8 @@ impl PolicyManagementService {
             None,
             deleted_by,
             None,
-        ).await?;
+        )
+        .await?;
 
         info!(rule_id = %rule_id, "Sensitive operation rule deleted successfully");
         Ok(())
@@ -314,14 +348,23 @@ impl PolicyManagementService {
 
     /// 获取所有敏感操作规则
     #[instrument(skip(self))]
-    pub async fn get_sensitive_op_rules(&self, include_disabled: bool) -> Result<Vec<SensitiveOperationRule>> {
-        debug!("Fetching sensitive operation rules, include_disabled: {}", include_disabled);
+    pub async fn get_sensitive_op_rules(
+        &self,
+        include_disabled: bool,
+    ) -> Result<Vec<SensitiveOperationRule>> {
+        debug!(
+            "Fetching sensitive operation rules, include_disabled: {}",
+            include_disabled
+        );
         self.db.get_sensitive_op_rules(include_disabled).await
     }
 
     /// 根据ID获取敏感操作规则
     #[instrument(skip(self), fields(rule_id = %rule_id))]
-    pub async fn get_sensitive_op_rule_by_id(&self, rule_id: Uuid) -> Result<Option<SensitiveOperationRule>> {
+    pub async fn get_sensitive_op_rule_by_id(
+        &self,
+        rule_id: Uuid,
+    ) -> Result<Option<SensitiveOperationRule>> {
         debug!("Fetching sensitive operation rule by ID: {}", rule_id);
         self.db.get_sensitive_op_rule_by_id(rule_id).await
     }
@@ -338,7 +381,10 @@ impl PolicyManagementService {
         let active_sensitive_ops = sensitive_ops.iter().filter(|r| r.enabled).count();
 
         // 获取最后更新时间
-        let last_updated = self.db.get_last_policy_update_time().await?
+        let last_updated = self
+            .db
+            .get_last_policy_update_time()
+            .await?
             .unwrap_or_else(Utc::now);
 
         Ok(PolicyVersionInfo {
@@ -394,9 +440,16 @@ impl PolicyManagementService {
     ) -> Result<usize> {
         info!("Bulk updating rule status for {} rules", rule_ids.len());
 
-        let updated_count = self.db.bulk_update_dlp_rule_status(rule_ids, enabled, updated_by).await?;
+        let updated_count = self
+            .db
+            .bulk_update_dlp_rule_status(rule_ids, enabled, updated_by)
+            .await?;
 
-        info!(updated_count = updated_count, enabled = enabled, "Bulk rule status update completed");
+        info!(
+            updated_count = updated_count,
+            enabled = enabled,
+            "Bulk rule status update completed"
+        );
         Ok(updated_count)
     }
 
@@ -405,13 +458,17 @@ impl PolicyManagementService {
     pub async fn test_dlp_rule(&self, rule_id: Uuid, test_content: &str) -> Result<DlpTestResult> {
         debug!("Testing DLP rule: {}", rule_id);
 
-        let rule = self.db.get_dlp_rule_by_id(rule_id).await?
+        let rule = self
+            .db
+            .get_dlp_rule_by_id(rule_id)
+            .await?
             .ok_or_else(|| Error::NotFound("DLP rule not found".to_string()))?;
 
         let regex = regex::Regex::new(&rule.pattern)
             .map_err(|e| Error::Validation(format!("Invalid regex pattern: {}", e)))?;
 
-        let matches: Vec<DlpTestMatch> = regex.find_iter(test_content)
+        let matches: Vec<DlpTestMatch> = regex
+            .find_iter(test_content)
             .map(|m: regex::Match| DlpTestMatch {
                 start: m.start(),
                 end: m.end(),
@@ -420,7 +477,9 @@ impl PolicyManagementService {
             })
             .collect();
 
-        let sanitized_content = regex.replace_all(test_content, &rule.replacement).to_string();
+        let sanitized_content = regex
+            .replace_all(test_content, &rule.replacement)
+            .to_string();
 
         let has_matches = !matches.is_empty();
 
@@ -443,14 +502,16 @@ impl PolicyManagementService {
         changed_by: Uuid,
         reason: Option<String>,
     ) -> Result<()> {
-        self.db.record_policy_change(
-            rule_id,
-            change_type,
-            old_value,
-            new_value,
-            changed_by,
-            reason,
-        ).await
+        self.db
+            .record_policy_change(
+                rule_id,
+                change_type,
+                old_value,
+                new_value,
+                changed_by,
+                reason,
+            )
+            .await
     }
 }
 
@@ -480,7 +541,7 @@ mod tests {
     use deadpool_postgres::Pool;
 
     // 注意：这些测试需要数据库连接，在实际环境中需要配置测试数据库
-    
+
     #[tokio::test]
     #[ignore] // 需要数据库连接
     async fn test_create_dlp_rule() {
@@ -488,7 +549,7 @@ mod tests {
         // let pool = setup_test_db().await;
         // let db = Database::new(pool);
         // let service = PolicyManagementService::new(db);
-        
+
         // let request = CreateDlpRuleRequest {
         //     name: "Test Rule".to_string(),
         //     pattern: r"\d{3}-\d{2}-\d{4}".to_string(),
@@ -498,7 +559,7 @@ mod tests {
         //     enabled: true,
         //     category: "test".to_string(),
         // };
-        
+
         // let created_by = Uuid::new_v4();
         // let result = service.create_dlp_rule(request, created_by).await;
         // assert!(result.is_ok());
@@ -536,7 +597,7 @@ mod tests {
 
         let regex = regex::Regex::new(pattern).unwrap();
         let matches: Vec<_> = regex.find_iter(test_content).collect();
-        
+
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0].as_str(), "123-45-6789");
         assert_eq!(matches[1].as_str(), "987-65-4321");
@@ -548,7 +609,7 @@ mod tests {
     #[test]
     fn test_policy_change_record_serialization() {
         use crate::models::PolicyChangeRecord;
-        
+
         let record = PolicyChangeRecord {
             id: Uuid::new_v4(),
             rule_id: Uuid::new_v4(),
@@ -562,7 +623,7 @@ mod tests {
 
         let serialized = serde_json::to_string(&record).unwrap();
         let deserialized: PolicyChangeRecord = serde_json::from_str(&serialized).unwrap();
-        
+
         assert_eq!(record.id, deserialized.id);
         assert_eq!(record.change_type, deserialized.change_type);
     }

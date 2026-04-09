@@ -34,17 +34,17 @@ pub enum Period {
 impl Period {
     fn trunc(&self) -> &'static str {
         match self {
-            Period::Week  => "week",
+            Period::Week => "week",
             Period::Month => "month",
-            _             => "day",
+            _ => "day",
         }
     }
 
     fn interval(&self) -> &'static str {
         match self {
-            Period::Week  => "7 days",
+            Period::Week => "7 days",
             Period::Month => "30 days",
-            _             => "1 day",
+            _ => "1 day",
         }
     }
 }
@@ -58,34 +58,36 @@ pub struct ReportQuery {
     pub limit: i64,
 }
 
-fn default_limit() -> i64 { 7 }
+fn default_limit() -> i64 {
+    7
+}
 
 // ── 查询结果结构体 ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 struct AiUsageRow {
-    period:             chrono::DateTime<chrono::Utc>,
+    period: chrono::DateTime<chrono::Utc>,
     conversation_count: i64,
-    total_tokens:       i64,
+    total_tokens: i64,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 struct ModelCostRow {
-    model_id:      String,
-    display_name:  String,
-    call_count:    i64,
-    input_tokens:  i64,
+    model_id: String,
+    display_name: String,
+    call_count: i64,
+    input_tokens: i64,
     output_tokens: i64,
-    cost_cents:    i64,
+    cost_cents: i64,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 struct DeptRankingRow {
-    department_id:   uuid::Uuid,
+    department_id: uuid::Uuid,
     department_name: String,
-    call_count:      i64,
-    total_tokens:    i64,
-    cost_cents:      i64,
+    call_count: i64,
+    total_tokens: i64,
+    cost_cents: i64,
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
@@ -181,5 +183,7 @@ pub async fn get_dept_ranking(
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
-    Ok(Json(json!({ "period": params.period, "departments": departments })))
+    Ok(Json(
+        json!({ "period": params.period, "departments": departments }),
+    ))
 }

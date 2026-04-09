@@ -275,10 +275,7 @@ impl AdminConfigSync {
 
             match self.fetch_once().await {
                 Ok(config) => {
-                    tracing::debug!(
-                        version = config.config_version,
-                        "Config sync completed"
-                    );
+                    tracing::debug!(version = config.config_version, "Config sync completed");
                 }
                 Err(e) => {
                     tracing::debug!("Config sync failed (will retry): {}", e);
@@ -310,9 +307,8 @@ impl AdminConfigSync {
             match self.fetch_once().await {
                 Ok(config) => {
                     let current_version = config.config_version.unwrap_or(0);
-                    let version_changed = last_version
-                        .map(|v| v != current_version)
-                        .unwrap_or(false); // 首次拉取不视为变化，避免重复注入
+                    let version_changed =
+                        last_version.map(|v| v != current_version).unwrap_or(false); // 首次拉取不视为变化，避免重复注入
 
                     if version_changed {
                         tracing::info!(

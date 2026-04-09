@@ -46,13 +46,18 @@ pub async fn get_policies_handler(
     State(state): State<AppState>,
     Query(params): Query<PolicyQueryParams>,
 ) -> Result<Json<PoliciesResponse>> {
-    info!("Fetching all policies, include_disabled: {}", params.include_disabled);
+    info!(
+        "Fetching all policies, include_disabled: {}",
+        params.include_disabled
+    );
 
     let db = Database::new(state.db_pool.clone());
     let service = PolicyManagementService::new(db);
 
     let dlp_rules = service.get_dlp_rules(params.include_disabled).await?;
-    let sensitive_ops_rules = service.get_sensitive_op_rules(params.include_disabled).await?;
+    let sensitive_ops_rules = service
+        .get_sensitive_op_rules(params.include_disabled)
+        .await?;
     let version = service.get_policy_version_info().await?;
 
     debug!(
@@ -74,7 +79,10 @@ pub async fn get_dlp_policies_handler(
     State(state): State<AppState>,
     Query(params): Query<PolicyQueryParams>,
 ) -> Result<Json<Vec<DlpRule>>> {
-    info!("Fetching DLP policies, include_disabled: {}", params.include_disabled);
+    info!(
+        "Fetching DLP policies, include_disabled: {}",
+        params.include_disabled
+    );
 
     let db = Database::new(state.db_pool.clone());
     let service = PolicyManagementService::new(db);
@@ -92,14 +100,22 @@ pub async fn get_sensitive_ops_policies_handler(
     State(state): State<AppState>,
     Query(params): Query<PolicyQueryParams>,
 ) -> Result<Json<Vec<SensitiveOperationRule>>> {
-    info!("Fetching sensitive operation policies, include_disabled: {}", params.include_disabled);
+    info!(
+        "Fetching sensitive operation policies, include_disabled: {}",
+        params.include_disabled
+    );
 
     let db = Database::new(state.db_pool.clone());
     let service = PolicyManagementService::new(db);
 
-    let rules = service.get_sensitive_op_rules(params.include_disabled).await?;
+    let rules = service
+        .get_sensitive_op_rules(params.include_disabled)
+        .await?;
 
-    debug!(count = rules.len(), "Sensitive operation policies fetched successfully");
+    debug!(
+        count = rules.len(),
+        "Sensitive operation policies fetched successfully"
+    );
 
     Ok(Json(rules))
 }

@@ -171,7 +171,11 @@ mod tests {
         assert!(json["events"].is_array());
 
         let obj = json.as_object().unwrap();
-        assert_eq!(obj.len(), 2, "JobEventsResponse should have exactly 2 fields");
+        assert_eq!(
+            obj.len(),
+            2,
+            "JobEventsResponse should have exactly 2 fields"
+        );
     }
 
     /// 前端 JobPromptResponse 类型定义：
@@ -193,7 +197,11 @@ mod tests {
         assert!(json["job_id"].is_string());
 
         let obj = json.as_object().unwrap();
-        assert_eq!(obj.len(), 2, "JobPromptResponse should have exactly 2 fields");
+        assert_eq!(
+            obj.len(),
+            2,
+            "JobPromptResponse should have exactly 2 fields"
+        );
     }
 
     // =========================================================================
@@ -243,7 +251,10 @@ mod tests {
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: JobPromptRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.content, malicious, "Content should be preserved verbatim");
+        assert_eq!(
+            parsed.content, malicious,
+            "Content should be preserved verbatim"
+        );
     }
 
     // =========================================================================
@@ -417,6 +428,7 @@ mod tests {
     ///   title: string;
     ///   status: string;
     ///   created_at: string;
+    ///   conversation_id?: string;
     ///   started_at?: string;
     ///   completed_at?: string;
     /// }
@@ -430,6 +442,7 @@ mod tests {
             title: "分析季度报告".into(),
             status: "completed".into(),
             created_at: "2026-04-05T09:00:00Z".into(),
+            conversation_id: Some("550e8400-e29b-41d4-a716-446655440111".into()),
             started_at: Some("2026-04-05T09:00:01Z".into()),
             completed_at: Some("2026-04-05T09:05:00Z".into()),
         };
@@ -440,7 +453,7 @@ mod tests {
         assert!(json["title"].is_string());
         assert!(json["status"].is_string());
         assert!(json["created_at"].is_string());
-        assert_eq!(obj.len(), 6, "JobInfoResponse should have exactly 6 fields");
+        assert_eq!(obj.len(), 7, "JobInfoResponse should have exactly 7 fields");
     }
 
     #[test]
@@ -452,12 +465,23 @@ mod tests {
             title: "待执行任务".into(),
             status: "pending".into(),
             created_at: "2026-04-05T09:00:00Z".into(),
+            conversation_id: None,
             started_at: None,
             completed_at: None,
         };
         let json = serde_json::to_value(&info).expect("should serialize");
-        assert!(json["started_at"].is_null(), "started_at should be null when absent");
-        assert!(json["completed_at"].is_null(), "completed_at should be null when absent");
+        assert!(
+            json["conversation_id"].is_null(),
+            "conversation_id should be null when absent"
+        );
+        assert!(
+            json["started_at"].is_null(),
+            "started_at should be null when absent"
+        );
+        assert!(
+            json["completed_at"].is_null(),
+            "completed_at should be null when absent"
+        );
     }
 
     #[test]
@@ -469,12 +493,22 @@ mod tests {
             title: "任务标题".into(),
             status: "running".into(),
             created_at: "2026-04-05T09:00:00Z".into(),
+            conversation_id: None,
             started_at: None,
             completed_at: None,
         };
         let json_str = serde_json::to_string(&info).expect("should serialize");
-        assert!(!json_str.contains("user_id"), "user_id should not be exposed");
-        assert!(!json_str.contains("owner_id"), "owner_id should not be exposed");
-        assert!(!json_str.contains("api_key"), "api_key should not be exposed");
+        assert!(
+            !json_str.contains("user_id"),
+            "user_id should not be exposed"
+        );
+        assert!(
+            !json_str.contains("owner_id"),
+            "owner_id should not be exposed"
+        );
+        assert!(
+            !json_str.contains("api_key"),
+            "api_key should not be exposed"
+        );
     }
 }

@@ -39,22 +39,39 @@ mod tests {
 
     #[async_trait]
     impl LlmProvider for CapturingProvider {
-        fn model_name(&self) -> &str { &self.name }
-        fn cost_per_token(&self) -> (Decimal, Decimal) { (Decimal::ZERO, Decimal::ZERO) }
-        async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, ironclaw::error::LlmError> {
+        fn model_name(&self) -> &str {
+            &self.name
+        }
+        fn cost_per_token(&self) -> (Decimal, Decimal) {
+            (Decimal::ZERO, Decimal::ZERO)
+        }
+        async fn complete(
+            &self,
+            req: CompletionRequest,
+        ) -> Result<CompletionResponse, ironclaw::error::LlmError> {
             *self.captured.write().unwrap() = req.model.clone();
             Ok(CompletionResponse {
-                content: "ok".into(), input_tokens: 1, output_tokens: 1,
+                content: "ok".into(),
+                input_tokens: 1,
+                output_tokens: 1,
                 finish_reason: FinishReason::Stop,
-                cache_read_input_tokens: 0, cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 0,
             })
         }
-        async fn complete_with_tools(&self, req: ToolCompletionRequest) -> Result<ToolCompletionResponse, ironclaw::error::LlmError> {
+        async fn complete_with_tools(
+            &self,
+            req: ToolCompletionRequest,
+        ) -> Result<ToolCompletionResponse, ironclaw::error::LlmError> {
             *self.captured.write().unwrap() = req.model.clone();
             Ok(ToolCompletionResponse {
-                content: Some("ok".into()), tool_calls: vec![], input_tokens: 1, output_tokens: 1,
+                content: Some("ok".into()),
+                tool_calls: vec![],
+                input_tokens: 1,
+                output_tokens: 1,
                 finish_reason: FinishReason::Stop,
-                cache_read_input_tokens: 0, cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 0,
             })
         }
     }
@@ -100,8 +117,8 @@ mod tests {
         let ovr = Arc::new(RwLock::new(Some("glm-4.7-flash".to_string())));
         let provider = ModelSwitchProvider::new(inner.clone(), ovr);
 
-        let req = CompletionRequest::new(vec![ChatMessage::user("hi")])
-            .with_model("explicit-model");
+        let req =
+            CompletionRequest::new(vec![ChatMessage::user("hi")]).with_model("explicit-model");
         provider.complete(req).await.unwrap();
         assert_eq!(inner.captured_model().as_deref(), Some("explicit-model"));
     }
@@ -143,7 +160,10 @@ mod tests {
         // 请求发到新 provider
         let req = CompletionRequest::new(vec![ChatMessage::user("hi")]);
         provider.complete(req).await.unwrap();
-        assert!(original.captured_model().is_none(), "original should not receive request");
+        assert!(
+            original.captured_model().is_none(),
+            "original should not receive request"
+        );
         // replacement 收到了请求（captured_model 是 None 因为没有 override）
     }
 
@@ -159,7 +179,10 @@ mod tests {
         let new_inner = Arc::new(CapturingProvider::with_name("new-model"));
         provider.replace_inner(new_inner);
 
-        assert!(ovr.read().unwrap().is_none(), "override should be cleared after replace_inner");
+        assert!(
+            ovr.read().unwrap().is_none(),
+            "override should be cleared after replace_inner"
+        );
     }
 
     #[tokio::test]
@@ -179,7 +202,10 @@ mod tests {
         // 请求应该带上 override
         let req = CompletionRequest::new(vec![ChatMessage::user("hi")]);
         provider.complete(req).await.unwrap();
-        assert_eq!(new_inner.captured_model().as_deref(), Some("override-on-new"));
+        assert_eq!(
+            new_inner.captured_model().as_deref(),
+            Some("override-on-new")
+        );
     }
 
     // ── 契约测试 ──

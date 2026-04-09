@@ -13,8 +13,8 @@ use axum::{
 use deadpool_postgres::Config;
 use http_body_util::BodyExt;
 use serde_json::json;
-use tower::ServiceExt;
 use tokio_postgres::NoTls;
+use tower::ServiceExt;
 
 // ============================================================================
 // 辅助函数
@@ -280,7 +280,9 @@ async fn test_security_headers_present_on_response() {
     let headers = resp.headers();
 
     assert_eq!(
-        headers.get("content-security-policy").and_then(|v| v.to_str().ok()),
+        headers
+            .get("content-security-policy")
+            .and_then(|v| v.to_str().ok()),
         Some("default-src 'self'"),
         "缺少 Content-Security-Policy 头"
     );
@@ -290,7 +292,9 @@ async fn test_security_headers_present_on_response() {
         "缺少 X-Frame-Options 头"
     );
     assert_eq!(
-        headers.get("x-content-type-options").and_then(|v| v.to_str().ok()),
+        headers
+            .get("x-content-type-options")
+            .and_then(|v| v.to_str().ok()),
         Some("nosniff"),
         "缺少 X-Content-Type-Options 头"
     );

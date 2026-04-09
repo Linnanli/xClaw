@@ -157,8 +157,10 @@ pub async fn check_http_request(
     // 扫描 URL
     let url_result = state.safety_bridge.scan_outbound(&url);
     if url_result.was_blocked {
-        return Err(format!("URL contains sensitive data: {}", 
-            url_result.block_reason.unwrap_or_default()));
+        return Err(format!(
+            "URL contains sensitive data: {}",
+            url_result.block_reason.unwrap_or_default()
+        ));
     }
 
     // 扫描 headers
@@ -175,8 +177,10 @@ pub async fn check_http_request(
         if let Ok(body_str) = String::from_utf8(body_bytes) {
             let body_result = state.safety_bridge.scan_outbound(&body_str);
             if body_result.was_blocked {
-                return Err(format!("Request body contains sensitive data: {}",
-                    body_result.block_reason.unwrap_or_default()));
+                return Err(format!(
+                    "Request body contains sensitive data: {}",
+                    body_result.block_reason.unwrap_or_default()
+                ));
             }
         }
     }
@@ -189,9 +193,7 @@ pub async fn check_http_request(
 /// 前端 `useDlpScan.ts` 的 `getDlpConfig()` 调用此命令。
 /// 从 SafetyBridge 的脱敏配置构建前端期望的格式。
 #[tauri::command]
-pub async fn get_dlp_config(
-    state: State<'_, EngineState>,
-) -> Result<DlpConfigResponse, String> {
+pub async fn get_dlp_config(state: State<'_, EngineState>) -> Result<DlpConfigResponse, String> {
     let state = state.get()?;
     let config = state.safety_bridge.sanitization_config();
 
@@ -213,9 +215,7 @@ pub async fn get_dlp_config(
 /// 新架构下 DLP 配置由 Admin Backend 统一管理，
 /// 客户端不支持本地修改。返回成功但不执行操作。
 #[tauri::command]
-pub async fn update_dlp_config(
-    _config: serde_json::Value,
-) -> Result<(), String> {
+pub async fn update_dlp_config(_config: serde_json::Value) -> Result<(), String> {
     tracing::warn!("update_dlp_config is no-op in embedded mode; config managed by admin");
     Ok(())
 }
@@ -257,13 +257,11 @@ pub async fn sync_dlp_rules_from_admin(
 }
 
 /// 内部同步逻辑（不依赖 Tauri State，可从 engine.rs 直接调用）。
-pub async fn do_sync_dlp_rules(
-    safety_bridge: &SafetyBridge,
-) -> Result<SyncDlpResult, String> {
+pub async fn do_sync_dlp_rules(safety_bridge: &SafetyBridge) -> Result<SyncDlpResult, String> {
     tracing::info!("Syncing DLP rules from admin backend");
 
-    let admin_url = std::env::var("ADMIN_BACKEND_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
+    let admin_url =
+        std::env::var("ADMIN_BACKEND_URL").unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -315,45 +313,80 @@ pub async fn do_sync_dlp_rules(
         let regex_str = match rule_type {
             "keyword" => {
                 let rule_config = &rule["rule_config"];
-                let keywords: Vec<String> = if let Some(arr) = rule_config.get("keywords").and_then(|v| v.as_array()) {
-                    arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).filter(|s| !s.is_empty()).collect()
-                } else {
-                    raw_pattern.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
-                };
+                let keywords: Vec<String> =
+                    if let Some(arr) = rule_config.get("keywords").and_then(|v| v.as_array()) {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .filter(|s| !s.is_empty())
+                            .collect()
+                    } else {
+                        raw_pattern
+                            .split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect()
+                    };
                 if keywords.is_empty() {
                     tracing::warn!("Skipping keyword rule '{}': no keywords", name);
                     continue;
                 }
-                let case_sensitive = rule_config.get("case_sensitive").and_then(|v| v.as_bool()).unwrap_or(false);
-                let match_mode = rule_config.get("match_mode").and_then(|v| v.as_str()).unwrap_or("contains");
+                let case_sensitive = rule_config
+                    .get("case_sensitive")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let match_mode = rule_config
+                    .get("match_mode")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("contains");
                 let escaped: Vec<String> = keywords.iter().map(|kw| regex::escape(kw)).collect();
                 let joined = escaped.join("|");
                 let pat = match match_mode {
                     "whole_word" => format!(r"\b(?:{})\b", joined),
                     _ => format!(r"(?:{})", joined),
                 };
-                if case_sensitive { pat } else { format!("(?i){}", pat) }
+                if case_sensitive {
+                    pat
+                } else {
+                    format!("(?i){}", pat)
+                }
             }
             "dictionary" => {
                 let rule_config = &rule["rule_config"];
-                let keywords: Vec<String> = raw_pattern.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+                let keywords: Vec<String> = raw_pattern
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
                 if keywords.is_empty() {
                     tracing::warn!("Skipping dictionary rule '{}': no keywords", name);
                     continue;
                 }
-                let case_sensitive = rule_config.get("case_sensitive").and_then(|v| v.as_bool()).unwrap_or(false);
-                let match_mode = rule_config.get("match_mode").and_then(|v| v.as_str()).unwrap_or("contains");
+                let case_sensitive = rule_config
+                    .get("case_sensitive")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let match_mode = rule_config
+                    .get("match_mode")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("contains");
                 let escaped: Vec<String> = keywords.iter().map(|kw| regex::escape(kw)).collect();
                 let joined = escaped.join("|");
                 let pat = match match_mode {
                     "whole_word" => format!(r"\b(?:{})\b", joined),
                     _ => format!(r"(?:{})", joined),
                 };
-                if case_sensitive { pat } else { format!("(?i){}", pat) }
+                if case_sensitive {
+                    pat
+                } else {
+                    format!("(?i){}", pat)
+                }
             }
             _ => {
                 // regex 类型：处理 /pattern/ 格式
-                if raw_pattern.starts_with('/') && raw_pattern.ends_with('/') && raw_pattern.len() > 2 {
+                if raw_pattern.starts_with('/')
+                    && raw_pattern.ends_with('/')
+                    && raw_pattern.len() > 2
+                {
                     raw_pattern[1..raw_pattern.len() - 1].to_string()
                 } else {
                     raw_pattern.clone()
@@ -369,7 +402,12 @@ pub async fn do_sync_dlp_rules(
         let compiled = match regex::Regex::new(&regex_str) {
             Ok(r) => r,
             Err(e) => {
-                tracing::warn!("Skipping rule '{}': invalid regex '{}': {}", name, regex_str, e);
+                tracing::warn!(
+                    "Skipping rule '{}': invalid regex '{}': {}",
+                    name,
+                    regex_str,
+                    e
+                );
                 continue;
             }
         };
@@ -401,6 +439,9 @@ pub async fn do_sync_dlp_rules(
     Ok(SyncDlpResult {
         success: true,
         rules_synced,
-        message: format!("Successfully synced {} DLP rules from admin backend", rules_synced),
+        message: format!(
+            "Successfully synced {} DLP rules from admin backend",
+            rules_synced
+        ),
     })
 }

@@ -37,10 +37,7 @@ impl From<ironclaw::channels::web::log_layer::LogEntry> for LogEntryDto {
 }
 
 /// 获取清空偏移后的日志条目（最多 `limit` 条，时间正序）。
-fn entries_after_offset(
-    state: &crate::state::AppState,
-    limit: usize,
-) -> Vec<LogEntryDto> {
+fn entries_after_offset(state: &crate::state::AppState, limit: usize) -> Vec<LogEntryDto> {
     let offset = state.log_clear_offset.load(Ordering::Relaxed);
     let all = state.log_broadcaster.recent_entries();
     let sliced: Vec<_> = all.into_iter().skip(offset).collect();
@@ -49,7 +46,10 @@ fn entries_after_offset(
 }
 
 /// 从已过滤的条目中取最后 `limit` 条并转换为 DTO。
-fn take_last(entries: Vec<ironclaw::channels::web::log_layer::LogEntry>, limit: usize) -> Vec<LogEntryDto> {
+fn take_last(
+    entries: Vec<ironclaw::channels::web::log_layer::LogEntry>,
+    limit: usize,
+) -> Vec<LogEntryDto> {
     let start = entries.len().saturating_sub(limit);
     entries.into_iter().skip(start).map(Into::into).collect()
 }
@@ -107,7 +107,8 @@ pub async fn ic_filter_logs(
         .skip(offset)
         .filter(|e| {
             let level_ok = level_filter.is_empty() || e.level.to_uppercase() == level_filter;
-            let module_ok = module_filter.is_empty() || e.target.to_lowercase().contains(&module_filter);
+            let module_ok =
+                module_filter.is_empty() || e.target.to_lowercase().contains(&module_filter);
             level_ok && module_ok
         })
         .collect();
@@ -116,9 +117,7 @@ pub async fn ic_filter_logs(
 
 /// 导出日志为 JSON 字符串（供前端用 dialog + fs 插件保存到用户选择的路径）。
 #[tauri::command]
-pub async fn ic_export_logs(
-    state: State<'_, EngineState>,
-) -> Result<String, String> {
+pub async fn ic_export_logs(state: State<'_, EngineState>) -> Result<String, String> {
     let state = state.get()?;
     let offset = state.log_clear_offset.load(Ordering::Relaxed);
     let entries: Vec<LogEntryDto> = state
@@ -133,9 +132,7 @@ pub async fn ic_export_logs(
 
 /// 清空日志（视觉清空：记录当前日志总数作为偏移，后续查询跳过此前条目）。
 #[tauri::command]
-pub async fn ic_clear_logs(
-    state: State<'_, EngineState>,
-) -> Result<(), String> {
+pub async fn ic_clear_logs(state: State<'_, EngineState>) -> Result<(), String> {
     let state = state.get()?;
     let current_len = state.log_broadcaster.recent_entries().len();
     state.log_clear_offset.store(current_len, Ordering::Relaxed);

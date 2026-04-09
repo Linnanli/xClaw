@@ -115,8 +115,8 @@ pub async fn poll_approval_status(
     thread_id: String,
     store: Arc<Mutex<PendingTickets>>,
 ) {
-    let admin_url = std::env::var("ADMIN_BACKEND_URL")
-        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let admin_url =
+        std::env::var("ADMIN_BACKEND_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
     let client_token = std::env::var("ADMIN_AUTH_TOKEN").unwrap_or_default();
 
     let http = reqwest::Client::builder()

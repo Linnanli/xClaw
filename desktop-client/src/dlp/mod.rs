@@ -8,30 +8,30 @@
 //! - 实时消息流脱敏
 
 pub mod detector;
+pub mod integration;
 pub mod patterns;
 pub mod sanitizer;
-pub mod integration;
 
 // 测试模块
-#[cfg(test)]
-pub mod security_tests;
-#[cfg(test)]
-pub mod integration_tests;
-#[cfg(test)]
-pub mod requirements_tests;
-#[cfg(test)]
-pub mod reliability_tests;
 #[cfg(test)]
 pub mod change_coverage_tests;
 #[cfg(test)]
 pub mod code_coverage_tests;
 #[cfg(test)]
 pub mod data_coverage_tests;
+#[cfg(test)]
+pub mod integration_tests;
+#[cfg(test)]
+pub mod reliability_tests;
+#[cfg(test)]
+pub mod requirements_tests;
+#[cfg(test)]
+pub mod security_tests;
 
-pub use detector::{DlpDetector, DlpDetectionResult, DlpMatch, DlpSeverity, DlpAction};
-pub use patterns::{ChinesePatterns, ApiKeyPatterns, CustomPattern};
+pub use detector::{DlpAction, DlpDetectionResult, DlpDetector, DlpMatch, DlpSeverity};
+pub use integration::{CustomPatternConfig, DlpIntegration, DlpIntegrationConfig, DlpStatistics};
+pub use patterns::{ApiKeyPatterns, ChinesePatterns, CustomPattern};
 pub use sanitizer::{DlpSanitizer, SanitizationConfig, SanitizationResult};
-pub use integration::{DlpIntegration, DlpIntegrationConfig, DlpStatistics, CustomPatternConfig};
 
 use thiserror::Error;
 
@@ -40,19 +40,19 @@ use thiserror::Error;
 pub enum DlpError {
     #[error("Pattern compilation failed: {0}")]
     PatternCompilation(String),
-    
+
     #[error("Configuration error: {0}")]
     Configuration(String),
-    
+
     #[error("Sanitization failed: {0}")]
     Sanitization(String),
-    
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    
+
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
-    
+
     #[error("Policy sync error: {0}")]
     PolicySync(#[from] crate::error::Error),
 }

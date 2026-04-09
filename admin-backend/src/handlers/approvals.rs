@@ -23,7 +23,10 @@ pub async fn create_approval(
     State(state): State<AppState>,
     Json(payload): Json<CreateApprovalRequest>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let row = client
@@ -45,10 +48,15 @@ pub async fn create_approval(
     let id: Uuid = row.get(0);
 
     write_audit_log(
-        &client, payload.applicant_id,
+        &client,
+        payload.applicant_id,
         "create_approval",
-        &format!("创建审批工单: {} ({})", payload.operation_name, payload.operation_type),
-    ).await;
+        &format!(
+            "创建审批工单: {} ({})",
+            payload.operation_name, payload.operation_type
+        ),
+    )
+    .await;
 
     Ok(Json(json!({
         "id": id,
@@ -63,7 +71,10 @@ pub async fn get_approvals(
     State(state): State<AppState>,
     Query(params): Query<ApprovalQuery>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // 先将过期的 pending 工单标记为 expired
@@ -74,12 +85,20 @@ pub async fn get_approvals(
     let offset = (page - 1) * page_size;
 
     let (where_clause, query_params) = build_approval_filter(&params);
-    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-        query_params.iter().map(|p| &**p as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = query_params
+        .iter()
+        .map(|p| &**p as &(dyn tokio_postgres::types::ToSql + Sync))
+        .collect();
 
-    let count_sql = format!("SELECT COUNT(*) FROM approval_tickets t JOIN users u ON u.id = t.applicant_id {}", where_clause);
-    let total: i64 = client.query_one(&count_sql, &param_refs).await
-        .map_err(|e| Error::Database(e.to_string()))?.get(0);
+    let count_sql = format!(
+        "SELECT COUNT(*) FROM approval_tickets t JOIN users u ON u.id = t.applicant_id {}",
+        where_clause
+    );
+    let total: i64 = client
+        .query_one(&count_sql, &param_refs)
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
+        .get(0);
 
     let data_sql = format!(
         "SELECT t.id, u.username, t.operation_type, t.operation_name, t.reason,
@@ -89,7 +108,9 @@ pub async fn get_approvals(
          {} ORDER BY t.created_at DESC LIMIT {} OFFSET {}",
         where_clause, page_size, offset
     );
-    let rows = client.query(&data_sql, &param_refs).await
+    let rows = client
+        .query(&data_sql, &param_refs)
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let tickets: Vec<_> = rows.iter().map(row_to_approval_ticket).collect();
@@ -103,23 +124,27 @@ pub async fn get_approvals(
 }
 
 /// GET /api/approvals/stats — 审批统计
-pub async fn get_approval_stats(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+pub async fn get_approval_stats(State(state): State<AppState>) -> Result<Json<serde_json::Value>> {
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     mark_expired_tickets(&client).await;
 
-    let row = client.query_one(
-        "SELECT
+    let row = client
+        .query_one(
+            "SELECT
             COUNT(*) FILTER (WHERE status = 'pending') as pending,
             COUNT(*) FILTER (WHERE status = 'approved') as approved,
             COUNT(*) FILTER (WHERE status = 'rejected') as rejected,
             COUNT(*) FILTER (WHERE status = 'expired') as expired
          FROM approval_tickets",
-        &[],
-    ).await.map_err(|e| Error::Database(e.to_string()))?;
+            &[],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
 
     Ok(Json(json!({
         "pending": row.get::<_, i64>(0),
@@ -141,19 +166,29 @@ pub async fn review_approval(
         _ => return Err(Error::Validation("action 必须为 approve 或 reject".into())),
     };
 
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let existing = client
-        .query_opt("SELECT status, operation_name FROM approval_tickets WHERE id = $1", &[&ticket_id])
-        .await.map_err(|e| Error::Database(e.to_string()))?
+        .query_opt(
+            "SELECT status, operation_name FROM approval_tickets WHERE id = $1",
+            &[&ticket_id],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
         .ok_or_else(|| Error::NotFound("审批工单不存在".into()))?;
 
     let current_status: String = existing.get(0);
     let op_name: String = existing.get(1);
 
     if current_status != "pending" {
-        return Err(Error::Validation(format!("工单状态为 {}，无法审批", current_status)));
+        return Err(Error::Validation(format!(
+            "工单状态为 {}，无法审批",
+            current_status
+        )));
     }
 
     let now = chrono::Utc::now();
@@ -162,12 +197,22 @@ pub async fn review_approval(
         &[&new_status, &payload.comment, &now, &Uuid::nil(), &ticket_id],
     ).await.map_err(|e| Error::Database(e.to_string()))?;
 
-    let action_label = if new_status == "approved" { "批准" } else { "拒绝" };
-    write_audit_log(&client, Uuid::nil(), "review_approval",
+    let action_label = if new_status == "approved" {
+        "批准"
+    } else {
+        "拒绝"
+    };
+    write_audit_log(
+        &client,
+        Uuid::nil(),
+        "review_approval",
         &format!("{}审批工单: {}", action_label, op_name),
-    ).await;
+    )
+    .await;
 
-    Ok(Json(json!({ "message": format!("工单已{}", action_label) })))
+    Ok(Json(
+        json!({ "message": format!("工单已{}", action_label) }),
+    ))
 }
 
 /// GET /api/approvals/{id}/check — 检查审批状态（客户端用）
@@ -175,7 +220,10 @@ pub async fn check_approval(
     State(state): State<AppState>,
     Path(ticket_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let row = client
@@ -183,7 +231,8 @@ pub async fn check_approval(
             "SELECT status, expires_at, reviewed_at FROM approval_tickets WHERE id = $1",
             &[&ticket_id],
         )
-        .await.map_err(|e| Error::Database(e.to_string()))?
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
         .ok_or_else(|| Error::NotFound("审批工单不存在".into()))?;
 
     let status: String = row.get(0);
@@ -226,7 +275,10 @@ fn row_to_approval_ticket(row: &tokio_postgres::Row) -> serde_json::Value {
 
 fn build_approval_filter(
     params: &ApprovalQuery,
-) -> (String, Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>>) {
+) -> (
+    String,
+    Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>>,
+) {
     let mut conditions: Vec<String> = Vec::new();
     let mut query_params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = Vec::new();
 
@@ -303,6 +355,9 @@ pub async fn check_approval_timeouts(pool: &deadpool_postgres::Pool) {
     }
 
     if !rows.is_empty() {
-        tracing::info!(count = rows.len(), "approval timeout check: triggered alerts");
+        tracing::info!(
+            count = rows.len(),
+            "approval timeout check: triggered alerts"
+        );
     }
 }

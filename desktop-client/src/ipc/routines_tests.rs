@@ -8,7 +8,9 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::ipc::routines::{CreateRoutineRequest, RoutineInfo, RoutineRun, RoutineRunsResponse};
+    use crate::ipc::routines::{
+        CreateRoutineRequest, RoutineInfo, RoutineRun, RoutineRunsResponse,
+    };
 
     // =========================================================================
     // 单元测试 — 正常路径
@@ -65,18 +67,16 @@ mod tests {
     fn test_routine_runs_response_serialization() {
         let resp = RoutineRunsResponse {
             routine_id: "r-001".into(),
-            runs: vec![
-                RoutineRun {
-                    id: "run-1".into(),
-                    trigger_type: "cron".into(),
-                    started_at: "2026-04-05T09:00:00Z".into(),
-                    completed_at: None,
-                    status: "Running".into(),
-                    result_summary: None,
-                    tokens_used: None,
-                    job_id: None,
-                },
-            ],
+            runs: vec![RoutineRun {
+                id: "run-1".into(),
+                trigger_type: "cron".into(),
+                started_at: "2026-04-05T09:00:00Z".into(),
+                completed_at: None,
+                status: "Running".into(),
+                result_summary: None,
+                tokens_used: None,
+                job_id: None,
+            }],
         };
         let json = serde_json::to_value(&resp).expect("should serialize");
         assert_eq!(json["routine_id"], "r-001");
@@ -291,8 +291,14 @@ mod tests {
             trigger: serde_json::json!({"type": "manual"}),
         };
         let json_str = serde_json::to_string(&info).expect("should serialize");
-        assert!(!json_str.contains("user_id"), "user_id should not be exposed");
-        assert!(!json_str.contains("owner_id"), "owner_id should not be exposed");
+        assert!(
+            !json_str.contains("user_id"),
+            "user_id should not be exposed"
+        );
+        assert!(
+            !json_str.contains("owner_id"),
+            "owner_id should not be exposed"
+        );
     }
 
     /// RoutineInfo 不应泄露内部运行时状态字段。
@@ -361,7 +367,7 @@ mod tests {
     /// manual 和 event 触发器不应计算 next_fire_at（应为 None）。
     #[test]
     fn test_regression_non_cron_triggers_have_no_next_fire_at() {
-        use ironclaw::agent::routine::{Trigger, next_cron_fire};
+        use ironclaw::agent::routine::{next_cron_fire, Trigger};
 
         let non_cron_triggers = vec![
             serde_json::json!({"type": "manual"}),
@@ -369,14 +375,13 @@ mod tests {
         ];
 
         for trigger_json in non_cron_triggers {
-            let trigger: Trigger = serde_json::from_value(trigger_json.clone())
-                .expect("should parse trigger");
+            let trigger: Trigger =
+                serde_json::from_value(trigger_json.clone()).expect("should parse trigger");
 
             // 只有 Cron 变体才调用 next_cron_fire
             let next_fire_at = match &trigger {
                 Trigger::Cron { schedule, timezone } => {
-                    next_cron_fire(schedule, timezone.as_deref())
-                        .expect("valid cron")
+                    next_cron_fire(schedule, timezone.as_deref()).expect("valid cron")
                 }
                 _ => None,
             };
@@ -389,46 +394,55 @@ mod tests {
         }
     }
 
-    // =======================================================================================
-    // 契约测试 — FireRoutineResponse（ic_fire_routine 返回值，前端依赖字段名）
-    // =======================================================================================
+    // ==========================================================================================
+    // 契约测试 — TriggerRoutineResponse（ic_fire_routine 返回值，前端依赖字段名）
+    // ==========================================================================================
 
-    /// 前端 FireRoutineResponse 类型：
+    /// 前端 TriggerRoutineResponse 类型：
     /// ```typescript
-    /// interface FireRoutineResponse {
-    ///   thread_id: string;
-    ///   prompt: string;
+    /// interface TriggerRoutineResponse {
+    ///   status: string;
+    ///   routine_id: string;
+    ///   run_id: string;
     /// }
     /// ```
     #[test]
     fn test_contract_fire_routine_response_fields() {
-        use crate::ipc::routines::FireRoutineResponse;
+        use crate::ipc::routines::TriggerRoutineResponse;
 
-        let resp = FireRoutineResponse {
-            thread_id: "550e8400-e29b-41d4-a716-446655440000".into(),
-            prompt: "总结今日工作进展".into(),
+        let resp = TriggerRoutineResponse {
+            status: "triggered".into(),
+            routine_id: "550e8400-e29b-41d4-a716-446655440000".into(),
+            run_id: "11f5a970-bf31-4d6f-8a20-61f3f96a3c43".into(),
         };
         let json = serde_json::to_value(&resp).expect("should serialize");
         let obj = json.as_object().expect("should be object");
 
-        assert!(json["thread_id"].is_string(), "thread_id must be string");
-        assert!(json["prompt"].is_string(), "prompt must be string");
-        assert_eq!(obj.len(), 2, "FireRoutineResponse should have exactly 2 fields");
+        assert!(json["status"].is_string(), "status must be string");
+        assert!(json["routine_id"].is_string(), "routine_id must be string");
+        assert!(json["run_id"].is_string(), "run_id must be string");
+        assert_eq!(
+            obj.len(),
+            3,
+            "TriggerRoutineResponse should have exactly 3 fields"
+        );
     }
 
     #[test]
     fn test_contract_fire_routine_response_no_extra_fields() {
-        use crate::ipc::routines::FireRoutineResponse;
+        use crate::ipc::routines::TriggerRoutineResponse;
 
-        let resp = FireRoutineResponse {
-            thread_id: "thread-abc".into(),
-            prompt: "执行任务".into(),
+        let resp = TriggerRoutineResponse {
+            status: "triggered".into(),
+            routine_id: "routine-abc".into(),
+            run_id: "run-abc".into(),
         };
         let json_str = serde_json::to_string(&resp).expect("should serialize");
 
         // 不应泄露内部字段
-        assert!(!json_str.contains("routine_id"));
         assert!(!json_str.contains("user_id"));
         assert!(!json_str.contains("owner_id"));
+        assert!(!json_str.contains("thread_id"));
+        assert!(!json_str.contains("prompt"));
     }
 }

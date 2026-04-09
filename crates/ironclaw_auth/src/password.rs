@@ -1,6 +1,6 @@
 use crate::error::{AuthError, Result};
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use argon2::password_hash::SaltString;
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use rand::thread_rng;
 
 /// Password manager using Argon2.
@@ -28,8 +28,8 @@ impl PasswordManager {
 
     /// Verify a password against a hash.
     pub fn verify(&self, password: &str, hash: &str) -> Result<()> {
-        let parsed_hash = PasswordHash::new(hash)
-            .map_err(|e| AuthError::AuthFailed(e.to_string()))?;
+        let parsed_hash =
+            PasswordHash::new(hash).map_err(|e| AuthError::AuthFailed(e.to_string()))?;
 
         self.argon2
             .verify_password(password.as_bytes(), &parsed_hash)

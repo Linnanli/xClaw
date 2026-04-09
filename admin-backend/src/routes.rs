@@ -1,21 +1,23 @@
 use crate::auth::AuthManager;
 use crate::error::{Error, Result};
 use crate::handlers::{
-    self,
-    get_dlp_policies_handler, get_policies_handler, get_policy_version_handler,
+    self, get_dlp_policies_handler, get_policies_handler, get_policy_version_handler,
     get_sensitive_ops_policies_handler,
 };
-use crate::middleware::{
-    rate_limit::RateLimitLayer,
-    security_headers::SecurityHeadersLayer,
+use crate::middleware::{rate_limit::RateLimitLayer, security_headers::SecurityHeadersLayer};
+use crate::models::{
+    self, AssignPermissionsRequest, AuditLogExportQuery, CreateDepartmentRequest,
+    CreateDictionaryRequest, CreateDlpRuleRequest, CreateRoleRequest, CreateUserRequest,
+    LoginRequest, LoginResponse, RefreshTokenRequest, UpdateClientConfigRequest,
+    UpdateDepartmentRequest, UpdateDictionaryRequest, UpdateDlpRuleRequest, UpdateRoleRequest,
+    UpdateUserRequest,
 };
-use crate::models::{self, CreateUserRequest, LoginRequest, LoginResponse, RefreshTokenRequest, CreateRoleRequest, UpdateRoleRequest, AssignPermissionsRequest, CreateDlpRuleRequest, UpdateDlpRuleRequest, CreateDictionaryRequest, UpdateDictionaryRequest, UpdateUserRequest, CreateDepartmentRequest, UpdateDepartmentRequest, AuditLogExportQuery, UpdateClientConfigRequest};
 use crate::AppState;
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    routing::{get, post, put, delete},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -32,10 +34,19 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/auth/refresh", post(refresh_token))
         .route("/api/users", get(get_users).post(create_user))
         .route("/api/users/import", post(import_users))
-        .route("/api/users/{id}", get(get_user).put(update_user).delete(delete_user))
-        .route("/api/users/{id}/roles", get(get_user_roles).post(assign_user_roles))
+        .route(
+            "/api/users/{id}",
+            get(get_user).put(update_user).delete(delete_user),
+        )
+        .route(
+            "/api/users/{id}/roles",
+            get(get_user_roles).post(assign_user_roles),
+        )
         .route("/api/roles", get(get_roles).post(create_role))
-        .route("/api/roles/{id}", get(get_role).put(update_role).delete(delete_role))
+        .route(
+            "/api/roles/{id}",
+            get(get_role).put(update_role).delete(delete_role),
+        )
         .route("/api/roles/{id}/permissions", post(assign_permissions))
         .route("/api/permissions", get(get_permissions))
         .route("/api/dlp-rules", get(get_dlp_rules).post(create_dlp_rule))
@@ -43,14 +54,31 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/dlp-rules/batch/delete", post(batch_delete_dlp_rules))
         .route("/api/dlp-rules/export", get(export_dlp_rules))
         .route("/api/dlp-rules/import", post(import_dlp_rules))
-        .route("/api/dlp-rules/{id}", put(update_dlp_rule).delete(delete_dlp_rule))
-        .route("/api/dlp-dictionaries", get(get_dictionaries).post(create_dictionary))
-        .route("/api/dlp-dictionaries/{id}", get(get_dictionary).put(update_dictionary).delete(delete_dictionary))
+        .route(
+            "/api/dlp-rules/{id}",
+            put(update_dlp_rule).delete(delete_dlp_rule),
+        )
+        .route(
+            "/api/dlp-dictionaries",
+            get(get_dictionaries).post(create_dictionary),
+        )
+        .route(
+            "/api/dlp-dictionaries/{id}",
+            get(get_dictionary)
+                .put(update_dictionary)
+                .delete(delete_dictionary),
+        )
         .route("/api/audit-logs/export", get(export_audit_logs))
         .route("/api/audit-logs", get(get_audit_logs))
         .route("/api/audit-logs/report", post(report_audit_event))
-        .route("/api/sensitive-operations", get(get_sensitive_operations).post(create_sensitive_operation))
-        .route("/api/sensitive-operations/{id}", put(update_sensitive_operation).delete(delete_sensitive_operation))
+        .route(
+            "/api/sensitive-operations",
+            get(get_sensitive_operations).post(create_sensitive_operation),
+        )
+        .route(
+            "/api/sensitive-operations/{id}",
+            put(update_sensitive_operation).delete(delete_sensitive_operation),
+        )
         // 策略变更记录 API
         .route("/api/policy-changes", get(get_policy_changes))
         .route("/api/policy-changes/stats", get(get_policy_change_stats))
@@ -58,34 +86,73 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/clients/push-policy-all", post(push_policy_all))
         .route("/api/clients/stats", get(get_client_stats))
         .route("/api/clients", get(get_clients))
-        .route("/api/clients/{id}", get(get_client_detail).delete(delete_client_record))
+        .route(
+            "/api/clients/{id}",
+            get(get_client_detail).delete(delete_client_record),
+        )
         .route("/api/clients/{id}/disconnect", post(disconnect_client))
         .route("/api/clients/{id}/push-policy", post(push_policy_to_client))
         // 新增：策略查询 API（供 Desktop Client 使用）
         .route("/api/policies", get(get_policies_handler))
         .route("/api/policies/dlp", get(get_dlp_policies_handler))
-        .route("/api/policies/sensitive-ops", get(get_sensitive_ops_policies_handler))
+        .route(
+            "/api/policies/sensitive-ops",
+            get(get_sensitive_ops_policies_handler),
+        )
         .route("/api/policies/version", get(get_policy_version_handler))
         // 技能管理 API（重构：直查 Admin DB，不再代理 Gateway）
         .route("/api/skills", get(handlers::extensions::list_skills))
-        .route("/api/skills/upload", post(handlers::extensions::upload_skill))
-        .route("/api/skills/{id}/enable", post(handlers::extensions::set_skill_enabled))
-        .route("/api/skills/{id}/disable", post(handlers::extensions::set_skill_enabled))
-        .route("/api/skills/{id}/review", post(handlers::extensions::review_skill))
+        .route(
+            "/api/skills/upload",
+            post(handlers::extensions::upload_skill),
+        )
+        .route(
+            "/api/skills/{id}/enable",
+            post(handlers::extensions::set_skill_enabled),
+        )
+        .route(
+            "/api/skills/{id}/disable",
+            post(handlers::extensions::set_skill_enabled),
+        )
+        .route(
+            "/api/skills/{id}/review",
+            post(handlers::extensions::review_skill),
+        )
         // 插件管理 API（重构：直查 Admin DB，不再代理 Gateway）
         .route("/api/plugins", get(handlers::extensions::list_plugins))
-        .route("/api/plugins/upload", post(handlers::extensions::upload_plugin))
-        .route("/api/plugins/{id}/enable", post(handlers::extensions::set_plugin_enabled))
-        .route("/api/plugins/{id}/disable", post(handlers::extensions::set_plugin_enabled))
-        .route("/api/plugins/{id}/review", post(handlers::extensions::review_plugin))
+        .route(
+            "/api/plugins/upload",
+            post(handlers::extensions::upload_plugin),
+        )
+        .route(
+            "/api/plugins/{id}/enable",
+            post(handlers::extensions::set_plugin_enabled),
+        )
+        .route(
+            "/api/plugins/{id}/disable",
+            post(handlers::extensions::set_plugin_enabled),
+        )
+        .route(
+            "/api/plugins/{id}/review",
+            post(handlers::extensions::review_plugin),
+        )
         // 私有注册表 API（兼容 ClawHub /api/v1/ 格式，供 ironclaw 引擎使用）
         .route("/api/v1/search", get(handlers::extensions::registry_search))
-        .route("/api/v1/download", get(handlers::extensions::registry_download))
-        .route("/api/v1/skills/{slug}", get(handlers::extensions::registry_skill_detail))
+        .route(
+            "/api/v1/download",
+            get(handlers::extensions::registry_download),
+        )
+        .route(
+            "/api/v1/skills/{slug}",
+            get(handlers::extensions::registry_skill_detail),
+        )
         // 系统配置 API
         .route("/api/settings", get(get_settings).put(update_settings))
         // 客户端配置下发 API
-        .route("/api/client-config", get(get_client_config).put(update_client_config))
+        .route(
+            "/api/client-config",
+            get(get_client_config).put(update_client_config),
+        )
         // 客户端数据上报 API（供 Desktop Client 使用）
         .route("/api/client-reports", post(post_client_reports))
         // 仪表盘 API
@@ -93,58 +160,177 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/dashboard/activity", get(get_dashboard_activity))
         .route("/api/dashboard/trends", get(get_dashboard_trends))
         // 部门管理 API
-        .route("/api/departments", get(get_departments).post(create_department))
-        .route("/api/departments/{id}", get(handlers::departments::get_department_detail).put(update_department).delete(delete_department))
-        .route("/api/departments/{id}/members", get(handlers::departments::get_department_members))
-        .route("/api/departments/{id}/model-whitelist", get(handlers::departments::get_model_whitelist).put(handlers::departments::update_model_whitelist))
-        .route("/api/departments/{id}/quota-summary", get(handlers::quota::department_quota_summary))
-        .route("/api/departments/{id}/skill-whitelist", get(handlers::extensions::get_skill_whitelist).put(handlers::extensions::update_skill_whitelist))
+        .route(
+            "/api/departments",
+            get(get_departments).post(create_department),
+        )
+        .route(
+            "/api/departments/{id}",
+            get(handlers::departments::get_department_detail)
+                .put(update_department)
+                .delete(delete_department),
+        )
+        .route(
+            "/api/departments/{id}/members",
+            get(handlers::departments::get_department_members),
+        )
+        .route(
+            "/api/departments/{id}/model-whitelist",
+            get(handlers::departments::get_model_whitelist)
+                .put(handlers::departments::update_model_whitelist),
+        )
+        .route(
+            "/api/departments/{id}/quota-summary",
+            get(handlers::quota::department_quota_summary),
+        )
+        .route(
+            "/api/departments/{id}/skill-whitelist",
+            get(handlers::extensions::get_skill_whitelist)
+                .put(handlers::extensions::update_skill_whitelist),
+        )
         // 模型配置 API
-        .route("/api/model-configs", get(get_model_configs).post(create_model_config))
-        .route("/api/model-configs/{id}", put(update_model_config).delete(delete_model_config))
-        .route("/api/model-configs/test-connection", post(test_model_connection))
+        .route(
+            "/api/model-configs",
+            get(get_model_configs).post(create_model_config),
+        )
+        .route(
+            "/api/model-configs/{id}",
+            put(update_model_config).delete(delete_model_config),
+        )
+        .route(
+            "/api/model-configs/test-connection",
+            post(test_model_connection),
+        )
         // 客户端模型列表（精简版，供 Desktop Client 拉取）
         .route("/api/client-models", get(get_client_models))
         // 告警与通知 API
-        .route("/api/alert-rules", get(handlers::alerts::get_alert_rules).post(handlers::alerts::create_alert_rule))
-        .route("/api/alert-rules/{id}", put(handlers::alerts::update_alert_rule).delete(handlers::alerts::delete_alert_rule))
+        .route(
+            "/api/alert-rules",
+            get(handlers::alerts::get_alert_rules).post(handlers::alerts::create_alert_rule),
+        )
+        .route(
+            "/api/alert-rules/{id}",
+            put(handlers::alerts::update_alert_rule).delete(handlers::alerts::delete_alert_rule),
+        )
         .route("/api/alerts", get(handlers::alerts::get_alert_events))
         .route("/api/alerts/stats", get(handlers::alerts::get_alert_stats))
-        .route("/api/alerts/unhandled-count", get(handlers::alerts::get_unhandled_alert_count))
-        .route("/api/alerts/trigger", post(handlers::alerts::manual_trigger_alert))
-        .route("/api/alerts/{id}/status", put(handlers::alerts::update_alert_event_status))
+        .route(
+            "/api/alerts/unhandled-count",
+            get(handlers::alerts::get_unhandled_alert_count),
+        )
+        .route(
+            "/api/alerts/trigger",
+            post(handlers::alerts::manual_trigger_alert),
+        )
+        .route(
+            "/api/alerts/{id}/status",
+            put(handlers::alerts::update_alert_event_status),
+        )
         // 对话审计 API
-        .route("/api/conversations/stats", get(handlers::conversations::get_conversation_stats))
-        .route("/api/conversations", get(handlers::conversations::get_conversations))
-        .route("/api/conversations/{id}", get(handlers::conversations::get_conversation_detail))
+        .route(
+            "/api/conversations/stats",
+            get(handlers::conversations::get_conversation_stats),
+        )
+        .route(
+            "/api/conversations",
+            get(handlers::conversations::get_conversations),
+        )
+        .route(
+            "/api/conversations/{id}",
+            get(handlers::conversations::get_conversation_detail),
+        )
         // 审批流 API
-        .route("/api/approvals/stats", get(handlers::approvals::get_approval_stats))
-        .route("/api/approvals", get(handlers::approvals::get_approvals).post(handlers::approvals::create_approval))
-        .route("/api/approvals/{id}/review", put(handlers::approvals::review_approval))
-        .route("/api/approvals/{id}/check", get(handlers::approvals::check_approval))
+        .route(
+            "/api/approvals/stats",
+            get(handlers::approvals::get_approval_stats),
+        )
+        .route(
+            "/api/approvals",
+            get(handlers::approvals::get_approvals).post(handlers::approvals::create_approval),
+        )
+        .route(
+            "/api/approvals/{id}/review",
+            put(handlers::approvals::review_approval),
+        )
+        .route(
+            "/api/approvals/{id}/check",
+            get(handlers::approvals::check_approval),
+        )
         // 知识库管理 API
-        .route("/api/knowledge-bases", get(handlers::knowledge_base::list_knowledge_bases).post(handlers::knowledge_base::create_knowledge_base))
-        .route("/api/knowledge-bases/{id}", put(handlers::knowledge_base::update_knowledge_base).delete(handlers::knowledge_base::delete_knowledge_base))
-        .route("/api/knowledge-bases/{id}/documents", get(handlers::knowledge_base::list_documents).post(handlers::knowledge_base::upload_document))
-        .route("/api/knowledge-bases/{id}/documents/{doc_id}", delete(handlers::knowledge_base::delete_document))
-        .route("/api/knowledge-bases/{id}/search", post(handlers::knowledge_base::search_knowledge_base))
+        .route(
+            "/api/knowledge-bases",
+            get(handlers::knowledge_base::list_knowledge_bases)
+                .post(handlers::knowledge_base::create_knowledge_base),
+        )
+        .route(
+            "/api/knowledge-bases/{id}",
+            put(handlers::knowledge_base::update_knowledge_base)
+                .delete(handlers::knowledge_base::delete_knowledge_base),
+        )
+        .route(
+            "/api/knowledge-bases/{id}/documents",
+            get(handlers::knowledge_base::list_documents)
+                .post(handlers::knowledge_base::upload_document),
+        )
+        .route(
+            "/api/knowledge-bases/{id}/documents/{doc_id}",
+            delete(handlers::knowledge_base::delete_document),
+        )
+        .route(
+            "/api/knowledge-bases/{id}/search",
+            post(handlers::knowledge_base::search_knowledge_base),
+        )
         // 合规管理 API
-        .route("/api/compliance/overview", get(handlers::compliance::get_compliance_overview))
-        .route("/api/compliance/reports", get(handlers::compliance::get_compliance_reports).post(handlers::compliance::generate_compliance_report))
-        .route("/api/compliance/retention", get(handlers::compliance::get_retention_policies))
-        .route("/api/compliance/retention/{level}", put(handlers::compliance::update_retention_policy))
+        .route(
+            "/api/compliance/overview",
+            get(handlers::compliance::get_compliance_overview),
+        )
+        .route(
+            "/api/compliance/reports",
+            get(handlers::compliance::get_compliance_reports)
+                .post(handlers::compliance::generate_compliance_report),
+        )
+        .route(
+            "/api/compliance/retention",
+            get(handlers::compliance::get_retention_policies),
+        )
+        .route(
+            "/api/compliance/retention/{level}",
+            put(handlers::compliance::update_retention_policy),
+        )
         // 费用配额管理 API
         .route("/api/quota/check", post(handlers::quota::quota_check))
-        .route("/api/quota/report-usage", post(handlers::quota::report_usage))
+        .route(
+            "/api/quota/report-usage",
+            post(handlers::quota::report_usage),
+        )
         .route("/api/quota/overview", get(handlers::quota::quota_overview))
-        .route("/api/quota/config", get(handlers::quota::get_quota_config).put(handlers::quota::update_quota_config))
-        .route("/api/quota/department-ranking", get(handlers::quota::department_ranking))
-        .route("/api/quota/model-ranking", get(handlers::quota::model_ranking))
+        .route(
+            "/api/quota/config",
+            get(handlers::quota::get_quota_config).put(handlers::quota::update_quota_config),
+        )
+        .route(
+            "/api/quota/department-ranking",
+            get(handlers::quota::department_ranking),
+        )
+        .route(
+            "/api/quota/model-ranking",
+            get(handlers::quota::model_ranking),
+        )
         .route("/api/quota/details", get(handlers::quota::usage_records))
         // 统计报表 API
-        .route("/api/reports/ai-usage", get(handlers::reports::get_ai_usage))
-        .route("/api/reports/model-cost", get(handlers::reports::get_model_cost))
-        .route("/api/reports/dept-ranking", get(handlers::reports::get_dept_ranking))
+        .route(
+            "/api/reports/ai-usage",
+            get(handlers::reports::get_ai_usage),
+        )
+        .route(
+            "/api/reports/model-cost",
+            get(handlers::reports::get_model_cost),
+        )
+        .route(
+            "/api/reports/dept-ranking",
+            get(handlers::reports::get_dept_ranking),
+        )
         .with_state(state)
         .layer(axum::middleware::from_fn(crate::middleware::auth::jwt_auth))
         .layer(RateLimitLayer::new())
@@ -192,12 +378,18 @@ async fn register(
     State(state): State<AppState>,
     Json(payload): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // Check if user already exists
     let existing = client
-        .query_opt("SELECT id FROM users WHERE username = $1", &[&payload.username])
+        .query_opt(
+            "SELECT id FROM users WHERE username = $1",
+            &[&payload.username],
+        )
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
@@ -205,7 +397,8 @@ async fn register(
         return Err(Error::UserExists);
     }
 
-    let auth = AuthManager::new(std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string()));
+    let auth =
+        AuthManager::new(std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string()));
     let password_hash = auth.hash_password(&payload.password)?;
 
     let user_id = Uuid::new_v4();
@@ -215,7 +408,14 @@ async fn register(
         .execute(
             "INSERT INTO users (id, username, email, password_hash, created_at, updated_at) 
              VALUES ($1, $2, $3, $4, $5, $6)",
-            &[&user_id, &payload.username, &payload.email, &password_hash, &now, &now],
+            &[
+                &user_id,
+                &payload.username,
+                &payload.email,
+                &password_hash,
+                &now,
+                &now,
+            ],
         )
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
@@ -236,7 +436,10 @@ async fn login(
     headers: HeaderMap,
     Json(payload): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let ip = crate::middleware::extract_client_ip(&headers);
@@ -270,10 +473,14 @@ async fn login(
         }
     }
 
-    let auth = AuthManager::new(std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string()));
+    let auth =
+        AuthManager::new(std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string()));
 
     // 验证密码
-    if auth.verify_password(&payload.password, &password_hash).is_err() {
+    if auth
+        .verify_password(&payload.password, &password_hash)
+        .is_err()
+    {
         let new_fail_count = fail_count + 1;
         if new_fail_count >= 5 {
             // 锁定 15 分钟
@@ -293,8 +500,12 @@ async fn login(
                 let trigger = crate::models::AlertTrigger {
                     event_type: "abnormal_login".into(),
                     severity: "high".into(),
-                    detail: format!("用户 {} 连续登录失败 {} 次，账户已锁定 15 分钟（IP: {}）",
-                        username, new_fail_count, ip.as_deref().unwrap_or("unknown")),
+                    detail: format!(
+                        "用户 {} 连续登录失败 {} 次，账户已锁定 15 分钟（IP: {}）",
+                        username,
+                        new_fail_count,
+                        ip.as_deref().unwrap_or("unknown")
+                    ),
                     event_data: None,
                 };
                 if let Err(e) = crate::handlers::alerts::trigger_alert(&pool, &trigger).await {
@@ -315,7 +526,10 @@ async fn login(
             &client,
             user_id,
             "login_failed",
-            &format!("用户 {} 登录失败（第 {} 次）", payload.username, new_fail_count),
+            &format!(
+                "用户 {} 登录失败（第 {} 次）",
+                payload.username, new_fail_count
+            ),
             ip_str,
             ua_str,
         )
@@ -382,7 +596,8 @@ async fn refresh_token(
     State(_state): State<AppState>,
     Json(payload): Json<RefreshTokenRequest>,
 ) -> Result<Json<serde_json::Value>> {
-    let auth = AuthManager::new(std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string()));
+    let auth =
+        AuthManager::new(std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string()));
     let claims = auth.verify_token(&payload.refresh_token)?;
 
     let access_token = auth.generate_access_token(&claims.sub)?;
@@ -395,10 +610,11 @@ async fn refresh_token(
     })))
 }
 
-async fn get_users(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+async fn get_users(State(state): State<AppState>) -> Result<Json<serde_json::Value>> {
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let rows = client
@@ -415,7 +631,7 @@ async fn get_users(
     let mut users = Vec::new();
     for row in rows {
         let user_id: Uuid = row.get(0);
-        
+
         // Get user roles
         let role_rows = client
             .query(
@@ -464,7 +680,10 @@ async fn delete_user(
     State(state): State<AppState>,
     Path(user_id): Path<Uuid>,
 ) -> Result<StatusCode> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let result = client
@@ -483,7 +702,10 @@ async fn get_user(
     State(state): State<AppState>,
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let row = client
@@ -517,7 +739,10 @@ async fn get_audit_logs(
     State(state): State<AppState>,
     Query(params): Query<AuditLogQuery>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let page = params.page.unwrap_or(1).max(1);
@@ -593,10 +818,11 @@ async fn get_audit_logs(
     })))
 }
 
-async fn get_dlp_rules(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+async fn get_dlp_rules(State(state): State<AppState>) -> Result<Json<serde_json::Value>> {
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let rows = client
@@ -637,7 +863,10 @@ async fn create_dlp_rule(
     State(state): State<AppState>,
     Json(payload): Json<CreateDlpRuleRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let rule_id = Uuid::new_v4();
@@ -654,7 +883,16 @@ async fn create_dlp_rule(
 
     // 记录审计日志
     let system_user = Uuid::nil();
-    write_audit_log(&client, system_user, "create_dlp_rule", &format!("创建 DLP 规则: {} (类型: {})", payload.name, payload.rule_type)).await;
+    write_audit_log(
+        &client,
+        system_user,
+        "create_dlp_rule",
+        &format!(
+            "创建 DLP 规则: {} (类型: {})",
+            payload.name, payload.rule_type
+        ),
+    )
+    .await;
 
     Ok((
         StatusCode::CREATED,
@@ -681,7 +919,10 @@ async fn update_dlp_rule(
     Path(rule_id): Path<Uuid>,
     Json(payload): Json<UpdateDlpRuleRequest>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // Check if rule exists
@@ -774,7 +1015,13 @@ async fn update_dlp_rule(
 
     // 记录审计日志
     let system_user = Uuid::nil();
-    write_audit_log(&client, system_user, "update_dlp_rule", &format!("更新 DLP 规则: {} ({})", row.get::<_, String>(1), rule_id)).await;
+    write_audit_log(
+        &client,
+        system_user,
+        "update_dlp_rule",
+        &format!("更新 DLP 规则: {} ({})", row.get::<_, String>(1), rule_id),
+    )
+    .await;
 
     Ok(Json(json!({
         "id": row.get::<_, Uuid>(0),
@@ -797,7 +1044,10 @@ async fn delete_dlp_rule(
     State(state): State<AppState>,
     Path(rule_id): Path<Uuid>,
 ) -> Result<StatusCode> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let result = client
@@ -811,7 +1061,13 @@ async fn delete_dlp_rule(
 
     // 记录审计日志
     let system_user = Uuid::nil();
-    write_audit_log(&client, system_user, "delete_dlp_rule", &format!("删除 DLP 规则: {}", rule_id)).await;
+    write_audit_log(
+        &client,
+        system_user,
+        "delete_dlp_rule",
+        &format!("删除 DLP 规则: {}", rule_id),
+    )
+    .await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -842,7 +1098,10 @@ async fn batch_update_dlp_status(
         return Err(Error::Validation("ids 不能为空".to_string()));
     }
 
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let now = chrono::Utc::now();
@@ -861,8 +1120,18 @@ async fn batch_update_dlp_status(
 
     // 记录审计日志
     let system_user = Uuid::nil();
-    let action_text = if payload.enabled { "批量启用" } else { "批量禁用" };
-    write_audit_log(&client, system_user, "batch_update_dlp_status", &format!("{} {} 条 DLP 规则", action_text, updated)).await;
+    let action_text = if payload.enabled {
+        "批量启用"
+    } else {
+        "批量禁用"
+    };
+    write_audit_log(
+        &client,
+        system_user,
+        "batch_update_dlp_status",
+        &format!("{} {} 条 DLP 规则", action_text, updated),
+    )
+    .await;
 
     Ok(Json(json!({
         "updated": updated,
@@ -878,7 +1147,10 @@ async fn batch_delete_dlp_rules(
         return Err(Error::Validation("ids 不能为空".to_string()));
     }
 
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let mut deleted = 0u64;
@@ -893,7 +1165,13 @@ async fn batch_delete_dlp_rules(
 
     // 记录审计日志
     let system_user = Uuid::nil();
-    write_audit_log(&client, system_user, "batch_delete_dlp_rules", &format!("批量删除 {} 条 DLP 规则", deleted)).await;
+    write_audit_log(
+        &client,
+        system_user,
+        "batch_delete_dlp_rules",
+        &format!("批量删除 {} 条 DLP 规则", deleted),
+    )
+    .await;
 
     Ok(Json(json!({
         "deleted": deleted,
@@ -901,10 +1179,11 @@ async fn batch_delete_dlp_rules(
     })))
 }
 
-async fn export_dlp_rules(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+async fn export_dlp_rules(State(state): State<AppState>) -> Result<Json<serde_json::Value>> {
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let rows = client
@@ -948,7 +1227,10 @@ async fn import_dlp_rules(
         return Err(Error::Validation("rules 不能为空".to_string()));
     }
 
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let now = chrono::Utc::now();
@@ -972,7 +1254,13 @@ async fn import_dlp_rules(
 
     // 记录审计日志
     let system_user = Uuid::nil();
-    write_audit_log(&client, system_user, "import_dlp_rules", &format!("导入 {} 条 DLP 规则，{} 条失败", imported, errors.len())).await;
+    write_audit_log(
+        &client,
+        system_user,
+        "import_dlp_rules",
+        &format!("导入 {} 条 DLP 规则，{} 条失败", imported, errors.len()),
+    )
+    .await;
 
     Ok((
         StatusCode::CREATED,
@@ -997,10 +1285,14 @@ async fn report_audit_event(
     State(state): State<AppState>,
     Json(payload): Json<ReportAuditEventRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
-    let user_id = payload.user_id
+    let user_id = payload
+        .user_id
         .and_then(|s| Uuid::parse_str(&s).ok())
         .unwrap_or_else(Uuid::nil);
 
@@ -1024,7 +1316,10 @@ async fn report_audit_event(
 async fn get_sensitive_operations(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let rows = client
@@ -1064,13 +1359,18 @@ async fn create_sensitive_operation(
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
     // 验证
     if payload.name.trim().is_empty() || payload.name.len() < 2 || payload.name.len() > 100 {
-        return Err(Error::Validation("名称长度必须在 2-100 字符之间".to_string()));
+        return Err(Error::Validation(
+            "名称长度必须在 2-100 字符之间".to_string(),
+        ));
     }
     if payload.operation_type.trim().is_empty() {
         return Err(Error::Validation("操作类型不能为空".to_string()));
     }
 
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let id = Uuid::new_v4();
@@ -1110,12 +1410,18 @@ async fn update_sensitive_operation(
     Path(id): Path<Uuid>,
     Json(payload): Json<models::UpdateSensitiveOperationRequest>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // 检查是否存在
     let existing = client
-        .query_opt("SELECT id FROM sensitive_operation_rules WHERE id = $1", &[&id])
+        .query_opt(
+            "SELECT id FROM sensitive_operation_rules WHERE id = $1",
+            &[&id],
+        )
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
@@ -1126,7 +1432,9 @@ async fn update_sensitive_operation(
     // 验证名称
     if let Some(ref name) = payload.name {
         if name.trim().is_empty() || name.len() < 2 || name.len() > 100 {
-            return Err(Error::Validation("名称长度必须在 2-100 字符之间".to_string()));
+            return Err(Error::Validation(
+                "名称长度必须在 2-100 字符之间".to_string(),
+            ));
         }
     }
 
@@ -1135,10 +1443,8 @@ async fn update_sensitive_operation(
     // 动态构建 UPDATE 语句
     let mut set_clauses = vec!["updated_at = $2".to_string()];
     let mut param_idx = 3u32;
-    let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = vec![
-        Box::new(id),
-        Box::new(now),
-    ];
+    let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> =
+        vec![Box::new(id), Box::new(now)];
 
     if let Some(ref name) = payload.name {
         set_clauses.push(format!("name = ${}", param_idx));
@@ -1181,8 +1487,10 @@ async fn update_sensitive_operation(
         set_clauses.join(", ")
     );
 
-    let params_ref: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-        params.iter().map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+    let params_ref: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
+        .iter()
+        .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+        .collect();
 
     client
         .execute(&sql, &params_ref)
@@ -1196,11 +1504,17 @@ async fn delete_sensitive_operation(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let result = client
-        .execute("DELETE FROM sensitive_operation_rules WHERE id = $1", &[&id])
+        .execute(
+            "DELETE FROM sensitive_operation_rules WHERE id = $1",
+            &[&id],
+        )
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
@@ -1215,10 +1529,11 @@ async fn delete_sensitive_operation(
 // 字典管理 (Dictionary Management)
 // ============================================================================
 
-async fn get_dictionaries(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+async fn get_dictionaries(State(state): State<AppState>) -> Result<Json<serde_json::Value>> {
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let rows = client
@@ -1252,7 +1567,10 @@ async fn get_dictionary(
     State(state): State<AppState>,
     Path(dict_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let row = client
@@ -1287,11 +1605,16 @@ async fn create_dictionary(
         return Err(Error::Validation("关键字列表不能为空".to_string()));
     }
 
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // 去重并过滤空字符串
-    let keywords: Vec<String> = payload.keywords.iter()
+    let keywords: Vec<String> = payload
+        .keywords
+        .iter()
         .map(|k| k.trim().to_string())
         .filter(|k| !k.is_empty())
         .collect::<std::collections::HashSet<_>>()
@@ -1312,7 +1635,13 @@ async fn create_dictionary(
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let system_user = Uuid::nil();
-    write_audit_log(&client, system_user, "create_dictionary", &format!("创建字典: {} ({} 个关键字)", payload.name, keyword_count)).await;
+    write_audit_log(
+        &client,
+        system_user,
+        "create_dictionary",
+        &format!("创建字典: {} ({} 个关键字)", payload.name, keyword_count),
+    )
+    .await;
 
     Ok((
         StatusCode::CREATED,
@@ -1333,7 +1662,10 @@ async fn update_dictionary(
     Path(dict_id): Path<Uuid>,
     Json(payload): Json<UpdateDictionaryRequest>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let existing = client
@@ -1363,7 +1695,8 @@ async fn update_dictionary(
     }
 
     if let Some(ref keywords) = payload.keywords {
-        let deduped: Vec<String> = keywords.iter()
+        let deduped: Vec<String> = keywords
+            .iter()
             .map(|k| k.trim().to_string())
             .filter(|k| !k.is_empty())
             .collect::<std::collections::HashSet<_>>()
@@ -1380,7 +1713,10 @@ async fn update_dictionary(
 
     params.push(Box::new(dict_id));
 
-    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params.iter().map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
+        .iter()
+        .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+        .collect();
 
     let query = format!(
         "UPDATE dlp_dictionaries SET {} WHERE id = ${} RETURNING id, name, description, keywords, keyword_count, created_at, updated_at",
@@ -1394,7 +1730,13 @@ async fn update_dictionary(
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let system_user = Uuid::nil();
-    write_audit_log(&client, system_user, "update_dictionary", &format!("更新字典: {}", row.get::<_, String>(1))).await;
+    write_audit_log(
+        &client,
+        system_user,
+        "update_dictionary",
+        &format!("更新字典: {}", row.get::<_, String>(1)),
+    )
+    .await;
 
     Ok(Json(json!({
         "id": row.get::<_, Uuid>(0),
@@ -1411,7 +1753,10 @@ async fn delete_dictionary(
     State(state): State<AppState>,
     Path(dict_id): Path<Uuid>,
 ) -> Result<StatusCode> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let result = client
@@ -1424,17 +1769,23 @@ async fn delete_dictionary(
     }
 
     let system_user = Uuid::nil();
-    write_audit_log(&client, system_user, "delete_dictionary", &format!("删除字典: {}", dict_id)).await;
+    write_audit_log(
+        &client,
+        system_user,
+        "delete_dictionary",
+        &format!("删除字典: {}", dict_id),
+    )
+    .await;
 
     Ok(StatusCode::NO_CONTENT)
 }
 
-
 // Role handlers
-async fn get_roles(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+async fn get_roles(State(state): State<AppState>) -> Result<Json<serde_json::Value>> {
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let rows = client
@@ -1474,7 +1825,10 @@ async fn get_role(
     State(state): State<AppState>,
     Path(role_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // Get role info
@@ -1540,7 +1894,10 @@ async fn create_role(
     State(state): State<AppState>,
     Json(payload): Json<CreateRoleRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // Check if role already exists
@@ -1582,7 +1939,10 @@ async fn update_role(
     Path(role_id): Path<Uuid>,
     Json(payload): Json<UpdateRoleRequest>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // Check if role exists
@@ -1638,7 +1998,10 @@ async fn delete_role(
     State(state): State<AppState>,
     Path(role_id): Path<Uuid>,
 ) -> Result<StatusCode> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let result = client
@@ -1658,7 +2021,10 @@ async fn assign_permissions(
     Path(role_id): Path<Uuid>,
     Json(payload): Json<AssignPermissionsRequest>,
 ) -> Result<StatusCode> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // Check if role exists
@@ -1673,7 +2039,10 @@ async fn assign_permissions(
 
     // Delete existing permissions
     client
-        .execute("DELETE FROM role_permissions WHERE role_id = $1", &[&role_id])
+        .execute(
+            "DELETE FROM role_permissions WHERE role_id = $1",
+            &[&role_id],
+        )
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
@@ -1693,10 +2062,11 @@ async fn assign_permissions(
 }
 
 // Permission handlers
-async fn get_permissions(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+async fn get_permissions(State(state): State<AppState>) -> Result<Json<serde_json::Value>> {
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let rows = client
@@ -1724,10 +2094,14 @@ async fn get_permissions(
         .collect();
 
     // Group permissions by resource
-    let mut grouped: std::collections::HashMap<String, Vec<serde_json::Value>> = std::collections::HashMap::new();
+    let mut grouped: std::collections::HashMap<String, Vec<serde_json::Value>> =
+        std::collections::HashMap::new();
     for permission in permissions {
         let resource = permission["resource"].as_str().unwrap().to_string();
-        grouped.entry(resource).or_insert_with(Vec::new).push(permission);
+        grouped
+            .entry(resource)
+            .or_insert_with(Vec::new)
+            .push(permission);
     }
 
     Ok(Json(json!({ "permissions": grouped })))
@@ -1738,7 +2112,10 @@ async fn get_user_roles(
     State(state): State<AppState>,
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // Check if user exists
@@ -1783,7 +2160,10 @@ async fn assign_user_roles(
     Path(user_id): Path<Uuid>,
     Json(payload): Json<AssignPermissionsRequest>,
 ) -> Result<StatusCode> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // Check if user exists
@@ -1831,12 +2211,18 @@ async fn create_user(
     State(state): State<AppState>,
     Json(payload): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // Check if user already exists
     let existing = client
-        .query_opt("SELECT id FROM users WHERE username = $1", &[&payload.username])
+        .query_opt(
+            "SELECT id FROM users WHERE username = $1",
+            &[&payload.username],
+        )
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
@@ -1844,7 +2230,8 @@ async fn create_user(
         return Err(Error::UserExists);
     }
 
-    let auth = AuthManager::new(std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string()));
+    let auth =
+        AuthManager::new(std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string()));
     let password_hash = auth.hash_password(&payload.password)?;
 
     let user_id = Uuid::new_v4();
@@ -1854,7 +2241,14 @@ async fn create_user(
         .execute(
             "INSERT INTO users (id, username, email, password_hash, created_at, updated_at) 
              VALUES ($1, $2, $3, $4, $5, $6)",
-            &[&user_id, &payload.username, &payload.email, &password_hash, &now, &now],
+            &[
+                &user_id,
+                &payload.username,
+                &payload.email,
+                &password_hash,
+                &now,
+                &now,
+            ],
         )
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
@@ -1887,11 +2281,13 @@ async fn import_users(
 ) -> Result<Json<serde_json::Value>> {
     const MAX_ROWS: usize = 1000;
 
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
-    let auth = AuthManager::new(
-        std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string())
-    );
+    let auth =
+        AuthManager::new(std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string()));
 
     let mut lines = body.lines();
     let _header = lines.next(); // 跳过表头
@@ -1951,7 +2347,8 @@ async fn import_single_user(
         return Err(format!("用户名 '{}' 已存在", username));
     }
 
-    let password_hash = auth.hash_password(password)
+    let password_hash = auth
+        .hash_password(password)
         .map_err(|_| "密码哈希失败".to_string())?;
 
     let user_id = Uuid::new_v4();
@@ -1992,7 +2389,10 @@ async fn get_policy_changes(
     State(state): State<AppState>,
     Query(params): Query<PolicyChangeQuery>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let page_size = params.page_size.unwrap_or(20).min(100).max(1);
@@ -2019,7 +2419,8 @@ async fn get_policy_changes(
     if let Some(ref start_date) = params.start_date {
         if let Ok(dt) = chrono::NaiveDate::parse_from_str(start_date, "%Y-%m-%d") {
             let start = dt.and_hms_opt(0, 0, 0).unwrap();
-            let start_utc = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(start, chrono::Utc);
+            let start_utc =
+                chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(start, chrono::Utc);
             conditions.push(format!("changed_at >= ${}", param_idx));
             query_params.push(Box::new(start_utc));
             param_idx += 1;
@@ -2029,7 +2430,8 @@ async fn get_policy_changes(
     if let Some(ref end_date) = params.end_date {
         if let Ok(dt) = chrono::NaiveDate::parse_from_str(end_date, "%Y-%m-%d") {
             let end = dt.and_hms_opt(23, 59, 59).unwrap();
-            let end_utc = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(end, chrono::Utc);
+            let end_utc =
+                chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(end, chrono::Utc);
             conditions.push(format!("changed_at <= ${}", param_idx));
             query_params.push(Box::new(end_utc));
             param_idx += 1;
@@ -2038,7 +2440,10 @@ async fn get_policy_changes(
 
     if let Some(ref search) = params.search {
         let pattern = format!("%{}%", search);
-        conditions.push(format!("(rule_name ILIKE ${0} OR changed_by_name ILIKE ${0})", param_idx));
+        conditions.push(format!(
+            "(rule_name ILIKE ${0} OR changed_by_name ILIKE ${0})",
+            param_idx
+        ));
         query_params.push(Box::new(pattern));
         param_idx += 1;
     }
@@ -2050,9 +2455,14 @@ async fn get_policy_changes(
     };
 
     // 查询总数
-    let count_sql = format!("SELECT COUNT(*) FROM policy_change_records {}", where_clause);
-    let count_params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-        query_params.iter().map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+    let count_sql = format!(
+        "SELECT COUNT(*) FROM policy_change_records {}",
+        where_clause
+    );
+    let count_params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = query_params
+        .iter()
+        .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+        .collect();
     let count_row = client
         .query_one(&count_sql, &count_params)
         .await
@@ -2074,8 +2484,10 @@ async fn get_policy_changes(
         where_clause, limit_idx, offset_idx
     );
 
-    let data_params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-        query_params.iter().map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+    let data_params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = query_params
+        .iter()
+        .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+        .collect();
     let rows = client
         .query(&data_sql, &data_params)
         .await
@@ -2112,10 +2524,11 @@ async fn get_policy_changes(
     })))
 }
 
-async fn get_policy_change_stats(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+async fn get_policy_change_stats(State(state): State<AppState>) -> Result<Json<serde_json::Value>> {
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // 按变更类型统计
@@ -2127,9 +2540,10 @@ async fn get_policy_change_stats(
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
-    let by_change_type: Vec<_> = type_rows.iter().map(|r| {
-        json!({ "type": r.get::<_, String>(0), "count": r.get::<_, i64>(1) })
-    }).collect();
+    let by_change_type: Vec<_> = type_rows
+        .iter()
+        .map(|r| json!({ "type": r.get::<_, String>(0), "count": r.get::<_, i64>(1) }))
+        .collect();
 
     // 按规则类型统计
     let rule_rows = client
@@ -2140,9 +2554,10 @@ async fn get_policy_change_stats(
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
-    let by_rule_type: Vec<_> = rule_rows.iter().map(|r| {
-        json!({ "type": r.get::<_, String>(0), "count": r.get::<_, i64>(1) })
-    }).collect();
+    let by_rule_type: Vec<_> = rule_rows
+        .iter()
+        .map(|r| json!({ "type": r.get::<_, String>(0), "count": r.get::<_, i64>(1) }))
+        .collect();
 
     // 最近 7 天趋势
     let trend_rows = client
@@ -2157,12 +2572,15 @@ async fn get_policy_change_stats(
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
-    let trend: Vec<_> = trend_rows.iter().map(|r| {
-        json!({
-            "date": r.get::<_, chrono::NaiveDate>(0).to_string(),
-            "count": r.get::<_, i64>(1),
+    let trend: Vec<_> = trend_rows
+        .iter()
+        .map(|r| {
+            json!({
+                "date": r.get::<_, chrono::NaiveDate>(0).to_string(),
+                "count": r.get::<_, i64>(1),
+            })
         })
-    }).collect();
+        .collect();
 
     // 总数
     let total_row = client
@@ -2179,7 +2597,6 @@ async fn get_policy_change_stats(
     })))
 }
 
-
 // ============================================================================
 // 客户端管理 (Client Management)
 // ============================================================================
@@ -2195,7 +2612,10 @@ async fn get_clients(
     State(state): State<AppState>,
     Query(params): Query<ClientQuery>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let mut conditions: Vec<String> = vec![];
@@ -2204,7 +2624,10 @@ async fn get_clients(
 
     if let Some(ref search) = params.search {
         let pattern = format!("%{}%", search);
-        conditions.push(format!("(username ILIKE ${0} OR client_name ILIKE ${0} OR ip_address ILIKE ${0})", idx));
+        conditions.push(format!(
+            "(username ILIKE ${0} OR client_name ILIKE ${0} OR ip_address ILIKE ${0})",
+            idx
+        ));
         query_params.push(Box::new(pattern));
         idx += 1;
     }
@@ -2233,30 +2656,37 @@ async fn get_clients(
         where_clause
     );
 
-    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-        query_params.iter().map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = query_params
+        .iter()
+        .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+        .collect();
 
-    let rows = client.query(&sql, &param_refs).await
+    let rows = client
+        .query(&sql, &param_refs)
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
-    let clients: Vec<_> = rows.iter().map(|r| {
-        json!({
-            "id": r.get::<_, Uuid>(0),
-            "user_id": r.try_get::<_, Option<Uuid>>(1).unwrap_or(None),
-            "username": r.try_get::<_, Option<String>>(2).unwrap_or(None),
-            "client_name": r.try_get::<_, Option<String>>(3).unwrap_or(None),
-            "version": r.try_get::<_, Option<String>>(4).unwrap_or(None),
-            "os": r.try_get::<_, Option<String>>(5).unwrap_or(None),
-            "ip_address": r.try_get::<_, Option<String>>(6).unwrap_or(None),
-            "last_activity": r.get::<_, chrono::DateTime<chrono::Utc>>(7),
-            "online": r.get::<_, bool>(8),
-            "policy_version": r.try_get::<_, Option<String>>(9).unwrap_or(None),
-            "registered_at": r.get::<_, chrono::DateTime<chrono::Utc>>(10),
-            "updated_at": r.get::<_, chrono::DateTime<chrono::Utc>>(11),
-            "device_fingerprint": r.try_get::<_, Option<serde_json::Value>>(12).unwrap_or(None),
-            "needs_upgrade": r.try_get::<_, bool>(13).unwrap_or(false),
+    let clients: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<_, Uuid>(0),
+                "user_id": r.try_get::<_, Option<Uuid>>(1).unwrap_or(None),
+                "username": r.try_get::<_, Option<String>>(2).unwrap_or(None),
+                "client_name": r.try_get::<_, Option<String>>(3).unwrap_or(None),
+                "version": r.try_get::<_, Option<String>>(4).unwrap_or(None),
+                "os": r.try_get::<_, Option<String>>(5).unwrap_or(None),
+                "ip_address": r.try_get::<_, Option<String>>(6).unwrap_or(None),
+                "last_activity": r.get::<_, chrono::DateTime<chrono::Utc>>(7),
+                "online": r.get::<_, bool>(8),
+                "policy_version": r.try_get::<_, Option<String>>(9).unwrap_or(None),
+                "registered_at": r.get::<_, chrono::DateTime<chrono::Utc>>(10),
+                "updated_at": r.get::<_, chrono::DateTime<chrono::Utc>>(11),
+                "device_fingerprint": r.try_get::<_, Option<serde_json::Value>>(12).unwrap_or(None),
+                "needs_upgrade": r.try_get::<_, bool>(13).unwrap_or(false),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({ "clients": clients })))
 }
@@ -2265,7 +2695,10 @@ async fn get_client_detail(
     State(state): State<AppState>,
     Path(client_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let row = client
@@ -2300,11 +2733,17 @@ async fn delete_client_record(
     State(state): State<AppState>,
     Path(client_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let result = client
-        .execute("DELETE FROM registered_clients WHERE id = $1", &[&client_id])
+        .execute(
+            "DELETE FROM registered_clients WHERE id = $1",
+            &[&client_id],
+        )
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
@@ -2315,17 +2754,25 @@ async fn delete_client_record(
     Ok(Json(json!({ "message": "删除成功" })))
 }
 
-async fn get_client_stats(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+async fn get_client_stats(State(state): State<AppState>) -> Result<Json<serde_json::Value>> {
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
-    let total_row = client.query_one("SELECT COUNT(*) FROM registered_clients", &[]).await
+    let total_row = client
+        .query_one("SELECT COUNT(*) FROM registered_clients", &[])
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
     let total: i64 = total_row.get(0);
 
-    let online_row = client.query_one("SELECT COUNT(*) FROM registered_clients WHERE online = true", &[]).await
+    let online_row = client
+        .query_one(
+            "SELECT COUNT(*) FROM registered_clients WHERE online = true",
+            &[],
+        )
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
     let online: i64 = online_row.get(0);
 
@@ -2334,18 +2781,20 @@ async fn get_client_stats(
         &[],
     ).await.map_err(|e| Error::Database(e.to_string()))?;
 
-    let by_os: Vec<_> = os_rows.iter().map(|r| {
-        json!({ "os": r.get::<_, String>(0), "count": r.get::<_, i64>(1) })
-    }).collect();
+    let by_os: Vec<_> = os_rows
+        .iter()
+        .map(|r| json!({ "os": r.get::<_, String>(0), "count": r.get::<_, i64>(1) }))
+        .collect();
 
     let version_rows = client.query(
         "SELECT COALESCE(version, 'Unknown') as version, COUNT(*) as count FROM registered_clients GROUP BY version ORDER BY count DESC",
         &[],
     ).await.map_err(|e| Error::Database(e.to_string()))?;
 
-    let by_version: Vec<_> = version_rows.iter().map(|r| {
-        json!({ "version": r.get::<_, String>(0), "count": r.get::<_, i64>(1) })
-    }).collect();
+    let by_version: Vec<_> = version_rows
+        .iter()
+        .map(|r| json!({ "version": r.get::<_, String>(0), "count": r.get::<_, i64>(1) }))
+        .collect();
 
     Ok(Json(json!({
         "total": total,
@@ -2358,16 +2807,17 @@ async fn get_client_stats(
 
 // ==================== 系统配置 API ====================
 
-async fn get_settings(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+async fn get_settings(State(state): State<AppState>) -> Result<Json<serde_json::Value>> {
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
-    let rows = client.query(
-        "SELECT key, value FROM system_settings",
-        &[],
-    ).await.map_err(|e| Error::Database(e.to_string()))?;
+    let rows = client
+        .query("SELECT key, value FROM system_settings", &[])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
 
     let mut config = json!({
         "dlp_enabled": true,
@@ -2400,16 +2850,28 @@ async fn update_settings(
     State(state): State<AppState>,
     Json(payload): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let valid_keys = [
-        "dlp_enabled", "dlp_scan_timeout_ms", "dlp_fail_open",
-        "audit_retention_days", "audit_enabled",
-        "client_heartbeat_interval_s", "client_offline_threshold_s",
-        "policy_sync_interval_s", "policy_auto_push",
-        "watermark_enabled", "watermark_template", "watermark_font_size",
-        "watermark_opacity", "watermark_position", "watermark_color",
+        "dlp_enabled",
+        "dlp_scan_timeout_ms",
+        "dlp_fail_open",
+        "audit_retention_days",
+        "audit_enabled",
+        "client_heartbeat_interval_s",
+        "client_offline_threshold_s",
+        "policy_sync_interval_s",
+        "policy_auto_push",
+        "watermark_enabled",
+        "watermark_template",
+        "watermark_font_size",
+        "watermark_opacity",
+        "watermark_position",
+        "watermark_color",
         "minimum_client_version",
     ];
 
@@ -2432,7 +2894,8 @@ async fn update_settings(
             Uuid::nil(),
             "update_settings",
             &format!("更新系统配置: {}", changed_keys.join(", ")),
-        ).await;
+        )
+        .await;
     }
 
     Ok(Json(json!({ "message": "配置保存成功" })))
@@ -2483,20 +2946,26 @@ async fn get_client_config(
     State(state): State<AppState>,
     Query(params): Query<ClientConfigQuery>,
 ) -> Result<Json<ClientConfigResponse>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // 尝试查找特定客户端配置，否则使用全局默认
     let row = if let Some(ref cid) = params.client_id {
         let uuid = Uuid::parse_str(cid)
             .map_err(|_| Error::Validation("Invalid client_id format".into()))?;
-        client.query_opt(
-            "SELECT llm_backend, llm_api_key, llm_model, llm_base_url, \
+        client
+            .query_opt(
+                "SELECT llm_backend, llm_api_key, llm_model, llm_base_url, \
              safety_enabled, skills_enabled, extensions_enabled, \
              max_cost_per_day_cents, config_version, updated_at \
              FROM client_configs WHERE client_id = $1",
-            &[&uuid],
-        ).await.map_err(|e| Error::Database(e.to_string()))?
+                &[&uuid],
+            )
+            .await
+            .map_err(|e| Error::Database(e.to_string()))?
     } else {
         None
     };
@@ -2504,13 +2973,16 @@ async fn get_client_config(
     // 如果没有特定配置，查找全局默认
     let row = match row {
         Some(r) => Some(r),
-        None => client.query_opt(
-            "SELECT llm_backend, llm_api_key, llm_model, llm_base_url, \
+        None => client
+            .query_opt(
+                "SELECT llm_backend, llm_api_key, llm_model, llm_base_url, \
              safety_enabled, skills_enabled, extensions_enabled, \
              max_cost_per_day_cents, config_version, updated_at \
              FROM client_configs WHERE client_id IS NULL",
-            &[],
-        ).await.map_err(|e| Error::Database(e.to_string()))?,
+                &[],
+            )
+            .await
+            .map_err(|e| Error::Database(e.to_string()))?,
     };
 
     let response = match row {
@@ -2527,21 +2999,33 @@ async fn get_client_config(
                 max_cost_per_day_cents: r.get(7),
                 config_version: r.get(8),
                 updated_at: updated_at.to_rfc3339(),
-                watermark_enabled: None, watermark_template: None,
-                watermark_font_size: None, watermark_opacity: None,
-                watermark_position: None, watermark_color: None,
+                watermark_enabled: None,
+                watermark_template: None,
+                watermark_font_size: None,
+                watermark_opacity: None,
+                watermark_position: None,
+                watermark_color: None,
                 needs_upgrade: None,
                 skill_registry_url: None,
             }
         }
         None => ClientConfigResponse {
-            llm_backend: None, llm_api_key: None, llm_model: None, llm_base_url: None,
-            safety_enabled: None, skills_enabled: None, extensions_enabled: None,
-            max_cost_per_day_cents: None, config_version: 0,
+            llm_backend: None,
+            llm_api_key: None,
+            llm_model: None,
+            llm_base_url: None,
+            safety_enabled: None,
+            skills_enabled: None,
+            extensions_enabled: None,
+            max_cost_per_day_cents: None,
+            config_version: 0,
             updated_at: Utc::now().to_rfc3339(),
-            watermark_enabled: None, watermark_template: None,
-            watermark_font_size: None, watermark_opacity: None,
-            watermark_position: None, watermark_color: None,
+            watermark_enabled: None,
+            watermark_template: None,
+            watermark_font_size: None,
+            watermark_opacity: None,
+            watermark_position: None,
+            watermark_color: None,
             needs_upgrade: None,
             skill_registry_url: None,
         },
@@ -2569,17 +3053,25 @@ async fn get_client_config(
     // 填充私有注册表地址（需求 14.17）
     // 从 system_settings 读取 admin_base_url，拼接 client_token 作为身份标识
     if let Ok(rows) = client
-        .query("SELECT value FROM system_settings WHERE key = 'admin_base_url'", &[])
+        .query(
+            "SELECT value FROM system_settings WHERE key = 'admin_base_url'",
+            &[],
+        )
         .await
     {
         if let Some(row) = rows.first() {
             let val: serde_json::Value = row.get(0);
             if let Some(base_url) = val.as_str() {
-                let token_suffix = params.client_id
+                let token_suffix = params
+                    .client_id
                     .as_deref()
                     .map(|id| format!("?client_token={}", id))
                     .unwrap_or_default();
-                response.skill_registry_url = Some(format!("{}/api/v1{}", base_url.trim_end_matches('/'), token_suffix));
+                response.skill_registry_url = Some(format!(
+                    "{}/api/v1{}",
+                    base_url.trim_end_matches('/'),
+                    token_suffix
+                ));
             }
         }
     }
@@ -2593,9 +3085,13 @@ async fn merge_watermark_settings(
     client: &deadpool_postgres::Object,
     response: &mut ClientConfigResponse,
 ) {
-    let rows = match client.query(
-        "SELECT key, value FROM system_settings WHERE key LIKE 'watermark_%'", &[],
-    ).await {
+    let rows = match client
+        .query(
+            "SELECT key, value FROM system_settings WHERE key LIKE 'watermark_%'",
+            &[],
+        )
+        .await
+    {
         Ok(r) => r,
         Err(_) => return,
     };
@@ -2643,24 +3139,34 @@ async fn post_client_reports(
     Json(payload): Json<Vec<ClientReportPayload>>,
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
     if payload.is_empty() {
-        return Ok((
-            StatusCode::OK,
-            Json(json!({ "received": 0 })),
-        ));
+        return Ok((StatusCode::OK, Json(json!({ "received": 0 }))));
     }
 
     if payload.len() > 1000 {
-        return Err(Error::Validation("Too many reports in batch (max 1000)".into()));
+        return Err(Error::Validation(
+            "Too many reports in batch (max 1000)".into(),
+        ));
     }
 
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let now = Utc::now();
     let mut inserted = 0u64;
 
     for report in &payload {
-        let valid_types = ["audit_log", "dlp_event", "usage_stats", "health_status", "conversation", "usage", "model_error"];
+        let valid_types = [
+            "audit_log",
+            "dlp_event",
+            "usage_stats",
+            "health_status",
+            "conversation",
+            "usage",
+            "model_error",
+        ];
         if !valid_types.contains(&report.report_type.as_str()) {
             tracing::warn!(report_type = %report.report_type, "Unknown report type, skipping");
             continue;
@@ -2680,10 +3186,14 @@ async fn post_client_reports(
         if report.report_type == "model_error" {
             let pool = state.db_pool.clone();
             let model_id = report.data["model_id"].as_str().unwrap_or("").to_string();
-            let error_msg = report.data["error"].as_str().unwrap_or("unknown error").to_string();
+            let error_msg = report.data["error"]
+                .as_str()
+                .unwrap_or("unknown error")
+                .to_string();
             let data = report.data.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_model_error_report(&pool, &model_id, &error_msg, data).await {
+                if let Err(e) = handle_model_error_report(&pool, &model_id, &error_msg, data).await
+                {
                     tracing::warn!(error = %e, "Failed to handle model error report");
                 }
             });
@@ -2693,9 +3203,12 @@ async fn post_client_reports(
 
         // conversation 类型走专用处理逻辑（幂等写入 conversations 表）
         if report.report_type == "conversation" {
-            match serde_json::from_value::<crate::models::ConversationReportPayload>(report.data.clone()) {
+            match serde_json::from_value::<crate::models::ConversationReportPayload>(
+                report.data.clone(),
+            ) {
                 Ok(conv_payload) => {
-                    match handlers::conversations::ingest_conversation(&client, &conv_payload).await {
+                    match handlers::conversations::ingest_conversation(&client, &conv_payload).await
+                    {
                         Ok(Some(summary)) => {
                             inserted += 1;
                             // 异步触发费用上报，不阻塞响应
@@ -2704,7 +3217,9 @@ async fn post_client_reports(
                             tokio::spawn(report_conversation_usage(pool, user_id, summary));
                         }
                         Ok(None) => { /* 幂等跳过 */ }
-                        Err(e) => { tracing::warn!(error = %e, "Failed to ingest conversation"); }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Failed to ingest conversation");
+                        }
                     }
                 }
                 Err(e) => {
@@ -2715,17 +3230,26 @@ async fn post_client_reports(
         }
 
         let id = Uuid::new_v4();
-        client.execute(
-            "INSERT INTO client_reports (id, report_type, payload, received_at) \
+        client
+            .execute(
+                "INSERT INTO client_reports (id, report_type, payload, received_at) \
              VALUES ($1, $2, $3, $4)",
-            &[&id, &report.report_type, &report.data, &now],
-        ).await.map_err(|e| Error::Database(e.to_string()))?;
+                &[&id, &report.report_type, &report.data, &now],
+            )
+            .await
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         // DLP 事件：异步触发告警（不阻塞响应）
         if report.report_type == "dlp_event" {
             let pool = state.db_pool.clone();
-            let severity = report.data["severity"].as_str().unwrap_or("medium").to_string();
-            let rule_name = report.data["rule_name"].as_str().unwrap_or("unknown").to_string();
+            let severity = report.data["severity"]
+                .as_str()
+                .unwrap_or("medium")
+                .to_string();
+            let rule_name = report.data["rule_name"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string();
             let event_data = report.data.clone();
             tokio::spawn(async move {
                 let trigger = crate::models::AlertTrigger {
@@ -2745,13 +3269,8 @@ async fn post_client_reports(
 
     info!(count = inserted, "Client reports received");
 
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({ "received": inserted })),
-    ))
+    Ok((StatusCode::CREATED, Json(json!({ "received": inserted }))))
 }
-
-
 
 // ============================================================================
 // 辅助函数
@@ -2877,7 +3396,10 @@ async fn handle_model_error_report(
             let trigger = crate::models::AlertTrigger {
                 event_type: "model_error".into(),
                 severity: "high".into(),
-                detail: format!("模型 {} 连续失败 {} 次: {}", display_name, failures, error_msg),
+                detail: format!(
+                    "模型 {} 连续失败 {} 次: {}",
+                    display_name, failures, error_msg
+                ),
                 event_data: Some(event_data),
             };
             if let Err(e) = crate::handlers::alerts::trigger_alert(pool, &trigger).await {
@@ -2932,11 +3454,16 @@ async fn update_user(
     // 验证密码长度
     if let Some(ref password) = payload.password {
         if password.len() < 8 || password.len() > 128 {
-            return Err(Error::Validation("密码长度必须在 8-128 字符之间".to_string()));
+            return Err(Error::Validation(
+                "密码长度必须在 8-128 字符之间".to_string(),
+            ));
         }
     }
 
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // 检查用户是否存在
@@ -2963,9 +3490,8 @@ async fn update_user(
     }
 
     if let Some(ref password) = payload.password {
-        let auth = AuthManager::new(
-            std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string()),
-        );
+        let auth =
+            AuthManager::new(std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string()));
         let password_hash = auth.hash_password(password)?;
         set_clauses.push(format!("password_hash = ${}", param_idx));
         params.push(Box::new(password_hash));
@@ -2982,7 +3508,9 @@ async fn update_user(
 
     // 如果没有任何字段需要更新
     if changed_fields.is_empty() {
-        return Err(Error::Validation("至少需要提供一个要更新的字段".to_string()));
+        return Err(Error::Validation(
+            "至少需要提供一个要更新的字段".to_string(),
+        ));
     }
 
     params.push(Box::new(user_id));
@@ -2993,8 +3521,10 @@ async fn update_user(
         param_idx
     );
 
-    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-        params.iter().map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
+        .iter()
+        .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+        .collect();
 
     let row = client
         .query_one(&sql, &param_refs)
@@ -3002,7 +3532,11 @@ async fn update_user(
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // 写入审计日志
-    let details = format!("更新用户 {}，修改字段: {}", row.get::<_, String>(1), changed_fields.join(", "));
+    let details = format!(
+        "更新用户 {}，修改字段: {}",
+        row.get::<_, String>(1),
+        changed_fields.join(", ")
+    );
     write_audit_log(&client, user_id, "update_user", &details).await;
 
     Ok(Json(json!({
@@ -3014,15 +3548,15 @@ async fn update_user(
     })))
 }
 
-
 // ============================================================================
 // 仪表盘 API (Dashboard)
 // ============================================================================
 
-async fn get_dashboard_stats(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+async fn get_dashboard_stats(State(state): State<AppState>) -> Result<Json<serde_json::Value>> {
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let total_users: i64 = client
@@ -3032,7 +3566,10 @@ async fn get_dashboard_stats(
         .get(0);
 
     let online_clients: i64 = client
-        .query_one("SELECT COUNT(*) FROM registered_clients WHERE online = true", &[])
+        .query_one(
+            "SELECT COUNT(*) FROM registered_clients WHERE online = true",
+            &[],
+        )
         .await
         .map_err(|e| Error::Database(e.to_string()))?
         .get(0);
@@ -3096,10 +3633,11 @@ async fn get_dashboard_stats(
     })))
 }
 
-async fn get_dashboard_activity(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+async fn get_dashboard_activity(State(state): State<AppState>) -> Result<Json<serde_json::Value>> {
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let rows = client
@@ -3130,10 +3668,11 @@ async fn get_dashboard_activity(
     Ok(Json(json!({ "logs": logs })))
 }
 
-async fn get_dashboard_trends(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+async fn get_dashboard_trends(State(state): State<AppState>) -> Result<Json<serde_json::Value>> {
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // 近 7 天用户活跃度（按审计日志中不同 user_id 计数）
@@ -3188,7 +3727,6 @@ async fn get_dashboard_trends(
     })))
 }
 
-
 // ============================================================================
 // 客户端配置更新 (PUT /api/client-config)
 // ============================================================================
@@ -3200,25 +3738,35 @@ async fn update_client_config(
     // 验证 max_cost_per_day_cents
     if let Some(cost) = payload.max_cost_per_day_cents {
         if cost < 0 {
-            return Err(Error::Validation("max_cost_per_day_cents 必须 >= 0".to_string()));
+            return Err(Error::Validation(
+                "max_cost_per_day_cents 必须 >= 0".to_string(),
+            ));
         }
     }
 
     // 验证 llm_base_url
     if let Some(ref url) = payload.llm_base_url {
         if !url.is_empty() && !url.starts_with("http://") && !url.starts_with("https://") {
-            return Err(Error::Validation("llm_base_url 格式不正确，需以 http:// 或 https:// 开头".to_string()));
+            return Err(Error::Validation(
+                "llm_base_url 格式不正确，需以 http:// 或 https:// 开头".to_string(),
+            ));
         }
     }
 
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let now = chrono::Utc::now();
 
     // 检查全局配置是否存在
     let existing = client
-        .query_opt("SELECT id, config_version FROM client_configs WHERE client_id IS NULL", &[])
+        .query_opt(
+            "SELECT id, config_version FROM client_configs WHERE client_id IS NULL",
+            &[],
+        )
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
@@ -3234,10 +3782,8 @@ async fn update_client_config(
             "config_version = $1".to_string(),
             "updated_at = $2".to_string(),
         ];
-        let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = vec![
-            Box::new(config_version),
-            Box::new(now),
-        ];
+        let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> =
+            vec![Box::new(config_version), Box::new(now)];
         let mut param_idx = 3u32;
         let mut changed_fields: Vec<String> = vec![];
 
@@ -3298,10 +3844,14 @@ async fn update_client_config(
             param_idx
         );
 
-        let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-            params.iter().map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+        let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
+            .iter()
+            .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+            .collect();
 
-        client.execute(&sql, &param_refs).await
+        client
+            .execute(&sql, &param_refs)
+            .await
             .map_err(|e| Error::Database(e.to_string()))?;
 
         // 审计日志（不记录 api_key 值）
@@ -3310,8 +3860,13 @@ async fn update_client_config(
             &client,
             system_user,
             "update_client_config",
-            &format!("更新客户端配置 v{}，变更字段: {}", config_version, changed_fields.join(", ")),
-        ).await;
+            &format!(
+                "更新客户端配置 v{}，变更字段: {}",
+                config_version,
+                changed_fields.join(", ")
+            ),
+        )
+        .await;
     } else {
         // 不存在全局配置，创建一条
         config_version = 1;
@@ -3328,7 +3883,13 @@ async fn update_client_config(
         ).await.map_err(|e| Error::Database(e.to_string()))?;
 
         let system_user = Uuid::nil();
-        write_audit_log(&client, system_user, "update_client_config", "创建全局客户端配置 v1").await;
+        write_audit_log(
+            &client,
+            system_user,
+            "update_client_config",
+            "创建全局客户端配置 v1",
+        )
+        .await;
     }
 
     Ok(Json(json!({
@@ -3338,7 +3899,6 @@ async fn update_client_config(
     })))
 }
 
-
 // ============================================================================
 // 审计日志导出 (GET /api/audit-logs/export)
 // ============================================================================
@@ -3347,7 +3907,10 @@ async fn export_audit_logs(
     State(state): State<AppState>,
     Query(params): Query<AuditLogExportQuery>,
 ) -> Result<axum::response::Response> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let mut conditions: Vec<String> = vec![];
@@ -3356,9 +3919,13 @@ async fn export_audit_logs(
 
     if let Some(ref start_time) = params.start_time {
         let dt = chrono::DateTime::parse_from_rfc3339(start_time)
-            .or_else(|_| chrono::NaiveDateTime::parse_from_str(start_time, "%Y-%m-%dT%H:%M:%S")
-                .map(|ndt| ndt.and_utc().fixed_offset()))
-            .map_err(|_| Error::Validation("start_time 格式不正确，需为 ISO 8601 格式".to_string()))?;
+            .or_else(|_| {
+                chrono::NaiveDateTime::parse_from_str(start_time, "%Y-%m-%dT%H:%M:%S")
+                    .map(|ndt| ndt.and_utc().fixed_offset())
+            })
+            .map_err(|_| {
+                Error::Validation("start_time 格式不正确，需为 ISO 8601 格式".to_string())
+            })?;
         conditions.push(format!("a.created_at >= ${}", idx));
         query_params.push(Box::new(dt.with_timezone(&chrono::Utc)));
         idx += 1;
@@ -3366,9 +3933,13 @@ async fn export_audit_logs(
 
     if let Some(ref end_time) = params.end_time {
         let dt = chrono::DateTime::parse_from_rfc3339(end_time)
-            .or_else(|_| chrono::NaiveDateTime::parse_from_str(end_time, "%Y-%m-%dT%H:%M:%S")
-                .map(|ndt| ndt.and_utc().fixed_offset()))
-            .map_err(|_| Error::Validation("end_time 格式不正确，需为 ISO 8601 格式".to_string()))?;
+            .or_else(|_| {
+                chrono::NaiveDateTime::parse_from_str(end_time, "%Y-%m-%dT%H:%M:%S")
+                    .map(|ndt| ndt.and_utc().fixed_offset())
+            })
+            .map_err(|_| {
+                Error::Validation("end_time 格式不正确，需为 ISO 8601 格式".to_string())
+            })?;
         conditions.push(format!("a.created_at <= ${}", idx));
         query_params.push(Box::new(dt.with_timezone(&chrono::Utc)));
         idx += 1;
@@ -3402,10 +3973,14 @@ async fn export_audit_logs(
         where_clause
     );
 
-    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-        query_params.iter().map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = query_params
+        .iter()
+        .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+        .collect();
 
-    let rows = client.query(&sql, &param_refs).await
+    let rows = client
+        .query(&sql, &param_refs)
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // 构建 CSV
@@ -3436,11 +4011,13 @@ async fn export_audit_logs(
     Ok(axum::response::Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "text/csv; charset=utf-8")
-        .header("Content-Disposition", format!("attachment; filename=\"{}\"", filename))
+        .header(
+            "Content-Disposition",
+            format!("attachment; filename=\"{}\"", filename),
+        )
         .body(axum::body::Body::from(csv))
         .unwrap())
 }
-
 
 // ============================================================================
 // 客户端强制下线与策略推送 (Client Operations)
@@ -3453,7 +4030,10 @@ async fn disconnect_client(
     State(state): State<AppState>,
     Path(client_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // 检查客户端是否存在
@@ -3510,7 +4090,10 @@ async fn push_policy_to_client(
     State(state): State<AppState>,
     Path(client_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // 检查客户端是否存在
@@ -3556,10 +4139,11 @@ async fn push_policy_to_client(
 }
 
 /// POST /api/clients/push-policy-all — 向所有在线客户端推送策略
-async fn push_policy_all(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+async fn push_policy_all(State(state): State<AppState>) -> Result<Json<serde_json::Value>> {
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let now = chrono::Utc::now();
@@ -3589,7 +4173,6 @@ async fn push_policy_all(
     })))
 }
 
-
 // ============================================================================
 // 部门管理 CRUD (Department Management)
 // ============================================================================
@@ -3603,14 +4186,21 @@ async fn get_departments(
     State(state): State<AppState>,
     Query(params): Query<models::DepartmentQuery>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let (sql, query_params) = build_departments_query(&params);
-    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-        query_params.iter().map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = query_params
+        .iter()
+        .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+        .collect();
 
-    let rows = client.query(&sql, &param_refs).await
+    let rows = client
+        .query(&sql, &param_refs)
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let departments: Vec<serde_json::Value> = rows.iter().map(|r| {
@@ -3700,13 +4290,16 @@ fn build_department_tree(departments: &[serde_json::Value]) -> Vec<serde_json::V
 /// 构建部门列表查询 SQL（支持搜索 + 筛选）
 fn build_departments_query(
     params: &models::DepartmentQuery,
-) -> (String, Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>>) {
+) -> (
+    String,
+    Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>>,
+) {
     let mut sql = String::from(
         "SELECT d.id, d.name, d.description, d.token_quota_enabled, d.token_quota_per_day,
                 d.parent_id, d.created_at, d.updated_at,
                 COUNT(u.id) as member_count
          FROM departments d
-         LEFT JOIN users u ON u.department_id = d.id"
+         LEFT JOIN users u ON u.department_id = d.id",
     );
     let mut conditions: Vec<String> = Vec::new();
     let mut query_params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = Vec::new();
@@ -3737,7 +4330,7 @@ fn build_departments_query(
     sql.push_str(
         " GROUP BY d.id, d.name, d.description, d.token_quota_enabled, d.token_quota_per_day,
                    d.parent_id, d.created_at, d.updated_at
-          ORDER BY d.name ASC"
+          ORDER BY d.name ASC",
     );
 
     let _ = idx; // suppress unused warning
@@ -3758,7 +4351,9 @@ async fn create_department(
     // 验证名称长度
     let name = payload.name.trim().to_string();
     if name.len() < 2 || name.len() > 100 {
-        return Err(Error::Validation("部门名称长度必须在 2-100 字符之间".to_string()));
+        return Err(Error::Validation(
+            "部门名称长度必须在 2-100 字符之间".to_string(),
+        ));
     }
 
     // 验证 token_quota 一致性
@@ -3770,11 +4365,16 @@ async fn create_department(
     }
     if let Some(quota) = payload.token_quota_per_day {
         if quota < 0 {
-            return Err(Error::Validation("token_quota_per_day 不能为负数".to_string()));
+            return Err(Error::Validation(
+                "token_quota_per_day 不能为负数".to_string(),
+            ));
         }
     }
 
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // 检查名称唯一性
@@ -3821,7 +4421,11 @@ async fn create_department(
         &client,
         system_user,
         "create_department",
-        &format!("创建部门: {} (限额: {})", name, if quota_enabled { "启用" } else { "关闭" }),
+        &format!(
+            "创建部门: {} (限额: {})",
+            name,
+            if quota_enabled { "启用" } else { "关闭" }
+        ),
     )
     .await;
 
@@ -3847,7 +4451,10 @@ async fn update_department(
     Path(dept_id): Path<Uuid>,
     Json(payload): Json<UpdateDepartmentRequest>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // 检查部门是否存在
@@ -3864,7 +4471,9 @@ async fn update_department(
     if let Some(ref name) = payload.name {
         let trimmed = name.trim();
         if trimmed.len() < 2 || trimmed.len() > 100 {
-            return Err(Error::Validation("部门名称长度必须在 2-100 字符之间".to_string()));
+            return Err(Error::Validation(
+                "部门名称长度必须在 2-100 字符之间".to_string(),
+            ));
         }
         // 检查名称唯一性（排除自身）
         let dup = client
@@ -3937,7 +4546,9 @@ async fn update_department(
     }
 
     if changed_fields.is_empty() {
-        return Err(Error::Validation("至少需要提供一个要更新的字段".to_string()));
+        return Err(Error::Validation(
+            "至少需要提供一个要更新的字段".to_string(),
+        ));
     }
 
     params.push(Box::new(dept_id));
@@ -3949,8 +4560,10 @@ async fn update_department(
         param_idx
     );
 
-    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-        params.iter().map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
+        .iter()
+        .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+        .collect();
 
     let row = client
         .query_one(&sql, &param_refs)
@@ -3963,7 +4576,11 @@ async fn update_department(
         &client,
         system_user,
         "update_department",
-        &format!("更新部门 {}，修改字段: {}", row.get::<_, String>(1), changed_fields.join(", ")),
+        &format!(
+            "更新部门 {}，修改字段: {}",
+            row.get::<_, String>(1),
+            changed_fields.join(", ")
+        ),
     )
     .await;
 
@@ -4001,7 +4618,10 @@ async fn delete_department(
     State(state): State<AppState>,
     Path(dept_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // 检查部门是否存在
@@ -4041,9 +4661,10 @@ async fn delete_department(
         .get(0);
 
     if child_count > 0 {
-        return Err(Error::Validation(
-            format!("部门 '{}' 下有 {} 个子部门，请先删除或移动子部门", dept_name, child_count),
-        ));
+        return Err(Error::Validation(format!(
+            "部门 '{}' 下有 {} 个子部门，请先删除或移动子部门",
+            dept_name, child_count
+        )));
     }
 
     // 删除部门（模型白名单由 ON DELETE CASCADE 自动清理）
@@ -4071,10 +4692,11 @@ async fn delete_department(
 
 /// GET /api/model-configs — 获取所有模型配置（管理端）
 #[instrument(skip(state))]
-async fn get_model_configs(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<serde_json::Value>>> {
-    let client = state.db_pool.get().await
+async fn get_model_configs(State(state): State<AppState>) -> Result<Json<Vec<serde_json::Value>>> {
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let rows = client
@@ -4137,7 +4759,10 @@ async fn create_model_config(
         return Err(Error::Validation("api_key 不能为空".into()));
     }
 
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // 检查 model_id 唯一性
@@ -4211,7 +4836,10 @@ async fn update_model_config(
     Path(config_id): Path<Uuid>,
     Json(body): Json<models::UpdateModelConfigRequest>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // 检查是否存在
@@ -4298,7 +4926,10 @@ async fn delete_model_config(
     State(state): State<AppState>,
     Path(config_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let existing = client
@@ -4404,7 +5035,10 @@ async fn test_model_connection(
         // 其他: 服务端错误
         _ => {
             let error_text = response.text().await.unwrap_or_default();
-            Err(Error::Internal(format!("服务端错误 ({}): {}", status, error_text)))
+            Err(Error::Internal(format!(
+                "服务端错误 ({}): {}",
+                status, error_text
+            )))
         }
     }
 }
@@ -4418,7 +5052,10 @@ async fn get_client_models(
     State(state): State<AppState>,
     Query(params): Query<ClientModelsQuery>,
 ) -> Result<Json<Vec<models::ClientModelConfig>>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // 确定白名单过滤条件
@@ -4447,7 +5084,11 @@ async fn get_client_models(
             let caps_json: serde_json::Value = row.get(6);
             let capabilities = caps_json
                 .as_array()
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
 
             models::ClientModelConfig {
@@ -4459,7 +5100,9 @@ async fn get_client_models(
                 capabilities,
                 api_base_url: row.get(7),
                 api_key: row.get(8),
-                api_format: row.get::<_, Option<String>>(9).unwrap_or_else(|| "openai".to_string()),
+                api_format: row
+                    .get::<_, Option<String>>(9)
+                    .unwrap_or_else(|| "openai".to_string()),
                 source: "admin".to_string(),
             }
         })
@@ -4485,10 +5128,10 @@ async fn resolve_whitelist(
     };
 
     // 查用户部门
-    let dept_row = client.query_opt(
-        "SELECT department_id FROM users WHERE id = $1",
-        &[&uid],
-    ).await.map_err(|e| Error::Database(e.to_string()))?;
+    let dept_row = client
+        .query_opt("SELECT department_id FROM users WHERE id = $1", &[&uid])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
 
     let dept_id: Option<Uuid> = dept_row.and_then(|r| r.get(0));
     let dept_id = match dept_id {
@@ -4497,10 +5140,13 @@ async fn resolve_whitelist(
     };
 
     // 查白名单
-    let rows = client.query(
-        "SELECT model_config_id FROM department_model_whitelist WHERE department_id = $1",
-        &[&dept_id],
-    ).await.map_err(|e| Error::Database(e.to_string()))?;
+    let rows = client
+        .query(
+            "SELECT model_config_id FROM department_model_whitelist WHERE department_id = $1",
+            &[&dept_id],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
 
     if rows.is_empty() {
         return Ok(None); // 无白名单 = 不过滤
@@ -4519,11 +5165,7 @@ fn normalize_api_base_url(url: &str) -> String {
     let trimmed = url.trim_end_matches('/');
     // 顺序重要：先匹配不含 /v1 的后缀，保留 /v1（它是 base URL 的一部分）。
     // 例如 https://api.openai.com/v1/chat/completions → https://api.openai.com/v1
-    for suffix in &[
-        "/chat/completions",
-        "/completions",
-        "/messages",
-    ] {
+    for suffix in &["/chat/completions", "/completions", "/messages"] {
         if let Some(base) = trimmed.strip_suffix(suffix) {
             return base.to_string();
         }

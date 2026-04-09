@@ -34,8 +34,12 @@ mod conversation_ingest_failures {
     #[test]
     fn test_failure_missing_client_conversation_id() {
         let json = r#"{"user_id": "550e8400-e29b-41d4-a716-446655440000", "messages": []}"#;
-        let result: Result<admin_backend::models::ConversationReportPayload, _> = serde_json::from_str(json);
-        assert!(result.is_err(), "缺少 client_conversation_id 应反序列化失败");
+        let result: Result<admin_backend::models::ConversationReportPayload, _> =
+            serde_json::from_str(json);
+        assert!(
+            result.is_err(),
+            "缺少 client_conversation_id 应反序列化失败"
+        );
     }
 }
 

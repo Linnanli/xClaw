@@ -123,7 +123,6 @@ pub struct PolicyChangeRecord {
     pub reason: Option<String>,
 }
 
-
 // DLP Rule request models
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateDlpRuleRequest {
@@ -287,7 +286,9 @@ pub struct UpdateUserRequest {
 }
 
 /// 自定义反序列化：支持 null（清除）、缺失（不修改）、UUID 值（设置）
-fn deserialize_optional_uuid<'de, D>(deserializer: D) -> std::result::Result<Option<Option<Uuid>>, D::Error>
+fn deserialize_optional_uuid<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Option<Uuid>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {

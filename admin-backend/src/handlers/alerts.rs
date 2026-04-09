@@ -30,10 +30,11 @@ use uuid::Uuid;
 // ============================================================================
 
 /// GET /api/alert-rules
-pub async fn get_alert_rules(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+pub async fn get_alert_rules(State(state): State<AppState>) -> Result<Json<serde_json::Value>> {
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let rows = client
@@ -57,7 +58,10 @@ pub async fn create_alert_rule(
 ) -> Result<Json<serde_json::Value>> {
     validate_alert_rule_fields(&payload.event_type, &payload.severity)?;
 
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let channels_json = serde_json::to_value(&payload.notify_channels)
@@ -112,7 +116,10 @@ pub async fn update_alert_rule(
         validate_severity(sev)?;
     }
 
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // 验证规则存在
@@ -124,8 +131,10 @@ pub async fn update_alert_rule(
     let old_name: String = existing.get(0);
 
     let (sql, params) = build_alert_rule_update_sql(rule_id, &payload);
-    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-        params.iter().map(|p| &**p as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
+        .iter()
+        .map(|p| &**p as &(dyn tokio_postgres::types::ToSql + Sync))
+        .collect();
 
     client
         .execute(&sql, &param_refs)
@@ -148,7 +157,10 @@ pub async fn delete_alert_rule(
     State(state): State<AppState>,
     Path(rule_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let row = client
@@ -183,7 +195,10 @@ pub async fn get_alert_events(
     State(state): State<AppState>,
     Query(params): Query<AlertEventQuery>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let page = params.page.unwrap_or(1).max(1);
@@ -191,8 +206,10 @@ pub async fn get_alert_events(
     let offset = (page - 1) * page_size;
 
     let (where_clause, query_params) = build_alert_events_filter(&params);
-    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-        query_params.iter().map(|p| &**p as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+    let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = query_params
+        .iter()
+        .map(|p| &**p as &(dyn tokio_postgres::types::ToSql + Sync))
+        .collect();
 
     // 总数查询
     let count_sql = format!("SELECT COUNT(*) FROM alert_events {}", where_clause);
@@ -227,10 +244,11 @@ pub async fn get_alert_events(
 }
 
 /// GET /api/alerts/stats
-pub async fn get_alert_stats(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+pub async fn get_alert_stats(State(state): State<AppState>) -> Result<Json<serde_json::Value>> {
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let row = client
@@ -258,7 +276,10 @@ pub async fn get_alert_stats(
 pub async fn get_unhandled_alert_count(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let row = client
@@ -280,11 +301,17 @@ pub async fn update_alert_event_status(
 ) -> Result<Json<serde_json::Value>> {
     validate_alert_status(&payload.status)?;
 
-    let client = state.db_pool.get().await
+    let client = state
+        .db_pool
+        .get()
+        .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let existing = client
-        .query_opt("SELECT rule_name FROM alert_events WHERE id = $1", &[&event_id])
+        .query_opt(
+            "SELECT rule_name FROM alert_events WHERE id = $1",
+            &[&event_id],
+        )
         .await
         .map_err(|e| Error::Database(e.to_string()))?
         .ok_or_else(|| Error::NotFound("告警事件不存在".into()))?;
@@ -360,9 +387,15 @@ pub async fn trigger_alert(
         };
 
         let event_id = insert_alert_event(
-            &client, rule_id, &rule_name, &trigger.event_type,
-            severity, &trigger.detail, &trigger.event_data,
-        ).await?;
+            &client,
+            rule_id,
+            &rule_name,
+            &trigger.event_type,
+            severity,
+            &trigger.detail,
+            &trigger.event_data,
+        )
+        .await?;
 
         insert_notification_logs(&client, event_id, &channels).await;
 
@@ -372,7 +405,14 @@ pub async fn trigger_alert(
         let severity_clone = severity.to_string();
         let detail_clone = trigger.detail.clone();
         tokio::spawn(async move {
-            send_alert_notifications(&pool_clone, event_id, &rule_name_clone, &severity_clone, &detail_clone).await;
+            send_alert_notifications(
+                &pool_clone,
+                event_id,
+                &rule_name_clone,
+                &severity_clone,
+                &detail_clone,
+            )
+            .await;
         });
 
         created_count += 1;
@@ -544,7 +584,10 @@ fn row_to_alert_event(row: &tokio_postgres::Row) -> serde_json::Value {
 /// 构建告警事件筛选 WHERE 子句
 fn build_alert_events_filter(
     params: &AlertEventQuery,
-) -> (String, Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>>) {
+) -> (
+    String,
+    Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>>,
+) {
     let mut conditions: Vec<String> = Vec::new();
     let mut query_params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = Vec::new();
     let mut idx = 1;
@@ -591,7 +634,10 @@ fn build_alert_events_filter(
 fn build_alert_rule_update_sql(
     rule_id: Uuid,
     payload: &UpdateAlertRuleRequest,
-) -> (String, Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>>) {
+) -> (
+    String,
+    Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>>,
+) {
     let mut sets: Vec<String> = Vec::new();
     let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = Vec::new();
     let mut idx = 1;
@@ -678,7 +724,11 @@ impl NotificationChannelConfig {
         let get = |key: &str| -> Option<String> {
             rows.iter()
                 .find(|r| r.get::<_, String>(0) == key)
-                .and_then(|r| r.get::<_, serde_json::Value>(1).as_str().map(|s| s.to_string()))
+                .and_then(|r| {
+                    r.get::<_, serde_json::Value>(1)
+                        .as_str()
+                        .map(|s| s.to_string())
+                })
         };
 
         Self {
@@ -741,13 +791,28 @@ pub async fn send_alert_notifications(
 
         let result = match channel.as_str() {
             "wecom" => {
-                send_webhook(&http, config.wecom_webhook.as_deref(), &build_wecom_payload(&message)).await
+                send_webhook(
+                    &http,
+                    config.wecom_webhook.as_deref(),
+                    &build_wecom_payload(&message),
+                )
+                .await
             }
             "dingtalk" => {
-                send_webhook(&http, config.dingtalk_webhook.as_deref(), &build_dingtalk_payload(&message)).await
+                send_webhook(
+                    &http,
+                    config.dingtalk_webhook.as_deref(),
+                    &build_dingtalk_payload(&message),
+                )
+                .await
             }
             "feishu" => {
-                send_webhook(&http, config.feishu_webhook.as_deref(), &build_feishu_payload(&message)).await
+                send_webhook(
+                    &http,
+                    config.feishu_webhook.as_deref(),
+                    &build_feishu_payload(&message),
+                )
+                .await
             }
             "email" => send_email_notification(&config, &message).await,
             other => Err(format!("Unknown channel: {}", other)),

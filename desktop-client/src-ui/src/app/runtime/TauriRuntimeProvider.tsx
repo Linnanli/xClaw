@@ -34,6 +34,7 @@ import type { SanitizationStats } from '@hooks/useDlpScan';
 import { tracing } from '@utils/tracing';
 import { ModelContext } from '@contexts/ModelContext';
 import { isErrorResponse, friendlyErrorMessage } from '@utils/friendlyError';
+import type { ChatCommand } from '../types/chatCommand';
 
 // ============================================================================
 // 类型定义
@@ -47,6 +48,8 @@ interface TauriMessage {
   reasoning?: string;
   /** DLP 脱敏统计，仅用户消息有值 */
   dlpStats?: SanitizationStats;
+  /** 当前用户消息命中的事件任务数量（用于 UI 提示） */
+  routineTriggerCount?: number;
   /** 错误消息，assistant 消息出错时设置 */
   error?: string;
 }
@@ -57,6 +60,88 @@ type BackendRole = 'user' | 'assistant' | 'system' | 'tool' | 'tool_calls' | str
 /** 过滤：只保留 assistant-ui 支持的 role（user / assistant） */
 function isDisplayableRole(role: BackendRole): role is 'user' | 'assistant' {
   return role === 'user' || role === 'assistant';
+}
+
+type PersistedUiEvent =
+  | { kind: 'ui_event'; event: 'routine_triggered'; fired: number }
+  | { kind: 'ui_event'; event: 'dlp_redacted'; stats: SanitizationStats }
+  | { kind: 'ui_event'; event: 'approval_needed'; request_id: string; tool_name: string; description: string }
+  | { kind: 'ui_event'; event: 'approval_resolved'; request_id: string; approved: boolean };
+
+function isSanitizationStats(value: unknown): value is SanitizationStats {
+  if (!value || typeof value !== 'object') return false;
+  const stats = value as Record<string, unknown>;
+  return (
+    typeof stats.total_matches === 'number' &&
+    typeof stats.redacted_count === 'number' &&
+    typeof stats.blocked_count === 'number' &&
+    typeof stats.warned_count === 'number'
+  );
+}
+
+function parsePersistedUiEvent(content: string): PersistedUiEvent | null {
+  try {
+    const parsed = JSON.parse(content) as Record<string, unknown>;
+    if (parsed.kind !== 'ui_event' || typeof parsed.event !== 'string') return null;
+
+    if (parsed.event === 'routine_triggered') {
+      const fired = typeof parsed.fired === 'number' && parsed.fired > 0 ? parsed.fired : 1;
+      return { kind: 'ui_event', event: 'routine_triggered', fired };
+    }
+    if (parsed.event === 'dlp_redacted' && isSanitizationStats(parsed.stats)) {
+      return { kind: 'ui_event', event: 'dlp_redacted', stats: parsed.stats };
+    }
+    if (
+      parsed.event === 'approval_needed' &&
+      typeof parsed.request_id === 'string' &&
+      typeof parsed.tool_name === 'string' &&
+      typeof parsed.description === 'string'
+    ) {
+      return {
+        kind: 'ui_event',
+        event: 'approval_needed',
+        request_id: parsed.request_id,
+        tool_name: parsed.tool_name,
+        description: parsed.description,
+      };
+    }
+    if (
+      parsed.event === 'approval_resolved' &&
+      typeof parsed.request_id === 'string' &&
+      typeof parsed.approved === 'boolean'
+    ) {
+      return {
+        kind: 'ui_event',
+        event: 'approval_resolved',
+        request_id: parsed.request_id,
+        approved: parsed.approved,
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function attachRoutineTriggeredToLastUser(messages: TauriMessage[], fired: number): void {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role === 'user') {
+      messages[i] = {
+        ...messages[i],
+        routineTriggerCount: (messages[i].routineTriggerCount ?? 0) + fired,
+      };
+      return;
+    }
+  }
+}
+
+function attachDlpStatsToLastUser(messages: TauriMessage[], stats: SanitizationStats): void {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role === 'user') {
+      messages[i] = { ...messages[i], dlpStats: stats };
+      return;
+    }
+  }
 }
 
 interface SendMessageResponse {
@@ -74,7 +159,8 @@ type ChatEvent =
   | { type: 'status'; message: string; level: string }
   | { type: 'error'; message: string; code?: string }
   | { type: 'connection_status'; connected: boolean; message: string }
-  | { type: 'job_status'; job_id: string; title: string; status: string };
+  | { type: 'job_status'; job_id: string; title: string; status: string }
+  | { type: 'routine_triggered'; thread_id: string; fired: number };
 
 interface TauriRuntimeProviderProps {
   children: ReactNode;
@@ -86,9 +172,10 @@ interface TauriRuntimeProviderProps {
   onModelChange?: (modelId: string) => void;
   /** 打开自定义模型弹窗的回调（由 ChatTabTauri 提供） */
   onOpenCustomModelModal?: () => void;
-  /** 定时任务手动触发时的提示词，挂载后自动发送 */
-  pendingPrompt?: string | null;
-  onPendingPromptSent?: () => void;
+  /** 外部下发的聊天指令（统一走对话发送链路） */
+  outboundCommand?: ChatCommand | null;
+  /** 指令执行完成回调（用于消费队列） */
+  onOutboundCommandHandled?: (commandId: string) => void;
   /** 引擎就绪计数器，变化时重新加载历史消息 */
   engineReadyKey?: number;
 }
@@ -166,12 +253,18 @@ function convertMessage(msg: TauriMessage): ThreadMessageLike {
   if (msg.content) parts.push({ type: 'text', text: msg.content });
   if (parts.length === 0) parts.push({ type: 'text', text: '' });
 
+  const customMetadata = {
+    ...(msg.dlpStats ? { dlpStats: msg.dlpStats } : {}),
+    ...((msg.routineTriggerCount ?? 0) > 0 ? { routineTriggerCount: msg.routineTriggerCount } : {}),
+  };
+  const hasCustomMetadata = Object.keys(customMetadata).length > 0;
+
   const base = {
     role: msg.role,
     content: parts,
     id: msg.id,
     createdAt: new Date(msg.timestamp),
-    ...(msg.dlpStats ? { metadata: { custom: { dlpStats: msg.dlpStats } } } : {}),
+    ...(hasCustomMetadata ? { metadata: { custom: customMetadata } } : {}),
   };
 
   if (msg.error) {
@@ -179,6 +272,35 @@ function convertMessage(msg: TauriMessage): ThreadMessageLike {
   }
 
   return base;
+}
+
+function normalizeExternalMessages(next: readonly ThreadMessageLike[]): TauriMessage[] {
+  return next.map((m, idx) => {
+    let content = '';
+    let reasoning: string | undefined;
+
+    if (Array.isArray(m.content)) {
+      const textParts: string[] = [];
+      for (const part of m.content) {
+        if (part.type === 'reasoning') {
+          reasoning = typeof part.text === 'string' ? part.text : reasoning;
+          continue;
+        }
+        if (part.type === 'text' && typeof part.text === 'string') {
+          textParts.push(part.text);
+        }
+      }
+      content = textParts.join('');
+    }
+
+    return {
+      id: m.id ?? `external-${Date.now()}-${idx}`,
+      role: m.role === 'user' ? 'user' : 'assistant',
+      content,
+      timestamp: m.createdAt instanceof Date ? m.createdAt.getTime() : Date.now(),
+      reasoning,
+    };
+  });
 }
 
 // ============================================================================
@@ -208,8 +330,8 @@ export function TauriRuntimeProvider({
   initialModelId,
   onModelChange,
   onOpenCustomModelModal,
-  pendingPrompt,
-  onPendingPromptSent,
+  outboundCommand,
+  onOutboundCommandHandled,
   engineReadyKey,
 }: TauriRuntimeProviderProps) {
   // 若有 pendingMessage，表示有任务正在执行，初始 isRunning = true
@@ -220,6 +342,7 @@ export function TauriRuntimeProvider({
   const selectedModelRef = useRef<ModelConfigItem | null>(null);
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const msgIdCounter = useRef(1);
+  const bootstrapThreadIdRef = useRef<string | null>(null);
   const { scanUserInput } = useDlpScan();
 
   // ── 模型列表状态（由本 Provider 管理，通过 ModelContext 向下传递）──
@@ -309,20 +432,47 @@ export function TauriRuntimeProvider({
     });
   }, [onModelChange, models]);
 
-  // ── 加载历史消息 ──
-  const pendingPromptSent = useRef(false);
-  const onPendingPromptSentRef = useRef(onPendingPromptSent);
-  onPendingPromptSentRef.current = onPendingPromptSent;
+  // ── 处理 chat-event（思考链 + 流式 + 工具 + 响应）──
+  // 声明提前，供 history-loading effect 的 thread 切换清理使用
+  const pendingAssistantId = useRef<string | null>(null);
+  const thinkingBuffer = useRef<string>('');
+  // 用于检测 threadId 实际切换（区别于同一 thread 的历史重载）
+  const prevThreadIdRef = useRef<string | null>(threadId);
+  const handledCommandIdRef = useRef<string | null>(null);
+
+  const clearPendingAssistantState = useCallback((): void => {
+    pendingAssistantId.current = null;
+    thinkingBuffer.current = '';
+    setIsRunning(false);
+  }, []);
+
+  const clearThreadRuntimeState = useCallback((): void => {
+    clearPendingAssistantState();
+    setPendingApprovals([]);
+  }, [clearPendingAssistantState]);
 
   useEffect(() => {
     if (!threadId) {
+      prevThreadIdRef.current = null;
+      bootstrapThreadIdRef.current = null;
+      clearThreadRuntimeState();
       setMessages([]);
       return;
     }
 
-    // pendingPrompt 已发送过，跳过重新加载（避免 clearPendingPrompt 触发的
-    // 依赖变化导致 setMessages(loaded) 覆盖掉本地添加的 user 气泡）
-    if (pendingPromptSent.current) return;
+    // 新线程由当前 Provider 内部 onNew 创建时，先保留本地乐观消息/流式状态，
+    // 避免 threadId 切换触发的历史重载把正在渲染的消息树缩短导致越界。
+    if (bootstrapThreadIdRef.current === threadId) {
+      bootstrapThreadIdRef.current = null;
+      prevThreadIdRef.current = threadId;
+      return;
+    }
+
+    // thread 切换时立即清理上一个 thread 的流式状态，防止残留内容出现在新 thread 中
+    if (threadId !== prevThreadIdRef.current) {
+      prevThreadIdRef.current = threadId;
+      clearThreadRuntimeState();
+    }
 
     let cancelled = false;
 
@@ -331,39 +481,46 @@ export function TauriRuntimeProvider({
         const history = await threadApi.getMessages(threadId);
         if (cancelled) return;
 
-        const loaded = history
-          .filter((m) => isDisplayableRole(m.role))
-          .map((m) => ({
-            id: m.id,
-            role: m.role as 'user' | 'assistant',
-            content: m.content,
-            timestamp: new Date(m.created_at).getTime(),
-          }));
+        const loaded: TauriMessage[] = [];
+        const restoredApprovals = new Map<string, PendingApproval>();
+        history.forEach((m) => {
+          if (isDisplayableRole(m.role)) {
+            loaded.push({
+              id: m.id,
+              role: m.role as 'user' | 'assistant',
+              content: m.content,
+              timestamp: new Date(m.created_at).getTime(),
+            });
+            return;
+          }
 
-        if (pendingPrompt && !pendingPromptSent.current) {
-          pendingPromptSent.current = true;
-          const userMsg: TauriMessage = {
-            id: `routine-${msgIdCounter.current++}`,
-            role: 'user',
-            content: pendingPrompt,
-            timestamp: Date.now(),
-          };
-          setMessages([...loaded, userMsg]);
-          setIsRunning(true);
-          invoke('send_chat_message', {
-            threadId,
-            content: pendingPrompt,
-            modelId: modelIdRef.current ?? null,
-            apiBaseUrl: selectedModelRef.current?.api_base_url ?? null,
-            apiKey: selectedModelRef.current?.api_key ?? null,
-          }).catch((err) => {
-            tracing.error('Failed to send routine prompt', { error: err });
-            setIsRunning(false);
-          });
-          onPendingPromptSentRef.current?.();
-        } else {
-          setMessages(loaded);
-        }
+          if (m.role === 'system') {
+            const event = parsePersistedUiEvent(m.content);
+            if (!event) return;
+            if (event.event === 'routine_triggered') {
+              attachRoutineTriggeredToLastUser(loaded, event.fired);
+              return;
+            }
+            if (event.event === 'dlp_redacted') {
+              attachDlpStatsToLastUser(loaded, event.stats);
+              return;
+            }
+            if (event.event === 'approval_needed') {
+              restoredApprovals.set(event.request_id, {
+                request_id: event.request_id,
+                tool_name: event.tool_name,
+                description: event.description,
+              });
+              return;
+            }
+            if (event.event === 'approval_resolved') {
+              restoredApprovals.delete(event.request_id);
+            }
+          }
+        });
+
+        setMessages(loaded);
+        setPendingApprovals(Array.from(restoredApprovals.values()));
       } catch (err) {
         if (!cancelled) tracing.error('Failed to load thread history', { error: err });
       }
@@ -371,10 +528,7 @@ export function TauriRuntimeProvider({
 
     load();
     return () => { cancelled = true; };
-    // onPendingPromptSent 通过 ref 引用，不放入依赖数组，
-    // 避免 clearPendingPrompt 触发 effect 重跑覆盖 user 消息。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadId, pendingPrompt, engineReadyKey]);
+  }, [threadId, engineReadyKey, clearThreadRuntimeState]);
 
   // ── chat-event 监听 ──
   useEffect(() => {
@@ -402,10 +556,6 @@ export function TauriRuntimeProvider({
       invoke('unsubscribe_chat_events').catch(() => {});
     };
   }, []);
-
-  // ── 处理 chat-event（思考链 + 流式 + 工具 + 响应）──
-  const pendingAssistantId = useRef<string | null>(null);
-  const thinkingBuffer = useRef<string>('');
 
   const handleChatEvent = useCallback((event: ChatEvent) => {
     switch (event.type) {
@@ -473,6 +623,11 @@ export function TauriRuntimeProvider({
       }
 
       case 'response': {
+        // 忽略已切换 thread 后到达的旧 thread 响应（thread 切换时流式调用尚未结束）
+        if (event.thread_id && event.thread_id !== threadIdRef.current) {
+          tracing.debug('Ignoring response for stale thread', { event_thread: event.thread_id, current: threadIdRef.current });
+          break;
+        }
         if (pendingAssistantId.current) {
           const tempId = pendingAssistantId.current;
           setMessages((prev) =>
@@ -484,16 +639,12 @@ export function TauriRuntimeProvider({
             { id: event.message_id, role: 'assistant' as const, content: event.content, timestamp: Date.now() },
           ]);
         }
-        pendingAssistantId.current = null;
-        thinkingBuffer.current = '';
-        setIsRunning(false);
+        clearPendingAssistantState();
         break;
       }
 
       case 'error':
-        pendingAssistantId.current = null;
-        thinkingBuffer.current = '';
-        setIsRunning(false);
+        clearPendingAssistantState();
         tracing.error('Chat event error', { message: event.message, code: event.code });
         setMessages((prev) => {
           // 如果已有 pending assistant 消息，更新它为错误状态
@@ -530,17 +681,25 @@ export function TauriRuntimeProvider({
       case 'job_status':
         // 由 useRunningJobs 直接监听处理，此处无需额外操作
         break;
+
+      case 'routine_triggered': {
+        if (event.thread_id && event.thread_id !== threadIdRef.current) {
+          break;
+        }
+        setMessages((prev) => {
+          const fired = Number.isFinite(event.fired) && event.fired > 0 ? event.fired : 1;
+          const next = [...prev];
+          attachRoutineTriggeredToLastUser(next, fired);
+          return next;
+        });
+        break;
+      }
     }
-  }, [loadModels]);
+  }, [loadModels, clearPendingAssistantState]);
 
-  // ── 发送新消息（assistant-ui onNew 回调）──
-  const onNew = useCallback(
-    async (appendMessage: AppendMessage) => {
-      const textPart = appendMessage.content.find((p) => p.type === 'text');
-      if (!textPart || textPart.type !== 'text') return;
-
-      const rawContent = textPart.text;
-
+  // ── 统一发送文本入口（Composer / 外部指令共用）──
+  const sendUserText = useCallback(
+    async (rawContent: string) => {
       // 1. DLP 扫描（Fail-Safe：扫描失败时阻止发送）
       let content = rawContent;
       let dlpResult: Awaited<ReturnType<typeof scanUserInput>> | null = null;
@@ -567,6 +726,7 @@ export function TauriRuntimeProvider({
         try {
           const newThread = await threadApi.createThread();
           tid = newThread.id;
+          bootstrapThreadIdRef.current = tid;
           threadIdRef.current = tid;
           onThreadCreated?.(tid);
         } catch (err) {
@@ -594,14 +754,50 @@ export function TauriRuntimeProvider({
           modelId: modelIdRef.current ?? null,
           apiBaseUrl: selectedModelRef.current?.api_base_url ?? null,
           apiKey: selectedModelRef.current?.api_key ?? null,
+          dlpStats: dlpResult?.had_sensitive_data ? dlpResult.sanitization_stats : null,
         });
       } catch (err) {
         tracing.error('Failed to send message', { error: err });
         setIsRunning(false);
+        const errMsg = typeof err === 'string' ? err : (err as Error)?.message ?? '发送失败，请检查模型配置';
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `error-${Date.now()}`,
+            role: 'assistant' as const,
+            content: '',
+            timestamp: Date.now(),
+            error: errMsg,
+          },
+        ]);
       }
     },
     [scanUserInput, onThreadCreated, onBlockedCb, onRedactedCb],
   );
+
+  // ── 发送新消息（assistant-ui onNew 回调）──
+  const onNew = useCallback(
+    async (appendMessage: AppendMessage) => {
+      const textPart = appendMessage.content.find((p) => p.type === 'text');
+      if (!textPart || textPart.type !== 'text') return;
+      await sendUserText(textPart.text);
+    },
+    [sendUserText],
+  );
+
+  // ── 处理外部聊天指令（统一走 sendUserText）──
+  useEffect(() => {
+    if (!outboundCommand) return;
+    if (handledCommandIdRef.current === outboundCommand.id) return;
+    handledCommandIdRef.current = outboundCommand.id;
+
+    if (outboundCommand.kind === 'send_text') {
+      void sendUserText(outboundCommand.text)
+        .finally(() => {
+          onOutboundCommandHandled?.(outboundCommand.id);
+        });
+    }
+  }, [outboundCommand, sendUserText, onOutboundCommandHandled]);
 
   const onCancel = useCallback(async () => {
     setIsRunning(false);
@@ -615,9 +811,7 @@ export function TauriRuntimeProvider({
     onNew,
     onCancel,
     setMessages: (newMessages) => {
-      if (Array.isArray(newMessages)) {
-        setMessages(newMessages as TauriMessage[]);
-      }
+      setMessages(normalizeExternalMessages(newMessages));
     },
   });
 

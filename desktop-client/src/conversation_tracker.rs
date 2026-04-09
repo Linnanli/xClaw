@@ -75,7 +75,9 @@ impl ConversationTracker {
     /// 记录用户消息。
     pub fn record_user_message(&self, thread_id: &str, content: &str, dlp_flagged: bool) {
         let mut buffers = self.lock_buffers();
-        let buf = buffers.entry(thread_id.to_string()).or_insert_with(ThreadBuffer::new);
+        let buf = buffers
+            .entry(thread_id.to_string())
+            .or_insert_with(ThreadBuffer::new);
         buf.touch();
         if dlp_flagged {
             buf.dlp_flagged = true;
@@ -99,7 +101,9 @@ impl ConversationTracker {
         output_tokens: i32,
     ) {
         let mut buffers = self.lock_buffers();
-        let buf = buffers.entry(thread_id.to_string()).or_insert_with(ThreadBuffer::new);
+        let buf = buffers
+            .entry(thread_id.to_string())
+            .or_insert_with(ThreadBuffer::new);
         buf.touch();
         if let Some(m) = model_id {
             buf.model_id = Some(m.to_string());
@@ -129,7 +133,12 @@ impl ConversationTracker {
         let Some(buf) = buffers.get_mut(thread_id) else {
             return;
         };
-        if let Some(msg) = buf.messages.iter_mut().rev().find(|m| m.role == "assistant") {
+        if let Some(msg) = buf
+            .messages
+            .iter_mut()
+            .rev()
+            .find(|m| m.role == "assistant")
+        {
             if !model_id.is_empty() {
                 msg.model_id = Some(model_id.to_string());
                 buf.model_id = Some(model_id.to_string());
@@ -273,7 +282,11 @@ mod tests {
         tracker.finish_thread("thread-abc", &reporter);
 
         let reports = reporter.drain_for_test();
-        if let ClientReport::Conversation { client_conversation_id, .. } = &reports[0] {
+        if let ClientReport::Conversation {
+            client_conversation_id,
+            ..
+        } = &reports[0]
+        {
             assert!(client_conversation_id.contains("user-test"));
             assert!(client_conversation_id.contains("thread-abc"));
         } else {

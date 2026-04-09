@@ -1,5 +1,5 @@
-use crate::Result;
 use crate::policy_sync::PolicySyncManager;
+use crate::Result;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,7 +125,10 @@ mod tests {
         policy_manager.update_dlp_policies(policies, 1).unwrap();
         let dlp = DlpIntegration::new(policy_manager);
 
-        let sanitized = dlp.sanitize_for_storage("Contact: user@example.com").await.unwrap();
+        let sanitized = dlp
+            .sanitize_for_storage("Contact: user@example.com")
+            .await
+            .unwrap();
         assert!(sanitized.contains("[EMAIL]"));
     }
 }

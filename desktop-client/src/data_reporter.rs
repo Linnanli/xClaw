@@ -196,10 +196,7 @@ impl DataReporter {
 
     /// 获取当前队列长度。
     pub fn queue_len(&self) -> usize {
-        self.queue
-            .lock()
-            .map(|q| q.len())
-            .unwrap_or(0)
+        self.queue.lock().map(|q| q.len()).unwrap_or(0)
     }
 
     /// 取出队列中所有事件（仅用于测试）。

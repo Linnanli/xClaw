@@ -26,6 +26,15 @@ pub struct SendMessageResponse {
     pub success: bool,
 }
 
+/// 前端可选传入的 DLP 脱敏统计（用于持久化 UI 标记）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientDlpStats {
+    pub total_matches: usize,
+    pub redacted_count: usize,
+    pub blocked_count: usize,
+    pub warned_count: usize,
+}
+
 /// 发送聊天消息。
 ///
 /// 构造 `IncomingMessage` 并通过 `msg_sender` 注入 Agent 消息循环。
@@ -59,6 +68,7 @@ pub async fn send_chat_message(
     model_id: Option<String>,
     api_base_url: Option<String>,
     api_key: Option<String>,
+    dlp_stats: Option<ClientDlpStats>,
 ) -> Result<SendMessageResponse, String> {
     let state = state.get()?;
     let message_id = uuid::Uuid::new_v4().to_string();
@@ -78,10 +88,32 @@ pub async fn send_chat_message(
             thread_id = %thread_id,
             "Message blocked by SafetyBridge"
         );
-        return Err(scan_result.block_reason.unwrap_or_else(|| {
-            "消息包含敏感信息，已被安全策略拦截".to_string()
-        }));
+        return Err(scan_result
+            .block_reason
+            .unwrap_or_else(|| "消息包含敏感信息，已被安全策略拦截".to_string()));
     }
+
+    let dlp_redacted_stats = dlp_stats
+        .map(|stats| {
+            serde_json::json!({
+                "total_matches": stats.total_matches,
+                "redacted_count": stats.redacted_count,
+                "blocked_count": stats.blocked_count,
+                "warned_count": stats.warned_count,
+            })
+        })
+        .or_else(|| {
+            if !scan_result.had_sensitive_data {
+                return None;
+            }
+            let secret_count = u32::from(scan_result.stats.secret_detected);
+            Some(serde_json::json!({
+                "total_matches": scan_result.stats.pii_matches + secret_count as usize,
+                "redacted_count": scan_result.stats.redacted_count,
+                "blocked_count": scan_result.stats.blocked_count + secret_count as usize,
+                "warned_count": scan_result.stats.warned_count,
+            }))
+        });
 
     let safe_content = if scan_result.had_sensitive_data {
         tracing::debug!(
@@ -130,9 +162,14 @@ pub async fn send_chat_message(
     // ── Skill 激活通知（desktop-client 侧扩展）────────────────────
     emit_skills_activated_if_any(&app_handle, state, &safe_content);
 
-    let msg = IncomingMessage::new("tauri", &state.owner_id, &safe_content)
+    let mut msg = IncomingMessage::new("tauri", &state.owner_id, &safe_content)
         .with_thread(&thread_id)
         .with_owner_id(&state.owner_id);
+    if let Some(stats) = dlp_redacted_stats {
+        msg = msg.with_metadata(serde_json::json!({
+            "dlp_redacted_stats": stats,
+        }));
+    }
 
     state
         .msg_sender
@@ -162,7 +199,6 @@ fn emit_skills_activated_if_any(
     state: &crate::state::AppState,
     content: &str,
 ) {
-
     let Some(registry) = state.skill_registry.as_ref() else {
         return;
     };
@@ -187,7 +223,9 @@ fn emit_skills_activated_if_any(
 
     let _ = app_handle.emit(
         "chat-event",
-        crate::tauri_channel::ChatEvent::SkillsActivated { skills: skill_names },
+        crate::tauri_channel::ChatEvent::SkillsActivated {
+            skills: skill_names,
+        },
     );
 }
 
@@ -252,8 +290,7 @@ fn classify_switch(state: &crate::state::AppState, api_base_url: Option<&str>) -
 
     // 容错比较：`https://host/v1` 和 `https://host` 视为同一 provider
     let urls_match = |a: &str, b: &str| -> bool {
-        a == b
-            || a.trim_end_matches("/v1") == b.trim_end_matches("/v1")
+        a == b || a.trim_end_matches("/v1") == b.trim_end_matches("/v1")
     };
 
     if urls_match(&new_url, &current) {
@@ -275,9 +312,19 @@ pub(crate) fn switch_provider(
     let base_url = api_base_url
         .filter(|u| !u.is_empty())
         .ok_or("跨 provider 切换需要 api_base_url")?;
-    let key = api_key
-        .filter(|k| !k.is_empty() && *k != "****")
-        .ok_or("跨 provider 切换需要有效的 api_key（非脱敏值）")?;
+
+    // api_key 为 "****" 时表示前端返回的脱敏值，从本地存储取真实 key。
+    let resolved_key: String;
+    let key = match api_key.filter(|k| !k.is_empty() && *k != "****") {
+        Some(k) => k,
+        None => {
+            resolved_key =
+                crate::ipc::models::lookup_custom_api_key(model_id).ok_or_else(|| {
+                    format!("模型 {} 的 API key 未找到，请在设置中重新配置", model_id)
+                })?;
+            &resolved_key
+        }
+    };
 
     // 规范化 base_url：去掉尾部的 /chat/completions 等路径，
     // rig-core 会自动拼接 /chat/completions。
@@ -315,11 +362,7 @@ pub(crate) fn switch_provider(
 /// provider 比较时的容错匹配（带 `/v1` vs 不带）由 `classify_switch` 单独处理。
 pub(crate) fn normalize_base_url(url: &str) -> String {
     let trimmed = url.trim_end_matches('/');
-    for suffix in &[
-        "/v1/chat/completions",
-        "/chat/completions",
-        "/completions",
-    ] {
+    for suffix in &["/v1/chat/completions", "/chat/completions", "/completions"] {
         if let Some(base) = trimmed.strip_suffix(suffix) {
             return base.to_string();
         }
@@ -332,7 +375,9 @@ pub(crate) fn normalize_base_url(url: &str) -> String {
 /// 跨 provider 切换后，用户选回初始 provider 的模型时调用。
 /// 用保存的初始 provider 引用恢复，然后 set_model 切换模型名。
 fn restore_initial_provider(state: &crate::state::AppState, model_id: &str) {
-    state.model_switch.replace_inner(Arc::clone(&state.initial_provider));
+    state
+        .model_switch
+        .replace_inner(Arc::clone(&state.initial_provider));
 
     if let Ok(mut guard) = state.provider_base_url.write() {
         *guard = state.initial_base_url.clone();
@@ -409,9 +454,7 @@ async fn quota_precheck(state: &crate::state::AppState) -> Result<(), String> {
         .map_err(|_| "配额服务响应异常".to_string())?;
 
     if body["allowed"].as_bool() == Some(false) {
-        let reason = body["reason"]
-            .as_str()
-            .unwrap_or("当日费用已达限额");
+        let reason = body["reason"].as_str().unwrap_or("当日费用已达限额");
         return Err(reason.to_string());
     }
 
@@ -475,7 +518,6 @@ pub async fn report_usage_to_admin(
     }
 }
 
-
 /// 立即激活指定模型，不需要发送消息。
 ///
 /// 解决"切换模型后定时任务仍用旧 provider"的问题：
@@ -492,7 +534,12 @@ pub async fn ic_activate_model(
     match switch_kind {
         SwitchKind::InPlace => switch_model_in_place(state, &model_id),
         SwitchKind::CrossProvider => {
-            switch_provider(state, &model_id, api_base_url.as_deref(), api_key.as_deref())?;
+            switch_provider(
+                state,
+                &model_id,
+                api_base_url.as_deref(),
+                api_key.as_deref(),
+            )?;
         }
         SwitchKind::RestoreInitial => {
             restore_initial_provider(state, &model_id);
