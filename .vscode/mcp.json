@@ -42,11 +42,6 @@
       "command": "npx",
       "args": ["shadcn@latest", "mcp"],
       "type": "stdio"
-    },
-    "pencil": {
-      "command": "/Users/nallylin/.pencil/mcp/kiro/out/mcp-server-darwin-x64",
-      "args": ["--app", "kiro"],
-      "type": "stdio"
     }
   }
 }

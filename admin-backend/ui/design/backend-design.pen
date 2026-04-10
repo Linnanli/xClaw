@@ -45451,6 +45451,1470 @@
           ]
         }
       ]
+    },
+    {
+      "type": "frame",
+      "id": "sm3G0",
+      "x": 3300,
+      "y": 0,
+      "name": "审核弹窗 + 扫描结果",
+      "width": 600,
+      "height": 600,
+      "layout": "vertical",
+      "gap": 16,
+      "children": [
+        {
+          "type": "text",
+          "id": "pbJqi",
+          "name": "modal_title",
+          "content": "审核技能: Demo Skill",
+          "fontFamily": "Inter",
+          "fontSize": 20,
+          "fontWeight": "700"
+        },
+        {
+          "type": "frame",
+          "id": "R5nMc",
+          "name": "scan_section",
+          "layout": "vertical",
+          "gap": 8,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "Ebhpl",
+              "name": "scan_title",
+              "content": "安全扫描结果",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "q7GOo",
+              "name": "verdict_badge",
+              "content": "Verdict: DANGEROUS (Orange)",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "uXI5X",
+              "name": "finding1",
+              "content": "❗ High: API Key Leak. main.py:12\n  Suggested fix: Extract to env vars",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "n8AUv",
+              "name": "finding2",
+              "content": "⚠️ Medium: Unauthorized Network. main.py:45\n  Suggested fix: Use proxy list",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "J8Q3H",
+          "name": "actions",
+          "gap": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "I0J7J",
+              "name": "btn_pass",
+              "content": "[ 通过 ]",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "gHUt1",
+              "name": "btn_reject",
+              "content": "[ 拒绝 ]",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "CenNA",
+      "x": 12000,
+      "y": 0,
+      "name": "[弹窗] 上传扩展 — State 1: 选择文件",
+      "width": 560,
+      "fill": "#FFFFFF",
+      "cornerRadius": 12,
+      "stroke": {
+        "thickness": 1,
+        "fill": "#E8E8E8"
+      },
+      "effect": {
+        "type": "shadow",
+        "shadowType": "outer",
+        "color": "#00000018",
+        "offset": {
+          "x": 0,
+          "y": 8
+        },
+        "blur": 32
+      },
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "xYCwo",
+          "name": "hdr",
+          "width": "fill_container",
+          "stroke": {
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#E8E8E8"
+          },
+          "padding": [
+            20,
+            24
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "0FpvR",
+              "name": "hdrTitle",
+              "gap": 10,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "ZPKi9",
+                  "width": 16,
+                  "height": 16,
+                  "iconFontName": "upload",
+                  "iconFontFamily": "lucide",
+                  "fill": "#0A6B3A"
+                },
+                {
+                  "type": "text",
+                  "id": "FNdMf",
+                  "fill": "#1A1A1A",
+                  "content": "上传技能/插件扩展",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 16,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "icon_font",
+              "id": "WS1on",
+              "width": 18,
+              "height": 18,
+              "iconFontName": "x",
+              "iconFontFamily": "lucide",
+              "fill": "#9CA3AF"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "5WoDT",
+          "name": "body",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "padding": 24,
+          "children": [
+            {
+              "type": "frame",
+              "id": "HtVFo",
+              "name": "dz",
+              "width": "fill_container",
+              "height": 130,
+              "fill": "#F9FAFB",
+              "cornerRadius": 10,
+              "stroke": {
+                "thickness": 1.5,
+                "fill": "#D1D5DB"
+              },
+              "gap": 6,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "l71P6",
+                  "fill": "#6B7280",
+                  "content": "拖拽文件到此处，或点击选择",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "m1sJ8",
+                  "fill": "#9CA3AF",
+                  "content": "支持 .zip / .tar.gz 格式",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "blIVQ",
+              "fill": "#374151",
+              "content": "待上传：malicious-plugin-v1.zip（2.4MB）",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "600"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "mrplF",
+          "name": "footer",
+          "width": "fill_container",
+          "stroke": {
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#E8E8E8"
+          },
+          "gap": 12,
+          "padding": [
+            16,
+            24
+          ],
+          "justifyContent": "end",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "V4SrW",
+              "name": "cancelBtn",
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#E8E8E8"
+              },
+              "padding": [
+                10,
+                20
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "4IdMo",
+                  "fill": "#374151",
+                  "content": "取消",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "9b6kC",
+              "name": "saveBtn",
+              "fill": "#0A6B3A",
+              "cornerRadius": 8,
+              "gap": 8,
+              "padding": [
+                10,
+                20
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "jZlCE",
+                  "width": 12,
+                  "height": 12,
+                  "iconFontName": "check",
+                  "iconFontFamily": "lucide",
+                  "fill": "#FFFFFF"
+                },
+                {
+                  "type": "text",
+                  "id": "Nm2jp",
+                  "fill": "#FFFFFF",
+                  "content": "开始上传",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "ZhAkw",
+      "x": 12600,
+      "y": 0,
+      "name": "[弹窗] 上传扩展 — State 2: 格式校验失败",
+      "width": 560,
+      "fill": "#FFFFFF",
+      "cornerRadius": 12,
+      "stroke": {
+        "thickness": 1,
+        "fill": "#E8E8E8"
+      },
+      "effect": {
+        "type": "shadow",
+        "shadowType": "outer",
+        "color": "#00000018",
+        "offset": {
+          "x": 0,
+          "y": 8
+        },
+        "blur": 32
+      },
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "GX28a",
+          "name": "hdr",
+          "width": "fill_container",
+          "stroke": {
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#E8E8E8"
+          },
+          "padding": [
+            20,
+            24
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "SYBNp",
+              "name": "hdrTitle",
+              "gap": 10,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "2I3yX",
+                  "width": 16,
+                  "height": 16,
+                  "iconFontName": "upload",
+                  "iconFontFamily": "lucide",
+                  "fill": "#0A6B3A"
+                },
+                {
+                  "type": "text",
+                  "id": "zVCg2",
+                  "fill": "#1A1A1A",
+                  "content": "上传技能/插件扩展",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 16,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "icon_font",
+              "id": "710gD",
+              "width": 18,
+              "height": 18,
+              "iconFontName": "x",
+              "iconFontFamily": "lucide",
+              "fill": "#9CA3AF"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Niqb5",
+          "name": "body",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "padding": 24,
+          "children": [
+            {
+              "type": "frame",
+              "id": "Zcg4l",
+              "name": "step1ok",
+              "width": "fill_container",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "VAhkJ",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "circle-check",
+                  "iconFontFamily": "lucide",
+                  "fill": "#22C55E"
+                },
+                {
+                  "type": "frame",
+                  "id": "Vbq8w",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "tfEss",
+                      "fill": "#9CA3AF",
+                      "content": "Step 1 — 文件解析",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "4xhcj",
+                      "fill": "#9CA3AF",
+                      "content": "malicious-plugin-v1.zip 读取成功",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "vxlxC",
+              "name": "step2err",
+              "width": "fill_container",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "VJtgi",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "circle-x",
+                  "iconFontFamily": "lucide",
+                  "fill": "#EF4444"
+                },
+                {
+                  "type": "frame",
+                  "id": "2iX8V",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "cDo6c",
+                      "fill": "#f87171",
+                      "content": "Step 2 — SKILL.md 格式校验",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "HVsOE",
+                      "fill": "#f87171",
+                      "content": "校验失败，已终止",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "9v4Yh",
+              "name": "errbox",
+              "width": "fill_container",
+              "fill": "#FEF2F2",
+              "cornerRadius": 8,
+              "layout": "vertical",
+              "gap": 6,
+              "padding": [
+                12,
+                14
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "iAgiu",
+                  "fill": "#DC2626",
+                  "content": "• 缺少必填字段: name",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "DCO0r",
+                  "fill": "#DC2626",
+                  "content": "• keywords 数量（25）超过上限（20）",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "PXGcB",
+                  "fill": "#DC2626",
+                  "content": "• activation.patterns[1]: 非法正则表达式",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "rrxpQ",
+              "name": "step3idle",
+              "width": "fill_container",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "B2zcC",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "circle",
+                  "iconFontFamily": "lucide",
+                  "fill": "#D1D5DB"
+                },
+                {
+                  "type": "frame",
+                  "id": "qbFkV",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "BpIyd",
+                      "fill": "#D1D5DB",
+                      "content": "Step 3 — 安全扫描",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "DLjKh",
+                      "fill": "#D1D5DB",
+                      "content": "等待前置步骤完成",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "ON0DL",
+              "name": "step4idle",
+              "width": "fill_container",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "NQ1ib",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "circle",
+                  "iconFontFamily": "lucide",
+                  "fill": "#D1D5DB"
+                },
+                {
+                  "type": "frame",
+                  "id": "3kTV7",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "NwIzr",
+                      "fill": "#D1D5DB",
+                      "content": "Step 4 — 提交审核队列",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "dvSaX",
+                      "fill": "#D1D5DB",
+                      "content": "等待前置步骤完成",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "ouVCm",
+          "name": "footer",
+          "width": "fill_container",
+          "stroke": {
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#E8E8E8"
+          },
+          "gap": 12,
+          "padding": [
+            16,
+            24
+          ],
+          "justifyContent": "end",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "Xdtl8",
+              "name": "cancelBtn",
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#E8E8E8"
+              },
+              "padding": [
+                10,
+                20
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "v17sk",
+                  "fill": "#374151",
+                  "content": "取消",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "7E9Zq",
+              "name": "saveBtn",
+              "fill": "#0A6B3A",
+              "cornerRadius": 8,
+              "gap": 8,
+              "padding": [
+                10,
+                20
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "aZnhn",
+                  "width": 12,
+                  "height": 12,
+                  "iconFontName": "check",
+                  "iconFontFamily": "lucide",
+                  "fill": "#FFFFFF"
+                },
+                {
+                  "type": "text",
+                  "id": "bOuSH",
+                  "fill": "#FFFFFF",
+                  "content": "开始上传",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "hMoab",
+      "x": 13200,
+      "y": 0,
+      "name": "[弹窗] 上传扩展 — State 3: 安全扫描中",
+      "width": 560,
+      "fill": "#FFFFFF",
+      "cornerRadius": 12,
+      "stroke": {
+        "thickness": 1,
+        "fill": "#E8E8E8"
+      },
+      "effect": {
+        "type": "shadow",
+        "shadowType": "outer",
+        "color": "#00000018",
+        "offset": {
+          "x": 0,
+          "y": 8
+        },
+        "blur": 32
+      },
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "N5dIl",
+          "name": "hdr",
+          "width": "fill_container",
+          "stroke": {
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#E8E8E8"
+          },
+          "padding": [
+            20,
+            24
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "CVKUf",
+              "name": "hdrTitle",
+              "gap": 10,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "fLvQ9",
+                  "width": 16,
+                  "height": 16,
+                  "iconFontName": "upload",
+                  "iconFontFamily": "lucide",
+                  "fill": "#0A6B3A"
+                },
+                {
+                  "type": "text",
+                  "id": "jtCZG",
+                  "fill": "#1A1A1A",
+                  "content": "上传技能/插件扩展",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 16,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "icon_font",
+              "id": "ixSu4",
+              "width": 18,
+              "height": 18,
+              "iconFontName": "x",
+              "iconFontFamily": "lucide",
+              "fill": "#9CA3AF"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Td9jE",
+          "name": "body",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "padding": 24,
+          "children": [
+            {
+              "type": "frame",
+              "id": "xEf5i",
+              "width": "fill_container",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "I1fml",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "circle-check",
+                  "iconFontFamily": "lucide",
+                  "fill": "#22C55E"
+                },
+                {
+                  "type": "frame",
+                  "id": "QOOig",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "GSkfK",
+                      "fill": "#9CA3AF",
+                      "content": "Step 1 — 文件解析",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "CFc2M",
+                      "fill": "#9CA3AF",
+                      "content": "malicious-plugin-v1.zip 读取成功",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "ULb0I",
+              "width": "fill_container",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "6wfdY",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "circle-check",
+                  "iconFontFamily": "lucide",
+                  "fill": "#22C55E"
+                },
+                {
+                  "type": "frame",
+                  "id": "w1dhC",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "mWbUH",
+                      "fill": "#9CA3AF",
+                      "content": "Step 2 — SKILL.md 格式校验",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "o7L1n",
+                      "fill": "#9CA3AF",
+                      "content": "name / version / activation 字段全部合法",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "n31pG",
+              "name": "scan_row",
+              "width": "fill_container",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "JjJND",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "loader-circle",
+                  "iconFontFamily": "lucide",
+                  "fill": "#3B82F6"
+                },
+                {
+                  "type": "frame",
+                  "id": "rj3UJ",
+                  "name": "scaninfo",
+                  "layout": "vertical",
+                  "gap": 6,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "xFWLw",
+                      "fill": "#60a5fa",
+                      "content": "Step 3 — 安全扫描中…",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "YXDv3",
+                      "fill": "#EFF6FF",
+                      "cornerRadius": 8,
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": [
+                        10,
+                        14
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "5ARPR",
+                          "fill": "#22C55E",
+                          "content": "✓  解析 SKILL.md 元数据",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "oNdxm",
+                          "fill": "#3B82F6",
+                          "content": "●  检查 sandbox shell profiles",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "68Q76",
+                          "fill": "#9CA3AF",
+                          "content": "○  匹配 vetting rules（网络/文件/命令）",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "CpZWI",
+                          "fill": "#9CA3AF",
+                          "content": "○  生成扫描报告",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "xhzJD",
+              "width": "fill_container",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "ZMqmw",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "circle",
+                  "iconFontFamily": "lucide",
+                  "fill": "#D1D5DB"
+                },
+                {
+                  "type": "frame",
+                  "id": "roYKi",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "j5RP6",
+                      "fill": "#D1D5DB",
+                      "content": "Step 4 — 提交审核队列",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "mRfQz",
+                      "fill": "#D1D5DB",
+                      "content": "等待前置步骤完成",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "0NZQb",
+          "name": "footer",
+          "width": "fill_container",
+          "stroke": {
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#E8E8E8"
+          },
+          "gap": 12,
+          "padding": [
+            16,
+            24
+          ],
+          "justifyContent": "end",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "ifTqZ",
+              "name": "cancelBtn",
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#E8E8E8"
+              },
+              "padding": [
+                10,
+                20
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "kCFgK",
+                  "fill": "#374151",
+                  "content": "取消",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "Wo9mZ",
+              "name": "saveBtn",
+              "fill": "#6B7280",
+              "cornerRadius": 8,
+              "gap": 8,
+              "padding": [
+                10,
+                20
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "E4Kfp",
+                  "width": 12,
+                  "height": 12,
+                  "iconFontName": "loader-circle",
+                  "iconFontFamily": "lucide",
+                  "fill": "#FFFFFF"
+                },
+                {
+                  "type": "text",
+                  "id": "y9Qb2",
+                  "fill": "#FFFFFF",
+                  "content": "扫描中…",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "pxIQc",
+      "x": 13800,
+      "y": 0,
+      "name": "[弹窗] 上传扩展 — State 4: 扫描完成/待审核",
+      "width": 560,
+      "fill": "#FFFFFF",
+      "cornerRadius": 12,
+      "stroke": {
+        "thickness": 1,
+        "fill": "#E8E8E8"
+      },
+      "effect": {
+        "type": "shadow",
+        "shadowType": "outer",
+        "color": "#00000018",
+        "offset": {
+          "x": 0,
+          "y": 8
+        },
+        "blur": 32
+      },
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "FytZx",
+          "name": "hdr",
+          "width": "fill_container",
+          "stroke": {
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#E8E8E8"
+          },
+          "padding": [
+            20,
+            24
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "TuakF",
+              "name": "hdrTitle",
+              "gap": 10,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "bePgH",
+                  "width": 16,
+                  "height": 16,
+                  "iconFontName": "upload",
+                  "iconFontFamily": "lucide",
+                  "fill": "#0A6B3A"
+                },
+                {
+                  "type": "text",
+                  "id": "Y7JZk",
+                  "fill": "#1A1A1A",
+                  "content": "上传技能/插件扩展",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 16,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "icon_font",
+              "id": "k2JSk",
+              "width": 18,
+              "height": 18,
+              "iconFontName": "x",
+              "iconFontFamily": "lucide",
+              "fill": "#9CA3AF"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "GG5XA",
+          "name": "body",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "padding": 24,
+          "children": [
+            {
+              "type": "frame",
+              "id": "knsN8",
+              "width": "fill_container",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "fNNVm",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "circle-check",
+                  "iconFontFamily": "lucide",
+                  "fill": "#22C55E"
+                },
+                {
+                  "type": "frame",
+                  "id": "Yv6KD",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "X2yvL",
+                      "fill": "#9CA3AF",
+                      "content": "Step 1 — 文件解析",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "CG1j6",
+                      "fill": "#9CA3AF",
+                      "content": "malicious-plugin-v1.zip 读取成功",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "oFK8E",
+              "width": "fill_container",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "lzzOS",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "circle-check",
+                  "iconFontFamily": "lucide",
+                  "fill": "#22C55E"
+                },
+                {
+                  "type": "frame",
+                  "id": "9OBgd",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "kV97x",
+                      "fill": "#9CA3AF",
+                      "content": "Step 2 — SKILL.md 格式校验",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "xPsMS",
+                      "fill": "#9CA3AF",
+                      "content": "name / version / activation 字段全部合法",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "ZSGNv",
+              "width": "fill_container",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "UGosz",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "triangle-alert",
+                  "iconFontFamily": "lucide",
+                  "fill": "#F97316"
+                },
+                {
+                  "type": "frame",
+                  "id": "rQNtm",
+                  "layout": "vertical",
+                  "gap": 6,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "MOyki",
+                      "fill": "#fb923c",
+                      "content": "Step 3 — 安全扫描完成",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "G3TBr",
+                      "fill": "#FFF7ED",
+                      "cornerRadius": 8,
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": [
+                        10,
+                        14
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "XLFWr",
+                          "fill": "#EA580C",
+                          "content": "结论：DANGEROUS（发现 2 个问题）",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "bbf9K",
+                          "fill": "#C2410C",
+                          "content": "● [High]  main.py:12 — 明文外发网络请求\n● [Medium] main.py:45 — 读取未声明环境变量",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "pLsG7",
+              "width": "fill_container",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "nIewE",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "circle-check",
+                  "iconFontFamily": "lucide",
+                  "fill": "#22C55E"
+                },
+                {
+                  "type": "frame",
+                  "id": "4JJ2A",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "aeqCR",
+                      "fill": "#9CA3AF",
+                      "content": "Step 4 — 提交审核队列",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "k78Sg",
+                      "fill": "#9CA3AF",
+                      "content": "状态：pending_review，等待管理员审核",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "vTLz4",
+          "name": "footer",
+          "width": "fill_container",
+          "stroke": {
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#E8E8E8"
+          },
+          "gap": 12,
+          "padding": [
+            16,
+            24
+          ],
+          "justifyContent": "end",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "BWSuZ",
+              "name": "cancelBtn",
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#E8E8E8"
+              },
+              "padding": [
+                10,
+                20
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "U1kSt",
+                  "fill": "#374151",
+                  "content": "取消",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "9lqc3",
+              "name": "saveBtn",
+              "fill": "#0A6B3A",
+              "cornerRadius": 8,
+              "gap": 8,
+              "padding": [
+                10,
+                20
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "Ir4YP",
+                  "width": 12,
+                  "height": 12,
+                  "iconFontName": "check",
+                  "iconFontFamily": "lucide",
+                  "fill": "#FFFFFF"
+                },
+                {
+                  "type": "text",
+                  "id": "rJfNq",
+                  "fill": "#FFFFFF",
+                  "content": "确认关闭",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                }
+              ]
+            }
+          ]
+        }
+      ]
     }
   ]
 }
