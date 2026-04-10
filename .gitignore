@@ -41,3 +41,12 @@ __pycache__/
 *.pyd
 claude-code-main
 */**/node_modules/
+.omx/
+.codex/*
+!.codex/agents/
+!.codex/agents/**
+!.codex/skills/
+!.codex/skills/**
+.codex/skills/.system/**
+!.codex/prompts/
+!.codex/prompts/**
