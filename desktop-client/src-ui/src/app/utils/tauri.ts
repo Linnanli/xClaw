@@ -141,16 +141,48 @@ export interface InstalledExtension {
   enabled: boolean;
 }
 
+interface ExtensionInfoBackend {
+  name: string;
+  display_name: string | null;
+  kind: string;
+  installed: boolean;
+  active: boolean;
+  authenticated: boolean;
+  tools: string[];
+}
+
+function toExtensionMetadata(ext: ExtensionInfoBackend): ExtensionMetadata {
+  return {
+    id: ext.name,
+    name: ext.display_name || ext.name,
+    version: '0.0.0',
+    description: `${ext.kind} 扩展`,
+    author: ext.kind,
+    tools: ext.tools,
+  };
+}
+
 export const extensionApi = {
-  getInstalledExtensions: () => invokeTauri<InstalledExtension[]>('ic_list_extensions'),
-  getAvailableExtensions: () => invokeTauri<ExtensionMetadata[]>('ic_search_extensions', { query: '' }),
+  getInstalledExtensions: async (): Promise<InstalledExtension[]> => {
+    const list = await invokeTauri<ExtensionInfoBackend[]>('ic_list_extensions');
+    return list
+      .filter((ext) => ext.installed)
+      .map((ext) => ({ metadata: toExtensionMetadata(ext), enabled: ext.active }));
+  },
+  getAvailableExtensions: async (): Promise<ExtensionMetadata[]> => {
+    const list = await invokeTauri<ExtensionInfoBackend[]>('ic_list_extensions', {
+      includeAvailable: true,
+    });
+    return list.map(toExtensionMetadata);
+  },
   installExtension: (metadata: ExtensionMetadata) =>
     invokeTauri('ic_install_extension', { name: metadata.id }),
   uninstallExtension: (extensionId: string) =>
     invokeTauri('ic_uninstall_extension', { name: extensionId }),
-  // enable/disable 暂无对应新命令
-  enableExtension: async (_extensionId: string): Promise<void> => {},
-  disableExtension: async (_extensionId: string): Promise<void> => {},
+  enableExtension: (extensionId: string): Promise<void> =>
+    invokeTauri('ic_enable_extension', { name: extensionId }),
+  disableExtension: (extensionId: string): Promise<void> =>
+    invokeTauri('ic_disable_extension', { name: extensionId }),
 };
 
 // Extension Search API
@@ -527,16 +559,46 @@ export interface InstalledSkill {
   enabled: boolean;
 }
 
+interface SkillInfoBackend {
+  name: string;
+  version: string;
+  description: string;
+  source: string;
+  trust: string;
+  keywords: string[];
+  enabled: boolean;
+}
+
+function toSkillMetadata(skill: SkillInfoBackend): Skill {
+  return {
+    id: skill.name,
+    name: skill.name,
+    version: skill.version,
+    description: skill.description,
+    author: '',
+    keywords: skill.keywords,
+    trust_level: skill.trust,
+    source: skill.source,
+  };
+}
+
 export const skillApi = {
   getAvailableSkills: () => invokeTauri<Skill[]>('ic_search_skills', { query: '' }),
-  getInstalledSkills: () => invokeTauri<InstalledSkill[]>('ic_list_skills'),
+  getInstalledSkills: async (): Promise<InstalledSkill[]> => {
+    const list = await invokeTauri<SkillInfoBackend[]>('ic_list_skills');
+    return list.map((skill) => ({
+      metadata: toSkillMetadata(skill),
+      enabled: skill.enabled,
+    }));
+  },
   installSkill: (skillId: string) =>
     invokeTauri('ic_install_skill', { name: skillId }),
   uninstallSkill: (skillId: string) =>
     invokeTauri('ic_uninstall_skill', { name: skillId }),
-  // enable/disable 暂无对应新命令
-  enableSkill: async (_skillId: string): Promise<void> => {},
-  disableSkill: async (_skillId: string): Promise<void> => {},
+  enableSkill: (skillId: string): Promise<void> =>
+    invokeTauri('ic_enable_skill', { name: skillId }),
+  disableSkill: (skillId: string): Promise<void> =>
+    invokeTauri('ic_disable_skill', { name: skillId }),
 };
 
 // ============================================================================

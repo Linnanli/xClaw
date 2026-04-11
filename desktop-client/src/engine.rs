@@ -12,6 +12,7 @@
 //! 5. `app_handle.manage(AppState)` — 注入 Tauri 全局状态
 //! 6. `agent.run()` — 阻塞运行消息循环
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -162,6 +163,19 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     let scheduler_slot: ironclaw::tools::builtin::SchedulerSlot =
         Arc::new(tokio::sync::RwLock::new(None));
 
+    let disabled_skills = load_disabled_names(
+        components.db.as_ref(),
+        &config.owner_id,
+        "desktop_disabled_skills",
+    )
+    .await;
+    let disabled_extensions = load_disabled_names(
+        components.db.as_ref(),
+        &config.owner_id,
+        "desktop_disabled_extensions",
+    )
+    .await;
+
     let app_state = AppState {
         msg_sender,
         db: components.db.clone(),
@@ -184,6 +198,8 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         log_broadcaster: Arc::clone(&log_broadcaster),
         log_clear_offset: std::sync::atomic::AtomicUsize::new(0),
         routine_engine_slot: Arc::clone(&routine_engine_slot),
+        disabled_skills: std::sync::RwLock::new(disabled_skills),
+        disabled_extensions: std::sync::RwLock::new(disabled_extensions),
     };
     // 从 Tauri managed state 获取 EngineState 并填充
     let engine_state = app_handle.state::<EngineState>();
@@ -552,4 +568,31 @@ fn apply_default_model(state: &AppState, model: &crate::ipc::models::ModelConfig
         base_url = %crate::ipc::chat::normalize_base_url(base_url),
         "Default LLM provider initialized from admin backend"
     );
+}
+
+async fn load_disabled_names(
+    db: Option<&Arc<dyn ironclaw::db::Database>>,
+    owner_id: &str,
+    key: &str,
+) -> HashSet<String> {
+    let Some(db) = db else {
+        return HashSet::new();
+    };
+
+    let value = match db.get_setting(owner_id, key).await {
+        Ok(Some(value)) => value,
+        Ok(None) => return HashSet::new(),
+        Err(error) => {
+            tracing::warn!(%key, error = %error, "Failed to load disabled set");
+            return HashSet::new();
+        }
+    };
+
+    match serde_json::from_value::<Vec<String>>(value) {
+        Ok(names) => names.into_iter().collect(),
+        Err(error) => {
+            tracing::warn!(%key, error = %error, "Invalid disabled set payload");
+            HashSet::new()
+        }
+    }
 }

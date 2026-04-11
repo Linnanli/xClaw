@@ -86,7 +86,7 @@ describe('ExtensionsTab', () => {
       renderExtensionsTab();
       await waitFor(() => {
         expect(screen.getByPlaceholderText('搜索已安装的扩展')).toBeInTheDocument();
-        expect(screen.getByText('添加扩展')).toBeInTheDocument();
+        expect(screen.getByText('刷新扩展')).toBeInTheDocument();
       });
     });
 

@@ -5,7 +5,10 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::state::EngineState;
+use super::persistence::persist_disabled_items;
+use crate::state::{AppState, EngineState};
+
+const DISABLED_EXTENSIONS_SETTING_KEY: &str = "desktop_disabled_extensions";
 
 /// 扩展信息（前端展示用）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,6 +20,14 @@ pub struct ExtensionInfo {
     pub active: bool,
     pub authenticated: bool,
     pub tools: Vec<String>,
+}
+
+fn extension_name_exists<'a>(name: &str, mut names: impl Iterator<Item = &'a str>) -> bool {
+    names.any(|candidate| candidate == name)
+}
+
+fn effective_active(is_runtime_active: bool, is_soft_enabled: bool) -> bool {
+    is_runtime_active && is_soft_enabled
 }
 
 /// 列出扩展。
@@ -43,11 +54,64 @@ pub async fn ic_list_extensions(
             display_name: e.display_name.clone(),
             kind: format!("{}", e.kind),
             installed: e.installed,
-            active: e.active,
+            active: effective_active(e.active, state.extension_enabled(&e.name)),
             authenticated: e.authenticated,
             tools: e.tools.clone(),
         })
         .collect())
+}
+
+/// 启用扩展。
+#[tauri::command]
+pub async fn ic_enable_extension(
+    state: State<'_, EngineState>,
+    name: String,
+) -> Result<(), String> {
+    let state = state.get()?;
+    let ext_mgr = state
+        .extension_manager
+        .as_ref()
+        .ok_or("Extension manager not available")?;
+
+    ensure_extension_installed(state, &name).await?;
+    ext_mgr
+        .activate(&name, &state.owner_id)
+        .await
+        .map_err(|e| format!("Failed to enable extension: {}", e))?;
+    if let Err(error) = set_extension_enabled_with_persist(state, &name, true).await {
+        let _ = soft_deactivate_extension_runtime(state, &name).await;
+        return Err(error);
+    }
+    tracing::info!(extension = %name, "Extension enabled");
+    Ok(())
+}
+
+/// 禁用扩展（软禁用，仅对 desktop-client 生效）。
+#[tauri::command]
+pub async fn ic_disable_extension(
+    state: State<'_, EngineState>,
+    name: String,
+) -> Result<(), String> {
+    let state = state.get()?;
+    let ext_mgr = state
+        .extension_manager
+        .as_ref()
+        .ok_or("Extension manager not available")?;
+
+    ensure_extension_installed(state, &name).await?;
+    soft_deactivate_extension_runtime(state, &name).await?;
+    if let Err(error) = set_extension_enabled_with_persist(state, &name, false).await {
+        if let Err(reactivate_error) = ext_mgr.activate(&name, &state.owner_id).await {
+            return Err(format!(
+                "{}; failed to reactivate extension after rollback: {}",
+                error, reactivate_error
+            ));
+        }
+        return Err(error);
+    }
+
+    tracing::info!(extension = %name, "Extension disabled");
+    Ok(())
 }
 
 /// 安装扩展。
@@ -241,4 +305,101 @@ pub async fn ic_search_extensions(
             tools: Vec::new(),
         })
         .collect())
+}
+
+async fn ensure_extension_installed(state: &AppState, name: &str) -> Result<(), String> {
+    let ext_mgr = state
+        .extension_manager
+        .as_ref()
+        .ok_or("Extension manager not available")?;
+    let installed = ext_mgr
+        .list(None, false, &state.owner_id)
+        .await
+        .map_err(|e| format!("Failed to list extensions: {}", e))?;
+    if extension_name_exists(name, installed.iter().map(|ext| ext.name.as_str())) {
+        return Ok(());
+    }
+    Err(format!("Extension not installed: {}", name))
+}
+
+async fn persist_disabled_extensions(state: &AppState) -> Result<(), String> {
+    let disabled = state.disabled_extensions_snapshot()?;
+    persist_disabled_items(
+        state,
+        DISABLED_EXTENSIONS_SETTING_KEY,
+        disabled,
+        "extensions",
+    )
+    .await
+}
+
+async fn set_extension_enabled_with_persist(
+    state: &AppState,
+    name: &str,
+    enabled: bool,
+) -> Result<(), String> {
+    state.set_extension_enabled(name, enabled)?;
+    if let Err(error) = persist_disabled_extensions(state).await {
+        let rollback_error = state
+            .set_extension_enabled(name, !enabled)
+            .err()
+            .unwrap_or_default();
+        if rollback_error.is_empty() {
+            return Err(error);
+        }
+        return Err(format!(
+            "{}; rollback failed: {}",
+            error, rollback_error
+        ));
+    }
+    Ok(())
+}
+
+async fn soft_deactivate_extension_runtime(state: &AppState, name: &str) -> Result<(), String> {
+    let ext_mgr = state
+        .extension_manager
+        .as_ref()
+        .ok_or("Extension manager not available")?;
+
+    let installed = ext_mgr
+        .list(None, false, &state.owner_id)
+        .await
+        .map_err(|e| format!("Failed to list extensions: {}", e))?;
+
+    let Some(extension) = installed.into_iter().find(|ext| ext.name == name) else {
+        return Err(format!("Extension not installed: {}", name));
+    };
+
+    for tool in extension.tools {
+        state.tools.unregister(&tool).await;
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{effective_active, extension_name_exists};
+
+    #[test]
+    fn test_extension_name_exists_when_present() {
+        let installed = ["github", "slack", "notion"];
+        let found = extension_name_exists("slack", installed.iter().copied());
+        assert!(found, "expected installed extension to be found");
+    }
+
+    #[test]
+    fn test_extension_name_exists_when_missing() {
+        let installed = ["github", "slack", "notion"];
+        let found = extension_name_exists("linear", installed.iter().copied());
+        assert!(!found, "expected missing extension to be rejected");
+    }
+
+    #[test]
+    fn test_effective_active_requires_runtime_and_soft_enable() {
+        assert!(effective_active(true, true));
+        assert!(!effective_active(true, false));
+        assert!(!effective_active(false, true));
+        assert!(!effective_active(false, false));
+    }
 }

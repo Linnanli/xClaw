@@ -29,6 +29,7 @@
 //!     → 前端收到 "engine ready" 或 "engine error" 事件
 //! ```
 
+use std::collections::HashSet;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use ironclaw::agent::routine_engine::RoutineEngine;
@@ -103,6 +104,103 @@ pub struct AppState {
     pub log_clear_offset: std::sync::atomic::AtomicUsize,
     /// Routine engine slot — 引擎就绪后填充，供 ic_fire_routine 使用。
     pub routine_engine_slot: Arc<tokio::sync::RwLock<Option<Arc<RoutineEngine>>>>,
+    /// 被用户禁用的技能名集合（仅影响 desktop-client IPC 行为）。
+    pub disabled_skills: std::sync::RwLock<HashSet<String>>,
+    /// 被用户禁用的扩展名集合（仅影响 desktop-client IPC 行为）。
+    pub disabled_extensions: std::sync::RwLock<HashSet<String>>,
+}
+
+impl AppState {
+    pub fn skill_enabled(&self, name: &str) -> bool {
+        self.disabled_skills
+            .read()
+            .map(|set| !set.contains(name))
+            .unwrap_or(true)
+    }
+
+    pub fn extension_enabled(&self, name: &str) -> bool {
+        self.disabled_extensions
+            .read()
+            .map(|set| !set.contains(name))
+            .unwrap_or(true)
+    }
+
+    pub fn set_skill_enabled(&self, name: &str, enabled: bool) -> Result<(), String> {
+        set_enabled_flag(&self.disabled_skills, name, enabled)
+    }
+
+    pub fn set_extension_enabled(&self, name: &str, enabled: bool) -> Result<(), String> {
+        set_enabled_flag(&self.disabled_extensions, name, enabled)
+    }
+
+    pub fn disabled_skills_snapshot(&self) -> Result<Vec<String>, String> {
+        disabled_snapshot(&self.disabled_skills)
+    }
+
+    pub fn disabled_extensions_snapshot(&self) -> Result<Vec<String>, String> {
+        disabled_snapshot(&self.disabled_extensions)
+    }
+}
+
+fn set_enabled_flag(
+    lock: &std::sync::RwLock<HashSet<String>>,
+    name: &str,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut guard = lock.write().map_err(|e| format!("Lock poisoned: {}", e))?;
+    if enabled {
+        guard.remove(name);
+        return Ok(());
+    }
+    guard.insert(name.to_string());
+    Ok(())
+}
+
+fn disabled_snapshot(lock: &std::sync::RwLock<HashSet<String>>) -> Result<Vec<String>, String> {
+    let guard = lock.read().map_err(|e| format!("Lock poisoned: {}", e))?;
+    Ok(guard.iter().cloned().collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{disabled_snapshot, set_enabled_flag};
+    use std::collections::HashSet;
+    use std::sync::RwLock;
+
+    #[test]
+    fn test_set_enabled_flag_disable_then_enable() {
+        let lock = RwLock::new(HashSet::new());
+
+        set_enabled_flag(&lock, "github", false).expect("disable should succeed");
+        let disabled = disabled_snapshot(&lock).expect("snapshot should succeed");
+        assert_eq!(disabled, vec!["github".to_string()]);
+
+        set_enabled_flag(&lock, "github", true).expect("enable should succeed");
+        let disabled = disabled_snapshot(&lock).expect("snapshot should succeed");
+        assert!(disabled.is_empty(), "enabled extension should be removed");
+    }
+
+    #[test]
+    fn test_set_enabled_flag_idempotent_disable() {
+        let lock = RwLock::new(HashSet::new());
+
+        set_enabled_flag(&lock, "calendar", false).expect("first disable should succeed");
+        set_enabled_flag(&lock, "calendar", false).expect("second disable should succeed");
+
+        let disabled = disabled_snapshot(&lock).expect("snapshot should succeed");
+        assert_eq!(disabled, vec!["calendar".to_string()]);
+    }
+
+    #[test]
+    fn test_disabled_snapshot_returns_all_disabled_names() {
+        let lock = RwLock::new(HashSet::new());
+        set_enabled_flag(&lock, "a", false).expect("disable a should succeed");
+        set_enabled_flag(&lock, "b", false).expect("disable b should succeed");
+
+        let mut disabled = disabled_snapshot(&lock).expect("snapshot should succeed");
+        disabled.sort();
+        assert_eq!(disabled, vec!["a".to_string(), "b".to_string()]);
+    }
 }
 
 /// `main.rs` 中创建的 `LogBroadcaster` 的 Tauri managed state 包装。

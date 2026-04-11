@@ -20,6 +20,14 @@ import {
   Zap,
 } from 'lucide-react';
 import { cn } from '../ui/utils';
+import { Switch } from '../ui/switch';
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '../ui/sheet';
 import { invokeTauri } from '../../utils/tauri';
 
 // ── 类型定义（与 Rust SkillInfo 契约对齐）──────────────────────────
@@ -33,6 +41,7 @@ interface SkillInfo {
   /** "trusted" | "installed" */
   trust: string;
   keywords: string[];
+  enabled: boolean;
 }
 
 // ── 主组件 ────────────────────────────────────────────────────────
@@ -43,6 +52,7 @@ export function SkillsTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const [detailSkill, setDetailSkill] = useState<SkillInfo | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   const loadSkills = useCallback(async () => {
@@ -85,6 +95,30 @@ export function SkillsTab() {
       console.error('Failed to uninstall skill:', err);
       setError('卸载技能失败');
     }
+  };
+
+  const handleToggle = async (name: string, enabled: boolean) => {
+    setSkills((prev) =>
+      prev.map((skill) => (skill.name === name ? { ...skill, enabled: !enabled } : skill)),
+    );
+    try {
+      if (enabled) {
+        await invokeTauri('ic_disable_skill', { name });
+      } else {
+        await invokeTauri('ic_enable_skill', { name });
+      }
+    } catch (err) {
+      console.error('Failed to toggle skill:', err);
+      setSkills((prev) =>
+        prev.map((skill) => (skill.name === name ? { ...skill, enabled } : skill)),
+      );
+      setError('切换技能状态失败');
+    }
+  };
+
+  const openDetail = (skill: SkillInfo) => {
+    setMenuOpenId(null);
+    setDetailSkill(skill);
   };
 
   const filtered = skills.filter(
@@ -140,6 +174,8 @@ export function SkillsTab() {
                   onMenuToggle={() =>
                     setMenuOpenId(menuOpenId === skill.name ? null : skill.name)
                   }
+                  onToggle={() => handleToggle(skill.name, skill.enabled)}
+                  onOpenDetail={() => openDetail(skill)}
                   onUninstall={() => handleUninstall(skill.name)}
                   menuRef={menuOpenId === skill.name ? menuRef : undefined}
                 />
@@ -149,6 +185,51 @@ export function SkillsTab() {
           ))}
         </div>
       )}
+
+      <Sheet open={!!detailSkill} onOpenChange={(open) => !open && setDetailSkill(null)}>
+        <SheetContent side="right" className="w-[360px] p-0 sm:max-w-[360px]">
+          <SheetHeader className="border-b border-border px-5 py-4 text-left">
+            <SheetTitle className="text-base">技能详情</SheetTitle>
+            <SheetDescription>
+              {detailSkill?.name || '查看技能元数据与触发关键词'}
+            </SheetDescription>
+          </SheetHeader>
+          {detailSkill && (
+            <div className="space-y-4 px-5 py-4 text-sm">
+              <div>
+                <p className="text-xs text-muted-foreground">名称</p>
+                <p className="mt-1 font-medium text-foreground">{detailSkill.name}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">版本</p>
+                <p className="mt-1 text-foreground">{detailSkill.version}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">描述</p>
+                <p className="mt-1 whitespace-pre-wrap text-foreground">
+                  {detailSkill.description || '暂无描述'}
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <SourceBadge source={detailSkill.source} />
+                {detailSkill.trust === 'trusted' && <TrustedBadge />}
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">关键词</p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {detailSkill.keywords.length > 0 ? (
+                    detailSkill.keywords.map((keyword) => (
+                      <KeywordBadge key={keyword} keyword={keyword} />
+                    ))
+                  ) : (
+                    <span className="text-xs text-muted-foreground">无关键词</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
@@ -177,12 +258,16 @@ function SkillCard({
   skill,
   menuOpen,
   onMenuToggle,
+  onToggle,
+  onOpenDetail,
   onUninstall,
   menuRef,
 }: {
   skill: SkillInfo;
   menuOpen: boolean;
   onMenuToggle: () => void;
+  onToggle: () => void;
+  onOpenDetail: () => void;
   onUninstall: () => void;
   menuRef?: React.RefObject<HTMLDivElement | null>;
 }) {
@@ -204,13 +289,22 @@ function SkillCard({
             </span>
           </div>
         </div>
-        <button
-          onClick={onMenuToggle}
-          className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
-          aria-label="更多操作"
-        >
-          <MoreHorizontal className="size-[18px]" />
-        </button>
+        <div className="flex items-center gap-2">
+          {!isBuiltin && (
+            <Switch
+              checked={skill.enabled}
+              onCheckedChange={onToggle}
+              aria-label={`${skill.name} 启用开关`}
+            />
+          )}
+          <button
+            onClick={onMenuToggle}
+            className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+            aria-label="更多操作"
+          >
+            <MoreHorizontal className="size-[18px]" />
+          </button>
+        </div>
       </div>
 
       {/* 底部：标签 + 关键词 */}
@@ -228,7 +322,10 @@ function SkillCard({
           ref={menuRef}
           className="absolute right-4 top-full z-10 mt-1 w-[140px] rounded-[10px] border border-border bg-background p-1.5 shadow-lg"
         >
-          <button className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-foreground transition-colors hover:bg-accent">
+          <button
+            onClick={onOpenDetail}
+            className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-foreground transition-colors hover:bg-accent"
+          >
             <Info className="size-3.5 text-muted-foreground" />
             查看详情
           </button>

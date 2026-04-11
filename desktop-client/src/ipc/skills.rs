@@ -12,7 +12,10 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::state::EngineState;
+use super::persistence::persist_disabled_items;
+use crate::state::{AppState, EngineState};
+
+const DISABLED_SKILLS_SETTING_KEY: &str = "desktop_disabled_skills";
 
 /// 技能信息（前端展示用）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,6 +29,13 @@ pub struct SkillInfo {
     pub trust: String,
     /// 激活关键词列表（供前端展示触发条件）
     pub keywords: Vec<String>,
+    /// 是否启用（由 desktop-client 本地设置控制）。
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 /// 技能目录搜索结果。
@@ -75,11 +85,36 @@ pub async fn ic_list_skills(state: State<'_, EngineState>) -> Result<Vec<SkillIn
                     .take(5)
                     .cloned()
                     .collect(),
+                enabled: state.skill_enabled(&s.manifest.name),
             }
         })
         .collect();
 
     Ok(result)
+}
+
+#[tauri::command]
+pub async fn ic_enable_skill(
+    state: State<'_, EngineState>,
+    name: String,
+) -> Result<(), String> {
+    let state = state.get()?;
+    ensure_skill_exists(state, &name)?;
+    set_skill_enabled_with_persist(state, &name, true).await?;
+    tracing::info!(skill = %name, "Skill enabled");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn ic_disable_skill(
+    state: State<'_, EngineState>,
+    name: String,
+) -> Result<(), String> {
+    let state = state.get()?;
+    ensure_skill_exists(state, &name)?;
+    set_skill_enabled_with_persist(state, &name, false).await?;
+    tracing::info!(skill = %name, "Skill disabled");
+    Ok(())
 }
 
 /// 搜索技能目录。
@@ -190,5 +225,43 @@ pub async fn ic_uninstall_skill(state: State<'_, EngineState>, name: String) -> 
     }
 
     tracing::info!(skill = %name, "Skill uninstalled");
+    Ok(())
+}
+
+fn ensure_skill_exists(state: &AppState, name: &str) -> Result<(), String> {
+    let registry = state.skill_registry.as_ref().ok_or("Skills not enabled")?;
+    let guard = registry
+        .read()
+        .map_err(|e| format!("Lock poisoned: {}", e))?;
+    if guard.has(name) {
+        return Ok(());
+    }
+    Err(format!("Skill not found: {}", name))
+}
+
+async fn persist_disabled_skills(state: &AppState) -> Result<(), String> {
+    let disabled = state.disabled_skills_snapshot()?;
+    persist_disabled_items(state, DISABLED_SKILLS_SETTING_KEY, disabled, "skills").await
+}
+
+async fn set_skill_enabled_with_persist(
+    state: &AppState,
+    name: &str,
+    enabled: bool,
+) -> Result<(), String> {
+    state.set_skill_enabled(name, enabled)?;
+    if let Err(error) = persist_disabled_skills(state).await {
+        let rollback_error = state
+            .set_skill_enabled(name, !enabled)
+            .err()
+            .unwrap_or_default();
+        if rollback_error.is_empty() {
+            return Err(error);
+        }
+        return Err(format!(
+            "{}; rollback failed: {}",
+            error, rollback_error
+        ));
+    }
     Ok(())
 }

@@ -115,10 +115,25 @@ mod skill_list_contract {
     #[test]
     fn test_review_status_values() {
         // 前端 ReviewBadge 组件期望的状态值
-        let valid_statuses = ["pending", "approved", "rejected"];
+        let valid_statuses = [
+            "scanning",
+            "pending",
+            "approved",
+            "rejected",
+            "scan_failed",
+            "yanked",
+        ];
         for s in &valid_statuses {
             assert!(
-                matches!(*s, "pending" | "approved" | "rejected"),
+                matches!(
+                    *s,
+                    "scanning"
+                        | "pending"
+                        | "approved"
+                        | "rejected"
+                        | "scan_failed"
+                        | "yanked"
+                ),
                 "无效的 review_status: {}",
                 s
             );
@@ -134,6 +149,83 @@ mod skill_list_contract {
                 "无效的 source: {}",
                 s
             );
+        }
+    }
+}
+
+mod scan_results_contract {
+    use serde_json::json;
+
+    #[test]
+    fn test_scan_result_response_has_required_fields() {
+        let response = json!({
+            "skill_id": "550e8400-e29b-41d4-a716-446655440000",
+            "scan_result": {
+                "scanner_type": "cisco-ai-skill-scanner",
+                "verdict": "SAFE",
+                "is_safe": true,
+                "max_severity": null,
+                "findings_count": 0,
+                "findings": [],
+                "scan_duration_ms": 14,
+                "scanned_at": "2026-04-10T10:00:00Z",
+                "created_at": "2026-04-10T10:00:00Z"
+            }
+        });
+
+        assert!(response.get("skill_id").is_some(), "缺少 skill_id 字段");
+        assert!(response.get("scan_result").is_some(), "缺少 scan_result 字段");
+
+        let scan_result = &response["scan_result"];
+        for field in [
+            "scanner_type",
+            "verdict",
+            "is_safe",
+            "findings_count",
+            "findings",
+        ] {
+            assert!(scan_result.get(field).is_some(), "scan_result 缺少字段: {}", field);
+        }
+    }
+}
+
+mod skill_action_contract {
+    use serde_json::json;
+
+    #[test]
+    fn test_rescan_response_has_required_fields() {
+        let response = json!({
+            "id": "550e8400-e29b-41d4-a716-446655440000",
+            "previous_review_status": "scan_failed",
+            "review_status": "pending",
+            "enabled": false,
+            "is_safe": true,
+            "findings_count": 0
+        });
+
+        for field in [
+            "id",
+            "previous_review_status",
+            "review_status",
+            "enabled",
+            "is_safe",
+            "findings_count",
+        ] {
+            assert!(response.get(field).is_some(), "rescan 响应缺少字段: {}", field);
+        }
+    }
+
+    #[test]
+    fn test_yank_response_has_required_fields() {
+        let response = json!({
+            "id": "550e8400-e29b-41d4-a716-446655440000",
+            "previous_review_status": "approved",
+            "review_status": "yanked",
+            "enabled": false
+        });
+
+        for field in ["id", "previous_review_status", "review_status", "enabled"] {
+            assert!(response.get(field).is_some(), "yank 响应缺少字段: {}", field);
         }
     }
 }

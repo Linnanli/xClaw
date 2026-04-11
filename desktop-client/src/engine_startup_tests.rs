@@ -71,6 +71,8 @@ mod engine_state_timing_tests {
             log_broadcaster: Arc::new(ironclaw::channels::web::log_layer::LogBroadcaster::new()),
             log_clear_offset: std::sync::atomic::AtomicUsize::new(0),
             routine_engine_slot: Arc::new(tokio::sync::RwLock::new(None)),
+            disabled_skills: std::sync::RwLock::new(std::collections::HashSet::new()),
+            disabled_extensions: std::sync::RwLock::new(std::collections::HashSet::new()),
         }
     }
 

@@ -165,10 +165,9 @@ pub async fn send_chat_message(
     let mut msg = IncomingMessage::new("tauri", &state.owner_id, &safe_content)
         .with_thread(&thread_id)
         .with_owner_id(&state.owner_id);
-    if let Some(stats) = dlp_redacted_stats {
-        msg = msg.with_metadata(serde_json::json!({
-            "dlp_redacted_stats": stats,
-        }));
+    let metadata = build_message_metadata(state, dlp_redacted_stats);
+    if !metadata.is_null() {
+        msg = msg.with_metadata(metadata);
     }
 
     state
@@ -190,6 +189,47 @@ pub async fn send_chat_message(
     })
 }
 
+fn build_message_metadata(
+    state: &crate::state::AppState,
+    dlp_redacted_stats: Option<serde_json::Value>,
+) -> serde_json::Value {
+    let mut metadata = serde_json::Map::new();
+
+    if let Some(stats) = dlp_redacted_stats {
+        metadata.insert("dlp_redacted_stats".to_string(), stats);
+    }
+
+    if let Ok(disabled_skills) = state.disabled_skills_snapshot() {
+        metadata.insert(
+            "disabled_skills".to_string(),
+            serde_json::Value::Array(
+                disabled_skills
+                    .into_iter()
+                    .map(serde_json::Value::String)
+                    .collect(),
+            ),
+        );
+    }
+
+    if let Ok(disabled_extensions) = state.disabled_extensions_snapshot() {
+        metadata.insert(
+            "disabled_extensions".to_string(),
+            serde_json::Value::Array(
+                disabled_extensions
+                    .into_iter()
+                    .map(serde_json::Value::String)
+                    .collect(),
+            ),
+        );
+    }
+
+    if metadata.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::Value::Object(metadata)
+    }
+}
+
 /// 在消息发送前做 skill 关键词匹配，若有激活则 emit `skills_activated` 事件。
 ///
 /// 使用 ironclaw 已有的 `prefilter_skills` 函数，不修改 ironclaw 任何代码。
@@ -206,10 +246,21 @@ fn emit_skills_activated_if_any(
         return;
     };
 
+    // prefilter_skills 需要 &[LoadedSkill]，这里构建已启用技能快照。
+    let enabled_skills: Vec<ironclaw::skills::LoadedSkill> = guard
+        .skills()
+        .iter()
+        .filter(|skill| state.skill_enabled(skill.name()))
+        .cloned()
+        .collect();
+    if enabled_skills.is_empty() {
+        return;
+    }
+
     let skills_cfg = &state.skills_config;
     let selected = ironclaw::skills::prefilter_skills(
         content,
-        guard.skills(),
+        &enabled_skills,
         skills_cfg.max_active_skills,
         skills_cfg.max_context_tokens,
     );

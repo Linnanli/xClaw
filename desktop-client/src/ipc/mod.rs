@@ -11,6 +11,7 @@ pub mod jobs;
 pub mod logs;
 pub mod memory;
 pub mod models;
+mod persistence;
 pub mod routines;
 pub mod skills;
 pub mod threads;

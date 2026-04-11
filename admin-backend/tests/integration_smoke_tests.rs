@@ -172,6 +172,7 @@ async fn test_migration_all_tables_exist() {
         ("021_knowledge", "knowledge_bases"),
         ("021_knowledge_docs", "kb_documents"),
         ("023_extensions_v2", "department_skill_whitelist"),
+        ("025_scan_results", "scan_results"),
         // 020 是字段扩展迁移，表已存在，列级验证见 test_migration_020_security_fields_columns
         // 022 是 system_settings 数据插入，表已存在，通过 settings key 验证
         // 023 字段扩展验证见 test_migration_023_extensions_v2_columns
@@ -590,6 +591,9 @@ async fn test_migration_023_extensions_v2_columns() {
 async fn test_http_extensions_v2_routes_registered() {
     let routes = [
         "/api/skills/upload",
+        "/api/skills/00000000-0000-0000-0000-000000000000/scan-results",
+        "/api/skills/00000000-0000-0000-0000-000000000000/rescan",
+        "/api/skills/00000000-0000-0000-0000-000000000000/yank",
         "/api/plugins/upload",
         "/api/v1/search",
         "/api/v1/download",

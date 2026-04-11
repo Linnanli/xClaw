@@ -24,6 +24,7 @@ mod tests {
             source: "workspace".into(),
             trust: "trusted".into(),
             keywords: vec!["review".into(), "code".into()],
+            enabled: true,
         };
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["name"], "code-review");
@@ -91,6 +92,7 @@ mod tests {
     ///   source: 'workspace' | 'user' | 'installed';
     ///   trust: 'trusted' | 'installed';
     ///   keywords: string[];
+    ///   enabled: boolean;
     /// }
     /// ```
     #[test]
@@ -102,6 +104,7 @@ mod tests {
             source: "workspace".into(),
             trust: "trusted".into(),
             keywords: vec!["review".into()],
+            enabled: true,
         };
         let json: serde_json::Value = serde_json::to_value(&info).unwrap();
 
@@ -113,7 +116,8 @@ mod tests {
         assert!(json["keywords"].is_array());
 
         let obj = json.as_object().unwrap();
-        assert_eq!(obj.len(), 6, "SkillInfo should have exactly 6 fields");
+        assert!(json["enabled"].is_boolean());
+        assert_eq!(obj.len(), 7, "SkillInfo should have exactly 7 fields");
     }
 
     /// 前端 CatalogSearchResult 类型定义：
@@ -182,6 +186,7 @@ mod tests {
             source: "workspace".into(),
             trust: "trusted".into(),
             keywords: vec![],
+            enabled: true,
         };
         let json_str = serde_json::to_string(&info).unwrap();
 
@@ -202,6 +207,7 @@ mod tests {
             source: "user".into(),
             trust: "trusted".into(),
             keywords: vec![],
+            enabled: true,
         };
         let json_str = serde_json::to_string(&info).unwrap();
 
@@ -243,6 +249,7 @@ mod tests {
             source: "user".into(),
             trust: "installed".into(),
             keywords: vec![],
+            enabled: true,
         };
         let json = serde_json::to_string(&info).unwrap();
         let parsed: SkillInfo = serde_json::from_str(&json).unwrap();
@@ -258,6 +265,7 @@ mod tests {
             source: "workspace".into(),
             trust: "trusted".into(),
             keywords: vec!["审查".into()],
+            enabled: true,
         };
         let json = serde_json::to_string(&info).unwrap();
         let parsed: SkillInfo = serde_json::from_str(&json).unwrap();
@@ -273,6 +281,7 @@ mod tests {
             source: "user".into(),
             trust: "trusted".into(),
             keywords: vec![],
+            enabled: true,
         };
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["version"], "2.0.0-beta.1");
@@ -327,6 +336,7 @@ mod tests {
             source: "user".into(),
             trust: "trusted".into(),
             keywords: vec![],
+            enabled: true,
         };
         let json = serde_json::to_string(&info).unwrap();
         let parsed: SkillInfo = serde_json::from_str(&json).unwrap();
@@ -342,6 +352,7 @@ mod tests {
             source: "workspace".into(),
             trust: "trusted".into(),
             keywords: vec![],
+            enabled: true,
         };
         let json = serde_json::to_string(&info).unwrap();
         let parsed: SkillInfo = serde_json::from_str(&json).unwrap();
@@ -359,6 +370,7 @@ mod tests {
                 source: source.to_string(),
                 trust: "trusted".into(),
                 keywords: vec![],
+            enabled: true,
             };
             let json = serde_json::to_value(&info).unwrap();
             assert_eq!(json["source"], *source);
@@ -375,6 +387,7 @@ mod tests {
             source: "workspace".into(),
             trust: "trusted".into(),
             keywords: vec!["a".into(), "b".into(), "c".into(), "d".into(), "e".into()],
+            enabled: true,
         };
         let json = serde_json::to_value(&info).unwrap();
         assert!(json["keywords"].as_array().unwrap().len() <= 5);

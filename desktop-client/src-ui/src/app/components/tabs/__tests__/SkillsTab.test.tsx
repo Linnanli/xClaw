@@ -30,6 +30,7 @@ const mockSkills = [
     source: 'workspace',   // 内置技能，不可移除
     trust: 'trusted',
     keywords: ['ai', 'personality'],
+    enabled: true,
   },
   {
     name: 'custom-skill',
@@ -38,6 +39,7 @@ const mockSkills = [
     source: 'user',        // 用户技能，可移除
     trust: 'installed',
     keywords: [],
+    enabled: false,
   },
 ];
 

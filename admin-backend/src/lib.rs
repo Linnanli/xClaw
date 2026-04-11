@@ -1,11 +1,15 @@
 pub mod auth;
 pub mod db;
 pub mod error;
+pub mod extensions_state;
+pub mod extensions_validation;
 pub mod handlers;
 pub mod middleware;
 pub mod models;
 pub mod policy_management;
 pub mod routes;
+pub mod scanner;
+pub mod skill_package;
 
 pub use error::{Error, Result};
 

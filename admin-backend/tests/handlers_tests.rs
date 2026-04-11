@@ -32,8 +32,14 @@ async fn create_test_pool() -> Pool {
 /// 创建测试用的应用状态
 async fn create_test_state() -> Arc<AppState> {
     let pool = create_test_pool().await;
+    let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+        "postgres://postgres:postgres@localhost:5432/ironclaw_test".to_string()
+    });
+    let sqlx_pool =
+        sqlx::PgPool::connect_lazy(&db_url).expect("Failed to create lazy sqlx pool");
     Arc::new(AppState {
         db_pool: pool,
+        sqlx_pool,
         http_client: reqwest::Client::new(),
         gateway_url: "http://localhost:3000".to_string(),
     })

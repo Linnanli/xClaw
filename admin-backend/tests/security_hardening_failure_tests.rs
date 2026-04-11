@@ -33,8 +33,13 @@ async fn try_connect_db() -> Option<deadpool_postgres::Pool> {
 }
 
 fn build_app(pool: deadpool_postgres::Pool) -> axum::Router {
+    let db_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/ironclaw".to_string());
+    let sqlx_pool =
+        sqlx::PgPool::connect_lazy(&db_url).expect("create lazy sqlx pool for test app");
     let state = AppState {
         db_pool: pool,
+        sqlx_pool,
         http_client: reqwest::Client::new(),
         gateway_url: "http://localhost:38080".to_string(),
     };
@@ -149,17 +154,26 @@ async fn test_failure_rate_limit_triggers_429() {
     // 由于 create_router 内部创建新的 RateLimitLayer，
     // 我们需要在同一个 app 上发送多次请求。
     // axum Router 实现了 Clone，可以多次 oneshot。
+    let db_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/ironclaw".to_string());
+    let sqlx_pool =
+        sqlx::PgPool::connect_lazy(&db_url).expect("create lazy sqlx pool for rate-limit test");
     let state = AppState {
         db_pool: pool,
+        sqlx_pool,
         http_client: reqwest::Client::new(),
         gateway_url: "http://localhost:38080".to_string(),
     };
     let app = create_router(state);
 
     let mut last_status = StatusCode::OK;
+    let login_limit = std::env::var("RATE_LIMIT_LOGIN")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(30);
 
-    // 发送 11 次请求，使用相同 IP（无 X-Forwarded-For 时使用 "unknown"）
-    for i in 0..11 {
+    // 发送 (limit + 1) 次请求，使用相同 IP（无 X-Forwarded-For 时使用 "unknown"）
+    for i in 0..=login_limit {
         let resp = app
             .clone()
             .oneshot(
@@ -184,7 +198,7 @@ async fn test_failure_rate_limit_triggers_429() {
     assert_eq!(
         last_status,
         StatusCode::TOO_MANY_REQUESTS,
-        "连续 11 次登录请求应触发 429 Too Many Requests（登录限制 10 次/分钟）"
+        "连续 (limit+1) 次登录请求应触发 429 Too Many Requests"
     );
 }
 

@@ -107,6 +107,10 @@ pub fn create_router(state: AppState) -> Router {
             post(handlers::extensions::upload_skill),
         )
         .route(
+            "/api/skills/upload-package",
+            post(handlers::extensions::upload_skill_package),
+        )
+        .route(
             "/api/skills/{id}/enable",
             post(handlers::extensions::set_skill_enabled),
         )
@@ -117,6 +121,18 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/api/skills/{id}/review",
             post(handlers::extensions::review_skill),
+        )
+        .route(
+            "/api/skills/{id}/scan-results",
+            get(handlers::extensions::get_skill_scan_results),
+        )
+        .route(
+            "/api/skills/{id}/rescan",
+            post(handlers::extensions::rescan_skill),
+        )
+        .route(
+            "/api/skills/{id}/yank",
+            post(handlers::extensions::yank_skill),
         )
         // 插件管理 API（重构：直查 Admin DB，不再代理 Gateway）
         .route("/api/plugins", get(handlers::extensions::list_plugins))
@@ -135,6 +151,14 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/api/plugins/{id}/review",
             post(handlers::extensions::review_plugin),
+        )
+        .route(
+            "/api/plugins/{id}/scan-results",
+            get(handlers::extensions::get_plugin_scan_results),
+        )
+        .route(
+            "/api/plugins/{id}/yank",
+            post(handlers::extensions::yank_plugin),
         )
         // 私有注册表 API（兼容 ClawHub /api/v1/ 格式，供 ironclaw 引擎使用）
         .route("/api/v1/search", get(handlers::extensions::registry_search))
@@ -2267,7 +2291,7 @@ async fn create_user(
 /// POST /api/users/import — 批量导入用户（CSV 格式，需求 3.8）
 ///
 /// CSV 格式（首行为表头）：
-/// ```
+/// ```text
 /// username,email,password,department_id
 /// alice,alice@example.com,Pass123!,
 /// bob,bob@example.com,Pass456!,dept-uuid
