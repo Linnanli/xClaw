@@ -12,6 +12,7 @@ interface DlpRule {
   id: string; name: string; pattern: string; replacement?: string
   severity: 'low' | 'medium' | 'high' | 'critical'
   description?: string; enabled: boolean; category: string
+  classification_level?: string
   rule_type: 'regex' | 'keyword' | 'dictionary'
   updated_at: string
 }

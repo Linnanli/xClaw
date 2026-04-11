@@ -537,8 +537,6 @@ pub struct DlpTestMatch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::Database;
-    use deadpool_postgres::Pool;
 
     // 注意：这些测试需要数据库连接，在实际环境中需要配置测试数据库
 

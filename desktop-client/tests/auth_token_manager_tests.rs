@@ -1,6 +1,4 @@
-use desktop_client::auth_token_manager::{AuthTokenManager, TokenError};
-use std::fs;
-use tempfile::TempDir;
+use desktop_client::auth_token_manager::TokenError;
 
 // 从 auth_token_manager.rs 复制的私有函数，用于测试
 fn generate_random_token() -> String {

@@ -7,9 +7,8 @@
 mod reliability_tests {
     use crate::dlp::patterns::get_all_builtin_patterns;
     use crate::dlp::{DlpDetector, DlpIntegration, DlpSanitizer};
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-    use tokio::time::{sleep, Duration};
+    use tokio::time::Duration;
 
     #[tokio::test]
     async fn test_reliability_network_failure_recovery() {

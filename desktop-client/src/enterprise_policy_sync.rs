@@ -438,6 +438,7 @@ impl EnterprisePolicySyncManager {
     }
 
     /// 使用 HTTP 客户端获取策略（实际实现）
+    #[cfg(not(test))]
     async fn fetch_policies_with_client(
         &self,
         client: &reqwest::Client,
@@ -535,6 +536,7 @@ impl EnterprisePolicySyncManager {
     }
 
     /// 转换 Admin Backend 的 DLP 规则格式为本地格式
+    #[cfg(not(test))]
     fn convert_dlp_rules(&self, rules_raw: Vec<serde_json::Value>) -> DlpResult<Vec<DlpPolicy>> {
         let mut policies = Vec::new();
 
@@ -555,6 +557,7 @@ impl EnterprisePolicySyncManager {
     }
 
     /// 转换 Admin Backend 的敏感操作规则格式为本地格式
+    #[cfg(not(test))]
     fn convert_sensitive_ops_rules(
         &self,
         rules_raw: Vec<serde_json::Value>,

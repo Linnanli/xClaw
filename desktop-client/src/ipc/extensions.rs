@@ -379,7 +379,99 @@ async fn soft_deactivate_extension_runtime(state: &AppState, name: &str) -> Resu
 
 #[cfg(test)]
 mod tests {
-    use super::{effective_active, extension_name_exists};
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
+    use super::{
+        effective_active, extension_name_exists, set_extension_enabled_with_persist,
+    };
+    use crate::safety_bridge::SafetyBridge;
+    use crate::state::AppState;
+    use ironclaw::context::ContextManager;
+    use ironclaw::safety::{SafetyConfig, SafetyLayer};
+    use ironclaw::tools::ToolRegistry;
+
+    struct StubLlmProvider;
+
+    #[async_trait::async_trait]
+    impl ironclaw::llm::LlmProvider for StubLlmProvider {
+        fn model_name(&self) -> &str {
+            "stub-model"
+        }
+
+        fn cost_per_token(&self) -> (rust_decimal::Decimal, rust_decimal::Decimal) {
+            (rust_decimal::Decimal::ZERO, rust_decimal::Decimal::ZERO)
+        }
+
+        async fn complete(
+            &self,
+            _req: ironclaw::llm::CompletionRequest,
+        ) -> Result<ironclaw::llm::CompletionResponse, ironclaw::error::LlmError> {
+            Err(ironclaw::error::LlmError::RequestFailed {
+                provider: "stub".into(),
+                reason: "not implemented".into(),
+            })
+        }
+
+        async fn complete_with_tools(
+            &self,
+            _req: ironclaw::llm::ToolCompletionRequest,
+        ) -> Result<ironclaw::llm::ToolCompletionResponse, ironclaw::error::LlmError> {
+            Err(ironclaw::error::LlmError::RequestFailed {
+                provider: "stub".into(),
+                reason: "not implemented".into(),
+            })
+        }
+    }
+
+    fn create_test_app_state(disabled_extensions: &[&str]) -> AppState {
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let safety = Arc::new(SafetyLayer::new(&SafetyConfig {
+            max_output_length: 100_000,
+            injection_check_enabled: true,
+        }));
+        let safety_bridge = Arc::new(SafetyBridge::new(Arc::clone(&safety), None, None));
+        let tools = Arc::new(ToolRegistry::new());
+        let context_manager = Arc::new(ContextManager::new(5));
+
+        let model_override = Arc::new(std::sync::RwLock::new(None));
+        let stub_llm: Arc<dyn ironclaw::llm::LlmProvider> = Arc::new(StubLlmProvider);
+        let model_switch = Arc::new(crate::model_switch::ModelSwitchProvider::new(
+            Arc::clone(&stub_llm),
+            Arc::clone(&model_override),
+        ));
+
+        AppState {
+            msg_sender: tx,
+            db: None,
+            workspace: None,
+            tools,
+            extension_manager: None,
+            skill_registry: None,
+            skill_catalog: None,
+            skills_config: ironclaw::config::SkillsConfig::default(),
+            safety,
+            safety_bridge,
+            context_manager,
+            owner_id: "test-owner".to_string(),
+            llm: Arc::clone(&model_switch) as _,
+            model_override,
+            model_switch,
+            provider_base_url: std::sync::RwLock::new(String::new()),
+            initial_provider: Arc::clone(&stub_llm),
+            initial_base_url: String::new(),
+            log_broadcaster: Arc::new(ironclaw::channels::web::log_layer::LogBroadcaster::new()),
+            log_clear_offset: std::sync::atomic::AtomicUsize::new(0),
+            routine_engine_slot: Arc::new(tokio::sync::RwLock::new(None)),
+            disabled_skills: std::sync::RwLock::new(HashSet::new()),
+            disabled_extensions: std::sync::RwLock::new(
+                disabled_extensions
+                    .iter()
+                    .map(|name| (*name).to_string())
+                    .collect(),
+            ),
+        }
+    }
 
     #[test]
     fn test_extension_name_exists_when_present() {
@@ -401,5 +493,53 @@ mod tests {
         assert!(!effective_active(true, false));
         assert!(!effective_active(false, true));
         assert!(!effective_active(false, false));
+    }
+
+    #[tokio::test]
+    async fn test_disable_extension_rollback_when_persist_fails() {
+        let state = create_test_app_state(&[]);
+
+        let result = set_extension_enabled_with_persist(&state, "github", false).await;
+        assert!(result.is_err());
+        let message = result.err().unwrap_or_default();
+        assert!(
+            message.contains("Database not available"),
+            "expected persistence error, actual: {}",
+            message
+        );
+
+        assert!(
+            state.extension_enabled("github"),
+            "failed persist should rollback disable operation"
+        );
+
+        let snapshot = state
+            .disabled_extensions_snapshot()
+            .expect("snapshot should be readable");
+        assert!(snapshot.is_empty(), "rollback should clear disabled flag");
+    }
+
+    #[tokio::test]
+    async fn test_enable_extension_rollback_when_persist_fails() {
+        let state = create_test_app_state(&["github"]);
+
+        let result = set_extension_enabled_with_persist(&state, "github", true).await;
+        assert!(result.is_err());
+        let message = result.err().unwrap_or_default();
+        assert!(
+            message.contains("Database not available"),
+            "expected persistence error, actual: {}",
+            message
+        );
+
+        assert!(
+            !state.extension_enabled("github"),
+            "failed persist should rollback enable operation"
+        );
+
+        let snapshot = state
+            .disabled_extensions_snapshot()
+            .expect("snapshot should be readable");
+        assert_eq!(snapshot, vec!["github".to_string()]);
     }
 }

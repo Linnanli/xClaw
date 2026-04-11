@@ -257,7 +257,7 @@ mod code_coverage_tests {
 
         // 分支13: 统计信息获取
         let stats = integration.get_statistics().await;
-        assert!(stats.total_scans >= 0);
+        assert!(stats.total_scans > 0, "Statistics should record processed scans");
     }
 
     #[test]

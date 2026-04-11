@@ -498,7 +498,8 @@ mod data_coverage_tests {
         ];
 
         for duration in &durations {
-            assert!(duration.as_nanos() >= 0, "Duration should be non-negative");
+            let nanos = duration.as_nanos() as u64;
+            assert_eq!(std::time::Duration::from_nanos(nanos), *duration);
             println!("Duration test: {:?}", duration);
         }
     }

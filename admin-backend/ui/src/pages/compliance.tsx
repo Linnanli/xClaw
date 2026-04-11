@@ -257,9 +257,10 @@ function ReportDetailDialog({ report, onClose }: { report: Report | null; onClos
   const [exporting, setExporting] = useState(false)
 
   if (!report) return null
+  const currentReport = report
 
-  const t = typeMap[report.report_type] ?? { label: report.report_type, color: '#999' }
-  const c = report.content
+  const t = typeMap[currentReport.report_type] ?? { label: currentReport.report_type, color: '#999' }
+  const c = currentReport.content
 
   const stats = c ? [
     { label: 'DLP 拦截次数', value: c.dlp_blocks, color: '#CF1322' },
@@ -271,7 +272,7 @@ function ReportDetailDialog({ report, onClose }: { report: Report | null; onClos
   async function handleExport() {
     setExporting(true)
     try {
-      await exportReportPdf(report)
+      await exportReportPdf(currentReport)
     } finally {
       setExporting(false)
     }

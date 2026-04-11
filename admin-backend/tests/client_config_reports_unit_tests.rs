@@ -119,6 +119,26 @@ fn test_config_response_version_zero_is_valid() {
 }
 
 #[test]
+fn test_admin_client_config_deserialize_contract() {
+    let json_val = json!({
+        "llm_backend": "openai",
+        "llm_api_key": "sk-test",
+        "llm_model": "gpt-4.1",
+        "llm_base_url": "https://api.openai.com",
+        "safety_enabled": true,
+        "skills_enabled": true,
+        "extensions_enabled": false,
+        "max_cost_per_day_cents": 1234,
+        "config_version": 7,
+        "updated_at": "2026-03-22T00:00:00Z"
+    });
+
+    let parsed: AdminClientConfig = serde_json::from_value(json_val).unwrap();
+    assert_eq!(parsed.max_cost_per_day_cents, Some(1234));
+    assert_eq!(parsed.config_version, Some(7));
+}
+
+#[test]
 fn test_config_response_large_version_number() {
     let resp = ClientConfigResponse {
         llm_backend: None,

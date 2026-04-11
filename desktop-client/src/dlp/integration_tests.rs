@@ -317,7 +317,6 @@ mod api_consistency_tests {
             let result = integration.scan_user_input(input).await.unwrap();
 
             // 验证响应格式一致性
-            assert!(result.sanitization_stats.total_matches >= 0);
             assert!(
                 result.sanitization_stats.redacted_count <= result.sanitization_stats.total_matches
             );

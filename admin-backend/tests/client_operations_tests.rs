@@ -66,7 +66,7 @@ mod client_operations_contract_tests {
 
         assert!(response.get("updated_count").is_some());
         assert!(response["updated_count"].is_number());
-        assert!(response["updated_count"].as_u64().unwrap() >= 0);
+        assert!(response["updated_count"].as_u64().is_some());
     }
 }
 

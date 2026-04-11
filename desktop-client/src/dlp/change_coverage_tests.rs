@@ -248,9 +248,8 @@ mod change_coverage_tests {
 
             // 错误处理应该一致：要么成功，要么产生可预期的错误
             match result {
-                Ok(scan_result) => {
-                    // 成功的情况下，结果应该是有效的
-                    assert!(scan_result.sanitized_content.len() >= 0);
+                Ok(_scan_result) => {
+                    // 成功路径可正常返回结果即可
                 }
                 Err(error) => {
                     // 错误应该是可理解的
@@ -366,8 +365,7 @@ mod change_coverage_tests {
 #[cfg(test)]
 mod regression_tests {
     use crate::dlp::patterns::get_all_builtin_patterns;
-    use crate::dlp::{DlpDetector, DlpIntegration};
-    use std::sync::Arc;
+    use crate::dlp::DlpIntegration;
 
     #[tokio::test]
     async fn test_regression_issue_001_chinese_id_detection() {

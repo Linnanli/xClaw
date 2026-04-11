@@ -22,7 +22,8 @@ const loginSchema = z.object({
   rememberMe: z.boolean().default(false),
 })
 
-type LoginFormValues = z.infer<typeof loginSchema>
+type LoginFormInput = z.input<typeof loginSchema>
+type LoginFormValues = z.output<typeof loginSchema>
 
 const BRAND_STATS = [
   { value: '24', label: 'DLP 规则', color: '#0A6B3A' },
@@ -54,7 +55,7 @@ export default function LoginPage() {
   const navigate = useNavigate()
   const login = useAuthStore((s) => s.login)
 
-  const form = useForm<LoginFormValues>({
+  const form = useForm<LoginFormInput, unknown, LoginFormValues>({
     resolver: zodResolver(loginSchema),
     defaultValues: { username: '', password: '', mfaCode: '', rememberMe: false },
   })

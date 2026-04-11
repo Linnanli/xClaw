@@ -413,7 +413,7 @@ pub(crate) fn switch_provider(
 /// provider 比较时的容错匹配（带 `/v1` vs 不带）由 `classify_switch` 单独处理。
 pub(crate) fn normalize_base_url(url: &str) -> String {
     let trimmed = url.trim_end_matches('/');
-    for suffix in &["/v1/chat/completions", "/chat/completions", "/completions"] {
+    for suffix in &["/chat/completions", "/completions"] {
         if let Some(base) = trimmed.strip_suffix(suffix) {
             return base.to_string();
         }

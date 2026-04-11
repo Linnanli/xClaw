@@ -15,6 +15,9 @@ interface SkillRow {
   review_status: SkillStatus
   is_builtin: boolean
   invoke_count: number
+  reviewed_by?: string
+  reviewed_at?: string
+  review_note?: string
   updated_at: string
 }
 
@@ -31,6 +34,9 @@ interface PluginRow {
   is_builtin: boolean
   invoke_count: number
   requires_sandbox: boolean
+  reviewed_by?: string
+  reviewed_at?: string
+  review_note?: string
   updated_at: string
 }
 
@@ -106,6 +112,38 @@ function seedSkills(): SkillRow[] {
       review_status: 'approved',
       is_builtin: false,
       invoke_count: 3,
+      reviewed_by: 'admin123456',
+      reviewed_at: '2026-04-10T08:30:00.000Z',
+      review_note: '审核通过：规则命中为空，允许上架',
+      updated_at: now(),
+    },
+    {
+      id: 'skill-rejected',
+      name: 'rejected-skill',
+      description: '已拒绝技能',
+      version: '1.0.0',
+      author: 'user',
+      enabled: false,
+      source: 'admin_upload',
+      review_status: 'rejected',
+      is_builtin: false,
+      invoke_count: 0,
+      reviewed_by: 'reviewer9988',
+      reviewed_at: '2026-04-09T02:10:00.000Z',
+      review_note: '拒绝原因：命中高危规则，需整改后重提',
+      updated_at: now(),
+    },
+    {
+      id: 'skill-yanked',
+      name: 'yanked-skill',
+      description: '已下架技能',
+      version: '1.3.0',
+      author: 'user',
+      enabled: false,
+      source: 'admin_upload',
+      review_status: 'yanked',
+      is_builtin: false,
+      invoke_count: 7,
       updated_at: now(),
     },
   ]
@@ -171,6 +209,9 @@ function seedPlugins(): PluginRow[] {
       is_builtin: false,
       invoke_count: 2,
       requires_sandbox: false,
+      reviewed_by: 'plugadmin88',
+      reviewed_at: '2026-04-08T09:00:00.000Z',
+      review_note: '插件审核通过，建议后续增加超时保护',
       updated_at: now(),
     },
   ]
@@ -238,6 +279,83 @@ describe('扩展管理', () => {
       cy.contains('tr', 'approved-skill').within(() => {
         cy.contains('button', '下架').should('be.visible')
       })
+    })
+
+    it('审核信息列应展示 reviewer 历史', () => {
+      mockSkills([
+        {
+          id: 'skill-reviewed-only',
+          name: 'reviewed-skill',
+          description: '带审核历史技能',
+          version: '1.0.0',
+          author: 'user',
+          enabled: true,
+          source: 'admin_upload',
+          review_status: 'approved',
+          is_builtin: false,
+          invoke_count: 1,
+          reviewed_by: 'admin123456',
+          reviewed_at: '2026-04-10T08:30:00.000Z',
+          updated_at: now(),
+        },
+      ])
+
+      cy.visit('/extensions')
+      cy.wait('@getSkills')
+
+      cy.contains('tr', 'reviewed-skill').within(() => {
+        cy.contains(/admin123\s*\//).should('be.visible')
+      })
+    })
+
+    it('审核信息列应支持展开备注', () => {
+      mockSkills([
+        {
+          id: 'skill-note-only',
+          name: 'rejected-skill',
+          description: '带审核备注技能',
+          version: '1.0.0',
+          author: 'user',
+          enabled: false,
+          source: 'admin_upload',
+          review_status: 'rejected',
+          is_builtin: false,
+          invoke_count: 0,
+          reviewed_by: 'reviewer9988',
+          reviewed_at: '2026-04-09T02:10:00.000Z',
+          review_note: '拒绝原因：命中高危规则，需整改后重提',
+          updated_at: now(),
+        },
+      ])
+
+      cy.visit('/extensions')
+      cy.wait('@getSkills')
+
+      cy.contains('tr', 'rejected-skill').within(() => {
+        cy.contains('summary', '备注').click()
+        cy.contains('拒绝原因：命中高危规则，需整改后重提').should('be.visible')
+      })
+    })
+  })
+
+  describe('审核过滤 Tab', () => {
+    beforeEach(() => {
+      cy.visit('/extensions')
+      cy.wait('@getSkills')
+    })
+
+    it('待扫描过滤应仅显示 scanning/scan_failed 项', () => {
+      cy.contains('button', '待扫描 (1)').click()
+      cy.contains('tr', 'scan-failed-skill').should('be.visible')
+      cy.contains('tr', 'pending-skill').should('not.exist')
+      cy.contains('tr', 'approved-skill').should('not.exist')
+    })
+
+    it('已下架过滤应仅显示 yanked 项', () => {
+      cy.contains('button', '已下架 (1)').click()
+      cy.contains('tr', 'yanked-skill').should('be.visible')
+      cy.contains('tr', 'approved-skill').should('not.exist')
+      cy.contains('tr', 'pending-skill').should('not.exist')
     })
   })
 
@@ -410,6 +528,41 @@ describe('扩展管理', () => {
       cy.contains('审核：pending-plugin').should('be.visible')
       cy.contains('安全扫描结果').should('be.visible')
       cy.contains('SAFE').should('be.visible')
+    })
+  })
+
+  describe('插件审核历史', () => {
+    it('插件列表应支持展开审核备注', () => {
+      mockPlugins([
+        {
+          id: 'plugin-note-only',
+          name: 'approved-plugin',
+          description: '带审核备注插件',
+          version: '1.0.0',
+          author: 'user',
+          enabled: true,
+          source: 'admin_upload',
+          review_status: 'approved',
+          plugin_type: 'http',
+          is_builtin: false,
+          invoke_count: 2,
+          requires_sandbox: false,
+          reviewed_by: 'plugadmin88',
+          reviewed_at: '2026-04-08T09:00:00.000Z',
+          review_note: '插件审核通过，建议后续增加超时保护',
+          updated_at: now(),
+        },
+      ])
+
+      cy.visit('/extensions')
+      cy.wait('@getSkills')
+      cy.contains('button', '插件管理').click()
+      cy.wait('@getPlugins')
+
+      cy.contains('tr', 'approved-plugin').within(() => {
+        cy.contains('summary', '备注').click()
+        cy.contains('插件审核通过，建议后续增加超时保护').should('be.visible')
+      })
     })
   })
 

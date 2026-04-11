@@ -4,16 +4,12 @@
 
 use admin_backend::{handlers::*, AppState};
 use axum::{
-    body::Body,
     extract::{Query, State},
-    http::{Request, StatusCode},
     Json,
 };
 use deadpool_postgres::{Config, Pool};
-use serde_json::json;
 use std::sync::Arc;
 use tokio_postgres::NoTls;
-use uuid::Uuid;
 
 /// 创建测试用的数据库连接池
 async fn create_test_pool() -> Pool {
@@ -57,9 +53,12 @@ async fn test_get_policies_handler_success() {
     // 正常路径测试：应该返回策略列表
     match result {
         Ok(Json(response)) => {
-            assert!(response.dlp_rules.len() >= 0);
-            assert!(response.sensitive_ops_rules.len() >= 0);
-            assert!(response.version.dlp_rules_version >= 0);
+            assert!(
+                response.version.total_dlp_rules >= response.version.active_dlp_rules
+            );
+            assert!(
+                response.version.total_sensitive_ops >= response.version.active_sensitive_ops
+            );
         }
         Err(_) => {
             // 如果数据库不可用，测试应该跳过而不是失败
@@ -80,9 +79,12 @@ async fn test_get_policies_handler_with_disabled() {
     // 测试包含禁用规则的情况
     match result {
         Ok(Json(response)) => {
-            // 包含禁用规则时，数量应该 >= 不包含禁用规则的数量
-            assert!(response.dlp_rules.len() >= 0);
-            assert!(response.sensitive_ops_rules.len() >= 0);
+            assert!(
+                response.version.total_dlp_rules >= response.version.active_dlp_rules
+            );
+            assert!(
+                response.version.total_sensitive_ops >= response.version.active_sensitive_ops
+            );
         }
         Err(_) => {
             println!("Database not available, skipping test");
@@ -102,8 +104,7 @@ async fn test_get_dlp_policies_handler_success() {
     // 正常路径测试：应该返回 DLP 规则列表
     match result {
         Ok(Json(rules)) => {
-            // 验证返回的是 Vec<DlpRule>
-            assert!(rules.len() >= 0);
+            assert!(rules.iter().all(|rule| !rule.name.is_empty()));
 
             // 如果有规则，验证规则结构
             if let Some(rule) = rules.first() {
@@ -131,7 +132,7 @@ async fn test_get_sensitive_ops_policies_handler_success() {
     // 正常路径测试：应该返回敏感操作规则列表
     match result {
         Ok(Json(rules)) => {
-            assert!(rules.len() >= 0);
+            assert!(rules.iter().all(|rule| !rule.name.is_empty()));
 
             // 如果有规则，验证规则结构
             if let Some(rule) = rules.first() {
@@ -155,12 +156,8 @@ async fn test_get_policy_version_handler_success() {
     // 正常路径测试：应该返回版本信息
     match result {
         Ok(Json(version)) => {
-            assert!(version.dlp_rules_version >= 0);
-            assert!(version.sensitive_ops_version >= 0);
-            assert!(version.total_dlp_rules >= 0);
-            assert!(version.total_sensitive_ops >= 0);
-            assert!(version.active_dlp_rules >= 0);
-            assert!(version.active_sensitive_ops >= 0);
+            assert!(version.total_dlp_rules >= version.active_dlp_rules);
+            assert!(version.total_sensitive_ops >= version.active_sensitive_ops);
         }
         Err(_) => {
             println!("Database not available, skipping test");
@@ -225,7 +222,7 @@ async fn test_handlers_database_failure() {
     config.dbname = Some("invalid_db".to_string());
 
     // 这应该会失败，但我们要优雅地处理
-    if let Ok(pool) = config.create_pool(None, NoTls) {
+    if config.create_pool(None, NoTls).is_ok() {
         let state = create_test_state().await;
         let params = Query(PolicyQueryParams {
             include_disabled: false,
@@ -256,9 +253,6 @@ fn test_error_messages_no_sensitive_data() {
 #[tokio::test]
 async fn test_handler_performance() {
     let state = create_test_state().await;
-    let params = Query(PolicyQueryParams {
-        include_disabled: false,
-    });
 
     let start = std::time::Instant::now();
     let _result = get_policy_version_handler(State((*state).clone())).await;

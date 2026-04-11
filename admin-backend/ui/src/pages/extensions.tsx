@@ -243,6 +243,13 @@ function reviewHistoryLabel(item: { reviewed_by?: string; reviewed_at?: string }
   return `${reviewer} / ${reviewedAt.toLocaleString('zh-CN', { hour12: false })}`
 }
 
+function reviewNoteText(note?: string): string {
+  if (!note) {
+    return ''
+  }
+  return note.trim()
+}
+
 function sourceBadgeStyle(source: string): { background: string; color: string } {
   if (source === 'builtin') {
     return { background: '#F0F0F0', color: '#666666' }
@@ -323,6 +330,25 @@ function SeverityBadge({ severity }: { severity: string }) {
     <span className="inline-flex items-center px-1.5 py-0.5 font-mono text-[9px] font-semibold" style={{ background: meta.bg, color: meta.color }}>
       {meta.label}
     </span>
+  )
+}
+
+function ReviewHistoryCell({ item }: { item: { reviewed_by?: string; reviewed_at?: string; review_note?: string } }) {
+  const summary = reviewHistoryLabel(item)
+  const note = reviewNoteText(item.review_note)
+
+  if (!note) {
+    return <span className="font-mono text-[10px] text-[#999999]">{summary}</span>
+  }
+
+  return (
+    <details className="group">
+      <summary className="cursor-pointer list-none font-mono text-[10px] text-[#999999]">
+        <span>{summary}</span>
+        <span className="ml-1 text-[#0A6B3A]">备注</span>
+      </summary>
+      <p className="mt-1 whitespace-pre-wrap break-words font-mono text-[10px] text-[#666666]">{note}</p>
+    </details>
   )
 }
 
@@ -1003,7 +1029,9 @@ function SkillTable({
               <TableCell><ReviewBadge status={item.review_status} /></TableCell>
               <TableCell className="font-mono text-[10px] text-[#999999]">{item.version}</TableCell>
               <TableCell className="font-mono text-[10px] text-[#999999]">{item.invoke_count.toLocaleString()}</TableCell>
-              <TableCell className="max-w-48 truncate font-mono text-[10px] text-[#999999]">{reviewHistoryLabel(item)}</TableCell>
+              <TableCell className="max-w-48 align-top">
+                <ReviewHistoryCell item={item} />
+              </TableCell>
               <TableCell><ToggleSwitch on={item.enabled} onChange={() => onToggle(item)} /></TableCell>
               <TableCell>
                 <div className="flex items-center gap-2">
@@ -1108,7 +1136,9 @@ function PluginTable({
               <TableCell><ReviewBadge status={item.review_status} /></TableCell>
               <TableCell className="font-mono text-[10px] text-[#999999]">{item.version}</TableCell>
               <TableCell className="font-mono text-[10px] text-[#999999]">{item.requires_sandbox ? '需要' : '—'}</TableCell>
-              <TableCell className="max-w-48 truncate font-mono text-[10px] text-[#999999]">{reviewHistoryLabel(item)}</TableCell>
+              <TableCell className="max-w-48 align-top">
+                <ReviewHistoryCell item={item} />
+              </TableCell>
               <TableCell><ToggleSwitch on={item.enabled} onChange={() => onToggle(item)} /></TableCell>
               <TableCell>
                 <div className="flex items-center gap-2">

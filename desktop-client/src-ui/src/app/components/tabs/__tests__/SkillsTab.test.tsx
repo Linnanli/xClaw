@@ -186,6 +186,72 @@ describe('SkillsTab', () => {
         expect(mockInvoke).toHaveBeenCalledWith('ic_uninstall_skill', { name: 'custom-skill' });
       });
     });
+
+    it('应该打开技能详情 Sheet 并展示字段', async () => {
+      renderSkillsTab();
+      await waitFor(() => {
+        expect(screen.getByText('agent-mbti')).toBeInTheDocument();
+      });
+
+      const menuButtons = screen.getAllByLabelText('更多操作');
+      fireEvent.click(menuButtons[0]);
+      fireEvent.click(screen.getByText('查看详情'));
+
+      await waitFor(() => {
+        expect(screen.getByText('技能详情')).toBeInTheDocument();
+        expect(screen.getByText('名称')).toBeInTheDocument();
+        expect(screen.getByText('版本')).toBeInTheDocument();
+        expect(screen.getByText('描述')).toBeInTheDocument();
+        expect(screen.getByText('关键词')).toBeInTheDocument();
+        expect(screen.getByText('1.0.0')).toBeInTheDocument();
+      });
+    });
+  });
+
+  describe('启用/禁用开关', () => {
+    it('禁用已启用技能时应调用 ic_disable_skill', async () => {
+      const enabledUserSkill = [
+        {
+          name: 'enabled-user-skill',
+          version: '1.2.3',
+          description: 'Enabled user skill',
+          source: 'user',
+          trust: 'installed',
+          keywords: ['toggle'],
+          enabled: true,
+        },
+      ];
+      mockInvoke.mockImplementation((cmd: string) => {
+        if (cmd === 'ic_list_skills') return Promise.resolve(enabledUserSkill);
+        return Promise.resolve(undefined);
+      });
+
+      renderSkillsTab();
+      await waitFor(() => {
+        expect(screen.getByText('enabled-user-skill')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByLabelText('enabled-user-skill 启用开关'));
+
+      await waitFor(() => {
+        expect(mockInvoke).toHaveBeenCalledWith('ic_disable_skill', {
+          name: 'enabled-user-skill',
+        });
+      });
+    });
+
+    it('启用未启用技能时应调用 ic_enable_skill', async () => {
+      renderSkillsTab();
+      await waitFor(() => {
+        expect(screen.getByText('custom-skill')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByLabelText('custom-skill 启用开关'));
+
+      await waitFor(() => {
+        expect(mockInvoke).toHaveBeenCalledWith('ic_enable_skill', { name: 'custom-skill' });
+      });
+    });
   });
 
   // ── 错误路径 ────────────────────────────────────────────────────
