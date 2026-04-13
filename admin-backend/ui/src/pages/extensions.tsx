@@ -17,6 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
 import {
   Table,
   TableBody,
@@ -29,11 +30,14 @@ import { Textarea } from '@/components/ui/textarea'
 import { TablePagination } from '@/components/ui/table-pagination'
 import { ToggleSwitch } from '@/components/ui/toggle-switch'
 import { api } from '@/lib/api'
+import { toast } from 'sonner'
 
 type ReviewStatus = 'scanning' | 'pending' | 'approved' | 'rejected' | 'scan_failed' | 'yanked'
 type ReviewFilter = 'all' | 'needs_scan' | 'pending' | 'approved' | 'rejected' | 'yanked'
 type TabKey = 'skills' | 'plugins'
 type UploadState = 'pick' | 'validation_failed' | 'scanning' | 'completed'
+
+const UPLOAD_SLOW_SPIN_CLASS = 'animate-spin [animation-duration:1.8s]'
 
 interface SkillItem {
   id: string
@@ -82,6 +86,26 @@ interface SkillUploadResponse {
   name: string
   review_status: ReviewStatus
   message?: string
+  scan_result?: Record<string, unknown> | null
+  scan_runtime?: Record<string, unknown> | null
+}
+
+interface UploadScanRuntime {
+  use_llm: boolean
+  llm_provider: string
+  llm_model?: string
+  llm_base_url?: string
+  llm_api_version?: string
+  llm_model_config_id?: string
+  llm_api_key_configured: boolean
+}
+
+interface UploadModelConfigOption {
+  id: string
+  modelId: string
+  displayName: string
+  provider: string
+  enabled: boolean
 }
 
 interface ScanFinding {
@@ -120,10 +144,30 @@ function tableActionButtonClass(tone: 'default' | 'danger' = 'default'): string 
 
 function extractApiMessage(error: unknown, fallback: string): string {
   if (typeof error === 'object' && error !== null) {
-    const maybeResponse = (error as { response?: { data?: { message?: unknown } } }).response
-    const maybeMessage = maybeResponse?.data?.message
-    if (typeof maybeMessage === 'string' && maybeMessage.trim().length > 0) {
-      return maybeMessage
+    const maybeResponse = (error as {
+      response?: {
+        data?: {
+          message?: unknown
+          details?: unknown
+          error?: unknown
+        }
+      }
+    }).response
+    const data = maybeResponse?.data
+
+    const candidates = [data?.details, data?.message, data?.error]
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim().length > 0) {
+        return candidate
+      }
+      if (Array.isArray(candidate)) {
+        const joined = candidate
+          .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+          .join(' | ')
+        if (joined.length > 0) {
+          return joined
+        }
+      }
     }
   }
 
@@ -153,49 +197,184 @@ function parseValidationErrors(message: string): string[] {
   return [body]
 }
 
-function normalizeFindings(input: unknown): ScanFinding[] {
+function normalizeUploadModelConfigs(input: unknown): UploadModelConfigOption[] {
   if (!Array.isArray(input)) {
     return []
   }
 
-  return input.reduce<ScanFinding[]>((acc, item) => {
+  return input.reduce<UploadModelConfigOption[]>((acc, item) => {
     if (typeof item !== 'object' || item === null) {
       return acc
     }
 
     const row = item as Record<string, unknown>
-    const locationPath = typeof row.location === 'string'
-      ? row.location
-      : typeof row.file === 'string'
-        ? row.file
-      : typeof row.file_path === 'string'
-        ? row.file_path
-        : undefined
+    const id = typeof row.id === 'string' ? row.id : ''
+    const modelId = typeof row.model_id === 'string' ? row.model_id : ''
+    const displayName = typeof row.display_name === 'string' ? row.display_name : modelId
+    const provider = typeof row.provider === 'string' ? row.provider : 'unknown'
+    const enabled = row.enabled === true
+
+    if (!id || !modelId) {
+      return acc
+    }
+
+    acc.push({ id, modelId, displayName, provider, enabled })
+    return acc
+  }, [])
+}
+
+function mapUploadScanRuntime(input: unknown): UploadScanRuntime | null {
+  if (!input || typeof input !== 'object') {
+    return null
+  }
+
+  const row = input as Record<string, unknown>
+  const hasAnyLlmField =
+    typeof row.llm_provider === 'string'
+    || typeof row.llm_model === 'string'
+    || typeof row.llm_base_url === 'string'
+    || typeof row.llm_api_version === 'string'
+    || row.use_llm === true
+    || row.use_llm === false
+
+  if (!hasAnyLlmField) {
+    return null
+  }
+
+  return {
+    use_llm: row.use_llm === true,
+    llm_provider: typeof row.llm_provider === 'string' ? row.llm_provider : 'unknown',
+    llm_model: typeof row.llm_model === 'string' ? row.llm_model : undefined,
+    llm_base_url: typeof row.llm_base_url === 'string' ? row.llm_base_url : undefined,
+    llm_api_version: typeof row.llm_api_version === 'string' ? row.llm_api_version : undefined,
+    llm_model_config_id: typeof row.llm_model_config_id === 'string' ? row.llm_model_config_id : undefined,
+    llm_api_key_configured: row.llm_api_key_configured === true,
+  }
+}
+
+function firstStringField(row: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = row[key]
+    if (typeof value === 'string') {
+      return value
+    }
+  }
+  return undefined
+}
+
+function normalizeFindings(input: unknown): ScanFinding[] {
+  if (!Array.isArray(input)) {
+    return []
+  }
+
+  const normalized = input.reduce<ScanFinding[]>((acc, item) => {
+    if (typeof item !== 'object' || item === null) {
+      return acc
+    }
+
+    const row = item as Record<string, unknown>
+    const locationPath = firstStringField(row, ['location', 'file', 'file_path'])
+    const ruleId = firstStringField(row, ['rule_id', 'id'])
+    const severity = firstStringField(row, ['severity', 'level'])
+    const title = firstStringField(row, ['title', 'message'])
+    const snippet = firstStringField(row, ['code_snippet', 'snippet'])
+    const recommendation = firstStringField(row, ['recommendation', 'suggestion'])
     const line = typeof row.line === 'number' ? `:${row.line}` : ''
 
     acc.push({
-      rule_id: typeof row.rule_id === 'string' ? row.rule_id : typeof row.id === 'string' ? row.id : undefined,
-      severity: typeof row.severity === 'string'
-        ? row.severity.toUpperCase()
-        : typeof row.level === 'string'
-          ? row.level.toUpperCase()
-          : undefined,
-      title: typeof row.title === 'string' ? row.title : typeof row.message === 'string' ? row.message : undefined,
+      rule_id: ruleId,
+      severity: severity?.toUpperCase(),
+      title,
       location: locationPath ? `${locationPath}${line}` : undefined,
-      snippet: typeof row.code_snippet === 'string'
-        ? row.code_snippet
-        : typeof row.snippet === 'string'
-          ? row.snippet
-          : undefined,
-      recommendation: typeof row.recommendation === 'string'
-        ? row.recommendation
-        : typeof row.suggestion === 'string'
-          ? row.suggestion
-          : undefined,
+      snippet,
+      recommendation,
     })
 
     return acc
   }, [])
+
+  return dedupeFindings(normalized)
+}
+
+function scanStepMeta(state: UploadState): { status: 'running' | 'warn' | 'idle'; subtitle: string } {
+  if (state === 'scanning') {
+    return { status: 'running', subtitle: '等待扫描步骤完成' }
+  }
+  if (state === 'completed') {
+    return { status: 'warn', subtitle: '扫描已完成' }
+  }
+  return { status: 'idle', subtitle: '等待前置步骤完成' }
+}
+
+function submitQueueStepMeta(
+  state: UploadState,
+  reviewStatus: ReviewStatus | undefined,
+): { status: 'idle' | 'warn' | 'done'; subtitle: string } {
+  if (state !== 'completed') {
+    return { status: 'idle', subtitle: '等待前置步骤完成' }
+  }
+  if (reviewStatus === 'scan_failed') {
+    return { status: 'warn', subtitle: '扫描失败，未进入审核队列' }
+  }
+  return { status: 'done', subtitle: '状态：pending，等待管理员审核' }
+}
+
+function normalizeFindingSnippet(snippet: string | undefined): string {
+  if (!snippet) {
+    return ''
+  }
+  return snippet
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '')
+}
+
+function isPromptRuleId(ruleId: string | undefined): boolean {
+  if (!ruleId) {
+    return false
+  }
+  const normalized = ruleId.toUpperCase()
+  return normalized.includes('PROMPT') || normalized.includes('INJECTION')
+}
+
+function dedupeFindings(findings: ScanFinding[]): ScanFinding[] {
+  const promptSnippetWithScannerRule = new Set<string>()
+
+  findings.forEach((finding) => {
+    const snippetKey = normalizeFindingSnippet(finding.snippet)
+    if (!snippetKey || !isPromptRuleId(finding.rule_id)) {
+      return
+    }
+
+    if (finding.rule_id !== 'PROMPT_INJECTION_INSTRUCTION_OVERRIDE') {
+      promptSnippetWithScannerRule.add(snippetKey)
+    }
+  })
+
+  const seenExact = new Set<string>()
+  return findings.filter((finding) => {
+    const snippetKey = normalizeFindingSnippet(finding.snippet)
+    if (
+      finding.rule_id === 'PROMPT_INJECTION_INSTRUCTION_OVERRIDE'
+      && snippetKey
+      && promptSnippetWithScannerRule.has(snippetKey)
+    ) {
+      return false
+    }
+
+    const exactKey = [
+      finding.rule_id ?? '',
+      finding.severity ?? '',
+      finding.title ?? '',
+      finding.location ?? '',
+      snippetKey,
+    ].join('|')
+
+    if (seenExact.has(exactKey)) {
+      return false
+    }
+    seenExact.add(exactKey)
+    return true
+  })
 }
 
 function isSupportedSkillPackage(fileName: string): boolean {
@@ -391,7 +570,7 @@ function StepRow({
     return (
       <div className="space-y-1">
         <div className="flex items-center gap-2 font-mono text-[10px] font-semibold text-[#1677FF]">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          <Loader2 className={`h-3.5 w-3.5 ${UPLOAD_SLOW_SPIN_CLASS}`} />
           Step {index} - {title}...
         </div>
         <p className="pl-5 font-mono text-[9px] text-[#999999]">{subtitle}</p>
@@ -426,12 +605,18 @@ interface UploadSkillModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onSuccess: () => void
+  onReviewRequest: (target: ReviewTarget) => void
 }
 
 interface UploadPickPanelProps {
   file: File | null
   fileRef: { current: HTMLInputElement | null }
+  modelOptions: UploadModelConfigOption[]
+  selectedModelConfigId: string
+  modelLoading: boolean
+  modelError: string
   onPickFile: (event: React.ChangeEvent<HTMLInputElement>) => void
+  onModelConfigChange: (modelConfigId: string) => void
 }
 
 interface UploadStatusPanelProps {
@@ -439,14 +624,20 @@ interface UploadStatusPanelProps {
   file: File | null
   errors: string[]
   scanNotes: string[]
+  scanProgress: number
   serverResponse: SkillUploadResponse | null
+  uploadScanResult: ScanResultPayload | null
 }
 
 interface UploadModalFooterProps {
   state: UploadState
   loading: boolean
+  canSubmit: boolean
+  disabledTooltip: string
+  canReviewNow: boolean
   onCancel: () => void
   onSubmit: () => void
+  onReviewNow: () => void
 }
 
 function formatUploadFileLabel(file: File | null): string {
@@ -456,29 +647,115 @@ function formatUploadFileLabel(file: File | null): string {
   return `${file.name} (${(file.size / 1024 / 1024).toFixed(1)}MB)`
 }
 
-function UploadPickPanel({ file, fileRef, onPickFile }: UploadPickPanelProps) {
+interface UploadLlmConfigPanelProps {
+  modelOptions: UploadModelConfigOption[]
+  selectedModelConfigId: string
+  modelLoading: boolean
+  modelError: string
+  onModelConfigChange: (modelConfigId: string) => void
+}
+
+function UploadLlmConfigPanel({
+  modelOptions,
+  selectedModelConfigId,
+  modelLoading,
+  modelError,
+  onModelConfigChange,
+}: UploadLlmConfigPanelProps) {
+  const hasOptions = modelOptions.length > 0
+
+  return (
+    <div className="space-y-3 border border-[#E8E8E8] bg-[#FAFAFA] px-4 py-3">
+      <div>
+        <p className="font-mono text-[10px] font-semibold text-[#1A1A1A]">启用 LLM 深度扫描</p>
+        <p className="font-mono text-[9px] text-[#666666]">请先选择扫描模型，未选择时上传框将禁用</p>
+      </div>
+
+      <div className="grid gap-2">
+        {modelError && <p className="font-mono text-[9px] text-[#CF1322]">{modelError}</p>}
+        <label className="grid gap-1 font-mono text-[9px] text-[#666666]">
+          扫描模型配置
+          <select
+            value={selectedModelConfigId}
+            disabled={modelLoading || !hasOptions}
+            onChange={(event) => onModelConfigChange(event.target.value)}
+            className="h-8 border border-[#D9D9D9] bg-white px-2 font-mono text-[10px] text-[#1A1A1A] disabled:bg-[#F5F5F5]"
+          >
+            {!hasOptions && <option value="">暂无可用模型配置</option>}
+            {modelOptions.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.displayName} ({option.provider} / {option.modelId})
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="font-mono text-[9px] text-[#666666]">将自动使用所选模型配置中的 provider 和 API Key</p>
+      </div>
+    </div>
+  )
+}
+
+function UploadPickPanel({
+  file,
+  fileRef,
+  modelOptions,
+  selectedModelConfigId,
+  modelLoading,
+  modelError,
+  onPickFile,
+  onModelConfigChange,
+}: UploadPickPanelProps) {
+  const canPickFile = selectedModelConfigId.length > 0
+
   return (
     <>
+      <UploadLlmConfigPanel
+        modelOptions={modelOptions}
+        selectedModelConfigId={selectedModelConfigId}
+        modelLoading={modelLoading}
+        modelError={modelError}
+        onModelConfigChange={onModelConfigChange}
+      />
+
       <input
         ref={fileRef}
         type="file"
         accept=".zip,.tar.gz,.tgz"
         className="hidden"
+        disabled={!canPickFile}
         onChange={onPickFile}
       />
       <button
         type="button"
-        onClick={() => fileRef.current?.click()}
-        className="flex h-40 w-full items-center justify-center border border-dashed border-[#E8E8E8] bg-white px-4 font-mono text-[10px] font-medium text-[#999999] transition hover:border-[#0A6B3A] hover:text-[#0A6B3A]"
+        disabled={!canPickFile}
+        onClick={() => {
+          if (!canPickFile) {
+            return
+          }
+          fileRef.current?.click()
+        }}
+        className="flex h-40 w-full items-center justify-center border border-dashed border-[#E8E8E8] bg-white px-4 font-mono text-[10px] font-medium text-[#999999] transition hover:border-[#0A6B3A] hover:text-[#0A6B3A] disabled:cursor-not-allowed disabled:border-[#E8E8E8] disabled:bg-[#F5F5F5] disabled:text-[#BBBBBB]"
       >
-        拖拽文件到此处，或点击选择 支持 .zip / .tar.gz 格式
+        {canPickFile ? '拖拽文件到此处，或点击选择 支持 .zip / .tar.gz 格式' : '请先选择 LLM 模型配置，随后可上传文件'}
       </button>
       <p className="font-mono text-[10px] font-medium text-[#1A1A1A]">待上传：{formatUploadFileLabel(file)}</p>
     </>
   )
 }
 
-function UploadStatusPanel({ state, file, errors, scanNotes, serverResponse }: UploadStatusPanelProps) {
+function UploadStatusPanel({
+  state,
+  file,
+  errors,
+  scanNotes,
+  scanProgress,
+  serverResponse,
+  uploadScanResult,
+}: UploadStatusPanelProps) {
+  const uploadScanRuntime = mapUploadScanRuntime(serverResponse?.scan_runtime)
+  const scanStep = scanStepMeta(state)
+  const submitQueueStep = submitQueueStepMeta(state, serverResponse?.review_status)
+
   return (
     <div className="space-y-3">
       <StepRow index={1} title="文件解析" status="done" subtitle={file?.name ?? '文件已读取'} />
@@ -502,16 +779,23 @@ function UploadStatusPanel({ state, file, errors, scanNotes, serverResponse }: U
       <StepRow
         index={3}
         title="安全扫描"
-        status={state === 'scanning' ? 'running' : state === 'completed' ? 'warn' : 'idle'}
-        subtitle={state === 'scanning' ? '等待扫描步骤完成' : state === 'completed' ? '扫描已完成' : '等待前置步骤完成'}
+        status={scanStep.status}
+        subtitle={scanStep.subtitle}
       />
 
       {state === 'scanning' && (
         <div className="border border-[#1677FF40] bg-[#1677FF08] px-4 py-3">
+          <p className="mb-2 font-mono text-[9px] text-[#5B8FF9]">当前扫描内容：</p>
           <ul className="space-y-1 font-mono text-[10px] text-[#1677FF]">
             {scanNotes.map((item, index) => (
               <li key={item} className="flex items-center gap-2">
-                {index === 1 ? <Circle className="h-3.5 w-3.5 fill-[#1677FF] text-[#1677FF]" /> : <CheckCircle2 className="h-3.5 w-3.5 text-[#0A6B3A]" />}
+                {index < scanProgress ? (
+                  <CheckCircle2 className="h-3.5 w-3.5 text-[#0A6B3A]" />
+                ) : index === scanProgress ? (
+                  <Loader2 className={`h-3.5 w-3.5 ${UPLOAD_SLOW_SPIN_CLASS}`} />
+                ) : (
+                  <Circle className="h-3.5 w-3.5 text-[#91C3FF]" />
+                )}
                 {item}
               </li>
             ))}
@@ -522,71 +806,269 @@ function UploadStatusPanel({ state, file, errors, scanNotes, serverResponse }: U
       {state === 'completed' && serverResponse && (
         <div className="border border-[#D4870040] bg-[#D4870008] px-4 py-3 text-[#D48700]">
           <p className="font-mono text-[10px] font-semibold">
-            结论：{serverResponse.review_status === 'scan_failed' ? 'DANGEROUS' : 'PENDING_REVIEW'}
+            {serverResponse.review_status === 'scan_failed'
+              ? '扫描未通过，请修复后重扫'
+              : '扫描通过，已进入待审核队列'}
           </p>
-          <p className="font-mono text-[10px]">状态：{serverResponse.review_status}，等待管理员审核</p>
+          {uploadScanResult && (
+            <div className="mt-2 space-y-1 border-t border-[#D4870040] pt-2">
+              <p className="font-mono text-[10px]">
+                扫描器：{uploadScanResult.scanner_type} | 风险结论：{uploadScanResult.verdict}
+              </p>
+              <p className="font-mono text-[10px]">
+                发现项：{uploadScanResult.findings_count}
+                {typeof uploadScanResult.scan_duration_ms === 'number' && ` | 耗时：${uploadScanResult.scan_duration_ms}ms`}
+              </p>
+              {uploadScanResult.findings.length > 0 && (
+                <ul className="space-y-1 font-mono text-[10px]">
+                  {uploadScanResult.findings.slice(0, 3).map((finding, index) => (
+                    <li key={`${finding.rule_id ?? 'finding'}-${index}`} className="space-y-1">
+                      <p>
+                        • {(finding.severity ?? 'UNKNOWN').toUpperCase()} - {finding.title ?? finding.rule_id ?? `发现问题 #${index + 1}`}
+                      </p>
+                      {finding.snippet && (
+                        <pre className="bg-[#FFF7E6] px-2 py-1 text-[9px] text-[#8A6A00] whitespace-pre-wrap">
+                          {finding.snippet}
+                        </pre>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
+          {uploadScanRuntime && (
+            <div className="mt-2 space-y-1 border-t border-[#D4870040] pt-2">
+              <p className="font-mono text-[10px] font-semibold">本次实际 LLM 参数</p>
+              <p className="font-mono text-[10px]">
+                use_llm：{uploadScanRuntime.use_llm ? 'true' : 'false'} | provider：{uploadScanRuntime.llm_provider}
+              </p>
+              {uploadScanRuntime.llm_model && (
+                <p className="font-mono text-[10px]">model：{uploadScanRuntime.llm_model}</p>
+              )}
+              {uploadScanRuntime.llm_base_url && (
+                <p className="font-mono text-[10px] break-all">base_url：{uploadScanRuntime.llm_base_url}</p>
+              )}
+              {uploadScanRuntime.llm_api_version && (
+                <p className="font-mono text-[10px]">api_version：{uploadScanRuntime.llm_api_version}</p>
+              )}
+              {uploadScanRuntime.llm_model_config_id && (
+                <p className="font-mono text-[10px] break-all">model_config_id：{uploadScanRuntime.llm_model_config_id}</p>
+              )}
+              <p className="font-mono text-[10px]">
+                api_key：{uploadScanRuntime.llm_api_key_configured ? '已配置（隐藏）' : '未配置'}
+              </p>
+            </div>
+          )}
+
+          {!uploadScanResult && (
+            <p className="mt-2 font-mono text-[10px] text-[#8A6A00]">
+              扫描结果尚未落库，可在“审核”弹窗中查看完整扫描报告
+            </p>
+          )}
         </div>
       )}
 
       <StepRow
         index={4}
         title="提交审核队列"
-        status={state === 'completed' ? 'done' : 'idle'}
-        subtitle={state === 'completed' ? '状态：pending_review，等待管理员审核' : '等待前置步骤完成'}
+        status={submitQueueStep.status}
+        subtitle={submitQueueStep.subtitle}
       />
     </div>
   )
 }
 
-function UploadModalFooter({ state, loading, onCancel, onSubmit }: UploadModalFooterProps) {
+function UploadModalFooter({
+  state,
+  loading,
+  canSubmit,
+  disabledTooltip,
+  canReviewNow,
+  onCancel,
+  onSubmit,
+  onReviewNow,
+}: UploadModalFooterProps) {
+  const submitDisabled = loading || !canSubmit
+
+  if (state === 'completed') {
+    return (
+      <DialogFooter inset={false} className="flex-wrap items-center justify-end gap-3 border-[#E8E8E8] bg-white px-6 py-4" showCloseButton={false}>
+        <button type="button" onClick={onCancel} className="border border-[#E8E8E8] bg-white px-5 py-2.5 font-mono text-[10px] font-semibold text-[#1A1A1A]">
+          稍后处理
+        </button>
+        {canReviewNow ? (
+          <button
+            type="button"
+            onClick={onReviewNow}
+            className="flex items-center gap-2 bg-[#0A6B3A] px-5 py-2.5 font-mono text-[10px] font-semibold text-white"
+          >
+            <CheckCircle2 className="h-3 w-3" />
+            审核
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={onCancel}
+            className="flex items-center gap-2 bg-[#0A6B3A] px-5 py-2.5 font-mono text-[10px] font-semibold text-white"
+          >
+            <CheckCircle2 className="h-3 w-3" />
+            确认关闭
+          </button>
+        )}
+      </DialogFooter>
+    )
+  }
+
   return (
     <DialogFooter inset={false} className="flex-wrap items-center justify-end gap-3 border-[#E8E8E8] bg-white px-6 py-4" showCloseButton={false}>
       <button type="button" onClick={onCancel} className="border border-[#E8E8E8] bg-white px-5 py-2.5 font-mono text-[10px] font-semibold text-[#1A1A1A]">
         取消
       </button>
-      {state !== 'completed' ? (
-        <button
-          type="button"
-          onClick={onSubmit}
-          disabled={loading}
-          className="flex items-center gap-2 bg-[#0A6B3A] px-5 py-2.5 font-mono text-[10px] font-semibold text-white disabled:opacity-50"
-        >
-          {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
-          开始上传
-        </button>
-      ) : (
-        <button
-          type="button"
-          onClick={onCancel}
-          className="flex items-center gap-2 bg-[#0A6B3A] px-5 py-2.5 font-mono text-[10px] font-semibold text-white"
-        >
-          <CheckCircle2 className="h-3 w-3" />
-          确认关闭
-        </button>
-      )}
+      <Button
+        type="button"
+        onClick={onSubmit}
+        disabled={submitDisabled}
+        disabledTooltip={disabledTooltip}
+        className="h-auto rounded-none bg-[#0A6B3A] px-5 py-2.5 font-mono text-[10px] font-semibold text-white"
+      >
+        {loading ? <Loader2 className={`h-3 w-3 ${UPLOAD_SLOW_SPIN_CLASS}`} /> : <CheckCircle2 className="h-3 w-3" />}
+        开始上传
+      </Button>
     </DialogFooter>
   )
 }
 
 function useUploadSkillModalState(open: boolean, onSuccess: () => void) {
   const [file, setFile] = useState<File | null>(null)
+  const [modelOptions, setModelOptions] = useState<UploadModelConfigOption[]>([])
+  const [selectedModelConfigId, setSelectedModelConfigId] = useState('')
+  const [modelLoading, setModelLoading] = useState(false)
+  const [modelError, setModelError] = useState('')
   const [state, setState] = useState<UploadState>('pick')
   const [errors, setErrors] = useState<string[]>([])
   const [scanNotes, setScanNotes] = useState<string[]>([])
+  const [scanProgress, setScanProgress] = useState(0)
   const [loading, setLoading] = useState(false)
   const [serverResponse, setServerResponse] = useState<SkillUploadResponse | null>(null)
+  const [uploadScanResult, setUploadScanResult] = useState<ScanResultPayload | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
+
+  // Buffer API result so scan animation can finish before state transition
+  const pendingResult = useRef<{
+    response?: SkillUploadResponse
+    errors?: string[]
+    scanResult?: ScanResultPayload | null
+  } | null>(null)
+  const scanDone = useRef(false)
 
   useEffect(() => {
     if (open) {
       setFile(null)
+      setModelError('')
       setState('pick')
       setErrors([])
       setScanNotes([])
+      setScanProgress(0)
       setLoading(false)
       setServerResponse(null)
+      setUploadScanResult(null)
+      pendingResult.current = null
+      scanDone.current = false
     }
   }, [open])
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    let cancelled = false
+    const loadModelOptions = async () => {
+      setModelLoading(true)
+      setModelError('')
+      try {
+        const res = await api.get('/model-configs')
+        if (cancelled) {
+          return
+        }
+        const normalized = normalizeUploadModelConfigs(res.data)
+        const enabledOnly = normalized.filter((item) => item.enabled)
+        setModelOptions(enabledOnly)
+        setSelectedModelConfigId((prev) => {
+          if (prev && enabledOnly.some((item) => item.id === prev)) {
+            return prev
+          }
+          return enabledOnly[0]?.id ?? ''
+        })
+        if (enabledOnly.length === 0) {
+          setModelError('暂无启用中的模型配置，请先到“模型配置”页面启用')
+        }
+      } catch (error: unknown) {
+        if (!cancelled) {
+          setModelOptions([])
+          setSelectedModelConfigId('')
+          setModelError(extractApiMessage(error, '加载模型配置失败'))
+        }
+      } finally {
+        if (!cancelled) {
+          setModelLoading(false)
+        }
+      }
+    }
+
+    void loadModelOptions()
+    return () => {
+      cancelled = true
+    }
+  }, [open])
+
+  // Flush buffered API result once scan animation completes
+  const flushPending = useCallback(() => {
+    const buf = pendingResult.current
+    if (!buf) return
+    pendingResult.current = null
+    setLoading(false)
+    if (buf.errors) {
+      setErrors(buf.errors)
+      setState('validation_failed')
+    } else if (buf.response) {
+      setServerResponse(buf.response)
+      setUploadScanResult(buf.scanResult ?? null)
+      setState('completed')
+      if (buf.response.review_status === 'pending') {
+        toast.success('上传成功，已进入待审核队列')
+      }
+      onSuccess()
+    }
+  }, [onSuccess])
+
+  useEffect(() => {
+    if (state !== 'scanning' || scanNotes.length === 0) {
+      return
+    }
+
+    scanDone.current = false
+    setScanProgress(0)
+    const timer = window.setInterval(() => {
+      setScanProgress((prev) => {
+        const next = prev + 1
+        if (next >= scanNotes.length) {
+          window.clearInterval(timer)
+          scanDone.current = true
+          // If API already returned, flush on next tick
+          if (pendingResult.current) {
+            window.setTimeout(flushPending, 400)
+          }
+          return prev
+        }
+        return next
+      })
+    }, 900)
+
+    return () => window.clearInterval(timer)
+  }, [state, scanNotes, flushPending])
 
   const pickFile = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const next = event.target.files?.[0] ?? null
@@ -594,6 +1076,7 @@ function useUploadSkillModalState(open: boolean, onSuccess: () => void) {
     setState('pick')
     setErrors([])
     setScanNotes([])
+    setUploadScanResult(null)
     setServerResponse(null)
   }, [])
 
@@ -610,64 +1093,140 @@ function useUploadSkillModalState(open: boolean, onSuccess: () => void) {
       return
     }
 
+    if (!selectedModelConfigId) {
+      setState('validation_failed')
+      setErrors(['请先选择一个启用中的模型配置'])
+      return
+    }
+
     setLoading(true)
     setErrors([])
 
+    const selectedModel = modelOptions.find((item) => item.id === selectedModelConfigId)
+    const scanModelLabel = selectedModel
+      ? `${selectedModel.displayName} (${selectedModel.provider})`
+      : '未选择'
+
     setState('scanning')
-    setScanNotes(['上传压缩包', '服务端提取 SKILL.md 并校验', '生成扫描报告'])
+    setScanNotes([
+      `读取上传包内容（${file.name}）`,
+      '解析 SKILL.md frontmatter（name/description）',
+      '扫描 SKILL.md 正文与脚本片段（注入/危险模式）',
+      `启用 LLM 深度检测（模型=${scanModelLabel}）`,
+      '解析 manifest.json 元数据（version/author）',
+      '汇总风险等级并生成扫描报告',
+    ])
 
     const formData = new FormData()
     formData.append('package', file)
+    formData.append('enable_llm_scan', 'true')
+    if (selectedModelConfigId) {
+      formData.append('llm_model_config_id', selectedModelConfigId)
+    }
 
     try {
       const res = await api.post('/skills/upload-package', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
+        timeout: 150_000,
       })
       const result = res.data as SkillUploadResponse
-      setServerResponse(result)
-      setState('completed')
-      onSuccess()
+      const scanResult = mapScanResultPayload(result.scan_result)
+
+      if (scanDone.current) {
+        setServerResponse(result)
+        setUploadScanResult(scanResult)
+        setState('completed')
+        setLoading(false)
+        onSuccess()
+      } else {
+        pendingResult.current = { response: result, scanResult }
+      }
     } catch (error: unknown) {
       const message = extractApiMessage(error, '上传失败')
       const parsedErrors = parseValidationErrors(message)
-      setErrors(parsedErrors.length > 0 ? parsedErrors : [message])
-      setState('validation_failed')
-    } finally {
-      setLoading(false)
+      const errList = parsedErrors.length > 0 ? parsedErrors : [message]
+      if (scanDone.current) {
+        setErrors(errList)
+        setState('validation_failed')
+        setLoading(false)
+      } else {
+        pendingResult.current = { errors: errList }
+      }
     }
-  }, [file, onSuccess])
+  }, [file, modelOptions, onSuccess, selectedModelConfigId])
 
   return {
     file,
+    modelOptions,
+    selectedModelConfigId,
+    modelLoading,
+    modelError,
     state,
     errors,
     scanNotes,
+    scanProgress,
     loading,
     serverResponse,
+    uploadScanResult,
     fileRef,
     pickFile,
+    setSelectedModelConfigId,
     runUpload,
   }
 }
 
-function UploadSkillModal({ open, onOpenChange, onSuccess }: UploadSkillModalProps) {
+function UploadSkillModal({ open, onOpenChange, onSuccess, onReviewRequest }: UploadSkillModalProps) {
   const {
     file,
+    modelOptions,
+    selectedModelConfigId,
+    modelLoading,
+    modelError,
     state,
     errors,
     scanNotes,
+    scanProgress,
     loading,
     serverResponse,
+    uploadScanResult,
     fileRef,
     pickFile,
+    setSelectedModelConfigId,
     runUpload,
   } = useUploadSkillModalState(open, onSuccess)
 
   const closeModal = useCallback(() => {
     onOpenChange(false)
   }, [onOpenChange])
+
+  const hasSelectedModel = selectedModelConfigId.length > 0
+  const hasSelectedFile = file !== null
+  const canSubmitUpload = hasSelectedFile && hasSelectedModel && !modelLoading
+  const canReviewNow = state === 'completed' && serverResponse?.review_status === 'pending'
+
+  let disabledTooltip = ''
+  if (modelLoading) {
+    disabledTooltip = '模型配置加载中，请稍候'
+  } else if (!hasSelectedModel) {
+    disabledTooltip = modelError || '请先选择启用中的 LLM 模型配置'
+  } else if (!hasSelectedFile) {
+    disabledTooltip = '请先选择技能包文件'
+  }
+
+  const handleReviewNow = useCallback(() => {
+    if (!canReviewNow || !serverResponse) {
+      return
+    }
+
+    onOpenChange(false)
+    onReviewRequest({
+      id: serverResponse.id,
+      name: serverResponse.name,
+      type: 'skill',
+    })
+  }, [canReviewNow, onOpenChange, onReviewRequest, serverResponse])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -684,19 +1243,41 @@ function UploadSkillModal({ open, onOpenChange, onSuccess }: UploadSkillModalPro
         </DialogHeader>
 
         <div className="space-y-4 px-6 py-6" style={{ maxHeight: '55vh', overflowY: 'auto' }}>
-          {state === 'pick' && <UploadPickPanel file={file} fileRef={fileRef} onPickFile={pickFile} />}
+          {state === 'pick' && (
+            <UploadPickPanel
+              file={file}
+              fileRef={fileRef}
+              modelOptions={modelOptions}
+              selectedModelConfigId={selectedModelConfigId}
+              modelLoading={modelLoading}
+              modelError={modelError}
+              onPickFile={pickFile}
+              onModelConfigChange={setSelectedModelConfigId}
+            />
+          )}
           {state !== 'pick' && (
             <UploadStatusPanel
               state={state}
               file={file}
               errors={errors}
               scanNotes={scanNotes}
+              scanProgress={scanProgress}
               serverResponse={serverResponse}
+              uploadScanResult={uploadScanResult}
             />
           )}
         </div>
 
-        <UploadModalFooter state={state} loading={loading} onCancel={closeModal} onSubmit={runUpload} />
+        <UploadModalFooter
+          state={state}
+          loading={loading}
+          canSubmit={canSubmitUpload}
+          disabledTooltip={disabledTooltip}
+          canReviewNow={canReviewNow}
+          onCancel={closeModal}
+          onSubmit={runUpload}
+          onReviewNow={handleReviewNow}
+        />
       </DialogContent>
     </Dialog>
   )
@@ -713,10 +1294,15 @@ interface ReviewScanSectionProps {
   scanError: string
   scanResult: ScanResultPayload | null
   findings: ScanFinding[]
+  canTriggerRescan: boolean
+  rescanLoading: boolean
+  rescanError: string
+  onRescan: () => void
 }
 
 interface ReviewFooterProps {
   loading: boolean
+  canSubmit: boolean
   onClose: () => void
   onApprove: () => void
   onReject: () => void
@@ -754,42 +1340,40 @@ function useReviewScanResult(target: ReviewTarget | null) {
   const [scanLoading, setScanLoading] = useState(false)
   const [scanError, setScanError] = useState('')
   const [scanResult, setScanResult] = useState<ScanResultPayload | null>(null)
+  const requestSeqRef = useRef(0)
 
-  useEffect(() => {
-    setScanLoading(false)
+  const reload = useCallback(async () => {
     setScanError('')
     setScanResult(null)
 
     if (!target) {
+      setScanLoading(false)
       return
     }
 
-    let disposed = false
+    requestSeqRef.current += 1
+    const requestSeq = requestSeqRef.current
     setScanLoading(true)
 
-    api.get(scanResultsEndpoint(target))
-      .then((res) => {
-        if (disposed) {
-          return
-        }
+    try {
+      const res = await api.get(scanResultsEndpoint(target))
+      if (requestSeq === requestSeqRef.current) {
         setScanResult(mapScanResultPayload(res.data?.scan_result))
-      })
-      .catch((error: unknown) => {
-        if (disposed) {
-          return
-        }
+      }
+    } catch (error: unknown) {
+      if (requestSeq === requestSeqRef.current) {
         setScanError(extractApiMessage(error, '扫描结果加载失败'))
-      })
-      .finally(() => {
-        if (!disposed) {
-          setScanLoading(false)
-        }
-      })
-
-    return () => {
-      disposed = true
+      }
+    } finally {
+      if (requestSeq === requestSeqRef.current) {
+        setScanLoading(false)
+      }
     }
   }, [target])
+
+  useEffect(() => {
+    void reload()
+  }, [reload])
 
   const findings = useMemo<ScanFinding[]>(() => {
     if (!scanResult) {
@@ -798,10 +1382,19 @@ function useReviewScanResult(target: ReviewTarget | null) {
     return sortFindingsBySeverity(scanResult.findings)
   }, [scanResult])
 
-  return { scanLoading, scanError, scanResult, findings }
+  return { scanLoading, scanError, scanResult, findings, reload }
 }
 
-function ReviewScanSection({ scanLoading, scanError, scanResult, findings }: ReviewScanSectionProps) {
+function ReviewScanSection({
+  scanLoading,
+  scanError,
+  scanResult,
+  findings,
+  canTriggerRescan,
+  rescanLoading,
+  rescanError,
+  onRescan,
+}: ReviewScanSectionProps) {
   return (
     <section className="space-y-3 border border-[#E8E8E8] bg-[#FAFAFA] p-4">
       <div className="flex items-center justify-between">
@@ -817,7 +1410,23 @@ function ReviewScanSection({ scanLoading, scanError, scanResult, findings }: Rev
       )}
 
       {!scanLoading && scanError && <p className="font-mono text-[10px] text-[#CF1322]">{scanError}</p>}
-      {!scanLoading && !scanError && !scanResult && <p className="font-mono text-[10px] text-[#999999]">暂无扫描结果</p>}
+      {!scanLoading && !scanError && !scanResult && (
+        <div className="space-y-2">
+          <p className="font-mono text-[10px] text-[#999999]">暂无扫描结果（可能是历史数据未执行扫描）</p>
+          {canTriggerRescan && (
+            <button
+              type="button"
+              disabled={rescanLoading}
+              onClick={onRescan}
+              className="inline-flex items-center gap-2 border border-[#E8E8E8] bg-white px-3 py-1.5 font-mono text-[9px] font-semibold text-[#1A1A1A] disabled:opacity-50"
+            >
+              {rescanLoading && <Loader2 className="h-3 w-3 animate-spin" />}
+              立即重扫并刷新结果
+            </button>
+          )}
+          {rescanError && <p className="font-mono text-[10px] text-[#CF1322]">{rescanError}</p>}
+        </div>
+      )}
 
       {!scanLoading && !scanError && scanResult && (
         <div className="space-y-2">
@@ -857,7 +1466,7 @@ function ReviewScanSection({ scanLoading, scanError, scanResult, findings }: Rev
   )
 }
 
-function ReviewFooter({ loading, onClose, onApprove, onReject }: ReviewFooterProps) {
+function ReviewFooter({ loading, canSubmit, onClose, onApprove, onReject }: ReviewFooterProps) {
   return (
     <DialogFooter inset={false} className="flex-wrap items-center justify-end gap-3 border-[#E8E8E8] bg-white px-6 py-4" showCloseButton={false}>
       <button type="button" onClick={onClose} className="border border-[#E8E8E8] bg-white px-5 py-2.5 font-mono text-[10px] font-semibold text-[#1A1A1A]">
@@ -865,7 +1474,7 @@ function ReviewFooter({ loading, onClose, onApprove, onReject }: ReviewFooterPro
       </button>
       <button
         type="button"
-        disabled={loading}
+        disabled={loading || !canSubmit}
         onClick={onReject}
         className="border border-[#CF132240] bg-[#CF132208] px-5 py-2.5 font-mono text-[10px] font-semibold text-[#CF1322] disabled:opacity-50"
       >
@@ -873,7 +1482,7 @@ function ReviewFooter({ loading, onClose, onApprove, onReject }: ReviewFooterPro
       </button>
       <button
         type="button"
-        disabled={loading}
+        disabled={loading || !canSubmit}
         onClick={onApprove}
         className="flex items-center gap-2 bg-[#0A6B3A] px-5 py-2.5 font-mono text-[10px] font-semibold text-white disabled:opacity-50"
       >
@@ -887,13 +1496,38 @@ function ReviewFooter({ loading, onClose, onApprove, onReject }: ReviewFooterPro
 function ReviewModal({ target, onClose, onSuccess }: ReviewModalProps) {
   const [note, setNote] = useState('')
   const [loading, setLoading] = useState(false)
-  const { scanLoading, scanError, scanResult, findings } = useReviewScanResult(target)
+  const [rescanLoading, setRescanLoading] = useState(false)
+  const [rescanError, setRescanError] = useState('')
+  const { scanLoading, scanError, scanResult, findings, reload } = useReviewScanResult(target)
 
   const open = target !== null
 
   useEffect(() => {
     setNote('')
+    setRescanError('')
   }, [target])
+
+  const triggerRescan = useCallback(async () => {
+    if (!target || target.type !== 'skill') {
+      return
+    }
+
+    setRescanLoading(true)
+    setRescanError('')
+    try {
+      await api.post(`/skills/${target.id}/rescan`, {}, { timeout: 150_000 })
+      await reload()
+      toast.success('重扫完成并已刷新结果')
+      onSuccess()
+    } catch (error: unknown) {
+      toast.error(extractApiMessage(error, '触发重扫失败'))
+      setRescanError(extractApiMessage(error, '触发重扫失败'))
+    } finally {
+      setRescanLoading(false)
+    }
+  }, [onSuccess, reload, target])
+
+  const canSubmitReview = !scanLoading && !!scanResult
 
   const submit = useCallback(async (approved: boolean) => {
     if (!target) {
@@ -903,6 +1537,7 @@ function ReviewModal({ target, onClose, onSuccess }: ReviewModalProps) {
     setLoading(true)
     try {
       await api.post(`/${target.type === 'skill' ? 'skills' : 'plugins'}/${target.id}/review`, { approved, note })
+      toast.success(approved ? '审核已通过' : '审核已拒绝')
       onSuccess()
       onClose()
     } finally {
@@ -924,7 +1559,16 @@ function ReviewModal({ target, onClose, onSuccess }: ReviewModalProps) {
         </DialogHeader>
 
         <div className="space-y-4 px-6 py-6" style={{ maxHeight: '55vh', overflowY: 'auto' }}>
-          <ReviewScanSection scanLoading={scanLoading} scanError={scanError} scanResult={scanResult} findings={findings} />
+          <ReviewScanSection
+            scanLoading={scanLoading}
+            scanError={scanError}
+            scanResult={scanResult}
+            findings={findings}
+            canTriggerRescan={target?.type === 'skill' && !scanLoading && !scanResult}
+            rescanLoading={rescanLoading}
+            rescanError={rescanError}
+            onRescan={triggerRescan}
+          />
 
           <section className="space-y-2">
             <label className="font-mono text-[10px] font-semibold text-[#1A1A1A]" htmlFor="review-note">审核备注（可选）</label>
@@ -940,6 +1584,7 @@ function ReviewModal({ target, onClose, onSuccess }: ReviewModalProps) {
 
         <ReviewFooter
           loading={loading}
+          canSubmit={canSubmitReview}
           onClose={onClose}
           onApprove={() => submit(true)}
           onReject={() => submit(false)}
@@ -957,6 +1602,7 @@ function SkillTable({
   onToggle,
   onReview,
   onRescan,
+  onRelist,
   onYank,
 }: {
   items: SkillItem[]
@@ -966,6 +1612,7 @@ function SkillTable({
   onToggle: (item: SkillItem) => void
   onReview: (item: SkillItem) => void
   onRescan: (item: SkillItem) => void
+  onRelist: (item: SkillItem) => void
   onYank: (item: SkillItem) => void
 }) {
   const pageSize = 10
@@ -1049,6 +1696,11 @@ function SkillTable({
                   {item.review_status === 'approved' && (
                     <button type="button" onClick={() => onYank(item)} className={tableActionButtonClass('danger')}>
                       下架
+                    </button>
+                  )}
+                  {item.review_status === 'yanked' && (
+                    <button type="button" onClick={() => onRelist(item)} className={tableActionButtonClass()}>
+                      上架
                     </button>
                   )}
                 </div>
@@ -1216,8 +1868,10 @@ export default function ExtensionsPage() {
     const action = item.enabled ? 'disable' : 'enable'
     try {
       await api.post(`/skills/${item.id}/${action}`)
+      toast.success(`技能已${action === 'enable' ? '启用' : '禁用'}`)
       await loadSkills()
     } catch (error) {
+      toast.error(extractApiMessage(error, '切换技能状态失败'))
       console.error('切换技能状态失败', error)
     }
   }, [loadSkills])
@@ -1226,18 +1880,33 @@ export default function ExtensionsPage() {
     const action = item.enabled ? 'disable' : 'enable'
     try {
       await api.post(`/plugins/${item.id}/${action}`)
+      toast.success(`插件已${action === 'enable' ? '启用' : '禁用'}`)
       await loadPlugins()
     } catch (error) {
+      toast.error(extractApiMessage(error, '切换插件状态失败'))
       console.error('切换插件状态失败', error)
     }
   }, [loadPlugins])
 
   const handleRescanSkill = useCallback(async (item: SkillItem) => {
     try {
-      await api.post(`/skills/${item.id}/rescan`)
+      await api.post(`/skills/${item.id}/rescan`, undefined, { timeout: 150_000 })
+      toast.success('技能重扫完成')
       await loadSkills()
     } catch (error) {
+      toast.error(extractApiMessage(error, '技能重扫失败'))
       console.error('技能重扫失败', error)
+    }
+  }, [loadSkills])
+
+  const handleRelistSkill = useCallback(async (item: SkillItem) => {
+    try {
+      await api.post(`/skills/${item.id}/enable`)
+      toast.success('技能已上架')
+      await loadSkills()
+    } catch (error) {
+      toast.error(extractApiMessage(error, '技能上架失败'))
+      console.error('技能上架失败', error)
     }
   }, [loadSkills])
 
@@ -1247,8 +1916,10 @@ export default function ExtensionsPage() {
     }
     try {
       await api.post(`/skills/${item.id}/yank`, {})
+      toast.success('技能已下架')
       await loadSkills()
     } catch (error) {
+      toast.error(extractApiMessage(error, '技能下架失败'))
       console.error('技能下架失败', error)
     }
   }, [loadSkills])
@@ -1259,8 +1930,10 @@ export default function ExtensionsPage() {
     }
     try {
       await api.post(`/plugins/${item.id}/yank`, {})
+      toast.success('插件已下架')
       await loadPlugins()
     } catch (error) {
+      toast.error(extractApiMessage(error, '插件下架失败'))
       console.error('插件下架失败', error)
     }
   }, [loadPlugins])
@@ -1385,6 +2058,7 @@ export default function ExtensionsPage() {
           onToggle={handleToggleSkill}
           onReview={(item) => setReviewTarget({ id: item.id, name: item.name, type: 'skill' })}
           onRescan={handleRescanSkill}
+          onRelist={handleRelistSkill}
           onYank={handleYankSkill}
         />
       )}
@@ -1401,7 +2075,15 @@ export default function ExtensionsPage() {
         />
       )}
 
-      <UploadSkillModal open={uploadOpen} onOpenChange={setUploadOpen} onSuccess={loadSkills} />
+      <UploadSkillModal
+        open={uploadOpen}
+        onOpenChange={setUploadOpen}
+        onSuccess={loadSkills}
+        onReviewRequest={(target) => {
+          setUploadOpen(false)
+          setReviewTarget(target)
+        }}
+      />
       <ReviewModal
         target={reviewTarget}
         onClose={() => setReviewTarget(null)}

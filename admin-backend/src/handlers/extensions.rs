@@ -18,19 +18,23 @@ use uuid::Uuid;
 use crate::{
     error::{Error, Result},
     extensions_state::{
-        enabled_after_rescan, review_status_after_rescan, REVIEW_STATUS_PENDING,
-        REVIEW_STATUS_SCANNING,
-        REVIEW_STATUS_SCAN_FAILED, REVIEW_STATUS_YANKED,
+        enabled_after_rescan, review_status_after_rescan, REVIEW_STATUS_APPROVED,
+        REVIEW_STATUS_PENDING, REVIEW_STATUS_SCAN_FAILED, REVIEW_STATUS_YANKED,
     },
     extensions_validation::{extract_skill_metadata, validate_skill_package},
     routes::write_audit_log,
-    scanner::{FindingSeverity, ScanResult, ScannerConfig, SkillScanner},
-    skill_package::extract_skill_content,
+    scanner::{
+        FindingSeverity, ScanError, ScanResult, ScanUploadOptions, ScannerConfig,
+        SecurityFinding, SecurityVerdict, SkillScanner,
+    },
+    skill_package::extract_skill_package,
     AppState,
 };
 
 type DbPool = deadpool_postgres::Pool;
 const MAX_UPLOAD_PACKAGE_BYTES: usize = 8 * 1024 * 1024;
+const PROMPT_INJECTION_RULE_ID: &str = "PROMPT_INJECTION_INSTRUCTION_OVERRIDE";
+const PROMPT_INJECTION_FINDING_TITLE: &str = "检测到提示词注入指令";
 
 // ── 数据类型 ─────────────────────────────────────────────────────────────────
 
@@ -147,17 +151,40 @@ async fn set_item_enabled(
     };
 
     // table 来自内部调用，只能是 "skills" 或 "plugins"，无 SQL 注入风险
-    let sql = format!(
-        "UPDATE {} SET enabled = $1, updated_at = NOW() WHERE id = $2",
-        table
-    );
-    let rows = sqlx::query(&sql)
-        .bind(enabled)
-        .bind(item_id)
-        .execute(sqlx_pool)
-        .await
-        .map_err(|e| Error::Database(e.to_string()))?
-        .rows_affected();
+    let rows = if enabled {
+        let sql = format!(
+            "UPDATE {} SET
+                enabled = true,
+                review_status = CASE
+                    WHEN review_status = $1 THEN $2
+                    ELSE review_status
+                END,
+                updated_at = NOW()
+             WHERE id = $3",
+            table
+        );
+
+        sqlx::query(&sql)
+            .bind(REVIEW_STATUS_YANKED)
+            .bind(REVIEW_STATUS_APPROVED)
+            .bind(item_id)
+            .execute(sqlx_pool)
+            .await
+            .map_err(|e| Error::Database(e.to_string()))?
+            .rows_affected()
+    } else {
+        let sql = format!(
+            "UPDATE {} SET enabled = false, updated_at = NOW() WHERE id = $1",
+            table
+        );
+
+        sqlx::query(&sql)
+            .bind(item_id)
+            .execute(sqlx_pool)
+            .await
+            .map_err(|e| Error::Database(e.to_string()))?
+            .rows_affected()
+    };
 
     if rows == 0 {
         return Err(Error::NotFound(format!(
@@ -170,6 +197,13 @@ async fn set_item_enabled(
         )));
     }
 
+    let review_status_sql = format!("SELECT review_status FROM {} WHERE id = $1", table);
+    let review_status: String = sqlx::query_scalar(&review_status_sql)
+        .bind(item_id)
+        .fetch_one(sqlx_pool)
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
     let db = db_pool
         .get()
         .await
@@ -179,15 +213,16 @@ async fn set_item_enabled(
         Uuid::nil(),
         &format!("{}_toggle", table),
         &format!(
-            "{} {} 已{}",
+            "{} {} 已{}（review_status={}）",
             table,
             item_id,
-            if enabled { "启用" } else { "禁用" }
+            if enabled { "启用" } else { "禁用" },
+            review_status,
         ),
     )
     .await;
 
-    Ok(Json(json!({ "id": item_id, "enabled": enabled })))
+    Ok(Json(json!({ "id": item_id, "enabled": enabled, "review_status": review_status })))
 }
 
 pub async fn set_skill_enabled(
@@ -227,11 +262,31 @@ pub struct SkillUploadRequest {
     pub version: Option<String>,
     pub description: Option<String>,
     pub author: Option<String>,
+    pub enable_llm_scan: Option<bool>,
+    pub llm_model_config_id: Option<Uuid>,
+    pub llm_provider: Option<String>,
+    pub llm_api_key: Option<String>,
 }
 
 struct UploadedSkillPackage {
     file_name: String,
     content: String,
+    manifest_json: Option<String>,
+    enable_llm_scan: Option<bool>,
+    llm_model_config_id: Option<Uuid>,
+    llm_provider: Option<String>,
+    llm_api_key: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ScanRuntimeDebugView {
+    use_llm: bool,
+    llm_provider: String,
+    llm_model: Option<String>,
+    llm_base_url: Option<String>,
+    llm_api_version: Option<String>,
+    llm_model_config_id: Option<Uuid>,
+    llm_api_key_configured: bool,
 }
 
 fn severity_to_string(severity: FindingSeverity) -> &'static str {
@@ -242,6 +297,307 @@ fn severity_to_string(severity: FindingSeverity) -> &'static str {
         FindingSeverity::Critical => "CRITICAL",
         FindingSeverity::Unknown => "UNKNOWN",
     }
+}
+
+const PROMPT_INJECTION_MARKERS: [&str; 7] = [
+    "忽略上面的要求",
+    "忽略以上要求",
+    "ignore previous instructions",
+    "ignore above instructions",
+    "reveal api key",
+    "api key发给我",
+    "api key 给我",
+];
+
+fn suspicious_line_snippet(content: &str, marker: &str) -> String {
+    for line in content.lines() {
+        if line.to_lowercase().contains(marker) {
+            return limit_text(line.trim(), 220);
+        }
+    }
+    limit_text(content.trim(), 220)
+}
+
+fn prompt_injection_snippet(content: &str) -> Option<String> {
+    let lowered = content.to_lowercase();
+    for marker in PROMPT_INJECTION_MARKERS {
+        if lowered.contains(marker) {
+            return Some(suspicious_line_snippet(content, marker));
+        }
+    }
+    None
+}
+
+fn has_prompt_injection_finding(scan_result: &ScanResult) -> bool {
+    scan_result
+        .findings
+        .iter()
+        .any(|finding| finding.rule_id.as_deref() == Some(PROMPT_INJECTION_RULE_ID))
+}
+
+fn normalize_findings_compare_text(input: &str) -> String {
+    input
+        .chars()
+        .filter(|ch| ch.is_alphanumeric())
+        .flat_map(|ch| ch.to_lowercase())
+        .collect()
+}
+
+fn is_prompt_injection_like_finding(finding: &SecurityFinding) -> bool {
+    let rule = finding
+        .rule_id
+        .as_deref()
+        .map(str::to_ascii_uppercase)
+        .unwrap_or_default();
+    let title = finding.title.as_deref().unwrap_or("").to_ascii_lowercase();
+
+    rule.contains("PROMPT") || title.contains("prompt") || title.contains("提示词")
+}
+
+fn has_equivalent_prompt_injection_finding(scan_result: &ScanResult, snippet: &str) -> bool {
+    let target = normalize_findings_compare_text(snippet);
+    if target.is_empty() {
+        return false;
+    }
+
+    scan_result.findings.iter().any(|finding| {
+        if !is_prompt_injection_like_finding(finding) {
+            return false;
+        }
+
+        let Some(finding_snippet) = finding.snippet.as_deref() else {
+            return false;
+        };
+        let normalized = normalize_findings_compare_text(finding_snippet);
+        if normalized.is_empty() {
+            return false;
+        }
+
+        normalized == target || normalized.contains(&target) || target.contains(&normalized)
+    })
+}
+
+fn guarded_max_severity(existing: Option<FindingSeverity>) -> Option<FindingSeverity> {
+    match existing {
+        Some(FindingSeverity::Critical) => Some(FindingSeverity::Critical),
+        _ => Some(FindingSeverity::High),
+    }
+}
+
+fn enforce_prompt_injection_guard(scan_result: ScanResult, content: &str) -> ScanResult {
+    let Some(snippet) = prompt_injection_snippet(content) else {
+        return scan_result;
+    };
+
+    if has_prompt_injection_finding(&scan_result)
+        || has_equivalent_prompt_injection_finding(&scan_result, &snippet)
+    {
+        return scan_result;
+    }
+
+    let mut findings = scan_result.findings;
+    findings.push(SecurityFinding {
+        rule_id: Some(PROMPT_INJECTION_RULE_ID.to_string()),
+        severity: FindingSeverity::High,
+        title: Some(PROMPT_INJECTION_FINDING_TITLE.to_string()),
+        file: Some("SKILL.md".to_string()),
+        snippet: Some(snippet),
+        recommendation: Some("移除提示词注入语句（如忽略系统要求、索要密钥）后重新上传".to_string()),
+    });
+
+    let findings_count = findings.len() as i32;
+    ScanResult {
+        scanner_type: scan_result.scanner_type,
+        verdict: SecurityVerdict::Dangerous,
+        is_safe: false,
+        max_severity: guarded_max_severity(scan_result.max_severity),
+        findings_count,
+        findings,
+        scan_duration_ms: scan_result.scan_duration_ms,
+    }
+}
+
+const SCANNER_ERROR_SNIPPET_LIMIT: usize = 400;
+
+fn compact_text(input: &str) -> String {
+    input.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn limit_text(input: &str, max_chars: usize) -> String {
+    if input.chars().count() <= max_chars {
+        return input.to_string();
+    }
+    let trimmed: String = input.chars().take(max_chars).collect();
+    format!("{}...", trimmed)
+}
+
+fn scanner_error_body_summary(body: &str) -> Option<String> {
+    let compact = compact_text(body);
+    if compact.is_empty() {
+        return None;
+    }
+    Some(limit_text(&compact, SCANNER_ERROR_SNIPPET_LIMIT))
+}
+
+fn scanner_error_summary(error: &ScanError) -> String {
+    match error {
+        ScanError::Request(message) => {
+            format!("扫描服务请求失败: {}", limit_text(&compact_text(message), 180))
+        }
+        ScanError::HttpStatus { status, body } => {
+            if let Some(summary) = scanner_error_body_summary(body) {
+                return format!("扫描服务返回异常状态码 {}: {}", status, summary);
+            }
+            format!("扫描服务返回异常状态码 {}", status)
+        }
+        ScanError::Parse(message) => {
+            format!("扫描服务响应解析失败: {}", limit_text(&compact_text(message), 180))
+        }
+    }
+}
+
+fn scanner_unavailable_error(error: &ScanError) -> Error {
+    Error::Validation(format!(
+        "安全扫描服务未启动或不可用: {}",
+        scanner_error_summary(error)
+    ))
+}
+
+fn parse_optional_bool(input: Option<&str>) -> Option<bool> {
+    input.and_then(|value| match value.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" => Some(true),
+        "false" | "0" | "no" | "off" => Some(false),
+        _ => None,
+    })
+}
+
+fn build_scan_runtime_debug_view(
+    payload: &SkillUploadRequest,
+    scan_options: &ScanUploadOptions,
+) -> ScanRuntimeDebugView {
+    ScanRuntimeDebugView {
+        use_llm: scan_options.use_llm,
+        llm_provider: scan_options.llm_provider.clone(),
+        llm_model: scan_options.llm_model.clone(),
+        llm_base_url: scan_options.llm_base_url.clone(),
+        llm_api_version: scan_options.llm_api_version.clone(),
+        llm_model_config_id: payload.llm_model_config_id,
+        llm_api_key_configured: scan_options
+            .llm_api_key
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|v| !v.is_empty()),
+    }
+}
+
+fn sanitize_optional_text(input: Option<String>) -> Option<String> {
+    input
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn resolve_llm_provider(
+    provider_from_upload: Option<String>,
+    provider_from_config: &str,
+) -> Result<String> {
+    let provider = sanitize_optional_text(provider_from_upload)
+        .unwrap_or_else(|| provider_from_config.to_string())
+        .to_ascii_lowercase();
+
+    if provider == "anthropic" || provider == "openai" {
+        return Ok(provider);
+    }
+
+    Err(Error::Validation(format!(
+        "不支持的 LLM provider: {}（仅支持 anthropic/openai）",
+        provider
+    )))
+}
+
+fn resolve_scanner_provider_from_model(provider: &str, api_format: &str) -> String {
+    let format_normalized = api_format.trim().to_ascii_lowercase();
+    if format_normalized == "anthropic" || provider.eq_ignore_ascii_case("anthropic") {
+        return "anthropic".to_string();
+    }
+    "openai".to_string()
+}
+
+/// litellm 需要 `provider/model` 格式才能路由到正确的 SDK。
+/// 如果 model_id 本身不含 `/`，自动加上 scanner provider 前缀。
+fn prefix_model_for_litellm(model_id: &str, scanner_provider: &str) -> String {
+    if model_id.contains('/') {
+        return model_id.to_string();
+    }
+    format!("{}/{}", scanner_provider, model_id)
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct ModelConfigForScan {
+    model_id: String,
+    provider: String,
+    api_key: Option<String>,
+    enabled: bool,
+    api_format: String,
+    llm_base_url: Option<String>,
+    llm_api_version: Option<String>,
+}
+
+async fn load_model_config_for_scan(
+    sqlx_pool: &sqlx::PgPool,
+    model_config_id: Uuid,
+) -> Result<ModelConfigForScan> {
+    let row = sqlx::query_as::<_, ModelConfigForScan>(
+        "SELECT model_id, provider, api_key, enabled,
+            COALESCE(extra_config->>'api_format', 'openai') AS api_format,
+            NULLIF(api_base_url, '') AS llm_base_url,
+            NULLIF(extra_config->>'api_version', '') AS llm_api_version
+         FROM model_configs
+         WHERE id = $1",
+    )
+    .bind(model_config_id)
+    .fetch_optional(sqlx_pool)
+    .await
+    .map_err(|e| Error::Database(e.to_string()))?
+    .ok_or_else(|| Error::Validation("所选模型配置不存在".into()))?;
+
+    Ok(row)
+}
+
+async fn build_scan_upload_options(
+    scanner_cfg: &ScannerConfig,
+    sqlx_pool: &sqlx::PgPool,
+    payload: &SkillUploadRequest,
+) -> Result<ScanUploadOptions> {
+    let mut options = ScanUploadOptions::from_config(scanner_cfg);
+
+    if let Some(enable_llm_scan) = payload.enable_llm_scan {
+        options.use_llm = enable_llm_scan;
+    }
+
+    if let Some(model_config_id) = payload.llm_model_config_id {
+        let model = load_model_config_for_scan(sqlx_pool, model_config_id).await?;
+        if !model.enabled {
+            return Err(Error::Validation("所选模型配置已禁用，请选择启用中的模型".into()));
+        }
+
+        let api_key = sanitize_optional_text(model.api_key)
+            .ok_or_else(|| Error::Validation("所选模型配置未配置 API Key".into()))?;
+
+        options.llm_provider = resolve_scanner_provider_from_model(&model.provider, &model.api_format);
+        options.llm_api_key = Some(api_key);
+        options.llm_model = Some(prefix_model_for_litellm(&model.model_id, &options.llm_provider));
+        options.llm_base_url = sanitize_optional_text(model.llm_base_url);
+        options.llm_api_version = sanitize_optional_text(model.llm_api_version);
+        return Ok(options);
+    }
+
+    options.llm_provider = resolve_llm_provider(payload.llm_provider.clone(), &options.llm_provider)?;
+
+    if let Some(llm_api_key) = sanitize_optional_text(payload.llm_api_key.clone()) {
+        options.llm_api_key = Some(llm_api_key);
+    }
+
+    Ok(options)
 }
 
 async fn save_scan_result(sqlx_pool: &sqlx::PgPool, skill_id: Uuid, scan: &ScanResult) -> Result<()> {
@@ -272,6 +628,20 @@ async fn save_scan_result(sqlx_pool: &sqlx::PgPool, skill_id: Uuid, scan: &ScanR
     Ok(())
 }
 
+async fn clear_scan_results(sqlx_pool: &sqlx::PgPool, target_type: &str, target_id: Uuid) -> Result<()> {
+    sqlx::query(
+        "DELETE FROM scan_results
+         WHERE target_type = $1 AND target_id = $2",
+    )
+    .bind(target_type)
+    .bind(target_id)
+    .execute(sqlx_pool)
+    .await
+    .map_err(|e| Error::Database(e.to_string()))?;
+
+    Ok(())
+}
+
 async fn update_skill_review_status(
     sqlx_pool: &sqlx::PgPool,
     skill_id: Uuid,
@@ -291,82 +661,123 @@ async fn update_skill_review_status(
     Ok(review_status.to_string())
 }
 
-async fn run_skill_scan_and_persist(
-    sqlx_pool: &sqlx::PgPool,
-    skill_id: Uuid,
+const LLM_SCAN_MIN_TIMEOUT_MS: u64 = 120_000;
+const SCANNER_DEFAULT_TIMEOUT_MS: u64 = 30_000;
+
+fn effective_scan_timeout(cfg: &ScannerConfig, options: &ScanUploadOptions) -> u64 {
+    if options.use_llm && cfg.timeout_ms == SCANNER_DEFAULT_TIMEOUT_MS {
+        cfg.timeout_ms.max(LLM_SCAN_MIN_TIMEOUT_MS)
+    } else {
+        cfg.timeout_ms
+    }
+}
+
+async fn scan_skill_with_guard(
     skill_name: &str,
     content: &str,
     scanner_cfg: &ScannerConfig,
-) -> Result<()> {
-    let scanner = SkillScanner::new(&scanner_cfg.url, scanner_cfg.timeout_ms)
+    scan_options: &ScanUploadOptions,
+) -> Result<ScanResult> {
+    let timeout_ms = effective_scan_timeout(scanner_cfg, scan_options);
+    let scanner = SkillScanner::new(&scanner_cfg.url, timeout_ms)
         .map_err(|e| Error::Internal(format!("初始化扫描器失败: {}", e)))?;
 
-    match scanner.scan_upload(skill_name, content).await {
-        Ok(scan_result) => {
-            save_scan_result(sqlx_pool, skill_id, &scan_result).await?;
-            let next_status = if scan_result.is_safe {
-                REVIEW_STATUS_PENDING
-            } else {
-                REVIEW_STATUS_SCAN_FAILED
-            };
-            let _ = update_skill_review_status(sqlx_pool, skill_id, next_status).await?;
-        }
-        Err(error) => {
+    let scan_result = scanner
+        .scan_upload(skill_name, content, scan_options)
+        .await
+        .map_err(|error| {
             tracing::warn!(
-                skill_id = %skill_id,
                 skill = %skill_name,
                 error = %error,
                 "Security scan request failed"
             );
-            let _ = update_skill_review_status(sqlx_pool, skill_id, REVIEW_STATUS_SCAN_FAILED).await?;
-        }
-    }
+            scanner_unavailable_error(&error)
+        })?;
 
-    Ok(())
+    Ok(enforce_prompt_injection_guard(scan_result, content))
 }
 
-fn spawn_skill_scan_job(
-    sqlx_pool: sqlx::PgPool,
-    skill_id: Uuid,
-    skill_name: String,
-    content: String,
-    scanner_cfg: ScannerConfig,
-) {
-    tokio::spawn(async move {
-        if let Err(error) = run_skill_scan_and_persist(
-            &sqlx_pool,
-            skill_id,
-            &skill_name,
-            &content,
-            &scanner_cfg,
-        )
-        .await
-        {
-            tracing::error!(
-                skill_id = %skill_id,
-                skill = %skill_name,
-                error = %error,
-                "Background skill scan job failed"
-            );
-            if let Err(update_error) =
-                update_skill_review_status(&sqlx_pool, skill_id, REVIEW_STATUS_SCAN_FAILED).await
-            {
-                tracing::error!(
-                    skill_id = %skill_id,
-                    error = %update_error,
-                    "Failed to set skill review status to scan_failed after scan job failure"
-                );
+fn upload_result_message(review_status: &str, scan_row: Option<&ScanResultRow>) -> &'static str {
+    if review_status == REVIEW_STATUS_SCAN_FAILED {
+        if let Some(row) = scan_row {
+            if row.verdict == "BLOCKED" || row.verdict == "UNKNOWN" {
+                return "技能包已上传，安全扫描执行异常，请查看扫描结果";
             }
         }
-    });
+        return "技能包已上传，安全扫描发现风险";
+    }
+
+    if review_status == REVIEW_STATUS_PENDING {
+        return "技能包已上传，安全扫描通过，等待审核";
+    }
+
+    "技能包已上传"
+}
+
+async fn fetch_latest_skill_scan_row(
+    sqlx_pool: &sqlx::PgPool,
+    skill_id: Uuid,
+) -> Result<Option<ScanResultRow>> {
+    sqlx::query_as::<_, ScanResultRow>(
+        "SELECT scanner_type, verdict, is_safe, max_severity,
+                findings_count, findings, scan_duration_ms,
+                scanned_at, created_at
+         FROM scan_results
+         WHERE target_type = 'skill' AND target_id = $1
+         ORDER BY scanned_at DESC NULLS LAST, created_at DESC
+         LIMIT 1",
+    )
+    .bind(skill_id)
+    .fetch_optional(sqlx_pool)
+    .await
+    .map_err(|e| Error::Database(e.to_string()))
+}
+
+async fn build_upload_skill_response(
+    sqlx_pool: &sqlx::PgPool,
+    skill_id: Uuid,
+    skill_name: &str,
+    scan_runtime: &ScanRuntimeDebugView,
+) -> Result<(StatusCode, Json<serde_json::Value>)> {
+    let final_status: String = sqlx::query_scalar("SELECT review_status FROM skills WHERE id = $1")
+        .bind(skill_id)
+        .fetch_one(sqlx_pool)
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let scan_row = fetch_latest_skill_scan_row(sqlx_pool, skill_id).await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "id": skill_id,
+            "name": skill_name,
+            "review_status": final_status,
+            "scan_result": scan_row,
+            "scan_runtime": scan_runtime,
+            "message": upload_result_message(&final_status, scan_row.as_ref())
+        })),
+    ))
 }
 
 pub async fn upload_skill(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(payload): Json<SkillUploadRequest>,
+    Json(mut payload): Json<SkillUploadRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
     validate_skill_package(&payload.content)?;
+    let metadata = extract_skill_metadata(&payload.content, None)?;
+
+    if payload.version.is_none() {
+        payload.version = metadata.version;
+    }
+    if payload.description.is_none() {
+        payload.description = metadata.description;
+    }
+    if payload.author.is_none() {
+        payload.author = metadata.author;
+    }
+
     upload_skill_from_payload(&state, &headers, payload, "json").await
 }
 
@@ -378,13 +789,17 @@ pub async fn upload_skill_package(
     let uploaded = read_skill_package_from_multipart(&mut multipart).await?;
     validate_skill_package(&uploaded.content)?;
 
-    let metadata = extract_skill_metadata(&uploaded.content)?;
+    let metadata = extract_skill_metadata(&uploaded.content, uploaded.manifest_json.as_deref())?;
     let payload = SkillUploadRequest {
         name: metadata.name,
         content: uploaded.content,
         version: metadata.version,
         description: metadata.description,
         author: metadata.author,
+        enable_llm_scan: uploaded.enable_llm_scan,
+        llm_model_config_id: uploaded.llm_model_config_id,
+        llm_provider: uploaded.llm_provider,
+        llm_api_key: uploaded.llm_api_key,
     };
 
     upload_skill_from_payload(&state, &headers, payload, &uploaded.file_name).await
@@ -393,22 +808,117 @@ pub async fn upload_skill_package(
 async fn read_skill_package_from_multipart(
     multipart: &mut Multipart,
 ) -> Result<UploadedSkillPackage> {
+    let mut uploaded: Option<UploadedSkillPackage> = None;
+    let mut enable_llm_scan: Option<bool> = None;
+    let mut llm_model_config_id: Option<Uuid> = None;
+    let mut llm_provider: Option<String> = None;
+    let mut llm_api_key: Option<String> = None;
+
     while let Some(field) = multipart
         .next_field()
         .await
         .map_err(|e| Error::Validation(format!("读取上传字段失败: {}", e)))?
     {
-        let Some(file_name) = field.file_name().map(ToString::to_string) else {
+        let field_name = field.name().map(ToString::to_string);
+
+        if let Some(file_name) = field.file_name().map(ToString::to_string) {
+            let bytes = read_field_bytes_limited(field, MAX_UPLOAD_PACKAGE_BYTES).await?;
+            let extracted = extract_skill_package(&file_name, &bytes)?;
+            uploaded = Some(UploadedSkillPackage {
+                file_name,
+                content: extracted.skill_content,
+                manifest_json: extracted.manifest_json,
+                enable_llm_scan: None,
+                llm_model_config_id: None,
+                llm_provider: None,
+                llm_api_key: None,
+            });
+            continue;
+        }
+
+        let Some(name) = field_name else {
             continue;
         };
 
-        let bytes = read_field_bytes_limited(field, MAX_UPLOAD_PACKAGE_BYTES).await?;
-        let content = extract_skill_content(&file_name, &bytes)?;
+        let value = field
+            .text()
+            .await
+            .map_err(|e| Error::Validation(format!("读取字段 {} 失败: {}", name, e)))?;
 
-        return Ok(UploadedSkillPackage { file_name, content });
+        apply_llm_field_from_multipart(
+            &name,
+            value,
+            &mut enable_llm_scan,
+            &mut llm_model_config_id,
+            &mut llm_provider,
+            &mut llm_api_key,
+        )?;
     }
 
-    Err(Error::Validation("未检测到上传文件字段".into()))
+    let mut result = uploaded.ok_or_else(|| Error::Validation("未检测到上传文件字段".into()))?;
+    result.enable_llm_scan = enable_llm_scan;
+    result.llm_model_config_id = llm_model_config_id;
+    result.llm_provider = llm_provider;
+    result.llm_api_key = llm_api_key;
+    Ok(result)
+}
+
+fn parse_model_config_id_from_form(value: &str) -> Result<Option<Uuid>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    let parsed = Uuid::parse_str(trimmed).map_err(|_| {
+        Error::Validation(format!("字段 llm_model_config_id 值无效: {}（应为 UUID）", value))
+    })?;
+    Ok(Some(parsed))
+}
+
+fn parse_enable_llm_scan_from_form(value: &str) -> Result<Option<bool>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    let parsed = parse_optional_bool(Some(trimmed)).ok_or_else(|| {
+        Error::Validation(format!(
+            "字段 enable_llm_scan 值无效: {}（仅支持 true/false）",
+            value
+        ))
+    })?;
+    Ok(Some(parsed))
+}
+
+fn apply_llm_field_from_multipart(
+    name: &str,
+    value: String,
+    enable_llm_scan: &mut Option<bool>,
+    llm_model_config_id: &mut Option<Uuid>,
+    llm_provider: &mut Option<String>,
+    llm_api_key: &mut Option<String>,
+) -> Result<()> {
+    match name {
+        "enable_llm_scan" => {
+            if let Some(parsed) = parse_enable_llm_scan_from_form(&value)? {
+                *enable_llm_scan = Some(parsed);
+            }
+        }
+        "llm_model_config_id" => {
+            if let Some(parsed) = parse_model_config_id_from_form(&value)? {
+                *llm_model_config_id = Some(parsed);
+            }
+        }
+        "llm_provider" => {
+            *llm_provider = sanitize_optional_text(Some(value));
+        }
+        "llm_api_key" => {
+            *llm_api_key = sanitize_optional_text(Some(value));
+        }
+        _ => {}
+    }
+
+    Ok(())
 }
 
 async fn read_field_bytes_limited(
@@ -434,41 +944,144 @@ async fn read_field_bytes_limited(
     Ok(bytes)
 }
 
+async fn ensure_scanner_service_ready(scanner_cfg: &ScannerConfig) -> Result<()> {
+    let scanner = SkillScanner::new(&scanner_cfg.url, scanner_cfg.timeout_ms)
+        .map_err(|e| Error::Validation(format!("安全扫描服务未启动或不可用: {}", e)))?;
+
+    scanner
+        .check_health()
+        .await
+        .map_err(|e| Error::Validation(format!("安全扫描服务未启动或不可用: {}", e)))?;
+
+    Ok(())
+}
+
+async fn upsert_uploaded_skill(
+    sqlx_pool: &sqlx::PgPool,
+    skill_name: &str,
+    version: &str,
+    description: &str,
+    author: &str,
+    uploader_id: Option<Uuid>,
+    content: &str,
+) -> Result<Uuid> {
+    sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO skills (
+            id, name, description, version, author, uploaded_by, file_path,
+            enabled, source, review_status, is_builtin, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, false, 'admin_upload', 'scanning', false, NOW(), NOW())
+        ON CONFLICT (name) DO UPDATE
+        SET
+            description = EXCLUDED.description,
+            version = EXCLUDED.version,
+            author = EXCLUDED.author,
+            uploaded_by = EXCLUDED.uploaded_by,
+            file_path = EXCLUDED.file_path,
+            enabled = false,
+            source = 'admin_upload',
+            review_status = 'scanning',
+            review_note = NULL,
+            reviewed_by = NULL,
+            reviewed_at = NULL,
+            updated_at = NOW()
+        RETURNING id",
+    )
+    .bind(Uuid::new_v4())
+    .bind(skill_name)
+    .bind(description)
+    .bind(version)
+    .bind(author)
+    .bind(uploader_id)
+    .bind(content)
+    .fetch_one(sqlx_pool)
+    .await
+    .map_err(|e| Error::Database(e.to_string()))
+}
+
+async fn finalize_upload_review_status(
+    sqlx_pool: &sqlx::PgPool,
+    skill_id: Uuid,
+    scan_result: Option<&ScanResult>,
+) -> Result<()> {
+    if let Some(scan_result) = scan_result {
+        save_scan_result(sqlx_pool, skill_id, scan_result).await?;
+        let next_status = if scan_result.is_safe {
+            REVIEW_STATUS_PENDING
+        } else {
+            REVIEW_STATUS_SCAN_FAILED
+        };
+        return update_skill_review_status(sqlx_pool, skill_id, next_status)
+            .await
+            .map(|_| ());
+    }
+
+    update_skill_review_status(sqlx_pool, skill_id, REVIEW_STATUS_PENDING)
+        .await
+        .map(|_| ())
+}
+
 async fn upload_skill_from_payload(
     state: &AppState,
     headers: &HeaderMap,
     payload: SkillUploadRequest,
     source_label: &str,
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
-
-    let skill_id = Uuid::new_v4();
     let uploader_id = admin_user_id_from_headers(headers);
-    let version = payload.version.as_deref().unwrap_or("1.0.0");
+    let skill_name = payload.name.clone();
+    let version = payload
+        .version
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or("1.0.0");
     let description = payload.description.as_deref().unwrap_or("");
     let author = payload.author.as_deref().unwrap_or("");
     let scanner_cfg = ScannerConfig::from_env();
-    let review_status = if scanner_cfg.enabled {
-        REVIEW_STATUS_SCANNING.to_string()
+    let scan_options = build_scan_upload_options(&scanner_cfg, &state.sqlx_pool, &payload).await?;
+    let scan_runtime = build_scan_runtime_debug_view(&payload, &scan_options);
+
+    tracing::info!(
+        skill = %skill_name,
+        use_llm = scan_runtime.use_llm,
+        llm_provider = %scan_runtime.llm_provider,
+        llm_model = ?scan_runtime.llm_model,
+        llm_base_url = ?scan_runtime.llm_base_url,
+        llm_api_version = ?scan_runtime.llm_api_version,
+        llm_model_config_id = ?scan_runtime.llm_model_config_id,
+        llm_api_key_configured = scan_runtime.llm_api_key_configured,
+        "Resolved scan runtime options for skill upload"
+    );
+
+    if scanner_cfg.enabled {
+        ensure_scanner_service_ready(&scanner_cfg).await?;
+    }
+
+    let guarded_scan_result = if scanner_cfg.enabled {
+        Some(scan_skill_with_guard(
+            &skill_name,
+            &payload.content,
+            &scanner_cfg,
+            &scan_options,
+        )
+        .await?)
     } else {
-        REVIEW_STATUS_PENDING.to_string()
+        None
     };
 
-    sqlx::query(
-           "INSERT INTO skills (id, name, description, version, author, uploaded_by, file_path,
-                            enabled, source, review_status, is_builtin, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, false, 'admin_upload', $8, false, NOW(), NOW())",
+    let persisted_skill_id = upsert_uploaded_skill(
+        &state.sqlx_pool,
+        &skill_name,
+        version,
+        description,
+        author,
+        uploader_id,
+        &payload.content,
     )
-    .bind(skill_id)
-    .bind(&payload.name)
-    .bind(description)
-    .bind(version)
-    .bind(author)
-        .bind(uploader_id)
-    .bind(&payload.content)
-    .bind(&review_status)
-    .execute(&state.sqlx_pool)
-    .await
-    .map_err(|e| Error::Database(e.to_string()))?;
+    .await?;
+
+    // Re-upload should replace the previous review application context and stale scan output.
+    clear_scan_results(&state.sqlx_pool, "skill", persisted_skill_id).await?;
 
     let db = state
         .db_pool
@@ -481,34 +1094,20 @@ async fn upload_skill_from_payload(
         "skill_upload",
         &format!(
             "上传技能包：{} ({}) source={} ",
-            payload.name, skill_id, source_label
+            skill_name, persisted_skill_id, source_label
         ),
     )
     .await;
 
-    if scanner_cfg.enabled {
-        spawn_skill_scan_job(
-            state.sqlx_pool.clone(),
-            skill_id,
-            payload.name.clone(),
-            payload.content.clone(),
-            scanner_cfg,
-        );
-    }
+    finalize_upload_review_status(
+        &state.sqlx_pool,
+        persisted_skill_id,
+        guarded_scan_result.as_ref(),
+    )
+    .await?;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({
-            "id": skill_id,
-            "name": payload.name,
-            "review_status": review_status,
-            "message": if review_status == REVIEW_STATUS_SCANNING {
-                "技能包已上传，正在执行安全扫描"
-            } else {
-                "技能包已上传，等待审核"
-            }
-        })),
-    ))
+    build_upload_skill_response(&state.sqlx_pool, persisted_skill_id, &skill_name, &scan_runtime)
+        .await
 }
 
 // ── 审核（技能和插件共用逻辑）────────────────────────────────────────────────
@@ -526,6 +1125,8 @@ async fn review_item(
     } else {
         ("rejected", false)
     };
+
+    ensure_scan_result_exists_for_review(sqlx_pool, table, item_id).await?;
 
     let sql = format!(
         "UPDATE {} SET review_status = $1, enabled = $2, review_note = $3,
@@ -580,6 +1181,43 @@ async fn review_item(
     Ok(Json(
         json!({ "id": item_id, "review_status": new_status, "enabled": enabled }),
     ))
+}
+
+fn scan_target_type_for_table(table: &str) -> Option<&'static str> {
+    match table {
+        "skills" => Some("skill"),
+        "plugins" => Some("plugin"),
+        _ => None,
+    }
+}
+
+async fn ensure_scan_result_exists_for_review(
+    sqlx_pool: &sqlx::PgPool,
+    table: &str,
+    item_id: Uuid,
+) -> Result<()> {
+    let Some(target_type) = scan_target_type_for_table(table) else {
+        return Ok(());
+    };
+
+    let latest_scan_exists = sqlx::query_scalar::<_, i32>(
+        "SELECT 1
+         FROM scan_results
+         WHERE target_type = $1 AND target_id = $2
+         ORDER BY scanned_at DESC NULLS LAST, created_at DESC
+         LIMIT 1",
+    )
+    .bind(target_type)
+    .bind(item_id)
+    .fetch_optional(sqlx_pool)
+    .await
+    .map_err(|e| Error::Database(e.to_string()))?;
+
+    if latest_scan_exists.is_none() {
+        return Err(Error::Validation("未检测到扫描结果，禁止审核".into()));
+    }
+
+    Ok(())
 }
 
 fn admin_user_id_from_headers(headers: &HeaderMap) -> Option<Uuid> {
@@ -652,10 +1290,6 @@ struct PluginStateRow {
     review_status: String,
 }
 
-fn scanner_disabled_error() -> Error {
-    Error::Validation("安全扫描器未启用，无法执行重扫".into())
-}
-
 async fn fetch_skill_state(sqlx_pool: &sqlx::PgPool, skill_id: Uuid) -> Result<SkillStateRow> {
     let row = sqlx::query_as::<_, SkillStateRow>(
         "SELECT name, file_path, review_status, enabled
@@ -726,34 +1360,40 @@ async fn persist_rescan_result(
 async fn run_skill_rescan(
     sqlx_pool: &sqlx::PgPool,
     scanner: &SkillScanner,
+    scan_options: &ScanUploadOptions,
     skill_id: Uuid,
     skill_name: &str,
     content: &str,
     current_status: &str,
     current_enabled: bool,
 ) -> Result<(String, bool, bool, i32)> {
-    match scanner.scan_upload(skill_name, content).await {
+    match scanner.scan_upload(skill_name, content, scan_options).await {
         Ok(scan_result) => {
+            let guarded_result = enforce_prompt_injection_guard(scan_result, content);
             let (next_status, next_enabled) = persist_rescan_result(
                 sqlx_pool,
                 skill_id,
                 current_status,
                 current_enabled,
-                &scan_result,
+                &guarded_result,
             )
             .await?;
 
             Ok((
                 next_status,
                 next_enabled,
-                scan_result.is_safe,
-                scan_result.findings_count,
+                guarded_result.is_safe,
+                guarded_result.findings_count,
             ))
         }
-        Err(_) => {
-            let next_status = REVIEW_STATUS_SCAN_FAILED.to_string();
-            update_skill_state_after_rescan(sqlx_pool, skill_id, &next_status, false).await?;
-            Ok((next_status, false, false, 0))
+        Err(error) => {
+            tracing::warn!(
+                skill_id = %skill_id,
+                skill = %skill_name,
+                error = %error,
+                "Skill rescan request failed"
+            );
+            Err(scanner_unavailable_error(&error))
         }
     }
 }
@@ -801,6 +1441,14 @@ fn skill_rescan_response(
     }))
 }
 
+fn can_rescan_skill(review_status: &str) -> bool {
+    review_status == REVIEW_STATUS_SCAN_FAILED || review_status == REVIEW_STATUS_PENDING
+}
+
+fn scanner_disabled_error() -> Error {
+    Error::Validation("安全扫描器未启用，无法执行重扫".into())
+}
+
 /// POST /api/skills/{id}/rescan
 pub async fn rescan_skill(
     State(state): State<AppState>,
@@ -808,8 +1456,8 @@ pub async fn rescan_skill(
 ) -> Result<Json<serde_json::Value>> {
     let skill = fetch_skill_state(&state.sqlx_pool, skill_id).await?;
     let previous_status = skill.review_status.clone();
-    if previous_status != REVIEW_STATUS_SCAN_FAILED {
-        return Err(Error::Validation("仅 scan_failed 状态的技能可以重扫".into()));
+    if !can_rescan_skill(&previous_status) {
+        return Err(Error::Validation("仅 pending 或 scan_failed 状态的技能可以重扫".into()));
     }
     let content = skill
         .file_path
@@ -821,11 +1469,18 @@ pub async fn rescan_skill(
         return Err(scanner_disabled_error());
     }
 
-    let scanner = SkillScanner::new(&scanner_cfg.url, scanner_cfg.timeout_ms)
+    ensure_scanner_service_ready(&scanner_cfg).await?;
+
+    let scan_options = ScanUploadOptions::from_config(&scanner_cfg);
+    let timeout_ms = effective_scan_timeout(&scanner_cfg, &scan_options);
+
+    let scanner = SkillScanner::new(&scanner_cfg.url, timeout_ms)
         .map_err(|e| Error::Internal(format!("初始化扫描器失败: {}", e)))?;
+
     let (next_status, next_enabled, is_safe, findings_count) = run_skill_rescan(
         &state.sqlx_pool,
         &scanner,
+        &scan_options,
         skill_id,
         &skill.name,
         content,

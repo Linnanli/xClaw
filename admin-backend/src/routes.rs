@@ -20,9 +20,12 @@ use axum::{
     routing::{delete, get, post, put},
     Json, Router,
 };
+use base64::Engine;
 use chrono::{DateTime, Utc};
+use ed25519_dalek::{Signer, SigningKey};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashMap;
 use tracing::{debug, info, instrument};
 use uuid::Uuid;
 
@@ -111,11 +114,7 @@ pub fn create_router(state: AppState) -> Router {
             post(handlers::extensions::upload_skill_package),
         )
         .route(
-            "/api/skills/{id}/enable",
-            post(handlers::extensions::set_skill_enabled),
-        )
-        .route(
-            "/api/skills/{id}/disable",
+            "/api/skills/{id}/{action}",
             post(handlers::extensions::set_skill_enabled),
         )
         .route(
@@ -141,11 +140,7 @@ pub fn create_router(state: AppState) -> Router {
             post(handlers::extensions::upload_plugin),
         )
         .route(
-            "/api/plugins/{id}/enable",
-            post(handlers::extensions::set_plugin_enabled),
-        )
-        .route(
-            "/api/plugins/{id}/disable",
+            "/api/plugins/{id}/{action}",
             post(handlers::extensions::set_plugin_enabled),
         )
         .route(
@@ -177,6 +172,7 @@ pub fn create_router(state: AppState) -> Router {
             "/api/client-config",
             get(get_client_config).put(update_client_config),
         )
+        .route("/api/client-policy", get(get_client_policy))
         // 客户端数据上报 API（供 Desktop Client 使用）
         .route("/api/client-reports", post(post_client_reports))
         // 仪表盘 API
@@ -2939,6 +2935,8 @@ struct ClientConfigResponse {
     safety_enabled: Option<bool>,
     skills_enabled: Option<bool>,
     extensions_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    managed_mode: Option<bool>,
     max_cost_per_day_cents: Option<i64>,
     config_version: i64,
     updated_at: String,
@@ -2957,6 +2955,26 @@ struct ClientConfigResponse {
     // ironclaw 引擎通过 CLAWHUB_REGISTRY 环境变量读取此值
     #[serde(skip_serializing_if = "Option::is_none")]
     skill_registry_url: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ManagedPolicyManifest {
+    policy_version: u64,
+    issued_at: String,
+    expires_at: String,
+    managed_mode: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_id: Option<String>,
+    allowed_skills: Vec<String>,
+    allowed_extensions: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SignedClientPolicyResponse {
+    algorithm: String,
+    key_id: String,
+    manifest_payload: String,
+    signature: String,
 }
 
 /// GET /api/client-config — 返回客户端应使用的配置。
@@ -3020,6 +3038,7 @@ async fn get_client_config(
                 safety_enabled: r.get(4),
                 skills_enabled: r.get(5),
                 extensions_enabled: r.get(6),
+                managed_mode: None,
                 max_cost_per_day_cents: r.get(7),
                 config_version: r.get(8),
                 updated_at: updated_at.to_rfc3339(),
@@ -3041,6 +3060,7 @@ async fn get_client_config(
             safety_enabled: None,
             skills_enabled: None,
             extensions_enabled: None,
+            managed_mode: None,
             max_cost_per_day_cents: None,
             config_version: 0,
             updated_at: Utc::now().to_rfc3339(),
@@ -3074,6 +3094,19 @@ async fn get_client_config(
         }
     }
 
+    if let Ok(rows) = client
+        .query(
+            "SELECT value FROM system_settings WHERE key = 'managed_mode'",
+            &[],
+        )
+        .await
+    {
+        if let Some(row) = rows.first() {
+            let val: serde_json::Value = row.get(0);
+            response.managed_mode = parse_bool_setting(&val);
+        }
+    }
+
     // 填充私有注册表地址（需求 14.17）
     // 从 system_settings 读取 admin_base_url，拼接 client_token 作为身份标识
     if let Ok(rows) = client
@@ -3102,6 +3135,245 @@ async fn get_client_config(
 
     debug!(version = response.config_version, "Client config served");
     Ok(Json(response))
+}
+
+#[instrument(skip(state))]
+async fn get_client_policy(
+    State(state): State<AppState>,
+    Query(params): Query<ClientConfigQuery>,
+) -> Result<Json<SignedClientPolicyResponse>> {
+    let client = state
+        .db_pool
+        .get()
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    let client_uuid = params
+        .client_id
+        .as_deref()
+        .map(Uuid::parse_str)
+        .transpose()
+        .map_err(|_| Error::Validation("Invalid client_id format".into()))?;
+
+    let department_id = resolve_client_department_id(&client, client_uuid).await?;
+    let managed_mode = read_managed_mode_setting(&client).await;
+    let ttl_seconds = read_policy_ttl_seconds(&client).await;
+    let now = Utc::now();
+    let expires_at = now + chrono::Duration::seconds(ttl_seconds as i64);
+
+    let manifest = ManagedPolicyManifest {
+        policy_version: now.timestamp_millis() as u64,
+        issued_at: now.to_rfc3339(),
+        expires_at: expires_at.to_rfc3339(),
+        managed_mode,
+        client_id: client_uuid.map(|id| id.to_string()),
+        allowed_skills: fetch_allowed_skill_names(&client, department_id).await?,
+        allowed_extensions: fetch_allowed_extension_names(&client).await?,
+    };
+
+    let manifest_payload = serde_json::to_string(&manifest)
+        .map_err(|e| Error::Internal(format!("Failed to serialize policy manifest: {}", e)))?;
+    let (key_id, signature) = sign_policy_payload(&manifest_payload)?;
+
+    Ok(Json(SignedClientPolicyResponse {
+        algorithm: "ed25519".to_string(),
+        key_id,
+        manifest_payload,
+        signature,
+    }))
+}
+
+fn sign_policy_payload(payload: &str) -> Result<(String, String)> {
+    let (key_id, private_key_b64) = resolve_signing_key_material()?;
+    let key_bytes = base64::engine::general_purpose::STANDARD
+        .decode(private_key_b64)
+        .map_err(|e| Error::Internal(format!("Invalid signing key payload: {}", e)))?;
+    let key_array: [u8; 32] = key_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| Error::Internal("Managed policy signing key must decode to 32 bytes".into()))?;
+    let signing_key = SigningKey::from_bytes(&key_array);
+
+    let signature = signing_key.sign(payload.as_bytes());
+    let signature_b64 = base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
+    Ok((key_id, signature_b64))
+}
+
+fn resolve_signing_key_material() -> Result<(String, String)> {
+    if let Ok(raw) = std::env::var("MANAGED_POLICY_SIGNING_KEYS_JSON") {
+        return resolve_signing_key_from_map(&raw);
+    }
+
+    let key_id = std::env::var("MANAGED_POLICY_KEY_ID")
+        .unwrap_or_else(|_| "managed-policy-key-v1".to_string());
+    let private_key_b64 = std::env::var("MANAGED_POLICY_SIGNING_KEY_B64").map_err(|_| {
+        Error::Internal(
+            "MANAGED_POLICY_SIGNING_KEY_B64 is required when MANAGED_POLICY_SIGNING_KEYS_JSON is unset"
+                .into(),
+        )
+    })?;
+    Ok((key_id, private_key_b64))
+}
+
+fn resolve_signing_key_from_map(raw: &str) -> Result<(String, String)> {
+    let key_map = serde_json::from_str::<HashMap<String, String>>(raw)
+        .map_err(|e| Error::Internal(format!("Invalid MANAGED_POLICY_SIGNING_KEYS_JSON: {}", e)))?;
+
+    if key_map.is_empty() {
+        return Err(Error::Internal(
+            "MANAGED_POLICY_SIGNING_KEYS_JSON must not be empty".into(),
+        ));
+    }
+
+    let active_key_id = std::env::var("MANAGED_POLICY_ACTIVE_KEY_ID")
+        .or_else(|_| std::env::var("MANAGED_POLICY_KEY_ID"))
+        .unwrap_or_else(|_| "managed-policy-key-v1".to_string());
+
+    let key = key_map.get(&active_key_id).cloned().ok_or_else(|| {
+        Error::Internal(format!(
+            "MANAGED_POLICY_ACTIVE_KEY_ID '{}' not found in MANAGED_POLICY_SIGNING_KEYS_JSON",
+            active_key_id
+        ))
+    })?;
+
+    if key.trim().is_empty() {
+        return Err(Error::Internal(format!(
+            "Signing key for key_id '{}' is empty",
+            active_key_id
+        )));
+    }
+
+    Ok((active_key_id, key))
+}
+
+async fn resolve_client_department_id(
+    client: &deadpool_postgres::Object,
+    client_id: Option<Uuid>,
+) -> Result<Option<Uuid>> {
+    let Some(client_id) = client_id else {
+        return Ok(None);
+    };
+
+    let row = client
+        .query_opt(
+            "SELECT u.department_id
+             FROM registered_clients rc
+             JOIN users u ON rc.user_id = u.id
+             WHERE rc.id = $1",
+            &[&client_id],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    Ok(row.and_then(|r| r.try_get::<_, Option<Uuid>>(0).ok().flatten()))
+}
+
+async fn fetch_allowed_skill_names(
+    client: &deadpool_postgres::Object,
+    department_id: Option<Uuid>,
+) -> Result<Vec<String>> {
+    if let Some(department_id) = department_id {
+        let whitelist_count: i64 = client
+            .query_one(
+                "SELECT COUNT(*) FROM department_skill_whitelist WHERE department_id = $1",
+                &[&department_id],
+            )
+            .await
+            .map_err(|e| Error::Database(e.to_string()))?
+            .get(0);
+
+        if whitelist_count > 0 {
+            let rows = client
+                .query(
+                    "SELECT s.name
+                     FROM skills s
+                     JOIN department_skill_whitelist w ON s.id = w.skill_id
+                     WHERE w.department_id = $1
+                       AND s.enabled = true
+                       AND s.review_status = 'approved'
+                     ORDER BY s.name ASC",
+                    &[&department_id],
+                )
+                .await
+                .map_err(|e| Error::Database(e.to_string()))?;
+            return Ok(rows.iter().map(|r| r.get::<_, String>(0)).collect());
+        }
+    }
+
+    let rows = client
+        .query(
+            "SELECT name
+             FROM skills
+             WHERE enabled = true
+               AND review_status = 'approved'
+             ORDER BY name ASC",
+            &[],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+    Ok(rows.iter().map(|r| r.get::<_, String>(0)).collect())
+}
+
+async fn fetch_allowed_extension_names(client: &deadpool_postgres::Object) -> Result<Vec<String>> {
+    let rows = client
+        .query(
+            "SELECT name
+             FROM plugins
+             WHERE enabled = true
+               AND review_status = 'approved'
+             ORDER BY name ASC",
+            &[],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+    Ok(rows.iter().map(|r| r.get::<_, String>(0)).collect())
+}
+
+async fn read_managed_mode_setting(client: &deadpool_postgres::Object) -> bool {
+    let value = read_system_setting(client, "managed_mode").await;
+    value.and_then(|v| parse_bool_setting(&v)).unwrap_or(false)
+}
+
+async fn read_policy_ttl_seconds(client: &deadpool_postgres::Object) -> u64 {
+    let value = read_system_setting(client, "managed_policy_ttl_seconds").await;
+    let ttl = value.and_then(|v| parse_i64_setting(&v)).unwrap_or(300);
+    if ttl <= 0 {
+        return 300;
+    }
+    ttl as u64
+}
+
+async fn read_system_setting(
+    client: &deadpool_postgres::Object,
+    key: &str,
+) -> Option<serde_json::Value> {
+    client
+        .query_opt("SELECT value FROM system_settings WHERE key = $1", &[&key])
+        .await
+        .ok()
+        .flatten()
+        .and_then(|row| row.try_get::<_, serde_json::Value>(0).ok())
+}
+
+fn parse_bool_setting(value: &serde_json::Value) -> Option<bool> {
+    match value {
+        serde_json::Value::Bool(flag) => Some(*flag),
+        serde_json::Value::String(raw) => match raw.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" => Some(true),
+            "false" | "0" => Some(false),
+            _ => None,
+        },
+        serde_json::Value::Number(number) => number.as_i64().map(|v| v != 0),
+        _ => None,
+    }
+}
+
+fn parse_i64_setting(value: &serde_json::Value) -> Option<i64> {
+    match value {
+        serde_json::Value::Number(number) => number.as_i64(),
+        serde_json::Value::String(raw) => raw.trim().parse::<i64>().ok(),
+        _ => None,
+    }
 }
 
 /// 从 system_settings 读取水印配置并合并到 ClientConfigResponse

@@ -27,10 +27,20 @@ use ironclaw::config::Config;
 use ironclaw::hooks::bootstrap_hooks;
 use ironclaw::llm::create_session_manager;
 
+use crate::managed_policy::{
+    ManagedPolicySnapshot, cache_signed_policy_in_store, ensure_policy_version_monotonic,
+    fetch_signed_policy, load_verified_policy_from_store, managed_policy_public_keys_from_env,
+    verify_signed_policy_with_env,
+};
 use crate::model_switch::ModelSwitchProvider;
 use crate::safety_bridge::SafetyBridge;
 use crate::state::{AppState, EngineState};
 use crate::tauri_channel::{ChatEvent, TauriChannel};
+
+const MANAGED_ALLOWED_SKILLS_SETTING_KEY: &str = "desktop_managed_allowed_skills";
+const MANAGED_ALLOWED_EXTENSIONS_SETTING_KEY: &str = "desktop_managed_allowed_extensions";
+const DISABLED_SKILLS_SETTING_KEY: &str = "desktop_disabled_skills";
+const DISABLED_EXTENSIONS_SETTING_KEY: &str = "desktop_disabled_extensions";
 /// 启动 IronClaw 引擎。
 ///
 /// 在 Tauri `setup` 回调中通过 `tauri::async_runtime::spawn` 调用。
@@ -163,18 +173,44 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     let scheduler_slot: ironclaw::tools::builtin::SchedulerSlot =
         Arc::new(tokio::sync::RwLock::new(None));
 
-    let disabled_skills = load_disabled_names(
+    let mut disabled_skills = load_name_set(
         components.db.as_ref(),
         &config.owner_id,
-        "desktop_disabled_skills",
+        DISABLED_SKILLS_SETTING_KEY,
+        "disabled set",
     )
     .await;
-    let disabled_extensions = load_disabled_names(
+    let mut disabled_extensions = load_name_set(
         components.db.as_ref(),
         &config.owner_id,
-        "desktop_disabled_extensions",
+        DISABLED_EXTENSIONS_SETTING_KEY,
+        "disabled set",
     )
     .await;
+
+    if managed_mode_enabled() {
+        let (unauthorized_skills, unauthorized_extensions, has_signed_policy) =
+            collect_managed_mode_restrictions(
+                components.db.as_ref(),
+                &config.owner_id,
+                components.skill_registry.as_ref(),
+                components.extension_manager.as_ref(),
+                &admin_url,
+                &client_token,
+            )
+            .await;
+
+        let skill_block_count = unauthorized_skills.len();
+        let extension_block_count = unauthorized_extensions.len();
+        disabled_skills.extend(unauthorized_skills);
+        disabled_extensions.extend(unauthorized_extensions);
+        tracing::info!(
+            skill_block_count,
+            extension_block_count,
+            has_signed_policy,
+            "Managed mode startup policy applied"
+        );
+    }
 
     let app_state = AppState {
         msg_sender,
@@ -257,6 +293,42 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         } else {
             tracing::debug!("ADMIN_AUTH_TOKEN not set, skipping admin config sync");
         }
+    }
+
+    // ── 启动受管策略运行时收敛循环 ────────────────────────────────
+    // 每 30 秒按最新 env + 签名策略 + 本地设置重新计算禁用集合，
+    // 确保 managed_mode 运行中切换后无需重启即可收敛。
+    {
+        let app_handle_clone = app_handle.clone();
+        let admin_url_clone = admin_url.clone();
+        let client_token_clone = client_token.clone();
+        tauri::async_runtime::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            loop {
+                interval.tick().await;
+                let engine_state = app_handle_clone.state::<EngineState>();
+                match engine_state.get() {
+                    Ok(state) => {
+                        if let Err(error) = refresh_runtime_policy_restrictions(
+                            state,
+                            &admin_url_clone,
+                            &client_token_clone,
+                        )
+                        .await
+                        {
+                            tracing::warn!(
+                                error = %error,
+                                "Failed to refresh runtime managed policy restrictions"
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        tracing::debug!(error = %error, "Engine not ready for managed policy refresh")
+                    }
+                }
+            }
+        });
+        tracing::info!("Managed policy refresh loop started (30s interval)");
     }
 
     // ── 启动 ConversationTracker 定期 flush（需求 16.16）──────────
@@ -570,10 +642,152 @@ fn apply_default_model(state: &AppState, model: &crate::ipc::models::ModelConfig
     );
 }
 
-async fn load_disabled_names(
+fn managed_mode_enabled() -> bool {
+    std::env::var("MANAGED_MODE")
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            normalized == "true" || normalized == "1"
+        })
+        .unwrap_or(false)
+}
+
+async fn resolve_managed_policy(
+    db: Option<&Arc<dyn ironclaw::db::Database>>,
+    owner_id: &str,
+    admin_url: &str,
+    client_token: &str,
+) -> Option<ManagedPolicySnapshot> {
+    let Some(db) = db else {
+        tracing::warn!("Managed mode enabled but database is unavailable, cannot load signed policy");
+        return None;
+    };
+
+    if let Err(error) = managed_policy_public_keys_from_env() {
+        tracing::warn!(error = %error, "Managed mode public key material missing; signed policy unavailable");
+        return None;
+    }
+
+    if !client_token.is_empty() {
+        let http_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap_or_default();
+
+        match fetch_signed_policy(&http_client, admin_url, client_token).await {
+            Ok(envelope) => match verify_signed_policy_with_env(&envelope) {
+                Ok(policy) => {
+                    if let Err(error) = ensure_policy_version_monotonic(
+                        db.as_ref(),
+                        owner_id,
+                        policy.manifest.policy_version,
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            key_id = %envelope.key_id,
+                            policy_version = policy.manifest.policy_version,
+                            error = %error,
+                            "Rejected fetched managed policy due to replay protection"
+                        );
+                    } else {
+                        if let Err(error) = cache_signed_policy_in_store(db.as_ref(), owner_id, &envelope).await {
+                            tracing::warn!(
+                                key_id = %envelope.key_id,
+                                policy_version = policy.manifest.policy_version,
+                                error = %error,
+                                "Failed to cache signed managed policy envelope"
+                            );
+                        }
+                        tracing::info!(
+                            key_id = %envelope.key_id,
+                            policy_version = policy.manifest.policy_version,
+                            source = "remote",
+                            "Managed policy accepted"
+                        );
+                        return Some(policy);
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, "Fetched managed policy failed verification");
+                }
+            },
+            Err(error) => {
+                tracing::warn!(error = %error, "Failed to fetch signed managed policy from admin");
+            }
+        }
+    }
+
+    match load_verified_policy_from_store(db.as_ref(), owner_id).await {
+        Ok(Some(policy)) => {
+            tracing::info!(
+                policy_version = policy.manifest.policy_version,
+                source = "cache",
+                "Managed policy accepted"
+            );
+            Some(policy)
+        }
+        Ok(None) => {
+            tracing::warn!("No cached signed managed policy available");
+            None
+        }
+        Err(error) => {
+            tracing::warn!(error = %error, "Failed to load cached signed managed policy");
+            return None;
+        }
+    }
+}
+
+fn collect_unauthorized_skills(
+    registry: Option<&Arc<std::sync::RwLock<ironclaw::skills::SkillRegistry>>>,
+    allowed: &HashSet<String>,
+) -> HashSet<String> {
+    let Some(registry) = registry else {
+        return HashSet::new();
+    };
+
+    let Ok(guard) = registry.read() else {
+        return HashSet::new();
+    };
+
+    guard
+        .skills()
+        .iter()
+        .filter(|skill| matches!(skill.source, ironclaw::skills::SkillSource::User(_)))
+        .map(|skill| skill.manifest.name.clone())
+        .filter(|name| !allowed.contains(name))
+        .collect()
+}
+
+async fn collect_unauthorized_extensions(
+    extension_manager: Option<&Arc<ironclaw::extensions::ExtensionManager>>,
+    owner_id: &str,
+    allowed: &HashSet<String>,
+) -> HashSet<String> {
+    let Some(extension_manager) = extension_manager else {
+        return HashSet::new();
+    };
+
+    let installed = match extension_manager.list(None, false, owner_id).await {
+        Ok(installed) => installed,
+        Err(error) => {
+            tracing::warn!(error = %error, "Failed to list extensions for managed policy");
+            return HashSet::new();
+        }
+    };
+
+    installed
+        .into_iter()
+        .filter(|extension| extension.installed)
+        .map(|extension| extension.name)
+        .filter(|name| !allowed.contains(name))
+        .collect()
+}
+
+async fn load_name_set(
     db: Option<&Arc<dyn ironclaw::db::Database>>,
     owner_id: &str,
     key: &str,
+    purpose: &str,
 ) -> HashSet<String> {
     let Some(db) = db else {
         return HashSet::new();
@@ -583,7 +797,7 @@ async fn load_disabled_names(
         Ok(Some(value)) => value,
         Ok(None) => return HashSet::new(),
         Err(error) => {
-            tracing::warn!(%key, error = %error, "Failed to load disabled set");
+            tracing::warn!(%key, %purpose, error = %error, "Failed to load settings set");
             return HashSet::new();
         }
     };
@@ -591,8 +805,118 @@ async fn load_disabled_names(
     match serde_json::from_value::<Vec<String>>(value) {
         Ok(names) => names.into_iter().collect(),
         Err(error) => {
-            tracing::warn!(%key, error = %error, "Invalid disabled set payload");
+            tracing::warn!(%key, %purpose, error = %error, "Invalid settings set payload");
             HashSet::new()
         }
     }
+}
+
+async fn resolve_managed_allowlists(
+    db: Option<&Arc<dyn ironclaw::db::Database>>,
+    owner_id: &str,
+    managed_policy: Option<&ManagedPolicySnapshot>,
+) -> (HashSet<String>, HashSet<String>) {
+    if let Some(policy) = managed_policy {
+        return (policy.allowed_skill_set(), policy.allowed_extension_set());
+    }
+
+    let allowed_skills = load_name_set(
+        db,
+        owner_id,
+        MANAGED_ALLOWED_SKILLS_SETTING_KEY,
+        "managed allowlist",
+    )
+    .await;
+    let allowed_extensions = load_name_set(
+        db,
+        owner_id,
+        MANAGED_ALLOWED_EXTENSIONS_SETTING_KEY,
+        "managed allowlist",
+    )
+    .await;
+
+    (allowed_skills, allowed_extensions)
+}
+
+async fn collect_managed_mode_restrictions(
+    db: Option<&Arc<dyn ironclaw::db::Database>>,
+    owner_id: &str,
+    skill_registry: Option<&Arc<std::sync::RwLock<ironclaw::skills::SkillRegistry>>>,
+    extension_manager: Option<&Arc<ironclaw::extensions::ExtensionManager>>,
+    admin_url: &str,
+    client_token: &str,
+) -> (HashSet<String>, HashSet<String>, bool) {
+    let managed_policy = resolve_managed_policy(db, owner_id, admin_url, client_token).await;
+    let (allowed_skills, allowed_extensions) =
+        resolve_managed_allowlists(db, owner_id, managed_policy.as_ref()).await;
+
+    let unauthorized_skills = collect_unauthorized_skills(skill_registry, &allowed_skills);
+    let unauthorized_extensions =
+        collect_unauthorized_extensions(extension_manager, owner_id, &allowed_extensions).await;
+
+    (
+        unauthorized_skills,
+        unauthorized_extensions,
+        managed_policy.is_some(),
+    )
+}
+
+async fn refresh_runtime_policy_restrictions(
+    state: &AppState,
+    admin_url: &str,
+    client_token: &str,
+) -> Result<(), String> {
+    let mut disabled_skills = load_name_set(
+        state.db.as_ref(),
+        &state.owner_id,
+        DISABLED_SKILLS_SETTING_KEY,
+        "disabled set",
+    )
+    .await;
+    let mut disabled_extensions = load_name_set(
+        state.db.as_ref(),
+        &state.owner_id,
+        DISABLED_EXTENSIONS_SETTING_KEY,
+        "disabled set",
+    )
+    .await;
+
+    if managed_mode_enabled() {
+        let (unauthorized_skills, unauthorized_extensions, has_signed_policy) =
+            collect_managed_mode_restrictions(
+                state.db.as_ref(),
+                &state.owner_id,
+                state.skill_registry.as_ref(),
+                state.extension_manager.as_ref(),
+                admin_url,
+                client_token,
+            )
+            .await;
+
+        let skill_block_count = unauthorized_skills.len();
+        let extension_block_count = unauthorized_extensions.len();
+        disabled_skills.extend(unauthorized_skills);
+        disabled_extensions.extend(unauthorized_extensions);
+        tracing::info!(
+            skill_block_count,
+            extension_block_count,
+            has_signed_policy,
+            "Managed mode runtime policy refreshed"
+        );
+    }
+
+    let mut skill_guard = state
+        .disabled_skills
+        .write()
+        .map_err(|e| format!("Failed to lock disabled_skills: {}", e))?;
+    *skill_guard = disabled_skills;
+    drop(skill_guard);
+
+    let mut extension_guard = state
+        .disabled_extensions
+        .write()
+        .map_err(|e| format!("Failed to lock disabled_extensions: {}", e))?;
+    *extension_guard = disabled_extensions;
+
+    Ok(())
 }

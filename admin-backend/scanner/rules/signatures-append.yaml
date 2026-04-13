@@ -142,3 +142,48 @@
   file_types: [python, bash]
   description: "Skill accesses browser cookies or session data"
   remediation: "Skills must not access browser storage or session data"
+
+# CJK business prompt-injection patterns (derived from ATR community patterns)
+- id: XCLAW_CJK_PROMPT_OVERRIDE
+  category: prompt_injection
+  severity: CRITICAL
+  patterns:
+    - "(忽略|无视|忘记|跳过|無視|忘記).{0,8}(之前|以前|上面|先前|原來|原有|現有).{0,8}(指令|指示|规则|規則|设定|設定|提示|要求|限制|约束|約束)"
+    - "(以前の|前の|これまでの|先ほどの|上記の).{0,6}(指示|指令|ルール|制約|設定).{0,6}(を)?.{0,6}(無視|忘れ|スキップ|取り消)"
+    - "(다른|모든|기존의|이전의).{0,8}(내용|메시지|지시|규칙).{0,8}(을|를)?.{0,8}(무시|잊어|건너뛰)"
+  file_types: [markdown, text, yaml, json]
+  description: "CJK prompt injection attempting to override existing instructions"
+  remediation: "Remove instruction override text and keep user intent aligned with system policy"
+
+- id: XCLAW_CJK_FINANCIAL_COERCION
+  category: prompt_injection
+  severity: CRITICAL
+  patterns:
+    - "(你必须|你一定要|你务必|你必須|你現在就|马上|立刻).{0,30}(转账|轉帳|支付|付款|发送|發送|打款|汇款|匯款|执行|執行)"
+    - "(送金|振込|支払).{0,20}(すぐ|直ちに|今すぐ).{0,20}(実行|送信)"
+    - "(송금|이체|결제).{0,20}(지금|즉시|바로).{0,20}(실행|전송)"
+  file_types: [markdown, text, yaml, json]
+  description: "CJK coercion patterns that pressure the agent to execute financial actions"
+  remediation: "Remove coercive transfer/payment instructions and require explicit user confirmation flow"
+
+- id: XCLAW_CJK_SYSTEM_PROMPT_EXTRACTION
+  category: prompt_injection
+  severity: HIGH
+  patterns:
+    - "(输出|輸出|显示|顯示|告诉我|告訴我|打印|列出|复述|複述).{0,12}(系统|系統|初始|隐藏|隱藏).{0,12}(提示词|提示詞|指令|規則|规则|配置|设定|設定)"
+    - "(システムプロンプト|システム指示|初期指示|隠し指示).{0,10}(出力|表示|教えて|見せて|公開|開示)"
+    - "(시스템\\s*프롬프트|초기\\s*지시|숨겨진\\s*지시).{0,10}(출력|표시|공개|보여)"
+  file_types: [markdown, text, yaml, json]
+  description: "CJK prompt extraction attempts requesting hidden/system instructions"
+  remediation: "Do not include requests to reveal system prompts or hidden instruction context"
+
+- id: XCLAW_CJK_REFUSAL_SUPPRESSION
+  category: prompt_injection
+  severity: HIGH
+  patterns:
+    - "(不要拒绝|不要拒絕|别拒绝|別拒絕|不准拒绝|不準拒絕|不能拒绝|不能拒絕|禁止拒绝|禁止拒絕)"
+    - "(拒否しないで|断らないで|拒絶するな).{0,12}(必ず|絶対に).{0,12}(実行|回答|対応)"
+    - "(거부하지\\s*마|절대\\s*거절하지\\s*마).{0,12}(반드시|무조건).{0,12}(실행|응답)"
+  file_types: [markdown, text, yaml, json]
+  description: "CJK attempts to suppress refusal behavior and force compliance"
+  remediation: "Remove refusal suppression text and preserve safety refusal behavior"

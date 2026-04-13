@@ -156,6 +156,7 @@ mod watermark_config_tests {
         // GET /api/client-config 应返回水印配置字段
         let config = json!({
             "llm_backend": null,
+            "managed_mode": true,
             "watermark_enabled": true,
             "watermark_template": "{username}",
             "watermark_font_size": 16,

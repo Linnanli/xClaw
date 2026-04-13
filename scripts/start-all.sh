@@ -167,6 +167,12 @@ if ! check_postgres_db "$PROJECT_ROOT/admin-backend"; then
 fi
 
 # ============================================
+# 启动 Skill Scanner
+# ============================================
+
+start_skill_scanner "$PROJECT_ROOT/admin-backend"
+
+# ============================================
 # Desktop Client 使用嵌入式模式，无需外部 IronClaw 服务器
 # IronClaw 引擎直接运行在 Tauri 进程内，通过 Tauri IPC 通信
 # ============================================

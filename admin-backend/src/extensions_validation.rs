@@ -34,6 +34,24 @@ struct SkillFrontmatter {
     tags: Option<Vec<String>>,
 }
 
+#[derive(Debug, Deserialize)]
+struct UploadManifest {
+    version: Option<String>,
+    author: Option<UploadManifestAuthor>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum UploadManifestAuthor {
+    Text(String),
+    Object(UploadManifestAuthorObject),
+}
+
+#[derive(Debug, Deserialize)]
+struct UploadManifestAuthorObject {
+    name: Option<String>,
+}
+
 pub fn validate_skill_package(content: &str) -> Result<()> {
     if content.len() > MAX_SKILL_FILE_BYTES {
         return Err(Error::Validation("技能包文件超过 64 KiB 限制".into()));
@@ -45,22 +63,45 @@ pub fn validate_skill_package(content: &str) -> Result<()> {
     validate_frontmatter(&frontmatter)
 }
 
-pub fn extract_skill_metadata(content: &str) -> Result<SkillPackageMetadata> {
+pub fn extract_skill_metadata(
+    content: &str,
+    manifest_json: Option<&str>,
+) -> Result<SkillPackageMetadata> {
     let yaml = extract_frontmatter_yaml(content)?;
     let frontmatter = parse_frontmatter(&yaml)?;
     let name = validate_name(frontmatter.name.as_deref())?;
+    let manifest = parse_optional_manifest(manifest_json)?;
+
+    let version = manifest
+        .as_ref()
+        .and_then(|m| normalize_optional(m.version.clone()))
+        .or_else(|| normalize_optional(frontmatter.version));
+    let description = normalize_optional(frontmatter.description);
+    let author = normalize_optional(frontmatter.author)
+        .or_else(|| manifest.as_ref().and_then(manifest_author_name));
 
     Ok(SkillPackageMetadata {
         name,
-        version: normalize_optional(frontmatter.version),
-        description: normalize_optional(frontmatter.description),
-        author: normalize_optional(frontmatter.author),
+        version,
+        description,
+        author,
     })
 }
 
 fn parse_frontmatter(yaml: &str) -> Result<SkillFrontmatter> {
     serde_yaml::from_str(yaml)
         .map_err(|e| Error::Validation(format!("frontmatter YAML 解析失败: {}", e)))
+}
+
+fn parse_optional_manifest(manifest_json: Option<&str>) -> Result<Option<UploadManifest>> {
+    let Some(json) = manifest_json else {
+        return Ok(None);
+    };
+
+    let manifest: UploadManifest = serde_json::from_str(json)
+        .map_err(|e| Error::Validation(format!("manifest.json 解析失败: {}", e)))?;
+
+    Ok(Some(manifest))
 }
 
 fn extract_frontmatter_yaml(content: &str) -> Result<String> {
@@ -93,7 +134,6 @@ fn extract_frontmatter_yaml(content: &str) -> Result<String> {
 
 fn validate_frontmatter(frontmatter: &SkillFrontmatter) -> Result<()> {
     validate_name(frontmatter.name.as_deref())?;
-    validate_required_text_field(frontmatter.version.as_deref(), "version")?;
     validate_required_text_field(frontmatter.description.as_deref(), "description")?;
     validate_activation(frontmatter.activation.as_ref())?;
     validate_keyword_list(&frontmatter.keywords, "keywords")?;
@@ -121,17 +161,15 @@ fn validate_name(name: Option<&str>) -> Result<String> {
 fn validate_required_text_field(value: Option<&str>, field_name: &str) -> Result<()> {
     let normalized = value.map(str::trim).unwrap_or("");
     if normalized.is_empty() {
-        return Err(Error::Validation(format!(
-            "frontmatter 缺少必填字段 {}",
-            field_name
-        )));
+        return Err(Error::Validation(format!("frontmatter 缺少必填字段 {}", field_name)));
     }
     Ok(())
 }
 
 fn validate_activation(activation: Option<&ActivationConfig>) -> Result<()> {
-    let activation = activation
-        .ok_or_else(|| Error::Validation("frontmatter 缺少必填字段 activation".into()))?;
+    let Some(activation) = activation else {
+        return Ok(());
+    };
     let has_keywords = activation
         .keywords
         .as_ref()
@@ -199,6 +237,14 @@ fn is_valid_skill_name(name: &str) -> bool {
     }
 
     chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+fn manifest_author_name(manifest: &UploadManifest) -> Option<String> {
+    match &manifest.author {
+        Some(UploadManifestAuthor::Text(text)) => normalize_optional(Some(text.clone())),
+        Some(UploadManifestAuthor::Object(obj)) => normalize_optional(obj.name.clone()),
+        None => None,
+    }
 }
 
 fn normalize_optional(value: Option<String>) -> Option<String> {

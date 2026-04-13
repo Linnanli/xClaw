@@ -47,6 +47,19 @@ async fn test_audit_reviewer_id_is_persisted_from_header() {
         .await
         .expect("seed pending skill");
 
+    client
+        .execute(
+            "INSERT INTO scan_results (
+                target_type, target_id, scanner_type, verdict, is_safe,
+                max_severity, findings_count, findings, scan_duration_ms, scanned_at, created_at
+             ) VALUES (
+                'skill', $1, 'security-audit-scanner', 'SAFE', true,
+                NULL, 0, $2::jsonb, 5, NOW(), NOW())",
+            &[&skill_id, &json!([])],
+        )
+        .await
+        .expect("seed scan result for review gate");
+
     let path = format!("/api/skills/{}/review", skill_id);
     let reviewer_header_value = reviewer_id.to_string();
     let resp = post_json_with_headers(
@@ -75,6 +88,10 @@ async fn test_audit_reviewer_id_is_persisted_from_header() {
     let reviewed_by: Option<Uuid> = row.get(0);
     assert_eq!(reviewed_by, Some(reviewer_id));
 
+    client
+        .execute("DELETE FROM scan_results WHERE target_type = 'skill' AND target_id = $1", &[&skill_id])
+        .await
+        .expect("cleanup scan result");
     client
         .execute("DELETE FROM skills WHERE id = $1", &[&skill_id])
         .await

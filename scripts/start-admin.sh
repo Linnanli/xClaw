@@ -13,4 +13,9 @@
 # 如果同时需要 Desktop Client，请使用:
 #   ./scripts/start-all.sh
 
+if [ -z "${MANAGED_POLICY_SIGNING_KEY_B64:-}" ]; then
+	export MANAGED_POLICY_SIGNING_KEY_B64="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+	echo "[WARN] MANAGED_POLICY_SIGNING_KEY_B64 未设置，已注入开发默认值（仅开发环境）"
+fi
+
 exec "$(dirname "${BASH_SOURCE[0]}")/../admin-backend/scripts/start-admin.sh" "$@"

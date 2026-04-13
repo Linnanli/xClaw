@@ -51,6 +51,8 @@ pub struct AdminClientConfig {
     pub skills_enabled: Option<bool>,
     /// 是否启用扩展系统
     pub extensions_enabled: Option<bool>,
+    /// 是否启用受管终端模式（只允许管理端注册表/策略定义的安装路径）
+    pub managed_mode: Option<bool>,
 
     // === 限制 ===
     /// 每日最大花费（美分）
@@ -118,6 +120,9 @@ impl AdminClientConfig {
         }
         if let Some(enabled) = self.extensions_enabled {
             std::env::set_var("EXTENSIONS_ENABLED", enabled.to_string());
+        }
+        if let Some(enabled) = self.managed_mode {
+            std::env::set_var("MANAGED_MODE", enabled.to_string());
         }
         if let Some(cost) = self.max_cost_per_day_cents {
             std::env::set_var("MAX_COST_PER_DAY_CENTS", cost.to_string());

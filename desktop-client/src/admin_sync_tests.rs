@@ -29,6 +29,7 @@ mod tests {
         assert!(config.max_cost_per_day_cents.is_none());
         assert!(config.config_version.is_none());
         assert!(config.updated_at.is_none());
+        assert!(config.managed_mode.is_none());
     }
 
     #[test]
@@ -205,6 +206,7 @@ mod tests {
             "safety_enabled": true,
             "skills_enabled": true,
             "extensions_enabled": true,
+            "managed_mode": true,
             "max_cost_per_day_cents": 1000,
             "config_version": 42,
             "updated_at": "2025-06-01T00:00:00Z"
@@ -215,6 +217,7 @@ mod tests {
         assert_eq!(config.llm_api_key, Some("sk-test".into()));
         assert!(config.llm_base_url.is_none());
         assert_eq!(config.safety_enabled, Some(true));
+        assert_eq!(config.managed_mode, Some(true));
         assert_eq!(config.max_cost_per_day_cents, Some(1000));
     }
 

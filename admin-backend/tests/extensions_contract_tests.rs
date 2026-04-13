@@ -240,6 +240,7 @@ mod client_config_contract {
         let config = json!({
             "llm_backend": "openai",
             "config_version": 1,
+            "managed_mode": true,
             "skill_registry_url": "https://admin.corp.com?client_token=abc123"
         });
 
@@ -254,6 +255,55 @@ mod client_config_contract {
             "skill_registry_url 格式不正确: {}",
             url
         );
+
+        assert_eq!(config["managed_mode"], true);
+    }
+}
+
+/// client-policy 响应格式契约（Desktop Client 验签消费）
+mod client_policy_contract {
+    use serde_json::json;
+
+    #[test]
+    fn test_client_policy_response_has_signed_fields() {
+        let response = json!({
+            "algorithm": "ed25519",
+            "key_id": "managed-policy-key-v1",
+            "manifest_payload": "{\"policy_version\":1}",
+            "signature": "ZmFrZS1zaWduYXR1cmU="
+        });
+
+        for field in ["algorithm", "key_id", "manifest_payload", "signature"] {
+            assert!(
+                response.get(field).is_some(),
+                "client-policy 缺少字段: {}",
+                field
+            );
+        }
+        assert_eq!(response["algorithm"], "ed25519");
+    }
+
+    #[test]
+    fn test_client_policy_manifest_payload_contains_allowlists() {
+        let manifest = json!({
+            "policy_version": 1,
+            "issued_at": "2026-04-12T00:00:00Z",
+            "expires_at": "2026-04-12T00:05:00Z",
+            "managed_mode": true,
+            "allowed_skills": ["review-checklist"],
+            "allowed_extensions": ["github"]
+        });
+
+        for field in [
+            "policy_version",
+            "issued_at",
+            "expires_at",
+            "managed_mode",
+            "allowed_skills",
+            "allowed_extensions",
+        ] {
+            assert!(manifest.get(field).is_some(), "manifest 缺少字段: {}", field);
+        }
     }
 }
 

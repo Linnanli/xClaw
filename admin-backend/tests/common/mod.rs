@@ -2,13 +2,14 @@
 
 use admin_backend::{routes::create_router, AppState};
 use axum::{
-    body::Body,
-    http::{Request, StatusCode},
-    routing::post,
+    body::{Body, Bytes},
+    http::{HeaderMap, Request, StatusCode},
+    routing::{get as route_get, post},
     Json, Router,
 };
 use deadpool_postgres::Config;
 use http_body_util::BodyExt;
+use serde_json::json;
 use serde_json::Value;
 use std::net::SocketAddr;
 use std::sync::{Mutex, MutexGuard};
@@ -69,16 +70,159 @@ pub fn configure_scanner_env(
 }
 
 pub async fn spawn_scanner_server(response: Value, delay_ms: u64) -> (String, JoinHandle<()>) {
-    let app = Router::new().route(
-        "/scan-upload",
-        post(move || {
-            let response = response.clone();
-            async move {
-                sleep(Duration::from_millis(delay_ms)).await;
-                Json(response)
-            }
-        }),
-    );
+    let app = Router::new()
+        .route(
+            "/scan-upload",
+            post(move || {
+                let response = response.clone();
+                async move {
+                    sleep(Duration::from_millis(delay_ms)).await;
+                    Json(response)
+                }
+            }),
+        )
+        .route("/health", route_get(|| async { StatusCode::OK }));
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test scanner server");
+    let addr: SocketAddr = listener.local_addr().expect("get scanner addr");
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve scanner app");
+    });
+
+    (format!("http://{}", addr), handle)
+}
+
+pub async fn spawn_scanner_server_with_http_error(
+    status: StatusCode,
+    body: &str,
+) -> (String, JoinHandle<()>) {
+    let body_text = body.to_string();
+    let app = Router::new()
+        .route(
+            "/scan-upload",
+            post(move || {
+                let body_text = body_text.clone();
+                async move { (status, body_text) }
+            }),
+        )
+        .route("/health", route_get(|| async { StatusCode::OK }));
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test scanner server");
+    let addr: SocketAddr = listener.local_addr().expect("get scanner addr");
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve scanner app");
+    });
+
+    (format!("http://{}", addr), handle)
+}
+
+pub async fn spawn_scanner_server_validating_llm(
+    expected_provider: &str,
+    expected_api_key: &str,
+) -> (String, JoinHandle<()>) {
+    spawn_scanner_server_validating_llm_with_options(
+        expected_provider,
+        expected_api_key,
+        None,
+        None,
+        None,
+    )
+    .await
+}
+
+fn multipart_contains_field(body_text: &str, field_name: &str, expected_value: &str) -> bool {
+    body_text.contains(&format!("name=\"{}\"", field_name))
+        && body_text.contains(&format!("\r\n{}\r\n", expected_value))
+}
+
+fn header_equals(headers: &HeaderMap, header_name: &str, expected: Option<&str>) -> bool {
+    match expected {
+        Some(value) => headers
+            .get(header_name)
+            .and_then(|raw| raw.to_str().ok())
+            .map(|actual| actual == value)
+            .unwrap_or(false),
+        None => true,
+    }
+}
+
+pub async fn spawn_scanner_server_validating_llm_with_options(
+    expected_provider: &str,
+    expected_api_key: &str,
+    expected_model: Option<&str>,
+    expected_base_url: Option<&str>,
+    expected_api_version: Option<&str>,
+) -> (String, JoinHandle<()>) {
+    let provider = expected_provider.to_string();
+    let api_key = expected_api_key.to_string();
+    let model = expected_model.map(str::to_string);
+    let base_url = expected_base_url.map(str::to_string);
+    let api_version = expected_api_version.map(str::to_string);
+
+    let app = Router::new()
+        .route(
+            "/scan-upload",
+            post(move |headers: HeaderMap, body: Bytes| {
+                let provider = provider.clone();
+                let api_key = api_key.clone();
+                let model = model.clone();
+                let base_url = base_url.clone();
+                let api_version = api_version.clone();
+                async move {
+                    let body_text = String::from_utf8_lossy(&body);
+                    let has_use_llm = body_text.contains("name=\"use_llm\"")
+                        && body_text.contains("\r\ntrue\r\n");
+                    let has_expected_provider =
+                        multipart_contains_field(&body_text, "llm_provider", &provider);
+                    let has_expected_api_key = headers
+                        .get("X-LLM-Key")
+                        .and_then(|value| value.to_str().ok())
+                        .map(|value| value == api_key)
+                        .unwrap_or(false);
+                    let has_expected_model =
+                        header_equals(&headers, "X-LLM-Model", model.as_deref());
+                    let has_expected_base_url =
+                        header_equals(&headers, "X-LLM-Base-URL", base_url.as_deref());
+                    let has_expected_api_version =
+                        header_equals(&headers, "X-LLM-API-Version", api_version.as_deref());
+
+                    if has_use_llm
+                        && has_expected_provider
+                        && has_expected_api_key
+                        && has_expected_model
+                        && has_expected_base_url
+                        && has_expected_api_version
+                    {
+                        Json(json!({
+                            "scanner_type": "integration-scanner",
+                            "verdict": "SAFE",
+                            "is_safe": true,
+                            "findings_count": 0,
+                            "findings": [],
+                            "scan_duration_ms": 5
+                        }))
+                    } else {
+                        Json(json!({
+                            "scanner_type": "integration-scanner",
+                            "verdict": "BLOCKED",
+                            "is_safe": false,
+                            "findings_count": 1,
+                            "findings": [{"rule_id": "IT_EXPECT_LLM", "severity": "HIGH"}],
+                            "scan_duration_ms": 5
+                        }))
+                    }
+                }
+            }),
+        )
+        .route("/health", route_get(|| async { StatusCode::OK }));
 
     let listener = TcpListener::bind("127.0.0.1:0")
         .await

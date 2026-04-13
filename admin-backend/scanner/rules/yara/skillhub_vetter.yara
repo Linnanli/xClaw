@@ -116,7 +116,7 @@ rule vetter_browser_data_theft {
             $mac_chrome or
             $sqlite_cookies or
             (
-                ($cookies_db or $login_data or $web_data) and
+                ($cookies_db or $login_data or $web_data or $local_storage or $session_storage) and
                 ($chrome_path or $firefox_path or $mac_chrome or $chromium_path)
             )
         )

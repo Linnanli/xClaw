@@ -19,6 +19,17 @@ ADMIN_BACKEND_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
 
 source "$SCRIPT_DIR/common.sh"
 
+# 开发环境默认签名密钥（base64 解码后 32 字节）。
+# 生产环境请通过安全密钥管理系统注入，不要使用该默认值。
+DEFAULT_MANAGED_POLICY_SIGNING_KEY_B64="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+
+if [ -z "${MANAGED_POLICY_SIGNING_KEY_B64:-}" ]; then
+    export MANAGED_POLICY_SIGNING_KEY_B64="$DEFAULT_MANAGED_POLICY_SIGNING_KEY_B64"
+    log_warn "MANAGED_POLICY_SIGNING_KEY_B64 未设置，已使用开发默认值（仅开发环境）"
+else
+    log_info "MANAGED_POLICY_SIGNING_KEY_B64 已从环境变量注入"
+fi
+
 cleanup() {
     log_info "清理资源..."
     [ -n "${BACKEND_PID:-}" ] && kill $BACKEND_PID 2>/dev/null || true
@@ -45,6 +56,12 @@ clean_port 5174 "admin-frontend"
 if ! start_postgres_db "$ADMIN_BACKEND_ROOT"; then
     exit 1
 fi
+
+# ============================================
+# 启动 Skill Scanner
+# ============================================
+
+start_skill_scanner "$ADMIN_BACKEND_ROOT"
 
 # ============================================
 # 启动后端

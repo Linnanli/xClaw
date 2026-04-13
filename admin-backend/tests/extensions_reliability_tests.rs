@@ -114,7 +114,7 @@ async fn test_rescan_returns_400_when_scanner_disabled() {
 }
 
 #[tokio::test]
-async fn test_rescan_timeout_recovery_marks_scan_failed() {
+async fn test_rescan_timeout_returns_error_without_state_change() {
     let pool = match try_connect_db().await {
         Some(p) => p,
         None => {
@@ -156,12 +156,11 @@ async fn test_rescan_timeout_recovery_marks_scan_failed() {
 
     let path = format!("/api/skills/{}/rescan", skill_id);
     let resp = post_json(build_app(pool.clone()), &path, json!({})).await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     let body = response_json(resp).await;
-    assert_eq!(body["review_status"], "scan_failed");
-    assert_eq!(body["enabled"], false);
-    assert_eq!(body["is_safe"], false);
+    let details = body["details"].as_str().unwrap_or_default();
+    assert!(details.contains("安全扫描服务未启动或不可用"));
 
     let row = client
         .query_one(
@@ -173,7 +172,17 @@ async fn test_rescan_timeout_recovery_marks_scan_failed() {
     let review_status: String = row.get(0);
     let enabled: bool = row.get(1);
     assert_eq!(review_status, "scan_failed");
-    assert!(!enabled);
+    assert!(enabled);
+
+    let scan_count_row = client
+        .query_one(
+            "SELECT COUNT(*) FROM scan_results WHERE target_type = 'skill' AND target_id = $1",
+            &[&skill_id],
+        )
+        .await
+        .expect("query scan result count");
+    let scan_count: i64 = scan_count_row.get(0);
+    assert_eq!(scan_count, 0);
 
     handle.abort();
     client

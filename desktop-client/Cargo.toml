@@ -49,6 +49,8 @@ dotenvy = "0.15"
 
 # Date/time
 chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.22"
+ed25519-dalek = "2"
 
 # Decimal (shared with ironclaw for LlmProvider::cost_per_token)
 rust_decimal = "1"

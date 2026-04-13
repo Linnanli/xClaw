@@ -23,9 +23,11 @@ anyhow = "1"
 dotenvy = "0.15"
 async-trait = "0.1"
 regex = "1"
+base64 = "0.22"
+ed25519-dalek = "2"
 
 # HTTP client for proxying to IronClaw Gateway
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
 
 # SSE support
 axum-extra = { version = "0.10", features = ["typed-header"] }

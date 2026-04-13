@@ -18,7 +18,7 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <RouterProvider router={router} />
-        <Toaster />
+        <Toaster position="top-right" />
       </TooltipProvider>
     </QueryClientProvider>
   )

@@ -5,10 +5,12 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use super::persistence::persist_disabled_items;
+use crate::managed_policy::load_verified_policy_from_store;
+use super::persistence::{load_string_set, persist_disabled_items};
 use crate::state::{AppState, EngineState};
 
 const DISABLED_EXTENSIONS_SETTING_KEY: &str = "desktop_disabled_extensions";
+const MANAGED_ALLOWED_EXTENSIONS_SETTING_KEY: &str = "desktop_managed_allowed_extensions";
 
 /// 扩展信息（前端展示用）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +30,55 @@ fn extension_name_exists<'a>(name: &str, mut names: impl Iterator<Item = &'a str
 
 fn effective_active(is_runtime_active: bool, is_soft_enabled: bool) -> bool {
     is_runtime_active && is_soft_enabled
+}
+
+fn managed_mode_enabled() -> bool {
+    std::env::var("MANAGED_MODE")
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            normalized == "true" || normalized == "1"
+        })
+        .unwrap_or(false)
+}
+
+fn validate_extension_install_source(managed_mode: bool, url: Option<&str>) -> Result<(), String> {
+    if managed_mode && url.is_some() {
+        return Err(
+            "Managed mode enabled: explicit extension URL installation is not allowed".to_string(),
+        );
+    }
+    Ok(())
+}
+
+async fn ensure_extension_allowed_in_managed_mode(
+    state: &AppState,
+    name: &str,
+) -> Result<(), String> {
+    if !managed_mode_enabled() {
+        return Ok(());
+    }
+
+    if let Some(db) = state.db.as_ref() {
+        if let Some(policy) = load_verified_policy_from_store(db.as_ref(), &state.owner_id).await? {
+            if policy.allows_extension(name) {
+                return Ok(());
+            }
+            return Err(format!(
+                "Managed mode enabled: extension '{}' is not in signed policy allowlist",
+                name
+            ));
+        }
+    }
+
+    let allowed = load_string_set(state, MANAGED_ALLOWED_EXTENSIONS_SETTING_KEY).await?;
+    if allowed.contains(name) {
+        return Ok(());
+    }
+
+    Err(format!(
+        "Managed mode enabled: extension '{}' is not in approved allowlist",
+        name
+    ))
 }
 
 /// 列出扩展。
@@ -74,6 +125,7 @@ pub async fn ic_enable_extension(
         .ok_or("Extension manager not available")?;
 
     ensure_extension_installed(state, &name).await?;
+    ensure_extension_allowed_in_managed_mode(state, &name).await?;
     ext_mgr
         .activate(&name, &state.owner_id)
         .await
@@ -122,6 +174,8 @@ pub async fn ic_install_extension(
     url: Option<String>,
 ) -> Result<String, String> {
     let state = state.get()?;
+    validate_extension_install_source(managed_mode_enabled(), url.as_deref())?;
+    ensure_extension_allowed_in_managed_mode(state, &name).await?;
     let ext_mgr = state
         .extension_manager
         .as_ref()
@@ -384,6 +438,7 @@ mod tests {
 
     use super::{
         effective_active, extension_name_exists, set_extension_enabled_with_persist,
+        validate_extension_install_source,
     };
     use crate::safety_bridge::SafetyBridge;
     use crate::state::AppState;
@@ -541,5 +596,32 @@ mod tests {
             .disabled_extensions_snapshot()
             .expect("snapshot should be readable");
         assert_eq!(snapshot, vec!["github".to_string()]);
+    }
+
+    #[test]
+    fn test_validate_extension_install_source_managed_mode_rejects_url() {
+        let result = validate_extension_install_source(true, Some("https://example.com/ext.wasm"));
+        assert!(result.is_err(), "managed mode should reject explicit extension URL");
+        let message = result.err().unwrap_or_default();
+        assert!(
+            message.contains("Managed mode"),
+            "error should mention managed mode, actual: {}",
+            message
+        );
+    }
+
+    #[test]
+    fn test_validate_extension_install_source_managed_mode_accepts_registry_install() {
+        let result = validate_extension_install_source(true, None);
+        assert!(
+            result.is_ok(),
+            "managed mode should allow registry-based extension install"
+        );
+    }
+
+    #[test]
+    fn test_validate_extension_install_source_non_managed_mode_allows_url() {
+        let result = validate_extension_install_source(false, Some("https://example.com/ext.wasm"));
+        assert!(result.is_ok(), "non-managed mode should allow explicit extension URL");
     }
 }

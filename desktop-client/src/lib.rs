@@ -19,6 +19,7 @@ pub mod conversation_tracker;
 pub mod data_reporter;
 pub mod engine;
 pub mod ipc;
+pub mod managed_policy;
 pub mod model_switch;
 pub mod state;
 pub mod tauri_channel;

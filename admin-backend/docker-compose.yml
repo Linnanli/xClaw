@@ -1,3 +1,6 @@
+x-managed-policy-env: &managed_policy_env
+  MANAGED_POLICY_SIGNING_KEY_B64: ${MANAGED_POLICY_SIGNING_KEY_B64:-MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
+
 services:
   postgres:
     image: postgres:15-alpine
@@ -6,6 +9,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: ironclaw
+      <<: *managed_policy_env
     ports:
       - "5432:5432"
     volumes:
@@ -23,9 +27,15 @@ services:
     container_name: admin-backend-skill-scanner
     ports:
       - "8000:8000"
+    environment:
+      <<: *managed_policy_env
+      SKILL_SCANNER_LLM_API_KEY: ${SKILL_SCANNER_LLM_API_KEY:-}
+      SKILL_SCANNER_LLM_MODEL: ${SKILL_SCANNER_LLM_MODEL:-claude-3-5-sonnet-20241022}
+      SKILL_SCANNER_LLM_BASE_URL: ${SKILL_SCANNER_LLM_BASE_URL:-}
+      SKILL_SCANNER_LLM_API_VERSION: ${SKILL_SCANNER_LLM_API_VERSION:-}
     volumes:
-      - ./scanner/rules/signatures-append.yaml:/app/vetter-rules/signatures-append.yaml:ro
-      - ./scanner/rules/yara/skillhub_vetter.yara:/usr/local/lib/python3.11/site-packages/skill_scanner/data/yara_rules/skillhub_vetter.yara:ro
+      - ./scanner/rules/signatures-append.yaml:/app/custom-rules/signatures/xclaw_custom.yaml:ro
+      - ./scanner/rules/yara/skillhub_vetter.yara:/app/custom-rules/yara/xclaw_custom.yara:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/health || exit 1"]
       interval: 10s

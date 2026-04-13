@@ -2,7 +2,7 @@ use admin_backend::extensions_state::{
     enabled_after_rescan, review_status_after_rescan, REVIEW_STATUS_APPROVED,
     REVIEW_STATUS_PENDING, REVIEW_STATUS_SCAN_FAILED,
 };
-use admin_backend::extensions_validation::validate_skill_package;
+use admin_backend::extensions_validation::{extract_skill_metadata, validate_skill_package};
 
 #[test]
 fn req_extensions_001_rescan_safe_keeps_approved_when_already_approved() {
@@ -48,6 +48,12 @@ fn req_extensions_006_validate_skill_package_accepts_minimal_valid_frontmatter()
 }
 
 #[test]
+fn req_extensions_006b_validate_skill_package_accepts_claude_style_without_version() {
+    let content = "---\nname: valid-skill\ndescription: x\n---\n# body";
+    assert!(validate_skill_package(content).is_ok());
+}
+
+#[test]
 fn req_extensions_007_validate_skill_package_rejects_missing_frontmatter() {
     let err = validate_skill_package("# no frontmatter").expect_err("should reject content");
     assert!(err.to_string().contains("缺少 YAML frontmatter"));
@@ -81,4 +87,28 @@ fn req_extensions_011_validate_skill_package_rejects_oversized_content() {
 
     let err = validate_skill_package(&content).expect_err("should reject oversized content");
     assert!(err.to_string().contains("超过 64 KiB"));
+}
+
+#[test]
+fn req_extensions_012_extract_skill_metadata_uses_manifest_json_version() {
+    let content = "---\nname: valid-skill\ndescription: x\n---\n# body";
+    let manifest = r#"{"version":"2.1.0"}"#;
+
+    let metadata = extract_skill_metadata(content, Some(manifest))
+        .expect("metadata extraction should succeed");
+
+    assert_eq!(metadata.name, "valid-skill");
+    assert_eq!(metadata.version.as_deref(), Some("2.1.0"));
+    assert_eq!(metadata.description.as_deref(), Some("x"));
+}
+
+#[test]
+fn req_extensions_013_extract_skill_metadata_accepts_manifest_without_name() {
+    let content = "---\nname: valid-skill\ndescription: x\n---\n# body";
+    let manifest = r#"{"version":"2.1.0","author":"manifest-author"}"#;
+
+    let metadata = extract_skill_metadata(content, Some(manifest))
+        .expect("metadata extraction should allow manifest without name");
+    assert_eq!(metadata.version.as_deref(), Some("2.1.0"));
+    assert_eq!(metadata.author.as_deref(), Some("manifest-author"));
 }

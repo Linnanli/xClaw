@@ -275,6 +275,56 @@ clean_port() {
     sleep 1
 }
 
+# 启动 Skill Scanner 容器
+# 参数: $1 - admin-backend 目录路径
+start_skill_scanner() {
+    local ADMIN_BACKEND_DIR="$1"
+
+    log_section "启动 Skill Scanner"
+
+    cd "$ADMIN_BACKEND_DIR"
+
+    # 检查容器是否已运行
+    if docker ps 2>/dev/null | grep -q admin-backend-skill-scanner; then
+        log_info "Skill Scanner 容器已在运行"
+        export SCANNER_ENABLED=true
+        export SCANNER_URL="http://localhost:8000"
+        return 0
+    fi
+
+    log_info "启动 Skill Scanner 容器（首次需要构建镜像，可能较慢）..."
+
+    if docker compose version &> /dev/null; then
+        docker compose up -d skill-scanner
+    else
+        docker-compose up -d skill-scanner
+    fi
+
+    log_info "等待 Skill Scanner 就绪..."
+
+    local MAX_WAIT=60
+    local WAIT_COUNT=0
+    echo -n "Scanner 启动进度: "
+    while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
+        if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+            echo ""
+            log_info "Skill Scanner 已就绪"
+            export SCANNER_ENABLED=true
+            export SCANNER_URL="http://localhost:8000"
+            return 0
+        fi
+        echo -n "."
+        sleep 1
+        WAIT_COUNT=$((WAIT_COUNT + 1))
+    done
+
+    echo ""
+    log_warn "Skill Scanner 启动超时，上传功能将跳过安全扫描"
+    echo "查看日志: docker logs admin-backend-skill-scanner"
+    # 不设置 SCANNER_ENABLED，后端会跳过扫描
+    return 0
+}
+
 # 启动 Admin Backend 后端
 # 参数: $1 - admin-backend 目录路径
 start_admin_backend() {
