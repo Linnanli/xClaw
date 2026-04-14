@@ -60,6 +60,30 @@ function mockPlugins(plugins: PluginRow[]) {
   }).as('getPlugins')
 }
 
+function mockModelConfigs() {
+  cy.intercept('GET', '/api/model-configs', {
+    body: [
+      {
+        id: 'model-config-qwen',
+        model_id: 'qwen3.6-plus-2026-04-02',
+        display_name: 'qwen3.6-plus-2026-04-02',
+        provider: 'qwen',
+        enabled: true,
+      },
+    ],
+  }).as('getModelConfigs')
+}
+
+function visitExtensionsPage() {
+  cy.visit('/extensions')
+  cy.wait('@getSkills')
+}
+
+function openSkillUploadDialog() {
+  cy.contains('上传技能包').click()
+  cy.wait('@getModelConfigs')
+}
+
 function seedSkills(): SkillRow[] {
   return [
     {
@@ -226,8 +250,7 @@ describe('扩展管理', () => {
 
   describe('页面结构与Tab', () => {
     beforeEach(() => {
-      cy.visit('/extensions')
-      cy.wait('@getSkills')
+      visitExtensionsPage()
     })
 
     it('应渲染页面标题和说明', () => {
@@ -252,8 +275,7 @@ describe('扩展管理', () => {
 
   describe('技能列表展示', () => {
     beforeEach(() => {
-      cy.visit('/extensions')
-      cy.wait('@getSkills')
+      visitExtensionsPage()
     })
 
     it('内置技能行应展示来源与审核状态', () => {
@@ -300,8 +322,7 @@ describe('扩展管理', () => {
         },
       ])
 
-      cy.visit('/extensions')
-      cy.wait('@getSkills')
+      visitExtensionsPage()
 
       cy.contains('tr', 'reviewed-skill').within(() => {
         cy.contains(/admin123\s*\//).should('be.visible')
@@ -328,8 +349,7 @@ describe('扩展管理', () => {
         },
       ])
 
-      cy.visit('/extensions')
-      cy.wait('@getSkills')
+      visitExtensionsPage()
 
       cy.contains('tr', 'rejected-skill').within(() => {
         cy.contains('summary', '备注').click()
@@ -340,8 +360,7 @@ describe('扩展管理', () => {
 
   describe('审核过滤 Tab', () => {
     beforeEach(() => {
-      cy.visit('/extensions')
-      cy.wait('@getSkills')
+      visitExtensionsPage()
     })
 
     it('待扫描过滤应仅显示 scanning/scan_failed 项', () => {
@@ -361,18 +380,19 @@ describe('扩展管理', () => {
 
   describe('上传流程', () => {
     beforeEach(() => {
-      cy.visit('/extensions')
-      cy.wait('@getSkills')
+      mockModelConfigs()
+      visitExtensionsPage()
     })
 
-    it('未选择文件时应提示错误', () => {
-      cy.contains('上传技能包').click()
-      cy.contains('button', '开始上传').click()
-      cy.contains('请先选择一个技能文件').should('be.visible')
+    it('未选择文件时上传按钮应保持禁用', () => {
+      openSkillUploadDialog()
+      cy.contains('button', '开始上传').should('be.disabled')
+      cy.get('[data-slot="tooltip-trigger"]').trigger('mouseenter', { force: true })
+      cy.contains('请先选择技能包文件').should('be.visible')
     })
 
     it('选择不支持后缀应被前端拒绝', () => {
-      cy.contains('上传技能包').click()
+      openSkillUploadDialog()
       cy.get('input[type="file"]').selectFile(
         {
           contents: Cypress.Buffer.from('---\nname: demo\n---\ncontent'),
@@ -399,7 +419,7 @@ describe('扩展管理', () => {
         })
       }).as('uploadPackage')
 
-      cy.contains('上传技能包').click()
+      openSkillUploadDialog()
       cy.get('input[type="file"]').selectFile(
         {
           contents: Cypress.Buffer.from('PK\u0003\u0004fake zip'),
@@ -453,8 +473,7 @@ describe('扩展管理', () => {
         },
       }).as('getScanResults')
 
-      cy.visit('/extensions')
-      cy.wait('@getSkills')
+      visitExtensionsPage()
       cy.contains('tr', 'scan-skill').within(() => {
         cy.contains('button', '审核').click()
       })
@@ -483,19 +502,30 @@ describe('扩展管理', () => {
       ])
 
       cy.intercept('GET', '/api/skills/test-pending-id/scan-results', {
-        body: { skill_id: 'test-pending-id', scan_result: null },
-      })
+        body: {
+          skill_id: 'test-pending-id',
+          scan_result: {
+            scanner_type: 'cisco-ai-skill-scanner',
+            verdict: 'SAFE',
+            is_safe: true,
+            max_severity: 'LOW',
+            findings_count: 0,
+            findings: [],
+            created_at: now(),
+          },
+        },
+      }).as('getPendingScanResults')
 
       cy.intercept('POST', '/api/skills/test-pending-id/review', (req) => {
         expect(req.body.approved).to.eq(true)
         req.reply({ statusCode: 200, body: { review_status: 'approved' } })
       }).as('reviewSkill')
 
-      cy.visit('/extensions')
-      cy.wait('@getSkills')
+      visitExtensionsPage()
       cy.contains('tr', 'pending-skill').within(() => {
         cy.contains('button', '审核').click()
       })
+      cy.wait('@getPendingScanResults')
       cy.get('[data-slot="dialog-content"]').contains('button', '通过').click()
       cy.wait('@reviewSkill')
     })
@@ -516,8 +546,7 @@ describe('扩展管理', () => {
         },
       }).as('getPluginScanResults')
 
-      cy.visit('/extensions')
-      cy.wait('@getSkills')
+      visitExtensionsPage()
       cy.contains('button', '插件管理').click()
       cy.wait('@getPlugins')
       cy.contains('tr', 'pending-plugin').within(() => {
@@ -554,8 +583,7 @@ describe('扩展管理', () => {
         },
       ])
 
-      cy.visit('/extensions')
-      cy.wait('@getSkills')
+      visitExtensionsPage()
       cy.contains('button', '插件管理').click()
       cy.wait('@getPlugins')
 
@@ -573,8 +601,7 @@ describe('扩展管理', () => {
         body: { id: 'skill-scan-failed', review_status: 'pending', enabled: false },
       }).as('rescanSkill')
 
-      cy.visit('/extensions')
-      cy.wait('@getSkills')
+      visitExtensionsPage()
       cy.contains('tr', 'scan-failed-skill').within(() => {
         cy.contains('button', '重扫').click()
       })
@@ -587,8 +614,7 @@ describe('扩展管理', () => {
         body: { id: 'skill-approved-upload', review_status: 'yanked', enabled: false },
       }).as('yankSkill')
 
-      cy.visit('/extensions')
-      cy.wait('@getSkills')
+      visitExtensionsPage()
       cy.window().then((win) => {
         cy.stub(win, 'confirm').returns(true)
       })
@@ -604,8 +630,7 @@ describe('扩展管理', () => {
         body: { id: 'plugin-approved-upload', review_status: 'yanked', enabled: false },
       }).as('yankPlugin')
 
-      cy.visit('/extensions')
-      cy.wait('@getSkills')
+      visitExtensionsPage()
       cy.window().then((win) => {
         cy.stub(win, 'confirm').returns(true)
       })
@@ -624,8 +649,7 @@ describe('扩展管理', () => {
         body: { id: 'skill-delegation', enabled: false },
       }).as('disableSkill')
 
-      cy.visit('/extensions')
-      cy.wait('@getSkills')
+      visitExtensionsPage()
       cy.contains('tr', 'delegation').within(() => {
         cy.get('[data-testid^="toggle-"]').first().click()
       })
@@ -635,8 +659,7 @@ describe('扩展管理', () => {
 
   describe('导航', () => {
     it('通过 URL 访问应正常渲染', () => {
-      cy.visit('/extensions')
-      cy.wait('@getSkills')
+      visitExtensionsPage()
       cy.contains('扩展管理').should('be.visible')
       cy.url().should('include', '/extensions')
     })

@@ -160,7 +160,16 @@ pub async fn send_chat_message(
     }
 
     // ── Skill 激活通知（desktop-client 侧扩展）────────────────────
-    emit_skills_activated_if_any(&app_handle, state, &safe_content);
+    let activated_skills = detect_and_emit_skills_activated(&app_handle, state, &safe_content);
+
+    state.conversation_tracker.record_user_message(
+        &thread_id,
+        &safe_content,
+        scan_result.had_sensitive_data,
+    );
+    state
+        .conversation_tracker
+        .record_activated_skills(&thread_id, &activated_skills);
 
     let mut msg = IncomingMessage::new("tauri", &state.owner_id, &safe_content)
         .with_thread(&thread_id)
@@ -234,16 +243,16 @@ fn build_message_metadata(
 ///
 /// 使用 ironclaw 已有的 `prefilter_skills` 函数，不修改 ironclaw 任何代码。
 /// 失败时静默跳过（skill 通知是 best-effort，不影响消息发送）。
-fn emit_skills_activated_if_any(
+fn detect_and_emit_skills_activated(
     app_handle: &tauri::AppHandle,
     state: &crate::state::AppState,
     content: &str,
-) {
+) -> Vec<String> {
     let Some(registry) = state.skill_registry.as_ref() else {
-        return;
+        return Vec::new();
     };
     let Ok(guard) = registry.read() else {
-        return;
+        return Vec::new();
     };
 
     // prefilter_skills 需要 &[LoadedSkill]，这里构建已启用技能快照。
@@ -254,7 +263,7 @@ fn emit_skills_activated_if_any(
         .cloned()
         .collect();
     if enabled_skills.is_empty() {
-        return;
+        return Vec::new();
     }
 
     let skills_cfg = &state.skills_config;
@@ -266,7 +275,7 @@ fn emit_skills_activated_if_any(
     );
 
     if selected.is_empty() {
-        return;
+        return Vec::new();
     }
 
     let skill_names: Vec<String> = selected.iter().map(|s| s.name().to_string()).collect();
@@ -275,9 +284,11 @@ fn emit_skills_activated_if_any(
     let _ = app_handle.emit(
         "chat-event",
         crate::tauri_channel::ChatEvent::SkillsActivated {
-            skills: skill_names,
+            skills: skill_names.clone(),
         },
     );
+
+    skill_names
 }
 
 /// 订阅聊天事件（兼容命令）。

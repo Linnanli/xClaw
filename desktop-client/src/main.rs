@@ -202,11 +202,8 @@ const ADMIN_CONFIG_MAPPINGS: &[(&str, &str)] = &[
     ("llm_api_key", "LLM_API_KEY"),
     ("llm_model", "LLM_MODEL"),
     ("llm_base_url", "LLM_BASE_URL"),
-    // ── 后续扩展 ──────────────────────────────────────────────
-    // ("safety_max_output_length", "SAFETY_MAX_OUTPUT_LENGTH"),
-    // ("safety_injection_check", "SAFETY_INJECTION_CHECK_ENABLED"),
-    // ("admin_api_url", "ADMIN_API_URL"),
-    // ("admin_api_key", "ADMIN_API_KEY"),
+    ("skill_registry_url", "CLAWHUB_REGISTRY"),
+    ("managed_mode", "MANAGED_MODE"),
 ];
 
 /// 敏感字段（日志中不打印值）。
@@ -257,16 +254,20 @@ fn apply_admin_overrides() {
 
     let mut injected = 0u32;
     for &(json_key, env_key) in ADMIN_CONFIG_MAPPINGS {
-        if let Some(val) = config.get(json_key).and_then(|v| v.as_str()) {
-            if !val.is_empty() {
-                env::set_var(env_key, val);
-                injected += 1;
+        let val = config.get(json_key).and_then(|v| match v {
+            serde_json::Value::String(s) if !s.is_empty() => Some(s.clone()),
+            serde_json::Value::Bool(b) => Some(b.to_string()),
+            serde_json::Value::Number(n) => Some(n.to_string()),
+            _ => None,
+        });
+        if let Some(val) = val {
+            env::set_var(env_key, &val);
+            injected += 1;
 
-                if ADMIN_CONFIG_SENSITIVE_KEYS.contains(&env_key) {
-                    tracing::info!("Admin override: {}=***", env_key);
-                } else {
-                    tracing::info!("Admin override: {}={}", env_key, val);
-                }
+            if ADMIN_CONFIG_SENSITIVE_KEYS.contains(&env_key) {
+                tracing::info!("Admin override: {}=***", env_key);
+            } else {
+                tracing::info!("Admin override: {}={}", env_key, val);
             }
         }
     }

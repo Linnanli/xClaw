@@ -99,6 +99,9 @@ pub enum ClientReport {
         /// DLP 详情
         #[serde(skip_serializing_if = "Option::is_none")]
         dlp_details: Option<String>,
+        /// 本次对话中激活过的技能名（去重后）
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        used_skills: Vec<String>,
         /// 消息列表
         messages: Vec<ConversationMessage>,
     },

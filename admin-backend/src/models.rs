@@ -314,6 +314,8 @@ pub struct CreateDepartmentRequest {
 pub struct UpdateDepartmentRequest {
     pub name: Option<String>,
     pub description: Option<String>,
+    /// None = 不修改, Some(None) = 清除父部门（提升为根）, Some(Some(id)) = 设置上级部门
+    #[serde(default, deserialize_with = "deserialize_optional_uuid")]
     pub parent_id: Option<Option<Uuid>>,
     pub token_quota_enabled: Option<bool>,
     pub token_quota_per_day: Option<Option<i32>>,
@@ -565,6 +567,8 @@ pub struct ConversationReportPayload {
     pub model_id: Option<String>,
     pub dlp_flagged: Option<bool>,
     pub dlp_details: Option<String>,
+    #[serde(default)]
+    pub used_skills: Vec<String>,
     pub messages: Vec<ConversationMessagePayload>,
 }
 

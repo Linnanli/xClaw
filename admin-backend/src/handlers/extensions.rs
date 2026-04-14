@@ -95,9 +95,18 @@ pub struct RegistrySearchQuery {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct RegistryAccessQuery {
+    /// client_token 用于识别用户所属部门，按白名单过滤结果
+    pub client_token: Option<String>,
+    /// user_id 备用身份标识
+    pub user_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct RegistryDownloadQuery {
     pub slug: String,
     pub client_token: Option<String>,
+    pub user_id: Option<String>,
 }
 
 // ── 技能列表（重写：直查 Admin DB）────────────────────────────────────────────
@@ -708,6 +717,11 @@ fn upload_result_message(review_status: &str, scan_row: Option<&ScanResultRow>) 
     }
 
     if review_status == REVIEW_STATUS_PENDING {
+        if let Some(row) = scan_row {
+            if row.verdict == "UNKNOWN" {
+                return "技能包已上传，安全扫描未执行，等待人工审核";
+            }
+        }
         return "技能包已上传，安全扫描通过，等待审核";
     }
 
@@ -1016,9 +1030,31 @@ async fn finalize_upload_review_status(
             .map(|_| ());
     }
 
+    // SCANNER_ENABLED=false 时写入占位扫描结果，避免审核门禁因无记录而卡死。
+    save_scan_result(sqlx_pool, skill_id, &scanner_disabled_placeholder_result()).await?;
+
     update_skill_review_status(sqlx_pool, skill_id, REVIEW_STATUS_PENDING)
         .await
         .map(|_| ())
+}
+
+fn scanner_disabled_placeholder_result() -> ScanResult {
+    ScanResult {
+        scanner_type: "scanner-disabled".to_string(),
+        verdict: SecurityVerdict::Unknown,
+        is_safe: false,
+        max_severity: Some(FindingSeverity::Unknown),
+        findings_count: 1,
+        findings: vec![SecurityFinding {
+            rule_id: Some("SCANNER_DISABLED".to_string()),
+            severity: FindingSeverity::Unknown,
+            title: Some("安全扫描未执行".to_string()),
+            file: Some("SKILL.md".to_string()),
+            snippet: None,
+            recommendation: Some("启用扫描服务并执行重扫后再审核".to_string()),
+        }],
+        scan_duration_ms: None,
+    }
 }
 
 async fn upload_skill_from_payload(
@@ -1762,11 +1798,12 @@ pub async fn upload_plugin(
 //   GET {registry_url}/api/v1/skills/{slug}
 //
 // client_token 用于查找用户所属部门，按白名单过滤结果。
-// 未提供 token 或 token 无效时，返回所有已审核通过且已启用的技能。
+// 未提供 token 或 token 无效时，search 返回空结果，download/detail 拒绝访问。
 
 /// 从 client_token 解析出部门 ID（查 registered_clients 表）
 async fn resolve_department_id(pool: &sqlx::PgPool, client_token: Option<&str>) -> Option<Uuid> {
     let token = client_token?;
+    let client_id = Uuid::parse_str(token).ok()?;
 
     #[derive(sqlx::FromRow)]
     struct Row {
@@ -1780,12 +1817,52 @@ async fn resolve_department_id(pool: &sqlx::PgPool, client_token: Option<&str>) 
             WHERE rc.id = $1::uuid
          LIMIT 1",
     )
-    .bind(token)
+    .bind(client_id)
     .fetch_optional(pool)
     .await
     .ok()
     .flatten()
     .and_then(|r| r.department_id)
+}
+
+fn registry_access_token<'a>(client_token: Option<&'a str>, user_id: Option<&'a str>) -> Option<&'a str> {
+    client_token.or(user_id)
+}
+
+async fn resolve_effective_whitelist_department(
+    pool: &sqlx::PgPool,
+    start_department_id: Uuid,
+) -> Result<Option<Uuid>> {
+    let mut current_id = Some(start_department_id);
+
+    for _ in 0..10 {
+        let Some(dept_id) = current_id else {
+            break;
+        };
+
+        let count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM department_skill_whitelist WHERE department_id = $1",
+        )
+        .bind(dept_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+        if count > 0 {
+            return Ok(Some(dept_id));
+        }
+
+        current_id = sqlx::query_scalar::<_, Option<Uuid>>(
+            "SELECT parent_id FROM departments WHERE id = $1",
+        )
+        .bind(dept_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
+        .flatten();
+    }
+
+    Ok(None)
 }
 
 /// GET /api/v1/search?q=xxx&client_token=yyy
@@ -1794,13 +1871,16 @@ pub async fn registry_search(
     Query(params): Query<RegistrySearchQuery>,
 ) -> Result<Json<serde_json::Value>> {
     let query = params.q.as_deref().unwrap_or("").to_lowercase();
-    let token = params.client_token.as_deref().or(params.user_id.as_deref());
-    let dept_id = resolve_department_id(&state.sqlx_pool, token).await;
-
-    let skills = match dept_id {
-        Some(did) => fetch_skills_for_department(&state.sqlx_pool, did, &query).await?,
-        None => fetch_all_enabled_skills(&state.sqlx_pool, &query).await?,
+    let token = registry_access_token(params.client_token.as_deref(), params.user_id.as_deref());
+    let Some(dept_id) = resolve_department_id(&state.sqlx_pool, token).await else {
+        tracing::warn!(
+            has_identity = token.is_some(),
+            "registry_search: missing or invalid client token"
+        );
+        return Ok(Json(json!({ "results": [] })));
     };
+
+    let skills = fetch_skills_for_department(&state.sqlx_pool, dept_id, &query).await?;
 
     Ok(Json(json!({ "results": skills })))
 }
@@ -1811,36 +1891,11 @@ async fn fetch_skills_for_department(
     dept_id: Uuid,
     query: &str,
 ) -> Result<Vec<serde_json::Value>> {
-    #[derive(sqlx::FromRow)]
-    struct CountRow {
-        count: i64,
-    }
-
-    let cnt = sqlx::query_as::<_, CountRow>(
-        "SELECT COUNT(*) AS count FROM department_skill_whitelist WHERE department_id = $1",
-    )
-    .bind(dept_id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| Error::Database(e.to_string()))?;
-
-    if cnt.count > 0 {
-        fetch_skills_by_whitelist(pool, dept_id, query).await
+    if let Some(effective_dept_id) = resolve_effective_whitelist_department(pool, dept_id).await? {
+        fetch_skills_by_whitelist(pool, effective_dept_id, query).await
     } else {
         fetch_all_enabled_skills(pool, query).await
     }
-}
-
-async fn department_has_whitelist(pool: &sqlx::PgPool, dept_id: Uuid) -> Result<bool> {
-    let count = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM department_skill_whitelist WHERE department_id = $1",
-    )
-    .bind(dept_id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| Error::Database(e.to_string()))?;
-
-    Ok(count > 0)
 }
 
 async fn skill_in_department_whitelist(
@@ -1868,14 +1923,14 @@ async fn can_download_skill_by_token(
     client_token: Option<&str>,
 ) -> Result<bool> {
     let Some(dept_id) = resolve_department_id(pool, client_token).await else {
+        return Ok(false);
+    };
+
+    let Some(effective_dept_id) = resolve_effective_whitelist_department(pool, dept_id).await? else {
         return Ok(true);
     };
 
-    if !department_has_whitelist(pool, dept_id).await? {
-        return Ok(true);
-    }
-
-    skill_in_department_whitelist(pool, dept_id, skill_id).await
+    skill_in_department_whitelist(pool, effective_dept_id, skill_id).await
 }
 
 #[derive(sqlx::FromRow)]
@@ -1889,7 +1944,7 @@ struct SkillSearchRow {
 fn skill_to_registry_entry(s: &SkillSearchRow) -> serde_json::Value {
     json!({
         "slug": s.id.to_string(),
-        "display_name": s.name,
+        "displayName": s.name,
         "summary": s.description,
         "version": s.version,
         "score": 1.0,
@@ -1973,9 +2028,8 @@ pub async fn registry_download(
         return Err(Error::NotFound("技能不可用".into()));
     }
 
-    if !can_download_skill_by_token(&state.sqlx_pool, skill_id, params.client_token.as_deref())
-        .await?
-    {
+    let token = registry_access_token(params.client_token.as_deref(), params.user_id.as_deref());
+    if !can_download_skill_by_token(&state.sqlx_pool, skill_id, token).await? {
         return Err(Error::NotFound("技能不可用".into()));
     }
 
@@ -1994,8 +2048,14 @@ pub async fn registry_download(
 pub async fn registry_skill_detail(
     State(state): State<AppState>,
     Path(slug): Path<String>,
+    Query(params): Query<RegistryAccessQuery>,
 ) -> Result<Json<serde_json::Value>> {
     let skill_id = Uuid::parse_str(&slug).map_err(|_| Error::Validation("slug 格式无效".into()))?;
+
+    let token = registry_access_token(params.client_token.as_deref(), params.user_id.as_deref());
+    if !can_download_skill_by_token(&state.sqlx_pool, skill_id, token).await? {
+        return Err(Error::NotFound("技能不可用".into()));
+    }
 
     #[derive(sqlx::FromRow)]
     struct Row {
@@ -2018,16 +2078,16 @@ pub async fn registry_skill_detail(
     Ok(Json(json!({
         "skill": {
             "slug": slug,
-            "display_name": row.name,
+            "displayName": row.name,
             "summary": row.description,
-            "updated_at": null,
+            "updatedAt": null,
+            "stats": {
+                "installsCurrent": row.invoke_count,
+                "downloads": row.invoke_count,
+                "stars": null,
+            },
         },
         "owner": null,
-        "stats": {
-            "installs_current": row.invoke_count,
-            "downloads": row.invoke_count,
-            "stars": null,
-        }
     })))
 }
 

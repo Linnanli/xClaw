@@ -81,7 +81,14 @@ mod compliance_failure_tests {
 
 #[cfg(test)]
 mod jwt_auth_middleware_tests {
+    use admin_backend::middleware::auth::PUBLIC_PREFIXES;
     use serde_json::json;
+
+    fn is_public_path(path: &str) -> bool {
+        PUBLIC_PREFIXES
+            .iter()
+            .any(|prefix| path.starts_with(prefix))
+    }
 
     // ── JWT 中间件公开路径豁免验证 ────────────────────────────────
 
@@ -89,49 +96,27 @@ mod jwt_auth_middleware_tests {
     /// 这些路径不需要 JWT token，客户端直连场景依赖这些豁免
     #[test]
     fn test_public_paths_include_client_endpoints() {
-        // 与 middleware/auth.rs 中 PUBLIC_PREFIXES 保持一致
-        let public_prefixes = [
-            "/api/auth/",
-            "/api/client-reports",
-            "/api/client-config",
-            "/api/client-models",
-            "/api/policies",
-            "/api/quota/check",
-            "/api/quota/report-usage",
-            "/health",
-        ];
-
         // 客户端直连必须豁免的路径
         let required_public = [
             "/api/client-reports",     // 客户端数据上报
             "/api/client-config",      // 客户端配置拉取
             "/api/client-models",      // 客户端模型列表
+            "/api/client-policy",      // 签名策略拉取
             "/api/quota/check",        // 配额预检（客户端发起）
             "/api/quota/report-usage", // 用量上报
+            "/api/v1/search",          // 私有注册表搜索
+            "/api/v1/download",        // 私有注册表下载
+            "/api/v1/skills/550e8400-e29b-41d4-a716-446655440000", // 私有注册表详情
         ];
 
         for path in &required_public {
-            let is_public = public_prefixes
-                .iter()
-                .any(|prefix| path.starts_with(prefix));
-            assert!(is_public, "客户端路径 '{}' 必须在公开路径列表中", path);
+            assert!(is_public_path(path), "客户端路径 '{}' 必须在公开路径列表中", path);
         }
     }
 
     /// 验证合规路径需要认证（不在公开列表中）
     #[test]
     fn test_compliance_paths_require_auth() {
-        let public_prefixes = [
-            "/api/auth/",
-            "/api/client-reports",
-            "/api/client-config",
-            "/api/client-models",
-            "/api/policies",
-            "/api/quota/check",
-            "/api/quota/report-usage",
-            "/health",
-        ];
-
         let protected_paths = [
             "/api/compliance/overview",
             "/api/compliance/reports",
@@ -139,11 +124,8 @@ mod jwt_auth_middleware_tests {
         ];
 
         for path in &protected_paths {
-            let is_public = public_prefixes
-                .iter()
-                .any(|prefix| path.starts_with(prefix));
             assert!(
-                !is_public,
+                !is_public_path(path),
                 "合规路径 '{}' 不应在公开列表中，必须要求认证",
                 path
             );

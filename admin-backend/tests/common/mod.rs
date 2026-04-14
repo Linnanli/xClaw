@@ -49,7 +49,9 @@ pub fn configure_scanner_env(
     url: Option<&str>,
     timeout_ms: Option<u64>,
 ) -> ScannerEnvGuard {
-    let lock = SCANNER_ENV_LOCK.lock().expect("lock scanner env");
+    let lock = SCANNER_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let old_enabled = std::env::var("SCANNER_ENABLED").ok();
     let old_url = std::env::var("SCANNER_URL").ok();
     let old_timeout = std::env::var("SCANNER_TIMEOUT_MS").ok();
@@ -334,6 +336,29 @@ pub async fn post_json_with_headers(
     )
     .await
     .expect("execute POST request")
+}
+
+pub async fn put_json(
+    app: axum::Router,
+    path: &str,
+    body: Value,
+) -> axum::response::Response {
+    let token = make_auth_token();
+    let builder = Request::builder()
+        .method("PUT")
+        .uri(path)
+        .header("authorization", format!("Bearer {}", token))
+        .header("content-type", "application/json");
+
+    app.oneshot(
+        builder
+            .body(Body::from(
+                serde_json::to_vec(&body).expect("serialize PUT body"),
+            ))
+            .expect("build PUT request"),
+    )
+    .await
+    .expect("execute PUT request")
 }
 
 pub async fn response_json(resp: axum::response::Response) -> Value {

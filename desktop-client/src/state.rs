@@ -47,6 +47,7 @@ use ironclaw::workspace::Workspace;
 use tokio::sync::mpsc;
 
 use crate::safety_bridge::SafetyBridge;
+use crate::conversation_tracker::ConversationTracker;
 
 /// IronClaw 引擎内部状态。
 ///
@@ -75,6 +76,8 @@ pub struct AppState {
     pub safety_bridge: Arc<SafetyBridge>,
     /// 上下文管理器（任务审批等）。
     pub context_manager: Arc<ContextManager>,
+    /// 对话追踪器（对话审计与技能使用上报）。
+    pub conversation_tracker: Arc<ConversationTracker>,
     /// 实例 owner ID。
     pub owner_id: String,
     /// LLM provider 引用（用于模型切换和查询可用模型列表）。

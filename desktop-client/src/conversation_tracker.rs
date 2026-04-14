@@ -19,7 +19,7 @@
 //! - 显式切换 thread 时 flush 旧 thread
 //! - 上报失败不影响主流程（DataReporter 有重试机制）
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -33,6 +33,8 @@ struct ThreadBuffer {
     model_id: Option<String>,
     /// 是否有 DLP 标记
     dlp_flagged: bool,
+    /// 本次对话激活过的技能名（去重）
+    used_skills: HashSet<String>,
 }
 
 impl ThreadBuffer {
@@ -42,6 +44,7 @@ impl ThreadBuffer {
             last_activity: Instant::now(),
             model_id: None,
             dlp_flagged: false,
+            used_skills: HashSet::new(),
         }
     }
 
@@ -89,6 +92,21 @@ impl ConversationTracker {
             input_tokens: 0,
             output_tokens: 0,
         });
+    }
+
+    /// 记录本轮命中的技能名。
+    pub fn record_activated_skills(&self, thread_id: &str, skill_names: &[String]) {
+        if skill_names.is_empty() {
+            return;
+        }
+
+        let mut buffers = self.lock_buffers();
+        let buf = buffers
+            .entry(thread_id.to_string())
+            .or_insert_with(ThreadBuffer::new);
+        buf.touch();
+        buf.used_skills
+            .extend(skill_names.iter().filter(|name| !name.is_empty()).cloned());
     }
 
     /// 记录 assistant 回复（Token 数由后续 `update_last_assistant_tokens` 回填）。
@@ -184,6 +202,10 @@ impl ConversationTracker {
         if buf.messages.is_empty() {
             return None;
         }
+
+        let mut used_skills: Vec<String> = buf.used_skills.into_iter().collect();
+        used_skills.sort();
+
         Some(ClientReport::Conversation {
             client_conversation_id: format!("{}-{}", self.user_id, thread_id),
             user_id: self.user_id.clone(),
@@ -191,6 +213,7 @@ impl ConversationTracker {
             model_id: buf.model_id,
             dlp_flagged: Some(buf.dlp_flagged),
             dlp_details: None,
+            used_skills,
             messages: buf.messages,
         })
     }
@@ -289,6 +312,33 @@ mod tests {
         {
             assert!(client_conversation_id.contains("user-test"));
             assert!(client_conversation_id.contains("thread-abc"));
+        } else {
+            panic!("Expected Conversation report");
+        }
+    }
+
+    #[test]
+    fn test_activated_skills_are_deduplicated_in_report() {
+        let tracker = make_tracker();
+        let reporter = make_reporter();
+
+        tracker.record_user_message("thread-skill", "use some skills", false);
+        tracker.record_activated_skills(
+            "thread-skill",
+            &[
+                "code-review-expert".to_string(),
+                "code-review-expert".to_string(),
+                "code-simplifier".to_string(),
+            ],
+        );
+        tracker.finish_thread("thread-skill", &reporter);
+
+        let reports = reporter.drain_for_test();
+        if let ClientReport::Conversation { used_skills, .. } = &reports[0] {
+            assert_eq!(
+                used_skills,
+                &vec!["code-review-expert".to_string(), "code-simplifier".to_string()]
+            );
         } else {
             panic!("Expected Conversation report");
         }

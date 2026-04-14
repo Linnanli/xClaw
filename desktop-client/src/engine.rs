@@ -188,18 +188,18 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     )
     .await;
 
-    if managed_mode_enabled() {
-        let (unauthorized_skills, unauthorized_extensions, has_signed_policy) =
-            collect_managed_mode_restrictions(
-                components.db.as_ref(),
-                &config.owner_id,
-                components.skill_registry.as_ref(),
-                components.extension_manager.as_ref(),
-                &admin_url,
-                &client_token,
-            )
-            .await;
+    let (unauthorized_skills, unauthorized_extensions, has_signed_policy) =
+        collect_client_policy_restrictions(
+            components.db.as_ref(),
+            &config.owner_id,
+            components.skill_registry.as_ref(),
+            components.extension_manager.as_ref(),
+            &admin_url,
+            &client_token,
+        )
+        .await;
 
+    if should_apply_client_policy_restrictions(has_signed_policy) {
         let skill_block_count = unauthorized_skills.len();
         let extension_block_count = unauthorized_extensions.len();
         disabled_skills.extend(unauthorized_skills);
@@ -208,7 +208,7 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
             skill_block_count,
             extension_block_count,
             has_signed_policy,
-            "Managed mode startup policy applied"
+            "Client policy startup restrictions applied"
         );
     }
 
@@ -224,6 +224,7 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         safety: Arc::clone(&components.safety),
         safety_bridge,
         context_manager: Arc::clone(&components.context_manager),
+        conversation_tracker: Arc::clone(&tracker),
         owner_id: config.owner_id.clone(),
         llm: Arc::clone(&wrapped_llm),
         model_override: Arc::clone(&model_override),
@@ -275,6 +276,30 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
                     ),
                 },
                 Err(e) => tracing::warn!("Engine not ready for DLP sync: {}", e),
+            }
+        });
+    }
+
+    // ── 启动时同步 Managed Skills 列表 ───────────────────────────
+    // Managed mode 下，仅同步服务端技能列表与允许集，不预下载 SKILL.md 内容。
+    // 技能内容在用户启用该技能时按需下载。
+    if managed_mode_enabled() {
+        let app_handle_clone = app_handle.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            let engine_state = app_handle_clone.state::<EngineState>();
+            match engine_state.get() {
+                Ok(state) => {
+                    if let Err(e) =
+                        crate::ipc::skills::startup_sync_managed_skills(state).await
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            "Startup managed skills sync failed"
+                        );
+                    }
+                }
+                Err(e) => tracing::warn!("Engine not ready for managed skills sync: {}", e),
             }
         });
     }
@@ -651,6 +676,27 @@ fn managed_mode_enabled() -> bool {
         .unwrap_or(false)
 }
 
+fn should_apply_client_policy_restrictions(has_signed_policy: bool) -> bool {
+    has_signed_policy || managed_mode_enabled()
+}
+
+async fn load_cached_policy_snapshot(
+    db: Option<&Arc<dyn ironclaw::db::Database>>,
+    owner_id: &str,
+) -> Option<ManagedPolicySnapshot> {
+    let Some(db) = db else {
+        return None;
+    };
+
+    match load_verified_policy_from_store(db.as_ref(), owner_id).await {
+        Ok(policy) => policy,
+        Err(error) => {
+            tracing::warn!(error = %error, "Failed to load cached signed policy");
+            None
+        }
+    }
+}
+
 async fn resolve_managed_policy(
     db: Option<&Arc<dyn ironclaw::db::Database>>,
     owner_id: &str,
@@ -752,7 +798,6 @@ fn collect_unauthorized_skills(
     guard
         .skills()
         .iter()
-        .filter(|skill| matches!(skill.source, ironclaw::skills::SkillSource::User(_)))
         .map(|skill| skill.manifest.name.clone())
         .filter(|name| !allowed.contains(name))
         .collect()
@@ -838,7 +883,7 @@ async fn resolve_managed_allowlists(
     (allowed_skills, allowed_extensions)
 }
 
-async fn collect_managed_mode_restrictions(
+async fn collect_client_policy_restrictions(
     db: Option<&Arc<dyn ironclaw::db::Database>>,
     owner_id: &str,
     skill_registry: Option<&Arc<std::sync::RwLock<ironclaw::skills::SkillRegistry>>>,
@@ -846,19 +891,31 @@ async fn collect_managed_mode_restrictions(
     admin_url: &str,
     client_token: &str,
 ) -> (HashSet<String>, HashSet<String>, bool) {
-    let managed_policy = resolve_managed_policy(db, owner_id, admin_url, client_token).await;
-    let (allowed_skills, allowed_extensions) =
-        resolve_managed_allowlists(db, owner_id, managed_policy.as_ref()).await;
+    let managed_mode = managed_mode_enabled();
+    let managed_policy = if managed_mode {
+        resolve_managed_policy(db, owner_id, admin_url, client_token).await
+    } else {
+        load_cached_policy_snapshot(db, owner_id).await
+    };
+    let has_signed_policy = managed_policy.is_some();
+
+    if !should_apply_client_policy_restrictions(has_signed_policy) {
+        return (HashSet::new(), HashSet::new(), false);
+    }
+
+    let (allowed_skills, allowed_extensions) = if managed_mode {
+        resolve_managed_allowlists(db, owner_id, managed_policy.as_ref()).await
+    } else if let Some(policy) = managed_policy {
+        (policy.allowed_skill_set(), policy.allowed_extension_set())
+    } else {
+        return (HashSet::new(), HashSet::new(), false);
+    };
 
     let unauthorized_skills = collect_unauthorized_skills(skill_registry, &allowed_skills);
     let unauthorized_extensions =
         collect_unauthorized_extensions(extension_manager, owner_id, &allowed_extensions).await;
 
-    (
-        unauthorized_skills,
-        unauthorized_extensions,
-        managed_policy.is_some(),
-    )
+    (unauthorized_skills, unauthorized_extensions, has_signed_policy)
 }
 
 async fn refresh_runtime_policy_restrictions(
@@ -881,18 +938,18 @@ async fn refresh_runtime_policy_restrictions(
     )
     .await;
 
-    if managed_mode_enabled() {
-        let (unauthorized_skills, unauthorized_extensions, has_signed_policy) =
-            collect_managed_mode_restrictions(
-                state.db.as_ref(),
-                &state.owner_id,
-                state.skill_registry.as_ref(),
-                state.extension_manager.as_ref(),
-                admin_url,
-                client_token,
-            )
-            .await;
+    let (unauthorized_skills, unauthorized_extensions, has_signed_policy) =
+        collect_client_policy_restrictions(
+            state.db.as_ref(),
+            &state.owner_id,
+            state.skill_registry.as_ref(),
+            state.extension_manager.as_ref(),
+            admin_url,
+            client_token,
+        )
+        .await;
 
+    if should_apply_client_policy_restrictions(has_signed_policy) {
         let skill_block_count = unauthorized_skills.len();
         let extension_block_count = unauthorized_extensions.len();
         disabled_skills.extend(unauthorized_skills);
@@ -901,7 +958,7 @@ async fn refresh_runtime_policy_restrictions(
             skill_block_count,
             extension_block_count,
             has_signed_policy,
-            "Managed mode runtime policy refreshed"
+            "Client policy runtime restrictions refreshed"
         );
     }
 

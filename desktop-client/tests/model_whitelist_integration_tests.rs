@@ -29,6 +29,7 @@ mod model_whitelist_tests {
             model_id: Some("gpt-4o".to_string()),
             dlp_flagged: Some(false),
             dlp_details: None,
+            used_skills: vec!["code-review-expert".to_string()],
             messages: vec![
                 ConversationMessage {
                     role: "user".to_string(),
@@ -52,6 +53,7 @@ mod model_whitelist_tests {
         assert!(json.contains("\"type\":\"conversation\""));
         assert!(json.contains("conv-123"));
         assert!(json.contains("测试对话"));
+        assert!(json.contains("code-review-expert"));
         assert!(json.contains("input_tokens"));
         assert!(json.contains("output_tokens"));
     }

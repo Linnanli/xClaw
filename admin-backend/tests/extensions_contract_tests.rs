@@ -9,11 +9,13 @@ mod registry_contract {
     #[test]
     fn test_search_response_wrapped_format() {
         // ironclaw 的 CatalogSearchEnvelope 期望 {"results": [...]}
+        // CatalogSearchResult 使用 #[serde(rename_all = "camelCase")]，
+        // 所以 JSON key 必须是 camelCase（displayName 而非 display_name）
         let response = json!({
             "results": [
                 {
                     "slug": "550e8400-e29b-41d4-a716-446655440000",
-                    "display_name": "写作助手",
+                    "displayName": "写作助手",
                     "summary": "帮助撰写各类文档",
                     "version": "1.0.0",
                     "score": 1.0
@@ -29,11 +31,11 @@ mod registry_contract {
         assert!(!results.is_empty());
 
         let entry = &results[0];
-        // ironclaw CatalogSearchResult 期望的字段
+        // ironclaw CatalogSearchResult(rename_all=camelCase) 期望的字段
         assert!(entry.get("slug").is_some(), "缺少 slug 字段");
         assert!(
-            entry.get("display_name").is_some(),
-            "缺少 display_name 字段"
+            entry.get("displayName").is_some(),
+            "缺少 displayName 字段"
         );
         assert!(entry.get("summary").is_some(), "缺少 summary 字段");
     }
@@ -41,26 +43,28 @@ mod registry_contract {
     #[test]
     fn test_skill_detail_response_format() {
         // ironclaw SkillDetailResponse 期望的格式
+        // SkillDetailInner 使用 #[serde(rename_all = "camelCase")]，
+        // stats 嵌套在 skill 对象内部（而非顶层）
         let response = json!({
             "skill": {
                 "slug": "550e8400-e29b-41d4-a716-446655440000",
-                "display_name": "写作助手",
+                "displayName": "写作助手",
                 "summary": "帮助撰写各类文档",
-                "updated_at": null
+                "updatedAt": null,
+                "stats": {
+                    "installsCurrent": 42,
+                    "downloads": 42,
+                    "stars": null
+                }
             },
             "owner": null,
-            "stats": {
-                "installs_current": 42,
-                "downloads": 42,
-                "stars": null
-            }
         });
 
         assert!(response.get("skill").is_some(), "缺少 skill 字段");
-        assert!(response.get("stats").is_some(), "缺少 stats 字段");
         let skill = &response["skill"];
         assert!(skill.get("slug").is_some());
-        assert!(skill.get("display_name").is_some());
+        assert!(skill.get("displayName").is_some());
+        assert!(skill.get("stats").is_some(), "stats 必须嵌套在 skill 内");
     }
 
     #[test]

@@ -47,9 +47,138 @@ interface WhitelistModel {
   enabled: boolean
 }
 
+interface WhitelistSkill {
+  skill_id: string
+  name: string
+}
+
+interface ModelOption {
+  id: string
+  model_id: string
+  display_name: string
+  provider: string
+}
+
+interface SkillOption {
+  id: string
+  name: string
+  enabled: boolean
+  review_status: string
+}
+
+interface DepartmentQuotaSummary {
+  today_total_used_cents: number
+  custom_limit_cents: number | null
+  children_limit_sum_cents: number
+}
+
+interface RootDepartmentQuotaSummary extends DepartmentQuotaSummary {
+  is_custom: boolean
+  monthly_budget_cents: number | null
+  month_total_used_cents: number
+}
+
 interface TreeNode {
   dept: Department
   children: TreeNode[]
+}
+
+function defaultCreateParentId(departments: Department[]): string {
+  const root = departments.find((dept) => !dept.parent_id)
+  return root?.id ?? ''
+}
+
+function hasRootDepartment(departments: Department[], excludedDeptId?: string): boolean {
+  return departments.some((dept) => !dept.parent_id && dept.id !== excludedDeptId)
+}
+
+function canBeRootDepartment(departments: Department[], dept: DepartmentDetail): boolean {
+  return !hasRootDepartment(departments, dept.id) || !dept.parent_id
+}
+
+function toggleSelection(selected: Set<string>, id: string): Set<string> {
+  const next = new Set(selected)
+  if (next.has(id)) {
+    next.delete(id)
+  } else {
+    next.add(id)
+  }
+  return next
+}
+
+function departmentDailyQuotaLabel(
+  detail: DepartmentDetail,
+  quotaSummary: DepartmentQuotaSummary | null,
+): string {
+  if (!quotaSummary) {
+    return '—'
+  }
+
+  if (quotaSummary.custom_limit_cents != null) {
+    return formatCents(quotaSummary.custom_limit_cents)
+  }
+
+  if (!detail.parent_id) {
+    return `${formatCents(quotaSummary.children_limit_sum_cents)} (累加)`
+  }
+
+  return '未设置'
+}
+
+function rootQuotaLimitLabel(
+  summary: RootDepartmentQuotaSummary | null,
+  isCustom: boolean,
+  customLimit: string,
+): string {
+  if (!summary) {
+    return '加载中...'
+  }
+
+  if (!isCustom) {
+    return `${formatCents(summary.children_limit_sum_cents)} (累加)`
+  }
+
+  return customLimit ? formatCents(Number(customLimit)) : '未设置'
+}
+
+function mapModelOptions(data: unknown): ModelOption[] {
+  if (!Array.isArray(data)) {
+    return []
+  }
+
+  return data.flatMap((item) => {
+    const candidate = item as Partial<ModelOption>
+    if (
+      typeof candidate.id !== 'string' ||
+      typeof candidate.model_id !== 'string' ||
+      typeof candidate.display_name !== 'string' ||
+      typeof candidate.provider !== 'string'
+    ) {
+      return []
+    }
+
+    return [candidate as ModelOption]
+  })
+}
+
+function mapApprovedSkillOptions(data: unknown): SkillOption[] {
+  if (!Array.isArray(data)) {
+    return []
+  }
+
+  return data.flatMap((item) => {
+    const candidate = item as Partial<SkillOption>
+    if (
+      typeof candidate.id !== 'string' ||
+      typeof candidate.name !== 'string' ||
+      candidate.enabled !== true ||
+      candidate.review_status !== 'approved'
+    ) {
+      return []
+    }
+
+    return [candidate as SkillOption]
+  })
 }
 
 /* ── 树形构建 ── */
@@ -123,16 +252,32 @@ function CreateDeptDialog({ open, departments, onClose, onCreated }: {
 }) {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
-  const [parentId, setParentId] = useState('')
+  const [parentId, setParentId] = useState(defaultCreateParentId(departments))
   const [quotaEnabled, setQuotaEnabled] = useState(false)
   const [quotaPerDay, setQuotaPerDay] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
-  const reset = () => { setName(''); setDescription(''); setParentId(''); setQuotaEnabled(false); setQuotaPerDay(''); setError('') }
+  const rootDepartmentExists = hasRootDepartment(departments)
+
+  const reset = () => {
+    setName('')
+    setDescription('')
+    setParentId(defaultCreateParentId(departments))
+    setQuotaEnabled(false)
+    setQuotaPerDay('')
+    setError('')
+  }
+
+  useEffect(() => {
+    if (open) {
+      reset()
+    }
+  }, [open, departments])
 
   const handleSave = async () => {
     if (name.trim().length < 2) { setError('部门名称至少 2 个字符'); return }
+    if (rootDepartmentExists && !parentId) { setError('系统只允许一个顶级部门，请为新部门选择上级部门'); return }
     setSaving(true); setError('')
     try {
       await api.post('/departments', {
@@ -163,9 +308,10 @@ function CreateDeptDialog({ open, departments, onClose, onCreated }: {
           <div className="flex flex-col gap-1.5">
             <FormLabel>上级部门</FormLabel>
             <select value={parentId} onChange={e => setParentId(e.target.value)} className="border border-[#E8E8E8] bg-[#F5F5F5] px-3 py-2 font-mono text-[10px] text-[#1A1A1A] outline-none">
-              <option value="">无（顶级部门）</option>
+              {!rootDepartmentExists && <option value="">无（顶级部门）</option>}
               {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
+            {rootDepartmentExists && <p className="font-mono text-[9px] text-[#999]">系统仅允许一个顶级部门，新部门需挂在现有部门下。</p>}
           </div>
           <div className="flex flex-col gap-1.5">
             <FormLabel>描述</FormLabel>
@@ -211,11 +357,13 @@ function EditDeptDialog({ open, dept, departments, onClose, onSaved }: {
     setName(dept.name); setDescription(dept.description || ''); setParentId(dept.parent_id || ''); setError('')
   }, [dept, open])
 
-  // 排除自身和自身的子孙部门，防止循环引用
+  // 前端先排除自身；服务端仍会做父子循环校验。
   const availableParents = departments.filter(d => d.id !== dept.id)
+  const rootAllowed = canBeRootDepartment(departments, dept)
 
   const handleSave = async () => {
     if (name.trim().length < 2) { setError('部门名称至少 2 个字符'); return }
+    if (!rootAllowed && !parentId) { setError('系统只允许一个顶级部门，请为该部门选择上级部门'); return }
     setSaving(true); setError('')
     try {
       await api.put(`/departments/${dept.id}`, {
@@ -244,9 +392,10 @@ function EditDeptDialog({ open, dept, departments, onClose, onSaved }: {
           <div className="flex flex-col gap-1.5">
             <FormLabel>上级部门</FormLabel>
             <select value={parentId} onChange={e => setParentId(e.target.value)} className="border border-[#E8E8E8] bg-[#F5F5F5] px-3 py-2 font-mono text-[10px] text-[#1A1A1A] outline-none">
-              <option value="">无（顶级部门）</option>
+              {rootAllowed && <option value="">无（顶级部门）</option>}
               {availableParents.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
+            {!rootAllowed && <p className="font-mono text-[9px] text-[#999]">当前已存在顶级部门，不能再将该部门提升为顶级部门。</p>}
           </div>
           <div className="flex flex-col gap-1.5">
             <FormLabel>描述</FormLabel>
@@ -267,8 +416,6 @@ function EditDeptDialog({ open, dept, departments, onClose, onSaved }: {
 
 /* ── 模型白名单编辑弹窗 ── */
 
-interface ModelOption { id: string; model_id: string; display_name: string; provider: string }
-
 function ModelWhitelistDialog({ open, deptId, deptName, currentWhitelist, onClose, onSaved }: {
   open: boolean; deptId: string; deptName: string; currentWhitelist: WhitelistModel[]; onClose: () => void; onSaved: () => void
 }) {
@@ -282,15 +429,12 @@ function ModelWhitelistDialog({ open, deptId, deptName, currentWhitelist, onClos
     setSelected(new Set(currentWhitelist.map(m => m.id)))
     setError('')
     api.get('/model-configs').then(res => {
-      const models = (res.data || []).map((m: any) => ({ id: m.id, model_id: m.model_id, display_name: m.display_name, provider: m.provider }))
-      setAllModels(models)
+      setAllModels(mapModelOptions(res.data))
     }).catch(() => setError('加载模型列表失败'))
   }, [open, currentWhitelist])
 
   const toggle = (id: string) => {
-    const next = new Set(selected)
-    if (next.has(id)) next.delete(id); else next.add(id)
-    setSelected(next)
+    setSelected((current) => toggleSelection(current, id))
   }
 
   const handleSave = async () => {
@@ -342,6 +486,73 @@ function ModelWhitelistDialog({ open, deptId, deptName, currentWhitelist, onClos
   )
 }
 
+function SkillWhitelistDialog({ open, deptId, deptName, currentWhitelist, onClose, onSaved }: {
+  open: boolean; deptId: string; deptName: string; currentWhitelist: WhitelistSkill[]; onClose: () => void; onSaved: () => void
+}) {
+  const [allSkills, setAllSkills] = useState<SkillOption[]>([])
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!open) return
+    setSelected(new Set(currentWhitelist.map(s => s.skill_id)))
+    setError('')
+    api.get('/skills').then(res => {
+      setAllSkills(mapApprovedSkillOptions(res.data?.skills))
+    }).catch(() => setError('加载技能列表失败'))
+  }, [open, currentWhitelist])
+
+  const toggle = (id: string) => {
+    setSelected((current) => toggleSelection(current, id))
+  }
+
+  const handleSave = async () => {
+    setSaving(true); setError('')
+    try {
+      await api.put(`/departments/${deptId}/skill-whitelist`, { skill_ids: Array.from(selected) })
+      onSaved()
+    } catch (err: any) {
+      setError(err.response?.data?.error || '保存失败')
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
+      <DialogContent className="sm:max-w-[520px] rounded-none p-0 gap-0 ring-0" style={{ border: '1px solid #E8E8E8' }} showCloseButton={false}>
+        {error && <StatusMessage type="error" message={error} />}
+        <div className="flex items-center justify-between px-6 py-5" style={{ borderBottom: '1px solid #E8E8E8' }}>
+          <span className="font-mono text-xs font-semibold text-[#1A1A1A]">编辑技能白名单 — {deptName}</span>
+        </div>
+        <div className="px-6 py-4">
+          <p className="mb-3 font-mono text-[9px] text-[#999]">不选择任何技能 = 该部门可使用全部已审核技能</p>
+          <div className="flex max-h-[300px] flex-col gap-1.5 overflow-y-auto">
+            {allSkills.map(s => (
+              <button key={s.id} onClick={() => toggle(s.id)} className="flex items-center gap-3 px-3 py-2 text-left" style={{ border: `1px solid ${selected.has(s.id) ? '#0A6B3A' : '#E8E8E8'}`, background: selected.has(s.id) ? '#0A6B3A08' : '#fff' }}>
+                <div className={`flex h-4 w-4 shrink-0 items-center justify-center border ${selected.has(s.id) ? 'border-[#0A6B3A] bg-[#0A6B3A]' : 'border-[#D9D9D9]'}`}>
+                  {selected.has(s.id) && <Check className="h-2.5 w-2.5 text-white" />}
+                </div>
+                <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">{s.name}</span>
+              </button>
+            ))}
+            {allSkills.length === 0 && <span className="py-4 text-center font-mono text-[10px] text-[#999]">暂无可用技能</span>}
+          </div>
+        </div>
+        <div className="flex items-center justify-between px-6 py-4" style={{ borderTop: '1px solid #E8E8E8' }}>
+          <span className="font-mono text-[9px] text-[#999]">已选 {selected.size} / {allSkills.length}</span>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="border border-[#E8E8E8] bg-white px-4 py-2 font-mono text-[9px] font-semibold text-[#1A1A1A]">取消</button>
+            <button onClick={handleSave} disabled={saving} className="flex items-center gap-1.5 bg-[#0A6B3A] px-4 py-2 font-mono text-[9px] font-semibold text-white disabled:opacity-50">
+              {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+              保存白名单
+            </button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 /* ── 配额卡片（接入 API） ── */
 /* 根部门（parent_id 为 null）展示子部门限额累加值 + 自定义限额切换（验收标准15） */
 /* 普通部门展示直接配额设置 */
@@ -354,7 +565,7 @@ function QuotaCard({ dept, onSaved }: { dept: DepartmentDetail; onSaved: () => v
 }
 
 function RootQuotaCard({ dept, onSaved }: { dept: DepartmentDetail; onSaved: () => void }) {
-  const [summary, setSummary] = useState<{ children_limit_sum_cents: number; custom_limit_cents: number | null; is_custom: boolean; today_total_used_cents: number; monthly_budget_cents: number | null; month_total_used_cents: number } | null>(null)
+  const [summary, setSummary] = useState<RootDepartmentQuotaSummary | null>(null)
   const [isCustom, setIsCustom] = useState(false)
   const [customLimit, setCustomLimit] = useState('')
   const [monthlyBudget, setMonthlyBudget] = useState('')
@@ -385,9 +596,7 @@ function RootQuotaCard({ dept, onSaved }: { dept: DepartmentDetail; onSaved: () 
     } finally { setSaving(false) }
   }
 
-  const displayLimit = summary
-    ? (isCustom ? (customLimit ? formatCents(Number(customLimit)) : '未设置') : `${formatCents(summary.children_limit_sum_cents)} (累加)`)
-    : '加载中...'
+  const displayLimit = rootQuotaLimitLabel(summary, isCustom, customLimit)
 
   const budgetPct = summary && summary.monthly_budget_cents
     ? Math.min(Math.round(summary.month_total_used_cents / summary.monthly_budget_cents * 100), 100)
@@ -543,7 +752,17 @@ function DeptQuotaCard({ dept, onSaved }: { dept: DepartmentDetail; onSaved: () 
 
 /* ── 白名单卡片（接入 API） ── */
 
-function AccessCard({ whitelist, onEdit }: { whitelist: WhitelistModel[]; onEdit: () => void }) {
+function AccessCard({
+  modelWhitelist,
+  skillWhitelist,
+  onEditModel,
+  onEditSkill,
+}: {
+  modelWhitelist: WhitelistModel[]
+  skillWhitelist: WhitelistSkill[]
+  onEditModel: () => void
+  onEditSkill: () => void
+}) {
   return (
     <div className="flex flex-1 flex-col gap-3 bg-white p-5" style={{ border: '1px solid #E8E8E8' }}>
       <div className="flex items-center gap-2.5 pb-3" style={{ borderBottom: '1px solid #E8E8E8' }}>
@@ -554,19 +773,41 @@ function AccessCard({ whitelist, onEdit }: { whitelist: WhitelistModel[]; onEdit
         <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">可用模型白名单</span>
         <div className="flex items-center gap-2">
           <span className="font-mono text-[10px] font-medium text-[#0A6B3A]">
-            {whitelist.length > 0 ? `${whitelist.length} 个模型` : '全部可用'}
+            {modelWhitelist.length > 0 ? `${modelWhitelist.length} 个模型` : '全部可用'}
           </span>
-          <button onClick={onEdit} className="flex items-center gap-1.5 border border-[#0A6B3A] bg-white px-2 py-0.5 font-mono text-[8px] font-semibold text-[#0A6B3A]">
+          <button onClick={onEditModel} className="flex items-center gap-1.5 border border-[#0A6B3A] bg-white px-2 py-0.5 font-mono text-[8px] font-semibold text-[#0A6B3A]">
             <Pencil className="h-2.5 w-2.5" />
             编辑
           </button>
         </div>
       </div>
-      {whitelist.length > 0 && (
+      {modelWhitelist.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
-          {whitelist.map(m => (
+          {modelWhitelist.map(m => (
             <span key={m.id} className="bg-[#F5F5F5] px-2 py-1 font-mono text-[9px] text-[#1A1A1A]" style={{ border: '1px solid #E8E8E8' }}>
               {m.display_name}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <div className="mt-1 flex items-center justify-between" style={{ borderTop: '1px dashed #E8E8E8', paddingTop: '10px' }}>
+        <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">可用技能白名单</span>
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-[10px] font-medium text-[#0A6B3A]">
+            {skillWhitelist.length > 0 ? `${skillWhitelist.length} 个技能` : '全部可用'}
+          </span>
+          <button onClick={onEditSkill} className="flex items-center gap-1.5 border border-[#0A6B3A] bg-white px-2 py-0.5 font-mono text-[8px] font-semibold text-[#0A6B3A]">
+            <Pencil className="h-2.5 w-2.5" />
+            编辑
+          </button>
+        </div>
+      </div>
+      {skillWhitelist.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {skillWhitelist.map(s => (
+            <span key={s.skill_id} className="bg-[#F5F5F5] px-2 py-1 font-mono text-[9px] text-[#1A1A1A]" style={{ border: '1px solid #E8E8E8' }}>
+              {s.name}
             </span>
           ))}
         </div>
@@ -676,6 +917,7 @@ export default function DepartmentsPage() {
   const [createOpen, setCreateOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [whitelistOpen, setWhitelistOpen] = useState(false)
+  const [skillWhitelistOpen, setSkillWhitelistOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [quotaFilter, setQuotaFilter] = useState('')
 
@@ -683,7 +925,8 @@ export default function DepartmentsPage() {
   const [detail, setDetail] = useState<DepartmentDetail | null>(null)
   const [members, setMembers] = useState<DeptMember[]>([])
   const [whitelist, setWhitelist] = useState<WhitelistModel[]>([])
-  const [quotaSummary, setQuotaSummary] = useState<{ today_total_used_cents: number; custom_limit_cents: number | null; children_limit_sum_cents: number } | null>(null)
+  const [skillWhitelist, setSkillWhitelist] = useState<WhitelistSkill[]>([])
+  const [quotaSummary, setQuotaSummary] = useState<DepartmentQuotaSummary | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
 
   const loadDepartments = useCallback(async () => {
@@ -702,15 +945,17 @@ export default function DepartmentsPage() {
   const loadDetail = useCallback(async (id: string) => {
     setDetailLoading(true)
     try {
-      const [dRes, mRes, wRes, qRes] = await Promise.all([
+      const [dRes, mRes, wRes, sRes, qRes] = await Promise.all([
         api.get(`/departments/${id}`),
         api.get(`/departments/${id}/members`),
         api.get(`/departments/${id}/model-whitelist`),
+        api.get(`/departments/${id}/skill-whitelist`),
         api.get(`/departments/${id}/quota-summary`).catch(() => ({ data: null })),
       ])
       setDetail(dRes.data)
       setMembers(mRes.data.members || [])
       setWhitelist(wRes.data.models || [])
+      setSkillWhitelist(sRes.data.skills || [])
       setQuotaSummary(qRes.data)
     } catch (err) {
       console.error('加载部门详情失败', err)
@@ -722,7 +967,7 @@ export default function DepartmentsPage() {
   // 选中部门变化时加载详情
   useEffect(() => {
     if (selectedId) loadDetail(selectedId)
-    else { setDetail(null); setMembers([]); setWhitelist([]); setQuotaSummary(null) }
+    else { setDetail(null); setMembers([]); setWhitelist([]); setSkillWhitelist([]); setQuotaSummary(null) }
   }, [selectedId, loadDetail])
 
   // 加载完成后默认选中第一个
@@ -737,6 +982,7 @@ export default function DepartmentsPage() {
   const handleQuotaSaved = () => { loadDepartments(); if (selectedId) loadDetail(selectedId) }
   const handleEditSaved = () => { setEditOpen(false); loadDepartments(); if (selectedId) loadDetail(selectedId) }
   const handleWhitelistSaved = () => { setWhitelistOpen(false); if (selectedId) loadDetail(selectedId) }
+  const handleSkillWhitelistSaved = () => { setSkillWhitelistOpen(false); if (selectedId) loadDetail(selectedId) }
 
   return (
     <div className="flex flex-col gap-6">
@@ -819,8 +1065,9 @@ export default function DepartmentsPage() {
                 {[
                   { label: '成员数', value: String(detail.member_count), color: '#1A1A1A', border: '#E8E8E8' },
                   { label: '每日消耗', value: quotaSummary ? formatCents(quotaSummary.today_total_used_cents) : '—', color: '#0A6B3A', border: '#0A6B3A40' },
-                  { label: '每日配额', value: quotaSummary ? (quotaSummary.custom_limit_cents != null ? formatCents(quotaSummary.custom_limit_cents) : (!detail.parent_id ? `${formatCents(quotaSummary.children_limit_sum_cents)} (累加)` : '未设置')) : '—', color: '#1A1A1A', border: '#E8E8E8' },
+                  { label: '每日配额', value: departmentDailyQuotaLabel(detail, quotaSummary), color: '#1A1A1A', border: '#E8E8E8' },
                   { label: '模型白名单', value: whitelist.length > 0 ? `${whitelist.length} 个` : '全部', color: '#1A1A1A', border: '#E8E8E8' },
+                  { label: '技能白名单', value: skillWhitelist.length > 0 ? `${skillWhitelist.length} 个` : '全部', color: '#1A1A1A', border: '#E8E8E8' },
                 ].map(c => (
                   <div key={c.label} className="flex flex-1 flex-col gap-2 bg-white p-4" style={{ border: `1px solid ${c.border}` }}>
                     <span className="font-mono text-[9px] font-semibold tracking-[0.5px] text-[#999]">{c.label}</span>
@@ -832,7 +1079,12 @@ export default function DepartmentsPage() {
               {/* 配额 + 白名单 */}
               <div className="flex gap-4">
                 <QuotaCard dept={detail} onSaved={handleQuotaSaved} />
-                <AccessCard whitelist={whitelist} onEdit={() => setWhitelistOpen(true)} />
+                <AccessCard
+                  modelWhitelist={whitelist}
+                  skillWhitelist={skillWhitelist}
+                  onEditModel={() => setWhitelistOpen(true)}
+                  onEditSkill={() => setSkillWhitelistOpen(true)}
+                />
               </div>
 
               {/* 成员表格 */}
@@ -845,6 +1097,7 @@ export default function DepartmentsPage() {
       <CreateDeptDialog open={createOpen} departments={departments} onClose={() => setCreateOpen(false)} onCreated={handleCreated} />
       {detail && <EditDeptDialog open={editOpen} dept={detail} departments={departments} onClose={() => setEditOpen(false)} onSaved={handleEditSaved} />}
       {detail && <ModelWhitelistDialog open={whitelistOpen} deptId={detail.id} deptName={detail.name} currentWhitelist={whitelist} onClose={() => setWhitelistOpen(false)} onSaved={handleWhitelistSaved} />}
+      {detail && <SkillWhitelistDialog open={skillWhitelistOpen} deptId={detail.id} deptName={detail.name} currentWhitelist={skillWhitelist} onClose={() => setSkillWhitelistOpen(false)} onSaved={handleSkillWhitelistSaved} />}
     </div>
   )
 }

@@ -26,10 +26,11 @@ async fn test_invalid_client_token_recovery() {
     assert_status_ok(resp.status());
 
     let body = response_json(resp).await;
-    assert!(
-        body.get("results").and_then(|v| v.as_array()).is_some(),
-        "降级路径下仍应返回 results 数组"
-    );
+    let results = body
+        .get("results")
+        .and_then(|v| v.as_array())
+        .expect("无效 token 时仍应返回 results 数组");
+    assert!(results.is_empty(), "无效 token 不应返回任何技能结果");
 }
 
 #[tokio::test]

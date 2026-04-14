@@ -1,7 +1,9 @@
 //! JWT 认证中间件
 //!
 //! 保护所有 `/api/*` 路由（除 `/api/auth/*`、`/api/client-reports`、`/api/client-config`、
-//! `/api/client-models`、`/api/policies*`、`/api/quota/check`、`/api/quota/report-usage`）。
+//! `/api/client-models`、`/api/client-policy`、`/api/policies*`、
+//! `/api/quota/check`、`/api/quota/report-usage`、`/api/v1/search`、
+//! `/api/v1/download`、`/api/v1/skills/*`）。
 //!
 //! 验证通过后将 `TokenClaims` 注入 `Extension`，handler 可通过
 //! `Extension(claims): Extension<TokenClaims>` 提取当前用户信息。
@@ -18,14 +20,18 @@ use serde_json::json;
 use crate::auth::AuthManager;
 
 /// 不需要 JWT 验证的路径前缀
-const PUBLIC_PREFIXES: &[&str] = &[
+pub const PUBLIC_PREFIXES: &[&str] = &[
     "/api/auth/",
     "/api/client-reports",
     "/api/client-config",
     "/api/client-models",
+    "/api/client-policy",
     "/api/policies",
     "/api/quota/check",
     "/api/quota/report-usage",
+    "/api/v1/search",
+    "/api/v1/download",
+    "/api/v1/skills/",
     "/health",
 ];
 

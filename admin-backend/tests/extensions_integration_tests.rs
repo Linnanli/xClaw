@@ -329,7 +329,28 @@ async fn req_extensions_001d_upload_same_name_upserts_existing_skill() {
         .await
         .expect("count scan results after upsert");
     let scan_count: i64 = scan_count_row.get(0);
-    assert_eq!(scan_count, 0, "同名重新上传应清理旧扫描记录");
+    assert_eq!(scan_count, 1, "同名重新上传后应只保留最新扫描记录");
+
+    let scan_row = client
+        .query_one(
+            "SELECT scanner_type, verdict, findings
+             FROM scan_results
+             WHERE target_type = 'skill' AND target_id = $1",
+            &[&skill_id],
+        )
+        .await
+        .expect("query replacement scan result");
+    let scanner_type: String = scan_row.get(0);
+    let verdict: String = scan_row.get(1);
+    let findings: serde_json::Value = scan_row.get(2);
+
+    assert_eq!(scanner_type, "scanner-disabled");
+    assert_eq!(verdict, "UNKNOWN");
+    assert_ne!(
+        findings,
+        json!([{"rule_id": "OLD-1", "severity": "HIGH"}]),
+        "同名重新上传应清理旧扫描记录并写入新的占位结果"
+    );
 
     client
         .execute("DELETE FROM scan_results WHERE target_id = $1", &[&skill_id])
@@ -469,10 +490,11 @@ async fn req_extensions_001i_upload_package_with_model_config_id_uses_persisted_
 
     let model_config_id = Uuid::new_v4();
     let model_id = unique_name("it_model_cfg");
+    let expected_scanner_model = format!("{}/{}", expected_provider, model_id);
     let (scanner_url, handle) = spawn_scanner_server_validating_llm_with_options(
         expected_provider,
         expected_api_key,
-        Some(&model_id),
+        Some(&expected_scanner_model),
         Some(expected_base_url),
         Some(expected_api_version),
     )
@@ -483,10 +505,10 @@ async fn req_extensions_001i_upload_package_with_model_config_id_uses_persisted_
     client
         .execute(
             "INSERT INTO model_configs (
-                id, model_id, display_name, provider, api_key, enabled, is_default,
+                id, model_id, display_name, provider, api_key, api_base_url, enabled, is_default,
                 sort_order, capabilities, extra_config
              ) VALUES (
-                $1, $2, $3, $4, $5, true, false, 1, $6::jsonb, $7::jsonb
+                $1, $2, $3, $4, $5, $6, true, false, 1, $7::jsonb, $8::jsonb
              )",
             &[
                 &model_config_id,
@@ -494,10 +516,10 @@ async fn req_extensions_001i_upload_package_with_model_config_id_uses_persisted_
                 &"Integration Model Config",
                 &"deepseek",
                 &expected_api_key,
+                &expected_base_url,
                 &json!([]),
                 &json!({
                     "api_format": "openai",
-                    "base_url": expected_base_url,
                     "api_version": expected_api_version
                 }),
             ],
@@ -1263,28 +1285,24 @@ async fn req_extensions_004c_rescan_works_when_scanner_enabled_flag_is_false() {
 
     let path = format!("/api/skills/{}/rescan", skill_id);
     let resp = post_json(build_app(pool.clone()), &path, json!({})).await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     let body = response_json(resp).await;
-    assert_eq!(body["review_status"], "pending");
-    assert_eq!(body["is_safe"], true);
+    let details = body["details"].as_str().unwrap_or_default();
+    assert!(details.contains("安全扫描器未启用"));
 
-    let scan_row = client
+    let scan_count_row = client
         .query_one(
-            "SELECT verdict, findings_count
+            "SELECT COUNT(*)
              FROM scan_results
-             WHERE target_type = 'skill' AND target_id = $1
-             ORDER BY created_at DESC
-             LIMIT 1",
+             WHERE target_type = 'skill' AND target_id = $1",
             &[&skill_id],
         )
         .await
-        .expect("query manual rescan result");
-    let verdict: String = scan_row.get(0);
-    let findings_count: i32 = scan_row.get(1);
+        .expect("query manual rescan result count");
+    let scan_count: i64 = scan_count_row.get(0);
 
-    assert_eq!(verdict, "SAFE");
-    assert_eq!(findings_count, 0);
+    assert_eq!(scan_count, 0, "扫描器关闭时重扫不应写入新的扫描记录");
 
     handle.abort();
     client

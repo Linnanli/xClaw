@@ -1,4 +1,4 @@
-use admin_backend::scanner::{ScanError, SecurityVerdict, SkillScanner};
+use admin_backend::scanner::{ScanError, ScanUploadOptions, SecurityVerdict, SkillScanner};
 use axum::{routing::post, Json, Router};
 use serde_json::{json, Value};
 use std::net::SocketAddr;
@@ -34,6 +34,17 @@ async fn spawn_scanner_server(response: Value, delay: Duration) -> (String, Join
     (format!("http://{}", addr), handle)
 }
 
+fn scan_options() -> ScanUploadOptions {
+    ScanUploadOptions {
+        use_llm: false,
+        llm_provider: String::new(),
+        llm_api_key: None,
+        llm_model: None,
+        llm_base_url: None,
+        llm_api_version: None,
+    }
+}
+
 #[tokio::test]
 async fn scan_upload_success() {
     let response = json!({
@@ -46,7 +57,11 @@ async fn scan_upload_success() {
 
     let scanner = SkillScanner::new(&base_url, 500).expect("create scanner client");
     let result = scanner
-        .scan_upload("review-checklist", "---\nname: review-checklist\n---")
+        .scan_upload(
+            "review-checklist",
+            "---\nname: review-checklist\n---",
+            &scan_options(),
+        )
         .await
         .expect("scan should succeed");
 
@@ -67,7 +82,11 @@ async fn scan_upload_timeout_error() {
 
     let scanner = SkillScanner::new(&base_url, 50).expect("create scanner client");
     let err = scanner
-        .scan_upload("review-checklist", "---\nname: review-checklist\n---")
+        .scan_upload(
+            "review-checklist",
+            "---\nname: review-checklist\n---",
+            &scan_options(),
+        )
         .await
         .expect_err("scan should timeout");
 
@@ -86,7 +105,11 @@ async fn scan_upload_unreachable_error() {
 
     let scanner = SkillScanner::new(&format!("http://{}", addr), 100).expect("create scanner");
     let err = scanner
-        .scan_upload("review-checklist", "---\nname: review-checklist\n---")
+        .scan_upload(
+            "review-checklist",
+            "---\nname: review-checklist\n---",
+            &scan_options(),
+        )
         .await
         .expect_err("unreachable scanner should fail");
 

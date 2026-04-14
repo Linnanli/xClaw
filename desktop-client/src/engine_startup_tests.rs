@@ -61,6 +61,7 @@ mod engine_state_timing_tests {
             safety,
             safety_bridge,
             context_manager,
+            conversation_tracker: Arc::new(crate::conversation_tracker::ConversationTracker::new("test-owner".to_string())),
             owner_id: "test-owner".to_string(),
             llm: Arc::clone(&model_switch) as _,
             model_override,

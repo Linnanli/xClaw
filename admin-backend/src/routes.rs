@@ -29,6 +29,50 @@ use std::collections::HashMap;
 use tracing::{debug, info, instrument};
 use uuid::Uuid;
 
+async fn ensure_parent_department_exists(
+    client: &tokio_postgres::Client,
+    parent_id: Uuid,
+) -> Result<()> {
+    let parent_exists = client
+        .query_opt("SELECT id FROM departments WHERE id = $1", &[&parent_id])
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    if parent_exists.is_none() {
+        return Err(Error::Validation("指定的父部门不存在".to_string()));
+    }
+
+    Ok(())
+}
+
+async fn ensure_single_root_department(
+    client: &tokio_postgres::Client,
+    target_parent_id: Option<Uuid>,
+    current_dept_id: Option<Uuid>,
+) -> Result<()> {
+    if target_parent_id.is_some() {
+        return Ok(());
+    }
+
+    let existing_root = client
+        .query_opt(
+            "SELECT id FROM departments
+             WHERE parent_id IS NULL AND ($1::uuid IS NULL OR id <> $1)
+             LIMIT 1",
+            &[&current_dept_id],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    if existing_root.is_some() {
+        return Err(Error::Validation(
+            "系统只允许一个顶级部门，请为新部门选择上级部门".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health_check))
@@ -3155,11 +3199,28 @@ async fn get_client_policy(
         .transpose()
         .map_err(|_| Error::Validation("Invalid client_id format".into()))?;
 
+    info!(
+        client_id = ?client_uuid,
+        raw_client_id = ?params.client_id,
+        "get_client_policy: resolving department"
+    );
+
     let department_id = resolve_client_department_id(&client, client_uuid).await?;
     let managed_mode = read_managed_mode_setting(&client).await;
     let ttl_seconds = read_policy_ttl_seconds(&client).await;
     let now = Utc::now();
     let expires_at = now + chrono::Duration::seconds(ttl_seconds as i64);
+
+    let allowed_skills = fetch_allowed_skill_names(&client, department_id).await?;
+    let allowed_extensions = fetch_allowed_extension_names(&client).await?;
+
+    info!(
+        ?department_id,
+        managed_mode,
+        skill_count = allowed_skills.len(),
+        skills = ?allowed_skills,
+        "get_client_policy: resolved policy"
+    );
 
     let manifest = ManagedPolicyManifest {
         policy_version: now.timestamp_millis() as u64,
@@ -3167,8 +3228,8 @@ async fn get_client_policy(
         expires_at: expires_at.to_rfc3339(),
         managed_mode,
         client_id: client_uuid.map(|id| id.to_string()),
-        allowed_skills: fetch_allowed_skill_names(&client, department_id).await?,
-        allowed_extensions: fetch_allowed_extension_names(&client).await?,
+        allowed_skills,
+        allowed_extensions,
     };
 
     let manifest_payload = serde_json::to_string(&manifest)
@@ -3251,12 +3312,13 @@ async fn resolve_client_department_id(
     client_id: Option<Uuid>,
 ) -> Result<Option<Uuid>> {
     let Some(client_id) = client_id else {
+        info!("resolve_client_department_id: no client_id provided, department=None");
         return Ok(None);
     };
 
     let row = client
         .query_opt(
-            "SELECT u.department_id
+            "SELECT u.department_id, u.username
              FROM registered_clients rc
              JOIN users u ON rc.user_id = u.id
              WHERE rc.id = $1",
@@ -3264,6 +3326,25 @@ async fn resolve_client_department_id(
         )
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
+
+    match &row {
+        Some(r) => {
+            let dept: Option<Uuid> = r.try_get(0).ok().flatten();
+            let username: String = r.try_get(1).unwrap_or_default();
+            info!(
+                %client_id,
+                %username,
+                department_id = ?dept,
+                "resolve_client_department_id: found registered client"
+            );
+        }
+        None => {
+            info!(
+                %client_id,
+                "resolve_client_department_id: no registered_client found for this client_id"
+            );
+        }
+    }
 
     Ok(row.and_then(|r| r.try_get::<_, Option<Uuid>>(0).ok().flatten()))
 }
@@ -3273,16 +3354,9 @@ async fn fetch_allowed_skill_names(
     department_id: Option<Uuid>,
 ) -> Result<Vec<String>> {
     if let Some(department_id) = department_id {
-        let whitelist_count: i64 = client
-            .query_one(
-                "SELECT COUNT(*) FROM department_skill_whitelist WHERE department_id = $1",
-                &[&department_id],
-            )
-            .await
-            .map_err(|e| Error::Database(e.to_string()))?
-            .get(0);
-
-        if whitelist_count > 0 {
+        // 向上遍历部门树，找到第一个有白名单的部门
+        let effective_dept = resolve_effective_whitelist_department(client, department_id).await?;
+        if let Some(effective_id) = effective_dept {
             let rows = client
                 .query(
                     "SELECT s.name
@@ -3292,12 +3366,27 @@ async fn fetch_allowed_skill_names(
                        AND s.enabled = true
                        AND s.review_status = 'approved'
                      ORDER BY s.name ASC",
-                    &[&department_id],
+                    &[&effective_id],
                 )
                 .await
                 .map_err(|e| Error::Database(e.to_string()))?;
-            return Ok(rows.iter().map(|r| r.get::<_, String>(0)).collect());
+            let names: Vec<String> = rows.iter().map(|r| r.get::<_, String>(0)).collect();
+            info!(
+                ?department_id,
+                ?effective_id,
+                inherited = (effective_id != department_id),
+                count = names.len(),
+                skills = ?names,
+                "fetch_allowed_skill_names: whitelist resolved"
+            );
+            return Ok(names);
         }
+        info!(
+            ?department_id,
+            "fetch_allowed_skill_names: no whitelist in department chain, falling back to all approved"
+        );
+    } else {
+        info!("fetch_allowed_skill_names: no department, returning all approved skills");
     }
 
     let rows = client
@@ -3312,6 +3401,45 @@ async fn fetch_allowed_skill_names(
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
     Ok(rows.iter().map(|r| r.get::<_, String>(0)).collect())
+}
+
+async fn resolve_effective_whitelist_department(
+    client: &deadpool_postgres::Object,
+    start_department_id: Uuid,
+) -> Result<Option<Uuid>> {
+    let mut current_id = Some(start_department_id);
+    let max_depth = 10;
+
+    for _ in 0..max_depth {
+        let Some(dept_id) = current_id else {
+            break;
+        };
+
+        let count: i64 = client
+            .query_one(
+                "SELECT COUNT(*) FROM department_skill_whitelist WHERE department_id = $1",
+                &[&dept_id],
+            )
+            .await
+            .map_err(|e| Error::Database(e.to_string()))?
+            .get(0);
+
+        if count > 0 {
+            return Ok(Some(dept_id));
+        }
+
+        let parent_row = client
+            .query_opt(
+                "SELECT parent_id FROM departments WHERE id = $1",
+                &[&dept_id],
+            )
+            .await
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        current_id = parent_row.and_then(|r| r.try_get::<_, Option<Uuid>>(0).ok().flatten());
+    }
+
+    Ok(None)
 }
 
 async fn fetch_allowed_extension_names(client: &deadpool_postgres::Object) -> Result<Vec<String>> {
@@ -4683,15 +4811,10 @@ async fn create_department(
         return Err(Error::Conflict(format!("部门名称 '{}' 已存在", name)));
     }
 
-    // 验证 parent_id 有效性
-    if let Some(ref parent_id) = payload.parent_id {
-        let parent_exists = client
-            .query_opt("SELECT id FROM departments WHERE id = $1", &[parent_id])
-            .await
-            .map_err(|e| Error::Database(e.to_string()))?;
-        if parent_exists.is_none() {
-            return Err(Error::Validation("指定的父部门不存在".to_string()));
-        }
+    ensure_single_root_department(&client, payload.parent_id, None).await?;
+
+    if let Some(parent_id) = payload.parent_id {
+        ensure_parent_department_exists(&client, parent_id).await?;
     }
 
     let dept_id = Uuid::new_v4();
@@ -4786,17 +4909,13 @@ async fn update_department(
 
     // 验证 parent_id（不能设为自身，不能形成循环）
     if let Some(ref parent_opt) = payload.parent_id {
+        ensure_single_root_department(&client, *parent_opt, Some(dept_id)).await?;
+
         if let Some(ref parent_id) = parent_opt {
             if *parent_id == dept_id {
                 return Err(Error::Validation("部门不能设为自身的子部门".to_string()));
             }
-            let parent_exists = client
-                .query_opt("SELECT id FROM departments WHERE id = $1", &[parent_id])
-                .await
-                .map_err(|e| Error::Database(e.to_string()))?;
-            if parent_exists.is_none() {
-                return Err(Error::Validation("指定的父部门不存在".to_string()));
-            }
+            ensure_parent_department_exists(&client, *parent_id).await?;
         }
     }
 

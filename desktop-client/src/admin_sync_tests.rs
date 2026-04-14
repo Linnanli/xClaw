@@ -414,6 +414,27 @@ mod tests {
     }
 
     #[test]
+    fn test_build_client_config_url_appends_client_id_for_uuid_token() {
+        let url = crate::admin_sync::build_client_config_url(
+            "https://admin.example.com/",
+            "550e8400-e29b-41d4-a716-446655440000",
+        );
+        assert_eq!(
+            url,
+            "https://admin.example.com/api/client-config?client_id=550e8400-e29b-41d4-a716-446655440000"
+        );
+    }
+
+    #[test]
+    fn test_build_client_config_url_skips_client_id_for_non_uuid_token() {
+        let url = crate::admin_sync::build_client_config_url(
+            "https://admin.example.com",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        );
+        assert_eq!(url, "https://admin.example.com/api/client-config");
+    }
+
+    #[test]
     fn test_sync_with_interval() {
         let sync = crate::admin_sync::AdminConfigSync::new(
             "https://admin.example.com".into(),
@@ -469,5 +490,53 @@ mod tests {
         // 默认版本检查间隔应为 30 秒（通过 builder 覆盖验证）
         let sync_custom = sync.with_version_check_interval(std::time::Duration::from_secs(30));
         let _ = sync_custom.config();
+    }
+
+    // =========================================================================
+    // admin_config.json 值提取逻辑（ADMIN_CONFIG_MAPPINGS 转换）
+    // =========================================================================
+
+    /// 模拟 `apply_admin_overrides` 中从 JSON Value 提取环境变量值的逻辑。
+    fn extract_env_value(v: &serde_json::Value) -> Option<String> {
+        match v {
+            serde_json::Value::String(s) if !s.is_empty() => Some(s.clone()),
+            serde_json::Value::Bool(b) => Some(b.to_string()),
+            serde_json::Value::Number(n) => Some(n.to_string()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn test_admin_config_extracts_bool_as_string() {
+        let config: serde_json::Value = serde_json::json!({
+            "managed_mode": true,
+            "llm_backend": "openai",
+            "config_version": 42
+        });
+        assert_eq!(
+            extract_env_value(config.get("managed_mode").unwrap()),
+            Some("true".to_string()),
+            "Bool true should become string 'true'"
+        );
+        assert_eq!(
+            extract_env_value(config.get("llm_backend").unwrap()),
+            Some("openai".to_string()),
+        );
+        assert_eq!(
+            extract_env_value(config.get("config_version").unwrap()),
+            Some("42".to_string()),
+            "Number should become string"
+        );
+    }
+
+    #[test]
+    fn test_admin_config_rejects_null_and_empty() {
+        let config: serde_json::Value = serde_json::json!({
+            "missing_key": null,
+            "empty_string": ""
+        });
+        assert_eq!(extract_env_value(config.get("missing_key").unwrap()), None);
+        assert_eq!(extract_env_value(config.get("empty_string").unwrap()), None);
+        assert_eq!(extract_env_value(&serde_json::Value::Null), None);
     }
 }

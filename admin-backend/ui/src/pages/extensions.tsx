@@ -1430,6 +1430,19 @@ function ReviewScanSection({
 
       {!scanLoading && !scanError && scanResult && (
         <div className="space-y-2">
+          {canTriggerRescan && (
+            <button
+              type="button"
+              disabled={rescanLoading}
+              onClick={onRescan}
+              className="inline-flex items-center gap-2 border border-[#E8E8E8] bg-white px-3 py-1.5 font-mono text-[9px] font-semibold text-[#1A1A1A] disabled:opacity-50"
+            >
+              {rescanLoading && <Loader2 className="h-3 w-3 animate-spin" />}
+              重新扫描
+            </button>
+          )}
+          {rescanError && <p className="font-mono text-[10px] text-[#CF1322]">{rescanError}</p>}
+
           <div className="flex flex-wrap items-center gap-2 font-mono text-[10px] text-[#666666]">
             <span>扫描器：{scanResult.scanner_type}</span>
             <span>问题数：{scanResult.findings_count}</span>
@@ -1564,7 +1577,7 @@ function ReviewModal({ target, onClose, onSuccess }: ReviewModalProps) {
             scanError={scanError}
             scanResult={scanResult}
             findings={findings}
-            canTriggerRescan={target?.type === 'skill' && !scanLoading && !scanResult}
+            canTriggerRescan={target?.type === 'skill' && !scanLoading}
             rescanLoading={rescanLoading}
             rescanError={rescanError}
             onRescan={triggerRescan}

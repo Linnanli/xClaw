@@ -125,6 +125,14 @@ else
     log_info "LLM 配置已检测"
 fi
 
+# 开发环境：仅在显式 opt-in 时注入固定测试密钥，避免默认落到已知明文密钥。
+if [ -z "${SECRETS_MASTER_KEY:-}" ] && [ "${ALLOW_INSECURE_DEV_SECRETS:-0}" = "1" ]; then
+    export SECRETS_MASTER_KEY="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    log_warn "ALLOW_INSECURE_DEV_SECRETS=1，已注入开发固定密钥（仅本机调试）"
+elif [ -z "${SECRETS_MASTER_KEY:-}" ]; then
+    log_warn "SECRETS_MASTER_KEY 未设置；如需绕过 Keychain 弹窗，请显式设置 SECRETS_MASTER_KEY 或 ALLOW_INSECURE_DEV_SECRETS=1"
+fi
+
 # ============================================
 # 设置环境变量
 # ============================================

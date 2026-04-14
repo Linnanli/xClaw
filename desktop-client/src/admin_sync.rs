@@ -193,6 +193,14 @@ pub struct AdminConfigSync {
     version_check_interval: Duration,
 }
 
+pub(crate) fn build_client_config_url(admin_url: &str, client_token: &str) -> String {
+    let base = format!("{}/api/client-config", admin_url.trim_end_matches('/'));
+    if uuid::Uuid::parse_str(client_token).is_ok() {
+        return format!("{}?client_id={}", base, client_token);
+    }
+    base
+}
+
 impl AdminConfigSync {
     /// 创建新的同步器。
     pub fn new(admin_url: String, client_token: String) -> Self {
@@ -231,7 +239,7 @@ impl AdminConfigSync {
     /// 成功时更新内存缓存和本地文件缓存。
     /// 失败时保持现有配置不变。
     pub async fn fetch_once(&self) -> Result<AdminClientConfig, String> {
-        let url = format!("{}/api/client-config", self.admin_url);
+        let url = build_client_config_url(&self.admin_url, &self.client_token);
 
         let response = self
             .http_client
