@@ -207,3 +207,5 @@ npm run test:e2e
 - `admin-backend/tests/integration_smoke_tests.rs` — 冒烟测试
 - `desktop-client/tests/tauri_command_contract_tests.rs` — Tauri 命令契约测试
 - `admin-backend/ui/cypress/` — Cypress E2E 测试
+- `docs/plans/project-level-pict-test-design.md` — 项目级 PICT 测试矩阵与子模型设计
+- `docs/plans/skill-management-test-generation-comparison.md` — 技能管理模块的常规生成 vs PICT 驱动生成对照
