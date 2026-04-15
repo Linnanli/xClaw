@@ -151,15 +151,34 @@ mod tests {
     #[test]
     fn test_contract_approval_needed_event() {
         let event = ChatEvent::ApprovalNeeded {
+            thread_id: "thread-1".into(),
             request_id: "r-1".into(),
             tool_name: "rm".into(),
             description: "delete file".into(),
         };
         let json: serde_json::Value = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "approval_needed");
+        assert!(json["thread_id"].is_string());
         assert!(json["request_id"].is_string());
         assert!(json["tool_name"].is_string());
         assert!(json["description"].is_string());
+    }
+
+    #[test]
+    fn test_contract_approval_result_event() {
+        let event = ChatEvent::ApprovalResult {
+            ticket_id: "ticket-1".into(),
+            thread_id: "thread-1".into(),
+            request_id: Some("req-1".into()),
+            status: "approved".into(),
+            review_comment: Some("ok".into()),
+            expires_at: Some("2025-01-01T00:00:00Z".into()),
+        };
+        let json: serde_json::Value = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "approval_result");
+        assert_eq!(json["ticket_id"], "ticket-1");
+        assert_eq!(json["request_id"], "req-1");
+        assert_eq!(json["status"], "approved");
     }
 
     #[test]

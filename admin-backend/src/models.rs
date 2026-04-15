@@ -573,9 +573,23 @@ pub struct ConversationReportPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationAttachmentPayload {
+    pub id: String,
+    pub kind: String,
+    pub mime_type: String,
+    pub filename: Option<String>,
+    pub size_bytes: Option<u64>,
+    pub extracted_text: Option<String>,
+    pub image_data_base64: Option<String>,
+    pub duration_secs: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationMessagePayload {
     pub role: String,
     pub content: String,
+    #[serde(default)]
+    pub attachments: Vec<ConversationAttachmentPayload>,
     pub model_id: Option<String>,
     #[serde(default)]
     pub input_tokens: i32,

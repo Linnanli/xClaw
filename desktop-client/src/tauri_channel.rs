@@ -78,9 +78,23 @@ pub enum ChatEvent {
     /// 工具需要用户审批。
     #[serde(rename = "approval_needed")]
     ApprovalNeeded {
+        thread_id: String,
         request_id: String,
         tool_name: String,
         description: String,
+    },
+    /// 异步审批结果（后台工单轮询完成后通知前端）。
+    #[serde(rename = "approval_result")]
+    ApprovalResult {
+        ticket_id: String,
+        thread_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
+        status: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        review_comment: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        expires_at: Option<String>,
     },
     /// 图片已生成。
     #[serde(rename = "image_generated")]
@@ -264,6 +278,7 @@ impl TauriChannel {
                 description,
                 ..
             } => ChatEvent::ApprovalNeeded {
+                thread_id: String::new(),
                 request_id: request_id.clone(),
                 tool_name: tool_name.clone(),
                 description: description.clone(),
@@ -383,6 +398,27 @@ impl Channel for TauriChannel {
                     .unwrap_or_default()
                     .to_string(),
                 fired: metadata.get("fired").and_then(|v| v.as_u64()).unwrap_or(1),
+            };
+            return self.emit_event(&event);
+        }
+
+        if let StatusUpdate::ApprovalNeeded {
+            request_id,
+            tool_name,
+            description,
+            ..
+        } = &status
+        {
+            let event = ChatEvent::ApprovalNeeded {
+                thread_id: metadata
+                    .get("notify_thread_id")
+                    .and_then(|value| value.as_str())
+                    .or_else(|| metadata.get("thread_id").and_then(|value| value.as_str()))
+                    .unwrap_or_default()
+                    .to_string(),
+                request_id: request_id.clone(),
+                tool_name: tool_name.clone(),
+                description: description.clone(),
             };
             return self.emit_event(&event);
         }

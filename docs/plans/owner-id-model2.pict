@@ -1,0 +1,14 @@
+# Consumer behavior after identity split
+Operation: ConversationAudit, QuotaPrecheck, UsageReport, ModelFetch, ApprovalSubmit
+BackendUserState: ReadyUuid, Missing, ReadFailure
+AdminRouteState: Success, Denied, Unavailable, NotApplicable
+
+# Constraints
+IF [Operation] = "ConversationAudit" THEN [AdminRouteState] = "NotApplicable";
+IF [Operation] = "UsageReport" THEN [AdminRouteState] <> "Denied";
+IF [Operation] = "UsageReport" THEN [AdminRouteState] <> "NotApplicable";
+IF [Operation] = "ModelFetch" THEN [AdminRouteState] <> "Denied";
+IF [Operation] = "ModelFetch" THEN [AdminRouteState] <> "NotApplicable";
+IF [Operation] = "ApprovalSubmit" THEN [AdminRouteState] <> "Denied";
+IF [Operation] = "ApprovalSubmit" THEN [AdminRouteState] <> "NotApplicable";
+IF [Operation] = "QuotaPrecheck" THEN [AdminRouteState] <> "NotApplicable";

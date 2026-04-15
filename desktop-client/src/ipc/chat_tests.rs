@@ -7,7 +7,11 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::ipc::chat::SendMessageResponse;
+    use crate::ipc::chat::{
+        usage_report_backend_user_id, FrontendAttachment, SendMessageResponse,
+    };
+    use std::sync::RwLock;
+    use uuid::Uuid;
 
     // =========================================================================
     // 单元测试 — 正常路径
@@ -178,5 +182,48 @@ mod tests {
             normalize_base_url("https://api.openai.com/v1/"),
             "https://api.openai.com/v1",
         );
+    }
+
+    #[test]
+    fn test_frontend_attachment_deserialization() {
+        let json = r#"{
+            "id":"att-1",
+            "kind":"image",
+            "mime_type":"image/png",
+            "filename":"diagram.png",
+            "size_bytes":12,
+            "extracted_text":null,
+            "data":[1,2,3],
+            "duration_secs":null
+        }"#;
+
+        let attachment: FrontendAttachment = serde_json::from_str(json).unwrap();
+        assert_eq!(attachment.id, "att-1");
+        assert_eq!(attachment.mime_type, "image/png");
+        assert_eq!(attachment.data, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_usage_report_backend_user_id_returns_none_when_missing() {
+        let lock = RwLock::new(None);
+
+        let user_id = usage_report_backend_user_id(&lock)
+            .expect("missing identity should not be a hard error for usage reporting");
+
+        assert!(user_id.is_none());
+    }
+
+    #[test]
+    fn test_usage_report_backend_user_id_reports_poisoned_lock() {
+        let lock = RwLock::new(Some(Uuid::nil()));
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = lock.write().expect("write lock should succeed");
+            panic!("poison backend user id lock");
+        });
+
+        let error = usage_report_backend_user_id(&lock)
+            .expect_err("poisoned backend user id lock should fail");
+
+        assert_eq!(error, "后台用户身份读取失败，跳过费用上报");
     }
 }

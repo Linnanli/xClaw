@@ -4,10 +4,11 @@
 //! 提供任务事件历史和后续提示功能。
 
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
 use crate::state::EngineState;
+use crate::tauri_channel::ChatEvent;
 use ironclaw::context::JobState;
 
 // ─── 数据类型 ────────────────────────────────────────────────────────
@@ -76,6 +77,52 @@ pub struct JobPromptResponse {
     pub job_id: String,
 }
 
+fn ensure_owned_job(
+    state: &crate::state::AppState,
+    job: &ironclaw::context::JobContext,
+) -> Result<(), String> {
+    if job.user_id == state.scope_id {
+        return Ok(());
+    }
+
+    Err("Job not found or access denied".into())
+}
+
+async fn stop_active_job(
+    scheduler: Option<std::sync::Arc<ironclaw::agent::Scheduler>>,
+    job_id: Uuid,
+    job_state: JobState,
+) -> Result<(), String> {
+    if !job_state.is_active() {
+        return Ok(());
+    }
+
+    let scheduler = scheduler
+        .ok_or_else(|| "Failed to cancel job: active job scheduler unavailable".to_string())?;
+
+    scheduler
+        .stop(job_id)
+        .await
+        .map_err(|error| format!("Failed to cancel job: {}", error))
+}
+
+fn emit_job_status(app_handle: &AppHandle, job_id: Uuid, title: &str, status: &str) {
+    let event = ChatEvent::JobStatus {
+        job_id: job_id.to_string(),
+        title: title.to_string(),
+        status: status.to_string(),
+    };
+    let _ = app_handle.emit("chat-event", event);
+}
+
+fn restart_job_title(job: &ironclaw::context::JobContext, failure_reason: &str) -> String {
+    if failure_reason.is_empty() || matches!(job.state, JobState::Cancelled) {
+        return job.title.clone();
+    }
+
+    format!("Previous attempt failed: {}. Retry: {}", failure_reason, job.title)
+}
+
 // ─── Tauri Commands ──────────────────────────────────────────────────
 
 /// 列出当前用户的所有任务。
@@ -85,7 +132,7 @@ pub async fn ic_list_jobs(state: State<'_, EngineState>) -> Result<Vec<JobInfoRe
     let db = state.db.as_ref().ok_or("Database not available")?.clone();
 
     let jobs = db
-        .list_agent_jobs_for_user(&state.owner_id)
+        .list_agent_jobs_for_user(&state.scope_id)
         .await
         .map_err(|e| format!("Failed to list jobs: {}", e))?;
 
@@ -235,8 +282,8 @@ pub async fn ic_job_prompt(
     // 通过消息系统发送后续提示
     let prompt_content = format!("!prompt {} {}", uuid, content);
 
-    let msg = ironclaw::channels::IncomingMessage::new("tauri", &state.owner_id, &prompt_content)
-        .with_owner_id(&state.owner_id);
+    let msg = ironclaw::channels::IncomingMessage::new("tauri", &state.scope_id, &prompt_content)
+        .with_owner_id(&state.scope_id);
 
     state
         .msg_sender
@@ -250,4 +297,106 @@ pub async fn ic_job_prompt(
         status: "sent".to_string(),
         job_id,
     })
+}
+
+/// 取消运行中的 agent 任务。
+#[tauri::command]
+pub async fn ic_cancel_job(
+    app_handle: tauri::AppHandle,
+    state: State<'_, EngineState>,
+    job_id: String,
+) -> Result<(), String> {
+    let state = state.get()?;
+    let uuid = Uuid::parse_str(&job_id).map_err(|_| format!("Invalid job ID: {}", job_id))?;
+    let db = state.db.as_ref().ok_or("Database not available")?;
+
+    let job = db
+        .get_job(uuid)
+        .await
+        .map_err(|e| format!("Failed to load job: {}", e))?
+        .ok_or_else(|| format!("Job not found: {}", job_id))?;
+
+    ensure_owned_job(state, &job)?;
+
+    let scheduler = state.scheduler_slot.read().await.as_ref().cloned();
+    stop_active_job(scheduler, uuid, job.state).await?;
+
+    db.update_job_status(uuid, JobState::Cancelled, Some("Cancelled by user"))
+        .await
+        .map_err(|e| format!("Failed to cancel job: {}", e))?;
+
+    emit_job_status(&app_handle, uuid, &job.title, "cancelled");
+    tracing::info!(job_id = %uuid, "Job cancelled");
+    Ok(())
+}
+
+#[cfg(test)]
+mod cancel_tests {
+    use super::stop_active_job;
+    use ironclaw::context::JobState;
+    use uuid::Uuid;
+
+    #[tokio::test]
+    async fn active_job_without_scheduler_is_rejected() {
+        let error = stop_active_job(None, Uuid::nil(), JobState::InProgress)
+            .await
+            .expect_err("active jobs require scheduler stop before marking cancelled");
+
+        assert_eq!(error, "Failed to cancel job: active job scheduler unavailable");
+    }
+
+    #[tokio::test]
+    async fn inactive_job_without_scheduler_is_allowed() {
+        stop_active_job(None, Uuid::nil(), JobState::Completed)
+            .await
+            .expect("inactive job should not require scheduler stop");
+    }
+}
+
+/// 重试一个已结束的 agent 任务。
+#[tauri::command]
+pub async fn ic_restart_job(
+    app_handle: tauri::AppHandle,
+    state: State<'_, EngineState>,
+    job_id: String,
+) -> Result<(), String> {
+    let state = state.get()?;
+    let uuid = Uuid::parse_str(&job_id).map_err(|_| format!("Invalid job ID: {}", job_id))?;
+    let db = state.db.as_ref().ok_or("Database not available")?;
+
+    let job = db
+        .get_job(uuid)
+        .await
+        .map_err(|e| format!("Failed to load job: {}", e))?
+        .ok_or_else(|| format!("Job not found: {}", job_id))?;
+
+    ensure_owned_job(state, &job)?;
+
+    if job.state.is_active() {
+        return Err(format!("Cannot restart active job in state '{}'", job.state));
+    }
+
+    let scheduler = state
+        .scheduler_slot
+        .read()
+        .await
+        .as_ref()
+        .cloned()
+        .ok_or("Scheduler not available")?;
+
+    let failure_reason = db
+        .get_agent_job_failure_reason(uuid)
+        .await
+        .map_err(|e| format!("Failed to load job failure reason: {}", e))?
+        .unwrap_or_default();
+
+    let title = restart_job_title(&job, &failure_reason);
+    let new_job_id = scheduler
+        .dispatch_job(&job.user_id, &title, &job.description, None)
+        .await
+        .map_err(|e| format!("Failed to restart job: {}", e))?;
+
+    emit_job_status(&app_handle, new_job_id, &title, "in_progress");
+    tracing::info!(old_job_id = %uuid, new_job_id = %new_job_id, "Job restarted");
+    Ok(())
 }

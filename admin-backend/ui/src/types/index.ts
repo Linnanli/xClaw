@@ -165,10 +165,22 @@ export interface ConversationDetail extends Conversation {
   messages: ConversationMessage[]
 }
 
+export interface ConversationAttachment {
+  id: string
+  kind: string
+  mime_type: string
+  filename?: string
+  size_bytes?: number
+  extracted_text?: string
+  image_data_base64?: string
+  duration_secs?: number
+}
+
 export interface ConversationMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
   content: string
+  attachments: ConversationAttachment[]
   model_id?: string
   input_tokens: number
   output_tokens: number

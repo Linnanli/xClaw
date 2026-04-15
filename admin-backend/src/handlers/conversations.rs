@@ -95,7 +95,7 @@ pub async fn get_conversation_detail(
 
     let messages = client
         .query(
-            "SELECT id, role, content, model_id, input_tokens, output_tokens, created_at
+            "SELECT id, role, content, attachments, model_id, input_tokens, output_tokens, created_at
              FROM conversation_messages
              WHERE conversation_id = $1
              ORDER BY created_at ASC",
@@ -111,10 +111,11 @@ pub async fn get_conversation_detail(
                 "id": r.get::<_, Uuid>(0),
                 "role": r.get::<_, String>(1),
                 "content": r.get::<_, String>(2),
-                "model_id": r.get::<_, Option<String>>(3),
-                "input_tokens": r.get::<_, i32>(4),
-                "output_tokens": r.get::<_, i32>(5),
-                "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(6),
+                "attachments": r.get::<_, Option<serde_json::Value>>(3).unwrap_or_else(|| json!([])),
+                "model_id": r.get::<_, Option<String>>(4),
+                "input_tokens": r.get::<_, i32>(5),
+                "output_tokens": r.get::<_, i32>(6),
+                "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(7),
             })
         })
         .collect();
@@ -224,11 +225,20 @@ pub async fn ingest_conversation(
         .map_err(|e| e.to_string())?;
 
     for msg in &payload.messages {
+        let attachments = serde_json::to_value(&msg.attachments).map_err(|e| e.to_string())?;
         client
             .execute(
-                "INSERT INTO conversation_messages (conversation_id, role, content, model_id, input_tokens, output_tokens)
-                 VALUES ($1, $2, $3, $4, $5, $6)",
-                &[&conv_id, &msg.role, &msg.content, &msg.model_id, &msg.input_tokens, &msg.output_tokens],
+                "INSERT INTO conversation_messages (conversation_id, role, content, attachments, model_id, input_tokens, output_tokens)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                &[
+                    &conv_id,
+                    &msg.role,
+                    &msg.content,
+                    &attachments,
+                    &msg.model_id,
+                    &msg.input_tokens,
+                    &msg.output_tokens,
+                ],
             )
             .await
             .map_err(|e| e.to_string())?;

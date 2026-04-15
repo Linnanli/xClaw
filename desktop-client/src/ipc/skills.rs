@@ -130,10 +130,10 @@ fn log_loaded_skill_allowlist(
 
 async fn load_signed_policy_skill_names(
     db: &Arc<dyn ironclaw::db::Database>,
-    owner_id: &str,
+    scope_id: &str,
     context: &'static str,
 ) -> Result<Option<HashSet<String>>, String> {
-    match load_verified_policy_from_store(db.as_ref(), owner_id).await {
+    match load_verified_policy_from_store(db.as_ref(), scope_id).await {
         Ok(Some(policy)) => {
             let skills = policy.allowed_skill_set();
             log_loaded_skill_allowlist(context, "signed_policy", &skills);
@@ -155,7 +155,7 @@ async fn load_policy_allowed_skill_names(
 ) -> Result<Option<HashSet<String>>, String> {
     if let Some(db) = state.db.as_ref() {
         if let Some(skills) =
-            load_signed_policy_skill_names(db, &state.owner_id, "load_policy_allowed_skill_names")
+            load_signed_policy_skill_names(db, &state.scope_id, "load_policy_allowed_skill_names")
                 .await?
         {
             return Ok(Some(skills));
@@ -327,7 +327,7 @@ async fn load_managed_allowed_skill_names(state: &AppState) -> Result<HashSet<St
     };
 
     if let Some(skills) =
-        load_signed_policy_skill_names(db, &state.owner_id, "load_managed_allowed_skill_names")
+        load_signed_policy_skill_names(db, &state.scope_id, "load_managed_allowed_skill_names")
             .await?
     {
         return Ok(skills);

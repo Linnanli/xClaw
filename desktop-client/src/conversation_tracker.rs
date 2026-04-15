@@ -15,18 +15,22 @@
 //! # 设计决策
 //!
 //! - 按 thread_id 分组，每个 thread 维护独立的消息缓冲
-//! - 超过 30 分钟无新消息视为对话结束，自动 flush
+//! - 超过 10 分钟无新消息视为对话结束，自动 flush
 //! - 显式切换 thread 时 flush 旧 thread
 //! - 上报失败不影响主流程（DataReporter 有重试机制）
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use uuid::Uuid;
 
-use crate::data_reporter::{ClientReport, ConversationMessage, DataReporter};
+use crate::data_reporter::{
+    ClientReport, ConversationAttachment, ConversationMessage, DataReporter,
+};
 
 /// 单个 thread 的对话缓冲。
 struct ThreadBuffer {
+    report_id: Uuid,
     messages: Vec<ConversationMessage>,
     last_activity: Instant,
     /// 本次对话使用的主模型（最后一条 assistant 消息的 model_id）
@@ -40,6 +44,7 @@ struct ThreadBuffer {
 impl ThreadBuffer {
     fn new() -> Self {
         Self {
+            report_id: Uuid::new_v4(),
             messages: Vec::new(),
             last_activity: Instant::now(),
             model_id: None,
@@ -60,23 +65,42 @@ impl ThreadBuffer {
 /// 对话追踪器。
 ///
 /// 线程安全，通过 `Arc<ConversationTracker>` 在 Tauri 命令和 Channel 之间共享。
+pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+pub const IDLE_FLUSH_INTERVAL: Duration = Duration::from_secs(60);
+
 pub struct ConversationTracker {
     buffers: Mutex<HashMap<String, ThreadBuffer>>,
-    user_id: String,
+    scope_id: String,
+    backend_user_id: Arc<std::sync::RwLock<Option<Uuid>>>,
     pub idle_timeout: Duration,
 }
 
 impl ConversationTracker {
-    pub fn new(user_id: String) -> Self {
+    pub fn new(scope_id: String) -> Self {
         Self {
             buffers: Mutex::new(HashMap::new()),
-            user_id,
-            idle_timeout: Duration::from_secs(30 * 60),
+            scope_id,
+            backend_user_id: Arc::new(std::sync::RwLock::new(None)),
+            idle_timeout: DEFAULT_IDLE_TIMEOUT,
         }
     }
 
+    pub fn with_backend_user_id_sink(
+        mut self,
+        backend_user_id: Arc<std::sync::RwLock<Option<Uuid>>>,
+    ) -> Self {
+        self.backend_user_id = backend_user_id;
+        self
+    }
+
     /// 记录用户消息。
-    pub fn record_user_message(&self, thread_id: &str, content: &str, dlp_flagged: bool) {
+    pub fn record_user_message(
+        &self,
+        thread_id: &str,
+        content: &str,
+        dlp_flagged: bool,
+        attachments: &[ConversationAttachment],
+    ) {
         let mut buffers = self.lock_buffers();
         let buf = buffers
             .entry(thread_id.to_string())
@@ -88,6 +112,7 @@ impl ConversationTracker {
         buf.messages.push(ConversationMessage {
             role: "user".to_string(),
             content: content.to_string(),
+            attachments: attachments.to_vec(),
             model_id: None,
             input_tokens: 0,
             output_tokens: 0,
@@ -129,6 +154,7 @@ impl ConversationTracker {
         buf.messages.push(ConversationMessage {
             role: "assistant".to_string(),
             content: content.to_string(),
+            attachments: Vec::new(),
             model_id: model_id.map(|s| s.to_string()),
             input_tokens,
             output_tokens,
@@ -205,10 +231,17 @@ impl ConversationTracker {
 
         let mut used_skills: Vec<String> = buf.used_skills.into_iter().collect();
         used_skills.sort();
+        let report_user_id = self
+            .backend_user_id
+            .read()
+            .ok()
+            .and_then(|user_id| *user_id)
+            .map(|user_id: Uuid| user_id.to_string())
+            .unwrap_or_else(|| self.scope_id.clone());
 
         Some(ClientReport::Conversation {
-            client_conversation_id: format!("{}-{}", self.user_id, thread_id),
-            user_id: self.user_id.clone(),
+            client_conversation_id: format!("{}-{}-{}", self.scope_id, thread_id, buf.report_id),
+            user_id: report_user_id,
             topic: None,
             model_id: buf.model_id,
             dlp_flagged: Some(buf.dlp_flagged),
@@ -241,11 +274,18 @@ mod tests {
     }
 
     #[test]
+    fn test_default_idle_timeout_is_ten_minutes() {
+        let tracker = make_tracker();
+
+        assert_eq!(tracker.idle_timeout, DEFAULT_IDLE_TIMEOUT);
+    }
+
+    #[test]
     fn test_record_and_finish_thread() {
         let tracker = make_tracker();
         let reporter = make_reporter();
 
-        tracker.record_user_message("t1", "hello", false);
+        tracker.record_user_message("t1", "hello", false, &[]);
         tracker.record_assistant_message("t1", "hi", Some("gpt-4o"), 10, 5);
         tracker.finish_thread("t1", &reporter);
 
@@ -266,7 +306,7 @@ mod tests {
         let tracker = make_tracker();
         let reporter = make_reporter();
 
-        tracker.record_user_message("t2", "secret content", true);
+        tracker.record_user_message("t2", "secret content", true, &[]);
         tracker.record_assistant_message("t2", "ok", None, 5, 3);
         tracker.finish_thread("t2", &reporter);
 
@@ -286,7 +326,7 @@ mod tests {
         tracker.idle_timeout = Duration::from_millis(1); // 极短超时用于测试
         let reporter = make_reporter();
 
-        tracker.record_user_message("t3", "hello", false);
+        tracker.record_user_message("t3", "hello", false, &[]);
         tracker.record_assistant_message("t3", "hi", None, 5, 3);
 
         std::thread::sleep(Duration::from_millis(5));
@@ -300,7 +340,7 @@ mod tests {
         let tracker = make_tracker();
         let reporter = make_reporter();
 
-        tracker.record_user_message("thread-abc", "hi", false);
+        tracker.record_user_message("thread-abc", "hi", false, &[]);
         tracker.record_assistant_message("thread-abc", "hello", None, 3, 2);
         tracker.finish_thread("thread-abc", &reporter);
 
@@ -318,11 +358,116 @@ mod tests {
     }
 
     #[test]
+    fn test_same_thread_multiple_reports_have_distinct_ids() {
+        let tracker = make_tracker();
+        let reporter = make_reporter();
+
+        tracker.record_user_message("thread-repeat", "first", false, &[]);
+        tracker.record_assistant_message("thread-repeat", "reply-1", None, 3, 2);
+        tracker.finish_thread("thread-repeat", &reporter);
+
+        let first_report_id = match &reporter.drain_for_test()[0] {
+            ClientReport::Conversation {
+                client_conversation_id,
+                ..
+            } => client_conversation_id.clone(),
+            _ => panic!("Expected Conversation report"),
+        };
+
+        tracker.record_user_message("thread-repeat", "second", false, &[]);
+        tracker.record_assistant_message("thread-repeat", "reply-2", None, 4, 3);
+        tracker.finish_thread("thread-repeat", &reporter);
+
+        let second_report_id = match &reporter.drain_for_test()[0] {
+            ClientReport::Conversation {
+                client_conversation_id,
+                ..
+            } => client_conversation_id.clone(),
+            _ => panic!("Expected Conversation report"),
+        };
+
+        assert_ne!(first_report_id, second_report_id);
+    }
+
+    #[test]
+    fn test_report_uses_backend_user_id_when_available() {
+        let backend_user_id = std::sync::Arc::new(std::sync::RwLock::new(Some(
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
+        )));
+        let tracker = ConversationTracker::new("scope-test".to_string())
+            .with_backend_user_id_sink(std::sync::Arc::clone(&backend_user_id));
+        let reporter = make_reporter();
+
+        tracker.record_user_message("thread-backend", "hello", false, &[]);
+        tracker.record_assistant_message("thread-backend", "hi", None, 3, 2);
+        tracker.finish_thread("thread-backend", &reporter);
+
+        let reports = reporter.drain_for_test();
+        if let ClientReport::Conversation {
+            user_id,
+            client_conversation_id,
+            ..
+        } = &reports[0]
+        {
+            assert_eq!(user_id, "550e8400-e29b-41d4-a716-446655440000");
+            assert!(client_conversation_id.contains("scope-test"));
+        } else {
+            panic!("Expected Conversation report");
+        }
+    }
+
+    #[test]
+    fn test_report_falls_back_to_scope_id_when_backend_user_missing() {
+        let backend_user_id = std::sync::Arc::new(std::sync::RwLock::new(None));
+        let tracker = ConversationTracker::new("scope-fallback".to_string())
+            .with_backend_user_id_sink(std::sync::Arc::clone(&backend_user_id));
+        let reporter = make_reporter();
+
+        tracker.record_user_message("thread-fallback", "hello", false, &[]);
+        tracker.record_assistant_message("thread-fallback", "hi", None, 3, 2);
+        tracker.finish_thread("thread-fallback", &reporter);
+
+        let reports = reporter.drain_for_test();
+        if let ClientReport::Conversation { user_id, .. } = &reports[0] {
+            assert_eq!(user_id, "scope-fallback");
+        } else {
+            panic!("Expected Conversation report");
+        }
+    }
+
+    #[test]
+    fn test_report_falls_back_to_scope_id_when_backend_user_lock_poisoned() {
+        let backend_user_id = std::sync::Arc::new(std::sync::RwLock::new(Some(Uuid::nil())));
+        let poisoned_backend_user_id = std::sync::Arc::clone(&backend_user_id);
+        let _ = std::panic::catch_unwind(move || {
+            let _guard = poisoned_backend_user_id
+                .write()
+                .expect("write lock should succeed");
+            panic!("poison backend user id lock");
+        });
+
+        let tracker = ConversationTracker::new("scope-read-failure".to_string())
+            .with_backend_user_id_sink(backend_user_id);
+        let reporter = make_reporter();
+
+        tracker.record_user_message("thread-read-failure", "hello", false, &[]);
+        tracker.record_assistant_message("thread-read-failure", "hi", None, 3, 2);
+        tracker.finish_thread("thread-read-failure", &reporter);
+
+        let reports = reporter.drain_for_test();
+        if let ClientReport::Conversation { user_id, .. } = &reports[0] {
+            assert_eq!(user_id, "scope-read-failure");
+        } else {
+            panic!("Expected Conversation report");
+        }
+    }
+
+    #[test]
     fn test_activated_skills_are_deduplicated_in_report() {
         let tracker = make_tracker();
         let reporter = make_reporter();
 
-        tracker.record_user_message("thread-skill", "use some skills", false);
+        tracker.record_user_message("thread-skill", "use some skills", false, &[]);
         tracker.record_activated_skills(
             "thread-skill",
             &[

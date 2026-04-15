@@ -4,6 +4,7 @@
 
 use crate::auth_token_manager::AuthTokenManager;
 use crate::{Error, Result};
+use uuid::Uuid;
 
 /// 构建带超时的 HTTP 客户端。
 fn build_http_client(timeout_secs: u64) -> Result<reqwest::Client> {
@@ -19,6 +20,15 @@ fn admin_env() -> (String, String) {
         std::env::var("ADMIN_BACKEND_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
     let token = std::env::var("ADMIN_AUTH_TOKEN").unwrap_or_default();
     (url, token)
+}
+
+fn resolve_applicant_id_value(backend_user_id: &std::sync::RwLock<Option<Uuid>>) -> Result<Uuid> {
+    crate::state::require_backend_user_id_value(backend_user_id, "审批申请人身份")
+        .map_err(Error::ConfigError)
+}
+
+fn resolve_applicant_id(state: &crate::state::AppState) -> Result<Uuid> {
+    resolve_applicant_id_value(&state.backend_user_id)
 }
 
 /// 获取认证令牌。
@@ -133,20 +143,50 @@ pub async fn get_watermark_config() -> Result<serde_json::Value> {
 #[tauri::command]
 pub async fn submit_approval_ticket(
     app_handle: tauri::AppHandle,
+    state: tauri::State<'_, crate::state::EngineState>,
     store: tauri::State<'_, crate::approval_polling::PendingTicketStore>,
+    request_id: String,
+    tool_name: String,
     content: String,
     thread_id: String,
 ) -> Result<String> {
     // 在进入 async 前提取 Arc，避免 State 生命周期跨 await 的问题
+    let state = state
+        .get()
+        .map_err(Error::ConfigError)?;
     let store_arc = store.0.clone();
     let (admin_url, client_token) = admin_env();
+    if client_token.is_empty() {
+        return Err(Error::ConfigError("未配置 ADMIN_AUTH_TOKEN，无法提交审批工单".into()));
+    }
+
+    {
+        let store = store_arc.lock().await;
+        if let Some(existing_ticket_id) = store.ticket_id_for_request_id(&request_id) {
+            tracing::info!(
+                ticket_id = %existing_ticket_id,
+                request_id = %request_id,
+                thread_id = %thread_id,
+                "Approval ticket already pending, reusing existing ticket"
+            );
+            return Ok(existing_ticket_id);
+        }
+    }
+
+    let applicant_id = resolve_applicant_id(state)?;
     let http = build_http_client(10)?;
+    let operation_name = if tool_name.trim().is_empty() {
+        "工具审批".to_string()
+    } else {
+        format!("工具审批: {}", tool_name.trim())
+    };
+    let reason = format!("request_id={request_id}\nthread_id={thread_id}\n{content}");
 
     let payload = serde_json::json!({
-        "operation_type": "conversation_submit",
-        "operation_name": content.chars().take(100).collect::<String>(),
-        "reason": content,
-        "applicant_id": "00000000-0000-0000-0000-000000000000",
+        "operation_type": "tool_approval",
+        "operation_name": operation_name,
+        "reason": reason,
+        "applicant_id": applicant_id,
     });
 
     let resp = http
@@ -181,6 +221,7 @@ pub async fn submit_approval_ticket(
         .add(crate::approval_polling::PendingTicket {
             ticket_id: ticket_id.clone(),
             thread_id: thread_id.clone(),
+            request_id: Some(request_id.clone()),
             content: content.chars().take(200).collect(),
         });
 
@@ -190,14 +231,70 @@ pub async fn submit_approval_ticket(
         app_handle,
         ticket_id.clone(),
         thread_id.clone(),
+        Some(request_id.clone()),
         store_arc2,
     ));
 
     tracing::info!(
         ticket_id = %ticket_id,
+        request_id = %request_id,
         thread_id = %thread_id,
         "Approval ticket submitted, polling started"
     );
 
     Ok(ticket_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_applicant_id_value;
+    use crate::Error;
+    use std::sync::RwLock;
+    use uuid::Uuid;
+
+    #[test]
+    fn test_resolve_applicant_id_value_returns_backend_uuid() {
+        let applicant_id =
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440123").expect("uuid should parse");
+        let backend_user_id = RwLock::new(Some(applicant_id));
+
+        let resolved =
+            resolve_applicant_id_value(&backend_user_id).expect("ready backend identity should resolve");
+
+        assert_eq!(resolved, applicant_id);
+    }
+
+    #[test]
+    fn test_resolve_applicant_id_value_fails_when_missing() {
+        let backend_user_id = RwLock::new(None);
+
+        let error = resolve_applicant_id_value(&backend_user_id)
+            .expect_err("missing backend identity should block approval submission");
+
+        match error {
+            Error::ConfigError(message) => {
+                assert_eq!(message, "审批申请人身份：后台用户身份尚未就绪");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_applicant_id_value_fails_when_lock_poisoned() {
+        let backend_user_id = RwLock::new(Some(Uuid::nil()));
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = backend_user_id.write().expect("write lock should succeed");
+            panic!("poison applicant identity lock");
+        });
+
+        let error = resolve_applicant_id_value(&backend_user_id)
+            .expect_err("poisoned backend identity should block approval submission");
+
+        match error {
+            Error::ConfigError(message) => {
+                assert_eq!(message, "审批申请人身份：后台用户身份读取失败");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
 }

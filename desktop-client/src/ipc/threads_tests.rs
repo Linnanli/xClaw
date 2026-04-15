@@ -54,6 +54,7 @@ mod tests {
             id: "msg-001".into(),
             role: "user".into(),
             content: "Hello, world!".into(),
+            attachments: Vec::new(),
             created_at: "2025-06-01T10:30:00+00:00".into(),
         };
         let json = serde_json::to_value(&msg).unwrap();
@@ -152,6 +153,7 @@ mod tests {
     ///   id: string;
     ///   role: string;
     ///   content: string;
+    ///   attachments?: CompleteAttachment[];
     ///   created_at: string;
     /// }
     /// ```
@@ -161,6 +163,7 @@ mod tests {
             id: "m-1".into(),
             role: "user".into(),
             content: "test".into(),
+            attachments: Vec::new(),
             created_at: "2025-01-01T00:00:00+00:00".into(),
         };
         let json: serde_json::Value = serde_json::to_value(&msg).unwrap();
@@ -205,6 +208,7 @@ mod tests {
             id: "m-1".into(),
             role: "user".into(),
             content: "Hello".into(),
+            attachments: Vec::new(),
             created_at: "2025-01-01T00:00:00+00:00".into(),
         };
         let json_str = serde_json::to_string(&msg).unwrap();
@@ -239,6 +243,7 @@ mod tests {
             id: "m-1".into(),
             role: "user".into(),
             content: "你好世界 🌍 مرحبا العالم".into(),
+            attachments: Vec::new(),
             created_at: "2025-01-01T00:00:00+00:00".into(),
         };
         let json = serde_json::to_string(&msg).unwrap();
@@ -268,6 +273,7 @@ mod tests {
             id: "m-1".into(),
             role: "assistant".into(),
             content: r#"Use `SELECT * FROM users WHERE name = "O'Brien"` to query."#.into(),
+            attachments: Vec::new(),
             created_at: "2025-01-01T00:00:00+00:00".into(),
         };
         let json = serde_json::to_string(&msg).unwrap();
@@ -281,6 +287,7 @@ mod tests {
             id: "m-1".into(),
             role: "user".into(),
             content: r#"{"malicious": true, "inject": "}"}"#.into(),
+            attachments: Vec::new(),
             created_at: "2025-01-01T00:00:00+00:00".into(),
         };
         // 序列化不应 panic，且反序列化应保持原始内容

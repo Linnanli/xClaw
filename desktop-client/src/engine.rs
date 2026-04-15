@@ -18,6 +18,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use tauri::{AppHandle, Emitter, Manager};
 use tracing;
+use uuid::Uuid;
 
 use ironclaw::agent::routine_engine::RoutineEngine;
 use ironclaw::agent::{Agent, AgentDeps};
@@ -69,7 +70,7 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
 
     tracing::info!(
         backend = %config.llm.backend,
-        owner_id = %config.owner_id,
+        scope_id = %config.owner_id,
         "Configuration loaded"
     );
 
@@ -92,6 +93,7 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     .context("Failed to build IronClaw components")?;
 
     let config = components.config.clone();
+    let scope_id = config.owner_id.clone();
 
     tracing::info!(
         tools = components.tools.count(),
@@ -112,10 +114,32 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     let admin_url =
         std::env::var("ADMIN_BACKEND_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
     let client_token = std::env::var("ADMIN_AUTH_TOKEN").unwrap_or_default();
+    let backend_user_id = Arc::new(std::sync::RwLock::new(None::<Uuid>));
+    let admin_config_sync = if client_token.is_empty() {
+        None
+    } else {
+        Some(
+            crate::admin_sync::AdminConfigSync::new(admin_url.clone(), client_token.clone())
+                .with_backend_user_id_sink(Arc::clone(&backend_user_id)),
+        )
+    };
+
+    if let Some(sync) = admin_config_sync.as_ref() {
+        if let Err(error) = sync.fetch_once().await {
+            tracing::debug!(error = %error, "Initial admin config fetch skipped");
+
+            if let Ok(cached) = crate::admin_sync::AdminConfigCache::load() {
+                if let Ok(mut current) = backend_user_id.write() {
+                    *current = cached.backend_principal_id;
+                }
+            }
+        }
+    }
 
     let tracker = Arc::new(crate::conversation_tracker::ConversationTracker::new(
-        config.owner_id.clone(),
-    ));
+        scope_id.clone(),
+    )
+    .with_backend_user_id_sink(Arc::clone(&backend_user_id)));
     let reporter = Arc::new(crate::data_reporter::DataReporter::new(
         admin_url.clone(),
         client_token.clone(),
@@ -175,14 +199,14 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
 
     let mut disabled_skills = load_name_set(
         components.db.as_ref(),
-        &config.owner_id,
+        &scope_id,
         DISABLED_SKILLS_SETTING_KEY,
         "disabled set",
     )
     .await;
     let mut disabled_extensions = load_name_set(
         components.db.as_ref(),
-        &config.owner_id,
+        &scope_id,
         DISABLED_EXTENSIONS_SETTING_KEY,
         "disabled set",
     )
@@ -191,7 +215,7 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     let (unauthorized_skills, unauthorized_extensions, has_signed_policy) =
         collect_client_policy_restrictions(
             components.db.as_ref(),
-            &config.owner_id,
+            &scope_id,
             components.skill_registry.as_ref(),
             components.extension_manager.as_ref(),
             &admin_url,
@@ -225,7 +249,9 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         safety_bridge,
         context_manager: Arc::clone(&components.context_manager),
         conversation_tracker: Arc::clone(&tracker),
-        owner_id: config.owner_id.clone(),
+        data_reporter: Arc::clone(&reporter),
+        scope_id: scope_id.clone(),
+        backend_user_id: Arc::clone(&backend_user_id),
         llm: Arc::clone(&wrapped_llm),
         model_override: Arc::clone(&model_override),
         model_switch: Arc::clone(&model_switch),
@@ -235,6 +261,7 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         log_broadcaster: Arc::clone(&log_broadcaster),
         log_clear_offset: std::sync::atomic::AtomicUsize::new(0),
         routine_engine_slot: Arc::clone(&routine_engine_slot),
+        scheduler_slot: Arc::clone(&scheduler_slot),
         disabled_skills: std::sync::RwLock::new(disabled_skills),
         disabled_extensions: std::sync::RwLock::new(disabled_extensions),
     };
@@ -308,9 +335,7 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     // 每 30 秒检查配置版本，版本变化时立即应用新配置。
     // 实现需求 9.10：Admin 保存配置后客户端主动拉取，无需等待 5 分钟周期。
     {
-        if !client_token.is_empty() {
-            let sync =
-                crate::admin_sync::AdminConfigSync::new(admin_url.clone(), client_token.clone());
+        if let Some(sync) = admin_config_sync {
             tauri::async_runtime::spawn(async move {
                 sync.run_sync_loop_with_version_check().await;
             });
@@ -357,19 +382,28 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     }
 
     // ── 启动 ConversationTracker 定期 flush（需求 16.16）──────────
-    // 每 5 分钟检查一次空闲 thread（超过 30 分钟无活动），触发上报。
+    // 每分钟检查一次空闲 thread（超过 10 分钟无活动），触发上报。
     {
         let tracker_clone = Arc::clone(&tracker);
         let reporter_clone = Arc::clone(&reporter);
         tauri::async_runtime::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5 * 60));
+            let mut interval = tokio::time::interval(crate::conversation_tracker::IDLE_FLUSH_INTERVAL);
             loop {
                 interval.tick().await;
                 tracker_clone.flush_idle_threads(&reporter_clone);
                 tracing::debug!("ConversationTracker: flushed idle threads");
             }
         });
-        tracing::info!("ConversationTracker flush loop started (5min interval)");
+        tracing::info!("ConversationTracker flush loop started (1min interval)");
+    }
+
+    // ── 启动 DataReporter 批量出站循环（需求 16.16）───────────────
+    {
+        let reporter_clone = Arc::clone(&reporter);
+        tauri::async_runtime::spawn(async move {
+            reporter_clone.run_flush_loop().await;
+        });
+        tracing::info!("DataReporter flush loop started (30s interval)");
     }
 
     // ── 恢复 pending 审批轮询任务（需求 23.12）────────────────────
@@ -388,6 +422,7 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
                     app_handle.clone(),
                     ticket.ticket_id,
                     ticket.thread_id,
+                    ticket.request_id,
                     store_arc.clone(),
                 ));
             }
@@ -426,7 +461,7 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     let session_manager = Arc::clone(&components.agent_session_manager);
 
     let deps = AgentDeps {
-        owner_id: config.owner_id.clone(),
+        owner_id: scope_id.clone(),
         store: components.db,
         llm: wrapped_llm,
         cheap_llm: components.cheap_llm,
@@ -590,7 +625,8 @@ fn find_builtin_skills_source(app_handle: &AppHandle) -> Option<std::path::PathB
 ///
 /// 失败时静默降级（继续使用 .env 配置），不影响引擎正常运行。
 pub(crate) async fn init_default_provider(state: &AppState) {
-    match fetch_default_model(&state.owner_id).await {
+    let backend_user_id = state.backend_user_id.read().ok().and_then(|value| *value);
+    match fetch_default_model(backend_user_id).await {
         Ok(Some(model)) => apply_default_model(state, &model),
         Ok(None) => tracing::debug!("No models returned from admin backend"),
         Err(e) => tracing::debug!(error = %e, "Skipping default provider init"),
@@ -599,13 +635,13 @@ pub(crate) async fn init_default_provider(state: &AppState) {
 
 /// 从 Admin Backend 拉取模型列表，返回默认模型（is_default 优先，否则取第一个）。
 async fn fetch_default_model(
-    owner_id: &str,
+    backend_user_id: Option<Uuid>,
 ) -> Result<Option<crate::ipc::models::ModelConfig>, String> {
     let admin_url =
         std::env::var("ADMIN_BACKEND_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
 
-    let url = if uuid::Uuid::parse_str(owner_id).is_ok() {
-        format!("{}/api/client-models?user_id={}", admin_url, owner_id)
+    let url = if let Some(user_id) = backend_user_id {
+        format!("{}/api/client-models?user_id={}", admin_url, user_id)
     } else {
         format!("{}/api/client-models", admin_url)
     };
@@ -682,13 +718,13 @@ fn should_apply_client_policy_restrictions(has_signed_policy: bool) -> bool {
 
 async fn load_cached_policy_snapshot(
     db: Option<&Arc<dyn ironclaw::db::Database>>,
-    owner_id: &str,
+    scope_id: &str,
 ) -> Option<ManagedPolicySnapshot> {
     let Some(db) = db else {
         return None;
     };
 
-    match load_verified_policy_from_store(db.as_ref(), owner_id).await {
+    match load_verified_policy_from_store(db.as_ref(), scope_id).await {
         Ok(policy) => policy,
         Err(error) => {
             tracing::warn!(error = %error, "Failed to load cached signed policy");
@@ -699,7 +735,7 @@ async fn load_cached_policy_snapshot(
 
 async fn resolve_managed_policy(
     db: Option<&Arc<dyn ironclaw::db::Database>>,
-    owner_id: &str,
+    scope_id: &str,
     admin_url: &str,
     client_token: &str,
 ) -> Option<ManagedPolicySnapshot> {
@@ -724,7 +760,7 @@ async fn resolve_managed_policy(
                 Ok(policy) => {
                     if let Err(error) = ensure_policy_version_monotonic(
                         db.as_ref(),
-                        owner_id,
+                        scope_id,
                         policy.manifest.policy_version,
                     )
                     .await
@@ -736,7 +772,7 @@ async fn resolve_managed_policy(
                             "Rejected fetched managed policy due to replay protection"
                         );
                     } else {
-                        if let Err(error) = cache_signed_policy_in_store(db.as_ref(), owner_id, &envelope).await {
+                        if let Err(error) = cache_signed_policy_in_store(db.as_ref(), scope_id, &envelope).await {
                             tracing::warn!(
                                 key_id = %envelope.key_id,
                                 policy_version = policy.manifest.policy_version,
@@ -763,7 +799,7 @@ async fn resolve_managed_policy(
         }
     }
 
-    match load_verified_policy_from_store(db.as_ref(), owner_id).await {
+    match load_verified_policy_from_store(db.as_ref(), scope_id).await {
         Ok(Some(policy)) => {
             tracing::info!(
                 policy_version = policy.manifest.policy_version,
@@ -805,14 +841,14 @@ fn collect_unauthorized_skills(
 
 async fn collect_unauthorized_extensions(
     extension_manager: Option<&Arc<ironclaw::extensions::ExtensionManager>>,
-    owner_id: &str,
+    scope_id: &str,
     allowed: &HashSet<String>,
 ) -> HashSet<String> {
     let Some(extension_manager) = extension_manager else {
         return HashSet::new();
     };
 
-    let installed = match extension_manager.list(None, false, owner_id).await {
+    let installed = match extension_manager.list(None, false, scope_id).await {
         Ok(installed) => installed,
         Err(error) => {
             tracing::warn!(error = %error, "Failed to list extensions for managed policy");
@@ -830,7 +866,7 @@ async fn collect_unauthorized_extensions(
 
 async fn load_name_set(
     db: Option<&Arc<dyn ironclaw::db::Database>>,
-    owner_id: &str,
+    scope_id: &str,
     key: &str,
     purpose: &str,
 ) -> HashSet<String> {
@@ -838,7 +874,7 @@ async fn load_name_set(
         return HashSet::new();
     };
 
-    let value = match db.get_setting(owner_id, key).await {
+    let value = match db.get_setting(scope_id, key).await {
         Ok(Some(value)) => value,
         Ok(None) => return HashSet::new(),
         Err(error) => {
@@ -858,7 +894,7 @@ async fn load_name_set(
 
 async fn resolve_managed_allowlists(
     db: Option<&Arc<dyn ironclaw::db::Database>>,
-    owner_id: &str,
+    scope_id: &str,
     managed_policy: Option<&ManagedPolicySnapshot>,
 ) -> (HashSet<String>, HashSet<String>) {
     if let Some(policy) = managed_policy {
@@ -867,14 +903,14 @@ async fn resolve_managed_allowlists(
 
     let allowed_skills = load_name_set(
         db,
-        owner_id,
+        scope_id,
         MANAGED_ALLOWED_SKILLS_SETTING_KEY,
         "managed allowlist",
     )
     .await;
     let allowed_extensions = load_name_set(
         db,
-        owner_id,
+        scope_id,
         MANAGED_ALLOWED_EXTENSIONS_SETTING_KEY,
         "managed allowlist",
     )
@@ -885,7 +921,7 @@ async fn resolve_managed_allowlists(
 
 async fn collect_client_policy_restrictions(
     db: Option<&Arc<dyn ironclaw::db::Database>>,
-    owner_id: &str,
+    scope_id: &str,
     skill_registry: Option<&Arc<std::sync::RwLock<ironclaw::skills::SkillRegistry>>>,
     extension_manager: Option<&Arc<ironclaw::extensions::ExtensionManager>>,
     admin_url: &str,
@@ -893,9 +929,9 @@ async fn collect_client_policy_restrictions(
 ) -> (HashSet<String>, HashSet<String>, bool) {
     let managed_mode = managed_mode_enabled();
     let managed_policy = if managed_mode {
-        resolve_managed_policy(db, owner_id, admin_url, client_token).await
+        resolve_managed_policy(db, scope_id, admin_url, client_token).await
     } else {
-        load_cached_policy_snapshot(db, owner_id).await
+        load_cached_policy_snapshot(db, scope_id).await
     };
     let has_signed_policy = managed_policy.is_some();
 
@@ -904,7 +940,7 @@ async fn collect_client_policy_restrictions(
     }
 
     let (allowed_skills, allowed_extensions) = if managed_mode {
-        resolve_managed_allowlists(db, owner_id, managed_policy.as_ref()).await
+        resolve_managed_allowlists(db, scope_id, managed_policy.as_ref()).await
     } else if let Some(policy) = managed_policy {
         (policy.allowed_skill_set(), policy.allowed_extension_set())
     } else {
@@ -913,7 +949,7 @@ async fn collect_client_policy_restrictions(
 
     let unauthorized_skills = collect_unauthorized_skills(skill_registry, &allowed_skills);
     let unauthorized_extensions =
-        collect_unauthorized_extensions(extension_manager, owner_id, &allowed_extensions).await;
+        collect_unauthorized_extensions(extension_manager, scope_id, &allowed_extensions).await;
 
     (unauthorized_skills, unauthorized_extensions, has_signed_policy)
 }
@@ -925,14 +961,14 @@ async fn refresh_runtime_policy_restrictions(
 ) -> Result<(), String> {
     let mut disabled_skills = load_name_set(
         state.db.as_ref(),
-        &state.owner_id,
+        &state.scope_id,
         DISABLED_SKILLS_SETTING_KEY,
         "disabled set",
     )
     .await;
     let mut disabled_extensions = load_name_set(
         state.db.as_ref(),
-        &state.owner_id,
+        &state.scope_id,
         DISABLED_EXTENSIONS_SETTING_KEY,
         "disabled set",
     )
@@ -941,7 +977,7 @@ async fn refresh_runtime_policy_restrictions(
     let (unauthorized_skills, unauthorized_extensions, has_signed_policy) =
         collect_client_policy_restrictions(
             state.db.as_ref(),
-            &state.owner_id,
+            &state.scope_id,
             state.skill_registry.as_ref(),
             state.extension_manager.as_ref(),
             admin_url,

@@ -12,10 +12,11 @@
 
 use std::sync::Arc;
 
-use ironclaw::channels::IncomingMessage;
+use ironclaw::channels::{AttachmentKind, IncomingAttachment, IncomingMessage};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
 
+use crate::data_reporter::ConversationAttachment;
 use crate::state::EngineState;
 use crate::tauri_channel::ChatEvent;
 
@@ -33,6 +34,19 @@ pub struct ClientDlpStats {
     pub redacted_count: usize,
     pub blocked_count: usize,
     pub warned_count: usize,
+}
+
+/// 前端上传到 Tauri 的附件负载。
+#[derive(Debug, Clone, Deserialize)]
+pub struct FrontendAttachment {
+    pub id: String,
+    pub kind: String,
+    pub mime_type: String,
+    pub filename: Option<String>,
+    pub size_bytes: Option<u64>,
+    pub extracted_text: Option<String>,
+    pub data: Vec<u8>,
+    pub duration_secs: Option<u32>,
 }
 
 /// 发送聊天消息。
@@ -69,9 +83,11 @@ pub async fn send_chat_message(
     api_base_url: Option<String>,
     api_key: Option<String>,
     dlp_stats: Option<ClientDlpStats>,
+    attachments: Option<Vec<FrontendAttachment>>,
 ) -> Result<SendMessageResponse, String> {
     let state = state.get()?;
     let message_id = uuid::Uuid::new_v4().to_string();
+    let (incoming_attachments, report_attachments) = build_attachments(attachments)?;
 
     // ── 配额预检：调用 Admin Backend 检查是否超额 ─────────────────
     if let Err(reason) = quota_precheck(state).await {
@@ -166,14 +182,20 @@ pub async fn send_chat_message(
         &thread_id,
         &safe_content,
         scan_result.had_sensitive_data,
+        &report_attachments,
     );
     state
         .conversation_tracker
         .record_activated_skills(&thread_id, &activated_skills);
 
-    let mut msg = IncomingMessage::new("tauri", &state.owner_id, &safe_content)
+    let mut msg = IncomingMessage::new("tauri", &state.scope_id, &safe_content)
         .with_thread(&thread_id)
-        .with_owner_id(&state.owner_id);
+        .with_owner_id(&state.scope_id);
+
+    if !incoming_attachments.is_empty() {
+        msg = msg.with_attachments(incoming_attachments);
+    }
+
     let metadata = build_message_metadata(state, dlp_redacted_stats);
     if !metadata.is_null() {
         msg = msg.with_metadata(metadata);
@@ -196,6 +218,90 @@ pub async fn send_chat_message(
         message_id,
         success: true,
     })
+}
+
+#[tauri::command]
+pub async fn ic_interrupt_thread(
+    state: State<'_, EngineState>,
+    thread_id: String,
+) -> Result<(), String> {
+    let state = state.get()?;
+    send_thread_control_message(state, &thread_id, "/interrupt").await
+}
+
+#[tauri::command]
+pub async fn ic_finalize_thread(
+    state: State<'_, EngineState>,
+    thread_id: String,
+) -> Result<(), String> {
+    let state = state.get()?;
+    state
+        .conversation_tracker
+        .finish_thread(&thread_id, &state.data_reporter);
+
+    if let Err(error) = state.data_reporter.flush().await {
+        tracing::warn!(thread_id = %thread_id, error = %error, "Failed to flush finalized conversation immediately");
+    }
+
+    Ok(())
+}
+
+fn build_attachments(
+    attachments: Option<Vec<FrontendAttachment>>,
+) -> Result<(Vec<IncomingAttachment>, Vec<ConversationAttachment>), String> {
+    let mut incoming_attachments = Vec::new();
+    let mut report_attachments = Vec::new();
+
+    for attachment in attachments.unwrap_or_default() {
+            let kind = match attachment.kind.as_str() {
+                "audio" => AttachmentKind::Audio,
+                "image" => AttachmentKind::Image,
+                "document" => AttachmentKind::Document,
+                _ => AttachmentKind::from_mime_type(&attachment.mime_type),
+            };
+
+            report_attachments.push(ConversationAttachment::from_frontend(
+                attachment.id.clone(),
+                attachment.kind.clone(),
+                attachment.mime_type.clone(),
+                attachment.filename.clone(),
+                attachment.size_bytes,
+                attachment.extracted_text.clone(),
+                &attachment.data,
+                attachment.duration_secs,
+            ));
+
+            incoming_attachments.push(IncomingAttachment {
+                id: attachment.id,
+                kind,
+                mime_type: attachment.mime_type,
+                filename: attachment.filename,
+                size_bytes: attachment.size_bytes,
+                source_url: None,
+                storage_key: None,
+                extracted_text: attachment.extracted_text,
+                data: attachment.data,
+                duration_secs: attachment.duration_secs,
+            });
+    }
+
+    Ok((incoming_attachments, report_attachments))
+}
+
+async fn send_thread_control_message(
+    state: &crate::state::AppState,
+    thread_id: &str,
+    content: &str,
+) -> Result<(), String> {
+    let msg = IncomingMessage::new("tauri", &state.scope_id, content)
+        .with_thread(thread_id)
+        .with_owner_id(&state.scope_id);
+
+    state
+        .msg_sender
+        .send(msg)
+        .await
+        .map_err(|e| format!("Failed to send thread control message: {}", e))
 }
 
 fn build_message_metadata(
@@ -491,7 +597,7 @@ async fn quota_precheck(state: &crate::state::AppState) -> Result<(), String> {
         return Ok(());
     }
 
-    let user_id = &state.owner_id;
+    let user_id = state.require_backend_user_id("配额预检")?;
     let url = format!("{}/api/quota/check", admin_url);
 
     let client = reqwest::Client::builder()
@@ -523,6 +629,15 @@ async fn quota_precheck(state: &crate::state::AppState) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn usage_report_backend_user_id(
+    backend_user_id: &std::sync::RwLock<Option<uuid::Uuid>>,
+) -> Result<Option<uuid::Uuid>, String> {
+    backend_user_id
+        .read()
+        .map(|guard| *guard)
+        .map_err(|_| "后台用户身份读取失败，跳过费用上报".to_string())
+}
+
 // ── 费用上报 ─────────────────────────────────────────────────────
 
 /// 向 Admin Backend 上报 LLM 调用的 Token 消耗。
@@ -552,8 +667,25 @@ pub async fn report_usage_to_admin(
     };
 
     let url = format!("{}/api/quota/report-usage", admin_url);
+    let user_id = match usage_report_backend_user_id(&state.backend_user_id) {
+        Ok(Some(user_id)) => user_id,
+        Ok(None) => {
+            tracing::warn!("后台用户身份尚未就绪，跳过费用上报");
+            return;
+        }
+        Err(error) => {
+            tracing::warn!("{}", error);
+            return;
+        }
+    };
+
+    if user_id.is_nil() {
+        tracing::warn!("后台用户身份尚未就绪，跳过费用上报");
+        return;
+    }
+
     let payload = serde_json::json!({
-        "user_id": state.owner_id,
+        "user_id": user_id,
         "model_id": model_id,
         "input_tokens": input_tokens as i64,
         "output_tokens": output_tokens as i64,

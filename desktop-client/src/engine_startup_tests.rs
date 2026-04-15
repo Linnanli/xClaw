@@ -41,6 +41,10 @@ mod engine_state_timing_tests {
         let safety_bridge = Arc::new(SafetyBridge::new(Arc::clone(&safety), None, None));
         let tools = Arc::new(ToolRegistry::new());
         let context_manager = Arc::new(ContextManager::new(5));
+        let data_reporter = Arc::new(crate::data_reporter::DataReporter::new(
+            "http://localhost:3000".to_string(),
+            "test-token".to_string(),
+        ));
 
         let model_override = Arc::new(std::sync::RwLock::new(None));
         let stub_llm: Arc<dyn ironclaw::llm::LlmProvider> = Arc::new(StubLlmProvider);
@@ -62,7 +66,9 @@ mod engine_state_timing_tests {
             safety_bridge,
             context_manager,
             conversation_tracker: Arc::new(crate::conversation_tracker::ConversationTracker::new("test-owner".to_string())),
-            owner_id: "test-owner".to_string(),
+            data_reporter,
+            scope_id: "test-owner".to_string(),
+            backend_user_id: Arc::new(std::sync::RwLock::new(None)),
             llm: Arc::clone(&model_switch) as _,
             model_override,
             model_switch,
@@ -72,6 +78,7 @@ mod engine_state_timing_tests {
             log_broadcaster: Arc::new(ironclaw::channels::web::log_layer::LogBroadcaster::new()),
             log_clear_offset: std::sync::atomic::AtomicUsize::new(0),
             routine_engine_slot: Arc::new(tokio::sync::RwLock::new(None)),
+            scheduler_slot: Arc::new(tokio::sync::RwLock::new(None)),
             disabled_skills: std::sync::RwLock::new(std::collections::HashSet::new()),
             disabled_extensions: std::sync::RwLock::new(std::collections::HashSet::new()),
         }
@@ -138,7 +145,7 @@ mod engine_state_timing_tests {
 
         let app_state = engine.get();
         assert!(app_state.is_ok(), "初始化后 get() 应该成功");
-        assert_eq!(app_state.unwrap().owner_id, "test-owner");
+        assert_eq!(app_state.unwrap().scope_id, "test-owner");
     }
 
     #[test]
@@ -228,7 +235,7 @@ mod engine_state_timing_tests {
             handles.push(std::thread::spawn(move || {
                 let result = engine.get();
                 assert!(result.is_ok(), "初始化后并发 get() 都应该成功");
-                assert_eq!(result.unwrap().owner_id, "test-owner");
+                assert_eq!(result.unwrap().scope_id, "test-owner");
             }));
         }
 
@@ -316,7 +323,7 @@ mod engine_state_timing_tests {
 
         // 同一个 EngineState 的多次 get() 应该返回同一个 AppState
         assert_eq!(
-            state1.owner_id, state2.owner_id,
+            state1.scope_id, state2.scope_id,
             "多次 get() 应该返回相同的状态"
         );
     }
@@ -343,7 +350,7 @@ mod engine_state_timing_tests {
         let state = engine.get().unwrap();
 
         // 验证所有字段都可访问（不 panic）
-        assert_eq!(state.owner_id, "test-owner");
+        assert_eq!(state.scope_id, "test-owner");
         assert!(state.db.is_none()); // 最小状态没有 DB
         assert!(state.workspace.is_none());
         assert!(state.extension_manager.is_none());
@@ -387,7 +394,7 @@ mod engine_state_timing_tests {
             loop {
                 match engine_clone.get() {
                     Ok(state) => {
-                        assert_eq!(state.owner_id, "test-owner");
+                        assert_eq!(state.scope_id, "test-owner");
                         return attempts;
                     }
                     Err(_) => {

@@ -25,7 +25,7 @@ import {
 } from "@assistant-ui/react";
 import type { SanitizationStats } from "@/app/hooks/useDlpScan";
 import { useWatermark } from "@/app/hooks/useWatermark";
-import { useApprovalState } from "@/app/runtime/TauriRuntimeProvider";
+import { useApprovalState, type PendingApproval } from "@/app/runtime/TauriRuntimeProvider";
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -285,7 +285,8 @@ const MessageError: FC = () => {
 };
 
 const AssistantMessage: FC = () => {
-  const { pendingApprovals, approve, deny } = useApprovalState();
+  const { pendingApprovals, approve, deny, submitForReview } = useApprovalState();
+  const isLast = useAuiState((s) => s.message.isLast);
 
   return (
     <MessagePrimitive.Root
@@ -315,14 +316,15 @@ const AssistantMessage: FC = () => {
       </div>
 
       {/* 即时工具授权按钮 */}
-      {pendingApprovals.length > 0 && (
+      {isLast && pendingApprovals.length > 0 && (
         <div className="ml-[42px] mt-3 flex flex-col gap-2">
           {pendingApprovals.map((approval) => (
             <ApprovalCard
               key={approval.request_id}
               approval={approval}
-              onApprove={() => approve(approval.request_id, '')}
-              onDeny={() => deny(approval.request_id, '')}
+              onApprove={() => approve(approval.request_id)}
+              onDeny={() => deny(approval.request_id)}
+              onSubmit={() => submitForReview(approval.request_id, approval.tool_name, approval.description)}
             />
           ))}
         </div>
@@ -529,12 +531,13 @@ const BranchPicker: FC<BranchPickerPrimitive.Root.Props> = ({
 // ── 即时工具授权卡片 ──────────────────────────────────────────────
 
 interface ApprovalCardProps {
-  approval: { request_id: string; tool_name: string; description: string };
+  approval: PendingApproval;
   onApprove: () => void;
   onDeny: () => void;
+  onSubmit: () => void;
 }
 
-const ApprovalCard: FC<ApprovalCardProps> = ({ approval, onApprove, onDeny }) => (
+const ApprovalCard: FC<ApprovalCardProps> = ({ approval, onApprove, onDeny, onSubmit }) => (
   <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3 dark:border-amber-800/40 dark:bg-amber-950/20">
     <ShieldAlert className="mt-0.5 size-4 shrink-0 text-amber-500" />
     <div className="flex flex-1 flex-col gap-2">
@@ -544,6 +547,15 @@ const ApprovalCard: FC<ApprovalCardProps> = ({ approval, onApprove, onDeny }) =>
         </p>
         {approval.description && (
           <p className="mt-0.5 text-xs text-muted-foreground">{approval.description}</p>
+        )}
+        {approval.ticket_status === 'pending' && approval.ticket_id && (
+          <p className="mt-1 text-[11px] text-amber-700">审批中，工单 {approval.ticket_id.slice(0, 8)} 已提交</p>
+        )}
+        {approval.ticket_status === 'submitting' && (
+          <p className="mt-1 text-[11px] text-amber-700">正在提交审批工单...</p>
+        )}
+        {approval.ticket_error && (
+          <p className="mt-1 text-[11px] text-red-600">{approval.ticket_error}</p>
         )}
       </div>
       <div className="flex gap-2">
@@ -560,6 +572,20 @@ const ApprovalCard: FC<ApprovalCardProps> = ({ approval, onApprove, onDeny }) =>
         >
           <XCircleIcon className="size-3" />
           拒绝
+        </button>
+        <button
+          onClick={onSubmit}
+          disabled={approval.ticket_status === 'pending' || approval.ticket_status === 'submitting'}
+          className="flex items-center gap-1 rounded-md border border-amber-300 bg-white px-3 py-1 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <ShieldCheck className="size-3" />
+          {approval.ticket_status === 'pending'
+            ? '审批中'
+            : approval.ticket_status === 'submitting'
+              ? '提交中'
+              : approval.ticket_status === 'expired'
+                ? '重新提交审批'
+                : '提交审批'}
         </button>
       </div>
     </div>

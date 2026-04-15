@@ -22,13 +22,14 @@
 import { type ReactNode, useState, useCallback, useEffect, useRef, createContext, useContext } from 'react';
 import {
   AssistantRuntimeProvider,
+  type AttachmentAdapter,
   useExternalStoreRuntime,
   type ThreadMessageLike,
   type AppendMessage,
 } from '@assistant-ui/react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { threadApi, modelApi, type ModelConfigItem } from '@utils/tauri';
+import { approvalApi, threadApi, modelApi, type ModelConfigItem } from '@utils/tauri';
 import { useDlpScan } from '@hooks/useDlpScan';
 import type { SanitizationStats } from '@hooks/useDlpScan';
 import { tracing } from '@utils/tracing';
@@ -45,6 +46,7 @@ interface TauriMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
+  attachments?: NonNullable<ThreadMessageLike['attachments']>;
   reasoning?: string;
   /** DLP 脱敏统计，仅用户消息有值 */
   dlpStats?: SanitizationStats;
@@ -155,7 +157,8 @@ type ChatEvent =
   | { type: 'stream_chunk'; content: string }
   | { type: 'tool_started'; name: string }
   | { type: 'tool_completed'; name: string; success: boolean; error?: string }
-  | { type: 'approval_needed'; request_id: string; tool_name: string; description: string }
+  | { type: 'approval_needed'; thread_id: string; request_id: string; tool_name: string; description: string }
+  | { type: 'approval_result'; ticket_id: string; thread_id: string; request_id?: string; status: string; review_comment?: string; expires_at?: string }
   | { type: 'status'; message: string; level: string }
   | { type: 'error'; message: string; code?: string }
   | { type: 'connection_status'; connected: boolean; message: string }
@@ -214,18 +217,23 @@ export interface PendingApproval {
   request_id: string;
   tool_name: string;
   description: string;
+  ticket_id?: string;
+  ticket_status?: 'submitting' | 'pending' | 'expired';
+  ticket_error?: string;
 }
 
 interface ApprovalState {
   pendingApprovals: PendingApproval[];
-  approve: (requestId: string, threadId: string) => Promise<void>;
-  deny: (requestId: string, threadId: string) => Promise<void>;
+  approve: (requestId: string) => Promise<void>;
+  deny: (requestId: string) => Promise<void>;
+  submitForReview: (requestId: string, toolName: string, description: string) => Promise<void>;
 }
 
 const ApprovalContext = createContext<ApprovalState>({
   pendingApprovals: [],
   approve: async () => {},
   deny: async () => {},
+  submitForReview: async () => {},
 });
 
 export const useApprovalState = () => useContext(ApprovalContext);
@@ -264,6 +272,7 @@ function convertMessage(msg: TauriMessage): ThreadMessageLike {
     content: parts,
     id: msg.id,
     createdAt: new Date(msg.timestamp),
+    ...(msg.attachments ? { attachments: msg.attachments } : {}),
     ...(hasCustomMetadata ? { metadata: { custom: customMetadata } } : {}),
   };
 
@@ -298,9 +307,193 @@ function normalizeExternalMessages(next: readonly ThreadMessageLike[]): TauriMes
       role: m.role === 'user' ? 'user' : 'assistant',
       content,
       timestamp: m.createdAt instanceof Date ? m.createdAt.getTime() : Date.now(),
+      attachments: m.attachments,
       reasoning,
     };
   });
+}
+
+type RuntimeAttachment = NonNullable<ThreadMessageLike['attachments']>[number];
+
+interface SerializedAttachment {
+  id: string;
+  kind: 'audio' | 'image' | 'document';
+  mime_type: string;
+  filename: string | null;
+  size_bytes: number | null;
+  extracted_text: string | null;
+  data: number[];
+  duration_secs: number | null;
+}
+
+const COMPOSER_ATTACHMENT_ACCEPT = [
+  'image/*',
+  'audio/*',
+  'application/pdf',
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'text/html',
+  'text/xml',
+  'application/json',
+  '.txt',
+  '.md',
+  '.csv',
+  '.pdf',
+].join(',');
+
+function composerAttachmentType(file: File): RuntimeAttachment['type'] {
+  const mimeType = file.type.toLowerCase();
+  if (mimeType.startsWith('image/')) {
+    return 'image';
+  }
+  if (mimeType.startsWith('audio/')) {
+    return 'audio';
+  }
+  return 'document';
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = (error) => reject(error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function readFileAsText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+    reader.onerror = (error) => reject(error);
+    reader.readAsText(file);
+  });
+}
+
+function fileCanInlineText(file: File): boolean {
+  const mimeType = file.type.toLowerCase();
+  return mimeType.startsWith('text/') || mimeType === 'application/json';
+}
+
+async function buildComposerAttachmentContent(file: File): Promise<NonNullable<RuntimeAttachment['content']>> {
+  const type = composerAttachmentType(file);
+  if (type === 'image') {
+    return [{ type: 'image', image: await readFileAsDataUrl(file) }];
+  }
+
+  if (fileCanInlineText(file)) {
+    const text = await readFileAsText(file);
+    return text.trim() ? [{ type: 'text', text }] : [];
+  }
+
+  return [];
+}
+
+const composerAttachmentAdapter: AttachmentAdapter = {
+  accept: COMPOSER_ATTACHMENT_ACCEPT,
+  async add({ file }) {
+    return {
+      id: `${file.name}-${file.size}-${file.lastModified}`,
+      type: composerAttachmentType(file),
+      name: file.name,
+      contentType: file.type || undefined,
+      file,
+      status: { type: 'requires-action', reason: 'composer-send' },
+    };
+  },
+  async remove() {
+    return;
+  },
+  async send(attachment) {
+    return {
+      ...attachment,
+      status: { type: 'complete' },
+      content: await buildComposerAttachmentContent(attachment.file),
+    };
+  },
+};
+
+function extractTextContent(content: AppendMessage['content']): string {
+  if (typeof content === 'string') {
+    return content;
+  }
+
+  const textParts: string[] = [];
+  for (const part of content) {
+    if (part.type === 'text' && typeof part.text === 'string') {
+      textParts.push(part.text);
+    }
+  }
+  return textParts.join('');
+}
+
+function detectAttachmentKind(attachment: RuntimeAttachment): 'audio' | 'image' | 'document' {
+  const contentType = attachment.contentType ?? attachment.file?.type ?? '';
+  if (attachment.type === 'image' || contentType.startsWith('image/')) {
+    return 'image';
+  }
+  if (contentType.startsWith('audio/')) {
+    return 'audio';
+  }
+  return 'document';
+}
+
+function extractAttachmentText(attachment: RuntimeAttachment): string | null {
+  if (!attachment.content) {
+    return null;
+  }
+
+  const text = attachment.content
+    .filter((part) => part.type === 'text')
+    .map((part) => part.text)
+    .join('\n')
+    .trim();
+
+  return text || null;
+}
+
+async function serializeAttachment(attachment: RuntimeAttachment): Promise<SerializedAttachment> {
+  const file = attachment.file;
+  if (!file) {
+    throw new Error(`附件 ${attachment.name} 缺少本地文件内容，无法发送`);
+  }
+
+  const buffer = await file.arrayBuffer();
+  return {
+    id: attachment.id,
+    kind: detectAttachmentKind(attachment),
+    mime_type: attachment.contentType ?? file.type ?? 'application/octet-stream',
+    filename: attachment.name || file.name || null,
+    size_bytes: Number.isFinite(file.size) ? file.size : null,
+    extracted_text: extractAttachmentText(attachment),
+    data: Array.from(new Uint8Array(buffer)),
+    duration_secs: null,
+  };
+}
+
+async function serializeAttachments(
+  attachments: readonly RuntimeAttachment[],
+): Promise<SerializedAttachment[]> {
+  if (attachments.length === 0) {
+    return [];
+  }
+
+  return Promise.all(attachments.map((attachment) => serializeAttachment(attachment)));
+}
+
+function updatePendingApproval(
+  approvals: PendingApproval[],
+  requestId: string,
+  updater: (approval: PendingApproval) => PendingApproval,
+): PendingApproval[] {
+  return approvals.map((approval) =>
+    approval.request_id === requestId ? updater(approval) : approval,
+  );
+}
+
+function hasPendingApprovalTicket(approval: PendingApproval | undefined): boolean {
+  return approval?.ticket_status === 'submitting' || approval?.ticket_status === 'pending';
 }
 
 // ============================================================================
@@ -357,6 +550,7 @@ export function TauriRuntimeProvider({
 
   // 即时工具授权状态
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
+  const approvalSubmissionLocksRef = useRef<Set<string>>(new Set());
 
   const clearDlpBlock = useCallback(() => {
     setDlpBlocked(false);
@@ -371,21 +565,84 @@ export function TauriRuntimeProvider({
     setDlpRedactedStats(stats);
   }, []);
 
+  const releaseApprovalSubmissionLock = useCallback((requestId: string): void => {
+    approvalSubmissionLocksRef.current.delete(requestId);
+  }, []);
+
+  const setPendingApprovalTicketState = useCallback(
+    (requestId: string, fields: Partial<PendingApproval>): void => {
+      setPendingApprovals((prev) =>
+        updatePendingApproval(prev, requestId, (approval) => ({
+          ...approval,
+          ...fields,
+        })),
+      );
+    },
+    [],
+  );
+
   // 即时工具授权：approve / deny 通过 IPC 发送消息给 Agent
   const sendApprovalDecision = useCallback(async (command: 'ic_approve_tool' | 'ic_deny_tool', requestId: string, tid: string) => {
     try {
       await invoke(command, { requestId, threadId: tid });
+      releaseApprovalSubmissionLock(requestId);
       setPendingApprovals((prev) => prev.filter((a) => a.request_id !== requestId));
     } catch (err) {
       tracing.error(`Failed to ${command}`, { requestId, error: err });
     }
-  }, []);
+  }, [releaseApprovalSubmissionLock]);
 
   const approve = useCallback((requestId: string, tid: string) =>
     sendApprovalDecision('ic_approve_tool', requestId, tid), [sendApprovalDecision]);
 
   const deny = useCallback((requestId: string, tid: string) =>
     sendApprovalDecision('ic_deny_tool', requestId, tid), [sendApprovalDecision]);
+
+  const submitForReview = useCallback(
+    async (requestId: string, toolName: string, description: string) => {
+      if (approvalSubmissionLocksRef.current.has(requestId)) {
+        tracing.debug('Skipping duplicate approval ticket submission while request is in-flight', { requestId });
+        return;
+      }
+
+      const currentApproval = pendingApprovals.find((approval) => approval.request_id === requestId);
+      if (hasPendingApprovalTicket(currentApproval)) {
+        tracing.debug('Skipping duplicate approval ticket submission while ticket is pending', { requestId });
+        return;
+      }
+
+      const tid = threadIdRef.current;
+      if (!tid) {
+        tracing.warn('Cannot submit approval ticket without thread id', { requestId });
+        return;
+      }
+
+      approvalSubmissionLocksRef.current.add(requestId);
+      setPendingApprovalTicketState(requestId, {
+        ticket_status: 'submitting',
+        ticket_error: undefined,
+      });
+
+      try {
+        const ticketId = await approvalApi.submitApprovalTicket(requestId, toolName, description, tid);
+        setPendingApprovalTicketState(requestId, {
+          ticket_id: ticketId,
+          ticket_status: 'pending',
+          ticket_error: undefined,
+        });
+      } catch (error) {
+        releaseApprovalSubmissionLock(requestId);
+        const message = error instanceof Error ? error.message : String(error);
+        tracing.error('Failed to submit approval ticket', { requestId, error });
+        setPendingApprovalTicketState(requestId, {
+          ticket_id: undefined,
+          ticket_status: undefined,
+          ticket_error: message,
+        });
+      }
+    },
+    [pendingApprovals, releaseApprovalSubmissionLock, setPendingApprovalTicketState],
+  );
 
   // 同步 threadId ref
   useEffect(() => { threadIdRef.current = threadId; }, [threadId]);
@@ -439,6 +696,7 @@ export function TauriRuntimeProvider({
   // 用于检测 threadId 实际切换（区别于同一 thread 的历史重载）
   const prevThreadIdRef = useRef<string | null>(threadId);
   const handledCommandIdRef = useRef<string | null>(null);
+  const activeTurnRef = useRef(false);
 
   const clearPendingAssistantState = useCallback((): void => {
     pendingAssistantId.current = null;
@@ -451,12 +709,50 @@ export function TauriRuntimeProvider({
     setPendingApprovals([]);
   }, [clearPendingAssistantState]);
 
+  const finalizePreviousThread = useCallback(
+    async (previousThreadId: string | null, shouldInterrupt: boolean): Promise<void> => {
+      if (!previousThreadId) {
+        return;
+      }
+
+      if (shouldInterrupt) {
+        try {
+          await threadApi.interruptThread(previousThreadId);
+        } catch (error) {
+          tracing.warn('Failed to interrupt previous thread before switch', {
+            threadId: previousThreadId,
+            error,
+          });
+        }
+      }
+
+      try {
+        await threadApi.finalizeThread(previousThreadId);
+      } catch (error) {
+        tracing.warn('Failed to finalize previous thread', {
+          threadId: previousThreadId,
+          error,
+        });
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    activeTurnRef.current = isRunning || pendingApprovals.length > 0 || pendingAssistantId.current !== null;
+  }, [isRunning, pendingApprovals.length]);
+
   useEffect(() => {
     if (!threadId) {
+      const previousThreadId = prevThreadIdRef.current;
+      const shouldInterrupt = activeTurnRef.current;
       prevThreadIdRef.current = null;
       bootstrapThreadIdRef.current = null;
       clearThreadRuntimeState();
       setMessages([]);
+      if (previousThreadId) {
+        void finalizePreviousThread(previousThreadId, shouldInterrupt);
+      }
       return;
     }
 
@@ -470,8 +766,13 @@ export function TauriRuntimeProvider({
 
     // thread 切换时立即清理上一个 thread 的流式状态，防止残留内容出现在新 thread 中
     if (threadId !== prevThreadIdRef.current) {
+      const previousThreadId = prevThreadIdRef.current;
+      const shouldInterrupt = activeTurnRef.current;
       prevThreadIdRef.current = threadId;
       clearThreadRuntimeState();
+      if (previousThreadId) {
+        void finalizePreviousThread(previousThreadId, shouldInterrupt);
+      }
     }
 
     let cancelled = false;
@@ -490,6 +791,7 @@ export function TauriRuntimeProvider({
               role: m.role as 'user' | 'assistant',
               content: m.content,
               timestamp: new Date(m.created_at).getTime(),
+              ...(m.attachments ? { attachments: m.attachments } : {}),
             });
             return;
           }
@@ -528,7 +830,7 @@ export function TauriRuntimeProvider({
 
     load();
     return () => { cancelled = true; };
-  }, [threadId, engineReadyKey, clearThreadRuntimeState]);
+  }, [threadId, engineReadyKey, clearThreadRuntimeState, finalizePreviousThread]);
 
   // ── chat-event 监听 ──
   useEffect(() => {
@@ -613,12 +915,48 @@ export function TauriRuntimeProvider({
       }
 
       case 'approval_needed': {
+        if (event.thread_id && event.thread_id !== threadIdRef.current) {
+          break;
+        }
+
+        setIsRunning(false);
         tracing.info('Tool approval needed', { tool: event.tool_name, requestId: event.request_id });
         setPendingApprovals((prev) => {
           // 去重：同一 request_id 不重复添加
           if (prev.some((a) => a.request_id === event.request_id)) return prev;
           return [...prev, { request_id: event.request_id, tool_name: event.tool_name, description: event.description }];
         });
+        break;
+      }
+
+      case 'approval_result': {
+        if (!event.request_id) {
+          tracing.warn('Approval result missing request_id', { ticketId: event.ticket_id, status: event.status });
+          break;
+        }
+
+        releaseApprovalSubmissionLock(event.request_id);
+
+        if (event.status === 'approved') {
+          void sendApprovalDecision('ic_approve_tool', event.request_id, event.thread_id);
+          break;
+        }
+
+        if (event.status === 'rejected') {
+          void sendApprovalDecision('ic_deny_tool', event.request_id, event.thread_id);
+          break;
+        }
+
+        if (event.status === 'expired') {
+          setPendingApprovals((prev) =>
+            updatePendingApproval(prev, event.request_id!, (approval) => ({
+              ...approval,
+              ticket_id: undefined,
+              ticket_status: 'expired',
+              ticket_error: '审批工单已过期，可重新提交',
+            })),
+          );
+        }
         break;
       }
 
@@ -695,11 +1033,11 @@ export function TauriRuntimeProvider({
         break;
       }
     }
-  }, [loadModels, clearPendingAssistantState]);
+  }, [loadModels, clearPendingAssistantState, releaseApprovalSubmissionLock, sendApprovalDecision]);
 
   // ── 统一发送文本入口（Composer / 外部指令共用）──
   const sendUserText = useCallback(
-    async (rawContent: string) => {
+    async (rawContent: string, attachments: readonly RuntimeAttachment[] = []) => {
       // 1. DLP 扫描（Fail-Safe：扫描失败时阻止发送）
       let content = rawContent;
       let dlpResult: Awaited<ReturnType<typeof scanUserInput>> | null = null;
@@ -710,6 +1048,7 @@ export function TauriRuntimeProvider({
           onBlockedCb(dlpResult.block_reason || '内容包含敏感信息');
           return;
         }
+
         if (dlpResult.had_sensitive_data) {
           onRedactedCb(dlpResult.sanitization_stats);
           content = dlpResult.sanitized_content;
@@ -735,12 +1074,31 @@ export function TauriRuntimeProvider({
         }
       }
 
+      let serializedAttachments: SerializedAttachment[] = [];
+      try {
+        serializedAttachments = await serializeAttachments(attachments);
+      } catch (error) {
+        tracing.error('Failed to serialize attachments', { error });
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `error-${Date.now()}`,
+            role: 'assistant' as const,
+            content: '',
+            timestamp: Date.now(),
+            error: error instanceof Error ? error.message : '附件读取失败，无法发送消息',
+          },
+        ]);
+        return;
+      }
+
       // 3. 乐观更新：立即添加用户消息（含 DLP 脱敏统计）
       const userMsg: TauriMessage = {
         id: `msg-${msgIdCounter.current++}`,
         role: 'user',
         content,
         timestamp: Date.now(),
+        ...(attachments.length > 0 ? { attachments } : {}),
         dlpStats: dlpResult?.had_sensitive_data ? dlpResult.sanitization_stats : undefined,
       };
       setMessages((prev) => [...prev, userMsg]);
@@ -755,6 +1113,7 @@ export function TauriRuntimeProvider({
           apiBaseUrl: selectedModelRef.current?.api_base_url ?? null,
           apiKey: selectedModelRef.current?.api_key ?? null,
           dlpStats: dlpResult?.had_sensitive_data ? dlpResult.sanitization_stats : null,
+          attachments: serializedAttachments.length > 0 ? serializedAttachments : null,
         });
       } catch (err) {
         tracing.error('Failed to send message', { error: err });
@@ -778,9 +1137,12 @@ export function TauriRuntimeProvider({
   // ── 发送新消息（assistant-ui onNew 回调）──
   const onNew = useCallback(
     async (appendMessage: AppendMessage) => {
-      const textPart = appendMessage.content.find((p) => p.type === 'text');
-      if (!textPart || textPart.type !== 'text') return;
-      await sendUserText(textPart.text);
+      const textContent = extractTextContent(appendMessage.content);
+      const attachments = appendMessage.attachments ?? [];
+      if (!textContent.trim() && attachments.length === 0) {
+        return;
+      }
+      await sendUserText(textContent, attachments);
     },
     [sendUserText],
   );
@@ -800,8 +1162,20 @@ export function TauriRuntimeProvider({
   }, [outboundCommand, sendUserText, onOutboundCommandHandled]);
 
   const onCancel = useCallback(async () => {
-    setIsRunning(false);
-  }, []);
+    const tid = threadIdRef.current;
+    if (!tid) {
+      clearPendingAssistantState();
+      return;
+    }
+
+    try {
+      await threadApi.interruptThread(tid);
+    } catch (error) {
+      tracing.warn('Failed to interrupt active thread', { threadId: tid, error });
+    } finally {
+      clearPendingAssistantState();
+    }
+  }, [clearPendingAssistantState]);
 
   // ── 构建 ExternalStoreRuntime ──
   const runtime = useExternalStoreRuntime({
@@ -810,6 +1184,9 @@ export function TauriRuntimeProvider({
     convertMessage,
     onNew,
     onCancel,
+    adapters: {
+      attachments: composerAttachmentAdapter,
+    },
     setMessages: (newMessages) => {
       setMessages(normalizeExternalMessages(newMessages));
     },
@@ -842,6 +1219,7 @@ export function TauriRuntimeProvider({
               pendingApprovals,
               approve: (requestId) => approve(requestId, threadIdRef.current ?? ''),
               deny: (requestId) => deny(requestId, threadIdRef.current ?? ''),
+              submitForReview,
             }}
           >
             {children}

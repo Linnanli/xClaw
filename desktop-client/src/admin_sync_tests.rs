@@ -11,6 +11,9 @@
 #[cfg(test)]
 mod tests {
     use crate::admin_sync::{AdminClientConfig, AdminConfigCache};
+    use mockito::Matcher;
+    use std::sync::{Arc, RwLock};
+    use uuid::Uuid;
 
     // =========================================================================
     // 单元测试 — 正常路径
@@ -27,6 +30,7 @@ mod tests {
         assert!(config.skills_enabled.is_none());
         assert!(config.extensions_enabled.is_none());
         assert!(config.max_cost_per_day_cents.is_none());
+        assert!(config.backend_principal_id.is_none());
         assert!(config.config_version.is_none());
         assert!(config.updated_at.is_none());
         assert!(config.managed_mode.is_none());
@@ -62,6 +66,7 @@ mod tests {
             "llm_api_key": "sk-ant-test",
             "llm_model": "claude-3-opus",
             "safety_enabled": true,
+            "backend_principal_id": "550e8400-e29b-41d4-a716-446655440000",
             "config_version": 7
         }"#;
         let config: AdminClientConfig = serde_json::from_str(json).unwrap();
@@ -69,6 +74,10 @@ mod tests {
         assert_eq!(config.llm_api_key, Some("sk-ant-test".into()));
         assert_eq!(config.llm_model, Some("claude-3-opus".into()));
         assert_eq!(config.safety_enabled, Some(true));
+        assert_eq!(
+            config.backend_principal_id,
+            Some(Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap())
+        );
         assert_eq!(config.config_version, Some(7));
         // 未提供的字段应为 None
         assert!(config.llm_base_url.is_none());
@@ -86,6 +95,9 @@ mod tests {
             skills_enabled: Some(false),
             extensions_enabled: Some(true),
             max_cost_per_day_cents: Some(500),
+            backend_principal_id: Some(
+                Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
+            ),
             config_version: Some(1),
             updated_at: Some("2025-01-01T00:00:00Z".into()),
             ..Default::default()
@@ -158,10 +170,13 @@ mod tests {
     fn test_cache_save_and_load() {
         let temp_dir = tempfile::tempdir().unwrap();
         let cache_path = temp_dir.path().join("admin_config.json");
+        let backend_principal_id =
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
 
         let config = AdminClientConfig {
             llm_backend: Some("openai".into()),
             llm_model: Some("gpt-4".into()),
+            backend_principal_id: Some(backend_principal_id),
             config_version: Some(42),
             ..Default::default()
         };
@@ -174,6 +189,7 @@ mod tests {
         let loaded_content = std::fs::read_to_string(&cache_path).unwrap();
         let loaded: AdminClientConfig = serde_json::from_str(&loaded_content).unwrap();
         assert_eq!(loaded.llm_backend, Some("openai".into()));
+        assert_eq!(loaded.backend_principal_id, Some(backend_principal_id));
         assert_eq!(loaded.config_version, Some(42));
     }
 
@@ -207,6 +223,7 @@ mod tests {
             "skills_enabled": true,
             "extensions_enabled": true,
             "managed_mode": true,
+            "backend_principal_id": "550e8400-e29b-41d4-a716-446655440000",
             "max_cost_per_day_cents": 1000,
             "config_version": 42,
             "updated_at": "2025-06-01T00:00:00Z"
@@ -218,6 +235,10 @@ mod tests {
         assert!(config.llm_base_url.is_none());
         assert_eq!(config.safety_enabled, Some(true));
         assert_eq!(config.managed_mode, Some(true));
+        assert_eq!(
+            config.backend_principal_id,
+            Some(Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap())
+        );
         assert_eq!(config.max_cost_per_day_cents, Some(1000));
     }
 
@@ -275,16 +296,20 @@ mod tests {
         // （这是代码逻辑验证，不是运行时验证）
     }
 
-    /// 验证 AdminClientConfig 不包含用户个人信息。
+    /// 验证 AdminClientConfig 可包含后台主身份 UUID，但不包含个人资料字段。
     #[test]
     fn test_audit_no_user_pii() {
         let config = AdminClientConfig {
             llm_backend: Some("openai".into()),
             llm_api_key: Some("sk-key".into()),
+            backend_principal_id: Some(
+                Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
+            ),
             ..Default::default()
         };
         let json_str = serde_json::to_string(&config).unwrap();
 
+        assert!(json_str.contains("backend_principal_id"));
         assert!(!json_str.contains("user_id"));
         assert!(!json_str.contains("email"));
         assert!(!json_str.contains("username"));
@@ -452,6 +477,83 @@ mod tests {
         );
         let result = sync.fetch_once().await;
         assert!(result.is_err(), "Should fail with network error");
+    }
+
+    #[tokio::test]
+    async fn test_sync_fetch_once_publishes_backend_user_id_when_present() {
+        let client_token = "550e8400-e29b-41d4-a716-446655440000";
+        let backend_principal_id =
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").expect("uuid should parse");
+        let authorization = format!("Bearer {}", client_token);
+        let mut server = mockito::Server::new_async().await;
+
+        let mock = server
+            .mock("GET", "/api/client-config")
+            .match_query(Matcher::UrlEncoded(
+                "client_id".into(),
+                client_token.to_string(),
+            ))
+            .match_header("authorization", authorization.as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "llm_backend": "openai",
+                    "backend_principal_id": backend_principal_id,
+                    "config_version": 1,
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let sink = Arc::new(RwLock::new(None));
+        let sync = crate::admin_sync::AdminConfigSync::new(server.url(), client_token.into())
+            .with_backend_user_id_sink(Arc::clone(&sink));
+
+        let config = sync.fetch_once().await.expect("fetch_once should succeed");
+
+        assert_eq!(config.backend_principal_id, Some(backend_principal_id));
+        assert_eq!(sink.read().expect("sink should be readable").to_owned(), Some(backend_principal_id));
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_sync_fetch_once_clears_backend_user_id_when_missing() {
+        let client_token = "550e8400-e29b-41d4-a716-446655440000";
+        let previous_backend_user_id =
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").expect("uuid should parse");
+        let authorization = format!("Bearer {}", client_token);
+        let mut server = mockito::Server::new_async().await;
+
+        let mock = server
+            .mock("GET", "/api/client-config")
+            .match_query(Matcher::UrlEncoded(
+                "client_id".into(),
+                client_token.to_string(),
+            ))
+            .match_header("authorization", authorization.as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "llm_backend": "openai",
+                    "config_version": 2,
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let sink = Arc::new(RwLock::new(Some(previous_backend_user_id)));
+        let sync = crate::admin_sync::AdminConfigSync::new(server.url(), client_token.into())
+            .with_backend_user_id_sink(Arc::clone(&sink));
+
+        let config = sync.fetch_once().await.expect("fetch_once should succeed");
+
+        assert!(config.backend_principal_id.is_none());
+        assert!(sink.read().expect("sink should be readable").is_none());
+        mock.assert_async().await;
     }
 
     // =========================================================================

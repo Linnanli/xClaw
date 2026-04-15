@@ -86,6 +86,8 @@ macro_rules! all_tauri_commands {
             // ── 聊天 ────────────────────────────────────────────
             desktop_client::ipc::send_chat_message,
             desktop_client::ipc::ic_activate_model,
+            desktop_client::ipc::ic_interrupt_thread,
+            desktop_client::ipc::ic_finalize_thread,
             desktop_client::ipc::subscribe_chat_events,
             desktop_client::ipc::unsubscribe_chat_events,
             // ── 线程管理 ────────────────────────────────────────
@@ -119,6 +121,8 @@ macro_rules! all_tauri_commands {
             desktop_client::ipc::ic_job_events,
             desktop_client::ipc::ic_job_prompt,
             desktop_client::ipc::ic_get_job_detail,
+            desktop_client::ipc::ic_cancel_job,
+            desktop_client::ipc::ic_restart_job,
             // ── 日程管理 ────────────────────────────────────────
             desktop_client::ipc::ic_routine_runs,
             desktop_client::ipc::ic_list_routines,

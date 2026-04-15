@@ -22,9 +22,9 @@ pub async fn ic_approve_tool(
     let state = state.get()?;
     let content = format!("!approve {}", request_id);
 
-    let msg = IncomingMessage::new("tauri", &state.owner_id, &content)
+    let msg = IncomingMessage::new("tauri", &state.scope_id, &content)
         .with_thread(&thread_id)
-        .with_owner_id(&state.owner_id);
+        .with_owner_id(&state.scope_id);
 
     state
         .msg_sender
@@ -46,9 +46,9 @@ pub async fn ic_deny_tool(
     let state = state.get()?;
     let content = format!("!deny {}", request_id);
 
-    let msg = IncomingMessage::new("tauri", &state.owner_id, &content)
+    let msg = IncomingMessage::new("tauri", &state.scope_id, &content)
         .with_thread(&thread_id)
-        .with_owner_id(&state.owner_id);
+        .with_owner_id(&state.scope_id);
 
     state
         .msg_sender

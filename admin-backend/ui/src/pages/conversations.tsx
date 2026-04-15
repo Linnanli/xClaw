@@ -1,15 +1,40 @@
-import { Search, Download, Loader2, X, MessageSquare } from 'lucide-react'
+import { Search, Download, Loader2, X, MessageSquare, ImageIcon, FileText, AudioLines } from 'lucide-react'
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/api'
 import { TablePagination } from '@/components/ui/table-pagination'
 import { StatusTag } from '@/components/ui/status-tag'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
-import type { Conversation, ConversationDetail, ConversationStats } from '@/types'
+import type { Conversation, ConversationAttachment, ConversationDetail, ConversationStats } from '@/types'
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
   return String(n)
+}
+
+function formatBytes(n?: number): string {
+  if (!n) return '未知大小'
+  if (n >= 1_048_576) return `${(n / 1_048_576).toFixed(1)} MB`
+  if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${n} B`
+}
+
+function attachmentPreviewSrc(attachment: ConversationAttachment): string | null {
+  if (!attachment.image_data_base64) return null
+  return `data:${attachment.mime_type};base64,${attachment.image_data_base64}`
+}
+
+function attachmentIcon(attachment: ConversationAttachment) {
+  if (attachment.kind === 'image') return <ImageIcon className="h-3.5 w-3.5 text-[#1677FF]" />
+  if (attachment.kind === 'audio') return <AudioLines className="h-3.5 w-3.5 text-[#7A4D00]" />
+  return <FileText className="h-3.5 w-3.5 text-[#5B5B5B]" />
+}
+
+function attachmentLabel(attachment: ConversationAttachment): string {
+  if (attachment.filename) return attachment.filename
+  if (attachment.kind === 'image') return '图片附件'
+  if (attachment.kind === 'audio') return '音频附件'
+  return '文档附件'
 }
 
 export default function ConversationsPage() {
@@ -210,6 +235,9 @@ function ConversationDetailDialog({ open, detail, loading, onClose }: {
                       )}
                     </div>
                     <p className="whitespace-pre-wrap font-mono text-[10px] text-[#333]">{msg.content}</p>
+                    {msg.attachments.length > 0 && (
+                      <ConversationAttachments attachments={msg.attachments} />
+                    )}
                   </div>
                 ))}
               </div>
@@ -226,6 +254,44 @@ function InfoItem({ label, value, color }: { label: string; value: string; color
     <div className="flex items-center gap-1.5">
       <span className="font-mono text-[9px] text-[#999]">{label}:</span>
       <span className="font-mono text-[10px] font-medium" style={{ color: color || '#1A1A1A' }}>{value}</span>
+    </div>
+  )
+}
+
+function ConversationAttachments({ attachments }: { attachments: ConversationAttachment[] }) {
+  return (
+    <div className="mt-1 flex flex-col gap-2 border-t border-[#E8E8E8] pt-2">
+      <span className="font-mono text-[8px] font-semibold tracking-[0.4px] text-[#999999]">附件</span>
+      <div className="flex flex-col gap-2">
+        {attachments.map((attachment) => {
+          const previewSrc = attachmentPreviewSrc(attachment)
+          return (
+            <div key={attachment.id} className="rounded border border-[#E8E8E8] bg-white px-2.5 py-2">
+              <div className="flex items-center gap-2">
+                {attachmentIcon(attachment)}
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="truncate font-mono text-[10px] font-medium text-[#1A1A1A]">{attachmentLabel(attachment)}</span>
+                  <span className="font-mono text-[8px] text-[#999999]">
+                    {attachment.mime_type} · {formatBytes(attachment.size_bytes)}
+                  </span>
+                </div>
+              </div>
+              {previewSrc && (
+                <img
+                  src={previewSrc}
+                  alt={attachmentLabel(attachment)}
+                  className="mt-2 max-h-[180px] rounded border border-[#E8E8E8] object-contain"
+                />
+              )}
+              {attachment.extracted_text && (
+                <div className="mt-2 rounded bg-[#FAFAFA] px-2 py-1.5">
+                  <span className="font-mono text-[8px] leading-4 text-[#666666]">{attachment.extracted_text}</span>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }

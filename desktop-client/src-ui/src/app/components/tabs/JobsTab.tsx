@@ -138,6 +138,13 @@ export function JobsTab() {
             卡住
           </span>
         );
+      case 'cancelled':
+        return (
+          <span className="px-3 py-1 bg-slate-400/10 text-slate-400 text-sm rounded-full border border-slate-400/30 flex items-center gap-2">
+            <StopCircle size={14} />
+            已取消
+          </span>
+        );
       default:
         return null;
     }
@@ -152,7 +159,7 @@ export function JobsTab() {
     pending: jobs.filter(j => j.status === 'pending').length,
     in_progress: jobs.filter(j => j.status === 'in_progress').length,
     completed: jobs.filter(j => j.status === 'completed').length,
-    failed: jobs.filter(j => j.status === 'failed').length,
+    failed: jobs.filter(j => j.status === 'failed' || j.status === 'cancelled').length,
     stuck: jobs.filter(j => j.status === 'stuck').length,
   };
 
@@ -415,7 +422,7 @@ export function JobsTab() {
                         取消任务
                       </button>
                     )}
-                    {(selectedJob.status === 'completed' || selectedJob.status === 'failed' || selectedJob.status === 'stuck') && (
+                    {(selectedJob.status === 'completed' || selectedJob.status === 'failed' || selectedJob.status === 'stuck' || selectedJob.status === 'cancelled') && (
                       <button
                         onClick={() => handleRestartJob(selectedJob.id)}
                         className={`flex-1 px-4 py-2 rounded-lg transition-colors flex items-center justify-center gap-2 ${

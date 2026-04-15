@@ -151,6 +151,40 @@ fn test_failure_model_config_missing_required_fields() {
     assert!(result.is_err(), "缺少必填字段应返回错误");
 }
 
+#[test]
+fn test_client_models_url_includes_backend_user_id_when_ready() {
+    let backend_user_id =
+        uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440999").expect("uuid should parse");
+
+    let url = client_models_url("https://admin.example.com", Some(backend_user_id));
+
+    assert_eq!(
+        url,
+        "https://admin.example.com/api/client-models?user_id=550e8400-e29b-41d4-a716-446655440999"
+    );
+}
+
+#[test]
+fn test_client_models_url_omits_backend_user_id_when_missing() {
+    let url = client_models_url("https://admin.example.com", None);
+
+    assert_eq!(url, "https://admin.example.com/api/client-models");
+}
+
+#[test]
+fn test_model_fetch_backend_user_id_reports_poisoned_lock() {
+    let backend_user_id = std::sync::RwLock::new(Some(uuid::Uuid::nil()));
+    let _ = std::panic::catch_unwind(|| {
+        let _guard = backend_user_id.write().expect("write lock should succeed");
+        panic!("poison backend identity for model fetch");
+    });
+
+    let error = model_fetch_backend_user_id(&backend_user_id)
+        .expect_err("poisoned backend identity should fail model fetch precheck");
+
+    assert_eq!(error, "后台用户身份读取失败");
+}
+
 // ============================================================================
 // 安全审计测试 - API Key 不泄露
 // ============================================================================

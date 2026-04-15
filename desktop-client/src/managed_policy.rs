@@ -111,24 +111,24 @@ pub fn verify_signed_policy_with_env(
 
 pub async fn cache_signed_policy_in_store(
     db: &dyn Database,
-    owner_id: &str,
+    scope_id: &str,
     envelope: &SignedManagedPolicyEnvelope,
 ) -> Result<(), String> {
     let value = serde_json::to_value(envelope)
         .map_err(|e| format!("Failed to serialize signed policy envelope: {}", e))?;
-    db.set_setting(owner_id, SIGNED_POLICY_CACHE_KEY, &value)
+    db.set_setting(scope_id, SIGNED_POLICY_CACHE_KEY, &value)
         .await
         .map_err(|e| format!("Failed to cache signed policy envelope: {}", e))
 }
 
 pub async fn ensure_policy_version_monotonic(
     db: &dyn Database,
-    owner_id: &str,
+    scope_id: &str,
     incoming_version: u64,
 ) -> Result<(), String> {
-    let latest = load_cached_policy_version(db, owner_id).await?;
+    let latest = load_cached_policy_version(db, scope_id).await?;
     ensure_newer_policy_version(incoming_version, latest)?;
-    persist_cached_policy_version(db, owner_id, incoming_version).await
+    persist_cached_policy_version(db, scope_id, incoming_version).await
 }
 
 fn ensure_newer_policy_version(incoming_version: u64, latest: Option<u64>) -> Result<(), String> {
@@ -145,10 +145,10 @@ fn ensure_newer_policy_version(incoming_version: u64, latest: Option<u64>) -> Re
 
 pub async fn load_verified_policy_from_store(
     db: &dyn Database,
-    owner_id: &str,
+    scope_id: &str,
 ) -> Result<Option<ManagedPolicySnapshot>, String> {
     let value = db
-        .get_setting(owner_id, SIGNED_POLICY_CACHE_KEY)
+        .get_setting(scope_id, SIGNED_POLICY_CACHE_KEY)
         .await
         .map_err(|e| format!("Failed to load signed policy envelope: {}", e))?;
 
@@ -160,7 +160,7 @@ pub async fn load_verified_policy_from_store(
         .map_err(|e| format!("Invalid signed policy envelope payload: {}", e))?;
     let policy = verify_signed_policy_with_env(&envelope)?;
 
-    if let Some(latest) = load_cached_policy_version(db, owner_id).await? {
+    if let Some(latest) = load_cached_policy_version(db, scope_id).await? {
         if policy.manifest.policy_version < latest {
             return Err(format!(
                 "Cached policy version {} is older than latest accepted version {}",
@@ -245,9 +245,9 @@ fn decode_signature(signature_b64: &str) -> Result<Signature, String> {
     Ok(Signature::from_bytes(&sig_array))
 }
 
-async fn load_cached_policy_version(db: &dyn Database, owner_id: &str) -> Result<Option<u64>, String> {
+async fn load_cached_policy_version(db: &dyn Database, scope_id: &str) -> Result<Option<u64>, String> {
     let value = db
-        .get_setting(owner_id, SIGNED_POLICY_VERSION_KEY)
+        .get_setting(scope_id, SIGNED_POLICY_VERSION_KEY)
         .await
         .map_err(|e| format!("Failed to load signed policy version: {}", e))?;
     let Some(value) = value else {
@@ -261,10 +261,10 @@ async fn load_cached_policy_version(db: &dyn Database, owner_id: &str) -> Result
 
 async fn persist_cached_policy_version(
     db: &dyn Database,
-    owner_id: &str,
+    scope_id: &str,
     version: u64,
 ) -> Result<(), String> {
-    db.set_setting(owner_id, SIGNED_POLICY_VERSION_KEY, &serde_json::json!(version))
+    db.set_setting(scope_id, SIGNED_POLICY_VERSION_KEY, &serde_json::json!(version))
         .await
         .map_err(|e| format!("Failed to persist signed policy version: {}", e))
 }

@@ -2982,6 +2982,8 @@ struct ClientConfigResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     managed_mode: Option<bool>,
     max_cost_per_day_cents: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backend_principal_id: Option<Uuid>,
     config_version: i64,
     updated_at: String,
     // 水印配置（从 system_settings 读取）
@@ -3084,6 +3086,7 @@ async fn get_client_config(
                 extensions_enabled: r.get(6),
                 managed_mode: None,
                 max_cost_per_day_cents: r.get(7),
+                backend_principal_id: None,
                 config_version: r.get(8),
                 updated_at: updated_at.to_rfc3339(),
                 watermark_enabled: None,
@@ -3106,6 +3109,7 @@ async fn get_client_config(
             extensions_enabled: None,
             managed_mode: None,
             max_cost_per_day_cents: None,
+            backend_principal_id: None,
             config_version: 0,
             updated_at: Utc::now().to_rfc3339(),
             watermark_enabled: None,
@@ -3128,12 +3132,13 @@ async fn get_client_config(
         if let Ok(uuid) = Uuid::parse_str(cid) {
             if let Ok(Some(row)) = client
                 .query_opt(
-                    "SELECT needs_upgrade FROM registered_clients WHERE id = $1",
+                    "SELECT user_id, needs_upgrade FROM registered_clients WHERE id = $1",
                     &[&uuid],
                 )
                 .await
             {
-                response.needs_upgrade = row.try_get::<_, bool>(0).ok();
+                response.backend_principal_id = row.try_get::<_, Uuid>(0).ok();
+                response.needs_upgrade = row.try_get::<_, bool>(1).ok();
             }
         }
     }
@@ -3560,6 +3565,7 @@ struct ClientReportPayload {
 #[instrument(skip(state, payload))]
 async fn post_client_reports(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<Vec<ClientReportPayload>>,
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
     if payload.is_empty() {
@@ -3627,9 +3633,7 @@ async fn post_client_reports(
 
         // conversation 类型走专用处理逻辑（幂等写入 conversations 表）
         if report.report_type == "conversation" {
-            match serde_json::from_value::<crate::models::ConversationReportPayload>(
-                report.data.clone(),
-            ) {
+            match resolve_conversation_report_payload(&client, &headers, &report.data).await {
                 Ok(conv_payload) => {
                     match handlers::conversations::ingest_conversation(&client, &conv_payload).await
                     {
@@ -3694,6 +3698,96 @@ async fn post_client_reports(
     info!(count = inserted, "Client reports received");
 
     Ok((StatusCode::CREATED, Json(json!({ "received": inserted }))))
+}
+
+async fn resolve_conversation_report_payload(
+    client: &deadpool_postgres::Object,
+    headers: &HeaderMap,
+    data: &serde_json::Value,
+) -> std::result::Result<crate::models::ConversationReportPayload, String> {
+    let registered_client_user_id = resolve_registered_client_user_id(client, headers).await?;
+    let payload = patch_conversation_report_user_id(data.clone(), registered_client_user_id);
+    serde_json::from_value(payload).map_err(|e| e.to_string())
+}
+
+async fn resolve_registered_client_user_id(
+    client: &deadpool_postgres::Object,
+    headers: &HeaderMap,
+) -> std::result::Result<Option<Uuid>, String> {
+    let Some(token) = crate::middleware::auth::extract_bearer_token(headers) else {
+        return Ok(None);
+    };
+    let Ok(client_id) = Uuid::parse_str(&token) else {
+        return Ok(None);
+    };
+
+    let row = client
+        .query_opt(
+            "SELECT user_id FROM registered_clients WHERE id = $1",
+            &[&client_id],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(row.and_then(|value| value.try_get::<_, Option<Uuid>>(0).ok().flatten()))
+}
+
+fn patch_conversation_report_user_id(
+    mut data: serde_json::Value,
+    registered_client_user_id: Option<Uuid>,
+) -> serde_json::Value {
+    let Some(user_id) = registered_client_user_id else {
+        return data;
+    };
+
+    if let Some(obj) = data.as_object_mut() {
+        obj.insert("user_id".to_string(), json!(user_id));
+    }
+
+    data
+}
+
+#[cfg(test)]
+mod conversation_report_user_binding_tests {
+    use super::patch_conversation_report_user_id;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    #[test]
+    fn registered_client_identity_overrides_payload_user_id() {
+        let payload_user_id =
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").expect("uuid should parse");
+        let registered_user_id =
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440123").expect("uuid should parse");
+
+        let patched = patch_conversation_report_user_id(
+            json!({
+                "client_conversation_id": "conv-1",
+                "user_id": payload_user_id,
+                "messages": [],
+            }),
+            Some(registered_user_id),
+        );
+
+        assert_eq!(patched["user_id"], json!(registered_user_id));
+    }
+
+    #[test]
+    fn payload_user_id_is_preserved_without_registered_client_binding() {
+        let payload_user_id =
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").expect("uuid should parse");
+
+        let patched = patch_conversation_report_user_id(
+            json!({
+                "client_conversation_id": "conv-1",
+                "user_id": payload_user_id,
+                "messages": [],
+            }),
+            None,
+        );
+
+        assert_eq!(patched["user_id"], json!(payload_user_id));
+    }
 }
 
 // ============================================================================

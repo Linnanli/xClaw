@@ -209,3 +209,4 @@ npm run test:e2e
 - `admin-backend/ui/cypress/` — Cypress E2E 测试
 - `docs/plans/project-level-pict-test-design.md` — 项目级 PICT 测试矩阵与子模型设计
 - `docs/plans/skill-management-test-generation-comparison.md` — 技能管理模块的常规生成 vs PICT 驱动生成对照
+- `scripts/pict_generate.py` — 统一的 PICT/pypict/Docker 生成入口，供 agent 和开发者直接生成 pairwise 组合

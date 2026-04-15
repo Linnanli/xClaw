@@ -16,6 +16,8 @@ const FRONTEND_INVOKED_COMMANDS: &[&str] = &[
     // ── 聊天 ────────────────────────────────────────────────────
     "send_chat_message",
     "ic_activate_model",
+    "ic_interrupt_thread",
+    "ic_finalize_thread",
     "subscribe_chat_events",
     "unsubscribe_chat_events",
     // ── 线程管理 ────────────────────────────────────────────────
@@ -48,6 +50,9 @@ const FRONTEND_INVOKED_COMMANDS: &[&str] = &[
     "ic_list_jobs",
     "ic_job_events",
     "ic_job_prompt",
+    "ic_get_job_detail",
+    "ic_cancel_job",
+    "ic_restart_job",
     // ── 日程管理 ────────────────────────────────────────────────
     "ic_routine_runs",
     "ic_list_routines",
@@ -95,6 +100,8 @@ const FRONTEND_INVOKED_COMMANDS: &[&str] = &[
 const REGISTERED_COMMANDS: &[&str] = &[
     "send_chat_message",
     "ic_activate_model",
+    "ic_interrupt_thread",
+    "ic_finalize_thread",
     "subscribe_chat_events",
     "unsubscribe_chat_events",
     "ic_list_threads",
@@ -122,6 +129,9 @@ const REGISTERED_COMMANDS: &[&str] = &[
     "ic_list_jobs",
     "ic_job_events",
     "ic_job_prompt",
+    "ic_get_job_detail",
+    "ic_cancel_job",
+    "ic_restart_job",
     "ic_routine_runs",
     "ic_list_routines",
     "ic_create_routine",

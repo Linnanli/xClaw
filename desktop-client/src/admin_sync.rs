@@ -28,6 +28,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
+use uuid::Uuid;
 
 /// 管理端下发的客户端配置。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -57,6 +58,10 @@ pub struct AdminClientConfig {
     // === 限制 ===
     /// 每日最大花费（美分）
     pub max_cost_per_day_cents: Option<u64>,
+
+    /// Admin Backend 中当前客户端绑定的真实用户 ID。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend_principal_id: Option<Uuid>,
 
     // === 水印 ===
     /// 是否启用水印
@@ -187,6 +192,8 @@ pub struct AdminConfigSync {
     http_client: reqwest::Client,
     /// 当前配置（内存缓存）
     current_config: Arc<RwLock<AdminClientConfig>>,
+    /// 后台主身份同步出口。
+    backend_user_id: Option<Arc<std::sync::RwLock<Option<Uuid>>>>,
     /// 同步间隔（用于 run_sync_loop）
     sync_interval: Duration,
     /// 版本检查间隔（用于 run_sync_loop_with_version_check）
@@ -212,9 +219,18 @@ impl AdminConfigSync {
                 .build()
                 .unwrap_or_default(),
             current_config: Arc::new(RwLock::new(AdminClientConfig::default())),
+            backend_user_id: None,
             sync_interval: Duration::from_secs(300), // 5 分钟
             version_check_interval: Duration::from_secs(30), // 30 秒
         }
+    }
+
+    pub fn with_backend_user_id_sink(
+        mut self,
+        backend_user_id: Arc<std::sync::RwLock<Option<Uuid>>>,
+    ) -> Self {
+        self.backend_user_id = Some(backend_user_id);
+        self
     }
 
     /// 设置同步间隔。
@@ -258,6 +274,8 @@ impl AdminConfigSync {
             .await
             .map_err(|e| format!("Failed to parse response: {}", e))?;
 
+        self.publish_backend_principal_id(config.backend_principal_id);
+
         // 更新内存缓存
         {
             let mut current = self.current_config.write().await;
@@ -275,6 +293,19 @@ impl AdminConfigSync {
         );
 
         Ok(config)
+    }
+
+    fn publish_backend_principal_id(&self, backend_principal_id: Option<Uuid>) {
+        if let Some(target) = &self.backend_user_id {
+            match target.write() {
+                Ok(mut current) => {
+                    *current = backend_principal_id;
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, "Failed to publish backend principal id");
+                }
+            }
+        }
     }
 
     /// 启动后台同步循环。

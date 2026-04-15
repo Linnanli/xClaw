@@ -26,6 +26,7 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 /// 客户端上报事件。
@@ -114,6 +115,9 @@ pub struct ConversationMessage {
     pub role: String,
     /// 消息内容
     pub content: String,
+    /// 附件元数据（仅用户消息通常有值）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<ConversationAttachment>,
     /// 使用的模型 ID（仅 assistant 消息有值）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
@@ -123,6 +127,53 @@ pub struct ConversationMessage {
     /// 输出 Token 数（仅 assistant 消息有值）
     #[serde(default)]
     pub output_tokens: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConversationAttachment {
+    pub id: String,
+    pub kind: String,
+    pub mime_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extracted_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_data_base64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_secs: Option<u32>,
+}
+
+impl ConversationAttachment {
+    pub fn from_frontend(
+        id: String,
+        kind: String,
+        mime_type: String,
+        filename: Option<String>,
+        size_bytes: Option<u64>,
+        extracted_text: Option<String>,
+        data: &[u8],
+        duration_secs: Option<u32>,
+    ) -> Self {
+        let image_data_base64 = if kind == "image" && !data.is_empty() {
+            Some(base64::engine::general_purpose::STANDARD.encode(data))
+        } else {
+            None
+        };
+
+        Self {
+            id,
+            kind,
+            mime_type,
+            filename,
+            size_bytes,
+            extracted_text,
+            image_data_base64,
+            duration_secs,
+        }
+    }
 }
 
 /// 数据上报器。

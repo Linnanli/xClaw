@@ -119,7 +119,7 @@ pub async fn ic_list_routines(state: State<'_, EngineState>) -> Result<Vec<Routi
     let state = state.get()?;
     let db = state.db.as_ref().ok_or("Database not available")?;
     let mut routines = db
-        .list_routines(&state.owner_id)
+        .list_routines(&state.scope_id)
         .await
         .map_err(|e| format!("Failed to list routines: {}", e))?;
 
@@ -192,7 +192,7 @@ pub async fn ic_create_routine(
         id: Uuid::new_v4(),
         name: request.name.clone(),
         description: request.description,
-        user_id: state.owner_id.clone(),
+        user_id: state.scope_id.clone(),
         enabled: true,
         trigger,
         action: RoutineAction::FullJob {
@@ -354,7 +354,7 @@ pub async fn ic_fire_routine(
     };
 
     let run_id = engine
-        .fire_manual(uuid, Some(&state.owner_id))
+        .fire_manual(uuid, Some(&state.scope_id))
         .await
         .map_err(|e| e.to_string())?;
     wait_for_run_job_link(db, uuid, run_id).await;

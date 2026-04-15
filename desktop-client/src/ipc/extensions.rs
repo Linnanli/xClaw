@@ -59,7 +59,7 @@ async fn ensure_extension_allowed_in_managed_mode(
     }
 
     if let Some(db) = state.db.as_ref() {
-        if let Some(policy) = load_verified_policy_from_store(db.as_ref(), &state.owner_id).await? {
+        if let Some(policy) = load_verified_policy_from_store(db.as_ref(), &state.scope_id).await? {
             if policy.allows_extension(name) {
                 return Ok(());
             }
@@ -94,7 +94,7 @@ pub async fn ic_list_extensions(
         .ok_or("Extension manager not available")?;
 
     let extensions = ext_mgr
-        .list(None, include_available.unwrap_or(false), &state.owner_id)
+        .list(None, include_available.unwrap_or(false), &state.scope_id)
         .await
         .map_err(|e| format!("Failed to list extensions: {}", e))?;
 
@@ -127,7 +127,7 @@ pub async fn ic_enable_extension(
     ensure_extension_installed(state, &name).await?;
     ensure_extension_allowed_in_managed_mode(state, &name).await?;
     ext_mgr
-        .activate(&name, &state.owner_id)
+        .activate(&name, &state.scope_id)
         .await
         .map_err(|e| format!("Failed to enable extension: {}", e))?;
     if let Err(error) = set_extension_enabled_with_persist(state, &name, true).await {
@@ -153,7 +153,7 @@ pub async fn ic_disable_extension(
     ensure_extension_installed(state, &name).await?;
     soft_deactivate_extension_runtime(state, &name).await?;
     if let Err(error) = set_extension_enabled_with_persist(state, &name, false).await {
-        if let Err(reactivate_error) = ext_mgr.activate(&name, &state.owner_id).await {
+        if let Err(reactivate_error) = ext_mgr.activate(&name, &state.scope_id).await {
             return Err(format!(
                 "{}; failed to reactivate extension after rollback: {}",
                 error, reactivate_error
@@ -182,7 +182,7 @@ pub async fn ic_install_extension(
         .ok_or("Extension manager not available")?;
 
     let result = ext_mgr
-        .install(&name, url.as_deref(), None, &state.owner_id)
+        .install(&name, url.as_deref(), None, &state.scope_id)
         .await
         .map_err(|e| format!("Failed to install extension: {}", e))?;
 
@@ -203,7 +203,7 @@ pub async fn ic_uninstall_extension(
         .ok_or("Extension manager not available")?;
 
     let message = ext_mgr
-        .remove(&name, &state.owner_id)
+        .remove(&name, &state.scope_id)
         .await
         .map_err(|e| format!("Failed to uninstall extension: {}", e))?;
 
@@ -258,12 +258,12 @@ pub async fn ic_extension_setup(
         .ok_or("Extension manager not available")?;
 
     let secrets = ext_mgr
-        .get_setup_schema(&name, &state.owner_id)
+        .get_setup_schema(&name, &state.scope_id)
         .await
         .map_err(|e| format!("Failed to get setup schema: {}", e))?;
 
     let kind = ext_mgr
-        .list(None, false, &state.owner_id)
+        .list(None, false, &state.scope_id)
         .await
         .ok()
         .and_then(|list| list.into_iter().find(|e| e.name == name))
@@ -311,7 +311,7 @@ pub async fn ic_extension_setup_submit(
             &name,
             &secrets,
             &std::collections::HashMap::new(),
-            &state.owner_id,
+            &state.scope_id,
         )
         .await
         .map_err(|e| format!("Failed to configure extension: {}", e))?;
@@ -367,7 +367,7 @@ async fn ensure_extension_installed(state: &AppState, name: &str) -> Result<(), 
         .as_ref()
         .ok_or("Extension manager not available")?;
     let installed = ext_mgr
-        .list(None, false, &state.owner_id)
+        .list(None, false, &state.scope_id)
         .await
         .map_err(|e| format!("Failed to list extensions: {}", e))?;
     if extension_name_exists(name, installed.iter().map(|ext| ext.name.as_str())) {
@@ -416,7 +416,7 @@ async fn soft_deactivate_extension_runtime(state: &AppState, name: &str) -> Resu
         .ok_or("Extension manager not available")?;
 
     let installed = ext_mgr
-        .list(None, false, &state.owner_id)
+        .list(None, false, &state.scope_id)
         .await
         .map_err(|e| format!("Failed to list extensions: {}", e))?;
 
@@ -488,6 +488,10 @@ mod tests {
         let safety_bridge = Arc::new(SafetyBridge::new(Arc::clone(&safety), None, None));
         let tools = Arc::new(ToolRegistry::new());
         let context_manager = Arc::new(ContextManager::new(5));
+        let data_reporter = Arc::new(crate::data_reporter::DataReporter::new(
+            "http://localhost:3000".to_string(),
+            "test-token".to_string(),
+        ));
 
         let model_override = Arc::new(std::sync::RwLock::new(None));
         let stub_llm: Arc<dyn ironclaw::llm::LlmProvider> = Arc::new(StubLlmProvider);
@@ -509,7 +513,9 @@ mod tests {
             safety_bridge,
             context_manager,
             conversation_tracker: Arc::new(crate::conversation_tracker::ConversationTracker::new("test-owner".to_string())),
-            owner_id: "test-owner".to_string(),
+            data_reporter,
+            scope_id: "test-owner".to_string(),
+            backend_user_id: Arc::new(std::sync::RwLock::new(None)),
             llm: Arc::clone(&model_switch) as _,
             model_override,
             model_switch,
@@ -519,6 +525,7 @@ mod tests {
             log_broadcaster: Arc::new(ironclaw::channels::web::log_layer::LogBroadcaster::new()),
             log_clear_offset: std::sync::atomic::AtomicUsize::new(0),
             routine_engine_slot: Arc::new(tokio::sync::RwLock::new(None)),
+            scheduler_slot: Arc::new(tokio::sync::RwLock::new(None)),
             disabled_skills: std::sync::RwLock::new(HashSet::new()),
             disabled_extensions: std::sync::RwLock::new(
                 disabled_extensions

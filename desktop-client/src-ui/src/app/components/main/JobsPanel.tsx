@@ -38,12 +38,13 @@ interface JobsPanelProps {
   onJobClick?: (conversationId: string) => void;
 }
 
-type StatusKey = 'running' | 'completed' | 'failed';
+type StatusKey = 'running' | 'completed' | 'failed' | 'cancelled';
 
 const STATUS_CONFIG: Record<StatusKey, { label: string; color: string; bgColor: string; icon: React.ElementType }> = {
   running: { label: '运行中', color: 'text-amber-600', bgColor: 'bg-amber-50', icon: Loader2 },
   completed: { label: '已完成', color: 'text-emerald-600', bgColor: 'bg-emerald-50', icon: CheckCircle },
   failed: { label: '失败', color: 'text-red-600', bgColor: 'bg-red-50', icon: XCircle },
+  cancelled: { label: '已取消', color: 'text-slate-600', bgColor: 'bg-slate-100', icon: XCircle },
 };
 
 const EVENT_TYPE_LABELS: Record<string, string> = {
@@ -175,12 +176,13 @@ export function JobsPanel({ open, onOpenChange, onAskJobResult, onJobClick }: Jo
   const counts = {
     running: jobs.filter((j) => j.status === 'in_progress' || j.status === 'pending').length,
     completed: jobs.filter((j) => j.status === 'completed').length,
-    failed: jobs.filter((j) => j.status === 'failed').length,
+    failed: jobs.filter((j) => j.status === 'failed' || j.status === 'cancelled').length,
   };
 
   const mapStatus = (status: string): StatusKey => {
     if (status === 'completed') return 'completed';
     if (status === 'failed') return 'failed';
+    if (status === 'cancelled') return 'cancelled';
     return 'running';
   };
 

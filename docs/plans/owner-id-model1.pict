@@ -1,0 +1,11 @@
+# Client token and sync path
+ClientTokenKind: UuidClientToken, NonUuidToken, EmptyToken
+IdentitySource: FreshClientConfig, CacheFallback, SyncDisabled
+BackendPrincipalField: ValidUuid, Missing
+ObservationPoint: StartupInit, RuntimeRefresh
+
+# Constraints
+IF [ClientTokenKind] = "EmptyToken" THEN [IdentitySource] = "SyncDisabled";
+IF [IdentitySource] = "SyncDisabled" THEN [BackendPrincipalField] = "Missing";
+IF [IdentitySource] = "FreshClientConfig" THEN [ClientTokenKind] <> "EmptyToken";
+IF [IdentitySource] = "CacheFallback" THEN [ObservationPoint] = "StartupInit";

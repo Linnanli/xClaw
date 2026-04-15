@@ -63,7 +63,7 @@ pub async fn jwt_auth(request: Request<Body>, next: Next) -> Response {
     }
 }
 
-fn extract_bearer_token(headers: &axum::http::HeaderMap) -> Option<String> {
+pub(crate) fn extract_bearer_token(headers: &axum::http::HeaderMap) -> Option<String> {
     let value = headers.get("authorization")?.to_str().ok()?;
     value.strip_prefix("Bearer ").map(|s| s.to_owned())
 }

@@ -4,6 +4,7 @@
 // 暂无对应新命令的 API 返回 stub 默认值
 
 import { invoke } from '@tauri-apps/api/core';
+import type { ThreadMessageLike } from '@assistant-ui/react';
 
 // Helper function to invoke Tauri commands with error handling
 export async function invokeTauri<T = any>(
@@ -72,6 +73,7 @@ export interface Message {
   thread_id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
+  attachments?: NonNullable<ThreadMessageLike['attachments']>;
   created_at: string;
 }
 
@@ -113,6 +115,7 @@ export const threadApi = {
       id: string;
       role: string;
       content: string;
+      attachments?: NonNullable<ThreadMessageLike['attachments']>;
       created_at: string;
     }>>('ic_get_thread_history', { threadId });
     return messages.map(m => ({
@@ -120,6 +123,14 @@ export const threadApi = {
       thread_id: threadId,
       role: m.role as 'user' | 'assistant' | 'system',
     }));
+  },
+
+  interruptThread: async (threadId: string): Promise<void> => {
+    await invokeTauri('ic_interrupt_thread', { threadId });
+  },
+
+  finalizeThread: async (threadId: string): Promise<void> => {
+    await invokeTauri('ic_finalize_thread', { threadId });
   },
 };
 
@@ -341,6 +352,8 @@ export const approvalApi = {
     invokeTauri('ic_approve_tool', { requestId, threadId }),
   denyOperation: (requestId: string, threadId: string = 'default') =>
     invokeTauri('ic_deny_tool', { requestId, threadId }),
+  submitApprovalTicket: (requestId: string, toolName: string, content: string, threadId: string) =>
+    invokeTauri<string>('submit_approval_ticket', { requestId, toolName, content, threadId }),
 };
 
 // ============================================================================
@@ -602,7 +615,7 @@ export const skillApi = {
 };
 
 // ============================================================================
-// Job APIs (stub — 暂无对应新命令)
+// Job APIs → ic_list_jobs, ic_get_job_detail, ic_cancel_job, ic_restart_job
 // ============================================================================
 
 export interface JobInfo {
@@ -653,8 +666,12 @@ export const jobApi = {
   },
   getJobDetail: (jobId: string): Promise<JobDetail> =>
     invokeTauri<JobDetail>('ic_get_job_detail', { jobId }),
-  cancelJob: async (_jobId: string): Promise<void> => {},
-  restartJob: async (_jobId: string): Promise<void> => {},
+  cancelJob: async (jobId: string): Promise<void> => {
+    await invokeTauri('ic_cancel_job', { jobId });
+  },
+  restartJob: async (jobId: string): Promise<void> => {
+    await invokeTauri('ic_restart_job', { jobId });
+  },
   getJobEvents: (jobId: string) =>
     invokeTauri<JobEventsResponse>('ic_job_events', { jobId }),
   sendJobPrompt: (jobId: string, content: string) =>

@@ -1,9 +1,13 @@
 mod common;
 
-use axum::http::StatusCode;
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use chrono::{DateTime, Utc};
 use common::{build_app, get, post_json, response_json, try_connect_db, unique_name};
 use serde_json::Value;
+use tower::ServiceExt;
 use tokio_postgres::Client as DbClient;
 use uuid::Uuid;
 
@@ -178,6 +182,26 @@ async fn cleanup_departments(client: &DbClient, department_ids: &[Uuid]) {
     }
 }
 
+async fn post_client_report_with_token(
+    app: axum::Router,
+    client_token: Uuid,
+    body: serde_json::Value,
+) -> axum::response::Response {
+    app.oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/api/client-reports")
+            .header("authorization", format!("Bearer {client_token}"))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&body).expect("serialize POST body"),
+            ))
+            .expect("build client report request"),
+    )
+    .await
+    .expect("execute client report request")
+}
+
 #[tokio::test]
 async fn test_conversation_report_used_skills_do_not_mutate_invoke_count() {
     let pool = match try_connect_db().await {
@@ -268,6 +292,85 @@ async fn test_conversation_report_used_skills_do_not_mutate_invoke_count() {
 
     cleanup_conversation_report_data(&client, user_id).await;
     cleanup_skills(&client, &[invoked_skill_id, untouched_skill_id]).await;
+    cleanup_user(&client, user_id).await;
+    cleanup_departments(&client, &[dept_id]).await;
+}
+
+#[tokio::test]
+async fn test_conversation_report_falls_back_to_registered_client_user_for_list_visibility() {
+    let pool = match try_connect_db().await {
+        Some(p) => p,
+        None => {
+            println!("⚠️ 数据库不可用，跳过");
+            return;
+        }
+    };
+
+    let now = Utc::now();
+    let dept_id = Uuid::new_v4();
+    let user_id = Uuid::new_v4();
+    let client_token = Uuid::new_v4();
+    let dept_name = unique_name("conv_audit_dept");
+    let username = unique_name("conv_audit_user");
+    let email = format!("{}@example.com", username);
+
+    let client = pool.get().await.expect("get db client");
+
+    insert_department(
+        &client,
+        now,
+        dept_id,
+        &dept_name,
+        "conversation audit department",
+        None,
+    )
+    .await;
+    insert_user(&client, now, user_id, &username, &email, dept_id).await;
+    insert_registered_client(
+        &client,
+        now,
+        client_token,
+        user_id,
+        &username,
+        "conversation-audit-client",
+    )
+    .await;
+
+    let body = serde_json::json!([
+        {
+            "type": "conversation",
+            "client_conversation_id": format!("default-thread-{}", client_token),
+            "user_id": "default",
+            "topic": "fallback audit test",
+            "model_id": "gpt-4o-mini",
+            "messages": [
+                {"role": "user", "content": "hello admin audit"},
+                {"role": "assistant", "content": "hello", "input_tokens": 3, "output_tokens": 5}
+            ]
+        }
+    ]);
+
+    let resp = post_client_report_with_token(build_app(pool.clone()), client_token, body).await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let stored_count: i64 = client
+        .query_one("SELECT COUNT(*) FROM conversations WHERE user_id = $1", &[&user_id])
+        .await
+        .expect("query conversations count")
+        .get(0);
+    assert_eq!(stored_count, 1, "conversation 应写入真实用户 ID");
+
+    let list_resp = get(build_app(pool.clone()), "/api/conversations?page=1&page_size=20").await;
+    assert_eq!(list_resp.status(), StatusCode::OK);
+    let list_body = response_json(list_resp).await;
+    let items = list_body["data"].as_array().expect("conversation list should be array");
+    assert!(
+        items.iter().any(|item| item["username"] == username && item["topic"] == "fallback audit test"),
+        "对话审计列表应能看到客户端上报的对话"
+    );
+
+    cleanup_conversation_report_data(&client, user_id).await;
+    cleanup_registered_client(&client, client_token).await;
     cleanup_user(&client, user_id).await;
     cleanup_departments(&client, &[dept_id]).await;
 }

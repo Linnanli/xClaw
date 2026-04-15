@@ -245,6 +245,7 @@ mod client_config_contract {
             "llm_backend": "openai",
             "config_version": 1,
             "managed_mode": true,
+            "backend_principal_id": "550e8400-e29b-41d4-a716-446655440000",
             "skill_registry_url": "https://admin.corp.com?client_token=abc123"
         });
 
@@ -261,6 +262,10 @@ mod client_config_contract {
         );
 
         assert_eq!(config["managed_mode"], true);
+        assert_eq!(
+            config["backend_principal_id"],
+            "550e8400-e29b-41d4-a716-446655440000"
+        );
     }
 }
 

@@ -42,12 +42,15 @@ use ironclaw::extensions::ExtensionManager;
 use ironclaw::safety::SafetyLayer;
 use ironclaw::skills::catalog::SkillCatalog;
 use ironclaw::skills::SkillRegistry;
+use ironclaw::tools::builtin::SchedulerSlot;
 use ironclaw::tools::ToolRegistry;
 use ironclaw::workspace::Workspace;
 use tokio::sync::mpsc;
+use uuid::Uuid;
 
 use crate::safety_bridge::SafetyBridge;
 use crate::conversation_tracker::ConversationTracker;
+use crate::data_reporter::DataReporter;
 
 /// IronClaw 引擎内部状态。
 ///
@@ -78,8 +81,12 @@ pub struct AppState {
     pub context_manager: Arc<ContextManager>,
     /// 对话追踪器（对话审计与技能使用上报）。
     pub conversation_tracker: Arc<ConversationTracker>,
-    /// 实例 owner ID。
-    pub owner_id: String,
+    /// 数据上报器（对话审计/DLP/运行指标出站）。
+    pub data_reporter: Arc<DataReporter>,
+    /// IronClaw 本地租户/作用域 ID。
+    pub scope_id: String,
+    /// Admin Backend 中当前客户端绑定的真实用户 ID。
+    pub backend_user_id: Arc<std::sync::RwLock<Option<Uuid>>>,
     /// LLM provider 引用（用于模型切换和查询可用模型列表）。
     ///
     /// 模型切换策略：
@@ -107,6 +114,8 @@ pub struct AppState {
     pub log_clear_offset: std::sync::atomic::AtomicUsize,
     /// Routine engine slot — 引擎就绪后填充，供 ic_fire_routine 使用。
     pub routine_engine_slot: Arc<tokio::sync::RwLock<Option<Arc<RoutineEngine>>>>,
+    /// Scheduler slot — Agent 构建完成后填充，供任务取消/重试命令使用。
+    pub scheduler_slot: SchedulerSlot,
     /// 被用户禁用的技能名集合（仅影响 desktop-client IPC 行为）。
     pub disabled_skills: std::sync::RwLock<HashSet<String>>,
     /// 被用户禁用的扩展名集合（仅影响 desktop-client IPC 行为）。
@@ -114,6 +123,10 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub fn require_backend_user_id(&self, context: &str) -> Result<Uuid, String> {
+        require_backend_user_id_value(&self.backend_user_id, context)
+    }
+
     pub fn skill_enabled(&self, name: &str) -> bool {
         self.disabled_skills
             .read()
@@ -145,6 +158,17 @@ impl AppState {
     }
 }
 
+pub(crate) fn require_backend_user_id_value(
+    backend_user_id: &std::sync::RwLock<Option<Uuid>>,
+    context: &str,
+) -> Result<Uuid, String> {
+    backend_user_id
+        .read()
+        .map_err(|_| format!("{}：后台用户身份读取失败", context))?
+        .to_owned()
+        .ok_or_else(|| format!("{}：后台用户身份尚未就绪", context))
+}
+
 fn set_enabled_flag(
     lock: &std::sync::RwLock<HashSet<String>>,
     name: &str,
@@ -166,9 +190,10 @@ fn disabled_snapshot(lock: &std::sync::RwLock<HashSet<String>>) -> Result<Vec<St
 
 #[cfg(test)]
 mod tests {
-    use super::{disabled_snapshot, set_enabled_flag};
+    use super::{disabled_snapshot, require_backend_user_id_value, set_enabled_flag};
     use std::collections::HashSet;
     use std::sync::RwLock;
+    use uuid::Uuid;
 
     #[test]
     fn test_set_enabled_flag_disable_then_enable() {
@@ -203,6 +228,42 @@ mod tests {
         let mut disabled = disabled_snapshot(&lock).expect("snapshot should succeed");
         disabled.sort();
         assert_eq!(disabled, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn test_require_backend_user_id_value_returns_uuid() {
+        let expected = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000")
+            .expect("uuid should parse");
+        let lock = RwLock::new(Some(expected));
+
+        let actual = require_backend_user_id_value(&lock, "配额预检")
+            .expect("backend user id should be available");
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_require_backend_user_id_value_reports_missing_identity() {
+        let lock = RwLock::new(None);
+
+        let error = require_backend_user_id_value(&lock, "审批申请人身份")
+            .expect_err("missing backend user id should fail");
+
+        assert_eq!(error, "审批申请人身份：后台用户身份尚未就绪");
+    }
+
+    #[test]
+    fn test_require_backend_user_id_value_reports_poisoned_lock() {
+        let lock = RwLock::new(Some(Uuid::nil()));
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = lock.write().expect("write lock should succeed");
+            panic!("poison backend user id lock");
+        });
+
+        let error = require_backend_user_id_value(&lock, "配额预检")
+            .expect_err("poisoned backend user id lock should fail");
+
+        assert_eq!(error, "配额预检：后台用户身份读取失败");
     }
 }
 

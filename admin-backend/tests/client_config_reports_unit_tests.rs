@@ -23,6 +23,7 @@ struct ClientConfigResponse {
     skills_enabled: Option<bool>,
     extensions_enabled: Option<bool>,
     max_cost_per_day_cents: Option<i64>,
+    backend_principal_id: Option<String>,
     config_version: i64,
     updated_at: String,
 }
@@ -38,6 +39,7 @@ struct AdminClientConfig {
     skills_enabled: Option<bool>,
     extensions_enabled: Option<bool>,
     max_cost_per_day_cents: Option<u64>,
+    backend_principal_id: Option<String>,
     config_version: Option<u64>,
     updated_at: Option<String>,
 }
@@ -66,6 +68,7 @@ fn test_config_response_full_serialize() {
         skills_enabled: Some(true),
         extensions_enabled: Some(false),
         max_cost_per_day_cents: Some(5000),
+        backend_principal_id: Some("550e8400-e29b-41d4-a716-446655440000".into()),
         config_version: 42,
         updated_at: "2026-03-22T00:00:00Z".into(),
     };
@@ -86,6 +89,7 @@ fn test_config_response_all_none_fields() {
         skills_enabled: None,
         extensions_enabled: None,
         max_cost_per_day_cents: None,
+        backend_principal_id: None,
         config_version: 0,
         updated_at: "2026-03-22T00:00:00Z".into(),
     };
@@ -129,12 +133,17 @@ fn test_admin_client_config_deserialize_contract() {
         "skills_enabled": true,
         "extensions_enabled": false,
         "max_cost_per_day_cents": 1234,
+        "backend_principal_id": "550e8400-e29b-41d4-a716-446655440000",
         "config_version": 7,
         "updated_at": "2026-03-22T00:00:00Z"
     });
 
     let parsed: AdminClientConfig = serde_json::from_value(json_val).unwrap();
     assert_eq!(parsed.max_cost_per_day_cents, Some(1234));
+    assert_eq!(
+        parsed.backend_principal_id,
+        Some("550e8400-e29b-41d4-a716-446655440000".into())
+    );
     assert_eq!(parsed.config_version, Some(7));
 }
 
@@ -149,6 +158,7 @@ fn test_config_response_large_version_number() {
         skills_enabled: None,
         extensions_enabled: None,
         max_cost_per_day_cents: None,
+        backend_principal_id: None,
         config_version: i64::MAX,
         updated_at: "2026-03-22T00:00:00Z".into(),
     };
@@ -169,6 +179,7 @@ fn test_config_response_max_cost_boundary() {
         skills_enabled: None,
         extensions_enabled: None,
         max_cost_per_day_cents: Some(0),
+        backend_principal_id: None,
         config_version: 1,
         updated_at: "2026-03-22T00:00:00Z".into(),
     };
@@ -384,6 +395,7 @@ fn test_config_response_negative_cost() {
         skills_enabled: None,
         extensions_enabled: None,
         max_cost_per_day_cents: Some(-100),
+        backend_principal_id: None,
         config_version: 1,
         updated_at: "2026-03-22T00:00:00Z".into(),
     };

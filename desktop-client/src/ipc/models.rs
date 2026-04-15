@@ -89,6 +89,22 @@ fn load_custom_models() -> CustomModelStore {
     }
 }
 
+pub(crate) fn model_fetch_backend_user_id(
+    backend_user_id: &std::sync::RwLock<Option<uuid::Uuid>>,
+) -> Result<Option<uuid::Uuid>, String> {
+    backend_user_id
+        .read()
+        .map_err(|_| "后台用户身份读取失败".to_string())
+        .map(|value| *value)
+}
+
+pub(crate) fn client_models_url(admin_url: &str, backend_user_id: Option<uuid::Uuid>) -> String {
+    match backend_user_id {
+        Some(user_id) => format!("{}/api/client-models?user_id={}", admin_url, user_id),
+        None => format!("{}/api/client-models", admin_url),
+    }
+}
+
 /// 从本地自定义模型存储中查找指定 model_id 的真实 API key。
 ///
 /// 供 `switch_provider` 在收到脱敏值（`"****"`）时回退调用，
@@ -364,22 +380,15 @@ async fn fetch_admin_models(engine: &EngineState) -> Result<Vec<ModelConfig>, St
     let admin_url =
         std::env::var("ADMIN_BACKEND_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
 
-    // 获取当前用户 ID，用于部门白名单过滤
-    // owner_id 可能是非 UUID 值（如 "default"），此时不传 user_id 参数
     let state = engine.get().map_err(|e| format!("引擎未就绪: {}", e))?;
-    let owner_id = &state.owner_id;
+    let backend_user_id = model_fetch_backend_user_id(&state.backend_user_id)?;
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
 
-    // 仅当 owner_id 是合法 UUID 时才传 user_id，否则后端返回所有已启用模型
-    let url = if uuid::Uuid::parse_str(owner_id).is_ok() {
-        format!("{}/api/client-models?user_id={}", admin_url, owner_id)
-    } else {
-        format!("{}/api/client-models", admin_url)
-    };
+    let url = client_models_url(&admin_url, backend_user_id);
     let response = client
         .get(&url)
         .send()

@@ -2,7 +2,9 @@
 
 #[cfg(test)]
 mod conversation_payload_tests {
-    use admin_backend::models::{ConversationMessagePayload, ConversationReportPayload};
+    use admin_backend::models::{
+        ConversationAttachmentPayload, ConversationMessagePayload, ConversationReportPayload,
+    };
 
     #[test]
     fn req_conv_8_report_payload_deserializes() {
@@ -44,6 +46,7 @@ mod conversation_payload_tests {
             ConversationMessagePayload {
                 role: "user".into(),
                 content: "hi".into(),
+                attachments: Vec::new(),
                 model_id: None,
                 input_tokens: 10,
                 output_tokens: 0,
@@ -51,6 +54,7 @@ mod conversation_payload_tests {
             ConversationMessagePayload {
                 role: "assistant".into(),
                 content: "hello".into(),
+                attachments: Vec::new(),
                 model_id: Some("gpt".into()),
                 input_tokens: 0,
                 output_tokens: 20,
@@ -61,6 +65,45 @@ mod conversation_payload_tests {
             .map(|m| m.input_tokens + m.output_tokens)
             .sum();
         assert_eq!(total, 30);
+    }
+
+    #[test]
+    fn req_conv_9_report_payload_attachment_backward_compatible() {
+        let json = r#"{
+            "client_conversation_id": "conv-old",
+            "user_id": "550e8400-e29b-41d4-a716-446655440000",
+            "messages": [
+                {"role": "user", "content": "legacy message"}
+            ]
+        }"#;
+        let payload: ConversationReportPayload = serde_json::from_str(json).expect("旧 payload 应能反序列化");
+        assert_eq!(payload.messages.len(), 1);
+        assert!(payload.messages[0].attachments.is_empty());
+    }
+
+    #[test]
+    fn req_conv_10_report_payload_with_attachments() {
+        let message = ConversationMessagePayload {
+            role: "user".into(),
+            content: "see attachment".into(),
+            attachments: vec![ConversationAttachmentPayload {
+                id: "img-1".into(),
+                kind: "image".into(),
+                mime_type: "image/png".into(),
+                filename: Some("diagram.png".into()),
+                size_bytes: Some(128),
+                extracted_text: None,
+                image_data_base64: Some("Zm9v".into()),
+                duration_secs: None,
+            }],
+            model_id: None,
+            input_tokens: 0,
+            output_tokens: 0,
+        };
+        let json = serde_json::to_value(&message).expect("message 应能序列化");
+
+        assert_eq!(json["attachments"][0]["kind"], "image");
+        assert_eq!(json["attachments"][0]["filename"], "diagram.png");
     }
 }
 
@@ -105,12 +148,13 @@ mod conversation_contract_tests {
             "id": "uuid", "username": "test", "topic": "t", "message_count": 2, "total_tokens": 30,
             "dlp_flagged": false, "created_at": "2025-01-01T00:00:00Z",
             "messages": [
-                {"id": "m1", "role": "user", "content": "hi", "input_tokens": 10, "output_tokens": 0, "created_at": "2025-01-01T00:00:00Z"},
-                {"id": "m2", "role": "assistant", "content": "hello", "input_tokens": 0, "output_tokens": 20, "created_at": "2025-01-01T00:00:01Z"}
+                {"id": "m1", "role": "user", "content": "hi", "attachments": [{"id": "img-1", "kind": "image", "mime_type": "image/png", "image_data_base64": "Zm9v"}], "input_tokens": 10, "output_tokens": 0, "created_at": "2025-01-01T00:00:00Z"},
+                {"id": "m2", "role": "assistant", "content": "hello", "attachments": [], "input_tokens": 0, "output_tokens": 20, "created_at": "2025-01-01T00:00:01Z"}
             ]
         });
         assert!(resp["messages"].is_array());
         assert_eq!(resp["messages"].as_array().unwrap().len(), 2);
+        assert!(resp["messages"][0]["attachments"].is_array());
     }
 
     #[test]

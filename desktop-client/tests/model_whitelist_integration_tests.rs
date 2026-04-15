@@ -34,6 +34,7 @@ mod model_whitelist_tests {
                 ConversationMessage {
                     role: "user".to_string(),
                     content: "Hello".to_string(),
+                    attachments: Vec::new(),
                     model_id: None,
                     input_tokens: 0,
                     output_tokens: 0,
@@ -41,6 +42,7 @@ mod model_whitelist_tests {
                 ConversationMessage {
                     role: "assistant".to_string(),
                     content: "Hi there!".to_string(),
+                    attachments: Vec::new(),
                     model_id: Some("gpt-4o".to_string()),
                     input_tokens: 10,
                     output_tokens: 5,
@@ -74,7 +76,7 @@ mod conversation_tracker_tests {
         let tracker = ConversationTracker::new("user-001".to_string());
         let reporter = make_reporter();
 
-        tracker.record_user_message("thread-1", "你好", false);
+        tracker.record_user_message("thread-1", "你好", false, &[]);
         tracker.record_assistant_message(
             "thread-1",
             "你好！有什么可以帮你？",
@@ -101,7 +103,7 @@ mod conversation_tracker_tests {
         let tracker = ConversationTracker::new("user-003".to_string());
         let reporter = make_reporter();
 
-        tracker.record_user_message("thread-2", "敏感内容", true);
+        tracker.record_user_message("thread-2", "敏感内容", true, &[]);
         tracker.record_assistant_message("thread-2", "已处理", None, 5, 3);
         tracker.finish_thread("thread-2", &reporter);
 
@@ -114,7 +116,7 @@ mod conversation_tracker_tests {
         let tracker = ConversationTracker::new("user-004".to_string());
         let reporter = make_reporter();
 
-        tracker.record_user_message("thread-3", "hello", false);
+        tracker.record_user_message("thread-3", "hello", false, &[]);
         tracker.record_assistant_message("thread-3", "hi", Some("gpt-4o"), 10, 8);
         tracker.finish_thread("thread-3", &reporter);
 
@@ -128,7 +130,7 @@ mod conversation_tracker_tests {
         tracker.idle_timeout = Duration::from_millis(1);
         let reporter = make_reporter();
 
-        tracker.record_user_message("thread-4", "hi", false);
+        tracker.record_user_message("thread-4", "hi", false, &[]);
         tracker.record_assistant_message("thread-4", "hello", None, 5, 3);
 
         std::thread::sleep(Duration::from_millis(5));
@@ -142,8 +144,8 @@ mod conversation_tracker_tests {
         let tracker = ConversationTracker::new("user-006".to_string());
         let reporter = make_reporter();
 
-        tracker.record_user_message("t-a", "msg a", false);
-        tracker.record_user_message("t-b", "msg b", false);
+        tracker.record_user_message("t-a", "msg a", false, &[]);
+        tracker.record_user_message("t-b", "msg b", false, &[]);
         tracker.record_assistant_message("t-a", "reply a", None, 5, 3);
         tracker.record_assistant_message("t-b", "reply b", None, 7, 4);
 

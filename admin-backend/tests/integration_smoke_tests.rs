@@ -173,6 +173,7 @@ async fn test_migration_all_tables_exist() {
         ("021_knowledge_docs", "kb_documents"),
         ("023_extensions_v2", "department_skill_whitelist"),
         ("025_scan_results", "scan_results"),
+        // 026 为 conversation_messages 字段扩展，列级验证见 test_migration_026_conversation_attachments_column
         // 020 是字段扩展迁移，表已存在，列级验证见 test_migration_020_security_fields_columns
         // 022 是 system_settings 数据插入，表已存在，通过 settings key 验证
         // 023 字段扩展验证见 test_migration_023_extensions_v2_columns
@@ -289,6 +290,29 @@ async fn test_migration_020_security_fields_columns() {
             col
         );
     }
+}
+
+#[tokio::test]
+async fn test_migration_026_conversation_attachments_column() {
+    let pool = match try_connect_db().await {
+        Some(p) => p,
+        None => {
+            println!("⚠️  数据库不可用，跳过");
+            return;
+        }
+    };
+    let client = pool.get().await.unwrap();
+
+    let row = client
+        .query_one(
+            "SELECT COUNT(*) FROM information_schema.columns \
+             WHERE table_schema = 'public' AND table_name = 'conversation_messages' AND column_name = 'attachments'",
+            &[],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(row.get::<_, i64>(0), 1, "026 迁移缺少 attachments 列");
 }
 
 /// 验证 model_configs 表的列结构
