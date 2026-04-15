@@ -79,6 +79,28 @@ cd admin-backend
 ./scripts/start-db.sh
 ```
 
+### 创建独立 worktree
+
+```bash
+./scripts/add-worktree.sh audit
+./scripts/add-worktree.sh --name ui-polish --branch feat/ui-polish --from main
+./scripts/add-worktree.sh --name fix-login --no-open
+```
+
+这个脚本会：
+- 在同级目录下创建 `../x-claw.worktrees/<名称>`
+- 自动创建或复用对应 Git 分支
+- 自动执行子模块同步与初始化，优先复用本地 `ironclaw` 仓库对象，避免新 worktree 里 `ironclaw` 为空或因本地未推送提交而拉取失败
+- 默认用 VS Code 新窗口打开新 worktree；如不需要可加 `--no-open`
+
+### 删除 worktree
+
+```bash
+./scripts/remove-worktree.sh audit
+./scripts/remove-worktree.sh --name ui-polish --delete-branch
+./scripts/remove-worktree.sh --path ../x-claw.worktrees/fix-login --force
+```
+
 ## 常见问题
 
 ### Docker 未启动
