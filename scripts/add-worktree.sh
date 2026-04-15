@@ -5,7 +5,7 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 用法:
-    ./scripts/add-worktree.sh --name <worktree-name> [--branch <branch-name>] [--from <base-ref>] [--path <target-dir>] [--no-open]
+    ./scripts/add-worktree.sh --name <worktree-name> [--branch <branch-name>] [--from <base-ref>] [--path <target-dir>] [--no-open] [--no-copy-config]
   ./scripts/add-worktree.sh <worktree-name> [branch-name] [base-ref]
 
 说明:
@@ -13,26 +13,53 @@ usage() {
   --branch / 第二个位置参数: Git 分支名，可选，默认与 worktree 名相同
   --from / 第三个位置参数: 新分支基线，可选，默认 HEAD
   --path: 自定义 worktree 目录，默认创建到 ../<repo>.worktrees/<worktree-name>
+    --copy-config: 创建后复制当前仓库中被 Git 忽略的本地配置文件（默认开启）
+    --no-copy-config: 创建后不复制本地配置
     --open: 创建后用 VS Code 新窗口打开 worktree（默认开启）
     --no-open: 创建后不自动打开 VS Code
 
 示例:
   ./scripts/add-worktree.sh audit
   ./scripts/add-worktree.sh --name ui-polish --branch feat/ui-polish --from main
-    ./scripts/add-worktree.sh --name fix-login --no-open
+  ./scripts/add-worktree.sh --name fix-login --no-open
+  ./scripts/add-worktree.sh --name clean-room --no-copy-config
   ./scripts/add-worktree.sh fix-login hotfix/login origin/main
 EOF
 }
 
 require_option_value() {
-        local option_name="$1"
-        local option_value="${2:-}"
+    local option_name="$1"
+    local option_value="${2:-}"
 
-        if [[ -z "$option_value" || "$option_value" == -* ]]; then
-                echo "$option_name 需要一个参数值" >&2
-                usage >&2
-                exit 1
-        fi
+    if [[ -z "$option_value" || "$option_value" == -* ]]; then
+        echo "$option_name 需要一个参数值" >&2
+        usage >&2
+        exit 1
+    fi
+}
+
+copy_local_configs() {
+    local config_files
+    local config_file
+
+    if [[ "$COPY_LOCAL_CONFIGS" != "true" ]]; then
+        echo "[3/4] 跳过复制本地配置"
+        return 0
+    fi
+
+    config_files="$(git -C "$PROJECT_ROOT" ls-files --others --ignored --exclude-standard | grep -E '(^|/)(\.env(\..*)?|[^/]+\.local|settings\.local\.json|admin_config\.json)$' || true)"
+    if [[ -z "$config_files" ]]; then
+        echo "[3/4] 未发现需要复制的本地配置"
+        return 0
+    fi
+
+    echo "[3/4] 复制本地配置"
+    while read -r config_file; do
+        [[ -z "$config_file" ]] && continue
+        mkdir -p "$TARGET_PATH/$(dirname "$config_file")"
+        cp "$PROJECT_ROOT/$config_file" "$TARGET_PATH/$config_file"
+        echo "  - 已复制: $config_file"
+    done <<< "$config_files"
 }
 
 init_submodules() {
@@ -81,6 +108,7 @@ BRANCH_NAME=""
 BASE_REF="HEAD"
 TARGET_PATH=""
 OPEN_IN_VSCODE="true"
+COPY_LOCAL_CONFIGS="true"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -103,6 +131,14 @@ while [[ $# -gt 0 ]]; do
             require_option_value "$1" "${2:-}"
             TARGET_PATH="$2"
             shift 2
+            ;;
+        --copy-config)
+            COPY_LOCAL_CONFIGS="true"
+            shift
+            ;;
+        --no-copy-config)
+            COPY_LOCAL_CONFIGS="false"
+            shift
             ;;
         --open)
             OPEN_IN_VSCODE="true"
@@ -179,20 +215,22 @@ fi
 cd "$PROJECT_ROOT"
 
 if git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
-    echo "[1/3] 使用已有分支创建 worktree: $BRANCH_NAME"
+    echo "[1/4] 使用已有分支创建 worktree: $BRANCH_NAME"
     git worktree add "$TARGET_PATH" "$BRANCH_NAME"
 else
-    echo "[1/3] 基于 $BASE_REF 创建新分支并生成 worktree: $BRANCH_NAME"
+    echo "[1/4] 基于 $BASE_REF 创建新分支并生成 worktree: $BRANCH_NAME"
     git worktree add -b "$BRANCH_NAME" "$TARGET_PATH" "$BASE_REF"
 fi
 
-echo "[2/3] 同步并初始化子模块"
+echo "[2/4] 同步并初始化子模块"
 if ! init_submodules; then
     echo "子模块初始化失败，已保留 worktree 供排查: $TARGET_PATH" >&2
     exit 1
 fi
 
-echo "[3/3] 完成"
+copy_local_configs
+
+echo "[4/4] 完成"
 echo "worktree 路径: $TARGET_PATH"
 echo "进入目录: cd $TARGET_PATH"
 open_in_vscode

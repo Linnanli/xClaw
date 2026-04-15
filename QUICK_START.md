@@ -85,12 +85,14 @@ cd admin-backend
 ./scripts/add-worktree.sh audit
 ./scripts/add-worktree.sh --name ui-polish --branch feat/ui-polish --from main
 ./scripts/add-worktree.sh --name fix-login --no-open
+./scripts/add-worktree.sh --name clean-room --no-copy-config
 ```
 
 这个脚本会：
 - 在同级目录下创建 `../x-claw.worktrees/<名称>`
 - 自动创建或复用对应 Git 分支
 - 自动执行子模块同步与初始化，优先复用本地 `ironclaw` 仓库对象，避免新 worktree 里 `ironclaw` 为空或因本地未推送提交而拉取失败
+- 默认复制当前仓库中被 Git 忽略的本地配置文件（如 `.env`、`desktop-client/.env`）；如不需要可加 `--no-copy-config`
 - 默认用 VS Code 新窗口打开新 worktree；如不需要可加 `--no-open`
 
 ### 删除 worktree
@@ -98,8 +100,19 @@ cd admin-backend
 ```bash
 ./scripts/remove-worktree.sh audit
 ./scripts/remove-worktree.sh --name ui-polish --delete-branch
+./scripts/remove-worktree.sh --name ui-polish --delete-branch --yes
 ./scripts/remove-worktree.sh --path ../x-claw.worktrees/fix-login --force
 ```
+
+删除脚本默认会要求你输入 worktree 名称确认，避免误删；如需在脚本或 CI 中非交互执行，可加 `--yes`。
+
+### 查看 worktree 列表
+
+```bash
+./scripts/list-worktrees.sh
+```
+
+这个脚本会列出每个 worktree 的名称、分支、当前是否有未提交改动，以及对应路径。
 
 ## 常见问题
 
