@@ -4,6 +4,10 @@ use std::env;
 use tokio::net::TcpListener;
 use tracing_subscriber;
 
+const DEFAULT_AUDIT_RETENTION_DAYS: i64 = 90;
+const DEFAULT_CLIENT_REPORT_RETENTION_DAYS: i64 = 30;
+const DEFAULT_CLIENT_HEALTH_RETENTION_DAYS: i64 = 2;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
@@ -85,24 +89,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match cleanup_pool.get().await {
                 Err(e) => tracing::error!("audit cleanup: failed to get db connection: {}", e),
                 Ok(client) => {
-                    // 从 system_settings 读取保留天数，默认 90 天
-                    let retention_days: i64 = client
-                        .query_opt(
-                            "SELECT value FROM system_settings WHERE key = 'audit_retention_days'",
-                            &[],
-                        )
-                        .await
-                        .ok()
-                        .flatten()
-                        .and_then(|row| {
-                            let v: Option<serde_json::Value> = row.get(0);
-                            v.and_then(|j| match j {
-                                serde_json::Value::Number(n) => n.as_i64(),
-                                serde_json::Value::String(s) => s.parse::<i64>().ok(),
-                                _ => None,
-                            })
-                        })
-                        .unwrap_or(90);
+                    let retention_days = read_retention_days(
+                        &client,
+                        "audit_retention_days",
+                        DEFAULT_AUDIT_RETENTION_DAYS,
+                    )
+                    .await;
 
                     let days_str = retention_days.to_string();
                     match client
@@ -120,6 +112,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             retention_days
                         ),
                         Err(e) => tracing::error!("audit cleanup: delete failed: {}", e),
+                    }
+
+                    let client_report_retention_days = read_retention_days(
+                        &client,
+                        "client_report_retention_days",
+                        DEFAULT_CLIENT_REPORT_RETENTION_DAYS,
+                    )
+                    .await;
+                    let client_health_retention_days = read_retention_days(
+                        &client,
+                        "client_health_retention_days",
+                        DEFAULT_CLIENT_HEALTH_RETENTION_DAYS,
+                    )
+                    .await;
+
+                    let report_days_str = client_report_retention_days.to_string();
+                    let health_days_str = client_health_retention_days.to_string();
+                    match cleanup_client_reports(&client, &report_days_str, &health_days_str).await {
+                        Ok((deleted_general, deleted_health)) => tracing::info!(
+                            "client report cleanup: deleted {} general rows older than {} days, {} health_status rows older than {} days",
+                            deleted_general,
+                            client_report_retention_days,
+                            deleted_health,
+                            client_health_retention_days
+                        ),
+                        Err(e) => tracing::error!("client report cleanup: delete failed: {}", e),
                     }
                 }
             }
@@ -159,6 +177,65 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+async fn read_retention_days(
+    client: &deadpool_postgres::Object,
+    key: &str,
+    default_days: i64,
+) -> i64 {
+    let parsed_days = client
+        .query_opt("SELECT value FROM system_settings WHERE key = $1", &[&key])
+        .await
+        .ok()
+        .flatten()
+        .and_then(|row| {
+            let value: Option<serde_json::Value> = row.get(0);
+            value.and_then(|v| match v {
+                serde_json::Value::Number(n) => n.as_i64(),
+                serde_json::Value::String(s) => s.parse::<i64>().ok(),
+                _ => None,
+            })
+        })
+        .unwrap_or(default_days);
+
+    if parsed_days < 1 {
+        tracing::warn!(
+            setting_key = key,
+            parsed_days,
+            default_days,
+            "invalid retention days, fallback to minimum safe value"
+        );
+        return default_days.max(1);
+    }
+
+    parsed_days
+}
+
+async fn cleanup_client_reports(
+    client: &deadpool_postgres::Object,
+    report_days: &str,
+    health_days: &str,
+) -> std::result::Result<(u64, u64), tokio_postgres::Error> {
+    let deleted_general = client
+        .execute(
+            "DELETE FROM client_reports \
+             WHERE report_type <> 'health_status' \
+             AND received_at < NOW() - ($1 || ' days')::INTERVAL",
+            &[&report_days],
+        )
+        .await?;
+
+    let deleted_health = client
+        .execute(
+            "DELETE FROM client_reports \
+             WHERE report_type = 'health_status' \
+             AND received_at < NOW() - ($1 || ' days')::INTERVAL",
+            &[&health_days],
+        )
+        .await?;
+
+    Ok((deleted_general, deleted_health))
 }
 
 /// 重试失败的通知：扫描 notification_logs 中 status='failed' 且 attempts < 3 的记录，

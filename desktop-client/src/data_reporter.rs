@@ -176,6 +176,15 @@ impl ConversationAttachment {
     }
 }
 
+#[derive(Clone)]
+struct HealthStatusSnapshot {
+    client_version: String,
+    active_extensions: Vec<String>,
+    reported_at: std::time::Instant,
+}
+
+const DEFAULT_HEALTH_STATUS_MIN_INTERVAL_SECS: u64 = 10 * 60;
+
 /// 数据上报器。
 ///
 /// 使用内存队列缓冲事件，定期批量上报到 Admin Backend。
@@ -193,6 +202,10 @@ pub struct DataReporter {
     flush_interval: Duration,
     /// 队列最大容量（防止内存溢出）
     max_queue_size: usize,
+    /// 相同健康状态最小上报间隔。
+    health_status_min_interval: Duration,
+    /// 最近一次健康状态快照，用于降采样。
+    last_health_status: Mutex<Option<HealthStatusSnapshot>>,
 }
 
 impl DataReporter {
@@ -208,6 +221,10 @@ impl DataReporter {
                 .unwrap_or_default(),
             flush_interval: Duration::from_secs(30),
             max_queue_size: 10_000,
+            health_status_min_interval: Duration::from_secs(
+                DEFAULT_HEALTH_STATUS_MIN_INTERVAL_SECS,
+            ),
+            last_health_status: Mutex::new(None),
         }
     }
 
@@ -223,10 +240,20 @@ impl DataReporter {
         self
     }
 
+    /// 设置相同 health_status 的最小上报间隔。
+    pub fn with_health_status_min_interval(mut self, interval: Duration) -> Self {
+        self.health_status_min_interval = interval;
+        self
+    }
+
     /// 将事件加入上报队列。
     ///
     /// 如果队列已满，丢弃最旧的事件（FIFO 淘汰）。
     pub fn enqueue(&self, report: ClientReport) {
+        if !self.should_enqueue(&report) {
+            return;
+        }
+
         let mut queue = match self.queue.lock() {
             Ok(q) => q,
             Err(poisoned) => {
@@ -246,6 +273,49 @@ impl DataReporter {
         }
 
         queue.push(report);
+    }
+
+    fn should_enqueue(&self, report: &ClientReport) -> bool {
+        match report {
+            ClientReport::HealthStatus {
+                client_version,
+                active_extensions,
+                ..
+            } => self.should_enqueue_health_status(client_version, active_extensions),
+            _ => true,
+        }
+    }
+
+    fn should_enqueue_health_status(
+        &self,
+        client_version: &str,
+        active_extensions: &[String],
+    ) -> bool {
+        let mut normalized_extensions = active_extensions.to_vec();
+        normalized_extensions.sort();
+
+        let now = std::time::Instant::now();
+        let mut last = match self.last_health_status.lock() {
+            Ok(v) => v,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        if let Some(snapshot) = last.as_ref() {
+            let same_status = snapshot.client_version == client_version
+                && snapshot.active_extensions == normalized_extensions;
+            let within_interval =
+                now.duration_since(snapshot.reported_at) < self.health_status_min_interval;
+            if same_status && within_interval {
+                return false;
+            }
+        }
+
+        *last = Some(HealthStatusSnapshot {
+            client_version: client_version.to_string(),
+            active_extensions: normalized_extensions,
+            reported_at: now,
+        });
+        true
     }
 
     /// 获取当前队列长度。

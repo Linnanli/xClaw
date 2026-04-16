@@ -14,7 +14,7 @@ use crate::models::{
 };
 use crate::AppState;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{delete, get, post, put},
@@ -118,6 +118,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/audit-logs/export", get(export_audit_logs))
         .route("/api/audit-logs", get(get_audit_logs))
         .route("/api/audit-logs/report", post(report_audit_event))
+        .route("/api/client-events", get(get_client_events))
         .route(
             "/api/sensitive-operations",
             get(get_sensitive_operations).post(create_sensitive_operation),
@@ -428,14 +429,18 @@ pub async fn write_audit_log_with_context(
     let now = chrono::Utc::now();
     if let Err(e) = client
         .execute(
-            "INSERT INTO audit_logs (id, user_id, action, details, ip_address, user_agent, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            "INSERT INTO audit_logs (id, user_id, action, details, ip_address, user_agent, created_at, is_immutable) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE)",
             &[&id, &user_id, &action, &details, &ip_address, &user_agent, &now],
         )
         .await
     {
         eprintln!("Failed to write audit log: {}", e);
     }
+}
+
+fn actor_id_from_claims(claims: &crate::models::TokenClaims) -> Result<Uuid> {
+    Uuid::parse_str(&claims.sub).map_err(|_| Error::Unauthorized)
 }
 
 async fn register(
@@ -742,6 +747,7 @@ async fn get_users(State(state): State<AppState>) -> Result<Json<serde_json::Val
 
 async fn delete_user(
     State(state): State<AppState>,
+    Extension(claims): Extension<crate::models::TokenClaims>,
     Path(user_id): Path<Uuid>,
 ) -> Result<StatusCode> {
     let client = state
@@ -758,6 +764,9 @@ async fn delete_user(
     if result == 0 {
         return Err(Error::UserNotFound);
     }
+
+    let actor_id = actor_id_from_claims(&claims)?;
+    write_audit_log(&client, actor_id, "delete_user", &format!("删除用户 ID: {}", user_id)).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -797,81 +806,133 @@ struct AuditLogQuery {
     page_size: Option<i64>,
     /// 全文搜索：匹配 action 或 details 字段（ILIKE）
     q: Option<String>,
+    /// 精确匹配 action 字段
+    action: Option<String>,
+    /// 模糊匹配用户名
+    username: Option<String>,
+    /// 起始时间（ISO 8601）
+    start_time: Option<String>,
+    /// 截止时间（ISO 8601）
+    end_time: Option<String>,
+}
+
+/// 构建审计日志 WHERE 子句，返回 (where_clause, params)
+fn build_audit_where(
+    q: Option<&str>,
+    action: Option<&str>,
+    username: Option<&str>,
+    start_time: Option<&str>,
+    end_time: Option<&str>,
+) -> Result<(String, Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>>)> {
+    let mut conditions: Vec<String> = Vec::new();
+    let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = Vec::new();
+
+    if let Some(q) = q {
+        let pattern = format!("%{}%", q.trim());
+        let n = params.len() + 1;
+        conditions.push(format!("(a.action ILIKE ${n} OR a.details ILIKE ${n})"));
+        params.push(Box::new(pattern));
+    }
+    if let Some(action) = action {
+        let n = params.len() + 1;
+        conditions.push(format!("a.action = ${n}"));
+        params.push(Box::new(action.to_string()));
+    }
+    if let Some(username) = username {
+        let n = params.len() + 1;
+        let pattern = format!("%{}%", username);
+        conditions.push(format!("u.username ILIKE ${n}"));
+        params.push(Box::new(pattern));
+    }
+    if let Some(start_str) = start_time {
+        let dt = chrono::DateTime::parse_from_rfc3339(start_str)
+            .or_else(|_| {
+                chrono::NaiveDateTime::parse_from_str(start_str, "%Y-%m-%dT%H:%M:%S")
+                    .map(|ndt| ndt.and_utc().fixed_offset())
+            })
+            .map_err(|_| Error::Validation("start_time 格式不正确，需为 ISO 8601 格式".to_string()))?;
+        let n = params.len() + 1;
+        conditions.push(format!("a.created_at >= ${n}"));
+        params.push(Box::new(dt.with_timezone(&chrono::Utc)));
+    }
+    if let Some(end_str) = end_time {
+        let dt = chrono::DateTime::parse_from_rfc3339(end_str)
+            .or_else(|_| {
+                chrono::NaiveDateTime::parse_from_str(end_str, "%Y-%m-%dT%H:%M:%S")
+                    .map(|ndt| ndt.and_utc().fixed_offset())
+            })
+            .map_err(|_| Error::Validation("end_time 格式不正确，需为 ISO 8601 格式".to_string()))?;
+        let n = params.len() + 1;
+        conditions.push(format!("a.created_at <= ${n}"));
+        params.push(Box::new(dt.with_timezone(&chrono::Utc)));
+    }
+
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    };
+    Ok((where_clause, params))
 }
 
 async fn get_audit_logs(
     State(state): State<AppState>,
     Query(params): Query<AuditLogQuery>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state
-        .db_pool
-        .get()
-        .await
-        .map_err(|e| Error::Database(e.to_string()))?;
-
+    let client = state.db_pool.get().await.map_err(|e| Error::Database(e.to_string()))?;
     let page = params.page.unwrap_or(1).max(1);
     let page_size = params.page_size.unwrap_or(50).clamp(1, 200);
     let offset = (page - 1) * page_size;
 
-    // 根据是否有搜索词构建不同的查询
-    let (total, rows) = if let Some(ref q) = params.q {
-        let pattern = format!("%{}%", q.trim());
-        let count_row = client
-            .query_one(
-                "SELECT COUNT(*) FROM audit_logs WHERE (action ILIKE $1 OR details ILIKE $1)",
-                &[&pattern],
-            )
-            .await
-            .map_err(|e| Error::Database(e.to_string()))?;
-        let total: i64 = count_row.get(0);
+    let (where_clause, mut where_params) = build_audit_where(
+        params.q.as_deref(),
+        params.action.as_deref(),
+        params.username.as_deref(),
+        params.start_time.as_deref(),
+        params.end_time.as_deref(),
+    )?;
 
-        let rows = client
-            .query(
-                "SELECT a.id, a.user_id, u.username, a.action, a.details, a.created_at
-                 FROM audit_logs a
-                 LEFT JOIN users u ON a.user_id = u.id
-                 WHERE (a.action ILIKE $1 OR a.details ILIKE $1)
-                 ORDER BY a.created_at DESC
-                 LIMIT $2 OFFSET $3",
-                &[&pattern, &page_size, &offset],
-            )
-            .await
-            .map_err(|e| Error::Database(e.to_string()))?;
-        (total, rows)
-    } else {
-        let count_row = client
-            .query_one("SELECT COUNT(*) FROM audit_logs", &[])
-            .await
-            .map_err(|e| Error::Database(e.to_string()))?;
-        let total: i64 = count_row.get(0);
+    let count_sql = format!(
+        "SELECT COUNT(*) FROM audit_logs a LEFT JOIN users u ON a.user_id = u.id {}",
+        where_clause
+    );
+    let count_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+        where_params.iter().map(|p| p.as_ref() as _).collect();
+    let total: i64 = client
+        .query_one(&count_sql, &count_refs)
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
+        .get(0);
 
-        let rows = client
-            .query(
-                "SELECT a.id, a.user_id, u.username, a.action, a.details, a.created_at
-                 FROM audit_logs a
-                 LEFT JOIN users u ON a.user_id = u.id
-                 ORDER BY a.created_at DESC
-                 LIMIT $1 OFFSET $2",
-                &[&page_size, &offset],
-            )
-            .await
-            .map_err(|e| Error::Database(e.to_string()))?;
-        (total, rows)
-    };
+    let idx_limit = where_params.len() + 1;
+    let idx_offset = idx_limit + 1;
+    where_params.push(Box::new(page_size));
+    where_params.push(Box::new(offset));
+    let data_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+        where_params.iter().map(|p| p.as_ref() as _).collect();
 
-    let logs: Vec<_> = rows
-        .iter()
-        .map(|r| {
-            json!({
-                "id": r.get::<_, Uuid>(0),
-                "user_id": r.get::<_, Option<Uuid>>(1),
-                "username": r.get::<_, Option<String>>(2),
-                "action": r.get::<_, String>(3),
-                "details": r.get::<_, String>(4),
-                "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(5),
-            })
-        })
-        .collect();
+    let data_sql = format!(
+        "SELECT a.id, a.user_id, u.username, a.action, a.details, \
+         a.ip_address, a.user_agent, a.created_at \
+         FROM audit_logs a \
+         LEFT JOIN users u ON a.user_id = u.id \
+         {} \
+         ORDER BY a.created_at DESC \
+         LIMIT ${idx_limit} OFFSET ${idx_offset}",
+        where_clause
+    );
+    let rows = client.query(&data_sql, &data_refs).await.map_err(|e| Error::Database(e.to_string()))?;
+
+    let logs: Vec<_> = rows.iter().map(|r| json!({
+        "id": r.get::<_, Uuid>(0),
+        "user_id": r.get::<_, Option<Uuid>>(1),
+        "username": r.get::<_, Option<String>>(2),
+        "action": r.get::<_, String>(3),
+        "details": r.get::<_, String>(4),
+        "ip_address": r.get::<_, Option<String>>(5),
+        "user_agent": r.get::<_, Option<String>>(6),
+        "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(7),
+    })).collect();
 
     Ok(Json(json!({
         "logs": logs,
@@ -1342,11 +1403,11 @@ async fn import_dlp_rules(
 struct ReportAuditEventRequest {
     action: String,
     details: String,
-    user_id: Option<String>,
 }
 
 async fn report_audit_event(
     State(state): State<AppState>,
+    Extension(claims): Extension<crate::models::TokenClaims>,
     Json(payload): Json<ReportAuditEventRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
     let client = state
@@ -1355,26 +1416,10 @@ async fn report_audit_event(
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
-    let user_id = payload
-        .user_id
-        .and_then(|s| Uuid::parse_str(&s).ok())
-        .unwrap_or_else(Uuid::nil);
+    let actor_id = actor_id_from_claims(&claims)?;
+    write_audit_log(&client, actor_id, &payload.action, &payload.details).await;
 
-    let id = Uuid::new_v4();
-    let now = chrono::Utc::now();
-
-    client
-        .execute(
-            "INSERT INTO audit_logs (id, user_id, action, details, created_at) VALUES ($1, $2, $3, $4, $5)",
-            &[&id, &user_id, &payload.action, &payload.details, &now],
-        )
-        .await
-        .map_err(|e| Error::Database(e.to_string()))?;
-
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({ "id": id, "created_at": now })),
-    ))
+    Ok((StatusCode::CREATED, Json(json!({ "status": "ok" }))))
 }
 
 async fn get_sensitive_operations(
@@ -1956,6 +2001,7 @@ async fn get_role(
 
 async fn create_role(
     State(state): State<AppState>,
+    Extension(claims): Extension<crate::models::TokenClaims>,
     Json(payload): Json<CreateRoleRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
     let client = state
@@ -1986,6 +2032,9 @@ async fn create_role(
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
+    let actor_id = actor_id_from_claims(&claims)?;
+    write_audit_log(&client, actor_id, "create_role", &format!("创建角色: {}", payload.name)).await;
+
     Ok((
         StatusCode::CREATED,
         Json(json!({
@@ -2000,6 +2049,7 @@ async fn create_role(
 
 async fn update_role(
     State(state): State<AppState>,
+    Extension(claims): Extension<crate::models::TokenClaims>,
     Path(role_id): Path<Uuid>,
     Json(payload): Json<UpdateRoleRequest>,
 ) -> Result<Json<serde_json::Value>> {
@@ -2049,6 +2099,9 @@ async fn update_role(
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
+    let actor_id = actor_id_from_claims(&claims)?;
+    write_audit_log(&client, actor_id, "update_role", &format!("更新角色 ID: {}", role_id)).await;
+
     Ok(Json(json!({
         "id": row.get::<_, Uuid>(0),
         "name": row.get::<_, String>(1),
@@ -2060,6 +2113,7 @@ async fn update_role(
 
 async fn delete_role(
     State(state): State<AppState>,
+    Extension(claims): Extension<crate::models::TokenClaims>,
     Path(role_id): Path<Uuid>,
 ) -> Result<StatusCode> {
     let client = state
@@ -2077,11 +2131,15 @@ async fn delete_role(
         return Err(Error::NotFound("Role not found".to_string()));
     }
 
+    let actor_id = actor_id_from_claims(&claims)?;
+    write_audit_log(&client, actor_id, "delete_role", &format!("删除角色 ID: {}", role_id)).await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn assign_permissions(
     State(state): State<AppState>,
+    Extension(claims): Extension<crate::models::TokenClaims>,
     Path(role_id): Path<Uuid>,
     Json(payload): Json<AssignPermissionsRequest>,
 ) -> Result<StatusCode> {
@@ -2121,6 +2179,9 @@ async fn assign_permissions(
             .await
             .map_err(|e| Error::Database(e.to_string()))?;
     }
+
+    let actor_id = actor_id_from_claims(&claims)?;
+    write_audit_log(&client, actor_id, "assign_permissions", &format!("为角色 {} 分配权限", role_id)).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -2273,6 +2334,7 @@ async fn assign_user_roles(
 
 async fn create_user(
     State(state): State<AppState>,
+    Extension(claims): Extension<crate::models::TokenClaims>,
     Json(payload): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
     let client = state
@@ -2316,6 +2378,9 @@ async fn create_user(
         )
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
+
+    let actor_id = actor_id_from_claims(&claims)?;
+    write_audit_log(&client, actor_id, "create_user", &format!("创建用户: {}", payload.username)).await;
 
     Ok((
         StatusCode::CREATED,
@@ -4483,7 +4548,7 @@ async fn export_audit_logs(
     };
 
     let sql = format!(
-        "SELECT a.id, u.username, a.action, a.details, a.created_at
+        "SELECT a.id, u.username, a.action, a.details, a.ip_address, a.user_agent, a.created_at
          FROM audit_logs a
          LEFT JOIN users u ON a.user_id = u.id
          {}
@@ -4503,7 +4568,7 @@ async fn export_audit_logs(
 
     // 构建 CSV
     let bom = "\u{FEFF}";
-    let header = "时间,操作人,操作类型,详情,日志ID\n";
+    let header = "时间,操作人,操作类型,详情,来源IP,User-Agent,日志ID\n";
     let mut csv = format!("{}{}", bom, header);
 
     for row in &rows {
@@ -4511,14 +4576,18 @@ async fn export_audit_logs(
         let username: Option<String> = row.get(1);
         let action: String = row.get(2);
         let details: String = row.get(3);
-        let created_at: chrono::DateTime<chrono::Utc> = row.get(4);
+        let ip_address: Option<String> = row.get(4);
+        let user_agent: Option<String> = row.get(5);
+        let created_at: chrono::DateTime<chrono::Utc> = row.get(6);
 
         csv.push_str(&format!(
-            "{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{}\n",
             escape_csv_field(&created_at.to_rfc3339()),
             escape_csv_field(username.as_deref().unwrap_or("系统")),
             escape_csv_field(&action),
             escape_csv_field(&details),
+            escape_csv_field(ip_address.as_deref().unwrap_or("")),
+            escape_csv_field(user_agent.as_deref().unwrap_or("")),
             escape_csv_field(&id.to_string()),
         ));
     }
@@ -4535,6 +4604,114 @@ async fn export_audit_logs(
         )
         .body(axum::body::Body::from(csv))
         .unwrap())
+}
+
+// ============================================================================
+// 客户端事件查询 (Client Events)
+// ============================================================================
+
+#[derive(serde::Deserialize)]
+struct ClientEventQuery {
+    page: Option<i64>,
+    page_size: Option<i64>,
+    report_type: Option<String>,
+    include_health_status: Option<bool>,
+    start_time: Option<String>,
+    end_time: Option<String>,
+}
+
+/// GET /api/client-events — 查询客户端上报的事件记录
+async fn get_client_events(
+    State(state): State<AppState>,
+    Query(params): Query<ClientEventQuery>,
+) -> Result<Json<serde_json::Value>> {
+    let client = state.db_pool.get().await.map_err(|e| Error::Database(e.to_string()))?;
+    let page = params.page.unwrap_or(1).max(1);
+    let page_size = params.page_size.unwrap_or(20).clamp(1, 200);
+    let offset = (page - 1) * page_size;
+
+    let mut conditions: Vec<String> = Vec::new();
+    let mut where_params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = Vec::new();
+
+    let requested_report_type = params.report_type.as_deref().filter(|rt| !rt.is_empty());
+
+    if requested_report_type.is_none() && !params.include_health_status.unwrap_or(false) {
+        let n = where_params.len() + 1;
+        conditions.push(format!("cr.report_type <> ${n}"));
+        where_params.push(Box::new("health_status".to_string()));
+    }
+
+    if let Some(rt) = requested_report_type {
+        let n = where_params.len() + 1;
+        conditions.push(format!("cr.report_type = ${n}"));
+        where_params.push(Box::new(rt.to_string()));
+    }
+    if let Some(start_str) = &params.start_time {
+        let dt = chrono::DateTime::parse_from_rfc3339(start_str)
+            .map_err(|_| Error::Validation("start_time 格式不正确，需为 ISO 8601 格式".to_string()))?;
+        let n = where_params.len() + 1;
+        conditions.push(format!("cr.received_at >= ${n}"));
+        where_params.push(Box::new(dt.with_timezone(&chrono::Utc)));
+    }
+    if let Some(end_str) = &params.end_time {
+        let dt = chrono::DateTime::parse_from_rfc3339(end_str)
+            .map_err(|_| Error::Validation("end_time 格式不正确，需为 ISO 8601 格式".to_string()))?;
+        let n = where_params.len() + 1;
+        conditions.push(format!("cr.received_at <= ${n}"));
+        where_params.push(Box::new(dt.with_timezone(&chrono::Utc)));
+    }
+
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    };
+
+    let count_sql = format!(
+        "SELECT COUNT(*) FROM client_reports cr {}",
+        where_clause
+    );
+    let count_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+        where_params.iter().map(|p| p.as_ref() as _).collect();
+    let total: i64 = client
+        .query_one(&count_sql, &count_refs)
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?
+        .get(0);
+
+    let idx_limit = where_params.len() + 1;
+    let idx_offset = idx_limit + 1;
+    where_params.push(Box::new(page_size));
+    where_params.push(Box::new(offset));
+    let data_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+        where_params.iter().map(|p| p.as_ref() as _).collect();
+
+    let data_sql = format!(
+        "SELECT cr.id, cr.report_type, cr.payload, cr.received_at, rc.username \
+         FROM client_reports cr \
+         LEFT JOIN registered_clients rc ON cr.client_id = rc.id \
+         {} \
+         ORDER BY cr.received_at DESC \
+         LIMIT ${idx_limit} OFFSET ${idx_offset}",
+        where_clause
+    );
+    let rows = client.query(&data_sql, &data_refs).await.map_err(|e| Error::Database(e.to_string()))?;
+
+    let events: Vec<_> = rows.iter().map(|r| json!({
+        "id": r.get::<_, Uuid>(0),
+        "report_type": r.get::<_, String>(1),
+        "payload": r.get::<_, Option<serde_json::Value>>(2),
+        "received_at": r.get::<_, chrono::DateTime<chrono::Utc>>(3),
+        "client_username": r.get::<_, Option<String>>(4),
+    })).collect();
+
+    Ok(Json(json!({
+        "events": events,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total as f64 / page_size as f64).ceil() as i64,
+    })))
 }
 
 // ============================================================================

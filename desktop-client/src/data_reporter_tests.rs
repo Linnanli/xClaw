@@ -125,6 +125,104 @@ mod tests {
     }
 
     #[test]
+    fn test_health_status_deduplicated_within_interval() {
+        let reporter = DataReporter::new("https://admin.example.com".into(), "test-token".into())
+            .with_health_status_min_interval(std::time::Duration::from_secs(600));
+
+        let report = ClientReport::HealthStatus {
+            timestamp: "2025-01-01T00:00:00Z".into(),
+            client_version: "0.1.0".into(),
+            uptime_secs: 60,
+            active_extensions: vec!["github-mcp".into(), "slack".into()],
+        };
+        reporter.enqueue(report.clone());
+        reporter.enqueue(report);
+
+        assert_eq!(reporter.queue_len(), 1);
+    }
+
+    #[test]
+    fn test_health_status_reenqueued_when_extensions_changed() {
+        let reporter = DataReporter::new("https://admin.example.com".into(), "test-token".into())
+            .with_health_status_min_interval(std::time::Duration::from_secs(600));
+
+        reporter.enqueue(ClientReport::HealthStatus {
+            timestamp: "2025-01-01T00:00:00Z".into(),
+            client_version: "0.1.0".into(),
+            uptime_secs: 60,
+            active_extensions: vec!["github-mcp".into()],
+        });
+        reporter.enqueue(ClientReport::HealthStatus {
+            timestamp: "2025-01-01T00:00:10Z".into(),
+            client_version: "0.1.0".into(),
+            uptime_secs: 70,
+            active_extensions: vec!["github-mcp".into(), "slack".into()],
+        });
+
+        assert_eq!(reporter.queue_len(), 2);
+    }
+
+    #[test]
+    fn test_health_status_reenqueued_when_interval_zero() {
+        let reporter = DataReporter::new("https://admin.example.com".into(), "test-token".into())
+            .with_health_status_min_interval(std::time::Duration::ZERO);
+
+        let report = ClientReport::HealthStatus {
+            timestamp: "2025-01-01T00:00:00Z".into(),
+            client_version: "0.1.0".into(),
+            uptime_secs: 60,
+            active_extensions: vec!["github-mcp".into()],
+        };
+        reporter.enqueue(report.clone());
+        reporter.enqueue(report);
+
+        assert_eq!(reporter.queue_len(), 2);
+    }
+
+    #[test]
+    fn test_health_status_pairwise_enqueue_behavior() {
+        let cases: Vec<(&str, &str, usize)> = vec![
+            ("same", "nonzero", 1),
+            ("same", "zero", 2),
+            ("changed", "nonzero", 2),
+            ("changed", "zero", 2),
+        ];
+
+        for (same_status, min_interval, expected_queue_len) in cases {
+            let interval = if min_interval == "zero" {
+                std::time::Duration::ZERO
+            } else {
+                std::time::Duration::from_secs(600)
+            };
+            let reporter = DataReporter::new("https://admin.example.com".into(), "test-token".into())
+                .with_health_status_min_interval(interval);
+
+            reporter.enqueue(ClientReport::HealthStatus {
+                timestamp: "2025-01-01T00:00:00Z".into(),
+                client_version: "0.1.0".into(),
+                uptime_secs: 60,
+                active_extensions: vec!["github-mcp".into()],
+            });
+            reporter.enqueue(ClientReport::HealthStatus {
+                timestamp: "2025-01-01T00:00:10Z".into(),
+                client_version: "0.1.0".into(),
+                uptime_secs: 70,
+                active_extensions: if same_status == "same" {
+                    vec!["github-mcp".into()]
+                } else {
+                    vec!["github-mcp".into(), "slack".into()]
+                },
+            });
+
+            assert_eq!(
+                reporter.queue_len(),
+                expected_queue_len,
+                "pairwise case failed: same_status={same_status}, min_interval={min_interval}"
+            );
+        }
+    }
+
+    #[test]
     fn test_reporter_queue_overflow_drops_oldest() {
         let reporter = DataReporter::new("https://admin.example.com".into(), "test-token".into())
             .with_max_queue_size(10);

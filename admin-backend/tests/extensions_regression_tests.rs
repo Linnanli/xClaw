@@ -376,6 +376,60 @@ async fn test_conversation_report_falls_back_to_registered_client_user_for_list_
 }
 
 #[tokio::test]
+async fn test_client_events_report_type_health_status_not_filtered_by_default_exclusion() {
+    let pool = match try_connect_db().await {
+        Some(p) => p,
+        None => {
+            println!("⚠️ 数据库不可用，跳过");
+            return;
+        }
+    };
+
+    let marker = format!("health-status-marker-{}", Uuid::new_v4());
+    let body = serde_json::json!([
+        {
+            "type": "health_status",
+            "timestamp": "2026-04-16T10:00:00Z",
+            "client_version": "0.1.0",
+            "uptime_secs": 120,
+            "active_extensions": [],
+            "marker": marker
+        }
+    ]);
+
+    let post_resp = post_json(build_app(pool.clone()), "/api/client-reports", body).await;
+    assert_eq!(post_resp.status(), StatusCode::CREATED);
+
+    let get_resp = get(
+        build_app(pool.clone()),
+        "/api/client-events?page=1&page_size=20&report_type=health_status",
+    )
+    .await;
+    assert_eq!(get_resp.status(), StatusCode::OK);
+
+    let list_body = response_json(get_resp).await;
+    let events = list_body["events"]
+        .as_array()
+        .expect("events should be array");
+    assert!(
+        events.iter().any(|event| {
+            event["report_type"] == "health_status"
+                && event["payload"]["marker"] == marker
+        }),
+        "显式 report_type=health_status 时应返回 health_status 事件"
+    );
+
+    let client = pool.get().await.expect("get db client");
+    client
+        .execute(
+            "DELETE FROM client_reports WHERE payload::text LIKE $1",
+            &[&format!("%{}%", marker)],
+        )
+        .await
+        .expect("cleanup client reports");
+}
+
+#[tokio::test]
 async fn test_department_whitelist_backward_compatibility() {
     let pool = match try_connect_db().await {
         Some(p) => p,

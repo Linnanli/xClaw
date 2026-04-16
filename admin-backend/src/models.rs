@@ -355,6 +355,7 @@ pub struct AuditLogExportQuery {
     pub end_time: Option<String>,
     pub action: Option<String>,
     pub username: Option<String>,
+    pub q: Option<String>,
 }
 
 // ============================================================================
