@@ -1,6 +1,51 @@
 [workspace]
-members = ["desktop-client", "admin-backend", "crates/ironclaw_auth"]
+members = [
+	"desktop-client",
+	"admin-backend",
+	"crates/ironclaw_auth",
+	"desktop-client/ironclaw",
+	"desktop-client/ironclaw/crates/ironclaw_common",
+	"desktop-client/ironclaw/crates/ironclaw_safety",
+]
 exclude = ["ironclaw"]
 resolver = "2"
+
+[profile.release]
+strip = true
+
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+[workspace.metadata.dist]
+cargo-dist-version = "0.30.3"
+allow-dirty = ["ci"]
+ci = "github"
+installers = ["shell", "powershell", "npm", "msi"]
+publish-jobs = []
+targets = [
+	"aarch64-apple-darwin",
+	"aarch64-unknown-linux-gnu",
+	"aarch64-unknown-linux-musl",
+	"x86_64-apple-darwin",
+	"x86_64-unknown-linux-gnu",
+	"x86_64-unknown-linux-musl",
+	"x86_64-pc-windows-msvc",
+]
+windows-archive = ".tar.gz"
+unix-archive = ".tar.gz"
+pr-run-mode = "skip"
+install-path = "CARGO_HOME"
+install-updater = true
+cache-builds = true
+
+[workspace.metadata.dist.github-custom-runners]
+aarch64-unknown-linux-gnu = "ubuntu-24.04-arm"
+aarch64-unknown-linux-musl = "ubuntu-24.04-arm"
+x86_64-unknown-linux-gnu = "ubuntu-22.04"
+x86_64-unknown-linux-musl = "ubuntu-22.04"
+x86_64-pc-windows-msvc = "windows-2022"
+x86_64-apple-darwin = "macos-15-intel"
+aarch64-apple-darwin = "macos-14"
 
 

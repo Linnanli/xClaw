@@ -602,13 +602,13 @@ fn find_builtin_skills_source(app_handle: &AppHandle) -> Option<std::path::PathB
         candidates.push(resource_dir.join("skills"));
     }
     // 2. 开发时相对路径（从项目根目录运行）
-    candidates.push(std::path::PathBuf::from("ironclaw/skills"));
+    candidates.push(std::path::PathBuf::from("desktop-client/ironclaw/skills"));
     // 3. 开发时相对路径（从 desktop-client/ 目录运行，即 `cargo tauri dev` 的 CWD）
-    candidates.push(std::path::PathBuf::from("../ironclaw/skills"));
+    candidates.push(std::path::PathBuf::from("ironclaw/skills"));
     // 4. 可执行文件目录向上查找（CI / 非标准工作目录）
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
-            candidates.push(exe_dir.join("../../../ironclaw/skills"));
+            candidates.push(exe_dir.join("../../../desktop-client/ironclaw/skills"));
         }
     }
 

@@ -50,3 +50,5 @@ claude-code-main
 .codex/skills/.system/**
 !.codex/prompts/
 !.codex/prompts/**
+/decode-claude-code-main/
+/claw-decode-main/
