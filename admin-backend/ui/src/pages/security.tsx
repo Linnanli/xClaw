@@ -380,9 +380,117 @@ function DropdownSelect({ label, options, value, onChange }: {
   )
 }
 
+/* ── 新建/编辑敏感操作弹窗 ── */
+
+interface SensitiveOpFormDialogProps {
+  open: boolean
+  editingOp: SensitiveOperation | null
+  onClose: () => void
+  onSaved: () => void
+}
+
+function SensitiveOpFormDialog({ open, editingOp, onClose, onSaved }: SensitiveOpFormDialogProps) {
+  const isEditing = !!editingOp
+  const [name, setName] = useState('')
+  const [operationType, setOperationType] = useState('')
+  const [riskLevel, setRiskLevel] = useState('medium')
+  const [requiresApproval, setRequiresApproval] = useState(true)
+  const [description, setDescription] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    setMsg(null)
+    if (editingOp) {
+      setName(editingOp.name); setOperationType(editingOp.operation_type)
+      setRiskLevel(editingOp.risk_level); setRequiresApproval(editingOp.requires_approval)
+      setDescription(editingOp.description ?? '')
+    } else {
+      setName(''); setOperationType(''); setRiskLevel('medium'); setRequiresApproval(true); setDescription('')
+    }
+  }, [open, editingOp])
+
+  async function handleSave() {
+    if (!name.trim()) { setMsg({ type: 'error', text: '请输入操作名称' }); return }
+    if (!operationType.trim()) { setMsg({ type: 'error', text: '请输入操作类型' }); return }
+    setSaving(true); setMsg(null)
+    try {
+      const payload = { name: name.trim(), operation_type: operationType.trim(), risk_level: riskLevel, requires_approval: requiresApproval, description: description.trim() || undefined }
+      if (isEditing) {
+        await api.put(`/sensitive-operations/${editingOp.id}`, payload)
+        setMsg({ type: 'success', text: '操作更新成功' })
+      } else {
+        await api.post('/sensitive-operations', payload)
+        setMsg({ type: 'success', text: '操作创建成功' })
+      }
+      setTimeout(() => { onSaved(); onClose() }, 500)
+    } catch (err: any) {
+      setMsg({ type: 'error', text: err?.response?.data?.error || '操作失败' })
+    } finally { setSaving(false) }
+  }
+
+  const RISK_OPTIONS = Object.entries(RISK_LEVEL_MAP).map(([k, v]) => ({ value: k, label: v.label }))
+  const inputCls = 'w-full bg-[#F5F5F5] px-3.5 py-2.5 font-mono text-[10px] font-medium text-[#1A1A1A] outline-none placeholder:text-[#CCCCCC]'
+  const inputBorder = { border: '1px solid #E8E8E8' }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
+      <DialogContent className="sm:max-w-[480px] rounded-none p-0 gap-0 ring-0" style={{ border: '1px solid #E8E8E8' }} showCloseButton={false}>
+        <div className="flex items-center justify-between px-6 py-5" style={{ borderBottom: '1px solid #E8E8E8' }}>
+          <div className="flex items-center gap-2.5">
+            <AlertTriangle className="h-4 w-4 text-[#D48700]" />
+            <span className="text-base font-semibold text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{isEditing ? '编辑敏感操作' : '新建敏感操作'}</span>
+          </div>
+          <button onClick={onClose} className="font-mono text-sm font-semibold text-[#999999] hover:text-[#1A1A1A]">✕</button>
+        </div>
+        {msg && (
+          <div className="px-6 py-2" style={{ backgroundColor: msg.type === 'success' ? '#0A6B3A08' : '#CF132208', borderBottom: '1px solid #E8E8E8' }}>
+            <span className="font-mono text-[10px] font-medium" style={{ color: msg.type === 'success' ? '#0A6B3A' : '#CF1322' }}>{msg.text}</span>
+          </div>
+        )}
+        <div className="flex flex-col gap-4 px-6 py-6">
+          <div className="flex flex-col gap-2">
+            <label className="font-mono text-[10px] font-semibold text-[#1A1A1A]">操作名称 <span className="text-[#CF1322]">*</span></label>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：文件导出" className={inputCls} style={inputBorder} />
+          </div>
+          <div className="flex flex-col gap-2">
+            <label className="font-mono text-[10px] font-semibold text-[#1A1A1A]">操作类型 <span className="text-[#CF1322]">*</span></label>
+            <input value={operationType} onChange={(e) => setOperationType(e.target.value)} placeholder="例如：file_export" className={inputCls} style={inputBorder} />
+            <span className="font-mono text-[9px] text-[#999999]">用于与客户端策略匹配，建议使用英文下划线格式</span>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-2">
+              <label className="font-mono text-[10px] font-semibold text-[#1A1A1A]">风险等级</label>
+              <DropdownSelect label={RISK_LEVEL_MAP[riskLevel]?.label ?? '中'} options={RISK_OPTIONS} value={riskLevel} onChange={setRiskLevel} />
+            </div>
+            <div className="flex flex-col gap-2">
+              <label className="font-mono text-[10px] font-semibold text-[#1A1A1A]">需要审批</label>
+              <div className="flex items-center gap-2 py-1.5">
+                <ToggleSwitch on={requiresApproval} onChange={() => setRequiresApproval(!requiresApproval)} />
+                <span className="font-mono text-[10px] font-medium text-[#999999]">{requiresApproval ? '是' : '否'}</span>
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-col gap-2">
+            <label className="font-mono text-[10px] font-semibold text-[#1A1A1A]">描述</label>
+            <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="操作描述（可选）" rows={2} className="w-full resize-none bg-[#F5F5F5] px-3.5 py-2.5 font-mono text-[10px] font-medium text-[#1A1A1A] outline-none placeholder:text-[#CCCCCC]" style={inputBorder} />
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-3 px-6 py-4" style={{ borderTop: '1px solid #E8E8E8' }}>
+          <button onClick={onClose} className="border border-[#E8E8E8] bg-white px-5 py-2.5 font-mono text-[10px] font-semibold text-[#1A1A1A]">取消</button>
+          <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 bg-[#0A6B3A] px-5 py-2.5 font-mono text-[10px] font-semibold text-white disabled:opacity-50">
+            <Check className="h-3 w-3" />{isEditing ? '保存' : '创建'}
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 /* ── Tab 定义 ── */
 
-const tabs = ['DLP 规则', '敏感词典', '敏感操作', '策略版本', '拦截记录'] as const
+const tabs = ['DLP 规则', '敏感词典', '策略版本', '拦截记录'] as const
 type TabKey = (typeof tabs)[number]
 
 const PAGE_SIZE = 10
@@ -394,6 +502,8 @@ export default function SecurityPage() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [editingRule, setEditingRule] = useState<DlpRule | null>(null)
   const [dictDialogOpen, setDictDialogOpen] = useState(false)
+  const [sensitiveOpDialogOpen, setSensitiveOpDialogOpen] = useState(false)
+  const [editingOp, setEditingOp] = useState<SensitiveOperation | null>(null)
 
   // DLP 规则
   const [rules, setRules] = useState<DlpRule[]>([])
@@ -575,7 +685,7 @@ export default function SecurityPage() {
           <h1 className="text-[22px] font-bold tracking-tight text-[#1A1A1A]" style={{ fontFamily: 'Space Grotesk, sans-serif', letterSpacing: '-1px' }}>
             安全策略
           </h1>
-          <p className="font-mono text-xs text-[#999999]">DLP 规则、敏感词典、敏感操作与策略版本管理</p>
+          <p className="font-mono text-xs text-[#999999]">DLP 规则、敏感词典与策略版本管理</p>
         </div>
         <div className="flex gap-2">
           <button className="flex items-center gap-2 border border-[#E8E8E8] bg-white px-4 py-2.5 font-mono text-[9px] font-semibold text-[#1A1A1A]">
@@ -720,35 +830,52 @@ export default function SecurityPage() {
 
       {/* ── 敏感操作 Tab ── */}
       {activeTab === '敏感操作' && (
-        <div className="bg-white" style={{ border: '1px solid #E8E8E8' }}>
-          <div className="flex items-center px-4 py-2.5" style={{ borderBottom: '1px solid #E8E8E8', backgroundColor: '#FAFAFA' }}>
-            {['操作名称', '风险等级', '需审批', '状态', '操作'].map((h) => (
-              <span key={h} className="flex-1 min-w-0 font-mono text-[9px] font-semibold tracking-[0.5px] text-[#999999]" style={h === '操作' ? { width: 80, flex: 'none' } : undefined}>{h}</span>
-            ))}
-          </div>
-
-          {opsLoading ? <LoadingState /> : pagedOps.length === 0 ? (
-            <EmptyState icon={AlertTriangle} text="暂无敏感操作" />
-          ) : pagedOps.map((op, i) => {
-            const risk = RISK_LEVEL_MAP[op.risk_level] ?? { label: op.risk_level, color: '#999' }
-            return (
-              <div key={op.id} className="flex items-center px-4 py-3" style={{ borderBottom: i < pagedOps.length - 1 ? '1px solid #E8E8E8' : 'none' }}>
-                <span className="flex-1 min-w-0 font-mono text-[10px] font-medium text-[#1A1A1A]">{op.name}</span>
-                <div className="flex-1 min-w-0"><StatusTag label={risk.label} color={risk.color} /></div>
-                <span className="flex-1 min-w-0 font-mono text-[10px] font-medium" style={{ color: op.requires_approval ? '#0A6B3A' : '#999999' }}>
-                  {op.requires_approval ? '是' : '否'}
-                </span>
-                <div className="flex-1 min-w-0"><ToggleSwitch on={op.enabled} onChange={() => handleToggleOp(op)} /></div>
-                <div className="flex items-center gap-3" style={{ width: 80, flexShrink: 0 }}>
-                  <button className="text-[#6a6a6a] hover:text-[#0A6B3A]" title="编辑"><Pencil className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => handleDeleteOp(op)} className="text-[#6a6a6a] hover:text-[#CF1322]" title="删除"><Trash2 className="h-3.5 w-3.5" /></button>
-                </div>
+        <>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="flex w-[220px] items-center gap-2.5 border border-[#E8E8E8] bg-white px-3.5 py-2">
+                <Search className="h-3 w-3 text-[#6a6a6a]" />
+                <span className="font-mono text-[10px] font-medium text-[#CCCCCC]">搜索敏感操作...</span>
               </div>
-            )
-          })}
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="font-mono text-[10px] font-medium text-[#999999]">共 {ops.length} 条规则</span>
+              <button onClick={() => setSensitiveOpDialogOpen(true)} className="flex items-center gap-2 bg-[#0A6B3A] px-4 py-2 font-mono text-[9px] font-semibold text-white">
+                <Plus className="h-3 w-3" />
+                新建操作
+              </button>
+            </div>
+          </div>
+          <div className="bg-white" style={{ border: '1px solid #E8E8E8' }}>
+            <div className="flex items-center px-4 py-2.5" style={{ borderBottom: '1px solid #E8E8E8', backgroundColor: '#FAFAFA' }}>
+              {['操作名称', '风险等级', '需审批', '状态', '操作'].map((h) => (
+                <span key={h} className="flex-1 min-w-0 font-mono text-[9px] font-semibold tracking-[0.5px] text-[#999999]" style={h === '操作' ? { width: 80, flex: 'none' } : undefined}>{h}</span>
+              ))}
+            </div>
 
-          <TablePagination current={opsPage} total={ops.length} pageSize={PAGE_SIZE} onChange={setOpsPage} />
-        </div>
+            {opsLoading ? <LoadingState /> : pagedOps.length === 0 ? (
+              <EmptyState icon={AlertTriangle} text="暂无敏感操作" />
+            ) : pagedOps.map((op, i) => {
+              const risk = RISK_LEVEL_MAP[op.risk_level] ?? { label: op.risk_level, color: '#999' }
+              return (
+                <div key={op.id} className="flex items-center px-4 py-3" style={{ borderBottom: i < pagedOps.length - 1 ? '1px solid #E8E8E8' : 'none' }}>
+                  <span className="flex-1 min-w-0 font-mono text-[10px] font-medium text-[#1A1A1A]">{op.name}</span>
+                  <div className="flex-1 min-w-0"><StatusTag label={risk.label} color={risk.color} /></div>
+                  <span className="flex-1 min-w-0 font-mono text-[10px] font-medium" style={{ color: op.requires_approval ? '#0A6B3A' : '#999999' }}>
+                    {op.requires_approval ? '是' : '否'}
+                  </span>
+                  <div className="flex-1 min-w-0"><ToggleSwitch on={op.enabled} onChange={() => handleToggleOp(op)} /></div>
+                  <div className="flex items-center gap-3" style={{ width: 80, flexShrink: 0 }}>
+                    <button onClick={() => { setEditingOp(op); setSensitiveOpDialogOpen(true) }} className="text-[#6a6a6a] hover:text-[#0A6B3A]" title="编辑"><Pencil className="h-3.5 w-3.5" /></button>
+                    <button onClick={() => handleDeleteOp(op)} className="text-[#6a6a6a] hover:text-[#CF1322]" title="删除"><Trash2 className="h-3.5 w-3.5" /></button>
+                  </div>
+                </div>
+              )
+            })}
+
+            <TablePagination current={opsPage} total={ops.length} pageSize={PAGE_SIZE} onChange={setOpsPage} />
+          </div>
+        </>
       )}
 
       {/* ── 策略版本 Tab ── */}
@@ -787,6 +914,7 @@ export default function SecurityPage() {
 
       <DlpRuleFormDialog open={createDialogOpen} editingRule={editingRule} onClose={() => { setCreateDialogOpen(false); setEditingRule(null) }} onSaved={loadRules} />
       <DictFormDialog open={dictDialogOpen} onClose={() => setDictDialogOpen(false)} onSaved={loadDicts} />
+      <SensitiveOpFormDialog open={sensitiveOpDialogOpen} editingOp={editingOp} onClose={() => { setSensitiveOpDialogOpen(false); setEditingOp(null) }} onSaved={loadOps} />
     </div>
   )
 }

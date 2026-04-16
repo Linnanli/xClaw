@@ -4,7 +4,16 @@
 
 use crate::auth_token_manager::AuthTokenManager;
 use crate::{Error, Result};
+use serde::Serialize;
 use uuid::Uuid;
+
+#[derive(Debug, Serialize)]
+struct ApprovalTicketPayload {
+    applicant_id: Uuid,
+    operation_type: String,
+    operation_name: String,
+    reason: Option<String>,
+}
 
 /// 构建带超时的 HTTP 客户端。
 fn build_http_client(timeout_secs: u64) -> Result<reqwest::Client> {
@@ -182,12 +191,12 @@ pub async fn submit_approval_ticket(
     };
     let reason = format!("request_id={request_id}\nthread_id={thread_id}\n{content}");
 
-    let payload = serde_json::json!({
-        "operation_type": "tool_approval",
-        "operation_name": operation_name,
-        "reason": reason,
-        "applicant_id": applicant_id,
-    });
+    let payload = ApprovalTicketPayload {
+        applicant_id,
+        operation_type: "tool_approval".to_string(),
+        operation_name,
+        reason: Some(reason),
+    };
 
     let resp = http
         .post(format!("{}/api/approvals", admin_url))

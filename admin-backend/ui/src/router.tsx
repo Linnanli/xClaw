@@ -9,7 +9,6 @@ import AlertsPage from '@/pages/alerts'
 import ConversationsPage from '@/pages/conversations'
 import KnowledgeBasesPage from '@/pages/knowledge-bases'
 import DepartmentsPage from '@/pages/departments'
-import ApprovalsPage from '@/pages/approvals'
 import CompliancePage from '@/pages/compliance'
 import WatermarkPage from '@/pages/watermark'
 import SettingsPage from '@/pages/settings'
@@ -56,7 +55,6 @@ export const router = createBrowserRouter([
       { path: 'alerts', element: <AlertsPage /> },
       { path: 'conversations', element: <ConversationsPage /> },
       { path: 'knowledge-bases', element: <KnowledgeBasesPage /> },
-      { path: 'approvals', element: <ApprovalsPage /> },
       { path: 'compliance', element: <CompliancePage /> },
       { path: 'watermark', element: <WatermarkPage /> },
       { path: 'settings', element: <SettingsPage /> },

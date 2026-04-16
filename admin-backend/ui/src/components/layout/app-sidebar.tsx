@@ -3,7 +3,7 @@ import { Link, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, Monitor, Users, Shield, Bell,
   MessageSquare, BookOpen, Coins, ShieldCheck, Scan,
-  SquareCheck, Settings, Building2, BarChart3, Bot,
+  Settings, Building2, BarChart3, Bot,
   FileText, Puzzle, ChevronDown,
 } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth'
@@ -57,7 +57,6 @@ const navEntries: NavEntry[] = [
     children: [
       { title: '告警中心', icon: Bell, href: '/alerts' },
       { title: '对话审计', icon: MessageSquare, href: '/conversations' },
-      { title: '审批工单', icon: SquareCheck, href: '/approvals' },
     ],
   },
   {

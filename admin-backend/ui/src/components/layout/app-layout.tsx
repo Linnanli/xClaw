@@ -12,7 +12,6 @@ const routeTitles: Record<string, string> = {
   '/watermark': '水印追踪',
   '/alerts': '告警中心',
   '/conversations': '对话审计',
-  '/approvals': '审批工单',
   '/model-configs': '模型配置',
   '/knowledge-bases': '知识库',
   '/extensions': '扩展管理',

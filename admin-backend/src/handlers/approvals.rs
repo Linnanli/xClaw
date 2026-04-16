@@ -102,7 +102,7 @@ pub async fn get_approvals(
 
     let data_sql = format!(
         "SELECT t.id, u.username, t.operation_type, t.operation_name, t.reason,
-                t.status, t.review_comment, t.reviewed_at, t.expires_at, t.created_at
+            t.status, t.review_comment, t.reviewed_at, t.expires_at, t.created_at
          FROM approval_tickets t
          JOIN users u ON u.id = t.applicant_id
          {} ORDER BY t.created_at DESC LIMIT {} OFFSET {}",

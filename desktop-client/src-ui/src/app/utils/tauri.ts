@@ -340,7 +340,7 @@ export const offlineApi = {
     can_write: true,
     can_sync: false,
   }),
-  canPerformOperation: async (_operation: string): Promise<boolean> => true,
+  canPerformOperation: async (): Promise<boolean> => true,
 };
 
 // ============================================================================
