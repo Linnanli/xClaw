@@ -36,6 +36,13 @@ import { tracing } from '@utils/tracing';
 import { ModelContext } from '@contexts/ModelContext';
 import { isErrorResponse, friendlyErrorMessage } from '@utils/friendlyError';
 import type { ChatCommand } from '../types/chatCommand';
+import { EchoToolUI } from '../components/assistant-ui/tool-renderers/echo-renderer';
+import { FileEditToolUI } from '../components/assistant-ui/tool-renderers/file-edit-renderer';
+import { GrepResultToolUI } from '../components/assistant-ui/tool-renderers/grep-result-renderer';
+import { ShellOutputToolUI } from '../components/assistant-ui/tool-renderers/shell-output-renderer';
+import { GlobResultToolUI } from '../components/assistant-ui/tool-renderers/glob-result-renderer';
+import { GitDiffToolUI } from '../components/assistant-ui/tool-renderers/git-diff-renderer';
+import { LspResultToolUI } from '../components/assistant-ui/tool-renderers/lsp-result-renderer';
 
 // ============================================================================
 // 类型定义
@@ -1194,6 +1201,13 @@ export function TauriRuntimeProvider({
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
+      <EchoToolUI />
+      <FileEditToolUI />
+      <GrepResultToolUI />
+      <ShellOutputToolUI />
+      <GlobResultToolUI />
+      <GitDiffToolUI />
+      <LspResultToolUI />
       <ModelContext.Provider
         value={{
           selectedModelId,

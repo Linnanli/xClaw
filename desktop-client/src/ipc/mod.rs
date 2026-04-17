@@ -15,6 +15,7 @@ pub(crate) mod persistence;
 pub mod routines;
 pub mod skills;
 pub mod threads;
+pub mod workspace;
 
 #[cfg(test)]
 #[path = "chat_tests.rs"]
@@ -72,3 +73,4 @@ pub use models::*;
 pub use routines::*;
 pub use skills::*;
 pub use threads::*;
+pub use workspace::*;

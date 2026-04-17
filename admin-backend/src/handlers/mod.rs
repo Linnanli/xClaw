@@ -4,6 +4,7 @@
 
 pub mod alerts;
 pub mod approvals;
+pub mod code_tools;
 pub mod compliance;
 pub mod conversations;
 pub mod departments;

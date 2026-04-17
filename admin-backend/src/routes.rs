@@ -212,6 +212,37 @@ pub fn create_router(state: AppState) -> Router {
         )
         // 系统配置 API
         .route("/api/settings", get(get_settings).put(update_settings))
+        // 代码工具策略 API（P0 Claude Code Parity）
+        .route(
+            "/api/settings/code-tools",
+            get(handlers::code_tools::get_code_tools)
+                .put(handlers::code_tools::put_code_tools),
+        )
+        .route(
+            "/api/settings/workspace-paths",
+            get(handlers::code_tools::get_workspace_paths)
+                .put(handlers::code_tools::put_workspace_paths),
+        )
+        .route(
+            "/api/settings/bash-rules",
+            get(handlers::code_tools::get_bash_rules)
+                .put(handlers::code_tools::put_bash_rules),
+        )
+        // LSP 服务器白名单 + Git 仓库白名单 + 代码操作报表（P1 Claude Code Parity）
+        .route(
+            "/api/settings/lsp-servers",
+            get(handlers::code_tools::get_lsp_servers)
+                .put(handlers::code_tools::put_lsp_servers),
+        )
+        .route(
+            "/api/settings/git-repos",
+            get(handlers::code_tools::get_git_repos)
+                .put(handlers::code_tools::put_git_repos),
+        )
+        .route(
+            "/api/reports/code-operations",
+            get(handlers::code_tools::get_code_operations),
+        )
         // 客户端配置下发 API
         .route(
             "/api/client-config",
@@ -3078,6 +3109,12 @@ struct ManagedPolicyManifest {
     client_id: Option<String>,
     allowed_skills: Vec<String>,
     allowed_extensions: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code_tools: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workspace_paths: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bash_rules: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -3284,6 +3321,11 @@ async fn get_client_policy(
     let allowed_skills = fetch_allowed_skill_names(&client, department_id).await?;
     let allowed_extensions = fetch_allowed_extension_names(&client).await?;
 
+    // Fetch code tool settings (fallback to global if department has none)
+    let code_tools = fetch_code_tool_config(&state.sqlx_pool, "code_tools", department_id).await;
+    let workspace_paths = fetch_code_tool_config(&state.sqlx_pool, "workspace_paths", department_id).await;
+    let bash_rules = fetch_code_tool_config(&state.sqlx_pool, "bash_rules", department_id).await;
+
     info!(
         ?department_id,
         managed_mode,
@@ -3300,6 +3342,9 @@ async fn get_client_policy(
         client_id: client_uuid.map(|id| id.to_string()),
         allowed_skills,
         allowed_extensions,
+        code_tools,
+        workspace_paths,
+        bash_rules,
     };
 
     let manifest_payload = serde_json::to_string(&manifest)
@@ -3525,6 +3570,39 @@ async fn fetch_allowed_extension_names(client: &deadpool_postgres::Object) -> Re
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
     Ok(rows.iter().map(|r| r.get::<_, String>(0)).collect())
+}
+
+/// Fetch code_tool_settings config by type, with department→global fallback.
+async fn fetch_code_tool_config(
+    pool: &sqlx::PgPool,
+    setting_type: &str,
+    department_id: Option<Uuid>,
+) -> Option<serde_json::Value> {
+    // Try department-specific first
+    if let Some(dept_id) = department_id {
+        let row: Option<(serde_json::Value,)> = sqlx::query_as(
+            "SELECT config FROM code_tool_settings \
+             WHERE setting_type = $1 AND department_id = $2",
+        )
+        .bind(setting_type)
+        .bind(dept_id)
+        .fetch_optional(pool)
+        .await
+        .ok()?;
+        if let Some((config,)) = row {
+            return Some(config);
+        }
+    }
+    // Fallback to global
+    let row: Option<(serde_json::Value,)> = sqlx::query_as(
+        "SELECT config FROM code_tool_settings \
+         WHERE setting_type = $1 AND department_id IS NULL",
+    )
+    .bind(setting_type)
+    .fetch_optional(pool)
+    .await
+    .ok()?;
+    row.map(|(config,)| config)
 }
 
 async fn read_managed_mode_setting(client: &deadpool_postgres::Object) -> bool {

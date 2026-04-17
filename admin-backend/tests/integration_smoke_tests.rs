@@ -173,10 +173,12 @@ async fn test_migration_all_tables_exist() {
         ("021_knowledge_docs", "kb_documents"),
         ("023_extensions_v2", "department_skill_whitelist"),
         ("025_scan_results", "scan_results"),
+        ("027_code_tool_settings", "code_tool_settings"),
         // 026 为 conversation_messages 字段扩展，列级验证见 test_migration_026_conversation_attachments_column
         // 020 是字段扩展迁移，表已存在，列级验证见 test_migration_020_security_fields_columns
         // 022 是 system_settings 数据插入，表已存在，通过 settings key 验证
         // 023 字段扩展验证见 test_migration_023_extensions_v2_columns
+        // 028 是 code_tool_settings 数据插入（lsp_servers/git_repos），表已存在于 027
     ];
 
     let mut missing = Vec::new();
@@ -467,6 +469,9 @@ async fn test_http_all_critical_get_routes_registered() {
         "/api/skills",
         "/api/plugins",
         "/api/settings",
+        "/api/settings/code-tools",
+        "/api/settings/workspace-paths",
+        "/api/settings/bash-rules",
         "/api/dashboard/stats",
         "/api/alert-rules",
         "/api/alerts",

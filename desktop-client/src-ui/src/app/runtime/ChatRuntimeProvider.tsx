@@ -12,6 +12,13 @@ import { type ReactNode, useState, useCallback, createContext, useContext, useRe
 import { AssistantRuntimeProvider } from '@assistant-ui/react';
 import { useChatRuntime, AssistantChatTransport } from '@assistant-ui/react-ai-sdk';
 import type { SanitizationStats } from '../hooks/useDlpScan';
+import { EchoToolUI } from '../components/assistant-ui/tool-renderers/echo-renderer';
+import { FileEditToolUI } from '../components/assistant-ui/tool-renderers/file-edit-renderer';
+import { GrepResultToolUI } from '../components/assistant-ui/tool-renderers/grep-result-renderer';
+import { ShellOutputToolUI } from '../components/assistant-ui/tool-renderers/shell-output-renderer';
+import { GlobResultToolUI } from '../components/assistant-ui/tool-renderers/glob-result-renderer';
+import { GitDiffToolUI } from '../components/assistant-ui/tool-renderers/git-diff-renderer';
+import { LspResultToolUI } from '../components/assistant-ui/tool-renderers/lsp-result-renderer';
 
 // ============================================================================
 // DLP Context
@@ -101,6 +108,13 @@ export function ChatRuntimeProvider({
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
+      <EchoToolUI />
+      <FileEditToolUI />
+      <GrepResultToolUI />
+      <ShellOutputToolUI />
+      <GlobResultToolUI />
+      <GitDiffToolUI />
+      <LspResultToolUI />
       <DlpContext.Provider
         value={{
           blocked: dlpBlocked,

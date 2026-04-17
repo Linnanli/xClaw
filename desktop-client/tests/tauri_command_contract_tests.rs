@@ -94,6 +94,10 @@ const FRONTEND_INVOKED_COMMANDS: &[&str] = &[
     "ic_filter_logs",
     "ic_export_logs",
     "ic_clear_logs",
+    // ── 工作区状态 ──────────────────────────────────────────────
+    "ic_workspace_git_status",
+    "ic_workspace_root",
+    "ic_active_servers",
 ];
 
 /// `all_tauri_commands!()` 宏中注册的所有命令名（必须与 lib.rs 保持同步）。
@@ -168,6 +172,10 @@ const REGISTERED_COMMANDS: &[&str] = &[
     "ic_filter_logs",
     "ic_export_logs",
     "ic_clear_logs",
+    // ── 工作区状态 ──────────────────────────────────────────────
+    "ic_workspace_git_status",
+    "ic_workspace_root",
+    "ic_active_servers",
 ];
 
 #[test]

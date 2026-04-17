@@ -495,6 +495,16 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         builder: None,
         llm_backend: config.llm.backend.clone(),
         tenant_rates: Arc::new(ironclaw::tenant::TenantRateRegistry::new(4, 4)),
+        cache_monitor: {
+            let obs_config = ironclaw::observability::ObservabilityConfig {
+                backend: "log".to_string(),
+            };
+            let observer: std::sync::Arc<dyn ironclaw::observability::Observer> =
+                std::sync::Arc::from(ironclaw::observability::create_observer(&obs_config));
+            Some(std::sync::Arc::new(
+                ironclaw::observability::PromptCacheMonitor::new(observer),
+            ))
+        },
     };
 
     let mut agent = Agent::new(

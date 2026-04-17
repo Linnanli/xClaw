@@ -17,6 +17,7 @@ import {
   Moon,
   User,
   Zap,
+  FolderOpen,
 } from 'lucide-react';
 import {
   Dialog,
@@ -31,10 +32,12 @@ import { SkillsTab } from '../tabs/SkillsTab';
 import { ExtensionsTab } from '../tabs/ExtensionsTab';
 import { MemoryTab } from '../tabs/MemoryTab';
 import { AboutTab } from '../tabs/AboutTab';
+import { WorkspaceTab } from '../tabs/WorkspaceTab';
 
 type SettingsNav =
   | 'general'
   | 'usage'
+  | 'workspace'
   | 'skills'
   | 'extensions'
   | 'memory'
@@ -43,6 +46,7 @@ type SettingsNav =
 const NAV_ITEMS: { key: SettingsNav; label: string; icon: React.ElementType }[] = [
   { key: 'general', label: '通用设置', icon: Settings },
   { key: 'usage', label: '用量统计', icon: BarChart3 },
+  { key: 'workspace', label: '工作区', icon: FolderOpen },
   { key: 'skills', label: '技能管理', icon: Zap },
   { key: 'extensions', label: '扩展', icon: Puzzle },
   { key: 'memory', label: '记忆', icon: Brain },
@@ -71,6 +75,8 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
         return <GeneralSettings aiSafety={aiSafety} onAiSafetyChange={setAiSafety} antiSleep={antiSleep} onAntiSleepChange={setAntiSleep} onLogout={handleLogout} />;
       case 'usage':
         return <UsageStats />;
+      case 'workspace':
+        return <WorkspaceTab />;
       case 'skills':
         return <SkillsTab />;
       case 'extensions':

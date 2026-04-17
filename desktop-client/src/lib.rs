@@ -164,6 +164,10 @@ macro_rules! all_tauri_commands {
             desktop_client::ipc::ic_filter_logs,
             desktop_client::ipc::ic_export_logs,
             desktop_client::ipc::ic_clear_logs,
+            // ── 工作区状态 ──────────────────────────────────────
+            desktop_client::ipc::ic_workspace_git_status,
+            desktop_client::ipc::ic_workspace_root,
+            desktop_client::ipc::ic_active_servers,
         ]
     };
 }

@@ -1,3 +1,6 @@
 [submodule "ironclaw"]
 	path = desktop-client/ironclaw
 	url = https://github.com/nearai/ironclaw.git
+[submodule "claw-code"]
+	path = claw-code
+	url = https://github.com/ultraworkers/claw-code.git
