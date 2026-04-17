@@ -98,6 +98,11 @@ const FRONTEND_INVOKED_COMMANDS: &[&str] = &[
     "ic_workspace_git_status",
     "ic_workspace_root",
     "ic_active_servers",
+    // ── Plan Mode / Fork ────────────────────────────────────────
+    "ic_toggle_plan_mode",
+    "ic_approve_plan",
+    "ic_revise_plan",
+    "ic_fork_thread",
 ];
 
 /// `all_tauri_commands!()` 宏中注册的所有命令名（必须与 lib.rs 保持同步）。
@@ -176,6 +181,11 @@ const REGISTERED_COMMANDS: &[&str] = &[
     "ic_workspace_git_status",
     "ic_workspace_root",
     "ic_active_servers",
+    // ── Plan Mode / Fork ────────────────────────────────────────
+    "ic_toggle_plan_mode",
+    "ic_approve_plan",
+    "ic_revise_plan",
+    "ic_fork_thread",
 ];
 
 #[test]

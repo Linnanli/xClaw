@@ -19,6 +19,9 @@ import { ShellOutputToolUI } from '../components/assistant-ui/tool-renderers/she
 import { GlobResultToolUI } from '../components/assistant-ui/tool-renderers/glob-result-renderer';
 import { GitDiffToolUI } from '../components/assistant-ui/tool-renderers/git-diff-renderer';
 import { LspResultToolUI } from '../components/assistant-ui/tool-renderers/lsp-result-renderer';
+import { PlanModeToolUI } from '../components/assistant-ui/tool-renderers/plan-renderer';
+import { SessionForkToolUI } from '../components/assistant-ui/tool-renderers/fork-renderer';
+import { SubAgentToolUI } from '../components/assistant-ui/tool-renderers/sub-agent-renderer';
 
 // ============================================================================
 // DLP Context
@@ -115,6 +118,9 @@ export function ChatRuntimeProvider({
       <GlobResultToolUI />
       <GitDiffToolUI />
       <LspResultToolUI />
+      <PlanModeToolUI />
+      <SessionForkToolUI />
+      <SubAgentToolUI />
       <DlpContext.Provider
         value={{
           blocked: dlpBlocked,
