@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::State;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::state::EngineState;
 
@@ -128,26 +128,26 @@ fn save_custom_models(store: &CustomModelStore) -> Result<(), String> {
 }
 
 /// 获取所有可用模型（后台下发 + 本地自定义）
+///
+/// 模型来源优先级：后台下发 > LLM provider 查询 > 内置兜底列表。
+/// 后台返回空列表与请求失败等价，均退回下一级来源。
 #[tauri::command]
 pub async fn get_available_models(
     engine: State<'_, EngineState>,
 ) -> Result<Vec<ModelConfig>, String> {
-    let mut models = Vec::new();
+    let admin_models = fetch_admin_models(&engine).await.unwrap_or_default();
 
-    // 1. 尝试从后台拉取
-    match fetch_admin_models(&engine).await {
-        Ok(admin_models) => {
-            debug!(count = admin_models.len(), "从后台获取模型列表");
-            models.extend(admin_models);
-        }
-        Err(e) => {
-            warn!("从后台获取模型列表失败，从 LLM provider 查询: {}", e);
-            // 从实际的 LLM provider 查询可用模型，而非硬编码列表
-            models.extend(query_provider_models(&engine).await);
-        }
-    }
+    let base_models = if admin_models.is_empty() {
+        debug!("后台模型为空或不可用，从 LLM provider 查询");
+        query_provider_models(&engine).await
+    } else {
+        debug!(count = admin_models.len(), "从后台获取模型列表");
+        admin_models
+    };
 
-    // 2. 合并本地自定义模型
+    let mut models = base_models;
+
+    // 合并本地自定义模型
     let custom_store = load_custom_models();
     for cm in &custom_store.models {
         models.push(ModelConfig {

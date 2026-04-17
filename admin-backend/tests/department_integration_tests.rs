@@ -110,3 +110,70 @@ async fn test_failure_update_child_to_second_root_rejected() {
     let details = body["details"].as_str().unwrap_or_default();
     assert!(details.contains("只允许一个顶级部门"));
 }
+
+#[tokio::test]
+async fn test_failure_update_model_whitelist_with_disabled_model_rejected() {
+    let pool = match try_connect_db().await {
+        Some(p) => p,
+        None => {
+            println!("⚠️ 数据库不可用，跳过");
+            return;
+        }
+    };
+
+    let client = pool.get().await.expect("get db client");
+    let dept_id = Uuid::new_v4();
+    let model_id = Uuid::new_v4();
+    let now = Utc::now();
+    let model_name = format!("disabled_model_{}", model_id.simple());
+
+    client
+        .execute(
+            "INSERT INTO departments (id, name, description, parent_id, token_quota_enabled, token_quota_per_day, created_at, updated_at)
+             VALUES ($1, $2, 'for whitelist test', NULL, false, NULL, $3, $3)",
+            &[&dept_id, &format!("dept_{}", dept_id.simple()), &now],
+        )
+        .await
+        .expect("insert department");
+
+    client
+        .execute(
+            "INSERT INTO model_configs (id, model_id, display_name, provider, enabled, is_default, sort_order, capabilities, extra_config)
+             VALUES ($1, $2, $3, 'openai', false, false, 9999, '[]'::jsonb, '{}'::jsonb)",
+            &[&model_id, &format!("model_{}", model_id.simple()), &model_name],
+        )
+        .await
+        .expect("insert disabled model");
+
+    let resp = put_json(
+        build_app(pool.clone()),
+        &format!("/api/departments/{}/model-whitelist", dept_id),
+        json!({ "model_config_ids": [model_id] }),
+    )
+    .await;
+
+    let status = resp.status();
+    let body = response_json(resp).await;
+
+    client
+        .execute(
+            "DELETE FROM department_model_whitelist WHERE department_id = $1",
+            &[&dept_id],
+        )
+        .await
+        .expect("cleanup whitelist");
+    client
+        .execute("DELETE FROM model_configs WHERE id = $1", &[&model_id])
+        .await
+        .expect("cleanup model config");
+    client
+        .execute("DELETE FROM departments WHERE id = $1", &[&dept_id])
+        .await
+        .expect("cleanup department");
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "Validation error");
+    let details = body["details"].as_str().unwrap_or_default();
+    assert!(details.contains("禁止设置禁用模型"));
+    assert!(details.contains(&model_name));
+}

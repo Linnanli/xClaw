@@ -69,6 +69,23 @@ export function useModelConfig(): UseModelConfigReturn {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // 仅加载自定义模型（mount 和 CRUD 后使用，避免冗余的 getAvailableModels 调用）
+  const reloadCustomModels = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const customs = await modelApi.getCustomModels();
+      setCustomModels(customs);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+      console.error('加载自定义模型失败:', msg);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // 完整刷新（供外部显式调用，如设置页面需要展示全量模型列表时）
   const refresh = useCallback(async () => {
     try {
       setLoading(true);
@@ -95,8 +112,8 @@ export function useModelConfig(): UseModelConfigReturn {
   }, [selectedModelId]);
 
   useEffect(() => {
-    refresh();
-  }, []);
+    reloadCustomModels();
+  }, [reloadCustomModels]);
 
   const selectModel = useCallback((modelId: string) => {
     setSelectedModelId(modelId);
@@ -105,27 +122,27 @@ export function useModelConfig(): UseModelConfigReturn {
   const createModel = useCallback(
     async (params: CreateModelParams): Promise<CustomModelItem> => {
       const result = await modelApi.createCustomModel(params);
-      await refresh();
+      await reloadCustomModels();
       return result;
     },
-    [refresh],
+    [reloadCustomModels],
   );
 
   const updateModel = useCallback(
     async (params: UpdateModelParams): Promise<CustomModelItem> => {
       const result = await modelApi.updateCustomModel(params);
-      await refresh();
+      await reloadCustomModels();
       return result;
     },
-    [refresh],
+    [reloadCustomModels],
   );
 
   const deleteModel = useCallback(
     async (modelId: string): Promise<void> => {
       await modelApi.deleteCustomModel(modelId);
-      await refresh();
+      await reloadCustomModels();
     },
-    [refresh],
+    [reloadCustomModels],
   );
 
   const testConnection = useCallback(

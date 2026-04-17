@@ -57,6 +57,7 @@ interface ModelOption {
   model_id: string
   display_name: string
   provider: string
+  enabled: boolean
 }
 
 interface SkillOption {
@@ -157,7 +158,13 @@ function mapModelOptions(data: unknown): ModelOption[] {
       return []
     }
 
-    return [candidate as ModelOption]
+    return [{
+      id: candidate.id,
+      model_id: candidate.model_id,
+      display_name: candidate.display_name,
+      provider: candidate.provider,
+      enabled: candidate.enabled !== false,
+    }]
   })
 }
 
@@ -443,7 +450,7 @@ function ModelWhitelistDialog({ open, deptId, deptName, currentWhitelist, onClos
       await api.put(`/departments/${deptId}/model-whitelist`, { model_config_ids: Array.from(selected) })
       onSaved()
     } catch (err: any) {
-      setError(err.response?.data?.error || '保存失败')
+      setError(err.response?.data?.details || err.response?.data?.error || '保存失败')
     } finally { setSaving(false) }
   }
 
@@ -463,7 +470,14 @@ function ModelWhitelistDialog({ open, deptId, deptName, currentWhitelist, onClos
                   {selected.has(m.id) && <Check className="h-2.5 w-2.5 text-white" />}
                 </div>
                 <div className="flex flex-col">
-                  <span className="font-mono text-[10px] font-medium text-[#1A1A1A]">{m.display_name}</span>
+                  <span className="flex items-center gap-2 font-mono text-[10px] font-medium text-[#1A1A1A]">
+                    {m.display_name}
+                    {!m.enabled && (
+                      <span className="border border-[#E8E8E8] bg-[#F5F5F5] px-1.5 py-0.5 text-[8px] text-[#8A8A8A]">
+                        已禁用
+                      </span>
+                    )}
+                  </span>
                   <span className="font-mono text-[9px] text-[#999]">{m.provider} · {m.model_id}</span>
                 </div>
               </button>

@@ -70,6 +70,27 @@ function mockDepartmentApi() {
       })
     }
 
+    if (url === '/model-configs') {
+      return Promise.resolve({
+        data: [
+          {
+            id: 'model-enabled-1',
+            model_id: 'qwen3.6-plus-2026-04-02',
+            display_name: 'qwen3.6-plus-2026-04-02',
+            provider: 'qwen',
+            enabled: true,
+          },
+          {
+            id: 'model-disabled-1',
+            model_id: 'qwen3.5-omni-plus-2026-03-15',
+            display_name: 'qwen3.5-omni-plus-2026-03-15',
+            provider: 'qwen',
+            enabled: false,
+          },
+        ],
+      })
+    }
+
     if (url === '/departments/dept-1/quota-summary') {
       return Promise.resolve({
         data: {
@@ -137,6 +158,69 @@ describe('DepartmentsPage', () => {
       expect(mockedApi.put).toHaveBeenCalledWith('/departments/dept-1/skill-whitelist', {
         skill_ids: ['skill-1', 'skill-2'],
       })
+    })
+  })
+
+  it('模型白名单弹窗应标记禁用模型并展示后端校验错误', async () => {
+    mockedApi.put.mockRejectedValueOnce({
+      response: {
+        data: {
+          details: '禁止设置禁用模型: qwen3.5-omni-plus-2026-03-15',
+        },
+      },
+    })
+
+    render(<DepartmentsPage />)
+    const user = userEvent.setup()
+
+    await waitFor(() => {
+      expect(screen.getByText('可用技能白名单')).toBeInTheDocument()
+    })
+
+    const editButtons = screen.getAllByRole('button', { name: /^编辑$/ })
+    await user.click(editButtons[0])
+
+    await waitFor(() => {
+      expect(screen.getByText('编辑模型白名单 — 研发部')).toBeInTheDocument()
+    })
+
+    expect(screen.getByText('已禁用')).toBeInTheDocument()
+
+    await user.click(screen.getByText('qwen3.5-omni-plus-2026-03-15'))
+    await user.click(screen.getByRole('button', { name: '保存白名单' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('禁止设置禁用模型: qwen3.5-omni-plus-2026-03-15')).toBeInTheDocument()
+    })
+  })
+
+  it('模型白名单保存失败时应回退展示 error 字段', async () => {
+    mockedApi.put.mockRejectedValueOnce({
+      response: {
+        data: {
+          error: '保存失败：模型不可用',
+        },
+      },
+    })
+
+    render(<DepartmentsPage />)
+    const user = userEvent.setup()
+
+    await waitFor(() => {
+      expect(screen.getByText('可用技能白名单')).toBeInTheDocument()
+    })
+
+    const editButtons = screen.getAllByRole('button', { name: /^编辑$/ })
+    await user.click(editButtons[0])
+
+    await waitFor(() => {
+      expect(screen.getByText('编辑模型白名单 — 研发部')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: '保存白名单' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('保存失败：模型不可用')).toBeInTheDocument()
     })
   })
 

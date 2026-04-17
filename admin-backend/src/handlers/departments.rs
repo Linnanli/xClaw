@@ -151,6 +151,9 @@ pub async fn update_model_whitelist(
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
+    // 在同一事务内校验并写入，避免 check-then-act 竞态。
+    validate_whitelist_models_enabled(&tx, &payload.model_config_ids).await?;
+
     tx.execute(
         "DELETE FROM department_model_whitelist WHERE department_id = $1",
         &[&dept_id],
@@ -189,6 +192,33 @@ pub async fn update_model_whitelist(
         "message": "模型白名单已更新",
         "count": payload.model_config_ids.len(),
     })))
+}
+
+async fn validate_whitelist_models_enabled(
+    client: &(impl deadpool_postgres::GenericClient + Sync),
+    model_config_ids: &[Uuid],
+) -> Result<()> {
+    if model_config_ids.is_empty() {
+        return Ok(());
+    }
+
+    let rows = client
+        .query(
+            "SELECT display_name FROM model_configs WHERE id = ANY($1::uuid[]) AND enabled = false ORDER BY display_name",
+            &[&model_config_ids],
+        )
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
+
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    let disabled_names: Vec<String> = rows.iter().map(|row| row.get::<_, String>(0)).collect();
+    Err(Error::Validation(format!(
+        "禁止设置禁用模型: {}",
+        disabled_names.join("、")
+    )))
 }
 
 // ============================================================================
