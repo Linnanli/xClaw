@@ -44,6 +44,7 @@
             "core:window:allow-hide",
             "core:default",
             "dialog:allow-save",
+            "dialog:allow-open",
             "fs:allow-write-text-file",
             "fs:allow-app-write"
           ]

@@ -90,17 +90,45 @@ pub async fn ic_list_threads(
 }
 
 /// 创建新对话线程。
+///
+/// Automatically creates a sandboxed workspace directory under
+/// `~/.ironclaw/projects/{thread_id}/` and stores the path in
+/// conversation metadata as `workspace_root`.
 #[tauri::command]
 pub async fn ic_create_thread(state: State<'_, EngineState>) -> Result<String, String> {
     let state = state.get()?;
     let db = state.db.as_ref().ok_or("Database not available")?;
 
+    let metadata = serde_json::json!({});
     let id = db
-        .create_conversation("tauri", &state.scope_id, None)
+        .create_conversation_with_metadata("tauri", &state.scope_id, &metadata)
         .await
         .map_err(|e| format!("Failed to create thread: {}", e))?;
 
-    tracing::debug!(thread_id = %id, "Thread created");
+    // Create sandbox workspace — path is deterministic from thread id.
+    // If this fails, the conversation still exists; resolve_workspace()
+    // will lazy-create the directory when tools actually need it.
+    let workspace_path = match ironclaw::workspace_dir::create_sandbox_workspace(id) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(thread_id = %id, error = %e,
+                "Sandbox workspace creation failed; will retry at tool execution time");
+            return Err(format!("Failed to create workspace directory: {e}"));
+        }
+    };
+
+    // Best-effort metadata update — even if this fails the workspace on
+    // disk is discoverable by convention (~/.ironclaw/projects/{thread_id}/).
+    let ws_str = workspace_path.to_string_lossy().to_string();
+    if let Err(e) = db
+        .update_conversation_metadata_field(id, "workspace_root", &serde_json::json!(ws_str))
+        .await
+    {
+        tracing::warn!(thread_id = %id, error = %e,
+            "workspace_root metadata not persisted; resolve_workspace will recover by convention");
+    }
+
+    tracing::debug!(thread_id = %id, workspace = %ws_str, "Thread created with workspace");
     Ok(id.to_string())
 }
 

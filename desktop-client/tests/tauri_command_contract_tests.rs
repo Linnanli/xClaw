@@ -98,6 +98,9 @@ const FRONTEND_INVOKED_COMMANDS: &[&str] = &[
     "ic_workspace_git_status",
     "ic_workspace_root",
     "ic_active_servers",
+    "ic_import_workspace",
+    "ic_get_thread_workspace",
+    "ic_list_sandbox_workspaces",
     // ── Plan Mode / Fork ────────────────────────────────────────
     "ic_toggle_plan_mode",
     "ic_approve_plan",
@@ -181,6 +184,9 @@ const REGISTERED_COMMANDS: &[&str] = &[
     "ic_workspace_git_status",
     "ic_workspace_root",
     "ic_active_servers",
+    "ic_import_workspace",
+    "ic_get_thread_workspace",
+    "ic_list_sandbox_workspaces",
     // ── Plan Mode / Fork ────────────────────────────────────────
     "ic_toggle_plan_mode",
     "ic_approve_plan",

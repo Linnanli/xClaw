@@ -168,6 +168,9 @@ macro_rules! all_tauri_commands {
             desktop_client::ipc::ic_workspace_git_status,
             desktop_client::ipc::ic_workspace_root,
             desktop_client::ipc::ic_active_servers,
+            desktop_client::ipc::ic_import_workspace,
+            desktop_client::ipc::ic_get_thread_workspace,
+            desktop_client::ipc::ic_list_sandbox_workspaces,
             // ── Plan Mode / Fork ────────────────────────────────
             desktop_client::ipc::ic_toggle_plan_mode,
             desktop_client::ipc::ic_approve_plan,

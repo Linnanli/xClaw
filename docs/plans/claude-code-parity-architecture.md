@@ -1819,3 +1819,77 @@ BootstrapPlan::claude_code_default():
 | **P3+** | `policy_engine.rs` (编排规则) | Routine 引擎升级 | 条件驱动自动化编排 |
 | **P3+** | `bootstrap.rs` (12 阶段) | 快速启动模式 | 启动优化 |
 | **P3+** | `session.rs` (日志轮转/版本化) | Thread 持久化增强 | 长期运行稳定性 |
+
+---
+
+## 附录 G: Parity Harness 评估层级 (TODO)
+
+### 当前完成: Layer 1 — Scripted Scenario Testing
+
+通过预编程 LLM 响应 + 真实工具执行，验证 50 个行为/安全场景（47 通过，3 ignored）。
+覆盖：功能 parity (30)、路径安全 (5)、Bash 安全 (5)、输出安全 (5)、企业安全 (5)。
+
+### 未来: Layer 2 — Recording & Replay
+
+**目标**: 录制真实 Claude Code 会话 trace，在 ironclaw 上原样回放，对比工具调用序列和结果差异。
+
+**关键组件**:
+- **Trace Recorder**: 拦截 Claude Code CLI 的 API 请求/响应，序列化为 JSON trace 文件
+- **Replay Engine**: 将 trace 中的 LLM 响应注入 ScriptedLlm，驱动 ironclaw agentic loop
+- **Diff Reporter**: 对比两端的工具调用序列、参数、输出、耗时
+
+**价值**: 从"场景设计者认为应该这样"升级到"真实 Claude Code 确实这样做"。
+
+### 未来: Layer 3 — Live A/B Testing
+
+**目标**: 同一用户请求同时发送给 Claude Code 和 ironclaw，实时对比输出质量和行为一致性。
+
+**关键组件**:
+- **A/B Router**: 按比例（如 10%）将请求同时路由到两个后端
+- **Quality Evaluator**: 自动评估代码正确性、工具调用效率、token 消耗
+- **Dashboard**: 可视化 parity score 趋势、regression 告警
+
+**价值**: 持续监控生产环境中的 parity drift，而非依赖离线快照。
+
+---
+
+## 附录 H: 待实现安全增强 (TODO)
+
+### TODO: Git Repo 白名单
+
+**优先级**: P1（随 Git 工具套件一起交付）
+
+**目标**: 控制 AI Agent 可交互的 Git 远程仓库范围，防止代码通过 push/clone 泄露到非授权仓库。
+
+**设计要点**:
+- 数据库侧已就绪：`028_lsp_server_settings.sql` 含 `git_repos` setting type
+- 白名单为空 = 允许任何仓库；非空 = 只允许匹配的 URL pattern
+- `push_requires_approval: true` — push 操作需人工审批
+- `commit_dlp_scan: true` — commit 内容经 DLP 引擎扫描
+- **Threat model**: 防 AI Agent 无人监督推送，不防人类用户的 `git push`（后者属 Git 服务端 hook / 网络策略范畴）
+
+**集成点**:
+- `GitPushTool` / `GitCommitTool` 执行前检查 remote URL 是否在白名单内
+- Admin Backend `/api/settings/git-repos` GET/PUT 已在 API 表中规划
+
+### TODO: cap-std Capability-Based 文件沙箱
+
+**优先级**: P2（路径安全长期演进方案）
+
+**目标**: 用 `cap-std` 的 capability-based 文件系统替代当前基于路径字符串校验的沙箱机制，从根源消灭路径逃逸。
+
+**现状**:
+- 当前 `validate_path()` 通过 `normalize_lexical()` + `starts_with(base_canonical)` 校验
+- 已有 null byte、URL 编码、symlink 追踪防护
+- **弱点**: 依赖路径字符串分析，无法防御所有 TOCTOU 和 Unicode confusable 攻击
+
+**cap-std 方案**:
+```rust
+use cap_std::fs::Dir;
+// 创建一个 Dir 对象代表工作区——后续所有操作只能在此子树内
+let workspace = Dir::open_ambient_dir(&workspace_path, cap_std::ambient_authority())?;
+// 无论传什么路径，都无法逃逸出 workspace
+workspace.open("../../etc/passwd"); // → Error
+```
+
+**迁移路径**: 先作为 `validate_path()` 的可选后端引入，逐步替换字符串校验逻辑。
