@@ -30,17 +30,18 @@
 - 策略内容包含：policy_version、issued_at、expires_at、managed_mode、allowed_skills、allowed_extensions。
 - 客户端验签（Ed25519）后执行；支持远端拉取失败时回退本地“已验签缓存”。
 
-### P3（进行中）：密钥轮换 + 防重放 + 可观测性
+### P3（已完成）：密钥轮换 + 防重放 + 可观测性
 
 - 密钥轮换：
-  - 管理端支持多 signing key（按 key_id 选择当前签名密钥）。
-  - 客户端支持多 verifying key（按 key_id 查找对应公钥验签）。
+  - 管理端支持多 signing key（按 key_id 选择当前签名密钥）。✅
+  - 客户端支持多 verifying key（按 key_id 查找对应公钥验签）。✅
 - 防重放：
-  - 客户端持久化 last_policy_version，仅接受版本号单调递增的策略。
-  - 对过期策略和旧版本策略拒绝应用，并记录告警日志。
+  - 客户端持久化 last_policy_version，仅接受版本号单调递增的策略。✅
+  - 对过期策略和旧版本策略拒绝应用，并记录告警日志。✅
 - 可观测性：
-  - 启动日志记录 key_id、policy_version、来源（remote/cache）和拒绝原因。
-  - 联调脚本覆盖策略下发、验签、版本拒绝路径。
+  - 启动日志记录 managed_mode 启用状态与 has_signed_policy 结果。✅
+  - 运行时日志记录 key_id、policy_version、来源（remote/cache）和拒绝原因。✅
+  - 联调脚本覆盖策略下发、验签、版本拒绝路径。✅（managed-policy-smoke.sh）
 
 ---
 

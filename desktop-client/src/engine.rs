@@ -212,6 +212,11 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     )
     .await;
 
+    tracing::info!(
+        managed_mode = managed_mode_enabled(),
+        "Resolving client policy restrictions at startup"
+    );
+
     let (unauthorized_skills, unauthorized_extensions, has_signed_policy) =
         collect_client_policy_restrictions(
             components.db.as_ref(),
