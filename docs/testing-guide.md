@@ -126,6 +126,27 @@ fn test_audit_no_sensitive_data_leak() {
 
 ## E2E 测试模式
 
+### P2 能力专项
+
+Plan Mode / Session Fork / Sub-Agent 这三类能力至少要覆盖三层：
+
+```bash
+# Gate 场景
+cargo test -p ironclaw --test parity_gate_p2
+
+# 真实 agent loop E2E
+cargo test -p ironclaw --test p2_e2e_tests
+
+# 安全审计
+cargo test -p ironclaw --test p2_security_audit_tests
+```
+
+专项检查点：
+- Plan Mode 必须验证审批前为 fail-safe，不执行写操作
+- Session Fork 必须验证分支后的线程独立演化
+- Sub-Agent 必须验证 depth limit 和 role whitelist
+- 错误消息、日志、结果预览不得泄露原始敏感内容
+
 ### Cypress 基础模式
 
 ```javascript

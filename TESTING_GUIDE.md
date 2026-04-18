@@ -8,6 +8,30 @@
 
 ---
 
+## P2 验证补充
+
+本轮新增的 P2 能力还需要补充以下验证：
+1. Plan Mode 结构化计划输出与审批前等待状态
+2. Session Fork 分支创建与独立演进
+3. Sub-Agent Explore / Verify 角色与安全边界
+
+### Rust 侧自动化验证
+
+```bash
+cargo test -p ironclaw --test parity_gate_p2
+cargo test -p ironclaw --test p2_e2e_tests
+cargo test -p ironclaw --test p2_security_audit_tests
+```
+
+### 桌面端前端验证重点
+
+1. 发送触发规划的请求后，应看到 Plan 卡片而不是普通纯文本。
+2. 从历史消息重载线程时，Plan / Fork / Sub-Agent 工具卡片应能被恢复。
+3. Verify 子代理场景不得暴露原始敏感输入到 UI 错误提示。
+4. Plan 未批准前，不得实际执行中高风险写操作。
+
+---
+
 ## 第一步：启动环境
 
 ### 1.1 启动 Docker

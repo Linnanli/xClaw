@@ -71,7 +71,7 @@ export interface ThreadListResponse {
 export interface Message {
   id: string;
   thread_id: string;
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'tool_calls' | string;
   content: string;
   attachments?: NonNullable<ThreadMessageLike['attachments']>;
   created_at: string;
@@ -121,7 +121,7 @@ export const threadApi = {
     return messages.map(m => ({
       ...m,
       thread_id: threadId,
-      role: m.role as 'user' | 'assistant' | 'system',
+      role: m.role,
     }));
   },
 

@@ -8,7 +8,8 @@
  * - 安全审计：DLP Fail-Safe 行为
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { parsePersistedToolCalls } from '../TauriRuntimeProvider';
 
 // ============================================================================
 // Mock 依赖
@@ -85,6 +86,65 @@ describe('消息转换 (convertMessage)', () => {
 
     expect(tauriMsg.role).toBe('assistant');
     expect(tauriMsg.content.length).toBeGreaterThan(0);
+  });
+
+  it('req_runtime_003_parse_persisted_tool_calls_wrapper_format', () => {
+    const parsed = parsePersistedToolCalls(
+      JSON.stringify({
+        calls: [
+          {
+            name: 'plan_mode',
+            call_id: 'turn1_0',
+            result: '{"action":"submit","goal":"Refactor auth"}',
+          },
+        ],
+      }),
+    );
+
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].toolName).toBe('plan_mode');
+    expect(parsed[0].toolCallId).toBe('turn1_0');
+    expect(parsed[0].isError).toBe(false);
+  });
+
+  it('req_runtime_004_parse_persisted_tool_calls_marks_error', () => {
+    const parsed = parsePersistedToolCalls(
+      JSON.stringify([
+        {
+          name: 'sub_agent',
+          call_id: 'turn2_0',
+          error: 'depth limit reached',
+        },
+      ]),
+    );
+
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].toolName).toBe('sub_agent');
+    expect(parsed[0].isError).toBe(true);
+    expect(parsed[0].result).toContain('depth limit');
+  });
+
+  it('req_runtime_005_parse_persisted_tool_calls_tool_calls_wrapper_and_arguments', () => {
+    const parsed = parsePersistedToolCalls(
+      JSON.stringify({
+        tool_calls: [
+          {
+            id: 'turn3_0',
+            name: 'session_fork',
+            arguments: {
+              at_turn: 3,
+              reason: 'retry from key turn',
+            },
+            result: '{"new_thread_id":"thread-branch"}',
+          },
+        ],
+      }),
+    );
+
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].toolCallId).toBe('turn3_0');
+    expect(parsed[0].toolName).toBe('session_fork');
+    expect(parsed[0].args).toEqual({ at_turn: 3, reason: 'retry from key turn' });
   });
 });
 

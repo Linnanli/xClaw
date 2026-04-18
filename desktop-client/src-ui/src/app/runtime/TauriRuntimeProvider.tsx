@@ -27,6 +27,8 @@ import {
   type ThreadMessageLike,
   type AppendMessage,
 } from '@assistant-ui/react';
+import type { CompleteAttachment, PendingAttachment, ThreadUserMessagePart } from '@assistant-ui/core';
+import type { ReadonlyJSONObject } from 'assistant-stream/utils';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { approvalApi, threadApi, modelApi, type ModelConfigItem } from '@utils/tauri';
@@ -57,6 +59,13 @@ interface TauriMessage {
   content: string;
   timestamp: number;
   attachments?: NonNullable<ThreadMessageLike['attachments']>;
+  toolCalls?: Array<{
+    toolCallId?: string;
+    toolName: string;
+    args?: ReadonlyJSONObject;
+    result?: string;
+    isError?: boolean;
+  }>;
   reasoning?: string;
   /** DLP 脱敏统计，仅用户消息有值 */
   dlpStats?: SanitizationStats;
@@ -72,6 +81,79 @@ type BackendRole = 'user' | 'assistant' | 'system' | 'tool' | 'tool_calls' | str
 /** 过滤：只保留 assistant-ui 支持的 role（user / assistant） */
 function isDisplayableRole(role: BackendRole): role is 'user' | 'assistant' {
   return role === 'user' || role === 'assistant';
+}
+
+type PersistedToolCall = {
+  name?: string;
+  id?: string;
+  call_id?: string;
+  args?: unknown;
+  arguments?: unknown;
+  result?: string;
+  error?: string;
+};
+
+function parsePersistedToolArgs(raw: unknown): ReadonlyJSONObject | undefined {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return raw as ReadonlyJSONObject;
+  }
+
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as ReadonlyJSONObject;
+      }
+    } catch {
+      return undefined;
+    }
+  }
+
+  return undefined;
+}
+
+export function parsePersistedToolCalls(content: string): Array<{
+  toolCallId?: string;
+  toolName: string;
+  args?: ReadonlyJSONObject;
+  result?: string;
+  isError?: boolean;
+}> {
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    const calls = Array.isArray(parsed)
+      ? parsed
+      : parsed && typeof parsed === 'object' && 'calls' in parsed
+        ? (parsed as { calls?: unknown }).calls
+        : parsed && typeof parsed === 'object' && 'tool_calls' in parsed
+          ? (parsed as { tool_calls?: unknown }).tool_calls
+        : undefined;
+
+    if (!Array.isArray(calls)) {
+      return [];
+    }
+
+    return calls
+      .filter((call): call is PersistedToolCall => !!call && typeof call === 'object')
+      .map((call) => ({
+        toolCallId:
+          typeof call.call_id === 'string'
+            ? call.call_id
+            : typeof call.id === 'string'
+              ? call.id
+              : undefined,
+        toolName: typeof call.name === 'string' ? call.name : 'unknown_tool',
+        args: parsePersistedToolArgs(call.args ?? call.arguments),
+        result: typeof call.result === 'string'
+          ? call.result
+          : typeof call.error === 'string'
+            ? call.error
+            : undefined,
+        isError: typeof call.error === 'string',
+      }));
+  } catch {
+    return [];
+  }
 }
 
 type PersistedUiEvent =
@@ -253,7 +335,18 @@ export const useApprovalState = () => useContext(ApprovalContext);
 // ============================================================================
 
 function convertMessage(msg: TauriMessage): ThreadMessageLike {
-  const parts: Array<{ type: 'text'; text: string } | { type: 'reasoning'; text: string }> = [];
+  const parts: Array<
+    { type: 'text'; text: string }
+    | { type: 'reasoning'; text: string }
+    | {
+        type: 'tool-call';
+        toolCallId?: string;
+        toolName: string;
+        args?: ReadonlyJSONObject;
+        result?: string;
+        isError?: boolean;
+      }
+  > = [];
 
   // ironclaw agent loop 在 handle_message 失败时发送 `"Error: {chain}"` 格式的普通 response，
   // 检测后转换为 error 状态，由 ErrorPrimitive 渲染友好提示。
@@ -268,6 +361,18 @@ function convertMessage(msg: TauriMessage): ThreadMessageLike {
   }
 
   if (msg.reasoning) parts.push({ type: 'reasoning', text: msg.reasoning });
+  if (msg.toolCalls?.length) {
+    parts.push(
+      ...msg.toolCalls.map((toolCall) => ({
+        type: 'tool-call' as const,
+        toolCallId: toolCall.toolCallId,
+        toolName: toolCall.toolName,
+        args: toolCall.args,
+        result: toolCall.result,
+        isError: toolCall.isError,
+      })),
+    );
+  }
   if (msg.content) parts.push({ type: 'text', text: msg.content });
   if (parts.length === 0) parts.push({ type: 'text', text: '' });
 
@@ -386,7 +491,7 @@ function fileCanInlineText(file: File): boolean {
   return mimeType.startsWith('text/') || mimeType === 'application/json';
 }
 
-async function buildComposerAttachmentContent(file: File): Promise<NonNullable<RuntimeAttachment['content']>> {
+async function buildComposerAttachmentContent(file: File): Promise<ThreadUserMessagePart[]> {
   const type = composerAttachmentType(file);
   if (type === 'image') {
     return [{ type: 'image', image: await readFileAsDataUrl(file) }];
@@ -415,7 +520,7 @@ const composerAttachmentAdapter: AttachmentAdapter = {
   async remove() {
     return;
   },
-  async send(attachment) {
+  async send(attachment: PendingAttachment): Promise<CompleteAttachment> {
     return {
       ...attachment,
       status: { type: 'complete' },
@@ -802,6 +907,22 @@ export function TauriRuntimeProvider({
               content: m.content,
               timestamp: new Date(m.created_at).getTime(),
               ...(m.attachments ? { attachments: m.attachments } : {}),
+            });
+            return;
+          }
+
+          if (m.role === 'tool_calls') {
+            const toolCalls = parsePersistedToolCalls(m.content);
+            if (toolCalls.length === 0) {
+              return;
+            }
+
+            loaded.push({
+              id: `${m.id}-tool-calls`,
+              role: 'assistant',
+              content: '',
+              timestamp: new Date(m.created_at).getTime(),
+              toolCalls,
             });
             return;
           }
