@@ -3,7 +3,7 @@
  *
  * 两种触发机制：
  * 1. 定期轮询（10s）— 保底兜底
- * 2. 收到 chat-event response 时立即刷新 — Agent 工具调用结束后快速响应
+ * 2. 收到 chat-stream response 时立即刷新 — Agent 工具调用结束后快速响应
  *
  * 引擎就绪时触发首次查询。
  */
@@ -44,8 +44,9 @@ export function useRunningJobs(): number {
 
   // job_status 事件触发立即刷新（任务创建/完成时精确响应）
   useEffect(() => {
-    const unlistenPromise = listen<{ type: string }>('chat-event', (event) => {
-      if (event.payload.type === 'job_status') {
+    const unlistenPromise = listen<{ type: string; data?: { type?: string } }>('chat-stream', (event) => {
+      // DataCustom job_status: { type: "data-custom", data: { type: "job_status", ... } }
+      if (event.payload.type === 'data-custom' && event.payload.data?.type === 'job_status') {
         refresh();
       }
     });

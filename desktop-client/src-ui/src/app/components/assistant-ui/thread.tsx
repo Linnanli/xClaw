@@ -4,8 +4,10 @@ import {
   UserMessageAttachments,
 } from "@/app/components/assistant-ui/attachment";
 import { MarkdownText } from "@/app/components/assistant-ui/markdown-text";
-import { Reasoning } from "@/app/components/assistant-ui/reasoning";
+import { Reasoning, ReasoningGroup } from "@/app/components/assistant-ui/reasoning";
 import { ToolFallback } from "@/app/components/assistant-ui/tool-fallback";
+import { ToolStepIndicator } from "@/app/components/assistant-ui/tool-step-indicator";
+import { ContextToolGroup, groupToolSteps } from "@/app/components/assistant-ui/context-tool-group";
 import { TooltipIconButton } from "@/app/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/app/components/ui/button";
 import { cn } from "@/app/components/ui/utils";
@@ -25,7 +27,7 @@ import {
 } from "@assistant-ui/react";
 import type { SanitizationStats } from "@/app/hooks/useDlpScan";
 import { useWatermark } from "@/app/hooks/useWatermark";
-import { useApprovalState, type PendingApproval } from "@/app/runtime/TauriRuntimeProvider";
+import { useApprovalState, type PendingApproval, type ToolStep } from "@/app/runtime/TauriRuntimeProvider";
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -59,6 +61,14 @@ function extractRoutineTriggerCount(custom: unknown): number {
     return typeof value === 'number' && value > 0 ? value : 0;
   }
   return 0;
+}
+
+function extractToolSteps(custom: unknown): ToolStep[] | undefined {
+  if (custom && typeof custom === 'object' && 'toolSteps' in custom) {
+    const steps = (custom as { toolSteps?: unknown }).toolSteps;
+    return Array.isArray(steps) ? (steps as ToolStep[]) : undefined;
+  }
+  return undefined;
 }
 
 export const Thread: FC = () => {
@@ -285,8 +295,13 @@ const MessageError: FC = () => {
 };
 
 const AssistantMessage: FC = () => {
-  const { pendingApprovals, approve, deny, submitForReview } = useApprovalState();
+  const { pendingApprovals, approve, deny } = useApprovalState();
   const isLast = useAuiState((s) => s.message.isLast);
+  const toolSteps = useAuiState((s) => extractToolSteps(s.message.metadata?.custom));
+  // Hide lightweight indicators when real tool-call parts are rendered by ToolFallback
+  const hasToolCallParts = useAuiState((s) =>
+    s.message.content.some((part: { type: string }) => part.type === 'tool-call'),
+  );
 
   return (
     <MessagePrimitive.Root
@@ -303,15 +318,36 @@ const AssistantMessage: FC = () => {
 
       {/* 内容区：左偏移 42px（头像 32px + gap 10px），与头像右侧对齐 */}
       <div className="aui-assistant-message-content wrap-break-word ml-[42px] text-foreground leading-relaxed">
-        <MessagePrimitive.Parts>
-          {({ part }) => {
-            if (part.type === "reasoning") return <Reasoning {...part} />;
-            if (part.type === "text") return <MarkdownText />;
-            if (part.type === "tool-call")
-              return part.toolUI ?? <ToolFallback {...part} />;
-            return null;
+        <MessagePrimitive.Parts
+          components={{
+            Text: MarkdownText,
+            Reasoning,
+            ReasoningGroup,
+            tools: { Fallback: ToolFallback },
           }}
-        </MessagePrimitive.Parts>
+        />
+
+        {/* 流式过程中的工具执行步骤时间线（仅当无真实 tool-call 渲染时显示） */}
+        {toolSteps && toolSteps.length > 0 && !hasToolCallParts && (
+          <div className="my-1.5 flex flex-col gap-0.5 border-l-2 border-muted-foreground/15 pl-3">
+            {groupToolSteps(toolSteps).map((segment, idx) =>
+              segment.type === "group" ? (
+                <ContextToolGroup
+                  key={`ctx-group-${segment.steps[0].startedAt}-${idx}`}
+                  steps={segment.steps}
+                />
+              ) : (
+                <ToolStepIndicator
+                  key={`${segment.step.toolName}-${segment.step.startedAt}-${idx}`}
+                  toolName={segment.step.toolName}
+                  status={segment.step.status}
+                  error={segment.step.error}
+                />
+              ),
+            )}
+          </div>
+        )}
+
         <MessageError />
       </div>
 
@@ -324,7 +360,6 @@ const AssistantMessage: FC = () => {
               approval={approval}
               onApprove={() => approve(approval.request_id)}
               onDeny={() => deny(approval.request_id)}
-              onSubmit={() => submitForReview(approval.request_id, approval.tool_name, approval.description)}
             />
           ))}
         </div>
@@ -534,10 +569,9 @@ interface ApprovalCardProps {
   approval: PendingApproval;
   onApprove: () => void;
   onDeny: () => void;
-  onSubmit: () => void;
 }
 
-const ApprovalCard: FC<ApprovalCardProps> = ({ approval, onApprove, onDeny, onSubmit }) => (
+const ApprovalCard: FC<ApprovalCardProps> = ({ approval, onApprove, onDeny }) => (
   <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3 dark:border-amber-800/40 dark:bg-amber-950/20">
     <ShieldAlert className="mt-0.5 size-4 shrink-0 text-amber-500" />
     <div className="flex flex-1 flex-col gap-2">
@@ -547,15 +581,6 @@ const ApprovalCard: FC<ApprovalCardProps> = ({ approval, onApprove, onDeny, onSu
         </p>
         {approval.description && (
           <p className="mt-0.5 text-xs text-muted-foreground">{approval.description}</p>
-        )}
-        {approval.ticket_status === 'pending' && approval.ticket_id && (
-          <p className="mt-1 text-[11px] text-amber-700">审批中，工单 {approval.ticket_id.slice(0, 8)} 已提交</p>
-        )}
-        {approval.ticket_status === 'submitting' && (
-          <p className="mt-1 text-[11px] text-amber-700">正在提交审批工单...</p>
-        )}
-        {approval.ticket_error && (
-          <p className="mt-1 text-[11px] text-red-600">{approval.ticket_error}</p>
         )}
       </div>
       <div className="flex gap-2">
@@ -572,20 +597,6 @@ const ApprovalCard: FC<ApprovalCardProps> = ({ approval, onApprove, onDeny, onSu
         >
           <XCircleIcon className="size-3" />
           拒绝
-        </button>
-        <button
-          onClick={onSubmit}
-          disabled={approval.ticket_status === 'pending' || approval.ticket_status === 'submitting'}
-          className="flex items-center gap-1 rounded-md border border-amber-300 bg-white px-3 py-1 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          <ShieldCheck className="size-3" />
-          {approval.ticket_status === 'pending'
-            ? '审批中'
-            : approval.ticket_status === 'submitting'
-              ? '提交中'
-              : approval.ticket_status === 'expired'
-                ? '重新提交审批'
-                : '提交审批'}
         </button>
       </div>
     </div>

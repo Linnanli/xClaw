@@ -1,19 +1,8 @@
 /**
- * GitDiffRenderer — git_diff 工具的 inline diff 渲染器。
- *
- * 解析 git_diff 工具返回的文本输出，显示：
- * - diff --stat 概要（文件变更统计）
- * - diff --patch 内容（红色删除行 / 绿色新增行）
- * - 可折叠（默认折叠，点击展开完整 diff）
+ * GitDiffRenderer — inline trigger + collapsible diff
  */
 import { makeAssistantToolUI } from "@assistant-ui/react";
-import { useState } from "react";
-import {
-  GitBranchIcon,
-  ChevronDownIcon,
-  ChevronRightIcon,
-  LoaderIcon,
-} from "lucide-react";
+import { CollapsibleToolShell } from "./tool-ui-shared";
 
 interface GitDiffArgs {
   staged?: boolean;
@@ -22,23 +11,19 @@ interface GitDiffArgs {
 }
 
 function DiffView({ text }: { text: string }) {
-  const lines = text.split("\n");
-
   return (
     <pre className="overflow-x-auto text-xs leading-relaxed">
-      {lines.map((line, i) => {
-        let className = "px-2";
-        if (line.startsWith("+") && !line.startsWith("+++")) {
-          className = "bg-green-500/15 text-green-400 px-2";
-        } else if (line.startsWith("-") && !line.startsWith("---")) {
-          className = "bg-red-500/15 text-red-400 px-2";
-        } else if (line.startsWith("@@")) {
-          className = "text-blue-400 px-2";
-        } else if (line.startsWith("diff --git")) {
-          className = "text-yellow-400 font-semibold px-2";
-        }
+      {text.split("\n").map((line, i) => {
+        let cls = "";
+        if (line.startsWith("+") && !line.startsWith("+++"))
+          cls = "bg-green-500/15 text-green-400";
+        else if (line.startsWith("-") && !line.startsWith("---"))
+          cls = "bg-red-500/15 text-red-400";
+        else if (line.startsWith("@@")) cls = "text-blue-400";
+        else if (line.startsWith("diff --git"))
+          cls = "text-yellow-400 font-semibold";
         return (
-          <div key={i} className={className}>
+          <div key={i} className={cls}>
             {line || "\u00A0"}
           </div>
         );
@@ -50,51 +35,32 @@ function DiffView({ text }: { text: string }) {
 export const GitDiffToolUI = makeAssistantToolUI<GitDiffArgs, string>({
   toolName: "git_diff",
   render: ({ args, result, status }) => {
-    const [expanded, setExpanded] = useState(false);
-    const staged = args?.staged ?? false;
-    const label = staged ? "Staged changes" : "Unstaged changes";
-    const fileFilter = args?.file_path;
-
-    const isRunning = status.type === "running";
+    const label = args?.staged ? "staged" : "unstaged";
     const noChanges =
       status.type === "complete" &&
-      result &&
-      (result.includes("No ") && result.includes("changes"));
+      result?.includes("No ") &&
+      result?.includes("changes");
 
     return (
-      <div className="my-1 overflow-hidden rounded-md border border-border/50 bg-muted/30 text-sm">
-        {/* Header */}
-        <button
-          type="button"
-          onClick={() => setExpanded((p) => !p)}
-          className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-muted/50"
-        >
-          {isRunning ? (
-            <LoaderIcon className="h-4 w-4 animate-spin text-muted-foreground" />
-          ) : expanded ? (
-            <ChevronDownIcon className="h-4 w-4 text-muted-foreground" />
-          ) : (
-            <ChevronRightIcon className="h-4 w-4 text-muted-foreground" />
-          )}
-          <GitBranchIcon className="h-4 w-4 text-blue-400" />
-          <span className="font-medium text-foreground">{label}</span>
-          {fileFilter && (
-            <span className="text-muted-foreground">— {fileFilter}</span>
-          )}
-          {noChanges && (
-            <span className="ml-auto text-muted-foreground text-xs">
-              No changes
-            </span>
-          )}
-        </button>
-
-        {/* Body */}
-        {expanded && status.type === "complete" && result && (
-          <div className="border-t border-border/50 bg-[#1e1e1e] p-2">
+      <CollapsibleToolShell
+        toolName="git_diff"
+        status={status}
+        summary={
+          <>
+            <span className="opacity-60">{label}</span>
+            {args?.file_path && (
+              <span className="truncate opacity-40">{args.file_path}</span>
+            )}
+            {noChanges && <span className="opacity-40">no changes</span>}
+          </>
+        }
+      >
+        {status.type === "complete" && result && (
+          <div className="max-h-96 overflow-y-auto rounded-md border bg-muted/50 p-3">
             <DiffView text={result} />
           </div>
         )}
-      </div>
+      </CollapsibleToolShell>
     );
   },
 });

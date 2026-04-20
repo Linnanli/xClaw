@@ -1893,3 +1893,45 @@ workspace.open("../../etc/passwd"); // → Error
 ```
 
 **迁移路径**: 先作为 `validate_path()` 的可选后端引入，逐步替换字符串校验逻辑。
+
+---
+
+## TODO: 迁移 rig-core 0.30 → 0.35（原生流式支持）
+
+**优先级**: P3（非阻塞 — 当前 `openai_streaming.rs` 直接 reqwest SSE 实现已可用且边界情况已处理）
+
+### 背景
+
+rig-core **0.35.0**（2025-06 发布）新增原生流式 API：
+
+- `StreamingPrompt` trait — `stream_prompt()` 返回 `Stream<Item = StreamedAssistantContent>`
+- `StreamedAssistantContent::Text(String)` / `StreamedAssistantContent::ToolCall(...)` — 结构化流式事件
+- 内建 OpenAI / Anthropic / Cohere 流式支持
+
+当前项目使用 rig-core **0.30**（无流式 API），因此自行实现了 `openai_streaming.rs`（直接 reqwest + eventsource-stream SSE）。
+
+### 迁移范围
+
+影响范围极小，rig 的使用集中在两个文件：
+
+| 文件 | 改动 |
+|------|------|
+| `ironclaw/src/llm/rig_adapter.rs` | `complete_with_tools_stream()` 改用 rig 0.35 的 `stream_prompt()` |
+| `ironclaw/src/llm/mod.rs` | 3 个工厂函数（`create_openai_compat_from_registry` 等）适配新 API |
+
+其余代码（`LlmProvider` trait、dispatcher、reasoning、7 个 wrapper provider、前端）**完全不受影响**。
+
+### 决策点
+
+| 方案 | 优点 | 缺点 |
+|------|------|------|
+| **A: 采用 rig 0.35 流式** | 减少自维护代码（可删除 `openai_streaming.rs`）；上游社区维护边界情况 | 依赖上游发布节奏；rig 0.35 刚发布，API 可能还不稳定 |
+| **B: 保持当前 reqwest SSE** | 完全可控；已覆盖 reasoning/refusal/content_filter/error_event 等边界情况 | 需自行维护 SSE 解析；新 provider 需手动适配 |
+
+**建议**: 等 rig 0.35 稳定 1-2 个月后再评估迁移，当前实现已够用。
+
+### Breaking Change 风险
+
+- `CompletionModel` trait 签名可能变更（0.30 → 0.35 跨 5 个小版本）
+- `Message` / `CompletionRequest` 类型字段可能有增删
+- 迁移前需跑通所有 13 个 `openai_streaming` 测试 + ironclaw 全量编译

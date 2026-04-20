@@ -146,7 +146,7 @@ pub async fn ic_revise_plan(
 ///
 /// 发送 `/fork {at_turn}` 控制命令到 Agent。
 /// Agent 调用 `Session::fork_thread()` 创建新 Thread。
-/// 前端通过 `chat-event` 接收 fork 完成事件。
+/// 前端通过 `chat-stream` 接收 fork 完成事件。
 #[tauri::command]
 pub async fn ic_fork_thread(
     state: State<'_, EngineState>,
@@ -166,7 +166,7 @@ pub async fn ic_fork_thread(
         .await
         .map_err(|e| format!("Failed to fork thread: {}", e))?;
 
-    // 实际的 new_thread_id 由 Agent 异步通过 chat-event 返回
+    // 实际的 new_thread_id 由 Agent 异步通过 chat-stream 返回
     Ok(ForkResponse {
         source_thread_id: thread_id,
         new_thread_id: String::new(),

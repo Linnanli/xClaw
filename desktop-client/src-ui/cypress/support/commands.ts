@@ -37,7 +37,7 @@ Cypress.Commands.add('emitChatEvent', (payload: Record<string, unknown>) => {
     ).__XCLAW_CYPRESS_TAURI_EMIT_CHAT_EVENT__;
 
     if (!emitter) {
-      throw new Error('Cypress Tauri chat-event emitter is not available');
+      throw new Error('Cypress Tauri chat-stream emitter is not available');
     }
 
     emitter(payload);

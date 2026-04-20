@@ -48,7 +48,13 @@ vi.mock('../../ui/tooltip', () => ({
 vi.mock('../../../utils/tauri', () => ({
   threadApi: {
     getThreads: vi.fn().mockResolvedValue([]),
+    createThread: vi.fn().mockResolvedValue({ id: 'new-thread-id', title: '新对话', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }),
   },
+  invokeTauri: vi.fn().mockResolvedValue(''),
+}));
+
+vi.mock('@tauri-apps/plugin-dialog', () => ({
+  open: vi.fn().mockResolvedValue(null),
 }));
 
 const defaultProps = {
@@ -57,6 +63,7 @@ const defaultProps = {
   selectedThreadId: null,
   onThreadSelect: vi.fn(),
   onNewChat: vi.fn(),
+  onImportFolder: vi.fn(),
 };
 
 describe('AppSidebar', () => {
@@ -81,15 +88,15 @@ describe('AppSidebar', () => {
 
   it('应该显示所有底部导航项', () => {
     render(<AppSidebar {...defaultProps} />);
-    expect(screen.getByText('聊天')).toBeInTheDocument();
+    expect(screen.getByText('工作区')).toBeInTheDocument();
     expect(screen.getByText('日志')).toBeInTheDocument();
     expect(screen.getByText('定时任务')).toBeInTheDocument();
     expect(screen.getByText('设置')).toBeInTheDocument();
   });
 
-  it('点击新建聊天按钮应触发 onNewChat', () => {
+  it('点击新建对话按钮应触发 onNewChat', () => {
     render(<AppSidebar {...defaultProps} />);
-    const newChatBtn = screen.getByLabelText('新建聊天');
+    const newChatBtn = screen.getByLabelText('新建对话');
     fireEvent.click(newChatBtn);
     expect(defaultProps.onNewChat).toHaveBeenCalledTimes(1);
   });

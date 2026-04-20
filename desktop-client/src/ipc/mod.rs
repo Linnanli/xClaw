@@ -16,6 +16,7 @@ pub mod plan_mode;
 pub mod routines;
 pub mod skills;
 pub mod threads;
+pub mod file_ops;
 pub mod workspace;
 
 #[cfg(test)]
@@ -75,4 +76,5 @@ pub use plan_mode::*;
 pub use routines::*;
 pub use skills::*;
 pub use threads::*;
+pub use file_ops::*;
 pub use workspace::*;

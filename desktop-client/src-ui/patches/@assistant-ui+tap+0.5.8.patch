@@ -1,0 +1,26 @@
+diff --git a/node_modules/@assistant-ui/tap/dist/hooks/tap-resources.js b/node_modules/@assistant-ui/tap/dist/hooks/tap-resources.js
+index 39ca5fa..d6ba4ed 100644
+--- a/node_modules/@assistant-ui/tap/dist/hooks/tap-resources.js
++++ b/node_modules/@assistant-ui/tap/dist/hooks/tap-resources.js
+@@ -73,7 +73,9 @@ export function tapResources(getElements, getElementsDeps) {
+         return () => {
+             for (const key of fibers.keys()) {
+                 const fiber = fibers.get(key).fiber;
+-                unmountResourceFiber(fiber);
++                if (fiber.isMounted) {
++                    unmountResourceFiber(fiber);
++                }
+             }
+         };
+     }, []);
+@@ -87,7 +89,9 @@ export function tapResources(getElements, getElementsDeps) {
+                 fibers.delete(key);
+             }
+             else if (Array.isArray(state.next)) {
+-                unmountResourceFiber(state.fiber);
++                if (state.fiber.isMounted) {
++                    unmountResourceFiber(state.fiber);
++                }
+                 state.fiber = state.next[0];
+                 commitResourceFiber(state.fiber, state.next[1]);
+             }

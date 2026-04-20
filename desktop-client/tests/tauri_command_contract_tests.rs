@@ -106,6 +106,9 @@ const FRONTEND_INVOKED_COMMANDS: &[&str] = &[
     "ic_approve_plan",
     "ic_revise_plan",
     "ic_fork_thread",
+    // ── 文件操作 ────────────────────────────────────────────────
+    "ic_undo_file_edit",
+    "ic_open_file_at_line",
 ];
 
 /// `all_tauri_commands!()` 宏中注册的所有命令名（必须与 lib.rs 保持同步）。
@@ -192,6 +195,9 @@ const REGISTERED_COMMANDS: &[&str] = &[
     "ic_approve_plan",
     "ic_revise_plan",
     "ic_fork_thread",
+    // ── 文件操作 ────────────────────────────────────────────────
+    "ic_undo_file_edit",
+    "ic_open_file_at_line",
 ];
 
 #[test]

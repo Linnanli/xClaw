@@ -34,6 +34,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 dirs = "6"
 regex = "1"
+open = "5"
 
 # Safety and DLP
 ironclaw_safety = { path = "./ironclaw/crates/ironclaw_safety" }

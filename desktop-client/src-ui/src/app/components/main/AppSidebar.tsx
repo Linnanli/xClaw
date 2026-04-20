@@ -8,9 +8,11 @@
 
 import { useState, useEffect } from 'react';
 import {
-  MessageCircle,
+  FolderOpen,
+  FolderInput,
   Plus,
   FileText,
+  MessageCircle,
   Timer,
   Settings,
   Shield,
@@ -34,8 +36,9 @@ import { Button } from '../ui/button';
 import { ScrollArea } from '../ui/scroll-area';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { cn } from '../ui/utils';
-import { threadApi, type Thread } from '../../utils/tauri';
+import { threadApi, invokeTauri, type Thread } from '../../utils/tauri';
 import { useEngineReady } from '../../hooks/useEngineReady';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 
 export type NavItem = 'chat' | 'logs' | 'routines' | 'settings';
 
@@ -45,6 +48,7 @@ interface AppSidebarProps {
   selectedThreadId: string | null;
   onThreadSelect: (threadId: string) => void;
   onNewChat: () => void;
+  onImportFolder: (threadId: string, path: string) => void;
   refreshKey?: number; // 外部递增触发重新加载线程列表
 }
 
@@ -80,6 +84,7 @@ export function AppSidebar({
   selectedThreadId,
   onThreadSelect,
   onNewChat,
+  onImportFolder,
   refreshKey = 0,
 }: AppSidebarProps) {
   const [threads, setThreads] = useState<Thread[]>([]);
@@ -108,6 +113,16 @@ export function AppSidebar({
 
   const toggleGroup = (group: keyof typeof expandedGroups) => {
     setExpandedGroups((prev) => ({ ...prev, [group]: !prev[group] }));
+  };
+
+  const handleImportFolder = async () => {
+    const selected = await openDialog({ directory: true, title: '选择工作区文件夹' });
+    if (!selected) return;
+
+    const threadId = await threadApi.createThread();
+    await invokeTauri('ic_import_workspace', { threadId: threadId.id, path: selected });
+    onImportFolder(threadId.id, selected);
+    loadThreads();
   };
 
   const renderThreadGroup = (
@@ -162,20 +177,36 @@ export function AppSidebar({
           </div>
           <span className="text-base font-bold text-foreground">X-Claw</span>
         </div>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="outline"
-              size="icon"
-              className="size-7 rounded-lg border-[#C8F0D8] bg-[#F0F9F4] hover:bg-[#e0f3e8] dark:border-primary/30 dark:bg-primary/10 dark:hover:bg-primary/20"
-              onClick={onNewChat}
-              aria-label="新建聊天"
-            >
-              <Plus className="size-4 text-primary" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="right">新建聊天</TooltipContent>
-        </Tooltip>
+        <div className="flex items-center gap-1">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="icon"
+                className="size-7 rounded-lg border-border/50 bg-secondary/30 hover:bg-secondary/60"
+                onClick={handleImportFolder}
+                aria-label="导入文件夹"
+              >
+                <FolderInput className="size-4 text-muted-foreground" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right">导入文件夹</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="icon"
+                className="size-7 rounded-lg border-[#C8F0D8] bg-[#F0F9F4] hover:bg-[#e0f3e8] dark:border-primary/30 dark:bg-primary/10 dark:hover:bg-primary/20"
+                onClick={onNewChat}
+                aria-label="新建对话"
+              >
+                <Plus className="size-4 text-primary" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right">新建对话</TooltipContent>
+          </Tooltip>
+        </div>
       </SidebarHeader>
 
       {/* Main Nav + Chat History (SideTop) */}
@@ -192,8 +223,8 @@ export function AppSidebar({
                     'data-[active=true]:!bg-primary data-[active=true]:!text-primary-foreground hover:!bg-primary/90 hover:!text-primary-foreground',
                 )}
               >
-                <MessageCircle className="size-[18px]" />
-                <span>聊天</span>
+                <FolderOpen className="size-[18px]" />
+                <span>工作区</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
@@ -229,6 +260,7 @@ export function AppSidebar({
               <span>日志</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
+
           <SidebarMenuItem>
             <SidebarMenuButton
               isActive={activeNav === 'routines'}

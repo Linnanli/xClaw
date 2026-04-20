@@ -233,8 +233,19 @@ const ReasoningGroupImpl: ReasoningGroupComponent = ({
     return lastIndex >= startIndex && lastIndex <= endIndex;
   });
 
+  const isLastMessage = useAuiState((s) => s.message.isLast);
+  const [manualClosed, setManualClosed] = useState(false);
+
+  // 最新消息的 reasoning 默认展开；流式时始终展开（除非用户手动折叠）
+  const shouldOpen = isReasoningStreaming
+    ? !manualClosed
+    : isLastMessage && !manualClosed;
+
   return (
-    <ReasoningRoot defaultOpen={isReasoningStreaming}>
+    <ReasoningRoot
+      open={shouldOpen}
+      onOpenChange={(open) => { if (!open) setManualClosed(true); }}
+    >
       <ReasoningTrigger active={isReasoningStreaming} />
       <ReasoningContent aria-busy={isReasoningStreaming}>
         <ReasoningText>{children}</ReasoningText>

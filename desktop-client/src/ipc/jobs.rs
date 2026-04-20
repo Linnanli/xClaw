@@ -8,7 +8,7 @@ use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
 use crate::state::EngineState;
-use crate::tauri_channel::ChatEvent;
+use crate::vercel_ui_protocol::VercelUIStream;
 use ironclaw::context::JobState;
 
 // ─── 数据类型 ────────────────────────────────────────────────────────
@@ -107,12 +107,16 @@ async fn stop_active_job(
 }
 
 fn emit_job_status(app_handle: &AppHandle, job_id: Uuid, title: &str, status: &str) {
-    let event = ChatEvent::JobStatus {
-        job_id: job_id.to_string(),
-        title: title.to_string(),
-        status: status.to_string(),
+    let event = VercelUIStream::DataCustom {
+        id: None,
+        data: serde_json::json!({
+            "type": "job_status",
+            "job_id": job_id.to_string(),
+            "title": title,
+            "status": status,
+        }),
     };
-    let _ = app_handle.emit("chat-event", event);
+    let _ = app_handle.emit("chat-stream", event);
 }
 
 fn restart_job_title(job: &ironclaw::context::JobContext, failure_reason: &str) -> String {
@@ -347,7 +351,9 @@ mod cancel_tests {
 
     #[tokio::test]
     async fn inactive_job_without_scheduler_is_allowed() {
-        stop_active_job(None, Uuid::nil(), JobState::Completed)
+        // Use a terminal state — Completed is NOT terminal in this state machine
+        // (Completed → Submitted → Accepted), so is_active() returns true for it.
+        stop_active_job(None, Uuid::nil(), JobState::Failed)
             .await
             .expect("inactive job should not require scheduler stop");
     }

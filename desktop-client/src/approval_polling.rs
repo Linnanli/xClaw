@@ -2,7 +2,7 @@
 //!
 //! 实现对话流异步审批任务：
 //! - 创建审批工单后启动后台轮询任务
-//! - 每 30 秒检查工单状态，状态变更时通过 chat-event 通知前端
+//! - 每 30 秒检查工单状态，状态变更时通过 chat-stream 通知前端
 //! - 本地持久化 pending ticket_id 列表，重启时恢复轮询
 //!
 //! # 架构
@@ -12,7 +12,7 @@
 //!   → POST /api/approvals → 获取 ticket_id
 //!   → tokio::spawn(poll_approval_status)
 //!     → 每 30 秒 GET /api/approvals/{id}/check（最多 2880 次 = 24h）
-//!     → 状态变更 → app_handle.emit("chat-event", ApprovalResult)
+//!     → 状态变更 → app_handle.emit("chat-stream", ApprovalResult)
 //! ```
 //!
 //! # 状态共享
@@ -120,7 +120,7 @@ impl PendingTicketStore {
 /// 启动单个审批工单的后台轮询任务。
 ///
 /// 每 30 秒调用 `GET /api/approvals/{id}/check`，
-/// 检测到状态变更时通过 `chat-event` 推送结果并终止轮询。
+/// 检测到状态变更时通过 `chat-stream` 推送结果并终止轮询。
 /// 超过 `MAX_POLL_ATTEMPTS` 次后自动终止（防止无限循环）。
 pub async fn poll_approval_status(
     app_handle: tauri::AppHandle,
@@ -220,21 +220,19 @@ fn emit_approval_result(
     data: &serde_json::Value,
 ) {
     use tauri::Emitter;
-    let event = crate::tauri_channel::ChatEvent::ApprovalResult {
-        ticket_id: ticket_id.to_string(),
-        thread_id: thread_id.to_string(),
-        request_id: request_id.map(str::to_string),
-        status: status.to_string(),
-        review_comment: data
-            .get("review_comment")
-            .and_then(|value| value.as_str())
-            .map(str::to_string),
-        expires_at: data
-            .get("expires_at")
-            .and_then(|value| value.as_str())
-            .map(str::to_string),
+    let event = crate::vercel_ui_protocol::VercelUIStream::DataCustom {
+        id: None,
+        data: serde_json::json!({
+            "type": "approval_result",
+            "ticket_id": ticket_id,
+            "thread_id": thread_id,
+            "request_id": request_id,
+            "status": status,
+            "review_comment": data.get("review_comment").and_then(|v| v.as_str()),
+            "expires_at": data.get("expires_at").and_then(|v| v.as_str()),
+        }),
     };
-    let _ = app_handle.emit("chat-event", event);
+    let _ = app_handle.emit("chat-stream", event);
 }
 
 #[cfg(test)]

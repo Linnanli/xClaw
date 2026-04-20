@@ -1,20 +1,14 @@
 /**
- * FileEditRenderer — CodeEditTool 输出的 inline diff 渲染器。
+ * FileEditRenderer — inline trigger + collapsible diff + Undo
  *
- * 解析 code_edit 工具返回的 JSON，显示：
- * - 文件路径 + 替换计数
- * - diff 预览（红色删除行 / 绿色新增行）
- * - 可折叠（默认折叠，点击展开完整 diff）
+ * 默认 auto-apply：Agent 的 code_edit 工具直接写入文件，
+ * 前端展示 diff + Undo 按钮。用户不满意可撤回。
  */
+import { useCallback, useState } from "react";
 import { makeAssistantToolUI } from "@assistant-ui/react";
-import { useState } from "react";
-import {
-  FileEditIcon,
-  CheckCircle2Icon,
-  ChevronDownIcon,
-  ChevronRightIcon,
-} from "lucide-react";
-import { cn } from "@/app/components/ui/utils";
+import { Undo2Icon } from "lucide-react";
+import { fileOpsApi } from "@utils/tauri";
+import { CollapsibleToolShell, basename } from "./tool-ui-shared";
 
 interface CodeEditArgs {
   file_path: string;
@@ -31,21 +25,17 @@ interface CodeEditResult {
 }
 
 function DiffView({ diff }: { diff: string }) {
-  const lines = diff.split("\n");
-
   return (
     <pre className="overflow-x-auto text-xs leading-relaxed">
-      {lines.map((line, i) => {
-        let className = "px-2";
-        if (line.startsWith("+") && !line.startsWith("+++")) {
-          className = "bg-green-500/15 text-green-400 px-2";
-        } else if (line.startsWith("-") && !line.startsWith("---")) {
-          className = "bg-red-500/15 text-red-400 px-2";
-        } else if (line.startsWith("@@")) {
-          className = "text-blue-400 px-2";
-        }
+      {diff.split("\n").map((line, i) => {
+        let cls = "";
+        if (line.startsWith("+") && !line.startsWith("+++"))
+          cls = "bg-green-500/15 text-green-400";
+        else if (line.startsWith("-") && !line.startsWith("---"))
+          cls = "bg-red-500/15 text-red-400";
+        else if (line.startsWith("@@")) cls = "text-blue-400";
         return (
-          <div key={i} className={className}>
+          <div key={i} className={cls}>
             {line || "\u00A0"}
           </div>
         );
@@ -54,74 +44,108 @@ function DiffView({ diff }: { diff: string }) {
   );
 }
 
+function parseEditResult(raw: string): CodeEditResult | null {
+  try {
+    return JSON.parse(raw) as CodeEditResult;
+  } catch {
+    return null;
+  }
+}
+
+type UndoState = "idle" | "pending" | "done" | "error";
+
+function UndoButton({
+  args,
+  parsed,
+}: {
+  args: CodeEditArgs | undefined;
+  parsed: CodeEditResult;
+}) {
+  const [undoState, setUndoState] = useState<UndoState>("idle");
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const handleUndo = useCallback(async () => {
+    if (!args) return;
+    setUndoState("pending");
+    setErrorMsg(null);
+    try {
+      await fileOpsApi.undoFileEdit(
+        parsed.path,
+        args.old_string,
+        args.new_string,
+        parsed.replaced_count,
+      );
+      setUndoState("done");
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+      setUndoState("error");
+    }
+  }, [args, parsed]);
+
+  if (undoState === "done") {
+    return (
+      <span className="text-xs text-muted-foreground">已撤回</span>
+    );
+  }
+
+  return (
+    <>
+      <button
+        onClick={handleUndo}
+        disabled={undoState === "pending"}
+        className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted disabled:opacity-50"
+      >
+        <Undo2Icon className="size-3" />
+        {undoState === "pending" ? "撤回中..." : "撤回编辑"}
+      </button>
+      {errorMsg && (
+        <span className="text-xs text-destructive">{errorMsg}</span>
+      )}
+    </>
+  );
+}
+
 export const FileEditToolUI = makeAssistantToolUI<CodeEditArgs, string>({
   toolName: "code_edit",
   render: ({ args, result, status }) => {
-    const [expanded, setExpanded] = useState(false);
-
-    let parsed: CodeEditResult | null = null;
-    if (status.type === "complete" && result) {
-      try {
-        parsed = JSON.parse(result) as CodeEditResult;
-      } catch {
-        // result is plain text
-      }
-    }
-
+    const parsed =
+      status.type === "complete" && result ? parseEditResult(result) : null;
     const filePath = parsed?.path ?? args?.file_path ?? "unknown";
-    const fileName = filePath.split("/").pop() ?? filePath;
+    const fileName = basename(filePath);
+    const isComplete = status.type === "complete";
+
+    const undoAction =
+      isComplete && parsed?.success && args ? (
+        <UndoButton args={args} parsed={parsed} />
+      ) : null;
 
     return (
-      <div className="my-1 overflow-hidden rounded-md border border-border/50 bg-muted/30 text-sm">
-        {/* Header */}
-        <button
-          type="button"
-          onClick={() => setExpanded((p) => !p)}
-          className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-muted/50"
-        >
-          {status.type === "running" ? (
-            <span className="size-2 animate-pulse rounded-full bg-blue-400" />
-          ) : parsed?.success ? (
-            <CheckCircle2Icon className="size-4 text-green-500" />
-          ) : (
-            <FileEditIcon className="size-4 text-muted-foreground" />
-          )}
-          <span className="font-medium text-foreground">{fileName}</span>
-          {parsed && (
-            <span className="text-xs text-muted-foreground">
-              {parsed.replaced_count} replacement{parsed.replaced_count !== 1 ? "s" : ""}
-            </span>
-          )}
-          <span className="ml-auto">
-            {expanded ? (
-              <ChevronDownIcon className="size-4 text-muted-foreground" />
-            ) : (
-              <ChevronRightIcon className="size-4 text-muted-foreground" />
+      <CollapsibleToolShell
+        toolName="code_edit"
+        status={status}
+        summary={
+          <>
+            <span className="truncate opacity-60">{fileName}</span>
+            {parsed && (
+              <span className="shrink-0 opacity-40">
+                {parsed.replaced_count} replacement
+                {parsed.replaced_count !== 1 ? "s" : ""}
+              </span>
             )}
-          </span>
-        </button>
-
-        {/* Diff body */}
-        {expanded && parsed?.diff_preview && (
-          <div className="border-t border-border/50 bg-[#1e1e2e]">
+          </>
+        }
+        actions={undoAction}
+      >
+        {parsed?.diff_preview ? (
+          <div className="max-h-96 overflow-y-auto rounded-md border bg-muted/50 p-3">
             <DiffView diff={parsed.diff_preview} />
           </div>
-        )}
-
-        {/* Running indicator */}
-        {status.type === "running" && (
-          <div className="px-3 py-1 text-xs text-muted-foreground">
-            Editing {args?.file_path ?? "file"}…
-          </div>
-        )}
-
-        {/* Error state */}
-        {status.type === "complete" && result && !parsed && (
-          <div className="border-t border-border/50 px-3 py-2 text-xs text-red-400">
+        ) : isComplete && result && !parsed ? (
+          <div className="rounded-md border bg-muted/50 p-3 text-xs text-destructive">
             {result}
           </div>
-        )}
-      </div>
+        ) : null}
+      </CollapsibleToolShell>
     );
   },
 });

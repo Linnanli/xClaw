@@ -13,13 +13,13 @@
  * 职责：
  * - 管理消息状态（messages, isRunning）
  * - 将 assistant-ui 的 onNew 转换为 Tauri IPC 调用
- * - 监听 chat-event 并更新消息列表（含流式、思考链、工具状态）
+ * - 监听 chat-stream 并更新消息列表（含流式、思考链、工具状态）
  * - DLP 扫描集成（发送前拦截，Fail-Safe 设计）
  * - 线程管理（创建、切换、历史加载）
  * - 模型动态切换（通过 model_override metadata 传递给 Agent）
  */
 
-import { type ReactNode, useState, useCallback, useEffect, useRef, createContext, useContext } from 'react';
+import { type ReactNode, Component, useState, useCallback, useEffect, useRef, createContext, useContext } from 'react';
 import {
   AssistantRuntimeProvider,
   type AttachmentAdapter,
@@ -31,7 +31,7 @@ import type { CompleteAttachment, PendingAttachment, ThreadUserMessagePart } fro
 import type { ReadonlyJSONObject } from 'assistant-stream/utils';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { approvalApi, threadApi, modelApi, type ModelConfigItem } from '@utils/tauri';
+import { threadApi, modelApi, type ModelConfigItem } from '@utils/tauri';
 import { useDlpScan } from '@hooks/useDlpScan';
 import type { SanitizationStats } from '@hooks/useDlpScan';
 import { tracing } from '@utils/tracing';
@@ -67,6 +67,8 @@ interface TauriMessage {
     isError?: boolean;
   }>;
   reasoning?: string;
+  /** 实时工具执行步骤（流式过程中由 tool_started/tool_completed 事件驱动） */
+  toolSteps?: ToolStep[];
   /** DLP 脱敏统计，仅用户消息有值 */
   dlpStats?: SanitizationStats;
   /** 当前用户消息命中的事件任务数量（用于 UI 提示） */
@@ -74,6 +76,33 @@ interface TauriMessage {
   /** 错误消息，assistant 消息出错时设置 */
   error?: string;
 }
+
+/** 工具执行步骤（流式过程中追踪 tool_started → tool_completed） */
+export interface ToolStep {
+  toolName: string;
+  status: 'running' | 'complete' | 'error';
+  error?: string;
+  startedAt: number;
+  completedAt?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Vercel AI Protocol stream events (from chat-stream channel)
+// ---------------------------------------------------------------------------
+
+/** Rust `VercelUIStream` events emitted on the `chat-stream` Tauri IPC channel. */
+type VercelStreamEvent =
+  | { type: 'tool-input-start'; toolCallId: string; toolName: string }
+  | { type: 'tool-input-available'; toolCallId: string; toolName: string; input: unknown }
+  | { type: 'tool-output-available'; toolCallId: string; output: unknown }
+  | { type: 'tool-output-error'; toolCallId: string; errorText: string }
+  | { type: 'text-delta'; id: string; delta: string }
+  | { type: 'reasoning-delta'; id: string; delta: string }
+  | { type: 'finish'; id: string }
+  | { type: 'error'; errorText: string }
+  | { type: 'data-custom'; id?: string; data: Record<string, unknown> };
+
+type ToolCallEntry = NonNullable<TauriMessage['toolCalls']>[number];
 
 /** 后端可能返回的所有 role 类型 */
 type BackendRole = 'user' | 'assistant' | 'system' | 'tool' | 'tool_calls' | string;
@@ -87,8 +116,10 @@ type PersistedToolCall = {
   name?: string;
   id?: string;
   call_id?: string;
+  tool_call_id?: string;
   args?: unknown;
   arguments?: unknown;
+  parameters?: unknown;
   result?: string;
   error?: string;
 };
@@ -137,13 +168,15 @@ export function parsePersistedToolCalls(content: string): Array<{
       .filter((call): call is PersistedToolCall => !!call && typeof call === 'object')
       .map((call) => ({
         toolCallId:
-          typeof call.call_id === 'string'
-            ? call.call_id
-            : typeof call.id === 'string'
-              ? call.id
-              : undefined,
+          typeof call.tool_call_id === 'string'
+            ? call.tool_call_id
+            : typeof call.call_id === 'string'
+              ? call.call_id
+              : typeof call.id === 'string'
+                ? call.id
+                : undefined,
         toolName: typeof call.name === 'string' ? call.name : 'unknown_tool',
-        args: parsePersistedToolArgs(call.args ?? call.arguments),
+        args: parsePersistedToolArgs(call.args ?? call.arguments ?? call.parameters),
         result: typeof call.result === 'string'
           ? call.result
           : typeof call.error === 'string'
@@ -250,7 +283,6 @@ type ChatEvent =
   | { type: 'tool_started'; name: string }
   | { type: 'tool_completed'; name: string; success: boolean; error?: string }
   | { type: 'approval_needed'; thread_id: string; request_id: string; tool_name: string; description: string }
-  | { type: 'approval_result'; ticket_id: string; thread_id: string; request_id?: string; status: string; review_comment?: string; expires_at?: string }
   | { type: 'status'; message: string; level: string }
   | { type: 'error'; message: string; code?: string }
   | { type: 'connection_status'; connected: boolean; message: string }
@@ -309,26 +341,53 @@ export interface PendingApproval {
   request_id: string;
   tool_name: string;
   description: string;
-  ticket_id?: string;
-  ticket_status?: 'submitting' | 'pending' | 'expired';
-  ticket_error?: string;
 }
 
 interface ApprovalState {
   pendingApprovals: PendingApproval[];
   approve: (requestId: string) => Promise<void>;
   deny: (requestId: string) => Promise<void>;
-  submitForReview: (requestId: string, toolName: string, description: string) => Promise<void>;
 }
 
 const ApprovalContext = createContext<ApprovalState>({
   pendingApprovals: [],
   approve: async () => {},
   deny: async () => {},
-  submitForReview: async () => {},
 });
 
 export const useApprovalState = () => useContext(ApprovalContext);
+
+// ============================================================================
+// ErrorBoundary: 兜底 assistant-ui 内部 fiber 管理错误
+// See: https://github.com/assistant-ui/assistant-ui/issues/3123
+// ============================================================================
+
+interface RuntimeErrorBoundaryProps { children: ReactNode }
+interface RuntimeErrorBoundaryState { hasError: boolean; errorKey: number }
+
+class RuntimeErrorBoundary extends Component<RuntimeErrorBoundaryProps, RuntimeErrorBoundaryState> {
+  state: RuntimeErrorBoundaryState = { hasError: false, errorKey: 0 };
+
+  static getDerivedStateFromError(): Partial<RuntimeErrorBoundaryState> {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error) {
+    tracing.warn('AssistantRuntime recovered from internal error', { message: error.message });
+  }
+
+  componentDidUpdate(_: RuntimeErrorBoundaryProps, prevState: RuntimeErrorBoundaryState) {
+    if (this.state.hasError && !prevState.hasError) {
+      // Auto-recover on next tick by re-mounting the runtime subtree
+      requestAnimationFrame(() => this.setState((s) => ({ hasError: false, errorKey: s.errorKey + 1 })));
+    }
+  }
+
+  render() {
+    if (this.state.hasError) return null;
+    return <>{this.props.children}</>;
+  }
+}
 
 // ============================================================================
 // 消息转换：TauriMessage → assistant-ui ThreadMessageLike
@@ -373,12 +432,16 @@ function convertMessage(msg: TauriMessage): ThreadMessageLike {
       })),
     );
   }
+  // toolSteps 不再映射为 tool-call parts（它们缺少 args/result，
+  // ToolFallback 渲染效果差）。改为通过 metadata.custom.toolSteps 传递，
+  // 由 AssistantMessage 用轻量 ToolStepIndicator 渲染。
   if (msg.content) parts.push({ type: 'text', text: msg.content });
   if (parts.length === 0) parts.push({ type: 'text', text: '' });
 
   const customMetadata = {
     ...(msg.dlpStats ? { dlpStats: msg.dlpStats } : {}),
     ...((msg.routineTriggerCount ?? 0) > 0 ? { routineTriggerCount: msg.routineTriggerCount } : {}),
+    ...(msg.toolSteps?.length ? { toolSteps: msg.toolSteps } : {}),
   };
   const hasCustomMetadata = Object.keys(customMetadata).length > 0;
 
@@ -597,20 +660,6 @@ async function serializeAttachments(
   return Promise.all(attachments.map((attachment) => serializeAttachment(attachment)));
 }
 
-function updatePendingApproval(
-  approvals: PendingApproval[],
-  requestId: string,
-  updater: (approval: PendingApproval) => PendingApproval,
-): PendingApproval[] {
-  return approvals.map((approval) =>
-    approval.request_id === requestId ? updater(approval) : approval,
-  );
-}
-
-function hasPendingApprovalTicket(approval: PendingApproval | undefined): boolean {
-  return approval?.ticket_status === 'submitting' || approval?.ticket_status === 'pending';
-}
-
 // ============================================================================
 // 系统状态过滤（非 AI 推理内容，不显示在思考链中）
 // ============================================================================
@@ -623,8 +672,24 @@ const SYSTEM_STATUS_PREFIXES = [
   'Retrying',
 ];
 
+/** 工具执行状态信息（由后端作为 thinking 事件发出，实际是工具进度，不应混入 reasoning） */
+const TOOL_PROGRESS_PATTERNS = [
+  /^Running /,
+  /^Executing /,
+  /^Thinking \(step \d+\)/,
+  /^Reading /,
+  /^Searching /,
+  /^Writing /,
+  /^Analyzing /,
+];
+
 function isSystemStatus(message: string): boolean {
   return SYSTEM_STATUS_PREFIXES.some((p) => message.startsWith(p));
+}
+
+/** 识别后端作为 thinking 发出的工具进度消息 */
+function isToolProgress(message: string): boolean {
+  return TOOL_PROGRESS_PATTERNS.some((p) => p.test(message));
 }
 
 // ============================================================================
@@ -648,7 +713,6 @@ export function TauriRuntimeProvider({
   const threadIdRef = useRef(threadId);
   const modelIdRef = useRef(initialModelId);
   const selectedModelRef = useRef<ModelConfigItem | null>(null);
-  const unlistenRef = useRef<UnlistenFn | null>(null);
   const msgIdCounter = useRef(1);
   const bootstrapThreadIdRef = useRef<string | null>(null);
   const { scanUserInput } = useDlpScan();
@@ -665,7 +729,6 @@ export function TauriRuntimeProvider({
 
   // 即时工具授权状态
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
-  const approvalSubmissionLocksRef = useRef<Set<string>>(new Set());
 
   const clearDlpBlock = useCallback(() => {
     setDlpBlocked(false);
@@ -680,84 +743,21 @@ export function TauriRuntimeProvider({
     setDlpRedactedStats(stats);
   }, []);
 
-  const releaseApprovalSubmissionLock = useCallback((requestId: string): void => {
-    approvalSubmissionLocksRef.current.delete(requestId);
-  }, []);
-
-  const setPendingApprovalTicketState = useCallback(
-    (requestId: string, fields: Partial<PendingApproval>): void => {
-      setPendingApprovals((prev) =>
-        updatePendingApproval(prev, requestId, (approval) => ({
-          ...approval,
-          ...fields,
-        })),
-      );
-    },
-    [],
-  );
-
   // 即时工具授权：approve / deny 通过 IPC 发送消息给 Agent
   const sendApprovalDecision = useCallback(async (command: 'ic_approve_tool' | 'ic_deny_tool', requestId: string, tid: string) => {
     try {
       await invoke(command, { requestId, threadId: tid });
-      releaseApprovalSubmissionLock(requestId);
       setPendingApprovals((prev) => prev.filter((a) => a.request_id !== requestId));
     } catch (err) {
       tracing.error(`Failed to ${command}`, { requestId, error: err });
     }
-  }, [releaseApprovalSubmissionLock]);
+  }, []);
 
   const approve = useCallback((requestId: string, tid: string) =>
     sendApprovalDecision('ic_approve_tool', requestId, tid), [sendApprovalDecision]);
 
   const deny = useCallback((requestId: string, tid: string) =>
     sendApprovalDecision('ic_deny_tool', requestId, tid), [sendApprovalDecision]);
-
-  const submitForReview = useCallback(
-    async (requestId: string, toolName: string, description: string) => {
-      if (approvalSubmissionLocksRef.current.has(requestId)) {
-        tracing.debug('Skipping duplicate approval ticket submission while request is in-flight', { requestId });
-        return;
-      }
-
-      const currentApproval = pendingApprovals.find((approval) => approval.request_id === requestId);
-      if (hasPendingApprovalTicket(currentApproval)) {
-        tracing.debug('Skipping duplicate approval ticket submission while ticket is pending', { requestId });
-        return;
-      }
-
-      const tid = threadIdRef.current;
-      if (!tid) {
-        tracing.warn('Cannot submit approval ticket without thread id', { requestId });
-        return;
-      }
-
-      approvalSubmissionLocksRef.current.add(requestId);
-      setPendingApprovalTicketState(requestId, {
-        ticket_status: 'submitting',
-        ticket_error: undefined,
-      });
-
-      try {
-        const ticketId = await approvalApi.submitApprovalTicket(requestId, toolName, description, tid);
-        setPendingApprovalTicketState(requestId, {
-          ticket_id: ticketId,
-          ticket_status: 'pending',
-          ticket_error: undefined,
-        });
-      } catch (error) {
-        releaseApprovalSubmissionLock(requestId);
-        const message = error instanceof Error ? error.message : String(error);
-        tracing.error('Failed to submit approval ticket', { requestId, error });
-        setPendingApprovalTicketState(requestId, {
-          ticket_id: undefined,
-          ticket_status: undefined,
-          ticket_error: message,
-        });
-      }
-    },
-    [pendingApprovals, releaseApprovalSubmissionLock, setPendingApprovalTicketState],
-  );
 
   // 同步 threadId ref
   useEffect(() => { threadIdRef.current = threadId; }, [threadId]);
@@ -804,10 +804,13 @@ export function TauriRuntimeProvider({
     });
   }, [onModelChange, models]);
 
-  // ── 处理 chat-event（思考链 + 流式 + 工具 + 响应）──
+  // ── 处理 chat-stream（思考链 + 流式 + 工具 + 响应）──
   // 声明提前，供 history-loading effect 的 thread 切换清理使用
   const pendingAssistantId = useRef<string | null>(null);
   const thinkingBuffer = useRef<string>('');
+  const toolStepsBuffer = useRef<ToolStep[]>([]);
+  /** Real tool call data from chat-stream Vercel protocol events. */
+  const toolCallsBuffer = useRef<ToolCallEntry[]>([]);
   // 用于检测 threadId 实际切换（区别于同一 thread 的历史重载）
   const prevThreadIdRef = useRef<string | null>(threadId);
   const handledCommandIdRef = useRef<string | null>(null);
@@ -816,6 +819,8 @@ export function TauriRuntimeProvider({
   const clearPendingAssistantState = useCallback((): void => {
     pendingAssistantId.current = null;
     thinkingBuffer.current = '';
+    toolStepsBuffer.current = [];
+    toolCallsBuffer.current = [];
     setIsRunning(false);
   }, []);
 
@@ -899,15 +904,25 @@ export function TauriRuntimeProvider({
 
         const loaded: TauriMessage[] = [];
         const restoredApprovals = new Map<string, PendingApproval>();
+        // Buffer tool_calls for merging into the next assistant message.
+        // DB order: user → tool_calls → assistant. We merge tool_calls into
+        // the following assistant message so streaming and history produce
+        // the same single-message structure.
+        let pendingToolCalls: TauriMessage['toolCalls'] | undefined;
         history.forEach((m) => {
           if (isDisplayableRole(m.role)) {
-            loaded.push({
+            const msg: TauriMessage = {
               id: m.id,
               role: m.role as 'user' | 'assistant',
               content: m.content,
               timestamp: new Date(m.created_at).getTime(),
               ...(m.attachments ? { attachments: m.attachments } : {}),
-            });
+            };
+            if (msg.role === 'assistant' && pendingToolCalls) {
+              msg.toolCalls = pendingToolCalls;
+              pendingToolCalls = undefined;
+            }
+            loaded.push(msg);
             return;
           }
 
@@ -916,14 +931,7 @@ export function TauriRuntimeProvider({
             if (toolCalls.length === 0) {
               return;
             }
-
-            loaded.push({
-              id: `${m.id}-tool-calls`,
-              role: 'assistant',
-              content: '',
-              timestamp: new Date(m.created_at).getTime(),
-              toolCalls,
-            });
+            pendingToolCalls = toolCalls;
             return;
           }
 
@@ -952,6 +960,22 @@ export function TauriRuntimeProvider({
           }
         });
 
+        // Flush any trailing tool_calls that had no following assistant message
+        if (pendingToolCalls) {
+          const lastMsg = loaded[loaded.length - 1];
+          if (lastMsg?.role === 'assistant') {
+            lastMsg.toolCalls = pendingToolCalls;
+          } else {
+            loaded.push({
+              id: `orphan-tool-calls-${Date.now()}`,
+              role: 'assistant',
+              content: '',
+              timestamp: Date.now(),
+              toolCalls: pendingToolCalls,
+            });
+          }
+        }
+
         setMessages(loaded);
         setPendingApprovals(Array.from(restoredApprovals.values()));
       } catch (err) {
@@ -963,20 +987,65 @@ export function TauriRuntimeProvider({
     return () => { cancelled = true; };
   }, [threadId, engineReadyKey, clearThreadRuntimeState, finalizePreviousThread]);
 
-  // ── chat-event 监听 ──
+  // ── chat-stream 统一监听（Vercel AI protocol + DataCustom 混合事件）──
   useEffect(() => {
     let mounted = true;
+    let unlisten: UnlistenFn | null = null;
 
     const setup = async () => {
       try {
-        const unlisten = await listen<ChatEvent>('chat-event', (event) => {
+        unlisten = await listen<VercelStreamEvent>('chat-stream', (event) => {
           if (!mounted) return;
-          handleChatEvent(event.payload);
+          const payload = event.payload;
+
+          switch (payload.type) {
+            // ── Native Vercel tool events ──
+            case 'tool-input-start':
+              handleStreamEvent(payload);
+              // Also create ToolStep for UI indicator (formerly from ChatEvent tool_started)
+              handleChatEvent({ type: 'tool_started', name: payload.toolName });
+              break;
+            case 'tool-input-available':
+            case 'tool-output-available':
+              handleStreamEvent(payload);
+              break;
+            case 'tool-output-error':
+              handleStreamEvent(payload);
+              // Synthesize tool_completed for ToolStep update (Rust only sends ToolOutputError when tool_call_id exists)
+              {
+                const entry = toolCallsBuffer.current.find((tc) => tc.toolCallId === payload.toolCallId);
+                if (entry?.toolName) {
+                  handleChatEvent({ type: 'tool_completed', name: entry.toolName, success: false, error: payload.errorText });
+                }
+              }
+              break;
+
+            // ── Native Vercel text/reasoning ──
+            case 'reasoning-delta':
+              handleChatEvent({ type: 'thinking', message: payload.delta });
+              break;
+            case 'text-delta':
+              handleChatEvent({ type: 'stream_chunk', content: payload.delta });
+              break;
+
+            // ── Vercel error ──
+            case 'error':
+              handleChatEvent({ type: 'error', message: payload.errorText });
+              break;
+
+            // ── DataCustom wrapper (contains ChatEvent-shaped data) ──
+            case 'data-custom':
+              handleChatEvent(payload.data as ChatEvent);
+              break;
+
+            // ── Finish (no-op — response finalization handled by data-custom response) ──
+            case 'finish':
+              break;
+          }
         });
-        unlistenRef.current = unlisten;
         await invoke('subscribe_chat_events').catch(() => {});
       } catch (err) {
-        tracing.error('Failed to setup chat events', { error: err });
+        tracing.error('Failed to setup chat-stream listener', { error: err });
       }
     };
 
@@ -984,17 +1053,75 @@ export function TauriRuntimeProvider({
 
     return () => {
       mounted = false;
-      unlistenRef.current?.();
-      unlistenRef.current = null;
+      unlisten?.();
       invoke('unsubscribe_chat_events').catch(() => {});
     };
   }, []);
 
+  /** Process Vercel AI protocol stream events from the `chat-stream` channel. */
+  const handleStreamEvent = useCallback((event: VercelStreamEvent) => {
+    switch (event.type) {
+      case 'tool-input-start': {
+        const entry: ToolCallEntry = {
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+        };
+        toolCallsBuffer.current = [...toolCallsBuffer.current, entry];
+        break;
+      }
+      case 'tool-input-available': {
+        const input =
+          event.input && typeof event.input === 'object' && !Array.isArray(event.input)
+            ? (event.input as ReadonlyJSONObject)
+            : undefined;
+        toolCallsBuffer.current = toolCallsBuffer.current.map((tc) =>
+          tc.toolCallId === event.toolCallId ? { ...tc, args: input } : tc,
+        );
+        break;
+      }
+      case 'tool-output-available': {
+        const result =
+          typeof event.output === 'string' ? event.output : JSON.stringify(event.output);
+        toolCallsBuffer.current = toolCallsBuffer.current.map((tc) =>
+          tc.toolCallId === event.toolCallId ? { ...tc, result } : tc,
+        );
+        break;
+      }
+      case 'tool-output-error': {
+        toolCallsBuffer.current = toolCallsBuffer.current.map((tc) =>
+          tc.toolCallId === event.toolCallId
+            ? { ...tc, result: event.errorText, isError: true }
+            : tc,
+        );
+        break;
+      }
+      default:
+        return;
+    }
+
+    // Sync tool calls into the current pending assistant message
+    const calls = toolCallsBuffer.current;
+    if (pendingAssistantId.current && calls.length > 0) {
+      const tempId = pendingAssistantId.current;
+      setMessages((prev) =>
+        prev.map((m) => (m.id === tempId ? { ...m, toolCalls: [...calls] } : m)),
+      );
+    }
+  }, []);
+
   const handleChatEvent = useCallback((event: ChatEvent) => {
+    tracing.debug('[chat-stream]', { type: event.type, detail: 'type' in event ? (event as Record<string, unknown>).name ?? (event as Record<string, unknown>).message ?? '' : '' });
+
     switch (event.type) {
       case 'thinking': {
         setIsRunning(true);
         if (isSystemStatus(event.message)) break;
+
+        // 工具进度消息不混入 reasoning 文本（由 toolSteps UI 承载）
+        if (isToolProgress(event.message)) {
+          tracing.debug('[thinking-filtered] tool progress', { message: event.message });
+          break;
+        }
 
         thinkingBuffer.current += (thinkingBuffer.current ? '\n' : '') + event.message;
 
@@ -1034,13 +1161,60 @@ export function TauriRuntimeProvider({
 
       case 'tool_started': {
         setIsRunning(true);
-        tracing.debug('Tool started', { name: event.name });
+        tracing.debug('[tool_started]', { name: event.name, pendingId: pendingAssistantId.current, bufferLen: toolStepsBuffer.current.length });
+
+        const newStep: ToolStep = { toolName: event.name, status: 'running', startedAt: Date.now() };
+        toolStepsBuffer.current = [...toolStepsBuffer.current, newStep];
+        const currentSteps = toolStepsBuffer.current;
+
+        // 确保有 pending assistant 消息来承载工具步骤
+        if (!pendingAssistantId.current) {
+          const tempId = `tool-${Date.now()}`;
+          pendingAssistantId.current = tempId;
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: tempId,
+              role: 'assistant',
+              content: '',
+              reasoning: thinkingBuffer.current || undefined,
+              toolSteps: currentSteps,
+              timestamp: Date.now(),
+            },
+          ]);
+        } else {
+          const tempId = pendingAssistantId.current;
+          setMessages((prev) =>
+            prev.map((m) => (m.id === tempId ? { ...m, toolSteps: currentSteps } : m)),
+          );
+        }
         break;
       }
 
       case 'tool_completed': {
+        tracing.debug('[tool_completed]', { name: event.name, success: event.success, error: event.error, bufferLen: toolStepsBuffer.current.length });
         if (!event.success) {
           tracing.warn('Tool failed', { name: event.name, error: event.error });
+        }
+
+        // 更新 buffer 中对应 toolStep 状态
+        toolStepsBuffer.current = toolStepsBuffer.current.map((step) =>
+          step.toolName === event.name && step.status === 'running'
+            ? {
+                ...step,
+                status: event.success ? 'complete' : 'error',
+                error: event.error,
+                completedAt: Date.now(),
+              }
+            : step,
+        );
+        const currentSteps = toolStepsBuffer.current;
+
+        if (pendingAssistantId.current) {
+          const tempId = pendingAssistantId.current;
+          setMessages((prev) =>
+            prev.map((m) => (m.id === tempId ? { ...m, toolSteps: currentSteps } : m)),
+          );
         }
         break;
       }
@@ -1060,37 +1234,6 @@ export function TauriRuntimeProvider({
         break;
       }
 
-      case 'approval_result': {
-        if (!event.request_id) {
-          tracing.warn('Approval result missing request_id', { ticketId: event.ticket_id, status: event.status });
-          break;
-        }
-
-        releaseApprovalSubmissionLock(event.request_id);
-
-        if (event.status === 'approved') {
-          void sendApprovalDecision('ic_approve_tool', event.request_id, event.thread_id);
-          break;
-        }
-
-        if (event.status === 'rejected') {
-          void sendApprovalDecision('ic_deny_tool', event.request_id, event.thread_id);
-          break;
-        }
-
-        if (event.status === 'expired') {
-          setPendingApprovals((prev) =>
-            updatePendingApproval(prev, event.request_id!, (approval) => ({
-              ...approval,
-              ticket_id: undefined,
-              ticket_status: 'expired',
-              ticket_error: '审批工单已过期，可重新提交',
-            })),
-          );
-        }
-        break;
-      }
-
       case 'response': {
         // 忽略已切换 thread 后到达的旧 thread 响应（thread 切换时流式调用尚未结束）
         if (event.thread_id && event.thread_id !== threadIdRef.current) {
@@ -1099,8 +1242,27 @@ export function TauriRuntimeProvider({
         }
         if (pendingAssistantId.current) {
           const tempId = pendingAssistantId.current;
+          tracing.debug('[response] finalizing pending message', { tempId, messageId: event.message_id, hasToolSteps: toolStepsBuffer.current.length });
+          // 保留 toolSteps — 它们是本轮工具执行的可视化历史，不应在 response 时清除。
+          // 优先使用 chat-stream 传来的真实工具调用数据（含 args/result/toolCallId），
+          // 降级使用 toolSteps 的合成转换（仅有工具名和状态，用于历史消息恢复）。
+          const bufferedCalls = toolCallsBuffer.current;
+          const steps = toolStepsBuffer.current;
+          const toolCalls =
+            bufferedCalls.length > 0
+              ? [...bufferedCalls]
+              : steps.length > 0
+                ? steps.map((step, i) => ({
+                    toolCallId: `step_${i}`,
+                    toolName: step.toolName,
+                    isError: step.status === 'error',
+                    ...(step.error ? { result: step.error } : {}),
+                  }))
+                : undefined;
           setMessages((prev) =>
-            prev.map((m) => (m.id === tempId ? { ...m, id: event.message_id, content: event.content } : m)),
+            prev.map((m) => (m.id === tempId
+              ? { ...m, id: event.message_id, content: event.content, ...(toolCalls ? { toolCalls } : {}) }
+              : m)),
           );
         } else {
           setMessages((prev) => [
@@ -1164,7 +1326,7 @@ export function TauriRuntimeProvider({
         break;
       }
     }
-  }, [loadModels, clearPendingAssistantState, releaseApprovalSubmissionLock, sendApprovalDecision]);
+  }, [loadModels, clearPendingAssistantState, sendApprovalDecision]);
 
   // ── 统一发送文本入口（Composer / 外部指令共用）──
   const sendUserText = useCallback(
@@ -1324,6 +1486,7 @@ export function TauriRuntimeProvider({
   });
 
   return (
+    <RuntimeErrorBoundary>
     <AssistantRuntimeProvider runtime={runtime}>
       <EchoToolUI />
       <FileEditToolUI />
@@ -1360,7 +1523,6 @@ export function TauriRuntimeProvider({
               pendingApprovals,
               approve: (requestId) => approve(requestId, threadIdRef.current ?? ''),
               deny: (requestId) => deny(requestId, threadIdRef.current ?? ''),
-              submitForReview,
             }}
           >
             {children}
@@ -1368,5 +1530,6 @@ export function TauriRuntimeProvider({
         </DlpContext.Provider>
       </ModelContext.Provider>
     </AssistantRuntimeProvider>
+    </RuntimeErrorBoundary>
   );
 }

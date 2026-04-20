@@ -42,7 +42,6 @@ vi.mock('../../utils/tauri', async (importOriginal) => {
     approvalApi: {
       approve: vi.fn().mockResolvedValue(undefined),
       deny: vi.fn().mockResolvedValue(undefined),
-      submitTicket: vi.fn().mockResolvedValue(undefined),
       listPending: vi.fn().mockResolvedValue([]),
     },
     modelApi: {

@@ -1,16 +1,13 @@
 /**
- * GlobResultRenderer — GlobSearchTool 输出的文件树渲染器。
+ * GlobResultRenderer — inline trigger + collapsible file list
  *
- * 解析 glob_search 文本输出，显示匹配文件列表（带文件图标）。
+ * 文件路径可点击，用系统默认编辑器打开。
  */
+import { useCallback } from "react";
 import { makeAssistantToolUI } from "@assistant-ui/react";
-import { useState } from "react";
-import {
-  FolderSearchIcon,
-  ChevronDownIcon,
-  ChevronRightIcon,
-  FileIcon,
-} from "lucide-react";
+import { FileIcon } from "lucide-react";
+import { fileOpsApi } from "@utils/tauri";
+import { CollapsibleToolShell } from "./tool-ui-shared";
 
 interface GlobSearchArgs {
   pattern: string;
@@ -25,87 +22,72 @@ function parseGlobOutput(text: string): { count: number; files: string[] } {
   if (lines.length === 1 && lines[0] === "No files matched.") {
     return { count: 0, files: [] };
   }
-
-  // First line: "Found N files:"
   const headerMatch = lines[0]?.match(/^Found (\d+) files:/);
   const count = headerMatch ? parseInt(headerMatch[1], 10) : 0;
-
   const files = lines
     .slice(1)
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
-
   return { count, files };
+}
+
+function ClickableFilePath({ file }: { file: string }) {
+  const handleClick = useCallback(() => {
+    fileOpsApi.openFileAtLine(file, 1).catch(() => {});
+  }, [file]);
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      className="flex items-center gap-1.5 py-0.5 text-left transition-colors hover:text-foreground"
+    >
+      <FileIcon className="size-3 shrink-0 text-muted-foreground" />
+      <span className="font-mono text-foreground underline decoration-dotted underline-offset-2">
+        {file}
+      </span>
+    </button>
+  );
 }
 
 export const GlobResultToolUI = makeAssistantToolUI<GlobSearchArgs, string>({
   toolName: "glob_search",
   render: ({ args, result, status }) => {
-    const [expanded, setExpanded] = useState(false);
-
     const { count, files } = result
       ? parseGlobOutput(result)
       : { count: 0, files: [] };
 
     return (
-      <div className="my-1 overflow-hidden rounded-md border border-border/50 bg-muted/30 text-sm">
-        {/* Header */}
-        <button
-          type="button"
-          onClick={() => setExpanded((p) => !p)}
-          className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-muted/50"
-        >
-          {status.type === "running" ? (
-            <span className="size-2 animate-pulse rounded-full bg-blue-400" />
-          ) : (
-            <FolderSearchIcon className="size-4 text-muted-foreground" />
-          )}
-          <span className="font-mono text-xs text-foreground">
-            {args?.pattern ?? "glob"}
-          </span>
-          {status.type === "complete" && (
-            <span className="text-xs text-muted-foreground">
-              {count} file{count !== 1 ? "s" : ""}
-            </span>
-          )}
-          <span className="ml-auto">
-            {expanded ? (
-              <ChevronDownIcon className="size-4 text-muted-foreground" />
-            ) : (
-              <ChevronRightIcon className="size-4 text-muted-foreground" />
+      <CollapsibleToolShell
+        toolName="glob_search"
+        status={status}
+        summary={
+          <>
+            {args?.pattern && (
+              <span className="truncate font-mono opacity-60">
+                {args.pattern}
+              </span>
             )}
-          </span>
-        </button>
-
-        {/* Running indicator */}
-        {status.type === "running" && (
-          <div className="px-3 py-1 text-xs text-muted-foreground">
-            Searching for <code>{args?.pattern}</code>…
-          </div>
-        )}
-
-        {/* File list */}
-        {expanded && files.length > 0 && (
-          <div className="border-t border-border/50 px-3 py-1.5">
+            {status.type === "complete" && (
+              <span className="shrink-0 opacity-40">
+                {count} file{count !== 1 ? "s" : ""}
+              </span>
+            )}
+          </>
+        }
+      >
+        {files.length > 0 ? (
+          <div className="max-h-96 overflow-y-auto rounded-md border bg-muted/50 p-3 text-xs">
             {files.map((file, i) => (
-              <div
-                key={i}
-                className="flex items-center gap-1.5 py-0.5 text-xs"
-              >
-                <FileIcon className="size-3 text-muted-foreground" />
-                <span className="font-mono text-foreground">{file}</span>
-              </div>
+              <ClickableFilePath key={i} file={file} />
             ))}
           </div>
-        )}
-
-        {/* No results */}
-        {expanded && status.type === "complete" && count === 0 && (
-          <div className="border-t border-border/50 px-3 py-2 text-xs text-muted-foreground">
+        ) : status.type === "complete" && count === 0 ? (
+          <div className="rounded-md border bg-muted/50 p-3 text-xs text-muted-foreground">
             No files matched.
           </div>
-        )}
-      </div>
+        ) : null}
+      </CollapsibleToolShell>
     );
   },
 });

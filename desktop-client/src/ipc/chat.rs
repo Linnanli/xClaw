@@ -1,7 +1,7 @@
 //! 聊天相关 Tauri Commands。
 //!
 //! 通过 `AppState.msg_sender` 将用户消息注入 TauriChannel，
-//! Agent 处理后通过 `ChatEvent` 推送回复到前端。
+//! Agent 处理后通过 `VercelUIStream` 推送回复到前端。
 //!
 //! # 前端兼容性
 //!
@@ -18,7 +18,7 @@ use tauri::{Emitter, Manager, State};
 
 use crate::data_reporter::ConversationAttachment;
 use crate::state::EngineState;
-use crate::tauri_channel::ChatEvent;
+use crate::vercel_ui_protocol::VercelUIStream;
 
 /// 发送消息的响应。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,7 +52,7 @@ pub struct FrontendAttachment {
 /// 发送聊天消息。
 ///
 /// 构造 `IncomingMessage` 并通过 `msg_sender` 注入 Agent 消息循环。
-/// AI 回复通过 `chat-event` Tauri 事件异步推送到前端。
+/// AI 回复通过 `chat-stream` Tauri 事件异步推送到前端。
 ///
 /// # 模型切换
 ///
@@ -64,7 +64,7 @@ pub struct FrontendAttachment {
 /// # Skill 激活通知
 ///
 /// 在消息注入 Agent 前，先用 ironclaw 的 `prefilter_skills` 做本地匹配。
-/// 若有 skill 被激活，通过 `chat-event` 发出 `skills_activated` 事件。
+/// 若有 skill 被激活，通过 `chat-stream` 发出 `skills_activated` 事件。
 ///
 /// # 安全
 ///
@@ -388,9 +388,13 @@ fn detect_and_emit_skills_activated(
     tracing::debug!(skills = ?skill_names, "Skills activated (client-side detection)");
 
     let _ = app_handle.emit(
-        "chat-event",
-        crate::tauri_channel::ChatEvent::SkillsActivated {
-            skills: skill_names.clone(),
+        "chat-stream",
+        VercelUIStream::DataCustom {
+            id: None,
+            data: serde_json::json!({
+                "type": "skills_activated",
+                "skills": skill_names,
+            }),
         },
     );
 
@@ -408,10 +412,14 @@ pub async fn subscribe_chat_events(app_handle: tauri::AppHandle) -> Result<(), S
     {
         app_handle
             .emit(
-                "chat-event",
-                ChatEvent::ConnectionStatus {
-                    connected: true,
-                    message: "IronClaw engine ready".to_string(),
+                "chat-stream",
+                VercelUIStream::DataCustom {
+                    id: None,
+                    data: serde_json::json!({
+                        "type": "connection_status",
+                        "connected": true,
+                        "message": "IronClaw engine ready",
+                    }),
                 },
             )
             .map_err(|e| format!("Failed to emit connection status: {}", e))?;

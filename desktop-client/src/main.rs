@@ -74,10 +74,9 @@ fn main() {
                     engine_state.set_failed(err_msg.clone());
 
                     let _ = app_handle.emit(
-                        "chat-event",
-                        desktop_client::tauri_channel::ChatEvent::Error {
-                            message: desktop_client::error::friendly_engine_error(&err_msg),
-                            code: Some("ENGINE_STARTUP_FAILED".into()),
+                        "chat-stream",
+                        desktop_client::vercel_ui_protocol::VercelUIStream::Error {
+                            error_text: desktop_client::error::friendly_engine_error(&err_msg),
                         },
                     );
                 }

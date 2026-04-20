@@ -8,7 +8,7 @@ type EngineStatus = 'starting' | 'running' | 'error';
 /**
  * 引擎状态指示器 — 嵌入式模式
  *
- * 监听 Tauri IPC `chat-event` 判断引擎是否就绪。
+ * 监听 Tauri IPC `chat-stream` 判断引擎是否就绪。
  * 收到任何非 Error 事件即视为引擎运行中。
  */
 export function ConnectionStatus() {
@@ -21,13 +21,14 @@ export function ConnectionStatus() {
     let cancelled = false;
 
     // 监听引擎事件判断状态
-    listen<any>('chat-event', (event) => {
+    listen<any>('chat-stream', (event) => {
       const payload = event.payload;
-      if (payload && typeof payload === 'object' && 'Error' in payload) {
-        const err = payload.Error as { message: string; code?: string };
-        if (err.code === 'ENGINE_STARTUP_FAILED' || err.code === 'ENGINE_ERROR') {
+      // VercelUIStream::Error → { type: "error", errorText: "..." }
+      if (payload?.type === 'error') {
+        const errorText = payload.errorText as string | undefined;
+        if (errorText) {
           setStatus('error');
-          setErrorMsg(err.message);
+          setErrorMsg(errorText);
           return;
         }
       }

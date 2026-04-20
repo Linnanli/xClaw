@@ -114,7 +114,7 @@ describe('useAiChatTauri', () => {
     renderHook(() => useAiChatTauri({ threadId: 'thread-123' }));
 
     await waitFor(() => {
-      expect(mockListen).toHaveBeenCalledWith('chat-event', expect.any(Function));
+      expect(mockListen).toHaveBeenCalledWith('chat-stream', expect.any(Function));
       expect(mockInvoke).toHaveBeenCalledWith('subscribe_chat_events');
     });
   });

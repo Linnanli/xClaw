@@ -5,140 +5,37 @@
 //!
 //! # 架构
 //!
+//! 统一使用 `chat-stream` 通道，发送 `VercelUIStream` 事件：
+//! - 工具事件 → `ToolInputStart/Available`, `ToolOutputAvailable/Error`
+//! - 文本流 → `TextDelta`
+//! - 思考链 → `ReasoningDelta`
+//! - 非标准事件 → `DataCustom { data: {"type": "...", ...} }`
+//!
 //! ```text
 //! 前端 invoke("send_chat_message")
 //!   → TauriChannel.incoming_tx.send(IncomingMessage)
 //!   → Agent 处理
 //!   → TauriChannel.respond() / send_status()
-//!   → app_handle.emit("chat-event", ChatEvent)
-//!   → 前端 listen("chat-event")
+//!   → app_handle.emit("chat-stream", VercelUIStream)
+//!   → 前端 listen("chat-stream")
 //! ```
 
 use async_trait::async_trait;
 use ironclaw::channels::{Channel, IncomingMessage, MessageStream, OutgoingResponse, StatusUpdate};
 use ironclaw::error::ChannelError;
-use serde::Serialize;
+use serde_json::json;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, Mutex};
 
 use crate::conversation_tracker::ConversationTracker;
-
-// ---------------------------------------------------------------------------
-// ChatEvent — 前端接收的聊天事件
-// ---------------------------------------------------------------------------
-
-/// 前端接收的聊天事件。
-///
-/// 与现有前端 `useAiChatTauri.ts` 中的 `ChatEvent` 类型完全兼容，
-/// 确保前端代码零修改。
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type")]
-pub enum ChatEvent {
-    /// AI 回复消息。
-    #[serde(rename = "response")]
-    Response {
-        message_id: String,
-        content: String,
-        thread_id: String,
-        /// 消息来源，用于前端区分普通聊天和定时任务通知。
-        /// "chat" = 普通聊天回复，"routine" = 定时任务通知。
-        #[serde(default)]
-        source: String,
-    },
-    /// Agent 正在思考。
-    #[serde(rename = "thinking")]
-    Thinking { message: String },
-    /// 通用状态更新。
-    #[serde(rename = "status")]
-    Status { message: String, level: String },
-    /// 错误事件。
-    #[serde(rename = "error")]
-    Error {
-        message: String,
-        code: Option<String>,
-    },
-    /// 连接状态变更。
-    #[serde(rename = "connection_status")]
-    ConnectionStatus { connected: bool, message: String },
-    // === 扩展事件（前端可按需处理）===
-    /// 工具开始执行。
-    #[serde(rename = "tool_started")]
-    ToolStarted { name: String },
-    /// 工具执行完成。
-    #[serde(rename = "tool_completed")]
-    ToolCompleted {
-        name: String,
-        success: bool,
-        error: Option<String>,
-    },
-    /// 流式文本片段。
-    #[serde(rename = "stream_chunk")]
-    StreamChunk { content: String },
-    /// 工具需要用户审批。
-    #[serde(rename = "approval_needed")]
-    ApprovalNeeded {
-        thread_id: String,
-        request_id: String,
-        tool_name: String,
-        description: String,
-    },
-    /// 异步审批结果（后台工单轮询完成后通知前端）。
-    #[serde(rename = "approval_result")]
-    ApprovalResult {
-        ticket_id: String,
-        thread_id: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        request_id: Option<String>,
-        status: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        review_comment: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        expires_at: Option<String>,
-    },
-    /// 图片已生成。
-    #[serde(rename = "image_generated")]
-    ImageGenerated {
-        data_url: String,
-        path: Option<String>,
-    },
-    /// 建议的后续消息。
-    #[serde(rename = "suggestions")]
-    Suggestions { suggestions: Vec<String> },
-    /// 后台任务状态变更（job 创建/完成时推送）。
-    ///
-    /// 前端用于实时更新任务列表和头部运行中计数，无需轮询。
-    #[serde(rename = "job_status")]
-    JobStatus {
-        job_id: String,
-        title: String,
-        /// "in_progress" | "completed" | "failed"
-        status: String,
-    },
-    /// 本轮对话激活的技能列表（desktop-client 侧检测，不依赖 ironclaw 事件）。
-    ///
-    /// 在 `send_chat_message` 中通过 `prefilter_skills` 本地匹配后发出，
-    /// 供前端在 AI 回复前展示"正在使用技能 X"的提示。
-    #[serde(rename = "skills_activated")]
-    SkillsActivated {
-        /// 激活的技能名称列表（按匹配分数排序）。
-        skills: Vec<String>,
-    },
-    /// 当前对话消息触发了事件任务（仅用于在用户气泡下显示 UI 提示）。
-    #[serde(rename = "routine_triggered")]
-    RoutineTriggered {
-        /// 触发来源的对话线程 ID（用于前端过滤当前线程）。
-        thread_id: String,
-        /// 本次命中的事件任务数量。
-        fired: u64,
-    },
-}
+use crate::vercel_ui_protocol::VercelUIStream;
 
 // ---------------------------------------------------------------------------
 // TauriJobEventSink — Worker 事件广播到 Tauri IPC
 // ---------------------------------------------------------------------------
 
-/// 实现 `JobEventSink` trait，将 Worker 的 job 事件转为 `ChatEvent::JobStatus` 推送到前端。
+/// 实现 `JobEventSink` trait，将 Worker 的 job 事件推送到前端。
 ///
 /// 只关注 `"result"` 和 `"status"` 事件类型（任务完成/状态变更），
 /// 其他事件（tool_use、reasoning 等）在桌面客户端不需要实时推送。
@@ -154,28 +51,30 @@ impl TauriJobEventSink {
 
 impl ironclaw::worker::JobEventSink for TauriJobEventSink {
     fn send_job_event(&self, job_id: uuid::Uuid, event_type: &str, data: &serde_json::Value) {
-        let event = match event_type {
+        match event_type {
             "result" | "status" => {
                 let status = data
                     .get("status")
                     .and_then(|v| v.as_str())
                     .or_else(|| data.get("message").and_then(|v| v.as_str()))
-                    .unwrap_or("unknown")
-                    .to_string();
+                    .unwrap_or("unknown");
                 let title = data
                     .get("title")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                ChatEvent::JobStatus {
-                    job_id: job_id.to_string(),
-                    title,
-                    status,
-                }
+                    .unwrap_or("");
+                let event = VercelUIStream::DataCustom {
+                    id: None,
+                    data: json!({
+                        "type": "job_status",
+                        "job_id": job_id.to_string(),
+                        "title": title,
+                        "status": status,
+                    }),
+                };
+                let _ = self.app_handle.emit("chat-stream", &event);
             }
-            _ => return, // tool_use、reasoning 等不推送
-        };
-        let _ = self.app_handle.emit("chat-event", &event);
+            _ => {} // tool_use、reasoning 等不推送
+        }
     }
 }
 
@@ -229,103 +128,233 @@ impl TauriChannel {
         self.incoming_tx.clone()
     }
 
-    /// 向前端发送 `ChatEvent`。
-    fn emit_event(&self, event: &ChatEvent) -> Result<(), ChannelError> {
+    /// 向前端发送 Vercel AI protocol 事件（`chat-stream` 通道）。
+    fn emit_stream(&self, event: &VercelUIStream) -> Result<(), ChannelError> {
         self.app_handle
-            .emit("chat-event", event)
+            .emit("chat-stream", event)
             .map_err(|e| ChannelError::SendFailed {
                 name: "tauri".into(),
                 reason: e.to_string(),
             })
     }
 
-    /// 将 `StatusUpdate` 映射为前端 `ChatEvent`。
-    pub(crate) fn status_to_event(status: &StatusUpdate) -> ChatEvent {
-        match status {
-            StatusUpdate::Thinking(msg) => ChatEvent::Thinking {
-                message: msg.clone(),
-            },
-            StatusUpdate::ToolStarted { name } => ChatEvent::ToolStarted { name: name.clone() },
-            StatusUpdate::ToolCompleted {
-                name,
-                success,
-                error,
-                ..
-            } => ChatEvent::ToolCompleted {
-                name: name.clone(),
-                success: *success,
-                error: error.clone(),
-            },
-            StatusUpdate::ToolResult { name, preview } => ChatEvent::Status {
-                message: format!("[{}] {}", name, preview),
-                level: "debug".into(),
-            },
-            StatusUpdate::StreamChunk(content) => ChatEvent::StreamChunk {
-                content: content.clone(),
-            },
-            StatusUpdate::Status(msg) => ChatEvent::Status {
-                message: msg.clone(),
-                level: "info".into(),
-            },
-            StatusUpdate::JobStarted { job_id, title, .. } => ChatEvent::JobStatus {
-                job_id: job_id.clone(),
-                title: title.clone(),
-                status: "in_progress".into(),
-            },
-            StatusUpdate::ApprovalNeeded {
-                request_id,
-                tool_name,
-                description,
-                ..
-            } => ChatEvent::ApprovalNeeded {
-                thread_id: String::new(),
-                request_id: request_id.clone(),
-                tool_name: tool_name.clone(),
-                description: description.clone(),
-            },
-            StatusUpdate::AuthRequired {
-                extension_name,
-                instructions,
-                ..
-            } => ChatEvent::Status {
-                message: format!(
+    /// 将 `StatusUpdate` 映射为 `VercelUIStream` 事件并发送。
+    ///
+    /// - 工具/文本/推理事件 → 原生 Vercel AI protocol 类型
+    /// - 其他事件 → `DataCustom { data: {"type": "...", ...} }`
+    pub(crate) fn emit_status_stream(
+        &self,
+        status: &StatusUpdate,
+        metadata: &serde_json::Value,
+    ) -> Result<(), ChannelError> {
+        for event in map_status_to_stream(status, metadata) {
+            self.emit_stream(&event)?;
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 纯映射函数 — StatusUpdate → Vec<VercelUIStream>
+// ---------------------------------------------------------------------------
+
+/// 将 `StatusUpdate` + metadata 映射为 `VercelUIStream` 事件列表（纯函数）。
+///
+/// 返回 0~2 个事件。测试可直接调用此函数验证映射逻辑，无需 `AppHandle`。
+pub(crate) fn map_status_to_stream(
+    status: &StatusUpdate,
+    metadata: &serde_json::Value,
+) -> Vec<VercelUIStream> {
+    fn tool_call_id(metadata: &serde_json::Value) -> String {
+        metadata
+            .get("_tool_call_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    match status {
+        StatusUpdate::Thinking(msg) => vec![VercelUIStream::ReasoningDelta {
+            id: String::new(),
+            delta: msg.clone(),
+            provider_metadata: None,
+        }],
+
+        StatusUpdate::StreamChunk(content) => vec![VercelUIStream::TextDelta {
+            id: String::new(),
+            delta: content.clone(),
+            provider_metadata: None,
+        }],
+
+        StatusUpdate::ToolStarted { name } => {
+            let tcid = tool_call_id(metadata);
+            if tcid.is_empty() {
+                return vec![];
+            }
+            let tool_args = metadata
+                .get("_tool_arguments")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            vec![
+                VercelUIStream::ToolInputStart {
+                    tool_call_id: tcid.clone(),
+                    tool_name: name.clone(),
+                    provider_executed: Some(true),
+                    provider_metadata: None,
+                },
+                VercelUIStream::ToolInputAvailable {
+                    tool_call_id: tcid,
+                    tool_name: name.clone(),
+                    input: tool_args,
+                    provider_executed: Some(true),
+                    provider_metadata: None,
+                },
+            ]
+        }
+
+        StatusUpdate::ToolResult { preview, .. } => {
+            let tcid = tool_call_id(metadata);
+            if tcid.is_empty() {
+                return vec![];
+            }
+            vec![VercelUIStream::ToolOutputAvailable {
+                tool_call_id: tcid,
+                output: serde_json::Value::String(preview.clone()),
+                provider_executed: Some(true),
+            }]
+        }
+
+        StatusUpdate::ToolCompleted {
+            name,
+            success: false,
+            error,
+            ..
+        } => {
+            let tcid = tool_call_id(metadata);
+            if tcid.is_empty() {
+                return vec![VercelUIStream::DataCustom {
+                    id: None,
+                    data: json!({
+                        "type": "tool_completed",
+                        "name": name,
+                        "success": false,
+                        "error": error,
+                    }),
+                }];
+            }
+            vec![VercelUIStream::ToolOutputError {
+                tool_call_id: tcid,
+                error_text: error
+                    .clone()
+                    .unwrap_or_else(|| "Unknown error".to_string()),
+                provider_executed: Some(true),
+            }]
+        }
+
+        StatusUpdate::ToolCompleted {
+            name,
+            success: true,
+            ..
+        } => vec![VercelUIStream::DataCustom {
+            id: None,
+            data: json!({
+                "type": "tool_completed",
+                "name": name,
+                "success": true,
+            }),
+        }],
+
+        StatusUpdate::Status(msg) => vec![VercelUIStream::DataCustom {
+            id: None,
+            data: json!({ "type": "status", "message": msg, "level": "info" }),
+        }],
+
+        StatusUpdate::JobStarted {
+            job_id, title, ..
+        } => vec![VercelUIStream::DataCustom {
+            id: None,
+            data: json!({
+                "type": "job_status",
+                "job_id": job_id,
+                "title": title,
+                "status": "in_progress",
+            }),
+        }],
+
+        StatusUpdate::ApprovalNeeded {
+            request_id,
+            tool_name,
+            description,
+            ..
+        } => {
+            let thread_id = metadata
+                .get("notify_thread_id")
+                .and_then(|v| v.as_str())
+                .or_else(|| metadata.get("thread_id").and_then(|v| v.as_str()))
+                .unwrap_or_default();
+            vec![VercelUIStream::DataCustom {
+                id: None,
+                data: json!({
+                    "type": "approval_needed",
+                    "thread_id": thread_id,
+                    "request_id": request_id,
+                    "tool_name": tool_name,
+                    "description": description,
+                }),
+            }]
+        }
+
+        StatusUpdate::AuthRequired {
+            extension_name,
+            instructions,
+            ..
+        } => vec![VercelUIStream::DataCustom {
+            id: None,
+            data: json!({
+                "type": "status",
+                "message": format!(
                     "Extension '{}' requires authentication{}",
                     extension_name,
-                    instructions
-                        .as_ref()
-                        .map(|i| format!(": {}", i))
-                        .unwrap_or_default()
+                    instructions.as_ref().map(|i| format!(": {}", i)).unwrap_or_default()
                 ),
-                level: "warn".into(),
-            },
-            StatusUpdate::AuthCompleted {
-                extension_name,
-                success,
-                message,
-            } => ChatEvent::Status {
-                message: format!(
+                "level": "warn",
+            }),
+        }],
+
+        StatusUpdate::AuthCompleted {
+            extension_name,
+            success,
+            message,
+        } => vec![VercelUIStream::DataCustom {
+            id: None,
+            data: json!({
+                "type": "status",
+                "message": format!(
                     "Extension '{}' auth {}: {}",
                     extension_name,
                     if *success { "succeeded" } else { "failed" },
                     message
                 ),
-                level: if *success { "info" } else { "error" }.into(),
-            },
-            StatusUpdate::ImageGenerated { data_url, path } => ChatEvent::ImageGenerated {
-                data_url: data_url.clone(),
-                path: path.clone(),
-            },
-            StatusUpdate::Suggestions { suggestions } => ChatEvent::Suggestions {
-                suggestions: suggestions.clone(),
-            },
-            // ReasoningUpdate 和 TurnCost 不推送到前端，返回空 debug 事件
-            StatusUpdate::ReasoningUpdate { .. } | StatusUpdate::TurnCost { .. } => {
-                ChatEvent::Status {
-                    message: String::new(),
-                    level: "debug".into(),
-                }
-            }
-        }
+                "level": if *success { "info" } else { "error" },
+            }),
+        }],
+
+        StatusUpdate::ImageGenerated { data_url, path } => vec![VercelUIStream::DataCustom {
+            id: None,
+            data: json!({
+                "type": "image_generated",
+                "data_url": data_url,
+                "path": path,
+            }),
+        }],
+
+        StatusUpdate::Suggestions { suggestions } => vec![VercelUIStream::DataCustom {
+            id: None,
+            data: json!({ "type": "suggestions", "suggestions": suggestions }),
+        }],
+
+        // ReasoningUpdate 和 TurnCost 不推送到前端
+        StatusUpdate::ReasoningUpdate { .. } | StatusUpdate::TurnCost { .. } => vec![],
     }
 }
 
@@ -351,9 +380,13 @@ impl Channel for TauriChannel {
                 })?;
 
         // 通知前端引擎就绪
-        let _ = self.emit_event(&ChatEvent::ConnectionStatus {
-            connected: true,
-            message: "IronClaw engine ready".into(),
+        let _ = self.emit_stream(&VercelUIStream::DataCustom {
+            id: None,
+            data: json!({
+                "type": "connection_status",
+                "connected": true,
+                "message": "IronClaw engine ready",
+            }),
         });
 
         let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
@@ -372,13 +405,19 @@ impl Channel for TauriChannel {
             tracker.record_assistant_message(&thread_id, &response.content, None, 0, 0);
         }
 
-        let event = ChatEvent::Response {
-            message_id: msg.id.to_string(),
-            content: response.content,
-            thread_id,
-            source: "chat".to_string(),
-        };
-        self.emit_event(&event)
+        self.emit_stream(&VercelUIStream::DataCustom {
+            id: None,
+            data: json!({
+                "type": "response",
+                "message_id": msg.id.to_string(),
+                "content": response.content,
+                "thread_id": thread_id,
+                "source": "chat",
+            }),
+        })?;
+        self.emit_stream(&VercelUIStream::Finish {
+            id: msg.id.to_string(),
+        })
     }
 
     async fn send_status(
@@ -386,49 +425,28 @@ impl Channel for TauriChannel {
         status: StatusUpdate,
         metadata: &serde_json::Value,
     ) -> Result<(), ChannelError> {
+        // routine_triggered → DataCustom
         if metadata
             .get("routine_triggered")
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
         {
-            let event = ChatEvent::RoutineTriggered {
-                thread_id: metadata
-                    .get("thread_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-                fired: metadata.get("fired").and_then(|v| v.as_u64()).unwrap_or(1),
-            };
-            return self.emit_event(&event);
+            return self.emit_stream(&VercelUIStream::DataCustom {
+                id: None,
+                data: json!({
+                    "type": "routine_triggered",
+                    "thread_id": metadata.get("thread_id").and_then(|v| v.as_str()).unwrap_or_default(),
+                    "fired": metadata.get("fired").and_then(|v| v.as_u64()).unwrap_or(1),
+                }),
+            });
         }
 
-        if let StatusUpdate::ApprovalNeeded {
-            request_id,
-            tool_name,
-            description,
-            ..
-        } = &status
-        {
-            let event = ChatEvent::ApprovalNeeded {
-                thread_id: metadata
-                    .get("notify_thread_id")
-                    .and_then(|value| value.as_str())
-                    .or_else(|| metadata.get("thread_id").and_then(|value| value.as_str()))
-                    .unwrap_or_default()
-                    .to_string(),
-                request_id: request_id.clone(),
-                tool_name: tool_name.clone(),
-                description: description.clone(),
-            };
-            return self.emit_event(&event);
-        }
-
-        // TurnCost 不推送到前端，只更新对话追踪器（汇总整轮 Token 消耗）
+        // TurnCost → 只更新对话追踪器，不推送到前端
         if let StatusUpdate::TurnCost {
             input_tokens,
             output_tokens,
             ..
-        } = status
+        } = &status
         {
             if let Some(tracker) = &self.conversation_tracker {
                 let thread_id = metadata
@@ -438,15 +456,14 @@ impl Channel for TauriChannel {
                 tracker.update_last_assistant_tokens(
                     thread_id,
                     "",
-                    input_tokens.min(i32::MAX as u64) as i32,
-                    output_tokens.min(i32::MAX as u64) as i32,
+                    (*input_tokens).min(i32::MAX as u64) as i32,
+                    (*output_tokens).min(i32::MAX as u64) as i32,
                 );
             }
             return Ok(());
         }
 
-        let event = Self::status_to_event(&status);
-        self.emit_event(&event)
+        self.emit_status_stream(&status, metadata)
     }
 
     async fn broadcast(
@@ -454,13 +471,16 @@ impl Channel for TauriChannel {
         _user_id: &str,
         response: OutgoingResponse,
     ) -> Result<(), ChannelError> {
-        let event = ChatEvent::Response {
-            message_id: uuid::Uuid::new_v4().to_string(),
-            content: response.content,
-            thread_id: response.thread_id.unwrap_or_default(),
-            source: "routine".to_string(),
-        };
-        self.emit_event(&event)
+        self.emit_stream(&VercelUIStream::DataCustom {
+            id: None,
+            data: json!({
+                "type": "response",
+                "message_id": uuid::Uuid::new_v4().to_string(),
+                "content": response.content,
+                "thread_id": response.thread_id.unwrap_or_default(),
+                "source": "routine",
+            }),
+        })
     }
 
     async fn health_check(&self) -> Result<(), ChannelError> {
@@ -469,9 +489,13 @@ impl Channel for TauriChannel {
     }
 
     async fn shutdown(&self) -> Result<(), ChannelError> {
-        let _ = self.emit_event(&ChatEvent::ConnectionStatus {
-            connected: false,
-            message: "IronClaw engine shutting down".into(),
+        let _ = self.emit_stream(&VercelUIStream::DataCustom {
+            id: None,
+            data: json!({
+                "type": "connection_status",
+                "connected": false,
+                "message": "IronClaw engine shutting down",
+            }),
         });
         Ok(())
     }
@@ -485,129 +509,110 @@ impl Channel for TauriChannel {
 mod tests {
     use super::*;
 
-    /// 验证所有 StatusUpdate 变体都能正确映射为 ChatEvent，不会 panic。
+    /// Helper: build a default metadata value (empty JSON object).
+    fn empty_meta() -> serde_json::Value {
+        json!({})
+    }
+
+    /// Helper: build metadata with _tool_call_id injected.
+    fn tool_meta(tool_call_id: &str) -> serde_json::Value {
+        json!({ "_tool_call_id": tool_call_id, "_tool_arguments": {"foo": "bar"} })
+    }
+
+    /// 验证所有 StatusUpdate 变体都能正确映射为 VercelUIStream 且序列化不 panic。
     #[test]
-    fn test_status_to_event_covers_all_variants() {
-        let cases: Vec<StatusUpdate> = vec![
-            StatusUpdate::Thinking("processing...".into()),
-            StatusUpdate::ToolStarted {
-                name: "shell".into(),
-            },
-            StatusUpdate::ToolCompleted {
-                name: "shell".into(),
-                success: true,
-                error: None,
-                parameters: None,
-            },
-            StatusUpdate::ToolResult {
-                name: "shell".into(),
-                preview: "output...".into(),
-            },
-            StatusUpdate::StreamChunk("hello ".into()),
-            StatusUpdate::Status("ready".into()),
-            StatusUpdate::JobStarted {
-                job_id: "j-1".into(),
-                title: "Build".into(),
-                browse_url: "http://localhost".into(),
-            },
-            StatusUpdate::ApprovalNeeded {
-                request_id: "r-1".into(),
-                tool_name: "rm".into(),
-                description: "delete file".into(),
-                parameters: serde_json::json!({}),
-                allow_always: true,
-            },
-            StatusUpdate::AuthRequired {
-                extension_name: "github".into(),
-                instructions: Some("click link".into()),
-                auth_url: None,
-                setup_url: None,
-            },
-            StatusUpdate::AuthCompleted {
-                extension_name: "github".into(),
-                success: true,
-                message: "ok".into(),
-            },
-            StatusUpdate::ImageGenerated {
-                data_url: "data:image/png;base64,abc".into(),
-                path: Some("/tmp/img.png".into()),
-            },
-            StatusUpdate::Suggestions {
-                suggestions: vec!["try this".into()],
-            },
-            StatusUpdate::ReasoningUpdate {
-                narrative: "Choosing search tool".into(),
-                decisions: vec![],
-            },
-            StatusUpdate::TurnCost {
-                input_tokens: 100,
-                output_tokens: 50,
-                cost_usd: "$0.0010".into(),
-            },
+    fn test_status_to_stream_covers_all_variants() {
+        let cases: Vec<(StatusUpdate, serde_json::Value)> = vec![
+            (StatusUpdate::Thinking("processing...".into()), empty_meta()),
+            (StatusUpdate::ToolStarted { name: "shell".into() }, tool_meta("tc-1")),
+            (StatusUpdate::ToolCompleted { name: "shell".into(), success: true, error: None, parameters: None }, tool_meta("tc-1")),
+            (StatusUpdate::ToolCompleted { name: "shell".into(), success: false, error: Some("fail".into()), parameters: None }, tool_meta("tc-2")),
+            (StatusUpdate::ToolResult { name: "shell".into(), preview: "output...".into() }, tool_meta("tc-1")),
+            (StatusUpdate::StreamChunk("hello ".into()), empty_meta()),
+            (StatusUpdate::Status("ready".into()), empty_meta()),
+            (StatusUpdate::JobStarted { job_id: "j-1".into(), title: "Build".into(), browse_url: "http://localhost".into() }, empty_meta()),
+            (StatusUpdate::ApprovalNeeded { request_id: "r-1".into(), tool_name: "rm".into(), description: "delete file".into(), parameters: json!({}), allow_always: true }, empty_meta()),
+            (StatusUpdate::AuthRequired { extension_name: "github".into(), instructions: Some("click link".into()), auth_url: None, setup_url: None }, empty_meta()),
+            (StatusUpdate::AuthCompleted { extension_name: "github".into(), success: true, message: "ok".into() }, empty_meta()),
+            (StatusUpdate::ImageGenerated { data_url: "data:image/png;base64,abc".into(), path: Some("/tmp/img.png".into()) }, empty_meta()),
+            (StatusUpdate::Suggestions { suggestions: vec!["try this".into()] }, empty_meta()),
+            (StatusUpdate::ReasoningUpdate { narrative: "Choosing search tool".into(), decisions: vec![] }, empty_meta()),
+            (StatusUpdate::TurnCost { input_tokens: 100, output_tokens: 50, cost_usd: "$0.0010".into() }, empty_meta()),
         ];
 
-        for status in &cases {
-            let event = TauriChannel::status_to_event(status);
-            // 验证序列化不会失败
-            let json = serde_json::to_string(&event).expect("ChatEvent should serialize");
-            assert!(!json.is_empty());
+        for (status, meta) in &cases {
+            let events = map_status_to_stream(&status, &meta);
+            // 每个事件都应该能成功序列化
+            for event in &events {
+                serde_json::to_value(event).expect("should serialize");
+            }
         }
     }
 
-    /// 验证 ChatEvent 序列化格式与前端 TypeScript 类型兼容。
+    /// 验证 DataCustom response 事件格式与前端 TypeScript 类型兼容。
     #[test]
-    fn test_chat_event_serialization_format() {
-        let event = ChatEvent::Response {
-            message_id: "msg-1".into(),
-            content: "Hello".into(),
-            thread_id: "t-1".into(),
-            source: "chat".into(),
+    fn test_response_event_serialization() {
+        let event = VercelUIStream::DataCustom {
+            id: None,
+            data: json!({
+                "type": "response",
+                "message_id": "msg-1",
+                "content": "Hello",
+                "thread_id": "t-1",
+                "source": "chat",
+            }),
         };
-        let json: serde_json::Value = serde_json::to_value(&event).unwrap();
-        assert_eq!(json["type"], "response");
-        assert_eq!(json["message_id"], "msg-1");
-        assert_eq!(json["content"], "Hello");
-        assert_eq!(json["thread_id"], "t-1");
-        assert_eq!(json["source"], "chat");
+        let json: serde_json::Value = serde_json::to_value(&event).expect("should serialize");
+        assert_eq!(json["type"], "data-custom");
+        assert_eq!(json["data"]["type"], "response");
+        assert_eq!(json["data"]["message_id"], "msg-1");
+        assert_eq!(json["data"]["content"], "Hello");
+        assert_eq!(json["data"]["thread_id"], "t-1");
+        assert_eq!(json["data"]["source"], "chat");
     }
 
-    /// 验证 thinking 事件格式。
+    /// 验证 reasoning-delta 事件格式。
     #[test]
-    fn test_thinking_event_format() {
-        let event = ChatEvent::Thinking {
-            message: "analyzing...".into(),
-        };
-        let json: serde_json::Value = serde_json::to_value(&event).unwrap();
-        assert_eq!(json["type"], "thinking");
-        assert_eq!(json["message"], "analyzing...");
+    fn test_thinking_maps_to_reasoning_delta() {
+        let events = map_status_to_stream(
+            &StatusUpdate::Thinking("analyzing...".into()),
+            &empty_meta(),
+        );
+        assert_eq!(events.len(), 1);
+        let json = serde_json::to_value(&events[0]).expect("should serialize");
+        assert_eq!(json["type"], "reasoning-delta");
+        assert_eq!(json["delta"], "analyzing...");
     }
 
-    /// 验证 error 事件格式。
+    /// 验证 error 事件使用 Vercel protocol Error 类型。
     #[test]
     fn test_error_event_format() {
-        let event = ChatEvent::Error {
-            message: "timeout".into(),
-            code: Some("TIMEOUT".into()),
+        let event = VercelUIStream::Error {
+            error_text: "timeout".into(),
         };
-        let json: serde_json::Value = serde_json::to_value(&event).unwrap();
+        let json: serde_json::Value = serde_json::to_value(&event).expect("should serialize");
         assert_eq!(json["type"], "error");
-        assert_eq!(json["message"], "timeout");
-        assert_eq!(json["code"], "TIMEOUT");
+        assert_eq!(json["errorText"], "timeout");
     }
 
-    /// 验证 connection_status 事件格式。
+    /// 验证 connection_status 通过 DataCustom 发送。
     #[test]
-    fn test_connection_status_event_format() {
-        let event = ChatEvent::ConnectionStatus {
-            connected: true,
-            message: "ready".into(),
+    fn test_connection_status_as_data_custom() {
+        let event = VercelUIStream::DataCustom {
+            id: None,
+            data: json!({
+                "type": "connection_status",
+                "connected": true,
+                "message": "ready",
+            }),
         };
-        let json: serde_json::Value = serde_json::to_value(&event).unwrap();
-        assert_eq!(json["type"], "connection_status");
-        assert_eq!(json["connected"], true);
+        let json: serde_json::Value = serde_json::to_value(&event).expect("should serialize");
+        assert_eq!(json["type"], "data-custom");
+        assert_eq!(json["data"]["type"], "connection_status");
+        assert_eq!(json["data"]["connected"], true);
     }
 
-    /// 安全测试：验证 ToolCompleted 失败时 error 字段不包含敏感信息模式。
+    /// 安全测试：验证 ToolCompleted 失败时映射结果不包含 parameters。
     #[test]
     fn test_security_tool_completed_error_no_sensitive_leak() {
         let status = StatusUpdate::ToolCompleted {
@@ -616,59 +621,52 @@ mod tests {
             error: Some("db connection failed".into()),
             parameters: Some(r#"{"value": "[REDACTED]"}"#.into()),
         };
-        let event = TauriChannel::status_to_event(&status);
-        let json = serde_json::to_string(&event).unwrap();
-        // parameters 不应出现在前端事件中（TauriChannel 不转发 parameters）
-        assert!(!json.contains("REDACTED"));
+        let events = map_status_to_stream(&status, &tool_meta("tc-1"));
+        assert_eq!(events.len(), 1);
+        let json = serde_json::to_string(&events[0]).expect("should serialize");
+        assert!(!json.contains("REDACTED"), "parameters should not be in emitted event");
     }
 
-    /// 契约测试：JobStarted → job_status 事件，字段与前端 TypeScript 类型匹配。
-    ///
-    /// 前端类型：
-    /// ```typescript
-    /// { type: 'job_status'; job_id: string; title: string; status: string }
-    /// ```
+    /// 契约测试：JobStarted → data-custom job_status 事件。
     #[test]
-    fn test_contract_job_started_maps_to_job_status_event() {
+    fn test_contract_job_started_maps_to_job_status() {
         let status = StatusUpdate::JobStarted {
             job_id: "550e8400-e29b-41d4-a716-446655440000".into(),
             title: "分析代码库".into(),
             browse_url: "http://localhost".into(),
         };
-        let event = TauriChannel::status_to_event(&status);
-        let json = serde_json::to_value(&event).expect("should serialize");
-
-        assert_eq!(json["type"], "job_status");
-        assert_eq!(json["job_id"], "550e8400-e29b-41d4-a716-446655440000");
-        assert_eq!(json["title"], "分析代码库");
-        assert_eq!(json["status"], "in_progress");
-
-        let obj = json.as_object().expect("should be object");
-        assert_eq!(
-            obj.len(),
-            4,
-            "job_status should have exactly 4 fields (type + 3)"
-        );
+        let events = map_status_to_stream(&status, &empty_meta());
+        assert_eq!(events.len(), 1);
+        let json = serde_json::to_value(&events[0]).expect("should serialize");
+        assert_eq!(json["data"]["type"], "job_status");
+        assert_eq!(json["data"]["job_id"], "550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(json["data"]["title"], "分析代码库");
+        assert_eq!(json["data"]["status"], "in_progress");
     }
 
-    /// 安全审计：job_status 事件不应泄露 user_id 或内部字段。
+    /// 安全审计：job_status 事件不应泄露 user_id 或 browse_url。
     #[test]
     fn test_audit_job_status_no_sensitive_fields() {
         let status = StatusUpdate::JobStarted {
             job_id: "job-001".into(),
             title: "任务标题".into(),
-            browse_url: "http://localhost".into(),
+            browse_url: "http://localhost/secret".into(),
         };
-        let event = TauriChannel::status_to_event(&status);
-        let json_str = serde_json::to_string(&event).expect("should serialize");
+        let events = map_status_to_stream(&status, &empty_meta());
+        assert_eq!(events.len(), 1);
+        let json_str = serde_json::to_string(&events[0]).expect("should serialize");
+        assert!(!json_str.contains("user_id"), "user_id should not be exposed");
+        assert!(!json_str.contains("browse_url"), "browse_url should not be forwarded");
+        assert!(!json_str.contains("secret"), "browse_url value should not leak");
+    }
 
-        assert!(
-            !json_str.contains("user_id"),
-            "user_id should not be exposed"
-        );
-        assert!(
-            !json_str.contains("browse_url"),
-            "browse_url should not be forwarded to frontend"
-        );
+    /// 验证 ToolStarted 无 tool_call_id 时返回空列表（不生成空 ID 的事件）。
+    #[test]
+    fn test_tool_started_without_tool_call_id_is_noop() {
+        let status = StatusUpdate::ToolStarted {
+            name: "shell".into(),
+        };
+        let events = map_status_to_stream(&status, &empty_meta());
+        assert!(events.is_empty(), "ToolStarted without tool_call_id should produce no events");
     }
 }

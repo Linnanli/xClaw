@@ -2,7 +2,7 @@
 //!
 //! 覆盖维度：
 //! - 单元测试（正常路径 + 错误路径）
-//! - 契约测试（ChatEvent 格式与前端 TypeScript 类型匹配）
+//! - 契约测试（VercelUIStream 格式与前端 TypeScript 类型匹配）
 //! - 安全审计测试（敏感信息不泄露）
 
 #[cfg(test)]

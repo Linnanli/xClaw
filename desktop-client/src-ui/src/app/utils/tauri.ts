@@ -352,8 +352,6 @@ export const approvalApi = {
     invokeTauri('ic_approve_tool', { requestId, threadId }),
   denyOperation: (requestId: string, threadId: string = 'default') =>
     invokeTauri('ic_deny_tool', { requestId, threadId }),
-  submitApprovalTicket: (requestId: string, toolName: string, content: string, threadId: string) =>
-    invokeTauri<string>('submit_approval_ticket', { requestId, toolName, content, threadId }),
 };
 
 // ============================================================================
@@ -369,6 +367,17 @@ export interface Tool {
 
 export const toolApi = {
   getEnabledTools: async (): Promise<Tool[]> => [],
+};
+
+// ============================================================================
+// File Operations — Undo / Open
+// ============================================================================
+
+export const fileOpsApi = {
+  undoFileEdit: (path: string, oldString: string, newString: string, count: number) =>
+    invokeTauri<string>('ic_undo_file_edit', { path, oldString, newString, count }),
+  openFileAtLine: (path: string, line?: number) =>
+    invokeTauri<void>('ic_open_file_at_line', { path, line: line ?? null }),
 };
 
 // ============================================================================

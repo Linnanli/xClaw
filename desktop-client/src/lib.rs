@@ -23,6 +23,7 @@ pub mod managed_policy;
 pub mod model_switch;
 pub mod state;
 pub mod tauri_channel;
+pub mod vercel_ui_protocol;
 
 // ── 测试模块（仅在测试时编译）──────────────────────────────────────
 #[cfg(test)]
@@ -171,6 +172,10 @@ macro_rules! all_tauri_commands {
             desktop_client::ipc::ic_import_workspace,
             desktop_client::ipc::ic_get_thread_workspace,
             desktop_client::ipc::ic_list_sandbox_workspaces,
+            // ── 文件操作（Undo / Open）────────────────────────
+            desktop_client::ipc::ic_undo_file_edit,
+            desktop_client::ipc::ic_open_file_at_line,
+            
             // ── Plan Mode / Fork ────────────────────────────────
             desktop_client::ipc::ic_toggle_plan_mode,
             desktop_client::ipc::ic_approve_plan,

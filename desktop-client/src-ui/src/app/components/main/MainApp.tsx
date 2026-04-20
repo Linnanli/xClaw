@@ -11,6 +11,7 @@ import { AppSidebar, type NavItem } from './AppSidebar';
 import { AppHeader } from './AppHeader';
 import { ChatTabTauri } from '../tabs/ChatTabTauri';
 import { LogsTab } from '../tabs/LogsTab';
+
 import { RoutinesTab } from '../tabs/RoutinesTab';
 import { SettingsModal } from './SettingsModal';
 import { JobsPanel } from './JobsPanel';
@@ -26,7 +27,7 @@ import { EngineReadyProvider, useEngineReady } from '../../hooks/useEngineReady'
 import { useRunningJobs } from '../../hooks/useRunningJobs';
 
 const NAV_TITLES: Record<NavItem, string> = {
-  chat: '聊天',
+  chat: '工作区',
   logs: '日志',
   routines: '定时任务',
   settings: '设置',
@@ -120,6 +121,11 @@ function MainAppContent() {
     }
   };
 
+  const handleImportFolder = (threadId: string, _path: string) => {
+    selectThread(threadId);
+    setActiveNav('chat');
+  };
+
   const renderContent = () => {
     switch (activeNav) {
       case 'chat':
@@ -147,6 +153,7 @@ function MainAppContent() {
         selectedThreadId={selectedThreadId}
         onThreadSelect={selectThread}
         onNewChat={handleNewChat}
+        onImportFolder={handleImportFolder}
         refreshKey={sidebarRefreshKey}
       />
       <SidebarInset>

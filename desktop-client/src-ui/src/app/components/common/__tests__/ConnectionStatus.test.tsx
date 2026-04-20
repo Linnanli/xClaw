@@ -20,9 +20,9 @@ vi.mock('../../../contexts/ThemeContext', () => ({
   useTheme: () => ({ theme: 'light' }),
 }));
 
-// 触发 chat-event 的辅助函数
+// 触发 chat-stream 的辅助函数
 function emitChatEvent(payload: unknown) {
-  const handlers = mockListenHandlers['chat-event'] ?? [];
+  const handlers = mockListenHandlers['chat-stream'] ?? [];
   handlers.forEach((h) => h({ payload }));
 }
 
@@ -48,7 +48,7 @@ describe('ConnectionStatus', () => {
     render(<ConnectionStatus />);
 
     await act(async () => {
-      emitChatEvent({ type: 'response', content: 'hello' });
+      emitChatEvent({ type: 'data-custom', data: { type: 'response', content: 'hello' } });
     });
 
     expect(screen.getByText('引擎运行中')).toBeInTheDocument();
@@ -59,7 +59,7 @@ describe('ConnectionStatus', () => {
     render(<ConnectionStatus />);
 
     await act(async () => {
-      emitChatEvent({ Error: { message: '启动失败', code: 'ENGINE_STARTUP_FAILED' } });
+      emitChatEvent({ type: 'error', errorText: '启动失败' });
     });
 
     expect(screen.getByText('引擎异常')).toBeInTheDocument();
@@ -80,7 +80,7 @@ describe('ConnectionStatus', () => {
     render(<ConnectionStatus />);
 
     await act(async () => {
-      emitChatEvent({ type: 'response' });
+      emitChatEvent({ type: 'data-custom', data: { type: 'response' } });
     });
 
     await act(async () => {
@@ -90,10 +90,10 @@ describe('ConnectionStatus', () => {
     expect(screen.getByText('引擎运行中')).toBeInTheDocument();
   });
 
-  it('应注册 chat-event 监听器', async () => {
+  it('应注册 chat-stream 监听器', async () => {
     const { listen } = await import('@tauri-apps/api/event');
     render(<ConnectionStatus />);
-    expect(listen).toHaveBeenCalledWith('chat-event', expect.any(Function));
+    expect(listen).toHaveBeenCalledWith('chat-stream', expect.any(Function));
   });
 
   it('卸载时应调用 unlisten 清理', async () => {

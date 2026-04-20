@@ -265,7 +265,7 @@ export function useAiChatTauri(options: UseAiChatTauriOptions) {
         tracing.debug('Setting up chat event listener');
 
         // 监听聊天事件
-        const unlisten = await listen<ChatEvent>('chat-event', (event) => {
+        const unlisten = await listen<ChatEvent>('chat-stream', (event) => {
           if (mounted) {
             handleChatEventRef.current(event.payload);
           }

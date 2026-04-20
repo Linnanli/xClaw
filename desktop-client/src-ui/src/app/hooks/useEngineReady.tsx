@@ -24,10 +24,15 @@ export function EngineReadyProvider({ children }: { children: ReactNode }) {
   const [readyKey, setReadyKey] = useState(0);
 
   useEffect(() => {
-    const unlistenPromise = listen<{ type: string; connected?: boolean }>(
-      'chat-event',
+    const unlistenPromise = listen<{ type: string; data?: { type?: string; connected?: boolean } }>(
+      'chat-stream',
       (event) => {
-        if (event.payload.type === 'connection_status' && event.payload.connected) {
+        // DataCustom connection_status: { type: "data-custom", data: { type: "connection_status", connected: true } }
+        if (
+          event.payload.type === 'data-custom' &&
+          event.payload.data?.type === 'connection_status' &&
+          event.payload.data?.connected
+        ) {
           setReady(true);
           setReadyKey((k) => k + 1);
         }

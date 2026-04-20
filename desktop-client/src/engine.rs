@@ -36,7 +36,8 @@ use crate::managed_policy::{
 use crate::model_switch::ModelSwitchProvider;
 use crate::safety_bridge::SafetyBridge;
 use crate::state::{AppState, EngineState};
-use crate::tauri_channel::{ChatEvent, TauriChannel};
+use crate::tauri_channel::TauriChannel;
+use crate::vercel_ui_protocol::VercelUIStream;
 
 const MANAGED_ALLOWED_SKILLS_SETTING_KEY: &str = "desktop_managed_allowed_skills";
 const MANAGED_ALLOWED_EXTENSIONS_SETTING_KEY: &str = "desktop_managed_allowed_extensions";
@@ -50,7 +51,7 @@ const DISABLED_EXTENSIONS_SETTING_KEY: &str = "desktop_disabled_extensions";
 ///
 /// # Errors
 ///
-/// 返回 `anyhow::Error`，调用方应捕获并通过 `ChatEvent::Error` 通知前端。
+/// 返回 `anyhow::Error`，调用方应捕获并通过 `VercelUIStream::Error` 通知前端。
 pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> {
     tracing::info!("Starting IronClaw embedded engine...");
 
@@ -436,10 +437,14 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
 
     // 通知前端引擎已就绪
     let _ = app_handle.emit(
-        "chat-event",
-        ChatEvent::ConnectionStatus {
-            connected: true,
-            message: "IronClaw engine ready".to_string(),
+        "chat-stream",
+        VercelUIStream::DataCustom {
+            id: None,
+            data: serde_json::json!({
+                "type": "connection_status",
+                "connected": true,
+                "message": "IronClaw engine ready",
+            }),
         },
     );
 
@@ -534,10 +539,9 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     if let Err(e) = agent.run().await {
         tracing::error!(error = %e, "Agent exited with error");
         let _ = app_handle.emit(
-            "chat-event",
-            ChatEvent::Error {
-                message: crate::error::friendly_engine_error(&e.to_string()),
-                code: Some("ENGINE_ERROR".into()),
+            "chat-stream",
+            VercelUIStream::Error {
+                error_text: crate::error::friendly_engine_error(&e.to_string()),
             },
         );
         return Err(e.into());

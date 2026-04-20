@@ -111,8 +111,9 @@ export function JobsPanel({ open, onOpenChange, onAskJobResult, onJobClick }: Jo
     };
 
     const JOB_EVENT_TYPES = new Set(['job_status', 'job_started', 'job_updated', 'job_completed', 'job_failed']);
-    const unlistenPromise = listen<{ type?: string }>('chat-event', (event) => {
-      if (JOB_EVENT_TYPES.has(event.payload?.type ?? '')) {
+    const unlistenPromise = listen<{ type?: string; data?: { type?: string } }>('chat-stream', (event) => {
+      // DataCustom job events: { type: "data-custom", data: { type: "job_status", ... } }
+      if (event.payload?.type === 'data-custom' && JOB_EVENT_TYPES.has(event.payload.data?.type ?? '')) {
         scheduleRefresh();
       }
     });

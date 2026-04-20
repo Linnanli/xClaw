@@ -125,4 +125,20 @@ impl LlmProvider for ModelSwitchProvider {
         let provider = self.current_inner();
         provider.complete_with_tools(request).await
     }
+
+    fn supports_streaming(&self) -> bool {
+        self.current_inner().supports_streaming()
+    }
+
+    async fn complete_with_tools_stream(
+        &self,
+        mut request: ToolCompletionRequest,
+        chunk_tx: tokio::sync::mpsc::UnboundedSender<String>,
+    ) -> Result<ToolCompletionResponse, ironclaw::error::LlmError> {
+        if request.model.is_none() {
+            request.model = self.read_override();
+        }
+        let provider = self.current_inner();
+        provider.complete_with_tools_stream(request, chunk_tx).await
+    }
 }

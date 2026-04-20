@@ -148,7 +148,7 @@ export function setupCypressTauriMock(): void {
 
   win.__XCLAW_CYPRESS_TAURI_EMIT_CHAT_EVENT__ = (payload: Record<string, unknown>) => {
     win.__TAURI_INTERNALS__?.invoke?.('plugin:event|emit', {
-      event: 'chat-event',
+      event: 'chat-stream',
       payload,
     });
   };
