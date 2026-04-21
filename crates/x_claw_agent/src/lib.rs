@@ -11,6 +11,7 @@
 //! See [`../UPSTREAM_BASELINE.md`](../UPSTREAM_BASELINE.md) for the chosen
 //! upstream commit and porting log.
 
+pub mod compaction;
 pub mod context_monitor;
 pub mod hooks;
 pub mod messages;
