@@ -17,6 +17,7 @@ pub mod messages;
 pub mod session;
 pub mod submission;
 pub mod task;
+pub mod traits;
 pub mod undo;
 
 pub use hooks::{
@@ -31,6 +32,7 @@ pub use messages::{
     ToolResult, UnsupportedParam, generate_tool_call_id, sanitize_tool_messages,
     strip_unsupported_completion_params, strip_unsupported_tool_params,
 };
+pub use traits::{HostError, LlmCompleter, WorkspaceWriter};
 
 /// Crate version string, exposed so downstream crates can surface the baseline
 /// to operators without reparsing `Cargo.toml`.
