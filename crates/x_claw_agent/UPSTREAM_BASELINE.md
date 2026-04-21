@@ -40,8 +40,92 @@ Step C/D must **treat the ironclaw `agent/` tree as the source of truth** for wh
 
 The "upstream rebase" story (Step K) therefore reduces to: "when claw-code upstream changes, cherry-pick semantic improvements into `x_claw_agent`" rather than "`subtree pull` blindly."
 
+## Upstream capability audit (2026-04-21, commit `610b3470`)
+
+Half-day scan of `claw-code/rust/crates/runtime/src/*.rs` against
+`desktop-client/ironclaw/src/agent/*.rs`, looking for upstream-only capabilities
+worth porting into `x_claw_agent` before Step D.
+
+### Upstream-only modules (ironclaw does not have equivalents)
+
+| Upstream module | Lines | Purpose | Relevance to ironclaw |
+|---|---|---|---|
+| `bash_validation.rs` | 1004 | Bash command denylist + arg validation before exec | **High** — ironclaw currently delegates command safety to DockerSandbox; a pre-exec textual validator is complementary |
+| `mcp*` (8 files, ~6500) | — | Full MCP client + server + lifecycle + tool bridge | **Low for Phase 3** — MCP integration already tracked separately; not in agent refactor scope |
+| `permissions.rs` + `permission_enforcer.rs` | 1268 | 5-level permission modes (ReadOnly / WorkspaceWrite / DangerFullAccess / Prompt / Allow) + static allow/deny rules + prompt override | **Medium** — ironclaw approval flow is binary (approve/deny); upstream's mode model is richer but unclear whether product wants it now |
+| `policy_engine.rs` | 581 | Multi-lane merge / reconcile / escalate policy with green-level conditions | **None** — upstream-specific worktree orchestration; does not match ironclaw's single-workspace flow |
+| `green_contract.rs` / `stale_base.rs` / `stale_branch.rs` | ~1100 | Lane freshness + green-light contracts | **None** — same lane-orchestration scope as above |
+| `sandbox.rs` | 385 | Linux namespace/netns isolation descriptors | **Low** — ironclaw already has DockerSandbox which is a stronger primitive |
+| `bootstrap.rs` / `worker_boot.rs` | ~1800 | CLI launch sequencing | **None** — ironclaw has its own `engine_startup_tests` + `main.rs` path |
+| `task_packet.rs` / `task_registry.rs` / `team_cron_registry.rs` | ~1400 | Task packet format + cron-like scheduling | **Overlap** — ironclaw has `routine.rs` + `scheduler.rs` + `routine_engine.rs` serving the same role |
+| `recovery_recipes.rs` | 633 | Recipe-driven recovery playbooks | **Medium** — possibly useful for `self_repair.rs`, needs deeper look |
+| `oauth.rs` | 603 | OAuth device flow | **Low** — provider-specific; not an agent-layer concern |
+
+### Ironclaw-only modules (upstream has no equivalent)
+
+| Ironclaw module | Lines | Purpose |
+|---|---|---|
+| `agent_loop.rs` | 1908 | Channel-driven main loop with `AgentDeps`, workspace, DB, channels |
+| `dispatcher.rs` | 3001 | Tool dispatch + approval + parameter redaction |
+| `thread_ops.rs` | 2572 | Thread/session persistence + undo + approval replay |
+| `routine.rs` + `routine_engine.rs` | 4140 | Cron + reactive routine engine |
+| `self_repair.rs` | 856 | Stuck-job + broken-tool repair |
+| `cost_guard.rs` | 892 | Per-user cost cap enforcement |
+| `heartbeat.rs` | 971 | Proactive heartbeat |
+| `submission.rs` | 870 | Submission parser (slash commands etc.) |
+| `agentic_loop.rs` | 836 | Inner LLM → tool → LLM loop with `LoopDelegate` trait |
+| `session_manager.rs` | 1105 | Multi-user session lifecycle |
+| `undo.rs` | 376 | Checkpoint-based undo |
+| `attachments.rs` | 307 | Attachment handling |
+| `context_monitor.rs` | 236 | Context budget tracking |
+| `router.rs` | 200 | Channel message intent routing |
+
+### Overlapping concepts with divergent implementations
+
+| Concept | Upstream | Ironclaw | Verdict |
+|---|---|---|---|
+| Session/message model | `session.rs` + `ContentBlock { Text, ToolUse, ToolResult }` | `session.rs` + `Session > Thread > Turn` tree, uses `ChatMessage`/`ToolCall` | Ironclaw richer; keep ironclaw's |
+| Compaction | `compact.rs` 825 lines | `compaction.rs` 899 lines | Both have it; ironclaw integrated with `ContextMonitor` — keep ironclaw's |
+| Conversation loop | `conversation.rs` 1811 lines, `ApiClient` + `ToolExecutor` traits | `agent_loop.rs` + `agentic_loop.rs` + `dispatcher.rs`, `LoopDelegate` trait | Different shape; ironclaw's is channel-integrated |
+| Hooks | `hooks.rs` 1116 lines, **subprocess hooks** (`PreToolUse`/`PostToolUse` exec shell commands via `RuntimeHookConfig`) | `src/hooks/HookRegistry` (in-process Rust hooks) | **Different concept**; upstream is user-extension points, ironclaw is internal hooks. Phase 3 plan's `SafetyHook`/`ApprovalGate` is a third concept (trait seam for crate split) |
+
+### Decision
+
+**Treat ironclaw `agent/` as the source of truth; do NOT attempt any
+`git subtree pull`-style sync of upstream `runtime/` into `x_claw_agent`.**
+
+Rationale:
+
+1. Divergence is structural, not incidental. Ironclaw has ~14 modules upstream
+   does not have; upstream has ~15 modules ironclaw does not need. Even in
+   overlapping concepts (session, compaction, conversation) the shape differs.
+2. Upstream `runtime` mixes application-layer concerns (CLI bootstrap, MCP
+   servers, OAuth, worktree policy) into the crate. These are not wanted in
+   `x_claw_agent` by design.
+3. Only three upstream modules are genuinely portable candidates, and all are
+   **optional enhancements**, not Phase 3 blockers:
+   - `bash_validation.rs` — pre-exec textual bash denylist. **Defer** to a
+     follow-up safety story; DockerSandbox already handles the hard cases.
+   - `permissions.rs` / `permission_enforcer.rs` — 5-level permission modes.
+     **Defer** until product confirms richer modes are wanted; current
+     binary approval works.
+   - `recovery_recipes.rs` — recipe-driven recovery. **Revisit** when
+     `self_repair.rs` next needs a refactor.
+
+### Revised Phase 3 porting strategy (supersedes 05-phase3-agent-extraction.md Step D/K)
+
+- **Step D**: move ironclaw `agent/*` into `crates/x_claw_agent/src/runtime/`
+  and `crates/ironclaw_routines/` along the split already documented in the
+  plan, **not** from upstream. Insert hook seams (`SafetyHook`,
+  `SandboxExecutor`, `SecretProvider`, `ApprovalGate`) at the trait boundary
+  defined in Step C.
+- **Step K**: "rebase drill" becomes a **semantic cherry-pick drill**: pick
+  one upstream improvement (candidate: `bash_validation.rs`), port it into
+  `x_claw_agent` as a new feature module, and verify the porting log mechanism
+  works. Drop the `git subtree pull` language.
+
 ## Porting log
 
 | Date | Upstream commit | What | Notes |
 |---|---|---|---|
-| 2026-04-21 | `610b3470` | Initial baseline | Empty scaffold; no runtime code ported yet. |
+| 2026-04-21 | `610b3470` | Initial baseline + capability audit | Empty scaffold; no runtime code ported yet. Decision: ironclaw is source of truth; upstream is a shape reference. |
