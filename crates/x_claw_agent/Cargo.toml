@@ -1,0 +1,20 @@
+[package]
+name = "x_claw_agent"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+description = "Agent runtime fork of claw-code with x-claw specific Hook trait boundary"
+authors = ["x-claw contributors"]
+license = "MIT OR Apache-2.0"
+publish = false
+
+[package.metadata.dist]
+dist = false
+
+[lib]
+name = "x_claw_agent"
+path = "src/lib.rs"
+
+[dependencies]
+# Shell 骨架暂无运行时依赖。Step C/D 搬运 claw-code runtime 代码时再按需加入
+# tokio / serde / async-trait / futures / claw-code-api / claw-code-tools。
