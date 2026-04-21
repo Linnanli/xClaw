@@ -23,6 +23,11 @@ serde_json = "1"
 thiserror = "1"
 # messages 模块依赖
 tracing = "0.1"
+# session / undo / task 依赖
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
+# session 的 truncate_preview helper
+ironclaw_common = { path = "../../desktop-client/ironclaw/crates/ironclaw_common", version = "0.1.0" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }

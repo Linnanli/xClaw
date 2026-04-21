@@ -11996,11 +11996,14 @@ name = "x_claw_agent"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
+ "ironclaw_common",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

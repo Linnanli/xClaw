@@ -11,8 +11,13 @@
 //! See [`../UPSTREAM_BASELINE.md`](../UPSTREAM_BASELINE.md) for the chosen
 //! upstream commit and porting log.
 
+pub mod context_monitor;
 pub mod hooks;
 pub mod messages;
+pub mod session;
+pub mod submission;
+pub mod task;
+pub mod undo;
 
 pub use hooks::{
     ApprovalError, ApprovalGate, ApprovalOutcome, ApprovalRequest, AutoApproveGate, DenyAllGate,
