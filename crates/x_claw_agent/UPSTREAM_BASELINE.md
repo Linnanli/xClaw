@@ -129,3 +129,4 @@ Rationale:
 | Date | Upstream commit | What | Notes |
 |---|---|---|---|
 | 2026-04-21 | `610b3470` | Initial baseline + capability audit | Empty scaffold; no runtime code ported yet. Decision: ironclaw is source of truth; upstream is a shape reference. |
+| 2026-04-21 | n/a (internal) | Step D-0: move message domain types | Moved `Role`/`ContentPart`/`ImageUrl`/`ChatMessage` + `ToolCall`/`ToolResult`/`ToolDefinition` + `Completion(Tool)Request/Response`/`FinishReason`/`ModelMetadata` + `sanitize_tool_messages`/`UnsupportedParam`/`strip_unsupported_*` (ironclaw `llm/provider.rs` lines 1-355 + 491-580 + tests) into `x_claw_agent::messages`. `LlmProvider` trait stays in ironclaw (requires `rust_decimal`, `LlmError`). Ironclaw's `llm/provider.rs` now just re-exports. 17 tests migrated, all green. `cargo build --workspace` 0 errors / 0 warnings. 665 ironclaw `llm::` unit tests still green. |

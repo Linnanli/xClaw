@@ -12,12 +12,19 @@
 //! upstream commit and porting log.
 
 pub mod hooks;
+pub mod messages;
 
 pub use hooks::{
     ApprovalError, ApprovalGate, ApprovalOutcome, ApprovalRequest, AutoApproveGate, DenyAllGate,
     InMemorySecrets, NoopSafetyHook, NoopSandboxExecutor, SafetyDecision, SafetyError, SafetyHook,
     SandboxError, SandboxExecOutput, SandboxExecRequest, SandboxExecutor, SecretError,
     SecretProvider, SecretString,
+};
+pub use messages::{
+    ChatMessage, CompletionRequest, CompletionResponse, ContentPart, FinishReason, ImageUrl,
+    ModelMetadata, Role, ToolCall, ToolCompletionRequest, ToolCompletionResponse, ToolDefinition,
+    ToolResult, UnsupportedParam, generate_tool_call_id, sanitize_tool_messages,
+    strip_unsupported_completion_params, strip_unsupported_tool_params,
 };
 
 /// Crate version string, exposed so downstream crates can surface the baseline

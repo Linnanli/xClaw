@@ -4484,6 +4484,7 @@ dependencies = [
  "wasmtime",
  "wasmtime-wasi",
  "webpki-roots 0.26.11",
+ "x_claw_agent",
  "zbus",
  "zip",
 ]
@@ -11999,6 +12000,7 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
