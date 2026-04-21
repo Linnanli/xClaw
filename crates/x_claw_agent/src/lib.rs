@@ -4,12 +4,21 @@
 //! will:
 //!
 //! - Step C: define Hook traits (`SafetyHook`, `SandboxExecutor`, `SecretProvider`,
-//!   `ApprovalGate`) in [`hooks`].
-//! - Step D: port the runtime loop from `claw-code`'s runtime crate into
-//!   [`runtime`] with hook insertion points.
+//!   `ApprovalGate`) in [`hooks`]. **Done.**
+//! - Step D: port the runtime loop from ironclaw's `agent/` tree into
+//!   [`runtime`] with hook insertion points. **Pending.**
 //!
 //! See [`../UPSTREAM_BASELINE.md`](../UPSTREAM_BASELINE.md) for the chosen
 //! upstream commit and porting log.
+
+pub mod hooks;
+
+pub use hooks::{
+    ApprovalError, ApprovalGate, ApprovalOutcome, ApprovalRequest, AutoApproveGate, DenyAllGate,
+    InMemorySecrets, NoopSafetyHook, NoopSandboxExecutor, SafetyDecision, SafetyError, SafetyHook,
+    SandboxError, SandboxExecOutput, SandboxExecRequest, SandboxExecutor, SecretError,
+    SecretProvider, SecretString,
+};
 
 /// Crate version string, exposed so downstream crates can surface the baseline
 /// to operators without reparsing `Cargo.toml`.

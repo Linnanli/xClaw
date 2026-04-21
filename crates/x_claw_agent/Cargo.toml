@@ -16,5 +16,11 @@ name = "x_claw_agent"
 path = "src/lib.rs"
 
 [dependencies]
-# Shell 骨架暂无运行时依赖。Step C/D 搬运 claw-code runtime 代码时再按需加入
-# tokio / serde / async-trait / futures / claw-code-api / claw-code-tools。
+# Hook trait 层依赖。保持最小集，不拉 ironclaw/claw-code 业务代码。
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }

@@ -11993,6 +11993,13 @@ dependencies = [
 [[package]]
 name = "x_claw_agent"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+]
 
 [[package]]
 name = "xattr"
