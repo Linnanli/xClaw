@@ -11,10 +11,14 @@
 //! See [`../UPSTREAM_BASELINE.md`](../UPSTREAM_BASELINE.md) for the chosen
 //! upstream commit and porting log.
 
+pub mod agentic_loop;
 pub mod compaction;
 pub mod context_monitor;
 pub mod hooks;
+pub mod intent;
 pub mod messages;
+pub mod reasoning_ctx;
+pub mod response_types;
 pub mod session;
 pub mod submission;
 pub mod task;
