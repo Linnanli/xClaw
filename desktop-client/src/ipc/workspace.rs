@@ -99,7 +99,7 @@ pub async fn ic_import_workspace(
         .parse()
         .map_err(|_| format!("Invalid thread_id: {thread_id}"))?;
 
-    let canonical = ironclaw::workspace_dir::validate_import_path(&path)
+    let canonical = crate::workspace_dir::validate_import_path(&path)
         .map_err(|e| format!("Invalid workspace path: {e}"))?;
     let canonical_str = canonical.to_string_lossy().to_string();
 
@@ -140,7 +140,7 @@ pub async fn ic_get_thread_workspace(
 /// 列出 `~/.ironclaw/projects/` 下所有沙箱工作区。
 #[tauri::command]
 pub async fn ic_list_sandbox_workspaces() -> Result<Vec<SandboxWorkspace>, String> {
-    let base = ironclaw::workspace_dir::projects_base();
+    let base = crate::workspace_dir::projects_base();
     if !tokio::fs::try_exists(&base).await.unwrap_or(false) {
         return Ok(Vec::new());
     }
@@ -150,8 +150,8 @@ pub async fn ic_list_sandbox_workspaces() -> Result<Vec<SandboxWorkspace>, Strin
         .await
         .map_err(|e| format!("Failed to read projects directory: {e}"))?;
 
-    while let Some(entry) = dir.next_entry().await.map_err(|e| e.to_string())? {
-        let ft = entry.file_type().await.map_err(|e| e.to_string())?;
+    while let Some(entry) = dir.next_entry().await.map_err(|e: std::io::Error| e.to_string())? {
+        let ft = entry.file_type().await.map_err(|e: std::io::Error| e.to_string())?;
         if ft.is_dir() {
             entries.push(SandboxWorkspace {
                 name: entry.file_name().to_string_lossy().into_owned(),

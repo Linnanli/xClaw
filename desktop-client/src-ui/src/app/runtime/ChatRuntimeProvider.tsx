@@ -1,17 +1,23 @@
 /**
- * ChatRuntimeProvider — 基于 @assistant-ui/react-ai-sdk 的 LLM 运行时
+ * ChatRuntimeProvider — 新一代 LLM 运行时（Phase 1）
  *
  * 架构：
  *   useChatRuntime（@assistant-ui/react-ai-sdk）
- *     └─ AssistantChatTransport → Admin Backend /api/chat/completions
- *         └─ 后端返回 Vercel AI SDK Data Stream 格式
+ *     └─ TauriChatTransport → invoke('send_chat_message') + listen('chat-stream')
+ *         └─ 后端 `VercelUIStream` 已对齐 AI SDK v5 `UIMessageChunk`
  *   DLP 拦截在 Composer 层（thread.tsx 的 ComposerAction）
+ *
+ * 相比旧的 HTTP 版 ChatRuntimeProvider（已废弃），本 Provider：
+ * - 直接走 Tauri IPC，不再绕 HTTP
+ * - 事件流由后端 `tauri_channel.rs` 推送，无需 streamText
+ * - 前端状态管理 100% 交由 assistant-ui SDK（branch / 流式 / 工具 UI 自动处理）
  */
 
 import { type ReactNode, useState, useCallback, createContext, useContext, useRef } from 'react';
 import { AssistantRuntimeProvider } from '@assistant-ui/react';
-import { useChatRuntime, AssistantChatTransport } from '@assistant-ui/react-ai-sdk';
+import { useChatRuntime } from '@assistant-ui/react-ai-sdk';
 import type { SanitizationStats } from '../hooks/useDlpScan';
+import { TauriChatTransport } from './TauriChatTransport';
 import { EchoToolUI } from '../components/assistant-ui/tool-renderers/echo-renderer';
 import { FileEditToolUI } from '../components/assistant-ui/tool-renderers/file-edit-renderer';
 import { GrepResultToolUI } from '../components/assistant-ui/tool-renderers/grep-result-renderer';
@@ -22,9 +28,13 @@ import { LspResultToolUI } from '../components/assistant-ui/tool-renderers/lsp-r
 import { PlanModeToolUI } from '../components/assistant-ui/tool-renderers/plan-renderer';
 import { SessionForkToolUI } from '../components/assistant-ui/tool-renderers/fork-renderer';
 import { SubAgentToolUI } from '../components/assistant-ui/tool-renderers/sub-agent-renderer';
+import {
+  ApprovalToolUI,
+  ApprovalThreadIdProvider,
+} from '../components/tool-ui/approval-tool-ui';
 
 // ============================================================================
-// DLP Context
+// DLP Context（与旧 Provider 兼容）
 // ============================================================================
 
 interface DlpState {
@@ -55,14 +65,21 @@ export const useDlpState = () => useContext(DlpContext);
 
 interface ChatRuntimeProviderProps {
   children: ReactNode;
-  apiUrl?: string;
-  modelId?: string;
+  /** 当前会话 id；未选中会话时可为 null，内部会回落到临时 id */
+  threadId?: string | null;
+  /** 当前选中模型 id；transport 会在每次发送时读最新值 */
+  modelId?: string | null;
+  /** 自定义 provider 的 base url / api key（自定义模型场景） */
+  apiBaseUrl?: string | null;
+  apiKey?: string | null;
 }
 
 export function ChatRuntimeProvider({
   children,
-  apiUrl = 'http://localhost:3000/api/chat/completions',
-  modelId = 'deepseek-chat',
+  threadId,
+  modelId,
+  apiBaseUrl,
+  apiKey,
 }: ChatRuntimeProviderProps) {
   const [dlpBlocked, setDlpBlocked] = useState(false);
   const [dlpBlockReason, setDlpBlockReason] = useState<string | null>(null);
@@ -73,7 +90,6 @@ export function ChatRuntimeProvider({
     setDlpBlockReason(null);
   }, []);
   const clearDlpRedacted = useCallback(() => setDlpRedactedStats(null), []);
-
   const onBlockedCb = useCallback((reason: string) => {
     setDlpBlocked(true);
     setDlpBlockReason(reason);
@@ -82,28 +98,23 @@ export function ChatRuntimeProvider({
     setDlpRedactedStats(stats);
   }, []);
 
-  // 用 ref 保持 transport 闭包能读到最新的 modelId
-  const modelIdRef = useRef(modelId);
-  modelIdRef.current = modelId;
+  // 用 ref 保持 transport 闭包读最新的 modelId / threadId 等
+  const threadIdRef = useRef(threadId ?? null);
+  threadIdRef.current = threadId ?? null;
+  const modelIdRef = useRef(modelId ?? null);
+  modelIdRef.current = modelId ?? null;
+  const apiBaseUrlRef = useRef(apiBaseUrl ?? null);
+  apiBaseUrlRef.current = apiBaseUrl ?? null;
+  const apiKeyRef = useRef(apiKey ?? null);
+  apiKeyRef.current = apiKey ?? null;
 
-  // transport 只创建一次，通过 ref 动态读取最新 modelId
-  const transportRef = useRef<AssistantChatTransport<never> | null>(null);
+  // Transport 只创建一次
+  const transportRef = useRef<TauriChatTransport | null>(null);
   if (!transportRef.current) {
-    transportRef.current = new AssistantChatTransport({
-      api: apiUrl,
-      body: () => ({ model: modelIdRef.current }),
-      prepareSendMessagesRequest: async (options) => {
-        console.log('[ChatTransport] prepareSendMessagesRequest called');
-        console.log('[ChatTransport] messages[0]:', JSON.stringify(options.messages?.[0]).substring(0, 200));
-        console.log('[ChatTransport] body keys:', Object.keys(options.body ?? {}));
-        return {
-          body: {
-            ...options.body,
-            model: modelIdRef.current,
-            messages: options.messages,
-          },
-        };
-      },
+    transportRef.current = new TauriChatTransport({
+      modelId: () => modelIdRef.current,
+      apiBaseUrl: () => apiBaseUrlRef.current,
+      apiKey: () => apiKeyRef.current,
     });
   }
 
@@ -121,6 +132,7 @@ export function ChatRuntimeProvider({
       <PlanModeToolUI />
       <SessionForkToolUI />
       <SubAgentToolUI />
+      <ApprovalToolUI />
       <DlpContext.Provider
         value={{
           blocked: dlpBlocked,
@@ -132,7 +144,9 @@ export function ChatRuntimeProvider({
           onRedacted: onRedactedCb,
         }}
       >
-        {children}
+        <ApprovalThreadIdProvider threadId={threadId ?? null}>
+          {children}
+        </ApprovalThreadIdProvider>
       </DlpContext.Provider>
     </AssistantRuntimeProvider>
   );

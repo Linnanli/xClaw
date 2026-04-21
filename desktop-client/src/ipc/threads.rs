@@ -108,7 +108,7 @@ pub async fn ic_create_thread(state: State<'_, EngineState>) -> Result<String, S
     // Create sandbox workspace — path is deterministic from thread id.
     // If this fails, the conversation still exists; resolve_workspace()
     // will lazy-create the directory when tools actually need it.
-    let workspace_path = match ironclaw::workspace_dir::create_sandbox_workspace(id) {
+    let workspace_path = match crate::workspace_dir::create_sandbox_workspace(id) {
         Ok(p) => p,
         Err(e) => {
             tracing::error!(thread_id = %id, error = %e,

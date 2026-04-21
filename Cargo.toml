@@ -7,8 +7,15 @@ members = [
 	"desktop-client/ironclaw/crates/ironclaw_common",
 	"desktop-client/ironclaw/crates/ironclaw_safety",
 ]
-exclude = ["ironclaw"]
+exclude = ["ironclaw", "claw-code"]
 resolver = "2"
+
+[profile.dev]
+opt-level = 0          # 本 crate 不优化，编译快
+incremental = true     # 增量编译
+
+[profile.dev.package."*"]
+opt-level = 1          # 第三方依赖 O1，编译一次后不再重编且运行更快
 
 [profile.release]
 strip = true

@@ -24,6 +24,7 @@ pub mod model_switch;
 pub mod state;
 pub mod tauri_channel;
 pub mod vercel_ui_protocol;
+pub mod workspace_dir;
 
 // ── 测试模块（仅在测试时编译）──────────────────────────────────────
 #[cfg(test)]

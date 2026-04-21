@@ -42,6 +42,10 @@ ironclaw_safety = { path = "./ironclaw/crates/ironclaw_safety" }
 # IronClaw embedded server
 ironclaw = { path = "./ironclaw", features = ["libsql"] }
 
+# NOTE: To run the Desktop Client GUI with the Phase 2 claw-code backend,
+# build with `--features claw-code-llm` and set env `IRONCLAW_LLM_BACKEND=claw-code`.
+# See desktop-client/ironclaw/src/llm/mod.rs `should_use_claw_code_backend()`.
+
 # HTTP client for API calls
 reqwest = { version = "0.11", features = ["json", "stream"] }
 
@@ -82,3 +86,20 @@ reqwest = { version = "0.11", features = ["json", "stream", "blocking"] }
 
 [build-dependencies]
 tauri-build = "2.0"
+
+# ============================================================================
+# Phase 2 Architecture Refactor — claw-code backend passthrough
+#
+# Passes `claw-code-llm` through to the embedded `ironclaw` crate. When built
+# with `--features claw-code-llm` **and** `IRONCLAW_LLM_BACKEND=claw-code` is
+# set at runtime, `create_registry_provider` routes all LLM calls through
+# `ClawCodeLlmProvider` instead of rig-core. Default build keeps the legacy
+# rig-core path byte-for-byte identical.
+#
+# Grayscale workflow:
+#   cargo tauri dev --features claw-code-llm         # build-time opt-in
+#   export IRONCLAW_LLM_BACKEND=claw-code             # runtime opt-in
+# ============================================================================
+[features]
+default = []
+claw-code-llm = ["ironclaw/claw-code-llm"]

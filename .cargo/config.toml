@@ -1,0 +1,9 @@
+# 加速开发编译
+# macOS: 使用系统 linker 的 -ld_new 标志（Xcode 15+ 自带新 linker，更快）
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-fuse-ld=/usr/bin/ld"]
+
+# Linux: 使用 mold（需 brew install mold 或 apt install mold）
+# [target.x86_64-unknown-linux-gnu]
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]

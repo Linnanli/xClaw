@@ -31,9 +31,9 @@ case "${1:-}" in
     rm -rf target/debug/incremental
     rm -rf target/release/incremental
 
-    # cargo-sweep 清理 30 天未使用的旧产物（如已安装）
+    # cargo-sweep 清理 3 天未使用的旧产物（如已安装）
     if command -v cargo-sweep &>/dev/null; then
-      cargo sweep -t 30
+      cargo sweep --time 3
     fi
 
     after=$(print_size target)

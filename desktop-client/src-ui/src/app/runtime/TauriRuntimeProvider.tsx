@@ -422,9 +422,9 @@ function convertMessage(msg: TauriMessage): ThreadMessageLike {
   if (msg.reasoning) parts.push({ type: 'reasoning', text: msg.reasoning });
   if (msg.toolCalls?.length) {
     parts.push(
-      ...msg.toolCalls.map((toolCall) => ({
+      ...msg.toolCalls.map((toolCall, idx) => ({
         type: 'tool-call' as const,
-        toolCallId: toolCall.toolCallId,
+        toolCallId: toolCall.toolCallId || `${msg.id}_tool_${idx}`,
         toolName: toolCall.toolName,
         args: toolCall.args,
         result: toolCall.result,
@@ -1062,6 +1062,8 @@ export function TauriRuntimeProvider({
   const handleStreamEvent = useCallback((event: VercelStreamEvent) => {
     switch (event.type) {
       case 'tool-input-start': {
+        // Deduplicate: skip if this toolCallId already exists in buffer
+        if (toolCallsBuffer.current.some((tc) => tc.toolCallId === event.toolCallId)) break;
         const entry: ToolCallEntry = {
           toolCallId: event.toolCallId,
           toolName: event.toolName,
@@ -1221,10 +1223,12 @@ export function TauriRuntimeProvider({
 
       case 'approval_needed': {
         if (event.thread_id && event.thread_id !== threadIdRef.current) {
+          console.warn('[approval_needed] DROPPED: thread_id mismatch', { eventThread: event.thread_id, currentThread: threadIdRef.current });
           break;
         }
 
         setIsRunning(false);
+        console.warn('[approval_needed] Processing', { tool: event.tool_name, requestId: event.request_id, pendingAssistantId: pendingAssistantId.current });
         tracing.info('Tool approval needed', { tool: event.tool_name, requestId: event.request_id });
         setPendingApprovals((prev) => {
           // 去重：同一 request_id 不重复添加

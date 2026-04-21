@@ -232,6 +232,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "api"
+version = "0.1.0"
+dependencies = [
+ "reqwest 0.12.28",
+ "runtime",
+ "serde",
+ "serde_json",
+ "telemetry",
+ "tokio",
+]
+
+[[package]]
 name = "ar_archive_writer"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1293,16 +1305,6 @@ checksum = "874bb8112abecc98cbd6d81ea4fa7e94fb9449648c93cc89aa40c81c24d7de03"
 dependencies = [
  "alloc-no-stdlib",
  "alloc-stdlib",
-]
-
-[[package]]
-name = "bstr"
-version = "1.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63044e1ae8e69f3b5a92c736ca6269b8d12fa7efe39bf34ddb06d102cf0e2cab"
-dependencies = [
- "memchr",
- "serde",
 ]
 
 [[package]]
@@ -3557,19 +3559,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
-name = "globset"
-version = "0.4.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52dfc19153a48bde0cbd630453615c8151bce3a5adfac7a0aebfbf0a1e1f57e3"
-dependencies = [
- "aho-corasick",
- "bstr",
- "log",
- "regex-automata",
- "regex-syntax",
-]
-
-[[package]]
 name = "gobject-sys"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4391,6 +4380,7 @@ dependencies = [
  "aes-gcm",
  "aho-corasick",
  "anyhow",
+ "api",
  "async-trait",
  "aws-config",
  "aws-sdk-bedrockruntime",
@@ -4415,7 +4405,6 @@ dependencies = [
  "flate2",
  "fs4",
  "futures",
- "globset",
  "hex",
  "hkdf",
  "hmac",
@@ -4425,7 +4414,6 @@ dependencies = [
  "hyper-util",
  "iana-time-zone",
  "insta",
- "ironclaw",
  "ironclaw_common",
  "ironclaw_safety",
  "json5",
@@ -6396,6 +6384,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "plugins"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "png"
 version = "0.17.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7391,6 +7387,21 @@ dependencies = [
  "spki",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "runtime"
+version = "0.1.0"
+dependencies = [
+ "glob",
+ "plugins",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "telemetry",
+ "tokio",
+ "walkdir",
 ]
 
 [[package]]
@@ -9203,6 +9214,14 @@ dependencies = [
  "dunce",
  "embed-resource",
  "toml 0.9.12+spec-1.1.0",
+]
+
+[[package]]
+name = "telemetry"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

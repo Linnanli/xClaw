@@ -292,16 +292,41 @@ pub(crate) fn map_status_to_stream(
                 .and_then(|v| v.as_str())
                 .or_else(|| metadata.get("thread_id").and_then(|v| v.as_str()))
                 .unwrap_or_default();
-            vec![VercelUIStream::DataCustom {
-                id: None,
-                data: json!({
-                    "type": "approval_needed",
-                    "thread_id": thread_id,
-                    "request_id": request_id,
-                    "tool_name": tool_name,
-                    "description": description,
-                }),
-            }]
+            tracing::info!(
+                tool_name = %tool_name,
+                request_id = %request_id,
+                thread_id = %thread_id,
+                "Emitting approval_needed event to frontend"
+            );
+            // 双发：
+            //   - 旧 `DataCustom` 事件：兼容 TauriRuntimeProvider 的 useApprovalState
+            //   - 新 `ToolInputAvailable` 事件：对接 assistant-ui `approval_request` ToolUI
+            //     （request_id 同时作为 toolCallId，SDK 按 id 自动挂载到正确 branch）
+            //
+            // 注意：parameters 字段**不**透传给前端，防止敏感信息泄露（与旧 DataCustom 对齐）。
+            vec![
+                VercelUIStream::DataCustom {
+                    id: None,
+                    data: json!({
+                        "type": "approval_needed",
+                        "thread_id": thread_id,
+                        "request_id": request_id,
+                        "tool_name": tool_name,
+                        "description": description,
+                    }),
+                },
+                VercelUIStream::ToolInputAvailable {
+                    tool_call_id: request_id.to_string(),
+                    tool_name: "approval_request".to_string(),
+                    input: json!({
+                        "request_id": request_id,
+                        "tool_name": tool_name,
+                        "description": description,
+                    }),
+                    provider_executed: None,
+                    provider_metadata: None,
+                },
+            ]
         }
 
         StatusUpdate::AuthRequired {

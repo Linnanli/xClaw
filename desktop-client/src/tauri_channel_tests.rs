@@ -243,7 +243,7 @@ mod tests {
         );
     }
 
-    /// 验证 ApprovalNeeded DataCustom 不泄露 parameters 字段。
+    /// 验证 ApprovalNeeded 双发帧（DataCustom + ToolInputAvailable）均不泄露 parameters 字段。
     #[test]
     fn test_audit_approval_needed_no_parameters_leak() {
         let status = StatusUpdate::ApprovalNeeded {
@@ -258,11 +258,59 @@ mod tests {
         };
         let meta = json!({ "thread_id": "t-1" });
         let events = crate::tauri_channel::map_status_to_stream(&status, &meta);
-        assert_eq!(events.len(), 1);
-        let json_str = serde_json::to_string(&events[0]).unwrap();
-        assert!(!json_str.contains("/etc/shadow"), "sensitive path leaked");
-        assert!(!json_str.contains("secret_hash"), "sensitive content leaked");
-        assert!(!json_str.contains("parameters"), "parameters field leaked");
+        assert_eq!(
+            events.len(),
+            2,
+            "ApprovalNeeded 应发 DataCustom + ToolInputAvailable 两帧（兼容期双发）"
+        );
+        // 全部帧都不能泄露 parameters
+        for (idx, ev) in events.iter().enumerate() {
+            let json_str = serde_json::to_string(ev).unwrap();
+            assert!(
+                !json_str.contains("/etc/shadow"),
+                "event #{idx} sensitive path leaked"
+            );
+            assert!(
+                !json_str.contains("secret_hash"),
+                "event #{idx} sensitive content leaked"
+            );
+            assert!(
+                !json_str.contains("parameters"),
+                "event #{idx} parameters field leaked"
+            );
+        }
+    }
+
+    /// 验证 ApprovalNeeded 的第 2 帧是标准的 `tool-input-available`，
+    /// 与前端 `approval_request` ToolUI 对齐。
+    #[test]
+    fn test_contract_approval_needed_emits_tool_input_available() {
+        let status = StatusUpdate::ApprovalNeeded {
+            request_id: "550e8400-e29b-41d4-a716-446655440000".into(),
+            tool_name: "shell".into(),
+            description: "rm -rf /tmp".into(),
+            parameters: serde_json::json!({"cmd": "rm -rf /tmp"}),
+            allow_always: false,
+        };
+        let events = crate::tauri_channel::map_status_to_stream(&status, &json!({}));
+        assert_eq!(events.len(), 2);
+
+        // 序列化后验证协议兼容 AI SDK v5 UIMessageChunk
+        let tool_frame = serde_json::to_value(&events[1]).unwrap();
+        assert_eq!(tool_frame["type"], "tool-input-available");
+        assert_eq!(
+            tool_frame["toolCallId"],
+            "550e8400-e29b-41d4-a716-446655440000"
+        );
+        assert_eq!(tool_frame["toolName"], "approval_request");
+        // input 是前端 ApprovalArgs 的子集（不含 parameters / allow_always）
+        assert_eq!(
+            tool_frame["input"]["request_id"],
+            "550e8400-e29b-41d4-a716-446655440000"
+        );
+        assert_eq!(tool_frame["input"]["tool_name"], "shell");
+        assert_eq!(tool_frame["input"]["description"], "rm -rf /tmp");
+        assert!(tool_frame["input"].get("parameters").is_none());
     }
 
     /// 验证 AuthRequired 事件不泄露 auth_url 和 setup_url。

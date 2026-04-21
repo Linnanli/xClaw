@@ -94,6 +94,7 @@ export const Thread: FC = () => {
 
         <ThreadPrimitive.ViewportFooter className="aui-thread-viewport-footer sticky bottom-0 mt-auto flex w-full flex-col gap-4 overflow-visible rounded-t-(--composer-radius) bg-background pb-4 md:pb-6">
           <ThreadScrollToBottom />
+          <FloatingApprovalBanner />
           <Composer />
         </ThreadPrimitive.ViewportFooter>
       </ThreadPrimitive.Viewport>
@@ -560,6 +561,25 @@ const BranchPicker: FC<BranchPickerPrimitive.Root.Props> = ({
         </TooltipIconButton>
       </BranchPickerPrimitive.Next>
     </BranchPickerPrimitive.Root>
+  );
+};
+
+// ── 浮动审批横幅（Thread 级，不依赖 branch 位置）──────────────────
+
+const FloatingApprovalBanner: FC = () => {
+  const { pendingApprovals, approve, deny } = useApprovalState();
+  if (pendingApprovals.length === 0) return null;
+  return (
+    <div className="mx-auto flex w-full max-w-(--thread-max-width) flex-col gap-2 px-2">
+      {pendingApprovals.map((approval) => (
+        <ApprovalCard
+          key={approval.request_id}
+          approval={approval}
+          onApprove={() => approve(approval.request_id)}
+          onDeny={() => deny(approval.request_id)}
+        />
+      ))}
+    </div>
   );
 };
 
