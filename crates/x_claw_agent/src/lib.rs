@@ -12,11 +12,13 @@
 //! upstream commit and porting log.
 
 pub mod agentic_loop;
+pub mod bash_validation;
 pub mod compaction;
 pub mod context_monitor;
 pub mod hooks;
 pub mod intent;
 pub mod messages;
+pub mod permissions;
 pub mod reasoning_ctx;
 pub mod response_types;
 pub mod session;
@@ -25,6 +27,10 @@ pub mod task;
 pub mod traits;
 pub mod undo;
 
+pub use bash_validation::{
+    CommandIntent, ValidationResult, check_destructive, classify_command, validate_command,
+    validate_mode, validate_paths, validate_read_only, validate_sed,
+};
 pub use hooks::{
     ApprovalError, ApprovalGate, ApprovalOutcome, ApprovalRequest, AutoApproveGate, DenyAllGate,
     InMemorySecrets, NoopSafetyHook, NoopSandboxExecutor, SafetyDecision, SafetyError, SafetyHook,
@@ -37,6 +43,7 @@ pub use messages::{
     ToolResult, UnsupportedParam, generate_tool_call_id, sanitize_tool_messages,
     strip_unsupported_completion_params, strip_unsupported_tool_params,
 };
+pub use permissions::PermissionMode;
 pub use traits::{HostError, LlmCompleter, WorkspaceWriter};
 
 /// Crate version string, exposed so downstream crates can surface the baseline

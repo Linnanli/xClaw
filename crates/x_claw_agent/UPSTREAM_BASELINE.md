@@ -249,3 +249,57 @@ All four hooks are **fail-safe**: errors refuse the operation rather than allow 
 - `cargo test -p ironclaw --lib secrets::agent_provider` — 7/7 passed.
 - `cargo test -p ironclaw --test agent_hooks_integration_test` — 13/13 passed.
 - `cargo build -p ironclaw --lib` — 0 errors / 0 warnings.
+
+---
+
+## Step K — cherry-pick drill: port `bash_validation.rs` — DONE (2026-04-22)
+
+**Goal**: exercise the "semantic cherry-pick" workflow this baseline doc was created to support. Pick one upstream improvement, port it with documented deviations, and prove the porting log mechanism works end-to-end.
+
+**What was ported**:
+
+- `crates/x_claw_agent/src/bash_validation.rs` (1004 lines, 32 tests) — byte-for-byte copy of upstream `claw-code/rust/crates/runtime/src/bash_validation.rs` at baseline `610b3470`. Only the module doc header was extended with provenance + integration notes. The `use crate::permissions::PermissionMode;` line resolves to our local sliced port (see below) — not to upstream's full `permissions` module.
+- `crates/x_claw_agent/src/permissions.rs` (NEW, ~75 lines including tests) — **deliberately sliced** port of upstream `permissions.rs`. Carries over **only** the `PermissionMode` enum + `as_str()` + the five variants `ReadOnly` / `WorkspaceWrite` / `DangerFullAccess` / `Prompt` / `Allow`. Deliberately left behind:
+  - `PermissionPolicy` (283-line rule engine over `RuntimePermissionRuleConfig`).
+  - `PermissionContext` / `PermissionRequest` / `PermissionPromptDecision` / `PermissionOutcome` / `PermissionOverride`.
+  - The `crate::config::RuntimePermissionRuleConfig` dependency.
+
+**Deviation rationale (the point of the drill)**:
+
+- `bash_validation.rs` is the only current consumer of `PermissionMode` in x_claw_agent, and it uses nothing beyond the 5-variant enum + `Copy`/`Eq`/`as_str()`. The full policy engine would cost ~700 lines plus a config-crate dependency for zero current value.
+- Rule-engine semantics (deny rules, policy overrides, user prompts) are already owned by ironclaw's existing `safety` + `tools` + `extensions` surface. Porting upstream's would create a parallel policy engine and the coexistence cost is not justified.
+- This is exactly the kind of deviation the porting log exists to capture: **port the syntactic check, leave the semantic policy to the host**.
+
+**Public re-exports added to `lib.rs`**:
+
+```rust
+pub use bash_validation::{
+    CommandIntent, ValidationResult, check_destructive, classify_command, validate_command,
+    validate_mode, validate_paths, validate_read_only, validate_sed,
+};
+pub use permissions::PermissionMode;
+```
+
+**Host integration guidance**:
+
+- `validate_command(cmd, mode, workspace)` returns `ValidationResult::{Allow, Warn, Block}`.
+- A host already running `SafetyHook::before_tool_call` can call this as the **first gate** inside its hook impl and translate `Warn` / `Block` into `SafetyDecision::Block` / `SafetyDecision::Redact`.
+- ironclaw has not yet wired this in — deliberate, same reason as the Phase 3 closure: the dispatcher still calls `SafetyLayer` directly. When D-5 is revisited, ironclaw's `before_tool_call` hook impl should call `validate_command` before its own DLP/denylist checks.
+
+**Test state**:
+
+- `cargo test -p x_claw_agent --lib` — **198 passed** (164 + 32 bash_validation + 2 permissions). Up from 164 at Phase 3 closure.
+- `cargo build -p ironclaw --lib` — 0 errors / 0 warnings.
+- `cargo build -p x_claw_agent --lib` — 0 errors / 0 warnings.
+- No ironclaw tests touched (ironclaw doesn't use these symbols yet).
+
+**What this drill proved**:
+
+1. Mechanical step: `cp` + minor header edits + `use` path substitution + `pub use` re-export. 5-minute port.
+2. Deviation-tracking step: `permissions.rs` sliced port is documented both in the file header and this baseline entry. Anyone reading either place sees what was left behind and why.
+3. The porting log format (per-commit entry with commit hash, what, notes) scales — this is entry #9 and still readable.
+
+**What remains as future drill variants** (not executed):
+
+- Port a module that **doesn't** compile cleanly against our trait surface (would force a refactor of the adapter layer and prove the porting log captures that too).
+- Port a module that **has an ironclaw counterpart** (would force a "keep ironclaw / adopt upstream / merge" decision and document the verdict).
