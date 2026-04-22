@@ -22,6 +22,7 @@ import { ChatRuntimeProvider, useDlpState } from '../../runtime/ChatRuntimeProvi
 import { ModelProvider } from '../../runtime/contexts/ModelProvider';
 import { ApprovalProvider } from '../../runtime/contexts/ApprovalProvider';
 import { useModelContext } from '../../contexts/ModelContext';
+import { useEngineReady } from '../../hooks/useEngineReady';
 import { TokenManager } from '@utils/tokenManager';
 import { DlpBlockedDialog } from '../ai/DlpBlockedDialog';
 
@@ -64,10 +65,30 @@ export function ChatTabTauriExperimental({
 /**
  * 从 ModelContext 读出当前选中模型的 id / api_base_url / api_key，
  * 透传给 ChatRuntimeProvider 的 transport。
+ *
+ * 引擎未就绪时渲染启动占位，避免 transport 在 IPC 通道没准备好时就发送请求。
+ * `useEngineReady` 由外层 `MainApp` 的 `EngineReadyProvider` 提供，
+ * 通过 `chat-stream` 的 `connection_status` 事件翻转 `ready` 标志。
  */
 function ChatRuntimeBridge({ threadId }: { threadId: string | null }) {
   const { selectedModelId, models } = useModelContext();
+  const { ready } = useEngineReady();
   const selected = models.find((m) => m.model_id === selectedModelId) ?? null;
+
+  if (!ready) {
+    return (
+      <div
+        data-testid="chat-runtime-boot-placeholder"
+        className="flex h-full flex-col items-center justify-center bg-background text-sm text-muted-foreground"
+      >
+        <div className="flex items-center gap-2">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" aria-hidden />
+          引擎启动中…
+        </div>
+      </div>
+    );
+  }
+
   return (
     <ChatRuntimeProvider
       threadId={threadId}
