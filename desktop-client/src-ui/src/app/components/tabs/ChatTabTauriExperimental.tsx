@@ -6,9 +6,9 @@
  *
  * 零破坏原则：
  * - 不修改既有 `ChatTabTauri.tsx`、`TauriRuntimeProvider.tsx`、`thread.tsx`
- * - `Thread` 内部仍会 `useApprovalState()`，但新 Provider 不注入 ApprovalContext
- *   → hook 读默认空数组，`FloatingApprovalBanner` 自动空转
- * - Approval 渲染由 `ApprovalToolUI` 按 `toolCallId` 挂到正确 branch
+ * - Phase 1.2 已接入 `ModelProvider` / `ApprovalProvider`，`Thread` 内的
+ *   `useApprovalState()` 能读取新 Runtime 自己的 approval 队列
+ * - Approval 也可通过 `ApprovalToolUI` 按 `toolCallId` 挂到正确 branch 渲染
  *
  * 真机验收步骤见 `e2e/tests/ai-sdk-migration.spec.js`。
  *
@@ -20,6 +20,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Thread } from '@components/assistant-ui/thread';
 import { ChatRuntimeProvider, useDlpState } from '../../runtime/ChatRuntimeProvider';
 import { ModelProvider } from '../../runtime/contexts/ModelProvider';
+import { ApprovalProvider } from '../../runtime/contexts/ApprovalProvider';
 import { useModelContext } from '../../contexts/ModelContext';
 import { TokenManager } from '@utils/tokenManager';
 import { DlpBlockedDialog } from '../ai/DlpBlockedDialog';
@@ -53,7 +54,9 @@ export function ChatTabTauriExperimental({
       onModelChange={onModelChange}
       onOpenCustomModelModal={onOpenCustomModelModal}
     >
-      <ChatRuntimeBridge threadId={selectedThreadId ?? null} />
+      <ApprovalProvider threadId={selectedThreadId ?? null}>
+        <ChatRuntimeBridge threadId={selectedThreadId ?? null} />
+      </ApprovalProvider>
     </ModelProvider>
   );
 }

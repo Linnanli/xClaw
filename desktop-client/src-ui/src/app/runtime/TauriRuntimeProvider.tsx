@@ -48,6 +48,11 @@ import { LspResultToolUI } from '../components/assistant-ui/tool-renderers/lsp-r
 import { PlanModeToolUI } from '../components/assistant-ui/tool-renderers/plan-renderer';
 import { SessionForkToolUI } from '../components/assistant-ui/tool-renderers/fork-renderer';
 import { SubAgentToolUI } from '../components/assistant-ui/tool-renderers/sub-agent-renderer';
+import {
+  ApprovalContext,
+  useApprovalState,
+  type PendingApproval,
+} from './contexts/ApprovalProvider';
 
 // ============================================================================
 // 类型定义
@@ -207,27 +212,15 @@ export const useDlpState = () => useContext(DlpContext);
 
 // ============================================================================
 // Approval Context — 即时工具授权
+// ---------------------------------------------------------------------------
+// `ApprovalContext` / `PendingApproval` / `useApprovalState` 的定义已迁移到
+// `runtime/contexts/ApprovalProvider.tsx`（新 Runtime 树独立挂载使用）；
+// 本文件仍保留相同 context 实例引用，旧 Runtime 树通过内部的
+// `ApprovalContext.Provider` 包裹子树，两侧 `useApprovalState` 行为一致。
 // ============================================================================
 
-export interface PendingApproval {
-  request_id: string;
-  tool_name: string;
-  description: string;
-}
-
-interface ApprovalState {
-  pendingApprovals: PendingApproval[];
-  approve: (requestId: string) => Promise<void>;
-  deny: (requestId: string) => Promise<void>;
-}
-
-const ApprovalContext = createContext<ApprovalState>({
-  pendingApprovals: [],
-  approve: async () => {},
-  deny: async () => {},
-});
-
-export const useApprovalState = () => useContext(ApprovalContext);
+export { useApprovalState };
+export type { PendingApproval };
 
 // ============================================================================
 // ErrorBoundary: 兜底 assistant-ui 内部 fiber 管理错误
