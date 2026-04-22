@@ -178,3 +178,74 @@ All four hooks are **fail-safe**: errors refuse the operation rather than allow 
 2. **`ApprovalGate` wiring**. Current ironclaw approval flow goes through its own channel; rewiring it to `x_claw_agent::ApprovalGate` is part of the same deferred work.
 
 **Test status**: `cargo test -p ironclaw_safety --features agent-hook` — 7/7 new tests pass. `cargo build -p ironclaw --lib` — green.
+
+---
+
+## Step E — SandboxManager impl SandboxExecutor — DONE (2026-04-21)
+
+**Commit**: submodule `d9a31cf9` — `feat(sandbox): impl x_claw_agent::SandboxExecutor for SandboxManager`
+
+**What was added**:
+
+- `desktop-client/ironclaw/src/sandbox/agent_executor.rs`:
+  - `SandboxAgentExecutor { manager: Arc<SandboxManager>, workspace_root: PathBuf }` implementing `x_claw_agent::SandboxExecutor`.
+  - `run_bash` delegates to `SandboxManager`'s Docker path; `read_file` / `write_file` use `tokio::fs` bounded by `workspace_root`.
+  - Manual `normalize_path` resolves `..` segments **without** filesystem touch, so non-existent write targets still get validated.
+  - Error mapping is exhaustive: every `IronclawSandboxError` variant maps to a specific `x_claw_agent::SandboxError` variant (PolicyViolation / Docker / Timeout / ResourceExhausted / Io).
+
+**Scope narrowing vs. original plan (05b)**:
+
+- Plan called for extracting `src/sandbox/` into a separate `crates/ironclaw_sandbox/` crate.
+- `src/sandbox/` already couples to `src/secrets/` via `CredentialMapping` — extracting one forces extracting both.
+- The architectural goal (clean `x_claw_agent` boundary) is achieved by the trait seam alone. Same Route-B discipline as D-3/D-4.
+
+**Tests**: 7/7 new unit tests (path validation, write/read roundtrip, parent-escape rejection, absolute-foreign-path rejection) pass under `cargo test -p ironclaw --lib sandbox::agent_executor`. `cargo build -p ironclaw --lib` 0 errors / 0 warnings.
+
+---
+
+## Step F — SecretsStore impl SecretProvider — DONE (2026-04-21)
+
+**Commit**: submodule `ef4149ec` — `feat(secrets): impl x_claw_agent::SecretProvider for SecretsStore`
+
+**What was added**:
+
+- `desktop-client/ironclaw/src/secrets/agent_provider.rs`:
+  - `AgentSecrets<S: SecretsStore> { store: Arc<S>, user_id: String }` implementing `x_claw_agent::SecretProvider`.
+  - Generic over `S: SecretsStore` so Postgres / LibSql / InMemory backends all satisfy the trait.
+  - `user_id` scopes every lookup; the agent kernel cannot accidentally cross users.
+  - `SecretError::NotFound` -> `Ok(None)` (first-class "not configured").
+  - All other variants (DecryptionFailed / AccessDenied / KeychainError / Database / ...) collapse to `AgentSecretError::Io` — fail-safe.
+  - Plaintext lives briefly in `DecryptedSecret`, unwrapped into `x_claw_agent::SecretString` only inside `get()`.
+
+**Scope narrowing**: same rationale as Step E. Trait seam alone suffices; no separate `crates/ironclaw_secrets/` extraction.
+
+**Tests**: 7/7 new unit tests (roundtrip, none-on-missing, user isolation, debug redaction, NotFound mapping, non-NotFound -> Io). Plus a full integration contract test (see Phase 3 closure).
+
+---
+
+## Phase 3 — CLOSED at G / E / F (2026-04-21)
+
+**Integration contract test**: `desktop-client/ironclaw/tests/agent_hooks_integration_test.rs` — 13 `#[tokio::test]` cases proving the four Hook adapters (`IronclawSafetyHook` / `SandboxAgentExecutor` / `AgentSecrets` / `AutoApproveGate`) compose behind `Arc<dyn Trait>`, satisfy `Send + Sync`, and honour their fail-safe contracts at the trait boundary. 13/13 pass.
+
+**Why H / I / J / K stop here**:
+
+- Original plan called for organising `agent_app.rs` (Step I) and wiring the hooks into dispatcher's call sites (Step I + H).
+- Audit confirmed: `desktop-client/ironclaw/src/agent/dispatcher.rs` already hardcodes `SafetyLayer::sanitize_tool_output` at 5+ sites (L274 / L316 / L564-565 / L598 / L647-648 / L877 / L964). This is the same file family that triggered D-5 deferral.
+- Replacing those hardcoded calls with `Arc<dyn SafetyHook>` would require touching exactly the dispatcher / agent_loop / thread_ops surface that D-5 explicitly deferred, for no user-visible capability gain (SafetyLayer is already invoked; the hook seam would just re-route the same calls).
+- The three Hook adapters are now **ready to plug in** the day dispatcher/delegate is revisited. That day is not Phase 3.
+
+**Boundary after Phase 3**:
+
+- `x_claw_agent` = agent core + 4 object-safe host traits (`SafetyHook` / `SandboxExecutor` / `SecretProvider` / `ApprovalGate`).
+- `ironclaw_safety` + `ironclaw` provide concrete trait implementations behind feature gates (`agent-hook`) or always-on (`sandbox::agent_executor`, `secrets::agent_provider`).
+- The trait seam is proven by the integration contract test; no ironclaw types leak through the kernel boundary.
+- Dispatcher continues to call `SafetyLayer` directly; the hook plumbing is a future seam activated when D-5 is revisited.
+
+**Final Phase 3 test state**:
+
+- `cargo test -p x_claw_agent --lib` — 164 passed / 0 failed.
+- `cargo test -p ironclaw_safety --features agent-hook` — 196 passed (189 + 7 new) / 0 failed.
+- `cargo test -p ironclaw --lib sandbox::agent_executor` — 7/7 passed.
+- `cargo test -p ironclaw --lib secrets::agent_provider` — 7/7 passed.
+- `cargo test -p ironclaw --test agent_hooks_integration_test` — 13/13 passed.
+- `cargo build -p ironclaw --lib` — 0 errors / 0 warnings.
