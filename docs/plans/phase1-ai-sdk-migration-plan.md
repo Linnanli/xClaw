@@ -85,18 +85,13 @@ TauriRuntimeProvider 订阅的 `ChatEvent` 共 **10 个 variant**，全部通过
 
 把 TauriRuntimeProvider 内部 3 类无 React 依赖的逻辑抽到 `runtime/shared/`：
 
-- `runtime/shared/persistedEvents.ts`
-  - `parsePersistedToolCalls(content)` 从 Provider L146 搬出。
-  - `parsePersistedUiEvents(content)` 从 L192 搬出。
-  - `serializeAttachment(att)` / `deserializeAttachment(raw)` 从 L494–560 搬出。
-- `runtime/shared/chatEventMapping.ts`
-  - `ChatEvent` 类型定义（L279）——**仅作为 `data-custom.data` 的 inner shape 类型**，不是独立事件源。
-  - `dispatchDataCustom(event)` — 根据 `event.payload.data.type` 分发到 approval/job/routine/error Context。**不包含** thinking / tool_* （它们已是 AI SDK 原生 chunk，不经过这个分发器）。
-- `runtime/shared/historyLoader.ts`
-  - `loadThreadHistory(threadId): Promise<UIMessage[]>` — 封装 `threadApi.getMessages` + persisted events 还原。
-  - **关键工作量**：DB 三段式 `user → tool_calls → assistant` 需展开为 AI SDK 的 `UIMessage.parts` discriminated union（`text` / `tool-${name}` / `reasoning` / `data-${kind}`）；`routineTriggerCount` / `dlpStats` / `attachments` 没有原生 `UIMessage` 字段，统一落到 `message.metadata` 或 `data-*` parts。参考现有 `TauriRuntimeProvider.tsx:870-985` 的合并逻辑，但结果结构不同。
+- `runtime/shared/persistedEvents.ts` ✅ **已完成**（commit `b4e7eff1`）
+  - `parsePersistedToolCalls(content)` / `parsePersistedUiEvent(content)`
+  - 配套 20 个单元测试
+- ❌ ~~`runtime/shared/chatEventMapping.ts`~~ — **不做**。`ChatEvent` 类型只是旧 Provider 的内部翻译层（把 `VercelStreamEvent` 翻回旧形状以复用 `handleChatEvent`）；新 Provider 不需要翻译层。分流工作转到 Phase 1.2：每个 Context 直接 `listen('chat-stream')` 按 `data-custom.data.type` 过滤。待 Phase 1.5 删 `TauriRuntimeProvider` 时，`ChatEvent` 类型随之消失。
+- ⏸️ ~~`runtime/shared/historyLoader.ts`~~ → **推迟到 Phase 1.3**。它的核心是 `TauriMessage → UIMessage.parts` 映射器，与 Phase 1.1 "无行为变化的纯函数抽出"不匹配，放到 1.3 随新功能一起做。
 
-**产出**：TauriRuntimeProvider 行数 ~1100（-30%）；ChatRuntimeProvider 行数不变。E2E 验证主对话无回归。
+**产出**：TauriRuntimeProvider 行数小幅下降（`persistedEvents` 约 -140 行）；共享纯函数就位；无行为变化。Phase 1.1 的原定三个模块，只做 1 个；中间层 `chatEventMapping.ts` 判定不必要、`historyLoader.ts` 同步到 1.3。
 
 ### Phase 1.2 — ChatRuntimeProvider 补齐高优先级 Context
 
