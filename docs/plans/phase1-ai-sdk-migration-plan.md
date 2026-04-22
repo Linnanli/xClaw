@@ -130,14 +130,30 @@ TauriRuntimeProvider 订阅的 `ChatEvent` 共 **10 个 variant**，全部通过
 
 **现状**：`ChatRuntimeProvider` 目前接收 `threadId` 但**完全没接历史回放**——`useChatRuntime({ transport })` 调用无 `initialMessages`，也无 `useEffect` 监听 threadId 重载（`ChatRuntimeProvider.tsx:77-119`）。切换会话时旧消息不会出现。
 
-- 实现 `historyLoader.loadThreadHistory(threadId)` → `UIMessage[]`（见 1.1）。
-- `ChatRuntimeProvider` 新增 `useEffect`：threadId 变化时 `await loadThreadHistory` 后调用 `runtime.setMessages(…)` 或利用 AI SDK `useChat` 的 `initialMessages` + `key` 重建方式。**两种路径都需验证**：`useChatRuntime` 的 runtime 对象是否暴露 `setMessages` API。
-- 新增 `OutboundCommandQueue` context：`{ queue: ChatCommand[], dispatch(cmd), consume(id) }`。transport 在 send 之前先取队列头。
-- 新增 `onThreadCreated` 回调 shim：当后端返回新 threadId 时通知外层（Experimental 自述"新 Runtime 暂不支持运行时创建线程回调"的缺口在这里补）。
+#### 风险红线 #4 解除 —— `useChatRuntime` API 能力探测结论
 
-**产出**：ChatRuntimeProvider 可完整替代 TauriRuntimeProvider 的历史/指令能力。
+源码核查（`node_modules/@assistant-ui/react-ai-sdk/src/ui/use-chat/{useChatRuntime,useAISDKRuntime,useExternalHistory}.ts`）：
 
-**风险红线**：这个阶段的工作量主体是"`TauriMessage → UIMessage.parts` 映射器"，不是"接管 API"。估时 1–2 天效验过小，**下调为 2–3 天**。
+1. **`useChatRuntime` 返回的是 `AssistantRuntime`，不暴露 `chatHelpers.setMessages`**。所以"直接在 threadId 变化时调 `runtime.setMessages(...)`"的原稿路径 ❌ 不可行。
+2. **唯一 supported 的历史回放入口是 `options.adapters.history`**（`ThreadHistoryAdapter`）。内部 `useExternalHistory` 会做：
+   - `historyAdapter.withFormat(aiSDKV6FormatAdapter).load()` → `MessageFormatRepository<UIMessage>`
+   - `runtime.thread.import(repo)` 同步 assistant-ui 的消息仓库
+   - `chatHelpers.setMessages(messages)` 同步 AI SDK 的 chat 状态
+3. **`aiSDKV6FormatAdapter`** 和 **`AISDKMessageConverter`** 由 SDK 提供，直接复用即可，不用自己写 `UIMessage ↔ ThreadMessage` 转换。
+4. **线程切换语义**：`useChatRuntime` 内部用 `useRemoteThreadListRuntime`，每个 thread 对应独立的 `useChatThreadRuntime`；换 thread 会重建 hook 树，`useExternalHistory` 里的 `loadedRef` 会重置，历史会重新加载 ✅。
+5. **`remoteId` gate**：`useExternalHistory` 只在 `threadListItem.getState().remoteId` 存在时才调 adapter.load。我们是本地 Tauri，必须确保 `threadListItem` 有 remoteId（`useCloudThreadListAdapter({ cloud: undefined })` 的行为要验）——**这是本阶段唯一还未解的点**。
+
+**结论**：Phase 1.3 采用"自建 `TauriHistoryAdapter: ThreadHistoryAdapter`"路径，内部调 `threadApi.getMessages()` 并用 Phase 1.1 的 `parsePersistedToolCalls` / `parsePersistedUiEvent` 把 `TauriMessage[]` 映射成 `UIMessage[]`；`withFormat` 走 `aiSDKV6FormatAdapter`。若 remoteId gate 不触发，再考虑降级用 `runtime.thread.import()` 直接注入。
+
+#### 工作分解
+
+- **1.3.a** — `TauriMessage → UIMessage.parts` 映射器（`runtime/shared/historyLoader.ts`），单元测试覆盖正常消息 / 含 toolCalls / 含 attachments / approval system events / routine_triggered / dlp_redacted。**本阶段主体工作量**。
+- **1.3.b** — `TauriHistoryAdapter` 封装（实现 `ThreadHistoryAdapter.withFormat(...).load()` 返回 `MessageFormatRepository<UIMessage>`），在 `ChatRuntimeProvider` 的 `useChatRuntime` options 里注入。
+- **1.3.c** — 小型集成测试：模拟 `threadApi.getMessages` → 挂 `ChatRuntimeProvider` → 断言 `Thread` 里渲染出历史消息。若 remoteId gate 阻断，切换到 `runtime.thread.import()` 降级方案。
+- **1.3.d** — `OutboundCommandQueue` context：`{ queue: ChatCommand[], dispatch(cmd), consume(id) }`。`TauriChatTransport.sendMessages` 在 invoke 之前先 `consume()` 队首。
+- **1.3.e** — `onThreadCreated` 回调 shim：后端返回新 threadId 时通知外层（补齐 Experimental 依赖缺口清单第 3 行）。
+
+**估时**：2–3 天（以 1.3.a 为主）。
 
 ### Phase 1.4 — 侧通道事件 + 错误边界
 
