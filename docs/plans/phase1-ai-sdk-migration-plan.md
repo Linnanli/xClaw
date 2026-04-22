@@ -93,7 +93,8 @@ TauriRuntimeProvider 订阅的 `ChatEvent` 共 **10 个 variant**，全部通过
   - `ChatEvent` 类型定义（L279）——**仅作为 `data-custom.data` 的 inner shape 类型**，不是独立事件源。
   - `dispatchDataCustom(event)` — 根据 `event.payload.data.type` 分发到 approval/job/routine/error Context。**不包含** thinking / tool_* （它们已是 AI SDK 原生 chunk，不经过这个分发器）。
 - `runtime/shared/historyLoader.ts`
-  - `loadThreadHistory(threadId): Promise<ThreadMessageLike[]>` — 封装 `threadApi.loadMessages` + persisted events 还原。
+  - `loadThreadHistory(threadId): Promise<UIMessage[]>` — 封装 `threadApi.getMessages` + persisted events 还原。
+  - **关键工作量**：DB 三段式 `user → tool_calls → assistant` 需展开为 AI SDK 的 `UIMessage.parts` discriminated union（`text` / `tool-${name}` / `reasoning` / `data-${kind}`）；`routineTriggerCount` / `dlpStats` / `attachments` 没有原生 `UIMessage` 字段，统一落到 `message.metadata` 或 `data-*` parts。参考现有 `TauriRuntimeProvider.tsx:870-985` 的合并逻辑，但结果结构不同。
 
 **产出**：TauriRuntimeProvider 行数 ~1100（-30%）；ChatRuntimeProvider 行数不变。E2E 验证主对话无回归。
 
@@ -122,12 +123,26 @@ TauriRuntimeProvider 订阅的 `ChatEvent` 共 **10 个 variant**，全部通过
 
 **前置依赖 ⚠️**：`ChatTabTauriExperimental` 目前在 `src-ui/` 没有任何入口引用（MainApp 只 import `ChatTabTauri`）。**Phase 1.2 开始前必须先在 MainApp 加个 dev-only 切换**（feature flag / URL param / 隐藏 tab）让 Experimental 渲染起来，否则"实验 tab 并行验证"这条安全网是空的。这个切换在 Phase 1.5 合并时一并拆掉。
 
+**Experimental 依赖缺口清单**（必须在 Phase 1.2 新 Context 完成后立即接入 Experimental，否则 E2E 验证只能覆盖 DLP + 单模型）：
+
+| 能力 | Experimental 当前状态 | 修复方式 |
+|---|---|---|
+| 自定义模型 `apiBaseUrl` / `apiKey` 透传 | ❌ 只传 `threadId` + `modelId` | Phase 1.2 ModelProvider 完成后，Experimental 从 `useModelContext()` 读并透入 `ChatRuntimeProvider` |
+| ApprovalContext 注入 | ❌ 按自述"hook 读默认空数组、FloatingApprovalBanner 空转" | Phase 1.2 ApprovalProvider 建成后，Experimental 外层包 `ApprovalProvider` |
+| `onThreadCreated` 回调 | ❌ 按自述"新 Runtime 暂不支持运行时创建线程回调" | Phase 1.3 OutboundCommandQueue 同批 |
+
 ### Phase 1.3 — 历史回放与外部指令
 
-- `ChatRuntimeProvider` 接收 `threadId` 变化时，调用 `loadThreadHistory(threadId)` 得到 `ThreadMessageLike[]`，传给 `useChatRuntime({ transport, initialMessages })`。
+**现状**：`ChatRuntimeProvider` 目前接收 `threadId` 但**完全没接历史回放**——`useChatRuntime({ transport })` 调用无 `initialMessages`，也无 `useEffect` 监听 threadId 重载（`ChatRuntimeProvider.tsx:77-119`）。切换会话时旧消息不会出现。
+
+- 实现 `historyLoader.loadThreadHistory(threadId)` → `UIMessage[]`（见 1.1）。
+- `ChatRuntimeProvider` 新增 `useEffect`：threadId 变化时 `await loadThreadHistory` 后调用 `runtime.setMessages(…)` 或利用 AI SDK `useChat` 的 `initialMessages` + `key` 重建方式。**两种路径都需验证**：`useChatRuntime` 的 runtime 对象是否暴露 `setMessages` API。
 - 新增 `OutboundCommandQueue` context：`{ queue: ChatCommand[], dispatch(cmd), consume(id) }`。transport 在 send 之前先取队列头。
+- 新增 `onThreadCreated` 回调 shim：当后端返回新 threadId 时通知外层（Experimental 自述"新 Runtime 暂不支持运行时创建线程回调"的缺口在这里补）。
 
 **产出**：ChatRuntimeProvider 可完整替代 TauriRuntimeProvider 的历史/指令能力。
+
+**风险红线**：这个阶段的工作量主体是"`TauriMessage → UIMessage.parts` 映射器"，不是"接管 API"。估时 1–2 天效验过小，**下调为 2–3 天**。
 
 ### Phase 1.4 — 侧通道事件 + 错误边界
 
@@ -164,17 +179,18 @@ Phase 1.2 只在前端建 Context、订阅同一条 `chat-stream`、按 `data-cu
 |---|---|---|
 | 1.1 纯函数抽出 | 1 天 | 低。没有行为变化，单元测试覆盖即可。 |
 | 1.2 三大 Context | **1–2 天**（原 2–3 天，移除后端依赖后下调） | 低–中。纯前端，参照 `useEngineReady` 范式。 |
-| 1.3 历史回放 | 1–2 天 | 中。`initialMessages` 与 AI SDK 的 reasoning/tool-call 段保留需要验证。 |
+| 1.3 历史回放 | **2–3 天**（原 1–2 天，上调因为真正工作是 TauriMessage→UIMessage.parts 映射） | **中–高**。DB 三段式合并 + discriminated union parts + metadata 嵌套 三个事交汇在这里。 |
 | 1.4 侧通道 + 错误边界 | 1 天 | 低。 |
 | 1.5 切换 + 删除 | 1–2 天（含回归） | 高。全量回归必跑，否则主对话有可能回退。 |
 
-**总计**：~1 周（含 QA，相比原估 1.5 周下调）。
+**总计**：~1–1.5 周（含 QA）。最大不确定性落在 1.3 的映射器；其他阶段都有明确参照实现。
 
 **风险红线**：
 
 1. **AI SDK v5 的 tool-call UI 状态机与 `ToolStep` 不 1:1**。实验 tab 的 tool renderer 已经用了 SDK 的协议（`tool-input-start` / `tool-output-available`），但历史数据里的 `PersistedToolCall` 需要一套映射器。Phase 1.3 的 `loadThreadHistory` 必须验证这个转换不丢数据。
 2. **`useChatRuntime` 不支持中途替换 transport**。模型切换时 apiKey/apiBaseUrl 变了，目前 transport 用 getter 闭包读最新值——这条设计保留，**不要**试图用"重建 transport"的方式支持模型切换。
 3. **多个 Context 订阅同一个 `chat-stream`**：Tauri 的 `listen` 会为每个订阅者独立分发事件，`useEngineReady` 已证明该模式可行。若未来事件吞吐压力变大再引入 `ChatStreamBus` fan-out；Phase 1 不做。
+4. **`useChatRuntime` 的历史注入 API 不清**。AI SDK v5 `useChat` 有 `initialMessages`，但 `useChatRuntime` 包装后的 runtime 对象是否暴露 `setMessages` / `replaceMessages` 待确认。如无则只能靠改 `key` 整个重建 runtime（每次会话切换都关 transport 连接），与风险 2 冲突。Phase 1.3 第一步就是贴源码核查这点。
 
 ---
 
