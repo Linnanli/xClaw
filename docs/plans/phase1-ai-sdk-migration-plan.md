@@ -55,13 +55,15 @@ TauriRuntimeProvider 订阅的 `ChatEvent` 共 **10 个 variant**，全部通过
 |---|---|---|---|
 | `response` | `text-delta` / `finish` | ✅ 原生 | — |
 | `stream_chunk` | `text-delta` | ✅ 原生 | — |
-| `tool_started` / `tool_completed` | `tool-input-start` / `tool-output-available` | ✅ 原生 | 需确认 `TauriChatTransport` 已映射 |
-| `thinking` | `reasoning-delta` 或 `data-custom` | ⚠️ 部分 | UX 文案对齐 |
+| `tool_started` / `tool_completed` | `tool-input-start` / `tool-input-available` / `tool-output-available` / `tool-output-error` | ✅ 原生，**transport 已 identity 透传**（`TauriChatTransport.ts:79-89`） | — |
+| `thinking` | **`reasoning-delta`**（`tauri_channel.rs:177` `StatusUpdate::Thinking → VercelUIStream::ReasoningDelta`） | ✅ 原生 | —（文案若不一致再调） |
 | `approval_needed` | `data-custom.data.type = 'approval_needed'` | ❌ Context 未建 | **前端**建 `ApprovalContext`，订阅同一个 `chat-stream` 按 inner type 分流 |
 | `job_status` | `data-custom.data.type = 'job_status'` | ❌ Context 未建 | **前端**建 Job Context，同上 |
 | `routine_triggered` | `data-custom.data.type = 'routine_triggered'` | ❌ Context 未建 | **前端**建 Routine Context，同上 |
-| `error` | `VercelStreamEvent` 的 `error` variant + AI SDK `onError` | ⚠️ 需 shim | 保留后端错误码 / 降级文案的 shim |
+| `error` | `VercelStreamEvent.error` + AI SDK `onError` | ⚠️ 需 shim | 保留后端错误码 / 降级文案的 shim |
 | `connection_status` | `data-custom.data.type = 'connection_status'` | ✅ `useEngineReady` 已消费 | 保留该 hook，无需新增 |
+
+> **事实核查更正**：原稿把 `thinking` 列为"⚠️ 部分"、把 `tool_*` 列为"需确认"——都是过时判断。代码证据显示它们都已经是 AI SDK 原生 chunk，**不需要 shim**。真正需要 Context 分流的只剩 approval_needed / job_status / routine_triggered 三类。
 
 ---
 
@@ -88,8 +90,8 @@ TauriRuntimeProvider 订阅的 `ChatEvent` 共 **10 个 variant**，全部通过
   - `parsePersistedUiEvents(content)` 从 L192 搬出。
   - `serializeAttachment(att)` / `deserializeAttachment(raw)` 从 L494–560 搬出。
 - `runtime/shared/chatEventMapping.ts`
-  - `ChatEvent` 类型定义（L279）。
-  - `mapChatEventToAssistantUpdate(event)` — 把非 stream 事件转为 UI 侧 action（approval/job/routine）。
+  - `ChatEvent` 类型定义（L279）——**仅作为 `data-custom.data` 的 inner shape 类型**，不是独立事件源。
+  - `dispatchDataCustom(event)` — 根据 `event.payload.data.type` 分发到 approval/job/routine/error Context。**不包含** thinking / tool_* （它们已是 AI SDK 原生 chunk，不经过这个分发器）。
 - `runtime/shared/historyLoader.ts`
   - `loadThreadHistory(threadId): Promise<ThreadMessageLike[]>` — 封装 `threadApi.loadMessages` + persisted events 还原。
 
@@ -117,6 +119,8 @@ TauriRuntimeProvider 订阅的 `ChatEvent` 共 **10 个 variant**，全部通过
 **多订阅者性能注意**：多个 Context 都 `listen('chat-stream')` 意味着同一个事件会被 Tauri 递送多次（每个订阅者一份）。`useEngineReady` 已经在这么做，实测无感。若后续出现热路径问题，可在 Phase 1.4 抽一个 `ChatStreamBus` 单例做内部 fan-out，再让 Context 订阅该 bus——但 Phase 1.2 不必做这个优化。
 
 **产出**：ChatRuntimeProvider 从 153 → ~220 行；新增 3 个 Context ~450 行。E2E 跑 ChatTabTauriExperimental 验证模型切换、审批弹窗、引擎未就绪友好提示。
+
+**前置依赖 ⚠️**：`ChatTabTauriExperimental` 目前在 `src-ui/` 没有任何入口引用（MainApp 只 import `ChatTabTauri`）。**Phase 1.2 开始前必须先在 MainApp 加个 dev-only 切换**（feature flag / URL param / 隐藏 tab）让 Experimental 渲染起来，否则"实验 tab 并行验证"这条安全网是空的。这个切换在 Phase 1.5 合并时一并拆掉。
 
 ### Phase 1.3 — 历史回放与外部指令
 
@@ -178,8 +182,9 @@ Phase 1.2 只在前端建 Context、订阅同一条 `chat-stream`、按 `data-cu
 
 在启动 Phase 1.1 之前必须确认：
 
-- [ ] `TauriChatTransport` 目前已经把 `tool_started` / `tool_completed` 正确映射到 AI SDK chunk（否则 1.1 前还要补 transport）。
+- [x] ~~`TauriChatTransport` 目前已经把 `tool_started` / `tool_completed` 正确映射到 AI SDK chunk~~ — **已确认：`TauriChatTransport.ts:79-89` identity 透传 `tool-input-*` / `tool-output-*`，`thinking` 后端已映射为 `reasoning-delta`（`tauri_channel.rs:177`）**。
 - [x] ~~后端 `tauri_channel.rs` 确认可以新增独立 event name~~ — **已确认：Phase 1 不需要后端改动**，`chat-stream` + `data-custom` 单通道是稳定合约。
+- [ ] **在 MainApp 为 `ChatTabTauriExperimental` 提供 dev-only 切换入口**（feature flag / URL param）——否则 Phase 1.2+ 的 E2E 验证无路径运行。
 - [ ] 现有 Cypress / Playwright 主对话回归用例齐备（否则 1.5 切换阶段没有安全网）。
 - [ ] 决定 **Phase 1 期间 `ChatTabTauriExperimental` 是否继续存在**：推荐存在直到 1.4 结束，1.5 合并删除。
 
