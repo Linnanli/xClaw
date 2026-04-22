@@ -10,6 +10,7 @@ import { SidebarProvider, SidebarInset } from '../ui/sidebar';
 import { AppSidebar, type NavItem } from './AppSidebar';
 import { AppHeader } from './AppHeader';
 import { ChatTabTauri } from '../tabs/ChatTabTauri';
+import { ChatTabTauriExperimental } from '../tabs/ChatTabTauriExperimental';
 import { LogsTab } from '../tabs/LogsTab';
 
 import { RoutinesTab } from '../tabs/RoutinesTab';
@@ -24,6 +25,7 @@ import { ShortcutManager, SHORTCUTS } from '../../utils/shortcuts';
 import { tracing } from '../../utils/tracing';
 import { useChatNavigation } from '../../hooks/useChatNavigation';
 import { EngineReadyProvider, useEngineReady } from '../../hooks/useEngineReady';
+import { useExperimentalRuntime } from '../../hooks/useExperimentalRuntime';
 import { useRunningJobs } from '../../hooks/useRunningJobs';
 
 const NAV_TITLES: Record<NavItem, string> = {
@@ -60,6 +62,7 @@ function MainAppContent() {
   const { config: watermarkConfig, loading: watermarkLoading } = useWatermark();
   const { themeMode, setTheme } = useTheme();
   const runningJobs = useRunningJobs();
+  const experimentalRuntime = useExperimentalRuntime();
 
   // 嵌入式模式：SSE 连接跳过，使用 Tauri IPC
   useEffect(() => {
@@ -129,6 +132,16 @@ function MainAppContent() {
   const renderContent = () => {
     switch (activeNav) {
       case 'chat':
+        if (experimentalRuntime) {
+          // Phase 1 dev-only 入口：启用方式见 useExperimentalRuntime.ts
+          // 注意：Experimental tab 目前不消费 outboundCommand / engineReadyKey / onThreadSelect，
+          // 这些能力会在 Phase 1.2–1.3 分别通过 ModelProvider / OutboundCommandQueue / 历史回放补齐。
+          return (
+            <ChatTabTauriExperimental
+              selectedThreadId={selectedThreadId}
+            />
+          );
+        }
         return (
           <ChatTabTauri
             selectedThreadId={selectedThreadId}
@@ -165,6 +178,12 @@ function MainAppContent() {
           theme={themeMode}
           onThemeChange={setTheme}
         />
+          {experimentalRuntime && activeNav === 'chat' && (
+            <div className="border-b border-amber-500/40 bg-amber-500/10 px-4 py-1 text-xs text-amber-700 dark:text-amber-300">
+              ⚠️ 实验性 Runtime 已启用（AI SDK + ChatRuntimeProvider）。
+              关闭：URL 加 <code>?runtime=legacy</code> 或 <code>localStorage.removeItem('experimental-runtime')</code>
+            </div>
+          )}
           <div className="min-h-0 flex-1 overflow-hidden">{renderContent()}</div>
         </SidebarInset>
 
