@@ -28,6 +28,8 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 # session 的 truncate_preview helper
 ironclaw_common = { path = "../../desktop-client/ironclaw/crates/ironclaw_common", version = "0.1.0" }
+# session_manager 需要 RwLock/Mutex/spawn (fire-and-forget hooks)
+tokio = { version = "1", features = ["sync", "rt", "time"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "sync"] }

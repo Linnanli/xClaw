@@ -22,6 +22,8 @@ pub mod permissions;
 pub mod reasoning_ctx;
 pub mod response_types;
 pub mod session;
+pub mod session_hooks;
+pub mod session_manager;
 pub mod submission;
 pub mod task;
 pub mod traits;
@@ -44,6 +46,8 @@ pub use messages::{
     strip_unsupported_completion_params, strip_unsupported_tool_params,
 };
 pub use permissions::PermissionMode;
+pub use session_hooks::{NoopSessionHooks, SessionHooks};
+pub use session_manager::SessionManager;
 pub use traits::{HostError, LlmCompleter, WorkspaceWriter};
 
 /// Crate version string, exposed so downstream crates can surface the baseline

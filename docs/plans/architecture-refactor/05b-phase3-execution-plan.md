@@ -18,23 +18,25 @@
 
 ### `crates/x_claw_agent`（agent runtime 核心）
 
-| 文件 | 行数 | 归属理由 |
-|---|---|---|
-| `agent_loop.rs` | 1908 | 主循环入口，`Agent` / `AgentDeps` |
-| `agentic_loop.rs` | 836 | `LoopDelegate` trait + `run_agentic_loop` |
-| `dispatcher.rs` | 3001 | 工具调度（chat 消费者的 `LoopDelegate` 实现） |
-| `thread_ops.rs` | 2572 | 线程持久化 + undo replay |
-| `session.rs` | 1962 | Session/Thread/Turn 模型 |
-| `session_manager.rs` | 1105 | 多用户 session 生命周期 |
-| `submission.rs` | 870 | 提交解析（含 slash commands） |
-| `commands.rs` | 1033 | 系统命令 handler |
-| `compaction.rs` | 899 | 上下文压缩 |
-| `context_monitor.rs` | 236 | 上下文预算监控 |
-| `attachments.rs` | 307 | 附件内容增强 |
-| `task.rs` | 283 | scheduler 用的 Task 类型 |
-| `undo.rs` | 376 | 检查点 undo |
-| `router.rs` | 200 | 消息意图路由 |
-| **合计** | ~15 588 行 | |
+> **2026-04-23 修订（方案 C'）**：下表原列 `agent_loop.rs / dispatcher.rs / thread_ops.rs / commands.rs / router.rs` 已改为**保留在 ironclaw 应用层**（见 Step D-5 章节）。这些文件紧耦合 channels / DB / extensions / Job 业务语义，属于应用组装层而非 runtime。下表保留原列表是为了历史对照，实际归属以 Step D-5 修订版为准。
+
+| 文件 | 行数 | 归属理由 | C' 修订后实际位置 |
+|---|---|---|---|
+| `agent_loop.rs` | 1908 | 主循环入口，`Agent` / `AgentDeps` | ⚠️ 留 ironclaw 应用层（持 ChannelManager/DB/Extensions 等全量） |
+| `agentic_loop.rs` | 836 | `LoopDelegate` trait + `run_agentic_loop` | ✅ x_claw_agent（D-4 已搬） |
+| `dispatcher.rs` | 3001 | 工具调度（chat 消费者的 `LoopDelegate` 实现） | ⚠️ 留 ironclaw 应用层（LoopDelegate 的 chat impl） |
+| `thread_ops.rs` | 2572 | 线程持久化 + undo replay | ⚠️ 留 ironclaw 应用层（channel/DB 语义硬编码） |
+| `session.rs` | 1962 | Session/Thread/Turn 模型 | ✅ x_claw_agent（D-1 已搬） |
+| `session_manager.rs` | 1105 | 多用户 session 生命周期 | ✅ x_claw_agent（D-5 本轮搬完） |
+| `submission.rs` | 870 | 提交解析（含 slash commands） | ✅ x_claw_agent |
+| `commands.rs` | 1033 | 系统命令 handler | ⚠️ 留 ironclaw 应用层（/help /model /status 是 ironclaw UX） |
+| `compaction.rs` | 899 | 上下文压缩 | ✅ x_claw_agent |
+| `context_monitor.rs` | 236 | 上下文预算监控 | ✅ x_claw_agent |
+| `attachments.rs` | 307 | 附件内容增强 | ✅ x_claw_agent |
+| `task.rs` | 283 | scheduler 用的 Task 类型 | ✅ x_claw_agent |
+| `undo.rs` | 376 | 检查点 undo | ✅ x_claw_agent |
+| `router.rs` | 200 | 消息意图路由 | ⚠️ 留 ironclaw 应用层（MessageIntent 含 Job 业务语义） |
+| **x_claw_agent 实际合计** | **~7 800 行** | 真正可复用的 runtime（C' 修订后） | |
 
 ### `crates/ironclaw_routines`（ironclaw 原创扩展）
 
@@ -89,9 +91,31 @@
 
 Hook 以 `Arc<dyn SafetyHook>` / `Arc<dyn ApprovalGate>` 形式存于 `LoopDelegate` 实现里或通过新字段传入 `run_agentic_loop`。具体方案 Step D-4 开工时决定（两种都可行，看哪个 diff 最小）。
 
-**D-5 (~0.5d)**：搬 `agent_loop.rs`、`dispatcher.rs`、`thread_ops.rs`、`commands.rs`、`session_manager.rs`。这是最大一搬，但文件内部自包含，主要是改 `use crate::...` 路径。
+**D-5 (~0.5d)**：搬 `session_manager.rs` 进 `x_claw_agent`（**方案 C'**，2026-04-23 修订）。
 
-每次搬完跑一次 `cargo build -p x_claw_agent` + `cargo build -p desktop-client --lib`。
+**2026-04-23 修订：收敛为方案 C'。** 原计划"把 `agent_loop.rs / dispatcher.rs / thread_ops.rs / commands.rs / session_manager.rs` 五个文件全部搬进 `x_claw_agent`"会让 runtime crate 变成"半个 ironclaw"：
+- `agent_loop.rs`（1908 LOC）是 **`Agent` 应用 facade**，持有 `ChannelManager` / `Database` / `ExtensionManager` / `SkillRegistry` / `HookRegistry` / `SafetyLayer` / `LlmProvider` / `Workspace` / `AgentConfig` / `TenantCtx` 全量应用层组件，属于应用组装层
+- `dispatcher.rs`（3001 LOC）是 chat channel 的 `LoopDelegate` 实现，和 `worker/job.rs` / `worker/container.rs` 的 `LoopDelegate` 实现同性质——按 D-4 的设计本就该留在应用层
+- `thread_ops.rs`（2572 LOC）含 `requires_preexisting_uuid_thread("gateway"\|"test")` 等 channel 语义硬编码 + DB hydration，是 ironclaw 特定行为
+- `commands.rs`（1033 LOC）的 `/help` `/model` `/status` 是 ironclaw UX 决策
+- `router.rs`（200 LOC）的 `MessageIntent::CreateJob / CheckJobStatus / CancelJob / ListJobs / HelpJob` 枚举变体是 **ironclaw Job 业务语义**，不是 runtime 通用能力
+
+强搬这 5 个会违反 05b 开篇边界（第 13 行："agent runtime 本身 vs ironclaw 原创扩展"）、需要新建 5+ trait（ChannelManager/Database/ExtensionManager/SkillRegistry/Tenant 的占位），导致 D-5 从 0.5d 膨胀到 2-3d，且 `x_claw_agent` 边界被 ironclaw 特定语义污染，对 admin-backend / 第三方复用毫无帮助。
+
+**C' 范围**：
+- 搬 `session_manager.rs`（1105 LOC） → `crates/x_claw_agent/src/session_manager.rs`
+- 新增 `crates/x_claw_agent/src/session_hooks.rs` 定义 `SessionHooks` trait（`on_session_start` / `on_session_end`，fire-and-forget 语义）
+- 把 `session_manager::with_hooks(Arc<HookRegistry>)` 改为 `with_hooks(Arc<dyn SessionHooks>)`
+- 在 ironclaw `src/hooks/mod.rs` 里为 `HookRegistry` `impl SessionHooks`（桥接 `HookEvent::SessionStart / SessionEnd`）
+- 保留在 ironclaw `src/agent/`：`agent_loop.rs` / `dispatcher.rs` / `thread_ops.rs` / `commands.rs` / `router.rs`
+
+**x_claw_agent 最终 LOC**：session + agentic_loop + submission + task + attachments + compaction + context_monitor + undo + session_manager ≈ 7 800 行（真正的可复用 runtime），不含 router（Job 语义强耦合）。
+
+**验证**：
+- `cargo test -p x_claw_agent --lib session_manager` ✅ 24 测试（含 2 个 SessionHooks wiring 测试）
+- `cargo test -p ironclaw --lib agent_session_manager` ✅ 1 测试（HookRegistry → SessionHooks 桥接）
+
+其余文件（`agent_loop.rs` / `dispatcher.rs` / `thread_ops.rs` / `commands.rs` / `router.rs`）保留在 ironclaw 应用层，不变。后续若做文件 rename（如 `agent_loop.rs` → `agent_app.rs` 以体现"应用 facade"职责）视为独立 cleanup，不纳入 D-5 范围。
 
 ---
 
