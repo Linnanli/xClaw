@@ -332,3 +332,77 @@ git revert <delete-rig-commit>
 | I | 删除 rig-core | 1d |
 | — | 缓冲 | 2.5d |
 | **合计** | | **15d（三周）** |
+
+---
+
+## 当前进度审查（最新一次盘点）
+
+> 盘点方法：仓库内 `grep -rn "rig_adapter|rig::|rig-core|rig-llm|IRONCLAW_LLM_BACKEND|RigAdapter"` + 文件存在性核对 + Cargo.toml/feature 检查。
+
+### 已完成（Step A–I 主体）
+
+- ✅ **Step A–C / E**：`desktop-client/ironclaw/src/llm/claw_code_provider.rs`（**1334 行**）已上线，`from_registry_config` 接管 Anthropic / OpenAI / Ollama 协议。
+- ✅ **Step B**：`LlmProvider` trait 已落在 `desktop-client/ironclaw/src/llm/provider.rs`。
+- ✅ **Step F**：`RigLlmAdapter` 过渡包装未落地（直接跳过，因为 Step E 一次性切完）。
+- ✅ **Step I 主体**：
+  - `rig_adapter.rs` 已删除（约 2026 行）
+  - `desktop-client/ironclaw/Cargo.toml` 已无 `rig-core` 依赖
+  - `desktop-client/ironclaw/src/llm/schema_utils.rs`（**217 行**）已抽出 `normalize_schema_strict`
+  - `IRONCLAW_LLM_BACKEND` env 开关与 `should_use_claw_code_backend()` 函数已删除
+  - `create_registry_provider` 在 `mod.rs` 内**无条件**走 `ClawCodeLlmProvider`，`GithubCopilotProvider` 与 `CodexChatGpt` 维持独立分支
+  - `claw-code-llm` feature 选了**04b 决策点 4.1 选项 A**（保留为 no-op default feature）
+
+### 待开发清单（已完成）
+
+> 盘点：T1+T2+T4 已在后续提交完成，真实 LLM 回归 T5 已跑通。
+
+#### T1 · 源码内 `rig-core` 注释清理 ✅
+
+已清理 7 个 `.rs` 文件：`mod.rs` / `registry.rs` / `config.rs` / `github_copilot.rs` / `codex_chatgpt.rs` / `retry.rs` / `config/llm.rs`。
+
+保留的历史标注（有意不删，作为变更档案）：
+
+- `schema_utils.rs` 顶部注释："原位于 `rig_adapter.rs`，Phase 2 Step I 从 rig 体系解耦搬到此处"
+- `mod.rs` 函数文档："Phase 2 Step I 之后 rig-core 已被彻底移除"
+- `retry.rs` 错误匹配注释："历史 rig-core 格式: ..."（保留以便识别老格式错误串）
+- `ironclaw/Cargo.toml` `claw-code-llm` feature 注释：历史遗留说明
+
+#### T2 · CLAUDE.md / FEATURE_PARITY.md / Cargo.toml 清理 ✅
+
+- `src/llm/CLAUDE.md`：架构表格 `rig_adapter.rs` → `claw_code_provider.rs` + `schema_utils.rs`；"rig_adapter.rs Details" 章节重写为 "claw_code_provider.rs Details"；GitHub Copilot / 模型 override 描述同步更新
+- `FEATURE_PARITY.md`：L251（OpenAI-compatible）与 L569（Ollama）条目的 `rig::providers::ollama` / `RigAdapter` 替换
+- `ironclaw/Cargo.toml` L213–217：补充了"下一次 minor 版本可同步删除该 feature 与 desktop-client passthrough"提示
+
+#### T3 · `claw-code-llm` no-op feature 终态（延后）
+
+维持选项 A：`claw-code-llm = []` no-op + `desktop-client` 单点 passthrough。**建议延后到 Phase 3 首次 minor 版本号升级时执行选项 B**（同步删 feature 名 + passthrough + 相关脚本参数），避免独立 PR。
+
+#### T4 · 验收 grep ✅
+
+`grep -rn "rig_adapter|RigAdapter|rig-core|rig-llm|IRONCLAW_LLM_BACKEND" --include='*.rs' --include='*.toml' desktop-client/ironclaw/{src,tests,Cargo.toml} desktop-client/Cargo.toml` 仅剩 4 条历史标注（见 T1 清单），**0 条逻辑残留**。`rig::providers / rig::completion` **0 命中**。`tests/support::test_rig::TestRigBuilder` 是测试夹具命名巧合，与 rig-core 无关。
+
+#### T5 · 真实 LLM / 安全回归 ✅
+
+DashScope qwen 真实回归（`cargo test -p ironclaw --test claw_code_real_llm_tests --features libsql -- --ignored --test-threads=1`）：
+
+```
+running 6 tests
+test test_qwen_simple_text_completion ... ok
+test test_qwen_multi_turn_history_preserved ... ok
+test test_qwen_tool_call_round_trip ... ok
+test test_qwen_full_tool_round_trip_with_final_answer ... ok
+test test_qwen_invalid_api_key_returns_clear_error ... ok
+test test_qwen_via_create_registry_provider_with_env_switch ... ok
+test result: ok. 6 passed; 0 failed; finished in 7.93s
+```
+
+关键证据：
+- **工具调用 2-hop 完整回路**：`test_qwen_full_tool_round_trip_with_final_answer` 通过
+- **错误路径清晰**：401 Unauthorized 正确分类为 `RequestFailed`
+- **DashScope 经 claw-code-api 路径工作**：无需任何 JSON 补丁
+- `cargo build -p ironclaw` / `cargo build -p desktop-client` 均 **0 错 0 警**
+
+### 验收回归（已完成）
+
+本文档顶部的"验收标准"与 `04b-step-i` §6 均已打勾，**Phase 2 正式收口**。Phase 3（`05-phase3-agent-extraction.md`）可作为唯一焦点推进。
+

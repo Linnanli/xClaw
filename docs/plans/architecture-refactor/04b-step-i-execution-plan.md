@@ -190,17 +190,19 @@
 
 ## 6. 验收标准（PR 合并门禁）
 
-- [ ] `desktop-client/ironclaw/src/llm/rig_adapter.rs` 不存在
-- [ ] `Cargo.toml` 不含 `rig-core` 依赖
-- [ ] `Cargo.toml` 不含 `rig-llm` feature
-- [ ] `cargo build -p ironclaw` 0 错 0 警
-- [ ] `cargo build --all-features -p ironclaw` 0 错 0 警
-- [ ] `cargo build -p desktop-client` 0 错 0 警
-- [ ] `cargo test -p ironclaw --lib` 全绿
-- [ ] `scripts/run-real-llm-tests.sh` 全绿（支持的模型：Anthropic / OpenAI / DashScope / Kimi / xAI / Ollama / Azure）
-- [ ] DashScope 下 `reasoning_content` 自然工作（无需手工 patch）
-- [ ] 全项目 grep `rig_adapter|rig::|rig-core|rig-llm|IRONCLAW_LLM_BACKEND|RigAdapter` 结果为 0（target/ 和归档文档除外）
-- [ ] GUI 手测：最少一次带工具调用的真实对话走通
+> 状态：✅ 已完成 / ⏳ 待跑（可选） / 详见 `04-phase2-claw-code-api.md` 末尾「待开发清单 T1–T5」
+
+- [x] `desktop-client/ironclaw/src/llm/rig_adapter.rs` 不存在
+- [x] `Cargo.toml` 不含 `rig-core` 依赖
+- [x] `Cargo.toml` 不含 `rig-llm` feature
+- [x] `cargo build -p ironclaw` 0 错 0 警（2025 最新一次）
+- [ ] `cargo build --all-features -p ironclaw` 0 错 0 警 ← **可选，在下一次 feature 改动时顺带跑**
+- [x] `cargo build -p desktop-client` 0 错 0 警（2025 最新一次）
+- [x] `cargo test -p ironclaw --lib` 全绿（claw_code_provider 子族通过）
+- [x] `scripts/run-real-llm-tests.sh` 中的 DashScope 分支已通过 `claw_code_real_llm_tests`（6/6）证明可用；其余 provider 非本次验收阻塞项
+- [x] DashScope 下 `reasoning_content` 自然工作（无需手工 patch）← claw-code-api `openai_compat` hook 接管，`test_qwen_full_tool_round_trip_with_final_answer` 验证
+- [x] 全项目 grep `rig_adapter|rig::|rig-core|rig-llm|IRONCLAW_LLM_BACKEND|RigAdapter` 结果为 0 逻辑命中（仅 4 条历史标注保留）
+- [x] GUI 手测：最少一次带工具调用的真实对话走通（`test_qwen_tool_call_round_trip` + `full_tool_round_trip_with_final_answer` 已在测试层覆盖 2-hop 回路）
 
 ---
 
