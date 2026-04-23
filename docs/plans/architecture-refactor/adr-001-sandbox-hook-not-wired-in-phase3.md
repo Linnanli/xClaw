@@ -3,6 +3,7 @@
 - 状态：**已采纳**（2026-04-23）
 - 影响范围：`crates/x_claw_agent::SandboxExecutor` / `desktop-client/ironclaw/src/sandbox/agent_executor.rs` / Phase 3 Step E
 - 相关代码：上游 `ironclaw-main/src/bridge/sandbox/`、`ironclaw-main/src/bin/sandbox_daemon.rs`、`ironclaw-main/crates/ironclaw_engine/`
+- **后续决策**：[ADR-002 — 沙箱后端分层策略](./adr-002-sandbox-backend-layered-strategy.md)（Phase 4 如何"接"沙箱：cap-std 应用层 + Codex 三平台内核层 + safety 兜底 + 可选 Docker）
 
 ## 背景
 

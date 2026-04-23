@@ -356,18 +356,27 @@ ShellTool / FileReadTool / ...（在容器里执行，返回 Response）
 - 领先上游：38 commit（Phase 2/3 改造）
 - **落后上游：387 commit**（engine v2 + bridge + sandbox_daemon 都在这 387 里）
 
-##### E-重新定义：本轮 Phase 3 只做文档冻结，真实对齐进 Phase 4
+##### E-重新定义：Phase 3 冻结 + cap-std 前置；Phase 4 走 D+ 分层沙箱（ADR-002）
+
+**2026-04-23 更新**：ADR-002 决策 Phase 4 沙箱后端不走上游 ironclaw engine v2 的 Docker daemon 方案，改为 **D+ 分层策略**：应用层 cap-std + 内核层 fork Codex 三平台沙箱 + 兜底层 `ironclaw_safety` + 可选 Docker。E-2 ~ E-7 相应重划。
 
 | 子步 | Phase | 内容 | 可启动 |
 |---|---|---|---|
-| **E-0** | Phase 3 本轮 | 05b 文档冻结 + `SandboxAgentExecutor` / `SandboxExecutor` hook 加注释说明"Phase 3 不接线，保留作可选契约" | ✅ 立即 |
-| **E-1** | Phase 3 本轮 | ADR：为何 Phase 3 不走进程内 sandbox hook，Phase 4 对齐上游 | ✅ 立即 |
-| **E-2** | Phase 4 | 引入 `ironclaw_engine` crate（或 subtree pull 上游对应路径） | ❌ 依赖 Phase 4 启动 |
-| **E-3** | Phase 4 | 搬运 `src/bridge/sandbox/` 11 个文件（~2624 行）到本仓；切出 `src/bridge/` 目录树 | ❌ 依赖 E-2 |
-| **E-4** | Phase 4 | 新增 `[[bin]] sandbox_daemon` target（搬 `src/bin/sandbox_daemon.rs`） | ❌ 依赖 E-3 |
-| **E-5** | Phase 4 | Dockerfile 改造：打包 `sandbox_daemon` 二进制进 worker 镜像 | ❌ 依赖 E-4 |
-| **E-6** | Phase 4 | 端到端集成测试：宿主机 + 容器 + NDJSON RPC round-trip；失败路径（Docker 未启动/容器崩溃/daemon 不响应） | ❌ 依赖 E-5 |
-| **E-7** | Phase 4 | 清理本仓 engine v1 `src/sandbox/manager.rs::SandboxManager` 的死代码残留（或保留为 legacy fallback，视上游策略） | ❌ 依赖 E-6 |
+| **E-0** | Phase 3 本轮 | 05b 文档冻结 + `SandboxAgentExecutor` / `SandboxExecutor` hook 加注释说明"Phase 3 不接线，保留作可选契约" | ✅ 已完成 |
+| **E-1** | Phase 3 本轮 | [ADR-001](./adr-001-sandbox-hook-not-wired-in-phase3.md)：为何 Phase 3 不走进程内 sandbox hook | ✅ 已完成 |
+| **E-1.5** | Phase 3 / Phase 4 桥接 | [ADR-002](./adr-002-sandbox-backend-layered-strategy.md)：D+ 分层策略（cap-std + Codex 三平台 + safety 兜底 + 可选 Docker） | ✅ 已完成 |
+| **E-cap-std** | Phase 3 尾期 | 应用层：`cap-std` 替换 `desktop-client/ironclaw/src/sandbox/agent_executor.rs::resolve_path_bounded`；workspace 改用 `cap_std::fs::Dir` capability 句柄 | ✅ 可立即启动（独立、低风险、跨平台，半到 1 天） |
+| **E-sandbox-trait** | Phase 4 第 1 周 | 新建 `crates/ironclaw_sandbox_common`：定义 `SandboxPolicy` / `SandboxExecRequest` / `SandboxType` 公共类型；`x_claw_agent::SandboxExecutor` 落地真实实现切面 | ❌ 依赖 Phase 4 启动 |
+| **E-linux-sandbox** | Phase 4 第 2-3 周 | 新建 `crates/ironclaw_sandbox_linux`：fork `codex-cli-main/codex-rs/core/src/landlock.rs` + `linux-sandbox/` binary；Landlock + seccomp；保留 NOTICE | ❌ 依赖 E-sandbox-trait |
+| **E-macos-sandbox** | Phase 4 第 4 周 | 新建 `crates/ironclaw_sandbox_macos`：fork `codex-cli-main/codex-rs/sandboxing/src/seatbelt.rs` + SBPL 策略模板；`sandbox-exec` 调用 | ❌ 依赖 E-sandbox-trait |
+| **E-windows-sandbox** | Phase 4 第 5-7 周 | 新建 `crates/ironclaw_sandbox_windows`：fork `codex-cli-main/codex-rs/windows-sandbox-rs/` 整个子 crate（~25 个源文件）；Restricted Token + Job Object + ConPTY；含 `codex-command-runner.exe` 辅助 binary | ❌ 依赖 E-sandbox-trait |
+| **E-integration** | Phase 4 第 8 周 | 三平台沙箱在 `desktop-client/ironclaw/` 装配 + 端到端测试：策略违规拒绝、逃逸尝试、失败路径、资源上限；安全审计测试 | ❌ 依赖 E-linux + E-macos + E-windows |
+| **E-docker-backend** | Phase 5+ 可选 | 企业/高风险场景：对齐上游 ironclaw engine v2，搬 `src/bridge/sandbox/` + `sandbox_daemon` binary，作为 `SandboxExecutor` 的备用实现 | ❌ 非必需，由企业需求驱动 |
+| **E-cleanup** | Phase 4 尾期 | 清理 engine v1 `src/sandbox/manager.rs::SandboxManager` 死代码（或保留作 legacy fallback） | ❌ 依赖 E-integration |
+
+**建议顺序**：E-cap-std（并行） → E-sandbox-trait → E-linux-sandbox → E-macos-sandbox → E-windows-sandbox → E-integration → E-cleanup。Linux 先做是因为 Landlock 最成熟、CI 环境原生支持。
+
+**许可证合规**：fork Codex 代码（Apache-2.0）后，`LICENSES/codex-NOTICE.md` 需记录：来源仓库、上游 commit hash（当前 `d3b044938`）、Apache-2.0 副本、修改范围摘要。
 
 ##### `x_claw_agent::SandboxExecutor` hook 保留策略
 
@@ -377,12 +386,12 @@ ShellTool / FileReadTool / ...（在容器里执行，返回 Response）
 - **不在 Phase 3 接线**：本仓 ironclaw 侧永远是 `NoopSandboxExecutor`
 - **不把 `SandboxAgentExecutor` adapter 删掉**：它是基于错误假设建的，但代码本身无害、编译通过、有测试覆盖；留作文档反例 + 潜在未来复用（如果真的要把 engine v1 `SandboxManager` 挂进 hook，代码在那里）。文件头部加注释说明"Phase 3 未接线原因"。
 
-##### 为什么不在 Phase 3 合并 E-2~E-7
+##### 为什么不在 Phase 3 合并 E-sandbox-trait ~ E-integration
 
-1. **工作量**：上游 387 commit 差距，engine v2 + bridge 落地跨 agent loop / workspace / channels 整条链，绝不是"搬 2624 行"那么简单
-2. **边界清晰**：Phase 3 的目标是"抽出 `x_claw_agent`"，不是"对齐上游 engine v2"
-3. **风险控制**：engine v2 sandbox 涉及 Docker、NDJSON 协议、容器生命周期，调试需要真实环境，打包进 Phase 3 会阻塞整体进度
-4. **上游持续演进**：Phase 4 开始时建议先同步上游最新 main，再开工 E-2
+1. **工作量**：Codex fork 三平台（Linux/macOS/Windows 合计 ~8-12 KLOC）+ 适配 + 测试，远超 Phase 3 周期
+2. **边界清晰**：Phase 3 目标是"抽出 `x_claw_agent`"，不是"落地真实内核沙箱"
+3. **风险控制**：Windows Restricted Token / macOS SBPL 策略调试需要真实三平台环境
+4. **cap-std 例外**：独立、纯应用层、跨平台、工作量小，且对 Phase 3 已有代码是直接增强，因此前置到 Phase 3 尾期
 
 #### F · `crates/ironclaw_secrets` 新 crate（~1d）
 

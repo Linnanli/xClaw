@@ -4,3 +4,6 @@
 [submodule "claw-code"]
 	path = claw-code
 	url = https://github.com/ultraworkers/claw-code.git
+[submodule "codex-cli-main"]
+	path = codex-cli-main
+	url = https://github.com/openai/codex.git
