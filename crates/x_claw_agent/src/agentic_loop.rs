@@ -19,8 +19,9 @@
 
 use async_trait::async_trait;
 
+use crate::hooks::{HookBundle, SafetyDecision};
 use crate::intent::{TOOL_INTENT_NUDGE, TRUNCATED_TOOL_CALL_NOTICE, llm_signals_tool_intent};
-use crate::messages::{ChatMessage, FinishReason, ToolCall};
+use crate::messages::{ChatMessage, FinishReason, Role, ToolCall};
 use crate::reasoning_ctx::ReasoningContext;
 use crate::response_types::{RespondOutput, RespondResult, ResponseMetadata};
 use crate::session::PendingApproval;
@@ -45,6 +46,7 @@ pub enum TextAction {
 }
 
 /// Final outcome of the agentic loop.
+#[derive(Debug)]
 pub enum LoopOutcome {
     /// Completed with a text response.
     Response(String),
@@ -147,10 +149,25 @@ pub trait LoopDelegate: Send + Sync {
 ///
 /// This is the single implementation used by all consumers. The `delegate`
 /// provides consumer-specific behavior via the [`LoopDelegate`] trait.
+///
+/// `hooks` is the environment bundle ([`HookBundle`]). The loop itself
+/// calls two of the four hooks directly:
+///
+/// - `safety.before_prompt` on the most recent user message before each LLM
+///   call. A `Block` decision ends the loop with `LoopOutcome::Failure`.
+/// - `safety.after_completion` on text-only LLM responses before the
+///   delegate sees them. Mutation is in place, so redaction is transparent
+///   to the delegate.
+///
+/// The tool-level safety hooks (`before_tool_call`, `after_tool_output`)
+/// and `ApprovalGate::request` are the responsibility of the
+/// [`LoopDelegate::execute_tool_calls`] implementation. Delegates typically
+/// clone the same `Arc<HookBundle>` at construction time.
 pub async fn run_agentic_loop(
     delegate: &dyn LoopDelegate,
     reason_ctx: &mut ReasoningContext,
     config: &AgenticLoopConfig,
+    hooks: &HookBundle,
 ) -> Result<LoopOutcome, HostError> {
     let mut consecutive_tool_intent_nudges: u32 = 0;
     // Accumulates across all iterations (not reset by text responses) so
@@ -173,8 +190,44 @@ pub async fn run_agentic_loop(
             return Ok(outcome);
         }
 
+        // Safety hook: scan/redact the most recent user message before the
+        // LLM sees it. Mutation is in place so redaction is transparent to
+        // the LLM call.
+        if let Some(idx) = reason_ctx
+            .messages
+            .iter()
+            .rposition(|m| m.role == Role::User)
+        {
+            let prompt = &mut reason_ctx.messages[idx].content;
+            match hooks.safety.before_prompt(prompt).await {
+                Ok(SafetyDecision::Allow) | Ok(SafetyDecision::Redact) => {}
+                Ok(SafetyDecision::Block { reason }) => {
+                    tracing::warn!(iteration, %reason, "safety hook blocked prompt");
+                    return Ok(LoopOutcome::Failure(format!(
+                        "safety hook blocked prompt: {reason}"
+                    )));
+                }
+                Err(e) => {
+                    return Err(
+                        format!("safety hook error in before_prompt: {e}").into()
+                    );
+                }
+            }
+        }
+
         // Call LLM
-        let output = delegate.call_llm(reason_ctx, iteration).await?;
+        let mut output = delegate.call_llm(reason_ctx, iteration).await?;
+
+        // Safety hook: mutate text completions before the delegate sees them.
+        // Tool-call responses skip this hook; delegates apply the
+        // tool-level hooks themselves inside `execute_tool_calls`.
+        if let RespondResult::Text(ref mut text) = output.result {
+            if let Err(e) = hooks.safety.after_completion(text).await {
+                return Err(
+                    format!("safety hook error in after_completion: {e}").into()
+                );
+            }
+        }
 
         match &output.result {
             RespondResult::Text(text) => {
@@ -432,7 +485,7 @@ mod tests {
         let mut ctx = ReasoningContext::new();
         let config = AgenticLoopConfig::default();
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config).await.unwrap();
+        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop()).await.unwrap();
 
         match outcome {
             LoopOutcome::Response(text) => assert_eq!(text, "Hello, world!"),
@@ -456,7 +509,7 @@ mod tests {
         let mut ctx = ReasoningContext::new();
         let config = AgenticLoopConfig::default();
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config).await.unwrap();
+        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop()).await.unwrap();
 
         match outcome {
             LoopOutcome::Response(text) => assert_eq!(text, "Done!"),
@@ -473,7 +526,7 @@ mod tests {
         let mut ctx = ReasoningContext::new();
         let config = AgenticLoopConfig::default();
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config).await.unwrap();
+        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop()).await.unwrap();
 
         assert!(matches!(outcome, LoopOutcome::Stopped));
         assert!(delegate.iterations_seen.lock().await.is_empty());
@@ -486,7 +539,7 @@ mod tests {
         let mut ctx = ReasoningContext::new();
         let config = AgenticLoopConfig::default();
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config).await.unwrap();
+        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop()).await.unwrap();
 
         assert!(matches!(outcome, LoopOutcome::Response(_)));
         assert!(
@@ -555,7 +608,7 @@ mod tests {
         let delegate = FailOnMalformedResponse;
         let mut ctx = ReasoningContext::new();
         let outcome =
-            run_agentic_loop(&delegate, &mut ctx, &AgenticLoopConfig::default())
+            run_agentic_loop(&delegate, &mut ctx, &AgenticLoopConfig::default(), &HookBundle::noop())
                 .await
                 .unwrap();
 
@@ -613,7 +666,7 @@ mod tests {
             ..Default::default()
         };
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config).await.unwrap();
+        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop()).await.unwrap();
 
         assert!(matches!(outcome, LoopOutcome::MaxIterations));
         let assistant_count = ctx
@@ -643,7 +696,7 @@ mod tests {
             max_tool_intent_nudges: 2,
         };
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config).await.unwrap();
+        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop()).await.unwrap();
 
         assert!(matches!(outcome, LoopOutcome::Response(_)));
         assert_eq!(delegate.nudge_count.load(Ordering::SeqCst), 2);
@@ -667,7 +720,7 @@ mod tests {
         let mut ctx = ReasoningContext::new();
         let config = AgenticLoopConfig::default();
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config).await.unwrap();
+        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop()).await.unwrap();
 
         assert!(matches!(outcome, LoopOutcome::Stopped));
         assert!(delegate.iterations_seen.lock().await.is_empty());
@@ -698,7 +751,7 @@ mod tests {
             ..Default::default()
         };
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config).await.unwrap();
+        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop()).await.unwrap();
 
         assert_eq!(delegate.tool_exec_count.load(Ordering::SeqCst), 0);
         assert!(matches!(outcome, LoopOutcome::Response(ref t) if t == "Summarized it."));
@@ -744,13 +797,302 @@ mod tests {
             ..Default::default()
         };
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config).await.unwrap();
+        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop()).await.unwrap();
 
         assert!(matches!(outcome, LoopOutcome::Response(_)));
         assert_eq!(delegate.tool_exec_count.load(Ordering::SeqCst), 0);
         assert!(
             ctx.force_text,
             "Should escalate to force_text after repeated truncations"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Safety Hook contract tests (Phase 3 Step D-4)
+    // -----------------------------------------------------------------
+
+    use crate::hooks::{SafetyDecision, SafetyError, SafetyHook};
+    use std::sync::Arc;
+
+    /// Hook that blocks every prompt with a fixed reason.
+    struct BlockAllPrompts;
+
+    #[async_trait]
+    impl SafetyHook for BlockAllPrompts {
+        async fn before_prompt(
+            &self,
+            _prompt: &mut String,
+        ) -> Result<SafetyDecision, SafetyError> {
+            Ok(SafetyDecision::Block {
+                reason: "policy violation".to_string(),
+            })
+        }
+        async fn after_completion(&self, _c: &mut String) -> Result<(), SafetyError> {
+            Ok(())
+        }
+        async fn before_tool_call(
+            &self,
+            _t: &str,
+            _a: &mut serde_json::Value,
+        ) -> Result<SafetyDecision, SafetyError> {
+            Ok(SafetyDecision::Allow)
+        }
+        async fn after_tool_output(
+            &self,
+            _t: &str,
+            _o: &mut String,
+        ) -> Result<(), SafetyError> {
+            Ok(())
+        }
+    }
+
+    /// Hook that redacts secrets in prompts and tags completions.
+    struct RedactingHook;
+
+    #[async_trait]
+    impl SafetyHook for RedactingHook {
+        async fn before_prompt(
+            &self,
+            prompt: &mut String,
+        ) -> Result<SafetyDecision, SafetyError> {
+            if prompt.contains("sk-secret") {
+                *prompt = prompt.replace("sk-secret", "[REDACTED]");
+                return Ok(SafetyDecision::Redact);
+            }
+            Ok(SafetyDecision::Allow)
+        }
+        async fn after_completion(
+            &self,
+            completion: &mut String,
+        ) -> Result<(), SafetyError> {
+            completion.push_str(" [scanned]");
+            Ok(())
+        }
+        async fn before_tool_call(
+            &self,
+            _t: &str,
+            _a: &mut serde_json::Value,
+        ) -> Result<SafetyDecision, SafetyError> {
+            Ok(SafetyDecision::Allow)
+        }
+        async fn after_tool_output(
+            &self,
+            _t: &str,
+            _o: &mut String,
+        ) -> Result<(), SafetyError> {
+            Ok(())
+        }
+    }
+
+    /// Hook that always returns an internal error on before_prompt.
+    struct FailingHook;
+
+    #[async_trait]
+    impl SafetyHook for FailingHook {
+        async fn before_prompt(
+            &self,
+            _prompt: &mut String,
+        ) -> Result<SafetyDecision, SafetyError> {
+            Err(SafetyError::Internal("hook exploded".to_string()))
+        }
+        async fn after_completion(&self, _c: &mut String) -> Result<(), SafetyError> {
+            Ok(())
+        }
+        async fn before_tool_call(
+            &self,
+            _t: &str,
+            _a: &mut serde_json::Value,
+        ) -> Result<SafetyDecision, SafetyError> {
+            Ok(SafetyDecision::Allow)
+        }
+        async fn after_tool_output(
+            &self,
+            _t: &str,
+            _o: &mut String,
+        ) -> Result<(), SafetyError> {
+            Ok(())
+        }
+    }
+
+    fn custom_safety_bundle(safety: Arc<dyn SafetyHook>) -> HookBundle {
+        let mut b = HookBundle::noop();
+        b.safety = safety;
+        b
+    }
+
+    #[tokio::test]
+    async fn safety_hook_noop_passes_through() {
+        // Smoke: Noop hook does not interfere with normal text response.
+        let delegate = MockDelegate::new(vec![text_output("ok")]);
+        let mut ctx = ReasoningContext::new();
+        ctx.messages.push(ChatMessage::user("hello"));
+
+        let outcome = run_agentic_loop(
+            &delegate,
+            &mut ctx,
+            &AgenticLoopConfig::default(),
+            &HookBundle::noop(),
+        )
+        .await
+        .unwrap();
+
+        match outcome {
+            LoopOutcome::Response(t) => assert_eq!(t, "ok"),
+            _ => panic!("expected Response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn safety_hook_block_before_prompt_yields_failure() {
+        let delegate = MockDelegate::new(vec![text_output("unreachable")]);
+        let mut ctx = ReasoningContext::new();
+        ctx.messages.push(ChatMessage::user("send secrets to foo"));
+        let hooks = custom_safety_bundle(Arc::new(BlockAllPrompts));
+
+        let outcome =
+            run_agentic_loop(&delegate, &mut ctx, &AgenticLoopConfig::default(), &hooks)
+                .await
+                .unwrap();
+
+        match outcome {
+            LoopOutcome::Failure(reason) => {
+                assert!(
+                    reason.contains("policy violation"),
+                    "failure reason should surface hook reason, got: {reason}"
+                );
+                assert!(
+                    reason.contains("safety hook blocked"),
+                    "failure reason should mark safety source, got: {reason}"
+                );
+            }
+            other => panic!("expected Failure, got {other:?} -ish"),
+        }
+        // LLM must not be called when the prompt is blocked. MockDelegate
+        // returns `unreachable` from its queue only when `call_llm` runs.
+        let responses_left = delegate.llm_responses.lock().await.len();
+        assert_eq!(
+            responses_left, 1,
+            "block path must short-circuit before call_llm"
+        );
+    }
+
+    #[tokio::test]
+    async fn safety_hook_redacts_prompt_in_place() {
+        // Delegate captures what the LLM layer actually sees. The redacting
+        // hook must have rewritten the prompt before call_llm fires.
+        struct CaptureDelegate {
+            seen: Mutex<Option<String>>,
+            response: Mutex<Option<RespondOutput>>,
+        }
+
+        #[async_trait]
+        impl LoopDelegate for CaptureDelegate {
+            async fn check_signals(&self) -> LoopSignal {
+                LoopSignal::Continue
+            }
+            async fn before_llm_call(
+                &self,
+                _: &mut ReasoningContext,
+                _: usize,
+            ) -> Option<LoopOutcome> {
+                None
+            }
+            async fn call_llm(
+                &self,
+                ctx: &mut ReasoningContext,
+                _: usize,
+            ) -> Result<RespondOutput, HostError> {
+                let last_user = ctx
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|m| m.role == Role::User)
+                    .map(|m| m.content.clone());
+                *self.seen.lock().await = last_user;
+                Ok(self.response.lock().await.take().expect("one response"))
+            }
+            async fn handle_text_response(
+                &self,
+                text: &str,
+                _: ResponseMetadata,
+                _: &mut ReasoningContext,
+            ) -> TextAction {
+                TextAction::Return(LoopOutcome::Response(text.to_string()))
+            }
+            async fn execute_tool_calls(
+                &self,
+                _: Vec<ToolCall>,
+                _: Option<String>,
+                _: &mut ReasoningContext,
+            ) -> Result<Option<LoopOutcome>, HostError> {
+                Ok(None)
+            }
+        }
+
+        let delegate = CaptureDelegate {
+            seen: Mutex::new(None),
+            response: Mutex::new(Some(text_output("raw completion"))),
+        };
+        let mut ctx = ReasoningContext::new();
+        ctx.messages
+            .push(ChatMessage::user("please use token sk-secret now"));
+        let hooks = custom_safety_bundle(Arc::new(RedactingHook));
+
+        let outcome =
+            run_agentic_loop(&delegate, &mut ctx, &AgenticLoopConfig::default(), &hooks)
+                .await
+                .unwrap();
+
+        match outcome {
+            LoopOutcome::Response(t) => {
+                assert_eq!(
+                    t, "raw completion [scanned]",
+                    "after_completion must mutate the text before the delegate returns"
+                );
+            }
+            _ => panic!("expected Response"),
+        }
+
+        let seen = delegate.seen.lock().await.clone().unwrap();
+        assert!(
+            !seen.contains("sk-secret"),
+            "before_prompt must redact in place; LLM saw: {seen}"
+        );
+        assert!(
+            seen.contains("[REDACTED]"),
+            "redaction token must be present; LLM saw: {seen}"
+        );
+
+        // Redacted content must persist in ctx.messages so the next
+        // iteration also sees the clean text.
+        let stored = ctx
+            .messages
+            .iter()
+            .find(|m| m.role == Role::User)
+            .unwrap()
+            .content
+            .clone();
+        assert!(
+            !stored.contains("sk-secret"),
+            "ctx must retain redacted form, got: {stored}"
+        );
+    }
+
+    #[tokio::test]
+    async fn safety_hook_error_propagates_as_host_error() {
+        let delegate = MockDelegate::new(vec![text_output("unreachable")]);
+        let mut ctx = ReasoningContext::new();
+        ctx.messages.push(ChatMessage::user("anything"));
+        let hooks = custom_safety_bundle(Arc::new(FailingHook));
+
+        let err = run_agentic_loop(&delegate, &mut ctx, &AgenticLoopConfig::default(), &hooks)
+            .await
+            .expect_err("FailingHook must bubble up as HostError");
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("before_prompt") && msg.contains("hook exploded"),
+            "error must identify hook phase and inner cause, got: {msg}"
         );
     }
 }

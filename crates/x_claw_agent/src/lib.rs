@@ -33,8 +33,8 @@ pub use bash_validation::{
 };
 pub use hooks::{
     ApprovalError, ApprovalGate, ApprovalOutcome, ApprovalRequest, AutoApproveGate, DenyAllGate,
-    InMemorySecrets, NoopSafetyHook, NoopSandboxExecutor, SafetyDecision, SafetyError, SafetyHook,
-    SandboxError, SandboxExecOutput, SandboxExecRequest, SandboxExecutor, SecretError,
+    HookBundle, InMemorySecrets, NoopSafetyHook, NoopSandboxExecutor, SafetyDecision, SafetyError,
+    SafetyHook, SandboxError, SandboxExecOutput, SandboxExecRequest, SandboxExecutor, SecretError,
     SecretProvider, SecretString,
 };
 pub use messages::{

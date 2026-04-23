@@ -22,6 +22,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -357,6 +358,61 @@ impl ApprovalGate for DenyAllGate {
         Ok(ApprovalOutcome::Denied {
             reason: "DenyAllGate rejects every tool call".to_string(),
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HookBundle
+// ---------------------------------------------------------------------------
+
+/// Bundle of the four hook implementers that describe the environment around
+/// the agent runtime.
+///
+/// The [`run_agentic_loop`](crate::agentic_loop::run_agentic_loop) takes
+/// `&HookBundle` to call `safety.before_prompt` and `safety.after_completion`
+/// directly. Tool-level hooks (`before_tool_call`, `after_tool_output`) and
+/// `ApprovalGate::request` are the responsibility of the
+/// [`LoopDelegate::execute_tool_calls`](crate::agentic_loop::LoopDelegate)
+/// implementation — delegates typically hold their own `Arc<HookBundle>`
+/// and call into it during tool iteration.
+///
+/// Keeping tool-level hooks out of the loop avoids forcing every delegate
+/// to re-express the tool execution contract through the loop signature.
+/// The runtime stays narrow; delegates stay in charge of their own
+/// tool dispatch.
+#[derive(Clone)]
+pub struct HookBundle {
+    pub safety: Arc<dyn SafetyHook>,
+    pub sandbox: Arc<dyn SandboxExecutor>,
+    pub secrets: Arc<dyn SecretProvider>,
+    pub approval: Arc<dyn ApprovalGate>,
+}
+
+impl HookBundle {
+    /// Bundle made of all Noop / InMemory / AutoApprove defaults. Useful for
+    /// unit tests that don't exercise any hook path.
+    #[must_use]
+    pub fn noop() -> Self {
+        Self {
+            safety: Arc::new(NoopSafetyHook),
+            sandbox: Arc::new(NoopSandboxExecutor),
+            secrets: Arc::new(InMemorySecrets::new()),
+            approval: Arc::new(AutoApproveGate),
+        }
+    }
+}
+
+impl std::fmt::Debug for HookBundle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Concrete hook implementers rarely implement Debug themselves and
+        // their internals are often privileged state (approval surfaces,
+        // secret stores). Render only the struct shape.
+        f.debug_struct("HookBundle")
+            .field("safety", &"<dyn SafetyHook>")
+            .field("sandbox", &"<dyn SandboxExecutor>")
+            .field("secrets", &"<dyn SecretProvider>")
+            .field("approval", &"<dyn ApprovalGate>")
+            .finish()
     }
 }
 
