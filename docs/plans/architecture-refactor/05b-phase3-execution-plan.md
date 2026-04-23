@@ -266,7 +266,7 @@ pub fn build_agent(
 | 已搬运的 ironclaw agent runtime 支撑模块（**10 个**） | `src/{agentic_loop, compaction, context_monitor, intent, messages, reasoning_ctx, response_types, session, submission, task, undo}.rs` | 编译通过 + Hook 已插桩 |
 | **G `IronclawSafetyHook` adapter** | `desktop-client/ironclaw/crates/ironclaw_safety/src/agent_hook.rs` | `SafetyLayer` → `SafetyHook` 映射，`agent-hook` feature 已开启 |
 | **G 3 处生产接线** | `worker/container.rs` / `worker/job.rs` / `agent/dispatcher.rs` | 通过 `hook_bundle_with_safety()` helper 统一构造 |
-| **E `SandboxAgentExecutor` adapter** | `desktop-client/ironclaw/src/sandbox/agent_executor.rs` | `SandboxManager` → `SandboxExecutor`；**尚未接线** |
+| **E `SandboxAgentExecutor` adapter** | `desktop-client/ironclaw/src/sandbox/agent_executor.rs` | `SandboxManager` → `SandboxExecutor`；⚠️ **基于错误假设建立，见下文 "E 章节重新定义"** |
 | **F `AgentSecrets` adapter** | `desktop-client/ironclaw/src/secrets/agent_provider.rs` | `SecretsStore` → `SecretProvider`；**尚未接线** |
 | Integration contract test | 子模块 commit `79ec4f05` | |
 
@@ -301,14 +301,88 @@ pub fn build_agent(
 
 **验收**：每搬一个就跑 `cargo build -p x_claw_agent` 与 `cargo build -p desktop-client --lib`。
 
-#### E · `crates/ironclaw_sandbox` 新 crate（~1.5d）
+#### E · 与上游 engine v2 进程外沙箱对齐（**章节重新定义**）
 
-**现状**：`SandboxAgentExecutor` adapter 已在 `desktop-client/ironclaw/src/sandbox/agent_executor.rs` 就位，**但尚未在 `hook_bundle_with_safety()` 中接线**（3 处 call site 的 `HookBundle.sandbox` 仍是 `Arc<NoopSandboxExecutor>`）。
+> **2026-04-23 修订**：原 E 计划（"提 `crates/ironclaw_sandbox` crate + 给 `x_claw_agent::SandboxExecutor` hook 接线 `SandboxManager`"）基于错误假设。下文为按上游 ironclaw main 分支（HEAD `9dcd8969`，代码在 `ironclaw-main/` 本地参考）真实架构重新规划。
 
-当前 `crates/` 下只有 `ironclaw_auth` 与 `x_claw_agent`，独立 `ironclaw_sandbox` crate **未建立**。任务：
+##### E-现状诊断（必读）
 
-1. **短路径（先接线）**：扩展 `hook_bundle_with_safety` → `hook_bundle_full(safety, sandbox_mgr, secrets)`，把 `SandboxAgentExecutor` 注入 `HookBundle.sandbox`
-2. **长路径（提 crate）**：`cargo new --lib crates/ironclaw_sandbox` + 搬运 `desktop-client/ironclaw/src/sandbox/` + 主 crate 改 `use ironclaw_sandbox::*;`
+- `SandboxManager` 在 **agent 主进程 0 个调用者**（上游 main + 本仓一致，git grep 已验证）
+- `SandboxModeConfig::to_sandbox_config()` 在上游 main + 本仓都 **0 个调用者**
+- `config.sandbox.enabled` 的 6 处 gate 全部控制 `container_job_manager` / `prompt_queue` / `SandboxReaper` / `SandboxReadiness` 枚举，**不控制** `SandboxManager`
+- 唯一真实的 `ShellTool::with_sandbox(...)` 调用点是 `src/bin/sandbox_daemon.rs` —— 独立 binary，在容器**内部**跑
+- 结论：**agent 主进程不走进程内 sandbox hook**，上游设计就是进程外 daemon + Docker exec NDJSON RPC
+
+##### E-上游真实架构（`ironclaw-main/` 参考）
+
+```
+agent 主进程（宿主机）
+    │
+    │  LLM 决定调用 shell / file_read / ...
+    ▼
+ironclaw_engine::WorkspaceMounts  ← 抽象，按前缀分发
+    │
+    │  路径以 /project/ 开头？
+    ▼
+bridge/sandbox/intercept::maybe_intercept
+    │
+    │  SANDBOX_ENABLED=true ?
+    ▼
+ContainerizedMountFactory → ProjectSandboxManager
+    │  （每项目一个 Docker 容器）
+    ▼
+DockerTransport::dispatch  ← NDJSON over "docker exec -i"
+    │
+    ▼
+容器内 sandbox_daemon binary（255 行）
+    │
+    │  解析 Request { method: "execute_tool", params: { name, input } }
+    ▼
+ShellTool / FileReadTool / ...（在容器里执行，返回 Response）
+```
+
+关键组成（上游路径 → 本仓缺失情况）：
+
+| 上游文件/目录 | 行数 | 本仓状态 |
+|---|---|---|
+| `crates/ironclaw_engine/` | 大（含 `WorkspaceMounts / MountBackend / ProjectMountFactory` 等） | ❌ 完全缺失 |
+| `src/bridge/sandbox/` | 2624（11 个 `.rs`） | ❌ 完全缺失（本仓无 `src/bridge/` 目录） |
+| `src/bin/sandbox_daemon.rs` | 255 | ❌ 完全缺失 |
+| `SANDBOX_ENABLED` → `engine_v2_sandbox_enabled()` 开关 | 小 | ❌ 本仓只有 `config.sandbox.enabled`，未 gate 真实 sandbox |
+| `src/sandbox/manager.rs::SandboxManager` (engine v1) | 本仓有 | ⚠️ engine v1 残留，上游也保留但不再是主路径 |
+
+本仓 fork 时间点早于 engine v2 sandbox 落地：
+- 分叉 commit: `732c23e06`
+- 领先上游：38 commit（Phase 2/3 改造）
+- **落后上游：387 commit**（engine v2 + bridge + sandbox_daemon 都在这 387 里）
+
+##### E-重新定义：本轮 Phase 3 只做文档冻结，真实对齐进 Phase 4
+
+| 子步 | Phase | 内容 | 可启动 |
+|---|---|---|---|
+| **E-0** | Phase 3 本轮 | 05b 文档冻结 + `SandboxAgentExecutor` / `SandboxExecutor` hook 加注释说明"Phase 3 不接线，保留作可选契约" | ✅ 立即 |
+| **E-1** | Phase 3 本轮 | ADR：为何 Phase 3 不走进程内 sandbox hook，Phase 4 对齐上游 | ✅ 立即 |
+| **E-2** | Phase 4 | 引入 `ironclaw_engine` crate（或 subtree pull 上游对应路径） | ❌ 依赖 Phase 4 启动 |
+| **E-3** | Phase 4 | 搬运 `src/bridge/sandbox/` 11 个文件（~2624 行）到本仓；切出 `src/bridge/` 目录树 | ❌ 依赖 E-2 |
+| **E-4** | Phase 4 | 新增 `[[bin]] sandbox_daemon` target（搬 `src/bin/sandbox_daemon.rs`） | ❌ 依赖 E-3 |
+| **E-5** | Phase 4 | Dockerfile 改造：打包 `sandbox_daemon` 二进制进 worker 镜像 | ❌ 依赖 E-4 |
+| **E-6** | Phase 4 | 端到端集成测试：宿主机 + 容器 + NDJSON RPC round-trip；失败路径（Docker 未启动/容器崩溃/daemon 不响应） | ❌ 依赖 E-5 |
+| **E-7** | Phase 4 | 清理本仓 engine v1 `src/sandbox/manager.rs::SandboxManager` 的死代码残留（或保留为 legacy fallback，视上游策略） | ❌ 依赖 E-6 |
+
+##### `x_claw_agent::SandboxExecutor` hook 保留策略
+
+进程内 `SandboxExecutor` trait 已在 `crates/x_claw_agent/src/hooks.rs` 就位。处置策略：
+
+- **保留不删**：作为 `x_claw_agent` 可选契约，方便未来 wasm sandbox / 其他 runtime 场景
+- **不在 Phase 3 接线**：本仓 ironclaw 侧永远是 `NoopSandboxExecutor`
+- **不把 `SandboxAgentExecutor` adapter 删掉**：它是基于错误假设建的，但代码本身无害、编译通过、有测试覆盖；留作文档反例 + 潜在未来复用（如果真的要把 engine v1 `SandboxManager` 挂进 hook，代码在那里）。文件头部加注释说明"Phase 3 未接线原因"。
+
+##### 为什么不在 Phase 3 合并 E-2~E-7
+
+1. **工作量**：上游 387 commit 差距，engine v2 + bridge 落地跨 agent loop / workspace / channels 整条链，绝不是"搬 2624 行"那么简单
+2. **边界清晰**：Phase 3 的目标是"抽出 `x_claw_agent`"，不是"对齐上游 engine v2"
+3. **风险控制**：engine v2 sandbox 涉及 Docker、NDJSON 协议、容器生命周期，调试需要真实环境，打包进 Phase 3 会阻塞整体进度
+4. **上游持续演进**：Phase 4 开始时建议先同步上游最新 main，再开工 E-2
 
 #### F · `crates/ironclaw_secrets` 新 crate（~1d）
 
@@ -356,17 +430,20 @@ pub fn build_agent(
 | Step A + B + C | 100% |
 | Step D-1 ~ D-3 + D-4 + D-5 支撑模块 | ~85%（缺 7 个大文件搬迁） |
 | Step D-4 Hook 插桩 | **100%** ✅ |
-| Step G `ironclaw_safety` agent-hook | **100%**（接线完成，契约测试未补） |
-| Step E / F adapter | adapter 已建，**未接线** |
+| Step G `ironclaw_safety` agent-hook | **100%**（接线 + 契约测试完成） |
+| Step E（原）→ E-0/E-1 文档冻结 | **0%**（本轮立即） |
+| Step E-2 ~ E-7（Phase 4 对齐上游 engine v2） | 0% |
+| Step F adapter → F 接线 | adapter 已建，**未接线** |
 | Step D-5 / H / I / J / K | 0% |
-| **整体 Phase 3** | **~40%** |
+| **整体 Phase 3** | **~42%** |
 
-### 建议切入顺序
+### 建议切入顺序（2026-04-23 修订）
 
 1. ~~**D-4（Hook 插桩）**~~ ✅ 已完成（`cf9eca75`）
-2. ~~**G（`ironclaw_safety::agent_hook`）**~~ ✅ 已完成（`22236f99`）
-3. **E + F 接线**（最小改动）— 扩展 `hook_bundle_with_safety` → `hook_bundle_full`，把 `SandboxAgentExecutor` + `AgentSecrets` 注入 `HookBundle`；补 G 的契约测试
-4. **D-5（7 个大文件搬迁）** — 依赖 E/F 接线稳定
-5. **E / F 提 crate**（`crates/ironclaw_sandbox` + `crates/ironclaw_secrets`）
+2. ~~**G（`ironclaw_safety::agent_hook`）**~~ ✅ 已完成（`22236f99` + 契约测试 `a18aef97`）
+3. **E-0 + E-1（本轮）** — 05b 文档冻结 + 写 ADR 记录"Phase 3 不走进程内 sandbox hook，Phase 4 对齐上游 engine v2"；给 `SandboxAgentExecutor` 加注释
+4. **F 接线** — `AgentSecrets` 注入 `HookBundle.secrets`（通过扩展 helper `hook_bundle_with_safety_and_secrets`），3 处 call site 更新
+5. **D-5（7 个大文件搬迁）** — 沿原顺序：`attachments → router → session_manager → commands → thread_ops → dispatcher → agent_loop`
 6. **H（`ironclaw_routines`）** — 依赖 D-5
 7. **I → J → K** — 应用层组装 + 清理 + 上游演练
+8. **（Phase 4）E-2 ~ E-7** — engine v2 + `src/bridge/sandbox/` + `sandbox_daemon` binary 对齐上游

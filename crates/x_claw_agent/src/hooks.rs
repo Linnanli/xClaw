@@ -155,6 +155,19 @@ pub enum SandboxError {
 
 /// Runs model-requested code / file / network operations in an isolated
 /// environment.
+///
+/// # Phase 3 状态 — 见 ADR-001
+///
+/// 本 trait 是 `x_claw_agent` 面向未来多 runtime（wasm、进程内 VM 等）的
+/// **可选 hook 契约**。Phase 3 的 ironclaw 集成中 **不会** 被接线：
+///
+/// - ironclaw 侧永远注入 [`NoopSandboxExecutor`]；
+/// - 真实沙箱能力对齐上游 `nearai/ironclaw` 的进程外 daemon 架构
+///   （engine v2 + `bridge/sandbox/` + `sandbox_daemon` binary + NDJSON JSON-RPC），
+///   该工作归档在 Phase 4（docs/plans/architecture-refactor/05b 执行计划 E-2 ~ E-7）。
+///
+/// 因此实现者请注意：目前没有任何生产代码路径会调用本 trait 的方法。
+/// 保留它的目的是 (a) 为非 ironclaw runtime 留扩展点，(b) 方便单元测试注入 mock。
 #[async_trait]
 pub trait SandboxExecutor: Send + Sync {
     async fn run_bash(&self, req: SandboxExecRequest) -> Result<SandboxExecOutput, SandboxError>;

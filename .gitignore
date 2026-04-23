@@ -52,3 +52,4 @@ claude-code-main
 !.codex/prompts/**
 /decode-claude-code-main/
 /claw-decode-main/
+/ironclaw-main/
