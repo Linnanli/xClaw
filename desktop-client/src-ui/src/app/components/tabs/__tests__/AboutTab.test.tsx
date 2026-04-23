@@ -9,7 +9,7 @@
  */
 
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
-import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { AboutTab } from '../AboutTab';
 
 // mock invokeTauri
@@ -23,17 +23,12 @@ const mockInvoke = vi.mocked(invokeTauri);
 describe('AboutTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.useFakeTimers();
     // 默认：get_app_version 返回 '1.2.3'，check_for_updates 返回最新
     mockInvoke.mockImplementation((cmd: string) => {
       if (cmd === 'get_app_version') return Promise.resolve('1.2.3');
       if (cmd === 'check_for_updates') return Promise.resolve({ needs_upgrade: false, current_version: '1.2.3' });
       return Promise.resolve(null);
     });
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
   });
 
   /* ── 初始化和渲染 ── */

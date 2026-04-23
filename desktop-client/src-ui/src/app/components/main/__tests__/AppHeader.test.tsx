@@ -28,12 +28,13 @@ describe('AppHeader', () => {
 
   it('有运行中任务时应显示计数', () => {
     render(<AppHeader title="聊天" runningJobs={3} />);
-    expect(screen.getByText('3')).toBeInTheDocument();
+    // 实际渲染："{N} 个任务运行中"
+    expect(screen.getByText('3 个任务运行中')).toBeInTheDocument();
   });
 
   it('无运行中任务时不显示计数', () => {
     render(<AppHeader title="聊天" runningJobs={0} />);
-    expect(screen.queryByText('0')).not.toBeInTheDocument();
+    expect(screen.queryByText(/个任务运行中/)).not.toBeInTheDocument();
   });
 
   it('有未读通知时应显示红点', () => {

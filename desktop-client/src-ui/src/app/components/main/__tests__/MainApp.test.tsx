@@ -98,7 +98,8 @@ describe('MainApp', () => {
   it('默认应显示聊天标签页', () => {
     render(<MainApp />);
     expect(screen.getByTestId('chat-tab')).toBeInTheDocument();
-    expect(screen.getByTestId('app-header')).toHaveTextContent('聊天');
+    // NAV_TITLES.chat = '工作区'
+    expect(screen.getByTestId('app-header')).toHaveTextContent('工作区');
   });
 
   it('应该使用 SidebarProvider 包裹布局', () => {
@@ -123,7 +124,8 @@ describe('MainApp', () => {
 
   it('test_contract_header_shows_correct_title_for_default_nav', () => {
     render(<MainApp />);
-    expect(screen.getByTestId('app-header')).toHaveTextContent('聊天');
+    // NAV_TITLES.chat = '工作区'
+    expect(screen.getByTestId('app-header')).toHaveTextContent('工作区');
   });
 
   // ===== 安全审计测试 =====
