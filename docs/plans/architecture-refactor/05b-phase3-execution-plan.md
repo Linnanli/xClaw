@@ -243,3 +243,121 @@ pub fn build_agent(
 - 2026-04-21：决定 agent runtime 从 ironclaw 搬，不从 claw-code 搬
 - 2026-04-21：决定 `LoopDelegate` 作为 agent runtime 的主 seam，hook 调用从 `run_agentic_loop` 内部发起
 - 2026-04-21：决定 Step K 从 "subtree pull 演练" 降级为 "语义 cherry-pick 演练"（候选：`bash_validation.rs`）
+
+---
+
+## 当前进度审查（最新一次盘点）
+
+> 盘点方式：`ls crates/ + crates/x_claw_agent/src/`、对比 ironclaw `agent/*`、grep `agentic_loop.rs` 里的 `SafetyHook|ApprovalGate` 调用点。
+
+### 已完成（Step A + B + C + 部分 D + D-3）
+
+| 产物 | 位置 | 备注 |
+|---|---|---|
+| 上游基线 + 能力审计 | `crates/x_claw_agent/UPSTREAM_BASELINE.md` | 含 Porting log |
+| crate 骨架 | `crates/x_claw_agent/{Cargo.toml, src/lib.rs}` | 最小依赖集 |
+| Hook traits + 默认实现 | `src/hooks.rs` | `SafetyHook / SandboxExecutor / SecretProvider / ApprovalGate` + `Noop / Auto / Deny / InMemory` 默认 |
+| `LlmCompleter` / `WorkspaceWriter` 占位 | `src/traits.rs` | Step D-3 主体已完成 |
+| 应用层桥接 | `desktop-client/ironclaw/src/agent/traits_impl.rs` | ironclaw 侧实现 x_claw_agent 的 traits |
+| 上游 port | `src/bash_validation.rs` (1004 行) + `src/permissions.rs` | Step K 预演产物 |
+| 已搬运的 ironclaw agent runtime 支撑模块（**10 个**） | `src/{agentic_loop, compaction, context_monitor, intent, messages, reasoning_ctx, response_types, session, submission, task, undo}.rs` | 编译通过；但 `agentic_loop.rs` **Hook 调用点 grep = 0，未插桩** |
+| Integration contract test | 子模块 commit `79ec4f05` | |
+
+### 待开发清单（剩余 Step D-4 / D-5 + E–K）
+
+#### ⚡ D-4 · Hook 调用点插桩（**关键阻塞项**）
+
+在 `crates/x_claw_agent/src/agentic_loop.rs` 的 `run_agentic_loop` 内部插 4 处 Hook 调用：
+
+| 位置 | Hook 调用 | 失败处理 |
+|---|---|---|
+| `call_llm` 之前 | `SafetyHook::before_prompt(&mut prompt)` | `Block` → 返回 `HostError::SafetyBlocked` |
+| LLM 返回 text 后、交给 delegate 前 | `SafetyHook::after_completion(&mut completion)` | `Err` → `HostError::SafetyError` |
+| `execute_tool_calls` 循环内，每个 `ToolCall` 前 | `SafetyHook::before_tool_call(&tool, &args)` → `ApprovalGate::request(...)` | `Block` 或 `Deny` → skip + 记录 deny reason |
+| 工具 output 回传给 LLM 前 | `SafetyHook::after_tool_output(&tool, &mut output)` | `Err` → `HostError::SafetyError` |
+
+**设计决策待定**：Hook 以 `Arc<dyn SafetyHook>` 作为新字段加到 `LoopDelegate` trait，还是作为 `run_agentic_loop(ctx, hooks: HookBundle)` 入参？建议后者（diff 最小，不污染 `LoopDelegate` 三个实现方）。
+
+**验收**：新增单测用 `NoopSafetyHook + AutoApproveGate` 走正常路径，用自定义 `BlockPromptHook` 验证 `Block` 分支正确短路。
+
+#### D-5 · 7 个大文件搬迁到 `x_claw_agent`（~1.5d）
+
+| 文件 | 行数 | 依赖改造 |
+|---|---|---|
+| `agent_loop.rs` | 1908 | `AgentDeps` 字段中的 `workspace / db / channels / extensions` 需走新 trait 占位 |
+| `dispatcher.rs` | 3001 | 工具调用前插 `ApprovalGate`；参数脱敏继续走 `SafetyHook` |
+| `thread_ops.rs` | 2572 | 文件系统访问统一走 `SandboxExecutor` |
+| `session_manager.rs` | 1105 | 多用户会话生命周期 |
+| `commands.rs` | 1033 | 系统命令 handler |
+| `attachments.rs` | 307 | 附件增强逻辑 |
+| `router.rs` | 200 | 消息意图路由 |
+
+**顺序建议**：`attachments → router → session_manager → commands → thread_ops → dispatcher → agent_loop`（依赖从小到大）。
+
+**验收**：每搬一个就跑 `cargo build -p x_claw_agent` 与 `cargo build -p desktop-client --lib`。
+
+#### E · `crates/ironclaw_sandbox` 新 crate（~1.5d）
+
+当前 `crates/` 下只有 `ironclaw_auth` 与 `x_claw_agent`，`ironclaw_sandbox` **未建立**。任务：
+
+1. `cargo new --lib crates/ironclaw_sandbox`
+2. 把 `desktop-client/ironclaw/src/sandbox/` 全部移过去（Docker / 本地命令执行 / 容器管理）
+3. 实现 `impl SandboxExecutor for SandboxManager`（run_bash / read_file / write_file / fetch）
+4. ironclaw 主 crate 把 `src/sandbox` 删除，改为 `use ironclaw_sandbox::*;`
+
+#### F · `crates/ironclaw_secrets` 新 crate（~1d）
+
+同 E，当前未建立。把 `desktop-client/ironclaw/src/secrets/` 提出 + 写 `AgentSecrets` 薄适配器实现 `SecretProvider`。
+
+#### G · `ironclaw_safety` 加 `agent-hook` feature（~0.5d）
+
+`crates/ironclaw_safety` 已存在（在 `desktop-client/ironclaw/crates/`）。任务：
+
+1. 在 `Cargo.toml` 加 `agent-hook = ["dep:x_claw_agent"]`
+2. 新建 `src/agent_hook.rs`，映射：
+   - `SafetyLayer::sanitize_input` → `before_prompt`
+   - `LeakDetector::scan_and_clean` → `after_completion` / `after_tool_output`
+   - `Policy::check` → `before_tool_call` 的 Allow/Block 决策
+3. 契约测试：DLP 规则在 `SafetyHook` 接口下仍生效（参考 `DLP_TESTING_LESSONS_LEARNED.md` 的失败路径测试模式）
+
+#### H · `crates/ironclaw_routines` 新 crate（~1.5d）
+
+未建立。按归属清单搬 7 个文件：
+
+- `routine.rs` (1562) + `routine_engine.rs` (2578) + `scheduler.rs` (1230)
+- `self_repair.rs` (856) + `cost_guard.rs` (892) + `heartbeat.rs` (971) + `job_monitor.rs` (534)
+
+依赖 `x_claw_agent` + `ironclaw_sandbox`（走 trait）。
+
+#### I · `desktop-client/ironclaw/src/agent_app.rs` 应用层组装（~1d）
+
+新建 <100 行文件：组装 `Agent + SafetyLayer (impl SafetyHook) + SandboxManager (impl SandboxExecutor) + AgentSecrets + ApprovalDispatcher`。
+
+#### J · 删除旧 `agent/*`（~1d）
+
+`desktop-client/ironclaw/src/agent/` 全量删除。`use crate::agent::...` 全局替换为 `use x_claw_agent::...` 或 `use ironclaw_routines::...`。
+
+**前置**：Step A–I 全绿 + `integration_smoke_tests.rs` 通过。
+
+#### K · 语义 cherry-pick 演练（~1d）
+
+挑一个上游新增/改动的模块（候选：`bash_validation.rs` 的增量、`recovery_recipes.rs`）走完整 porting 流程，在 `UPSTREAM_BASELINE.md` Porting log 加条目。
+
+### 进度百分比（估算）
+
+| 大块 | 进度 |
+|---|---|
+| Step A + B + C | 100% |
+| Step D-1 ~ D-3 + D-5 支撑模块 | ~70%（缺 7 个大文件 + Hook 插桩） |
+| Step D-4 Hook 插桩 | 0% |
+| Step E / F / G / H / I / J / K | 0% |
+| **整体 Phase 3** | **~25%** |
+
+### 建议切入顺序
+
+1. **D-4（Hook 插桩）** — 最高优先级，因为 E/F/G 三个 crate 的 impl 都要 hook 契约稳定后才能落
+2. **G（`ironclaw_safety::agent_hook`）** — 先让最关键的 SafetyHook 契约跑通，DLP 历史教训决定这里必须最先做契约测试
+3. **E（`ironclaw_sandbox`）+ F（`ironclaw_secrets`）** — 两个独立 crate，并行推进
+4. **D-5（7 个大文件搬迁）** — 需要 E/F/G 的 crate 就位后才有 use path 稳定
+5. **H（`ironclaw_routines`）** — 依赖 D-5 完成
+6. **I → J → K** — 应用层组装 + 清理 + 上游演练
