@@ -250,20 +250,27 @@ pub fn build_agent(
 
 > 盘点方式：`ls crates/ + crates/x_claw_agent/src/`、对比 ironclaw `agent/*`、grep `agentic_loop.rs` 里的 `SafetyHook|ApprovalGate` 调用点。
 
-### 已完成（Step A + B + C + 部分 D + D-3）
+### 已完成（Step A + B + C + 部分 D + D-3 + **D-4** + 部分 E/F/G）
 
 | 产物 | 位置 | 备注 |
 |---|---|---|
 | 上游基线 + 能力审计 | `crates/x_claw_agent/UPSTREAM_BASELINE.md` | 含 Porting log |
 | crate 骨架 | `crates/x_claw_agent/{Cargo.toml, src/lib.rs}` | 最小依赖集 |
 | Hook traits + 默认实现 | `src/hooks.rs` | `SafetyHook / SandboxExecutor / SecretProvider / ApprovalGate` + `Noop / Auto / Deny / InMemory` 默认 |
+| **`HookBundle` 聚合结构** (D-4) | `src/hooks.rs` | 四 `Arc` 字段 + `HookBundle::noop()` + 自定义 Debug |
+| **`run_agentic_loop` Hook 插桩** (D-4) | `src/agentic_loop.rs` | `before_prompt` (Block→Failure) + `after_completion` (in-place)；tool 级 hook 由 delegate 调 |
+| **D-4 契约测试 ×4** | `src/agentic_loop.rs::tests` | noop 透传 / Block 短路 / Redact in-place（LLM 看到 redacted）/ Err 透传 |
 | `LlmCompleter` / `WorkspaceWriter` 占位 | `src/traits.rs` | Step D-3 主体已完成 |
 | 应用层桥接 | `desktop-client/ironclaw/src/agent/traits_impl.rs` | ironclaw 侧实现 x_claw_agent 的 traits |
 | 上游 port | `src/bash_validation.rs` (1004 行) + `src/permissions.rs` | Step K 预演产物 |
-| 已搬运的 ironclaw agent runtime 支撑模块（**10 个**） | `src/{agentic_loop, compaction, context_monitor, intent, messages, reasoning_ctx, response_types, session, submission, task, undo}.rs` | 编译通过；但 `agentic_loop.rs` **Hook 调用点 grep = 0，未插桩** |
+| 已搬运的 ironclaw agent runtime 支撑模块（**10 个**） | `src/{agentic_loop, compaction, context_monitor, intent, messages, reasoning_ctx, response_types, session, submission, task, undo}.rs` | 编译通过 + Hook 已插桩 |
+| **G `IronclawSafetyHook` adapter** | `desktop-client/ironclaw/crates/ironclaw_safety/src/agent_hook.rs` | `SafetyLayer` → `SafetyHook` 映射，`agent-hook` feature 已开启 |
+| **G 3 处生产接线** | `worker/container.rs` / `worker/job.rs` / `agent/dispatcher.rs` | 通过 `hook_bundle_with_safety()` helper 统一构造 |
+| **E `SandboxAgentExecutor` adapter** | `desktop-client/ironclaw/src/sandbox/agent_executor.rs` | `SandboxManager` → `SandboxExecutor`；**尚未接线** |
+| **F `AgentSecrets` adapter** | `desktop-client/ironclaw/src/secrets/agent_provider.rs` | `SecretsStore` → `SecretProvider`；**尚未接线** |
 | Integration contract test | 子模块 commit `79ec4f05` | |
 
-### 待开发清单（剩余 Step D-4 / D-5 + E–K）
+### 待开发清单（剩余 D-5 + E/F 接线 + H/I/J/K）
 
 #### ⚡ D-4 · Hook 调用点插桩（**关键阻塞项**）
 
@@ -276,9 +283,7 @@ pub fn build_agent(
 | `execute_tool_calls` 循环内，每个 `ToolCall` 前 | `SafetyHook::before_tool_call(&tool, &args)` → `ApprovalGate::request(...)` | `Block` 或 `Deny` → skip + 记录 deny reason |
 | 工具 output 回传给 LLM 前 | `SafetyHook::after_tool_output(&tool, &mut output)` | `Err` → `HostError::SafetyError` |
 
-**设计决策待定**：Hook 以 `Arc<dyn SafetyHook>` 作为新字段加到 `LoopDelegate` trait，还是作为 `run_agentic_loop(ctx, hooks: HookBundle)` 入参？建议后者（diff 最小，不污染 `LoopDelegate` 三个实现方）。
-
-**验收**：新增单测用 `NoopSafetyHook + AutoApproveGate` 走正常路径，用自定义 `BlockPromptHook` 验证 `Block` 分支正确短路。
+**✅ 已完成**（parent `cf9eca75` / submodule `19d215e0`）：选择 `HookBundle` 入参方案（diff 最小，未污染 `LoopDelegate` 三实现方）。4 个契约测试全绿，`cargo test -p x_claw_agent` 202 passed。Tool 级 hook（`before_tool_call / after_tool_output / Approval`）仍由 `LoopDelegate::execute_tool_calls` 各 impl 自行调用，不在 loop 主干。
 
 #### D-5 · 7 个大文件搬迁到 `x_claw_agent`（~1.5d）
 
@@ -298,27 +303,28 @@ pub fn build_agent(
 
 #### E · `crates/ironclaw_sandbox` 新 crate（~1.5d）
 
-当前 `crates/` 下只有 `ironclaw_auth` 与 `x_claw_agent`，`ironclaw_sandbox` **未建立**。任务：
+**现状**：`SandboxAgentExecutor` adapter 已在 `desktop-client/ironclaw/src/sandbox/agent_executor.rs` 就位，**但尚未在 `hook_bundle_with_safety()` 中接线**（3 处 call site 的 `HookBundle.sandbox` 仍是 `Arc<NoopSandboxExecutor>`）。
 
-1. `cargo new --lib crates/ironclaw_sandbox`
-2. 把 `desktop-client/ironclaw/src/sandbox/` 全部移过去（Docker / 本地命令执行 / 容器管理）
-3. 实现 `impl SandboxExecutor for SandboxManager`（run_bash / read_file / write_file / fetch）
-4. ironclaw 主 crate 把 `src/sandbox` 删除，改为 `use ironclaw_sandbox::*;`
+当前 `crates/` 下只有 `ironclaw_auth` 与 `x_claw_agent`，独立 `ironclaw_sandbox` crate **未建立**。任务：
+
+1. **短路径（先接线）**：扩展 `hook_bundle_with_safety` → `hook_bundle_full(safety, sandbox_mgr, secrets)`，把 `SandboxAgentExecutor` 注入 `HookBundle.sandbox`
+2. **长路径（提 crate）**：`cargo new --lib crates/ironclaw_sandbox` + 搬运 `desktop-client/ironclaw/src/sandbox/` + 主 crate 改 `use ironclaw_sandbox::*;`
 
 #### F · `crates/ironclaw_secrets` 新 crate（~1d）
 
-同 E，当前未建立。把 `desktop-client/ironclaw/src/secrets/` 提出 + 写 `AgentSecrets` 薄适配器实现 `SecretProvider`。
+**现状**：`AgentSecrets<S>` adapter 已在 `desktop-client/ironclaw/src/secrets/agent_provider.rs` 就位，**但尚未接线**。同 E，先接线后提 crate。
 
-#### G · `ironclaw_safety` 加 `agent-hook` feature（~0.5d）
+#### G · `ironclaw_safety` 加 `agent-hook` feature
 
-`crates/ironclaw_safety` 已存在（在 `desktop-client/ironclaw/crates/`）。任务：
+**✅ 已完成**（parent `22236f99` / submodule `1dbcf861`）：
 
-1. 在 `Cargo.toml` 加 `agent-hook = ["dep:x_claw_agent"]`
-2. 新建 `src/agent_hook.rs`，映射：
-   - `SafetyLayer::sanitize_input` → `before_prompt`
-   - `LeakDetector::scan_and_clean` → `after_completion` / `after_tool_output`
-   - `Policy::check` → `before_tool_call` 的 Allow/Block 决策
-3. 契约测试：DLP 规则在 `SafetyHook` 接口下仍生效（参考 `DLP_TESTING_LESSONS_LEARNED.md` 的失败路径测试模式）
+- `agent-hook` feature 已在 `desktop-client/ironclaw/Cargo.toml` 开启
+- `IronclawSafetyHook` adapter 已实现 `before_prompt / after_completion / before_tool_call / after_tool_output`
+- `hook_bundle_with_safety(Arc<SafetyLayer>)` helper 已在 `desktop-client/ironclaw/src/agent/agentic_loop.rs` 就位
+- 3 处生产 call site（`worker/container.rs` / `worker/job.rs` / `agent/dispatcher.rs`）已通过该 helper 注入真实 `SafetyHook`
+- `cargo build --workspace --tests` 0 错误 0 警告
+
+**遗留**：契约测试（DLP 规则在 `SafetyHook` 接口下仍生效）尚未补充，建议在 E/F 接线时一并补上（参考 `DLP_TESTING_LESSONS_LEARNED.md` 的失败路径测试模式）。
 
 #### H · `crates/ironclaw_routines` 新 crate（~1.5d）
 
@@ -348,16 +354,19 @@ pub fn build_agent(
 | 大块 | 进度 |
 |---|---|
 | Step A + B + C | 100% |
-| Step D-1 ~ D-3 + D-5 支撑模块 | ~70%（缺 7 个大文件 + Hook 插桩） |
-| Step D-4 Hook 插桩 | 0% |
-| Step E / F / G / H / I / J / K | 0% |
-| **整体 Phase 3** | **~25%** |
+| Step D-1 ~ D-3 + D-4 + D-5 支撑模块 | ~85%（缺 7 个大文件搬迁） |
+| Step D-4 Hook 插桩 | **100%** ✅ |
+| Step G `ironclaw_safety` agent-hook | **100%**（接线完成，契约测试未补） |
+| Step E / F adapter | adapter 已建，**未接线** |
+| Step D-5 / H / I / J / K | 0% |
+| **整体 Phase 3** | **~40%** |
 
 ### 建议切入顺序
 
-1. **D-4（Hook 插桩）** — 最高优先级，因为 E/F/G 三个 crate 的 impl 都要 hook 契约稳定后才能落
-2. **G（`ironclaw_safety::agent_hook`）** — 先让最关键的 SafetyHook 契约跑通，DLP 历史教训决定这里必须最先做契约测试
-3. **E（`ironclaw_sandbox`）+ F（`ironclaw_secrets`）** — 两个独立 crate，并行推进
-4. **D-5（7 个大文件搬迁）** — 需要 E/F/G 的 crate 就位后才有 use path 稳定
-5. **H（`ironclaw_routines`）** — 依赖 D-5 完成
-6. **I → J → K** — 应用层组装 + 清理 + 上游演练
+1. ~~**D-4（Hook 插桩）**~~ ✅ 已完成（`cf9eca75`）
+2. ~~**G（`ironclaw_safety::agent_hook`）**~~ ✅ 已完成（`22236f99`）
+3. **E + F 接线**（最小改动）— 扩展 `hook_bundle_with_safety` → `hook_bundle_full`，把 `SandboxAgentExecutor` + `AgentSecrets` 注入 `HookBundle`；补 G 的契约测试
+4. **D-5（7 个大文件搬迁）** — 依赖 E/F 接线稳定
+5. **E / F 提 crate**（`crates/ironclaw_sandbox` + `crates/ironclaw_secrets`）
+6. **H（`ironclaw_routines`）** — 依赖 D-5
+7. **I → J → K** — 应用层组装 + 清理 + 上游演练
