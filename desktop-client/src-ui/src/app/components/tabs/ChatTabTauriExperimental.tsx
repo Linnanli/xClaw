@@ -21,7 +21,6 @@ import { Thread } from '@components/assistant-ui/thread';
 import { useDlpState } from '../../runtime/ChatRuntimeProvider';
 import { ThreadHistoryLoader } from '../../runtime/ThreadHistoryLoader';
 import { ModelProvider } from '../../runtime/contexts/ModelProvider';
-import { ApprovalProvider } from '../../runtime/contexts/ApprovalProvider';
 import { useModelContext } from '../../contexts/ModelContext';
 import { useEngineReady } from '../../hooks/useEngineReady';
 import { TokenManager } from '@utils/tokenManager';
@@ -56,9 +55,7 @@ export function ChatTabTauriExperimental({
       onModelChange={onModelChange}
       onOpenCustomModelModal={onOpenCustomModelModal}
     >
-      <ApprovalProvider threadId={selectedThreadId ?? null}>
-        <ChatRuntimeBridge threadId={selectedThreadId ?? null} />
-      </ApprovalProvider>
+      <ChatRuntimeBridge threadId={selectedThreadId ?? null} />
     </ModelProvider>
   );
 }

@@ -13,7 +13,7 @@ import { render, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 
-const { getMessagesMock, chatRuntimeProviderMock } = vi.hoisted(() => ({
+const { getMessagesMock, chatRuntimeProviderMock, approvalProviderMock } = vi.hoisted(() => ({
   getMessagesMock: vi.fn(),
   chatRuntimeProviderMock: vi.fn((props: { children: ReactNode; [k: string]: unknown }) => (
     <div data-testid="chat-runtime-provider" data-thread-id={String(props.threadId ?? '')}>
@@ -23,6 +23,20 @@ const { getMessagesMock, chatRuntimeProviderMock } = vi.hoisted(() => ({
       {props.children}
     </div>
   )),
+  approvalProviderMock: vi.fn((props: { children: ReactNode; [k: string]: unknown }) => {
+    const approvals = Array.isArray(props.initialPendingApprovals)
+      ? props.initialPendingApprovals
+      : [];
+    return (
+      <div
+        data-testid="approval-provider"
+        data-thread-id={String(props.threadId ?? '')}
+        data-approvals-count={String(approvals.length)}
+      >
+        {props.children}
+      </div>
+    );
+  }),
 }));
 
 vi.mock('../../utils/tauri', () => ({
@@ -34,6 +48,9 @@ vi.mock('../../utils/tracing', () => ({
 vi.mock('../ChatRuntimeProvider', () => ({
   ChatRuntimeProvider: chatRuntimeProviderMock,
 }));
+vi.mock('../contexts/ApprovalProvider', () => ({
+  ApprovalProvider: approvalProviderMock,
+}));
 
 import { ThreadHistoryLoader } from '../ThreadHistoryLoader';
 
@@ -41,6 +58,7 @@ describe('ThreadHistoryLoader', () => {
   beforeEach(() => {
     getMessagesMock.mockReset();
     chatRuntimeProviderMock.mockClear();
+    approvalProviderMock.mockClear();
   });
 
   it('threadId=null 时直接挂载空 ChatRuntimeProvider，不调用 getMessages', () => {
@@ -182,5 +200,36 @@ describe('ThreadHistoryLoader', () => {
 
     expect(getByTestId('chat-runtime-provider').getAttribute('data-thread-id')).toBe('t2');
     expect(getByTestId('initial-messages-count').textContent).toBe('1');
+  });
+
+  it('将 mapper 的 restoredApprovals seed 到 ApprovalProvider', async () => {
+    // 历史中有一条 approval_needed，没有 resolved → mapper 会产出一条 restoredApproval
+    const needed = JSON.stringify({
+      kind: 'ui_event',
+      event: 'approval_needed',
+      request_id: 'req-A',
+      tool_name: 'bash',
+      description: 'run ls',
+    });
+    getMessagesMock.mockResolvedValue([
+      { id: 's1', thread_id: 't1', role: 'system', content: needed, created_at: '2025-01-01T00:00:00Z' },
+      { id: 'u1', thread_id: 't1', role: 'user', content: 'hi', created_at: '2025-01-01T00:00:01Z' },
+    ]);
+
+    const { getByTestId } = render(
+      <ThreadHistoryLoader threadId="t1">
+        <div>content</div>
+      </ThreadHistoryLoader>,
+    );
+
+    await waitFor(() => {
+      expect(getByTestId('approval-provider').getAttribute('data-approvals-count')).toBe('1');
+    });
+    expect(getByTestId('approval-provider').getAttribute('data-thread-id')).toBe('t1');
+
+    const lastCall = approvalProviderMock.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(lastCall?.initialPendingApprovals).toEqual([
+      { request_id: 'req-A', tool_name: 'bash', description: 'run ls' },
+    ]);
   });
 });

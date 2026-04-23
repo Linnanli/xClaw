@@ -339,3 +339,110 @@ describe('ApprovalProvider - 失败路径 / 鲁棒性', () => {
     expect(invoke).toHaveBeenCalledWith('ic_approve_tool', { requestId: 'req-1', threadId: '' });
   });
 });
+
+describe('ApprovalProvider - initialPendingApprovals (Phase 1.3.b 补丁)', () => {
+  let bus: ReturnType<typeof installListener>;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    bus = installListener();
+    await bus.setup();
+  });
+
+  it('挂载时用 initialPendingApprovals 预填队列', () => {
+    render(
+      <ApprovalProvider
+        threadId="t-1"
+        initialPendingApprovals={[
+          { request_id: 'seed-1', tool_name: 'bash', description: 'seeded' },
+          { request_id: 'seed-2', tool_name: 'read_file', description: 'another' },
+        ]}
+      >
+        <Consumer />
+      </ApprovalProvider>,
+    );
+
+    expect(screen.getByTestId('count').textContent).toBe('2');
+    expect(screen.getByTestId('item-seed-1').textContent).toContain('bash');
+    expect(screen.getByTestId('item-seed-2').textContent).toContain('read_file');
+  });
+
+  it('seed 后仍能追加 chat-stream 的新 approval_needed', async () => {
+    render(
+      <ApprovalProvider
+        threadId="t-1"
+        initialPendingApprovals={[
+          { request_id: 'seed-1', tool_name: 'bash', description: 's' },
+        ]}
+      >
+        <Consumer />
+      </ApprovalProvider>,
+    );
+    await waitFor(() => expect(bus.handlers.length).toBe(1));
+
+    act(() => {
+      bus.fire({
+        type: 'data-custom',
+        data: {
+          type: 'approval_needed',
+          request_id: 'live-1',
+          tool_name: 'read_file',
+          description: 'live',
+          thread_id: 't-1',
+        },
+      });
+    });
+    expect(screen.getByTestId('count').textContent).toBe('2');
+  });
+
+  it('seed 后 approval_resolved 能冲销 seeded 项', async () => {
+    render(
+      <ApprovalProvider
+        threadId="t-1"
+        initialPendingApprovals={[
+          { request_id: 'seed-1', tool_name: 'bash', description: 's' },
+        ]}
+      >
+        <Consumer />
+      </ApprovalProvider>,
+    );
+    await waitFor(() => expect(bus.handlers.length).toBe(1));
+
+    act(() => {
+      bus.fire({
+        type: 'data-custom',
+        data: { type: 'approval_resolved', request_id: 'seed-1', thread_id: 't-1' },
+      });
+    });
+    expect(screen.getByTestId('count').textContent).toBe('0');
+  });
+
+  it('threadId 切换时重新用 seed 覆盖（不保留上一次 thread 的队列）', () => {
+    const { rerender } = render(
+      <ApprovalProvider
+        threadId="t-1"
+        initialPendingApprovals={[
+          { request_id: 'seed-a', tool_name: 'bash', description: 'A' },
+        ]}
+      >
+        <Consumer />
+      </ApprovalProvider>,
+    );
+    expect(screen.getByTestId('count').textContent).toBe('1');
+
+    rerender(
+      <ApprovalProvider
+        threadId="t-2"
+        initialPendingApprovals={[
+          { request_id: 'seed-b', tool_name: 'read', description: 'B' },
+          { request_id: 'seed-c', tool_name: 'write', description: 'C' },
+        ]}
+      >
+        <Consumer />
+      </ApprovalProvider>,
+    );
+    expect(screen.getByTestId('count').textContent).toBe('2');
+    expect(screen.queryByTestId('item-seed-a')).toBeNull();
+    expect(screen.getByTestId('item-seed-b')).toBeTruthy();
+  });
+});

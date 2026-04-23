@@ -69,18 +69,37 @@ interface ApprovalStreamPayload {
 export interface ApprovalProviderProps {
   /** 当前会话 id；审批决定回传给后端时必须带上。允许 null（无会话时退化成空队列）。 */
   threadId: string | null;
+  /**
+   * 从历史消息中恢复的 pending approvals，作为初始 seed。
+   * 由 `ThreadHistoryLoader` 经 `mapTauriMessagesToUIMessages` 算出；mapper 已处理
+   * `approval_resolved` 冲销，所以这里的是 final pending 集合，直接使用即可。
+   * threadId 切换时下游 seed 由 key 重建迫使重读，这里仅备注：不要在 threadId
+   * 不变的同一挂载周期内重复注入（会覆盖 chat-stream 以来的现场状态）。
+   */
+  initialPendingApprovals?: readonly PendingApproval[];
   children: ReactNode;
 }
 
-export function ApprovalProvider({ threadId, children }: ApprovalProviderProps) {
-  const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
+export function ApprovalProvider({
+  threadId,
+  initialPendingApprovals,
+  children,
+}: ApprovalProviderProps) {
+  const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>(
+    () => (initialPendingApprovals ? [...initialPendingApprovals] : []),
+  );
   // ref 保证在 listener 闭包里读到最新 threadId，避免 unlisten/relisten 抖动
   const threadIdRef = useRef<string | null>(threadId);
   threadIdRef.current = threadId;
 
-  // 会话切换：清空上一个会话遗留的待审批项
+  // 会话切换：重新 seed。依赖 threadId 变化 → 注入新 seed（或清空）。
+  // 本层父组件（ThreadHistoryLoader）在 threadId 切换时会重新 fetch 并传新的
+  // initialPendingApprovals，因此 seed 总是与 threadId 匹配。
   useEffect(() => {
-    setPendingApprovals([]);
+    setPendingApprovals(
+      initialPendingApprovals ? [...initialPendingApprovals] : [],
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId]);
 
   useEffect(() => {
