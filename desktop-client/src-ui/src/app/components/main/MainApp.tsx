@@ -134,11 +134,13 @@ function MainAppContent() {
       case 'chat':
         if (experimentalRuntime) {
           // Phase 1 dev-only 入口：启用方式见 useExperimentalRuntime.ts
-          // 注意：Experimental tab 目前不消费 outboundCommand / engineReadyKey / onThreadSelect，
-          // 这些能力会在 Phase 1.2–1.3 分别通过 ModelProvider / OutboundCommandQueue / 历史回放补齐。
+          // Phase 1.3.e: onThreadCreated 接上 selectThread — runtime 在
+          // selectedThreadId === null 时会自动调 threadApi.createThread 并回传真实 id。
+          // 仍未接：outboundCommand / engineReadyKey（Phase 1.4 统一清理）。
           return (
             <ChatTabTauriExperimental
               selectedThreadId={selectedThreadId}
+              onThreadCreated={selectThread}
             />
           );
         }
