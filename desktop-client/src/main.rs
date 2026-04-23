@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ironclaw::channels::web::log_layer::{init_tracing, LogBroadcaster};
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 
 // ── 应用级常量 ────────────────────────────────────────────────────
 
@@ -73,9 +73,10 @@ fn main() {
                     let engine_state = app_handle.state::<desktop_client::state::EngineState>();
                     engine_state.set_failed(err_msg.clone());
 
-                    let _ = app_handle.emit(
-                        "chat-stream",
-                        desktop_client::vercel_ui_protocol::VercelUIStream::Error {
+                    let _ = desktop_client::tauri_channel::emit_chat_stream(
+                        &app_handle,
+                        None,
+                        &desktop_client::vercel_ui_protocol::VercelUIStream::Error {
                             error_text: desktop_client::error::friendly_engine_error(&err_msg),
                         },
                     );

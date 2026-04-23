@@ -253,4 +253,121 @@ describe('TauriChatTransport', () => {
     const transport = new TauriChatTransport();
     await expect(transport.reconnectToStream()).resolves.toBeNull();
   });
+
+  // ── Envelope 过滤：thread-scoped 事件按 threadId 丢弃 ────────────────────
+
+  it('drops events whose envelope threadId mismatches currentThreadId', async () => {
+    const { getHandler } = setupListenCapture();
+    let currentThread = 'thread-B';
+    const transport = new TauriChatTransport({
+      currentThreadId: () => currentThread,
+    });
+
+    const stream = await transport.sendMessages({
+      chatId: 'thread-B',
+      messages: [makeUserMessage('hi')],
+      abortSignal: undefined,
+    });
+
+    const handler = getHandler()!;
+    // 旧 thread A 残留事件 —— envelope 有 threadId=thread-A，当前绑定 thread-B，必须被丢弃
+    handler({
+      payload: { type: 'text-delta', id: 'm1', delta: 'OLD', threadId: 'thread-A' },
+    });
+    // 当前 thread B 的事件 —— 必须透传
+    handler({
+      payload: { type: 'text-delta', id: 'm1', delta: 'NEW', threadId: 'thread-B' },
+    });
+    handler({ payload: { type: 'finish', threadId: 'thread-B' } });
+
+    const chunks = await drainStream(stream);
+    const deltas = chunks.filter((c): c is { type: 'text-delta'; delta: string } & UIMessageChunkBase =>
+      c.type === 'text-delta',
+    );
+    expect(deltas.map((c) => c.delta)).toEqual(['NEW']);
+    expect(deltas.map((c) => c.delta)).not.toContain('OLD');
+  });
+
+  it('always forwards system-level events (envelope without threadId)', async () => {
+    const { getHandler } = setupListenCapture();
+    const transport = new TauriChatTransport({
+      currentThreadId: () => 'thread-B',
+    });
+
+    const stream = await transport.sendMessages({
+      chatId: 'thread-B',
+      messages: [makeUserMessage('hi')],
+      abortSignal: undefined,
+    });
+
+    const handler = getHandler()!;
+    // 系统级广播：无 threadId，必须透传
+    handler({
+      payload: {
+        type: 'data-custom',
+        data: { type: 'connection_status', connected: true },
+      },
+    });
+    handler({
+      payload: {
+        type: 'data-custom',
+        data: { type: 'job_status', job_id: 'j-1', status: 'running' },
+      },
+    });
+    handler({ payload: { type: 'finish' } });
+
+    const chunks = await drainStream(stream);
+    const kinds = chunks.map((c) => c.type);
+    expect(kinds).toContain('data-connection_status');
+    expect(kinds).toContain('data-job_status');
+  });
+
+  it('falls back to pass-through when currentThreadId returns null', async () => {
+    const { getHandler } = setupListenCapture();
+    const transport = new TauriChatTransport({
+      currentThreadId: () => null,
+    });
+
+    const stream = await transport.sendMessages({
+      chatId: 'thread-X',
+      messages: [makeUserMessage('hi')],
+      abortSignal: undefined,
+    });
+
+    const handler = getHandler()!;
+    handler({
+      payload: { type: 'text-delta', id: 'm1', delta: 'pass', threadId: 'thread-Y' },
+    });
+    handler({ payload: { type: 'finish' } });
+
+    const chunks = await drainStream(stream);
+    expect(chunks.some((c) => c.type === 'text-delta')).toBe(true);
+  });
 });
+
+// 单独测试 extractEnvelopeThreadId 纯函数
+describe('extractEnvelopeThreadId', () => {
+  it('returns string when payload.threadId is non-empty string', async () => {
+    const { extractEnvelopeThreadId } = await import('../TauriChatTransport');
+    expect(extractEnvelopeThreadId({ type: 'text-delta', threadId: 'thread-A' })).toBe('thread-A');
+  });
+
+  it('returns null when threadId missing', async () => {
+    const { extractEnvelopeThreadId } = await import('../TauriChatTransport');
+    expect(extractEnvelopeThreadId({ type: 'data-custom', data: {} })).toBeNull();
+  });
+
+  it('returns null when threadId is empty string', async () => {
+    const { extractEnvelopeThreadId } = await import('../TauriChatTransport');
+    expect(extractEnvelopeThreadId({ type: 'text-delta', threadId: '' })).toBeNull();
+  });
+
+  it('returns null for non-object payload', async () => {
+    const { extractEnvelopeThreadId } = await import('../TauriChatTransport');
+    expect(extractEnvelopeThreadId(null)).toBeNull();
+    expect(extractEnvelopeThreadId(undefined)).toBeNull();
+    expect(extractEnvelopeThreadId('string')).toBeNull();
+  });
+});
+
+type UIMessageChunkBase = { type: string };

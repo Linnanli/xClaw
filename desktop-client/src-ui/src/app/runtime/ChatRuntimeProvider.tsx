@@ -134,6 +134,7 @@ export function ChatRuntimeProvider({
       modelId: () => modelIdRef.current,
       apiBaseUrl: () => apiBaseUrlRef.current,
       apiKey: () => apiKeyRef.current,
+      currentThreadId: () => threadIdRef.current,
     });
   }
 

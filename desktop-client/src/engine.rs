@@ -16,7 +16,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::Context;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use tracing;
 use uuid::Uuid;
 
@@ -435,10 +435,11 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         }
     }
 
-    // 通知前端引擎已就绪
-    let _ = app_handle.emit(
-        "chat-stream",
-        VercelUIStream::DataCustom {
+    // 通知前端引擎已就绪（系统级广播）
+    let _ = crate::tauri_channel::emit_chat_stream(
+        &app_handle,
+        None,
+        &VercelUIStream::DataCustom {
             id: None,
             data: serde_json::json!({
                 "type": "connection_status",
@@ -538,9 +539,10 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     // agent.run() 阻塞直到所有 channel stream 结束或收到 Ctrl+C。
     if let Err(e) = agent.run().await {
         tracing::error!(error = %e, "Agent exited with error");
-        let _ = app_handle.emit(
-            "chat-stream",
-            VercelUIStream::Error {
+        let _ = crate::tauri_channel::emit_chat_stream(
+            &app_handle,
+            None,
+            &VercelUIStream::Error {
                 error_text: crate::error::friendly_engine_error(&e.to_string()),
             },
         );

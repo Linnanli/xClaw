@@ -136,6 +136,28 @@ export interface TauriChatTransportOptions {
   apiBaseUrl?: () => string | null;
   /** 动态获取 api_key（自定义模型）。 */
   apiKey?: () => string | null;
+  /**
+   * 动态获取 transport 当前绑定的 threadId。
+   *
+   * 若后端 `chat-stream` envelope 顶层包含 `threadId` 字段（线程专属事件），
+   * listener 会比对此 getter 返回值，不匹配则丢弃该 chunk，避免 thread 切换后
+   * 旧流污染新线程 state。系统级事件（envelope 无 threadId）总是透传。
+   *
+   * 未提供时退化为全透传（不做过滤）。
+   */
+  currentThreadId?: () => string | null;
+}
+
+/**
+ * 从后端 `chat-stream` envelope payload 中读取 `threadId`。
+ * 约定：系统级广播不携带此字段；线程专属事件顶层注入该字段。
+ *
+ * 导出供测试使用。
+ */
+export function extractEnvelopeThreadId(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const value = (payload as Record<string, unknown>).threadId;
+  return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
 /**
@@ -150,11 +172,13 @@ export class TauriChatTransport<UI_MESSAGE extends UIMessage = UIMessage>
   private readonly modelIdFn: () => string | null;
   private readonly apiBaseUrlFn: () => string | null;
   private readonly apiKeyFn: () => string | null;
+  private readonly currentThreadIdFn: () => string | null;
 
   constructor(options: TauriChatTransportOptions = {}) {
     this.modelIdFn = options.modelId ?? (() => null);
     this.apiBaseUrlFn = options.apiBaseUrl ?? (() => null);
     this.apiKeyFn = options.apiKey ?? (() => null);
+    this.currentThreadIdFn = options.currentThreadId ?? (() => null);
   }
 
   async sendMessages(
@@ -175,6 +199,17 @@ export class TauriChatTransport<UI_MESSAGE extends UIMessage = UIMessage>
         // 1. 先订阅 chat-stream（必须在 invoke 之前，避免竞态丢事件）
         try {
           unlisten = await listen<BackendStreamEvent>('chat-stream', (event) => {
+            // Envelope 过滤：如果事件携带 threadId 且与当前 transport 绑定的
+            // threadId 不匹配，直接丢弃（避免 thread 切换时旧流污染新线程 state）。
+            // 系统级广播（envelope 无 threadId）总是透传。
+            const eventThreadId = extractEnvelopeThreadId(event.payload);
+            if (eventThreadId !== null) {
+              const currentThreadId = this.currentThreadIdFn();
+              if (currentThreadId && currentThreadId !== eventThreadId) {
+                return;
+              }
+            }
+
             const chunk = toUIMessageChunk(event.payload);
             if (!chunk) return;
             try {

@@ -4,7 +4,7 @@
 //! 提供任务事件历史和后续提示功能。
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 use crate::state::EngineState;
@@ -116,7 +116,8 @@ fn emit_job_status(app_handle: &AppHandle, job_id: Uuid, title: &str, status: &s
             "status": status,
         }),
     };
-    let _ = app_handle.emit("chat-stream", event);
+    // 全局 job 事件：未绑定到特定 thread，前端所有 Transport 透传
+    let _ = crate::tauri_channel::emit_chat_stream(app_handle, None, &event);
 }
 
 fn restart_job_title(job: &ironclaw::context::JobContext, failure_reason: &str) -> String {

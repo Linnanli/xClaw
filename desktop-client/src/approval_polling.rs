@@ -219,7 +219,6 @@ fn emit_approval_result(
     status: &str,
     data: &serde_json::Value,
 ) {
-    use tauri::Emitter;
     let event = crate::vercel_ui_protocol::VercelUIStream::DataCustom {
         id: None,
         data: serde_json::json!({
@@ -232,7 +231,13 @@ fn emit_approval_result(
             "expires_at": data.get("expires_at").and_then(|v| v.as_str()),
         }),
     };
-    let _ = app_handle.emit("chat-stream", event);
+    // 线程专属：审批结果归属发起该审批的 thread
+    let thread_scope = if thread_id.is_empty() {
+        None
+    } else {
+        Some(thread_id)
+    };
+    let _ = crate::tauri_channel::emit_chat_stream(app_handle, thread_scope, &event);
 }
 
 #[cfg(test)]
