@@ -18,7 +18,8 @@
 import { useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Thread } from '@components/assistant-ui/thread';
-import { ChatRuntimeProvider, useDlpState } from '../../runtime/ChatRuntimeProvider';
+import { useDlpState } from '../../runtime/ChatRuntimeProvider';
+import { ThreadHistoryLoader } from '../../runtime/ThreadHistoryLoader';
 import { ModelProvider } from '../../runtime/contexts/ModelProvider';
 import { ApprovalProvider } from '../../runtime/contexts/ApprovalProvider';
 import { useModelContext } from '../../contexts/ModelContext';
@@ -90,7 +91,7 @@ function ChatRuntimeBridge({ threadId }: { threadId: string | null }) {
   }
 
   return (
-    <ChatRuntimeProvider
+    <ThreadHistoryLoader
       threadId={threadId}
       modelId={selectedModelId || null}
       apiBaseUrl={selected?.api_base_url ?? null}
@@ -100,7 +101,7 @@ function ChatRuntimeBridge({ threadId }: { threadId: string | null }) {
         <Thread />
       </div>
       <DlpBlockedDialogBridge />
-    </ChatRuntimeProvider>
+    </ThreadHistoryLoader>
   );
 }
 

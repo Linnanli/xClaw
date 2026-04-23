@@ -18,6 +18,18 @@ import { AssistantRuntimeProvider } from '@assistant-ui/react';
 import { useChatRuntime } from '@assistant-ui/react-ai-sdk';
 import type { SanitizationStats } from '../hooks/useDlpScan';
 import { TauriChatTransport } from './TauriChatTransport';
+
+/**
+ * 历史初始消息的结构型，与 `ai@5 UIMessage` 的核心字段兼容（id/role/parts）。
+ * 由于 `@ai-sdk/react@1.2` 未导出 `UIMessage` 类型，这里用本地类型避免深入 node_modules 嵌套路径。
+ * 传入 `useChatRuntime` 时会通过 `unknown` 中转 cast，运行时由 `AISDKMessageConverter` 正常识别。
+ */
+export type InitialChatMessage = {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  parts: ReadonlyArray<Record<string, unknown>>;
+  metadata?: unknown;
+};
 import { EchoToolUI } from '../components/assistant-ui/tool-renderers/echo-renderer';
 import { FileEditToolUI } from '../components/assistant-ui/tool-renderers/file-edit-renderer';
 import { GrepResultToolUI } from '../components/assistant-ui/tool-renderers/grep-result-renderer';
@@ -72,6 +84,12 @@ interface ChatRuntimeProviderProps {
   /** 自定义 provider 的 base url / api key（自定义模型场景） */
   apiBaseUrl?: string | null;
   apiKey?: string | null;
+  /**
+   * 初始历史消息（AI SDK v5 UIMessage 结构）。
+   * 由外层 `ThreadHistoryLoader` 通过 `threadApi.getMessages` + `mapTauriMessagesToUIMessages` 预取后注入。
+   * `useChatRuntime` 只在挂载时读取一次；要切换 thread 必须让本 Provider 随 threadId 重建（外层通过 `key={threadId}` 实现）。
+   */
+  initialMessages?: InitialChatMessage[];
 }
 
 export function ChatRuntimeProvider({
@@ -80,6 +98,7 @@ export function ChatRuntimeProvider({
   modelId,
   apiBaseUrl,
   apiKey,
+  initialMessages,
 }: ChatRuntimeProviderProps) {
   const [dlpBlocked, setDlpBlocked] = useState(false);
   const [dlpBlockReason, setDlpBlockReason] = useState<string | null>(null);
@@ -118,7 +137,13 @@ export function ChatRuntimeProvider({
     });
   }
 
-  const runtime = useChatRuntime({ transport: transportRef.current });
+  // `useChatRuntime` 泛型要求 messages 为 `UIMessage<...>[]`，而我们从持久化映射出来的
+  // `InitialChatMessage[]` 结构等价但 TS 类型不重合；统一用 `any` 走运行时 duck-typing。
+  const runtimeOptions: Record<string, unknown> = { transport: transportRef.current };
+  if (threadId) runtimeOptions.id = threadId;
+  if (initialMessages && initialMessages.length > 0) runtimeOptions.messages = initialMessages;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const runtime = useChatRuntime(runtimeOptions as any);
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>

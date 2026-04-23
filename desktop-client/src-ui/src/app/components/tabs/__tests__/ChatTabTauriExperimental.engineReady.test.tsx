@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, waitFor } from '@testing-library/react';
 import { ChatTabTauriExperimental } from '../ChatTabTauriExperimental';
 import { EngineReadyProvider } from '../../../hooks/useEngineReady';
 
@@ -34,6 +34,10 @@ vi.mock('@utils/tauri', async (importOriginal) => {
     modelApi: {
       getAvailableModels: vi.fn().mockResolvedValue([]),
       activateModel: vi.fn().mockResolvedValue(undefined),
+    },
+    threadApi: {
+      ...actual.threadApi,
+      getMessages: vi.fn().mockResolvedValue([]),
     },
   };
 });
@@ -63,7 +67,7 @@ describe('ChatTabTauriExperimental - engine ready 门控', () => {
     expect(screen.queryByTestId('thread-root')).toBeNull();
   });
 
-  it('收到 connection_status connected=true 后挂载 Thread', () => {
+  it('收到 connection_status connected=true 后挂载 Thread', async () => {
     render(
       <EngineReadyProvider>
         <ChatTabTauriExperimental selectedThreadId="t-1" />
@@ -84,6 +88,9 @@ describe('ChatTabTauriExperimental - engine ready 门控', () => {
     });
 
     expect(screen.queryByTestId('chat-runtime-boot-placeholder')).toBeNull();
-    expect(screen.getByTestId('thread-root')).toBeInTheDocument();
+    // ThreadHistoryLoader 异步加载历史后才挂载 Thread
+    await waitFor(() => {
+      expect(screen.getByTestId('thread-root')).toBeInTheDocument();
+    });
   });
 });
