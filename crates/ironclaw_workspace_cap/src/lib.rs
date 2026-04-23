@@ -50,6 +50,28 @@ use std::path::{Path, PathBuf};
 use cap_std::ambient_authority;
 use cap_std::fs::Dir;
 
+/// A streaming file handle inside a capability-bound workspace.
+///
+/// Implements `std::io::Read` / `Write` / `Seek` — use it for large files
+/// where loading the whole contents into a `Vec<u8>` is wasteful.
+pub type WorkspaceFile = cap_std::fs::File;
+
+/// A single entry returned by [`WorkspaceCapability::list_dir`].
+#[derive(Debug, Clone)]
+pub struct DirEntry {
+    /// File name (not a full path). Safe to join back onto the caller's
+    /// relative directory context.
+    pub name: std::ffi::OsString,
+    /// `true` if the entry is a regular directory (not a symlink to one).
+    pub is_dir: bool,
+    /// `true` if the entry is a regular file.
+    pub is_file: bool,
+    /// `true` if the entry is a symbolic link (following not attempted).
+    pub is_symlink: bool,
+    /// File length in bytes. `0` for directories and symlinks.
+    pub len: u64,
+}
+
 /// Errors returned by workspace capability operations.
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceCapError {
@@ -137,6 +159,76 @@ impl WorkspaceCapability {
     /// still capability-bound to this workspace.
     pub fn dir(&self) -> &Dir {
         &self.dir
+    }
+
+    /// List entries directly under `rel`. Does **not** recurse.
+    ///
+    /// Passing `""` or `"."` lists the workspace root itself. Each
+    /// returned [`DirEntry`] contains only the file name (no path
+    /// prefix); the caller joins it back onto its own relative context.
+    ///
+    /// Entry order is OS-dependent (typically inode / insertion order);
+    /// callers that need a stable order must sort.
+    pub fn list_dir(&self, rel: impl AsRef<Path>) -> Result<Vec<DirEntry>, WorkspaceCapError> {
+        let rel = rel.as_ref();
+        let read_dir = if rel.as_os_str().is_empty() || rel == Path::new(".") {
+            self.dir.entries().map_err(|e| translate(rel, e))?
+        } else {
+            self.dir.read_dir(rel).map_err(|e| translate(rel, e))?
+        };
+
+        let mut out = Vec::new();
+        for entry in read_dir {
+            let entry = entry.map_err(|e| translate(rel, e))?;
+            let metadata = entry.metadata().map_err(|e| translate(rel, e))?;
+            let file_type = metadata.file_type();
+            out.push(DirEntry {
+                name: entry.file_name().into(),
+                is_dir: file_type.is_dir(),
+                is_file: file_type.is_file(),
+                is_symlink: file_type.is_symlink(),
+                len: if file_type.is_file() {
+                    metadata.len()
+                } else {
+                    0
+                },
+            });
+        }
+        Ok(out)
+    }
+
+    /// Remove the file at `rel`. Refuses directories (use
+    /// [`Self::remove_dir_all`] for that).
+    pub fn remove_file(&self, rel: impl AsRef<Path>) -> Result<(), WorkspaceCapError> {
+        let rel = rel.as_ref();
+        self.dir.remove_file(rel).map_err(|e| translate(rel, e))
+    }
+
+    /// Remove a directory and all its contents recursively.
+    ///
+    /// Separate from [`Self::remove_file`] so callers make an explicit
+    /// destructive choice — deleting a populated directory accidentally
+    /// is the kind of mistake a capability API should make harder, not
+    /// easier.
+    pub fn remove_dir_all(&self, rel: impl AsRef<Path>) -> Result<(), WorkspaceCapError> {
+        let rel = rel.as_ref();
+        self.dir.remove_dir_all(rel).map_err(|e| translate(rel, e))
+    }
+
+    /// Open `rel` for streaming reads. Use this instead of [`Self::read`]
+    /// when the file is large and you want to avoid buffering it all in
+    /// memory.
+    pub fn open_read(&self, rel: impl AsRef<Path>) -> Result<WorkspaceFile, WorkspaceCapError> {
+        let rel = rel.as_ref();
+        self.dir.open(rel).map_err(|e| translate(rel, e))
+    }
+
+    /// Open `rel` for streaming writes (truncates if exists, creates if
+    /// not). Parent directories are **not** auto-created — call
+    /// [`Self::create_dir_all`] first if needed.
+    pub fn open_write(&self, rel: impl AsRef<Path>) -> Result<WorkspaceFile, WorkspaceCapError> {
+        let rel = rel.as_ref();
+        self.dir.create(rel).map_err(|e| translate(rel, e))
     }
 }
 
@@ -305,5 +397,172 @@ mod tests {
     fn root_is_informational_only() {
         let (ws, tmp) = new_workspace();
         assert_eq!(ws.root(), tmp.path());
+    }
+
+    // -- list_dir / remove_file / streaming --
+
+    #[test]
+    fn list_dir_empty_root() {
+        let (ws, _tmp) = new_workspace();
+        let entries = ws.list_dir("").unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn list_dir_root_with_dot() {
+        let (ws, _tmp) = new_workspace();
+        ws.write("a.txt", b"1").unwrap();
+        let entries = ws.list_dir(".").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "a.txt");
+    }
+
+    #[test]
+    fn list_dir_mixed_content() {
+        let (ws, _tmp) = new_workspace();
+        ws.write("file1.txt", b"hello").unwrap();
+        ws.write("file2.log", b"world!").unwrap();
+        ws.create_dir_all("subdir").unwrap();
+        let mut entries = ws.list_dir("").unwrap();
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].name, "file1.txt");
+        assert!(entries[0].is_file);
+        assert_eq!(entries[0].len, 5);
+        assert_eq!(entries[1].name, "file2.log");
+        assert_eq!(entries[1].len, 6);
+        assert_eq!(entries[2].name, "subdir");
+        assert!(entries[2].is_dir);
+        assert_eq!(entries[2].len, 0);
+    }
+
+    #[test]
+    fn list_dir_subdirectory() {
+        let (ws, _tmp) = new_workspace();
+        ws.write("a/b/x.txt", b"x").unwrap();
+        ws.write("a/b/y.txt", b"yy").unwrap();
+        let mut entries = ws.list_dir("a/b").unwrap();
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name, "x.txt");
+        assert_eq!(entries[1].name, "y.txt");
+    }
+
+    #[test]
+    fn list_dir_absolute_path_rejected() {
+        let (ws, _tmp) = new_workspace();
+        let err = ws.list_dir("/etc").unwrap_err();
+        assert!(matches!(err, WorkspaceCapError::PolicyViolation(_)));
+    }
+
+    #[test]
+    fn list_dir_escape_rejected() {
+        let (ws, _tmp) = new_workspace();
+        let err = ws.list_dir("../..").unwrap_err();
+        assert!(matches!(err, WorkspaceCapError::PolicyViolation(_)));
+    }
+
+    #[test]
+    fn list_dir_nonexistent_is_io_error() {
+        let (ws, _tmp) = new_workspace();
+        let err = ws.list_dir("does/not/exist").unwrap_err();
+        assert!(matches!(err, WorkspaceCapError::Io(_)));
+    }
+
+    #[test]
+    fn remove_file_removes_existing_file() {
+        let (ws, _tmp) = new_workspace();
+        ws.write("doomed.txt", b"x").unwrap();
+        assert!(ws.exists("doomed.txt"));
+        ws.remove_file("doomed.txt").unwrap();
+        assert!(!ws.exists("doomed.txt"));
+    }
+
+    #[test]
+    fn remove_file_nonexistent_is_io_error() {
+        let (ws, _tmp) = new_workspace();
+        let err = ws.remove_file("never.txt").unwrap_err();
+        assert!(matches!(err, WorkspaceCapError::Io(_)));
+    }
+
+    #[test]
+    fn remove_file_absolute_path_rejected() {
+        let (ws, _tmp) = new_workspace();
+        let err = ws.remove_file("/etc/passwd").unwrap_err();
+        assert!(matches!(err, WorkspaceCapError::PolicyViolation(_)));
+    }
+
+    #[test]
+    fn remove_file_refuses_directory() {
+        let (ws, _tmp) = new_workspace();
+        ws.create_dir_all("dir").unwrap();
+        // remove_file on a directory is an I/O error (IsADirectory /
+        // PermissionDenied depending on platform). Either way the dir is
+        // still there.
+        let _ = ws.remove_file("dir");
+        assert!(ws.exists("dir"));
+    }
+
+    #[test]
+    fn remove_dir_all_removes_populated_directory() {
+        let (ws, _tmp) = new_workspace();
+        ws.write("keep/me/inner.txt", b"data").unwrap();
+        assert!(ws.exists("keep/me/inner.txt"));
+        ws.remove_dir_all("keep").unwrap();
+        assert!(!ws.exists("keep"));
+    }
+
+    #[test]
+    fn remove_dir_all_absolute_path_rejected() {
+        let (ws, _tmp) = new_workspace();
+        let err = ws.remove_dir_all("/tmp").unwrap_err();
+        assert!(matches!(err, WorkspaceCapError::PolicyViolation(_)));
+    }
+
+    #[test]
+    fn open_read_streams_file_contents() {
+        use std::io::Read;
+        let (ws, _tmp) = new_workspace();
+        ws.write("big.bin", &[0xAB; 1024]).unwrap();
+        let mut file = ws.open_read("big.bin").unwrap();
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf).unwrap();
+        assert_eq!(buf.len(), 1024);
+        assert!(buf.iter().all(|b| *b == 0xAB));
+    }
+
+    #[test]
+    fn open_write_streams_writes_and_truncates() {
+        use std::io::{Read, Write};
+        let (ws, _tmp) = new_workspace();
+        ws.write("mut.txt", b"OLD LONG CONTENT").unwrap();
+
+        {
+            let mut file = ws.open_write("mut.txt").unwrap();
+            file.write_all(b"new").unwrap();
+            file.flush().unwrap();
+        }
+
+        // open_write should truncate — expect "new" not "new LONG CONTENT".
+        let mut buf = Vec::new();
+        ws.open_read("mut.txt")
+            .unwrap()
+            .read_to_end(&mut buf)
+            .unwrap();
+        assert_eq!(buf, b"new");
+    }
+
+    #[test]
+    fn open_read_absolute_path_rejected() {
+        let (ws, _tmp) = new_workspace();
+        let err = ws.open_read("/etc/passwd").unwrap_err();
+        assert!(matches!(err, WorkspaceCapError::PolicyViolation(_)));
+    }
+
+    #[test]
+    fn open_write_absolute_path_rejected() {
+        let (ws, _tmp) = new_workspace();
+        let err = ws.open_write("/tmp/evil").unwrap_err();
+        assert!(matches!(err, WorkspaceCapError::PolicyViolation(_)));
     }
 }
