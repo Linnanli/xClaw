@@ -24,8 +24,8 @@ vi.mock('../AppHeader', () => ({
   AppHeader: ({ title }: any) => <div data-testid="app-header">{title}</div>,
 }));
 
-vi.mock('../../tabs/ChatTabTauri', () => ({
-  ChatTabTauri: () => <div data-testid="chat-tab">Chat Content</div>,
+vi.mock('../../tabs/ChatTabTauriExperimental', () => ({
+  ChatTabTauriExperimental: () => <div data-testid="chat-tab">Chat Content</div>,
 }));
 
 vi.mock('../../tabs/LogsTab', () => ({

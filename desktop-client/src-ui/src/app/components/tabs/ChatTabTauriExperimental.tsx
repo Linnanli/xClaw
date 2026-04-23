@@ -17,6 +17,7 @@
 
 import { useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { useComposerRuntime } from '@assistant-ui/react';
 import { Thread } from '@components/assistant-ui/thread';
 import { useDlpState } from '../../runtime/ChatRuntimeProvider';
 import { ThreadHistoryLoader } from '../../runtime/ThreadHistoryLoader';
@@ -26,6 +27,7 @@ import { useEngineReady } from '../../hooks/useEngineReady';
 import { TokenManager } from '@utils/tokenManager';
 import { threadApi } from '../../utils/tauri';
 import { tracing } from '../../utils/tracing';
+import type { ChatCommand } from '../../types/chatCommand';
 import { DlpBlockedDialog } from '../ai/DlpBlockedDialog';
 
 interface ChatTabTauriExperimentalProps {
@@ -47,6 +49,15 @@ interface ChatTabTauriExperimentalProps {
    * 不会自动创建（保留上层对 thread 生命周期的完全控制）。
    */
   onThreadCreated?: (threadId: string) => void;
+  /**
+   * 外部指令入口（Phase 1.4：对齐旧 ChatTabTauri 的 outboundCommand 通道）。
+   *
+   * 当 `pendingCommand.kind === 'send_text'` 时，runtime 内部会通过
+   * `useComposerRuntime` 把文本写入输入框并触发 `send()`，复用 composer
+   * 的 DLP 拦截链路。处理完成后调用 `onOutboundCommandHandled(id)` 释放队列。
+   */
+  outboundCommand?: ChatCommand | null;
+  onOutboundCommandHandled?: (commandId: string) => void;
 }
 
 export function ChatTabTauriExperimental({
@@ -55,6 +66,8 @@ export function ChatTabTauriExperimental({
   onModelChange,
   onOpenCustomModelModal,
   onThreadCreated,
+  outboundCommand,
+  onOutboundCommandHandled,
 }: ChatTabTauriExperimentalProps) {
   useEffect(() => {
     TokenManager.getToken().catch((err) => console.error('Failed to load token:', err));
@@ -72,6 +85,8 @@ export function ChatTabTauriExperimental({
       <ChatRuntimeBridge
         threadId={selectedThreadId ?? null}
         onThreadCreated={onThreadCreated}
+        outboundCommand={outboundCommand ?? null}
+        onOutboundCommandHandled={onOutboundCommandHandled}
       />
     </ModelProvider>
   );
@@ -88,9 +103,13 @@ export function ChatTabTauriExperimental({
 function ChatRuntimeBridge({
   threadId,
   onThreadCreated,
+  outboundCommand,
+  onOutboundCommandHandled,
 }: {
   threadId: string | null;
   onThreadCreated?: (threadId: string) => void;
+  outboundCommand?: ChatCommand | null;
+  onOutboundCommandHandled?: (commandId: string) => void;
 }) {
   const { selectedModelId, models } = useModelContext();
   const { ready } = useEngineReady();
@@ -159,8 +178,49 @@ function ChatRuntimeBridge({
         <Thread />
       </div>
       <DlpBlockedDialogBridge />
+      <OutboundCommandBridge
+        command={outboundCommand ?? null}
+        onConsume={onOutboundCommandHandled}
+      />
     </ThreadHistoryLoader>
   );
+}
+
+/**
+ * OutboundCommandBridge — 外部指令注入到 composer 输入框并触发发送。
+ *
+ * 必须挂在 `AssistantRuntimeProvider` 内部（即 `ThreadHistoryLoader` →
+ * `ChatRuntimeProvider` 的 children 中），否则 `useComposerRuntime()` 会
+ * 拿不到 runtime 报错。
+ *
+ * 用 `lastConsumedIdRef` 防止 strict-mode 双挂载或同一指令被重复发送。
+ */
+function OutboundCommandBridge({
+  command,
+  onConsume,
+}: {
+  command: ChatCommand | null;
+  onConsume?: (commandId: string) => void;
+}) {
+  const composerRuntime = useComposerRuntime();
+  const lastConsumedIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!command) return;
+    if (lastConsumedIdRef.current === command.id) return;
+    if (command.kind !== 'send_text') return;
+    lastConsumedIdRef.current = command.id;
+    try {
+      composerRuntime.setText(command.text);
+      composerRuntime.send();
+    } catch (err) {
+      tracing.error('[OutboundCommandBridge] inject command failed', { error: err });
+    } finally {
+      onConsume?.(command.id);
+    }
+  }, [command, composerRuntime, onConsume]);
+
+  return null;
 }
 
 function DlpBlockedDialogBridge() {
