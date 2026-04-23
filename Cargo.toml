@@ -3,6 +3,7 @@ members = [
 	"desktop-client",
 	"admin-backend",
 	"crates/ironclaw_auth",
+	"crates/ironclaw_workspace_cap",
 	"crates/x_claw_agent",
 	"desktop-client/ironclaw",
 	"desktop-client/ironclaw/crates/ironclaw_common",
