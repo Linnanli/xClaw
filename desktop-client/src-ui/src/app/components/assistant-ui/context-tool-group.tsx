@@ -12,7 +12,7 @@ import { memo, useState } from "react";
 import { CheckIcon, ChevronRightIcon, LoaderIcon, BookOpenIcon } from "lucide-react";
 import { cn } from "@/app/components/ui/utils";
 import { ToolStepIndicator } from "./tool-step-indicator";
-import type { ToolStep } from "@/app/runtime/TauriRuntimeProvider";
+import type { ToolStep } from "@/app/runtime/contexts/ApprovalProvider";
 
 /** 被视为"上下文采集"的工具名集合 */
 const CONTEXT_TOOLS = new Set([

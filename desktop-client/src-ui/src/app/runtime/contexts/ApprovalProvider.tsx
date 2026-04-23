@@ -39,6 +39,21 @@ export interface PendingApproval {
   description: string;
 }
 
+/**
+ * 工具执行步骤（流式过程中追踪 tool_started → tool_completed）。
+ *
+ * Phase 1.4 从旧 `TauriRuntimeProvider.tsx` 迁移到此处，与 `PendingApproval`
+ * 聚合在工具交互域。新 Runtime 尚未维护完整的 toolSteps 时间轴；该类型
+ * 目前仅被 `thread.tsx` / `context-tool-group.tsx` 以"可选字段"使用。
+ */
+export interface ToolStep {
+  toolName: string;
+  status: 'running' | 'complete' | 'error';
+  error?: string;
+  startedAt: number;
+  completedAt?: number;
+}
+
 interface ApprovalState {
   pendingApprovals: PendingApproval[];
   approve: (requestId: string) => Promise<void>;

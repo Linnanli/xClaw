@@ -27,7 +27,7 @@ import {
 } from "@assistant-ui/react";
 import type { SanitizationStats } from "@/app/hooks/useDlpScan";
 import { useWatermark } from "@/app/hooks/useWatermark";
-import { useApprovalState, type PendingApproval, type ToolStep } from "@/app/runtime/TauriRuntimeProvider";
+import { useApprovalState, type PendingApproval, type ToolStep } from "@/app/runtime/contexts/ApprovalProvider";
 import {
   ArrowDownIcon,
   ArrowUpIcon,

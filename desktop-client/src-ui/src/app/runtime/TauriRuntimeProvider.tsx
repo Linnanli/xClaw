@@ -82,14 +82,9 @@ interface TauriMessage {
   error?: string;
 }
 
-/** 工具执行步骤（流式过程中追踪 tool_started → tool_completed） */
-export interface ToolStep {
-  toolName: string;
-  status: 'running' | 'complete' | 'error';
-  error?: string;
-  startedAt: number;
-  completedAt?: number;
-}
+/** 工具执行步骤 — Phase 1.4 已迁移到 `contexts/ApprovalProvider`，此处 re-export 以保持向后兼容。 */
+import type { ToolStep } from './contexts/ApprovalProvider';
+export type { ToolStep };
 
 // ---------------------------------------------------------------------------
 // Vercel AI Protocol stream events (from chat-stream channel)
