@@ -711,7 +711,42 @@ ironclaw 的安全栈 (~25,000 行) 是项目最大差异化优势, 包含:
 
 ---
 
-## 11. 待确认事项
+## 12. 核心四项能力归属细化 (Round 12 审计)
+
+> 回答 "压缩/缓存/权限检查/工具注册执行/系统提示词组装都有了吗? 用哪个库?"
+> 结论: 五项全有, 分布不均, 各有 "最优归属"。
+
+### 12.1 归属矩阵 (经源码审计)
+
+| 能力 | codex 现状 | ironclaw 现状 | claw-code 现状 | Route B 决策 | 外部库 |
+|------|-----------|--------------|---------------|-------------|-------|
+| **1. 压缩 (Compaction)** | `core/src/context_manager/` (mod/history/normalize/updates) + `core/templates/compact/{prompt,summary_prefix}.md` | `agent/compaction.rs` 是 shim, 生产实现在 `x_claw_agent::compaction` | `x_claw_agent::compaction` | `x_claw_agent::compaction` 主实现 + port codex `templates/compact/*.md` + port codex `TotalTokenUsageBreakdown` token 计算 → `dasclaw_context_mgr` | 无 (纯 prompt 策略) |
+| **2. 缓存 (Prompt Cache)** | ❌ **零命中** (`PromptCache`/`cache_control`/`cached_tokens`) | ✅ `observability/prompt_cache.rs` (201 行, `PromptCacheMonitor` 原子计数 cache_read/cache_creation/hit rate) | ❌ | **100% 保留 ironclaw** — codex 无对等物, 属 L3 可观测性 | `std::sync::atomic::AtomicU64` (标准库) |
+| **3. 权限检查 (Permissions/Approval)** | **15+ 文件最完整**: `protocol/approvals.rs` + `protocol/permissions.rs` 协议; `core/config/permissions.rs` + `config/permissions_toml.rs` 配置; `core/guardian/approval_request.rs` guardian; `core/context/permissions_instructions.rs` + `context/prompts/permissions/` prompt; `tui/.../approval_overlay.rs` UI; `hooks/events/permission_request.rs` hook; `utils/approval-presets/` preset | ❌ **`ApprovalPolicy`/`permission_check` 零命中 — 无显式 approval 系统**; `ironclaw_safety` 是 DLP 不是 approval | ✅ `x_claw_agent::permissions` (1268 行: `permissions.rs` 683 + `permission_enforcer.rs` 585, 已 Phase 3 port) | **新 crate `dasclaw_permissions`** = codex 协议 + codex prompt/preset/guardian + claw-code 强制引擎 + ironclaw_safety 补 L6 内容策略 | 无 |
+| **4. 工具注册执行 (Tool Registry)** | `core/src/tools/` 20 文件骨架: registry + router + orchestrator + parallel + network_approval + sandboxing + handlers + runtimes (code_mode/js_repl) + hook_names + events + spec | `tools/` 加固层: coercion + rate_limiter + schema_validator + redaction + autonomy + feature_flags + wasm + mcp + builtin + builder | ❌ | **骨架 port codex `core/tools/`** (W1 kernel 的一部分, 命名 `dasclaw_tools_kernel`) + **保留 ironclaw `tools/` 加固层** 叠加 | `wasmtime` 28 + WASI component model (WASM); `jsonschema` crate (schema 校验); MCP SDK (内部) |
+| **5. 系统提示词组装** | **30+ 个按 concern 拆分的 `*_instructions.rs`**: apps / available_plugins / available_skills / collaboration_mode / environment_context / hook_additional_context / image_generation / model_switch / permissions / personality_spec / plugin / realtime_start / realtime_end / skill / spawn_agent / subagent_notification / user / user_shell_command / turn_aborted + `fragment.rs` + `prompts/` 模板目录 | ❌ 散落在 `tools/builder/core.rs`, `tools/builtin/memory.rs`, `llm/reasoning.rs`, `workspace/mod.rs`, **无统一组装模块** | ❌ | **整 port codex `core/context/`** → 进 `dasclaw_context_mgr` (W4), 保留按 concern 分文件结构 | 无 (纯模板字符串) |
+
+### 12.2 对 §7 能力归属总表的修订
+
+之前 §7 的 "tools registry 保留 ironclaw" 不准确, 正确是 "codex 骨架 + ironclaw 加固叠加"。
+之前 §7 的 "permissions 由 claw-code port" 不完整, 正确是 "codex 协议 + claw-code 强制 + codex prompt + ironclaw_safety L6" 四源融合。
+
+### 12.3 Route B 完成度自检
+
+| 关键能力 | 是否在 Route B 里? | 备注 |
+|---------|------------------|------|
+| 压缩 | ✅ `x_claw_agent::compaction` + codex 模板 | W4 |
+| Prompt cache 监控 | ✅ `observability/prompt_cache.rs` 保留 | 已有 |
+| 权限检查 (协议+引擎+prompt+内容策略) | ✅ **新 crate `dasclaw_permissions`** | W4/W8 前做 |
+| 工具注册+路由+并行执行 | ✅ codex kernel port | W1 |
+| 工具加固 (schema/coercion/rate_limit/redaction/WASM) | ✅ ironclaw `tools/` 保留 | 已有 |
+| 系统提示词组装 (30+ instructions) | ✅ port codex `core/context/` | W4 |
+
+**结论: 五项全齐, 均已明确归属和 Wave**。
+
+---
+
+## 13. 待确认事项
 
 请仔细看以下决策点:
 
