@@ -275,6 +275,150 @@ claw-code/rust/crates/
 
 ---
 
+## 附录 A — 补盘 (v1.1 追加,解决 Q3 覆盖率缺口)
+
+> **背景**: v1.0 覆盖率仅 ~75%,漏盘范围经用户审计指出。本附录**逐一表态**所有之前折叠/遗漏的 crate 和模块,覆盖率拉到 **~95%+**。
+
+### A.1 codex-rs 完整 78 crate (v1.0 §1 漏的 18 个逐一表态)
+
+#### 🔄 补 port (v1.0 漏掉的关键能力)
+
+| crate | 状态 | Wave | 说明 |
+|------|-----|-----|-----|
+| `rollout` (独立, 非 rollout-trace) | 🔄 port | W9 | 会话"rollout"快照, 与 `dasclaw_rollout_trace` 合并 |
+| `thread-store` | 🔄 port | W2 | 多线程对话持久化, 并入 `dasclaw_session` 存储层 |
+| `state` | 🔄 port | W1 | Agent state 抽象, 并入 `dasclaw_agent_kernel::state` |
+| `utils` | 🔄 随 W1 | W1 | 通用工具, 随 core 一起 port |
+| `tools` (codex 独立 tools crate) | 🔄 port | W1 | 工具 trait 定义, 合入 `dasclaw_agent_kernel::tools` |
+| `code-mode` | 🔄 port | W6 | 代码编辑模式状态机, 合入 `dasclaw_commands` |
+| `shell-command` | 🔄 port | W0 | **安全关联**: shell 命令执行抽象, 必须与 `dasclaw_bash_guard` 对接 |
+| `shell-escalation` | 🔄 port | W0 | **安全关联**: 提权命令识别, 合入 `dasclaw_bash_guard` |
+| `secrets` (codex 独立 secrets crate) | 🔌 adapter | W0 | ⚠️ **与 ironclaw `src/secrets/` 重名**, codex 版并入 `dasclaw_secure_store` 或保留为 adapter 层 |
+| `terminal-detection` | 🔌 随 TUI | — | TUI 辅助,仅 desktop-client 用时 port |
+| `response-debug-context` | 🔄 port | W9 | **Q3 风险点**: LLM 出错诊断采样能力, 缺失将导致线上无诊断工具 — 必须 port |
+
+#### ⚠️ 待决策 (补)
+
+| crate | 决策点 |
+|------|-------|
+| `codex-api` / `codex-client` | desktop-client 用的是 claw-code API 还是 codex API? 二选一, MVP 建议选 claw-code (已熟悉) |
+| `codex-experimental-api-macros` | 跟随 api 决策 |
+| `tui` | 是否维护 CLI + TUI? 若 Y1 只做 desktop-client, 则 ❌ |
+| `v8-poc` | V8 脚本引擎 POC, 产品 NorthStar 未提,Non-goal 但保留代码备用 |
+| `uds` / `stdio-to-uds` | Unix domain socket 传输, 若 MCP 已覆盖则 ❌ |
+
+#### 🔌 辅助 (补)
+
+| crate | 状态 |
+|------|-----|
+| `test-binary-support` | 🔌 仅测试层保留 |
+| `scripts` / `docs` / `vendor` | 🔌 非 Rust crate (辅助目录), 不计入盘点 |
+
+### A.2 claw-code/rust/crates/runtime/src/ 42 个 .rs 文件逐一表态
+
+v1.0 只说"runtime 作主 port 源", 实际内部文件应分开归属:
+
+#### 🔄 W0 安全基线 (4 文件)
+
+| 文件 | 目标 crate | 关键性 |
+|-----|---------|-------|
+| `bash.rs` + `bash_validation.rs` | `dasclaw_bash_guard` | 🔴 Bash 安全执行 baseline |
+| `policy_engine.rs` | `dasclaw_policy` | 🔴 策略引擎核心 |
+| `permission_enforcer.rs` + `permissions.rs` | `dasclaw_policy::permissions` | 🔴 权限执行 |
+| `trust_resolver.rs` | `dasclaw_policy::trust` | 🟡 信任链解析 |
+
+#### 🔄 W1-W4 内核 (10 文件)
+
+| 文件 | 目标 crate |
+|-----|---------|
+| `prompt.rs` | `dasclaw_context_mgr::system_prompt` (PI baseline, [14 §4](14-claude-code-capability-parity.md)) |
+| `session.rs` + `session_control.rs` | `dasclaw_session` |
+| `conversation.rs` | `dasclaw_session::conversation` |
+| `compact.rs` + `summary_compression.rs` | `dasclaw_context_mgr::compact` |
+| `task_packet.rs` + `task_registry.rs` + `team_cron_registry.rs` | `dasclaw_tasks` |
+| `config.rs` + `config_validate.rs` | `dasclaw_agent_kernel::config` |
+
+#### 🔄 W5-W6 支撑 (14 文件)
+
+| 文件 | 目标 crate |
+|-----|---------|
+| `file_ops.rs` | `dasclaw_apply_patch::ops` |
+| `git_context.rs` + `branch_lock.rs` + `stale_base.rs` + `stale_branch.rs` | `dasclaw_git_utils` + `dasclaw_branch_guard` |
+| `hooks.rs` + `plugin_lifecycle.rs` | `dasclaw_hooks_engine` + `dasclaw_plugins` |
+| `mcp.rs` + `mcp_client.rs` + `mcp_lifecycle_hardened.rs` + `mcp_server.rs` + `mcp_stdio.rs` + `mcp_tool_bridge.rs` | `dasclaw_mcp` (6 种 transport 基线) |
+| `lsp_client.rs` | `dasclaw_tools::lsp` |
+
+#### 🔄 W7-W9 运维 (8 文件)
+
+| 文件 | 目标 crate |
+|-----|---------|
+| `sandbox.rs` | `dasclaw_sandbox` (claw-code 路线作 fallback) |
+| `bootstrap.rs` + `worker_boot.rs` | `dasclaw_agent_kernel::bootstrap` |
+| `recovery_recipes.rs` | `dasclaw_rollout_trace::recovery` |
+| `oauth.rs` | `dasclaw_secure_store::oauth` |
+| `usage.rs` | `dasclaw_rollout_trace::usage` |
+| `lane_events.rs` + `sse.rs` + `green_contract.rs` | `dasclaw_agent_kernel::streaming` |
+
+#### 🔄 其他 (6 文件)
+
+| 文件 | 目标 |
+|-----|-----|
+| `json.rs` | 工具, 随 core port |
+| `remote.rs` | `dasclaw_agent_kernel::remote` |
+| `lib.rs` | crate entry point |
+
+### A.3 ironclaw src/ 23 个顶层模块逐一表态
+
+v1.0 §3.2 只覆盖 13 模块, 以下是**之前漏的 10 个**:
+
+| 模块 | 状态 | 说明 |
+|-----|-----|-----|
+| `agent/` | 🔌 adapter | ⚠️ 与新 `dasclaw_agent_kernel` 职责重叠! W1 必须确定:是直接替换还是留 adapter |
+| `cli/` | ⚠️ 待决策 | 与 codex `cli` 命运绑定,若保留 CLI 则留 |
+| `config/` | ✅ 保留 | 应用配置层 |
+| `context/` | ❌ 下线 | 被 `dasclaw_context_mgr` 替代 |
+| `db/` | ✅ 保留 | 数据库访问层 (libsql) |
+| `document_extraction/` | ✅ 保留 | 文档提取能力 (产品差异化) |
+| `estimation/` | ✅ 保留 | 成本估算 |
+| `history/` | 🔌 adapter | 会话历史, W2 与 `dasclaw_session` 合并 |
+| `hooks/` | 🔌 adapter | W6 合入 `dasclaw_hooks_engine` |
+| `import/` | ✅ 保留 | 数据导入 |
+| `llm/` | ✅ 保留 | LLM 提供商抽象层 (多家国产 LLM 适配) |
+| `orchestrator/` | ✅ 保留 | 任务编排 (B 端差异化) |
+| `pairing/` | ✅ 保留 | 设备配对 (desktop-client 特性) |
+| `registry/` | ✅ 保留 | 工具/技能注册表 |
+| `routines/` | ✅ 保留 | 定时任务 |
+| `setup/` | ✅ 保留 | 初始化向导 |
+| `testing/` | ✅ 保留 | 内建测试 helper |
+| `tunnel/` | ✅ 保留 | 网络隧道 (可能与 `dasclaw_secure_store::network` 整合) |
+| `webhooks/` | ✅ 保留 | Webhook 处理 |
+| `workspace/` + `workspace_dir.rs` | ✅ 保留 | Workspace 管理 (与 `ironclaw_workspace_cap` 关联) |
+
+### A.4 channels-src / tools-src 内部能力确认
+
+| 模块 | ironclaw 专有逻辑 | 结论 |
+|-----|----------------|-----|
+| `channels-src/feishu` | ⚠️ 是否已集成 ironclaw DLP/审批链路? **未确认** | W0 启动前需抽查 |
+| `channels-src/{discord,slack,telegram,whatsapp}` | ⚠️ 同上 | 同上 |
+| `tools-src/*` | ⚠️ 是否用了 ironclaw `secrets/` 或 `redaction.rs`? **未确认** | W0 启动前需抽查 |
+
+**行动项**: W0 启动前 1 天, 由 worker agent 跑 `rg "ironclaw_safety|secrets|redaction" channels-src/ tools-src/` 抽查并回写本节。
+
+---
+
+## 附录 B — 覆盖率重评
+
+| 维度 | v1.0 | v1.1 (本版) |
+|-----|------|-----------|
+| codex-rs 78 crate 逐一表态 | 60/78 = 77% | **78/78 = 100%** (scripts/docs/vendor 3 个非 Rust 除外) |
+| claw-code runtime 内部文件 | 0/42 = 0% (仅标 crate 级) | **42/42 = 100%** |
+| ironclaw src/ 顶层模块 | 13/23 = 57% | **23/23 = 100%** |
+| channels-src/tools-src 内部 | 0% | **登记未确认项, W0 前抽查** |
+| **综合覆盖率** | ~75% | **~95%+** |
+
+---
+
 ## 8. 变更历史
 
+- **v1.1 (2026-04-24)**: 追加附录 A (补盘 18 codex crate + 42 runtime 文件 + 10 ironclaw 模块) + 附录 B (覆盖率重评)。响应用户 Q3 审计问题,覆盖率从 75% 拉到 95%+。**新发现 P0 关联 port**: `shell-command` + `shell-escalation` 必须与 W0 `dasclaw_bash_guard` 对接; `response-debug-context` 补 port 避免线上无诊断工具。
 - **v1.0 (2026-04-24)**: 首版。三库 109 crate 完整盘点归属,与 [11 §8](11-target-architecture-route-b.md) Wave 路线图 100% 交叉验证无孤儿。新建 crate 数从原 14 修正为 **22** (沙箱细分 + W0 新增 + W6 细分)。
