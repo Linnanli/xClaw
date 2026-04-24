@@ -291,42 +291,59 @@ const SENSITIVE_PARTS: &[&str] = &[
 
 ## 4. 对路线 B 架构设计的修正
 
-### 4.1 原 11 文档 §6/§7 的问题
+### 4.1 三层沙箱栈15 — 不是"二选一", 是"三者并存"
 
+```text
+┌───────────────────────────────────────────────────────────┐
+│  L1 主进程 FS 防护 (用户态 / 应用层)                              │
+│  ironclaw_workspace_cap (568 行, cap_std)                             │
+│  ── 防 ../ 逃逸, 防 symlink 逃逸, TOCTOU-safe                      │
+│  ── 作用: Rust 主进程自己的 fs::read/write                          │
+└───────────────────────────────────────────────────────────┘
+                       ▲ 与下层互补, 不重复
+┌───────────────────────────────────────────────────────────┐
+│  L2 子进程沙箱 (内核态 / OS 原生)                                  │
+│  dasclaw_sandbox_linux (port codex linux-sandbox 4780 行)             │
+│  dasclaw_sandbox_windows (port codex windows-sandbox-rs 9753 行)      │
+│  ── Linux: bubblewrap + seccomp + landlock + proxy_routing (netns)    │
+│  ── Windows: Restricted Token + Cap SID + ACL + Firewall             │
+│  ── 作用: LLM 调用的 bash / python / exec 子进程                     │
+└───────────────────────────────────────────────────────────┘
+                       ▲ 与下层互补, 更外围
+┌───────────────────────────────────────────────────────────┐
+│  L3 容器沙箱 (OS 级虚拟化)                                           │
+│  ironclaw sandbox/ + sandbox/proxy/ (3611 行, Docker)                  │
+│  ── Docker container + 出口代理 + 域名白名单 + 凭证注入           │
+│  ── 作用: 外部 MCP / 不可信任务 / 高风险操作的兔底              │
+└───────────────────────────────────────────────────────────┘
 ```
-dasclaw_sandbox_linux   ← 原方案: 从 codex port
-dasclaw_sandbox_windows ← 原方案: 从 codex port
-```
 
-**问题**: ironclaw 已有 `sandbox/` 2,251 行 + `sandbox/proxy/` 1,360 行 = **3,611 行成熟 Docker 沙箱** (外加进程外 daemon 架构)。如果从 codex port 进程级 sandbox_linux/windows, 会:
-- 降级: 容器级 → 进程级
-- 丢失: 出口代理 + 域名白名单 + 凭证注入
-- 重复劳动
+**三层完全互补, 缺任一层均有安全缺口**:
+- 仅 L1 → 子进程不受限, 能跳出 workspace
+- 仅 L2 → 主进程 的 Rust 代码路径 bug 仍能逃逸
+- 仅 L3 → 每次 bash 都起容器 (性能灾难), 且内部出现敏感操作仍无 fast-path 防护
 
-### 4.2 修订方案
+### 4.2 对原 11 文档 §6/§7 的修正
 
-| 原计划 | 修订后 |
-|---|---|
-| `dasclaw_sandbox_linux` (port codex) | **保留 ironclaw `sandbox/`** + **选择性借鉴 codex sandbox_linux 的 seccomp/landlock 加固思路**注入 sub-process 层 |
-| `dasclaw_sandbox_windows` (port codex) | **保留 ironclaw `sandbox/`** + **借鉴 codex sandbox_windows 的 Restricted Token / Job Object 思路**加固 sub-process 层 |
-| `dasclaw_policy` (port codex) | **对齐** ironclaw `ironclaw_safety::policy` + codex policy, 择优合并 |
-| `dasclaw_rollout_trace` (port codex) | **保留** ironclaw, 无需 port |
-| `dasclaw_apply_patch` (port claw-code) | ✅ 维持原计划 (ironclaw 无 apply_patch) |
-| `dasclaw_branch_guard` (port claw-code) | ✅ 维持原计划 |
-| `dasclaw_device_identity` (port claw-code) | ✅ 维持原计划 |
+**正确方案**:
 
-### 4.3 新增保留清单 (路线 B 必须保留, 不动一行)
+| crate / 模块 | 行数 | 来源 | 技术 | 路线 B 决策 |
+|---|---|---|---|---|
+| `ironclaw_workspace_cap` | 568 | ironclaw 原生 | cap_std | ✅ **保留**, 不 port codex |
+| `dasclaw_sandbox_linux` | ~4,780 | **codex linux-sandbox port** | bubblewrap + seccomp + landlock + netns | ★ **新增**, 零实现需 port |
+| `dasclaw_sandbox_windows` | ~9,753 | **codex windows-sandbox-rs port** | Restricted Token + Cap SID + ACL + Firewall | ★ **新增**, 零实现需 port |
+| `ironclaw sandbox/` + `sandbox/proxy/` | 3,611 | ironclaw 原生 | Docker + proxy + allowlist | ✅ **保留**, 用于容器级兔底 |
 
-| crate/模块 | 理由 |
-|---|---|
-| `ironclaw_safety` | 项目唯一 fuzz 测试 crate, 4849 行, credential_detect + leak_detector 独有 |
-| `ironclaw_workspace_cap` | cap_std TOCTOU-safe 路径防护, codex/claw 无对应 |
-| `tools/wasm/*` | 15 文件 wasm 沙箱, 独有 |
-| `secrets/*` | OS Keychain + 加密, 独有 |
-| `sandbox/` + `sandbox/proxy/` | 容器级沙箱, 比 codex 进程级更强 |
-| `tools/redaction.rs` | 18+ 字段自动脱敏 |
-| `extensions/` | 11786 行 extensions 沙箱 |
-| `NETWORK_SECURITY.md` | 合规审查必备文档 |
+**该 port 的**: codex 的 linux-sandbox / windows-sandbox-rs (ironclaw 无子进程级沙箱实现)
+**该保留的**: ironclaw 的 workspace_cap (应用层) + sandbox (容器层)
+**不是二选一关系**。
+
+### 4.3 原上轮修订不准确之处
+
+上一轮 13 文档说 "仅借鉴 codex seccomp 加固" 不准确。正确表述:
+- codex linux-sandbox 是 **4780 行完整模块**, 不是可以 "借鉴思路" 的片段, 需整 port
+- codex windows-sandbox-rs 是 **9753 行**, 同样需整 port
+- 两者与 ironclaw Docker 沙箱**低层不同**, **不能相互替代**
 
 ---
 
@@ -334,18 +351,18 @@ dasclaw_sandbox_windows ← 原方案: 从 codex port
 
 | 层级 | 能力 | 实现来源 | 路线 B 决策 |
 |---|---|---|---|
-| **L1 进程内 FS 防护** | cap_std TOCTOU-safe FS | ironclaw_workspace_cap | ✅ 保留 |
-| **L2 工具沙箱 (WASM)** | wasmtime + capability opt-in | ironclaw tools/wasm | ✅ 保留 |
-| **L3 凭证边界** | credential_injector + SecretsStore | ironclaw secrets + wasm/credential_injector | ✅ 保留 |
-| **L4 子进程沙箱 (OS)** | Docker container + proxy | ironclaw sandbox + sandbox/proxy | ✅ 保留主体 |
-|  | seccomp/landlock (Linux) | codex sandbox_linux | ⚠️ 借鉴加固 |
-|  | Restricted Token (Windows) | codex sandbox_windows | ⚠️ 借鉴加固 |
-| **L5 内容安全 (DLP)** | Prompt sanitize + credential/leak detect + policy | ironclaw_safety (4849 + fuzz) | ✅ 保留 |
-| **L6 日志脱敏** | 18+ 敏感字段自动 redact | tools/redaction.rs | ✅ 保留 |
-| **L7 网络审计** | 4 边界 + 5 端口 + 威胁模型 | NETWORK_SECURITY.md | ✅ 维护 |
-| **L8 Extension 治理** | 插件元数据校验 + 沙箱 | extensions/ | ✅ 保留 |
+| **L1 主进程 FS 防护 (应用层)** | cap_std TOCTOU-safe | `ironclaw_workspace_cap` (568) | ✅ 保留 |
+| **L2 子进程沙箱 (内核层, Linux)** | bubblewrap + seccomp + landlock + netns | `dasclaw_sandbox_linux` ← port codex linux-sandbox (4780) | ★ 新增 |
+| **L2 子进程沙箱 (内核层, Windows)** | Restricted Token + Cap SID + ACL + Firewall | `dasclaw_sandbox_windows` ← port codex windows-sandbox-rs (9753) | ★ 新增 |
+| **L3 容器沙箱 (OS 虚拟化)** | Docker + proxy + allowlist | `ironclaw sandbox/` + `sandbox/proxy/` (3611) | ✅ 保留 |
+| **L4 工具沙箱 (WASM)** | wasmtime + capability opt-in | `ironclaw tools/wasm/` (15 文件) | ✅ 保留 |
+| **L5 凭证边界** | credential_injector + SecretsStore | `ironclaw secrets/` + `tools/wasm/credential_injector.rs` | ✅ 保留 |
+| **L6 内容安全 (DLP)** | Prompt sanitize + credential/leak detect + policy | `ironclaw_safety` (4849 + fuzz) | ✅ 保留 |
+| **L7 日志脱敏** | 18+ 敏感字段自动 redact | `tools/redaction.rs` | ✅ 保留 |
+| **L8 网络审计** | 4 边界 + 5 端口 + 威胁模型 | `NETWORK_SECURITY.md` | ✅ 维护 |
+| **L9 Extension 治理** | 插件元数据校验 + 沙箱 | `extensions/` | ✅ 保留 |
 
-**8 层纵深防御栈, 全部保留 ironclaw 为主, codex 仅作加固来源**。
+**9 层纵深防御栈**。L1+L3+L4+L5+L6+L7+L8+L9 保留 ironclaw, L2 新增 (port codex)。
 
 ---
 
