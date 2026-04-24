@@ -476,20 +476,25 @@ x-claw/
 
 ## 8. Wave 路线图 (路线 B 完整版)
 
+> **v1.1 更新 (15 产品北极星对账)**: W0 扩展为"安全 + 治理 P0 联合补齐",由 Claude Code 对标 P0 (Bash Guard/CVE) 与产品北极星 v1.1 P0 (SkillsHub 签名+CVE+分级 / 国密密钥 / Fuzz 扩展) 合并。新增 W0-W2 治理深度重构并行线 + W_Q3 可视化 Agent 编辑器。详见 [14-claude-code-capability-parity.md §2.1](14-claude-code-capability-parity.md) 与 [15-product-north-star.md §9.2](15-product-north-star.md)。
+
 | Wave | 主题 | 新增 / 改动 | 依赖 |
 |---|---|---|---|
-| **W1** | Agent Kernel | port codex `core/agent/` → `dasclaw_agent_kernel`; 把 Hook trait 从 `x_claw_agent` 迁过来 | - |
+| **W0** | **安全与治理 P0** (v1.1 扩展) | 🅰 `dasclaw_bash_guard` (Bash AST 7000+ 行 + sed/awk) + CVE 流程 / 🅱 SkillsHub 签名+CVE+风险分级 + `dasclaw_secure_store` (TPM/SE/国密 SM2/SM3/SM4) + Fuzz 覆盖扩展 (secrets+credential_injector+workspace_cap) | - (前置一切) |
+| **W0-W2** | **治理后台深度重构** (并行) | 组织架构管控 (部门 AI 配额/目录/网络/知识库权限) + 对话审计深度增强 (全链路 trace_id + 脱敏落库 + 多维检索 P50<1s + 90 天回溯 + 告警 + 导出 + 分部门隔离) | - (与 W0 并行) |
+| **W1** | Agent Kernel | port codex `core/agent/` → `dasclaw_agent_kernel`; 把 Hook trait 从 `x_claw_agent` 迁过来 | W0 |
 | **W2** | Session 分层 | port codex `core/session/` → `dasclaw_session`; ironclaw `session.rs/session_manager.rs` 下线 | W1 |
 | **W3** | Tasks 与快照 | port codex `core/tasks/` → `dasclaw_tasks`; 含 ghost_snapshot 任务级回滚 | W1, W2 |
-| **W4** | Context Manager | port codex `core/context_manager/` → `dasclaw_context_mgr`; ironclaw `compaction.rs/context_monitor.rs` 下线 | W1 |
+| **W4** | Context Manager | port codex `core/context_manager/` → `dasclaw_context_mgr`; ironclaw `compaction.rs/context_monitor.rs` 下线 + snip_compaction/micro_compact/token_budget/threshold_config | W1 |
 | **W5** | Patch 与 Git | port `dasclaw_apply_patch` + `dasclaw_git_utils`; ironclaw `code_edit.rs / tools/builtin/git/` 改 adapter | - (并行) |
-| **W6** | Hooks 与 Features | port `dasclaw_hooks_engine` + `dasclaw_features`; ironclaw `hooks/` 改 adapter | - (并行) |
-| **W7** | 沙箱平台覆盖 | port `dasclaw_sandbox` (管理器) + `dasclaw_sandbox_linux` + `dasclaw_sandbox_windows` + `dasclaw_sandbox_macos`; ironclaw `sandbox/` 加分发层 | - (并行) |
+| **W6** | Hooks 与 Features | port `dasclaw_hooks_engine` + `dasclaw_features` + `dasclaw_feature_flags`; ironclaw `hooks/` 改 adapter | - (并行) |
+| **W7** | 沙箱平台覆盖 | port `dasclaw_sandbox` (管理器) + `dasclaw_sandbox_linux` + `dasclaw_sandbox_windows` + `dasclaw_sandbox_macos`; ironclaw `sandbox/` 加分发层 + W0 Fuzz 覆盖要求延续 | - (并行) |
 | **W8** | 合规与分支治理 | 聚合 claw → `dasclaw_policy` + `dasclaw_branch_guard`; ironclaw `safety/` 改 adapter | - (并行) |
 | **W9** | 可观测与身份 | port `dasclaw_rollout_trace` + `dasclaw_device_identity` | - (并行) |
 | **W10** | 集成测试 + 老 sub_agent 重写 | `tools/builtin/sub_agent.rs` 重写为 kernel adapter; 契约/冒烟测试覆盖 14 个新 crate | W1-W9 |
+| **W_Q3** | **企业自定制行业 Agent 可视化编辑器** (Y1 Q3) | `admin-backend/ui/src/pages/agents.tsx` + 后端 CRUD + 调度继承 7 大类 15 条安全栈 | W0-W10 稳定 |
 
-**并行性**: W5/W6/W7/W8/W9 互不依赖, 可并行推进。W1→W4 是顺序的 (kernel 定义接口, 后续依赖)。
+**并行性**: W5/W6/W7/W8/W9 互不依赖, 可并行推进。W1→W4 是顺序的 (kernel 定义接口, 后续依赖)。**W0 与 W0-W2 治理重构并行但均前置阻塞 W1**。W_Q3 是 Y1 Q3 产品里程碑,依赖全部基线稳定。
 
 ---
 

@@ -336,14 +336,29 @@ codex 路径:
 ### 2.1 🔴 P0 必补 (安全相关, 生产阻塞级)
 
 > **Round 18 更新**: 原 P0 清单中的 `<system-reminder>` 标签 (#3) 与 `CYBER_RISK_INSTRUCTION` 文本 (#4) 经 `semantic_search` 验证发现 claw-code `runtime/src/prompt.rs:480` 已具备等价实现, 从 P0 移出。
+>
+> **Round 18+ 更新 (15 产品北极星 v1.1 对账注入)**: 产品北极星定稿 [15-product-north-star.md](15-product-north-star.md) §9.2 经 13 文档对账补齐 6 条产品级 P0, 与本表 Claude Code 解耦视角的 P0 合并, P0 从 3 项扩至 9 项。来源归属列区分: 🅰 = Claude Code 对标 / 🅱 = 产品北极星 v1.1。
 
-| # | 能力 | 所属层 | 新增 crate / 模块 | 工作量 |
-|---|------|-------|------------------|--------|
-| 1 | Bash AST 安全分析 7000+ 行 | L5 safety | `dasclaw_bash_guard` | 3000-5000 LOC |
-| 2 | sed/awk 修改标志识别 | L5 safety | `dasclaw_bash_guard::sed_awk` | 500 LOC |
-| 3 | CVE 跟踪流程 + CI 扫描 | 工程 | `docs/security/cve-tracking.md` + `scripts/ci/cve-scan.sh` | 200 LOC + 文档 |
+| # | 能力 | 所属层 | 新增 crate / 模块 | 来源 | 工作量 |
+|---|------|-------|------------------|------|--------|
+| 1 | Bash AST 安全分析 7000+ 行 | L5 safety | `dasclaw_bash_guard` | 🅰 | 3000-5000 LOC |
+| 2 | sed/awk 修改标志识别 | L5 safety | `dasclaw_bash_guard::sed_awk` | 🅰 | 500 LOC |
+| 3 | CVE 跟踪流程 + CI 扫描 | 工程 | `docs/security/cve-tracking.md` + `scripts/ci/cve-scan.sh` | 🅰 | 200 LOC + 文档 |
+| 4 | **CPU 级密钥存储** (TPM/SE/国密 SM2/SM3/SM4) | L5 密钥 | `dasclaw_secure_store` (扩展 `ironclaw secrets/`) | 🅱 | 1500-2500 LOC |
+| 5 | **组织架构管控** (部门 AI 配额/目录/网络/知识库权限) | 治理 | `admin-backend/src/handlers/{org,quota,policy}.rs` + desktop-client 权限边界 | 🅱 | 2000-3000 LOC |
+| 6 | **SkillsHub 签名 + CVE 跟踪 + 风险分级 + 分发** | 治理 | `admin-backend/src/handlers/extensions.rs` 扩展 (SkillScanner 已有,补签名/CVE/分级) | 🅱 | 1200-1800 LOC |
+| 7 | **对话审计深度增强** (全链路 trace_id + 脱敏落库 + 多维检索 P50<1s + 90 天回溯 + 告警 + 导出 + 分部门隔离) | 治理 | `admin-backend/src/handlers/audit.rs` 重构 + desktop-client 遥测 hook | 🅱 | 2500-3500 LOC |
+| 8 | **客户端 Agent 可视化编辑器** (企业自定制行业 Agent) | 产品 | `admin-backend/ui/src/pages/agents.tsx` + 后端 CRUD + 调度继承安全栈 | 🅱 (Y1 Q3) | 2000-3000 LOC |
+| 9 | **Fuzz 覆盖扩展** (`secrets` + `credential_injector` + `workspace_cap` + 待建 `dasclaw_sandbox_*`) | 横切工艺 | 各 crate `fuzz/` 目录新增 target | 🅱 | 600-1000 LOC |
 
-**P0 总工作量**: ~3500-5500 LOC + 文档。
+**P0 总工作量**: ~13,500-20,600 LOC + 文档 (原 3,500-5,500 + 产品注入 10,000-15,100)。
+
+**P0 优先级子分层** (防止 W0 塞爆):
+
+- **W0 必须前置**: #1-#3 (Claude Code 对标,生产阻塞) + #6 (Skill 扫描签名,决定 MVP 能否上架)
+- **W0 并行启动**: #4 (密钥国密化,国央企强制) + #9 (Fuzz 扩展,不阻塞但持续)
+- **W0-W2 交付**: #5 (组织管控) + #7 (审计增强) — 需要 admin-backend 深度重构
+- **Y1 Q3 交付**: #8 (可视化编辑器) — 依赖 #1-#7 先稳
 
 ### 2.2 🟡 P1 应补 (工程基础设施)
 
@@ -387,9 +402,11 @@ codex 路径:
 
 | Wave | 原计划 | 补丁 |
 |------|-------|------|
-| W0 (新) | — | **安全 P0 补齐**: `dasclaw_bash_guard` + CVE 流程。原拟入 P0 的 Prompt Injection 标签与 CYBER_RISK_INSTRUCTION 经 Round 18 验证 claw-code 已具备等价实现, 不进 W0 |
+| W0 (新) | — | **安全 P0 补齐 (v1.1 扩展版)**: 🅰 `dasclaw_bash_guard` + CVE 流程 (Claude Code 对标) + 🅱 SkillsHub 签名+CVE+分级 + `dasclaw_secure_store` 国密 + Fuzz 扩展 (产品北极星)。原拟入 P0 的 Prompt Injection 标签与 CYBER_RISK_INSTRUCTION 经 Round 18 验证 claw-code 已具备等价实现, 不进 W0 |
+| W0-W2 | — | **治理后台深度重构**: 组织架构管控 + 对话审计深度增强 (admin-backend handlers/audit,org,quota,policy 全面重构), 与 W0 并行但交付跨 W0-W2 |
 | W4 | context_mgr + llm_cache | **追加**: `snip_compaction` + `micro_compact` + `token_budget` + `threshold_config` (整合 codex 90%×window 与 claw-code 100K env 两种策略)。claude_md_loader 由于 claw-code 已实现, 移至 "port claw-code 已有模块" 的主线不单独起 Wave |
 | W5 (新) | — | **Feature Flag 基础设施**: `dasclaw_feature_flags` 独立 crate, 为后续 KAIROS/BRIDGE_MODE 等 Flag 提供底座 |
+| **W_Q3 (新)** | — | **企业自定制行业 Agent 可视化编辑器**: `admin-backend/ui` + 后端 CRUD + 调度继承 7 大类 15 条安全栈。Y1 Q3 交付, 依赖 W0-W8 稳定 |
 | W9+ | — | **P2 能力按需**: TeamCreateTool / DAEMON / 启动优化 / SKILL_SEARCH 等, 滚动排期 |
 
 ---
