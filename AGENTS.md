@@ -16,7 +16,7 @@
    - 每次给开发者解释方案或者让开发选择方案，必须调用 `mcp-feedback-enhanced` 工具。
    - 工具调用后，Agent 必须等待用户反馈，收到明确指示后再继续执行后续任务。
 
-### 分析工具使用规范（Round 17 新增）
+### 分析工具使用规范（Round 17 建立 / Round 18 实证）
 
 **重大架构决策/能力盘点/跨项目对比前，必须按三级顺序使用工具**：
 
@@ -27,11 +27,22 @@
 | Level 3 字面量层 | `rg` / `grep` | 已知确切词后再用 |
 
 **反模式（禁止）**：
-- ❌ 跳过 Level 1，直接 `rg <英文词>` 找概念 — 漏掉异名等价实现（如 codex `SpawnAgentForkMode` ≡ Claude Code `forkSubagent`）
+- ❌ 跳过 Level 1，直接 `rg <英文词>` 找概念 — 漏掉异名等价实现
 - ❌ 判定"独家/缺失"时只看单一 repo — 必须三方交叉验证
 - ❌ 未读解构文档（如 `decode-claude-code-main/`）就给架构结论
+- ❌ 写架构对账文档时没有先按本规范核验能力表每一格 — 会把主观猜测当结论
 
-**教训来源**：Round 1-15 多次误判（"codex 没 forkSubagent"、"ironclaw Prompt Cache 独家"）的根因均为字面量搜索陷阱。详见 [14-claude-code-capability-parity.md §0](docs/plans/architecture-refactor/14-claude-code-capability-parity.md)。
+**执行流程（最低标准）**：
+1. 先用 `semantic_search` 搜概念（≥ 2 种语义表达）
+2. 若有符号级疑问，用 `vscode_listCodeUsages` 打引用图
+3. 最后才用 `rg` 定位确切位置
+4. 对于"X 没有 Y"这类否定性结论，**必须明确给出 Level 1 + Level 3 双证据**才能落笔
+
+**教训来源**：
+- Round 1-15 多次误判（"codex 没 forkSubagent"、"ironclaw Prompt Cache 独家"）的根因均为字面量搜索陷阱。
+- **Round 18 实证**：14 文档 Round 17 版本列出的 4 项 P0/P1 "缺口"（`<system-reminder>` 标签 / CYBER_RISK_INSTRUCTION 文本 / 多层 CLAUDE.md 加载 / 压缩阈值），经 `semantic_search` 验证全部是**伪缺口** —— claw-code `runtime/src/prompt.rs:480` 与 `prompt.rs:197`、codex `openai_models.rs:306` 早已实现。4/19 的文档错误率直接证明：**不做 semantic_search 就动笔写对账文档是不合格的**。
+
+详见 [14-claude-code-capability-parity.md §0 §4.1 §6](docs/plans/architecture-refactor/14-claude-code-capability-parity.md)。
 
 ---
 
