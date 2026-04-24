@@ -479,18 +479,172 @@ x-claw/
 
 ---
 
-## 9. 待确认事项
+## 9. 编排层 (L3) 为什么保留 ironclaw 实现? — 用户关键提问回答
+
+**一句话**: ironclaw 的 dispatcher/router/thread_ops **不是 agent 内核**, 而是连接 codex kernel 与 ironclaw 特有外围 (skills/jobs/channels/extensions) 的**胶水层**。这些胶水能力是 codex/claw-code 都没有的, 替换成本极高且没有对等物可换。
+
+### 9.1 ironclaw dispatcher 的 4 项独有能力 (证据)
+
+**文件规模**:
+
+```
+dispatcher.rs      3,017 行   (工具调度 + skill 注入 + channel 感知)
+thread_ops.rs      2,583 行   (thread 操作 + undo/redo + 审批)
+commands.rs        1,033 行   (/help /model /status /skills 等命令)
+router.rs            200 行   (自然语言 → MessageIntent)
+submission.rs          4 行   (re-export)
+─────────────────────
+合计                6,837 行
+```
+
+#### 能力 1: Skill 动态注入 (dispatcher.rs:132-199) ⭐
+
+```rust
+// dispatcher.rs 第 132-144 行
+// Select and prepare active skills (if skills system is enabled)
+let (disabled_skills, disabled_extensions) = if message.channel == "tauri" {
+    (
+        disabled_names_from_metadata(message, "disabled_skills"),
+        disabled_names_from_metadata(message, "disabled_extensions"),
+    )
+} else { ... };
+
+let active_skills = self.select_active_skills(&message.content, &disabled_skills);
+
+// 第 147-174 行: 注入 <skill> XML block
+let skill_context = if !active_skills.is_empty() {
+    for skill in &active_skills {
+        let trust_label = match skill.trust {
+            SkillTrust::Trusted => "TRUSTED",
+            SkillTrust::Installed => "INSTALLED",
+        };
+        format!("<skill name=\"{}\" version=\"{}\" trust=\"{}\">...</skill>", ...)
+    }
+}
+```
+
+**价值**: 这是**整个系统 skill 系统的唯一注入点**。根据用户消息内容**动态选择** trusted/installed skill, 注入为 XML block 到 system prompt。**codex / claw-code 完全没有这个机制**。
+
+#### 能力 2: Channel 感知差异化 (dispatcher.rs 多处)
+
+```rust
+if message.channel == "tauri" { ... }  // 仅 Tauri 前端从 metadata 读 disabled 列表
+```
+
+**价值**: ironclaw 有 **7 个 channel 入口** (tauri / web / repl / relay / webhook / wasm / signal), dispatcher 是它们的**统一收敛点**, 针对不同 channel 差异化读取 metadata / 启用 skill / 审批策略。codex 只有 tui+app-server 两个入口, 没有多 channel 抽象。
+
+#### 能力 3: 并行 JoinSet 工具调度 (dispatcher.rs:880-920)
+
+```rust
+let mut join_set = JoinSet::new();
+for (pf_idx, tc) in &runnable {
+    join_set.spawn(async move {
+        // 每个工具独立 status event + safety check + execute + post-flight
+    });
+}
+```
+
+**价值**: 工业级并行调度, 集成 status event 流式推送, 与 codex 的并行实现水平相当。**路线 B 直接保留**, 无需重写。
+
+#### 能力 4: Job 语义路由 (router.rs)
+
+```rust
+pub enum MessageIntent {
+    CreateJob { title, description, category },
+    CheckJobStatus { job_id },
+    CancelJob { job_id },
+    ListJobs { filter },
+    HelpJob { job_id },
+    Chat { content },
+    Command { command, args },
+    Unknown,
+}
+```
+
+**价值**: 把自然语言对话**语义映射到 Job 系统**, 连接 `routines/` 与 `orchestrator/`。**codex / claw-code 没有 job 概念**, 它们只管对话 turn。
+
+### 9.2 codex 编排层对应物 (做什么)
+
+**codex `codex_delegate.rs` (852 行) + `thread_manager.rs` (1,129 行)** 职责:
+
+| 职责 | 是否与 ironclaw 重叠 |
+|---|---|
+| Guardian approval 路由 (企业审批流) | ⚠️ ironclaw `safety/` + `approval` IPC 已有不同实现 |
+| MCP tool 批准缓存 (ACCEPT / ACCEPT_FOR_SESSION / DECLINE) | ⚠️ 可借鉴到 dispatcher |
+| Collaboration mode 切换 (collaboration_mode_presets) | ❌ ironclaw 无此概念 |
+| Thread 生命周期 (spawn/prune) | ✅ 路线 B 已切到 `dasclaw_session` |
+| Model preset 管理 | ⚠️ ironclaw `llm/models.rs` 已有 |
+
+**codex 的编排层没有**:
+- ❌ Skill 动态注入
+- ❌ Channel 感知差异化
+- ❌ Job 语义路由
+- ❌ 7 channel 入口汇聚
+
+### 9.3 claw-code 编排层对应物
+
+**claw-code `runtime/conversation.rs` (1,811 行) + `session_control.rs` (966 行)**:
+
+- 对话状态机 (turn / message / tool_call 推进)
+- session 生命周期控制
+- **没有**: skill 动态注入、multi-channel、job 路由
+
+### 9.4 三家对比表
+
+| 编排层职责 | ironclaw dispatcher | codex codex_delegate | claw-code conversation |
+|---|---|---|---|
+| LLM call → tool → repeat 主循环 | ✅ (调 x_claw_agent loop) | ✅ | ✅ |
+| 并行工具调度 | ✅ JoinSet (3k LOC) | ✅ | ✅ |
+| **Skill 动态选择 + 注入** | ✅ **独有** | ❌ | ❌ |
+| **Channel 感知 metadata** | ✅ **独有 (7 入口)** | ❌ (2 入口硬编码) | ❌ |
+| **Job 语义路由** | ✅ **独有** | ❌ | ❌ |
+| **Extensions 动态禁用** | ✅ **独有** | ⚠️ (plugin 系统不同) | ⚠️ |
+| **/help /model /status 命令** | ✅ commands.rs 1k | ✅ | ✅ |
+| Guardian approval | ⚠️ 不同实现 | ✅ 更全 | ⚠️ |
+| MCP approval 缓存 | ⚠️ 基础 | ✅ 更细 | ⚠️ |
+| Collaboration mode | ❌ | ✅ | ❌ |
+| Thread 生命周期 | 部分 (thread_ops) | ✅ | ✅ |
+| undo/redo checkpoint | ✅ agent/undo.rs | ✅ core/tasks/undo.rs | ❌ |
+
+### 9.5 结论: 为什么编排层用 ironclaw?
+
+**3 条理由**:
+
+1. **ironclaw 编排层集成了系统特有能力**: skill 注入 / 7 channel / job 路由 / extensions 禁用 — 这些都是 codex/claw 没有的, 替换 = 从零重写
+2. **替换成本 ≈ 重构整个应用层**: dispatcher + thread_ops + commands + router = **6,837 行深度耦合代码**, 与 skills/channels/jobs/extensions 双向引用
+3. **codex 的编排层强项可选择性融合**, 不需要整替换:
+   - **MCP approval 缓存** (ACCEPT_FOR_SESSION 等) 可借鉴思路合并到 dispatcher
+   - **Guardian approval** 可参考设计, 但 ironclaw 已有自己的 approval IPC (`ic_approve_plan`)
+   - **Thread 生命周期** 已通过 `dasclaw_session` 替换内核部分
+
+**路线 B 的正确边界划分**:
+
+```
+codex → 内核 (agent_kernel / session / tasks / context_mgr)  ← 算法标准化, 越替换越优
+ironclaw → 编排层 (dispatcher / router / thread_ops / commands)  ← 应用胶水, 越保留越省
+codex/claw → 工具与治理 (apply_patch / git / policy / sandbox)  ← 独立子能力, 整 crate 移植
+ironclaw → 外围生态 (channels / llm / tools / routines / extensions / skills)  ← 7年积累, 完全保留
+```
+
+**简言之**: dispatcher 不是"agent 引擎", 而是"**把 agent 引擎和公司应用接起来的胶水**"。胶水是 ironclaw 独有的, 所以保留; 引擎是 codex 更优的, 所以替换。这就是路线 B 的本质。
+
+---
+
+## 10. 待确认事项
 
 请仔细看以下决策点:
 
-1. **架构图是否清晰?** 5 个 mermaid 图分别覆盖: 五层总览 / crate 依赖 / 数据流 / 多 agent 协调 / Hook 注入。是否还需要补充某个视角的图?
+1. **§9 的编排层保留理由是否充分?** 如果您仍觉得 codex codex_delegate + thread_manager 比 ironclaw dispatcher 更优, 请指出具体哪项能力; 我可以再做更细致对比。
 
-2. **目录规划是否合理?** crates/ 下 14 个新 dasclaw_* + 3 个存量 + 1 个 legacy x_claw_agent, 是否过多需要合并? 例如:
-   - `dasclaw_sandbox_linux` + `dasclaw_sandbox_windows` 合成 `dasclaw_sandbox` 单 crate?
-   - `dasclaw_policy` + `dasclaw_branch_guard` 合成 `dasclaw_governance`?
+2. **架构图是否清晰?** 5 个 mermaid 图分别覆盖: 五层总览 / crate 依赖 / 数据流 / 多 agent 协调 / Hook 注入。是否还需要补充某个视角的图? (例如: skill 注入流程? channel 汇聚图?)
 
-3. **下线决策是否激进?** ironclaw `agent/{session.rs, session_manager.rs, task.rs, compaction.rs, context_monitor.rs}` 5 文件下线换成 codex port, 是否分阶段灰度更稳?
+3. **14 个新 dasclaw_* crate 是否过多?** 建议合并选项:
+   - `dasclaw_sandbox_linux` + `dasclaw_sandbox_windows` → `dasclaw_sandbox` 单 crate 两 feature?
+   - `dasclaw_policy` + `dasclaw_branch_guard` → `dasclaw_governance`?
+   - `dasclaw_rollout_trace` + `dasclaw_device_identity` → `dasclaw_enterprise`?
 
-4. **Wave 顺序是否合适?** 当前是 W1-W4 内核优先, W5-W9 周边并行, W10 收口。或先做 W5-W8 周边能力, 再吃 W1-W4 内核?
+4. **下线 5 个 ironclaw 文件激进吗?** `session.rs / session_manager.rs / task.rs / compaction.rs / context_monitor.rs` 直接换成 codex port, 是否分阶段灰度更稳?
 
-5. **legacy x_claw_agent 命名是否改?** 当前保留为 wrapper, 文档建议保留原名; 或改为 `dasclaw_agent_legacy` 强调过渡性。
+5. **Wave 顺序**: 当前是 W1-W4 内核优先, W5-W9 周边并行。或先做 W5-W8 周边能力再吃内核?
+
+6. **legacy `x_claw_agent` 是否改名**为 `dasclaw_agent_legacy` 强调过渡性?
