@@ -408,9 +408,35 @@ ironclaw 当前 `skills/` (3,665 行) 是 **SKILL.md 规范**, 按 `skills/mod.r
 
 ### 结论
 
-> **可以跑, 但必须 "deny-exec seccomp + landlock/seatbelt 写保护 + netns egress proxy + cgroups 限额 + env 清空" 五件套齐上, 少一件就破**。
-> 目前 ironclaw 只有 **L3 Docker** 拥有完整五件套; **L2 子进程沙箱**要等 W7 port 完 codex 三平台 (~15,254 行) 才能达到同等强度。
-> 这是为什么 W7 在 Route B 是独立关键 Wave。
+> **可以跑, 但"五件套齐上"不是 port codex 就能拿到**。详见 §5.5.1 codex 五件套真实现状审计。
+
+### 5.5.1 codex OS 原生沙箱五件套审计 (经源码验证)
+
+**三强两缺**, 不是想象中的"port 即齐":
+
+| # | 五件套能力 | codex 实现 | 证据 (文件:行) | 评价 |
+|---|-----------|-----------|---------------|------|
+| 1 | **deny-exec seccomp** | ❌ 不做 | `sandboxing/src/seatbelt_base_policy.sbpl:10-11` 明确 `(allow process-exec)` + `(allow process-fork)`; Linux seccompiler 只用于**网络过滤** (`linux-sandbox/src/landlock.rs:67` `install_network_seccomp_filter_on_current_thread`) | **弱** |
+| 2 | **landlock / Seatbelt 写保护** | ✅ 完整 | `linux-sandbox/src/landlock.rs:15-22` 引入 `landlock` crate 全套; macOS Seatbelt `(deny default)` closed-by-default | **强** |
+| 3 | **netns + egress proxy** | ✅ 完整 | `linux-sandbox/src/bwrap.rs:156-157` `--unshare-net`; `proxy_routing.rs:121` `activate_proxy_routes_in_netns` (797 行) | **强** |
+| 4 | **cgroups / rlimit 资源限额** | ❌ **完全没有** | `grep cgroup\|rlimit\|RLIMIT\|setrlimit linux-sandbox/ sandboxing/` 全仓零命中 | **缺** |
+| 5 | **env clear 默认开启** | ⚠️ 疑缺 | `grep clearenv\|env_clear\|--clearenv` 零命中 (bwrap 支持 `--clearenv` 但 codex 不用) | **疑缺** |
+
+**设计哲学推测**: codex 面向开发者本地工作站, 设计重点是"防 FS 逃逸 + 防网络外联", 不管资源耗尽和子进程创建 (Python/Node worker 需要 fork)。
+
+### 5.5.2 Route B 补齐方案
+
+**Port codex 三平台 ≠ 获得完整五件套**。Route B 必须在 ironclaw 侧额外做:
+
+| 缺口 | Route B 补救 | 归属 | Wave |
+|------|------------|------|------|
+| **cgroups v2 资源限额** | 新增 `dasclaw_sandbox_resources` (Linux systemd-run / cgroups v2 API, `pids.max` / `memory.max` / `cpu.max`) | ★ 新建, ironclaw 原创 | W7 |
+| **可选 deny-exec 模式** | 扩展 codex seccomp policy, 高风险场景 (外部 MCP / 不可信 skill) 切 "no-exec" profile | 修改 codex fork, NOTICE 注明 | W7 |
+| **env clear 默认开启** | port bwrap 时默认传 `--clearenv`, 只放行 allowlist 环境变量 (避免 `OPENAI_API_KEY` 等泄漏给 py/node 子进程) | port 时加固 | W7 |
+
+**结论修订**: 之前说"W7 port 完就有完整五件套"**不准确**。准确说法是:
+
+> **W7 = codex 三平台 port (~15,254 行) + ironclaw 补 cgroups + 修 codex fork 开 deny-exec + bwrap 默认 clearenv 加固四项, 才能达到"五件套齐上"**。
 
 ---
 
@@ -418,12 +444,35 @@ ironclaw 当前 `skills/` (3,665 行) 是 **SKILL.md 规范**, 按 `skills/mod.r
 
 | 模块 | LOC | 一句话职责 | Route B 决策 |
 |------|----|----------|------------|
-| `skills/` | 3,665 (7 文件) | SKILL.md prompt 层扩展 + trust attenuation (trusted/installed 两态, 最低信任降级) | ✅ **保留 ironclaw** (codex 无对等物; SKILL.md 与 claw-code `agents/` 不冲突) |
+| `skills/` | 3,665 (7 文件) | SKILL.md prompt 层扩展 + trust attenuation (trusted/installed 两态, 最低信任降级) | ⚠️ **重新评估**: port codex `skills/` (include_dir 内置 + system cache) + `core-skills/` (SkillsManager/injection/render/loader/remote/model) 作为骨架, 叠加 ironclaw `attenuation.rs` 信任衰减 — 见 §5.6.1 |
 | `evaluation/` | 965 (3 文件) | Job 完成质量评估 (output quality / requirements match / error rate / user feedback) | ✅ **保留 ironclaw** (B 端产品差异) |
 | `observability/` | 835 (6 文件) | Trait-based Observer 插件 (noop/log/multi + prompt_cache), 预留 OTel/Prometheus 扩展位 | ✅ **保留 ironclaw** |
 | `worker/` ⚠️ | 5,343 (7 文件) | **L3 Docker 容器内 guest runtime**: `ironclaw worker` 子命令, 内置 `ProxyLlmProvider` 把 LLM 调用反向代理回 orchestrator → **容器内不持有 API key**, 与 L5 credential_injector 同一"边界注入"思路 | ✅ **保留 ironclaw** (L3 的不可分割组件) |
 
 **`worker/` 是之前 §2.4 遗漏的关键发现**: L3 Docker 沙箱实际是 **host (`sandbox/` 3,611 行) + guest (`worker/` 5,343 行) 双侧协同**, 合计 8,954 行, 不是之前文档说的 3,611 行单侧。
+
+### 5.6.1 skills 归属修正 (Round 11 发现)
+
+**上一轮说 "codex 无 skills 概念" 是错的**。核实后:
+
+| 维度 | codex | ironclaw |
+|------|-------|---------|
+| crate | `codex-rs/skills/` + `codex-rs/core-skills/` | `desktop-client/ironclaw/src/skills/` |
+| 格式 | `---\nname:\ndescription:\n---\n<markdown>` | `---\nname:\ndescription:\n---\n<markdown>` (完全一致) |
+| 内置 | `.codex/skills/` 10 个 (babysit-pr / code-review 系列 / codex-bug / remote-tests / test-tui) | `SkillRegistry` 无内置 |
+| 注入 | `core-skills/src/injection.rs` `build_skill_injections()` → `SkillInjection{name,path,contents}` | `skills/selector.rs` prefilter + 直接拼 prompt |
+| **独有**: 内置 bundle | ✅ `include_dir!` 把 skills 编译进二进制 + `install_system_skills()` 指纹 marker | ❌ |
+| **独有**: 加载分层 | ✅ loader/remote/render/manager/model 完整分层 | ❌ 单 registry |
+| **独有**: 信任衰减 | ❌ | ✅ `attenuation.rs` (trusted/installed 两态取最低) |
+| **独有**: Gating | ❌ | ✅ `gating.rs` 运行时工具探测 (`which`/`where`) |
+| **脚本携带** | ✅ `babysit-pr/scripts/*.py` (LLM 读到 prompt 后调 shell 工具执行) | ✅ 同模式 |
+
+**执行路径两边一致**: skills **不直接执行**脚本, 由 prompt → LLM 决策 → shell 工具 → L2 沙箱。
+
+**Route B 决策修正**:
+- **骨架**: port codex `skills/` + `core-skills/` (**~3,000+ 行**, include_dir 内置 + SkillsManager + injection + loader + remote)
+- **叠加**: 保留 ironclaw `attenuation.rs` (226 行) + `gating.rs` (167 行) 作为**安全层增强**, 在 codex SkillPolicy 之上加一层信任衰减
+- **新 crate 名**: `dasclaw_skills` (不再用 ironclaw `skills/`), 依赖 `ironclaw_safety` 的信任模型
 
 ---
 
