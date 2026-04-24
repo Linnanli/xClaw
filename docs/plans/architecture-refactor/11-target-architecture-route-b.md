@@ -605,6 +605,9 @@ pub enum MessageIntent {
 | Collaboration mode | ❌ | ✅ | ❌ |
 | Thread 生命周期 | 部分 (thread_ops) | ✅ | ✅ |
 | undo/redo checkpoint | ✅ agent/undo.rs | ✅ core/tasks/undo.rs | ❌ |
+| **定时任务系统** (cron/scheduler/recurring) | ✅ **独有 8,662 行** (`routines/`) | ❌ **完全无** | ❌ **完全无** |
+
+> **定时任务证据补充**: codex 仅在 `code-mode/runtime/timers.rs` 有 V8 setTimeout API 实现 (114 行), 无任何 cron/scheduler/routine 概念; claw-code 同样无定时任务系统。ironclaw `routines/` 8 文件 8,662 行包括: cron 表达式解析 (5/6/7 字段, `routine.rs:733`)、`scheduler.rs` (1,238)、`routine_engine.rs` (2,578)、企业运维 routine (`cost_guard` 892 / `heartbeat` 971 / `self_repair` 856 / `job_monitor` 534)。**这是 ironclaw 编排层第 5 项独有能力**。
 
 ### 9.5 结论: 为什么编排层用 ironclaw?
 
@@ -630,7 +633,51 @@ ironclaw → 外围生态 (channels / llm / tools / routines / extensions / skil
 
 ---
 
-## 10. 待确认事项
+## 10. 设计决策记录 (避免过度设计)
+
+### 10.1 暂不做 4-Tier 分层 (Foundation / Assistant SDK / Governance / Integration)
+
+**背景**: 评估过"按可剥离性分 4 层 + 新增 `dasclaw_assistant` SDK tier"的方案, 最终**当前阶段不采纳**。
+
+**理由**:
+- 当前 14 个 `dasclaw_*` crate 的扁平结构已经满足核心剥离需求 (kernel 零 UI / Tauri / sqlite 依赖)
+- 4-Tier 分层会引入额外抽象层 + Tier 间依赖规则 + `dasclaw_assistant` 包装层, **当前没有真实需求**
+- "个人助理 SDK"、"云端 claw"等抽离场景**目前未启动**, 等需求落地时再规划更准
+- 避免**过度设计**: 现在画出来的 Tier 边界很可能与未来真实抽离需求不匹配, 反而成为重构负担
+
+**未来再考虑的触发条件**:
+- ✅ 决定将 agent 内核作为独立 SDK 发布 (crates.io 公开 / 给三方使用)
+- ✅ 决定启动云端 claw 项目, 需要在 server 环境复用 agent 能力
+- ✅ 出现 ≥ 2 个独立产品形态需要复用同一套 agent 内核
+
+**当前保持原则**:
+- 14 个 `dasclaw_*` crate 扁平结构
+- 保持 trait 驱动 (kernel 不依赖具体 UI / 存储实现) — 为未来抽离留接口
+- **不合并** `dasclaw_skills` + `dasclaw_tool_runtime` (将来抽离个人助理 SDK 时各自独立更灵活)
+- **不预创建** `dasclaw_assistant` 包装 crate (YAGNI)
+
+### 10.2 移植合规策略 → 见独立文档
+
+所有从 codex (Apache-2.0) 和 claw-code (MIT) 移植代码的合规要求, 详见:
+
+📄 **[12-porting-compliance.md](./12-porting-compliance.md)** — 完整 checklist 包括:
+- Apache 2.0 / MIT 4 条强制红线
+- NOTICE / LICENSE 文件模板
+- 移植文件头模板 (3 种场景)
+- 字符串常量改写 checklist (防二进制指纹)
+- PR 提交前 checklist
+- 风险矩阵
+
+**最低执行标准 (TL;DR)**:
+1. 每个 `dasclaw_*` crate 根附 `LICENSE-APACHE` + `NOTICE`
+2. 移植文件头加 SPDX + 来源 commit + 修改概述注释
+3. crate 名禁用 `codex` / `openai`
+4. 改写移植的 prompt / error / log target 字符串
+5. README 主动致谢上游
+
+---
+
+## 11. 待确认事项
 
 请仔细看以下决策点:
 
