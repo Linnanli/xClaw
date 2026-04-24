@@ -645,6 +645,65 @@ ironclaw → 外围生态 (channels / llm / tools / routines / extensions / skil
 
 **简言之**: dispatcher 不是"agent 引擎", 而是"**把 agent 引擎和公司应用接起来的胶水**"。胶水是 ironclaw 独有的, 所以保留; 引擎是 codex 更优的, 所以替换。这就是路线 B 的本质。
 
+### 9.6 两个"编排"层次辨析 — Coordinator vs Spawn Tree (Round 15)
+
+**"编排"在本项目有两种截然不同的含义**, 必须严格区分:
+
+#### (A) LLM 决策层编排 — Spawn Tree (codex 主导)
+
+| 维度 | 实现 |
+|------|------|
+| 触发方 | **LLM 自主决策** (在一次 session 中调 `SpawnAgent` 工具) |
+| 生命周期 | 一次会话内, 父结束即子取消 |
+| 通信 | **Mailbox** (`agent/mailbox.rs`) + `InterAgentCommunication` (protocol) |
+| 关键代码 (codex) | `codex_delegate.rs` 852 + `agent/` 10 文件 (control/registry/mailbox/role/status/agent_resolver/builtins/agent_names.txt) + `tools/handlers/multi_agents/` v1 208 + `multi_agents_v2/` 304 + `multi_agents_common.rs` 380 + `context/{spawn_agent_instructions,subagent_notification}.rs` + protocol 的 `SubAgentSource`/`InterAgentCommunication`/`AgentPath` |
+| 关键代码 (ironclaw) | `tools/builtin/sub_agent.rs` 381 行 — role 白名单 (Explore/Verify/Custom) + depth=1 限制 + safety 过滤 |
+| Route B 决策 | **新 crate `dasclaw_agent_spawn`** = codex 机制 (~3000 行 port) + ironclaw sub_agent 安全封装 (381 行保留, 作为 codex spawn 的前置校验层) |
+
+#### (B) Job 调度层编排 — Coordinator (ironclaw 独有)
+
+| 维度 | 实现 |
+|------|------|
+| 触发方 | **外部 HTTP API** (例: `POST /jobs { task: "code review PR#123" }`) |
+| 生命周期 | 跨 session 跨容器, Reaper 清理僵尸 |
+| 通信 | HTTP + ProxyLlmProvider 反向调用 (容器内 Worker ↔ Orchestrator) |
+| 关键代码 (ironclaw) | `orchestrator/` 3,188 行: `api.rs` 991 (HTTP 接口) + `auth.rs` 293 (JWT) + `job_manager.rs` 738 (**核心 Coordinator**) + `reaper.rs` 969 (**僵尸 Job 清理**) + `mod.rs` 197; 配对 `worker/` 5,343 行 L3 guest runtime |
+| codex | ❌ 完全没有 (codex 面向 CLI/TUI 单机, 不做 HTTP 作业分发) |
+| claw-code | ❌ 完全没有 |
+| Route B 决策 | **100% 保留 ironclaw** — codex 无对等物, 替换成本 = 重写整套 Job 调度 |
+
+#### 两层关系图
+
+```text
+[外部系统/用户]
+     │ HTTP POST /jobs
+     ▼
+┌─────────────────────────────────────────────┐
+│ (B) ironclaw orchestrator/ — Coordinator     │
+│   api → auth → job_manager → reaper         │
+└─────────────────────────────────────────────┘
+     │ 启动容器 + 分配 Job
+     ▼
+┌─────────────────────────────────────────────┐
+│ ironclaw worker/ — L3 容器内 runtime          │
+│   ProxyLlmProvider + 工具注册表              │
+└─────────────────────────────────────────────┘
+     │ 容器内跑 dasclaw_agent_kernel
+     ▼
+┌─────────────────────────────────────────────┐
+│ (A) codex spawn tree — LLM 决策层编排        │
+│   SpawnAgent tool →                          │
+│   ironclaw sub_agent 前置校验                │
+│     (role whitelist / depth=1 / safety) →    │
+│   codex_delegate fork child thread + mailbox │
+└─────────────────────────────────────────────┘
+```
+
+**结论**:
+- 用户问的 **"Team 模式"** 在 **三家都没有显式概念**, 期望的"团队协作"实际是 (A) spawn tree 的 sibling agents
+- **"Coordinator"** = **ironclaw `orchestrator/` (3,188 行)**, 不是 codex 的 delegate
+- **"子 Agent"** 的 fork 机制 port codex, 安全封装保留 ironclaw, **两者融合**不是二选一
+
 ---
 
 ## 10. 设计决策记录 (避免过度设计)
