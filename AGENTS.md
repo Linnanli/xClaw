@@ -16,6 +16,23 @@
    - 每次给开发者解释方案或者让开发选择方案，必须调用 `mcp-feedback-enhanced` 工具。
    - 工具调用后，Agent 必须等待用户反馈，收到明确指示后再继续执行后续任务。
 
+### 分析工具使用规范（Round 17 新增）
+
+**重大架构决策/能力盘点/跨项目对比前，必须按三级顺序使用工具**：
+
+| 级别 | 工具 | 使用场景 |
+|------|------|---------|
+| Level 1 语义层 | `semantic_search` | 概念搜索（跨命名等价实现），**必须先用** |
+| Level 2 符号层 | `vscode_listCodeUsages` | LSP 引用/定义/实现图，核验判断 |
+| Level 3 字面量层 | `rg` / `grep` | 已知确切词后再用 |
+
+**反模式（禁止）**：
+- ❌ 跳过 Level 1，直接 `rg <英文词>` 找概念 — 漏掉异名等价实现（如 codex `SpawnAgentForkMode` ≡ Claude Code `forkSubagent`）
+- ❌ 判定"独家/缺失"时只看单一 repo — 必须三方交叉验证
+- ❌ 未读解构文档（如 `decode-claude-code-main/`）就给架构结论
+
+**教训来源**：Round 1-15 多次误判（"codex 没 forkSubagent"、"ironclaw Prompt Cache 独家"）的根因均为字面量搜索陷阱。详见 [14-claude-code-capability-parity.md §0](docs/plans/architecture-refactor/14-claude-code-capability-parity.md)。
+
 ---
 
 ## 架构规则：代码复用优先

@@ -805,6 +805,45 @@ ironclaw 的安全栈 (~25,000 行) 是项目最大差异化优势, 包含:
 
 ---
 
+## 12.4 Claude Code 能力对账补丁 (Round 17)
+
+> **前置说明**: §12.1 的"核心五能力"只覆盖了 codex/claw-code/ironclaw 三方已有的基础能力交集。Round 17 使用语义搜索系统扫描 `decode-claude-code-main/` 12 章后, 发现 Claude Code 原版还有 **19 项能力** 我们架构文档未涉及, 其中 5 项是生产级必补的安全能力 (P0)。
+
+### 关键缺口摘要
+
+| 优先级 | 能力 | 新增 crate / 模块 | 估算 LOC |
+|-------|------|------------------|---------|
+| 🔴 P0 | Bash AST 安全分析 (7000+ 行 Claude Code 代码) | `dasclaw_bash_guard` | 3000-5000 |
+| 🔴 P0 | Prompt Injection `<system-reminder>` 标签 | `dasclaw_context_mgr::injection_guard` | 200 |
+| 🔴 P0 | CYBER_RISK_INSTRUCTION 系统提示词安全约束 | `dasclaw_context_mgr::safety_instructions` | 100 |
+| 🔴 P0 | CVE 跟踪流程 + CI 扫描 | 工程文档 + 脚本 | 200 |
+| 🟡 P1 | 运行时 Feature Flag (OpenFeature / Flagsmith) | `dasclaw_feature_flags` | 400-600 |
+| 🟡 P1 | HISTORY_SNIP 选择性剪切压缩 | `dasclaw_context_mgr::snip_compaction` | 400 |
+| 🟡 P1 | CACHED_MICROCOMPACT 缓存微压缩 | `dasclaw_context_mgr::micro_compact` | 300 |
+| 🟡 P1 | TOKEN_BUDGET Token 硬预算 | `dasclaw_context_mgr::token_budget` | 200 |
+| 🟡 P1 | 多层 CLAUDE.md 加载 (全局/项目/目录 + 条件规则 + 附件注入) | `dasclaw_context_mgr::claude_md_loader` | 300-500 |
+| 🟡 P1 | EXPERIMENTAL_SKILL_SEARCH | `dasclaw_skills::search` | 400 |
+| 🟢 P2 | TeamCreateTool 原子并行团队 | `dasclaw_agent_team` | 600 |
+| 🟢 P2 | 启动性能优化 (tracing + OnceLock + 并行 spawn) | 横切 | 300 |
+| 🟢 P2 | DAEMON / AGENT_TRIGGERS_REMOTE / MONITOR_TOOL / BRIDGE_MODE / UDS_INBOX | 按需 | 不估 |
+| ⚪ P3 | KAIROS 主动模式 / Agent Coordinator / `/ultraplan` 等 | 产品决策 | — |
+
+### Wave 路线图修订
+
+建议:
+- **新增 W0** — 安全 P0 补齐 (生产阻塞, 前置一切)
+- **W4 追加** — P1 的 5 个 context_mgr 子模块融入现有 Wave
+- **新增 W5** — Feature Flag 基础设施独立 Wave, 为后续 Flag 控制能力提供底座
+- **W9+** — P2 按需滚动
+
+### 完整对账见独立文档
+
+详尽的 12 章逐章对账 + 每项能力的 codex/claw-code/ironclaw 三方映射 + Round 18 待验证清单 + 工具使用规范, 见:
+
+📖 **[14-claude-code-capability-parity.md](./14-claude-code-capability-parity.md)**
+
+---
+
 ## 13. 待确认事项
 
 请仔细看以下决策点:
