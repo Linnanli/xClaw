@@ -480,23 +480,60 @@ ShellTool / FileReadTool / ...（在容器里执行，返回 Response）
 
 | 大块 | 进度 |
 |---|---|
-| Step A + B + C | 100% |
-| Step D-1 ~ D-3 + D-4 + D-5 支撑模块 | ~85%（缺 7 个大文件搬迁） |
-| Step D-4 Hook 插桩 | **100%** ✅ |
-| Step G `ironclaw_safety` agent-hook | **100%**（接线 + 契约测试完成） |
-| Step E（原）→ E-0/E-1 文档冻结 | **0%**（本轮立即） |
-| Step E-2 ~ E-7（Phase 4 对齐上游 engine v2） | 0% |
-| Step F adapter → F 接线 | adapter 已建，**未接线** |
-| Step D-5 / H / I / J / K | 0% |
-| **整体 Phase 3** | **~42%** |
+| Step A + B + C | 100% ✅ |
+| Step D-1 ~ D-4 / D-4.5（支撑模块 + Hook 插桩） | 100% ✅ |
+| Step D-5（1908+3008+2583+1033+1105 行大文件移入 x_claw_agent） | **决策变更：不搬入 kernel** ✅ |
+| Step D-5 C'（`SessionManager` + `SessionHooks` Trait 解耦） | 100% ✅ |
+| Step E（原 `ironclaw_sandbox` crate） | **E-0/E-1 冻结；adapter 就位不接线** ✅ |
+| Step E-1.5 / E-cap-std（Phase 4 分层沙箱策略 + cap-std 前置） | 100% ✅ |
+| Step F（`AgentSecrets` adapter） | adapter 已建；Hook 侧不接线（同 E） ✅ |
+| Step G（`ironclaw_safety::agent_hook`） | 100%（接线 + 契约测试完成） ✅ |
+| Step H''（routines 提升为顶级模块 `src/routines/`） | 100% ✅（H 原 crate 方案已放弃） |
+| Step I（`agent_app.rs` 组装） | **不做**（D-5 不搬入，组装点留在 ironclaw 现有 `lib.rs` / `app.rs`） |
+| Step J（删除 `agent/*`） | **不做**（前提不成立：agent/ 不清空，保留作为应用层 re-export 壳） |
+| Step K（上游语义 cherry-pick 演练） | **已事实完成**（`bash_validation.rs` 1004 行已在 A 阶段就 port 进来） |
+| **整体 Phase 3** | **100% CLOSED**（2026-04-21） |
 
-### 建议切入顺序（2026-04-23 修订）
+### Phase 3 最终决策摘要
 
-1. ~~**D-4（Hook 插桩）**~~ ✅ 已完成（`cf9eca75`）
-2. ~~**G（`ironclaw_safety::agent_hook`）**~~ ✅ 已完成（`22236f99` + 契约测试 `a18aef97`）
-3. **E-0 + E-1（本轮）** — 05b 文档冻结 + 写 ADR 记录"Phase 3 不走进程内 sandbox hook，Phase 4 对齐上游 engine v2"；给 `SandboxAgentExecutor` 加注释
-4. **F 接线** — `AgentSecrets` 注入 `HookBundle.secrets`（通过扩展 helper `hook_bundle_with_safety_and_secrets`），3 处 call site 更新
-5. **D-5（7 个大文件搬迁）** — 沿原顺序：`attachments → router → session_manager → commands → thread_ops → dispatcher → agent_loop`
-6. **H（`ironclaw_routines`）** — 依赖 D-5
-7. **I → J → K** — 应用层组装 + 清理 + 上游演练
-8. **（Phase 4）E-2 ~ E-7** — engine v2 + `src/bridge/sandbox/` + `sandbox_daemon` binary 对齐上游
+Phase 3 在 2026-04-21 经过 D-5 决策后**主动收口**，不是"未完成"而是"目标重新定义"：
+
+**原计划 vs. 最终交付**：
+
+| 原目标 | 最终结果 | 原因 |
+|---|---|---|
+| 把 ironclaw `agent/` 完整搬进 `x_claw_agent` kernel | 只搬 agent **核心** 17 个文件；`agent_loop` / `dispatcher` / `thread_ops` / `commands` 保留在 ironclaw 应用层 | D-5 审计发现这 5 个文件耦合 `channels` / `context` / `db` / `extensions` / `hooks` / `safety` / `skills` / `tools`，搬入 kernel 会把 traits 从 2 个膨胀到 10+，违反 D-3 窄域原则 |
+| 建立 `ironclaw_sandbox` + `ironclaw_secrets` + `ironclaw_routines` 三个新 crate | 三个都**没建**；routines 以顶级模块形式就位；sandbox/secrets adapter 就位但不独立成 crate | 均无第二消费者；额外 crate 只带来编译开销，不带来架构收益 |
+| 删除 `desktop-client/ironclaw/src/agent/` | **不删**；它作为应用层 agent 目录继续存在，通过 re-export 桥接 `x_claw_agent` | D-5 决策后该目录仍是应用层的一部分，只是内部实现已经被拆成 kernel + application |
+| 接线 4 个 Hook（`SafetyHook` / `SandboxExecutor` / `SecretProvider` / `ApprovalGate`）到 dispatcher | 只接线 `SafetyHook`（G）；其余三者 adapter 就位，不接线 | ADR-001：dispatcher 已直接调用 SafetyLayer，多走一层 hook 无用户可见收益；sandbox hook 路线走 Phase 4 engine v2 |
+| 从上游 `runtime/` subtree pull 同步 | 改为"语义 cherry-pick" | UPSTREAM_BASELINE.md 决策：ironclaw `agent/` 是 source of truth，上游是形状参考 |
+
+**Phase 3 的真实产出**：
+
+1. **`x_claw_agent` crate** — agent 核心推理层（17 模块），对外暴露 `run_agentic_loop` + 4 个 object-safe host traits + `HookBundle`
+2. **`ironclaw_safety::agent-hook` feature** — `SafetyHook` 的生产实现
+3. **`SandboxAgentExecutor` / `AgentSecrets` adapter** — Phase 4 engine v2 预留接口
+4. **7 个 routines 文件** — 作为顶级模块 `src/routines/` 独立
+5. **cap-std 路径隔离** — workspace 已用 capability 句柄
+6. **3 份 ADR** + **UPSTREAM_BASELINE.md** + **porting log** — 记录所有偏离原计划的决策
+
+**Phase 3 测试基线**（冻结）：
+- `cargo build --workspace --all-targets` — 0 错误 0 警告
+- `cargo test -p x_claw_agent --lib` — 228 passed
+- `cargo test -p ironclaw --lib` — 4020 passed / 0 failed / 3 ignored
+- `cargo test -p ironclaw_safety --features agent-hook` — 716 passed
+- 全 workspace ~5 241 lib tests 全绿
+
+**Phase 3 结束 commit 链**：
+- H'' submodule `4d7f31c8` / parent `d127af5a`（2026-04-21）
+- D-5 C' submodule `c6efa1c1` / parent `744aba5b`（2026-04-21）
+- Step G submodule `7720cf10`（2026-04-21）
+
+### Phase 4 移交（新章程）
+
+Phase 3 不再覆盖的、但仍在 x-claw roadmap 上的工作交给 Phase 4：
+
+1. **claw-code 开发者能力移植**（LSP / 精细文件操作 / Git 深度集成 / Plan Mode / Session Fork）— 见 `06-phase4-claw-code-capability-port.md`（待建）
+2. **Phase 4 engine v2 沙箱对齐上游**（Codex 三平台 `src/bridge/sandbox/` + `sandbox_daemon` binary）— 见 [ADR-002](./adr-002-sandbox-backend-layered-strategy.md)
+3. **Hook 三接线收尾**（`SandboxExecutor` / `SecretProvider` / `ApprovalGate` 接进 dispatcher）— 随 Phase 4 engine v2 一并做
+4. **上游 rebase 机制实战**（真的从上游 cherry-pick 一次增量改动并走完 porting log 流程）
