@@ -276,38 +276,42 @@ flowchart LR
         J[codex device-key + agent-identity]
         K[codex skills/assets]
     end
-    P0 --> Impl["ironclaw workspace Cargo.toml<br/>path 依赖 + adapter"]
+    P0 --> Impl["das_claw_* 新 crate<br/>path 依赖 + adapter"]
     P1 --> Impl
     P2 --> Impl
 ```
 
 ### 3.3 目录规划 (最小改动原则)
 
+> **命名规范 (用户决策)**: 新增的所有 crate 统一使用 `das_claw_*` 前缀;
+> 存量 `ironclaw_*` crate (`ironclaw_auth`, `ironclaw_workspace_cap`) 和 `ironclaw/` 主库
+> 后续分阶段改名为 `das_claw_*`, 本文档 Phase 4 只处理新增项。
+
 ```
 x-claw/
-├─ crates/                        # 现有共享 crate
-│   ├─ ironclaw_auth/             # 保留
-│   ├─ ironclaw_workspace_cap/    # 保留
-│   ├─ x_claw_agent/              # 保留
-│   ├─ ironclaw_apply_patch/      # ★ 新增: 从 codex apply-patch 移植 + 重命名
-│   ├─ ironclaw_git_utils/        # ★ 新增: 从 codex git-utils 移植
-│   ├─ ironclaw_hooks_engine/     # ★ 新增: 从 codex hooks 移植 schema+engine
-│   ├─ ironclaw_features/         # ★ 新增: 从 codex features 移植
-│   ├─ ironclaw_sandbox_linux/    # ★ P1: 从 codex linux-sandbox
-│   ├─ ironclaw_sandbox_windows/  # ★ P1: 从 codex windows-sandbox-rs
-│   ├─ ironclaw_policy/           # ★ P1: 从 claw policy_engine + permission_enforcer + trust_resolver
-│   ├─ ironclaw_branch_guard/     # ★ P1: 从 claw branch_lock + stale_base + stale_branch
-│   ├─ ironclaw_rollout_trace/    # ★ P2: 从 codex rollout-trace
-│   └─ ironclaw_device_identity/  # ★ P2: 从 codex device-key + agent-identity
+├─ crates/                          # 共享 crate
+│   ├─ ironclaw_auth/               # 保留 (后续改名 das_claw_auth)
+│   ├─ ironclaw_workspace_cap/      # 保留 (后续改名 das_claw_workspace_cap)
+│   ├─ x_claw_agent/                # 保留 (Phase 3 产出)
+│   ├─ das_claw_apply_patch/        # ★ W1: 整 crate 从 codex apply-patch 移植
+│   ├─ das_claw_git_utils/          # ★ W1: 整 crate 从 codex git-utils 移植
+│   ├─ das_claw_hooks_engine/       # ★ W1: 整 crate 从 codex hooks 移植 schema+engine
+│   ├─ das_claw_features/           # ★ W1: 整 crate 从 codex features 移植
+│   ├─ das_claw_sandbox_linux/      # ★ W2: 从 codex linux-sandbox
+│   ├─ das_claw_sandbox_windows/    # ★ W2: 从 codex windows-sandbox-rs
+│   ├─ das_claw_policy/             # ★ W2: 聚合 claw policy_engine + permission_enforcer + trust_resolver
+│   ├─ das_claw_branch_guard/       # ★ W2: 聚合 claw branch_lock + stale_base + stale_branch
+│   ├─ das_claw_rollout_trace/      # ★ W3: 从 codex rollout-trace
+│   └─ das_claw_device_identity/    # ★ W4: 从 codex device-key + agent-identity
 
-├─ desktop-client/ironclaw/src/   # 现有主库 (**适配层在此**)
+├─ desktop-client/ironclaw/src/     # 现有主库 (**适配层在此**, 后续整体改名)
 │   ├─ tools/builtin/
-│   │   └─ apply_patch.rs         # 改写: 调用 ironclaw_apply_patch crate
-│   ├─ hooks/                     # 改写: 基于 ironclaw_hooks_engine
-│   ├─ safety/                    # 改写: 基于 ironclaw_policy
-│   ├─ sandbox/                   # 新增 linux/windows 分发层
+│   │   └─ apply_patch.rs           # 改写: 调用 das_claw_apply_patch
+│   ├─ hooks/                       # 改写: 基于 das_claw_hooks_engine
+│   ├─ safety/                      # 改写: 基于 das_claw_policy
+│   ├─ sandbox/                     # 新增 linux/windows 分发层
 │   └─ routines/
-│       └─ recovery.rs            # ★ 新增: 封装 recovery_recipes
+│       └─ recovery.rs              # ★ 新增: 封装 claw recovery_recipes
 ```
 
 ---
@@ -339,10 +343,10 @@ flowchart LR
 
 | 新 crate | ironclaw 适配点 | 灰度退役目标 |
 |---|---|---|
-| `ironclaw_apply_patch` | `tools/builtin/code_edit.rs` 改调用 | 内部 patch 实现 |
-| `ironclaw_git_utils` | `tools/builtin/git/` 替换 | 简化 git 实现 |
-| `ironclaw_hooks_engine` | `hooks/{hook,registry}.rs` 改为薄适配 | 自写 hook 注册表 |
-| `ironclaw_features` | 新建 `src/features_gate.rs` | 全局 feature flag 空缺 |
+| `das_claw_apply_patch` | `tools/builtin/code_edit.rs` 改调用 | 内部 patch 实现 |
+| `das_claw_git_utils` | `tools/builtin/git/` 替换 | 简化 git 实现 |
+| `das_claw_hooks_engine` | `hooks/{hook,registry}.rs` 改为薄适配 | 自写 hook 注册表 |
+| `das_claw_features` | 新建 `src/features_gate.rs` | 全局 feature flag 空缺 |
 
 ### 4.3 不应做的事
 
@@ -372,11 +376,71 @@ flowchart LR
 
 ---
 
-## 6. 待用户决策 (3 个)
+## 6. 待用户决策 (已全部确定 ✅)
 
-1. **迁移顺序**: 是否认可 W1 (apply-patch/git-utils/features/hooks) 作为第一波? 或优先 W2 合规沙箱?
-2. **整 crate 导入命名**: 新 crate 前缀用 `ironclaw_*` (文档建议) 还是保留 `codex_*` 原名?
-3. **claw-code LICENSE 核查**: 是否允许直接 port `policy_engine.rs` / `branch_lock.rs` 等文件? 若不允许, 改为"读其思路, 自写实现"。
+| # | 决策 | 结论 |
+|---|---|---|
+| 1 | 迁移顺序 | **W1 (apply-patch / git-utils / features / hooks) 起步** |
+| 2 | 新 crate 命名 | **统一 `das_claw_*` 前缀**; 存量 `ironclaw_*` 后续分阶段改名 |
+| 3 | claw-code LICENSE | **允许整 crate port**; W2 / W3 将直接原样迁入 |
+
+---
+
+## 7. Phase 3 架构重构的延续性 (补充)
+
+**问: 之前做的架构重构还能用上吗?**
+
+**答: 全部延续, 且 Phase 4 正好是它的自然延伸。**
+
+Phase 3 的成果 (已落地, commit `26f4b11f`):
+
+- `crates/x_claw_agent/` 独立 crate (17 个文件) 从 ironclaw 主包抽出 agent 引擎
+- `agentic_loop` / `session_manager` / `intent` / `reasoning_ctx` 等从 `ironclaw/src/agent/` port 到独立 crate
+- `agentic_loop.rs` Route-B 设计: 去除 `Reasoning` 依赖, 引擎只看 `RespondOutput`
+- Hook traits (`SafetyHook` / `SandboxExecutor` / `SecretProvider` / `ApprovalGate`) 在 `x_claw_agent::hooks` 定义
+- `bash_validation` / `permissions` 已从 claw-code 原样 port 进来
+- `desktop-client/ironclaw/src/agent/agentic_loop.rs` 退化为 **re-export shim**
+
+**Phase 4 对 Phase 3 的关系**:
+
+```mermaid
+flowchart LR
+    P3["Phase 3 完成态:<br/>x_claw_agent 独立 crate<br/>Hook trait 定义<br/>engine 脱离 ironclaw"]
+    P4W1["Phase 4 W1 新增:<br/>das_claw_apply_patch<br/>das_claw_git_utils<br/>das_claw_features<br/>das_claw_hooks_engine"]
+    P4W2["Phase 4 W2 新增:<br/>das_claw_sandbox_linux/windows<br/>das_claw_policy<br/>das_claw_branch_guard"]
+    P3 -->|"沿用同一架构模式<br/>(整 crate 抽离 + ironclaw 适配层)"| P4W1
+    P4W1 --> P4W2
+```
+
+Phase 3 验证了 **"抽独立 crate + 在 ironclaw 写适配 shim"** 的模式是可行的, 所以 Phase 4 就直接按同样思路扩展新能力。**不需要重新架构重构, 只需要按这个模式持续加 crate**。
+
+---
+
+## 8. ironclaw agent 血缘澄清 (补充)
+
+**问: 客户端的 ironclaw agent 能力是不是从 claw-code 搬迁过来?**
+
+**答: 部分是, 部分不是。证据来自 `crates/x_claw_agent/` 内的源码注释。**
+
+| 组件 | 来源 | 证据注释 |
+|---|---|---|
+| `x_claw_agent::lib.rs` | **fork of claw-code** | `//! x_claw_agent — agent runtime fork of claw-code for the x-claw project.` |
+| `bash_validation.rs` | **claw-code 原样 port** | `//! - Source: claw-code/rust/crates/runtime/src/bash_validation.rs` |
+| `permissions.rs` | **claw-code 切片 port** | `//! This module is a deliberately sliced port of upstream claw-code's ...` |
+| `agentic_loop.rs` | **ironclaw 自有, Phase 3 时 port 进来** | `//! Ported from ironclaw agent/agentic_loop.rs as part of Phase 3 Step D-4.` |
+| `session_manager.rs` | **ironclaw 自有** | `//! Ported from ironclaw's src/agent/session_manager.rs (Phase 3 Step D-5)` |
+| `intent.rs` | **ironclaw 自有** | `//! Ported from ironclaw llm/reasoning.rs as part of Phase 3 Step D-4.` |
+| `reasoning_ctx.rs` | **ironclaw 自有** | `//! Ported from ironclaw::llm::reasoning::ReasoningContext` |
+| `hooks.rs` | **新写, 零依赖** | `//! No ironclaw / claw-code dependency. Traits use only std, serde_json, ...` |
+
+**结论**:
+
+- **血缘真相**: x_claw_agent 的骨架是"**claw-code fork 作为容器 + ironclaw 原生 engine 注入**"的混合体
+- **`bash_validation` / `permissions`** 来自 claw-code
+- **`agentic_loop` / `session_manager` / `intent` / `reasoning_ctx` / `compaction` / `context_monitor` / `undo` / `submission` / `task`** 来自 ironclaw 原生实现
+- **`hooks` trait** 是 Phase 3 为解耦新写的
+
+Phase 4 的策略与这个历史事实一致: **对 codex/claw-code 已有独立 crate 的能力**, 继续走"整 crate 导入 + adapter"路线; **对 ironclaw 原生成熟的能力** (agentic loop / session / dispatcher / 33 builtin tool), **保留不动**。
 
 ---
 
