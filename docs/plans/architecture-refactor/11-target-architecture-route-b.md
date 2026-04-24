@@ -442,9 +442,12 @@ x-claw/
 | **Hooks schema + engine** | `dasclaw_hooks_engine` | codex port | ★ 新增 |
 | **Feature flags** | `dasclaw_features` | codex port | ★ 新增 |
 | **L1 主进程 FS 防护** (cap_std TOCTOU-safe) | `ironclaw_workspace_cap` (568 行) | ironclaw 原生 | ★ 100% 保留 |
+| **L2 子进程沙箱统一管理器** (`SandboxPolicy` 分发) | `dasclaw_sandbox` | **codex sandboxing/ port (含 policy_transforms + manager)** | ★ 新增, 整 port |
 | **L2 子进程沙箱 Linux** (bubblewrap + seccomp + landlock + netns) | `dasclaw_sandbox_linux` | **codex linux-sandbox port (4780 行)** | ★ 新增, 整 port |
 | **L2 子进程沙箱 Windows** (Restricted Token + Cap SID + ACL + Firewall) | `dasclaw_sandbox_windows` | **codex windows-sandbox-rs port (9753 行)** | ★ 新增, 整 port |
-| **L3 容器沙箱** (Docker + proxy + allowlist) | `ironclaw sandbox/` + `sandbox/proxy/` (3611 行) | ironclaw 原生 | ★ 100% 保留 |
+| **L2 子进程沙箱 macOS** (Seatbelt / sandbox-exec + .sbpl 策略) | `dasclaw_sandbox_macos` | **codex sandboxing/src/seatbelt.rs port (721 行 + 3 个 .sbpl)** | ★ 新增, 整 port |
+| **L3 容器沙箱 host 侧** (Docker orchestrator + proxy + allowlist) | `ironclaw sandbox/` + `sandbox/proxy/` (3611 行) | ironclaw 原生 | ★ 100% 保留 |
+| **L3 容器沙箱 guest 侧** (容器内 runtime + ProxyLlmProvider 反向调用) | `ironclaw worker/` (5343 行) | ironclaw 独有 | ★ 100% 保留 |
 | **L4 WASM 工具沙箱** + capability opt-in | `ironclaw tools/wasm/` (15 文件) | ironclaw 独有 | ★ 100% 保留 |
 | **L5 凭证 host 边界注入** (tool 看不到 secret) | `ironclaw tools/wasm/credential_injector.rs` (639) | ironclaw 独有 | ★ 100% 保留 |
 | **L5 Secrets 存储 + OS Keychain** | `ironclaw secrets/` (2546 行) | ironclaw 独有 | ★ 100% 保留 |
@@ -465,7 +468,9 @@ x-claw/
 | **Cost Guard** | `ironclaw agent/cost_guard.rs` | ironclaw 独有 | ★ 100% 保留 |
 | **Heartbeat** | `ironclaw agent/heartbeat.rs` | ironclaw 独有 | ★ 100% 保留 |
 | **Tauri 79 IPC** | `desktop-client/src/ipc/` | ironclaw 原生 | ★ 100% 保留 |
-| **Skills 资产** | `ironclaw skills/` + codex bundled assets | ironclaw + codex 融合 | 增强 |
+| **Skills 资产 (SKILL.md prompt 层 + 信任衰减)** | `ironclaw skills/` (3665 行) + codex bundled assets | ironclaw + codex 融合 | 增强 |
+| **Job 完成质量评估** | `ironclaw evaluation/` (965 行) | ironclaw 独有 | ★ 100% 保留 |
+| **插件式 Observability** (noop/log/multi + prompt_cache) | `ironclaw observability/` (835 行) | ironclaw 独有 | ★ 100% 保留 |
 
 ---
 
@@ -479,7 +484,7 @@ x-claw/
 | **W4** | Context Manager | port codex `core/context_manager/` → `dasclaw_context_mgr`; ironclaw `compaction.rs/context_monitor.rs` 下线 | W1 |
 | **W5** | Patch 与 Git | port `dasclaw_apply_patch` + `dasclaw_git_utils`; ironclaw `code_edit.rs / tools/builtin/git/` 改 adapter | - (并行) |
 | **W6** | Hooks 与 Features | port `dasclaw_hooks_engine` + `dasclaw_features`; ironclaw `hooks/` 改 adapter | - (并行) |
-| **W7** | 沙箱平台覆盖 | port `dasclaw_sandbox_linux` + `dasclaw_sandbox_windows`; ironclaw `sandbox/` 加分发层 | - (并行) |
+| **W7** | 沙箱平台覆盖 | port `dasclaw_sandbox` (管理器) + `dasclaw_sandbox_linux` + `dasclaw_sandbox_windows` + `dasclaw_sandbox_macos`; ironclaw `sandbox/` 加分发层 | - (并行) |
 | **W8** | 合规与分支治理 | 聚合 claw → `dasclaw_policy` + `dasclaw_branch_guard`; ironclaw `safety/` 改 adapter | - (并行) |
 | **W9** | 可观测与身份 | port `dasclaw_rollout_trace` + `dasclaw_device_identity` | - (并行) |
 | **W10** | 集成测试 + 老 sub_agent 重写 | `tools/builtin/sub_agent.rs` 重写为 kernel adapter; 契约/冒烟测试覆盖 14 个新 crate | W1-W9 |
