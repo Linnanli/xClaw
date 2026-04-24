@@ -1,0 +1,366 @@
+# 13 — ironclaw 安全能力清单 (路线 B 保留范围)
+
+> **结论先行**: ironclaw 的安全栈共 ~25,000 行代码, 是本项目**最大的差异化优势**。
+> codex / claw-code 在此领域**全面落后**。路线 B 的安全能力**必须完全保留 ironclaw**, 不可被"port codex"思路误伤。
+
+---
+
+## 1. 用户提问的 "Agent 不直接访问 LLM API key" 机制 ✅
+
+### 精确描述
+
+不是"把 agent 主体打成 wasm", 而是: **WASM 工具沙箱 + 凭证 host 边界注入**。
+
+### 实现文件
+
+| 文件 | 行数 | 职责 |
+|---|---|---|
+| [tools/wasm/credential_injector.rs](../../../desktop-client/ironclaw/src/tools/wasm/credential_injector.rs) | **639** | **核心**: WASM 工具永远看不到凭证值 |
+| [tools/wasm/mod.rs](../../../desktop-client/ironclaw/src/tools/wasm) 等 15 文件 | ~3000+ | wasmtime 28 + WASI component model |
+
+### 工作流程 (摘自 credential_injector.rs 头注释)
+
+```text
+WASM 工具发起 HTTP 请求 ──► Host 接收请求 ──► 按 host 域名匹配凭证
+                                                  │
+                              ┌───────────────────┘
+                              ▼
+                    从加密 SecretsStore 解密
+                              │
+                              ▼
+                    注入到 HTTP 请求:
+                    ├─► Authorization: Bearer xxx
+                    ├─► X-API-Key: xxx
+                    └─► ?api_key=xxx (query)
+                              │
+                              ▼
+                    执行实际 HTTP 请求
+```
+
+### Capability opt-in 模型 (摘自 `wasm/capabilities.rs`)
+
+```rust
+/// By default, all capabilities are `None` (disabled).
+/// Each must be explicitly granted.
+pub struct Capabilities {
+    pub workspace_read: Option<WorkspaceCapability>,
+    pub http: Option<HttpCapability>,
+    pub tool_invoke: Option<ToolInvokeCapability>,
+    pub secrets: Option<SecretsCapability>,      // ← 只能 exists(), 不能 get()
+    pub webhook: Option<WebhookCapability>,
+    pub websocket: Option<serde_json::Value>,
+}
+```
+
+**关键**: 工具必须在 manifest 显式声明 capability, host 才授予对应 host function。
+
+---
+
+## 2. ironclaw 完整安全能力清单 (11 大类)
+
+### 2.1 能力一览
+
+| # | 模块 | 行数 | 路径 | 路线 B 决策 |
+|---|---|---|---|---|
+| 1 | **WASM 工具沙箱** | 15 文件 ~3000+ | `tools/wasm/` | ✅ 完全保留 |
+| 2 | **凭证 host 边界注入** | 639 | `tools/wasm/credential_injector.rs` | ✅ 完全保留 |
+| 3 | **Secrets 存储** | 2,546 | `secrets/` | ✅ 完全保留 |
+| 4 | **Docker 容器沙箱** | 2,251 | `sandbox/` | ✅ 保留 + 选择性借鉴 codex seccomp |
+| 5 | **Sandbox 出口代理** | 1,360 | `sandbox/proxy/` | ✅ 完全保留 |
+| 6 | **`ironclaw_safety` crate** (+ fuzz) | **4,849** | `crates/ironclaw_safety/` | ✅ **完全保留, 不动一行** |
+| 7 | **Redaction 自动脱敏** | 251 | `tools/redaction.rs` | ✅ 完全保留 |
+| 8 | **Extensions 沙箱** | 11,786 | `extensions/` | ✅ 完全保留 |
+| 9 | **`ironclaw_workspace_cap` crate** | 568 | `crates/ironclaw_workspace_cap/` | ✅ 完全保留 |
+| 10 | **Network Security 威胁模型** | 文档 | `src/NETWORK_SECURITY.md` | ✅ 维护更新 |
+| 11 | **Tenant 与 AdminScope 治理** | — | `tenant.rs` + `profile.rs` | ✅ 完全保留 |
+
+**合计**: ~25,000 行安全相关代码 + fuzz 测试。
+
+---
+
+### 2.2 WASM 工具沙箱 (`tools/wasm/`) — 15 文件
+
+| 文件 | 职责 |
+|---|---|
+| `runtime.rs` | wasmtime 运行时主控 |
+| `host.rs` | Host functions (暴露给 WASM 的边界 API) |
+| `loader.rs` | WASM component 加载 + 签名校验 |
+| `wrapper.rs` | Tool trait 实现 + 调用包装 |
+| `capabilities.rs` (419) | Capabilities 声明模型 (opt-in) |
+| `capabilities_schema.rs` | JSON schema 校验 |
+| `credential_injector.rs` (639) | **凭证注入边界** |
+| `allowlist.rs` | HTTP endpoint 白名单 (host + path + method) |
+| `limits.rs` | 资源限制 (内存 / 时间 / fuel) |
+| `storage.rs` | 工具级存储 |
+| `error.rs` | 错误类型 |
+| `mod.rs` | 模块入口 |
+
+**依赖**: `wasmtime = "28" features=["component-model"]`, `wasmtime-wasi = "28"` (见 `desktop-client/ironclaw/Cargo.toml`).
+
+**默认安全策略**: 所有 capability 默认 `None`, 必须显式 grant。
+
+---
+
+### 2.3 Secrets 存储 (`secrets/`) — 2,546 行
+
+| 文件 | 行数 | 职责 |
+|---|---|---|
+| `mod.rs` | 170 | 模块入口 |
+| `types.rs` | 506 | SecretRecord / CredentialMapping / DecryptedSecret 类型 |
+| `crypto.rs` | 373 | AES/ChaCha20 加密 + master key 派生 |
+| `keychain.rs` | 318 | OS Keychain (macOS Keychain Access / Windows Credential Manager) |
+| `store.rs` | 974 | SecretsStore 主逻辑 + CRUD + 访问审计 |
+| `agent_provider.rs` | 205 | Agent 调用接口 (仅返回 Decrypted, 不返回原文) |
+
+**核心**: master key 存 OS Keychain, 实际 secret 加密存 sqlite, 运行时 on-demand 解密。
+
+---
+
+### 2.4 Docker 容器沙箱 (`sandbox/`) — 2,251 行
+
+> ⚠️ **架构说明** (见 `adr-001-sandbox-hook-not-wired-in-phase3.md`):  
+> ironclaw 真实沙箱是**进程外 daemon** 架构 (`src/bridge/sandbox/` + `src/bin/sandbox_daemon.rs`), 不是进程内 hook。
+
+| 文件 | 行数 | 职责 |
+|---|---|---|
+| `container.rs` | 635 | Docker container 生命周期管理 |
+| `manager.rs` | 697 | SandboxManager + 多 container 编排 |
+| `agent_executor.rs` | 277 | `x_claw_agent::SandboxExecutor` adapter (Phase 3 未接线) |
+| `config.rs` | 233 | 沙箱配置 |
+| `detect.rs` | 235 | Docker 可用性检测 |
+| `mod.rs` | 116 | 模块入口 |
+| `error.rs` | 58 | 错误类型 |
+
+**Container 安全保证** (摘自 `container.rs` 头注释):
+- 环境变量**明确无 secret** (`Environment: http_proxy=..., No secrets or credentials`)
+- `/workspace` 按 policy 挂 ro/rw
+- `/output` 挂 rw
+- 资源限制 (CPU / memory / pid / network)
+- 强制走 HTTP proxy (`host.docker.internal:PORT`)
+
+---
+
+### 2.5 Sandbox 出口代理 (`sandbox/proxy/`) — 1,360 行
+
+| 文件 | 行数 | 职责 |
+|---|---|---|
+| `http.rs` | 556 | HTTP 代理服务器 |
+| `allowlist.rs` | 335 | 域名白名单校验 |
+| `policy.rs` | 306 | Policy decider (允许/拒绝/需审批) |
+| `mod.rs` | 163 | 架构图 + 入口 |
+
+**架构** (摘自 `proxy/mod.rs`):
+```
+┌──────────────┐   ┌──────────┐   ┌──────────────────────┐
+│ HTTP Proxy   │──▶│ Policy   │──▶│ Credential Resolver  │
+│ Server       │   │ Decider  │   │                      │
+└──────────────┘   └──────────┘   └──────────────────────┘
+                        │
+                        ▼
+                 ┌──────────────┐
+                 │ Allowlist    │
+                 │ Validator    │
+                 └──────────────┘
+```
+
+**价值**: 容器内流量必须经此代理出去, 在 proxy 边界完成 "白名单校验 + 凭证注入" 双重控制。
+
+---
+
+### 2.6 `ironclaw_safety` crate (4,849 行 + fuzz) ⭐ 最高质量安全代码
+
+**位置**: `desktop-client/ironclaw/crates/ironclaw_safety/`
+
+| 文件 | 行数 | 职责 |
+|---|---|---|
+| `lib.rs` | 615 | crate 入口 + 公共 API |
+| `policy.rs` | 535 | 安全策略引擎 (rule-based decision) |
+| `sanitizer.rs` | 725 | **Prompt injection 清洗** (input/output filter) |
+| `validator.rs` | 776 | 请求/响应校验 |
+| `credential_detect.rs` | 637 | ★ **自动检测 LLM 输出中的凭证泄漏** |
+| `leak_detector.rs` | 1,336 | ★ **大数据泄漏检测 (DLP)** |
+| `agent_hook.rs` | 225 | agent 钩子注入点 |
+
+### Fuzz 测试 (项目中唯一)
+
+```
+crates/ironclaw_safety/fuzz/
+├── Cargo.toml
+└── corpus/
+    ├── fuzz_safety_sanitizer/   ← prompt 清洗 fuzz 语料
+    ├── fuzz_safety_validator/   ← 验证器 fuzz 语料
+    └── fuzz_config_env/         ← 配置环境 fuzz 语料
+```
+
+**地位**: 这是项目**唯一**有 fuzz 测试的 crate, 安全等级最高。
+
+---
+
+### 2.7 Redaction (`tools/redaction.rs`) — 251 行
+
+自动脱敏 18+ 敏感字段:
+
+```rust
+const SENSITIVE_EXACT: &[&str] = &[
+    "authorization", "proxy-authorization", "cookie", "set-cookie",
+    "x-api-key", "api-key", "api_key",
+    "access_token", "refresh_token", "session_token", "id_token", "token",
+    "password", "passwd", "secret", "client_secret",
+    "private_key", "apikey", "apisecret",
+];
+
+const SENSITIVE_PARTS: &[&str] = &[
+    "password", "passwd", "secret", "credential", ...
+];
+```
+
+**用途**: 工具调用参数/返回/日志在落盘前自动 `[REDACTED]` 替换。
+
+---
+
+### 2.8 `ironclaw_workspace_cap` crate (568 行) — 路径逃逸防护
+
+**位置**: `crates/ironclaw_workspace_cap/src/lib.rs`
+
+**原理** (摘自文件头注释):
+
+> 基于 `cap_std::fs::Dir`, 在 **OS 内核层** (`openat` + symlink 控制) 强制每个文件系统访问都在单一 root 目录内。
+> 这是 ironclaw 沙箱栈的 *应用层* (ADR-002), 与 *内核层* (Landlock / sandbox-exec / Windows Restricted Token) 互补。
+
+### 保证 (Guarantees)
+- ✅ 绝对路径 **被拒绝**
+- ✅ `..` 逃逸 **被拒绝**
+- ✅ 指向 root 外的 symlink 在 open 时 **被拒绝**
+- ✅ root 自身的 TOCTOU 竞争 **被消除** (持有 directory fd 作为 capability)
+
+### 明确非保证 (by design)
+- ❌ 不限制子进程 — 内核沙箱层的职责
+- ❌ 不强制 DLP/审批 — `ironclaw_safety` 的职责
+- ❌ 不限制文件大小/数量 — 调用方职责
+
+**价值**: Rust 进程自身的路径安全, 防 `../../../etc/passwd` 类攻击。
+
+---
+
+### 2.9 NETWORK_SECURITY.md 威胁模型
+
+**位置**: `desktop-client/ironclaw/src/NETWORK_SECURITY.md`
+
+### 4 层信任边界
+
+| 边界 | 信任等级 | 示例 |
+|---|---|---|
+| Local user | 完全信任 | TUI / Web Gateway loopback |
+| Browser client | 已认证 | Bearer token + CORS + Origin + CSRF |
+| **Docker containers** | **不信任** (沙箱化) | per-job token + allowlist egress + dropped capabilities |
+| **External services** | **不信任** | Telegram/Slack webhook shared secret |
+
+### 5 个监听端口审计
+
+| Listener | Port | Bind | Auth |
+|---|---|---|---|
+| Web Gateway | 3000 | `127.0.0.1` | Bearer token (constant-time) |
+| HTTP Webhook | 8080 | `0.0.0.0` | Shared secret (body) |
+| Orchestrator API | 50051 | loopback (mac/win) / 0.0.0.0 (linux) | Per-job bearer (constant-time) |
+| OAuth Callback | 9876 | `127.0.0.1` | None (ephemeral 5-min) |
+| Sandbox HTTP Proxy | ephemeral | `127.0.0.1` | None (loopback only) |
+
+**价值**: 完整可审计的网络安全文档, 合规审查必备。
+
+---
+
+## 3. 与 codex / claw-code 对比
+
+| 安全能力 | codex | claw-code | ironclaw |
+|---|---|---|---|
+| WASM 工具沙箱 + capability opt-in | ❌ | ❌ | ✅ **独有** |
+| 凭证 host 边界注入 (tool 看不到 secret) | ❌ | ❌ | ✅ **独有** |
+| OS Keychain 集成 | ⚠️ 基础 | ❌ | ✅ 完整 |
+| Docker 容器沙箱 + 出口代理 + 白名单 | ✅ 进程级 sandbox_linux/win | ⚠️ 基础 | ✅ 容器级 + proxy + allowlist |
+| **Prompt injection fuzz 测试** | ❌ | ❌ | ✅ **独有 (项目唯一)** |
+| **自动凭证泄漏检测** (LLM 输出扫描) | ❌ | ❌ | ✅ `credential_detect.rs` |
+| **大数据泄漏检测 (DLP)** | ❌ | ❌ | ✅ `leak_detector.rs` |
+| 自动 redaction (18+ 字段) | ⚠️ | ⚠️ | ✅ |
+| Capability-based FS (cap_std TOCTOU-safe) | ❌ | ❌ | ✅ `ironclaw_workspace_cap` |
+| 4 层威胁模型文档 | ❌ | ❌ | ✅ NETWORK_SECURITY.md |
+| Extensions 沙箱 (11k 行) | ❌ | ❌ | ✅ 完整 |
+
+**结论**: 本领域 ironclaw **全面领先**。
+
+---
+
+## 4. 对路线 B 架构设计的修正
+
+### 4.1 原 11 文档 §6/§7 的问题
+
+```
+dasclaw_sandbox_linux   ← 原方案: 从 codex port
+dasclaw_sandbox_windows ← 原方案: 从 codex port
+```
+
+**问题**: ironclaw 已有 `sandbox/` 2,251 行 + `sandbox/proxy/` 1,360 行 = **3,611 行成熟 Docker 沙箱** (外加进程外 daemon 架构)。如果从 codex port 进程级 sandbox_linux/windows, 会:
+- 降级: 容器级 → 进程级
+- 丢失: 出口代理 + 域名白名单 + 凭证注入
+- 重复劳动
+
+### 4.2 修订方案
+
+| 原计划 | 修订后 |
+|---|---|
+| `dasclaw_sandbox_linux` (port codex) | **保留 ironclaw `sandbox/`** + **选择性借鉴 codex sandbox_linux 的 seccomp/landlock 加固思路**注入 sub-process 层 |
+| `dasclaw_sandbox_windows` (port codex) | **保留 ironclaw `sandbox/`** + **借鉴 codex sandbox_windows 的 Restricted Token / Job Object 思路**加固 sub-process 层 |
+| `dasclaw_policy` (port codex) | **对齐** ironclaw `ironclaw_safety::policy` + codex policy, 择优合并 |
+| `dasclaw_rollout_trace` (port codex) | **保留** ironclaw, 无需 port |
+| `dasclaw_apply_patch` (port claw-code) | ✅ 维持原计划 (ironclaw 无 apply_patch) |
+| `dasclaw_branch_guard` (port claw-code) | ✅ 维持原计划 |
+| `dasclaw_device_identity` (port claw-code) | ✅ 维持原计划 |
+
+### 4.3 新增保留清单 (路线 B 必须保留, 不动一行)
+
+| crate/模块 | 理由 |
+|---|---|
+| `ironclaw_safety` | 项目唯一 fuzz 测试 crate, 4849 行, credential_detect + leak_detector 独有 |
+| `ironclaw_workspace_cap` | cap_std TOCTOU-safe 路径防护, codex/claw 无对应 |
+| `tools/wasm/*` | 15 文件 wasm 沙箱, 独有 |
+| `secrets/*` | OS Keychain + 加密, 独有 |
+| `sandbox/` + `sandbox/proxy/` | 容器级沙箱, 比 codex 进程级更强 |
+| `tools/redaction.rs` | 18+ 字段自动脱敏 |
+| `extensions/` | 11786 行 extensions 沙箱 |
+| `NETWORK_SECURITY.md` | 合规审查必备文档 |
+
+---
+
+## 5. 路线 B 安全能力归属 (最终版)
+
+| 层级 | 能力 | 实现来源 | 路线 B 决策 |
+|---|---|---|---|
+| **L1 进程内 FS 防护** | cap_std TOCTOU-safe FS | ironclaw_workspace_cap | ✅ 保留 |
+| **L2 工具沙箱 (WASM)** | wasmtime + capability opt-in | ironclaw tools/wasm | ✅ 保留 |
+| **L3 凭证边界** | credential_injector + SecretsStore | ironclaw secrets + wasm/credential_injector | ✅ 保留 |
+| **L4 子进程沙箱 (OS)** | Docker container + proxy | ironclaw sandbox + sandbox/proxy | ✅ 保留主体 |
+|  | seccomp/landlock (Linux) | codex sandbox_linux | ⚠️ 借鉴加固 |
+|  | Restricted Token (Windows) | codex sandbox_windows | ⚠️ 借鉴加固 |
+| **L5 内容安全 (DLP)** | Prompt sanitize + credential/leak detect + policy | ironclaw_safety (4849 + fuzz) | ✅ 保留 |
+| **L6 日志脱敏** | 18+ 敏感字段自动 redact | tools/redaction.rs | ✅ 保留 |
+| **L7 网络审计** | 4 边界 + 5 端口 + 威胁模型 | NETWORK_SECURITY.md | ✅ 维护 |
+| **L8 Extension 治理** | 插件元数据校验 + 沙箱 | extensions/ | ✅ 保留 |
+
+**8 层纵深防御栈, 全部保留 ironclaw 为主, codex 仅作加固来源**。
+
+---
+
+## 6. Action Items
+
+- [ ] 修订 11 文档 §6 目录规划:
+  - [ ] `dasclaw_sandbox_linux/windows` 从 "codex port" 改为 "保留 ironclaw sandbox + codex seccomp 借鉴"
+  - [ ] 新增 "★保留 ironclaw 安全栈" 章节, 列出 8 层防御
+- [ ] 修订 11 文档 §7 能力归属表, 补"安全"相关行
+- [ ] Wave 路线图中**禁止把安全能力放在早期 Wave** (避免破坏现有防御)
+- [ ] 移植 codex sandbox_linux 加固时, 走"增量集成"而非"整替换"
+
+---
+
+## 附录: 相关 ADR
+
+- `adr-001-sandbox-hook-not-wired-in-phase3.md` — 为何 Phase 3 未接线进程内 sandbox hook
+- `adr-002-...md` (引用自 workspace_cap lib.rs) — 沙箱双层架构: 应用层 (cap_std) + 内核层 (Landlock/sandbox-exec/Restricted Token)

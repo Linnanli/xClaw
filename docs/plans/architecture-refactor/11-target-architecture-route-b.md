@@ -412,9 +412,9 @@ x-claw/
 │       ├─ routines/                   # ★ 保留 (融合 claw recovery_recipes)
 │       ├─ orchestrator/               # ★ 100% 保留
 │       ├─ hooks/                      # 改写: 基于 dasclaw_hooks_engine schema/engine
-│       ├─ safety/                     # 改写: 基于 dasclaw_policy
-│       ├─ sandbox/                    # 改写: 分发到 dasclaw_sandbox_linux/windows
-│       ├─ secrets/                    # ★ 保留 (融合 dasclaw_device_identity)
+│       ├─ safety/                     # ★ 保留 (重导到 `ironclaw_safety` crate, 见 13 文档)
+│       ├─ sandbox/                    # ★ 保留 3611 行容器级 + codex 借鉴子进程内核加固
+│       ├─ secrets/                    # ★ 保留 2546 行 (独立于 device_identity)
 │       └─ observability/              # ★ 保留 (融合 dasclaw_rollout_trace)
 ```
 
@@ -441,8 +441,16 @@ x-claw/
 | **Git utils (ghost_commits/baseline)** | `dasclaw_git_utils` | codex port | ★ 新增 |
 | **Hooks schema + engine** | `dasclaw_hooks_engine` | codex port | ★ 新增 |
 | **Feature flags** | `dasclaw_features` | codex port | ★ 新增 |
-| **Linux/Windows 沙箱** | `dasclaw_sandbox_linux/windows` | codex port | ★ 新增 |
-| **合规策略** | `dasclaw_policy` | claw 聚合 | ★ 新增 |
+| **Linux/Windows 子进程内核沙箱** | `dasclaw_sandbox_linux/windows` | codex 借鉴 (seccomp/landlock/Restricted Token) 注入 ironclaw `sandbox/` 子进程层 | 增强，**非整替换** (详见 13 文档 §4) |
+| **容器级沙箱 + 出口代理 + 白名单** | `ironclaw sandbox/` + `sandbox/proxy/` (3611 行) | ironclaw 原生 | ★ 100% 保留 |
+| **WASM 工具沙箱 + capability opt-in** | `ironclaw tools/wasm/` (15 文件) | ironclaw 独有 | ★ 100% 保留 |
+| **凭证 host 边界注入** (tool 看不到 secret) | `ironclaw tools/wasm/credential_injector.rs` (639) | ironclaw 独有 | ★ 100% 保留 |
+| **Secrets 存储 + OS Keychain** | `ironclaw secrets/` (2546 行) | ironclaw 独有 | ★ 100% 保留 |
+| **Safety (prompt inj / 凭证检测 / DLP / policy)** | `ironclaw_safety` crate (4849 行 + fuzz) | ironclaw 独有 | ★ 100% 保留, 不动一行 |
+| **Capability-based FS (TOCTOU-safe)** | `ironclaw_workspace_cap` crate (568) | ironclaw 独有 | ★ 100% 保留 |
+| **Redaction (18+ 敏感字段自动脱敏)** | `ironclaw tools/redaction.rs` (251) | ironclaw 独有 | ★ 100% 保留 |
+| **网络威胁模型 (4 边界 + 5 端口)** | `NETWORK_SECURITY.md` | ironclaw 独有 | ★ 维护 |
+| **合规策略** | `dasclaw_policy` | claw 聚合 + 对齐 ironclaw_safety::policy | 增强 |
 | **分支治理** | `dasclaw_branch_guard` | claw 聚合 | ★ 新增 |
 | **错误恢复** | `ironclaw routines/self_repair.rs` 合并 | ironclaw + claw 融合 | 增强 |
 | **MCP 加固** | `ironclaw extensions/` 内部 | ironclaw + claw 融合 | 增强 |
@@ -656,7 +664,22 @@ ironclaw → 外围生态 (channels / llm / tools / routines / extensions / skil
 - **不合并** `dasclaw_skills` + `dasclaw_tool_runtime` (将来抽离个人助理 SDK 时各自独立更灵活)
 - **不预创建** `dasclaw_assistant` 包装 crate (YAGNI)
 
-### 10.2 移植合规策略 → 见独立文档
+### 10.2 安全能力归属修正 → 见独立文档
+
+ironclaw 的安全栈 (~25,000 行) 是项目最大差异化优势, 包含:
+- WASM 工具沙箱 + 凭证 host 边界注入 (工具看不到 API key)
+- `ironclaw_safety` crate (4849 行 + fuzz 测试, 含 credential_detect + DLP leak_detector)
+- `ironclaw_workspace_cap` (cap_std TOCTOU-safe 路径防护)
+- 容器级 Docker 沙箱 + 出口代理 + 域名白名单
+- NETWORK_SECURITY.md 4 层威胁模型 + 5 端口审计
+
+**关键修正**: `dasclaw_sandbox_linux/windows` **不是整 port codex**, 而是保留 ironclaw `sandbox/` 3611 行容器级实现, 仅借鉴 codex seccomp/landlock/Restricted Token 加固子进程内核层。
+
+完整清单与归属决策详见:
+
+📄 **[13-security-capability-inventory.md](./13-security-capability-inventory.md)** — 8 层纵深防御栈 + 与 codex/claw-code 逐项对比 + 路线 B 保留范围。
+
+### 10.3 移植合规策略 → 见独立文档
 
 所有从 codex (Apache-2.0) 和 claw-code (MIT) 移植代码的合规要求, 详见:
 
