@@ -148,7 +148,7 @@ pub const DEFAULT_MAX_TURNS: u16 = 10;
 
 ### 路线 A: 保守增量 (当前 09 文档默认方案)
 
-**做法**: 保留 ironclaw agent 主干, 新增 das_claw_* crate 补短板。
+**做法**: 保留 ironclaw agent 主干, 新增 dasclaw_* crate 补短板。
 
 ```mermaid
 flowchart TB
@@ -157,12 +157,12 @@ flowchart TB
         A2[ironclaw/src/agent/dispatcher 等]
     end
     subgraph 补丁["5 波补丁"]
-        B1[das_claw_apply_patch]
-        B2[das_claw_git_utils]
-        B3[das_claw_hooks_engine]
-        B4[das_claw_features]
-        B5[das_claw_sandbox_*]
-        B6[das_claw_policy]
+        B1[dasclaw_apply_patch]
+        B2[dasclaw_git_utils]
+        B3[dasclaw_hooks_engine]
+        B4[dasclaw_features]
+        B5[dasclaw_sandbox_*]
+        B6[dasclaw_policy]
     end
     保留 --> 补丁
 ```
@@ -180,10 +180,10 @@ flowchart TB
 ```mermaid
 flowchart TB
     subgraph 新内核["新 agent 内核 (整 crate port)"]
-        C1["das_claw_agent_kernel<br/>← codex core/agent (5.8k)"]
-        C2["das_claw_session<br/>← codex core/session (~15k)"]
-        C3["das_claw_tasks<br/>← codex core/tasks (~3k)"]
-        C4["das_claw_context_mgr<br/>← codex core/context_manager (~2k)"]
+        C1["dasclaw_agent_kernel<br/>← codex core/agent (5.8k)"]
+        C2["dasclaw_session<br/>← codex core/session (~15k)"]
+        C3["dasclaw_tasks<br/>← codex core/tasks (~3k)"]
+        C4["dasclaw_context_mgr<br/>← codex core/context_manager (~2k)"]
     end
     subgraph 保留["保留 ironclaw 外围"]
         D1[33 builtin tool]
@@ -202,10 +202,10 @@ flowchart TB
 
 **迁移步骤**:
 
-1. **W1 (新)**: port codex `core/agent/` → `crates/das_claw_agent_kernel` (mailbox / registry / role / control / status / agent_resolver)
-2. **W2 (新)**: port codex `core/session/` → `crates/das_claw_session`
-3. **W3 (新)**: port codex `core/tasks/` → `crates/das_claw_tasks` (含 ghost_snapshot 任务级快照)
-4. **W4 (新)**: port codex `core/context_manager/` → `crates/das_claw_context_mgr`
+1. **W1 (新)**: port codex `core/agent/` → `crates/dasclaw_agent_kernel` (mailbox / registry / role / control / status / agent_resolver)
+2. **W2 (新)**: port codex `core/session/` → `crates/dasclaw_session`
+3. **W3 (新)**: port codex `core/tasks/` → `crates/dasclaw_tasks` (含 ghost_snapshot 任务级快照)
+4. **W4 (新)**: port codex `core/context_manager/` → `crates/dasclaw_context_mgr`
 5. **W5**: 在 `ironclaw/src/agent/` 写适配层, 让 dispatcher / thread_ops 调用新内核
 6. **W6**: 保留 09 文档 W1-W5 的 apply-patch / git-utils / features / hooks / sandbox / policy
 
@@ -260,11 +260,11 @@ flowchart TB
 | Phase 3 产出 | 路线 B 处理 |
 |---|---|
 | `x_claw_agent::agentic_loop` (Route-B 设计) | 保留为"外层 loop wrapper", 内部 delegate 调新内核 |
-| `x_claw_agent::hooks` (SafetyHook / SandboxExecutor / SecretProvider / ApprovalGate) | **直接迁到新 `das_claw_agent_kernel`** 作为顶层 Hook trait |
+| `x_claw_agent::hooks` (SafetyHook / SandboxExecutor / SecretProvider / ApprovalGate) | **直接迁到新 `dasclaw_agent_kernel`** 作为顶层 Hook trait |
 | `x_claw_agent::bash_validation` | 保留 (来自 claw-code, 独立可复用) |
-| `x_claw_agent::permissions` | 保留或合并到 `das_claw_policy` |
-| `x_claw_agent::session_manager` / `session` | **下线**, 换成 `das_claw_session` |
-| `x_claw_agent::compaction` / `context_monitor` | **下线**, 换成 `das_claw_context_mgr` |
+| `x_claw_agent::permissions` | 保留或合并到 `dasclaw_policy` |
+| `x_claw_agent::session_manager` / `session` | **下线**, 换成 `dasclaw_session` |
+| `x_claw_agent::compaction` / `context_monitor` | **下线**, 换成 `dasclaw_context_mgr` |
 | `x_claw_agent::intent` / `reasoning_ctx` | 保留 (ironclaw 特定 LLM 接入) |
 
 → **Phase 3 抽 crate 的模式和 Hook 设计 100% 复用, 只是换更优的 Session/Tasks/Context 实现**。
@@ -291,8 +291,183 @@ flowchart TB
 ## 7. 待决策 (请选路线)
 
 1. **路线 A / B / C?** (文档建议 **B**)
-2. 若选 B, 是先启动 **W1 (das_claw_agent_kernel port codex agent/)**, 还是 **先补 09 文档的 apply-patch / git-utils** (09 W1 与本文 W6 合并)?
-3. 是否保留 `x_claw_agent` 名字 (Phase 3 已占用), 或一并改名 `das_claw_agent_legacy`?
+2. 若选 B, 是先启动 **W1 (dasclaw_agent_kernel port codex agent/)**, 还是 **先补 09 文档的 apply-patch / git-utils** (09 W1 与本文 W6 合并)?
+3. 是否保留 `x_claw_agent` 名字 (Phase 3 已占用), 或一并改名 `dasclaw_agent_legacy`?
+
+---
+
+## 8. codex 内核移植的精确边界 (路线 B)
+
+### 8.1 ✅ 整 crate / 整模块 port (路线 B 的核心搬迁)
+
+**共 4 个新 crate, 总计约 31k LOC, 从 codex `core/` 切出**:
+
+| 新 crate | 来源路径 | LOC | 内容 |
+|---|---|---|---|
+| `dasclaw_agent_kernel` | `codex-cli-main/codex-rs/core/src/agent/` | ~5.8k | `mod.rs` / `registry.rs` (AgentRegistry/ActiveAgents/AgentMetadata) / `mailbox.rs` (mpsc + watch + 序号) / `control.rs` / `role.rs` / `status.rs` / `agent_resolver.rs` + 4 个 tests 文件 |
+| `dasclaw_session` | `codex-cli-main/codex-rs/core/src/session/` | ~15k | 会话生命周期、25 文件分层抽象 (具体文件群有待 W2 时清点) |
+| `dasclaw_tasks` | `codex-cli-main/codex-rs/core/src/tasks/` | ~3k | `regular.rs` / `review.rs` / `compact.rs` / `user_shell.rs` / `undo.rs` / `ghost_snapshot.rs` (★ 任务级快照/回滚) + tests |
+| `dasclaw_context_mgr` | `codex-cli-main/codex-rs/core/src/context_manager/` | ~2k | `history.rs` / `normalize.rs` / `updates.rs` / `mod.rs` + tests (历史 normalize、增量更新) |
+
+**+ 09 文档已规划的 6 个 crate** (apply-patch / git-utils / hooks / features / sandbox / policy 等):
+
+| 新 crate | 来源 | LOC |
+|---|---|---|
+| `dasclaw_apply_patch` | codex `apply-patch/` | ~2k |
+| `dasclaw_git_utils` | codex `git-utils/` | ~3k |
+| `dasclaw_hooks_engine` | codex `hooks/` | ~6.9k |
+| `dasclaw_features` | codex `features/` | ~1k |
+| `dasclaw_sandbox_linux` | codex `linux-sandbox/` | ~? |
+| `dasclaw_sandbox_windows` | codex `windows-sandbox-rs/` | ~12.5k |
+| `dasclaw_policy` | claw `policy_engine.rs` + `permission_enforcer.rs` + `trust_resolver.rs` | ~? |
+| `dasclaw_branch_guard` | claw `branch_lock.rs` + `stale_base.rs` + `stale_branch.rs` | ~? |
+| `dasclaw_rollout_trace` | codex `rollout-trace/` | ~9.9k |
+| `dasclaw_device_identity` | codex `device-key/` + `agent-identity/` | ~? |
+
+**总计**: 路线 B 共新增 14 个 dasclaw_* crate, 整体 codex/claw 移植量约 50-60k LOC。
+
+### 8.2 ❌ codex 不搬迁的内容 (即使路线 B 也不动)
+
+| codex 模块 | LOC | 不搬原因 |
+|---|---|---|
+| `codex-rs/tui/` | 142k | ratatui CLI 前端, 我们走 Tauri+React |
+| `codex-rs/app-server/` + `app-server-client/` + `app-server-protocol/` + `app-server-test-client/` | ~99k | ironclaw `channels/web/` 已达 40k LOC, 完整覆盖 HTTP+SSE+WS+OpenAI 兼容 + handlers |
+| `codex-rs/exec-server/` | 13.6k | ironclaw shell.rs + bash_validator + sandbox 已覆盖 |
+| `codex-rs/cli/` | 7k | Tauri 不需要 CLI 入口 |
+| `codex-rs/cloud-tasks*` (4 个) | - | SaaS 与政企合规冲突 |
+| `codex-rs/realtime-webrtc/` | - | 音视频非办公场景 |
+| `codex-rs/v8-poc/` | - | 实验 |
+| `codex-rs/lmstudio/` + `ollama/` | - | ironclaw `llm/` 28 provider 更全 |
+| `codex-rs/responses-api-proxy/` | - | ironclaw `channels/web/responses_api.rs` 已实装 |
+| `codex-rs/feedback/` + `debug-client/` + `codex-backend-openapi-models/` | - | 内部反馈/调试, ironclaw 自有链路 |
+| `codex-rs/stdio-to-uds/` + `uds/` | - | IPC 桥接, Tauri 不需要 |
+| **codex-rs/core/src/ 中除 agent/session/tasks/context_manager 之外的 ~190k LOC** | ~190k | 包含 client/exec/safety/sandboxing/skills/state/utils 等; 这些 ironclaw 主库已有对应或不需要 |
+
+**关键澄清**: **路线 B 不是搬迁整个 codex CLI**, 只挑 4 个高价值子模块 (agent/session/tasks/context_manager) + 09 文档已选的独立 crate。**总搬迁量 < 10% codex codebase**。
+
+### 8.3 ✅ ironclaw 100% 保留的能力 (路线 B 不动)
+
+| ironclaw 子系统 | LOC | 路线 B 处理 |
+|---|---|---|
+| `tools/builtin/` 33 tool (50k LOC) | 50k | **完全保留**, 只是工具调用入口改接 dasclaw_agent_kernel |
+| `channels/` (web/repl/relay/webhook/wasm/signal) | 40k | **完全保留** |
+| `llm/` 28 provider + failover + circuit_breaker | 28k | **完全保留** |
+| `extensions/` (MCP discovery/manager/registry) | - | **完全保留** |
+| `skills/` (catalog/gating/parser/registry/selector/attenuation) | - | **完全保留** |
+| `routines/` (scheduler/cost_guard/heartbeat/job_monitor/self_repair) | - | **完全保留** (合并 claw `recovery_recipes`) |
+| `orchestrator/` (api/auth/job_manager/reaper) | - | **完全保留** |
+| `webhooks/` / `tunnel/` / `secrets/` / `db/` / `history/` / `workspace/` / `evaluation/` / `import/` / `pairing/` / `setup/` | - | **完全保留** |
+| `desktop-client/src/` 79 个 Tauri IPC | - | **完全保留** (路线 B 无 UI 影响) |
+| `crates/ironclaw_auth` / `ironclaw_workspace_cap` | - | **完全保留** (后续逐步改名 dasclaw_*) |
+| `agent/dispatcher.rs` 并行 JoinSet 工具调度 | - | **保留为外层 dispatcher**, 内部调用新 kernel |
+| `x_claw_agent/hooks.rs` Hook trait | - | **迁到 dasclaw_agent_kernel 顶层**, 接口契约不变 |
+| `x_claw_agent/bash_validation.rs` (来自 claw-code) | - | **保留** (单独可复用) |
+
+### 8.4 ⚠️ ironclaw 部分下线/被替换的内容
+
+| ironclaw 模块 | 路线 B 处理 |
+|---|---|
+| `agent/agentic_loop.rs` (re-export shim) + `x_claw_agent/agentic_loop.rs` | **保留为 outer loop wrapper**, 内部 delegate 调 dasclaw_agent_kernel |
+| `agent/session.rs` + `agent/session_manager.rs` + `x_claw_agent/session*.rs` | **下线**, 换成 `dasclaw_session` |
+| `agent/task.rs` + `x_claw_agent/task.rs` | **下线**, 换成 `dasclaw_tasks` |
+| `agent/compaction.rs` + `agent/context_monitor.rs` + `x_claw_agent/compaction.rs` + `context_monitor.rs` | **下线**, 换成 `dasclaw_context_mgr` |
+| `agent/thread_ops.rs` | **重写**, 调 dasclaw_session 接口 |
+| `tools/builtin/sub_agent.rs` | **重写**, MAX_DEPTH 限制移除, 改用 dasclaw_agent_kernel 的 registry/mailbox |
+
+---
+
+## 9. claw-code 的定位 (路线 B 下)
+
+### 9.1 claw-code 的双重身份
+
+| 身份 | 表现 | 路线 B 下的处理 |
+|---|---|---|
+| **历史血缘** | x_claw_agent 起初是 "fork of claw-code" | 已经把有用的 `bash_validation` / `permissions` port 进来; 其余历史价值已榨完 |
+| **能力源** | 仍有 4 类独有能力未引入 | 通过新 crate **聚合迁入** (而非整 crate port) |
+
+### 9.2 claw-code 在路线 B 中的角色: **能力源, 不再作为骨架参考**
+
+**仍要从 claw-code 引入的 4 类能力** (聚合到新 crate):
+
+| 能力 | 来源文件 | 目标新 crate |
+|---|---|---|
+| 合规策略 | `policy_engine.rs` + `permission_enforcer.rs` + `trust_resolver.rs` | `dasclaw_policy` |
+| 分支治理 | `branch_lock.rs` + `stale_base.rs` + `stale_branch.rs` | `dasclaw_branch_guard` |
+| 错误恢复 | `recovery_recipes.rs` | 合并到 ironclaw `routines/self_repair.rs` |
+| MCP 加固 | `mcp_lifecycle_hardened.rs` + `mcp_tool_bridge.rs` | 合并到 ironclaw `extensions/` 内部 |
+
+**为什么 claw-code 不能作为 agent 内核骨架?**
+
+1. **架构反模式**: `runtime/src/` 把 44 个文件平铺扁平, 没有子模块边界
+2. **无 mailbox/registry**: 多 agent 也是靠 TaskRegistry + 文件 IPC, 没有 codex 的 mpsc + watch 通道
+3. **session 抽象浅**: `session.rs + session_control.rs` 两文件, 与 codex `core/session/` 25 文件不在一个量级
+4. **测试覆盖弱**: 与 codex 的 _tests.rs 标准化方式相比组织混乱
+
+**为什么 claw-code 仍要作为合规/治理能力源?**
+
+- `policy_engine.rs` + `permission_enforcer.rs` 是 codex 没有的工业级实现
+- `branch_lock.rs` + `stale_*` 是企业并发场景独有
+- 这些是 codex `safety.rs` 单文件无法替代的
+
+### 9.3 claw-code 的最终去向
+
+```mermaid
+flowchart LR
+    subgraph claw["claw-code 仓库"]
+        R1[runtime/policy_engine.rs]
+        R2[runtime/permission_enforcer.rs]
+        R3[runtime/trust_resolver.rs]
+        R4[runtime/branch_lock.rs]
+        R5[runtime/stale_base.rs]
+        R6[runtime/stale_branch.rs]
+        R7[runtime/recovery_recipes.rs]
+        R8[runtime/mcp_lifecycle_hardened.rs]
+        R9[bash_validation.rs ✓ 已 port]
+        R10[permissions.rs ✓ 已 port]
+        R11[其他 30 文件 ❌ 不引入]
+    end
+    R1 & R2 & R3 --> P[dasclaw_policy]
+    R4 & R5 & R6 --> B[dasclaw_branch_guard]
+    R7 --> S[ironclaw routines/self_repair]
+    R8 --> E[ironclaw extensions]
+```
+
+**结论**: claw-code 在路线 B 下**降级为"合规与治理能力源"**, 不再承担 agent 骨架角色。其历史血缘 (Phase 3 港的 bash_validation/permissions) 保留, 不重复引入。
+
+### 9.4 一张图说清 路线 B 的三方关系
+
+```mermaid
+flowchart TB
+    subgraph 新["新 dasclaw_* crate (codex/claw 双源港)"]
+        K1[dasclaw_agent_kernel ← codex core/agent]
+        K2[dasclaw_session ← codex core/session]
+        K3[dasclaw_tasks ← codex core/tasks]
+        K4[dasclaw_context_mgr ← codex core/context_manager]
+        K5[dasclaw_apply_patch ← codex apply-patch]
+        K6[dasclaw_git_utils ← codex git-utils]
+        K7[dasclaw_hooks_engine ← codex hooks]
+        K8[dasclaw_features ← codex features]
+        K9[dasclaw_sandbox_linux/windows ← codex]
+        K10[dasclaw_policy ← claw policy_engine 等]
+        K11[dasclaw_branch_guard ← claw branch_lock 等]
+    end
+    subgraph 保留["ironclaw 主库保留"]
+        I1[33 builtin tool]
+        I2[channels/]
+        I3[llm/ 28 provider]
+        I4[routines/]
+        I5[extensions/]
+        I6[orchestrator/]
+        I7[Tauri 79 IPC]
+    end
+    subgraph 退役["x_claw_agent (legacy shim)"]
+        X1[agentic_loop wrapper 保留]
+        X2[hooks.rs trait → 迁到 K1]
+        X3[session/task/context → 下线]
+    end
+    新 --> 保留
+    退役 -.-> 新
+```
 
 ---
 

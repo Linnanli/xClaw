@@ -276,39 +276,39 @@ flowchart LR
         J[codex device-key + agent-identity]
         K[codex skills/assets]
     end
-    P0 --> Impl["das_claw_* 新 crate<br/>path 依赖 + adapter"]
+    P0 --> Impl["dasclaw_* 新 crate<br/>path 依赖 + adapter"]
     P1 --> Impl
     P2 --> Impl
 ```
 
 ### 3.3 目录规划 (最小改动原则)
 
-> **命名规范 (用户决策)**: 新增的所有 crate 统一使用 `das_claw_*` 前缀;
+> **命名规范 (用户决策)**: 新增的所有 crate 统一使用 `dasclaw_*` 前缀;
 > 存量 `ironclaw_*` crate (`ironclaw_auth`, `ironclaw_workspace_cap`) 和 `ironclaw/` 主库
-> 后续分阶段改名为 `das_claw_*`, 本文档 Phase 4 只处理新增项。
+> 后续分阶段改名为 `dasclaw_*`, 本文档 Phase 4 只处理新增项。
 
 ```
 x-claw/
 ├─ crates/                          # 共享 crate
-│   ├─ ironclaw_auth/               # 保留 (后续改名 das_claw_auth)
-│   ├─ ironclaw_workspace_cap/      # 保留 (后续改名 das_claw_workspace_cap)
+│   ├─ ironclaw_auth/               # 保留 (后续改名 dasclaw_auth)
+│   ├─ ironclaw_workspace_cap/      # 保留 (后续改名 dasclaw_workspace_cap)
 │   ├─ x_claw_agent/                # 保留 (Phase 3 产出)
-│   ├─ das_claw_apply_patch/        # ★ W1: 整 crate 从 codex apply-patch 移植
-│   ├─ das_claw_git_utils/          # ★ W1: 整 crate 从 codex git-utils 移植
-│   ├─ das_claw_hooks_engine/       # ★ W1: 整 crate 从 codex hooks 移植 schema+engine
-│   ├─ das_claw_features/           # ★ W1: 整 crate 从 codex features 移植
-│   ├─ das_claw_sandbox_linux/      # ★ W2: 从 codex linux-sandbox
-│   ├─ das_claw_sandbox_windows/    # ★ W2: 从 codex windows-sandbox-rs
-│   ├─ das_claw_policy/             # ★ W2: 聚合 claw policy_engine + permission_enforcer + trust_resolver
-│   ├─ das_claw_branch_guard/       # ★ W2: 聚合 claw branch_lock + stale_base + stale_branch
-│   ├─ das_claw_rollout_trace/      # ★ W3: 从 codex rollout-trace
-│   └─ das_claw_device_identity/    # ★ W4: 从 codex device-key + agent-identity
+│   ├─ dasclaw_apply_patch/        # ★ W1: 整 crate 从 codex apply-patch 移植
+│   ├─ dasclaw_git_utils/          # ★ W1: 整 crate 从 codex git-utils 移植
+│   ├─ dasclaw_hooks_engine/       # ★ W1: 整 crate 从 codex hooks 移植 schema+engine
+│   ├─ dasclaw_features/           # ★ W1: 整 crate 从 codex features 移植
+│   ├─ dasclaw_sandbox_linux/      # ★ W2: 从 codex linux-sandbox
+│   ├─ dasclaw_sandbox_windows/    # ★ W2: 从 codex windows-sandbox-rs
+│   ├─ dasclaw_policy/             # ★ W2: 聚合 claw policy_engine + permission_enforcer + trust_resolver
+│   ├─ dasclaw_branch_guard/       # ★ W2: 聚合 claw branch_lock + stale_base + stale_branch
+│   ├─ dasclaw_rollout_trace/      # ★ W3: 从 codex rollout-trace
+│   └─ dasclaw_device_identity/    # ★ W4: 从 codex device-key + agent-identity
 
 ├─ desktop-client/ironclaw/src/     # 现有主库 (**适配层在此**, 后续整体改名)
 │   ├─ tools/builtin/
-│   │   └─ apply_patch.rs           # 改写: 调用 das_claw_apply_patch
-│   ├─ hooks/                       # 改写: 基于 das_claw_hooks_engine
-│   ├─ safety/                      # 改写: 基于 das_claw_policy
+│   │   └─ apply_patch.rs           # 改写: 调用 dasclaw_apply_patch
+│   ├─ hooks/                       # 改写: 基于 dasclaw_hooks_engine
+│   ├─ safety/                      # 改写: 基于 dasclaw_policy
 │   ├─ sandbox/                     # 新增 linux/windows 分发层
 │   └─ routines/
 │       └─ recovery.rs              # ★ 新增: 封装 claw recovery_recipes
@@ -343,10 +343,10 @@ flowchart LR
 
 | 新 crate | ironclaw 适配点 | 灰度退役目标 |
 |---|---|---|
-| `das_claw_apply_patch` | `tools/builtin/code_edit.rs` 改调用 | 内部 patch 实现 |
-| `das_claw_git_utils` | `tools/builtin/git/` 替换 | 简化 git 实现 |
-| `das_claw_hooks_engine` | `hooks/{hook,registry}.rs` 改为薄适配 | 自写 hook 注册表 |
-| `das_claw_features` | 新建 `src/features_gate.rs` | 全局 feature flag 空缺 |
+| `dasclaw_apply_patch` | `tools/builtin/code_edit.rs` 改调用 | 内部 patch 实现 |
+| `dasclaw_git_utils` | `tools/builtin/git/` 替换 | 简化 git 实现 |
+| `dasclaw_hooks_engine` | `hooks/{hook,registry}.rs` 改为薄适配 | 自写 hook 注册表 |
+| `dasclaw_features` | 新建 `src/features_gate.rs` | 全局 feature flag 空缺 |
 
 ### 4.3 不应做的事
 
@@ -381,7 +381,7 @@ flowchart LR
 | # | 决策 | 结论 |
 |---|---|---|
 | 1 | 迁移顺序 | **W1 (apply-patch / git-utils / features / hooks) 起步** |
-| 2 | 新 crate 命名 | **统一 `das_claw_*` 前缀**; 存量 `ironclaw_*` 后续分阶段改名 |
+| 2 | 新 crate 命名 | **统一 `dasclaw_*` 前缀**; 存量 `ironclaw_*` 后续分阶段改名 |
 | 3 | claw-code LICENSE | **允许整 crate port**; W2 / W3 将直接原样迁入 |
 
 ---
@@ -406,8 +406,8 @@ Phase 3 的成果 (已落地, commit `26f4b11f`):
 ```mermaid
 flowchart LR
     P3["Phase 3 完成态:<br/>x_claw_agent 独立 crate<br/>Hook trait 定义<br/>engine 脱离 ironclaw"]
-    P4W1["Phase 4 W1 新增:<br/>das_claw_apply_patch<br/>das_claw_git_utils<br/>das_claw_features<br/>das_claw_hooks_engine"]
-    P4W2["Phase 4 W2 新增:<br/>das_claw_sandbox_linux/windows<br/>das_claw_policy<br/>das_claw_branch_guard"]
+    P4W1["Phase 4 W1 新增:<br/>dasclaw_apply_patch<br/>dasclaw_git_utils<br/>dasclaw_features<br/>dasclaw_hooks_engine"]
+    P4W2["Phase 4 W2 新增:<br/>dasclaw_sandbox_linux/windows<br/>dasclaw_policy<br/>dasclaw_branch_guard"]
     P3 -->|"沿用同一架构模式<br/>(整 crate 抽离 + ironclaw 适配层)"| P4W1
     P4W1 --> P4W2
 ```
