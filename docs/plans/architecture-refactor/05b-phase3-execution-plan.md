@@ -40,16 +40,24 @@
 
 ### `crates/ironclaw_routines`（ironclaw 原创扩展）
 
-| 文件 | 行数 | 归属理由 |
-|---|---|---|
-| `routine.rs` | 1562 | 类型定义 |
-| `routine_engine.rs` | 2578 | 执行引擎 |
-| `scheduler.rs` | 1230 | 调度器 |
-| `self_repair.rs` | 856 | 卡住 job 自愈 |
-| `cost_guard.rs` | 892 | 单用户成本上限 |
-| `heartbeat.rs` | 971 | 主动心跳 |
-| `job_monitor.rs` | 534 | 后台 job 输出转发 |
-| **合计** | ~8 623 行 | |
+> **2026-04-23 修订（方案 H''）**：经依赖耦合分析，这 7 个文件里只有 `routine.rs` + `cost_guard.rs` 是真正低耦合的；`routine_engine / scheduler / heartbeat / job_monitor` 深度依赖 `channels / extensions / workspace / tools / ContextManager`，和 D-5 砍掉的 `agent_loop / dispatcher` 是同一类困境；`self_repair` 虽然体积不大但生产字段里持有 `Arc<ContextManager>` + `Arc<ToolRegistry>`，同样不宜搬。独立 crate 的"跨项目复用"收益在当前没有第二个消费者的情况下是假设性的。
+>
+> **最终方案**：不提 `crates/ironclaw_routines` crate。改为**顶级模块化**：把全部 7 个文件从 `desktop-client/ironclaw/src/agent/` 挪到 `desktop-client/ironclaw/src/routines/`，并在 `crate::agent::*` 保留 re-export 作兼容层，让 `crate::agent::{routine, routine_engine, scheduler, self_repair, cost_guard, heartbeat, job_monitor}` 的既有 import 全部零改动。
+>
+> **收益**：agent/ 目录不再是什么都塞的大箩筐，routines 子系统独立可见；未来如果真的出现第二个消费者，顶级模块的独立度就是 crate 的独立度，迁移几乎零工作量。
+>
+> **代价**：近零（只是改路径 + 更新 `mod` 声明 + 修几处 `super::`/`crate::` 路径）。
+
+| 文件 | 行数 | 归属理由 | H'' 修订后实际位置 |
+|---|---|---|---|
+| `routine.rs` | 1562 | 类型定义 | ✅ `desktop-client/ironclaw/src/routines/routine.rs` |
+| `routine_engine.rs` | 2578 | 执行引擎 | ✅ `desktop-client/ironclaw/src/routines/routine_engine.rs` |
+| `scheduler.rs` | 1230 | 调度器 | ✅ `desktop-client/ironclaw/src/routines/scheduler.rs` |
+| `self_repair.rs` | 856 | 卡住 job 自愈 | ✅ `desktop-client/ironclaw/src/routines/self_repair.rs` |
+| `cost_guard.rs` | 892 | 单用户成本上限 | ✅ `desktop-client/ironclaw/src/routines/cost_guard.rs` |
+| `heartbeat.rs` | 971 | 主动心跳 | ✅ `desktop-client/ironclaw/src/routines/heartbeat.rs` |
+| `job_monitor.rs` | 534 | 后台 job 输出转发 | ✅ `desktop-client/ironclaw/src/routines/job_monitor.rs` |
+| **合计** | ~8 623 行 | 顶级模块化，非独立 crate | |
 
 ### 保留在 `desktop-client/ironclaw/src/` 顶层（应用层组装）
 
@@ -186,11 +194,23 @@ agent-hook = ["dep:x_claw_agent"]
 
 ---
 
-## Step H — `ironclaw_routines` crate（~1.5d）
+## Step H — routines 顶级模块化（~2h）
 
-按模块归属清单搬 7 个文件。这是独立的 crate，依赖 `x_claw_agent` + `ironclaw_sandbox`（后者通过 trait 访问）。
+> **2026-04-23 修订（方案 H''）**：原计划"提 `crates/ironclaw_routines` crate 搬 7 个文件"被降级为"顶级模块化"。原因见"模块归属清单 / `ironclaw_routines`"章节的修订说明。
 
-注意：`routine_engine.rs` 里的 `SandboxReadiness` 现在走 trait，而不是直接依赖 `SandboxManager`。
+**范围**：把 7 个文件从 `desktop-client/ironclaw/src/agent/` 挪到 `desktop-client/ironclaw/src/routines/`，`crate::agent::*` 保留 re-export 兼容层。
+
+**步骤**：
+1. `mkdir src/routines` + 新建 `src/routines/mod.rs`（7 个 `pub mod`）
+2. `git mv src/agent/{routine,routine_engine,scheduler,self_repair,cost_guard,heartbeat,job_monitor}.rs src/routines/`
+3. `src/lib.rs` 加 `pub mod routines;`
+4. `src/agent/mod.rs` 移除 7 个 `mod xxx`，改为 `pub use crate::routines::{xxx};` re-export
+5. 修 `routines/*.rs` 内部跨文件引用：`use crate::agent::routine::...` → `use crate::routines::routine::...`；`use crate::agent::Scheduler` → `use crate::routines::scheduler::Scheduler`
+6. `cargo build -p ironclaw --lib --tests` + `cargo test -p ironclaw --lib` 验收
+
+**验收**：`cargo test -p ironclaw --lib` 4020 passed / 0 failed；`cargo build -p ironclaw` 0 错误 0 警告。
+
+**已完成**（submodule `4d7f31c8`）。
 
 ---
 
