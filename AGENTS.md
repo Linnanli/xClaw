@@ -50,12 +50,6 @@
 
 ### 复用优先级
 
-**Desktop Client**：
-1. 复用 Web Gateway API（`src/channels/web/handlers/`）→ 创建 Tauri 命令包装器
-2. 复用共享 Crate（`crates/ironclaw_auth/` 等）
-3. 从主项目提取新的共享 Crate
-4. 仅 Desktop Client 特有功能才独立实现
-
 **Admin Backend**：
 1. 通过 `ironclaw` crate 依赖主项目核心功能
 2. 复用共享 Crate

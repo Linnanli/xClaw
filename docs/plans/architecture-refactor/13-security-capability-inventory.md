@@ -458,7 +458,15 @@ ironclaw 当前 `skills/` (3,665 行) 是 **SKILL.md 规范**, 按 `skills/mod.r
 | 维度 | codex | ironclaw |
 |------|-------|---------|
 | crate | `codex-rs/skills/` + `codex-rs/core-skills/` | `desktop-client/ironclaw/src/skills/` |
-| 格式 | `---\nname:\ndescription:\n---\n<markdown>` | `---\nname:\ndescription:\n---\n<markdown>` (完全一致) |
+| 格式 | `---
+name:
+description:
+---
+<markdown>` | `---
+name:
+description:
+---
+<markdown>` (完全一致) |
 | 内置 | `.codex/skills/` 10 个 (babysit-pr / code-review 系列 / codex-bug / remote-tests / test-tui) | `SkillRegistry` 无内置 |
 | 注入 | `core-skills/src/injection.rs` `build_skill_injections()` → `SkillInjection{name,path,contents}` | `skills/selector.rs` prefilter + 直接拼 prompt |
 | **独有**: 内置 bundle | ✅ `include_dir!` 把 skills 编译进二进制 + `install_system_skills()` 指纹 marker | ❌ |

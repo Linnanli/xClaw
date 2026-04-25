@@ -59,21 +59,27 @@ pub enum DataStreamFrame {
 impl DataStreamFrame {
     pub fn encode(&self) -> String {
         match self {
-            Self::Text { text } => format!("0:{}\n", serde_json::to_string(text).unwrap()),
+            Self::Text { text } => format!("0:{}
+", serde_json::to_string(text).unwrap()),
             Self::ToolCall { id, name, args } => {
                 let payload = serde_json::json!({
                     "toolCallId": id, "toolName": name, "args": args
                 });
-                format!("9:{}\n", payload)
+                format!("9:{}
+", payload)
             }
             Self::ToolResult { id, result } => {
-                format!("a:{}\n", serde_json::json!({"toolCallId": id, "result": result}))
+                format!("a:{}
+", serde_json::json!({"toolCallId": id, "result": result}))
             }
-            Self::Data { items } => format!("2:{}\n", serde_json::json!(items)),
+            Self::Data { items } => format!("2:{}
+", serde_json::json!(items)),
             Self::Finish { reason, usage } => {
-                format!("d:{}\n", serde_json::json!({"finishReason": reason, "usage": usage}))
+                format!("d:{}
+", serde_json::json!({"finishReason": reason, "usage": usage}))
             }
-            Self::Error { message } => format!("3:{}\n", serde_json::to_string(message).unwrap()),
+            Self::Error { message } => format!("3:{}
+", serde_json::to_string(message).unwrap()),
         }
     }
 }
