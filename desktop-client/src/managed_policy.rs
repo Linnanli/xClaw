@@ -70,7 +70,10 @@ pub async fn fetch_signed_policy(
         .map_err(|e| format!("Failed to fetch client policy: {}", e))?;
 
     if !response.status().is_success() {
-        return Err(format!("Client policy endpoint returned {}", response.status()));
+        return Err(format!(
+            "Client policy endpoint returned {}",
+            response.status()
+        ));
     }
 
     response
@@ -177,7 +180,10 @@ pub fn verify_signed_policy(
     public_key_b64: &str,
 ) -> Result<ManagedPolicySnapshot, String> {
     if envelope.algorithm.to_ascii_lowercase() != "ed25519" {
-        return Err(format!("Unsupported policy signature algorithm: {}", envelope.algorithm));
+        return Err(format!(
+            "Unsupported policy signature algorithm: {}",
+            envelope.algorithm
+        ));
     }
 
     let verifying_key = decode_public_key(public_key_b64)?;
@@ -245,7 +251,10 @@ fn decode_signature(signature_b64: &str) -> Result<Signature, String> {
     Ok(Signature::from_bytes(&sig_array))
 }
 
-async fn load_cached_policy_version(db: &dyn Database, scope_id: &str) -> Result<Option<u64>, String> {
+async fn load_cached_policy_version(
+    db: &dyn Database,
+    scope_id: &str,
+) -> Result<Option<u64>, String> {
     let value = db
         .get_setting(scope_id, SIGNED_POLICY_VERSION_KEY)
         .await
@@ -264,9 +273,13 @@ async fn persist_cached_policy_version(
     scope_id: &str,
     version: u64,
 ) -> Result<(), String> {
-    db.set_setting(scope_id, SIGNED_POLICY_VERSION_KEY, &serde_json::json!(version))
-        .await
-        .map_err(|e| format!("Failed to persist signed policy version: {}", e))
+    db.set_setting(
+        scope_id,
+        SIGNED_POLICY_VERSION_KEY,
+        &serde_json::json!(version),
+    )
+    .await
+    .map_err(|e| format!("Failed to persist signed policy version: {}", e))
 }
 
 fn default_policy_key_id() -> String {
@@ -306,8 +319,8 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
 
     use super::{
-        ManagedPolicyManifest, SignedManagedPolicyEnvelope, ensure_newer_policy_version,
-        verify_signed_policy,
+        ensure_newer_policy_version, verify_signed_policy, ManagedPolicyManifest,
+        SignedManagedPolicyEnvelope,
     };
 
     fn signed_envelope(
@@ -327,8 +340,8 @@ mod tests {
     #[test]
     fn test_verify_signed_policy_success() {
         let signing_key = SigningKey::from_bytes(&[7u8; 32]);
-        let verifying_key_b64 =
-            base64::engine::general_purpose::STANDARD.encode(signing_key.verifying_key().to_bytes());
+        let verifying_key_b64 = base64::engine::general_purpose::STANDARD
+            .encode(signing_key.verifying_key().to_bytes());
         let manifest = ManagedPolicyManifest {
             policy_version: 1,
             issued_at: Utc::now().to_rfc3339(),
@@ -347,8 +360,8 @@ mod tests {
     #[test]
     fn test_verify_signed_policy_rejects_expired_policy() {
         let signing_key = SigningKey::from_bytes(&[9u8; 32]);
-        let verifying_key_b64 =
-            base64::engine::general_purpose::STANDARD.encode(signing_key.verifying_key().to_bytes());
+        let verifying_key_b64 = base64::engine::general_purpose::STANDARD
+            .encode(signing_key.verifying_key().to_bytes());
         let manifest = ManagedPolicyManifest {
             policy_version: 1,
             issued_at: (Utc::now() - Duration::hours(2)).to_rfc3339(),
@@ -366,8 +379,8 @@ mod tests {
     #[test]
     fn test_verify_signed_policy_rejects_zero_policy_version() {
         let signing_key = SigningKey::from_bytes(&[5u8; 32]);
-        let verifying_key_b64 =
-            base64::engine::general_purpose::STANDARD.encode(signing_key.verifying_key().to_bytes());
+        let verifying_key_b64 = base64::engine::general_purpose::STANDARD
+            .encode(signing_key.verifying_key().to_bytes());
         let manifest = ManagedPolicyManifest {
             policy_version: 0,
             issued_at: Utc::now().to_rfc3339(),
@@ -385,8 +398,8 @@ mod tests {
     #[test]
     fn test_verify_signed_policy_rejects_future_issued_at() {
         let signing_key = SigningKey::from_bytes(&[3u8; 32]);
-        let verifying_key_b64 =
-            base64::engine::general_purpose::STANDARD.encode(signing_key.verifying_key().to_bytes());
+        let verifying_key_b64 = base64::engine::general_purpose::STANDARD
+            .encode(signing_key.verifying_key().to_bytes());
         let manifest = ManagedPolicyManifest {
             policy_version: 1,
             issued_at: (Utc::now() + Duration::minutes(10)).to_rfc3339(),

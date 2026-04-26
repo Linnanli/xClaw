@@ -10,7 +10,6 @@
 #[error("dasclaw_apply_patch skeleton error: {0}")]
 pub struct SkeletonError(pub String);
 
-
 /// Primary entry trait (placeholder). Replaced with full surface in W2+.
 pub trait ApplyPatch {
     /// Lark-grammar apply_patch protocol (codex port).
@@ -20,5 +19,6 @@ pub trait ApplyPatch {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn skeleton_compiles() { /* W1 placeholder */ }
+    fn skeleton_compiles() { /* W1 placeholder */
+    }
 }

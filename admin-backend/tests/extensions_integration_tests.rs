@@ -1,13 +1,13 @@
 mod common;
 
-use axum::{body::Body, http::Request};
 use axum::http::StatusCode;
+use axum::{body::Body, http::Request};
 use chrono::Utc;
 use common::{
     build_app, configure_scanner_env, get, make_auth_token, post_json, response_json,
     spawn_scanner_server, spawn_scanner_server_validating_llm,
-    spawn_scanner_server_validating_llm_with_options,
-    spawn_scanner_server_with_http_error, try_connect_db, unique_name,
+    spawn_scanner_server_validating_llm_with_options, spawn_scanner_server_with_http_error,
+    try_connect_db, unique_name,
 };
 use serde_json::json;
 use std::io::Write;
@@ -23,16 +23,8 @@ async fn post_multipart_file(
     content_type: &str,
     bytes: &[u8],
 ) -> axum::response::Response {
-    post_multipart_file_with_fields(
-        app,
-        path,
-        field_name,
-        file_name,
-        content_type,
-        bytes,
-        &[],
-    )
-    .await
+    post_multipart_file_with_fields(app, path, field_name, file_name, content_type, bytes, &[])
+        .await
 }
 
 async fn post_multipart_file_with_fields(
@@ -139,7 +131,12 @@ async fn req_extensions_001_upload_valid_skill_returns_201_and_persists() {
 
     let status = resp.status();
     let body = response_json(resp).await;
-    assert_eq!(status, StatusCode::CREATED, "unexpected upload response: {}", body);
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "unexpected upload response: {}",
+        body
+    );
     assert_eq!(body["review_status"], "pending");
 
     let client = pool.get().await.expect("get db client");
@@ -155,7 +152,9 @@ async fn req_extensions_001_upload_valid_skill_returns_201_and_persists() {
     let file_path: Option<String> = row.get(1);
     assert_eq!(review_status, "pending");
     assert!(
-        file_path.unwrap_or_default().contains("# Integration Skill"),
+        file_path
+            .unwrap_or_default()
+            .contains("# Integration Skill"),
         "file_path 应保存上传内容"
     );
 
@@ -202,7 +201,12 @@ async fn req_extensions_001c_upload_package_with_manifest_version_returns_201_an
 
     let status = resp.status();
     let body = response_json(resp).await;
-    assert_eq!(status, StatusCode::CREATED, "unexpected upload response: {}", body);
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "unexpected upload response: {}",
+        body
+    );
     assert_eq!(body["review_status"], "pending");
 
     let skill_id = Uuid::parse_str(body["id"].as_str().unwrap_or_default())
@@ -265,7 +269,10 @@ async fn req_extensions_001d_upload_same_name_upserts_existing_skill() {
              ) VALUES (
                 'skill', $1, 'legacy-scanner', 'BLOCKED', false,
                 'HIGH', 1, $2::jsonb, 3, NOW(), NOW())",
-            &[&skill_id, &json!([{"rule_id": "OLD-1", "severity": "HIGH"}])],
+            &[
+                &skill_id,
+                &json!([{"rule_id": "OLD-1", "severity": "HIGH"}]),
+            ],
         )
         .await
         .expect("seed old scan result");
@@ -315,7 +322,10 @@ async fn req_extensions_001d_upload_same_name_upserts_existing_skill() {
     assert!(file_path.unwrap_or_default().contains("# New Content"));
 
     let count_row = client
-        .query_one("SELECT COUNT(*) FROM skills WHERE name = $1", &[&skill_name])
+        .query_one(
+            "SELECT COUNT(*) FROM skills WHERE name = $1",
+            &[&skill_name],
+        )
         .await
         .expect("count skill rows by name");
     let count: i64 = count_row.get(0);
@@ -353,7 +363,10 @@ async fn req_extensions_001d_upload_same_name_upserts_existing_skill() {
     );
 
     client
-        .execute("DELETE FROM scan_results WHERE target_id = $1", &[&skill_id])
+        .execute(
+            "DELETE FROM scan_results WHERE target_id = $1",
+            &[&skill_id],
+        )
         .await
         .expect("cleanup scan results");
     client
@@ -406,7 +419,12 @@ async fn req_extensions_001g_upload_package_with_llm_fields_forwards_to_scanner(
 
     let status = resp.status();
     let body = response_json(resp).await;
-    assert_eq!(status, StatusCode::CREATED, "unexpected upload response: {}", body);
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "unexpected upload response: {}",
+        body
+    );
     assert_eq!(body["review_status"], "pending");
     assert_eq!(body["scan_result"]["verdict"], "SAFE");
     assert_eq!(body["scan_result"]["findings_count"], 0);
@@ -415,7 +433,10 @@ async fn req_extensions_001g_upload_package_with_llm_fields_forwards_to_scanner(
         .expect("response should include valid skill id");
     let client = pool.get().await.expect("get db client");
     client
-        .execute("DELETE FROM scan_results WHERE target_id = $1", &[&skill_id])
+        .execute(
+            "DELETE FROM scan_results WHERE target_id = $1",
+            &[&skill_id],
+        )
         .await
         .expect("cleanup scan results");
     client
@@ -460,7 +481,12 @@ async fn req_extensions_001h_upload_package_rejects_invalid_enable_llm_scan() {
 
     let status = resp.status();
     let body = response_json(resp).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "unexpected error response: {}", body);
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "unexpected error response: {}",
+        body
+    );
     let message = body["details"]
         .as_str()
         .or_else(|| body["message"].as_str())
@@ -556,14 +582,22 @@ async fn req_extensions_001i_upload_package_with_model_config_id_uses_persisted_
 
     let status = resp.status();
     let body = response_json(resp).await;
-    assert_eq!(status, StatusCode::CREATED, "unexpected upload response: {}", body);
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "unexpected upload response: {}",
+        body
+    );
     assert_eq!(body["review_status"], "pending");
     assert_eq!(body["scan_result"]["verdict"], "SAFE");
 
     let skill_id = Uuid::parse_str(body["id"].as_str().unwrap_or_default())
         .expect("response should include valid skill id");
     client
-        .execute("DELETE FROM scan_results WHERE target_id = $1", &[&skill_id])
+        .execute(
+            "DELETE FROM scan_results WHERE target_id = $1",
+            &[&skill_id],
+        )
         .await
         .expect("cleanup scan results");
     client
@@ -571,7 +605,10 @@ async fn req_extensions_001i_upload_package_with_model_config_id_uses_persisted_
         .await
         .expect("cleanup skill");
     client
-        .execute("DELETE FROM model_configs WHERE id = $1", &[&model_config_id])
+        .execute(
+            "DELETE FROM model_configs WHERE id = $1",
+            &[&model_config_id],
+        )
         .await
         .expect("cleanup model config");
     handle.abort();
@@ -625,7 +662,10 @@ async fn req_extensions_001b_upload_with_scanner_enabled_scans_synchronously() {
 
     // Sync scan: response should already have final status and scan result
     assert_eq!(body["review_status"], "pending");
-    assert!(body["scan_result"].is_object(), "response should include scan_result");
+    assert!(
+        body["scan_result"].is_object(),
+        "response should include scan_result"
+    );
     assert_eq!(body["scan_result"]["verdict"], "SAFE");
     assert_eq!(body["scan_result"]["is_safe"], true);
     assert_eq!(body["scan_result"]["findings_count"], 0);
@@ -636,7 +676,10 @@ async fn req_extensions_001b_upload_with_scanner_enabled_scans_synchronously() {
 
     // DB should also have the final state
     let row = client
-        .query_one("SELECT review_status FROM skills WHERE id = $1", &[&skill_id])
+        .query_one(
+            "SELECT review_status FROM skills WHERE id = $1",
+            &[&skill_id],
+        )
         .await
         .expect("query uploaded skill status");
     let db_status: String = row.get(0);
@@ -663,7 +706,10 @@ async fn req_extensions_001b_upload_with_scanner_enabled_scans_synchronously() {
 
     handle.abort();
     client
-        .execute("DELETE FROM scan_results WHERE target_id = $1", &[&skill_id])
+        .execute(
+            "DELETE FROM scan_results WHERE target_id = $1",
+            &[&skill_id],
+        )
         .await
         .expect("cleanup scan results");
     client
@@ -717,14 +763,22 @@ async fn req_extensions_001e_upload_scan_timeout_returns_error() {
 
     let status = resp.status();
     let body = response_json(resp).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "unexpected upload response: {}", body);
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "unexpected upload response: {}",
+        body
+    );
     let details = body["details"].as_str().unwrap_or_default();
     assert!(details.contains("安全扫描服务未启动或不可用"));
 
     let client = pool.get().await.expect("get db client");
 
     let row = client
-        .query_one("SELECT COUNT(*) FROM skills WHERE name = $1", &[&skill_name])
+        .query_one(
+            "SELECT COUNT(*) FROM skills WHERE name = $1",
+            &[&skill_name],
+        )
         .await
         .expect("query skill count");
     let count: i64 = row.get(0);
@@ -777,7 +831,10 @@ async fn req_extensions_001f_upload_scan_http_error_returns_error() {
 
     let client = pool.get().await.expect("get db client");
     let row = client
-        .query_one("SELECT COUNT(*) FROM skills WHERE name = $1", &[&skill_name])
+        .query_one(
+            "SELECT COUNT(*) FROM skills WHERE name = $1",
+            &[&skill_name],
+        )
         .await
         .expect("query skill count");
     let count: i64 = row.get(0);
@@ -853,7 +910,10 @@ async fn req_extensions_001g_upload_prompt_injection_phrase_forces_scan_failed()
     let client = pool.get().await.expect("get db client");
 
     client
-        .execute("DELETE FROM scan_results WHERE target_id = $1", &[&skill_id])
+        .execute(
+            "DELETE FROM scan_results WHERE target_id = $1",
+            &[&skill_id],
+        )
         .await
         .expect("cleanup scan results");
     client
@@ -935,7 +995,10 @@ async fn req_extensions_001j_upload_prompt_injection_existing_scanner_hit_skips_
     let client = pool.get().await.expect("get db client");
 
     client
-        .execute("DELETE FROM scan_results WHERE target_id = $1", &[&skill_id])
+        .execute(
+            "DELETE FROM scan_results WHERE target_id = $1",
+            &[&skill_id],
+        )
         .await
         .expect("cleanup scan results");
     client
@@ -994,7 +1057,10 @@ async fn req_extensions_002_get_scan_results_returns_latest_record() {
     assert_eq!(body["scan_result"]["findings_count"], 2);
 
     client
-        .execute("DELETE FROM scan_results WHERE target_id = $1", &[&skill_id])
+        .execute(
+            "DELETE FROM scan_results WHERE target_id = $1",
+            &[&skill_id],
+        )
         .await
         .expect("cleanup scan results");
 }
@@ -1145,7 +1211,10 @@ async fn req_extensions_004_rescan_safe_marks_pending_and_stores_scan_result() {
 
     handle.abort();
     client
-        .execute("DELETE FROM scan_results WHERE target_id = $1", &[&skill_id])
+        .execute(
+            "DELETE FROM scan_results WHERE target_id = $1",
+            &[&skill_id],
+        )
         .await
         .expect("cleanup scan results");
     client
@@ -1229,7 +1298,10 @@ async fn req_extensions_004b_rescan_pending_backfills_scan_result() {
 
     handle.abort();
     client
-        .execute("DELETE FROM scan_results WHERE target_id = $1", &[&skill_id])
+        .execute(
+            "DELETE FROM scan_results WHERE target_id = $1",
+            &[&skill_id],
+        )
         .await
         .expect("cleanup scan results");
     client
@@ -1306,7 +1378,10 @@ async fn req_extensions_004c_rescan_works_when_scanner_enabled_flag_is_false() {
 
     handle.abort();
     client
-        .execute("DELETE FROM scan_results WHERE target_id = $1", &[&skill_id])
+        .execute(
+            "DELETE FROM scan_results WHERE target_id = $1",
+            &[&skill_id],
+        )
         .await
         .expect("cleanup scan results");
     client
@@ -1384,7 +1459,10 @@ async fn req_extensions_005_rescan_blocked_keeps_scan_failed_and_disables_skill(
 
     handle.abort();
     client
-        .execute("DELETE FROM scan_results WHERE target_id = $1", &[&skill_id])
+        .execute(
+            "DELETE FROM scan_results WHERE target_id = $1",
+            &[&skill_id],
+        )
         .await
         .expect("cleanup scan results");
     client
@@ -1442,7 +1520,10 @@ async fn req_extensions_006_get_plugin_scan_results_returns_latest_record() {
     assert_eq!(body["scan_result"]["findings_count"], 1);
 
     client
-        .execute("DELETE FROM scan_results WHERE target_id = $1", &[&plugin_id])
+        .execute(
+            "DELETE FROM scan_results WHERE target_id = $1",
+            &[&plugin_id],
+        )
         .await
         .expect("cleanup plugin scan results");
 }

@@ -170,8 +170,7 @@ mod tests {
     fn test_cache_save_and_load() {
         let temp_dir = tempfile::tempdir().unwrap();
         let cache_path = temp_dir.path().join("admin_config.json");
-        let backend_principal_id =
-            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let backend_principal_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
 
         let config = AdminClientConfig {
             llm_backend: Some("openai".into()),
@@ -514,7 +513,10 @@ mod tests {
         let config = sync.fetch_once().await.expect("fetch_once should succeed");
 
         assert_eq!(config.backend_principal_id, Some(backend_principal_id));
-        assert_eq!(sink.read().expect("sink should be readable").to_owned(), Some(backend_principal_id));
+        assert_eq!(
+            sink.read().expect("sink should be readable").to_owned(),
+            Some(backend_principal_id)
+        );
         mock.assert_async().await;
     }
 

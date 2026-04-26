@@ -10,7 +10,6 @@
 #[error("dasclaw_routines skeleton error: {0}")]
 pub struct SkeletonError(pub String);
 
-
 /// Primary entry trait (placeholder). Replaced with full surface in W2+.
 pub trait RoutineRunner {
     /// Routine orchestration (fork ironclaw 0.24 routines module promotion).
@@ -20,5 +19,6 @@ pub trait RoutineRunner {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn skeleton_compiles() { /* W1 placeholder */ }
+    fn skeleton_compiles() { /* W1 placeholder */
+    }
 }

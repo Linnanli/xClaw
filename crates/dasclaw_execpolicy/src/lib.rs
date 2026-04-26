@@ -10,7 +10,11 @@
 #[error("dasclaw_execpolicy skeleton error: {0}")]
 pub struct SkeletonError(pub String);
 
-pub enum PolicyDecision { Allow, Deny, Ask }
+pub enum PolicyDecision {
+    Allow,
+    Deny,
+    Ask,
+}
 
 /// Primary entry trait (placeholder). Replaced with full surface in W2+.
 pub trait ExecPolicy {
@@ -21,5 +25,6 @@ pub trait ExecPolicy {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn skeleton_compiles() { /* W1 placeholder */ }
+    fn skeleton_compiles() { /* W1 placeholder */
+    }
 }

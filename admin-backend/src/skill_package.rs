@@ -63,7 +63,8 @@ fn extract_from_zip(bytes: &[u8]) -> Result<ExtractedSkillPackage> {
         }
     }
 
-    let skill_content = skill_content.ok_or_else(|| Error::Validation("技能包中缺少 SKILL.md".into()))?;
+    let skill_content =
+        skill_content.ok_or_else(|| Error::Validation("技能包中缺少 SKILL.md".into()))?;
 
     Ok(ExtractedSkillPackage {
         skill_content,
@@ -105,7 +106,8 @@ fn extract_from_tar_gz(bytes: &[u8]) -> Result<ExtractedSkillPackage> {
         }
     }
 
-    let skill_content = skill_content.ok_or_else(|| Error::Validation("技能包中缺少 SKILL.md".into()))?;
+    let skill_content =
+        skill_content.ok_or_else(|| Error::Validation("技能包中缺少 SKILL.md".into()))?;
 
     Ok(ExtractedSkillPackage {
         skill_content,
@@ -114,7 +116,9 @@ fn extract_from_tar_gz(bytes: &[u8]) -> Result<ExtractedSkillPackage> {
 }
 
 fn is_skill_file(path: &str) -> bool {
-    path.rsplit('/').next().is_some_and(|name| name == SKILL_FILE_NAME)
+    path.rsplit('/')
+        .next()
+        .is_some_and(|name| name == SKILL_FILE_NAME)
 }
 
 fn is_platform_manifest_file(path: &str) -> bool {

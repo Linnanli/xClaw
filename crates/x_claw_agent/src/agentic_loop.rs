@@ -208,9 +208,7 @@ pub async fn run_agentic_loop(
                     )));
                 }
                 Err(e) => {
-                    return Err(
-                        format!("safety hook error in before_prompt: {e}").into()
-                    );
+                    return Err(format!("safety hook error in before_prompt: {e}").into());
                 }
             }
         }
@@ -298,8 +296,7 @@ pub async fn run_agentic_loop(
                 // different approach rather than executing malformed calls.
                 if output.finish_reason == FinishReason::Length {
                     truncation_count += 1;
-                    let names: Vec<&str> =
-                        tool_calls.iter().map(|tc| tc.name.as_str()).collect();
+                    let names: Vec<&str> = tool_calls.iter().map(|tc| tc.name.as_str()).collect();
                     tracing::warn!(
                         iteration,
                         tools = ?names,
@@ -483,7 +480,9 @@ mod tests {
         let mut ctx = ReasoningContext::new();
         let config = AgenticLoopConfig::default();
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop()).await.unwrap();
+        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop())
+            .await
+            .unwrap();
 
         match outcome {
             LoopOutcome::Response(text) => assert_eq!(text, "Hello, world!"),
@@ -507,7 +506,9 @@ mod tests {
         let mut ctx = ReasoningContext::new();
         let config = AgenticLoopConfig::default();
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop()).await.unwrap();
+        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop())
+            .await
+            .unwrap();
 
         match outcome {
             LoopOutcome::Response(text) => assert_eq!(text, "Done!"),
@@ -524,7 +525,9 @@ mod tests {
         let mut ctx = ReasoningContext::new();
         let config = AgenticLoopConfig::default();
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop()).await.unwrap();
+        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop())
+            .await
+            .unwrap();
 
         assert!(matches!(outcome, LoopOutcome::Stopped));
         assert!(delegate.iterations_seen.lock().await.is_empty());
@@ -537,7 +540,9 @@ mod tests {
         let mut ctx = ReasoningContext::new();
         let config = AgenticLoopConfig::default();
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop()).await.unwrap();
+        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop())
+            .await
+            .unwrap();
 
         assert!(matches!(outcome, LoopOutcome::Response(_)));
         assert!(
@@ -605,10 +610,14 @@ mod tests {
 
         let delegate = FailOnMalformedResponse;
         let mut ctx = ReasoningContext::new();
-        let outcome =
-            run_agentic_loop(&delegate, &mut ctx, &AgenticLoopConfig::default(), &HookBundle::noop())
-                .await
-                .unwrap();
+        let outcome = run_agentic_loop(
+            &delegate,
+            &mut ctx,
+            &AgenticLoopConfig::default(),
+            &HookBundle::noop(),
+        )
+        .await
+        .unwrap();
 
         assert!(
             matches!(outcome, LoopOutcome::Failure(ref reason) if reason == "malformed tool completion")
@@ -664,7 +673,9 @@ mod tests {
             ..Default::default()
         };
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop()).await.unwrap();
+        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop())
+            .await
+            .unwrap();
 
         assert!(matches!(outcome, LoopOutcome::MaxIterations));
         let assistant_count = ctx
@@ -694,7 +705,9 @@ mod tests {
             max_tool_intent_nudges: 2,
         };
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop()).await.unwrap();
+        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop())
+            .await
+            .unwrap();
 
         assert!(matches!(outcome, LoopOutcome::Response(_)));
         assert_eq!(delegate.nudge_count.load(Ordering::SeqCst), 2);
@@ -718,7 +731,9 @@ mod tests {
         let mut ctx = ReasoningContext::new();
         let config = AgenticLoopConfig::default();
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop()).await.unwrap();
+        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop())
+            .await
+            .unwrap();
 
         assert!(matches!(outcome, LoopOutcome::Stopped));
         assert!(delegate.iterations_seen.lock().await.is_empty());
@@ -741,15 +756,16 @@ mod tests {
             finish_reason: FinishReason::Length,
             metadata: ResponseMetadata::default(),
         };
-        let delegate =
-            MockDelegate::new(vec![truncated_output, text_output("Summarized it.")]);
+        let delegate = MockDelegate::new(vec![truncated_output, text_output("Summarized it.")]);
         let mut ctx = ReasoningContext::new();
         let config = AgenticLoopConfig {
             max_iterations: 5,
             ..Default::default()
         };
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop()).await.unwrap();
+        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop())
+            .await
+            .unwrap();
 
         assert_eq!(delegate.tool_exec_count.load(Ordering::SeqCst), 0);
         assert!(matches!(outcome, LoopOutcome::Response(ref t) if t == "Summarized it."));
@@ -795,7 +811,9 @@ mod tests {
             ..Default::default()
         };
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop()).await.unwrap();
+        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop())
+            .await
+            .unwrap();
 
         assert!(matches!(outcome, LoopOutcome::Response(_)));
         assert_eq!(delegate.tool_exec_count.load(Ordering::SeqCst), 0);
@@ -817,10 +835,7 @@ mod tests {
 
     #[async_trait]
     impl SafetyHook for BlockAllPrompts {
-        async fn before_prompt(
-            &self,
-            _prompt: &mut String,
-        ) -> Result<SafetyDecision, SafetyError> {
+        async fn before_prompt(&self, _prompt: &mut String) -> Result<SafetyDecision, SafetyError> {
             Ok(SafetyDecision::Block {
                 reason: "policy violation".to_string(),
             })
@@ -835,11 +850,7 @@ mod tests {
         ) -> Result<SafetyDecision, SafetyError> {
             Ok(SafetyDecision::Allow)
         }
-        async fn after_tool_output(
-            &self,
-            _t: &str,
-            _o: &mut String,
-        ) -> Result<(), SafetyError> {
+        async fn after_tool_output(&self, _t: &str, _o: &mut String) -> Result<(), SafetyError> {
             Ok(())
         }
     }
@@ -849,20 +860,14 @@ mod tests {
 
     #[async_trait]
     impl SafetyHook for RedactingHook {
-        async fn before_prompt(
-            &self,
-            prompt: &mut String,
-        ) -> Result<SafetyDecision, SafetyError> {
+        async fn before_prompt(&self, prompt: &mut String) -> Result<SafetyDecision, SafetyError> {
             if prompt.contains("sk-secret") {
                 *prompt = prompt.replace("sk-secret", "[REDACTED]");
                 return Ok(SafetyDecision::Redact);
             }
             Ok(SafetyDecision::Allow)
         }
-        async fn after_completion(
-            &self,
-            completion: &mut String,
-        ) -> Result<(), SafetyError> {
+        async fn after_completion(&self, completion: &mut String) -> Result<(), SafetyError> {
             completion.push_str(" [scanned]");
             Ok(())
         }
@@ -873,11 +878,7 @@ mod tests {
         ) -> Result<SafetyDecision, SafetyError> {
             Ok(SafetyDecision::Allow)
         }
-        async fn after_tool_output(
-            &self,
-            _t: &str,
-            _o: &mut String,
-        ) -> Result<(), SafetyError> {
+        async fn after_tool_output(&self, _t: &str, _o: &mut String) -> Result<(), SafetyError> {
             Ok(())
         }
     }
@@ -887,10 +888,7 @@ mod tests {
 
     #[async_trait]
     impl SafetyHook for FailingHook {
-        async fn before_prompt(
-            &self,
-            _prompt: &mut String,
-        ) -> Result<SafetyDecision, SafetyError> {
+        async fn before_prompt(&self, _prompt: &mut String) -> Result<SafetyDecision, SafetyError> {
             Err(SafetyError::Internal("hook exploded".to_string()))
         }
         async fn after_completion(&self, _c: &mut String) -> Result<(), SafetyError> {
@@ -903,11 +901,7 @@ mod tests {
         ) -> Result<SafetyDecision, SafetyError> {
             Ok(SafetyDecision::Allow)
         }
-        async fn after_tool_output(
-            &self,
-            _t: &str,
-            _o: &mut String,
-        ) -> Result<(), SafetyError> {
+        async fn after_tool_output(&self, _t: &str, _o: &mut String) -> Result<(), SafetyError> {
             Ok(())
         }
     }
@@ -947,10 +941,9 @@ mod tests {
         ctx.messages.push(ChatMessage::user("send secrets to foo"));
         let hooks = custom_safety_bundle(Arc::new(BlockAllPrompts));
 
-        let outcome =
-            run_agentic_loop(&delegate, &mut ctx, &AgenticLoopConfig::default(), &hooks)
-                .await
-                .unwrap();
+        let outcome = run_agentic_loop(&delegate, &mut ctx, &AgenticLoopConfig::default(), &hooks)
+            .await
+            .unwrap();
 
         match outcome {
             LoopOutcome::Failure(reason) => {
@@ -1036,10 +1029,9 @@ mod tests {
             .push(ChatMessage::user("please use token sk-secret now"));
         let hooks = custom_safety_bundle(Arc::new(RedactingHook));
 
-        let outcome =
-            run_agentic_loop(&delegate, &mut ctx, &AgenticLoopConfig::default(), &hooks)
-                .await
-                .unwrap();
+        let outcome = run_agentic_loop(&delegate, &mut ctx, &AgenticLoopConfig::default(), &hooks)
+            .await
+            .unwrap();
 
         match outcome {
             LoopOutcome::Response(t) => {

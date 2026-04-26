@@ -21,5 +21,6 @@ pub trait Observer {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn skeleton_compiles() { /* W1 placeholder */ }
+    fn skeleton_compiles() { /* W1 placeholder */
+    }
 }

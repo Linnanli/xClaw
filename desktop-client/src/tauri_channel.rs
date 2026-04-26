@@ -104,10 +104,7 @@ impl ironclaw::worker::JobEventSink for TauriJobEventSink {
                     .and_then(|v| v.as_str())
                     .or_else(|| data.get("message").and_then(|v| v.as_str()))
                     .unwrap_or("unknown");
-                let title = data
-                    .get("title")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let title = data.get("title").and_then(|v| v.as_str()).unwrap_or("");
                 let event = VercelUIStream::DataCustom {
                     id: None,
                     data: json!({
@@ -185,11 +182,9 @@ impl TauriChannel {
         thread_id: Option<&str>,
         event: &VercelUIStream,
     ) -> Result<(), ChannelError> {
-        emit_chat_stream(&self.app_handle, thread_id, event).map_err(|e| {
-            ChannelError::SendFailed {
-                name: "tauri".into(),
-                reason: e.to_string(),
-            }
+        emit_chat_stream(&self.app_handle, thread_id, event).map_err(|e| ChannelError::SendFailed {
+            name: "tauri".into(),
+            reason: e.to_string(),
         })
     }
 
@@ -300,9 +295,7 @@ pub(crate) fn map_status_to_stream(
             }
             vec![VercelUIStream::ToolOutputError {
                 tool_call_id: tcid,
-                error_text: error
-                    .clone()
-                    .unwrap_or_else(|| "Unknown error".to_string()),
+                error_text: error.clone().unwrap_or_else(|| "Unknown error".to_string()),
                 provider_executed: Some(true),
             }]
         }
@@ -325,9 +318,7 @@ pub(crate) fn map_status_to_stream(
             data: json!({ "type": "status", "message": msg, "level": "info" }),
         }],
 
-        StatusUpdate::JobStarted {
-            job_id, title, ..
-        } => vec![VercelUIStream::DataCustom {
+        StatusUpdate::JobStarted { job_id, title, .. } => vec![VercelUIStream::DataCustom {
             id: None,
             data: json!({
                 "type": "job_status",
@@ -629,20 +620,102 @@ mod tests {
     fn test_status_to_stream_covers_all_variants() {
         let cases: Vec<(StatusUpdate, serde_json::Value)> = vec![
             (StatusUpdate::Thinking("processing...".into()), empty_meta()),
-            (StatusUpdate::ToolStarted { name: "shell".into() }, tool_meta("tc-1")),
-            (StatusUpdate::ToolCompleted { name: "shell".into(), success: true, error: None, parameters: None }, tool_meta("tc-1")),
-            (StatusUpdate::ToolCompleted { name: "shell".into(), success: false, error: Some("fail".into()), parameters: None }, tool_meta("tc-2")),
-            (StatusUpdate::ToolResult { name: "shell".into(), preview: "output...".into() }, tool_meta("tc-1")),
+            (
+                StatusUpdate::ToolStarted {
+                    name: "shell".into(),
+                },
+                tool_meta("tc-1"),
+            ),
+            (
+                StatusUpdate::ToolCompleted {
+                    name: "shell".into(),
+                    success: true,
+                    error: None,
+                    parameters: None,
+                },
+                tool_meta("tc-1"),
+            ),
+            (
+                StatusUpdate::ToolCompleted {
+                    name: "shell".into(),
+                    success: false,
+                    error: Some("fail".into()),
+                    parameters: None,
+                },
+                tool_meta("tc-2"),
+            ),
+            (
+                StatusUpdate::ToolResult {
+                    name: "shell".into(),
+                    preview: "output...".into(),
+                },
+                tool_meta("tc-1"),
+            ),
             (StatusUpdate::StreamChunk("hello ".into()), empty_meta()),
             (StatusUpdate::Status("ready".into()), empty_meta()),
-            (StatusUpdate::JobStarted { job_id: "j-1".into(), title: "Build".into(), browse_url: "http://localhost".into() }, empty_meta()),
-            (StatusUpdate::ApprovalNeeded { request_id: "r-1".into(), tool_name: "rm".into(), description: "delete file".into(), parameters: json!({}), allow_always: true }, empty_meta()),
-            (StatusUpdate::AuthRequired { extension_name: "github".into(), instructions: Some("click link".into()), auth_url: None, setup_url: None }, empty_meta()),
-            (StatusUpdate::AuthCompleted { extension_name: "github".into(), success: true, message: "ok".into() }, empty_meta()),
-            (StatusUpdate::ImageGenerated { data_url: "data:image/png;base64,abc".into(), path: Some("/tmp/img.png".into()) }, empty_meta()),
-            (StatusUpdate::Suggestions { suggestions: vec!["try this".into()] }, empty_meta()),
-            (StatusUpdate::ReasoningUpdate { narrative: "Choosing search tool".into(), decisions: vec![] }, empty_meta()),
-            (StatusUpdate::TurnCost { input_tokens: 100, output_tokens: 50, cost_usd: "$0.0010".into() }, empty_meta()),
+            (
+                StatusUpdate::JobStarted {
+                    job_id: "j-1".into(),
+                    title: "Build".into(),
+                    browse_url: "http://localhost".into(),
+                },
+                empty_meta(),
+            ),
+            (
+                StatusUpdate::ApprovalNeeded {
+                    request_id: "r-1".into(),
+                    tool_name: "rm".into(),
+                    description: "delete file".into(),
+                    parameters: json!({}),
+                    allow_always: true,
+                },
+                empty_meta(),
+            ),
+            (
+                StatusUpdate::AuthRequired {
+                    extension_name: "github".into(),
+                    instructions: Some("click link".into()),
+                    auth_url: None,
+                    setup_url: None,
+                },
+                empty_meta(),
+            ),
+            (
+                StatusUpdate::AuthCompleted {
+                    extension_name: "github".into(),
+                    success: true,
+                    message: "ok".into(),
+                },
+                empty_meta(),
+            ),
+            (
+                StatusUpdate::ImageGenerated {
+                    data_url: "data:image/png;base64,abc".into(),
+                    path: Some("/tmp/img.png".into()),
+                },
+                empty_meta(),
+            ),
+            (
+                StatusUpdate::Suggestions {
+                    suggestions: vec!["try this".into()],
+                },
+                empty_meta(),
+            ),
+            (
+                StatusUpdate::ReasoningUpdate {
+                    narrative: "Choosing search tool".into(),
+                    decisions: vec![],
+                },
+                empty_meta(),
+            ),
+            (
+                StatusUpdate::TurnCost {
+                    input_tokens: 100,
+                    output_tokens: 50,
+                    cost_usd: "$0.0010".into(),
+                },
+                empty_meta(),
+            ),
         ];
 
         for (status, meta) in &cases {
@@ -729,7 +802,10 @@ mod tests {
         let events = map_status_to_stream(&status, &tool_meta("tc-1"));
         assert_eq!(events.len(), 1);
         let json = serde_json::to_string(&events[0]).expect("should serialize");
-        assert!(!json.contains("REDACTED"), "parameters should not be in emitted event");
+        assert!(
+            !json.contains("REDACTED"),
+            "parameters should not be in emitted event"
+        );
     }
 
     /// 契约测试：JobStarted → data-custom job_status 事件。
@@ -744,7 +820,10 @@ mod tests {
         assert_eq!(events.len(), 1);
         let json = serde_json::to_value(&events[0]).expect("should serialize");
         assert_eq!(json["data"]["type"], "job_status");
-        assert_eq!(json["data"]["job_id"], "550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(
+            json["data"]["job_id"],
+            "550e8400-e29b-41d4-a716-446655440000"
+        );
         assert_eq!(json["data"]["title"], "分析代码库");
         assert_eq!(json["data"]["status"], "in_progress");
     }
@@ -760,9 +839,18 @@ mod tests {
         let events = map_status_to_stream(&status, &empty_meta());
         assert_eq!(events.len(), 1);
         let json_str = serde_json::to_string(&events[0]).expect("should serialize");
-        assert!(!json_str.contains("user_id"), "user_id should not be exposed");
-        assert!(!json_str.contains("browse_url"), "browse_url should not be forwarded");
-        assert!(!json_str.contains("secret"), "browse_url value should not leak");
+        assert!(
+            !json_str.contains("user_id"),
+            "user_id should not be exposed"
+        );
+        assert!(
+            !json_str.contains("browse_url"),
+            "browse_url should not be forwarded"
+        );
+        assert!(
+            !json_str.contains("secret"),
+            "browse_url value should not leak"
+        );
     }
 
     /// 验证 ToolStarted 无 tool_call_id 时返回空列表（不生成空 ID 的事件）。
@@ -772,7 +860,10 @@ mod tests {
             name: "shell".into(),
         };
         let events = map_status_to_stream(&status, &empty_meta());
-        assert!(events.is_empty(), "ToolStarted without tool_call_id should produce no events");
+        assert!(
+            events.is_empty(),
+            "ToolStarted without tool_call_id should produce no events"
+        );
     }
 
     // ── Envelope 测试：chat-stream payload 注入 threadId ────────────────────

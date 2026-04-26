@@ -10,7 +10,6 @@
 #[error("dasclaw_bash_validation skeleton error: {0}")]
 pub struct SkeletonError(pub String);
 
-
 /// Primary entry trait (placeholder). Replaced with full surface in W2+.
 pub trait BashValidator {
     /// Bash injection detection (6 validation modules from claw-code).
@@ -20,5 +19,6 @@ pub trait BashValidator {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn skeleton_compiles() { /* W1 placeholder */ }
+    fn skeleton_compiles() { /* W1 placeholder */
+    }
 }

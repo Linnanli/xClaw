@@ -205,7 +205,8 @@ const REGISTERED_COMMANDS: &[&str] = &[
 ];
 
 #[test]
-fn test_all_frontend_commands_are_registered() {    let registered: std::collections::HashSet<&str> = REGISTERED_COMMANDS.iter().copied().collect();
+fn test_all_frontend_commands_are_registered() {
+    let registered: std::collections::HashSet<&str> = REGISTERED_COMMANDS.iter().copied().collect();
 
     let missing: Vec<&str> = FRONTEND_INVOKED_COMMANDS
         .iter()

@@ -29,9 +29,9 @@ use ironclaw::hooks::bootstrap_hooks;
 use ironclaw::llm::create_session_manager;
 
 use crate::managed_policy::{
-    ManagedPolicySnapshot, cache_signed_policy_in_store, ensure_policy_version_monotonic,
-    fetch_signed_policy, load_verified_policy_from_store, managed_policy_public_keys_from_env,
-    verify_signed_policy_with_env,
+    cache_signed_policy_in_store, ensure_policy_version_monotonic, fetch_signed_policy,
+    load_verified_policy_from_store, managed_policy_public_keys_from_env,
+    verify_signed_policy_with_env, ManagedPolicySnapshot,
 };
 use crate::model_switch::ModelSwitchProvider;
 use crate::safety_bridge::SafetyBridge;
@@ -137,10 +137,10 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         }
     }
 
-    let tracker = Arc::new(crate::conversation_tracker::ConversationTracker::new(
-        scope_id.clone(),
-    )
-    .with_backend_user_id_sink(Arc::clone(&backend_user_id)));
+    let tracker = Arc::new(
+        crate::conversation_tracker::ConversationTracker::new(scope_id.clone())
+            .with_backend_user_id_sink(Arc::clone(&backend_user_id)),
+    );
     let reporter = Arc::new(crate::data_reporter::DataReporter::new(
         admin_url.clone(),
         client_token.clone(),
@@ -323,9 +323,7 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
             let engine_state = app_handle_clone.state::<EngineState>();
             match engine_state.get() {
                 Ok(state) => {
-                    if let Err(e) =
-                        crate::ipc::skills::startup_sync_managed_skills(state).await
-                    {
+                    if let Err(e) = crate::ipc::skills::startup_sync_managed_skills(state).await {
                         tracing::warn!(
                             error = %e,
                             "Startup managed skills sync failed"
@@ -393,7 +391,8 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         let tracker_clone = Arc::clone(&tracker);
         let reporter_clone = Arc::clone(&reporter);
         tauri::async_runtime::spawn(async move {
-            let mut interval = tokio::time::interval(crate::conversation_tracker::IDLE_FLUSH_INTERVAL);
+            let mut interval =
+                tokio::time::interval(crate::conversation_tracker::IDLE_FLUSH_INTERVAL);
             loop {
                 interval.tick().await;
                 tracker_clone.flush_idle_threads(&reporter_clone);
@@ -761,7 +760,9 @@ async fn resolve_managed_policy(
     client_token: &str,
 ) -> Option<ManagedPolicySnapshot> {
     let Some(db) = db else {
-        tracing::warn!("Managed mode enabled but database is unavailable, cannot load signed policy");
+        tracing::warn!(
+            "Managed mode enabled but database is unavailable, cannot load signed policy"
+        );
         return None;
     };
 
@@ -793,7 +794,9 @@ async fn resolve_managed_policy(
                             "Rejected fetched managed policy due to replay protection"
                         );
                     } else {
-                        if let Err(error) = cache_signed_policy_in_store(db.as_ref(), scope_id, &envelope).await {
+                        if let Err(error) =
+                            cache_signed_policy_in_store(db.as_ref(), scope_id, &envelope).await
+                        {
                             tracing::warn!(
                                 key_id = %envelope.key_id,
                                 policy_version = policy.manifest.policy_version,
@@ -972,7 +975,11 @@ async fn collect_client_policy_restrictions(
     let unauthorized_extensions =
         collect_unauthorized_extensions(extension_manager, scope_id, &allowed_extensions).await;
 
-    (unauthorized_skills, unauthorized_extensions, has_signed_policy)
+    (
+        unauthorized_skills,
+        unauthorized_extensions,
+        has_signed_policy,
+    )
 }
 
 async fn refresh_runtime_policy_restrictions(

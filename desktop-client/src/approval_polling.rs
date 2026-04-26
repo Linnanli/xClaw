@@ -247,7 +247,8 @@ mod tests {
     #[test]
     fn test_pending_ticket_request_id_is_optional_for_backward_compat() {
         let legacy = r#"{"ticket_id":"t1","thread_id":"thread-1","content":"desc"}"#;
-        let ticket: PendingTicket = serde_json::from_str(legacy).expect("legacy ticket should deserialize");
+        let ticket: PendingTicket =
+            serde_json::from_str(legacy).expect("legacy ticket should deserialize");
         assert!(ticket.request_id.is_none());
     }
 

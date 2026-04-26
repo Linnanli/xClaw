@@ -15,8 +15,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tauri::State;
 
-use crate::managed_policy::load_verified_policy_from_store;
 use super::persistence::{load_string_set, persist_disabled_items};
+use crate::managed_policy::load_verified_policy_from_store;
 use crate::state::{AppState, EngineState};
 
 const DISABLED_SKILLS_SETTING_KEY: &str = "desktop_disabled_skills";
@@ -75,8 +75,7 @@ fn validate_skill_catalog_registry_policy(
 fn validate_skill_install_source(managed_mode: bool) -> Result<(), String> {
     if managed_mode {
         return Err(
-            "Managed mode enabled: local SKILL.md content installation is not allowed"
-                .to_string(),
+            "Managed mode enabled: local SKILL.md content installation is not allowed".to_string(),
         );
     }
     Ok(())
@@ -88,10 +87,7 @@ async fn ensure_skill_allowed_by_policy(state: &AppState, name: &str) -> Result<
         return Ok(());
     }
 
-    Err(format!(
-        "Client policy does not allow skill '{}'",
-        name
-    ))
+    Err(format!("Client policy does not allow skill '{}'", name))
 }
 
 fn filter_skill_infos_by_allowlist(
@@ -322,7 +318,10 @@ async fn sync_catalog_skill_list(catalog: &ironclaw::skills::catalog::SkillCatal
 
 async fn load_managed_allowed_skill_names(state: &AppState) -> Result<HashSet<String>, String> {
     let Some(db) = state.db.as_ref() else {
-        tracing::warn!(context = "load_managed_allowed_skill_names", "db is None, cannot load policy");
+        tracing::warn!(
+            context = "load_managed_allowed_skill_names",
+            "db is None, cannot load policy"
+        );
         return Ok(HashSet::new());
     };
 
@@ -333,7 +332,10 @@ async fn load_managed_allowed_skill_names(state: &AppState) -> Result<HashSet<St
         return Ok(skills);
     }
 
-    tracing::debug!(context = "load_managed_allowed_skill_names", "falling back to setting key");
+    tracing::debug!(
+        context = "load_managed_allowed_skill_names",
+        "falling back to setting key"
+    );
     let skills = load_string_set(state, MANAGED_ALLOWED_SKILLS_SETTING_KEY).await?;
     log_loaded_skill_allowlist(
         "load_managed_allowed_skill_names",
@@ -443,8 +445,7 @@ async fn install_skill_from_catalog_slug(
     registry: &Arc<std::sync::RwLock<ironclaw::skills::SkillRegistry>>,
     slug: &str,
 ) -> Result<bool, String> {
-    let download_url =
-        ironclaw::skills::catalog::skill_download_url(catalog.registry_url(), slug);
+    let download_url = ironclaw::skills::catalog::skill_download_url(catalog.registry_url(), slug);
     tracing::info!(
         slug = %slug,
         download_url = %download_url,
@@ -546,10 +547,7 @@ async fn fetch_catalog_skill_markdown(download_url: &str) -> Result<String, Stri
     );
 
     if !status.is_success() {
-        return Err(format!(
-            "Skill download returned status {}",
-            status
-        ));
+        return Err(format!("Skill download returned status {}", status));
     }
 
     let text = response
@@ -607,10 +605,7 @@ async fn install_managed_skill_on_demand(state: &AppState, name: &str) -> Result
 }
 
 #[tauri::command]
-pub async fn ic_enable_skill(
-    state: State<'_, EngineState>,
-    name: String,
-) -> Result<(), String> {
+pub async fn ic_enable_skill(state: State<'_, EngineState>, name: String) -> Result<(), String> {
     let state = state.get()?;
     ensure_skill_allowed_by_policy(state, &name).await?;
     if !has_skill(state, &name)? {
@@ -623,10 +618,7 @@ pub async fn ic_enable_skill(
 }
 
 #[tauri::command]
-pub async fn ic_disable_skill(
-    state: State<'_, EngineState>,
-    name: String,
-) -> Result<(), String> {
+pub async fn ic_disable_skill(state: State<'_, EngineState>, name: String) -> Result<(), String> {
     let state = state.get()?;
     ensure_skill_exists(state, &name)?;
     set_skill_enabled_with_persist(state, &name, false).await?;
@@ -785,10 +777,7 @@ async fn set_skill_enabled_with_persist(
         if rollback_error.is_empty() {
             return Err(error);
         }
-        return Err(format!(
-            "{}; rollback failed: {}",
-            error, rollback_error
-        ));
+        return Err(format!("{}; rollback failed: {}", error, rollback_error));
     }
     Ok(())
 }
@@ -797,9 +786,8 @@ async fn set_skill_enabled_with_persist(
 mod tests {
     use super::{
         extract_skill_name_from_content, filter_skill_infos_by_allowlist,
-        install_missing_allowed_skills, missing_allowed_skill_names,
-        skill_allowed_by_policy, validate_skill_catalog_registry_policy,
-        validate_skill_install_source, SkillInfo,
+        install_missing_allowed_skills, missing_allowed_skill_names, skill_allowed_by_policy,
+        validate_skill_catalog_registry_policy, validate_skill_install_source, SkillInfo,
     };
     use std::collections::HashSet;
     use std::sync::{Arc, RwLock};
@@ -825,7 +813,10 @@ mod tests {
     #[test]
     fn test_validate_skill_install_source_managed_mode_rejects_content_install() {
         let result = validate_skill_install_source(true);
-        assert!(result.is_err(), "managed mode should reject local SKILL.md content install");
+        assert!(
+            result.is_err(),
+            "managed mode should reject local SKILL.md content install"
+        );
         let message = result.err().unwrap_or_default();
         assert!(
             message.contains("Managed mode"),
@@ -837,26 +828,38 @@ mod tests {
     #[test]
     fn test_validate_skill_install_source_non_managed_mode_allows_content_install() {
         let result = validate_skill_install_source(false);
-        assert!(result.is_ok(), "non-managed mode should allow content install");
+        assert!(
+            result.is_ok(),
+            "non-managed mode should allow content install"
+        );
     }
 
     #[test]
     fn test_validate_skill_catalog_registry_policy_managed_requires_registry_url() {
         let result = validate_skill_catalog_registry_policy(true, None);
-        assert!(result.is_err(), "managed mode should require CLAWHUB_REGISTRY");
+        assert!(
+            result.is_err(),
+            "managed mode should require CLAWHUB_REGISTRY"
+        );
     }
 
     #[test]
     fn test_validate_skill_catalog_registry_policy_managed_accepts_registry_url() {
         let result =
             validate_skill_catalog_registry_policy(true, Some("https://admin.example.com/api/v1"));
-        assert!(result.is_ok(), "managed mode should accept configured admin registry");
+        assert!(
+            result.is_ok(),
+            "managed mode should accept configured admin registry"
+        );
     }
 
     #[test]
     fn test_validate_skill_catalog_registry_policy_non_managed_accepts_missing_registry() {
         let result = validate_skill_catalog_registry_policy(false, None);
-        assert!(result.is_ok(), "non-managed mode should allow missing CLAWHUB_REGISTRY");
+        assert!(
+            result.is_ok(),
+            "non-managed mode should allow missing CLAWHUB_REGISTRY"
+        );
     }
 
     #[test]
@@ -871,7 +874,10 @@ mod tests {
         let missing = missing_allowed_skill_names(&allowed, &installed);
         assert_eq!(
             missing,
-            vec!["code-review-expert".to_string(), "code-simplifier".to_string()]
+            vec![
+                "code-review-expert".to_string(),
+                "code-simplifier".to_string()
+            ]
         );
     }
 
@@ -959,7 +965,9 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/api/v1/download"))
             .and(query_param("slug", slug))
-            .respond_with(ResponseTemplate::new(200).set_body_string(managed_skill_content(skill_name)))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(managed_skill_content(skill_name)),
+            )
             .mount(&server)
             .await;
 
@@ -971,12 +979,8 @@ mod tests {
                 .with_installed_dir(tempdir.path().join("installed-skills")),
         ));
 
-        let installed = install_missing_allowed_skills(
-            &catalog,
-            &registry,
-            &[skill_name.to_string()],
-        )
-        .await;
+        let installed =
+            install_missing_allowed_skills(&catalog, &registry, &[skill_name.to_string()]).await;
 
         std::env::remove_var("CLAWHUB_REGISTRY");
 
@@ -1020,7 +1024,9 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/api/v1/download"))
             .and(query_param("slug", good_slug))
-            .respond_with(ResponseTemplate::new(200).set_body_string(managed_skill_content(good_name)))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(managed_skill_content(good_name)),
+            )
             .mount(&server)
             .await;
 

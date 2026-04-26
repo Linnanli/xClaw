@@ -74,11 +74,7 @@ pub trait SafetyHook: Send + Sync {
 
     /// Called with a tool output before it is returned to the LLM as a
     /// tool-result message. May mutate the output (e.g. redact secrets).
-    async fn after_tool_output(
-        &self,
-        tool: &str,
-        output: &mut String,
-    ) -> Result<(), SafetyError>;
+    async fn after_tool_output(&self, tool: &str, output: &mut String) -> Result<(), SafetyError>;
 }
 
 /// Default no-op implementation. Every operation is allowed unchanged.

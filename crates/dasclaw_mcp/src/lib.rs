@@ -10,7 +10,6 @@
 #[error("dasclaw_mcp skeleton error: {0}")]
 pub struct SkeletonError(pub String);
 
-
 /// Primary entry trait (placeholder). Replaced with full surface in W2+.
 pub trait McpTransport {
     /// MCP client with 6 transports (Stdio / SSE / HTTP / WebSocket / SDK / ManagedProxy).
@@ -20,5 +19,6 @@ pub trait McpTransport {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn skeleton_compiles() { /* W1 placeholder */ }
+    fn skeleton_compiles() { /* W1 placeholder */
+    }
 }

@@ -48,9 +48,9 @@ use ironclaw::workspace::Workspace;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::safety_bridge::SafetyBridge;
 use crate::conversation_tracker::ConversationTracker;
 use crate::data_reporter::DataReporter;
+use crate::safety_bridge::SafetyBridge;
 
 /// IronClaw 引擎内部状态。
 ///
@@ -232,8 +232,8 @@ mod tests {
 
     #[test]
     fn test_require_backend_user_id_value_returns_uuid() {
-        let expected = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000")
-            .expect("uuid should parse");
+        let expected =
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").expect("uuid should parse");
         let lock = RwLock::new(Some(expected));
 
         let actual = require_backend_user_id_value(&lock, "配额预检")

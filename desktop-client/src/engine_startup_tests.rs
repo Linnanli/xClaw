@@ -65,7 +65,9 @@ mod engine_state_timing_tests {
             safety,
             safety_bridge,
             context_manager,
-            conversation_tracker: Arc::new(crate::conversation_tracker::ConversationTracker::new("test-owner".to_string())),
+            conversation_tracker: Arc::new(crate::conversation_tracker::ConversationTracker::new(
+                "test-owner".to_string(),
+            )),
             data_reporter,
             scope_id: "test-owner".to_string(),
             backend_user_id: Arc::new(std::sync::RwLock::new(None)),

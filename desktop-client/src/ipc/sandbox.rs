@@ -10,7 +10,7 @@
 //! `Command::output()`.
 
 use dasclaw_sandbox::{
-    select_backend, SandboxExecRequest, SandboxPolicy, SandboxablePreference, SandboxType,
+    select_backend, SandboxExecRequest, SandboxPolicy, SandboxType, SandboxablePreference,
 };
 use serde::Serialize;
 use std::process::Command;
@@ -116,8 +116,13 @@ mod tests {
     async fn smoke_test_reports_a_backend_label() {
         let report = ic_sandbox_smoke_test().await.expect("smoke must not error");
         assert!(
-            ["none", "macos_seatbelt", "linux_seccomp", "windows_restricted_token"]
-                .contains(&report.backend.as_str()),
+            [
+                "none",
+                "macos_seatbelt",
+                "linux_seccomp",
+                "windows_restricted_token"
+            ]
+            .contains(&report.backend.as_str()),
             "unexpected backend label: {}",
             report.backend
         );

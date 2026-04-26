@@ -215,8 +215,7 @@ pub fn create_router(state: AppState) -> Router {
         // 代码工具策略 API（P0 Claude Code Parity）
         .route(
             "/api/settings/code-tools",
-            get(handlers::code_tools::get_code_tools)
-                .put(handlers::code_tools::put_code_tools),
+            get(handlers::code_tools::get_code_tools).put(handlers::code_tools::put_code_tools),
         )
         .route(
             "/api/settings/workspace-paths",
@@ -225,19 +224,16 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route(
             "/api/settings/bash-rules",
-            get(handlers::code_tools::get_bash_rules)
-                .put(handlers::code_tools::put_bash_rules),
+            get(handlers::code_tools::get_bash_rules).put(handlers::code_tools::put_bash_rules),
         )
         // LSP 服务器白名单 + Git 仓库白名单 + 代码操作报表（P1 Claude Code Parity）
         .route(
             "/api/settings/lsp-servers",
-            get(handlers::code_tools::get_lsp_servers)
-                .put(handlers::code_tools::put_lsp_servers),
+            get(handlers::code_tools::get_lsp_servers).put(handlers::code_tools::put_lsp_servers),
         )
         .route(
             "/api/settings/git-repos",
-            get(handlers::code_tools::get_git_repos)
-                .put(handlers::code_tools::put_git_repos),
+            get(handlers::code_tools::get_git_repos).put(handlers::code_tools::put_git_repos),
         )
         .route(
             "/api/reports/code-operations",
@@ -797,7 +793,13 @@ async fn delete_user(
     }
 
     let actor_id = actor_id_from_claims(&claims)?;
-    write_audit_log(&client, actor_id, "delete_user", &format!("删除用户 ID: {}", user_id)).await;
+    write_audit_log(
+        &client,
+        actor_id,
+        "delete_user",
+        &format!("删除用户 ID: {}", user_id),
+    )
+    .await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -854,7 +856,10 @@ fn build_audit_where(
     username: Option<&str>,
     start_time: Option<&str>,
     end_time: Option<&str>,
-) -> Result<(String, Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>>)> {
+) -> Result<(
+    String,
+    Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>>,
+)> {
     let mut conditions: Vec<String> = Vec::new();
     let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = Vec::new();
 
@@ -881,7 +886,9 @@ fn build_audit_where(
                 chrono::NaiveDateTime::parse_from_str(start_str, "%Y-%m-%dT%H:%M:%S")
                     .map(|ndt| ndt.and_utc().fixed_offset())
             })
-            .map_err(|_| Error::Validation("start_time 格式不正确，需为 ISO 8601 格式".to_string()))?;
+            .map_err(|_| {
+                Error::Validation("start_time 格式不正确，需为 ISO 8601 格式".to_string())
+            })?;
         let n = params.len() + 1;
         conditions.push(format!("a.created_at >= ${n}"));
         params.push(Box::new(dt.with_timezone(&chrono::Utc)));
@@ -892,7 +899,9 @@ fn build_audit_where(
                 chrono::NaiveDateTime::parse_from_str(end_str, "%Y-%m-%dT%H:%M:%S")
                     .map(|ndt| ndt.and_utc().fixed_offset())
             })
-            .map_err(|_| Error::Validation("end_time 格式不正确，需为 ISO 8601 格式".to_string()))?;
+            .map_err(|_| {
+                Error::Validation("end_time 格式不正确，需为 ISO 8601 格式".to_string())
+            })?;
         let n = params.len() + 1;
         conditions.push(format!("a.created_at <= ${n}"));
         params.push(Box::new(dt.with_timezone(&chrono::Utc)));
@@ -910,7 +919,11 @@ async fn get_audit_logs(
     State(state): State<AppState>,
     Query(params): Query<AuditLogQuery>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await.map_err(|e| Error::Database(e.to_string()))?;
+    let client = state
+        .db_pool
+        .get()
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
     let page = params.page.unwrap_or(1).max(1);
     let page_size = params.page_size.unwrap_or(50).clamp(1, 200);
     let offset = (page - 1) * page_size;
@@ -952,18 +965,26 @@ async fn get_audit_logs(
          LIMIT ${idx_limit} OFFSET ${idx_offset}",
         where_clause
     );
-    let rows = client.query(&data_sql, &data_refs).await.map_err(|e| Error::Database(e.to_string()))?;
+    let rows = client
+        .query(&data_sql, &data_refs)
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
 
-    let logs: Vec<_> = rows.iter().map(|r| json!({
-        "id": r.get::<_, Uuid>(0),
-        "user_id": r.get::<_, Option<Uuid>>(1),
-        "username": r.get::<_, Option<String>>(2),
-        "action": r.get::<_, String>(3),
-        "details": r.get::<_, String>(4),
-        "ip_address": r.get::<_, Option<String>>(5),
-        "user_agent": r.get::<_, Option<String>>(6),
-        "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(7),
-    })).collect();
+    let logs: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<_, Uuid>(0),
+                "user_id": r.get::<_, Option<Uuid>>(1),
+                "username": r.get::<_, Option<String>>(2),
+                "action": r.get::<_, String>(3),
+                "details": r.get::<_, String>(4),
+                "ip_address": r.get::<_, Option<String>>(5),
+                "user_agent": r.get::<_, Option<String>>(6),
+                "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(7),
+            })
+        })
+        .collect();
 
     Ok(Json(json!({
         "logs": logs,
@@ -2064,7 +2085,13 @@ async fn create_role(
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let actor_id = actor_id_from_claims(&claims)?;
-    write_audit_log(&client, actor_id, "create_role", &format!("创建角色: {}", payload.name)).await;
+    write_audit_log(
+        &client,
+        actor_id,
+        "create_role",
+        &format!("创建角色: {}", payload.name),
+    )
+    .await;
 
     Ok((
         StatusCode::CREATED,
@@ -2131,7 +2158,13 @@ async fn update_role(
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let actor_id = actor_id_from_claims(&claims)?;
-    write_audit_log(&client, actor_id, "update_role", &format!("更新角色 ID: {}", role_id)).await;
+    write_audit_log(
+        &client,
+        actor_id,
+        "update_role",
+        &format!("更新角色 ID: {}", role_id),
+    )
+    .await;
 
     Ok(Json(json!({
         "id": row.get::<_, Uuid>(0),
@@ -2163,7 +2196,13 @@ async fn delete_role(
     }
 
     let actor_id = actor_id_from_claims(&claims)?;
-    write_audit_log(&client, actor_id, "delete_role", &format!("删除角色 ID: {}", role_id)).await;
+    write_audit_log(
+        &client,
+        actor_id,
+        "delete_role",
+        &format!("删除角色 ID: {}", role_id),
+    )
+    .await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -2212,7 +2251,13 @@ async fn assign_permissions(
     }
 
     let actor_id = actor_id_from_claims(&claims)?;
-    write_audit_log(&client, actor_id, "assign_permissions", &format!("为角色 {} 分配权限", role_id)).await;
+    write_audit_log(
+        &client,
+        actor_id,
+        "assign_permissions",
+        &format!("为角色 {} 分配权限", role_id),
+    )
+    .await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -2411,7 +2456,13 @@ async fn create_user(
         .map_err(|e| Error::Database(e.to_string()))?;
 
     let actor_id = actor_id_from_claims(&claims)?;
-    write_audit_log(&client, actor_id, "create_user", &format!("创建用户: {}", payload.username)).await;
+    write_audit_log(
+        &client,
+        actor_id,
+        "create_user",
+        &format!("创建用户: {}", payload.username),
+    )
+    .await;
 
     Ok((
         StatusCode::CREATED,
@@ -3323,7 +3374,8 @@ async fn get_client_policy(
 
     // Fetch code tool settings (fallback to global if department has none)
     let code_tools = fetch_code_tool_config(&state.sqlx_pool, "code_tools", department_id).await;
-    let workspace_paths = fetch_code_tool_config(&state.sqlx_pool, "workspace_paths", department_id).await;
+    let workspace_paths =
+        fetch_code_tool_config(&state.sqlx_pool, "workspace_paths", department_id).await;
     let bash_rules = fetch_code_tool_config(&state.sqlx_pool, "bash_rules", department_id).await;
 
     info!(
@@ -3364,10 +3416,9 @@ fn sign_policy_payload(payload: &str) -> Result<(String, String)> {
     let key_bytes = base64::engine::general_purpose::STANDARD
         .decode(private_key_b64)
         .map_err(|e| Error::Internal(format!("Invalid signing key payload: {}", e)))?;
-    let key_array: [u8; 32] = key_bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| Error::Internal("Managed policy signing key must decode to 32 bytes".into()))?;
+    let key_array: [u8; 32] = key_bytes.as_slice().try_into().map_err(|_| {
+        Error::Internal("Managed policy signing key must decode to 32 bytes".into())
+    })?;
     let signing_key = SigningKey::from_bytes(&key_array);
 
     let signature = signing_key.sign(payload.as_bytes());
@@ -4703,7 +4754,11 @@ async fn get_client_events(
     State(state): State<AppState>,
     Query(params): Query<ClientEventQuery>,
 ) -> Result<Json<serde_json::Value>> {
-    let client = state.db_pool.get().await.map_err(|e| Error::Database(e.to_string()))?;
+    let client = state
+        .db_pool
+        .get()
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
     let page = params.page.unwrap_or(1).max(1);
     let page_size = params.page_size.unwrap_or(20).clamp(1, 200);
     let offset = (page - 1) * page_size;
@@ -4725,15 +4780,17 @@ async fn get_client_events(
         where_params.push(Box::new(rt.to_string()));
     }
     if let Some(start_str) = &params.start_time {
-        let dt = chrono::DateTime::parse_from_rfc3339(start_str)
-            .map_err(|_| Error::Validation("start_time 格式不正确，需为 ISO 8601 格式".to_string()))?;
+        let dt = chrono::DateTime::parse_from_rfc3339(start_str).map_err(|_| {
+            Error::Validation("start_time 格式不正确，需为 ISO 8601 格式".to_string())
+        })?;
         let n = where_params.len() + 1;
         conditions.push(format!("cr.received_at >= ${n}"));
         where_params.push(Box::new(dt.with_timezone(&chrono::Utc)));
     }
     if let Some(end_str) = &params.end_time {
-        let dt = chrono::DateTime::parse_from_rfc3339(end_str)
-            .map_err(|_| Error::Validation("end_time 格式不正确，需为 ISO 8601 格式".to_string()))?;
+        let dt = chrono::DateTime::parse_from_rfc3339(end_str).map_err(|_| {
+            Error::Validation("end_time 格式不正确，需为 ISO 8601 格式".to_string())
+        })?;
         let n = where_params.len() + 1;
         conditions.push(format!("cr.received_at <= ${n}"));
         where_params.push(Box::new(dt.with_timezone(&chrono::Utc)));
@@ -4745,10 +4802,7 @@ async fn get_client_events(
         format!("WHERE {}", conditions.join(" AND "))
     };
 
-    let count_sql = format!(
-        "SELECT COUNT(*) FROM client_reports cr {}",
-        where_clause
-    );
+    let count_sql = format!("SELECT COUNT(*) FROM client_reports cr {}", where_clause);
     let count_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
         where_params.iter().map(|p| p.as_ref() as _).collect();
     let total: i64 = client
@@ -4773,15 +4827,23 @@ async fn get_client_events(
          LIMIT ${idx_limit} OFFSET ${idx_offset}",
         where_clause
     );
-    let rows = client.query(&data_sql, &data_refs).await.map_err(|e| Error::Database(e.to_string()))?;
+    let rows = client
+        .query(&data_sql, &data_refs)
+        .await
+        .map_err(|e| Error::Database(e.to_string()))?;
 
-    let events: Vec<_> = rows.iter().map(|r| json!({
-        "id": r.get::<_, Uuid>(0),
-        "report_type": r.get::<_, String>(1),
-        "payload": r.get::<_, Option<serde_json::Value>>(2),
-        "received_at": r.get::<_, chrono::DateTime<chrono::Utc>>(3),
-        "client_username": r.get::<_, Option<String>>(4),
-    })).collect();
+    let events: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<_, Uuid>(0),
+                "report_type": r.get::<_, String>(1),
+                "payload": r.get::<_, Option<serde_json::Value>>(2),
+                "received_at": r.get::<_, chrono::DateTime<chrono::Utc>>(3),
+                "client_username": r.get::<_, Option<String>>(4),
+            })
+        })
+        .collect();
 
     Ok(Json(json!({
         "events": events,

@@ -11,7 +11,11 @@
 pub struct SkeletonError(pub String);
 
 pub struct GovernanceContext;
-pub enum GovernanceDecision { Allow, Deny, Escalate }
+pub enum GovernanceDecision {
+    Allow,
+    Deny,
+    Escalate,
+}
 
 /// Primary entry trait (placeholder). Replaced with full surface in W2+.
 pub trait GovernanceEngine {
@@ -22,5 +26,6 @@ pub trait GovernanceEngine {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn skeleton_compiles() { /* W1 placeholder */ }
+    fn skeleton_compiles() { /* W1 placeholder */
+    }
 }

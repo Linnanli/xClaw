@@ -10,7 +10,6 @@
 #[error("dasclaw_crash skeleton error: {0}")]
 pub struct SkeletonError(pub String);
 
-
 /// Primary entry trait (placeholder). Replaced with full surface in W2+.
 pub trait CrashReporter {
     /// panic_hook + sentry adapter (cross-cutting gap fill).
@@ -20,5 +19,6 @@ pub trait CrashReporter {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn skeleton_compiles() { /* W1 placeholder */ }
+    fn skeleton_compiles() { /* W1 placeholder */
+    }
 }

@@ -13,15 +13,14 @@ use crate::state::EngineState;
 
 /// 构建 ExecApproval JSON 消息体，供 SubmissionParser 解析为 `Submission::ExecApproval`。
 fn build_exec_approval_json(request_id: &str, approved: bool) -> Result<String, String> {
-    let uuid = Uuid::parse_str(request_id)
-        .map_err(|e| format!("Invalid request_id UUID: {}", e))?;
+    let uuid =
+        Uuid::parse_str(request_id).map_err(|e| format!("Invalid request_id UUID: {}", e))?;
     let submission = Submission::ExecApproval {
         request_id: uuid,
         approved,
         always: false,
     };
-    serde_json::to_string(&submission)
-        .map_err(|e| format!("Failed to serialize approval: {}", e))
+    serde_json::to_string(&submission).map_err(|e| format!("Failed to serialize approval: {}", e))
 }
 
 /// 审批工具执行请求。

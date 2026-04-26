@@ -135,7 +135,10 @@ impl Session {
             .iter()
             .cloned()
             .enumerate()
-            .map(|(i, mut t)| { t.turn_number = i; t })
+            .map(|(i, mut t)| {
+                t.turn_number = i;
+                t
+            })
             .collect();
 
         let now = Utc::now();

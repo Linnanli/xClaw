@@ -176,7 +176,7 @@ macro_rules! all_tauri_commands {
             // ── 文件操作（Undo / Open）────────────────────────
             desktop_client::ipc::ic_undo_file_edit,
             desktop_client::ipc::ic_open_file_at_line,
-            
+
             // ── Plan Mode / Fork ────────────────────────────────
             desktop_client::ipc::ic_toggle_plan_mode,
             desktop_client::ipc::ic_approve_plan,

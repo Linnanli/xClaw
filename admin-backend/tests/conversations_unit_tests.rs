@@ -76,7 +76,8 @@ mod conversation_payload_tests {
                 {"role": "user", "content": "legacy message"}
             ]
         }"#;
-        let payload: ConversationReportPayload = serde_json::from_str(json).expect("旧 payload 应能反序列化");
+        let payload: ConversationReportPayload =
+            serde_json::from_str(json).expect("旧 payload 应能反序列化");
         assert_eq!(payload.messages.len(), 1);
         assert!(payload.messages[0].attachments.is_empty());
     }

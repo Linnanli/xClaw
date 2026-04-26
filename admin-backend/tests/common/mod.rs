@@ -58,10 +58,7 @@ pub fn configure_scanner_env(
 
     std::env::set_var("SCANNER_ENABLED", if enabled { "true" } else { "false" });
     restore_env_var("SCANNER_URL", url.map(ToString::to_string));
-    restore_env_var(
-        "SCANNER_TIMEOUT_MS",
-        timeout_ms.map(|v| v.to_string()),
-    );
+    restore_env_var("SCANNER_TIMEOUT_MS", timeout_ms.map(|v| v.to_string()));
 
     ScannerEnvGuard {
         _lock: lock,
@@ -90,9 +87,7 @@ pub async fn spawn_scanner_server(response: Value, delay_ms: u64) -> (String, Jo
         .expect("bind test scanner server");
     let addr: SocketAddr = listener.local_addr().expect("get scanner addr");
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app)
-            .await
-            .expect("serve scanner app");
+        axum::serve(listener, app).await.expect("serve scanner app");
     });
 
     (format!("http://{}", addr), handle)
@@ -118,9 +113,7 @@ pub async fn spawn_scanner_server_with_http_error(
         .expect("bind test scanner server");
     let addr: SocketAddr = listener.local_addr().expect("get scanner addr");
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app)
-            .await
-            .expect("serve scanner app");
+        axum::serve(listener, app).await.expect("serve scanner app");
     });
 
     (format!("http://{}", addr), handle)
@@ -231,9 +224,7 @@ pub async fn spawn_scanner_server_validating_llm_with_options(
         .expect("bind test scanner server");
     let addr: SocketAddr = listener.local_addr().expect("get scanner addr");
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app)
-            .await
-            .expect("serve scanner app");
+        axum::serve(listener, app).await.expect("serve scanner app");
     });
 
     (format!("http://{}", addr), handle)
@@ -302,11 +293,7 @@ pub async fn get_with_headers(
         .expect("execute GET request")
 }
 
-pub async fn post_json(
-    app: axum::Router,
-    path: &str,
-    body: Value,
-) -> axum::response::Response {
+pub async fn post_json(app: axum::Router, path: &str, body: Value) -> axum::response::Response {
     post_json_with_headers(app, path, body, &[]).await
 }
 
@@ -338,11 +325,7 @@ pub async fn post_json_with_headers(
     .expect("execute POST request")
 }
 
-pub async fn put_json(
-    app: axum::Router,
-    path: &str,
-    body: Value,
-) -> axum::response::Response {
+pub async fn put_json(app: axum::Router, path: &str, body: Value) -> axum::response::Response {
     let token = make_auth_token();
     let builder = Request::builder()
         .method("PUT")
@@ -372,12 +355,7 @@ pub async fn response_json(resp: axum::response::Response) -> Value {
 }
 
 pub fn assert_status_ok(status: StatusCode) {
-    assert_eq!(
-        status,
-        StatusCode::OK,
-        "expected HTTP 200, got {}",
-        status
-    );
+    assert_eq!(status, StatusCode::OK, "expected HTTP 200, got {}", status);
 }
 
 pub fn unique_name(prefix: &str) -> String {

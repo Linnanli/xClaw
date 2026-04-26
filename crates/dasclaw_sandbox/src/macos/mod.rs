@@ -185,10 +185,7 @@ mod tests {
     fn escape_sbpl_path_handles_quotes_and_backslashes() {
         use std::path::Path;
         assert_eq!(escape_sbpl_path(Path::new("/normal/path")), "/normal/path");
-        assert_eq!(
-            escape_sbpl_path(Path::new("/has\"quote")),
-            "/has\\\"quote"
-        );
+        assert_eq!(escape_sbpl_path(Path::new("/has\"quote")), "/has\\\"quote");
         assert_eq!(
             escape_sbpl_path(Path::new("/has\\backslash")),
             "/has\\\\backslash"
@@ -217,7 +214,8 @@ mod tests {
         std::env::set_var("DASCLAW_SBX_SENTINEL", "leaked");
         let sb = SeatbeltSandbox::new();
         let mut cmd = Command::new("/bin/sh");
-        cmd.arg("-c").arg("echo \"v=${DASCLAW_SBX_SENTINEL:-empty}\"");
+        cmd.arg("-c")
+            .arg("echo \"v=${DASCLAW_SBX_SENTINEL:-empty}\"");
         let req = SandboxExecRequest {
             command: cmd,
             policy: SandboxPolicy::read_only_defaults(),

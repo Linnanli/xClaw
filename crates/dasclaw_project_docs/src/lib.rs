@@ -10,7 +10,6 @@
 #[error("dasclaw_project_docs skeleton error: {0}")]
 pub struct SkeletonError(pub String);
 
-
 /// Primary entry trait (placeholder). Replaced with full surface in W2+.
 pub trait ProjectDocLoader {
     /// AGENTS.md / CLAUDE.md multi-layer project doc loader.
@@ -20,5 +19,6 @@ pub trait ProjectDocLoader {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn skeleton_compiles() { /* W1 placeholder */ }
+    fn skeleton_compiles() { /* W1 placeholder */
+    }
 }

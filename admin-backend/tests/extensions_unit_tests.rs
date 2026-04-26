@@ -68,9 +68,12 @@ fn req_extensions_008_validate_skill_package_rejects_invalid_name() {
 
 #[test]
 fn req_extensions_009_validate_skill_package_rejects_empty_activation() {
-    let content = "---\nname: valid-skill\nversion: 1.0.0\ndescription: x\nactivation: {}\n---\n# body";
+    let content =
+        "---\nname: valid-skill\nversion: 1.0.0\ndescription: x\nactivation: {}\n---\n# body";
     let err = validate_skill_package(content).expect_err("should reject empty activation");
-    assert!(err.to_string().contains("activation.keywords 或 activation.patterns"));
+    assert!(err
+        .to_string()
+        .contains("activation.keywords 或 activation.patterns"));
 }
 
 #[test]

@@ -10,7 +10,6 @@
 #[error("dasclaw_hooks skeleton error: {0}")]
 pub struct SkeletonError(pub String);
 
-
 /// Primary entry trait (placeholder). Replaced with full surface in W2+.
 pub trait HookEngine {
     /// Schema + Registry + Engine three-layer hook system (codex-style).
@@ -20,5 +19,6 @@ pub trait HookEngine {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn skeleton_compiles() { /* W1 placeholder */ }
+    fn skeleton_compiles() { /* W1 placeholder */
+    }
 }

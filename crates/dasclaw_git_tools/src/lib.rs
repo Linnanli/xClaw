@@ -10,7 +10,6 @@
 #[error("dasclaw_git_tools skeleton error: {0}")]
 pub struct SkeletonError(pub String);
 
-
 /// Primary entry trait (placeholder). Replaced with full surface in W2+.
 pub trait GitTool {
     /// Git operation toolset: branch/commit/diff/log/push/runner/stale/status (fork private cargo, ~1,331 LOC).
@@ -20,5 +19,6 @@ pub trait GitTool {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn skeleton_compiles() { /* W1 placeholder */ }
+    fn skeleton_compiles() { /* W1 placeholder */
+    }
 }

@@ -111,7 +111,10 @@ mod tests {
             .with_system_prompt("sys".into());
         assert_eq!(ctx.messages.len(), 1);
         assert_eq!(ctx.job_description.as_deref(), Some("repro bug"));
-        assert_eq!(ctx.metadata.get("thread_id").map(String::as_str), Some("abc"));
+        assert_eq!(
+            ctx.metadata.get("thread_id").map(String::as_str),
+            Some("abc")
+        );
         assert_eq!(ctx.system_prompt.as_deref(), Some("sys"));
     }
 }

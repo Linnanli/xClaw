@@ -16,7 +16,10 @@ pub async fn persist_disabled_items(
         .map_err(|e| format!("Failed to persist disabled {}: {}", subject, e))
 }
 
-pub async fn load_string_set(state: &AppState, setting_key: &str) -> Result<HashSet<String>, String> {
+pub async fn load_string_set(
+    state: &AppState,
+    setting_key: &str,
+) -> Result<HashSet<String>, String> {
     let db = state.db.as_ref().ok_or("Database not available")?;
     let value = db
         .get_setting(&state.scope_id, setting_key)

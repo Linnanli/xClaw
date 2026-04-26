@@ -254,36 +254,36 @@ fn build_attachments(
     let mut report_attachments = Vec::new();
 
     for attachment in attachments.unwrap_or_default() {
-            let kind = match attachment.kind.as_str() {
-                "audio" => AttachmentKind::Audio,
-                "image" => AttachmentKind::Image,
-                "document" => AttachmentKind::Document,
-                _ => AttachmentKind::from_mime_type(&attachment.mime_type),
-            };
+        let kind = match attachment.kind.as_str() {
+            "audio" => AttachmentKind::Audio,
+            "image" => AttachmentKind::Image,
+            "document" => AttachmentKind::Document,
+            _ => AttachmentKind::from_mime_type(&attachment.mime_type),
+        };
 
-            report_attachments.push(ConversationAttachment::from_frontend(
-                attachment.id.clone(),
-                attachment.kind.clone(),
-                attachment.mime_type.clone(),
-                attachment.filename.clone(),
-                attachment.size_bytes,
-                attachment.extracted_text.clone(),
-                &attachment.data,
-                attachment.duration_secs,
-            ));
+        report_attachments.push(ConversationAttachment::from_frontend(
+            attachment.id.clone(),
+            attachment.kind.clone(),
+            attachment.mime_type.clone(),
+            attachment.filename.clone(),
+            attachment.size_bytes,
+            attachment.extracted_text.clone(),
+            &attachment.data,
+            attachment.duration_secs,
+        ));
 
-            incoming_attachments.push(IncomingAttachment {
-                id: attachment.id,
-                kind,
-                mime_type: attachment.mime_type,
-                filename: attachment.filename,
-                size_bytes: attachment.size_bytes,
-                source_url: None,
-                storage_key: None,
-                extracted_text: attachment.extracted_text,
-                data: attachment.data,
-                duration_secs: attachment.duration_secs,
-            });
+        incoming_attachments.push(IncomingAttachment {
+            id: attachment.id,
+            kind,
+            mime_type: attachment.mime_type,
+            filename: attachment.filename,
+            size_bytes: attachment.size_bytes,
+            source_url: None,
+            storage_key: None,
+            extracted_text: attachment.extracted_text,
+            data: attachment.data,
+            duration_secs: attachment.duration_secs,
+        });
     }
 
     Ok((incoming_attachments, report_attachments))

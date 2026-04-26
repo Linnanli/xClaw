@@ -256,7 +256,10 @@ mod tests {
     #[test]
     fn restricted_and_proxy_routed_are_distinct() {
         // 编译期常量比较，确保两个 mode 没被合并。
-        assert_ne!(NetworkSeccompMode::Restricted, NetworkSeccompMode::ProxyRouted);
+        assert_ne!(
+            NetworkSeccompMode::Restricted,
+            NetworkSeccompMode::ProxyRouted
+        );
     }
 
     #[test]

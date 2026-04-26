@@ -125,7 +125,10 @@ fn restart_job_title(job: &ironclaw::context::JobContext, failure_reason: &str) 
         return job.title.clone();
     }
 
-    format!("Previous attempt failed: {}. Retry: {}", failure_reason, job.title)
+    format!(
+        "Previous attempt failed: {}. Retry: {}",
+        failure_reason, job.title
+    )
 }
 
 // ─── Tauri Commands ──────────────────────────────────────────────────
@@ -347,7 +350,10 @@ mod cancel_tests {
             .await
             .expect_err("active jobs require scheduler stop before marking cancelled");
 
-        assert_eq!(error, "Failed to cancel job: active job scheduler unavailable");
+        assert_eq!(
+            error,
+            "Failed to cancel job: active job scheduler unavailable"
+        );
     }
 
     #[tokio::test]
@@ -380,7 +386,10 @@ pub async fn ic_restart_job(
     ensure_owned_job(state, &job)?;
 
     if job.state.is_active() {
-        return Err(format!("Cannot restart active job in state '{}'", job.state));
+        return Err(format!(
+            "Cannot restart active job in state '{}'",
+            job.state
+        ));
     }
 
     let scheduler = state

@@ -10,7 +10,6 @@
 #[error("dasclaw_lsp skeleton error: {0}")]
 pub struct SkeletonError(pub String);
 
-
 /// Primary entry trait (placeholder). Replaced with full surface in W2+.
 pub trait LspClient {
     /// LSP client wrapper (textDocument/* tools, fork private cargo, ~1,694 LOC).
@@ -20,5 +19,6 @@ pub trait LspClient {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn skeleton_compiles() { /* W1 placeholder */ }
+    fn skeleton_compiles() { /* W1 placeholder */
+    }
 }
