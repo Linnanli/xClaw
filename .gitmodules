@@ -1,6 +1,7 @@
 [submodule "ironclaw"]
 	path = desktop-client/ironclaw
-	url = https://github.com/nearai/ironclaw.git
+	url = https://github.com/Linnanli/xclaw-ironclaw.git
+	branch = x-claw-core
 [submodule "claw-code"]
 	path = claw-code
 	url = https://github.com/Linnanli/xclaw-claw-code.git
