@@ -28,6 +28,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -48,6 +50,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -71,6 +75,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -96,6 +102,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -113,6 +121,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -133,6 +143,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -150,6 +162,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
       - name: Build Docker image
         run: docker build -t ironclaw-test:ci .
 
@@ -161,6 +175,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
+          submodules: recursive
           fetch-depth: 0
       - name: Check version bumps for changed extensions
         env:

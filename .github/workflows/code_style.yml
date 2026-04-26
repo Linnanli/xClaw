@@ -9,6 +9,8 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v6
+      with:
+        submodules: recursive
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
@@ -22,6 +24,8 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v6
+      with:
+        submodules: recursive
     - name: Run cargo deny
       uses: EmbarkStudios/cargo-deny-action@v2
 
@@ -41,6 +45,8 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v6
+      with:
+        submodules: recursive
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
@@ -68,6 +74,8 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v6
+      with:
+        submodules: recursive
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
@@ -85,6 +93,7 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v6
       with:
+        submodules: recursive
         fetch-depth: 0
     - uses: actions/setup-python@v5
       with:
