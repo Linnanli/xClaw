@@ -1,5 +1,9 @@
 # architecture-refactor — 2026-04 吸收式重构（ADR-101）
 
+> **v2.4 部分补齐**（2026-04-26）：31 补 3 处蓝图缺口（dasclaw_lsp / dasclaw_git_tools / dasclaw_routines，基于 39 §3 实测）；W1 骨架 14 → 17 个，P1 crate 数 4 → 7。
+>
+> **v2.3 部分订正**（2026-04-26）：31/32 订正 fork 处理矛盾（git 实测 fork 有 42 fork-only commit，W1-W6 保留，W6+ 才删；永不升级 0.26）。
+
 > **v2.2 文档集合**（2026-04-25 ~ 2026-04-26）
 > 本目录是本次「吸收式重构」决策与执行计划的主资产。9 份核心文档 + 2 份 ADR。
 
@@ -10,8 +14,8 @@
 | # | 文档 | 角色 | 当前版本 |
 |---|------|------|---------|
 | 30 | [30-architecture-truth.md](30-architecture-truth.md) | **事实矩阵**：四方 + ironclaw fork 现状盘点（一切结论的事实底盘） | **v2.2** |
-| 31 | [31-target-architecture.md](31-target-architecture.md) | **目标架构**：15 crate 蓝图 + ADR-101 ~ ADR-110（含 dasclaw_bridge_lite） | **v2.2** |
-| 32 | [32-execution-plan.md](32-execution-plan.md) | **执行计划**：W1-W9 共 9 个 Wave，~8-10 月（v2.2 W6 扩 5 周） | **v2.2** |
+| 31 | [31-target-architecture.md](31-target-architecture.md) | **目标架构** ：18 crate 蓝图 + ADR-101 ~ ADR-110（v2.4 补 dasclaw_lsp/git_tools/routines） | **v2.4** |
+| 32 | [32-execution-plan.md](32-execution-plan.md) | **执行计划**：W1-W9 共9 个 Wave，~8-10 月（v2.4 加 commit 前 code-simplifier + code-review-expert 准则） | **v2.4** |
 | 33 | [33-feasibility-and-validation.md](33-feasibility-and-validation.md) | **可行性 + 验证**：18 个目标 + 10 个风险 + 三层 E2E（含 §3.8 tauri-driver vs Computer Use vs Lima/Codespaces） | **v2.2** |
 
 ### 🔍 能力清单（35-38）
@@ -21,8 +25,7 @@
 | 35 | [35-codex-capability-inventory.md](35-codex-capability-inventory.md) | codex-cli-main 全量盘点 + §Q 88 commit 增量 | **v0.3** |
 | 36 | [36-claw-code-capability-inventory.md](36-claw-code-capability-inventory.md) | claw-code 全量盘点（治理 6 件套 / mock-anthropic 27 场景） | v1 |
 | 37 | [37-ironclaw-main-capability-inventory.md](37-ironclaw-main-capability-inventory.md) | ironclaw-main 上游 v0.26 全量盘点（464,222 LOC） | v1 |
-| 38 | [38-desktop-client-ironclaw-fork-inventory.md](38-desktop-client-ironclaw-fork-inventory.md) | desktop-client/ironclaw fork 全量盘点（295,658 LOC） | v1 |
-
+| 38 | [38-desktop-client-ironclaw-fork-inventory.md](38-desktop-client-ironclaw-fork-inventory.md) | desktop-client/ironclaw fork 全量盘点（295,658 LOC） | v1 || 39 | [39-fork-private-cargo-inventory.md](39-fork-private-cargo-inventory.md) | **fork 私货迁移地图**：49 独家文件 / 93 修改文件 / ≈14,800 LOC + W6+ 删 fork 前置 checklist | **v1** |
 ### 📝 架构评审
 
 | 文档 | 内容 |

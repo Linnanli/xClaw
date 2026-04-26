@@ -1,5 +1,9 @@
 # 31 — 目标架构（边界清晰、可复用）
 
+> **v2.4 (2026-04-26)** · 补 3 处蓝图缺口（基于 [39-fork-private-cargo-inventory.md](39-fork-private-cargo-inventory.md) §3 实测）：新增 `dasclaw_lsp`（fork 私货 1,694 LOC）/ `dasclaw_git_tools`（fork 私货 1,331 LOC）/ `dasclaw_routines`（提升点 31 LOC，路由 desktop-client/ironclaw 0.24 routines 模块）。原 P1 4 个 → 7 个，W1 骨架 14 → **17**。
+
+> **v2.3 (2026-04-26)** · 订正 fork 处理矛盾：ADR-105 §落地 + §4.5 废弃表与 ADR-101 §136 对齐。git log 实测 fork 在 ironclaw-v0.26.0 tag 之后有 **42 fork-only commit**（Phase 2/3 dasclaw 接线核心成果：rig-core 清理 / ClawCodeLlmProvider / x_claw_agent host trait 接线 / IronclawSafetyHook / 5 agent 模块迁移 / SessionManager / routines 提升）。决策：W1-W6 保留 fork 作为私货来源，W6+ 私货全迁出后才删除；**永不**直接升级 fork 到 0.26 顶层依赖（与 38 §137 一致）。
+
 > **v2.1 (2026-04-25)** · 基于 [30-architecture-truth.md](30-architecture-truth.md) v2（146 子能力、15 大类、~95% 覆盖率）的事实矩阵。
 > 本文档替代 11/16 等历史架构文档（详见 cleanup-proposal.md）。
 >
@@ -170,9 +174,12 @@ flowchart TB
 - **核心策略**：抽 v2 的 4 trait 骨架 + 关键类型 → 注入 x_claw_agent；不复制 26k LOC 实现
 
 ### ADR-105：保留 ironclaw 集成层
-**决策**：L5（LLM/Channels/Memory/Routines/Secrets/Doc）继续依赖 `ironclaw-main`，但通过 trait 暴露给 L3。
+**决策**：L5（LLM/Channels/Memory/Routines/Secrets/Doc）继续依赖 `desktop-client/ironclaw` fork（吸收源），不直接升级到 ironclaw-main 0.26 顶层依赖。
 **理由**：这部分是 ironclaw 真正的护城河（多通道、混合搜索、Routines），重写无价值。
-**落地**：W1 把 desktop-client/ironclaw 子模块切回上游 ironclaw-main 0.26+ git submodule，删除 path fork。
+**落地（v2.3 订正）**：fork 在 0.26.0 tag 之后还有 **42 个 fork-only commit**（Phase 2/3 dasclaw 接线全部成果：rig-core 清理 / ClawCodeLlmProvider / x_claw_agent host trait 接线 / IronclawSafetyHook / 5 agent 模块迁移 / SessionManager / routines 提升）。这些私货是吸收式重构的核心成果，**不能丢**。
+- W1-W6 期间：fork 保留作为私货来源（path dep + ironclaw_safety + ironclaw_common 路径不动）
+- W6+ 收尾：私货全部迁出到 dasclaw_* 子 crate 后，**才**删除 fork
+- **永不**直接升级 fork 到 0.26（与 ADR-101 §136 一致；38 §137 已实证升级风险高 30k+ LOC + 5 migration）
 
 ### ADR-106：项目级文档统一为 AGENTS.md 协议
 **决策**：新建 `dasclaw_project_docs` crate，统一加载优先级：`AGENTS.md` > `CLAUDE.md` > `.codex/agents.md` > project config。多层合并：user 全局 → project 项目级 → cwd 覆盖，与 codex `project_doc_max_bytes` 机制一致。
@@ -237,7 +244,7 @@ flowchart TB
 | `crates/dasclaw_project_docs` | codex/claw 合并 | AGENTS.md / CLAUDE.md 多层加载 |
 | `crates/dasclaw_pty` | codex/exec-server port | portable-pty 信号转发 + resize |
 
-### 4.2 新建（P1 推荐，4 个）
+### 4.2 新建（P1 推荐，7 个） — v2.4 补 3
 
 | crate | 来源 | 提供 |
 |-------|------|------|
@@ -245,6 +252,9 @@ flowchart TB
 | `crates/dasclaw_mcp` | claw-code 6 transport port | 统一 MCP 客户端 |
 | `crates/dasclaw_execpolicy` | codex port | Starlark 权限规则 |
 | `crates/dasclaw_bash_validation` | claw-code/runtime/bash_validation.rs port | bash 注入检测（6 验证模块 × 1004 LOC）|
+| `crates/dasclaw_lsp` **(v2.4 新)** | fork 私货迁出（5 文件 ≈ 1,694 LOC：`tools/builtin/lsp/{tool,client,mod,server_config,protocol}`） | LSP 客户端封装 + textDocument/* 包装工具 |
+| `crates/dasclaw_git_tools` **(v2.4 新)** | fork 私货迁出（9 文件 ≈ 1,331 LOC：`tools/builtin/git/{branch,commit,diff,log,push,runner,stale,status,mod}`） | Git 操作工具集（与 dasclaw_governance::stale_branch 协作） |
+| `crates/dasclaw_routines` **(v2.4 新)** | fork `desktop-client/ironclaw/.../routines/` 提升 | 例程编排（与 dasclaw_governance::recovery_recipes 衔接） |
 
 ### 4.3 新建（P2 增强，5 个）
 
@@ -263,12 +273,13 @@ flowchart TB
 - `desktop-client/ironclaw/crates/ironclaw_safety` → 升级为 `crates/dasclaw_safety`（移到顶层 workspace）
 - `desktop-client/ironclaw/crates/ironclaw_common` → 升级为 `crates/dasclaw_common`
 
-### 4.5 废弃 / 迁移
+### 4.5 废弃 / 迁移（v2.3 订正）
 
-| 现有 | 处理 |
-|------|------|
-| `crates/x_claw_agent`（Phase 3 Step C） | 内容并入 `dasclaw_core`，crate 删除 |
-| `desktop-client/ironclaw/`（0.24 精简 fork） | 删除 path 子模块，改用 ironclaw-main 顶层依赖 |
+| 现有 | 处理 | 时机 |
+|------|------|------|
+| `crates/x_claw_agent`（Phase 3 Step C） | 内容并入 `dasclaw_core`，crate rename | W6 收尾 |
+| `desktop-client/ironclaw/`（fork @ 0.24.0 + 42 fork-only commit） | **W1-W6 保留作为私货来源**；W6+ 私货全部迁出到 dasclaw_* 后才删除 | W6+ |
+| **直接升级 fork 到 ironclaw-main 0.26** | ❌ **永不**（与 ADR-101 §136 一致；38 §137 实证升级风险 30k+ LOC + 5 migration） | — |
 
 ---
 

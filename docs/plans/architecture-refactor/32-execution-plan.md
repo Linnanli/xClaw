@@ -1,5 +1,9 @@
 # 32 — 分阶段执行计划
 
+> **v2.4 (2026-04-26)** · 新增「通用 Wave 完成准则」一节：每个 Wave 任意大功能块 commit 之前，必须依次跑 `code-simplifier`（清理）+ `code-review-expert`（严肃 review，P0/P1 阻塞 commit）。三个 review skill 已对比评估，code-review-expert 为唯一首选（SOLID + 语言特化 + 架构异味）。
+
+> **v2.3 (2026-04-26)** · W1 任务 1 订正：不删 fork、不升级 0.26。git log 实测 fork 有 42 fork-only commit（Phase 2/3 dasclaw 接线核心成果），W1-W6 保留作为私货来源，W6+ 才删除。与 31 v2.3 + 38 §137 对齐。
+
 > **v2.2 (2026-04-25)** · 配套 [31-target-architecture.md](31-target-architecture.md) v2.2 + [30-architecture-truth.md](30-architecture-truth.md) v2 + [35-codex-capability-inventory.md](35-codex-capability-inventory.md) v0.3。
 > 共 9 个 Wave，每个 Wave 2-5 周。总计 ~8-10 个月（v2.2 比 v2.1 +1 月，吸收 ironclaw bridge_lite + workspace 去多租户化 + codex 88 commit 增量跟进）。
 >
@@ -59,6 +63,42 @@
 
 ---
 
+## 通用 Wave 完成准则（v2.4 新增）
+
+> **背景**：v2.3 之前各 Wave 验收只列 build/test/clippy，缺乏 commit 前的代码 review 环节。v2.4 起每个 Wave **任意一个大功能块（≥1 crate 的核心 trait 实现 / ≥300 LOC 新代码 / 涉及安全或 IPC 边界）** 完成后，**commit 之前**必须依次经过下述两步 skill 流程，结果记入该 Wave 验收 checklist。
+
+### Step 1 — 写完即清理（轻量、必做）
+
+应用 [`.github/skills/code-simplifier`](../../.github/skills/code-simplifier/SKILL.md)：
+
+- 减嵌套、去冗余、改命名、合并相关逻辑
+- 移除显而易见操作的注释
+- **不改行为**，只改可读性
+- 项目特化规则：Rust 顶层函数显式返回类型；禁止嵌套三元；显式优于紧凑
+
+### Step 2 — 大块完成做严肃 review（必做）
+
+应用 [`skills/code-review-expert`](../../skills/code-review-expert/SKILL.md)：
+
+- 严重度：**P0 必须修才能 commit / P1 应当修 / P2 可创建 follow-up / P3 可选**
+- 强项 4 维：**SOLID 违规 + 架构异味 + 安全风险 + 语言特化**（Rust → 自动加载 references/language-rust.md，覆盖 unwrap/clone 滥用、生命周期、Send/Sync、unsafe）
+- 必须查：所有变更跨边界路径（auth / IPC / sandbox / approval / 数据写入 / 网络）
+- **删除候选评估**：识别死代码、过度抽象、可移除的 feature flag
+
+### 不用 `.codex/skills/code-review` 的原因
+
+- 该 skill 与 code-review-expert 范围重叠，但**依赖 agent delegation（THOROUGH tier）**，调度成本高
+- 严重度只有 4 级 + 通用清单，没有 SOLID 专项 / 语言专项 reference
+- 结论：**code-review-expert 是 commit 前 review 的唯一首选**；code-review 仅在 expert 不可用时降级使用
+
+### Wave 验收 checklist 通用项（每 Wave 自动叠加）
+
+- [ ] 大功能块 commit 前已跑 code-simplifier
+- [ ] 大功能块 commit 前已跑 code-review-expert，P0/P1 全部修复或显式接受 follow-up
+- [ ] review 输出（findings 列表 + 修复说明）作为 commit message 一部分或 PR 描述
+
+---
+
 ## W1 · 基线收敛（3 周）
 
 ### 进入条件
@@ -89,11 +129,15 @@
 
 > 完整对比报告参见对话 §"Agent Runtime 三家深度对比"。
 
-### 任务
-1. **删除 desktop-client/ironclaw fork**（ADR-101 落地）
-   - 备份当前 desktop-client/ironclaw 到 archive/
-   - 在 desktop-client/Cargo.toml 改为依赖顶层 ironclaw-main 0.26（path 或 git submodule）
-   - 把 ironclaw-main 加入顶层 workspace.members
+### 任务（v2.3 订正：W1 不删 fork、不升级 0.26）
+
+> **背景订正**：之前版本写 "删除 fork + 顶层 0.26 依赖" 与 ADR-101 §136 + 38 §137 矛盾。git log 实测 fork 在 0.26.0 tag 之后有 **42 fork-only commit**（Phase 2/3 dasclaw 接线核心成果），不能丢。
+
+1. **保留 desktop-client/ironclaw fork**（W1-W6 期间作为私货来源）
+   - **不**备份到 archive/、**不**删除、**不**改顶层依赖
+   - desktop-client/Cargo.toml 维持现状（`ironclaw_safety` + `ironclaw_common` path dep）
+   - 顶层 workspace.members 维持现状（含 `desktop-client/ironclaw` + 其 2 子 crate）
+   - 删除时机：W6+ 私货全迁完后
 2. **新建 crate 骨架**（无实现，仅目录 + Cargo.toml + lib.rs trait）
    - crates/dasclaw_core                ← 由 x_claw_agent 升级，文件保留原路径，crate name 在 W6 切换
    - crates/dasclaw_sandbox
