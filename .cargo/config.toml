@@ -1,14 +1,14 @@
 # 加速开发编译
 #
-# 1) sccache：编译产物缓存。已通过 brew/cargo 安装到 /usr/local/bin/sccache 或 ~/.cargo/bin/sccache。
-#    若本机未装可执行 `cargo install sccache` 或 `brew install sccache`。
-#    通过 [build].rustc-wrapper 让所有 cargo 命令自动走缓存（首次冷编依旧慢，但二次起会显著加速）。
+# 1) sccache：编译产物缓存。本仓库**不**在 [build].rustc-wrapper 里写死 sccache，
+#    因为 CI runner 默认未安装 sccache，会导致 `cargo` 直接报
+#    "could not execute process `sccache ...` (No such file or directory)"。
+#    需要本地启用缓存的开发者请在 shell rc 里设置环境变量：
+#        export RUSTC_WRAPPER=sccache
+#    或在 ~/.cargo/config.toml（用户级，不进 git）里加 [build] rustc-wrapper = "sccache"。
 # 2) macOS linker：使用 Xcode 15+ 的 ld-new。
 # 3) Linux linker：可选 mold，见下方注释。
 # 4) 测试：建议用 cargo-nextest（`cargo install cargo-nextest`），命令 `cargo nextest run -p <crate>`。
-
-[build]
-rustc-wrapper = "sccache"
 
 [target.aarch64-apple-darwin]
 rustflags = ["-C", "link-arg=-fuse-ld=/usr/bin/ld"]
