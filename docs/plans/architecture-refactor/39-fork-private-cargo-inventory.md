@@ -280,6 +280,45 @@
 - 31 v2.3 §4.5 「desktop-client/ironclaw — W1-W6 保留作为私货来源；W6+ 私货全迁出后才删除」的**具体打勾清单**
 - 32 v2.3 W6+ 任务的**前置依赖**
 
-## 7. 变更日志
+## 7. LlmProvider facade 合同（C-1，v1.1 增补）
 
+> §1.1 LLM 层迁移触发 trait 形态决策。在真搬 1,334 LOC 之前，先在 `x_claw_agent::llm` 立 zero-implementation 的 facade trait `LlmProviderFacade`，强制把 W6 搬迁后的目标接口形状固化下来。
+
+**facade 代码位置**：[`crates/x_claw_agent/src/llm.rs`](../../crates/x_claw_agent/src/llm.rs)
+
+### 7.1 fork 现 trait → facade 决策表（11 个 method）
+
+| fork `LlmProvider` method | facade keep? | 理由 |
+|---|:---:|---|
+| `model_name() -> &str` | ✅ keep | 标识 |
+| `complete(req)` | ⚠️ drop（合并到 with_tools） | 已被 `complete_with_tools` 覆盖 |
+| `complete_with_tools(req)` | ✅ **核心** | agent loop 主入口 |
+| `complete_with_tools_stream(req, tx)` | ✅ keep | UI streaming 必须 |
+| `list_models()` | ✅ keep | provider 注册 UI 用 |
+| `model_metadata()` | ✅ keep | context length 决策 |
+| `effective_model_name(req)` | ✅ keep | alias 路由 |
+| `active_model_name()` | ⚠️ drop（合并） | 等价于 `effective_model_name(None)` |
+| `set_model(model)` | ✅ keep | 运行时切模型 |
+| `cost_per_token() -> (Decimal, Decimal)` | ❌ drop | cost 留 ironclaw 应用层 |
+| `calculate_cost(in, out) -> Decimal` | ❌ drop | 同上 |
+| `cache_write_multiplier()` | ❌ drop | 同上 |
+| `cache_read_discount()` | ❌ drop | 同上 |
+| `supports_streaming() -> bool` | ✅ keep | 调用方判定路径 |
+
+**结论**：11 中 7 进 facade，4 个 cost/cache 留 ironclaw 应用层（W6+ 决定是否上独立扩展 trait），2 个合并/drop。
+
+### 7.2 错误类型策略
+
+facade 用 [`HostError`](../../crates/x_claw_agent/src/traits.rs)（即 `Box<dyn std::error::Error + Send + Sync>`），与 `LlmCompleter` 一致。具体 provider 内部仍可用 fork 的 `LlmError`，调用方只看 boxed dyn，需要细节时 downcast。这样既不污染 dasclaw_core，又保留错误链。
+
+### 7.3 W6 搬迁打勾点（与 §5.5 联动）
+
+- [ ] `desktop-client/ironclaw/src/llm/provider.rs` 的 `LlmProvider` trait 改为继承 `x_claw_agent::llm::LlmProviderFacade`，编译期强制现存 ≥ 8 个 provider 实现都满足合同
+- [ ] `claw_code_provider.rs` `impl LlmProviderFacade for ClawCodeLlmProvider`（先不动 `LlmProvider`）
+- [ ] 把 `LlmProviderFacade` 从 `x_claw_agent::llm` 重命名为 `dasclaw_core::llm::LlmProvider` 的同时把 1,334 LOC 实现搬到 `dasclaw_core::llm::claw_code`
+- [ ] fork 内 `crate::llm::provider::LlmProvider` 删除，所有引用走 `dasclaw_core::llm::LlmProvider`
+
+## 8. 变更日志
+
+- **v1.1 (2026-04-26)** — 新增 §7：LlmProvider facade 合同表 + 错误策略 + W6 搬迁打勾点。配套代码：`x_claw_agent::llm::LlmProviderFacade`（zero-implementation）。
 - **v1.0 (2026-04-26)** — 首发。基于 `git log ironclaw-v0.26.0..HEAD --no-merges` 实测 42 commit / 49 独家文件 / 93 修改文件 / ≈ 14,800 LOC 私货。

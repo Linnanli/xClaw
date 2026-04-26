@@ -17,6 +17,7 @@ pub mod compaction;
 pub mod context_monitor;
 pub mod hooks;
 pub mod intent;
+pub mod llm;
 pub mod messages;
 pub mod permissions;
 pub mod reasoning_ctx;

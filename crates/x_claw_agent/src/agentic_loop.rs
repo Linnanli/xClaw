@@ -221,12 +221,10 @@ pub async fn run_agentic_loop(
         // Safety hook: mutate text completions before the delegate sees them.
         // Tool-call responses skip this hook; delegates apply the
         // tool-level hooks themselves inside `execute_tool_calls`.
-        if let RespondResult::Text(ref mut text) = output.result {
-            if let Err(e) = hooks.safety.after_completion(text).await {
-                return Err(
-                    format!("safety hook error in after_completion: {e}").into()
-                );
-            }
+        if let RespondResult::Text(ref mut text) = output.result
+            && let Err(e) = hooks.safety.after_completion(text).await
+        {
+            return Err(format!("safety hook error in after_completion: {e}").into());
         }
 
         match &output.result {
