@@ -1,0 +1,13 @@
+[package]
+name = "dasclaw_pty"
+version = "0.0.0-w1"
+edition = "2021"
+description = "portable-pty wrapper with signal forwarding + resize."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = "1"

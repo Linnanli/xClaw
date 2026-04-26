@@ -2375,6 +2375,126 @@ dependencies = [
 ]
 
 [[package]]
+name = "dasclaw_apply_patch"
+version = "0.0.0-w1"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dasclaw_bash_validation"
+version = "0.0.0-w1"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dasclaw_crash"
+version = "0.0.0-w1"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dasclaw_execpolicy"
+version = "0.0.0-w1"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dasclaw_features"
+version = "0.0.0-w1"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dasclaw_git_tools"
+version = "0.0.0-w1"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dasclaw_governance"
+version = "0.0.0-w1"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dasclaw_hooks"
+version = "0.0.0-w1"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dasclaw_identity"
+version = "0.0.0-w1"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dasclaw_lsp"
+version = "0.0.0-w1"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dasclaw_mcp"
+version = "0.0.0-w1"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dasclaw_net_proxy"
+version = "0.0.0-w1"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dasclaw_observability"
+version = "0.0.0-w1"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dasclaw_project_docs"
+version = "0.0.0-w1"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dasclaw_pty"
+version = "0.0.0-w1"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dasclaw_routines"
+version = "0.0.0-w1"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dasclaw_sandbox"
+version = "0.0.0-w1"
+dependencies = [
+ "thiserror 1.0.69",
+ "url",
+]
+
+[[package]]
 name = "data-encoding"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2512,6 +2632,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
+ "dasclaw_sandbox",
  "dirs 6.0.0",
  "dotenvy",
  "ed25519-dalek",

@@ -1,0 +1,14 @@
+[package]
+name = "dasclaw_sandbox"
+version = "0.0.0-w1"
+edition = "2021"
+description = "Cross-platform sandbox (Linux landlock / macOS seatbelt / Windows job-object)."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = "1"
+url = "2"

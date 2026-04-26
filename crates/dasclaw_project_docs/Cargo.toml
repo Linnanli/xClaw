@@ -1,0 +1,13 @@
+[package]
+name = "dasclaw_project_docs"
+version = "0.0.0-w1"
+edition = "2021"
+description = "AGENTS.md / CLAUDE.md multi-layer project doc loader."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = "1"

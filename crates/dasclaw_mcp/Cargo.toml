@@ -1,0 +1,13 @@
+[package]
+name = "dasclaw_mcp"
+version = "0.0.0-w1"
+edition = "2021"
+description = "MCP client with 6 transports (Stdio / SSE / HTTP / WebSocket / SDK / ManagedProxy)."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = "1"

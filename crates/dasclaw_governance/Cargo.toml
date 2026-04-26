@@ -1,0 +1,13 @@
+[package]
+name = "dasclaw_governance"
+version = "0.0.0-w1"
+edition = "2021"
+description = "Self-governance 6-pack: policy / recovery / trust / branch_lock / stale / green."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = "1"

@@ -1,0 +1,13 @@
+[package]
+name = "dasclaw_observability"
+version = "0.0.0-w1"
+edition = "2021"
+description = "Unified observability + rollout-trace 4 sub-tables (codex + ironclaw)."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = "1"

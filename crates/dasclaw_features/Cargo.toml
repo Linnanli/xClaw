@@ -1,0 +1,13 @@
+[package]
+name = "dasclaw_features"
+version = "0.0.0-w1"
+edition = "2021"
+description = "4-stage feature flag lifecycle (codex port)."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = "1"

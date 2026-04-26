@@ -1,0 +1,13 @@
+[package]
+name = "dasclaw_net_proxy"
+version = "0.0.0-w1"
+edition = "2021"
+description = "rama-based MITM proxy with self-signed CA (codex port)."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = "1"
