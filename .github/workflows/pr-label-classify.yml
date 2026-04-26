@@ -11,6 +11,13 @@ permissions:
 
 jobs:
   classify:
+    # Temporarily disabled: this workflow uses pull_request_target + checkout
+    # base.ref, so it always runs the script from the BASE branch. The
+    # pr-labeler.sh fix (multi-page jq accumulator) lives on the PR branch,
+    # so the bug recurs here until the PR is merged into base.
+    # Re-enable in a follow-up PR after this PR (which fixes pr-labeler.sh)
+    # is merged into the xClaw default branch.
+    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout base branch
