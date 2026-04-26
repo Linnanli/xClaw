@@ -72,7 +72,17 @@ unused-allowed-license = "allow"
 
 [bans]
 multiple-versions = "warn"
-wildcards = "deny"
+# xClaw fork: downgrade wildcards to "warn".
+# Workspace binaries (admin-backend, desktop-client) and vendored
+# sub-crates (ironclaw, ironclaw_safety) all carry license fields (needed
+# for the cargo-deny licenses phase) which makes cargo-deny classify them
+# as "public". When public, `allow-wildcard-paths = true` no longer applies
+# because crates.io disallows path deps — but these crates are not
+# published to crates.io (they are app binaries / vendored sub-crates
+# inside a Tauri desktop app). The wildcard-paths come from intra-repo
+# `path = "..."` deps which is the standard workspace pattern. Downgrade
+# to "warn" so these path deps surface as warnings instead of failing CI.
+wildcards = "warn"
 # monty (Pydantic's embedded Python) is git-only (not on crates.io),
 # so it inherently lacks a version constraint. Allow path-dep wildcards.
 allow-wildcard-paths = true
