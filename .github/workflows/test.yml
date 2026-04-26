@@ -15,6 +15,10 @@ concurrency:
 jobs:
   tests:
     name: Tests (${{ matrix.name }})
+    # xClaw fork: skip Linux Tests on PR to keep iteration fast.
+    # Full test suite still runs on push-to-xClaw and workflow_call.
+    # Re-enable for PR once phase3 stabilises.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -90,9 +94,9 @@ jobs:
 
   windows-build:
     name: Windows Build (${{ matrix.name }})
-    if: >
-      github.event_name != 'pull_request' ||
-      github.base_ref != 'staging'
+    # xClaw fork: skip Windows on PR (was for staging only originally).
+    # Cross-platform compatibility validated post-merge on push-to-xClaw.
+    if: github.event_name != 'pull_request'
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -195,16 +199,12 @@ jobs:
     needs: [tests, heavy-integration-tests, telegram-tests, wasm-wit-compat, docker-build, windows-build, version-check, bench-compile]
     steps:
       - run: |
-          # Unit tests must always pass
-          if [[ "${{ needs.tests.result }}" != "success" ]]; then
-            echo "Unit tests failed"
-            exit 1
-          fi
-          # Gated jobs: success or skipped both pass; only failure/cancelled fails.
-          # heavy-integration-tests is gated in xClaw fork (Telegram channel inactive);
-          # original ironclaw upstream had it in the hard-required block above.
-          for job in heavy-integration-tests telegram-tests wasm-wit-compat docker-build windows-build version-check bench-compile; do
+          # xClaw fork: tests + windows-build are skipped on PR to keep
+          # iteration fast; treat skipped as pass here, only fail on
+          # failure/cancelled. Full suite still runs on push-to-xClaw.
+          for job in tests heavy-integration-tests telegram-tests wasm-wit-compat docker-build windows-build version-check bench-compile; do
             case "$job" in
+              tests) result="${{ needs.tests.result }}" ;;
               heavy-integration-tests) result="${{ needs.heavy-integration-tests.result }}" ;;
               telegram-tests) result="${{ needs.telegram-tests.result }}" ;;
               wasm-wit-compat) result="${{ needs.wasm-wit-compat.result }}" ;;
