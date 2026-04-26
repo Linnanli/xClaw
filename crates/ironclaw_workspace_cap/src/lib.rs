@@ -241,7 +241,7 @@ impl Clone for WorkspaceCapability {
         let dir = self
             .dir
             .try_clone()
-            .expect("cap-std Dir::try_clone failed — likely FD exhaustion");
+            .expect("cap-std Dir::try_clone failed — likely FD exhaustion"); // safety: only fails on fd exhaustion; process is already unhealthy and Clone has no fallible signature
         Self {
             dir,
             root: self.root.clone(),
