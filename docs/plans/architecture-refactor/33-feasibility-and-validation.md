@@ -1,5 +1,6 @@
 # 33 — 融合可行性分析 + 验证方案 + 复用现有测试工具
 
+> **v2.2 (2026-04-26)** · §3.8 全栈 Tauri E2E 调研新增（回应用户对"模拟用户操作"的疑问，对比 tauri-driver 与 MCP+Computer Use，给出三层方案）。
 > **v2.0 (2026-04-25)** · 基于 [30-architecture-truth.md](30-architecture-truth.md) v2 + [31-target-architecture.md](31-target-architecture.md) v2 + [32-execution-plan.md](32-execution-plan.md) v2 同步升级。
 >
 > 回答用户的核心问题：
@@ -157,9 +158,218 @@ IF [DlpEnabled] = false AND [Platform] = "windows" THEN [GovernanceEnabled] = tr
 
 ### 3.7 E2E（Cypress + Playwright）
 
-- desktop-client/cypress 现有用例全部通过
+- desktop-client/cypress 现有用例全部通过（**仅测 webview 内 React UI**，无法跨进程触达 Rust 命令真实路径）
 - 新增：Plan Mode + Approval 流程 E2E
 - 新增：Routine 触发 → Hook 拦截 → 用户审批 全流程
+
+> ⚠️ **Cypress 不是真"全栈 Tauri E2E"**：它只在浏览器里跑前端打包产物，IPC `invoke()` 走 mock，**Rust 主进程实际没启动**。要验证「整个 Tauri 应用启动 → 模拟用户点击 → 跨 IPC + Rust + Sandbox + LLM 全链路」需要 §3.8 方案。
+
+### 3.8 全栈 Tauri E2E（v2.2 新增，回应用户调研问题）
+
+**问题**：之前 §3.7 只覆盖 webview 内测试，没有真正"启动 Tauri 二进制 + 模拟用户操作 + 看到结果"的 E2E 方案。本节调研两条候选路线并给出分层方案。
+
+#### 3.8.1 候选方案对比
+
+| 维度 | 方案 A：tauri-driver + WebdriverIO | 方案 B：MCP + Computer Use 视觉操控 |
+|------|------------------------------------|-----------------------------------|
+| **协议** | W3C WebDriver（标准） | 屏幕截图 + 鼠标/键盘事件 |
+| **如何工作** | tauri-driver 包装平台原生 WebDriver（Linux: WebKitWebDriver / Windows: msedgedriver），WebdriverIO 通过 selenium 协议驱动 | Anthropic Claude `computer_use_20241022` 工具 / OpenAI Operator 通过截图 + 推理决定下一步动作 |
+| **Linux** | ✅ 成熟（webkit2gtk-driver） | ✅ 通过 X11/Wayland |
+| **Windows** | ✅ 成熟（Edge WebDriver） | ✅ |
+| **macOS** | ❌ **官方明确不支持**（WKWebView 没有 driver tool）— 这是 desktop-client 主开发平台，**致命缺口** | ✅ 通过 Accessibility API |
+| **iOS / Android** | ⚠️ Appium 2 实验性 | ✅ |
+| **确定性** | ✅ 选择器精确，可重放 | ❌ 模型每次决策可能不同（截图差 1px → 行为变化） |
+| **速度** | 毫秒级动作 | 每步 2-8 秒（截图 + 模型推理） |
+| **成本** | CI 时间 | tokens（Computer Use ≈ $0.05-0.20/分钟） |
+| **能识别原生菜单 / 系统对话框** | ❌ 仅限 webview DOM | ✅ 全屏识别 |
+| **CI gating 适配** | ✅ 可作主力 | ⚠️ 不适合 gating（false positive + 慢 + 贵） |
+| **维护成本** | DOM 选择器漂移需维护 | prompt + 截图基线维护 |
+| **能否发现新用例** | ❌（按脚本走） | ✅（探索性，可能发现脚本没覆盖的路径） |
+
+**结论**：两者**不互斥，应分层共存**：
+
+| 层 | 用途 | 工具选择 | 触发频率 |
+|---|------|---------|---------|
+| **L1** CI gating | 确定性回归（Linux+Windows runners） | tauri-driver + WebdriverIO + xvfb-run | 每 PR / 每 commit |
+| **L1.5** macOS 本地全栈 E2E（**v2.2 新增**） | macOS 开发者本地即可跑 Linux 全栈 | **Lima/colima + Linux VM + virtiofs 挂源码 + Xvfb + tauri-driver**（与 L1 CI 同构） | 本地 / pre-commit |
+| **L2** 真机 nightly | macOS 平台特定逻辑兜底 | Playwright connect over CDP（Tauri 2 `devtools` feature） | 每日 nightly |
+| **L3** 探索性 / UAT 演示 | 发现新用例 + 客户演示 + macOS native 路径补救 | Anthropic Claude `computer_use` MCP | 按需 / 重大版本前 |
+
+#### 3.8.2 方案 A 实施细节（Linux+Windows CI gating，**也是 L1.5 本地路径**）
+
+```
+desktop-client/
+├── tests/e2e-tauri/                # 新增目录
+│   ├── package.json                # @wdio/cli + @wdio/spec-reporter + @wdio/local-runner
+│   ├── wdio.conf.ts
+│   └── specs/
+│       ├── chat.e2e.ts             # 启动 → 输入消息 → 看到 SSE 响应
+│       ├── plan-mode.e2e.ts        # 切 Plan Mode → 触发 approval → 用户批准 → 看到执行
+│       ├── lsp.e2e.ts              # 打开文件 → 触发 LSP → 看到 diagnostics（W6 新增 IPC）
+│       ├── mcp.e2e.ts              # 添加 MCP server → 调工具 → 看到结果（W6 新增 IPC）
+│       └── goal.e2e.ts             # 设目标 + 预算 → 超预算 → GoalLimitReached（W6 新增 IPC）
+└── scripts/run-e2e-tauri.sh        # 启动 tauri-driver 后台 + 等待 9515 端口 + 跑 wdio
+```
+
+CI matrix（追加到 [32-execution-plan.md](32-execution-plan.md) §5.3）：
+
+```yaml
+e2e-tauri:
+  strategy:
+    matrix:
+      os: [ubuntu-22.04, windows-2022]   # macOS 不在此层
+  steps:
+    - cargo install tauri-driver --locked
+    - cargo tauri build --debug
+    - bash scripts/run-e2e-tauri.sh
+```
+
+#### 3.8.3 方案 B / L3 实施细节（探索性 + UAT）
+
+- **不进 CI gating**，仅作为本地 / nightly 探索工具。
+- 配套：在 `desktop-client/tests/e2e-mcp/` 放 prompt 用例（如"打开应用 → 在聊天框输入'帮我分析这个项目' → 验证 sidebar 出现 plan steps"）。
+- 调用方式：通过 `mcp-feedback-enhanced` 或独立 Claude desktop 客户端 + Computer Use MCP，运行 prompt + 截图断言。
+- 价值：
+  - **回归用例发现**：让模型自由探索，发现 WebdriverIO 脚本未覆盖的边角路径 → 反哺 L1 用例。
+  - **客户演示**：录制 Computer Use trace 作为产品演示视频。
+  - **macOS 真机覆盖兜底**：因 tauri-driver 在 macOS 不可用，Computer Use 是唯一能模拟真用户操作 macOS 桌面应用的方案（即便慢且贵）。
+
+#### 3.8.4 macOS 缺口的折中（**v2.2 重排：L1.5 Lima 路径成为主补丁**）
+
+由于 tauri-driver 在 macOS 缺席，本地 macOS 开发者无法直接跑 L1 全栈 E2E。**Lima/colima Linux VM** 是最务实的补丁——**与 GitHub Actions Ubuntu runner 完全同构**，本地即可跑 PR 提交前的 E2E 回归。
+
+##### L1.5 Lima 方案技术细节
+
+| 维度 | 选型 | 理由 |
+|------|------|------|
+| **VM 工具** | **Lima**（或 colima 包装） | 原生 macOS，无需 Docker Desktop 许可证；macOS 13+ Apple Silicon 用 vmType: `vz` 最快 |
+| **挂载** | **virtiofs** | macOS 13+ + `vmType: vz` 支持，性能接近原生；fallback 9p（默认 v1.0+）或 reverse-sshfs |
+| **代码同步** | macOS 上修改 → guest 立即可见 | 不用 `cargo build` 跨平台同步，host 编辑 + guest 编译/执行 |
+| **VM image** | Ubuntu 22.04 LTS（与 GitHub Actions `ubuntu-22.04` runner 同版本） | 100% 复现 CI 环境 |
+| **GUI 显示** | **Xvfb** 虚拟帧缓冲（与 Tauri 官方 CI 完全相同） | 无需 X11 转发，无需 VNC，纯 headless |
+| **架构** | Apple Silicon 默认 ARM64 VM；如需 x86_64 走 Rosetta（慢） | desktop-client 已支持 ARM64 Linux 构建 |
+
+##### L1.5 lima.yaml 模板（落到 [scripts/](../../../scripts/) 下）
+
+```yaml
+# scripts/lima-e2e.yaml
+vmType: vz                      # macOS 13+ Apple Virtualization Framework
+arch: aarch64                   # Apple Silicon 默认；Intel 改 x86_64
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-arm64.img"
+    arch: aarch64
+mountType: virtiofs             # 性能最好；不支持时降级 9p
+mounts:
+  - location: "~"
+    writable: true              # macOS 主目录挂入 guest，writable 让 cargo target 可写回
+  - location: "/Users/nallylin/Documents/code/x-claw"
+    writable: true
+cpus: 4
+memory: "8GiB"
+disk: "60GiB"
+provision:
+  - mode: system
+    script: |
+      apt-get update
+      apt-get install -y \
+        build-essential pkg-config libssl-dev \
+        libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+        webkit2gtk-driver xvfb \
+        nodejs npm
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  - mode: user
+    script: |
+      cargo install tauri-driver --locked
+```
+
+##### L1.5 操作流程（macOS 开发者本地）
+
+```bash
+# 一次性初始化（首次 ~10-15 分钟）
+limactl start --name=x-claw-e2e scripts/lima-e2e.yaml
+
+# 每次跑 E2E（host 已修改代码）
+limactl shell x-claw-e2e bash -c "
+  cd /Users/nallylin/Documents/code/x-claw/desktop-client && \
+  cargo tauri build --debug && \
+  cd tests/e2e-tauri && \
+  xvfb-run npm run test
+"
+
+# 看截图（失败时）
+open /Users/nallylin/Documents/code/x-claw/desktop-client/tests/e2e-tauri/screenshots/
+```
+
+##### L1.5 不能解决的 macOS 平台特定问题
+
+L1.5 跑的是 **Linux 二进制**，因此**仍然不验证**以下 macOS 平台路径：
+- `dasclaw_sandbox` 的 macOS seatbelt 后端（W2 ADR-002）
+- macOS keychain 集成（dasclaw_identity）
+- 原生菜单栏 / Dock 集成
+- macOS 平台特定的 Tauri 行为（如窗口控制按钮）
+
+→ 这些**仍需 L2 nightly real-mac CI** 或 **L3 Computer Use 探索性测试**兜底。但 95% 的业务逻辑回归（IPC 路由、命令分发、agent loop、hooks、LLM 调用、DLP）走 L1.5 即可，这是最有性价比的覆盖。
+
+##### L1.5 vs 其它选项对比
+
+| 选项 | 是否解决 macOS 全栈 E2E | 体验 | 推荐 |
+|------|------------------------|------|------|
+| **Lima + Xvfb（L1.5 主路径）** | ✅ Linux 二进制 95% 业务逻辑覆盖 | 首启慢、之后快 | ⭐⭐⭐⭐⭐ |
+| **GitHub Codespaces + devcontainer**（L1.5 云端替代） | ✅ 同 Lima，但跑在云端 Ubuntu | 零本地占用 + 零安装；网络依赖；空闲会停 | ⭐⭐⭐⭐ |
+| Docker（colima + DinD） | ✅ 同上但需 Docker socket | 复杂度高，不如 Lima 直接 | ⭐⭐⭐ |
+| OrbStack（商业） | ✅ 性能最好 | 商业许可，团队推广困难 | ⭐⭐⭐⭐ |
+| Parallels / VMware Fusion | ✅ 全功能 | 重量级 + 商业 | ⭐⭐ |
+| 等 macOS CI runner | ❌ 仅 nightly 拿到 | 反馈慢 | ⭐ |
+
+##### Codespaces 路径细节（v2.2 新增）
+
+事实核验（GitHub 官方文档 2026-04）：
+- **Copilot Pro / Pro+ 不直接含 Codespaces 配额**（两产品独立计费）
+- **GitHub 个人账户免费配额**：Free 120 core-hours + 15 GB-month / Pro 180 core-hours + 20 GB-month
+- **超出价格**：2 核 $0.18/hr / 4 核 $0.36/hr / 8 核 $0.72/hr
+
+对桌面端 E2E 用例的预算估算：
+- 单次 `cargo tauri build --debug` + 5 个 E2E 场景 ≈ **8-12 分钟**（4 核机器）
+- 4 核免费配额：120 hrs ÷ 4 cores = **30 wall-clock 小时/月** = 约 **150-200 次跑**
+- nightly 30 次/月 ≈ 全免费配额内
+- 超出预算：$0.36/hr × 5 hrs = **$1.8/月**（按 60 次/月计）
+
+操作流程（Codespaces）：
+
+```yaml
+# .devcontainer/devcontainer.json
+{
+  "name": "x-claw E2E",
+  "image": "mcr.microsoft.com/devcontainers/rust:1-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "20" }
+  },
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev webkit2gtk-driver xvfb && cargo install tauri-driver --locked",
+  "hostRequirements": { "cpus": 4, "memory": "8gb" }
+}
+```
+
+```bash
+# 在 Codespace Terminal 一行跑 E2E
+cd desktop-client && cargo tauri build --debug && cd tests/e2e-tauri && xvfb-run npm run test
+```
+
+**Codespaces vs Lima 选型建议**：
+| 场景 | 推荐 |
+|------|------|
+| 本地 macOS 开发，频繁迭代 | **Lima**（无网络延迟、配额无忧） |
+| 出差 / 临时设备 / Windows 同事 | **Codespaces**（开箱即用） |
+| 团队新成员上手 | **Codespaces**（无配置成本） |
+| nightly 自动化跑 | GitHub Actions runner（不用 Codespaces，因为 Actions 直接是 Linux） |
+
+**结论**：两者并存，按场景选。L1.5 文档同时保留 `scripts/lima-e2e.yaml` 和 `.devcontainer/devcontainer.json` 两份模板。
+
+#### 3.8.5 工作量与归属
+
+- **W6（v2.2 已扩 5 周）末尾追加 3 天**：搭建 L1 tauri-driver 框架 + 5 个核心场景（chat/plan-mode/lsp/mcp/goal）。
+- **W6 同期 0.5 天**：写 `scripts/lima-e2e.yaml` + `.devcontainer/devcontainer.json` 两份模板 + README，让 macOS 开发者一行命令跑通 L1.5（Lima 或 Codespaces 二选一）。
+- **W8 验证与硬化**：补全所有 W2-W7 新 crate 对应的 L1 用例 + 配置 nightly L2 + 准备 L3 prompt 库。
+- **不阻塞 W6 的 IPC 切换主任务**，作为质量门禁项。
 
 ---
 

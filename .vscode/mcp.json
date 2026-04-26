@@ -47,7 +47,7 @@
       "command": "uvx",
       "args": ["--with", "starlette<1", "mcp-feedback-enhanced@2.6.0"],
       "type": "stdio",
-      "timeout": 1200,
+      "timeout": 2000,
       "env": {
         "MCP_DESKTOP_MODE": "true",
         "MCP_WEB_HOST": "127.0.0.1",

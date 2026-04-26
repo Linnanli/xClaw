@@ -1,6 +1,7 @@
-# 30 — 四方能力事实矩阵（深度核验版 v2.1）
+# 30 — 四方能力事实矩阵（深度核验版 v2.2）
 
-> **v2.1 (2026-04-25)** · 在 v2.0 基础上补充 35/36 两份全量能力清单交叉引用。参见 [35-codex-capability-inventory.md](35-codex-capability-inventory.md)（codex 92 crate / 461,354 LOC 生产）与 [36-claw-code-capability-inventory.md](36-claw-code-capability-inventory.md)（claw-code 9 crate / 48,599 LOC）。
+> **v2.2 (2026-04-26)** · 反向合并 35 v0.3 §Q（88 commit 增量） + 36/37/38 全量 LOC + 31 v2.2（ADR-104 补充 / ADR-110 Bridge Lite） + 32 v2.2（W6 扩 5 周） + 33 v2.2（§3.8 全栈 Tauri E2E 三层方案）。
+> **v2.1 (2026-04-25)** · 在 v2.0 基础上补充 35/36 两份全量能力清单交叉引用。参见 [35-codex-capability-inventory.md](35-codex-capability-inventory.md) v0.3（codex 92 crate / 461,354 LOC 生产）、[36-claw-code-capability-inventory.md](36-claw-code-capability-inventory.md)（claw-code 9 crate / 48,599 LOC）、[37-ironclaw-main-capability-inventory.md](37-ironclaw-main-capability-inventory.md)（ironclaw-main 0.26 / 464,222 LOC）、[38-desktop-client-ironclaw-fork-inventory.md](38-desktop-client-ironclaw-fork-inventory.md)（fork / 295,658 LOC）。
 > **v2.0 (2026-04-25)** · 在 v1 基础上扩展到 **15 大类 / 90+ 子能力 / ~360 数据点**，覆盖率 ≥ 95%。
 > 验证方法：每条断言都经 **Level 1 semantic_search → Level 2 vscode_listCodeUsages → Level 3 rg/find** 中至少两级验证（[`AGENTS.md`](AGENTS.md ) 三级规则）。
 > v1 → v2 关键修正：Explore subagent 一次扫描漏掉了 claw-code 6 件套位置，已用 `find` 字面量复核确认。
@@ -18,14 +19,15 @@
 
 ### 0.2 仓库定位（核验后结论）
 
-| 仓库 | 真实定位 | 形态 | 规模 | 主要语言 |
+| 仓库 | 真实定位 | 形态 | 规模（v2.2 精算） | 主要语言 |
 |------|---------|------|------|---------|
 | **desktop-client** | Tauri 桌面客户端 + ironclaw fork（精简 2 crate）+ x_claw_agent fork（claw-code/runtime 简化版） | 单形态桌面 GUI | ~14 IPC / 38 命令 / React UI | Rust + TS |
-| **desktop-client/ironclaw** (submodule) | ironclaw-main 0.24 完整 fork（git submodule，但 Cargo 依赖只取 `ironclaw_safety`） | 嵌入子模块 | 全量 fork | Rust |
-| **crates/x_claw_agent** | 18 模块；fork 自 claw-code/runtime 的精简版（hooks trait/session/agentic_loop/undo/permissions） | path dep | ~独立 18 模块 | Rust |
-| **ironclaw-main 0.26.0** | 多通道 Web-first 个人 AI 助手 + LLM 编排平台 | 11+ channels（Web/REPL/TUI/Telegram/Slack/Discord/Signal/WASM 等） | ~6 crate / FEATURE_PARITY 全量实现 | Rust |
-| **claw-code** | Claude Code 协议级 fork + 自治治理增强（policy/recovery/trust/branch_lock/stale/green） | CLI 主导 | 9 crate | Rust |
-| **codex-cli-main** | OpenAI Codex Rust 重写 + 多平台沙箱基线 | CLI/TUI/app-server | 78+ crate | Rust |
+| **desktop-client/ironclaw** (submodule) | ironclaw-main 0.24 完整 fork（git submodule，但 Cargo 依赖只取 `ironclaw_safety`） | 嵌入子模块 | **295,658 LOC** （见 [38](38-desktop-client-ironclaw-fork-inventory.md)） | Rust |
+| **crates/x_claw_agent** | 18 模块；fork 自 claw-code/runtime 的精简版（hooks trait/session/agentic_loop/undo/permissions） | path dep | **9,641 LOC** | Rust |
+| **ironclaw_engine v2** （上游） | ironclaw-main 0.26 中的 trait-injection 式 agent runtime | crate | **30,414 LOC 总**（traits 410 + types 3,109 + 实现 26,895） | Rust |
+| **ironclaw-main 0.26.0** | 多通道 Web-first 个人 AI 助手 + LLM 编排平台 | 11+ channels（Web/REPL/TUI/Telegram/Slack/Discord/Signal/WASM 等） | **464,222 LOC** （见 [37](37-ironclaw-main-capability-inventory.md)） | Rust |
+| **claw-code** | Claude Code 协议级 fork + 自治治理增强（policy/recovery/trust/branch_lock/stale/green） | CLI 主导 | **48,599 LOC** （见 [36](36-claw-code-capability-inventory.md)） | Rust |
+| **codex-cli-main** | OpenAI Codex Rust 重写 + 多平台沙箱基线 | CLI/TUI/app-server | **461,354 LOC / 92 crate**（见 [35](35-codex-capability-inventory.md) v0.3） | Rust |
 
 ### 0.3 关键事实（架构基线）
 
@@ -71,8 +73,10 @@
 | Undo / 撤销操作 | ✅ x_claw_agent/undo.rs | ⚠️ session 层 | ⚠️ 通过 git ghost commits | ⚠️ 通过 git checkpoint | — |
 | Heartbeat / 后台脉搏 | ⚠️ | ✅ src/agent/heartbeat.rs | ❌ 未发现 | ❌ 未发现 | — |
 | Routine / 定时任务 | ✅ 继承 | ✅ scheduler + cron + event trigger | ✅ team_cron_registry.rs | ❌ 未发现 | — |
+| **Goal 系统（目标+预算，v2.2 新增）** | ❌ | ❌ | ❌ | ✅ **独家** goals.rs 1,639 LOC + goal_tool + thread_goal model | codex 88 commit P0★★★★★，见 [35](35-codex-capability-inventory.md) §Q.2 |
+| **ThreadStore trait（v2.2 新增）** | ❌ | ❌ | ❌ | ✅ thread-store crate 6,354 LOC（InMemory + LiveThread） | codex 88 commit P0★★★★ |
 
-**关键结论**：四方都有 loop，差异在外壳。codex 的 multi-agents v2 与 ironclaw v2（CodeAct 引擎）需要在 31 文档单独对比。
+**关键结论**：四方都有 loop，差异在外壳。codex 的 multi-agents v2 与 ironclaw v2（CodeAct 引擎）在 31 文档 §3 + ADR-104 v2.2、ADR-110 已对比 —— 结论是以 ironclaw_engine v2 抽象层（410 LOC trait + 3,109 LOC types）为骨架，同时吸收 codex goal/ThreadStore 增量。
 
 ---
 
@@ -87,7 +91,7 @@
 | Git utils（baseline/ghost commit） | ⚠️ | ⚠️ builtin/git/ | ✅ git_context.rs | ✅ git-utils crate（最完整） | — |
 | LSP 客户端 | ✅ 继承 | ✅ tools/builtin/lsp/ | ✅ runtime/lsp_client.rs（438 LOC） | ✅ core/lsp | — |
 | MCP 客户端 transport 数 | ⚠️ 继承部分 | ✅ ManagedMcp（HTTP+stdio） | ✅ **6 种（独家最全）** | ⚠️ stdio + http（ws 实验） | claw runtime/config.rs L113-144 |
-| Code Mode / JS REPL | ❌ | ❌ | ❌ | ✅ **独家** tools/code_mode + js_repl_tool | — |
+| Code Mode / JS REPL | ❌ | ❌ | ❌ | ⚠️ **js_repl 已废弃**（PR #19410 / commit 8a559e7938），**code_mode 是唯一 CodeAct 入口** | [35](35-codex-capability-inventory.md) §Q.3 |
 | 并行 tool_use 执行 | ⚠️ 继承 | ❌ v1 串行（v2 待验证） | ❌ 顺序 SSE | ✅ parallel_tool_calls flag | codex core/session/turn.rs L967 |
 | Partial tool call（流式参数） | ⚠️ | ⚠️ | ✅ mock-anthropic 可模拟 | ✅ supports_partial_tool_calls | — |
 | PDF 提取 | ✅ 继承 | ✅ pdf-extract crate | ✅ tools/pdf_extract.rs | ❌ 未发现 | — |
@@ -185,6 +189,7 @@
 | WebSocket 推送 | ❌ Approval 用 30s polling | ✅ Discord/Telegram gateway 内部 | ⚠️ MCP Ws transport | ❌ | — |
 | JSON-RPC（app-server） | ❌ | ❌ | ❌ | ✅ **独家** app-server-protocol | — |
 | HTTP webhook 通道 | ❌ | ✅ channels/http.rs | ❌ | ❌ | — |
+| **Unix socket transport（v2.2 新增）** | ❌ | ❌ | ❌ | ✅ codex 88 commit P0 增量，考虑作为 Tauri IPC 替代方案 | [35](35-codex-capability-inventory.md) §Q.2 |
 
 **关键结论**：codex 的 **JSON-RPC app-server** 是唯一标准化外壳协议（其他都是私有 SSE / IPC）；ironclaw 的 **多通道 SSE** 是 Web 形态最强。
 
@@ -265,7 +270,7 @@
 | 子能力 | desktop | ironclaw | claw-code | codex | 证据 |
 |--------|:-:|:-:|:-:|:-:|------|
 | Observability backend trait | ✅ 继承 | ✅ trait + 3 后端（noop/log/multi） | ⚠️ telemetry/lib.rs TelemetrySink | ⚠️ analytics | — |
-| Rollout Trace（推理路径追踪） | ❌ | ❌ | ❌ | ✅ **独家** rollout-trace crate | — |
+| Rollout Trace（推理路径追踪） | ❌ | ❌ | ❌ | ✅ **独家** rollout-trace crate （v2.2: 88 commit 后新增 4 子表 code_cell/protocol_event/thread/tool_dispatch） | [35](35-codex-capability-inventory.md) §Q.2 |
 | Mission Cost Guards | ⚠️ | ✅ agent/cost_guard.rs | ⚠️ /cost | ⚠️ analytics | — |
 | Token Budget | ⚠️ | ✅ + 滑动窗口 | ✅ /budget /max-tokens | ⚠️ tool_output_token_limit | — |
 | Rate Limiter（每工具/每用户） | ⚠️ | ✅ tools/rate_limiter.rs | ⚠️ /rate-limit | ⚠️ rate_limits | — |
@@ -370,6 +375,10 @@
 | ExecPolicy（Starlark 权限规则） | codex/execpolicy | ❌ | 可审计权限策略 |
 | portable-pty + exec-server | codex/exec-server | ❌ | 长会话/信号转发/resize |
 | AGENTS.md 多层加载（与 codex 生态对齐） | codex/config | ❌ | 项目级文档协议 |
+| **Goal 系统五件套（v2.2 新增）** | codex/core/goals.rs 1,639 LOC + goal_tool + thread_goal model + UI 适配 | ❌ | 超预算自动暂停＋goal-driven 控制流 |
+| **ThreadStore trait（v2.2 新增）** | codex/thread-store 6,354 LOC | ❌ | 为 dasclaw_core 多后端可拔插存储层 |
+| **permissions profiles 重构（v2.2 新增）** | codex/core/permissions | ⚠️ x_claw_agent 有 trait | 移除 legacy read-only modes，统一 profiles |
+| **rollout-trace 四子表（v2.2 新增）** | codex/rollout-trace | ❌ | code_cell + protocol_event + thread + tool_dispatch 四路追踪 |
 
 ### 2.2 P1 — 自治治理 6+ 件套（claw-code 来源）
 
@@ -463,26 +472,30 @@
 
 ## 5. 给 31 / 32 / 33 文档的输入约束
 
-1. **承认双引擎现状**，但目标态必须**明确指定唯一 runtime**（候选见 31 文档 §3）。
+1. **承认双引擎现状**，但目标态必须**明确指定唯一 runtime**（候选见 [31](31-target-architecture.md) §3 + ADR-101；**v2.2 结论**：以 ironclaw_engine v2 抽象层为骨架，dasclaw_core ≈ 14-16k LOC，见 ADR-104 v2.2）。
 2. **三平台 sandbox 必搬**（codex），是架构基线、非可选项。
 3. **claw-code 自治治理 6 件套**作为独立 crate 抽出，**作为可选启用模块**。
 4. **desktop-client 上层（DLP/SafetyBridge/PolicySync/IPC/Auth/EngineStartup/契约测试）零回退**。
 5. **Web Gateway / 多通道**保留在 admin-backend，不进 desktop-client。
 6. **AGENTS.md 协议**作为项目级文档**统一标准**（与 codex 生态对齐）。
 7. **不搬的内容写进 ADR 作为永久 non-goal**。
+8. **（v2.2 新增）dasclaw_bridge_lite ≈ 5-7k LOC**（vs ironclaw bridge 全套 25,369 LOC）：保 EffectExecutor + LlmBackend + AuthLite + CostGuard + UserFacingErrors；砍 router 9.6k + store 大半 + skill_migration。见 [31](31-target-architecture.md) ADR-110。
+9. **（v2.2 新增）dasclaw_workspace ≈ 7-9k LOC**（vs ironclaw workspace 全套 12,857 LOC）：去多租户化 -3k LOC，保 chunker + embeddings + RRF k=60 + Hybrid Search。见 [32](32-execution-plan.md) W6。
+10. **（v2.2 新增）全栈 Tauri E2E 三层方案**：L1 tauri-driver+WebdriverIO（Linux+Windows CI gating）＋L1.5 Lima/Codespaces（macOS 本地补丁）＋L2 Playwright over CDP（nightly）＋L3 Computer Use MCP（探索性 / UAT）。见 [33](33-feasibility-and-validation.md) §3.8。
+11. **（v2.2 新增）codex 88 commit P0 增量**：goal 五件套 / ThreadStore trait / permissions profiles / rollout-trace / Unix socket transport 纳入 W6。见 [35](35-codex-capability-inventory.md) §Q.2。
 
 ---
 
 ## 6. 覆盖率自评
 
-| 大类 | 子能力数 | 已核验 | 覆盖率 |
+| 大类 | 子能力数（v2.2 调整） | 已核验 | 覆盖率 |
 |------|:-:|:-:|:-:|
-| A. Agent 内核 | 9 | 9 | 100% |
+| A. Agent 内核 | 11 （+Goal+ThreadStore） | 11 | 100% |
 | B. 工具系统 | 14 | 14 | 100% |
 | C. 沙箱隔离 | 10 | 10 | 100% |
 | D. 安全治理 | 17 | 17 | 100% |
 | E. LLM Provider | 11 | 11 | 100% |
-| F. 流式协议 | 6 | 6 | 100% |
+| F. 流式协议 | 7 （+Unix socket） | 7 | 100% |
 | G. 配置加载 | 7 | 7 | 100% |
 | H. 通道形态 | 12 | 12 | 100% |
 | I. 历史持久化 | 7 | 7 | 100% |
@@ -492,7 +505,7 @@
 | M. 测试打包 | 10 | 10 | 100% |
 | N. 多模态 | 6 | 6 | 100% |
 | O. UX 增强 | 10 | 10 | 100% |
-| **总计** | **146** | **146** | **100%** |
+| **总计** | **149** | **149** | **100%** |
 
 > 注：覆盖率指**枚举到的子能力数**，不代表每个子能力的内部实现都 100% 摸透。每个 ✅/⚠️/❌ 都对应至少 1 条文件路径或 grep 证据；如未来发现新子能力，补充进对应大类即可。
 
@@ -509,3 +522,14 @@
 - 这恰恰证明 [`AGENTS.md`](AGENTS.md ) 提倡的**三级工具规则有效**：单一 semantic_search 会漏，必须多源交叉验证。
 
 **Round 18 教训应用**：本文档把"X 没有 Y"改写成"按文件路径核验未发现 Y"，避免重蹈"伪缺口"覆辙。
+
+**v2.1 → v2.2 关键合并**：
+- 反向回填来源：35 v0.3 §Q（codex 88 commit 增量）+ 36/37/38 三份能力清单 + 31 v2.2（ADR-104 v2.2 + ADR-110）+ 32 v2.2（W6 5 周）+ 33 v2.2（§3.8 全栈 E2E 三层方案）。
+- §0.2 仓库定位表补 LOC 精算（codex 461,354 / ironclaw 464,222 / fork 295,658 / claw 48,599 / x_claw_agent 9,641 / engine v2 30,414）。
+- §A 加 **Goal 系统**与 **ThreadStore trait**（codex 88 commit P0 增量）。
+- §B 标 **codex js_repl 已废弃**（PR #19410）。
+- §F 加 **Unix socket transport**。
+- §K rollout-trace 标注 **88 commit 后新增 4 子表**（code_cell + protocol_event + thread + tool_dispatch）。
+- §2.1 P0 加 4 项新条目（Goal 五件套 / ThreadStore trait / permissions profiles 重构 / rollout-trace 四子表）。
+- §5 输入约束加 4 条（dasclaw_core 14-16k LOC / dasclaw_bridge_lite 5-7k LOC / dasclaw_workspace 7-9k LOC / 三层 E2E 方案 / codex 88 commit P0 增量）。
+- §6 覆盖率自评 子能力数 146 → **149**。
