@@ -23,6 +23,11 @@ pub mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::SeatbeltSandbox;
 
+#[cfg(target_os = "linux")]
+pub mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::LinuxSeccompSandbox;
+
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -171,6 +176,10 @@ fn build_backend(t: SandboxType) -> Box<dyn Sandbox> {
     #[cfg(target_os = "macos")]
     if matches!(t, SandboxType::MacosSeatbelt) {
         return Box::new(SeatbeltSandbox::new());
+    }
+    #[cfg(target_os = "linux")]
+    if matches!(t, SandboxType::LinuxSeccomp) {
+        return Box::new(LinuxSeccompSandbox::new());
     }
     Box::new(NoopSandbox { kind: t })
 }
