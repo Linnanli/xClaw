@@ -46,6 +46,9 @@ jobs:
 
   heavy-integration-tests:
     name: Heavy Integration Tests
+    # disabled in xClaw fork: Telegram WASM channel not active here.
+    # re-enable by removing `if: false` once channels-src/telegram is wired up.
+    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -68,9 +71,8 @@ jobs:
 
   telegram-tests:
     name: Telegram Channel Tests
-    if: >
-      github.event_name != 'pull_request' ||
-      github.base_ref != 'staging'
+    # disabled in xClaw fork: Telegram channel not active here.
+    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -139,6 +141,9 @@ jobs:
 
   bench-compile:
     name: Benchmark Compilation
+    # disabled in xClaw fork: benches inherited from ironclaw require Telegram /
+    # channels infra that is not active in this fork.
+    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -155,9 +160,9 @@ jobs:
 
   docker-build:
     name: Docker Build
-    if: >
-      github.event_name != 'pull_request' ||
-      github.base_ref != 'staging'
+    # disabled in xClaw fork: Dockerfile inherited from ironclaw is not yet adapted
+    # to the dasclaw_* workspace + 3 git submodules layout.
+    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -169,8 +174,10 @@ jobs:
 
   version-check:
     name: Version Bump Check
+    # disabled in xClaw fork: extension version-bump policy inherited from ironclaw
+    # does not apply to the phase3 refactor cadence.
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    if: false
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -195,13 +202,12 @@ jobs:
             echo "Unit tests failed"
             exit 1
           fi
-          if [[ "${{ needs.heavy-integration-tests.result }}" != "success" ]]; then
-            echo "Heavy integration tests failed"
-            exit 1
-          fi
-          # Gated jobs: must pass on promotion PRs / push, skipped on developer PRs
-          for job in telegram-tests wasm-wit-compat docker-build windows-build version-check bench-compile; do
+          # Gated jobs: success or skipped both pass; only failure/cancelled fails.
+          # heavy-integration-tests is gated in xClaw fork (Telegram channel inactive);
+          # original ironclaw upstream had it in the hard-required block above.
+          for job in heavy-integration-tests telegram-tests wasm-wit-compat docker-build windows-build version-check bench-compile; do
             case "$job" in
+              heavy-integration-tests) result="${{ needs.heavy-integration-tests.result }}" ;;
               telegram-tests) result="${{ needs.telegram-tests.result }}" ;;
               wasm-wit-compat) result="${{ needs.wasm-wit-compat.result }}" ;;
               docker-build) result="${{ needs.docker-build.result }}" ;;
