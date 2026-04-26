@@ -19,16 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: all-features
-            # Keep product feature coverage broad without pulling in the
-            # test-only `integration` feature, which is exercised separately
-            # in the heavy integration job below.
-            flags: "--no-default-features --features postgres,libsql,html-to-markdown,bedrock,import"
-          - name: default
-            flags: ""
-          - name: libsql-only
-            flags: "--no-default-features --features libsql"
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"name":"default","flags":""}]' || '[{"name":"all-features","flags":"--no-default-features --features postgres,libsql,html-to-markdown,bedrock,import"},{"name":"default","flags":""},{"name":"libsql-only","flags":"--no-default-features --features libsql"}]') }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -106,13 +97,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: all-features
-            flags: "--no-default-features --features postgres,libsql,html-to-markdown,bedrock,import"
-          - name: default
-            flags: ""
-          - name: libsql-only
-            flags: "--no-default-features --features libsql"
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"name":"default","flags":""}]' || '[{"name":"all-features","flags":"--no-default-features --features postgres,libsql,html-to-markdown,bedrock,import"},{"name":"default","flags":""},{"name":"libsql-only","flags":"--no-default-features --features libsql"}]') }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6

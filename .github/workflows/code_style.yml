@@ -39,13 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: all-features
-            flags: "--all-features"
-          - name: default
-            flags: ""
-          - name: libsql-only
-            flags: "--no-default-features --features libsql"
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"name":"default","flags":""}]' || '[{"name":"all-features","flags":"--all-features"},{"name":"default","flags":""},{"name":"libsql-only","flags":"--no-default-features --features libsql"}]') }}
     steps:
     - name: Checkout repository
       uses: actions/checkout@v6
