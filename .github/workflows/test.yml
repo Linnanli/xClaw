@@ -8,6 +8,10 @@ on:
     branches:
       - xClaw
 
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   tests:
     name: Tests (${{ matrix.name }})

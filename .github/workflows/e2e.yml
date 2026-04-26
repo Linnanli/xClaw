@@ -11,6 +11,10 @@ on:
       - "src/channels/web/**"
       - "tests/e2e/**"
 
+concurrency:
+  group: e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # ── Step 1: compile once ──────────────────────────────────────────────────
   build:
