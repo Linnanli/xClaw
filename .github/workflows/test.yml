@@ -3,10 +3,10 @@ on:
   workflow_call:
   pull_request:
     branches:
-      - main
+      - xClaw
   push:
     branches:
-      - main
+      - xClaw
 
 jobs:
   tests:

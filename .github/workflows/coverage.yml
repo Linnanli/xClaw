@@ -29,7 +29,7 @@
 name: Code Coverage
 on:
   push:
-    branches: [main]
+    branches: [xClaw]
 
 permissions:
   id-token: write

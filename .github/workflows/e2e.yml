@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
   pull_request:
     branches:
-      - main
+      - xClaw
     paths:
       - "src/channels/web/**"
       - "tests/e2e/**"
