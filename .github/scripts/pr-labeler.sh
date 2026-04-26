@@ -39,13 +39,17 @@ set_exclusive_label() {
 # ─── size ───────────────────────────────────────────────────────────────────
 
 classify_size() {
-  # Sum changed lines across non-doc files
+  # Sum changed lines across non-doc files.
+  # Note: `gh api --paginate --jq` runs jq per page, so the previous
+  # `[...] | add` returned one number per page and total ended up as a
+  # newline-separated string ("13649\n7473"), which broke `(( total < 10 ))`.
+  # Fix: emit one .changes integer per file via jq, then sum with awk so the
+  # accumulator works uniformly across single- and multi-page responses.
   local total
   total=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" \
-    --paginate --jq '
-      [.[] | select(.filename | test("\\.(md|txt|rst|adoc)$") | not) | .changes]
-      | add // 0
-    ')
+    --paginate \
+    --jq '.[] | select(.filename | test("\\.(md|txt|rst|adoc)$") | not) | .changes' \
+    | awk 'BEGIN{s=0} {s+=$1} END{print s+0}')
 
   local label
   if   (( total < 10 ));  then label="size: XS"
