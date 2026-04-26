@@ -3,7 +3,8 @@
 	url = https://github.com/nearai/ironclaw.git
 [submodule "claw-code"]
 	path = claw-code
-	url = https://github.com/ultraworkers/claw-code.git
+	url = https://github.com/Linnanli/xclaw-claw-code.git
+	branch = x-claw
 [submodule "codex-cli-main"]
 	path = codex-cli-main
 	url = https://github.com/openai/codex.git
