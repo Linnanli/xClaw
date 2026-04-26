@@ -182,6 +182,8 @@ macro_rules! all_tauri_commands {
             desktop_client::ipc::ic_approve_plan,
             desktop_client::ipc::ic_revise_plan,
             desktop_client::ipc::ic_fork_thread,
+            // ── Sandbox（W2 ADR-110 接线，dasclaw_sandbox）─────
+            desktop_client::ipc::ic_sandbox_smoke_test,
         ]
     };
 }
