@@ -47,6 +47,16 @@ jobs:
       uses: actions/checkout@v6
       with:
         submodules: recursive
+    - name: Install Linux system dependencies (GTK / WebKit for Tauri desktop-client)
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y --no-install-recommends \
+          libgtk-3-dev \
+          libwebkit2gtk-4.1-dev \
+          libayatana-appindicator3-dev \
+          librsvg2-dev \
+          libsoup-3.0-dev \
+          libssl-dev
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
@@ -55,7 +65,12 @@ jobs:
       with:
         key: clippy-${{ matrix.name }}
     - name: Check lints
-      run: cargo clippy --all --benches --tests --examples ${{ matrix.flags }} -- -D warnings
+      # xClaw fork: collapsible_if / collapsible_match are new in clippy 1.95.0
+      # and trigger on inherited ironclaw code (desktop-client/ironclaw/src/
+      # agent/dispatcher.rs and channels/signal.rs). Allowing them at the CI
+      # level is the least invasive fix; remove these allows once the upstream
+      # ironclaw fork (Linnanli/xclaw-ironclaw) refactors those call sites.
+      run: cargo clippy --all --benches --tests --examples ${{ matrix.flags }} -- -D warnings -A clippy::collapsible_if -A clippy::collapsible_match
 
   clippy-windows:
     name: Clippy Windows (${{ matrix.name }})

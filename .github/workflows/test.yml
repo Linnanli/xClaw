@@ -30,17 +30,25 @@ jobs:
         uses: actions/checkout@v6
         with:
           submodules: recursive
+      - name: Install Linux system dependencies (GTK / WebKit for Tauri desktop-client)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libssl-dev
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-wasip2
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.name }}
-      - name: Install cargo-component
-        run: cargo install cargo-component --locked || true
-      - name: Build WASM channels (for integration tests)
-        run: ./scripts/build-wasm-extensions.sh --channels
+      # NOTE(xClaw fork): removed the `Install cargo-component` and
+      # `Build WASM channels` steps inherited from ironclaw — channels-src/
+      # is not active in xClaw and `./scripts/build-wasm-extensions.sh` does
+      # not exist at the workspace root.
       - name: Run Tests
         run: cargo test ${{ matrix.flags }} -- --nocapture
 
@@ -116,9 +124,10 @@ jobs:
 
   wasm-wit-compat:
     name: WASM WIT Compatibility
-    if: >
-      github.event_name != 'pull_request' ||
-      github.base_ref != 'staging'
+    # disabled in xClaw fork: ./scripts/build-wasm-extensions.sh inherited from
+    # ironclaw is not present at the xClaw workspace root, and channels-src/
+    # WIT extensions are not active in this fork.
+    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
