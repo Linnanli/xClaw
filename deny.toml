@@ -17,6 +17,32 @@ ignore = [
     # rand unsoundness with custom logger calling rand::rng() during reseed — we don't use this pattern;
     # revisit/remove by 2026-06-30, or when transitive deps (tower, nanoid, phf_generator) release rand ≥0.9.3 compat
     "RUSTSEC-2026-0097",
+
+    # ─── xClaw-fork additions ─────────────────────────────────────────────
+    # Wasmtime advisory cluster (transitive via WASM extension infra).
+    # All come from the same wasmtime stack pinned by upstream ironclaw;
+    # the channel/extension code paths are not active in xClaw fork (we
+    # disabled telegram/heavy-integration/wasm-wit-compat jobs), so these
+    # advisories do not affect the runtime hot path. Track separately for
+    # eventual wasmtime bump.
+    "RUSTSEC-2025-0046",  # wasmtime GHSA-fm79-3f68-h2fc
+    "RUSTSEC-2025-0118",  # wasmtime GHSA-hc7m-r6v8-hg9q
+    "RUSTSEC-2026-0020",
+    "RUSTSEC-2026-0021",
+    "RUSTSEC-2026-0067",
+    "RUSTSEC-2026-0068",
+    "RUSTSEC-2026-0085",
+    "RUSTSEC-2026-0086",
+    "RUSTSEC-2026-0087",
+    "RUSTSEC-2026-0088",
+    "RUSTSEC-2026-0089",
+    "RUSTSEC-2026-0091",
+    "RUSTSEC-2026-0092",
+    "RUSTSEC-2026-0093",
+    "RUSTSEC-2026-0094",
+    "RUSTSEC-2026-0095",
+    "RUSTSEC-2026-0096",
+    "RUSTSEC-2026-0104",
 ]
 
 [licenses]
