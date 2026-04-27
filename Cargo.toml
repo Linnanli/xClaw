@@ -24,6 +24,8 @@ members = [
 	"crates/dasclaw_lsp",
 	"crates/dasclaw_git_tools",
 	"crates/dasclaw_routines",
+	# W2.6 接线层：组合 sandbox + pty + workspace_cap policy
+	"crates/dasclaw_exec",
 	"desktop-client/ironclaw",
 	"desktop-client/ironclaw/crates/ironclaw_common",
 	"desktop-client/ironclaw/crates/ironclaw_safety",
