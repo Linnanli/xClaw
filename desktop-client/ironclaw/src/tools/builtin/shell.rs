@@ -639,7 +639,12 @@ impl ShellTool {
         // also enforces its own timeout, but the caller's value can be tighter).
         let result = tokio::time::timeout(timeout, async {
             sandbox
-                .execute(cmd, workdir, self.sandbox_policy, std::collections::HashMap::new())
+                .execute(
+                    cmd,
+                    workdir,
+                    self.sandbox_policy,
+                    std::collections::HashMap::new(),
+                )
                 .await
         })
         .await;
