@@ -10,8 +10,13 @@
 //! Design notes:
 //! - `SandboxType`, `SandboxablePreference`, `get_platform_sandbox()` mirror
 //!   codex `manager.rs` API surface, neutralized (no `codex_protocol` dep).
-//! - `SandboxPolicy` is a **dasclaw-owned** struct, not re-exported from
-//!   codex-protocol. Mapping adapter lives in `dasclaw_bridge_lite` (W3+).
+//! - `SandboxBackendConfig` is a **dasclaw-owned** struct describing the
+//!   *backend-level* knobs the sandbox kernel needs (writable roots, proxy
+//!   ports, network/spawn flags). It is intentionally *flatter* than the
+//!   codex `SandboxPolicy` enum — the higher-level policy enum lives in
+//!   `ironclaw_workspace_cap::policy::SandboxPolicy` and is converted to
+//!   `SandboxBackendConfig` by `dasclaw_exec` at execution time.
+//!   `SandboxPolicy` remains as a **deprecated alias** for transition.
 //! - Three platform backends gated by `cfg(target_os = ...)` like codex.
 //! - Real impl deferred (W2.2+); current stubs return
 //!   `SandboxError::NotImplemented` so callers compile but fail loud at runtime.
@@ -96,10 +101,15 @@ pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType
     }
 }
 
-/// Minimal neutral sandbox policy. Adapter to/from codex's richer enum lives
-/// in `dasclaw_bridge_lite` (W3+).
+/// Backend-level sandbox configuration: the concrete knobs the sandbox
+/// **kernel** (seatbelt / seccomp / windows) needs to enforce a policy.
+///
+/// This struct is intentionally flatter than codex's `SandboxPolicy` enum.
+/// The higher-level policy enum lives in
+/// `ironclaw_workspace_cap::policy::SandboxPolicy` and is converted to this
+/// struct by `dasclaw_exec` (or any caller) at execution time.
 #[derive(Clone, Debug, Default)]
-pub struct SandboxPolicy {
+pub struct SandboxBackendConfig {
     pub readable_roots: Vec<PathBuf>,
     pub writable_roots: Vec<PathBuf>,
     pub allow_network: bool,
@@ -110,7 +120,7 @@ pub struct SandboxPolicy {
     pub proxy_loopback_ports: Vec<u16>,
 }
 
-impl SandboxPolicy {
+impl SandboxBackendConfig {
     pub fn read_only_defaults() -> Self {
         Self::default()
     }
@@ -126,13 +136,17 @@ impl SandboxPolicy {
     }
 }
 
+/// Deprecated alias kept for transition; will be removed once all call
+/// sites use `SandboxBackendConfig` directly.
+pub type SandboxPolicy = SandboxBackendConfig;
+
 pub mod proxy;
 
 /// What the caller wants to execute under a sandbox.
 #[derive(Debug)]
 pub struct SandboxExecRequest {
     pub command: Command,
-    pub policy: SandboxPolicy,
+    pub policy: SandboxBackendConfig,
     pub preference: SandboxablePreference,
     pub windows_sandbox_enabled: bool,
 }
