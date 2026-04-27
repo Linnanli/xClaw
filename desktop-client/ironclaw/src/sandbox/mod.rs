@@ -30,6 +30,8 @@ pub mod config;
 pub mod detect;
 pub mod docker_conn;
 pub mod error;
+/// W3.2b-4: bridge to [`dasclaw_net_proxy`] for sandbox egress enforcement.
+pub mod net_proxy;
 /// W3.1a: codex-style OS-level executor (replaces Docker `SandboxManager` for
 /// tool execution). See [`os_executor::OsExecutor`].
 pub mod os_executor;

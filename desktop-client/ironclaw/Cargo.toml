@@ -92,6 +92,8 @@ x_claw_agent = { path = "../../crates/x_claw_agent", version = "0.1.0" }
 # W3.1a: OS-level sandbox executor (replaces Docker sandbox path)
 dasclaw_exec = { path = "../../crates/dasclaw_exec", version = "0.1.0" }
 dasclaw_sandbox = { path = "../../crates/dasclaw_sandbox", version = "0.0.0-w1" }
+# W3.2b: audited HTTP egress proxy (allowlist + credential injection)
+dasclaw_net_proxy = { path = "../../crates/dasclaw_net_proxy", version = "0.1.0" }
 ironclaw_workspace_cap = { path = "../../crates/ironclaw_workspace_cap", version = "0.1.0" }
 
 # Safety/sanitization
