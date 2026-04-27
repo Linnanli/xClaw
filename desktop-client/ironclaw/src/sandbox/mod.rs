@@ -90,6 +90,8 @@ pub mod container;
 pub mod detect;
 pub mod error;
 pub mod manager;
+/// W3.1a: codex-style OS-level executor (replaces Docker manager in W3.1c).
+pub mod os_executor;
 pub mod proxy;
 
 /// `x_claw_agent::SandboxExecutor` adapter.
@@ -100,6 +102,7 @@ pub use container::{ContainerOutput, ContainerRunner, connect_docker};
 pub use detect::{DockerDetection, DockerStatus, Platform, check_docker};
 pub use error::{Result, SandboxError};
 pub use manager::{ExecOutput, SandboxManager, SandboxManagerBuilder};
+pub use os_executor::OsExecutor;
 pub use proxy::{
     CredentialResolver, DefaultPolicyDecider, DomainAllowlist, EnvCredentialResolver, HttpProxy,
     NetworkDecision, NetworkPolicyDecider, NetworkProxyBuilder, NetworkRequest,
