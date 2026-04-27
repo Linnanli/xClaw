@@ -7,9 +7,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::ipc::chat::{
-        usage_report_backend_user_id, FrontendAttachment, SendMessageResponse,
-    };
+    use crate::ipc::chat::{usage_report_backend_user_id, FrontendAttachment, SendMessageResponse};
     use std::sync::RwLock;
     use uuid::Uuid;
 

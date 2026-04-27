@@ -160,13 +160,13 @@ pub async fn submit_approval_ticket(
     thread_id: String,
 ) -> Result<String> {
     // 在进入 async 前提取 Arc，避免 State 生命周期跨 await 的问题
-    let state = state
-        .get()
-        .map_err(Error::ConfigError)?;
+    let state = state.get().map_err(Error::ConfigError)?;
     let store_arc = store.0.clone();
     let (admin_url, client_token) = admin_env();
     if client_token.is_empty() {
-        return Err(Error::ConfigError("未配置 ADMIN_AUTH_TOKEN，无法提交审批工单".into()));
+        return Err(Error::ConfigError(
+            "未配置 ADMIN_AUTH_TOKEN，无法提交审批工单".into(),
+        ));
     }
 
     {
@@ -267,8 +267,8 @@ mod tests {
             Uuid::parse_str("550e8400-e29b-41d4-a716-446655440123").expect("uuid should parse");
         let backend_user_id = RwLock::new(Some(applicant_id));
 
-        let resolved =
-            resolve_applicant_id_value(&backend_user_id).expect("ready backend identity should resolve");
+        let resolved = resolve_applicant_id_value(&backend_user_id)
+            .expect("ready backend identity should resolve");
 
         assert_eq!(resolved, applicant_id);
     }

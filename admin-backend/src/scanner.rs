@@ -378,7 +378,12 @@ fn parse_scan_result(payload: Value) -> Result<ScanResult, ScanError> {
         .get("max_severity")
         .and_then(Value::as_str)
         .map(FindingSeverity::from_raw)
-        .or_else(|| findings.iter().map(|f| f.severity).max_by_key(severity_rank));
+        .or_else(|| {
+            findings
+                .iter()
+                .map(|f| f.severity)
+                .max_by_key(severity_rank)
+        });
 
     let is_safe = payload
         .get("is_safe")

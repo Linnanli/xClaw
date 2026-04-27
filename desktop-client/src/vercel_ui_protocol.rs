@@ -166,9 +166,7 @@ pub enum VercelUIStream {
     // === Stream lifecycle ===
     /// Signals the end of the stream.
     #[serde(rename = "finish")]
-    Finish {
-        id: String,
-    },
+    Finish { id: String },
 
     // === Custom (non-Vercel) extensions ===
     /// Custom data part (for approval_needed, connection_status, etc.)
@@ -360,9 +358,7 @@ mod tests {
 
     #[test]
     fn test_finish_serialization() {
-        let event = VercelUIStream::Finish {
-            id: "msg_1".into(),
-        };
+        let event = VercelUIStream::Finish { id: "msg_1".into() };
         let json = serde_json::to_value(&event).expect("should serialize");
         assert_eq!(json["type"], "finish");
         assert_eq!(json["id"], "msg_1");
@@ -377,8 +373,7 @@ mod tests {
             provider_metadata: None,
         };
         let json_str = serde_json::to_string(&event).expect("serialize");
-        let deserialized: VercelUIStream =
-            serde_json::from_str(&json_str).expect("deserialize");
+        let deserialized: VercelUIStream = serde_json::from_str(&json_str).expect("deserialize");
         let json_again = serde_json::to_string(&deserialized).expect("re-serialize");
         assert_eq!(json_str, json_again);
     }

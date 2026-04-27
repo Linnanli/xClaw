@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use ironclaw::channels::{AttachmentKind, IncomingAttachment, IncomingMessage};
 use serde::{Deserialize, Serialize};
-use tauri::{Emitter, Manager, State};
+use tauri::{Manager, State};
 
 use crate::data_reporter::ConversationAttachment;
 use crate::state::EngineState;
@@ -176,7 +176,8 @@ pub async fn send_chat_message(
     }
 
     // ── Skill 激活通知（desktop-client 侧扩展）────────────────────
-    let activated_skills = detect_and_emit_skills_activated(&app_handle, state, &safe_content);
+    let activated_skills =
+        detect_and_emit_skills_activated(&app_handle, state, &thread_id, &safe_content);
 
     state.conversation_tracker.record_user_message(
         &thread_id,
@@ -253,36 +254,36 @@ fn build_attachments(
     let mut report_attachments = Vec::new();
 
     for attachment in attachments.unwrap_or_default() {
-            let kind = match attachment.kind.as_str() {
-                "audio" => AttachmentKind::Audio,
-                "image" => AttachmentKind::Image,
-                "document" => AttachmentKind::Document,
-                _ => AttachmentKind::from_mime_type(&attachment.mime_type),
-            };
+        let kind = match attachment.kind.as_str() {
+            "audio" => AttachmentKind::Audio,
+            "image" => AttachmentKind::Image,
+            "document" => AttachmentKind::Document,
+            _ => AttachmentKind::from_mime_type(&attachment.mime_type),
+        };
 
-            report_attachments.push(ConversationAttachment::from_frontend(
-                attachment.id.clone(),
-                attachment.kind.clone(),
-                attachment.mime_type.clone(),
-                attachment.filename.clone(),
-                attachment.size_bytes,
-                attachment.extracted_text.clone(),
-                &attachment.data,
-                attachment.duration_secs,
-            ));
+        report_attachments.push(ConversationAttachment::from_frontend(
+            attachment.id.clone(),
+            attachment.kind.clone(),
+            attachment.mime_type.clone(),
+            attachment.filename.clone(),
+            attachment.size_bytes,
+            attachment.extracted_text.clone(),
+            &attachment.data,
+            attachment.duration_secs,
+        ));
 
-            incoming_attachments.push(IncomingAttachment {
-                id: attachment.id,
-                kind,
-                mime_type: attachment.mime_type,
-                filename: attachment.filename,
-                size_bytes: attachment.size_bytes,
-                source_url: None,
-                storage_key: None,
-                extracted_text: attachment.extracted_text,
-                data: attachment.data,
-                duration_secs: attachment.duration_secs,
-            });
+        incoming_attachments.push(IncomingAttachment {
+            id: attachment.id,
+            kind,
+            mime_type: attachment.mime_type,
+            filename: attachment.filename,
+            size_bytes: attachment.size_bytes,
+            source_url: None,
+            storage_key: None,
+            extracted_text: attachment.extracted_text,
+            data: attachment.data,
+            duration_secs: attachment.duration_secs,
+        });
     }
 
     Ok((incoming_attachments, report_attachments))
@@ -352,6 +353,7 @@ fn build_message_metadata(
 fn detect_and_emit_skills_activated(
     app_handle: &tauri::AppHandle,
     state: &crate::state::AppState,
+    thread_id: &str,
     content: &str,
 ) -> Vec<String> {
     let Some(registry) = state.skill_registry.as_ref() else {
@@ -387,16 +389,19 @@ fn detect_and_emit_skills_activated(
     let skill_names: Vec<String> = selected.iter().map(|s| s.name().to_string()).collect();
     tracing::debug!(skills = ?skill_names, "Skills activated (client-side detection)");
 
-    let _ = app_handle.emit(
-        "chat-stream",
-        VercelUIStream::DataCustom {
-            id: None,
-            data: serde_json::json!({
-                "type": "skills_activated",
-                "skills": skill_names,
-            }),
-        },
-    );
+    let event = VercelUIStream::DataCustom {
+        id: None,
+        data: serde_json::json!({
+            "type": "skills_activated",
+            "skills": skill_names,
+        }),
+    };
+    let thread_scope = if thread_id.is_empty() {
+        None
+    } else {
+        Some(thread_id)
+    };
+    let _ = crate::tauri_channel::emit_chat_stream(app_handle, thread_scope, &event);
 
     skill_names
 }
@@ -410,19 +415,20 @@ pub async fn subscribe_chat_events(app_handle: tauri::AppHandle) -> Result<(), S
         .try_state::<crate::state::EngineState>()
         .map_or(false, |es| es.is_ready())
     {
-        app_handle
-            .emit(
-                "chat-stream",
-                VercelUIStream::DataCustom {
-                    id: None,
-                    data: serde_json::json!({
-                        "type": "connection_status",
-                        "connected": true,
-                        "message": "IronClaw engine ready",
-                    }),
-                },
-            )
-            .map_err(|e| format!("Failed to emit connection status: {}", e))?;
+        // 系统级广播：前端所有 Transport 透传
+        crate::tauri_channel::emit_chat_stream(
+            &app_handle,
+            None,
+            &VercelUIStream::DataCustom {
+                id: None,
+                data: serde_json::json!({
+                    "type": "connection_status",
+                    "connected": true,
+                    "message": "IronClaw engine ready",
+                }),
+            },
+        )
+        .map_err(|e| format!("Failed to emit connection status: {}", e))?;
     }
 
     Ok(())

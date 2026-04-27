@@ -1,0 +1,13 @@
+[package]
+name = "dasclaw_bash_validation"
+version = "0.0.0-w1"
+edition = "2021"
+description = "Bash injection detection (6 validation modules from claw-code)."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = "1"

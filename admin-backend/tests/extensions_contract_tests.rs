@@ -33,10 +33,7 @@ mod registry_contract {
         let entry = &results[0];
         // ironclaw CatalogSearchResult(rename_all=camelCase) 期望的字段
         assert!(entry.get("slug").is_some(), "缺少 slug 字段");
-        assert!(
-            entry.get("displayName").is_some(),
-            "缺少 displayName 字段"
-        );
+        assert!(entry.get("displayName").is_some(), "缺少 displayName 字段");
         assert!(entry.get("summary").is_some(), "缺少 summary 字段");
     }
 
@@ -131,12 +128,7 @@ mod skill_list_contract {
             assert!(
                 matches!(
                     *s,
-                    "scanning"
-                        | "pending"
-                        | "approved"
-                        | "rejected"
-                        | "scan_failed"
-                        | "yanked"
+                    "scanning" | "pending" | "approved" | "rejected" | "scan_failed" | "yanked"
                 ),
                 "无效的 review_status: {}",
                 s
@@ -178,7 +170,10 @@ mod scan_results_contract {
         });
 
         assert!(response.get("skill_id").is_some(), "缺少 skill_id 字段");
-        assert!(response.get("scan_result").is_some(), "缺少 scan_result 字段");
+        assert!(
+            response.get("scan_result").is_some(),
+            "缺少 scan_result 字段"
+        );
 
         let scan_result = &response["scan_result"];
         for field in [
@@ -188,7 +183,11 @@ mod scan_results_contract {
             "findings_count",
             "findings",
         ] {
-            assert!(scan_result.get(field).is_some(), "scan_result 缺少字段: {}", field);
+            assert!(
+                scan_result.get(field).is_some(),
+                "scan_result 缺少字段: {}",
+                field
+            );
         }
     }
 }
@@ -215,7 +214,11 @@ mod skill_action_contract {
             "is_safe",
             "findings_count",
         ] {
-            assert!(response.get(field).is_some(), "rescan 响应缺少字段: {}", field);
+            assert!(
+                response.get(field).is_some(),
+                "rescan 响应缺少字段: {}",
+                field
+            );
         }
     }
 
@@ -229,7 +232,11 @@ mod skill_action_contract {
         });
 
         for field in ["id", "previous_review_status", "review_status", "enabled"] {
-            assert!(response.get(field).is_some(), "yank 响应缺少字段: {}", field);
+            assert!(
+                response.get(field).is_some(),
+                "yank 响应缺少字段: {}",
+                field
+            );
         }
     }
 }
@@ -311,7 +318,11 @@ mod client_policy_contract {
             "allowed_skills",
             "allowed_extensions",
         ] {
-            assert!(manifest.get(field).is_some(), "manifest 缺少字段: {}", field);
+            assert!(
+                manifest.get(field).is_some(),
+                "manifest 缺少字段: {}",
+                field
+            );
         }
     }
 }

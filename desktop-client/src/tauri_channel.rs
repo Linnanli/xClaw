@@ -32,6 +32,52 @@ use crate::conversation_tracker::ConversationTracker;
 use crate::vercel_ui_protocol::VercelUIStream;
 
 // ---------------------------------------------------------------------------
+// chat-stream envelope — 事件线程归属
+// ---------------------------------------------------------------------------
+
+/// 将 `VercelUIStream` 事件包装成 `chat-stream` envelope 后 emit 到前端。
+///
+/// - `thread_id = Some(tid)` → 线程专属事件，前端 Transport 按 threadId 过滤，
+///   与当前活跃 thread 不匹配则丢弃（避免 thread 切换时旧流污染新线程 state）。
+/// - `thread_id = None` → 系统级广播（`connection_status` / `error` / 全局 job 事件等），
+///   前端所有 Transport 透传。
+///
+/// Envelope 结构：在 `VercelUIStream` 序列化结果的顶层注入 `threadId` 字段。
+/// AI SDK v5 `UIMessageChunk` 不使用该字段，完全向后兼容。
+pub fn emit_chat_stream(
+    app_handle: &tauri::AppHandle,
+    thread_id: Option<&str>,
+    event: &VercelUIStream,
+) -> Result<(), tauri::Error> {
+    let payload = build_chat_stream_payload(thread_id, event);
+    app_handle.emit("chat-stream", payload)
+}
+
+/// 构造 `chat-stream` envelope payload（纯函数，便于单元测试）。
+///
+/// - `thread_id = Some(tid)` 且 `tid` 非空 → payload 顶层注入 `threadId` 字段
+/// - `thread_id = None` 或空串 → 不注入，视为系统级广播
+/// - 若 `VercelUIStream` 意外无法序列化（极端情况），退化为事件本体直接返回
+pub(crate) fn build_chat_stream_payload(
+    thread_id: Option<&str>,
+    event: &VercelUIStream,
+) -> serde_json::Value {
+    let mut payload = match serde_json::to_value(event) {
+        Ok(v) => v,
+        Err(_) => return serde_json::to_value(event).unwrap_or(serde_json::Value::Null),
+    };
+    if let (Some(tid), serde_json::Value::Object(map)) = (thread_id, &mut payload) {
+        if !tid.is_empty() {
+            map.insert(
+                "threadId".to_string(),
+                serde_json::Value::String(tid.to_string()),
+            );
+        }
+    }
+    payload
+}
+
+// ---------------------------------------------------------------------------
 // TauriJobEventSink — Worker 事件广播到 Tauri IPC
 // ---------------------------------------------------------------------------
 
@@ -58,10 +104,7 @@ impl ironclaw::worker::JobEventSink for TauriJobEventSink {
                     .and_then(|v| v.as_str())
                     .or_else(|| data.get("message").and_then(|v| v.as_str()))
                     .unwrap_or("unknown");
-                let title = data
-                    .get("title")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let title = data.get("title").and_then(|v| v.as_str()).unwrap_or("");
                 let event = VercelUIStream::DataCustom {
                     id: None,
                     data: json!({
@@ -71,7 +114,8 @@ impl ironclaw::worker::JobEventSink for TauriJobEventSink {
                         "status": status,
                     }),
                 };
-                let _ = self.app_handle.emit("chat-stream", &event);
+                // job 事件跨 thread 广播（未来可携带 owning thread_id，当前暂不区分）
+                let _ = emit_chat_stream(&self.app_handle, None, &event);
             }
             _ => {} // tool_use、reasoning 等不推送
         }
@@ -129,13 +173,19 @@ impl TauriChannel {
     }
 
     /// 向前端发送 Vercel AI protocol 事件（`chat-stream` 通道）。
-    fn emit_stream(&self, event: &VercelUIStream) -> Result<(), ChannelError> {
-        self.app_handle
-            .emit("chat-stream", event)
-            .map_err(|e| ChannelError::SendFailed {
-                name: "tauri".into(),
-                reason: e.to_string(),
-            })
+    ///
+    /// `thread_id` 决定事件归属：
+    /// - `Some(tid)` → 线程专属事件，前端按 threadId 过滤
+    /// - `None` → 系统级广播，前端所有 Transport 透传
+    fn emit_stream(
+        &self,
+        thread_id: Option<&str>,
+        event: &VercelUIStream,
+    ) -> Result<(), ChannelError> {
+        emit_chat_stream(&self.app_handle, thread_id, event).map_err(|e| ChannelError::SendFailed {
+            name: "tauri".into(),
+            reason: e.to_string(),
+        })
     }
 
     /// 将 `StatusUpdate` 映射为 `VercelUIStream` 事件并发送。
@@ -144,11 +194,12 @@ impl TauriChannel {
     /// - 其他事件 → `DataCustom { data: {"type": "...", ...} }`
     pub(crate) fn emit_status_stream(
         &self,
+        thread_id: Option<&str>,
         status: &StatusUpdate,
         metadata: &serde_json::Value,
     ) -> Result<(), ChannelError> {
         for event in map_status_to_stream(status, metadata) {
-            self.emit_stream(&event)?;
+            self.emit_stream(thread_id, &event)?;
         }
         Ok(())
     }
@@ -244,9 +295,7 @@ pub(crate) fn map_status_to_stream(
             }
             vec![VercelUIStream::ToolOutputError {
                 tool_call_id: tcid,
-                error_text: error
-                    .clone()
-                    .unwrap_or_else(|| "Unknown error".to_string()),
+                error_text: error.clone().unwrap_or_else(|| "Unknown error".to_string()),
                 provider_executed: Some(true),
             }]
         }
@@ -269,9 +318,7 @@ pub(crate) fn map_status_to_stream(
             data: json!({ "type": "status", "message": msg, "level": "info" }),
         }],
 
-        StatusUpdate::JobStarted {
-            job_id, title, ..
-        } => vec![VercelUIStream::DataCustom {
+        StatusUpdate::JobStarted { job_id, title, .. } => vec![VercelUIStream::DataCustom {
             id: None,
             data: json!({
                 "type": "job_status",
@@ -404,15 +451,18 @@ impl Channel for TauriChannel {
                     reason: "Channel already started (start() called twice)".into(),
                 })?;
 
-        // 通知前端引擎就绪
-        let _ = self.emit_stream(&VercelUIStream::DataCustom {
-            id: None,
-            data: json!({
-                "type": "connection_status",
-                "connected": true,
-                "message": "IronClaw engine ready",
-            }),
-        });
+        // 通知前端引擎就绪（系统级广播）
+        let _ = self.emit_stream(
+            None,
+            &VercelUIStream::DataCustom {
+                id: None,
+                data: json!({
+                    "type": "connection_status",
+                    "connected": true,
+                    "message": "IronClaw engine ready",
+                }),
+            },
+        );
 
         let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
         Ok(Box::pin(stream))
@@ -430,19 +480,25 @@ impl Channel for TauriChannel {
             tracker.record_assistant_message(&thread_id, &response.content, None, 0, 0);
         }
 
-        self.emit_stream(&VercelUIStream::DataCustom {
-            id: None,
-            data: json!({
-                "type": "response",
-                "message_id": msg.id.to_string(),
-                "content": response.content,
-                "thread_id": thread_id,
-                "source": "chat",
-            }),
-        })?;
-        self.emit_stream(&VercelUIStream::Finish {
-            id: msg.id.to_string(),
-        })
+        self.emit_stream(
+            Some(&thread_id),
+            &VercelUIStream::DataCustom {
+                id: None,
+                data: json!({
+                    "type": "response",
+                    "message_id": msg.id.to_string(),
+                    "content": response.content,
+                    "thread_id": thread_id,
+                    "source": "chat",
+                }),
+            },
+        )?;
+        self.emit_stream(
+            Some(&thread_id),
+            &VercelUIStream::Finish {
+                id: msg.id.to_string(),
+            },
+        )
     }
 
     async fn send_status(
@@ -450,20 +506,30 @@ impl Channel for TauriChannel {
         status: StatusUpdate,
         metadata: &serde_json::Value,
     ) -> Result<(), ChannelError> {
+        // 提取 thread_id（两种 key 兼容 Agent 内部约定）
+        let thread_id = metadata
+            .get("notify_thread_id")
+            .and_then(|v| v.as_str())
+            .or_else(|| metadata.get("thread_id").and_then(|v| v.as_str()))
+            .filter(|s| !s.is_empty());
+
         // routine_triggered → DataCustom
         if metadata
             .get("routine_triggered")
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
         {
-            return self.emit_stream(&VercelUIStream::DataCustom {
-                id: None,
-                data: json!({
-                    "type": "routine_triggered",
-                    "thread_id": metadata.get("thread_id").and_then(|v| v.as_str()).unwrap_or_default(),
-                    "fired": metadata.get("fired").and_then(|v| v.as_u64()).unwrap_or(1),
-                }),
-            });
+            return self.emit_stream(
+                thread_id,
+                &VercelUIStream::DataCustom {
+                    id: None,
+                    data: json!({
+                        "type": "routine_triggered",
+                        "thread_id": thread_id.unwrap_or_default(),
+                        "fired": metadata.get("fired").and_then(|v| v.as_u64()).unwrap_or(1),
+                    }),
+                },
+            );
         }
 
         // TurnCost → 只更新对话追踪器，不推送到前端
@@ -474,12 +540,8 @@ impl Channel for TauriChannel {
         } = &status
         {
             if let Some(tracker) = &self.conversation_tracker {
-                let thread_id = metadata
-                    .get("notify_thread_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
                 tracker.update_last_assistant_tokens(
-                    thread_id,
+                    thread_id.unwrap_or_default(),
                     "",
                     (*input_tokens).min(i32::MAX as u64) as i32,
                     (*output_tokens).min(i32::MAX as u64) as i32,
@@ -488,7 +550,7 @@ impl Channel for TauriChannel {
             return Ok(());
         }
 
-        self.emit_status_stream(&status, metadata)
+        self.emit_status_stream(thread_id, &status, metadata)
     }
 
     async fn broadcast(
@@ -496,16 +558,22 @@ impl Channel for TauriChannel {
         _user_id: &str,
         response: OutgoingResponse,
     ) -> Result<(), ChannelError> {
-        self.emit_stream(&VercelUIStream::DataCustom {
-            id: None,
-            data: json!({
-                "type": "response",
-                "message_id": uuid::Uuid::new_v4().to_string(),
-                "content": response.content,
-                "thread_id": response.thread_id.unwrap_or_default(),
-                "source": "routine",
-            }),
-        })
+        let thread_id = response.thread_id.clone();
+        let thread_scope = thread_id.as_deref();
+        let thread_id_str = thread_id.clone().unwrap_or_default();
+        self.emit_stream(
+            thread_scope,
+            &VercelUIStream::DataCustom {
+                id: None,
+                data: json!({
+                    "type": "response",
+                    "message_id": uuid::Uuid::new_v4().to_string(),
+                    "content": response.content,
+                    "thread_id": thread_id_str,
+                    "source": "routine",
+                }),
+            },
+        )
     }
 
     async fn health_check(&self) -> Result<(), ChannelError> {
@@ -514,14 +582,17 @@ impl Channel for TauriChannel {
     }
 
     async fn shutdown(&self) -> Result<(), ChannelError> {
-        let _ = self.emit_stream(&VercelUIStream::DataCustom {
-            id: None,
-            data: json!({
-                "type": "connection_status",
-                "connected": false,
-                "message": "IronClaw engine shutting down",
-            }),
-        });
+        let _ = self.emit_stream(
+            None,
+            &VercelUIStream::DataCustom {
+                id: None,
+                data: json!({
+                    "type": "connection_status",
+                    "connected": false,
+                    "message": "IronClaw engine shutting down",
+                }),
+            },
+        );
         Ok(())
     }
 }
@@ -549,20 +620,102 @@ mod tests {
     fn test_status_to_stream_covers_all_variants() {
         let cases: Vec<(StatusUpdate, serde_json::Value)> = vec![
             (StatusUpdate::Thinking("processing...".into()), empty_meta()),
-            (StatusUpdate::ToolStarted { name: "shell".into() }, tool_meta("tc-1")),
-            (StatusUpdate::ToolCompleted { name: "shell".into(), success: true, error: None, parameters: None }, tool_meta("tc-1")),
-            (StatusUpdate::ToolCompleted { name: "shell".into(), success: false, error: Some("fail".into()), parameters: None }, tool_meta("tc-2")),
-            (StatusUpdate::ToolResult { name: "shell".into(), preview: "output...".into() }, tool_meta("tc-1")),
+            (
+                StatusUpdate::ToolStarted {
+                    name: "shell".into(),
+                },
+                tool_meta("tc-1"),
+            ),
+            (
+                StatusUpdate::ToolCompleted {
+                    name: "shell".into(),
+                    success: true,
+                    error: None,
+                    parameters: None,
+                },
+                tool_meta("tc-1"),
+            ),
+            (
+                StatusUpdate::ToolCompleted {
+                    name: "shell".into(),
+                    success: false,
+                    error: Some("fail".into()),
+                    parameters: None,
+                },
+                tool_meta("tc-2"),
+            ),
+            (
+                StatusUpdate::ToolResult {
+                    name: "shell".into(),
+                    preview: "output...".into(),
+                },
+                tool_meta("tc-1"),
+            ),
             (StatusUpdate::StreamChunk("hello ".into()), empty_meta()),
             (StatusUpdate::Status("ready".into()), empty_meta()),
-            (StatusUpdate::JobStarted { job_id: "j-1".into(), title: "Build".into(), browse_url: "http://localhost".into() }, empty_meta()),
-            (StatusUpdate::ApprovalNeeded { request_id: "r-1".into(), tool_name: "rm".into(), description: "delete file".into(), parameters: json!({}), allow_always: true }, empty_meta()),
-            (StatusUpdate::AuthRequired { extension_name: "github".into(), instructions: Some("click link".into()), auth_url: None, setup_url: None }, empty_meta()),
-            (StatusUpdate::AuthCompleted { extension_name: "github".into(), success: true, message: "ok".into() }, empty_meta()),
-            (StatusUpdate::ImageGenerated { data_url: "data:image/png;base64,abc".into(), path: Some("/tmp/img.png".into()) }, empty_meta()),
-            (StatusUpdate::Suggestions { suggestions: vec!["try this".into()] }, empty_meta()),
-            (StatusUpdate::ReasoningUpdate { narrative: "Choosing search tool".into(), decisions: vec![] }, empty_meta()),
-            (StatusUpdate::TurnCost { input_tokens: 100, output_tokens: 50, cost_usd: "$0.0010".into() }, empty_meta()),
+            (
+                StatusUpdate::JobStarted {
+                    job_id: "j-1".into(),
+                    title: "Build".into(),
+                    browse_url: "http://localhost".into(),
+                },
+                empty_meta(),
+            ),
+            (
+                StatusUpdate::ApprovalNeeded {
+                    request_id: "r-1".into(),
+                    tool_name: "rm".into(),
+                    description: "delete file".into(),
+                    parameters: json!({}),
+                    allow_always: true,
+                },
+                empty_meta(),
+            ),
+            (
+                StatusUpdate::AuthRequired {
+                    extension_name: "github".into(),
+                    instructions: Some("click link".into()),
+                    auth_url: None,
+                    setup_url: None,
+                },
+                empty_meta(),
+            ),
+            (
+                StatusUpdate::AuthCompleted {
+                    extension_name: "github".into(),
+                    success: true,
+                    message: "ok".into(),
+                },
+                empty_meta(),
+            ),
+            (
+                StatusUpdate::ImageGenerated {
+                    data_url: "data:image/png;base64,abc".into(),
+                    path: Some("/tmp/img.png".into()),
+                },
+                empty_meta(),
+            ),
+            (
+                StatusUpdate::Suggestions {
+                    suggestions: vec!["try this".into()],
+                },
+                empty_meta(),
+            ),
+            (
+                StatusUpdate::ReasoningUpdate {
+                    narrative: "Choosing search tool".into(),
+                    decisions: vec![],
+                },
+                empty_meta(),
+            ),
+            (
+                StatusUpdate::TurnCost {
+                    input_tokens: 100,
+                    output_tokens: 50,
+                    cost_usd: "$0.0010".into(),
+                },
+                empty_meta(),
+            ),
         ];
 
         for (status, meta) in &cases {
@@ -649,7 +802,10 @@ mod tests {
         let events = map_status_to_stream(&status, &tool_meta("tc-1"));
         assert_eq!(events.len(), 1);
         let json = serde_json::to_string(&events[0]).expect("should serialize");
-        assert!(!json.contains("REDACTED"), "parameters should not be in emitted event");
+        assert!(
+            !json.contains("REDACTED"),
+            "parameters should not be in emitted event"
+        );
     }
 
     /// 契约测试：JobStarted → data-custom job_status 事件。
@@ -664,7 +820,10 @@ mod tests {
         assert_eq!(events.len(), 1);
         let json = serde_json::to_value(&events[0]).expect("should serialize");
         assert_eq!(json["data"]["type"], "job_status");
-        assert_eq!(json["data"]["job_id"], "550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(
+            json["data"]["job_id"],
+            "550e8400-e29b-41d4-a716-446655440000"
+        );
         assert_eq!(json["data"]["title"], "分析代码库");
         assert_eq!(json["data"]["status"], "in_progress");
     }
@@ -680,9 +839,18 @@ mod tests {
         let events = map_status_to_stream(&status, &empty_meta());
         assert_eq!(events.len(), 1);
         let json_str = serde_json::to_string(&events[0]).expect("should serialize");
-        assert!(!json_str.contains("user_id"), "user_id should not be exposed");
-        assert!(!json_str.contains("browse_url"), "browse_url should not be forwarded");
-        assert!(!json_str.contains("secret"), "browse_url value should not leak");
+        assert!(
+            !json_str.contains("user_id"),
+            "user_id should not be exposed"
+        );
+        assert!(
+            !json_str.contains("browse_url"),
+            "browse_url should not be forwarded"
+        );
+        assert!(
+            !json_str.contains("secret"),
+            "browse_url value should not leak"
+        );
     }
 
     /// 验证 ToolStarted 无 tool_call_id 时返回空列表（不生成空 ID 的事件）。
@@ -692,6 +860,76 @@ mod tests {
             name: "shell".into(),
         };
         let events = map_status_to_stream(&status, &empty_meta());
-        assert!(events.is_empty(), "ToolStarted without tool_call_id should produce no events");
+        assert!(
+            events.is_empty(),
+            "ToolStarted without tool_call_id should produce no events"
+        );
+    }
+
+    // ── Envelope 测试：chat-stream payload 注入 threadId ────────────────────
+
+    /// 线程专属事件：顶层应含 `threadId` 字段，type 字段保持不变。
+    #[test]
+    fn test_envelope_injects_threadid_for_thread_scoped_event() {
+        let event = VercelUIStream::TextDelta {
+            id: "m1".into(),
+            delta: "hi".into(),
+            provider_metadata: None,
+        };
+        let payload = build_chat_stream_payload(Some("thread-abc"), &event);
+        assert_eq!(payload["type"], "text-delta");
+        assert_eq!(payload["id"], "m1");
+        assert_eq!(payload["delta"], "hi");
+        assert_eq!(payload["threadId"], "thread-abc");
+    }
+
+    /// 系统级广播：`thread_id = None` 时 payload 顶层不应出现 `threadId` 字段。
+    #[test]
+    fn test_envelope_omits_threadid_for_system_event() {
+        let event = VercelUIStream::DataCustom {
+            id: None,
+            data: json!({
+                "type": "connection_status",
+                "connected": true,
+            }),
+        };
+        let payload = build_chat_stream_payload(None, &event);
+        assert_eq!(payload["type"], "data-custom");
+        assert_eq!(payload["data"]["type"], "connection_status");
+        assert!(
+            payload.get("threadId").is_none(),
+            "system broadcast must not carry threadId"
+        );
+    }
+
+    /// 空串 threadId 等同于系统广播（fail-safe：避免前端误把空串当 thread 匹配）。
+    #[test]
+    fn test_envelope_treats_empty_threadid_as_system() {
+        let event = VercelUIStream::Error {
+            error_text: "boom".into(),
+        };
+        let payload = build_chat_stream_payload(Some(""), &event);
+        assert_eq!(payload["type"], "error");
+        assert!(payload.get("threadId").is_none());
+    }
+
+    /// DataCustom 类型的线程专属事件：既保留内层 `data.thread_id`，
+    /// 也在顶层注入 envelope `threadId`，两者互不冲突（顶层用于路由，内层保留业务字段）。
+    #[test]
+    fn test_envelope_preserves_inner_data_fields() {
+        let event = VercelUIStream::DataCustom {
+            id: None,
+            data: json!({
+                "type": "approval_result",
+                "thread_id": "thread-abc",
+                "request_id": "r-1",
+                "status": "approved",
+            }),
+        };
+        let payload = build_chat_stream_payload(Some("thread-abc"), &event);
+        assert_eq!(payload["threadId"], "thread-abc");
+        assert_eq!(payload["data"]["thread_id"], "thread-abc");
+        assert_eq!(payload["data"]["request_id"], "r-1");
+        assert_eq!(payload["data"]["status"], "approved");
     }
 }

@@ -109,6 +109,8 @@ const FRONTEND_INVOKED_COMMANDS: &[&str] = &[
     // ── 文件操作 ────────────────────────────────────────────────
     "ic_undo_file_edit",
     "ic_open_file_at_line",
+    // ── Sandbox（W2 ADR-110 接线）──────────────────────────────
+    "ic_sandbox_smoke_test",
 ];
 
 /// `all_tauri_commands!()` 宏中注册的所有命令名（必须与 lib.rs 保持同步）。
@@ -198,6 +200,8 @@ const REGISTERED_COMMANDS: &[&str] = &[
     // ── 文件操作 ────────────────────────────────────────────────
     "ic_undo_file_edit",
     "ic_open_file_at_line",
+    // ── Sandbox（W2 ADR-110 接线）──────────────────────────────
+    "ic_sandbox_smoke_test",
 ];
 
 #[test]

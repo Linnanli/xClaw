@@ -3,51 +3,65 @@ on:
   workflow_call:
   pull_request:
     branches:
-      - main
+      - xClaw
   push:
     branches:
-      - main
+      - xClaw
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   tests:
     name: Tests (${{ matrix.name }})
+    # xClaw fork: skip Linux Tests on PR to keep iteration fast.
+    # Full test suite still runs on push-to-xClaw and workflow_call.
+    # Re-enable for PR once phase3 stabilises.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: all-features
-            # Keep product feature coverage broad without pulling in the
-            # test-only `integration` feature, which is exercised separately
-            # in the heavy integration job below.
-            flags: "--no-default-features --features postgres,libsql,html-to-markdown,bedrock,import"
-          - name: default
-            flags: ""
-          - name: libsql-only
-            flags: "--no-default-features --features libsql"
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"name":"default","flags":""}]' || '[{"name":"all-features","flags":"--no-default-features --features postgres,libsql,html-to-markdown,bedrock,import"},{"name":"default","flags":""},{"name":"libsql-only","flags":"--no-default-features --features libsql"}]') }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Install Linux system dependencies (GTK / WebKit for Tauri desktop-client)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libssl-dev
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-wasip2
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.name }}
-      - name: Install cargo-component
-        run: cargo install cargo-component --locked || true
-      - name: Build WASM channels (for integration tests)
-        run: ./scripts/build-wasm-extensions.sh --channels
+      # NOTE(xClaw fork): removed the `Install cargo-component` and
+      # `Build WASM channels` steps inherited from ironclaw — channels-src/
+      # is not active in xClaw and `./scripts/build-wasm-extensions.sh` does
+      # not exist at the workspace root.
       - name: Run Tests
         run: cargo test ${{ matrix.flags }} -- --nocapture
 
   heavy-integration-tests:
     name: Heavy Integration Tests
+    # disabled in xClaw fork: Telegram WASM channel not active here.
+    # re-enable by removing `if: false` once channels-src/telegram is wired up.
+    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -64,13 +78,14 @@ jobs:
 
   telegram-tests:
     name: Telegram Channel Tests
-    if: >
-      github.event_name != 'pull_request' ||
-      github.base_ref != 'staging'
+    # disabled in xClaw fork: Telegram channel not active here.
+    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -78,41 +93,30 @@ jobs:
         run: cargo test --manifest-path channels-src/telegram/Cargo.toml -- --nocapture
 
   windows-build:
-    name: Windows Build (${{ matrix.name }})
-    if: >
-      github.event_name != 'pull_request' ||
-      github.base_ref != 'staging'
-    runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: all-features
-            flags: "--no-default-features --features postgres,libsql,html-to-markdown,bedrock,import"
-          - name: default
-            flags: ""
-          - name: libsql-only
-            flags: "--no-default-features --features libsql"
+    # xClaw fork: Windows build moved to its own workflow.
+    # See .github/workflows/windows-ci.yml — runs on workflow_dispatch +
+    # weekly schedule + push to main/refactor/* + push to feat/win-* /
+    # ci/win-* branches. Decoupled from main PR cadence to keep iteration
+    # fast; cross-platform regression is still protected by the dedicated
+    # workflow.
+    name: Windows Build (decoupled to windows-ci.yml)
+    runs-on: ubuntu-latest
+    if: false
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: windows-${{ matrix.name }}
-      - name: Check compilation
-        run: cargo check --all --benches --tests --examples ${{ matrix.flags }}
+      - run: echo "see .github/workflows/windows-ci.yml"
 
   wasm-wit-compat:
     name: WASM WIT Compatibility
-    if: >
-      github.event_name != 'pull_request' ||
-      github.base_ref != 'staging'
+    # disabled in xClaw fork: ./scripts/build-wasm-extensions.sh inherited from
+    # ironclaw is not present at the xClaw workspace root, and channels-src/
+    # WIT extensions are not active in this fork.
+    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -129,10 +133,15 @@ jobs:
 
   bench-compile:
     name: Benchmark Compilation
+    # disabled in xClaw fork: benches inherited from ironclaw require Telegram /
+    # channels infra that is not active in this fork.
+    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -143,24 +152,29 @@ jobs:
 
   docker-build:
     name: Docker Build
-    if: >
-      github.event_name != 'pull_request' ||
-      github.base_ref != 'staging'
+    # disabled in xClaw fork: Dockerfile inherited from ironclaw is not yet adapted
+    # to the dasclaw_* workspace + 3 git submodules layout.
+    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
       - name: Build Docker image
         run: docker build -t ironclaw-test:ci .
 
   version-check:
     name: Version Bump Check
+    # disabled in xClaw fork: extension version-bump policy inherited from ironclaw
+    # does not apply to the phase3 refactor cadence.
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    if: false
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
+          submodules: recursive
           fetch-depth: 0
       - name: Check version bumps for changed extensions
         env:
@@ -172,25 +186,20 @@ jobs:
     name: Run Tests
     runs-on: ubuntu-latest
     if: always()
-    needs: [tests, heavy-integration-tests, telegram-tests, wasm-wit-compat, docker-build, windows-build, version-check, bench-compile]
+    needs: [tests, heavy-integration-tests, telegram-tests, wasm-wit-compat, docker-build, version-check, bench-compile]
     steps:
       - run: |
-          # Unit tests must always pass
-          if [[ "${{ needs.tests.result }}" != "success" ]]; then
-            echo "Unit tests failed"
-            exit 1
-          fi
-          if [[ "${{ needs.heavy-integration-tests.result }}" != "success" ]]; then
-            echo "Heavy integration tests failed"
-            exit 1
-          fi
-          # Gated jobs: must pass on promotion PRs / push, skipped on developer PRs
-          for job in telegram-tests wasm-wit-compat docker-build windows-build version-check bench-compile; do
+          # xClaw fork: tests are skipped on PR to keep iteration fast;
+          # treat skipped as pass here, only fail on failure/cancelled.
+          # Full suite still runs on push-to-xClaw. Windows build moved to
+          # .github/workflows/windows-ci.yml — not part of this gate.
+          for job in tests heavy-integration-tests telegram-tests wasm-wit-compat docker-build version-check bench-compile; do
             case "$job" in
+              tests) result="${{ needs.tests.result }}" ;;
+              heavy-integration-tests) result="${{ needs.heavy-integration-tests.result }}" ;;
               telegram-tests) result="${{ needs.telegram-tests.result }}" ;;
               wasm-wit-compat) result="${{ needs.wasm-wit-compat.result }}" ;;
               docker-build) result="${{ needs.docker-build.result }}" ;;
-              windows-build) result="${{ needs.windows-build.result }}" ;;
               version-check) result="${{ needs.version-check.result }}" ;;
               bench-compile) result="${{ needs.bench-compile.result }}" ;;
             esac

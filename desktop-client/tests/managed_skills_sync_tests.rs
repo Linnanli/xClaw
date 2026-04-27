@@ -255,8 +255,12 @@ mod real_integration {
             "downloaded SKILL.md content should not be empty"
         );
 
-        let dir_name = extract_skill_name_from_content(&content)
-            .unwrap_or_else(|| format!("_managed_{}", entry.slug.chars().take(8).collect::<String>()));
+        let dir_name = extract_skill_name_from_content(&content).unwrap_or_else(|| {
+            format!(
+                "_managed_{}",
+                entry.slug.chars().take(8).collect::<String>()
+            )
+        });
 
         let (resolved_name, loaded) = ironclaw::skills::SkillRegistry::prepare_install_to_disk(
             registry.install_target_dir(),
@@ -273,7 +277,10 @@ mod real_integration {
         registry
             .commit_install(&resolved_name, loaded)
             .unwrap_or_else(|e| panic!("commit install failed: {}", e));
-        assert!(registry.has(target), "skill should be installed after lazy download");
+        assert!(
+            registry.has(target),
+            "skill should be installed after lazy download"
+        );
 
         let skill_file = installed_dir.join(target).join("SKILL.md");
         assert!(skill_file.exists(), "installed SKILL.md should exist");
@@ -304,7 +311,10 @@ mod real_integration {
 
         // 直接发 HTTP 请求模拟 SkillCatalog 的 fetch_search 行为
         let client = reqwest::Client::new();
-        let url = format!("{}/api/v1/search?q=&client_token={}", admin_url, client_token); // 空查询 = 列出全部
+        let url = format!(
+            "{}/api/v1/search?q=&client_token={}",
+            admin_url, client_token
+        ); // 空查询 = 列出全部
         eprintln!("Fetching: {}", url);
 
         let response = match client.get(&url).send().await {
@@ -345,8 +355,13 @@ mod real_integration {
             results: Vec<SearchResult>,
         }
 
-        let envelope: Envelope = serde_json::from_str(&body)
-            .unwrap_or_else(|e| panic!("Failed to parse response: {} — body: {}", e, &body[..body.len().min(200)]));
+        let envelope: Envelope = serde_json::from_str(&body).unwrap_or_else(|e| {
+            panic!(
+                "Failed to parse response: {} — body: {}",
+                e,
+                &body[..body.len().min(200)]
+            )
+        });
 
         eprintln!("Parsed {} results:", envelope.results.len());
         for (i, entry) in envelope.results.iter().enumerate() {
@@ -429,7 +444,10 @@ mod real_integration {
                 expected,
                 outcome.results.iter().map(|e| &e.name).collect::<Vec<_>>()
             );
-            eprintln!("✅ find_catalog_slug_for_name 精确匹配成功: slug={:?}", found);
+            eprintln!(
+                "✅ find_catalog_slug_for_name 精确匹配成功: slug={:?}",
+                found
+            );
         } else {
             eprintln!("⚠️ admin backend 没有已审核技能，无法验证端到端流程");
         }

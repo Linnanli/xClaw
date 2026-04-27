@@ -370,7 +370,7 @@ mod tests {
                 source: source.to_string(),
                 trust: "trusted".into(),
                 keywords: vec![],
-            enabled: true,
+                enabled: true,
             };
             let json = serde_json::to_value(&info).unwrap();
             assert_eq!(json["source"], *source);

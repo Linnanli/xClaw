@@ -24,8 +24,8 @@ use crate::{
     extensions_validation::{extract_skill_metadata, validate_skill_package},
     routes::write_audit_log,
     scanner::{
-        FindingSeverity, ScanError, ScanResult, ScanUploadOptions, ScannerConfig,
-        SecurityFinding, SecurityVerdict, SkillScanner,
+        FindingSeverity, ScanError, ScanResult, ScanUploadOptions, ScannerConfig, SecurityFinding,
+        SecurityVerdict, SkillScanner,
     },
     skill_package::extract_skill_package,
     AppState,
@@ -231,7 +231,9 @@ async fn set_item_enabled(
     )
     .await;
 
-    Ok(Json(json!({ "id": item_id, "enabled": enabled, "review_status": review_status })))
+    Ok(Json(
+        json!({ "id": item_id, "enabled": enabled, "review_status": review_status }),
+    ))
 }
 
 pub async fn set_skill_enabled(
@@ -411,7 +413,9 @@ fn enforce_prompt_injection_guard(scan_result: ScanResult, content: &str) -> Sca
         title: Some(PROMPT_INJECTION_FINDING_TITLE.to_string()),
         file: Some("SKILL.md".to_string()),
         snippet: Some(snippet),
-        recommendation: Some("移除提示词注入语句（如忽略系统要求、索要密钥）后重新上传".to_string()),
+        recommendation: Some(
+            "移除提示词注入语句（如忽略系统要求、索要密钥）后重新上传".to_string(),
+        ),
     });
 
     let findings_count = findings.len() as i32;
@@ -451,7 +455,10 @@ fn scanner_error_body_summary(body: &str) -> Option<String> {
 fn scanner_error_summary(error: &ScanError) -> String {
     match error {
         ScanError::Request(message) => {
-            format!("扫描服务请求失败: {}", limit_text(&compact_text(message), 180))
+            format!(
+                "扫描服务请求失败: {}",
+                limit_text(&compact_text(message), 180)
+            )
         }
         ScanError::HttpStatus { status, body } => {
             if let Some(summary) = scanner_error_body_summary(body) {
@@ -460,7 +467,10 @@ fn scanner_error_summary(error: &ScanError) -> String {
             format!("扫描服务返回异常状态码 {}", status)
         }
         ScanError::Parse(message) => {
-            format!("扫描服务响应解析失败: {}", limit_text(&compact_text(message), 180))
+            format!(
+                "扫描服务响应解析失败: {}",
+                limit_text(&compact_text(message), 180)
+            )
         }
     }
 }
@@ -586,21 +596,28 @@ async fn build_scan_upload_options(
     if let Some(model_config_id) = payload.llm_model_config_id {
         let model = load_model_config_for_scan(sqlx_pool, model_config_id).await?;
         if !model.enabled {
-            return Err(Error::Validation("所选模型配置已禁用，请选择启用中的模型".into()));
+            return Err(Error::Validation(
+                "所选模型配置已禁用，请选择启用中的模型".into(),
+            ));
         }
 
         let api_key = sanitize_optional_text(model.api_key)
             .ok_or_else(|| Error::Validation("所选模型配置未配置 API Key".into()))?;
 
-        options.llm_provider = resolve_scanner_provider_from_model(&model.provider, &model.api_format);
+        options.llm_provider =
+            resolve_scanner_provider_from_model(&model.provider, &model.api_format);
         options.llm_api_key = Some(api_key);
-        options.llm_model = Some(prefix_model_for_litellm(&model.model_id, &options.llm_provider));
+        options.llm_model = Some(prefix_model_for_litellm(
+            &model.model_id,
+            &options.llm_provider,
+        ));
         options.llm_base_url = sanitize_optional_text(model.llm_base_url);
         options.llm_api_version = sanitize_optional_text(model.llm_api_version);
         return Ok(options);
     }
 
-    options.llm_provider = resolve_llm_provider(payload.llm_provider.clone(), &options.llm_provider)?;
+    options.llm_provider =
+        resolve_llm_provider(payload.llm_provider.clone(), &options.llm_provider)?;
 
     if let Some(llm_api_key) = sanitize_optional_text(payload.llm_api_key.clone()) {
         options.llm_api_key = Some(llm_api_key);
@@ -609,7 +626,11 @@ async fn build_scan_upload_options(
     Ok(options)
 }
 
-async fn save_scan_result(sqlx_pool: &sqlx::PgPool, skill_id: Uuid, scan: &ScanResult) -> Result<()> {
+async fn save_scan_result(
+    sqlx_pool: &sqlx::PgPool,
+    skill_id: Uuid,
+    scan: &ScanResult,
+) -> Result<()> {
     let findings = serde_json::to_value(&scan.findings)
         .map_err(|e| Error::Internal(format!("序列化扫描结果失败: {}", e)))?;
     let verdict = format!("{:?}", scan.verdict).to_uppercase();
@@ -637,7 +658,11 @@ async fn save_scan_result(sqlx_pool: &sqlx::PgPool, skill_id: Uuid, scan: &ScanR
     Ok(())
 }
 
-async fn clear_scan_results(sqlx_pool: &sqlx::PgPool, target_type: &str, target_id: Uuid) -> Result<()> {
+async fn clear_scan_results(
+    sqlx_pool: &sqlx::PgPool,
+    target_type: &str,
+    target_id: Uuid,
+) -> Result<()> {
     sqlx::query(
         "DELETE FROM scan_results
          WHERE target_type = $1 AND target_id = $2",
@@ -884,7 +909,10 @@ fn parse_model_config_id_from_form(value: &str) -> Result<Option<Uuid>> {
     }
 
     let parsed = Uuid::parse_str(trimmed).map_err(|_| {
-        Error::Validation(format!("字段 llm_model_config_id 值无效: {}（应为 UUID）", value))
+        Error::Validation(format!(
+            "字段 llm_model_config_id 值无效: {}（应为 UUID）",
+            value
+        ))
     })?;
     Ok(Some(parsed))
 }
@@ -1094,13 +1122,10 @@ async fn upload_skill_from_payload(
     }
 
     let guarded_scan_result = if scanner_cfg.enabled {
-        Some(scan_skill_with_guard(
-            &skill_name,
-            &payload.content,
-            &scanner_cfg,
-            &scan_options,
+        Some(
+            scan_skill_with_guard(&skill_name, &payload.content, &scanner_cfg, &scan_options)
+                .await?,
         )
-        .await?)
     } else {
         None
     };
@@ -1142,8 +1167,13 @@ async fn upload_skill_from_payload(
     )
     .await?;
 
-    build_upload_skill_response(&state.sqlx_pool, persisted_skill_id, &skill_name, &scan_runtime)
-        .await
+    build_upload_skill_response(
+        &state.sqlx_pool,
+        persisted_skill_id,
+        &skill_name,
+        &scan_runtime,
+    )
+    .await
 }
 
 // ── 审核（技能和插件共用逻辑）────────────────────────────────────────────────
@@ -1493,7 +1523,9 @@ pub async fn rescan_skill(
     let skill = fetch_skill_state(&state.sqlx_pool, skill_id).await?;
     let previous_status = skill.review_status.clone();
     if !can_rescan_skill(&previous_status) {
-        return Err(Error::Validation("仅 pending 或 scan_failed 状态的技能可以重扫".into()));
+        return Err(Error::Validation(
+            "仅 pending 或 scan_failed 状态的技能可以重扫".into(),
+        ));
     }
     let content = skill
         .file_path
@@ -1555,7 +1587,11 @@ pub async fn yank_skill(
         return Err(Error::Conflict("技能已处于下架状态".into()));
     }
 
-    let note = payload.note.as_deref().map(str::trim).filter(|v| !v.is_empty());
+    let note = payload
+        .note
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
 
     sqlx::query(
         "UPDATE skills
@@ -1670,7 +1706,11 @@ pub async fn yank_plugin(
         return Err(Error::Conflict("插件已处于下架状态".into()));
     }
 
-    let note = payload.note.as_deref().map(str::trim).filter(|v| !v.is_empty());
+    let note = payload
+        .note
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
 
     sqlx::query(
         "UPDATE plugins
@@ -1825,7 +1865,10 @@ async fn resolve_department_id(pool: &sqlx::PgPool, client_token: Option<&str>) 
     .and_then(|r| r.department_id)
 }
 
-fn registry_access_token<'a>(client_token: Option<&'a str>, user_id: Option<&'a str>) -> Option<&'a str> {
+fn registry_access_token<'a>(
+    client_token: Option<&'a str>,
+    user_id: Option<&'a str>,
+) -> Option<&'a str> {
     client_token.or(user_id)
 }
 
@@ -1926,7 +1969,8 @@ async fn can_download_skill_by_token(
         return Ok(false);
     };
 
-    let Some(effective_dept_id) = resolve_effective_whitelist_department(pool, dept_id).await? else {
+    let Some(effective_dept_id) = resolve_effective_whitelist_department(pool, dept_id).await?
+    else {
         return Ok(true);
     };
 

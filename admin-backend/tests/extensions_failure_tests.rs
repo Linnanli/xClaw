@@ -359,7 +359,10 @@ async fn test_failure_upload_returns_error_when_scanner_service_unavailable() {
 
     let client = pool.get().await.expect("get db client");
     let row = client
-        .query_one("SELECT COUNT(*) FROM skills WHERE name = $1", &[&skill_name])
+        .query_one(
+            "SELECT COUNT(*) FROM skills WHERE name = $1",
+            &[&skill_name],
+        )
         .await
         .expect("query skill count");
     let count: i64 = row.get(0);

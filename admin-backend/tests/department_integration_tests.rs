@@ -101,7 +101,10 @@ async fn test_failure_update_child_to_second_root_rejected() {
     let body = response_json(resp).await;
 
     client
-        .execute("DELETE FROM departments WHERE id = $1 OR id = $2", &[&root_id, &child_id])
+        .execute(
+            "DELETE FROM departments WHERE id = $1 OR id = $2",
+            &[&root_id, &child_id],
+        )
         .await
         .expect("cleanup department tree");
 

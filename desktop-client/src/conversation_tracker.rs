@@ -482,7 +482,10 @@ mod tests {
         if let ClientReport::Conversation { used_skills, .. } = &reports[0] {
             assert_eq!(
                 used_skills,
-                &vec!["code-review-expert".to_string(), "code-simplifier".to_string()]
+                &vec![
+                    "code-review-expert".to_string(),
+                    "code-simplifier".to_string()
+                ]
             );
         } else {
             panic!("Expected Conversation report");

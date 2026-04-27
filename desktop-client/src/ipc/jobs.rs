@@ -4,7 +4,7 @@
 //! 提供任务事件历史和后续提示功能。
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 use crate::state::EngineState;
@@ -116,7 +116,8 @@ fn emit_job_status(app_handle: &AppHandle, job_id: Uuid, title: &str, status: &s
             "status": status,
         }),
     };
-    let _ = app_handle.emit("chat-stream", event);
+    // 全局 job 事件：未绑定到特定 thread，前端所有 Transport 透传
+    let _ = crate::tauri_channel::emit_chat_stream(app_handle, None, &event);
 }
 
 fn restart_job_title(job: &ironclaw::context::JobContext, failure_reason: &str) -> String {
@@ -124,7 +125,10 @@ fn restart_job_title(job: &ironclaw::context::JobContext, failure_reason: &str) 
         return job.title.clone();
     }
 
-    format!("Previous attempt failed: {}. Retry: {}", failure_reason, job.title)
+    format!(
+        "Previous attempt failed: {}. Retry: {}",
+        failure_reason, job.title
+    )
 }
 
 // ─── Tauri Commands ──────────────────────────────────────────────────
@@ -346,7 +350,10 @@ mod cancel_tests {
             .await
             .expect_err("active jobs require scheduler stop before marking cancelled");
 
-        assert_eq!(error, "Failed to cancel job: active job scheduler unavailable");
+        assert_eq!(
+            error,
+            "Failed to cancel job: active job scheduler unavailable"
+        );
     }
 
     #[tokio::test]
@@ -379,7 +386,10 @@ pub async fn ic_restart_job(
     ensure_owned_job(state, &job)?;
 
     if job.state.is_active() {
-        return Err(format!("Cannot restart active job in state '{}'", job.state));
+        return Err(format!(
+            "Cannot restart active job in state '{}'",
+            job.state
+        ));
     }
 
     let scheduler = state

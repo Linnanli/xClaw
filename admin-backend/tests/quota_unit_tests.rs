@@ -1,6 +1,15 @@
 //! 配额管理单元测试
 //!
 //! 覆盖：基础验证、多层级预检（验收标准14）、契约测试（含15）、安全审计
+//!
+//! 注：当前为 placeholder 占位测试（全常量算术），等业务逻辑接入后替换为真实用例。
+//! 因此 allow 几个由常量触发的 clippy lint。
+#![allow(
+    clippy::erasing_op,
+    clippy::nonminimal_bool,
+    clippy::assertions_on_constants,
+    clippy::unnecessary_map_or
+)]
 
 #[cfg(test)]
 mod quota_validation_tests {

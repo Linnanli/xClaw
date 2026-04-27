@@ -167,9 +167,7 @@ mod tests {
 
     #[test]
     fn test_contract_finish() {
-        let event = VercelUIStream::Finish {
-            id: "msg-1".into(),
-        };
+        let event = VercelUIStream::Finish { id: "msg-1".into() };
         let json: serde_json::Value = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "finish");
         assert_eq!(json["id"], "msg-1");
@@ -236,7 +234,10 @@ mod tests {
         };
         let json_str = serde_json::to_string(&event).unwrap();
 
-        assert!(!json_str.contains("password"), "password leaked to frontend");
+        assert!(
+            !json_str.contains("password"),
+            "password leaked to frontend"
+        );
         assert!(
             !json_str.contains("parameters"),
             "parameters field leaked to frontend"
@@ -411,7 +412,10 @@ mod tests {
         };
         let json = serde_json::to_string(&event).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert!(parsed["data"]["content"].as_str().unwrap().contains("<script>"));
+        assert!(parsed["data"]["content"]
+            .as_str()
+            .unwrap()
+            .contains("<script>"));
     }
 
     #[test]
@@ -457,23 +461,96 @@ mod tests {
 
         let cases: Vec<(StatusUpdate, &serde_json::Value)> = vec![
             (StatusUpdate::Thinking("test".into()), &empty),
-            (StatusUpdate::ToolStarted { name: "test".into() }, &meta),
-            (StatusUpdate::ToolCompleted { name: "test".into(), success: true, error: None, parameters: None }, &meta),
-            (StatusUpdate::ToolCompleted { name: "test".into(), success: false, error: Some("fail".into()), parameters: None }, &meta),
-            (StatusUpdate::ToolResult { name: "test".into(), preview: "test".into() }, &meta),
+            (
+                StatusUpdate::ToolStarted {
+                    name: "test".into(),
+                },
+                &meta,
+            ),
+            (
+                StatusUpdate::ToolCompleted {
+                    name: "test".into(),
+                    success: true,
+                    error: None,
+                    parameters: None,
+                },
+                &meta,
+            ),
+            (
+                StatusUpdate::ToolCompleted {
+                    name: "test".into(),
+                    success: false,
+                    error: Some("fail".into()),
+                    parameters: None,
+                },
+                &meta,
+            ),
+            (
+                StatusUpdate::ToolResult {
+                    name: "test".into(),
+                    preview: "test".into(),
+                },
+                &meta,
+            ),
             (StatusUpdate::StreamChunk("test".into()), &empty),
             (StatusUpdate::Status("test".into()), &empty),
-            (StatusUpdate::JobStarted { job_id: "j-1".into(), title: "test".into(), browse_url: "http://localhost".into() }, &empty),
-            (StatusUpdate::ApprovalNeeded { request_id: "r-1".into(), tool_name: "test".into(), description: "test".into(), parameters: json!({}), allow_always: true }, &empty),
-            (StatusUpdate::AuthRequired { extension_name: "test".into(), instructions: None, auth_url: None, setup_url: None }, &empty),
-            (StatusUpdate::AuthCompleted { extension_name: "test".into(), success: true, message: "ok".into() }, &empty),
-            (StatusUpdate::ImageGenerated { data_url: "data:".into(), path: None }, &empty),
-            (StatusUpdate::Suggestions { suggestions: vec![] }, &empty),
+            (
+                StatusUpdate::JobStarted {
+                    job_id: "j-1".into(),
+                    title: "test".into(),
+                    browse_url: "http://localhost".into(),
+                },
+                &empty,
+            ),
+            (
+                StatusUpdate::ApprovalNeeded {
+                    request_id: "r-1".into(),
+                    tool_name: "test".into(),
+                    description: "test".into(),
+                    parameters: json!({}),
+                    allow_always: true,
+                },
+                &empty,
+            ),
+            (
+                StatusUpdate::AuthRequired {
+                    extension_name: "test".into(),
+                    instructions: None,
+                    auth_url: None,
+                    setup_url: None,
+                },
+                &empty,
+            ),
+            (
+                StatusUpdate::AuthCompleted {
+                    extension_name: "test".into(),
+                    success: true,
+                    message: "ok".into(),
+                },
+                &empty,
+            ),
+            (
+                StatusUpdate::ImageGenerated {
+                    data_url: "data:".into(),
+                    path: None,
+                },
+                &empty,
+            ),
+            (
+                StatusUpdate::Suggestions {
+                    suggestions: vec![],
+                },
+                &empty,
+            ),
         ];
 
         for (status, m) in &cases {
             let events = crate::tauri_channel::map_status_to_stream(status, m);
-            assert!(!events.is_empty(), "status {:?} should produce events", status);
+            assert!(
+                !events.is_empty(),
+                "status {:?} should produce events",
+                status
+            );
             for event in &events {
                 serde_json::to_value(event).expect("should serialize");
             }

@@ -19,9 +19,7 @@ pub struct ActiveServer {
 
 /// 获取当前工作目录的 git status 输出。
 #[tauri::command]
-pub async fn ic_workspace_git_status(
-    state: State<'_, EngineState>,
-) -> Result<String, String> {
+pub async fn ic_workspace_git_status(state: State<'_, EngineState>) -> Result<String, String> {
     let _state = state.get()?;
 
     let output = tokio::process::Command::new("git")
@@ -40,9 +38,7 @@ pub async fn ic_workspace_git_status(
 
 /// 返回当前工作目录路径。
 #[tauri::command]
-pub async fn ic_workspace_root(
-    state: State<'_, EngineState>,
-) -> Result<String, String> {
+pub async fn ic_workspace_root(state: State<'_, EngineState>) -> Result<String, String> {
     let _state = state.get()?;
 
     std::env::current_dir()
@@ -52,9 +48,7 @@ pub async fn ic_workspace_root(
 
 /// 列出当前活跃的 LSP 和 MCP 服务器。
 #[tauri::command]
-pub async fn ic_active_servers(
-    state: State<'_, EngineState>,
-) -> Result<Vec<ActiveServer>, String> {
+pub async fn ic_active_servers(state: State<'_, EngineState>) -> Result<Vec<ActiveServer>, String> {
     let state = state.get()?;
     let mut servers = Vec::new();
 
@@ -103,13 +97,9 @@ pub async fn ic_import_workspace(
         .map_err(|e| format!("Invalid workspace path: {e}"))?;
     let canonical_str = canonical.to_string_lossy().to_string();
 
-    db.update_conversation_metadata_field(
-        tid,
-        "workspace_root",
-        &serde_json::json!(canonical_str),
-    )
-    .await
-    .map_err(|e| format!("Failed to update workspace: {e}"))?;
+    db.update_conversation_metadata_field(tid, "workspace_root", &serde_json::json!(canonical_str))
+        .await
+        .map_err(|e| format!("Failed to update workspace: {e}"))?;
 
     tracing::info!(thread_id = %tid, workspace = %canonical_str, "Workspace imported");
     Ok(canonical_str)
@@ -133,8 +123,10 @@ pub async fn ic_get_thread_workspace(
         .await
         .map_err(|e| format!("Failed to read metadata: {e}"))?;
 
-    Ok(meta
-        .and_then(|m| m.get("workspace_root").and_then(|v| v.as_str().map(String::from))))
+    Ok(meta.and_then(|m| {
+        m.get("workspace_root")
+            .and_then(|v| v.as_str().map(String::from))
+    }))
 }
 
 /// 列出 `~/.ironclaw/projects/` 下所有沙箱工作区。
@@ -150,8 +142,15 @@ pub async fn ic_list_sandbox_workspaces() -> Result<Vec<SandboxWorkspace>, Strin
         .await
         .map_err(|e| format!("Failed to read projects directory: {e}"))?;
 
-    while let Some(entry) = dir.next_entry().await.map_err(|e: std::io::Error| e.to_string())? {
-        let ft = entry.file_type().await.map_err(|e: std::io::Error| e.to_string())?;
+    while let Some(entry) = dir
+        .next_entry()
+        .await
+        .map_err(|e: std::io::Error| e.to_string())?
+    {
+        let ft = entry
+            .file_type()
+            .await
+            .map_err(|e: std::io::Error| e.to_string())?;
         if ft.is_dir() {
             entries.push(SandboxWorkspace {
                 name: entry.file_name().to_string_lossy().into_owned(),

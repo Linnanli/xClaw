@@ -5,8 +5,8 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::managed_policy::load_verified_policy_from_store;
 use super::persistence::{load_string_set, persist_disabled_items};
+use crate::managed_policy::load_verified_policy_from_store;
 use crate::state::{AppState, EngineState};
 
 const DISABLED_EXTENSIONS_SETTING_KEY: &str = "desktop_disabled_extensions";
@@ -401,10 +401,7 @@ async fn set_extension_enabled_with_persist(
         if rollback_error.is_empty() {
             return Err(error);
         }
-        return Err(format!(
-            "{}; rollback failed: {}",
-            error, rollback_error
-        ));
+        return Err(format!("{}; rollback failed: {}", error, rollback_error));
     }
     Ok(())
 }
@@ -512,7 +509,9 @@ mod tests {
             safety,
             safety_bridge,
             context_manager,
-            conversation_tracker: Arc::new(crate::conversation_tracker::ConversationTracker::new("test-owner".to_string())),
+            conversation_tracker: Arc::new(crate::conversation_tracker::ConversationTracker::new(
+                "test-owner".to_string(),
+            )),
             data_reporter,
             scope_id: "test-owner".to_string(),
             backend_user_id: Arc::new(std::sync::RwLock::new(None)),
@@ -609,7 +608,10 @@ mod tests {
     #[test]
     fn test_validate_extension_install_source_managed_mode_rejects_url() {
         let result = validate_extension_install_source(true, Some("https://example.com/ext.wasm"));
-        assert!(result.is_err(), "managed mode should reject explicit extension URL");
+        assert!(
+            result.is_err(),
+            "managed mode should reject explicit extension URL"
+        );
         let message = result.err().unwrap_or_default();
         assert!(
             message.contains("Managed mode"),
@@ -630,6 +632,9 @@ mod tests {
     #[test]
     fn test_validate_extension_install_source_non_managed_mode_allows_url() {
         let result = validate_extension_install_source(false, Some("https://example.com/ext.wasm"));
-        assert!(result.is_ok(), "non-managed mode should allow explicit extension URL");
+        assert!(
+            result.is_ok(),
+            "non-managed mode should allow explicit extension URL"
+        );
     }
 }

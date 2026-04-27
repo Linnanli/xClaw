@@ -1,0 +1,19 @@
+[package]
+name = "dasclaw_pty"
+version = "0.1.0-w2"
+edition = "2021"
+description = "portable-pty wrapper exposing a Pty trait + spawn/read/write/resize/kill primitives."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = "1"
+portable-pty = "0.8"
+
+[dev-dependencies]
+# `cat` is the canonical interactive workload used by integration tests; no
+# extra crates required since spawn() takes raw program/args.
+

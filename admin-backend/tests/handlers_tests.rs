@@ -31,8 +31,7 @@ async fn create_test_state() -> Arc<AppState> {
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
         "postgres://postgres:postgres@localhost:5432/ironclaw_test".to_string()
     });
-    let sqlx_pool =
-        sqlx::PgPool::connect_lazy(&db_url).expect("Failed to create lazy sqlx pool");
+    let sqlx_pool = sqlx::PgPool::connect_lazy(&db_url).expect("Failed to create lazy sqlx pool");
     Arc::new(AppState {
         db_pool: pool,
         sqlx_pool,
@@ -53,12 +52,8 @@ async fn test_get_policies_handler_success() {
     // 正常路径测试：应该返回策略列表
     match result {
         Ok(Json(response)) => {
-            assert!(
-                response.version.total_dlp_rules >= response.version.active_dlp_rules
-            );
-            assert!(
-                response.version.total_sensitive_ops >= response.version.active_sensitive_ops
-            );
+            assert!(response.version.total_dlp_rules >= response.version.active_dlp_rules);
+            assert!(response.version.total_sensitive_ops >= response.version.active_sensitive_ops);
         }
         Err(_) => {
             // 如果数据库不可用，测试应该跳过而不是失败
@@ -79,12 +74,8 @@ async fn test_get_policies_handler_with_disabled() {
     // 测试包含禁用规则的情况
     match result {
         Ok(Json(response)) => {
-            assert!(
-                response.version.total_dlp_rules >= response.version.active_dlp_rules
-            );
-            assert!(
-                response.version.total_sensitive_ops >= response.version.active_sensitive_ops
-            );
+            assert!(response.version.total_dlp_rules >= response.version.active_dlp_rules);
+            assert!(response.version.total_sensitive_ops >= response.version.active_sensitive_ops);
         }
         Err(_) => {
             println!("Database not available, skipping test");

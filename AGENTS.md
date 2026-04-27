@@ -9,21 +9,46 @@
 1. **不要假设用户清楚自己想要什么。** 当动机或目标不清晰时，停下来讨论，而不是猜测着往前冲。做错了再改的成本远高于多问一句。
 2. **目标清晰但路径不是最短的，直接说并建议更好的办法。** 用户可能因为惯性选择了次优方案，AI 有责任指出更短的路径——但最终决定权在用户。
 
+### 反馈原则
+
+1. **开发完成后调用 MCP 工具**：
+   - 每次代码开发完成后，必须调用 `mcp-feedback-enhanced` 工具。
+   - 每次给开发者解释方案或者让开发选择方案，必须调用 `mcp-feedback-enhanced` 工具。
+   - 工具调用后，Agent 必须等待用户反馈，收到明确指示后再继续执行后续任务。
+
+### 分析工具使用规范（Round 17 建立 / Round 18 实证）
+
+**重大架构决策/能力盘点/跨项目对比前，必须按三级顺序使用工具**：
+
+| 级别 | 工具 | 使用场景 |
+|------|------|---------|
+| Level 1 语义层 | `semantic_search` | 概念搜索（跨命名等价实现），**必须先用** |
+| Level 2 符号层 | `vscode_listCodeUsages` | LSP 引用/定义/实现图，核验判断 |
+| Level 3 字面量层 | `rg` / `grep` | 已知确切词后再用 |
+
+**反模式（禁止）**：
+- ❌ 跳过 Level 1，直接 `rg <英文词>` 找概念 — 漏掉异名等价实现
+- ❌ 判定"独家/缺失"时只看单一 repo — 必须三方交叉验证
+- ❌ 未读解构文档（如 `decode-claude-code-main/`）就给架构结论
+- ❌ 写架构对账文档时没有先按本规范核验能力表每一格 — 会把主观猜测当结论
+
+**执行流程（最低标准）**：
+1. 先用 `semantic_search` 搜概念（≥ 2 种语义表达）
+2. 若有符号级疑问，用 `vscode_listCodeUsages` 打引用图
+3. 最后才用 `rg` 定位确切位置
+4. 对于"X 没有 Y"这类否定性结论，**必须明确给出 Level 1 + Level 3 双证据**才能落笔
+
+**教训来源**：
+- Round 1-15 多次误判（"codex 没 forkSubagent"、"ironclaw Prompt Cache 独家"）的根因均为字面量搜索陷阱。
+- **Round 18 实证**：14 文档 Round 17 版本列出的 4 项 P0/P1 "缺口"（`<system-reminder>` 标签 / CYBER_RISK_INSTRUCTION 文本 / 多层 CLAUDE.md 加载 / 压缩阈值），经 `semantic_search` 验证全部是**伪缺口** —— claw-code `runtime/src/prompt.rs:480` 与 `prompt.rs:197`、codex `openai_models.rs:306` 早已实现。4/19 的文档错误率直接证明：**不做 semantic_search 就动笔写对账文档是不合格的**。
+
+详见 [14-claude-code-capability-parity.md §0 §4.1 §6](docs/plans/architecture-refactor/14-claude-code-capability-parity.md)。
+
 ---
 
 ## 架构规则：代码复用优先
 
-### 核心原则
-
-Desktop Client 和 Admin Backend 新增功能时，**禁止重复实现**主项目已有的能力。
-
 ### 复用优先级
-
-**Desktop Client**：
-1. 复用 Web Gateway API（`src/channels/web/handlers/`）→ 创建 Tauri 命令包装器
-2. 复用共享 Crate（`crates/ironclaw_auth/` 等）
-3. 从主项目提取新的共享 Crate
-4. 仅 Desktop Client 特有功能才独立实现
 
 **Admin Backend**：
 1. 通过 `ironclaw` crate 依赖主项目核心功能

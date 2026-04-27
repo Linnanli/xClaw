@@ -161,7 +161,10 @@ fn validate_name(name: Option<&str>) -> Result<String> {
 fn validate_required_text_field(value: Option<&str>, field_name: &str) -> Result<()> {
     let normalized = value.map(str::trim).unwrap_or("");
     if normalized.is_empty() {
-        return Err(Error::Validation(format!("frontmatter 缺少必填字段 {}", field_name)));
+        return Err(Error::Validation(format!(
+            "frontmatter 缺少必填字段 {}",
+            field_name
+        )));
     }
     Ok(())
 }

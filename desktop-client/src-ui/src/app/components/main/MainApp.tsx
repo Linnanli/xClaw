@@ -9,7 +9,7 @@ import React, { useState, useEffect } from 'react';
 import { SidebarProvider, SidebarInset } from '../ui/sidebar';
 import { AppSidebar, type NavItem } from './AppSidebar';
 import { AppHeader } from './AppHeader';
-import { ChatTabTauri } from '../tabs/ChatTabTauri';
+import { ChatTabTauriExperimental } from '../tabs/ChatTabTauriExperimental';
 import { LogsTab } from '../tabs/LogsTab';
 
 import { RoutinesTab } from '../tabs/RoutinesTab';
@@ -23,7 +23,7 @@ import { sessionApi } from '../../utils/tauri';
 import { ShortcutManager, SHORTCUTS } from '../../utils/shortcuts';
 import { tracing } from '../../utils/tracing';
 import { useChatNavigation } from '../../hooks/useChatNavigation';
-import { EngineReadyProvider, useEngineReady } from '../../hooks/useEngineReady';
+import { EngineReadyProvider } from '../../hooks/useEngineReady';
 import { useRunningJobs } from '../../hooks/useRunningJobs';
 
 const NAV_TITLES: Record<NavItem, string> = {
@@ -56,7 +56,6 @@ function MainAppContent() {
   const [jobsOpen, setJobsOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [routinesOpen, setRoutinesOpen] = useState(false);
-  const { readyKey: engineReadyKey } = useEngineReady();
   const { config: watermarkConfig, loading: watermarkLoading } = useWatermark();
   const { themeMode, setTheme } = useTheme();
   const runningJobs = useRunningJobs();
@@ -129,13 +128,17 @@ function MainAppContent() {
   const renderContent = () => {
     switch (activeNav) {
       case 'chat':
+        // Phase 1.4: 统一走 AI-SDK 新 Runtime（旧 ChatTabTauri/TauriRuntimeProvider 已下线）。
+        // - onThreadCreated: threadId === null 时由 runtime 内部调 threadApi.createThread
+        //   拿到真实 id，避免 assistant-ui 临时 id 污染后端。
+        // - outboundCommand: "常见问题" 等点击注入文本到 composer，由 OutboundCommandBridge
+        //   通过 useComposerRuntime.setText + send() 触发，复用 Composer 的 DLP 拦截链路。
         return (
-          <ChatTabTauri
+          <ChatTabTauriExperimental
             selectedThreadId={selectedThreadId}
-            onThreadSelect={selectThread}
+            onThreadCreated={selectThread}
             outboundCommand={pendingCommand}
             onOutboundCommandHandled={consumeCommand}
-            engineReadyKey={engineReadyKey}
           />
         );
       case 'logs':

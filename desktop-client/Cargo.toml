@@ -3,6 +3,7 @@ name = "desktop-client"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.92"
+license = "Apache-2.0 OR MIT"
 
 [dependencies]
 # Tauri framework
@@ -38,6 +39,7 @@ open = "5"
 
 # Safety and DLP
 ironclaw_safety = { path = "./ironclaw/crates/ironclaw_safety" }
+dasclaw_sandbox = { path = "../crates/dasclaw_sandbox" }
 
 # IronClaw embedded server
 ironclaw = { path = "./ironclaw", features = ["libsql"] }

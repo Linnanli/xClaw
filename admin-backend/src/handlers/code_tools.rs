@@ -135,12 +135,7 @@ async fn upsert_setting(
     }))
 }
 
-async fn write_audit_sqlx(
-    pool: &sqlx::PgPool,
-    actor_id: Uuid,
-    action: &str,
-    details: &str,
-) {
+async fn write_audit_sqlx(pool: &sqlx::PgPool, actor_id: Uuid, action: &str, details: &str) {
     let id = Uuid::new_v4();
     let now = chrono::Utc::now();
     let _ = sqlx::query(

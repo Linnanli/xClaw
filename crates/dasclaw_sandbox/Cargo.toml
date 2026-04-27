@@ -1,0 +1,26 @@
+[package]
+name = "dasclaw_sandbox"
+version = "0.0.0-w1"
+edition = "2021"
+description = "Cross-platform sandbox (Linux landlock / macOS seatbelt / Windows job-object)."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = "1"
+url = "2"
+
+# W2.3 — Linux seccomp backend.
+# 只在 Linux target 上启用，避免污染 macOS/Windows 工作流。
+# 选型理由（详见 docs/plans/architecture-refactor/32 §W2.3）：
+#   - codex `linux-sandbox` 的主路径是 bubblewrap (2,005 LOC) + seccomp (343 LOC)；
+#     landlock 在 codex 自己已经标注为 legacy/backup。
+#   - 文件系统限制由进程内 `ironclaw_workspace_cap` (cap-std) 兜底，
+#     与 dasclaw_sandbox kernel 层互补不重叠。
+#   - 不引入外部 bwrap setuid 依赖，部署更轻。
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+seccompiler = "0.5"

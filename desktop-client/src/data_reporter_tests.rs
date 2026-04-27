@@ -194,8 +194,9 @@ mod tests {
             } else {
                 std::time::Duration::from_secs(600)
             };
-            let reporter = DataReporter::new("https://admin.example.com".into(), "test-token".into())
-                .with_health_status_min_interval(interval);
+            let reporter =
+                DataReporter::new("https://admin.example.com".into(), "test-token".into())
+                    .with_health_status_min_interval(interval);
 
             reporter.enqueue(ClientReport::HealthStatus {
                 timestamp: "2025-01-01T00:00:00Z".into(),

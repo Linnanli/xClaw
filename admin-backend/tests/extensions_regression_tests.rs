@@ -7,8 +7,8 @@ use axum::{
 use chrono::{DateTime, Utc};
 use common::{build_app, get, post_json, response_json, try_connect_db, unique_name};
 use serde_json::Value;
-use tower::ServiceExt;
 use tokio_postgres::Client as DbClient;
+use tower::ServiceExt;
 use uuid::Uuid;
 
 fn registry_search_path(client_token: Uuid) -> String {
@@ -152,7 +152,10 @@ async fn cleanup_skill_whitelist(client: &DbClient, department_id: Uuid) {
 
 async fn cleanup_registered_client(client: &DbClient, client_token: Uuid) {
     client
-        .execute("DELETE FROM registered_clients WHERE id = $1", &[&client_token])
+        .execute(
+            "DELETE FROM registered_clients WHERE id = $1",
+            &[&client_token],
+        )
         .await
         .expect("cleanup client");
 }
@@ -277,17 +280,26 @@ async fn test_conversation_report_used_skills_do_not_mutate_invoke_count() {
     assert_eq!(resp.status(), StatusCode::CREATED);
 
     let invoked_count: i64 = client
-        .query_one("SELECT invoke_count FROM skills WHERE id = $1", &[&invoked_skill_id])
+        .query_one(
+            "SELECT invoke_count FROM skills WHERE id = $1",
+            &[&invoked_skill_id],
+        )
         .await
         .expect("query invoked skill count")
         .get(0);
     let untouched_count: i64 = client
-        .query_one("SELECT invoke_count FROM skills WHERE id = $1", &[&untouched_skill_id])
+        .query_one(
+            "SELECT invoke_count FROM skills WHERE id = $1",
+            &[&untouched_skill_id],
+        )
         .await
         .expect("query untouched skill count")
         .get(0);
 
-    assert_eq!(invoked_count, 0, "client 侧预判 used_skills 不应直接增加调用计数");
+    assert_eq!(
+        invoked_count, 0,
+        "client 侧预判 used_skills 不应直接增加调用计数"
+    );
     assert_eq!(untouched_count, 0, "未使用技能不应增加计数");
 
     cleanup_conversation_report_data(&client, user_id).await;
@@ -354,18 +366,29 @@ async fn test_conversation_report_falls_back_to_registered_client_user_for_list_
     assert_eq!(resp.status(), StatusCode::CREATED);
 
     let stored_count: i64 = client
-        .query_one("SELECT COUNT(*) FROM conversations WHERE user_id = $1", &[&user_id])
+        .query_one(
+            "SELECT COUNT(*) FROM conversations WHERE user_id = $1",
+            &[&user_id],
+        )
         .await
         .expect("query conversations count")
         .get(0);
     assert_eq!(stored_count, 1, "conversation 应写入真实用户 ID");
 
-    let list_resp = get(build_app(pool.clone()), "/api/conversations?page=1&page_size=20").await;
+    let list_resp = get(
+        build_app(pool.clone()),
+        "/api/conversations?page=1&page_size=20",
+    )
+    .await;
     assert_eq!(list_resp.status(), StatusCode::OK);
     let list_body = response_json(list_resp).await;
-    let items = list_body["data"].as_array().expect("conversation list should be array");
+    let items = list_body["data"]
+        .as_array()
+        .expect("conversation list should be array");
     assert!(
-        items.iter().any(|item| item["username"] == username && item["topic"] == "fallback audit test"),
+        items
+            .iter()
+            .any(|item| item["username"] == username && item["topic"] == "fallback audit test"),
         "对话审计列表应能看到客户端上报的对话"
     );
 
@@ -413,8 +436,7 @@ async fn test_client_events_report_type_health_status_not_filtered_by_default_ex
         .expect("events should be array");
     assert!(
         events.iter().any(|event| {
-            event["report_type"] == "health_status"
-                && event["payload"]["marker"] == marker
+            event["report_type"] == "health_status" && event["payload"]["marker"] == marker
         }),
         "显式 report_type=health_status 时应返回 health_status 事件"
     );
@@ -463,8 +485,15 @@ async fn test_department_whitelist_backward_compatibility() {
     )
     .await;
     insert_user(&client, now, user_id, &username, &email, dept_id).await;
-    insert_registered_client(&client, now, client_token, user_id, &username, "reg-test-client")
-        .await;
+    insert_registered_client(
+        &client,
+        now,
+        client_token,
+        user_id,
+        &username,
+        "reg-test-client",
+    )
+    .await;
     insert_skill(
         &client,
         now,
@@ -712,8 +741,15 @@ async fn test_department_skill_whitelist_search_and_download_end_to_end() {
     )
     .await;
     insert_user(&client, now, user_id, &username, &email, dept_id).await;
-    insert_registered_client(&client, now, client_token, user_id, &username, "e2e-test-client")
-        .await;
+    insert_registered_client(
+        &client,
+        now,
+        client_token,
+        user_id,
+        &username,
+        "e2e-test-client",
+    )
+    .await;
     insert_skill(
         &client,
         now,
@@ -741,7 +777,9 @@ async fn test_department_skill_whitelist_search_and_download_end_to_end() {
     assert_eq!(anonymous_search_resp.status(), StatusCode::OK);
     let anonymous_search_body = response_json(anonymous_search_resp).await;
     assert_eq!(
-        anonymous_search_body["results"].as_array().map(|items| items.len()),
+        anonymous_search_body["results"]
+            .as_array()
+            .map(|items| items.len()),
         Some(0),
         "未携带 client_token 的注册表搜索不应返回任何技能"
     );

@@ -30,7 +30,12 @@ async fn test_audit_reviewer_id_is_persisted_from_header() {
         .execute(
             "INSERT INTO users (id, username, email, password_hash, created_at, updated_at)
              VALUES ($1, $2, $3, 'hash', $4, $4)",
-            &[&reviewer_id, &reviewer_username, &reviewer_email, &Utc::now()],
+            &[
+                &reviewer_id,
+                &reviewer_username,
+                &reviewer_email,
+                &Utc::now(),
+            ],
         )
         .await
         .expect("seed reviewer user");
@@ -79,17 +84,17 @@ async fn test_audit_reviewer_id_is_persisted_from_header() {
     );
 
     let row = client
-        .query_one(
-            "SELECT reviewed_by FROM skills WHERE id = $1",
-            &[&skill_id],
-        )
+        .query_one("SELECT reviewed_by FROM skills WHERE id = $1", &[&skill_id])
         .await
         .expect("query reviewed skill");
     let reviewed_by: Option<Uuid> = row.get(0);
     assert_eq!(reviewed_by, Some(reviewer_id));
 
     client
-        .execute("DELETE FROM scan_results WHERE target_type = 'skill' AND target_id = $1", &[&skill_id])
+        .execute(
+            "DELETE FROM scan_results WHERE target_type = 'skill' AND target_id = $1",
+            &[&skill_id],
+        )
         .await
         .expect("cleanup scan result");
     client
@@ -215,7 +220,12 @@ async fn test_audit_uploader_id_is_persisted_from_header() {
         .execute(
             "INSERT INTO users (id, username, email, password_hash, created_at, updated_at)
              VALUES ($1, $2, $3, 'hash', $4, $4)",
-            &[&uploader_id, &uploader_username, &uploader_email, &Utc::now()],
+            &[
+                &uploader_id,
+                &uploader_username,
+                &uploader_email,
+                &Utc::now(),
+            ],
         )
         .await
         .expect("seed uploader user");
@@ -247,10 +257,7 @@ async fn test_audit_uploader_id_is_persisted_from_header() {
     );
 
     let row = client
-        .query_one(
-            "SELECT uploaded_by FROM skills WHERE id = $1",
-            &[&skill_id],
-        )
+        .query_one("SELECT uploaded_by FROM skills WHERE id = $1", &[&skill_id])
         .await
         .expect("query uploaded skill");
     let uploaded_by: Option<Uuid> = row.get(0);

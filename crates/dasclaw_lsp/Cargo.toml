@@ -1,0 +1,13 @@
+[package]
+name = "dasclaw_lsp"
+version = "0.0.0-w1"
+edition = "2021"
+description = "LSP client wrapper (textDocument/* tools, fork private cargo, ~1,694 LOC)."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = "1"

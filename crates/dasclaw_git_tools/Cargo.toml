@@ -1,0 +1,13 @@
+[package]
+name = "dasclaw_git_tools"
+version = "0.0.0-w1"
+edition = "2021"
+description = "Git operation toolset: branch/commit/diff/log/push/runner/stale/status (fork private cargo, ~1,331 LOC)."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = "1"

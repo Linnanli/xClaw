@@ -1,0 +1,13 @@
+[package]
+name = "dasclaw_apply_patch"
+version = "0.0.0-w1"
+edition = "2021"
+description = "Lark-grammar apply_patch protocol (codex port)."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = "1"

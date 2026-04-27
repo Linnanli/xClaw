@@ -60,10 +60,7 @@ pub async fn ic_undo_file_edit(
 ///
 /// 优先尝试 `code` CLI（VS Code）; 若不可用则回退到系统默认 `open`。
 #[tauri::command]
-pub async fn ic_open_file_at_line(
-    path: String,
-    line: Option<u32>,
-) -> Result<(), String> {
+pub async fn ic_open_file_at_line(path: String, line: Option<u32>) -> Result<(), String> {
     let file_path = std::path::Path::new(&path);
     if !file_path.exists() {
         return Err(format!("文件不存在: {}", path));

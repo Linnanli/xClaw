@@ -32,7 +32,11 @@ function wrapper({ children }: { children: ReactNode }) {
 }
 
 function emitConnectionStatus(connected: boolean) {
-  capturedListener?.({ payload: { type: 'connection_status', connected } });
+  // Phase 1.3 起 EngineReadyProvider 期待 envelope 格式：
+  // `{ type: 'data-custom', data: { type: 'connection_status', connected } }`
+  capturedListener?.({
+    payload: { type: 'data-custom', data: { type: 'connection_status', connected } },
+  });
 }
 
 function emitOtherEvent(type: string) {

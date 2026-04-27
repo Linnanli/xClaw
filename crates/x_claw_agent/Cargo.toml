@@ -1,0 +1,35 @@
+[package]
+name = "x_claw_agent"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+description = "Agent runtime fork of claw-code with x-claw specific Hook trait boundary"
+authors = ["x-claw contributors"]
+license = "MIT OR Apache-2.0"
+publish = false
+
+[package.metadata.dist]
+dist = false
+
+[lib]
+name = "x_claw_agent"
+path = "src/lib.rs"
+
+[dependencies]
+# Hook trait 层依赖。保持最小集，不拉 ironclaw/claw-code 业务代码。
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+# messages 模块依赖
+tracing = "0.1"
+# session / undo / task 依赖
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
+# session 的 truncate_preview helper
+ironclaw_common = { path = "../../desktop-client/ironclaw/crates/ironclaw_common", version = "0.1.0" }
+# session_manager 需要 RwLock/Mutex/spawn (fire-and-forget hooks)
+tokio = { version = "1", features = ["sync", "rt", "time"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "sync"] }

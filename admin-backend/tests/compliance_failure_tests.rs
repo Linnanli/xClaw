@@ -98,19 +98,23 @@ mod jwt_auth_middleware_tests {
     fn test_public_paths_include_client_endpoints() {
         // 客户端直连必须豁免的路径
         let required_public = [
-            "/api/client-reports",     // 客户端数据上报
-            "/api/client-config",      // 客户端配置拉取
-            "/api/client-models",      // 客户端模型列表
-            "/api/client-policy",      // 签名策略拉取
-            "/api/quota/check",        // 配额预检（客户端发起）
-            "/api/quota/report-usage", // 用量上报
-            "/api/v1/search",          // 私有注册表搜索
-            "/api/v1/download",        // 私有注册表下载
+            "/api/client-reports",                                 // 客户端数据上报
+            "/api/client-config",                                  // 客户端配置拉取
+            "/api/client-models",                                  // 客户端模型列表
+            "/api/client-policy",                                  // 签名策略拉取
+            "/api/quota/check",                                    // 配额预检（客户端发起）
+            "/api/quota/report-usage",                             // 用量上报
+            "/api/v1/search",                                      // 私有注册表搜索
+            "/api/v1/download",                                    // 私有注册表下载
             "/api/v1/skills/550e8400-e29b-41d4-a716-446655440000", // 私有注册表详情
         ];
 
         for path in &required_public {
-            assert!(is_public_path(path), "客户端路径 '{}' 必须在公开路径列表中", path);
+            assert!(
+                is_public_path(path),
+                "客户端路径 '{}' 必须在公开路径列表中",
+                path
+            );
         }
     }
 

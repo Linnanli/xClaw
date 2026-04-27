@@ -148,11 +148,8 @@ async fn test_rescan_timeout_returns_error_without_state_change() {
         .await
         .expect("seed skill");
 
-    let (scanner_url, handle) = spawn_scanner_server(
-        json!({"verdict": "SAFE", "findings": []}),
-        200,
-    )
-    .await;
+    let (scanner_url, handle) =
+        spawn_scanner_server(json!({"verdict": "SAFE", "findings": []}), 200).await;
     let _scanner_guard = configure_scanner_env(true, Some(&scanner_url), Some(50));
 
     let path = format!("/api/skills/{}/rescan", skill_id);
@@ -187,7 +184,10 @@ async fn test_rescan_timeout_returns_error_without_state_change() {
 
     handle.abort();
     client
-        .execute("DELETE FROM scan_results WHERE target_id = $1", &[&skill_id])
+        .execute(
+            "DELETE FROM scan_results WHERE target_id = $1",
+            &[&skill_id],
+        )
         .await
         .expect("cleanup scan result");
     client

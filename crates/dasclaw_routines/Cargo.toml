@@ -1,0 +1,13 @@
+[package]
+name = "dasclaw_routines"
+version = "0.0.0-w1"
+edition = "2021"
+description = "Routine orchestration (fork ironclaw 0.24 routines module promotion)."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = "1"
