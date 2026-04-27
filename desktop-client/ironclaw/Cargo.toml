@@ -194,6 +194,13 @@ pty-process = { version = "0.5", features = ["async"] }
 secret-service = { version = "4", features = ["rt-tokio-crypto-rust"] }
 zbus = "4"
 
+# Windows Credential Manager (master-key storage; data sealed by DPAPI per-user)
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Security_Credentials",
+] }
+
 [dev-dependencies]
 ironclaw = { path = ".", features = ["test-support"] }
 tokio-test = "0.4"

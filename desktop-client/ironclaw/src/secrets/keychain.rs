@@ -3,6 +3,7 @@
 //! Provides platform-specific keychain support:
 //! - macOS: security-framework (Keychain Services)
 //! - Linux: secret-service (GNOME Keyring, KWallet)
+//! - Windows: Credential Manager (CredWriteW/CredReadW/CredDeleteW; DPAPI-sealed per-user)
 //!
 //! # Example
 //!
@@ -20,11 +21,11 @@
 use crate::secrets::SecretError;
 
 /// Service name for keychain entries.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 const SERVICE_NAME: &str = "ironclaw";
 
 /// Account name for the master key.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 const MASTER_KEY_ACCOUNT: &str = "master_key";
 
 /// Generate a random 32-byte master key.
@@ -229,10 +230,170 @@ mod platform {
 }
 
 // ============================================================================
+// Windows implementation using Credential Manager (DPAPI-sealed per-user)
+// ============================================================================
+//
+// Stores the master key as a generic credential under target name
+// "ironclaw:master_key" via CredWriteW. The Credential Manager seals the
+// blob with DPAPI bound to the current Windows user, so the key is not
+// recoverable from disk by other users on the same machine and never
+// touches plaintext outside this process and the OS credential store.
+//
+// API mapping:
+//   - store_master_key  -> CredWriteW (CRED_TYPE_GENERIC, CRED_PERSIST_LOCAL_MACHINE)
+//   - get_master_key    -> CredReadW
+//   - delete_master_key -> CredDeleteW
+//   - has_master_key    -> CredReadW + check exists
+
+#[cfg(target_os = "windows")]
+mod platform {
+    use std::ffi::c_void;
+    use std::slice;
+
+    use windows::Win32::Foundation::{ERROR_NOT_FOUND, FILETIME, GetLastError, WIN32_ERROR};
+    use windows::Win32::Security::Credentials::{
+        CRED_FLAGS, CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC, CREDENTIALW, CredDeleteW,
+        CredFree, CredReadW, CredWriteW,
+    };
+    use windows::core::PCWSTR;
+
+    use super::*;
+
+    /// Build the credential target name as a NUL-terminated wide string.
+    /// Format: "ironclaw:master_key" (matches `SERVICE_NAME:MASTER_KEY_ACCOUNT`).
+    fn target_name_wide() -> Vec<u16> {
+        let s = format!("{}:{}", SERVICE_NAME, MASTER_KEY_ACCOUNT);
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    /// Convert the last Win32 error to a `SecretError::KeychainError`.
+    fn keychain_err(action: &str) -> SecretError {
+        // Safety: `GetLastError` is always callable; returns thread-local LastError.
+        let code: WIN32_ERROR = unsafe { GetLastError() };
+        SecretError::KeychainError(format!(
+            "Failed to {} (Win32 error 0x{:08X})",
+            action, code.0
+        ))
+    }
+
+    /// Store the master key in the Windows Credential Manager.
+    pub async fn store_master_key(key: &[u8]) -> Result<(), SecretError> {
+        // Convert to hex for storage parity with macOS/Linux backends.
+        let key_hex: String = key.iter().map(|b| format!("{:02x}", b)).collect();
+        let mut target = target_name_wide();
+        let mut blob = key_hex.into_bytes();
+
+        let cred = CREDENTIALW {
+            Flags: CRED_FLAGS(0),
+            Type: CRED_TYPE_GENERIC,
+            TargetName: PCWSTR(target.as_mut_ptr()),
+            Comment: PCWSTR::null(),
+            LastWritten: FILETIME::default(),
+            CredentialBlobSize: blob.len() as u32,
+            CredentialBlob: blob.as_mut_ptr(),
+            Persist: CRED_PERSIST_LOCAL_MACHINE,
+            AttributeCount: 0,
+            Attributes: std::ptr::null_mut(),
+            TargetAlias: PCWSTR::null(),
+            UserName: PCWSTR::null(),
+        };
+
+        // Safety: `cred` is fully initialized; `target` and `blob` outlive the call.
+        let result = unsafe { CredWriteW(&cred, 0) };
+        result.map_err(|_| keychain_err("store in Credential Manager"))
+    }
+
+    /// Retrieve the master key from the Windows Credential Manager.
+    pub async fn get_master_key() -> Result<Vec<u8>, SecretError> {
+        let mut target = target_name_wide();
+        let mut cred_ptr: *mut CREDENTIALW = std::ptr::null_mut();
+
+        // Safety: `target` is a valid NUL-terminated wide string. `cred_ptr` is
+        // initialized via the FFI on success; we always pair successful reads
+        // with `CredFree`.
+        let result = unsafe {
+            CredReadW(
+                PCWSTR(target.as_mut_ptr()),
+                CRED_TYPE_GENERIC,
+                0,
+                &mut cred_ptr,
+            )
+        };
+
+        result.map_err(|_| keychain_err("read from Credential Manager"))?;
+
+        if cred_ptr.is_null() {
+            return Err(SecretError::KeychainError(
+                "CredReadW returned success but null pointer".to_string(),
+            ));
+        }
+
+        // Safety: `cred_ptr` is non-null and valid until `CredFree` below.
+        // Copy the blob bytes into a Vec before freeing the OS allocation.
+        let bytes: Vec<u8> = unsafe {
+            let cred = &*cred_ptr;
+            let len = cred.CredentialBlobSize as usize;
+            slice::from_raw_parts(cred.CredentialBlob, len).to_vec()
+        };
+
+        // Safety: balance the `CredReadW` allocation.
+        unsafe { CredFree(cred_ptr as *const c_void) };
+
+        let hex_str = String::from_utf8(bytes).map_err(|_| {
+            SecretError::KeychainError("Invalid UTF-8 in Credential Manager blob".to_string())
+        })?;
+
+        hex_to_bytes(&hex_str)
+    }
+
+    /// Delete the master key from the Windows Credential Manager.
+    pub async fn delete_master_key() -> Result<(), SecretError> {
+        let mut target = target_name_wide();
+
+        // Safety: `target` is a valid NUL-terminated wide string.
+        let result = unsafe { CredDeleteW(PCWSTR(target.as_mut_ptr()), CRED_TYPE_GENERIC, 0) };
+
+        match result {
+            Ok(()) => Ok(()),
+            Err(e) if e.code() == ERROR_NOT_FOUND.to_hresult() => {
+                // Idempotent: deleting a missing entry is not an error
+                // (matches macOS/Linux behavior more closely).
+                Ok(())
+            }
+            Err(_) => Err(keychain_err("delete from Credential Manager")),
+        }
+    }
+
+    /// Check if a master key exists in the Credential Manager.
+    pub async fn has_master_key() -> bool {
+        let mut target = target_name_wide();
+        let mut cred_ptr: *mut CREDENTIALW = std::ptr::null_mut();
+
+        // Safety: same as `get_master_key`.
+        let result = unsafe {
+            CredReadW(
+                PCWSTR(target.as_mut_ptr()),
+                CRED_TYPE_GENERIC,
+                0,
+                &mut cred_ptr,
+            )
+        };
+
+        if result.is_ok() && !cred_ptr.is_null() {
+            // Safety: balance the `CredReadW` allocation.
+            unsafe { CredFree(cred_ptr as *const c_void) };
+            true
+        } else {
+            false
+        }
+    }
+}
+
+// ============================================================================
 // Fallback for unsupported platforms
 // ============================================================================
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 mod platform {
     use super::*;
 
@@ -263,7 +424,7 @@ mod platform {
 pub use platform::{delete_master_key, get_master_key, has_master_key, store_master_key};
 
 /// Parse a hex string to bytes.
-#[cfg(any(target_os = "macos", target_os = "linux", test))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows", test))]
 fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, SecretError> {
     if !hex.len().is_multiple_of(2) {
         return Err(SecretError::KeychainError(
@@ -314,5 +475,45 @@ mod tests {
     fn test_hex_to_bytes_invalid() {
         assert!(hex_to_bytes("abc").is_err()); // Odd length
         assert!(hex_to_bytes("gg").is_err()); // Invalid chars
+    }
+
+    /// Windows Credential Manager round-trip — gated to Windows so CI runs it
+    /// in the windows-ci.yml job. Local macOS/Linux dev does not exercise the
+    /// Win32 path, but the cfg-gated module is still type-checked when this
+    /// crate is built for `x86_64-pc-windows-msvc`.
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn windows_credential_manager_roundtrip() {
+        // Use a deterministic key so failures point at the keychain layer,
+        // not the RNG.
+        let key: Vec<u8> = (0u8..32).collect();
+
+        // Best-effort cleanup before/after to keep the test idempotent
+        // when re-run on the same Windows agent.
+        let _ = delete_master_key().await;
+
+        store_master_key(&key)
+            .await
+            .expect("store_master_key must succeed");
+        assert!(
+            has_master_key().await,
+            "credential should exist after store"
+        );
+
+        let read_back = get_master_key().await.expect("get_master_key must succeed");
+        assert_eq!(read_back, key, "round-trip must preserve key bytes");
+
+        delete_master_key()
+            .await
+            .expect("delete_master_key must succeed");
+        assert!(
+            !has_master_key().await,
+            "credential should be gone after delete"
+        );
+
+        // Idempotent delete (mirrors macOS/Linux behavior).
+        delete_master_key()
+            .await
+            .expect("delete on missing entry must not error");
     }
 }
