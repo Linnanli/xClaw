@@ -2396,6 +2396,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dasclaw_exec"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "dasclaw_sandbox",
+ "ironclaw_workspace_cap",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
 name = "dasclaw_execpolicy"
 version = "0.0.0-w1"
 dependencies = [
