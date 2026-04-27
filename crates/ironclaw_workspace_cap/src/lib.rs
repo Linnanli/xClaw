@@ -47,7 +47,7 @@
 
 pub mod policy;
 pub use policy::{
-    default_read_only_subpaths_for_writable_root, NetworkAccess, SandboxPolicy, WritableRoot,
+    NetworkAccess, SandboxPolicy, WritableRoot, default_read_only_subpaths_for_writable_root,
 };
 
 use std::path::{Path, PathBuf};

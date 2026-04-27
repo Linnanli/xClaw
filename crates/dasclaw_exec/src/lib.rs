@@ -45,7 +45,7 @@ use std::process::{Command, Output};
 
 use dasclaw_sandbox::proxy::detect_loopback_ports;
 use dasclaw_sandbox::{
-    select_backend, SandboxBackendConfig, SandboxError, SandboxExecRequest, SandboxablePreference,
+    SandboxBackendConfig, SandboxError, SandboxExecRequest, SandboxablePreference, select_backend,
 };
 use ironclaw_workspace_cap::policy::{NetworkAccess, SandboxPolicy};
 
@@ -271,15 +271,17 @@ mod tests {
             Path::new("/x"),
         );
         assert!(cfg.allow_network);
-        assert!(cfg.writable_roots.is_empty(), "external 走外层容器，本地只读");
+        assert!(
+            cfg.writable_roots.is_empty(),
+            "external 走外层容器，本地只读"
+        );
     }
 
     #[test]
     fn workspace_write_includes_cwd_in_writable_roots() {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
-        let cfg =
-            policy_to_backend_config(&SandboxPolicy::new_workspace_write_policy(), cwd);
+        let cfg = policy_to_backend_config(&SandboxPolicy::new_workspace_write_policy(), cwd);
         assert!(
             cfg.writable_roots.iter().any(|r| r == cwd),
             "writable_roots 必须包含 cwd: {:?}",
@@ -291,10 +293,8 @@ mod tests {
     fn workspace_write_includes_slash_tmp_on_unix() {
         if cfg!(unix) && Path::new("/tmp").is_dir() {
             let tmp = tempfile::tempdir().unwrap();
-            let cfg = policy_to_backend_config(
-                &SandboxPolicy::new_workspace_write_policy(),
-                tmp.path(),
-            );
+            let cfg =
+                policy_to_backend_config(&SandboxPolicy::new_workspace_write_policy(), tmp.path());
             assert!(
                 cfg.writable_roots.iter().any(|r| r == Path::new("/tmp")),
                 "Unix 默认应包含 /tmp"
