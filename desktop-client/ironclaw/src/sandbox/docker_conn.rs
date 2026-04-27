@@ -14,7 +14,11 @@
 //! 3. `~/.colima/default/docker.sock` (Colima)
 //! 4. `~/.rd/docker.sock` (Rancher Desktop)
 //! 5. `$XDG_RUNTIME_DIR/docker.sock` (rootless Docker on Linux)
-//! 6. `/run/user/$UID/docker.sock` (rootless Docker fallback)
+//! 6. `$XDG_RUNTIME_DIR/podman/podman.sock` (Podman rootless on Linux —
+//!    Podman exposes a Docker-API-compatible socket so bollard connects
+//!    transparently; see [docs/plans/architecture-refactor/42-client-job-runtime-routes.md](../../../docs/plans/architecture-refactor/42-client-job-runtime-routes.md))
+//! 7. `/run/user/$UID/docker.sock` (rootless Docker fallback)
+//! 8. `/run/user/$UID/podman/podman.sock` (Podman rootless fallback)
 
 use bollard::Docker;
 
@@ -47,7 +51,8 @@ pub async fn connect_docker() -> Result<Docker> {
         reason: "Could not connect to Docker daemon. Tried: $DOCKER_HOST, \
             /var/run/docker.sock, ~/.docker/run/docker.sock, \
             ~/.colima/default/docker.sock, ~/.rd/docker.sock, \
-            $XDG_RUNTIME_DIR/docker.sock, /run/user/$UID/docker.sock"
+            $XDG_RUNTIME_DIR/docker.sock, $XDG_RUNTIME_DIR/podman/podman.sock, \
+            /run/user/$UID/docker.sock, /run/user/$UID/podman/podman.sock"
             .to_string(),
     })
 }
@@ -85,10 +90,12 @@ fn unix_socket_candidates_from_env(
 
     if let Some(xdg_runtime_dir) = xdg_runtime_dir {
         push_unique(xdg_runtime_dir.join("docker.sock"));
+        push_unique(xdg_runtime_dir.join("podman/podman.sock"));
     }
 
     if let Some(uid) = uid.filter(|value| !value.is_empty()) {
         push_unique(PathBuf::from(format!("/run/user/{uid}/docker.sock")));
+        push_unique(PathBuf::from(format!("/run/user/{uid}/podman/podman.sock")));
     }
 
     candidates
@@ -111,5 +118,50 @@ mod tests {
         assert!(candidates.contains(&PathBuf::from("/home/tester/.colima/default/docker.sock")));
         assert!(candidates.contains(&PathBuf::from("/home/tester/.rd/docker.sock")));
         assert!(candidates.contains(&PathBuf::from("/run/user/1000/docker.sock")));
+    }
+
+    #[test]
+    fn unix_socket_candidates_include_podman_rootless_paths() {
+        // Provide a $XDG_RUNTIME_DIR that differs from /run/user/$UID so the
+        // two probe sources produce distinct paths and we can assert on each.
+        let candidates = unix_socket_candidates_from_env(
+            Some(PathBuf::from("/home/tester")),
+            Some(PathBuf::from("/tmp/xdg-runtime")),
+            Some("1000".to_string()),
+        );
+
+        // Podman rootless exposes a Docker-API-compatible socket; bollard
+        // connects transparently. See W3.1d / docs 42-client-job-runtime-routes.
+        assert!(
+            candidates.contains(&PathBuf::from("/tmp/xdg-runtime/podman/podman.sock")),
+            "podman rootless socket via $XDG_RUNTIME_DIR should be probed"
+        );
+        assert!(
+            candidates.contains(&PathBuf::from("/run/user/1000/podman/podman.sock")),
+            "podman rootless socket via UID fallback should be probed"
+        );
+    }
+
+    #[test]
+    fn unix_socket_candidates_dedupe_when_xdg_matches_uid_fallback() {
+        // When $XDG_RUNTIME_DIR is /run/user/$UID (the typical Linux setup),
+        // both probes resolve to the same paths and must not produce duplicates.
+        let candidates = unix_socket_candidates_from_env(
+            None,
+            Some(PathBuf::from("/run/user/1000")),
+            Some("1000".to_string()),
+        );
+
+        let docker_count = candidates
+            .iter()
+            .filter(|p| p == &&PathBuf::from("/run/user/1000/docker.sock"))
+            .count();
+        let podman_count = candidates
+            .iter()
+            .filter(|p| p == &&PathBuf::from("/run/user/1000/podman/podman.sock"))
+            .count();
+
+        assert_eq!(docker_count, 1, "docker.sock should be deduplicated");
+        assert_eq!(podman_count, 1, "podman.sock should be deduplicated");
     }
 }
