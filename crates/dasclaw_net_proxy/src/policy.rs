@@ -6,6 +6,7 @@
 use async_trait::async_trait;
 
 use crate::allowlist::DomainAllowlist;
+use crate::reasons::NetworkDenyReason;
 use crate::types::{CredentialLocation, CredentialMapping};
 
 /// A network request to be evaluated.
@@ -72,8 +73,8 @@ pub enum NetworkDecision {
     },
     /// Deny the request.
     Deny {
-        /// Reason for denial.
-        reason: String,
+        /// Type-safe reason. Renders to a human string via `Display`.
+        reason: NetworkDenyReason,
     },
 }
 
@@ -172,14 +173,20 @@ impl NetworkPolicyDecider for AllowAllDecider {
 
 /// A policy decider that denies everything.
 pub struct DenyAllDecider {
-    reason: String,
+    reason: NetworkDenyReason,
 }
 
 impl DenyAllDecider {
-    pub fn new(reason: &str) -> Self {
+    /// Build a kill-switch decider with operator-supplied detail.
+    pub fn new(detail: impl Into<String>) -> Self {
         Self {
-            reason: reason.to_string(),
+            reason: NetworkDenyReason::kill_switch(detail),
         }
+    }
+
+    /// Build a kill-switch decider from a pre-constructed reason.
+    pub fn with_reason(reason: NetworkDenyReason) -> Self {
+        Self { reason }
     }
 }
 
@@ -239,6 +246,51 @@ mod tests {
         let decision = decider.decide(&req).await;
 
         assert!(!decision.is_allowed());
+    }
+
+    #[tokio::test]
+    async fn deny_reason_is_typed_host_not_allowed() {
+        let allowlist = DomainAllowlist::new(&["crates.io".to_string()]);
+        let decider = DefaultPolicyDecider::new(allowlist, vec![]);
+
+        let req = NetworkRequest::from_url("GET", "https://evil.com/steal").unwrap();
+        let decision = decider.decide(&req).await;
+
+        let NetworkDecision::Deny { reason } = decision else {
+            panic!("expected Deny, got {:?}", decision);
+        };
+        // Type-safe: callers can branch on .kind() or pattern-match.
+        assert_eq!(reason.kind(), "host_not_allowed");
+        match reason {
+            NetworkDenyReason::HostNotAllowed { host, allowed } => {
+                assert_eq!(host, "evil.com");
+                assert_eq!(allowed, vec!["crates.io".to_string()]);
+            }
+            other => panic!("unexpected reason variant: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn deny_all_decider_carries_kill_switch_kind() {
+        let decider = DenyAllDecider::new("operator override");
+        let req = NetworkRequest::from_url("GET", "https://anything.com").unwrap();
+
+        let NetworkDecision::Deny { reason } = decider.decide(&req).await else {
+            panic!("DenyAll must always deny");
+        };
+        assert_eq!(reason.kind(), "kill_switch");
+        assert_eq!(reason.to_string(), "operator override");
+    }
+
+    #[tokio::test]
+    async fn empty_allowlist_yields_typed_reason() {
+        let decider = DefaultPolicyDecider::new(DomainAllowlist::empty(), vec![]);
+        let req = NetworkRequest::from_url("GET", "https://crates.io").unwrap();
+
+        let NetworkDecision::Deny { reason } = decider.decide(&req).await else {
+            panic!("empty allowlist must deny");
+        };
+        assert_eq!(reason.kind(), "empty_allowlist");
     }
 
     #[tokio::test]
