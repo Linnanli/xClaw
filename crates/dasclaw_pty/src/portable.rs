@@ -134,7 +134,9 @@ impl PtyChild for PortablePtyChild {
 
             if let Some(deadline) = deadline {
                 if Instant::now() >= deadline {
-                    return Err(PtyError::WaitTimeout(timeout.expect("deadline implies timeout")));
+                    return Err(PtyError::WaitTimeout(
+                        timeout.expect("deadline implies timeout"),
+                    ));
                 }
             }
 

@@ -7,9 +7,7 @@
 
 use std::time::Duration;
 
-use crate::{
-    default_backend, PortablePtyBackend, Pty, PtyExitStatus, PtySize, PtySpawnOptions,
-};
+use crate::{default_backend, PortablePtyBackend, Pty, PtyExitStatus, PtySize, PtySpawnOptions};
 
 #[test]
 fn pty_size_default_is_24x80() {
@@ -168,9 +166,24 @@ fn resize_does_not_error_on_running_child() {
 
     // 三档常见尺寸都应该能 resize 成功。
     for size in [
-        PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
-        PtySize { rows: 40, cols: 120, pixel_width: 0, pixel_height: 0 },
-        PtySize { rows: 80, cols: 200, pixel_width: 1920, pixel_height: 1080 },
+        PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        },
+        PtySize {
+            rows: 40,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        },
+        PtySize {
+            rows: 80,
+            cols: 200,
+            pixel_width: 1920,
+            pixel_height: 1080,
+        },
     ] {
         child.resize(size).expect("resize should succeed");
     }
@@ -188,10 +201,7 @@ fn kill_then_wait_reports_finished() {
         .expect("spawn sleeping shell");
 
     // 进程应该还在跑。
-    assert_eq!(
-        child.try_wait().expect("try_wait"),
-        PtyExitStatus::Running
-    );
+    assert_eq!(child.try_wait().expect("try_wait"), PtyExitStatus::Running);
 
     child.kill().expect("kill running child");
 
@@ -199,7 +209,10 @@ fn kill_then_wait_reports_finished() {
     let status = child
         .wait_for_exit(Some(Duration::from_secs(2)))
         .expect("wait after kill");
-    assert!(status.is_finished(), "kill should make child finished, got {status:?}");
+    assert!(
+        status.is_finished(),
+        "kill should make child finished, got {status:?}"
+    );
 }
 
 #[cfg(unix)]
