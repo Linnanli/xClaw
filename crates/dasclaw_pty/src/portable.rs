@@ -124,7 +124,7 @@ impl PtyChild for PortablePtyChild {
         // portable-pty 没有原生 timeout wait API；用 try_wait + 轮询模拟。
         // 轮询间隔 25ms 在交互响应（< 一帧）和 CPU 占用间取中庸值。
         const POLL_INTERVAL: Duration = Duration::from_millis(25);
-        let deadline = timeout.map(|t| Instant::now() + t);
+        let deadline = timeout.map(|t| (Instant::now() + t, t));
 
         loop {
             match self.try_wait()? {
@@ -132,11 +132,9 @@ impl PtyChild for PortablePtyChild {
                 done => return Ok(done),
             }
 
-            if let Some(deadline) = deadline {
+            if let Some((deadline, total)) = deadline {
                 if Instant::now() >= deadline {
-                    return Err(PtyError::WaitTimeout(
-                        timeout.expect("deadline implies timeout"),
-                    ));
+                    return Err(PtyError::WaitTimeout(total));
                 }
             }
 
