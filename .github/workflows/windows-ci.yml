@@ -1,0 +1,109 @@
+name: Windows CI
+
+# xClaw fork: Windows build / test decoupled from main PR cadence.
+#
+# 触发策略（架构干净，边界清晰）：
+#   - workflow_dispatch  → 任何分支手动触发
+#   - schedule           → 每周日 03:00 UTC 跑 main + refactor 分支回归
+#   - push to main / refactor/* → 主线合并后自动回归保护
+#   - push to feat/win-* / ci/win-* / windows-* → Windows 专项分支自动跑
+#   - pull_request 仅当 PR 标 `windows-ci` label → 临时 Windows PR 验证
+#
+# 主 PR 流水线（test.yml）不依赖本工作流的结果，保持快速迭代。
+# 真要在 PR 阶段验证 Windows，加 `windows-ci` label 即可。
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 每周日 03:00 UTC ≈ 北京时间周日 11:00
+    - cron: '0 3 * * 0'
+  push:
+    branches:
+      - main
+      - 'refactor/**'
+      - 'feat/win-**'
+      - 'feat/win/**'
+      - 'ci/win-**'
+      - 'windows-**'
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+permissions:
+  contents: read
+
+jobs:
+  windows-build:
+    name: Windows Build (${{ matrix.name }})
+    # PR 仅在标了 windows-ci label 才跑（否则 push/schedule/dispatch 都跑）
+    if: |
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'windows-ci')
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            flags: ""
+          - name: all-features
+            flags: "--no-default-features --features postgres,libsql,html-to-markdown,bedrock,import"
+          - name: libsql-only
+            flags: "--no-default-features --features libsql"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-${{ matrix.name }}
+      - name: Check compilation
+        run: cargo check --all --benches --tests --examples ${{ matrix.flags }}
+
+  windows-test:
+    name: Windows Tests (${{ matrix.name }})
+    # 测试仅在 dispatch / schedule / push to main 跑，PR 上太慢
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'windows-ci-full'))
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            flags: ""
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-test-${{ matrix.name }}
+      - name: Run tests
+        run: cargo test ${{ matrix.flags }} -- --nocapture
+
+  # 聚合 job：方便分支保护规则只引用单个 status
+  windows-ci-success:
+    name: Windows CI Success
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [windows-build]
+    steps:
+      - name: Aggregate result
+        run: |
+          # windows-test 是 best-effort（schedule/dispatch 才跑），不计入 gate
+          result="${{ needs.windows-build.result }}"
+          if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
+            echo "windows-build failed"
+            exit 1
+          fi
+          echo "windows-build OK (or skipped)"
