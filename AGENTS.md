@@ -16,6 +16,32 @@
    - 每次给开发者解释方案或者让开发选择方案，必须调用 `mcp-feedback-enhanced` 工具。
    - 工具调用后，Agent 必须等待用户反馈，收到明确指示后再继续执行后续任务。
 
+### Skills 强制使用规范
+
+每个开发回合都要主动核对是否触发 skill，不要靠"想起来"才用。以下三个 skill 是默认触发，**不是可选**：
+
+| Skill | 触发时机 | 缺省后果 |
+|-------|---------|---------|
+| `code-quality-audit` | **写完一段非平凡实现后**（新函数/新模块/重构 > 50 LOC）、commit/push 前、用户说"审查/检查质量" | 会把补丁式代码、过长函数、unwrap/clone 滥用、重复造轮子的隐患合并进主线 |
+| `code-simplifier` | **`code-quality-audit` 之后**，对刚改完的代码做收敛（消嵌套/去重复/改命名） | 留下啰嗦/低可读代码，后续重构成本飙升 |
+| `code-review-expert` | **PR 自审前**（push 之前）、PR 合并前、用户说"review/审查这次改动" | 漏掉 SOLID 违规、安全风险、依赖耦合等高阶问题 |
+
+**执行顺序（默认管线）**：
+1. 实现完成 → `cargo build` 0 错误 0 警告
+2. `code-quality-audit` 自查（必须）
+3. `code-simplifier` 收敛（必须）
+4. `cargo fmt` + `python3.12 scripts/check_no_panics.py`
+5. commit 前 `code-review-expert` 自审（必须）
+6. push + 开 PR
+
+**不需要执行 skill 的场景**：
+- 单字符/单行 typo 修复
+- 仅文档/注释修改
+- 仅 fmt/lint 自动修复
+- 用户明确说"跳过 review，先跑起来"
+
+**遗忘检测**：每次准备 push 前，先问自己"刚才有没有跑过 code-quality-audit 和 code-review-expert？"，如果没有，回到对应步骤补做。
+
 ### 分析工具使用规范（Round 17 建立 / Round 18 实证）
 
 **重大架构决策/能力盘点/跨项目对比前，必须按三级顺序使用工具**：
