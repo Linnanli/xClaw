@@ -1,0 +1,1351 @@
+//! `ClawCodeLlmProvider` — LLM Provider 基于 `claw-code-api` 的原生客户端。
+//!
+//! Phase 2 Step I 完成后，本模块是生产唯一 LLM 路径
+//! （`GithubCopilot` / `CodexChatGpt` 由各自独立 provider 处理）。
+//!
+//! 关键收益：
+//! - `OpenAiCompatClient` 已为各 OpenAI-compat 厂商（DashScope/Kimi/xAI/Ollama）
+//!   提供 per-provider hook，消除"打 JSON 补丁"需要（参见
+//!   [`docs/plans/architecture-refactor/04-phase2-claw-code-api.md`]）。
+//! - 编译期裁掉大量历史 rig 适配层的异构类型体操。
+
+use async_trait::async_trait;
+use claw_code_api::{
+    AnthropicClient, AuthSource, InputContentBlock, InputMessage, MessageRequest, MessageResponse,
+    OpenAiCompatClient, OpenAiCompatConfig, OutputContentBlock, ProviderClient,
+    ToolChoice as ApiToolChoice, ToolDefinition as ApiToolDefinition, ToolResultContentBlock,
+};
+use rust_decimal::Decimal;
+use secrecy::ExposeSecret;
+
+use crate::llm::config::{OAUTH_PLACEHOLDER, RegistryProviderConfig};
+use crate::llm::error::LlmError;
+use crate::llm::provider::{
+    ChatMessage, CompletionRequest, CompletionResponse, ContentPart, FinishReason, LlmProvider,
+    Role, ToolCall, ToolCompletionRequest, ToolCompletionResponse, ToolDefinition,
+};
+use crate::llm::registry::ProviderProtocol;
+
+/// 使用 `claw-code-api` 作为底层 HTTP 客户端的 Provider。
+#[derive(Debug)]
+pub struct ClawCodeLlmProvider {
+    client: ProviderClient,
+    /// 配置时声明的模型名（可能是 alias，如 `"opus"`）。
+    configured_model: String,
+    /// `resolve_model_alias` 解析后的真实模型名（请求体用这个）。
+    resolved_model: String,
+    /// (input_rate, output_rate) — 每 token 成本；None 表示未知。
+    cost_rates: Option<(Decimal, Decimal)>,
+}
+
+impl ClawCodeLlmProvider {
+    /// 根据模型名自动探测 Provider 类型（OpenAI / Anthropic / xAI / DashScope 等）。
+    pub fn from_model(model: impl Into<String>) -> Result<Self, LlmError> {
+        let configured_model = model.into();
+        let resolved_model = claw_code_api::resolve_model_alias(&configured_model).to_string();
+        let client = ProviderClient::from_model(&configured_model).map_err(map_api_error)?;
+        Ok(Self {
+            client,
+            configured_model,
+            resolved_model,
+            cost_rates: None,
+        })
+    }
+
+    /// 覆盖 token 单价（用于 `calculate_cost` / `cost_per_token`）。
+    #[must_use]
+    pub fn with_cost_rates(mut self, input: Decimal, output: Decimal) -> Self {
+        self.cost_rates = Some((input, output));
+        self
+    }
+
+    /// 从 ironclaw 的 [`RegistryProviderConfig`] 构造一个 Provider。
+    ///
+    /// 这是 **Step D** 的核心入口，负责把 x-claw 现有的 providers.json 配置
+    /// 映射到 `claw-code-api` 的具体 client：
+    ///
+    /// | `ProviderProtocol`  | 映射目标                                                    |
+    /// |---------------------|-------------------------------------------------------------|
+    /// | `Anthropic`         | `AnthropicClient::new(api_key)` 或 OAuth `AuthSource::BearerToken` |
+    /// | `OpenAiCompletions` | `OpenAiCompatClient::new(api_key, cfg).with_base_url(...)`  |
+    /// | `Ollama`            | 同上，空 api_key                                             |
+    /// | `GithubCopilot`     | 不在本模块范围，由 `github_copilot::GithubCopilotProvider` 处理 |
+    ///
+    /// 不读取任何环境变量：凭据/URL 都来自显式配置，符合 x-claw 的 keychain 模型。
+    pub fn from_registry_config(config: &RegistryProviderConfig) -> Result<Self, LlmError> {
+        let configured_model = config.model.clone();
+        let resolved_model = claw_code_api::resolve_model_alias(&configured_model).to_string();
+
+        let client = match config.protocol {
+            ProviderProtocol::Anthropic => build_anthropic_client(config)?,
+            ProviderProtocol::OpenAiCompletions => build_openai_compat_client(config)?,
+            ProviderProtocol::Ollama => build_ollama_client(config),
+            ProviderProtocol::GithubCopilot => {
+                return Err(LlmError::RequestFailed {
+                    provider: config.provider_id.clone(),
+                    reason: "github_copilot 不应由 ClawCodeLlmProvider 处理；请确认调用方先走 \
+                             GithubCopilotProvider （见 mod.rs create_registry_provider）"
+                        .to_string(),
+                });
+            }
+        };
+
+        Ok(Self {
+            client,
+            configured_model,
+            resolved_model,
+            cost_rates: None,
+        })
+    }
+
+    /// 返回底层 `ProviderClient` 供测试注入使用（内部接口，不公开稳定）。
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn client_for_test(&self) -> &ProviderClient {
+        &self.client
+    }
+}
+
+// ============================================================================
+// 请求映射：ironclaw → claw-code-api
+// ============================================================================
+
+/// 把 ironclaw 的 `CompletionRequest` 映射为 claw-code-api 的 `MessageRequest`。
+/// **默认不含 tools**，工具场景走 [`build_tool_message_request`]。
+pub(crate) fn build_chat_message_request(
+    req: &CompletionRequest,
+    default_model: &str,
+) -> MessageRequest {
+    let (system, messages) = split_system_and_messages(&req.messages);
+    MessageRequest {
+        model: req
+            .model
+            .clone()
+            .unwrap_or_else(|| default_model.to_string()),
+        max_tokens: req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
+        messages,
+        system,
+        tools: None,
+        tool_choice: None,
+        stream: false,
+        temperature: req.temperature.map(f64::from),
+        top_p: None,
+        frequency_penalty: None,
+        presence_penalty: None,
+        stop: req.stop_sequences.clone(),
+        reasoning_effort: None,
+    }
+}
+
+/// 把 ironclaw 的 `ToolCompletionRequest` 映射为 claw-code-api 的 `MessageRequest`。
+pub(crate) fn build_tool_message_request(
+    req: &ToolCompletionRequest,
+    default_model: &str,
+) -> MessageRequest {
+    let (system, messages) = split_system_and_messages(&req.messages);
+    let tools = if req.tools.is_empty() {
+        None
+    } else {
+        Some(req.tools.iter().map(map_tool_definition).collect())
+    };
+    MessageRequest {
+        model: req
+            .model
+            .clone()
+            .unwrap_or_else(|| default_model.to_string()),
+        max_tokens: req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
+        messages,
+        system,
+        tools,
+        tool_choice: req.tool_choice.as_deref().and_then(map_tool_choice),
+        stream: false,
+        temperature: req.temperature.map(f64::from),
+        top_p: None,
+        frequency_penalty: None,
+        presence_penalty: None,
+        stop: req.stop_sequences.clone(),
+        reasoning_effort: None,
+    }
+}
+
+const DEFAULT_MAX_TOKENS: u32 = 4096;
+
+fn split_system_and_messages(messages: &[ChatMessage]) -> (Option<String>, Vec<InputMessage>) {
+    let mut system_parts: Vec<String> = Vec::new();
+    let mut out: Vec<InputMessage> = Vec::with_capacity(messages.len());
+
+    for m in messages {
+        match m.role {
+            Role::System => {
+                // 合并多条 system 消息（用两换行分隔，与 Anthropic 官方 pattern 一致）。
+                if !m.content.is_empty() {
+                    system_parts.push(m.content.clone());
+                }
+            }
+            Role::User => out.push(map_user_message(m)),
+            Role::Assistant => out.push(map_assistant_message(m)),
+            Role::Tool => out.push(map_tool_result_message(m)),
+        }
+    }
+
+    let system = if system_parts.is_empty() {
+        None
+    } else {
+        Some(system_parts.join("\n\n"))
+    };
+    (system, out)
+}
+
+fn map_user_message(m: &ChatMessage) -> InputMessage {
+    let mut content: Vec<InputContentBlock> = Vec::new();
+    // 多模态优先；否则退回纯文本。
+    if m.content_parts.is_empty() {
+        if !m.content.is_empty() {
+            content.push(InputContentBlock::Text {
+                text: m.content.clone(),
+            });
+        }
+    } else {
+        for part in &m.content_parts {
+            match part {
+                ContentPart::Text { text } => {
+                    content.push(InputContentBlock::Text { text: text.clone() })
+                }
+                ContentPart::ImageUrl { image_url: _ } => {
+                    // claw-code-api 的 InputContentBlock 目前不直接接受 OpenAI image_url，
+                    // 交由未来扩展。此处降级为占位文本以免丢失语义。
+                    content.push(InputContentBlock::Text {
+                        text: "[image]".to_string(),
+                    });
+                }
+            }
+        }
+    }
+    InputMessage {
+        role: "user".to_string(),
+        content,
+    }
+}
+
+fn map_assistant_message(m: &ChatMessage) -> InputMessage {
+    let mut content: Vec<InputContentBlock> = Vec::new();
+
+    if !m.content.is_empty() {
+        content.push(InputContentBlock::Text {
+            text: m.content.clone(),
+        });
+    }
+
+    if let Some(tool_calls) = &m.tool_calls {
+        for tc in tool_calls {
+            content.push(InputContentBlock::ToolUse {
+                id: tc.id.clone(),
+                name: tc.name.clone(),
+                input: tc.arguments.clone(),
+            });
+        }
+    }
+
+    InputMessage {
+        role: "assistant".to_string(),
+        content,
+    }
+}
+
+fn map_tool_result_message(m: &ChatMessage) -> InputMessage {
+    // ironclaw 的 Role::Tool 消息要求带 tool_call_id；若缺失则降级为 "unknown" 以防硬崩溃，
+    // 调用方应当在构造时就保证 tool_call_id 存在。
+    let tool_use_id = m.tool_call_id.clone().unwrap_or_else(|| "unknown".into());
+    InputMessage {
+        role: "user".to_string(),
+        content: vec![InputContentBlock::ToolResult {
+            tool_use_id,
+            content: vec![ToolResultContentBlock::Text {
+                text: m.content.clone(),
+            }],
+            is_error: false,
+        }],
+    }
+}
+
+fn map_tool_definition(td: &ToolDefinition) -> ApiToolDefinition {
+    let description = if td.description.is_empty() {
+        None
+    } else {
+        Some(td.description.clone())
+    };
+    ApiToolDefinition {
+        name: td.name.clone(),
+        description,
+        input_schema: td.parameters.clone(),
+    }
+}
+
+fn map_tool_choice(choice: &str) -> Option<ApiToolChoice> {
+    match choice {
+        "auto" => Some(ApiToolChoice::Auto),
+        "required" | "any" => Some(ApiToolChoice::Any),
+        "none" => None,
+        other => {
+            // 特定工具名：`{"type":"tool","name":"..."}` 风格
+            Some(ApiToolChoice::Tool {
+                name: other.to_string(),
+            })
+        }
+    }
+}
+
+// ============================================================================
+// 响应映射：claw-code-api → ironclaw
+// ============================================================================
+
+pub(crate) fn map_message_response(resp: MessageResponse) -> ToolCompletionResponse {
+    let mut text = String::new();
+    let mut tool_calls: Vec<ToolCall> = Vec::new();
+
+    for block in resp.content {
+        match block {
+            OutputContentBlock::Text { text: t } => {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(&t);
+            }
+            OutputContentBlock::ToolUse { id, name, input } => {
+                tool_calls.push(ToolCall {
+                    id,
+                    name,
+                    arguments: input,
+                    reasoning: None,
+                });
+            }
+            OutputContentBlock::Thinking { thinking, .. } => {
+                // 思考链：包装成 `<think>...</think>` 前置进 content，与 ironclaw
+                // 下游 reasoning pipeline（`strip_thinking_tags_regex` 等）既有
+                // 约定一致。空 thinking 不推（避免产生空 `<think></think>`）。
+                if !thinking.is_empty() {
+                    let wrapped = format!("<think>{thinking}</think>");
+                    if text.is_empty() {
+                        text = wrapped;
+                    } else {
+                        text = format!("{wrapped}\n{text}");
+                    }
+                }
+            }
+            OutputContentBlock::RedactedThinking { .. } => {
+                // redacted_thinking 是 Anthropic 的加密 payload，没有可读文本；
+                // 保留 drop 策略（下游任何消费者都拿不到可读内容）。
+            }
+        }
+    }
+
+    let finish_reason = map_finish_reason(resp.stop_reason.as_deref());
+    let cache_read = resp.usage.cache_read_input_tokens;
+    let cache_creation = resp.usage.cache_creation_input_tokens;
+
+    ToolCompletionResponse {
+        content: if text.is_empty() { None } else { Some(text) },
+        tool_calls,
+        input_tokens: resp.usage.input_tokens,
+        output_tokens: resp.usage.output_tokens,
+        finish_reason,
+        cache_read_input_tokens: cache_read,
+        cache_creation_input_tokens: cache_creation,
+    }
+}
+
+fn map_finish_reason(reason: Option<&str>) -> FinishReason {
+    match reason {
+        Some("end_turn") | Some("stop") | Some("stop_sequence") => FinishReason::Stop,
+        Some("max_tokens") | Some("length") => FinishReason::Length,
+        Some("tool_use") | Some("tool_calls") => FinishReason::ToolUse,
+        Some("content_filter") | Some("refusal") => FinishReason::ContentFilter,
+        _ => FinishReason::Unknown,
+    }
+}
+
+fn map_api_error(err: claw_code_api::ApiError) -> LlmError {
+    LlmError::RequestFailed {
+        provider: "claw-code-api".to_string(),
+        reason: err.to_string(),
+    }
+}
+
+// ============================================================================
+// Provider client builders（Step D — 配置迁移）
+// ============================================================================
+
+/// 从注册表配置读取 API key 明文；`OAUTH_PLACEHOLDER` 被视为"无 API key"。
+fn registry_api_key(config: &RegistryProviderConfig) -> Option<String> {
+    config
+        .api_key
+        .as_ref()
+        .map(|k| k.expose_secret().to_string())
+        .filter(|k| !k.is_empty() && k != OAUTH_PLACEHOLDER)
+}
+
+fn build_anthropic_client(config: &RegistryProviderConfig) -> Result<ProviderClient, LlmError> {
+    // OAuth 优先：Anthropic Console 只发 session token 而不给 API key 的场景。
+    let auth = match (
+        registry_api_key(config),
+        config
+            .oauth_token
+            .as_ref()
+            .map(|t| t.expose_secret().to_string()),
+    ) {
+        (Some(api_key), Some(bearer_token)) => AuthSource::ApiKeyAndBearer {
+            api_key,
+            bearer_token,
+        },
+        (Some(api_key), None) => AuthSource::ApiKey(api_key),
+        (None, Some(bearer_token)) => AuthSource::BearerToken(bearer_token),
+        (None, None) => {
+            return Err(LlmError::AuthFailed {
+                provider: config.provider_id.clone(),
+            });
+        }
+    };
+
+    let client = AnthropicClient::from_auth(auth).with_base_url(config.base_url.clone());
+    Ok(ProviderClient::Anthropic(client))
+}
+
+/// 根据模型名自动选 DashScope / xAI / OpenAI 预设；然后 override base_url。
+fn pick_openai_compat_config(model: &str) -> (OpenAiCompatConfig, ProviderVariant) {
+    let resolved = claw_code_api::resolve_model_alias(model);
+    match claw_code_api::detect_provider_kind(&resolved) {
+        claw_code_api::ProviderKind::Xai => (OpenAiCompatConfig::xai(), ProviderVariant::Xai),
+        claw_code_api::ProviderKind::OpenAi => {
+            // 根据模型 metadata 进一步区分 DashScope vs 通用 OpenAI-compat
+            // （Groq/Kimi/OpenRouter/Tinfoil 都用 openai() 预设 + 自定义 base_url）
+            (OpenAiCompatConfig::openai(), ProviderVariant::OpenAi)
+        }
+        // Anthropic 不该走到这里；兜底 openai 预设以避免 panic，错误由上层抛出。
+        claw_code_api::ProviderKind::Anthropic => {
+            (OpenAiCompatConfig::openai(), ProviderVariant::OpenAi)
+        }
+    }
+}
+
+/// 区分 `ProviderClient::Xai` vs `ProviderClient::OpenAi` 枚举分支。
+enum ProviderVariant {
+    Xai,
+    OpenAi,
+}
+
+fn build_openai_compat_client(config: &RegistryProviderConfig) -> Result<ProviderClient, LlmError> {
+    let api_key = registry_api_key(config).ok_or_else(|| LlmError::AuthFailed {
+        provider: config.provider_id.clone(),
+    })?;
+
+    let (compat_config, variant) = pick_openai_compat_config(&config.model);
+    let client =
+        OpenAiCompatClient::new(api_key, compat_config).with_base_url(config.base_url.clone());
+    Ok(match variant {
+        ProviderVariant::Xai => ProviderClient::Xai(client),
+        ProviderVariant::OpenAi => ProviderClient::OpenAi(client),
+    })
+}
+
+fn build_ollama_client(config: &RegistryProviderConfig) -> ProviderClient {
+    // Ollama 不需要 API key；如果用户填了 key（如反向代理鉴权），也传进去。
+    let api_key = registry_api_key(config).unwrap_or_default();
+    let client = OpenAiCompatClient::new(api_key, OpenAiCompatConfig::openai())
+        .with_base_url(config.base_url.clone());
+    ProviderClient::OpenAi(client)
+}
+
+// ============================================================================
+// LlmProvider trait 实现
+// ============================================================================
+
+#[async_trait]
+impl LlmProvider for ClawCodeLlmProvider {
+    fn model_name(&self) -> &str {
+        &self.configured_model
+    }
+
+    fn cost_per_token(&self) -> (Decimal, Decimal) {
+        self.cost_rates.unwrap_or((Decimal::ZERO, Decimal::ZERO))
+    }
+
+    async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, LlmError> {
+        let msg_req = build_chat_message_request(&request, &self.resolved_model);
+        let resp = self
+            .client
+            .send_message(&msg_req)
+            .await
+            .map_err(map_api_error)?;
+        let tool_resp = map_message_response(resp);
+
+        // complete() 不支持工具；如果 LLM 意外返回工具调用，记作 Unknown finish。
+        let finish_reason = if tool_resp.tool_calls.is_empty() {
+            tool_resp.finish_reason
+        } else {
+            FinishReason::Unknown
+        };
+
+        Ok(CompletionResponse {
+            content: tool_resp.content.unwrap_or_default(),
+            input_tokens: tool_resp.input_tokens,
+            output_tokens: tool_resp.output_tokens,
+            finish_reason,
+            cache_read_input_tokens: tool_resp.cache_read_input_tokens,
+            cache_creation_input_tokens: tool_resp.cache_creation_input_tokens,
+        })
+    }
+
+    async fn complete_with_tools(
+        &self,
+        request: ToolCompletionRequest,
+    ) -> Result<ToolCompletionResponse, LlmError> {
+        let msg_req = build_tool_message_request(&request, &self.resolved_model);
+        let resp = self
+            .client
+            .send_message(&msg_req)
+            .await
+            .map_err(map_api_error)?;
+        Ok(map_message_response(resp))
+    }
+
+    async fn list_models(&self) -> Result<Vec<String>, LlmError> {
+        // claw-code-api 暂未提供运行时列表接口；返回当前已配置模型作为最小保证。
+        Ok(vec![self.configured_model.clone()])
+    }
+
+    fn effective_model_name(&self, requested_model: Option<&str>) -> String {
+        requested_model
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| self.configured_model.clone())
+    }
+
+    fn active_model_name(&self) -> String {
+        self.configured_model.clone()
+    }
+}
+
+// ============================================================================
+// 测试：消息映射 / 响应映射（纯函数，不需要网络）
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use claw_code_api::Usage;
+    use serde_json::json;
+
+    fn mk_user(text: &str) -> ChatMessage {
+        ChatMessage::user(text)
+    }
+
+    fn mk_assistant(text: &str) -> ChatMessage {
+        ChatMessage {
+            role: Role::Assistant,
+            content: text.to_string(),
+            content_parts: Vec::new(),
+            tool_call_id: None,
+            name: None,
+            tool_calls: None,
+        }
+    }
+
+    // -------- split_system_and_messages --------
+
+    #[test]
+    fn test_split_system_single_system_message() {
+        let msgs = vec![ChatMessage::system("you are helpful"), mk_user("hi")];
+        let (sys, out) = split_system_and_messages(&msgs);
+        assert_eq!(sys.as_deref(), Some("you are helpful"));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].role, "user");
+    }
+
+    #[test]
+    fn test_split_system_multiple_system_messages_joined() {
+        let msgs = vec![
+            ChatMessage::system("rule A"),
+            ChatMessage::system("rule B"),
+            mk_user("hi"),
+        ];
+        let (sys, _) = split_system_and_messages(&msgs);
+        assert_eq!(sys.as_deref(), Some("rule A\n\nrule B"));
+    }
+
+    #[test]
+    fn test_split_system_empty_system_is_dropped() {
+        let msgs = vec![ChatMessage::system(""), mk_user("hi")];
+        let (sys, _) = split_system_and_messages(&msgs);
+        assert!(sys.is_none());
+    }
+
+    #[test]
+    fn test_split_preserves_conversation_order() {
+        let msgs = vec![mk_user("q1"), mk_assistant("a1"), mk_user("q2")];
+        let (_, out) = split_system_and_messages(&msgs);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].role, "user");
+        assert_eq!(out[1].role, "assistant");
+        assert_eq!(out[2].role, "user");
+    }
+
+    // -------- user message mapping --------
+
+    #[test]
+    fn test_user_plain_text() {
+        let im = map_user_message(&mk_user("hello"));
+        assert_eq!(im.role, "user");
+        assert_eq!(im.content.len(), 1);
+        match &im.content[0] {
+            InputContentBlock::Text { text } => assert_eq!(text, "hello"),
+            _ => panic!("expected text block"),
+        }
+    }
+
+    #[test]
+    fn test_user_multimodal_text_part() {
+        let m = ChatMessage {
+            role: Role::User,
+            content: String::new(),
+            content_parts: vec![
+                ContentPart::Text { text: "a".into() },
+                ContentPart::Text { text: "b".into() },
+            ],
+            tool_call_id: None,
+            name: None,
+            tool_calls: None,
+        };
+        let im = map_user_message(&m);
+        assert_eq!(im.content.len(), 2);
+    }
+
+    // -------- assistant message with tool_calls --------
+
+    #[test]
+    fn test_assistant_with_tool_calls() {
+        let m = ChatMessage {
+            role: Role::Assistant,
+            content: "thinking...".into(),
+            content_parts: Vec::new(),
+            tool_call_id: None,
+            name: None,
+            tool_calls: Some(vec![ToolCall {
+                id: "tc-1".into(),
+                name: "shell".into(),
+                arguments: json!({"cmd": "ls"}),
+                reasoning: None,
+            }]),
+        };
+        let im = map_assistant_message(&m);
+        assert_eq!(im.content.len(), 2);
+        match &im.content[0] {
+            InputContentBlock::Text { text } => assert_eq!(text, "thinking..."),
+            _ => panic!("expected text first"),
+        }
+        match &im.content[1] {
+            InputContentBlock::ToolUse { id, name, input } => {
+                assert_eq!(id, "tc-1");
+                assert_eq!(name, "shell");
+                assert_eq!(input["cmd"], "ls");
+            }
+            _ => panic!("expected tool_use"),
+        }
+    }
+
+    #[test]
+    fn test_assistant_tool_calls_only_no_text() {
+        let m = ChatMessage {
+            role: Role::Assistant,
+            content: String::new(),
+            content_parts: Vec::new(),
+            tool_call_id: None,
+            name: None,
+            tool_calls: Some(vec![ToolCall {
+                id: "tc-2".into(),
+                name: "lookup".into(),
+                arguments: json!({"q": "rust"}),
+                reasoning: None,
+            }]),
+        };
+        let im = map_assistant_message(&m);
+        assert_eq!(im.content.len(), 1);
+        assert!(matches!(im.content[0], InputContentBlock::ToolUse { .. }));
+    }
+
+    // -------- tool result mapping --------
+
+    #[test]
+    fn test_tool_result_wraps_into_user_message() {
+        let m = ChatMessage::tool_result("tc-1", "shell", "ok");
+        let im = map_tool_result_message(&m);
+        assert_eq!(im.role, "user"); // Anthropic 协议：tool_result 是 user role
+        match &im.content[0] {
+            InputContentBlock::ToolResult {
+                tool_use_id,
+                is_error,
+                ..
+            } => {
+                assert_eq!(tool_use_id, "tc-1");
+                assert!(!is_error);
+            }
+            _ => panic!("expected tool_result"),
+        }
+    }
+
+    // -------- tool definition --------
+
+    #[test]
+    fn test_tool_definition_mapping() {
+        let td = ToolDefinition {
+            name: "shell".into(),
+            description: "run a shell command".into(),
+            parameters: json!({"type": "object"}),
+        };
+        let api_td = map_tool_definition(&td);
+        assert_eq!(api_td.name, "shell");
+        assert_eq!(api_td.description.as_deref(), Some("run a shell command"));
+        assert_eq!(api_td.input_schema, json!({"type": "object"}));
+    }
+
+    #[test]
+    fn test_tool_definition_empty_description_becomes_none() {
+        let td = ToolDefinition {
+            name: "shell".into(),
+            description: String::new(),
+            parameters: json!({}),
+        };
+        let api_td = map_tool_definition(&td);
+        assert!(api_td.description.is_none());
+    }
+
+    // -------- tool_choice mapping --------
+
+    #[test]
+    fn test_tool_choice_mapping() {
+        assert!(matches!(map_tool_choice("auto"), Some(ApiToolChoice::Auto)));
+        assert!(matches!(
+            map_tool_choice("required"),
+            Some(ApiToolChoice::Any)
+        ));
+        assert!(matches!(map_tool_choice("any"), Some(ApiToolChoice::Any)));
+        assert!(map_tool_choice("none").is_none());
+        match map_tool_choice("shell") {
+            Some(ApiToolChoice::Tool { name }) => assert_eq!(name, "shell"),
+            other => panic!("expected specific tool, got {other:?}"),
+        }
+    }
+
+    // -------- finish reason --------
+
+    #[test]
+    fn test_finish_reason_mapping() {
+        assert_eq!(map_finish_reason(Some("end_turn")), FinishReason::Stop);
+        assert_eq!(map_finish_reason(Some("stop")), FinishReason::Stop);
+        assert_eq!(map_finish_reason(Some("max_tokens")), FinishReason::Length);
+        assert_eq!(map_finish_reason(Some("tool_use")), FinishReason::ToolUse);
+        assert_eq!(map_finish_reason(Some("tool_calls")), FinishReason::ToolUse);
+        assert_eq!(
+            map_finish_reason(Some("content_filter")),
+            FinishReason::ContentFilter
+        );
+        assert_eq!(map_finish_reason(None), FinishReason::Unknown);
+        assert_eq!(map_finish_reason(Some("wat")), FinishReason::Unknown);
+    }
+
+    // -------- response mapping --------
+
+    fn mk_resp(
+        content: Vec<OutputContentBlock>,
+        stop_reason: Option<&str>,
+        usage: Usage,
+    ) -> MessageResponse {
+        MessageResponse {
+            id: "m-test".into(),
+            kind: "message".into(),
+            role: "assistant".into(),
+            content,
+            model: "claude-sonnet".into(),
+            stop_reason: stop_reason.map(|s| s.to_string()),
+            stop_sequence: None,
+            usage,
+            request_id: None,
+        }
+    }
+
+    #[test]
+    fn test_response_text_only() {
+        let resp = mk_resp(
+            vec![OutputContentBlock::Text { text: "hi".into() }],
+            Some("end_turn"),
+            Usage {
+                input_tokens: 5,
+                output_tokens: 2,
+                ..Usage::default()
+            },
+        );
+        let out = map_message_response(resp);
+        assert_eq!(out.content.as_deref(), Some("hi"));
+        assert!(out.tool_calls.is_empty());
+        assert_eq!(out.finish_reason, FinishReason::Stop);
+        assert_eq!(out.input_tokens, 5);
+        assert_eq!(out.output_tokens, 2);
+    }
+
+    #[test]
+    fn test_response_tool_use_and_text_interleaved() {
+        let resp = mk_resp(
+            vec![
+                OutputContentBlock::Text {
+                    text: "I'll run it".into(),
+                },
+                OutputContentBlock::ToolUse {
+                    id: "tc-x".into(),
+                    name: "shell".into(),
+                    input: json!({"cmd": "pwd"}),
+                },
+            ],
+            Some("tool_use"),
+            Usage::default(),
+        );
+        let out = map_message_response(resp);
+        assert_eq!(out.content.as_deref(), Some("I'll run it"));
+        assert_eq!(out.tool_calls.len(), 1);
+        assert_eq!(out.tool_calls[0].id, "tc-x");
+        assert_eq!(out.tool_calls[0].name, "shell");
+        assert_eq!(out.tool_calls[0].arguments["cmd"], "pwd");
+        assert_eq!(out.finish_reason, FinishReason::ToolUse);
+    }
+
+    #[test]
+    fn test_response_cache_tokens_propagated() {
+        let resp = mk_resp(
+            vec![OutputContentBlock::Text { text: "x".into() }],
+            Some("end_turn"),
+            Usage {
+                input_tokens: 100,
+                output_tokens: 10,
+                cache_read_input_tokens: 80,
+                cache_creation_input_tokens: 15,
+            },
+        );
+        let out = map_message_response(resp);
+        assert_eq!(out.cache_read_input_tokens, 80);
+        assert_eq!(out.cache_creation_input_tokens, 15);
+    }
+
+    /// Thinking block 必须被包成 `<think>...</think>` 放在 Text 前面，与
+    /// ironclaw 下游 `strip_thinking_tags_regex` 的期望格式一致。
+    #[test]
+    fn test_response_thinking_block_wrapped_before_text() {
+        let resp = mk_resp(
+            vec![
+                OutputContentBlock::Thinking {
+                    thinking: "user wants weather; I should call the tool".into(),
+                    signature: None,
+                },
+                OutputContentBlock::Text {
+                    text: "Let me check the weather.".into(),
+                },
+            ],
+            Some("end_turn"),
+            Usage::default(),
+        );
+        let out = map_message_response(resp);
+        let content = out.content.expect("content should be Some");
+        assert!(
+            content.starts_with("<think>user wants weather; I should call the tool</think>"),
+            "think tag must lead the content, got: {content}"
+        );
+        assert!(
+            content.contains("Let me check the weather."),
+            "visible text must be preserved, got: {content}"
+        );
+    }
+
+    /// 只有 Thinking block、没有 Text 时，content 仍应是 `<think>...</think>`
+    /// 而不是空字符串——避免 agent loop 把空响应当作"沉默回复"。
+    #[test]
+    fn test_response_thinking_only_still_produces_content() {
+        let resp = mk_resp(
+            vec![OutputContentBlock::Thinking {
+                thinking: "reasoning in progress".into(),
+                signature: None,
+            }],
+            Some("end_turn"),
+            Usage::default(),
+        );
+        let out = map_message_response(resp);
+        assert_eq!(
+            out.content.as_deref(),
+            Some("<think>reasoning in progress</think>")
+        );
+    }
+
+    /// 空 Thinking block 不应该生成空 `<think></think>`（会污染下游正则）。
+    #[test]
+    fn test_response_empty_thinking_does_not_pollute_content() {
+        let resp = mk_resp(
+            vec![
+                OutputContentBlock::Thinking {
+                    thinking: String::new(),
+                    signature: None,
+                },
+                OutputContentBlock::Text {
+                    text: "hello".into(),
+                },
+            ],
+            Some("end_turn"),
+            Usage::default(),
+        );
+        let out = map_message_response(resp);
+        assert_eq!(out.content.as_deref(), Some("hello"));
+    }
+
+    // -------- chat request build --------
+
+    #[test]
+    fn test_chat_request_uses_override_model() {
+        let req = CompletionRequest::new(vec![mk_user("hi")])
+            .with_model("gpt-4o")
+            .with_max_tokens(100)
+            .with_temperature(0.2);
+        let built = build_chat_message_request(&req, "sonnet");
+        assert_eq!(built.model, "gpt-4o");
+        assert_eq!(built.max_tokens, 100);
+        // f32 → f64 会带精度误差，用 epsilon 比较
+        let t = built.temperature.expect("temperature set");
+        assert!((t - 0.2).abs() < 1e-6, "temperature = {t}");
+        assert!(built.tools.is_none());
+        assert_eq!(built.messages.len(), 1);
+    }
+
+    #[test]
+    fn test_chat_request_falls_back_to_default_model() {
+        let req = CompletionRequest::new(vec![mk_user("hi")]);
+        let built = build_chat_message_request(&req, "sonnet");
+        assert_eq!(built.model, "sonnet");
+        assert_eq!(built.max_tokens, DEFAULT_MAX_TOKENS);
+    }
+
+    // -------- tool request build --------
+
+    #[test]
+    fn test_tool_request_includes_tools_and_choice() {
+        let req = ToolCompletionRequest::new(
+            vec![mk_user("go")],
+            vec![ToolDefinition {
+                name: "shell".into(),
+                description: "".into(),
+                parameters: json!({}),
+            }],
+        )
+        .with_tool_choice("required")
+        .with_model("qwen-plus");
+        let built = build_tool_message_request(&req, "sonnet");
+        assert_eq!(built.model, "qwen-plus");
+        assert_eq!(built.tools.as_ref().unwrap().len(), 1);
+        assert!(matches!(built.tool_choice, Some(ApiToolChoice::Any)));
+    }
+
+    #[test]
+    fn test_tool_request_empty_tools_becomes_none() {
+        let req = ToolCompletionRequest::new(vec![mk_user("hi")], vec![]);
+        let built = build_tool_message_request(&req, "sonnet");
+        assert!(built.tools.is_none());
+    }
+
+    // -------- full round-trip: build → response → map --------
+
+    #[test]
+    fn test_round_trip_tool_call_history() {
+        // assistant 上一轮要求调 shell；当前轮把结果传回
+        let msgs = vec![
+            ChatMessage::system("be brief"),
+            mk_user("list root"),
+            ChatMessage {
+                role: Role::Assistant,
+                content: String::new(),
+                content_parts: Vec::new(),
+                tool_call_id: None,
+                name: None,
+                tool_calls: Some(vec![ToolCall {
+                    id: "call-1".into(),
+                    name: "shell".into(),
+                    arguments: json!({"cmd": "ls /"}),
+                    reasoning: None,
+                }]),
+            },
+            ChatMessage::tool_result("call-1", "shell", "bin\netc\nusr"),
+        ];
+        let req = CompletionRequest::new(msgs);
+        let built = build_chat_message_request(&req, "claude-sonnet-4-6");
+
+        assert_eq!(built.system.as_deref(), Some("be brief"));
+        // user, assistant(tool_use), user(tool_result)
+        assert_eq!(built.messages.len(), 3);
+        assert_eq!(built.messages[0].role, "user");
+        assert_eq!(built.messages[1].role, "assistant");
+        assert!(matches!(
+            built.messages[1].content[0],
+            InputContentBlock::ToolUse { .. }
+        ));
+        assert_eq!(built.messages[2].role, "user");
+        assert!(matches!(
+            built.messages[2].content[0],
+            InputContentBlock::ToolResult { .. }
+        ));
+    }
+
+    // ========================================================================
+    // Step D — 配置迁移测试
+    //
+    // 目标：验证 x-claw 现有 `RegistryProviderConfig` 能无损映射到
+    // `ClawCodeLlmProvider`，覆盖每一种 `ProviderProtocol` 分支。
+    // ========================================================================
+
+    use crate::llm::config::{CacheRetention, RegistryProviderConfig};
+    use claw_code_api::ProviderKind;
+    use secrecy::SecretString;
+
+    fn mk_config(
+        protocol: ProviderProtocol,
+        provider_id: &str,
+        model: &str,
+        base_url: &str,
+        api_key: Option<&str>,
+        oauth_token: Option<&str>,
+    ) -> RegistryProviderConfig {
+        RegistryProviderConfig {
+            protocol,
+            provider_id: provider_id.to_string(),
+            api_key: api_key.map(|k| SecretString::from(k.to_string())),
+            base_url: base_url.to_string(),
+            model: model.to_string(),
+            extra_headers: Vec::new(),
+            oauth_token: oauth_token.map(|t| SecretString::from(t.to_string())),
+            is_codex_chatgpt: false,
+            refresh_token: None,
+            auth_path: None,
+            cache_retention: CacheRetention::None,
+            unsupported_params: Vec::new(),
+            strict_tools_schema: true,
+        }
+    }
+
+    #[test]
+    fn test_migrate_anthropic_api_key_config() {
+        let cfg = mk_config(
+            ProviderProtocol::Anthropic,
+            "anthropic",
+            "claude-sonnet-4-6",
+            "https://api.anthropic.com",
+            Some("sk-ant-real"),
+            None,
+        );
+        let p = ClawCodeLlmProvider::from_registry_config(&cfg).expect("build");
+        assert_eq!(p.model_name(), "claude-sonnet-4-6");
+        assert_eq!(p.client_for_test().provider_kind(), ProviderKind::Anthropic);
+    }
+
+    #[test]
+    fn test_migrate_anthropic_oauth_only_config() {
+        // 与 `claude login` 场景对齐：只有 OAuth bearer token。
+        let cfg = mk_config(
+            ProviderProtocol::Anthropic,
+            "anthropic-oauth",
+            "claude-opus-4-6",
+            "https://api.anthropic.com",
+            Some(OAUTH_PLACEHOLDER),
+            Some("oauth-bearer-token"),
+        );
+        let p = ClawCodeLlmProvider::from_registry_config(&cfg).expect("build");
+        assert_eq!(p.resolved_model, "claude-opus-4-6");
+        assert_eq!(p.client_for_test().provider_kind(), ProviderKind::Anthropic);
+    }
+
+    #[test]
+    fn test_migrate_anthropic_rejects_missing_credentials() {
+        let cfg = mk_config(
+            ProviderProtocol::Anthropic,
+            "anthropic-bad",
+            "claude-sonnet-4-6",
+            "https://api.anthropic.com",
+            None,
+            None,
+        );
+        let err = ClawCodeLlmProvider::from_registry_config(&cfg).unwrap_err();
+        assert!(
+            matches!(&err, LlmError::AuthFailed { provider } if provider == "anthropic-bad"),
+            "unexpected err: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_migrate_openai_config() {
+        let cfg = mk_config(
+            ProviderProtocol::OpenAiCompletions,
+            "openai",
+            "gpt-4o",
+            "https://api.openai.com/v1",
+            Some("sk-openai"),
+            None,
+        );
+        let p = ClawCodeLlmProvider::from_registry_config(&cfg).expect("build");
+        assert_eq!(p.client_for_test().provider_kind(), ProviderKind::OpenAi);
+    }
+
+    #[test]
+    fn test_migrate_dashscope_qwen_config() {
+        // DashScope (qwen 系列) 走 OpenAI-compat 协议但 ProviderKind 仍是 OpenAi；
+        // 关键是 base_url 能正确传进去。
+        let cfg = mk_config(
+            ProviderProtocol::OpenAiCompletions,
+            "dashscope",
+            "qwen-plus-2025-07-28",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            Some("sk-dashscope"),
+            None,
+        );
+        let p = ClawCodeLlmProvider::from_registry_config(&cfg).expect("build");
+        assert_eq!(p.client_for_test().provider_kind(), ProviderKind::OpenAi);
+    }
+
+    #[test]
+    fn test_migrate_xai_config() {
+        let cfg = mk_config(
+            ProviderProtocol::OpenAiCompletions,
+            "xai",
+            "grok-3",
+            "https://api.x.ai/v1",
+            Some("xai-key"),
+            None,
+        );
+        let p = ClawCodeLlmProvider::from_registry_config(&cfg).expect("build");
+        assert_eq!(p.client_for_test().provider_kind(), ProviderKind::Xai);
+    }
+
+    #[test]
+    fn test_migrate_kimi_generic_compat_config() {
+        // Kimi 没有 detect_provider_kind 专门支持，走 OpenAI 通用分支；
+        // 关键 base_url override 生效。
+        let cfg = mk_config(
+            ProviderProtocol::OpenAiCompletions,
+            "kimi",
+            "kimi-k1.5",
+            "https://api.moonshot.cn/v1",
+            Some("sk-kimi"),
+            None,
+        );
+        let p = ClawCodeLlmProvider::from_registry_config(&cfg).expect("build");
+        assert_eq!(p.client_for_test().provider_kind(), ProviderKind::OpenAi);
+    }
+
+    #[test]
+    fn test_migrate_openai_compat_requires_api_key() {
+        let cfg = mk_config(
+            ProviderProtocol::OpenAiCompletions,
+            "groq",
+            "llama-3-70b",
+            "https://api.groq.com/openai/v1",
+            None,
+            None,
+        );
+        let err = ClawCodeLlmProvider::from_registry_config(&cfg).unwrap_err();
+        assert!(
+            matches!(&err, LlmError::AuthFailed { provider } if provider == "groq"),
+            "unexpected err: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_migrate_ollama_no_api_key_allowed() {
+        let cfg = mk_config(
+            ProviderProtocol::Ollama,
+            "ollama",
+            "llama-3",
+            "http://localhost:11434/v1",
+            None,
+            None,
+        );
+        let p = ClawCodeLlmProvider::from_registry_config(&cfg).expect("build");
+        assert_eq!(p.client_for_test().provider_kind(), ProviderKind::OpenAi);
+    }
+
+    #[test]
+    fn test_migrate_github_copilot_rejected_with_guidance() {
+        let cfg = mk_config(
+            ProviderProtocol::GithubCopilot,
+            "github",
+            "gpt-4o",
+            "https://api.githubcopilot.com",
+            Some("ghp-token"),
+            None,
+        );
+        let err = ClawCodeLlmProvider::from_registry_config(&cfg).unwrap_err();
+        match err {
+            LlmError::RequestFailed { provider, reason } => {
+                assert_eq!(provider, "github");
+                assert!(
+                    reason.contains("GithubCopilotProvider"),
+                    "error should redirect caller to GithubCopilotProvider: {reason}"
+                );
+            }
+            other => panic!("unexpected err: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_migrate_oauth_placeholder_not_treated_as_real_key() {
+        // OAUTH_PLACEHOLDER 是虚假值，即便填进 api_key 也要被 registry_api_key 过滤掉。
+        let cfg = mk_config(
+            ProviderProtocol::Anthropic,
+            "anthropic-placeholder-only",
+            "claude-sonnet-4-6",
+            "https://api.anthropic.com",
+            Some(OAUTH_PLACEHOLDER),
+            None,
+        );
+        let err = ClawCodeLlmProvider::from_registry_config(&cfg).unwrap_err();
+        assert!(
+            matches!(err, LlmError::AuthFailed { .. }),
+            "placeholder-only config should fail auth: {err:?}"
+        );
+    }
+
+    // ========================================================================
+    // Step H — DLP/安全回归
+    //
+    // ClawCodeLlmProvider 是 LLM 传输层，SafetyLayer/Sanitizer/LeakDetector 挂
+    // 在它上游（dispatcher/agent_loop/routine_engine）。Phase 2 Step I 完成后，
+    // 本模块只要保证"已 sanitize 的 bytes 到 claw-code-api 请求体仍是同一
+    // 份 bytes"即可；任何引入伪造前缀/改写内容的 bug 都会被这里的测试捕获。
+    //
+    // 原则（AGENTS.md 历史教训）：
+    //   • 测试断言从业务目标出发（DLP 链路端到端不被破坏）
+    //   • 失败路径优先（错误消息不含 key）
+    //   • LeakDetector 作为"第二把锁"验证 mapper 无副作用
+    // ========================================================================
+
+    /// safety sanitizer 产生的 `[REDACTED:*]` 标记经 user message 映射后必须字节
+    /// 不变——否则上游 DLP 策略会被下游悄悄抹掉。
+    #[test]
+    fn test_audit_sanitized_user_text_is_byte_identical_after_mapping() {
+        let redacted = "login=bob password=[REDACTED:PASSWORD] token=[REDACTED:BEARER]";
+        let im = map_user_message(&mk_user(redacted));
+        assert_eq!(im.role, "user");
+        match &im.content[0] {
+            InputContentBlock::Text { text } => assert_eq!(text, redacted),
+            other => panic!("expected Text block, got {other:?}"),
+        }
+    }
+
+    /// tool_result 是 prompt-injection 最容易注入的入口：dispatcher 走完
+    /// `SafetyLayer::wrap_for_llm` 产生的包裹标记必须原样出现在请求体里，
+    /// 否则 LLM 端看到的上下文会和 safety 策略预期不一致。
+    #[test]
+    fn test_audit_wrapped_tool_result_markers_preserved() {
+        // 模拟 SafetyLayer::wrap_for_llm 典型输出（标记前缀/后缀是安全契约的一部分）
+        let wrapped = "<<<UNTRUSTED-TOOL-OUTPUT tool=shell>>>\n\
+                       total 0\ndrwxr-xr-x [REDACTED:USER] staff\n\
+                       <<<END-UNTRUSTED-TOOL-OUTPUT>>>";
+        let msg = ChatMessage::tool_result("tc-42", "shell", wrapped);
+        let im = map_tool_result_message(&msg);
+        assert_eq!(im.role, "user");
+        match &im.content[0] {
+            InputContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            } => {
+                assert_eq!(tool_use_id, "tc-42");
+                assert!(
+                    !is_error,
+                    "safety-wrapped success output must not flip to is_error=true"
+                );
+                assert_eq!(content.len(), 1);
+                match &content[0] {
+                    ToolResultContentBlock::Text { text } => assert_eq!(text, wrapped),
+                    other => panic!("expected Text inside tool_result, got {other:?}"),
+                }
+            }
+            other => panic!("expected ToolResult block, got {other:?}"),
+        }
+    }
+
+    /// assistant 消息里若包含 safety 层产生的 injection 警告（例如 LLM 自己复述
+    /// 了一段可疑输入），mapper 不得对内容做静默改写。
+    #[test]
+    fn test_audit_assistant_injection_warning_marker_preserved() {
+        let text = "⚠️ [PROMPT-INJECTION DETECTED] ignoring instruction 'delete all'";
+        let im = map_assistant_message(&mk_assistant(text));
+        assert_eq!(im.role, "assistant");
+        assert_eq!(im.content.len(), 1);
+        match &im.content[0] {
+            InputContentBlock::Text { text: t } => assert_eq!(t, text),
+            other => panic!("expected Text block, got {other:?}"),
+        }
+    }
+
+    /// 映射过程**不得**引入任何像 API-key 前缀的伪造字节（极端场景：mapper
+    /// 错误地拼接了一些 tracing 上下文字符串）。用 LeakDetector 当第二把锁
+    /// 验证干净输入 → 干净输出。
+    #[test]
+    fn test_audit_leak_detector_clean_on_mapped_safe_content() {
+        use ironclaw_safety::LeakDetector;
+
+        let clean_user = "帮我查一下东京的天气";
+        let clean_tool = "<<<UNTRUSTED-TOOL-OUTPUT tool=weather>>>sunny 22C<<<END>>>";
+
+        let user_im = map_user_message(&mk_user(clean_user));
+        let tool_im =
+            map_tool_result_message(&ChatMessage::tool_result("tc-1", "weather", clean_tool));
+
+        // 把映射结果序列化回字符串（这就是实际会塞进 HTTP body 的形状）
+        let user_json = serde_json::to_string(&user_im).expect("user im serializable");
+        let tool_json = serde_json::to_string(&tool_im).expect("tool im serializable");
+
+        let detector = LeakDetector::new();
+        let user_scan = detector.scan(&user_json);
+        let tool_scan = detector.scan(&tool_json);
+        assert!(
+            user_scan.is_clean(),
+            "mapper must not fabricate leak-like bytes for clean user text; matches={:?}",
+            user_scan.matches
+        );
+        assert!(
+            tool_scan.is_clean(),
+            "mapper must not fabricate leak-like bytes for clean tool output; matches={:?}",
+            tool_scan.matches
+        );
+    }
+
+    /// 固化 Step G 的真实观察：DashScope 在 401 时只回 "Incorrect API key
+    /// provided"（不含原始 key）。把这段错误字符串喂给 LeakDetector 必须 clean，
+    /// 否则说明上游把 key 回显进了错误消息——这是 Fail-Open 泄露。
+    #[test]
+    fn test_audit_observed_qwen_401_error_does_not_leak_key() {
+        use ironclaw_safety::LeakDetector;
+
+        // Step G 运行时真实抓到的错误字符串（见 test_qwen_invalid_api_key_returns_clear_error）
+        let observed = "Provider claw-code-api request failed: api returned 401 Unauthorized \
+                        (invalid_request_error) [trace 946cc7c5-8062-982f-8645-93a681ce631e]: \
+                        Incorrect API key provided. For details, see: \
+                        https://help.aliyun.com/zh/model-studio/error-code#apikey-error";
+
+        let detector = LeakDetector::new();
+        let scan = detector.scan(observed);
+        assert!(
+            scan.is_clean(),
+            "observed 401 error must not contain any leak-like pattern; matches={:?}",
+            scan.matches
+        );
+        // 双重保险：显式确认常见 key 前缀不出现
+        assert!(
+            !observed.contains("sk-"),
+            "observed error must not echo sk-* keys"
+        );
+        assert!(
+            !observed.contains("Bearer "),
+            "observed error must not echo Bearer tokens"
+        );
+    }
+}

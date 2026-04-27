@@ -1,0 +1,87 @@
+//! Built-in tools that come with the agent.
+
+pub mod bash_validator;
+mod code_edit;
+mod echo;
+pub mod extension_tools;
+mod file;
+pub mod file_guard;
+pub mod git;
+mod glob_search;
+mod grep_search;
+mod http;
+mod job;
+mod json;
+pub mod lsp;
+pub mod memory;
+mod message;
+pub mod path_utils;
+mod plan_mode;
+mod restart;
+pub mod routine;
+pub mod secrets_tools;
+mod session_fork;
+pub(crate) mod shell;
+pub mod skill_tools;
+pub mod sub_agent;
+mod time;
+mod tool_info;
+mod web_fetch;
+mod web_search;
+
+pub use code_edit::CodeEditTool;
+pub use echo::EchoTool;
+pub use extension_tools::{
+    ExtensionInfoTool, ToolActivateTool, ToolAuthTool, ToolInstallTool, ToolListTool,
+    ToolRemoveTool, ToolSearchTool, ToolUpgradeTool,
+};
+pub use file::{ApplyPatchTool, ListDirTool, ReadFileTool, WriteFileTool};
+pub use git::{
+    GitBranchTool, GitCommitTool, GitDiffTool, GitLogTool, GitPushTool, GitStaleCheckTool,
+    GitStatusTool,
+};
+pub use glob_search::GlobSearchTool;
+pub use grep_search::GrepSearchTool;
+pub use http::HttpTool;
+pub use job::{
+    CancelJobTool, CreateJobTool, JobEventsTool, JobPromptTool, JobStatusTool, ListJobsTool,
+    PromptQueue, SchedulerSlot,
+};
+pub use json::JsonTool;
+pub use lsp::LspQueryTool;
+pub use memory::{MemoryReadTool, MemorySearchTool, MemoryTreeTool, MemoryWriteTool};
+pub use message::MessageTool;
+pub use plan_mode::PlanModeTool;
+pub use restart::RestartTool;
+pub use routine::{
+    EventEmitTool, RoutineCreateTool, RoutineDeleteTool, RoutineFireTool, RoutineHistoryTool,
+    RoutineListTool, RoutineUpdateTool,
+};
+pub use secrets_tools::{SecretDeleteTool, SecretListTool};
+pub use session_fork::SessionForkTool;
+pub use shell::ShellTool;
+pub use skill_tools::{SkillInstallTool, SkillListTool, SkillRemoveTool, SkillSearchTool};
+pub use sub_agent::{SubAgentRole, SubAgentTool};
+pub use time::TimeTool;
+pub use tool_info::ToolInfoTool;
+pub use web_fetch::WebFetchTool;
+pub use web_search::WebSearchTool;
+mod html_converter;
+pub mod image_analyze;
+pub mod image_edit;
+pub mod image_gen;
+
+pub use html_converter::convert_html_to_markdown;
+pub use image_analyze::ImageAnalyzeTool;
+pub use image_edit::ImageEditTool;
+pub use image_gen::ImageGenerateTool;
+
+/// Detect image media type from file extension via `mime_guess`.
+/// Falls back to `image/jpeg` for unrecognized or non-image extensions.
+pub(crate) fn media_type_from_path(path: &str) -> String {
+    mime_guess::from_path(path)
+        .first_raw()
+        .filter(|m| m.starts_with("image/"))
+        .unwrap_or("image/jpeg")
+        .to_string()
+}
