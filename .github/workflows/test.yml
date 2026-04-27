@@ -93,27 +93,17 @@ jobs:
         run: cargo test --manifest-path channels-src/telegram/Cargo.toml -- --nocapture
 
   windows-build:
-    name: Windows Build (${{ matrix.name }})
-    # xClaw fork: skip Windows on PR (was for staging only originally).
-    # Cross-platform compatibility validated post-merge on push-to-xClaw.
-    if: github.event_name != 'pull_request'
-    runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"name":"default","flags":""}]' || '[{"name":"all-features","flags":"--no-default-features --features postgres,libsql,html-to-markdown,bedrock,import"},{"name":"default","flags":""},{"name":"libsql-only","flags":"--no-default-features --features libsql"}]') }}
+    # xClaw fork: Windows build moved to its own workflow.
+    # See .github/workflows/windows-ci.yml — runs on workflow_dispatch +
+    # weekly schedule + push to main/refactor/* + push to feat/win-* /
+    # ci/win-* branches. Decoupled from main PR cadence to keep iteration
+    # fast; cross-platform regression is still protected by the dedicated
+    # workflow.
+    name: Windows Build (decoupled to windows-ci.yml)
+    runs-on: ubuntu-latest
+    if: false
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          submodules: recursive
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: windows-${{ matrix.name }}
-      - name: Check compilation
-        run: cargo check --all --benches --tests --examples ${{ matrix.flags }}
+      - run: echo "see .github/workflows/windows-ci.yml"
 
   wasm-wit-compat:
     name: WASM WIT Compatibility
@@ -196,20 +186,20 @@ jobs:
     name: Run Tests
     runs-on: ubuntu-latest
     if: always()
-    needs: [tests, heavy-integration-tests, telegram-tests, wasm-wit-compat, docker-build, windows-build, version-check, bench-compile]
+    needs: [tests, heavy-integration-tests, telegram-tests, wasm-wit-compat, docker-build, version-check, bench-compile]
     steps:
       - run: |
-          # xClaw fork: tests + windows-build are skipped on PR to keep
-          # iteration fast; treat skipped as pass here, only fail on
-          # failure/cancelled. Full suite still runs on push-to-xClaw.
-          for job in tests heavy-integration-tests telegram-tests wasm-wit-compat docker-build windows-build version-check bench-compile; do
+          # xClaw fork: tests are skipped on PR to keep iteration fast;
+          # treat skipped as pass here, only fail on failure/cancelled.
+          # Full suite still runs on push-to-xClaw. Windows build moved to
+          # .github/workflows/windows-ci.yml — not part of this gate.
+          for job in tests heavy-integration-tests telegram-tests wasm-wit-compat docker-build version-check bench-compile; do
             case "$job" in
               tests) result="${{ needs.tests.result }}" ;;
               heavy-integration-tests) result="${{ needs.heavy-integration-tests.result }}" ;;
               telegram-tests) result="${{ needs.telegram-tests.result }}" ;;
               wasm-wit-compat) result="${{ needs.wasm-wit-compat.result }}" ;;
               docker-build) result="${{ needs.docker-build.result }}" ;;
-              windows-build) result="${{ needs.windows-build.result }}" ;;
               version-check) result="${{ needs.version-check.result }}" ;;
               bench-compile) result="${{ needs.bench-compile.result }}" ;;
             esac
