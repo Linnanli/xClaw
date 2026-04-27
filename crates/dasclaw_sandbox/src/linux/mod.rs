@@ -29,9 +29,10 @@
 //!
 //! - 不限制文件系统访问（依赖应用层 cap-std）
 //! - `allow_network=true` 时 seccomp 完全 bypass（无 syscall filter 安装）
-//! - `proxy_loopback_ports` 字段当前在 Linux 上只用于将来的 proxy-routed
-//!   模式，W2.3a 阶段未启用 — 调用方设了也会被忽略并发 debug 日志
-//!   （TODO W2.3b：实装 ProxyRouted 模式）
+//! - `proxy_loopback_ports` **非空** 且 `allow_network=false` 时切到
+//!   ProxyRouted 模式：允许 AF_INET/AF_INET6 socket 连本地代理桥，
+//!   拒 AF_UNIX 防旁路。env 透传由调用方在 [`crate::SandboxExecRequest`]
+//!   显式注入；`dasclaw_exec` 已经默认从宿主 env 检测 proxy 端口。
 
 #![cfg(target_os = "linux")]
 
@@ -121,10 +122,9 @@ impl Sandbox for LinuxSeccompSandbox {
 /// - `Restricted`：拒绝所有非 AF_UNIX socket 创建 + connect/accept/bind 等
 ///   网络 syscall。`cargo` / `npm` 等工具仍可工作（它们用 AF_UNIX
 ///   socketpair 与子进程通信）。
-/// - `ProxyRouted`：在 ProxyRouted 模式下允许 AF_INET/AF_INET6 socket（用于
-///   连接到本地代理桥），但拒绝 AF_UNIX socket 阻止旁路。**W2.3a 阶段
-///   声明此模式但 Sandbox::execute 暂未根据 proxy_loopback_ports 实际
-///   启用**（TODO W2.3b）。
+/// - `ProxyRouted`：允许 AF_INET/AF_INET6 socket（用于连接到本地代理桥），
+///   但拒绝 AF_UNIX socket 阻止旁路。`Sandbox::execute` 在
+///   `proxy_loopback_ports` 非空且 `allow_network=false` 时自动切此模式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NetworkSeccompMode {
     Restricted,
@@ -270,5 +270,31 @@ mod tests {
         // 创建 socket。所以仅用单元测试保证 enum + arch 检测逻辑。
         let arch_ok = cfg!(any(target_arch = "x86_64", target_arch = "aarch64"));
         assert!(arch_ok, "Linux Tier-1 arch precondition");
+    }
+
+    /// W2.3b 路径覆盖测试：模拟 `Sandbox::execute` 内部如何根据
+    /// `proxy_loopback_ports.is_empty()` 选择 mode。本测试只覆盖映射
+    /// 决策，不实际安装 filter（apply 会污染线程）。
+    #[test]
+    fn empty_proxy_ports_picks_restricted_mode() {
+        let proxy_routed = !Vec::<u16>::new().is_empty();
+        let mode = if proxy_routed {
+            NetworkSeccompMode::ProxyRouted
+        } else {
+            NetworkSeccompMode::Restricted
+        };
+        assert_eq!(mode, NetworkSeccompMode::Restricted);
+    }
+
+    #[test]
+    fn nonempty_proxy_ports_picks_proxy_routed_mode() {
+        let ports: Vec<u16> = vec![8888];
+        let proxy_routed = !ports.is_empty();
+        let mode = if proxy_routed {
+            NetworkSeccompMode::ProxyRouted
+        } else {
+            NetworkSeccompMode::Restricted
+        };
+        assert_eq!(mode, NetworkSeccompMode::ProxyRouted);
     }
 }

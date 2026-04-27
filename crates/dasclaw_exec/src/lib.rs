@@ -39,9 +39,11 @@
 
 #![forbid(unsafe_code)]
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use dasclaw_sandbox::proxy::detect_loopback_ports;
 use dasclaw_sandbox::{
     select_backend, SandboxBackendConfig, SandboxError, SandboxExecRequest, SandboxablePreference,
 };
@@ -157,6 +159,21 @@ impl ProcessExecutor for SandboxedExecutor {
 /// [`ironclaw_workspace_cap::policy::SandboxPolicy::is_path_writable`] 用户态决策
 /// 与 [`ironclaw_workspace_cap::WorkspaceCap`] 文件接口共同强制。
 pub fn policy_to_backend_config(policy: &SandboxPolicy, cwd: &Path) -> SandboxBackendConfig {
+    policy_to_backend_config_with_env(policy, cwd, &std::env::vars().collect())
+}
+
+/// 可注入 env 的测试友好版本。`env` 应为完整进程环境变量集（
+/// `std::env::vars().collect::<HashMap<_, _>>()`）；proxy 端口从这里提取。
+///
+/// 只在网络受限（`network_access=false` 或 `Restricted`）且检测到代理时才
+/// 填充 `proxy_loopback_ports`；网络全开时 hole punch 多余，不填。
+pub fn policy_to_backend_config_with_env(
+    policy: &SandboxPolicy,
+    cwd: &Path,
+    env: &HashMap<String, String>,
+) -> SandboxBackendConfig {
+    let proxy_ports_when_restricted = || detect_loopback_ports(env);
+
     match policy {
         SandboxPolicy::DangerFullAccess => SandboxBackendConfig {
             readable_roots: vec![PathBuf::from("/")],
@@ -170,16 +187,27 @@ pub fn policy_to_backend_config(policy: &SandboxPolicy, cwd: &Path) -> SandboxBa
             writable_roots: vec![],
             allow_network: *network_access,
             allow_spawn: true,
-            proxy_loopback_ports: vec![],
+            proxy_loopback_ports: if *network_access {
+                vec![]
+            } else {
+                proxy_ports_when_restricted()
+            },
         },
-        SandboxPolicy::ExternalSandbox { network_access } => SandboxBackendConfig {
-            // 进程内被外层容器隔离，本地视为只读。
-            readable_roots: vec![PathBuf::from("/")],
-            writable_roots: vec![],
-            allow_network: matches!(network_access, NetworkAccess::Enabled),
-            allow_spawn: true,
-            proxy_loopback_ports: vec![],
-        },
+        SandboxPolicy::ExternalSandbox { network_access } => {
+            let net_enabled = matches!(network_access, NetworkAccess::Enabled);
+            SandboxBackendConfig {
+                // 进程内被外层容器隔离，本地视为只读。
+                readable_roots: vec![PathBuf::from("/")],
+                writable_roots: vec![],
+                allow_network: net_enabled,
+                allow_spawn: true,
+                proxy_loopback_ports: if net_enabled {
+                    vec![]
+                } else {
+                    proxy_ports_when_restricted()
+                },
+            }
+        }
         SandboxPolicy::WorkspaceWrite { network_access, .. } => {
             let roots = policy.get_writable_roots_with_cwd(cwd);
             let writable_roots: Vec<PathBuf> = roots.iter().map(|r| r.root.clone()).collect();
@@ -188,7 +216,11 @@ pub fn policy_to_backend_config(policy: &SandboxPolicy, cwd: &Path) -> SandboxBa
                 writable_roots,
                 allow_network: *network_access,
                 allow_spawn: true,
-                proxy_loopback_ports: vec![],
+                proxy_loopback_ports: if *network_access {
+                    vec![]
+                } else {
+                    proxy_ports_when_restricted()
+                },
             }
         }
     }
@@ -268,6 +300,108 @@ mod tests {
                 "Unix 默认应包含 /tmp"
             );
         }
+    }
+
+    // -- W2.3b proxy 集成 --
+
+    fn proxy_env(url: &str) -> HashMap<String, String> {
+        let mut e = HashMap::new();
+        e.insert("HTTPS_PROXY".to_string(), url.to_string());
+        e
+    }
+
+    #[test]
+    fn workspace_write_with_proxy_env_populates_proxy_ports() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = proxy_env("http://127.0.0.1:8080");
+        let cfg = policy_to_backend_config_with_env(
+            &SandboxPolicy::new_workspace_write_policy(),
+            tmp.path(),
+            &env,
+        );
+        assert_eq!(
+            cfg.proxy_loopback_ports,
+            vec![8080],
+            "网络受限 + 检测到 loopback proxy 应填 hole-punch 端口"
+        );
+        assert!(!cfg.allow_network, "WorkspaceWrite 默认 network=false");
+    }
+
+    #[test]
+    fn workspace_write_with_network_enabled_skips_proxy_ports() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = proxy_env("http://127.0.0.1:8080");
+        let cfg = policy_to_backend_config_with_env(
+            &SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![],
+                network_access: true,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
+            },
+            tmp.path(),
+            &env,
+        );
+        assert!(
+            cfg.proxy_loopback_ports.is_empty(),
+            "网络全开时 hole-punch 多余，不应填 proxy 端口"
+        );
+        assert!(cfg.allow_network);
+    }
+
+    #[test]
+    fn read_only_with_proxy_env_populates_proxy_ports_when_network_denied() {
+        let env = proxy_env("socks5://localhost:1080");
+        let cfg = policy_to_backend_config_with_env(
+            &SandboxPolicy::ReadOnly {
+                network_access: false,
+            },
+            Path::new("/x"),
+            &env,
+        );
+        assert_eq!(cfg.proxy_loopback_ports, vec![1080]);
+    }
+
+    #[test]
+    fn external_sandbox_restricted_with_proxy_env_picks_up_ports() {
+        let env = proxy_env("http://127.0.0.1:9999");
+        let cfg = policy_to_backend_config_with_env(
+            &SandboxPolicy::ExternalSandbox {
+                network_access: NetworkAccess::Restricted,
+            },
+            Path::new("/x"),
+            &env,
+        );
+        assert_eq!(cfg.proxy_loopback_ports, vec![9999]);
+        assert!(!cfg.allow_network);
+    }
+
+    #[test]
+    fn external_sandbox_enabled_skips_proxy_ports() {
+        let env = proxy_env("http://127.0.0.1:9999");
+        let cfg = policy_to_backend_config_with_env(
+            &SandboxPolicy::ExternalSandbox {
+                network_access: NetworkAccess::Enabled,
+            },
+            Path::new("/x"),
+            &env,
+        );
+        assert!(cfg.proxy_loopback_ports.is_empty());
+        assert!(cfg.allow_network);
+    }
+
+    #[test]
+    fn non_loopback_proxy_does_not_populate_ports() {
+        // 真实远程 proxy（不是 loopback）→ sandbox 不该 hole-punch loopback
+        let env = proxy_env("http://corp-proxy.internal:3128");
+        let cfg = policy_to_backend_config_with_env(
+            &SandboxPolicy::new_workspace_write_policy(),
+            Path::new("/x"),
+            &env,
+        );
+        assert!(
+            cfg.proxy_loopback_ports.is_empty(),
+            "非 loopback proxy 不应触发 hole-punch"
+        );
     }
 
     // -- ProcessExecutor 接口契约 --
