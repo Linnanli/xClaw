@@ -4627,6 +4627,7 @@ dependencies = [
  "cron",
  "crossterm",
  "dasclaw_exec",
+ "dasclaw_net_proxy",
  "dasclaw_sandbox",
  "deadpool-postgres",
  "dirs 6.0.0",
