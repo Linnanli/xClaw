@@ -9,9 +9,16 @@
 
 ## 0. TL;DR
 
-**采纳 Tier B''**：把 `ironclaw-main/src/sandbox/proxy/*` (1361 LOC) **整体复用**到 `crates/dasclaw_net_proxy`，**不**从 codex `network-proxy` port 任何代码。
+**采纳 Tier B''+**：
 
-DLP（深度流量审计）作为**服务器端 admin-backend gateway**未来工作，不在 desktop-client 做。
+1. **网络代理**：把 `ironclaw-main/src/sandbox/proxy/*` (1361 LOC) **整体复用**到 `crates/dasclaw_net_proxy`
+2. **凭据注入**：复用 `ironclaw-main/src/secrets/*` 现有 KMS 架构（AES-256-GCM + HKDF-SHA256 + OS keychain master key）
+3. **reasons 枚举**：增量定义强类型 `DenyReason`（~58 LOC），替换字符串拒绝原因
+4. **Windows keychain**：补齐 `secrets/keychain.rs` 的 Windows DPAPI/Credential Manager 实现（~150 LOC）
+
+**不**从 codex `network-proxy` (8876 LOC) port 任何代码（含 MITM/cert）。
+
+DLP（深度流量审计）作为**服务器端 admin-backend gateway**未来工作（§7.1），不在 desktop-client 做。
 
 ---
 
@@ -59,50 +66,135 @@ DLP（深度流量审计）作为**服务器端 admin-backend gateway**未来工
 
 ---
 
-## 4. 决策：Tier B''
+## 4. 决策：Tier B''+
 
-### 4.1 复用 ironclaw-main 网络代理
+### 4.1 复用 ironclaw-main 网络代理（1361 LOC）
 
-- 把 `ironclaw-main/src/sandbox/proxy/{allowlist,http,mod,policy}.rs` 4 文件 1361 LOC **整体复制**到 `crates/dasclaw_net_proxy/src/`
+- 把 `ironclaw-main/src/sandbox/proxy/{allowlist,http,mod,policy}.rs` 4 文件整体复制到 `crates/dasclaw_net_proxy/src/`
 - 重命名包：`crate::sandbox::proxy::*` → `dasclaw_net_proxy::*`
 - 重命名错误类型：`crate::sandbox::error::SandboxError::ProxyError` → `dasclaw_net_proxy::NetProxyError`
 - 解耦：移除对 `crate::secrets::CredentialMapping` 的硬编码依赖，改为 trait 注入
-- 保留：HTTP forward / CONNECT 隧道 / DomainAllowlist / NetworkPolicyDecider / **凭据注入**（核心政企卖点）
+- 保留：HTTP forward / CONNECT 隧道 / DomainAllowlist / NetworkPolicyDecider / 凭据注入接口
 
-### 4.2 desktop-client 集成
+### 4.2 凭据注入：复用 ironclaw secrets 模块
 
-- ironclaw `sandbox/os_executor.rs` 启动 sandboxed 进程时，注入 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` 环境变量指向本地 `dasclaw_net_proxy`
-- ReadOnly / WorkspaceWrite 策略下启用代理；FullAccess 直接出网
+**不在 dasclaw_net_proxy 内部实现 keychain**，由 desktop-client 注入实现：
 
-### 4.3 不做的事
+```rust
+// dasclaw_net_proxy 仅定义 trait（保持解耦）
+pub trait CredentialResolver: Send + Sync {
+    async fn resolve(&self, name: &str) -> Option<String>;
+}
 
-- ❌ MITM / TLS 解密 / 自签 CA：技术上有效，部署上是灾难（CA 私钥泄漏 = 任意站点伪造）
-- ❌ SOCKS5 支持：现阶段不需要（git/curl/cargo/npm/pip 全支持 `HTTPS_PROXY`），出现兼容问题再加
+// desktop-client/ironclaw 实现，桥接现有 secrets 模块
+pub struct IronclawSecretsResolver {
+    store: Arc<dyn SecretsStore + Send + Sync>,
+    user_id: String,
+}
+
+impl CredentialResolver for IronclawSecretsResolver {
+    async fn resolve(&self, name: &str) -> Option<String> {
+        self.store.get_decrypted(&self.user_id, name).await
+            .ok()
+            .map(|s| s.expose().to_string())
+    }
+}
+```
+
+复用以下 ironclaw 既有能力：
+- `secrets/crypto.rs` (373 LOC) — AES-256-GCM + HKDF-SHA256
+- `secrets/store.rs` (1269 LOC) — Postgres/libsql/InMemory 三后端 + CAS 消费 + ACL
+- `secrets/keychain.rs` (318 LOC) — macOS + Linux master key
+- `secrets/types.rs::CredentialLocation` (5 种位置：Bearer/Basic/Header/QueryParam/UrlPath)
+- `secrets/types.rs::CredentialMapping` (默认 `optional: false`，安全默认)
+- `secrets/types.rs::any_exist` (启动安全门：表非空但 master key 换了 → 启动失败)
+
+### 4.3 reasons 枚举（58 LOC 增量）
+
+替换 `policy.rs` 中的字符串拒绝原因：
+
+```rust
+pub enum DenyReason {
+    NotInAllowlist { domain: String, allowlist_count: usize },
+    PolicyForbidden { policy: SandboxPolicy },
+    CredentialMissing { mapping_name: String, host_pattern: String },
+    InvalidMethod { method: String, allowed: Vec<String> },
+    UpstreamUnreachable { error_kind: ErrorKind },
+}
+```
+
+收益：审计 SQL `GROUP BY reason_type` / 前端按类型本地化 + 一键修复 / 测试断言精确化。
+
+### 4.4 Windows keychain（150 LOC 增量）
+
+补齐 `desktop-client/ironclaw/src/secrets/keychain.rs` 的 Windows 实现：
+
+```rust
+#[cfg(target_os = "windows")]
+mod platform {
+    use windows::Win32::Security::Credentials::{
+        CredDeleteW, CredReadW, CredWriteW, CRED_TYPE_GENERIC, CREDENTIALW, CRED_PERSIST_LOCAL_MACHINE,
+    };
+    use super::*;
+
+    pub async fn store_master_key(key: &[u8]) -> Result<(), SecretError> {
+        // CredWriteW with CRED_TYPE_GENERIC + CRED_PERSIST_LOCAL_MACHINE
+        // Data 由 DPAPI 自动加密绑定到当前 user
+    }
+    pub async fn get_master_key() -> Result<Vec<u8>, SecretError> { /* CredReadW */ }
+    pub async fn delete_master_key() -> Result<(), SecretError> { /* CredDeleteW */ }
+}
+```
+
+依赖：`windows = { version = "0.58", features = ["Win32_Security_Credentials"] }`
+
+**为什么选 windows-rs 而非 keyring-rs**：
+- 与现有 macOS (security-framework) / Linux (secret-service) 风格一致（每平台直接调原生 API）
+- **不动现有 318 LOC 已稳定代码**（最小风险）
+- windows-rs 是微软官方维护，质量与 security-framework 同级
+- DPAPI 自动加密 + 绑定 user，比通用 keyring 抽象更精确
+
+### 4.5 不做的事
+
+- ❌ MITM / TLS 解密 / 自签 CA：详见 §1.2 的 8 项风险
+- ❌ SOCKS5 支持：现阶段不需要，出现具体兼容问题再加（§7.2 TODO）
 - ❌ 动态策略热更新：重启进程即可
-- ❌ 透明代理：需 root 权限，不符合企业部署模型
+- ❌ 透明代理：需 root 权限
 - ❌ 从 codex `network-proxy` port 任何代码：避免重写已有可用实现
 
 ---
 
 ## 5. 实施分阶段
 
-### W3.2b-1 — 复用 ironclaw-main 4 文件到 dasclaw_net_proxy（约 1400 LOC）
-- 复制 4 个 .rs 文件
-- 改包名/错误类型/解耦 secrets 模块
+### W3.2b-1 — 复用 ironclaw-main 网络代理到 dasclaw_net_proxy（约 1400 LOC）
+- 复制 `sandbox/proxy/` 4 个 .rs 文件
+- 改包名/错误类型/解耦 secrets 模块（定义 trait）
 - 删 W1 skeleton
 - `cargo build` + `cargo nextest` 通过
 
-### W3.2b-2 — desktop-client 集成（约 100 LOC）
+### W3.2b-2 — reasons 枚举（约 60 LOC）
+- 定义 `DenyReason` enum
+- 替换 `policy.rs` 中的 `String` 拒绝原因
+- 单元测试覆盖每个变体
+
+### W3.2b-3 — Windows keychain 实现（约 150 LOC）
+- `desktop-client/ironclaw/src/secrets/keychain.rs` 加 `#[cfg(target_os = "windows")] mod platform`
+- 用 windows-rs 调 CredWriteW/CredReadW/CredDeleteW
+- Cargo.toml 加 `windows = "0.58"` Windows-only 依赖
+- 跨平台测试（macOS/Linux/Windows CI matrix）
+
+### W3.2b-4 — desktop-client 集成（约 150 LOC）
+- 实现 `IronclawSecretsResolver` 桥接 `dasclaw_net_proxy::CredentialResolver`
 - ironclaw `os_executor` 启动 NetProxy 监听 localhost:某端口
-- 沙箱进程环境变量注入
-- 集成测试：启动代理 → 沙箱内 curl 通过它访问 allow 域名 / 拒非 allow
+- 沙箱进程环境变量注入 `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`
+- 集成测试：启动代理 → 沙箱内 curl 通过它访问 allow 域名 / 拒非 allow / 凭据正确注入
 
-### W3.2b-3 — 文档与回归测试（约 100 LOC）
+### W3.2b-5 — 文档与 e2e（约 100 LOC）
 - 写 `docs/plans/architecture-refactor/44-net-proxy-port-completion.md` 记录差异
-- 端到端 e2e 测试
-- 性能基准：对比直连 vs 经代理的延迟
+- 端到端 e2e 测试（agent → 代理 → 真实 GitHub API）
+- 性能基准：直连 vs 经代理的延迟
 
-**总量**：约 1600 LOC（其中 1400 是直接复用），3 个 PR。
+**总量**：约 1860 LOC（其中 1400 直接复用，460 新增），5 个 PR。
 
 ---
 
@@ -162,6 +254,13 @@ ironclaw-main 当前只有 tracing 文本日志。如需进 SIEM/Splunk，可增
 
 ## 8. 决策
 
-✅ **采纳 Tier B''**：复用 ironclaw-main 现状 (1361 LOC) 到 `dasclaw_net_proxy`，不从 codex port。
+✅ **采纳 Tier B''+**：
 
-DLP / SOCKS5 / 结构化审计 列为未来 TODO，按触发条件增量。
+1. 复用 ironclaw-main `sandbox/proxy/*` (1361 LOC) 到 `dasclaw_net_proxy`
+2. 复用 ironclaw-main `secrets/*` 现有 KMS 架构（不重写）
+3. 增量加 reasons 枚举（~58 LOC）
+4. 增量补 Windows keychain（~150 LOC）
+
+不从 codex network-proxy port 任何代码。
+
+DLP / SOCKS5 / 结构化审计 列为未来 TODO（§7），按触发条件增量。
