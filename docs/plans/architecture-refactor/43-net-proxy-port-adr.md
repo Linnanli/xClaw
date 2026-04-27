@@ -1,154 +1,167 @@
 # 43 — Network Proxy Port ADR (W3.2b)
 
-> 决策：把 codex `network-proxy` (8876 LOC) 中的哪些部分 port 到 `dasclaw_net_proxy`？
-> 状态：**Draft，待 review**
-> 上游依赖：W3.2a (PR #17) 删 `sandbox/proxy/*` 死代码已完成
+> 决策：把 codex `network-proxy` 还是 `ironclaw-main/sandbox/proxy/*` port 到 `dasclaw_net_proxy`？
+> 状态：**Final（已决议）**
+> 上游依赖：W3.2a (PR #17) 删 ironclaw 内嵌 `sandbox/proxy/*` 死代码已完成
 > 关联：[42-client-job-runtime-routes.md](./42-client-job-runtime-routes.md)、`crates/dasclaw_net_proxy`
 
 ---
 
 ## 0. TL;DR
 
-**推荐路线 = Tier B（Audit-only HTTP/SOCKS5 forward proxy + 静态 allowlist）**：从 codex 取 ~3500 LOC，**不做** MITM 解密 / 不做证书自签 / 不做动态策略热更新。
+**采纳 Tier B''**：把 `ironclaw-main/src/sandbox/proxy/*` (1361 LOC) **整体复用**到 `crates/dasclaw_net_proxy`，**不**从 codex `network-proxy` port 任何代码。
 
-| 组件 | codex LOC | port? | 理由 |
-|---|---|---|---|
-| `lib.rs` (公共导出) | 62 | ✅ 重写 | 适配 dasclaw 命名 |
-| `config.rs` (env/CLI 解析) | 869 | ⚠️ 子集 ~300 | 只保留代理监听/上游/allowlist；不要 MITM/cert 配置 |
-| `http_proxy.rs` (HTTP CONNECT 转发) | 1319 | ✅ 全 | 核心 |
-| `socks5.rs` (SOCKS5 转发) | 616 | ✅ 全 | 让无 HTTP_PROXY 支持的工具也能走代理 |
-| `network_policy.rs` (allowlist 决策) | 898 | ⚠️ 子集 ~400 | 只保留静态 allowlist + audit log；删 dynamic policy update |
-| `policy.rs` (policy 类型/解析) | 465 | ⚠️ 子集 ~200 | 同上 |
-| `proxy.rs` (主代理状态机) | 1182 | ✅ 全 | 核心 |
-| `runtime.rs` (异步 runtime/connection mgmt) | 1776 | ✅ 全 | 核心 |
-| `state.rs` (审计/计数) | 419 | ✅ 全 | 安全可观测性必需 |
-| `upstream.rs` (上游连接) | 190 | ✅ 全 | 核心 |
-| `reasons.rs` (拒绝理由枚举) | 8 | ✅ 全 | 微不足道 |
-| `responses.rs` (HTTP 错误页) | 118 | ✅ 全 | UX |
-| `certs.rs` (CA 自签证书生成) | 344 | ❌ 不 port | MITM 专用，安全审计风险高 |
-| `mitm.rs` (TLS 解密/重签) | 482 | ❌ 不 port | 同上 |
-| `mitm_tests.rs` | 128 | ❌ 不 port | 同上 |
-
-**Port 总量：约 3500 LOC（占 codex 40%）。**
+DLP（深度流量审计）作为**服务器端 admin-backend gateway**未来工作，不在 desktop-client 做。
 
 ---
 
 ## 1. 上下文
 
-### 1.1 现状
+### 1.1 三种实现现状对比
 
-- **codex `network-proxy`**：8876 LOC，14 文件，rama 框架。功能：HTTP/SOCKS5 转发 + MITM 解密 + 自签 CA + 静态/动态 allowlist + 审计计数。被 `codex-rs/core/src/session/mod.rs:71-73` 等多处生产使用。
-- **ironclaw `sandbox/proxy/*`**：1360 LOC，已在 W3.2a (PR #17) 删除（dead code，0 外部消费者）。
-- **dasclaw_net_proxy**：W1 占位 24 行 skeleton，只有 `NetProxy` trait stub。
+| 实现 | 位置 | LOC | 状态 |
+|---|---|---|---|
+| **ironclaw-main** 网络代理 | `ironclaw-main/src/sandbox/proxy/` | 1361 | ✅ 上游生产代码，被 `SandboxManager` 使用 |
+| **codex** 网络代理 | `codex-cli-main/codex-rs/network-proxy/` | 8876 | ✅ codex 生产代码（含 MITM/cert）|
+| **dasclaw_net_proxy** | `crates/dasclaw_net_proxy/` | 24 | ⚠️ W1 占位 skeleton |
+| **xClaw 内嵌 proxy** | ~~`desktop-client/ironclaw/src/sandbox/proxy/`~~ | ~~1360~~ | ❌ W3.2a 已删（PR #17）|
 
-### 1.2 真实需求来源
+### 1.2 关键发现（三级分析得出）
 
-ironclaw 的网络代理用于哪些场景？
-1. **Tool 网络访问审计**：`ReadOnly`/`WorkspaceWrite` 沙箱策略下，工具默认 OS 层拦截网络（Seatbelt/Landlock/Restricted Token）。如果用户允许特定 allowlist，工具应通过本地代理出网，所有请求落审计日志。
-2. **凭据注入隔离**：Agent 自己的 HTTP 调用（如 search、fetch tool）不应把 API key 暴露给被沙箱的工具进程。代理可代为注入（旧 ironclaw `CredentialResolver` 的初衷）。
-3. **企业合规**：审计原文（host/port/method/timestamps），便于事后合规审查。
-
-**不需要的能力**：
-- MITM 解密 TLS（合规高风险，且对 OpenAI/Anthropic API 等已知密钥流量没有审计价值——只看到加密 bytes）
-- 动态策略热更新（admin-backend 推送可走重启或独立配置 channel）
-- 自签 CA 链（增加安装复杂度 + 安全攻击面）
+1. xClaw 内嵌 proxy 是从 ironclaw-main 直接复制来的（文件名/行数字节级一致）。W3.2a 删它是因为 W3.1c 删 Docker `SandboxManager` 后，proxy 没人用变成死代码。
+2. ironclaw-main 的代理本身就是 **forward-only + CONNECT 隧道**，**不带 MITM**。
+3. **凭据注入**（API key 自动注入到 Bearer / X-Api-Key / Query string）是 ironclaw-main 独有的政企级亮点 (`ironclaw-main/src/sandbox/proxy/http.rs:240-330`)。
 
 ---
 
-## 2. 决策矩阵
+## 2. 政企级真实需求拆解
 
-| Tier | 范围 | LOC | 启动时间 | 安全审计风险 | UX 复杂度 |
-|---|---|---|---|---|---|
-| A. Full port | 全部 8876 LOC | 8876 | 高（CA 安装、证书管理）| 高（MITM）| 高（用户必装 CA）|
-| **B. Audit-only forward**（推荐）| 去 MITM/cert | ~3500 | 中 | 低 | 低 |
-| C. Minimal HTTP allowlist | 只 HTTP/CONNECT + allowlist | ~1500 | 低 | 极低 | 极低 |
-| D. 不做 | 直接走 OS 层 block-all | 0 | 0 | 0 | 用户痛点：无法审计授权出网 |
-
-**评分**（满分 5）：
-
-| Tier | 安全 | 审计 | 维护成本 | 用户 UX | 总分 |
-|---|---|---|---|---|---|
-| A | 4 | 5 | 2 | 2 | 13 |
-| **B** | **5** | **5** | **3** | **4** | **17** |
-| C | 5 | 3 | 5 | 4 | 17 |
-| D | 5 | 1 | 5 | 2 | 13 |
-
-B 与 C 同分。**选 B 的理由**：SOCKS5 让 git/curl/wget 等不支持 `HTTPS_PROXY` 的工具也能受控，C 会暴露这个口子。多花 ~2000 LOC 一次性投入换长期工具兼容性，账划得来。
+| 需求 | 必要性 | ironclaw-main | codex network-proxy | 真正需要 MITM？ |
+|---|---|---|---|---|
+| 合规审计：谁何时访问什么域名 | 🔴 必需 | ✅ | ✅ | 否 |
+| 凭据隔离：API key 不暴露给沙箱进程 | 🔴 必需 | ✅★ | ✅ | 否 |
+| 域名管控：allowlist | 🔴 必需 | ✅ | ✅ | 否 |
+| **DLP（数据防泄漏）** | 🟡 重要 | ❌ | ✅（MITM）| **是** |
+| 企业批量部署：1000 台员工电脑一键装 | 🔴 必需 | ✅ 简单 | ❌ CA 链问题 | — |
+| 结构化审计日志（进 SIEM）| 🟡 重要 | ⚠️ 仅 tracing | ✅ state.rs | — |
 
 ---
 
-## 3. 拒绝路线的依据
+## 3. 决策矩阵
 
-### A. Full port — 拒绝
-- MITM 自签 CA 在 macOS 需写入 keychain，Windows 写入 root CA store，Linux 各发行版路径不一。安装失败率 >20%（codex 用户社区反馈）。
-- TLS 解密对 LLM API 流量审计价值低（要看的就是 host/method/timestamp，不是 body）。
-- 攻击面：CA 私钥泄漏 = 中间人能伪造任何站点。
-
-### C. Minimal HTTP allowlist — 拒绝
-- 无 SOCKS5 → git clone/curl 类工具如果不支持 `HTTPS_PROXY`（或者用户配错），出网就完全绕过审计。
-- 现代 agent 工具链普遍要 git/cargo/npm/pip 出网，全部加 `HTTPS_PROXY` 配置太脆弱。
-
-### D. 不做 — 拒绝
-- 用户场景 1（审计授权出网）无法满足。
-- 等同于"要么完全断网要么完全开放"，不符合 ReadOnly+allowlist 策略的 IronClaw 价值主张。
+| Tier | 范围 | LOC | 安全 | 凭据注入 | DLP | 部署 | 维护 | 总分 |
+|---|---|---|---|---|---|---|---|---|
+| A. codex full port | 8876 | 5 | ✅ | ✅ | ✅ MITM | 1（CA 灾难）| 2 | 13 |
+| B. codex 子集 port | 3500 | 5 | ⚠️ 需重写凭据注入 | ❌ | ✅ | 3 | 17 |
+| **B''. ironclaw-main 复用**（推荐）| **1361** | **5** | **✅★** | **❌（DLP 服务器侧）**| **5** | **5** | **20** |
+| C. HTTP-only minimal | ~1500 | 4 | ✅ | ❌ | ❌ | 4 | 13 |
+| D. 不做 | 0 | 5 | ❌ | ❌ | 1 | 5 | 11 |
 
 ---
 
-## 4. 实施分阶段
+## 4. 决策：Tier B''
 
-### W3.2b-1 — 项目结构与依赖（约 200 LOC）
-- 在 `crates/dasclaw_net_proxy/Cargo.toml` 加依赖：`tokio`, `hyper`, `rama`, `tracing`, `thiserror`, `serde` 等（参考 codex 版本）
-- 拆分 src/ 目录骨架：`config.rs`, `http_proxy.rs`, `socks5.rs`, `policy.rs`, `state.rs`, `runtime.rs`, `reasons.rs`, `responses.rs`, `upstream.rs`
-- 删 `lib.rs` 中的 W1 skeleton，写新公共 API（`NetProxyServer`, `Builder`, `AuditEvent`, `AllowlistDecider`）
+### 4.1 复用 ironclaw-main 网络代理
 
-### W3.2b-2 — 端口 forward 核心（约 2500 LOC）
-- 复制 codex `http_proxy.rs` + `socks5.rs` + `runtime.rs` + `proxy.rs` + `upstream.rs`
-- 改命名：`codex_*` → `dasclaw_*`，去掉 codex 内部依赖
-- 留接口可注入 `AllowlistDecider` trait，但默认实现先简单（静态白名单 + audit log）
+- 把 `ironclaw-main/src/sandbox/proxy/{allowlist,http,mod,policy}.rs` 4 文件 1361 LOC **整体复制**到 `crates/dasclaw_net_proxy/src/`
+- 重命名包：`crate::sandbox::proxy::*` → `dasclaw_net_proxy::*`
+- 重命名错误类型：`crate::sandbox::error::SandboxError::ProxyError` → `dasclaw_net_proxy::NetProxyError`
+- 解耦：移除对 `crate::secrets::CredentialMapping` 的硬编码依赖，改为 trait 注入
+- 保留：HTTP forward / CONNECT 隧道 / DomainAllowlist / NetworkPolicyDecider / **凭据注入**（核心政企卖点）
 
-### W3.2b-3 — 端口 policy 子集（约 600 LOC）
-- 复制 `network_policy.rs` 中**静态 allowlist + reasons**部分
-- 复制 `policy.rs` 中类型定义
-- 删 dynamic policy update / hot reload
+### 4.2 desktop-client 集成
 
-### W3.2b-4 — 端口 state/audit（约 400 LOC）
-- 复制 `state.rs` 全部
-- 留 hook：`AuditSink` trait 让 desktop-client 接 sqlite/log file
+- ironclaw `sandbox/os_executor.rs` 启动 sandboxed 进程时，注入 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` 环境变量指向本地 `dasclaw_net_proxy`
+- ReadOnly / WorkspaceWrite 策略下启用代理；FullAccess 直接出网
 
-### W3.2b-5 — 集成测试 + 文档（约 200 LOC）
-- 端到端测试：启动 NetProxy → curl 通过它访问 allow 域名 → block 非 allow 域名 → 审计日志包含两条
+### 4.3 不做的事
+
+- ❌ MITM / TLS 解密 / 自签 CA：技术上有效，部署上是灾难（CA 私钥泄漏 = 任意站点伪造）
+- ❌ SOCKS5 支持：现阶段不需要（git/curl/cargo/npm/pip 全支持 `HTTPS_PROXY`），出现兼容问题再加
+- ❌ 动态策略热更新：重启进程即可
+- ❌ 透明代理：需 root 权限，不符合企业部署模型
+- ❌ 从 codex `network-proxy` port 任何代码：避免重写已有可用实现
+
+---
+
+## 5. 实施分阶段
+
+### W3.2b-1 — 复用 ironclaw-main 4 文件到 dasclaw_net_proxy（约 1400 LOC）
+- 复制 4 个 .rs 文件
+- 改包名/错误类型/解耦 secrets 模块
+- 删 W1 skeleton
+- `cargo build` + `cargo nextest` 通过
+
+### W3.2b-2 — desktop-client 集成（约 100 LOC）
+- ironclaw `os_executor` 启动 NetProxy 监听 localhost:某端口
+- 沙箱进程环境变量注入
+- 集成测试：启动代理 → 沙箱内 curl 通过它访问 allow 域名 / 拒非 allow
+
+### W3.2b-3 — 文档与回归测试（约 100 LOC）
 - 写 `docs/plans/architecture-refactor/44-net-proxy-port-completion.md` 记录差异
+- 端到端 e2e 测试
+- 性能基准：对比直连 vs 经代理的延迟
 
-### W3.2b-6 — desktop-client 集成（约 100 LOC）
-- 在 ironclaw 启动 NetProxy 监听 localhost:某端口
-- ReadOnly/WorkspaceWrite 沙箱注入 `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` 环境变量
-- 写集成测试
+**总量**：约 1600 LOC（其中 1400 是直接复用），3 个 PR。
 
 ---
 
-## 5. 已识别风险与缓解
+## 6. 已识别风险与缓解
 
 | 风险 | 概率 | 影响 | 缓解 |
 |---|---|---|---|
-| codex 的 rama 版本与 dasclaw workspace 冲突 | 中 | 高 | 第一步先验证依赖能 resolve，不行就降级用 hyper 直连 |
-| codex 内部用了 codex-only 的 logging/error 类型 | 高 | 中 | 明确改写到 dasclaw 标准（thiserror + tracing）|
-| 8876 → 3500 LOC 删除可能误删依赖 | 中 | 中 | 分模块独立 PR，每个 PR 跑 cargo build + nextest |
-| 用户不愿配置 HTTPS_PROXY | 低 | 低 | 默认通过 `dasclaw_exec` 注入环境变量；用户可关闭 |
-| MITM 缺失影响某些审计需求 | 低 | 低 | 文档明确：要审计 body，用 OpenTelemetry on agent side，不在 proxy 层 |
+| ironclaw-main 4 文件依赖 `crate::secrets`，移植要重新设计抽象 | 高 | 中 | W3.2b-1 显式解耦：定义 `CredentialMapping` 中性 trait，让 desktop-client 注入实现 |
+| ironclaw-main 用 hyper 0.x，dasclaw workspace 可能用别版本 | 中 | 中 | 第一步先 `cargo build` 验证依赖能 resolve |
+| 缺 SOCKS5 → 某些工具不读 HTTPS_PROXY 出网绕过 | 低 | 中 | 监控审计日志缺口；出现具体工具失败再补 SOCKS5 |
+| 缺 DLP body 解密 → 员工敏感数据可能外传 | 中 | 高 | 见 §7 服务器端方案 |
 
 ---
 
-## 6. 不做什么（明确边界）
+## 7. 未来工作（TODO）
 
-- **不**移植 MITM/cert 模块：永远走 CONNECT 隧道，TLS 流量原样转发
-- **不**支持透明代理（iptables/pf 拦截）：用户必须显式配 `HTTPS_PROXY`
-- **不**做应用层 LLM 流量解析：那是 admin-backend 的 DLP gateway 的事
-- **不**支持热重载策略：重启进程，简单可靠
+### 7.1 [TODO] 服务器端 DLP Gateway（admin-backend）
+
+**问题**：客户端 forward proxy 看不到 TLS body，无法做敏感数据外传检测。
+
+**方案**：在 admin-backend 增加 DLP gateway 模块：
+
+```
+desktop agent → [本地 forward proxy: 元数据审计 + allowlist + 凭据注入]
+                    │
+                    └──► admin-backend DLP gateway → [TLS termination + body 扫描] → 真实外网
+                          ↑ 服务器侧 CA（HSM 保护），不下发到客户端
+```
+
+**为什么放服务器端**：
+- 1 台服务器 vs 1000 台员工电脑，CA 维护点收敛
+- CA 私钥在服务器（带 HSM 保护）vs 1000 份私钥分散
+- 企业网关产品（Zscaler / Palo Alto Prisma）都是这套架构
+- 法规合规：审计日志统一收口
+
+**触发条件**（任一即启动设计）：
+- 客户明确要求"员工不能把代码外传"
+- 法规要求（金融 PCI-DSS / 医疗 HIPAA / 等保 三级以上）
+- 内部安全审计发现 forward-only 不足以满足合规
+
+**前置依赖**：
+- admin-backend HTTPS gateway 基础设施（已有？）
+- DLP 规则引擎（正则 / 关键字 / 文件指纹 / ML 分类）
+- CA 颁发与员工设备 trust store 推送（GPO for Windows / MDM for macOS / kickstart for Linux）
+
+**预估**：W11+ 工作量，需独立 ADR + RFP（含商用方案对比 Zscaler/Symantec DLP 等）。
+
+### 7.2 [TODO] SOCKS5 兜底（按需）
+
+如果生产中观察到工具绕过 forward proxy 出网，再从 codex `network-proxy/socks5.rs` (616 LOC) 增量 port。
+
+### 7.3 [TODO] 结构化审计日志
+
+ironclaw-main 当前只有 tracing 文本日志。如需进 SIEM/Splunk，可增量 port codex `state.rs` (419 LOC) 提供结构化事件。
 
 ---
 
-## 7. 决策
+## 8. 决策
 
-✅ **采纳 Tier B**。
+✅ **采纳 Tier B''**：复用 ironclaw-main 现状 (1361 LOC) 到 `dasclaw_net_proxy`，不从 codex port。
 
-下一步：等用户 review 此 ADR，确认后开 W3.2b-1 PR（依赖 + 骨架）。
+DLP / SOCKS5 / 结构化审计 列为未来 TODO，按触发条件增量。
