@@ -1,11 +1,8 @@
-//! W3.1a: OS-level sandbox executor backed by [`dasclaw_exec`].
+//! W3.1a/c: OS-level sandbox executor backed by [`dasclaw_exec`].
 //!
-//! 现状：旧 [`super::manager::SandboxManager`] 走 Docker + 网络代理路线。
-//! W3 路线决定改走 codex 兼容的进程级 sandbox（macOS Seatbelt /
-//! Linux Landlock+seccomp，由 [`dasclaw_sandbox`] 提供）。
-//!
-//! 本 PR (W3.1a) 只**新增** `OsExecutor`，不动 Docker manager — 让 shell.rs
-//! 后续可以按 backend 选择切换。完整删 Docker 在 W3.1c。
+//! 替换原先基于 Docker 的 `SandboxManager`（W3.1c 已移除），走 codex 兼容
+//! 的进程级 sandbox（macOS Seatbelt / Linux Landlock+seccomp，由
+//! [`dasclaw_sandbox`] 提供）。
 //!
 //! ## 政策映射
 //!
@@ -19,11 +16,11 @@
 //! | `WorkspaceWrite` | `WorkspaceWrite { writable_roots: [], network_access: false, .. }` | cwd 由 dasclaw_exec 隐式加入 |
 //! | `FullAccess` | `DangerFullAccess` | 双 opt-in 守卫保留 |
 //!
-//! ## 与旧 SandboxManager 的契约对齐
+//! ## 输入/输出契约
 //!
 //! - 输入：`command: &str`（shell 字符串，仍用 `sh -c` / `cmd /C` 包裹）
-//! - 输出：[`super::manager::ExecOutput`]（不变，避免上层重写）
-//! - 错误：[`super::error::SandboxError`]（不变）
+//! - 输出：[`ExecOutput`]
+//! - 错误：[`super::error::SandboxError`]
 //! - 异步：tokio runtime 上 spawn_blocking + timeout
 
 use std::collections::HashMap;
@@ -33,11 +30,27 @@ use std::time::{Duration, Instant};
 
 use dasclaw_exec::{ExecRequest, ProcessExecutor, SandboxedExecutor};
 use dasclaw_sandbox::SandboxablePreference;
+
+/// Output from sandbox execution.
+#[derive(Debug, Clone)]
+pub struct ExecOutput {
+    /// Exit code from the command.
+    pub exit_code: i64,
+    /// Standard output.
+    pub stdout: String,
+    /// Standard error.
+    pub stderr: String,
+    /// Combined output (stdout + stderr).
+    pub output: String,
+    /// How long the command ran.
+    pub duration: Duration,
+    /// Whether output was truncated.
+    pub truncated: bool,
+}
 use ironclaw_workspace_cap::policy::SandboxPolicy as CapPolicy;
 
 use super::config::SandboxPolicy;
 use super::error::{Result, SandboxError};
-use super::manager::ExecOutput;
 
 /// 64KB 输出截断阈值（与 Docker manager 路径一致）。
 const MAX_OUTPUT_SIZE: usize = 64 * 1024;
@@ -79,7 +92,7 @@ impl OsExecutor {
 
     /// 在 OS 沙箱内执行 shell 命令。
     ///
-    /// 旧 `SandboxManager::execute_with_policy` 的等价接口。
+    /// 旧 `SandboxManager::execute_with_policy` 的等价接口（W3.1c 移除）。
     pub async fn execute(
         &self,
         command: &str,

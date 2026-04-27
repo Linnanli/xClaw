@@ -1,42 +1,20 @@
-//! Docker execution sandbox for secure command execution.
+//! OS-level execution sandbox for secure command execution.
 //!
-//! This module provides a complete sandboxing solution for running untrusted commands:
-//! - **Container isolation**: Commands run in ephemeral Docker containers
-//! - **Network proxy**: All network traffic goes through a validating proxy
-//! - **Credential injection**: Secrets are injected by the proxy, never exposed in containers
-//! - **Resource limits**: Memory, CPU, and timeout enforcement
+//! This module provides sandboxing primitives for the agent's tool layer:
 //!
-//! # Architecture
-//!
-//! ```text
-//! ┌─────────────────────────────────────────────────────────────────────────────┐
-//! │                           Sandbox System                                     │
-//! │                                                                              │
-//! │  ┌─────────────────────────────────────────────────────────────────────┐    │
-//! │  │                        SandboxManager                                │    │
-//! │  │                                                                      │    │
-//! │  │  • Coordinates container creation and execution                     │    │
-//! │  │  • Manages proxy lifecycle                                          │    │
-//! │  │  • Enforces resource limits                                         │    │
-//! │  └─────────────────────────────────────────────────────────────────────┘    │
-//! │           │                              │                                   │
-//! │           ▼                              ▼                                   │
-//! │  ┌──────────────────┐          ┌───────────────────┐                        │
-//! │  │   Container      │          │   Network Proxy   │                        │
-//! │  │   Runner         │          │                   │                        │
-//! │  │                  │          │  • Allowlist      │                        │
-//! │  │  • Create        │◀────────▶│  • Credentials    │                        │
-//! │  │  • Execute       │          │  • Logging        │                        │
-//! │  │  • Cleanup       │          │                   │                        │
-//! │  └──────────────────┘          └───────────────────┘                        │
-//! │           │                              │                                   │
-//! │           ▼                              ▼                                   │
-//! │  ┌──────────────────┐          ┌───────────────────┐                        │
-//! │  │     Docker       │          │     Internet      │                        │
-//! │  │                  │          │   (allowed hosts) │                        │
-//! │  └──────────────────┘          └───────────────────┘                        │
-//! └─────────────────────────────────────────────────────────────────────────────┘
-//! ```
+//! - **OS-level isolation** ([`os_executor`]): codex-style platform sandboxes
+//!   (macOS Seatbelt / Linux Landlock+seccomp / Windows Restricted Token),
+//!   delegated to `dasclaw_exec::SandboxedExecutor` and
+//!   `dasclaw_sandbox::Sandbox`. Replaces the previous Docker-based execution
+//!   path (`SandboxManager`, removed in W3.1c).
+//! - **Network proxy** ([`proxy`]): allowlist enforcement with credential
+//!   injection by domain. Used by tools that need outbound HTTP from agent
+//!   code without exposing API keys to the executed command.
+//! - **Docker daemon detection** ([`detect`]): read-only probe used by the
+//!   setup wizard, boot screen, and `ironclaw doctor` to surface Docker
+//!   availability for the **separate** background-job container layer
+//!   (`orchestrator/{job_manager,reaper}.rs`). It is no longer involved in
+//!   tool execution.
 //!
 //! # Sandbox Policies
 //!
@@ -45,64 +23,21 @@
 //! | `ReadOnly` | Read workspace | Proxied | Explore code, fetch docs |
 //! | `WorkspaceWrite` | Read/write workspace | Proxied | Build software, run tests |
 //! | `FullAccess` | Full host | Full | Direct execution (no sandbox) |
-//!
-//! # Example
-//!
-//! ```rust,no_run
-//! use ironclaw::sandbox::{SandboxManager, SandboxManagerBuilder, SandboxPolicy};
-//! use std::collections::HashMap;
-//! use std::path::Path;
-//!
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let manager = SandboxManagerBuilder::new()
-//!     .enabled(true)
-//!     .policy(SandboxPolicy::WorkspaceWrite)
-//!     .build();
-//!
-//! manager.initialize().await?;
-//!
-//! let result = manager.execute(
-//!     "cargo build --release",
-//!     Path::new("/workspace/my-project"),
-//!     HashMap::new(),
-//! ).await?;
-//!
-//! println!("Exit code: {}", result.exit_code);
-//! println!("Output: {}", result.output);
-//!
-//! manager.shutdown().await;
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! # Security Properties
-//!
-//! - **No credentials in containers**: Environment variables with secrets never enter containers
-//! - **Network isolation**: All traffic routes through the proxy (validated domains only)
-//! - **Non-root execution**: Containers run as UID 1000
-//! - **Read-only root**: Container filesystem is read-only (except workspace mount)
-//! - **Capability dropping**: All Linux capabilities dropped, only essential ones added back
-//! - **Auto-cleanup**: Containers are removed after execution (--rm + explicit cleanup)
-//! - **Timeout enforcement**: Commands are killed after the timeout
 
 pub mod config;
-pub mod container;
 pub mod detect;
+pub mod docker_conn;
 pub mod error;
-pub mod manager;
-/// W3.1a: codex-style OS-level executor (replaces Docker manager in W3.1c).
+/// W3.1a: codex-style OS-level executor (replaces Docker `SandboxManager` for
+/// tool execution). See [`os_executor::OsExecutor`].
 pub mod os_executor;
 pub mod proxy;
 
-/// `x_claw_agent::SandboxExecutor` adapter.
-pub mod agent_executor;
-
 pub use config::{ResourceLimits, SandboxConfig, SandboxPolicy};
-pub use container::{ContainerOutput, ContainerRunner, connect_docker};
 pub use detect::{DockerDetection, DockerStatus, Platform, check_docker};
+pub use docker_conn::connect_docker;
 pub use error::{Result, SandboxError};
-pub use manager::{ExecOutput, SandboxManager, SandboxManagerBuilder};
-pub use os_executor::OsExecutor;
+pub use os_executor::{ExecOutput, OsExecutor};
 pub use proxy::{
     CredentialResolver, DefaultPolicyDecider, DomainAllowlist, EnvCredentialResolver, HttpProxy,
     NetworkDecision, NetworkPolicyDecider, NetworkProxyBuilder, NetworkRequest,
