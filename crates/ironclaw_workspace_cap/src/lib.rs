@@ -45,6 +45,11 @@
 //! assert!(ws.read("/etc/passwd").is_err());
 //! ```
 
+pub mod policy;
+pub use policy::{
+    NetworkAccess, SandboxPolicy, WritableRoot, default_read_only_subpaths_for_writable_root,
+};
+
 use std::path::{Path, PathBuf};
 
 use cap_std::ambient_authority;
@@ -129,12 +134,12 @@ impl WorkspaceCapability {
     /// Write `data` to `rel`, creating parent directories as needed.
     pub fn write(&self, rel: impl AsRef<Path>, data: &[u8]) -> Result<(), WorkspaceCapError> {
         let rel = rel.as_ref();
-        if let Some(parent) = rel.parent() {
-            if !parent.as_os_str().is_empty() {
-                self.dir
-                    .create_dir_all(parent)
-                    .map_err(|e| translate(parent, e))?;
-            }
+        if let Some(parent) = rel.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            self.dir
+                .create_dir_all(parent)
+                .map_err(|e| translate(parent, e))?;
         }
         self.dir.write(rel, data).map_err(|e| translate(rel, e))
     }
@@ -183,7 +188,7 @@ impl WorkspaceCapability {
             let metadata = entry.metadata().map_err(|e| translate(rel, e))?;
             let file_type = metadata.file_type();
             out.push(DirEntry {
-                name: entry.file_name().into(),
+                name: entry.file_name(),
                 is_dir: file_type.is_dir(),
                 is_file: file_type.is_file(),
                 is_symlink: file_type.is_symlink(),
