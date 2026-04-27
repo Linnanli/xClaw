@@ -54,7 +54,7 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 use crate::context::JobContext;
-use crate::sandbox::{SandboxManager, SandboxPolicy};
+use crate::sandbox::{OsExecutor, SandboxPolicy};
 use crate::tools::tool::{
     ApprovalRequirement, RiskLevel, Tool, ToolDomain, ToolError, ToolOutput, require_str,
 };
@@ -552,8 +552,8 @@ pub struct ShellTool {
     timeout: Duration,
     /// Whether to allow potentially dangerous commands (requires explicit approval).
     allow_dangerous: bool,
-    /// Optional sandbox manager for Docker execution.
-    sandbox: Option<Arc<SandboxManager>>,
+    /// Optional OS-level sandbox executor (W3.1a: codex-style, replaces Docker manager).
+    sandbox: Option<Arc<OsExecutor>>,
     /// Sandbox policy to use when sandbox is available.
     sandbox_policy: SandboxPolicy,
 }
@@ -594,8 +594,8 @@ impl ShellTool {
         self
     }
 
-    /// Enable sandbox execution with the given manager.
-    pub fn with_sandbox(mut self, sandbox: Arc<SandboxManager>) -> Self {
+    /// Enable sandbox execution with the given OS executor.
+    pub fn with_sandbox(mut self, sandbox: Arc<OsExecutor>) -> Self {
         self.sandbox = Some(sandbox);
         self
     }
@@ -627,18 +627,19 @@ impl ShellTool {
         None
     }
 
-    /// Execute a command through the sandbox.
+    /// Execute a command through the OS sandbox.
     async fn execute_sandboxed(
         &self,
-        sandbox: &SandboxManager,
+        sandbox: &OsExecutor,
         cmd: &str,
         workdir: &Path,
         timeout: Duration,
     ) -> Result<(String, i64), ToolError> {
-        // Override sandbox config timeout if needed
+        // Outer timeout still wraps the executor (defense in depth: OsExecutor
+        // also enforces its own timeout, but the caller's value can be tighter).
         let result = tokio::time::timeout(timeout, async {
             sandbox
-                .execute_with_policy(
+                .execute(
                     cmd,
                     workdir,
                     self.sandbox_policy,
@@ -807,11 +808,11 @@ impl ShellTool {
         // Determine timeout
         let timeout_duration = timeout.map(Duration::from_secs).unwrap_or(self.timeout);
 
-        // Use sandbox if configured; fail-closed (never silently fall through
-        // to unsandboxed execution when sandbox was intended).
-        if let Some(ref sandbox) = self.sandbox
-            && (sandbox.is_initialized() || sandbox.config().enabled)
-        {
+        // Use OS sandbox if configured; fail-closed (never silently fall through
+        // to unsandboxed execution when sandbox was intended). Unlike Docker manager,
+        // OsExecutor has no lazy init / config-disabled mode — being constructed
+        // implies "enabled".
+        if let Some(ref sandbox) = self.sandbox {
             return self
                 .execute_sandboxed(sandbox, cmd, &cwd, timeout_duration)
                 .await;
