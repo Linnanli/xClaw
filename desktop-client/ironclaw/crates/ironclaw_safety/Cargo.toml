@@ -1,0 +1,37 @@
+[package]
+name = "ironclaw_safety"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.92"
+description = "Prompt injection defense, input validation, secret leak detection, and safety policy enforcement"
+authors = ["NEAR AI <support@near.ai>"]
+license = "MIT OR Apache-2.0"
+homepage = "https://github.com/nearai/ironclaw"
+repository = "https://github.com/nearai/ironclaw"
+
+[package.metadata.dist]
+dist = false
+
+[dependencies]
+aho-corasick = "1"
+regex = "1"
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+url = "2"
+
+# Optional: adapter that implements `x_claw_agent::SafetyHook` so the agent
+# runtime can plug SafetyLayer in at its four hook points without taking a
+# hard dependency on ironclaw.
+async-trait = { version = "0.1", optional = true }
+x_claw_agent = { path = "../../../../crates/x_claw_agent", optional = true }
+
+[features]
+default = []
+# Enables the `agent_hook` module: `IronclawSafetyHook` adapter for
+# `x_claw_agent::SafetyHook`.
+agent-hook = ["dep:async-trait", "dep:x_claw_agent"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros", "sync"] }
+async-trait = "0.1"
