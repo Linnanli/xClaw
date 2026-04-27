@@ -105,6 +105,21 @@
 4. `cargo build` 完整编译验证（不只是 `cargo test`）
 5. 0 编译错误，0 编译警告
 
+### 测试运行器：默认使用 nextest
+
+**项目默认用 `cargo nextest run` 替代 `cargo test`**，进程级并行更快，无 fixture 串扰风险。
+
+```bash
+# 推荐
+cargo nextest run -p ironclaw --lib sandbox::os_executor
+cargo nextest run -p desktop-client --lib engine_startup_tests
+
+# 仅当 nextest 未安装时回退
+cargo test -p ironclaw
+```
+
+未装请：`cargo install cargo-nextest --locked`。CI 使用何种命令以仓库 workflow 为准（不强制改 CI）。
+
 ### 外部库使用
 
 - **先搜索项目中该库的现有用法**（`rg "libsql::" src/`），参考项目代码而非外部文档
