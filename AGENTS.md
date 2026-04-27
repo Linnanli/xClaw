@@ -120,6 +120,26 @@ cargo test -p ironclaw
 
 未装请：`cargo install cargo-nextest --locked`。CI 使用何种命令以仓库 workflow 为准（不强制改 CI）。
 
+### 构建缓存清理：默认使用 cargo sweep --time 3
+
+**磁盘满时优先用 `cargo sweep --time 3`，禁止用 `cargo clean` 或 `cargo sweep --time 0` 一次清干净**。一次性清掉全部产物会导致下次 build 需要从零重编全部依赖（10+ 分钟），sccache 也帮不上忙（增量缓存丢了）。
+
+```bash
+# 推荐：清掉 3 天没访问过的产物，保留近期增量缓存
+cargo sweep --time 3
+
+# 自动定时清理（cron）
+0 3 * * * cd ~/Documents/code/x-claw && cargo sweep --time 3
+
+# 禁止：一次清干净
+# cargo clean              ← 不要用
+# cargo sweep --time 0     ← 不要用
+```
+
+未装请：`cargo install cargo-sweep --locked`。
+
+详细工作流（含 sccache、`cargo build -p desktop-client --lib` 增量编译）见 [desktop-client/README.md](desktop-client/README.md)。
+
 ### 外部库使用
 
 - **先搜索项目中该库的现有用法**（`rg "libsql::" src/`），参考项目代码而非外部文档
