@@ -323,7 +323,12 @@ mod tests {
     #[test]
     fn read_only_policy_constructor_disables_network() {
         let p = SandboxPolicy::new_read_only_policy();
-        assert!(matches!(p, SandboxPolicy::ReadOnly { network_access: false }));
+        assert!(matches!(
+            p,
+            SandboxPolicy::ReadOnly {
+                network_access: false
+            }
+        ));
         assert!(!p.has_full_network_access());
     }
 
@@ -349,10 +354,12 @@ mod tests {
     #[test]
     fn full_disk_write_access_only_for_danger_or_external() {
         assert!(SandboxPolicy::DangerFullAccess.has_full_disk_write_access());
-        assert!(SandboxPolicy::ExternalSandbox {
-            network_access: NetworkAccess::Restricted
-        }
-        .has_full_disk_write_access());
+        assert!(
+            SandboxPolicy::ExternalSandbox {
+                network_access: NetworkAccess::Restricted
+            }
+            .has_full_disk_write_access()
+        );
         assert!(!SandboxPolicy::new_read_only_policy().has_full_disk_write_access());
         assert!(!SandboxPolicy::new_workspace_write_policy().has_full_disk_write_access());
     }
@@ -360,16 +367,30 @@ mod tests {
     #[test]
     fn full_network_access_per_variant() {
         assert!(SandboxPolicy::DangerFullAccess.has_full_network_access());
-        assert!(SandboxPolicy::ExternalSandbox {
-            network_access: NetworkAccess::Enabled
-        }
-        .has_full_network_access());
-        assert!(!SandboxPolicy::ExternalSandbox {
-            network_access: NetworkAccess::Restricted
-        }
-        .has_full_network_access());
-        assert!(SandboxPolicy::ReadOnly { network_access: true }.has_full_network_access());
-        assert!(!SandboxPolicy::ReadOnly { network_access: false }.has_full_network_access());
+        assert!(
+            SandboxPolicy::ExternalSandbox {
+                network_access: NetworkAccess::Enabled
+            }
+            .has_full_network_access()
+        );
+        assert!(
+            !SandboxPolicy::ExternalSandbox {
+                network_access: NetworkAccess::Restricted
+            }
+            .has_full_network_access()
+        );
+        assert!(
+            SandboxPolicy::ReadOnly {
+                network_access: true
+            }
+            .has_full_network_access()
+        );
+        assert!(
+            !SandboxPolicy::ReadOnly {
+                network_access: false
+            }
+            .has_full_network_access()
+        );
     }
 
     // ---------- serde wire format ----------
@@ -378,8 +399,12 @@ mod tests {
     fn serde_round_trip_all_variants() {
         let cases = [
             SandboxPolicy::DangerFullAccess,
-            SandboxPolicy::ReadOnly { network_access: false },
-            SandboxPolicy::ReadOnly { network_access: true },
+            SandboxPolicy::ReadOnly {
+                network_access: false,
+            },
+            SandboxPolicy::ReadOnly {
+                network_access: true,
+            },
             SandboxPolicy::ExternalSandbox {
                 network_access: NetworkAccess::Restricted,
             },
@@ -443,10 +468,7 @@ mod tests {
     fn writable_root_blocks_read_only_subpath() {
         let wr = WritableRoot {
             root: PathBuf::from("/work"),
-            read_only_subpaths: vec![
-                PathBuf::from("/work/.git"),
-                PathBuf::from("/work/.codex"),
-            ],
+            read_only_subpaths: vec![PathBuf::from("/work/.git"), PathBuf::from("/work/.codex")],
         };
         // 洞中洞
         assert!(!wr.is_path_writable(Path::new("/work/.git/hooks/pre-commit")));
@@ -483,8 +505,7 @@ mod tests {
 
         // protect_missing_dot_codex=true 即使 .codex 不存在也加入保护清单
         // （首次创建走审批流）。
-        let subs_protected =
-            default_read_only_subpaths_for_writable_root(tmp.path(), true);
+        let subs_protected = default_read_only_subpaths_for_writable_root(tmp.path(), true);
         assert_eq!(subs_protected, vec![tmp.path().join(".codex")]);
     }
 
@@ -643,7 +664,10 @@ mod tests {
         if cfg!(unix) {
             // /tmp 通常存在；exclude=false 应包含，exclude=true 应不包含
             if Path::new("/tmp").is_dir() {
-                assert!(has_tmp_default, "default policy should include /tmp on unix");
+                assert!(
+                    has_tmp_default,
+                    "default policy should include /tmp on unix"
+                );
             }
             assert!(!has_tmp_excluded, "exclude_slash_tmp must drop /tmp");
         } else {
