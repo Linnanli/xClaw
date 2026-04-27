@@ -26,6 +26,7 @@ use tokio::sync::RwLock;
 
 use crate::error::{ProxyError, Result};
 use crate::policy::{NetworkDecision, NetworkPolicyDecider, NetworkRequest};
+use crate::reasons::NetworkDenyReason;
 use crate::types::CredentialLocation;
 
 /// State shared across proxy connections.
@@ -210,11 +211,9 @@ async fn handle_request(
     let network_req = match NetworkRequest::from_url(&method, &uri) {
         Some(r) => r,
         None => {
-            tracing::warn!("Proxy: invalid URL: {}", uri);
-            return Ok(error_response(
-                StatusCode::BAD_REQUEST,
-                "Invalid URL".to_string(),
-            ));
+            let reason = NetworkDenyReason::invalid_url(uri.clone());
+            tracing::warn!("Proxy: invalid URL ({}): {}", reason.kind(), uri);
+            return Ok(error_response(StatusCode::BAD_REQUEST, reason.to_string()));
         }
     };
 
@@ -223,8 +222,14 @@ async fn handle_request(
 
     match decision {
         NetworkDecision::Deny { reason } => {
-            tracing::info!("Proxy: blocked {} {} - {}", method, uri, reason);
-            Ok(error_response(StatusCode::FORBIDDEN, reason))
+            tracing::info!(
+                "Proxy: blocked {} {} - kind={} ({})",
+                method,
+                uri,
+                reason.kind(),
+                reason
+            );
+            Ok(error_response(StatusCode::FORBIDDEN, reason.to_string()))
         }
         NetworkDecision::Allow | NetworkDecision::AllowWithCredentials { .. } => {
             // Forward the request
@@ -250,7 +255,10 @@ async fn handle_connect(
     let authority = match req.uri().authority() {
         Some(a) => a.clone(),
         None => {
-            return error_response(StatusCode::BAD_REQUEST, "Missing host".to_string());
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                NetworkDenyReason::MissingHost.to_string(),
+            );
         }
     };
 
@@ -268,8 +276,13 @@ async fn handle_connect(
     let decision = state.decider.decide(&network_req).await;
 
     if let NetworkDecision::Deny { reason } = decision {
-        tracing::info!("Proxy: blocked CONNECT {} - {}", host, reason);
-        return error_response(StatusCode::FORBIDDEN, reason);
+        tracing::info!(
+            "Proxy: blocked CONNECT {} - kind={} ({})",
+            host,
+            reason.kind(),
+            reason
+        );
+        return error_response(StatusCode::FORBIDDEN, reason.to_string());
     }
 
     tracing::debug!("Proxy: allowing CONNECT to {}", target_addr);
