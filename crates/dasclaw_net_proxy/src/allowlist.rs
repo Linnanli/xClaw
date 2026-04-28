@@ -5,6 +5,8 @@
 
 use std::fmt;
 
+use crate::reasons::NetworkDenyReason;
+
 /// Pattern for matching allowed domains.
 #[derive(Debug, Clone)]
 pub struct DomainPattern {
@@ -63,8 +65,9 @@ impl fmt::Display for DomainPattern {
 pub enum DomainValidationResult {
     /// Domain is allowed.
     Allowed,
-    /// Domain is denied with a reason.
-    Denied(String),
+    /// Domain is denied — the embedded reason is type-safe and renders
+    /// to the legacy free-form string via `Display`.
+    Denied(NetworkDenyReason),
 }
 
 impl DomainValidationResult {
@@ -100,7 +103,7 @@ impl DomainAllowlist {
     /// Check if a domain is allowed.
     pub fn is_allowed(&self, host: &str) -> DomainValidationResult {
         if self.patterns.is_empty() {
-            return DomainValidationResult::Denied("empty allowlist".to_string());
+            return DomainValidationResult::Denied(NetworkDenyReason::EmptyAllowlist);
         }
 
         for pattern in &self.patterns {
@@ -109,14 +112,12 @@ impl DomainAllowlist {
             }
         }
 
-        DomainValidationResult::Denied(format!(
-            "host '{}' not in allowlist: [{}]",
+        DomainValidationResult::Denied(NetworkDenyReason::host_not_allowed(
             host,
             self.patterns
                 .iter()
-                .map(|p| p.pattern())
-                .collect::<Vec<_>>()
-                .join(", ")
+                .map(|p| p.pattern().to_string())
+                .collect(),
         ))
     }
 

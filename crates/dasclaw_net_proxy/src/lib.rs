@@ -41,6 +41,7 @@ pub mod builder;
 pub mod error;
 pub mod http;
 pub mod policy;
+pub mod reasons;
 pub mod types;
 
 pub use allowlist::{DomainAllowlist, DomainPattern, DomainValidationResult};
@@ -51,4 +52,5 @@ pub use policy::{
     AllowAllDecider, DefaultPolicyDecider, DenyAllDecider, NetworkDecision, NetworkPolicyDecider,
     NetworkRequest,
 };
+pub use reasons::NetworkDenyReason;
 pub use types::{CredentialLocation, CredentialMapping};
