@@ -52,6 +52,8 @@
 | 日期 | 主题 | 完整 URI | 开局 prompt |
 |---|---|---|---|
 | 2026-04-26 | W3-A 契合度评估方案（Step 1 待做） | `file:///Users/nallylin/Library/Application%20Support/Code/User/workspaceStorage/185633b60e9bb925751de80a50ffce63/GitHub.copilot-chat/memory-tool/memories/MTg0ZDhhNTctOWQ0Zi00N2I1LTlmODEtMTFjMTdmZTgyY2Jl/w3a-compatibility-evaluation-handoff.md` | 读该 URI 后做 Step 1：整理 `docs/plans/architecture-refactor/adr-112-input-checklist.md` |
+| 2026-04-28 | W3-A Step 3 ADR 主体撰写（Step 1 已闭环） | `file:///Users/nallylin/Library/Application%20Support/Code/User/workspaceStorage/185633b60e9bb925751de80a50ffce63/GitHub.copilot-chat/memory-tool/memories/YTkxYmVkNDItYzI3MS00MWIyLTgxMmYtZjg4OGMyZTc5NjEz/w3a-step3-adr-handoff.md` | 读该 URI 后做 Step 3：撰写 `docs/plans/architecture-refactor/adr-112-compatibility-evaluation.md`（按 9 章节骨架 + 14×3 评分卡 + Phase 0 10 行 + 16 条偏离声明 + 4 KPI + CI 三档） |
+| 2026-04-28 | Phase 0 P0-1 Prompt 装配三连收口（W3-A Step 1+3 双闭环） | `file:///Users/nallylin/Library/Application%20Support/Code/User/workspaceStorage/185633b60e9bb925751de80a50ffce63/GitHub.copilot-chat/memory-tool/memories/YTkxYmVkNDItYzI3MS00MWIyLTgxMmYtZjg4OGMyZTc5NjEz/phase0-p01-prompt-handoff.md` | 读该 URI 后做 P0-1：TDD 红测 → 合并 ironclaw 3 builder 为 LayeredPromptBuilder → 删 IRONCLAW_PROMPT_LAYERING env → 统一 PROMPT_CACHE_BOUNDARY 常量 → nextest+build 全绿 → 三 skill 自审 → 开 PR |
 
 ##### 已归档
 
