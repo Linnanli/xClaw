@@ -434,6 +434,7 @@ cargo test -p desktop-client --lib engine_startup_tests
 - [ ] 已编写集成测试和契约测试
 - [ ] `cargo build` 编译通过，0 错误 0 警告
 - [ ] 所有测试通过
+- [ ] **W3-A Phase 0 进行中**：若本 PR 属于 P0-1 ~ P0-10 任务族，必须按 [ADR-112 §5.4 评估嵌入节奏](docs/plans/architecture-refactor/adr-112-compatibility-evaluation.md#54-评估嵌入节奏b1--b2--b3) 自带 H1 unit + H2 integration 测试（W3-A 收尾后此项删除）
 
 ### 安全功能（额外）
 
