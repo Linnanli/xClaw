@@ -38,8 +38,24 @@
 #### 提醒动作（固定流程）
 
 1. 先把当前状态写入 `/memories/session/<topic>-handoff.md`
-2. 明确说明“当前已完成的闭环 milestone 是什么”
-3. 再建议用户新开会话，并告诉用户下一会话第一句该读取哪个 handoff 文件
+2. 调用 `resolve_memory_file_uri` 拿到该文件的**完整 file:// URI**
+3. 把完整 URI 同步登记到本文件下方的 [Session Handoff Index](#session-handoff-index) 表格中
+4. 明确说明"当前已完成的闭环 milestone 是什么"
+5. 给用户的下一会话开局 prompt 中**必须包含完整 URI**（不是 `/memories/session/...` 短路径），因为新会话的 agent 不一定能解析短路径
+
+#### Session Handoff Index
+
+> 当前活跃的 handoff 文件清单。完成下一会话或废弃后，把对应行移到本表下方的"已归档"区。
+>
+> 每条目格式：`日期 | 主题 | 完整 file:// URI | 下一会话开局 prompt 摘要`
+
+| 日期 | 主题 | 完整 URI | 开局 prompt |
+|---|---|---|---|
+| 2026-04-26 | W3-A 契合度评估方案（Step 1 待做） | `file:///Users/nallylin/Library/Application%20Support/Code/User/workspaceStorage/185633b60e9bb925751de80a50ffce63/GitHub.copilot-chat/memory-tool/memories/MTg0ZDhhNTctOWQ0Zi00N2I1LTlmODEtMTFjMTdmZTgyY2Jl/w3a-compatibility-evaluation-handoff.md` | 读该 URI 后做 Step 1：整理 `docs/plans/architecture-refactor/adr-112-input-checklist.md` |
+
+##### 已归档
+
+（暂无）
 
 #### 注意
 
