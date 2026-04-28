@@ -101,6 +101,67 @@ pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType
     }
 }
 
+/// Per-process resource limits enforced via `setrlimit(2)` on Unix and
+/// (future) Windows Job Objects on Windows.
+///
+/// Each field is `Option<u64>`; `None` means "do not enforce" (inherit
+/// parent limit). [`ResourceLimits::default`] returns sane defaults that
+/// handle 99% of legitimate workloads while blocking runaway scripts and
+/// fork bombs before the OS OOM killer mis-targets unrelated processes.
+///
+/// Callers wanting **no enforcement** must explicitly call
+/// [`ResourceLimits::unlimited`].
+///
+/// See [45 — Resource Limits ADR](../../docs/plans/architecture-refactor/45-resource-limits-adr.md).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResourceLimits {
+    /// Maximum address-space size in bytes. Enforced via `RLIMIT_AS` on
+    /// Unix; `JOB_OBJECT_LIMIT_PROCESS_MEMORY` on Windows (future).
+    pub max_memory_bytes: Option<u64>,
+
+    /// Maximum CPU seconds (soft = `SIGXCPU`, hard = `SIGKILL`). Enforced
+    /// via `RLIMIT_CPU` on Unix; silently ignored on Windows.
+    pub max_cpu_secs: Option<u64>,
+
+    /// Max simultaneously open file descriptors. Enforced via
+    /// `RLIMIT_NOFILE` on Unix; silently ignored on Windows.
+    pub max_open_files: Option<u64>,
+
+    /// Max child processes the sandbox may spawn. Enforced via
+    /// `RLIMIT_NPROC` on Unix; `JOB_OBJECT_LIMIT_ACTIVE_PROCESS` on Windows.
+    pub max_processes: Option<u64>,
+}
+
+impl Default for ResourceLimits {
+    /// Sane defaults: 4 GiB memory / 600 s CPU / 1024 FDs / 1024 processes.
+    ///
+    /// Rationale per Round 20 user decision: macOS OOM killer sometimes
+    /// mis-targets Finder/IDE under memory pressure; defaults catch
+    /// runaway scripts before that triggers. Users override via config.
+    fn default() -> Self {
+        Self {
+            max_memory_bytes: Some(4 * 1024 * 1024 * 1024), // 4 GiB
+            max_cpu_secs: Some(600),                         // 10 min
+            max_open_files: Some(1024),
+            max_processes: Some(1024),
+        }
+    }
+}
+
+impl ResourceLimits {
+    /// Construct a [`ResourceLimits`] with **no** enforcement. Callers
+    /// should prefer [`Default::default`] unless they have a specific
+    /// reason to disable all limits (e.g. trusted batch jobs).
+    pub fn unlimited() -> Self {
+        Self {
+            max_memory_bytes: None,
+            max_cpu_secs: None,
+            max_open_files: None,
+            max_processes: None,
+        }
+    }
+}
+
 /// Backend-level sandbox configuration: the concrete knobs the sandbox
 /// **kernel** (seatbelt / seccomp / windows) needs to enforce a policy.
 ///
@@ -118,6 +179,11 @@ pub struct SandboxBackendConfig {
     /// detected from `HTTP_PROXY` / `HTTPS_PROXY` env vars.
     /// Populated by `proxy::detect_loopback_ports()`.
     pub proxy_loopback_ports: Vec<u16>,
+    /// Resource limits applied via `setrlimit` in the child process's
+    /// pre_exec hook. Defaults to [`ResourceLimits::default`] (4 GiB / 600 s
+    /// / 1024 FDs / 1024 procs). Pass [`ResourceLimits::unlimited`] to opt
+    /// out completely. See W3.3 ADR.
+    pub resource_limits: ResourceLimits,
 }
 
 impl SandboxBackendConfig {
@@ -134,6 +200,12 @@ impl SandboxBackendConfig {
         self.proxy_loopback_ports = ports;
         self
     }
+
+    /// Override the resource limits applied to spawned processes.
+    pub fn with_resource_limits(mut self, limits: ResourceLimits) -> Self {
+        self.resource_limits = limits;
+        self
+    }
 }
 
 /// Deprecated alias kept for transition; will be removed once all call
@@ -141,6 +213,9 @@ impl SandboxBackendConfig {
 pub type SandboxPolicy = SandboxBackendConfig;
 
 pub mod proxy;
+
+#[cfg(unix)]
+pub mod rlimit;
 
 /// What the caller wants to execute under a sandbox.
 #[derive(Debug)]
