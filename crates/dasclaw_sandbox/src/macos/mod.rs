@@ -13,8 +13,10 @@
 //! ports codex's full proxy-loopback-port + UDS allow-list logic
 //! (`seatbelt.rs` 723 LOC) once `dasclaw_net_proxy` lands in W7.
 
+use std::os::unix::process::CommandExt;
 use std::process::Command;
 
+use crate::rlimit;
 use crate::{Sandbox, SandboxError, SandboxExecRequest, SandboxType};
 
 const SEATBELT_EXECUTABLE: &str = "/usr/bin/sandbox-exec";
@@ -128,6 +130,18 @@ impl Sandbox for SeatbeltSandbox {
         }
         if let Some(d) = req.command.get_current_dir() {
             wrapped.current_dir(d);
+        }
+
+        // W3.3-2: apply setrlimit in child pre_exec. rlimits inherit across
+        // exec(2), so limits set on `sandbox-exec` flow through to the
+        // sandboxed program it spawns.
+        let limits = req.policy.resource_limits.clone();
+        // SAFETY: `apply_in_pre_exec` only invokes async-signal-safe
+        // libc::setrlimit calls and returns io::Result. No allocations,
+        // no locks, no other Rust runtime dependencies. See module docs
+        // on `crate::rlimit`.
+        unsafe {
+            wrapped.pre_exec(move || rlimit::apply_in_pre_exec(&limits));
         }
 
         Ok(wrapped.output()?)
@@ -245,5 +259,42 @@ mod tests {
         let out = sb.execute(req).expect("seatbelt should run echo");
         assert!(out.status.success(), "exit={:?}", out.status);
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hello");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn seatbelt_propagates_resource_limits_to_child() {
+        // W3.3-2 integration: setrlimit applied in pre_exec on the
+        // sandbox-exec wrapper must inherit through to the child process.
+        // We cap RLIMIT_NOFILE to 64 and ask `sh -c 'ulimit -n'` to print
+        // its soft fd limit; the child should see 64, not the parent's.
+        use crate::ResourceLimits;
+
+        let sb = SeatbeltSandbox::new();
+        let mut cmd = Command::new("/bin/sh");
+        cmd.arg("-c").arg("ulimit -n");
+
+        let limits = ResourceLimits {
+            max_memory_bytes: None,
+            max_cpu_secs: None,
+            max_open_files: Some(64),
+            max_processes: None,
+        };
+        let policy = SandboxPolicy::read_only_defaults().with_resource_limits(limits);
+
+        let req = SandboxExecRequest {
+            command: cmd,
+            policy,
+            preference: SandboxablePreference::Require,
+            windows_sandbox_enabled: false,
+        };
+        let out = sb.execute(req).expect("seatbelt should run sh");
+        assert!(out.status.success(), "exit={:?}", out.status);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(
+            stdout.trim(),
+            "64",
+            "child should see RLIMIT_NOFILE=64, got {stdout:?}"
+        );
     }
 }

@@ -16,6 +16,37 @@
    - 每次给开发者解释方案或者让开发选择方案，必须调用 `mcp-feedback-enhanced` 工具。
    - 工具调用后，Agent 必须等待用户反馈，收到明确指示后再继续执行后续任务。
 
+### 会话轮换原则
+
+**核心标准：不要用“1 个 PR”判断会话是否该结束；以“闭环 milestone”判断。**
+
+#### 什么算一个闭环 milestone
+
+满足以下 3 条中的至少 2 条，即视为完成一个阶段，可建议新开会话：
+- 一个明确决策已定稿（如 ADR 从 draft 变 accepted，或关键方案被用户确认）
+- 一段实现已落地并完成验证（build / test / lint / smoke 至少一类可执行验证通过）
+- 产出已沉淀为可交接状态（PR、ADR、handoff、研究笔记、完成报告）
+
+#### 何时必须提醒用户考虑新会话
+
+- 同一会话内已经完成 1 个以上闭环 milestone，且准备进入下一个阶段
+- 已完成 2 个以上非平凡 PR 或 stacked PR 切片，准备继续下一个子波次
+- 已经写过 handoff、conversation summary，或已经明显依赖摘要态上下文推进工作
+- 任务模式即将切换：例如从“实现/调试”切到“架构对账/研究/文档”，或反过来
+- 出现 token budget、context compaction、summary 接管之类信号
+
+#### 提醒动作（固定流程）
+
+1. 先把当前状态写入 `/memories/session/<topic>-handoff.md`
+2. 明确说明“当前已完成的闭环 milestone 是什么”
+3. 再建议用户新开会话，并告诉用户下一会话第一句该读取哪个 handoff 文件
+
+#### 注意
+
+- **单个 PR 默认不是阶段边界**；PR 可能只是为了 reviewability 被拆小
+- stacked PR 以“该组 PR 是否完成一个闭环 milestone”来判断，而不是以最前面那个 PR 是否已开来判断
+- 如果只是一个很小的 typo / 文档修订 / lint 修复，不要机械地建议新会话
+
 ### Skills 强制使用规范
 
 每个开发回合都要主动核对是否触发 skill，不要靠"想起来"才用。以下三个 skill 是默认触发，**不是可选**：
@@ -41,6 +72,49 @@
 - 用户明确说"跳过 review，先跑起来"
 
 **遗忘检测**：每次准备 push 前，先问自己"刚才有没有跑过 code-quality-audit 和 code-review-expert？"，如果没有，回到对应步骤补做。
+
+### GitHub PR 工作流
+
+#### 默认原则
+
+- **先完成局部闭环，再开 PR**：实现、验证、必要的自审都完成后再提交，不要把“未验证草稿”直接推成 PR
+- **PR 要小而完整**：优先拆成可 review 的小 PR，但每个 PR 都必须有明确边界、验证结果和 merge 顺序
+- **能 stacked 就 stacked，不要把无关改动塞进同一个 PR**
+
+#### 标准流程
+
+1. 完成当前切片实现
+2. 运行最小充分验证：先窄测试，再必要的 build / workspace build
+3. 按 Skills 管线完成 `code-quality-audit` → `code-simplifier` → `code-review-expert`（适用时）
+4. commit，commit message 说明当前切片的真实边界
+5. push 分支
+6. 开 PR，并在 PR 描述中写清：
+    - 这个 PR 做了什么
+    - 明确没做什么
+    - 验证命令和结果
+    - 风险 / 后续步骤
+7. 如果是 stacked PR，必须额外写清：
+    - base 分支不是 `xClaw` 而是上一个 feature branch
+    - merge 顺序
+    - “请先 merge #X，再看本 PR”
+8. 开完 PR 后，用 `gh pr checks` 或等价方式至少看一轮状态，并把结果同步给用户
+9. 若当前闭环 milestone 已完成，按“会话轮换原则”判断是否该建议新会话
+
+#### PR 描述最低要求
+
+- 背景 / 目标
+- 改动范围
+- 非目标（What’s NOT in this PR）
+- 验证
+- 后续 PR / 下一步
+
+#### 禁止事项
+
+- ❌ 还没跑基本验证就开 PR
+- ❌ stacked PR 不写 base / merge 顺序
+- ❌ PR 标题和 commit / 实际改动边界不一致
+- ❌ 一个 PR 混入多个互不相干的主题
+- ❌ 明明已经完成闭环 milestone，却继续在同一会话无限追加新阶段
 
 ### 分析工具使用规范（Round 17 建立 / Round 18 实证）
 
@@ -80,28 +154,6 @@
 **教训来源**：
 - Round 1-15 多次误判（"codex 没 forkSubagent"、"ironclaw Prompt Cache 独家"）的根因均为字面量搜索陷阱。
 - **Round 18 实证**：14 文档 Round 17 版本列出的 4 项 P0/P1 "缺口"（`<system-reminder>` 标签 / CYBER_RISK_INSTRUCTION 文本 / 多层 CLAUDE.md 加载 / 压缩阈值），经 `semantic_search` 验证全部是**伪缺口** —— claw-code `runtime/src/prompt.rs:480` 与 `prompt.rs:197`、codex `openai_models.rs:306` 早已实现。4/19 的文档错误率直接证明：**不做 semantic_search 就动笔写对账文档是不合格的**。
-
----
-
-## 架构规则：代码复用优先
-
-### 复用优先级
-
-**Admin Backend**：
-1. 通过 `ironclaw` crate 依赖主项目核心功能
-2. 复用共享 Crate
-3. 创建新的共享 Crate
-4. 仅管理后台特有功能才独立实现
-
-### 共享 Crate 规范
-
-参考 `crates/ironclaw_auth/` 的模式。共享 crate 不应依赖应用层代码，API 变更需同步更新所有使用方。
-
-### 可复用的 Web Gateway API
-
-实现 Desktop Client 功能前必须检查：Memory、Chat、Jobs、Extensions、Skills、Routines、Logs、Approval 相关 handler 是否已存在于 `src/channels/web/handlers/`。
-
-详细的架构说明、流程图和代码示例见 `docs/architecture-guide.md`。
 
 ---
 
@@ -353,19 +405,6 @@ cargo test -p desktop-client --lib engine_startup_tests
 
 ---
 
-## E2E 测试
-
-前端功能完成后必须编写 E2E 测试。推荐 Cypress（UI 测试）和 Playwright（SSE/跨浏览器测试）。
-
-关键要求：
-- 同时覆盖模拟环境和真实环境
-- 新功能先检查主项目是否有相同实现（如 `src/channels/web/static/app.js`）
-- 验证前后端实际通信格式，不只依赖 mock
-
-参考：`admin-backend/ui/cypress/`、`docs/testing-guide.md`
-
----
-
 ## 统一检查清单
 
 ### 功能开发
@@ -384,15 +423,15 @@ cargo test -p desktop-client --lib engine_startup_tests
 - [ ] 降级逻辑采用 Fail-Safe 设计
 - [ ] 契约测试验证业务目标可达成
 
-### 新增迁移
 
-- [ ] 已在 `integration_smoke_tests.rs` 的 `required` 列表追加表名验证
+### GitHub PR
 
-### 新增 Tauri 命令
-
-- [ ] 已添加到 `all_tauri_commands!()` 宏
-- [ ] 已添加到 `FRONTEND_INVOKED_COMMANDS`
-- [ ] `cargo test --test tauri_command_contract_tests` 通过
+- [ ] 当前切片已完成最小充分验证后再开 PR
+- [ ] 已按需执行 `code-quality-audit`、`code-simplifier`、`code-review-expert`
+- [ ] PR 描述已写清背景、范围、非目标、验证、后续步骤
+- [ ] 如果是 stacked PR，已写清 base、merge 顺序、先看哪个 PR
+- [ ] 已至少运行一轮 `gh pr checks` 或等价检查并同步结果
+- [ ] 如果当前已完成闭环 milestone，已按会话轮换原则写 handoff 并提醒用户考虑新会话
 
 ---
 
