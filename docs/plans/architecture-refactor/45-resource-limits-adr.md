@@ -1,8 +1,8 @@
 # 45 — Resource Limits (Memory / CPU / FDs / Processes) ADR
 
-**Status**: DRAFT — pending user review
+**Status**: ACCEPTED — Round 20 (2026-04-28)
 **Date**: 2026-04-28
-**Tier**: B+ (additive; default-off; no migration risk)
+**Tier**: B+ (additive; sane defaults; user override via config)
 **Wave**: W3.3
 **Predecessor**: [44 — Net Proxy Port](./44-net-proxy-port-completion.md)
 
@@ -55,10 +55,11 @@ Layer the implementation across two axes:
 Add `ResourceLimits` to `dasclaw_sandbox::SandboxBackendConfig`:
 
 ```rust
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ResourceLimits {
     /// Maximum address-space size in bytes. Enforced via RLIMIT_AS on Unix,
     /// JOB_OBJECT_LIMIT_PROCESS_MEMORY on Windows.
+    /// `None` means no limit (caller must opt-out explicitly).
     pub max_memory_bytes: Option<u64>,
 
     /// Maximum CPU seconds (soft = SIGXCPU, hard = SIGKILL). Unix only;
@@ -73,18 +74,37 @@ pub struct ResourceLimits {
     /// JOB_OBJECT_LIMIT_ACTIVE_PROCESS on Windows.
     pub max_processes: Option<u64>,
 }
+
+impl Default for ResourceLimits {
+    /// Sane defaults that handle 99% of legitimate workloads (cargo build,
+    /// npm install, python tests) but block runaway scripts and fork bombs
+    /// before the OS OOM killer mis-targets unrelated processes (e.g. Finder
+    /// on macOS). Users override via `config.toml [sandbox.resource_limits]`.
+    fn default() -> Self {
+        Self {
+            max_memory_bytes: Some(4 * 1024 * 1024 * 1024), // 4 GiB
+            max_cpu_secs:     Some(600),                     // 10 min
+            max_open_files:   Some(1024),
+            max_processes:    Some(1024),
+        }
+    }
+}
 ```
 
-**Enforcement point**: `OsExecutor::execute` between `Command::pre_exec`
-(setrlimit before exec, **after** fork but **before** exec — must be
-async-signal-safe) and `Command::spawn`.
+**Enforcement point**: `OsExecutor::execute` via `Command::pre_exec`
+(setrlimit **after fork but before exec** — closure must be
+async-signal-safe).
 
 **Why `pre_exec` rather than the parent process**: setrlimit on the parent
 would shrink the runtime's own limits and cascade to other tool calls.
 
-**Crate**: use `nix::sys::resource::setrlimit` (already in cargo workspace
-via codex deps; verify in W3.3 implementation PR). Fall back to direct
-`libc::setrlimit` if `nix` is not desired as a new dep.
+**Crate choice**: direct `libc::setrlimit`, **not** `nix`. Rationale:
+- Workspace-wide consistency: codex's 13 crates that touch syscalls all
+  use `libc` directly (verified via `rg '^libc =' codex-rs/`).
+- pre_exec closure must be async-signal-safe — `nix`'s `Result<_, Errno>`
+  conversion path involves alloc; `libc` is a single `unsafe` block with
+  zero allocation.
+- W3.3 has only ~4 setrlimit call sites — wrapper benefit is marginal.
 
 ### Axis 2 — Linux cgroup v2 (optional enhancement)
 
@@ -103,9 +123,23 @@ OOM kill scoping, and works for entire process trees including detached
 forks — but requires write access to `/sys/fs/cgroup` which not all distros
 allow without `systemd-run --user`.
 
-**Decision**: default-off cgroup support behind `enable_cgroup_v2: bool` in
-`SandboxBackendConfig`. If enabled but unavailable, log a warning and fall
-through to pure setrlimit.
+**Decision**: **auto-detect** cgroup v2. On every `OsExecutor` startup,
+probe `/sys/fs/cgroup/cgroup.controllers` once and cache the result. If
+`memory` and `cpu` controllers are present **and** `/sys/fs/cgroup/dasclaw/`
+is writable (or can be created), use cgroup v2; otherwise fall back to
+pure setrlimit.
+
+**Observability requirement**: emit one of these lines at startup so
+incident response can grep logs:
+- `sandbox: resource_limits backend=cgroup_v2 (path=/sys/fs/cgroup/dasclaw)`
+- `sandbox: resource_limits backend=setrlimit (cgroup_v2 unavailable: <reason>)`
+
+Reasons may be: `not Linux`, `controllers missing: memory cpu`,
+`mount not writable`, or `cgroup_v2 disabled by config`.
+
+A `disable_cgroup_v2: bool` escape hatch in config covers the rare case
+where a user wants deterministic setrlimit-only behavior on a Linux box
+that has cgroup v2 available.
 
 ### Axis 3 — Windows (future)
 
@@ -178,17 +212,32 @@ this fits comfortably as a single 1-week PR sequence:
 
 ---
 
-## Open questions
+## Decisions (Round 20, user-confirmed 2026-04-28)
 
-1. **Should `max_memory_bytes` default be set to a sane value (e.g. 2 GB) or
-   left `None`?** Setting a default would catch runaway scripts but might
-   surprise users running large compilations. Leaning toward `None` (opt-in)
-   to match the Round 19 "keep dormant" pattern.
-2. **Should `enable_cgroup_v2` be inferred from environment (auto-detect) or
-   require explicit opt-in?** Auto-detect is friendlier but harder to
-   reason about during incident response. Leaning toward explicit opt-in.
-3. **`nix` crate vs raw `libc`?** `nix` is already pulled by some workspace
-   members; double-check via `cargo tree` before committing.
+| # | Question | Decision | Rationale |
+|---|----------|----------|-----------|
+| 1 | `max_memory_bytes` default | **Sane defaults** (4 GiB / 600 s / 1024 FD / 1024 procs) via `impl Default for ResourceLimits` | macOS OOM killer often mis-targets Finder/IDE under memory pressure; defaults catch runaway scripts before that triggers. Users override in `config.toml`. Admin-pushed policy is W4+ scope. |
+| 2 | cgroup v2 activation | **Auto-detect** with startup log line + `disable_cgroup_v2` config escape hatch | cgroup v2 is a strict superset of setrlimit (per-tree accounting, scoped OOM kill); the "hard to reason about" concern is solved by emitting an explicit backend log line. |
+| 3 | `nix` crate vs `libc` | **Direct `libc`**, no new workspace dep | Codex/W3.1c precedent uses `libc` everywhere; pre_exec must be async-signal-safe and `libc` has zero allocation; only ~4 call sites — wrapper not worth the inconsistency cost. |
+
+### Defaults reference table
+
+| Limit | Default | RLIMIT name | Rationale |
+|-------|---------|-------------|-----------|
+| `max_memory_bytes` | 4 GiB | `RLIMIT_AS` | Headroom for `cargo build` of medium projects; users running LLM inference must override. |
+| `max_cpu_secs` | 600 s (10 min) | `RLIMIT_CPU` | Long enough for full-repo `npm install` / `pip install`; stops infinite loops. |
+| `max_open_files` | 1024 | `RLIMIT_NOFILE` | macOS default soft limit is 256, Linux 1024 — picking 1024 matches common Linux dev environments. |
+| `max_processes` | 1024 | `RLIMIT_NPROC` | Stops fork bombs without breaking parallel build systems (`make -j32` stays well under). |
+
+### Override mechanism
+
+```toml
+# config.toml — per-machine override
+[sandbox.resource_limits]
+max_memory_bytes = 16_000_000_000  # 16 GB for large Rust builds
+max_cpu_secs     = 0                # 0 = unlimited (sentinel)
+# disable_cgroup_v2 = true          # rare; force setrlimit-only on Linux
+```
 
 ---
 
