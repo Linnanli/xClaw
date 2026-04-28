@@ -45,7 +45,8 @@ use std::process::{Command, Output};
 
 use dasclaw_sandbox::proxy::detect_loopback_ports;
 use dasclaw_sandbox::{
-    SandboxBackendConfig, SandboxError, SandboxExecRequest, SandboxablePreference, select_backend,
+    ResourceLimits, SandboxBackendConfig, SandboxError, SandboxExecRequest, SandboxablePreference,
+    select_backend,
 };
 use ironclaw_workspace_cap::policy::{NetworkAccess, SandboxPolicy};
 
@@ -181,6 +182,10 @@ pub fn policy_to_backend_config_with_env(
             allow_network: true,
             allow_spawn: true,
             proxy_loopback_ports: vec![],
+            // FullAccess is the user-trusted escape hatch; do not impose
+            // resource limits here. Callers wanting limits on FullAccess
+            // tasks must override `resource_limits` explicitly.
+            resource_limits: ResourceLimits::unlimited(),
         },
         SandboxPolicy::ReadOnly { network_access } => SandboxBackendConfig {
             readable_roots: vec![PathBuf::from("/")],
@@ -192,6 +197,7 @@ pub fn policy_to_backend_config_with_env(
             } else {
                 proxy_ports_when_restricted()
             },
+            resource_limits: ResourceLimits::default(),
         },
         SandboxPolicy::ExternalSandbox { network_access } => {
             let net_enabled = matches!(network_access, NetworkAccess::Enabled);
@@ -206,6 +212,7 @@ pub fn policy_to_backend_config_with_env(
                 } else {
                     proxy_ports_when_restricted()
                 },
+                resource_limits: ResourceLimits::default(),
             }
         }
         SandboxPolicy::WorkspaceWrite { network_access, .. } => {
@@ -221,6 +228,7 @@ pub fn policy_to_backend_config_with_env(
                 } else {
                     proxy_ports_when_restricted()
                 },
+                resource_limits: ResourceLimits::default(),
             }
         }
     }
@@ -237,6 +245,42 @@ mod tests {
         assert_eq!(cfg.writable_roots, vec![PathBuf::from("/")]);
         assert!(cfg.allow_network);
         assert!(cfg.allow_spawn);
+    }
+
+    // -- W3.3-1: ResourceLimits projection --
+
+    #[test]
+    fn danger_full_access_uses_unlimited_resources() {
+        let cfg = policy_to_backend_config(&SandboxPolicy::DangerFullAccess, Path::new("/x"));
+        // FullAccess is the user-trusted escape hatch; do not impose
+        // resource limits unless the caller overrides explicitly.
+        assert!(cfg.resource_limits.max_memory_bytes.is_none());
+        assert!(cfg.resource_limits.max_cpu_secs.is_none());
+    }
+
+    #[test]
+    fn read_only_uses_default_resource_limits() {
+        let cfg = policy_to_backend_config(
+            &SandboxPolicy::ReadOnly {
+                network_access: false,
+            },
+            Path::new("/x"),
+        );
+        assert_eq!(
+            cfg.resource_limits.max_memory_bytes,
+            Some(4 * 1024 * 1024 * 1024)
+        );
+        assert_eq!(cfg.resource_limits.max_cpu_secs, Some(600));
+    }
+
+    #[test]
+    fn workspace_write_uses_default_resource_limits() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg =
+            policy_to_backend_config(&SandboxPolicy::new_workspace_write_policy(), tmp.path());
+        assert!(cfg.resource_limits.max_memory_bytes.is_some());
+        assert_eq!(cfg.resource_limits.max_open_files, Some(1024));
+        assert_eq!(cfg.resource_limits.max_processes, Some(1024));
     }
 
     #[test]

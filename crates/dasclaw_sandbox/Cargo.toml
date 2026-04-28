@@ -13,6 +13,11 @@ path = "src/lib.rs"
 thiserror = "1"
 url = "2"
 
+# W3.3 — `libc` 现需在所有 Unix 平台启用（macOS + Linux），用于 setrlimit。
+# 详见 docs/plans/architecture-refactor/45-resource-limits-adr.md。
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # W2.3 — Linux seccomp backend.
 # 只在 Linux target 上启用，避免污染 macOS/Windows 工作流。
 # 选型理由（详见 docs/plans/architecture-refactor/32 §W2.3）：
@@ -22,5 +27,4 @@ url = "2"
 #     与 dasclaw_sandbox kernel 层互补不重叠。
 #   - 不引入外部 bwrap setuid 依赖，部署更轻。
 [target.'cfg(target_os = "linux")'.dependencies]
-libc = "0.2"
 seccompiler = "0.5"
