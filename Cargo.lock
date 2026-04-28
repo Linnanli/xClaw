@@ -2465,9 +2465,19 @@ dependencies = [
 
 [[package]]
 name = "dasclaw_net_proxy"
-version = "0.0.0-w1"
+version = "0.1.0"
 dependencies = [
- "thiserror 1.0.69",
+ "async-trait",
+ "bytes",
+ "http-body-util",
+ "hyper 1.8.1",
+ "hyper-util",
+ "reqwest 0.12.28",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]

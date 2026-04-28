@@ -1,8 +1,8 @@
 [package]
 name = "dasclaw_net_proxy"
-version = "0.0.0-w1"
-edition = "2021"
-description = "rama-based MITM proxy with self-signed CA (codex port)."
+version = "0.1.0"
+edition = "2024"
+description = "HTTP forward proxy with domain allowlist + credential injection (ported from ironclaw-main)."
 license = "Apache-2.0 OR MIT"
 publish = false
 
@@ -10,4 +10,30 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
-thiserror = "1"
+# Error handling
+thiserror = "2"
+
+# Async runtime
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "sync", "time"] }
+async-trait = "0.1"
+
+# HTTP server
+hyper = { version = "1.5", features = ["server", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["server", "tokio", "http1", "http2"] }
+http-body-util = "0.1"
+bytes = "1"
+
+# Outbound HTTP client
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }
+
+# URL parsing
+url = "2"
+
+# Logging
+tracing = "0.1"
+
+# Serialization (for CredentialMapping/CredentialLocation)
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
