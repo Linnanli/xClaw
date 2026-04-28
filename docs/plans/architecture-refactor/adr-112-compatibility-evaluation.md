@@ -190,6 +190,64 @@ Sub-Agent（能力 9）按 input-checklist §2.7 决策放到 W5/W6：
 
 W3-A 收尾时仅要求 thread_fork() 双证据存在 + W5/W6 占位 ADR 已签。
 
+### 5.4 评估嵌入节奏（B1 / B2 / B3）
+
+> **核心原则**：本 ADR §3 的 39 Contract Test 套件 + §4 的 4 KPI **不是 Phase 0 之外的独立阶段**，必须**嵌入** P0-X PR 推进。专用"评估时间"只在 Phase 0 末尾保留 1 个收口 PR（2-3 天）。
+
+**禁止反模式**：
+- ❌ 把 39 套件堆到 Phase 0 末尾一次性写 — 会成为 1-2 周瓶颈，且模块边界已丢失语境
+- ❌ Phase 0 还未启动就先写完 39 套件 — P0-X 仍会改动模块边界（如 P0-3 把 5 hook 合 1），测试需重写
+
+#### 5.4.1 B1 同步补测（贯穿 P0-1 ~ P0-10）
+
+**规则**：每个 P0-X PR **必须自带**该 PR 涉及模块的 H1（unit）+ H2（integration）测试。
+
+**分布**（13 模块 × 2 = 26 套件分摊到 10 个 P0 PR）：
+
+| P0 任务 | 必带模块测试族 | Harness |
+|---|---|---|
+| P0-1 Prompt 三连 | 模块 1 Prompt | H1 + H2 |
+| P0-2 Tool bootstrap | 模块 2 Tool System | H1 + H2 |
+| P0-3 HookEngine 5→1 | 模块 4 Hook | H1 + H2 |
+| P0-4 ApprovalGate 去重 | 模块 5 Permission | H1 + H2 |
+| P0-5 SafetyDecision 3→4 | 模块 4 Hook（增量） | H1 + H2 |
+| P0-6 Compaction 90% | 模块 7 Context Mgmt | H1 + H2 |
+| P0-7 dasclaw_mcp port | 模块 8 MCP | H1 + H2 |
+| P0-8 dasclaw_obs / ironclaw_auth 收口 | 模块 11 Observability + 模块 12 Auth | H1 + H2 |
+| P0-9 Bash symlink | 模块 13 Bash Validation | H1 + H2 |
+| P0-10 dasclaw_sandbox trait | 模块 6 Sandbox | H1 + H2 |
+
+**剩余未对应 P0**（模块 3 Compaction 命中流 / 模块 9 Sub-Agent / 模块 10 Startup / 模块 14 Feature Flags）由独立小 PR 在 B3 之前补齐。
+
+#### 5.4.2 B2 中段接 CI（P0-3 完成后）
+
+**触发时机**：P0-3（hook 抽象稳定）完成时，开 1 个独立 CI 配置 PR。
+
+**接入内容**：
+- L1 PR smoke（< 5 min）：13 模块 × H1 子集 + Phase 0 10 行 assertion
+- L2 daily（< 30 min）：39 套件全跑 + 4 KPI 测量
+
+**为什么是 P0-3 而非更早**：P0-1（Prompt）/ P0-2（Tool）只改局部模块；P0-3 把 5 个 hook 合 1，是 hook 抽象稳定的标志。在此之前接 L1 PR smoke 会因 hook 测试反复重写而频繁红 CI。
+
+#### 5.4.3 B3 末尾收口（Phase 0 完成后 2-3 天）
+
+**触发时机**：P0-1 ~ P0-10 全部 merge 后。
+
+**1 个收口 PR 包含**：
+1. H3 ironclaw 5-suite 补 13 模块覆盖矩阵（live + gateway + 跨服务集成）
+2. 4 KPI 实测（DLP 漏报 / 跨租户违规 / Prompt injection 拦截 / audit 采样）
+3. 14 × 3 评分卡复评（与 Step 1 基线对比，阈值 ≥ 90）
+4. 本 ADR 状态：Draft → Accepted（Approver 签名）
+5. W3-A 准入门禁审核
+
+**通过后**：W3-A 收尾完成，Phase 1（hook 系统重构）可启动。
+
+#### 5.4.4 不在 §5.4 范围
+
+- ❌ **运行期 sub-agent 执行评估**：sub-agent 按 §5.3 已放到 W5/W6，不在 Phase 0
+- ❌ **开发期 multi-agent 并行写测试**：B1 节奏（实现 PR 自带测试）= 实现者顺手做，不需要专门评估 agent；关键路径 P0-1→2→3→4→8 强串行，单 agent 协调成本最低
+- ⚠️ **可选**：P0-6 / P0-7 / P0-9 / P0-10 是 §5.2 并行线，**遇到瓶颈时**可考虑 worktree 多 agent 并行（参见 [multi-agent-workflow-creator skill]），但属于执行策略而非评估方案，本 ADR 不强制
+
 ---
 
 ## 6. CI 三档（Layer 1 + Layer 2 验证机制）
