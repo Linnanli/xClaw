@@ -141,7 +141,7 @@ impl Default for ResourceLimits {
     fn default() -> Self {
         Self {
             max_memory_bytes: Some(4 * 1024 * 1024 * 1024), // 4 GiB
-            max_cpu_secs: Some(600),                         // 10 min
+            max_cpu_secs: Some(600),                        // 10 min
             max_open_files: Some(1024),
             max_processes: Some(1024),
         }

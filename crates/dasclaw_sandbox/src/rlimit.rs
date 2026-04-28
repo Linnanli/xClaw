@@ -81,8 +81,7 @@ pub fn apply_in_pre_exec(limits: &ResourceLimits) -> std::io::Result<()> {
 /// `u64::MAX` as a sentinel without triggering EINVAL.
 #[cfg(unix)]
 fn set_one(resource: RlimitResource, value: u64) -> std::io::Result<()> {
-    let infinity = libc::RLIM_INFINITY as u64;
-    let clamped = if value >= infinity {
+    let clamped = if value >= libc::RLIM_INFINITY {
         libc::RLIM_INFINITY
     } else {
         value as libc::rlim_t
@@ -163,8 +162,7 @@ mod tests {
     #[test]
     fn builder_with_resource_limits_overrides_default() {
         use crate::SandboxBackendConfig;
-        let cfg = SandboxBackendConfig::default()
-            .with_resource_limits(ResourceLimits::unlimited());
+        let cfg = SandboxBackendConfig::default().with_resource_limits(ResourceLimits::unlimited());
         assert!(cfg.resource_limits.max_memory_bytes.is_none());
     }
 
@@ -173,8 +171,7 @@ mod tests {
         // u64::MAX is the documented sentinel for "no limit". Verify the
         // clamp branch maps it to RLIM_INFINITY without panicking.
         let huge = u64::MAX;
-        let infinity = libc::RLIM_INFINITY as u64;
-        let clamped = if huge >= infinity {
+        let clamped = if huge >= libc::RLIM_INFINITY {
             libc::RLIM_INFINITY
         } else {
             huge as libc::rlim_t

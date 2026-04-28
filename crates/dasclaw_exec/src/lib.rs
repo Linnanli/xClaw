@@ -276,10 +276,8 @@ mod tests {
     #[test]
     fn workspace_write_uses_default_resource_limits() {
         let tmp = tempfile::tempdir().unwrap();
-        let cfg = policy_to_backend_config(
-            &SandboxPolicy::new_workspace_write_policy(),
-            tmp.path(),
-        );
+        let cfg =
+            policy_to_backend_config(&SandboxPolicy::new_workspace_write_policy(), tmp.path());
         assert!(cfg.resource_limits.max_memory_bytes.is_some());
         assert_eq!(cfg.resource_limits.max_open_files, Some(1024));
         assert_eq!(cfg.resource_limits.max_processes, Some(1024));
