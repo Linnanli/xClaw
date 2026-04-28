@@ -64,6 +64,19 @@
 3. 最后才用 `rg` 定位确切位置
 4. 对于"X 没有 Y"这类否定性结论，**必须明确给出 Level 1 + Level 3 双证据**才能落笔
 
+**触发判断表**（什么场景必须做三层验证）：
+
+| 场景 | 是否必须做三层验证 |
+|------|---------------------|
+| 否定性结论："X 没有 Y" / "X 是独家的" / "缺失 Y" | ✅ 必须 |
+| 新增模块 / 新建 crate / 新建文件 | ✅ 必须（先 semantic_search 是否已有等价） |
+| 跨项目对账（codex / claw-code / ironclaw 能力对比） | ✅ 必须 |
+| 架构对账文档（如 14-md） | ✅ 必须（Round 17/18 实证错误率 4/19） |
+| 已知模块内 bug 修复 | ❌ 不需要 |
+| 仅文档 / 格式化 / lint 修改 | ❌ 不需要 |
+| 已确定模块内 feature 扩展（不涉及"是否复用"） | ⚠️ 可选 |
+| commit message 写"已检查 X 是否已有，结论：…" | ✅ 推荐（过程透明度） |
+
 **教训来源**：
 - Round 1-15 多次误判（"codex 没 forkSubagent"、"ironclaw Prompt Cache 独家"）的根因均为字面量搜索陷阱。
 - **Round 18 实证**：14 文档 Round 17 版本列出的 4 项 P0/P1 "缺口"（`<system-reminder>` 标签 / CYBER_RISK_INSTRUCTION 文本 / 多层 CLAUDE.md 加载 / 压缩阈值），经 `semantic_search` 验证全部是**伪缺口** —— claw-code `runtime/src/prompt.rs:480` 与 `prompt.rs:197`、codex `openai_models.rs:306` 早已实现。4/19 的文档错误率直接证明：**不做 semantic_search 就动笔写对账文档是不合格的**。

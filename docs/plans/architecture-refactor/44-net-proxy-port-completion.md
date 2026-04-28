@@ -98,3 +98,36 @@ The `proxy_handle` must be kept alive for the lifetime of the executor; dropping
 - Bridge: `desktop-client/ironclaw/src/sandbox/net_proxy.rs`
 - Caller: `desktop-client/ironclaw/src/tools/builtin/shell.rs` (`with_extra_env`)
 - Keychain: `desktop-client/ironclaw/src/secrets/keychain.rs`
+
+## Round 19 lessons (W3.2b retrospective)
+
+Recorded after the 5-PR delivery to keep the analysis tooling discipline honest. Source: AGENTS.md §"分析工具使用规范" Round 17/18 lineage.
+
+### What went right
+
+1. **Avoided keyring-rs rewrite**: Before W3.2b-3 (Windows keychain), discovered `desktop-client/ironclaw/src/secrets/keychain.rs` already had **318 LOC** of mature macOS (`security-framework`) + Linux (`secret-service`) implementation. Decision: add Windows via `windows-rs` DPAPI as a third platform module rather than introducing keyring-rs and replacing all three. Saved ~200 LOC of churn and preserved the existing fail-safe contract.
+2. **Reused detect_loopback_ports**: Before designing how OS sandbox would let the local proxy through, ran `grep "PROXY_URL_ENV"` and found `crates/dasclaw_sandbox/src/proxy.rs::detect_loopback_ports` already ported from codex during W2.2b. `crates/dasclaw_exec/src/lib.rs:175` already calls it. Conclusion: the OS-sandbox-↔-proxy plumbing was solved 2 weeks ago; W3.2b only had to ship the proxy itself.
+3. **Reused secrets architecture**: `ironclaw-main` had 2961 LOC mature secrets KMS (master_key + HKDF + AES-GCM + per-secret salt + CAS + ACL). W3.2b-3 reused all of it instead of reinventing.
+
+### What was a near-miss (recorded for transparency)
+
+**`to_proxy_mapping` cross-crate type translation (W3.2b-4)**:
+- `crate::secrets::CredentialMapping` and `dasclaw_net_proxy::CredentialMapping` have nearly identical fields.
+- A naive reading flags this as duplication. The correct view is: they live in different crates (app vs. lib) with different ownership boundaries, and a `From` impl in either direction would create a circular dep (lib crate cannot depend on app crate; app's domain types should not be defined inside the lib crate either).
+- Hand-rolled `match` translation in `desktop-client/ironclaw/src/sandbox/net_proxy.rs::to_proxy_mapping` is correct.
+- **What was missed at the time**: the commit message did not state this trade-off. A reader could legitimately wonder "why not `From`?" and assume the author didn't think about it.
+- **Lesson for next time**: when hand-translating between two near-identical types, the commit message must include "why not `From` / `TryFrom`" reasoning, even when the answer is "circular dep".
+
+### What did NOT go wrong this round
+
+Cross-checked W3.2b-1 / 2 / 4 / 5 against existing implementations via `grep` over the full workspace + `codex-cli-main/`, `claw-code/`, `ironclaw-main/`. No "module already exists, rewrote it" findings. The only adjacent prior art (`crates/dasclaw_net_proxy/src/builder.rs` line 3 docstring explicitly cites it) is `ironclaw-main/src/sandbox/proxy/mod.rs::NetworkProxyBuilder`, which is the source we are porting *from* — by design.
+
+### Trigger for the analysis matrix in AGENTS.md
+
+The "触发判断表" (trigger table) in AGENTS.md §"分析工具使用规范" was added after Round 19 to make the rule actionable:
+
+- New crate / new module → must `semantic_search` first (this would have caught keyring-rs rewrite if it had been attempted).
+- Negative claim ("X has no Y") → must show Level 1 + Level 3 evidence before writing it down.
+- Hand-rolled type translation between two near-identical types → commit message must explain why no `From` impl.
+
+This closes the loop on Round 17's discovery that the previous version of doc 14 had a 4/19 false-negative rate when negative claims were made without `semantic_search` evidence.
