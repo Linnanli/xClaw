@@ -14,7 +14,9 @@
 //! (`seatbelt.rs` 723 LOC) once `dasclaw_net_proxy` lands in W7.
 
 use std::os::unix::process::CommandExt;
-use std::process::Command;
+use std::process::{Command, Stdio};
+
+pub mod memorystatus;
 
 use crate::rlimit;
 use crate::{Sandbox, SandboxError, SandboxExecRequest, SandboxType};
@@ -140,11 +142,24 @@ impl Sandbox for SeatbeltSandbox {
         // libc::setrlimit calls and returns io::Result. No allocations,
         // no locks, no other Rust runtime dependencies. See module docs
         // on `crate::rlimit`.
+        let pre_exec_limits = limits.clone();
         unsafe {
-            wrapped.pre_exec(move || rlimit::apply_in_pre_exec(&limits));
+            wrapped.pre_exec(move || rlimit::apply_in_pre_exec(&pre_exec_limits));
         }
 
-        Ok(wrapped.output()?)
+        // W3.3-3b: spawn 后用 memorystatus_control 补足内存限制（macOS 上
+        // RLIMIT_AS 返回 EINVAL，详见 docs/plans/architecture-refactor/46）。
+        // 为了能在 spawn 后拿到 child pid 再调 memorystatus_control，
+        // 改用 spawn() + wait_with_output() 取代 output()。
+        wrapped.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let child = wrapped.spawn()?;
+        if let Some(bytes) = limits.max_memory_bytes {
+            // 设限失败不中断 execute：rlimit 已在 pre_exec 套上 CPU/FD/NPROC，
+            // memorystatus 是内存加固。失败记入 stderr observability、但不 failgte。
+            // 当前阶段没有 logger 接入；静默忽略错误，后续引入 tracing 后补 warn!。
+            let _ = memorystatus::set_memory_limit(child.id() as i32, bytes);
+        }
+        Ok(child.wait_with_output()?)
     }
 }
 
