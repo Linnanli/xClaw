@@ -239,6 +239,18 @@ max_cpu_secs     = 0                # 0 = unlimited (sentinel)
 # disable_cgroup_v2 = true          # rare; force setrlimit-only on Linux
 ```
 
+### Round 21 — macOS memory enforcement supplement
+
+W3.3-2 实测发现 `setrlimit(RLIMIT_AS / RLIMIT_DATA)` 在 Darwin 返回 EINVAL，
+internal alternatives 调研结果归档到独立研究笔记，不重复展开：
+
+📎 **见 [46 — macOS Memory Limit Research](46-macos-memory-limit-research.md)**
+
+要点：
+- W3.3-2 当前的 cfg-gate（macOS 跳过内存 setrlimit）是正确 baseline
+- W3.3-3 macOS 内存限制走 `memorystatus_control` SPI（公开 SDK 头，与 Linux cgroup v2 同 Wave 落地）
+- 失败时降级为 warn log + 用户可见 `enforcement_unavailable` 状态字段，与 cgroup v2 的 `disable_cgroup_v2` escape hatch 对称
+
 ---
 
 ## Refs
