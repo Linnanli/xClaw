@@ -38,12 +38,14 @@
 
 use std::collections::BTreeMap;
 use std::os::unix::process::CommandExt;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use seccompiler::{
     apply_filter, BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition,
     SeccompFilter, SeccompRule, TargetArch,
 };
+
+pub mod cgroup_v2;
 
 use crate::rlimit;
 use crate::{Sandbox, SandboxError, SandboxExecRequest, SandboxType};
@@ -98,12 +100,17 @@ impl Sandbox for LinuxSeccompSandbox {
         let limits = req.policy.resource_limits.clone();
         let install_seccomp = !allow_network;
 
-        // SAFETY: pre_exec 在子进程的 fork() 之后、exec() 之前运行。
-        // 我们只调用 async-signal-safe 的 syscall（setrlimit, prctl,
+        // 让父进程能在 spawn 后通过 child.id() 把 pid 写入 cgroup.procs，
+        // 因此需要 piped stdout/stderr 配合后续 wait_with_output()。
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+        // pre_exec 闭包：fork() 之后、exec() 之前在子进程上下文运行。
+        let pre_exec_limits = limits.clone();
+        // SAFETY: 我们只调用 async-signal-safe 的 syscall（setrlimit, prctl,
         // seccomp 系列）和返回 io::Error 的 helper。不会触发分配、锁或线程。
         unsafe {
             cmd.pre_exec(move || {
-                rlimit::apply_in_pre_exec(&limits)?;
+                rlimit::apply_in_pre_exec(&pre_exec_limits)?;
                 if install_seccomp {
                     set_no_new_privs()
                         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
@@ -119,7 +126,34 @@ impl Sandbox for LinuxSeccompSandbox {
             });
         }
 
-        Ok(cmd.output()?)
+        // W3.3-3a: cgroup v2 RSS-based 内存限制（如可用）。
+        // 与 rlimit 层互补：rlimit 走 RLIMIT_AS（虚拟地址空间，cargo build 等
+        // 工具容易误伤）；cgroup memory.max 走 RSS（真实物理占用）。两者并行。
+        //
+        // 时序：spawn → assign_pid（写 cgroup.procs）→ wait_with_output。
+        // 为什么不在 pre_exec 写 cgroup：写 cgroup.procs 不在 async-signal-safe
+        // 列表，且需要父进程已知子 pid。
+        let cgroup_guard = match (limits.max_memory_bytes, cgroup_v2::detect()) {
+            (Some(_), cgroup_v2::DetectionResult::Available) => {
+                let suffix = cgroup_v2::unique_suffix();
+                cgroup_v2::CgroupGuard::new(&suffix, &limits).ok()
+            }
+            _ => None,
+        };
+
+        let mut child = cmd.spawn()?;
+
+        if let Some(ref guard) = cgroup_guard {
+            // pid 写 cgroup.procs 失败不应整个 execute 失败：cgroup 是
+            // 增强项，rlimit 已经在 pre_exec 兜底。失败时记录但继续。
+            // 与 ADR-45 "backend log line" 设计一致——观测性问题，不是正确性问题。
+            let _ = guard.assign_pid(child.id());
+        }
+
+        let output = child.wait_with_output()?;
+        // cgroup_guard 在此处自动 drop → rmdir。
+        drop(cgroup_guard);
+        Ok(output)
     }
 }
 
