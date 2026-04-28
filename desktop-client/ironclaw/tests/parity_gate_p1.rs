@@ -538,18 +538,18 @@ fn fp_022_dynamic_layer_preserves_static_cache() {
     let p1 = builder_cached.build(&dynamic_v1);
     let p2 = builder_cached.build(&dynamic_v2);
     assert!(
-        p1.text.contains("__PROMPT_CACHE_BOUNDARY__"),
+        p1.text.contains(x_claw_agent::PROMPT_CACHE_BOUNDARY),
         "FP-022: cache boundary marker should be present"
     );
     // The prefix before the boundary should be identical
     let prefix_v1 = p1
         .text
-        .split("__PROMPT_CACHE_BOUNDARY__")
+        .split(x_claw_agent::PROMPT_CACHE_BOUNDARY)
         .next()
         .expect("split");
     let prefix_v2 = p2
         .text
-        .split("__PROMPT_CACHE_BOUNDARY__")
+        .split(x_claw_agent::PROMPT_CACHE_BOUNDARY)
         .next()
         .expect("split");
     assert_eq!(

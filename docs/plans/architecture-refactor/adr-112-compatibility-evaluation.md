@@ -22,7 +22,7 @@
 
 W3-A 是 Route D 落地的第一阶段，包含三个子目标：
 
-1. **Phase 0 收口**：把 5 个 🔴 红 patchwork（Prompt 3 builder / Tool 5 register / Hook 5 套 / MCP 0 transport / Sub-Agent 仅 thread fork）和 6 个 🟡 黄 patchwork 收敛到可被单一 codebase 维护的状态
+1. **Phase 0 收口**：把 5 个 🔴 红 patchwork（Prompt 单 builder 双分支 + 常量分裂 / Tool 5 register / Hook 5 套 / MCP 0 transport / Sub-Agent 仅 thread fork）和 6 个 🟡 黄 patchwork 收敛到可被单一 codebase 维护的状态
 2. **Layer 1 Parity 主骨架**：14 能力 × 3 harness = 39 contract test 套件全部跑通
 3. **39 test + 4 KPI + 评分卡 ≥ 90%** 才允许进入 Phase 1（hook 系统重构）
 
@@ -153,7 +153,7 @@ Total = 0.30 × Parity + 0.30 × Integration + 0.40 × Business
 
 ```mermaid
 graph LR
-  P01[P0-1 Prompt 三连<br/>3 builder→1 + 删 env + 常量统一] --> P02[P0-2 Tool bootstrap_tools]
+  P01[P0-1 Prompt 三连<br/>双分支→单路径 + 删 env + 常量统一] --> P02[P0-2 Tool bootstrap_tools]
   P01 --> P05[P0-5 SafetyDecision 3→4 状态]
   P02 --> P03[P0-3 HookEngine 5 套合 1]
   P05 --> P03
@@ -285,7 +285,7 @@ sum_weighted = 1.5 × (#2 #3 #4 #8 #9) + 1.0 × (#1 #5 #6 #7 #11 #13) + 0.5 × (
 | # | 模块 | 分类 | 上游基线 | x-claw 实现 | 风险 | 接受期限 | 关闭动作 |
 |---|------|------|---------|------------|------|---------|---------|
 | 1-10 | （沿用 §2.5.4 原 10 条，不重复） | — | — | — | — | — | — |
-| 11 | Prompt | **A 架构** | claw-code 单 builder | ironclaw 3 builder | 🔴 | Phase 0 | P0-1 收敛 |
+| 11 | Prompt | **A 架构** | claw-code 单 builder | ironclaw 单 builder + env-flag 双分支 + 字面量分裂 | 🔴 | Phase 0 | P0-1 收敛（删 env-branch + 常量统一到 `x_claw_agent::PROMPT_CACHE_BOUNDARY`；builder 实现层合并见 issue #38） |
 | 12 | Tool System | **A 架构** | codex build_specs 统一 | 5 register_* | 🔴 | Phase 0 | P0-2 bootstrap_tools() |
 | 13 | Hook | **A 架构** | codex 单 engine | 5 套并存 | 🔴 | Phase 0 | P0-3 HookEngine |
 | 14 | Compaction 阈值 | **C 行为** | codex 90% | x-claw 80% | 🟡 | Phase 0 | P0-6 改 90% + override |
