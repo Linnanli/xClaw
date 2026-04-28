@@ -54,7 +54,24 @@ type RlimitResource = libc::c_int;
 #[cfg(unix)]
 pub fn apply_in_pre_exec(limits: &ResourceLimits) -> std::io::Result<()> {
     if let Some(bytes) = limits.max_memory_bytes {
+        // Memory enforcement via setrlimit is platform-specific:
+        //
+        // - **Linux**: `RLIMIT_AS` caps the process address-space size.
+        //   Kernel-enforced. This is the canonical setrlimit-path memory
+        //   ceiling. (cgroup v2 in W3.3-3 will provide RSS-based limits.)
+        // - **macOS**: setrlimit on `RLIMIT_AS` *or* `RLIMIT_DATA` returns
+        //   EINVAL — the Darwin kernel exposes the constants but does not
+        //   enforce them. Real macOS memory limiting requires Mach task
+        //   policies (`task_policy_set` with `TASK_MEMORYSTATUS_*`),
+        //   deferred to a future Wave per ADR-45.
+        //
+        // On unsupported platforms we silently skip memory rather than
+        // fail Fail-Safe — the limit is advisory and other axes (CPU,
+        // open files, processes) still apply.
+        #[cfg(target_os = "linux")]
         set_one(libc::RLIMIT_AS, bytes)?;
+        #[cfg(not(target_os = "linux"))]
+        let _ = bytes;
     }
     if let Some(secs) = limits.max_cpu_secs {
         set_one(libc::RLIMIT_CPU, secs)?;
@@ -73,22 +90,50 @@ pub fn apply_in_pre_exec(limits: &ResourceLimits) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Set one resource limit; both soft and hard set to `value`.
+/// Set one resource limit by lowering only the **soft** limit, preserving
+/// the hard limit.
 ///
-/// `rlim_t` is `u64` on all currently supported Unix targets, so the
-/// `value as rlim_t` cast is lossless. We additionally treat values at or
-/// above `RLIM_INFINITY` as "unlimited" — this lets callers use
-/// `u64::MAX` as a sentinel without triggering EINVAL.
+/// Behavior:
+/// 1. `getrlimit` to read the current `(soft, hard)` pair.
+/// 2. If `value >= RLIM_INFINITY`, leave the soft limit untouched
+///    (unbounded sentinel — caller said "no extra cap").
+/// 3. Otherwise clamp `value` against the current hard limit
+///    (non-privileged processes cannot raise hard).
+/// 4. Set `rlim_cur = clamped`, `rlim_max = current.rlim_max`. This is the
+///    POSIX-portable "shrink soft only" pattern; some kernels (notably
+///    Darwin for certain resources) reject attempts to *lower* the hard
+///    limit even though POSIX permits it.
+///
+/// Both `getrlimit` and `setrlimit` are async-signal-safe (signal-safety(7)).
 #[cfg(unix)]
 fn set_one(resource: RlimitResource, value: u64) -> std::io::Result<()> {
-    let clamped = if value >= libc::RLIM_INFINITY {
-        libc::RLIM_INFINITY
-    } else {
-        value as libc::rlim_t
+    let mut current = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
     };
+    // SAFETY: getrlimit reads into a stack-local `rlimit`. Async-signal-safe.
+    let ret = unsafe { libc::getrlimit(resource, &mut current) };
+    if ret != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    let infinity = libc::RLIM_INFINITY as u64;
+    if value >= infinity {
+        // Caller said "unbounded" — leave existing limit alone.
+        return Ok(());
+    }
+
+    let v = value as libc::rlim_t;
+    let clamped = if current.rlim_max != libc::RLIM_INFINITY && v > current.rlim_max {
+        current.rlim_max
+    } else {
+        v
+    };
+
     let rlim = libc::rlimit {
         rlim_cur: clamped,
-        rlim_max: clamped,
+        // Preserve the existing hard limit; only narrow the soft cap.
+        rlim_max: current.rlim_max,
     };
     // SAFETY: setrlimit is POSIX async-signal-safe. `rlim` is a valid
     // pointer for the duration of the call.

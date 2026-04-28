@@ -45,6 +45,7 @@ use seccompiler::{
     SeccompFilter, SeccompRule, TargetArch,
 };
 
+use crate::rlimit;
 use crate::{Sandbox, SandboxError, SandboxExecRequest, SandboxType};
 
 /// Linux 子进程沙箱后端：seccomp 网络阻断（W2.3a）。
@@ -91,14 +92,19 @@ impl Sandbox for LinuxSeccompSandbox {
             cmd.current_dir(d);
         }
 
-        // 只在网络受限时安装 seccomp。allow_network=true 完全跳过，避免
-        // 不必要的 syscall 拦截开销。
-        if !allow_network {
-            // SAFETY: pre_exec 在子进程的 fork() 之后、exec() 之前运行。
-            // 我们只调用 async-signal-safe 的 syscall（prctl, seccomp 系列）
-            // 和返回 io::Error 的 helper。不会触发分配、锁或线程。
-            unsafe {
-                cmd.pre_exec(move || {
+        // W3.3-2: setrlimit 总是先应用（与 allow_network 无关）。
+        // seccomp 只在网络受限时安装。两者合并到同一个 pre_exec 闭包，
+        // 子进程 fork() 后顺序执行：rlimit → no_new_privs → seccomp → exec。
+        let limits = req.policy.resource_limits.clone();
+        let install_seccomp = !allow_network;
+
+        // SAFETY: pre_exec 在子进程的 fork() 之后、exec() 之前运行。
+        // 我们只调用 async-signal-safe 的 syscall（setrlimit, prctl,
+        // seccomp 系列）和返回 io::Error 的 helper。不会触发分配、锁或线程。
+        unsafe {
+            cmd.pre_exec(move || {
+                rlimit::apply_in_pre_exec(&limits)?;
+                if install_seccomp {
                     set_no_new_privs()
                         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
                     let mode = if proxy_routed {
@@ -108,9 +114,9 @@ impl Sandbox for LinuxSeccompSandbox {
                     };
                     install_network_seccomp_filter(mode)
                         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-                    Ok(())
-                });
-            }
+                }
+                Ok(())
+            });
         }
 
         Ok(cmd.output()?)
