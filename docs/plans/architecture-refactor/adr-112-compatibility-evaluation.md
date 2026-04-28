@@ -286,7 +286,7 @@ sum_weighted = 1.5 × (#2 #3 #4 #8 #9) + 1.0 × (#1 #5 #6 #7 #11 #13) + 0.5 × (
 |---|------|------|---------|------------|------|---------|---------|
 | 1-10 | （沿用 §2.5.4 原 10 条，不重复） | — | — | — | — | — | — |
 | 11 | Prompt | **A 架构** | claw-code 单 builder | ironclaw 3 builder | 🔴 | Phase 0 | P0-1 收敛 |
-| 12 | Tool System | **A 架构** | codex build_specs 统一 | 5 register_* | 🔴 | Phase 0 | P0-2 bootstrap_tools() |
+| 12 | Tool System | **A 架构** | codex 统一 build_specs | ironclaw 19 register_* 方法（其中 12 个 bootstrap 类跨 4 文件，3 个动态注册类保留独立 API） | 🔴 | Phase 0 | P0-2 bootstrap_tools()（详见 [p02-bootstrap-tools-design.md](./p02-bootstrap-tools-design.md)） |
 | 13 | Hook | **A 架构** | codex 单 engine | 5 套并存 | 🔴 | Phase 0 | P0-3 HookEngine |
 | 14 | Compaction 阈值 | **C 行为** | codex 90% | x-claw 80% | 🟡 | Phase 0 | P0-6 改 90% + override |
 | 15 | MCP | **B 能力缺失** | claw-code 6 transport | 0 transport | 🔴 | Phase 0 | P0-7 port |
