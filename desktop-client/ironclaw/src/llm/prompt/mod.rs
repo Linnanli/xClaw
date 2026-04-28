@@ -7,9 +7,9 @@
 //! | Static  | Identity + rules + tool specs + safety policy     | < 1×/week     | Long (1h)   |
 //! | Dynamic | Environment + memory + skills + MCP + admin policy| Every call    | None        |
 //!
-//! A boundary marker (`__PROMPT_CACHE_BOUNDARY__`) separates the two layers
-//! so Anthropic's automatic caching places the cache breakpoint correctly.
-//! Non-Anthropic models receive the combined prompt with no marker.
+//! A boundary marker (see [`x_claw_agent::PROMPT_CACHE_BOUNDARY`]) separates
+//! the two layers so Anthropic's automatic caching places the cache breakpoint
+//! correctly. Non-Anthropic models receive the combined prompt with no marker.
 
 mod dynamic_layer;
 mod static_layer;
@@ -21,13 +21,16 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use x_claw_agent::PROMPT_CACHE_BOUNDARY;
+
 use crate::llm::ToolDefinition;
 
-/// Marker that separates the cached (static) portion from the uncached
-/// (dynamic) portion.  Anthropic's automatic caching uses the prefix of the
-/// system prompt for cache key computation — keeping the static portion
-/// stable dramatically improves hit rate.
-const CACHE_BOUNDARY: &str = "\n\n<!-- __PROMPT_CACHE_BOUNDARY__ -->\n\n";
+/// HTML-comment-wrapped boundary marker injected between the static and dynamic
+/// layers. The wrapping is inert for the model but anchors Anthropic's cache
+/// breakpoint at a deterministic byte offset.
+fn cache_boundary_section() -> String {
+    format!("\n\n<!-- {PROMPT_CACHE_BOUNDARY} -->\n\n")
+}
 
 /// A pre-built layered prompt ready for use.
 #[derive(Debug, Clone)]
@@ -93,7 +96,12 @@ impl LayeredPromptBuilder {
         let dynamic_text = dynamic_layer::build(dynamic);
 
         let text = if self.supports_cache_boundary {
-            format!("{}{}{}", self.static_layer, CACHE_BOUNDARY, dynamic_text)
+            format!(
+                "{}{}{}",
+                self.static_layer,
+                cache_boundary_section(),
+                dynamic_text
+            )
         } else {
             format!("{}\n\n{}", self.static_layer, dynamic_text)
         };
@@ -216,11 +224,12 @@ mod tests {
 
     #[test]
     fn test_build_includes_cache_boundary_when_enabled() {
+        // 字面量沿用 claw-code 上游基线（PROMPT_CACHE_BOUNDARY = __SYSTEM_PROMPT_DYNAMIC_BOUNDARY__）
         let tools = sample_tools();
         let config = sample_config();
         let builder = LayeredPromptBuilder::new(&tools, &config).with_cache_boundary(true);
         let prompt = builder.build(&DynamicLayerInput::default());
-        assert!(prompt.text.contains("__PROMPT_CACHE_BOUNDARY__"));
+        assert!(prompt.text.contains(PROMPT_CACHE_BOUNDARY));
     }
 
     #[test]
@@ -229,7 +238,7 @@ mod tests {
         let config = sample_config();
         let builder = LayeredPromptBuilder::new(&tools, &config).with_cache_boundary(false);
         let prompt = builder.build(&DynamicLayerInput::default());
-        assert!(!prompt.text.contains("__PROMPT_CACHE_BOUNDARY__"));
+        assert!(!prompt.text.contains(PROMPT_CACHE_BOUNDARY));
     }
 
     #[test]

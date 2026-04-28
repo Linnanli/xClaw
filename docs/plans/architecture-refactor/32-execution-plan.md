@@ -229,6 +229,9 @@ W1 失败：恢复 desktop-client/ironclaw 子模块（git revert）。
 
 ## W3 · Hooks 引擎 + Apply Patch + 项目文档（含 E 类多层加载）（3 周）
 
+> **前置门禁**：W3 启动前必须先完成 **W3-A Phase 0**（10 行红线 + 14×3 契合度评估）。  
+> 评估方案见 [ADR-112](adr-112-compatibility-evaluation.md)；**评估嵌入节奏**（B1 同步补测 / B2 中段接 CI / B3 末尾收口）见 [ADR-112 §5.4](adr-112-compatibility-evaluation.md#54-评估嵌入节奏b1--b2--b3)。
+
 ### 任务
 1. **dasclaw_hooks**：
    - 从 codex-cli-main/codex-rs/hooks port `schema.rs` / `registry.rs` / `engine.rs`
