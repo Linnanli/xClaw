@@ -20,6 +20,7 @@ pub mod intent;
 pub mod llm;
 pub mod messages;
 pub mod permissions;
+pub mod prompt;
 pub mod reasoning_ctx;
 pub mod response_types;
 pub mod session;
@@ -47,6 +48,7 @@ pub use messages::{
     strip_unsupported_completion_params, strip_unsupported_tool_params,
 };
 pub use permissions::PermissionMode;
+pub use prompt::PROMPT_CACHE_BOUNDARY;
 pub use session_hooks::{NoopSessionHooks, SessionHooks};
 pub use session_manager::SessionManager;
 pub use traits::{HostError, LlmCompleter, WorkspaceWriter};
