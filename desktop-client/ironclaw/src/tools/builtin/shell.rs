@@ -556,6 +556,11 @@ pub struct ShellTool {
     sandbox: Option<Arc<OsExecutor>>,
     /// Sandbox policy to use when sandbox is available.
     sandbox_policy: SandboxPolicy,
+    /// W3.2b-5: extra env vars merged into every spawned command (sandboxed
+    /// or direct). Typically populated with `HTTPS_PROXY`/`HTTP_PROXY`/
+    /// `NO_PROXY` from [`crate::sandbox::net_proxy::proxy_env_vars`] so tool
+    /// processes route HTTP traffic through the audited egress proxy.
+    extra_env: HashMap<String, String>,
 }
 
 impl std::fmt::Debug for ShellTool {
@@ -579,7 +584,18 @@ impl ShellTool {
             allow_dangerous: false,
             sandbox: None,
             sandbox_policy: SandboxPolicy::ReadOnly,
+            extra_env: HashMap::new(),
         }
+    }
+
+    /// W3.2b-5: set the extra env vars merged into every spawned command.
+    ///
+    /// Use [`crate::sandbox::net_proxy::proxy_env_vars`] to obtain the
+    /// `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` triplet pointing at a running
+    /// [`crate::sandbox::net_proxy::NetworkProxyHandle`].
+    pub fn with_extra_env(mut self, env: HashMap<String, String>) -> Self {
+        self.extra_env = env;
+        self
     }
 
     /// Set the working directory.
@@ -637,14 +653,14 @@ impl ShellTool {
     ) -> Result<(String, i64), ToolError> {
         // Outer timeout still wraps the executor (defense in depth: OsExecutor
         // also enforces its own timeout, but the caller's value can be tighter).
+        // W3.2b-5: forward `extra_env` (typically proxy env vars) into the
+        // sandboxed child process so HTTP egress is routed through the audited
+        // proxy. The OS sandbox itself enforces filesystem/network policy; the
+        // proxy enforces domain allowlist + credential injection on top.
+        let env = self.extra_env.clone();
         let result = tokio::time::timeout(timeout, async {
             sandbox
-                .execute(
-                    cmd,
-                    workdir,
-                    self.sandbox_policy,
-                    std::collections::HashMap::new(),
-                )
+                .execute(cmd, workdir, self.sandbox_policy, env)
                 .await
         })
         .await;
@@ -818,9 +834,20 @@ impl ShellTool {
                 .await;
         }
 
+        // W3.2b-5: when running unsandboxed, merge configured proxy env vars
+        // (`self.extra_env`) under the caller-supplied `extra_env`. Caller
+        // wins on conflict so per-call overrides remain possible.
+        let merged_env = if self.extra_env.is_empty() {
+            extra_env.clone()
+        } else {
+            let mut merged = self.extra_env.clone();
+            merged.extend(extra_env.iter().map(|(k, v)| (k.clone(), v.clone())));
+            merged
+        };
+
         // Only execute directly when no sandbox was configured at all.
         let (output, code) = self
-            .execute_direct(cmd, &cwd, timeout_duration, extra_env)
+            .execute_direct(cmd, &cwd, timeout_duration, &merged_env)
             .await?;
         Ok((output, code as i64))
     }
@@ -1075,6 +1102,50 @@ mod tests {
 
         assert_eq!(tool.sandbox_policy, SandboxPolicy::WorkspaceWrite);
         assert_eq!(tool.timeout, Duration::from_secs(60));
+    }
+
+    /// W3.2b-5: `with_extra_env` populates the env map that gets forwarded
+    /// to both sandboxed and direct execution paths.
+    #[test]
+    fn test_with_extra_env_populates_field() {
+        let mut env = HashMap::new();
+        env.insert(
+            "HTTPS_PROXY".to_string(),
+            "http://127.0.0.1:9090".to_string(),
+        );
+        env.insert("NO_PROXY".to_string(), "localhost".to_string());
+        let tool = ShellTool::new().with_extra_env(env.clone());
+        assert_eq!(tool.extra_env, env);
+    }
+
+    /// W3.2b-5: when the unsandboxed path runs, `self.extra_env` is merged
+    /// into the spawned process environment. Caller-supplied env wins on
+    /// conflict so per-call overrides remain possible.
+    #[tokio::test]
+    async fn test_extra_env_injected_into_direct_execution() {
+        let mut configured = HashMap::new();
+        configured.insert("TEST_PROXY_VAR".to_string(), "from-config".to_string());
+        configured.insert("TEST_OVERRIDE_VAR".to_string(), "from-config".to_string());
+        let tool = ShellTool::new().with_extra_env(configured);
+
+        // Caller overrides one var; the other should come from configured.
+        let mut per_call = HashMap::new();
+        per_call.insert("TEST_OVERRIDE_VAR".to_string(), "from-call".to_string());
+
+        let (out, code) = tool
+            .execute_command(
+                "echo \"$TEST_PROXY_VAR|$TEST_OVERRIDE_VAR\"",
+                None,
+                Some(5),
+                &per_call,
+            )
+            .await
+            .expect("command runs");
+        assert_eq!(code, 0, "command exited non-zero: {out}");
+        assert!(
+            out.contains("from-config|from-call"),
+            "expected merged env, got: {out}"
+        );
     }
 
     // ── Command token matching ─────────────────────────────────────────
