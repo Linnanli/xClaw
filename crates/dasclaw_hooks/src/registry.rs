@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use crate::hooks::hook::{Hook, HookContext, HookError, HookEvent, HookFailureMode, HookOutcome};
+use crate::hook::{Hook, HookContext, HookError, HookEvent, HookFailureMode, HookOutcome};
 
 /// A registered hook with its priority.
 struct HookEntry {
@@ -185,7 +185,7 @@ fn extract_content(event: &HookEvent) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hooks::hook::{HookFailureMode, HookPoint};
+    use crate::hook::{HookFailureMode, HookPoint};
     use async_trait::async_trait;
     use std::time::Duration;
 

@@ -1,8 +1,8 @@
 [package]
 name = "dasclaw_hooks"
-version = "0.0.0-w1"
-edition = "2021"
-description = "Schema + Registry + Engine three-layer hook system (codex-style)."
+version = "0.1.0"
+edition = "2024"
+description = "Unified hook engine — single orchestration entry for the agent runtime (P0-3, ADR-113)."
 license = "Apache-2.0 OR MIT"
 publish = false
 
@@ -10,4 +10,16 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
+async-trait = "0.1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 thiserror = "1"
+tokio = { version = "1", features = ["sync", "macros", "time", "rt"] }
+tracing = "0.1"
+
+# Reexport `x_claw_agent` trait seams so `dasclaw_hooks` becomes the single
+# front-door for both event-style hooks and trait-seam hooks. See ADR-113.
+x_claw_agent = { path = "../x_claw_agent", version = "0.1.0" }
