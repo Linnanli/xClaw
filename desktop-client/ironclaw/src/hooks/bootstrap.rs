@@ -5,12 +5,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::channels::wasm::discover_channels;
-use crate::hooks::bundled::{
-    HookBundleConfig, HookRegistrationSummary, register_bundle, register_bundled_hooks,
-};
-use crate::hooks::registry::HookRegistry;
 use crate::tools::wasm::{discover_dev_tools, discover_tools};
 use crate::workspace::Workspace;
+use dasclaw_hooks::{
+    HookBundleConfig, HookRegistrationSummary, HookRegistry, register_bundle,
+    register_bundled_hooks,
+};
 
 /// Summary of hook bootstrap work done at startup.
 #[derive(Debug, Default, Clone, Copy)]

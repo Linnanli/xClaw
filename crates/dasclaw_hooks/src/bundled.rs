@@ -11,7 +11,7 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 
-use crate::hooks::{
+use crate::{
     Hook, HookContext, HookError, HookEvent, HookFailureMode, HookOutcome, HookPoint, HookRegistry,
 };
 
