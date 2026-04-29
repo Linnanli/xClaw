@@ -38,6 +38,16 @@
       "args": ["mcp-server-fetch"],
       "type": "stdio"
     },
+    "code-review-graph": {
+      "command": "/Users/nallylin/.local/bin/code-review-graph",
+      "args": ["serve", "--repo", "/Users/nallylin/Documents/code/x-claw/desktop-client/ironclaw"],
+      "type": "stdio"
+    },
+    "repomix": {
+      "command": "npx",
+      "args": ["-y", "repomix", "--mcp"],
+      "type": "stdio"
+    },
     "shadcn": {
       "command": "npx",
       "args": ["shadcn@latest", "mcp"],

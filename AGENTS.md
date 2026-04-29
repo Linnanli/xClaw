@@ -469,3 +469,51 @@ cargo test -p desktop-client --lib engine_startup_tests
 - `desktop-client/tests/tauri_command_contract_tests.rs` — Tauri 命令契约测试
 - `admin-backend/ui/cypress/` — Cypress E2E 测试
 - `.kiro/steering/rust-coding-standards.md` — Rust 编码标准、错误处理模式、测试代码示例、质量门禁脚本
+
+## 代码图谱与打包工具（2026-04-29 启用）
+
+### Repomix 核心模块打包
+
+预先生成的 LLM 友好打包（位于 `docs/repomix-out/`，已 gitignore）：
+
+| 文件 | 模块 | 文件数 | tokens |
+|---|---|---|---|
+| `codex-rs-core.md` | codex-cli-main 内核 (core/tools/protocol/mcp-server/exec/sandboxing/...) | 602 | 947K |
+| `claw-code-core.md` | claw-code (rust/+src/) | 70 | 274K |
+| `ironclaw-main-core.md` | ironclaw-main (src/+crates/) | 522 | 1.78M |
+| `desktop-ironclaw-core.md` | desktop-client/ironclaw (src/+crates/) | 385 | 1.11M |
+
+重新生成命令模板（注意根 `.gitignore` 含 `/ironclaw-main/`，需 `--no-gitignore`）：
+```bash
+repomix --compress --style markdown --no-gitignore \
+  --include "src/**/*.rs,crates/**/*.rs" --ignore "**/target/**" \
+  -o /Users/nallylin/Documents/code/x-claw/docs/repomix-out/<name>.md
+```
+
+MCP 接入：`.vscode/mcp.json` 已添加 `repomix` server (`npx -y repomix --mcp`)。
+
+### code-review-graph 增量图谱
+
+CLI: `/Users/nallylin/.local/bin/code-review-graph`（多 repo registry 已注册 4 个）：
+
+| alias | path | nodes | edges | files |
+|---|---|---|---|---|
+| `ironclaw` | `desktop-client/ironclaw` | 20519 | 196690 | 1116 |
+| `codex-cli` | `codex-cli-main` | 34382 | 336693 | 2273 |
+| `claw-code` | `claw-code` | 4522 | 37559 | 156 |
+| `ironclaw-main` | `ironclaw-main` | 23674 | 220750 | 846 |
+
+常用命令：
+- `code-review-graph repos` — 列出已注册 repo
+- `code-review-graph build --repo <path>` — 全量重建
+- `code-review-graph update --repo <path>` — 增量更新
+- `code-review-graph watch --repo <path>` — 自动增量（**仅 desktop-client/ironclaw 启用**）
+- `code-review-graph detect-changes --base HEAD~N [--brief]` — impact radius 报告
+- `code-review-graph status` — 图谱统计
+
+MCP 接入：`.vscode/mcp.json` 中 `code-review-graph` server 已指向 `desktop-client/ironclaw`，提供 `mcp_code-review-g_*` 工具集（impact_radius / affected_flows / review_context / semantic_search_nodes / community / minimal_context 等）。
+
+注意事项：
+- `register` 要求路径下有 `.git` 或 `.code-review-graph`；首次对子目录用 `build` 自动创建后再 register
+- `watch` 是后台守护进程，改文件即触发增量；不要并发对同一 repo 跑 build/update（共享 SQLite）
+- `detect-changes` 风险评分: ≥0.7 高风险，需重点 review；untested 列表标记缺测试
