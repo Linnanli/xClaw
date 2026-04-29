@@ -27,12 +27,12 @@ use crate::context::ContextManager;
 use crate::db::Database;
 use crate::error::{ChannelError, Error};
 use crate::extensions::ExtensionManager;
-use crate::hooks::HookRegistry;
 use crate::llm::LlmProvider;
 use crate::safety::SafetyLayer;
 use crate::skills::SkillRegistry;
 use crate::tools::ToolRegistry;
 use crate::workspace::Workspace;
+use dasclaw_hooks::HookRegistry;
 
 /// spawn task 的返回值，指示主循环是否应该退出。
 enum MessageAction {
@@ -1046,7 +1046,7 @@ impl Agent {
         match result {
             Ok(Some(response)) if !response.is_empty() => {
                 // Hook: BeforeOutbound
-                let event = crate::hooks::HookEvent::Outbound {
+                let event = dasclaw_hooks::HookEvent::Outbound {
                     user_id: message.user_id.clone(),
                     channel: message.channel.clone(),
                     content: response.clone(),
@@ -1057,7 +1057,7 @@ impl Agent {
                         tracing::warn!("BeforeOutbound hook blocked response: {}", err);
                         return MessageAction::Continue;
                     }
-                    Ok(crate::hooks::HookOutcome::Continue {
+                    Ok(dasclaw_hooks::HookOutcome::Continue {
                         modified: Some(new_content),
                     }) => new_content,
                     _ => response,
@@ -1214,22 +1214,31 @@ impl Agent {
             std::any::type_name_of_val(&submission)
         );
 
-        // Hook: BeforeInbound — allow hooks to modify or reject user input
+        // Hook: BeforeInbound — declarative bundle 横切层（audit / regex transform /
+        // outbound webhook 等用户可配置规则）。
+        //
+        // 契约（ADR-113 §2.3 + PR #46 `no_safety_rule_in_event_hooks()` 启动期校验）：
+        // - 此处 dispatch 仅承载 declarative bundle 注册的 `Hook` trait 实现；
+        // - SafetyLayer 走的是另一条路径（`HookBundle.safety` → `IronclawSafetyHook`
+        //   → agent loop 直接调用 `before_prompt`），**不**通过 HookRegistry；
+        // - 禁止把 SafetyLayer 适配为 `Hook` 注册到此处，否则 prompt 会被双扫描。
+        //   `dasclaw_hooks::contract::no_safety_rule_in_event_hooks()` 在启动期拒绝
+        //   含 secret/redact/safety 关键字的 declarative rule。
         if let Submission::UserInput { ref content } = submission {
-            let event = crate::hooks::HookEvent::Inbound {
+            let event = dasclaw_hooks::HookEvent::Inbound {
                 user_id: message.user_id.clone(),
                 channel: message.channel.clone(),
                 content: content.clone(),
                 thread_id: message.thread_id.clone(),
             };
             match self.hooks().run(&event).await {
-                Err(crate::hooks::HookError::Rejected { reason }) => {
+                Err(dasclaw_hooks::HookError::Rejected { reason }) => {
                     return Ok(Some(format!("[Message rejected: {}]", reason)));
                 }
                 Err(err) => {
                     return Ok(Some(format!("[Message blocked by hook policy: {}]", err)));
                 }
-                Ok(crate::hooks::HookOutcome::Continue {
+                Ok(dasclaw_hooks::HookOutcome::Continue {
                     modified: Some(new_content),
                 }) => {
                     submission = Submission::UserInput {

@@ -721,14 +721,14 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
 
             // Hook: BeforeToolCall
             let hook_params = redact_params(&tc.arguments, sensitive);
-            let event = crate::hooks::HookEvent::ToolCall {
+            let event = dasclaw_hooks::HookEvent::ToolCall {
                 tool_name: tc.name.clone(),
                 parameters: hook_params,
                 user_id: self.message.user_id.clone(),
                 context: "chat".to_string(),
             };
             match self.agent.hooks().run(&event).await {
-                Err(crate::hooks::HookError::Rejected { reason }) => {
+                Err(dasclaw_hooks::HookError::Rejected { reason }) => {
                     preflight.push((
                         tc,
                         PreflightOutcome::Rejected(format!(
@@ -748,7 +748,7 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
                     ));
                     continue;
                 }
-                Ok(crate::hooks::HookOutcome::Continue {
+                Ok(dasclaw_hooks::HookOutcome::Continue {
                     modified: Some(new_params),
                 }) => match serde_json::from_str::<serde_json::Value>(&new_params) {
                     Ok(mut parsed) => {
@@ -1527,13 +1527,13 @@ mod tests {
     use crate::config::{AgentConfig, SafetyConfig, SkillsConfig};
     use crate::context::ContextManager;
     use crate::error::Error;
-    use crate::hooks::HookRegistry;
     use crate::llm::{
         CompletionRequest, CompletionResponse, FinishReason, LlmProvider, ToolCall,
         ToolCompletionRequest, ToolCompletionResponse, ToolDefinition,
     };
     use crate::safety::SafetyLayer;
     use crate::tools::ToolRegistry;
+    use dasclaw_hooks::HookRegistry;
 
     use super::{
         check_auth_required, disabled_names_from_metadata, filter_tools_by_disabled_extensions,

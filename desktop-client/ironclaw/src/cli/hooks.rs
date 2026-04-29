@@ -12,8 +12,8 @@ use std::path::Path;
 
 use clap::Subcommand;
 
-use crate::hooks::bundled::{HookBundleConfig, HookRuleConfig, OutboundWebhookConfig};
-use crate::hooks::hook::HookPoint;
+use dasclaw_hooks::bundled::{HookBundleConfig, HookRuleConfig, OutboundWebhookConfig};
+use dasclaw_hooks::hook::HookPoint;
 
 const BUNDLED_AUDIT_PRIORITY: u32 = 25;
 const DEFAULT_RULE_PRIORITY: u32 = 100;

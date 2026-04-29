@@ -510,19 +510,19 @@ impl Agent {
 
                 // Hook: TransformResponse — allow hooks to modify or reject the final response
                 let response = {
-                    let event = crate::hooks::HookEvent::ResponseTransform {
+                    let event = dasclaw_hooks::HookEvent::ResponseTransform {
                         user_id: message.user_id.clone(),
                         thread_id: thread_id.to_string(),
                         response: response.clone(),
                     };
                     match self.hooks().run(&event).await {
-                        Err(crate::hooks::HookError::Rejected { reason }) => {
+                        Err(dasclaw_hooks::HookError::Rejected { reason }) => {
                             format!("[Response filtered: {}]", reason)
                         }
                         Err(err) => {
                             format!("[Response blocked by hook policy: {}]", err)
                         }
-                        Ok(crate::hooks::HookOutcome::Continue {
+                        Ok(dasclaw_hooks::HookOutcome::Continue {
                             modified: Some(new_response),
                         }) => new_response,
                         _ => response, // fail-open: use original

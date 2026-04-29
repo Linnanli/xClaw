@@ -13,7 +13,6 @@ use crate::config::AgentConfig;
 use crate::context::{ContextManager, JobContext, JobState};
 use crate::error::{Error, JobError};
 use crate::extensions::ExtensionManager;
-use crate::hooks::HookRegistry;
 use crate::llm::LlmProvider;
 use crate::safety::SafetyLayer;
 use crate::tenant::AdminScope;
@@ -22,6 +21,7 @@ use crate::tools::{
     prepare_tool_params,
 };
 use crate::worker::job::{Worker, WorkerDeps};
+use dasclaw_hooks::HookRegistry;
 
 /// Message to send to a worker.
 #[derive(Debug)]
