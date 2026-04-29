@@ -84,14 +84,13 @@ impl Default for BootstrapMode {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum BootstrapError {
-    /// `bootstrap_tools` was already called on this registry. The registry
-    /// keeps an idempotency latch so a misconfigured caller can't quietly
-    /// double-register tool groups (which would race with
-    /// `PROTECTED_TOOL_NAMES` shadow rejection on the second pass).
-    #[error("tools already bootstrapped")]
-    AlreadyBootstrapped,
-
-    /// Catch-all variant for downstream registration failures.
+    /// Catch-all variant for downstream registration failures. Kept as the
+    /// sole variant for now: `bootstrap_tools` is intentionally infallible
+    /// for the current set of registered tool groups (each `register_*_internal`
+    /// dispatches to `register_sync`, which is `HashMap::insert`-style and
+    /// cannot fail). The variant exists so future tool groups that need real
+    /// fallible registration (e.g. WASM tool integrity checks at bootstrap
+    /// time) have a place to slot in without changing the public signature.
     #[error("bootstrap error: {0}")]
     Other(String),
 }

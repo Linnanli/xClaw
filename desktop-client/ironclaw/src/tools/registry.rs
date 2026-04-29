@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::RwLock;
 
@@ -106,11 +105,6 @@ pub struct ToolRegistry {
     rate_limiter: RateLimiter,
     /// Reference to the message tool for setting context per-turn.
     message_tool: RwLock<Option<Arc<crate::tools::builtin::MessageTool>>>,
-    /// Idempotency latch for `bootstrap_tools`. Set on first successful call;
-    /// subsequent calls return [`BootstrapError::AlreadyBootstrapped`] so the
-    /// dispatch path stays single-pass and avoids racing with
-    /// [`PROTECTED_TOOL_NAMES`] shadow rejection on a re-register.
-    bootstrapped: AtomicBool,
 }
 
 impl ToolRegistry {
@@ -132,7 +126,6 @@ impl ToolRegistry {
             secrets_store: None,
             rate_limiter: RateLimiter::new(),
             message_tool: RwLock::new(None),
-            bootstrapped: AtomicBool::new(false),
         }
     }
 
@@ -352,48 +345,33 @@ impl ToolRegistry {
         self.register_dev_tools_internal();
     }
 
-    /// Single-entry bootstrap — replaces the legacy 12-call `register_*_tools`
-    /// pattern scattered across `app.rs`, `main.rs`, `agent_loop.rs`, and
+    /// Single-API tool bootstrap — applies a [`BootstrapContext`] to the
+    /// registry. Replaces the legacy 12-call `register_*_tools` pattern
+    /// scattered across `app.rs`, `main.rs`, `agent_loop.rs`, and
     /// `worker/container.rs`. See ADR-112 §5 P0-2 / `p02-bootstrap-tools-design.md`.
     ///
     /// Walks [`BootstrapContext`] fields in dependency order and registers
     /// each tool group whose prerequisites are present. Missing prerequisites
-    /// silently skip their group — this lets early-startup callers register
-    /// the always-available subset (e.g. `mode = Test`) without wiring every
-    /// production-only resource.
+    /// silently skip their group.
     ///
-    /// Idempotent latch: a successful first call sets a flag; subsequent calls
-    /// return [`BootstrapError::AlreadyBootstrapped`] to keep the dispatch
-    /// path single-pass.
+    /// # Multi-stage init is supported by design
     ///
-    /// # Errors
+    /// Some tool groups depend on resources that only become available at
+    /// later init stages (e.g. `RoutineEngine` needs the agent loop running;
+    /// `ChannelManager` needs network setup; `JobManager` needs the
+    /// scheduler). `bootstrap_tools` is therefore safe to call multiple
+    /// times with different `ctx` shapes — earlier groups already registered
+    /// are simply re-applied (the underlying [`Self::register_sync`] is
+    /// `HashMap::insert`-style, so identical inputs yield identical state).
     ///
-    /// - [`BootstrapError::AlreadyBootstrapped`] when called more than once on
-    ///   the same registry instance.
-    ///
-    /// # Scope note (PR #3)
-    ///
-    /// PR #3 wires `bootstrap_tools` end-to-end and validates with 5
-    /// `req_p02_pr3_*` tests, but does **not** yet migrate the 12 legacy call
-    /// sites or privatize the underlying `register_*_tools` methods — those
-    /// land together in PR #4 to keep this PR reviewable. The `#[doc(hidden)]`
-    /// attribute on the legacy methods communicates their pending removal
-    /// without breaking compilation of the existing callers.
+    /// `BootstrapMode::Test` short-circuits after registering builtins and
+    /// returns immediately, since test setups never need the production
+    /// dependency stages.
     pub async fn bootstrap_tools(
         self: &Arc<Self>,
         ctx: &crate::tools::bootstrap::BootstrapContext,
     ) -> Result<(), crate::tools::bootstrap::BootstrapError> {
-        use crate::tools::bootstrap::{BootstrapError, BootstrapMode};
-
-        // Idempotency latch (compare_exchange so concurrent callers race once
-        // and the loser observes AlreadyBootstrapped without double-registering).
-        if self
-            .bootstrapped
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            return Err(BootstrapError::AlreadyBootstrapped);
-        }
+        use crate::tools::bootstrap::BootstrapMode;
 
         // Mode-driven base set: builtin always, dev/container conditional.
         match ctx.mode {
@@ -1456,7 +1434,7 @@ mod tests {
     // shared invariant is that the legacy 12 register_*_tools paths do not
     // re-fire — bootstrap_tools is the single entry point under test.
 
-    use crate::tools::bootstrap::{BootstrapContext, BootstrapError, BootstrapMode};
+    use crate::tools::bootstrap::{BootstrapContext, BootstrapMode};
 
     #[tokio::test]
     async fn req_p02_pr3_a_orchestrator_with_local_tools_includes_dev() {
@@ -1551,19 +1529,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn req_p02_pr3_d_idempotent_returns_already_bootstrapped() {
-        // The idempotency latch protects against accidental double-init,
-        // which would otherwise race with PROTECTED_TOOL_NAMES shadow
-        // rejection on the second pass and silently drop registrations.
-        let registry = Arc::new(ToolRegistry::new());
-        let ctx = BootstrapContext::for_test();
+    async fn req_p02_pr3_d_incremental_calls_accumulate_groups() {
+        // Multi-stage init contract: production callers (app.rs / main.rs /
+        // agent_loop.rs / worker/container.rs) reach `bootstrap_tools` at
+        // different points as their dependencies materialize. Subsequent
+        // calls must accumulate groups rather than fail — the underlying
+        // `register_sync` is HashMap::insert-style, so identical inputs
+        // are naturally idempotent and new fields just add new tools.
+        use crate::secrets::SecretsStore;
+        use crate::testing::credentials::test_secrets_store;
 
-        registry.bootstrap_tools(&ctx).await.unwrap();
-        let err = registry
-            .bootstrap_tools(&ctx)
-            .await
-            .expect_err("second bootstrap_tools call must error");
-        assert!(matches!(err, BootstrapError::AlreadyBootstrapped));
+        let registry = Arc::new(ToolRegistry::new());
+
+        // Stage 1: orchestrator boot — builtins only, no production deps.
+        let ctx_stage_1 = BootstrapContext {
+            mode: BootstrapMode::Orchestrator {
+                allow_local_tools: false,
+            },
+            ..Default::default()
+        };
+        registry.bootstrap_tools(&ctx_stage_1).await.unwrap();
+        assert!(registry.has("echo").await);
+        assert!(!registry.has("secret_list").await);
+
+        // Stage 2: secrets store materialized later (e.g. after keychain unlock).
+        let store: Arc<dyn SecretsStore + Send + Sync> = Arc::new(test_secrets_store());
+        let ctx_stage_2 = BootstrapContext {
+            mode: BootstrapMode::Orchestrator {
+                allow_local_tools: false,
+            },
+            secrets_store: Some(store),
+            ..Default::default()
+        };
+        registry.bootstrap_tools(&ctx_stage_2).await.unwrap();
+        assert!(
+            registry.has("echo").await,
+            "stage-1 builtins must survive stage-2 application"
+        );
+        assert!(
+            registry.has("secret_list").await,
+            "stage-2 must add secrets group on top of stage-1"
+        );
     }
 
     #[tokio::test]
