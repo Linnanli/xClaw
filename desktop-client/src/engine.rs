@@ -25,7 +25,7 @@ use ironclaw::agent::{Agent, AgentDeps};
 use ironclaw::app::{AppBuilder, AppBuilderFlags};
 use ironclaw::channels::ChannelManager;
 use ironclaw::config::Config;
-use ironclaw::hooks::bootstrap_hooks;
+use ironclaw::hook_bootstrap::bootstrap_hooks;
 use ironclaw::llm::create_session_manager;
 
 use crate::managed_policy::{

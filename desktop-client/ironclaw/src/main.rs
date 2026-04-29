@@ -19,7 +19,7 @@ use ironclaw::{
         run_status_command, run_tool_command,
     },
     config::Config,
-    hooks::bootstrap_hooks,
+    hook_bootstrap::bootstrap_hooks,
     llm::create_session_manager,
     orchestrator::{ReaperConfig, SandboxReaper},
     pairing::PairingStore,

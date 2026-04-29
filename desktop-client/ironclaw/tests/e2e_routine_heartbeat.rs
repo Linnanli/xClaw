@@ -17,6 +17,7 @@ mod tests {
     use secrecy::SecretString;
     use uuid::Uuid;
 
+    use dasclaw_hooks::HookRegistry;
     use ironclaw::agent::routine::{
         NotifyConfig, Routine, RoutineAction, RoutineGuardrails, RoutineRun, RunStatus, Trigger,
     };
@@ -27,7 +28,6 @@ mod tests {
     use ironclaw::context::{ContextManager, JobContext};
     use ironclaw::db::{Database, libsql::LibSqlBackend};
     use ironclaw::extensions::ExtensionManager;
-    use ironclaw::hooks::HookRegistry;
     use ironclaw::llm::LlmProvider;
     use ironclaw::safety::SafetyLayer;
     use ironclaw::secrets::{InMemorySecretsStore, SecretsCrypto, SecretsStore};
