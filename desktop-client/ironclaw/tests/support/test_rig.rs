@@ -671,25 +671,18 @@ impl TestRigBuilder {
             }
         };
 
-        // 6. Register job tools, routine tools, and extra tools.
+        // 6. Bootstrap tool groups via the unified `bootstrap_tools()` entry
+        //    point (P0-2 PR #4). Build optional dependencies inline first, then
+        //    a single `BootstrapContext` carries every group at once. The test
+        //    rig forces `allow_local_tools = true` so filesystem/shell dev
+        //    tools are always present, regardless of upstream builder flags.
         {
-            // Ensure filesystem/shell dev tools are always available in the
-            // test rig, even if upstream builder flags/config disable local tools.
-            components.tools.register_dev_tools();
-
-            components.tools.register_job_tools(
-                Arc::clone(&components.context_manager),
-                Some(scheduler_slot.clone()),
-                None,
-                components.db.clone(),
-                None,
-                None,
-                None,
-                None,
-            );
-
-            // Routine tools: create a RoutineEngine with the LLM and workspace.
-            if let (Some(db_arc), Some(ws)) = (&components.db, &components.workspace) {
+            // Build the optional RoutineEngine once when both DB and workspace
+            // are present — needed by the routine tool group.
+            let routine_pair: Option<(
+                Arc<dyn ironclaw::db::Database>,
+                Arc<ironclaw::agent::routine_engine::RoutineEngine>,
+            )> = if let (Some(db_arc), Some(ws)) = (&components.db, &components.workspace) {
                 use ironclaw::agent::routine_engine::RoutineEngine;
                 use ironclaw::config::RoutineConfig;
 
@@ -707,22 +700,52 @@ impl TestRigBuilder {
                     components.safety.clone(),
                     ironclaw::agent::routine_engine::SandboxReadiness::DisabledByConfig,
                 ));
-                components
-                    .tools
-                    .register_routine_tools(Arc::clone(db_arc), engine);
-            }
+                Some((Arc::clone(db_arc), engine))
+            } else {
+                None
+            };
 
-            // Skills tools: ensure tests use temp skill dirs (sandbox-safe) even if
-            // AppBuilder did not wire them for this environment.
-            if enable_skills {
+            // Build the optional skill registry/catalog inline so tests use
+            // sandbox-safe temp dirs even when AppBuilder skipped wiring.
+            let skill_pair: Option<(
+                Arc<std::sync::RwLock<ironclaw::skills::SkillRegistry>>,
+                Arc<ironclaw::skills::catalog::SkillCatalog>,
+            )> = if enable_skills {
                 let registry = Arc::new(std::sync::RwLock::new(
                     ironclaw::skills::SkillRegistry::new(temp_dir.path().join("skills"))
                         .with_installed_dir(temp_dir.path().join("installed_skills")),
                 ));
                 let catalog = ironclaw::skills::catalog::shared_catalog();
-                components
-                    .tools
-                    .register_skill_tools(Arc::clone(&registry), Arc::clone(&catalog));
+                Some((registry, catalog))
+            } else {
+                None
+            };
+
+            let mut job_cfg = ironclaw::tools::bootstrap::JobToolsConfig::new(Arc::clone(
+                &components.context_manager,
+            ));
+            job_cfg.scheduler_slot = Some(scheduler_slot.clone());
+            job_cfg.store = components.db.clone();
+
+            let ctx = ironclaw::tools::bootstrap::BootstrapContext {
+                mode: ironclaw::tools::bootstrap::BootstrapMode::Orchestrator {
+                    allow_local_tools: true,
+                },
+                job_config: Some(job_cfg),
+                routine_store: routine_pair.as_ref().map(|(d, _)| Arc::clone(d)),
+                routine_engine: routine_pair.as_ref().map(|(_, e)| Arc::clone(e)),
+                skill_registry: skill_pair.as_ref().map(|(r, _)| Arc::clone(r)),
+                skill_catalog: skill_pair.as_ref().map(|(_, c)| Arc::clone(c)),
+                ..Default::default()
+            };
+            components
+                .tools
+                .bootstrap_tools(&ctx)
+                .await
+                .expect("test rig: bootstrap_tools (init phase)");
+
+            // Stash the skill pair on components for accessor parity.
+            if let Some((registry, catalog)) = skill_pair {
                 components.skill_registry = Some(registry);
                 components.skill_catalog = Some(catalog);
             }
@@ -837,9 +860,20 @@ impl TestRigBuilder {
         let channels = Arc::new(channel_manager);
 
         // 7b. Register message tool so routines can send messages to channels.
+        //     Re-bootstrap with `mode = Orchestrator { allow_local_tools: false }`:
+        //     base-set re-registration is idempotent (HashMap::insert), and
+        //     `channels` + `extension_manager` gate the message tool group.
         deps.tools
-            .register_message_tools(Arc::clone(&channels), deps.extension_manager.clone())
-            .await;
+            .bootstrap_tools(&ironclaw::tools::bootstrap::BootstrapContext {
+                mode: ironclaw::tools::bootstrap::BootstrapMode::Orchestrator {
+                    allow_local_tools: false,
+                },
+                channels: Some(Arc::clone(&channels)),
+                extension_manager: deps.extension_manager.clone(),
+                ..Default::default()
+            })
+            .await
+            .expect("test rig: bootstrap_tools (message phase)");
 
         // 8. Create Agent.
         let routine_config = if enable_routines {

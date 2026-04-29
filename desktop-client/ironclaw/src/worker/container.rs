@@ -74,7 +74,7 @@ impl WorkerRuntime {
     /// Create a new worker runtime.
     ///
     /// Reads `IRONCLAW_WORKER_TOKEN` from the environment for auth.
-    pub fn new(config: WorkerConfig) -> Result<Self, WorkerError> {
+    pub async fn new(config: WorkerConfig) -> Result<Self, WorkerError> {
         let client = Arc::new(WorkerHttpClient::from_env(
             config.orchestrator_url.clone(),
             config.job_id,
@@ -91,8 +91,17 @@ impl WorkerRuntime {
         }));
 
         let tools = Arc::new(ToolRegistry::new());
-        // Register only container-safe tools
-        tools.register_container_tools();
+        // Sandboxed worker: register the full container-domain tool set
+        // (filesystem, shell, dev tools) via the unified bootstrap API.
+        tools
+            .bootstrap_tools(&crate::tools::bootstrap::BootstrapContext {
+                mode: crate::tools::bootstrap::BootstrapMode::Container,
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| WorkerError::ExecutionFailed {
+                reason: format!("bootstrap_tools failed: {e}"),
+            })?;
 
         Ok(Self {
             config,

@@ -517,11 +517,16 @@ impl TestHarnessBuilder {
 
         let llm: Arc<dyn LlmProvider> = self.llm.unwrap_or_else(|| Arc::new(StubLlm::default()));
 
-        let tools = self.tools.unwrap_or_else(|| {
-            let t = Arc::new(ToolRegistry::new());
-            t.register_builtin_tools();
-            t
-        });
+        let tools = match self.tools {
+            Some(t) => t,
+            None => {
+                let t = Arc::new(ToolRegistry::new());
+                t.bootstrap_tools(&crate::tools::bootstrap::BootstrapContext::for_test())
+                    .await
+                    .expect("for_test() bootstrap is infallible");
+                t
+            }
+        };
 
         let safety = Arc::new(SafetyLayer::new(&SafetyConfig {
             max_output_length: 100_000,

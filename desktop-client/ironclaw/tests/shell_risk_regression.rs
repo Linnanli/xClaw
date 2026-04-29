@@ -22,6 +22,7 @@
 //!    variants remain `High`.
 //! 6. **`risk_level_for` trait method** — delegates to classify_command_risk.
 
+use ironclaw::tools::bootstrap::{BootstrapContext, BootstrapMode};
 use ironclaw::tools::{ApprovalRequirement, RiskLevel, Tool, ToolRegistry};
 use std::sync::Arc;
 
@@ -30,9 +31,16 @@ use std::sync::Arc;
 // ---------------------------------------------------------------------------
 
 async fn shell_tool() -> Arc<dyn Tool> {
-    let registry = ToolRegistry::new();
-    registry.register_builtin_tools();
-    registry.register_dev_tools();
+    let registry = Arc::new(ToolRegistry::new());
+    registry
+        .bootstrap_tools(&BootstrapContext {
+            mode: BootstrapMode::Orchestrator {
+                allow_local_tools: true,
+            },
+            ..Default::default()
+        })
+        .await
+        .expect("bootstrap_tools is infallible for this context");
     registry
         .all()
         .await

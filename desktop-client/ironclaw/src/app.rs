@@ -22,6 +22,7 @@ use crate::secrets::SecretsStore;
 use crate::skills::SkillRegistry;
 use crate::skills::catalog::SkillCatalog;
 use crate::tools::ToolRegistry;
+use crate::tools::bootstrap::{BootstrapContext, BootstrapMode, ImageApiConfig, VisionApiConfig};
 use crate::tools::mcp::{McpProcessManager, McpSessionManager};
 use crate::tools::wasm::SharedCredentialRegistry;
 use crate::tools::wasm::WasmToolRuntime;
@@ -315,12 +316,17 @@ impl AppBuilder {
         } else {
             Arc::new(ToolRegistry::new())
         };
-        tools.register_builtin_tools();
-        tools.register_tool_info();
-
-        if let Some(ref ss) = self.secrets_store {
-            tools.register_secrets_tools(Arc::clone(ss));
-        }
+        // Build a single bootstrap context that aggregates every tool group
+        // available at this init phase, then dispatch via `bootstrap_tools`.
+        // Multi-stage init: subsequent phases (`init_extensions`, `build_all`)
+        // call `bootstrap_tools` again with extra fields populated.
+        let mut ctx = BootstrapContext {
+            mode: BootstrapMode::Orchestrator {
+                allow_local_tools: self.config.agent.allow_local_tools,
+            },
+            secrets_store: self.secrets_store.clone(),
+            ..Default::default()
+        };
 
         // Create embeddings provider using the unified method
         let embeddings = self
@@ -328,7 +334,7 @@ impl AppBuilder {
             .embeddings
             .create_provider(&self.config.llm.nearai.base_url, self.session.clone());
 
-        // Register memory tools if database is available
+        // Build workspace (memory tools backing) if a database is available.
         let workspace_user_id = self.config.owner_id.as_str();
         let workspace = if let Some(ref db) = self.db {
             let emb_cache_config = EmbeddingCacheConfig {
@@ -368,12 +374,12 @@ impl AppBuilder {
                     self.config.search.clone(),
                     self.config.workspace.clone(),
                 ));
-                tools.register_memory_tools_with_resolver(pool);
+                ctx.db_pool = Some(pool);
                 tracing::info!(
                     "Memory tools configured with per-user workspace resolver (multi-tenant mode)"
                 );
             } else {
-                tools.register_memory_tools(Arc::clone(&ws));
+                ctx.workspace = Some(Arc::clone(&ws));
             }
 
             Some(ws)
@@ -381,7 +387,7 @@ impl AppBuilder {
             None
         };
 
-        // Register image/vision tools if we have a workspace and LLM API credentials
+        // Image / vision tools require a workspace and LLM API credentials.
         if workspace.is_some() {
             let (api_base, api_key_opt) = if let Some(ref provider) = self.config.llm.provider {
                 (
@@ -402,7 +408,6 @@ impl AppBuilder {
             };
 
             if let Some(api_key) = api_key_opt {
-                // Check for image generation models
                 let model_name = self
                     .config
                     .llm
@@ -414,15 +419,25 @@ impl AppBuilder {
                 let gen_model = crate::llm::image_models::suggest_image_model(&models)
                     .unwrap_or("flux-1.1-pro")
                     .to_string();
-                tools.register_image_tools(api_base.clone(), api_key.clone(), gen_model, None);
+                ctx.image_api = Some(ImageApiConfig {
+                    api_base: api_base.clone(),
+                    api_key: api_key.clone(),
+                    gen_model,
+                });
 
-                // Check for vision models
                 let vision_model = crate::llm::vision_models::suggest_vision_model(&models)
                     .unwrap_or(&model_name)
                     .to_string();
-                tools.register_vision_tools(api_base, api_key, vision_model, None);
+                ctx.vision_api = Some(VisionApiConfig {
+                    api_base,
+                    api_key,
+                    vision_model,
+                });
             }
         }
+
+        tools.bootstrap_tools(&ctx).await?;
+        tools.register_tool_info();
 
         // Register builder tool if enabled
         let builder = if self.config.builder.enabled
@@ -735,7 +750,18 @@ impl AppBuilder {
                 self.db.clone(),
                 catalog_entries.clone(),
             ));
-            tools.register_extension_tools(Arc::clone(&manager));
+            // Register the extension-management tool group via bootstrap_tools.
+            // Other groups already registered in init_tools are reapplied
+            // (idempotent — `register_sync` uses `HashMap::insert`).
+            tools
+                .bootstrap_tools(&BootstrapContext {
+                    mode: BootstrapMode::Orchestrator {
+                        allow_local_tools: self.config.agent.allow_local_tools,
+                    },
+                    extension_manager: Some(Arc::clone(&manager)),
+                    ..Default::default()
+                })
+                .await?;
             tracing::debug!("Extension manager initialized with in-chat discovery tools");
 
             if !startup_mcp_clients.is_empty() {
@@ -751,13 +777,10 @@ impl AppBuilder {
             Some(manager)
         };
 
-        // register_builder_tool() already calls register_dev_tools() internally,
-        // so only register them here when the builder didn't already do it.
-        let builder_registered_dev_tools = self.config.builder.enabled
-            && (self.config.agent.allow_local_tools || !self.config.sandbox.enabled);
-        if self.config.agent.allow_local_tools && !builder_registered_dev_tools {
-            tools.register_dev_tools();
-        }
+        // Dev tools are dispatched via `mode = Orchestrator { allow_local_tools }`
+        // inside `init_tools`. The legacy late-bound `register_dev_tools` call
+        // here is no longer needed — `register_sync` is idempotent regardless
+        // of whether `register_builder_tool` already ran.
 
         Ok((
             mcp_session_manager,
@@ -886,7 +909,16 @@ impl AppBuilder {
             }
             let registry = Arc::new(std::sync::RwLock::new(registry));
             let catalog = crate::skills::catalog::shared_catalog();
-            tools.register_skill_tools(Arc::clone(&registry), Arc::clone(&catalog));
+            tools
+                .bootstrap_tools(&BootstrapContext {
+                    mode: BootstrapMode::Orchestrator {
+                        allow_local_tools: self.config.agent.allow_local_tools,
+                    },
+                    skill_registry: Some(Arc::clone(&registry)),
+                    skill_catalog: Some(Arc::clone(&catalog)),
+                    ..Default::default()
+                })
+                .await?;
             (Some(registry), Some(catalog))
         } else {
             (None, None)

@@ -46,17 +46,24 @@ const DEV_TOOLS: &[&str] = &[
     "web_fetch",
 ];
 
-fn create_full_registry() -> Arc<ToolRegistry> {
+async fn create_full_registry() -> Arc<ToolRegistry> {
     let registry = Arc::new(ToolRegistry::new());
-    registry.register_builtin_tools();
-    registry.register_dev_tools();
+    registry
+        .bootstrap_tools(&ironclaw::tools::bootstrap::BootstrapContext {
+            mode: ironclaw::tools::bootstrap::BootstrapMode::Orchestrator {
+                allow_local_tools: true,
+            },
+            ..Default::default()
+        })
+        .await
+        .expect("bootstrap_tools is infallible for this context");
     registry
 }
 
 /// Every tool registered at startup must be retrievable by name.
 #[tokio::test]
 async fn test_all_registered_tools_reachable_by_name() {
-    let registry = create_full_registry();
+    let registry = create_full_registry().await;
     let all_names = registry.list().await;
     let all_set: BTreeSet<String> = all_names.into_iter().collect();
 
@@ -76,7 +83,7 @@ async fn test_all_registered_tools_reachable_by_name() {
 /// Every tool in the registry must appear in `tool_definitions()`.
 #[tokio::test]
 async fn test_all_tools_in_definitions() {
-    let registry = create_full_registry();
+    let registry = create_full_registry().await;
     let defs = registry.tool_definitions().await;
     let def_names: BTreeSet<String> = defs.iter().map(|d| d.name.clone()).collect();
 
@@ -97,7 +104,7 @@ async fn test_all_tools_in_definitions() {
 /// `get()` for every advertised tool name must return Some.
 #[tokio::test]
 async fn test_get_matches_list() {
-    let registry = create_full_registry();
+    let registry = create_full_registry().await;
     let all_names = registry.list().await;
 
     let mut unreachable = Vec::new();
@@ -116,7 +123,7 @@ async fn test_get_matches_list() {
 /// `parameters_schema()` for every tool must return valid JSON with a "type" field.
 #[tokio::test]
 async fn test_all_tools_have_valid_schema() {
-    let registry = create_full_registry();
+    let registry = create_full_registry().await;
     let all_names = registry.list().await;
 
     let mut bad_schemas = Vec::new();
@@ -137,7 +144,7 @@ async fn test_all_tools_have_valid_schema() {
 /// `name()` for every tool must match its registry key.
 #[tokio::test]
 async fn test_tool_name_matches_registry_key() {
-    let registry = create_full_registry();
+    let registry = create_full_registry().await;
     let all_names = registry.list().await;
 
     let mut mismatched = Vec::new();
@@ -157,7 +164,7 @@ async fn test_tool_name_matches_registry_key() {
 /// web_search and web_fetch specifically exist and have correct schemas.
 #[tokio::test]
 async fn test_web_tools_registered() {
-    let registry = create_full_registry();
+    let registry = create_full_registry().await;
 
     // web_search
     let ws = registry
@@ -186,7 +193,7 @@ async fn test_web_tools_registered() {
 /// No two tools share the same name.
 #[tokio::test]
 async fn test_no_duplicate_tool_names() {
-    let registry = create_full_registry();
+    let registry = create_full_registry().await;
     let defs = registry.tool_definitions().await;
     let mut seen = BTreeSet::new();
     let mut dupes = Vec::new();
