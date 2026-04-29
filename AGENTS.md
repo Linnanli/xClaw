@@ -45,21 +45,14 @@
 
 #### Session Handoff Index
 
-> 当前活跃的 handoff 文件清单。完成下一会话或废弃后，把对应行移到本表下方的"已归档"区。
+> 当前活跃的 handoff 文件清单。已归档/作废的条目直接从本表删除（不在本文件内保留归档区，避免索引膨胀；如需追溯走 git history）。
 >
 > 每条目格式：`日期 | 主题 | 完整 file:// URI | 下一会话开局 prompt 摘要`
 
 | 日期 | 主题 | 完整 URI | 开局 prompt |
 |---|---|---|---|
-| 2026-04-26 | W3-A 契合度评估方案（Step 1 待做） | `file:///Users/nallylin/Library/Application%20Support/Code/User/workspaceStorage/185633b60e9bb925751de80a50ffce63/GitHub.copilot-chat/memory-tool/memories/MTg0ZDhhNTctOWQ0Zi00N2I1LTlmODEtMTFjMTdmZTgyY2Jl/w3a-compatibility-evaluation-handoff.md` | 读该 URI 后做 Step 1：整理 `docs/plans/architecture-refactor/adr-112-input-checklist.md` |
-| 2026-04-28 | W3-A Step 3 ADR 主体撰写（Step 1 已闭环） | `file:///Users/nallylin/Library/Application%20Support/Code/User/workspaceStorage/185633b60e9bb925751de80a50ffce63/GitHub.copilot-chat/memory-tool/memories/YTkxYmVkNDItYzI3MS00MWIyLTgxMmYtZjg4OGMyZTc5NjEz/w3a-step3-adr-handoff.md` | 读该 URI 后做 Step 3：撰写 `docs/plans/architecture-refactor/adr-112-compatibility-evaluation.md`（按 9 章节骨架 + 14×3 评分卡 + Phase 0 10 行 + 16 条偏离声明 + 4 KPI + CI 三档） |
-| 2026-04-28 | Phase 0 P0-1 Prompt 装配三连收口（W3-A Step 1+3 双闭环） | `file:///Users/nallylin/Library/Application%20Support/Code/User/workspaceStorage/185633b60e9bb925751de80a50ffce63/GitHub.copilot-chat/memory-tool/memories/YTkxYmVkNDItYzI3MS00MWIyLTgxMmYtZjg4OGMyZTc5NjEz/phase0-p01-prompt-handoff.md` | 读该 URI 后做 P0-1：TDD 红测 → 合并 ironclaw 3 builder 为 LayeredPromptBuilder → 删 IRONCLAW_PROMPT_LAYERING env → 统一 PROMPT_CACHE_BOUNDARY 常量 → nextest+build 全绿 → 三 skill 自审 → 开 PR |
-| 2026-04-29 | P0-1 完成报告（PR #39 已开，CI 主要项 pass，闭环） | `file:///Users/nallylin/Library/Application%20Support/Code/User/workspaceStorage/185633b60e9bb925751de80a50ffce63/GitHub.copilot-chat/memory-tool/memories/YzU4NDZiZjctNzUxMy00NDBkLTliNWYtNTI4MTFiOTA3YmRk/p01-prompt-unification-completion.md` | P0-1 已闭环（PR #39）。下一会话可直接进入 P0-2 Tool bootstrap_tools()，读 ADR-112 §5 + input-checklist 即可，无需读本 handoff |
+| 2026-04-28 | W3-A Step 3 ADR 主体撰写 | `file:///Users/nallylin/Library/Application%20Support/Code/User/workspaceStorage/185633b60e9bb925751de80a50ffce63/GitHub.copilot-chat/memory-tool/memories/YTkxYmVkNDItYzI3MS00MWIyLTgxMmYtZjg4OGMyZTc5NjEz/w3a-step3-adr-handoff.md` | 读该 URI 后做 Step 3：撰写 `docs/plans/architecture-refactor/adr-112-compatibility-evaluation.md`（按 9 章节骨架 + 14×3 评分卡 + Phase 0 10 行 + 16 条偏离声明 + 4 KPI + CI 三档） |
 | 2026-04-30 | P0-2 PR #3 — bootstrap_tools() 实现 + register_*_tools 私有化（PR #36/39/40/41/42 已合并 to xClaw） | `file:///Users/nallylin/Library/Application%20Support/Code/User/workspaceStorage/185633b60e9bb925751de80a50ffce63/GitHub.copilot-chat/memory-tool/memories/YzU4NDZiZjctNzUxMy00NDBkLTliNWYtNTI4MTFiOTA3YmRk/p02-pr3-bootstrap-impl-handoff.md` | 读该 URI + p02-bootstrap-tools-design.md §3.2 → TDD 红测（5 个 req_p02_pr3_*）→ 替换 9 marker trait 为具体类型 → 实现 bootstrap_tools 按 mode + 字段分发 → 私有化 12 register → cargo nextest + build 全绿 → 三 skill 自审 → 开 PR base=xClaw |
-
-##### 已归档
-
-（暂无）
 
 #### 注意
 
@@ -79,7 +72,7 @@
 | `code-review-expert` | **PR 自审前**（push 之前）、PR 合并前、用户说"review/审查这次改动" | 漏掉 SOLID 违规、安全风险、依赖耦合等高阶问题 |
 
 **执行顺序（默认管线）**：
-1. 实现完成 → `cargo build` 0 错误 0 警告
+1. 实现完成 → `cargo check -p <touched-crate> --tests` 0 错 0 警（完整 `cargo build` 由 CI 兑现）
 2. `code-quality-audit` 自查（必须）
 3. `code-simplifier` 收敛（必须）
 4. `cargo fmt` + `python3.12 scripts/check_no_panics.py`
@@ -255,14 +248,46 @@ MCP 接入：`.vscode/mcp.json` 中 `code-review-graph` server 已指向 `deskto
 
 ## Rust 开发规范
 
+### 本地快速开发节奏（完整 build 下沉 CI）
+
+**原则**：本地只跑必要的几项以保障实现质量；实测耗时 10–16 分钟的 `cargo build -p ironclaw --tests` / `cargo check --workspace --all-targets` 不再是本地强制门。全量编译 + clippy + cargo-deny + 全类 workspace test 由 CI 兜底（见 `.github/workflows/test.yml` `Code Style` `Clippy (default)` `Tests` 等 jobs）。
+
+**本地必做（按顺序）**：
+
+```bash
+# 1. 只 check 本轮改动的 crate 及下游直接依赖者（1–3 分钟）
+cargo check -p <touched-crate> --tests
+cargo check -p <one-direct-downstream> --tests   # 可选：如增删了 pub API
+
+# 2. 跑本轮改动范围内的 nextest（1 分钟以内）
+cargo nextest run -p <touched-crate>
+
+# 3. fmt + check_no_panics
+cargo fmt --all
+python3.12 scripts/check_no_panics.py --base origin/<base-branch>
+
+# 4. crate 级 clippy（不跑 workspace clippy，CI 兜底）
+cargo clippy --no-deps -p <touched-crate> --all-targets -- -D warnings
+```
+
+**本地不要跑**：
+
+- `cargo build` / `cargo check --workspace --all-targets`（超过 10 分钟，CI 会跑）
+- `cargo clippy --workspace`（依赖 ironclaw 等大 crate 的预存 lint，本地跑也是为别人跑）
+- `cargo nextest run --workspace`（包含 heavy integration，CI 事后补跑）
+
+**冒烟 build（可选）**：开发者可随时在本地手动跑 `cargo build -p ironclaw --tests`，但不作为 PR 提交门。
+
+**如果本地 cargo check 过了但 CI 红** → 大概率是 link-time / proc-macro / cfg-flag combos / desktop-client 集成问题，补跑 `cargo build -p <被 CI 报错的 crate>` 复现。
+
 ### 开发流程（TDD）
 
 新增 Rust 函数/模块/结构体/API 端点时（不含最小 bug 修复）：
 1. 编写测试用例（Red）
 2. 实现功能代码（Green）
 3. 重构优化（Refactor）
-4. `cargo build` 完整编译验证（不只是 `cargo test`）
-5. 0 编译错误，0 编译警告
+4. `cargo check -p <touched-crate> --tests` 本地验证（0 错 0 警）
+5. 完整 `cargo build` / workspace clippy 由 CI 兑现，不是本地强制项
 
 ### 测试运行器：默认使用 nextest
 
@@ -509,7 +534,7 @@ cargo test -p desktop-client --lib engine_startup_tests
 - [ ] 已遵循 TDD 流程（测试优先）
 - [ ] 单元测试覆盖正常路径 + 错误路径
 - [ ] 已编写集成测试和契约测试
-- [ ] `cargo build` 编译通过，0 错误 0 警告
+- [ ] `cargo check -p <touched-crate> --tests` 本地编译通过（0 错 0 警）；完整 `cargo build` / workspace clippy 由 CI 兑现
 - [ ] 所有测试通过
 - [ ] **W3-A Phase 0 进行中**：若本 PR 属于 P0-1 ~ P0-10 任务族，必须按 [ADR-112 §5.4 评估嵌入节奏](docs/plans/architecture-refactor/adr-112-compatibility-evaluation.md#54-评估嵌入节奏b1--b2--b3) 自带 H1 unit + H2 integration 测试（W3-A 收尾后此项删除）
 

@@ -23,10 +23,10 @@ concurrency:
 jobs:
   tests:
     name: Tests (${{ matrix.name }})
-    # xClaw fork: skip Linux Tests on PR to keep iteration fast.
-    # Full test suite still runs on push-to-xClaw and workflow_call.
-    # Re-enable for PR once phase3 stabilises.
-    if: github.event_name != 'pull_request'
+    # xClaw fork: PR triggers a single 'default' matrix slice (see matrix
+    # below). Full multi-feature suite still only runs on push-to-xClaw and
+    # workflow_call. This is the local-fast / CI-strict workflow handoff
+    # described in AGENTS.md "本地快速开发节奏".
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
