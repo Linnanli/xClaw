@@ -456,9 +456,7 @@ fn classify_build_tool_intent(first: &str, cmd: &str) -> CommandIntent {
             // These mutate node_modules / lockfile but are recoverable, so they map to
             // Write (Medium) — matching ShellTool's MEDIUM_RISK_PATTERNS contract
             // (see shell_risk_regression::medium_risk_commands).
-            "install" | "uninstall" | "add" | "remove" | "update" | "ci" => {
-                CommandIntent::Write
-            }
+            "install" | "uninstall" | "add" | "remove" | "update" | "ci" => CommandIntent::Write,
             _ => CommandIntent::PackageManagement,
         },
         "pip" | "pip3" => match sub {
