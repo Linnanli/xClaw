@@ -36,11 +36,22 @@
 //!
 //! # Rollout note
 //!
-//! This struct lands in PR #2 of the P0-2 stacked series. The actual
-//! `bootstrap_tools()` method and the migration of the 12 internal
-//! `register_*_tools` callers land in PR #3 / PR #4.
+//! This struct landed in PR #2 of the P0-2 stacked series. PR #3 (this PR)
+//! adds the `bootstrap_tools()` method and replaces the 9 forward-compat
+//! marker traits with concrete types. PR #4 migrates the 12 legacy
+//! `register_*_tools` call sites and deletes the public compat wrappers.
 
 use std::sync::Arc;
+
+use crate::agent::routine_engine::RoutineEngine;
+use crate::channels::ChannelManager;
+use crate::db::Database;
+use crate::extensions::ExtensionManager;
+use crate::secrets::SecretsStore;
+use crate::skills::catalog::SkillCatalog;
+use crate::skills::registry::SkillRegistry;
+use crate::tools::builtin::memory::WorkspaceResolver;
+use crate::workspace::Workspace;
 
 /// Deployment mode that selects which tool groups are registered by default.
 ///
@@ -70,13 +81,16 @@ impl Default for BootstrapMode {
 }
 
 /// Errors that can occur during `bootstrap_tools` execution.
-///
-/// Currently empty — present for API stability so the eventual `Result<(), BootstrapError>`
-/// signature in PR #3 does not break callers added in PR #4.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum BootstrapError {
-    /// Reserved variant — see ADR-112 §5 P0-2.
+    /// Catch-all variant for downstream registration failures. Kept as the
+    /// sole variant for now: `bootstrap_tools` is intentionally infallible
+    /// for the current set of registered tool groups (each `register_*_internal`
+    /// dispatches to `register_sync`, which is `HashMap::insert`-style and
+    /// cannot fail). The variant exists so future tool groups that need real
+    /// fallible registration (e.g. WASM tool integrity checks at bootstrap
+    /// time) have a place to slot in without changing the public signature.
     #[error("bootstrap error: {0}")]
     Other(String),
 }
@@ -137,31 +151,34 @@ pub struct BootstrapContext {
     pub mode: BootstrapMode,
 
     /// Workspace handle (memory tools fallback when `db_pool` is absent).
-    pub workspace: Option<Arc<dyn WorkspaceHandle>>,
+    pub workspace: Option<Arc<Workspace>>,
 
-    /// libsql connection pool (preferred memory backend).
-    pub db_pool: Option<Arc<dyn DbPoolHandle>>,
+    /// Workspace resolver used by memory tools (preferred over `workspace`).
+    /// Despite the legacy field name, this is the resolver abstraction —
+    /// any implementation of `WorkspaceResolver` (libsql-backed, in-memory,
+    /// fixed-workspace) works.
+    pub db_pool: Option<Arc<dyn WorkspaceResolver>>,
 
     /// Secrets store (secrets / authenticated http).
-    pub secrets_store: Option<Arc<dyn SecretsStoreHandle>>,
+    pub secrets_store: Option<Arc<dyn SecretsStore + Send + Sync>>,
 
     /// Extension manager (extension / message tools).
-    pub extension_manager: Option<Arc<dyn ExtensionManagerHandle>>,
+    pub extension_manager: Option<Arc<ExtensionManager>>,
 
-    /// Channel registry (message tools).
-    pub channels: Option<Arc<dyn ChannelRegistryHandle>>,
+    /// Channel manager (message tools).
+    pub channels: Option<Arc<ChannelManager>>,
 
     /// Skill registry handle (skill tools).
-    pub skill_registry: Option<Arc<dyn SkillRegistryHandle>>,
+    pub skill_registry: Option<Arc<std::sync::RwLock<SkillRegistry>>>,
 
     /// Skill catalog handle (skill tools).
-    pub skill_catalog: Option<Arc<dyn SkillCatalogHandle>>,
+    pub skill_catalog: Option<Arc<SkillCatalog>>,
 
-    /// Routine store (routine tools).
-    pub routine_store: Option<Arc<dyn RoutineStoreHandle>>,
+    /// Routine store (routine tools, also used as the JobEvents backing store).
+    pub routine_store: Option<Arc<dyn Database>>,
 
     /// Routine engine (routine tools).
-    pub routine_engine: Option<Arc<dyn RoutineEngineHandle>>,
+    pub routine_engine: Option<Arc<RoutineEngine>>,
 
     /// Job tools configuration.
     pub job_config: Option<JobToolsConfig>,
@@ -200,43 +217,13 @@ impl BootstrapContext {
     }
 }
 
-// ─── Marker traits for type erasure ─────────────────────────────────────
+// ─── Removed in PR #3: 9 forward-compat marker traits ───────────────────
 //
-// Each Handle trait is a thin marker that lets BootstrapContext hold
-// `Arc<dyn HandleTrait>` without pulling concrete types into this module.
-// PR #3 will downcast or pass these through to the concrete `_internal`
-// register methods.
-//
-// Defining markers (rather than re-exporting the concrete types) keeps the
-// dependency graph clean: `tools::bootstrap` becomes a leaf module that only
-// the registry and external callers depend on.
-
-/// Marker for any value usable as a `workspace` field. PR #3 narrows this.
-pub trait WorkspaceHandle: Send + Sync + 'static {}
-
-/// Marker for any value usable as a `db_pool` field. PR #3 narrows this.
-pub trait DbPoolHandle: Send + Sync + 'static {}
-
-/// Marker for any value usable as a `secrets_store` field. PR #3 narrows this.
-pub trait SecretsStoreHandle: Send + Sync + 'static {}
-
-/// Marker for any value usable as an `extension_manager` field. PR #3 narrows this.
-pub trait ExtensionManagerHandle: Send + Sync + 'static {}
-
-/// Marker for any value usable as a `channels` field. PR #3 narrows this.
-pub trait ChannelRegistryHandle: Send + Sync + 'static {}
-
-/// Marker for any value usable as a `skill_registry` field. PR #3 narrows this.
-pub trait SkillRegistryHandle: Send + Sync + 'static {}
-
-/// Marker for any value usable as a `skill_catalog` field. PR #3 narrows this.
-pub trait SkillCatalogHandle: Send + Sync + 'static {}
-
-/// Marker for any value usable as a `routine_store` field. PR #3 narrows this.
-pub trait RoutineStoreHandle: Send + Sync + 'static {}
-
-/// Marker for any value usable as a `routine_engine` field. PR #3 narrows this.
-pub trait RoutineEngineHandle: Send + Sync + 'static {}
+// PR #2 used empty marker traits (`WorkspaceHandle`, `DbPoolHandle`, …) as
+// placeholders so the struct shape could land before concrete types were
+// chosen. PR #3 replaces them with concrete `Arc<…>` field types (see
+// `BootstrapContext` above), unblocking the actual `bootstrap_tools()`
+// implementation.
 
 #[cfg(test)]
 mod tests {
