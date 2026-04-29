@@ -22,7 +22,7 @@ use crate::extensions::{
     InstallResult, InstalledExtension, RegistryEntry, ResultSource, SearchResult, ToolAuthState,
     UpgradeOutcome, UpgradeResult, VerificationChallenge,
 };
-use crate::hooks::HookRegistry;
+use dasclaw_hooks::HookRegistry;
 use crate::pairing::PairingStore;
 use crate::secrets::{CreateSecretParams, SecretsStore};
 use crate::tools::ToolRegistry;

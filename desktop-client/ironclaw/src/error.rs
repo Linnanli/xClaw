@@ -41,7 +41,7 @@ pub enum Error {
     Workspace(#[from] WorkspaceError),
 
     #[error("Hook error: {0}")]
-    Hook(#[from] crate::hooks::HookError),
+    Hook(#[from] dasclaw_hooks::HookError),
 
     #[error("Orchestrator error: {0}")]
     Orchestrator(#[from] OrchestratorError),

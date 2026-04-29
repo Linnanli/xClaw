@@ -13,7 +13,7 @@ use crate::config::AgentConfig;
 use crate::context::{ContextManager, JobContext, JobState};
 use crate::error::{Error, JobError};
 use crate::extensions::ExtensionManager;
-use crate::hooks::HookRegistry;
+use dasclaw_hooks::HookRegistry;
 use crate::llm::LlmProvider;
 use crate::safety::SafetyLayer;
 use crate::tenant::AdminScope;

@@ -15,7 +15,7 @@ use crate::config::Config;
 use crate::context::ContextManager;
 use crate::db::Database;
 use crate::extensions::ExtensionManager;
-use crate::hooks::HookRegistry;
+use dasclaw_hooks::HookRegistry;
 use crate::llm::{LlmProvider, RecordingLlm, SessionManager};
 use crate::safety::SafetyLayer;
 use crate::secrets::SecretsStore;
@@ -976,7 +976,7 @@ mod tests {
     use tokio::sync::mpsc;
 
     use crate::agent::SessionManager as AgentSessionManager;
-    use crate::hooks::{
+    use dasclaw_hooks::{
         Hook, HookContext, HookError, HookEvent, HookOutcome, HookPoint, HookRegistry,
     };
 

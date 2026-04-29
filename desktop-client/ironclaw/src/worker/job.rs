@@ -20,7 +20,7 @@ use crate::agent::scheduler::WorkerMessage;
 use crate::channels::web::types::ToolDecisionDto;
 use crate::context::{ContextManager, JobState};
 use crate::error::Error;
-use crate::hooks::HookRegistry;
+use dasclaw_hooks::HookRegistry;
 use crate::llm::{
     ActionPlan, ChatMessage, LlmProvider, Reasoning, ReasoningContext, RespondResult,
     ResponseMetadata, ToolCall, ToolSelection,
@@ -593,7 +593,7 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
 
         // Run BeforeToolCall hook
         let effective_params = {
-            use crate::hooks::{HookError, HookEvent, HookOutcome};
+            use dasclaw_hooks::{HookError, HookEvent, HookOutcome};
             let hook_params = redact_params(&normalized_params, tool.sensitive_params());
             let event = HookEvent::ToolCall {
                 tool_name: tool_name.to_string(),
@@ -1916,7 +1916,7 @@ mod tests {
             })),
             tools: Arc::new(registry),
             store: None,
-            hooks: Arc::new(crate::hooks::HookRegistry::new()),
+            hooks: Arc::new(dasclaw_hooks::HookRegistry::new()),
             timeout: Duration::from_secs(30),
             use_planning: false,
             sse_tx: None,
@@ -2137,7 +2137,7 @@ mod tests {
             })),
             tools: Arc::new(registry),
             store: None,
-            hooks: Arc::new(crate::hooks::HookRegistry::new()),
+            hooks: Arc::new(dasclaw_hooks::HookRegistry::new()),
             timeout: Duration::from_secs(30),
             use_planning: false,
             sse_tx: None,

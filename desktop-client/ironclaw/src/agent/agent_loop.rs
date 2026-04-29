@@ -27,7 +27,7 @@ use crate::context::ContextManager;
 use crate::db::Database;
 use crate::error::{ChannelError, Error};
 use crate::extensions::ExtensionManager;
-use crate::hooks::HookRegistry;
+use dasclaw_hooks::HookRegistry;
 use crate::llm::LlmProvider;
 use crate::safety::SafetyLayer;
 use crate::skills::SkillRegistry;
@@ -1046,7 +1046,7 @@ impl Agent {
         match result {
             Ok(Some(response)) if !response.is_empty() => {
                 // Hook: BeforeOutbound
-                let event = crate::hooks::HookEvent::Outbound {
+                let event = dasclaw_hooks::HookEvent::Outbound {
                     user_id: message.user_id.clone(),
                     channel: message.channel.clone(),
                     content: response.clone(),
@@ -1057,7 +1057,7 @@ impl Agent {
                         tracing::warn!("BeforeOutbound hook blocked response: {}", err);
                         return MessageAction::Continue;
                     }
-                    Ok(crate::hooks::HookOutcome::Continue {
+                    Ok(dasclaw_hooks::HookOutcome::Continue {
                         modified: Some(new_content),
                     }) => new_content,
                     _ => response,
@@ -1216,20 +1216,20 @@ impl Agent {
 
         // Hook: BeforeInbound — allow hooks to modify or reject user input
         if let Submission::UserInput { ref content } = submission {
-            let event = crate::hooks::HookEvent::Inbound {
+            let event = dasclaw_hooks::HookEvent::Inbound {
                 user_id: message.user_id.clone(),
                 channel: message.channel.clone(),
                 content: content.clone(),
                 thread_id: message.thread_id.clone(),
             };
             match self.hooks().run(&event).await {
-                Err(crate::hooks::HookError::Rejected { reason }) => {
+                Err(dasclaw_hooks::HookError::Rejected { reason }) => {
                     return Ok(Some(format!("[Message rejected: {}]", reason)));
                 }
                 Err(err) => {
                     return Ok(Some(format!("[Message blocked by hook policy: {}]", err)));
                 }
-                Ok(crate::hooks::HookOutcome::Continue {
+                Ok(dasclaw_hooks::HookOutcome::Continue {
                     modified: Some(new_content),
                 }) => {
                     submission = Submission::UserInput {
