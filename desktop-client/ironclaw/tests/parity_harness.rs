@@ -175,8 +175,15 @@ async fn run_scenario(
 ) -> ScenarioResult {
     let llm = Arc::new(ScriptedLlm::new(steps));
     let tools = Arc::new(ToolRegistry::new());
-    tools.register_builtin_tools();
-    tools.register_dev_tools();
+    tools
+        .bootstrap_tools(&ironclaw::tools::bootstrap::BootstrapContext {
+            mode: ironclaw::tools::bootstrap::BootstrapMode::Orchestrator {
+                allow_local_tools: true,
+            },
+            ..Default::default()
+        })
+        .await
+        .expect("bootstrap_tools is infallible for this context");
 
     let reasoning = Arc::new(Reasoning::new(
         Arc::clone(&llm) as Arc<dyn ironclaw::llm::LlmProvider>
@@ -222,8 +229,15 @@ async fn run_scenario_with_job_ctx(
 ) -> ScenarioResult {
     let llm = Arc::new(ScriptedLlm::new(steps));
     let tools = Arc::new(ToolRegistry::new());
-    tools.register_builtin_tools();
-    tools.register_dev_tools();
+    tools
+        .bootstrap_tools(&ironclaw::tools::bootstrap::BootstrapContext {
+            mode: ironclaw::tools::bootstrap::BootstrapMode::Orchestrator {
+                allow_local_tools: true,
+            },
+            ..Default::default()
+        })
+        .await
+        .expect("bootstrap_tools is infallible for this context");
 
     let reasoning = Arc::new(Reasoning::new(
         Arc::clone(&llm) as Arc<dyn ironclaw::llm::LlmProvider>
@@ -1380,8 +1394,15 @@ async fn ps_029_max_iterations_reached() {
 
     let llm = Arc::new(ScriptedLlm::new(steps));
     let tools = Arc::new(ToolRegistry::new());
-    tools.register_builtin_tools();
-    tools.register_dev_tools();
+    tools
+        .bootstrap_tools(&ironclaw::tools::bootstrap::BootstrapContext {
+            mode: ironclaw::tools::bootstrap::BootstrapMode::Orchestrator {
+                allow_local_tools: true,
+            },
+            ..Default::default()
+        })
+        .await
+        .expect("bootstrap_tools is infallible for this context");
 
     let reasoning = Arc::new(Reasoning::new(
         Arc::clone(&llm) as Arc<dyn ironclaw::llm::LlmProvider>
@@ -1434,7 +1455,10 @@ async fn ps_030_token_usage_tracked() {
         "Response for token test.",
     )]));
     let tools = Arc::new(ToolRegistry::new());
-    tools.register_builtin_tools();
+    tools
+        .bootstrap_tools(&ironclaw::tools::bootstrap::BootstrapContext::for_test())
+        .await
+        .expect("bootstrap_tools is infallible for this context");
 
     let reasoning = Arc::new(Reasoning::new(
         Arc::clone(&llm) as Arc<dyn ironclaw::llm::LlmProvider>

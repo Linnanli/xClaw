@@ -23,6 +23,7 @@ use ironclaw::{
     llm::create_session_manager,
     orchestrator::{ReaperConfig, SandboxReaper},
     pairing::PairingStore,
+    tools::bootstrap::{BootstrapContext, BootstrapMode, JobToolsConfig},
     tracing_fmt::{init_cli_tracing, init_worker_tracing},
     webhooks::{self, ToolWebhookState},
 };
@@ -571,20 +572,29 @@ async fn async_main() -> anyhow::Result<()> {
         Arc::new(tokio::sync::RwLock::new(None));
 
     // Register job tools (sandbox deps auto-injected when container_job_manager is available)
-    components.tools.register_job_tools(
-        Arc::clone(&components.context_manager),
-        Some(scheduler_slot.clone()),
-        container_job_manager.clone(),
-        components.db.clone(),
-        job_event_tx.clone(),
-        Some(channels.inject_sender()),
-        if config.sandbox.enabled {
-            Some(Arc::clone(&prompt_queue))
-        } else {
-            None
-        },
-        components.secrets_store.clone(),
-    );
+    components
+        .tools
+        .bootstrap_tools(&BootstrapContext {
+            mode: BootstrapMode::Orchestrator {
+                allow_local_tools: config.agent.allow_local_tools,
+            },
+            job_config: Some(JobToolsConfig {
+                context_manager: Arc::clone(&components.context_manager),
+                scheduler_slot: Some(scheduler_slot.clone()),
+                job_manager: container_job_manager.clone(),
+                store: components.db.clone(),
+                job_event_tx: job_event_tx.clone(),
+                inject_tx: Some(channels.inject_sender()),
+                prompt_queue: if config.sandbox.enabled {
+                    Some(Arc::clone(&prompt_queue))
+                } else {
+                    None
+                },
+                secrets_store: components.secrets_store.clone(),
+            }),
+            ..Default::default()
+        })
+        .await?;
 
     // ── Gateway channel ────────────────────────────────────────────────
 
@@ -818,8 +828,15 @@ async fn async_main() -> anyhow::Result<()> {
     // Register message tool for sending messages to connected channels
     components
         .tools
-        .register_message_tools(Arc::clone(&channels), components.extension_manager.clone())
-        .await;
+        .bootstrap_tools(&BootstrapContext {
+            mode: BootstrapMode::Orchestrator {
+                allow_local_tools: config.agent.allow_local_tools,
+            },
+            channels: Some(Arc::clone(&channels)),
+            extension_manager: components.extension_manager.clone(),
+            ..Default::default()
+        })
+        .await?;
 
     // Default user ID for extension operations (single-user mode).
     let ext_user_id = config.owner_id.clone();

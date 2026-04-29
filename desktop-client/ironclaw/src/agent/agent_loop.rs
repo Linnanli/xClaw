@@ -796,10 +796,28 @@ impl Agent {
                         self.deps.sandbox_readiness,
                     ));
 
-                    // Register routine tools
+                    // Register routine tools via the unified bootstrap API.
+                    // The orchestrator path already wired builtin / dev / etc.
+                    // earlier in startup; this stage-2 call is purely additive
+                    // — `register_sync` is `HashMap::insert`-style, so the
+                    // re-register of builtins is a no-op overwrite.
                     self.deps
                         .tools
-                        .register_routine_tools(Arc::clone(store), Arc::clone(&engine));
+                        .bootstrap_tools(&crate::tools::bootstrap::BootstrapContext {
+                            mode: crate::tools::bootstrap::BootstrapMode::Orchestrator {
+                                allow_local_tools: false,
+                            },
+                            routine_store: Some(Arc::clone(store)),
+                            routine_engine: Some(Arc::clone(&engine)),
+                            ..Default::default()
+                        })
+                        .await
+                        .map_err(|e| {
+                            crate::error::Error::Tool(crate::error::ToolError::ExecutionFailed {
+                                name: "bootstrap_tools".to_string(),
+                                reason: e.to_string(),
+                            })
+                        })?;
 
                     // Load initial event cache
                     engine.refresh_event_cache().await;

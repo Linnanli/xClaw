@@ -179,16 +179,21 @@ impl GatewayWorkflowHarness {
             .register(Arc::new(MockGithubWebhookTool))
             .await;
 
-        components.tools.register_job_tools(
-            Arc::clone(&components.context_manager),
-            None,
-            None,
-            components.db.clone(),
-            None,
-            None,
-            None,
-            None,
-        );
+        let mut job_cfg = ironclaw::tools::bootstrap::JobToolsConfig::new(Arc::clone(
+            &components.context_manager,
+        ));
+        job_cfg.store = components.db.clone();
+        components
+            .tools
+            .bootstrap_tools(&ironclaw::tools::bootstrap::BootstrapContext {
+                mode: ironclaw::tools::bootstrap::BootstrapMode::Orchestrator {
+                    allow_local_tools: false,
+                },
+                job_config: Some(job_cfg),
+                ..Default::default()
+            })
+            .await
+            .expect("gateway harness: bootstrap_tools");
 
         // Agent::run() creates its own RoutineEngine and populates this slot.
         let routine_slot: Arc<tokio::sync::RwLock<Option<Arc<RoutineEngine>>>> =

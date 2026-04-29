@@ -18,9 +18,16 @@ use ironclaw::tools::{Tool, ToolRegistry};
 /// construction helpers exist.
 #[tokio::test]
 async fn all_core_builtin_tool_schemas_are_valid() {
-    let registry = ToolRegistry::new();
-    registry.register_builtin_tools();
-    registry.register_dev_tools();
+    let registry = std::sync::Arc::new(ToolRegistry::new());
+    registry
+        .bootstrap_tools(&ironclaw::tools::bootstrap::BootstrapContext {
+            mode: ironclaw::tools::bootstrap::BootstrapMode::Orchestrator {
+                allow_local_tools: true,
+            },
+            ..Default::default()
+        })
+        .await
+        .expect("bootstrap_tools is infallible for this context");
 
     let tools = registry.all().await;
     assert!(
@@ -52,9 +59,16 @@ async fn all_core_builtin_tool_schemas_are_valid() {
 /// This guards against a new tool being added without schema validation coverage.
 #[tokio::test]
 async fn core_registration_covers_expected_tools() {
-    let registry = ToolRegistry::new();
-    registry.register_builtin_tools();
-    registry.register_dev_tools();
+    let registry = std::sync::Arc::new(ToolRegistry::new());
+    registry
+        .bootstrap_tools(&ironclaw::tools::bootstrap::BootstrapContext {
+            mode: ironclaw::tools::bootstrap::BootstrapMode::Orchestrator {
+                allow_local_tools: true,
+            },
+            ..Default::default()
+        })
+        .await
+        .expect("bootstrap_tools is infallible for this context");
 
     let mut names = registry.list().await;
     names.sort();
@@ -144,9 +158,16 @@ fn shell_tool_schema_is_valid() {
 /// panicking when called from within a multi-threaded runtime context.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn all_core_tools_work_in_multi_thread_runtime() {
-    let registry = ToolRegistry::new();
-    registry.register_builtin_tools();
-    registry.register_dev_tools();
+    let registry = std::sync::Arc::new(ToolRegistry::new());
+    registry
+        .bootstrap_tools(&ironclaw::tools::bootstrap::BootstrapContext {
+            mode: ironclaw::tools::bootstrap::BootstrapMode::Orchestrator {
+                allow_local_tools: true,
+            },
+            ..Default::default()
+        })
+        .await
+        .expect("bootstrap_tools is infallible for this context");
 
     let tools = registry.all().await;
     assert!(

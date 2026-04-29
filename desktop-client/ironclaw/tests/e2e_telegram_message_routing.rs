@@ -217,8 +217,16 @@ mod tests {
         let channels = Arc::new(channel_manager);
 
         deps.tools
-            .register_message_tools(Arc::clone(&channels), deps.extension_manager.clone())
-            .await;
+            .bootstrap_tools(&ironclaw::tools::bootstrap::BootstrapContext {
+                mode: ironclaw::tools::bootstrap::BootstrapMode::Orchestrator {
+                    allow_local_tools: false,
+                },
+                channels: Some(Arc::clone(&channels)),
+                extension_manager: deps.extension_manager.clone(),
+                ..Default::default()
+            })
+            .await
+            .expect("e2e telegram: bootstrap_tools");
 
         let agent = Agent::new(
             components.config.agent.clone(),

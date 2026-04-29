@@ -36,21 +36,24 @@
 //!
 //! # Rollout note
 //!
-//! This struct landed in PR #2 of the P0-2 stacked series. PR #3 (this PR)
-//! adds the `bootstrap_tools()` method and replaces the 9 forward-compat
-//! marker traits with concrete types. PR #4 migrates the 12 legacy
-//! `register_*_tools` call sites and deletes the public compat wrappers.
+//! This struct landed in PR #2 of the P0-2 stacked series. PR #3 added the
+//! `bootstrap_tools()` method and replaced the 9 forward-compat marker traits
+//! with concrete types. PR #4 (this PR) extended `JobToolsConfig` to carry the
+//! full job-tool dependency set, migrated all 14 legacy `register_*_tools`
+//! call sites to `bootstrap_tools()`, and removed the public compat wrappers.
 
 use std::sync::Arc;
 
 use crate::agent::routine_engine::RoutineEngine;
-use crate::channels::ChannelManager;
+use crate::channels::{ChannelManager, IncomingMessage};
+use crate::context::ContextManager;
 use crate::db::Database;
 use crate::extensions::ExtensionManager;
+use crate::orchestrator::job_manager::ContainerJobManager;
 use crate::secrets::SecretsStore;
 use crate::skills::catalog::SkillCatalog;
 use crate::skills::registry::SkillRegistry;
-use crate::tools::builtin::memory::WorkspaceResolver;
+use crate::tools::builtin::{PromptQueue, SchedulerSlot, memory::WorkspaceResolver};
 use crate::workspace::Workspace;
 
 /// Deployment mode that selects which tool groups are registered by default.
@@ -101,11 +104,41 @@ pub enum BootstrapError {
 // would create cycles during incremental compilation, so callers fill the
 // fields with their own `Arc<...>` values at the call site.
 
-/// Configuration bundle for `register_job_tools`.
-#[derive(Debug, Clone, Default)]
+/// Configuration bundle for the job-tool group (`create_job`, `list_jobs`,
+/// `job_status`, `cancel_job`, optional `job_events` / `job_prompt`).
+///
+/// `context_manager` is required (every job tool keys on it). All other
+/// fields are optional: each missing dependency simply skips the matching
+/// capability (e.g. without a `prompt_queue` the `job_prompt` tool is not
+/// registered).
+#[derive(Clone)]
 pub struct JobToolsConfig {
-    pub admin_base_url: Option<String>,
-    pub agent_id: Option<String>,
+    pub context_manager: Arc<ContextManager>,
+    pub scheduler_slot: Option<SchedulerSlot>,
+    pub job_manager: Option<Arc<ContainerJobManager>>,
+    pub store: Option<Arc<dyn Database>>,
+    pub job_event_tx:
+        Option<tokio::sync::broadcast::Sender<(uuid::Uuid, String, ironclaw_common::AppEvent)>>,
+    pub inject_tx: Option<tokio::sync::mpsc::Sender<IncomingMessage>>,
+    pub prompt_queue: Option<PromptQueue>,
+    pub secrets_store: Option<Arc<dyn SecretsStore + Send + Sync>>,
+}
+
+impl JobToolsConfig {
+    /// Construct a minimal config with only the required `ContextManager`.
+    /// Optional dependencies can be filled in via direct field assignment.
+    pub fn new(context_manager: Arc<ContextManager>) -> Self {
+        Self {
+            context_manager,
+            scheduler_slot: None,
+            job_manager: None,
+            store: None,
+            job_event_tx: None,
+            inject_tx: None,
+            prompt_queue: None,
+            secrets_store: None,
+        }
+    }
 }
 
 /// Configuration bundle for `register_image_tools`.
@@ -144,8 +177,12 @@ pub struct VisionApiConfig {
 /// | `image_api`                                     | image                           |
 /// | `vision_api`                                    | vision                          |
 /// | `channels` + `extension_manager`                | message (async)                 |
+///
+/// Note: This struct is intentionally **not** `#[non_exhaustive]` — callers
+/// build it via `..Default::default()` spread expressions across the workspace
+/// (`main.rs`, `app.rs`, integration tests). Adding a field is therefore a
+/// non-breaking change as long as the new field carries a `Default` impl.
 #[derive(Default)]
-#[non_exhaustive]
 pub struct BootstrapContext {
     /// Deployment mode. Required.
     pub mode: BootstrapMode,
