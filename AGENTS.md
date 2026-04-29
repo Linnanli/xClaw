@@ -492,6 +492,13 @@ repomix --compress --style markdown --no-gitignore \
 
 MCP 接入：`.vscode/mcp.json` 已添加 `repomix` server (`npx -y repomix --mcp`)。
 
+**何时使用 Repomix**（适合「全景概览 / 一次性灌入 LLM」）：
+- 接手陌生模块前先读一遍打包文件，比逐个 `read_file` 快
+- 跨 crate 重构前先核对模块边界与公共 API
+- 让外部 LLM（无 IDE 工具链）也能理解代码：把 `.md` 直接拷给它
+- 写 ADR / 设计文档前盘点既有实现
+- ⚠️ **不适合**：单个符号查询、增量改动追踪、行级精确定位 → 改用 `grep_search` 或 code-review-graph
+
 ### code-review-graph 增量图谱
 
 CLI: `/Users/nallylin/.local/bin/code-review-graph`（多 repo registry 已注册 4 个）：
@@ -517,3 +524,22 @@ MCP 接入：`.vscode/mcp.json` 中 `code-review-graph` server 已指向 `deskto
 - `register` 要求路径下有 `.git` 或 `.code-review-graph`；首次对子目录用 `build` 自动创建后再 register
 - `watch` 是后台守护进程，改文件即触发增量；不要并发对同一 repo 跑 build/update（共享 SQLite）
 - `detect-changes` 风险评分: ≥0.7 高风险，需重点 review；untested 列表标记缺测试
+
+**何时使用 code-review-graph**（适合「精确定位 / 影响面分析」）：
+- PR review 前评估改动影响半径：`detect-changes --base origin/xClaw` → 看 impact_radius 与 untested
+- 重构前查调用方/被调用方：`mcp_code-review-g_impact_radius` / `affected_flows`
+- 找语义相近的实现避免重复造轮子：`mcp_code-review-g_semantic_search_nodes`
+- 给 LLM 提供「最小可读上下文」而非整文件：`mcp_code-review-g_minimal_context`
+- 探索代码社群结构 / 模块耦合：`mcp_code-review-g_community`
+- ⚠️ **不适合**：纯文档变更（图谱不索引）、模块全貌讲解 → 改用 Repomix 或 `read_file`
+
+### 工具选型速查
+
+| 任务 | 首选工具 |
+|---|---|
+| 「这个 crate 大概做什么 / 给我一份概览」 | Repomix `*-core.md` |
+| 「改了 X，会波及哪些测试 / 调用方」 | code-review-graph `detect-changes` / `impact_radius` |
+| 「找一个名字叫 XXX 的函数」 | `grep_search` / `file_search` |
+| 「找一个『大概是这意思』的实现」 | code-review-graph `semantic_search_nodes` |
+| 「贴给外部 LLM 让它出方案」 | Repomix 打包 |
+| 「PR 评审清单 / 风险打分」 | code-review-graph `detect-changes --brief` |
