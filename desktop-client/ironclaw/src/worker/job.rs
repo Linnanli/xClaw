@@ -20,7 +20,6 @@ use crate::agent::scheduler::WorkerMessage;
 use crate::channels::web::types::ToolDecisionDto;
 use crate::context::{ContextManager, JobState};
 use crate::error::Error;
-use dasclaw_hooks::HookRegistry;
 use crate::llm::{
     ActionPlan, ChatMessage, LlmProvider, Reasoning, ReasoningContext, RespondResult,
     ResponseMetadata, ToolCall, ToolSelection,
@@ -36,6 +35,7 @@ use crate::worker::autonomous_recovery::{
     AutonomousRecoveryAction, AutonomousRecoveryState, EMPTY_TOOL_COMPLETION_FAILURE,
     EMPTY_TOOL_COMPLETION_NUDGE, FORCE_TEXT_RECOVERY_PROMPT,
 };
+use dasclaw_hooks::HookRegistry;
 use ironclaw_common::AppEvent;
 use x_claw_agent::traits::HostError;
 

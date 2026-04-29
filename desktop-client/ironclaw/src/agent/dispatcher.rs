@@ -1527,13 +1527,13 @@ mod tests {
     use crate::config::{AgentConfig, SafetyConfig, SkillsConfig};
     use crate::context::ContextManager;
     use crate::error::Error;
-    use dasclaw_hooks::HookRegistry;
     use crate::llm::{
         CompletionRequest, CompletionResponse, FinishReason, LlmProvider, ToolCall,
         ToolCompletionRequest, ToolCompletionResponse, ToolDefinition,
     };
     use crate::safety::SafetyLayer;
     use crate::tools::ToolRegistry;
+    use dasclaw_hooks::HookRegistry;
 
     use super::{
         check_auth_required, disabled_names_from_metadata, filter_tools_by_disabled_extensions,

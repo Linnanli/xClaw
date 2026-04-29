@@ -504,8 +504,8 @@ impl TestHarnessBuilder {
     pub async fn build(self) -> TestHarness {
         use crate::agent::cost_guard::{CostGuard, CostGuardConfig};
         use crate::config::{SafetyConfig, SkillsConfig};
-        use dasclaw_hooks::HookRegistry;
         use crate::safety::SafetyLayer;
+        use dasclaw_hooks::HookRegistry;
 
         let (db, temp_dir) = if let Some(db) = self.db {
             // Caller provided a DB; create a dummy temp dir to satisfy the struct.

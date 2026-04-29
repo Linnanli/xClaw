@@ -22,7 +22,6 @@ use crate::extensions::{
     InstallResult, InstalledExtension, RegistryEntry, ResultSource, SearchResult, ToolAuthState,
     UpgradeOutcome, UpgradeResult, VerificationChallenge,
 };
-use dasclaw_hooks::HookRegistry;
 use crate::pairing::PairingStore;
 use crate::secrets::{CreateSecretParams, SecretsStore};
 use crate::tools::ToolRegistry;
@@ -34,6 +33,7 @@ use crate::tools::mcp::auth::{
 use crate::tools::mcp::config::McpServerConfig;
 use crate::tools::mcp::session::McpSessionManager;
 use crate::tools::wasm::{WasmToolLoader, WasmToolRuntime, discover_tools};
+use dasclaw_hooks::HookRegistry;
 
 /// Pending OAuth authorization state.
 struct PendingAuth {
