@@ -2,6 +2,14 @@ name: Regression Test Check
 
 on:
   pull_request:
+    # xClaw fork: doc-only PRs don't require regression tests.
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '.kiro/**'
+      - 'LICENSE*'
+      - '.vscode/**'
+      - '.github/ISSUE_TEMPLATE/**'
 
 jobs:
   regression-test:

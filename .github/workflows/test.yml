@@ -4,6 +4,14 @@ on:
   pull_request:
     branches:
       - xClaw
+    # xClaw fork: skip test job on doc-only PRs.
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '.kiro/**'
+      - 'LICENSE*'
+      - '.vscode/**'
+      - '.github/ISSUE_TEMPLATE/**'
   push:
     branches:
       - xClaw

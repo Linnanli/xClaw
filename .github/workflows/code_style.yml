@@ -1,6 +1,17 @@
 name: Code Style
 on:
   pull_request:
+    # xClaw fork: skip lint/format/deny/no-panics on doc-only PRs
+    # (Markdown / docs / IDE config / license-only changes can't break code).
+    # If a PR also touches code, none of the patterns below match and the
+    # workflow runs as usual.
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '.kiro/**'
+      - 'LICENSE*'
+      - '.vscode/**'
+      - '.github/ISSUE_TEMPLATE/**'
 
 concurrency:
   group: codestyle-${{ github.workflow }}-${{ github.ref }}
