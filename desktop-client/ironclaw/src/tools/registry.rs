@@ -545,12 +545,14 @@ impl ToolRegistry {
 
     /// Register job management tools.
     ///
-    /// Private helper invoked by [`Self::bootstrap_tools`] when `job_config`
-    /// is provided. When sandbox deps are present, `create_job` automatically
-    /// delegates to Docker containers; otherwise it dispatches via the
-    /// Scheduler (which persists to DB and spawns a worker).
+    /// Invoked by [`Self::bootstrap_tools`] when `job_config` is provided,
+    /// and by `desktop-client/src/engine.rs` Phase 7 (which has not yet
+    /// migrated to the unified `bootstrap_tools` entry point — tracked as
+    /// follow-up work). When sandbox deps are present, `create_job`
+    /// automatically delegates to Docker containers; otherwise it dispatches
+    /// via the Scheduler (which persists to DB and spawns a worker).
     #[allow(clippy::too_many_arguments)]
-    fn register_job_tools(
+    pub fn register_job_tools(
         &self,
         context_manager: Arc<ContextManager>,
         scheduler_slot: Option<crate::tools::builtin::SchedulerSlot>,
@@ -699,10 +701,12 @@ impl ToolRegistry {
 
     /// Register message tool for sending messages to channels.
     ///
-    /// Private helper invoked by [`Self::bootstrap_tools`] when `channels`
-    /// is set. The async path runs last so it does not block earlier sync
+    /// Invoked by [`Self::bootstrap_tools`] when `channels` is set, and by
+    /// `desktop-client/src/engine.rs` Phase 7 (which has not yet migrated to
+    /// the unified `bootstrap_tools` entry point — tracked as follow-up
+    /// work). The async path runs last so it does not block earlier sync
     /// dispatches.
-    async fn register_message_tools(
+    pub async fn register_message_tools(
         &self,
         channel_manager: Arc<crate::channels::ChannelManager>,
         extension_manager: Option<Arc<crate::extensions::ExtensionManager>>,
