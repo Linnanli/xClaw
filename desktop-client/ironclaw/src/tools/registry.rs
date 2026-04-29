@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::RwLock;
 
@@ -105,6 +106,11 @@ pub struct ToolRegistry {
     rate_limiter: RateLimiter,
     /// Reference to the message tool for setting context per-turn.
     message_tool: RwLock<Option<Arc<crate::tools::builtin::MessageTool>>>,
+    /// Idempotency latch for `bootstrap_tools`. Set on first successful call;
+    /// subsequent calls return [`BootstrapError::AlreadyBootstrapped`] so the
+    /// dispatch path stays single-pass and avoids racing with
+    /// [`PROTECTED_TOOL_NAMES`] shadow rejection on a re-register.
+    bootstrapped: AtomicBool,
 }
 
 impl ToolRegistry {
@@ -126,6 +132,7 @@ impl ToolRegistry {
             secrets_store: None,
             rate_limiter: RateLimiter::new(),
             message_tool: RwLock::new(None),
+            bootstrapped: AtomicBool::new(false),
         }
     }
 
@@ -277,7 +284,24 @@ impl ToolRegistry {
     }
 
     /// Register all built-in tools.
+    /// Register the standard built-in tools (echo, time, json, http).
+    ///
+    /// Call this once during startup to register the orchestrator-domain tools.
+    /// Container-domain tools (file ops, shell) must be registered separately
+    /// inside the sandboxed worker.
+    ///
+    /// # Deprecated public surface (PR #3)
+    ///
+    /// Slated for privatization in PR #4 once the 12 legacy call sites move to
+    /// [`Self::bootstrap_tools`]. The implementation lives in
+    /// [`Self::register_builtin_tools_internal`]; this is a thin wrapper kept
+    /// for source compatibility during the migration.
+    #[doc(hidden)]
     pub fn register_builtin_tools(&self) {
+        self.register_builtin_tools_internal();
+    }
+
+    fn register_builtin_tools_internal(&self) {
         self.register_sync(Arc::new(EchoTool));
         self.register_sync(Arc::new(TimeTool));
         self.register_sync(Arc::new(JsonTool));
@@ -307,17 +331,147 @@ impl ToolRegistry {
     /// This registers tools that don't touch the filesystem or run shell commands:
     /// echo, time, json, http. Use this when `allow_local_tools = false` and
     /// container-domain tools should only be available inside sandboxed containers.
+    /// PR #3 compat wrapper. Will be privatized in PR #4.
+    #[doc(hidden)]
     pub fn register_orchestrator_tools(&self) {
-        self.register_builtin_tools();
-        // register_builtin_tools already only registers orchestrator-domain tools
+        self.register_orchestrator_tools_internal();
     }
 
-    /// Register container-domain tools (filesystem, shell, code).
-    ///
-    /// These tools are intended to run inside sandboxed Docker containers.
-    /// Call this in the worker process, not the orchestrator (unless `allow_local_tools = true`).
+    fn register_orchestrator_tools_internal(&self) {
+        self.register_builtin_tools_internal();
+        // register_builtin_tools_internal already only registers orchestrator-domain tools
+    }
+
+    /// PR #3 compat wrapper. Will be privatized in PR #4.
+    #[doc(hidden)]
     pub fn register_container_tools(&self) {
-        self.register_dev_tools();
+        self.register_container_tools_internal();
+    }
+
+    fn register_container_tools_internal(&self) {
+        self.register_dev_tools_internal();
+    }
+
+    /// Single-entry bootstrap — replaces the legacy 12-call `register_*_tools`
+    /// pattern scattered across `app.rs`, `main.rs`, `agent_loop.rs`, and
+    /// `worker/container.rs`. See ADR-112 §5 P0-2 / `p02-bootstrap-tools-design.md`.
+    ///
+    /// Walks [`BootstrapContext`] fields in dependency order and registers
+    /// each tool group whose prerequisites are present. Missing prerequisites
+    /// silently skip their group — this lets early-startup callers register
+    /// the always-available subset (e.g. `mode = Test`) without wiring every
+    /// production-only resource.
+    ///
+    /// Idempotent latch: a successful first call sets a flag; subsequent calls
+    /// return [`BootstrapError::AlreadyBootstrapped`] to keep the dispatch
+    /// path single-pass.
+    ///
+    /// # Errors
+    ///
+    /// - [`BootstrapError::AlreadyBootstrapped`] when called more than once on
+    ///   the same registry instance.
+    ///
+    /// # Scope note (PR #3)
+    ///
+    /// PR #3 wires `bootstrap_tools` end-to-end and validates with 5
+    /// `req_p02_pr3_*` tests, but does **not** yet migrate the 12 legacy call
+    /// sites or privatize the underlying `register_*_tools` methods — those
+    /// land together in PR #4 to keep this PR reviewable. The `#[doc(hidden)]`
+    /// attribute on the legacy methods communicates their pending removal
+    /// without breaking compilation of the existing callers.
+    pub async fn bootstrap_tools(
+        self: &Arc<Self>,
+        ctx: &crate::tools::bootstrap::BootstrapContext,
+    ) -> Result<(), crate::tools::bootstrap::BootstrapError> {
+        use crate::tools::bootstrap::{BootstrapError, BootstrapMode};
+
+        // Idempotency latch (compare_exchange so concurrent callers race once
+        // and the loser observes AlreadyBootstrapped without double-registering).
+        if self
+            .bootstrapped
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Err(BootstrapError::AlreadyBootstrapped);
+        }
+
+        // Mode-driven base set: builtin always, dev/container conditional.
+        match ctx.mode {
+            BootstrapMode::Test => {
+                self.register_builtin_tools_internal();
+                // Test mode is intentionally minimal — no further dispatch.
+                return Ok(());
+            }
+            BootstrapMode::Orchestrator {
+                allow_local_tools: false,
+            } => {
+                self.register_builtin_tools_internal();
+            }
+            BootstrapMode::Orchestrator {
+                allow_local_tools: true,
+            }
+            | BootstrapMode::Container => {
+                self.register_builtin_tools_internal();
+                self.register_dev_tools_internal();
+            }
+        }
+
+        // Field-gated tool groups (sync first, async last).
+        if let Some(store) = &ctx.secrets_store {
+            self.register_secrets_tools_internal(Arc::clone(store));
+        }
+        // Memory: prefer the resolver path when both are present, fall back to workspace.
+        match (&ctx.db_pool, &ctx.workspace) {
+            (Some(resolver), _) => {
+                self.register_memory_tools_with_resolver_internal(Arc::clone(resolver));
+            }
+            (None, Some(ws)) => self.register_memory_tools_internal(Arc::clone(ws)),
+            (None, None) => {}
+        }
+        if let Some(em) = &ctx.extension_manager {
+            self.register_extension_tools_internal(Arc::clone(em));
+        }
+        if let (Some(reg), Some(cat)) = (&ctx.skill_registry, &ctx.skill_catalog) {
+            self.register_skill_tools_internal(Arc::clone(reg), Arc::clone(cat));
+        }
+        if let (Some(store), Some(eng)) = (&ctx.routine_store, &ctx.routine_engine) {
+            self.register_routine_tools_internal(Arc::clone(store), Arc::clone(eng));
+        }
+        if let Some(api) = &ctx.image_api {
+            self.register_image_tools_internal(
+                api.api_base.clone(),
+                api.api_key.clone(),
+                api.gen_model.clone(),
+                None,
+            );
+        }
+        if let Some(api) = &ctx.vision_api {
+            self.register_vision_tools_internal(
+                api.api_base.clone(),
+                api.api_key.clone(),
+                api.vision_model.clone(),
+                None,
+            );
+        }
+
+        // Job tools: require a ContextManager. The PR #2 `JobToolsConfig`
+        // bundle only carries `admin_base_url` / `agent_id`, which is not
+        // enough to drive `register_job_tools_internal` (it needs
+        // `Arc<ContextManager>` plus six optional dependencies). PR #4 extends
+        // `JobToolsConfig` and wires the call site; for PR #3 the field is
+        // reserved.
+        let _ = &ctx.job_config;
+
+        // Async last so its single .await does not block earlier sync paths.
+        if let Some(channels) = &ctx.channels {
+            self.register_message_tools_internal(
+                Arc::clone(channels),
+                ctx.extension_manager.clone(),
+            )
+            .await;
+        }
+
+        Ok(())
     }
 
     /// Get tool definitions filtered by domain.
@@ -379,7 +533,13 @@ impl ToolRegistry {
     /// These tools provide shell access, file operations, and code editing
     /// capabilities needed for the software builder. Call this after
     /// `register_builtin_tools()` to enable code generation features.
+    /// PR #3 compat wrapper. Will be privatized in PR #4.
+    #[doc(hidden)]
     pub fn register_dev_tools(&self) {
+        self.register_dev_tools_internal();
+    }
+
+    fn register_dev_tools_internal(&self) {
         self.register_sync(Arc::new(ShellTool::new()));
         self.register_sync(Arc::new(ReadFileTool::new()));
         self.register_sync(Arc::new(WriteFileTool::new()));
@@ -416,7 +576,16 @@ impl ToolRegistry {
     ///
     /// Memory tools require a workspace resolver for persistence. Call this after
     /// `register_builtin_tools()` if you have a workspace available.
+    /// PR #3 compat wrapper. Will be privatized in PR #4.
+    #[doc(hidden)]
     pub fn register_memory_tools_with_resolver(
+        &self,
+        resolver: Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>,
+    ) {
+        self.register_memory_tools_with_resolver_internal(resolver);
+    }
+
+    fn register_memory_tools_with_resolver_internal(
         &self,
         resolver: Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>,
     ) {
@@ -432,7 +601,13 @@ impl ToolRegistry {
     ///
     /// Memory tools require a workspace for persistence. Call this after
     /// `register_builtin_tools()` if you have a workspace available.
+    /// PR #3 compat wrapper. Will be privatized in PR #4.
+    #[doc(hidden)]
     pub fn register_memory_tools(&self, workspace: Arc<Workspace>) {
+        self.register_memory_tools_internal(workspace);
+    }
+
+    fn register_memory_tools_internal(&self, workspace: Arc<Workspace>) {
         self.register_sync(Arc::new(MemorySearchTool::from_workspace(Arc::clone(
             &workspace,
         ))));
@@ -453,8 +628,36 @@ impl ToolRegistry {
     /// When sandbox deps are provided, `create_job` automatically delegates to
     /// Docker containers. Otherwise it dispatches via the Scheduler (which
     /// persists to DB and spawns a worker).
+    /// PR #3 compat wrapper. Will be privatized in PR #4.
+    #[doc(hidden)]
     #[allow(clippy::too_many_arguments)]
     pub fn register_job_tools(
+        &self,
+        context_manager: Arc<ContextManager>,
+        scheduler_slot: Option<crate::tools::builtin::SchedulerSlot>,
+        job_manager: Option<Arc<ContainerJobManager>>,
+        store: Option<Arc<dyn Database>>,
+        job_event_tx: Option<
+            tokio::sync::broadcast::Sender<(uuid::Uuid, String, ironclaw_common::AppEvent)>,
+        >,
+        inject_tx: Option<tokio::sync::mpsc::Sender<crate::channels::IncomingMessage>>,
+        prompt_queue: Option<PromptQueue>,
+        secrets_store: Option<Arc<dyn SecretsStore + Send + Sync>>,
+    ) {
+        self.register_job_tools_internal(
+            context_manager,
+            scheduler_slot,
+            job_manager,
+            store,
+            job_event_tx,
+            inject_tx,
+            prompt_queue,
+            secrets_store,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn register_job_tools_internal(
         &self,
         context_manager: Arc<ContextManager>,
         scheduler_slot: Option<crate::tools::builtin::SchedulerSlot>,
@@ -520,7 +723,16 @@ impl ToolRegistry {
     ///
     /// These allow the LLM to persist API keys and tokens encrypted in the database.
     /// Values are never returned to the LLM; only names and metadata are exposed.
+    /// PR #3 compat wrapper. Will be privatized in PR #4.
+    #[doc(hidden)]
     pub fn register_secrets_tools(
+        &self,
+        store: Arc<dyn crate::secrets::SecretsStore + Send + Sync>,
+    ) {
+        self.register_secrets_tools_internal(store);
+    }
+
+    fn register_secrets_tools_internal(
         &self,
         store: Arc<dyn crate::secrets::SecretsStore + Send + Sync>,
     ) {
@@ -533,7 +745,13 @@ impl ToolRegistry {
     /// Register extension management tools (search, install, auth, activate, list, remove).
     ///
     /// These allow the LLM to manage MCP servers and WASM tools through conversation.
+    /// PR #3 compat wrapper. Will be privatized in PR #4.
+    #[doc(hidden)]
     pub fn register_extension_tools(&self, manager: Arc<ExtensionManager>) {
+        self.register_extension_tools_internal(manager);
+    }
+
+    fn register_extension_tools_internal(&self, manager: Arc<ExtensionManager>) {
         self.register_sync(Arc::new(ToolSearchTool::new(Arc::clone(&manager))));
         self.register_sync(Arc::new(ToolInstallTool::new(Arc::clone(&manager))));
         self.register_sync(Arc::new(ToolAuthTool::new(Arc::clone(&manager))));
@@ -548,7 +766,17 @@ impl ToolRegistry {
     /// Register skill management tools (list, search, install, remove).
     ///
     /// These allow the LLM to manage prompt-level skills through conversation.
+    /// PR #3 compat wrapper. Will be privatized in PR #4.
+    #[doc(hidden)]
     pub fn register_skill_tools(
+        &self,
+        registry: Arc<std::sync::RwLock<SkillRegistry>>,
+        catalog: Arc<SkillCatalog>,
+    ) {
+        self.register_skill_tools_internal(registry, catalog);
+    }
+
+    fn register_skill_tools_internal(
         &self,
         registry: Arc<std::sync::RwLock<SkillRegistry>>,
         catalog: Arc<SkillCatalog>,
@@ -570,7 +798,17 @@ impl ToolRegistry {
     ///
     /// These allow the LLM to create, list, update, delete, and view history
     /// of routines (scheduled and event-driven tasks).
+    /// PR #3 compat wrapper. Will be privatized in PR #4.
+    #[doc(hidden)]
     pub fn register_routine_tools(
+        &self,
+        store: Arc<dyn Database>,
+        engine: Arc<crate::agent::routine_engine::RoutineEngine>,
+    ) {
+        self.register_routine_tools_internal(store, engine);
+    }
+
+    fn register_routine_tools_internal(
         &self,
         store: Arc<dyn Database>,
         engine: Arc<crate::agent::routine_engine::RoutineEngine>,
@@ -602,7 +840,18 @@ impl ToolRegistry {
     }
 
     /// Register message tool for sending messages to channels.
+    /// PR #3 compat wrapper. Will be privatized in PR #4.
+    #[doc(hidden)]
     pub async fn register_message_tools(
+        &self,
+        channel_manager: Arc<crate::channels::ChannelManager>,
+        extension_manager: Option<Arc<crate::extensions::ExtensionManager>>,
+    ) {
+        self.register_message_tools_internal(channel_manager, extension_manager)
+            .await;
+    }
+
+    async fn register_message_tools_internal(
         &self,
         channel_manager: Arc<crate::channels::ChannelManager>,
         extension_manager: Option<Arc<crate::extensions::ExtensionManager>>,
@@ -637,7 +886,19 @@ impl ToolRegistry {
     ///
     /// These tools allow the LLM to generate and edit images using cloud APIs.
     /// Requires an API base URL, API key, and model name for the image generation backend.
+    /// PR #3 compat wrapper. Will be privatized in PR #4.
+    #[doc(hidden)]
     pub fn register_image_tools(
+        &self,
+        api_base_url: String,
+        api_key: String,
+        gen_model: String,
+        base_dir: Option<std::path::PathBuf>,
+    ) {
+        self.register_image_tools_internal(api_base_url, api_key, gen_model, base_dir);
+    }
+
+    fn register_image_tools_internal(
         &self,
         api_base_url: String,
         api_key: String,
@@ -662,7 +923,19 @@ impl ToolRegistry {
     /// Register vision/image analysis tools.
     ///
     /// These tools allow the LLM to analyze images using a vision-capable model.
+    /// PR #3 compat wrapper. Will be privatized in PR #4.
+    #[doc(hidden)]
     pub fn register_vision_tools(
+        &self,
+        api_base_url: String,
+        api_key: String,
+        vision_model: String,
+        base_dir: Option<std::path::PathBuf>,
+    ) {
+        self.register_vision_tools_internal(api_base_url, api_key, vision_model, base_dir);
+    }
+
+    fn register_vision_tools_internal(
         &self,
         api_base_url: String,
         api_key: String,
@@ -691,7 +964,7 @@ impl ToolRegistry {
         config: Option<BuilderConfig>,
     ) -> Arc<dyn SoftwareBuilder> {
         // First register dev tools needed by the builder
-        self.register_dev_tools();
+        self.register_dev_tools_internal();
 
         // Create the builder (arg order: config, llm, tools)
         let builder: Arc<dyn SoftwareBuilder> = Arc::new(LlmSoftwareBuilder::new(
@@ -1175,5 +1448,145 @@ mod tests {
         registry.retain_only(&[]).await;
         let after = registry.list().await.len();
         assert_eq!(before, after);
+    }
+
+    // ─── PR #3: bootstrap_tools() behaviour tests (ADR-112 §5.4.1 B1) ────
+    //
+    // Each test exercises one observable contract of `bootstrap_tools`. The
+    // shared invariant is that the legacy 12 register_*_tools paths do not
+    // re-fire — bootstrap_tools is the single entry point under test.
+
+    use crate::tools::bootstrap::{BootstrapContext, BootstrapError, BootstrapMode};
+
+    #[tokio::test]
+    async fn req_p02_pr3_a_orchestrator_with_local_tools_includes_dev() {
+        // Orchestrator { allow_local_tools: true } must register dev tools
+        // (shell / read_file / write_file). This is the local-development
+        // path equivalent to the legacy `register_dev_tools` call site.
+        let registry = Arc::new(ToolRegistry::new());
+        let ctx = BootstrapContext {
+            mode: BootstrapMode::Orchestrator {
+                allow_local_tools: true,
+            },
+            ..Default::default()
+        };
+        registry.bootstrap_tools(&ctx).await.unwrap();
+
+        assert!(registry.has("echo").await, "builtin tools must register");
+        assert!(
+            registry.has("shell").await,
+            "dev tools (shell) must register when allow_local_tools=true"
+        );
+        assert!(
+            registry.has("read_file").await,
+            "dev tools (read_file) must register when allow_local_tools=true"
+        );
+    }
+
+    #[tokio::test]
+    async fn req_p02_pr3_b_orchestrator_default_skips_dev_tools() {
+        // Orchestrator { allow_local_tools: false } — the production main
+        // process path — must NOT register dev tools. Container-domain tools
+        // belong inside the sandboxed worker, not the orchestrator.
+        let registry = Arc::new(ToolRegistry::new());
+        let ctx = BootstrapContext {
+            mode: BootstrapMode::Orchestrator {
+                allow_local_tools: false,
+            },
+            ..Default::default()
+        };
+        registry.bootstrap_tools(&ctx).await.unwrap();
+
+        assert!(registry.has("echo").await, "builtin tools must register");
+        assert!(
+            !registry.has("shell").await,
+            "shell must NOT register on default orchestrator"
+        );
+        assert!(
+            !registry.has("read_file").await,
+            "read_file must NOT register on default orchestrator"
+        );
+    }
+
+    #[tokio::test]
+    async fn req_p02_pr3_c_field_gates_secrets_tool_group() {
+        // Field-to-group mapping: secrets_store=None → no secret tools;
+        // Some → secret_list / secret_delete present. This shape repeats
+        // for every other field-gated group (extension / skill / routine /
+        // image / vision); secrets is the simplest to wire because
+        // InMemorySecretsStore needs no async setup.
+        use crate::secrets::SecretsStore;
+        use crate::testing::credentials::test_secrets_store;
+
+        // Without secrets_store: secret tools must be absent.
+        let registry_a = Arc::new(ToolRegistry::new());
+        let ctx_a = BootstrapContext {
+            mode: BootstrapMode::Orchestrator {
+                allow_local_tools: false,
+            },
+            ..Default::default()
+        };
+        registry_a.bootstrap_tools(&ctx_a).await.unwrap();
+        assert!(!registry_a.has("secret_list").await);
+
+        // With secrets_store: secret_list and secret_delete must register.
+        let store: Arc<dyn SecretsStore + Send + Sync> = Arc::new(test_secrets_store());
+        let registry_b = Arc::new(ToolRegistry::new());
+        let ctx_b = BootstrapContext {
+            mode: BootstrapMode::Orchestrator {
+                allow_local_tools: false,
+            },
+            secrets_store: Some(store),
+            ..Default::default()
+        };
+        registry_b.bootstrap_tools(&ctx_b).await.unwrap();
+        assert!(
+            registry_b.has("secret_list").await,
+            "secret_list must register when secrets_store is provided"
+        );
+        assert!(
+            registry_b.has("secret_delete").await,
+            "secret_delete must register when secrets_store is provided"
+        );
+    }
+
+    #[tokio::test]
+    async fn req_p02_pr3_d_idempotent_returns_already_bootstrapped() {
+        // The idempotency latch protects against accidental double-init,
+        // which would otherwise race with PROTECTED_TOOL_NAMES shadow
+        // rejection on the second pass and silently drop registrations.
+        let registry = Arc::new(ToolRegistry::new());
+        let ctx = BootstrapContext::for_test();
+
+        registry.bootstrap_tools(&ctx).await.unwrap();
+        let err = registry
+            .bootstrap_tools(&ctx)
+            .await
+            .expect_err("second bootstrap_tools call must error");
+        assert!(matches!(err, BootstrapError::AlreadyBootstrapped));
+    }
+
+    #[tokio::test]
+    async fn req_p02_pr3_e_test_mode_registers_only_builtins() {
+        // Test mode is the minimum-viable setup used by `BootstrapContext::for_test()`.
+        // It must register the four core built-ins (echo / time / json / http)
+        // and must NOT register any dev or production-gated tool group, even
+        // if other fields are accidentally set on the context.
+        let registry = Arc::new(ToolRegistry::new());
+        let ctx = BootstrapContext::for_test();
+        registry.bootstrap_tools(&ctx).await.unwrap();
+
+        for builtin in ["echo", "time", "json", "http"] {
+            assert!(
+                registry.has(builtin).await,
+                "Test mode must register builtin '{builtin}'"
+            );
+        }
+        for excluded in ["shell", "read_file", "secret_list", "memory_read"] {
+            assert!(
+                !registry.has(excluded).await,
+                "Test mode must NOT register '{excluded}'"
+            );
+        }
     }
 }
