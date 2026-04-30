@@ -2378,6 +2378,7 @@ dependencies = [
 name = "dasclaw_apply_patch"
 version = "0.0.0-w1"
 dependencies = [
+ "tempfile",
  "thiserror 1.0.69",
 ]
 
@@ -4635,6 +4636,7 @@ dependencies = [
  "criterion",
  "cron",
  "crossterm",
+ "dasclaw_apply_patch",
  "dasclaw_exec",
  "dasclaw_hooks",
  "dasclaw_net_proxy",

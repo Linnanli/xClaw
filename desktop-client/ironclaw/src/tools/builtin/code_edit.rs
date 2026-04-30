@@ -1,9 +1,13 @@
 //! Precise code editing tool with count verification and diff preview.
 //!
-//! Complements ApplyPatchTool: this tool adds **replacement count verification**
-//! (the caller specifies how many replacements they expect) and returns a
-//! **unified-diff-style preview** of the change. This prevents accidental bulk
-//! replacements when old_string appears more times than expected.
+//! Complements `ApplyPatchTool`: that tool consumes the codex `apply_patch`
+//! lark envelope (multi-file, multi-hunk, with surrounding context) and is the
+//! correct surface for batch refactors and renames. **This** tool covers the
+//! single-point-replacement-within-one-file niche by adding **replacement
+//! count verification** (the caller specifies how many replacements they
+//! expect) and returning a **unified-diff-style preview** of the change. This
+//! prevents accidental bulk replacements when `old_string` appears more times
+//! than expected.
 
 use std::path::PathBuf;
 

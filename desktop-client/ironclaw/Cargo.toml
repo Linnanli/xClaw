@@ -96,6 +96,8 @@ dasclaw_sandbox = { path = "../../crates/dasclaw_sandbox", version = "0.0.0-w1" 
 dasclaw_net_proxy = { path = "../../crates/dasclaw_net_proxy", version = "0.1.0" }
 # P0-3 (ADR-113): unified hook engine — single front-door for event hooks + trait seams
 dasclaw_hooks = { path = "../../crates/dasclaw_hooks", version = "0.1.0" }
+# W3 #53: codex-protocol apply_patch parser + minimal apply layer
+dasclaw_apply_patch = { path = "../../crates/dasclaw_apply_patch", version = "0.0.0-w1" }
 ironclaw_workspace_cap = { path = "../../crates/ironclaw_workspace_cap", version = "0.1.0" }
 
 # Safety/sanitization
