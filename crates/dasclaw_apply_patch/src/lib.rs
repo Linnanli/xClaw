@@ -1,24 +1,35 @@
-//! Lark-grammar apply_patch protocol (codex port).
+//! `dasclaw_apply_patch` — lark-grammar `apply_patch` parser ported from
+//! `codex-cli-main/codex-rs/apply-patch`.
 //!
-//! W1 skeleton — trait surface only, no impl.
-//! See `docs/plans/architecture-refactor/31-target-architecture.md` §4 for design.
+//! This crate exposes only the **parser** surface (W3 issue #52). Patch
+//! application (filesystem mutation, hunk seek/replace) is intentionally
+//! out of scope and lives in a follow-up issue.
+//!
+//! # Public API
+//!
+//! - [`parse_patch`] — parse a complete patch (lenient by default).
+//! - [`parse_patch_streaming`] — parse partial/streaming patch text for
+//!   progress reporting only.
+//! - [`ApplyPatchArgs`], [`Hunk`], [`UpdateFileChunk`], [`ParseError`].
+//!
+//! # Example
+//!
+//! ```
+//! use dasclaw_apply_patch::{parse_patch, Hunk};
+//!
+//! let patch = "*** Begin Patch\n\
+//!              *** Add File: hello.txt\n\
+//!              +world\n\
+//!              *** End Patch";
+//! let args = parse_patch(patch).unwrap();
+//! assert!(matches!(args.hunks[0], Hunk::AddFile { .. }));
+//! ```
 
-#![allow(dead_code)]
+mod parser;
 
-/// Placeholder error type. Replaced with module-specific errors in W2+.
-#[derive(Debug, thiserror::Error)]
-#[error("dasclaw_apply_patch skeleton error: {0}")]
-pub struct SkeletonError(pub String);
-
-/// Primary entry trait (placeholder). Replaced with full surface in W2+.
-pub trait ApplyPatch {
-    /// Lark-grammar apply_patch protocol (codex port).
-    fn apply(&self, patch: &str) -> Result<(), SkeletonError>;
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn skeleton_compiles() { /* W1 placeholder */
-    }
-}
+pub use parser::parse_patch;
+pub use parser::parse_patch_streaming;
+pub use parser::ApplyPatchArgs;
+pub use parser::Hunk;
+pub use parser::ParseError;
+pub use parser::UpdateFileChunk;
