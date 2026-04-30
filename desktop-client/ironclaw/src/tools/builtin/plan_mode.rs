@@ -59,7 +59,7 @@ impl Tool for PlanModeTool {
                                 "properties": {
                                     "description": { "type": "string" },
                                     "tool_name": { "type": "string" },
-                                    "parameters": { "type": "object" },
+                                    "parameters": { "description": "Tool-specific parameters (freeform, schema varies by tool)" },
                                     "risk": { "type": "string", "enum": ["low", "medium", "high"] },
                                     "files": { "type": "array", "items": { "type": "string" } }
                                 },
