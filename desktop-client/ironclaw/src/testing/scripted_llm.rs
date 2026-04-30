@@ -8,6 +8,7 @@
 //!
 //! ```rust,no_run
 //! use ironclaw::testing::scripted_llm::{ScriptedLlm, ScriptedStep};
+//! use serde_json::json;
 //!
 //! let llm = ScriptedLlm::new(vec![
 //!     ScriptedStep::tool_calls(vec![("read_file", json!({"path": "f.txt"}))]),

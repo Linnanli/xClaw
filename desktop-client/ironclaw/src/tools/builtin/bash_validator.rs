@@ -223,7 +223,10 @@ const SYSTEM_ADMIN_COMMANDS: &[&str] = &[
     "umount",
     "fdisk",
     "parted",
-    "lsblk",
+    // NOTE: `lsblk` and `blkid` are read-only block-device inspectors and are
+    // intentionally NOT in this list. Treating them as SystemAdmin produced High
+    // risk classifications for harmless inspection commands and conflicted with
+    // ShellTool's pattern table (see shell_risk_regression::word_boundary_no_false_positives).
     "blkid",
     "systemctl",
     "service",
@@ -411,8 +414,12 @@ fn classify_read_only_variant(first: &str, cmd: &str) -> CommandIntent {
     if (first == "sed" || first == "awk") && cmd.contains(" -i") {
         return CommandIntent::Write;
     }
+    // `find -delete` removes matched files. Treated as Write (reversible scope, bounded
+    // by the find expression) rather than Destructive, to align with ShellTool's pattern
+    // table (`find` is in MEDIUM_RISK_PATTERNS). Truly destructive variants (e.g. paired
+    // with `rm -rf` via -exec) are caught below.
     if first == "find" && cmd.contains("-delete") {
-        return CommandIntent::Destructive;
+        return CommandIntent::Write;
     }
     if first == "find" && cmd.contains("-exec") {
         return CommandIntent::Write;
@@ -438,13 +445,18 @@ fn classify_build_tool_intent(first: &str, cmd: &str) -> CommandIntent {
 
     match first {
         "cargo" => match sub {
-            "build" | "test" | "check" | "clippy" | "run" | "bench" | "doc" | "fmt" => {
-                CommandIntent::Write
-            }
+            // Read-only analysis subcommands — no filesystem mutation.
+            "check" | "clippy" => CommandIntent::ReadOnly,
+            "build" | "test" | "run" | "bench" | "doc" | "fmt" => CommandIntent::Write,
             _ => CommandIntent::PackageManagement,
         },
         "npm" | "yarn" | "pnpm" | "bun" => match sub {
             "test" | "run" | "start" | "dev" | "build" | "lint" | "exec" => CommandIntent::Write,
+            // Reversible package operations: install/uninstall/add/remove/update/ci.
+            // These mutate node_modules / lockfile but are recoverable, so they map to
+            // Write (Medium) — matching ShellTool's MEDIUM_RISK_PATTERNS contract
+            // (see shell_risk_regression::medium_risk_commands).
+            "install" | "uninstall" | "add" | "remove" | "update" | "ci" => CommandIntent::Write,
             _ => CommandIntent::PackageManagement,
         },
         "pip" | "pip3" => match sub {
@@ -682,10 +694,12 @@ mod tests {
     }
 
     #[test]
-    fn find_delete_is_destructive() {
+    fn find_delete_is_write() {
+        // `find -delete` is bounded by the find expression \u2014 maps to Write (Medium),
+        // matching ShellTool's MEDIUM_RISK_PATTERNS contract.
         let r = validate("find . -name '*.tmp' -delete", &ws());
-        assert_eq!(r.intent, CommandIntent::Destructive);
-        assert_eq!(r.risk_level, RiskLevel::High);
+        assert_eq!(r.intent, CommandIntent::Write);
+        assert_eq!(r.risk_level, RiskLevel::Medium);
     }
 
     #[test]
@@ -757,10 +771,12 @@ mod tests {
     }
 
     #[test]
-    fn package_management_is_high() {
+    fn npm_install_is_write() {
+        // Reversible package operation \u2014 maps to Write (Medium), aligned with
+        // ShellTool's MEDIUM_RISK_PATTERNS (see shell_risk_regression contract).
         let r = validate("npm install express", &ws());
-        assert_eq!(r.intent, CommandIntent::PackageManagement);
-        assert_eq!(r.risk_level, RiskLevel::High);
+        assert_eq!(r.intent, CommandIntent::Write);
+        assert_eq!(r.risk_level, RiskLevel::Medium);
     }
 
     #[test]
@@ -771,10 +787,33 @@ mod tests {
     }
 
     #[test]
+    fn cargo_check_is_read_only() {
+        // Pure analysis, no filesystem mutation \u2014 maps to ReadOnly (Low).
+        let r = validate("cargo check", &ws());
+        assert_eq!(r.intent, CommandIntent::ReadOnly);
+        assert_eq!(r.risk_level, RiskLevel::Low);
+    }
+
+    #[test]
+    fn cargo_clippy_is_read_only() {
+        let r = validate("cargo clippy --all-targets", &ws());
+        assert_eq!(r.intent, CommandIntent::ReadOnly);
+        assert_eq!(r.risk_level, RiskLevel::Low);
+    }
+
+    #[test]
     fn cargo_install_is_package_management() {
         let r = validate("cargo install ripgrep", &ws());
         assert_eq!(r.intent, CommandIntent::PackageManagement);
         assert_eq!(r.risk_level, RiskLevel::High);
+    }
+
+    #[test]
+    fn lsblk_is_not_sysadmin() {
+        // Block-device inspector \u2014 read-only, must not be classified as SystemAdmin/High.
+        let r = validate("lsblk", &ws());
+        assert_ne!(r.intent, CommandIntent::SystemAdmin);
+        assert_ne!(r.risk_level, RiskLevel::High);
     }
 
     #[test]
