@@ -2500,9 +2500,6 @@ dependencies = [
 [[package]]
 name = "dasclaw_project_docs"
 version = "0.0.0-w1"
-dependencies = [
- "thiserror 1.0.69",
-]
 
 [[package]]
 name = "dasclaw_pty"
