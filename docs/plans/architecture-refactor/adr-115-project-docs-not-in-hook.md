@@ -73,6 +73,34 @@ ADR-113 已规定：
 - **#59a** ([Issue #59](https://github.com/Linnanli/xClaw/issues/59))：纯 helper（assemble_section），不涉及 hook
 - **#59b** ([Issue #111](https://github.com/Linnanli/xClaw/issues/111))：SessionManager 构建期 DI 注入，不调用 dasclaw_hooks
 
+### 2.5 生命周期：session 内不可变
+
+ProjectDoc 在 session 创建时（OnSessionStart 时机点）加载**一次**，session 生命周期内**不可变**。
+
+| 参考库 | 实测调用站 | 行为 |
+|---|---|---|
+| codex | `core/src/session/mod.rs:501` `AgentsMdManager::new(&config).user_instructions(...)` 在 session 构造期调用，结果存入 `Session.user_instructions`（line 601）。后续每个 turn 直接读 `turn_context.user_instructions`（line 2639），不重新读盘 | session 内不可变 |
+| claw-code | `runtime/src/conversation.rs:925` `SystemPromptBuilder::new().with_project_context(...).build()` 在 `ConversationRuntime::new` 时 build 成 `system_prompt` 字符串，`run_turn` 复用同一份 | session 内不可变 |
+| ironclaw legacy | `llm/reasoning.rs:488` `Reasoning.with_workspace_system_prompt(p)` 构造期注入 | session 内不可变 |
+
+**强制契约**：
+
+- agent loop 每一轮**不得**重新调用 `loader.load()` / `assemble_section()`
+- `system_prompt` 一旦写入 `ReasoningContext` / `Session` 即被冻结
+- 用户修改 `AGENTS.md` 后**必须新建 session**才生效（与 codex / claw-code / ironclaw 行为一致）
+
+**理由**：
+
+1. **prompt prefix caching 稳定性**：上游 LLM 提供商（OpenAI / Anthropic）对 system prompt 走 prefix cache，session 中途换 system prompt 会击穿缓存
+2. **推理一致性**：模型上一轮基于 v1 AGENTS.md 推理，下一轮突然变 v2 会导致推理跳变
+3. **IO/性能**：每 turn 重读盘 + 多层 walkdir + 拼装是无谓开销
+
+**未来增强（不在 R0 / 不在 #59 范围内）**：
+- `/reload-context` 斜杠命令：手动触发重读 + 截断 conversation 重启
+- chat 工具 `update_project_context()`：让 LLM 自己请求刷新
+
+这两类增强若实现，仍**不进** hook 系统——仍走构建期 DI（重建 session 或局部重建 system_prompt）。
+
 ---
 
 ## 3. Consequences
