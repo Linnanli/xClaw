@@ -130,6 +130,51 @@
 - ❌ 一个 PR 混入多个互不相干的主题
 - ❌ 明明已经完成闭环 milestone，却继续在同一会话无限追加新阶段
 
+### Base 分支既有 broken 测试处置规范（2026-04-30 PR #79/#81 实证）
+
+**触发场景**：CI 改造（如完整 build 下沉 PR CI）后，第一波 PR 突然在与本身改动无关的测试上 fail。
+
+**根因模式**：
+- 改 CI 之前 Tests job 是 `if: false`，PR 阶段不跑测试
+- 多个 broken 测试在历史上合进了 base（xClaw），从未被 PR CI 拦截
+- CI 改造后第一次让 broken 浮现，每个新 PR 都会"莫名其妙"红
+- 多个 broken 之间还会**互锁**：PR-A 修测试-X 但被测试-Y broken 挡住，PR-B 修测试-Y 但被测试-X broken 挡住，单独发都过不了
+
+**处置流程（按优先级）**：
+
+1. **先确认是不是 base 既有问题**：在 `origin/<base>` HEAD 上跑同一测试。如果同样 fail → 是历史欠债，不是本 PR 引入。
+2. **本地全套验证不能只跑 touched crate**：base broken 的测试可能在 untouched crate 里。`cargo check -p <crate>` 不会发现，必须跑相关测试 binary：`cargo nextest run -p ironclaw --test <broken_test>`。
+3. **互锁的 broken 优先合并到单 PR**，不要 stacked：
+   - stacked PR 解决不了 base broken 测试问题
+   - rebase + 合并 commit 到一个 PR，PR 描述里写清 `Closes #X + Closes #Y`
+   - 关闭被合并那个 PR 时留 comment 说明合并去向
+4. **修复方式按 broken 类型选**：
+   - **测试断言固化错误设计**（如 hard-coded expected list 没跟实现同步）→ 更新断言到当前真实状态
+   - **代码真有 bug**（如 plan_mode `parameters: {type:object}` 缺 `properties`）→ 修代码
+   - **测试与 fork 策略冲突**（如 telegram_auth_integration `CI=true` 触发 panic 但 xClaw 不激活该 channel）→ 改 gate 条件，fork 默认跳过 + 上游 opt-in
+   - **跨模块互锁**：必须一次性修齐
+5. **Regression test enforcement workflow 注意点**：
+   - 该 workflow 只监听 `pull_request` 默认 events，**不监听 `labeled`**，加 label 不会自动 rerun
+   - 临时绕过：推空 commit 带 `[skip-regression-check]` marker 触发 rerun（commit 消息扫描，比 label 鲁棒）
+   - 根因修复方式：让脚本的 `^tests/` 正则识别嵌套 crate 路径（如 `desktop-client/ironclaw/tests/...`）
+6. **本地分层策略边界**（AGENTS.md 本地节奏）：
+   - "本地不要跑 workspace test" 仍然有效，但**前提是 CI 必须在 PR 阶段跑全集**
+   - 一旦 CI 改造让 PR 第一次跑全集，**24h 内修齐 base broken**，不要让它过夜污染所有 PR
+   - 改 CI 的 PR 自身要预跑 workspace test 一遍，提前发现 broken
+
+**反模式（禁止）**：
+- ❌ 看到无关测试 fail 就直接 `--no-verify` 推或者关 PR 重开
+- ❌ 把 base broken 当成本 PR 的责任去研究
+- ❌ 把互锁的两个 broken 修拆成两个 stacked PR（解不了，base 仍 broken）
+- ❌ 修测试断言时不验证"是断言写错了还是代码真坏了"——盲目改断言会固化 bug
+- ❌ Tests CI 红就建议合并（违反 AGENTS.md "PR 验证未通过不开 PR"）
+
+**实证案例**（PR #79 + #81 + 后续修补）：
+- xClaw 同时 broken 三处：`shell_risk_regression`（4 处分级漂移）/`telegram_auth_integration`（CI gate 错位）/`tool_schema_validation`（hard-coded list 过期 + plan_mode schema bug）
+- 三者互锁，单独 PR 全过不了 Tests
+- 处置：rebase 合并到 #79 单 PR，一次修齐 4 类问题，`Closes #76 + Closes #80`
+- 教训：CI 改造 PR (#50) 自身没跑 workspace test，broken 集中在合并后第一波 feature PR 暴露
+
 ### 分析工具使用规范（Round 17 建立 / Round 18 实证）
 
 **重大架构决策/能力盘点/跨项目对比前，必须按三级顺序使用工具**：
