@@ -12,7 +12,7 @@
 //!
 //! W2.6 will wire `dasclaw_core` to consult this policy before every tool
 //! invocation. W2 验收约束："WritableRoot 洞中洞契约测试 — sandbox 在
-//! WorkspaceWrite 模式下写 `.git/hooks/*`、`.codex/*` 必须返回 SandboxError，
+//! WorkspaceWrite 模式下写 `.git/hooks/*`、`.dasclaw/*` 必须返回 SandboxError，
 //! 且无任何 fallback。" 本模块负责 *决策* 那些路径不可写；强制是 sandbox 的
 //! 职责。
 //!
@@ -86,7 +86,8 @@ pub enum SandboxPolicy {
     },
 
     /// 工作区可写：默认 cwd + `/tmp`（Unix）+ `$TMPDIR` + 显式 `writable_roots`，
-    /// 同时**洞中洞**保护 `.git/`、`.codex/`、`.agents/` 等敏感子路径。
+    /// 同时**洞中洞**保护 `.git/`、`.dasclaw/`、`.agents/`（以及 `.codex/` 兼容
+    /// 仅当目录已存在时）等敏感子路径。
     #[serde(rename = "workspace-write")]
     WorkspaceWrite {
         /// cwd 之外额外的可写根。
@@ -221,9 +222,11 @@ impl SandboxPolicy {
         roots
             .into_iter()
             .map(|root| {
-                let protect_missing_dot_codex = root == cwd;
-                let read_only_subpaths =
-                    default_read_only_subpaths_for_writable_root(&root, protect_missing_dot_codex);
+                let protect_missing_project_meta = root == cwd;
+                let read_only_subpaths = default_read_only_subpaths_for_writable_root(
+                    &root,
+                    protect_missing_project_meta,
+                );
                 WritableRoot {
                     root,
                     read_only_subpaths,
@@ -271,16 +274,17 @@ impl SandboxPolicy {
 ///
 /// 默认保护：
 /// - `<root>/.git`：防 agent 改 hook 后 commit 时 RCE
-/// - `<root>/.agents`：codex 的 agent 描述文件目录
-/// - `<root>/.codex`：codex 项目元数据；`protect_missing_dot_codex=true` 时
-///   即使目录不存在也保护（防首次创建绕过审批流）
+/// - `<root>/.agents`：agent 描述文件目录（与 codex `.agents/` 同义）
+/// - `<root>/.dasclaw`：x-claw 项目元数据；`protect_missing_project_meta=true`
+///   时即使目录不存在也保护（防首次创建绕过审批流）
+/// - `<root>/.codex`：仅在目录已存在时保护（兼容 codex-fork 导入仓库）
 ///
 /// 不像 codex 那样解析 `.git` 文本指针文件（worktree/submodule 场景）—
 /// 当前切片仅保护直接路径。worktree 增强留给 W2.6 集成 dasclaw_core 时按
 /// 真实场景需求增量补。
 pub fn default_read_only_subpaths_for_writable_root(
     writable_root: &Path,
-    protect_missing_dot_codex: bool,
+    protect_missing_project_meta: bool,
 ) -> Vec<PathBuf> {
     let mut subpaths: Vec<PathBuf> = Vec::new();
 
@@ -294,12 +298,18 @@ pub fn default_read_only_subpaths_for_writable_root(
         subpaths.push(dot_agents);
     }
 
+    let dot_dasclaw = writable_root.join(".dasclaw");
+    if protect_missing_project_meta || dot_dasclaw.is_dir() {
+        subpaths.push(dot_dasclaw);
+    }
+
+    // codex 兼容：仅在目录已存在时保护（fork 用户可能从 codex 导入仓库）。
     let dot_codex = writable_root.join(".codex");
-    if protect_missing_dot_codex || dot_codex.is_dir() {
+    if dot_codex.is_dir() {
         subpaths.push(dot_codex);
     }
 
-    // dedup（保持顺序）。codex 同等逻辑。
+    // dedup（保持顺序）。
     let mut seen = std::collections::HashSet::new();
     subpaths.retain(|p| seen.insert(p.clone()));
     subpaths
@@ -487,39 +497,43 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         std::fs::create_dir(tmp.path().join(".git")).unwrap();
         std::fs::create_dir(tmp.path().join(".agents")).unwrap();
+        std::fs::create_dir(tmp.path().join(".dasclaw")).unwrap();
         std::fs::create_dir(tmp.path().join(".codex")).unwrap();
 
         let subs = default_read_only_subpaths_for_writable_root(tmp.path(), false);
         assert!(subs.contains(&tmp.path().join(".git")));
         assert!(subs.contains(&tmp.path().join(".agents")));
-        assert!(subs.contains(&tmp.path().join(".codex")));
+        assert!(subs.contains(&tmp.path().join(".dasclaw")));
+        assert!(
+            subs.contains(&tmp.path().join(".codex")),
+            ".codex must be protected when present (codex-fork compat)"
+        );
     }
 
     #[test]
-    fn default_read_only_subpaths_skips_missing_dirs_unless_dot_codex_protected() {
+    fn default_read_only_subpaths_skips_missing_dirs_unless_project_meta_protected() {
         let tmp = TempDir::new().unwrap();
         // 啥都没创建。
         let subs_unprotected =
-            default_read_only_subpaths_for_writable_root(tmp.path(), /* dot_codex */ false);
+            default_read_only_subpaths_for_writable_root(tmp.path(), /* project_meta */ false);
         assert!(subs_unprotected.is_empty(), "got {subs_unprotected:?}");
 
-        // protect_missing_dot_codex=true 即使 .codex 不存在也加入保护清单
-        // （首次创建走审批流）。
+        // protect_missing_project_meta=true 即使 .dasclaw 不存在也加入保护清单
+        // （首次创建走审批流）。`.codex` 仅在存在时保护，本例中应不在列。
         let subs_protected = default_read_only_subpaths_for_writable_root(tmp.path(), true);
-        assert_eq!(subs_protected, vec![tmp.path().join(".codex")]);
+        assert_eq!(subs_protected, vec![tmp.path().join(".dasclaw")]);
     }
 
     #[test]
     fn default_read_only_subpaths_dedup() {
         let tmp = TempDir::new().unwrap();
-        std::fs::create_dir(tmp.path().join(".codex")).unwrap();
+        std::fs::create_dir(tmp.path().join(".dasclaw")).unwrap();
         // 调两次相同路径不应产生重复。
         let mut a = default_read_only_subpaths_for_writable_root(tmp.path(), true);
         let b = default_read_only_subpaths_for_writable_root(tmp.path(), true);
         assert_eq!(a, b);
         a.extend(b);
-        // dedup 内置在函数里，组合的 a 自带已含 .codex 一次（因为函数自身去重，
-        // extend 后会变两份 — 这里只是验证函数本身返回去重后的结果）。
+        // 函数自身去重，返回只含 .dasclaw 一项。
         assert_eq!(
             default_read_only_subpaths_for_writable_root(tmp.path(), true).len(),
             1
@@ -554,7 +568,7 @@ mod tests {
     }
 
     /// **W2 验收契约**："在 WorkspaceWrite 模式下写 `.git/hooks/*`、
-    /// `.codex/*` 必须返回 SandboxError，且无任何 fallback。"
+    /// `.dasclaw/*` 必须返回 SandboxError，且无任何 fallback。"
     /// 本测试验证策略层正确地决策了"不可写"。
     #[test]
     fn workspace_write_blocks_dot_git_hooks_under_cwd() {
@@ -572,7 +586,12 @@ mod tests {
         assert!(!p.is_path_writable(&cwd.join(".git/config"), cwd));
         assert!(!p.is_path_writable(&cwd.join(".git"), cwd));
 
-        // .codex 即使不存在也保护（protect_missing_dot_codex=true 因 root==cwd）
+        // .dasclaw 即使不存在也保护（protect_missing_project_meta=true 因 root==cwd）
+        assert!(!p.is_path_writable(&cwd.join(".dasclaw/secrets.toml"), cwd));
+
+        // .codex 不存在时不加入保护清单（仅 codex-fork 场景下使用）
+        // 验证创建后会被保护。
+        std::fs::create_dir(cwd.join(".codex")).unwrap();
         assert!(!p.is_path_writable(&cwd.join(".codex/secrets.toml"), cwd));
     }
 
