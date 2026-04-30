@@ -1,8 +1,7 @@
 //! AGENTS.md / CLAUDE.md multi-layer project doc loader.
 //!
-//! W3 issue #54 — public surface; #55 — single-directory priority routing.
-//! Downstream issues fill the rest of the impl:
-//! - #56: 3-layer merge (user / project / cwd)
+//! W3 issues #54 (trait surface), #55 (single-dir priority), #56 (3-layer merge).
+//! Downstream:
 //! - #57: recursive upward search to repo root / `$HOME`
 //! - #58: `max_bytes` truncation
 //! - #59: `OnSessionStart` hook injection
@@ -73,7 +72,7 @@ impl ProjectDocLoader for EmptyProjectDocLoader {
     }
 }
 
-/// Filenames searched in priority order within a single directory.
+/// Filenames searched in priority order within a project / cwd directory.
 ///
 /// Mirrors ADR-106 with the `.codex/` → `.dasclaw/` migration (issues #99/#100):
 /// the project's own namespace (`.dasclaw/AGENTS.md`) outranks third-party
@@ -86,11 +85,42 @@ const DOC_FILENAME_PRIORITY: &[&str] = &[
     ".codex/AGENTS.md",
 ];
 
+/// User-global filename priority chain (relative to `$HOME`).
+///
+/// Mirrors ADR-106 dual-read: `~/.dasclaw/AGENTS.md` is the new primary,
+/// `~/.codex/AGENTS.md` retained for codex-fork compatibility.
+const USER_GLOBAL_FILENAME_PRIORITY: &[&str] = &[".dasclaw/AGENTS.md", ".codex/AGENTS.md"];
+
+/// Read a single doc, skipping unreadable / whitespace-only files.
+///
+/// Centralises the “best-effort, never panic” I/O policy mandated by the
+/// [`ProjectDocLoader`] trait contract. Whitespace-only files are skipped to
+/// match codex `agents_md.rs` behaviour.
+fn read_doc_at(path: PathBuf, layer: DocLayer) -> Option<ProjectDoc> {
+    let content = std::fs::read_to_string(&path).ok()?;
+    if content.trim().is_empty() {
+        return None;
+    }
+    let bytes = content.len();
+    Some(ProjectDoc {
+        content,
+        source_path: path,
+        layer,
+        bytes,
+    })
+}
+
+/// Walk a filename priority chain under `base`, returning the first match.
+fn first_priority_doc(base: &Path, chain: &[&str], layer: DocLayer) -> Option<ProjectDoc> {
+    chain
+        .iter()
+        .find_map(|relative| read_doc_at(base.join(relative), layer))
+}
+
 /// Single-directory priority loader (#55).
 ///
 /// Walks [`DOC_FILENAME_PRIORITY`] in order under `cwd` and returns the first
-/// readable, non-empty doc. Whitespace-only files are skipped (matches codex
-/// `agents_md.rs` behaviour). I/O errors fall through silently per the
+/// readable, non-empty doc. I/O errors fall through silently per the
 /// [`ProjectDocLoader`] contract.
 ///
 /// Multi-layer merge (#56), upward search (#57), and byte-cap truncation
@@ -100,23 +130,68 @@ pub struct PriorityProjectDocLoader;
 
 impl ProjectDocLoader for PriorityProjectDocLoader {
     fn load(&self, cwd: &Path) -> Vec<ProjectDoc> {
-        for relative in DOC_FILENAME_PRIORITY {
-            let path = cwd.join(relative);
-            let Ok(content) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            if content.trim().is_empty() {
-                continue;
-            }
-            let bytes = content.len();
-            return vec![ProjectDoc {
-                content,
-                source_path: path,
-                layer: DocLayer::Cwd,
-                bytes,
-            }];
+        first_priority_doc(cwd, DOC_FILENAME_PRIORITY, DocLayer::Cwd)
+            .map(|doc| vec![doc])
+            .unwrap_or_default()
+    }
+}
+
+/// 3-layer merge loader (#56).
+///
+/// Emits up to 3 docs in load order: `UserGlobal` → `Project` → `Cwd`.
+/// Each layer reuses [`DOC_FILENAME_PRIORITY`] (or
+/// [`USER_GLOBAL_FILENAME_PRIORITY`] for the user-global layer) and skips
+/// empty / unreadable files. When `cwd` is the same path as `project_root`
+/// the duplicate `Cwd` emit is suppressed so callers see a single
+/// `Project`-layer doc instead of two copies.
+///
+/// `user_home` and `project_root` are optional so callers can disable the
+/// upper layers without composing a different loader (e.g. ephemeral /
+/// non-repo `cwd`s in tests). Recursive upward search to find
+/// `project_root` is the responsibility of issue #57.
+#[derive(Debug, Default, Clone)]
+pub struct LayeredProjectDocLoader {
+    user_home: Option<PathBuf>,
+    project_root: Option<PathBuf>,
+}
+
+impl LayeredProjectDocLoader {
+    /// Construct a layered loader with explicit user-home and project-root paths.
+    pub fn new(user_home: Option<PathBuf>, project_root: Option<PathBuf>) -> Self {
+        Self {
+            user_home,
+            project_root,
         }
-        Vec::new()
+    }
+}
+
+impl ProjectDocLoader for LayeredProjectDocLoader {
+    fn load(&self, cwd: &Path) -> Vec<ProjectDoc> {
+        let mut docs = Vec::with_capacity(3);
+
+        let user_doc = self.user_home.as_deref().and_then(|home| {
+            first_priority_doc(home, USER_GLOBAL_FILENAME_PRIORITY, DocLayer::UserGlobal)
+        });
+        if let Some(doc) = user_doc {
+            docs.push(doc);
+        }
+
+        let project_doc = self
+            .project_root
+            .as_deref()
+            .and_then(|root| first_priority_doc(root, DOC_FILENAME_PRIORITY, DocLayer::Project));
+        if let Some(doc) = project_doc {
+            docs.push(doc);
+        }
+
+        let cwd_is_project_root = self.project_root.as_deref() == Some(cwd);
+        if !cwd_is_project_root {
+            if let Some(doc) = first_priority_doc(cwd, DOC_FILENAME_PRIORITY, DocLayer::Cwd) {
+                docs.push(doc);
+            }
+        }
+
+        docs
     }
 }
 
@@ -244,5 +319,161 @@ mod tests {
     fn req_project_docs_55_missing_directory_returns_empty_without_panic() {
         let docs = PriorityProjectDocLoader.load(Path::new("/nonexistent/x-claw-test-path"));
         assert!(docs.is_empty());
+    }
+
+    // ───────────────────────── #56 LayeredProjectDocLoader ─────────────────────────
+
+    #[test]
+    fn req_project_docs_56_three_layers_emit_in_order() {
+        let home = tempdir().unwrap();
+        let project = tempdir().unwrap();
+        let cwd = project.path().join("subdir");
+        fs::create_dir_all(&cwd).unwrap();
+
+        write(home.path(), ".dasclaw/AGENTS.md", "user-body");
+        write(project.path(), "AGENTS.md", "project-body");
+        write(&cwd, "AGENTS.md", "cwd-body");
+
+        let loader = LayeredProjectDocLoader::new(
+            Some(home.path().to_path_buf()),
+            Some(project.path().to_path_buf()),
+        );
+        let docs = loader.load(&cwd);
+
+        assert_eq!(docs.len(), 3);
+        assert_eq!(docs[0].layer, DocLayer::UserGlobal);
+        assert_eq!(docs[0].content, "user-body");
+        assert_eq!(docs[1].layer, DocLayer::Project);
+        assert_eq!(docs[1].content, "project-body");
+        assert_eq!(docs[2].layer, DocLayer::Cwd);
+        assert_eq!(docs[2].content, "cwd-body");
+    }
+
+    #[test]
+    fn req_project_docs_56_user_plus_project_two_layers() {
+        let home = tempdir().unwrap();
+        let project = tempdir().unwrap();
+        let cwd = project.path().join("subdir");
+        fs::create_dir_all(&cwd).unwrap();
+
+        write(home.path(), ".dasclaw/AGENTS.md", "user-body");
+        write(project.path(), "AGENTS.md", "project-body");
+        // No doc at cwd.
+
+        let loader = LayeredProjectDocLoader::new(
+            Some(home.path().to_path_buf()),
+            Some(project.path().to_path_buf()),
+        );
+        let docs = loader.load(&cwd);
+
+        assert_eq!(docs.len(), 2);
+        assert_eq!(docs[0].layer, DocLayer::UserGlobal);
+        assert_eq!(docs[1].layer, DocLayer::Project);
+    }
+
+    #[test]
+    fn req_project_docs_56_project_plus_cwd_skips_missing_user() {
+        let project = tempdir().unwrap();
+        let cwd = project.path().join("subdir");
+        fs::create_dir_all(&cwd).unwrap();
+
+        write(project.path(), "AGENTS.md", "project-body");
+        write(&cwd, "AGENTS.md", "cwd-body");
+
+        let loader = LayeredProjectDocLoader::new(None, Some(project.path().to_path_buf()));
+        let docs = loader.load(&cwd);
+
+        assert_eq!(docs.len(), 2);
+        assert_eq!(docs[0].layer, DocLayer::Project);
+        assert_eq!(docs[1].layer, DocLayer::Cwd);
+    }
+
+    #[test]
+    fn req_project_docs_56_cwd_only_when_no_user_no_project() {
+        let cwd = tempdir().unwrap();
+        write(cwd.path(), "AGENTS.md", "cwd-body");
+
+        let loader = LayeredProjectDocLoader::new(None, None);
+        let docs = loader.load(cwd.path());
+
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].layer, DocLayer::Cwd);
+    }
+
+    #[test]
+    fn req_project_docs_56_returns_empty_when_no_docs_anywhere() {
+        let home = tempdir().unwrap();
+        let project = tempdir().unwrap();
+        let cwd = project.path().join("subdir");
+        fs::create_dir_all(&cwd).unwrap();
+
+        let loader = LayeredProjectDocLoader::new(
+            Some(home.path().to_path_buf()),
+            Some(project.path().to_path_buf()),
+        );
+        assert!(loader.load(&cwd).is_empty());
+    }
+
+    #[test]
+    fn req_project_docs_56_cwd_equal_to_project_root_dedups_to_single_project_doc() {
+        let project = tempdir().unwrap();
+        write(project.path(), "AGENTS.md", "project-body");
+
+        let loader = LayeredProjectDocLoader::new(None, Some(project.path().to_path_buf()));
+        let docs = loader.load(project.path());
+
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].layer, DocLayer::Project);
+        assert_eq!(docs[0].content, "project-body");
+    }
+
+    #[test]
+    fn req_project_docs_56_user_global_dasclaw_wins_over_codex_compat() {
+        let home = tempdir().unwrap();
+        let cwd = tempdir().unwrap();
+        write(home.path(), ".dasclaw/AGENTS.md", "user-dasclaw");
+        write(home.path(), ".codex/AGENTS.md", "user-codex");
+
+        let loader = LayeredProjectDocLoader::new(Some(home.path().to_path_buf()), None);
+        let docs = loader.load(cwd.path());
+
+        let user_docs: Vec<_> = docs
+            .iter()
+            .filter(|d| d.layer == DocLayer::UserGlobal)
+            .collect();
+        assert_eq!(user_docs.len(), 1);
+        assert_eq!(user_docs[0].content, "user-dasclaw");
+    }
+
+    #[test]
+    fn req_project_docs_56_user_global_falls_back_to_codex_compat() {
+        let home = tempdir().unwrap();
+        let cwd = tempdir().unwrap();
+        write(home.path(), ".codex/AGENTS.md", "user-codex");
+
+        let loader = LayeredProjectDocLoader::new(Some(home.path().to_path_buf()), None);
+        let docs = loader.load(cwd.path());
+
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].layer, DocLayer::UserGlobal);
+        assert_eq!(docs[0].content, "user-codex");
+        assert_eq!(docs[0].source_path, home.path().join(".codex/AGENTS.md"));
+    }
+
+    #[test]
+    fn req_project_docs_56_project_layer_uses_full_priority_chain() {
+        let project = tempdir().unwrap();
+        // Only CLAUDE.md at project root — should still emit at Project layer.
+        write(project.path(), "CLAUDE.md", "claude-project");
+        let cwd = project.path().join("subdir");
+        fs::create_dir_all(&cwd).unwrap();
+
+        let loader = LayeredProjectDocLoader::new(None, Some(project.path().to_path_buf()));
+        let docs = loader.load(&cwd);
+
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].layer, DocLayer::Project);
+        assert_eq!(docs[0].content, "claude-project");
+        assert_eq!(docs[0].source_path, project.path().join("CLAUDE.md"));
     }
 }
