@@ -1,0 +1,114 @@
+name: Project board automation
+
+# Syncs issues + PRs into the architecture-refactor Project (v2) and
+# transitions their Status field on lifecycle events.
+#
+# Activation:
+#   Set repository variable PROJECT_URL to the Project v2 URL (e.g.
+#   https://github.com/users/Linnanli/projects/N) and create a Personal
+#   Access Token (classic, scopes: project, repo) stored as repository
+#   secret PROJECT_TOKEN. Without these vars/secrets every step is a no-op.
+#
+# Status field values used (must match Project's Status options):
+#   - Backlog
+#   - Ready
+#   - In-Progress
+#   - In-Review
+#   - Done
+#   - Blocked
+
+on:
+  issues:
+    types: [opened, reopened, labeled, closed]
+  pull_request:
+    types: [opened, ready_for_review, review_requested, closed, reopened]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  add-and-transition:
+    runs-on: ubuntu-latest
+    if: ${{ vars.PROJECT_URL != '' }}
+    steps:
+      - name: Add item to Project
+        uses: actions/add-to-project@v1.0.2
+        with:
+          project-url: ${{ vars.PROJECT_URL }}
+          github-token: ${{ secrets.PROJECT_TOKEN }}
+
+      - name: Compute target Status
+        id: status
+        env:
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          MERGED: ${{ github.event.pull_request.merged }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          LABELS: ${{ toJSON(github.event.issue.labels) }}
+        run: |
+          set -euo pipefail
+          target=""
+          if [ "$EVENT" = "issues" ]; then
+            case "$ACTION" in
+              opened|reopened) target="Backlog" ;;
+              labeled)
+                if printf '%s' "$LABELS" | grep -q '"ready-for-dev"'; then target="Ready"; fi
+                if printf '%s' "$LABELS" | grep -q '"blocked"'; then target="Blocked"; fi
+                ;;
+              closed) target="Done" ;;
+            esac
+          elif [ "$EVENT" = "pull_request" ]; then
+            case "$ACTION" in
+              opened|reopened)
+                if [ "$DRAFT" = "true" ]; then target="In-Progress"; else target="In-Review"; fi
+                ;;
+              ready_for_review|review_requested) target="In-Review" ;;
+              closed)
+                if [ "$MERGED" = "true" ]; then target="Done"; fi
+                ;;
+            esac
+          fi
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          echo "Computed target Status: '$target'"
+
+      - name: Set Status field on Project item
+        if: steps.status.outputs.target != ''
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+          PROJECT_URL: ${{ vars.PROJECT_URL }}
+          TARGET: ${{ steps.status.outputs.target }}
+          ITEM_NODE_ID: ${{ github.event.issue.node_id || github.event.pull_request.node_id }}
+        run: |
+          set -euo pipefail
+          owner=$(echo "$PROJECT_URL" | awk -F/ '{print $5}')
+          number=$(echo "$PROJECT_URL" | awk -F/ '{print $7}')
+          kind=$(echo "$PROJECT_URL" | awk -F/ '{print $4}')   # users | orgs
+
+          # 1. Resolve project node id + Status field id + target option id
+          if [ "$kind" = "users" ]; then
+            project_id=$(gh api graphql -f query='query($l:String!,$n:Int!){user(login:$l){projectV2(number:$n){id}}}' -f l="$owner" -F n="$number" --jq .data.user.projectV2.id)
+            field_json=$(gh api graphql -f query='query($l:String!,$n:Int!){user(login:$l){projectV2(number:$n){field(name:"Status"){... on ProjectV2SingleSelectField{id options{id name}}}}}}' -f l="$owner" -F n="$number")
+          else
+            project_id=$(gh api graphql -f query='query($l:String!,$n:Int!){organization(login:$l){projectV2(number:$n){id}}}' -f l="$owner" -F n="$number" --jq .data.organization.projectV2.id)
+            field_json=$(gh api graphql -f query='query($l:String!,$n:Int!){organization(login:$l){projectV2(number:$n){field(name:"Status"){... on ProjectV2SingleSelectField{id options{id name}}}}}}' -f l="$owner" -F n="$number")
+          fi
+          field_id=$(echo "$field_json" | jq -r '.. | .field? // empty | .id' | head -1)
+          option_id=$(echo "$field_json" | jq -r --arg t "$TARGET" '.. | .options? // empty | .[] | select(.name==$t) | .id' | head -1)
+          if [ -z "$field_id" ] || [ -z "$option_id" ]; then
+            echo "::warning::Status field or option '$TARGET' not found in Project. Skipping."
+            exit 0
+          fi
+
+          # 2. Resolve project item id for this issue/PR
+          item_id=$(gh api graphql -f query='query($p:ID!,$c:String){node(id:$p){... on ProjectV2{items(first:100,after:$c){nodes{id content{... on Issue{id} ... on PullRequest{id}}} pageInfo{hasNextPage endCursor}}}}}' -f p="$project_id" --jq ".data.node.items.nodes[] | select(.content.id==\"$ITEM_NODE_ID\") | .id" | head -1)
+          if [ -z "$item_id" ]; then
+            echo "::warning::Project item for $ITEM_NODE_ID not found (add-to-project may need a moment). Skipping."
+            exit 0
+          fi
+
+          # 3. Update Status
+          gh api graphql -f query='mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){projectV2Item{id}}}' \
+            -f p="$project_id" -f i="$item_id" -f f="$field_id" -f o="$option_id"
+          echo "Set Status='$TARGET' on item $item_id"
