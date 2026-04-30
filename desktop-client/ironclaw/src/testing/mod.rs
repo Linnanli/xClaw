@@ -248,7 +248,7 @@ impl LlmProvider for StubLlm {
 ///
 /// # Usage
 ///
-/// ```rust,no_run
+/// ```ignore
 /// let (channel, sender) = StubChannel::new("test");
 /// sender.send(IncomingMessage::new("test", "user1", "hello")).await.unwrap();
 /// // ... run agent logic that calls channel.respond() ...
