@@ -2500,6 +2500,9 @@ dependencies = [
 [[package]]
 name = "dasclaw_project_docs"
 version = "0.0.0-w1"
+dependencies = [
+ "tempfile",
+]
 
 [[package]]
 name = "dasclaw_pty"
