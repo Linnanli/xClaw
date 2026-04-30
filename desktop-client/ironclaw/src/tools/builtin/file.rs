@@ -532,7 +532,27 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
-/// Apply patch tool for targeted file edits.
+/// Apply patch tool — codex `apply_patch` lark-grammar protocol.
+///
+/// Consumes a single envelope (`*** Begin Patch ... *** End Patch`) describing
+/// one or more `Add File` / `Delete File` / `Update File` hunks, and routes
+/// parsing + application through the shared [`dasclaw_apply_patch`] crate.
+///
+/// Boundary with `code_edit`:
+///
+/// - Use `apply_patch` for **multi-file** patches and **multi-hunk** edits
+///   carrying their own context lines (`@@`, `-`, `+`, ` `). The envelope is
+///   the only correct surface for batch refactors and renames.
+/// - Use `code_edit` for **single-point string replacement within one file**
+///   when you want explicit replacement-count verification (it surfaces an
+///   `expected_count` field). It is *not* a substitute for multi-hunk patches.
+///
+/// Path safety: each hunk's destination path is validated through the
+/// configured [`PathPolicy`] *before* any filesystem mutation, mirroring the
+/// rest of the file-tool family. Move-rename hunks (`*** Move to:`) are
+/// parsed but not yet applied — they currently surface as a structured error
+/// so callers can fall back to a separate add/delete sequence (see W3
+/// follow-up).
 #[derive(Debug, Default)]
 pub struct ApplyPatchTool {
     base_dir: Option<PathBuf>,
@@ -562,33 +582,25 @@ impl Tool for ApplyPatchTool {
     }
 
     fn description(&self) -> &str {
-        "Apply targeted edits to a file using search/replace. Finds the exact 'old_string' \
-         and replaces it with 'new_string'. Use for surgical code changes without rewriting entire files. \
-         The old_string must match exactly (including whitespace and indentation)."
+        "Apply a multi-file patch using the apply_patch envelope format. The `input` field must \
+         start with `*** Begin Patch` and end with `*** End Patch`, containing one or more hunks: \
+         `*** Add File: <path>` followed by `+`-prefixed contents; `*** Delete File: <path>`; or \
+         `*** Update File: <path>` followed by `@@` chunks of context (` `), removed (`-`), and \
+         added (`+`) lines. Use `apply_patch` for multi-file or multi-hunk edits with surrounding \
+         context. For surgical single-point replacement within one file, prefer `code_edit` \
+         (which verifies an explicit replacement count)."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "path": {
+                "input": {
                     "type": "string",
-                    "description": "Path to the file to edit"
-                },
-                "old_string": {
-                    "type": "string",
-                    "description": "The exact string to find and replace"
-                },
-                "new_string": {
-                    "type": "string",
-                    "description": "The string to replace it with"
-                },
-                "replace_all": {
-                    "type": "boolean",
-                    "description": "If true, replace all occurrences (default false, replaces first only)"
+                    "description": "The full apply_patch envelope, beginning with `*** Begin Patch` and ending with `*** End Patch`."
                 }
             },
-            "required": ["path", "old_string", "new_string"]
+            "required": ["input"]
         })
     }
 
@@ -597,63 +609,43 @@ impl Tool for ApplyPatchTool {
         params: serde_json::Value,
         ctx: &JobContext,
     ) -> Result<ToolOutput, ToolError> {
-        let path_str = require_str(&params, "path")?;
-
-        let old_string = require_str(&params, "old_string")?;
-
-        let new_string = require_str(&params, "new_string")?;
-
-        let replace_all = params
-            .get("replace_all")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
+        let input = require_str(&params, "input")?;
         let start = std::time::Instant::now();
 
+        let args = dasclaw_apply_patch::parse_patch(input)
+            .map_err(|e| ToolError::ExecutionFailed(format!("invalid patch: {e}")))?;
+
         let effective = super::path_utils::effective_base_dir(self.base_dir.as_deref(), ctx);
-        let path = validate_path_with_policy(
-            path_str,
-            effective.as_deref(),
-            self.policy.as_ref(),
-            AccessMode::Write,
-        )?;
 
-        // Read current content
-        let content = fs::read_to_string(&path)
-            .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {}", e)))?;
-
-        // Check if old_string exists
-        if !content.contains(old_string) {
-            return Err(ToolError::ExecutionFailed(format!(
-                "Could not find the specified text in {}. Make sure old_string matches exactly.",
-                path.display()
-            )));
+        // Validate every destination path through the configured policy *before*
+        // touching the filesystem; the apply layer then enforces base_dir again
+        // as a defence-in-depth check (absolute / parent-dir escape).
+        for hunk in &args.hunks {
+            let raw = hunk.path().to_string_lossy().into_owned();
+            validate_path_with_policy(
+                &raw,
+                effective.as_deref(),
+                self.policy.as_ref(),
+                AccessMode::Write,
+            )?;
         }
 
-        // Apply replacement
-        let new_content = if replace_all {
-            content.replace(old_string, new_string)
-        } else {
-            content.replacen(old_string, new_string, 1)
+        let opts = dasclaw_apply_patch::ApplyOptions {
+            base_dir: effective.clone(),
         };
 
-        // Count replacements
-        let replacements = if replace_all {
-            content.matches(old_string).count()
-        } else {
-            1
+        let report = dasclaw_apply_patch::apply(&args, &opts)
+            .map_err(|e| ToolError::ExecutionFailed(format!("apply_patch failed: {e}")))?;
+
+        let to_str = |v: &Vec<PathBuf>| -> Vec<String> {
+            v.iter().map(|p| p.display().to_string()).collect()
         };
-
-        // Write back
-        fs::write(&path, &new_content)
-            .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write file: {}", e)))?;
-
         let result = serde_json::json!({
-            "path": path.display().to_string(),
-            "replacements": replacements,
-            "success": true
+            "success": true,
+            "files_added": to_str(&report.files_added),
+            "files_deleted": to_str(&report.files_deleted),
+            "files_updated": to_str(&report.files_updated),
+            "hunks_applied": report.hunks_applied,
         });
 
         Ok(ToolOutput::success(result, start.elapsed()))
@@ -728,29 +720,68 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_apply_patch() {
+    async fn test_apply_patch_codex_protocol() {
         let dir = TempDir::new().unwrap();
-        let file_path = dir.path().join("code.rs");
-        std::fs::write(&file_path, "fn main() {\n    println!(\"old\");\n}\n").unwrap();
+        // Pre-existing file that the patch will Update; the patch also Adds a
+        // brand new file in a nested directory. This exercises the full
+        // codex-protocol envelope (multi-file, mixed Add/Update).
+        let code_path = dir.path().join("code.rs");
+        std::fs::write(&code_path, "fn main() {\n    println!(\"old\");\n}\n").unwrap();
 
         let tool = ApplyPatchTool::new().with_base_dir(dir.path().to_path_buf());
         let ctx = JobContext::default();
 
+        let envelope = [
+            "*** Begin Patch",
+            "*** Update File: code.rs",
+            "@@",
+            " fn main() {",
+            "-    println!(\"old\");",
+            "+    println!(\"new\");",
+            " }",
+            "*** Add File: docs/notes.md",
+            "+# Notes",
+            "+hello",
+            "*** End Patch",
+        ]
+        .join("\n");
+
         let result = tool
-            .execute(
-                serde_json::json!({
-                    "path": file_path.to_str().unwrap(),
-                    "old_string": "println!(\"old\")",
-                    "new_string": "println!(\"new\")"
-                }),
-                &ctx,
-            )
+            .execute(serde_json::json!({ "input": envelope }), &ctx)
             .await
             .unwrap();
 
         assert!(result.result.get("success").unwrap().as_bool().unwrap());
-        let content = std::fs::read_to_string(&file_path).unwrap();
-        assert!(content.contains("println!(\"new\")"));
+        assert_eq!(
+            result
+                .result
+                .get("hunks_applied")
+                .unwrap()
+                .as_u64()
+                .unwrap(),
+            2
+        );
+        assert!(
+            std::fs::read_to_string(&code_path)
+                .unwrap()
+                .contains("println!(\"new\")")
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("docs/notes.md")).unwrap(),
+            "# Notes\nhello\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_apply_patch_rejects_invalid_envelope() {
+        let dir = TempDir::new().unwrap();
+        let tool = ApplyPatchTool::new().with_base_dir(dir.path().to_path_buf());
+        let ctx = JobContext::default();
+
+        let result = tool
+            .execute(serde_json::json!({ "input": "not a real patch" }), &ctx)
+            .await;
+        assert!(matches!(result, Err(ToolError::ExecutionFailed(_))));
     }
 
     #[tokio::test]

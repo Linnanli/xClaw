@@ -32,9 +32,7 @@
             "id": "call_apply_patch",
             "name": "apply_patch",
             "arguments": {
-              "path": "/tmp/ironclaw_coverage_test_apply_patch/patch_target.txt",
-              "old_string": "This is the original content.",
-              "new_string": "This is the PATCHED content."
+              "input": "*** Begin Patch\n*** Update File: /tmp/ironclaw_coverage_test_apply_patch/patch_target.txt\n@@\n-This is the original content.\n+This is the PATCHED content.\n*** End Patch"
             }
           }
         ],

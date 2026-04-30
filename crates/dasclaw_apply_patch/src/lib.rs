@@ -25,8 +25,13 @@
 //! assert!(matches!(args.hunks[0], Hunk::AddFile { .. }));
 //! ```
 
+mod apply;
 mod parser;
 
+pub use apply::apply;
+pub use apply::ApplyError;
+pub use apply::ApplyOptions;
+pub use apply::ApplyReport;
 pub use parser::parse_patch;
 pub use parser::parse_patch_streaming;
 pub use parser::ApplyPatchArgs;
