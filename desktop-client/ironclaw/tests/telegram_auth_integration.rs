@@ -26,8 +26,15 @@ use ironclaw::pairing::PairingStore;
 use tokio::time::{Duration, timeout};
 
 /// Skip the test if the Telegram WASM module hasn't been built.
-/// In CI (detected via the `CI` env var), panic instead of skipping so a
-/// broken WASM build step doesn't silently produce green tests.
+///
+/// xClaw fork: `channels-src/telegram/` is not built by the default Tests
+/// workflow (see `.github/workflows/test.yml` — the WASM build step is
+/// intentionally removed because the Telegram channel is not active here).
+/// Therefore these tests must be opt-in: only panic when the operator
+/// explicitly opts into requiring the WASM artifact via
+/// `REQUIRE_TELEGRAM_WASM=1` (e.g. when re-enabling the channel for
+/// regression validation). Otherwise skip silently so a fork that doesn't
+/// ship the channel doesn't fail CI on every PR.
 macro_rules! require_telegram_wasm {
     () => {
         if !telegram_wasm_path().exists() {
@@ -36,7 +43,7 @@ macro_rules! require_telegram_wasm {
                  Build with: cd channels-src/telegram && cargo build --target wasm32-wasip2 --release",
                 telegram_wasm_path()
             );
-            if std::env::var("CI").is_ok() {
+            if std::env::var("REQUIRE_TELEGRAM_WASM").is_ok() {
                 panic!("{}", msg);
             }
             eprintln!("Skipping test: {}", msg);
