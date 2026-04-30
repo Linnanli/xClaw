@@ -1,14 +1,17 @@
 //! AGENTS.md / CLAUDE.md multi-layer project doc loader.
 //!
-//! W3 issues #54 (trait surface), #55 (single-dir priority), #56 (3-layer merge).
+//! W3 issues #54 (trait surface), #55 (single-dir priority), #56 (3-layer merge),
+//! #58 (`max_bytes` truncation).
 //! Downstream:
-//! - #57: recursive upward search to repo root / `$HOME`
-//! - #58: `max_bytes` truncation
 //! - #59 (#59a): `assemble_section` helper — joins layered docs into a
 //!   single `system_prompt` section. Loaded into the prompt at session
 //!   construction time via constructor DI per
 //!   [ADR-115](../../docs/plans/architecture-refactor/adr-115-project-docs-not-in-hook.md);
 //!   never enters the `dasclaw_hooks` system.
+//!
+//! Note: #57 (recursive upward search) was closed as obsolete — desktop-client
+//! uses an explicit session-level `workspace_root` (auto-generated sandbox or
+//! user-imported), so cwd ≈ project_root and walk-up is unnecessary.
 //!
 //! See `docs/plans/architecture-refactor/31-target-architecture.md` §4 and
 //! `32-execution-plan.md` W3 task 3 for the full design.
@@ -95,13 +98,48 @@ const DOC_FILENAME_PRIORITY: &[&str] = &[
 /// `~/.codex/AGENTS.md` retained for codex-fork compatibility.
 const USER_GLOBAL_FILENAME_PRIORITY: &[&str] = &[".dasclaw/AGENTS.md", ".codex/AGENTS.md"];
 
+/// Default per-doc byte cap (#58). Mirrors codex `project_doc_max_bytes` default of 8 KiB.
+pub const DEFAULT_PROJECT_DOC_MAX_BYTES: usize = 8 * 1024;
+
+/// Truncate `content` to at most `max_bytes`, preserving complete lines.
+///
+/// If the content fits within the cap it is returned as-is. Otherwise the
+/// longest prefix of complete lines (terminated by `\n`) that fits in
+/// `max_bytes` is kept. If even the first line is longer than `max_bytes`
+/// the prefix is cut at the largest valid UTF-8 char boundary `<= max_bytes`,
+/// guaranteeing a valid `String` without panicking on multi-byte chars.
+fn truncate_to_max_bytes(content: String, max_bytes: usize) -> String {
+    if content.len() <= max_bytes {
+        return content;
+    }
+    let mut out = String::with_capacity(max_bytes);
+    for line in content.split_inclusive('\n') {
+        if out.len() + line.len() > max_bytes {
+            break;
+        }
+        out.push_str(line);
+    }
+    if !out.is_empty() {
+        return out;
+    }
+    // Single line wider than cap: trim back to a UTF-8 boundary.
+    let mut end = max_bytes.min(content.len());
+    while end > 0 && !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    content[..end].to_string()
+}
+
 /// Read a single doc, skipping unreadable / whitespace-only files.
 ///
 /// Centralises the “best-effort, never panic” I/O policy mandated by the
 /// [`ProjectDocLoader`] trait contract. Whitespace-only files are skipped to
-/// match codex `agents_md.rs` behaviour.
-fn read_doc_at(path: PathBuf, layer: DocLayer) -> Option<ProjectDoc> {
-    let content = std::fs::read_to_string(&path).ok()?;
+/// match codex `agents_md.rs` behaviour. `max_bytes` (#58) caps the doc body
+/// at line boundaries before whitespace check, mirroring codex
+/// `project_doc_max_bytes`.
+fn read_doc_at(path: PathBuf, layer: DocLayer, max_bytes: usize) -> Option<ProjectDoc> {
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let content = truncate_to_max_bytes(raw, max_bytes);
     if content.trim().is_empty() {
         return None;
     }
@@ -115,32 +153,54 @@ fn read_doc_at(path: PathBuf, layer: DocLayer) -> Option<ProjectDoc> {
 }
 
 /// Walk a filename priority chain under `base`, returning the first match.
-fn first_priority_doc(base: &Path, chain: &[&str], layer: DocLayer) -> Option<ProjectDoc> {
+fn first_priority_doc(
+    base: &Path,
+    chain: &[&str],
+    layer: DocLayer,
+    max_bytes: usize,
+) -> Option<ProjectDoc> {
     chain
         .iter()
-        .find_map(|relative| read_doc_at(base.join(relative), layer))
+        .find_map(|relative| read_doc_at(base.join(relative), layer, max_bytes))
 }
 
 /// Single-directory priority loader (#55).
 ///
 /// Walks [`DOC_FILENAME_PRIORITY`] in order under `cwd` and returns the first
 /// readable, non-empty doc. I/O errors fall through silently per the
-/// [`ProjectDocLoader`] contract.
+/// [`ProjectDocLoader`] contract. Doc bodies are truncated at `max_bytes`
+/// line-boundaries (#58, default [`DEFAULT_PROJECT_DOC_MAX_BYTES`]).
 ///
-/// Multi-layer merge (#56), upward search (#57), and byte-cap truncation
-/// (#58) are intentionally out of scope here.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct PriorityProjectDocLoader;
+/// Multi-layer merge is provided by [`LayeredProjectDocLoader`] (#56).
+#[derive(Debug, Clone)]
+pub struct PriorityProjectDocLoader {
+    max_bytes: usize,
+}
+
+impl Default for PriorityProjectDocLoader {
+    fn default() -> Self {
+        Self {
+            max_bytes: DEFAULT_PROJECT_DOC_MAX_BYTES,
+        }
+    }
+}
+
+impl PriorityProjectDocLoader {
+    /// Construct a loader with a custom per-doc byte cap (#58).
+    pub fn with_max_bytes(max_bytes: usize) -> Self {
+        Self { max_bytes }
+    }
+}
 
 impl ProjectDocLoader for PriorityProjectDocLoader {
     fn load(&self, cwd: &Path) -> Vec<ProjectDoc> {
-        first_priority_doc(cwd, DOC_FILENAME_PRIORITY, DocLayer::Cwd)
+        first_priority_doc(cwd, DOC_FILENAME_PRIORITY, DocLayer::Cwd, self.max_bytes)
             .map(|doc| vec![doc])
             .unwrap_or_default()
     }
 }
 
-/// 3-layer merge loader (#56).
+/// 3-layer merge loader (#56) with per-doc byte cap (#58).
 ///
 /// Emits up to 3 docs in load order: `UserGlobal` → `Project` → `Cwd`.
 /// Each layer reuses [`DOC_FILENAME_PRIORITY`] (or
@@ -151,21 +211,42 @@ impl ProjectDocLoader for PriorityProjectDocLoader {
 ///
 /// `user_home` and `project_root` are optional so callers can disable the
 /// upper layers without composing a different loader (e.g. ephemeral /
-/// non-repo `cwd`s in tests). Recursive upward search to find
-/// `project_root` is the responsibility of issue #57.
-#[derive(Debug, Default, Clone)]
+/// non-repo `cwd`s in tests).
+#[derive(Debug, Clone)]
 pub struct LayeredProjectDocLoader {
     user_home: Option<PathBuf>,
     project_root: Option<PathBuf>,
+    max_bytes: usize,
+}
+
+impl Default for LayeredProjectDocLoader {
+    fn default() -> Self {
+        Self {
+            user_home: None,
+            project_root: None,
+            max_bytes: DEFAULT_PROJECT_DOC_MAX_BYTES,
+        }
+    }
 }
 
 impl LayeredProjectDocLoader {
     /// Construct a layered loader with explicit user-home and project-root paths.
+    ///
+    /// Uses [`DEFAULT_PROJECT_DOC_MAX_BYTES`] as the per-doc byte cap; call
+    /// [`Self::with_max_bytes`] to override.
     pub fn new(user_home: Option<PathBuf>, project_root: Option<PathBuf>) -> Self {
         Self {
             user_home,
             project_root,
+            max_bytes: DEFAULT_PROJECT_DOC_MAX_BYTES,
         }
+    }
+
+    /// Override the per-doc byte cap (#58).
+    #[must_use]
+    pub fn with_max_bytes(mut self, max_bytes: usize) -> Self {
+        self.max_bytes = max_bytes;
+        self
     }
 }
 
@@ -174,23 +255,34 @@ impl ProjectDocLoader for LayeredProjectDocLoader {
         let mut docs = Vec::with_capacity(3);
 
         let user_doc = self.user_home.as_deref().and_then(|home| {
-            first_priority_doc(home, USER_GLOBAL_FILENAME_PRIORITY, DocLayer::UserGlobal)
+            first_priority_doc(
+                home,
+                USER_GLOBAL_FILENAME_PRIORITY,
+                DocLayer::UserGlobal,
+                self.max_bytes,
+            )
         });
         if let Some(doc) = user_doc {
             docs.push(doc);
         }
 
-        let project_doc = self
-            .project_root
-            .as_deref()
-            .and_then(|root| first_priority_doc(root, DOC_FILENAME_PRIORITY, DocLayer::Project));
+        let project_doc = self.project_root.as_deref().and_then(|root| {
+            first_priority_doc(
+                root,
+                DOC_FILENAME_PRIORITY,
+                DocLayer::Project,
+                self.max_bytes,
+            )
+        });
         if let Some(doc) = project_doc {
             docs.push(doc);
         }
 
         let cwd_is_project_root = self.project_root.as_deref() == Some(cwd);
         if !cwd_is_project_root {
-            if let Some(doc) = first_priority_doc(cwd, DOC_FILENAME_PRIORITY, DocLayer::Cwd) {
+            if let Some(doc) =
+                first_priority_doc(cwd, DOC_FILENAME_PRIORITY, DocLayer::Cwd, self.max_bytes)
+            {
                 docs.push(doc);
             }
         }
@@ -264,7 +356,7 @@ mod tests {
         write(tmp.path(), ".dasclaw/AGENTS.md", "dasclaw-body");
         write(tmp.path(), ".codex/AGENTS.md", "codex-body");
 
-        let docs = PriorityProjectDocLoader.load(tmp.path());
+        let docs = PriorityProjectDocLoader::default().load(tmp.path());
 
         assert_eq!(docs.len(), 1);
         assert_eq!(docs[0].content, "agents-body");
@@ -278,7 +370,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         write(tmp.path(), "CLAUDE.md", "claude-body");
 
-        let docs = PriorityProjectDocLoader.load(tmp.path());
+        let docs = PriorityProjectDocLoader::default().load(tmp.path());
 
         assert_eq!(docs.len(), 1);
         assert_eq!(docs[0].content, "claude-body");
@@ -290,7 +382,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         write(tmp.path(), ".dasclaw/AGENTS.md", "dasclaw-body");
 
-        let docs = PriorityProjectDocLoader.load(tmp.path());
+        let docs = PriorityProjectDocLoader::default().load(tmp.path());
 
         assert_eq!(docs.len(), 1);
         assert_eq!(docs[0].content, "dasclaw-body");
@@ -302,7 +394,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         write(tmp.path(), ".codex/AGENTS.md", "codex-body");
 
-        let docs = PriorityProjectDocLoader.load(tmp.path());
+        let docs = PriorityProjectDocLoader::default().load(tmp.path());
 
         assert_eq!(docs.len(), 1);
         assert_eq!(docs[0].content, "codex-body");
@@ -315,7 +407,7 @@ mod tests {
         write(tmp.path(), ".dasclaw/AGENTS.md", "dasclaw-body");
         write(tmp.path(), ".codex/AGENTS.md", "codex-body");
 
-        let docs = PriorityProjectDocLoader.load(tmp.path());
+        let docs = PriorityProjectDocLoader::default().load(tmp.path());
 
         assert_eq!(docs.len(), 1);
         assert_eq!(docs[0].content, "dasclaw-body");
@@ -327,7 +419,7 @@ mod tests {
         write(tmp.path(), ".dasclaw/AGENTS.md", "dasclaw-body");
         write(tmp.path(), "CLAUDE.md", "claude-body");
 
-        let docs = PriorityProjectDocLoader.load(tmp.path());
+        let docs = PriorityProjectDocLoader::default().load(tmp.path());
 
         assert_eq!(docs.len(), 1);
         assert_eq!(docs[0].content, "dasclaw-body");
@@ -338,7 +430,7 @@ mod tests {
     fn req_project_docs_55_returns_empty_when_no_docs_present() {
         let tmp = tempdir().unwrap();
 
-        let docs = PriorityProjectDocLoader.load(tmp.path());
+        let docs = PriorityProjectDocLoader::default().load(tmp.path());
 
         assert!(docs.is_empty());
     }
@@ -349,7 +441,7 @@ mod tests {
         write(tmp.path(), "AGENTS.md", "   \n\t\n");
         write(tmp.path(), "CLAUDE.md", "claude-body");
 
-        let docs = PriorityProjectDocLoader.load(tmp.path());
+        let docs = PriorityProjectDocLoader::default().load(tmp.path());
 
         assert_eq!(docs.len(), 1);
         assert_eq!(docs[0].content, "claude-body");
@@ -358,7 +450,8 @@ mod tests {
 
     #[test]
     fn req_project_docs_55_missing_directory_returns_empty_without_panic() {
-        let docs = PriorityProjectDocLoader.load(Path::new("/nonexistent/x-claw-test-path"));
+        let docs =
+            PriorityProjectDocLoader::default().load(Path::new("/nonexistent/x-claw-test-path"));
         assert!(docs.is_empty());
     }
 
@@ -516,5 +609,112 @@ mod tests {
         assert_eq!(docs[0].layer, DocLayer::Project);
         assert_eq!(docs[0].content, "claude-project");
         assert_eq!(docs[0].source_path, project.path().join("CLAUDE.md"));
+    }
+
+    // -------------------- #58 max_bytes truncation --------------------
+
+    fn make_lined_body(line_count: usize, line_body: &str) -> String {
+        let mut s = String::new();
+        for _ in 0..line_count {
+            s.push_str(line_body);
+            s.push('\n');
+        }
+        s
+    }
+
+    #[test]
+    fn req_project_docs_58_default_cap_is_8_kib() {
+        assert_eq!(DEFAULT_PROJECT_DOC_MAX_BYTES, 8 * 1024);
+    }
+
+    #[test]
+    fn req_project_docs_58_under_cap_returned_verbatim() {
+        let tmp = tempdir().unwrap();
+        // ~5 KiB body of 64-byte lines (64 * 80 = 5120).
+        let body = make_lined_body(80, &"a".repeat(63));
+        assert!(body.len() < DEFAULT_PROJECT_DOC_MAX_BYTES);
+        write(tmp.path(), "AGENTS.md", &body);
+
+        let docs = PriorityProjectDocLoader::default().load(tmp.path());
+
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].content, body);
+        assert_eq!(docs[0].bytes, body.len());
+    }
+
+    #[test]
+    fn req_project_docs_58_over_cap_truncated_at_line_boundary() {
+        let tmp = tempdir().unwrap();
+        // ~10 KiB body of 64-byte lines: 160 lines * 64 = 10240.
+        let body = make_lined_body(160, &"b".repeat(63));
+        assert!(body.len() > DEFAULT_PROJECT_DOC_MAX_BYTES);
+        write(tmp.path(), "AGENTS.md", &body);
+
+        let docs = PriorityProjectDocLoader::default().load(tmp.path());
+
+        assert_eq!(docs.len(), 1);
+        let content = &docs[0].content;
+        assert!(content.len() <= DEFAULT_PROJECT_DOC_MAX_BYTES);
+        // Last char must be '\n' — i.e. the last surviving line is complete.
+        assert_eq!(content.as_bytes().last().copied(), Some(b'\n'));
+        assert_eq!(docs[0].bytes, content.len());
+    }
+
+    #[test]
+    fn req_project_docs_58_with_max_bytes_override_applied() {
+        let tmp = tempdir().unwrap();
+        // 4 lines of 100 bytes each = 400 bytes; cap to 250 -> exactly 2 lines.
+        let body = make_lined_body(4, &"c".repeat(99));
+        write(tmp.path(), "AGENTS.md", &body);
+
+        let docs = PriorityProjectDocLoader::with_max_bytes(250).load(tmp.path());
+
+        assert_eq!(docs.len(), 1);
+        let content = &docs[0].content;
+        assert!(content.len() <= 250);
+        assert_eq!(content.matches('\n').count(), 2);
+    }
+
+    #[test]
+    fn req_project_docs_58_layered_loader_truncates_each_layer() {
+        let home = tempdir().unwrap();
+        let project = tempdir().unwrap();
+        let body = make_lined_body(4, &"d".repeat(99)); // 400 bytes
+        write(home.path(), ".dasclaw/AGENTS.md", &body);
+        write(project.path(), "AGENTS.md", &body);
+
+        let loader = LayeredProjectDocLoader::new(
+            Some(home.path().to_path_buf()),
+            Some(project.path().to_path_buf()),
+        )
+        .with_max_bytes(150); // 1 line of 100 bytes fits, 2nd would overflow
+
+        let docs = loader.load(project.path());
+
+        assert_eq!(docs.len(), 2);
+        for doc in &docs {
+            assert!(doc.content.len() <= 150);
+            assert_eq!(doc.content.matches('\n').count(), 1);
+        }
+    }
+
+    #[test]
+    fn req_project_docs_58_single_line_over_cap_keeps_utf8_boundary() {
+        let tmp = tempdir().unwrap();
+        // 4-byte UTF-8 char repeated -> 100 chars * 4 bytes = 400 bytes, no '\n'.
+        let body = "🦀".repeat(100);
+        assert_eq!(body.len(), 400);
+        write(tmp.path(), "AGENTS.md", &body);
+
+        let docs = PriorityProjectDocLoader::with_max_bytes(150).load(tmp.path());
+
+        assert_eq!(docs.len(), 1);
+        let content = &docs[0].content;
+        assert!(content.len() <= 150);
+        // Must remain valid UTF-8 (round-trip without panic).
+        let _: &str = content.as_str();
+        // 150 / 4 = 37.5 → 37 crabs → 148 bytes.
+        assert_eq!(content.chars().count(), 37);
+        assert_eq!(content.len(), 148);
     }
 }
