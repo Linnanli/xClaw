@@ -53,7 +53,7 @@ pub mod estimation;
 pub mod evaluation;
 pub mod extensions;
 pub mod history;
-pub mod hooks;
+pub mod hook_bootstrap;
 #[cfg(feature = "import")]
 pub mod import;
 pub mod llm;

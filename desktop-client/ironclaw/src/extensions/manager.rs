@@ -4137,7 +4137,7 @@ impl ExtensionManager {
         {
             let source = format!("plugin.tool:{}", name);
             let registration =
-                crate::hooks::bootstrap::register_plugin_bundle_from_capabilities_file(
+                crate::hook_bootstrap::register_plugin_bundle_from_capabilities_file(
                     hooks, &source, cap_path,
                 )
                 .await;

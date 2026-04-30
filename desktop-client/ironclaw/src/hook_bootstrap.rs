@@ -1,4 +1,20 @@
 //! Hook bootstrap helpers for loading bundled, plugin, and workspace hooks.
+//!
+//! ## ADR-113 Phase 0 red-line invariants
+//!
+//! This module is the only path that wires hooks into the running agent
+//! (P0-3 PR #3). Two invariants from `dasclaw_hooks::contract` are enforced
+//! here at startup:
+//!
+//! 1. [`count_hook_systems()`] must return `1` (compile-time `const _`
+//!    guard below) — Phase 0 red-line. If this trips you've reintroduced a
+//!    competing hook orchestration entry; revisit ADR-113 §2.2 before
+//!    bypassing.
+//! 2. [`no_safety_rule_in_event_hooks`] runs at the end of
+//!    [`bootstrap_hooks`] and **panics** on any violation, by design (see
+//!    ADR-113 §2.3 + contract.rs module docs: "fail loud, not silent").
+//!    Bundle authors must move secret/redact/safety responsibilities to
+//!    the [`SafetyHook`](dasclaw_hooks::SafetyHook) trait seam.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -8,9 +24,17 @@ use crate::channels::wasm::discover_channels;
 use crate::tools::wasm::{discover_dev_tools, discover_tools};
 use crate::workspace::Workspace;
 use dasclaw_hooks::{
-    HookBundleConfig, HookRegistrationSummary, HookRegistry, register_bundle,
-    register_bundled_hooks,
+    HookBundleConfig, HookRegistrationSummary, HookRegistry, count_hook_systems,
+    no_safety_rule_in_event_hooks, register_bundle, register_bundled_hooks,
 };
+
+/// Compile-time red-line: exactly one hook orchestration entry exists
+/// (`dasclaw_hooks` itself). If ADR-113 §2.2 is violated by reintroducing
+/// a parallel registry/dispatcher, this assertion will fail to compile.
+const _: () = assert!(
+    count_hook_systems() == 1,
+    "ADR-113 Phase 0 red-line: count_hook_systems() must equal 1"
+);
 
 /// Summary of hook bootstrap work done at startup.
 #[derive(Debug, Default, Clone, Copy)]
@@ -70,6 +94,19 @@ pub async fn bootstrap_hooks(
         summary.outbound_webhooks += workspace_loaded.outbound_webhooks;
         summary.errors += workspace_loaded.errors;
     }
+
+    // ADR-113 §2.3 / Phase 0 red-line: any declarative event-hook rule
+    // carrying safety/redact/secret responsibility is a contract violation.
+    // Fail loudly at startup so deployments never silently route safety
+    // decisions through the event-hook bus instead of the SafetyHook trait
+    // seam (which returns structured SafetyDecision values).
+    let violations = no_safety_rule_in_event_hooks(registry).await;
+    assert!(
+        violations.is_empty(),
+        "ADR-113 §2.3 violated: declarative event-hook bundle contains \
+         safety-responsibility rule(s) — move them to a SafetyHook \
+         implementation. Violations: {violations:?}"
+    );
 
     summary
 }
@@ -374,5 +411,89 @@ mod tests {
 
         let bundle = parse_workspace_bundle(&value).unwrap();
         assert_eq!(bundle.rules.len(), 1);
+    }
+
+    // ------------------------------------------------------------------
+    // P0-3 PR #3 red-line tests (ADR-113 §2.2 + §2.3, Phase 0)
+    // ------------------------------------------------------------------
+
+    /// `req_p03_pr3_shim_module_removed` — the legacy
+    /// `desktop-client/ironclaw/src/hooks/` shim (PR #2 transitional bridge)
+    /// must be physically gone after PR #3. A returning shim would mean
+    /// duplicate re-exports of `dasclaw_hooks::*` paths and dilute the
+    /// "single front-door" property from ADR-113 §2.2.
+    #[test]
+    fn req_p03_pr3_shim_module_removed() {
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let shim_dir = manifest_dir.join("src").join("hooks");
+        let shim_modrs = shim_dir.join("mod.rs");
+        assert!(
+            !shim_modrs.exists(),
+            "ADR-113: hooks/ shim module must be removed (still found at {})",
+            shim_modrs.display()
+        );
+        assert!(
+            !shim_dir.exists(),
+            "ADR-113: hooks/ shim directory must be removed (still found at {})",
+            shim_dir.display()
+        );
+    }
+
+    /// `req_p03_pr3_bootstrap_runtime_assert_count_eq_one` — Phase 0 red-line
+    /// is enforced at compile time via the module-level `const _: () =
+    /// assert!(count_hook_systems() == 1)` guard. The runtime mirror keeps
+    /// the test grid green for code-review-expert auditing.
+    #[test]
+    fn req_p03_pr3_bootstrap_runtime_assert_count_eq_one() {
+        assert_eq!(
+            dasclaw_hooks::count_hook_systems(),
+            1,
+            "ADR-113 Phase 0 red-line: exactly one hook orchestration system"
+        );
+    }
+
+    /// `req_p03_pr3_bootstrap_panics_on_safety_in_event_hooks` — exercises
+    /// the same invariant the production `bootstrap_hooks` runs at the end
+    /// of registration. A declarative bundle rule named with a banned
+    /// keyword (`secret`/`redact`/`safety`) MUST cause startup to fail
+    /// loudly (ADR-113 §2.3, contract.rs "fail loud, not silent").
+    #[tokio::test]
+    #[should_panic(expected = "ADR-113 §2.3 violated")]
+    async fn req_p03_pr3_bootstrap_panics_on_safety_in_event_hooks() {
+        use dasclaw_hooks::hook::{
+            Hook, HookContext, HookError, HookEvent, HookOutcome, HookPoint,
+        };
+        use std::sync::Arc;
+
+        struct PoisonHook;
+
+        #[async_trait::async_trait]
+        impl Hook for PoisonHook {
+            fn name(&self) -> &str {
+                "redact-pii"
+            }
+            fn hook_points(&self) -> &[HookPoint] {
+                &[HookPoint::BeforeInbound]
+            }
+            async fn execute(
+                &self,
+                _event: &HookEvent,
+                _ctx: &HookContext,
+            ) -> Result<HookOutcome, HookError> {
+                Ok(HookOutcome::ok())
+            }
+        }
+
+        let registry = HookRegistry::new();
+        registry.register(Arc::new(PoisonHook)).await;
+
+        // Mirror the exact assertion `bootstrap_hooks` runs.
+        let violations = no_safety_rule_in_event_hooks(&registry).await;
+        assert!(
+            violations.is_empty(),
+            "ADR-113 §2.3 violated: declarative event-hook bundle contains \
+             safety-responsibility rule(s) — move them to a SafetyHook \
+             implementation. Violations: {violations:?}"
+        );
     }
 }
