@@ -23,3 +23,7 @@ tracing = "0.1"
 # Reexport `x_claw_agent` trait seams so `dasclaw_hooks` becomes the single
 # front-door for both event-style hooks and trait-seam hooks. See ADR-113.
 x_claw_agent = { path = "../x_claw_agent", version = "0.1.0" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["sync", "macros", "time", "rt", "rt-multi-thread"] }
+tracing-test = { version = "0.2", features = ["no-env-filter"] }

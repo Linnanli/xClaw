@@ -80,6 +80,7 @@ impl HookRegistry {
     /// - Timeout/error handling respects each hook's `failure_mode`.
     pub async fn run(&self, event: &HookEvent) -> Result<HookOutcome, HookError> {
         let point = event.hook_point();
+        let event_kind = event.event_kind();
         let ctx = HookContext::default();
 
         // Clone matching hooks and drop the read guard before executing.
@@ -94,6 +95,16 @@ impl HookRegistry {
                 .collect()
         };
 
+        // ADR-113 single-instrumentation point: every lifecycle dispatch emits
+        // one log line so e2e runs always show all 6 trigger points, even
+        // when no hooks are registered (W3 #60).
+        tracing::debug!(
+            hook_point = %point.as_str(),
+            event_type = %event_kind,
+            matching_hooks = matching.len(),
+            "lifecycle fired"
+        );
+
         if matching.is_empty() {
             return Ok(HookOutcome::ok());
         }
@@ -102,6 +113,13 @@ impl HookRegistry {
 
         for hook in &matching {
             let timeout = hook.timeout();
+
+            tracing::debug!(
+                hook_name = %hook.name(),
+                hook_point = %point.as_str(),
+                event_type = %event_kind,
+                "hook executing"
+            );
 
             let result = tokio::time::timeout(timeout, hook.execute(&current_event, &ctx)).await;
 
