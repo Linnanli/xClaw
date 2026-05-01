@@ -369,7 +369,7 @@ mod tests {
     fn logs_dir_under_ironclaw() {
         let path = ironclaw_logs_dir();
         let s = path.to_string_lossy();
-        assert!(s.ends_with(".ironclaw/logs"), "unexpected path: {s}");
+        assert!(s.ends_with(".dasclaw/logs"), "unexpected path: {s}");
     }
 
     #[test]

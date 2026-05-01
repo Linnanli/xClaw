@@ -1302,7 +1302,7 @@ mod tests {
     #[test]
     fn test_default_tools_dir() {
         let dir = default_tools_dir();
-        assert!(dir.to_string_lossy().contains(".ironclaw"));
+        assert!(dir.to_string_lossy().contains(".dasclaw"));
         assert!(dir.to_string_lossy().contains("tools"));
     }
 
