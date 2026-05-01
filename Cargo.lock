@@ -12375,9 +12375,11 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "dasclaw_project_docs",
  "ironclaw_common",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tracing",

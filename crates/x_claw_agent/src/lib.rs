@@ -20,6 +20,7 @@ pub mod intent;
 pub mod llm;
 pub mod messages;
 pub mod permissions;
+pub mod project_docs;
 pub mod prompt;
 pub mod reasoning_ctx;
 pub mod response_types;

@@ -30,6 +30,10 @@ uuid = { version = "1", features = ["v4", "v5", "serde"] }
 ironclaw_common = { path = "../../desktop-client/ironclaw/crates/ironclaw_common", version = "0.1.0" }
 # session_manager 需要 RwLock/Mutex/spawn (fire-and-forget hooks)
 tokio = { version = "1", features = ["sync", "rt", "time"] }
+# Project doc 注入 (#59b / ADR-115): SessionManager 构建期 DI 调用
+# `LayeredProjectDocLoader` + `assemble_section`，不进 hook 系统。
+dasclaw_project_docs = { path = "../dasclaw_project_docs", version = "0.0.0-w1" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "sync"] }
+tempfile = "3"
