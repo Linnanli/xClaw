@@ -58,9 +58,10 @@ const CODEX_LAYER_JOIN: &str = "\n\n";
 fn write_doc(dir: &Path, rel: &str, body: &str) {
     let path = dir.join(rel);
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).expect("create parent dir");
+        fs::create_dir_all(parent)
+            .unwrap_or_else(|e| panic!("create parent {}: {e}", parent.display()));
     }
-    fs::write(&path, body).expect("write fixture doc");
+    fs::write(&path, body).unwrap_or_else(|e| panic!("write fixture {}: {e}", path.display()));
 }
 
 fn join_codex_style(docs: &[dasclaw_project_docs::ProjectDoc]) -> String {
