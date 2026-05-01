@@ -4,7 +4,11 @@
 //! Downstream:
 //! - #57: recursive upward search to repo root / `$HOME`
 //! - #58: `max_bytes` truncation
-//! - #59: `OnSessionStart` hook injection
+//! - #59 (#59a): `assemble_section` helper — joins layered docs into a
+//!   single `system_prompt` section. Loaded into the prompt at session
+//!   construction time via constructor DI per
+//!   [ADR-115](../../docs/plans/architecture-refactor/adr-115-project-docs-not-in-hook.md);
+//!   never enters the `dasclaw_hooks` system.
 //!
 //! See `docs/plans/architecture-refactor/31-target-architecture.md` §4 and
 //! `32-execution-plan.md` W3 task 3 for the full design.
@@ -193,6 +197,43 @@ impl ProjectDocLoader for LayeredProjectDocLoader {
 
         docs
     }
+}
+
+/// Separator inserted between adjacent project-doc fragments when assembling
+/// them into a single `system_prompt` section.
+///
+/// Locked to codex `agents_md.rs::AGENTS_MD_SEPARATOR` so prompt diffs across
+/// `x-claw`, `codex` and `claw-code` stay readable side-by-side.
+pub const PROJECT_DOC_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
+
+/// Assemble multi-layer project docs into a single `system_prompt` section.
+///
+/// Behaviour (locked by `tests/assemble_section.rs`):
+///
+/// - Returns `None` when `docs` is empty or every fragment has empty content
+///   (so callers never emit an orphan separator into the prompt).
+/// - Preserves the input order — the [`ProjectDocLoader`] trait already
+///   defines load-priority ordering, and re-sorting here would silently
+///   override caller-side composition (e.g. cwd overrides).
+/// - Skips blank fragments mid-list rather than dropping the whole section,
+///   so a missing project-layer doc doesn't create two adjacent separators.
+/// - Does not re-truncate `content`; truncation is `max_bytes`'s job (#58).
+///
+/// Per [ADR-115](../../docs/plans/architecture-refactor/adr-115-project-docs-not-in-hook.md)
+/// this helper is invoked at session-construction time via constructor DI;
+/// it must not be wired into the `dasclaw_hooks` system.
+pub fn assemble_section(docs: &[ProjectDoc]) -> Option<String> {
+    let parts: Vec<&str> = docs
+        .iter()
+        .map(|d| d.content.as_str())
+        .filter(|content| !content.is_empty())
+        .collect();
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    Some(parts.join(PROJECT_DOC_SEPARATOR))
 }
 
 #[cfg(test)]
