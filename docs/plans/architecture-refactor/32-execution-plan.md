@@ -247,7 +247,7 @@ W1 失败：恢复 desktop-client/ironclaw 子模块（git revert）。
    - 递归向上查找直到 repo root 或 `$HOME`（参考 codex `agents_md.rs:367 LOC` 实现）
    - 提供 `ProjectDocLoader` trait：`load(cwd) -> Vec<ProjectDoc { content, source_path, layer, bytes }>`
    - 单层 max_bytes 默认 8KB（与 codex 对齐）超出按行截断而非报错
-   - 集成到 dasclaw_hooks::OnSessionStart：加载后注入 system prompt 的 dynamic boundary 之后
+   - **加载机制**：SessionManager 在 session 创建时（OnSessionStart 时机点）**构建期 DI** 调用 `LayeredProjectDocLoader::load()` + `assemble_section()` 直接注入 system prompt 的 dynamic boundary 之后；**不进 `dasclaw_hooks` 系统**（与 codex/claw-code/ironclaw 三参考库一致；详见 [ADR-115](adr-115-project-docs-not-in-hook.md) + ADR-113 §2.4 反跨界原则）
    - **不采用 claw-code 单层方案**（[36 §7](36-claw-code-capability-inventory.md)）— claw 仅支持 cwd 单一 CLAUDE.md，弱于 codex/ironclaw
 4. **集成到 dasclaw_core**：替代当前散落的 hook 调用点
 
