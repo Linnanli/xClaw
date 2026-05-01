@@ -4,11 +4,20 @@
 //! available is `DATABASE_URL` (chicken-and-egg: can't connect to DB without
 //! it). Everything else is auto-detected or read from env vars.
 //!
-//! File: `~/.ironclaw/.env` (standard dotenvy format)
+//! File: `~/.dasclaw/.env` (standard dotenvy format).
+//!
+//! Legacy `~/.ironclaw/.env` is **not** read implicitly; if a user still has
+//! data in `~/.ironclaw/`, [`compute_ironclaw_base_dir`] emits a one-time
+//! migration notice instructing them to run the `dasclaw migrate` subcommand
+//! (delivered by ADR-114 B-Ⅱ, see issue #107).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
+/// Primary env override for the base directory (post-rebrand).
+const DASCLAW_BASE_DIR_ENV: &str = "DASCLAW_BASE_DIR";
+
+/// Legacy env override kept for one release cycle. See ADR-114 B-Ⅰ.
 const IRONCLAW_BASE_DIR_ENV: &str = "IRONCLAW_BASE_DIR";
 
 /// Lazily computed IronClaw base directory, cached for the lifetime of the process.
@@ -19,52 +28,106 @@ static IRONCLAW_BASE_DIR: LazyLock<PathBuf> = LazyLock::new(compute_ironclaw_bas
 /// This is the underlying implementation used by both the public
 /// `ironclaw_base_dir()` function (which caches the result) and tests
 /// (which need to verify different configurations).
+///
+/// Resolution order (per ADR-114 §2.2 类 B-Ⅰ):
+/// 1. `DASCLAW_BASE_DIR` — primary override
+/// 2. `IRONCLAW_BASE_DIR` — legacy fallback, emits a `tracing::warn!` deprecation
+///    notice; support will be removed in a future release
+/// 3. Default: `~/.dasclaw` (or `./.dasclaw` if home cannot be determined)
+///
+/// When the legacy directory `~/.ironclaw/` exists but `~/.dasclaw/` does not,
+/// a migration notice is logged pointing users at `dasclaw migrate` (B-Ⅱ).
 pub fn compute_ironclaw_base_dir() -> PathBuf {
-    std::env::var(IRONCLAW_BASE_DIR_ENV)
-        .map(PathBuf::from)
-        .map(|path| {
-            if path.as_os_str().is_empty() {
-                default_base_dir()
-            } else if !path.is_absolute() {
-                eprintln!(
-                    "Warning: IRONCLAW_BASE_DIR is a relative path '{}', resolved against current directory",
-                    path.display()
-                );
-                path
-            } else {
-                path
-            }
-        })
-        .unwrap_or_else(|_| default_base_dir())
+    if let Some(path) = base_dir_from_env() {
+        return path;
+    }
+    default_base_dir()
 }
 
-/// Get the default IronClaw base directory (~/.ironclaw).
+/// Read the env override following the dual-read priority.
+///
+/// Empty values for either env var are treated as unset, matching the original
+/// `IRONCLAW_BASE_DIR` semantics. Relative paths emit a warning but are still
+/// returned (they resolve against the current directory at use time).
+fn base_dir_from_env() -> Option<PathBuf> {
+    if let Some(path) = read_base_dir_env(DASCLAW_BASE_DIR_ENV) {
+        return Some(path);
+    }
+    let legacy = read_base_dir_env(IRONCLAW_BASE_DIR_ENV)?;
+    tracing::warn!(
+        "{IRONCLAW_BASE_DIR_ENV} is deprecated; set {DASCLAW_BASE_DIR_ENV} instead. \
+         Support for {IRONCLAW_BASE_DIR_ENV} will be removed in a future release."
+    );
+    Some(legacy)
+}
+
+/// Read a single base-dir env var, returning `None` for unset / empty values.
+fn read_base_dir_env(name: &str) -> Option<PathBuf> {
+    let raw = std::env::var(name).ok()?;
+    if raw.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(raw);
+    if !path.is_absolute() {
+        eprintln!(
+            "Warning: {} is a relative path '{}', resolved against current directory",
+            name,
+            path.display()
+        );
+    }
+    Some(path)
+}
+
+/// Get the default IronClaw base directory (`~/.dasclaw`).
 ///
 /// Logs a warning if the home directory cannot be determined and falls back to
-/// the current directory.
+/// the current directory. Also emits a one-time migration notice when only the
+/// legacy `~/.ironclaw/` exists.
 fn default_base_dir() -> PathBuf {
-    if let Some(home) = dirs::home_dir() {
-        home.join(".ironclaw")
-    } else {
+    let Some(home) = dirs::home_dir() else {
         eprintln!("Warning: Could not determine home directory, using current directory");
-        std::env::current_dir()
+        return std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("/tmp"))
-            .join(".ironclaw")
+            .join(".dasclaw");
+    };
+    let dasclaw = home.join(".dasclaw");
+    let legacy = home.join(".ironclaw");
+    emit_migration_notice_if_needed(&dasclaw, &legacy);
+    dasclaw
+}
+
+/// Emit a `tracing::warn!` migration notice when only the legacy directory exists.
+///
+/// Pure side-effect helper, separated so tests can target it directly without
+/// going through `dirs::home_dir()`. The actual migration logic ships in
+/// ADR-114 B-Ⅱ (`dasclaw migrate` subcommand, issue #107) — this function only
+/// surfaces the prompt.
+fn emit_migration_notice_if_needed(dasclaw: &Path, legacy: &Path) {
+    if legacy.exists() && !dasclaw.exists() {
+        tracing::warn!(
+            "Detected legacy `{}` but no `{}`. Run `dasclaw migrate` to move your data \
+             (migration helper ships in ADR-114 B-Ⅱ, issue #107).",
+            legacy.display(),
+            dasclaw.display()
+        );
     }
 }
 
 /// Get the IronClaw base directory.
 ///
-/// Override with `IRONCLAW_BASE_DIR` environment variable.
-/// Defaults to `~/.ironclaw` (or `./.ironclaw` if home directory cannot be determined).
+/// Override with `DASCLAW_BASE_DIR` (preferred) or `IRONCLAW_BASE_DIR`
+/// (deprecated, kept for one release cycle — emits a `tracing::warn!` when used).
+/// Defaults to `~/.dasclaw` (or `./.dasclaw` if home directory cannot be determined).
 ///
 /// Thread-safe: the value is computed once and cached in a `LazyLock`.
 ///
 /// # Environment Variable Behavior
-/// - If `IRONCLAW_BASE_DIR` is set to a non-empty path, that path is used.
-/// - If `IRONCLAW_BASE_DIR` is set to an empty string, it is treated as unset.
-/// - If `IRONCLAW_BASE_DIR` contains null bytes, a warning is printed and the default is used.
+/// - `DASCLAW_BASE_DIR` takes priority over `IRONCLAW_BASE_DIR`.
+/// - Empty values are treated as unset.
+/// - Relative paths emit a warning but are still used (resolved against cwd).
 /// - If the home directory cannot be determined, a warning is printed and the current directory is used.
+/// - When `~/.ironclaw/` exists but `~/.dasclaw/` does not, a one-time migration
+///   notice points to the `dasclaw migrate` subcommand (ADR-114 B-Ⅱ, issue #107).
 ///
 /// # Returns
 /// A `PathBuf` pointing to the base directory. The path is not validated
@@ -73,20 +136,22 @@ pub fn ironclaw_base_dir() -> PathBuf {
     IRONCLAW_BASE_DIR.clone()
 }
 
-/// Path to the IronClaw-specific `.env` file: `~/.ironclaw/.env`.
+/// Path to the IronClaw-specific `.env` file: `<base>/.env` where `<base>`
+/// resolves via [`ironclaw_base_dir`] (defaults to `~/.dasclaw/.env`).
 pub fn ironclaw_env_path() -> PathBuf {
     ironclaw_base_dir().join(".env")
 }
 
-/// Load env vars from `~/.ironclaw/.env` (in addition to the standard `.env`).
+/// Load env vars from `<base>/.env` (in addition to the standard `.env`),
+/// where `<base>` is [`ironclaw_base_dir`] (defaults to `~/.dasclaw`).
 ///
 /// Call this **after** `dotenvy::dotenv()` so that the standard `./.env`
-/// takes priority over `~/.ironclaw/.env`. dotenvy never overwrites
+/// takes priority over `<base>/.env`. dotenvy never overwrites
 /// existing env vars, so the effective priority is:
 ///
-///   explicit env vars > `./.env` > `~/.ironclaw/.env` > auto-detect
+///   explicit env vars > `./.env` > `<base>/.env` > auto-detect
 ///
-/// If `~/.ironclaw/.env` doesn't exist but the legacy `bootstrap.json` does,
+/// If `<base>/.env` doesn't exist but the legacy `bootstrap.json` does,
 /// extracts `DATABASE_URL` from it and writes the `.env` file (one-time
 /// upgrade from the old config format).
 ///
@@ -109,12 +174,13 @@ pub fn load_ironclaw_env() {
     // Auto-detect libsql: if DATABASE_BACKEND is still unset after loading
     // all env files, and the local SQLite DB exists, default to libsql.
     // This avoids the chicken-and-egg problem on cloud instances where no
-    // DATABASE_URL is configured but ironclaw.db is already present.
+    // DATABASE_URL is configured but the local DB is already present.
+    //
+    // Path follows `ironclaw_base_dir()` (defaults to `~/.dasclaw`); legacy
+    // `~/.ironclaw/ironclaw.db` is reachable via `IRONCLAW_BASE_DIR=...`
+    // until users run the B-Ⅱ migration helper (issue #107).
     if std::env::var("DATABASE_BACKEND").is_err() {
-        let default_db = dirs::home_dir()
-            .unwrap_or_default()
-            .join(".ironclaw")
-            .join("ironclaw.db");
+        let default_db = ironclaw_base_dir().join("ironclaw.db");
         if default_db.exists() {
             if tokio::runtime::Handle::try_current().is_ok() {
                 // Tokio runtime is active (multi-threaded); std::env::set_var is UB here.
@@ -670,19 +736,28 @@ INJECTED="pwned"#;
         // Use compute_ironclaw_base_dir() directly to avoid LazyLock caching,
         // which can be poisoned by whichever test initializes it first.
         let _guard = lock_env();
-        let old_val = std::env::var("IRONCLAW_BASE_DIR").ok();
+        let old_dasclaw = std::env::var(DASCLAW_BASE_DIR_ENV).ok();
+        let old_legacy = std::env::var(IRONCLAW_BASE_DIR_ENV).ok();
         // SAFETY: Under lock_env(), no concurrent env access.
-        unsafe { std::env::remove_var("IRONCLAW_BASE_DIR") };
+        unsafe {
+            std::env::remove_var(DASCLAW_BASE_DIR_ENV);
+            std::env::remove_var(IRONCLAW_BASE_DIR_ENV);
+        }
 
         let path = compute_ironclaw_base_dir().join(".env");
         assert!(
-            path.ends_with(".ironclaw/.env"),
-            "expected path ending with .ironclaw/.env, got: {}",
+            path.ends_with(".dasclaw/.env"),
+            "expected path ending with .dasclaw/.env, got: {}",
             path.display()
         );
 
-        if let Some(val) = old_val {
-            unsafe { std::env::set_var("IRONCLAW_BASE_DIR", val) };
+        unsafe {
+            if let Some(val) = old_dasclaw {
+                std::env::set_var(DASCLAW_BASE_DIR_ENV, val);
+            }
+            if let Some(val) = old_legacy {
+                std::env::set_var(IRONCLAW_BASE_DIR_ENV, val);
+            }
         }
     }
 
@@ -1045,22 +1120,21 @@ INJECTED="pwned"#;
 
     #[test]
     fn test_ironclaw_base_dir_default() {
-        // This test must run first (or in isolation) before the LazyLock is initialized.
-        // It verifies that when IRONCLAW_BASE_DIR is not set, the default path is used.
+        // When neither DASCLAW_BASE_DIR nor IRONCLAW_BASE_DIR is set, the
+        // default base dir is `~/.dasclaw` (ADR-114 B-Ⅰ).
         let _guard = lock_env();
-        let old_val = std::env::var("IRONCLAW_BASE_DIR").ok();
-        // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-        unsafe { std::env::remove_var("IRONCLAW_BASE_DIR") };
+        let snap = snapshot_base_dir_envs();
+        // SAFETY: lock_env() guarantees single-threaded env access.
+        unsafe {
+            std::env::remove_var(DASCLAW_BASE_DIR_ENV);
+            std::env::remove_var(IRONCLAW_BASE_DIR_ENV);
+        }
 
-        // Force re-evaluation by calling the computation function directly
         let path = compute_ironclaw_base_dir();
         let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-        assert_eq!(path, home.join(".ironclaw"));
+        assert_eq!(path, home.join(".dasclaw"));
 
-        if let Some(val) = old_val {
-            // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-            unsafe { std::env::set_var("IRONCLAW_BASE_DIR", val) };
-        }
+        unsafe { restore_base_dir_envs(snap) };
     }
 
     #[test]
@@ -1110,24 +1184,21 @@ INJECTED="pwned"#;
 
     #[test]
     fn test_ironclaw_base_dir_empty_env() {
-        // Verifies that empty IRONCLAW_BASE_DIR falls back to default.
+        // Empty values for both DASCLAW_BASE_DIR and IRONCLAW_BASE_DIR fall
+        // back to the default `~/.dasclaw`.
         let _guard = lock_env();
-        let old_val = std::env::var("IRONCLAW_BASE_DIR").ok();
-        // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-        unsafe { std::env::set_var("IRONCLAW_BASE_DIR", "") };
+        let snap = snapshot_base_dir_envs();
+        // SAFETY: lock_env() guarantees single-threaded env access.
+        unsafe {
+            std::env::set_var(DASCLAW_BASE_DIR_ENV, "");
+            std::env::set_var(IRONCLAW_BASE_DIR_ENV, "");
+        }
 
-        // Force re-evaluation by calling the computation function directly
         let path = compute_ironclaw_base_dir();
         let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-        assert_eq!(path, home.join(".ironclaw"));
+        assert_eq!(path, home.join(".dasclaw"));
 
-        if let Some(val) = old_val {
-            // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-            unsafe { std::env::set_var("IRONCLAW_BASE_DIR", val) };
-        } else {
-            // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-            unsafe { std::env::remove_var("IRONCLAW_BASE_DIR") };
-        }
+        unsafe { restore_base_dir_envs(snap) };
     }
 
     #[test]
@@ -1413,6 +1484,129 @@ INJECTED="pwned"#;
         assert_eq!(
             parsed[0],
             ("DATABASE_BACKEND".to_string(), "libsql".to_string())
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // ADR-114 B-Ⅰ: DASCLAW_BASE_DIR dual-read with IRONCLAW_BASE_DIR
+    // deprecation. (issue #106)
+    // ---------------------------------------------------------------
+
+    /// Snapshot DASCLAW_BASE_DIR + IRONCLAW_BASE_DIR for restoration after
+    /// a test that mutates them. Caller must hold `lock_env()`.
+    fn snapshot_base_dir_envs() -> (Option<String>, Option<String>) {
+        (
+            std::env::var(DASCLAW_BASE_DIR_ENV).ok(),
+            std::env::var(IRONCLAW_BASE_DIR_ENV).ok(),
+        )
+    }
+
+    /// Restore DASCLAW_BASE_DIR + IRONCLAW_BASE_DIR from a snapshot.
+    /// SAFETY: caller must hold `lock_env()`.
+    unsafe fn restore_base_dir_envs(snapshot: (Option<String>, Option<String>)) {
+        let (dasclaw, legacy) = snapshot;
+        unsafe {
+            std::env::remove_var(DASCLAW_BASE_DIR_ENV);
+            std::env::remove_var(IRONCLAW_BASE_DIR_ENV);
+            if let Some(val) = dasclaw {
+                std::env::set_var(DASCLAW_BASE_DIR_ENV, val);
+            }
+            if let Some(val) = legacy {
+                std::env::set_var(IRONCLAW_BASE_DIR_ENV, val);
+            }
+        }
+    }
+
+    #[test]
+    fn req_adr_114_bi_dasclaw_base_dir_takes_priority() {
+        let _guard = lock_env();
+        let snap = snapshot_base_dir_envs();
+        // SAFETY: under lock_env() — single-threaded env access.
+        unsafe {
+            std::env::set_var(DASCLAW_BASE_DIR_ENV, "/tmp/dasclaw-priority");
+            std::env::set_var(IRONCLAW_BASE_DIR_ENV, "/tmp/ironclaw-legacy");
+        }
+
+        let resolved = compute_ironclaw_base_dir();
+        assert_eq!(
+            resolved,
+            PathBuf::from("/tmp/dasclaw-priority"),
+            "DASCLAW_BASE_DIR must take priority over IRONCLAW_BASE_DIR"
+        );
+
+        unsafe { restore_base_dir_envs(snap) };
+    }
+
+    #[test]
+    #[tracing_test::traced_test]
+    fn req_adr_114_bi_ironclaw_base_dir_fallback_with_warning() {
+        let _guard = lock_env();
+        let snap = snapshot_base_dir_envs();
+        unsafe {
+            std::env::remove_var(DASCLAW_BASE_DIR_ENV);
+            std::env::set_var(IRONCLAW_BASE_DIR_ENV, "/tmp/ironclaw-fallback");
+        }
+
+        let resolved = compute_ironclaw_base_dir();
+        assert_eq!(resolved, PathBuf::from("/tmp/ironclaw-fallback"));
+        assert!(
+            logs_contain("deprecated"),
+            "expected a deprecation warning when only IRONCLAW_BASE_DIR is set"
+        );
+
+        unsafe { restore_base_dir_envs(snap) };
+    }
+
+    #[test]
+    fn req_adr_114_bi_default_base_dir_is_dasclaw() {
+        let _guard = lock_env();
+        let snap = snapshot_base_dir_envs();
+        unsafe {
+            std::env::remove_var(DASCLAW_BASE_DIR_ENV);
+            std::env::remove_var(IRONCLAW_BASE_DIR_ENV);
+        }
+
+        let resolved = compute_ironclaw_base_dir();
+        assert!(
+            resolved.ends_with(".dasclaw"),
+            "default base dir must end with .dasclaw, got: {}",
+            resolved.display()
+        );
+
+        unsafe { restore_base_dir_envs(snap) };
+    }
+
+    #[test]
+    #[tracing_test::traced_test]
+    fn req_adr_114_bi_migration_notice_when_only_legacy_exists() {
+        let dir = tempdir().unwrap();
+        let dasclaw = dir.path().join(".dasclaw");
+        let legacy = dir.path().join(".ironclaw");
+        std::fs::create_dir_all(&legacy).unwrap();
+        // dasclaw intentionally does not exist.
+
+        emit_migration_notice_if_needed(&dasclaw, &legacy);
+
+        assert!(
+            logs_contain("dasclaw migrate"),
+            "expected migration notice mentioning `dasclaw migrate` subcommand"
+        );
+    }
+
+    #[test]
+    #[tracing_test::traced_test]
+    fn req_adr_114_bi_migration_notice_silent_when_dasclaw_exists() {
+        let dir = tempdir().unwrap();
+        let dasclaw = dir.path().join(".dasclaw");
+        let legacy = dir.path().join(".ironclaw");
+        std::fs::create_dir_all(&dasclaw).unwrap();
+        std::fs::create_dir_all(&legacy).unwrap();
+
+        emit_migration_notice_if_needed(&dasclaw, &legacy);
+
+        assert!(
+            !logs_contain("dasclaw migrate"),
+            "migration notice must NOT be emitted when ~/.dasclaw already exists"
         );
     }
 }

@@ -6,13 +6,38 @@ on:
 
 permissions:
   pull-requests: read
+  contents: read
 
 jobs:
   closes-link:
     runs-on: ubuntu-latest
     if: github.event.pull_request.draft == false
     steps:
+      - name: Detect ADR-only PR (exempt from closes-link)
+        id: exempt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # ADR docs are reference material referenced by other PRs, not implementation
+          # of trackable issues. Exempt PRs whose changes are entirely under
+          # docs/plans/architecture-refactor/adr-*.md from the closes-link check.
+          files=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].filename')
+          if [ -z "$files" ]; then
+            echo "exempt=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          non_adr=$(printf '%s\n' "$files" | grep -vE '^docs/plans/architecture-refactor/adr-.*\.md$' || true)
+          if [ -z "$non_adr" ]; then
+            echo "All changed files are ADR docs; exempting from closes-link check."
+            echo "exempt=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exempt=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Require Closes/Fixes/Resolves #N in PR body
+        if: steps.exempt.outputs.exempt != 'true'
         env:
           BODY: ${{ github.event.pull_request.body }}
         run: |

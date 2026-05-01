@@ -182,7 +182,7 @@ flowchart TB
 - **永不**直接升级 fork 到 0.26（与 ADR-101 §136 一致；38 §137 已实证升级风险高 30k+ LOC + 5 migration）
 
 ### ADR-106：项目级文档统一为 AGENTS.md 协议
-**决策**：新建 `dasclaw_project_docs` crate，统一加载优先级：`AGENTS.md` > `CLAUDE.md` > `.codex/agents.md` > project config。多层合并：user 全局 → project 项目级 → cwd 覆盖，与 codex `project_doc_max_bytes` 机制一致。
+**决策**：新建 `dasclaw_project_docs` crate，统一加载优先级（同目录内）：`AGENTS.md` > `.dasclaw/AGENTS.md` > `CLAUDE.md` > `.codex/AGENTS.md` > project config。多层合并：user 全局 → project 项目级 → cwd 覆盖，与 codex `project_doc_max_bytes` 机制一致。`.dasclaw/AGENTS.md` 为 x-claw 项目命名空间主写位（issue #99/#100 已固定，**优先于第三方惯例 `CLAUDE.md`**），`.codex/AGENTS.md` 仅作 codex-fork 兼容只读回退。
 **理由**：
 - 30 v2 §G 事实：desktop-client 完全不加载项目级文档（grep ipc/ 无项目文档加载），与 codex/claw 生态不互通。
 - AGENTS.md 已是业界事实标准（OpenAI / Anthropic / Cursor / Aider 等都采用），CLAUDE.md 为 Anthropic 生态别名。
