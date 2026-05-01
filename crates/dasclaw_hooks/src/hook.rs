@@ -87,6 +87,21 @@ impl HookEvent {
         }
     }
 
+    /// Variant tag used as the `event_type` field in lifecycle trace logs.
+    ///
+    /// Distinct from [`HookPoint::as_str`] so consumers can disambiguate the
+    /// event shape from the lifecycle slot it triggered.
+    pub fn event_kind(&self) -> &'static str {
+        match self {
+            HookEvent::Inbound { .. } => "Inbound",
+            HookEvent::ToolCall { .. } => "ToolCall",
+            HookEvent::Outbound { .. } => "Outbound",
+            HookEvent::SessionStart { .. } => "SessionStart",
+            HookEvent::SessionEnd { .. } => "SessionEnd",
+            HookEvent::ResponseTransform { .. } => "ResponseTransform",
+        }
+    }
+
     /// Apply a modification string to the event's primary content field.
     pub fn apply_modification(&mut self, modified: &str) {
         match self {
