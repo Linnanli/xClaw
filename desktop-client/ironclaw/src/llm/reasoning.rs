@@ -833,6 +833,7 @@ Respond with a JSON plan in this format:
             conversation_context: Some(self.build_conversation_section()).filter(|s| !s.is_empty()),
             group_guidance: Some(self.build_group_section()).filter(|s| !s.is_empty()),
             runtime_info: Some(self.build_runtime_section()).filter(|s| !s.is_empty()),
+            environment: Some(self.build_environment_section()).filter(|s| !s.is_empty()),
             ..Default::default()
         };
 
@@ -928,6 +929,27 @@ Examples (tool calls use JSON format):\n\
             return String::new();
         }
         format!("\n\n## Runtime\n{}", parts.join(" | "))
+    }
+
+    /// Build the body of the dynamic `## Environment` section.
+    ///
+    /// Per ADR-117 §2.3 D8.2 the format is a Markdown body of:
+    ///
+    /// ```text
+    /// cwd: {path}
+    /// date: {YYYY-MM-DD}
+    /// platform: {os}
+    /// ```
+    ///
+    /// `dynamic_layer::build` wraps the body under a `## Environment` heading;
+    /// this helper only returns the body so the heading is owned in one place.
+    fn build_environment_section(&self) -> String {
+        let cwd = std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "<unknown>".into());
+        let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let platform = std::env::consts::OS;
+        format!("cwd: {cwd}\ndate: {date}\nplatform: {platform}")
     }
 
     fn build_conversation_section(&self) -> String {
