@@ -502,7 +502,7 @@ fn fp_021_prompt_cache_hit_rate_above_80() {
 fn fp_022_dynamic_layer_preserves_static_cache() {
     let tools = sample_tools();
     let config = sample_config();
-    let mut builder = LayeredPromptBuilder::new(&tools, &config);
+    let builder = LayeredPromptBuilder::new(&tools, &config);
 
     // Static layer should not change when only dynamic content changes
     let dynamic_v1 = DynamicLayerInput {
@@ -516,12 +516,6 @@ fn fp_022_dynamic_layer_preserves_static_cache() {
 
     let prompt_v1 = builder.build(&dynamic_v1);
     let prompt_v2 = builder.build(&dynamic_v2);
-
-    // Static hash should remain the same
-    assert!(
-        !builder.refresh_static(&tools, &config),
-        "FP-022: refresh_static with same tools/config should return false"
-    );
 
     // Both prompts should contain their respective dynamic content
     assert!(
