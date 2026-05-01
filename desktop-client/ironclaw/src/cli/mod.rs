@@ -25,6 +25,7 @@ pub mod import;
 mod logs;
 mod mcp;
 pub mod memory;
+mod migrate;
 mod models;
 pub mod oauth_defaults;
 mod pairing;
@@ -46,6 +47,7 @@ pub use logs::{LogsCommand, run_logs_command};
 pub use mcp::{McpCommand, run_mcp_command};
 pub use memory::MemoryCommand;
 pub use memory::run_memory_command_with_db;
+pub use migrate::{MigrateCommand, run_migrate_command};
 pub use models::{ModelsCommand, run_models_command};
 pub use pairing::{PairingCommand, run_pairing_command, run_pairing_command_with_store};
 pub use registry::{RegistryCommand, run_registry_command};
@@ -247,6 +249,13 @@ pub enum Command {
         long_about = "Displays health and diagnostics info.\nExample: ironclaw status"
     )]
     Status,
+
+    /// Migrate legacy `~/.ironclaw/` data into `~/.dasclaw/` (ADR-114 B-Ⅱ).
+    #[command(
+        about = "Migrate ~/.ironclaw -> ~/.dasclaw",
+        long_about = "Copies files from the legacy ~/.ironclaw directory into ~/.dasclaw.\nNever overwrites existing destination files; safe to re-run.\nExamples:\n  dasclaw migrate --dry-run   # Preview the plan\n  dasclaw migrate             # Copy missing files and write marker\n  dasclaw migrate --force     # Resume after a previous successful run"
+    )]
+    Migrate(MigrateCommand),
 
     /// Generate shell completion scripts
     #[command(
