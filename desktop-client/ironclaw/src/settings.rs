@@ -1569,7 +1569,7 @@ mod tests {
     #[test]
     fn default_toml_path_under_ironclaw() {
         let path = Settings::default_toml_path();
-        assert!(path.to_string_lossy().contains(".ironclaw"));
+        assert!(path.to_string_lossy().contains(".dasclaw"));
         assert!(path.to_string_lossy().ends_with("config.toml"));
     }
 
