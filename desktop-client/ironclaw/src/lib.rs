@@ -57,6 +57,7 @@ pub mod hook_bootstrap;
 #[cfg(feature = "import")]
 pub mod import;
 pub mod llm;
+pub mod migration;
 pub mod observability;
 pub mod orchestrator;
 pub mod pairing;
