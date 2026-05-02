@@ -4,9 +4,7 @@
 //! group chat rules, runtime info, environment context, and project doc.
 //!
 //! Composition order is fixed by [ADR-117 §2.3 D8.6]:
-//! skill → channel → ext → conv → group → runtime → environment → project_doc
-//! → admin_policy → token_budget → language_preference. The trailing three
-//! fields are scheduled for removal in PR-3 (ADR-117 D8.4 / issue #137).
+//! skill → channel → ext → conv → group → runtime → environment → project_doc.
 //!
 //! [ADR-117 §2.3 D8.6]: ../../../../docs/plans/architecture-refactor/adr-117-p0c-prompt-builder-unification.md
 
@@ -33,12 +31,6 @@ pub struct DynamicLayerInput {
     /// `.codex/AGENTS.md`. Placeholder field for the post-#55 wiring step
     /// (ADR-117 §2.3 D8.3); current callers leave it `None`.
     pub project_doc: Option<String>,
-    /// Admin-managed policy overrides.
-    pub admin_policy: Option<String>,
-    /// Token budget / quota reminder.
-    pub token_budget: Option<String>,
-    /// User's preferred interaction language.
-    pub language_preference: Option<String>,
 }
 
 /// Build the dynamic (uncached) portion of the system prompt.
@@ -100,31 +92,6 @@ pub fn build(input: &DynamicLayerInput) -> String {
         }
     }
 
-    if let Some(ref policy) = input.admin_policy {
-        if !policy.is_empty() {
-            sections.push(format!(
-                "## Admin Policy\n\n\
-                 The following policies are enforced by the organization administrator.\n\
-                 They take precedence over user preferences but not over safety rules.\n\n\
-                 {policy}"
-            ));
-        }
-    }
-
-    if let Some(ref budget) = input.token_budget {
-        if !budget.is_empty() {
-            sections.push(format!("## Token Budget\n\n{budget}"));
-        }
-    }
-
-    if let Some(ref lang) = input.language_preference {
-        if !lang.is_empty() {
-            sections.push(format!(
-                "## Language\n\nRespond in {lang} unless the user writes in a different language."
-            ));
-        }
-    }
-
     sections.join("\n\n")
 }
 
@@ -151,29 +118,17 @@ mod tests {
     }
 
     #[test]
-    fn test_admin_policy_precedence_note() {
-        let input = DynamicLayerInput {
-            admin_policy: Some("No external API calls.".into()),
-            ..Default::default()
-        };
-        let text = build(&input);
-        assert!(text.contains("Admin Policy"));
-        assert!(text.contains("take precedence"));
-        assert!(text.contains("No external API calls"));
-    }
-
-    #[test]
     fn test_multiple_sections_joined() {
         let input = DynamicLayerInput {
             channel: Some("telegram".into()),
-            language_preference: Some("中文".into()),
+            runtime_info: Some("model=claude".into()),
             ..Default::default()
         };
         let text = build(&input);
         assert!(text.contains("Channel"));
         assert!(text.contains("telegram"));
-        assert!(text.contains("Language"));
-        assert!(text.contains("中文"));
+        assert!(text.contains("Runtime"));
+        assert!(text.contains("model=claude"));
     }
 
     #[test]

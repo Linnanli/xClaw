@@ -17,8 +17,6 @@ mod static_layer;
 pub use dynamic_layer::DynamicLayerInput;
 pub use static_layer::StaticLayer;
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use x_claw_agent::PROMPT_CACHE_BOUNDARY;
@@ -37,22 +35,19 @@ fn cache_boundary_section() -> String {
 pub struct LayeredPrompt {
     /// The fully assembled system prompt string.
     pub text: String,
-    /// Whether the static layer was rebuilt (hash changed).
-    pub static_changed: bool,
 }
 
 /// Builds system prompts with static/dynamic separation.
 ///
-/// The static layer is computed once and cached in an `Arc<String>`.
-/// It is only rebuilt when the `static_hash` changes (tool set change,
-/// config change, etc.).
-///
-/// The dynamic layer is rebuilt every call from the provided `DynamicLayerInput`.
+/// The static layer is computed once at construction and cached in an
+/// `Arc<String>`. The dynamic layer is rebuilt every call from the provided
+/// [`DynamicLayerInput`]. Provider-side prefix caching relies on byte-level
+/// stability of the static prefix, not on a builder-side hash; see ADR-117
+/// §2.2 D6 for why the previous `static_hash` / `refresh_static` machinery
+/// was removed.
 pub struct LayeredPromptBuilder {
     /// Cached static layer text.
     static_layer: Arc<String>,
-    /// Hash of the inputs that produced `static_layer`.
-    static_hash: u64,
     /// Whether the model supports Anthropic-style cache control.
     supports_cache_boundary: bool,
 }
@@ -61,10 +56,8 @@ impl LayeredPromptBuilder {
     /// Create a new builder with the given tool definitions and static config.
     pub fn new(tools: &[ToolDefinition], static_config: &StaticLayerConfig) -> Self {
         let static_text = StaticLayer::build(tools, static_config);
-        let hash = Self::compute_hash(tools, static_config);
         Self {
             static_layer: Arc::new(static_text),
-            static_hash: hash,
             supports_cache_boundary: false,
         }
     }
@@ -73,22 +66,6 @@ impl LayeredPromptBuilder {
     pub fn with_cache_boundary(mut self, enabled: bool) -> Self {
         self.supports_cache_boundary = enabled;
         self
-    }
-
-    /// Rebuild the static layer only if inputs have changed.
-    /// Returns `true` if the layer was actually rebuilt.
-    pub fn refresh_static(
-        &mut self,
-        tools: &[ToolDefinition],
-        static_config: &StaticLayerConfig,
-    ) -> bool {
-        let new_hash = Self::compute_hash(tools, static_config);
-        if new_hash == self.static_hash {
-            return false;
-        }
-        self.static_layer = Arc::new(StaticLayer::build(tools, static_config));
-        self.static_hash = new_hash;
-        true
     }
 
     /// Build the full system prompt by combining static + dynamic layers.
@@ -106,32 +83,12 @@ impl LayeredPromptBuilder {
             format!("{}\n\n{}", self.static_layer, dynamic_text)
         };
 
-        LayeredPrompt {
-            text,
-            static_changed: false,
-        }
-    }
-
-    /// Get the current static layer hash.
-    pub fn static_hash(&self) -> u64 {
-        self.static_hash
-    }
-
-    fn compute_hash(tools: &[ToolDefinition], config: &StaticLayerConfig) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        for t in tools {
-            t.name.hash(&mut hasher);
-            t.description.hash(&mut hasher);
-        }
-        config.identity.hash(&mut hasher);
-        config.has_native_thinking.hash(&mut hasher);
-        config.model_name.hash(&mut hasher);
-        hasher.finish()
+        LayeredPrompt { text }
     }
 }
 
 /// Configuration inputs for the static layer that rarely change.
-#[derive(Debug, Clone, Hash)]
+#[derive(Debug, Clone, Default)]
 pub struct StaticLayerConfig {
     /// Workspace identity prompt (AGENTS.md + SOUL.md + IDENTITY.md etc.).
     pub identity: String,
@@ -139,16 +96,6 @@ pub struct StaticLayerConfig {
     pub model_name: String,
     /// Whether the model has native thinking (Qwen3, DeepSeek-R1).
     pub has_native_thinking: bool,
-}
-
-impl Default for StaticLayerConfig {
-    fn default() -> Self {
-        Self {
-            identity: String::new(),
-            model_name: String::new(),
-            has_native_thinking: false,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -176,50 +123,6 @@ mod tests {
             model_name: "claude-sonnet-4-20250514".into(),
             has_native_thinking: false,
         }
-    }
-
-    #[test]
-    fn test_static_hash_stable_for_same_inputs() {
-        let tools = sample_tools();
-        let config = sample_config();
-        let b1 = LayeredPromptBuilder::new(&tools, &config);
-        let b2 = LayeredPromptBuilder::new(&tools, &config);
-        assert_eq!(b1.static_hash(), b2.static_hash());
-    }
-
-    #[test]
-    fn test_static_hash_changes_on_tool_change() {
-        let config = sample_config();
-        let tools1 = sample_tools();
-        let tools2 = vec![ToolDefinition {
-            name: "grep_search".into(),
-            description: "Search files".into(),
-            parameters: serde_json::json!({}),
-        }];
-        let b1 = LayeredPromptBuilder::new(&tools1, &config);
-        let b2 = LayeredPromptBuilder::new(&tools2, &config);
-        assert_ne!(b1.static_hash(), b2.static_hash());
-    }
-
-    #[test]
-    fn test_refresh_static_returns_false_when_unchanged() {
-        let tools = sample_tools();
-        let config = sample_config();
-        let mut builder = LayeredPromptBuilder::new(&tools, &config);
-        assert!(!builder.refresh_static(&tools, &config));
-    }
-
-    #[test]
-    fn test_refresh_static_returns_true_when_tools_change() {
-        let tools = sample_tools();
-        let config = sample_config();
-        let mut builder = LayeredPromptBuilder::new(&tools, &config);
-        let new_tools = vec![ToolDefinition {
-            name: "git_status".into(),
-            description: "Git status".into(),
-            parameters: serde_json::json!({}),
-        }];
-        assert!(builder.refresh_static(&new_tools, &config));
     }
 
     #[test]
