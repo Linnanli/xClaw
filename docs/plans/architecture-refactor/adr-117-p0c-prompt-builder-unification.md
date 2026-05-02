@@ -1,10 +1,21 @@
 # ADR-117: P0-C Prompt Builder 统一（吸收 claw-code 至 LayeredPromptBuilder）
 
-- **Status**: Proposed
-- **Date**: 2026-04-30
-- **Approver**: pending
+- **Status**: Accepted (v1.1, 父仓 D6/D8.4 已落地 #142；子仓 D5/D7 通过 PR-4 + 子仓 PR 收尾)
+- **Date**: 2026-04-30 / **v1.1 修订**: 2026-05-02
+- **Approver**: 已批 (PR #140/#141/#142 + 用户批准 v1.1 D7 升档)
 - **Issue**: [#130](https://github.com/Linnanli/xClaw/issues/130)（W3/B P0-C — Prompt Builder 统一）
-- **Closes**: #130
+- **Closes**: #130（由父仓 PR-3 #142 完成；v1.1 D7 子仓 PR-4 是 ADR 增补，不再 closes）
+
+## v1.1 修订记（2026-05-02）
+
+基于父仓 PR-3 (#142) 合并后启动子仓清理时的实测三层验证（`grep -rn` 全仓 + Cargo.toml 反向依赖图），订正 v1.0 的 **D7 删除半径**。原措辞「档 1 保守 — 仅删 `runtime/src/prompt.rs` + `rusty-claude-cli/`」与实际依赖图矛盾：
+
+- `claw-code/rust/crates/tools` 在 [`tools/src/lib.rs#L15`](../../claw-code/rust/crates/tools/src/lib.rs#L15) + [`#L3621`](../../claw-code/rust/crates/tools/src/lib.rs#L3621) 调用 `runtime::load_system_prompt`；删 `runtime/src/prompt.rs` 后 `tools` crate 编译炸
+- `tools` crate 的反向依赖（实测 grep）只有 `rusty-claude-cli` + `compat-harness`，**desktop-client / ironclaw fork / 主仓任何 crate 均 0 引用**
+- `compat-harness` / `mock-anthropic-service` 的反向依赖也只有 `rusty-claude-cli`
+- 这 3 个 crate 已分别在 [31-target-architecture.md §ADR-104 non-goal](31-target-architecture.md) 列为「永久不做 / 保留作测试工具不进生产」
+
+**v1.1 决策**：D7 升档至「档 1.5」，删除半径扩到 `tools/` + `compat-harness/` + `mock-anthropic-service/`。所有删除目标均为 ADR-104 既定 non-goal，不属新增范围；不是补丁式扩档，是按既定路线一次性清理。详见 §2.2 D7 / §3.2 / §4.1 PR-4 / §6.1 Tier 3。
 - **Related**:
   - [p0c-prompt-builder-inventory.md](p0c-prompt-builder-inventory.md)（事实底盘 + §11 16 个待决问题，本 ADR 是其封顶）
   - [adr-112-compatibility-evaluation.md §5](adr-112-compatibility-evaluation.md)（W3-A Phase 0 P0-1 boundary literal 统一前置）
@@ -45,6 +56,13 @@ inventory §10 + 本 ADR 起草过程的三层验证（semantic_search → vscod
 4. **inventory 35/36/37 三份 capability inventory 均未拍 composition 顺序**：D8 决策属真空地带，由本 ADR 一次性定义。
 5. **`claw-code-api` 依赖 `claw-code/rust/crates/runtime` 仅用于 OAuth/usage/config**，与 `runtime::prompt` 模块无耦合 → 删除 `runtime/src/prompt.rs` 不破 desktop-client 编译。
 6. **`claw-code/rust/crates/rusty-claude-cli` 是 desktop-client 的死代码**：grep workflows + Cargo.toml + lockfile 0 命中。
+7. **(v1.1 新增) `tools` / `compat-harness` / `mock-anthropic-service` 三 crate 也是 desktop-client 死代码**：实测 Cargo.toml 反向依赖图（[`grep -E '^[a-z_-]+ *= *\{ *path' crates/*/Cargo.toml`](../../claw-code/rust/crates/)）：
+   - `tools` ← 仅 `rusty-claude-cli` + `compat-harness`
+   - `compat-harness` ← 仅 `rusty-claude-cli`
+   - `mock-anthropic-service` ← 仅 `rusty-claude-cli`（含 path dep + `tests/mock_parity_harness.rs` / `tests/compact_output.rs` `use`）
+   - 主仓 workspace 根 [`Cargo.toml#L33`](../../Cargo.toml#L33) `exclude = ["ironclaw", "claw-code"]`，claw-code 子树**不参与主仓编译**
+   - desktop-client 唯一桥梁 [`desktop-client/ironclaw/Cargo.toml#L149`](../../desktop-client/ironclaw/Cargo.toml#L149) `claw-code-api = { path = ".../api", package = "api" }`，`api` 仅依赖 `runtime + telemetry`，**不依赖 `tools` / `commands` / `plugins`**
+   - 结论：删除 `tools` / `compat-harness` / `mock-anthropic-service` 对 x-claw 主仓 0 影响（与删除 `rusty-claude-cli` 同级）
 
 ---
 
@@ -62,9 +80,9 @@ inventory §10 + 本 ADR 起草过程的三层验证（semantic_search → vscod
 | **D2** | boundary 字面量来源 | **B' — 通过 `x_claw_agent::PROMPT_CACHE_BOUNDARY` 单源** | claw-code 端的同名常量随 D5 删除一并消失 |
 | **D3** | 吸收范围 | **Absorb a/b/c/d/e/g/i** | inventory §11 的待决问题 a/b/c/d/e/g/i 由本 ADR 给出最终选择 |
 | **D4** | `IRONCLAW_PROMPT_LAYERING` 环境变量 | **C — 删除** | P0-1 已默认启用并删除；本 ADR 仅追认 |
-| **D5** | `claw-code/rust/crates/runtime/src/prompt.rs` | **drop — 整文件删除** | desktop-client 不依赖 `runtime::prompt`，且 `claw-code-api` 不再需要 |
+| **D5** | `claw-code/rust/crates/runtime/src/prompt.rs` | **drop — 整文件删除** | desktop-client 不依赖 `runtime::prompt`，且 `claw-code-api` 不再需要；连带删除 `runtime/lib.rs` 的 `pub use prompt::*` + `runtime/src/conversation.rs` 测试块对 `SystemPromptBuilder` 的引用 |
 | **D6** | `LayeredPromptBuilder.static_hash` + `static_changed` 旗标 | **Y — 删除** | 该 hash 字段无消费者，prefix cache 真正依赖的是字节稳定性，而非业务层 hash 比较 |
-| **D7** | 删除半径 | **档 1 保守 — 仅删 `runtime/src/prompt.rs` + `rusty-claude-cli/`** | 不删整个 `claw-code` 子树。`claw-code-api` 仍提供 OAuth/usage/config 给 desktop-client；agent loop 已独立 |
+| **D7** (v1.1 修订) | 删除半径 | **档 1.5 — 删 `runtime/src/prompt.rs` + `rusty-claude-cli/` + `tools/` + `compat-harness/` + `mock-anthropic-service/`** | 实测反向依赖图 (§1.3 #7)：`tools` / `compat-harness` / `mock-anthropic-service` 反向依赖均只指向 `rusty-claude-cli`，删 `rusty-claude-cli` 后 3 crate 反向依赖归零；3 crate 已在 [31 §ADR-104 non-goal](31-target-architecture.md) 列为「永久不做 / 保留作测试工具不进生产」。仍保留 `claw-code-api` (`runtime` + `plugins` + `telemetry` + `api` + `commands` + `src/`) — desktop-client 实际消费链路 |
 | **D8** | composition 顺序 | 见 §2.3（6 个子决策） | inventory 35/36/37 真空地带，本 ADR 一次性拍板 |
 | **D9** | 测试不变量 | 见 §2.4（5 个子决策） | 删 3 加 5；不引入快照测试；不设覆盖率门槛 |
 | **D10** | 落地序列 | **三段 PR** + 立即删除 + 单 commit revert | 见 §4 |
@@ -117,21 +135,21 @@ pub struct DynamicLayerInput {
 
 - 装配路径单源化：`Reasoning::build_system_prompt_with_tools` → `LayeredPromptBuilder::build` → `String`，可被任意 provider 透传
 - `DynamicLayerInput` 形态契合 codex `EnvironmentContext` 概念（cwd/date/platform），未来若接 #55 ProjectDocLoader 不需要再改 schema
-- 删除 ~600 LOC 死代码（runtime/src/prompt.rs ~920 行 + rusty-claude-cli + 3 个 dynamic 字段 + hash 系列）
+- 删除死代码（v1.1 重估）：父仓 ≈180 LOC（3 dynamic 字段 + hash 系列 + 3 测试，已随 #142 落地）；子仓 **≈ 46k LOC**（`runtime/src/prompt.rs` ≈ 920 + `rusty-claude-cli/` ≈ 30k + `tools/` ≈ 12.5k + `compat-harness/` ≈ 2k + `mock-anthropic-service/` ≈ 1.5k）— 全部在 [31 §ADR-104 non-goal](31-target-architecture.md) 既定路线内
 - ADR-115 的「构建期 DI」原则得到字段化承接（`project_doc: Option<String>`）
 
 ### 3.2 负面 / 成本
 
-- 删除 `claw-code/rust/crates/runtime/src/prompt.rs` 后，`claw-code` 子项目的 standalone 用途（如果有）失去 system prompt 装配能力 → 但本仓库不依赖该路径，可接受
-- 跨 crate 删除 PR（PR-3）需要 `cargo check -p claw-code-api` 双重验证
+- 删除 `claw-code/rust/crates/runtime/src/prompt.rs` + `tools/` + `rusty-claude-cli/` + `compat-harness/` + `mock-anthropic-service/` 后，**`claw-code` 子项目的 standalone CLI / sub-agent dispatch / mock parity 测试 全部失能**；但本仓库不依赖这些路径（实测依赖图§1.3 #7），且 ADR-104 non-goal 已预警 — 可接受
+- 跨 crate 删除 PR（子仓 PR-4 + 父仓 bump submodule）需要 `cargo check -p claw-code-api` 双重验证 + 子仓 `cargo check --workspace` 验证 workspace Cargo.toml 同步清理
 
 ### 3.3 风险
 
 | # | 风险 | 缓解 |
 |---|---|---|
 | **R-1** | **boundary marker 全 provider 无消费**（核心遗留问题） | 本 ADR **不在范围内**修复 — 单独 P1 issue「Anthropic provider 接入 `cache_control` 切分」；本 ADR §1.3 已记录该负向事实底盘 |
-| **R-2** | PR-3 删 `rusty-claude-cli` 破 CI workflow | PR-3 必须先 `grep -r "rusty-claude-cli" .github/workflows/` 0 命中 |
-| **R-3** | PR-3 删 `runtime/src/prompt.rs` 破 `claw-code-api` 编译 | PR-3 必须 `cargo check -p claw-code-api` 通过 |
+| **R-2** | 子仓 PR-4 删 `rusty-claude-cli/` / `tools/` / `compat-harness/` / `mock-anthropic-service/` 破 子仓 CI workflow | PR-4 必须先 `grep -rn 'rusty-claude-cli\|crates/tools\|compat-harness\|mock-anthropic-service' .github/workflows/ claw-code/.github/workflows/` 0 命中；子仓 `release.yml` 等引用需同步删除 |
+| **R-3** | 子仓 PR-4 删 `runtime/src/prompt.rs` 破 `claw-code-api` 编译 / 主仓 desktop-client 编译 | PR-4 必须子仓 `cargo check --workspace` 通过；父仓 bump submodule PR 必须 `cargo check -p ironclaw -p desktop-client` 通过 |
 | **R-4** | `## Environment` 段格式与 #55 ProjectDocLoader 将来要求冲突 | `project_doc` 字段已预留；#55 实施时仅填字段，不改格式 |
 | **R-5** | `admin_policy` / `token_budget` / `language_preference` 误删（万一上游 fork 或某 milestone 真要用） | 已三层验证 0 caller，且未来正确路径登记到 [#137](https://github.com/Linnanli/xClaw/issues/137)（admin_policy → ironclaw_safety fail-safe / token_budget → context/compact / language_preference → ChannelAdapter）；删除是字段重构，不是能力删除 |
 
@@ -139,13 +157,14 @@ pub struct DynamicLayerInput {
 
 ## 4. 落地序列（D10）
 
-### 4.1 三段 PR
+### 4.1 四段 PR（v1.1 从三段拆为四段）
 
-| PR | 标题 | base | closes | 内容 | LOC | 风险 |
+| PR | 标题 | base | closes | 内容 | LOC | 状态 |
 |---|---|---|---|---|---|---|
-| **PR-1** | `docs(adr): adr-117 p0c prompt builder unification` | xClaw | — | 仅本文档 | +~400 / -0 | 0 |
-| **PR-2** | `feat(prompt): implement adr-117 d8 composition order` | PR-1 合并后 xClaw | — | `DynamicLayerInput.environment` + `project_doc` 字段；`dynamic_layer.rs` render；`reasoning.rs` 喂 `EnvironmentContext::current()` 数据；新增 5 测试 | +~80 / -5 | 低 |
-| **PR-3** | `chore(prompt): remove dead code per adr-117 d5/d6/d7/d8.4` | PR-2 合并后 xClaw | **#130** | 删 `admin_policy`/`token_budget`/`language_preference` 字段 + `dynamic_layer.rs` 对应 render；删 `LayeredPromptBuilder.static_hash` + `static_changed` + hash 测试；删 `claw-code/rust/crates/runtime/src/prompt.rs`（D5）；删 `claw-code/rust/crates/rusty-claude-cli/`（D7）；同步 `runtime/lib.rs` 的 `pub use` | +~10 / -~600 | 中 |
+| **PR-1** | `docs(adr): adr-117 p0c prompt builder unification` | xClaw | — | 仅本文档 v1.0 | +~400 / -0 | ✅ 合并 #140 ([ca996222](https://github.com/Linnanli/xClaw/commit/ca996222)) |
+| **PR-2** | `feat(prompt): implement adr-117 d8 composition order` | PR-1 合并后 xClaw | — | `DynamicLayerInput.environment` + `project_doc` 字段；`dynamic_layer.rs` render；`reasoning.rs` 嗂 `EnvironmentContext::current()` 数据；新增 5 测试 | +~80 / -5 | ✅ 合并 #141 ([b8049f4c](https://github.com/Linnanli/xClaw/commit/b8049f4c)) |
+| **PR-3** | `chore(prompt): remove dead static_hash/legacy fields per ADR-117 D6/D8.4` | PR-2 合并后 xClaw | **#130** | 父仓部分仅：删 `admin_policy`/`token_budget`/`language_preference` 字段 + `dynamic_layer.rs` 对应 render；删 `LayeredPromptBuilder.static_hash` + `static_changed` + hash 测试 | +13 / -161 | ✅ 合并 #142 ([51e14910](https://github.com/Linnanli/xClaw/commit/51e14910))。实际仅含 D6 + D8.4；D5/D7 子仓部分拆出 PR-4 |
+| **PR-4** (v1.1 新增) | `chore(claw-code): drop dead crates per ADR-117 D5/D7` | xClaw | —（#130 已由 #142 closes） | 子仓改动（在 `claw-code` submodule 中开 PR）：删 `runtime/src/prompt.rs`（D5）；同步 `runtime/lib.rs` `pub use` + `runtime/src/conversation.rs` 测试块对 `SystemPromptBuilder` 的引用；删 `rusty-claude-cli/` + `tools/` + `compat-harness/` + `mock-anthropic-service/`（D7 档 1.5）；同步 `claw-code/rust/Cargo.toml` workspace.members + `release.yml` 任何 `rusty-claude-cli` 引用。父仓同步 PR：bump `claw-code` submodule pointer | +~10 / -~46k | 🟡 进行中 (v1.1) |
 
 ### 4.2 每 PR 必跑验证
 
@@ -159,12 +178,24 @@ python3.12 scripts/check_no_panics.py --base origin/xClaw
 cargo clippy --no-deps -p ironclaw --all-targets -- -D warnings
 ```
 
-PR-3 额外：
+PR-3 额外（仅父仓部分）：
 
 ```bash
-cargo check -p claw-code-api                                   # 不破依赖
-grep -r "rusty_claude_cli\|runtime::prompt" --include='*.rs'   # 无残留引用
-grep -r "rusty-claude-cli" .github/workflows/                  # 无 workflow 引用
+cargo check -p ironclaw -p desktop-client                      # 正常依赖状态不变
+```
+
+PR-4 额外（子仓 + 父仓 bump submodule）：
+
+```bash
+# 子仓 (cd claw-code/rust)
+cargo check --workspace                                          # 同步 workspace.members 后编译通
+rg 'rusty_claude_cli|runtime::prompt|use tools|use compat_harness|use mock_anthropic_service' --type rust
+  # 仅允许 0 命中（生产代码）；测试块内任何残留需同步清理
+
+# 父仓 (仓库根)
+cargo check -p claw-code-api -p ironclaw -p desktop-client       # 不破依赖
+grep -rn 'rusty-claude-cli\|crates/tools\|compat-harness\|mock-anthropic-service' \
+  .github/workflows/ claw-code/.github/workflows/ scripts/ admin-backend/  # 0 命中
 ```
 
 ### 4.3 删除时机
@@ -187,7 +218,7 @@ grep -r "rusty-claude-cli" .github/workflows/                  # 无 workflow �
 
 - **不修复 boundary marker 无 provider 消费**（R-1，单独 P1 issue）
 - **不接入 #55 ProjectDocLoader**（仅占位字段）
-- **不删除整个 `claw-code` 子树**（D7 档 1 保守，仅删 `runtime/src/prompt.rs` + `rusty-claude-cli/`）
+- **不删除整个 `claw-code` 子树**（v1.1 D7 档 1.5：仅删 `runtime/src/prompt.rs` + `rusty-claude-cli/` + `tools/` + `compat-harness/` + `mock-anthropic-service/`；保留 `runtime` + `plugins` + `telemetry` + `api` + `commands` + `src/` 侜 desktop-client 经 `claw-code-api` 消费）
 - **不重新设计 codex-style top-level `instructions` 装配**（与本仓库 ChatMessage::system 单串模型不兼容，留待后续 ADR）
 - **不引入 `insta` 快照测试**（D9.4）
 - **不设覆盖率门槛**（D9.5）
@@ -206,10 +237,11 @@ inventory [§10](p0c-prompt-builder-inventory.md) + 本 ADR 起草过程已完�
   - `cache_control` 在 desktop-client/ironclaw、claw-code、ironclaw-main provider 层 0 命中（R-1 事实底盘）
   - `git log -S` 确认 admin_policy 等三字段仅 P0-1 commit（3f45d54）引入
   - `rusty-claude-cli` 在 workflows / Cargo / lockfile 0 命中
+  - **(v1.1 新增)** `tools` / `compat-harness` / `mock-anthropic-service` 在主仓 `Cargo.toml` / `desktop-client/` / `admin-backend/` / `crates/*/Cargo.toml` / `.github/workflows/` 0 命中；子仓内反向依赖仅指向 `rusty-claude-cli`（实测 `grep -E '^[a-z_-]+ *= *\{ *path' claw-code/rust/crates/*/Cargo.toml`）
 
 ### 6.2 关联 issue
 
-- **#130**：本 ADR 实施 PR-3 closes
+- **#130**：本 ADR 实施 PR-3 (#142) 已 closes。v1.1 PR-4 是子仓清理增补，不再 closes
 - **#55**：[CLOSED] ProjectDocLoader loader 实现本体已完；将其输出接入 `DynamicLayerInput.project_doc` 字段赋值属后续 issue
 - **#137**：admin_policy / token_budget / language_preference 三字段未来正确路径追踪
 - **未来 P1（待开 issue）**：Anthropic provider 实现 `cache_control` 切分（R-1）
