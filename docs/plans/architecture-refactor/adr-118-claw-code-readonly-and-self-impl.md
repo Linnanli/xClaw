@@ -224,3 +224,143 @@ python3.12 scripts/check_no_panics.py --base origin/xClaw
 - [adr-104-routine-vs-runtime-classification.md](archive/legacy-v1/adr-104-routine-vs-runtime-classification.md) non-goal 列表（CLI/TUI/mock-anthropic-service/compat-harness 永久不进生产）
 - [adr-117-p0c-prompt-builder-unification.md](adr-117-p0c-prompt-builder-unification.md) v1.2（D5/D7 撤回标记）
 
+---
+
+## 8. 实施事实账本（基于 desktop-client/ironclaw/src/llm/ 深度剖析）
+
+> 本节为 **W6 实施依据**。基于直接读源（2026-05-02 subagent 全模块剖析）锁定，不是设计建议。所有 type 行号引自 `claw-code/rust/crates/api/src/lib.rs` re-export 表。
+
+### 8.1 ironclaw LLM 子系统 6 个独立后端 provider 矩阵
+
+| Provider 文件 | 主 type | 行数 | 协议 | 鉴权 | streaming | 走 claw_code_api |
+|---|---|---|---|---|---|---|
+| `claw_code_provider.rs` | `ClawCodeLlmProvider` | 1 351 | Anthropic Messages / OpenAI Chat Completions / xAI / Ollama | ApiKey + OAuth Bearer | ❌（trait 默认）| ✅ **是**（W6-C 切走） |
+| `nearai_chat.rs` | `NearAiChatProvider` | 2 286 | OpenAI Chat（NEAR AI 端）| Bearer key/session | ✅ | ❌ |
+| `openai_codex_provider.rs` | `OpenAiCodexProvider` | 1 226 | OpenAI Responses API | OAuth JWT | ✅ SSE | ❌ |
+| `codex_chatgpt.rs` | `CodexChatGptProvider` | 934 | Responses API（chatgpt.com）| Bearer + 401 refresh | ✅ SSE | ❌ |
+| `github_copilot.rs` | `GithubCopilotProvider` | 679 | OpenAI Chat（Copilot 端）| GitHub OAuth → session token | ✅ | ❌ |
+| `gemini_oauth.rs` | `GeminiOauthProvider` | 2 617 | Gemini generateContent | Google OAuth + key fallback | ✅ | ❌ |
+| `bedrock.rs` (feature) | `BedrockProvider` | 1 419 | Bedrock Converse | AWS IAM | ❌ | ❌ |
+
+**关键反直觉**：`claw_code_provider.rs` 这个名字 **同时承载 Anthropic / OpenAI / xAI / Kimi / DashScope / Groq / OpenRouter / Tinfoil / Ollama 等所有非专属后端**——因为 `claw_code_api::ProviderClient` 是个三分支枚举（`Anthropic / Xai / OpenAi`）。**它不是 Anthropic 专属适配器**。这是命名混淆点，W6-C 完成后建议改名为 `multi_protocol_provider.rs` 或 `dasclaw_provider.rs`。
+
+### 8.2 装饰器栈（外→内，由 `build_provider_chain` 组装）
+
+```
+6. RecordingLlm (env IRONCLAW_RECORD_TRACE)
+5. CachedProvider (仅 cache complete()，不 cache tool calls)
+4. CircuitBreakerProvider (Closed/Open/HalfOpen，5 失败→30s 半开)
+3. FailoverProvider (多 provider + per-provider cooldown)
+2. SmartRoutingProvider (13 维 complexity scorer，cheap/primary 分流)
+1. RetryProvider (指数退避 1/2/4s + jitter)
+0. 内层 Provider
+```
+
+`TokenRefreshingProvider` 是 `OpenAiCodexProvider` 专用，套在主链之内。**所有装饰器配置都从 `LlmConfig.nearai` 字段读取**（命名遗留——`NearAiConfig` 实际担当通用运行时开关角色，覆盖 retry / circuit_breaker / cache / failover / smart_routing 等全部装饰器）。
+
+### 8.3 W6 任务组 C 必须从 `dasclaw_llm_provider` 迁出的 type / function 完整清单
+
+来自 `claw_code_provider.rs` 行 13–17 的 `use claw_code_api::{...}` 单一导入语句 + 模块内全路径调用：
+
+#### Type（13 个，1:1 复刻）
+
+| 类型 | 形式 | 必保语义 |
+|---|---|---|
+| `ProviderClient` | `enum { Anthropic(_), Xai(_), OpenAi(_) }` | `send_message` / `stream_message` / `provider_kind()` 调度 |
+| `ProviderKind` | `enum { Anthropic, Xai, OpenAi }` | 测试断言用，公开比较语义 |
+| `AnthropicClient` | struct | `from_auth(AuthSource)` / `with_base_url` / `send_message` / `stream_message` |
+| `OpenAiCompatClient` | struct | `new(api_key, OpenAiCompatConfig)` / `with_base_url` / `send_message` / `stream_message` |
+| `OpenAiCompatConfig` | struct + 关联函数 | `::openai()` / `::xai()` / `::dashscope()` 三预设 |
+| `AuthSource` | enum 3 变体 | `ApiKey(String) / BearerToken(String) / ApiKeyAndBearer { api_key, bearer_token }` |
+| `MessageRequest` | struct（13 字段） | `model / max_tokens / messages / system / tools / tool_choice / stream / temperature / top_p / frequency_penalty / presence_penalty / stop / reasoning_effort` |
+| `MessageResponse` | struct | `content: Vec<OutputContentBlock> / usage: Usage / stop_reason: Option<String>` |
+| `InputMessage` | struct | `role: String / content: Vec<InputContentBlock>` |
+| `InputContentBlock` | enum | `Text { text } / ToolUse { id, name, input } / ToolResult { tool_use_id, content, is_error }` |
+| `OutputContentBlock` | enum | `Text / ToolUse / Thinking / RedactedThinking` |
+| `ToolDefinition` (alias `ApiToolDefinition`) | struct | `name / description / input_schema(JsonValue)` |
+| `ToolChoice` (alias `ApiToolChoice`) | enum | `Auto / Any / Tool { name }` |
+| `ToolResultContentBlock` | enum | 至少 `Text { text }` |
+| `Usage` | struct | `input_tokens / output_tokens / cache_read_input_tokens / cache_creation_input_tokens` |
+| `ApiError` | struct | `to_string()` 含 trace ID + HTTP 状态 + 上游错误体 |
+
+#### Free function（2 个）
+
+- `resolve_model_alias(model: &str) -> String`（"opus" → "claude-opus-4-6"）
+- `detect_provider_kind(model: &str) -> ProviderKind`（启发式分类）
+
+#### Client 方法（仅 1 个核心）
+
+```rust
+async fn send_message(&self, request: &MessageRequest) -> Result<MessageResponse, ApiError>
+```
+
+> 当前 ironclaw 端**没调** `stream_message`（详见 §8.5 风险）。但 `dasclaw_llm_provider` **必须保留** `stream_message` 与 SSE 解析以便后续启用。
+
+#### HTTP / SSE 设施
+
+- `build_http_client() -> Result<reqwest::Client, ApiError>`
+- `build_http_client_with(&ProxyConfig) -> Result<reqwest::Client, ApiError>`
+- `ProxyConfig` struct
+- `parse_frame` / `SseParser`
+
+#### 模型别名表
+
+`MODEL_REGISTRY` const 数组 9 条（`opus / sonnet / haiku → claude-*` + `grok-* → xAI` + `kimi → DashScope`）+ 每条 `ProviderMetadata`。**编译期内嵌**，不能依赖运行时配置。
+
+#### Prompt cache（可选，W6-C 决策）
+
+`PromptCache / PromptCacheConfig / PromptCachePaths / PromptCacheRecord / PromptCacheStats / CacheBreakEvent` + `ProviderClient::with_prompt_cache` / `prompt_cache_stats` / `take_last_prompt_cache_record`。⚠ **当前 ironclaw 端没调用这些**——`RegistryProviderConfig.cache_retention` 字段为它预留。W6-C 可先 stub。
+
+### 8.4 **不需要迁出**的（保留在 ironclaw 内部）
+
+下列是 ironclaw 应用层的「翻译胶水」，与 `dasclaw_llm_provider` 解耦：
+
+- `LlmProvider` trait（属于 ironclaw + x_claw_agent）
+- `LlmError` 枚举（应用层错误模型）
+- `ChatMessage / CompletionRequest / ToolCompletionRequest`（已在 `x_claw_agent::messages`）
+- `build_chat_message_request` / `build_tool_message_request`
+- `split_system_and_messages` / `map_user_message` / `map_assistant_message` / `map_tool_result_message` / `map_tool_definition` / `map_tool_choice`
+- `map_message_response` / `map_finish_reason` / `map_api_error`
+- `from_registry_config` 路由（`RegistryProviderConfig` 是 ironclaw 私有概念）
+- `build_anthropic_client` / `build_openai_compat_client` / `build_ollama_client` / `pick_openai_compat_config`
+- 全部 35+ 个单元测试（输入/输出契约不变，仅改 import）
+
+### 8.5 W6 实施时顺势处理的架构债（DO NOT FIX 在本 ADR）
+
+仅登记，不在本 PR / W6-C 范围内：
+
+1. **streaming 缺口**：`ClawCodeLlmProvider` 不实现 `supports_streaming = true`，所有走 claw-code 通道的后端（Anthropic / OpenAI / xAI / Kimi / DashScope / Groq / OpenRouter / Tinfoil / Ollama）**当前都是非流式**——这是显著产品缺口。建议 W6-D 或 W7 单独 issue 跟进。
+2. **错误归一过粗**：`map_api_error` 把所有 `ApiError` 都归为 `LlmError::RequestFailed`，丢失 `RateLimited`（`Retry-After` 失效）/ `AuthFailed`（401 不能触发 OAuth re-login）/ `ContextLengthExceeded`（被错误判 retryable）。`is_retryable` 用字符串扫描补救，脆弱契约。`dasclaw_llm_provider::ApiError` 设计时**应直接拆强类型变体**便于精确映射。
+3. **cost 默认 0**：`ClawCodeLlmProvider::cost_per_token` 在未显式提供 rates 时返回 `(0, 0)`，且 `from_registry_config` / `from_model` **不主动调** `costs::model_cost(&self.resolved_model)`。所有走 claw-code 通道的请求成本统计**默认归零**，与 `NearAiChatProvider` 不对称。
+4. **命名遗留**：W6-C 完成后建议把 type 名 `ClawCodeLlmProvider` 改为 `DasclawLlmProvider` 或 `MultiProtocolProvider`（避免暗示对 claw-code 的依赖）；文件 `claw_code_provider.rs` 改为 `dasclaw_provider.rs`。这是 type/file rename，不影响行为。
+5. **`NearAiConfig` 命名误导**：实际承担通用运行时装饰器开关（max_retries / circuit_breaker / response_cache / failover / smart_routing），即便 backend ≠ NearAI 也必填。建议 W7 拆出 `LlmRuntimeConfig`。
+6. **`is_codex_chatgpt` 隐式状态机**：`RegistryProviderConfig.protocol = OpenAiCompletions + is_codex_chatgpt = true` 这个组合没有强类型表达。建议 W7 在 `ProviderProtocol` 加 `CodexChatGpt` 变体。
+
+### 8.6 落地建议 crate 边界（最小可行）
+
+```
+crates/dasclaw_llm_provider/
+├── src/
+│   ├── lib.rs                        # 全部 pub use
+│   ├── error.rs                      # ApiError（强类型变体）
+│   ├── http_client.rs                # build_http_client + ProxyConfig
+│   ├── types.rs                      # MessageRequest/Response, InputMessage,
+│   │                                 # InputContentBlock, OutputContentBlock,
+│   │                                 # ToolDefinition, ToolChoice, Usage,
+│   │                                 # ToolResultContentBlock
+│   ├── providers/
+│   │   ├── mod.rs                    # ProviderKind + MODEL_REGISTRY +
+│   │   │                             # resolve_model_alias + detect_provider_kind
+│   │   ├── anthropic.rs              # AnthropicClient + AuthSource
+│   │   └── openai_compat.rs          # OpenAiCompatClient + OpenAiCompatConfig
+│   ├── client.rs                     # ProviderClient enum + send/stream dispatch
+│   ├── sse.rs                        # SseParser + parse_frame
+│   └── prompt_cache.rs               # （可选 stub）
+└── Cargo.toml
+   依赖：reqwest / serde / serde_json / async-trait / thiserror /
+        eventsource-stream / secrecy / chrono
+```
+
+迁完后 `desktop-client/ironclaw/src/llm/claw_code_provider.rs` 只需把 `use claw_code_api::{...}` 改成 `use dasclaw_llm_provider::{...}`，35 个单元测试断言不需要改逻辑（除了 `claw_code_api::ProviderKind` → `dasclaw_llm_provider::ProviderKind`）。
+
+
