@@ -97,6 +97,26 @@ desktop-client/ironclaw
 
 完成 §2.3 后，主仓**整个 workspace 不再有任何 path 指向 `claw-code/`**。`Cargo.toml:33` 的 `exclude = ["claw-code"]` 保持不变（已对，编译期不参与）。
 
+### 2.5 与 ironclaw 现有 LLM provider 的关系（**不冲突**，平行架构）
+
+> 用户提问澄清：「ironclaw 原本的 llm provider 是否和 claw_code_provider.rs 冲突？」答：**不冲突**。
+
+`desktop-client/ironclaw/src/llm/` 目录下当前共有 **8+ 个 provider 实现**，按 backend 平行分布（参见 `desktop-client/ironclaw/src/llm/CLAUDE.md`）：
+
+| Provider 文件 | 后端 | 是否依赖 claw_code_api |
+|---|---|---|
+| `claw_code_provider.rs` (`ClawCodeLlmProvider`) | **Anthropic / OpenAI / Ollama / OpenAI-compat**（Phase 2 Step I 之后唯一生产路径） | ✅ **是**（W6 切换为 `dasclaw_llm_provider`） |
+| `nearai_chat.rs` (`NearAiChatProvider`) | NEAR AI | ❌ 否（独立 reqwest） |
+| `github_copilot.rs` (`GithubCopilotProvider`) | GitHub Copilot | ❌ 否（独立 reqwest，Copilot API 与 OpenAI 不兼容） |
+| `openai_codex_provider.rs` (`OpenAiCodexProvider`) | OpenAI Codex（ChatGPT subscription） | ❌ 否（独立 OAuth + Responses API） |
+| `bedrock.rs` (feature gated) | AWS Bedrock | ❌ 否（aws-sdk-bedrockruntime） |
+| `gemini_oauth.rs` (`GeminiOauthProvider`) | Google Gemini | ❌ 否 |
+| `failover.rs` / `smart_routing.rs` / `circuit_breaker.rs` / `recording.rs` / `response_cache.rs` / `retry.rs` / `token_refreshing.rs` | 装饰器（包装其他 provider） | ❌ 否 |
+
+**结论**：W6 任务组 C **只动 `claw_code_provider.rs` 一个文件**，其它 7 个 backend 的实现完全不受影响。`ClawCodeLlmProvider` 这个 type 的对外 `LlmProvider` trait 实现保持不变，仅替换其内部使用的「上游 HTTP client」依赖（`claw_code_api::Client` → `dasclaw_llm_provider::Client`）。从 `mod.rs` 的 wire 点（`create_llm_provider_from_registry_config` 调用 `claw_code_provider::ClawCodeLlmProvider::from_registry_config`）来看，**调用方完全无感知**。
+
+> 命名建议（W6 实施时定）：`ClawCodeLlmProvider` 这个 type 名也建议同步改为 `DasclawLlmProvider` 或 `AnthropicOpenAiCompatProvider`，避免暗示对 claw-code 的依赖。但这是文件 / type rename，不影响行为。
+
 ---
 
 ## 3. 工作量与影响
