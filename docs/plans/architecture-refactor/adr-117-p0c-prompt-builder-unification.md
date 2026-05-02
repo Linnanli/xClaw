@@ -1,10 +1,29 @@
 # ADR-117: P0-C Prompt Builder 统一（吸收 claw-code 至 LayeredPromptBuilder）
 
-- **Status**: Proposed
+- **Status**: Accepted (v1.2 partial-supersede)
 - **Date**: 2026-04-30
-- **Approver**: pending
-- **Issue**: [#130](https://github.com/Linnanli/xClaw/issues/130)（W3/B P0-C — Prompt Builder 统一）
+- **Last revision**: 2026-05-02 (v1.2)
+- **Approver**: x-claw 架构组
+- **Issue**: [#130](https://github.com/Linnanli/xClaw/issues/130)（W3/B P0-C — Prompt Builder 统一） — closed by [#142](https://github.com/Linnanli/xClaw/pull/142)
 - **Closes**: #130
+
+## 修订记 (Revisions)
+
+- **v1.0 (2026-04-30)** — 初稿（Proposed）
+- **v1.1 (2026-05-02, 已撤回)** — 试图扩档 D7 删除半径至「档 1.5」（在 claw-code 子仓内删 5 项 crate），方向错误，PR #143 已 close
+- **v1.2 (2026-05-02)** — **D5 + D7 子仓内删除工作项已撤回**（claw-code 子仓恢复原代码 db8ff4d revert c36c0ef），由 [ADR-118](adr-118-claw-code-readonly-and-self-impl.md) 取代为「主仓自实现 LLM provider + 删除 desktop-client/ironclaw 对 claw-code-api 的 path-dep」。本 ADR 其余部分（D6 / D8.2 / D8.3 / D8.4 / 提示词单源核心目标）保持有效。
+
+### Done 状态（v1.2 截至 2026-05-02）
+
+| 工作项 | PR | 状态 |
+|---|---|---|
+| ADR doc 起草 | [#140](https://github.com/Linnanli/xClaw/pull/140) | ✅ Merged ca99622 |
+| D8.2 + D8.3 cache refactor | [#141](https://github.com/Linnanli/xClaw/pull/141) | ✅ Merged b8049f4c |
+| D6 + D8.4 删 static_hash / legacy 字段 | [#142](https://github.com/Linnanli/xClaw/pull/142) | ✅ Merged 51e14910，closes #130 |
+| **核心目标「提示词单源 = LayeredPromptBuilder」** | — | ✅ **达成** |
+| ~~v1.1 D7 扩档（在子仓内删）~~ | ~~[#143](https://github.com/Linnanli/xClaw/pull/143)~~ | ❌ Closed（方向错误，由 ADR-118 取代） |
+| ~~父仓 bump submodule~~ | ~~[#144](https://github.com/Linnanli/xClaw/pull/144)~~ | ❌ Closed（子仓 revert 后无需 bump） |
+| **D5 + D7 撤回** | [ADR-118](adr-118-claw-code-readonly-and-self-impl.md) | 🟡 Pending（W6 实施） |
 - **Related**:
   - [p0c-prompt-builder-inventory.md](p0c-prompt-builder-inventory.md)（事实底盘 + §11 16 个待决问题，本 ADR 是其封顶）
   - [adr-112-compatibility-evaluation.md §5](adr-112-compatibility-evaluation.md)（W3-A Phase 0 P0-1 boundary literal 统一前置）
@@ -62,9 +81,9 @@ inventory §10 + 本 ADR 起草过程的三层验证（semantic_search → vscod
 | **D2** | boundary 字面量来源 | **B' — 通过 `x_claw_agent::PROMPT_CACHE_BOUNDARY` 单源** | claw-code 端的同名常量随 D5 删除一并消失 |
 | **D3** | 吸收范围 | **Absorb a/b/c/d/e/g/i** | inventory §11 的待决问题 a/b/c/d/e/g/i 由本 ADR 给出最终选择 |
 | **D4** | `IRONCLAW_PROMPT_LAYERING` 环境变量 | **C — 删除** | P0-1 已默认启用并删除；本 ADR 仅追认 |
-| **D5** | `claw-code/rust/crates/runtime/src/prompt.rs` | **drop — 整文件删除** | desktop-client 不依赖 `runtime::prompt`，且 `claw-code-api` 不再需要 |
+| **D5** | `claw-code/rust/crates/runtime/src/prompt.rs` | ~~drop — 整文件删除~~ → **撤回 (v1.2)**：保留子仓代码不动，由 [ADR-118](adr-118-claw-code-readonly-and-self-impl.md) 取代为「主仓自实现 + 删 path-dep」 | desktop-client 不依赖 `runtime::prompt`；claw-code 子仓改为只读参考库 |
 | **D6** | `LayeredPromptBuilder.static_hash` + `static_changed` 旗标 | **Y — 删除** | 该 hash 字段无消费者，prefix cache 真正依赖的是字节稳定性，而非业务层 hash 比较 |
-| **D7** | 删除半径 | **档 1 保守 — 仅删 `runtime/src/prompt.rs` + `rusty-claude-cli/`** | 不删整个 `claw-code` 子树。`claw-code-api` 仍提供 OAuth/usage/config 给 desktop-client；agent loop 已独立 |
+| **D7** | 删除半径 | ~~档 1 保守 — 仅删 `runtime/src/prompt.rs` + `rusty-claude-cli/`~~ → **撤回 (v1.2)**：claw-code 子仓整体保持原貌，由 [ADR-118](adr-118-claw-code-readonly-and-self-impl.md) 取代为「主仓自实现 LLM provider + 删 desktop-client/ironclaw 对 claw-code-api 的 path-dep」 | 子仓代码 0 行变化；路径变为主仓 `crates/dasclaw_llm_provider` 新建 |
 | **D8** | composition 顺序 | 见 §2.3（6 个子决策） | inventory 35/36/37 真空地带，本 ADR 一次性拍板 |
 | **D9** | 测试不变量 | 见 §2.4（5 个子决策） | 删 3 加 5；不引入快照测试；不设覆盖率门槛 |
 | **D10** | 落地序列 | **三段 PR** + 立即删除 + 单 commit revert | 见 §4 |
@@ -187,7 +206,7 @@ grep -r "rusty-claude-cli" .github/workflows/                  # 无 workflow �
 
 - **不修复 boundary marker 无 provider 消费**（R-1，单独 P1 issue）
 - **不接入 #55 ProjectDocLoader**（仅占位字段）
-- **不删除整个 `claw-code` 子树**（D7 档 1 保守，仅删 `runtime/src/prompt.rs` + `rusty-claude-cli/`）
+- **不删除整个 `claw-code` 子树**（v1.2 进一步强化：子仓代码 0 行变化，作为只读参考库；原 D7 「档 1 保守」措辞已撤回，详 [ADR-118](adr-118-claw-code-readonly-and-self-impl.md)）
 - **不重新设计 codex-style top-level `instructions` 装配**（与本仓库 ChatMessage::system 单串模型不兼容，留待后续 ADR）
 - **不引入 `insta` 快照测试**（D9.4）
 - **不设覆盖率门槛**（D9.5）
