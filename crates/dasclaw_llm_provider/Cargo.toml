@@ -1,0 +1,18 @@
+[package]
+name = "dasclaw_llm_provider"
+version = "0.0.0-w6"
+edition = "2021"
+description = "Main-repo native LLM provider — replaces claw-code-api path-dep per ADR-118."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+
+[dev-dependencies]
+serde_json = "1"
