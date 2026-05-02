@@ -57,6 +57,48 @@ desktop-client/ironclaw
 
 `claw-code-api` 在子仓内还间接消费 `runtime` + `telemetry` 的少量类型（`SessionTracer` 等），形成 5 crate 互依赖簇。
 
+### 1.4 三仓 LLM provider 血脉关系（W6-C 决策的关键背景）
+
+为澄清「desktop-client/ironclaw 的 LLM provider 是不是从 ironclaw-main 直接复制」这个常被问到的问题，三层验证如下：
+
+| 验证 | 命令 | 结果 |
+|---|---|---|
+| ironclaw-main 是否依赖 claw_code | `grep -rn "claw_code\|claw-code" ironclaw-main/Cargo.toml ironclaw-main/src/` | **0 命中** |
+| desktop-client 是否还依赖 rig-core | `grep -n "^rig\|rig-core" desktop-client/ironclaw/Cargo.toml` | 仅 1 行注释「Phase 2 Step I 之前用来切换 rig-core / claw-code-api 两套 LLM」 |
+| ironclaw-main 用 rig 的规模 | `grep -rln "use rig\|rig::" ironclaw-main/src/` | 2 个 .rs 文件（`mod.rs` + `rig_adapter.rs`）+ Cargo 1 处依赖 |
+| 文件清单 diff | `diff <(ls .../desktop-client/ironclaw/src/llm/*.rs) <(ls .../ironclaw-main/src/llm/*.rs)` | desktop 多 `claw_code_provider.rs` + `prompt/` + `schema_utils.rs`；ironclaw-main 多 `anthropic_oauth.rs` + `rig_adapter.rs` + `runtime.rs` |
+
+**结论**：desktop-client/ironclaw 的 LLM provider **不是从 ironclaw-main 简单复制**。共同祖先确实是 ironclaw-main，但在 fork 之后做过一次重大架构替换 —— **Phase 2 Step I**：
+
+```
+ironclaw-main/src/llm/                  desktop-client/ironclaw/src/llm/
+─────────────────────────────────       ──────────────────────────────────
+LlmProvider trait (相同)        ────►   LlmProvider trait (相同，已下沉到 x_claw_agent)
+rig::CompletionModel (rig-core)         claw_code_api::ProviderClient
+rig_adapter.rs (适配 rig→Llm)   ────►   claw_code_provider.rs (适配 claw-code-api→Llm)
+                                        prompt/ (LayeredPromptBuilder，新增)
+                                        schema_utils.rs (从 rig_adapter 抽出)
+nearai_chat / openai_codex /            nearai_chat / openai_codex /
+codex_chatgpt / github_copilot /        codex_chatgpt / github_copilot /
+gemini_oauth / bedrock                  gemini_oauth / bedrock
+(独立 reqwest 直连，不走 rig)           (独立 reqwest 直连，与 ironclaw-main 几乎相同)
+                  ⬆同源⬆                                  ⬆同源⬆
+```
+
+「Anthropic + OpenAI + xAI + Kimi + DashScope + Groq + OpenRouter + Tinfoil + Ollama」这 9 种协议在 ironclaw-main 时代走 **rig-core CompletionModel trait**，desktop fork 之后改为走 **claw-code-api ProviderClient enum**。其他 6 个独立 backend（nearai / codex / copilot / gemini / bedrock）的实现两端**几乎一致**（独立 reqwest 直连，未受 Phase 2 Step I 影响）。
+
+**W6-C 的演化路径定位**：
+
+```
+ironclaw-main 时代：rig-core (外部 crate)              ← 上游 fork 起点
+                       ↓ Phase 2 Step I 重大替换
+desktop-client 当前：claw-code-api (子仓 path-dep)     ← 当前状态（W4）
+                       ↓ W6-C 二次替换
+W6 完成态：dasclaw_llm_provider (主仓自实现 crate)     ← 终态
+```
+
+**这告诉我们 W6-C 不是回退到 rig-core 时代，而是把"外部依赖 + 子仓 fork"两层耦合一起卸掉**：从 rig-core（外部 crate 锁定）→ claw-code-api（子仓 fork 锁定）→ dasclaw_llm_provider（主仓自治）。这是架构控制权的逐步收回，不是来回切换。
+
 ## 2. 决策
 
 ### 2.1 claw-code 子仓 = 只读参考库
