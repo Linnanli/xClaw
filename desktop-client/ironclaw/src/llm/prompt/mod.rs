@@ -261,4 +261,67 @@ mod tests {
         // Dynamic layer content
         assert!(prompt.text.contains("pytest"));
     }
+
+    /// ADR-117 D9.3: provider universality — when serialized as the body of an
+    /// OpenAI ChatCompletion `system` message (a JSON string), the assembled
+    /// prompt round-trips untouched. The boundary marker, when present, is an
+    /// inert HTML comment that does not break OpenAI's request schema.
+    #[test]
+    fn test_openai_compat_prompt_serializes() {
+        let tools = sample_tools();
+        let config = sample_config();
+        let builder = LayeredPromptBuilder::new(&tools, &config).with_cache_boundary(false);
+        let dynamic = DynamicLayerInput {
+            environment: Some("cwd: /x\ndate: 2026-05-01\nplatform: linux".into()),
+            ..Default::default()
+        };
+        let text = builder.build(&dynamic).text;
+        // OpenAI does not consume the boundary marker — it must be absent on
+        // non-Anthropic models.
+        assert!(!text.contains(PROMPT_CACHE_BOUNDARY));
+        // Round-trip through serde_json (OpenAI request body shape).
+        let payload = serde_json::json!({
+            "role": "system",
+            "content": text.clone(),
+        });
+        let encoded = serde_json::to_string(&payload).expect("openai system message serializes");
+        let decoded: serde_json::Value =
+            serde_json::from_str(&encoded).expect("openai system message round-trips");
+        assert_eq!(decoded["content"].as_str().unwrap(), text);
+        assert!(
+            decoded["content"]
+                .as_str()
+                .unwrap()
+                .contains("## Environment")
+        );
+    }
+
+    /// ADR-117 D9.3: provider universality — for Anthropic the cache boundary
+    /// marker is emitted as an inert HTML comment. It must survive JSON
+    /// serialization unchanged so the on-wire bytes (and therefore prefix-cache
+    /// hashing) stay deterministic.
+    #[test]
+    fn test_anthropic_compat_prompt_serializes() {
+        let tools = sample_tools();
+        let config = sample_config();
+        let builder = LayeredPromptBuilder::new(&tools, &config).with_cache_boundary(true);
+        let dynamic = DynamicLayerInput {
+            environment: Some("cwd: /x\ndate: 2026-05-01\nplatform: macos".into()),
+            ..Default::default()
+        };
+        let text = builder.build(&dynamic).text;
+        assert!(text.contains(PROMPT_CACHE_BOUNDARY));
+        assert!(
+            text.contains("<!--"),
+            "marker is wrapped as an inert HTML comment"
+        );
+        // Anthropic system block — array form. The boundary must round-trip.
+        let payload = serde_json::json!([{ "type": "text", "text": text.clone() }]);
+        let encoded = serde_json::to_string(&payload).expect("anthropic system block serializes");
+        let decoded: serde_json::Value =
+            serde_json::from_str(&encoded).expect("anthropic system block round-trips");
+        let decoded_text = decoded[0]["text"].as_str().unwrap();
+        assert_eq!(decoded_text, text);
+        assert!(decoded_text.contains(PROMPT_CACHE_BOUNDARY));
+    }
 }
