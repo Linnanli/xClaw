@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.pull_request.draft == false
     steps:
-      - name: Detect ADR-only PR (exempt from closes-link)
+      - name: Detect plan-docs-only PR (exempt from closes-link)
         id: exempt
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -21,17 +21,18 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          # ADR docs are reference material referenced by other PRs, not implementation
-          # of trackable issues. Exempt PRs whose changes are entirely under
-          # docs/plans/architecture-refactor/adr-*.md from the closes-link check.
+          # Plan docs (ADRs, execution plans, inventories under docs/plans/architecture-refactor/)
+          # are reference material referenced by other PRs, not implementation of trackable
+          # issues. Exempt PRs whose changes are entirely under that directory from the
+          # closes-link check.
           files=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].filename')
           if [ -z "$files" ]; then
             echo "exempt=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          non_adr=$(printf '%s\n' "$files" | grep -vE '^docs/plans/architecture-refactor/adr-.*\.md$' || true)
-          if [ -z "$non_adr" ]; then
-            echo "All changed files are ADR docs; exempting from closes-link check."
+          non_plan=$(printf '%s\n' "$files" | grep -vE '^docs/plans/architecture-refactor/.*\.md$' || true)
+          if [ -z "$non_plan" ]; then
+            echo "All changed files are plan docs; exempting from closes-link check."
             echo "exempt=true" >> "$GITHUB_OUTPUT"
           else
             echo "exempt=false" >> "$GITHUB_OUTPUT"
