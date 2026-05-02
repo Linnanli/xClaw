@@ -4,12 +4,17 @@
 //! claw-code 子仓视为只读参考库，本 crate **重新设计** Anthropic Messages /
 //! OpenAI Chat Completions 兼容层 wire 类型与 client 抽象，不直接消费子仓代码。
 //!
-//! 当前阶段：**PR-A.0 骨架**
+//! 当前阶段：**PR-A.1 — HTTP transport + SSE 解析器原语**
 //! - ✅ wire 类型（`types`）—— Anthropic Messages 协议输入/输出/streaming events
 //! - ✅ 强类型错误（`error::ApiError`）—— 拆分 `RateLimited` / `AuthFailed` /
-//!   `ContextWindowExceeded` / `Http` / `Json` / `Io` / `Provider`，便于上层精确映射
+//!   `ContextWindowExceeded` / `ServerError` / `Transport` / `MalformedSseFrame` 等，
+//!   便于上层精确映射
 //! - ✅ `ProviderKind` + 模型别名表 + `metadata_for_model` + `max_tokens_for_model`
-//! - 🟡 `AnthropicClient` / `OpenAiCompatClient`：留给 PR-A.2，本骨架暂未实现
+//! - ✅ `http::ProxyConfig` + `http::build_http_client_with` —— `reqwest::Client`
+//!   构造 + 代理（HTTP/HTTPS/统一 URL/no_proxy）支持，纯函数 + 显式 env 入口
+//! - ✅ `sse::SseParser` + `sse::parse_frame` —— 增量 SSE 帧解析器，识别 ping/DONE/comment
+//! - 🟡 `AnthropicClient` / `OpenAiCompatClient`：留给 PR-A.2 / PR-A.3，本 PR 暂未实现
+//! - 🟡 重试策略 + Retry-After 解析：随 PR-A.2 client 一并落地
 //!
 //! 与 `claw-code-api` 的设计差异（顺势处理架构债，详见 ADR-118 §8.5）：
 //!
@@ -27,15 +32,19 @@
 #![warn(missing_docs)]
 
 pub mod error;
+pub mod http;
 pub mod providers;
+pub mod sse;
 pub mod types;
 
 pub use error::ApiError;
+pub use http::{build_http_client, build_http_client_with, ProxyConfig};
 pub use providers::{
     detect_provider_kind, max_tokens_for_model, max_tokens_for_model_with_override,
     metadata_for_model, model_token_limit, resolve_model_alias, EnvSnapshot, ModelTokenLimit,
     ProviderKind, ProviderMetadata,
 };
+pub use sse::{parse_frame, SseParser};
 pub use types::{
     ContentBlockDelta, ContentBlockDeltaEvent, ContentBlockStartEvent, ContentBlockStopEvent,
     InputContentBlock, InputMessage, MessageDelta, MessageDeltaEvent, MessageRequest,

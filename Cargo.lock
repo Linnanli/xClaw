@@ -2464,9 +2464,11 @@ dependencies = [
 name = "dasclaw_llm_provider"
 version = "0.0.0-w6"
 dependencies = [
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]
