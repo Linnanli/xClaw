@@ -1,5 +1,7 @@
 # 32 — 分阶段执行计划
 
+> **v2.5 (2026-05-02)** · 配套 [ADR-118](adr-118-claw-code-readonly-and-self-impl.md)：W6 新增任务组 C「LLM provider 中立迁出 + 删 claw-code-api path-dep」。`crates/dasclaw_llm_provider` 新建 + `desktop-client/ironclaw/src/llm/claw_code_provider.rs` 切换 + 删 `Cargo.toml:149` path-dep。claw-code 子仓**保持只读参考库**（ADR-117 D5/D7 子仓内删除已撤回）。W6 工作量 +0.5 周（5 -> 5.5 周）。
+
 > **v2.4 (2026-04-26)** · 新增「通用 Wave 完成准则」一节：每个 Wave 任意大功能块 commit 之前，必须依次跑 `code-simplifier`（清理）+ `code-review-expert`（严肃 review，P0/P1 阻塞 commit）。三个 review skill 已对比评估，code-review-expert 为唯一首选（SOLID + 语言特化 + 架构异味）。
 
 > **v2.3 (2026-04-26)** · W1 任务 1 订正：不删 fork、不升级 0.26。git log 实测 fork 有 42 fork-only commit（Phase 2/3 dasclaw 接线核心成果），W1-W6 保留作为私货来源，W6+ 才删除。与 31 v2.3 + 38 §137 对齐。
@@ -316,9 +318,11 @@ dasclaw_governance.recovery_recipes = false
 
 ---
 
-## W6 · 客户端外壳整合 + 后端基底吸收（**5 周**，v2.2 +1 周）
+## W6 · 客户端外壳整合 + 后端基底吸收 + LLM provider 中立迁出（**5.5 周**，v2.5 +0.5 周）
 
-> **v2.2 调整**：原 4 周仅做 IPC 切换，现扩为 5 周：吸收 ironclaw 后端能力（workspace 去多租户化 + bridge_lite 5-7k）+ IPC 整合 + 88 commit codex 增量跟进。
+> **v2.5 调整**：在 v2.4 5 周基础上 +0.5 周吸收任务组 C — `crates/dasclaw_llm_provider` 新建 + 删 `claw-code-api` path-dep（ADR-118）。
+>
+> **v2.2 调整**：原 4 周仅做 IPC 切换，扩为 5 周：吸收 ironclaw 后端能力（workspace 去多租户化 + bridge_lite 5-7k）+ IPC 整合 + 88 commit codex 增量跟进。
 
 ### 任务
 
@@ -370,6 +374,30 @@ dasclaw_governance.recovery_recipes = false
 11. **删除中间桥接代码**（如有）
 12. **engine_startup_tests.rs 重写**：覆盖新 runtime 启动时序 + ProjectDocLoader 初始化
 
+#### 任务组 C — LLM provider 中立迁出（v2.5 新增，[ADR-118](adr-118-claw-code-readonly-and-self-impl.md)）
+
+> **背景**：[31-target-architecture.md L139](31-target-architecture.md) 已陈述「`claw_code_provider.rs` 1334 行... 中立迁出」，但 v2.4 之前未列具体 task。ADR-117 v1.0 D5/D7 错误地将「在 claw-code 子仓内删除」作为收尾，已被 ADR-118 推翻。**正确做法**：claw-code 子仓**保持只读参考库**（不删原代码、不解绑 submodule），主仓**自实现** LLM provider crate，**删除** `desktop-client/ironclaw` 对 `claw-code-api` 的 path-dep。
+
+13. **新建 `crates/dasclaw_llm_provider`** (~3.5-4.5k LOC)：
+    - 参考 `claw-code/rust/crates/api/src/providers/{anthropic,openai_compat,mod}.rs` 实现，**不消费**
+    - 主仓自定义类型：`AnthropicClient` / `OpenAiCompatClient` / `OpenAiCompatConfig` / `ProviderClient` enum / `AuthSource` / `ProviderKind` / 模型别名表 / `ApiError`
+    - 消息类型：`InputContentBlock` / `InputMessage` / `OutputContentBlock` / `MessageRequest` / `MessageResponse` / `ToolDefinition` / `ToolChoice` / `ToolResultContentBlock` / `Usage`
+    - SSE 解析（`parse_frame` / `SseParser`）
+    - HTTP 客户端构造（`build_http_client` / `ProxyConfig`）
+    - **契约测试**（mock HTTP server）：与 claw-code-api 行为等价
+14. **重写 `desktop-client/ironclaw/src/llm/claw_code_provider.rs`**：
+    - 改 `use claw_code_api::{...}` → `use dasclaw_llm_provider::{...}`
+    - 内部映射逻辑（`build_chat_message_request` / `map_message_response` 等）保持不变
+    - 文件可保留原名或改为 `dasclaw_llm_provider.rs`
+15. **删 path-dep**：
+    - `desktop-client/ironclaw/Cargo.toml:149` 删 `claw-code-api = { path = "../../claw-code/rust/crates/api", package = "api" }`
+    - `desktop-client/ironclaw/Cargo.toml:235` 删 `claw-code-llm = []` no-op feature
+    - 加 `dasclaw_llm_provider = { path = "../../crates/dasclaw_llm_provider" }` 依赖
+16. **验证**：
+    - `cargo check -p ironclaw -p dasclaw_llm_provider` 通过
+    - `cargo nextest run -p ironclaw --tests llm::` 全过
+    - `grep -rln "claw_code_api\|claw-code-api" desktop-client/ Cargo.toml crates/` 输出 = 空（除注释/历史 ADR 引用）
+
 ### 验收
 - [ ] dasclaw_workspace **≤ 9k LOC**（含 RRF k=60 + chunker + embeddings，已去多租户化）
 - [ ] dasclaw_bridge_lite **≤ 7k LOC**（不含 router/store_adapter/skill_migration）
@@ -380,6 +408,10 @@ dasclaw_governance.recovery_recipes = false
 - [ ] AGENTS.md 加载在启动时序中位于 EngineState::Ready 之前、ProjectDoc 注入 system prompt
 - [ ] Goal 系统：用户可设"目标 + 预算"，超预算时 agent 暂停并通过 IPC 推送 GoalLimitReached 事件
 - [ ] codex 88 commit 中 5 项 P0 增量已纳入或确认推迟（goal/ThreadStore trait/permissions profiles/rollout-trace/Unix socket）
+- [ ] **(v2.5)** `crates/dasclaw_llm_provider` ≤ 4.5k LOC，contract test 与 claw-code-api 行为等价
+- [ ] **(v2.5)** `desktop-client/ironclaw/Cargo.toml` 中 0 处 `claw-code-api` / `claw_code_api` 引用
+- [ ] **(v2.5)** `cargo tree -p ironclaw` 输出不再包含 claw-code path crates
+- [ ] **(v2.5)** claw-code 子仓代码 0 行变化（保持只读参考库）
 
 ---
 
