@@ -26,6 +26,8 @@ members = [
 	"crates/dasclaw_routines",
 	# W2.6 接线层：组合 sandbox + pty + workspace_cap policy
 	"crates/dasclaw_exec",
+	# W6-C 主仓自实现 LLM provider —— 替代 claw-code-api path-dep（ADR-118 PR-A.0 骨架）
+	"crates/dasclaw_llm_provider",
 	"desktop-client/ironclaw",
 	"desktop-client/ironclaw/crates/ironclaw_common",
 	"desktop-client/ironclaw/crates/ironclaw_safety",

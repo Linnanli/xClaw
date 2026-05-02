@@ -2461,6 +2461,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dasclaw_llm_provider"
+version = "0.0.0-w6"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "dasclaw_lsp"
 version = "0.0.0-w1"
 dependencies = [
