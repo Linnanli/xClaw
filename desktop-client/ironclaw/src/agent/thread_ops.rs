@@ -1271,16 +1271,24 @@ impl Agent {
                 )
                 .await;
 
-            if let Ok(ref output) = tool_result
-                && !output.is_empty()
-            {
+            // Sanitize tool result first so previews, thread record and the
+            // LLM ChatMessage all share the same redacted text. P0-G/W6 (#93).
+            let is_tool_error = tool_result.is_err();
+            let sanitized = crate::tools::execute::process_tool_result(
+                self.safety(),
+                &pending.tool_name,
+                &pending.tool_call_id,
+                &tool_result,
+            );
+
+            if !is_tool_error && !sanitized.display.is_empty() {
                 let _ = self
                     .channels
                     .send_status(
                         &message.channel,
                         StatusUpdate::ToolResult {
                             name: pending.tool_name.clone(),
-                            preview: output.clone(),
+                            preview: sanitized.display.clone(),
                         },
                         &tool_meta,
                     )
@@ -1291,15 +1299,7 @@ impl Agent {
             let mut context_messages = pending.context_messages;
             let deferred_tool_calls = pending.deferred_tool_calls;
 
-            // Sanitize tool result, then record the cleaned version in the
-            // thread. Must happen before auth intercept check which may return early.
-            let is_tool_error = tool_result.is_err();
-            let (result_content, _) = crate::tools::execute::process_tool_result(
-                self.safety(),
-                &pending.tool_name,
-                &pending.tool_call_id,
-                &tool_result,
-            );
+            let result_content = sanitized.display;
 
             // Record sanitized result in thread
             {
@@ -1541,9 +1541,17 @@ impl Agent {
             let mut deferred_auth: Option<String> = None;
 
             for (tc, deferred_result) in exec_results {
-                if let Ok(ref output) = deferred_result
-                    && !output.is_empty()
-                {
+                // Sanitize first so previews and thread records both use the
+                // redacted text the LLM sees. P0-G/W6 (#93).
+                let is_deferred_error = deferred_result.is_err();
+                let sanitized = crate::tools::execute::process_tool_result(
+                    self.safety(),
+                    &tc.name,
+                    &tc.id,
+                    &deferred_result,
+                );
+
+                if !is_deferred_error && !sanitized.display.is_empty() {
                     let result_meta =
                         crate::channels::tool_enriched_metadata(&message.metadata, &tc.id, None);
                     let _ = self
@@ -1552,22 +1560,14 @@ impl Agent {
                             &message.channel,
                             StatusUpdate::ToolResult {
                                 name: tc.name.clone(),
-                                preview: output.clone(),
+                                preview: sanitized.display.clone(),
                             },
                             &result_meta,
                         )
                         .await;
                 }
 
-                // Sanitize first, then record the cleaned version in thread.
-                // Must happen before auth detection which may set deferred_auth.
-                let is_deferred_error = deferred_result.is_err();
-                let (deferred_content, _) = crate::tools::execute::process_tool_result(
-                    self.safety(),
-                    &tc.name,
-                    &tc.id,
-                    &deferred_result,
-                );
+                let deferred_content = sanitized.display;
 
                 // Record sanitized result in thread
                 {

@@ -59,7 +59,9 @@ fn process_builder_tool_result(
             })
         });
 
-    crate::tools::execute::process_tool_result(&SAFETY, tool_name, tool_call_id, result)
+    let sanitized =
+        crate::tools::execute::process_tool_result(&SAFETY, tool_name, tool_call_id, result);
+    (sanitized.llm_content, sanitized.message)
 }
 
 /// Requirement specification for building software.
