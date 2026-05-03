@@ -232,18 +232,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
-name = "api"
-version = "0.1.0"
-dependencies = [
- "reqwest 0.12.28",
- "runtime",
- "serde",
- "serde_json",
- "telemetry",
- "tokio",
-]
-
-[[package]]
 name = "ar_archive_writer"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4282,7 +4270,6 @@ dependencies = [
  "tokio",
  "tokio-rustls 0.26.4",
  "tower-service",
- "webpki-roots 1.0.6",
 ]
 
 [[package]]
@@ -4632,7 +4619,6 @@ dependencies = [
  "aes-gcm",
  "aho-corasick",
  "anyhow",
- "api",
  "async-trait",
  "aws-config",
  "aws-sdk-bedrockruntime",
@@ -4652,6 +4638,7 @@ dependencies = [
  "dasclaw_apply_patch",
  "dasclaw_exec",
  "dasclaw_hooks",
+ "dasclaw_llm_provider",
  "dasclaw_net_proxy",
  "dasclaw_sandbox",
  "deadpool-postgres",
@@ -6664,14 +6651,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "plugins"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "png"
 version = "0.17.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7534,7 +7513,6 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams 0.4.2",
  "web-sys",
- "webpki-roots 1.0.6",
 ]
 
 [[package]]
@@ -7656,21 +7634,6 @@ dependencies = [
  "spki",
  "subtle",
  "zeroize",
-]
-
-[[package]]
-name = "runtime"
-version = "0.1.0"
-dependencies = [
- "glob",
- "plugins",
- "regex",
- "serde",
- "serde_json",
- "sha2",
- "telemetry",
- "tokio",
- "walkdir",
 ]
 
 [[package]]
@@ -9537,14 +9500,6 @@ dependencies = [
  "dunce",
  "embed-resource",
  "toml 0.9.12+spec-1.1.0",
-]
-
-[[package]]
-name = "telemetry"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
 ]
 
 [[package]]

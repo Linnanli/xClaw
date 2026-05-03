@@ -9,9 +9,11 @@
 //!   实际 HTTP client 在 PR-A.1+ 落地，路由 metadata 与 client 解耦。
 
 pub mod anthropic;
+pub mod client;
 pub mod openai_compat;
 
 pub use anthropic::{AnthropicClient, AnthropicStream, AuthSource};
+pub use client::ProviderClient;
 pub use openai_compat::{OpenAiCompatClient, OpenAiCompatConfig};
 
 /// LLM provider 类型（决定走 Anthropic Messages 协议 / OpenAI Chat Completions 协议 / xAI 协议）。

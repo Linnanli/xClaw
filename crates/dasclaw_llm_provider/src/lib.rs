@@ -4,7 +4,7 @@
 //! claw-code 子仓视为只读参考库，本 crate **重新设计** Anthropic Messages /
 //! OpenAI Chat Completions 兼容层 wire 类型与 client 抽象，不直接消费子仓代码。
 //!
-//! 当前阶段：**PR-A.3 — OpenAI Chat Completions 兼容客户端**
+//! 当前阶段：**PR-A.4 — `ProviderClient` enum dispatcher + ironclaw 切换 path-dep**
 //! - ✅ wire 类型（`types`）—— Anthropic Messages 协议输入/输出/streaming events
 //! - ✅ 强类型错误（`error::ApiError`）—— 拆分 `RateLimited` / `AuthFailed` /
 //!   `ContextWindowExceeded` / `ServerError` / `Transport` / `MalformedSseFrame` 等，
@@ -20,8 +20,11 @@
 //! - ✅ `providers::OpenAiCompatClient` —— `complete()` + xAI / OpenAI / DashScope 三预设；
 //!   复用 `RetryPolicy` 与 `ApiError` 强类型；inline error envelope 兜底；
 //!   `gpt-5*` 模型自动改用 `max_completion_tokens`；reasoning_content 提升为 Thinking block
+//! - ✅ `providers::ProviderClient` —— enum dispatcher（`Anthropic` / `Xai` / `OpenAi` 三变体），
+//!   显式构造、不读 env，`send_message()` 同步入口
+//! - ✅ ironclaw 切换 `claw-code-api` path-dep → `dasclaw_llm_provider`
 //! - 🟡 `OpenAiCompatClient::stream()`：留给 PR-A.3.1（ironclaw 当前 call site 仅用 `send_message`）
-//! - 🟡 删除主仓 `claw-code-api` path-dep：留给 PR-A.4
+//! - 🟡 `ProviderClient::stream_message()` dispatch：依赖 `OpenAiCompatClient::stream()`，同上
 //!
 //! 与 `claw-code-api` 的设计差异（顺势处理架构债，详见 ADR-118 §8.5）：
 //!
@@ -50,8 +53,8 @@ pub use http::{build_http_client, build_http_client_with, ProxyConfig};
 pub use providers::{
     detect_provider_kind, max_tokens_for_model, max_tokens_for_model_with_override,
     metadata_for_model, model_token_limit, resolve_model_alias, AnthropicClient, AnthropicStream,
-    AuthSource, EnvSnapshot, ModelTokenLimit, OpenAiCompatClient, OpenAiCompatConfig, ProviderKind,
-    ProviderMetadata,
+    AuthSource, EnvSnapshot, ModelTokenLimit, OpenAiCompatClient, OpenAiCompatConfig,
+    ProviderClient, ProviderKind, ProviderMetadata,
 };
 pub use retry::{parse_retry_after, RetryPolicy};
 pub use sse::{parse_frame, SseParser};

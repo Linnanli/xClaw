@@ -1,7 +1,11 @@
-//! `ClawCodeLlmProvider` — LLM Provider 基于 `claw-code-api` 的原生客户端。
+//! `ClawCodeLlmProvider` — LLM Provider 基于 `dasclaw_llm_provider` 的原生客户端。
 //!
 //! Phase 2 Step I 完成后，本模块是生产唯一 LLM 路径
 //! （`GithubCopilot` / `CodexChatGpt` 由各自独立 provider 处理）。
+//!
+//! W6-C PR-A.4 完成后，底层 client 切换到主仓自实现的 [`dasclaw_llm_provider`]，
+//! 不再依赖 `claw-code/rust/crates/api` 的 path-dep（claw-code 子仓只读化，详见
+//! [ADR-118](../../../../docs/plans/architecture-refactor/adr-118-claw-code-readonly-and-self-impl.md)）。
 //!
 //! 关键收益：
 //! - `OpenAiCompatClient` 已为各 OpenAI-compat 厂商（DashScope/Kimi/xAI/Ollama）
@@ -10,9 +14,9 @@
 //! - 编译期裁掉大量历史 rig 适配层的异构类型体操。
 
 use async_trait::async_trait;
-use claw_code_api::{
-    AnthropicClient, AuthSource, InputContentBlock, InputMessage, MessageRequest, MessageResponse,
-    OpenAiCompatClient, OpenAiCompatConfig, OutputContentBlock, ProviderClient,
+use dasclaw_llm_provider::{
+    AnthropicClient, ApiError, AuthSource, InputContentBlock, InputMessage, MessageRequest,
+    MessageResponse, OpenAiCompatClient, OpenAiCompatConfig, OutputContentBlock, ProviderClient,
     ToolChoice as ApiToolChoice, ToolDefinition as ApiToolDefinition, ToolResultContentBlock,
 };
 use rust_decimal::Decimal;
@@ -39,19 +43,6 @@ pub struct ClawCodeLlmProvider {
 }
 
 impl ClawCodeLlmProvider {
-    /// 根据模型名自动探测 Provider 类型（OpenAI / Anthropic / xAI / DashScope 等）。
-    pub fn from_model(model: impl Into<String>) -> Result<Self, LlmError> {
-        let configured_model = model.into();
-        let resolved_model = claw_code_api::resolve_model_alias(&configured_model).to_string();
-        let client = ProviderClient::from_model(&configured_model).map_err(map_api_error)?;
-        Ok(Self {
-            client,
-            configured_model,
-            resolved_model,
-            cost_rates: None,
-        })
-    }
-
     /// 覆盖 token 单价（用于 `calculate_cost` / `cost_per_token`）。
     #[must_use]
     pub fn with_cost_rates(mut self, input: Decimal, output: Decimal) -> Self {
@@ -62,7 +53,7 @@ impl ClawCodeLlmProvider {
     /// 从 ironclaw 的 [`RegistryProviderConfig`] 构造一个 Provider。
     ///
     /// 这是 **Step D** 的核心入口，负责把 x-claw 现有的 providers.json 配置
-    /// 映射到 `claw-code-api` 的具体 client：
+    /// 映射到 `dasclaw_llm_provider` 的具体 client：
     ///
     /// | `ProviderProtocol`  | 映射目标                                                    |
     /// |---------------------|-------------------------------------------------------------|
@@ -74,12 +65,13 @@ impl ClawCodeLlmProvider {
     /// 不读取任何环境变量：凭据/URL 都来自显式配置，符合 x-claw 的 keychain 模型。
     pub fn from_registry_config(config: &RegistryProviderConfig) -> Result<Self, LlmError> {
         let configured_model = config.model.clone();
-        let resolved_model = claw_code_api::resolve_model_alias(&configured_model).to_string();
+        let resolved_model =
+            dasclaw_llm_provider::resolve_model_alias(&configured_model).to_string();
 
         let client = match config.protocol {
             ProviderProtocol::Anthropic => build_anthropic_client(config)?,
             ProviderProtocol::OpenAiCompletions => build_openai_compat_client(config)?,
-            ProviderProtocol::Ollama => build_ollama_client(config),
+            ProviderProtocol::Ollama => build_ollama_client(config)?,
             ProviderProtocol::GithubCopilot => {
                 return Err(LlmError::RequestFailed {
                     provider: config.provider_id.clone(),
@@ -107,7 +99,7 @@ impl ClawCodeLlmProvider {
 }
 
 // ============================================================================
-// 请求映射：ironclaw → claw-code-api
+// 请求映射：ironclaw → dasclaw_llm_provider
 // ============================================================================
 
 /// 把 ironclaw 的 `CompletionRequest` 映射为 claw-code-api 的 `MessageRequest`。
@@ -212,8 +204,8 @@ fn map_user_message(m: &ChatMessage) -> InputMessage {
                     content.push(InputContentBlock::Text { text: text.clone() })
                 }
                 ContentPart::ImageUrl { image_url: _ } => {
-                    // claw-code-api 的 InputContentBlock 目前不直接接受 OpenAI image_url，
-                    // 交由未来扩展。此处降级为占位文本以免丢失语义。
+                    // dasclaw_llm_provider 的 InputContentBlock 目前不直接接受 OpenAI
+                    // image_url，交由未来扩展。此处降级为占位文本以免丢失语义。
                     content.push(InputContentBlock::Text {
                         text: "[image]".to_string(),
                     });
@@ -296,7 +288,7 @@ fn map_tool_choice(choice: &str) -> Option<ApiToolChoice> {
 }
 
 // ============================================================================
-// 响应映射：claw-code-api → ironclaw
+// 响应映射：dasclaw_llm_provider → ironclaw
 // ============================================================================
 
 pub(crate) fn map_message_response(resp: MessageResponse) -> ToolCompletionResponse {
@@ -364,9 +356,9 @@ fn map_finish_reason(reason: Option<&str>) -> FinishReason {
     }
 }
 
-fn map_api_error(err: claw_code_api::ApiError) -> LlmError {
+fn map_api_error(err: ApiError) -> LlmError {
     LlmError::RequestFailed {
-        provider: "claw-code-api".to_string(),
+        provider: "dasclaw_llm_provider".to_string(),
         reason: err.to_string(),
     }
 }
@@ -406,24 +398,30 @@ fn build_anthropic_client(config: &RegistryProviderConfig) -> Result<ProviderCli
         }
     };
 
-    let client = AnthropicClient::from_auth(auth).with_base_url(config.base_url.clone());
+    let client = AnthropicClient::with_auth(auth)
+        .map_err(map_api_error)?
+        .with_base_url(config.base_url.clone());
     Ok(ProviderClient::Anthropic(client))
 }
 
 /// 根据模型名自动选 DashScope / xAI / OpenAI 预设；然后 override base_url。
+///
+/// 仅基于模型名做静态映射，不读取环境（`EnvSnapshot::default()` 即可），
+/// 因为 ironclaw 的鉴权一律来自 `RegistryProviderConfig` 的显式配置。
 fn pick_openai_compat_config(model: &str) -> (OpenAiCompatConfig, ProviderVariant) {
-    let resolved = claw_code_api::resolve_model_alias(model);
-    match claw_code_api::detect_provider_kind(&resolved) {
-        claw_code_api::ProviderKind::Xai => (OpenAiCompatConfig::xai(), ProviderVariant::Xai),
-        claw_code_api::ProviderKind::OpenAi => {
+    use dasclaw_llm_provider::{
+        EnvSnapshot, ProviderKind, detect_provider_kind, resolve_model_alias,
+    };
+    let resolved = resolve_model_alias(model);
+    match detect_provider_kind(&resolved, &EnvSnapshot::default()) {
+        ProviderKind::Xai => (OpenAiCompatConfig::xai(), ProviderVariant::Xai),
+        ProviderKind::OpenAi => {
             // 根据模型 metadata 进一步区分 DashScope vs 通用 OpenAI-compat
             // （Groq/Kimi/OpenRouter/Tinfoil 都用 openai() 预设 + 自定义 base_url）
             (OpenAiCompatConfig::openai(), ProviderVariant::OpenAi)
         }
         // Anthropic 不该走到这里；兜底 openai 预设以避免 panic，错误由上层抛出。
-        claw_code_api::ProviderKind::Anthropic => {
-            (OpenAiCompatConfig::openai(), ProviderVariant::OpenAi)
-        }
+        ProviderKind::Anthropic => (OpenAiCompatConfig::openai(), ProviderVariant::OpenAi),
     }
 }
 
@@ -439,20 +437,22 @@ fn build_openai_compat_client(config: &RegistryProviderConfig) -> Result<Provide
     })?;
 
     let (compat_config, variant) = pick_openai_compat_config(&config.model);
-    let client =
-        OpenAiCompatClient::new(api_key, compat_config).with_base_url(config.base_url.clone());
+    let client = OpenAiCompatClient::new(api_key, compat_config)
+        .map_err(map_api_error)?
+        .with_base_url(config.base_url.clone());
     Ok(match variant {
         ProviderVariant::Xai => ProviderClient::Xai(client),
         ProviderVariant::OpenAi => ProviderClient::OpenAi(client),
     })
 }
 
-fn build_ollama_client(config: &RegistryProviderConfig) -> ProviderClient {
+fn build_ollama_client(config: &RegistryProviderConfig) -> Result<ProviderClient, LlmError> {
     // Ollama 不需要 API key；如果用户填了 key（如反向代理鉴权），也传进去。
     let api_key = registry_api_key(config).unwrap_or_default();
     let client = OpenAiCompatClient::new(api_key, OpenAiCompatConfig::openai())
+        .map_err(map_api_error)?
         .with_base_url(config.base_url.clone());
-    ProviderClient::OpenAi(client)
+    Ok(ProviderClient::OpenAi(client))
 }
 
 // ============================================================================
@@ -531,7 +531,7 @@ impl LlmProvider for ClawCodeLlmProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use claw_code_api::Usage;
+    use dasclaw_llm_provider::Usage;
     use serde_json::json;
 
     fn mk_user(text: &str) -> ChatMessage {
@@ -1003,7 +1003,7 @@ mod tests {
     // ========================================================================
 
     use crate::llm::config::{CacheRetention, RegistryProviderConfig};
-    use claw_code_api::ProviderKind;
+    use dasclaw_llm_provider::ProviderKind;
     use secrecy::SecretString;
 
     fn mk_config(
