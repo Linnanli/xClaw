@@ -193,6 +193,12 @@ pub struct Settings {
     #[serde(default)]
     pub sandbox: SandboxSettings,
 
+    /// Job runtime mode (ADR-119). When omitted, the legacy
+    /// `[sandbox] enabled` boolean is used to derive a mode for backward
+    /// compatibility (see `crate::config::JobRuntimeConfig::resolve`).
+    #[serde(default)]
+    pub job_runtime: Option<crate::config::job_runtime::JobRuntimeSettings>,
+
     /// Safety configuration.
     #[serde(default)]
     pub safety: SafetySettings,
