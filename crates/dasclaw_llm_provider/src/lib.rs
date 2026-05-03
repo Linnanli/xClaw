@@ -54,7 +54,7 @@ pub use providers::{
     detect_provider_kind, max_tokens_for_model, max_tokens_for_model_with_override,
     metadata_for_model, model_token_limit, resolve_model_alias, AnthropicClient, AnthropicStream,
     AuthSource, EnvSnapshot, ModelTokenLimit, OpenAiCompatClient, OpenAiCompatConfig,
-    ProviderClient, ProviderKind, ProviderMetadata,
+    OpenAiCompatStream, ProviderClient, ProviderKind, ProviderMetadata, ProviderStream,
 };
 pub use retry::{parse_retry_after, RetryPolicy};
 pub use sse::{parse_frame, SseParser};

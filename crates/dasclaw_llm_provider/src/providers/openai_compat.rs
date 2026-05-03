@@ -4,9 +4,11 @@
 //! DashScope（Qwen/Kimi/DeepSeek 等）、Moonshot Kimi、Groq、OpenRouter、Tinfoil、
 //! Ollama 本地等。各厂商通过 [`OpenAiCompatConfig`] 预设区分（base URL + 请求体大小限制）。
 //!
-//! 本 PR 仅实现 [`OpenAiCompatClient::complete`]（同步消息），与 ironclaw 当前 call site
-//! 一致。Streaming 实现单独由后续 PR 承载（参见 ADR-118 §8.5：`stream_message` 当前
-//! 主仓未调用，stub 优先于全量端口）。
+//! 本 client 同时实现 [`OpenAiCompatClient::complete`]（同步消息）与
+//! [`OpenAiCompatClient::stream`]（流式消息）。流式实现把 OpenAI 增量
+//! `chat.completion.chunk` 协议映射为 Anthropic 风格的 [`StreamEvent`] 序列
+//! （`message_start` / `content_block_*` / `message_delta` / `message_stop`），
+//! 让上层 ironclaw 用一套事件模型消费两类后端。
 //!
 //! # 与 `claw-code-api::providers::openai_compat` 的差异
 //!
@@ -18,6 +20,7 @@
 //! 4. **无 env 副作用**：[`OpenAiCompatClient::new`] 直接接收 API key，不再 `from_env`；
 //!    凭据采集由调用方负责。
 
+use std::collections::{BTreeMap, VecDeque};
 use std::time::Duration;
 
 use reqwest::header::HeaderMap;
@@ -28,7 +31,9 @@ use serde_json::{json, Value};
 use crate::error::ApiError;
 use crate::retry::{parse_retry_after, RetryPolicy};
 use crate::types::{
-    InputContentBlock, InputMessage, MessageRequest, MessageResponse, OutputContentBlock,
+    ContentBlockDelta, ContentBlockDeltaEvent, ContentBlockStartEvent, ContentBlockStopEvent,
+    InputContentBlock, InputMessage, MessageDelta, MessageDeltaEvent, MessageRequest,
+    MessageResponse, MessageStartEvent, MessageStopEvent, OutputContentBlock, StreamEvent,
     ToolChoice, ToolDefinition, ToolResultContentBlock, Usage,
 };
 
@@ -188,6 +193,38 @@ impl OpenAiCompatClient {
             normalized.request_id = request_id;
         }
         Ok(normalized)
+    }
+
+    /// 流式发送消息请求；返回 [`OpenAiCompatStream`] 增量推送 Anthropic 风格的
+    /// [`StreamEvent`] 序列。
+    ///
+    /// 内部强制将 `request.stream` 改写为 `true`，并把 OpenAI 增量
+    /// `chat.completion.chunk` 协议（`data: {...}\n\n` SSE 帧 + `[DONE]` 哨兵）
+    /// 翻译为 Anthropic 6 类事件（`message_start` / `content_block_*` /
+    /// `message_delta` / `message_stop`）。
+    ///
+    /// Tool 调用增量遵循 OpenAI 协议：每个 tool call 用 `index` 区分，名称在
+    /// 第一帧给出，arguments 由后续帧逐片拼接 — 本实现把它映射为
+    /// `content_block_start { tool_use, input: {} }` + 多次 `input_json_delta`
+    /// + `content_block_stop`，与 Anthropic 一致。
+    pub async fn stream(&self, request: &MessageRequest) -> Result<OpenAiCompatStream, ApiError> {
+        let request = MessageRequest {
+            stream: true,
+            ..request.clone()
+        };
+        let payload = build_chat_completion_request(&request, self.config);
+        check_request_body_size(&payload, self.config)?;
+
+        let response = self.send_with_retry(&payload).await?;
+        let request_id = request_id_from_headers(response.headers());
+        Ok(OpenAiCompatStream {
+            request_id,
+            response,
+            parser: OpenAiSseParser::new(self.config.provider_name, request.model.clone()),
+            pending: VecDeque::new(),
+            done: false,
+            state: StreamState::new(request.model.clone()),
+        })
     }
 
     async fn send_with_retry(&self, payload: &Value) -> Result<reqwest::Response, ApiError> {
@@ -670,6 +707,447 @@ struct OpenAiUsage {
     prompt_tokens: u32,
     #[serde(default)]
     completion_tokens: u32,
+}
+
+// ---------- Streaming ----------
+
+/// OpenAI Chat Completions 流式响应；由 [`OpenAiCompatClient::stream`] 创建。
+///
+/// 增量协议为 OpenAI `chat.completion.chunk` 序列（`data: {...}\n\n` SSE 帧 +
+/// `[DONE]` 哨兵），但本类型对外暴露 Anthropic 风格的 [`StreamEvent`]——上层
+/// ironclaw 用同一套 `next_event()` 消费 anthropic / openai_compat 两类后端。
+#[derive(Debug)]
+pub struct OpenAiCompatStream {
+    request_id: Option<String>,
+    response: reqwest::Response,
+    parser: OpenAiSseParser,
+    pending: VecDeque<StreamEvent>,
+    done: bool,
+    state: StreamState,
+}
+
+impl OpenAiCompatStream {
+    /// 上游返回的 trace ID（如有）。
+    #[must_use]
+    pub fn request_id(&self) -> Option<&str> {
+        self.request_id.as_deref()
+    }
+
+    /// 增量拉取下一个 [`StreamEvent`]；流结束时返回 `Ok(None)`。
+    ///
+    /// 内部状态机：先消费 HTTP body 字节 → SSE 帧 → `ChatCompletionChunk` →
+    /// 经 [`StreamState::ingest_chunk`] 翻译为 Anthropic 风格事件队列。
+    pub async fn next_event(&mut self) -> Result<Option<StreamEvent>, ApiError> {
+        loop {
+            if let Some(event) = self.pending.pop_front() {
+                return Ok(Some(event));
+            }
+            if self.done {
+                let trailing = self.state.finish()?;
+                if trailing.is_empty() {
+                    return Ok(None);
+                }
+                self.pending.extend(trailing);
+                continue;
+            }
+            match self
+                .response
+                .chunk()
+                .await
+                .map_err(|err| ApiError::StreamInterrupted(err.to_string()))?
+            {
+                Some(bytes) => {
+                    for chunk in self.parser.push(&bytes)? {
+                        self.pending.extend(self.state.ingest_chunk(chunk)?);
+                    }
+                }
+                None => {
+                    self.done = true;
+                }
+            }
+        }
+    }
+}
+
+/// OpenAI 形态 SSE 解析器：识别 `data: {...}\n\n` 帧与 `data: [DONE]` 哨兵。
+///
+/// 与 [`crate::sse::SseParser`]（Anthropic 形态：`event: foo\ndata: {...}`）的差异：
+/// OpenAI 不带 `event:` 字段，所有事件都是裸 JSON chunk；只有一个
+/// `[DONE]` 哨兵字符串作为流结束标记（不是 JSON）。
+#[derive(Debug)]
+struct OpenAiSseParser {
+    provider: &'static str,
+    model: String,
+    buffer: Vec<u8>,
+}
+
+impl OpenAiSseParser {
+    fn new(provider: &'static str, model: String) -> Self {
+        Self {
+            provider,
+            model,
+            buffer: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, chunk: &[u8]) -> Result<Vec<ChatCompletionChunk>, ApiError> {
+        self.buffer.extend_from_slice(chunk);
+        let mut events = Vec::new();
+        while let Some(frame) = take_frame(&mut self.buffer) {
+            if let Some(event) = self.parse_frame(&frame)? {
+                events.push(event);
+            }
+        }
+        Ok(events)
+    }
+
+    fn parse_frame(&self, frame: &str) -> Result<Option<ChatCompletionChunk>, ApiError> {
+        let mut payload = String::new();
+        for line in frame.split('\n') {
+            let line = line.strip_prefix('\r').unwrap_or(line);
+            let line = line.trim_end_matches('\r');
+            if line.is_empty() || line.starts_with(':') {
+                continue;
+            }
+            let Some(rest) = line.strip_prefix("data:") else {
+                continue;
+            };
+            let value = rest.strip_prefix(' ').unwrap_or(rest);
+            if value == "[DONE]" {
+                return Ok(None);
+            }
+            if !payload.is_empty() {
+                payload.push('\n');
+            }
+            payload.push_str(value);
+        }
+        if payload.is_empty() {
+            return Ok(None);
+        }
+        serde_json::from_str::<ChatCompletionChunk>(&payload)
+            .map(Some)
+            .map_err(|err| {
+                ApiError::MalformedSseFrame(format!(
+                    "{}: failed to deserialize chat.completion.chunk for model={}: {err}",
+                    self.provider, self.model
+                ))
+            })
+    }
+}
+
+/// 从 buffer 中切出下一个 SSE 帧（以 `\n\n` 为分隔；兼容 `\r\n\r\n`）。
+fn take_frame(buffer: &mut Vec<u8>) -> Option<String> {
+    let needle_lf = b"\n\n";
+    let needle_crlf = b"\r\n\r\n";
+    let lf_idx = buffer.windows(needle_lf.len()).position(|w| w == needle_lf);
+    let crlf_idx = buffer
+        .windows(needle_crlf.len())
+        .position(|w| w == needle_crlf);
+    let (split_at, sep_len) = match (lf_idx, crlf_idx) {
+        (Some(lf), Some(crlf)) if crlf <= lf => (crlf, needle_crlf.len()),
+        (Some(lf), _) => (lf, needle_lf.len()),
+        (None, Some(crlf)) => (crlf, needle_crlf.len()),
+        (None, None) => return None,
+    };
+    let frame_bytes: Vec<u8> = buffer.drain(..split_at).collect();
+    buffer.drain(..sep_len);
+    Some(String::from_utf8_lossy(&frame_bytes).into_owned())
+}
+
+/// 把 OpenAI `chat.completion.chunk` 流翻译成 Anthropic 风格 [`StreamEvent`] 序列的状态机。
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug)]
+struct StreamState {
+    model: String,
+    message_started: bool,
+    text_started: bool,
+    text_finished: bool,
+    finished: bool,
+    stop_reason: Option<String>,
+    usage: Option<Usage>,
+    tool_calls: BTreeMap<u32, ToolCallState>,
+}
+
+impl StreamState {
+    fn new(model: String) -> Self {
+        Self {
+            model,
+            message_started: false,
+            text_started: false,
+            text_finished: false,
+            finished: false,
+            stop_reason: None,
+            usage: None,
+            tool_calls: BTreeMap::new(),
+        }
+    }
+
+    fn ingest_chunk(&mut self, chunk: ChatCompletionChunk) -> Result<Vec<StreamEvent>, ApiError> {
+        let mut events = Vec::new();
+        if !self.message_started {
+            self.message_started = true;
+            events.push(StreamEvent::MessageStart(MessageStartEvent {
+                message: MessageResponse {
+                    id: chunk.id.clone(),
+                    kind: "message".to_string(),
+                    role: "assistant".to_string(),
+                    content: Vec::new(),
+                    model: chunk.model.clone().unwrap_or_else(|| self.model.clone()),
+                    stop_reason: None,
+                    stop_sequence: None,
+                    usage: Usage {
+                        input_tokens: 0,
+                        cache_creation_input_tokens: 0,
+                        cache_read_input_tokens: 0,
+                        output_tokens: 0,
+                    },
+                    request_id: None,
+                },
+            }));
+        }
+
+        if let Some(usage) = chunk.usage {
+            self.usage = Some(Usage {
+                input_tokens: usage.prompt_tokens,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+                output_tokens: usage.completion_tokens,
+            });
+        }
+
+        for choice in chunk.choices {
+            if let Some(content) = choice.delta.content.filter(|value| !value.is_empty()) {
+                if !self.text_started {
+                    self.text_started = true;
+                    events.push(StreamEvent::ContentBlockStart(ContentBlockStartEvent {
+                        index: 0,
+                        content_block: OutputContentBlock::Text {
+                            text: String::new(),
+                        },
+                    }));
+                }
+                events.push(StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
+                    index: 0,
+                    delta: ContentBlockDelta::TextDelta { text: content },
+                }));
+            }
+
+            for tool_call in choice.delta.tool_calls {
+                let state = self.tool_calls.entry(tool_call.index).or_default();
+                state.apply(tool_call);
+                let block_index = state.block_index();
+                if !state.started {
+                    if let Some(start_event) = state.start_event() {
+                        state.started = true;
+                        events.push(StreamEvent::ContentBlockStart(start_event));
+                    } else {
+                        continue;
+                    }
+                }
+                if let Some(delta_event) = state.delta_event() {
+                    events.push(StreamEvent::ContentBlockDelta(delta_event));
+                }
+                if choice.finish_reason.as_deref() == Some("tool_calls") && !state.stopped {
+                    state.stopped = true;
+                    events.push(StreamEvent::ContentBlockStop(ContentBlockStopEvent {
+                        index: block_index,
+                    }));
+                }
+            }
+
+            if let Some(finish_reason) = choice.finish_reason {
+                self.stop_reason = Some(normalize_finish_reason(&finish_reason));
+                if finish_reason == "tool_calls" {
+                    for state in self.tool_calls.values_mut() {
+                        if state.started && !state.stopped {
+                            state.stopped = true;
+                            events.push(StreamEvent::ContentBlockStop(ContentBlockStopEvent {
+                                index: state.block_index(),
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(events)
+    }
+
+    /// 在底层 HTTP body 结束时收尾：补 `content_block_stop` / `message_delta` /
+    /// `message_stop`。幂等 — 多次调用只在第一次产出事件。
+    fn finish(&mut self) -> Result<Vec<StreamEvent>, ApiError> {
+        if self.finished {
+            return Ok(Vec::new());
+        }
+        self.finished = true;
+
+        let mut events = Vec::new();
+        if self.text_started && !self.text_finished {
+            self.text_finished = true;
+            events.push(StreamEvent::ContentBlockStop(ContentBlockStopEvent {
+                index: 0,
+            }));
+        }
+
+        for state in self.tool_calls.values_mut() {
+            if !state.started {
+                if let Some(start_event) = state.start_event() {
+                    state.started = true;
+                    events.push(StreamEvent::ContentBlockStart(start_event));
+                    if let Some(delta_event) = state.delta_event() {
+                        events.push(StreamEvent::ContentBlockDelta(delta_event));
+                    }
+                }
+            }
+            if state.started && !state.stopped {
+                state.stopped = true;
+                events.push(StreamEvent::ContentBlockStop(ContentBlockStopEvent {
+                    index: state.block_index(),
+                }));
+            }
+        }
+
+        if self.message_started {
+            events.push(StreamEvent::MessageDelta(MessageDeltaEvent {
+                delta: MessageDelta {
+                    stop_reason: Some(
+                        self.stop_reason
+                            .clone()
+                            .unwrap_or_else(|| "end_turn".to_string()),
+                    ),
+                    stop_sequence: None,
+                },
+                usage: self.usage.clone().unwrap_or(Usage {
+                    input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
+                    output_tokens: 0,
+                }),
+            }));
+            events.push(StreamEvent::MessageStop(MessageStopEvent {}));
+        }
+        Ok(events)
+    }
+}
+
+/// 单个 OpenAI tool call 的累积状态。
+///
+/// OpenAI 流式协议中，同一个 tool call 跨多个 chunk 切片：第一个 chunk 给出 `id` +
+/// `function.name`，后续 chunk 仅切片 `function.arguments`。`block_index` 取
+/// `openai_index + 1`，把索引 0 留给可能存在的 text content block。
+#[derive(Debug, Default)]
+struct ToolCallState {
+    openai_index: u32,
+    id: Option<String>,
+    name: Option<String>,
+    arguments: String,
+    emitted_len: usize,
+    started: bool,
+    stopped: bool,
+}
+
+impl ToolCallState {
+    fn apply(&mut self, tool_call: DeltaToolCall) {
+        self.openai_index = tool_call.index;
+        if let Some(id) = tool_call.id {
+            self.id = Some(id);
+        }
+        if let Some(name) = tool_call.function.name {
+            self.name = Some(name);
+        }
+        if let Some(arguments) = tool_call.function.arguments {
+            self.arguments.push_str(&arguments);
+        }
+    }
+
+    const fn block_index(&self) -> u32 {
+        self.openai_index + 1
+    }
+
+    fn start_event(&self) -> Option<ContentBlockStartEvent> {
+        let name = self.name.clone()?;
+        let id = self
+            .id
+            .clone()
+            .unwrap_or_else(|| format!("tool_call_{}", self.openai_index));
+        Some(ContentBlockStartEvent {
+            index: self.block_index(),
+            content_block: OutputContentBlock::ToolUse {
+                id,
+                name,
+                input: json!({}),
+            },
+        })
+    }
+
+    fn delta_event(&mut self) -> Option<ContentBlockDeltaEvent> {
+        if self.emitted_len >= self.arguments.len() {
+            return None;
+        }
+        let delta = self.arguments[self.emitted_len..].to_string();
+        self.emitted_len = self.arguments.len();
+        Some(ContentBlockDeltaEvent {
+            index: self.block_index(),
+            delta: ContentBlockDelta::InputJsonDelta {
+                partial_json: delta,
+            },
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatCompletionChunk {
+    id: String,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    choices: Vec<ChunkChoice>,
+    #[serde(default)]
+    usage: Option<OpenAiUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChunkChoice {
+    delta: ChunkDelta,
+    #[serde(default)]
+    finish_reason: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ChunkDelta {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_null_as_empty_vec")]
+    tool_calls: Vec<DeltaToolCall>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeltaToolCall {
+    #[serde(default)]
+    index: u32,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    function: DeltaFunction,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct DeltaFunction {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    arguments: Option<String>,
+}
+
+/// 部分 OpenAI-compat 厂商把 `tool_calls` 显式写成 `null` 而不是省略字段或用 `[]`。
+/// `#[serde(default)]` 仅处理缺失键，处理不了显式 null —— 本反序列化器把
+/// `null` 视为 `[]`。
+fn deserialize_null_as_empty_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    Ok(Option::<Vec<T>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 #[cfg(test)]

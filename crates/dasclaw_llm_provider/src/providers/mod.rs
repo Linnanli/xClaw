@@ -13,8 +13,8 @@ pub mod client;
 pub mod openai_compat;
 
 pub use anthropic::{AnthropicClient, AnthropicStream, AuthSource};
-pub use client::ProviderClient;
-pub use openai_compat::{OpenAiCompatClient, OpenAiCompatConfig};
+pub use client::{ProviderClient, ProviderStream};
+pub use openai_compat::{OpenAiCompatClient, OpenAiCompatConfig, OpenAiCompatStream};
 
 /// LLM provider 类型（决定走 Anthropic Messages 协议 / OpenAI Chat Completions 协议 / xAI 协议）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

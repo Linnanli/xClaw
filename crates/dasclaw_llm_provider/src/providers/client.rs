@@ -12,17 +12,15 @@
 //!   构造，避免库层与进程环境耦合。
 //! - **不提供 `prompt_cache*` / `with_prompt_cache`**：PromptCache 是 `claw-code`
 //!   的应用层概念（依赖 telemetry / runtime）；本 crate 保持纯 HTTP client。
-//! - **不提供 `stream_message` dispatch**：当前 ironclaw call site 仅消费同步
-//!   `send_message`；流式入口留给 PR-A.3.1（[`OpenAiCompatClient::stream`] 落地后）。
 //!
 //! [ADR-118 §8.5]: ../../../docs/plans/architecture-refactor/adr-118-claw-code-readonly-and-self-impl.md
 //! [`OpenAiCompatClient::stream`]: super::openai_compat::OpenAiCompatClient
 
 use crate::error::ApiError;
-use crate::providers::anthropic::AnthropicClient;
-use crate::providers::openai_compat::OpenAiCompatClient;
+use crate::providers::anthropic::{AnthropicClient, AnthropicStream};
+use crate::providers::openai_compat::{OpenAiCompatClient, OpenAiCompatStream};
 use crate::providers::ProviderKind;
-use crate::types::{MessageRequest, MessageResponse};
+use crate::types::{MessageRequest, MessageResponse, StreamEvent};
 
 /// 路由到具体协议 client 的 enum。
 ///
@@ -61,6 +59,59 @@ impl ProviderClient {
         match self {
             Self::Anthropic(client) => client.complete(request).await,
             Self::Xai(client) | Self::OpenAi(client) => client.complete(request).await,
+        }
+    }
+
+    /// 流式发送一个消息请求，返回统一的 [`ProviderStream`]，后续可反复调用
+    /// [`ProviderStream::next_event`] 增量拉取 [`StreamEvent`]。
+    ///
+    /// 各后端差异被全部抻在这一层：Anthropic 本身就是 Anthropic-风格事件，
+    /// OpenAI / xAI 后端在 [`OpenAiCompatStream`] 内部把 `chat.completion.chunk`
+    /// 翻译为 Anthropic 事件 —— 上层 ironclaw 只面对 [`StreamEvent`]。
+    pub async fn stream_message(
+        &self,
+        request: &MessageRequest,
+    ) -> Result<ProviderStream, ApiError> {
+        match self {
+            Self::Anthropic(client) => client.stream(request).await.map(ProviderStream::Anthropic),
+            Self::Xai(client) => client
+                .stream(request)
+                .await
+                .map(ProviderStream::OpenAiCompat),
+            Self::OpenAi(client) => client
+                .stream(request)
+                .await
+                .map(ProviderStream::OpenAiCompat),
+        }
+    }
+}
+
+/// 跨后端统一的流式响应 —— [`ProviderClient::stream_message`] 的返回类型。
+///
+/// 两个变体均提供同名 `next_event()` 与 `request_id()`，调用方不需区分后端。
+#[derive(Debug)]
+pub enum ProviderStream {
+    /// Anthropic Messages API 原生流。
+    Anthropic(AnthropicStream),
+    /// OpenAI Chat Completions 兼容流（包含 OpenAI / xAI / DashScope 等）。
+    OpenAiCompat(OpenAiCompatStream),
+}
+
+impl ProviderStream {
+    /// 增量拉取下一个 [`StreamEvent`]；流结束时返回 `Ok(None)`。
+    pub async fn next_event(&mut self) -> Result<Option<StreamEvent>, ApiError> {
+        match self {
+            Self::Anthropic(stream) => stream.next_event().await,
+            Self::OpenAiCompat(stream) => stream.next_event().await,
+        }
+    }
+
+    /// 上游返回的 trace ID（如有）。
+    #[must_use]
+    pub fn request_id(&self) -> Option<&str> {
+        match self {
+            Self::Anthropic(stream) => stream.request_id(),
+            Self::OpenAiCompat(stream) => stream.request_id(),
         }
     }
 }
