@@ -132,15 +132,32 @@ jobs:
         BASE="${{ github.event.pull_request.base.sha }}"
         python3 scripts/check_no_panics.py --base "$BASE" --head HEAD
 
+  claw-code-readonly:
+    name: claw-code/ readonly guard (ADR-118)
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v6
+      with:
+        submodules: recursive
+        fetch-depth: 0
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: Reject changes inside claw-code/ outside of whitelist
+      run: |
+        BASE="${{ github.event.pull_request.base.sha }}"
+        python3 scripts/check_claw_code_readonly.py --base "$BASE" --head HEAD
+
   # Roll-up job for branch protection
   code-style:
     name: Code Style (fmt + clippy + deny)
     runs-on: ubuntu-latest
     if: always()
-    needs: [format, clippy, clippy-windows, deny-check, no-panics]
+    needs: [format, clippy, clippy-windows, deny-check, no-panics, claw-code-readonly]
     steps:
       - run: |
-          if [[ "${{ needs.format.result }}" != "success" || "${{ needs.clippy.result }}" != "success" || "${{ needs.deny-check.result }}" != "success" || "${{ needs.no-panics.result }}" != "success" ]]; then
+          if [[ "${{ needs.format.result }}" != "success" || "${{ needs.clippy.result }}" != "success" || "${{ needs.deny-check.result }}" != "success" || "${{ needs.no-panics.result }}" != "success" || "${{ needs.claw-code-readonly.result }}" != "success" ]]; then
             echo "One or more jobs failed"
             exit 1
           fi
