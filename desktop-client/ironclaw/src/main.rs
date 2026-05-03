@@ -365,7 +365,13 @@ async fn async_main() -> anyhow::Result<()> {
         components.db.as_ref(),
         components.secrets_store.as_ref(),
     )
-    .await;
+    .await
+    .map_err(|e| {
+        // ADR-119 F2: fail-closed boot — surface the error to the user
+        // instead of silently downgrading the runtime.
+        tracing::error!("Orchestrator setup refused to start: {e}");
+        anyhow::anyhow!("orchestrator setup failed: {e}")
+    })?;
     let container_job_manager = orch.container_job_manager;
     let job_event_tx = orch.job_event_tx;
     let prompt_queue = orch.prompt_queue;
