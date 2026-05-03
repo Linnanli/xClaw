@@ -52,3 +52,8 @@ claude-code-main
 !.codex/prompts/**
 /decode-claude-code-main/
 /claw-decode-main/
+
+# Local reference source copies (not tracked, kept for reading only)
+/ironclaw-main/
+/codex-cli-main/
+/docs/repomix-out/
