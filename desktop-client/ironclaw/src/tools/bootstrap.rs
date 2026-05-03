@@ -141,6 +141,32 @@ impl JobToolsConfig {
     }
 }
 
+/// Decide whether to register the job-tool group based on the resolved
+/// [`crate::config::JobRuntimeMode`] (ADR-119 F3).
+///
+/// Returns `Some(builder())` when the runtime mode allows job dispatch
+/// (`LocalContainer` or `Cloud`), or `None` when the runtime is
+/// [`crate::config::JobRuntimeMode::Disabled`] — in which case the
+/// registry skips registration of the 6 job tools entirely so the LLM
+/// never sees their definitions.
+///
+/// The `builder` closure is only invoked in the non-disabled case, so
+/// callers can place expensive `Arc::clone` calls inside it without
+/// paying the cost when job tools are off.
+pub fn job_tools_for_mode<F>(
+    mode: &crate::config::JobRuntimeMode,
+    builder: F,
+) -> Option<JobToolsConfig>
+where
+    F: FnOnce() -> JobToolsConfig,
+{
+    match mode {
+        crate::config::JobRuntimeMode::Disabled => None,
+        crate::config::JobRuntimeMode::LocalContainer
+        | crate::config::JobRuntimeMode::Cloud { .. } => Some(builder()),
+    }
+}
+
 /// Configuration bundle for `register_image_tools`.
 #[derive(Debug, Clone, Default)]
 pub struct ImageApiConfig {
@@ -346,5 +372,57 @@ mod tests {
         // can be added without breaking the trait derive contract.
         let err = BootstrapError::Other("boom".to_string());
         assert_eq!(err.to_string(), "bootstrap error: boom");
+    }
+
+    // ─── ADR-119 F3: job_tools_for_mode dispatch ──────────────────────────
+
+    #[test]
+    fn req_adr119_f3_disabled_returns_none_and_skips_builder() {
+        use crate::config::JobRuntimeMode;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let calls = AtomicUsize::new(0);
+        let result = job_tools_for_mode(&JobRuntimeMode::Disabled, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            unreachable!("builder must not run when mode is Disabled");
+        });
+        assert!(result.is_none(), "Disabled mode must yield None");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "builder must not be invoked when mode is Disabled (lazy gate contract)"
+        );
+    }
+
+    #[test]
+    fn req_adr119_f3_local_container_invokes_builder() {
+        use crate::config::JobRuntimeMode;
+        use crate::context::ContextManager;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let calls = AtomicUsize::new(0);
+        let result = job_tools_for_mode(&JobRuntimeMode::LocalContainer, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            JobToolsConfig::new(Arc::new(ContextManager::new(8)))
+        });
+        assert!(result.is_some(), "LocalContainer mode must yield Some");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn req_adr119_f3_cloud_invokes_builder() {
+        use crate::config::JobRuntimeMode;
+        use crate::context::ContextManager;
+
+        let result = job_tools_for_mode(
+            &JobRuntimeMode::Cloud {
+                endpoint: "https://jobs.example.com".to_string(),
+            },
+            || JobToolsConfig::new(Arc::new(ContextManager::new(8))),
+        );
+        assert!(
+            result.is_some(),
+            "Cloud mode must yield Some (dispatch reserved for future ADR)"
+        );
     }
 }

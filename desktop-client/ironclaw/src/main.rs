@@ -582,20 +582,28 @@ async fn async_main() -> anyhow::Result<()> {
             mode: BootstrapMode::Orchestrator {
                 allow_local_tools: config.agent.allow_local_tools,
             },
-            job_config: Some(JobToolsConfig {
-                context_manager: Arc::clone(&components.context_manager),
-                scheduler_slot: Some(scheduler_slot.clone()),
-                job_manager: container_job_manager.clone(),
-                store: components.db.clone(),
-                job_event_tx: job_event_tx.clone(),
-                inject_tx: Some(channels.inject_sender()),
-                prompt_queue: if config.sandbox.enabled {
-                    Some(Arc::clone(&prompt_queue))
-                } else {
-                    None
+            // ADR-119 F3: when JobRuntimeMode::Disabled, do not pass
+            // JobToolsConfig at all so the registry skips registering
+            // create_job / list_jobs / job_status / cancel_job /
+            // job_events / job_prompt entirely. The LLM never sees these
+            // 6 tool definitions in Disabled mode.
+            job_config: ironclaw::tools::bootstrap::job_tools_for_mode(
+                &config.job_runtime.mode,
+                || JobToolsConfig {
+                    context_manager: Arc::clone(&components.context_manager),
+                    scheduler_slot: Some(scheduler_slot.clone()),
+                    job_manager: container_job_manager.clone(),
+                    store: components.db.clone(),
+                    job_event_tx: job_event_tx.clone(),
+                    inject_tx: Some(channels.inject_sender()),
+                    prompt_queue: if config.sandbox.enabled {
+                        Some(Arc::clone(&prompt_queue))
+                    } else {
+                        None
+                    },
+                    secrets_store: components.secrets_store.clone(),
                 },
-                secrets_store: components.secrets_store.clone(),
-            }),
+            ),
             ..Default::default()
         })
         .await?;
