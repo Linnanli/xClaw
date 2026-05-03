@@ -465,6 +465,8 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         None, // inject_tx: 无需注入
         None, // prompt_queue: 无 sandbox prompt
         None, // secrets_store: 无 sandbox credentials
+        // ADR-119 F4 — 桌面客户端无 sandbox，runtime_mode 留空（不会触发 emit）。
+        String::new(),
     );
 
     // ── Phase 8: 构建 Agent ───────────────────────────────────────
