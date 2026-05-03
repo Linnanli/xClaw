@@ -90,6 +90,10 @@ pub struct CreateJobTool {
     inject_tx: Option<tokio::sync::mpsc::Sender<IncomingMessage>>,
     /// Encrypted secrets store for validating credential grants.
     secrets_store: Option<Arc<dyn SecretsStore + Send + Sync>>,
+    /// ADR-119 F4 — resolved [`JobRuntimeMode`] as a stable string
+    /// (`disabled` / `local_container` / `cloud`). Stamped onto the
+    /// [`AppEvent::JobStarted`] audit event when a sandbox job is created.
+    runtime_mode: String,
 }
 
 impl CreateJobTool {
@@ -102,6 +106,7 @@ impl CreateJobTool {
             event_tx: None,
             inject_tx: None,
             secrets_store: None,
+            runtime_mode: String::new(),
         }
     }
 
@@ -137,6 +142,13 @@ impl CreateJobTool {
     /// Inject secrets store for credential validation.
     pub fn with_secrets(mut self, secrets: Arc<dyn SecretsStore + Send + Sync>) -> Self {
         self.secrets_store = Some(secrets);
+        self
+    }
+
+    /// ADR-119 F4 — set the resolved runtime mode string used in the
+    /// [`AppEvent::JobStarted`] audit event.
+    pub fn with_runtime_mode(mut self, mode: impl Into<String>) -> Self {
+        self.runtime_mode = mode.into();
         self
     }
 
@@ -443,6 +455,12 @@ impl CreateJobTool {
         }
 
         // Create the container job with the pre-determined job_id.
+        // Snapshot grant names for the audit event before the vector is
+        // moved into create_job (ADR-119 F4).
+        let credential_grant_names: Vec<String> = credential_grants
+            .iter()
+            .map(|g| g.secret_name.clone())
+            .collect();
         let _token = jm
             .create_job(job_id, task, Some(project_dir), mode, credential_grants)
             .await
@@ -462,6 +480,23 @@ impl CreateJobTool {
         // Container started successfully.
         let now = Utc::now();
         self.update_status(job_id, "running", None, None, Some(now), None);
+
+        // ADR-119 F4 — emit JobStarted audit event with runtime metadata.
+        // SECURITY: only credential *names* are included; the secret values
+        // never leave the orchestrator process (OWASP A02 / Cryptographic
+        // Failures).
+        if let Some(etx) = &self.event_tx {
+            let audit_event = AppEvent::JobStarted {
+                job_id: job_id.to_string(),
+                title: task.to_string(),
+                browse_url: format!("/projects/{}", browse_id),
+                runtime_mode: self.runtime_mode.clone(),
+                image: Some(jm.image().to_string()),
+                endpoint: None,
+                credential_grants: credential_grant_names,
+            };
+            let _ = etx.send((job_id, ctx.user_id.clone(), audit_event));
+        }
 
         if !wait {
             // Spawn a background monitor that forwards Claude Code output
@@ -2286,5 +2321,24 @@ mod tests {
         let cm = ContextManager::new(5);
         let result = resolve_job_id("not-hex-at-all!", &cm).await;
         assert!(result.is_err()); // safety: test
+    }
+
+    /// ADR-119 F4 — `with_runtime_mode` builder must store the resolved
+    /// runtime-mode string for later stamping onto `JobStarted` audit events.
+    #[test]
+    fn req_adr119_f4_with_runtime_mode_stores_value() {
+        let manager = Arc::new(ContextManager::new(5));
+        let tool = CreateJobTool::new(manager).with_runtime_mode("local_container");
+        assert_eq!(tool.runtime_mode, "local_container"); // safety: test
+    }
+
+    /// ADR-119 F4 — `CreateJobTool::new` defaults `runtime_mode` to an empty
+    /// string so legacy/test callers keep compiling without forcing the
+    /// builder to be invoked.
+    #[test]
+    fn req_adr119_f4_runtime_mode_defaults_empty() {
+        let manager = Arc::new(ContextManager::new(5));
+        let tool = CreateJobTool::new(manager);
+        assert_eq!(tool.runtime_mode, ""); // safety: test
     }
 }

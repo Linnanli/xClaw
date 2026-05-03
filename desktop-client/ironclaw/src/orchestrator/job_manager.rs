@@ -255,6 +255,11 @@ impl ContainerJobManager {
         }
     }
 
+    /// Container image used to launch worker jobs (ADR-119 F4 audit field).
+    pub fn image(&self) -> &str {
+        &self.config.image
+    }
+
     /// Get or create a Docker connection.
     async fn docker(&self) -> Result<bollard::Docker, OrchestratorError> {
         {
