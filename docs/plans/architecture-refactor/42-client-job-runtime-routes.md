@@ -1,7 +1,8 @@
 # 42 · 客户端 Job 运行时路线方案记录
 
-**状态**：📋 决策搁置（Decision deferred） · 仅记录候选方案，不立即执行
-**日期**：2026-04-08（W3.1c 合并后）
+**状态**：✅ 决策已落 ADR-119（W6） · 候选方案保留供未来 mode 扩展参考
+**日期**：2026-04-08（W3.1c 合并后） · 决策更新 2026-05-12
+**决策文档**：[adr-119-job-runtime-decision-for-desktop-client.md](adr-119-job-runtime-decision-for-desktop-client.md)
 **前置文档**：
 - [41-docker-vs-os-sandbox-capability-comparison.md](41-docker-vs-os-sandbox-capability-comparison.md)（codex 进程沙箱 vs Docker 容器能力对比）
 - [orchestrator/mod.rs:108](../../../desktop-client/ironclaw/src/orchestrator/mod.rs#L108)（当前 Job 路径硬依赖 Docker 的代码证据）
