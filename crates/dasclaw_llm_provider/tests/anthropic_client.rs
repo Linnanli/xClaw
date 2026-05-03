@@ -12,7 +12,7 @@
 use std::time::Duration;
 
 use dasclaw_llm_provider::{
-    AnthropicClient, ApiError, AuthSource, MessageRequest, RetryPolicy, StreamEvent,
+    AnthropicClient, ApiError, AuthSource, InputMessage, MessageRequest, RetryPolicy, StreamEvent,
 };
 use serde_json::json;
 use wiremock::matchers::{header, method, path};
@@ -21,14 +21,12 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 const TEST_API_KEY: &str = "sk-ant-test";
 
 fn sample_request() -> MessageRequest {
-    let body = json!({
-        "model": "claude-3-5-sonnet-20241022",
-        "max_tokens": 16,
-        "messages": [
-            { "role": "user", "content": [{ "type": "text", "text": "ping" }] }
-        ]
-    });
-    serde_json::from_value(body).expect("MessageRequest deserializable")
+    MessageRequest {
+        model: "claude-3-5-sonnet-20241022".to_string(),
+        max_tokens: 16,
+        messages: vec![InputMessage::user_text("ping")],
+        ..MessageRequest::default()
+    }
 }
 
 fn fast_retry_policy(max_retries: u32) -> RetryPolicy {
@@ -56,11 +54,12 @@ fn success_body() -> serde_json::Value {
     })
 }
 
-async fn build_client(server: &MockServer, retry: RetryPolicy) -> AnthropicClient {
-    AnthropicClient::with_auth(AuthSource::ApiKey(TEST_API_KEY.into()))
-        .expect("client constructible")
-        .with_base_url(server.uri())
-        .with_retry_policy(retry)
+fn build_client(server_uri: String, retry: RetryPolicy) -> Result<AnthropicClient, ApiError> {
+    Ok(
+        AnthropicClient::with_auth(AuthSource::ApiKey(TEST_API_KEY.into()))?
+            .with_base_url(server_uri)
+            .with_retry_policy(retry),
+    )
 }
 
 #[tokio::test]
@@ -79,7 +78,7 @@ async fn complete_happy_path_propagates_request_id() {
         .mount(&server)
         .await;
 
-    let client = build_client(&server, fast_retry_policy(0)).await;
+    let client = build_client(server.uri(), fast_retry_policy(0)).expect("client constructible");
     let response = client.complete(&sample_request()).await.expect("ok");
     assert_eq!(response.request_id.as_deref(), Some("req-success"));
     assert_eq!(response.usage.input_tokens, 3);
@@ -98,7 +97,7 @@ async fn auth_failure_is_not_retried() {
         .mount(&server)
         .await;
 
-    let client = build_client(&server, fast_retry_policy(5)).await;
+    let client = build_client(server.uri(), fast_retry_policy(5)).expect("client constructible");
     let err = client
         .complete(&sample_request())
         .await
@@ -137,7 +136,7 @@ async fn rate_limited_then_success_honors_retry_after() {
         .mount(&server)
         .await;
 
-    let client = build_client(&server, fast_retry_policy(2)).await;
+    let client = build_client(server.uri(), fast_retry_policy(2)).expect("client constructible");
     let response = client.complete(&sample_request()).await.expect("ok");
     assert_eq!(response.usage.output_tokens, 1);
 }
@@ -157,7 +156,7 @@ async fn server_error_retries_then_succeeds() {
         .mount(&server)
         .await;
 
-    let client = build_client(&server, fast_retry_policy(3)).await;
+    let client = build_client(server.uri(), fast_retry_policy(3)).expect("client constructible");
     let response = client.complete(&sample_request()).await.expect("ok");
     assert_eq!(response.usage.input_tokens, 3);
 }
@@ -172,7 +171,7 @@ async fn max_retries_exhausted_returns_last_error() {
         .mount(&server)
         .await;
 
-    let client = build_client(&server, fast_retry_policy(2)).await;
+    let client = build_client(server.uri(), fast_retry_policy(2)).expect("client constructible");
     let err = client
         .complete(&sample_request())
         .await
@@ -196,7 +195,7 @@ async fn bad_request_extracts_anthropic_error_message() {
         .mount(&server)
         .await;
 
-    let client = build_client(&server, fast_retry_policy(3)).await;
+    let client = build_client(server.uri(), fast_retry_policy(3)).expect("client constructible");
     let err = client
         .complete(&sample_request())
         .await
@@ -242,7 +241,7 @@ data: {\"type\":\"message_stop\"}\n\
         .mount(&server)
         .await;
 
-    let client = build_client(&server, fast_retry_policy(0)).await;
+    let client = build_client(server.uri(), fast_retry_policy(0)).expect("client constructible");
     let mut stream = client.stream(&sample_request()).await.expect("ok");
     assert_eq!(stream.request_id(), Some("req-stream"));
 
