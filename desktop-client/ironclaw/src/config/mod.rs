@@ -17,6 +17,7 @@ pub(crate) mod embeddings;
 mod heartbeat;
 pub(crate) mod helpers;
 mod hygiene;
+pub mod job_runtime;
 pub(crate) mod llm;
 pub mod relay;
 mod routines;
@@ -47,6 +48,7 @@ pub use self::database::{DatabaseBackend, DatabaseConfig, SslMode, default_libsq
 pub use self::embeddings::{DEFAULT_EMBEDDING_CACHE_SIZE, EmbeddingsConfig};
 pub use self::heartbeat::HeartbeatConfig;
 pub use self::hygiene::HygieneConfig;
+pub use self::job_runtime::{JobRuntimeConfig, JobRuntimeMode, JobRuntimeSettings};
 pub use self::llm::default_session_path;
 pub use self::relay::RelayConfig;
 pub use self::routines::RoutineConfig;
@@ -101,6 +103,8 @@ pub struct Config {
     pub hygiene: HygieneConfig,
     pub routines: RoutineConfig,
     pub sandbox: SandboxModeConfig,
+    /// Job runtime mode (Disabled / LocalContainer / Cloud). See ADR-119.
+    pub job_runtime: JobRuntimeConfig,
     pub claude_code: ClaudeCodeConfig,
     pub skills: SkillsConfig,
     pub transcription: TranscriptionConfig,
@@ -174,6 +178,7 @@ impl Config {
                 enabled: false,
                 ..SandboxModeConfig::default()
             },
+            job_runtime: JobRuntimeConfig::default(),
             claude_code: ClaudeCodeConfig::default(),
             skills: SkillsConfig {
                 enabled: true,
@@ -369,6 +374,7 @@ impl Config {
             hygiene: HygieneConfig::resolve()?,
             routines: RoutineConfig::resolve()?,
             sandbox: SandboxModeConfig::resolve(settings)?,
+            job_runtime: JobRuntimeConfig::resolve(settings)?,
             claude_code: ClaudeCodeConfig::resolve(settings)?,
             skills: SkillsConfig::resolve()?,
             transcription: TranscriptionConfig::resolve(settings)?,
