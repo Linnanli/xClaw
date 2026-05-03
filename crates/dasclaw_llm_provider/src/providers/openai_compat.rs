@@ -632,18 +632,11 @@ fn normalize_response(
             .finish_reason
             .map(|value| normalize_finish_reason(&value)),
         stop_sequence: None,
-        usage: Usage {
-            input_tokens: response
-                .usage
-                .as_ref()
-                .map_or(0, |usage| usage.prompt_tokens),
-            cache_creation_input_tokens: 0,
-            cache_read_input_tokens: 0,
-            output_tokens: response
-                .usage
-                .as_ref()
-                .map_or(0, |usage| usage.completion_tokens),
-        },
+        usage: response
+            .usage
+            .as_ref()
+            .map(OpenAiUsage::to_dasclaw_usage)
+            .unwrap_or_default(),
         request_id: None,
     })
 }
@@ -707,6 +700,35 @@ struct OpenAiUsage {
     prompt_tokens: u32,
     #[serde(default)]
     completion_tokens: u32,
+    /// OpenAI / DashScope 在 `prompt_tokens_details.cached_tokens` 上报命中
+    /// 上下文缓存的 token 数；映射到 [`Usage::cache_read_input_tokens`]。
+    #[serde(default)]
+    prompt_tokens_details: Option<OpenAiPromptTokensDetails>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiPromptTokensDetails {
+    #[serde(default)]
+    cached_tokens: u32,
+}
+
+impl OpenAiUsage {
+    /// 把 OpenAI `usage` 规整为 dasclaw 的 [`Usage`]，按 Anthropic 语义把缓存
+    /// token 从 `input_tokens` 中扣除（OpenAI `prompt_tokens` 含命中缓存部分，
+    /// Anthropic `input_tokens` 仅指未缓存的新 token）。`cache_creation_input_tokens`
+    /// 保持 0：OpenAI 协议不区分新建缓存与命中缓存。
+    fn to_dasclaw_usage(&self) -> Usage {
+        let cached = self
+            .prompt_tokens_details
+            .as_ref()
+            .map_or(0, |details| details.cached_tokens);
+        Usage {
+            input_tokens: self.prompt_tokens.saturating_sub(cached),
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: cached,
+            output_tokens: self.completion_tokens,
+        }
+    }
 }
 
 // ---------- Streaming ----------
@@ -895,24 +917,14 @@ impl StreamState {
                     model: chunk.model.clone().unwrap_or_else(|| self.model.clone()),
                     stop_reason: None,
                     stop_sequence: None,
-                    usage: Usage {
-                        input_tokens: 0,
-                        cache_creation_input_tokens: 0,
-                        cache_read_input_tokens: 0,
-                        output_tokens: 0,
-                    },
+                    usage: Usage::default(),
                     request_id: None,
                 },
             }));
         }
 
         if let Some(usage) = chunk.usage {
-            self.usage = Some(Usage {
-                input_tokens: usage.prompt_tokens,
-                cache_creation_input_tokens: 0,
-                cache_read_input_tokens: 0,
-                output_tokens: usage.completion_tokens,
-            });
+            self.usage = Some(usage.to_dasclaw_usage());
         }
 
         for choice in chunk.choices {
@@ -1017,12 +1029,7 @@ impl StreamState {
                     ),
                     stop_sequence: None,
                 },
-                usage: self.usage.clone().unwrap_or(Usage {
-                    input_tokens: 0,
-                    cache_creation_input_tokens: 0,
-                    cache_read_input_tokens: 0,
-                    output_tokens: 0,
-                }),
+                usage: self.usage.clone().unwrap_or_default(),
             }));
             events.push(StreamEvent::MessageStop(MessageStopEvent {}));
         }

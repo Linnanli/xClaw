@@ -229,3 +229,63 @@ async fn inline_error_envelope_in_200_body_is_surfaced() {
         other => panic!("expected Provider, got {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn complete_maps_prompt_tokens_details_cached_tokens() {
+    // OpenAI / DashScope 在 `usage.prompt_tokens_details.cached_tokens` 上报命中
+    // 上下文缓存的 token 数；按 Anthropic 语义，这部分应进入
+    // `cache_read_input_tokens`，并从 `input_tokens` 中扣除。
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "chatcmpl-cache",
+            "model": "gpt-4o-mini",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": "ok" },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "prompt_tokens_details": { "cached_tokens": 80 }
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = build_client(server.uri(), fast_retry_policy(0)).expect("client constructible");
+    let response = client
+        .complete(&sample_request())
+        .await
+        .expect("request succeeds");
+    assert_eq!(response.usage.input_tokens, 20);
+    assert_eq!(response.usage.cache_read_input_tokens, 80);
+    assert_eq!(response.usage.cache_creation_input_tokens, 0);
+    assert_eq!(response.usage.output_tokens, 20);
+}
+
+#[tokio::test]
+async fn complete_without_prompt_tokens_details_keeps_cache_zero() {
+    // 旧 OpenAI / 不暴露 cache 字段的后端：cache_* 必须保持 0，
+    // input_tokens 直接等于 prompt_tokens，向后兼容。
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(success_body()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = build_client(server.uri(), fast_retry_policy(0)).expect("client constructible");
+    let response = client
+        .complete(&sample_request())
+        .await
+        .expect("request succeeds");
+    assert_eq!(response.usage.input_tokens, 3);
+    assert_eq!(response.usage.cache_read_input_tokens, 0);
+    assert_eq!(response.usage.cache_creation_input_tokens, 0);
+    assert_eq!(response.usage.output_tokens, 1);
+}
