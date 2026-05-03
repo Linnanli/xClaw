@@ -406,6 +406,7 @@ impl ToolRegistry {
                 jc.inject_tx.clone(),
                 jc.prompt_queue.clone(),
                 jc.secrets_store.clone(),
+                jc.runtime_mode.clone(),
             );
         }
 
@@ -564,8 +565,10 @@ impl ToolRegistry {
         inject_tx: Option<tokio::sync::mpsc::Sender<crate::channels::IncomingMessage>>,
         prompt_queue: Option<PromptQueue>,
         secrets_store: Option<Arc<dyn SecretsStore + Send + Sync>>,
+        runtime_mode: String,
     ) {
-        let mut create_tool = CreateJobTool::new(Arc::clone(&context_manager));
+        let mut create_tool =
+            CreateJobTool::new(Arc::clone(&context_manager)).with_runtime_mode(runtime_mode);
         if let Some(slot) = scheduler_slot {
             create_tool = create_tool.with_scheduler_slot(slot);
         }

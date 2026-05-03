@@ -85,6 +85,25 @@ pub enum AppEvent {
         job_id: String,
         title: String,
         browse_url: String,
+        /// ADR-119 F4 — audit field. Resolved [`JobRuntimeMode`] as the
+        /// stable string "disabled" / "local_container" / "cloud" (D5
+        /// audit contract). Stored as `String` so this crate stays
+        /// independent of the `ironclaw` desktop crate where the enum
+        /// lives.
+        #[serde(default)]
+        runtime_mode: String,
+        /// ADR-119 F4 — container image used to launch the worker
+        /// (LocalContainer only). `None` for `Disabled` / `Cloud`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        image: Option<String>,
+        /// ADR-119 F4 — remote scheduler endpoint (`Cloud` only).
+        /// `None` for `Disabled` / `LocalContainer`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        endpoint: Option<String>,
+        /// ADR-119 F4 — names of credentials granted to this job by the
+        /// orchestrator. Empty when no grants were attached.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        credential_grants: Vec<String>,
     },
     #[serde(rename = "approval_needed")]
     ApprovalNeeded {
@@ -286,6 +305,10 @@ mod tests {
                 job_id: String::new(),
                 title: String::new(),
                 browse_url: String::new(),
+                runtime_mode: String::new(),
+                image: None,
+                endpoint: None,
+                credential_grants: Vec::new(),
             },
             AppEvent::ApprovalNeeded {
                 request_id: String::new(),
@@ -389,5 +412,109 @@ mod tests {
         let json = serde_json::to_string(&original).unwrap();
         let deserialized: AppEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.event_type(), "response");
+    }
+
+    /// ADR-119 F4 — `JobStarted` must round-trip with the new audit fields
+    /// populated end-to-end.
+    #[test]
+    fn req_adr119_f4_job_started_round_trip_includes_audit_fields() {
+        let original = AppEvent::JobStarted {
+            job_id: "job-1".to_string(),
+            title: "build docs".to_string(),
+            browse_url: "/projects/xyz".to_string(),
+            runtime_mode: "local_container".to_string(),
+            image: Some("ironclaw/worker:1.2.3".to_string()),
+            endpoint: None,
+            credential_grants: vec!["github_token".to_string()],
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["type"], "job_started");
+        assert_eq!(parsed["runtime_mode"], "local_container");
+        assert_eq!(parsed["image"], "ironclaw/worker:1.2.3");
+        assert_eq!(parsed["credential_grants"][0], "github_token");
+        // Endpoint is omitted (skip_serializing_if Option::is_none).
+        assert!(parsed.get("endpoint").is_none());
+
+        let restored: AppEvent = serde_json::from_str(&json).unwrap();
+        match restored {
+            AppEvent::JobStarted {
+                runtime_mode,
+                image,
+                endpoint,
+                credential_grants,
+                ..
+            } => {
+                assert_eq!(runtime_mode, "local_container");
+                assert_eq!(image.as_deref(), Some("ironclaw/worker:1.2.3"));
+                assert_eq!(endpoint, None);
+                assert_eq!(credential_grants, vec!["github_token".to_string()]);
+            }
+            other => panic!("expected JobStarted, got {:?}", other),
+        }
+    }
+
+    /// ADR-119 F4 — old payloads (without the new audit fields) must still
+    /// deserialize via `#[serde(default)]` for forward/backward compat.
+    #[test]
+    fn req_adr119_f4_job_started_serde_backward_compat() {
+        let legacy = r#"{
+            "type": "job_started",
+            "job_id": "j1",
+            "title": "t",
+            "browse_url": "/p/abc"
+        }"#;
+        let parsed: AppEvent = serde_json::from_str(legacy).unwrap();
+        match parsed {
+            AppEvent::JobStarted {
+                runtime_mode,
+                image,
+                endpoint,
+                credential_grants,
+                ..
+            } => {
+                assert_eq!(runtime_mode, "");
+                assert_eq!(image, None);
+                assert_eq!(endpoint, None);
+                assert!(credential_grants.is_empty());
+            }
+            other => panic!("expected JobStarted, got {:?}", other),
+        }
+    }
+
+    /// ADR-119 F4 — `credential_grants` must contain only the secret *names*
+    /// chosen for the job; the secret *values* must never appear in any
+    /// serialised audit payload (OWASP A02 / Cryptographic Failures).
+    #[test]
+    fn req_adr119_f4_credential_grants_no_secret_values() {
+        let event = AppEvent::JobStarted {
+            job_id: "j".to_string(),
+            title: "t".to_string(),
+            browse_url: "/p".to_string(),
+            runtime_mode: "local_container".to_string(),
+            image: Some("img".to_string()),
+            endpoint: None,
+            // Only NAMES, never values.
+            credential_grants: vec!["github_token".to_string(), "npm_token".to_string()],
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        // Sentinel values that would indicate a leak if any code path ever
+        // pushed the actual secret value into the grants vector.
+        for forbidden in &[
+            "ghp_supersecretvalue",
+            "Bearer ",
+            "AKIA",
+            "sk-",
+            "PRIVATE KEY",
+        ] {
+            assert!(
+                !json.contains(forbidden),
+                "secret-shaped substring leaked into audit event: {}",
+                forbidden
+            );
+        }
+        // Names are present.
+        assert!(json.contains("github_token"));
+        assert!(json.contains("npm_token"));
     }
 }

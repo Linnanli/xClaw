@@ -122,6 +122,12 @@ pub struct JobToolsConfig {
     pub inject_tx: Option<tokio::sync::mpsc::Sender<IncomingMessage>>,
     pub prompt_queue: Option<PromptQueue>,
     pub secrets_store: Option<Arc<dyn SecretsStore + Send + Sync>>,
+    /// ADR-119 F4 — resolved [`crate::config::JobRuntimeMode`] as a stable
+    /// audit string (`disabled` / `local_container` / `cloud`). Stamped onto
+    /// the [`ironclaw_common::AppEvent::JobStarted`] event when a sandbox
+    /// job is created. Empty string when the caller did not supply a mode
+    /// (legacy callers / tests).
+    pub runtime_mode: String,
 }
 
 impl JobToolsConfig {
@@ -137,6 +143,7 @@ impl JobToolsConfig {
             inject_tx: None,
             prompt_queue: None,
             secrets_store: None,
+            runtime_mode: String::new(),
         }
     }
 }

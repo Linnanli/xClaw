@@ -608,6 +608,8 @@ async fn async_main() -> anyhow::Result<()> {
                         None
                     },
                     secrets_store: components.secrets_store.clone(),
+                    // ADR-119 F4 — stamp runtime mode for the JobStarted audit event.
+                    runtime_mode: config.job_runtime.mode.as_str().to_string(),
                 },
             ),
             ..Default::default()

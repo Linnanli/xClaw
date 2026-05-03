@@ -434,6 +434,16 @@ impl Channel for GatewayChannel {
                 job_id,
                 title,
                 browse_url,
+                // ADR-119 F4 — channel-side conversion path does not have
+                // access to the resolved JobRuntimeMode. The orchestrator
+                // emits the canonical audit-grade JobStarted event with
+                // populated metadata; this path is for forwarding chat
+                // status updates and intentionally leaves audit fields
+                // empty.
+                runtime_mode: String::new(),
+                image: None,
+                endpoint: None,
+                credential_grants: Vec::new(),
             },
             StatusUpdate::ApprovalNeeded {
                 request_id,
