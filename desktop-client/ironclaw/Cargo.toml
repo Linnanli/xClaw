@@ -144,9 +144,9 @@ blake3 = "1"
 rand = "0.8"
 subtle = "2"  # Constant-time comparisons for token validation
 
-# Multi-provider LLM support (claw-code-api native client)
-# crate 真实 package 名为 `api`，这里重命名为 claw-code-api 避免泛名冲突。
-claw-code-api = { path = "../../claw-code/rust/crates/api", package = "api" }
+# Multi-provider LLM support (主仓自实现 client，W6-C PR-A.4 起替代 claw-code-api path-dep；
+# claw-code 子仓自此只读保留，详见 ADR-118)
+dasclaw_llm_provider = { path = "../../crates/dasclaw_llm_provider" }
 
 # AWS Bedrock (native Converse API, opt-in via --features bedrock)
 aws-config = { version = "1", features = ["behavior-version-latest"], optional = true }
@@ -229,9 +229,9 @@ harness = false
 default = ["postgres", "libsql", "html-to-markdown"]
 test-support = ["dep:tempfile"]
 # 历史遗留：Phase 2 Step I 之前用来切换 rig-core / claw-code-api 两套 LLM
-# 后端，现在 claw-code-api 是唯一路径，feature 名保留为空 no-op，避免下游
-# （如 desktop-client）触发构建失败。下一次 minor 版本可同步删除该 feature
-# 与 desktop-client/Cargo.toml 中的 passthrough。
+# 后端，W6-C PR-A.4 之后 dasclaw_llm_provider 是唯一路径，feature 名保留为空
+# no-op，避免下游（如 desktop-client）触发构建失败。下一次 minor 版本可同步
+# 删除该 feature 与 desktop-client/Cargo.toml 中的 passthrough。
 claw-code-llm = []
 postgres = [
     "dep:deadpool-postgres",

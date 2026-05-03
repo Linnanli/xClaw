@@ -8,6 +8,14 @@
 //! - **职责单一**：本模块只做"模型名 → provider 类型"的纯函数映射，不做 HTTP / SSE。
 //!   实际 HTTP client 在 PR-A.1+ 落地，路由 metadata 与 client 解耦。
 
+pub mod anthropic;
+pub mod client;
+pub mod openai_compat;
+
+pub use anthropic::{AnthropicClient, AnthropicStream, AuthSource};
+pub use client::{ProviderClient, ProviderStream};
+pub use openai_compat::{OpenAiCompatClient, OpenAiCompatConfig, OpenAiCompatStream};
+
 /// LLM provider 类型（决定走 Anthropic Messages 协议 / OpenAI Chat Completions 协议 / xAI 协议）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProviderKind {

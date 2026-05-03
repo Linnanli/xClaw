@@ -4,7 +4,7 @@
 //! claw-code 子仓视为只读参考库，本 crate **重新设计** Anthropic Messages /
 //! OpenAI Chat Completions 兼容层 wire 类型与 client 抽象，不直接消费子仓代码。
 //!
-//! 当前阶段：**PR-A.1 — HTTP transport + SSE 解析器原语**
+//! 当前阶段：**PR-A.4 — `ProviderClient` enum dispatcher + ironclaw 切换 path-dep**
 //! - ✅ wire 类型（`types`）—— Anthropic Messages 协议输入/输出/streaming events
 //! - ✅ 强类型错误（`error::ApiError`）—— 拆分 `RateLimited` / `AuthFailed` /
 //!   `ContextWindowExceeded` / `ServerError` / `Transport` / `MalformedSseFrame` 等，
@@ -13,8 +13,18 @@
 //! - ✅ `http::ProxyConfig` + `http::build_http_client_with` —— `reqwest::Client`
 //!   构造 + 代理（HTTP/HTTPS/统一 URL/no_proxy）支持，纯函数 + 显式 env 入口
 //! - ✅ `sse::SseParser` + `sse::parse_frame` —— 增量 SSE 帧解析器，识别 ping/DONE/comment
-//! - 🟡 `AnthropicClient` / `OpenAiCompatClient`：留给 PR-A.2 / PR-A.3，本 PR 暂未实现
-//! - 🟡 重试策略 + Retry-After 解析：随 PR-A.2 client 一并落地
+//! - ✅ `retry::RetryPolicy` —— 指数退避 + 抖动 + `Retry-After` 头部尊重
+//!   （**改进**：claw-code 完全忽略 `Retry-After`，本 crate 优先采纳上游建议）
+//! - ✅ `providers::AnthropicClient` —— `complete()` / `stream()` + 状态码精确映射到
+//!   `ApiError` 各变体；`AuthSource` 支持 `ApiKey` / `BearerToken` / 双 header
+//! - ✅ `providers::OpenAiCompatClient` —— `complete()` + xAI / OpenAI / DashScope 三预设；
+//!   复用 `RetryPolicy` 与 `ApiError` 强类型；inline error envelope 兜底；
+//!   `gpt-5*` 模型自动改用 `max_completion_tokens`；reasoning_content 提升为 Thinking block
+//! - ✅ `providers::ProviderClient` —— enum dispatcher（`Anthropic` / `Xai` / `OpenAi` 三变体），
+//!   显式构造、不读 env，`send_message()` 同步入口
+//! - ✅ ironclaw 切换 `claw-code-api` path-dep → `dasclaw_llm_provider`
+//! - 🟡 `OpenAiCompatClient::stream()`：留给 PR-A.3.1（ironclaw 当前 call site 仅用 `send_message`）
+//! - 🟡 `ProviderClient::stream_message()` dispatch：依赖 `OpenAiCompatClient::stream()`，同上
 //!
 //! 与 `claw-code-api` 的设计差异（顺势处理架构债，详见 ADR-118 §8.5）：
 //!
@@ -34,6 +44,7 @@
 pub mod error;
 pub mod http;
 pub mod providers;
+pub mod retry;
 pub mod sse;
 pub mod types;
 
@@ -41,9 +52,11 @@ pub use error::ApiError;
 pub use http::{build_http_client, build_http_client_with, ProxyConfig};
 pub use providers::{
     detect_provider_kind, max_tokens_for_model, max_tokens_for_model_with_override,
-    metadata_for_model, model_token_limit, resolve_model_alias, EnvSnapshot, ModelTokenLimit,
-    ProviderKind, ProviderMetadata,
+    metadata_for_model, model_token_limit, resolve_model_alias, AnthropicClient, AnthropicStream,
+    AuthSource, EnvSnapshot, ModelTokenLimit, OpenAiCompatClient, OpenAiCompatConfig,
+    OpenAiCompatStream, ProviderClient, ProviderKind, ProviderMetadata, ProviderStream,
 };
+pub use retry::{parse_retry_after, RetryPolicy};
 pub use sse::{parse_frame, SseParser};
 pub use types::{
     ContentBlockDelta, ContentBlockDeltaEvent, ContentBlockStartEvent, ContentBlockStopEvent,
