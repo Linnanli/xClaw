@@ -59,8 +59,9 @@ pub use providers::{
 pub use retry::{parse_retry_after, RetryPolicy};
 pub use sse::{parse_frame, SseParser};
 pub use types::{
-    ContentBlockDelta, ContentBlockDeltaEvent, ContentBlockStartEvent, ContentBlockStopEvent,
-    InputContentBlock, InputMessage, MessageDelta, MessageDeltaEvent, MessageRequest,
-    MessageResponse, MessageStartEvent, MessageStopEvent, OutputContentBlock, StreamEvent,
-    ToolChoice, ToolDefinition, ToolResultContentBlock, Usage,
+    CacheControl, ContentBlockDelta, ContentBlockDeltaEvent, ContentBlockStartEvent,
+    ContentBlockStopEvent, InputContentBlock, InputMessage, MessageDelta, MessageDeltaEvent,
+    MessageRequest, MessageResponse, MessageStartEvent, MessageStopEvent, OutputContentBlock,
+    StreamEvent, SystemBlock, SystemPrompt, ToolChoice, ToolDefinition, ToolResultContentBlock,
+    Usage,
 };
