@@ -4,8 +4,8 @@
 //! 翻译为 Anthropic 风格 [`StreamEvent`] 序列。
 
 use dasclaw_llm_provider::{
-    ContentBlockDelta, InputMessage, MessageRequest, OpenAiCompatClient, OpenAiCompatConfig,
-    OutputContentBlock, ProviderClient, RetryPolicy, StreamEvent,
+    ApiError, ContentBlockDelta, InputMessage, MessageRequest, OpenAiCompatClient,
+    OpenAiCompatConfig, OutputContentBlock, ProviderClient, RetryPolicy, StreamEvent,
 };
 use std::time::Duration;
 use wiremock::matchers::{method, path};
@@ -24,15 +24,16 @@ fn sample_request() -> MessageRequest {
     }
 }
 
-fn build_client(server_uri: String) -> OpenAiCompatClient {
-    OpenAiCompatClient::new(TEST_API_KEY, OpenAiCompatConfig::openai())
-        .expect("client constructible")
-        .with_base_url(server_uri)
-        .with_retry_policy(RetryPolicy {
-            max_retries: 0,
-            initial_backoff: Duration::from_millis(1),
-            max_backoff: Duration::from_millis(2),
-        })
+fn build_client(server_uri: String) -> Result<OpenAiCompatClient, ApiError> {
+    Ok(
+        OpenAiCompatClient::new(TEST_API_KEY, OpenAiCompatConfig::openai())?
+            .with_base_url(server_uri)
+            .with_retry_policy(RetryPolicy {
+                max_retries: 0,
+                initial_backoff: Duration::from_millis(1),
+                max_backoff: Duration::from_millis(2),
+            }),
+    )
 }
 
 /// 把多帧 `data: {json}\n\n` + `data: [DONE]\n\n` 拼成 SSE body。
@@ -47,13 +48,16 @@ fn sse_body(frames: &[&str]) -> String {
     out
 }
 
-async fn drain_stream(client: &OpenAiCompatClient, request: &MessageRequest) -> Vec<StreamEvent> {
-    let mut stream = client.stream(request).await.expect("stream begins");
+async fn drain_stream(
+    client: &OpenAiCompatClient,
+    request: &MessageRequest,
+) -> Result<Vec<StreamEvent>, ApiError> {
+    let mut stream = client.stream(request).await?;
     let mut events = Vec::new();
-    while let Some(event) = stream.next_event().await.expect("next_event yields ok") {
+    while let Some(event) = stream.next_event().await? {
         events.push(event);
     }
-    events
+    Ok(events)
 }
 
 #[tokio::test]
@@ -76,8 +80,10 @@ async fn stream_text_chunks_yield_anthropic_event_sequence() {
         .mount(&server)
         .await;
 
-    let client = build_client(server.uri());
-    let events = drain_stream(&client, &sample_request()).await;
+    let client = build_client(server.uri()).expect("client constructible");
+    let events = drain_stream(&client, &sample_request())
+        .await
+        .expect("stream drains");
 
     assert!(matches!(events.first(), Some(StreamEvent::MessageStart(_))));
     assert!(matches!(
@@ -130,8 +136,10 @@ async fn stream_tool_call_accumulates_input_json_delta() {
         .mount(&server)
         .await;
 
-    let client = build_client(server.uri());
-    let events = drain_stream(&client, &sample_request()).await;
+    let client = build_client(server.uri()).expect("client constructible");
+    let events = drain_stream(&client, &sample_request())
+        .await
+        .expect("stream drains");
 
     // ContentBlockStart for ToolUse with name + id
     let start = events
@@ -194,8 +202,10 @@ async fn stream_tolerates_explicit_null_tool_calls() {
         .mount(&server)
         .await;
 
-    let client = build_client(server.uri());
-    let events = drain_stream(&client, &sample_request()).await;
+    let client = build_client(server.uri()).expect("client constructible");
+    let events = drain_stream(&client, &sample_request())
+        .await
+        .expect("stream drains");
     let text: String = events
         .iter()
         .filter_map(|e| match e {
@@ -229,7 +239,7 @@ async fn stream_dispatch_through_provider_client_returns_same_events() {
         .mount(&server)
         .await;
 
-    let inner = build_client(server.uri());
+    let inner = build_client(server.uri()).expect("client constructible");
     let provider = ProviderClient::OpenAi(inner);
     let mut stream = provider
         .stream_message(&sample_request())
