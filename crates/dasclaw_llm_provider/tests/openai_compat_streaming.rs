@@ -256,3 +256,42 @@ async fn stream_dispatch_through_provider_client_returns_same_events() {
     }
     assert_eq!(text, "hi");
 }
+
+#[tokio::test]
+async fn stream_message_delta_carries_cache_read_input_tokens() {
+    // 流式收尾的 `usage` 帧含 `prompt_tokens_details.cached_tokens` 时，必须
+    // 透传到 MessageDelta 事件的 `usage.cache_read_input_tokens`，并按
+    // Anthropic 语义把缓存 token 从 `input_tokens` 中扣除。
+    let server = MockServer::start().await;
+    let body = sse_body(&[
+        r#"{"id":"c-cache","model":"gpt-4o-mini","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]}"#,
+        r#"{"id":"c-cache","model":"gpt-4o-mini","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":75}}}"#,
+    ]);
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", SSE_CONTENT_TYPE)
+                .set_body_string(body),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = build_client(server.uri()).expect("client constructible");
+    let events = drain_stream(&client, &sample_request())
+        .await
+        .expect("stream drains");
+    let usage = events
+        .iter()
+        .rev()
+        .find_map(|e| match e {
+            StreamEvent::MessageDelta(ev) => Some(ev.usage.clone()),
+            _ => None,
+        })
+        .expect("message_delta carries usage");
+    assert_eq!(usage.input_tokens, 25);
+    assert_eq!(usage.cache_read_input_tokens, 75);
+    assert_eq!(usage.cache_creation_input_tokens, 0);
+    assert_eq!(usage.output_tokens, 2);
+}
