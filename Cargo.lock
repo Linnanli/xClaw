@@ -2422,6 +2422,7 @@ name = "dasclaw_governance"
 version = "0.0.0-w1"
 dependencies = [
  "serde",
+ "serde_json",
  "thiserror 1.0.69",
 ]
 

@@ -21,7 +21,7 @@ branch_lock = ["dep:serde"]
 stale_base = []
 stale_branch = []
 green_contract = ["dep:serde"]
-lane_events = []
+lane_events = ["dep:serde", "dep:serde_json"]
 # Convenience: enable the full 6-pack at once (used by integration tests).
 full = [
     "policy_engine",
@@ -37,3 +37,4 @@ full = [
 [dependencies]
 thiserror = "1"
 serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
