@@ -53,37 +53,17 @@ impl SafetyLayer {
         }
     }
 
-    /// Sanitize tool output before it reaches the LLM.
-    pub fn sanitize_tool_output(&self, tool_name: &str, output: &str) -> SanitizedOutput {
-        // Check length limits — keep the beginning so the LLM has partial data
-        if output.len() > self.config.max_output_length {
-            // Find a safe truncation point on a char boundary
-            let mut cut = self.config.max_output_length;
-            while cut > 0 && !output.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            let truncated = &output[..cut];
-            let notice = format!(
-                "\n\n[... truncated: showing {}/{} bytes. Use the json tool with \
-                 source_tool_call_id to query the full output.]",
-                cut,
-                output.len()
-            );
-            return SanitizedOutput {
-                content: format!("{}{}", truncated, notice),
-                warnings: vec![InjectionWarning {
-                    pattern: "output_too_large".to_string(),
-                    severity: Severity::Low,
-                    location: 0..output.len(),
-                    description: format!(
-                        "Output from tool '{}' was truncated due to size",
-                        tool_name
-                    ),
-                }],
-                was_modified: true,
-            };
-        }
-
+    /// Redact-only sanitization for tool output: applies leak detection,
+    /// policy enforcement, and (optionally) injection sanitization, but
+    /// **does not truncate**. Use this when downstream consumers need the
+    /// full redacted payload — e.g. `tool_output_stash` so subsequent tool
+    /// calls (the `json` tool via `source_tool_call_id`) can re-query the
+    /// complete structured output without losing trailing bytes.
+    ///
+    /// Compared to [`Self::sanitize_tool_output`], this method skips the
+    /// length-cap step. All redaction still applies, so the returned
+    /// content carries no raw secrets and no policy-blocked text.
+    pub fn sanitize_for_stash(&self, _tool_name: &str, output: &str) -> SanitizedOutput {
         let mut content = output.to_string();
         let mut was_modified = false;
 
@@ -135,6 +115,57 @@ impl SafetyLayer {
                 was_modified,
             }
         }
+    }
+
+    /// Apply the `max_output_length` cap to an already-redacted
+    /// [`SanitizedOutput`] (typically the return of
+    /// [`Self::sanitize_for_stash`]).
+    ///
+    /// If the body exceeds the cap, it is truncated on a UTF-8 char
+    /// boundary and a trailing notice instructs the model to fall back
+    /// to the `json` tool with `source_tool_call_id` to access the full
+    /// payload (which the caller is expected to keep untruncated, e.g.
+    /// in `tool_output_stash`).
+    ///
+    /// Splitting redaction (in `sanitize_for_stash`) from capping (here)
+    /// lets callers run the expensive regex pass exactly once and clone
+    /// the redacted text into both stash and display channels.
+    pub fn cap_for_llm(&self, tool_name: &str, mut redacted: SanitizedOutput) -> SanitizedOutput {
+        if redacted.content.len() <= self.config.max_output_length {
+            return redacted;
+        }
+
+        let original_len = redacted.content.len();
+        let mut cut = self.config.max_output_length;
+        while cut > 0 && !redacted.content.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let notice = format!(
+            "\n\n[... truncated: showing {}/{} bytes. Use the json tool with \
+             source_tool_call_id to query the full output.]",
+            cut, original_len
+        );
+        redacted.content.truncate(cut);
+        redacted.content.push_str(&notice);
+        redacted.warnings.push(InjectionWarning {
+            pattern: "output_too_large".to_string(),
+            severity: Severity::Low,
+            location: 0..original_len,
+            description: format!("Output from tool '{}' was truncated due to size", tool_name),
+        });
+        redacted.was_modified = true;
+        redacted
+    }
+
+    /// Sanitize tool output for the LLM: redact secrets / enforce policy
+    /// **and then** apply the `max_output_length` cap so the LLM context
+    /// stays bounded. Convenience wrapper that runs `sanitize_for_stash`
+    /// followed by `cap_for_llm` — prefer calling those two methods
+    /// directly when both stash and display channels are needed, to avoid
+    /// running the redaction regex twice.
+    pub fn sanitize_tool_output(&self, tool_name: &str, output: &str) -> SanitizedOutput {
+        let redacted = self.sanitize_for_stash(tool_name, output);
+        self.cap_for_llm(tool_name, redacted)
     }
 
     /// Validate input before processing.

@@ -143,16 +143,16 @@ impl LoopDelegate for ParityDelegate {
             .await;
 
             let is_error = result.is_err();
-            let (content, msg) = process_tool_result(&self.safety, &tc.name, &tc.id, &result);
+            let sanitized = process_tool_result(&self.safety, &tc.name, &tc.id, &result);
 
             self.tool_records.lock().await.push(ToolRecord {
                 name: tc.name.clone(),
                 arguments: tc.arguments.clone(),
-                output: content,
+                output: sanitized.display,
                 is_error,
             });
 
-            reason_ctx.messages.push(msg);
+            reason_ctx.messages.push(sanitized.message);
         }
         Ok(None)
     }

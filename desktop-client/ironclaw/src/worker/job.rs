@@ -827,13 +827,13 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
         // Use shared result processing for sanitize → wrap → ChatMessage.
         // The wrapped content (XML tags) goes into reason_ctx for the LLM.
         // The raw sanitized content goes into events/SSE for human-readable UI.
-        let (_wrapped, message) = process_tool_result(
+        let sanitized = process_tool_result(
             &self.deps.safety,
             &selection.tool_name,
             &selection.tool_call_id,
             &result,
         );
-        reason_ctx.messages.push(message);
+        reason_ctx.messages.push(sanitized.message);
 
         match result {
             Ok(raw_output) => {
