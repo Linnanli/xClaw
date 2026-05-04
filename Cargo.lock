@@ -2421,6 +2421,7 @@ dependencies = [
 name = "dasclaw_governance"
 version = "0.0.0-w1"
 dependencies = [
+ "serde",
  "thiserror 1.0.69",
 ]
 
