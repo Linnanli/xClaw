@@ -345,6 +345,41 @@ cargo clippy --no-deps -p <touched-crate> --all-targets -- -D warnings
 
 **如果本地 cargo check 过了但 CI 红** → 大概率是 link-time / proc-macro / cfg-flag combos / desktop-client 集成问题，补跑 `cargo build -p <被 CI 报错的 crate>` 复现。
 
+#### 时间优化最佳实践（实战总结）
+
+**针对单轮多文件改动，按"build 一次/检查多次"原则压缩耗时**：
+
+1. **测试合并跑，复用一次编译**：把多 crate 测试用 `-p A -p B` + `-E '组合 expr'` 合并到单次 `cargo nextest run` 调用：
+
+   ```bash
+   # 不要这样（重复 build 两次，10+ 分钟）：
+   cargo nextest run -p ironclaw_safety
+   cargo nextest run -p ironclaw -E 'test(req_p0g_w6)'
+
+   # 这样跑（一次 build 复用，3-5 分钟）：
+   cargo nextest run -p ironclaw_safety -p ironclaw \
+     -E 'test(req_p0g_w6) | test(process_tool_result)'
+   ```
+
+2. **fmt + no_panics 用 `&&` 串**：两者都是秒级，串起来一次拿结果：
+
+   ```bash
+   cargo fmt --all && python3.12 scripts/check_no_panics.py --base origin/xClaw
+   ```
+
+3. **本地 clippy 只跑改动 crate，不要 `--workspace`**：rust toolchain 漂移会触发 untouched crate 的预存 lint 假阳（如 `collapsible-if` / `is_multiple_of`）。**真理来源是 CI clippy job**，本地只确认自己改的文件零警告即可：
+
+   ```bash
+   cargo clippy --no-deps -p <touched-crate> --all-targets -- -D warnings
+   # 如果报错只在 untouched 文件 → 忽略，CI 决定
+   ```
+
+4. **e2e / heavy integration 优先 CI 跑**：本地只在与本轮改动直接相关时跑（如 P0-G/W6 改了 `tool_output_stash` 就要本地跑 `recorded_baseball_stats`）。其它 e2e 让 CI Tests job 兜底。
+
+5. **PR 等 CI 期间利用空档**：CI 跑 Tests/Clippy 加起来 10-25 分钟，这段时间可以并行：开下一个 issue 工作分支、写 ADR、跑 skills 管线（`code-quality-audit` 等）、读相关历史 PR。**禁止 sleep 等 CI**。
+
+6. **regression-test-check 失败 ≠ 真没测试**：CI 的 `git diff '*.rs'` glob 偶尔匹配不到 added `#[test]`。本地 `git diff origin/xClaw...HEAD -U0 -- '*.rs' | grep -E '^\+.*#\[test\]'` 能复现 MATCH 时，加空 commit `[skip-regression-check]` marker 跳过即可。
+
 ### 开发流程（TDD）
 
 新增 Rust 函数/模块/结构体/API 端点时（不含最小 bug 修复）：
