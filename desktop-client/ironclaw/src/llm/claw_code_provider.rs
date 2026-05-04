@@ -17,7 +17,8 @@ use async_trait::async_trait;
 use dasclaw_llm_provider::{
     AnthropicClient, ApiError, AuthSource, InputContentBlock, InputMessage, MessageRequest,
     MessageResponse, OpenAiCompatClient, OpenAiCompatConfig, OutputContentBlock, ProviderClient,
-    ToolChoice as ApiToolChoice, ToolDefinition as ApiToolDefinition, ToolResultContentBlock,
+    SystemBlock, SystemPrompt, ToolChoice as ApiToolChoice, ToolDefinition as ApiToolDefinition,
+    ToolResultContentBlock,
 };
 use rust_decimal::Decimal;
 use secrecy::ExposeSecret;
@@ -108,12 +109,14 @@ pub(crate) fn build_chat_message_request(
     req: &CompletionRequest,
     default_model: &str,
 ) -> MessageRequest {
-    let (system, messages) = split_system_and_messages(&req.messages);
+    let (system_text, messages) = split_system_and_messages(&req.messages);
+    let model = req
+        .model
+        .clone()
+        .unwrap_or_else(|| default_model.to_string());
+    let system = build_system_prompt(system_text, &model);
     MessageRequest {
-        model: req
-            .model
-            .clone()
-            .unwrap_or_else(|| default_model.to_string()),
+        model,
         max_tokens: req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
         messages,
         system,
@@ -134,17 +137,19 @@ pub(crate) fn build_tool_message_request(
     req: &ToolCompletionRequest,
     default_model: &str,
 ) -> MessageRequest {
-    let (system, messages) = split_system_and_messages(&req.messages);
+    let (system_text, messages) = split_system_and_messages(&req.messages);
     let tools = if req.tools.is_empty() {
         None
     } else {
         Some(req.tools.iter().map(map_tool_definition).collect())
     };
+    let model = req
+        .model
+        .clone()
+        .unwrap_or_else(|| default_model.to_string());
+    let system = build_system_prompt(system_text, &model);
     MessageRequest {
-        model: req
-            .model
-            .clone()
-            .unwrap_or_else(|| default_model.to_string()),
+        model,
         max_tokens: req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
         messages,
         system,
@@ -186,6 +191,48 @@ fn split_system_and_messages(messages: &[ChatMessage]) -> (Option<String>, Vec<I
         Some(system_parts.join("\n\n"))
     };
     (system, out)
+}
+
+/// Anthropic prompt cache 边界标注（HTML comment 形态，由 [`crate::llm::prompt::LayeredPromptBuilder`] 注入）。
+///
+/// 与 [`x_claw_agent::PROMPT_CACHE_BOUNDARY`] 保持一致：包裹成 HTML 注释后，
+/// 系统提示词中的边界标记不会被任何下游 markdown / 模型行为意外渲染。
+const CACHE_BOUNDARY_COMMENT: &str = concat!("<!-- ", "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__", " -->");
+
+/// 把合并好的 system 文本根据 protocol 投影到合适的 [`SystemPrompt`] 形态。
+///
+/// - **Anthropic 模型 + 含 [`x_claw_agent::PROMPT_CACHE_BOUNDARY`] 标记**：
+///   切成 `[static_prefix(cache_control=ephemeral), dynamic_suffix]` 两个 [`SystemBlock`]，
+///   让 Anthropic prompt cache 命中静态前缀（identity + tools + safety）；动态后缀
+///   （skills + channel + runtime ctx）每轮变化不进缓存。
+/// - **其它情形**：单段 `SystemPrompt::Text`（OpenAI-compat / 无边界标记 / 空文本）。
+///
+/// 边界检测在请求构造期完成，[`crate::llm::prompt::LayeredPromptBuilder`] 不感知 provider；
+/// 这样 ADR-117 R-1 标记从 *惰性* 变 *实际生效*，并保持 builder 与 provider 解耦。
+fn build_system_prompt(system_text: Option<String>, model: &str) -> Option<SystemPrompt> {
+    let text = system_text?;
+    if text.is_empty() {
+        return None;
+    }
+
+    // 复用 reasoning.rs 中的 Anthropic 检测逻辑（model 名包含 "claude"）。
+    let is_anthropic = model.contains("claude");
+    if !is_anthropic {
+        return Some(SystemPrompt::Text(text));
+    }
+
+    // 找到 HTML 注释形态的边界，整体剔除（不保留注释字面量）。
+    match text.split_once(CACHE_BOUNDARY_COMMENT) {
+        Some((prefix, suffix)) if !prefix.is_empty() => {
+            let mut blocks = vec![SystemBlock::text(prefix).with_ephemeral_cache()];
+            if !suffix.is_empty() {
+                blocks.push(SystemBlock::text(suffix));
+            }
+            Some(SystemPrompt::Blocks(blocks))
+        }
+        // 边界不存在（非 layered 路径）或前缀为空（异常）：回退到单段文本。
+        _ => Some(SystemPrompt::Text(text)),
+    }
 }
 
 fn map_user_message(m: &ChatMessage) -> InputMessage {
@@ -979,7 +1026,10 @@ mod tests {
         let req = CompletionRequest::new(msgs);
         let built = build_chat_message_request(&req, "claude-sonnet-4-6");
 
-        assert_eq!(built.system.as_deref(), Some("be brief"));
+        assert_eq!(
+            built.system.as_ref().map(|s| s.as_text()).as_deref(),
+            Some("be brief")
+        );
         // user, assistant(tool_use), user(tool_result)
         assert_eq!(built.messages.len(), 3);
         assert_eq!(built.messages[0].role, "user");
@@ -1347,5 +1397,121 @@ mod tests {
             !observed.contains("Bearer "),
             "observed error must not echo Bearer tokens"
         );
+    }
+
+    // -------- Anthropic prompt cache 边界切分 (issue #139, ADR-117 R-1) --------
+
+    /// 边界常量必须与 x_claw_agent 源真理一致（HTML comment 包装版本）。
+    #[test]
+    fn cache_boundary_comment_matches_agent_constant() {
+        let expected = format!("<!-- {} -->", x_claw_agent::PROMPT_CACHE_BOUNDARY);
+        assert_eq!(CACHE_BOUNDARY_COMMENT, expected);
+    }
+
+    /// req_llm_anthropic_cache_001：Anthropic 模型 + system 含 prompt cache 边界标记
+    /// → 切成 2 个 SystemBlock，静态前缀挂 `cache_control: {"type":"ephemeral"}`，
+    ///   动态后缀不挂 cache_control。
+    #[test]
+    fn req_llm_anthropic_cache_001_boundary_splits_into_two_blocks() {
+        let static_prefix = "You are an AI assistant.\n\nTools:\n- shell\n- read";
+        let dynamic_suffix = "\n\nCurrent time: 2025-01-15T10:00:00Z";
+        let system_text = format!(
+            "{static_prefix}\n\n{boundary}\n\n{dynamic_suffix}",
+            static_prefix = static_prefix,
+            boundary = CACHE_BOUNDARY_COMMENT,
+            dynamic_suffix = dynamic_suffix.trim_start(),
+        );
+
+        let req = CompletionRequest::new(vec![ChatMessage::system(&system_text), mk_user("hi")]);
+        let built = build_chat_message_request(&req, "claude-sonnet-4-6");
+
+        let blocks = match built.system.expect("system must be present") {
+            SystemPrompt::Blocks(b) => b,
+            other => panic!("expected Blocks form for Anthropic+boundary, got {other:?}"),
+        };
+        assert_eq!(blocks.len(), 2, "must produce exactly 2 system blocks");
+        // 静态前缀块：必须挂 ephemeral cache_control
+        assert_eq!(blocks[0].block_type, "text");
+        assert!(
+            blocks[0].text.contains("You are an AI assistant."),
+            "static block must contain identity prefix; got: {:?}",
+            blocks[0].text
+        );
+        let cc = blocks[0]
+            .cache_control
+            .as_ref()
+            .expect("static block must carry cache_control");
+        assert_eq!(cc.cache_type, "ephemeral");
+        // 动态后缀块：不挂 cache_control
+        assert_eq!(blocks[1].block_type, "text");
+        assert!(
+            blocks[1].text.contains("Current time"),
+            "dynamic block must contain runtime context; got: {:?}",
+            blocks[1].text
+        );
+        assert!(
+            blocks[1].cache_control.is_none(),
+            "dynamic block must NOT carry cache_control"
+        );
+        // 边界 HTML 注释必须被剔除（不在任何块的 text 中残留）
+        for b in &blocks {
+            assert!(
+                !b.text.contains(CACHE_BOUNDARY_COMMENT),
+                "boundary HTML comment must be stripped; leaked in: {:?}",
+                b.text
+            );
+        }
+    }
+
+    /// req_llm_anthropic_cache_002：Anthropic 模型 + system 不含边界标记
+    /// → 单段 `SystemPrompt::Text`，不引入任何 cache_control。
+    ///   并验证：非 Anthropic 模型即便含边界标记也保持单段文本（cache_control 仅 Anthropic 适用）。
+    #[test]
+    fn req_llm_anthropic_cache_002_no_boundary_keeps_text_form() {
+        // case 1：Anthropic 模型 + 无边界标记 → Text 形态
+        let req_a = CompletionRequest::new(vec![
+            ChatMessage::system("plain system prompt without boundary marker"),
+            mk_user("hi"),
+        ]);
+        let built_a = build_chat_message_request(&req_a, "claude-sonnet-4-6");
+        match built_a.system.expect("system present") {
+            SystemPrompt::Text(s) => {
+                assert_eq!(s, "plain system prompt without boundary marker");
+            }
+            other => panic!("expected Text form when no boundary marker; got {other:?}"),
+        }
+
+        // case 2：非 Anthropic 模型 + 含边界标记 → 仍是 Text 形态（cache_control 仅 Anthropic 识别）
+        let with_marker = format!("static\n\n{CACHE_BOUNDARY_COMMENT}\n\ndynamic");
+        let req_b = CompletionRequest::new(vec![ChatMessage::system(&with_marker), mk_user("hi")]);
+        let built_b = build_chat_message_request(&req_b, "gpt-4o");
+        match built_b.system.expect("system present") {
+            SystemPrompt::Text(s) => {
+                assert_eq!(s, with_marker, "non-Anthropic 模型应保留原始 system 文本");
+            }
+            other => panic!("expected Text form for non-Anthropic; got {other:?}"),
+        }
+    }
+
+    /// req_llm_anthropic_cache_002b：边界切分后的 wire JSON 序列化形态匹配 Anthropic API
+    /// （`system` 字段为数组，第一个元素含 `cache_control.type == "ephemeral"`）。
+    #[test]
+    fn req_llm_anthropic_cache_002b_wire_serialization_matches_anthropic_schema() {
+        let system_text = format!("STATIC{boundary}DYNAMIC", boundary = CACHE_BOUNDARY_COMMENT,);
+        let req = CompletionRequest::new(vec![ChatMessage::system(&system_text), mk_user("hi")]);
+        let built = build_chat_message_request(&req, "claude-opus-4-6");
+        let wire = serde_json::to_value(&built).expect("MessageRequest must serialize");
+        let system = wire
+            .get("system")
+            .expect("system field present")
+            .as_array()
+            .expect("system must serialize as array under Blocks form");
+        assert_eq!(system.len(), 2);
+        assert_eq!(system[0]["type"], "text");
+        assert_eq!(system[0]["text"], "STATIC");
+        assert_eq!(system[0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(system[1]["type"], "text");
+        assert_eq!(system[1]["text"], "DYNAMIC");
+        assert!(system[1].get("cache_control").is_none());
     }
 }

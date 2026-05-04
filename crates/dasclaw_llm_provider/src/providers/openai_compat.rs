@@ -426,8 +426,15 @@ pub fn build_chat_completion_request(
     _config: OpenAiCompatConfig,
 ) -> Value {
     let mut messages = Vec::new();
-    if let Some(system) = request.system.as_ref().filter(|value| !value.is_empty()) {
-        messages.push(json!({ "role": "system", "content": system }));
+    // OpenAI-compat 不识别 Anthropic 的 SystemPrompt::Blocks（含 cache_control），通过
+    // SystemPrompt::as_text 投影为单段文本注入第一条 role=system message。
+    if let Some(text) = request
+        .system
+        .as_ref()
+        .map(|sp| sp.as_text())
+        .filter(|s| !s.is_empty())
+    {
+        messages.push(json!({ "role": "system", "content": text }));
     }
     for message in &request.messages {
         messages.extend(translate_message(message));
@@ -1221,7 +1228,7 @@ mod tests {
             model: "gpt-4o".to_string(),
             max_tokens: 16,
             messages: vec![InputMessage::user_text("hi")],
-            system: Some("you are a tester".to_string()),
+            system: Some("you are a tester".into()),
             ..MessageRequest::default()
         };
         let payload = build_chat_completion_request(&request, OpenAiCompatConfig::openai());

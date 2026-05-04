@@ -26,8 +26,14 @@ pub struct MessageRequest {
     pub messages: Vec<InputMessage>,
     /// System prompt。Anthropic 协议是顶层字段，OpenAI-compat 走第一条 `role=system` message
     /// （由 client 实现负责适配，wire 层统一暴露此字段）。
+    ///
+    /// 支持两种形态（[`SystemPrompt`]）：
+    /// - `Text(String)`：单段文本，序列化为 `"system": "..."`（Anthropic / OpenAI-compat 通用）。
+    /// - `Blocks(Vec<SystemBlock>)`：分段文本，序列化为 `"system": [{"type":"text","text":"...","cache_control":...}]`，
+    ///   仅 Anthropic 识别（用于 prompt cache 边界标注）；OpenAI-compat 后端通过 [`SystemPrompt::as_text`]
+    ///   降级为单段文本。
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub system: Option<String>,
+    pub system: Option<SystemPrompt>,
     /// 工具定义。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<ToolDefinition>>,
@@ -64,6 +70,130 @@ impl MessageRequest {
     pub fn with_streaming(mut self) -> Self {
         self.stream = true;
         self
+    }
+}
+
+/// System prompt 字段值。
+///
+/// Anthropic Messages API 的 `system` 字段同时接受字符串与 content-block 数组：
+/// - 字符串形态：`"system": "You are..."`
+/// - 数组形态：`"system": [{"type":"text","text":"...","cache_control":{"type":"ephemeral"}}]`
+///
+/// 通过 `#[serde(untagged)]` 在序列化时自动选择形态。OpenAI-compat 等不支持数组形态的
+/// 后端可调用 [`SystemPrompt::as_text`] 降级为单段文本。
+///
+/// 数组形态用于 Anthropic prompt cache 边界标注（见 `__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__`
+/// 在 ironclaw `LayeredPromptBuilder` 中的注入点）：把 system 切成 *静态前缀 + 动态后缀*，
+/// 在静态前缀块上挂 `cache_control: {"type":"ephemeral"}`，让 Anthropic 缓存命中静态部分。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SystemPrompt {
+    /// 单段纯文本（默认形态，所有后端通用）。
+    Text(String),
+    /// 多段 content blocks（仅 Anthropic 直连使用；OpenAI-compat 通过 [`Self::as_text`] 降级）。
+    Blocks(Vec<SystemBlock>),
+}
+
+impl SystemPrompt {
+    /// 构造单段文本 system prompt。
+    #[must_use]
+    pub fn text(s: impl Into<String>) -> Self {
+        Self::Text(s.into())
+    }
+
+    /// 把当前 system prompt 投影成单段文本：
+    /// - `Text(s)` → `s.clone()`
+    /// - `Blocks(blocks)` → 把每块的 `text` 字段顺序拼接（不插入分隔符，保留原始字面量）
+    #[must_use]
+    pub fn as_text(&self) -> String {
+        match self {
+            Self::Text(s) => s.clone(),
+            Self::Blocks(blocks) => blocks
+                .iter()
+                .map(|b| b.text.as_str())
+                .collect::<Vec<_>>()
+                .concat(),
+        }
+    }
+
+    /// 是否为空（Text 空串 或 Blocks 全为空文本）。
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Text(s) => s.is_empty(),
+            Self::Blocks(blocks) => blocks.iter().all(|b| b.text.is_empty()),
+        }
+    }
+}
+
+impl From<String> for SystemPrompt {
+    fn from(s: String) -> Self {
+        Self::Text(s)
+    }
+}
+
+impl From<&str> for SystemPrompt {
+    fn from(s: &str) -> Self {
+        Self::Text(s.to_string())
+    }
+}
+
+/// Anthropic system content block（仅在 [`SystemPrompt::Blocks`] 中使用）。
+///
+/// 字段对齐 [Anthropic prompt caching 文档](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching)：
+/// `{ "type": "text", "text": "...", "cache_control": { "type": "ephemeral" } }`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SystemBlock {
+    /// Block 类型（当前仅 `"text"`）。
+    #[serde(rename = "type")]
+    pub block_type: String,
+    /// 块文本内容。
+    pub text: String,
+    /// 缓存控制；`Some(CacheControl::ephemeral())` 表示在此块结尾打 prompt cache 断点。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<CacheControl>,
+}
+
+impl SystemBlock {
+    /// 构造一个不含 `cache_control` 的纯文本块。
+    #[must_use]
+    pub fn text(text: impl Into<String>) -> Self {
+        Self {
+            block_type: "text".to_string(),
+            text: text.into(),
+            cache_control: None,
+        }
+    }
+
+    /// 在当前块上附加 `cache_control: {"type":"ephemeral"}` 并返回自身。
+    #[must_use]
+    pub fn with_ephemeral_cache(mut self) -> Self {
+        self.cache_control = Some(CacheControl::ephemeral());
+        self
+    }
+}
+
+/// Anthropic `cache_control` 标记。
+///
+/// 当前仅支持 `{"type": "ephemeral"}`（5 分钟默认 TTL）。`ttl` 字段保留供未来扩展（如 1 小时 beta）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CacheControl {
+    /// `"ephemeral"`。
+    #[serde(rename = "type")]
+    pub cache_type: String,
+    /// 可选 TTL（如 `"5m"` / `"1h"`）；None 时 Anthropic 应用默认 5 分钟。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<String>,
+}
+
+impl CacheControl {
+    /// 构造 `{"type": "ephemeral"}`（默认 5 分钟 TTL）。
+    #[must_use]
+    pub fn ephemeral() -> Self {
+        Self {
+            cache_type: "ephemeral".to_string(),
+            ttl: None,
+        }
     }
 }
 
