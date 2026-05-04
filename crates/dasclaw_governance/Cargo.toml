@@ -24,6 +24,7 @@ green_contract = ["dep:serde"]
 lane_events = ["dep:serde", "dep:serde_json"]
 team_cron_registry = ["dep:serde", "dep:serde_json"]
 task_packet = ["dep:serde", "dep:serde_json"]
+task_registry = ["dep:serde", "dep:serde_json", "task_packet"]
 # Convenience: enable the full 6-pack + task lifecycle at once (used by integration tests).
 full = [
     "policy_engine",
@@ -36,6 +37,7 @@ full = [
     "lane_events",
     "team_cron_registry",
     "task_packet",
+    "task_registry",
 ]
 
 [dependencies]

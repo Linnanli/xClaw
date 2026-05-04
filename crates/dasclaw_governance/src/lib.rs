@@ -72,6 +72,9 @@ pub mod team_cron_registry;
 #[cfg(feature = "task_packet")]
 pub mod task_packet;
 
+#[cfg(feature = "task_registry")]
+pub mod task_registry;
+
 #[cfg(test)]
 mod tests {
     #[test]
