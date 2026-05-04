@@ -15,7 +15,7 @@ path = "src/lib.rs"
 # its `pub mod` declaration. Implementations land in #65-#71.
 default = []
 policy_engine = []
-recovery_recipes = []
+recovery_recipes = ["dep:serde"]
 trust_resolver = []
 branch_lock = ["dep:serde"]
 stale_base = []
