@@ -43,6 +43,15 @@ ignore = [
     "RUSTSEC-2026-0095",
     "RUSTSEC-2026-0096",
     "RUSTSEC-2026-0104",
+
+    # rsa crate Marvin Attack timing sidechannel (RUSTSEC-2023-0071) — pulled
+    # in by jsonwebtoken 10.x's `rust_crypto` backend. ironclaw_auth ONLY uses
+    # HS256 with a shared secret (see crates/ironclaw_auth/src/jwt.rs); no RSA
+    # code path is ever invoked. The vulnerability requires the attacker to
+    # observe RSA decryption timing — irrelevant when no RSA primitive runs.
+    # No safe upgrade is available upstream; remove this ignore once the rsa
+    # crate ships a constant-time release. Tracked under #190.
+    "RUSTSEC-2023-0071",
 ]
 
 [licenses]
