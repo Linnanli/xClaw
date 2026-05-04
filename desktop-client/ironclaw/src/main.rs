@@ -36,6 +36,23 @@ use ironclaw::setup::{SetupConfig, SetupWizard};
 /// Synchronous entry point. Loads `.env` files before the Tokio runtime
 /// starts so that `std::env::set_var` is safe (no worker threads yet).
 fn main() -> anyhow::Result<()> {
+    // ADR-114 Ⅴ — same `src/main.rs` is compiled into two binaries:
+    // `dasclaw` (canonical) and `ironclaw` (legacy compatibility shim).
+    // When invoked through the legacy name, emit a single deprecation
+    // warning to stderr before continuing with the normal startup flow.
+    // We inspect argv[0] (`current_exe()`) instead of a compile-time flag
+    // so that one source file backs both `[[bin]]` entries — keeping the
+    // entry point logic single-sourced (no patch-style duplication).
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(stem) = exe.file_stem().and_then(|s| s.to_str())
+        && stem.eq_ignore_ascii_case("ironclaw")
+    {
+        eprintln!(
+            "warning: the `ironclaw` binary is deprecated and will be removed in a future \
+             release; use `dasclaw` instead. (ADR-114 Ⅴ — Cargo package + binary rename)"
+        );
+    }
+
     let _ = dotenvy::dotenv();
     ironclaw::bootstrap::load_ironclaw_env();
 

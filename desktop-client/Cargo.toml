@@ -41,8 +41,10 @@ open = "5"
 ironclaw_safety = { path = "./ironclaw/crates/ironclaw_safety" }
 dasclaw_sandbox = { path = "../crates/dasclaw_sandbox" }
 
-# IronClaw embedded server
-ironclaw = { path = "./ironclaw", features = ["libsql"] }
+# IronClaw embedded server (ADR-114 Ⅴ: package was renamed to `dasclaw`,
+# alias the extern name back to `ironclaw` so all `use ironclaw::` imports
+# in this crate keep resolving.)
+ironclaw = { path = "./ironclaw", features = ["libsql"], package = "dasclaw" }
 
 # HTTP client for API calls
 reqwest = { version = "0.11", features = ["json", "stream"] }

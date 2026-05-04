@@ -1,5 +1,5 @@
 [package]
-name = "ironclaw"
+name = "dasclaw"
 version = "0.24.0"
 edition = "2024"
 rust-version = "1.92"
@@ -8,12 +8,39 @@ authors = ["NEAR AI <support@near.ai>"]
 license = "MIT OR Apache-2.0"
 homepage = "https://github.com/nearai/ironclaw"
 repository = "https://github.com/nearai/ironclaw"
+# ADR-114 Ⅴ — invoke the canonical `dasclaw` binary by default. The legacy
+# `ironclaw` binary is kept as a deprecation shim that prints a warning and
+# then runs the same code path; see `[[bin]]` blocks below and the argv[0]
+# branch at the top of `fn main()` in `src/main.rs`.
+default-run = "dasclaw"
 
 [package.metadata.wix]
 upgrade-guid = "D0156E61-BA37-451E-8AB9-1A2ECCCFA48F"
 path-guid = "F90B6EA6-87F7-499B-BB19-CF55DE1EB339"
 license = false
 eula = false
+
+# ADR-114 Ⅴ — keep the Rust library crate name as `ironclaw` so every
+# `use ironclaw::...` import inside the workspace (including the 200+ test
+# files in this crate plus all downstream consumers in `desktop-client/`)
+# continues to resolve without source changes. Only the *package* name and
+# the *binary* name move to `dasclaw`; symbol-level references stay put.
+[lib]
+name = "ironclaw"
+path = "src/lib.rs"
+
+# ADR-114 Ⅴ — canonical entry point.
+[[bin]]
+name = "dasclaw"
+path = "src/main.rs"
+
+# ADR-114 Ⅴ — legacy entry point retained for one release cycle as a
+# compatibility alias. The same `src/main.rs` is compiled twice; the
+# binary detects argv[0] == "ironclaw" and emits a single deprecation
+# warning to stderr before delegating to the normal startup flow.
+[[bin]]
+name = "ironclaw"
+path = "src/main.rs"
 
 [dependencies]
 # Async runtime
@@ -208,7 +235,11 @@ windows = { version = "0.58", features = [
 ] }
 
 [dev-dependencies]
-ironclaw = { path = ".", features = ["test-support"] }
+# ADR-114 Ⅴ — the package is now `dasclaw` but every `use ironclaw::` in
+# this crate's tests resolves through the extern-name `ironclaw`, which is
+# achieved by aliasing the dev-dep entry: extern name `ironclaw` → package
+# `dasclaw`.
+ironclaw = { path = ".", features = ["test-support"], package = "dasclaw" }
 tokio-test = "0.4"
 tracing-test = "0.2"
 testcontainers-modules = { version = "0.11", features = ["postgres"] }
