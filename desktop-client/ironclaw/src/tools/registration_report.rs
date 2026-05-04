@@ -45,10 +45,19 @@ pub enum ToolSource {
     /// Includes all built-in groups (echo/time/json/http, dev tools, memory,
     /// job, message, extension/skill/routine/image/vision/secrets, tool_info).
     Builtin,
+    /// Dynamic registration whose canonical name uses the
+    /// `mcp.<server>.<tool>` namespace (issue #87).
+    Mcp,
+    /// Dynamic registration whose canonical name uses the
+    /// `wasm.<package>.<tool>` namespace (issue #87).
+    Wasm,
+    /// Dynamic registration whose canonical name uses the
+    /// `ext.<slug>.<tool>` namespace (issue #87).
+    Extension,
     /// Registered through the dynamic async path
-    /// ([`crate::tools::registry::ToolRegistry::register`]). Today this
-    /// covers WASM tools, the software-builder tool, and any other
-    /// programmatically-added tool.
+    /// ([`crate::tools::registry::ToolRegistry::register`]) without a
+    /// reserved namespace prefix. Kept for backwards compatibility while
+    /// existing call-sites migrate to `mcp.*` / `wasm.*` / `ext.*`.
     Dynamic,
 }
 
@@ -57,6 +66,9 @@ impl ToolSource {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Builtin => "builtin",
+            Self::Mcp => "mcp",
+            Self::Wasm => "wasm",
+            Self::Extension => "extension",
             Self::Dynamic => "dynamic",
         }
     }
@@ -76,6 +88,10 @@ pub enum RejectionReason {
     /// registration is dropped to keep security-critical tools (`shell`,
     /// `memory_write`, …) un-shadowable.
     ProtectedBuiltinShadow,
+    /// A dynamic tool tried to register under a canonical name that another
+    /// dynamic tool already owns (issue #87). The newer registration is
+    /// dropped — silent overwrite would corrupt audit / policy identity.
+    CanonicalNameCollision,
 }
 
 impl RejectionReason {
@@ -83,6 +99,7 @@ impl RejectionReason {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::ProtectedBuiltinShadow => "protected_builtin_shadow",
+            Self::CanonicalNameCollision => "canonical_name_collision",
         }
     }
 }

@@ -26,6 +26,7 @@ use crate::tools::builtin::{
     SubAgentTool, TimeTool, ToolActivateTool, ToolAuthTool, ToolInstallTool, ToolListTool,
     ToolRemoveTool, ToolSearchTool, ToolUpgradeTool, WebFetchTool, WebSearchTool, WriteFileTool,
 };
+use crate::tools::canonical_name::{CanonicalKind, CanonicalToolName};
 use crate::tools::rate_limiter::RateLimiter;
 use crate::tools::registration_report::{
     RegistrationOutcome, RejectionReason, ToolRegistrationEntry, ToolRegistrationReport, ToolSource,
@@ -94,6 +95,22 @@ const PROTECTED_TOOL_NAMES: &[&str] = &[
     "git_push",
     "lsp_query",
 ];
+
+/// Map a parsed canonical name kind to the report-facing source bucket.
+/// Centralised so the `register()` flow and any future caller agree on the
+/// classification.
+fn canonical_kind_to_source(kind: CanonicalKind) -> ToolSource {
+    match kind {
+        // `register_sync` is the only path that produces `Builtin` entries;
+        // if a dynamic registration somehow hints `Builtin` (shouldn't
+        // happen because `parse(_, false)` never returns Builtin), fall
+        // back to the safe-by-default `Dynamic` bucket.
+        CanonicalKind::Builtin | CanonicalKind::LegacyDynamic => ToolSource::Dynamic,
+        CanonicalKind::Mcp => ToolSource::Mcp,
+        CanonicalKind::Wasm => ToolSource::Wasm,
+        CanonicalKind::Extension => ToolSource::Extension,
+    }
+}
 
 /// Registry of available tools.
 pub struct ToolRegistry {
@@ -169,14 +186,21 @@ impl ToolRegistry {
         &self.rate_limiter
     }
 
-    /// Register a tool. Rejects dynamic tools that try to shadow a protected built-in name.
+    /// Register a tool. Rejects dynamic tools that try to shadow a protected
+    /// built-in name, or that collide with an already-registered canonical
+    /// name (issue #87 dynamic-vs-dynamic).
     pub async fn register(&self, tool: Arc<dyn Tool>) {
         let name = tool.name().to_string();
+        let canonical = CanonicalToolName::parse(&name, false);
+        let source = canonical_kind_to_source(canonical.kind());
+
+        // 1. Reject shadowing of protected built-ins.
         if PROTECTED_TOOL_NAMES.contains(&name.as_str())
             && self.builtin_names.read().await.contains(&name)
         {
             tracing::warn!(
                 tool = %name,
+                source = %source.as_str(),
                 "Rejected tool registration: would shadow a built-in tool"
             );
             self.registration_log
@@ -184,23 +208,48 @@ impl ToolRegistry {
                 .await
                 .push(ToolRegistrationEntry {
                     name,
-                    source: ToolSource::Dynamic,
+                    source,
                     outcome: RegistrationOutcome::Rejected {
                         reason: RejectionReason::ProtectedBuiltinShadow,
                     },
                 });
             return;
         }
+
+        // 2. Reject dynamic-vs-dynamic canonical-name collisions.
+        // Silent overwrite would corrupt audit and policy identity, since
+        // both pre-existing and incoming registrations claim the same
+        // canonical name. The first writer wins; later attempts are logged.
+        if self.tools.read().await.contains_key(&name) {
+            tracing::warn!(
+                tool = %name,
+                source = %source.as_str(),
+                canonical_kind = %canonical.kind().as_str(),
+                "Rejected tool registration: canonical name already registered"
+            );
+            self.registration_log
+                .write()
+                .await
+                .push(ToolRegistrationEntry {
+                    name,
+                    source,
+                    outcome: RegistrationOutcome::Rejected {
+                        reason: RejectionReason::CanonicalNameCollision,
+                    },
+                });
+            return;
+        }
+
         self.tools.write().await.insert(name.clone(), tool);
         self.registration_log
             .write()
             .await
             .push(ToolRegistrationEntry {
                 name: name.clone(),
-                source: ToolSource::Dynamic,
+                source,
                 outcome: RegistrationOutcome::Accepted,
             });
-        tracing::trace!("Registered tool: {}", name);
+        tracing::trace!(canonical_kind = %canonical.kind().as_str(), "Registered tool: {}", name);
     }
 
     /// Register a tool (sync version for startup, marks as built-in).
@@ -1843,5 +1892,177 @@ mod tests {
                 "registration report leaked '{forbidden}' in JSON: {json}"
             );
         }
+    }
+
+    // ── issue #87: dynamic tool namespace + canonical-name collisions ───
+
+    /// Minimal test double to drive `register()` without standing up a full
+    /// MCP/WASM stack. Only `name()` is meaningful for namespace tests.
+    struct StubTool {
+        name: String,
+    }
+
+    #[async_trait::async_trait]
+    impl Tool for StubTool {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn description(&self) -> &str {
+            "stub"
+        }
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        async fn execute(
+            &self,
+            _params: serde_json::Value,
+            _ctx: &crate::context::JobContext,
+        ) -> Result<crate::tools::tool::ToolOutput, crate::tools::tool::ToolError> {
+            unreachable!("not invoked in namespace tests")
+        }
+    }
+
+    fn stub(name: &str) -> Arc<dyn Tool> {
+        Arc::new(StubTool {
+            name: name.to_string(),
+        })
+    }
+
+    #[tokio::test]
+    async fn req_87_canonical_source_buckets_classified_in_report() {
+        let registry = Arc::new(ToolRegistry::new());
+        registry.register(stub("mcp.github.create_issue")).await;
+        registry.register(stub("wasm.acme.lint")).await;
+        registry.register(stub("ext.acme-suite.formatter")).await;
+        registry.register(stub("legacy_no_prefix")).await;
+
+        let report = registry.registration_report(None).await;
+
+        assert_eq!(
+            report.accepted.get("mcp").map(|v| v.as_slice()),
+            Some(["mcp.github.create_issue".to_string()].as_slice()),
+            "mcp.* must classify into the `mcp` bucket"
+        );
+        assert_eq!(
+            report.accepted.get("wasm").map(|v| v.as_slice()),
+            Some(["wasm.acme.lint".to_string()].as_slice()),
+            "wasm.* must classify into the `wasm` bucket"
+        );
+        assert_eq!(
+            report.accepted.get("extension").map(|v| v.as_slice()),
+            Some(["ext.acme-suite.formatter".to_string()].as_slice()),
+            "ext.* must classify into the `extension` bucket"
+        );
+        assert_eq!(
+            report.accepted.get("dynamic").map(|v| v.as_slice()),
+            Some(["legacy_no_prefix".to_string()].as_slice()),
+            "names without a reserved prefix stay in the legacy `dynamic` bucket"
+        );
+    }
+
+    #[tokio::test]
+    async fn req_87_dynamic_mcp_collision_rejected_first_writer_wins() {
+        let registry = Arc::new(ToolRegistry::new());
+        registry.register(stub("mcp.github.create_issue")).await;
+        // Second registration under the same canonical name — must be
+        // dropped, not silently overwrite the first.
+        registry.register(stub("mcp.github.create_issue")).await;
+
+        let report = registry.registration_report(None).await;
+
+        assert_eq!(
+            report.accepted.get("mcp").map(|v| v.len()).unwrap_or(0),
+            1,
+            "only the first MCP registration may live in the registry"
+        );
+        assert_eq!(report.rejected.len(), 1, "second attempt must be rejected");
+        let r = &report.rejected[0];
+        assert_eq!(r.name, "mcp.github.create_issue");
+        assert_eq!(r.source, super::ToolSource::Mcp);
+        assert_eq!(r.reason, super::RejectionReason::CanonicalNameCollision);
+        assert_eq!(r.reason.as_str(), "canonical_name_collision");
+    }
+
+    #[tokio::test]
+    async fn req_87_dynamic_wasm_vs_wasm_collision_rejected() {
+        let registry = Arc::new(ToolRegistry::new());
+        registry.register(stub("wasm.acme.lint")).await;
+        registry.register(stub("wasm.acme.lint")).await;
+
+        let report = registry.registration_report(None).await;
+
+        assert_eq!(report.rejected.len(), 1);
+        assert_eq!(report.rejected[0].source, super::ToolSource::Wasm);
+        assert_eq!(
+            report.rejected[0].reason,
+            super::RejectionReason::CanonicalNameCollision
+        );
+    }
+
+    #[tokio::test]
+    async fn req_87_dynamic_legacy_collision_also_rejected() {
+        // Legacy (un-prefixed) dynamic registrations must follow the same
+        // first-writer-wins rule; otherwise canonical-name uniqueness is
+        // not actually a registry invariant.
+        let registry = Arc::new(ToolRegistry::new());
+        registry.register(stub("legacy_tool")).await;
+        registry.register(stub("legacy_tool")).await;
+
+        let report = registry.registration_report(None).await;
+
+        assert_eq!(report.rejected.len(), 1);
+        assert_eq!(report.rejected[0].source, super::ToolSource::Dynamic);
+        assert_eq!(
+            report.rejected[0].reason,
+            super::RejectionReason::CanonicalNameCollision
+        );
+    }
+
+    #[tokio::test]
+    async fn req_87_cross_namespace_names_do_not_collide() {
+        // `mcp.foo.bar` and `wasm.foo.bar` are distinct canonical names; both
+        // must register successfully and surface in their own buckets.
+        let registry = Arc::new(ToolRegistry::new());
+        registry.register(stub("mcp.foo.bar")).await;
+        registry.register(stub("wasm.foo.bar")).await;
+
+        let report = registry.registration_report(None).await;
+
+        assert!(report.rejected.is_empty(), "no collision across namespaces");
+        assert_eq!(report.accepted_count(), 2);
+        assert!(
+            report
+                .accepted
+                .get("mcp")
+                .is_some_and(|v| v.contains(&"mcp.foo.bar".to_string()))
+        );
+        assert!(
+            report
+                .accepted
+                .get("wasm")
+                .is_some_and(|v| v.contains(&"wasm.foo.bar".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn req_87_protected_shadow_takes_precedence_over_collision_check() {
+        // If a dynamic tool tries to register under a built-in's bare name,
+        // the rejection reason must be `protected_builtin_shadow`, not the
+        // generic `canonical_name_collision`. Audit/policy needs the more
+        // specific signal to flag intentional shadow attempts.
+        let registry = Arc::new(ToolRegistry::new());
+        registry
+            .bootstrap_tools(&BootstrapContext::for_test())
+            .await
+            .unwrap();
+        registry.register(stub("echo")).await;
+
+        let report = registry.registration_report(None).await;
+        assert_eq!(report.rejected.len(), 1);
+        assert_eq!(
+            report.rejected[0].reason,
+            super::RejectionReason::ProtectedBuiltinShadow,
+            "protected-shadow must win over generic collision"
+        );
     }
 }

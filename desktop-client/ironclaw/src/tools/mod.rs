@@ -20,10 +20,15 @@ pub mod redaction;
 pub mod schema_validator;
 pub mod wasm;
 
+mod canonical_name;
 mod registration_report;
 mod registry;
 mod tool;
 
+pub use canonical_name::{
+    CanonicalKind, CanonicalToolName, NAMESPACE_PREFIX_EXTENSION, NAMESPACE_PREFIX_MCP,
+    NAMESPACE_PREFIX_WASM,
+};
 pub use registration_report::{
     RegistrationOutcome, RejectedToolEntry, RejectionReason, ToolRegistrationEntry,
     ToolRegistrationReport, ToolSource,
