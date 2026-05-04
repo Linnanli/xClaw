@@ -175,11 +175,14 @@ pub fn process_tool_result(
         Ok(output) => Cow::Borrowed(output.as_str()),
         Err(e) => Cow::Owned(format!("Tool '{}' failed: {}", tool_name, e)),
     };
-    // One redaction pass feeds both the LLM-facing (truncated) `display`
-    // and the stash (`stash_content`). Stash MUST stay untruncated so the
-    // `json` tool can still parse the full payload via `source_tool_call_id`.
-    let stash_content = safety.sanitize_for_stash(tool_name, &raw_content).content;
-    let display = safety.sanitize_tool_output(tool_name, &raw_content).content;
+    // Run redaction exactly once, then derive both channels from it:
+    //   * stash_content — untruncated, for `tool_output_stash` so the `json`
+    //     tool can re-query the full payload via `source_tool_call_id`.
+    //   * display       — same redacted body, then capped at
+    //     `max_output_length` for previews / LLM context.
+    let redacted = safety.sanitize_for_stash(tool_name, &raw_content);
+    let stash_content = redacted.content.clone();
+    let display = safety.cap_for_llm(tool_name, redacted).content;
     let llm_content = safety.wrap_for_llm(tool_name, &display);
     let message = ChatMessage::tool_result(tool_call_id, tool_name, llm_content.clone());
     SanitizedToolResult {
