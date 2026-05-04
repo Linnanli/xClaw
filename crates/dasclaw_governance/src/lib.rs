@@ -66,6 +66,9 @@ pub mod green_contract;
 #[cfg(feature = "lane_events")]
 pub mod lane_events;
 
+#[cfg(feature = "team_cron_registry")]
+pub mod team_cron_registry;
+
 #[cfg(test)]
 mod tests {
     #[test]

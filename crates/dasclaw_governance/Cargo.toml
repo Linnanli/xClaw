@@ -22,6 +22,7 @@ stale_base = []
 stale_branch = []
 green_contract = ["dep:serde"]
 lane_events = ["dep:serde", "dep:serde_json"]
+team_cron_registry = ["dep:serde", "dep:serde_json"]
 # Convenience: enable the full 6-pack at once (used by integration tests).
 full = [
     "policy_engine",
@@ -32,6 +33,7 @@ full = [
     "stale_branch",
     "green_contract",
     "lane_events",
+    "team_cron_registry",
 ]
 
 [dependencies]
