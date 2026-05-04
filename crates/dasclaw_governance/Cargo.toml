@@ -20,7 +20,7 @@ trust_resolver = []
 branch_lock = ["dep:serde"]
 stale_base = []
 stale_branch = []
-green_contract = []
+green_contract = ["dep:serde"]
 lane_events = []
 # Convenience: enable the full 6-pack at once (used by integration tests).
 full = [
