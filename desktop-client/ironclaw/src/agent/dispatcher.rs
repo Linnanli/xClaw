@@ -1091,15 +1091,19 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
                         deferred_auth = Some(instructions);
                     }
 
-                    // Stash sanitized output so subsequent tools that reference
-                    // it (e.g. via the `json` tool's `source_tool_call_id`) see
-                    // the same redacted text the LLM saw.
+                    // Stash the sanitized **untruncated** output so subsequent
+                    // tools that reference it (e.g. the `json` tool via
+                    // `source_tool_call_id`) can still parse the complete
+                    // structured payload after the LLM-facing copy has been
+                    // capped at `max_output_length`. `stash_content` shares
+                    // the same redaction pass as `display`, so no raw
+                    // secrets leak through this path.
                     if !is_tool_error {
                         self.job_ctx
                             .tool_output_stash
                             .write()
                             .await
-                            .insert(tc.id.clone(), sanitized.display.clone());
+                            .insert(tc.id.clone(), sanitized.stash_content.clone());
                     }
 
                     let result_content = sanitized.display;

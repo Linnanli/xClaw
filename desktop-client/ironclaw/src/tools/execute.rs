@@ -137,10 +137,17 @@ pub async fn execute_tool_with_safety(
 /// See P0-G/W6 (issue #93) for the rationale.
 #[derive(Debug, Clone)]
 pub struct SanitizedToolResult {
-    /// Sanitized text **without** the `<tool_output>` LLM wrapper. Use this
-    /// for UI preview (`StatusUpdate::ToolResult.preview`), channel relay,
-    /// `tool_output_stash`, and thread-level audit records.
+    /// Sanitized **and length-capped** text without the `<tool_output>` LLM
+    /// wrapper. Use this for UI preview (`StatusUpdate::ToolResult.preview`),
+    /// channel relay, and thread-level audit records — anywhere a bounded
+    /// human-/LLM-readable rendition is wanted.
     pub display: String,
+    /// Sanitized text **without truncation**. Use this for the
+    /// `tool_output_stash` so the `json` tool (queried via
+    /// `source_tool_call_id`) can still parse the full structured payload
+    /// after the LLM-facing copy has been capped at `max_output_length`.
+    /// Carries no raw secrets (same redaction pass as `display`).
+    pub stash_content: String,
     /// Sanitized text **with** the `<tool_output>` wrapper, exactly as embedded
     /// in [`SanitizedToolResult::message`]. Use only when you need the raw
     /// LLM-bound payload (e.g. assertions in tests).
@@ -168,12 +175,16 @@ pub fn process_tool_result(
         Ok(output) => Cow::Borrowed(output.as_str()),
         Err(e) => Cow::Owned(format!("Tool '{}' failed: {}", tool_name, e)),
     };
-    let sanitized = safety.sanitize_tool_output(tool_name, &raw_content);
-    let display = sanitized.content;
+    // One redaction pass feeds both the LLM-facing (truncated) `display`
+    // and the stash (`stash_content`). Stash MUST stay untruncated so the
+    // `json` tool can still parse the full payload via `source_tool_call_id`.
+    let stash_content = safety.sanitize_for_stash(tool_name, &raw_content).content;
+    let display = safety.sanitize_tool_output(tool_name, &raw_content).content;
     let llm_content = safety.wrap_for_llm(tool_name, &display);
     let message = ChatMessage::tool_result(tool_call_id, tool_name, llm_content.clone());
     SanitizedToolResult {
         display,
+        stash_content,
         llm_content,
         message,
     }
@@ -584,6 +595,74 @@ mod tests {
             !sanitized.llm_content.contains(&leaked),
             "LLM content must not contain the raw secret-bearing string: {}",
             sanitized.llm_content
+        );
+    }
+
+    /// req_p0g_w6_stash_keeps_full_redacted_content — P0-G/W6 regression for #176.
+    ///
+    /// `stash_content` feeds the `json` tool via `source_tool_call_id`. It
+    /// MUST stay untruncated even when the LLM-facing `display` is capped at
+    /// `max_output_length`, otherwise downstream `json` queries fail with
+    /// "invalid JSON input" on tail bytes that never made it into the stash.
+    /// Both fields share one redaction pass so neither leaks raw secrets.
+    #[test]
+    fn req_p0g_w6_stash_keeps_full_redacted_content() {
+        let safety = SafetyLayer::new(&crate::config::SafetyConfig {
+            max_output_length: 100,
+            injection_check_enabled: false,
+        });
+        // Build a payload larger than the cap. Embed a bearer token (Redact
+        // action, not Block) so we can verify redaction still applies to
+        // BOTH `display` and `stash_content` while neither is dropped.
+        let head = "{\"items\":[\"Authorization: ";
+        let token = format!("Bearer {}", "a".repeat(40));
+        let filler: String = std::iter::repeat('x').take(500).collect();
+        let raw = format!("{}{}\",\"{}\"]}}", head, token, filler);
+        assert!(raw.len() > 100, "test payload must exceed cap");
+
+        let result: Result<String, String> = Ok(raw.clone());
+        let sanitized = process_tool_result(&safety, "shell", "call_baseball_http_01", &result);
+
+        // 1. Display gets truncated + carries the truncation notice.
+        assert!(
+            sanitized.display.contains("truncated: showing"),
+            "display should carry truncation notice when over cap: {}",
+            sanitized.display
+        );
+
+        // 2. Stash is NOT truncated — it must include trailing bytes that
+        //    fall past the LLM cap, so the `json` tool can re-parse the
+        //    full structured payload.
+        assert!(
+            !sanitized.stash_content.contains("truncated: showing"),
+            "stash must not carry the truncation notice: {}",
+            sanitized.stash_content
+        );
+        assert!(
+            sanitized.stash_content.ends_with("]}"),
+            "stash must include the trailing JSON bytes that fall past the cap: …{}",
+            &sanitized.stash_content[sanitized.stash_content.len().saturating_sub(80)..]
+        );
+        assert!(
+            sanitized.stash_content.len() > sanitized.display.len(),
+            "stash must be longer than truncated display (stash={}, display={})",
+            sanitized.stash_content.len(),
+            sanitized.display.len()
+        );
+
+        // 3. Redaction still applies to both — neither path leaks the raw secret.
+        assert!(
+            !sanitized.display.contains(&token),
+            "display must redact the bearer token"
+        );
+        assert!(
+            !sanitized.stash_content.contains(&token),
+            "stash must redact the bearer token (same pass as display)"
+        );
+        assert!(
+            sanitized.stash_content.contains("[REDACTED]"),
+            "stash should carry the redaction marker: {}",
+            sanitized.stash_content
         );
     }
 }
