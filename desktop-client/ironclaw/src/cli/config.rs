@@ -240,7 +240,7 @@ fn show_path(has_db: bool) -> anyhow::Result<()> {
     }
     println!(
         "Env config:         {}",
-        crate::bootstrap::ironclaw_env_path().display()
+        crate::bootstrap::dasclaw_env_path().display()
     );
 
     let toml_path = Settings::default_toml_path();

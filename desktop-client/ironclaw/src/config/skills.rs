@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::bootstrap::ironclaw_base_dir;
+use crate::bootstrap::dasclaw_base_dir;
 use crate::config::helpers::{optional_env, parse_bool_env, parse_optional_env};
 use crate::error::ConfigError;
 
@@ -39,12 +39,12 @@ impl Default for SkillsConfig {
 
 /// Get the default user skills directory (~/.ironclaw/skills/).
 fn default_skills_dir() -> PathBuf {
-    ironclaw_base_dir().join("skills")
+    dasclaw_base_dir().join("skills")
 }
 
 /// Get the default installed skills directory (~/.ironclaw/installed_skills/).
 fn default_installed_skills_dir() -> PathBuf {
-    ironclaw_base_dir().join("installed_skills")
+    dasclaw_base_dir().join("installed_skills")
 }
 
 impl SkillsConfig {

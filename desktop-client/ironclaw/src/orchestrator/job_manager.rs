@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use crate::bootstrap::ironclaw_base_dir;
+use crate::bootstrap::dasclaw_base_dir;
 use crate::error::OrchestratorError;
 use crate::orchestrator::auth::{CredentialGrant, TokenStore};
 use crate::sandbox::connect_docker;
@@ -188,7 +188,7 @@ fn validate_bind_mount_path(
             ),
         })?;
 
-    let projects_base = ironclaw_base_dir().join("projects");
+    let projects_base = dasclaw_base_dir().join("projects");
 
     if !projects_base.is_absolute() {
         return Err(OrchestratorError::ContainerCreationFailed {
@@ -667,7 +667,7 @@ mod tests {
 
     #[test]
     fn test_validate_bind_mount_valid_path() {
-        let base = crate::bootstrap::compute_ironclaw_base_dir().join("projects");
+        let base = crate::bootstrap::compute_base_dir().join("projects");
         std::fs::create_dir_all(&base).unwrap();
 
         let test_dir = base.join("test_validate_bind");

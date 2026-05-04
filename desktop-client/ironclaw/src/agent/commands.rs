@@ -990,7 +990,7 @@ impl Agent {
             let model_env = registry.model_env_var(&backend);
             let env_var_prefix = format!("{}=", model_env);
 
-            let env_path = crate::bootstrap::ironclaw_env_path();
+            let env_path = crate::bootstrap::dasclaw_env_path();
             let env_has_var = std::fs::read_to_string(&env_path)
                 .ok()
                 .is_some_and(|content| {

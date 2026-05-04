@@ -337,7 +337,7 @@ impl ProviderRegistry {
 }
 
 fn user_providers_path() -> Option<std::path::PathBuf> {
-    Some(crate::bootstrap::ironclaw_base_dir().join("providers.json"))
+    Some(crate::bootstrap::dasclaw_base_dir().join("providers.json"))
 }
 
 #[cfg(test)]

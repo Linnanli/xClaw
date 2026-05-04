@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use secrecy::{ExposeSecret, SecretString};
 
-use crate::bootstrap::ironclaw_base_dir;
+use crate::bootstrap::dasclaw_base_dir;
 use crate::config::helpers::{optional_env, parse_optional_env};
 use crate::error::ConfigError;
 
@@ -226,7 +226,7 @@ impl SslMode {
 
 /// Default libSQL database path (~/.ironclaw/ironclaw.db).
 pub fn default_libsql_path() -> PathBuf {
-    ironclaw_base_dir().join("ironclaw.db")
+    dasclaw_base_dir().join("ironclaw.db")
 }
 
 #[cfg(test)]

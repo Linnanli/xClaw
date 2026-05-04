@@ -30,7 +30,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::bootstrap::ironclaw_base_dir;
+use crate::bootstrap::dasclaw_base_dir;
 use crate::workspace::Workspace;
 
 /// Global guard preventing concurrent hygiene passes.
@@ -84,7 +84,7 @@ impl Default for HygieneConfig {
             daily_retention_days: 30,
             conversation_retention_days: 7,
             cadence_hours: 12,
-            state_dir: ironclaw_base_dir(),
+            state_dir: dasclaw_base_dir(),
         }
     }
 }

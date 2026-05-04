@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 
-use crate::bootstrap::ironclaw_base_dir;
+use crate::bootstrap::dasclaw_base_dir;
 use crate::channels::{ChannelManager, OutgoingResponse};
 use crate::context::JobContext;
 use crate::extensions::ExtensionManager;
@@ -30,7 +30,7 @@ pub struct MessageTool {
 
 impl MessageTool {
     pub fn new(channel_manager: Arc<ChannelManager>) -> Self {
-        let base_dir = ironclaw_base_dir();
+        let base_dir = dasclaw_base_dir();
 
         Self {
             channel_manager,

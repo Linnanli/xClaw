@@ -15,7 +15,7 @@ use chrono::Utc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use crate::bootstrap::ironclaw_base_dir;
+use crate::bootstrap::dasclaw_base_dir;
 use crate::channels::IncomingMessage;
 use crate::context::{ContextManager, JobContext, JobState};
 use crate::db::Database;
@@ -740,7 +740,7 @@ fn validate_env_var_name(name: &str) -> Result<(), ToolError> {
 }
 
 fn projects_base() -> PathBuf {
-    ironclaw_base_dir().join("projects")
+    dasclaw_base_dir().join("projects")
 }
 
 /// Resolve the project directory, creating it if it doesn't exist.

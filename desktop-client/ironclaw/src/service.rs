@@ -12,7 +12,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-use crate::bootstrap::ironclaw_base_dir;
+use crate::bootstrap::dasclaw_base_dir;
 
 const SERVICE_LABEL: &str = "com.ironclaw.daemon";
 const SYSTEMD_UNIT: &str = "ironclaw.service";
@@ -269,7 +269,7 @@ fn linux_unit_path() -> Result<PathBuf> {
 }
 
 fn ironclaw_logs_dir() -> PathBuf {
-    ironclaw_base_dir().join("logs")
+    dasclaw_base_dir().join("logs")
 }
 
 // ── Shell helpers ───────────────────────────────────────────────
