@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use crate::bootstrap::ironclaw_base_dir;
+use crate::bootstrap::dasclaw_base_dir;
 use crate::cli::fmt;
 use crate::settings::Settings;
 
@@ -188,7 +188,7 @@ pub async fn run_status_command() -> anyhow::Result<()> {
         "{}",
         fmt::kv_line(
             "Config",
-            &crate::bootstrap::ironclaw_env_path().display().to_string(),
+            &crate::bootstrap::dasclaw_env_path().display().to_string(),
             12,
         )
     );
@@ -238,11 +238,11 @@ fn count_wasm_files(dir: &std::path::Path) -> usize {
 }
 
 fn default_tools_dir() -> PathBuf {
-    ironclaw_base_dir().join("tools")
+    dasclaw_base_dir().join("tools")
 }
 
 fn default_channels_dir() -> PathBuf {
-    ironclaw_base_dir().join("channels")
+    dasclaw_base_dir().join("channels")
 }
 
 #[cfg(test)]

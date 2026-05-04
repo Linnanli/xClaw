@@ -90,7 +90,7 @@ pub async fn run_logs_command(cmd: LogsCommand, config_path: Option<&Path>) -> a
 /// backwards in chunks to find the last `limit` newlines, so memory usage
 /// is proportional to the output size, not the file size.
 fn cmd_show(cmd: &LogsCommand) -> anyhow::Result<()> {
-    let log_path = crate::bootstrap::ironclaw_base_dir().join("gateway.log");
+    let log_path = crate::bootstrap::dasclaw_base_dir().join("gateway.log");
     if !log_path.exists() {
         anyhow::bail!(
             "No gateway log file found at {}.\n\

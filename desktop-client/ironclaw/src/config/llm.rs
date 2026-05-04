@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use secrecy::SecretString;
 
-use crate::bootstrap::ironclaw_base_dir;
+use crate::bootstrap::dasclaw_base_dir;
 use crate::config::helpers::{optional_env, parse_optional_env, validate_base_url};
 use crate::error::ConfigError;
 use crate::llm::config::*;
@@ -263,7 +263,7 @@ impl LlmConfig {
                 .unwrap_or_else(|| "app_EMoamEEZ73f0CkXaXp7hrann".to_string());
             let session_path = optional_env("OPENAI_CODEX_SESSION_PATH")?
                 .map(PathBuf::from)
-                .unwrap_or_else(|| ironclaw_base_dir().join("openai_codex_session.json"));
+                .unwrap_or_else(|| dasclaw_base_dir().join("openai_codex_session.json"));
             let token_refresh_margin_secs =
                 parse_optional_env("OPENAI_CODEX_REFRESH_MARGIN_SECS", 300)?;
             Some(OpenAiCodexConfig {
@@ -677,7 +677,7 @@ fn merge_extra_headers(
 
 /// Get the default session file path (~/.ironclaw/session.json).
 pub fn default_session_path() -> PathBuf {
-    ironclaw_base_dir().join("session.json")
+    dasclaw_base_dir().join("session.json")
 }
 
 #[cfg(test)]

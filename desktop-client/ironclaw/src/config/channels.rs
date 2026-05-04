@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::bootstrap::ironclaw_base_dir;
+use crate::bootstrap::dasclaw_base_dir;
 use crate::config::helpers::{optional_env, parse_bool_env, parse_optional_env};
 use crate::error::ConfigError;
 use crate::settings::Settings;
@@ -350,7 +350,7 @@ pub const DEFAULT_GATEWAY_PORT: u16 = 3000;
 
 /// Get the default channels directory (~/.ironclaw/channels/).
 fn default_channels_dir() -> PathBuf {
-    ironclaw_base_dir().join("channels")
+    dasclaw_base_dir().join("channels")
 }
 
 #[cfg(test)]

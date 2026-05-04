@@ -18,7 +18,7 @@ use std::sync::Arc;
 use deadpool_postgres::Config as PoolConfig;
 use secrecy::{ExposeSecret, SecretString};
 
-use crate::bootstrap::ironclaw_base_dir;
+use crate::bootstrap::dasclaw_base_dir;
 use crate::channels::wasm::{
     ChannelCapabilitiesFile, available_channel_names, install_bundled_channel,
 };
@@ -2516,7 +2516,7 @@ impl SetupWizard {
         println!();
 
         // Discover available WASM channels
-        let channels_dir = ironclaw_base_dir().join("channels");
+        let channels_dir = dasclaw_base_dir().join("channels");
 
         let mut discovered_channels = discover_wasm_channels(&channels_dir).await;
         let installed_names: HashSet<String> = discovered_channels
@@ -2737,7 +2737,7 @@ impl SetupWizard {
         println!();
 
         // Check which tools are already installed
-        let tools_dir = ironclaw_base_dir().join("tools");
+        let tools_dir = dasclaw_base_dir().join("tools");
 
         let installed_tools = discover_installed_tools(&tools_dir).await;
 
@@ -2777,7 +2777,7 @@ impl SetupWizard {
         let installer = crate::registry::installer::RegistryInstaller::new(
             repo_root.to_path_buf(),
             tools_dir.clone(),
-            ironclaw_base_dir().join("channels"),
+            dasclaw_base_dir().join("channels"),
         );
 
         let mut installed_count = 0;
@@ -3641,7 +3641,7 @@ async fn install_selected_registry_channels(
 
         let installer = crate::registry::installer::RegistryInstaller::new(
             repo_root.clone(),
-            ironclaw_base_dir().join("tools"),
+            dasclaw_base_dir().join("tools"),
             channels_dir.to_path_buf(),
         );
 

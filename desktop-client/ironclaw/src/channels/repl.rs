@@ -39,7 +39,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::agent::truncate_for_preview;
-use crate::bootstrap::ironclaw_base_dir;
+use crate::bootstrap::dasclaw_base_dir;
 use crate::channels::{Channel, IncomingMessage, MessageStream, OutgoingResponse, StatusUpdate};
 use crate::cli::fmt;
 use crate::error::ChannelError;
@@ -481,7 +481,7 @@ fn print_help() {
 
 /// Get the history file path (~/.ironclaw/history).
 fn history_path() -> std::path::PathBuf {
-    ironclaw_base_dir().join("history")
+    dasclaw_base_dir().join("history")
 }
 
 #[async_trait]

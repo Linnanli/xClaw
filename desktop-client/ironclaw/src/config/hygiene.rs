@@ -1,4 +1,4 @@
-use crate::bootstrap::ironclaw_base_dir;
+use crate::bootstrap::dasclaw_base_dir;
 use crate::config::helpers::{parse_bool_env, parse_optional_env};
 use crate::error::ConfigError;
 
@@ -50,7 +50,7 @@ impl HygieneConfig {
             daily_retention_days: self.daily_retention_days,
             conversation_retention_days: self.conversation_retention_days,
             cadence_hours: self.cadence_hours,
-            state_dir: ironclaw_base_dir(),
+            state_dir: dasclaw_base_dir(),
         }
     }
 }

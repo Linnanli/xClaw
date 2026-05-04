@@ -11,11 +11,11 @@
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-use crate::bootstrap::ironclaw_base_dir;
+use crate::bootstrap::dasclaw_base_dir;
 
 /// Return the base directory for auto-created workspaces: `~/.ironclaw/projects/`.
 pub fn projects_base() -> PathBuf {
-    ironclaw_base_dir().join("projects")
+    dasclaw_base_dir().join("projects")
 }
 
 /// Create a sandboxed workspace directory for a conversation thread.

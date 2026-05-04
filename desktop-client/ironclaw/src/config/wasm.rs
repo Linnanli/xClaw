@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::bootstrap::ironclaw_base_dir;
+use crate::bootstrap::dasclaw_base_dir;
 use crate::config::helpers::{optional_env, parse_bool_env, parse_optional_env};
 use crate::error::ConfigError;
 
@@ -40,7 +40,7 @@ impl Default for WasmConfig {
 
 /// Get the default tools directory (~/.ironclaw/tools/).
 fn default_tools_dir() -> PathBuf {
-    ironclaw_base_dir().join("tools")
+    dasclaw_base_dir().join("tools")
 }
 
 impl WasmConfig {

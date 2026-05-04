@@ -147,7 +147,7 @@ fn save_settings(settings: &Settings, config_path: Option<&Path>) -> anyhow::Res
 }
 
 fn config_toml_path() -> std::path::PathBuf {
-    crate::bootstrap::ironclaw_base_dir().join("config.toml")
+    crate::bootstrap::dasclaw_base_dir().join("config.toml")
 }
 
 /// Try to fetch the live model list from a provider.

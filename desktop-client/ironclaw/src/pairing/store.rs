@@ -13,7 +13,7 @@ use rand::Rng;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 
-use crate::bootstrap::ironclaw_base_dir;
+use crate::bootstrap::dasclaw_base_dir;
 
 const PAIRING_CODE_LENGTH: usize = 8;
 const PAIRING_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -76,7 +76,7 @@ struct AllowFromStoreFile {
 }
 
 fn default_pairing_dir() -> PathBuf {
-    ironclaw_base_dir()
+    dasclaw_base_dir()
 }
 
 fn safe_channel_key(channel: &str) -> Result<String, PairingStoreError> {

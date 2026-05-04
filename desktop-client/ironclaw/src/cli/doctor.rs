@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use crate::bootstrap::ironclaw_base_dir;
+use crate::bootstrap::dasclaw_base_dir;
 use crate::cli::fmt;
 use crate::settings::Settings;
 
@@ -376,7 +376,7 @@ async fn try_pg_connect() -> Result<(), String> {
 // ── Workspace directory ─────────────────────────────────────
 
 fn check_workspace_dir() -> CheckResult {
-    let dir = ironclaw_base_dir();
+    let dir = dasclaw_base_dir();
 
     if dir.exists() {
         if dir.is_dir() {
@@ -523,8 +523,8 @@ async fn check_mcp_config() -> CheckResult {
 // ── Skills ──────────────────────────────────────────────────
 
 async fn check_skills() -> CheckResult {
-    let user_dir = ironclaw_base_dir().join("skills");
-    let installed_dir = ironclaw_base_dir().join("installed_skills");
+    let user_dir = dasclaw_base_dir().join("skills");
+    let installed_dir = dasclaw_base_dir().join("installed_skills");
 
     let mut registry = crate::skills::SkillRegistry::new(user_dir.clone());
     registry = registry.with_installed_dir(installed_dir);

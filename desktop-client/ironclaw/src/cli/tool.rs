@@ -10,13 +10,13 @@ use std::sync::Arc;
 use clap::Subcommand;
 use tokio::fs;
 
-use crate::bootstrap::ironclaw_base_dir;
+use crate::bootstrap::dasclaw_base_dir;
 use crate::secrets::{CreateSecretParams, SecretsStore};
 use crate::tools::wasm::{CapabilitiesFile, compute_binary_hash};
 
 /// Default tools directory.
 fn default_tools_dir() -> PathBuf {
-    ironclaw_base_dir().join("tools")
+    dasclaw_base_dir().join("tools")
 }
 
 #[derive(Subcommand, Debug, Clone)]

@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 
 use tokio::fs;
 
-use crate::bootstrap::ironclaw_base_dir;
+use crate::bootstrap::dasclaw_base_dir;
 use crate::registry::catalog::RegistryError;
 use crate::registry::manifest::{BundleDefinition, ExtensionManifest, ManifestKind, SourceSpec};
 
@@ -219,7 +219,7 @@ impl RegistryInstaller {
 
     /// Default installer using standard paths.
     pub fn with_defaults(repo_root: PathBuf) -> Self {
-        let base_dir = ironclaw_base_dir();
+        let base_dir = dasclaw_base_dir();
         Self {
             repo_root,
             tools_dir: base_dir.join("tools"),

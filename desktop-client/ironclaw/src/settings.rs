@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::bootstrap::ironclaw_base_dir;
+use crate::bootstrap::dasclaw_base_dir;
 
 /// A custom LLM provider defined by the user through the web UI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -868,7 +868,7 @@ impl Settings {
 
     /// Get the default settings file path (~/.ironclaw/settings.json).
     pub fn default_path() -> std::path::PathBuf {
-        ironclaw_base_dir().join("settings.json")
+        dasclaw_base_dir().join("settings.json")
     }
 
     /// Load settings from disk, returning default if not found.
@@ -886,7 +886,7 @@ impl Settings {
 
     /// Default TOML config file path (~/.ironclaw/config.toml).
     pub fn default_toml_path() -> PathBuf {
-        ironclaw_base_dir().join("config.toml")
+        dasclaw_base_dir().join("config.toml")
     }
 
     /// Load settings from a TOML file.
