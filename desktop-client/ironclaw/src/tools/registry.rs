@@ -27,6 +27,9 @@ use crate::tools::builtin::{
     ToolRemoveTool, ToolSearchTool, ToolUpgradeTool, WebFetchTool, WebSearchTool, WriteFileTool,
 };
 use crate::tools::rate_limiter::RateLimiter;
+use crate::tools::registration_report::{
+    RegistrationOutcome, RejectionReason, ToolRegistrationEntry, ToolRegistrationReport, ToolSource,
+};
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolDomain};
 use crate::tools::wasm::{
     Capabilities, OAuthRefreshConfig, ResourceLimits, SharedCredentialRegistry, WasmError,
@@ -105,6 +108,12 @@ pub struct ToolRegistry {
     rate_limiter: RateLimiter,
     /// Reference to the message tool for setting context per-turn.
     message_tool: RwLock<Option<Arc<crate::tools::builtin::MessageTool>>>,
+    /// Append-only ledger of registration attempts (issue #88).
+    /// Records both accepted and rejected attempts, classified by
+    /// [`ToolSource`]. Used by [`Self::registration_report`] to render the
+    /// startup tool collision/visibility view without observing insertion
+    /// order.
+    registration_log: RwLock<Vec<ToolRegistrationEntry>>,
 }
 
 impl ToolRegistry {
@@ -126,6 +135,7 @@ impl ToolRegistry {
             secrets_store: None,
             rate_limiter: RateLimiter::new(),
             message_tool: RwLock::new(None),
+            registration_log: RwLock::new(Vec::new()),
         }
     }
 
@@ -169,9 +179,27 @@ impl ToolRegistry {
                 tool = %name,
                 "Rejected tool registration: would shadow a built-in tool"
             );
+            self.registration_log
+                .write()
+                .await
+                .push(ToolRegistrationEntry {
+                    name,
+                    source: ToolSource::Dynamic,
+                    outcome: RegistrationOutcome::Rejected {
+                        reason: RejectionReason::ProtectedBuiltinShadow,
+                    },
+                });
             return;
         }
         self.tools.write().await.insert(name.clone(), tool);
+        self.registration_log
+            .write()
+            .await
+            .push(ToolRegistrationEntry {
+                name: name.clone(),
+                source: ToolSource::Dynamic,
+                outcome: RegistrationOutcome::Accepted,
+            });
         tracing::trace!("Registered tool: {}", name);
     }
 
@@ -182,6 +210,13 @@ impl ToolRegistry {
             tools.insert(name.clone(), tool);
             if let Ok(mut builtins) = self.builtin_names.try_write() {
                 builtins.insert(name.clone());
+            }
+            if let Ok(mut log) = self.registration_log.try_write() {
+                log.push(ToolRegistrationEntry {
+                    name: name.clone(),
+                    source: ToolSource::Builtin,
+                    outcome: RegistrationOutcome::Accepted,
+                });
             }
             tracing::debug!("Registered tool: {}", name);
         }
@@ -233,6 +268,58 @@ impl ToolRegistry {
     /// Get the set of built-in tool names currently registered.
     pub async fn builtin_tool_names(&self) -> std::collections::HashSet<String> {
         self.builtin_names.read().await.clone()
+    }
+
+    /// Render the tool registration report (issue #88).
+    ///
+    /// Captures every accepted and rejected registration attempt up to this
+    /// point, grouped by [`ToolSource`]. When `flags` is provided the
+    /// `policy_disabled` field lists tools that are registered but disabled
+    /// by feature-flag policy (so the LLM never sees them).
+    ///
+    /// Sort order is canonical and dedup-applied — tests can snapshot the
+    /// returned report without observing insertion order.
+    pub async fn registration_report(
+        &self,
+        flags: Option<&crate::tools::feature_flags::ToolFeatureFlags>,
+    ) -> ToolRegistrationReport {
+        let log = self.registration_log.read().await.clone();
+        let policy_disabled = match flags {
+            Some(flags) => {
+                let tools = self.tools.read().await;
+                tools
+                    .keys()
+                    .filter(|name| !flags.is_tool_enabled(name))
+                    .cloned()
+                    .collect()
+            }
+            None => Vec::new(),
+        };
+        ToolRegistrationReport::from_entries(&log, policy_disabled)
+    }
+
+    /// Emit the registration report as a single `tracing::info!` event.
+    ///
+    /// Intended for one-shot startup logging right after `bootstrap_tools`
+    /// completes. The summary line carries only counts (no tool params or
+    /// secret values), and per-source name lists are emitted as structured
+    /// fields so log shippers can index them without parsing.
+    pub async fn log_registration_report(
+        &self,
+        flags: Option<&crate::tools::feature_flags::ToolFeatureFlags>,
+    ) {
+        let report = self.registration_report(flags).await;
+        let rejected_names: Vec<&str> = report.rejected.iter().map(|r| r.name.as_str()).collect();
+        tracing::info!(
+            target: "ironclaw::tools::startup",
+            accepted = report.accepted_count(),
+            rejected = report.rejected.len(),
+            policy_disabled = report.policy_disabled.len(),
+            rejected_tools = ?rejected_names,
+            policy_disabled_tools = ?report.policy_disabled,
+            "{}",
+            report.summary_line()
+        );
     }
 
     /// Get tool definitions for LLM function calling.
@@ -415,6 +502,11 @@ impl ToolRegistry {
             self.register_message_tools(Arc::clone(channels), ctx.extension_manager.clone())
                 .await;
         }
+
+        // Issue #88: emit the startup tool collision/visibility report.
+        // Builtin-only first cut — feature-flag view requires an explicit
+        // call site that owns `ToolFeatureFlags`.
+        self.log_registration_report(None).await;
 
         Ok(())
     }
@@ -729,6 +821,14 @@ impl ToolRegistry {
             .write()
             .await
             .insert("message".to_string());
+        self.registration_log
+            .write()
+            .await
+            .push(ToolRegistrationEntry {
+                name: "message".to_string(),
+                source: ToolSource::Builtin,
+                outcome: RegistrationOutcome::Accepted,
+            });
         tracing::debug!("Registered message tool");
     }
 
@@ -1611,5 +1711,137 @@ mod tests {
         assert!(cfg.inject_tx.is_none());
         assert!(cfg.prompt_queue.is_none());
         assert!(cfg.secrets_store.is_none());
+    }
+
+    // ── issue #88: tool collision and visibility startup report ─────────
+
+    #[tokio::test]
+    async fn req_88_registration_report_captures_builtin_via_register_sync() {
+        let registry = Arc::new(ToolRegistry::new());
+        registry
+            .bootstrap_tools(&BootstrapContext::for_test())
+            .await
+            .unwrap();
+
+        let report = registry.registration_report(None).await;
+
+        // Test mode registers exactly the four base built-ins.
+        let builtins = report.accepted.get("builtin").expect("builtin bucket");
+        for name in ["echo", "time", "json", "http"] {
+            assert!(
+                builtins.contains(&name.to_string()),
+                "missing built-in {name} in {builtins:?}"
+            );
+        }
+        assert!(
+            report.rejected.is_empty(),
+            "no rejections expected in test mode"
+        );
+        assert!(report.policy_disabled.is_empty());
+
+        // Builtin bucket is sorted (deterministic ordering for fixtures).
+        let mut sorted = builtins.clone();
+        sorted.sort();
+        assert_eq!(builtins, &sorted);
+    }
+
+    #[tokio::test]
+    async fn req_88_registration_report_records_protected_shadow_rejection() {
+        // A dynamic tool that tries to register under a protected built-in
+        // name must be rejected and recorded with the deterministic reason
+        // `protected_builtin_shadow` — never silently dropped.
+        struct FakeShell;
+        #[async_trait::async_trait]
+        impl Tool for FakeShell {
+            fn name(&self) -> &str {
+                "shell"
+            }
+            fn description(&self) -> &str {
+                "fake"
+            }
+            fn parameters_schema(&self) -> serde_json::Value {
+                serde_json::json!({})
+            }
+            async fn execute(
+                &self,
+                _params: serde_json::Value,
+                _ctx: &crate::context::JobContext,
+            ) -> Result<crate::tools::tool::ToolOutput, crate::tools::tool::ToolError> {
+                unreachable!("rejected before registration")
+            }
+        }
+
+        let registry = Arc::new(ToolRegistry::new());
+        registry
+            .bootstrap_tools(&BootstrapContext {
+                mode: BootstrapMode::Container,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        registry.register(Arc::new(FakeShell)).await;
+
+        let report = registry.registration_report(None).await;
+        assert_eq!(report.rejected.len(), 1, "one rejection expected");
+        let r = &report.rejected[0];
+        assert_eq!(r.name, "shell");
+        assert_eq!(r.source, super::ToolSource::Dynamic);
+        assert_eq!(r.reason.as_str(), "protected_builtin_shadow");
+
+        // The legitimate built-in `shell` is still registered under the
+        // builtin bucket — the dynamic shadow attempt did not displace it.
+        let builtin_shell_present = report
+            .accepted
+            .get("builtin")
+            .is_some_and(|v| v.contains(&"shell".to_string()));
+        assert!(builtin_shell_present, "built-in shell must remain accepted");
+    }
+
+    #[tokio::test]
+    async fn req_88_registration_report_policy_disabled_view() {
+        use crate::tools::feature_flags::ToolFeatureFlags;
+
+        let registry = Arc::new(ToolRegistry::new());
+        registry
+            .bootstrap_tools(&BootstrapContext::for_test())
+            .await
+            .unwrap();
+
+        let flags = ToolFeatureFlags::with_disabled(vec!["http".into(), "echo".into()]);
+        let report = registry.registration_report(Some(&flags)).await;
+
+        assert_eq!(
+            report.policy_disabled,
+            vec!["echo".to_string(), "http".to_string()],
+            "policy_disabled must be sorted and dedup'd"
+        );
+    }
+
+    #[tokio::test]
+    async fn req_88_registration_report_does_not_leak_tool_state() {
+        // Defence-in-depth: the report only carries names + source labels +
+        // rejection reason kinds. Snapshot it as JSON and assert the JSON
+        // body never contains parameter/schema/secret terminology.
+        let registry = Arc::new(ToolRegistry::new());
+        registry
+            .bootstrap_tools(&BootstrapContext::for_test())
+            .await
+            .unwrap();
+        let report = registry.registration_report(None).await;
+        let json = serde_json::to_string(&report).unwrap();
+
+        for forbidden in [
+            "parameters_schema",
+            "api_key",
+            "secret",
+            "password",
+            "token",
+        ] {
+            assert!(
+                !json.contains(forbidden),
+                "registration report leaked '{forbidden}' in JSON: {json}"
+            );
+        }
     }
 }
