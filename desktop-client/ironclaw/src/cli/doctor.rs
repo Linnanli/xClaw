@@ -566,23 +566,40 @@ fn check_secrets(settings: &Settings) -> CheckResult {
 
 fn check_service_installed() -> CheckResult {
     if cfg!(target_os = "macos") {
-        let plist =
-            dirs::home_dir().map(|h| h.join("Library/LaunchAgents/com.ironclaw.daemon.plist"));
-        match plist {
-            Some(path) if path.exists() => {
-                CheckResult::Pass(format!("launchd plist installed ({})", path.display()))
-            }
-            Some(_) => CheckResult::Skip("not installed (run `ironclaw service install`)".into()),
-            None => CheckResult::Skip("cannot determine home directory".into()),
+        let home = match dirs::home_dir() {
+            Some(h) => h,
+            None => return CheckResult::Skip("cannot determine home directory".into()),
+        };
+        let new_plist = home.join("Library/LaunchAgents/com.dasclaw.daemon.plist");
+        let legacy_plist = home.join("Library/LaunchAgents/com.ironclaw.daemon.plist");
+        if new_plist.exists() {
+            CheckResult::Pass(format!("launchd plist installed ({})", new_plist.display()))
+        } else if legacy_plist.exists() {
+            // Legacy plist still installed — surface a hint so the user runs
+            // `ironclaw service migrate` instead of leaving an orphan unit.
+            CheckResult::Pass(format!(
+                "legacy launchd plist installed at {}; run `ironclaw service migrate` to upgrade to com.dasclaw.daemon",
+                legacy_plist.display()
+            ))
+        } else {
+            CheckResult::Skip("not installed (run `ironclaw service install`)".into())
         }
     } else if cfg!(target_os = "linux") {
-        let unit = dirs::home_dir().map(|h| h.join(".config/systemd/user/ironclaw.service"));
-        match unit {
-            Some(path) if path.exists() => {
-                CheckResult::Pass(format!("systemd unit installed ({})", path.display()))
-            }
-            Some(_) => CheckResult::Skip("not installed (run `ironclaw service install`)".into()),
-            None => CheckResult::Skip("cannot determine home directory".into()),
+        let home = match dirs::home_dir() {
+            Some(h) => h,
+            None => return CheckResult::Skip("cannot determine home directory".into()),
+        };
+        let new_unit = home.join(".config/systemd/user/dasclaw.service");
+        let legacy_unit = home.join(".config/systemd/user/ironclaw.service");
+        if new_unit.exists() {
+            CheckResult::Pass(format!("systemd unit installed ({})", new_unit.display()))
+        } else if legacy_unit.exists() {
+            CheckResult::Pass(format!(
+                "legacy systemd unit installed at {}; run `ironclaw service migrate` to upgrade to dasclaw.service",
+                legacy_unit.display()
+            ))
+        } else {
+            CheckResult::Skip("not installed (run `ironclaw service install`)".into())
         }
     } else {
         CheckResult::Skip("service management not supported on this platform".into())

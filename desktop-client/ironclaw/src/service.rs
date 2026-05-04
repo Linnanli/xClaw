@@ -1,11 +1,19 @@
-//! OS service management for running IronClaw as a daemon.
+//! OS service management for running the daemon.
 //!
 //! Generates and manages platform-native service definitions:
-//! - **macOS**: launchd plist at `~/Library/LaunchAgents/com.ironclaw.daemon.plist`
-//! - **Linux**: systemd user unit at `~/.config/systemd/user/ironclaw.service`
+//! - **macOS**: launchd plist at `~/Library/LaunchAgents/com.dasclaw.daemon.plist`
+//! - **Linux**: systemd user unit at `~/.config/systemd/user/dasclaw.service`
 //!
 //! The installed service runs `ironclaw run` (the default agent mode) and is
 //! configured to restart automatically on failure.
+//!
+//! ## ADR-114 Ⅳ rename + migration
+//!
+//! The current names are the rebranded `dasclaw` family. The previous
+//! `com.ironclaw.daemon` / `ironclaw.service` names are still recognised so
+//! that `service uninstall` and `service migrate` can clean up legacy
+//! installations without leaving orphan units behind. See
+//! `docs/SERVICE_MIGRATION.md` for the user-facing flow.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -14,8 +22,13 @@ use anyhow::{Context, Result, bail};
 
 use crate::bootstrap::dasclaw_base_dir;
 
-const SERVICE_LABEL: &str = "com.ironclaw.daemon";
-const SYSTEMD_UNIT: &str = "ironclaw.service";
+const SERVICE_LABEL: &str = "com.dasclaw.daemon";
+const SYSTEMD_UNIT: &str = "dasclaw.service";
+
+/// Pre-rename launchd label, kept for `service uninstall` / `service migrate`.
+const LEGACY_SERVICE_LABEL: &str = "com.ironclaw.daemon";
+/// Pre-rename systemd unit, kept for `service uninstall` / `service migrate`.
+const LEGACY_SYSTEMD_UNIT: &str = "ironclaw.service";
 
 // ── Public dispatch ─────────────────────────────────────────────
 
@@ -27,10 +40,11 @@ pub fn handle_command(command: &ServiceAction) -> Result<()> {
         ServiceAction::Stop => stop(),
         ServiceAction::Status => status(),
         ServiceAction::Uninstall => uninstall(),
+        ServiceAction::Migrate => migrate(),
     }
 }
 
-/// The five service lifecycle actions.
+/// Service lifecycle actions.
 #[derive(Debug, Clone)]
 pub enum ServiceAction {
     Install,
@@ -38,6 +52,9 @@ pub enum ServiceAction {
     Stop,
     Status,
     Uninstall,
+    /// ADR-114 Ⅳ — detect legacy `ironclaw.*` service, stop+uninstall it,
+    /// then install+start the new `dasclaw.*` service.
+    Migrate,
 }
 
 // ── Install ─────────────────────────────────────────────────────
@@ -224,28 +241,147 @@ fn status() -> Result<()> {
 // ── Uninstall ───────────────────────────────────────────────────
 
 fn uninstall() -> Result<()> {
-    // Stop first (ignore errors, service might not be running)
+    // Stop first (ignore errors, service might not be running). We attempt
+    // to stop both current and legacy units so that a stale ironclaw.* unit
+    // does not survive an `uninstall` issued after a partial migration.
     stop().ok();
+    stop_legacy().ok();
 
     if cfg!(target_os = "macos") {
         let file = macos_plist_path()?;
-        if file.exists() {
-            std::fs::remove_file(&file)
-                .with_context(|| format!("failed to remove {}", file.display()))?;
+        let legacy = macos_legacy_plist_path()?;
+        let mut removed = Vec::new();
+        for p in [&file, &legacy] {
+            if p.exists() {
+                std::fs::remove_file(p)
+                    .with_context(|| format!("failed to remove {}", p.display()))?;
+                removed.push(p.display().to_string());
+            }
         }
-        println!("Service uninstalled ({})", file.display());
+        if removed.is_empty() {
+            println!(
+                "Service uninstalled (nothing to remove at {})",
+                file.display()
+            );
+        } else {
+            println!("Service uninstalled ({})", removed.join(", "));
+        }
         Ok(())
     } else if cfg!(target_os = "linux") {
         let file = linux_unit_path()?;
-        if file.exists() {
-            std::fs::remove_file(&file)
-                .with_context(|| format!("failed to remove {}", file.display()))?;
+        let legacy = linux_legacy_unit_path()?;
+        let mut removed = Vec::new();
+        for p in [&file, &legacy] {
+            if p.exists() {
+                std::fs::remove_file(p)
+                    .with_context(|| format!("failed to remove {}", p.display()))?;
+                removed.push(p.display().to_string());
+            }
         }
         run_checked(Command::new("systemctl").args(["--user", "daemon-reload"])).ok();
-        println!("Service uninstalled ({})", file.display());
+        if removed.is_empty() {
+            println!(
+                "Service uninstalled (nothing to remove at {})",
+                file.display()
+            );
+        } else {
+            println!("Service uninstalled ({})", removed.join(", "));
+        }
         Ok(())
     } else {
         bail!("Service management is only supported on macOS and Linux");
+    }
+}
+
+// ── Migrate (ADR-114 Ⅳ) ────────────────────────────────────────
+
+/// Detect a legacy `ironclaw.*` service installation and migrate it to the
+/// new `dasclaw.*` names: stop legacy → remove legacy unit file → install
+/// new unit → start it. Idempotent: if no legacy install is found, this is
+/// equivalent to `install` followed by `start` (skipping start if a current
+/// install already exists).
+fn migrate() -> Result<()> {
+    if !cfg!(target_os = "macos") && !cfg!(target_os = "linux") {
+        bail!("Service management is only supported on macOS and Linux");
+    }
+
+    let legacy_present = legacy_unit_path_if_present()?;
+    match &legacy_present {
+        Some(p) => println!("Detected legacy service at {}", p.display()),
+        None => println!("No legacy ironclaw service detected"),
+    }
+
+    // Step 1: stop the legacy service (best-effort, ignore errors when not
+    // loaded). Skipped when no legacy unit exists.
+    if legacy_present.is_some() {
+        stop_legacy().ok();
+    }
+
+    // Step 2: remove the legacy unit file so the new install does not
+    // collide with stale auto-load metadata.
+    if let Some(path) = legacy_present.as_ref()
+        && path.exists()
+    {
+        std::fs::remove_file(path)
+            .with_context(|| format!("failed to remove legacy {}", path.display()))?;
+        println!("Removed legacy unit {}", path.display());
+        if cfg!(target_os = "linux") {
+            run_checked(Command::new("systemctl").args(["--user", "daemon-reload"])).ok();
+        }
+    }
+
+    // Step 3: install the new unit (idempotent — overwrites if present).
+    install()?;
+
+    // Step 4: start the new service. Best-effort stop first so re-running
+    // `migrate` against an already-loaded current install does not trip
+    // launchctl's "service already loaded" error.
+    stop().ok();
+    start()?;
+    println!("Migration to {SERVICE_LABEL} / {SYSTEMD_UNIT} complete");
+    Ok(())
+}
+
+/// Stop the legacy service if any. Best-effort; never bails.
+fn stop_legacy() -> Result<()> {
+    if cfg!(target_os = "macos") {
+        let plist = macos_legacy_plist_path()?;
+        run_checked(
+            Command::new("launchctl")
+                .arg("stop")
+                .arg(LEGACY_SERVICE_LABEL),
+        )
+        .ok();
+        if plist.exists() {
+            run_checked(
+                Command::new("launchctl")
+                    .arg("unload")
+                    .arg("-w")
+                    .arg(&plist),
+            )
+            .ok();
+        }
+        Ok(())
+    } else if cfg!(target_os = "linux") {
+        run_checked(Command::new("systemctl").args(["--user", "stop", LEGACY_SYSTEMD_UNIT])).ok();
+        run_checked(Command::new("systemctl").args(["--user", "disable", LEGACY_SYSTEMD_UNIT]))
+            .ok();
+        Ok(())
+    } else {
+        Ok(())
+    }
+}
+
+/// Return the path to the legacy unit file if it exists on disk, else `None`.
+fn legacy_unit_path_if_present() -> Result<Option<PathBuf>> {
+    if cfg!(target_os = "macos") {
+        let p = macos_legacy_plist_path()?;
+        Ok(if p.exists() { Some(p) } else { None })
+    } else if cfg!(target_os = "linux") {
+        let p = linux_legacy_unit_path()?;
+        Ok(if p.exists() { Some(p) } else { None })
+    } else {
+        Ok(None)
     }
 }
 
@@ -259,6 +395,14 @@ fn macos_plist_path() -> Result<PathBuf> {
         .join(format!("{SERVICE_LABEL}.plist")))
 }
 
+fn macos_legacy_plist_path() -> Result<PathBuf> {
+    let home = dirs::home_dir().context("could not find home directory")?;
+    Ok(home
+        .join("Library")
+        .join("LaunchAgents")
+        .join(format!("{LEGACY_SERVICE_LABEL}.plist")))
+}
+
 fn linux_unit_path() -> Result<PathBuf> {
     let home = dirs::home_dir().context("could not find home directory")?;
     Ok(home
@@ -266,6 +410,15 @@ fn linux_unit_path() -> Result<PathBuf> {
         .join("systemd")
         .join("user")
         .join(SYSTEMD_UNIT))
+}
+
+fn linux_legacy_unit_path() -> Result<PathBuf> {
+    let home = dirs::home_dir().context("could not find home directory")?;
+    Ok(home
+        .join(".config")
+        .join("systemd")
+        .join("user")
+        .join(LEGACY_SYSTEMD_UNIT))
 }
 
 fn ironclaw_logs_dir() -> PathBuf {
@@ -345,24 +498,61 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn macos_plist_path_has_expected_suffix() {
+    fn req_109_macos_plist_path_uses_dasclaw_label() {
         let path = macos_plist_path().unwrap();
         let s = path.to_string_lossy();
         assert!(
+            s.ends_with("Library/LaunchAgents/com.dasclaw.daemon.plist"),
+            "unexpected path: {s}"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn req_109_macos_legacy_plist_path_points_at_ironclaw() {
+        let path = macos_legacy_plist_path().unwrap();
+        let s = path.to_string_lossy();
+        assert!(
             s.ends_with("Library/LaunchAgents/com.ironclaw.daemon.plist"),
+            "legacy path must still resolve to the pre-rename plist: {s}"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn req_109_linux_unit_path_uses_dasclaw_unit() {
+        let path = linux_unit_path().unwrap();
+        let s = path.to_string_lossy();
+        assert!(
+            s.ends_with(".config/systemd/user/dasclaw.service"),
             "unexpected path: {s}"
         );
     }
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn linux_unit_path_has_expected_suffix() {
-        let path = linux_unit_path().unwrap();
+    fn req_109_linux_legacy_unit_path_points_at_ironclaw() {
+        let path = linux_legacy_unit_path().unwrap();
         let s = path.to_string_lossy();
         assert!(
             s.ends_with(".config/systemd/user/ironclaw.service"),
-            "unexpected path: {s}"
+            "legacy path must still resolve to the pre-rename unit: {s}"
         );
+    }
+
+    #[test]
+    fn req_109_legacy_constants_remain_pinned_to_ironclaw_names() {
+        // Hard guard: if anyone refactors the constants away the rebrand
+        // window leaves users with no migration path. These two lines must
+        // stay literal.
+        assert_eq!(LEGACY_SERVICE_LABEL, "com.ironclaw.daemon");
+        assert_eq!(LEGACY_SYSTEMD_UNIT, "ironclaw.service");
+    }
+
+    #[test]
+    fn req_109_current_constants_use_dasclaw_namespace() {
+        assert_eq!(SERVICE_LABEL, "com.dasclaw.daemon");
+        assert_eq!(SYSTEMD_UNIT, "dasclaw.service");
     }
 
     #[test]

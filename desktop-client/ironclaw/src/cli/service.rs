@@ -14,8 +14,12 @@ pub enum ServiceCommand {
     Stop,
     /// Show service status.
     Status,
-    /// Uninstall the OS service and remove the unit file.
+    /// Uninstall the OS service and remove the unit file (also clears any
+    /// legacy `ironclaw.*` unit left over from before ADR-114 Ⅳ).
     Uninstall,
+    /// Migrate a pre-ADR-114 `ironclaw.*` service install to the renamed
+    /// `dasclaw.*` family: stop legacy → uninstall legacy → install new → start.
+    Migrate,
 }
 
 impl ServiceCommand {
@@ -27,6 +31,7 @@ impl ServiceCommand {
             ServiceCommand::Stop => ServiceAction::Stop,
             ServiceCommand::Status => ServiceAction::Status,
             ServiceCommand::Uninstall => ServiceAction::Uninstall,
+            ServiceCommand::Migrate => ServiceAction::Migrate,
         }
     }
 }
