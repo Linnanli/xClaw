@@ -54,26 +54,8 @@
 
 1. 先把当前状态写入 `/memories/session/<topic>-handoff.md`
 2. 调用 `resolve_memory_file_uri` 拿到该文件的**完整 file:// URI**
-3. 把完整 URI 同步登记到本文件下方的 [Session Handoff Index](#session-handoff-index) 表格中
-4. 明确说明"当前已完成的闭环 milestone 是什么"
-5. 给用户的下一会话开局 prompt 中**必须包含完整 URI**（不是 `/memories/session/...` 短路径），因为新会话的 agent 不一定能解析短路径
-
-#### Session Handoff Index
-
-> 当前活跃的 handoff 文件清单。已归档/作废的条目直接从本表删除（不在本文件内保留归档区，避免索引膨胀；如需追溯走 git history）。
->
-> 每条目格式：`日期 | 主题 | 完整 file:// URI | 下一会话开局 prompt 摘要`
-
-| 日期 | 主题 | 完整 URI | 开局 prompt |
-|---|---|---|---|
-| 2026-04-28 | W3-A Step 3 ADR 主体撰写 | `file:///Users/nallylin/Library/Application%20Support/Code/User/workspaceStorage/185633b60e9bb925751de80a50ffce63/GitHub.copilot-chat/memory-tool/memories/YTkxYmVkNDItYzI3MS00MWIyLTgxMmYtZjg4OGMyZTc5NjEz/w3a-step3-adr-handoff.md` | 读该 URI 后做 Step 3：撰写 `docs/plans/architecture-refactor/adr-112-compatibility-evaluation.md`（按 9 章节骨架 + 14×3 评分卡 + Phase 0 10 行 + 16 条偏离声明 + 4 KPI + CI 三档） |
-| 2026-04-30 | P0-2 PR #3 — bootstrap_tools() 实现 + register_*_tools 私有化（PR #36/39/40/41/42 已合并 to xClaw） | `file:///Users/nallylin/Library/Application%20Support/Code/User/workspaceStorage/185633b60e9bb925751de80a50ffce63/GitHub.copilot-chat/memory-tool/memories/YzU4NDZiZjctNzUxMy00NDBkLTliNWYtNTI4MTFiOTA3YmRk/p02-pr3-bootstrap-impl-handoff.md` | 读该 URI + p02-bootstrap-tools-design.md §3.2 → TDD 红测（5 个 req_p02_pr3_*）→ 替换 9 marker trait 为具体类型 → 实现 bootstrap_tools 按 mode + 字段分发 → 私有化 12 register → cargo nextest + build 全绿 → 三 skill 自审 → 开 PR base=xClaw |
-| 2026-04-30 | 架构可用性与任务覆盖审查 | `file:///Users/nallylin/Library/Application%20Support/Code/User/workspaceStorage/185633b60e9bb925751de80a50ffce63/GitHub.copilot-chat/memory-tool/memories/OGJmYmVkZTAtOTBmOS00YTk5LWI4ZDQtZmJjYzdiNmI3YWQ5/architecture-readiness-task-audit-handoff.md` | 已按 `docs/plans/architecture-refactor/48-agent-framework-readiness-and-task-audit.md` §6/§9 补齐 GitHub issues/Project：#28/#37 canonical，#84-#91 第一轮任务且带 `audit:first-review`，#92-#96 二次审查新增且带 `audit:second-review`；下一步优先实现 #28/#84/#92/#93，再做 #94，#85 依赖 #28/#84/#92/#93/#94/#61 |
-| 2026-04-30 | W3 #52 apply-patch parser port（PR #83 待 CI 全绿合并） | `file:///Users/nallylin/Library/Application%20Support/Code/User/workspaceStorage/185633b60e9bb925751de80a50ffce63/GitHub.copilot-chat/memory-tool/memories/MGQwOTU1NDMtZDkwNi00YTk0LTk4YzEtYzE0MmMyNzNhNTUw/w3-52-apply-patch-parser-handoff.md` | 读该 URI → `gh pr checks 83` 全绿则 squash merge → 推进 #53 [W3] ApplyPatchTool 注册（消费 `dasclaw_apply_patch::parse_patch`，TDD + skill 管线 + PR） |
-| 2026-04-30 | W3 .codex → 项目自有命名空间迁移（PR #97/#98/#100 全部 merged，`.dasclaw/` 命名约定已建立；B 类双读 + C 类 doc 待办） | `file:///Users/nallylin/Library/Application%20Support/Code/User/workspaceStorage/185633b60e9bb925751de80a50ffce63/GitHub.copilot-chat/memory-tool/memories/NWE5ZjQ5Y2EtNDQ5Yi00MGUyLTkxNTEtNGVkYzg0NTliYWFl/w3-codex-namespace-migration-handoff.md` | 读该 URI → 推进 #55 ProjectDocLoader 实际加载（按双读策略 `.dasclaw/AGENTS.md` 主 + `.codex/AGENTS.md` 兼容回退），同步改 lib.rs doc + 31-target-architecture.md §185 |
-| 2026-05-01 | W3 redline 拆解 + AGENTS.md 任务启动 4 问（PR #122/#123/#124 已 merged；#28/#37 已拆为 inventory(agent) + decision(redline) + implementation(agent) 三段子 issue：#126-#131） | `file:///Users/nallylin/Library/Application%20Support/Code/User/workspaceStorage/185633b60e9bb925751de80a50ffce63/GitHub.copilot-chat/memory-tool/memories/MTk2MmQ5NTctMTA4OS00MWQ0LTg3N2MtMDQzNDkyNDY0ZTNj/w3-redline-split-and-checklist-handoff.md` | 读该 URI → 按 AGENTS.md 顶部"任务启动 4 问"显式回答 → 推进 #126（#28 沙箱激活 inventory，agent S effort，强制三层验证，产出 `docs/plans/architecture-refactor/p0a-sandbox-activation-inventory.md`） |
-| 2026-05-01 | P0-A 沙箱激活 inventory 完成（PR #134 已绿, Closes #126） | `file:///Users/nallylin/Library/Application%20Support/Code/User/workspaceStorage/185633b60e9bb925751de80a50ffce63/GitHub.copilot-chat/memory-tool/memories/NWNlYzliNmUtMTEyMC00YWZmLWFmYjEtODYxZjhjYjIxMWQ1/p0a-inventory-126-done-handoff.md` | 读该 URI 全文 + AGENTS.md "任务启动 4 问" → 推进 #129 P0-C Prompt build inventory，完全镜像 #126→PR #134 范式（4 问 → 三层验证 → 12 章节文档 → PR base=xClaw, Closes #129），严格守 inventory 边界不做决策 |
-| 2026-XX | 安全批次清零 (#190 closed) + W5 governance 11 模块 port + #75 W4 测试套全 port (HEAD `0eec4b4b`，7 PR merged: #197/#201/#202/#203/#204/#205/#206 + #192 won't-fix) | `file:///Users/nallylin/Library/Application%20Support/Code/User/workspaceStorage/185633b60e9bb925751de80a50ffce63/GitHub.copilot-chat/memory-tool/memories/MzA4NzZjNzQtMDUzOC00ZmFlLTlhNjYtZmFlNDUxMTFmYWM1/security-w5-cadence-handoff.md` | 读该 URI 全文 → A. 新建 issue 跟踪 vendored 链剩余 8 高危 dependabot 告警的决策路径 (等上游 ironclaw rebase vs root `[patch.crates-io]` 强制覆盖，后者需 ADR + cargo-deny 例外)；B. 检查新 agent-friendly W4/W5 issue；C. 注意 #88 builtin-only 起步可能擦边补丁；硬约束 ADR-118 readonly + 禁补丁 + 完成闭环必调 mcp-feedback-enhanced |
+3. 明确说明"当前已完成的闭环 milestone 是什么"
+4. 给用户的下一会话开局 prompt 中**必须包含完整 URI**（不是 `/memories/session/...` 短路径），因为新会话的 agent 不一定能解析短路径
 
 #### 注意
 
