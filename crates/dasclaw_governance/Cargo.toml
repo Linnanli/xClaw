@@ -17,7 +17,7 @@ default = []
 policy_engine = []
 recovery_recipes = []
 trust_resolver = []
-branch_lock = []
+branch_lock = ["dep:serde"]
 stale_base = []
 stale_branch = []
 green_contract = []
@@ -36,3 +36,4 @@ full = [
 
 [dependencies]
 thiserror = "1"
+serde = { version = "1", features = ["derive"], optional = true }
