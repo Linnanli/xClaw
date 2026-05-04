@@ -44,3 +44,12 @@ full = [
 thiserror = "1"
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
+
+# Cross-module wiring tests for the full 6-pack — only compiled when
+# the convenience `full` feature is on. Keeps the default `cargo test`
+# (no features) lean, while `cargo nextest run -p dasclaw_governance
+# --features full` exercises the integration surface (#75).
+[[test]]
+name = "integration_tests"
+path = "tests/integration_tests.rs"
+required-features = ["full"]
