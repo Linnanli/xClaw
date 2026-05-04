@@ -9,5 +9,30 @@ publish = false
 [lib]
 path = "src/lib.rs"
 
+[features]
+# All 6-pack governance modules are OFF by default (W4 scaffolding).
+# Each module is opt-in via its cargo feature; activating a module pulls in
+# its `pub mod` declaration. Implementations land in #65-#71.
+default = []
+policy_engine = []
+recovery_recipes = []
+trust_resolver = []
+branch_lock = []
+stale_base = []
+stale_branch = []
+green_contract = []
+lane_events = []
+# Convenience: enable the full 6-pack at once (used by integration tests).
+full = [
+    "policy_engine",
+    "recovery_recipes",
+    "trust_resolver",
+    "branch_lock",
+    "stale_base",
+    "stale_branch",
+    "green_contract",
+    "lane_events",
+]
+
 [dependencies]
 thiserror = "1"
