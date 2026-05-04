@@ -20,8 +20,14 @@ pub mod redaction;
 pub mod schema_validator;
 pub mod wasm;
 
+mod registration_report;
 mod registry;
 mod tool;
+
+pub use registration_report::{
+    RegistrationOutcome, RejectedToolEntry, RejectionReason, ToolRegistrationEntry,
+    ToolRegistrationReport, ToolSource,
+};
 
 pub use autonomy::{
     AUTONOMOUS_TOOL_DENYLIST, autonomous_allowed_tool_names, autonomous_unavailable_error,
