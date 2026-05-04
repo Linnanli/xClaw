@@ -18,7 +18,9 @@ dist = false
 argon2 = { version = "0.5", features = ["std"] }
 
 # JWT tokens
-jsonwebtoken = "9"
+# v10 requires explicit backend selection; pick `rust_crypto` to avoid
+# pulling in the aws_lc_sys C build toolchain.
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto", "use_pem"] }
 
 # Time handling
 chrono = "0.4"
