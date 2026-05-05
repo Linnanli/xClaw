@@ -191,7 +191,13 @@ fn generate_random_token() -> String {
 
 /// 验证令牌格式
 ///
-/// 令牌应该是 64 字符的十六进制字符串，不包含控制字符、引号、空格等
+/// 令牌应该是 64 字符的十六进制字符串，不包含控制字符、引号、空格等。
+///
+/// 注意：本函数是"格式校验器"，**不是**密文比对函数。它会因不同的非法
+/// 输入在不同字符位置短路返回（例如长度不符 vs 含非 hex 字符），这是
+/// 设计预期的 fail-fast 行为。如需把外部输入的 token 与已存储的密钥做
+/// 等值比较以判定身份，请在调用方使用恒定时间比较（如 `subtle::
+/// ConstantTimeEq`），而不是依赖本函数提供旁路抗性。
 pub fn is_valid_token(token: &str) -> bool {
     token.len() == 64
         && token.chars().all(|c| c.is_ascii_hexdigit())
@@ -487,57 +493,17 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_security_timing_attack_resistance() {
-        let valid_token = "a".repeat(64);
-        let invalid_tokens = vec![
-            "b".repeat(64),
-            "c".repeat(64),
-            "d".repeat(64),
-            "e".repeat(64),
-            "f".repeat(64),
-        ];
-
-        // 测试多次以获得更稳定的时间测量
-        let iterations = 100;
-        let mut valid_times = Vec::new();
-        let mut invalid_times = Vec::new();
-
-        for _ in 0..iterations {
-            let start = std::time::Instant::now();
-            let _ = is_valid_token(&valid_token);
-            valid_times.push(start.elapsed());
-
-            for invalid_token in &invalid_tokens {
-                let start = std::time::Instant::now();
-                let _ = is_valid_token(invalid_token);
-                invalid_times.push(start.elapsed());
-            }
-        }
-
-        let avg_valid_time: u128 =
-            valid_times.iter().map(|d| d.as_nanos()).sum::<u128>() / valid_times.len() as u128;
-        let avg_invalid_time: u128 =
-            invalid_times.iter().map(|d| d.as_nanos()).sum::<u128>() / invalid_times.len() as u128;
-
-        // 时间差不应该太大（允许一定的变化，但不应该有明显的时序泄露）
-        let time_diff = avg_valid_time.abs_diff(avg_invalid_time);
-        let max_allowed_diff = std::cmp::max(avg_valid_time, avg_invalid_time) / 2; // 允许50%的差异
-
-        println!("Average valid time: {}ns", avg_valid_time);
-        println!("Average invalid time: {}ns", avg_invalid_time);
-        println!(
-            "Time difference: {}ns (max allowed: {}ns)",
-            time_diff, max_allowed_diff
-        );
-
-        assert!(
-            time_diff < max_allowed_diff,
-            "Timing difference too large: {}ns > {}ns (may indicate timing attack vulnerability)",
-            time_diff,
-            max_allowed_diff
-        );
-    }
+    // NOTE: 历史上此处有一个 `test_security_timing_attack_resistance`，断言
+    // `is_valid_token(valid)` 与 `is_valid_token(invalid)` 平均耗时差 < 50%。
+    // 该测试的前提是错的：`is_valid_token` 是"格式校验器"，按设计就会在不同
+    // 位置短路（长度不符立即返回 / 非 hex 字符短路 / 含控制字符短路），并非
+    // 密文比对函数；本模块也没有任何 secret-equality 比较路径需要恒定时间。
+    // 真正需要旁路抗性的是调用方在做 `received_token == stored_secret` 时使
+    // 用 `subtle::ConstantTimeEq`（已在 `is_valid_token` 的 doc 注释里说明）。
+    // 因此原测试既测错了对象（拿 `b/c/d/e/f` * 64 这类全合法 hex + 长度合规
+    // 的输入跑 valid 路径，看似在比对，实际两侧都走完整 happy path），又对
+    // 一个有意 fail-fast 的格式校验器强加恒定时间约束，长期作为 base 上的
+    // 不稳定测试。已删除；格式覆盖由 `test_is_valid_token_all_cases` 保证。
 
     #[test]
     fn test_security_memory_safety() {
