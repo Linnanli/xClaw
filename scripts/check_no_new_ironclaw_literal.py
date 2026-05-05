@@ -54,6 +54,7 @@ FILE_WHITELIST: tuple[str, ...] = (
     "scripts/check_no_new_ironclaw_literal.py",
     ".github/workflows/code_style.yml",
     ".github/pull_request_template.md",
+    "AGENTS.md",
 )
 
 
