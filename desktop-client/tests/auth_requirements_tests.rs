@@ -3,7 +3,6 @@ use desktop_client::commands::get_auth_token;
 use desktop_client::{clean_token, is_valid_token};
 use std::fs;
 use tempfile::TempDir;
-use tokio;
 
 // ========== 需求级覆盖率 >85% ==========
 

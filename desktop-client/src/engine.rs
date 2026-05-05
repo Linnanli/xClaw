@@ -840,7 +840,7 @@ async fn resolve_managed_policy(
         }
         Err(error) => {
             tracing::warn!(error = %error, "Failed to load cached signed managed policy");
-            return None;
+            None
         }
     }
 }
