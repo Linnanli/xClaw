@@ -20,6 +20,21 @@
 
 <!-- Closes #N, or "None" -->
 
+## Cross-cuts
+
+<!--
+ADR-114 (.ironclaw → .dasclaw rebrand) enforcement field. Required.
+Pick one and delete the others:
+
+  - ADR-114: 类A 无新增 .ironclaw / IRONCLAW_BASE_DIR 字面量
+  - ADR-114: 类B issue#XXX (打 'adr-114-class-b' label，CI grep guard 整体跳过)
+  - ADR-114: 不涉及
+
+Reference: docs/plans/architecture-refactor/adr-114-dasclaw-rebrand.md §4.1
+-->
+
+-
+
 ## Validation
 
 <!-- How did you verify this works? -->
