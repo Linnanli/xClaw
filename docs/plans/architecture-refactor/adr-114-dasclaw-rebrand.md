@@ -170,9 +170,10 @@ Cross-cuts: ADR-114 [类A 无新增 .ironclaw 字面量 | 类B issue#XXX | 不�
 post-Accepted 状态下 §4.2 白名单的实际形态：
 
 - **文件级白名单**保留：仅 ADR-114 自身 markdown、grep guard 脚本本身、
-  `.github/pull_request_template.md`、`.github/workflows/code_style.yml`。
-  这 4 个文件存在意义就是描述这两个字面量（守卫规则、CI 接入、PR 模板说明），
-  纳入业务 grep 没有意义。新增任何业务代码 / 子 crate 进白名单一律拒绝。
+  `.github/pull_request_template.md`、`.github/workflows/code_style.yml`、
+  顶层 `AGENTS.md`（红线文档化）。这 5 个文件存在意义就是描述这两个字面量
+  （守卫规则、CI 接入、PR 模板说明、Agent 必读规约），纳入业务 grep 没有意义。
+  新增任何业务代码 / 子 crate 进白名单一律拒绝。
 - **Label 豁免** `adr-114-class-b` 保留：用于 OQ-1 / OQ-2 / OQ-3 等仍开放的
   收尾子 issue，以及 `bootstrap.rs` 的 dual-read 维护型 PR。任何使用该 label
   的 PR 必须在描述里说明为什么属于类 B（CI 不强制，由 reviewer 拦截滥用）。

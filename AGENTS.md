@@ -122,8 +122,7 @@
 - 背景 / 目标
 - 改动范围
 - 非目标（What’s NOT in this PR）
-- 验证
-- 后续 PR / 下一步
+- 验证- **Cross-cuts**：声明本 PR 与 ADR-114（`.ironclaw` → `.dasclaw` 命名迁移）的关系。三选一：`类A`（无新增 `.ironclaw` / `IRONCLAW_BASE_DIR` 字面量）/ `类B issue#XXX`（集中工程，需带 `adr-114-class-b` label 豁免 grep guard）/ `不涉及`- 后续 PR / 下一步
 
 #### 禁止事项
 
@@ -132,6 +131,41 @@
 - ❌ PR 标题和 commit / 实际改动边界不一致
 - ❌ 一个 PR 混入多个互不相干的主题
 - ❌ 明明已经完成闭环 milestone，却继续在同一会话无限追加新阶段
+
+### ADR-114 红线（`.ironclaw` → `.dasclaw` 命名空间迁移）
+
+**真理来源**：[`docs/plans/architecture-refactor/adr-114-dasclaw-rebrand.md`](docs/plans/architecture-refactor/adr-114-dasclaw-rebrand.md)
+
+**硬性规则**（业务代码零容忍）：
+
+1. **禁止在 PR diff 中新增 `.ironclaw` 或 `IRONCLAW_BASE_DIR` 字面量**
+   - CI 通过 [`scripts/check_no_new_ironclaw_literal.py`](scripts/check_no_new_ironclaw_literal.py) 自动拦截（workflow `code_style.yml` 的 `no-new-ironclaw-literal` job）
+   - 删除 `.ironclaw` 行不算违规；只算**新增**行
+   - 已存在的 `.ironclaw` 字面量（迁移路径 / 历史注释 / fixture）不会触发
+2. **白名单文件**（meta 自指，可含字面量）：
+   - `docs/plans/architecture-refactor/adr-114-dasclaw-rebrand.md`
+   - `scripts/check_no_new_ironclaw_literal.py`
+   - `.github/workflows/code_style.yml`
+   - `.github/pull_request_template.md`
+3. **类 B 集中工程豁免**：
+   - 必须带 `adr-114-class-b` label
+   - 必须有专属 issue（如 ADR-114 §6 OQ-3 → issue #218）
+   - PR 标题 + body 显式声明 `类B issue#XXX`
+   - grep guard job 在该 label 下整体跳过；不允许零碎打补丁式豁免
+4. **PR 描述必须含 `Cross-cuts:` 三元声明**（见上节 PR 描述最低要求）
+
+**自查命令**（push 前）：
+
+```bash
+# 1. 字面量自查（不需 base 比较）
+grep -rn '\.ironclaw\b\|IRONCLAW_BASE_DIR' --include='*.rs' --include='*.toml' --include='*.sql' --include='*.md' \
+  desktop-client/ admin-backend/ crates/ scripts/ docs/ 2>&1 | grep -v 'adr-114\|ironclaw-main/\|claw-code/\|codex-cli-main/'
+
+# 2. 用 grep guard 自身做 PR diff 扫描（推荐）
+python3 scripts/check_no_new_ironclaw_literal.py --base origin/xClaw
+```
+
+**违规处理**：CI 红 → 要么改写为 `.dasclaw` / `DASCLAW_BASE_DIR`，要么补 `adr-114-class-b` label + 专属 issue。**禁止以注释或 `#[allow(...)]` 方式绕过 grep guard**。
 
 ### Base 分支既有 broken 测试处置规范（2026-04-30 PR #79/#81 实证）
 
