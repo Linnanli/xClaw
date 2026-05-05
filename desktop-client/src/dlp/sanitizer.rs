@@ -392,8 +392,10 @@ impl DlpSanitizer {
 
     /// 计算脱敏统计
     fn calculate_stats(&self, detection_result: &DlpDetectionResult) -> SanitizationStats {
-        let mut stats = SanitizationStats::default();
-        stats.total_matches = detection_result.matches.len();
+        let mut stats = SanitizationStats {
+            total_matches: detection_result.matches.len(),
+            ..Default::default()
+        };
 
         for dlp_match in &detection_result.matches {
             match dlp_match.action {
@@ -531,8 +533,10 @@ mod tests {
     fn test_sanitize_disabled() {
         let patterns = get_all_builtin_patterns().unwrap();
         let detector = DlpDetector::with_custom_patterns(patterns);
-        let mut config = SanitizationConfig::default();
-        config.enabled = false;
+        let config = SanitizationConfig {
+            enabled: false,
+            ..Default::default()
+        };
         let sanitizer = DlpSanitizer::new(detector, config);
 
         let content = "身份证：110101199003071234";
@@ -639,8 +643,10 @@ mod tests {
     fn test_update_config() {
         let mut sanitizer = create_test_sanitizer();
 
-        let mut new_config = SanitizationConfig::default();
-        new_config.enabled = false;
+        let new_config = SanitizationConfig {
+            enabled: false,
+            ..Default::default()
+        };
 
         sanitizer.update_config(new_config);
 

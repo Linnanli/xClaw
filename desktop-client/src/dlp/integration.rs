@@ -584,8 +584,10 @@ mod tests {
     async fn test_update_config() {
         let integration = DlpIntegration::with_default_config().await.unwrap();
 
-        let mut new_config = DlpIntegrationConfig::default();
-        new_config.enabled = false;
+        let new_config = DlpIntegrationConfig {
+            enabled: false,
+            ..Default::default()
+        };
 
         integration.update_config(new_config).await.unwrap();
 
@@ -618,8 +620,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_disabled_dlp() {
-        let mut config = DlpIntegrationConfig::default();
-        config.enabled = false;
+        let config = DlpIntegrationConfig {
+            enabled: false,
+            ..Default::default()
+        };
 
         let integration = DlpIntegration::new(config).await.unwrap();
         let content = "身份证：110101199003071234";
