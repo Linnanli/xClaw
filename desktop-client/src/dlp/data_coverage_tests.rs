@@ -211,8 +211,9 @@ mod data_coverage_tests {
 
             let result = sanitizer.sanitize("身份证： 110101199003071234 ");
             if *enabled {
-                assert!(result.had_sensitive_data || !result.had_sensitive_data);
-            // 任一结果都可接受
+                // 启用时仅验证调用不 panic；命中与否取决于检测器内部规则，
+                // 此处不强制断言（与本文件其它边界/无效用例的 `let _ =` 模式一致）。
+                let _ = result.had_sensitive_data;
             } else {
                 assert!(!result.had_sensitive_data); // 禁用时不应检测
             }
