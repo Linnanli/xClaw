@@ -1,17 +1,18 @@
 # ADR-117: P0-C Prompt Builder 统一（吸收 claw-code 至 LayeredPromptBuilder）
 
-- **Status**: Accepted (v1.2 partial-supersede)
+- **Status**: Accepted (v1.3 partial-supersede)
 - **Date**: 2026-04-30
-- **Last revision**: 2026-05-02 (v1.2)
+- **Last revision**: 2026-05-05 (v1.3)
 - **Approver**: x-claw 架构组
-- **Issue**: [#130](https://github.com/Linnanli/xClaw/issues/130)（W3/B P0-C — Prompt Builder 统一） — closed by [#142](https://github.com/Linnanli/xClaw/pull/142)
-- **Closes**: #130
+- **Issue**: [#130](https://github.com/Linnanli/xClaw/issues/130)（W3/B P0-C — Prompt Builder 统一） — closed by [#142](https://github.com/Linnanli/xClaw/pull/142)；[#131](https://github.com/Linnanli/xClaw/issues/131)（W3/C 实施）— closed by [#141](https://github.com/Linnanli/xClaw/pull/141) + [#142](https://github.com/Linnanli/xClaw/pull/142)（D5/D7 撤回，详 v1.3 修订记）
+- **Closes**: #130, #131
 
 ## 修订记 (Revisions)
 
 - **v1.0 (2026-04-30)** — 初稿（Proposed）
 - **v1.1 (2026-05-02, 已撤回)** — 试图扩档 D7 删除半径至「档 1.5」（在 claw-code 子仓内删 5 项 crate），方向错误，PR #143 已 close
 - **v1.2 (2026-05-02)** — **D5 + D7 子仓内删除工作项已撤回**（claw-code 子仓恢复原代码 db8ff4d revert c36c0ef），由 [ADR-118](adr-118-claw-code-readonly-and-self-impl.md) 取代为「主仓自实现 LLM provider + 删除 desktop-client/ironclaw 对 claw-code-api 的 path-dep」。本 ADR 其余部分（D6 / D8.2 / D8.3 / D8.4 / 提示词单源核心目标）保持有效。
+- **v1.3 (2026-05-05)** — **W3/C 实施 issue [#131](https://github.com/Linnanli/xClaw/issues/131) 收尾**：三层验证（`semantic_search` + `grep_search`）确认 `SystemPromptBuilder` 在 x-claw 主仓代码层 0 调用方（仅在只读区 `claw-code/rust/crates/runtime/` 与本 ADR 注释中出现）；`DynamicLayerInput.environment` / `project_doc` 字段、`## Environment` Markdown render、reasoning.rs 喂数据、5 个不变量测试均已在 #141 + #142 落地；D5/D7 已由 v1.2 + ADR-118 接手。结论：**#131 的 7 个 scope checkbox 全部由 #141 + #142 + ADR-118 履约**，无新增代码改动需要落地。本 v1.3 修订仅为关闭 issue 的过程透明度记录。
 
 ### Done 状态（v1.2 截至 2026-05-02）
 
@@ -21,6 +22,7 @@
 | D8.2 + D8.3 cache refactor | [#141](https://github.com/Linnanli/xClaw/pull/141) | ✅ Merged b8049f4c |
 | D6 + D8.4 删 static_hash / legacy 字段 | [#142](https://github.com/Linnanli/xClaw/pull/142) | ✅ Merged 51e14910，closes #130 |
 | **核心目标「提示词单源 = LayeredPromptBuilder」** | — | ✅ **达成** |
+| **W3/C 实施 #131 收尾**（v1.3） | 本文 doc-only PR | ✅ closes #131（7 scope items 全部履约：见 v1.3 修订记） |
 | ~~v1.1 D7 扩档（在子仓内删）~~ | ~~[#143](https://github.com/Linnanli/xClaw/pull/143)~~ | ❌ Closed（方向错误，由 ADR-118 取代） |
 | ~~父仓 bump submodule~~ | ~~[#144](https://github.com/Linnanli/xClaw/pull/144)~~ | ❌ Closed（子仓 revert 后无需 bump） |
 | **D5 + D7 撤回** | [ADR-118](adr-118-claw-code-readonly-and-self-impl.md) | 🟡 Pending（W6 实施） |
