@@ -265,10 +265,12 @@ mod access_control_tests {
     fn test_security_configuration_tampering() {
         let patterns = get_all_builtin_patterns().unwrap();
         let detector = DlpDetector::with_custom_patterns(patterns);
-        let mut config = SanitizationConfig::default();
 
         // 测试配置篡改保护
-        config.enabled = false;
+        let config = SanitizationConfig {
+            enabled: false,
+            ..Default::default()
+        };
         let sanitizer = DlpSanitizer::new(detector, config);
 
         // 即使禁用，也应该安全处理

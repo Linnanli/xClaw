@@ -335,8 +335,10 @@ mod failure_tests {
 
     #[test]
     fn test_failure_disabled_sanitization() {
-        let mut config = SanitizationConfig::default();
-        config.enabled = false;
+        let config = SanitizationConfig {
+            enabled: false,
+            ..Default::default()
+        };
 
         let bridge = create_bridge_with_config(config);
         let result = bridge.scan_user_input("身份证：110101199003071234");
