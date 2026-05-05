@@ -202,9 +202,11 @@ mod data_coverage_tests {
         // 布尔值测试
         let bool_values = [true, false];
         for enabled in &bool_values {
-            let mut config = SanitizationConfig::default();
-            config.enabled = *enabled;
-            config.preserve_format = !*enabled;
+            let config = SanitizationConfig {
+                enabled: *enabled,
+                preserve_format: !*enabled,
+                ..Default::default()
+            };
 
             let detector = DlpDetector::new();
             let sanitizer = DlpSanitizer::new(detector, config);
@@ -408,8 +410,10 @@ mod data_coverage_tests {
         replacement_map.insert("chinese_mobile".to_string(), "[手机号]".to_string());
         replacement_map.insert("custom_pattern".to_string(), "[自定义]".to_string());
 
-        let mut config = SanitizationConfig::default();
-        config.replacement_map = replacement_map;
+        let config = SanitizationConfig {
+            replacement_map,
+            ..Default::default()
+        };
 
         let detector2 = DlpDetector::new();
         let sanitizer = DlpSanitizer::new(detector2, config);
