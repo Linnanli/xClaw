@@ -59,8 +59,10 @@ mod code_coverage_tests {
         // 测试脱敏器的所有分支
 
         // 分支1: 脱敏功能禁用
-        let mut config_disabled = SanitizationConfig::default();
-        config_disabled.enabled = false;
+        let config_disabled = SanitizationConfig {
+            enabled: false,
+            ..Default::default()
+        };
         let detector_disabled = DlpDetector::new();
         let sanitizer_disabled = DlpSanitizer::new(detector_disabled, config_disabled);
 
@@ -82,8 +84,10 @@ mod code_coverage_tests {
         assert!(result_block.was_blocked);
 
         // 分支5: 格式保留开启
-        let mut config_preserve = SanitizationConfig::default();
-        config_preserve.preserve_format = true;
+        let config_preserve = SanitizationConfig {
+            preserve_format: true,
+            ..Default::default()
+        };
         let detector_preserve = DlpDetector::new();
         let sanitizer_preserve = DlpSanitizer::new(detector_preserve, config_preserve);
 
@@ -91,8 +95,10 @@ mod code_coverage_tests {
         assert!(result_preserve.sanitized_content.contains("*"));
 
         // 分支6: 格式保留关闭
-        let mut config_no_preserve = SanitizationConfig::default();
-        config_no_preserve.preserve_format = false;
+        let config_no_preserve = SanitizationConfig {
+            preserve_format: false,
+            ..Default::default()
+        };
         let detector_no_preserve = DlpDetector::new();
         let sanitizer_no_preserve = DlpSanitizer::new(detector_no_preserve, config_no_preserve);
 
