@@ -1,6 +1,7 @@
 -- Settings table: key-value store for all user configuration.
 --
--- Replaces ~/.ironclaw/settings.json, session.json, and mcp-servers.json.
+-- Replaces ~/.dasclaw/settings.json, session.json, and mcp-servers.json
+-- (see ADR-114 for the namespace migration history).
 -- Keys use dotted paths matching the existing Settings.get()/set() convention
 -- (e.g., "agent.name", "sandbox.enabled", "mcp_servers").
 -- One row per setting so individual values can be updated atomically.
