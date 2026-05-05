@@ -1,7 +1,8 @@
 # ADR-114: `.ironclaw` → `.dasclaw` 命名空间渐进迁移
 
-- **Status**: Draft
+- **Status**: Accepted
 - **Date**: 2026-04-29
+- **Accepted-On**: 2026-05-05
 - **Approver**: pending
 - **Supersedes**: 无
 - **Related**: ADR-106（`.codex` 双读兼容）、ADR-112 §1（产品命名空间收口）、AGENTS.md "禁止补丁式代码"红线
@@ -156,6 +157,31 @@ Cross-cuts: ADR-114 [类A 无新增 .ironclaw 字面量 | 类B issue#XXX | 不�
 - `~/.openclaw` 导入器（独立上游命名空间）
 - `ironclaw-main/` 旧仓库代码（参考材料，本 ADR 仅约束 `desktop-client/ironclaw/` 子项目和 `crates/` 下新代码）
 - `decode-claude-code-main/` / `claw-decode-main/` / `codex-cli-main/` 等参考库（只读快照）
+
+---
+
+## 5.A Accepted Addendum (2026-05-05)
+
+5 个类 B 子 issue（#106 #107 #108 #109 #110）全部 closed，grep guard
+`scripts/check_no_new_ironclaw_literal.py` + CI job `no-new-ironclaw-literal`
+（`.github/workflows/code_style.yml`）+ PR 模板 Cross-cuts 字段已落地，本 ADR
+升级为 **Accepted**。
+
+post-Accepted 状态下 §4.2 白名单的实际形态：
+
+- **文件级白名单**保留：仅 ADR-114 自身 markdown、grep guard 脚本本身、
+  `.github/pull_request_template.md`、`.github/workflows/code_style.yml`。
+  这 4 个文件存在意义就是描述这两个字面量（守卫规则、CI 接入、PR 模板说明），
+  纳入业务 grep 没有意义。新增任何业务代码 / 子 crate 进白名单一律拒绝。
+- **Label 豁免** `adr-114-class-b` 保留：用于 OQ-1 / OQ-2 / OQ-3 等仍开放的
+  收尾子 issue，以及 `bootstrap.rs` 的 dual-read 维护型 PR。任何使用该 label
+  的 PR 必须在描述里说明为什么属于类 B（CI 不强制，由 reviewer 拦截滥用）。
+- **业务代码不进入任何白名单**：所有 `desktop-client/`、`crates/`、
+  `admin-backend/` 下的 PR diff 必须 0 新增字面量；如撞守卫，要么改用
+  `dasclaw_*` 等价物，要么打 class-B label 并在 PR 描述说明依据。
+
+「白名单转为强制」在原文中的精神含义已完成：grep guard 默认对所有非 class-B PR
+强制，不再有任意业务代码 PR 享有沉默豁免。
 
 ---
 
