@@ -373,8 +373,8 @@ impl DlpSanitizer {
     /// 手机号格式保留（处理国际区号）
     fn preserve_format_mobile(&self, text: &str, preserve_chars: usize, mask_char: char) -> String {
         // 如果包含+86等国际区号，保留区号部分
-        if text.starts_with("+86") {
-            let mobile_part = &text[3..].trim_start_matches(&['-', ' '][..]);
+        if let Some(rest) = text.strip_prefix("+86") {
+            let mobile_part = rest.trim_start_matches(&['-', ' '][..]);
             let preserved_mobile =
                 self.preserve_format_generic(mobile_part, preserve_chars, mask_char);
             // 保持原有的分隔符

@@ -126,10 +126,10 @@ pub fn get_log_file_path() -> PathBuf {
 pub fn normalize_path(path: &str) -> PathBuf {
     let path = path.replace("\\", "/");
 
-    if path.starts_with("~/") {
+    if let Some(rest) = path.strip_prefix("~/") {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(&path[2..])
+            .join(rest)
     } else {
         PathBuf::from(path)
     }
