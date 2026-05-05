@@ -390,7 +390,7 @@ impl EnterprisePolicySyncManager {
                 last_sync: current_timestamp(),
             };
 
-            return Ok((dlp_policies, sensitive_ops_policies, version));
+            Ok((dlp_policies, sensitive_ops_policies, version))
         }
 
         #[cfg(not(test))]
@@ -592,11 +592,11 @@ impl EnterprisePolicySyncManager {
             // 测试环境：返回模拟版本
             use crate::policy_sync::PolicyVersion;
 
-            return Ok(PolicyVersion {
+            Ok(PolicyVersion {
                 dlp_rules_version: 1,
                 sensitive_ops_version: 1,
                 last_sync: current_timestamp(),
-            });
+            })
         }
 
         #[cfg(not(test))]
