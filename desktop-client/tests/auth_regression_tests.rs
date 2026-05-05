@@ -2,7 +2,6 @@ use desktop_client::auth_token_manager::AuthTokenManager;
 use desktop_client::{clean_token, is_valid_token};
 use std::fs;
 use tempfile::TempDir;
-use tokio;
 
 // ========== 变更覆盖率 >70% ==========
 // 确保重构不会破坏现有功能的回归测试
