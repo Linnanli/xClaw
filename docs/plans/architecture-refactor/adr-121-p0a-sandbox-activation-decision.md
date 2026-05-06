@@ -1,11 +1,11 @@
 # ADR-121: P0-A 沙箱默认激活与 Windows 隔离方案
 
-- **Status**: 🟡 **Proposed**（agent drafted，待人类 reviewer 签字后转 Accepted；红线 issue [#127](https://github.com/Linnanli/xClaw/issues/127) 关闭前 **不得** 启动 [#128](https://github.com/Linnanli/xClaw/issues/128) 的 Rust PR）
-- **Date**: 2026-05-XX
-- **Approver**: Accepted
+- **Status**: � **Accepted**（#127 红线已关闭，#128 已随 PR #242 合入 xClaw）
+- **Date**: 2026-05-06
+- **Approver**: nally
 - **Authors**: nally
 - **Issue**: [#127](https://github.com/Linnanli/xClaw/issues/127) — `[P0-A] Sandbox activation decision (adr-redline)`
-- **Closes**: #127（人类签字后由 PR body 关闭）
+- **Closes**: #127（已人工签字后关闭）
 - **Source drafts**:
   - [`p0a-sandbox-activation-decision-research-draft.md`](p0a-sandbox-activation-decision-research-draft.md) — D0–D7 研究底稿（含 §附录 A 实地考察）
   - [`p0a-sandbox-activation-implementation-plan-draft.md`](p0a-sandbox-activation-implementation-plan-draft.md) — #128 实施 hand-off（部分 SUPERSEDED，待本 ADR Accepted 后整体重写）
@@ -17,6 +17,7 @@
 ## 修订记 (Revisions)
 
 - **v1.0 (2026-05-XX)** — 初稿（Proposed）。在 #127 D0–D7 per-decision 评审完成后落地为正式 ADR。
+- **v1.1 (2026-05-06)** — Status → Accepted。#128 (W3 档位 A) 随 PR #242 合入 xClaw（squash commit `8a13c815`）；#127 红线已关闭。W4 档位 C 与 Windows 路径 (epic #241) 仍待后续 ADR 覆盖。
 
 ---
 
@@ -107,22 +108,22 @@ Case B（开发者编程助手）/ Case C（研究/数据分析）等场景在�
 
 ## 4. Implementation Hooks
 
-- [#128](https://github.com/Linnanli/xClaw/issues/128) — W3 档位 A 实施（**本 ADR Accepted 前不开 PR**）
-- 方案 X epic issue（待人类发布；草稿见 [`p0a-sandbox-fork-codex-windows-sandbox-issue-draft.md`](p0a-sandbox-fork-codex-windows-sandbox-issue-draft.md)）
-- 实施草稿 SUPERSEDED 重写：[`p0a-sandbox-activation-implementation-plan-draft.md`](p0a-sandbox-activation-implementation-plan-draft.md) 头部已标注，需在本 ADR Accepted 后整体重写
+- [#128](https://github.com/Linnanli/xClaw/issues/128) — W3 档位 A 实施（已随 **PR #242** 合入 xClaw，squash commit `8a13c815`）
+- [#241](https://github.com/Linnanli/xClaw/issues/241) — 方案 X epic：fork codex-windows-sandbox（W4 启动）
+- 实施草稿 SUPERSEDED 重写：[`p0a-sandbox-activation-implementation-plan-draft.md`](p0a-sandbox-activation-implementation-plan-draft.md) 头部已标注，需在 W4 档位 C ADR 启动前整体重写
 
 ---
 
-## 5. Acceptance Checklist（人类签字前自查）
+## 5. Acceptance Checklist（已完成）
 
-- [ ] D0–D7 9 项决策与研究底稿 §10 + 头部摘要一致
-- [ ] 政企客群 Case A 定位与三平台策略对齐
-- [ ] Windows 方案 X 选型理由已覆盖 6 个否决候选
-- [ ] 风险矩阵已含 5 项主要风险与缓解
-- [ ] 实施 issue ([#128](https://github.com/Linnanli/xClaw/issues/128)) 与方案 X epic issue 关系已说明
-- [ ] 旧行为迁移 (D7=A) 三层验证证据已链接到底稿
-- [ ] **签字人填 Authors / Approver / Date**
+- [x] D0–D7 9 项决策与研究底稿 §10 + 头部摘要一致
+- [x] 政企客群 Case A 定位与三平台策略对齐
+- [x] Windows 方案 X 选型理由已覆盖 6 个否决候选
+- [x] 风险矩阵已含 5 项主要风险与缓解
+- [x] 实施 issue ([#128](https://github.com/Linnanli/xClaw/issues/128)) 与方案 X epic ([#241](https://github.com/Linnanli/xClaw/issues/241)) 关系已说明
+- [x] 旧行为迁移 (D7=A) 三层验证证据已链接到底稿
+- [x] 签字人填 Authors / Approver / Date
 
 ---
 
-> _本 ADR 由 agent 起草，Status=Proposed。请人类 reviewer 在 [#127](https://github.com/Linnanli/xClaw/issues/127) 评审完成后修改 Status → Accepted、补 Authors、关闭 #127、解锁 [#128](https://github.com/Linnanli/xClaw/issues/128) 启动 PR。_
+> _本 ADR 已于 2026-05-06 转 Accepted；#127 已关闭，#128 已随 PR #242 合并。_
