@@ -309,8 +309,8 @@ mod tests {
     #[test]
     fn serde_rejects_relative_path() {
         let json = serde_json::to_string("relative/path").expect("serialize string");
-        let err = serde_json::from_str::<AbsolutePathBuf>(&json)
-            .expect_err("relative path should fail");
+        let err =
+            serde_json::from_str::<AbsolutePathBuf>(&json).expect_err("relative path should fail");
         assert!(err.to_string().contains("not absolute"));
     }
 }
