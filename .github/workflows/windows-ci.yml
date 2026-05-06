@@ -25,8 +25,15 @@ on:
       - 'feat/win/**'
       - 'ci/win-**'
       - 'windows-**'
+    # 任何分支动到 Windows 沙箱代码或 vendor 快照都触发（PR-1.1.3a 起）
+    paths:
+      - 'crates/dasclaw_sandbox_windows/**'
+      - 'vendor/codex-windows-sandbox/**'
+      - '.github/workflows/windows-ci.yml'
   pull_request:
     types: [opened, synchronize, reopened, labeled]
+    # 注意：保留 label 全局触发（任何 PR 标 windows-ci 都跑），
+    # 同时 push 端的 paths 已覆盖 Windows 沙箱目录的回归保护。
 
 permissions:
   contents: read
