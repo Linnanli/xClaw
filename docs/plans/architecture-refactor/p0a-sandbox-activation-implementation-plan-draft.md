@@ -1,41 +1,22 @@
-# P0-A 沙箱激活实现规划 — 研究草稿（#128 hand-off 材料）
+# P0-A 沙箱激活实现规划 — 研究草稿（已归档）
 
-> **Status**: 🟡 **Implementation planning draft** — 由 agent 基于 [`p0a-sandbox-activation-decision-research-draft.md`](./p0a-sandbox-activation-decision-research-draft.md) §10 决策矩阵和用户在会话中给出的"全部接受"反馈编写。
+> **Status**: 🔴 **SUPERSEDED / ARCHIVED**（2026-05-06）
 >
-> ## ⚠️ 决策矩阵已变更（2026-XX-XX 会话）— 本草稿正文 §1-§N 部分已 SUPERSEDED
+> 本草稿原作为 [#128](https://github.com/Linnanli/xClaw/issues/128) 实施 hand-off 材料起草，基于决策研究草稿 §10 旧矩阵（D0=B / D1=C / D2=E+C / D3=D Docker / D4=B / D5=WW / D6=A 含后门 / D7=A）。新矩阵在 per-decision 评审后落地为 **[ADR-121](./adr-121-p0a-sandbox-activation-decision.md) v1.1（Accepted, 2026-05-06）**，本草稿保留仅供历史溯源。
 >
-> 本草稿原基于 [`p0a-sandbox-activation-decision-research-draft.md`](./p0a-sandbox-activation-decision-research-draft.md) §10 旧矩阵（D0=B / D1=C / D2=E+C / D3=D Docker / D4=B / D5=WW / D6=A 含后门 / D7=A）撰写。
+> **W3 档位 A 已实施并合并**：
 >
-> 用户在新一轮 per-decision MCP gate 评审后给出**新矩阵**（详见研究草稿头部"⭐ 决策最终结果摘要"区块 + §附录 A）：
+> - PR：[#242](https://github.com/Linnanli/xClaw/pull/242)（squash commit `8a13c815`）
+> - 关闭：[#128](https://github.com/Linnanli/xClaw/issues/128)、[#127](https://github.com/Linnanli/xClaw/issues/127)
+> - 决策依据：[ADR-121](./adr-121-p0a-sandbox-activation-decision.md)
+> - 用户文档：[`desktop-client/docs/sandbox-activation.md`](../../../desktop-client/docs/sandbox-activation.md)
 >
-> - **D0 = C（ExecutionMode 枚举）** — 不再用 boolean `os_sandbox.enabled`；用 enum `{ Direct, OsSandbox, Docker }`
-> - **D1 = B（enterprise 强制无降级）** — 比原 C 更严
-> - **D2 = E + 友好错误子系统** — 直接全量 + 引导 UX
-> - **D3 = D3-3 Fork codex-windows-sandbox（方案 X）** — Windows 不走 Docker，走用户隔离 fork（详见 [`p0a-sandbox-fork-codex-windows-sandbox-issue-draft.md`](./p0a-sandbox-fork-codex-windows-sandbox-issue-draft.md)）
-> - **D4a = D / D4b = A** — 拆分 init 失败 vs runtime 拒绝两种语义
-> - **D5 = E（WorkspaceWrite + 政策可覆盖）** — 与原一致
-> - **D6 = A 简化版（去 always_on 后门）**
-> - **D7 = A** — 与原一致
+> **后续工作**：
 >
-> **实施者注意**：
-> 1. 本草稿 §3-§N（Phase 拆分、API 设计、测试计划）部分基于旧矩阵的 LOC 估算与代码示例需要按新矩阵重写
-> 2. 在 [#127](https://github.com/Linnanli/xClaw/issues/127) 由人类落地为正式 ADR 之后，本草稿应被**整体重写或归档**
-> 3. Windows 路径不再走 Docker，改 fork codex-windows-sandbox，需协调新 epic（见上述 issue draft）
-> 4. Framework 实施按 A→C 渐进：W3（#128）= 档位 A ~200 LOC env+Builder fallback；W4 = 新 ADR 档位 C ~1500 LOC 纯 Builder
+> - W4 档位 C（纯 Builder + 政策文件加载，~1500 LOC）— 待新 ADR；下面 §3–§N 的 Phase/API/测试将由新 ADR 配套实施草稿覆盖。
+> - Windows 路径（fork codex-windows-sandbox 方案 X）— epic [#241](https://github.com/Linnanli/xClaw/issues/241)，与 W4 解耦推进。
 >
-> ---
->
-> **重要前置约束**：
-> - ❌ 本文件**不是** [#128](https://github.com/Linnanli/xClaw/issues/128) PR
-> - ❌ 本文件**不修改** Rust 代码
-> - ❌ 在 [#127](https://github.com/Linnanli/xClaw/issues/127) ADR Status=Accepted 由人类签字之前，**任何 #128 PR 都不应开启**
-> - ✅ 本文件仅是给 #128 实施者的拆分清单 + 测试计划 + 风险对账
->
-> **Source**:
-> - 决策草稿（用户已口头批准 8/8 — **已 SUPERSEDED**，新矩阵见决策草稿头部摘要）：[`p0a-sandbox-activation-decision-research-draft.md`](./p0a-sandbox-activation-decision-research-draft.md)
-> - inventory：[`p0a-sandbox-activation-inventory.md`](./p0a-sandbox-activation-inventory.md)
-> - **新增 Windows 实施 issue draft**：[`p0a-sandbox-fork-codex-windows-sandbox-issue-draft.md`](./p0a-sandbox-fork-codex-windows-sandbox-issue-draft.md)
-> - 父：[#28](https://github.com/Linnanli/xClaw/issues/28)，决策红线：[#127](https://github.com/Linnanli/xClaw/issues/127)，实现：[#128](https://github.com/Linnanli/xClaw/issues/128)
+> 本文件正文以下章节基于旧矩阵编写，**仅作历史参考，不应直接据此实施**。
 
 ---
 
