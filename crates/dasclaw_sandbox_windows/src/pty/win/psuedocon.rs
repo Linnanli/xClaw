@@ -90,11 +90,11 @@ shared_library!(Ntdll,
     ) -> NTSTATUS,
 );
 
+const CONPTY_UNSUPPORTED: &str =
+    "this system does not support conpty.  Windows 10 October 2018 or newer is required";
+
 fn load_conpty() -> ConPtyFuncs {
-    let kernel = ConPtyFuncs::open(Path::new("kernel32.dll")).expect(
-        // safety: ConPTY APIs are required for the Windows sandbox; absence indicates an unsupported OS and is not recoverable
-        "this system does not support conpty.  Windows 10 October 2018 or newer is required",
-    );
+    let kernel = ConPtyFuncs::open(Path::new("kernel32.dll")).expect(CONPTY_UNSUPPORTED); // safety: ConPTY APIs are required for the Windows sandbox; absence indicates an unsupported OS and is not recoverable
 
     if let Ok(sideloaded) = ConPtyFuncs::open(Path::new("conpty.dll")) {
         sideloaded
