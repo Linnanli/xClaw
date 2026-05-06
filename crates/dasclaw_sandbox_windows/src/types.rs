@@ -10,17 +10,17 @@
 //! Phase 1.1.0; downstream PRs may reintroduce them if x-claw needs the
 //! corresponding capabilities.
 //!
-//! `AbsolutePathBuf` is also part of the upstream sandbox-policy surface; it
-//! lives in `codex-utils-absolute-path`. Until that helper is ported in
-//! PR-1.1.1, this module uses `std::path::PathBuf` for `writable_roots`. The
-//! serde representation is unchanged (a JSON array of path strings), so the
-//! switch to `AbsolutePathBuf` is a non-breaking refinement.
+//! `writable_roots` and `WritableRoot::{root, read_only_subpaths}` use
+//! [`AbsolutePathBuf`](crate::absolute_path::AbsolutePathBuf), matching
+//! upstream `codex-protocol`. The serde representation is a JSON array of
+//! path strings; `AbsolutePathBuf::Deserialize` rejects relative paths.
 
 use std::path::Path;
-use std::path::PathBuf;
 
 use serde::Deserialize;
 use serde::Serialize;
+
+use crate::absolute_path::AbsolutePathBuf;
 
 /// Represents whether outbound network access is available to the agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -70,7 +70,7 @@ pub enum SandboxPolicy {
         /// Additional folders (beyond cwd and possibly TMPDIR) that should be
         /// writable from within the sandbox.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        writable_roots: Vec<PathBuf>,
+        writable_roots: Vec<AbsolutePathBuf>,
 
         /// When set to `true`, outbound network access is allowed. `false` by
         /// default.
@@ -94,19 +94,19 @@ pub enum SandboxPolicy {
 /// read-only even when the root is writable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WritableRoot {
-    pub root: PathBuf,
+    pub root: AbsolutePathBuf,
 
     /// By construction, these subpaths are all under `root`.
-    pub read_only_subpaths: Vec<PathBuf>,
+    pub read_only_subpaths: Vec<AbsolutePathBuf>,
 }
 
 impl WritableRoot {
     pub fn is_path_writable(&self, path: &Path) -> bool {
-        if !path.starts_with(&self.root) {
+        if !path.starts_with(self.root.as_path()) {
             return false;
         }
         for subpath in &self.read_only_subpaths {
-            if path.starts_with(subpath) {
+            if path.starts_with(subpath.as_path()) {
                 return false;
             }
         }
@@ -197,12 +197,35 @@ mod tests {
 
     #[test]
     fn writable_root_blocks_paths_under_read_only_subpath() {
+        let repo = crate::absolute_path::test_path_buf("/repo");
+        let dotgit = crate::absolute_path::test_path_buf("/repo/.git");
+        let main_rs = crate::absolute_path::test_path_buf("/repo/src/main.rs");
+        let head = crate::absolute_path::test_path_buf("/repo/.git/HEAD");
+        let other = crate::absolute_path::test_path_buf("/other/path");
         let root = WritableRoot {
-            root: PathBuf::from("/repo"),
-            read_only_subpaths: vec![PathBuf::from("/repo/.git")],
+            root: AbsolutePathBuf::from_absolute_path_checked(&repo).expect("abs repo"),
+            read_only_subpaths: vec![
+                AbsolutePathBuf::from_absolute_path_checked(&dotgit).expect("abs .git"),
+            ],
         };
-        assert!(root.is_path_writable(Path::new("/repo/src/main.rs")));
-        assert!(!root.is_path_writable(Path::new("/repo/.git/HEAD")));
-        assert!(!root.is_path_writable(Path::new("/other/path")));
+        assert!(root.is_path_writable(&main_rs));
+        assert!(!root.is_path_writable(&head));
+        assert!(!root.is_path_writable(&other));
+    }
+
+    #[test]
+    fn workspace_write_with_writable_roots_round_trips() {
+        let root_path = crate::absolute_path::test_path_buf("/extra/root");
+        let abs = AbsolutePathBuf::from_absolute_path_checked(&root_path).expect("abs path");
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![abs.clone()],
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+        let json = serde_json::to_string(&policy).expect("serialize");
+        assert!(json.contains("writable_roots"));
+        let parsed: SandboxPolicy = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(policy, parsed);
     }
 }
