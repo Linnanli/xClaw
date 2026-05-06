@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "vendor_name": "codex-windows-sandbox",
+  "purpose": "Phase 1.0 vendor scaffolding for ADR-121 D3-3 (fork codex-windows-sandbox into dasclaw monorepo) — see epic #241.",
+  "upstream": {
+    "repository": "https://github.com/openai/codex",
+    "commit": "6e838a19fa52f2c30442c5bd2913acd1e6fe4c9d",
+    "commit_subject": "Enable unavailable dummy tools by default (#19459)",
+    "captured_at": "2026-05-06",
+    "license": "Apache-2.0",
+    "license_file": "LICENSE-APACHE-2.0",
+    "upstream_notice_file": "NOTICE-upstream"
+  },
+  "vendored_paths": [
+    {
+      "upstream": "codex-rs/windows-sandbox-rs",
+      "local": "vendor/codex-windows-sandbox/upstream/windows-sandbox-rs",
+      "role": "primary",
+      "reason": "Windows OS sandbox implementation (~12k LOC, ~30 modules: sandbox_users, token, cap, acl, workspace_acl, firewall, desktop, dpapi, conpty, setup_orchestrator, ...)."
+    },
+    {
+      "upstream": "codex-rs/protocol",
+      "local": "vendor/codex-windows-sandbox/upstream/protocol",
+      "role": "transitive",
+      "reason": "windows-sandbox-rs uses codex_protocol::protocol::{SandboxPolicy, NetworkAccess}. Full crate vendored to keep upstream cherry-picks straightforward; later phases may slim down."
+    },
+    {
+      "upstream": "codex-rs/utils/pty",
+      "local": "vendor/codex-windows-sandbox/upstream/utils/pty",
+      "role": "transitive",
+      "reason": "windows-sandbox-rs uses codex_utils_pty::{TerminalSize, SpawnedProcess, ProcessDriver, RawConPty, spawn_from_driver}. Note: dasclaw_pty exists in this repo and may eventually replace this dependency in a later phase."
+    },
+    {
+      "upstream": "codex-rs/utils/string",
+      "local": "vendor/codex-windows-sandbox/upstream/utils/string",
+      "role": "transitive",
+      "reason": "windows-sandbox-rs uses codex_utils_string::{sanitize_metric_tag_value, take_bytes_at_char_boundary}."
+    },
+    {
+      "upstream": "codex-rs/utils/absolute-path",
+      "local": "vendor/codex-windows-sandbox/upstream/utils/absolute-path",
+      "role": "transitive",
+      "reason": "windows-sandbox-rs uses codex_utils_absolute_path::AbsolutePathBuf."
+    }
+  ],
+  "modifications_in_this_pr": "None. This is a verbatim vendor copy. No file in vendor/codex-windows-sandbox/upstream/ has been modified relative to the captured upstream commit. Phase 1.1 will introduce workspace integration (workspace.dependencies, target gating, brand-neutral naming).",
+  "workspace_integration_status": "DEFERRED to PR-1.1. Vendored Cargo.toml files are intentionally NOT registered in the root workspace (see root Cargo.toml `exclude = [\"vendor\"]`). Running cargo build/check from the workspace root does not currently compile vendored code.",
+  "epic": "https://github.com/Linnanli/xClaw/issues/241",
+  "adr": "docs/plans/architecture-refactor/adr-121-p0a-sandbox-activation-decision.md"
+}
