@@ -2667,9 +2667,12 @@ name = "dasclaw_sandbox_windows"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dirs 6.0.0",
+ "dunce",
  "pretty_assertions",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

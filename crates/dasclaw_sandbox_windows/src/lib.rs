@@ -22,6 +22,7 @@
 //! The actual Win32 sandbox logic (AppContainer, JobObject, network ACLs)
 //! lands in subsequent PRs under tracker issue #250.
 
+pub mod absolute_path;
 pub mod string_util;
 pub mod types;
 
