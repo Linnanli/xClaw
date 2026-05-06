@@ -49,6 +49,7 @@ version = "0.52"
 features = [
   "Win32_Foundation",
   "Win32_Security_Cryptography",
+  "Win32_System_Threading",
 ]
 
 [dev-dependencies]
