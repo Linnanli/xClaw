@@ -11,12 +11,15 @@
 //! - [`SpawnedProcess`] — return value of spawn helpers.
 //! - [`ProcessDriver`] — adapter for backends that own their own transport.
 //! - [`spawn_from_driver`] — turns a [`ProcessDriver`] into a [`SpawnedProcess`].
-//! - `RawConPty` — `cfg(windows)` only, lands with PR-1.1.3b.
+//! - [`RawConPty`] — `cfg(windows)` only ConPTY backend (PR-1.1.3b).
 //!
 //! Upstream's `pipe`, `pty`, `process_group`, and bundled `tests` modules
 //! are intentionally omitted: nothing in `windows-sandbox-rs` imports them.
 
 mod process;
+
+#[cfg(windows)]
+mod win;
 
 pub use process::ProcessDriver;
 pub use process::ProcessHandle;
@@ -24,3 +27,6 @@ pub use process::SpawnedProcess;
 pub use process::TerminalSize;
 pub use process::combine_output_receivers;
 pub use process::spawn_from_driver;
+
+#[cfg(windows)]
+pub use win::RawConPty;
