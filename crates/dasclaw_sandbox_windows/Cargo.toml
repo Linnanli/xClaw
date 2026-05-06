@@ -23,8 +23,25 @@ tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# Win32 transport (RawConPty + win::*) lands in PR-1.1.3b.
-# Until then, no `cfg(windows)`-only deps are required.
+# Win32 transport (RawConPty + win::*).
+# These are required only when building for Windows targets.
+[target.'cfg(windows)'.dependencies]
+filedescriptor = "0.8"
+lazy_static = "1.4"
+log = "0.4"
+shared_library = "0.1"
+winapi = { version = "0.3", features = [
+  "handleapi",
+  "minwinbase",
+  "ntdef",
+  "ntstatus",
+  "processthreadsapi",
+  "synchapi",
+  "winbase",
+  "wincon",
+  "winerror",
+  "winnt",
+] }
 
 [dev-dependencies]
 pretty_assertions = "1"

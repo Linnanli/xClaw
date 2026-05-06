@@ -9,12 +9,12 @@
 //! See `vendor/codex-windows-sandbox/README.md` for the reference snapshot
 //! and the porting plan in tracker issue #250.
 //!
-//! ## Crate status (Phase 1.1.3a)
+//! ## Crate status (Phase 1.1.3b)
 //!
 //! V'-b "port-on-demand" subset. The cross-platform PTY/process plumbing
-//! (`pty::process`) required by `windows-sandbox-rs` is now in tree.
-//! The `cfg(windows)`-only ConPTY backend (`pty::win::*`, `RawConPty`) lands
-//! with PR-1.1.3b.
+//! (`pty::process`) and the `cfg(windows)`-only ConPTY backend
+//! (`pty::win::*`, `RawConPty`) required by `windows-sandbox-rs` are now in
+//! tree.
 //!
 //! Currently exposed:
 //!

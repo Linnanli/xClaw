@@ -2675,13 +2675,18 @@ dependencies = [
  "anyhow",
  "dirs 6.0.0",
  "dunce",
+ "filedescriptor",
+ "lazy_static",
  "libc",
+ "log",
  "portable-pty 0.9.0",
  "pretty_assertions",
  "serde",
  "serde_json",
+ "shared_library",
  "tempfile",
  "tokio",
+ "winapi",
 ]
 
 [[package]]
