@@ -43,8 +43,9 @@
       "reason": "windows-sandbox-rs uses codex_utils_absolute_path::AbsolutePathBuf."
     }
   ],
-  "modifications_in_this_pr": "None. This is a verbatim vendor copy. No file in vendor/codex-windows-sandbox/upstream/ has been modified relative to the captured upstream commit. Phase 1.1 will introduce workspace integration (workspace.dependencies, target gating, brand-neutral naming).",
-  "workspace_integration_status": "DEFERRED to PR-1.1. Vendored Cargo.toml files are intentionally NOT registered in the root workspace (see root Cargo.toml `exclude = [\"vendor\"]`). Running cargo build/check from the workspace root does not currently compile vendored code.",
+  "modifications_in_this_pr": "None. Files under vendor/codex-windows-sandbox/upstream/ are unchanged relative to the captured upstream commit and remain a read-only reference snapshot.",
+  "workspace_integration_status": "REFERENCE_ONLY. Per Phase 1.1 design path V'-b (tracker #250), files under vendor/codex-windows-sandbox/upstream/ are NEVER compiled. Root Cargo.toml keeps `vendor` in [workspace] exclude permanently. The actual built crate is crates/dasclaw_sandbox_windows/, which mechanically ports needed code from this snapshot with per-file Apache-2.0 attribution headers.",
+  "phase_1_1_tracker": "https://github.com/Linnanli/xClaw/issues/250",
   "epic": "https://github.com/Linnanli/xClaw/issues/241",
   "adr": "docs/plans/architecture-refactor/adr-121-p0a-sandbox-activation-decision.md"
 }

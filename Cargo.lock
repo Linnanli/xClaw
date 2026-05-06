@@ -2663,6 +2663,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dasclaw_sandbox_windows"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "data-encoding"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -28,6 +28,8 @@ members = [
 	"crates/dasclaw_exec",
 	# W6-C 主仓自实现 LLM provider —— 替代 claw-code-api path-dep（ADR-118 PR-A.0 骨架）
 	"crates/dasclaw_llm_provider",
+	# W4 ADR-121 D3-3 / Phase 1.1 — Windows sandbox port from openai/codex (commit 6e838a19fa)
+	"crates/dasclaw_sandbox_windows",
 	"desktop-client/ironclaw",
 	"desktop-client/ironclaw/crates/ironclaw_common",
 	"desktop-client/ironclaw/crates/ironclaw_safety",

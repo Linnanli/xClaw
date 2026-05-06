@@ -1,56 +1,47 @@
 # vendor/codex-windows-sandbox
 
-Phase 1.0 vendor scaffolding for **[ADR-121](../../docs/plans/architecture-refactor/adr-121-p0a-sandbox-activation-decision.md) D3-3**
-(Windows OS sandbox via fork of `codex-windows-sandbox`).
+> **Status (Phase 1.1.0)**: Read-only **reference snapshot**. The actual workspace crate
+> being built is [`crates/dasclaw_sandbox_windows`](../../crates/dasclaw_sandbox_windows).
+> Files under this directory are **never compiled** — root `Cargo.toml` keeps
+> `vendor` in `[workspace] exclude` and that exclusion will not be lifted.
 
-Tracking: epic [#241](https://github.com/Linnanli/xClaw/issues/241)
+This snapshot exists to make the porting plan in [tracker #250](https://github.com/Linnanli/xClaw/issues/250) auditable:
+each module ported into `crates/dasclaw_sandbox_windows/` carries a header that
+points back to the corresponding file under `upstream/`.
 
-## What is in this directory
+## Background
 
-- `upstream/` — verbatim copy of selected crates from
-  [openai/codex](https://github.com/openai/codex) at commit
-  [`6e838a19fa52f2c30442c5bd2913acd1e6fe4c9d`](https://github.com/openai/codex/commit/6e838a19fa52f2c30442c5bd2913acd1e6fe4c9d).
-  No file under `upstream/` has been modified relative to that commit.
-- `LICENSE-APACHE-2.0` — full text of the upstream Apache License 2.0.
-- `NOTICE-upstream` — verbatim copy of the upstream `NOTICE` file.
-- `vendor-pin.json` — machine-readable manifest of what was vendored, from where,
-  and at which upstream commit.
+Per [ADR-121](../../docs/plans/architecture-refactor/adr-121-p0a-sandbox-activation-decision.md) D3-3
+(epic [#241](https://github.com/Linnanli/xClaw/issues/241)), x-claw forks
+`codex-windows-sandbox`. Phase 1.0 (PR #248) vendored selected upstream crates
+verbatim. Phase 1.1 then re-evaluated build wiring and concluded that a verbatim
+build would drag in 30+ transitive `codex-*` crates. The decision (**design
+path V'-b**) is to:
 
-## What is **not** in this PR (PR-1.0)
+1. Keep the verbatim snapshot under `upstream/` as a **reference only**, and
+2. Hand-port the parts we actually need into a brand-new main-workspace crate
+   `crates/dasclaw_sandbox_windows/`, mechanically rewriting imports to local
+   equivalents, with each ported file carrying an Apache-2.0 attribution header.
 
-- ❌ Workspace registration — root `Cargo.toml` adds `vendor` to `[workspace] exclude`,
-  so vendored `Cargo.toml` files are intentionally **not** picked up by `cargo build`.
-- ❌ Edits to vendored `Cargo.toml` (no `[workspace.dependencies]` rewrites yet).
-- ❌ Brand renaming (`CodexSandboxUsers` → `DasclawSandboxUsers`, etc.).
-- ❌ Adapter glue from `crates/dasclaw_sandbox` to the vendored crate.
-- ❌ Windows CI matrix.
+## Layout
 
-These are deliberately deferred to **PR-1.1** so this PR can be reviewed strictly
-on three axes:
+| Path | Purpose |
+| --- | --- |
+| `upstream/` | Verbatim copy of selected upstream crates at the pinned commit. **Never built.** |
+| `LICENSE-APACHE-2.0` | Full text of the upstream Apache License 2.0. |
+| `NOTICE-upstream` | Verbatim copy of the upstream `NOTICE` file. |
+| `vendor-pin.json` | Machine-readable manifest: upstream commit, vendored paths, current usage status. |
 
-1. License attribution correctness (Apache 2.0 + NOTICE preserved, upstream commit pinned).
-2. Vendor scope (which 5 crates were copied and why — see `vendor-pin.json`).
-3. No accidental coupling to the workspace build graph.
+The vendored crates and the upstream commit are documented in
+[`vendor-pin.json`](./vendor-pin.json).
 
-## Vendored crates (5 total, ~32.8k LOC)
+## Refreshing the snapshot
 
-| Upstream path | Role | Local path |
-| --- | --- | --- |
-| `codex-rs/windows-sandbox-rs` | primary (12 253 LOC) | `upstream/windows-sandbox-rs/` |
-| `codex-rs/protocol` | transitive (`SandboxPolicy`, `NetworkAccess`) | `upstream/protocol/` |
-| `codex-rs/utils/pty` | transitive (ConPTY wrapper) | `upstream/utils/pty/` |
-| `codex-rs/utils/string` | transitive (2 helpers) | `upstream/utils/string/` |
-| `codex-rs/utils/absolute-path` | transitive (`AbsolutePathBuf`) | `upstream/utils/absolute-path/` |
-
-The full motivation for vendoring (vs. submodule / cargo path-dep) and the exact
-upstream surface used by `windows-sandbox-rs` is recorded in `vendor-pin.json`.
-
-## Refresh procedure
-
-To re-vendor against a newer upstream commit:
+Refresh is optional and only needed when porting a new upstream feature. To
+re-snapshot against a newer upstream commit:
 
 1. `cd codex-cli-main && git fetch && git checkout <new-commit>`
-2. From repo root, re-run the rsync used in PR-1.0 (one line per crate):
+2. From repo root, re-run the rsync (one line per crate):
    ```bash
    for d in windows-sandbox-rs protocol utils/pty utils/string utils/absolute-path; do
      rsync -a --delete --exclude='target' --exclude='.git' \
@@ -60,18 +51,12 @@ To re-vendor against a newer upstream commit:
 3. Update `vendor-pin.json` (`upstream.commit`, `commit_subject`, `captured_at`).
 4. Re-copy `LICENSE` / `NOTICE` from `codex-cli-main/` if the upstream files changed.
 
-## Why a separate `vendor/` tree (rather than a fresh `crates/` member)
-
-ADR-121 D3-3 explicitly chose **fork** over rewrite. Keeping the vendored tree
-isolated under `vendor/` preserves a clean delta against upstream so future
-cherry-picks stay tractable. PR-1.1 will introduce a `crates/dasclaw_sandbox_windows/`
-shim that depends on (or wraps) the vendored crate; the vendored sources
-themselves will continue to live under `vendor/` and remain branded `codex-*`
-until Phase 2 (Brand & Naming).
+Because the build does not depend on this directory, refresh **never affects
+CI**. It only affects the diff readers see when inspecting future ports.
 
 ## License
 
 Code under `upstream/` is © OpenAI and licensed under the Apache License 2.0
-(see `LICENSE-APACHE-2.0` and `NOTICE-upstream`). Any modifications introduced
-by later phases of this fork will preserve the Apache 2.0 license and add a
-modification notice as required by the license.
+(see `LICENSE-APACHE-2.0` and `NOTICE-upstream`). Files ported into
+`crates/dasclaw_sandbox_windows/` carry per-file attribution headers crediting
+the upstream source path and commit, in compliance with Apache 2.0 §4.
