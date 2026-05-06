@@ -9,27 +9,29 @@
 //! See `vendor/codex-windows-sandbox/README.md` for the reference snapshot
 //! and the porting plan in tracker issue #250.
 //!
-//! ## Crate status (Phase 1.1.3b)
+//! ## Crate status (Phase 1.1.4a)
 //!
 //! V'-b "port-on-demand" subset. The cross-platform PTY/process plumbing
 //! (`pty::process`) and the `cfg(windows)`-only ConPTY backend
-//! (`pty::win::*`, `RawConPty`) required by `windows-sandbox-rs` are now in
-//! tree.
+//! (`pty::win::*`, `RawConPty`) are in tree, and the leaf path-key utilities
+//! consumed by the sandbox have started landing.
 //!
 //! Currently exposed:
 //!
 //! - Sandbox policy types (`types::SandboxPolicy`, `types::NetworkAccess`,
 //!   `types::WritableRoot`).
-//! - String / path utilities (`string_util`, `absolute_path`).
+//! - String / path utilities (`string_util`, `absolute_path`,
+//!   `path_normalization`).
 //! - Cross-platform PTY/process driver adapter (`pty::ProcessDriver`,
 //!   `pty::SpawnedProcess`, `pty::TerminalSize`, `pty::spawn_from_driver`).
 //! - On non-Windows targets, [`unsupported`] returns a typed error indicating
 //!   that the Windows sandbox runtime is unavailable.
 //!
 //! The actual Win32 sandbox logic (AppContainer, JobObject, network ACLs)
-//! lands in subsequent PRs under tracker issue #250.
+//! lands in subsequent PRs under tracker issue #263 / #250.
 
 pub mod absolute_path;
+pub mod path_normalization;
 pub mod pty;
 pub mod string_util;
 pub mod types;
