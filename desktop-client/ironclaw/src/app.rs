@@ -58,6 +58,11 @@ pub struct AppComponents {
     pub catalog_entries: Vec<crate::extensions::RegistryEntry>,
     pub dev_loaded_tool_names: Vec<String>,
     pub builder: Option<Arc<dyn crate::tools::SoftwareBuilder>>,
+    /// W3 (#128 / ADR-121) — held to keep the allowlist HTTPS proxy alive
+    /// for the lifetime of the app. Dropping this shuts the proxy down.
+    /// `None` when [`crate::sandbox::ExecutionMode::Direct`] is selected
+    /// (dev mode) or when activation failed and the boot path warned.
+    pub network_proxy: Option<Arc<crate::sandbox::net_proxy::NetworkProxyHandle>>,
 }
 
 /// Options that control optional init phases.
@@ -300,6 +305,7 @@ impl AppBuilder {
             Option<Arc<dyn EmbeddingProvider>>,
             Option<Arc<Workspace>>,
             Option<Arc<dyn crate::tools::SoftwareBuilder>>,
+            Option<Arc<crate::sandbox::net_proxy::NetworkProxyHandle>>,
         ),
         anyhow::Error,
     > {
@@ -436,6 +442,21 @@ impl AppBuilder {
             }
         }
 
+        // ─── W3 (#128 / ADR-121) — OS sandbox + allowlist proxy activation ───
+        //
+        // Decisions: D0=C ExecutionMode {Direct,OsSandbox,Docker} /
+        // D1=B enterprise fail-closed (no silent downgrade) /
+        // D5=E WorkspaceWrite default policy /
+        // D6=A simplified (no `always_on` backdoor).
+        //
+        // `Direct` is dev-only: ShellTool runs unsandboxed. Enterprise
+        // installs must keep the default `OsSandbox` so allowlist proxy +
+        // bwrap isolation enforce egress / fs scope. `Docker` is the
+        // legacy worker pipeline and is left untouched here (W4 unifies).
+        let network_proxy = self
+            .activate_sandbox(&mut ctx, &credential_registry)
+            .await?;
+
         tools.bootstrap_tools(&ctx).await?;
         tools.register_tool_info();
 
@@ -452,7 +473,140 @@ impl AppBuilder {
             None
         };
 
-        Ok((safety, tools, embeddings, workspace, builder))
+        Ok((safety, tools, embeddings, workspace, builder, network_proxy))
+    }
+
+    /// W3 (#128 / ADR-121) — activate the OS sandbox executor + allowlist
+    /// HTTPS proxy and populate the matching [`BootstrapContext`] fields.
+    ///
+    /// Branches on [`crate::sandbox::ExecutionMode`]:
+    /// * `Direct` — no isolation, populates nothing. Dev-only; emits a
+    ///   warning so enterprise misconfiguration is loud (D1=B fail-CLOSED
+    ///   guidance: enterprise installs must override `SANDBOX_EXECUTION_MODE`
+    ///   away from `Direct`).
+    /// * `OsSandbox` — builds [`OsExecutor`], starts
+    ///   [`crate::sandbox::net_proxy::start_network_proxy`], stamps
+    ///   `proxy_env_vars` into `ctx.proxy_env`, and writes the `SandboxPolicy`
+    ///   resolved from config (default `WorkspaceWrite` per D5=E).
+    /// * `Docker` — left to the legacy worker pipeline; no dev-tool wiring.
+    ///
+    /// On `OsSandbox` activation failure (e.g. proxy port bind error,
+    /// missing secrets store), emits an error and returns `None`. The
+    /// caller proceeds with an unsandboxed `ShellTool`; the friendly-error
+    /// surface (D2=E / D4a=D) is delegated to the channel layer which
+    /// surfaces the warn log to the user.
+    async fn activate_sandbox(
+        &self,
+        ctx: &mut BootstrapContext,
+        _credential_registry: &Arc<SharedCredentialRegistry>,
+    ) -> Result<Option<Arc<crate::sandbox::net_proxy::NetworkProxyHandle>>, anyhow::Error> {
+        use crate::sandbox::ExecutionMode;
+        use std::time::Duration;
+
+        let sb = &self.config.sandbox;
+        match sb.execution_mode {
+            ExecutionMode::Direct => {
+                tracing::warn!(
+                    "SANDBOX_EXECUTION_MODE=direct — ShellTool will run \
+                     unsandboxed. This is intended for local development only. \
+                     Enterprise deployments must set SANDBOX_EXECUTION_MODE \
+                     to 'os_sandbox' (ADR-121 D1=B fail-CLOSED)."
+                );
+                Ok(None)
+            }
+            ExecutionMode::Docker => {
+                tracing::debug!(
+                    "SANDBOX_EXECUTION_MODE=docker — dev-tool boot path \
+                     leaves ShellTool unwired; container worker pipeline \
+                     handles isolation."
+                );
+                Ok(None)
+            }
+            ExecutionMode::OsSandbox => {
+                // Resolve the sandbox policy. ADR-121 D5=E: default is
+                // WorkspaceWrite so dev workflows succeed out-of-the-box.
+                let mut policy = sb
+                    .policy
+                    .parse::<crate::sandbox::SandboxPolicy>()
+                    .unwrap_or(crate::sandbox::SandboxPolicy::WorkspaceWrite);
+
+                // Double opt-in (ADR-121 D6=A simplified): FullAccess
+                // requires SANDBOX_ALLOW_FULL_ACCESS=true; otherwise we
+                // downgrade loudly to WorkspaceWrite.
+                if matches!(policy, crate::sandbox::SandboxPolicy::FullAccess)
+                    && !sb.allow_full_access
+                {
+                    tracing::error!(
+                        "SANDBOX_POLICY=full_access requires \
+                         SANDBOX_ALLOW_FULL_ACCESS=true. Downgrading to \
+                         WorkspaceWrite."
+                    );
+                    policy = crate::sandbox::SandboxPolicy::WorkspaceWrite;
+                }
+
+                let executor = Arc::new(crate::sandbox::OsExecutor::new(
+                    Duration::from_secs(sb.timeout_secs),
+                    sb.allow_full_access,
+                ));
+
+                // Network proxy requires a secrets store (credential
+                // resolver feed). Without one, log and skip — ShellTool
+                // still gets the OS sandbox; the proxy stays absent.
+                let proxy = match self.secrets_store.as_ref() {
+                    Some(store) => {
+                        let mut sandbox_cfg = sb.to_sandbox_config();
+                        // Override policy with the (possibly downgraded) one.
+                        sandbox_cfg.policy = policy;
+
+                        let mappings = crate::sandbox::default_credential_mappings();
+                        match crate::sandbox::net_proxy::start_network_proxy(
+                            &sandbox_cfg,
+                            mappings,
+                            Arc::clone(store),
+                            self.config.owner_id.clone(),
+                        )
+                        .await
+                        {
+                            Ok(handle) => {
+                                let handle = Arc::new(handle);
+                                let env_vec =
+                                    crate::sandbox::net_proxy::proxy_env_vars(handle.addr);
+                                ctx.proxy_env = env_vec.into_iter().collect();
+                                tracing::info!(
+                                    addr = %handle.addr,
+                                    policy = ?policy,
+                                    "OS sandbox activated with allowlist HTTPS proxy"
+                                );
+                                Some(handle)
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    error = %e,
+                                    "Failed to start allowlist proxy. \
+                                     ShellTool will run sandboxed but without \
+                                     egress filtering. Check SANDBOX_PROXY_PORT \
+                                     availability."
+                                );
+                                None
+                            }
+                        }
+                    }
+                    None => {
+                        tracing::warn!(
+                            "OS sandbox activated without secrets store — \
+                             allowlist proxy cannot inject credentials. \
+                             ShellTool will run sandboxed but external API \
+                             calls requiring API keys will fail."
+                        );
+                        None
+                    }
+                };
+
+                ctx.sandbox_executor = Some(executor);
+                ctx.sandbox_policy = policy;
+                Ok(proxy)
+            }
+        }
     }
 
     /// Phase 5: Load WASM tools, MCP servers, and create extension manager.
@@ -817,7 +971,8 @@ impl AppBuilder {
         } else {
             self.init_llm().await?
         };
-        let (safety, tools, embeddings, workspace, builder) = self.init_tools(&llm).await?;
+        let (safety, tools, embeddings, workspace, builder, network_proxy) =
+            self.init_tools(&llm).await?;
 
         // Create hook registry early so runtime extension activation can register hooks.
         let hooks = Arc::new(HookRegistry::new());
@@ -964,6 +1119,7 @@ impl AppBuilder {
             catalog_entries,
             dev_loaded_tool_names,
             builder,
+            network_proxy,
         })
     }
 }

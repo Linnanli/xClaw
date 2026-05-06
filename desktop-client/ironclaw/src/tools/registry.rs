@@ -487,6 +487,7 @@ impl ToolRegistry {
             }
             | BootstrapMode::Container => {
                 self.register_builtin_tools();
+                self.register_shell_tool(ctx);
                 self.register_dev_tools();
             }
         }
@@ -614,12 +615,40 @@ impl ToolRegistry {
         defs
     }
 
+    /// W3 (#128 / ADR-121) — register `ShellTool` with optional sandbox
+    /// executor + allowlist proxy env. Called from `bootstrap_tools` so
+    /// the boot path owns the sandbox wiring; the builder fallback path
+    /// (which has no `BootstrapContext`) does not re-register `ShellTool`.
+    ///
+    /// When `ctx.sandbox_executor` is `Some`, the tool runs every command
+    /// through the OS sandbox with `ctx.sandbox_policy`. When `None`,
+    /// `ShellTool` runs directly without isolation — only acceptable in
+    /// dev mode (`ExecutionMode::Direct`). Enterprise deployments are
+    /// expected to fail-closed at the `app.rs` activation site before
+    /// reaching this branch (ADR-121 D1=B).
+    fn register_shell_tool(&self, ctx: &crate::tools::bootstrap::BootstrapContext) {
+        let mut shell = ShellTool::new();
+        if let Some(executor) = ctx.sandbox_executor.as_ref() {
+            shell = shell
+                .with_sandbox(Arc::clone(executor))
+                .with_sandbox_policy(ctx.sandbox_policy);
+        }
+        if !ctx.proxy_env.is_empty() {
+            shell = shell.with_extra_env(ctx.proxy_env.clone());
+        }
+        self.register_sync(Arc::new(shell));
+    }
+
     /// Register development tools for building software.
     ///
     /// Private helper invoked by [`Self::bootstrap_tools`] when `mode` is
     /// `Container` or `Orchestrator { allow_local_tools: true }`.
+    ///
+    /// W3 (#128 / ADR-121) — `ShellTool` registration is split out into
+    /// [`Self::register_shell_tool`] so the sandbox/proxy wiring lives on
+    /// the boot path while the builder fallback (which has no
+    /// `BootstrapContext`) keeps the rest of the dev toolset.
     fn register_dev_tools(&self) {
-        self.register_sync(Arc::new(ShellTool::new()));
         self.register_sync(Arc::new(ReadFileTool::new()));
         self.register_sync(Arc::new(WriteFileTool::new()));
         self.register_sync(Arc::new(ListDirTool::new()));

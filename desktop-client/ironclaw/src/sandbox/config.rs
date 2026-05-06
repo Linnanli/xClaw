@@ -123,6 +123,56 @@ impl std::str::FromStr for SandboxPolicy {
     }
 }
 
+/// Execution mode for shell / dev tools (ADR-121 D0=C).
+///
+/// Selects how the orchestrator runs untrusted commands. The ironclaw
+/// boot path branches on this value to either build an [`OsExecutor`] +
+/// network proxy (`OsSandbox`) or run commands directly (`Direct`,
+/// dev-only) or hand off to the Docker worker pipeline (`Docker`).
+///
+/// W3 (#128) wires `Direct` and `OsSandbox`. `Docker` is reserved for
+/// the existing container worker path and is not exercised by the
+/// dev-tool boot path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExecutionMode {
+    /// No isolation — `ShellTool` invokes commands directly via `sh -c`.
+    /// Intended for local development on the engineer's own machine.
+    /// **Enterprise deployments must NOT use this** (ADR-121 D1=B
+    /// fail-closed): downstream activation in `app.rs` refuses to start
+    /// when the policy enforces sandboxing and `Direct` is selected.
+    Direct,
+
+    /// OS-level sandbox via [`crate::sandbox::OsExecutor`] (Linux: bwrap
+    /// landlock-style isolation) plus a forced HTTPS allowlist proxy
+    /// (`start_network_proxy`). The default for the W3 activation path on
+    /// Linux. Windows = fork epic #241; macOS = best-effort (Codex
+    /// `sandbox-pref::Auto` falls back to seatbelt where available).
+    #[default]
+    OsSandbox,
+
+    /// Hand-off to the Docker worker job pipeline. Not used by the
+    /// dev-tool boot path; reserved for future unification (W4).
+    Docker,
+}
+
+impl std::str::FromStr for ExecutionMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "direct" | "off" | "none" => Ok(ExecutionMode::Direct),
+            "os" | "os_sandbox" | "ossandbox" | "bwrap" | "seatbelt" => {
+                Ok(ExecutionMode::OsSandbox)
+            }
+            "docker" | "container" => Ok(ExecutionMode::Docker),
+            _ => Err(format!(
+                "invalid execution mode '{}', expected 'direct', 'os_sandbox', or 'docker'",
+                s
+            )),
+        }
+    }
+}
+
 /// Resource limits for container execution.
 #[derive(Debug, Clone)]
 pub struct ResourceLimits {
@@ -229,5 +279,45 @@ mod tests {
         assert!(allowlist.contains(&"crates.io".to_string()));
         assert!(allowlist.contains(&"registry.npmjs.org".to_string()));
         assert!(allowlist.contains(&"github.com".to_string()));
+    }
+
+    // ── ADR-121 W3 #128: ExecutionMode parsing ────────────────────
+
+    #[test]
+    fn req_sandbox_w3_001_execution_mode_default_is_os_sandbox() {
+        // ADR-121 D5=E + D1=B: enterprise fail-closed default.
+        assert_eq!(ExecutionMode::default(), ExecutionMode::OsSandbox);
+    }
+
+    #[test]
+    fn req_sandbox_w3_002_execution_mode_parses_aliases() {
+        // direct
+        for s in ["direct", "off", "none", "DIRECT", "Off"] {
+            assert_eq!(s.parse::<ExecutionMode>().unwrap(), ExecutionMode::Direct);
+        }
+        // os_sandbox
+        for s in [
+            "os",
+            "os_sandbox",
+            "ossandbox",
+            "bwrap",
+            "seatbelt",
+            "OS_Sandbox",
+        ] {
+            assert_eq!(
+                s.parse::<ExecutionMode>().unwrap(),
+                ExecutionMode::OsSandbox
+            );
+        }
+        // docker
+        for s in ["docker", "container", "Docker"] {
+            assert_eq!(s.parse::<ExecutionMode>().unwrap(), ExecutionMode::Docker);
+        }
+    }
+
+    #[test]
+    fn req_sandbox_w3_003_execution_mode_rejects_garbage() {
+        let err = "yolo".parse::<ExecutionMode>().unwrap_err();
+        assert!(err.contains("invalid execution mode"));
     }
 }

@@ -36,7 +36,7 @@ pub mod net_proxy;
 /// tool execution). See [`os_executor::OsExecutor`].
 pub mod os_executor;
 
-pub use config::{ResourceLimits, SandboxConfig, SandboxPolicy};
+pub use config::{ExecutionMode, ResourceLimits, SandboxConfig, SandboxPolicy};
 pub use detect::{DockerDetection, DockerStatus, Platform, check_docker};
 pub use docker_conn::connect_docker;
 pub use error::{Result, SandboxError};

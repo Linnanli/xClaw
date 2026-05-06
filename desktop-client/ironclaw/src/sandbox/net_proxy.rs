@@ -48,12 +48,12 @@ use crate::secrets::{
 /// Bridges `dasclaw_net_proxy::CredentialResolver` to the desktop-client
 /// `SecretsStore`. All errors are coerced to `None` (fail-safe).
 pub struct IronclawSecretsResolver {
-    store: Arc<dyn SecretsStore>,
+    store: Arc<dyn SecretsStore + Send + Sync>,
     user_id: String,
 }
 
 impl IronclawSecretsResolver {
-    pub fn new(store: Arc<dyn SecretsStore>, user_id: impl Into<String>) -> Self {
+    pub fn new(store: Arc<dyn SecretsStore + Send + Sync>, user_id: impl Into<String>) -> Self {
         Self {
             store,
             user_id: user_id.into(),
@@ -131,7 +131,7 @@ pub struct NetworkProxyHandle {
 pub async fn start_network_proxy(
     cfg: &SandboxConfig,
     credential_mappings: Vec<LocalMapping>,
-    store: Arc<dyn SecretsStore>,
+    store: Arc<dyn SecretsStore + Send + Sync>,
     user_id: impl Into<String>,
 ) -> Result<NetworkProxyHandle> {
     let mode = if cfg.policy.has_full_network() {
