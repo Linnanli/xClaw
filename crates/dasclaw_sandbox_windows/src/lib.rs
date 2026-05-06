@@ -9,7 +9,7 @@
 //! See `vendor/codex-windows-sandbox/README.md` for the reference snapshot
 //! and the porting plan in tracker issue #250.
 //!
-//! ## Crate status (Phase 1.1.4b)
+//! ## Crate status (Phase 1.1.4c)
 //!
 //! V'-b "port-on-demand" subset. The cross-platform PTY/process plumbing
 //! (`pty::process`) and the `cfg(windows)`-only ConPTY backend
@@ -26,6 +26,7 @@
 //!   `sandbox_utils::inject_git_safe_directory`).
 //! - Sandbox audit log (`logging::log_start` / `log_success` / `log_failure`
 //!   / `log_note` / `debug_log`).
+//! - DPAPI wrappers (`dpapi::protect` / `dpapi::unprotect`, `cfg(windows)`).
 //! - Cross-platform PTY/process driver adapter (`pty::ProcessDriver`,
 //!   `pty::SpawnedProcess`, `pty::TerminalSize`, `pty::spawn_from_driver`).
 //! - On non-Windows targets, [`unsupported`] returns a typed error indicating
@@ -35,6 +36,8 @@
 //! lands in subsequent PRs under tracker issue #263 / #250.
 
 pub mod absolute_path;
+#[cfg(windows)]
+pub mod dpapi;
 pub mod logging;
 pub mod path_normalization;
 pub mod pty;
