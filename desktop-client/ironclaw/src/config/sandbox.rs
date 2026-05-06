@@ -6,6 +6,13 @@ use crate::error::ConfigError;
 pub struct SandboxModeConfig {
     /// Whether the Docker sandbox is enabled.
     pub enabled: bool,
+    /// Execution mode for shell / dev tools (ADR-121 D0=C).
+    ///
+    /// On Linux defaults to `OsSandbox` (W3 activation path: bwrap +
+    /// allowlist proxy). Override via `SANDBOX_EXECUTION_MODE` env var
+    /// (`direct` / `os_sandbox` / `docker`). When set to `direct`,
+    /// commands run unsandboxed — only acceptable in dev (ADR-121 D1=B).
+    pub execution_mode: crate::sandbox::ExecutionMode,
     /// Sandbox policy: "readonly", "workspace_write", or "full_access".
     pub policy: String,
     /// Explicit opt-in for `FullAccess` policy.
@@ -37,7 +44,8 @@ impl Default for SandboxModeConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            policy: "readonly".to_string(),
+            execution_mode: crate::sandbox::ExecutionMode::default(),
+            policy: "workspace_write".to_string(),
             allow_full_access: false,
             timeout_secs: 120,
             memory_limit_mb: 2048,
@@ -86,6 +94,14 @@ impl SandboxModeConfig {
 
         Ok(Self {
             enabled: parse_bool_env("SANDBOX_ENABLED", ss.enabled)?,
+            execution_mode: optional_env("SANDBOX_EXECUTION_MODE")?
+                .map(|s| s.parse::<crate::sandbox::ExecutionMode>())
+                .transpose()
+                .map_err(|message| ConfigError::InvalidValue {
+                    key: "SANDBOX_EXECUTION_MODE".to_string(),
+                    message,
+                })?
+                .unwrap_or_default(),
             policy: parse_string_env("SANDBOX_POLICY", ss.policy.clone())?,
             // allow_full_access has no Settings counterpart — env > default only.
             allow_full_access: parse_bool_env("SANDBOX_ALLOW_FULL_ACCESS", false)?,
@@ -340,7 +356,10 @@ mod tests {
     fn sandbox_mode_config_default_values() {
         let cfg = SandboxModeConfig::default();
         assert!(cfg.enabled);
-        assert_eq!(cfg.policy, "readonly");
+        // ADR-121 D5=E: WorkspaceWrite is the default policy so dev
+        // workflows succeed out-of-the-box.
+        assert_eq!(cfg.policy, "workspace_write");
+        assert_eq!(cfg.execution_mode, crate::sandbox::ExecutionMode::OsSandbox);
         assert_eq!(cfg.timeout_secs, 120);
         assert_eq!(cfg.memory_limit_mb, 2048);
         assert_eq!(cfg.cpu_shares, 1024);
@@ -353,6 +372,7 @@ mod tests {
     fn sandbox_mode_config_custom_values() {
         let cfg = SandboxModeConfig {
             enabled: false,
+            execution_mode: crate::sandbox::ExecutionMode::default(),
             policy: "full_access".to_string(),
             timeout_secs: 600,
             memory_limit_mb: 4096,
@@ -378,6 +398,7 @@ mod tests {
     fn sandbox_mode_to_sandbox_config_propagates_fields() {
         let mode = SandboxModeConfig {
             enabled: true,
+            execution_mode: crate::sandbox::ExecutionMode::default(),
             policy: "workspace_write".to_string(),
             timeout_secs: 300,
             memory_limit_mb: 1024,
@@ -618,6 +639,51 @@ mod tests {
         unsafe { std::env::remove_var("SANDBOX_TIMEOUT_SECS") };
 
         assert_eq!(cfg.timeout_secs, 5);
+    }
+
+    // ── ADR-121 W3 #128: SANDBOX_EXECUTION_MODE env override ─────
+
+    #[test]
+    fn req_sandbox_w3_005_execution_mode_env_override_direct() {
+        let _guard = crate::config::helpers::lock_env();
+        let settings = crate::settings::Settings::default();
+
+        // SAFETY: Under ENV_MUTEX, no concurrent env access.
+        unsafe { std::env::set_var("SANDBOX_EXECUTION_MODE", "direct") };
+        let cfg = SandboxModeConfig::resolve(&settings).expect("resolve");
+        unsafe { std::env::remove_var("SANDBOX_EXECUTION_MODE") };
+
+        assert_eq!(cfg.execution_mode, crate::sandbox::ExecutionMode::Direct);
+    }
+
+    #[test]
+    fn req_sandbox_w3_006_execution_mode_env_invalid_rejected() {
+        let _guard = crate::config::helpers::lock_env();
+        let settings = crate::settings::Settings::default();
+
+        // SAFETY: Under ENV_MUTEX, no concurrent env access.
+        unsafe { std::env::set_var("SANDBOX_EXECUTION_MODE", "moonshot") };
+        let result = SandboxModeConfig::resolve(&settings);
+        unsafe { std::env::remove_var("SANDBOX_EXECUTION_MODE") };
+
+        let err = result.expect_err("invalid execution_mode must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("SANDBOX_EXECUTION_MODE"),
+            "error must name the offending env var, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn req_sandbox_w3_007_execution_mode_default_when_unset() {
+        let _guard = crate::config::helpers::lock_env();
+        let settings = crate::settings::Settings::default();
+        // SAFETY: Under ENV_MUTEX.
+        unsafe { std::env::remove_var("SANDBOX_EXECUTION_MODE") };
+
+        let cfg = SandboxModeConfig::resolve(&settings).expect("resolve");
+        // ADR-121 D1=B fail-closed default = OsSandbox.
+        assert_eq!(cfg.execution_mode, crate::sandbox::ExecutionMode::OsSandbox);
     }
 
     // ── ClaudeCodeConfig settings fallback tests ────────────────────

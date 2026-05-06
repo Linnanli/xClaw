@@ -12,7 +12,7 @@
   - [`p0a-sandbox-fork-codex-windows-sandbox-issue-draft.md`](p0a-sandbox-fork-codex-windows-sandbox-issue-draft.md) — Windows 方案 X (fork codex-windows-sandbox) epic issue 草稿
 - **Related**:
   - [ADR-002](adr-002-sandbox-backend-layered-strategy.md) — 沙箱后端分层策略（macOS Seatbelt / Linux Landlock+seccomp / Windows = 本 ADR 决定）
-  - [ADR-114](adr-114-dasclaw-rebrand.md) — `.ironclaw` → `.dasclaw` 命名迁移（本 ADR 不引入新 `.ironclaw` 字面量）
+  - [ADR-114](adr-114-dasclaw-rebrand.md) — 历史 ironclaw 命名空间 → dasclaw 命名迁移（本 ADR 不引入新的 ironclaw-prefix 字面量；CI grep guard 会拦）
 
 ## 修订记 (Revisions)
 

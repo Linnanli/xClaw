@@ -42,6 +42,7 @@
 //! full job-tool dependency set, migrated all 14 legacy `register_*_tools`
 //! call sites to `bootstrap_tools()`, and removed the public compat wrappers.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::agent::routine_engine::RoutineEngine;
@@ -50,6 +51,7 @@ use crate::context::ContextManager;
 use crate::db::Database;
 use crate::extensions::ExtensionManager;
 use crate::orchestrator::job_manager::ContainerJobManager;
+use crate::sandbox::{OsExecutor, SandboxPolicy};
 use crate::secrets::SecretsStore;
 use crate::skills::catalog::SkillCatalog;
 use crate::skills::registry::SkillRegistry;
@@ -258,6 +260,32 @@ pub struct BootstrapContext {
 
     /// Vision API configuration.
     pub vision_api: Option<VisionApiConfig>,
+
+    /// W3 — OS sandbox executor for [`crate::tools::builtin::ShellTool`].
+    ///
+    /// When `Some`, `register_dev_tools` chains
+    /// `ShellTool::with_sandbox(executor)` so every shell command goes
+    /// through the OS-level sandbox (Linux: bwrap-style isolation via the
+    /// vendored Codex `sandbox-pref`). When `None`, `ShellTool` runs
+    /// directly without isolation — only acceptable in dev mode
+    /// (`ExecutionMode::Direct`) per ADR-121 D0.
+    pub sandbox_executor: Option<Arc<OsExecutor>>,
+
+    /// W3 — Sandbox policy applied by [`crate::tools::builtin::ShellTool`]
+    /// when `sandbox_executor` is set. Per ADR-121 D5, defaults to
+    /// `WorkspaceWrite` so dev workflows (build/test/format) succeed
+    /// out-of-the-box; tighten via policy file or env override.
+    pub sandbox_policy: SandboxPolicy,
+
+    /// W3 — Extra env vars forwarded into every sandboxed shell command.
+    ///
+    /// Typically populated from
+    /// [`crate::sandbox::net_proxy::proxy_env_vars`] so commands route
+    /// HTTPS traffic through the allowlist-enforcing
+    /// [`crate::sandbox::net_proxy::NetworkProxyHandle`]. Empty when the
+    /// proxy is not running (Docker mode handles proxy injection
+    /// separately via container env).
+    pub proxy_env: HashMap<String, String>,
 }
 
 impl BootstrapContext {
@@ -379,6 +407,21 @@ mod tests {
         // can be added without breaking the trait derive contract.
         let err = BootstrapError::Other("boom".to_string());
         assert_eq!(err.to_string(), "bootstrap error: boom");
+    }
+
+    // ── ADR-121 W3 #128: sandbox fields on BootstrapContext ───────
+
+    #[test]
+    fn req_sandbox_w3_004_default_context_has_no_sandbox_executor() {
+        // app.rs::activate_sandbox is the *only* writer of these fields.
+        // A fresh context must report "no sandbox wired" so ShellTool's
+        // builder fallback applies (Direct mode behaviour).
+        let ctx = BootstrapContext::default();
+        assert!(ctx.sandbox_executor.is_none());
+        assert!(ctx.proxy_env.is_empty());
+        // Default policy on the bootstrap context is the most restrictive
+        // value — `app.rs` overrides it explicitly when activating.
+        assert_eq!(ctx.sandbox_policy, SandboxPolicy::ReadOnly);
     }
 
     // ─── ADR-119 F3: job_tools_for_mode dispatch ──────────────────────────

@@ -445,7 +445,7 @@ PR 开启前确保：
 - [ ] `cargo clippy --no-deps -p ironclaw --all-targets -- -D warnings` 通过
 - [ ] [`AGENTS.md`](../../../AGENTS.md) §"Skills 强制使用规范" 三件套自查（`code-quality-audit` → `code-simplifier` → `code-review-expert`）
 - [ ] PR 拆 stacked（按 §1 PR-1/2/3/4），每个 PR 独立 base 注明
-- [ ] PR body 含 `Cross-cuts:` 三元声明（ADR-114 红线，本系列 PR 应为 `类A` — 不引入 `.ironclaw` 字面量）
+- [ ] PR body 含 `Cross-cuts:` 三元声明（ADR-114 红线，本系列 PR 应为 `类A` — 不引入新的 ironclaw-prefix 字面量）
 - [ ] PR body 含 `Closes #128` 或分阶段 `Refs #128`（最后一个 PR 才 `Closes`）
 
 ---
