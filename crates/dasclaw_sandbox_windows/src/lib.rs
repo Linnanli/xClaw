@@ -9,12 +9,12 @@
 //! See `vendor/codex-windows-sandbox/README.md` for the reference snapshot
 //! and the porting plan in tracker issue #250.
 //!
-//! ## Crate status (Phase 1.1.4a)
+//! ## Crate status (Phase 1.1.4b)
 //!
 //! V'-b "port-on-demand" subset. The cross-platform PTY/process plumbing
 //! (`pty::process`) and the `cfg(windows)`-only ConPTY backend
-//! (`pty::win::*`, `RawConPty`) are in tree, and the leaf path-key utilities
-//! consumed by the sandbox have started landing.
+//! (`pty::win::*`, `RawConPty`) are in tree, plus the leaf path-key,
+//! sandbox setup, and logging utilities consumed across the upstream crate.
 //!
 //! Currently exposed:
 //!
@@ -22,6 +22,10 @@
 //!   `types::WritableRoot`).
 //! - String / path utilities (`string_util`, `absolute_path`,
 //!   `path_normalization`).
+//! - Sandbox setup helpers (`sandbox_utils::ensure_codex_home_exists`,
+//!   `sandbox_utils::inject_git_safe_directory`).
+//! - Sandbox audit log (`logging::log_start` / `log_success` / `log_failure`
+//!   / `log_note` / `debug_log`).
 //! - Cross-platform PTY/process driver adapter (`pty::ProcessDriver`,
 //!   `pty::SpawnedProcess`, `pty::TerminalSize`, `pty::spawn_from_driver`).
 //! - On non-Windows targets, [`unsupported`] returns a typed error indicating
@@ -31,8 +35,10 @@
 //! lands in subsequent PRs under tracker issue #263 / #250.
 
 pub mod absolute_path;
+pub mod logging;
 pub mod path_normalization;
 pub mod pty;
+pub mod sandbox_utils;
 pub mod string_util;
 pub mod types;
 
