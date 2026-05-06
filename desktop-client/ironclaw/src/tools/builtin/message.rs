@@ -613,6 +613,7 @@ mod tests {
 
         // Create temp files inside the sandbox
         let sandbox_dir = &tool.base_dir;
+        fs::create_dir_all(sandbox_dir).unwrap();
         let temp_dir = tempfile::tempdir_in(sandbox_dir).unwrap();
         let file1 = temp_dir.path().join("file1.txt");
         let file2 = temp_dir.path().join("file2.png");
@@ -746,6 +747,7 @@ mod tests {
 
         // Create a temp file within the sandbox directory
         let sandbox_dir = &tool.base_dir;
+        fs::create_dir_all(sandbox_dir).unwrap();
         let temp_dir = tempfile::tempdir_in(sandbox_dir).unwrap();
         let temp_path = temp_dir.path().join("test.txt");
         fs::write(&temp_path, "test content").unwrap();
@@ -783,6 +785,7 @@ mod tests {
 
         // Create temp files within the sandbox directory
         let sandbox_dir = &tool.base_dir;
+        fs::create_dir_all(sandbox_dir).unwrap();
         let temp_dir = tempfile::tempdir_in(sandbox_dir).unwrap();
         let temp_path1 = temp_dir.path().join("test1.txt");
         let temp_path2 = temp_dir.path().join("test2.txt");
