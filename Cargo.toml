@@ -32,7 +32,7 @@ members = [
 	"desktop-client/ironclaw/crates/ironclaw_common",
 	"desktop-client/ironclaw/crates/ironclaw_safety",
 ]
-exclude = ["ironclaw", "claw-code"]
+exclude = ["ironclaw", "claw-code", "vendor"]
 resolver = "2"
 
 [profile.dev]
