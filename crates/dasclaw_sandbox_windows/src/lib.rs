@@ -9,7 +9,7 @@
 //! See `vendor/codex-windows-sandbox/README.md` for the reference snapshot
 //! and the porting plan in tracker issue #250.
 //!
-//! ## Crate status (Phase 1.1.4f)
+//! ## Crate status (Phase 1.1.4g)
 //!
 //! V'-b "port-on-demand" subset. The cross-platform PTY/process plumbing
 //! (`pty::process`) and the `cfg(windows)`-only ConPTY backend
@@ -48,6 +48,13 @@
 //!   `hide_users::hide_current_user_profile_dir`, `cfg(windows)`).
 //! - Cross-platform PTY/process driver adapter (`pty::ProcessDriver`,
 //!   `pty::SpawnedProcess`, `pty::TerminalSize`, `pty::spawn_from_driver`).
+//! - Restricted-token builders for AppContainer / capability sandboxing
+//!   (`token::world_sid`, `token::convert_string_sid_to_sid`,
+//!   `token::get_current_token_for_restriction`,
+//!   `token::get_logon_sid_bytes`, `token::create_readonly_token_with_cap`,
+//!   `token::create_readonly_token_with_cap_from`,
+//!   `token::create_readonly_token_with_caps_from`,
+//!   `token::create_workspace_write_token_with_caps_from`, `cfg(windows)`).
 //! - On non-Windows targets, [`unsupported`] returns a typed error indicating
 //!   that the Windows sandbox runtime is unavailable.
 //!
@@ -69,6 +76,8 @@ pub mod pty;
 pub mod sandbox_utils;
 pub mod setup_error;
 pub mod string_util;
+#[cfg(windows)]
+pub mod token;
 pub mod types;
 #[cfg(windows)]
 pub mod winutil;
