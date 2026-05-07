@@ -22,9 +22,21 @@ jobs:
           fetch-depth: 0
 
       - name: Fetch PR head and base
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          set -euo pipefail
           git fetch origin ${{ github.event.pull_request.base.ref }}
-          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr-head
+          # GitHub does not always create refs/pull/N/head for stacked PRs whose
+          # base is another open PR's branch (only refs/pull/N/merge appears).
+          # Fall back to the PR head SHA from the event payload, which
+          # actions/checkout@v4 with fetch-depth: 0 has already pulled in.
+          if git fetch origin "pull/${{ github.event.pull_request.number }}/head:pr-head" 2>/dev/null; then
+            echo "pr-head fetched from refs/pull/N/head."
+          else
+            echo "refs/pull/N/head missing (likely stacked PR); falling back to PR head SHA $PR_HEAD_SHA."
+            git update-ref refs/heads/pr-head "$PR_HEAD_SHA"
+          fi
 
       - name: Check for regression tests
         env:
