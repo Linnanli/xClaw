@@ -43,6 +43,9 @@
 //!   `winutil::resolve_sid`, `winutil::string_from_sid_bytes`,
 //!   `winutil::quote_windows_arg`, `winutil::argv_to_command_line`,
 //!   `cfg(windows)`).
+//! - Hide newly-created sandbox users from Winlogon and hide the current
+//!   user's profile dir (`hide_users::hide_newly_created_users`,
+//!   `hide_users::hide_current_user_profile_dir`, `cfg(windows)`).
 //! - Cross-platform PTY/process driver adapter (`pty::ProcessDriver`,
 //!   `pty::SpawnedProcess`, `pty::TerminalSize`, `pty::spawn_from_driver`).
 //! - On non-Windows targets, [`unsupported`] returns a typed error indicating
@@ -56,6 +59,8 @@ pub mod cap;
 #[cfg(windows)]
 pub mod dpapi;
 pub mod env;
+#[cfg(windows)]
+pub mod hide_users;
 pub mod logging;
 pub mod path_normalization;
 #[cfg(windows)]
