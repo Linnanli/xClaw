@@ -9,7 +9,7 @@
 //! See `vendor/codex-windows-sandbox/README.md` for the reference snapshot
 //! and the porting plan in tracker issue #250.
 //!
-//! ## Crate status (Phase 1.1.4d)
+//! ## Crate status (Phase 1.1.4e)
 //!
 //! V'-b "port-on-demand" subset. The cross-platform PTY/process plumbing
 //! (`pty::process`) and the `cfg(windows)`-only ConPTY backend
@@ -29,6 +29,11 @@
 //! - DPAPI wrappers (`dpapi::protect` / `dpapi::unprotect`, `cfg(windows)`).
 //! - Process/thread attribute list builder
 //!   (`proc_thread_attr::ProcThreadAttributeList`, `cfg(windows)`).
+//! - Per-workspace capability SID store (`cap::CapSids`,
+//!   `cap::load_or_create_cap_sids`, `cap::workspace_cap_sid_for_cwd`).
+//! - Sandbox environment scrubbers (`env::normalize_null_device_env`,
+//!   `env::ensure_non_interactive_pager`, `env::inherit_path_env`,
+//!   `env::apply_no_network_to_env`).
 //! - Cross-platform PTY/process driver adapter (`pty::ProcessDriver`,
 //!   `pty::SpawnedProcess`, `pty::TerminalSize`, `pty::spawn_from_driver`).
 //! - On non-Windows targets, [`unsupported`] returns a typed error indicating
@@ -38,8 +43,10 @@
 //! lands in subsequent PRs under tracker issue #263 / #250.
 
 pub mod absolute_path;
+pub mod cap;
 #[cfg(windows)]
 pub mod dpapi;
+pub mod env;
 pub mod logging;
 pub mod path_normalization;
 #[cfg(windows)]
