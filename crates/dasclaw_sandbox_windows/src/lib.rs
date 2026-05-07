@@ -9,7 +9,7 @@
 //! See `vendor/codex-windows-sandbox/README.md` for the reference snapshot
 //! and the porting plan in tracker issue #250.
 //!
-//! ## Crate status (Phase 1.1.4i-7)
+//! ## Crate status (Phase 1.1.4i-8)
 //!
 //! V'-b "port-on-demand" subset. The cross-platform PTY/process plumbing
 //! (`pty::process`) and the `cfg(windows)`-only ConPTY backend
@@ -80,6 +80,15 @@
 //! - Sandbox audit / world-writable scan
 //!   (`audit::apply_world_writable_scan_and_denies`,
 //!   `audit::gather_candidates`, `cfg(windows)`).
+//! - Sandbox helper executable materialisation
+//!   (`helper_materialization::resolve_current_exe_for_launch`,
+//!   `cfg(windows)`).
+//! - Sandbox setup orchestrator (`setup::sandbox_dir`,
+//!   `setup::sandbox_bin_dir`, `setup::sandbox_secrets_dir`,
+//!   `setup::SETUP_VERSION`, plus `SandboxSetupRequest`,
+//!   `SetupRootOverrides`, `run_elevated_setup`, `run_setup_refresh`,
+//!   `run_setup_refresh_with_extra_read_roots`; re-exported at the crate
+//!   root, `cfg(windows)`).
 //! - On non-Windows targets, [`unsupported`] returns a typed error indicating
 //!   that the Windows sandbox runtime is unavailable.
 //!
@@ -99,6 +108,8 @@ pub mod desktop;
 pub mod dpapi;
 pub mod env;
 #[cfg(windows)]
+pub mod helper_materialization;
+#[cfg(windows)]
 pub mod hide_users;
 pub mod logging;
 pub mod path_normalization;
@@ -113,9 +124,15 @@ pub mod read_acl_mutex;
 #[cfg(windows)]
 pub mod sandbox_users;
 pub mod sandbox_utils;
+#[cfg(windows)]
+#[path = "setup_orchestrator.rs"]
+pub mod setup;
+#[cfg(windows)]
 pub mod setup_error;
-// Currently unused outside the crate; consumed by setup_orchestrator (later slice).
-#[allow(dead_code)]
+// Consumed by setup (setup_orchestrator) on Windows; on non-Windows targets
+// the consumer is cfg-gated out, so allow dead_code to keep the cross-platform
+// build clean.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub mod ssh_config_dependencies;
 pub mod string_util;
 #[cfg(windows)]
@@ -125,6 +142,27 @@ pub mod types;
 pub mod winutil;
 #[cfg(windows)]
 pub mod workspace_acl;
+
+#[cfg(windows)]
+pub use helper_materialization::resolve_current_exe_for_launch;
+#[cfg(windows)]
+pub use setup::SETUP_VERSION;
+#[cfg(windows)]
+pub use setup::SandboxSetupRequest;
+#[cfg(windows)]
+pub use setup::SetupRootOverrides;
+#[cfg(windows)]
+pub use setup::run_elevated_setup;
+#[cfg(windows)]
+pub use setup::run_setup_refresh;
+#[cfg(windows)]
+pub use setup::run_setup_refresh_with_extra_read_roots;
+#[cfg(windows)]
+pub use setup::sandbox_bin_dir;
+#[cfg(windows)]
+pub use setup::sandbox_dir;
+#[cfg(windows)]
+pub use setup::sandbox_secrets_dir;
 
 /// Returned by sandbox entry points on platforms where the Windows sandbox is
 /// unavailable.
