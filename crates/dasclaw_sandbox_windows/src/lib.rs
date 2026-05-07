@@ -9,7 +9,7 @@
 //! See `vendor/codex-windows-sandbox/README.md` for the reference snapshot
 //! and the porting plan in tracker issue #250.
 //!
-//! ## Crate status (Phase 1.1.4e)
+//! ## Crate status (Phase 1.1.4f)
 //!
 //! V'-b "port-on-demand" subset. The cross-platform PTY/process plumbing
 //! (`pty::process`) and the `cfg(windows)`-only ConPTY backend
@@ -34,6 +34,10 @@
 //! - Sandbox environment scrubbers (`env::normalize_null_device_env`,
 //!   `env::ensure_non_interactive_pager`, `env::inherit_path_env`,
 //!   `env::apply_no_network_to_env`).
+//! - Win32 utility helpers (`winutil::to_wide`, `winutil::format_last_error`,
+//!   `winutil::resolve_sid`, `winutil::string_from_sid_bytes`,
+//!   `winutil::quote_windows_arg`, `winutil::argv_to_command_line`,
+//!   `cfg(windows)`).
 //! - Cross-platform PTY/process driver adapter (`pty::ProcessDriver`,
 //!   `pty::SpawnedProcess`, `pty::TerminalSize`, `pty::spawn_from_driver`).
 //! - On non-Windows targets, [`unsupported`] returns a typed error indicating
@@ -55,6 +59,8 @@ pub mod pty;
 pub mod sandbox_utils;
 pub mod string_util;
 pub mod types;
+#[cfg(windows)]
+pub mod winutil;
 
 /// Returned by sandbox entry points on platforms where the Windows sandbox is
 /// unavailable.
