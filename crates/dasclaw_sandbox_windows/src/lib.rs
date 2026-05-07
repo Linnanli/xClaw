@@ -29,6 +29,11 @@
 //! - DPAPI wrappers (`dpapi::protect` / `dpapi::unprotect`, `cfg(windows)`).
 //! - Process/thread attribute list builder
 //!   (`proc_thread_attr::ProcThreadAttributeList`, `cfg(windows)`).
+//! - Setup error report types & redaction
+//!   (`setup_error::SetupFailure`, `setup_error::SetupErrorCode`,
+//!   `setup_error::write_setup_error_report`,
+//!   `setup_error::read_setup_error_report`,
+//!   `setup_error::sanitize_setup_metric_tag_value`).
 //! - Per-workspace capability SID store (`cap::CapSids`,
 //!   `cap::load_or_create_cap_sids`, `cap::workspace_cap_sid_for_cwd`).
 //! - Sandbox environment scrubbers (`env::normalize_null_device_env`,
@@ -57,6 +62,7 @@ pub mod path_normalization;
 pub mod proc_thread_attr;
 pub mod pty;
 pub mod sandbox_utils;
+pub mod setup_error;
 pub mod string_util;
 pub mod types;
 #[cfg(windows)]
