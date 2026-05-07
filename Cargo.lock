@@ -2684,6 +2684,7 @@ dependencies = [
  "dirs 6.0.0",
  "dunce",
  "filedescriptor",
+ "glob",
  "lazy_static",
  "libc",
  "log",
