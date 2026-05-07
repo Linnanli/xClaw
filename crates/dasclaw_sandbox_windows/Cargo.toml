@@ -49,7 +49,10 @@ winapi = { version = "0.3", features = [
 version = "0.52"
 features = [
   "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
   "Win32_Security_Cryptography",
+  "Win32_System_Diagnostics_Debug",
   "Win32_System_Threading",
 ]
 
