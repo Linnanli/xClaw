@@ -64,6 +64,21 @@ features = [
   "Win32_System_Threading",
 ]
 
+# High-level COM RAII bindings (`windows = 0.58`) co-exist with the sys-style
+# `windows-sys = 0.52` block above. See ADR-129
+# (`docs/plans/architecture-refactor/adr-129-sandbox-windows-windows-crate-adoption.md`).
+# Features mirror codex `windows-sandbox-rs` 1:1 so the verbatim port of
+# `firewall.rs`, `elevated_impl.rs`, and the inline `mod windows_impl` block
+# (Waves i-5 / i-6) compiles without rewrites.
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.58"
+features = [
+  "Win32_Foundation",
+  "Win32_NetworkManagement_WindowsFirewall",
+  "Win32_System_Com",
+  "Win32_System_Variant",
+]
+
 [dev-dependencies]
 pretty_assertions = "1"
 tempfile = "3"

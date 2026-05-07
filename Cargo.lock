@@ -2697,6 +2697,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "winapi",
+ "windows 0.58.0",
  "windows-sys 0.52.0",
 ]
 
