@@ -9,7 +9,7 @@
 //! See `vendor/codex-windows-sandbox/README.md` for the reference snapshot
 //! and the porting plan in tracker issue #250.
 //!
-//! ## Crate status (Phase 1.1.4i-8)
+//! ## Crate status (Phase 1.1.4i-9)
 //!
 //! V'-b "port-on-demand" subset. The cross-platform PTY/process plumbing
 //! (`pty::process`) and the `cfg(windows)`-only ConPTY backend
@@ -111,6 +111,8 @@ pub mod env;
 pub mod helper_materialization;
 #[cfg(windows)]
 pub mod hide_users;
+#[cfg(windows)]
+pub mod identity;
 pub mod logging;
 pub mod path_normalization;
 pub mod policy;
@@ -129,6 +131,8 @@ pub mod sandbox_utils;
 pub mod setup;
 #[cfg(windows)]
 pub mod setup_error;
+#[cfg(windows)]
+pub mod spawn_prep;
 // Consumed by setup (setup_orchestrator) on Windows; on non-Windows targets
 // the consumer is cfg-gated out, so allow dead_code to keep the cross-platform
 // build clean.
@@ -145,6 +149,10 @@ pub mod workspace_acl;
 
 #[cfg(windows)]
 pub use helper_materialization::resolve_current_exe_for_launch;
+#[cfg(windows)]
+pub use identity::require_logon_sandbox_creds;
+#[cfg(windows)]
+pub use identity::sandbox_setup_is_complete;
 #[cfg(windows)]
 pub use setup::SETUP_VERSION;
 #[cfg(windows)]
