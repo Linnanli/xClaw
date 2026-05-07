@@ -9,7 +9,7 @@
 //! See `vendor/codex-windows-sandbox/README.md` for the reference snapshot
 //! and the porting plan in tracker issue #250.
 //!
-//! ## Crate status (Phase 1.1.4i-6)
+//! ## Crate status (Phase 1.1.4i-7)
 //!
 //! V'-b "port-on-demand" subset. The cross-platform PTY/process plumbing
 //! (`pty::process`) and the `cfg(windows)`-only ConPTY backend
@@ -71,6 +71,15 @@
 //!   `cfg(windows)`).
 //! - SSH client config dependency resolver
 //!   (`ssh_config_dependencies::ssh_config_dependency_paths`).
+//! - Allow/deny path computation for sandbox policy
+//!   (`allow::AllowDenyPaths`, `allow::compute_allow_paths`).
+//! - Workspace ACL protection helpers
+//!   (`workspace_acl::is_command_cwd_root`,
+//!   `workspace_acl::protect_workspace_codex_dir`,
+//!   `workspace_acl::protect_workspace_agents_dir`, `cfg(windows)`).
+//! - Sandbox audit / world-writable scan
+//!   (`audit::apply_world_writable_scan_and_denies`,
+//!   `audit::gather_candidates`, `cfg(windows)`).
 //! - On non-Windows targets, [`unsupported`] returns a typed error indicating
 //!   that the Windows sandbox runtime is unavailable.
 //!
@@ -80,6 +89,9 @@
 pub mod absolute_path;
 #[cfg(windows)]
 pub mod acl;
+pub mod allow;
+#[cfg(windows)]
+pub mod audit;
 pub mod cap;
 #[cfg(windows)]
 pub mod desktop;
@@ -111,6 +123,8 @@ pub mod token;
 pub mod types;
 #[cfg(windows)]
 pub mod winutil;
+#[cfg(windows)]
+pub mod workspace_acl;
 
 /// Returned by sandbox entry points on platforms where the Windows sandbox is
 /// unavailable.
