@@ -1,7 +1,8 @@
 # ADR-130: sandbox-windows lib/bin split for setup_main_win
 
-- **Status**: 🟡 **Proposed**（待 nally 在 mcp-feedback-enhanced 中签字后转 Accepted）
+- **Status**: � **Accepted**（2026-05-07 nally 在 mcp-feedback-enhanced 签字）
 - **Date**: 2026-05-07
+- **Approver**: nally
 - **Authors**: GitHub Copilot agent (sandbox-windows port worker)
 - **Tracker**: [#263](https://github.com/Linnanli/xClaw/issues/263) — Phase 1.1.4 parent
 - **Epic**: [#241](https://github.com/Linnanli/xClaw/issues/241) — fork codex-windows-sandbox
