@@ -9,7 +9,7 @@
 //! See `vendor/codex-windows-sandbox/README.md` for the reference snapshot
 //! and the porting plan in tracker issue #250.
 //!
-//! ## Crate status (Phase 1.1.4i-4)
+//! ## Crate status (Phase 1.1.4i-5)
 //!
 //! V'-b "port-on-demand" subset. The cross-platform PTY/process plumbing
 //! (`pty::process`) and the `cfg(windows)`-only ConPTY backend
@@ -67,6 +67,8 @@
 //!   `read_acl_mutex::read_acl_mutex_exists`,
 //!   `read_acl_mutex::ReadAclMutexGuard`, `cfg(windows)`).
 //! - Filesystem ACL helpers (`acl::*`, `cfg(windows)`).
+//! - Sandbox user account creation / lookup (`sandbox_users::*`,
+//!   `cfg(windows)`).
 //! - On non-Windows targets, [`unsupported`] returns a typed error indicating
 //!   that the Windows sandbox runtime is unavailable.
 //!
@@ -94,6 +96,8 @@ pub mod process;
 pub mod pty;
 #[cfg(windows)]
 pub mod read_acl_mutex;
+#[cfg(windows)]
+pub mod sandbox_users;
 pub mod sandbox_utils;
 pub mod setup_error;
 pub mod string_util;
