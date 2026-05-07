@@ -132,6 +132,34 @@
 - ❌ 一个 PR 混入多个互不相干的主题
 - ❌ 明明已经完成闭环 milestone，却继续在同一会话无限追加新阶段
 
+#### PR 加速策略（手段 1/2/3）
+
+**前提**：sequential merge 红线不变，并行只发生在"准备 + CI"阶段，不在"merge"阶段。任何手段都不得改变"一次只 merge 一个 PR 到 base"的事实。
+
+- **手段 1（流水线重叠 / pipeline overlap）**：PR-N 等 CI 期间，本地切下一分支预先准备 PR-(N+1)
+  - 触发条件：单线垂直推进、PR 之间文件强依赖、必须串行 merge
+  - 操作顺序：commit PR-N → push → 切 PR-(N+1) 分支 → 本地完整跑流水线 → 等 PR-N CI 绿 → merge → `git checkout base && git pull --ff-only` → `git checkout PR-(N+1) && git rebase origin/<base>` → push → 开 PR
+  - **教训**：开始 PR-(N+1) 本地改之前必须先 commit PR-N 全部待提交内容，否则切回 base 合 merge 时会被未提交改动拦下
+  - 实测节省：~5 min / PR（W4 ADR-121 1.1.4c→1.1.4d 验证）
+
+- **手段 2（多 PR 并行 in-flight）**：文件零重叠的批次同时开 PR，CI 并行
+  - 触发条件：`cat-scan` 验证 ≥2 个候选文件**完全互不重叠**且互不依赖未移植符号
+  - 必须项：每个 PR 描述显式声明"与 PR #X 无文件重叠"
+  - merge 顺序：先到先 merge，后者必须 `git rebase origin/<base>` 后再 merge；不允许把并行 PR 互相设为对方分支的 base（那是 stacked，不是并行）
+  - 适用：W4 sandbox 端口、独立叶子模块、互不依赖的文档/脚本
+  - 理论上限：~40% 提速（受 GitHub Actions 并发额度与 reviewer 容量制约）
+
+- **手段 3（git worktree 隔离）**：长流水线时避免本地 `git checkout` 切分支重编
+  - 触发条件：单分支 cargo target 已占大量磁盘、切分支会触发 ≥3 min 增量重编
+  - 操作：`git worktree add ../x-claw-B feature/B`，每个 worktree 独立 `target/`
+  - 配合 sccache 使用，防止跨 worktree 重复编译
+
+**红线**：
+- ❌ 并行 PR 之间存在文件重叠 / 同一函数修改 → 必然 rebase 冲突，禁止
+- ❌ 跳过 cat-scan 直接并发开 PR
+- ❌ 把并行 PR 的 base 互相设为对方分支（那是 stacked，不是并行；stacked 必须显式声明且单线推进）
+- ❌ 用并行 PR 绕过单 PR 的"小而完整"原则——并行的每个 PR 仍须各自满足 PR 描述最低要求
+
 ### ADR-114 红线（`.ironclaw` → `.dasclaw` 命名空间迁移）
 
 **真理来源**：[`docs/plans/architecture-refactor/adr-114-dasclaw-rebrand.md`](docs/plans/architecture-refactor/adr-114-dasclaw-rebrand.md)
