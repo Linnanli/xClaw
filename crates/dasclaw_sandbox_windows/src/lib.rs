@@ -9,7 +9,7 @@
 //! See `vendor/codex-windows-sandbox/README.md` for the reference snapshot
 //! and the porting plan in tracker issue #250.
 //!
-//! ## Crate status (Phase 1.1.4i-1)
+//! ## Crate status (Phase 1.1.4i-2)
 //!
 //! V'-b "port-on-demand" subset. The cross-platform PTY/process plumbing
 //! (`pty::process`) and the `cfg(windows)`-only ConPTY backend
@@ -59,6 +59,9 @@
 //!   `desktop::LaunchDesktop::startup_info_desktop`, `cfg(windows)`).
 //! - Sandbox policy parser (`policy::parse_policy`, re-export
 //!   `policy::SandboxPolicy`).
+//! - Restricted-token-aware process spawner
+//!   (`process::create_process_as_user`, `process::spawn_process_with_pipes`,
+//!   `process::read_handle_loop`, `cfg(windows)`).
 //! - On non-Windows targets, [`unsupported`] returns a typed error indicating
 //!   that the Windows sandbox runtime is unavailable.
 //!
@@ -79,6 +82,8 @@ pub mod path_normalization;
 pub mod policy;
 #[cfg(windows)]
 pub mod proc_thread_attr;
+#[cfg(windows)]
+pub mod process;
 pub mod pty;
 pub mod sandbox_utils;
 pub mod setup_error;
