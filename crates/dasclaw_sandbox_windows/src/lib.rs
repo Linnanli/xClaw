@@ -147,6 +147,23 @@ pub mod winutil;
 #[cfg(windows)]
 pub mod workspace_acl;
 
+// `elevated/` subdirectory — modules used by the elevated command runner /
+// IPC bootstrap path. Mirrors codex `windows-sandbox-rs` `lib.rs` declarations
+// 1:1 (visibility kept verbatim: `pub(crate)` for `ipc_framed`, private for
+// `runner_pipe` / `runner_client`). The remaining file in that subdirectory,
+// `cwd_junction.rs`, is intentionally NOT registered here: upstream consumes
+// it only from the `command_runner_win.rs` bin source via `mod cwd_junction;`,
+// which lands in Wave i-7b. See ADR-130 §2.
+#[cfg(windows)]
+#[path = "elevated/ipc_framed.rs"]
+pub(crate) mod ipc_framed;
+#[cfg(windows)]
+#[path = "elevated/runner_client.rs"]
+mod runner_client;
+#[cfg(windows)]
+#[path = "elevated/runner_pipe.rs"]
+mod runner_pipe;
+
 #[cfg(windows)]
 pub use helper_materialization::resolve_current_exe_for_launch;
 #[cfg(windows)]
