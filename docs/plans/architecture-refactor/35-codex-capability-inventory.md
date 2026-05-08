@@ -39,18 +39,18 @@
 |---|---|------:|---|:---:|:---:|---|
 | A | Agent Runtime | ~5,000 | `core/src/session/`、`core/src/agent/` | ⚠️ 各有所长 | ⭐⭐⭐⭐⭐ | 选择性移植 AgentControl fork 策略 |
 | B | Tool 系统 | ~8,000 | `core/src/tools/`、`apply-patch/`、`unified_exec/`、`code_mode/` | ⚠️ 工具不同 | ⭐⭐⭐⭐⭐ | apply-patch + portable-pty + code_mode 移植 |
-| C | Sandbox | ~4,500 | `sandboxing/`、`linux-sandbox/`、`core/src/windows_sandbox.rs`、`process-hardening/` | ✅ 三平台覆盖更全 | ⭐⭐⭐⭐⭐ | **完整移植到 dasclaw_sandbox** |
+| C | Sandbox | ~4,500 | `sandboxing/`、`linux-sandbox/`、`windows-sandbox-rs/`（独立 crate，上游 · 之前为 `core/src/windows_sandbox.rs ~1200 行`，v2.5 拆出）、`process-hardening/` | ✅ 三平台覆盖更全 | ⭐⭐⭐⭐⭐ | **完整移植到 dasclaw_sandbox + dasclaw_sandbox_windows（verbatim，ADR-129/130）** |
 | D | Hooks | ~2,150 | `hooks/`（schema/registry/engine 三分离） | ✅ 设计更干净 | ⭐⭐⭐⭐ | 移植到 dasclaw_hooks |
 | E | Project Docs | ~3,300 | `core/src/agents_md.rs`、`config/src/agents_md_index.rs` | ⚠️ 多层加载等价 | ⭐⭐⭐⭐ | 移植到 dasclaw_project_docs |
 | F | Bash Validation | ~3,300 | `core/src/tools/runtimes/shell/bash_validator.rs` | ⚠️ 比 claw 弱（claw 1004 LOC × 6 模块更深）| ⭐⭐⭐⭐ | 与 claw bash_validation 合并到 dasclaw_bash_validation |
 | G | Governance（Guardian）| ~3,500 | `core/src/guardian/`、`core/src/state/service.rs`、`core/src/tools/handlers/approvals.rs` | ⚠️ 与 claw 6 件套互补 | ⭐⭐⭐⭐ | Guardian 评审 + claw 6 件套 → dasclaw_governance |
 | H | MCP | ~3,800 | `codex-mcp/`、`config/src/mcp_types.rs` | ✅ 多 ManagedProxy transport | ⭐⭐⭐⭐⭐ | 与 claw 6-transport 合并到 dasclaw_mcp |
-| I | ExecPolicy | ~3,200 | `execpolicy/`、`core/src/exec_policy.rs` | ✅ Starlark 完胜 | ⭐⭐⭐⭐⭐ | **完整移植到 dasclaw_execpolicy** |
+| I | ExecPolicy | ~3,200 | `execpolicy/`、`core/src/exec_policy.rs` | ✅ Starlark 完胜 | ⭐⭐⭐⭐⭐ | **完整移植到 dasclaw_execpolicy**（当前 30-LOC stub，完整 Starlark port 跟踪在 [#326](https://github.com/Linnanli/xClaw/issues/326) Part 2 + adr-1XX-execpolicy-port） |
 | J | Feature Flags | ~3,100 | `features/` | ✅ 4-stage 生命周期完整 | ⭐⭐⭐⭐ | 完整移植到 dasclaw_features |
 | K | Observability | ~2,000 | `otel/`、`rollout-trace/`、`analytics/` | ⚠️ 各有强项 | ⭐⭐⭐ | rollout-trace 移植到 dasclaw_observability |
 | L | Identity | ~1,200 | `agent-identity/`、`device-key/`、`login/`、`keyring-store/` | ❌ 弱于 ironclaw | ⭐⭐ | OAuth PKCE 借鉴；device-key 留 ironclaw |
 | M | Crash & Panic | ~0 | （**完全缺失**）| ❌ 都弱 | ⭐ | dasclaw_crash 自建 |
-| N | Network Proxy | ~3,500 | `network-proxy/` | ✅ 与 ironclaw 持平 | ⭐⭐⭐⭐ | 完整移植到 dasclaw_net_proxy |
+| N | Network Proxy | ~3,500 | `network-proxy/` | ✅ 与 ironclaw 持平 | ⭐⭐⭐⭐ | 完整移植到 dasclaw_net_proxy（当前为 ironclaw HTTP forward proxy port，ADR-43；完整 codex `network-proxy/` port 由 [#324](https://github.com/Linnanli/xClaw/issues/324) sub-task 3 追踪） |
 | O | App-Server / Channels / SDK / Login / TUI | ~7,000 | `app-server/`、`tui/`、`cli/`、`login/` | ⚠️ codex 独家 | ⭐ | **non-goal**（ADR-104） |
 
 **合计估算**：~53,500 LOC 是 codex 的"可借鉴/移植"核心，约占 codex 总产能的 11.6%。
