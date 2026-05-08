@@ -5,6 +5,12 @@ edition = "2024"
 license = "Apache-2.0"
 description = "Windows-specific sandbox runtime for x-claw, ported from openai/codex windows-sandbox-rs."
 publish = false
+# Disable cargo bin auto-discovery: `src/bin/command_runner.rs` is kept on disk
+# as part of the verbatim port (ADR-129 §1.3) but its `[[bin]]` registration
+# is deferred until the upstream `conpty/` module is ported. Without this flag
+# cargo would auto-pick up the file as a bin target and fail compilation on
+# `dasclaw_sandbox_windows::spawn_conpty_process_as_user` (not yet ported).
+autobins = false
 
 [lib]
 name = "dasclaw_sandbox_windows"
