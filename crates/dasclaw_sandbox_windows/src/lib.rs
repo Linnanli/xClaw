@@ -287,6 +287,32 @@ pub use token::create_workspace_write_token_with_caps_from;
 #[cfg(windows)]
 pub use token::get_current_token_for_restriction;
 
+// `dpapi::protect as dpapi_protect` re-export (issue #335 §3a). Mirrors codex
+// `windows-sandbox-rs/src/lib.rs:102` (`pub use dpapi::protect as dpapi_protect;`).
+// Consumed from `sandbox_users::write_secrets` via `crate::dpapi_protect`.
+#[cfg(windows)]
+pub use dpapi::protect as dpapi_protect;
+
+// `log_line` shared helper (issue #335 §3b). In codex upstream this fn lives
+// privately in `setup_main_win.rs` (a bin-attached `#[path]` module), and
+// `sandbox_users.rs` reaches it via `super::log_line`. Because dasclaw lifts
+// `sandbox_users` to a lib module (`pub mod sandbox_users` above), `super::`
+// resolves to the lib root; we therefore expose an identical helper here for
+// the same `super::log_line(...)` call sites to compile. Body verbatim from
+// codex `windows-sandbox-rs/src/setup_main_win.rs:106` @ 6e838a19fa.
+#[cfg(windows)]
+pub(crate) fn log_line(log: &mut std::fs::File, msg: &str) -> anyhow::Result<()> {
+    use std::io::Write;
+    let ts = chrono::Utc::now().to_rfc3339();
+    writeln!(log, "[{ts}] {msg}").map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperLogFailed,
+            format!("failed to write setup log line: {err}"),
+        ))
+    })?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // elevated_impl + inline windows_impl/stub blocks (Wave i-6b)
 //

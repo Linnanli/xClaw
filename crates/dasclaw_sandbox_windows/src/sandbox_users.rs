@@ -38,14 +38,14 @@ use windows_sys::Win32::Security::LookupAccountNameW;
 use windows_sys::Win32::Security::LookupAccountSidW;
 use windows_sys::Win32::Security::SID_NAME_USE;
 
-use codex_windows_sandbox::SETUP_VERSION;
-use codex_windows_sandbox::SetupErrorCode;
-use codex_windows_sandbox::SetupFailure;
-use codex_windows_sandbox::dpapi_protect;
-use codex_windows_sandbox::sandbox_dir;
-use codex_windows_sandbox::sandbox_secrets_dir;
-use codex_windows_sandbox::string_from_sid_bytes;
-use codex_windows_sandbox::to_wide;
+use crate::SETUP_VERSION;
+use crate::SetupErrorCode;
+use crate::SetupFailure;
+use crate::dpapi_protect;
+use crate::sandbox_dir;
+use crate::sandbox_secrets_dir;
+use crate::string_from_sid_bytes;
+use crate::to_wide;
 
 pub const SANDBOX_USERS_GROUP: &str = "CodexSandboxUsers";
 const SANDBOX_USERS_GROUP_COMMENT: &str = "Codex sandbox internal group (managed)";
