@@ -51,15 +51,19 @@
 #![cfg(target_os = "windows")]
 
 pub mod job_object;
+mod launcher_client;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use dasclaw_sandbox_windows::absolute_path::AbsolutePathBuf;
+use dasclaw_sandbox_windows::sandbox_setup_is_complete;
 use dasclaw_sandbox_windows::types::{NetworkAccess, SandboxPolicy as UpstreamPolicy};
-use dasclaw_sandbox_windows::{run_windows_sandbox_capture, sandbox_setup_is_complete};
 
-use crate::{Sandbox, SandboxBackendConfig, SandboxError, SandboxExecRequest, SandboxType};
+use crate::launcher_ipc::{LauncherRequest, OuterJobLimitsWire, PROTOCOL_VERSION};
+use crate::{
+    ResourceLimits, Sandbox, SandboxBackendConfig, SandboxError, SandboxExecRequest, SandboxType,
+};
 
 /// Windows restricted-token sandbox backend.
 ///
@@ -106,27 +110,45 @@ impl Sandbox for WindowsRestrictedTokenSandbox {
         let policy_json = serde_json::to_string(&upstream_policy)
             .map_err(|e| SandboxError::PolicyTransform(format!("serialize policy: {e}")))?;
 
-        // 3. dispatch
-        let capture = run_windows_sandbox_capture(
-            &policy_json,
-            &parts.cwd,
-            &dasclaw_home,
-            parts.argv,
-            &parts.cwd,
-            parts.env,
-            None,  // timeout — outer caller (OsExecutor) wraps with tokio timeout
-            false, // use_private_desktop=false: keep first-use UX simple; flip in Phase 1.3 / hardening
-        )
-        .map_err(|e| {
-            SandboxError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            ))
-        })?;
+        // 3. ResourceLimits → outer Job Object wire form
+        let outer_limits = build_outer_limits(&req.policy.resource_limits);
 
-        // 4. CaptureResult → std::process::Output
-        Ok(capture_result_to_output(capture))
+        // 4. spawn launcher binary（ADR-131 side-by-side wrapper）
+        let request = LauncherRequest {
+            protocol_version: PROTOCOL_VERSION,
+            argv: parts.argv,
+            cwd: parts.cwd,
+            env: parts.env,
+            dasclaw_home,
+            policy_json,
+            outer_limits,
+            // use_private_desktop=false：维持 first-use UX 简单；Phase 1.3 / hardening 时再切换。
+            use_private_desktop: false,
+        };
+
+        launcher_client::spawn_and_capture(request)
     }
+}
+
+/// 把 [`ResourceLimits`] 投影到 launcher IPC 的 [`OuterJobLimitsWire`]。
+///
+/// 全部字段为 `None` 时返回 `None`，让 launcher 跳过 outer Job Object 创建
+/// （它仍会调 `run_windows_sandbox_capture`，沙箱内层自身的 inner Job Object
+/// 由 `dasclaw_sandbox_windows` 上游负责）。
+///
+/// `max_processes` 是 `Option<u64>`，但 Windows `JOB_OBJECT_BASIC_LIMIT.ActiveProcessLimit`
+/// 是 `u32`。`u64 → u32` 失败时静默丢弃该字段（保留其它限制），不让
+/// 整个 outer 配置失败 —— 因为 4 GiB 内存上限仍然有意义。
+fn build_outer_limits(rl: &ResourceLimits) -> Option<OuterJobLimitsWire> {
+    let any = rl.max_memory_bytes.is_some() || rl.max_processes.is_some();
+    if !any {
+        return None;
+    }
+    Some(OuterJobLimitsWire {
+        max_process_memory_bytes: rl.max_memory_bytes,
+        max_job_memory_bytes: None,
+        max_active_processes: rl.max_processes.and_then(|n| u32::try_from(n).ok()),
+    })
 }
 
 /// Decomposed [`std::process::Command`] suitable for the upstream
@@ -220,19 +242,6 @@ fn backend_config_to_upstream_policy(
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         })
-    }
-}
-
-fn capture_result_to_output(
-    capture: dasclaw_sandbox_windows::CaptureResult,
-) -> std::process::Output {
-    use std::os::windows::process::ExitStatusExt;
-
-    let status = std::process::ExitStatus::from_raw(capture.exit_code as u32);
-    std::process::Output {
-        status,
-        stdout: capture.stdout,
-        stderr: capture.stderr,
     }
 }
 

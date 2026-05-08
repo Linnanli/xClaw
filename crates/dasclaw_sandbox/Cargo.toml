@@ -46,6 +46,10 @@ seccompiler = "0.5"
 dasclaw_sandbox_windows = { path = "../dasclaw_sandbox_windows" }
 dirs = "6"
 
+# ADR-131 / Slice B3 — base64 编码 launcher IPC 的 stdout / stderr 字节流。
+# 仅 Windows 用：launcher binary 编码 + adapter launcher_client 解码。
+base64 = "0.22"
+
 # ADR-131 / Slice B2 — Outer Job Object FFI for resource limits wrapper.
 # 仅在 Windows target 启用；features 与 dasclaw_sandbox_windows 0.52 对齐。
 # JobObjects = CreateJobObjectW / SetInformationJobObject / AssignProcessToJobObject
