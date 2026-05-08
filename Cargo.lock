@@ -2765,6 +2765,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dasclaw_process_hardening"
+version = "0.0.0-w5"
+dependencies = [
+ "libc",
+ "pretty_assertions",
+]
+
+[[package]]
 name = "dasclaw_project_docs"
 version = "0.0.0-w1"
 dependencies = [

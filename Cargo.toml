@@ -32,6 +32,8 @@ members = [
 	"crates/dasclaw_sandbox_windows",
 	# W5 #326 Part 2 / ADR-132 — codex-execpolicy verbatim port (1,790 LOC) + codex-utils-absolute-path dep
 	"crates/dasclaw_absolute_path",
+	# W5 #324 sub-task 1 — codex-process-hardening verbatim port (pre-main hardening, 189 LOC)
+	"crates/dasclaw_process_hardening",
 	"desktop-client/ironclaw",
 	"desktop-client/ironclaw/crates/ironclaw_common",
 	"desktop-client/ironclaw/crates/ironclaw_safety",

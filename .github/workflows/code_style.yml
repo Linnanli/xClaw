@@ -185,12 +185,26 @@ jobs:
     - name: Verify dasclaw_execpolicy + dasclaw_absolute_path are byte-equal to upstream
       run: python3 scripts/check_codex_execpolicy_drift.py
 
+  codex-process-hardening-drift:
+    name: ADR-129 verbatim drift (dasclaw_process_hardening)
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v6
+      with:
+        submodules: recursive
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: Verify ported file matches codex-cli-main snapshot byte-for-byte
+      run: python3.12 scripts/check_codex_process_hardening_drift.py
+
   # Roll-up job for branch protection
   code-style:
     name: Code Style (fmt + clippy + deny)
     runs-on: ubuntu-latest
     if: always()
-    needs: [format, clippy, clippy-windows, deny-check, no-panics, claw-code-readonly, no-new-ironclaw-literal, codex-execpolicy-drift]
+    needs: [format, clippy, clippy-windows, deny-check, no-panics, claw-code-readonly, no-new-ironclaw-literal, codex-execpolicy-drift, codex-process-hardening-drift]
     steps:
       - run: |
           if [[ "${{ needs.format.result }}" != "success" || "${{ needs.clippy.result }}" != "success" || "${{ needs.deny-check.result }}" != "success" || "${{ needs.no-panics.result }}" != "success" || "${{ needs.claw-code-readonly.result }}" != "success" || "${{ needs.codex-execpolicy-drift.result }}" != "success" ]]; then
@@ -200,6 +214,10 @@ jobs:
           # no-new-ironclaw-literal is skipped on adr-114-class-b PRs (by design); skipped is acceptable but failure is not
           if [[ "${{ needs.no-new-ironclaw-literal.result }}" != "success" && "${{ needs.no-new-ironclaw-literal.result }}" != "skipped" ]]; then
             echo "ADR-114 grep guard failed: ${{ needs.no-new-ironclaw-literal.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.codex-process-hardening-drift.result }}" != "success" ]]; then
+            echo "ADR-129 verbatim drift guard failed: ${{ needs.codex-process-hardening-drift.result }}"
             exit 1
           fi
           # clippy-windows only runs on main PRs, so skipped is acceptable but failure is not
