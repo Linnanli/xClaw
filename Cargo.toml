@@ -30,6 +30,8 @@ members = [
 	"crates/dasclaw_llm_provider",
 	# W4 ADR-121 D3-3 / Phase 1.1 — Windows sandbox port from openai/codex (commit 6e838a19fa)
 	"crates/dasclaw_sandbox_windows",
+	# W5 #326 Part 2 / ADR-132 — codex-execpolicy verbatim port (1,790 LOC) + codex-utils-absolute-path dep
+	"crates/dasclaw_absolute_path",
 	"desktop-client/ironclaw",
 	"desktop-client/ironclaw/crates/ironclaw_common",
 	"desktop-client/ironclaw/crates/ironclaw_safety",

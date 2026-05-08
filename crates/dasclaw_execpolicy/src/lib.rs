@@ -1,30 +1,30 @@
-//! Starlark-based exec permission rules (codex port).
-//!
-//! W1 skeleton — trait surface only, no impl.
-//! See `docs/plans/architecture-refactor/31-target-architecture.md` §4 for design.
+pub(crate) mod amend;
+pub(crate) mod decision;
+pub(crate) mod error;
+pub(crate) mod execpolicycheck;
+mod executable_name;
+pub(crate) mod parser;
+pub(crate) mod policy;
+pub mod rule;
 
-#![allow(dead_code)]
-
-/// Placeholder error type. Replaced with module-specific errors in W2+.
-#[derive(Debug, thiserror::Error)]
-#[error("dasclaw_execpolicy skeleton error: {0}")]
-pub struct SkeletonError(pub String);
-
-pub enum PolicyDecision {
-    Allow,
-    Deny,
-    Ask,
-}
-
-/// Primary entry trait (placeholder). Replaced with full surface in W2+.
-pub trait ExecPolicy {
-    /// Starlark-based exec permission rules (codex port).
-    fn evaluate(&self, cmd: &str) -> PolicyDecision;
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn skeleton_compiles() { /* W1 placeholder */
-    }
-}
+pub use amend::AmendError;
+pub use amend::blocking_append_allow_prefix_rule;
+pub use amend::blocking_append_network_rule;
+pub use decision::Decision;
+pub use error::Error;
+pub use error::ErrorLocation;
+pub use error::Result;
+pub use error::TextPosition;
+pub use error::TextRange;
+pub use execpolicycheck::ExecPolicyCheckCommand;
+pub use parser::PolicyParser;
+pub use policy::Evaluation;
+pub use policy::MatchOptions;
+pub use policy::Policy;
+pub use rule::NetworkRuleProtocol;
+pub use rule::PatternToken;
+pub use rule::PrefixPattern;
+pub use rule::PrefixRule;
+pub use rule::Rule;
+pub use rule::RuleMatch;
+pub use rule::RuleRef;

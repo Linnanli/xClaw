@@ -1,0 +1,27 @@
+[package]
+# Verbatim port of codex-utils-absolute-path @ codex-cli-main commit 4da6b0ae
+# (upstream snapshot vendored under codex-cli-main/codex-rs/utils/absolute-path).
+# Mechanical edits per ADR-129 §1.3 + ADR-132: package name swap only.
+# DO NOT hand-edit src/*.rs — drift guard scripts/check_codex_execpolicy_drift.py
+# verifies hash equality with upstream.
+name = "dasclaw_absolute_path"
+version = "0.0.0-w5"
+edition = "2024"
+description = "Absolute path newtype (verbatim port of codex-utils-absolute-path)."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+dirs = "6"
+dunce = "1.0.4"
+schemars = "0.8.22"
+serde = { version = "1", features = ["derive"] }
+ts-rs = { version = "11", features = ["serde-json-impl", "no-serde-warnings"] }
+
+[dev-dependencies]
+pretty_assertions = "1.4.1"
+serde_json = "1"
+tempfile = "3.23.0"
