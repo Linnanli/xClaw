@@ -1,0 +1,30 @@
+[package]
+# Verbatim port of codex-utils-home-dir @ codex-cli-main snapshot vendored
+# under codex-cli-main/codex-rs/utils/home-dir.
+# Mechanical edits per ADR-129 §1.3:
+#   - package name swap: codex-utils-home-dir → dasclaw_utils_home_dir
+#   - dep swap: codex-utils-absolute-path → dasclaw_absolute_path
+#   - use-path swap (in src/lib.rs):
+#       codex_utils_absolute_path → dasclaw_absolute_path
+# DO NOT hand-edit src/lib.rs — drift guard
+# scripts/check_codex_utils_home_dir_drift.py verifies hash equality with
+# upstream after normalizing the use-path swap.
+#
+# Required transitively by codex-network-proxy (#324 sub-task 3 / ADR-137).
+name = "dasclaw_utils_home_dir"
+version = "0.0.0-w5"
+edition = "2024"
+description = "CODEX_HOME resolution helper (verbatim port of codex-utils-home-dir)."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+dasclaw_absolute_path = { path = "../dasclaw_absolute_path", version = "0.0.0-w5" }
+dirs = "6"
+
+[dev-dependencies]
+pretty_assertions = "1.4.1"
+tempfile = "3.23.0"
