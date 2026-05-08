@@ -62,13 +62,7 @@
 //! - Restricted-token-aware process spawner
 //!   (`process::create_process_as_user`, `process::spawn_process_with_pipes`,
 //!   `process::read_handle_loop`, `cfg(windows)`).
-//! - Read-ACL named-mutex guard
-//!   (`read_acl_mutex::acquire_read_acl_mutex`,
-//!   `read_acl_mutex::read_acl_mutex_exists`,
-//!   `read_acl_mutex::ReadAclMutexGuard`, `cfg(windows)`).
 //! - Filesystem ACL helpers (`acl::*`, `cfg(windows)`).
-//! - Sandbox user account creation / lookup (`sandbox_users::*`,
-//!   `cfg(windows)`).
 //! - SSH client config dependency resolver
 //!   (`ssh_config_dependencies::ssh_config_dependency_paths`).
 //! - Allow/deny path computation for sandbox policy
@@ -121,10 +115,16 @@ pub mod proc_thread_attr;
 #[cfg(windows)]
 pub mod process;
 pub mod pty;
-#[cfg(windows)]
-pub mod read_acl_mutex;
-#[cfg(windows)]
-pub mod sandbox_users;
+// `read_acl_mutex` and `sandbox_users` are intentionally NOT registered as
+// lib modules — upstream codex `windows-sandbox-rs` keeps them as bin-only
+// sources, consumed via `mod read_acl_mutex;` / `mod sandbox_users;` from
+// `setup_main_win.rs` and `command_runner_win.rs` (bin sources, registered
+// via `#[path]` in `src/bin/*.rs`). Lifting them to `pub mod` here breaks
+// double-compilation: in the bin context their bodies use
+// `dasclaw_sandbox_windows::SETUP_VERSION` etc. which is the canonical
+// upstream pattern (`codex_windows_sandbox::X`), but inside the lib that
+// would be a self-import which Rust forbids. Keep them out of lib to mirror
+// upstream verbatim. See ADR-129 §1.3 / ADR-130 §2.
 pub mod sandbox_utils;
 #[cfg(windows)]
 #[path = "setup_orchestrator.rs"]
@@ -286,6 +286,20 @@ pub use token::create_readonly_token_with_caps_from;
 pub use token::create_workspace_write_token_with_caps_from;
 #[cfg(windows)]
 pub use token::get_current_token_for_restriction;
+
+// `dpapi::protect as dpapi_protect` re-export (issue #335 §3a). Mirrors codex
+// `windows-sandbox-rs/src/lib.rs:102` (`pub use dpapi::protect as dpapi_protect;`).
+// Consumed from `sandbox_users::write_secrets` via `crate::dpapi_protect`.
+#[cfg(windows)]
+pub use dpapi::protect as dpapi_protect;
+
+// `log_line` shared helper: in upstream codex this fn lives privately in
+// `setup_main_win.rs` (the bin source body). Since dasclaw mirrors the same
+// `mod sandbox_users;` registration in `setup_main_win.rs`, `super::log_line`
+// in `sandbox_users.rs` resolves to the bin's `log_line` directly — no lib
+// duplicate is required. (Earlier waves lifted `sandbox_users` to a lib
+// module, which broke this `super::` resolution and forced a duplicate
+// `pub(crate) log_line` here; both are now removed to match upstream.)
 
 // ---------------------------------------------------------------------------
 // elevated_impl + inline windows_impl/stub blocks (Wave i-6b)

@@ -16,7 +16,7 @@ use windows_sys::Win32::System::Threading::MUTEX_ALL_ACCESS;
 use windows_sys::Win32::System::Threading::OpenMutexW;
 use windows_sys::Win32::System::Threading::ReleaseMutex;
 
-use crate::winutil::to_wide;
+use dasclaw_sandbox_windows::to_wide;
 
 const READ_ACL_MUTEX_NAME: &str = "Local\\CodexSandboxReadAcl";
 

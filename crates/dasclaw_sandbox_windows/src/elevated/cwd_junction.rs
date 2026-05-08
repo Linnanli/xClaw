@@ -7,7 +7,7 @@
 
 #![cfg(target_os = "windows")]
 
-use crate::logging::log_note;
+use dasclaw_sandbox_windows::log_note;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hash;
 use std::hash::Hasher;

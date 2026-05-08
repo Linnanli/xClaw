@@ -48,6 +48,19 @@ windows-sys = { version = "0.52", features = [ ...28 个 features... ] }
 
 `AGENTS.md` 与 ADR-121 明确：sandbox-windows 端口必须 **verbatim**，禁止补丁式改写。任何"改写为 windows-sys 等价实现避免引入 windows crate"的方案都属于补丁式重写，直接违反端口红线。
 
+#### 1.3.1 Verbatim 边界（issue #335 微订正）
+
+verbatim 红线作用于 **`src/` 业务逻辑**（FFI 调用、ACL/Token/JobObject 算法、错误处理分支、参数构造），但 **不延伸到 build infra / 模块组织层面**。下列 fork 化操作不构成 verbatim 违规，属于跨 crate 端口必要的机械适配：
+
+| 类别 | 可 fork 化操作 | 上界 |
+|---|---|---|
+| Cargo.toml | 依赖列表（`tempfile`/`dirs`/`base64` 主依赖位置）、`windows-sys` features 列表对齐上游、crate name/lib name 重命名 | 不可改业务依赖语义（如把 `windows-sys` 替换为 `windows-rs`） |
+| `use` 路径 | `codex_windows_sandbox::X` → `crate::X` 自指改写（dasclaw 把 `sandbox_users` 等模块从 codex 的 bin-private mod 提升到 lib mod 后，自指必须改）| 不可改导入项数量与名称 |
+| 模块导出 | lib.rs 增补 `pub use foo::bar as baz;` 与上游 lib.rs 1:1 对齐；为 `super::log_line` 等跨模块调用补一份**逐字 body**的 `pub(crate)` helper | helper body 必须逐字复刻上游同名 fn，不允许"顺手简化" |
+| mod 组织 | `pub mod` vs bin-private `mod` 选择（dasclaw 出于跨 bin/lib 共享将部分 codex bin-private mod 提升为 pub mod） | 不可合并/拆分 codex 的 src 文件 |
+
+issue #335 暴露的现象（`UI/CreateDesktopW` 编译错误、`tempfile` 仅在 dev-deps、`use codex_windows_sandbox::` 自指、缺失 `log_line` 跨模块 helper）全部属于上表四类，PR #336 按 1:1 对齐 codex 上游修复，不构成对 §1.3 红线的破坏。
+
 ### 1.4 候选方案
 
 | 选项 | 描述 | 评估 |
