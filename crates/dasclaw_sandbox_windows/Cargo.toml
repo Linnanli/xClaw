@@ -15,6 +15,10 @@ path = "src/lib.rs"
 name = "dasclaw-sandbox-setup"
 path = "src/bin/setup_main.rs"
 
+[[bin]]
+name = "dasclaw-command-runner"
+path = "src/bin/command_runner.rs"
+
 [dependencies]
 anyhow = "1"
 base64 = "0.22"

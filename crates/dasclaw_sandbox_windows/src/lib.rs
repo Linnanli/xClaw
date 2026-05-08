@@ -228,6 +228,66 @@ pub use setup_error::write_setup_error_report;
 pub use token::convert_string_sid_to_sid;
 
 // ---------------------------------------------------------------------------
+// Re-exports consumed by `bin/command_runner.rs` (Wave i-7b).
+//
+// Same provenance as the i-7a block above: mirrors codex
+// `windows-sandbox-rs/src/lib.rs` (commit 6e838a19fa) 1:1 so the verbatim
+// port of `elevated/command_runner_win.rs` compiles with only an
+// `codex_windows_sandbox::` -> `dasclaw_sandbox_windows::` crate-name
+// rewrite. See ADR-130 §2.
+// ---------------------------------------------------------------------------
+#[cfg(windows)]
+pub use acl::allow_null_device;
+#[cfg(windows)]
+pub use desktop::LaunchDesktop;
+#[cfg(windows)]
+pub use hide_users::hide_current_user_profile_dir;
+#[cfg(windows)]
+pub use ipc_framed::ErrorPayload;
+#[cfg(windows)]
+pub use ipc_framed::ExitPayload;
+#[cfg(windows)]
+pub use ipc_framed::FramedMessage;
+#[cfg(windows)]
+pub use ipc_framed::Message;
+#[cfg(windows)]
+pub use ipc_framed::OutputPayload;
+#[cfg(windows)]
+pub use ipc_framed::OutputStream;
+#[cfg(windows)]
+pub use ipc_framed::ResizePayload;
+#[cfg(windows)]
+pub use ipc_framed::SpawnReady;
+#[cfg(windows)]
+pub use ipc_framed::SpawnRequest;
+#[cfg(windows)]
+pub use ipc_framed::decode_bytes;
+#[cfg(windows)]
+pub use ipc_framed::encode_bytes;
+#[cfg(windows)]
+pub use ipc_framed::read_frame;
+#[cfg(windows)]
+pub use ipc_framed::write_frame;
+pub use policy::SandboxPolicy;
+pub use policy::parse_policy;
+#[cfg(windows)]
+pub use process::PipeSpawnHandles;
+#[cfg(windows)]
+pub use process::StderrMode;
+#[cfg(windows)]
+pub use process::StdinMode;
+#[cfg(windows)]
+pub use process::read_handle_loop;
+#[cfg(windows)]
+pub use process::spawn_process_with_pipes;
+#[cfg(windows)]
+pub use token::create_readonly_token_with_caps_from;
+#[cfg(windows)]
+pub use token::create_workspace_write_token_with_caps_from;
+#[cfg(windows)]
+pub use token::get_current_token_for_restriction;
+
+// ---------------------------------------------------------------------------
 // elevated_impl + inline windows_impl/stub blocks (Wave i-6b)
 //
 // Verbatim port of upstream `codex-rs/windows-sandbox-rs/src/{elevated_impl.rs,
