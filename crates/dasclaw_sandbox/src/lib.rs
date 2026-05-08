@@ -33,6 +33,11 @@ pub mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::LinuxSeccompSandbox;
 
+#[cfg(target_os = "windows")]
+pub mod windows;
+#[cfg(target_os = "windows")]
+pub use windows::WindowsRestrictedTokenSandbox;
+
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -46,6 +51,13 @@ pub enum SandboxError {
 
     #[error("platform sandbox unavailable on this OS")]
     PlatformUnavailable,
+
+    /// Windows sandbox infrastructure (`dasclaw-sandbox-setup.exe`) has not
+    /// been initialized yet. Distinct from `NotImplemented` so callers can
+    /// surface a setup-prompt UX instead of treating the platform as
+    /// unsupported. See ADR-121 D3-3 / Phase 1.2 (issue #320).
+    #[error("windows sandbox setup pending: {detail}")]
+    WindowsSetupPending { detail: String },
 
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
@@ -269,6 +281,10 @@ fn build_backend(t: SandboxType) -> Box<dyn Sandbox> {
     #[cfg(target_os = "linux")]
     if matches!(t, SandboxType::LinuxSeccomp) {
         return Box::new(LinuxSeccompSandbox::new());
+    }
+    #[cfg(target_os = "windows")]
+    if matches!(t, SandboxType::WindowsRestrictedToken) {
+        return Box::new(WindowsRestrictedTokenSandbox::new());
     }
     Box::new(NoopSandbox { kind: t })
 }
