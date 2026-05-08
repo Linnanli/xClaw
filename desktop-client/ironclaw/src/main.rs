@@ -1,5 +1,18 @@
 //! IronClaw - Main entry point.
 
+/// #324 sub-task 1 — Pre-main process hardening hook.
+///
+/// Runs before `fn main()` (via `#[ctor::ctor]`) to disable core dumps,
+/// block ptrace attach, and scrub dangerous environment variables
+/// (`LD_PRELOAD`, `DYLD_*`, macOS malloc stack-logging controls, …).
+///
+/// Pattern mirrors codex `responses-api-proxy/src/main.rs:4-7`. Applies to
+/// both the `dasclaw` and `ironclaw` binaries (same `[[bin]] path`).
+#[ctor::ctor]
+fn pre_main() {
+    dasclaw_process_hardening::pre_main_hardening();
+}
+
 use std::sync::Arc;
 use std::time::Duration;
 
