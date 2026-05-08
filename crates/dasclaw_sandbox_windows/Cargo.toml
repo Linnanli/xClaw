@@ -15,9 +15,17 @@ path = "src/lib.rs"
 name = "dasclaw-sandbox-setup"
 path = "src/bin/setup_main.rs"
 
-[[bin]]
-name = "dasclaw-command-runner"
-path = "src/bin/command_runner.rs"
+# `dasclaw-command-runner` (codex `command_runner.rs` / `command_runner_win.rs`)
+# is gated out until the upstream `conpty/` module is ported — its body
+# references `dasclaw_sandbox_windows::spawn_conpty_process_as_user`, which
+# is part of a not-yet-ported wave. Re-enable in the wave that lands the
+# `conpty/` mod (see ADR-130 §i-7b follow-up). Source files
+# (`src/bin/command_runner.rs` and `src/elevated/command_runner_win.rs`)
+# are kept in tree for the verbatim port; only the [[bin]] registration is
+# disabled to unbreak Windows CI.
+# [[bin]]
+# name = "dasclaw-command-runner"
+# path = "src/bin/command_runner.rs"
 
 [dependencies]
 anyhow = "1"

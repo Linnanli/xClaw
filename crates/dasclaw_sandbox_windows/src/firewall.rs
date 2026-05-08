@@ -28,8 +28,8 @@ use windows::Win32::System::Com::CoUninitialize;
 use windows::core::BSTR;
 use windows::core::Interface;
 
-use crate::setup_error::SetupErrorCode;
-use crate::setup_error::SetupFailure;
+use dasclaw_sandbox_windows::SetupErrorCode;
+use dasclaw_sandbox_windows::SetupFailure;
 
 // This is the stable identifier we use to find/update the rule idempotently.
 // It intentionally does not change between installs.
