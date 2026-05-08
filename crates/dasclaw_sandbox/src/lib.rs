@@ -23,6 +23,11 @@
 
 #![allow(dead_code)]
 
+/// ADR-131 / Slice B1 — IPC protocol for `dasclaw-sandbox-resource-launcher`.
+///
+/// 跨平台公开（serde 数据结构），便于本地测试与 macOS/Linux 构建检查通过。
+pub mod launcher_ipc;
+
 #[cfg(target_os = "macos")]
 pub mod macos;
 #[cfg(target_os = "macos")]
@@ -58,6 +63,14 @@ pub enum SandboxError {
     /// unsupported. See ADR-121 D3-3 / Phase 1.2 (issue #320).
     #[error("windows sandbox setup pending: {detail}")]
     WindowsSetupPending { detail: String },
+
+    /// Windows resource-limits launcher (`dasclaw-sandbox-resource-launcher.exe`)
+    /// failed at spawn / IPC / Job Object FFI / sub-process invocation.
+    /// **Distinct** from [`Self::WindowsSetupPending`]: setup is already done,
+    /// but this particular invocation's wrapper failed. Callers should not
+    /// prompt the user to re-run setup. See ADR-131 §7 Q2.
+    #[error("windows sandbox resource launcher failed: {detail}")]
+    WindowsLauncherFailed { detail: String },
 
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),

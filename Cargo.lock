@@ -2672,6 +2672,7 @@ dependencies = [
  "dirs 6.0.0",
  "libc",
  "seccompiler",
+ "serde",
  "serde_json",
  "thiserror 1.0.69",
  "url",
