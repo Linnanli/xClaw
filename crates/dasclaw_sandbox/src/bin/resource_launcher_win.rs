@@ -24,6 +24,17 @@
 //! 退出码 1 + stderr 提示。理由见 ADR-131 §7 Q4：Cargo `[[bin]]` 不支持
 //! `[target.'cfg(...)'.bin]`；stub 让全平台 `cargo build` 可靠通过。
 
+/// #324 sub-task 1 — Pre-main process hardening hook.
+///
+/// Runs before `fn main()` (via `#[ctor::ctor]`) to disable core dumps,
+/// block ptrace attach, and scrub dangerous environment variables. Applies to
+/// both the Windows real-impl and the cross-platform stub branches below.
+/// Pattern mirrors codex `responses-api-proxy/src/main.rs:4-7`.
+#[ctor::ctor]
+fn pre_main() {
+    dasclaw_process_hardening::pre_main_hardening();
+}
+
 #[cfg(target_os = "windows")]
 fn main() -> std::process::ExitCode {
     use std::io::{Read, Write};
