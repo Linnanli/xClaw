@@ -36,3 +36,16 @@ seccompiler = "0.5"
 dasclaw_sandbox_windows = { path = "../dasclaw_sandbox_windows" }
 dirs = "6"
 serde_json = "1"
+
+# ADR-131 / Slice B2 — Outer Job Object FFI for resource limits wrapper.
+# 仅在 Windows target 启用；features 与 dasclaw_sandbox_windows 0.52 对齐。
+# JobObjects = CreateJobObjectW / SetInformationJobObject / AssignProcessToJobObject
+# Foundation = HANDLE / CloseHandle / GetLastError
+# Threading  = GetCurrentProcess
+[target.'cfg(target_os = "windows")'.dependencies.windows-sys]
+version = "0.52"
+features = [
+  "Win32_Foundation",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+]
