@@ -11,6 +11,22 @@ from dataclasses import dataclass
 
 
 PANIC_PATTERN = re.compile(r"\.(?:unwrap|expect)\(|(?<!_)assert(?:_eq|_ne)?!")
+
+# Crates whose entire source tree is a byte-for-byte verbatim port of upstream
+# code (codex-cli-main / openai-codex / etc) per ADR-129 §1.3 + ADR-132 +
+# ADR-133. These crates are protected by their own drift guard
+# (scripts/check_codex_*_drift.py) which forbids hand-edits — including the
+# `// safety: <reason>` comment this script normally accepts. Upstream's
+# panic discipline is therefore inherited as-is; we exempt these prefixes
+# from the panic gate. If you need to relax this list, also re-vendor the
+# upstream snapshot under codex-cli-main/ and update the matching drift guard.
+VERBATIM_PORTED_PREFIXES = (
+    "crates/dasclaw_absolute_path/",       # ADR-132 — codex-utils-absolute-path
+    "crates/dasclaw_execpolicy/",          # ADR-132 — codex-execpolicy
+    "crates/dasclaw_parsed_command/",      # ADR-133 — codex-protocol parse_command slice
+    "crates/dasclaw_sandbox_windows/",     # ADR-129 — codex sandbox-windows port
+    "crates/dasclaw_shell_command/",       # ADR-133 — codex-shell-command
+)
 TEST_ATTR_PATTERN = re.compile(
     r"^\s*#\s*\[\s*(?:"
     r"test"
@@ -190,6 +206,8 @@ def changed_rust_files(base: str, head: str) -> list[pathlib.Path]:
     files = []
     for line in output.splitlines():
         if line.endswith(".rs") and (line.startswith("src/") or line.startswith("crates/")):
+            if any(line.startswith(prefix) for prefix in VERBATIM_PORTED_PREFIXES):
+                continue
             files.append(pathlib.Path(line))
     return files
 
