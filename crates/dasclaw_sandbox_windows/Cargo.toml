@@ -10,6 +10,11 @@ publish = false
 name = "dasclaw_sandbox_windows"
 path = "src/lib.rs"
 
+# Bin entries mirror codex `windows-sandbox-rs` 1:1; see ADR-130 §2.
+[[bin]]
+name = "dasclaw-sandbox-setup"
+path = "src/bin/setup_main.rs"
+
 [dependencies]
 anyhow = "1"
 base64 = "0.22"

@@ -190,6 +190,44 @@ pub use setup::sandbox_dir;
 pub use setup::sandbox_secrets_dir;
 
 // ---------------------------------------------------------------------------
+// Re-exports consumed by `bin/setup_main.rs` (Wave i-7a).
+//
+// These mirror codex `windows-sandbox-rs/src/lib.rs` (commit 6e838a19fa)
+// 1:1 so the verbatim port of `setup_main_win.rs` compiles with only an
+// `codex_windows_sandbox::` -> `dasclaw_sandbox_windows::` crate-name
+// rewrite. See ADR-130 §2.
+// ---------------------------------------------------------------------------
+#[cfg(windows)]
+pub use acl::add_deny_write_ace;
+#[cfg(windows)]
+pub use acl::ensure_allow_mask_aces_with_inheritance;
+#[cfg(windows)]
+pub use acl::ensure_allow_write_aces;
+#[cfg(windows)]
+pub use acl::path_mask_allows;
+#[cfg(windows)]
+pub use cap::load_or_create_cap_sids;
+#[cfg(windows)]
+pub use cap::workspace_cap_sid_for_cwd;
+#[cfg(windows)]
+pub use hide_users::hide_newly_created_users;
+pub use logging::LOG_FILE_NAME;
+pub use logging::log_note;
+pub use path_normalization::canonicalize_path;
+#[cfg(windows)]
+pub use setup_error::SetupErrorCode;
+#[cfg(windows)]
+pub use setup_error::SetupErrorReport;
+#[cfg(windows)]
+pub use setup_error::SetupFailure;
+#[cfg(windows)]
+pub use setup_error::extract_failure as extract_setup_failure;
+#[cfg(windows)]
+pub use setup_error::write_setup_error_report;
+#[cfg(windows)]
+pub use token::convert_string_sid_to_sid;
+
+// ---------------------------------------------------------------------------
 // elevated_impl + inline windows_impl/stub blocks (Wave i-6b)
 //
 // Verbatim port of upstream `codex-rs/windows-sandbox-rs/src/{elevated_impl.rs,
