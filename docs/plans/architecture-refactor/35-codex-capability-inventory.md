@@ -45,7 +45,7 @@
 | F | Bash Validation | ~3,300 | `core/src/tools/runtimes/shell/bash_validator.rs` | ⚠️ 比 claw 弱（claw 1004 LOC × 6 模块更深）| ⭐⭐⭐⭐ | 与 claw bash_validation 合并到 dasclaw_bash_validation |
 | G | Governance（Guardian）| ~3,500 | `core/src/guardian/`、`core/src/state/service.rs`、`core/src/tools/handlers/approvals.rs` | ⚠️ 与 claw 6 件套互补 | ⭐⭐⭐⭐ | Guardian 评审 + claw 6 件套 → dasclaw_governance |
 | H | MCP | ~3,800 | `codex-mcp/`、`config/src/mcp_types.rs` | ✅ 多 ManagedProxy transport | ⭐⭐⭐⭐⭐ | 与 claw 6-transport 合并到 dasclaw_mcp |
-| I | ExecPolicy | ~3,200 | `execpolicy/`、`core/src/exec_policy.rs` | ✅ Starlark 完胜 | ⭐⭐⭐⭐⭐ | **完整移植到 dasclaw_execpolicy**（当前 30-LOC stub，完整 Starlark port 跟踪在 [#326](https://github.com/Linnanli/xClaw/issues/326) Part 2 + adr-1XX-execpolicy-port） |
+| I | ExecPolicy | ~3,200 | `execpolicy/`、`core/src/exec_policy.rs` | ✅ Starlark 完胜 |  ⭐⭐⭐⭐⭐ | **完整移植到 dasclaw_execpolicy**（当前 30-LOC stub，完整 Starlark port 跟踪在 [#326](https://github.com/Linnanli/xClaw/issues/326) Part 2 + [ADR-132](adr-132-execpolicy-starlark-port-plan.md)） |
 | J | Feature Flags | ~3,100 | `features/` | ✅ 4-stage 生命周期完整 | ⭐⭐⭐⭐ | 完整移植到 dasclaw_features |
 | K | Observability | ~2,000 | `otel/`、`rollout-trace/`、`analytics/` | ⚠️ 各有强项 | ⭐⭐⭐ | rollout-trace 移植到 dasclaw_observability |
 | L | Identity | ~1,200 | `agent-identity/`、`device-key/`、`login/`、`keyring-store/` | ❌ 弱于 ironclaw | ⭐⭐ | OAuth PKCE 借鉴；device-key 留 ironclaw |
