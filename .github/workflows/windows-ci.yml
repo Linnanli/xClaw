@@ -25,9 +25,13 @@ on:
       - 'feat/win/**'
       - 'ci/win-**'
       - 'windows-**'
-    # 任何分支动到 Windows 沙箱代码或 vendor 快照都触发（PR-1.1.3a 起）
+    # 任何分支动到 Windows 沙箱代码、跨平台 sandbox 抽象（含 Windows adapter）
+    # 或 vendor 快照都触发：
+    #   - PR-1.1.3a 起：dasclaw_sandbox_windows / vendor 快照
+    #   - PR-1.2 (#321) 起：dasclaw_sandbox（cross-platform 抽象，含 src/windows/）
     paths:
       - 'crates/dasclaw_sandbox_windows/**'
+      - 'crates/dasclaw_sandbox/**'
       - 'vendor/codex-windows-sandbox/**'
       - '.github/workflows/windows-ci.yml'
   pull_request:
