@@ -28,3 +28,11 @@ libc = "0.2"
 #   - 不引入外部 bwrap setuid 依赖，部署更轻。
 [target.'cfg(target_os = "linux")'.dependencies]
 seccompiler = "0.5"
+
+# W2.4 — Windows restricted-token backend (adapter to `dasclaw_sandbox_windows`).
+# 仅在 Windows target 启用，承接 `SandboxType::WindowsRestrictedToken`。
+# 详见 docs/plans/architecture-refactor/49-... 与 issue #320 (Phase 1.2)。
+[target.'cfg(target_os = "windows")'.dependencies]
+dasclaw_sandbox_windows = { path = "../dasclaw_sandbox_windows" }
+dirs = "6"
+serde_json = "1"

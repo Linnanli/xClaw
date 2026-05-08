@@ -2668,8 +2668,11 @@ dependencies = [
 name = "dasclaw_sandbox"
 version = "0.0.0-w1"
 dependencies = [
+ "dasclaw_sandbox_windows",
+ "dirs 6.0.0",
  "libc",
  "seccompiler",
+ "serde_json",
  "thiserror 1.0.69",
  "url",
 ]

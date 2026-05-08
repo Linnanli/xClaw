@@ -117,7 +117,10 @@ fn set_one(resource: RlimitResource, value: u64) -> std::io::Result<()> {
         return Err(std::io::Error::last_os_error());
     }
 
-    let infinity = libc::RLIM_INFINITY as u64;
+    // libc::RLIM_INFINITY is `rlim_t` (u64 on the platforms we support). The
+    // explicit `as u64` cast was historically required when targets disagreed
+    // on width; modern toolchains lint it as unnecessary.
+    let infinity: u64 = libc::RLIM_INFINITY;
     if value >= infinity {
         // Caller said "unbounded" — leave existing limit alone.
         return Ok(());
