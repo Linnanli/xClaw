@@ -1,0 +1,6 @@
+{
+  "version": "1.0.0",
+  "name": "adr-compliance-check",
+  "description": "审查当前 Git 改动是否违反本仓 ADR（Architecture Decision Records）的硬性约束：verbatim port 纯度、starlark 版本钉死、`.ironclaw` 字面量、drift-guard 接线、CI roll-up failure-check、PR 体例（ADR/Issue 引用、stacked PR 注记）等。",
+  "author": "nallylin"
+}
