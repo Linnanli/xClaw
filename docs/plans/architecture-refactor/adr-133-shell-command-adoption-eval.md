@@ -1,6 +1,6 @@
 # ADR-133: codex `shell-command` adoption evaluation (research-only)
 
-- **Status**: 🟡 **Decision: adopt-with-adapter** (research-only ADR per [#326](https://github.com/Linnanli/xClaw/issues/326) Part 3a; implementation is **out of scope** for this PR)
+- **Status**: � **Accepted (executed)** — verbatim port landed in PR for [#326](https://github.com/Linnanli/xClaw/issues/326) Part 3a. Original draft was research-only; §2.4 + §4 amended in-place during execution to record the actual file inventory + the codex-protocol slicing decision (see §amend below).
 - **Date**: 2026-05-08
 - **Approver**: pending nally sign-off
 - **Authors**: GitHub Copilot agent
@@ -96,8 +96,9 @@ crates/
 | 允许的机械改写 | 禁止 |
 |---|---|
 | `Cargo.toml name = "codex-shell-command"` → `dasclaw_shell_command` | 重构 `parse_command_impl`（2,526 LOC，注释明写 "DO NOT REVIEW THIS CODE BY HAND"）|
-| `use codex_protocol::parse_command::ParsedCommand` → `use dasclaw_protocol::parse_command::ParsedCommand`（如 dasclaw_protocol 已落地，否则保留 codex_protocol path-dep）| 改 `is_safe_command` / `is_dangerous_command` 阈值 |
-| `bash.rs` 的 `tree-sitter-bash` 依赖保留 | 把 PowerShell 模块裁掉 — 跨平台是核心特性 |
+| `use codex_protocol::parse_command::ParsedCommand` → `use dasclaw_parsed_command::parse_command::ParsedCommand`（**slicing**：见 §amend）| 改 `is_safe_command` / `is_dangerous_command` 阈值 |
+| `use codex_utils_absolute_path::X` → `use dasclaw_absolute_path::X`（与 ADR-132 同款机械改写）| 把 PowerShell 模块裁掉 — 跨平台是核心特性 |
+| `bash.rs` 的 `tree-sitter-bash` 依赖保留 | — |
 
 特别地，`parse_command.rs:23` 上游有显式注释：
 
@@ -129,7 +130,15 @@ pub use parse_command::{parse_command, extract_shell_command, shlex_join};
 
 ### 2.4 mechanical guard
 
-落地 PR 同时引入 `scripts/check_codex_shell_command_drift.py`，与 ADR-132 §3.3 同款：对 `crates/dasclaw_shell_command/src/{parse_command,bash,powershell,shell_detect}.rs` 与 codex 上游做 hash diff，仅允许 §2.2 表格列出的机械改写。
+落地 PR 同时引入 `scripts/check_codex_shell_command_drift.py`，与 ADR-132 §3.3 同款：对 13 个文件（dasclaw_parsed_command 1 个 + dasclaw_shell_command 12 个，含 `command_safety/` 子模块 + `powershell_parser.ps1`）与 codex 上游做 hash diff，仅允许 §2.2 表格列出的机械改写。drift guard 对两侧都执行 `_sort_use_blocks` 规范化，使 use-path swap 引发的 rustfmt 重排序不会被误判为 drift（与 ADR-132 §3.3 同款机制）。
+
+### 2.5 amend — codex-protocol 切片决定（执行期补记）
+
+严格 verbatim 红线意指"被端口的文件与上游字节一致"，**而非"必须连带 vendor 整棵传递依赖树"**。`dasclaw_shell_command` 在源码层面只引用 `codex_protocol::parse_command::ParsedCommand`（一个 31 LOC 的 enum，仅依赖 schemars/serde/ts-rs），整 codex-protocol crate 16,053 LOC + 30+ 传递依赖（reqwest, tokio, landlock, seccompiler, icu_*, codex-execpolicy, codex-network-proxy, codex-utils-image, …）远超本 PR 范围。
+
+**决定**：单独 vendor `protocol/src/parse_command.rs` 为新 crate `crates/dasclaw_parsed_command/`（verbatim，单文件 + 自己的 lib.rs 仅 `pub mod parse_command;`），并把这一文件加入 §2.4 drift guard。`use` 路径机械改写：`codex_protocol::parse_command::ParsedCommand` → `dasclaw_parsed_command::parse_command::ParsedCommand`。
+
+这一切片在精神上等价于 ADR-132 vendor `dasclaw_absolute_path` 而不 vendor 整棵 `codex-utils/`。后续若 dasclaw 真的需要更多 codex-protocol 类型，再扩 `dasclaw_parsed_command` 或拆 `dasclaw_protocol` 新 crate；本 PR 不预先扩展。
 
 ---
 
@@ -158,13 +167,15 @@ pub use parse_command::{parse_command, extract_shell_command, shlex_join};
 
 > 与 ADR-132 同样：单 PR 内的提交序，不拆 PR。
 
-1. **C1**: 创建 `crates/dasclaw_shell_command/` + Cargo.toml（依赖 `shlex`, `tree-sitter-bash`, `codex_protocol` path-dep 直至 dasclaw_protocol 落地）
-2. **C2**: `lib.rs` + `shell_detect.rs` + `command_safety/` verbatim
-3. **C3**: `bash.rs` + `powershell.rs` verbatim
-4. **C4**: `parse_command.rs` verbatim（最大文件，单独提交便于 review）
-5. **C5**: codex `shell-command/tests/` 中 `parse_command_*.rs` fixture 选 prefix-match + powershell-detect 两组 verbatim port
-6. **C6**: `scripts/check_codex_shell_command_drift.py` + workflow 接入
+1. **C1**: 创建 `crates/dasclaw_parsed_command/` + Cargo.toml（verbatim slice of `codex-rs/protocol/src/parse_command.rs` per §2.5）
+2. **C2**: 创建 `crates/dasclaw_shell_command/` + Cargo.toml（依赖 `shlex`, `tree-sitter-bash`, `regex`, `dasclaw_absolute_path`, `dasclaw_parsed_command`）
+3. **C3**: `lib.rs` + `shell_detect.rs` + `command_safety/`（含 `powershell_parser.ps1` 资源）verbatim
+4. **C4**: `bash.rs` + `powershell.rs` verbatim
+5. **C5**: `parse_command.rs` verbatim（最大文件 2,526 LOC；包含 inline `#[cfg(test)]` 测试 — 不需要单独 tests/ fixture，上游测试随 verbatim 一起到位）
+6. **C6**: `scripts/check_codex_shell_command_drift.py` + workflow 接入（13 PAIRS：1 + 12）
 7. **C7**: doc 32 §W4 / doc 35 文本同步（ironclaw UI 接入点说明）
+
+> **执行期补注（§amend）**：原 §2.4 / §4 设想 verbatim port 选 prefix-match + powershell-detect 两组 fixture，但上游 `shell-command/` 实际**没有** `tests/` 目录 — 所有测试以 `#[cfg(test)] mod tests` 内联在 `parse_command.rs` / `bash.rs` / `powershell.rs` / `command_safety/*.rs` 中（共 129 个测试用例），verbatim port 一并到位，无需额外 fixture 选择。
 
 **验收命令**：
 

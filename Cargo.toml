@@ -34,6 +34,9 @@ members = [
 	"crates/dasclaw_absolute_path",
 	# W5 #324 sub-task 1 — codex-process-hardening verbatim port (pre-main hardening, 189 LOC)
 	"crates/dasclaw_process_hardening",
+	# W5 #326 Part 3a / ADR-133 — codex-shell-command verbatim port (3,348 LOC + command_safety 2,420 LOC)
+	"crates/dasclaw_parsed_command",
+	"crates/dasclaw_shell_command",
 	"desktop-client/ironclaw",
 	"desktop-client/ironclaw/crates/ironclaw_common",
 	"desktop-client/ironclaw/crates/ironclaw_safety",

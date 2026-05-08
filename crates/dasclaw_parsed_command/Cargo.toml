@@ -1,0 +1,21 @@
+[package]
+# Verbatim slice of codex-cli-main/codex-rs/protocol/src/parse_command.rs
+# (commit 4da6b0ae). The rest of codex-protocol is NOT vendored — only the
+# 31-line ParsedCommand enum needed by dasclaw_shell_command. Rationale + red
+# line in ADR-133 §amend; mechanical edits per ADR-129 §1.3.
+# DO NOT hand-edit src/parse_command.rs — drift guard
+# scripts/check_codex_shell_command_drift.py verifies hash equality with upstream.
+name = "dasclaw_parsed_command"
+version = "0.0.0-w5"
+edition = "2024"
+description = "ParsedCommand enum (verbatim slice of codex-protocol)."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+schemars = "0.8.22"
+serde = { version = "1", features = ["derive"] }
+ts-rs = { version = "11", features = ["serde-json-impl", "no-serde-warnings"] }

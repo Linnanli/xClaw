@@ -320,7 +320,7 @@ dasclaw_governance.recovery_recipes = false
 ### 验收
 - [ ] 6 transport 全部有 1 个端到端测试
 - [ ] execpolicy 解析 codex 现有规则集（上游 `tests/basic.rs` verbatim port 33/33 `#[test]` 通过；ADR-132 §2.4 已修正为单文件 fixture，原"prefix_rule.rs + network_rule.rs"分文件抽样作废，门类覆盖不变）
-- [ ] dasclaw_shell_command `parse_command` 端到端测试（codex 上游 fixture 选 prefix-match + powershell-detect 两组 verbatim 通过）
+- [ ] dasclaw_shell_command `parse_command` 端到端测试（codex 上游 inline `#[cfg(test)]` 单测 129 个 verbatim 通过；ADR-133 §amend 记录上游无独立 tests/ 目录、所有测试随源文件 verbatim 落地）
 
 ---
 
