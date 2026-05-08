@@ -1,6 +1,6 @@
 # ADR-131: Windows Job Object resource-limits wrapper (side-by-side)
 
-- **Status**: � **Accepted**（2026-05-08 nally 在 mcp-feedback-enhanced 签字）
+- **Status**: 🟢 **Accepted + B1/B2/B3 落地**（2026-05-08 nally 在 mcp-feedback-enhanced 签字；B1 PR #329 / B2 PR #328 / B3 PR #333；B4 本 PR doc-sync）
 - **Date**: 2026-05-08
 - **Approver**: nally
 - **Authors**: GitHub Copilot agent
@@ -138,27 +138,27 @@ Adapter 改动：
 
 > 实施在 PR-2 进行，本 ADR (PR-1) 不含代码改动。
 
-### Slice B1 — launcher binary 骨架（effort: S）
+### Slice B1 — launcher binary 骨架（effort: S）— ✅ Done（PR #329）
 - `crates/dasclaw_sandbox/src/bin/resource_launcher_win.rs`
 - `Cargo.toml` `[[bin]]` 入口（cfg-gated 到 windows）
 - 单元测试：JSON IPC 协议 round-trip
 - **不**实际调 lib API（dry-run mode）
 
-### Slice B2 — Job Object FFI（effort: S）
+### Slice B2 — Job Object FFI（effort: S）— ✅ Done（PR #328）
 - `crates/dasclaw_sandbox/src/windows/job_object.rs`（新文件）
 - FFI: `CreateJobObjectW` + `SetInformationJobObject` + `AssignProcessToJobObject`
 - RAII guard：`Drop` 自动 `CloseHandle`
 - 单元测试：在 cfg(windows) 下创建-attach-drop 一次
 
-### Slice B3 — adapter 接入（effort: S）
+### Slice B3 — adapter 接入（effort: S）— ✅ Done（PR #333）
 - `WindowsRestrictedTokenSandbox::execute` 改为 spawn launcher
 - IPC：JSON stdin/stdout
 - 集成测试（cfg(windows) only）：spawn 一个 child，set memory cap，断言子进程在分配超过 cap 时被终止
 
-### Slice B4 — doc 同步（effort: S）
-- ADR-45 增加 "Axis 3 — Windows (implemented)" section
-- doc 51 §3 capability matrix：Windows 列改 ✅
-- `lib.rs` `ResourceLimits` 字段 doc-comment 删 *future / silently ignored* 标记
+### Slice B4 — doc 同步（effort: S）— 🟡 In progress（本 PR）
+- ADR-45 §"Axis 3 — Windows" section 改为 `(implemented via outer Job Object launcher; ADR-131)`
+- doc 51 §3 capability matrix：Windows 列 process memory / active process 改 ✅；§5.1 标 RESOLVED
+- `crates/dasclaw_sandbox/src/lib.rs` `ResourceLimits` 字段 doc-comment 删 *future / silently ignored* 标记（仅 max_memory_bytes；`max_cpu_secs` / `max_open_files` 仍保留 silent no-op 标记）
 
 每个 slice 独立 PR。Slice B1 + B2 可并行；B3 依赖前两个；B4 在 B3 后。
 

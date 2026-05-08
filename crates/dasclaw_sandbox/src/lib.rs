@@ -127,7 +127,8 @@ pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType
 }
 
 /// Per-process resource limits enforced via `setrlimit(2)` on Unix and
-/// (future) Windows Job Objects on Windows.
+/// outer Job Object via the `dasclaw-sandbox-resource-launcher` binary on
+/// Windows (see [ADR-131](../../docs/plans/architecture-refactor/adr-131-windows-job-object-resource-limits-wrapper.md)).
 ///
 /// Each field is `Option<u64>`; `None` means "do not enforce" (inherit
 /// parent limit). [`ResourceLimits::default`] returns sane defaults that
@@ -141,7 +142,8 @@ pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResourceLimits {
     /// Maximum address-space size in bytes. Enforced via `RLIMIT_AS` on
-    /// Unix; `JOB_OBJECT_LIMIT_PROCESS_MEMORY` on Windows (future).
+    /// Unix; `JOB_OBJECT_LIMIT_PROCESS_MEMORY` on Windows (outer Job Object
+    /// set by the launcher binary; see ADR-131).
     pub max_memory_bytes: Option<u64>,
 
     /// Maximum CPU seconds (soft = `SIGXCPU`, hard = `SIGKILL`). Enforced
