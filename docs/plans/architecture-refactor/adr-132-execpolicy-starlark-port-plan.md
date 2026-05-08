@@ -1,6 +1,6 @@
 # ADR-132: `dasclaw_execpolicy` Starlark engine — port plan
 
-- **Status**: 🟡 **Accepted (plan-only)** — locks scope + dependencies for the upcoming code port. Implementation lands in a follow-up PR; this ADR is the **prerequisite** [#326](https://github.com/Linnanli/xClaw/issues/326) Part 2 explicitly demands ("先决：新 ADR 锁 starlark-rust 版本 + 公共 API 范围").
+- **Status**: � **Accepted (executed)** — port landed in [#326 Part 2](https://github.com/Linnanli/xClaw/issues/326). Originally accepted plan-only on PR #340 (`4da6b0ae`); the verbatim port (1,790 LOC + 617 LOC `dasclaw_absolute_path` dep) and `scripts/check_codex_execpolicy_drift.py` landed in the follow-up PR. See §2.4 / §3.3 for amendments noted during execution.
 - **Date**: 2026-05-08
 - **Approver**: pending nally sign-off
 - **Authors**: GitHub Copilot agent
@@ -127,16 +127,15 @@ issue body 验收标准：
 
 > codex `execpolicy/tests/*` 中至少 prefix_rule + network_rule 两组用例 port 后通过
 
-具体抽样（来自 `codex-cli-main/codex-rs/execpolicy/tests/`）：
+**执行期修正（2026-05）**：上游 `codex-cli-main/codex-rs/execpolicy/tests/` 实际仅含**单一文件** `basic.rs`（963 LOC，33 个 `#[test]`），覆盖 prefix / network / alias / host-executable / justification / strictest-decision 等所有用例。verbatim 红线要求保留上游文件结构，因此本 ADR 原表（拆 `tests/prefix_rule.rs` + `tests/network_rule.rs` 两文件）作废，改为：
 
-| 用例 | 文件 | 覆盖 |
+| 上游文件 | 本仓文件 | 覆盖 |
 |---|---|---|
-| `prefix_rule_match.rs` | `tests/prefix_rule.rs` | `Rule::Prefix` 命中 |
-| `prefix_rule_no_match.rs` | 同上 | `NoMatch` 路径 |
-| `network_rule_block.rs` | `tests/network_rule.rs` | `Rule::Network` block |
-| `network_rule_allow.rs` | 同上 | allow 路径 |
+| `tests/basic.rs` | `crates/dasclaw_execpolicy/tests/basic.rs`（verbatim） | 33 个 `#[test]`，含 prefix_rule / network_rule / alias / host-executable / strictest-decision 全部门类 |
 
-verbatim port 后 **必须不修改 assertion**；任何与上游不一致都视为 port 错误。
+verbatim port 后 **必须不修改 assertion**；任何与上游不一致都视为 port 错误。验收命令 `cargo nextest run -p dasclaw_execpolicy` 必须 33/33 通过。
+
+**额外发现（2026-05）**：`codex-execpolicy` 对 `codex-utils-absolute-path` 有硬依赖（`AbsolutePathBuf` 用作 `host_executables_by_name` 的 value 类型与 `Rule::with_resolved_program` 入参）。verbatim 红线不允许把它替换成 `std::path::PathBuf`，所以 port 同时**新建** `crates/dasclaw_absolute_path/` 作为 `codex-utils-absolute-path`（617 LOC，dirs/dunce/schemars/ts-rs/serde 五项依赖）的 verbatim sibling crate。该 sibling 同样列入 `scripts/check_codex_execpolicy_drift.py` 的哈希检查范围。
 
 ---
 
@@ -159,9 +158,13 @@ verbatim port 后 **必须不修改 assertion**；任何与上游不一致都视
 
 ```python
 # scripts/check_codex_execpolicy_drift.py
-# 对 crates/dasclaw_execpolicy/src/{parser,policy,rule,decision,amend,error,executable_name}.rs
-# 与 codex-cli-main/codex-rs/execpolicy/src/同名文件做 hash diff，
-# 仅允许 §2.1 表格列出的机械改写。任何意外 diff 即 fail。
+# 对 crates/dasclaw_execpolicy/src/{amend,decision,error,executable_name,
+#   execpolicycheck,lib,main,parser,policy,rule}.rs +
+#   tests/basic.rs + examples/example.codexpolicy 与上游同名文件 hash diff,
+# 同时覆盖 crates/dasclaw_absolute_path/src/{lib,absolutize}.rs 与上游
+# codex-cli-main/codex-rs/utils/absolute-path/src/* 的 hash diff,
+# 仅允许 §2.1 表格列出的机械改写（包名 swap + use-path swap）.
+# 任何意外 diff 即 fail.
 ```
 
 与 `crates/dasclaw_sandbox_windows` 的 ADR-129 §1.3 guard 同款。
@@ -176,7 +179,7 @@ verbatim port 后 **必须不修改 assertion**；任何与上游不一致都视
 2. **C2**: `parser.rs` + `executable_name.rs` verbatim port（无外部依赖的最底层）
 3. **C3**: `rule.rs` + `decision.rs` + `amend.rs` + `error.rs` verbatim port
 4. **C4**: `policy.rs` verbatim port + 删除 30-LOC stub `PolicyDecision`
-5. **C5**: `tests/prefix_rule.rs` + `tests/network_rule.rs` verbatim port
+5. **C5**: `tests/basic.rs` verbatim port（上游单一测试文件 963 LOC / 33 个 `#[test]` — 覆盖 prefix / network / alias / host-executable 全部门类，原 §2.4 表已修正）
 6. **C6**: `scripts/check_codex_execpolicy_drift.py` + CI workflow 接入
 7. **C7**: doc 32 §W5 / doc 35 §I 落地后状态更新
 
