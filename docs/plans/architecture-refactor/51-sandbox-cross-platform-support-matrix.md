@@ -20,7 +20,7 @@ enterprise mode 的 fail-closed 表面）由 [#28 P0-A](https://github.com/Linna
 | `None`                      | ✅ direct execution             | ✅ direct execution            | ✅ direct execution                    | NoopSandbox |
 | `MacosSeatbelt`             | ✅ `seatbelt::SeatbeltSandbox`  | ❌ NotImplemented              | ❌ NotImplemented                      | sandbox-exec(1) profile |
 | `LinuxSeccomp`              | ❌ NotImplemented               | ✅ `linux::LinuxSeccompSandbox`| ❌ NotImplemented                      | seccomp + landlock 部分开启 |
-| `WindowsRestrictedToken`    | ❌ NotImplemented               | ❌ NotImplemented              | ✅ `windows::WindowsRestrictedTokenSandbox`（PR #321 起） | Job Object + Restricted Token + Alternate Desktop（**未**含 memory/cpu cap，详见 §3） |
+| `WindowsRestrictedToken`    | ❌ NotImplemented               | ❌ NotImplemented              | ✅ `windows::WindowsRestrictedTokenSandbox`（PR #321 起） | Job Object + Restricted Token + Alternate Desktop（process/job memory cap + active-process cap via outer Job Object launcher，见 ADR-131；CPU/FD cap 仍 ❌，详见 §3） |
 
 source: [crates/dasclaw_sandbox/src/lib.rs](../../crates/dasclaw_sandbox/src/lib.rs)
 `get_platform_sandbox` / `build_backend`。
@@ -47,9 +47,9 @@ P0-A enterprise contract 决定。
 | `writable_roots` 白名单       | ✅              | ✅                      | ✅                       |
 | `allow_network` toggle        | ✅              | ✅ (proxy loopback)    | ✅ (per-user firewall)  |
 | `proxy_loopback_ports` 透传   | ✅              | ✅                      | ❌（用 firewall 表达，详见 §5） |
-| Process memory cap            | ✅ `memorystatus_control` | ✅ cgroup v2 memory.max | ❌ Job Object 仅设 KILL_ON_JOB_CLOSE，未设 `JOB_OBJECT_LIMIT_PROCESS_MEMORY` |
-| CPU time cap                  | ✅ `RLIMIT_CPU` | ✅ `RLIMIT_CPU`         | ❌                      |
-| Active process count cap      | ❌              | ✅ `RLIMIT_NPROC`       | ❌                      |
+| Process memory cap            | ✅ `memorystatus_control` | ✅ cgroup v2 memory.max | ✅ outer Job Object via launcher (`JOB_OBJECT_LIMIT_PROCESS_MEMORY`，ADR-131) |
+| CPU time cap                  | ✅ `RLIMIT_CPU` | ✅ `RLIMIT_CPU`         | ❌ (ADR-131 §5 显式非目标) |
+| Active process count cap      | ❌              | ✅ `RLIMIT_NPROC`       | ✅ outer Job Object via launcher (`JOB_OBJECT_LIMIT_ACTIVE_PROCESS`，ADR-131) |
 | File descriptor cap           | ✅ `RLIMIT_NOFILE` | ✅ `RLIMIT_NOFILE`   | ❌（Windows 无对应原语） |
 | Process tree kill on exit     | ✅              | ✅                      | ✅                       |
 | Alternate desktop / UI isolation | n/a         | n/a                    | ⚠️ 实施可用但当前 adapter 默认 `use_private_desktop=false`（first-use UX），Phase 1.3 开启 |
@@ -71,14 +71,19 @@ execution**。enterprise mode 是否允许这条路径由 #28 P0-A 决定；本�
 
 ## 5. Windows 已知 gap
 
-### 5.1 资源限制缺失 (#34)
+### 5.1 资源限制——已通过 outer launcher 修复（#34 / ADR-131）
 
 `crates/dasclaw_sandbox_windows/src/elevated/command_runner_win.rs:121`
-当前 `JOBOBJECT_EXTENDED_LIMIT_INFORMATION.LimitFlags` 只包含
-`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`。`ResourceLimits.max_memory_bytes`
-/ `max_processes` / `max_cpu_seconds` 在 Windows backend 上是 **silent
-no-op**。修复路径受 [ADR-129 §1.3 verbatim 红线](./adr-129-sandbox-windows-windows-crate-adoption.md)
-约束，详见文档 [50](./50-sandbox-windows-phase-1.2-completion-and-roadmap.md) §3.2。
+verbatim 镜像的 inner Job Object 仍只含
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`（未改，遵守 [ADR-129 §1.3 verbatim
+红线](./adr-129-sandbox-windows-windows-crate-adoption.md)）。Phase 1.3
+通过 ADR-131 引入的 `dasclaw-sandbox-resource-launcher` 外层 Job Object
+已实施 `ResourceLimits.max_memory_bytes` /
+`ResourceLimits.max_processes`：launcher 创建外层 job 并把 verbatim
+sandbox 进程 `AssignProcessToJobObject` 进去，依赖 Windows 的 job nesting
+语义（限制取并集）。CPU time cap 与 FD cap 仍未实施（ADR-131 §5 非目标 +
+Windows 无对应原语）。详见文档 [50](./50-sandbox-windows-phase-1.2-completion-and-roadmap.md)
+§3.2 与 [ADR-131](./adr-131-windows-job-object-resource-limits-wrapper.md)。
 
 ### 5.2 `proxy_loopback_ports` 不透传
 

@@ -141,11 +141,33 @@ A `disable_cgroup_v2: bool` escape hatch in config covers the rare case
 where a user wants deterministic setrlimit-only behavior on a Linux box
 that has cgroup v2 available.
 
-### Axis 3 — Windows (future)
+### Axis 3 — Windows (implemented via outer Job Object launcher; ADR-131)
 
-Job Objects with `JOB_OBJECT_LIMIT_PROCESS_MEMORY` and
-`JOB_OBJECT_LIMIT_ACTIVE_PROCESS`. **Out of scope for W3.3**; tracked as a
-follow-up issue. setrlimit-based limits silently no-op on Windows.
+Outer Job Object created by the `dasclaw-sandbox-resource-launcher.exe`
+binary in `crates/dasclaw_sandbox` sets:
+
+- `JOB_OBJECT_LIMIT_PROCESS_MEMORY` ← `ResourceLimits::max_memory_bytes`
+- `JOB_OBJECT_LIMIT_JOB_MEMORY` ← (caller-side opt-in; not currently
+  surfaced through `ResourceLimits` because the abstraction is
+  per-process)
+- `JOB_OBJECT_LIMIT_ACTIVE_PROCESS` ← `ResourceLimits::max_processes`
+- `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` (always)
+
+The launcher process becomes the outer Job Object container; the verbatim
+`dasclaw_sandbox_windows::run_windows_sandbox_capture` sandbox process
+(which sets its own inner Job Object) is `AssignProcessToJobObject`'d
+into the outer job. Per Windows job-nesting semantics (Win 8+ /
+Server 2012+), child processes inherit the outer limits, so the
+combined limits are the **intersection** of inner + outer.
+
+`max_cpu_secs` and `max_open_files` remain silently no-op on Windows:
+the former because `JOB_OBJECT_LIMIT_PROCESS_TIME` semantics differ from
+`RLIMIT_CPU` (independent ADR if needed; ADR-131 §5 lists this as a
+non-goal), the latter because Windows has no portable per-process FD
+cap primitive.
+
+Implementation tracked in PRs #329 (B1 launcher skeleton), #328 (B2 Job
+Object FFI), #333 (B3 adapter wiring). Doc sync (this update) is B4.
 
 ---
 
