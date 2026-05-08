@@ -255,7 +255,7 @@ mod platform {
         CRED_FLAGS, CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC, CREDENTIALW, CredDeleteW,
         CredFree, CredReadW, CredWriteW,
     };
-    use windows::core::PCWSTR;
+    use windows::core::{PCWSTR, PWSTR};
 
     use super::*;
 
@@ -286,16 +286,19 @@ mod platform {
         let cred = CREDENTIALW {
             Flags: CRED_FLAGS(0),
             Type: CRED_TYPE_GENERIC,
-            TargetName: PCWSTR(target.as_mut_ptr()),
-            Comment: PCWSTR::null(),
+            // CREDENTIALW struct fields are `PWSTR` (mutable wide strings) per the
+            // `windows` 0.58 binding, while the `Cred*W` function arguments take
+            // `PCWSTR`. Do not collapse these two — they are different types.
+            TargetName: PWSTR(target.as_mut_ptr()),
+            Comment: PWSTR::null(),
             LastWritten: FILETIME::default(),
             CredentialBlobSize: blob.len() as u32,
             CredentialBlob: blob.as_mut_ptr(),
             Persist: CRED_PERSIST_LOCAL_MACHINE,
             AttributeCount: 0,
             Attributes: std::ptr::null_mut(),
-            TargetAlias: PCWSTR::null(),
-            UserName: PCWSTR::null(),
+            TargetAlias: PWSTR::null(),
+            UserName: PWSTR::null(),
         };
 
         // Safety: `cred` is fully initialized; `target` and `blob` outlive the call.
