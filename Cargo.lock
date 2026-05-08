@@ -2675,6 +2675,7 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "url",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

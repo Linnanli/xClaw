@@ -50,6 +50,8 @@
 
 #![cfg(target_os = "windows")]
 
+pub mod job_object;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
