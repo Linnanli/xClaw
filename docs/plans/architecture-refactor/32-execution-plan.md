@@ -143,6 +143,7 @@
 2. **新建 crate 骨架**（无实现，仅目录 + Cargo.toml + lib.rs trait）
    - crates/dasclaw_core                ← 由 x_claw_agent 升级，文件保留原路径，crate name 在 W6 切换
    - crates/dasclaw_sandbox
+   - crates/dasclaw_sandbox_windows    ← v2.5+ 新增（verbatim port from codex `windows-sandbox-rs`，见 ADR-129 / ADR-130；已实际落地 Phase 1.1.4j）
    - crates/dasclaw_pty                  ← v2 新增
    - crates/dasclaw_hooks
    - crates/dasclaw_apply_patch
@@ -188,7 +189,7 @@ W1 失败：恢复 desktop-client/ironclaw 子模块（git revert）。
 1. **从 codex-cli-main port sandbox**（参见 [35 §C](35-codex-capability-inventory.md)）：
    - codex-cli-main/codex-rs/linux-sandbox → dasclaw_sandbox/src/linux/
    - codex-cli-main/codex-rs/sandboxing（macOS seatbelt + .sbpl） → dasclaw_sandbox/src/macos/
-   - codex-cli-main/codex-rs/core/windows_sandbox.rs + windows_sandbox_read_grants.rs → dasclaw_sandbox/src/windows/
+   - codex-cli-main/codex-rs/windows-sandbox-rs/ → dasclaw_sandbox_windows/（verbatim，ADR-129） + dasclaw_sandbox/src/windows/（adapter 代 dasclaw_sandbox 调用 verbatim crate，ADR-130）。注：v2.5 之前计划为 `core/src/windows_sandbox.rs + windows_sandbox_read_grants.rs`，codex 上游已拆为独立 crate，dasclaw 跟进拆分。
    - codex-cli-main/codex-rs/process-hardening → dasclaw_sandbox/src/hardening.rs
 2. **抽 trait**：`pub trait Sandbox { fn execute(&self, cmd: Command) -> Result<Output>; }`
 3. **保留 ironclaw Docker 沙箱**作为高隔离备选实现（trait 多实现）
@@ -215,7 +216,7 @@ W1 失败：恢复 desktop-client/ironclaw 子模块（git revert）。
 ### 验收
 - [ ] 三平台单元测试通过（CI matrix 覆盖 ubuntu/macos/windows）
 - [ ] 失败路径测试：沙箱不可用时工具调用被拒绝，不降级为直接 exec
-- [ ] **WritableRoot 洞中洞契约测试**：sandbox 在 WorkspaceWrite 模式下写 `.git/hooks/*`、`.codex/*`、`.git/config` 必须返回 SandboxError，且无任何 fallback
+- [ ] **WritableRoot 洞中洞契约测试**：sandbox 在 WorkspaceWrite 模式下写 `.git/hooks/*`、`.codex/*`、`.git/config` 必须返回 SandboxError，且无任何 fallback。**已知限制（v2.5 补充）**：当前仅在 `dasclaw_sandbox` adapter 层检查，内核层强制（Linux Landlock-based subpath deny / macOS Seatbelt subpath deny / Windows Restricted Token DACL）跟进补强由 [#324 sub-task 2](https://github.com/Linnanli/xClaw/issues/324) 追踪
 - [ ] **ExternalSandbox 嵌套测试**：在 docker 容器内启动 desktop-client，agent 工具调用走 ExternalSandbox 模式，network_access 由 NetworkAccess 枚举决定
 - [ ] 性能基准：进程沙箱启动 < 50ms（对比 codex 基线）
 - [ ] PTY resize/信号转发 在 macOS+Linux 各 1 个示例脚本过
