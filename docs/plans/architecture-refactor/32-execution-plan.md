@@ -310,12 +310,17 @@ dasclaw_governance.recovery_recipes = false
 ### 任务
 1. **dasclaw_mcp**：以 claw-code/rust/crates/runtime/src/mcp_client.rs 为基线 port，6 transport 全部纳入：
    - Stdio / Sse / Http / WebSocket / Sdk / ManagedProxy
-2. **dasclaw_execpolicy**：从 codex-cli-main/codex-rs/execpolicy port Starlark 引擎
+2. **dasclaw_execpolicy**：从 codex-cli-main/codex-rs/execpolicy port Starlark 引擎（**verbatim port，规约见 [ADR-132](adr-132-execpolicy-starlark-port-plan.md)**：starlark = "=0.13" exact-pin、公共 API 冻结、`scripts/check_codex_execpolicy_drift.py` guard）
 3. ironclaw 现有 ManagedMcp 改为 dasclaw_mcp 的 adapter
+4. **dasclaw_shell_command**（[ADR-133](adr-133-shell-command-adoption-eval.md) 决议 adopt-with-adapter，与本 Wave 同窗口落地）：从 codex-cli-main/codex-rs/shell-command verbatim port，作为 ironclaw UI 的 `ParsedCommand` 渲染源；与 `dasclaw_bash_validation`（门控）职责正交，**不**合并
+
+### 不在本 Wave（明确 non-goal）
+- ❌ codex `shell-escalation`（Unix-only setuid 拦截器）— 不 port、不 stub、不 vendor 调用，决议见 [ADR-134](adr-134-shell-escalation-non-goal.md)。dasclaw 桌面客户端走 governance + bash_validation + execpolicy + net_proxy + OS 原生 sandbox 五层组合，已覆盖 escalation 想解决的需求。
 
 ### 验收
 - [ ] 6 transport 全部有 1 个端到端测试
-- [ ] execpolicy 解析 codex 现有规则集
+- [ ] execpolicy 解析 codex 现有规则集（prefix_rule + network_rule 两组 fixture verbatim port 通过）
+- [ ] dasclaw_shell_command `parse_command` 端到端测试（codex 上游 fixture 选 prefix-match + powershell-detect 两组 verbatim 通过）
 
 ---
 
