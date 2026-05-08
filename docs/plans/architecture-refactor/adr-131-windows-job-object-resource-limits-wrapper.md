@@ -1,8 +1,8 @@
 # ADR-131: Windows Job Object resource-limits wrapper (side-by-side)
 
-- **Status**: 🟡 **Proposed**（待 nally 在 mcp-feedback-enhanced 签字）
+- **Status**: � **Accepted**（2026-05-08 nally 在 mcp-feedback-enhanced 签字）
 - **Date**: 2026-05-08
-- **Approver**: nally（pending）
+- **Approver**: nally
 - **Authors**: GitHub Copilot agent
 - **Tracker**: [#34](https://github.com/Linnanli/xClaw/issues/34) — Windows process-level resource limits via Job Objects
 - **Epic 联动**: [#324](https://github.com/Linnanli/xClaw/issues/324) — sandbox 主线补强（与本 ADR 互不阻塞）
@@ -190,12 +190,30 @@ Windows 集成测试在 `.github/workflows/windows-ci.yml` 的 windows-latest ru
 
 ---
 
-## 7. Open questions（需 nally 决定）
+## 7. Open questions — 已签字回答
 
-1. **launcher binary 名字**：`dasclaw-sandbox-resource-launcher.exe` 还是更短的 `dasclaw-sb-launcher.exe`？
-2. **失败语义**：launcher 启动失败时，adapter 是 `WindowsSetupPending` 还是新增 `WindowsLauncherFailed` variant？
-3. **Slice 顺序**：B1+B2 并行起步，还是先 B2（FFI 单测拿信心）再 B1？
-4. **`required-features` gating**：launcher binary 是无条件 build（仅在非 Windows 平台 stub main），还是 `target.'cfg(windows)'.bin`？前者保 CI 全平台 build 通；后者更干净。
+| # | 问题 | 决议 | 理由 |
+|---|---|---|---|
+| 1 | launcher binary 名字 | **`dasclaw-sandbox-resource-launcher.exe`** | 命名清晰、与现有 `dasclaw-sandbox-setup` / `dasclaw-command-runner` 风格一致 |
+| 2 | 失败语义 | **新增 `SandboxError::WindowsLauncherFailed { detail }`** | 与现有 `WindowsSetupPending` 语义不同（前者是"setup 没做"，后者是"setup 已完成但本次执行的 wrapper 出问题"）。合并会误导用户去重跑 setup。独立 variant 让错误处理与 UI 提示能 match 不同分支 |
+| 3 | Slice 顺序 | **B1 + B2 并行起步** | 两个 slice 互不依赖（B1 是 binary 骨架 + IPC，B2 是 FFI 单测），并行可缩短时长；B3 等两者都 land 后再开 |
+| 4 | binary build gating | **方案 (a) — 无条件 build + 非 Windows stub main** | Cargo `[[bin]]` 不支持 `[target.'cfg(...)'.bin]` 直接 gate；`required-features` 方案虽然 Linux/macOS 不产 stub binary，但增加 CI 复杂度与"feature 忘开"误用风险。桌面端项目 CI 简单可靠更重要 |
+
+非 Windows 平台 stub 实施模板：
+
+```rust
+// crates/dasclaw_sandbox/src/bin/resource_launcher_win.rs
+#[cfg(target_os = "windows")]
+fn main() -> anyhow::Result<()> {
+    // 真实逻辑：读 stdin JSON → 创 outer Job Object → 设 limits → AssignProcessToJobObject → 调 lib API → 写 stdout
+}
+
+#[cfg(not(target_os = "windows"))]
+fn main() {
+    eprintln!("dasclaw-sandbox-resource-launcher is Windows-only");
+    std::process::exit(1);
+}
+```
 
 ---
 
