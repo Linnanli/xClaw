@@ -31,7 +31,10 @@ permissions:
 jobs:
   add-and-transition:
     runs-on: ubuntu-latest
-    if: ${{ vars.PROJECT_URL != '' }}
+    # Dependabot PRs run with a restricted token scope that cannot read
+    # secrets.PROJECT_TOKEN, and they are not tracked on the architecture-
+    # refactor project board anyway. Skip the entire job for them.
+    if: ${{ vars.PROJECT_URL != '' && github.actor != 'dependabot[bot]' }}
     steps:
       - name: Add item to Project
         uses: actions/add-to-project@v1.0.2
