@@ -283,16 +283,15 @@ fn spawn_lsp_reader(
         loop {
             match read_lsp_message(&mut reader).await {
                 Ok(bytes) => {
-                    if let Ok(resp) = serde_json::from_slice::<LspResponse>(&bytes) {
-                        if let Some(id) = resp.id {
-                            if let Some(tx) = pending.lock().await.remove(&id) {
-                                let _ = tx.send(resp);
-                            }
-                        }
-                        // Notifications (no id) are silently dropped; diagnostics
-                        // come as server-pushed notifications and are handled
-                        // separately if needed.
+                    if let Ok(resp) = serde_json::from_slice::<LspResponse>(&bytes)
+                        && let Some(id) = resp.id
+                        && let Some(tx) = pending.lock().await.remove(&id)
+                    {
+                        let _ = tx.send(resp);
                     }
+                    // Notifications (no id) are silently dropped; diagnostics
+                    // come as server-pushed notifications and are handled
+                    // separately if needed.
                 }
                 Err(e) => {
                     tracing::debug!("[{}] reader stopped: {}", server_name, e);
@@ -336,10 +335,10 @@ async fn read_lsp_message(
             // Empty line separates headers from body
             break;
         }
-        if let Some(val) = line.strip_prefix("Content-Length:") {
-            if let Ok(len) = val.trim().parse::<usize>() {
-                content_length = Some(len);
-            }
+        if let Some(val) = line.strip_prefix("Content-Length:")
+            && let Ok(len) = val.trim().parse::<usize>()
+        {
+            content_length = Some(len);
         }
     }
 

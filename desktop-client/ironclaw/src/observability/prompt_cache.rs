@@ -62,7 +62,7 @@ impl PromptCacheMonitor {
             warn!("Prompt static layer changed — cache will be invalidated for next request");
         }
 
-        if req_no % STATS_LOG_INTERVAL == 0 {
+        if req_no.is_multiple_of(STATS_LOG_INTERVAL) {
             self.log_stats(req_no);
         }
     }

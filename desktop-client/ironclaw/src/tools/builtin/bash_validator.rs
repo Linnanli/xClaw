@@ -480,7 +480,7 @@ fn has_force_recursive(cmd: &str) -> bool {
     }
     // Separate flags: -r -f
     let args: Vec<&str> = cmd.split_whitespace().collect();
-    args.iter().any(|&a| a == "-r") && args.iter().any(|&a| a == "-f")
+    args.contains(&"-r") && args.contains(&"-f")
 }
 
 // ─── Stage 5: sed validation ────────────────────────────────────────────

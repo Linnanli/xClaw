@@ -27,6 +27,12 @@ const MAX_REDIRECTS: usize = 10;
 
 pub struct WebSearchTool;
 
+impl Default for WebSearchTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WebSearchTool {
     pub fn new() -> Self {
         Self

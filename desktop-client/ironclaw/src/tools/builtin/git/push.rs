@@ -11,6 +11,12 @@ use super::runner::{resolve_workdir, run_git};
 
 pub struct GitPushTool;
 
+impl Default for GitPushTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GitPushTool {
     pub fn new() -> Self {
         Self
@@ -89,16 +95,10 @@ impl Tool for GitPushTool {
         ToolDomain::Container
     }
 
-    fn risk_level_for(&self, params: &serde_json::Value) -> RiskLevel {
-        let force = params
-            .get("force")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        if force {
-            RiskLevel::High
-        } else {
-            RiskLevel::High
-        }
+    fn risk_level_for(&self, _params: &serde_json::Value) -> RiskLevel {
+        // Push is always High risk regardless of --force; we keep both paths
+        // explicit at the schema level via `requires_approval = Always`.
+        RiskLevel::High
     }
 
     fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {

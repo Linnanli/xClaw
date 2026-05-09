@@ -211,20 +211,20 @@ pub fn validate_path_with_policy(
             Ok(path) => path,
             Err(e) => {
                 // Path escapes sandbox — policy may allow external read
-                if let Some(pol) = policy {
-                    if mode == AccessMode::Read {
-                        let fallback = validate_path(path_str, None)?;
-                        // Canonicalize to resolve symlinks — prevents TOCTOU where
-                        // a symlink is created after basic validation but before
-                        // the policy starts_with check.
-                        let fallback = if fallback.exists() {
-                            fallback.canonicalize().unwrap_or(fallback)
-                        } else {
-                            canonicalize_via_ancestor(&fallback)
-                        };
-                        pol.check(&fallback, base_dir, mode)?;
-                        return Ok(fallback);
-                    }
+                if let Some(pol) = policy
+                    && mode == AccessMode::Read
+                {
+                    let fallback = validate_path(path_str, None)?;
+                    // Canonicalize to resolve symlinks — prevents TOCTOU where
+                    // a symlink is created after basic validation but before
+                    // the policy starts_with check.
+                    let fallback = if fallback.exists() {
+                        fallback.canonicalize().unwrap_or(fallback)
+                    } else {
+                        canonicalize_via_ancestor(&fallback)
+                    };
+                    pol.check(&fallback, base_dir, mode)?;
+                    return Ok(fallback);
                 }
                 return Err(e);
             }

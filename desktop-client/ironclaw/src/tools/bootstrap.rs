@@ -63,7 +63,7 @@ use crate::workspace::Workspace;
 /// `Orchestrator` is the main process path. `Container` is the sandboxed
 /// worker path that needs filesystem/shell access. `Test` is a minimal
 /// initialization for unit tests.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BootstrapMode {
     /// Main process. By default, only safe (non-filesystem, non-shell) tools
     /// register. Set `allow_local_tools = true` to include dev tools (file ops,
@@ -76,13 +76,8 @@ pub enum BootstrapMode {
 
     /// Unit-test mode. Registers only built-in safe tools. Equivalent to the
     /// legacy standalone `register_builtin_tools()` call.
+    #[default]
     Test,
-}
-
-impl Default for BootstrapMode {
-    fn default() -> Self {
-        Self::Test
-    }
 }
 
 /// Errors that can occur during `bootstrap_tools` execution.
