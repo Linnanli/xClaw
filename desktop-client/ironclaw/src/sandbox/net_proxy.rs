@@ -154,10 +154,9 @@ pub async fn start_network_proxy(cfg: &SandboxConfig) -> Result<NetworkProxyHand
         })?,
         port => SocketAddr::from(([127, 0, 0, 1], port)),
     };
-    let bind_socks =
-        reserve_ephemeral_loopback_port().map_err(|e| SandboxError::Config {
-            reason: format!("reserve ephemeral socks proxy port failed: {e}"),
-        })?;
+    let bind_socks = reserve_ephemeral_loopback_port().map_err(|e| SandboxError::Config {
+        reason: format!("reserve ephemeral socks proxy port failed: {e}"),
+    })?;
 
     let proxy = NetworkProxy::builder()
         .state(proxy_state)
