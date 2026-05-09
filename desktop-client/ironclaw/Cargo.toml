@@ -125,7 +125,7 @@ dasclaw_sandbox = { path = "../../crates/dasclaw_sandbox", version = "0.0.0-w1" 
 dasclaw_process_hardening = { path = "../../crates/dasclaw_process_hardening" }
 ctor = "0.2"
 # W3.2b: audited HTTP egress proxy (allowlist + credential injection)
-dasclaw_net_proxy = { path = "../../crates/dasclaw_net_proxy", version = "0.1.0" }
+dasclaw_net_proxy = { path = "../../crates/dasclaw_net_proxy", version = "=0.0.0-w7" }
 # P0-3 (ADR-113): unified hook engine — single front-door for event hooks + trait seams
 dasclaw_hooks = { path = "../../crates/dasclaw_hooks", version = "0.1.0" }
 # W3 #53: codex-protocol apply_patch parser + minimal apply layer

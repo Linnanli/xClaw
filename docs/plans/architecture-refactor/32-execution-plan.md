@@ -431,7 +431,12 @@ dasclaw_governance.recovery_recipes = false
    - `panic::set_hook` 统一安装，错误产出到本地 dump + 可选后端
    - 默认后端走 admin-backend `/api/client-reports`（复用 DataReporter）
    - 可插拔 sentry/datadog adapter
-5. **dasclaw_net_proxy**（v2 新增）：从 codex/network-proxy port rama 框架 + HTTP_PROXY/HTTPS_PROXY/NO_PROXY + 自签 CA + MITM 拦截
+5. **dasclaw_net_proxy**（v2 新增，**ADR-137 PR-N23 单层口径**）：
+   - 从 codex/network-proxy 逐字移植 8,876 LOC（commit `6e838a19`），仅做机械替换：use 路径 swap（`codex_utils_*` → `dasclaw_utils_*`）+ Cargo.toml package rename。
+   - 提供 HTTP_PROXY/HTTPS_PROXY/NO_PROXY + 自签 CA + 域名 allowlist + 可选 MITM 审计（参见 `mitm.toml`）。
+   - **不携带凭证注入**（原 ironclaw fork 的 1,766 LOC `CredentialResolver` / `HttpProxy::with_credential_resolver` 在 HTTPS 路径上是死代码——详见 `31-target-architecture.md §4.5.1`）。凭证注入唯一权威路径：`desktop-client/ironclaw/src/tools/builtin/http.rs` 的 reqwest builder 层（HTTP+HTTPS 通吃，TLS 握手前注入）。
+   - 守卫：`scripts/check_codex_net_proxy_drift.py` byte-for-byte equivalence；CI job `codex-net-proxy-drift`（`code_style.yml`）。
+   - 消费侧 `desktop-client/ironclaw/src/sandbox/net_proxy.rs` 重写为单层适配器（`StaticReloader` + `start_network_proxy(&SandboxConfig)`），不引入兼容 shim 也不带 `#[deprecated]` 桥接。
 6. **AuthToken refresh**（v2 新增，ADR-107）：
    - 从 codex/login crate port `refresh_token` 流
    - desktop-client/src/auth_token_manager.rs 增加后台定时刷新任务（到期前 5 min）
@@ -443,6 +448,8 @@ dasclaw_governance.recovery_recipes = false
 - [ ] panic hook 人为触发 panic 能准确产出本地 dump + admin 上报
 - [ ] AuthToken 在 mock OAuth server 上能自动完成 refresh 循环
 - [ ] HTTP_PROXY 环境变量生效，可访问代理后的 LLM endpoint
+- [ ] **ADR-137 PR-N23 drift 守卫绿**：`python3.12 scripts/check_codex_net_proxy_drift.py` 输出 `OK: 15 files match upstream verbatim.`，CI job `codex-net-proxy-drift` PASS。
+- [ ] **凭证注入红线**：`grep -r "CredentialResolver\|with_credential_resolver" crates/dasclaw_net_proxy/src/` 必须 0 行（违反即视为 ADR-137 PR-N23 红线）。
 
 ---
 

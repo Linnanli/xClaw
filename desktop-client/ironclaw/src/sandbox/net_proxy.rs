@@ -1,32 +1,40 @@
-//! W3.2b-4: Desktop-client integration of [`dasclaw_net_proxy`].
+//! W7 / ADR-137 PR-N23: Desktop-client adapter for the verbatim-ported
+//! [`dasclaw_net_proxy`] (codex-network-proxy 8,876 LOC).
 //!
-//! Bridges the OS-sandbox layer (`SandboxConfig` + `SecretsStore`) to the
-//! audited HTTP egress proxy. Spawned tool containers receive `HTTPS_PROXY` /
-//! `HTTP_PROXY` / `NO_PROXY` env vars pointing at the local proxy, which then
-//! enforces the per-policy domain allowlist and injects credentials resolved
-//! from the desktop-client `SecretsStore` (postgres-backed, master-key sealed
-//! by the per-OS keychain — see [`crate::secrets::keychain`]).
+//! # Scope
 //!
-//! # Fail-safe contract
+//! Spawned tool containers receive `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY`
+//! env vars pointing at the local proxy, which enforces the per-policy
+//! domain allowlist and (optionally) MITM TLS audit.
 //!
-//! - `IronclawSecretsResolver::resolve` returns `None` on **any** error
-//!   (NotFound, decryption failure, db error). The proxy treats `None` as
-//!   "no credential available" and either omits the header (when
-//!   `optional: true`) or denies the request (when `optional: false`,
-//!   the default).
-//! - Conversion of an unknown / malformed mapping never panics; if the local
-//!   `CredentialLocation` cannot be represented by the proxy crate, the
-//!   mapping is silently dropped and the request will be allowed without
-//!   credential injection (subject to allowlist).
+//! # Credential injection lives elsewhere
 //!
-//! # Module layout
+//! The legacy 1,766 LOC ironclaw fork that lived here previously injected
+//! `Authorization` / `x-api-key` / query-param secrets at the proxy layer.
+//! Investigation (see ADR-137 §4 + 31-target-architecture.md §4.x) showed:
 //!
-//! - [`IronclawSecretsResolver`] — `dasclaw_net_proxy::CredentialResolver`
-//!   impl that pulls decrypted secrets from a `SecretsStore`.
-//! - [`to_proxy_mappings`] — translate `crate::secrets::CredentialMapping`
-//!   into `dasclaw_net_proxy::CredentialMapping`.
-//! - [`start_network_proxy`] — assemble a [`NetworkProxyBuilder`] from a
-//!   [`SandboxConfig`] + `SecretsStore`, start it, return a handle.
+//! - Default mappings (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` /
+//!   `NEARAI_API_KEY`) all point at HTTPS hosts.
+//! - The legacy code's own NOTE comment + `NETWORK_SECURITY.md` §"No MITM"
+//!   acknowledged HTTPS injection was impossible without MITM.
+//! - Therefore, sandbox-proxy credential injection was effectively
+//!   dead code for the canonical use case.
+//!
+//! Real credential injection that LLMs cannot bypass lives in:
+//!
+//! - [`crate::tools::builtin::http`] — host-side `reqwest` builder layer
+//!   (works for HTTPS because injection happens before TLS termination).
+//! - [`crate::tools::wasm::credential_injector`] — wasm tool host
+//!   injection (same property).
+//! - [`crate::orchestrator::api`] `/worker/{id}/credentials` endpoint —
+//!   per-job env-var injection for spawned containers.
+//!
+//! # Module surface
+//!
+//! - [`NetworkProxyHandle`] — keeps the proxy listener alive; dropping it
+//!   shuts the proxy down.
+//! - [`start_network_proxy`] — assemble + start the proxy from a
+//!   [`SandboxConfig`].
 //! - [`proxy_env_vars`] — produce the `HTTPS_PROXY` / `HTTP_PROXY` /
 //!   `NO_PROXY` triplet to inject into spawned child processes.
 
@@ -35,131 +43,125 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use dasclaw_net_proxy::{
-    CredentialLocation as ProxyLocation, CredentialMapping as ProxyMapping, CredentialResolver,
-    HttpProxy, NetworkProxyBuilder, ProxyMode,
+    ConfigReloader, ConfigState, NetworkDomainPermission, NetworkDomainPermissionEntry,
+    NetworkDomainPermissions, NetworkMode, NetworkProxy, NetworkProxyConfig,
+    NetworkProxyConstraints, NetworkProxyHandle as ProxyTaskHandle, NetworkProxyState,
+    build_config_state,
 };
 
 use crate::sandbox::config::SandboxConfig;
 use crate::sandbox::error::{Result, SandboxError};
-use crate::secrets::{
-    CredentialLocation as LocalLocation, CredentialMapping as LocalMapping, SecretsStore,
-};
 
-/// Bridges `dasclaw_net_proxy::CredentialResolver` to the desktop-client
-/// `SecretsStore`. All errors are coerced to `None` (fail-safe).
-pub struct IronclawSecretsResolver {
-    store: Arc<dyn SecretsStore + Send + Sync>,
-    user_id: String,
-}
-
-impl IronclawSecretsResolver {
-    pub fn new(store: Arc<dyn SecretsStore + Send + Sync>, user_id: impl Into<String>) -> Self {
-        Self {
-            store,
-            user_id: user_id.into(),
-        }
-    }
-}
+/// `ConfigReloader` that never reloads. The desktop-client surfaces config
+/// changes by restarting the sandbox manager (and therefore the proxy)
+/// rather than hot-reloading proxy state in place.
+struct StaticReloader;
 
 #[async_trait]
-impl CredentialResolver for IronclawSecretsResolver {
-    async fn resolve(&self, name: &str) -> Option<String> {
-        match self.store.get_decrypted(&self.user_id, name).await {
-            Ok(decrypted) => Some(decrypted.expose().to_string()),
-            Err(err) => {
-                // Fail-safe: never leak the secret name in error logs at
-                // info level, and never propagate the error — proxy will
-                // deny the request via the `optional: false` default.
-                tracing::debug!(secret = %name, error = %err, "secret resolution failed");
-                None
-            }
-        }
-    }
-}
-
-/// Convert a single desktop-client `CredentialMapping` into the proxy's
-/// representation. Returns `None` if the mapping has no host patterns or
-/// uses a `CredentialLocation` variant that the proxy crate cannot enforce.
-pub fn to_proxy_mapping(local: &LocalMapping) -> Option<ProxyMapping> {
-    if local.host_patterns.is_empty() {
-        return None;
+impl ConfigReloader for StaticReloader {
+    fn source_label(&self) -> String {
+        "ironclaw sandbox::net_proxy::StaticReloader".to_string()
     }
 
-    let location = match &local.location {
-        LocalLocation::AuthorizationBearer => ProxyLocation::AuthorizationBearer,
-        LocalLocation::AuthorizationBasic { username } => ProxyLocation::AuthorizationBasic {
-            username: username.clone(),
-        },
-        LocalLocation::Header { name, prefix } => ProxyLocation::Header {
-            name: name.clone(),
-            prefix: prefix.clone(),
-        },
-        LocalLocation::QueryParam { name } => ProxyLocation::QueryParam { name: name.clone() },
-        LocalLocation::UrlPath { placeholder } => ProxyLocation::UrlPath {
-            placeholder: placeholder.clone(),
-        },
-    };
+    async fn maybe_reload(&self) -> anyhow::Result<Option<ConfigState>> {
+        Ok(None)
+    }
 
-    Some(ProxyMapping {
-        secret_name: local.secret_name.clone(),
-        location,
-        host_patterns: local.host_patterns.clone(),
-        optional: false, // Fail-safe: missing secret denies the request.
-    })
-}
-
-/// Translate a list of local mappings. Mappings with empty `host_patterns`
-/// are dropped.
-pub fn to_proxy_mappings(local: &[LocalMapping]) -> Vec<ProxyMapping> {
-    local.iter().filter_map(to_proxy_mapping).collect()
+    async fn reload_now(&self) -> anyhow::Result<ConfigState> {
+        Err(anyhow::anyhow!(
+            "ironclaw sandbox proxy does not support runtime reload; restart the sandbox manager"
+        ))
+    }
 }
 
 /// Handle returned after starting the proxy. Holding it keeps the listener
 /// alive; dropping it shuts down the proxy.
 pub struct NetworkProxyHandle {
-    pub proxy: Arc<HttpProxy>,
+    /// Bound HTTP proxy address. Use this for `HTTPS_PROXY` / `HTTP_PROXY`.
     pub addr: SocketAddr,
+    /// Bound SOCKS5 proxy address (if SOCKS5 is enabled).
+    pub socks_addr: SocketAddr,
+    /// The running [`NetworkProxy`] instance. Held to keep the runtime
+    /// settings + state reference alive for as long as the handle exists.
+    pub proxy: Arc<NetworkProxy>,
+    /// Background task handle for the spawned HTTP / SOCKS5 listeners.
+    /// Dropped on shutdown.
+    _task: ProxyTaskHandle,
+}
+
+/// Build the [`NetworkProxyConfig`] for a given sandbox config.
+///
+/// - `policy.has_full_network()` (`FullAccess`) → `NetworkMode::Full`,
+///   no allowlist enforcement (the env-var triplet is still injected for
+///   `HTTPS_PROXY` consistency, but every host is accepted).
+/// - Otherwise → `NetworkMode::Limited`, with `network_allowlist` mapped
+///   to explicit `Allow` permissions (deny-by-default for everything else).
+fn build_proxy_config(cfg: &SandboxConfig) -> NetworkProxyConfig {
+    let mut proxy_config = NetworkProxyConfig::default();
+    proxy_config.network.enabled = true;
+
+    if cfg.policy.has_full_network() {
+        proxy_config.network.mode = NetworkMode::Full;
+    } else {
+        proxy_config.network.mode = NetworkMode::Limited;
+        if !cfg.network_allowlist.is_empty() {
+            let entries = cfg
+                .network_allowlist
+                .iter()
+                .map(|pattern| NetworkDomainPermissionEntry {
+                    pattern: pattern.clone(),
+                    permission: NetworkDomainPermission::Allow,
+                })
+                .collect();
+            proxy_config.network.domains = Some(NetworkDomainPermissions { entries });
+        }
+    }
+
+    proxy_config
 }
 
 /// Assemble + start a network proxy for the given sandbox config.
-///
-/// Mode mapping:
-/// - `SandboxPolicy::FullAccess` → `ProxyMode::AllowAll` (no enforcement;
-///   policy bypasses the sandbox anyway, kept here for env-var consistency).
-/// - Any other policy → `ProxyMode::Restricted` (allowlist + credential
-///   injection enforced).
-pub async fn start_network_proxy(
-    cfg: &SandboxConfig,
-    credential_mappings: Vec<LocalMapping>,
-    store: Arc<dyn SecretsStore + Send + Sync>,
-    user_id: impl Into<String>,
-) -> Result<NetworkProxyHandle> {
-    let mode = if cfg.policy.has_full_network() {
-        ProxyMode::AllowAll
-    } else {
-        ProxyMode::Restricted
-    };
+pub async fn start_network_proxy(cfg: &SandboxConfig) -> Result<NetworkProxyHandle> {
+    let proxy_config = build_proxy_config(cfg);
+    let state: ConfigState = build_config_state(proxy_config, NetworkProxyConstraints::default())
+        .map_err(|e| SandboxError::Config {
+        reason: format!("network proxy config invalid: {e}"),
+    })?;
 
-    let resolver: Arc<dyn CredentialResolver> =
-        Arc::new(IronclawSecretsResolver::new(store, user_id));
+    let proxy_state = Arc::new(NetworkProxyState::with_reloader(
+        state,
+        Arc::new(StaticReloader),
+    ));
 
-    let proxy = NetworkProxyBuilder::new()
-        .with_mode(mode)
-        .with_allowlist(cfg.network_allowlist.clone())
-        .with_credentials(to_proxy_mappings(&credential_mappings))
-        .with_credential_resolver(resolver)
-        .build();
+    // `managed_by_codex(false)` lets us pick the bind address rather than
+    // having codex's runtime auto-reserve loopback ephemeral listeners
+    // through its CODEX_HOME state file. The desktop-client owns the port
+    // (`SandboxConfig::proxy_port`), so we pass it through.
+    let bind_http = SocketAddr::from(([127, 0, 0, 1], cfg.proxy_port));
+    let bind_socks = SocketAddr::from(([127, 0, 0, 1], 0));
 
-    let addr = proxy
-        .start(cfg.proxy_port)
+    let proxy = NetworkProxy::builder()
+        .state(proxy_state)
+        .http_addr(bind_http)
+        .socks_addr(bind_socks)
+        .managed_by_codex(false)
+        .build()
         .await
         .map_err(|e| SandboxError::Config {
-            reason: format!("network proxy start failed: {e}"),
+            reason: format!("network proxy build failed: {e}"),
         })?;
 
+    let http_addr = proxy.http_addr();
+    let socks_addr = proxy.socks_addr();
+    let task = proxy.run().await.map_err(|e| SandboxError::Config {
+        reason: format!("network proxy start failed: {e}"),
+    })?;
+
     Ok(NetworkProxyHandle {
+        addr: http_addr,
+        socks_addr,
         proxy: Arc::new(proxy),
-        addr,
+        _task: task,
     })
 }
 
@@ -184,186 +186,69 @@ pub fn proxy_env_vars(addr: SocketAddr) -> Vec<(String, String)> {
 mod tests {
     use super::*;
     use crate::sandbox::config::{SandboxConfig, SandboxPolicy};
-    use crate::secrets::{CreateSecretParams, DecryptedSecret, Secret, SecretError, SecretRef};
-    use async_trait::async_trait;
-    use std::sync::Mutex;
-    use uuid::Uuid;
-
-    /// Minimal in-memory store sufficient for resolver tests. Only
-    /// `get_decrypted` is exercised; other methods return `NotFound`.
-    struct MemStore {
-        entries: Mutex<Vec<(String, String, String)>>, // (user, name, value)
-    }
-    impl MemStore {
-        fn with(entries: Vec<(&str, &str, &str)>) -> Self {
-            Self {
-                entries: Mutex::new(
-                    entries
-                        .into_iter()
-                        .map(|(u, n, v)| (u.into(), n.into(), v.into()))
-                        .collect(),
-                ),
-            }
-        }
-    }
-    #[async_trait]
-    impl SecretsStore for MemStore {
-        async fn create(
-            &self,
-            _: &str,
-            _: CreateSecretParams,
-        ) -> std::result::Result<Secret, SecretError> {
-            Err(SecretError::NotFound("not implemented".into()))
-        }
-        async fn get(&self, _: &str, name: &str) -> std::result::Result<Secret, SecretError> {
-            Err(SecretError::NotFound(name.into()))
-        }
-        async fn get_decrypted(
-            &self,
-            user_id: &str,
-            name: &str,
-        ) -> std::result::Result<DecryptedSecret, SecretError> {
-            let g = self.entries.lock().unwrap();
-            for (u, n, v) in g.iter() {
-                if u == user_id && n == name {
-                    return DecryptedSecret::from_bytes(v.as_bytes().to_vec());
-                }
-            }
-            Err(SecretError::NotFound(name.into()))
-        }
-        async fn exists(&self, _: &str, _: &str) -> std::result::Result<bool, SecretError> {
-            Ok(false)
-        }
-        async fn list(&self, _: &str) -> std::result::Result<Vec<SecretRef>, SecretError> {
-            Ok(vec![])
-        }
-        async fn delete(&self, _: &str, _: &str) -> std::result::Result<bool, SecretError> {
-            Ok(false)
-        }
-        async fn record_usage(&self, _: Uuid) -> std::result::Result<(), SecretError> {
-            Ok(())
-        }
-        async fn is_accessible(
-            &self,
-            _: &str,
-            _: &str,
-            _: &[String],
-        ) -> std::result::Result<bool, SecretError> {
-            Ok(true)
-        }
-    }
-
-    #[tokio::test]
-    async fn resolver_returns_value_when_present() {
-        let store = Arc::new(MemStore::with(vec![("alice", "OPENAI_API_KEY", "sk-xyz")]));
-        let r = IronclawSecretsResolver::new(store, "alice");
-        assert_eq!(r.resolve("OPENAI_API_KEY").await.as_deref(), Some("sk-xyz"));
-    }
-
-    #[tokio::test]
-    async fn resolver_returns_none_for_missing_secret() {
-        let store = Arc::new(MemStore::with(vec![]));
-        let r = IronclawSecretsResolver::new(store, "alice");
-        assert!(r.resolve("MISSING").await.is_none());
-    }
-
-    #[tokio::test]
-    async fn resolver_isolates_users() {
-        let store = Arc::new(MemStore::with(vec![("alice", "K", "a-val")]));
-        let bob = IronclawSecretsResolver::new(store.clone(), "bob");
-        assert!(
-            bob.resolve("K").await.is_none(),
-            "bob must not see alice's secret"
-        );
-    }
 
     #[test]
-    fn mapping_bearer_round_trips() {
-        let local = LocalMapping::bearer("OPENAI_API_KEY", "api.openai.com");
-        let proxy = to_proxy_mapping(&local).expect("convertible");
-        assert_eq!(proxy.secret_name, "OPENAI_API_KEY");
-        assert_eq!(proxy.host_patterns, vec!["api.openai.com".to_string()]);
-        assert!(matches!(proxy.location, ProxyLocation::AuthorizationBearer));
-        assert!(!proxy.optional, "must default to required (fail-safe)");
-    }
-
-    #[test]
-    fn mapping_header_round_trips() {
-        let local = LocalMapping::header("ANTHROPIC_API_KEY", "x-api-key", "api.anthropic.com");
-        let proxy = to_proxy_mapping(&local).expect("convertible");
-        match proxy.location {
-            ProxyLocation::Header { name, prefix } => {
-                assert_eq!(name, "x-api-key");
-                assert!(prefix.is_none());
-            }
-            other => panic!("unexpected location {other:?}"),
-        }
-    }
-
-    #[test]
-    fn mapping_with_empty_hosts_is_dropped() {
-        let local = LocalMapping {
-            secret_name: "X".into(),
-            location: LocalLocation::AuthorizationBearer,
-            host_patterns: vec![],
-        };
-        assert!(to_proxy_mapping(&local).is_none());
-    }
-
-    #[test]
-    fn mappings_expand_multi_host() {
-        let local = LocalMapping {
-            secret_name: "K".into(),
-            location: LocalLocation::AuthorizationBearer,
-            host_patterns: vec!["a.com".into(), "b.com".into()],
-        };
-        let out = to_proxy_mappings(&[local]);
-        assert_eq!(out.len(), 1);
+    fn proxy_env_vars_includes_https_http_no_proxy() {
+        let addr: SocketAddr = "127.0.0.1:31280".parse().unwrap();
+        let vars: std::collections::HashMap<_, _> = proxy_env_vars(addr).into_iter().collect();
         assert_eq!(
-            out[0].host_patterns,
-            vec!["a.com".to_string(), "b.com".to_string()]
+            vars.get("HTTPS_PROXY").map(String::as_str),
+            Some("http://127.0.0.1:31280")
+        );
+        assert_eq!(
+            vars.get("HTTP_PROXY").map(String::as_str),
+            Some("http://127.0.0.1:31280")
+        );
+        assert_eq!(
+            vars.get("NO_PROXY").map(String::as_str),
+            Some("localhost,127.0.0.1,::1")
         );
     }
 
     #[test]
-    fn proxy_env_vars_include_no_proxy() {
-        let addr: SocketAddr = "127.0.0.1:9999".parse().unwrap();
-        let env = proxy_env_vars(addr);
-        let map: std::collections::HashMap<_, _> = env.into_iter().collect();
-        assert_eq!(map["HTTPS_PROXY"], "http://127.0.0.1:9999");
-        assert_eq!(map["HTTP_PROXY"], "http://127.0.0.1:9999");
-        assert!(map["NO_PROXY"].contains("127.0.0.1"));
-    }
-
-    #[tokio::test]
-    async fn start_network_proxy_binds_and_serves() {
-        let cfg = SandboxConfig {
-            policy: SandboxPolicy::ReadOnly,
-            network_allowlist: vec!["example.com".into()],
-            proxy_port: 0,
-            ..SandboxConfig::default()
-        };
-        let store = Arc::new(MemStore::with(vec![]));
-        let handle = start_network_proxy(&cfg, vec![], store, "alice")
-            .await
-            .expect("proxy starts");
-        assert!(handle.addr.port() > 0);
-        assert!(handle.proxy.is_running());
-    }
-
-    #[tokio::test]
-    async fn full_access_policy_uses_allow_all_mode() {
-        // Sanity: FullAccess must not crash the builder even with empty allowlist.
+    fn build_proxy_config_full_access_disables_allowlist() {
         let cfg = SandboxConfig {
             policy: SandboxPolicy::FullAccess,
-            network_allowlist: vec![],
-            proxy_port: 0,
-            ..SandboxConfig::default()
+            network_allowlist: vec!["api.openai.com".to_string()],
+            ..Default::default()
         };
-        let store = Arc::new(MemStore::with(vec![]));
-        let handle = start_network_proxy(&cfg, vec![], store, "alice")
-            .await
-            .expect("proxy starts in AllowAll");
-        assert!(handle.proxy.is_running());
+        let proxy_cfg = build_proxy_config(&cfg);
+        assert!(matches!(proxy_cfg.network.mode, NetworkMode::Full));
+        assert!(proxy_cfg.network.domains.is_none());
+    }
+
+    #[test]
+    fn build_proxy_config_sandboxed_maps_allowlist_to_allow_entries() {
+        let cfg = SandboxConfig {
+            policy: SandboxPolicy::ReadOnly,
+            network_allowlist: vec![
+                "api.openai.com".to_string(),
+                "api.anthropic.com".to_string(),
+            ],
+            ..Default::default()
+        };
+        let proxy_cfg = build_proxy_config(&cfg);
+        assert!(matches!(proxy_cfg.network.mode, NetworkMode::Limited));
+        let domains = proxy_cfg.network.domains.expect("expected allowlist");
+        assert_eq!(domains.entries.len(), 2);
+        assert!(
+            domains
+                .entries
+                .iter()
+                .all(|e| e.permission == NetworkDomainPermission::Allow)
+        );
+    }
+
+    #[tokio::test]
+    async fn start_network_proxy_binds_loopback() {
+        let cfg = SandboxConfig {
+            policy: SandboxPolicy::ReadOnly,
+            network_allowlist: vec!["api.openai.com".to_string()],
+            proxy_port: 0,
+            ..Default::default()
+        };
+        let handle = start_network_proxy(&cfg).await.expect("proxy starts");
+        assert!(handle.addr.ip().is_loopback());
+        assert_ne!(handle.addr.port(), 0);
     }
 }
