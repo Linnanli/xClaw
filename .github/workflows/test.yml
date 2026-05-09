@@ -119,6 +119,15 @@ jobs:
       - name: Run Tests
         run: |
           set -euo pipefail
+          # sccache fail-soft: GHA Cache backend has occasional outages
+          # (HTTP 400 "Our services aren't available"). Probe before use;
+          # if unavailable, fall back to plain rustc instead of failing the
+          # whole job. Cache miss costs minutes; outage costs the whole PR.
+          if ! sccache --start-server >/dev/null 2>&1; then
+            echo "::warning::sccache unavailable (likely GHA Cache outage); disabling RUSTC_WRAPPER for this run"
+            unset RUSTC_WRAPPER
+            unset SCCACHE_GHA_ENABLED
+          fi
           SCOPE="${{ steps.scope.outputs.scope || '--workspace' }}"
           echo "Test scope: $SCOPE"
           cargo nextest run $SCOPE ${{ matrix.flags }} --no-fail-fast
