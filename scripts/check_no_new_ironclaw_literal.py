@@ -55,6 +55,10 @@ FILE_WHITELIST: tuple[str, ...] = (
     ".github/workflows/code_style.yml",
     ".github/pull_request_template.md",
     "AGENTS.md",
+    "skills/adr-compliance-check/SKILL.md",
+    "skills/adr-compliance-check/README.md",
+    "skills/adr-compliance-check/manifest.json",
+    "skills/adr-compliance-check/agents/agent.yaml",
 )
 
 
