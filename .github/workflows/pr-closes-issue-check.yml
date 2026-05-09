@@ -13,8 +13,23 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.pull_request.draft == false
     steps:
+      - name: Detect dependabot PR (exempt from closes-link)
+        id: exempt_bot
+        env:
+          ACTOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          # Dependabot PRs are auto-generated from manifest version bumps; no
+          # human-tracked issue exists. Exempt actor `dependabot[bot]` from
+          # the closes-link gate.
+          if [ "$ACTOR" = "dependabot[bot]" ]; then
+            echo "Dependabot PR detected; exempting from closes-link check."
+            echo "exempt=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exempt=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Detect plan-docs-only PR (exempt from closes-link)
         id: exempt
+        if: steps.exempt_bot.outputs.exempt != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -38,7 +53,7 @@ jobs:
             echo "exempt=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Require Closes/Fixes/Resolves #N in PR body
-        if: steps.exempt.outputs.exempt != 'true'
+        if: steps.exempt.outputs.exempt != 'true' && steps.exempt_bot.outputs.exempt != 'true'
         env:
           BODY: ${{ github.event.pull_request.body }}
         run: |
