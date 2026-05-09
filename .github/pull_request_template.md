@@ -20,6 +20,23 @@
 
 <!-- Closes #N, or "None" -->
 
+## Sources read
+
+<!--
+强制：列出本 PR 派单 issue body 中 **Source 文档** 字段、**关联 ADR** 字段引用的全部文件 +
+你实际打开过的 §/标题。Coding Agent 必须如实回声路径与小节，禁止只写 "已阅"。
+
+例：
+  - docs/plans/architecture-refactor/32-execution-plan.md §W7
+  - docs/plans/architecture-refactor/adr-137-net-proxy-port-plan.md §3.2 PR-N23
+  - AGENTS.md §"Skills 强制使用规范"
+  - crates/dasclaw_net_proxy/src/lib.rs（模块文档）
+
+如确实无 source（trivial chore PR），写 "None — chore PR with no architecture impact"。
+-->
+
+-
+
 ## Cross-cuts
 
 <!--
