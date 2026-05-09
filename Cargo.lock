@@ -2881,6 +2881,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "dasclaw_utils_home_dir"
+version = "0.0.0-w5"
+dependencies = [
+ "dasclaw_absolute_path",
+ "dirs 6.0.0",
+ "pretty_assertions",
+ "tempfile",
+]
+
+[[package]]
+name = "dasclaw_utils_rustls_provider"
+version = "0.0.0-w5"
+dependencies = [
+ "rustls 0.23.37",
+]
+
+[[package]]
 name = "data-encoding"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8482,6 +8499,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "758025cb5fccfd3bc2fd74708fd4682be41d99e5dff73c377c0646c6012c73a4"
 dependencies = [
  "aws-lc-rs",
+ "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
