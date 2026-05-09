@@ -1108,13 +1108,12 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
         };
 
         // Persist to DB so the message survives page refresh
-        if let Some(ref s) = store {
-            if let Err(e) = s
+        if let Some(ref s) = store
+            && let Err(e) = s
                 .add_conversation_message(conv_id, "assistant", &content)
                 .await
-            {
-                tracing::warn!(job_id = %job_id, "broadcast_result: failed to persist message: {e}");
-            }
+        {
+            tracing::warn!(job_id = %job_id, "broadcast_result: failed to persist message: {e}");
         }
 
         let response = crate::channels::OutgoingResponse {

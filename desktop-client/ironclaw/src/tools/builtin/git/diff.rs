@@ -9,6 +9,12 @@ use super::runner::{resolve_workdir, run_git};
 
 pub struct GitDiffTool;
 
+impl Default for GitDiffTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GitDiffTool {
     pub fn new() -> Self {
         Self

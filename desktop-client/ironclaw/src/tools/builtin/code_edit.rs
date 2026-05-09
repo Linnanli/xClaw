@@ -133,14 +133,14 @@ impl Tool for CodeEditTool {
         }
 
         // Count verification: reject if mismatch
-        if let Some(expected) = expected_count {
-            if actual_count != expected as usize {
-                return Err(ToolError::ExecutionFailed(format!(
-                    "Expected {} occurrence(s) of old_string but found {}. \
+        if let Some(expected) = expected_count
+            && actual_count != expected as usize
+        {
+            return Err(ToolError::ExecutionFailed(format!(
+                "Expected {} occurrence(s) of old_string but found {}. \
                      Edit aborted to prevent unintended changes.",
-                    expected, actual_count
-                )));
-            }
+                expected, actual_count
+            )));
         }
 
         // Determine how many to replace

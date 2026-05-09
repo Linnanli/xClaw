@@ -9,6 +9,12 @@ use super::runner::{resolve_workdir, run_git};
 
 pub struct GitBranchTool;
 
+impl Default for GitBranchTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GitBranchTool {
     pub fn new() -> Self {
         Self

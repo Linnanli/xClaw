@@ -9,6 +9,12 @@ use super::runner::{resolve_workdir, run_git};
 
 pub struct GitStatusTool;
 
+impl Default for GitStatusTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GitStatusTool {
     pub fn new() -> Self {
         Self

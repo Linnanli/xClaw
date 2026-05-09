@@ -20,6 +20,12 @@ use crate::tools::tool::{ApprovalRequirement, Tool, ToolDomain, ToolError, ToolO
 /// - `submit`  — submit a structured plan for user review
 pub struct PlanModeTool;
 
+impl Default for PlanModeTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PlanModeTool {
     pub fn new() -> Self {
         Self

@@ -27,6 +27,12 @@ const MAX_REDIRECTS: usize = 10;
 
 pub struct WebFetchTool;
 
+impl Default for WebFetchTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WebFetchTool {
     pub fn new() -> Self {
         Self

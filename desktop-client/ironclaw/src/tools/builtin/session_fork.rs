@@ -19,6 +19,12 @@ use crate::tools::tool::{ApprovalRequirement, Tool, ToolDomain, ToolError, ToolO
 /// the dispatcher can execute the fork on the session.
 pub struct SessionForkTool;
 
+impl Default for SessionForkTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SessionForkTool {
     pub fn new() -> Self {
         Self

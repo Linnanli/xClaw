@@ -13,6 +13,12 @@ use super::runner::{resolve_workdir, run_git};
 
 pub struct GitStaleCheckTool;
 
+impl Default for GitStaleCheckTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GitStaleCheckTool {
     pub fn new() -> Self {
         Self

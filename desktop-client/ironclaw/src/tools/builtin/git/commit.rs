@@ -14,6 +14,12 @@ const MAX_MESSAGE_LEN: usize = 1000;
 
 pub struct GitCommitTool;
 
+impl Default for GitCommitTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GitCommitTool {
     pub fn new() -> Self {
         Self

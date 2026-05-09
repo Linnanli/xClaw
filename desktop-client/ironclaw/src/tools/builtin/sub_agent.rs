@@ -30,7 +30,7 @@ pub enum SubAgentRole {
 
 impl SubAgentRole {
     /// Parse a role string.
-    pub fn from_str(s: &str) -> Result<Self, ToolError> {
+    pub fn parse(s: &str) -> Result<Self, ToolError> {
         match s.to_lowercase().as_str() {
             "explore" => Ok(Self::Explore),
             "verify" => Ok(Self::Verify),
@@ -99,6 +99,12 @@ pub struct SubAgentTool {
     /// Current depth (0 = main agent). Sub-agents at depth >= MAX_SUB_AGENT_DEPTH
     /// cannot spawn further sub-agents.
     current_depth: u16,
+}
+
+impl Default for SubAgentTool {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SubAgentTool {
@@ -182,7 +188,7 @@ impl Tool for SubAgentTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParameters("'role' is required".into()))?;
 
-        let role = SubAgentRole::from_str(role_str)?;
+        let role = SubAgentRole::parse(role_str)?;
 
         let goal = params
             .get("goal")

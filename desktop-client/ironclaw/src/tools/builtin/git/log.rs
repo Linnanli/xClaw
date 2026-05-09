@@ -12,6 +12,12 @@ const MAX_LIMIT: u64 = 100;
 
 pub struct GitLogTool;
 
+impl Default for GitLogTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GitLogTool {
     pub fn new() -> Self {
         Self

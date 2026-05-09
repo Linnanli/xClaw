@@ -686,20 +686,18 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
 
             // Plan mode interception: non-readonly tools get a dry-run preview
             // instead of actual execution.
-            if is_plan_mode {
-                if let Some(tool) = self.agent.tools().get(&tc.name).await {
-                    let risk = tool.risk_level_for(&tc.arguments);
-                    if risk > crate::tools::RiskLevel::Low {
-                        preflight.push((
-                            tc,
-                            PreflightOutcome::Rejected(format!(
-                                "[Plan Mode — dry-run] Tool '{}' would execute with risk level '{}'. \
+            if is_plan_mode && let Some(tool) = self.agent.tools().get(&tc.name).await {
+                let risk = tool.risk_level_for(&tc.arguments);
+                if risk > crate::tools::RiskLevel::Low {
+                    preflight.push((
+                        tc,
+                        PreflightOutcome::Rejected(format!(
+                            "[Plan Mode — dry-run] Tool '{}' would execute with risk level '{}'. \
                                  Approve the plan to execute for real.",
-                                original_tc.name, risk
-                            )),
-                        ));
-                        continue;
-                    }
+                            original_tc.name, risk
+                        )),
+                    ));
+                    continue;
                 }
             }
 
