@@ -1,0 +1,7 @@
+interface:
+  display_name: "ADR Compliance Check"
+  short_description: "Verify current git changes comply with x-claw ADR redlines (verbatim port, drift guards, CI roll-up, PR conventions)"
+  default_prompt: "Review current git changes against the ADR redlines defined in docs/plans/architecture-refactor/ and AGENTS.md. Block any patch-style edits to verbatim-ported files, missing drift guards, missing CI failure-check stanzas, or PR descriptions that do not cite the controlling ADR / issue."
+
+# Agent-agnostic skill - works with any LLM provider.
+# No provider-specific configuration required.

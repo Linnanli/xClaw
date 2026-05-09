@@ -29,6 +29,8 @@
 1. **开发完成后调用 MCP 工具**：
    - 每次代码开发完成后，必须调用 `mcp-feedback-enhanced` 工具。
    - 每次给开发者解释方案或者让开发选择方案，必须调用 `mcp-feedback-enhanced` 工具。
+   - `mcp-feedback-enhanced` **必须由当前主 agent 直接调用**，不得通过 `runSubagent` 或任何子 agent 代调；子 agent 看不到该工具不算已完成反馈步骤。
+   - 若 MCP 服务名与当前会话里的实际工具名不完全同名，以**主 agent 当前可见工具列表中的实际工具名**为准执行，不要因为命名映射差异而转交子 agent。
    - 工具调用后，Agent 必须等待用户反馈，收到明确指示后再继续执行后续任务。
 
 ### 会话轮换原则
@@ -66,21 +68,23 @@
 
 ### Skills 强制使用规范
 
-每个开发回合都要主动核对是否触发 skill，不要靠"想起来"才用。以下三个 skill 是默认触发，**不是可选**：
+每个开发回合都要主动核对是否触发 skill，不要靠"想起来"才用。以下四个 skill 是默认触发，**不是可选**：
 
 | Skill | 触发时机 | 缺省后果 |
 |-------|---------|---------|
 | `code-quality-audit` | **写完一段非平凡实现后**（新函数/新模块/重构 > 50 LOC）、commit/push 前、用户说"审查/检查质量" | 会把补丁式代码、过长函数、unwrap/clone 滥用、重复造轮子的隐患合并进主线 |
-| `code-simplifier` | **`code-quality-audit` 之后**，对刚改完的代码做收敛（消嵌套/去重复/改命名） | 留下啰嗦/低可读代码，后续重构成本飙升 |
+| `code-simplifier` | **`code-quality-audit` 之后**，对刚改完的代码做收敛（消嵌套/去重复/改命名）。**verbatim port 场景必须跳过**（任何"简化"都违反 ADR-129 §1.3） | 留下啰嗦/低可读代码，后续重构成本飙升 |
+| `adr-compliance-check` | **触及 `crates/dasclaw_*` / `.github/workflows/code_style.yml` / `scripts/check_codex_*_drift.py` / starlark pin / `.ironclaw` 字面量新增或豁免** 的 PR push 前 | 漏掉 verbatim 纯度违规、drift guard 接线缺失、CI roll-up `failure-check` stanza 缺失、PR 描述漏 ADR/Issue cite 等架构纪律问题 |
 | `code-review-expert` | **PR 自审前**（push 之前）、PR 合并前、用户说"review/审查这次改动" | 漏掉 SOLID 违规、安全风险、依赖耦合等高阶问题 |
 
 **执行顺序（默认管线）**：
 1. 实现完成 → `cargo check -p <touched-crate> --tests` 0 错 0 警（完整 `cargo build` 由 CI 兑现）
 2. `code-quality-audit` 自查（必须）
-3. `code-simplifier` 收敛（必须）
+3. `code-simplifier` 收敛（必须；verbatim port 跳过）
 4. `cargo fmt` + `python3.12 scripts/check_no_panics.py`
-5. commit 前 `code-review-expert` 自审（必须）
-6. push + 开 PR
+5. `adr-compliance-check` 自查（触及 ADR 红线场景必须）
+6. commit 前 `code-review-expert` 自审（必须）
+7. push + 开 PR
 
 **不需要执行 skill 的场景**：
 - 单字符/单行 typo 修复
@@ -88,7 +92,7 @@
 - 仅 fmt/lint 自动修复
 - 用户明确说"跳过 review，先跑起来"
 
-**遗忘检测**：每次准备 push 前，先问自己"刚才有没有跑过 code-quality-audit 和 code-review-expert？"，如果没有，回到对应步骤补做。
+**遗忘检测**：每次准备 push 前，先问自己"刚才有没有跑过 code-quality-audit、adr-compliance-check（适用时）和 code-review-expert？"，如果没有，回到对应步骤补做。
 
 ### GitHub PR 工作流
 
@@ -102,7 +106,7 @@
 
 1. 完成当前切片实现
 2. 运行最小充分验证：先窄测试，再必要的 build / workspace build
-3. 按 Skills 管线完成 `code-quality-audit` → `code-simplifier` → `code-review-expert`（适用时）
+3. 按 Skills 管线完成 `code-quality-audit` → `code-simplifier`（verbatim port 跳过）→ `adr-compliance-check`（触及 ADR 红线时）→ `code-review-expert`（适用时）
 4. commit，commit message 说明当前切片的真实边界
 5. push 分支
 6. 开 PR，并在 PR 描述中写清：
@@ -694,7 +698,7 @@ cargo test -p desktop-client --lib engine_startup_tests
 ### GitHub PR
 
 - [ ] 当前切片已完成最小充分验证后再开 PR
-- [ ] 已按需执行 `code-quality-audit`、`code-simplifier`、`code-review-expert`
+- [ ] 已按需执行 `code-quality-audit`、`code-simplifier`、`adr-compliance-check`（触及 ADR 红线时）、`code-review-expert`
 - [ ] PR 描述已写清背景、范围、非目标、验证、后续步骤
 - [ ] 如果是 stacked PR，已写清 base、merge 顺序、先看哪个 PR
 - [ ] 已至少运行一轮 `gh pr checks` 或等价检查并同步结果
