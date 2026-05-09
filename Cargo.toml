@@ -48,11 +48,18 @@ exclude = ["ironclaw", "claw-code", "vendor"]
 resolver = "2"
 
 [profile.dev]
-opt-level = 0          # 本 crate 不优化，编译快
-incremental = true     # 增量编译
+opt-level = 0                       # 本 crate 不优化，编译快
+incremental = true                  # 增量编译
+# CI OOM 防护：debug=2 时 ironclaw lib-test 链接 RAM 峰值 ~7GB，
+# 在 ubuntu-latest（4 vCPU / 16GB）上必现 ld signal 7。
+# line-tables-only 保留 backtrace 行号但砍 60-80% debug-info；
+# split-debuginfo=unpacked 把 .dwo 文件外置，进一步降低链接器内存。
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
 
 [profile.dev.package."*"]
 opt-level = 1          # 第三方依赖 O1，编译一次后不再重编且运行更快
+debug = "line-tables-only"
 
 [profile.release]
 strip = true
