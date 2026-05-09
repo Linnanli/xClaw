@@ -14,6 +14,7 @@
 //! - Viewing gateway logs (`logs`)
 //! - Checking system health (`status`)
 
+mod cert;
 mod channels;
 mod completion;
 mod config;
@@ -36,6 +37,7 @@ mod skills;
 pub mod status;
 mod tool;
 
+pub use cert::{CertCommand, run_cert_command};
 pub use channels::{ChannelsCommand, run_channels_command};
 pub use completion::Completion;
 pub use config::{ConfigCommand, run_config_command};
@@ -212,6 +214,14 @@ pub enum Command {
         long_about = "List, search, and inspect SKILL.md-based skills.\nExamples:\n  ironclaw skills list\n  ironclaw skills search 'writing'\n  ironclaw skills info my-skill"
     )]
     Skills(SkillsCommand),
+
+    /// Manage MITM CA trust chain (ADR-139)
+    #[command(
+        subcommand,
+        about = "Manage MITM CA trust chain",
+        long_about = "Install, revoke, rotate, inspect, or export the per-user MITM CA used by the audited HTTP egress proxy.\nExamples:\n  dasclaw cert status\n  dasclaw cert install\n  dasclaw cert export > ca.pem"
+    )]
+    Cert(CertCommand),
 
     /// Manage lifecycle hooks
     #[command(

@@ -2625,6 +2625,7 @@ dependencies = [
  "ctor 0.2.9",
  "dasclaw",
  "dasclaw_apply_patch",
+ "dasclaw_cert_trust",
  "dasclaw_exec",
  "dasclaw_hooks",
  "dasclaw_llm_provider",
@@ -2740,6 +2741,16 @@ name = "dasclaw_bash_validation"
 version = "0.0.0-w1"
 dependencies = [
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dasclaw_cert_trust"
+version = "0.0.0-w8"
+dependencies = [
+ "pretty_assertions",
+ "serde",
+ "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
