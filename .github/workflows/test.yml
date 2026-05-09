@@ -27,7 +27,21 @@ jobs:
     # below). Full multi-feature suite still only runs on push-to-xClaw and
     # workflow_call. This is the local-fast / CI-strict workflow handoff
     # described in AGENTS.md "本地快速开发节奏".
+    #
+    # NOTE: keep on `ubuntu-latest` (4 vCPU / 16GB). Migration to
+    # `ubuntu-latest-large` / `ubuntu-22.04-8core` requires GitHub Larger
+    # Runner billing approval; tracked separately. The dev profile +
+    # mold linker + nextest combo below should keep peak link RAM under
+    # 12GB so the standard runner no longer OOMs.
     runs-on: ubuntu-latest
+    env:
+      # sccache via GitHub Actions cache backend
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
+      # mold linker for x86_64-linux (huge RAM/time savings on the
+      # 350+ rlib ironclaw lib-test link step). Scoped to Linux only.
+      RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
+      CARGO_TERM_COLOR: always
     strategy:
       fail-fast: false
       matrix:
@@ -37,6 +51,8 @@ jobs:
         uses: actions/checkout@v6
         with:
           submodules: recursive
+          # need history to diff against base for path scoping
+          fetch-depth: 0
       - name: Install Linux system dependencies (GTK / WebKit for Tauri desktop-client)
         run: |
           sudo apt-get update -qq
@@ -46,18 +62,78 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             libsoup-3.0-dev \
-            libssl-dev
+            libssl-dev \
+            mold
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.name }}
-      # NOTE(xClaw fork): removed the `Install cargo-component` and
-      # `Build WASM channels` steps inherited from ironclaw — channels-src/
-      # is not active in xClaw and `./scripts/build-wasm-extensions.sh` does
-      # not exist at the workspace root.
+          # save cache even on partial-match restore so next run benefits
+          save-if: ${{ github.ref == 'refs/heads/xClaw' || github.event_name == 'workflow_call' }}
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.6
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      # AGENTS.md §3: PR scope = touched crate, full workspace 由 push-to-xClaw 兜底。
+      # 对 PR 事件，比较 base...HEAD 的改动文件，映射到 -p <crate> 列表；
+      # 任何非 crate 路径（workspace Cargo.toml / scripts / desktop-client / submodule）
+      # 触发 fallback 到 --workspace。
+      - name: Compute changed-crate scope (PR only)
+        id: scope
+        if: github.event_name == 'pull_request' && matrix.name == 'default'
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          changed=$(git diff --name-only "$base" "$head" || true)
+          echo "Changed files:"; echo "$changed"
+          fallback=0
+          declare -A crates=()
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              crates/*)
+                name=$(echo "$f" | cut -d/ -f2)
+                crates[$name]=1 ;;
+              admin-backend/*|desktop-client/*|claw-code/*|codex-cli-main/*|ironclaw-main/*|claw-decode-main/*|decode-claude-code-main/*|vendor/*)
+                fallback=1 ;;
+              Cargo.toml|Cargo.lock|build.rs|deny.toml|rust-toolchain.toml|.cargo/*)
+                fallback=1 ;;
+              *)
+                # docs / .github / scripts → don't trigger compile
+                ;;
+            esac
+          done <<< "$changed"
+          if [ "$fallback" = "1" ] || [ ${#crates[@]} -eq 0 ]; then
+            echo "scope=--workspace" >> "$GITHUB_OUTPUT"
+            echo "Using --workspace (fallback or no crate-only change)"
+          else
+            args=""
+            for c in "${!crates[@]}"; do args="$args -p $c"; done
+            echo "scope=$args" >> "$GITHUB_OUTPUT"
+            echo "Using scoped: $args"
+          fi
       - name: Run Tests
-        run: cargo test ${{ matrix.flags }} -- --nocapture
+        run: |
+          set -euo pipefail
+          # sccache fail-soft: GHA Cache backend has occasional outages
+          # (HTTP 400 "Our services aren't available"). Probe before use;
+          # if unavailable, fall back to plain rustc instead of failing the
+          # whole job. Cache miss costs minutes; outage costs the whole PR.
+          if ! sccache --start-server >/dev/null 2>&1; then
+            echo "::warning::sccache unavailable (likely GHA Cache outage); disabling RUSTC_WRAPPER for this run"
+            unset RUSTC_WRAPPER
+            unset SCCACHE_GHA_ENABLED
+          fi
+          SCOPE="${{ steps.scope.outputs.scope || '--workspace' }}"
+          echo "Test scope: $SCOPE"
+          cargo nextest run $SCOPE ${{ matrix.flags }} --no-fail-fast
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true
 
   heavy-integration-tests:
     name: Heavy Integration Tests
