@@ -1,39 +1,65 @@
 [package]
+# Verbatim port of codex-network-proxy @ codex-cli-main commit 6e838a19fa
+# (upstream snapshot vendored under codex-cli-main/codex-rs/network-proxy).
+# Mechanical edits per ADR-129 §1.3 + ADR-137:
+#   1. Cargo.toml package name swap: codex-network-proxy → dasclaw_net_proxy
+#      and lib name swap: codex_network_proxy → dasclaw_net_proxy.
+#   2. Workspace deps that don't exist in this repo are inlined with
+#      explicit versions; the rama-* alpha pins match codex upstream exactly.
+#   3. use-path swap in src/*.rs:
+#        codex_utils_absolute_path     → dasclaw_absolute_path
+#        codex_utils_home_dir          → dasclaw_utils_home_dir
+#        codex_utils_rustls_provider   → dasclaw_utils_rustls_provider
+# DO NOT hand-edit src/*.rs — drift guard
+# scripts/check_codex_net_proxy_drift.py verifies hash equality with upstream.
+#
+# Sandbox child credential injection (the deleted ironclaw 1,766 LOC fork)
+# was found to be dead code for the default LLM endpoints (HTTPS-only) and
+# is replaced by tool-level injection in
+# desktop-client/ironclaw/src/tools/builtin/http.rs (host-side reqwest layer)
+# which works for HTTPS without MITM. See ADR-137 + 31-target-architecture.md
+# §4 / 32-execution-plan.md W7 §5 for the full rationale.
 name = "dasclaw_net_proxy"
-version = "0.1.0"
+version = "0.0.0-w7"
 edition = "2024"
-description = "HTTP forward proxy with domain allowlist + credential injection (ported from ironclaw-main)."
+description = "Audited HTTP/SOCKS5 egress proxy with MITM TLS audit (verbatim port of codex-network-proxy)."
 license = "Apache-2.0 OR MIT"
 publish = false
 
 [lib]
+name = "dasclaw_net_proxy"
 path = "src/lib.rs"
 
 [dependencies]
-# Error handling
-thiserror = "2"
-
-# Async runtime
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "sync", "time"] }
+anyhow = "1"
 async-trait = "0.1"
-
-# HTTP server
-hyper = { version = "1.5", features = ["server", "http1", "http2"] }
-hyper-util = { version = "0.1", features = ["server", "tokio", "http1", "http2"] }
-http-body-util = "0.1"
-bytes = "1"
-
-# Outbound HTTP client
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }
-
-# URL parsing
-url = "2"
-
-# Logging
-tracing = "0.1"
-
-# Serialization (for CredentialMapping/CredentialLocation)
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+dasclaw_absolute_path = { path = "../dasclaw_absolute_path" }
+dasclaw_utils_home_dir = { path = "../dasclaw_utils_home_dir" }
+dasclaw_utils_rustls_provider = { path = "../dasclaw_utils_rustls_provider" }
+globset = "0.4"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+time = { version = "0.3", features = ["formatting", "macros"] }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+url = "2"
+# ADR-137 §3.2 + ADR-129 §1.3: rama-* must be exact-pin = "=0.3.0-alpha.4"
+# matching upstream codex-rs/network-proxy/Cargo.toml byte-for-byte.
+# deny.toml has a corresponding `*-alpha*` exception scoped to rama only.
+rama-core = "=0.3.0-alpha.4"
+rama-http = "=0.3.0-alpha.4"
+rama-http-backend = { version = "=0.3.0-alpha.4", features = ["tls"] }
+rama-net = { version = "=0.3.0-alpha.4", features = ["http", "tls"] }
+rama-socks5 = "=0.3.0-alpha.4"
+rama-tcp = { version = "=0.3.0-alpha.4", features = ["http"] }
+rama-tls-rustls = { version = "=0.3.0-alpha.4", features = ["http"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["full", "test-util"] }
+pretty_assertions = "1"
+tempfile = "3"
+
+[target.'cfg(target_family = "unix")'.dependencies]
+rama-unix = "=0.3.0-alpha.4"

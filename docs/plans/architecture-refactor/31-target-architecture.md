@@ -264,7 +264,7 @@ flowchart TB
 | `crates/dasclaw_observability` | ironclaw + codex/rollout-trace | 统一可观测 |
 | `crates/dasclaw_identity` | codex agent-identity + device-key | 设备级身份 |
 | `crates/dasclaw_crash` | 新建（四方公共缺口补齐）| panic hook + sentry 适配 |
-| `crates/dasclaw_net_proxy` | codex/network-proxy port | rama 框架 + 自签 CA + MITM |
+| `crates/dasclaw_net_proxy` | codex/network-proxy port | rama 框架 + 自签 CA + MITM（**单层口径**：仅域名 allowlist + 可选 MITM 审计；凭证注入由 `desktop-client/ironclaw/src/tools/builtin/http.rs` 的 reqwest builder 层执行，详见 §4.5.1） |
 
 ### 4.4 保留（已存在，无需新建）
 
@@ -280,6 +280,27 @@ flowchart TB
 | `crates/x_claw_agent`（Phase 3 Step C） | 内容并入 `dasclaw_core`，crate rename | W6 收尾 |
 | `desktop-client/ironclaw/`（fork @ 0.24.0 + 42 fork-only commit） | **W1-W6 保留作为私货来源**；W6+ 私货全部迁出到 dasclaw_* 后才删除 | W6+ |
 | **直接升级 fork 到 ironclaw-main 0.26** | ❌ **永不**（与 ADR-101 §136 一致；38 §137 实证升级风险 30k+ LOC + 5 migration） | — |
+
+### 4.5.1 ADR-137 PR-N23 决策记录：dasclaw_net_proxy 单层口径
+
+**决策**：`crates/dasclaw_net_proxy` **逐字移植 codex/network-proxy 8,876 LOC**（commit `6e838a19`），不携带任何凭证注入代码；凭证注入沿用 `desktop-client/ironclaw/src/tools/builtin/http.rs` 的 reqwest builder 层。
+
+**为什么不携带原 ironclaw fork 的 1,766 LOC `CredentialResolver` / `HttpProxy::with_credential_resolver`**：
+
+1. **HTTPS 路径上是死代码**：默认 mapping（`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `NEARAI_API_KEY`）目标全是 HTTPS。`crates/dasclaw_net_proxy` 自身在 `NETWORK_SECURITY.md §"No MITM"` 已注明「HTTPS body 不可注入凭证」，原 fork 代码注释（`http.rs:246`）也自陈 HTTPS 走 CONNECT tunnel、注入永远到不了 `Authorization` 头。
+2. **架构上正确层是宿主**：`tools/builtin/http.rs:520-555` 在 `reqwest` 客户端构造时注入 header / query / 1Password ref——发生在 TLS 握手**之前**，HTTP 与 HTTPS 都生效，且 LLM 无法绕过（沙箱只暴露被代理的 reqwest 客户端）。
+3. **MITM 路径需用户主动选择**：`mitm.toml` 默认关；要为代理层注入凭证必须强制全员开 MITM，违背 codex/ironclaw 的"默认零侵入"承诺，也会让所有 enterprise 部署强制安装自签 CA。
+4. **ADR-129 §1.3 红线**：携带式移植带 1,766 LOC fork delta 会让 drift 守卫永久失败，CI 无法机械验证 byte-equivalent。
+
+**结果**：
+
+- **代理层（`crates/dasclaw_net_proxy`）**：仅做域名 allowlist 拦截 + 可选 MITM 审计，**不**做凭证注入。`scripts/check_codex_net_proxy_drift.py` 守卫 byte-for-byte equivalence。
+- **凭证注入唯一权威路径**：`desktop-client/ironclaw/src/tools/builtin/http.rs`（host reqwest builder layer，HTTP+HTTPS 通吃）。
+  - WASM 工具：`tools/wasm/credential_injector` 同样在宿主层。
+  - 容器子进程：`orchestrator::api::/worker/{id}/credentials` 端点按 job 注入 env。
+- **消费侧**（`desktop-client/ironclaw/src/sandbox/net_proxy.rs`）：单层适配器，不重新引入 `CredentialResolver` 抽象，不做兼容兼容；任何后续凭证类需求一律走 host reqwest 层。
+
+**红线**：未来在 `crates/dasclaw_net_proxy` 重新引入凭证注入即视为**违反 ADR-137 PR-N23**，drift 守卫会 fail。
 
 ---
 

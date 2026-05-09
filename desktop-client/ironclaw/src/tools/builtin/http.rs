@@ -517,7 +517,34 @@ impl Tool for HttpTool {
             None
         };
 
-        // Credential injection from shared registry
+        // ── Canonical credential injection path (ADR-137 PR-N23) ──────────
+        //
+        // This is the **single source of truth** for credential injection
+        // in xClaw. All secret-bearing API requests (LLM providers, Vault
+        // refs, 1Password refs) are injected here, in the host `reqwest`
+        // builder layer, BEFORE TLS handshake — which means injection
+        // works for both HTTP and HTTPS endpoints and cannot be observed
+        // or bypassed by sandboxed tools.
+        //
+        // Why NOT at the proxy layer (`crates/dasclaw_net_proxy`):
+        //   - Default mappings (OPENAI_API_KEY / ANTHROPIC_API_KEY /
+        //     NEARAI_API_KEY) all target HTTPS hosts; the proxy can only
+        //     inject into headers if MITM is enabled (intercept-and-resign
+        //     TLS), which would force every enterprise deployment to
+        //     install a self-signed CA — see `mitm.toml` (default off)
+        //     and 31-target-architecture.md §4.5.1.
+        //   - The legacy `CredentialResolver` in the ironclaw fork was
+        //     1,766 LOC of dead code on the HTTPS path, intentionally
+        //     deleted in PR #355 / W7 / ADR-137 PR-N23.
+        //
+        // Sibling injection sites (host-side, same property):
+        //   - WASM tools: `crate::tools::wasm::credential_injector`
+        //   - Container subprocesses: `orchestrator::api`
+        //     `/worker/{id}/credentials` endpoint (per-job env injection)
+        //
+        // Red line: do NOT add credential injection to
+        // `crates/dasclaw_net_proxy` — the verbatim drift guard
+        // (`scripts/check_codex_net_proxy_drift.py`) will fail.
         if let (Some(registry), Some(store)) = (
             self.credential_registry.as_ref(),
             self.secrets_store.as_ref(),

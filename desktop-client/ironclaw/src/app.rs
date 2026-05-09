@@ -549,54 +549,36 @@ impl AppBuilder {
                     sb.allow_full_access,
                 ));
 
-                // Network proxy requires a secrets store (credential
-                // resolver feed). Without one, log and skip — ShellTool
-                // still gets the OS sandbox; the proxy stays absent.
-                let proxy = match self.secrets_store.as_ref() {
-                    Some(store) => {
-                        let mut sandbox_cfg = sb.to_sandbox_config();
-                        // Override policy with the (possibly downgraded) one.
-                        sandbox_cfg.policy = policy;
+                // Network proxy no longer requires a secrets store: the
+                // codex-network-proxy port (W7 / ADR-137 PR-N23) enforces
+                // domain allowlist + optional MITM TLS audit only.
+                // Credential injection lives in tools/builtin/http.rs
+                // (host-side reqwest layer) where it actually works for
+                // HTTPS, see crate::sandbox::net_proxy module docs.
+                let mut sandbox_cfg = sb.to_sandbox_config();
+                // Override policy with the (possibly downgraded) one.
+                sandbox_cfg.policy = policy;
 
-                        let mappings = crate::sandbox::default_credential_mappings();
-                        match crate::sandbox::net_proxy::start_network_proxy(
-                            &sandbox_cfg,
-                            mappings,
-                            Arc::clone(store),
-                            self.config.owner_id.clone(),
-                        )
-                        .await
-                        {
-                            Ok(handle) => {
-                                let handle = Arc::new(handle);
-                                let env_vec =
-                                    crate::sandbox::net_proxy::proxy_env_vars(handle.addr);
-                                ctx.proxy_env = env_vec.into_iter().collect();
-                                tracing::info!(
-                                    addr = %handle.addr,
-                                    policy = ?policy,
-                                    "OS sandbox activated with allowlist HTTPS proxy"
-                                );
-                                Some(handle)
-                            }
-                            Err(e) => {
-                                tracing::error!(
-                                    error = %e,
-                                    "Failed to start allowlist proxy. \
-                                     ShellTool will run sandboxed but without \
-                                     egress filtering. Check SANDBOX_PROXY_PORT \
-                                     availability."
-                                );
-                                None
-                            }
-                        }
+                let proxy = match crate::sandbox::net_proxy::start_network_proxy(&sandbox_cfg).await
+                {
+                    Ok(handle) => {
+                        let handle = Arc::new(handle);
+                        let env_vec = crate::sandbox::net_proxy::proxy_env_vars(handle.addr);
+                        ctx.proxy_env = env_vec.into_iter().collect();
+                        tracing::info!(
+                            addr = %handle.addr,
+                            policy = ?policy,
+                            "OS sandbox activated with allowlist HTTPS proxy"
+                        );
+                        Some(handle)
                     }
-                    None => {
-                        tracing::warn!(
-                            "OS sandbox activated without secrets store — \
-                             allowlist proxy cannot inject credentials. \
-                             ShellTool will run sandboxed but external API \
-                             calls requiring API keys will fail."
+                    Err(e) => {
+                        tracing::error!(
+                            error = %e,
+                            "Failed to start allowlist proxy. \
+                             ShellTool will run sandboxed but without \
+                             egress filtering. Check SANDBOX_PROXY_PORT \
+                             availability."
                         );
                         None
                     }

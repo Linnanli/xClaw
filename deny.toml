@@ -52,6 +52,17 @@ ignore = [
     # No safe upgrade is available upstream; remove this ignore once the rsa
     # crate ships a constant-time release. Tracked under #190.
     "RUSTSEC-2023-0071",
+
+    # hickory-proto 0.25.2 — pulled in transitively by rama-dns 0.3.0-alpha.4,
+    # which is verbatim-locked at `=0.3.0-alpha.4` per ADR-137 PR-N23 (see
+    # crates/dasclaw_net_proxy/Cargo.toml). dasclaw_net_proxy uses rama-dns
+    # only for upstream client-side name resolution: no DNSSEC features
+    # (`dnssec-ring`/`dnssec-aws-lc-rs`) are enabled and no DNS server port
+    # is exposed, so neither advisory is reachable from xClaw runtime.
+    # Unblock when codex upstream bumps rama → hickory ≥ 0.26.1; tracked
+    # under #357.
+    "RUSTSEC-2026-0118",  # NSEC3 closest-encloser unbounded loop (DNSSEC validators only)
+    "RUSTSEC-2026-0119",  # O(n²) name compression on encode (DNS server only)
 ]
 
 [licenses]

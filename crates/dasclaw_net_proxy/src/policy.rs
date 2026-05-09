@@ -1,358 +1,465 @@
-//! Network policy decision making.
-//!
-//! Determines whether network requests should be allowed, denied,
-//! or allowed with credential injection.
-
-use async_trait::async_trait;
-
-use crate::allowlist::DomainAllowlist;
-use crate::reasons::NetworkDenyReason;
-use crate::types::{CredentialLocation, CredentialMapping};
-
-/// A network request to be evaluated.
-#[derive(Debug, Clone)]
-pub struct NetworkRequest {
-    /// HTTP method (GET, POST, etc.).
-    pub method: String,
-    /// Full URL being requested.
-    pub url: String,
-    /// Host extracted from URL.
-    pub host: String,
-    /// Path portion of the URL.
-    pub path: String,
-}
-
-impl NetworkRequest {
-    /// Create from a URL string.
-    pub fn from_url(method: &str, url: &str) -> Option<Self> {
-        let parsed = url::Url::parse(url).ok()?;
-        if !matches!(parsed.scheme(), "http" | "https") {
-            return None;
-        }
-
-        let host = parsed.host_str()?;
-        let host = host
-            .strip_prefix('[')
-            .and_then(|v| v.strip_suffix(']'))
-            .unwrap_or(host)
-            .to_lowercase();
-        let path = parsed.path().to_string();
-
-        Some(Self {
-            method: method.to_uppercase(),
-            url: url.to_string(),
-            host,
-            path,
-        })
-    }
-}
-
-/// Extract path from a URL.
 #[cfg(test)]
-fn extract_path(url: &str) -> String {
-    let Ok(parsed) = url::Url::parse(url) else {
-        return "/".to_string();
-    };
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return "/".to_string();
+use crate::config::NetworkMode;
+use anyhow::Context;
+use anyhow::Result;
+use anyhow::bail;
+use anyhow::ensure;
+use globset::GlobBuilder;
+use globset::GlobSet;
+use globset::GlobSetBuilder;
+use std::collections::HashSet;
+use std::net::IpAddr;
+use std::net::Ipv4Addr;
+use std::net::Ipv6Addr;
+use url::Host as UrlHost;
+
+/// A normalized host string for policy evaluation.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Host(String);
+
+impl Host {
+    pub fn parse(input: &str) -> Result<Self> {
+        let normalized = normalize_host(input);
+        ensure!(!normalized.is_empty(), "host is empty");
+        Ok(Self(normalized))
     }
-    parsed.path().to_string()
-}
 
-/// Decision for a network request.
-#[derive(Debug, Clone)]
-pub enum NetworkDecision {
-    /// Allow the request as-is.
-    Allow,
-    /// Allow with credential injection.
-    AllowWithCredentials {
-        /// Name of the secret to look up.
-        secret_name: String,
-        /// Where to inject the credential.
-        location: CredentialLocation,
-    },
-    /// Deny the request.
-    Deny {
-        /// Type-safe reason. Renders to a human string via `Display`.
-        reason: NetworkDenyReason,
-    },
-}
-
-impl NetworkDecision {
-    pub fn is_allowed(&self) -> bool {
-        !matches!(self, NetworkDecision::Deny { .. })
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
-/// Trait for making network policy decisions.
-#[async_trait]
-pub trait NetworkPolicyDecider: Send + Sync {
-    /// Decide whether a request should be allowed.
-    async fn decide(&self, request: &NetworkRequest) -> NetworkDecision;
-}
-
-/// Default policy decider that uses allowlist and credential mappings.
-pub struct DefaultPolicyDecider {
-    allowlist: DomainAllowlist,
-    credential_mappings: Vec<CredentialMapping>,
-}
-
-impl DefaultPolicyDecider {
-    /// Create a new policy decider.
-    pub fn new(allowlist: DomainAllowlist, credential_mappings: Vec<CredentialMapping>) -> Self {
-        Self {
-            allowlist,
-            credential_mappings,
-        }
-    }
-
-    /// Find credential mapping for a host (supports glob patterns like `*.example.com`).
-    fn find_credential(&self, host: &str) -> Option<&CredentialMapping> {
-        let host_lower = host.to_lowercase();
-        self.credential_mappings.iter().find(|m| {
-            m.host_patterns
-                .iter()
-                .any(|pattern| host_matches_pattern(&host_lower, pattern))
-        })
-    }
-}
-
-#[async_trait]
-impl NetworkPolicyDecider for DefaultPolicyDecider {
-    async fn decide(&self, request: &NetworkRequest) -> NetworkDecision {
-        // First check if the domain is allowed
-        let validation = self.allowlist.is_allowed(&request.host);
-        if !validation.is_allowed()
-            && let crate::allowlist::DomainValidationResult::Denied(reason) = validation
-        {
-            return NetworkDecision::Deny { reason };
-        }
-
-        // Check if we need to inject credentials
-        if let Some(mapping) = self.find_credential(&request.host) {
-            return NetworkDecision::AllowWithCredentials {
-                secret_name: mapping.secret_name.clone(),
-                location: mapping.location.clone(),
-            };
-        }
-
-        NetworkDecision::Allow
-    }
-}
-
-/// Check if a host matches a pattern (supports `*.example.com` wildcards).
-fn host_matches_pattern(host: &str, pattern: &str) -> bool {
-    let pattern_lower = pattern.to_lowercase();
-    if pattern_lower == host {
+/// Returns true if the host is a loopback hostname or IP literal.
+pub fn is_loopback_host(host: &Host) -> bool {
+    let host = host.as_str();
+    let host = host.split_once('%').map(|(ip, _)| ip).unwrap_or(host);
+    if host == "localhost" {
         return true;
     }
-
-    // Support wildcard: *.example.com matches sub.example.com
-    if let Some(suffix) = pattern_lower.strip_prefix("*.")
-        && host.ends_with(suffix)
-        && host.len() > suffix.len()
-    {
-        let prefix = &host[..host.len() - suffix.len()];
-        if prefix.ends_with('.') || prefix.is_empty() {
-            return true;
-        }
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return ip.is_loopback();
     }
-
     false
 }
 
-/// A policy decider that allows everything (use with FullAccess policy).
-pub struct AllowAllDecider;
-
-#[async_trait]
-impl NetworkPolicyDecider for AllowAllDecider {
-    async fn decide(&self, _request: &NetworkRequest) -> NetworkDecision {
-        NetworkDecision::Allow
+pub fn is_non_public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => is_non_public_ipv4(ip),
+        IpAddr::V6(ip) => is_non_public_ipv6(ip),
     }
 }
 
-/// A policy decider that denies everything.
-pub struct DenyAllDecider {
-    reason: NetworkDenyReason,
+fn is_non_public_ipv4(ip: Ipv4Addr) -> bool {
+    // Use the standard library classification helpers where possible; they encode the intent more
+    // clearly than hand-rolled range checks. Some non-public ranges (e.g., CGNAT and TEST-NET
+    // blocks) are not covered by stable stdlib helpers yet, so we fall back to CIDR checks.
+    ip.is_loopback()
+        || ip.is_private()
+        || ip.is_link_local()
+        || ip.is_unspecified()
+        || ip.is_multicast()
+        || ip.is_broadcast()
+        || ipv4_in_cidr(ip, [0, 0, 0, 0], /*prefix*/ 8) // "this network" (RFC 1122)
+        || ipv4_in_cidr(ip, [100, 64, 0, 0], /*prefix*/ 10) // CGNAT (RFC 6598)
+        || ipv4_in_cidr(ip, [192, 0, 0, 0], /*prefix*/ 24) // IETF Protocol Assignments (RFC 6890)
+        || ipv4_in_cidr(ip, [192, 0, 2, 0], /*prefix*/ 24) // TEST-NET-1 (RFC 5737)
+        || ipv4_in_cidr(ip, [198, 18, 0, 0], /*prefix*/ 15) // Benchmarking (RFC 2544)
+        || ipv4_in_cidr(ip, [198, 51, 100, 0], /*prefix*/ 24) // TEST-NET-2 (RFC 5737)
+        || ipv4_in_cidr(ip, [203, 0, 113, 0], /*prefix*/ 24) // TEST-NET-3 (RFC 5737)
+        || ipv4_in_cidr(ip, [240, 0, 0, 0], /*prefix*/ 4) // Reserved (RFC 6890)
 }
 
-impl DenyAllDecider {
-    /// Build a kill-switch decider with operator-supplied detail.
-    pub fn new(detail: impl Into<String>) -> Self {
-        Self {
-            reason: NetworkDenyReason::kill_switch(detail),
+fn ipv4_in_cidr(ip: Ipv4Addr, base: [u8; 4], prefix: u8) -> bool {
+    let ip = u32::from(ip);
+    let base = u32::from(Ipv4Addr::from(base));
+    let mask = if prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix)
+    };
+    (ip & mask) == (base & mask)
+}
+
+fn is_non_public_ipv6(ip: Ipv6Addr) -> bool {
+    if let Some(v4) = ip.to_ipv4() {
+        return is_non_public_ipv4(v4) || ip.is_loopback();
+    }
+    // Treat anything that isn't globally routable as "local" for SSRF prevention. In particular:
+    //  - `::1` loopback
+    //  - `fc00::/7` unique-local (RFC 4193)
+    //  - `fe80::/10` link-local
+    //  - `::` unspecified
+    //  - multicast ranges
+    ip.is_loopback()
+        || ip.is_unspecified()
+        || ip.is_multicast()
+        || ip.is_unique_local()
+        || ip.is_unicast_link_local()
+}
+
+/// Normalize host fragments for policy matching (trim whitespace, strip ports/brackets, lowercase).
+pub fn normalize_host(host: &str) -> String {
+    let host = host.trim();
+    if host.starts_with('[')
+        && let Some(end) = host.find(']')
+    {
+        return normalize_dns_host(&host[1..end]);
+    }
+
+    // The proxy stack should typically hand us a host without a port, but be
+    // defensive and strip `:port` when there is exactly one `:`.
+    if host.bytes().filter(|b| *b == b':').count() == 1 {
+        let host = host.split(':').next().unwrap_or_default();
+        return normalize_dns_host(host);
+    }
+
+    // Avoid mangling unbracketed IPv6 literals, but strip trailing dots so fully qualified domain
+    // names are treated the same as their dotless variants.
+    normalize_dns_host(host)
+}
+
+fn normalize_dns_host(host: &str) -> String {
+    let host = host.to_ascii_lowercase();
+    host.trim_end_matches('.').to_string()
+}
+
+fn normalize_pattern(pattern: &str) -> String {
+    let pattern = pattern.trim();
+    if pattern == "*" {
+        return "*".to_string();
+    }
+
+    let (prefix, remainder) = if let Some(domain) = pattern.strip_prefix("**.") {
+        ("**.", domain)
+    } else if let Some(domain) = pattern.strip_prefix("*.") {
+        ("*.", domain)
+    } else {
+        ("", pattern)
+    };
+
+    let remainder = normalize_host(remainder);
+    if prefix.is_empty() {
+        remainder
+    } else {
+        format!("{prefix}{remainder}")
+    }
+}
+
+pub(crate) fn is_global_wildcard_domain_pattern(pattern: &str) -> bool {
+    let normalized = normalize_pattern(pattern);
+    expand_domain_pattern(&normalized)
+        .iter()
+        .any(|candidate| candidate == "*")
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GlobalWildcard {
+    Allow,
+    Reject,
+}
+
+pub(crate) fn compile_allowlist_globset(patterns: &[String]) -> Result<GlobSet> {
+    compile_globset_with_policy(patterns, GlobalWildcard::Allow)
+}
+
+pub(crate) fn compile_denylist_globset(patterns: &[String]) -> Result<GlobSet> {
+    compile_globset_with_policy(patterns, GlobalWildcard::Reject)
+}
+
+fn compile_globset_with_policy(
+    patterns: &[String],
+    global_wildcard: GlobalWildcard,
+) -> Result<GlobSet> {
+    let mut builder = GlobSetBuilder::new();
+    let mut seen = HashSet::new();
+    for pattern in patterns {
+        if global_wildcard == GlobalWildcard::Reject && is_global_wildcard_domain_pattern(pattern) {
+            bail!(
+                "unsupported global wildcard domain pattern \"*\"; use exact hosts or scoped wildcards like *.example.com or **.example.com"
+            );
+        }
+        let pattern = normalize_pattern(pattern);
+        // Supported domain patterns:
+        // - "example.com": match the exact host
+        // - "*.example.com": match any subdomain (not the apex)
+        // - "**.example.com": match the apex and any subdomain
+        // - "*": match every host when explicitly enabled for allowlist compilation
+        for candidate in expand_domain_pattern(&pattern) {
+            if !seen.insert(candidate.clone()) {
+                continue;
+            }
+            let glob = GlobBuilder::new(&candidate)
+                .case_insensitive(true)
+                .build()
+                .with_context(|| format!("invalid glob pattern: {candidate}"))?;
+            builder.add(glob);
+        }
+    }
+    Ok(builder.build()?)
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum DomainPattern {
+    ApexAndSubdomains(String),
+    SubdomainsOnly(String),
+    Exact(String),
+}
+
+impl DomainPattern {
+    /// Parse a policy pattern for constraint comparisons.
+    ///
+    /// Validation of glob syntax happens when building the globset; here we only
+    /// decode the wildcard prefixes to keep constraint checks lightweight.
+    pub(crate) fn parse(input: &str) -> Self {
+        let input = input.trim();
+        if input.is_empty() {
+            return Self::Exact(String::new());
+        }
+        if let Some(domain) = input.strip_prefix("**.") {
+            Self::parse_domain(domain, Self::ApexAndSubdomains)
+        } else if let Some(domain) = input.strip_prefix("*.") {
+            Self::parse_domain(domain, Self::SubdomainsOnly)
+        } else {
+            Self::Exact(input.to_string())
         }
     }
 
-    /// Build a kill-switch decider from a pre-constructed reason.
-    pub fn with_reason(reason: NetworkDenyReason) -> Self {
-        Self { reason }
+    /// Parse a policy pattern for constraint comparisons, validating domain parts with `url`.
+    pub(crate) fn parse_for_constraints(input: &str) -> Self {
+        let input = input.trim();
+        if input.is_empty() {
+            return Self::Exact(String::new());
+        }
+        if let Some(domain) = input.strip_prefix("**.") {
+            return Self::ApexAndSubdomains(parse_domain_for_constraints(domain));
+        }
+        if let Some(domain) = input.strip_prefix("*.") {
+            return Self::SubdomainsOnly(parse_domain_for_constraints(domain));
+        }
+        Self::Exact(parse_domain_for_constraints(input))
+    }
+
+    fn parse_domain(domain: &str, build: impl FnOnce(String) -> Self) -> Self {
+        let domain = domain.trim();
+        if domain.is_empty() {
+            return Self::Exact(String::new());
+        }
+        build(domain.to_string())
+    }
+
+    pub(crate) fn allows(&self, candidate: &DomainPattern) -> bool {
+        match self {
+            DomainPattern::Exact(domain) => match candidate {
+                DomainPattern::Exact(candidate) => domain_eq(candidate, domain),
+                _ => false,
+            },
+            DomainPattern::SubdomainsOnly(domain) => match candidate {
+                DomainPattern::Exact(candidate) => is_strict_subdomain(candidate, domain),
+                DomainPattern::SubdomainsOnly(candidate) => {
+                    is_subdomain_or_equal(candidate, domain)
+                }
+                DomainPattern::ApexAndSubdomains(candidate) => {
+                    is_strict_subdomain(candidate, domain)
+                }
+            },
+            DomainPattern::ApexAndSubdomains(domain) => match candidate {
+                DomainPattern::Exact(candidate) => is_subdomain_or_equal(candidate, domain),
+                DomainPattern::SubdomainsOnly(candidate) => {
+                    is_subdomain_or_equal(candidate, domain)
+                }
+                DomainPattern::ApexAndSubdomains(candidate) => {
+                    is_subdomain_or_equal(candidate, domain)
+                }
+            },
+        }
     }
 }
 
-#[async_trait]
-impl NetworkPolicyDecider for DenyAllDecider {
-    async fn decide(&self, _request: &NetworkRequest) -> NetworkDecision {
-        NetworkDecision::Deny {
-            reason: self.reason.clone(),
+fn parse_domain_for_constraints(domain: &str) -> String {
+    let domain = domain.trim().trim_end_matches('.');
+    if domain.is_empty() {
+        return String::new();
+    }
+    let host = if domain.starts_with('[') && domain.ends_with(']') {
+        &domain[1..domain.len().saturating_sub(1)]
+    } else {
+        domain
+    };
+    if host.contains('*') || host.contains('?') || host.contains('%') {
+        return domain.to_string();
+    }
+    match UrlHost::parse(host) {
+        Ok(host) => host.to_string(),
+        Err(_) => String::new(),
+    }
+}
+
+fn expand_domain_pattern(pattern: &str) -> Vec<String> {
+    match DomainPattern::parse(pattern) {
+        DomainPattern::Exact(domain) => vec![domain],
+        DomainPattern::SubdomainsOnly(domain) => {
+            vec![format!("?*.{domain}")]
+        }
+        DomainPattern::ApexAndSubdomains(domain) => {
+            vec![domain.clone(), format!("?*.{domain}")]
         }
     }
+}
+
+fn normalize_domain(domain: &str) -> String {
+    domain.trim_end_matches('.').to_ascii_lowercase()
+}
+
+fn domain_eq(left: &str, right: &str) -> bool {
+    normalize_domain(left) == normalize_domain(right)
+}
+
+fn is_subdomain_or_equal(child: &str, parent: &str) -> bool {
+    let child = normalize_domain(child);
+    let parent = normalize_domain(parent);
+    if child == parent {
+        return true;
+    }
+    child.ends_with(&format!(".{parent}"))
+}
+
+fn is_strict_subdomain(child: &str, parent: &str) -> bool {
+    let child = normalize_domain(child);
+    let parent = normalize_domain(parent);
+    child != parent && child.ends_with(&format!(".{parent}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_network_request_from_url() {
-        let req = NetworkRequest::from_url("GET", "https://api.example.com/v1/data").unwrap();
-        assert_eq!(req.method, "GET");
-        assert_eq!(req.host, "api.example.com");
-        assert_eq!(req.path, "/v1/data");
-    }
+    use pretty_assertions::assert_eq;
 
     #[test]
-    fn test_extract_path() {
-        assert_eq!(
-            extract_path("https://example.com/api/v1"),
-            "/api/v1".to_string()
-        );
-        assert_eq!(extract_path("https://example.com"), "/".to_string());
-        assert_eq!(extract_path("https://example.com/"), "/".to_string());
-        assert_eq!(
-            extract_path("https://example.com/path?q=1#frag"),
-            "/path".to_string()
-        );
-        assert_eq!(extract_path("ftp://example.com/path"), "/".to_string());
-    }
-
-    #[tokio::test]
-    async fn test_default_policy_allows_listed_domain() {
-        let allowlist = DomainAllowlist::new(&["crates.io".to_string()]);
-        let decider = DefaultPolicyDecider::new(allowlist, vec![]);
-
-        let req = NetworkRequest::from_url("GET", "https://crates.io/api/v1/crates").unwrap();
-        let decision = decider.decide(&req).await;
-
-        assert!(decision.is_allowed());
-    }
-
-    #[tokio::test]
-    async fn test_default_policy_denies_unlisted_domain() {
-        let allowlist = DomainAllowlist::new(&["crates.io".to_string()]);
-        let decider = DefaultPolicyDecider::new(allowlist, vec![]);
-
-        let req = NetworkRequest::from_url("GET", "https://evil.com/steal").unwrap();
-        let decision = decider.decide(&req).await;
-
-        assert!(!decision.is_allowed());
-    }
-
-    #[tokio::test]
-    async fn deny_reason_is_typed_host_not_allowed() {
-        let allowlist = DomainAllowlist::new(&["crates.io".to_string()]);
-        let decider = DefaultPolicyDecider::new(allowlist, vec![]);
-
-        let req = NetworkRequest::from_url("GET", "https://evil.com/steal").unwrap();
-        let decision = decider.decide(&req).await;
-
-        let NetworkDecision::Deny { reason } = decision else {
-            panic!("expected Deny, got {:?}", decision);
-        };
-        // Type-safe: callers can branch on .kind() or pattern-match.
-        assert_eq!(reason.kind(), "host_not_allowed");
-        match reason {
-            NetworkDenyReason::HostNotAllowed { host, allowed } => {
-                assert_eq!(host, "evil.com");
-                assert_eq!(allowed, vec!["crates.io".to_string()]);
-            }
-            other => panic!("unexpected reason variant: {:?}", other),
-        }
-    }
-
-    #[tokio::test]
-    async fn deny_all_decider_carries_kill_switch_kind() {
-        let decider = DenyAllDecider::new("operator override");
-        let req = NetworkRequest::from_url("GET", "https://anything.com").unwrap();
-
-        let NetworkDecision::Deny { reason } = decider.decide(&req).await else {
-            panic!("DenyAll must always deny");
-        };
-        assert_eq!(reason.kind(), "kill_switch");
-        assert_eq!(reason.to_string(), "operator override");
-    }
-
-    #[tokio::test]
-    async fn empty_allowlist_yields_typed_reason() {
-        let decider = DefaultPolicyDecider::new(DomainAllowlist::empty(), vec![]);
-        let req = NetworkRequest::from_url("GET", "https://crates.io").unwrap();
-
-        let NetworkDecision::Deny { reason } = decider.decide(&req).await else {
-            panic!("empty allowlist must deny");
-        };
-        assert_eq!(reason.kind(), "empty_allowlist");
-    }
-
-    #[tokio::test]
-    async fn test_credential_injection() {
-        let allowlist = DomainAllowlist::new(&["api.openai.com".to_string()]);
-        let credentials = vec![CredentialMapping::bearer(
-            "OPENAI_API_KEY",
-            "api.openai.com",
-        )];
-        let decider = DefaultPolicyDecider::new(allowlist, credentials);
-
-        let req =
-            NetworkRequest::from_url("POST", "https://api.openai.com/v1/chat/completions").unwrap();
-        let decision = decider.decide(&req).await;
-
-        match decision {
-            NetworkDecision::AllowWithCredentials { secret_name, .. } => {
-                assert_eq!(secret_name, "OPENAI_API_KEY");
-            }
-            _ => panic!("Expected AllowWithCredentials"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_credential_injection_with_wildcard_host_pattern() {
-        let allowlist =
-            DomainAllowlist::new(&["api.example.com".to_string(), "sub.example.com".to_string()]);
-        let credentials = vec![CredentialMapping {
-            secret_name: "EXAMPLE_KEY".to_string(),
-            location: CredentialLocation::AuthorizationBearer,
-            host_patterns: vec!["*.example.com".to_string()],
-            optional: false,
-        }];
-        let decider = DefaultPolicyDecider::new(allowlist, credentials);
-
-        let req = NetworkRequest::from_url("GET", "https://api.example.com/data").unwrap();
-        let decision = decider.decide(&req).await;
-
-        match decision {
-            NetworkDecision::AllowWithCredentials { secret_name, .. } => {
-                assert_eq!(secret_name, "EXAMPLE_KEY");
-            }
-            _ => panic!("Expected AllowWithCredentials for wildcard match"),
-        }
-
-        let req2 = NetworkRequest::from_url("GET", "https://sub.example.com/data").unwrap();
-        let decision2 = decider.decide(&req2).await;
-        assert!(
-            matches!(decision2, NetworkDecision::AllowWithCredentials { .. }),
-            "Wildcard pattern should match sub.example.com too"
-        );
+    fn method_allowed_full_allows_everything() {
+        assert!(NetworkMode::Full.allows_method("GET"));
+        assert!(NetworkMode::Full.allows_method("POST"));
+        assert!(NetworkMode::Full.allows_method("CONNECT"));
     }
 
     #[test]
-    fn test_host_matches_pattern_exact() {
-        assert!(host_matches_pattern("api.openai.com", "api.openai.com"));
-        assert!(!host_matches_pattern("api.openai.com", "evil.com"));
+    fn method_allowed_limited_allows_only_safe_methods() {
+        assert!(NetworkMode::Limited.allows_method("GET"));
+        assert!(NetworkMode::Limited.allows_method("HEAD"));
+        assert!(NetworkMode::Limited.allows_method("OPTIONS"));
+        assert!(!NetworkMode::Limited.allows_method("POST"));
+        assert!(!NetworkMode::Limited.allows_method("CONNECT"));
     }
 
     #[test]
-    fn test_host_matches_pattern_wildcard() {
-        assert!(host_matches_pattern("api.example.com", "*.example.com"));
-        assert!(!host_matches_pattern("example.com", "*.example.com"));
+    fn compile_globset_normalizes_trailing_dots() {
+        let set = compile_denylist_globset(&["Example.COM.".to_string()]).unwrap();
+
+        assert_eq!(true, set.is_match("example.com"));
+        assert_eq!(false, set.is_match("api.example.com"));
+    }
+
+    #[test]
+    fn compile_globset_normalizes_wildcards() {
+        let set = compile_denylist_globset(&["*.Example.COM.".to_string()]).unwrap();
+
+        assert_eq!(true, set.is_match("api.example.com"));
+        assert_eq!(false, set.is_match("example.com"));
+    }
+
+    #[test]
+    fn compile_globset_supports_mid_label_wildcards() {
+        let set = compile_denylist_globset(&["region*.v2.argotunnel.com".to_string()]).unwrap();
+
+        assert_eq!(true, set.is_match("region1.v2.argotunnel.com"));
+        assert_eq!(true, set.is_match("region.v2.argotunnel.com"));
+        assert_eq!(false, set.is_match("xregion1.v2.argotunnel.com"));
+        assert_eq!(false, set.is_match("foo.region1.v2.argotunnel.com"));
+    }
+
+    #[test]
+    fn compile_globset_normalizes_apex_and_subdomains() {
+        let set = compile_denylist_globset(&["**.Example.COM.".to_string()]).unwrap();
+
+        assert_eq!(true, set.is_match("example.com"));
+        assert_eq!(true, set.is_match("api.example.com"));
+    }
+
+    #[test]
+    fn compile_globset_normalizes_bracketed_ipv6_literals() {
+        let set = compile_denylist_globset(&["[::1]".to_string()]).unwrap();
+
+        assert_eq!(true, set.is_match("::1"));
+    }
+
+    #[test]
+    fn is_loopback_host_handles_localhost_variants() {
+        assert!(is_loopback_host(&Host::parse("localhost").unwrap()));
+        assert!(is_loopback_host(&Host::parse("localhost.").unwrap()));
+        assert!(is_loopback_host(&Host::parse("LOCALHOST").unwrap()));
+        assert!(!is_loopback_host(&Host::parse("notlocalhost").unwrap()));
+    }
+
+    #[test]
+    fn is_loopback_host_handles_ip_literals() {
+        assert!(is_loopback_host(&Host::parse("127.0.0.1").unwrap()));
+        assert!(is_loopback_host(&Host::parse("::1").unwrap()));
+        assert!(!is_loopback_host(&Host::parse("1.2.3.4").unwrap()));
+    }
+
+    #[test]
+    fn is_non_public_ip_rejects_private_and_loopback_ranges() {
+        assert!(is_non_public_ip("127.0.0.1".parse().unwrap()));
+        assert!(is_non_public_ip("10.0.0.1".parse().unwrap()));
+        assert!(is_non_public_ip("192.168.0.1".parse().unwrap()));
+        assert!(is_non_public_ip("100.64.0.1".parse().unwrap()));
+        assert!(is_non_public_ip("192.0.0.1".parse().unwrap()));
+        assert!(is_non_public_ip("192.0.2.1".parse().unwrap()));
+        assert!(is_non_public_ip("198.18.0.1".parse().unwrap()));
+        assert!(is_non_public_ip("198.51.100.1".parse().unwrap()));
+        assert!(is_non_public_ip("203.0.113.1".parse().unwrap()));
+        assert!(is_non_public_ip("240.0.0.1".parse().unwrap()));
+        assert!(is_non_public_ip("0.1.2.3".parse().unwrap()));
+        assert!(!is_non_public_ip("8.8.8.8".parse().unwrap()));
+
+        assert!(is_non_public_ip("::ffff:127.0.0.1".parse().unwrap()));
+        assert!(is_non_public_ip("::ffff:10.0.0.1".parse().unwrap()));
+        assert!(!is_non_public_ip("::ffff:8.8.8.8".parse().unwrap()));
+
+        assert!(is_non_public_ip("::1".parse().unwrap()));
+        assert!(is_non_public_ip("fe80::1".parse().unwrap()));
+        assert!(is_non_public_ip("fc00::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn normalize_host_lowercases_and_trims() {
+        assert_eq!(normalize_host("  ExAmPlE.CoM  "), "example.com");
+    }
+
+    #[test]
+    fn normalize_host_strips_port_for_host_port() {
+        assert_eq!(normalize_host("example.com:1234"), "example.com");
+    }
+
+    #[test]
+    fn normalize_host_preserves_unbracketed_ipv6() {
+        assert_eq!(normalize_host("2001:db8::1"), "2001:db8::1");
+    }
+
+    #[test]
+    fn normalize_host_strips_trailing_dot() {
+        assert_eq!(normalize_host("example.com."), "example.com");
+        assert_eq!(normalize_host("ExAmPlE.CoM."), "example.com");
+    }
+
+    #[test]
+    fn normalize_host_strips_trailing_dot_with_port() {
+        assert_eq!(normalize_host("example.com.:443"), "example.com");
+    }
+
+    #[test]
+    fn normalize_host_strips_brackets_for_ipv6() {
+        assert_eq!(normalize_host("[::1]"), "::1");
+        assert_eq!(normalize_host("[::1]:443"), "::1");
     }
 }
