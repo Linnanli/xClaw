@@ -1,0 +1,37 @@
+name: Bug 报告
+description: 已发布行为与预期不符
+title: "fix(<area>): <one-line bug>"
+labels: ["bug"]
+body:
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      description: 列出最小复现路径（命令、输入、环境）
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期 vs 实际
+    validations:
+      required: true
+  - type: input
+    id: source_doc
+    attributes:
+      label: 关联文档（选填）
+      description: |
+        如本 bug 涉及架构红线，粘贴 `docs/plans/architecture-refactor/...md §...`
+        Coding Agent 会按 `copilot-instructions.md §1` 阅读链接内容。
+      placeholder: docs/plans/architecture-refactor/?.md §?
+  - type: input
+    id: env
+    attributes:
+      label: 环境
+      description: OS / rustc / 涉及 crate 版本
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / 栈

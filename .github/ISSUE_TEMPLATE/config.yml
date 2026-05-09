@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 一般问题 / 提问
+    url: https://github.com/Linnanli/xClaw/discussions
+    about: 不属于架构重构 / bug / 跟踪类的提问，请去 Discussions。

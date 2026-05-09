@@ -1,0 +1,27 @@
+name: 跟踪 / 元 issue
+description: 跟踪一组改动 / 长期问题 / 非派单类元 issue
+title: "tracking: <topic>"
+labels: ["tracking"]
+body:
+  - type: textarea
+    id: scope
+    attributes:
+      label: 跟踪范围
+    validations:
+      required: true
+  - type: textarea
+    id: subtasks
+    attributes:
+      label: 子任务 / 关联 issue
+      placeholder: |
+        - [ ] #N — desc
+  - type: input
+    id: source_doc
+    attributes:
+      label: 关联文档（选填）
+      placeholder: docs/plans/architecture-refactor/?.md §?
+  - type: textarea
+    id: unblock_triggers
+    attributes:
+      label: 解除条件
+      description: 什么发生了这个 tracking 才能 close

@@ -6,10 +6,16 @@
 ## 1. 强制阅读顺序（开任何 PR 之前）
 
 1. [`AGENTS.md`](../AGENTS.md) — 中文规约总入口
-2. 本 issue body 顶部的 `**Source**:` 链接（指向 `docs/plans/architecture-refactor/...`）
+2. 本 issue body 顶部的 `**Source**:` 链接（指向 `docs/plans/architecture-refactor/...`） — **必须 `read_file` 至少一次**，禁止只看标题猜内容
 3. 涉及红线的 ADR：[`docs/plans/architecture-refactor/adr-112-compatibility-evaluation.md`](../docs/plans/architecture-refactor/adr-112-compatibility-evaluation.md)、
-   [`adr-113-hook-engine-unification.md`](../docs/plans/architecture-refactor/adr-113-hook-engine-unification.md)
+   [`adr-113-hook-engine-unification.md`](../docs/plans/architecture-refactor/adr-113-hook-engine-unification.md) +
+   issue body **关联 ADR** 字段中的全部条目 — 同样必须 `read_file`
 4. 触及 crate 的 `lib.rs` 模块文档
+
+> **Sources read 自检**（PR 必填）：在 PR body 的 `## Sources read` 段落中
+> 逐条回声你实际打开过的文件路径 + § 标题。**只写"已阅"会被视为未读**。
+> 模板见 [`.github/pull_request_template.md`](pull_request_template.md)。
+
 
 ## 2. 不要碰的红线
 
