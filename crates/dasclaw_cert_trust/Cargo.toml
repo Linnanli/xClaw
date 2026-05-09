@@ -1,0 +1,31 @@
+[package]
+# ADR-139 §4 — MITM CA trust-chain manager.
+#
+# This crate is **dasclaw original code**, not a verbatim port from codex
+# upstream (codex does not implement this layer). It centralizes:
+#   - CA install / uninstall / rotation against per-user OS keychains
+#   - env-var fallback (`SSL_CERT_FILE` / `REQUESTS_CA_BUNDLE` / `NODE_EXTRA_CA_CERTS`)
+#   - status / export utilities
+#
+# Implementation is cfg-gated per platform (macOS / Windows / Linux). PR1
+# (this commit) ships the API surface + module skeleton with all platform
+# entry points returning `Err(Error::NotImplemented)`. PR2 wires macOS +
+# Windows keychain code; PR3 wires Linux NSS DB. See ADR-139 §4.5.
+name = "dasclaw_cert_trust"
+version = "0.0.0-w8"
+edition = "2024"
+description = "MITM CA trust-chain manager (per-user keychain + env-var fallback)."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+name = "dasclaw_cert_trust"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tracing = "0.1"
+
+[dev-dependencies]
+pretty_assertions = "1"
