@@ -137,8 +137,27 @@ pub async fn start_network_proxy(cfg: &SandboxConfig) -> Result<NetworkProxyHand
     // having codex's runtime auto-reserve loopback ephemeral listeners
     // through its CODEX_HOME state file. The desktop-client owns the port
     // (`SandboxConfig::proxy_port`), so we pass it through.
-    let bind_http = SocketAddr::from(([127, 0, 0, 1], cfg.proxy_port));
-    let bind_socks = SocketAddr::from(([127, 0, 0, 1], 0));
+    //
+    // Caveat of the non-managed path: the verbatim API stores the
+    // *requested* address in `NetworkProxy.http_addr` and only binds inside
+    // `run()` — so when `proxy_port == 0` (ephemeral), `proxy.http_addr()`
+    // would still report port 0 to the desktop-client, which then cannot
+    // tell child containers where to send `HTTPS_PROXY`.
+    //
+    // Workaround: pre-reserve the ephemeral port locally, read its bound
+    // address, drop the listener, then pass the discovered port to the
+    // builder. Small TOCTOU window on desktop-client startup is acceptable
+    // (single-process boot, no contention).
+    let bind_http = match cfg.proxy_port {
+        0 => reserve_ephemeral_loopback_port().map_err(|e| SandboxError::Config {
+            reason: format!("reserve ephemeral http proxy port failed: {e}"),
+        })?,
+        port => SocketAddr::from(([127, 0, 0, 1], port)),
+    };
+    let bind_socks =
+        reserve_ephemeral_loopback_port().map_err(|e| SandboxError::Config {
+            reason: format!("reserve ephemeral socks proxy port failed: {e}"),
+        })?;
 
     let proxy = NetworkProxy::builder()
         .state(proxy_state)
@@ -163,6 +182,21 @@ pub async fn start_network_proxy(cfg: &SandboxConfig) -> Result<NetworkProxyHand
         proxy: Arc::new(proxy),
         _task: task,
     })
+}
+
+/// Bind a TCP listener to an ephemeral loopback port, read its
+/// OS-assigned address, and drop it. The returned `SocketAddr` is then
+/// passed to [`NetworkProxy::builder().http_addr(...)`] so that
+/// `proxy.http_addr()` reports the real bound port to callers.
+///
+/// Single-process desktop-client startup tolerates the brief
+/// drop→rebind window; the alternative (`managed_by_codex(true)`) is
+/// unsuitable here because the desktop-client owns its own bind config.
+fn reserve_ephemeral_loopback_port() -> std::io::Result<SocketAddr> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let addr = listener.local_addr()?;
+    drop(listener);
+    Ok(addr)
 }
 
 /// Env vars to inject into spawned child processes / containers so they
