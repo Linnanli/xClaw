@@ -1,0 +1,148 @@
+# ADR-141: Windows enterprise sandbox / resource-limit support matrix (research-only)
+
+- **Status**: 🟡 **Draft — proposes fail-closed default until #241 unblocks** (research-only ADR; implementation is **out of scope** for this PR)
+- **Date**: 2026-05-09
+- **Approver**: pending nally sign-off
+- **Authors**: GitHub Copilot agent
+- **Tracker**: [#91](https://github.com/Linnanli/xClaw/issues/91) — [P1/W3] Windows sandbox/resource-limit support plan
+- **Related**:
+  - [#28](https://github.com/Linnanli/xClaw/issues/28) — P0-A enterprise shell fail-closed contract (`adr-redline`, decision deferred to nally)
+  - [#241](https://github.com/Linnanli/xClaw/issues/241) — Fork codex-windows-sandbox into dasclaw monorepo (`blocked` epic)
+  - [ADR-129](adr-129-sandbox-windows-windows-crate-adoption.md) — verbatim red line for `dasclaw_sandbox_windows`
+  - [ADR-130](adr-130-sandbox-windows-lib-bin-split.md) — lib/bin split landed
+  - [ADR-131](adr-131-windows-job-object-resource-limits-wrapper.md) — Windows Job Object resource limits **accepted + B1/B2/B3 landed**
+  - [ADR-135](adr-135-sandboxing-crate-adoption-eval.md) — codex `sandboxing` crate (landlock V3 + sbpl + Windows ACL) adoption — pending sign-off
+  - [#324](https://github.com/Linnanli/xClaw/issues/324) sub-task 1 — process-hardening (PR #343 + #348 merged)
+
+---
+
+## 1. Context
+
+`#91` asks for an explicit Windows enterprise support plan so that P0-A's fail-closed contract (`#28`) does not silently degrade on Windows. Today the Windows posture is partially built but not declared, and that ambiguity is the audit risk #91 captures.
+
+### 1.1 What already ships on Windows (verified)
+
+| Layer | Component | Status | Source |
+|---|---|---|---|
+| Process hardening (`SetProcessMitigationPolicy` + dangerous-env scrub) | `dasclaw_process_hardening::pre_main_hardening` | ✅ wired into `dasclaw` / `ironclaw` / `dasclaw-sandbox-resource-launcher` | PR #343 + #348 |
+| Resource limits (CPU / memory / wall-clock / job tree kill) | `dasclaw_sandbox` Job Object launcher (`resource_launcher_win.rs`) | ✅ Slice B1/B2/B3 landed | ADR-131 §3 — PR #329 / #328 / #333 |
+| Application-layer policy (exec allow-list + argv shape) | `dasclaw_execpolicy` | ✅ verbatim port | PR #341 |
+| Application-layer bash validation | `dasclaw_bash_validation` | ✅ | existing |
+| OS-level filesystem / network sandbox | `dasclaw_sandbox_windows` (verbatim port of codex `windows-sandbox-rs` @ `6e838a19fa`) | ⚠️ scaffold only — `setup_main` / `command_runner` bins compile; **not yet wired into `dasclaw_exec` spawn path** | ADR-129/130; bins in `crates/dasclaw_sandbox_windows/src/bin/` |
+| Kernel-layer `read_only_subpaths` enforcement (`.git/hooks` / `.codex` / `.git/config` carve-outs) | codex `sandboxing` crate (`WindowsSandboxFilesystemOverrides::additional_deny_write_paths`) | ❌ not ported (blocked on ADR-135 / #324 sub-task 2) | ADR-135 §1.1 |
+
+### 1.2 What is missing or undeclared
+
+1. **No declared support tier.** Today `is_path_writable` does user-space carve-out checks, but kernel-layer enforcement of `read_only_subpaths` on Windows is acknowledged as a "known limitation" in [`crates/dasclaw_exec/src/lib.rs:11-15`](../../crates/dasclaw_exec/src/lib.rs).
+2. **No fail-closed contract test for Windows enterprise mode.** Linux/macOS contract tests assert that `SandboxError` is returned when the kernel backend is unavailable; the equivalent Windows assertion does not exist because the Windows OS sandbox is not yet wired.
+3. **`#241` blocks the OS sandbox wire-up.** The epic that ports `windows-sandbox-rs` end-to-end is labelled `blocked`, so any "Windows enterprise = full OS sandbox" claim is premature.
+4. **`#28` is `adr-redline`.** The fail-closed _policy_ decision belongs to nally; this ADR only documents the _matrix_ and the gap, it does not change `#28`'s policy.
+
+### 1.3 Three-way verification (per AGENTS.md §"分析工具使用规范")
+
+- Level 1 (`semantic_search` "windows sandbox spawn", "job object resource limit") — confirmed `dasclaw_sandbox_windows` bins exist and compile but are not invoked from `dasclaw_exec`.
+- Level 2 (`vscode_listCodeUsages` `pre_main_hardening`) — wired only in 3 binaries (`ironclaw/main.rs`, `resource_launcher_win.rs`, codex upstream `responses-api-proxy`); _not_ wired in `dasclaw_sandbox_windows::bin::{setup_main,command_runner}` because codex upstream does not wire them either (ADR-129 §1.3).
+- Level 3 (`rg "WindowsSandboxFilesystemOverrides"`) — only matches in `codex-cli-main/codex-rs/core/src/exec.rs`; zero matches in `crates/`. Confirms ADR-135 gap.
+
+---
+
+## 2. Decision options
+
+### 2A. **Declare Windows enterprise mode "fail-closed by default; opt-in soft mode behind feature flag"** (recommended)
+
+- Default behaviour on Windows when `enterprise_mode = true`:
+  - Process hardening + Job Object resource limits + execpolicy + bash validation are **required** (all already shipped).
+  - OS-level filesystem / network sandbox **required**; if `dasclaw_sandbox_windows` is not wired into the spawn path (current state), `dasclaw_exec` returns `SandboxError::WindowsSandboxNotAvailable`. No silent fallback to direct exec.
+  - Kernel-layer `read_only_subpaths` carve-outs **required**; if codex `sandboxing` crate (ADR-135) is not yet ported, `dasclaw_exec` returns `SandboxError::ReadOnlySubpathsKernelEnforcementMissing`. Caller may downgrade to user-space-only enforcement only if an explicit `enterprise_allow_userspace_carveouts = true` config flag is set _and_ logged.
+- Pros: matches Linux/macOS posture; `#28` policy preserved; aligns with codex upstream "refusing to run unsandboxed" pattern in `core/src/exec.rs:1006-1024`.
+- Cons: until `#241` unblocks, Windows enterprise users effectively cannot run sandboxed shell — they must explicitly opt into the soft mode flag, which gives them a clear audit trail.
+
+### 2B. **Declare Windows enterprise mode "unsupported until `#241` lands"**
+
+- `dasclaw_exec` returns `SandboxError::WindowsEnterpriseUnsupported` unconditionally on Windows when `enterprise_mode = true`.
+- Pros: zero ambiguity; users get a single, durable error message.
+- Cons: blocks all Windows enterprise adoption pending `#241`; breaks any in-flight Windows pilots; reduces real-world feedback that would inform the eventual port.
+
+### 2C. **Status quo: silent user-space-only enforcement on Windows**
+
+- Keep current behaviour where `is_path_writable` and execpolicy together guard the carve-outs; no kernel layer asserted; no error raised.
+- Pros: no code change.
+- Cons: violates `#28` fail-closed contract; the audit risk in `#91` remains; new vulnerabilities (e.g. TOCTOU on `.git/hooks`) ship to enterprise without surfacing.
+
+---
+
+## 3. Recommendation
+
+Adopt **2A**. Concretely, sequence as five small PRs, each gated behind its own ADR / issue, none of which is implemented in this ADR PR:
+
+### PR-W1 — Surface `SandboxError::WindowsSandboxNotAvailable` (effort: S, risk: low)
+
+- Add the variant to `dasclaw_sandbox::SandboxError` and `dasclaw_exec::ExecError`.
+- In `dasclaw_exec::ProcessExecutor::spawn` Windows branch: when `enterprise_mode = true` and `dasclaw_sandbox_windows` is not wired (compile-time `cfg`), return the new variant instead of falling through.
+- Contract test: `req_dasclaw_exec_windows_enterprise_fail_closed_when_no_sandbox`.
+- Issue: spin a sub-issue under `#91`.
+
+### PR-W2 — Surface `SandboxError::ReadOnlySubpathsKernelEnforcementMissing` + opt-in soft flag (effort: S, risk: low)
+
+- Add `enterprise_allow_userspace_carveouts: bool` (default `false`) to the relevant config schema.
+- In `dasclaw_exec` Windows branch: when carve-outs are present and the codex `sandboxing` crate has not yet been ported, return the new variant unless the soft flag is set; log a structured audit event when the flag is honoured.
+- Contract test: both fail-closed and soft-flag paths.
+
+### PR-W3 — Wire `dasclaw_sandbox_windows::setup_main` / `command_runner` into the `dasclaw_exec` spawn path (effort: M, risk: med)
+
+- Depends on `#241` unblocking and on ADR-129 §1.3 verbatim red line — wiring lives in **xClaw-only** glue code outside the verbatim crate.
+- Out of scope for this ADR; tracked under `#241`.
+
+### PR-W4 — Port codex `sandboxing` crate per ADR-135 Wave-B PR-B1 (effort: XL, risk: high)
+
+- Provides kernel-layer `additional_deny_write_paths` / Windows ACL DENY entries for `read_only_subpaths`.
+- Out of scope for this ADR; tracked under `#324` sub-task 2.
+
+### PR-W5 — Documentation + support-matrix snapshot (effort: S, risk: low)
+
+- Update `docs/plans/architecture-refactor/35-codex-capability-inventory.md` Windows column to reflect the matrix in §1.1 above.
+- Update `desktop-client/README.md` and any user-facing docs that mention Windows enterprise mode.
+
+Each PR is a single issue / single ADR / single review. None bundles multiple platforms or layers.
+
+---
+
+## 4. Out of scope (this ADR PR)
+
+❌ **No Rust code changes** — this PR is documentation only.
+
+❌ Does not change `#28` fail-closed policy; that remains nally's `adr-redline` decision.
+
+❌ Does not unblock `#241`; the OS sandbox port keeps its existing tracker.
+
+❌ Does not duplicate ADR-135's kernel-layer port plan; PR-W4 simply schedules ADR-135's recommendation onto the Windows critical path.
+
+❌ Does not modify the verbatim red line — `crates/dasclaw_sandbox_windows/src/bin/{setup_main,command_runner}.rs` stay byte-identical to codex upstream; all xClaw-side glue lives in `dasclaw_exec` / `dasclaw_sandbox`.
+
+---
+
+## 5. Validation (this ADR PR)
+
+```bash
+# Doc-only PR. Red-line guards must all pass.
+python3.12 scripts/check_no_panics.py --base origin/xClaw                     # OK (no .rs changed)
+python3   scripts/check_no_new_ironclaw_literal.py --base origin/xClaw        # OK
+cargo fmt --all -- --check                                                    # OK (no .rs changed)
+```
+
+No `cargo check` / `clippy` / `nextest` runs — no code changes.
+
+---
+
+## 6. Open questions (for reviewer)
+
+1. **OQ-1 — Default for `enterprise_allow_userspace_carveouts`.** This ADR proposes `false` (fail-closed). nally to confirm; alternative is `true` with a deprecation timer until PR-W4 lands.
+2. **OQ-2 — Naming of the new `SandboxError` variants.** Proposed names mirror existing codex `core/src/exec.rs:1006-1024` strings; nally to ratify or rename before PR-W1 is opened.
+3. **OQ-3 — Windows audit-event channel.** PR-W2's structured audit log needs a sink. Re-use existing `dasclaw_observability` event taxonomy or define a new `enterprise.windows.softmode_used` event? Defer to PR-W2 ADR.
+4. **OQ-4 — Telemetry for "Windows enterprise mode activated without OS sandbox".** Should this be a metric (count) or a structured event (per-spawn)? Default to event for forensic value; OQ deferred.
+
+---
+
+## 7. Decision log
+
+- 2026-05-09 — Draft created from `#91` scope; recommends 2A (fail-closed default + opt-in soft flag) over 2B (full unsupported) and 2C (silent status quo). Awaits nally sign-off.
