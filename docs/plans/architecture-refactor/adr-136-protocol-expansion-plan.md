@@ -202,17 +202,34 @@ codex-protocol
 
 | PR | 内容 | 文件数 | 估算 LOC | 备注 |
 |---|---|---|---|---|
-| **PR-C1.1** | rename `dasclaw_parsed_command` → `dasclaw_protocol` + drift guard 拆分 | 14（含 rename）| +217 / -63 | ✅ 已开 [#382](https://github.com/Linnanli/xClaw/pull/382)（in-flight） |
-| **PR-C1.2** | Layer 1：14 个叶子文件 verbatim port + lib.rs 出口（`AgentPath` / `ThreadId` / `ToolName`）| 14 + lib.rs + drift guard | ~2,500-3,000 | 单 PR；全 zero `crate::` deps，机械度高 |
-| **PR-C1.3** | Layer 2：`config_types.rs` + `openai_models.rs`（互相循环依赖）| 2 + lib.rs + drift guard | ~1,534 | 必须同 PR；解锁 Layer 3 |
-| **PR-C1.4** | Layer 3：`protocol.rs` + `permissions.rs` + `models.rs` + `approvals.rs` + `network_policy.rs` + `items.rs` + `request_permissions.rs` | 7 + lib.rs + drift guard | ~12,000 | 最大 PR；inner cycle protocol↔permissions↔models 必须同 PR；**也是 §6 Q2 实测验证点**——这里发现 `codex_async_utils` / `codex_utils_string` / `codex_utils_image` / `codex_network_proxy` 的 use 真实数量并触发选项 Z（utils file-level slice）|
+| **PR-C1.1** | rename `dasclaw_parsed_command` → `dasclaw_protocol` + drift guard 拆分 | 14（含 rename）| +217 / -63 | ✅ 已合 [#382](https://github.com/Linnanli/xClaw/pull/382) |
+| **PR-C1.2** | Layer 1：14 个叶子文件 verbatim port + lib.rs 出口（`AgentPath` / `ThreadId` / `ToolName`）| 14 + lib.rs + drift guard | ~2,500-3,000 | ✅ 已合 [#389](https://github.com/Linnanli/xClaw/pull/389) — 单 PR；全 zero `crate::` deps |
+| **PR-C1.3** | Layer 2：`config_types.rs` + `openai_models.rs`（互相循环依赖）| 2 + lib.rs + drift guard | ~1,534 | ✅ 已合 [#391](https://github.com/Linnanli/xClaw/pull/391) — 必须同 PR；解锁 Layer 3 |
+| **PR-C1.prep-1** | vendor 新 crate `dasclaw_async_utils`（small file-level slice，非全 port）| 1 crate, 1 file | ~86 | 解锁 `error.rs::CancelErr`；formal name 替代 line 161 "选项 Z 不新建 crate" 旧建议（见 §3.2 修订说明）|
+| **PR-C1.prep-2** | vendor 新 crate `dasclaw_utils_string`（small file-level slice）| 1 crate | ~436 | 解锁 `error.rs::truncate_middle_*` |
+| **PR-C1.prep-3** | vendor 新 crate `dasclaw_utils_cache`（small file-level slice）| 1 crate | ~?（先实测）| `dasclaw_utils_image` 的 transitive dep；amendment 1 漏列 |
+| **PR-C1.prep-4** | vendor 新 crate `dasclaw_utils_image`（small file-level slice）| 1 crate | ~404 | 解锁 `models.rs` / `permissions.rs` 中 `PromptImageMode` / `ImageProcessingError` / `load_for_prompt_bytes` |
+| **PR-C1.4a** | Layer 3 inner cycle：`protocol.rs` + `permissions.rs` + `models.rs` + `request_permissions.rs` | 4 + lib.rs + drift guard | ~9,000 | inner cycle protocol↔permissions↔models 必须同 PR；硬性拆出 |
+| **PR-C1.4b** | Layer 3 outer：`approvals.rs` + `network_policy.rs` + `items.rs` | 3 + lib.rs + drift guard | ~3,000 | 只 use C1.4a；C1.4a merge 后启动 |
 | **PR-C1.5** | Layer 4：`error.rs` + `error_tests.rs` | 2 + lib.rs + drift guard | ~1,182 | 收尾；C1 闭环 |
 
-**总数**：5 个 PR（与原计划相同），但每个 PR 现在都能独立编译。
+**总数**：10 个 PR（amendment 1 是 5 个，本 amendment 2 增加 4 个 prep + 把 C1.4 强制拆为 a/b）。每个 PR 现在都能独立编译且 LOC 中位数 ~1.5K，Layer 3 不再有单 PR ~12K 的体积风险。
 
-**每个 PR 仍需验证**：`cargo check -p dasclaw_protocol` 通过 + drift guard 通过 + 旧 use-path 全部 swap 完毕。
+**每个 PR 仍需验证**：`cargo check -p <touched-crate>` 通过 + drift guard 通过 + 旧 use-path 全部 swap 完毕。
 
-**Layer 3 拆分应急方案**（如 reviewer 认为 ~12K LOC 单 PR 太大）：在 PR-C1.4 启动前先评估 `{protocol, permissions, models, request_permissions}` 与 `{approvals, network_policy, items}` 是否可拆为 C1.4a + C1.4b（前者 inner cycle 闭包，后者只 use 前者）。机械可行；视 reviewer bandwidth 决定。
+### 3.2 amendment 2 修订说明（2026-05-XX）
+
+amendment 1 在 `§3` PR 顺序与 `§2 选项 Z` 之间存在 3 处文档 drift / scope 估算偏低，本 amendment 2 对修订点显式收紧：
+
+1. **选项 Z 文字废止**：amendment 1 line 161 写"选项 Z（推荐）— ... **不新建 crate**" 与 line 266 "建议 vendor `dasclaw_network_proxy`（small file-level slice）" 实质矛盾。已实证 [`crates/dasclaw_net_proxy/`](../../../crates/dasclaw_net_proxy/) / [`crates/dasclaw_absolute_path/`](../../../crates/dasclaw_absolute_path/) / [`crates/dasclaw_features/`](../../../crates/dasclaw_features/) 全部按"小 vendor crate"范式落地。本 amendment 2 正式废止"不新建 crate"语义，统一到「**utils 移植 = 新建独立小 crate（file-level slice）**」范式。
+2. **utils scope 估算从 2 个补到 4 个**：amendment 1 §6 Q2 line 265 只列 `codex_async_utils` 与 `codex_utils_string`。本 amendment 2 补全到 4 个（增加 `codex_utils_image` + 其 transitive `codex_utils_cache`），来自 PR-C1.4 启动前对 `models.rs` / `permissions.rs` `^use ` 行的实测：
+   - `models.rs:8` `use codex_utils_image::PromptImageMode;`
+   - `models.rs:9` `use codex_utils_image::load_for_prompt_bytes;`
+   - `permissions.rs:26` `use codex_utils_image::ImageProcessingError;`
+   - 上游 `codex-cli-main/codex-rs/utils/image/Cargo.toml` 列 `codex-utils-cache = { workspace = true }`，故 `cache` 是 transitive 必备
+3. **Layer 3 单 PR ~12K LOC 强制拆 a/b**：amendment 1 line 215 "应急方案视 reviewer bandwidth 决定" 太软。本 amendment 2 直接把 C1.4 拆为 C1.4a (`protocol + permissions + models + request_permissions`，inner cycle 闭包) 与 C1.4b (`approvals + network_policy + items`，只 use C1.4a)，每片 LOC 中位数 ~3K，与 W4 ADR-121 D3-3 Phase 1.1.4 已实证的 Wave-batch 模型一致（参见 `/memories/repo/x-claw-notes.md` 2026-05-XX 收尾条目，30 模块 9 PR 0 rework 0 红 CI）。
+
+修订点 1-3 都是文档级，不动任何 Rust 代码。本 PR 落地后立即按新表格启动 PR-C1.prep-1。
 
 ### Step C2 — Full protocol port（W7+）
 
@@ -274,3 +291,4 @@ cargo fmt --all -- --check   # OK (no .rs changed)
 - **2026-05-08**: 起草，提出 2C two-tier 方案。等待 nally sign-off 决定走 2A 还是 2C。如选 2C，立即起 issue track step C1.1 - C1.5 五个 PR。
 - **2026-05-15**: nally 在 epic [#380](https://github.com/Linnanli/xClaw/issues/380) 批准 option 2C two-tier file-level verbatim slice；与 ADR-135 OQ-1 合流。下一步：为 step C1.1 起专属 issue（rename `dasclaw_parsed_command` → `dasclaw_protocol` + drift guard 重命名），作为 Wave-A1 的首个实现 PR。Q2 （`protocol.rs` 是否独立编译）仍作为 step C1.5 启动前验证门，不在本 ADR 预答。
 - **2026-05-XX (本 amendment)**: PR-C1.1 实施期间（[#382](https://github.com/Linnanli/xClaw/pull/382)），实测上游 protocol crate `^use ` 行得真实依赖图，发现原 §3 PR 顺序与依赖闭包冲突——`error.rs`（原 C1.2）传递依赖 `protocol.rs`（原 C1.5），`config_types.rs`（原 C1.3）与 `openai_models.rs` 循环依赖。按原顺序硬推会强制 stub 缺失类型 = 补丁式代码。本 amendment 把 §3 PR 拆分改为自底向上 4 层（叶子 → config_types+openai_models → protocol+models+permissions+approvals+items+network_policy+request_permissions → error），每个 PR 内部 cycle-closed 且只 use 下层；§6 Q2 部分回答归档；总 PR 数仍为 5（不变）。next: 起 PR-C1.2 实现 14 个叶子合并 PR。
+- **2026-05-XX (amendment 2)**: PR-C1.3（[#391](https://github.com/Linnanli/xClaw/pull/391)）merge 后准备 C1.4 时，对 `models.rs` / `permissions.rs` 全 grep 完成 §6 Q2 实测，发现 amendment 1 在 3 处不够严：(1) `§2 选项 Z`「不新建 crate」与 `§6 Q2 line 266`「vendor `dasclaw_network_proxy` small file-level slice」实质矛盾，已实证落地全部按"小 vendor crate"范式（dasclaw_net_proxy / dasclaw_absolute_path / dasclaw_features）；(2) §6 Q2 line 265 utils scope 估算只列 `async_utils` + `utils_string` 2 个，实际还需 `utils_image` + transitive `utils_cache` 共 4 个；(3) Layer 3 ~12K LOC 单 PR 应急拆分文字"视 reviewer bandwidth 决定"过软。本 amendment 2 修订 §3 表格：增加 PR-C1.prep-1..4（4 个 utils 小 vendor crate）+ 把 C1.4 强制拆为 C1.4a (4 文件 inner cycle 闭包) / C1.4b (3 文件 outer)；总 PR 数 5 → 10。修订点纯文档级，不动任何 Rust 代码。next: 本 PR merge 后立即启动 PR-C1.prep-1 (`dasclaw_async_utils`)。
