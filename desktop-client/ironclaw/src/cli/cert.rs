@@ -1,8 +1,14 @@
 //! `dasclaw cert` CLI — MITM CA trust-chain management.
 //!
 //! ADR-139 §4.3 — five subcommands dispatching to `dasclaw_cert_trust`.
-//! PR1 wires the subcommand surface; the underlying lib stubs return
-//! `NotImplemented` until PR2/PR3.
+//! PR1 wired the subcommand surface; PR2 (this commit) plumbs real PEM
+//! input through `--from <path>` for `install` / `rotate`.
+//!
+//! Generation of the CA itself is `dasclaw_net_proxy`'s job (ADR-139
+//! §3.6). Until that PR lands, callers point `--from` at a manually
+//! generated CA (`openssl req -x509 …`).
+
+use std::path::PathBuf;
 
 use clap::Subcommand;
 use dasclaw_cert_trust::Error as TrustError;
@@ -11,11 +17,21 @@ use dasclaw_cert_trust::Error as TrustError;
 #[derive(Subcommand, Debug, Clone)]
 pub enum CertCommand {
     /// Install the dasclaw MITM CA into the per-user trust store.
-    Install,
+    Install {
+        /// Path to a PEM-encoded CA certificate. Once `dasclaw_net_proxy`
+        /// auto-generates the CA (ADR-139 §3.6 follow-up) this flag will
+        /// default to `$CODEX_HOME/proxy/ca.pem`.
+        #[arg(long, value_name = "PATH")]
+        from: PathBuf,
+    },
     /// Remove the dasclaw MITM CA and clear `$CODEX_HOME/proxy/`.
     Revoke,
     /// Regenerate the CA and re-inject it.
-    Rotate,
+    Rotate {
+        /// Path to the new PEM-encoded CA certificate.
+        #[arg(long, value_name = "PATH")]
+        from: PathBuf,
+    },
     /// Show CA fingerprint, expiry, and trust-store state.
     Status {
         /// Emit JSON instead of human-readable output.
@@ -27,20 +43,17 @@ pub enum CertCommand {
 }
 
 /// Run a `dasclaw cert` subcommand.
-///
-/// PR1: every operation routes to the `dasclaw_cert_trust` stub layer and
-/// surfaces `NotImplemented` as a friendly error. The `Status` subcommand
-/// is the one path that succeeds end-to-end (returns
-/// `installed: false`).
 pub fn run_cert_command(cmd: CertCommand) -> anyhow::Result<()> {
     match cmd {
-        CertCommand::Install => {
-            // PR1 has no CA bytes to install yet; a placeholder is fine
-            // because the stub never inspects the input.
-            map_trust_result(dasclaw_cert_trust::install_ca(b""))
+        CertCommand::Install { from } => {
+            let pem = read_pem_file(&from)?;
+            map_trust_result(dasclaw_cert_trust::install_ca(&pem))
         }
         CertCommand::Revoke => map_trust_result(dasclaw_cert_trust::uninstall_ca()),
-        CertCommand::Rotate => map_trust_result(dasclaw_cert_trust::rotate_ca(b"")),
+        CertCommand::Rotate { from } => {
+            let pem = read_pem_file(&from)?;
+            map_trust_result(dasclaw_cert_trust::rotate_ca(&pem))
+        }
         CertCommand::Status { json } => print_status(json),
         CertCommand::Export => match dasclaw_cert_trust::export_ca_pem() {
             Ok(pem) => {
@@ -53,6 +66,10 @@ pub fn run_cert_command(cmd: CertCommand) -> anyhow::Result<()> {
     }
 }
 
+fn read_pem_file(path: &std::path::Path) -> anyhow::Result<Vec<u8>> {
+    std::fs::read(path).map_err(|err| anyhow::anyhow!("failed to read CA PEM at {path:?}: {err}"))
+}
+
 fn map_trust_result(result: Result<(), TrustError>) -> anyhow::Result<()> {
     match result {
         Ok(()) => Ok(()),
@@ -61,8 +78,6 @@ fn map_trust_result(result: Result<(), TrustError>) -> anyhow::Result<()> {
 }
 
 fn format_trust_error(err: TrustError) -> anyhow::Error {
-    // PR2/PR3 will replace `NotImplemented` with real backend errors;
-    // surface a stable user-facing string until then.
     anyhow::anyhow!("{err}")
 }
 
@@ -101,9 +116,9 @@ mod tests {
     #[test]
     fn parses_each_subcommand() {
         for argv in [
-            vec!["test", "install"],
+            vec!["test", "install", "--from", "/tmp/ca.pem"],
             vec!["test", "revoke"],
-            vec!["test", "rotate"],
+            vec!["test", "rotate", "--from", "/tmp/ca.pem"],
             vec!["test", "status"],
             vec!["test", "status", "--json"],
             vec!["test", "export"],
@@ -113,15 +128,24 @@ mod tests {
     }
 
     #[test]
-    fn install_routes_to_trust_lib_stub() {
-        let err = run_cert_command(CertCommand::Install).expect_err("PR1 install must error");
-        assert!(err.to_string().contains("not yet implemented"));
+    fn install_without_from_flag_is_rejected() {
+        let err = Wrapper::try_parse_from(["test", "install"])
+            .expect_err("missing --from must be a clap error");
+        assert!(err.to_string().contains("--from"), "unexpected: {err}");
     }
 
     #[test]
-    fn status_text_succeeds_on_stub() {
-        // `status` is the only subcommand that does not return NotImplemented
-        // in PR1 — the stub backends report `installed: false`.
+    fn install_with_missing_file_returns_io_error() {
+        // Path that cannot exist.
+        let err = run_cert_command(CertCommand::Install {
+            from: "/dev/null/nonexistent/ca.pem".into(),
+        })
+        .expect_err("missing file must error");
+        assert!(err.to_string().contains("failed to read CA PEM"));
+    }
+
+    #[test]
+    fn status_text_succeeds() {
         run_cert_command(CertCommand::Status { json: true }).expect("status must succeed");
     }
 }

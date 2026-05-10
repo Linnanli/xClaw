@@ -5,11 +5,12 @@
 //! original code** (not a verbatim port from codex upstream — codex does
 //! not provide an equivalent).
 //!
-//! # Status (PR1 / ADR-139 §4.5)
+//! # Status (PR2 / ADR-139 §4.5)
 //!
-//! All platform-specific entry points currently return
-//! [`Error::NotImplemented`]. PR2 (macOS + Windows keychain) and PR3
-//! (Linux NSS DB) will replace those stubs with real implementations.
+//! macOS + Windows backends are now fully wired (PR2). Linux NSS DB
+//! backend (PR3) and the env-var fallback still return
+//! [`Error::NotImplemented`] / no-op stubs and will be filled in by the
+//! follow-up PRs.
 //!
 //! # API
 //!
@@ -25,6 +26,8 @@
 #![deny(missing_docs)]
 
 pub mod error;
+mod paths;
+mod pem;
 pub mod platform;
 pub mod status;
 

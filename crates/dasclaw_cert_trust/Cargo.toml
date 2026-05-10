@@ -8,8 +8,8 @@
 #   - status / export utilities
 #
 # Implementation is cfg-gated per platform (macOS / Windows / Linux). PR1
-# (this commit) ships the API surface + module skeleton with all platform
-# entry points returning `Err(Error::NotImplemented)`. PR2 wires macOS +
+# shipped the API surface + module skeleton with all platform entry points
+# returning `Err(Error::NotImplemented)`. PR2 (this commit) wires macOS +
 # Windows keychain code; PR3 wires Linux NSS DB. See ADR-139 §4.5.
 name = "dasclaw_cert_trust"
 version = "0.0.0-w8"
@@ -26,6 +26,29 @@ path = "src/lib.rs"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 tracing = "0.1"
+# PR2 (ADR-139 §4.5) — PEM↔DER decoding, SHA-256 fingerprinting, and
+# base64 encoding (for `export` PEM rewrap) are cross-platform, so they
+# live in `[dependencies]` (not cfg-gated).
+rustls-pemfile = "2"
+sha2 = "0.10"
+base64 = "0.22"
+dirs = "6"
+
+# macOS — per-user login keychain via `security-framework`.
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
+
+# Windows — `CurrentUser\Root` cert store via `windows-rs`.
+[target.'cfg(target_os = "windows")'.dependencies]
+# Locked at 0.58 to match the rest of the dasclaw workspace
+# (desktop-client/Cargo.toml, desktop-client/ironclaw/Cargo.toml,
+# crates/dasclaw_sandbox_windows/Cargo.toml). ADR-139 §3.5 mentions 0.59
+# as a target; that bump must be coordinated workspace-wide.
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+] }
 
 [dev-dependencies]
 pretty_assertions = "1"
+tempfile = "3"
