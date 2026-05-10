@@ -47,6 +47,8 @@ members = [
 	"crates/dasclaw_utils_string",
 	# W6 ADR-136 §3 amendment 2 PR-C1.prep-3 — codex-utils-cache verbatim port (~193 LOC)
 	"crates/dasclaw_utils_cache",
+	# W6 ADR-136 §3 amendment 2 PR-C1.prep-4 — codex-utils-image verbatim port (~404 LOC)
+	"crates/dasclaw_utils_image",
 	# W8 ADR-139 §4.5 PR1 — MITM CA trust-chain manager (dasclaw original, not verbatim)
 	"crates/dasclaw_cert_trust",
 	"desktop-client/ironclaw",
