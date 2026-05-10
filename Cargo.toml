@@ -35,7 +35,8 @@ members = [
 	# W5 #324 sub-task 1 — codex-process-hardening verbatim port (pre-main hardening, 189 LOC)
 	"crates/dasclaw_process_hardening",
 	# W5 #326 Part 3a / ADR-133 — codex-shell-command verbatim port (3,348 LOC + command_safety 2,420 LOC)
-	"crates/dasclaw_parsed_command",
+	# W6 ADR-136 Step C1.1 — dasclaw_parsed_command renamed to dasclaw_protocol; will expand to file-level slice (~12,547 LOC) per ADR-136 §3 Step C1.2~C1.5
+	"crates/dasclaw_protocol",
 	"crates/dasclaw_shell_command",
 	# W5 #324 sub-task 3 / ADR-137 — codex-network-proxy transitive deps (verbatim port)
 	"crates/dasclaw_utils_home_dir",

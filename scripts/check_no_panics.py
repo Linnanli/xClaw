@@ -23,7 +23,7 @@ PANIC_PATTERN = re.compile(r"\.(?:unwrap|expect)\(|(?<!_)assert(?:_eq|_ne)?!")
 VERBATIM_PORTED_PREFIXES = (
     "crates/dasclaw_absolute_path/",       # ADR-132 — codex-utils-absolute-path
     "crates/dasclaw_execpolicy/",          # ADR-132 — codex-execpolicy
-    "crates/dasclaw_parsed_command/",      # ADR-133 — codex-protocol parse_command slice
+    "crates/dasclaw_protocol/",            # ADR-133 + ADR-136 — codex-protocol file-level slice
     "crates/dasclaw_sandbox_windows/",     # ADR-129 — codex sandbox-windows port
     "crates/dasclaw_shell_command/",       # ADR-133 — codex-shell-command
 )

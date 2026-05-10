@@ -11,7 +11,7 @@
   - [ADR-133](adr-133-shell-command-adoption-eval.md) — shell-command port (uses dasclaw_parsed_command 31 LOC slice)
   - [ADR-135](adr-135-sandboxing-crate-adoption-eval.md) — sandboxing port (Wave-A 阻塞前置)
   - codex 上游：`codex-cli-main/codex-rs/protocol/`（28 文件，16,053 LOC）
-  - dasclaw 现状：[`crates/dasclaw_parsed_command/`](../../../crates/dasclaw_parsed_command/)（31 LOC slice，由 PR #342 落地）
+  - dasclaw 现状：[`crates/dasclaw_protocol/`](../../../crates/dasclaw_protocol/)（31 LOC slice，由 PR #342 落地为 `dasclaw_parsed_command`，PR-C1.1 rename 为 `dasclaw_protocol`）
   - 已落地姊妹 verbatim：PR #341 `dasclaw_execpolicy` / PR #342 `dasclaw_shell_command` / PR #343 `dasclaw_process_hardening`
 
 ---

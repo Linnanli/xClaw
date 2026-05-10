@@ -2912,15 +2912,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dasclaw_parsed_command"
-version = "0.0.0-w5"
-dependencies = [
- "schemars 0.8.22",
- "serde",
- "ts-rs",
-]
-
-[[package]]
 name = "dasclaw_process_hardening"
 version = "0.0.0-w5"
 dependencies = [
@@ -2933,6 +2924,15 @@ name = "dasclaw_project_docs"
 version = "0.0.0-w1"
 dependencies = [
  "tempfile",
+]
+
+[[package]]
+name = "dasclaw_protocol"
+version = "0.0.0-w6"
+dependencies = [
+ "schemars 0.8.22",
+ "serde",
+ "ts-rs",
 ]
 
 [[package]]
@@ -3002,7 +3002,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "dasclaw_absolute_path",
- "dasclaw_parsed_command",
+ "dasclaw_protocol",
  "once_cell",
  "pretty_assertions",
  "regex",
