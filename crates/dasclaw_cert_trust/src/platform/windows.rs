@@ -57,7 +57,7 @@ impl TrustStore for WindowsTrustStore {
     }
 
     fn install(&self, ca_pem: &[u8]) -> Result<()> {
-        let der = pem::decode_first_certificate(ca_pem)?;
+        let der = pem::decode_and_validate_root_ca(ca_pem)?;
         let fingerprint = pem::sha256_hex(&der);
         let store = open_root_store()?;
         let result = unsafe {

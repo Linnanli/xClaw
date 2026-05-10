@@ -25,6 +25,20 @@ pub enum Error {
     #[error("dasclaw_cert_trust: invalid CA PEM: {0}")]
     InvalidPem(String),
 
+    /// The PEM decoded successfully but the X.509 body is unfit to be
+    /// installed as a per-user root CA.
+    ///
+    /// Examples (issue #375 / ADR-139 §3.7 fail-safe):
+    /// - `BasicConstraints` extension absent or `cA: false` (leaf cert)
+    /// - `notAfter` already in the past (expired CA)
+    /// - issuer ≠ subject (non-self-signed intermediate)
+    ///
+    /// Distinguished from [`Error::InvalidPem`] (which means the input
+    /// was not even syntactically a certificate) so the CLI can give a
+    /// more actionable message.
+    #[error("dasclaw_cert_trust: CA cert rejected: {0}")]
+    InvalidCa(String),
+
     /// Underlying OS / I/O failure.
     #[error("dasclaw_cert_trust: I/O error: {0}")]
     Io(#[from] io::Error),
@@ -63,6 +77,14 @@ mod tests {
     fn invalid_pem_includes_reason() {
         let err = Error::InvalidPem("missing -----BEGIN CERTIFICATE-----".into());
         assert!(err.to_string().contains("missing -----BEGIN"));
+    }
+
+    #[test]
+    fn invalid_ca_includes_reason() {
+        let err = Error::InvalidCa("BasicConstraints CA:FALSE".into());
+        let msg = err.to_string();
+        assert!(msg.contains("CA cert rejected"), "wrong prefix: {msg}");
+        assert!(msg.contains("BasicConstraints"), "missing reason: {msg}");
     }
 
     #[test]
