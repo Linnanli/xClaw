@@ -1,0 +1,27 @@
+[package]
+name = "dasclaw_utils_image"
+version = "0.0.0-w7"
+edition = "2024"
+license = "Apache-2.0 OR MIT"
+publish = false
+
+# ADR-136 §3 amendment 2 PR-C1.prep-4 — verbatim port of codex-cli-main
+# `codex-utils-image` (~404 LOC). Per ADR-129 §1.3 the only edits permitted
+# in this Cargo.toml are mechanical package name swaps:
+#   codex-utils-image -> dasclaw_utils_image
+#   codex-utils-cache -> dasclaw_utils_cache (path dep, see below)
+# All dep version pins are taken verbatim from
+# codex-cli-main/codex-rs/Cargo.toml workspace.dependencies (xClaw does not
+# use a [workspace.dependencies] table — versions are inlined per crate to
+# match prep-1 / prep-2 / prep-3 precedent).
+
+[dependencies]
+base64 = "0.22.1"
+image = { version = "^0.25.9", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+dasclaw_utils_cache = { path = "../dasclaw_utils_cache" }
+mime_guess = "2.0.5"
+thiserror = "2.0.17"
+tokio = { version = "1", features = ["fs", "rt", "rt-multi-thread", "macros"] }
+
+[dev-dependencies]
+image = { version = "^0.25.9", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
