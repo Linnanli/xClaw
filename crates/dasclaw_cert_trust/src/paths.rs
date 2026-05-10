@@ -46,13 +46,30 @@ pub(crate) fn fingerprint_path() -> Result<PathBuf> {
 /// Persist the SHA-256 hex fingerprint of the just-installed CA.
 ///
 /// Creates `$CODEX_HOME/proxy/` on demand. Overwrites any prior value
-/// (rotation is install-after-uninstall).
+/// (rotation is install-after-uninstall). Writes are **atomic** via
+/// tempfile + rename so a crash mid-write leaves either the old
+/// fingerprint or the new one — never a half-written file. This is
+/// load-bearing: the keychain backends rely on the sentinel being
+/// authoritative; a truncated file would make `status()` falsely report
+/// "not installed" while the real CA is still trusted by the OS.
 pub(crate) fn write_fingerprint(fp_hex: &str) -> Result<()> {
     let path = fingerprint_path()?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+    let parent = path.parent().ok_or_else(|| {
+        Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "fingerprint path has no parent directory",
+        ))
+    })?;
+    std::fs::create_dir_all(parent)?;
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+    {
+        use std::io::Write as _;
+        tmp.write_all(fp_hex.as_bytes())?;
+        tmp.flush()?;
     }
-    std::fs::write(&path, fp_hex.as_bytes())?;
+    // `persist` does an atomic rename on POSIX; on Windows it falls back
+    // to MoveFileEx which is also atomic for same-volume renames.
+    tmp.persist(&path).map_err(|err| Error::Io(err.error))?;
     Ok(())
 }
 
@@ -139,5 +156,30 @@ mod tests {
         // Third call — file is gone again.
         clear_fingerprint().expect("third clear");
         assert!(read_fingerprint().expect("read").is_none());
+    }
+
+    #[test]
+    fn write_fingerprint_overwrites_atomically() {
+        // Atomic-rename contract: rewriting the same path with a new
+        // value yields the new value, never a half-written merge.
+        let td = TempDir::new().expect("tempdir");
+        with_codex_home(&td);
+        write_fingerprint("aaaa").expect("first write");
+        write_fingerprint("bbbb").expect("second write");
+        assert_eq!(read_fingerprint().expect("read").as_deref(), Some("bbbb"));
+        // No `.tmp` litter must be left in the proxy dir.
+        let dir = proxy_dir().expect("proxy_dir");
+        let entries: Vec<_> = std::fs::read_dir(&dir)
+            .expect("read_dir")
+            .filter_map(|e| {
+                e.ok()
+                    .map(|e| e.file_name().into_string().unwrap_or_default())
+            })
+            .collect();
+        assert_eq!(
+            entries,
+            vec![FINGERPRINT_FILENAME.to_string()],
+            "atomic rename must leave only the sentinel file: {entries:?}"
+        );
     }
 }

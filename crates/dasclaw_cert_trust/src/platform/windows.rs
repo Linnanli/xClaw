@@ -146,7 +146,7 @@ impl TrustStore for WindowsTrustStore {
         };
         free_dup_context(ctx);
         drop(store);
-        Ok(der_to_pem(&der))
+        Ok(pem::der_to_pem(&der))
     }
 }
 
@@ -262,20 +262,42 @@ fn map_win_err(operation: &'static str, err: WinError) -> Error {
     }
 }
 
-/// PEM-wrap a DER blob with standard 64-char line wrapping.
-fn der_to_pem(der: &[u8]) -> Vec<u8> {
-    use base64::Engine as _;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(der);
-    let mut out = String::with_capacity(b64.len() + 64);
-    out.push_str("-----BEGIN CERTIFICATE-----\n");
-    for chunk in b64.as_bytes().chunks(64) {
-        // `b64` is pure ASCII so chunk slicing always yields valid UTF-8.
-        match std::str::from_utf8(chunk) {
-            Ok(line) => out.push_str(line),
-            Err(_) => out.push_str(""),
-        }
-        out.push('\n');
+#[cfg(test)]
+mod tests {
+    //! Unit tests for the pure-function pieces (lifecycle is covered by
+    //! `tests/windows_integration.rs`). Locks the ADR-139 §3.7 fail-safe
+    //! error classification — `ERROR_CANCELLED` from a UAC / root-store
+    //! confirmation dialog must surface as `PermissionDenied`, not as a
+    //! generic `Backend` error.
+
+    use super::*;
+    use windows::core::HRESULT;
+
+    #[test]
+    fn user_cancel_maps_to_permission_denied() {
+        let err = WinError::from(HRESULT(0x800704C7u32 as i32));
+        let mapped = map_win_err("install", err);
+        assert!(
+            matches!(mapped, Error::PermissionDenied),
+            "user-cancel must fail-safe: {mapped:?}"
+        );
     }
-    out.push_str("-----END CERTIFICATE-----\n");
-    out.into_bytes()
+
+    #[test]
+    fn other_hresult_maps_to_backend_with_operation() {
+        // ERROR_FILE_NOT_FOUND (0x80070002) — a non-cancel failure must
+        // preserve the operation tag so callers can localize the error.
+        let err = WinError::from(HRESULT(0x80070002u32 as i32));
+        let mapped = map_win_err("uninstall (delete)", err);
+        match mapped {
+            Error::Backend { operation, reason } => {
+                assert_eq!(operation, "uninstall (delete)");
+                assert!(
+                    reason.contains("0x80070002"),
+                    "reason must include HRESULT: {reason}"
+                );
+            }
+            other => panic!("expected Backend, got {other:?}"),
+        }
+    }
 }

@@ -33,6 +33,11 @@ rustls-pemfile = "2"
 sha2 = "0.10"
 base64 = "0.22"
 dirs = "6"
+# Atomic fingerprint sentinel writes (tempfile + rename) — see
+# `paths::write_fingerprint`. A non-atomic write would let a mid-write
+# crash leave the file truncated while the OS keychain still trusts the
+# CA, breaking `status()` round-trip semantics.
+tempfile = "3"
 
 # macOS — per-user login keychain via `security-framework`.
 [target.'cfg(target_os = "macos")'.dependencies]

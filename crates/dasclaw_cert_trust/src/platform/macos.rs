@@ -67,11 +67,30 @@ impl TrustStore for MacOsTrustStore {
     fn install(&self, ca_pem: &[u8]) -> Result<()> {
         let der = pem::decode_first_certificate(ca_pem)?;
         let fingerprint = pem::sha256_hex(&der);
+        // If an *older* dasclaw CA is still recorded, reap it before
+        // adding the new one. Without this step a fresh `install` after
+        // a rotation would leave the previous root certificate trusted
+        // but orphaned (no longer referenced by the sentinel), so a
+        // subsequent `uninstall` could never find/remove it. This makes
+        // `install` semantically equivalent to `rotate` for the macOS
+        // backend, matching the Windows backend's
+        // `CERT_STORE_ADD_REPLACE_EXISTING` semantics.
+        if let Some(old_fp) = paths::read_fingerprint()?
+            && old_fp != fingerprint
+            && let Some(old_cert) = find_cert_by_fingerprint(&old_fp)?
+        {
+            match old_cert.delete() {
+                Ok(()) => {}
+                Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => {}
+                Err(e) => return Err(map_sf_err("install (reap old cert)", e)),
+            }
+        }
         let cert =
             SecCertificate::from_der(&der).map_err(|e| map_sf_err("install (parse DER)", e))?;
         // Adding to the login keychain may surface a "this app wants to
         // modify your keychain" prompt the first time. `errSecDuplicateItem`
-        // is benign — proceed to (re-)apply trust settings.
+        // is benign (the cert with this exact DER is already there) —
+        // proceed to (re-)apply trust settings to it.
         let keychain = SecKeychain::default().map_err(|e| map_sf_err("install (keychain)", e))?;
         match cert.add_to_keychain(Some(keychain)) {
             Ok(()) => {}
@@ -132,7 +151,7 @@ impl TrustStore for MacOsTrustStore {
                 reason: format!("CA fingerprint {target_fp} not found in user trust settings"),
             });
         };
-        Ok(der_to_pem(&cert.to_der()))
+        Ok(pem::der_to_pem(&cert.to_der()))
     }
 }
 
@@ -168,20 +187,53 @@ fn map_sf_err(operation: &'static str, err: SfError) -> Error {
     }
 }
 
-/// PEM-wrap a DER blob with standard 64-char line wrapping.
-fn der_to_pem(der: &[u8]) -> Vec<u8> {
-    use base64::Engine as _;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(der);
-    let mut out = String::with_capacity(b64.len() + 64);
-    out.push_str("-----BEGIN CERTIFICATE-----\n");
-    for chunk in b64.as_bytes().chunks(64) {
-        // `b64` is pure ASCII, so every chunk is valid UTF-8.
-        match std::str::from_utf8(chunk) {
-            Ok(line) => out.push_str(line),
-            Err(_) => out.push_str(""),
-        }
-        out.push('\n');
+#[cfg(test)]
+mod tests {
+    //! Unit tests for the pure-function pieces that don't touch the
+    //! real keychain (lifecycle is covered by `tests/macos_integration.rs`).
+    //! Locks the ADR-139 §3.7 fail-safe error classification.
+
+    use super::*;
+
+    fn sf_error(code: i32) -> SfError {
+        SfError::from_code(code)
     }
-    out.push_str("-----END CERTIFICATE-----\n");
-    out.into_bytes()
+
+    #[test]
+    fn user_cancel_maps_to_permission_denied() {
+        let err = map_sf_err("install", sf_error(ERR_SEC_USER_CANCELED));
+        assert!(
+            matches!(err, Error::PermissionDenied),
+            "user-cancel must fail-safe: {err:?}"
+        );
+    }
+
+    #[test]
+    fn auth_failure_maps_to_permission_denied() {
+        let err = map_sf_err("install", sf_error(ERR_SEC_AUTH_FAILED));
+        assert!(matches!(err, Error::PermissionDenied), "{err:?}");
+    }
+
+    #[test]
+    fn internal_component_maps_to_permission_denied() {
+        // Surfaced when set_trust_settings_always is called outside a
+        // GUI session — same fail-safe class as user-cancel.
+        let err = map_sf_err("install", sf_error(ERR_SEC_INTERNAL_COMPONENT));
+        assert!(matches!(err, Error::PermissionDenied), "{err:?}");
+    }
+
+    #[test]
+    fn duplicate_item_maps_to_backend_with_operation() {
+        let err = map_sf_err("install (add cert)", sf_error(ERR_SEC_DUPLICATE_ITEM));
+        match err {
+            Error::Backend { operation, reason } => {
+                assert_eq!(operation, "install (add cert)");
+                assert!(
+                    reason.contains(&format!("{ERR_SEC_DUPLICATE_ITEM}")),
+                    "reason must include OSStatus: {reason}"
+                );
+            }
+            other => panic!("expected Backend, got {other:?}"),
+        }
+    }
 }

@@ -45,6 +45,30 @@ pub(crate) fn sha256_hex(der: &[u8]) -> String {
     s
 }
 
+/// PEM-wrap a DER blob with standard 64-char line wrapping.
+///
+/// Shared by every platform backend's `export()` implementation so the
+/// output is byte-identical regardless of trust store. Base64 output is
+/// pure ASCII by construction, so chunk slicing never crosses a UTF-8
+/// boundary and we can index `&str` directly without a UTF-8 re-check.
+pub(crate) fn der_to_pem(der: &[u8]) -> Vec<u8> {
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(der);
+    let mut out = String::with_capacity(b64.len() + 64);
+    out.push_str("-----BEGIN CERTIFICATE-----\n");
+    let bytes = b64.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let end = (i + 64).min(bytes.len());
+        // Base64 alphabet is ASCII, so byte slice == char slice.
+        out.push_str(&b64[i..end]);
+        out.push('\n');
+        i = end;
+    }
+    out.push_str("-----END CERTIFICATE-----\n");
+    out.into_bytes()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,5 +128,45 @@ mod tests {
         assert_eq!(fp.len(), 64, "SHA-256 hex must be 64 chars");
         // Re-running yields identical output (no randomness).
         assert_eq!(fp, sha256_hex(&der));
+    }
+
+    #[test]
+    fn der_to_pem_round_trips_through_decode() {
+        let der = decode_first_certificate(SAMPLE_CA_PEM).expect("decode");
+        let pem = der_to_pem(&der);
+        // Header / footer are mandatory.
+        assert!(pem.starts_with(b"-----BEGIN CERTIFICATE-----\n"));
+        assert!(pem.ends_with(b"-----END CERTIFICATE-----\n"));
+        // Re-decoding the wrapped PEM yields the same DER body.
+        let der2 = decode_first_certificate(&pem).expect("re-decode");
+        assert_eq!(der, der2, "PEM rewrap must round-trip to original DER");
+    }
+
+    #[test]
+    fn der_to_pem_wraps_lines_at_64_chars() {
+        let der = decode_first_certificate(SAMPLE_CA_PEM).expect("decode");
+        let pem = der_to_pem(&der);
+        let text = std::str::from_utf8(&pem).expect("PEM is ASCII");
+        // All body lines (between header/footer) must be ≤ 64 chars.
+        for line in text.lines() {
+            if line.starts_with("---") {
+                continue;
+            }
+            assert!(
+                line.len() <= 64,
+                "body line longer than 64: {} chars: {line:?}",
+                line.len()
+            );
+        }
+    }
+
+    #[test]
+    fn der_to_pem_handles_empty_der() {
+        // An empty DER blob yields an empty body (no panics, no UB).
+        let pem = der_to_pem(b"");
+        assert_eq!(
+            pem,
+            b"-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n"
+        );
     }
 }
