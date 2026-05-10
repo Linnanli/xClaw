@@ -2748,6 +2748,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dasclaw_async_utils"
+version = "0.0.0-w7"
+dependencies = [
+ "async-trait",
+ "pretty_assertions",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "dasclaw_bash_validation"
 version = "0.0.0-w1"
 dependencies = [

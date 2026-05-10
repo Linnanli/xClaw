@@ -1,0 +1,34 @@
+[package]
+# Verbatim port of codex-async-utils @ codex-cli-main
+# (upstream snapshot vendored under codex-cli-main/codex-rs/async-utils).
+#
+# ADR-129 §1.3 + ADR-136 §3 amendment 2 PR-C1.prep-1 mandate verbatim port.
+# Mechanical edits allowed:
+#   1. Cargo.toml package name swap: codex-async-utils → dasclaw_async_utils.
+#   2. Workspace deps inlined with explicit versions; no workspace.dependencies
+#      table exists in this fork.
+#
+# src/lib.rs has zero `codex_*` use-paths, so no use-path swaps needed.
+# DO NOT hand-edit src/lib.rs — drift guard
+# scripts/check_codex_async_utils_drift.py verifies hash equality with upstream.
+#
+# Consumed by: PR-C1.5 (dasclaw_protocol::error::CancelErr).
+# See ADR-136 §3 amendment 2 for the bottom-up port plan.
+name = "dasclaw_async_utils"
+version = "0.0.0-w7"
+edition = "2024"
+description = "OrCancelExt trait + CancelErr for cancellation-aware futures (verbatim port of codex-async-utils)."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+name = "dasclaw_async_utils"
+path = "src/lib.rs"
+
+[dependencies]
+async-trait = "0.1"
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time"] }
+tokio-util = "0.7.18"
+
+[dev-dependencies]
+pretty_assertions = "1"

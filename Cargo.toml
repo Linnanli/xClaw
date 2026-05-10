@@ -41,6 +41,8 @@ members = [
 	# W5 #324 sub-task 3 / ADR-137 — codex-network-proxy transitive deps (verbatim port)
 	"crates/dasclaw_utils_home_dir",
 	"crates/dasclaw_utils_rustls_provider",
+	# W6 ADR-136 §3 amendment 2 PR-C1.prep-1 — codex-async-utils verbatim port (~86 LOC)
+	"crates/dasclaw_async_utils",
 	# W8 ADR-139 §4.5 PR1 — MITM CA trust-chain manager (dasclaw original, not verbatim)
 	"crates/dasclaw_cert_trust",
 	"desktop-client/ironclaw",
