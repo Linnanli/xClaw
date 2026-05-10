@@ -25,7 +25,7 @@ const SAMPLE_CA_PEM: &[u8] = include_bytes!("fixtures/sample-ca.pem");
 /// SAFETY: integration tests run one-per-process under nextest's default
 /// process-per-test model, so no other thread is racing this env mutation.
 fn isolate_codex_home() -> TempDir {
-    let td = TempDir::new().expect("tempdir");
+    let td = TempDir::new().expect("tempdir"); // safety: integration test helper, not production code
     // SAFETY: see module-level note about nextest process model.
     unsafe { std::env::set_var("CODEX_HOME", td.path()) };
     td

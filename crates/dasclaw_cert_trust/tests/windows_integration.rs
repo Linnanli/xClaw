@@ -18,7 +18,7 @@ const SAMPLE_CA_PEM: &[u8] = include_bytes!("fixtures/sample-ca.pem");
 
 /// SAFETY: see analogous helper in `macos_integration.rs`.
 fn isolate_codex_home() -> TempDir {
-    let td = TempDir::new().expect("tempdir");
+    let td = TempDir::new().expect("tempdir"); // safety: integration test helper, not production code
     // SAFETY: nextest runs one test per process by default.
     unsafe { std::env::set_var("CODEX_HOME", td.path()) };
     td
