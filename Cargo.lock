@@ -3051,6 +3051,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dasclaw_utils_cache"
+version = "0.0.0-w7"
+dependencies = [
+ "lru",
+ "sha1",
+ "tokio",
+]
+
+[[package]]
 name = "dasclaw_utils_home_dir"
 version = "0.0.0-w5"
 dependencies = [
