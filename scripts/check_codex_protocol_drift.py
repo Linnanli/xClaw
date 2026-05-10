@@ -1,23 +1,25 @@
 #!/usr/bin/env python3.12
-"""Drift guard: verify dasclaw_shell_command src remains byte-identical to
-the upstream codex snapshot vendored under codex-cli-main/codex-rs/.
+"""Drift guard: verify dasclaw_protocol src remains byte-identical to the
+upstream codex snapshot vendored under codex-cli-main/codex-rs/protocol/.
 
-ADR-129 §1.3 + ADR-133 mandate verbatim port. The only mechanical edits
-allowed are:
+ADR-129 §1.3 + ADR-136 mandate verbatim file-level port. Currently only
+`parse_command.rs` (31 LOC, ParsedCommand enum) is vendored — Step C1.2 ~
+C1.5 will add `error.rs`, `config_types.rs`, `permissions.rs`, `models.rs`,
+`protocol.rs`, `network_policy.rs` (~12,547 LOC, ~70% of codex-protocol).
 
-  1. `Cargo.toml` package name swap (codex-shell-command → dasclaw_shell_command).
-  2. `use codex_utils_absolute_path::X` → `use dasclaw_absolute_path::X`.
-  3. `use codex_protocol::parse_command::X` → `use dasclaw_protocol::parse_command::X`.
-  4. `use codex_shell_command::X` → `use dasclaw_shell_command::X`.
+The only mechanical edits allowed are:
 
-The sibling `dasclaw_protocol` slice (ADR-136 Step C1.1) has its own drift
-guard at scripts/check_codex_protocol_drift.py.
+  1. `Cargo.toml` package name swap (codex-protocol → dasclaw_protocol).
+  2. `use codex_protocol::X` → `use dasclaw_protocol::X` for cross-file
+     imports inside the slice.
+  3. Other `use codex_utils_*::X` → `use dasclaw_*::X` swaps as upstream
+     transitive deps get sliced (e.g. dasclaw_absolute_path).
 
 This script normalizes the swaps + sorts consecutive `use` blocks before
 hashing, then compares each file against its upstream peer. Any other diff
 is treated as drift and exits non-zero so CI can block patch-style edits.
 
-Run: python3.12 scripts/check_codex_shell_command_drift.py
+Run: python3.12 scripts/check_codex_protocol_drift.py
 """
 
 from __future__ import annotations
@@ -31,31 +33,23 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 PAIRS: list[tuple[Path, Path]] = []
 
-# ---- dasclaw_shell_command ↔ codex shell-command ---------------------------
-SC_LOCAL = REPO_ROOT / "crates" / "dasclaw_shell_command" / "src"
-SC_UPSTREAM = REPO_ROOT / "codex-cli-main" / "codex-rs" / "shell-command" / "src"
+# ---- dasclaw_protocol ↔ codex protocol file-level slice --------------------
+PROTO_LOCAL = REPO_ROOT / "crates" / "dasclaw_protocol" / "src"
+PROTO_UPSTREAM = REPO_ROOT / "codex-cli-main" / "codex-rs" / "protocol" / "src"
+
+# ADR-136 Step C1.1: only parse_command.rs is vendored.
+# Step C1.2 ~ C1.5 will append: error.rs, config_types.rs, permissions.rs,
+# models.rs, protocol.rs, network_policy.rs.
 for fname in [
-    "bash.rs",
-    "lib.rs",
     "parse_command.rs",
-    "powershell.rs",
-    "shell_detect.rs",
-    "command_safety/is_dangerous_command.rs",
-    "command_safety/is_safe_command.rs",
-    "command_safety/mod.rs",
-    "command_safety/powershell_parser.rs",
-    "command_safety/powershell_parser.ps1",
-    "command_safety/windows_dangerous_commands.rs",
-    "command_safety/windows_safe_commands.rs",
 ]:
-    PAIRS.append((SC_LOCAL / fname, SC_UPSTREAM / fname))
+    PAIRS.append((PROTO_LOCAL / fname, PROTO_UPSTREAM / fname))
 
 
 SWAP_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # Reverse the use-path swap so we compare against upstream verbatim.
     (re.compile(r"\bdasclaw_absolute_path\b"), "codex_utils_absolute_path"),
     (re.compile(r"\bdasclaw_protocol\b"), "codex_protocol"),
-    (re.compile(r"\bdasclaw_shell_command\b"), "codex_shell_command"),
 ]
 
 
@@ -128,7 +122,7 @@ def main() -> int:
         for line in drift:
             print(line, file=sys.stderr)
         print(
-            "\nADR-129 §1.3 + ADR-133 forbid hand-edits to ported files. "
+            "\nADR-129 §1.3 + ADR-136 forbid hand-edits to ported files. "
             "If upstream needs to change, re-vendor codex-cli-main first.",
             file=sys.stderr,
         )

@@ -3,7 +3,7 @@
 # Mechanical edits per ADR-129 §1.3 + ADR-133:
 #   - package name swap (codex-shell-command → dasclaw_shell_command)
 #   - codex_utils_absolute_path → dasclaw_absolute_path use-path swap
-#   - codex_protocol::parse_command → dasclaw_parsed_command::parse_command use-path swap
+#   - codex_protocol::parse_command → dasclaw_protocol::parse_command use-path swap (ADR-136 Step C1.1 rename; was dasclaw_parsed_command)
 #   - codex_shell_command → dasclaw_shell_command use-path swap
 # DO NOT hand-edit src/*.rs — drift guard
 # scripts/check_codex_shell_command_drift.py verifies hash equality with upstream.
@@ -20,7 +20,7 @@ path = "src/lib.rs"
 [dependencies]
 base64 = "0.22.1"
 dasclaw_absolute_path = { path = "../dasclaw_absolute_path" }
-dasclaw_parsed_command = { path = "../dasclaw_parsed_command" }
+dasclaw_protocol = { path = "../dasclaw_protocol" }
 once_cell = "1.20.2"
 regex = "1.12.3"
 serde = { version = "1", features = ["derive"] }
