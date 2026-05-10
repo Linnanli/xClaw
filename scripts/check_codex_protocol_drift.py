@@ -37,11 +37,27 @@ PAIRS: list[tuple[Path, Path]] = []
 PROTO_LOCAL = REPO_ROOT / "crates" / "dasclaw_protocol" / "src"
 PROTO_UPSTREAM = REPO_ROOT / "codex-cli-main" / "codex-rs" / "protocol" / "src"
 
-# ADR-136 Step C1.1: only parse_command.rs is vendored.
-# Step C1.2 ~ C1.5 will append: error.rs, config_types.rs, permissions.rs,
-# models.rs, protocol.rs, network_policy.rs.
+# ADR-136 Step C1.2 (Layer 1): parse_command + 14 zero-crate-deps leaves.
+# Step C1.3 ~ C1.5 will append: config_types, openai_models (cycle);
+# protocol, permissions, models, approvals, network_policy, items,
+# request_permissions (hub); error, error_tests.
 for fname in [
+    "account.rs",
+    "agent_path.rs",
+    "auth.rs",
+    "dynamic_tools.rs",
+    "exec_output.rs",
+    "exec_output_tests.rs",
+    "mcp.rs",
+    "memory_citation.rs",
+    "message_history.rs",
+    "num_format.rs",
     "parse_command.rs",
+    "plan_tool.rs",
+    "request_user_input.rs",
+    "thread_id.rs",
+    "tool_name.rs",
+    "user_input.rs",
 ]:
     PAIRS.append((PROTO_LOCAL / fname, PROTO_UPSTREAM / fname))
 
