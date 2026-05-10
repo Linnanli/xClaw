@@ -65,7 +65,7 @@ impl TrustStore for MacOsTrustStore {
     }
 
     fn install(&self, ca_pem: &[u8]) -> Result<()> {
-        let der = pem::decode_first_certificate(ca_pem)?;
+        let der = pem::decode_and_validate_root_ca(ca_pem)?;
         let fingerprint = pem::sha256_hex(&der);
         // If an *older* dasclaw CA is still recorded, reap it before
         // adding the new one. Without this step a fresh `install` after

@@ -5,6 +5,7 @@
 //! `TrustStore` impls are exposed.
 
 use sha2::Digest;
+use x509_parser::prelude::FromDer as _;
 
 use crate::Result;
 use crate::error::Error;
@@ -27,6 +28,96 @@ pub(crate) fn decode_first_certificate(ca_pem: &[u8]) -> Result<Vec<u8>> {
         )),
         Err(err) => Err(Error::InvalidPem(format!("PEM decode failed: {err}"))),
     }
+}
+
+/// Validate that a DER-encoded X.509 certificate is fit to be installed
+/// as a per-user **root** CA.
+///
+/// Implements the three RFC 5280 sanity checks called out in issue #375 /
+/// ADR-139 §3.7 (fail-safe error handling). The OS keychain APIs do not
+/// perform these checks themselves: they accept any well-formed DER and
+/// will then trust it as a root, so without this gate a caller could
+/// promote an arbitrary leaf cert into the user's trust store.
+///
+/// Rejected cases (each returns [`Error::InvalidCa`] with a specific
+/// reason string so the CLI can give an actionable message):
+///
+/// 1. **Not a CA** — `BasicConstraints` extension is absent or has
+///    `cA: false`. RFC 5280 §4.2.1.9 requires `cA: TRUE` for any cert
+///    that issues other certificates.
+/// 2. **Expired** — `notAfter` is already in the past. We only check
+///    `notAfter` (not `notBefore`); a not-yet-valid CA is unusual but
+///    legitimate (e.g. pre-staged rotation), while an already-expired CA
+///    cannot validate any TLS handshake.
+/// 3. **Not self-signed** — issuer DN ≠ subject DN. Only self-signed
+///    roots belong in a root store; an intermediate placed there would
+///    silently fail chain validation against any legitimate root.
+///
+/// Comparison of issuer and subject uses the **DER-encoded** name bytes
+/// per RFC 5280 §4.1.2.4 — string-form comparison would normalize whitespace
+/// and case in ways that don't match what the validator does at handshake
+/// time.
+///
+/// We deliberately do **not** verify the self-signature here. That would
+/// require a parsed public key + signature algorithm ladder, which
+/// `dasclaw_net_proxy` will already have done when generating the CA;
+/// re-doing it on the consumer side adds attack surface (parsing new
+/// algorithm OIDs) for no extra safety beyond the three checks above.
+pub(crate) fn validate_root_ca(der: &[u8]) -> Result<()> {
+    let (_rest, cert) = x509_parser::certificate::X509Certificate::from_der(der)
+        .map_err(|err| Error::InvalidCa(format!("X.509 parse failed: {err}")))?;
+
+    // Check 1: BasicConstraints CA:TRUE.
+    match cert
+        .basic_constraints()
+        .map_err(|err| Error::InvalidCa(format!("BasicConstraints parse failed: {err}")))?
+    {
+        Some(ext) if ext.value.ca => {}
+        Some(_) => {
+            return Err(Error::InvalidCa(
+                "BasicConstraints extension present but cA:FALSE (leaf cert, not a CA)".into(),
+            ));
+        }
+        None => {
+            return Err(Error::InvalidCa(
+                "BasicConstraints extension absent (cannot confirm cA:TRUE)".into(),
+            ));
+        }
+    }
+
+    // Check 2: notAfter not in the past (no clock-skew tolerance — the OS
+    // will reject expired certs at handshake time, and a CA that is "barely
+    // valid right now" is itself a problem we want to surface early).
+    let now = x509_parser::time::ASN1Time::now();
+    if !cert.validity().is_valid_at(now) {
+        return Err(Error::InvalidCa(format!(
+            "certificate not valid at current time (notBefore={}, notAfter={})",
+            cert.validity().not_before,
+            cert.validity().not_after,
+        )));
+    }
+
+    // Check 3: self-signed (issuer DN == subject DN, byte-equal in DER).
+    if cert.subject().as_raw() != cert.issuer().as_raw() {
+        return Err(Error::InvalidCa(
+            "issuer DN ≠ subject DN (not a self-signed root)".into(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Decode + validate a PEM-encoded root CA in one step.
+///
+/// Equivalent to `decode_first_certificate` followed by `validate_root_ca`.
+/// This is the entry point every `TrustStore::install` impl must use, so
+/// that platform backends never see an unvalidated PEM. The two-step
+/// composition is exposed so unit tests can target each stage in
+/// isolation.
+pub(crate) fn decode_and_validate_root_ca(ca_pem: &[u8]) -> Result<Vec<u8>> {
+    let der = decode_first_certificate(ca_pem)?;
+    validate_root_ca(&der)?;
+    Ok(der)
 }
 
 /// Compute the lowercase-hex SHA-256 fingerprint of a DER-encoded certificate.
@@ -167,6 +258,170 @@ mod tests {
         assert_eq!(
             pem,
             b"-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // validate_root_ca / decode_and_validate_root_ca — issue #375.
+    //
+    // Each fixture builder produces a freshly-generated cert via `rcgen`
+    // so the assertions don't drift when system time crosses any
+    // hard-coded `notAfter`. Builders return the DER bytes (the input
+    // shape of `validate_root_ca`).
+    // ------------------------------------------------------------------
+
+    /// Build a self-signed CA whose `notBefore`/`notAfter` are set
+    /// relative to "now" by the supplied offsets in days. Negative values
+    /// move the window into the past.
+    fn build_self_signed_ca_with_validity(days_before: i64, days_after: i64) -> Vec<u8> {
+        use rcgen::{
+            BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair,
+        };
+        use time::{Duration, OffsetDateTime};
+
+        let mut params = CertificateParams::new(Vec::<String>::new()).expect("CertificateParams");
+        let mut dn = DistinguishedName::new();
+        dn.push(DnType::CommonName, "dasclaw-test-root");
+        params.distinguished_name = dn;
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let now = OffsetDateTime::now_utc();
+        params.not_before = now + Duration::days(days_before);
+        params.not_after = now + Duration::days(days_after);
+
+        let key = KeyPair::generate().expect("keypair");
+        let cert = params.self_signed(&key).expect("self-sign");
+        cert.der().to_vec()
+    }
+
+    /// Build a self-signed leaf certificate (`BasicConstraints CA:FALSE`).
+    fn build_self_signed_leaf() -> Vec<u8> {
+        use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
+        use time::{Duration, OffsetDateTime};
+
+        let mut params = CertificateParams::new(Vec::<String>::new()).expect("CertificateParams");
+        let mut dn = DistinguishedName::new();
+        dn.push(DnType::CommonName, "dasclaw-test-leaf");
+        params.distinguished_name = dn;
+        params.is_ca = IsCa::ExplicitNoCa;
+        let now = OffsetDateTime::now_utc();
+        params.not_before = now - Duration::days(1);
+        params.not_after = now + Duration::days(30);
+
+        let key = KeyPair::generate().expect("keypair");
+        let cert = params.self_signed(&key).expect("self-sign");
+        cert.der().to_vec()
+    }
+
+    /// Build an intermediate CA signed by a separate root, so issuer DN ≠
+    /// subject DN.
+    fn build_non_self_signed_intermediate() -> Vec<u8> {
+        use rcgen::{
+            BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, Issuer, KeyPair,
+            SignatureAlgorithm,
+        };
+        use time::{Duration, OffsetDateTime};
+
+        // Root.
+        let mut root_params =
+            CertificateParams::new(Vec::<String>::new()).expect("CertificateParams");
+        let mut root_dn = DistinguishedName::new();
+        root_dn.push(DnType::CommonName, "dasclaw-test-root");
+        root_params.distinguished_name = root_dn;
+        root_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let now = OffsetDateTime::now_utc();
+        root_params.not_before = now - Duration::days(1);
+        root_params.not_after = now + Duration::days(365);
+        let root_key = KeyPair::generate().expect("root keypair");
+        let root_alg: &'static SignatureAlgorithm = root_key.algorithm();
+        let issuer = Issuer::new(root_params, root_key);
+
+        // Intermediate signed by root.
+        let mut int_params =
+            CertificateParams::new(Vec::<String>::new()).expect("CertificateParams");
+        let mut int_dn = DistinguishedName::new();
+        int_dn.push(DnType::CommonName, "dasclaw-test-intermediate");
+        int_params.distinguished_name = int_dn;
+        int_params.is_ca = IsCa::Ca(BasicConstraints::Constrained(0));
+        int_params.not_before = now - Duration::days(1);
+        int_params.not_after = now + Duration::days(180);
+        let int_key = KeyPair::generate_for(root_alg).expect("intermediate keypair");
+        let int_cert = int_params
+            .signed_by(&int_key, &issuer)
+            .expect("intermediate sign");
+        int_cert.der().to_vec()
+    }
+
+    #[test]
+    fn validate_root_ca_accepts_self_signed_ca() {
+        let der = build_self_signed_ca_with_validity(-1, 30);
+        validate_root_ca(&der).expect("freshly-minted self-signed CA must validate");
+    }
+
+    #[test]
+    fn validate_root_ca_rejects_leaf_cert_without_ca_true() {
+        let der = build_self_signed_leaf();
+        match validate_root_ca(&der).expect_err("leaf cert must be rejected") {
+            Error::InvalidCa(msg) => {
+                assert!(
+                    msg.contains("cA:FALSE") || msg.contains("BasicConstraints"),
+                    "unexpected reason: {msg}"
+                );
+            }
+            other => panic!("expected InvalidCa, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_root_ca_rejects_expired_ca() {
+        // notAfter 1 day ago.
+        let der = build_self_signed_ca_with_validity(-30, -1);
+        match validate_root_ca(&der).expect_err("expired CA must be rejected") {
+            Error::InvalidCa(msg) => {
+                assert!(
+                    msg.contains("not valid"),
+                    "expected validity message, got: {msg}"
+                );
+            }
+            other => panic!("expected InvalidCa, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_root_ca_rejects_non_self_signed_intermediate() {
+        let der = build_non_self_signed_intermediate();
+        match validate_root_ca(&der).expect_err("intermediate must be rejected") {
+            Error::InvalidCa(msg) => {
+                assert!(msg.contains("self-signed"), "unexpected reason: {msg}");
+            }
+            other => panic!("expected InvalidCa, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_root_ca_rejects_garbage_der() {
+        let err = validate_root_ca(b"not der at all").expect_err("garbage DER must be rejected");
+        assert!(matches!(err, Error::InvalidCa(_)));
+    }
+
+    #[test]
+    fn decode_and_validate_root_ca_accepts_valid_pem() {
+        // The fixture `sample-ca.pem` is a valid self-signed CA whose
+        // notAfter is far in the future (`-days 36500` when generated).
+        // If this assertion ever fires in CI it means the fixture has
+        // genuinely expired and needs regeneration.
+        decode_and_validate_root_ca(SAMPLE_CA_PEM)
+            .expect("sample-ca.pem must validate as a root CA");
+    }
+
+    #[test]
+    fn decode_and_validate_root_ca_surfaces_pem_errors_first() {
+        // PEM-syntax error should produce InvalidPem, not InvalidCa, so
+        // the CLI can give the right diagnosis.
+        let err =
+            decode_and_validate_root_ca(b"not a pem at all").expect_err("garbage input must fail");
+        assert!(
+            matches!(err, Error::InvalidPem(_)),
+            "expected InvalidPem, got {err:?}"
         );
     }
 }

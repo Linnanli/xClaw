@@ -33,6 +33,13 @@ rustls-pemfile = "2"
 sha2 = "0.10"
 base64 = "0.22"
 dirs = "6"
+# X.509 body validation before installing a CA — issue #375. Rejects
+# leaf certs (BasicConstraints CA:FALSE), expired CAs (notAfter in the
+# past), and non-self-signed intermediates so the caller cannot promote
+# an arbitrary cert into the OS root store. Already a transitive
+# dependency via the rustls-pki-types ecosystem; promoting to a direct
+# dependency lets us call the parser API explicitly.
+x509-parser = "0.18"
 # Atomic fingerprint sentinel writes (tempfile + rename) — see
 # `paths::write_fingerprint`. A non-atomic write would let a mid-write
 # crash leave the file truncated while the OS keychain still trusts the
@@ -57,3 +64,9 @@ windows = { version = "0.58", features = [
 [dev-dependencies]
 pretty_assertions = "1"
 tempfile = "3"
+# rcgen builds tailored X.509 fixtures (leaf / expired / non-self-signed)
+# for `pem::validate_root_ca` tests. Already in the workspace lockfile
+# via desktop-client/dasclaw_net_proxy, so adding it as a dev-dep does
+# not pull in a new transitive tree.
+rcgen = "0.14"
+time = "0.3"
