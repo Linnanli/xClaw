@@ -1,15 +1,14 @@
 [package]
 # Verbatim file-level slice of codex-cli-main/codex-rs/protocol/.
-# Layer 1 (C1.2): vendors parse_command + 14 zero-crate-deps leaf modules.
-# Will expand per ADR-136 §3 Step C1.3 ~ C1.5 (config_types/openai_models cycle,
-# protocol/permissions/models hub, error.rs).
+# Layers 1+2 (C1.2+C1.3): parse_command + 14 leaves + config_types/openai_models cycle.
+# Will expand per ADR-136 §3 Step C1.4 ~ C1.5 (Layer 3 hub, error.rs).
 # Mechanical edits per ADR-129 §1.3; rationale in ADR-136 §3.
 # DO NOT hand-edit any vendored *.rs file — drift guard
 # scripts/check_codex_protocol_drift.py verifies hash equality with upstream.
 name = "dasclaw_protocol"
 version = "0.0.0-w6"
 edition = "2024"
-description = "Verbatim file-level slice of codex-protocol (Layer 1 leaves; will expand per ADR-136)."
+description = "Verbatim file-level slice of codex-protocol (Layers 1+2; will expand per ADR-136)."
 license = "Apache-2.0 OR MIT"
 publish = false
 
@@ -18,6 +17,7 @@ path = "src/lib.rs"
 
 [dependencies]
 chardetng = "0.1.17"
+dasclaw_absolute_path = { path = "../dasclaw_absolute_path" }
 encoding_rs = "0.8.35"
 icu_decimal = "2.1"
 icu_locale_core = "2.1"
@@ -25,8 +25,11 @@ icu_provider = { version = "2.1", features = ["sync"] }
 schemars = "0.8.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+strum = "0.27.2"
+strum_macros = "0.28.0"
 sys-locale = "0.3.2"
 thiserror = "2"
+tracing = "0.1.44"
 ts-rs = { version = "11", features = ["serde-json-impl", "no-serde-warnings"] }
 uuid = { version = "1", features = ["serde", "v4", "v7"] }
 
@@ -36,4 +39,5 @@ pretty_assertions = "1"
 [package.metadata.cargo-shear]
 # `icu_provider` is required for its `sync` feature on `icu_decimal`'s
 # `DecimalFormatter` (otherwise `OnceLock<DecimalFormatter>` rejects `Sync`).
-ignored = ["icu_provider"]
+# `strum` is re-exported by `strum_macros` in non-nightly builds (matches upstream).
+ignored = ["icu_provider", "strum"]

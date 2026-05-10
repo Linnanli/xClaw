@@ -1,10 +1,10 @@
 //! Verbatim file-level slice of `codex-cli-main/codex-rs/protocol/`.
 //!
-//! **Current scope** (Step C1.2, ADR-136 §3 layered plan):
-//! Layer 1 zero-`crate::`-deps leaves (14 modules) + `parse_command` from C1.1.
+//! **Current scope** (Step C1.3, ADR-136 §3 layered plan):
+//! Layer 1 zero-`crate::`-deps leaves (14 modules) + parse_command (C1.1) +
+//! Layer 2 mutual-cycle pair `config_types` ↔ `openai_models` (C1.3).
 //!
-//! **Planned expansion** (ADR-136 §3 Step C1.3 ~ C1.5):
-//! Layer 2 — `config_types` + `openai_models` (mutual cycle, ~1.5 KLOC);
+//! **Planned expansion** (ADR-136 §3 Step C1.4 ~ C1.5):
 //! Layer 3 — `protocol`, `permissions`, `models`, `approvals`, `network_policy`,
 //! `items`, `request_permissions` (~12 KLOC, hub crate);
 //! Layer 4 — `error` + `error_tests` (~1.2 KLOC).
@@ -20,12 +20,14 @@ mod tool_name;
 pub use agent_path::AgentPath;
 pub use thread_id::ThreadId;
 pub use tool_name::ToolName;
+pub mod config_types;
 pub mod dynamic_tools;
 pub mod exec_output;
 pub mod mcp;
 pub mod memory_citation;
 pub mod message_history;
 pub mod num_format;
+pub mod openai_models;
 pub mod parse_command;
 pub mod plan_tool;
 pub mod request_user_input;
