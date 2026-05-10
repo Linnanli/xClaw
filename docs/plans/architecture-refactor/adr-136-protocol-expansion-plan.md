@@ -1,8 +1,8 @@
 # ADR-136: dasclaw_protocol expansion plan (research-only)
 
-- **Status**: 🟡 **Decision: pending — proposes hybrid approach** (research-only ADR; implementation **out of scope** for this PR)
-- **Date**: 2026-05-08
-- **Approver**: pending nally sign-off
+- **Status**: ✅ **Accepted** (path: option 2C two-tier — file-level verbatim slice now, full crate port deferred to ADR-138; implementation **out of scope** for this PR — driven by per-PR sub-ADRs in Step C1.1 ~ C1.5)
+- **Date**: 2026-05-08 (drafted) / 2026-05-15 (accepted)
+- **Approver**: nally (sign-off in epic [#380](https://github.com/Linnanli/xClaw/issues/380))
 - **Authors**: GitHub Copilot agent
 - **Tracker**: ADR-135 §6 Q1 — "dasclaw_protocol 切片粒度"
 - **Related**:
@@ -223,3 +223,4 @@ cargo fmt --all -- --check   # OK (no .rs changed)
 ## 7. Decision log
 
 - **2026-05-08**: 起草，提出 2C two-tier 方案。等待 nally sign-off 决定走 2A 还是 2C。如选 2C，立即起 issue track step C1.1 - C1.5 五个 PR。
+- **2026-05-15**: nally 在 epic [#380](https://github.com/Linnanli/xClaw/issues/380) 批准 option 2C two-tier file-level verbatim slice；与 ADR-135 OQ-1 合流。下一步：为 step C1.1 起专属 issue（rename `dasclaw_parsed_command` → `dasclaw_protocol` + drift guard 重命名），作为 Wave-A1 的首个实现 PR。Q2 （`protocol.rs` 是否独立编译）仍作为 step C1.5 启动前验证门，不在本 ADR 预答。
