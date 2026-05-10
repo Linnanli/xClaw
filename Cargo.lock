@@ -2749,6 +2749,7 @@ version = "0.0.0-w8"
 dependencies = [
  "base64 0.22.1",
  "dirs 6.0.0",
+ "libc",
  "pretty_assertions",
  "rcgen",
  "rustls-pemfile 2.2.0",

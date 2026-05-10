@@ -66,7 +66,25 @@ pub fn run_cert_command(cmd: CertCommand) -> anyhow::Result<()> {
     }
 }
 
+/// Read a CA PEM file from disk, refusing to follow symlinks.
+///
+/// Issue #376 §3.2 — `std::fs::read` happily follows symlinks. An
+/// attacker who can write to a directory the operator types into (e.g.
+/// a shared `/tmp/`) can swap a PEM symlink out for a different target
+/// between the operator's `ls` and our `read`. This function uses
+/// `symlink_metadata` to detect a symlink before reading. Hard links
+/// remain accepted — they cannot be redirected after creation, unlike
+/// symlinks — and dasclaw cannot meaningfully defend against an
+/// attacker who already has write access to the target file's inode.
 fn read_pem_file(path: &std::path::Path) -> anyhow::Result<Vec<u8>> {
+    let meta = std::fs::symlink_metadata(path)
+        .map_err(|err| anyhow::anyhow!("failed to stat CA PEM at {path:?}: {err}"))?;
+    if meta.file_type().is_symlink() {
+        anyhow::bail!(
+            "refusing to read CA PEM at {path:?}: path is a symlink \
+             (copy the PEM into a non-shared directory first)"
+        );
+    }
     std::fs::read(path).map_err(|err| anyhow::anyhow!("failed to read CA PEM at {path:?}: {err}"))
 }
 
@@ -141,11 +159,57 @@ mod tests {
             from: "/dev/null/nonexistent/ca.pem".into(),
         })
         .expect_err("missing file must error");
-        assert!(err.to_string().contains("failed to read CA PEM"));
+        // Issue #376 §3.2 — `read_pem_file` now stats first via
+        // `symlink_metadata`, so a missing path surfaces as a stat failure
+        // rather than a read failure. Both messages embed the bad path.
+        assert!(
+            err.to_string().contains("failed to stat CA PEM"),
+            "unexpected: {err}"
+        );
     }
 
     #[test]
     fn status_text_succeeds() {
         run_cert_command(CertCommand::Status { json: true }).expect("status must succeed");
+    }
+
+    /// Issue #376 §3.2 — symlinks must be rejected up front, before
+    /// reading the target. We don't accept "the target was the file the
+    /// operator expected when they typed the path" as a runtime check.
+    #[cfg(unix)]
+    #[test]
+    fn install_with_symlinked_pem_is_rejected() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let real = td.path().join("real-ca.pem");
+        std::fs::write(
+            &real,
+            b"-----BEGIN CERTIFICATE-----\nAAA=\n-----END CERTIFICATE-----\n",
+        )
+        .expect("write real");
+        let link = td.path().join("link-ca.pem");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+        let err = run_cert_command(CertCommand::Install { from: link.clone() })
+            .expect_err("symlink must be refused");
+        let msg = err.to_string();
+        assert!(msg.contains("symlink"), "msg: {msg}");
+    }
+
+    /// Plain (non-symlinked) regular files must still be accepted; the
+    /// symlink guard must not trigger on hard links / regular files.
+    #[test]
+    fn install_with_plain_file_is_not_rejected_at_read_stage() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let real = td.path().join("ca.pem");
+        std::fs::write(&real, b"not a real pem").expect("write");
+        // The error here will come from the trust-store layer (invalid
+        // PEM), NOT from `read_pem_file` itself. We just need to
+        // confirm the read passed through.
+        let err =
+            run_cert_command(CertCommand::Install { from: real }).expect_err("expected pem error");
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("symlink") && !msg.contains("failed to stat"),
+            "read stage should accept a regular file, got: {msg}"
+        );
     }
 }
