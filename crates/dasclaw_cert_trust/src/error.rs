@@ -28,6 +28,20 @@ pub enum Error {
     /// Underlying OS / I/O failure.
     #[error("dasclaw_cert_trust: I/O error: {0}")]
     Io(#[from] io::Error),
+
+    /// Platform trust-store backend rejected the operation for a reason
+    /// that is neither `PermissionDenied` nor an I/O error.
+    ///
+    /// Examples: macOS Security framework returned `errSecDuplicateItem`;
+    /// Windows `CertOpenStore` returned `ERROR_FILE_NOT_FOUND`. The string
+    /// payload captures the OS-specific error code/message verbatim.
+    #[error("dasclaw_cert_trust: {operation} failed: {reason}")]
+    Backend {
+        /// What we were trying to do (e.g. `"install"`, `"uninstall"`).
+        operation: &'static str,
+        /// Free-form OS error description (already redacted of secrets).
+        reason: String,
+    },
 }
 
 #[cfg(test)]
@@ -56,5 +70,16 @@ mod tests {
         let io_err = io::Error::new(io::ErrorKind::NotFound, "no such file");
         let err: Error = io_err.into();
         assert!(matches!(err, Error::Io(_)));
+    }
+
+    #[test]
+    fn backend_display_includes_operation_and_reason() {
+        let err = Error::Backend {
+            operation: "install",
+            reason: "errSecDuplicateItem (-25299)".into(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("install"), "missing operation: {msg}");
+        assert!(msg.contains("errSecDuplicateItem"), "missing reason: {msg}");
     }
 }

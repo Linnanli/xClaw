@@ -4,6 +4,10 @@
 //! macOS / Windows keychain code and PR3 adds Linux NSS DB.
 
 use crate::Result;
+#[cfg(any(
+    target_os = "linux",
+    not(any(target_os = "macos", target_os = "windows", target_os = "linux"))
+))]
 use crate::error::Error;
 use crate::status::CertStatus;
 
@@ -44,6 +48,15 @@ pub trait TrustStore {
 }
 
 /// Helper for stubs that are not yet implemented.
+///
+/// Only compiled when at least one stub backend (`linux` PR3 / generic
+/// `fallback`) is selected. On macOS / Windows every entry point is
+/// fully implemented so this helper is unreferenced and would warn as
+/// dead code.
+#[cfg(any(
+    target_os = "linux",
+    not(any(target_os = "macos", target_os = "windows", target_os = "linux"))
+))]
 pub(crate) fn not_implemented<T>(operation: &'static str, platform: &'static str) -> Result<T> {
     Err(Error::NotImplemented {
         operation,
