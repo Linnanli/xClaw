@@ -29,7 +29,11 @@ tracing = "0.1"
 # PR2 (ADR-139 §4.5) — PEM↔DER decoding, SHA-256 fingerprinting, and
 # base64 encoding (for `export` PEM rewrap) are cross-platform, so they
 # live in `[dependencies]` (not cfg-gated).
-rustls-pemfile = "2"
+#
+# Issue #374 — `rustls-pemfile` 2.x is unmaintained (RUSTSEC-2025-0134);
+# use `rustls-pki-types::pem::PemObject` directly instead. The `std`
+# feature is required for `from_pem_*` blanket impls.
+rustls-pki-types = { version = "1", features = ["std"] }
 sha2 = "0.10"
 base64 = "0.22"
 dirs = "6"

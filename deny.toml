@@ -66,14 +66,14 @@ ignore = [
 
     # rustls-pemfile 2.x is unmaintained as of 2025-10; upstream redirects
     # callers to the `PemObject` trait in `rustls-pki-types`. This crate is
-    # already pulled into the workspace transitively by bollard /
-    # rustls-native-certs / hyper-rustls (libsql), so the surface area was
-    # already present on origin/xClaw. ADR-139 §4.5 PR2 (#372 / PR #373)
-    # additionally added `rustls-pemfile = "2"` as a direct dependency in
-    # `crates/dasclaw_cert_trust` for parsing user-supplied CA PEM bytes.
-    # Migration to `rustls-pki-types::PemObject` is tracked under #374;
-    # there is no security flaw, only a maintenance signal. Remove this
-    # ignore once dasclaw_cert_trust + transitive consumers all migrate.
+    # pulled into the workspace transitively by bollard /
+    # rustls-native-certs / hyper-rustls (libsql); reqwest 0.11 also pulls
+    # the 1.x line. Issue #374 (PR landing this comment) migrated the only
+    # **direct** consumer (`crates/dasclaw_cert_trust`) to
+    # `rustls-pki-types::pem::PemObject`. The transitive paths can only be
+    # cleared once bollard / libsql / reqwest upgrade upstream, so the
+    # ignore stays until `cargo tree -i rustls-pemfile` is empty. There is
+    # no security flaw, only a maintenance signal.
     "RUSTSEC-2025-0134",  # rustls-pemfile unmaintained (no CVE)
 ]
 
