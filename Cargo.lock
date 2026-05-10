@@ -3068,6 +3068,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dasclaw_utils_string"
+version = "0.0.0-w7"
+dependencies = [
+ "pretty_assertions",
+ "regex-lite",
+]
+
+[[package]]
 name = "data-encoding"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
