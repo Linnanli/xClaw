@@ -1,8 +1,8 @@
 # ADR-135: codex `sandboxing` crate adoption evaluation (research-only)
 
-- **Status**: 🟡 **Decision: adopt-verbatim-but-blocked** (research-only ADR per [#324](https://github.com/Linnanli/xClaw/issues/324) sub-task 2; implementation is **out of scope** for this PR)
-- **Date**: 2026-05-08
-- **Approver**: pending nally sign-off
+- **Status**: ✅ **Accepted** (path: option 2A whole-crate verbatim port; implementation is **out of scope** for this PR — driven by per-PR ADRs in Wave-A/B/C)
+- **Date**: 2026-05-08 (drafted) / 2026-05-15 (accepted)
+- **Approver**: nally (sign-off in epic [#380](https://github.com/Linnanli/xClaw/issues/380))
 - **Authors**: GitHub Copilot agent
 - **Tracker**: [#324](https://github.com/Linnanli/xClaw/issues/324) sub-task 2 — kernel-level WritableRoot 强制（landlock V3 / sbpl / Win ACL）
 - **Related**:
@@ -238,3 +238,12 @@ cargo fmt --all -- --check   # OK (no .rs changed)
 ## 7. Decision log
 
 - **2026-05-08**: 起草，研究 codex sandboxing crate 与 dasclaw 现状对比，提出三波落地路径。等待 nally sign-off。
+- **2026-05-15**: nally 在 epic [#380](https://github.com/Linnanli/xClaw/issues/380) 沙箱主线 Batch 1 启动源追对话中批准执行。决议落点：
+  - **D1 / §3 路径**：采纳 option 2A — `codex-cli-main/codex-rs/sandboxing/` 整 crate verbatim port 到 `crates/dasclaw_sandboxing/`（5,251 LOC）+ drift guard；拒绝 2B/2C/2D。
+  - **D2 / §2C 拒绝**：禁止在 `dasclaw_sandbox` 内自家实现 landlock/sbpl/Win ACL（违反 ADR-129 §1.3 verbatim 红线 + AGENTS.md 禁止补丁式代码）。
+  - **D3 / §3 wave 归属**：接受 #324 sub-task 2 跨 W6 / W7 落地（不在 W5 闭环）；Wave-A→B→C 顺序约束。
+  - **D4 / §3 Wave 顺序**：A1 (`dasclaw_protocol` 扩，由 ADR-136 单独 govern) → A2 (`dasclaw_net_proxy` 已落地 ADR-137 + PR-N23，本路径已通) → B1 (`dasclaw_sandboxing` 整 crate verbatim) → C1+C2 (adapter 接入 + 退役 dasclaw_sandbox 重叠路径)。
+  - **OQ-1 答**：与 ADR-136 决议合流——`dasclaw_protocol` 走 option 2C two-tier 文件级 verbatim slice（12,547 LOC，70% codex-protocol），不切到类型粒度；W7+ 评估是否升级到 full crate port（ADR-138 单独提）。
+  - **OQ-2 答**：ADR-135 §3 “PR-A2 dasclaw_net_proxy verbatim port” 描述**已过时**——该工作已通过 ADR-137 + PR-N23 落地完成；§1.3 transitive 依赖图中红色 `codex-network-proxy` 标注现应视为已解锁。
+  - **OQ-3 答**：#324 sub-task 2 重 milestone 到 W6 起，跨 W7。
+  - **OQ-4 答**：[#324](https://github.com/Linnanli/xClaw/issues/324) sub-task 2 issue body 字面写“新增 `dasclaw_sandbox/src/{landlock_v3,sbpl_writable_root,win_acl_deny}.rs`” 路径**作废**——该写法早于 ADR-129/132/133/135 verbatim 纪律确立，按本 ADR 修订为“verbatim port `codex sandboxing` 整 crate 到 `crates/dasclaw_sandboxing/`”。issue body 由 epic [#380](https://github.com/Linnanli/xClaw/issues/380) 关联流程更新。
