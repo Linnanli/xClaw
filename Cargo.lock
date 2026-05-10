@@ -2752,7 +2752,7 @@ dependencies = [
  "libc",
  "pretty_assertions",
  "rcgen",
- "rustls-pemfile 2.2.0",
+ "rustls-pki-types",
  "security-framework 3.7.0",
  "serde",
  "sha2",

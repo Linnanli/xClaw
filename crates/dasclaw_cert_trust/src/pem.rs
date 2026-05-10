@@ -4,6 +4,7 @@
 //! deliberately small: only the public functions actually used by the
 //! `TrustStore` impls are exposed.
 
+use rustls_pki_types::pem::{PemObject, SectionKind};
 use sha2::Digest;
 use x509_parser::prelude::FromDer as _;
 
@@ -16,17 +17,23 @@ use crate::error::Error;
 /// - the input contains no `-----BEGIN CERTIFICATE-----` header,
 /// - the base64 body is malformed,
 /// - the first item is not a `CERTIFICATE` (e.g. a private key block).
+///
+/// Issue #374 — uses `rustls-pki-types::pem::PemObject` (the tuple impl
+/// on `(SectionKind, Vec<u8>)`) so we see the kind of the first PEM
+/// section directly. `CertificateDer::from_pem_slice` would skip
+/// non-certificate blocks silently, which would weaken the
+/// "first block is not a CERTIFICATE" error and let a private key
+/// block followed by a certificate slip through unchallenged.
 pub(crate) fn decode_first_certificate(ca_pem: &[u8]) -> Result<Vec<u8>> {
-    let mut cursor = std::io::Cursor::new(ca_pem);
-    match rustls_pemfile::read_one(&mut cursor) {
-        Ok(Some(rustls_pemfile::Item::X509Certificate(der))) => Ok(der.as_ref().to_vec()),
-        Ok(Some(_)) => Err(Error::InvalidPem(
+    match <(SectionKind, Vec<u8>) as PemObject>::pem_slice_iter(ca_pem).next() {
+        Some(Ok((SectionKind::Certificate, der))) => Ok(der),
+        Some(Ok(_)) => Err(Error::InvalidPem(
             "first PEM block is not a CERTIFICATE".into(),
         )),
-        Ok(None) => Err(Error::InvalidPem(
+        None => Err(Error::InvalidPem(
             "no CERTIFICATE block found in PEM input".into(),
         )),
-        Err(err) => Err(Error::InvalidPem(format!("PEM decode failed: {err}"))),
+        Some(Err(err)) => Err(Error::InvalidPem(format!("PEM decode failed: {err}"))),
     }
 }
 
