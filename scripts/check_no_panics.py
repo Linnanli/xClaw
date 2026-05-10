@@ -26,6 +26,7 @@ VERBATIM_PORTED_PREFIXES = (
     "crates/dasclaw_protocol/",            # ADR-133 + ADR-136 — codex-protocol file-level slice
     "crates/dasclaw_sandbox_windows/",     # ADR-129 — codex sandbox-windows port
     "crates/dasclaw_shell_command/",       # ADR-133 — codex-shell-command
+    "crates/dasclaw_utils_string/",        # ADR-136 amendment 2 — codex-utils-string verbatim port
 )
 TEST_ATTR_PATTERN = re.compile(
     r"^\s*#\s*\[\s*(?:"
