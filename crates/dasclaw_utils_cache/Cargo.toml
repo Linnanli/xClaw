@@ -1,0 +1,30 @@
+# =====================================================================
+# dasclaw_utils_cache — verbatim port of upstream codex-utils-cache
+#
+# ADR-129 §1.3 verbatim red line + ADR-136 §3 amendment 2 PR-C1.prep-3.
+# 上游真理来源：codex-cli-main/codex-rs/utils/cache/
+# 仅允许的机械变化：
+#   1. package.name 由 codex-utils-cache 改为 dasclaw_utils_cache
+#   2. workspace 继承字段（version/edition/license/[lints]/dep workspace=true）
+#      就地展开为显式 inline pin（xClaw 无 [workspace.dependencies]）
+# 任何其它字符级变化都视为 drift —— scripts/check_codex_utils_cache_drift.py
+# 在 CI 中以 SHA256 强制比对源文件与上游字节一致。
+# =====================================================================
+[package]
+name = "dasclaw_utils_cache"
+version = "0.0.0-w7"
+edition = "2024"
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+name = "dasclaw_utils_cache"
+path = "src/lib.rs"
+
+[dependencies]
+lru = "0.16.3"
+sha1 = "0.10.6"
+tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
