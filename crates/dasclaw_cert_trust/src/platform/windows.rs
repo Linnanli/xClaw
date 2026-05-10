@@ -102,18 +102,32 @@ impl TrustStore for WindowsTrustStore {
         };
         let store = open_root_store()?;
         let found = find_cert_in_store(store.handle(), &target_fp)?;
-        let installed = found.is_some();
-        if let Some(ctx) = found {
-            // We obtained `ctx` via CertDuplicateCertificateContext —
-            // free it now since status() has no further use.
-            free_dup_context(ctx);
-        }
+        // Extract `notAfter` from the encoded DER while we still own
+        // the context, then free it. Issue #376 §3.4 — graceful
+        // degradation: parse failures yield `expires_at: None` rather
+        // than masking `installed: true`.
+        let (installed, expires_at) = match found {
+            Some(ctx) => {
+                // SAFETY: `ctx` came from CertDuplicateCertificateContext;
+                // `pbCertEncoded` is valid for `cbCertEncoded` bytes for
+                // the lifetime of the context.
+                let expires_at = unsafe {
+                    let info = &*ctx;
+                    let der =
+                        std::slice::from_raw_parts(info.pbCertEncoded, info.cbCertEncoded as usize);
+                    pem::extract_not_after_rfc3339(der)
+                };
+                free_dup_context(ctx);
+                (true, expires_at)
+            }
+            None => (false, None),
+        };
         drop(store);
         if installed {
             Ok(CertStatus {
                 installed: true,
                 fingerprint_sha256: Some(target_fp),
-                expires_at: None, // PR2 does not parse X.509 — see ADR-139 follow-up.
+                expires_at,
                 platform: PLATFORM,
                 env_fallback_active: false,
             })

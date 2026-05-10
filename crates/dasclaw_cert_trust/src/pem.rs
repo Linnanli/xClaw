@@ -120,6 +120,25 @@ pub(crate) fn decode_and_validate_root_ca(ca_pem: &[u8]) -> Result<Vec<u8>> {
     Ok(der)
 }
 
+/// Extract the `notAfter` field from a DER-encoded certificate as an
+/// RFC 3339 timestamp string.
+///
+/// Used by `TrustStore::status()` impls to populate
+/// [`crate::status::CertStatus::expires_at`]. Returns `None` if the DER
+/// fails to parse or the timestamp cannot be formatted — `status()`
+/// should still report `installed: true` in that case (the keychain
+/// confirmed the cert is there; we just can't tell when it expires).
+///
+/// Issue #376 §3.4: `expires_at` was unconditionally `None` before
+/// X.509 validation landed. Now that #375 brought `x509-parser` in as a
+/// direct dependency, exposing the real expiry is essentially free.
+pub(crate) fn extract_not_after_rfc3339(der: &[u8]) -> Option<String> {
+    let (_rest, cert) = x509_parser::certificate::X509Certificate::from_der(der).ok()?;
+    let dt = cert.validity().not_after.to_datetime();
+    dt.format(&time::format_description::well_known::Rfc3339)
+        .ok()
+}
+
 /// Compute the lowercase-hex SHA-256 fingerprint of a DER-encoded certificate.
 ///
 /// This is the canonical identity dasclaw uses to recognize "its" CA inside
@@ -423,5 +442,22 @@ mod tests {
             matches!(err, Error::InvalidPem(_)),
             "expected InvalidPem, got {err:?}"
         );
+    }
+
+    #[test]
+    fn extract_not_after_rfc3339_returns_none_on_garbage() {
+        assert!(extract_not_after_rfc3339(b"not der").is_none());
+    }
+
+    #[test]
+    fn extract_not_after_rfc3339_returns_value_for_valid_ca() {
+        let der = build_self_signed_ca_with_validity(-1, 30);
+        let s = extract_not_after_rfc3339(&der).expect("RFC3339 expected");
+        // RFC 3339 shape requires `T` separator and ≥19 chars.
+        assert!(s.len() >= 19, "too short: {s}");
+        assert!(s.contains('T'), "missing T separator: {s}");
+        // Must round-trip back to an OffsetDateTime.
+        time::OffsetDateTime::parse(&s, &time::format_description::well_known::Rfc3339)
+            .expect("must parse back");
     }
 }

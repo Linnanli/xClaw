@@ -52,6 +52,20 @@ pub(crate) fn fingerprint_path() -> Result<PathBuf> {
 /// load-bearing: the keychain backends rely on the sentinel being
 /// authoritative; a truncated file would make `status()` falsely report
 /// "not installed" while the real CA is still trusted by the OS.
+///
+/// # Permissions (issue #376 §3.1)
+///
+/// On Unix the sentinel is created with mode `0o600`. The default umask
+/// would yield `0o644`, which lets any process running as the same user
+/// overwrite the file and trick `status()` / `uninstall()` into looking
+/// for the wrong CA in the keychain. Tightening to `0o600` does not add
+/// a real privilege boundary (anyone in the same user context can call
+/// the keychain APIs directly), but it makes intra-user tampering
+/// detectable: [`read_fingerprint`] also asserts the mode and ownership
+/// match what we wrote.
+///
+/// On Windows we rely on the default ACL (`CurrentUser` profile only),
+/// which already restricts access to the same user.
 pub(crate) fn write_fingerprint(fp_hex: &str) -> Result<()> {
     let path = fingerprint_path()?;
     let parent = path.parent().ok_or_else(|| {
@@ -61,7 +75,13 @@ pub(crate) fn write_fingerprint(fp_hex: &str) -> Result<()> {
         ))
     })?;
     std::fs::create_dir_all(parent)?;
-    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+    let mut builder = tempfile::Builder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        builder.permissions(std::fs::Permissions::from_mode(0o600));
+    }
+    let mut tmp = builder.tempfile_in(parent)?;
     {
         use std::io::Write as _;
         tmp.write_all(fp_hex.as_bytes())?;
@@ -76,10 +96,20 @@ pub(crate) fn write_fingerprint(fp_hex: &str) -> Result<()> {
 /// Read the previously-persisted SHA-256 fingerprint.
 ///
 /// Returns `Ok(None)` when the file does not exist (= no CA installed).
+///
+/// # Permissions (issue #376 §3.1)
+///
+/// On Unix this also verifies the file is owned by the current uid and
+/// has mode `0o600` — the same constraints [`write_fingerprint`]
+/// applies. A mismatch returns [`Error::Io`] with `PermissionDenied`,
+/// because a sentinel that another process tampered with cannot be
+/// trusted to point at our CA. Windows skips the check and relies on
+/// the default profile ACL.
 pub(crate) fn read_fingerprint() -> Result<Option<String>> {
     let path = fingerprint_path()?;
     match std::fs::read_to_string(&path) {
         Ok(content) => {
+            verify_sentinel_permissions(&path)?;
             let trimmed = content.trim().to_string();
             if trimmed.is_empty() {
                 Ok(None)
@@ -90,6 +120,47 @@ pub(crate) fn read_fingerprint() -> Result<Option<String>> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(Error::Io(err)),
     }
+}
+
+/// Unix: the sentinel must be a regular file owned by the current uid
+/// with mode `0o600`. Anything else means another process touched it
+/// and we should refuse to trust the value. On Windows / unsupported
+/// targets this is a no-op.
+#[cfg(unix)]
+fn verify_sentinel_permissions(path: &std::path::Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+    let meta = std::fs::metadata(path)?;
+    if !meta.is_file() {
+        return Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "fingerprint sentinel is not a regular file",
+        )));
+    }
+    let mode = meta.mode() & 0o777;
+    if mode != 0o600 {
+        return Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("fingerprint sentinel mode {mode:o} (expected 600)"),
+        )));
+    }
+    // `getuid()` is `unsafe` only because libc declares it so; the
+    // syscall itself has no preconditions and always succeeds.
+    let current_uid = unsafe { libc::getuid() };
+    if meta.uid() != current_uid {
+        return Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!(
+                "fingerprint sentinel owned by uid {}, expected {current_uid}",
+                meta.uid()
+            ),
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn verify_sentinel_permissions(_path: &std::path::Path) -> Result<()> {
+    Ok(())
 }
 
 /// Delete the fingerprint file. Idempotent — succeeds when the file is
@@ -181,5 +252,46 @@ mod tests {
             vec![FINGERPRINT_FILENAME.to_string()],
             "atomic rename must leave only the sentinel file: {entries:?}"
         );
+    }
+
+    /// Issue #376 §3.1 — sentinel must be created with mode 0o600.
+    #[cfg(unix)]
+    #[test]
+    fn write_fingerprint_uses_mode_0600_on_unix() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let td = TempDir::new().expect("tempdir");
+        with_codex_home(&td);
+        write_fingerprint("abc").expect("write");
+        let path = fingerprint_path().expect("path");
+        let mode = std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "expected mode 0600, got {mode:o}");
+    }
+
+    /// Issue #376 §3.1 — read must reject a tampered (world-readable)
+    /// sentinel even when its content would otherwise round-trip.
+    #[cfg(unix)]
+    #[test]
+    fn read_fingerprint_rejects_world_readable_sentinel() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let td = TempDir::new().expect("tempdir");
+        with_codex_home(&td);
+        write_fingerprint("abc").expect("write");
+        let path = fingerprint_path().expect("path");
+        // Loosen the mode behind our back, simulating a tampering
+        // process running as the same user.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+            .expect("relax mode");
+        let err = read_fingerprint().expect_err("must reject loose mode");
+        match err {
+            Error::Io(io_err) => {
+                assert_eq!(io_err.kind(), std::io::ErrorKind::PermissionDenied);
+                assert!(io_err.to_string().contains("644"), "msg: {io_err}");
+            }
+            other => panic!("expected Error::Io, got {other:?}"),
+        }
     }
 }

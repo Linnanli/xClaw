@@ -40,6 +40,12 @@ dirs = "6"
 # dependency via the rustls-pki-types ecosystem; promoting to a direct
 # dependency lets us call the parser API explicitly.
 x509-parser = "0.18"
+# RFC 3339 formatting of `notAfter` extracted from the installed CA so
+# `dasclaw cert status` can report a real expiry instead of `None`. We
+# only need `formatting` + `parsing` of `OffsetDateTime`; already
+# transitively present (rcgen / hyper-rustls), so promoting to a direct
+# dependency adds no new tree. Issue #376 §3.4.
+time = { version = "0.3", default-features = false, features = ["formatting"] }
 # Atomic fingerprint sentinel writes (tempfile + rename) — see
 # `paths::write_fingerprint`. A non-atomic write would let a mid-write
 # crash leave the file truncated while the OS keychain still trusts the
@@ -49,6 +55,13 @@ tempfile = "3"
 # macOS — per-user login keychain via `security-framework`.
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
+
+# Unix sentinel-permission audit (issue #376 §3.1) needs `getuid()` to
+# verify the fingerprint file is still owned by the dasclaw user. `libc`
+# is already in the workspace lockfile via `tempfile`/`rcgen`/etc., so
+# this adds no new transitive tree.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 # Windows — `CurrentUser\Root` cert store via `windows-rs`.
 [target.'cfg(target_os = "windows")'.dependencies]

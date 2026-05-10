@@ -127,13 +127,22 @@ impl TrustStore for MacOsTrustStore {
             return Ok(CertStatus::not_installed(PLATFORM));
         };
         match find_cert_by_fingerprint(&target_fp)? {
-            Some(_cert) => Ok(CertStatus {
-                installed: true,
-                fingerprint_sha256: Some(target_fp),
-                expires_at: None, // PR2 does not parse X.509 — see ADR-139 follow-up.
-                platform: PLATFORM,
-                env_fallback_active: false,
-            }),
+            Some(cert) => {
+                // Issue #376 §3.4 — surface the real `notAfter` extracted
+                // from the keychain copy of the CA. We deliberately do
+                // NOT propagate parse failures here: the keychain just
+                // confirmed the cert is installed, so `installed: true`
+                // remains the truthful answer; `expires_at: None` is the
+                // graceful degradation when the DER round-trip fails.
+                let expires_at = pem::extract_not_after_rfc3339(&cert.to_der());
+                Ok(CertStatus {
+                    installed: true,
+                    fingerprint_sha256: Some(target_fp),
+                    expires_at,
+                    platform: PLATFORM,
+                    env_fallback_active: false,
+                })
+            }
             None => Ok(CertStatus::not_installed(PLATFORM)),
         }
     }
