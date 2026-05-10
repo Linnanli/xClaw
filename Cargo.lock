@@ -2942,6 +2942,7 @@ name = "dasclaw_protocol"
 version = "0.0.0-w6"
 dependencies = [
  "chardetng",
+ "dasclaw_absolute_path",
  "encoding_rs",
  "icu_decimal",
  "icu_locale_core",
@@ -2950,8 +2951,11 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_json",
+ "strum",
+ "strum_macros",
  "sys-locale",
  "thiserror 2.0.18",
+ "tracing",
  "ts-rs",
  "uuid",
 ]
@@ -10821,6 +10825,24 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "152a0b65a590ff6c3da95cabe2353ee04e6167c896b28e3b14478c2636c922fc"
 dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "strum"
+version = "0.27.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af23d6f6c1a224baef9d3f61e287d2761385a5b88fdab4eb4c6f11aeb54c4bcf"
+
+[[package]]
+name = "strum_macros"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab85eea0270ee17587ed4156089e10b9e6880ee688791d45a905f5b1ca36f664"
+dependencies = [
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",

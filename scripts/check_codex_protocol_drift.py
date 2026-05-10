@@ -37,14 +37,14 @@ PAIRS: list[tuple[Path, Path]] = []
 PROTO_LOCAL = REPO_ROOT / "crates" / "dasclaw_protocol" / "src"
 PROTO_UPSTREAM = REPO_ROOT / "codex-cli-main" / "codex-rs" / "protocol" / "src"
 
-# ADR-136 Step C1.2 (Layer 1): parse_command + 14 zero-crate-deps leaves.
-# Step C1.3 ~ C1.5 will append: config_types, openai_models (cycle);
-# protocol, permissions, models, approvals, network_policy, items,
-# request_permissions (hub); error, error_tests.
+# ADR-136 Step C1.3 (Layers 1+2): parse_command + 14 leaves + config_types/openai_models cycle.
+# Step C1.4 ~ C1.5 will append: protocol, permissions, models, approvals,
+# network_policy, items, request_permissions (hub); error, error_tests.
 for fname in [
     "account.rs",
     "agent_path.rs",
     "auth.rs",
+    "config_types.rs",
     "dynamic_tools.rs",
     "exec_output.rs",
     "exec_output_tests.rs",
@@ -52,6 +52,7 @@ for fname in [
     "memory_citation.rs",
     "message_history.rs",
     "num_format.rs",
+    "openai_models.rs",
     "parse_command.rs",
     "plan_tool.rs",
     "request_user_input.rs",
