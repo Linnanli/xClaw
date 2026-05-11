@@ -1,52 +1,47 @@
-//! macOS Seatbelt sandbox backend (W2.2a — minimum viable).
+//! macOS Seatbelt sandbox backend — delegates sbpl synthesis to
+//! [`dasclaw_sandboxing::seatbelt`] (ADR-135 §3 PR-C1 / Wave-C1).
 //!
-//! Wraps `/usr/bin/sandbox-exec -p <policy> -- <cmd>`. The policy is composed
-//! by concatenating the three SBPL files lifted from
-//! `codex-cli-main/codex-rs/sandboxing/src/`:
+//! Before Wave-C1 this module composed its own sbpl from three vendored
+//! `.sbpl` files plus inline `writable_roots` / `proxy_loopback_ports`
+//! handling. That implementation **did not enforce `read_only_subpaths`
+//! (洞中洞)** — see ADR-142 / ADR-135 §1.3 "内核层暂不强制". The new code
+//! path defers all sbpl assembly to `dasclaw_sandboxing` so we inherit the
+//! upstream `FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd`
+//! logic that automatically protects `.git/`, `.dasclaw/`, `.codex/` and
+//! other sensitive subpaths under a writable root.
 //!
-//! - `seatbelt_base_policy.sbpl`   — base deny-by-default
-//! - `restricted_read_only_platform_defaults.sbpl` — RO platform paths
-//! - `seatbelt_network_policy.sbpl` — network allow rules (only when
-//!   `policy.allow_network` is true)
+//! ## What this module still owns
 //!
-//! W2.2a scope: literal sbpl include + writable_roots inline append. W2.2b
-//! ports codex's full proxy-loopback-port + UDS allow-list logic
-//! (`seatbelt.rs` 723 LOC) once `dasclaw_net_proxy` lands in W7.
+//! - `env_clear` parent-env scrubbing (W2.2c P1).
+//! - `pre_exec` `setrlimit` resource limits (W3.3-2).
+//! - Post-spawn `memorystatus_control` memory cap (W3.3-3b).
+//! - `spawn` + `wait_with_output` lifecycle.
+//!
+//! ## Known regression (tracked for Wave-C2)
+//!
+//! - `proxy_loopback_ports` hole-punching (HTTP_PROXY=http://localhost:PORT
+//!   support under `allow_network=false`) is **not** plumbed in C1.
+//!   `dasclaw_sandboxing::seatbelt::create_seatbelt_command_args` derives
+//!   loopback holes from a `NetworkProxy` instance (which inspects env).
+//!   Wave-C2 will thread the upstream `NetworkProxy` through; until then,
+//!   sessions that rely on a local HTTP proxy must use a policy with
+//!   `network_access=true` (broader access) instead of relying on the
+//!   per-port hole punch.
 
 use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 pub mod memorystatus;
+mod policy_bridge;
 
 use crate::rlimit;
 use crate::{Sandbox, SandboxError, SandboxExecRequest, SandboxType};
 
-const SEATBELT_EXECUTABLE: &str = "/usr/bin/sandbox-exec";
-
-/// Pre-allocation hint for sbpl assembly. Tuned to fit base + RO + network
-/// + a handful of writable_roots without realloc.
-const POLICY_BUFFER_HINT: usize = 256;
-
-const BASE_POLICY: &str = include_str!("policies/seatbelt_base_policy.sbpl");
-const RO_DEFAULTS: &str = include_str!("policies/restricted_read_only_platform_defaults.sbpl");
-const NETWORK_POLICY: &str = include_str!("policies/seatbelt_network_policy.sbpl");
-
-/// Escape a path for inclusion in an sbpl `"..."` string literal.
-///
-/// sbpl is S-expression based; the only characters that can break out of a
-/// string literal are `\` and `"`. Both must be backslash-prefixed.
-fn escape_sbpl_path(p: &std::path::Path) -> String {
-    let raw = p.display().to_string();
-    let mut out = String::with_capacity(raw.len());
-    for ch in raw.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            other => out.push(other),
-        }
-    }
-    out
-}
+use dasclaw_sandboxing::seatbelt::{
+    create_seatbelt_command_args, CreateSeatbeltCommandArgsParams,
+    MACOS_PATH_TO_SEATBELT_EXECUTABLE,
+};
 
 pub struct SeatbeltSandbox;
 
@@ -55,43 +50,39 @@ impl SeatbeltSandbox {
         Self
     }
 
-    /// Compose the full sbpl text for `req.policy`.
-    fn compose_policy(&self, req: &SandboxExecRequest) -> String {
-        let mut policy = String::with_capacity(
-            BASE_POLICY.len() + RO_DEFAULTS.len() + NETWORK_POLICY.len() + POLICY_BUFFER_HINT,
-        );
-        policy.push_str(BASE_POLICY);
-        policy.push('\n');
-        policy.push_str(RO_DEFAULTS);
-        policy.push('\n');
+    /// Build the `sandbox-exec` argument vector for `req` by delegating sbpl
+    /// synthesis to `dasclaw_sandboxing`.
+    ///
+    /// Returns the *arguments* portion only — the leading
+    /// `/usr/bin/sandbox-exec` executable path is left to the caller so the
+    /// `Command` construction site can also wire `pre_exec`, env scrubbing,
+    /// and `cwd`.
+    fn build_seatbelt_args(&self, req: &SandboxExecRequest) -> Vec<String> {
+        let cwd: PathBuf = req
+            .command
+            .get_current_dir()
+            .map(std::path::Path::to_path_buf)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("/"));
 
-        if req.policy.allow_network {
-            policy.push_str(NETWORK_POLICY);
-            policy.push('\n');
-        } else if !req.policy.proxy_loopback_ports.is_empty() {
-            // Network is denied wholesale, but punch holes for the local
-            // proxy listener(s). Mirrors codex `seatbelt.rs` proxy-routing
-            // path. Each port allowed for outbound TCP only.
-            for port in &req.policy.proxy_loopback_ports {
-                policy.push_str(&format!(
-                    "(allow network-outbound (remote tcp \"localhost:{port}\"))\n"
-                ));
-            }
+        let triple = policy_bridge::to_protocol_policy(&req.policy, &cwd);
+
+        let program = req.command.get_program().to_string_lossy().into_owned();
+        let mut command: Vec<String> = Vec::with_capacity(1 + req.command.get_args().len());
+        command.push(program);
+        for a in req.command.get_args() {
+            command.push(a.to_string_lossy().into_owned());
         }
 
-        for root in &req.policy.writable_roots {
-            policy.push_str(&format!(
-                "(allow file-write* (subpath \"{}\"))\n",
-                escape_sbpl_path(root)
-            ));
-        }
-        for root in &req.policy.readable_roots {
-            policy.push_str(&format!(
-                "(allow file-read* (subpath \"{}\"))\n",
-                escape_sbpl_path(root)
-            ));
-        }
-        policy
+        create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
+            command,
+            file_system_sandbox_policy: &triple.file_system_policy,
+            network_sandbox_policy: triple.network_policy,
+            sandbox_policy_cwd: &cwd,
+            enforce_managed_network: false,
+            network: None,
+            extra_allow_unix_sockets: &[],
+        })
     }
 }
 
@@ -107,16 +98,10 @@ impl Sandbox for SeatbeltSandbox {
     }
 
     fn execute(&self, req: SandboxExecRequest) -> Result<std::process::Output, SandboxError> {
-        let policy = self.compose_policy(&req);
+        let args = self.build_seatbelt_args(&req);
 
-        let program = req.command.get_program().to_os_string();
-        let args: Vec<_> = req.command.get_args().map(|a| a.to_os_string()).collect();
-
-        let mut wrapped = Command::new(SEATBELT_EXECUTABLE);
-        wrapped.arg("-p").arg(&policy).arg("--").arg(&program);
-        for a in &args {
-            wrapped.arg(a);
-        }
+        let mut wrapped = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE);
+        wrapped.args(&args);
 
         // Env scrubbing (W2.2c P1 fix): clear inherited parent env, then
         // pass *only* what the caller explicitly set on `req.command`. This
@@ -169,7 +154,7 @@ mod tests {
     use crate::{SandboxPolicy, SandboxablePreference};
 
     #[test]
-    fn compose_policy_includes_base_and_ro() {
+    fn build_seatbelt_args_emits_sandbox_exec_argv_shape() {
         let sb = SeatbeltSandbox::new();
         let req = SandboxExecRequest {
             command: Command::new("/bin/echo"),
@@ -177,15 +162,23 @@ mod tests {
             preference: SandboxablePreference::Auto,
             windows_sandbox_enabled: false,
         };
-        let policy = sb.compose_policy(&req);
-        // Sanity: base policy must mention `(version 1)` opener.
-        assert!(policy.contains("(version 1)"));
-        // No network policy when allow_network=false.
-        assert!(!policy.contains("(allow network*"));
+        let args = sb.build_seatbelt_args(&req);
+        // sandbox-exec args always start with `-p <policy>` and end with
+        // `-- <command>...`.
+        assert_eq!(args.first().map(String::as_str), Some("-p"));
+        let sep = args.iter().position(|a| a == "--").expect("`--` separator");
+        // The policy is at index 1.
+        let policy = &args[1];
+        assert!(
+            policy.contains("(version 1)"),
+            "policy must start with sbpl (version 1) opener"
+        );
+        // The command segment must contain `/bin/echo`.
+        assert!(args[sep + 1..].iter().any(|a| a == "/bin/echo"));
     }
 
     #[test]
-    fn compose_policy_appends_writable_root() {
+    fn build_seatbelt_args_propagates_writable_root_for_workspace_write() {
         let sb = SeatbeltSandbox::new();
         let req = SandboxExecRequest {
             command: Command::new("/bin/echo"),
@@ -193,46 +186,28 @@ mod tests {
             preference: SandboxablePreference::Auto,
             windows_sandbox_enabled: false,
         };
-        let policy = sb.compose_policy(&req);
-        assert!(policy.contains("(allow file-write* (subpath \"/tmp/work\"))"));
-    }
-
-    #[test]
-    fn compose_policy_punches_proxy_loopback_holes_when_network_denied() {
-        let sb = SeatbeltSandbox::new();
-        let req = SandboxExecRequest {
-            command: Command::new("/bin/echo"),
-            policy: SandboxPolicy::read_only_defaults().with_proxy_ports(vec![8888]),
-            preference: SandboxablePreference::Auto,
-            windows_sandbox_enabled: false,
-        };
-        let policy = sb.compose_policy(&req);
-        assert!(policy.contains("(allow network-outbound (remote tcp \"localhost:8888\"))"));
-    }
-
-    #[test]
-    fn escape_sbpl_path_handles_quotes_and_backslashes() {
-        use std::path::Path;
-        assert_eq!(escape_sbpl_path(Path::new("/normal/path")), "/normal/path");
-        assert_eq!(escape_sbpl_path(Path::new("/has\"quote")), "/has\\\"quote");
-        assert_eq!(
-            escape_sbpl_path(Path::new("/has\\backslash")),
-            "/has\\\\backslash"
+        let args = sb.build_seatbelt_args(&req);
+        // dasclaw_sandboxing materialises writable roots as `-D
+        // WRITABLE_ROOT_<N>=<path>` definition args; the sbpl policy body
+        // references them as `(param "WRITABLE_ROOT_<N>")`. Verify both
+        // sides line up.
+        let policy = &args[1];
+        assert!(
+            policy.contains("file-write"),
+            "policy must grant file-write* under a writable root: {policy}"
         );
-    }
-
-    #[test]
-    fn compose_policy_escapes_path_with_quote() {
-        let sb = SeatbeltSandbox::new();
-        let req = SandboxExecRequest {
-            command: Command::new("/bin/echo"),
-            policy: SandboxPolicy::read_only_defaults().with_writable("/tmp/has\"quote"),
-            preference: SandboxablePreference::Auto,
-            windows_sandbox_enabled: false,
-        };
-        let policy = sb.compose_policy(&req);
-        // Must NOT contain unescaped `"quote` mid-string (which would break sbpl)
-        assert!(policy.contains("(allow file-write* (subpath \"/tmp/has\\\"quote\"))"));
+        assert!(
+            policy.contains("WRITABLE_ROOT_"),
+            "policy must reference at least one WRITABLE_ROOT_<N> param: {policy}"
+        );
+        // On macOS `/tmp` is a symlink to `/private/tmp`, so the writable
+        // root is canonicalized before reaching the argv. Match the suffix
+        // rather than the literal input to stay robust across platforms.
+        assert!(
+            args.iter().any(|a| a.starts_with("-DWRITABLE_ROOT_")
+                && (a.ends_with("=/tmp/work") || a.ends_with("=/private/tmp/work"))),
+            "argv must define a WRITABLE_ROOT_<N>=/tmp/work definition, got {args:?}"
+        );
     }
 
     #[cfg(target_os = "macos")]
