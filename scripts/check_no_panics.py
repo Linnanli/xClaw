@@ -238,11 +238,43 @@ def added_lines_for_file(base: str, head: str, path: pathlib.Path) -> set[int]:
     return added
 
 
+def is_test_only_file(path: pathlib.Path) -> bool:
+    """Recognise file naming conventions that mark a file as test-only.
+
+    1. Codex upstream convention (vendored verbatim into several crates)
+       splits large test suites into a sibling `*_tests.rs` file that is
+       included from the production module via:
+
+           #[cfg(test)]
+           #[path = "<name>_tests.rs"]
+           mod tests;
+
+       The lexer in `line_test_contexts` only sees the included file in
+       isolation, so the parent's `#[cfg(test)]` gate is invisible. Treat
+       any `*_tests.rs` or `tests.rs` filename as test-only.
+    2. Cargo integration test convention: anything under a `tests/` or
+       `benches/` directory inside a crate is a separate test/bench target,
+       always compiled with `cfg(test)`.
+    """
+
+    name = path.name
+    if name == "tests.rs":
+        return True
+    if name.endswith("_tests.rs"):
+        return True
+    parts = path.parts
+    if "tests" in parts or "benches" in parts:
+        return True
+    return False
+
+
 def collect_violations(base: str, head: str) -> list[tuple[str, int, str]]:
     violations: list[tuple[str, int, str]] = []
 
     for path in changed_rust_files(base, head):
         if not path.exists():
+            continue
+        if is_test_only_file(path):
             continue
         added_lines = added_lines_for_file(base, head, path)
         if not added_lines:
@@ -373,6 +405,20 @@ class CheckNoPanicsTests(unittest.TestCase):
         contexts = line_test_contexts(lines)
 
         self.assertTrue(all(contexts))
+
+    def test_is_test_only_file_recognises_codex_convention(self) -> None:
+        self.assertTrue(is_test_only_file(pathlib.Path("crates/foo/src/bar_tests.rs")))
+        self.assertTrue(
+            is_test_only_file(pathlib.Path("crates/foo/src/seatbelt_tests.rs"))
+        )
+        self.assertTrue(is_test_only_file(pathlib.Path("src/tests.rs")))
+        self.assertTrue(
+            is_test_only_file(pathlib.Path("crates/foo/tests/integration.rs"))
+        )
+        self.assertTrue(is_test_only_file(pathlib.Path("crates/foo/benches/bench.rs")))
+        self.assertFalse(is_test_only_file(pathlib.Path("src/lib.rs")))
+        self.assertFalse(is_test_only_file(pathlib.Path("src/seatbelt.rs")))
+        self.assertFalse(is_test_only_file(pathlib.Path("src/notests.rs")))
 
 
 if __name__ == "__main__":
