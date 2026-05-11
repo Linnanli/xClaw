@@ -26,9 +26,11 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dasclaw_exec::{ExecRequest, ProcessExecutor, SandboxedExecutor};
+use dasclaw_net_proxy::NetworkProxy;
 use dasclaw_sandbox::SandboxablePreference;
 
 /// Output from sandbox execution.
@@ -70,10 +72,18 @@ fn legacy_policy_to_cap(policy: SandboxPolicy) -> CapPolicy {
 ///
 /// 不持有 Docker / 代理状态，每次 `execute` 独立构造 [`SandboxedExecutor`]。
 /// 这样 cwd / policy 可以按调用方期望逐次切换，不被首次 init 锁死。
+///
+/// W3.2-C2b: 会话级 [`NetworkProxy`] 通过构造期一次性注入，`execute` 时
+/// `.clone()` 进 [`SandboxedExecutor`]——下游 `dasclaw_sandboxing` 据此在
+/// Seatbelt profile 里 hole-punch HTTP/SOCKS 代理端口。`None` ⇒ 退化为旧
+/// 行为（沙箱内部完全禁网），fail-safe。
 pub struct OsExecutor {
     timeout: Duration,
     sandbox_pref: SandboxablePreference,
     allow_full_access: bool,
+    /// 会话级 NetworkProxy 句柄（`Arc` 因为 desktop-client 会话生命周期共享）。
+    /// `None` = 未启用代理，沙箱内部完全禁网。
+    network: Option<Arc<NetworkProxy>>,
 }
 
 impl OsExecutor {
@@ -82,11 +92,17 @@ impl OsExecutor {
     /// - `timeout`: 单条命令最大执行时间。
     /// - `allow_full_access`: 必须为 `true` 才允许 `FullAccess` 政策落到 host
     ///   进程（双 opt-in，与 `SANDBOX_ALLOW_FULL_ACCESS` 等价）。
-    pub fn new(timeout: Duration, allow_full_access: bool) -> Self {
+    /// - `network`: 可选会话级 [`NetworkProxy`]；`None` ⇒ 沙箱内部禁网。
+    pub fn new(
+        timeout: Duration,
+        allow_full_access: bool,
+        network: Option<Arc<NetworkProxy>>,
+    ) -> Self {
         Self {
             timeout,
             sandbox_pref: SandboxablePreference::Auto,
             allow_full_access,
+            network,
         }
     }
 
@@ -110,7 +126,10 @@ impl OsExecutor {
         }
 
         let cap_policy = legacy_policy_to_cap(policy);
-        let executor = SandboxedExecutor::new(cap_policy, self.sandbox_pref, false);
+        // W3.2-C2b: clone Arc → 拿到 owned NetworkProxy 句柄注入 SandboxedExecutor。
+        // NetworkProxy 内部已是 Arc<NetworkProxyState>，clone 廉价。
+        let network = self.network.as_deref().cloned();
+        let executor = SandboxedExecutor::new(cap_policy, self.sandbox_pref, false, network);
 
         let mut cmd = build_shell_command(command);
         cmd.envs(env);
@@ -221,7 +240,7 @@ mod tests {
 
     #[tokio::test]
     async fn full_access_without_opt_in_refuses() {
-        let executor = OsExecutor::new(Duration::from_secs(5), false);
+        let executor = OsExecutor::new(Duration::from_secs(5), false, None);
         let result = executor
             .execute(
                 "echo hi",
@@ -235,7 +254,7 @@ mod tests {
 
     #[tokio::test]
     async fn timeout_returns_timeout_error() {
-        let executor = OsExecutor::new(Duration::from_millis(100), true);
+        let executor = OsExecutor::new(Duration::from_millis(100), true, None);
         // sleep 远超 100ms,在 macOS / Linux 上都可用
         let result = executor
             .execute(

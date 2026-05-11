@@ -2808,7 +2808,9 @@ dependencies = [
 name = "dasclaw_exec"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
+ "dasclaw_net_proxy",
  "dasclaw_sandbox",
  "ironclaw_workspace_cap",
  "tempfile",
