@@ -82,6 +82,8 @@ fn run_smoke_blocking() -> Result<SandboxSmokeReport, String> {
         policy: SandboxPolicy::read_only_defaults(),
         preference: SandboxablePreference::Auto,
         windows_sandbox_enabled: false,
+        // Wave-C2a: smoke-test 路径不需要本地代理洞穿；保持 None。
+        network: None,
     };
 
     let out = sb
