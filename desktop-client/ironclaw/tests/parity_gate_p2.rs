@@ -22,9 +22,10 @@ use uuid::Uuid;
 // ═══════════════════════════════════════════════════════════════════════
 
 fn make_ctx() -> JobContext {
-    let mut ctx = JobContext::default();
-    ctx.conversation_id = Some(Uuid::new_v4());
-    ctx
+    JobContext {
+        conversation_id: Some(Uuid::new_v4()),
+        ..JobContext::default()
+    }
 }
 
 fn session_with_turns(n: usize) -> (Session, Uuid) {
