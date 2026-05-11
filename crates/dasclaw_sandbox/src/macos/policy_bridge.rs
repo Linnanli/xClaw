@@ -99,6 +99,8 @@ mod tests {
             allow_spawn: true,
             proxy_loopback_ports: vec![],
             resource_limits: Default::default(),
+            enterprise_mode: false,
+            enterprise_allow_userspace_carveouts: false,
         };
         let cwd = PathBuf::from("/");
         let triple = to_protocol_policy(&backend, &cwd);
@@ -119,6 +121,8 @@ mod tests {
             allow_spawn: true,
             proxy_loopback_ports: vec![],
             resource_limits: Default::default(),
+            enterprise_mode: false,
+            enterprise_allow_userspace_carveouts: false,
         };
         let cwd = PathBuf::from("/tmp/work");
         let triple = to_protocol_policy(&backend, &cwd);
@@ -147,6 +151,8 @@ mod tests {
             allow_spawn: true,
             proxy_loopback_ports: vec![],
             resource_limits: Default::default(),
+            enterprise_mode: false,
+            enterprise_allow_userspace_carveouts: false,
         };
         let cwd = PathBuf::from("/");
         let triple = to_protocol_policy(&backend, &cwd);

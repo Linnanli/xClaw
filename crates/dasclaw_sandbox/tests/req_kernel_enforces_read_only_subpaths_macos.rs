@@ -46,6 +46,8 @@ fn req_dasclaw_sandbox_kernel_blocks_git_hooks_under_workspace_write_macos() {
         allow_spawn: true,
         proxy_loopback_ports: vec![],
         resource_limits: Default::default(),
+        enterprise_mode: false,
+        enterprise_allow_userspace_carveouts: false,
     };
 
     // Attempt to overwrite the hook from inside the sandbox. With kernel-
@@ -103,6 +105,8 @@ fn req_dasclaw_sandbox_kernel_allows_write_to_non_hole_path_macos() {
         allow_spawn: true,
         proxy_loopback_ports: vec![],
         resource_limits: Default::default(),
+        enterprise_mode: false,
+        enterprise_allow_userspace_carveouts: false,
     };
 
     let mut cmd = Command::new("/bin/sh");

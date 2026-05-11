@@ -62,7 +62,8 @@ use dasclaw_sandbox_windows::types::{NetworkAccess, SandboxPolicy as UpstreamPol
 
 use crate::launcher_ipc::{LauncherRequest, OuterJobLimitsWire, PROTOCOL_VERSION};
 use crate::{
-    ResourceLimits, Sandbox, SandboxBackendConfig, SandboxError, SandboxExecRequest, SandboxType,
+    check_enterprise_gate, EnterpriseGateOutcome, ResourceLimits, Sandbox, SandboxBackendConfig,
+    SandboxError, SandboxExecRequest, SandboxType, SoftModeReason,
 };
 
 /// Windows restricted-token sandbox backend.
@@ -91,8 +92,41 @@ impl Sandbox for WindowsRestrictedTokenSandbox {
 
     fn execute(&self, req: SandboxExecRequest) -> Result<std::process::Output, SandboxError> {
         let dasclaw_home = resolve_dasclaw_home()?;
+        let setup_complete = sandbox_setup_is_complete(&dasclaw_home);
 
-        if !sandbox_setup_is_complete(&dasclaw_home) {
+        // ADR-141 fail-closed gate (PR-W1 + PR-W2). Runs first so that
+        // enterprise spawns surface the correct error variant before any
+        // command decomposition / IPC work.
+        match check_enterprise_gate(
+            &req.policy,
+            SandboxType::WindowsRestrictedToken,
+            setup_complete,
+        ) {
+            EnterpriseGateOutcome::Allow => {}
+            EnterpriseGateOutcome::AllowWithUserspaceSoftMode { reason } => {
+                emit_enterprise_softmode_audit_event(reason, &req, &dasclaw_home);
+            }
+            EnterpriseGateOutcome::DenyNoKernelSandbox => {
+                return Err(SandboxError::WindowsSandboxNotAvailable {
+                    detail: format!(
+                        "Windows enterprise mode requires the OS sandbox to be set up at {} \
+                         (run dasclaw-sandbox-setup.exe elevated). See ADR-141 §3 PR-W1.",
+                        dasclaw_home.display()
+                    ),
+                });
+            }
+            EnterpriseGateOutcome::DenyNoReadOnlySubpathsKernelEnforcement => {
+                return Err(SandboxError::ReadOnlySubpathsKernelEnforcementMissing {
+                    detail: "Windows kernel-layer read_only_subpaths enforcement is not \
+                             yet ported (ADR-141 PR-W3/W4 / Wave-C1b pending). Set \
+                             enterprise_allow_userspace_carveouts = true to opt into \
+                             user-space-only enforcement with an audit event."
+                        .to_string(),
+                });
+            }
+        }
+
+        if !setup_complete {
             return Err(SandboxError::WindowsSetupPending {
                 detail: format!(
                     "Windows sandbox not initialized at {}. Run \
@@ -243,6 +277,42 @@ fn backend_config_to_upstream_policy(
             exclude_slash_tmp: false,
         })
     }
+}
+
+/// Emit a structured per-spawn audit event recording that an enterprise
+/// spawn proceeded under user-space-only carve-out enforcement (ADR-141
+/// §6 OQ-3 / OQ-4 sign-off 2026-05-11).
+///
+/// Implemented as a `tracing::warn!` event rather than a new
+/// `dasclaw_observability::ObservabilityEvent` type — OQ-3 explicitly
+/// chose "re-use existing taxonomy" to avoid an ADR-138 schema evolution.
+/// Downstream telemetry sinks subscribed to the
+/// `sandbox.enterprise.softmode` target consume this event.
+///
+/// Per OQ-4, the event is **per-spawn** (one record per call), carrying
+/// program / cwd / soft-mode reason so a forensic search can answer
+/// "who ran what when".
+fn emit_enterprise_softmode_audit_event(
+    reason: SoftModeReason,
+    req: &SandboxExecRequest,
+    dasclaw_home: &Path,
+) {
+    let program = req.command.get_program().to_string_lossy().into_owned();
+    let cwd = req
+        .command
+        .get_current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "<inherit>".to_string());
+    tracing::warn!(
+        target: "sandbox.enterprise.softmode",
+        reason = reason.as_audit_tag(),
+        program = %program,
+        cwd = %cwd,
+        dasclaw_home = %dasclaw_home.display(),
+        writable_roots = req.policy.writable_roots.len(),
+        "enterprise spawn proceeded under user-space-only carve-out enforcement \
+         (kernel-layer read_only_subpaths not yet ported); see ADR-141",
+    );
 }
 
 /// 解析 dasclaw_home 路径。优先级见模块文档。
