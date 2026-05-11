@@ -72,6 +72,35 @@ pub enum SandboxError {
     #[error("windows sandbox resource launcher failed: {detail}")]
     WindowsLauncherFailed { detail: String },
 
+    /// Enterprise mode is on, but no OS-level sandbox is wired into the
+    /// spawn path on this platform. Returned by [`check_enterprise_gate`]
+    /// and surfaced by backends (currently Windows) when the platform's
+    /// kernel sandbox infrastructure is not yet available.
+    ///
+    /// **Fail-closed**: callers must not silently downgrade to direct
+    /// `exec`. See [ADR-141](../../docs/plans/architecture-refactor/adr-141-windows-enterprise-sandbox-support.md)
+    /// §3 PR-W1 / §6 OQ-2.
+    #[error("windows enterprise mode requires an OS sandbox but none is wired: {detail}")]
+    WindowsSandboxNotAvailable { detail: String },
+
+    /// Enterprise mode is on and the spawn carries workspace-write carve-outs
+    /// (e.g. `.git`, `.codex`, `.dasclaw`), but this platform's kernel-layer
+    /// `read_only_subpaths` enforcement has not been ported yet (macOS is
+    /// done via Wave-C1a; Windows waits on PR-W3/W4; Linux waits on
+    /// Wave-C1c).
+    ///
+    /// **Fail-closed by default**. Callers may downgrade to user-space-only
+    /// enforcement by setting
+    /// [`SandboxBackendConfig::enterprise_allow_userspace_carveouts`] to
+    /// `true` and emitting a structured per-spawn audit event. See
+    /// [ADR-141](../../docs/plans/architecture-refactor/adr-141-windows-enterprise-sandbox-support.md)
+    /// §3 PR-W2 / §6 OQ-1 / OQ-4.
+    #[error(
+        "enterprise mode requires kernel-layer read_only_subpaths enforcement, \
+         which is not yet ported on this platform: {detail}"
+    )]
+    ReadOnlySubpathsKernelEnforcementMissing { detail: String },
+
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -211,6 +240,30 @@ pub struct SandboxBackendConfig {
     /// / 1024 FDs / 1024 procs). Pass [`ResourceLimits::unlimited`] to opt
     /// out completely. See W3.3 ADR.
     pub resource_limits: ResourceLimits,
+
+    /// Whether the calling session is governed by **enterprise mode**
+    /// (i.e. an organization-managed fail-closed policy applies).
+    ///
+    /// When `false` (default), backends behave as before; the gate in
+    /// [`check_enterprise_gate`] short-circuits to
+    /// [`EnterpriseGateOutcome::Allow`].
+    ///
+    /// When `true`, backends must run the gate at the top of `execute` and
+    /// reject spawns whose required kernel-layer enforcement is not yet
+    /// ported on the host platform. See
+    /// [ADR-141](../../docs/plans/architecture-refactor/adr-141-windows-enterprise-sandbox-support.md)
+    /// §3 PR-W1 / §6 OQ-1.
+    pub enterprise_mode: bool,
+
+    /// **Soft-mode opt-in** for enterprise mode. When `enterprise_mode = true`
+    /// **and** the host platform lacks kernel-layer `read_only_subpaths`
+    /// enforcement, this flag lets the caller proceed with user-space-only
+    /// carve-outs (via [`ironclaw_workspace_cap::WorkspaceCap`] cap-std
+    /// interception + `is_path_writable`) **provided that** a structured
+    /// per-spawn audit event is emitted by the caller.
+    ///
+    /// Defaults to `false` (fail-closed) per ADR-141 §6 OQ-1.
+    pub enterprise_allow_userspace_carveouts: bool,
 }
 
 impl SandboxBackendConfig {
@@ -232,6 +285,143 @@ impl SandboxBackendConfig {
     pub fn with_resource_limits(mut self, limits: ResourceLimits) -> Self {
         self.resource_limits = limits;
         self
+    }
+
+    /// Enable enterprise mode (fail-closed gate). See [ADR-141][adr-141].
+    ///
+    /// [adr-141]: ../../docs/plans/architecture-refactor/adr-141-windows-enterprise-sandbox-support.md
+    pub fn with_enterprise_mode(mut self, enabled: bool) -> Self {
+        self.enterprise_mode = enabled;
+        self
+    }
+
+    /// Opt into user-space-only carve-out enforcement when the host
+    /// platform's kernel does not yet enforce `read_only_subpaths`. Must be
+    /// paired with a structured per-spawn audit event by the caller. See
+    /// [ADR-141][adr-141] §6 OQ-1 / OQ-4.
+    ///
+    /// [adr-141]: ../../docs/plans/architecture-refactor/adr-141-windows-enterprise-sandbox-support.md
+    pub fn with_enterprise_allow_userspace_carveouts(mut self, allow: bool) -> Self {
+        self.enterprise_allow_userspace_carveouts = allow;
+        self
+    }
+}
+
+/// Reason a soft-mode allow was granted by [`check_enterprise_gate`].
+///
+/// Carried in [`EnterpriseGateOutcome::AllowWithUserspaceSoftMode`] so callers
+/// can emit a structured per-spawn audit event (ADR-141 §6 OQ-4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SoftModeReason {
+    /// Windows lacks kernel-layer `read_only_subpaths` enforcement until
+    /// ADR-141 PR-W3/W4 lands (codex `sandboxing` crate Windows port).
+    WindowsNoKernelReadOnlySubpaths,
+    /// Linux lacks kernel-layer `read_only_subpaths` enforcement until
+    /// Wave-C1c (`dasclaw-linux-sandbox` setuid binary) lands.
+    LinuxNoKernelReadOnlySubpaths,
+}
+
+impl SoftModeReason {
+    /// Stable, dot-namespaced tag suitable for log fields / metric labels.
+    pub fn as_audit_tag(self) -> &'static str {
+        match self {
+            Self::WindowsNoKernelReadOnlySubpaths => "windows.no_kernel_read_only_subpaths",
+            Self::LinuxNoKernelReadOnlySubpaths => "linux.no_kernel_read_only_subpaths",
+        }
+    }
+}
+
+/// Outcome of the ADR-141 enterprise fail-closed gate.
+///
+/// Encodes the four-way decision matrix from ADR-141 §3 PR-W1+W2 as a closed
+/// enum so callers `match` exhaustively — there is no silent fall-through.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EnterpriseGateOutcome {
+    /// Either enterprise mode is off, or every required kernel-layer
+    /// enforcement is already in place. Caller may proceed with the spawn.
+    Allow,
+    /// Enterprise mode is on, kernel-layer `read_only_subpaths` is not yet
+    /// ported on this platform, **and** the caller opted into soft mode via
+    /// [`SandboxBackendConfig::enterprise_allow_userspace_carveouts`].
+    ///
+    /// Caller **must** emit a structured per-spawn audit event before
+    /// continuing (ADR-141 §6 OQ-3 / OQ-4). The `reason` is the audit tag.
+    AllowWithUserspaceSoftMode { reason: SoftModeReason },
+    /// Enterprise mode is on and the OS sandbox infrastructure is missing
+    /// (Windows setup not run, or no sandbox backend at all). Caller must
+    /// refuse to spawn with
+    /// [`SandboxError::WindowsSandboxNotAvailable`].
+    DenyNoKernelSandbox,
+    /// Enterprise mode is on, kernel-layer carve-outs are not ported on this
+    /// platform, and the soft flag is **not** set. Caller must refuse with
+    /// [`SandboxError::ReadOnlySubpathsKernelEnforcementMissing`].
+    DenyNoReadOnlySubpathsKernelEnforcement,
+}
+
+/// Cross-platform pure decision function for the ADR-141 enterprise
+/// fail-closed gate.
+///
+/// **No side effects** — designed so the full decision matrix can be unit
+/// tested on any host (macOS / Linux CI runners do not need a Windows VM).
+///
+/// Inputs:
+/// - `config`: the resolved [`SandboxBackendConfig`]; only the two
+///   `enterprise_*` fields and `writable_roots` affect the decision.
+/// - `sandbox_type`: the platform backend that will actually run the spawn.
+/// - `kernel_setup_complete`: the platform-specific "sandbox infra ready"
+///   signal. On Windows this is `sandbox_setup_is_complete(dasclaw_home)`;
+///   on macOS/Linux it should be passed as `true` (the kernel is always
+///   available — there is no per-machine setup step).
+///
+/// See [ADR-141](../../docs/plans/architecture-refactor/adr-141-windows-enterprise-sandbox-support.md)
+/// §1.1 for the platform-by-platform support matrix that drives this logic.
+pub fn check_enterprise_gate(
+    config: &SandboxBackendConfig,
+    sandbox_type: SandboxType,
+    kernel_setup_complete: bool,
+) -> EnterpriseGateOutcome {
+    if !config.enterprise_mode {
+        return EnterpriseGateOutcome::Allow;
+    }
+
+    // Step 1: a kernel sandbox must exist and be set up on this platform.
+    if sandbox_type == SandboxType::None || !kernel_setup_complete {
+        return EnterpriseGateOutcome::DenyNoKernelSandbox;
+    }
+
+    // Step 2: if the spawn carries no writable roots, there are no
+    // workspace-write carve-outs to worry about — read-only is enforced
+    // wholesale by the platform sandbox regardless.
+    if config.writable_roots.is_empty() {
+        return EnterpriseGateOutcome::Allow;
+    }
+
+    // Step 3: kernel-layer `read_only_subpaths` enforcement matrix
+    // (ADR-141 §1.1). macOS is wired in Wave-C1a via
+    // `dasclaw_sandboxing::seatbelt`; Windows waits on PR-W3/W4; Linux
+    // waits on Wave-C1c.
+    match sandbox_type {
+        SandboxType::MacosSeatbelt => EnterpriseGateOutcome::Allow,
+        SandboxType::WindowsRestrictedToken => {
+            decide_carveout_outcome(config, SoftModeReason::WindowsNoKernelReadOnlySubpaths)
+        }
+        SandboxType::LinuxSeccomp => {
+            decide_carveout_outcome(config, SoftModeReason::LinuxNoKernelReadOnlySubpaths)
+        }
+        SandboxType::None => EnterpriseGateOutcome::DenyNoKernelSandbox,
+    }
+}
+
+fn decide_carveout_outcome(
+    config: &SandboxBackendConfig,
+    reason: SoftModeReason,
+) -> EnterpriseGateOutcome {
+    if config.enterprise_allow_userspace_carveouts {
+        EnterpriseGateOutcome::AllowWithUserspaceSoftMode { reason }
+    } else {
+        EnterpriseGateOutcome::DenyNoReadOnlySubpathsKernelEnforcement
     }
 }
 
@@ -429,5 +619,147 @@ mod tests {
         assert_eq!(p.writable_roots[0], PathBuf::from("/tmp/work"));
         assert!(!p.allow_network);
         assert!(!p.allow_spawn);
+    }
+
+    // ---- ADR-141 fail-closed gate ---------------------------------------
+    //
+    // These tests cover the full `check_enterprise_gate` decision matrix.
+    // They are cross-platform pure-function tests (no `cfg(target_os = ...)`)
+    // so the same matrix is verified on every CI host.
+
+    fn gate_cfg(enterprise: bool, soft: bool, writable: &[&str]) -> SandboxBackendConfig {
+        SandboxBackendConfig {
+            enterprise_mode: enterprise,
+            enterprise_allow_userspace_carveouts: soft,
+            writable_roots: writable.iter().map(PathBuf::from).collect(),
+            ..SandboxBackendConfig::default()
+        }
+    }
+
+    #[test]
+    fn req_enterprise_gate_off_always_allows() {
+        for &sb in &[
+            SandboxType::None,
+            SandboxType::MacosSeatbelt,
+            SandboxType::LinuxSeccomp,
+            SandboxType::WindowsRestrictedToken,
+        ] {
+            let cfg = gate_cfg(false, false, &["/tmp/work"]);
+            assert_eq!(
+                check_enterprise_gate(&cfg, sb, false),
+                EnterpriseGateOutcome::Allow,
+                "enterprise_mode=false must short-circuit on {sb:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn req_enterprise_gate_denies_when_no_kernel_sandbox() {
+        let cfg = gate_cfg(true, false, &["/tmp/work"]);
+        assert_eq!(
+            check_enterprise_gate(&cfg, SandboxType::None, true),
+            EnterpriseGateOutcome::DenyNoKernelSandbox,
+        );
+    }
+
+    #[test]
+    fn req_enterprise_gate_denies_when_windows_setup_pending() {
+        let cfg = gate_cfg(true, false, &["/tmp/work"]);
+        assert_eq!(
+            check_enterprise_gate(&cfg, SandboxType::WindowsRestrictedToken, false),
+            EnterpriseGateOutcome::DenyNoKernelSandbox,
+            "Windows with !kernel_setup_complete must Deny",
+        );
+    }
+
+    #[test]
+    fn req_enterprise_gate_macos_allows_with_workspace_write() {
+        let cfg = gate_cfg(true, false, &["/tmp/work"]);
+        assert_eq!(
+            check_enterprise_gate(&cfg, SandboxType::MacosSeatbelt, true),
+            EnterpriseGateOutcome::Allow,
+            "Wave-C1a wired macOS kernel carve-outs",
+        );
+    }
+
+    #[test]
+    fn req_enterprise_gate_windows_denies_carveouts_without_soft_flag() {
+        let cfg = gate_cfg(true, false, &["/tmp/work"]);
+        assert_eq!(
+            check_enterprise_gate(&cfg, SandboxType::WindowsRestrictedToken, true),
+            EnterpriseGateOutcome::DenyNoReadOnlySubpathsKernelEnforcement,
+        );
+    }
+
+    #[test]
+    fn req_enterprise_gate_windows_softmode_allows_with_reason() {
+        let cfg = gate_cfg(true, true, &["/tmp/work"]);
+        assert_eq!(
+            check_enterprise_gate(&cfg, SandboxType::WindowsRestrictedToken, true),
+            EnterpriseGateOutcome::AllowWithUserspaceSoftMode {
+                reason: SoftModeReason::WindowsNoKernelReadOnlySubpaths,
+            },
+        );
+    }
+
+    #[test]
+    fn req_enterprise_gate_linux_denies_carveouts_without_soft_flag() {
+        let cfg = gate_cfg(true, false, &["/tmp/work"]);
+        assert_eq!(
+            check_enterprise_gate(&cfg, SandboxType::LinuxSeccomp, true),
+            EnterpriseGateOutcome::DenyNoReadOnlySubpathsKernelEnforcement,
+        );
+    }
+
+    #[test]
+    fn req_enterprise_gate_linux_softmode_allows_with_reason() {
+        let cfg = gate_cfg(true, true, &["/tmp/work"]);
+        assert_eq!(
+            check_enterprise_gate(&cfg, SandboxType::LinuxSeccomp, true),
+            EnterpriseGateOutcome::AllowWithUserspaceSoftMode {
+                reason: SoftModeReason::LinuxNoKernelReadOnlySubpaths,
+            },
+        );
+    }
+
+    #[test]
+    fn req_enterprise_gate_no_writable_roots_allows_everywhere() {
+        // Without WorkspaceWrite carve-outs, the gate should not block on
+        // missing `read_only_subpaths` enforcement.
+        for &sb in &[
+            SandboxType::MacosSeatbelt,
+            SandboxType::LinuxSeccomp,
+            SandboxType::WindowsRestrictedToken,
+        ] {
+            let cfg = gate_cfg(true, false, &[]);
+            assert_eq!(
+                check_enterprise_gate(&cfg, sb, true),
+                EnterpriseGateOutcome::Allow,
+                "no writable_roots ⇒ no carve-outs ⇒ Allow on {sb:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn req_softmode_reason_audit_tag_is_stable() {
+        // Tag strings are part of the audit-log contract (ADR-141 §6 OQ-4).
+        // Changing them is a downstream breaking change.
+        assert_eq!(
+            SoftModeReason::WindowsNoKernelReadOnlySubpaths.as_audit_tag(),
+            "windows.no_kernel_read_only_subpaths",
+        );
+        assert_eq!(
+            SoftModeReason::LinuxNoKernelReadOnlySubpaths.as_audit_tag(),
+            "linux.no_kernel_read_only_subpaths",
+        );
+    }
+
+    #[test]
+    fn enterprise_builders_set_fields() {
+        let cfg = SandboxBackendConfig::default()
+            .with_enterprise_mode(true)
+            .with_enterprise_allow_userspace_carveouts(true);
+        assert!(cfg.enterprise_mode);
+        assert!(cfg.enterprise_allow_userspace_carveouts);
     }
 }

@@ -225,6 +225,8 @@ pub fn policy_to_backend_config_with_env(
             // resource limits here. Callers wanting limits on FullAccess
             // tasks must override `resource_limits` explicitly.
             resource_limits: ResourceLimits::unlimited(),
+            enterprise_mode: false,
+            enterprise_allow_userspace_carveouts: false,
         },
         SandboxPolicy::ReadOnly { network_access } => SandboxBackendConfig {
             readable_roots: vec![PathBuf::from("/")],
@@ -237,6 +239,8 @@ pub fn policy_to_backend_config_with_env(
                 proxy_ports_when_restricted()
             },
             resource_limits: ResourceLimits::default(),
+            enterprise_mode: false,
+            enterprise_allow_userspace_carveouts: false,
         },
         SandboxPolicy::ExternalSandbox { network_access } => {
             let net_enabled = matches!(network_access, NetworkAccess::Enabled);
@@ -252,6 +256,8 @@ pub fn policy_to_backend_config_with_env(
                     proxy_ports_when_restricted()
                 },
                 resource_limits: ResourceLimits::default(),
+                enterprise_mode: false,
+                enterprise_allow_userspace_carveouts: false,
             }
         }
         SandboxPolicy::WorkspaceWrite { network_access, .. } => {
@@ -268,6 +274,8 @@ pub fn policy_to_backend_config_with_env(
                     proxy_ports_when_restricted()
                 },
                 resource_limits: ResourceLimits::default(),
+                enterprise_mode: false,
+                enterprise_allow_userspace_carveouts: false,
             }
         }
     }

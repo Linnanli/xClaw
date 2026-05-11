@@ -1,8 +1,8 @@
 # ADR-141: Windows enterprise sandbox / resource-limit support matrix (research-only)
 
-- **Status**: 🟡 **Draft — proposes fail-closed default until #241 unblocks** (research-only ADR; implementation is **out of scope** for this PR)
-- **Date**: 2026-05-09
-- **Approver**: pending nally sign-off
+- **Status**: ✅ **Accepted (2A: fail-closed default)** — sign-off 2026-05-11 (see §7)
+- **Date**: 2026-05-09 (drafted) / 2026-05-11 (sign-off)
+- **Approver**: nally (signed 2026-05-11; OQ-1~OQ-4 all resolved, see §6)
 - **Authors**: GitHub Copilot agent
 - **Tracker**: [#91](https://github.com/Linnanli/xClaw/issues/91) — [P1/W3] Windows sandbox/resource-limit support plan
 - **Related**:
@@ -134,15 +134,16 @@ No `cargo check` / `clippy` / `nextest` runs — no code changes.
 
 ---
 
-## 6. Open questions (for reviewer)
+## 6. Open questions — RESOLVED (2026-05-11 sign-off)
 
-1. **OQ-1 — Default for `enterprise_allow_userspace_carveouts`.** This ADR proposes `false` (fail-closed). nally to confirm; alternative is `true` with a deprecation timer until PR-W4 lands.
-2. **OQ-2 — Naming of the new `SandboxError` variants.** Proposed names mirror existing codex `core/src/exec.rs:1006-1024` strings; nally to ratify or rename before PR-W1 is opened.
-3. **OQ-3 — Windows audit-event channel.** PR-W2's structured audit log needs a sink. Re-use existing `dasclaw_observability` event taxonomy or define a new `enterprise.windows.softmode_used` event? Defer to PR-W2 ADR.
-4. **OQ-4 — Telemetry for "Windows enterprise mode activated without OS sandbox".** Should this be a metric (count) or a structured event (per-spawn)? Default to event for forensic value; OQ deferred.
+1. **OQ-1 — Default for `enterprise_allow_userspace_carveouts`** ✅ **`false` (fail-closed)**. Aligns with Linux/macOS posture, codex `core/src/exec.rs:1006-1024` pattern, and the `#28` adr-redline contract. Enterprise Windows users must explicitly opt into soft mode if they need to run before PR-W3/W4 lands; the opt-in must produce a structured audit event so the soft path leaves forensic evidence.
+2. **OQ-2 — Naming of the new `SandboxError` variants** ✅ **Accept proposed names verbatim**: `SandboxError::WindowsSandboxNotAvailable` and `SandboxError::ReadOnlySubpathsKernelEnforcementMissing`. Mirrors codex upstream string identifiers and avoids cross-platform translation surprises.
+3. **OQ-3 — Windows audit-event channel** ✅ **Re-use existing `dasclaw_observability` event taxonomy**. Avoids triggering an ADR-138 schema evolution; the soft-mode reason string is sufficient context inside an existing `sandbox.degraded` / equivalent envelope. New event types may be added in a follow-up ADR if forensic dashboards need them.
+4. **OQ-4 — Telemetry for "Windows enterprise mode activated without OS sandbox"** ✅ **Structured event (per-spawn)**. Forensic value of per-invocation context (user / cwd / command) outweighs the storage cost; metric-only would lose the audit trail required by enterprise customers.
 
 ---
 
 ## 7. Decision log
 
 - 2026-05-09 — Draft created from `#91` scope; recommends 2A (fail-closed default + opt-in soft flag) over 2B (full unsupported) and 2C (silent status quo). Awaits nally sign-off.
+- 2026-05-11 — **nally signed off (Wave-C1b authorization)**. All four OQ resolved per §6; option 2A accepted. PR-W1 + PR-W2 merged into one implementation slice (the fail-closed gate; no kernel ACL DENY work yet — that stays under PR-W3/W4). The gate adds two new `SandboxError` variants, two new `SandboxBackendConfig` fields (`enterprise_mode`, `enterprise_allow_userspace_carveouts`), and a cross-platform pure decision function `check_enterprise_gate` so the same matrix is testable on macOS/Linux CI hosts even though the Windows backend is the only enforcement site today.

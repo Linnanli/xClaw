@@ -23,6 +23,13 @@ serde_json = "1"
 thiserror = "1"
 url = "2"
 
+# ADR-141 §6 OQ-3/OQ-4 — structured per-spawn audit events for enterprise
+# soft-mode allows. Emitted by the Windows backend when the caller has
+# opted into `enterprise_allow_userspace_carveouts = true`. Re-uses the
+# existing tracing taxonomy rather than introducing a new
+# `dasclaw_observability` event type (OQ-3 sign-off 2026-05-11).
+tracing = "0.1"
+
 # #324 sub-task 1 — Pre-main process hardening for the
 # `dasclaw-sandbox-resource-launcher` binary. Wired via `#[ctor::ctor]` at the
 # top of `src/bin/resource_launcher_win.rs`. Pattern matches codex
