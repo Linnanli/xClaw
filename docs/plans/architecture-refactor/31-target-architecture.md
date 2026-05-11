@@ -278,6 +278,7 @@ flowchart TB
 | 现有 | 处理 | 时机 |
 |------|------|------|
 | `crates/x_claw_agent`（Phase 3 Step C） | 内容并入 `dasclaw_core`，crate rename | W6 收尾 |
+| `crates/dasclaw_parsed_command` | rename → `crates/dasclaw_protocol`（W6 ADR-136 §3 Step C1.1 落地，见 §4.5.2）| W6（已完成，PR #382） |
 | `desktop-client/ironclaw/`（fork @ 0.24.0 + 42 fork-only commit） | **W1-W6 保留作为私货来源**；W6+ 私货全部迁出到 dasclaw_* 后才删除 | W6+ |
 | **直接升级 fork 到 ironclaw-main 0.26** | ❌ **永不**（与 ADR-101 §136 一致；38 §137 实证升级风险 30k+ LOC + 5 migration） | — |
 
@@ -301,6 +302,26 @@ flowchart TB
 - **消费侧**（`desktop-client/ironclaw/src/sandbox/net_proxy.rs`）：单层适配器，不重新引入 `CredentialResolver` 抽象，不做兼容兼容；任何后续凭证类需求一律走 host reqwest 层。
 
 **红线**：未来在 `crates/dasclaw_net_proxy` 重新引入凭证注入即视为**违反 ADR-137 PR-N23**，drift 守卫会 fail。
+
+### 4.5.2 ADR-136 Step C1 + ADR-138 决策记录：dasclaw_protocol 文件级 slice + 4 utils vendor 小 crate
+
+**决策**：`crates/dasclaw_protocol` **文件级 verbatim slice** 上游 `codex-cli-main/codex-rs/protocol/`（28 *.rs + 1 asset 全部 byte-for-byte equal，~16K LOC），并新增 4 个 file-level slice 小 vendor crate 满足 transitive utils 依赖。crate name / lib name / 内联版本 pin 保留 `dasclaw_*` 命名（不翻转为上游 `codex-protocol`），详见 ADR-138 Option 2B。
+
+| crate | 来源 | 提供 | 落地 PR |
+|---|---|---|---|
+| `crates/dasclaw_protocol` | `codex-cli-main/codex-rs/protocol/`（28 *.rs + 1 asset，~16K LOC，**rename 自 `dasclaw_parsed_command`**）| codex protocol verbatim 类型表面：`protocol` / `permissions` / `models` / `config_types` / `openai_models` / `error` / `approvals` / `items` / `network_policy` / `request_permissions` / `parse_command` / 14 叶子（`account` / `agent_path` / `auth` / `dynamic_tools` / `exec_output` / `mcp` / `memory_citation` / `message_history` / `num_format` / `plan_tool` / `request_user_input` / `thread_id` / `tool_name` / `user_input`）| #382 / #389 / #391 / #402 / #404 |
+| `crates/dasclaw_async_utils` | `codex-cli-main/codex-rs/utils/async-utils/` file-level slice | `CancelErr`（解锁 `dasclaw_protocol::error`）| #393 |
+| `crates/dasclaw_utils_string` | `codex-cli-main/codex-rs/utils/string/` file-level slice | `truncate_middle_*`（解锁 `dasclaw_protocol::error`）| #396 |
+| `crates/dasclaw_utils_cache` | `codex-cli-main/codex-rs/utils/cache/` file-level slice | `dasclaw_utils_image` 的 transitive dep | #398 |
+| `crates/dasclaw_utils_image` | `codex-cli-main/codex-rs/utils/image/` file-level slice | `PromptImageMode` / `ImageProcessingError` / `load_for_prompt_bytes`（解锁 `dasclaw_protocol::models` / `permissions`）| #400 |
+
+**红线 & 守卫**：
+
+- 所有 vendored *.rs 文件 byte-for-byte equal 上游，由 `scripts/check_codex_protocol_drift.py` 每 PR 验证（PAIRS 表当前 27 行；CI job 见 `code_style.yml` 中 `codex-protocol-drift`）。
+- 仅允许 ADR-129 §1.3 列出的机械替换：`codex_*` use-path → `dasclaw_*` use-path + Cargo.toml package rename。
+- 上游 `codex-utils-template` 未被 28 个 *.rs 中任一行 `use`，**故意不 vendor**；如未来上游某 *.rs 新增 `use codex_utils_template::*`，drift script 会失败，按 ADR-136 prep-N 范式增开"Step C2 follow-up PR"vendor `dasclaw_utils_template`。
+- Linux-only target deps（`landlock` / `seccompiler`）由 `crates/dasclaw_protocol/Cargo.toml` `[target.'cfg(target_os = "linux")'.dependencies]` 显式声明（与上游 `codex-cli-main/codex-rs/protocol/Cargo.toml:48-51` 同形）。
+- 任何在 vendored *.rs 中手工 patch 即视为**违反 ADR-129 §1.3 verbatim 红线 + ADR-136 §3 amendment 2**，drift 守卫会 fail。
 
 ---
 
