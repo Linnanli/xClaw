@@ -184,12 +184,20 @@ impl ProcessExecutor for SandboxedExecutor {
 /// | `DangerFullAccess` | 允许 | 全盘可写 | 仅用于 trust 极高的本地任务 |
 /// | `ReadOnly { network_access }` | 由字段决定 | 全盘只读 | spawn 仍允许（unsafe shell 工具） |
 /// | `ExternalSandbox { network_access }` | 由字段决定 | 全盘只读（本地降级） | 实际隔离由外部容器完成 |
-/// | `WorkspaceWrite { roots, .. }` | 由字段决定 | cwd + roots + /tmp + $TMPDIR | 洞中洞 `.git/.codex` 在用户态强制 |
+/// | `WorkspaceWrite { roots, .. }` | 由字段决定 | cwd + roots + /tmp + $TMPDIR | 洞中洞 `.git/.codex/.dasclaw` 按平台分层强制（见下） |
 ///
-/// **已知限制**：sandbox 内核层（seatbelt / seccomp）按 root 整体允许写，
-/// 不强制 `read_only_subpaths`（洞中洞）。洞中洞契约由
-/// [`ironclaw_workspace_cap::policy::SandboxPolicy::is_path_writable`] 用户态决策
-/// 与 [`ironclaw_workspace_cap::WorkspaceCap`] 文件接口共同强制。
+/// **WritableRoot 洞中洞强制按平台分层**（与模块级 doc 一致）：
+///
+/// | 平台 | 内核层（kernel-enforced） | 用户态兜底 |
+/// |------|---------------------------|-----------|
+/// | macOS | ✅ 通过 `dasclaw_sandboxing::seatbelt` 在 sbpl 中表达 `(deny file-write* (subpath ".git/.codex/.dasclaw"))`（ADR-135 §3 PR-C1 / Wave-C1a） | [`ironclaw_workspace_cap`] cap-std + `is_path_writable` 第一道关 |
+/// | Linux | ❌ deferred to Wave-C1c（需 `dasclaw-linux-sandbox` setuid binary 落地，对齐 codex landlock V5 + bwrap 路径） | 同上 |
+/// | Windows | ❌ deferred to Wave-C1b / ADR-141（需在 `dasclaw_sandbox/src/windows/mod.rs` 调 `dasclaw_sandbox_windows::acl` 把 `read_only_subpaths` 转 DACL DENY entries） | 同上 |
+///
+/// Linux / Windows 上洞中洞当前仅靠 `is_path_writable` 用户态决策 +
+/// [`ironclaw_workspace_cap::WorkspaceCap`] cap-std 文件接口拦截；子进程通过
+/// 直接 syscall 写 `.git/hooks/` 在 Linux / Windows 上**目前不会被内核拒绝**。
+/// 进度追踪：[issue #380](https://github.com/Linnanli/xClaw/issues/380) Wave-C1b / C1c。
 pub fn policy_to_backend_config(policy: &SandboxPolicy, cwd: &Path) -> SandboxBackendConfig {
     policy_to_backend_config_with_env(policy, cwd, &std::env::vars().collect())
 }
