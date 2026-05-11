@@ -37,24 +37,31 @@ PAIRS: list[tuple[Path, Path]] = []
 PROTO_LOCAL = REPO_ROOT / "crates" / "dasclaw_protocol" / "src"
 PROTO_UPSTREAM = REPO_ROOT / "codex-cli-main" / "codex-rs" / "protocol" / "src"
 
-# ADR-136 Step C1.3 (Layers 1+2): parse_command + 14 leaves + config_types/openai_models cycle.
-# Step C1.4 ~ C1.5 will append: protocol, permissions, models, approvals,
-# network_policy, items, request_permissions (hub); error, error_tests.
+# ADR-136 Step C1.4 (Layers 1-3): parse_command + 14 leaves + config_types/openai_models cycle
+# + Layer 3 hub (protocol, permissions, models, request_permissions, approvals,
+# network_policy, items). Layer 4 (error, error_tests) lands in C1.5.
 for fname in [
     "account.rs",
     "agent_path.rs",
+    "approvals.rs",
     "auth.rs",
     "config_types.rs",
     "dynamic_tools.rs",
     "exec_output.rs",
     "exec_output_tests.rs",
+    "items.rs",
     "mcp.rs",
     "memory_citation.rs",
     "message_history.rs",
+    "models.rs",
+    "network_policy.rs",
     "num_format.rs",
     "openai_models.rs",
     "parse_command.rs",
+    "permissions.rs",
     "plan_tool.rs",
+    "protocol.rs",
+    "request_permissions.rs",
     "request_user_input.rs",
     "thread_id.rs",
     "tool_name.rs",
@@ -62,10 +69,22 @@ for fname in [
 ]:
     PAIRS.append((PROTO_LOCAL / fname, PROTO_UPSTREAM / fname))
 
+# Asset files (non-Rust) vendored alongside the source — verbatim, no swaps.
+ASSET_PAIRS: list[tuple[Path, Path]] = [
+    (
+        PROTO_LOCAL / "prompts" / "base_instructions" / "default.md",
+        PROTO_UPSTREAM / "prompts" / "base_instructions" / "default.md",
+    ),
+]
+
 
 SWAP_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # Reverse the use-path swap so we compare against upstream verbatim.
     (re.compile(r"\bdasclaw_absolute_path\b"), "codex_utils_absolute_path"),
+    (re.compile(r"\bdasclaw_utils_image\b"), "codex_utils_image"),
+    (re.compile(r"\bdasclaw_utils_string\b"), "codex_utils_string"),
+    (re.compile(r"\bdasclaw_execpolicy\b"), "codex_execpolicy"),
+    (re.compile(r"\bdasclaw_net_proxy\b"), "codex_network_proxy"),
     (re.compile(r"\bdasclaw_protocol\b"), "codex_protocol"),
 ]
 
@@ -131,6 +150,20 @@ def main() -> int:
                 f"(after use-path normalization + use-block sort)"
             )
 
+    # Asset files are compared byte-for-byte (no normalization).
+    for local, upstream in ASSET_PAIRS:
+        if not local.exists():
+            missing.append(f"local missing: {local.relative_to(REPO_ROOT)}")
+            continue
+        if not upstream.exists():
+            missing.append(f"upstream missing: {upstream.relative_to(REPO_ROOT)}")
+            continue
+        if local.read_bytes() != upstream.read_bytes():
+            drift.append(
+                f"DRIFT: {local.relative_to(REPO_ROOT)} != "
+                f"{upstream.relative_to(REPO_ROOT)} (asset byte-mismatch)"
+            )
+
     if missing:
         for line in missing:
             print(line, file=sys.stderr)
@@ -144,7 +177,7 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    print(f"OK: {len(PAIRS)} files match upstream verbatim.")
+    print(f"OK: {len(PAIRS)} files + {len(ASSET_PAIRS)} assets match upstream verbatim.")
     return 0
 
 

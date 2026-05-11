@@ -18,13 +18,20 @@ path = "src/lib.rs"
 [dependencies]
 chardetng = "0.1.17"
 dasclaw_absolute_path = { path = "../dasclaw_absolute_path" }
+dasclaw_execpolicy = { path = "../dasclaw_execpolicy" }
+dasclaw_net_proxy = { path = "../dasclaw_net_proxy" }
+dasclaw_utils_image = { path = "../dasclaw_utils_image" }
+dasclaw_utils_string = { path = "../dasclaw_utils_string" }
 encoding_rs = "0.8.35"
+globset = "0.4"
 icu_decimal = "2.1"
 icu_locale_core = "2.1"
 icu_provider = { version = "2.1", features = ["sync"] }
+quick-xml = { version = "0.38.4", features = ["serialize"] }
 schemars = "0.8.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_with = { version = "3.17", features = ["macros", "base64"] }
 strum = "0.27.2"
 strum_macros = "0.28.0"
 sys-locale = "0.3.2"
@@ -34,7 +41,9 @@ ts-rs = { version = "11", features = ["serde-json-impl", "no-serde-warnings"] }
 uuid = { version = "1", features = ["serde", "v4", "v7"] }
 
 [dev-dependencies]
+anyhow = "1"
 pretty_assertions = "1"
+tempfile = "3"
 
 [package.metadata.cargo-shear]
 # `icu_provider` is required for its `sync` feature on `icu_decimal`'s
