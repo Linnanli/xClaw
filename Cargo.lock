@@ -2978,10 +2978,12 @@ dependencies = [
  "icu_decimal",
  "icu_locale_core",
  "icu_provider",
+ "landlock",
  "pretty_assertions",
  "quick-xml",
  "reqwest 0.12.28",
  "schemars 0.8.22",
+ "seccompiler",
  "serde",
  "serde_json",
  "serde_with",
@@ -6016,6 +6018,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3c48237b9604c5a4702de6b824e02006c3214327564636aef27c1028a8fa0ed"
 dependencies = [
  "regex",
+]
+
+[[package]]
+name = "landlock"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49fefd6652c57d68aaa32544a4c0e642929725bdc1fd929367cdeb673ab81088"
+dependencies = [
+ "enumflags2",
+ "libc",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
