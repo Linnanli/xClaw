@@ -13,8 +13,11 @@
 //!   sbpl 中表达，sandbox-exec 内核层强制 `.git/`、`.dasclaw/`、`.codex/` 等
 //!   敏感子路径仅读不可写；`is_path_writable` 用户态决策仍然作为第一道关，
 //!   [`ironclaw_workspace_cap::WorkspaceCap`] 的 cap-std 文件接口在策略层做
-//!   二次拒绝。Linux landlock 洞中洞 deferred to Wave-C3（需要 `dasclaw-linux-sandbox`
-//!   binary 落地），Windows ACL DENY 由 ADR-141 enterprise PR 提供。
+//!   二次拒绝。Windows 上自 ADR-141 §3 PR-W3（Wave-C1b，PR #426）起由
+//!   `dasclaw_sandbox_windows::run_windows_sandbox_capture_with_extra_deny_write_paths`
+//!   把 `read_only_subpaths` 翻译为 Win32 DACL DENY entries，Windows 沙箱内核层
+//!   强制相同语义。Linux landlock 洞中洞 deferred to Wave-C1c（需要
+//!   `dasclaw-linux-sandbox` binary 落地）。
 //! - **PTY 终端**：走 [`dasclaw_pty`] 独立路径，不在 `ProcessExecutor` 范围；
 //!   终端会话的 sandbox 包裹由调用方在 `spawn` 时显式组合。
 //!
@@ -191,13 +194,13 @@ impl ProcessExecutor for SandboxedExecutor {
 /// | 平台 | 内核层（kernel-enforced） | 用户态兜底 |
 /// |------|---------------------------|-----------|
 /// | macOS | ✅ 通过 `dasclaw_sandboxing::seatbelt` 在 sbpl 中表达 `(deny file-write* (subpath ".git/.codex/.dasclaw"))`（ADR-135 §3 PR-C1 / Wave-C1a） | [`ironclaw_workspace_cap`] cap-std + `is_path_writable` 第一道关 |
+/// | Windows | ✅ 通过 `dasclaw_sandbox_windows::run_windows_sandbox_capture_with_extra_deny_write_paths` 把 `read_only_subpaths` 翻译为 Win32 DACL DENY entries（ADR-141 §3 PR-W3 / Wave-C1b，PR #426） | 同上 |
 /// | Linux | ❌ deferred to Wave-C1c（需 `dasclaw-linux-sandbox` setuid binary 落地，对齐 codex landlock V5 + bwrap 路径） | 同上 |
-/// | Windows | ❌ deferred to Wave-C1b / ADR-141（需在 `dasclaw_sandbox/src/windows/mod.rs` 调 `dasclaw_sandbox_windows::acl` 把 `read_only_subpaths` 转 DACL DENY entries） | 同上 |
 ///
-/// Linux / Windows 上洞中洞当前仅靠 `is_path_writable` 用户态决策 +
+/// Linux 上洞中洞当前仅靠 `is_path_writable` 用户态决策 +
 /// [`ironclaw_workspace_cap::WorkspaceCap`] cap-std 文件接口拦截；子进程通过
-/// 直接 syscall 写 `.git/hooks/` 在 Linux / Windows 上**目前不会被内核拒绝**。
-/// 进度追踪：[issue #380](https://github.com/Linnanli/xClaw/issues/380) Wave-C1b / C1c。
+/// 直接 syscall 写 `.git/hooks/` 在 Linux 上**目前不会被内核拒绝**。
+/// 进度追踪：[issue #380](https://github.com/Linnanli/xClaw/issues/380) Wave-C1c。
 pub fn policy_to_backend_config(policy: &SandboxPolicy, cwd: &Path) -> SandboxBackendConfig {
     policy_to_backend_config_with_env(policy, cwd, &std::env::vars().collect())
 }
