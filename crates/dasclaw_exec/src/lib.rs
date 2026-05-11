@@ -8,10 +8,13 @@
 //! ## 设计边界
 //!
 //! - **进程沙箱（dasclaw_sandbox）**：粗粒度，按 root 整体允许/拒绝写。
-//! - **WritableRoot 洞中洞（read_only_subpaths）**：理论上需要内核层
-//!   `landlock` / `sbpl` 表达；目前内核层暂不强制（known limitation），
-//!   `is_path_writable` 用户态决策仍然有效，且 [`ironclaw_workspace_cap::WorkspaceCap`]
-//!   的 cap-std 文件接口已经接入策略层做二次拒绝。
+//! - **WritableRoot 洞中洞（read_only_subpaths）**：自 ADR-135 §3 PR-C1（Wave-C1）
+//!   起，macOS 上由 `dasclaw_sandbox` 委托给 `dasclaw_sandboxing::seatbelt` 在
+//!   sbpl 中表达，sandbox-exec 内核层强制 `.git/`、`.dasclaw/`、`.codex/` 等
+//!   敏感子路径仅读不可写；`is_path_writable` 用户态决策仍然作为第一道关，
+//!   [`ironclaw_workspace_cap::WorkspaceCap`] 的 cap-std 文件接口在策略层做
+//!   二次拒绝。Linux landlock 洞中洞 deferred to Wave-C3（需要 `dasclaw-linux-sandbox`
+//!   binary 落地），Windows ACL DENY 由 ADR-141 enterprise PR 提供。
 //! - **PTY 终端**：走 [`dasclaw_pty`] 独立路径，不在 `ProcessExecutor` 范围；
 //!   终端会话的 sandbox 包裹由调用方在 `spawn` 时显式组合。
 //!

@@ -36,6 +36,16 @@ ctor = "0.2"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# ADR-135 §3 Wave-C1 — 内核层 Seatbelt sbpl 合成委托给 dasclaw_sandboxing。
+# 仅在 macOS target 启用；Linux 路径见 Wave-C3（需要 codex-linux-sandbox binary 落地），
+# Windows 不涉及（无对应内核 backend）。
+#
+# 详见 docs/plans/architecture-refactor/adr-135-sandboxing-crate-adoption-eval.md §3 PR-C1。
+[target.'cfg(target_os = "macos")'.dependencies]
+dasclaw_sandboxing = { path = "../dasclaw_sandboxing" }
+dasclaw_protocol = { path = "../dasclaw_protocol" }
+dasclaw_absolute_path = { path = "../dasclaw_absolute_path" }
+
 # W2.3 — Linux seccomp backend.
 # 只在 Linux target 上启用，避免污染 macOS/Windows 工作流。
 # 选型理由（详见 docs/plans/architecture-refactor/32 §W2.3）：
@@ -70,4 +80,8 @@ features = [
   "Win32_System_JobObjects",
   "Win32_System_Threading",
 ]
+
+# Wave-C1 contract test for kernel 洞中洞 enforcement (tests/req_kernel_*).
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+tempfile = "3"
 
