@@ -95,6 +95,7 @@ mod tests {
         let backend = SandboxBackendConfig {
             readable_roots: vec![PathBuf::from("/")],
             writable_roots: vec![],
+            read_only_subpaths: vec![],
             allow_network: false,
             allow_spawn: true,
             proxy_loopback_ports: vec![],
@@ -117,6 +118,7 @@ mod tests {
         let backend = SandboxBackendConfig {
             readable_roots: vec![PathBuf::from("/")],
             writable_roots: vec![PathBuf::from("/tmp/work")],
+            read_only_subpaths: vec![],
             allow_network: true,
             allow_spawn: true,
             proxy_loopback_ports: vec![],
@@ -147,6 +149,7 @@ mod tests {
         let backend = SandboxBackendConfig {
             readable_roots: vec![PathBuf::from("/")],
             writable_roots: vec![PathBuf::from("relative/path")],
+            read_only_subpaths: vec![],
             allow_network: false,
             allow_spawn: true,
             proxy_loopback_ports: vec![],

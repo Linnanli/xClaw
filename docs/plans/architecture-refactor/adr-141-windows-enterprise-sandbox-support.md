@@ -88,12 +88,17 @@ Adopt **2A**. Concretely, sequence as five small PRs, each gated behind its own 
 - In `dasclaw_exec` Windows branch: when carve-outs are present and the codex `sandboxing` crate has not yet been ported, return the new variant unless the soft flag is set; log a structured audit event when the flag is honoured.
 - Contract test: both fail-closed and soft-flag paths.
 
-### PR-W3 — Wire `dasclaw_sandbox_windows::setup_main` / `command_runner` into the `dasclaw_exec` spawn path (effort: M, risk: med)
+### PR-W3 — Wire `read_only_subpaths` carve-outs through launcher IPC to Win32 DACL DENY (effort: M, risk: med) ✅ **landed 2026-05-11+**
 
-- Depends on `#241` unblocking and on ADR-129 §1.3 verbatim red line — wiring lives in **xClaw-only** glue code outside the verbatim crate.
-- Out of scope for this ADR; tracked under `#241`.
+- xClaw-only glue (no `crates/dasclaw_sandbox_windows/` changes — ADR-129 §1.3 red line intact).
+- Adds `SandboxBackendConfig::read_only_subpaths: Vec<PathBuf>` and flattens it from `WritableRoot::read_only_subpaths` inside `dasclaw_exec::policy_to_backend_config_with_env`.
+- Extends `LauncherRequest` (cross-platform wire struct, JSON IPC) with `additional_deny_write_paths: Vec<PathBuf>` carrying `#[serde(default, skip_serializing_if = "Vec::is_empty")]` for forward/backward compatibility with older launchers.
+- `dasclaw-sandbox-resource-launcher` (Slice B3 binary) switches its single call site from upstream `run_windows_sandbox_capture` → `run_windows_sandbox_capture_with_extra_deny_write_paths` (already-published public symbol in `dasclaw_sandbox_windows`'s verbatim port; no upstream modification needed).
+- Corrects ADR-141 §3 PR-W1+W2 fail-closed gate signal from `writable_roots.is_empty()` → `read_only_subpaths.is_empty()` (OQ-W3-3): a `WorkspaceWrite` policy *always* has writable roots, so the original approximation misclassified the hole-free case as "needs kernel enforcement". Empty-holes WorkspaceWrite now correctly returns `Allow`.
+- Out of scope: `#241` Phase 4 UAC docs; `setup_main` / `command_runner` reuse (those live in PR-W4 / Wave-C1c with Landlock).
+- Contract tests: launcher_ipc round-trip including deny paths, legacy JSON forward-compat, `policy_to_backend_config` flatten, gate signal regression.
 
-### PR-W4 — Port codex `sandboxing` crate per ADR-135 Wave-B PR-B1 (effort: XL, risk: high)
+### PR-W4 — Port codex `sandboxing` crate per ADR-135 Wave-B PR-B1 + Linux Landlock (effort: XL, risk: high)
 
 - Provides kernel-layer `additional_deny_write_paths` / Windows ACL DENY entries for `read_only_subpaths`.
 - Out of scope for this ADR; tracked under `#324` sub-task 2.
@@ -141,9 +146,17 @@ No `cargo check` / `clippy` / `nextest` runs — no code changes.
 3. **OQ-3 — Windows audit-event channel** ✅ **Re-use existing `dasclaw_observability` event taxonomy**. Avoids triggering an ADR-138 schema evolution; the soft-mode reason string is sufficient context inside an existing `sandbox.degraded` / equivalent envelope. New event types may be added in a follow-up ADR if forensic dashboards need them.
 4. **OQ-4 — Telemetry for "Windows enterprise mode activated without OS sandbox"** ✅ **Structured event (per-spawn)**. Forensic value of per-invocation context (user / cwd / command) outweighs the storage cost; metric-only would lose the audit trail required by enterprise customers.
 
+### PR-W3 follow-up open questions — RESOLVED (2026-05-11+ sign-off)
+
+5. **OQ-W3-1 — Carrier for `read_only_subpaths` on the cross-crate boundary** ✅ **A: add `read_only_subpaths: Vec<PathBuf>` to `SandboxBackendConfig`**. Keeps the field next to `writable_roots` (its semantic peer) and matches the codex upstream pattern of pairing `writable_roots` + `additional_deny_write_paths` on the same call site. Alternative B (recompute from upstream `SandboxPolicy` inside the Windows backend) was rejected: forces the adapter to re-derive holes already computed by `policy_to_backend_config_with_env`, increasing drift surface.
+6. **OQ-W3-2 — Call site for upstream Win32 DACL DENY** ✅ **A: re-use the already-public `run_windows_sandbox_capture_with_extra_deny_write_paths`** (`dasclaw_sandbox_windows::lib.rs:455`). The upstream API takes `additional_deny_write_paths: &[PathBuf]` as its 8th argument; we wire the new `LauncherRequest.additional_deny_write_paths` field straight through. ADR-129 §1.3 verbatim red line preserved: no edits to `crates/dasclaw_sandbox_windows/`. Alternative B (call private `identity::deny_write_paths_override`) was rejected for breaching the verbatim contract.
+7. **OQ-W3-3 — Gate signal correction** ✅ **A: change `check_enterprise_gate` Step 2 from `writable_roots.is_empty()` to `read_only_subpaths.is_empty()`**. The PR-W1+W2 approximation misclassified the common case "WorkspaceWrite policy with no holes" as "needs kernel enforcement" (since WorkspaceWrite *always* has writable_roots). The corrected signal makes hole-free spawns short-circuit to `Allow` while preserving the deny path for any spawn that actually demands DACL DENY.
+8. **OQ-W3-4 — macOS / Linux semantics of the new field** ✅ **B: Windows-only consumer; macOS / Linux ignore it for this PR**. macOS sbpl carve-outs are already wired by ADR-135 PR-C1 inside `dasclaw_sandboxing::seatbelt` (verified via `req_kernel_enforces_read_only_subpaths_macos.rs`); Linux Landlock support is PR-W4 / Wave-C1c. Documented per-backend semantics on the field's doc comment so future ports know the contract.
+
 ---
 
 ## 7. Decision log
 
 - 2026-05-09 — Draft created from `#91` scope; recommends 2A (fail-closed default + opt-in soft flag) over 2B (full unsupported) and 2C (silent status quo). Awaits nally sign-off.
 - 2026-05-11 — **nally signed off (Wave-C1b authorization)**. All four OQ resolved per §6; option 2A accepted. PR-W1 + PR-W2 merged into one implementation slice (the fail-closed gate; no kernel ACL DENY work yet — that stays under PR-W3/W4). The gate adds two new `SandboxError` variants, two new `SandboxBackendConfig` fields (`enterprise_mode`, `enterprise_allow_userspace_carveouts`), and a cross-platform pure decision function `check_enterprise_gate` so the same matrix is testable on macOS/Linux CI hosts even though the Windows backend is the only enforcement site today.
+- 2026-05-11+ — **nally signed off (PR-W3 authorization)**. All four PR-W3 follow-up OQ resolved per §6 (A / A / A / B). Wiring layer landed: `SandboxBackendConfig.read_only_subpaths` field, `LauncherRequest.additional_deny_write_paths` field with backwards-compatible serde, `dasclaw_exec::policy_to_backend_config_with_env` flatten, `dasclaw-sandbox-resource-launcher` switched to upstream `run_windows_sandbox_capture_with_extra_deny_write_paths`, gate signal corrected. ADR-129 §1.3 verbatim red line preserved (zero edits to `crates/dasclaw_sandbox_windows/`). PR-W4 (codex `sandboxing` crate port + Linux Landlock) remains the next blocker.
