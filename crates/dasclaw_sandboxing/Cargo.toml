@@ -1,0 +1,51 @@
+[package]
+# Verbatim port of codex-sandboxing @ codex-cli-main commit 6e838a19fa
+# (upstream snapshot vendored under codex-cli-main/codex-rs/sandboxing).
+# Mechanical edits per ADR-129 §1.3 + ADR-135 §3.1:
+#   1. Cargo.toml package name swap: codex-sandboxing → dasclaw_sandboxing
+#      and lib name swap: codex_sandboxing → dasclaw_sandboxing.
+#   2. Workspace deps that don't exist in this repo are inlined with
+#      explicit versions matching upstream codex-rs/Cargo.toml.
+#   3. use-path swap in src/*.rs (mechanical, drift-guard enforced):
+#        codex_protocol            → dasclaw_protocol
+#        codex_network_proxy       → dasclaw_net_proxy
+#        codex_utils_absolute_path → dasclaw_absolute_path
+#   4. .sbpl asset files are byte-for-byte identical to upstream
+#      (they reference no codex-* symbols).
+# DO NOT hand-edit src/*.rs or src/*.sbpl — drift guard
+# scripts/check_codex_sandboxing_drift.py verifies hash equality.
+#
+# This crate provides the kernel-layer sandbox enforcement primitives:
+#   - Linux: bubblewrap + landlock V3 + seccomp helper (codex-linux-sandbox)
+#   - macOS: Apple seatbelt (sandbox-exec) with vendored .sbpl base policies
+#   - Common: SandboxPolicy → backend-specific transform via policy_transforms
+# Adapter wire-up into dasclaw_exec is Wave-C1 (separate PR, see issue #380).
+name = "dasclaw_sandboxing"
+version = "0.0.0-w7"
+edition = "2024"
+description = "Kernel-layer sandbox primitives (landlock/seatbelt) — verbatim port of codex-sandboxing."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+name = "dasclaw_sandboxing"
+path = "src/lib.rs"
+
+[dependencies]
+dasclaw_net_proxy = { path = "../dasclaw_net_proxy" }
+dasclaw_protocol = { path = "../dasclaw_protocol" }
+dasclaw_absolute_path = { path = "../dasclaw_absolute_path" }
+dunce = "1.0.4"
+libc = "0.2.182"
+serde_json = "1"
+regex-lite = "0.1.8"
+tracing = { version = "0.1.44", features = ["log"] }
+url = "2"
+which = "8"
+
+[dev-dependencies]
+anyhow = "1"
+async-trait = "0.1.89"
+pretty_assertions = "1.4.1"
+tempfile = "3.23.0"
+tokio = { version = "1", features = ["macros", "rt"] }
