@@ -2963,19 +2963,28 @@ dependencies = [
 name = "dasclaw_protocol"
 version = "0.0.0-w6"
 dependencies = [
+ "anyhow",
  "chardetng",
  "dasclaw_absolute_path",
+ "dasclaw_execpolicy",
+ "dasclaw_net_proxy",
+ "dasclaw_utils_image",
+ "dasclaw_utils_string",
  "encoding_rs",
+ "globset",
  "icu_decimal",
  "icu_locale_core",
  "icu_provider",
  "pretty_assertions",
+ "quick-xml",
  "schemars 0.8.22",
  "serde",
  "serde_json",
+ "serde_with",
  "strum",
  "strum_macros",
  "sys-locale",
+ "tempfile",
  "thiserror 2.0.18",
  "tracing",
  "ts-rs",
@@ -8304,6 +8313,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b66c2058c55a409d601666cffe35f04333cf1013010882cec174a7467cd4e21c"
 dependencies = [
  "memchr",
+ "serde",
 ]
 
 [[package]]
