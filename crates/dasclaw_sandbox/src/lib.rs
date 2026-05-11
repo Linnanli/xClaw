@@ -251,6 +251,15 @@ pub struct SandboxExecRequest {
     pub policy: SandboxBackendConfig,
     pub preference: SandboxablePreference,
     pub windows_sandbox_enabled: bool,
+    /// Optional reference to the managed `NetworkProxy` for the calling
+    /// session. macOS Seatbelt forwards this to
+    /// `dasclaw_sandboxing::seatbelt::create_seatbelt_command_args` so the
+    /// resulting sbpl includes `(allow network-outbound (remote ip ...))`
+    /// rules for the proxy's loopback HTTP/SOCKS ports (a.k.a. "hole
+    /// punching" under `allow_network=false`). When `None`, no proxy
+    /// hole-punch rules are emitted — matches Wave-C1 behaviour and is
+    /// safe (fail-closed). See ADR-135 §3 PR-C2 / ADR-142.
+    pub network: Option<dasclaw_net_proxy::NetworkProxy>,
 }
 
 /// Primary entry trait. Replaces W1 `SkeletonError`-returning placeholder.
@@ -391,6 +400,7 @@ mod tests {
             policy: SandboxPolicy::read_only_defaults(),
             preference: SandboxablePreference::Forbid,
             windows_sandbox_enabled: false,
+            network: None,
         };
         let out = sb.execute(req).expect("kind=None should run");
         assert!(out.status.success());
@@ -406,6 +416,7 @@ mod tests {
             policy: SandboxPolicy::read_only_defaults(),
             preference: SandboxablePreference::Auto,
             windows_sandbox_enabled: false,
+            network: None,
         };
         let err = sb.execute(req).unwrap_err();
         assert!(matches!(err, SandboxError::NotImplemented { stage: 2, .. }));

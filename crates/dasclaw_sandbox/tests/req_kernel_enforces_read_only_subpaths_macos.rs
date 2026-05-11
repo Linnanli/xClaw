@@ -64,6 +64,7 @@ fn req_dasclaw_sandbox_kernel_blocks_git_hooks_under_workspace_write_macos() {
         policy,
         preference: SandboxablePreference::Require,
         windows_sandbox_enabled: false,
+        network: None,
     };
     let out = SeatbeltSandbox::new()
         .execute(req)
@@ -114,6 +115,7 @@ fn req_dasclaw_sandbox_kernel_allows_write_to_non_hole_path_macos() {
         policy,
         preference: SandboxablePreference::Require,
         windows_sandbox_enabled: false,
+        network: None,
     };
     let out = SeatbeltSandbox::new()
         .execute(req)
