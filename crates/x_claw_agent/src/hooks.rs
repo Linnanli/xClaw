@@ -109,6 +109,23 @@ impl SafetyHook for NoopSafetyHook {
 // SandboxExecutor
 // ---------------------------------------------------------------------------
 
+/// Pluggable network-proxy hint passed through to the sandbox runtime.
+///
+/// Mirrors `dasclaw_net_proxy::NetworkProxy`'s relevant surface for the IPC
+/// boundary but stays dependency-free so `x_claw_agent` can continue to
+/// serialize sandbox requests over NDJSON without pulling the proxy crate
+/// (see this module's design constraint "No ironclaw / claw-code
+/// dependency").
+///
+/// The hosting runtime is responsible for hole-punching the corresponding
+/// loopback port in kernel-level sandbox profiles (ADR-137 / ADR-142).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SandboxNetworkHint {
+    /// Loopback URL (e.g. `http://127.0.0.1:48273`) that sandboxed
+    /// processes should treat as their HTTP/HTTPS proxy.
+    pub proxy_url: String,
+}
+
 /// Request describing one command to run inside the sandbox.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SandboxExecRequest {
@@ -118,6 +135,16 @@ pub struct SandboxExecRequest {
     pub cwd: PathBuf,
     /// Environment variables passed into the sandbox.
     pub env: HashMap<String, String>,
+    /// Optional network-proxy hint. `None` ⇒ the sandbox runs without
+    /// network egress (Fail-Safe). When `Some`, implementations MUST
+    /// hole-punch the loopback port at the kernel sandbox layer; otherwise
+    /// the proxy is unreachable from inside the sandbox.
+    ///
+    /// Backwards-compat: `#[serde(default)]` so existing NDJSON peers that
+    /// were emitting requests without this field continue to deserialize
+    /// into `None`.
+    #[serde(default)]
+    pub network: Option<SandboxNetworkHint>,
 }
 
 /// Result of a sandbox command execution.
@@ -464,6 +491,7 @@ mod tests {
             command: "ls".to_string(),
             cwd: PathBuf::from("/"),
             env: HashMap::new(),
+            network: None,
         };
         assert!(matches!(
             sb.run_bash(req).await,

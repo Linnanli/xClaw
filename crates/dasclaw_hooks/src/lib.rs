@@ -37,7 +37,7 @@ pub use x_claw_agent::{
     ApprovalError, ApprovalGate, ApprovalOutcome, ApprovalRequest, AutoApproveGate, DenyAllGate,
     HookBundle, InMemorySecrets, NoopSafetyHook, NoopSandboxExecutor, NoopSessionHooks,
     SafetyDecision, SafetyError, SafetyHook, SandboxError, SandboxExecOutput, SandboxExecRequest,
-    SandboxExecutor, SecretError, SecretProvider, SecretString, SessionHooks,
+    SandboxExecutor, SandboxNetworkHint, SecretError, SecretProvider, SecretString, SessionHooks,
 };
 
 /// Bridge [`HookRegistry`] into the `x_claw_agent::SessionHooks` trait so
