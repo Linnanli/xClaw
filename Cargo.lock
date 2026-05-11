@@ -3017,9 +3017,12 @@ dependencies = [
 name = "dasclaw_sandbox"
 version = "0.0.0-w1"
 dependencies = [
+ "anyhow",
+ "async-trait",
  "base64 0.22.1",
  "ctor 0.2.9",
  "dasclaw_absolute_path",
+ "dasclaw_net_proxy",
  "dasclaw_process_hardening",
  "dasclaw_protocol",
  "dasclaw_sandbox_windows",
@@ -3031,6 +3034,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 1.0.69",
+ "tokio",
  "url",
  "windows-sys 0.52.0",
 ]

@@ -17,16 +17,16 @@
 //! - Post-spawn `memorystatus_control` memory cap (W3.3-3b).
 //! - `spawn` + `wait_with_output` lifecycle.
 //!
-//! ## Known regression (tracked for Wave-C2)
+//! ## Wave-C2a: proxy_loopback_ports threaded via `req.network`
 //!
-//! - `proxy_loopback_ports` hole-punching (HTTP_PROXY=http://localhost:PORT
-//!   support under `allow_network=false`) is **not** plumbed in C1.
-//!   `dasclaw_sandboxing::seatbelt::create_seatbelt_command_args` derives
-//!   loopback holes from a `NetworkProxy` instance (which inspects env).
-//!   Wave-C2 will thread the upstream `NetworkProxy` through; until then,
-//!   sessions that rely on a local HTTP proxy must use a policy with
-//!   `network_access=true` (broader access) instead of relying on the
-//!   per-port hole punch.
+//! `req.network: Option<&NetworkProxy>` is now forwarded to
+//! `create_seatbelt_command_args`. When `Some`, the sbpl includes
+//! `(allow network-outbound (remote ip "127.0.0.1:N"))` rules for the
+//! proxy's loopback HTTP/SOCKS endpoints (restores `HTTP_PROXY=http://
+//! 127.0.0.1:PORT` "hole punching" under `allow_network=false`). When
+//! `None`, no proxy holes are emitted (fail-closed, matches C1
+//! behaviour). Callers (`dasclaw_exec` etc.) start populating the field
+//! in Wave-C2b.
 
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -80,7 +80,7 @@ impl SeatbeltSandbox {
             network_sandbox_policy: triple.network_policy,
             sandbox_policy_cwd: &cwd,
             enforce_managed_network: false,
-            network: None,
+            network: req.network.as_ref(),
             extra_allow_unix_sockets: &[],
         })
     }
@@ -161,6 +161,7 @@ mod tests {
             policy: SandboxPolicy::read_only_defaults(),
             preference: SandboxablePreference::Auto,
             windows_sandbox_enabled: false,
+            network: None,
         };
         let args = sb.build_seatbelt_args(&req);
         // sandbox-exec args always start with `-p <policy>` and end with
@@ -185,6 +186,7 @@ mod tests {
             policy: SandboxPolicy::read_only_defaults().with_writable("/tmp/work"),
             preference: SandboxablePreference::Auto,
             windows_sandbox_enabled: false,
+            network: None,
         };
         let args = sb.build_seatbelt_args(&req);
         // dasclaw_sandboxing materialises writable roots as `-D
@@ -225,6 +227,7 @@ mod tests {
             policy: SandboxPolicy::read_only_defaults(),
             preference: SandboxablePreference::Require,
             windows_sandbox_enabled: false,
+            network: None,
         };
         let out = sb.execute(req).expect("seatbelt should run sh");
         assert!(out.status.success());
@@ -245,6 +248,7 @@ mod tests {
             policy: SandboxPolicy::read_only_defaults(),
             preference: SandboxablePreference::Require,
             windows_sandbox_enabled: false,
+            network: None,
         };
         let out = sb.execute(req).expect("seatbelt should run echo");
         assert!(out.status.success(), "exit={:?}", out.status);
@@ -277,6 +281,7 @@ mod tests {
             policy,
             preference: SandboxablePreference::Require,
             windows_sandbox_enabled: false,
+            network: None,
         };
         let out = sb.execute(req).expect("seatbelt should run sh");
         assert!(out.status.success(), "exit={:?}", out.status);
@@ -285,6 +290,127 @@ mod tests {
             stdout.trim(),
             "64",
             "child should see RLIMIT_NOFILE=64, got {stdout:?}"
+        );
+    }
+
+    // ---------------------------------------------------------------------
+    // ADR-135 §3 Wave-C2a — `proxy_loopback_ports` 透传契约测试。
+    //
+    // 验证 `SandboxExecRequest.network` 是否被 `build_seatbelt_args` 正确
+    // 转发给 `dasclaw_sandboxing::seatbelt::create_seatbelt_command_args`。
+    // PR-C1 的回归在于硬编码 `network: None`；C2a 改为 `req.network.as_ref()`，
+    // 在 sbpl 中恢复 `(allow network-outbound (remote ip "localhost:<port>"))`
+    // hole-punch 规则。端到端的真实子进程穿透测试留给 PR-C2b（届时
+    // `dasclaw_exec` 才会真正下传 `NetworkProxy`）。
+    // ---------------------------------------------------------------------
+
+    use async_trait::async_trait;
+    use dasclaw_net_proxy::{
+        build_config_state, ConfigReloader, ConfigState, NetworkProxy, NetworkProxyConfig,
+        NetworkProxyConstraints, NetworkProxyState,
+    };
+    use std::net::Ipv4Addr;
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+
+    #[derive(Clone)]
+    struct StaticReloader {
+        state: ConfigState,
+    }
+
+    #[async_trait]
+    impl ConfigReloader for StaticReloader {
+        async fn maybe_reload(&self) -> anyhow::Result<Option<ConfigState>> {
+            Ok(None)
+        }
+
+        async fn reload_now(&self) -> anyhow::Result<ConfigState> {
+            Ok(self.state.clone())
+        }
+
+        fn source_label(&self) -> String {
+            "PR-C2a contract test reloader".to_string()
+        }
+    }
+
+    /// Build a `NetworkProxy` pointing at a fixed loopback HTTP port without
+    /// reserving real listeners. `managed_by_codex(false)` keeps the builder
+    /// from allocating an ephemeral port so the test stays deterministic.
+    async fn make_proxy(http_port: u16) -> NetworkProxy {
+        let mut cfg = NetworkProxyConfig::default();
+        cfg.network.enabled = true;
+        cfg.network.enable_socks5 = false;
+        cfg.network.proxy_url = format!("http://127.0.0.1:{http_port}");
+
+        let state = build_config_state(cfg, NetworkProxyConstraints::default())
+            .expect("build_config_state");
+        let reloader = Arc::new(StaticReloader {
+            state: state.clone(),
+        });
+        let proxy_state = Arc::new(NetworkProxyState::with_reloader(state, reloader));
+        NetworkProxy::builder()
+            .state(proxy_state)
+            .managed_by_codex(false)
+            .http_addr(SocketAddr::from((Ipv4Addr::LOCALHOST, http_port)))
+            .build()
+            .await
+            .expect("NetworkProxy::build")
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn req_macos_seatbelt_threads_proxy_loopback_port_into_sbpl() {
+        const HTTP_PORT: u16 = 18887;
+        let proxy = make_proxy(HTTP_PORT).await;
+
+        let mut cmd = Command::new("/bin/true");
+        cmd.current_dir("/tmp");
+        let req = SandboxExecRequest {
+            command: cmd,
+            policy: SandboxPolicy::read_only_defaults(),
+            preference: SandboxablePreference::Require,
+            windows_sandbox_enabled: false,
+            network: Some(proxy),
+        };
+
+        let args = SeatbeltSandbox::new().build_seatbelt_args(&req);
+        let policy = args
+            .iter()
+            .skip_while(|a| a.as_str() != "-p")
+            .nth(1)
+            .expect("sbpl policy follows -p");
+
+        let expected_rule =
+            format!("(allow network-outbound (remote ip \"localhost:{HTTP_PORT}\"))");
+        assert!(
+            policy.contains(&expected_rule),
+            "expected sbpl to hole-punch HTTP_PROXY loopback port via {expected_rule}; got policy:\n{policy}"
+        );
+    }
+
+    #[test]
+    fn req_macos_seatbelt_omits_loopback_holes_when_network_is_none() {
+        // Fail-safe negative test — defends against a future regression
+        // where a default proxy / env sniff would silently inject a hole.
+        let mut cmd = Command::new("/bin/true");
+        cmd.current_dir("/tmp");
+        let req = SandboxExecRequest {
+            command: cmd,
+            policy: SandboxPolicy::read_only_defaults(),
+            preference: SandboxablePreference::Require,
+            windows_sandbox_enabled: false,
+            network: None,
+        };
+
+        let args = SeatbeltSandbox::new().build_seatbelt_args(&req);
+        let policy = args
+            .iter()
+            .skip_while(|a| a.as_str() != "-p")
+            .nth(1)
+            .expect("sbpl policy follows -p");
+
+        assert!(
+            !policy.contains("(allow network-outbound (remote ip \"localhost:"),
+            "with network=None the sbpl must not emit any localhost:<port> hole; got:\n{policy}"
         );
     }
 }
