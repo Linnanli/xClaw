@@ -37,9 +37,9 @@ PAIRS: list[tuple[Path, Path]] = []
 PROTO_LOCAL = REPO_ROOT / "crates" / "dasclaw_protocol" / "src"
 PROTO_UPSTREAM = REPO_ROOT / "codex-cli-main" / "codex-rs" / "protocol" / "src"
 
-# ADR-136 Step C1.4 (Layers 1-3): parse_command + 14 leaves + config_types/openai_models cycle
+# ADR-136 Step C1.5 (Layers 1-4): parse_command + 14 leaves + config_types/openai_models cycle
 # + Layer 3 hub (protocol, permissions, models, request_permissions, approvals,
-# network_policy, items). Layer 4 (error, error_tests) lands in C1.5.
+# network_policy, items) + Layer 4 (error, error_tests).
 for fname in [
     "account.rs",
     "agent_path.rs",
@@ -47,6 +47,8 @@ for fname in [
     "auth.rs",
     "config_types.rs",
     "dynamic_tools.rs",
+    "error.rs",
+    "error_tests.rs",
     "exec_output.rs",
     "exec_output_tests.rs",
     "items.rs",
@@ -81,6 +83,7 @@ ASSET_PAIRS: list[tuple[Path, Path]] = [
 SWAP_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # Reverse the use-path swap so we compare against upstream verbatim.
     (re.compile(r"\bdasclaw_absolute_path\b"), "codex_utils_absolute_path"),
+    (re.compile(r"\bdasclaw_async_utils\b"), "codex_async_utils"),
     (re.compile(r"\bdasclaw_utils_image\b"), "codex_utils_image"),
     (re.compile(r"\bdasclaw_utils_string\b"), "codex_utils_string"),
     (re.compile(r"\bdasclaw_execpolicy\b"), "codex_execpolicy"),
