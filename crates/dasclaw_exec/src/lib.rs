@@ -142,6 +142,11 @@ impl ProcessExecutor for SandboxedExecutor {
             policy: backend,
             preference: self.sandbox_pref,
             windows_sandbox_enabled: self.windows_sandbox_enabled,
+            // Wave-C2a: 占位 None；调用方（agent / mcp）在 Wave-C2b
+            // 切换为传入会话级 NetworkProxy，以恢复 macOS Seatbelt 的
+            // HTTP_PROXY 端口洞穿能力。Linux 已通过 backend.proxy_loopback_ports
+            // 间接消费。
+            network: None,
         };
         sandbox.execute(exec).map_err(ExecError::from)
     }

@@ -31,6 +31,13 @@ url = "2"
 dasclaw_process_hardening = { path = "../dasclaw_process_hardening" }
 ctor = "0.2"
 
+# ADR-135 §3 Wave-C2a — NetworkProxy 通过 SandboxExecRequest 透传给
+# seatbelt sbpl 合成器，恢复 `HTTP_PROXY=http://127.0.0.1:PORT` 的洞穿能力
+# （allow_network=false 时的本地代理出口）。Linux 路径已通过
+# `proxy_loopback_ports` Vec<u16> 间接消费；macOS 路径在 PR-C2a 接上。
+# 详见 docs/plans/architecture-refactor/adr-135-sandboxing-crate-adoption-eval.md §3 PR-C2。
+dasclaw_net_proxy = { path = "../dasclaw_net_proxy" }
+
 # W3.3 — `libc` 现需在所有 Unix 平台启用（macOS + Linux），用于 setrlimit。
 # 详见 docs/plans/architecture-refactor/45-resource-limits-adr.md。
 [target.'cfg(unix)'.dependencies]
@@ -82,6 +89,11 @@ features = [
 ]
 
 # Wave-C1 contract test for kernel 洞中洞 enforcement (tests/req_kernel_*).
+# Wave-C2a contract test for proxy_loopback_ports threading through to
+# seatbelt argv (tests/req_macos_proxy_loopback_threads_through_seatbelt.rs).
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
+async-trait = "0.1"
+anyhow = "1"
 
