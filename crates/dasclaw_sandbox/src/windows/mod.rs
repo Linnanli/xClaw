@@ -158,6 +158,13 @@ impl Sandbox for WindowsRestrictedTokenSandbox {
             outer_limits,
             // use_private_desktop=false：维持 first-use UX 简单；Phase 1.3 / hardening 时再切换。
             use_private_desktop: false,
+            // ADR-141 §3 PR-W3 / OQ-W3-2 (sign-off 2026-05-11)：把
+            // `SandboxBackendConfig::read_only_subpaths` 透传给 launcher，
+            // launcher 改调 upstream
+            // `run_windows_sandbox_capture_with_extra_deny_write_paths`
+            // 来下发 Win32 DACL DENY ACE（kernel-enforced read-only holes
+            // inside writable workspaces）。空 Vec 时维持 Slice B1 行为。
+            additional_deny_write_paths: req.policy.read_only_subpaths.clone(),
         };
 
         launcher_client::spawn_and_capture(request)

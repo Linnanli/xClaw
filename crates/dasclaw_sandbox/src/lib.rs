@@ -229,6 +229,30 @@ impl ResourceLimits {
 pub struct SandboxBackendConfig {
     pub readable_roots: Vec<PathBuf>,
     pub writable_roots: Vec<PathBuf>,
+    /// Subpaths that must remain **read-only** even when contained inside a
+    /// [`Self::writable_roots`] entry — the so-called *洞中洞* / "holes within
+    /// holes" carve-outs (`.git/`, `.dasclaw/`, `.codex/`, etc.).
+    ///
+    /// Populated by `dasclaw_exec::policy_to_backend_config_with_env` from
+    /// [`ironclaw_workspace_cap::policy::WritableRoot::read_only_subpaths`]
+    /// for every writable root.
+    ///
+    /// **Per-backend semantics** (ADR-141 §3 PR-W3, OQ-W3-1/W3-4 sign-off
+    /// 2026-05-11):
+    /// - **Windows** (`crates/dasclaw_sandbox/src/windows/`) — kernel-enforced
+    ///   via Win32 DACL DENY ACEs. The list is forwarded into the launcher
+    ///   IPC ([`crate::launcher_ipc::LauncherRequest::additional_deny_write_paths`])
+    ///   and consumed by upstream
+    ///   `dasclaw_sandbox_windows::run_windows_sandbox_capture_with_extra_deny_write_paths`.
+    /// - **macOS** (`crates/dasclaw_sandbox/src/macos/`) — **ignored** at this
+    ///   layer; sbpl-level enforcement is wired through ADR-135 §3 PR-C1
+    ///   (`dasclaw_sandboxing::seatbelt`) using the higher-level
+    ///   `WritableRoot { root, read_only_subpaths }` shape directly. Keeping
+    ///   the field on `SandboxBackendConfig` lets [`check_enterprise_gate`]
+    ///   reason about the *presence* of carve-outs uniformly across hosts.
+    /// - **Linux** — ignored until Wave-C1c lands kernel-layer Landlock
+    ///   enforcement (ADR-135 PR-C3); behaviour mirrors macOS for now.
+    pub read_only_subpaths: Vec<PathBuf>,
     pub allow_network: bool,
     pub allow_spawn: bool,
     /// Loopback ports that the sandbox should allow outbound connect to,
@@ -391,10 +415,17 @@ pub fn check_enterprise_gate(
         return EnterpriseGateOutcome::DenyNoKernelSandbox;
     }
 
-    // Step 2: if the spawn carries no writable roots, there are no
-    // workspace-write carve-outs to worry about — read-only is enforced
-    // wholesale by the platform sandbox regardless.
-    if config.writable_roots.is_empty() {
+    // Step 2: if the spawn carries no `read_only_subpaths` carve-outs,
+    // there is nothing for the kernel layer to extra-deny — the base
+    // sandbox kind alone is sufficient regardless of how many writable
+    // roots are present (a workspace-write without any holes is the
+    // common case for non-enterprise tasks).
+    //
+    // OQ-W3-3 (sign-off 2026-05-11) corrected the original PR-W1+W2
+    // approximation `writable_roots.is_empty()`: a `WorkspaceWrite` policy
+    // *always* has writable roots, so the old signal misclassified the
+    // hole-free case as "needs kernel enforcement".
+    if config.read_only_subpaths.is_empty() {
         return EnterpriseGateOutcome::Allow;
     }
 
@@ -627,11 +658,17 @@ mod tests {
     // They are cross-platform pure-function tests (no `cfg(target_os = ...)`)
     // so the same matrix is verified on every CI host.
 
-    fn gate_cfg(enterprise: bool, soft: bool, writable: &[&str]) -> SandboxBackendConfig {
+    fn gate_cfg(
+        enterprise: bool,
+        soft: bool,
+        writable: &[&str],
+        read_only_subpaths: &[&str],
+    ) -> SandboxBackendConfig {
         SandboxBackendConfig {
             enterprise_mode: enterprise,
             enterprise_allow_userspace_carveouts: soft,
             writable_roots: writable.iter().map(PathBuf::from).collect(),
+            read_only_subpaths: read_only_subpaths.iter().map(PathBuf::from).collect(),
             ..SandboxBackendConfig::default()
         }
     }
@@ -644,7 +681,7 @@ mod tests {
             SandboxType::LinuxSeccomp,
             SandboxType::WindowsRestrictedToken,
         ] {
-            let cfg = gate_cfg(false, false, &["/tmp/work"]);
+            let cfg = gate_cfg(false, false, &["/tmp/work"], &["/tmp/work/.git"]);
             assert_eq!(
                 check_enterprise_gate(&cfg, sb, false),
                 EnterpriseGateOutcome::Allow,
@@ -655,7 +692,7 @@ mod tests {
 
     #[test]
     fn req_enterprise_gate_denies_when_no_kernel_sandbox() {
-        let cfg = gate_cfg(true, false, &["/tmp/work"]);
+        let cfg = gate_cfg(true, false, &["/tmp/work"], &["/tmp/work/.git"]);
         assert_eq!(
             check_enterprise_gate(&cfg, SandboxType::None, true),
             EnterpriseGateOutcome::DenyNoKernelSandbox,
@@ -664,7 +701,7 @@ mod tests {
 
     #[test]
     fn req_enterprise_gate_denies_when_windows_setup_pending() {
-        let cfg = gate_cfg(true, false, &["/tmp/work"]);
+        let cfg = gate_cfg(true, false, &["/tmp/work"], &["/tmp/work/.git"]);
         assert_eq!(
             check_enterprise_gate(&cfg, SandboxType::WindowsRestrictedToken, false),
             EnterpriseGateOutcome::DenyNoKernelSandbox,
@@ -674,7 +711,7 @@ mod tests {
 
     #[test]
     fn req_enterprise_gate_macos_allows_with_workspace_write() {
-        let cfg = gate_cfg(true, false, &["/tmp/work"]);
+        let cfg = gate_cfg(true, false, &["/tmp/work"], &["/tmp/work/.git"]);
         assert_eq!(
             check_enterprise_gate(&cfg, SandboxType::MacosSeatbelt, true),
             EnterpriseGateOutcome::Allow,
@@ -684,7 +721,7 @@ mod tests {
 
     #[test]
     fn req_enterprise_gate_windows_denies_carveouts_without_soft_flag() {
-        let cfg = gate_cfg(true, false, &["/tmp/work"]);
+        let cfg = gate_cfg(true, false, &["/tmp/work"], &["/tmp/work/.git"]);
         assert_eq!(
             check_enterprise_gate(&cfg, SandboxType::WindowsRestrictedToken, true),
             EnterpriseGateOutcome::DenyNoReadOnlySubpathsKernelEnforcement,
@@ -693,7 +730,7 @@ mod tests {
 
     #[test]
     fn req_enterprise_gate_windows_softmode_allows_with_reason() {
-        let cfg = gate_cfg(true, true, &["/tmp/work"]);
+        let cfg = gate_cfg(true, true, &["/tmp/work"], &["/tmp/work/.git"]);
         assert_eq!(
             check_enterprise_gate(&cfg, SandboxType::WindowsRestrictedToken, true),
             EnterpriseGateOutcome::AllowWithUserspaceSoftMode {
@@ -704,7 +741,7 @@ mod tests {
 
     #[test]
     fn req_enterprise_gate_linux_denies_carveouts_without_soft_flag() {
-        let cfg = gate_cfg(true, false, &["/tmp/work"]);
+        let cfg = gate_cfg(true, false, &["/tmp/work"], &["/tmp/work/.git"]);
         assert_eq!(
             check_enterprise_gate(&cfg, SandboxType::LinuxSeccomp, true),
             EnterpriseGateOutcome::DenyNoReadOnlySubpathsKernelEnforcement,
@@ -713,7 +750,7 @@ mod tests {
 
     #[test]
     fn req_enterprise_gate_linux_softmode_allows_with_reason() {
-        let cfg = gate_cfg(true, true, &["/tmp/work"]);
+        let cfg = gate_cfg(true, true, &["/tmp/work"], &["/tmp/work/.git"]);
         assert_eq!(
             check_enterprise_gate(&cfg, SandboxType::LinuxSeccomp, true),
             EnterpriseGateOutcome::AllowWithUserspaceSoftMode {
@@ -723,21 +760,42 @@ mod tests {
     }
 
     #[test]
-    fn req_enterprise_gate_no_writable_roots_allows_everywhere() {
-        // Without WorkspaceWrite carve-outs, the gate should not block on
-        // missing `read_only_subpaths` enforcement.
+    fn req_enterprise_gate_no_read_only_subpaths_allows_everywhere() {
+        // ADR-141 §3 PR-W3 / OQ-W3-3 (sign-off 2026-05-11): without any
+        // `read_only_subpaths` carve-outs, the gate must not block on
+        // missing kernel-layer hole enforcement — the base sandbox kind
+        // already covers the request. This holds even when WorkspaceWrite
+        // grants writable roots (the common non-enterprise hole-free case).
         for &sb in &[
             SandboxType::MacosSeatbelt,
             SandboxType::LinuxSeccomp,
             SandboxType::WindowsRestrictedToken,
         ] {
-            let cfg = gate_cfg(true, false, &[]);
+            let cfg = gate_cfg(true, false, &["/tmp/work"], &[]);
             assert_eq!(
                 check_enterprise_gate(&cfg, sb, true),
                 EnterpriseGateOutcome::Allow,
-                "no writable_roots ⇒ no carve-outs ⇒ Allow on {sb:?}",
+                "no read_only_subpaths ⇒ no carve-outs ⇒ Allow on {sb:?}",
             );
         }
+    }
+
+    #[test]
+    fn req_enterprise_gate_signal_is_subpaths_not_writable_roots() {
+        // OQ-W3-3 regression test: previously the gate short-circuited on
+        // `writable_roots.is_empty()`, which misclassified the common
+        // WorkspaceWrite hole-free case as "needs kernel enforcement".
+        // After the OQ-W3-3 fix, the signal is `read_only_subpaths.is_empty()`.
+        let cfg_holes_no_roots = gate_cfg(true, false, &[], &["/tmp/work/.git"]);
+        assert_eq!(
+            check_enterprise_gate(
+                &cfg_holes_no_roots,
+                SandboxType::WindowsRestrictedToken,
+                true
+            ),
+            EnterpriseGateOutcome::DenyNoReadOnlySubpathsKernelEnforcement,
+            "holes without writable_roots still demand kernel enforcement",
+        );
     }
 
     #[test]

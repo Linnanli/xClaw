@@ -218,6 +218,8 @@ pub fn policy_to_backend_config_with_env(
         SandboxPolicy::DangerFullAccess => SandboxBackendConfig {
             readable_roots: vec![PathBuf::from("/")],
             writable_roots: vec![PathBuf::from("/")],
+            // FullAccess: no holes — full root is writable.
+            read_only_subpaths: vec![],
             allow_network: true,
             allow_spawn: true,
             proxy_loopback_ports: vec![],
@@ -231,6 +233,8 @@ pub fn policy_to_backend_config_with_env(
         SandboxPolicy::ReadOnly { network_access } => SandboxBackendConfig {
             readable_roots: vec![PathBuf::from("/")],
             writable_roots: vec![],
+            // ReadOnly: no writable roots ⇒ no carve-outs needed.
+            read_only_subpaths: vec![],
             allow_network: *network_access,
             allow_spawn: true,
             proxy_loopback_ports: if *network_access {
@@ -248,6 +252,8 @@ pub fn policy_to_backend_config_with_env(
                 // 进程内被外层容器隔离，本地视为只读。
                 readable_roots: vec![PathBuf::from("/")],
                 writable_roots: vec![],
+                // ExternalSandbox：内层视为只读，无 carve-outs。
+                read_only_subpaths: vec![],
                 allow_network: net_enabled,
                 allow_spawn: true,
                 proxy_loopback_ports: if net_enabled {
@@ -263,9 +269,22 @@ pub fn policy_to_backend_config_with_env(
         SandboxPolicy::WorkspaceWrite { network_access, .. } => {
             let roots = policy.get_writable_roots_with_cwd(cwd);
             let writable_roots: Vec<PathBuf> = roots.iter().map(|r| r.root.clone()).collect();
+            // ADR-141 §3 PR-W3 / OQ-W3-2 (sign-off 2026-05-11)：flatten
+            // 每个 WritableRoot 的 `read_only_subpaths` (例如 `.git/`,
+            // `.codex/`, `.dasclaw/`) 到 backend config 顶层 —— 下游 Windows
+            // adapter 会把它们 wire 给 launcher，再透传给上游
+            // `run_windows_sandbox_capture_with_extra_deny_write_paths` 下发
+            // Win32 DACL DENY ACE，达成 kernel-enforced 洞中洞。macOS sbpl
+            // 由 ADR-135 PR-C1 在 `dasclaw_sandboxing::seatbelt` 处理，
+            // Linux Landlock 是 PR-W4 / Wave-C1c 的工作。
+            let read_only_subpaths: Vec<PathBuf> = roots
+                .iter()
+                .flat_map(|r| r.read_only_subpaths.iter().cloned())
+                .collect();
             SandboxBackendConfig {
                 readable_roots: vec![PathBuf::from("/")],
                 writable_roots,
+                read_only_subpaths,
                 allow_network: *network_access,
                 allow_spawn: true,
                 proxy_loopback_ports: if *network_access {
@@ -378,6 +397,50 @@ mod tests {
             "writable_roots 必须包含 cwd: {:?}",
             cfg.writable_roots
         );
+    }
+
+    #[test]
+    fn req_policy_to_backend_config_flattens_read_only_subpaths() {
+        // ADR-141 §3 PR-W3 / OQ-W3-2 (sign-off 2026-05-11):
+        // SandboxPolicy::WorkspaceWrite 在 `get_writable_roots_with_cwd`
+        // 里默认会给 cwd 加 `.git` / `.codex` / `.dasclaw` 等 read-only
+        // subpaths（见 `default_read_only_subpaths_for_writable_root`）。
+        // 本测试锁定: backend config 的 `read_only_subpaths` 必须把所有
+        // root 的 holes flatten 到顶层 —— 否则 Windows adapter 无法把
+        // 它们 wire 到 launcher IPC，最终 Win32 DACL DENY 会漏 ACE。
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let cfg =
+            policy_to_backend_config(&SandboxPolicy::new_workspace_write_policy(), tmp.path());
+        assert!(
+            cfg.read_only_subpaths.iter().any(|p| p == &git_dir),
+            "flatten 必须包含 cwd/.git，实际: {:?}",
+            cfg.read_only_subpaths,
+        );
+    }
+
+    #[test]
+    fn req_read_only_policies_have_empty_read_only_subpaths() {
+        // ReadOnly / ExternalSandbox / DangerFullAccess 没有 writable
+        // carve-outs，read_only_subpaths 必须空。否则 ADR-141 gate
+        // (Step 2) 误判为 needs-kernel-enforcement。
+        for p in [
+            SandboxPolicy::ReadOnly {
+                network_access: false,
+            },
+            SandboxPolicy::ExternalSandbox {
+                network_access: NetworkAccess::Restricted,
+            },
+            SandboxPolicy::DangerFullAccess,
+        ] {
+            let cfg = policy_to_backend_config(&p, Path::new("/tmp"));
+            assert!(
+                cfg.read_only_subpaths.is_empty(),
+                "{p:?} 不应产生 read_only_subpaths，实际: {:?}",
+                cfg.read_only_subpaths,
+            );
+        }
     }
 
     #[test]

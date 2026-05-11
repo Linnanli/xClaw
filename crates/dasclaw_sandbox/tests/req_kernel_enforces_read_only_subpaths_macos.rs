@@ -42,6 +42,7 @@ fn req_dasclaw_sandbox_kernel_blocks_git_hooks_under_workspace_write_macos() {
     let policy = SandboxBackendConfig {
         readable_roots: vec![PathBuf::from("/")],
         writable_roots: vec![workspace_root.clone()],
+        read_only_subpaths: vec![],
         allow_network: false,
         allow_spawn: true,
         proxy_loopback_ports: vec![],
@@ -101,6 +102,7 @@ fn req_dasclaw_sandbox_kernel_allows_write_to_non_hole_path_macos() {
     let policy = SandboxBackendConfig {
         readable_roots: vec![PathBuf::from("/")],
         writable_roots: vec![workspace_root.clone()],
+        read_only_subpaths: vec![],
         allow_network: false,
         allow_spawn: true,
         proxy_loopback_ports: vec![],

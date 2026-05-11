@@ -44,7 +44,7 @@ fn main() -> std::process::ExitCode {
 
     use dasclaw_sandbox::launcher_ipc::{LauncherRequest, LauncherResponse, PROTOCOL_VERSION};
     use dasclaw_sandbox::windows::job_object::{JobObject, OuterJobLimits};
-    use dasclaw_sandbox_windows::run_windows_sandbox_capture;
+    use dasclaw_sandbox_windows::run_windows_sandbox_capture_with_extra_deny_write_paths;
 
     fn write_response(resp: &LauncherResponse) -> std::io::Result<()> {
         let json = serde_json::to_vec(resp)
@@ -99,7 +99,7 @@ fn main() -> std::process::ExitCode {
         }
     };
 
-    let capture = match run_windows_sandbox_capture(
+    let capture = match run_windows_sandbox_capture_with_extra_deny_write_paths(
         &req.policy_json,
         &req.cwd,
         &req.dasclaw_home,
@@ -107,6 +107,12 @@ fn main() -> std::process::ExitCode {
         &req.cwd,
         req.env,
         None, // timeout — adapter 上层（OsExecutor）用 tokio timeout 包裹
+        // ADR-141 §3 PR-W3 / OQ-W3-2 (sign-off 2026-05-11): forward
+        // `SandboxBackendConfig::read_only_subpaths` as upstream
+        // `additional_deny_write_paths`, so upstream's `acl::add_deny_write_ace`
+        // installs Win32 DACL DENY ACEs on every carve-out path. Empty slice
+        // preserves Slice B1 behaviour bit-for-bit.
+        &req.additional_deny_write_paths,
         req.use_private_desktop,
     ) {
         Ok(c) => c,

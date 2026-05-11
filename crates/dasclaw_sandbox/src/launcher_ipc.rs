@@ -65,6 +65,20 @@ pub struct LauncherRequest {
 
     /// 是否使用 Alternate Desktop（透传上游 API）。
     pub use_private_desktop: bool,
+
+    /// 额外的 deny-write 路径列表 — 即 [`crate::SandboxBackendConfig::read_only_subpaths`]
+    /// 的 wire 形式（ADR-141 §3 PR-W3 / OQ-W3-2 sign-off 2026-05-11）。
+    ///
+    /// launcher 收到非空列表时改调
+    /// `dasclaw_sandbox_windows::run_windows_sandbox_capture_with_extra_deny_write_paths`，
+    /// 把这些路径作为 `additional_deny_write_paths` 透传给 upstream，upstream
+    /// 再通过 `acl::add_deny_write_ace` 下发 Win32 DACL DENY entries。
+    ///
+    /// 空 Vec = 维持 Slice B1 的旧行为（调 `run_windows_sandbox_capture`），
+    /// 协议向后兼容：旧 launcher 反序列化新 request 时 serde 的 `#[serde(default)]`
+    /// 兜底为空 Vec。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_deny_write_paths: Vec<PathBuf>,
 }
 
 /// `OuterJobLimits` 的 wire 形式。
@@ -142,6 +156,7 @@ mod tests {
                 max_active_processes: Some(64),
             }),
             use_private_desktop: false,
+            additional_deny_write_paths: vec![],
         }
     }
 
@@ -160,6 +175,57 @@ mod tests {
         let json = serde_json::to_string(&req).expect("serialize");
         let back: LauncherRequest = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(req, back);
+    }
+
+    #[test]
+    fn request_with_additional_deny_write_paths_round_trips() {
+        // ADR-141 §3 PR-W3 / OQ-W3-2 contract: deny paths must survive the
+        // adapter ↔ launcher IPC boundary intact so that upstream
+        // `run_windows_sandbox_capture_with_extra_deny_write_paths` can DENY
+        // them at the Win32 DACL layer.
+        let mut req = sample_request();
+        req.additional_deny_write_paths = vec![
+            PathBuf::from(r"C:\Users\u\workspace\.git"),
+            PathBuf::from(r"C:\Users\u\workspace\.dasclaw"),
+            PathBuf::from(r"C:\Users\u\workspace\.codex"),
+        ];
+        let json = serde_json::to_string(&req).expect("serialize");
+        let back: LauncherRequest = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(req, back);
+        assert_eq!(back.additional_deny_write_paths.len(), 3);
+    }
+
+    #[test]
+    fn request_omits_additional_deny_write_paths_when_empty() {
+        // skip_serializing_if keeps the wire payload backwards-compatible
+        // with launchers that predate ADR-141 PR-W3.
+        let req = sample_request();
+        assert!(req.additional_deny_write_paths.is_empty());
+        let json = serde_json::to_string(&req).expect("serialize");
+        assert!(
+            !json.contains("additional_deny_write_paths"),
+            "empty list must be omitted from wire payload, got: {json}",
+        );
+    }
+
+    #[test]
+    fn request_legacy_json_without_deny_paths_field_deserializes() {
+        // Forward-compat: an older adapter that does not yet emit the
+        // `additional_deny_write_paths` field must still be parseable.
+        let legacy_json = serde_json::json!({
+            "protocol_version": PROTOCOL_VERSION,
+            "argv": ["cmd.exe"],
+            "cwd": "C:\\workspace",
+            "env": {},
+            "dasclaw_home": "C:\\Users\\u\\.dasclaw",
+            "policy_json": "{\"ReadOnly\":{\"network_access\":false}}",
+            "outer_limits": null,
+            "use_private_desktop": false,
+        })
+        .to_string();
+        let parsed: LauncherRequest =
+            serde_json::from_str(&legacy_json).expect("legacy json must deserialize");
+        assert!(parsed.additional_deny_write_paths.is_empty());
     }
 
     #[test]
