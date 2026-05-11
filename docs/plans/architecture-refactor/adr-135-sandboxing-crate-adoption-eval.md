@@ -165,7 +165,11 @@ ADR-132 (execpolicy) 解决了"应用层 policy"语言；ADR-133 (shell-command)
 
 ### Wave-C（接入 dasclaw 主流水）
 4. **PR-C1**: 在 `dasclaw_sandbox::launcher_ipc` 接入 `dasclaw_sandboxing::SandboxManager` —— 把现行进程内 cap-std 调用改为"先调内核 backend，再用 cap-std 兜底"。这是**真正的"内核层强制"接入点**。
-5. **PR-C2**: 退役 `dasclaw_sandbox/{linux,macos,windows}/` 中与 sandboxing crate 重叠的部分（保留 `windows/job_object`、`rlimit`、`launcher_ipc`，移除冗余 `sandbox-exec` 调用）。
+5. **PR-C2a** *(merged via #414)*: 在 `dasclaw_sandbox::SandboxExecRequest` 上挂载 `network: Option<NetworkProxy>` 字段并透传到 `dasclaw_sandboxing::seatbelt::create_seatbelt_command_args`，让 macOS Seatbelt profile 可以在运行时 hole-punch 出代理回环端口。这一步只动 sandbox 内部 struct，不接入调用方。
+6. **PR-C2b** *(this PR)*: 把会话级 `NetworkProxy` 顺着 `OsExecutor` → `SandboxedExecutor` → `SandboxExecRequest` 一路往下游传。`SandboxedExecutor::new` 强制要求显式的 `Option<NetworkProxy>` 参数，构造期不注入 ⇒ 沙箱内部完全禁网（fail-safe）。`app.rs` 在 boot 时先启 proxy 再构造 executor，把句柄注入。
+7. **PR-C3** *(deferred)*: 退役 `dasclaw_sandbox/{linux,macos,windows}/` 中与 sandboxing crate 重叠的部分（保留 `windows/job_object`、`rlimit`、`launcher_ipc`，移除冗余 `sandbox-exec` 调用）。
+
+> **PR-C2 拆分的记录性说明**：原 ADR 写的 PR-C2 是"退役重叠部分"，落地时发现 W7 net-proxy 验收要求"代理地址必须能在沙箱内被访问"必须先走完，遂把"代理透传"从 W7 拉到本 ADR 的 W3.2 范围内，拆为 C2a（数据结构）+ C2b（调用方接线），原 C2 顺延为 C3。这是 ADR-137 单层口径下的合理加速，不破坏 ADR-002 三层架构。
 
 每个 PR 单独 review，单 issue 一目标，不跨阶段。
 

@@ -28,7 +28,7 @@
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let policy = SandboxPolicy::new_workspace_write_policy();
-//! let executor = SandboxedExecutor::new(policy, SandboxablePreference::Auto, false);
+//! let executor = SandboxedExecutor::new(policy, SandboxablePreference::Auto, false, None);
 //! let mut cmd = Command::new("echo");
 //! cmd.arg("hello");
 //! let output = executor.execute(ExecRequest {
@@ -46,6 +46,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use dasclaw_net_proxy::NetworkProxy;
 use dasclaw_sandbox::proxy::detect_loopback_ports;
 use dasclaw_sandbox::{
     ResourceLimits, SandboxBackendConfig, SandboxError, SandboxExecRequest, SandboxablePreference,
@@ -99,6 +100,16 @@ pub struct SandboxedExecutor {
     policy: SandboxPolicy,
     sandbox_pref: SandboxablePreference,
     windows_sandbox_enabled: bool,
+    /// 会话级 [`NetworkProxy`]，构造期注入。macOS Seatbelt 后端将其转译为
+    /// `(allow network-outbound (remote ip "localhost:<port>"))` sbpl 规则，
+    /// 让沙箱内子进程的 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量真正生效
+    /// （ADR-135 §3 PR-C2b / ADR-142）。
+    ///
+    /// `None` 等价于"无 proxy 注入"——backend 不会合成任何 loopback hole；
+    /// 这是 fail-safe 的缺省值（Wave-C2a 在 dasclaw_exec 出口处使用过的
+    /// 占位语义现在由调用方显式选择）。Linux 后端继续走 `backend.proxy_loopback_ports`
+    /// 的 env-detect 路径，与 `network` 互不冲突。
+    network: Option<NetworkProxy>,
 }
 
 impl SandboxedExecutor {
@@ -106,11 +117,13 @@ impl SandboxedExecutor {
         policy: SandboxPolicy,
         sandbox_pref: SandboxablePreference,
         windows_sandbox_enabled: bool,
+        network: Option<NetworkProxy>,
     ) -> Self {
         Self {
             policy,
             sandbox_pref,
             windows_sandbox_enabled,
+            network,
         }
     }
 
@@ -118,10 +131,19 @@ impl SandboxedExecutor {
     pub fn policy(&self) -> &SandboxPolicy {
         &self.policy
     }
-}
 
-impl ProcessExecutor for SandboxedExecutor {
-    fn execute(&self, req: ExecRequest) -> Result<Output, ExecError> {
+    /// 公开会话级 [`NetworkProxy`] 引用，便于调用方 / 测试断言注入是否到位。
+    pub fn network(&self) -> Option<&NetworkProxy> {
+        self.network.as_ref()
+    }
+
+    /// 把 [`ExecRequest`] 翻译成 [`SandboxExecRequest`]，**不执行**。
+    ///
+    /// 抽出来供契约测试断言 `network` 是否被忠实透传，同时让 `execute()`
+    /// 保持单一职责（assemble → run）。语义错误（cwd 落入洞中洞等）在这里
+    /// 一票否决；通过后返回的 `SandboxExecRequest` 即喂给 backend.execute()
+    /// 的最终形态。
+    pub fn assemble_request(&self, req: ExecRequest) -> Result<SandboxExecRequest, ExecError> {
         // 1. 政策门：cwd 自身不能落在洞中洞（read_only_subpath）。
         //    `is_path_writable(cwd, cwd)` 在 WorkspaceWrite 下总是把 cwd 加为
         //    隐含 root，所以这里只在非 ReadOnly 场景下，对 cwd 是否被任何
@@ -135,19 +157,20 @@ impl ProcessExecutor for SandboxedExecutor {
         // 2. 政策 → 内核配置
         let backend = policy_to_backend_config(&self.policy, &req.cwd);
 
-        // 3. 选后端 + 执行
-        let sandbox = select_backend(self.sandbox_pref, self.windows_sandbox_enabled)?;
-        let exec = SandboxExecRequest {
+        Ok(SandboxExecRequest {
             command: req.command,
             policy: backend,
             preference: self.sandbox_pref,
             windows_sandbox_enabled: self.windows_sandbox_enabled,
-            // Wave-C2a: 占位 None；调用方（agent / mcp）在 Wave-C2b
-            // 切换为传入会话级 NetworkProxy，以恢复 macOS Seatbelt 的
-            // HTTP_PROXY 端口洞穿能力。Linux 已通过 backend.proxy_loopback_ports
-            // 间接消费。
-            network: None,
-        };
+            network: self.network.clone(),
+        })
+    }
+}
+
+impl ProcessExecutor for SandboxedExecutor {
+    fn execute(&self, req: ExecRequest) -> Result<Output, ExecError> {
+        let exec = self.assemble_request(req)?;
+        let sandbox = select_backend(self.sandbox_pref, self.windows_sandbox_enabled)?;
         sandbox.execute(exec).map_err(ExecError::from)
     }
 }
@@ -474,6 +497,7 @@ mod tests {
             },
             SandboxablePreference::Forbid,
             false,
+            None,
         );
         let result = executor.execute(ExecRequest {
             command: Command::new("echo"),
@@ -495,6 +519,7 @@ mod tests {
             },
             SandboxablePreference::Forbid,
             false,
+            None,
         );
         let mut cmd = Command::new("true");
         cmd.arg("");
@@ -515,6 +540,7 @@ mod tests {
             SandboxPolicy::new_workspace_write_policy(),
             SandboxablePreference::Forbid,
             false,
+            None,
         );
         let mut cmd = Command::new("echo");
         cmd.arg("hello-from-exec");
@@ -528,4 +554,9 @@ mod tests {
         let stdout = String::from_utf8_lossy(&out.stdout);
         assert!(stdout.contains("hello-from-exec"));
     }
+
+    // NetworkProxy 透传契约 (ADR-135 §3 PR-C2b) 由集成测试覆盖：
+    // crates/dasclaw_exec/tests/network_proxy_threading.rs
+    // 该测试需要 dasclaw_net_proxy 公共 API 构造 unmanaged NetworkProxy，
+    // 故走 tests/ 目录而非 #[cfg(test)] mod。
 }

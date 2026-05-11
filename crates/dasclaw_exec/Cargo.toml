@@ -20,7 +20,14 @@ thiserror = "1"
 ironclaw_workspace_cap = { path = "../ironclaw_workspace_cap" }
 # 下层内核：跨平台沙箱执行
 dasclaw_sandbox = { path = "../dasclaw_sandbox" }
+# 网络代理：SandboxedExecutor 可注入会话级 NetworkProxy 以驱动 macOS Seatbelt
+# 的 HTTP_PROXY hole-punch（ADR-135 §3 PR-C2b / ADR-142）。
+dasclaw_net_proxy = { path = "../dasclaw_net_proxy" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 tempfile = "3"
+# 集成测试 tests/network_proxy_threading.rs 需要 anyhow + async-trait 实现
+# NoopReloader（ConfigReloader trait）以构造 unmanaged NetworkProxy。
+anyhow = "1"
+async-trait = "0.1"

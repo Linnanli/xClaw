@@ -544,17 +544,17 @@ impl AppBuilder {
                     policy = crate::sandbox::SandboxPolicy::WorkspaceWrite;
                 }
 
-                let executor = Arc::new(crate::sandbox::OsExecutor::new(
-                    Duration::from_secs(sb.timeout_secs),
-                    sb.allow_full_access,
-                ));
-
                 // Network proxy no longer requires a secrets store: the
                 // codex-network-proxy port (W7 / ADR-137 PR-N23) enforces
                 // domain allowlist + optional MITM TLS audit only.
                 // Credential injection lives in tools/builtin/http.rs
                 // (host-side reqwest layer) where it actually works for
                 // HTTPS, see crate::sandbox::net_proxy module docs.
+                //
+                // W3.2-C2b（ADR-135 §3 PR-C2b）：先启代理拿到句柄，再用
+                // 句柄构造 OsExecutor。OsExecutor 持有的 NetworkProxy 会
+                // 被 SandboxedExecutor → dasclaw_sandbox → seatbelt profile
+                // 透传，从而在 sandbox 内自动 hole-punch 出代理地址。
                 let mut sandbox_cfg = sb.to_sandbox_config();
                 // Override policy with the (possibly downgraded) one.
                 sandbox_cfg.policy = policy;
@@ -583,6 +583,14 @@ impl AppBuilder {
                         None
                     }
                 };
+
+                // W3.2-C2b: 把代理句柄注入 OsExecutor。proxy=None 时退化为
+                // 沙箱内部完全禁网（fail-safe）。
+                let executor = Arc::new(crate::sandbox::OsExecutor::new(
+                    Duration::from_secs(sb.timeout_secs),
+                    sb.allow_full_access,
+                    proxy.as_ref().map(|h| h.proxy.clone()),
+                ));
 
                 ctx.sandbox_executor = Some(executor);
                 ctx.sandbox_policy = policy;
