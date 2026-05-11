@@ -329,6 +329,8 @@ dasclaw_governance.recovery_recipes = false
 > **v2.5 调整**：在 v2.4 5 周基础上 +0.5 周吸收任务组 C — `crates/dasclaw_llm_provider` 新建 + 删 `claw-code-api` path-dep（ADR-118）。
 >
 > **v2.2 调整**：原 4 周仅做 IPC 切换，扩为 5 周：吸收 ironclaw 后端能力（workspace 去多租户化 + bridge_lite 5-7k）+ IPC 整合 + 88 commit codex 增量跟进。
+>
+> **v2.6 进度补记（2026-05-XX）**：任务组 D 「codex-protocol 文件级 verbatim slice (ADR-136 §3 Step C1)」已闭环 9 PR，落地详情见下方。新增 4 个 file-level slice 小 vendor utils crate (`dasclaw_async_utils` / `dasclaw_utils_string` / `dasclaw_utils_cache` / `dasclaw_utils_image`)；Step C2 评估已由 [ADR-138](adr-138-protocol-step-c2-evaluation.md) 推荐 Option 2B "keep file-level slice"。
 
 ### 任务
 
@@ -404,6 +406,22 @@ dasclaw_governance.recovery_recipes = false
     - `cargo nextest run -p ironclaw --tests llm::` 全过
     - `grep -rln "claw_code_api\|claw-code-api" desktop-client/ Cargo.toml crates/` 输出 = 空（除注释/历史 ADR 引用）
 
+#### 任务组 D — codex-protocol 文件级 verbatim slice（v2.6 新增，[ADR-136](adr-136-protocol-expansion-plan.md) §3 Step C1 + [ADR-138](adr-138-protocol-step-c2-evaluation.md)）
+
+> **背景**：ADR-136 §3 amendment 2 把上游 `codex-cli-main/codex-rs/protocol/` 28 *.rs + 1 asset（~16K LOC）按 4 层依赖闭包拆为 10 PR file-level verbatim slice 落到 `crates/dasclaw_protocol`，同期新建 4 个 file-level slice 小 vendor utils crate 补 transitive deps。ADR-129 §1.3 verbatim 红线由 `scripts/check_codex_protocol_drift.py` 守卫。
+
+17. **C1.1 — rename `dasclaw_parsed_command` → `dasclaw_protocol`**（PR [#382](https://github.com/Linnanli/xClaw/pull/382) ✅）：crate name 翻转 + drift guard 拆分；保留 `parse_command.rs`。
+18. **C1.2 — Layer 1 14 个叶子文件**（PR [#389](https://github.com/Linnanli/xClaw/pull/389) ✅）：`account` / `agent_path` / `auth` / `dynamic_tools` / `exec_output(+_tests)` / `mcp` / `memory_citation` / `message_history` / `num_format` / `plan_tool` / `request_user_input` / `thread_id` / `tool_name` / `user_input`（全 zero `crate::` deps）。
+19. **C1.3 — Layer 2 mutual-cycle pair**（PR [#391](https://github.com/Linnanli/xClaw/pull/391) ✅）：`config_types.rs` ↔ `openai_models.rs`（互相循环依赖必须同 PR）。
+20. **C1.prep-1..4 — 4 个 file-level slice 小 vendor utils crate**：
+    - **PR [#393](https://github.com/Linnanli/xClaw/pull/393) ✅** `crates/dasclaw_async_utils`（解锁 `error::CancelErr`）
+    - **PR [#396](https://github.com/Linnanli/xClaw/pull/396) ✅** `crates/dasclaw_utils_string`（解锁 `error::truncate_middle_*`）
+    - **PR [#398](https://github.com/Linnanli/xClaw/pull/398) ✅** `crates/dasclaw_utils_cache`（`dasclaw_utils_image` 的 transitive dep）
+    - **PR [#400](https://github.com/Linnanli/xClaw/pull/400) ✅** `crates/dasclaw_utils_image`（解锁 `models::PromptImageMode` / `permissions::ImageProcessingError`）
+21. **C1.4 — Layer 3 hub 7 文件**（PR [#402](https://github.com/Linnanli/xClaw/pull/402) ✅）：`protocol` / `permissions` / `models` / `request_permissions` / `approvals` / `network_policy` / `items`（amendment 2 原拆为 C1.4a/b 双 PR，实施期发现 `protocol.rs` 同时 re-export `approvals` / `items` 类型形成 strongly-connected component，合并为单 PR；该决定记入 PR #402 描述与 `dasclaw_protocol::lib.rs` 模块文档）。
+22. **C1.5 — Layer 4 `error` + `error_tests`**（PR [#404](https://github.com/Linnanli/xClaw/pull/404) ✅）：`error.rs` + `error_tests.rs`（~1,182 LOC，含 Linux-only `landlock` / `seccompiler` target-cfg deps）；188/188 nextest，所有 CI job 绿。
+23. **Step C2 评估 → ADR-138**：本任务组闭环后由 [ADR-138](adr-138-protocol-step-c2-evaluation.md) 评估"是否升级到 full crate verbatim port"。**结论：Option 2B keep file-level slice**——*.rs 已 28/28 byte-equal；crate name / workspace.dependencies 翻转是独立 ADR 议题，不绑架本任务组。`codex-utils-template` 未被 28 个 *.rs 中任一行 `use`，故意不 vendor。
+
 ### 验收
 - [ ] dasclaw_workspace **≤ 9k LOC**（含 RRF k=60 + chunker + embeddings，已去多租户化）
 - [ ] dasclaw_bridge_lite **≤ 7k LOC**（不含 router/store_adapter/skill_migration）
@@ -418,6 +436,10 @@ dasclaw_governance.recovery_recipes = false
 - [ ] **(v2.5)** `desktop-client/ironclaw/Cargo.toml` 中 0 处 `claw-code-api` / `claw_code_api` 引用
 - [ ] **(v2.5)** `cargo tree -p ironclaw` 输出不再包含 claw-code path crates
 - [ ] **(v2.5)** claw-code 子仓代码 0 行变化（保持只读参考库）
+- [x] **(v2.6 ADR-136 C1)** `crates/dasclaw_protocol` 28/28 *.rs + 1 asset byte-for-byte equal 上游（`python3.12 scripts/check_codex_protocol_drift.py` PASS，PAIRS = 27）
+- [x] **(v2.6 ADR-136 C1)** 4 个 file-level slice 小 vendor utils crate 全部落地：`dasclaw_async_utils` / `dasclaw_utils_string` / `dasclaw_utils_cache` / `dasclaw_utils_image`
+- [x] **(v2.6 ADR-136 C1)** `cargo nextest run -p dasclaw_protocol` 188/188 PASS
+- [x] **(v2.6 ADR-138)** Step C2 决策已落 ADR-138 Option 2B（保持 file-level slice，不翻转 crate name / 不引入 workspace.dependencies）
 
 ---
 
