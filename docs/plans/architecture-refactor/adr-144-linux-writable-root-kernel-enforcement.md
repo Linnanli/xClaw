@@ -89,6 +89,14 @@ $ grep -rn "setuid" codex-cli-main/codex-rs/linux-sandbox/src/
 landlock.rs:57:  // setuid privilege elevation. Many `bwrap` deployments rely on setuid, so …
 linux_run_main.rs:66: /// This exists so we can run bubblewrap first (which may rely on setuid)
 
+$ grep -rnE "unshare-user|--unshare-pid" codex-cli-main/codex-rs/linux-sandbox/src/bwrap.rs
+bwrap.rs:153: "--unshare-user".to_string(),
+bwrap.rs:154: "--unshare-pid".to_string(),
+
+$ ls codex-cli-main/codex-rs/vendor/bubblewrap/COPYING
+# GNU LIBRARY GENERAL PUBLIC LICENSE Version 2, June 1991
+# (LGPL v2 — see OQ-C1c-7)
+
 $ ls codex-cli-main/codex-rs/vendor/
 BUILD.bazel  bubblewrap
 
@@ -119,7 +127,7 @@ rust-ci-full.yml:654:   sudo sysctl -w kernel.apparmor_restrict_unprivileged_use
 | **B — Self-roll bwrap + landlock from scratch** | 仅取 codex 的 design ideas，自己写一份 Rust-only bubblewrap 替代品 | ❌ **直接违反 ADR-129 §1.3**；4,767 LOC × verbatim-locked workspace = 极高 drift 风险；安全敏感代码自写无 upstream 互查 |
 | **C — Use `landlock` crate only (skip bwrap)** | 只走 codex 的 legacy landlock 路径，跳过 bubblewrap 整 2 KLOC | ❌ 上游已把 landlock 标 "legacy/backup"，nesting carveout 不被支持；与 ADR-141 §1.1 三平台对称目标不符（macOS seatbelt 支持嵌套，Windows DACL 支持嵌套） |
 | **D — Defer Wave-C1c indefinitely** | 维持 Linux 路径"seccomp 网络阻断 + 应用层 cap-std"现状，正式作废 ADR-141 §1.1 Linux 行 | ❌ ADR-141 §6 OQ-1 fail-closed 默认要求 Linux 路径有 kernel FS 兜底；放弃即承认三平台不对称，回归到 #28 之前的状态 |
-| **E — Fork codex repo as git submodule** | 把 codex 整 repo submodule 进来，直接复用 `codex-linux-sandbox` 不端口 | ❌ submodule 带来跨 repo 编译/CI 复杂度；与现有 `dasclaw_sandbox_windows` / `dasclaw_sandboxing` 端口模式不对称；drift guard 失效（无法 byte diff） |
+| **E — Fork codex repo as git submodule** | 把 codex 整 repo submodule 进来，直接复用 `codex-linux-sandbox` 不端口 | ❌ submodule 与现有 `dasclaw_sandbox_windows` / `dasclaw_sandboxing` 端口模式不对称（其它 sandbox crate 都走 verbatim port + drift guard，submodule 引入第二套上游同步机制）；submodule pin 漂移检测要求开发者保持 submodule init / update，CI 复杂度提高；当前 codex-cli-main 已是工作区子目录（非 submodule），无强行换形态的必要 |
 
 ### 3.1 为什么 A 是唯一可接受路径
 
@@ -162,7 +170,7 @@ Phase 0 本 PR 仅落本 ADR，不写任何 Rust 代码。Phase 1 / 2 计划见 
 
 | 子任务 | 边界 | 验证 |
 |---|---|---|
-| P1.1 | 新建 `crates/dasclaw_sandbox_linux/` byte-for-byte 端口 + `vendor/bubblewrap/` 拷入 + `build.rs` 拷入 + `Cargo.toml` workspace 注册 | `cargo build -p dasclaw_sandbox_linux --target x86_64-unknown-linux-gnu`（macOS dev 用 `cross` 或 CI 跑）；`scripts/check_codex_linux_sandbox_drift.py` 接线 |
+| P1.1 | 新建 `crates/dasclaw_sandbox_linux/` byte-for-byte 端口 + `vendor/bubblewrap/` 拷入 + `build.rs` 拷入 + `Cargo.toml` workspace 注册 | 主要由 CI `ubuntu-latest` job 完成 `cargo build -p dasclaw_sandbox_linux`；macOS dev 仅做 `cargo check --target x86_64-unknown-linux-gnu` 走 cfg-gate 自测（实际 C 代码不编）；`scripts/check_codex_linux_sandbox_drift.py` 接线 |
 | P1.2 | `crates/dasclaw_sandbox/src/linux/mod.rs` adapter wiring：spawn 由 `dasclaw_sandbox_linux::run_main` 接管 FS，保留现 seccomp 网络阻断；`check_enterprise_gate` Step 3 Linux arm flip 为 `Allow`；删 `SoftModeReason::LinuxNoKernelReadOnlySubpaths` + `decide_carveout_outcome` Linux 分支 | 现有 `dasclaw_sandbox` 测试族 + 新增 H1/H2 测试（参照 ADR-112 §5.4） |
 | P1.3 | drift guard 脚本 + `.github/workflows/code_style.yml` `failure-check` stanza + Linux CI job 注入 `kernel.unprivileged_userns_clone=1` + `apt install pkg-config libcap-dev`（直抄 [`codex-rs/.github/workflows/rust-ci-full.yml:644-655`](../../../codex-cli-main/.github/workflows/rust-ci-full.yml)） | drift guard self-test；CI green on `ubuntu-latest` |
 
@@ -200,7 +208,7 @@ GitHub Actions `ubuntu-latest` 已被 codex 在自己 CI 上验证过可用（[`
 
 ---
 
-## 6. Open questions（对应 epic [#438](https://github.com/Linnanli/xClaw/issues/438) §"Phase 0 Open Questions"）
+## 6. Open questions（对应 epic [#438](https://github.com/Linnanli/xClaw/issues/438) §"Phase 0 Open Questions"，+ 自审新增 OQ-C1c-7）
 
 ### OQ-C1c-1：移植路径
 
@@ -220,11 +228,22 @@ GitHub Actions `ubuntu-latest` 已被 codex 在自己 CI 上验证过可用（[`
 
 ### OQ-C1c-5：proxy_routing.rs 端口边界
 
-**回答**：codex `proxy_routing.rs` (797 LOC) 是 loopback proxy 桥接，与 `dasclaw_sandbox::SandboxBackendConfig.proxy_loopback_ports`（已就位）配套。**全文件 verbatim 端口**，不在 Phase 1 拆分；其与现 [`crates/dasclaw_sandbox/src/linux/mod.rs`](../../../crates/dasclaw_sandbox/src/linux/mod.rs) 头部 doc 描述的 ProxyRouted 模式一致，端口后由 adapter 决定是走 codex 实现还是保留现 seccomp ProxyRouted 实现。Phase 1.2 PR 描述需明确该取舍；推荐**用 codex proxy_routing 替换现 seccomp ProxyRouted**，消除 W2.3 临时实现的技术债。
+**回答**：codex `proxy_routing.rs` (797 LOC) 是 loopback proxy 桥接，与 `dasclaw_sandbox::SandboxBackendConfig.proxy_loopback_ports`（已就位）配套。verbatim 端口意味着 codex `proxy_routing` 模块整体进入 `dasclaw_sandbox_linux`。现 [`crates/dasclaw_sandbox/src/linux/mod.rs`](../../../crates/dasclaw_sandbox/src/linux/mod.rs) 自有的 seccomp ProxyRouted 实现是 W2.3 临时实现，Phase 1.2 adapter wiring 时**必须**走 codex `proxy_routing`（不能保留两条 ProxyRouted 路径），W2.3 临时实现作为技术债同步清理。Phase 1.2 PR 描述要列出该 ProxyRouted 替换的回归测试列表。
 
 ### OQ-C1c-6：legacy landlock 保留策略
 
 **回答**：codex 上游把 landlock 标 "legacy fallback"，由 `features.use_legacy_landlock` 开关启用。Phase 1 verbatim 端口保留该开关；我方默认值 = `false`（与 codex 默认对齐），enterprise 配置可显式打开。**不要在 Phase 1 删 landlock 代码**——保持 verbatim 完整性，drift guard 才能起作用。
+
+### OQ-C1c-7：vendored bubblewrap LGPL v2 许可证影响（新增）
+
+**问题**：`codex-rs/vendor/bubblewrap/` 是上游 LGPL v2；本 workspace 顶层是 MIT OR Apache-2.0 双许可。vendored C 源码会被 codex `build.rs` **静态编入** 二进制，LGPL §6 对此种链接有重新链接条款要求。
+
+**初步分析**：
+- 现状：codex 自己就是 vendored static-link 进 OpenAI 产品；codex 已在自己的 NOTICE / `third_party/` 处理此问题，我们端口时**必须**同步抄它的 NOTICE 文件，并把 `bubblewrap/COPYING` 一同纳入 `crates/dasclaw_sandbox_linux/vendor/bubblewrap/`。
+- LGPL §6 通常的合规路径：(a) 发行 bubblewrap 修改后源码 + (b) 提供 "重新链接对象" 或动态链接选项。codex 选 (a)（vendor/ 目录本身已是 modified source 分发），我们随之即可。
+- **本 ADR 不解决该法务问题**，仅显式记录；Phase 1.1 PR 必须包含 NOTICE/THIRD_PARTY 文件同步，并由人类评审签字。
+
+**推荐**：Phase 1.1 PR 描述必须列：(1) `crates/dasclaw_sandbox_linux/vendor/bubblewrap/COPYING` 已拷入；(2) 顶层 NOTICE / `third_party/` 更新；(3) `cargo-deny` license allowlist 是否需要追加 LGPL-2.0；(4) 法务签字状态。若 (3) 或 (4) blocked，Phase 1.1 暂停，先开 sub-issue 解决。
 
 ---
 
