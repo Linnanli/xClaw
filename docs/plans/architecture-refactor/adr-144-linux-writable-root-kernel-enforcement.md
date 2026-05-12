@@ -1,10 +1,10 @@
-# ADR-144: Linux WritableRoot kernel enforcement (Wave-C1c — Phase 0 spike)
+# ADR-144: Linux WritableRoot kernel enforcement (Wave-C1c)
 
-- **Status**: Proposed (Phase 0 spike — research / planning only, **no Rust code in this PR**)
-- **Date**: 2026-05-12
+- **Status**: Accepted — Phase 1 完成（2026-05-12）；Phase 2 真机集成测试随后续 sandbox-touching PR 自动 exercise
+- **Date**: 2026-05-12 (Phase 0 spike); 2026-05-12 update (Phase 1 closeout)
 - **Authors**: GitHub Copilot (drafted under agent task), reviewed by [pending — human]
 - **Tracks**: [#438](https://github.com/Linnanli/xClaw/issues/438)
-- **Closes (Phase 0 only)**: epic [#380](https://github.com/Linnanli/xClaw/issues/380) Wave-C1c "Phase 0 spike + ADR draft" deliverable
+- **Closes**: epic [#380](https://github.com/Linnanli/xClaw/issues/380) Wave-C1c（行状态 🔴 → 🟢）
 - **References**:
   - ADR-129 §1.3 — verbatim port 红线
   - ADR-135 §3 — sandboxing crate adoption / Wave-C 拆分
@@ -166,6 +166,14 @@ Phase 0 本 PR 仅落本 ADR，不写任何 Rust 代码。Phase 1 / 2 计划见 
 - `crates/dasclaw_sandbox/src/linux/mod.rs:1-30` 头部 doc 在 Phase 1 启动 PR 同步加 "ADR-144 决定 verbatim port" 注脚（本 PR 不动 Rust 源码）。
 - Wave-C1c 工作量评估校正：4,767 LOC verbatim + ~200 LOC adapter + ~150 LOC drift guard + CI workflow ≈ **XL 不变**，但可拆为 P1.1（crate 端口 only，零 wiring）、P1.2（adapter wiring + gate flip）、P1.3（drift guard + CI sysctl）三个 sub-PR。
 
+> **Phase 1 status (2026-05-12 update)** — 全部 sub-PR 已合主：
+> - **P1.1** ✅ PR [#444](https://github.com/Linnanli/xClaw/pull/444)（`dasclaw_sandbox_linux` crate verbatim port）
+> - **P1.2a** ✅ PR [#445](https://github.com/Linnanli/xClaw/pull/445)（adapter wiring：`dasclaw_sandbox::linux::run_internal` spawn 由 helper 接管 FS）
+> - **P1.2b** ✅ PR [#448](https://github.com/Linnanli/xClaw/pull/448)（`check_enterprise_gate` Linux arm flip 为 `Allow`，删 `SoftModeReason::LinuxNoKernelReadOnlySubpaths` 死码）
+> - **P1.3** ✅ drift guard 脚本 + `codex-linux-sandbox-drift` job 已随 P1.1 落地；CI sysctl + helper pre-build 接线 ✅ PR [#451](https://github.com/Linnanli/xClaw/pull/451)（cherry-pick of [#450](https://github.com/Linnanli/xClaw/pull/450)，§5.4 verbatim 片段直接抄 codex `rust-ci-full.yml:644-655`）
+>
+> Epic #380 Wave-C1c 行可由 🔴 改为 🟢；ADR-141 §1.1 矩阵 Linux 行可标 ✅。本 ADR 由 `Proposed` 进入 `Accepted`。
+
 ### 5.2 Phase 1 计划（不在本 PR）
 
 | 子任务 | 边界 | 验证 |
@@ -251,6 +259,6 @@ GitHub Actions `ubuntu-latest` 已被 codex 在自己 CI 上验证过可用（[`
 
 ## 7. Sign-off
 
-- Status: **Proposed**（待 nally 评审；评审通过后改为 **Accepted** 并签 Date / Authors，同步在 epic #380 ROADMAP 表 Wave-C1c 行打 🟡，开 Phase 1.1 子 issue）
+- Status: **Accepted**（Phase 0 spike + Phase 1 sub-PR #444/#445/#448/#451 全部合主；epic #380 Wave-C1c 行打 🟢；Phase 2 真机集成测试随后续 sandbox-touching PR 自动 exercise）
 - 不属于 `adr-redline`：本 ADR 不改变 fail-closed 策略，仅做移植路径决策；Phase 1 实施 PR 各自再评审。
 - Cross-cuts (ADR-114)：类A（本 PR 仅新增本文档，无 `.ironclaw` / `IRONCLAW_BASE_DIR` 字面量）。
