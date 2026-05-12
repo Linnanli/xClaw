@@ -40,8 +40,8 @@ use windows_sys::Win32::Security::FreeSid;
 use windows_sys::Win32::Security::SECURITY_NT_AUTHORITY;
 
 pub const SETUP_VERSION: u32 = 5;
-pub const OFFLINE_USERNAME: &str = "CodexSandboxOffline";
-pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
+pub const OFFLINE_USERNAME: &str = "DasclawSandboxOffline";
+pub const ONLINE_USERNAME: &str = "DasclawSandboxOnline";
 const ERROR_CANCELLED: u32 = 1223;
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
@@ -561,22 +561,22 @@ fn find_setup_exe() -> PathBuf {
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
     {
-        let candidate = dir.join("codex-windows-sandbox-setup.exe");
+        let candidate = dir.join("dasclaw-windows-sandbox-setup.exe");
         if candidate.exists() {
             return candidate;
         }
 
         // Standalone installs keep Windows helper binaries under
-        // `codex-resources/` next to `codex.exe`, so elevation needs to probe
+        // `dasclaw-resources/` next to `dasclaw.exe`, so elevation needs to probe
         // that sibling folder before falling back to PATH.
         let resource_candidate = dir
-            .join("codex-resources")
-            .join("codex-windows-sandbox-setup.exe");
+            .join("dasclaw-resources")
+            .join("dasclaw-windows-sandbox-setup.exe");
         if resource_candidate.exists() {
             return resource_candidate;
         }
     }
-    PathBuf::from("codex-windows-sandbox-setup.exe")
+    PathBuf::from("dasclaw-windows-sandbox-setup.exe")
 }
 
 fn report_helper_failure(
@@ -1246,7 +1246,7 @@ mod tests {
     fn expanded_write_roots_still_drop_protected_codex_home() {
         let tmp = TempDir::new().expect("tempdir");
         let user_profile = tmp.path().join("user-profile");
-        let codex_home = user_profile.join("CodexHome");
+        let codex_home = user_profile.join("DasclawHome");
         let documents = user_profile.join("Documents");
         fs::create_dir_all(&codex_home).expect("create codex home");
         fs::create_dir_all(&documents).expect("create documents");
@@ -1264,7 +1264,7 @@ mod tests {
     #[test]
     fn gather_read_roots_includes_helper_bin_dir() {
         let tmp = TempDir::new().expect("tempdir");
-        let codex_home = tmp.path().join("codex-home");
+        let codex_home = tmp.path().join("dasclaw-home");
         let command_cwd = tmp.path().join("workspace");
         fs::create_dir_all(&command_cwd).expect("create workspace");
         let policy = SandboxPolicy::new_read_only_policy();
@@ -1279,7 +1279,7 @@ mod tests {
     #[test]
     fn workspace_write_roots_remain_readable() {
         let tmp = TempDir::new().expect("tempdir");
-        let codex_home = tmp.path().join("codex-home");
+        let codex_home = tmp.path().join("dasclaw-home");
         let command_cwd = tmp.path().join("workspace");
         let writable_root = tmp.path().join("extra-write-root");
         fs::create_dir_all(&command_cwd).expect("create workspace");
@@ -1304,7 +1304,7 @@ mod tests {
     #[test]
     fn build_payload_roots_preserves_helper_roots_when_read_override_is_provided() {
         let tmp = TempDir::new().expect("tempdir");
-        let codex_home = tmp.path().join("codex-home");
+        let codex_home = tmp.path().join("dasclaw-home");
         let policy_cwd = tmp.path().join("policy-cwd");
         let command_cwd = tmp.path().join("workspace");
         let readable_root = tmp.path().join("docs");
@@ -1351,7 +1351,7 @@ mod tests {
     #[test]
     fn build_payload_roots_replaces_full_read_policy_when_read_override_is_provided() {
         let tmp = TempDir::new().expect("tempdir");
-        let codex_home = tmp.path().join("codex-home");
+        let codex_home = tmp.path().join("dasclaw-home");
         let policy_cwd = tmp.path().join("policy-cwd");
         let command_cwd = tmp.path().join("workspace");
         let readable_root = tmp.path().join("docs");
@@ -1398,7 +1398,7 @@ mod tests {
     #[test]
     fn payload_deny_write_paths_merge_explicit_and_protected_children() {
         let tmp = TempDir::new().expect("tempdir");
-        let codex_home = tmp.path().join("codex-home");
+        let codex_home = tmp.path().join("dasclaw-home");
         let command_cwd = tmp.path().join("workspace");
         let extra_write_root = tmp.path().join("extra-write-root");
         let command_git = command_cwd.join(".git");
@@ -1442,7 +1442,7 @@ mod tests {
     #[test]
     fn full_read_roots_preserve_legacy_platform_defaults() {
         let tmp = TempDir::new().expect("tempdir");
-        let codex_home = tmp.path().join("codex-home");
+        let codex_home = tmp.path().join("dasclaw-home");
         let command_cwd = tmp.path().join("workspace");
         fs::create_dir_all(&command_cwd).expect("create workspace");
         let policy = SandboxPolicy::new_read_only_policy();

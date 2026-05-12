@@ -18,7 +18,7 @@ use windows_sys::Win32::System::Threading::ReleaseMutex;
 
 use dasclaw_sandbox_windows::to_wide;
 
-const READ_ACL_MUTEX_NAME: &str = "Local\\CodexSandboxReadAcl";
+const READ_ACL_MUTEX_NAME: &str = "Local\\DasclawSandboxReadAcl";
 
 pub struct ReadAclMutexGuard {
     handle: HANDLE,
