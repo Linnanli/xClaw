@@ -113,3 +113,9 @@ tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] 
 async-trait = "0.1"
 anyhow = "1"
 
+# Wave-C1c P1.2a contract test for kernel-enforced read_only_subpaths via
+# the dasclaw-sandbox-linux helper (bubblewrap + landlock V3),
+# tests/req_kernel_enforces_read_only_subpaths_linux.rs.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tempfile = "3"
+

@@ -170,6 +170,7 @@ impl Sandbox for LinuxSeccompSandbox {
 ///   返回 [`SandboxError::ReadOnlySubpathsKernelEnforcementMissing`]。
 ///   守住 ADR-141 §6 OQ-1：要求 kernel FS 隔离但没接 helper 时，**不能**
 ///   静默降级到 seccomp-only。
+#[derive(Debug)]
 pub(crate) struct CommandPlan {
     pub program: PathBuf,
     pub arg0: Option<String>,
