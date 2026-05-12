@@ -18,16 +18,22 @@ texts and (where the license requires it) the corresponding component source.
 --------------------------------------------------------------------------------
 
 Upstream:        https://github.com/containers/bubblewrap
-Upstream version: 0.11.0 (see vendor/bubblewrap/NEWS.md and meson.build)
+Upstream version: 0.11.0 (see crates/vendor/bubblewrap/NEWS.md and meson.build)
 SPDX-License-Identifier: LGPL-2.0-or-later
    (declared in the SPDX header of every C/H source file, e.g.
-    crates/dasclaw_sandbox_linux/vendor/bubblewrap/bubblewrap.c line 3)
-License texts:   crates/dasclaw_sandbox_linux/vendor/bubblewrap/COPYING
-                 crates/dasclaw_sandbox_linux/vendor/bubblewrap/LICENSE
-Vendored path:   crates/dasclaw_sandbox_linux/vendor/bubblewrap/
+    crates/vendor/bubblewrap/bubblewrap.c line 3)
+License texts:   crates/vendor/bubblewrap/COPYING
+                 crates/vendor/bubblewrap/LICENSE
+Vendored path:   crates/vendor/bubblewrap/
                  (byte-for-byte mirror of
                   codex-cli-main/codex-rs/vendor/bubblewrap/, per ADR-129 §1.3
-                  verbatim-port red line; see ADR-144 §6 OQ-C1c-7)
+                  verbatim-port red line; this path is a sibling of the
+                  consuming crate `crates/dasclaw_sandbox_linux/` to mirror
+                  upstream codex's `codex-rs/vendor/` sibling layout, which
+                  matches the relative path `../vendor/bubblewrap` referenced
+                  from `crates/dasclaw_sandbox_linux/build.rs` line 16; see
+                  ADR-144 §6 OQ-C1c-7 and the Wave-C1c P1.1 PR for layout
+                  rationale)
 Use in release:  The C sources (bubblewrap.c, bind-mount.c, network.c,
                  utils.c) are statically linked into the
                  `dasclaw_sandbox_linux` crate's release binary on Linux via
@@ -37,7 +43,7 @@ Use in release:  The C sources (bubblewrap.c, bind-mount.c, network.c,
 
 LGPL §6 compliance posture: xClaw distributes the complete corresponding
 source for bubblewrap in this repository under
-`crates/dasclaw_sandbox_linux/vendor/bubblewrap/`, including unmodified
+`crates/vendor/bubblewrap/`, including unmodified
 COPYING/LICENSE files and the unmodified C source. Building xClaw from source
 re-links bubblewrap automatically. This satisfies LGPL-2.0-or-later §6(a)
 (distribute complete corresponding source) for source-form distributions.

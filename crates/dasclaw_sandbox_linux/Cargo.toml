@@ -1,0 +1,80 @@
+[package]
+# Verbatim port of codex-linux-sandbox @ codex-cli-main commit 6e838a19fa
+# (upstream snapshot vendored under codex-cli-main/codex-rs/linux-sandbox).
+# Mechanical edits per ADR-129 §1.3 + ADR-144 §5.2:
+#   1. Cargo.toml package name swap:
+#        codex-linux-sandbox → dasclaw_sandbox_linux
+#      Library name swap:
+#        codex_linux_sandbox → dasclaw_sandbox_linux
+#      Bin name swap:
+#        codex-linux-sandbox → dasclaw-sandbox-linux
+#   2. Workspace deps remapped to local sibling crates by path:
+#        codex-protocol            → dasclaw_protocol (../dasclaw_protocol)
+#        codex-sandboxing          → dasclaw_sandboxing (../dasclaw_sandboxing)
+#        codex-utils-absolute-path → dasclaw_absolute_path (../dasclaw_absolute_path)
+#      Third-party crates (clap, globset, landlock, libc, seccompiler, serde,
+#      serde_json, url, cc, pkg-config, pretty_assertions, tempfile, tokio)
+#      are inlined with explicit versions matching upstream codex-rs/Cargo.toml
+#      because xClaw has no `[workspace.dependencies]` block.
+#   3. use-path swap in src/*.rs (mechanical, drift-guard enforced):
+#        codex_protocol            → dasclaw_protocol
+#        codex_sandboxing          → dasclaw_sandboxing
+#        codex_utils_absolute_path → dasclaw_absolute_path
+#        codex_linux_sandbox       → dasclaw_sandbox_linux  (lib name in main.rs)
+#      Env var names (CODEX_HOME, CODEX_BWRAP_SOURCE_DIR,
+#      CODEX_SKIP_VENDORED_BWRAP) are kept verbatim (precedent:
+#      dasclaw_utils_home_dir keeps `CODEX_HOME`).
+#   4. Dev-deps `codex-config` and `codex-core` are NOT inlined because the
+#      `tests/suite/{landlock,managed_proxy}.rs` integration tests that use
+#      them are NOT included in P1.1 (deferred to a later wave that ports
+#      those crates; src-level `#[cfg(test)] mod tests` only need
+#      dasclaw_protocol + dasclaw_absolute_path + pretty_assertions + tempfile).
+#   5. Vendored bubblewrap sources are at the **sibling** path
+#      `crates/vendor/bubblewrap/` (not `crates/dasclaw_sandbox_linux/vendor/`)
+#      to byte-for-byte match upstream codex's `codex-rs/vendor/bubblewrap/`
+#      sibling layout. `build.rs` line 16 references `../vendor/bubblewrap`
+#      verbatim and resolves to that sibling directory.
+# DO NOT hand-edit src/*.rs or build.rs — drift guard
+# scripts/check_codex_linux_sandbox_drift.py verifies hash equality.
+name = "dasclaw_sandbox_linux"
+version = "0.0.0-w7"
+edition = "2024"
+description = "Linux kernel-layer sandbox helper (bwrap + landlock) — verbatim port of codex-linux-sandbox."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[[bin]]
+name = "dasclaw-sandbox-linux"
+path = "src/main.rs"
+
+[lib]
+name = "dasclaw_sandbox_linux"
+path = "src/lib.rs"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+clap = { version = "4", features = ["derive"] }
+dasclaw_protocol = { path = "../dasclaw_protocol" }
+dasclaw_sandboxing = { path = "../dasclaw_sandboxing" }
+dasclaw_absolute_path = { path = "../dasclaw_absolute_path" }
+globset = "0.4"
+landlock = "0.4"
+libc = "0.2.182"
+seccompiler = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+pretty_assertions = "1.4.1"
+tempfile = "3.23.0"
+tokio = { version = "1", features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+] }
+
+[build-dependencies]
+cc = "1"
+pkg-config = "0.3"

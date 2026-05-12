@@ -52,6 +52,10 @@ members = [
 	# W7 ADR-135 §3 PR-B1 / #380 Wave-B1 — codex-sandboxing verbatim port
 	# (kernel-layer landlock/seatbelt primitives, ~4,895 LOC + 3 sbpl)
 	"crates/dasclaw_sandboxing",
+	# W7 ADR-144 §5.2 Phase 1.1 / #380 Wave-C1c / #443 — codex-linux-sandbox
+	# verbatim port (bwrap + landlock + linux_run_main, ~4,767 LOC Rust +
+	# vendored bubblewrap 0.11.0 C sources at crates/vendor/bubblewrap/).
+	"crates/dasclaw_sandbox_linux",
 	# W8 ADR-139 §4.5 PR1 — MITM CA trust-chain manager (dasclaw original, not verbatim)
 	"crates/dasclaw_cert_trust",
 	"desktop-client/ironclaw",

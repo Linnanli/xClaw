@@ -3043,6 +3043,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "dasclaw_sandbox_linux"
+version = "0.0.0-w7"
+dependencies = [
+ "cc",
+ "clap",
+ "dasclaw_absolute_path",
+ "dasclaw_protocol",
+ "dasclaw_sandboxing",
+ "globset",
+ "landlock",
+ "libc",
+ "pkg-config",
+ "pretty_assertions",
+ "seccompiler",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "dasclaw_sandbox_windows"
 version = "0.1.0"
 dependencies = [

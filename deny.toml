@@ -102,7 +102,7 @@ allow = [
     # LGPL-2.0-or-later — vendored bubblewrap C sources statically linked
     # into `dasclaw_sandbox_linux` release binaries on Linux (ADR-144 OQ-C1c-7,
     # tracking issue #440). The C sources at
-    # `crates/dasclaw_sandbox_linux/vendor/bubblewrap/` are NOT a Rust crate
+    # `crates/vendor/bubblewrap/` are NOT a Rust crate
     # and therefore are NOT visible to cargo-deny's license scanner (which
     # only walks the Cargo dependency graph). This entry is recorded
     # **declaratively** so that:
