@@ -1,0 +1,65 @@
+xClaw
+Copyright 2026 The xClaw Contributors
+
+Dual-licensed under MIT OR Apache-2.0 (see LICENSE-MIT and LICENSE-APACHE).
+
+================================================================================
+Third-party components vendored / statically linked into release binaries
+================================================================================
+
+The following third-party components are vendored into this repository and
+may be statically compiled into release artifacts. Their original license
+texts are preserved verbatim alongside the source code. End users distributing
+xClaw binaries MUST also distribute or otherwise make available the license
+texts and (where the license requires it) the corresponding component source.
+
+--------------------------------------------------------------------------------
+1. bubblewrap — LGPL-2.0-or-later
+--------------------------------------------------------------------------------
+
+Upstream:        https://github.com/containers/bubblewrap
+Upstream version: 0.11.0 (see vendor/bubblewrap/NEWS.md and meson.build)
+SPDX-License-Identifier: LGPL-2.0-or-later
+   (declared in the SPDX header of every C/H source file, e.g.
+    crates/dasclaw_sandbox_linux/vendor/bubblewrap/bubblewrap.c line 3)
+License texts:   crates/dasclaw_sandbox_linux/vendor/bubblewrap/COPYING
+                 crates/dasclaw_sandbox_linux/vendor/bubblewrap/LICENSE
+Vendored path:   crates/dasclaw_sandbox_linux/vendor/bubblewrap/
+                 (byte-for-byte mirror of
+                  codex-cli-main/codex-rs/vendor/bubblewrap/, per ADR-129 §1.3
+                  verbatim-port red line; see ADR-144 §6 OQ-C1c-7)
+Use in release:  The C sources (bubblewrap.c, bind-mount.c, network.c,
+                 utils.c) are statically linked into the
+                 `dasclaw_sandbox_linux` crate's release binary on Linux via
+                 the crate's build.rs (after Wave-C1c Phase 1.1 lands; see
+                 ADR-144). Until Phase 1.1 ships, the sources are present in
+                 the tree but not yet compiled into any artifact.
+
+LGPL §6 compliance posture: xClaw distributes the complete corresponding
+source for bubblewrap in this repository under
+`crates/dasclaw_sandbox_linux/vendor/bubblewrap/`, including unmodified
+COPYING/LICENSE files and the unmodified C source. Building xClaw from source
+re-links bubblewrap automatically. This satisfies LGPL-2.0-or-later §6(a)
+(distribute complete corresponding source) for source-form distributions.
+For binary distributions, downstream packagers MUST additionally provide a
+mechanism allowing the recipient to combine modified bubblewrap sources with
+the rest of the binary (LGPL §6(b) "object code + relinking instructions"
+or §6(c) "written offer to supply source"). See PR description for the
+project-level legal sign-off and the chosen §6 mechanism.
+
+--------------------------------------------------------------------------------
+2. Codex (codex-cli-main/codex-rs upstream sources) — Apache-2.0
+--------------------------------------------------------------------------------
+
+xClaw vendors portions of OpenAI's `codex` workspace (https://github.com/openai/codex)
+under codex-cli-main/ for byte-for-byte verbatim porting into dasclaw_*
+crates per ADR-129 §1.3. Codex's NOTICE and LICENSE files are preserved
+verbatim at codex-cli-main/NOTICE and codex-cli-main/LICENSE respectively.
+The Ratatui MIT attribution carried by codex's NOTICE applies transitively
+to any ratatui-derived code ported into xClaw.
+
+--------------------------------------------------------------------------------
+
+For the full list of Rust-crate-level (transitive) license attributions
+scanned by `cargo-deny`, see deny.toml `[licenses].allow` and the rendered
+output of `cargo deny check licenses`.
