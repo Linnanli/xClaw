@@ -373,11 +373,11 @@ agent-identity（ED25519 assertion）+ login（OAuth PKCE）+ keyring-store。**
 | B | apply_patch | ✅ | ❌ | ⚠️ | **codex** | 移植 |
 | B | code_mode (Node VM) | ✅ | ❌ | ⚠️ | **codex** | 可选 feature |
 | B | portable-pty | ✅ | ⚠️ | ❌ | **codex** | 移植 |
-| C | Linux sandbox (Landlock+bwrap) | ✅ | ⚠️ Docker | ⚠️ | **codex** | **完整移植** |
-| C | macOS sandbox (Seatbelt) | ✅ | ⚠️ Docker | ❌ | **codex** | **完整移植** |
-| C | Windows sandbox (JobObject) | ✅ | ❌ | ❌ | **codex** | **完整移植** |
+| C | Linux sandbox (Landlock+bwrap) | ✅ | ⚠️ Docker | ⚠️ | **codex** | ✅ **已完整移植** (Wave-C1c: ADR-144 / PR #444+#445+#448+#451+#453) |
+| C | macOS sandbox (Seatbelt) | ✅ | ⚠️ Docker | ❌ | **codex** | ✅ **已完整移植** (Wave-C1a: ADR-135 §3 PR-C1) |
+| C | Windows sandbox (JobObject) | ✅ | ❌ | ❌ | **codex** | ✅ **已完整移植** (Wave-C1b: ADR-141 §3 PR-W3 / PR #426) |
 | C | SandboxPolicy enum 协议 | ✅ | ⚠️ cap-std only | ❌ | **codex** | **协议层移植** |
-| C | WritableRoot 洞中洞 | ✅ | ❌ | ❌ | **codex** | 移植 |
+| C | WritableRoot 洞中洞 | ✅ | ❌ | ❌ | **codex** | ✅ **三平台 kernel 层已强制** (Wave-C1a/b/c) |
 | C | ExternalSandbox 嵌套 | ✅ | ❌ | ❌ | **codex** | 移植 |
 | D | Hooks 三分离（schema/registry/engine）| ✅ | ⚠️ 散落 | ⚠️ | **codex** | 移植结构 |
 | E | AGENTS.md 多层 | ✅ 3 层 | ⚠️ 2 层 | ✅ 2 层 | codex/claw | 三家合并 |
