@@ -99,6 +99,21 @@ allow = [
     "CC0-1.0",
     "Unlicense",
     "CDLA-Permissive-2.0",
+    # LGPL-2.0-or-later — vendored bubblewrap C sources statically linked
+    # into `dasclaw_sandbox_linux` release binaries on Linux (ADR-144 OQ-C1c-7,
+    # tracking issue #440). The C sources at
+    # `crates/dasclaw_sandbox_linux/vendor/bubblewrap/` are NOT a Rust crate
+    # and therefore are NOT visible to cargo-deny's license scanner (which
+    # only walks the Cargo dependency graph). This entry is recorded
+    # **declaratively** so that:
+    #   1. Any future Rust crate accidentally pulling LGPL-2.0-or-later into
+    #      the graph is fail-closed-allowed (rather than fail-open silently
+    #      via `unused-allowed-license = "allow"`).
+    #   2. Auditors reading deny.toml see the project's accepted license
+    #      surface in one place, including statically-linked C components.
+    # See top-level NOTICE §1 for upstream URL (containers/bubblewrap 0.11.0)
+    # and the §6(a)/(b)/(c) compliance posture.
+    "LGPL-2.0-or-later",
 ]
 unused-allowed-license = "allow"
 
