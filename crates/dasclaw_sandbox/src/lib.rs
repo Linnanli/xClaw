@@ -28,6 +28,11 @@
 /// 跨平台公开（serde 数据结构），便于本地测试与 macOS/Linux 构建检查通过。
 pub mod launcher_ipc;
 
+// Shared backend-config → protocol-policy bridge used by both macOS
+// (Seatbelt) and Linux (helper wiring per ADR-144 §5.3 P1.2a) backends.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod policy_bridge;
+
 #[cfg(target_os = "macos")]
 pub mod macos;
 #[cfg(target_os = "macos")]
@@ -301,11 +306,31 @@ pub struct SandboxBackendConfig {
     /// on every host; the flag becomes a no-op everywhere once Wave-C1c
     /// (`dasclaw-linux-sandbox` setuid binary) lands.
     pub enterprise_allow_userspace_carveouts: bool,
+
+    /// Path to the `dasclaw-sandbox-linux` helper binary that performs
+    /// kernel-layer FS isolation (bubblewrap + landlock) and seccomp on
+    /// Linux. **Required** for the Linux backend to spawn anything
+    /// (fail-closed) — see ADR-144 §5.3 P1.2a wiring + ADR-141 §6 OQ-1.
+    /// macOS / Windows backends ignore this field.
+    ///
+    /// Callers (e.g. desktop-client `OsExecutor`) typically resolve the
+    /// helper sibling to the running binary via
+    /// `std::env::current_exe()?.parent()?.join("dasclaw-sandbox-linux")`
+    /// at startup and inject it via [`Self::with_linux_sandbox_exe`].
+    pub linux_sandbox_exe: Option<PathBuf>,
 }
 
 impl SandboxBackendConfig {
     pub fn read_only_defaults() -> Self {
         Self::default()
+    }
+
+    /// Configure the path to the `dasclaw-sandbox-linux` helper binary
+    /// used by the Linux backend for kernel-layer FS isolation. See
+    /// [`Self::linux_sandbox_exe`] for the fail-closed contract.
+    pub fn with_linux_sandbox_exe(mut self, exe: PathBuf) -> Self {
+        self.linux_sandbox_exe = Some(exe);
+        self
     }
 
     pub fn with_writable<P: Into<PathBuf>>(mut self, p: P) -> Self {

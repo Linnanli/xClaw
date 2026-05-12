@@ -68,8 +68,17 @@ dasclaw_absolute_path = { path = "../dasclaw_absolute_path" }
 #   - 文件系统限制由进程内 `ironclaw_workspace_cap` (cap-std) 兜底，
 #     与 dasclaw_sandbox kernel 层互补不重叠。
 #   - 不引入外部 bwrap setuid 依赖，部署更轻。
+#
+# ADR-144 §5.3 P1.2a — `dasclaw-sandbox-linux` helper wiring：当
+# `SandboxBackendConfig.linux_sandbox_exe = Some(exe)` 时，把 user command
+# 包装成 `[exe, --..., --, user_cmd]` argv（与 codex landlock.rs 同形），
+# 把 FS 隔离 + seccomp 委托给 helper 内部完成；adapter 自身只保留 rlimit
+# / cgroup 等父进程层。argv 合成走 `dasclaw_sandboxing::landlock`。
 [target.'cfg(target_os = "linux")'.dependencies]
 seccompiler = "0.5"
+dasclaw_sandboxing = { path = "../dasclaw_sandboxing" }
+dasclaw_protocol = { path = "../dasclaw_protocol" }
+dasclaw_absolute_path = { path = "../dasclaw_absolute_path" }
 
 # W2.4 — Windows restricted-token backend (adapter to `dasclaw_sandbox_windows`).
 # 仅在 Windows target 启用，承接 `SandboxType::WindowsRestrictedToken`。
