@@ -54,7 +54,7 @@ pub mod job_object;
 mod launcher_client;
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use dasclaw_sandbox_windows::absolute_path::AbsolutePathBuf;
 use dasclaw_sandbox_windows::sandbox_setup_is_complete;
@@ -63,7 +63,7 @@ use dasclaw_sandbox_windows::types::{NetworkAccess, SandboxPolicy as UpstreamPol
 use crate::launcher_ipc::{LauncherRequest, OuterJobLimitsWire, PROTOCOL_VERSION};
 use crate::{
     check_enterprise_gate, EnterpriseGateOutcome, ResourceLimits, Sandbox, SandboxBackendConfig,
-    SandboxError, SandboxExecRequest, SandboxType, SoftModeReason,
+    SandboxError, SandboxExecRequest, SandboxType,
 };
 
 /// Windows restricted-token sandbox backend.
@@ -94,18 +94,19 @@ impl Sandbox for WindowsRestrictedTokenSandbox {
         let dasclaw_home = resolve_dasclaw_home()?;
         let setup_complete = sandbox_setup_is_complete(&dasclaw_home);
 
-        // ADR-141 fail-closed gate (PR-W1 + PR-W2). Runs first so that
-        // enterprise spawns surface the correct error variant before any
-        // command decomposition / IPC work.
+        // ADR-141 fail-closed gate (PR-W1). Runs first so that enterprise
+        // spawns surface the correct error variant before any command
+        // decomposition / IPC work. After xClaw#434 realigned Step 3 to
+        // recognise PR #426 (Wave-C1b) DACL DENY enforcement, the gate's
+        // Windows arm only produces `Allow` or `DenyNoKernelSandbox` —
+        // the soft-mode / carve-out-deny variants are Linux-only until
+        // Wave-C1c. The fallback arm guards against future regressions.
         match check_enterprise_gate(
             &req.policy,
             SandboxType::WindowsRestrictedToken,
             setup_complete,
         ) {
             EnterpriseGateOutcome::Allow => {}
-            EnterpriseGateOutcome::AllowWithUserspaceSoftMode { reason } => {
-                emit_enterprise_softmode_audit_event(reason, &req, &dasclaw_home);
-            }
             EnterpriseGateOutcome::DenyNoKernelSandbox => {
                 return Err(SandboxError::WindowsSandboxNotAvailable {
                     detail: format!(
@@ -115,16 +116,13 @@ impl Sandbox for WindowsRestrictedTokenSandbox {
                     ),
                 });
             }
-            EnterpriseGateOutcome::DenyNoReadOnlySubpathsKernelEnforcement => {
-                return Err(SandboxError::ReadOnlySubpathsKernelEnforcementMissing {
-                    detail: "Windows `check_enterprise_gate` Step 3 arm still routes \
-                             read_only_subpaths to soft-mode/deny even though PR #426 \
-                             (Wave-C1b / ADR-141 §3 PR-W3) wired DACL DENY end-to-end. \
-                             Tracked in https://github.com/Linnanli/xClaw/issues/434 — \
-                             until that lands, set enterprise_allow_userspace_carveouts \
-                             = true to opt into the audit-event soft-mode path."
-                        .to_string(),
-                });
+            other @ (EnterpriseGateOutcome::AllowWithUserspaceSoftMode { .. }
+            | EnterpriseGateOutcome::DenyNoReadOnlySubpathsKernelEnforcement) => {
+                return Err(SandboxError::PolicyTransform(format!(
+                    "internal: check_enterprise_gate returned {other:?} for \
+                     WindowsRestrictedToken; gate must Allow on Windows after \
+                     ADR-141 §3 PR-W3 (PR #426) + xClaw#434 realignment."
+                )));
             }
         }
 
@@ -286,43 +284,6 @@ fn backend_config_to_upstream_policy(
             exclude_slash_tmp: false,
         })
     }
-}
-
-/// Emit a structured per-spawn audit event recording that an enterprise
-/// spawn proceeded under user-space-only carve-out enforcement (ADR-141
-/// §6 OQ-3 / OQ-4 sign-off 2026-05-11).
-///
-/// Implemented as a `tracing::warn!` event rather than a new
-/// `dasclaw_observability::ObservabilityEvent` type — OQ-3 explicitly
-/// chose "re-use existing taxonomy" to avoid an ADR-138 schema evolution.
-/// Downstream telemetry sinks subscribed to the
-/// `sandbox.enterprise.softmode` target consume this event.
-///
-/// Per OQ-4, the event is **per-spawn** (one record per call), carrying
-/// program / cwd / soft-mode reason so a forensic search can answer
-/// "who ran what when".
-fn emit_enterprise_softmode_audit_event(
-    reason: SoftModeReason,
-    req: &SandboxExecRequest,
-    dasclaw_home: &Path,
-) {
-    let program = req.command.get_program().to_string_lossy().into_owned();
-    let cwd = req
-        .command
-        .get_current_dir()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "<inherit>".to_string());
-    tracing::warn!(
-        target: "sandbox.enterprise.softmode",
-        reason = reason.as_audit_tag(),
-        program = %program,
-        cwd = %cwd,
-        dasclaw_home = %dasclaw_home.display(),
-        writable_roots = req.policy.writable_roots.len(),
-        "enterprise spawn proceeded under user-space-only carve-out enforcement; \
-         on Windows the SoftModeReason premise is stale after PR #426 (DACL DENY \
-         wired); gate Step 3 realignment tracked in xClaw#434. See ADR-141.",
-    );
 }
 
 /// 解析 dasclaw_home 路径。优先级见模块文档。
