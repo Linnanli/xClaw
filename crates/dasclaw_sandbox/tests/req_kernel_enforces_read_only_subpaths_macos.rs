@@ -10,9 +10,10 @@
 //!
 //! ## 平台
 //!
-//! 仅 macOS。Linux landlock 洞中洞由 Wave-C3 落地（需要外部
-//! `dasclaw-linux-sandbox` binary），Windows ACL DENY 由 ADR-141 enterprise
-//! 路径提供。
+//! 仅 macOS。Linux landlock 洞中洞由 Wave-C1c（ADR-144 / PR
+//! #444+#445+#448+#451+#453）落地（`dasclaw_sandbox_linux` setuid binary +
+//! `dasclaw_sandboxing::landlock`），Windows ACL DENY 由 ADR-141 §3 PR-W3
+//! enterprise 路径提供（Wave-C1b / PR #426）。
 
 #![cfg(target_os = "macos")]
 

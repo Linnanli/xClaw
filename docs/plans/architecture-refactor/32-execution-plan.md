@@ -214,13 +214,13 @@ W1 失败：恢复 desktop-client/ironclaw 子模块（git revert）。
 - ironclaw 工具调用全部经过 dasclaw_sandbox + dasclaw_workspace_cap
 
 ### 验收
-- [ ] 三平台单元测试通过（CI matrix 覆盖 ubuntu/macos/windows）
-- [ ] 失败路径测试：沙箱不可用时工具调用被拒绝，不降级为直接 exec
-- [ ] **WritableRoot 洞中洞契约测试**：sandbox 在 WorkspaceWrite 模式下写 `.git/hooks/*`、`.codex/*`、`.git/config` 必须返回 SandboxError，且无任何 fallback。**已知限制（v2.5 补充）**：当前仅在 `dasclaw_sandbox` adapter 层检查，内核层强制（Linux Landlock-based subpath deny / macOS Seatbelt subpath deny / Windows Restricted Token DACL）跟进补强由 [#324 sub-task 2](https://github.com/Linnanli/xClaw/issues/324) 追踪
-- [ ] **ExternalSandbox 嵌套测试**：在 docker 容器内启动 desktop-client，agent 工具调用走 ExternalSandbox 模式，network_access 由 NetworkAccess 枚举决定
-- [ ] 性能基准：进程沙箱启动 < 50ms（对比 codex 基线）
-- [ ] PTY resize/信号转发 在 macOS+Linux 各 1 个示例脚本过
-- [ ] dasclaw_workspace_cap 协议 enum 通过 `ts-rs` 导出 TypeScript 类型，desktop-client 前端可直接 import
+- [x] 三平台单元测试通过（CI matrix 覆盖 ubuntu/macos/windows）
+- [x] 失败路径测试：沙箱不可用时工具调用被拒绝，不降级为直接 exec
+- [x] **WritableRoot 洞中洞契约测试**：sandbox 在 WorkspaceWrite 模式下写 `.git/hooks/*`、`.codex/*`、`.git/config` 必须返回 SandboxError，且无任何 fallback。**三平台内核层强制均已完成**：macOS Seatbelt subpath deny（ADR-135 §3 PR-C1 / Wave-C1a）、Windows Restricted Token DACL DENY（ADR-141 §3 PR-W3 / Wave-C1b / PR #426）、Linux bubblewrap `--ro-bind` 嵌套 + Landlock V5 `path_beneath_rules`（ADR-144 / Wave-C1c / PR #444+#445+#448+#451+#453）
+- [ ] **ExternalSandbox 嵌套测试**：在 docker 容器内启动 desktop-client，agent 工具调用走 ExternalSandbox 模式，network_access 由 NetworkAccess 枚举决定（追踪：[#380](https://github.com/Linnanli/xClaw/issues/380) Batch 6 B6-1）
+- [ ] 性能基准：进程沙箱启动 < 50ms（对比 codex 基线）（追踪：[#380](https://github.com/Linnanli/xClaw/issues/380) Batch 6 B6-2）
+- [ ] PTY resize/信号转发 在 macOS+Linux 各 1 个示例脚本过（追踪：[#380](https://github.com/Linnanli/xClaw/issues/380) Batch 6 B6-3）
+- [ ] dasclaw_workspace_cap 协议 enum 通过 `ts-rs` 导出 TypeScript 类型，desktop-client 前端可直接 import（追踪：[#380](https://github.com/Linnanli/xClaw/issues/380) Batch 6 B6-4）
 
 ### 复用 codex 测试
 - codex-rs/linux-sandbox/tests/* 直接 port
