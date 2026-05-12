@@ -93,7 +93,7 @@ pub(crate) fn spawn_runner_transport(
     let runner_cmdline = runner_exe
         .to_str()
         .map(str::to_owned)
-        .unwrap_or_else(|| "codex-command-runner.exe".to_string());
+        .unwrap_or_else(|| "dasclaw-command-runner.exe".to_string());
     let runner_full_cmd = format!(
         "{} {} {}",
         quote_windows_arg(&runner_cmdline),

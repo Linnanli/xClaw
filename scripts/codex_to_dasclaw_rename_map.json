@@ -1,0 +1,201 @@
+{
+  "_schema_version": "1.0.0",
+  "_source": "docs/plans/architecture-refactor/adr-145-windows-sandbox-users-naming-decision.md §6 / §7 — Accepted option B, nally 2025-11-15",
+  "_purpose": "Drift map for B4-1 drift-guard CI job: when comparing crates/dasclaw_sandbox_windows/ vs vendor/codex-windows-sandbox/, these literal-string substitutions are the only allowed diffs (apart from `dasclaw_sandbox_windows::` crate-path rewrite already documented in ADR-129).",
+  "_consumer": "PR-drift-guard (Batch 4 B4-1) — to be implemented in a follow-up PR",
+  "_strict_rules": [
+    "Variable names like `codex_home: &Path` MUST NOT be renamed (upstream verbatim function signatures).",
+    "User-home dot-prefix `.codex` MUST NOT be renamed (upstream codex CLI home convention).",
+    "Environment variables `CODEX_HOME` / `CODEX_NETWORK_ALLOW_LOCAL_BINDING` MUST NOT be renamed (upstream contract).",
+    "Provenance comments `// Derived from openai/codex commit ...` / `path: codex-rs/...` MUST NOT be touched.",
+    "`// safety: verbatim from codex ...` annotations MUST NOT be touched.",
+    "Function names `ensure_codex_home_exists`, `setup_codex_dir`, etc. MUST NOT be renamed (upstream verbatim).",
+    "Panic / expect messages referencing the variable `codex_home` MUST NOT be renamed (they describe the verbatim variable, not the OS namespace — see ADR-145 §1 scope table; cap.rs:108 `expect(\"create codex home\")` is kept verbatim for this reason)."
+  ],
+  "literal_replacements": [
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/sandbox_users.rs",
+      "category": "local-group",
+      "from": "\"CodexSandboxUsers\"",
+      "to": "\"DasclawSandboxUsers\"",
+      "count": 1
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/sandbox_users.rs",
+      "category": "local-group-comment",
+      "from": "\"Codex sandbox internal group (managed)\"",
+      "to": "\"Dasclaw sandbox internal group (managed)\"",
+      "count": 1
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/setup_orchestrator.rs",
+      "category": "local-user",
+      "from": "\"CodexSandboxOffline\"",
+      "to": "\"DasclawSandboxOffline\"",
+      "count": 1
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/setup_orchestrator.rs",
+      "category": "local-user",
+      "from": "\"CodexSandboxOnline\"",
+      "to": "\"DasclawSandboxOnline\"",
+      "count": 1
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/setup_orchestrator.rs",
+      "category": "setup-binary",
+      "from": "\"codex-windows-sandbox-setup.exe\"",
+      "to": "\"dasclaw-windows-sandbox-setup.exe\"",
+      "count": 3
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/setup_orchestrator.rs",
+      "category": "resource-dir",
+      "from": "\"codex-resources\"",
+      "to": "\"dasclaw-resources\"",
+      "count": 1
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/setup_orchestrator.rs",
+      "category": "inline-comment-sync",
+      "from": "`codex-resources/` next to `codex.exe`",
+      "to": "`dasclaw-resources/` next to `dasclaw.exe`",
+      "count": 1
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/setup_orchestrator.rs",
+      "category": "test-fixture-home-pascal",
+      "from": "\"CodexHome\"",
+      "to": "\"DasclawHome\"",
+      "count": 1
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/setup_orchestrator.rs",
+      "category": "test-fixture-home-kebab",
+      "from": "\"codex-home\"",
+      "to": "\"dasclaw-home\"",
+      "count": 6
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/firewall.rs",
+      "category": "firewall-internal-id",
+      "from": "\"codex_sandbox_offline_block_outbound\"",
+      "to": "\"dasclaw_sandbox_offline_block_outbound\"",
+      "count": 1
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/firewall.rs",
+      "category": "firewall-internal-id",
+      "from": "\"codex_sandbox_offline_block_loopback_tcp\"",
+      "to": "\"dasclaw_sandbox_offline_block_loopback_tcp\"",
+      "count": 1
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/firewall.rs",
+      "category": "firewall-internal-id",
+      "from": "\"codex_sandbox_offline_block_loopback_udp\"",
+      "to": "\"dasclaw_sandbox_offline_block_loopback_udp\"",
+      "count": 1
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/firewall.rs",
+      "category": "firewall-internal-id",
+      "from": "\"codex_sandbox_offline_allow_loopback_proxy\"",
+      "to": "\"dasclaw_sandbox_offline_allow_loopback_proxy\"",
+      "count": 1
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/firewall.rs",
+      "category": "firewall-friendly-name",
+      "from": "\"Codex Sandbox Offline - Block Non-Loopback Outbound\"",
+      "to": "\"Dasclaw Sandbox Offline - Block Non-Loopback Outbound\"",
+      "count": 1
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/firewall.rs",
+      "category": "firewall-friendly-name",
+      "from": "\"Codex Sandbox Offline - Block Loopback TCP (Except Proxy)\"",
+      "to": "\"Dasclaw Sandbox Offline - Block Loopback TCP (Except Proxy)\"",
+      "count": 1
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/firewall.rs",
+      "category": "firewall-friendly-name",
+      "from": "\"Codex Sandbox Offline - Block Loopback UDP\"",
+      "to": "\"Dasclaw Sandbox Offline - Block Loopback UDP\"",
+      "count": 1
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/read_acl_mutex.rs",
+      "category": "kernel-mutex",
+      "from": "\"Local\\\\CodexSandboxReadAcl\"",
+      "to": "\"Local\\\\DasclawSandboxReadAcl\"",
+      "count": 1
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/helper_materialization.rs",
+      "category": "resource-dir",
+      "from": "\"codex-resources\"",
+      "to": "\"dasclaw-resources\"",
+      "count": 1
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/helper_materialization.rs",
+      "category": "helper-binary",
+      "from": "\"codex-command-runner.exe\"",
+      "to": "\"dasclaw-command-runner.exe\"",
+      "count": 7
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/helper_materialization.rs",
+      "category": "main-binary",
+      "from": "\"codex.exe\"",
+      "to": "\"dasclaw.exe\"",
+      "count": 2
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/helper_materialization.rs",
+      "category": "test-fixture-home-kebab",
+      "from": "\"codex-home\"",
+      "to": "\"dasclaw-home\"",
+      "count": 1
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/helper_materialization.rs",
+      "category": "test-helper-binary-suffix",
+      "from": "\"codex-command-runner-test-suffix.exe\"",
+      "to": "\"dasclaw-command-runner-test-suffix.exe\"",
+      "count": 1
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/elevated/runner_client.rs",
+      "category": "helper-binary",
+      "from": "\"codex-command-runner.exe\"",
+      "to": "\"dasclaw-command-runner.exe\"",
+      "count": 1
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/elevated/runner_pipe.rs",
+      "category": "named-pipe",
+      "from": "\\\\.\\pipe\\codex-runner-",
+      "to": "\\\\.\\pipe\\dasclaw-runner-",
+      "count": 1
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/desktop.rs",
+      "category": "sandbox-desktop",
+      "from": "\"CodexSandboxDesktop-{:x}\"",
+      "to": "\"DasclawSandboxDesktop-{:x}\"",
+      "count": 1
+    },
+    {
+      "file": "crates/dasclaw_sandbox_windows/src/cap.rs",
+      "category": "test-fixture-home-kebab",
+      "from": "\"codex-home\"",
+      "to": "\"dasclaw-home\"",
+      "count": 1
+    }
+  ],
+  "_total_replacements": 40,
+  "_files_touched": 9
+}
