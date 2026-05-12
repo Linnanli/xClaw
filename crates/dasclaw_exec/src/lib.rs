@@ -16,8 +16,10 @@
 //!   二次拒绝。Windows 上自 ADR-141 §3 PR-W3（Wave-C1b，PR #426）起由
 //!   `dasclaw_sandbox_windows::run_windows_sandbox_capture_with_extra_deny_write_paths`
 //!   把 `read_only_subpaths` 翻译为 Win32 DACL DENY entries，Windows 沙箱内核层
-//!   强制相同语义。Linux landlock 洞中洞 deferred to Wave-C1c（需要
-//!   `dasclaw-linux-sandbox` binary 落地）。
+//!   强制相同语义。Linux 自 ADR-144（Wave-C1c，PR #444+#445+#448+#451+#453）起由
+//!   `dasclaw_sandbox_linux` setuid binary + `dasclaw_sandboxing::landlock` 把
+//!   `read_only_subpaths` 翻译为 bubblewrap `--ro-bind` 嵌套 + Landlock V5
+//!   `path_beneath_rules`，Linux 沙箱内核层强制相同语义。
 //! - **PTY 终端**：走 [`dasclaw_pty`] 独立路径，不在 `ProcessExecutor` 范围；
 //!   终端会话的 sandbox 包裹由调用方在 `spawn` 时显式组合。
 //!
@@ -216,12 +218,10 @@ impl ProcessExecutor for SandboxedExecutor {
 /// |------|---------------------------|-----------|
 /// | macOS | ✅ 通过 `dasclaw_sandboxing::seatbelt` 在 sbpl 中表达 `(deny file-write* (subpath ".git/.codex/.dasclaw"))`（ADR-135 §3 PR-C1 / Wave-C1a） | [`ironclaw_workspace_cap`] cap-std + `is_path_writable` 第一道关 |
 /// | Windows | ✅ 通过 `dasclaw_sandbox_windows::run_windows_sandbox_capture_with_extra_deny_write_paths` 把 `read_only_subpaths` 翻译为 Win32 DACL DENY entries（ADR-141 §3 PR-W3 / Wave-C1b，PR #426） | 同上 |
-/// | Linux | ❌ deferred to Wave-C1c（需 `dasclaw-linux-sandbox` setuid binary 落地，对齐 codex landlock V5 + bwrap 路径） | 同上 |
+/// | Linux | ✅ 通过 `dasclaw_sandbox_linux` setuid binary + `dasclaw_sandboxing::landlock` 把 `read_only_subpaths` 翻译为 bubblewrap `--ro-bind` 嵌套 + Landlock V5 `path_beneath_rules`（ADR-144 / Wave-C1c，PR #444+#445+#448+#451+#453） | 同上 |
 ///
-/// Linux 上洞中洞当前仅靠 `is_path_writable` 用户态决策 +
-/// [`ironclaw_workspace_cap::WorkspaceCap`] cap-std 文件接口拦截；子进程通过
-/// 直接 syscall 写 `.git/hooks/` 在 Linux 上**目前不会被内核拒绝**。
-/// 进度追踪：[issue #380](https://github.com/Linnanli/xClaw/issues/380) Wave-C1c。
+/// 三平台均已内核层强制，子进程绕过 `is_path_writable` 用户态决策直接
+/// syscall 写 `.git/hooks/`、`.codex/*`、`.dasclaw/*` 在三平台**均会被内核拒绝**。
 pub fn policy_to_backend_config(policy: &SandboxPolicy, cwd: &Path) -> SandboxBackendConfig {
     policy_to_backend_config_with_env(policy, cwd, &std::env::vars().collect())
 }
