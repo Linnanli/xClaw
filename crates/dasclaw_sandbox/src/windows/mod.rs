@@ -117,10 +117,12 @@ impl Sandbox for WindowsRestrictedTokenSandbox {
             }
             EnterpriseGateOutcome::DenyNoReadOnlySubpathsKernelEnforcement => {
                 return Err(SandboxError::ReadOnlySubpathsKernelEnforcementMissing {
-                    detail: "Windows kernel-layer read_only_subpaths enforcement is not \
-                             yet ported (ADR-141 PR-W3/W4 / Wave-C1b pending). Set \
-                             enterprise_allow_userspace_carveouts = true to opt into \
-                             user-space-only enforcement with an audit event."
+                    detail: "Windows `check_enterprise_gate` Step 3 arm still routes \
+                             read_only_subpaths to soft-mode/deny even though PR #426 \
+                             (Wave-C1b / ADR-141 §3 PR-W3) wired DACL DENY end-to-end. \
+                             Tracked in https://github.com/Linnanli/xClaw/issues/434 — \
+                             until that lands, set enterprise_allow_userspace_carveouts \
+                             = true to opt into the audit-event soft-mode path."
                         .to_string(),
                 });
             }
@@ -317,8 +319,9 @@ fn emit_enterprise_softmode_audit_event(
         cwd = %cwd,
         dasclaw_home = %dasclaw_home.display(),
         writable_roots = req.policy.writable_roots.len(),
-        "enterprise spawn proceeded under user-space-only carve-out enforcement \
-         (kernel-layer read_only_subpaths not yet ported); see ADR-141",
+        "enterprise spawn proceeded under user-space-only carve-out enforcement; \
+         on Windows the SoftModeReason premise is stale after PR #426 (DACL DENY \
+         wired); gate Step 3 realignment tracked in xClaw#434. See ADR-141.",
     );
 }
 

@@ -85,9 +85,11 @@ pub enum SandboxError {
 
     /// Enterprise mode is on and the spawn carries workspace-write carve-outs
     /// (e.g. `.git`, `.codex`, `.dasclaw`), but this platform's kernel-layer
-    /// `read_only_subpaths` enforcement has not been ported yet (macOS is
-    /// done via Wave-C1a; Windows waits on PR-W3/W4; Linux waits on
-    /// Wave-C1c).
+    /// `read_only_subpaths` enforcement has not been ported yet. Coverage:
+    /// macOS ✅ Wave-C1a; Windows DACL DENY data path ✅ wired by PR #426
+    /// (Wave-C1b) but `check_enterprise_gate` Step 3 arm not yet realigned —
+    /// tracked in [#434](https://github.com/Linnanli/xClaw/issues/434); Linux
+    /// 🔴 waits on Wave-C1c.
     ///
     /// **Fail-closed by default**. Callers may downgrade to user-space-only
     /// enforcement by setting
@@ -338,8 +340,15 @@ impl SandboxBackendConfig {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SoftModeReason {
-    /// Windows lacks kernel-layer `read_only_subpaths` enforcement until
-    /// ADR-141 PR-W3/W4 lands (codex `sandboxing` crate Windows port).
+    /// Windows: retained for `check_enterprise_gate` symmetry with Linux,
+    /// but the underlying premise (kernel-layer `read_only_subpaths` not
+    /// available) is now stale — ADR-141 §3 PR-W3 / Wave-C1b landed via
+    /// PR #426 wired `read_only_subpaths` to Win32 DACL DENY entries.
+    /// The gate Step 3 Windows arm has **not** yet been updated to
+    /// acknowledge this; tracked in
+    /// [#434](https://github.com/Linnanli/xClaw/issues/434) for a
+    /// dedicated decision PR (failure-mode semantic change requires
+    /// nally sign-off; out of scope for purely doc-correcting PRs).
     WindowsNoKernelReadOnlySubpaths,
     /// Linux lacks kernel-layer `read_only_subpaths` enforcement until
     /// Wave-C1c (`dasclaw-linux-sandbox` setuid binary) lands.
@@ -431,8 +440,10 @@ pub fn check_enterprise_gate(
 
     // Step 3: kernel-layer `read_only_subpaths` enforcement matrix
     // (ADR-141 §1.1). macOS is wired in Wave-C1a via
-    // `dasclaw_sandboxing::seatbelt`; Windows waits on PR-W3/W4; Linux
-    // waits on Wave-C1c.
+    // `dasclaw_sandboxing::seatbelt`; on Windows the DACL DENY data path
+    // is wired by PR #426 (Wave-C1b) but this arm still routes through
+    // soft-mode/deny — realignment tracked in xClaw#434. Linux waits on
+    // Wave-C1c.
     match sandbox_type {
         SandboxType::MacosSeatbelt => EnterpriseGateOutcome::Allow,
         SandboxType::WindowsRestrictedToken => {
