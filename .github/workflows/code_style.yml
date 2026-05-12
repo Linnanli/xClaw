@@ -56,7 +56,7 @@ jobs:
       uses: actions/checkout@v6
       with:
         submodules: recursive
-    - name: Install Linux system dependencies (GTK / WebKit for Tauri desktop-client)
+    - name: Install Linux system dependencies (GTK / WebKit for Tauri desktop-client; libcap for dasclaw_sandbox_linux vendored bwrap)
       run: |
         sudo apt-get update -qq
         sudo apt-get install -y --no-install-recommends \
@@ -65,7 +65,9 @@ jobs:
           libayatana-appindicator3-dev \
           librsvg2-dev \
           libsoup-3.0-dev \
-          libssl-dev
+          libssl-dev \
+          pkg-config \
+          libcap-dev
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
