@@ -243,7 +243,9 @@ GitHub Actions `ubuntu-latest` 已被 codex 在自己 CI 上验证过可用（[`
 - LGPL §6 通常的合规路径：(a) 发行 bubblewrap 修改后源码 + (b) 提供 "重新链接对象" 或动态链接选项。codex 选 (a)（vendor/ 目录本身已是 modified source 分发），我们随之即可。
 - **本 ADR 不解决该法务问题**，仅显式记录；Phase 1.1 PR 必须包含 NOTICE/THIRD_PARTY 文件同步，并由人类评审签字。
 
-**推荐**：Phase 1.1 PR 描述必须列：(1) `crates/dasclaw_sandbox_linux/vendor/bubblewrap/COPYING` 已拷入；(2) 顶层 NOTICE / `third_party/` 更新；(3) `cargo-deny` license allowlist 是否需要追加 LGPL-2.0；(4) 法务签字状态。若 (3) 或 (4) blocked，Phase 1.1 暂停，先开 sub-issue 解决。
+**推荐**：Phase 1.1 PR 描述必须列：(1) `crates/dasclaw_sandbox_linux/vendor/bubblewrap/COPYING` 已拷入；(2) 顶层 NOTICE / `third_party/` 更新；(3) `cargo-deny` license allowlist 是否需要追加 LGPL-2.0；(4) 法务签字状态。
+
+**Tracking**：已拆出独立 sub-issue [#440](https://github.com/Linnanli/xClaw/issues/440) — `chore(legal): LGPL v2 compliance for vendored bubblewrap`。**#440 是 Phase 1.1 的硬 blocker**：必须在 Phase 1.1 PR 中同时 close 才允许合入，否则 Phase 1.1 暂停。
 
 ---
 
