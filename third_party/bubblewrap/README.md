@@ -5,11 +5,15 @@ components are discoverable from the repository root via `third_party/`.
 
 The actual vendored bubblewrap source tree lives at:
 
-> [`crates/dasclaw_sandbox_linux/vendor/bubblewrap/`](../../crates/dasclaw_sandbox_linux/vendor/bubblewrap/)
+> [`crates/vendor/bubblewrap/`](../../crates/vendor/bubblewrap/)
 
-It is co-located with its consuming crate (`dasclaw_sandbox_linux`) to mirror
-upstream codex's layout (`codex-cli-main/codex-rs/vendor/bubblewrap/`) per the
-ADR-129 §1.3 verbatim-port red line. See [`NOTICE`](../../NOTICE) (top of
+It is placed as a **sibling** of the consuming crate `crates/dasclaw_sandbox_linux/`
+to exactly mirror upstream codex's sibling layout
+(`codex-cli-main/codex-rs/vendor/bubblewrap/` is sibling of
+`codex-cli-main/codex-rs/linux-sandbox/`), per the ADR-129 §1.3 verbatim-port
+red line. The path `../vendor/bubblewrap` referenced from
+[`crates/dasclaw_sandbox_linux/build.rs`](../../crates/dasclaw_sandbox_linux/build.rs)
+resolves to this directory. See [`NOTICE`](../../NOTICE) (top of
 repository) for the LGPL-2.0-or-later attribution, upstream URL, version
 (0.11.0), and §6 compliance posture.
 

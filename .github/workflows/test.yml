@@ -53,7 +53,7 @@ jobs:
           submodules: recursive
           # need history to diff against base for path scoping
           fetch-depth: 0
-      - name: Install Linux system dependencies (GTK / WebKit for Tauri desktop-client)
+      - name: Install Linux system dependencies (GTK / WebKit for Tauri desktop-client; libcap for dasclaw_sandbox_linux vendored bwrap)
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
@@ -63,7 +63,9 @@ jobs:
             librsvg2-dev \
             libsoup-3.0-dev \
             libssl-dev \
-            mold
+            mold \
+            pkg-config \
+            libcap-dev
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2

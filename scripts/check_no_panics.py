@@ -24,6 +24,7 @@ VERBATIM_PORTED_PREFIXES = (
     "crates/dasclaw_absolute_path/",       # ADR-132 — codex-utils-absolute-path
     "crates/dasclaw_execpolicy/",          # ADR-132 — codex-execpolicy
     "crates/dasclaw_protocol/",            # ADR-133 + ADR-136 — codex-protocol file-level slice
+    "crates/dasclaw_sandbox_linux/",       # ADR-144 §5.2 P1.1 — codex-linux-sandbox port
     "crates/dasclaw_sandbox_windows/",     # ADR-129 — codex sandbox-windows port
     "crates/dasclaw_shell_command/",       # ADR-133 — codex-shell-command
     "crates/dasclaw_utils_string/",        # ADR-136 amendment 2 — codex-utils-string verbatim port
