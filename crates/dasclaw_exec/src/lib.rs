@@ -252,7 +252,6 @@ pub fn policy_to_backend_config_with_env(
             // tasks must override `resource_limits` explicitly.
             resource_limits: ResourceLimits::unlimited(),
             enterprise_mode: false,
-            enterprise_allow_userspace_carveouts: false,
             linux_sandbox_exe: None,
         },
         SandboxPolicy::ReadOnly { network_access } => SandboxBackendConfig {
@@ -269,7 +268,6 @@ pub fn policy_to_backend_config_with_env(
             },
             resource_limits: ResourceLimits::default(),
             enterprise_mode: false,
-            enterprise_allow_userspace_carveouts: false,
             linux_sandbox_exe: None,
         },
         SandboxPolicy::ExternalSandbox { network_access } => {
@@ -289,7 +287,6 @@ pub fn policy_to_backend_config_with_env(
                 },
                 resource_limits: ResourceLimits::default(),
                 enterprise_mode: false,
-                enterprise_allow_userspace_carveouts: false,
                 linux_sandbox_exe: None,
             }
         }
@@ -321,7 +318,6 @@ pub fn policy_to_backend_config_with_env(
                 },
                 resource_limits: ResourceLimits::default(),
                 enterprise_mode: false,
-                enterprise_allow_userspace_carveouts: false,
                 linux_sandbox_exe: None,
             }
         }

@@ -116,8 +116,13 @@ impl Sandbox for WindowsRestrictedTokenSandbox {
                     ),
                 });
             }
-            other @ (EnterpriseGateOutcome::AllowWithUserspaceSoftMode { .. }
-            | EnterpriseGateOutcome::DenyNoReadOnlySubpathsKernelEnforcement) => {
+            // `EnterpriseGateOutcome` is `#[non_exhaustive]`; the wildcard
+            // acts as a fail-safe contract guard if a future variant is
+            // added without updating this matcher. After xClaw#446
+            // (Wave-C1c P1.2b gate realignment) every OS sandbox kind
+            // lands kernel enforcement, so the gate produces only `Allow`
+            // or `DenyNoKernelSandbox` for Windows today.
+            other => {
                 return Err(SandboxError::PolicyTransform(format!(
                     "internal: check_enterprise_gate returned {other:?} for \
                      WindowsRestrictedToken; gate must Allow on Windows after \

@@ -89,24 +89,23 @@ pub enum SandboxError {
     WindowsSandboxNotAvailable { detail: String },
 
     /// Enterprise mode is on and the spawn carries workspace-write carve-outs
-    /// (e.g. `.git`, `.codex`, `.dasclaw`), but this platform's kernel-layer
-    /// `read_only_subpaths` enforcement has not been ported yet. Coverage:
-    /// macOS ✅ Wave-C1a (`dasclaw_sandboxing::seatbelt`); Windows ✅ Wave-C1b
-    /// (PR #426 wired Win32 DACL DENY end-to-end + xClaw#434 realigned the
-    /// gate Step 3 Windows arm to `Allow`); Linux 🔴 waits on Wave-C1c
-    /// (`dasclaw-linux-sandbox` setuid binary + Landlock V3). After all
-    /// three platforms land, this variant becomes unreachable and will be
-    /// removed alongside [`SoftModeReason`].
+    /// (e.g. `.git`, `.codex`, `.dasclaw`), but the host platform's
+    /// kernel-layer `read_only_subpaths` enforcement could not be wired
+    /// for this spawn. Coverage by platform (ADR-141 §1.1, ADR-144 §5.3):
+    /// macOS ✅ Wave-C1a (`dasclaw_sandboxing::seatbelt`); Windows ✅
+    /// Wave-C1b (PR #426 wired Win32 DACL DENY end-to-end + xClaw#434
+    /// realigned the gate Step 3 Windows arm to `Allow`); Linux ✅
+    /// Wave-C1c P1.2a (`dasclaw-sandbox-linux` helper + bubblewrap +
+    /// landlock + seccomp).
     ///
-    /// **Fail-closed by default**. On Linux, callers may downgrade to
-    /// user-space-only enforcement by setting
-    /// [`SandboxBackendConfig::enterprise_allow_userspace_carveouts`] to
-    /// `true` and emitting a structured per-spawn audit event. See
-    /// [ADR-141](../../docs/plans/architecture-refactor/adr-141-windows-enterprise-sandbox-support.md)
-    /// §3 PR-W2 / §6 OQ-1 / OQ-4.
+    /// **Fail-closed**: produced by the Linux backend when the caller
+    /// did not inject [`SandboxBackendConfig::linux_sandbox_exe`] yet
+    /// the spawn carries `read_only_subpaths` or `enterprise_mode`
+    /// (ADR-144 §5.3 P1.2a wiring). Callers must surface this to the
+    /// operator rather than silently downgrading to direct `exec`.
     #[error(
         "enterprise mode requires kernel-layer read_only_subpaths enforcement, \
-         which is not yet ported on this platform: {detail}"
+         which is not yet wired on this platform: {detail}"
     )]
     ReadOnlySubpathsKernelEnforcementMissing { detail: String },
 
@@ -259,8 +258,11 @@ pub struct SandboxBackendConfig {
     ///   `WritableRoot { root, read_only_subpaths }` shape directly. Keeping
     ///   the field on `SandboxBackendConfig` lets [`check_enterprise_gate`]
     ///   reason about the *presence* of carve-outs uniformly across hosts.
-    /// - **Linux** — ignored until Wave-C1c lands kernel-layer Landlock
-    ///   enforcement (ADR-135 PR-C3); behaviour mirrors macOS for now.
+    /// - **Linux** (`crates/dasclaw_sandbox/src/linux/`) — kernel-enforced
+    ///   via the `dasclaw-sandbox-linux` helper (bubblewrap mount layout +
+    ///   landlock V3 rulesets), wired in Wave-C1c P1.2a; if
+    ///   [`SandboxBackendConfig::linux_sandbox_exe`] is absent the backend
+    ///   fails closed with [`SandboxError::ReadOnlySubpathsKernelEnforcementMissing`].
     pub read_only_subpaths: Vec<PathBuf>,
     pub allow_network: bool,
     pub allow_spawn: bool,
@@ -287,25 +289,6 @@ pub struct SandboxBackendConfig {
     /// [ADR-141](../../docs/plans/architecture-refactor/adr-141-windows-enterprise-sandbox-support.md)
     /// §3 PR-W1 / §6 OQ-1.
     pub enterprise_mode: bool,
-
-    /// **Soft-mode opt-in** for enterprise mode. When `enterprise_mode = true`
-    /// **and** the host platform lacks kernel-layer `read_only_subpaths`
-    /// enforcement, this flag lets the caller proceed with user-space-only
-    /// carve-outs (via [`ironclaw_workspace_cap::WorkspaceCap`] cap-std
-    /// interception + `is_path_writable`) **provided that** a structured
-    /// per-spawn audit event is emitted by the caller.
-    ///
-    /// Defaults to `false` (fail-closed) per ADR-141 §6 OQ-1.
-    ///
-    /// **Scope after xClaw#434** (Wave-C1b gate realignment): only Linux
-    /// can still hit the soft-mode path. macOS (Wave-C1a Seatbelt) and
-    /// Windows (Wave-C1b DACL DENY via PR #426) both have kernel-layer
-    /// enforcement, so `check_enterprise_gate` short-circuits to
-    /// [`EnterpriseGateOutcome::Allow`] regardless of this flag on those
-    /// platforms. Enterprise managed policies should keep this `false`
-    /// on every host; the flag becomes a no-op everywhere once Wave-C1c
-    /// (`dasclaw-linux-sandbox` setuid binary) lands.
-    pub enterprise_allow_userspace_carveouts: bool,
 
     /// Path to the `dasclaw-sandbox-linux` helper binary that performs
     /// kernel-layer FS isolation (bubblewrap + landlock) and seccomp on
@@ -356,77 +339,31 @@ impl SandboxBackendConfig {
         self.enterprise_mode = enabled;
         self
     }
-
-    /// Opt into user-space-only carve-out enforcement when the host
-    /// platform's kernel does not yet enforce `read_only_subpaths`. Must be
-    /// paired with a structured per-spawn audit event by the caller. See
-    /// [ADR-141][adr-141] §6 OQ-1 / OQ-4.
-    ///
-    /// [adr-141]: ../../docs/plans/architecture-refactor/adr-141-windows-enterprise-sandbox-support.md
-    pub fn with_enterprise_allow_userspace_carveouts(mut self, allow: bool) -> Self {
-        self.enterprise_allow_userspace_carveouts = allow;
-        self
-    }
-}
-
-/// Reason a soft-mode allow was granted by [`check_enterprise_gate`].
-///
-/// Carried in [`EnterpriseGateOutcome::AllowWithUserspaceSoftMode`] so callers
-/// can emit a structured per-spawn audit event (ADR-141 §6 OQ-4).
-///
-/// **Scope after xClaw#434**: only [`LinuxNoKernelReadOnlySubpaths`] remains.
-/// The former `WindowsNoKernelReadOnlySubpaths` variant was retired once
-/// PR #426 (Wave-C1b) wired Win32 DACL DENY end-to-end — Windows
-/// `read_only_subpaths` is now kernel-enforced just like macOS Seatbelt, so
-/// the gate no longer needs a soft-mode escape hatch on Windows. The variant
-/// is left around `LinuxNoKernelReadOnlySubpaths` until Wave-C1c
-/// (`dasclaw-linux-sandbox` setuid binary) lands kernel-layer Landlock
-/// enforcement on Linux, at which point this entire enum can be deleted.
-///
-/// [LinuxNoKernelReadOnlySubpaths]: SoftModeReason::LinuxNoKernelReadOnlySubpaths
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum SoftModeReason {
-    /// Linux lacks kernel-layer `read_only_subpaths` enforcement until
-    /// Wave-C1c (`dasclaw-linux-sandbox` setuid binary) lands.
-    LinuxNoKernelReadOnlySubpaths,
-}
-
-impl SoftModeReason {
-    /// Stable, dot-namespaced tag suitable for log fields / metric labels.
-    pub fn as_audit_tag(self) -> &'static str {
-        match self {
-            Self::LinuxNoKernelReadOnlySubpaths => "linux.no_kernel_read_only_subpaths",
-        }
-    }
 }
 
 /// Outcome of the ADR-141 enterprise fail-closed gate.
 ///
-/// Encodes the four-way decision matrix from ADR-141 §3 PR-W1+W2 as a closed
-/// enum so callers `match` exhaustively — there is no silent fall-through.
+/// Encodes the gate's decision as a closed enum so callers `match`
+/// exhaustively — there is no silent fall-through.
+///
+/// **Scope after xClaw#446** (Wave-C1c P1.2b gate realignment): every
+/// supported OS sandbox kind now has kernel-layer `read_only_subpaths`
+/// enforcement wired (macOS Seatbelt / Windows DACL DENY / Linux
+/// bubblewrap+landlock helper), so the gate produces only `Allow` or
+/// `DenyNoKernelSandbox`. The former soft-mode and "no kernel
+/// enforcement" outcomes were retired together with `SoftModeReason`
+/// and the `enterprise_allow_userspace_carveouts` opt-in flag.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EnterpriseGateOutcome {
     /// Either enterprise mode is off, or every required kernel-layer
     /// enforcement is already in place. Caller may proceed with the spawn.
     Allow,
-    /// Enterprise mode is on, kernel-layer `read_only_subpaths` is not yet
-    /// ported on this platform, **and** the caller opted into soft mode via
-    /// [`SandboxBackendConfig::enterprise_allow_userspace_carveouts`].
-    ///
-    /// Caller **must** emit a structured per-spawn audit event before
-    /// continuing (ADR-141 §6 OQ-3 / OQ-4). The `reason` is the audit tag.
-    AllowWithUserspaceSoftMode { reason: SoftModeReason },
     /// Enterprise mode is on and the OS sandbox infrastructure is missing
     /// (Windows setup not run, or no sandbox backend at all). Caller must
     /// refuse to spawn with
     /// [`SandboxError::WindowsSandboxNotAvailable`].
     DenyNoKernelSandbox,
-    /// Enterprise mode is on, kernel-layer carve-outs are not ported on this
-    /// platform, and the soft flag is **not** set. Caller must refuse with
-    /// [`SandboxError::ReadOnlySubpathsKernelEnforcementMissing`].
-    DenyNoReadOnlySubpathsKernelEnforcement,
 }
 
 /// Cross-platform pure decision function for the ADR-141 enterprise
@@ -475,31 +412,21 @@ pub fn check_enterprise_gate(
     }
 
     // Step 3: kernel-layer `read_only_subpaths` enforcement matrix
-    // (ADR-141 §1.1). macOS is wired in Wave-C1a via
-    // `dasclaw_sandboxing::seatbelt`; Windows is wired in Wave-C1b via
-    // PR #426 (`dasclaw_sandbox_windows::run_windows_sandbox_capture_with_extra_deny_write_paths`
-    // → Win32 DACL DENY ACEs). Linux still routes through the userspace
-    // soft-mode fallback until Wave-C1c (`dasclaw-linux-sandbox`
-    // setuid binary + Landlock V3) lands.
+    // (ADR-141 §1.1 + ADR-144 §5.3). All three OS sandbox kinds now have
+    // kernel-layer carve-out enforcement wired:
+    //   - macOS Seatbelt — Wave-C1a `dasclaw_sandboxing::seatbelt` sbpl.
+    //   - Windows RestrictedToken — Wave-C1b PR #426 Win32 DACL DENY ACEs.
+    //   - Linux Seccomp — Wave-C1c P1.2a `dasclaw-sandbox-linux` helper
+    //     (bubblewrap mount layout + landlock V3).
+    // `SandboxType::None` is already handled by Step 1; reasserting it
+    // here keeps the match exhaustive and acts as a fail-safe contract
+    // guard against future `SandboxType` variants being added without
+    // updating this matrix.
     match sandbox_type {
-        SandboxType::MacosSeatbelt | SandboxType::WindowsRestrictedToken => {
-            EnterpriseGateOutcome::Allow
-        }
-        SandboxType::LinuxSeccomp => {
-            decide_carveout_outcome(config, SoftModeReason::LinuxNoKernelReadOnlySubpaths)
-        }
+        SandboxType::MacosSeatbelt
+        | SandboxType::WindowsRestrictedToken
+        | SandboxType::LinuxSeccomp => EnterpriseGateOutcome::Allow,
         SandboxType::None => EnterpriseGateOutcome::DenyNoKernelSandbox,
-    }
-}
-
-fn decide_carveout_outcome(
-    config: &SandboxBackendConfig,
-    reason: SoftModeReason,
-) -> EnterpriseGateOutcome {
-    if config.enterprise_allow_userspace_carveouts {
-        EnterpriseGateOutcome::AllowWithUserspaceSoftMode { reason }
-    } else {
-        EnterpriseGateOutcome::DenyNoReadOnlySubpathsKernelEnforcement
     }
 }
 
@@ -707,13 +634,11 @@ mod tests {
 
     fn gate_cfg(
         enterprise: bool,
-        soft: bool,
         writable: &[&str],
         read_only_subpaths: &[&str],
     ) -> SandboxBackendConfig {
         SandboxBackendConfig {
             enterprise_mode: enterprise,
-            enterprise_allow_userspace_carveouts: soft,
             writable_roots: writable.iter().map(PathBuf::from).collect(),
             read_only_subpaths: read_only_subpaths.iter().map(PathBuf::from).collect(),
             ..SandboxBackendConfig::default()
@@ -728,7 +653,7 @@ mod tests {
             SandboxType::LinuxSeccomp,
             SandboxType::WindowsRestrictedToken,
         ] {
-            let cfg = gate_cfg(false, false, &["/tmp/work"], &["/tmp/work/.git"]);
+            let cfg = gate_cfg(false, &["/tmp/work"], &["/tmp/work/.git"]);
             assert_eq!(
                 check_enterprise_gate(&cfg, sb, false),
                 EnterpriseGateOutcome::Allow,
@@ -739,7 +664,7 @@ mod tests {
 
     #[test]
     fn req_enterprise_gate_denies_when_no_kernel_sandbox() {
-        let cfg = gate_cfg(true, false, &["/tmp/work"], &["/tmp/work/.git"]);
+        let cfg = gate_cfg(true, &["/tmp/work"], &["/tmp/work/.git"]);
         assert_eq!(
             check_enterprise_gate(&cfg, SandboxType::None, true),
             EnterpriseGateOutcome::DenyNoKernelSandbox,
@@ -748,7 +673,7 @@ mod tests {
 
     #[test]
     fn req_enterprise_gate_denies_when_windows_setup_pending() {
-        let cfg = gate_cfg(true, false, &["/tmp/work"], &["/tmp/work/.git"]);
+        let cfg = gate_cfg(true, &["/tmp/work"], &["/tmp/work/.git"]);
         assert_eq!(
             check_enterprise_gate(&cfg, SandboxType::WindowsRestrictedToken, false),
             EnterpriseGateOutcome::DenyNoKernelSandbox,
@@ -758,7 +683,7 @@ mod tests {
 
     #[test]
     fn req_enterprise_gate_macos_allows_with_workspace_write() {
-        let cfg = gate_cfg(true, false, &["/tmp/work"], &["/tmp/work/.git"]);
+        let cfg = gate_cfg(true, &["/tmp/work"], &["/tmp/work/.git"]);
         assert_eq!(
             check_enterprise_gate(&cfg, SandboxType::MacosSeatbelt, true),
             EnterpriseGateOutcome::Allow,
@@ -772,7 +697,7 @@ mod tests {
         // DENY for `read_only_subpaths` end-to-end, so the gate's Step 3
         // Windows arm must symmetrically return Allow with macOS — kernel
         // layer covers the carve-outs.
-        let cfg = gate_cfg(true, false, &["/tmp/work"], &["/tmp/work/.git"]);
+        let cfg = gate_cfg(true, &["/tmp/work"], &["/tmp/work/.git"]);
         assert_eq!(
             check_enterprise_gate(&cfg, SandboxType::WindowsRestrictedToken, true),
             EnterpriseGateOutcome::Allow,
@@ -781,37 +706,34 @@ mod tests {
     }
 
     #[test]
-    fn req_enterprise_gate_windows_softmode_flag_is_noop_after_pr426() {
-        // xClaw#434 regression guard: the
-        // `enterprise_allow_userspace_carveouts` soft-mode flag must NOT
-        // re-introduce the AllowWithUserspaceSoftMode branch on Windows
-        // — kernel enforcement supersedes soft-mode there, and emitting
-        // a soft-mode audit event would be misleading after PR #426.
-        let cfg = gate_cfg(true, true, &["/tmp/work"], &["/tmp/work/.git"]);
+    fn req_enterprise_gate_linux_allows_after_p1_2a_helper_wired() {
+        // xClaw#446 (Wave-C1c P1.2b gate realignment): PR #445 wired the
+        // `dasclaw-sandbox-linux` helper (bubblewrap + landlock V3) end-
+        // to-end through `crates/dasclaw_sandbox/src/linux/mod.rs`, so
+        // the gate's Step 3 Linux arm must symmetrically return Allow
+        // alongside macOS / Windows — kernel layer covers the carve-outs.
+        let cfg = gate_cfg(true, &["/tmp/work"], &["/tmp/work/.git"]);
         assert_eq!(
-            check_enterprise_gate(&cfg, SandboxType::WindowsRestrictedToken, true),
+            check_enterprise_gate(&cfg, SandboxType::LinuxSeccomp, true),
             EnterpriseGateOutcome::Allow,
-            "soft flag must be a no-op on Windows after kernel DACL DENY landed",
+            "Wave-C1c P1.2a wired Linux kernel carve-outs via bubblewrap+landlock helper",
         );
     }
 
     #[test]
-    fn req_enterprise_gate_linux_denies_carveouts_without_soft_flag() {
-        let cfg = gate_cfg(true, false, &["/tmp/work"], &["/tmp/work/.git"]);
+    fn req_enterprise_gate_linux_allows_read_only_subpaths_without_writable_roots() {
+        // xClaw#446 (Wave-C1c P1.2b) regression guard — replaces deleted
+        // `req_enterprise_gate_signal_is_subpaths_not_writable_roots`
+        // (OQ-W3-3 sign-off 2026-05-11). After P1.2a wired Linux kernel
+        // enforcement, the "holes without writable_roots" edge case must
+        // resolve to `Allow` on Linux (previously `Deny…`). This guards
+        // against accidentally re-introducing a `writable_roots`-based
+        // short-circuit in Step 2.
+        let cfg = gate_cfg(true, &[], &["/tmp/work/.git"]);
         assert_eq!(
             check_enterprise_gate(&cfg, SandboxType::LinuxSeccomp, true),
-            EnterpriseGateOutcome::DenyNoReadOnlySubpathsKernelEnforcement,
-        );
-    }
-
-    #[test]
-    fn req_enterprise_gate_linux_softmode_allows_with_reason() {
-        let cfg = gate_cfg(true, true, &["/tmp/work"], &["/tmp/work/.git"]);
-        assert_eq!(
-            check_enterprise_gate(&cfg, SandboxType::LinuxSeccomp, true),
-            EnterpriseGateOutcome::AllowWithUserspaceSoftMode {
-                reason: SoftModeReason::LinuxNoKernelReadOnlySubpaths,
-            },
+            EnterpriseGateOutcome::Allow,
+            "read_only_subpaths without writable_roots must still Allow on Linux after P1.2a",
         );
     }
 
@@ -827,7 +749,7 @@ mod tests {
             SandboxType::LinuxSeccomp,
             SandboxType::WindowsRestrictedToken,
         ] {
-            let cfg = gate_cfg(true, false, &["/tmp/work"], &[]);
+            let cfg = gate_cfg(true, &["/tmp/work"], &[]);
             assert_eq!(
                 check_enterprise_gate(&cfg, sb, true),
                 EnterpriseGateOutcome::Allow,
@@ -837,40 +759,8 @@ mod tests {
     }
 
     #[test]
-    fn req_enterprise_gate_signal_is_subpaths_not_writable_roots() {
-        // OQ-W3-3 regression test: previously the gate short-circuited on
-        // `writable_roots.is_empty()`, which misclassified the common
-        // WorkspaceWrite hole-free case as "needs kernel enforcement".
-        // After the OQ-W3-3 fix, the signal is `read_only_subpaths.is_empty()`.
-        // Retargeted to `LinuxSeccomp` after xClaw#434 — the Windows arm now
-        // short-circuits to Allow (kernel DACL DENY covers it), so Linux is
-        // the only `SandboxType` still exercising the read_only_subpaths
-        // signal path until Wave-C1c lands.
-        let cfg_holes_no_roots = gate_cfg(true, false, &[], &["/tmp/work/.git"]);
-        assert_eq!(
-            check_enterprise_gate(&cfg_holes_no_roots, SandboxType::LinuxSeccomp, true),
-            EnterpriseGateOutcome::DenyNoReadOnlySubpathsKernelEnforcement,
-            "holes without writable_roots still demand kernel enforcement",
-        );
-    }
-
-    #[test]
-    fn req_softmode_reason_audit_tag_is_stable() {
-        // Tag strings are part of the audit-log contract (ADR-141 §6 OQ-4).
-        // Changing them is a downstream breaking change. Windows variant
-        // was removed in xClaw#434 (PR #426 made it unreachable).
-        assert_eq!(
-            SoftModeReason::LinuxNoKernelReadOnlySubpaths.as_audit_tag(),
-            "linux.no_kernel_read_only_subpaths",
-        );
-    }
-
-    #[test]
     fn enterprise_builders_set_fields() {
-        let cfg = SandboxBackendConfig::default()
-            .with_enterprise_mode(true)
-            .with_enterprise_allow_userspace_carveouts(true);
+        let cfg = SandboxBackendConfig::default().with_enterprise_mode(true);
         assert!(cfg.enterprise_mode);
-        assert!(cfg.enterprise_allow_userspace_carveouts);
     }
 }

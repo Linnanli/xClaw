@@ -48,7 +48,6 @@ fn req_dasclaw_sandbox_kernel_blocks_git_hooks_under_workspace_write_macos() {
         proxy_loopback_ports: vec![],
         resource_limits: Default::default(),
         enterprise_mode: false,
-        enterprise_allow_userspace_carveouts: false,
         linux_sandbox_exe: None,
     };
 
@@ -109,7 +108,6 @@ fn req_dasclaw_sandbox_kernel_allows_write_to_non_hole_path_macos() {
         proxy_loopback_ports: vec![],
         resource_limits: Default::default(),
         enterprise_mode: false,
-        enterprise_allow_userspace_carveouts: false,
         linux_sandbox_exe: None,
     };
 

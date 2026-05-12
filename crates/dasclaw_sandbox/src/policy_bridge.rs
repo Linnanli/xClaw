@@ -111,7 +111,6 @@ mod tests {
             proxy_loopback_ports: vec![],
             resource_limits: Default::default(),
             enterprise_mode: false,
-            enterprise_allow_userspace_carveouts: false,
             linux_sandbox_exe: None,
         }
     }
