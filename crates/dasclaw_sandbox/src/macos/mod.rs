@@ -33,8 +33,8 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 pub mod memorystatus;
-mod policy_bridge;
 
+use crate::policy_bridge;
 use crate::rlimit;
 use crate::{Sandbox, SandboxError, SandboxExecRequest, SandboxType};
 

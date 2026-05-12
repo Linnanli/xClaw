@@ -25,6 +25,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -129,7 +130,13 @@ impl OsExecutor {
         // W3.2-C2b: clone Arc → 拿到 owned NetworkProxy 句柄注入 SandboxedExecutor。
         // NetworkProxy 内部已是 Arc<NetworkProxyState>，clone 廉价。
         let network = self.network.as_deref().cloned();
-        let executor = SandboxedExecutor::new(cap_policy, self.sandbox_pref, false, network);
+        // ADR-144 §5.3 P1.2a — Linux helper exe 解析：相对当前 ironclaw
+        // 主程序位置 `$EXE_DIR/dasclaw-sandbox-linux`。helper 不存在或路径
+        // 解析失败时返回 None，由 `dasclaw_sandbox::linux::prepare_command`
+        // 决定 fail-closed（需要 kernel FS 隔离时）或走 legacy seccomp 路径。
+        let linux_sandbox_exe = resolve_linux_sandbox_exe();
+        let executor = SandboxedExecutor::new(cap_policy, self.sandbox_pref, false, network)
+            .with_linux_sandbox_exe(linux_sandbox_exe);
 
         let mut cmd = build_shell_command(command);
         cmd.envs(env);
@@ -171,6 +178,38 @@ fn build_shell_command(command: &str) -> Command {
         let mut c = Command::new("sh");
         c.args(["-c", command]);
         c
+    }
+}
+
+/// ADR-144 §5.3 P1.2a — 解析 Linux helper `dasclaw-sandbox-linux` 的绝对路径。
+///
+/// 约定 helper 与 ironclaw 主程序同目录（`current_exe().parent()`），
+/// 这也是构建产物的默认布局。Helper 不存在或当前可执行路径无法获取时
+/// 返回 `None`，让 `dasclaw_sandbox::linux::prepare_command` 自行决定
+/// 走 legacy seccomp 路径还是 fail-closed（取决于 spawn 是否需要 kernel
+/// FS 隔离）。
+///
+/// 仅在 Linux target 下返回 `Some`；macOS/Windows 返回 `None`。
+fn resolve_linux_sandbox_exe() -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        let exe = std::env::current_exe().ok()?;
+        let dir = exe.parent()?;
+        let helper = dir.join("dasclaw-sandbox-linux");
+        if helper.exists() {
+            Some(helper)
+        } else {
+            tracing::warn!(
+                helper = %helper.display(),
+                "dasclaw-sandbox-linux helper not found alongside main binary; \
+                 spawns requiring kernel FS isolation will fail-closed"
+            );
+            None
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
     }
 }
 

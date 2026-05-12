@@ -113,6 +113,15 @@ pub struct SandboxedExecutor {
     /// 占位语义现在由调用方显式选择）。Linux 后端继续走 `backend.proxy_loopback_ports`
     /// 的 env-detect 路径，与 `network` 互不冲突。
     network: Option<NetworkProxy>,
+
+    /// 路径到 `dasclaw-sandbox-linux` helper 二进制。Linux 内核层 FS 隔离
+    /// （bubblewrap + landlock）必须经此 helper；ADR-144 §5.3 P1.2a wiring。
+    /// macOS / Windows 后端忽略；Linux 上为 `None` ⇒ adapter fail-closed。
+    ///
+    /// 调用方（如 desktop-client `OsExecutor`）在启动时解析
+    /// `std::env::current_exe()?.parent()?.join("dasclaw-sandbox-linux")`，
+    /// 通过 [`Self::with_linux_sandbox_exe`] 注入。
+    linux_sandbox_exe: Option<PathBuf>,
 }
 
 impl SandboxedExecutor {
@@ -127,7 +136,17 @@ impl SandboxedExecutor {
             sandbox_pref,
             windows_sandbox_enabled,
             network,
+            linux_sandbox_exe: None,
         }
+    }
+
+    /// 配置 `dasclaw-sandbox-linux` helper 二进制路径（ADR-144 §5.3 P1.2a）。
+    ///
+    /// 此值会被透传到 [`SandboxBackendConfig::linux_sandbox_exe`]，Linux 后端
+    /// 依据它决定走 helper 包装路径还是 fail-closed。macOS / Windows 上忽略。
+    pub fn with_linux_sandbox_exe(mut self, exe: Option<PathBuf>) -> Self {
+        self.linux_sandbox_exe = exe;
+        self
     }
 
     /// 公开 policy 供调用方做额外用户态检查。
@@ -158,7 +177,9 @@ impl SandboxedExecutor {
         }
 
         // 2. 政策 → 内核配置
-        let backend = policy_to_backend_config(&self.policy, &req.cwd);
+        let mut backend = policy_to_backend_config(&self.policy, &req.cwd);
+        // ADR-144 §5.3 P1.2a：透传 helper exe，让 Linux 后端 wiring。
+        backend.linux_sandbox_exe = self.linux_sandbox_exe.clone();
 
         Ok(SandboxExecRequest {
             command: req.command,
@@ -232,6 +253,7 @@ pub fn policy_to_backend_config_with_env(
             resource_limits: ResourceLimits::unlimited(),
             enterprise_mode: false,
             enterprise_allow_userspace_carveouts: false,
+            linux_sandbox_exe: None,
         },
         SandboxPolicy::ReadOnly { network_access } => SandboxBackendConfig {
             readable_roots: vec![PathBuf::from("/")],
@@ -248,6 +270,7 @@ pub fn policy_to_backend_config_with_env(
             resource_limits: ResourceLimits::default(),
             enterprise_mode: false,
             enterprise_allow_userspace_carveouts: false,
+            linux_sandbox_exe: None,
         },
         SandboxPolicy::ExternalSandbox { network_access } => {
             let net_enabled = matches!(network_access, NetworkAccess::Enabled);
@@ -267,6 +290,7 @@ pub fn policy_to_backend_config_with_env(
                 resource_limits: ResourceLimits::default(),
                 enterprise_mode: false,
                 enterprise_allow_userspace_carveouts: false,
+                linux_sandbox_exe: None,
             }
         }
         SandboxPolicy::WorkspaceWrite { network_access, .. } => {
@@ -298,6 +322,7 @@ pub fn policy_to_backend_config_with_env(
                 resource_limits: ResourceLimits::default(),
                 enterprise_mode: false,
                 enterprise_allow_userspace_carveouts: false,
+                linux_sandbox_exe: None,
             }
         }
     }
