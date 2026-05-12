@@ -66,6 +66,19 @@ jobs:
             mold \
             pkg-config \
             libcap-dev
+      # ADR-144 §5.4 — enable unprivileged user namespaces on the GHA runner
+      # so that the `dasclaw_sandbox_linux` helper (vendored bwrap) can
+      # `unshare(CLONE_NEWUSER)` without setuid. Mirrors codex's CI snippet
+      # verbatim ([`codex-rs/.github/workflows/rust-ci-full.yml:644-655`]).
+      # `apparmor_restrict_unprivileged_userns` only exists on Ubuntu 24.04+;
+      # the conditional `grep` keeps the step compatible with older runners.
+      - name: Enable unprivileged user namespaces (Linux)
+        run: |
+          set -euo pipefail
+          sudo sysctl -w kernel.unprivileged_userns_clone=1
+          if sudo sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -118,6 +131,31 @@ jobs:
             echo "scope=$args" >> "$GITHUB_OUTPUT"
             echo "Using scoped: $args"
           fi
+      # ADR-144 §5.3 P1.2a + §5.4 — produce the `dasclaw-sandbox-linux`
+      # helper binary that
+      # `crates/dasclaw_sandbox/tests/req_kernel_enforces_read_only_subpaths_linux.rs`
+      # auto-detects under `target/debug/`. Without this step the test
+      # self-skips (helper missing) and we lose Linux kernel-enforcement
+      # regression coverage. Built only when the scope actually exercises
+      # the test surface (touches `dasclaw_sandbox` / `dasclaw_sandbox_linux`,
+      # or uses the workspace fallback).
+      - name: Build dasclaw_sandbox_linux helper (Wave-C1c P1.2a regression coverage)
+        if: |
+          contains(steps.scope.outputs.scope, 'dasclaw_sandbox') ||
+          steps.scope.outputs.scope == '--workspace' ||
+          steps.scope.outputs.scope == '' ||
+          matrix.name != 'default'
+        run: |
+          set -euo pipefail
+          # sccache fail-soft (mirrors the strategy used by `Run Tests` below):
+          # GHA Cache backend has occasional outages; probe before use, fall
+          # back to plain rustc if unavailable rather than failing the job.
+          if ! sccache --start-server >/dev/null 2>&1; then
+            echo "::warning::sccache unavailable; building helper without RUSTC_WRAPPER"
+            unset RUSTC_WRAPPER
+            unset SCCACHE_GHA_ENABLED
+          fi
+          cargo build -p dasclaw_sandbox_linux --bin dasclaw-sandbox-linux
       - name: Run Tests
         run: |
           set -euo pipefail
