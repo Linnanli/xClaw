@@ -29,11 +29,11 @@
 | Application-layer policy (exec allow-list + argv shape) | `dasclaw_execpolicy` | ✅ verbatim port | PR #341 |
 | Application-layer bash validation | `dasclaw_bash_validation` | ✅ | existing |
 | OS-level filesystem / network sandbox | `dasclaw_sandbox_windows` (verbatim port of codex `windows-sandbox-rs` @ `6e838a19fa`) | ⚠️ scaffold only — `setup_main` / `command_runner` bins compile; **not yet wired into `dasclaw_exec` spawn path** | ADR-129/130; bins in `crates/dasclaw_sandbox_windows/src/bin/` |
-| Kernel-layer `read_only_subpaths` enforcement (`.git/hooks` / `.codex` / `.git/config` carve-outs) | codex `sandboxing` crate (`WindowsSandboxFilesystemOverrides::additional_deny_write_paths`) | ❌ not ported (blocked on ADR-135 / #324 sub-task 2) | ADR-135 §1.1 |
+| Kernel-layer `read_only_subpaths` enforcement (`.git/hooks` / `.codex` / `.git/config` carve-outs) | codex `sandboxing` crate (`WindowsSandboxFilesystemOverrides::additional_deny_write_paths`) via `dasclaw_sandbox_windows::run_windows_sandbox_capture_with_extra_deny_write_paths` | ✅ wired end-to-end via PR #426 (`SandboxBackendConfig.read_only_subpaths` → `LauncherRequest.additional_deny_write_paths` → upstream public API → Win32 DACL DENY entries) | ADR-141 §3 PR-W3 / Wave-C1b (PR #426) |
 
 ### 1.2 What is missing or undeclared
 
-1. **No declared support tier.** Today `is_path_writable` does user-space carve-out checks, but kernel-layer enforcement of `read_only_subpaths` on Windows is acknowledged as a "known limitation" in [`crates/dasclaw_exec/src/lib.rs:11-15`](../../crates/dasclaw_exec/src/lib.rs).
+1. **No declared support tier.** ~~Today `is_path_writable` does user-space carve-out checks, but kernel-layer enforcement of `read_only_subpaths` on Windows is acknowledged as a "known limitation".~~ **Resolved 2026-05-11+** by PR #426 (Wave-C1b) wiring `read_only_subpaths` end-to-end to Win32 DACL DENY entries; the `dasclaw_exec` doc table itself was updated by PR #428 to mark Windows as kernel-enforced.
 2. **No fail-closed contract test for Windows enterprise mode.** Linux/macOS contract tests assert that `SandboxError` is returned when the kernel backend is unavailable; the equivalent Windows assertion does not exist because the Windows OS sandbox is not yet wired.
 3. **`#241` blocks the OS sandbox wire-up.** The epic that ports `windows-sandbox-rs` end-to-end is labelled `blocked`, so any "Windows enterprise = full OS sandbox" claim is premature.
 4. **`#28` is `adr-redline`.** The fail-closed _policy_ decision belongs to nally; this ADR only documents the _matrix_ and the gap, it does not change `#28`'s policy.
