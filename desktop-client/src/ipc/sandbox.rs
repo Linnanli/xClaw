@@ -10,7 +10,8 @@
 //! `Command::output()`.
 
 use dasclaw_sandbox::{
-    select_backend, SandboxExecRequest, SandboxPolicy, SandboxType, SandboxablePreference,
+    sandbox_setup_status, select_backend, SandboxExecRequest, SandboxPolicy, SandboxSetupStatus,
+    SandboxType, SandboxablePreference,
 };
 use serde::Serialize;
 use std::process::Command;
@@ -110,6 +111,86 @@ fn backend_label(t: SandboxType) -> &'static str {
     }
 }
 
+/// Report shape returned by [`ic_sandbox_status`].
+///
+/// The front-end calls this at startup (epic #380 / issue #464) to detect
+/// whether the platform sandbox infrastructure is ready. On Windows, a
+/// `ready: false` response means `dasclaw-sandbox-setup.exe` has not been
+/// run yet — the UI should prompt the operator (and surface
+/// `action_hint` / `dasclaw_home` in the dialog).
+///
+/// On macOS / Linux this always returns `ready: true` because the kernel
+/// sandbox (Seatbelt / Landlock + seccomp) needs no operator setup.
+#[derive(Debug, Serialize)]
+pub struct SandboxStatusReport {
+    /// Same string namespace as [`SandboxSmokeReport::backend`].
+    pub backend: String,
+    pub ready: bool,
+    /// Inspected `dasclaw_home` (Windows only; `None` otherwise).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dasclaw_home: Option<String>,
+    /// Operator action hint when `ready == false`. Stable English; the
+    /// front-end is free to localise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action_hint: Option<String>,
+}
+
+/// Inspect platform sandbox infrastructure readiness.
+///
+/// Frontend should call this once at startup; on `ready == false` it shows
+/// a friendly dialog directing the operator (or IT admin) to run
+/// `dasclaw-sandbox-setup.exe` (Windows). See epic #380 / issue #464 and
+/// `dasclaw_sandbox::sandbox_setup_status` for the underlying contract.
+///
+/// `windows_sandbox_enabled = true`: we want to surface "setup pending"
+/// even before the user opts into sandbox-required mode, so the IT-admin
+/// fix path is visible immediately at first launch.
+#[tauri::command]
+pub async fn ic_sandbox_status() -> Result<SandboxStatusReport, String> {
+    // Pure read-only check (no FS writes, no spawn) — safe on the tokio
+    // worker without `spawn_blocking`.
+    Ok(map_status(sandbox_setup_status(true)))
+}
+
+fn map_status(status: SandboxSetupStatus) -> SandboxStatusReport {
+    match status {
+        SandboxSetupStatus::Ready { kind } => SandboxStatusReport {
+            backend: backend_label(kind).to_string(),
+            ready: true,
+            dasclaw_home: None,
+            action_hint: None,
+        },
+        SandboxSetupStatus::SetupRequired {
+            kind,
+            dasclaw_home,
+            action_hint,
+        } => SandboxStatusReport {
+            backend: backend_label(kind).to_string(),
+            ready: false,
+            dasclaw_home: Some(dasclaw_home.display().to_string()),
+            action_hint: Some(action_hint),
+        },
+        SandboxSetupStatus::Unavailable => SandboxStatusReport {
+            backend: "none".to_string(),
+            ready: false,
+            dasclaw_home: None,
+            action_hint: Some(
+                "No OS sandbox is wired on this platform; spawns run unsandboxed.".to_string(),
+            ),
+        },
+        // `SandboxSetupStatus` is `#[non_exhaustive]`; future variants
+        // land here until this matcher is updated.
+        _ => SandboxStatusReport {
+            backend: "unknown".to_string(),
+            ready: false,
+            dasclaw_home: None,
+            action_hint: Some(
+                "Unknown sandbox status variant; please update desktop-client.".to_string(),
+            ),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,5 +218,33 @@ mod tests {
         assert_eq!(report.backend, "macos_seatbelt");
         assert!(report.success);
         assert_eq!(report.stdout, "dasclaw");
+    }
+
+    #[tokio::test]
+    async fn status_returns_valid_backend_label() {
+        let r = ic_sandbox_status().await.expect("status must not error");
+        assert!(
+            [
+                "none",
+                "macos_seatbelt",
+                "linux_seccomp",
+                "windows_restricted_token",
+                "unknown",
+            ]
+            .contains(&r.backend.as_str()),
+            "unexpected backend label: {}",
+            r.backend
+        );
+        // Contract: ready=true ↔ action_hint=None.
+        assert_eq!(r.ready, r.action_hint.is_none());
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[tokio::test]
+    async fn status_is_ready_on_kernel_sandbox_platforms() {
+        let r = ic_sandbox_status().await.expect("status");
+        assert!(r.ready, "macOS/Linux kernel sandbox needs no setup");
+        assert!(r.dasclaw_home.is_none());
+        assert!(r.action_hint.is_none());
     }
 }

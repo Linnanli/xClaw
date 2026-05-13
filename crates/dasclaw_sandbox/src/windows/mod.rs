@@ -308,6 +308,38 @@ fn resolve_dasclaw_home() -> Result<PathBuf, SandboxError> {
     Ok(base.join("dasclaw"))
 }
 
+/// Backend for [`crate::sandbox_setup_status`] on Windows. Read-only
+/// inspection of `dasclaw_home` + `sandbox_setup_is_complete()`. Does **not**
+/// spawn the launcher or mutate any state — safe to call at process
+/// startup (epic #380 / issue #464).
+pub(crate) fn sandbox_setup_status_windows(kind: crate::SandboxType) -> crate::SandboxSetupStatus {
+    use crate::SandboxSetupStatus;
+
+    match resolve_dasclaw_home() {
+        Ok(dasclaw_home) => {
+            if sandbox_setup_is_complete(&dasclaw_home) {
+                SandboxSetupStatus::Ready { kind }
+            } else {
+                SandboxSetupStatus::SetupRequired {
+                    kind,
+                    dasclaw_home,
+                    action_hint: "Run dasclaw-sandbox-setup.exe (elevated). See \
+                         desktop-client/docs/windows-sandbox-setup-guide.md."
+                        .into(),
+                }
+            }
+        }
+        Err(e) => SandboxSetupStatus::SetupRequired {
+            kind,
+            dasclaw_home: PathBuf::from("<unresolved>"),
+            action_hint: format!(
+                "Cannot resolve dasclaw_home ({e}); set DASCLAW_HOME, then run \
+                 dasclaw-sandbox-setup.exe (elevated)."
+            ),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
