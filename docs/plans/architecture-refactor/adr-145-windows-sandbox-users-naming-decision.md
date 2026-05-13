@@ -208,7 +208,7 @@ ADR-114 §2 把 rebrand 工作分为：
 
 - **OQ-145-1** — Resolved：选 B 后 OS 命名空间不含 Codex 字面量，法务复核不再前置需要（`NOTICE` 文件仍保留 Apache-2.0 attribution）
 - **OQ-145-2** — Resolved：选 B 全 rename，`codex-resources` → `dasclaw-resources`（保持品牌一致；中性方案 `resources` 留作 future ADR，本轮不变）
-- **OQ-145-3** — 留 PR-migrate-script 实施：**默认实现双名清理**（10 LOC 弱防御），具体由 PR-migrate-script 落地
+- **OQ-145-3** — **Resolved**（B4-3 PR）：双名清理 PowerShell 脚本已写进 [`desktop-client/docs/windows-sandbox-setup-guide.md`](../../desktop-client/docs/windows-sandbox-setup-guide.md) §8.2，幂等可重跑，覆盖本地组 / 防火墙规则 / ProgramData 资源目录三处的 `CodexSandbox*` + `DasclawSandbox*` 双名残留。首发 B 路径机器无需运行；仅为 fork / 预发布构建残留兜底。
 
 ---
 
