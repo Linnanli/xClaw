@@ -1,0 +1,144 @@
+name: Windows Sandbox E2E
+
+# B4-5a (Issue #468): hosted GitHub Actions windows-latest 上跑 Windows OS
+# sandbox 的"能力 smoke + release 模式单测"，先验证 B4-5 评估文档
+# (docs/plans/architecture-refactor/b4-5-windows-runner-evaluation.md) 附录 A
+# 列出的未联网项：
+#   1. runner 是否 admin?
+#   2. 能否 `net user` 创建 / 删除本地账号?
+#   3. 能否 `netsh advfirewall` 增 / 删规则?
+#
+# 设计取舍：
+#   - 触发只接 workflow_dispatch + 每周日 schedule，**不接 PR**，确保非阻断
+#     （PR 流水线由现有 windows-ci.yml 兜底）
+#   - 不直接调用 `dasclaw-sandbox-setup.exe`：该 bin 是 privileged helper，
+#     需 orchestrator 构造 base64 payload；后续 PR 实现 orchestrator 端调用
+#   - cleanup step 用 `if: always()` 兜底，避免 smoke 中途失败留下残余账号 / 规则
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 每周日 04:00 UTC ≈ 北京时间周日 12:00（与 windows-ci.yml 错开 1 小时）
+    - cron: '0 4 * * 0'
+
+permissions:
+  contents: read
+
+# 资源命名集中常量，避免 cleanup 时漏字符
+env:
+  SMOKE_USER: dasclaw_b4_5a_smoke
+  SMOKE_FW_RULE: DasclawB45aSmoke
+
+jobs:
+  capability-smoke-and-release-tests:
+    name: Windows Sandbox E2E (capability smoke + release tests)
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-sandbox-e2e
+
+      # ---------- 能力 smoke：验证 B4-5 评估文档 §附录 A ----------
+
+      - name: Assert runner runs as Administrator
+        shell: pwsh
+        run: |
+          $groups = whoami /groups
+          if (-not ($groups -match 'BUILTIN\\Administrators')) {
+            Write-Error 'runner does not have BUILTIN\Administrators group; B4-5 evaluation §附录 A item #1 FAILED'
+            exit 1
+          }
+          Write-Host '[OK] runner is Administrator (B4-5 §附录 A item #1)'
+
+      - name: Smoke create + delete local user
+        shell: pwsh
+        run: |
+          $u = "${env:SMOKE_USER}"
+          net user $u /add /active:no /comment:"B4-5a CI smoke ephemeral" 2>&1 | Out-Host
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "net user /add FAILED for $u; B4-5 evaluation §附录 A item #2 FAILED"
+            exit 1
+          }
+          net user $u /delete 2>&1 | Out-Host
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "net user /delete FAILED for $u"
+            exit 1
+          }
+          Write-Host "[OK] net user add/delete works (B4-5 §附录 A item #2)"
+
+      - name: Smoke add + delete firewall rule
+        shell: pwsh
+        run: |
+          $r = "${env:SMOKE_FW_RULE}"
+          $bogus = Join-Path $env:TEMP 'dasclaw_b4_5a_nonexistent.exe'
+          netsh advfirewall firewall add rule name="$r" dir=out action=block program="$bogus" 2>&1 | Out-Host
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "netsh advfirewall add rule FAILED; B4-5 evaluation §附录 A item #3 FAILED"
+            exit 1
+          }
+          netsh advfirewall firewall delete rule name="$r" 2>&1 | Out-Host
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "netsh advfirewall delete rule FAILED"
+            exit 1
+          }
+          Write-Host "[OK] netsh advfirewall add/delete rule works (B4-5 §附录 A item #3)"
+
+      # ---------- 资源清理（即使 smoke 失败也跑） ----------
+
+      - name: Cleanup leftover smoke resources
+        if: always()
+        shell: pwsh
+        run: |
+          $u = "${env:SMOKE_USER}"
+          $r = "${env:SMOKE_FW_RULE}"
+          net user $u /delete 2>$null | Out-Null
+          netsh advfirewall firewall delete rule name="$r" 2>$null | Out-Null
+          Write-Host '[OK] cleanup pass complete (idempotent; ignores not-found)'
+
+      # ---------- release 模式 build + 全套单测 ----------
+
+      - name: Build dasclaw-sandbox-setup.exe (release)
+        shell: pwsh
+        run: |
+          cargo build --release -p dasclaw_sandbox_windows --bin dasclaw-sandbox-setup
+          $exe = 'target\release\dasclaw-sandbox-setup.exe'
+          if (-not (Test-Path $exe)) {
+            Write-Error "Expected $exe not found"
+            exit 1
+          }
+          Write-Host "[OK] $exe built ($(Get-Item $exe).Length bytes)"
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
+      - name: Run release-mode nextest for dasclaw_sandbox_windows
+        shell: pwsh
+        run: cargo nextest run --release -p dasclaw_sandbox_windows --no-fail-fast
+
+  # 聚合 job：为未来分支保护规则保留单一入口
+  windows-sandbox-e2e-success:
+    name: Windows Sandbox E2E Success
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [capability-smoke-and-release-tests]
+    steps:
+      - name: Aggregate result
+        run: |
+          result="${{ needs.capability-smoke-and-release-tests.result }}"
+          if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
+            echo "Windows Sandbox E2E failed"
+            exit 1
+          fi
+          echo "Windows Sandbox E2E OK (or skipped)"
