@@ -28,6 +28,20 @@
 /// 跨平台公开（serde 数据结构），便于本地测试与 macOS/Linux 构建检查通过。
 pub mod launcher_ipc;
 
+/// Issue #462 (B4-7) — Windows sandbox backend dispatch helpers
+/// (`Elevated` vs `RestrictedToken` runtime selection).
+///
+/// Cross-platform module so the decision matrix can be exercised in
+/// contract tests on any host; the actual `cfg(target_os = "windows")`
+/// adapter in `windows/mod.rs` consumes the same helper.
+pub mod windows_dispatch;
+
+/// Re-export of [`dasclaw_protocol::config_types::WindowsSandboxLevel`]
+/// so direct consumers of [`SandboxExecRequest`] don't need an extra
+/// `dasclaw_protocol` dependency just to populate
+/// [`SandboxExecRequest::windows_sandbox_level`] (issue #462 / B4-7).
+pub use dasclaw_protocol::config_types::WindowsSandboxLevel;
+
 // Shared backend-config → protocol-policy bridge used by both macOS
 // (Seatbelt) and Linux (helper wiring per ADR-144 §5.3 P1.2a) backends.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -446,6 +460,19 @@ pub struct SandboxExecRequest {
     pub policy: SandboxBackendConfig,
     pub preference: SandboxablePreference,
     pub windows_sandbox_enabled: bool,
+    /// Windows sandbox isolation tier (issue #462 / B4-7). Drives the
+    /// Windows backend's choice between the **restricted-token** entry
+    /// point (default, weaker isolation, no admin setup required at run
+    /// time) and the **elevated** entry point (full per-user firewall +
+    /// dedicated logon user, requires `dasclaw-sandbox-setup.exe`). See
+    /// [`crate::windows_dispatch::windows_sandbox_uses_elevated_backend`]
+    /// for the decision matrix. Ignored on macOS / Linux backends and
+    /// when `windows_sandbox_enabled == false`.
+    ///
+    /// Default = `WindowsSandboxLevel::Disabled` keeps the historical
+    /// (pre-#462) restricted-token path active even when callers haven't
+    /// migrated to setting the field explicitly.
+    pub windows_sandbox_level: dasclaw_protocol::config_types::WindowsSandboxLevel,
     /// Optional reference to the managed `NetworkProxy` for the calling
     /// session. macOS Seatbelt forwards this to
     /// `dasclaw_sandboxing::seatbelt::create_seatbelt_command_args` so the
@@ -707,6 +734,7 @@ mod tests {
             policy: SandboxPolicy::read_only_defaults(),
             preference: SandboxablePreference::Forbid,
             windows_sandbox_enabled: false,
+            windows_sandbox_level: dasclaw_protocol::config_types::WindowsSandboxLevel::Disabled,
             network: None,
         };
         let out = sb.execute(req).expect("kind=None should run");
@@ -723,6 +751,7 @@ mod tests {
             policy: SandboxPolicy::read_only_defaults(),
             preference: SandboxablePreference::Auto,
             windows_sandbox_enabled: false,
+            windows_sandbox_level: dasclaw_protocol::config_types::WindowsSandboxLevel::Disabled,
             network: None,
         };
         let err = sb.execute(req).unwrap_err();

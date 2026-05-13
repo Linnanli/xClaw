@@ -44,7 +44,9 @@ fn main() -> std::process::ExitCode {
 
     use dasclaw_sandbox::launcher_ipc::{LauncherRequest, LauncherResponse, PROTOCOL_VERSION};
     use dasclaw_sandbox::windows::job_object::{JobObject, OuterJobLimits};
+    use dasclaw_sandbox_windows::run_windows_sandbox_capture_elevated;
     use dasclaw_sandbox_windows::run_windows_sandbox_capture_with_extra_deny_write_paths;
+    use dasclaw_sandbox_windows::ElevatedSandboxCaptureRequest;
 
     fn write_response(resp: &LauncherResponse) -> std::io::Result<()> {
         let json = serde_json::to_vec(resp)
@@ -99,24 +101,53 @@ fn main() -> std::process::ExitCode {
         }
     };
 
-    let capture = match run_windows_sandbox_capture_with_extra_deny_write_paths(
-        &req.policy_json,
-        &req.cwd,
-        &req.dasclaw_home,
-        req.argv,
-        &req.cwd,
-        req.env,
-        None, // timeout — adapter 上层（OsExecutor）用 tokio timeout 包裹
-        // ADR-141 §3 PR-W3 / OQ-W3-2 (sign-off 2026-05-11): forward
-        // `SandboxBackendConfig::read_only_subpaths` as upstream
-        // `additional_deny_write_paths`, so upstream's `acl::add_deny_write_ace`
-        // installs Win32 DACL DENY ACEs on every carve-out path. Empty slice
-        // preserves Slice B1 behaviour bit-for-bit.
-        &req.additional_deny_write_paths,
-        req.use_private_desktop,
-    ) {
-        Ok(c) => c,
-        Err(e) => return fail(format!("run_windows_sandbox_capture: {e}"), 1),
+    let capture = if req.use_elevated_backend {
+        // Issue #462 (B4-7) — Elevated backend branch. v1: pass `None` for
+        // every filesystem override so upstream uses the policy_json
+        // defaults verbatim; future slices may surface real overrides
+        // through the IPC. `proxy_enforced` here mirrors the dispatch
+        // decision (helper returns `true` when either operator config or
+        // proxy demand it), so plumbing `true` keeps the elevated path's
+        // own firewall-mode logic consistent.
+        let request = ElevatedSandboxCaptureRequest {
+            policy_json_or_preset: req.policy_json.as_str(),
+            sandbox_policy_cwd: req.cwd.as_path(),
+            codex_home: req.dasclaw_home.as_path(),
+            command: req.argv,
+            cwd: req.cwd.as_path(),
+            env_map: req.env,
+            timeout_ms: None,
+            use_private_desktop: req.use_private_desktop,
+            proxy_enforced: true,
+            read_roots_override: None,
+            read_roots_include_platform_defaults: true,
+            write_roots_override: None,
+            deny_write_paths_override: req.additional_deny_write_paths.as_slice(),
+        };
+        match run_windows_sandbox_capture_elevated(request) {
+            Ok(c) => c,
+            Err(e) => return fail(format!("run_windows_sandbox_capture_elevated: {e}"), 1),
+        }
+    } else {
+        match run_windows_sandbox_capture_with_extra_deny_write_paths(
+            &req.policy_json,
+            &req.cwd,
+            &req.dasclaw_home,
+            req.argv,
+            &req.cwd,
+            req.env,
+            None, // timeout — adapter 上层（OsExecutor）用 tokio timeout 包裹
+            // ADR-141 §3 PR-W3 / OQ-W3-2 (sign-off 2026-05-11): forward
+            // `SandboxBackendConfig::read_only_subpaths` as upstream
+            // `additional_deny_write_paths`, so upstream's `acl::add_deny_write_ace`
+            // installs Win32 DACL DENY ACEs on every carve-out path. Empty slice
+            // preserves Slice B1 behaviour bit-for-bit.
+            &req.additional_deny_write_paths,
+            req.use_private_desktop,
+        ) {
+            Ok(c) => c,
+            Err(e) => return fail(format!("run_windows_sandbox_capture: {e}"), 1),
+        }
     };
 
     let resp = LauncherResponse {

@@ -161,6 +161,7 @@ mod tests {
             policy: SandboxPolicy::read_only_defaults(),
             preference: SandboxablePreference::Auto,
             windows_sandbox_enabled: false,
+            windows_sandbox_level: dasclaw_protocol::config_types::WindowsSandboxLevel::Disabled,
             network: None,
         };
         let args = sb.build_seatbelt_args(&req);
@@ -186,6 +187,7 @@ mod tests {
             policy: SandboxPolicy::read_only_defaults().with_writable("/tmp/work"),
             preference: SandboxablePreference::Auto,
             windows_sandbox_enabled: false,
+            windows_sandbox_level: dasclaw_protocol::config_types::WindowsSandboxLevel::Disabled,
             network: None,
         };
         let args = sb.build_seatbelt_args(&req);
@@ -227,6 +229,7 @@ mod tests {
             policy: SandboxPolicy::read_only_defaults(),
             preference: SandboxablePreference::Require,
             windows_sandbox_enabled: false,
+            windows_sandbox_level: dasclaw_protocol::config_types::WindowsSandboxLevel::Disabled,
             network: None,
         };
         let out = sb.execute(req).expect("seatbelt should run sh");
@@ -248,6 +251,7 @@ mod tests {
             policy: SandboxPolicy::read_only_defaults(),
             preference: SandboxablePreference::Require,
             windows_sandbox_enabled: false,
+            windows_sandbox_level: dasclaw_protocol::config_types::WindowsSandboxLevel::Disabled,
             network: None,
         };
         let out = sb.execute(req).expect("seatbelt should run echo");
@@ -281,6 +285,7 @@ mod tests {
             policy,
             preference: SandboxablePreference::Require,
             windows_sandbox_enabled: false,
+            windows_sandbox_level: dasclaw_protocol::config_types::WindowsSandboxLevel::Disabled,
             network: None,
         };
         let out = sb.execute(req).expect("seatbelt should run sh");
@@ -369,6 +374,7 @@ mod tests {
             policy: SandboxPolicy::read_only_defaults(),
             preference: SandboxablePreference::Require,
             windows_sandbox_enabled: false,
+            windows_sandbox_level: dasclaw_protocol::config_types::WindowsSandboxLevel::Disabled,
             network: Some(proxy),
         };
 
@@ -398,6 +404,7 @@ mod tests {
             policy: SandboxPolicy::read_only_defaults(),
             preference: SandboxablePreference::Require,
             windows_sandbox_enabled: false,
+            windows_sandbox_level: dasclaw_protocol::config_types::WindowsSandboxLevel::Disabled,
             network: None,
         };
 

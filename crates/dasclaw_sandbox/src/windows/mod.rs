@@ -170,6 +170,15 @@ impl Sandbox for WindowsRestrictedTokenSandbox {
             // 来下发 Win32 DACL DENY ACE（kernel-enforced read-only holes
             // inside writable workspaces）。空 Vec 时维持 Slice B1 行为。
             additional_deny_write_paths: req.policy.read_only_subpaths.clone(),
+            // Issue #462 (B4-7) — decide elevated vs restricted-token
+            // backend mirroring codex `exec.rs::windows_sandbox_uses_elevated_backend`.
+            // `proxy_enforced` = LLM/HTTP proxy in front of the sandboxed
+            // command (req.network is Some), since Windows firewall
+            // enforcement is tied to the logon-user identity.
+            use_elevated_backend: crate::windows_dispatch::windows_sandbox_uses_elevated_backend(
+                req.windows_sandbox_level,
+                req.network.is_some(),
+            ),
         };
 
         launcher_client::spawn_and_capture(request)

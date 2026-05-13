@@ -105,6 +105,13 @@ pub struct SandboxedExecutor {
     policy: SandboxPolicy,
     sandbox_pref: SandboxablePreference,
     windows_sandbox_enabled: bool,
+    /// Windows sandbox isolation tier (issue #462 / B4-7). Forwarded as
+    /// [`dasclaw_sandbox::SandboxExecRequest::windows_sandbox_level`] so the
+    /// Windows backend can pick between the restricted-token entry point
+    /// (default) and the elevated entry point. Default = `Disabled` keeps
+    /// the pre-#462 restricted-token behaviour for callers that haven't
+    /// migrated to the new builder API yet.
+    windows_sandbox_level: dasclaw_sandbox::WindowsSandboxLevel,
     /// 会话级 [`NetworkProxy`]，构造期注入。macOS Seatbelt 后端将其转译为
     /// `(allow network-outbound (remote ip "localhost:<port>"))` sbpl 规则，
     /// 让沙箱内子进程的 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量真正生效
@@ -137,9 +144,23 @@ impl SandboxedExecutor {
             policy,
             sandbox_pref,
             windows_sandbox_enabled,
+            windows_sandbox_level: dasclaw_sandbox::WindowsSandboxLevel::Disabled,
             network,
             linux_sandbox_exe: None,
         }
+    }
+
+    /// Configure the Windows sandbox isolation tier (issue #462 / B4-7).
+    ///
+    /// Enterprise deployments pin this at build time or push it through
+    /// the admin backend; the desktop client itself does **not** expose a
+    /// UI dropdown for it. Ignored on macOS / Linux backends.
+    pub fn with_windows_sandbox_level(
+        mut self,
+        level: dasclaw_sandbox::WindowsSandboxLevel,
+    ) -> Self {
+        self.windows_sandbox_level = level;
+        self
     }
 
     /// 配置 `dasclaw-sandbox-linux` helper 二进制路径（ADR-144 §5.3 P1.2a）。
@@ -188,6 +209,7 @@ impl SandboxedExecutor {
             policy: backend,
             preference: self.sandbox_pref,
             windows_sandbox_enabled: self.windows_sandbox_enabled,
+            windows_sandbox_level: self.windows_sandbox_level,
             network: self.network.clone(),
         })
     }

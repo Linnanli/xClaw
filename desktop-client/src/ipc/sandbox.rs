@@ -11,7 +11,7 @@
 
 use dasclaw_sandbox::{
     sandbox_setup_status, select_backend, SandboxExecRequest, SandboxPolicy, SandboxSetupStatus,
-    SandboxType, SandboxablePreference,
+    SandboxType, SandboxablePreference, WindowsSandboxLevel,
 };
 use serde::Serialize;
 use std::process::Command;
@@ -83,6 +83,7 @@ fn run_smoke_blocking() -> Result<SandboxSmokeReport, String> {
         policy: SandboxPolicy::read_only_defaults(),
         preference: SandboxablePreference::Auto,
         windows_sandbox_enabled: false,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
         // Wave-C2a: smoke-test 路径不需要本地代理洞穿；保持 None。
         network: None,
     };
