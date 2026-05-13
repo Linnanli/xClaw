@@ -14,7 +14,7 @@
 //!   **本切片采用**。
 //!
 //! 文件系统的 kernel 层兜底由调用方使用
-//! [`ironclaw_workspace_cap`](https://github.com/dbappsecurity/x-claw/tree/main/crates/ironclaw_workspace_cap)
+//! [`dasclaw_workspace_cap`](https://github.com/dbappsecurity/x-claw/tree/main/crates/dasclaw_workspace_cap)
 //! 完成 — 那是 cap-std 应用层 FS 边界，与本 kernel 层 sandbox 互补。
 //!
 //! ## seccomp 应用模型

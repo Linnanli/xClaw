@@ -22,7 +22,7 @@ use dasclaw_net_proxy::{
     NetworkProxyConstraints, NetworkProxyState, build_config_state,
 };
 use dasclaw_sandbox::SandboxablePreference;
-use ironclaw_workspace_cap::SandboxPolicy;
+use dasclaw_workspace_cap::SandboxPolicy;
 
 struct NoopReloader;
 

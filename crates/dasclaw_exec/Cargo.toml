@@ -3,7 +3,7 @@ name = "dasclaw_exec"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.92"
-description = "W2.6 整合层：把 ironclaw_workspace_cap 的高层 SandboxPolicy 转成 dasclaw_sandbox 的内核配置，提供 ProcessExecutor 抽象统一 tool 执行入口"
+description = "W2.6 整合层：把 dasclaw_workspace_cap 的高层 SandboxPolicy 转成 dasclaw_sandbox 的内核配置，提供 ProcessExecutor 抽象统一 tool 执行入口"
 authors = ["x-claw contributors"]
 license = "MIT OR Apache-2.0"
 publish = false
@@ -17,7 +17,7 @@ async-trait = "0.1"
 thiserror = "1"
 
 # 上层政策：高层 SandboxPolicy enum + WritableRoot 洞中洞决策
-ironclaw_workspace_cap = { path = "../ironclaw_workspace_cap" }
+dasclaw_workspace_cap = { path = "../dasclaw_workspace_cap" }
 # 下层内核：跨平台沙箱执行
 dasclaw_sandbox = { path = "../dasclaw_sandbox" }
 # 网络代理：SandboxedExecutor 可注入会话级 NetworkProxy 以驱动 macOS Seatbelt

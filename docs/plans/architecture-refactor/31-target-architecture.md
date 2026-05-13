@@ -74,7 +74,7 @@ flowchart TB
         CRASH["dasclaw_crash<br/>(新建：panic hook + sentry 上报<br/>四方公共缺口补齐)"]
         NETP["dasclaw_net_proxy<br/>(codex network-proxy port，rama 框架<br/>HTTP_PROXY / 自签 CA / MITM)"]
         AUTH["ironclaw_auth<br/>(已存在 + 补 token refresh 流)"]
-        WSC["ironclaw_workspace_cap<br/>(已存在)"]
+        WSC["dasclaw_workspace_cap<br/>(已存在)"]
     end
 
     UI --> IPC
@@ -269,7 +269,7 @@ flowchart TB
 ### 4.4 保留（已存在，无需新建）
 
 - `crates/ironclaw_auth` — 鉴权
-- `crates/ironclaw_workspace_cap` — 工作区能力
+- `crates/dasclaw_workspace_cap` — 工作区能力
 - `desktop-client/ironclaw/crates/ironclaw_safety` → 升级为 `crates/dasclaw_safety`（移到顶层 workspace）
 - `desktop-client/ironclaw/crates/ironclaw_common` → 升级为 `crates/dasclaw_common`
 
@@ -380,7 +380,7 @@ flowchart LR
         XSF[dasclaw_safety]
         XCM[dasclaw_common]
         IA[ironclaw_auth]
-        IWC[ironclaw_workspace_cap]
+        IWC[dasclaw_workspace_cap]
     end
     subgraph upstream["上游 ironclaw"]
         IC[ironclaw-main 0.26+<br/>llm/channels/memory/routines/secrets/doc/skills/extensions]

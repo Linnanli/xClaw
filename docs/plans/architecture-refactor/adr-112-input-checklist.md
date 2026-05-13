@@ -112,7 +112,7 @@
 
 | 层 | 能力 | 实现位置 |
 |---|---|---|
-| L1 | 主进程 FS 防护 (cap_std TOCTOU-safe) | `crates/ironclaw_workspace_cap/` (568 行) |
+| L1 | 主进程 FS 防护 (cap_std TOCTOU-safe) | `crates/dasclaw_workspace_cap/` (568 行) |
 | L2 | 子进程沙箱（三平台 OS-native） | 已 W3.3 完成（dasclaw_sandbox 三平台） |
 | L3 | 容器沙箱 host (Docker + proxy + allowlist) | `desktop-client/ironclaw/src/sandbox/` (3611 行) |
 | L4 | 工具沙箱 (WASM + capability opt-in) | `desktop-client/ironclaw/src/tools/wasm/` (15 文件 ~3000 行) |
@@ -222,14 +222,14 @@ parent agentic_loop
 
 ```
 Tenant A 创建 session
-  → ironclaw_workspace_cap::WorkspaceRoot::open(tenant_a_root)
+  → dasclaw_workspace_cap::WorkspaceRoot::open(tenant_a_root)
   → 所有 fs 调用必须穿过 tenant_a_root capability
   → Tenant B 同时创建 session
   → 两个 session 互不可见 fs / secrets / context
 ```
 
 **关键代码点**：
-- `crates/ironclaw_workspace_cap/src/lib.rs` (568 行)
+- `crates/dasclaw_workspace_cap/src/lib.rs` (568 行)
 - `desktop-client/ironclaw/src/secrets/store.rs`（按 tenant 分区）
 - admin-backend 多租户配置（待补 §1.4 的 RBAC）
 
@@ -262,14 +262,14 @@ Tenant A 创建 session
 
 | 指标 | 阈值 | 检测点 |
 |---|---|---|
-| 跨租户 fs 读 | 0 | `ironclaw_workspace_cap` capability check |
+| 跨租户 fs 读 | 0 | `dasclaw_workspace_cap` capability check |
 | 跨租户 secrets 读 | 0 | `secrets/store.rs` tenant filter |
 | 跨租户 session 列 | 0 | `session_manager` tenant 分区 |
 | 跨租户 audit log 读 | 0 | admin-backend RBAC 检查 |
 | Tenant ID 注入 (路径 / header / body) | 自动拒绝 | API 入口 middleware |
 
 需归并的资产：
-- `crates/ironclaw_workspace_cap/src/{lib,policy}.rs`
+- `crates/dasclaw_workspace_cap/src/{lib,policy}.rs`
 - admin-backend 多租户 SQL（待 §1.3 §1 RBAC 补完后定）
 
 ---
