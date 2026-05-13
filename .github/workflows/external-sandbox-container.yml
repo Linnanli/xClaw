@@ -1,0 +1,124 @@
+# B6-1b — ExternalSandbox 嵌套契约 CI workflow
+#
+# Issue:  https://github.com/Linnanli/xClaw/issues/472
+# Source: docs/plans/architecture-refactor/32-execution-plan.md §W2 验收
+#         "ExternalSandbox 嵌套测试"
+#
+# 设计：
+#   1. ubuntu-22.04 runner（glibc 2.35，与容器内 debian:bookworm-slim 的
+#      glibc 2.36 兼容）
+#   2. cargo test --no-run 在 runner 本机编译测试 binary（命中 cache）
+#   3. 容器运行：`--network none --read-only --tmpfs /tmp`，把 binary 以
+#      只读卷挂进去——这是 ExternalSandbox 嵌套契约的真实重放环境
+#   4. 不用 docker-in-docker、不用 --privileged、不需要 host sudo
+#
+# 为什么不直接在 runner 上 `cargo test`：
+#   那只覆盖 "ExternalSandbox 类型层不变量"。本 workflow 的价值是
+#   把测试 binary 放进**真实裸容器**里跑——若 ExternalSandbox 误启
+#   内层 sandbox，缺 CAP_SYS_ADMIN 会让 bwrap/landlock 初始化失败，
+#   测试就会炸。这是非容器环境下捕不到的回归。
+#
+# 范围限定（非目标，见 issue #472）：
+#   - 不引入 docker-in-docker
+#   - 不主动管理容器作为内建沙箱
+#   - 不改 `dasclaw_sandboxing/src/*.rs`（drift guard 守护）
+
+name: external-sandbox-container
+
+on:
+  pull_request:
+    paths:
+      - 'crates/dasclaw_sandboxing/**'
+      - 'crates/dasclaw_protocol/src/permissions.rs'
+      - 'crates/dasclaw_protocol/src/protocol.rs'
+      - 'ci/external-sandbox/**'
+      - '.github/workflows/external-sandbox-container.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  external-sandbox-nested:
+    name: ExternalSandbox nested contract (linux container)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: external-sandbox-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            external-sandbox-${{ runner.os }}-
+
+      # 单独编译测试 binary，避免 build 整个 workspace。
+      - name: Build req_external_sandbox_container test binary
+        run: |
+          cargo test --no-run \
+            -p dasclaw_sandboxing \
+            --test req_external_sandbox_container \
+            --message-format=json \
+            | tee /tmp/cargo-build.json
+
+      # 从 cargo --message-format=json 输出里精确抓出 binary 路径，
+      # 不再 `find target/debug/deps -name '...'`（避免 SHA suffix 多版本）
+      - name: Locate test binary
+        id: locate
+        run: |
+          BIN=$(python3 -c "
+          import json, sys
+          path = None
+          with open('/tmp/cargo-build.json') as f:
+              for line in f:
+                  msg = json.loads(line)
+                  if msg.get('reason') != 'compiler-artifact':
+                      continue
+                  if msg.get('profile', {}).get('test') is not True:
+                      continue
+                  target = msg.get('target', {})
+                  if target.get('name') != 'req_external_sandbox_container':
+                      continue
+                  exe = msg.get('executable')
+                  if exe:
+                      path = exe
+          if not path:
+              print('ERR: test binary not found in cargo output', file=sys.stderr)
+              sys.exit(1)
+          print(path)
+          ")
+          echo "Test binary: $BIN"
+          test -x "$BIN" || { echo "binary not executable"; exit 1; }
+          echo "bin=$BIN" >> "$GITHUB_OUTPUT"
+
+      - name: Build container image
+        run: docker build -f ci/external-sandbox/Dockerfile -t xclaw-external-sandbox-test .
+
+      # 关键步骤：--network none --read-only --tmpfs /tmp 真实复现
+      # "外层 docker 已隔离" 的运行环境。binary 通过只读 bind mount 进入。
+      - name: Run nested contract tests inside container
+        run: |
+          docker run --rm \
+            --network none \
+            --read-only \
+            --tmpfs /tmp:rw,size=64m \
+            -v "${{ steps.locate.outputs.bin }}:/test:ro" \
+            xclaw-external-sandbox-test \
+            /test --nocapture --test-threads=1
+
+      - name: Show container info on failure
+        if: failure()
+        run: |
+          echo "=== docker info ==="
+          docker info || true
+          echo "=== image labels ==="
+          docker inspect xclaw-external-sandbox-test || true
