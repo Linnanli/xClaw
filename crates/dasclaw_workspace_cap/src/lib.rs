@@ -33,7 +33,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use ironclaw_workspace_cap::WorkspaceCapability;
+//! use dasclaw_workspace_cap::WorkspaceCapability;
 //!
 //! let ws = WorkspaceCapability::open("/home/user/project").unwrap();
 //! ws.write("notes/todo.md", b"hello").unwrap();

@@ -7,7 +7,7 @@
 //! ## 政策映射
 //!
 //! 旧 [`super::config::SandboxPolicy`] 只有 3 变体（ReadOnly /
-//! WorkspaceWrite / FullAccess），对应 [`ironclaw_workspace_cap::policy::SandboxPolicy`]
+//! WorkspaceWrite / FullAccess），对应 [`dasclaw_workspace_cap::policy::SandboxPolicy`]
 //! 的 4 变体精确表达：
 //!
 //! | 旧 | 新（workspace_cap） | 备注 |
@@ -50,7 +50,7 @@ pub struct ExecOutput {
     /// Whether output was truncated.
     pub truncated: bool,
 }
-use ironclaw_workspace_cap::policy::SandboxPolicy as CapPolicy;
+use dasclaw_workspace_cap::policy::SandboxPolicy as CapPolicy;
 
 use super::config::SandboxPolicy;
 use super::error::{Result, SandboxError};

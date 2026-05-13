@@ -65,7 +65,7 @@ dasclaw_absolute_path = { path = "../dasclaw_absolute_path" }
 # 选型理由（详见 docs/plans/architecture-refactor/32 §W2.3）：
 #   - codex `linux-sandbox` 的主路径是 bubblewrap (2,005 LOC) + seccomp (343 LOC)；
 #     landlock 在 codex 自己已经标注为 legacy/backup。
-#   - 文件系统限制由进程内 `ironclaw_workspace_cap` (cap-std) 兜底，
+#   - 文件系统限制由进程内 `dasclaw_workspace_cap` (cap-std) 兜底，
 #     与 dasclaw_sandbox kernel 层互补不重叠。
 #   - 不引入外部 bwrap setuid 依赖，部署更轻。
 #

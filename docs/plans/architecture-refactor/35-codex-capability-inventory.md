@@ -183,7 +183,7 @@ impl WritableRoot {
 
 ### 2.5 对 dasclaw_workspace_cap 的启示
 
-ironclaw_workspace_cap 当前是 **kernel-level 强制层**（cap-std），但**缺策略层**。codex SandboxPolicy 是**纯协议层**，用 cap-std 无法直接实现（cap-std 不支持反向 RO 覆盖）。
+dasclaw_workspace_cap 当前是 **kernel-level 强制层**（cap-std），但**缺策略层**。codex SandboxPolicy 是**纯协议层**，用 cap-std 无法直接实现（cap-std 不支持反向 RO 覆盖）。
 
 **建议路径（W2 进场）**：
 - **保留** dasclaw_workspace_cap 现有 cap-std 实现作为**最低强制基线**

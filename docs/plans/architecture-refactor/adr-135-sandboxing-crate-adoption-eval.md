@@ -54,8 +54,8 @@
 
 **关键差异（已三层验证）**：
 - dasclaw_sandbox 的 macOS 路径调用 `sandbox-exec` 但**不自己生成 sbpl**——使用静态硬编码 + 占位
-- dasclaw_sandbox 的 Linux 路径**完全没有 landlock**——只有 seccomp（按 ADR §W2.3 决议，把文件系统限制留给 `ironclaw_workspace_cap` 进程内 cap-std）
-- dasclaw_sandbox 的 Windows 路径**只有资源限制，没有 ACL DENY**——文件系统强制由 `ironclaw_workspace_cap` 兜底
+- dasclaw_sandbox 的 Linux 路径**完全没有 landlock**——只有 seccomp（按 ADR §W2.3 决议，把文件系统限制留给 `dasclaw_workspace_cap` 进程内 cap-std）
+- dasclaw_sandbox 的 Windows 路径**只有资源限制，没有 ACL DENY**——文件系统强制由 `dasclaw_workspace_cap` 兜底
 
 > 这就是 #324 sub-task 2 的痛点：现行 `WritableRoot` 是**进程内自律式**（cap-std 拦 syscall）而非**内核强制**（kernel 拒绝 syscall）。逃逸窗口存在于"恶意代码绕过 cap-std 直接发 raw syscall"。
 

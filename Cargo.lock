@@ -2655,6 +2655,7 @@ dependencies = [
  "dasclaw_net_proxy",
  "dasclaw_process_hardening",
  "dasclaw_sandbox",
+ "dasclaw_workspace_cap",
  "deadpool-postgres",
  "dirs 6.0.0",
  "dotenvy",
@@ -2675,7 +2676,6 @@ dependencies = [
  "insta",
  "ironclaw_common",
  "ironclaw_safety",
- "ironclaw_workspace_cap",
  "json5",
  "jsonwebtoken 9.3.1",
  "libsql",
@@ -2812,7 +2812,7 @@ dependencies = [
  "async-trait",
  "dasclaw_net_proxy",
  "dasclaw_sandbox",
- "ironclaw_workspace_cap",
+ "dasclaw_workspace_cap",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -3176,6 +3176,17 @@ version = "0.0.0-w7"
 dependencies = [
  "pretty_assertions",
  "regex-lite",
+]
+
+[[package]]
+name = "dasclaw_workspace_cap"
+version = "0.1.0"
+dependencies = [
+ "cap-std 4.0.2",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -5743,17 +5754,6 @@ dependencies = [
  "tracing",
  "url",
  "x_claw_agent",
-]
-
-[[package]]
-name = "ironclaw_workspace_cap"
-version = "0.1.0"
-dependencies = [
- "cap-std 4.0.2",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
 ]
 
 [[package]]

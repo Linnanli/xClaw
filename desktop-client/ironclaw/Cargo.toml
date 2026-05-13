@@ -132,7 +132,7 @@ dasclaw_cert_trust = { path = "../../crates/dasclaw_cert_trust", version = "=0.0
 dasclaw_hooks = { path = "../../crates/dasclaw_hooks", version = "0.1.0" }
 # W3 #53: codex-protocol apply_patch parser + minimal apply layer
 dasclaw_apply_patch = { path = "../../crates/dasclaw_apply_patch", version = "0.0.0-w1" }
-ironclaw_workspace_cap = { path = "../../crates/ironclaw_workspace_cap", version = "0.1.0" }
+dasclaw_workspace_cap = { path = "../../crates/dasclaw_workspace_cap", version = "0.1.0" }
 
 # Safety/sanitization
 ironclaw_safety = { path = "crates/ironclaw_safety", version = "0.2.0", features = ["agent-hook"] }

@@ -14,7 +14,7 @@
 //!   *backend-level* knobs the sandbox kernel needs (writable roots, proxy
 //!   ports, network/spawn flags). It is intentionally *flatter* than the
 //!   codex `SandboxPolicy` enum — the higher-level policy enum lives in
-//!   `ironclaw_workspace_cap::policy::SandboxPolicy` and is converted to
+//!   `dasclaw_workspace_cap::policy::SandboxPolicy` and is converted to
 //!   `SandboxBackendConfig` by `dasclaw_exec` at execution time.
 //!   `SandboxPolicy` remains as a **deprecated alias** for transition.
 //! - Three platform backends gated by `cfg(target_os = ...)` like codex.
@@ -231,7 +231,7 @@ impl ResourceLimits {
 ///
 /// This struct is intentionally flatter than codex's `SandboxPolicy` enum.
 /// The higher-level policy enum lives in
-/// `ironclaw_workspace_cap::policy::SandboxPolicy` and is converted to this
+/// `dasclaw_workspace_cap::policy::SandboxPolicy` and is converted to this
 /// struct by `dasclaw_exec` (or any caller) at execution time.
 #[derive(Clone, Debug, Default)]
 pub struct SandboxBackendConfig {
@@ -242,7 +242,7 @@ pub struct SandboxBackendConfig {
     /// holes" carve-outs (`.git/`, `.dasclaw/`, `.codex/`, etc.).
     ///
     /// Populated by `dasclaw_exec::policy_to_backend_config_with_env` from
-    /// [`ironclaw_workspace_cap::policy::WritableRoot::read_only_subpaths`]
+    /// [`dasclaw_workspace_cap::policy::WritableRoot::read_only_subpaths`]
     /// for every writable root.
     ///
     /// **Per-backend semantics** (ADR-141 §3 PR-W3, OQ-W3-1/W3-4 sign-off

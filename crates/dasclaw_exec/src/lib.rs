@@ -1,6 +1,6 @@
 //! `dasclaw_exec` — W2.6 整合层。
 //!
-//! 把 [`ironclaw_workspace_cap::policy::SandboxPolicy`]（高层 4-tier enum，
+//! 把 [`dasclaw_workspace_cap::policy::SandboxPolicy`]（高层 4-tier enum，
 //! 与 codex 协议对齐）转成 [`dasclaw_sandbox::SandboxBackendConfig`]
 //! （内核级配置），并提供 [`ProcessExecutor`] 抽象，让 tool 调用方无需
 //! 自己组装 sandbox + policy + cwd 的胶水。
@@ -12,7 +12,7 @@
 //!   起，macOS 上由 `dasclaw_sandbox` 委托给 `dasclaw_sandboxing::seatbelt` 在
 //!   sbpl 中表达，sandbox-exec 内核层强制 `.git/`、`.dasclaw/`、`.codex/` 等
 //!   敏感子路径仅读不可写；`is_path_writable` 用户态决策仍然作为第一道关，
-//!   [`ironclaw_workspace_cap::WorkspaceCap`] 的 cap-std 文件接口在策略层做
+//!   [`dasclaw_workspace_cap::WorkspaceCap`] 的 cap-std 文件接口在策略层做
 //!   二次拒绝。Windows 上自 ADR-141 §3 PR-W3（Wave-C1b，PR #426）起由
 //!   `dasclaw_sandbox_windows::run_windows_sandbox_capture_with_extra_deny_write_paths`
 //!   把 `read_only_subpaths` 翻译为 Win32 DACL DENY entries，Windows 沙箱内核层
@@ -28,7 +28,7 @@
 //! ```no_run
 //! use dasclaw_exec::{ExecRequest, ProcessExecutor, SandboxedExecutor};
 //! use dasclaw_sandbox::SandboxablePreference;
-//! use ironclaw_workspace_cap::policy::SandboxPolicy;
+//! use dasclaw_workspace_cap::policy::SandboxPolicy;
 //! use std::process::Command;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -57,7 +57,7 @@ use dasclaw_sandbox::{
     ResourceLimits, SandboxBackendConfig, SandboxError, SandboxExecRequest, SandboxablePreference,
     select_backend,
 };
-use ironclaw_workspace_cap::policy::{NetworkAccess, SandboxPolicy};
+use dasclaw_workspace_cap::policy::{NetworkAccess, SandboxPolicy};
 
 /// 错误统一入口。
 #[derive(Debug, thiserror::Error)]
@@ -99,7 +99,7 @@ pub trait ProcessExecutor: Send + Sync {
     fn execute(&self, req: ExecRequest) -> Result<Output, ExecError>;
 }
 
-/// 默认实现：基于 [`ironclaw_workspace_cap::policy::SandboxPolicy`] +
+/// 默认实现：基于 [`dasclaw_workspace_cap::policy::SandboxPolicy`] +
 /// [`dasclaw_sandbox`] 的组合执行器。
 pub struct SandboxedExecutor {
     policy: SandboxPolicy,
@@ -216,7 +216,7 @@ impl ProcessExecutor for SandboxedExecutor {
 ///
 /// | 平台 | 内核层（kernel-enforced） | 用户态兜底 |
 /// |------|---------------------------|-----------|
-/// | macOS | ✅ 通过 `dasclaw_sandboxing::seatbelt` 在 sbpl 中表达 `(deny file-write* (subpath ".git/.codex/.dasclaw"))`（ADR-135 §3 PR-C1 / Wave-C1a） | [`ironclaw_workspace_cap`] cap-std + `is_path_writable` 第一道关 |
+/// | macOS | ✅ 通过 `dasclaw_sandboxing::seatbelt` 在 sbpl 中表达 `(deny file-write* (subpath ".git/.codex/.dasclaw"))`（ADR-135 §3 PR-C1 / Wave-C1a） | [`dasclaw_workspace_cap`] cap-std + `is_path_writable` 第一道关 |
 /// | Windows | ✅ 通过 `dasclaw_sandbox_windows::run_windows_sandbox_capture_with_extra_deny_write_paths` 把 `read_only_subpaths` 翻译为 Win32 DACL DENY entries（ADR-141 §3 PR-W3 / Wave-C1b，PR #426） | 同上 |
 /// | Linux | ✅ 通过 `dasclaw_sandbox_linux` setuid binary + `dasclaw_sandboxing::landlock` 把 `read_only_subpaths` 翻译为 bubblewrap `--ro-bind` 嵌套 + Landlock V5 `path_beneath_rules`（ADR-144 / Wave-C1c，PR #444+#445+#448+#451+#453） | 同上 |
 ///
@@ -327,7 +327,7 @@ pub fn policy_to_backend_config_with_env(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ironclaw_workspace_cap::policy::SandboxPolicy;
+    use dasclaw_workspace_cap::policy::SandboxPolicy;
 
     #[test]
     fn danger_full_access_maps_to_root_writable() {
