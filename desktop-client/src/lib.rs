@@ -184,6 +184,11 @@ macro_rules! all_tauri_commands {
             desktop_client::ipc::ic_fork_thread,
             // ── Sandbox（W2 ADR-110 接线，dasclaw_sandbox）─────
             desktop_client::ipc::ic_sandbox_smoke_test,
+            // B4-2 (issue #464): startup readiness check for the
+            // platform sandbox. On Windows surfaces "setup pending" so
+            // the UI can prompt the operator to run
+            // dasclaw-sandbox-setup.exe.
+            desktop_client::ipc::ic_sandbox_status,
         ]
     };
 }

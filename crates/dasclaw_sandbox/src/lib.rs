@@ -463,6 +463,70 @@ pub trait Sandbox {
     fn execute(&self, req: SandboxExecRequest) -> Result<std::process::Output, SandboxError>;
 }
 
+/// Status of the platform sandbox infrastructure as observed at startup.
+///
+/// On macOS/Linux the kernel sandbox (Seatbelt / Landlock + seccomp) is
+/// always available without operator action, so the status is
+/// [`SandboxSetupStatus::Ready`].
+///
+/// On Windows the sandbox requires a one-time elevated setup
+/// (`dasclaw-sandbox-setup.exe` — see ADR-145 and
+/// `desktop-client/docs/windows-sandbox-setup-guide.md`) that materialises
+/// per-user accounts, a marker file and DPAPI state under `dasclaw_home`.
+/// Until that runs, [`SandboxSetupStatus::SetupRequired`] is returned and
+/// callers (notably the desktop-client startup hook, epic #380 / issue
+/// #464) should surface a UX prompt directing the operator to run setup.
+///
+/// `#[non_exhaustive]` so future platforms can add variants without
+/// breaking out-of-crate `match` sites.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SandboxSetupStatus {
+    /// Platform sandbox infrastructure is ready or does not require setup.
+    Ready { kind: SandboxType },
+    /// Platform sandbox requires a one-time elevated setup before use.
+    SetupRequired {
+        kind: SandboxType,
+        /// Path inspected for setup state (so the UI can show
+        /// "expected setup root: …").
+        dasclaw_home: PathBuf,
+        /// Translation-friendly English hint describing the operator
+        /// action required to clear the `SetupRequired` state. The
+        /// front-end may localise / reword it; the Rust layer keeps it
+        /// stable as a fallback.
+        action_hint: String,
+    },
+    /// No OS-level sandbox is wired on this platform / configuration; a
+    /// spawn with `SandboxablePreference::Auto` falls back to
+    /// `NoopSandbox`. Returned on Windows when `windows_sandbox_enabled`
+    /// is `false`, and on any unsupported target OS.
+    Unavailable,
+}
+
+/// Inspect platform sandbox infrastructure readiness.
+///
+/// Pure read-only check: never blocks, never spawns a child, never mutates
+/// filesystem state. Safe to call from a process-startup hook (desktop-client
+/// uses this in `ic_sandbox_status` per epic #380 / issue #464).
+///
+/// `windows_sandbox_enabled` mirrors [`get_platform_sandbox`]: on Windows,
+/// passing `false` short-circuits to [`SandboxSetupStatus::Unavailable`]
+/// (the OS sandbox is opt-in there). For a startup readiness check the
+/// caller typically passes `true` so an un-setup install is surfaced even
+/// before the user opts in.
+pub fn sandbox_setup_status(windows_sandbox_enabled: bool) -> SandboxSetupStatus {
+    let Some(kind) = get_platform_sandbox(windows_sandbox_enabled) else {
+        return SandboxSetupStatus::Unavailable;
+    };
+
+    #[cfg(target_os = "windows")]
+    if matches!(kind, SandboxType::WindowsRestrictedToken) {
+        return windows::sandbox_setup_status_windows(kind);
+    }
+
+    SandboxSetupStatus::Ready { kind }
+}
+
 /// Resolve `pref` + platform → concrete backend.
 pub fn select_backend(
     pref: SandboxablePreference,
@@ -576,6 +640,54 @@ mod tests {
             let r = select_backend(SandboxablePreference::Require, false);
             assert!(matches!(r, Err(SandboxError::PlatformUnavailable)));
         }
+    }
+
+    #[test]
+    fn setup_status_is_pure_and_does_not_panic() {
+        // Pure read-only inspection; must be safe at startup regardless
+        // of host state. We only assert the call does not panic and
+        // returns a valid variant — host-specific assertions follow.
+        let _ = sandbox_setup_status(true);
+        let _ = sandbox_setup_status(false);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn setup_status_macos_is_ready() {
+        let s = sandbox_setup_status(true);
+        assert!(
+            matches!(
+                s,
+                SandboxSetupStatus::Ready {
+                    kind: SandboxType::MacosSeatbelt
+                }
+            ),
+            "macOS Seatbelt is kernel-provided; expected Ready"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn setup_status_linux_is_ready() {
+        let s = sandbox_setup_status(true);
+        assert!(
+            matches!(
+                s,
+                SandboxSetupStatus::Ready {
+                    kind: SandboxType::LinuxSeccomp
+                }
+            ),
+            "Linux Landlock+seccomp is kernel-provided; expected Ready"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn setup_status_windows_disabled_is_unavailable() {
+        // windows_sandbox_enabled=false → get_platform_sandbox returns
+        // None on Windows → Unavailable, no FS inspection.
+        let s = sandbox_setup_status(false);
+        assert_eq!(s, SandboxSetupStatus::Unavailable);
     }
 
     #[test]
