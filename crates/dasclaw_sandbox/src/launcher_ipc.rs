@@ -79,6 +79,25 @@ pub struct LauncherRequest {
     /// 兜底为空 Vec。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub additional_deny_write_paths: Vec<PathBuf>,
+
+    /// Issue #462 (B4-7) — select elevated Windows sandbox backend.
+    ///
+    /// - `false` (default; old-launcher wire compat) → launcher calls
+    ///   `dasclaw_sandbox_windows::run_windows_sandbox_capture_with_extra_deny_write_paths`
+    ///   (restricted-token / default / weaker isolation, no admin setup
+    ///   needed at run time).
+    /// - `true` → launcher calls
+    ///   `dasclaw_sandbox_windows::run_windows_sandbox_capture_elevated`
+    ///   (full elevated isolation: per-user firewall + dedicated logon
+    ///   user; requires `dasclaw-sandbox-setup.exe` to have completed).
+    ///
+    /// Decided in the adapter by
+    /// [`crate::windows_dispatch::windows_sandbox_uses_elevated_backend`].
+    /// `#[serde(default)]` keeps the wire backward-compatible: old launcher
+    /// binaries decoding a new request just see `false`, matching the
+    /// pre-#462 behaviour.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub use_elevated_backend: bool,
 }
 
 /// `OuterJobLimits` 的 wire 形式。
@@ -157,6 +176,7 @@ mod tests {
             }),
             use_private_desktop: false,
             additional_deny_write_paths: vec![],
+            use_elevated_backend: false,
         }
     }
 

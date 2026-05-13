@@ -83,6 +83,7 @@ fn req_dasclaw_sandbox_p1_2a_helper_blocks_read_only_subpath() {
         policy,
         preference: SandboxablePreference::Require,
         windows_sandbox_enabled: false,
+        windows_sandbox_level: dasclaw_protocol::config_types::WindowsSandboxLevel::Disabled,
         network: None,
     };
     let out = LinuxSeccompSandbox::new()
@@ -121,6 +122,7 @@ fn req_dasclaw_sandbox_p1_2a_fail_closed_when_helper_missing() {
         policy,
         preference: SandboxablePreference::Require,
         windows_sandbox_enabled: false,
+        windows_sandbox_level: dasclaw_protocol::config_types::WindowsSandboxLevel::Disabled,
         network: None,
     };
     let err = LinuxSeccompSandbox::new()

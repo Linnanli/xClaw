@@ -445,6 +445,7 @@ mod tests {
             policy,
             preference: SandboxablePreference::Auto,
             windows_sandbox_enabled: false,
+            windows_sandbox_level: dasclaw_protocol::config_types::WindowsSandboxLevel::Disabled,
             network: None,
         };
         let plan = prepare_command(&req).expect("legacy path should succeed");
@@ -475,6 +476,7 @@ mod tests {
             policy,
             preference: SandboxablePreference::Auto,
             windows_sandbox_enabled: false,
+            windows_sandbox_level: dasclaw_protocol::config_types::WindowsSandboxLevel::Disabled,
             network: None,
         };
         let plan = prepare_command(&req).expect("helper path should succeed");
@@ -528,6 +530,7 @@ mod tests {
             policy,
             preference: SandboxablePreference::Auto,
             windows_sandbox_enabled: false,
+            windows_sandbox_level: dasclaw_protocol::config_types::WindowsSandboxLevel::Disabled,
             network: None,
         };
         let err = prepare_command(&req).expect_err("must fail-closed");
