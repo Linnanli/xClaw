@@ -193,3 +193,113 @@ pub fn validate_unicode_whitespace(ctx: &ValidationContext) -> SecurityResult {
     }
     SecurityResult::Passthrough
 }
+
+// ─────────────────────────── validate_git_commit ────────────────────────────
+
+static GIT_COMMIT_PREFIX_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^git\s+commit\s+").expect("static regex") // safety: literal pattern, build-time correctness
+});
+
+/// Double-quoted message: captures (1) content, (2) remainder.
+static GIT_COMMIT_MSG_DQ_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"(?s)^git[ \t]+commit[ \t]+[^;&|`$<>()\n\r]*?-m[ \t]+"(.*?)"(.*)$"#)
+        .expect("static regex") // safety: literal pattern, build-time correctness
+});
+
+/// Single-quoted message: captures (1) content, (2) remainder.
+static GIT_COMMIT_MSG_SQ_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"(?s)^git[ \t]+commit[ \t]+[^;&|`$<>()\n\r]*?-m[ \t]+'(.*?)'(.*)$"#)
+        .expect("static regex") // safety: literal pattern, build-time correctness
+});
+
+static GIT_COMMIT_MSG_SUBST_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"\$\(|`|\$\{").expect("static regex") // safety: literal pattern, build-time correctness
+});
+
+static GIT_COMMIT_REMAINDER_OPS_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"[;|&()`]|\$\(|\$\{").expect("static regex") // safety: literal pattern, build-time correctness
+});
+
+/// Upstream `validateGitCommit` (L612-L741). Early validator that returns
+/// `Allow` for safe `git commit -m "..."` invocations, falling through to
+/// the main pipeline otherwise. Sub-ids:
+///   1 → GIT_COMMIT_SUBSTITUTION (double-quoted message contains `$(`, `` ` ``, `${`)
+///   5 → OBFUSCATED_FLAGS (message starts with `-`)
+pub fn validate_git_commit(ctx: &ValidationContext) -> SecurityResult {
+    let original = ctx.original_command();
+
+    if ctx.base_command() != "git" || !GIT_COMMIT_PREFIX_RE.is_match(original) {
+        return SecurityResult::Passthrough;
+    }
+
+    // Backslash anywhere → bail to full validators (regex quote tracking
+    // cannot survive `\"` / `\'`).
+    if original.contains('\\') {
+        return SecurityResult::Passthrough;
+    }
+
+    let Some((quote, message, remainder)) = (|| {
+        if let Some(caps) = GIT_COMMIT_MSG_DQ_RE.captures(original) {
+            return Some((
+                "\"",
+                caps.get(1).map(|m| m.as_str()).unwrap_or(""),
+                caps.get(2).map(|m| m.as_str()).unwrap_or(""),
+            ));
+        }
+        if let Some(caps) = GIT_COMMIT_MSG_SQ_RE.captures(original) {
+            return Some((
+                "'",
+                caps.get(1).map(|m| m.as_str()).unwrap_or(""),
+                caps.get(2).map(|m| m.as_str()).unwrap_or(""),
+            ));
+        }
+        None
+    })() else {
+        return SecurityResult::Passthrough;
+    };
+
+    // Double-quoted message containing command substitution patterns.
+    if quote == "\"" && !message.is_empty() && GIT_COMMIT_MSG_SUBST_RE.is_match(message) {
+        return block(
+            SecurityCheckId::GitCommitSubstitution,
+            1,
+            "Git commit message contains command substitution patterns",
+        );
+    }
+
+    // Remainder contains shell metacharacters that could chain commands.
+    if !remainder.is_empty() && GIT_COMMIT_REMAINDER_OPS_RE.is_match(remainder) {
+        return SecurityResult::Passthrough;
+    }
+    if !remainder.is_empty() {
+        // Strip quoted content from remainder, then check for unquoted `<`/`>`.
+        // Reachable only when the original command contains NO backslash (the
+        // backslash bail above), so simple quote toggling is correct.
+        let mut unquoted = String::new();
+        let mut in_sq = false;
+        let mut in_dq = false;
+        for c in remainder.chars() {
+            match c {
+                '\'' if !in_dq => in_sq = !in_sq,
+                '"' if !in_sq => in_dq = !in_dq,
+                _ if !in_sq && !in_dq => unquoted.push(c),
+                _ => {}
+            }
+        }
+        if unquoted.contains('<') || unquoted.contains('>') {
+            return SecurityResult::Passthrough;
+        }
+    }
+
+    // Message starts with `-` → looks like an obfuscated flag.
+    if message.starts_with('-') {
+        return block(
+            SecurityCheckId::ObfuscatedFlags,
+            5,
+            "Command contains quoted characters in flag names",
+        );
+    }
+
+    // Safe git commit form — short-circuit the rest of the pipeline.
+    SecurityResult::Allow
+}
