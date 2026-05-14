@@ -447,14 +447,16 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
             // Phase 3 Step G: SafetyLayer wired in via IronclawSafetyHook.
             // Phase 3 Step F: SecretsStore wired in via AgentSecrets,
             // scoped to the job owner (resolved just above).
-            // Issue #73 slice A1: workspace defaults to current_dir with
-            // "." fallback. TODO(#73): replace with per-session workspace
-            // injection once that ADR-redline decision lands.
+            // Issue #73 slice D: PermissionMode threaded explicitly; job
+            // workers run on user-scoped workspaces so default is
+            // `WorkspaceWrite`. Workspace defaults to current_dir; slice E
+            // will wire WorkspaceCap once available.
             &crate::agent::agentic_loop::hook_bundle_with_safety_and_secrets(
                 self.safety().clone(),
                 self.tools(),
                 &job_user_id,
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+                crate::agent::agentic_loop::PermissionMode::WorkspaceWrite,
             ),
         )
         .await
