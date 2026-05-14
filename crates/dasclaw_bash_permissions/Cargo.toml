@@ -1,0 +1,14 @@
+[package]
+name = "dasclaw_bash_permissions"
+version = "0.0.0-w1"
+edition = "2021"
+description = "Bash permission rule engine (port of upstream bashPermissions.ts pipeline)."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+regex = "1.12"
+thiserror = "1"

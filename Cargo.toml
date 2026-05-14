@@ -12,6 +12,9 @@ members = [
 	"crates/dasclaw_apply_patch",
 	"crates/dasclaw_project_docs",
 	"crates/dasclaw_bash_validation",
+	# Phase 2.2 Slice 2.2.a — bashPermissions rule-engine port (see
+	# docs/plans/bash-parity/phase-2.2-bash-permissions-rule-engine.md).
+	"crates/dasclaw_bash_permissions",
 	"crates/dasclaw_governance",
 	"crates/dasclaw_mcp",
 	"crates/dasclaw_execpolicy",
