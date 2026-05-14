@@ -204,14 +204,15 @@ Work independently to complete this job. When finished, your final message MUST 
                 // already inside Docker (no nested sandbox needed) and runs
                 // unattended (auto-approve).
                 //
-                // Issue #73 slice A1: workspace defaults to current_dir with
-                // "." fallback — mirrors the convention in
-                // crate::tools::builtin::shell. TODO(#73): replace with the
-                // per-session workspace injection path once that ADR-redline
-                // decision lands.
+                // Issue #73 slice D: PermissionMode threaded explicitly.
+                // Container workers run unattended inside a fully-sandboxed
+                // Docker environment, so the bash policy mirrors regular
+                // workers (`WorkspaceWrite`). Workspace defaults to
+                // current_dir; slice E will replace with WorkspaceCap.
                 &crate::agent::agentic_loop::hook_bundle_with_safety(
                     self.safety.clone(),
                     std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+                    crate::agent::agentic_loop::PermissionMode::WorkspaceWrite,
                 ),
             )
             .await

@@ -19,6 +19,12 @@ pub use x_claw_agent::agentic_loop::{
     AgenticLoopConfig, LoopDelegate, LoopOutcome, LoopSignal, TextAction, run_agentic_loop,
 };
 pub use x_claw_agent::intent::truncate_for_preview;
+// Issue #73 slice D: re-export PermissionMode so call sites (dispatcher,
+// worker/job, worker/container) construct hook bundles without depending
+// directly on x_claw_agent::permissions. The session-config layer that
+// eventually decides the mode lives in this crate — agent kernel stays
+// agnostic.
+pub use x_claw_agent::permissions::PermissionMode;
 
 use x_claw_agent::traits::HostError;
 
@@ -48,8 +54,13 @@ pub(crate) fn host_err_to_error(e: HostError) -> crate::error::Error {
 /// (generic JSON validation + leak detection).
 ///
 /// `workspace` is the root used by `pathValidation` to detect workspace
-/// escapes. `PermissionMode` is currently hard-coded to `WorkspaceWrite`
-/// — per-session injection is tracked by issue #73 slice D.
+/// escapes. `permission_mode` is the per-session bash validation policy
+/// (issue #73 slice D): callers must pass an explicit mode — typically
+/// [`PermissionMode::WorkspaceWrite`] for regular chat/worker sessions,
+/// or [`PermissionMode::ReadOnly`] for routines that must not mutate.
+/// Threading the mode as an explicit parameter keeps the safety boundary
+/// readable at every call site and lets the future session-config layer
+/// populate it without touching this crate.
 ///
 /// `sandbox` / `secrets` / `approval` keep their `Noop` / `InMemory` /
 /// `AutoApprove` defaults — they will be wired in by later Phase 3 steps.
@@ -59,15 +70,14 @@ pub(crate) fn host_err_to_error(e: HostError) -> crate::error::Error {
 pub fn hook_bundle_with_safety(
     safety: std::sync::Arc<crate::safety::SafetyLayer>,
     workspace: std::path::PathBuf,
+    permission_mode: PermissionMode,
 ) -> x_claw_agent::HookBundle {
     use std::sync::Arc;
     let composite = x_claw_agent::CompositeSafetyHook::builder()
         .add(
             "bash-validation",
             Arc::new(dasclaw_hooks::BashValidationHook::new(
-                // TODO(#73 slice D): replace with per-session PermissionMode
-                // once session-config injection lands.
-                x_claw_agent::permissions::PermissionMode::WorkspaceWrite,
+                permission_mode,
                 workspace,
             )),
         )
@@ -100,8 +110,9 @@ pub fn hook_bundle_with_safety_and_secrets(
     tools: &std::sync::Arc<crate::tools::ToolRegistry>,
     user_id: impl Into<String>,
     workspace: std::path::PathBuf,
+    permission_mode: PermissionMode,
 ) -> x_claw_agent::HookBundle {
-    let mut bundle = hook_bundle_with_safety(safety, workspace);
+    let mut bundle = hook_bundle_with_safety(safety, workspace, permission_mode);
     if let Some(store) = tools.secrets_store() {
         bundle.secrets = std::sync::Arc::new(crate::secrets::agent_provider::AgentSecrets::new(
             store.clone(),
@@ -154,7 +165,11 @@ mod tests {
     async fn safety_only_helper_leaves_secrets_as_noop() {
         let tools = registry_without_secrets();
         let _ = &tools; // silence unused warning when helper does not consume it
-        let bundle = hook_bundle_with_safety(safety_layer(), std::path::PathBuf::from("."));
+        let bundle = hook_bundle_with_safety(
+            safety_layer(),
+            std::path::PathBuf::from("."),
+            PermissionMode::WorkspaceWrite,
+        );
         // The noop secret provider returns None for any key (never errors).
         let got = bundle.secrets.get("any_key").await.unwrap();
         assert!(
@@ -171,6 +186,7 @@ mod tests {
             &tools,
             "alice",
             std::path::PathBuf::from("."),
+            PermissionMode::WorkspaceWrite,
         );
         let got = bundle
             .secrets
@@ -189,6 +205,7 @@ mod tests {
             &tools,
             "bob",
             std::path::PathBuf::from("."),
+            PermissionMode::WorkspaceWrite,
         );
         // Bob must not see alice's secrets.
         let got = bundle.secrets.get("alice_only").await.unwrap();
@@ -207,11 +224,141 @@ mod tests {
             &tools,
             "alice",
             std::path::PathBuf::from("."),
+            PermissionMode::WorkspaceWrite,
         );
         let got = bundle.secrets.get("anything").await.unwrap();
         assert!(
             got.is_none(),
             "no store = fall through to noop (no panic, no error)"
+        );
+    }
+
+    // ---- Issue #73 slice D: PermissionMode threading tests ----
+    //
+    // These tests prove that the `permission_mode` parameter actually
+    // reaches the inner `BashValidationHook` instead of being silently
+    // ignored. We pick a `rm -rf` style destructive command because it
+    // produces a deterministic Warn in `dasclaw_bash_validation`, and
+    // slice C's `map_warn_by_mode` table gives a different `SafetyDecision`
+    // per mode — so any short-circuit at construction time would surface
+    // immediately.
+    //
+    // We intentionally do NOT re-test the full 5-mode mapping table here
+    // (that's covered by `dasclaw_hooks::bash_validation_hook::tests` and
+    // `req_warn_*` from slice C). Only the *threading* is in scope.
+
+    /// `ReadOnly` mode must cause the destructive `rm` to be hard-Blocked
+    /// at the bash gate — proves the mode parameter is consumed.
+    #[tokio::test]
+    async fn req_safety_73_d_read_only_blocks_destructive_command() {
+        use x_claw_agent::SafetyDecision;
+        let bundle = hook_bundle_with_safety(
+            safety_layer(),
+            std::path::PathBuf::from("."),
+            PermissionMode::ReadOnly,
+        );
+        let mut args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_d" });
+        let decision = bundle
+            .safety
+            .before_tool_call("bash", &mut args)
+            .await
+            .unwrap();
+        assert!(
+            matches!(decision, SafetyDecision::Block { .. }),
+            "ReadOnly mode must block destructive bash command, got {decision:?}"
+        );
+    }
+
+    /// `WorkspaceWrite` mode (production default) must allow the same
+    /// destructive command — Warn → Allow per slice C's mapping table.
+    /// Different mode in == different decision out: the threading works.
+    #[tokio::test]
+    async fn req_safety_73_d_workspace_write_allows_destructive_command() {
+        use x_claw_agent::SafetyDecision;
+        let bundle = hook_bundle_with_safety(
+            safety_layer(),
+            std::path::PathBuf::from("."),
+            PermissionMode::WorkspaceWrite,
+        );
+        let mut args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_d" });
+        let decision = bundle
+            .safety
+            .before_tool_call("bash", &mut args)
+            .await
+            .unwrap();
+        assert!(
+            matches!(decision, SafetyDecision::Allow),
+            "WorkspaceWrite mode must allow destructive bash command (Warn -> Allow), got {decision:?}"
+        );
+    }
+
+    /// `Prompt` mode must surface a `SafetyDecision::Ask` so the UI can
+    /// gate the destructive command behind user confirmation.
+    #[tokio::test]
+    async fn req_safety_73_d_prompt_mode_asks_on_destructive_command() {
+        use x_claw_agent::SafetyDecision;
+        let bundle = hook_bundle_with_safety(
+            safety_layer(),
+            std::path::PathBuf::from("."),
+            PermissionMode::Prompt,
+        );
+        let mut args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_d" });
+        let decision = bundle
+            .safety
+            .before_tool_call("bash", &mut args)
+            .await
+            .unwrap();
+        assert!(
+            matches!(decision, SafetyDecision::Ask { .. }),
+            "Prompt mode must Ask for confirmation, got {decision:?}"
+        );
+    }
+
+    /// `DangerFullAccess` mode must allow the destructive command (slice C
+    /// maps Warn → Allow + info-level log).
+    #[tokio::test]
+    async fn req_safety_73_d_danger_full_access_allows_destructive_command() {
+        use x_claw_agent::SafetyDecision;
+        let bundle = hook_bundle_with_safety(
+            safety_layer(),
+            std::path::PathBuf::from("."),
+            PermissionMode::DangerFullAccess,
+        );
+        let mut args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_d" });
+        let decision = bundle
+            .safety
+            .before_tool_call("bash", &mut args)
+            .await
+            .unwrap();
+        assert!(
+            matches!(decision, SafetyDecision::Allow),
+            "DangerFullAccess mode must allow destructive bash command, got {decision:?}"
+        );
+    }
+
+    /// The secrets-aware helper must thread `permission_mode` through to
+    /// the same composite hook as the safety-only helper — guards against
+    /// future refactors that drop the parameter on one path.
+    #[tokio::test]
+    async fn req_safety_73_d_with_secrets_helper_threads_permission_mode() {
+        use x_claw_agent::SafetyDecision;
+        let tools = registry_without_secrets();
+        let bundle = hook_bundle_with_safety_and_secrets(
+            safety_layer(),
+            &tools,
+            "alice",
+            std::path::PathBuf::from("."),
+            PermissionMode::ReadOnly,
+        );
+        let mut args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_d" });
+        let decision = bundle
+            .safety
+            .before_tool_call("bash", &mut args)
+            .await
+            .unwrap();
+        assert!(
+            matches!(decision, SafetyDecision::Block { .. }),
+            "hook_bundle_with_safety_and_secrets must thread ReadOnly to bash hook"
         );
     }
 
@@ -225,6 +372,7 @@ mod tests {
             &tools,
             "alice",
             std::path::PathBuf::from("."),
+            PermissionMode::WorkspaceWrite,
         );
         // Exact identity check is not possible across Arc<dyn Trait>, but we
         // can at least assert the safety Arc pointer count > 1 (we hold one,
