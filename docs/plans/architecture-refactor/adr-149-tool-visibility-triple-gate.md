@@ -1,4 +1,4 @@
-# ADR-147: Tool Visibility Triple Gate — Prompt / Definitions / Executor 三层强制契约
+# ADR-149: Tool Visibility Triple Gate — Prompt / Definitions / Executor 三层强制契约
 
 - **Status**: Accepted（2026-05-13，对话评审通过）
 - **Date**: 2026-05-13（v1.0 Draft）/ 2026-05-13（v2.0 Accepted —— 新增 §1.3 三仓库对比 + §2.7 Source-Aware Default + §2.8 与 #484 衔接 + §6.5 备选 E）
@@ -8,7 +8,7 @@
   - GitHub Issue #84（P0-B/W3 Tool visibility triple gate：prompt + tool defs + executor — 本 ADR 落地后 close）
   - ADR-112（输入清单 §484 codex `build_specs_with_discoverable_tools` 工具注册统一）
   - ADR-113（Hook 系统收口 5→1，trait seam 双层抽象，本 ADR 复用 Layer B 注入模式）
-  - ADR-146（EgressGate 模式，本 ADR 沿用"维度切分 + fail-closed enum 决策"思路）
+  - ADR-148（EgressGate 模式，本 ADR 沿用"维度切分 + fail-closed enum 决策"思路）
   - claude-code-parity（`docs/plans/claude-code-parity-architecture.md` §680-687 disabled_tools HashSet 模型）
   - 现有实现：
     - [`desktop-client/ironclaw/src/tools/feature_flags.rs`](../../desktop-client/ironclaw/src/tools/feature_flags.rs) — 简单 `disabled_tools: HashSet<String>` 黑名单（仅 L3）
@@ -88,7 +88,7 @@ issue #84 要求：当某个工具被 policy 决策为"对当前 actor 不可见
 | **claude-code-parity** `disabled_tools: HashSet<String>` | ✅ 作为 `BlocklistPolicy` 最简实现（向后兼容） | §2.5 |
 | **claw-code** `PermissionOverride` hook 注入 | ✅ 通过 Layer A + Layer B 天然支持 | §3.2 |
 | **claw-code** `PermissionMode` 全局模式机 | ❌ 不采纳（dasclaw 倾向 per-tool policy） | — |
-| **codex** `network-proxy/policy.rs` host allowlist | ❌ 维度正交，由 ADR-146 `EgressGate` 覆盖 | §3.2 |
+| **codex** `network-proxy/policy.rs` host allowlist | ❌ 维度正交，由 ADR-148 `EgressGate` 覆盖 | §3.2 |
 | **claude-code** MCP `tools/list` 单层 client filter | ❌ 维度不够 | — |
 | 本仓库 `dasclaw_governance::policy_engine` (#65) | ❌ 维度无关（lane merge/escalate），**不复用同名 trait** | — |
 
@@ -116,7 +116,7 @@ dasclaw 已有 governance 6-pack（policy_engine / recovery_recipes / trust_reso
 
 ### 2.1 引入新 trait seam `ToolVisibilityPolicy`（Layer B）
 
-参照 ADR-146 `EgressGate` 模式：**单方法 + enum kind + enum decision + fail-closed**。
+参照 ADR-148 `EgressGate` 模式：**单方法 + enum kind + enum decision + fail-closed**。
 
 ```rust
 // crates/dasclaw_governance/src/tool_visibility.rs (新文件，feature-gated)
@@ -389,10 +389,10 @@ impl ToolDispatcher {
   ─────────────────────────────────────────────────────────────────
 ```
 
-### 3.2 与 ADR-113 / ADR-146 的关系
+### 3.2 与 ADR-113 / ADR-148 的关系
 
 - **ADR-113 双层抽象**：本 ADR 在 Layer B 新增 `ToolVisibilityPolicy` trait seam，**不**触碰 Layer A HookEngine
-- **ADR-146 EgressGate**：维度正交（egress = 数据出网/持久化/显示；tool gate = 工具是否对 actor 可见/可调）。**两个 trait 并存**，分别注入不同位置。`EgressGate.check(ToolExecution, args)` 仍在 L3 之后执行（先 policy 决定能不能调，再 egress 决定 args 能不能出）。
+- **ADR-148 EgressGate**：维度正交（egress = 数据出网/持久化/显示；tool gate = 工具是否对 actor 可见/可调）。**两个 trait 并存**，分别注入不同位置。`EgressGate.check(ToolExecution, args)` 仍在 L3 之后执行（先 policy 决定能不能调，再 egress 决定 args 能不能出）。
 - 调用顺序在 L3：`ToolVisibilityPolicy.check` → 通过 → `EgressGate.check(ToolExecution)` → 通过 → `executor.run`
 
 ### 3.3 测试族
@@ -416,13 +416,13 @@ impl ToolDispatcher {
 
 ## 4. Implementation Plan
 
-### 4.1 PR 拆分策略（默认单 PR，对齐 ADR-146 §4.5 经验）
+### 4.1 PR 拆分策略（默认单 PR，对齐 ADR-148 §4.5 经验）
 
 **默认方案：单 PR**（~2500 LOC 净 diff），保证 reviewer 一次看完三层共契约。
 
 仅当**触发以下任一条件**才拆为 2-PR 应急：
 - vendor codex 部分超 800 LOC（含 copyright header + NOTICE 调整）
-- L3 dispatcher 改动触及 >5 处分散调用点（参考 ADR-146 §2.5 9 处 sanitize_tool_output 教训）
+- L3 dispatcher 改动触及 >5 处分散调用点（参考 ADR-148 §2.5 9 处 sanitize_tool_output 教训）
 - 跨 crate 改动 >4 个（governance / vendor / x_claw_agent / ironclaw / desktop-client）→ 拆为 "PR-1: trait + vendor + BlocklistPolicy" + "PR-2: 三层接入点"
 
 ### 4.2 LOC 估算
@@ -439,7 +439,7 @@ impl ToolDispatcher {
 | `crates/x_claw_agent/src/prompts/catalog.rs` | 新建/扩展 | ~150 | L1 接入 |
 | `desktop-client/ironclaw/tests/tool_visibility_integration.rs` | 新建 | ~400 | test_security_84_* 集成测试 |
 | `desktop-client/ironclaw/tests/parity_harness.rs` | 修改 | ~50 | 迁移测试 + 保留 sp_016/sp_017 |
-| ADR-147 本文件 + 顶层 NOTICE | 新建/修改 | ~100 | 文档 |
+| ADR-149 本文件 + 顶层 NOTICE | 新建/修改 | ~100 | 文档 |
 | **合计** | | **~2240** | 单 PR 可控范围 |
 
 ### 4.3 阶段顺序（PR 内部）
@@ -458,7 +458,7 @@ impl ToolDispatcher {
 Closes #84
 
 ## 背景/目标
-落地 ADR-147：工具可见性三层强制契约（prompt + tool defs + executor）
+落地 ADR-149：工具可见性三层强制契约（prompt + tool defs + executor）
 
 ## 改动范围
 - 新 trait `ToolVisibilityPolicy` + `BlocklistPolicy` 默认实现
@@ -480,19 +480,19 @@ Closes #84
 
 ## Sources read
 - AGENTS.md §6（复用优先于新建）+ §2（红线）
-- ADR-147（本 PR 落地的 ADR）§2.1 trait 设计、§2.4 vendor 取舍、§4.3 阶段顺序
+- ADR-149（本 PR 落地的 ADR）§2.1 trait 设计、§2.4 vendor 取舍、§4.3 阶段顺序
 - ADR-112 §484（codex tool 注册统一参考）
 - ADR-113 §2.1（Layer B trait seam 双层抽象）
-- ADR-146 §2.2 + §4.5（EgressGate enum 决策模式 + 拆分应急）
+- ADR-148 §2.2 + §4.5（EgressGate enum 决策模式 + 拆分应急）
 - codex-cli-main/codex-rs/tools/src/tool_registry_plan.rs（vendor 源）
 
 ## 三层 reviewer 阅读引导
-- Tier 1（架构）：ADR-147 §2.1 + §2.2 + 本 PR 三层接入 diff
+- Tier 1（架构）：ADR-149 §2.1 + §2.2 + 本 PR 三层接入 diff
 - Tier 2（实现）：BlocklistPolicy + vendor crate + spec_builder
 - Tier 3（测试）：14 个新测试（5 个 security_*）
 ```
 
-### 4.5 拆分应急条款（对齐 ADR-146 §4.5 经验）
+### 4.5 拆分应急条款（对齐 ADR-148 §4.5 经验）
 
 满足以下任一条件，可临时拆为 2 PR 并在 PR-1 描述声明触发原因：
 
@@ -575,7 +575,7 @@ Closes #84
 ## 7. Rollout
 
 1. **Stage 0**（本 ADR 评审）：✅ 用户对话评审通过（2026-05-13）→ Status 转 Accepted
-2. **Stage 1**（GH issue 关联）：在 #84 顶 comment 引用本 ADR + 创建主跟踪 issue（类似 ADR-146 → #483 流程）
+2. **Stage 1**（GH issue 关联）：在 #84 顶 comment 引用本 ADR + 创建主跟踪 issue（类似 ADR-148 → #483 流程）
 3. **Stage 2**（PR 开发）：单 PR 默认，触发 §4.5 条件时拆 2 PR
 4. **Stage 3**（合并后）：
    - 默认部署仍走 `BlocklistPolicy`（BuiltIn 维度行为零变化）
@@ -592,10 +592,10 @@ Closes #84
 - [#484 — Skills/MCP/Extension visibility + integrity verification (extends #84)](https://github.com/Linnanli/xClaw/issues/484)
 - ADR-112 §484 — codex tool 注册统一参考
 - ADR-113 — Hook 系统收口 5→1，双层抽象保留
-- ADR-146 — EgressGate Pattern（语义清洗 + IPC Facade 拆分）
+- ADR-148 — EgressGate Pattern（语义清洗 + IPC Facade 拆分）
 - claude-code-parity-architecture.md §680-687 — disabled_tools HashSet 模型源头
 - codex-cli-main `codex-rs/tools/src/tool_registry_plan.rs` — vendor 源（Apache-2.0）
-- codex-cli-main `codex-rs/network-proxy/src/policy.rs` — host allowlist 维度（与 ADR-146 EgressGate 关联）
+- codex-cli-main `codex-rs/network-proxy/src/policy.rs` — host allowlist 维度（与 ADR-148 EgressGate 关联）
 - claw-code `rust/crates/runtime/src/permission_enforcer.rs` + `permissions.rs` — PermissionMode 模式机参考（不采纳，仅对比）
 - ironclaw-main `crates/ironclaw_engine/src/gate/{mod,pipeline,lease,tool_tier}.rs` — closed enum + GatePipeline 设计参考
 - ironclaw-main `crates/ironclaw_engine/src/capability/planner.rs` — LeasePlanner ThreadType-aware 设计参考

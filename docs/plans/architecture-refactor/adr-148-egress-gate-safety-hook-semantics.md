@@ -1,4 +1,4 @@
-# ADR-146: EgressGate Pattern — Safety Hook 语义清洗 + IPC Facade 拆分
+# ADR-148: EgressGate Pattern — Safety Hook 语义清洗 + IPC Facade 拆分
 
 - **Status**: Accepted（2026-05-13，单 PR 方案 v1.2，对话评审通过）
 - **Date**: 2026-05-13
@@ -326,10 +326,10 @@ agent loop 调用站对应一处替换（见 §4 PR-2）。
 
 ```markdown
 ## 背景/目标
-ADR-146 §1 - §2
+ADR-148 §1 - §2
 
 ## 改动范围
-本 PR 完整落地 ADR-146 §4.2 清单（新增 3 + 修改 15 + 删除 2）。
+本 PR 完整落地 ADR-148 §4.2 清单（新增 3 + 修改 15 + 删除 2）。
 
 ## 非目标（What's NOT in this PR）
 - SafetyLayer 5 子模块算法（不动）
@@ -348,7 +348,7 @@ ADR-146 §1 - §2
 
 ## Sources read
 - AGENTS.md §...
-- docs/plans/architecture-refactor/adr-146-...md（全文）
+- docs/plans/architecture-refactor/adr-148-...md（全文）
 - docs/plans/architecture-refactor/adr-113-...md §1.2 + §2.1
 - docs/plans/architecture-refactor/adr-001-...md
 - crates/x_claw_agent/src/hooks.rs（删除前快照）
@@ -448,7 +448,7 @@ pub fn no_mutation_in_egress_gate(gate: &dyn EgressGate) -> bool {
 
 ---
 
-## 7. 验收标准（ADR-146 完成定义）
+## 7. 验收标准（ADR-148 完成定义）
 
 - [ ] 单 PR `adr146-egress-gate-safety-semantics-cleanup` 合并到 `xClaw`
 - [ ] `cargo nextest run -p dasclaw_governance` 0 失败
@@ -462,7 +462,7 @@ pub fn no_mutation_in_egress_gate(gate: &dyn EgressGate) -> bool {
 - [ ] 三 skill 自审（code-quality-audit / code-simplifier / code-review-expert）记录到 PR 描述
 - [ ] PR body 含"3 层阅读梯度"引导
 - [ ] PR body `Closes #61` + `Closes #92`
-- [ ] ADR-113 §2.3 标注 "Safety trait seam 详见 ADR-146"
+- [ ] ADR-113 §2.3 标注 "Safety trait seam 详见 ADR-148"
 
 ---
 
