@@ -25,6 +25,11 @@ pub use x_claw_agent::intent::truncate_for_preview;
 // eventually decides the mode lives in this crate — agent kernel stays
 // agnostic.
 pub use x_claw_agent::permissions::PermissionMode;
+// Issue #73 slice E: workspace boundary is now sourced from a
+// capability-validated `WorkspaceCapability` instead of a raw `PathBuf`.
+// Re-exported so call sites don't have to depend on `dasclaw_workspace_cap`
+// directly.
+pub use dasclaw_workspace_cap::WorkspaceCapability;
 
 use x_claw_agent::traits::HostError;
 
@@ -53,8 +58,11 @@ pub(crate) fn host_err_to_error(e: HostError) -> crate::error::Error {
 /// issue #73 slice A1) → [`ironclaw_safety::agent_hook::IronclawSafetyHook`]
 /// (generic JSON validation + leak detection).
 ///
-/// `workspace` is the root used by `pathValidation` to detect workspace
-/// escapes. `permission_mode` is the per-session bash validation policy
+/// `workspace_cap` is the capability handle for the session workspace
+/// (issue #73 slice E). The bash hook reads `.root()` for `pathValidation`,
+/// so any path-escape check it performs is by definition consistent with
+/// the same boundary the rest of the agent (sandbox, FS tools, etc.) sees.
+/// `permission_mode` is the per-session bash validation policy
 /// (issue #73 slice D): callers must pass an explicit mode — typically
 /// [`PermissionMode::WorkspaceWrite`] for regular chat/worker sessions,
 /// or [`PermissionMode::ReadOnly`] for routines that must not mutate.
@@ -69,7 +77,7 @@ pub(crate) fn host_err_to_error(e: HostError) -> crate::error::Error {
 /// the safety boundary the moment any one call site forgets to plug it in.
 pub fn hook_bundle_with_safety(
     safety: std::sync::Arc<crate::safety::SafetyLayer>,
-    workspace: std::path::PathBuf,
+    workspace_cap: std::sync::Arc<WorkspaceCapability>,
     permission_mode: PermissionMode,
 ) -> x_claw_agent::HookBundle {
     use std::sync::Arc;
@@ -78,7 +86,7 @@ pub fn hook_bundle_with_safety(
             "bash-validation",
             Arc::new(dasclaw_hooks::BashValidationHook::new(
                 permission_mode,
-                workspace,
+                workspace_cap.root().to_path_buf(),
             )),
         )
         .add(
@@ -109,10 +117,10 @@ pub fn hook_bundle_with_safety_and_secrets(
     safety: std::sync::Arc<crate::safety::SafetyLayer>,
     tools: &std::sync::Arc<crate::tools::ToolRegistry>,
     user_id: impl Into<String>,
-    workspace: std::path::PathBuf,
+    workspace_cap: std::sync::Arc<WorkspaceCapability>,
     permission_mode: PermissionMode,
 ) -> x_claw_agent::HookBundle {
-    let mut bundle = hook_bundle_with_safety(safety, workspace, permission_mode);
+    let mut bundle = hook_bundle_with_safety(safety, workspace_cap, permission_mode);
     if let Some(store) = tools.secrets_store() {
         bundle.secrets = std::sync::Arc::new(crate::secrets::agent_provider::AgentSecrets::new(
             store.clone(),
@@ -146,6 +154,12 @@ mod tests {
         Arc::new(ToolRegistry::new())
     }
 
+    /// Open the current directory as a `WorkspaceCapability` for use in tests.
+    /// `.` is always openable in a cargo-test working directory.
+    fn test_workspace_cap() -> Arc<WorkspaceCapability> {
+        Arc::new(WorkspaceCapability::open(".").expect("workspace cap should open on `.` in tests"))
+    }
+
     async fn registry_with_secret(user_id: &str, key: &str, value: &str) -> Arc<ToolRegistry> {
         let crypto = Arc::new(
             SecretsCrypto::new(SecrecySecretString::from(TEST_MASTER_KEY.to_string())).unwrap(),
@@ -167,7 +181,7 @@ mod tests {
         let _ = &tools; // silence unused warning when helper does not consume it
         let bundle = hook_bundle_with_safety(
             safety_layer(),
-            std::path::PathBuf::from("."),
+            test_workspace_cap(),
             PermissionMode::WorkspaceWrite,
         );
         // The noop secret provider returns None for any key (never errors).
@@ -185,7 +199,7 @@ mod tests {
             safety_layer(),
             &tools,
             "alice",
-            std::path::PathBuf::from("."),
+            test_workspace_cap(),
             PermissionMode::WorkspaceWrite,
         );
         let got = bundle
@@ -204,7 +218,7 @@ mod tests {
             safety_layer(),
             &tools,
             "bob",
-            std::path::PathBuf::from("."),
+            test_workspace_cap(),
             PermissionMode::WorkspaceWrite,
         );
         // Bob must not see alice's secrets.
@@ -223,7 +237,7 @@ mod tests {
             safety_layer(),
             &tools,
             "alice",
-            std::path::PathBuf::from("."),
+            test_workspace_cap(),
             PermissionMode::WorkspaceWrite,
         );
         let got = bundle.secrets.get("anything").await.unwrap();
@@ -254,7 +268,7 @@ mod tests {
         use x_claw_agent::SafetyDecision;
         let bundle = hook_bundle_with_safety(
             safety_layer(),
-            std::path::PathBuf::from("."),
+            test_workspace_cap(),
             PermissionMode::ReadOnly,
         );
         let mut args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_d" });
@@ -277,7 +291,7 @@ mod tests {
         use x_claw_agent::SafetyDecision;
         let bundle = hook_bundle_with_safety(
             safety_layer(),
-            std::path::PathBuf::from("."),
+            test_workspace_cap(),
             PermissionMode::WorkspaceWrite,
         );
         let mut args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_d" });
@@ -297,11 +311,8 @@ mod tests {
     #[tokio::test]
     async fn req_safety_73_d_prompt_mode_asks_on_destructive_command() {
         use x_claw_agent::SafetyDecision;
-        let bundle = hook_bundle_with_safety(
-            safety_layer(),
-            std::path::PathBuf::from("."),
-            PermissionMode::Prompt,
-        );
+        let bundle =
+            hook_bundle_with_safety(safety_layer(), test_workspace_cap(), PermissionMode::Prompt);
         let mut args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_d" });
         let decision = bundle
             .safety
@@ -321,7 +332,7 @@ mod tests {
         use x_claw_agent::SafetyDecision;
         let bundle = hook_bundle_with_safety(
             safety_layer(),
-            std::path::PathBuf::from("."),
+            test_workspace_cap(),
             PermissionMode::DangerFullAccess,
         );
         let mut args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_d" });
@@ -347,7 +358,7 @@ mod tests {
             safety_layer(),
             &tools,
             "alice",
-            std::path::PathBuf::from("."),
+            test_workspace_cap(),
             PermissionMode::ReadOnly,
         );
         let mut args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_d" });
@@ -371,7 +382,7 @@ mod tests {
             safety_layer(),
             &tools,
             "alice",
-            std::path::PathBuf::from("."),
+            test_workspace_cap(),
             PermissionMode::WorkspaceWrite,
         );
         // Exact identity check is not possible across Arc<dyn Trait>, but we
@@ -380,5 +391,68 @@ mod tests {
         let _ = &bundle.safety;
         // Smoke-check: secrets slot is functional (not the noop).
         assert!(bundle.secrets.get("k").await.unwrap().is_some());
+    }
+
+    // ---- Issue #73 slice E: WorkspaceCapability injection ----
+
+    /// The workspace boundary inside the bundle must come from the
+    /// supplied `WorkspaceCapability::root()`, not from any implicit
+    /// process-level cwd. Building a cap rooted at a `TempDir` and
+    /// feeding it through both helpers must succeed and yield a hook
+    /// bundle whose bash policy still rejects the destructive command
+    /// under `ReadOnly` (proves the cap-rooted helper path is wired
+    /// end-to-end into the bash hook).
+    #[tokio::test]
+    async fn req_safety_73_e_workspace_cap_threads_through_safety_helper() {
+        use x_claw_agent::SafetyDecision;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cap = Arc::new(
+            WorkspaceCapability::open(tmp.path())
+                .expect("WorkspaceCapability::open on tempdir must succeed"),
+        );
+        assert_eq!(cap.root(), tmp.path(), "cap root must equal supplied path");
+
+        let bundle = hook_bundle_with_safety(safety_layer(), cap, PermissionMode::ReadOnly);
+        let mut args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_e" });
+        let decision = bundle
+            .safety
+            .before_tool_call("bash", &mut args)
+            .await
+            .unwrap();
+        assert!(
+            matches!(decision, SafetyDecision::Block { .. }),
+            "cap-rooted bundle must still enforce ReadOnly bash policy, got {decision:?}"
+        );
+    }
+
+    /// Same as above for the secrets-aware helper — the cap parameter
+    /// must reach the bash hook regardless of which constructor path
+    /// callers use.
+    #[tokio::test]
+    async fn req_safety_73_e_workspace_cap_threads_through_secrets_helper() {
+        use x_claw_agent::SafetyDecision;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cap = Arc::new(
+            WorkspaceCapability::open(tmp.path())
+                .expect("WorkspaceCapability::open on tempdir must succeed"),
+        );
+        let tools = registry_without_secrets();
+        let bundle = hook_bundle_with_safety_and_secrets(
+            safety_layer(),
+            &tools,
+            "alice",
+            cap,
+            PermissionMode::ReadOnly,
+        );
+        let mut args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_e" });
+        let decision = bundle
+            .safety
+            .before_tool_call("bash", &mut args)
+            .await
+            .unwrap();
+        assert!(
+            matches!(decision, SafetyDecision::Block { .. }),
+            "cap-rooted secrets bundle must still enforce ReadOnly, got {decision:?}"
+        );
     }
 }

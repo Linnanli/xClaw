@@ -280,15 +280,22 @@ impl Agent {
             // flows into `bundle.secrets` so the agent hook layer can read
             // user-scoped secrets without going through the tool path.
             // Issue #73 slice D: PermissionMode threaded explicitly so the
-            // session-config layer can override per chat session. Default
-            // `WorkspaceWrite` matches upstream claw-code's user-facing
-            // chat policy. Workspace defaults to current_dir with "."
-            // fallback; slice E will replace with WorkspaceCap injection.
+            // session-config layer can override per chat session.
+            // Issue #73 slice E: workspace boundary is sourced from a
+            // capability-validated `WorkspaceCapability`; `.` is the
+            // current chat session's working directory.
             &crate::agent::agentic_loop::hook_bundle_with_safety_and_secrets(
                 self.safety().clone(),
                 &self.deps.tools,
                 &message.user_id,
-                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+                std::sync::Arc::new(
+                    crate::agent::agentic_loop::WorkspaceCapability::open(
+                        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+                    )
+                    .map_err(|e| crate::error::WorkspaceError::IoError {
+                        reason: format!("failed to open workspace capability: {e}"),
+                    })?,
+                ),
                 crate::agent::agentic_loop::PermissionMode::WorkspaceWrite,
             ),
         )
