@@ -14,6 +14,9 @@
 use thiserror::Error;
 use tree_sitter::Tree;
 
+use super::context::ValidationContext;
+use super::types::{DecisionReason, SecurityResult};
+
 /// Reasons the AST layer can refuse to produce a `BashAst`.
 #[derive(Debug, Error, PartialEq, Eq)]
 #[non_exhaustive]
@@ -57,4 +60,29 @@ pub fn parse_for_security(command: &str) -> Result<BashAst, ParseFail> {
         return Err(ParseFail::ErrorNode);
     }
     Ok(BashAst { tree })
+}
+
+/// Engine-level Fail-Closed validator (plan §0 / §6).
+///
+/// Runs as the **final** pipeline entry: when no earlier validator opined
+/// and the cached AST is [`Err`], we conservatively refuse rather than
+/// allow a command whose syntax we cannot reason about. This closes the
+/// gap where unterminated quotes / mismatched braces fall through every
+/// regex/byte validator and silently reach the executor.
+///
+/// Misparsing-sensitive (via [`super::types::SecurityCheckId::is_misparsing`]
+/// returning true for [`super::types::SecurityCheckId::ParseFailure`]):
+/// once positioned at the pipeline tail, a Fail-Closed Block here will
+/// override any deferred non-misparsing result. This is intentional —
+/// if tree-sitter itself cannot agree on a parse, any partial regex hit
+/// upstream is less trustworthy than the AST-level refusal.
+pub fn validate_parse_failure(ctx: &ValidationContext) -> SecurityResult {
+    match ctx.ast() {
+        Ok(_) => SecurityResult::Passthrough,
+        Err(parse_fail) => SecurityResult::Block {
+            reason: DecisionReason::ParseFailure {
+                message: format!("Command syntax could not be safely parsed: {parse_fail}"),
+            },
+        },
+    }
 }
