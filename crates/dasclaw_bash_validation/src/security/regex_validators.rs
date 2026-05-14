@@ -71,33 +71,33 @@ static SHELL_META_QUOTED: Lazy<Regex> = Lazy::new(|| {
     // safety: literal pattern
 });
 static SHELL_META_NAME: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"-name\s+["'][^"']*[;|&][^"']*["']"#).expect("static regex") // safety
+    Regex::new(r#"-name\s+["'][^"']*[;|&][^"']*["']"#).expect("static regex") // safety: static literal pattern, compile-time validated
 });
 static SHELL_META_PATH: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"-path\s+["'][^"']*[;|&][^"']*["']"#).expect("static regex") // safety
+    Regex::new(r#"-path\s+["'][^"']*[;|&][^"']*["']"#).expect("static regex") // safety: static literal pattern, compile-time validated
 });
 static SHELL_META_INAME: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"-iname\s+["'][^"']*[;|&][^"']*["']"#).expect("static regex") // safety
+    Regex::new(r#"-iname\s+["'][^"']*[;|&][^"']*["']"#).expect("static regex") // safety: static literal pattern, compile-time validated
 });
 static SHELL_META_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"-regex\s+["'][^"']*[;&][^"']*["']"#).expect("static regex") // safety
+    Regex::new(r#"-regex\s+["'][^"']*[;&][^"']*["']"#).expect("static regex") // safety: static literal pattern, compile-time validated
 });
 
 // validateDangerousVariables (L828-L831)
 static DANGEROUS_VAR_REDIR_TO: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"[<>|]\s*\$[A-Za-z_]").expect("static regex") // safety
+    Regex::new(r"[<>|]\s*\$[A-Za-z_]").expect("static regex") // safety: static literal pattern, compile-time validated
 });
 static DANGEROUS_VAR_REDIR_FROM: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"\$[A-Za-z_][A-Za-z0-9_]*\s*[|<>]").expect("static regex") // safety
+    Regex::new(r"\$[A-Za-z_][A-Za-z0-9_]*\s*[|<>]").expect("static regex") // safety: static literal pattern, compile-time validated
 });
 
 // validateIFSInjection (L1023)
 static IFS_INJECTION_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\$IFS|\$\{[^}]*IFS").expect("static regex")); // safety
+    Lazy::new(|| Regex::new(r"\$IFS|\$\{[^}]*IFS").expect("static regex")); // safety: static literal pattern, compile-time validated
 
 // validateProcEnvironAccess (L1057)
 static PROC_ENVIRON_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"/proc/.*/environ").expect("static regex")); // safety
+    Lazy::new(|| Regex::new(r"/proc/.*/environ").expect("static regex")); // safety: static literal pattern, compile-time validated
 
 // =========================================================================
 // Validators
