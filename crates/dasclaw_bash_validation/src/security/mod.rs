@@ -32,6 +32,7 @@
 //! ```
 
 pub mod ast;
+pub mod ast_validators;
 pub mod context;
 pub mod early;
 pub mod quote_extract;
@@ -83,7 +84,20 @@ pub fn validate_security(command: &str) -> SecurityResult {
             early::validate_incomplete_commands,
             SecurityCheckId::IncompleteCommands,
         ),
-        // (Slice 2.1.c2) validate_jq_*, validate_obfuscated_flags
+        // validate_git_commit is an early validator (upstream L2270); a
+        // safe `git commit -m "..."` short-circuits to Allow.
+        (
+            early::validate_git_commit,
+            SecurityCheckId::GitCommitSubstitution,
+        ),
+        (
+            ast_validators::validate_jq_command,
+            SecurityCheckId::JqSystemFunction,
+        ),
+        (
+            ast_validators::validate_obfuscated_flags,
+            SecurityCheckId::ObfuscatedFlags,
+        ),
         (
             regex_validators::validate_shell_metacharacters,
             SecurityCheckId::ShellMetacharacters,
@@ -123,8 +137,14 @@ pub fn validate_security(command: &str) -> SecurityResult {
             regex_validators::validate_redirections,
             SecurityCheckId::DangerousPatternsInputRedirection,
         ),
-        // (Slice 2.1.c2) validate_backslash_escaped_whitespace,
-        //                validate_backslash_escaped_operators
+        (
+            ast_validators::validate_backslash_escaped_whitespace,
+            SecurityCheckId::BackslashEscapedWhitespace,
+        ),
+        (
+            ast_validators::validate_backslash_escaped_operators,
+            SecurityCheckId::BackslashEscapedOperators,
+        ),
         (
             early::validate_unicode_whitespace,
             SecurityCheckId::UnicodeWhitespace,
@@ -133,8 +153,18 @@ pub fn validate_security(command: &str) -> SecurityResult {
             regex_validators::validate_mid_word_hash,
             SecurityCheckId::MidWordHash,
         ),
-        // (Slice 2.1.c2) validate_brace_expansion, validate_zsh_dangerous_commands,
-        //                validate_malformed_token_injection
+        (
+            ast_validators::validate_brace_expansion,
+            SecurityCheckId::BraceExpansion,
+        ),
+        (
+            ast_validators::validate_zsh_dangerous_commands,
+            SecurityCheckId::ZshDangerousCommands,
+        ),
+        (
+            ast_validators::validate_malformed_token_injection,
+            SecurityCheckId::MalformedTokenInjection,
+        ),
     ];
 
     let mut deferred: Option<SecurityResult> = None;
