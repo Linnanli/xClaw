@@ -23,6 +23,13 @@
 //! until a Phase 2.2 validator (or the differential CI from plan §12)
 //! exercises it.
 //!
+//! `ControlCharacters` *does* have a production emit path as of PR #519
+//! (first early gate, see
+//! `crates/dasclaw_bash_validation/src/security/early.rs::validate_control_characters`).
+//! `req_security_490_p2_1_d_audit_log_control_chars_surface_rule_id`
+//! pins its `rule_id=ControlCharacters` audit surface so pipeline
+//! reorders can't silently demote it.
+//!
 //! Naming: `req_security_490_p2_1_d_audit_log_<scenario>` — same family as
 //! the existing Slice 2.1.d e2e tests so coverage tooling can group them.
 
@@ -121,5 +128,38 @@ async fn req_security_490_p2_1_d_audit_log_silent_on_safe_command() {
     assert!(
         !logs_contain("bash_security::block"),
         "audit tag must only fire on Block, never on Allow"
+    );
+}
+
+#[tokio::test]
+#[traced_test]
+async fn req_security_490_p2_1_d_audit_log_control_chars_surface_rule_id() {
+    // PR #519 (Slice 2.1.e prerequisite) added `validate_control_characters`
+    // as the *first* gate in `validate_security`. Pin its audit-log
+    // surface so future refactors of the pipeline order can't silently
+    // demote it without breaking this test.
+    //
+    // Input carries a literal null byte — caught only by the
+    // control-character gate; every later validator either ignores
+    // non-printable bytes or runs out of order.
+    let decision = fire_bash(PermissionMode::WorkspaceWrite, "echo safe\u{0}value").await;
+    assert!(
+        matches!(decision, SafetyDecision::Block { .. }),
+        "null byte must Block; got {decision:?}"
+    );
+
+    assert!(
+        logs_contain("bash_security::block"),
+        "audit tag must fire on control-character refusal"
+    );
+    // Exact rule_id — protects against pipeline-reorder regressions that
+    // would let a later (less specific) validator claim the rule_id.
+    assert!(
+        logs_contain("rule_id=ControlCharacters"),
+        "control-character refusal must surface `rule_id=ControlCharacters`, not a substitute"
+    );
+    assert!(
+        logs_contain("workspace-write"),
+        "audit log must carry the active PermissionMode slug"
     );
 }
