@@ -10,8 +10,8 @@
 //! - Slice 2.1.a — early validators + AST wrapper:
 //!   - [`SecurityCheckId`] / [`SecurityResult`] / [`DecisionReason`]
 //!   - [`ast::parse_for_security`] Fail-Closed AST wrapper
-//!   - [`early`] — 5 early validators (empty / incomplete / newlines / CR /
-//!     unicode whitespace)
+//!   - [`early`] — 6 early validators (control_characters / empty /
+//!     incomplete / newlines / CR / unicode whitespace)
 //! - Slice 2.1.b — context & quote infrastructure:
 //!   - [`ValidationContext`] now carries the 5 derived views upstream uses
 //!   - [`quote_extract`] ports `extractQuotedContent`,
@@ -78,6 +78,13 @@ pub fn validate_security(command: &str) -> SecurityResult {
     // is a pure insertion.
     type V = fn(&ValidationContext) -> SecurityResult;
     let pipeline: &[(V, SecurityCheckId)] = &[
+        // --- Absolute first gate (upstream `bashSecurity.ts` L2260 / L2442) ---
+        // Misparsing-sensitive: control chars confuse quote / AST tracking,
+        // so we must reject *before* any other validator inspects the string.
+        (
+            early::validate_control_characters,
+            SecurityCheckId::ControlCharacters,
+        ),
         // --- Early phase (always misparsing-sensitive in our port) ---
         (early::validate_empty, SecurityCheckId::IncompleteCommands),
         (

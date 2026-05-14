@@ -196,6 +196,88 @@ fn req_security_490_p2_1_a_ascii_only_passes_unicode_check() {
     );
 }
 
+// ───────────────────────────── control_characters ──────────────────────────
+
+#[test]
+fn req_security_490_p2_2_control_null_byte_blocks() {
+    let ctx = ValidationContext::new("echo safe\u{0}; rm -rf /");
+    assert_block(
+        &early::validate_control_characters(&ctx),
+        SecurityCheckId::ControlCharacters,
+        1,
+    );
+}
+
+#[test]
+fn req_security_490_p2_2_control_bel_blocks() {
+    let ctx = ValidationContext::new("echo \u{07}");
+    assert_block(
+        &early::validate_control_characters(&ctx),
+        SecurityCheckId::ControlCharacters,
+        1,
+    );
+}
+
+#[test]
+fn req_security_490_p2_2_control_unit_separator_blocks() {
+    // 0x1F (Unit Separator) — top of the upstream blocked range.
+    let ctx = ValidationContext::new("echo \u{1F}rm -rf /");
+    assert_block(
+        &early::validate_control_characters(&ctx),
+        SecurityCheckId::ControlCharacters,
+        1,
+    );
+}
+
+#[test]
+fn req_security_490_p2_2_control_del_blocks() {
+    let ctx = ValidationContext::new("echo \u{7F}");
+    assert_block(
+        &early::validate_control_characters(&ctx),
+        SecurityCheckId::ControlCharacters,
+        1,
+    );
+}
+
+#[test]
+fn req_security_490_p2_2_control_tab_newline_cr_pass() {
+    // Upstream comment L2244-L2247: tab / LF / CR are handled by other
+    // validators and must NOT trigger CONTROL_CHAR_RE.
+    for safe in ["echo\tfoo", "echo\nfoo", "echo\rfoo"] {
+        let ctx = ValidationContext::new(safe);
+        assert_eq!(
+            early::validate_control_characters(&ctx),
+            SecurityResult::Passthrough,
+            "{safe:?} should not trip control-char gate"
+        );
+    }
+}
+
+#[test]
+fn req_security_490_p2_2_control_printable_passes() {
+    let ctx = ValidationContext::new("echo hello world");
+    assert_eq!(
+        early::validate_control_characters(&ctx),
+        SecurityResult::Passthrough
+    );
+}
+
+#[test]
+fn req_security_490_p2_2_control_runs_before_other_gates() {
+    // SECURITY: control_characters must surface ahead of any other check
+    // (upstream L2260 / L2442). Here `\x00` is adjacent to `;`+`rm -rf /` —
+    // a downstream validator would otherwise fire `ShellMetacharacters`
+    // (id=5) or `DangerousPatternsCommandSubstitution` (id=8); we must see
+    // `ControlCharacters` (id=17) instead.
+    let result = validate_security("echo safe\u{0}; rm -rf /");
+    match result {
+        SecurityResult::Block {
+            reason: DecisionReason::CommandInjection { check_id, .. },
+        } => assert_eq!(check_id, SecurityCheckId::ControlCharacters),
+        other => panic!("expected ControlCharacters block, got {other:?}"),
+    }
+}
+
 // ───────────────────────────── ast::parse_for_security ──────────────────────
 
 #[test]
