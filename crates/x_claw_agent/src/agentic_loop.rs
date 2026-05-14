@@ -200,12 +200,46 @@ pub async fn run_agentic_loop(
         {
             let prompt = &mut reason_ctx.messages[idx].content;
             match hooks.safety.before_prompt(prompt).await {
-                Ok(SafetyDecision::Allow) | Ok(SafetyDecision::Redact) => {}
+                // Allow / Redact / Passthrough: continue (single-hook
+                // context treats Passthrough as Allow per ADR-146 §2.4).
+                Ok(SafetyDecision::Allow)
+                | Ok(SafetyDecision::Redact)
+                | Ok(SafetyDecision::Passthrough) => {}
                 Ok(SafetyDecision::Block { reason }) => {
                     tracing::warn!(iteration, %reason, "safety hook blocked prompt");
                     return Ok(LoopOutcome::Failure(format!(
                         "safety hook blocked prompt: {reason}"
                     )));
+                }
+                // Ask in a headless agent loop has no UI to render. Fail-Safe:
+                // treat as Block. Desktop-client wires real Ask UX in
+                // slice D (ADR-146 §2.5).
+                Ok(SafetyDecision::Ask { reason, .. }) => {
+                    tracing::warn!(
+                        iteration,
+                        %reason,
+                        "safety hook returned Ask in headless context; Fail-Safe block (slice D will wire UI)"
+                    );
+                    return Ok(LoopOutcome::Failure(format!(
+                        "safety hook requires user confirmation (no UI available): {reason}"
+                    )));
+                }
+                // Non-exhaustive guard: future variants added to
+                // `SafetyDecision` (which is `#[non_exhaustive]`) must be
+                // addressed explicitly at this site; failing closed is
+                // Fail-Safe. `#[allow(unreachable_patterns)]` is required
+                // because within the defining crate the compiler sees the
+                // enum as exhaustive — outside callers will need it.
+                #[allow(unreachable_patterns)]
+                Ok(other) => {
+                    tracing::error!(
+                        iteration,
+                        decision = ?other,
+                        "safety hook returned unhandled SafetyDecision variant; Fail-Safe block"
+                    );
+                    return Ok(LoopOutcome::Failure(
+                        "safety hook returned unsupported decision".to_string(),
+                    ));
                 }
                 Err(e) => {
                     return Err(format!("safety hook error in before_prompt: {e}").into());

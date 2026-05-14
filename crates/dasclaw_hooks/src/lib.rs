@@ -38,9 +38,10 @@ pub use registry::HookRegistry;
 // (`pub use`), not newtype wrappers.
 pub use x_claw_agent::{
     ApprovalError, ApprovalGate, ApprovalOutcome, ApprovalRequest, AutoApproveGate, DenyAllGate,
-    HookBundle, InMemorySecrets, NoopSafetyHook, NoopSandboxExecutor, NoopSessionHooks,
-    SafetyDecision, SafetyError, SafetyHook, SandboxError, SandboxExecOutput, SandboxExecRequest,
-    SandboxExecutor, SandboxNetworkHint, SecretError, SecretProvider, SecretString, SessionHooks,
+    HookBundle, InMemorySecrets, NoopSafetyHook, NoopSandboxExecutor, NoopSessionHooks, RuleAction,
+    RuleSuggestion, SafetyDecision, SafetyError, SafetyHook, SandboxError, SandboxExecOutput,
+    SandboxExecRequest, SandboxExecutor, SandboxNetworkHint, SecretError, SecretProvider,
+    SecretString, SessionHooks,
 };
 
 /// Bridge [`HookRegistry`] into the `x_claw_agent::SessionHooks` trait so

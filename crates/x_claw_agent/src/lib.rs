@@ -38,9 +38,9 @@ pub use bash_validation::{
 };
 pub use hooks::{
     ApprovalError, ApprovalGate, ApprovalOutcome, ApprovalRequest, AutoApproveGate, DenyAllGate,
-    HookBundle, InMemorySecrets, NoopSafetyHook, NoopSandboxExecutor, SafetyDecision, SafetyError,
-    SafetyHook, SandboxError, SandboxExecOutput, SandboxExecRequest, SandboxExecutor,
-    SandboxNetworkHint, SecretError, SecretProvider, SecretString,
+    HookBundle, InMemorySecrets, NoopSafetyHook, NoopSandboxExecutor, RuleAction, RuleSuggestion,
+    SafetyDecision, SafetyError, SafetyHook, SandboxError, SandboxExecOutput, SandboxExecRequest,
+    SandboxExecutor, SandboxNetworkHint, SecretError, SecretProvider, SecretString,
 };
 pub use messages::{
     ChatMessage, CompletionRequest, CompletionResponse, ContentPart, FinishReason, ImageUrl,

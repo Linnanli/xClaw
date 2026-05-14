@@ -33,7 +33,27 @@ use serde_json::Value;
 // ---------------------------------------------------------------------------
 
 /// Decision returned by [`SafetyHook`] methods.
+///
+/// # Variants (5-state, per ADR-146)
+///
+/// - [`SafetyDecision::Allow`]: continue without changes.
+/// - [`SafetyDecision::Redact`]: caller mutated payload in-place; continue
+///   with the mutated value.
+/// - [`SafetyDecision::Block`]: refuse the operation; surface `reason` to
+///   the user.
+/// - [`SafetyDecision::Ask`]: request user confirmation; UX should render
+///   the `suggestions` as actionable buttons (e.g. "Always allow `git
+///   status`", "Deny once"). In headless / non-interactive contexts the
+///   runtime SHOULD treat `Ask` as `Block` (Fail-Safe).
+/// - [`SafetyDecision::Passthrough`]: this hook abstains. In a
+///   [`CompositeSafetyHook`](../composite_safety_hook/) chain the next hook
+///   is consulted; in a single-hook context semantically equivalent to
+///   `Allow` (see ADR-146 §2.4).
+///
+/// The enum is `#[non_exhaustive]`: external `match` arms must include a
+/// `_` fallback so future variants do not break callers.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SafetyDecision {
     /// Allow the operation unchanged.
     Allow,
@@ -43,6 +63,43 @@ pub enum SafetyDecision {
     Redact,
     /// Refuse the operation; `reason` is safe to surface to the user.
     Block { reason: String },
+    /// Request user confirmation. `suggestions` may be empty when the hook
+    /// has no rule suggestions to offer.
+    Ask {
+        reason: String,
+        suggestions: Vec<RuleSuggestion>,
+    },
+    /// This hook abstains. `CompositeSafetyHook` continues with the next
+    /// hook; in a single-hook context the runtime should treat this as
+    /// `Allow`.
+    Passthrough,
+}
+
+/// A rule suggestion surfaced alongside [`SafetyDecision::Ask`] so the UX
+/// can render actionable buttons (e.g. "Always allow `git status`").
+///
+/// `suggestions` is typically empty in MVP slice C; later slices populate
+/// it from per-Warn rule pattern generators.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleSuggestion {
+    /// Human-readable label shown on the button.
+    pub label: String,
+    /// The rule pattern that would be inserted (e.g. `Bash(git status:allow)`).
+    pub rule_pattern: String,
+    /// The action this suggestion encodes.
+    pub action: RuleAction,
+}
+
+/// Action implied by a [`RuleSuggestion`] when the user selects it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RuleAction {
+    /// Always allow matching invocations.
+    Allow,
+    /// Always deny matching invocations.
+    Deny,
+    /// Continue asking on matching invocations (default).
+    Ask,
 }
 
 /// Errors raised by a [`SafetyHook`] implementation.
