@@ -176,6 +176,17 @@ Work independently to complete this job. When finished, your final message MUST 
         // Shared iteration tracker — read after the loop to report accurate counts.
         let iteration_tracker = Arc::new(Mutex::new(0u32));
 
+        // Issue #73 slice E: open the workspace capability before the
+        // timeout block so `?` propagates cleanly via this fn's error type.
+        let workspace_cap = Arc::new(
+            crate::agent::agentic_loop::WorkspaceCapability::open(
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            )
+            .map_err(|e| crate::error::WorkerError::ExecutionFailed {
+                reason: format!("failed to open workspace capability: {e}"),
+            })?,
+        );
+
         // Run with timeout using the shared agentic loop
         let result = tokio::time::timeout(self.config.timeout, async {
             let delegate = ContainerDelegate {
@@ -205,13 +216,12 @@ Work independently to complete this job. When finished, your final message MUST 
                 // unattended (auto-approve).
                 //
                 // Issue #73 slice D: PermissionMode threaded explicitly.
-                // Container workers run unattended inside a fully-sandboxed
-                // Docker environment, so the bash policy mirrors regular
-                // workers (`WorkspaceWrite`). Workspace defaults to
-                // current_dir; slice E will replace with WorkspaceCap.
+                // Issue #73 slice E: workspace boundary is capability-validated;
+                // container workers run inside an isolated Docker FS so the
+                // capability handle is over the in-container cwd.
                 &crate::agent::agentic_loop::hook_bundle_with_safety(
                     self.safety.clone(),
-                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+                    workspace_cap.clone(),
                     crate::agent::agentic_loop::PermissionMode::WorkspaceWrite,
                 ),
             )
