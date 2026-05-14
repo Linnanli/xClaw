@@ -82,17 +82,16 @@ pub fn validate_incomplete_commands(ctx: &ValidationContext) -> SecurityResult {
 
 // ─────────────────────────── validate_newlines ──────────────────────────────
 
-/// Upstream `validateNewlines` (L905-L943). Slice 2.1.a uses
-/// `original_command` directly (Slice 2.1.b will switch to
-/// `fully_unquoted_pre_strip` once that context view exists).
+/// Upstream `validateNewlines` (L905-L943). Scans
+/// `fully_unquoted_pre_strip` (so newlines inside `'…'` / `"…"` do not fire
+/// — matching upstream) for an LF/CR followed by a non-whitespace byte,
+/// permitting `<whitespace>\<newline>` (a bash line continuation at a word
+/// boundary) as the **only** exception.
 ///
 /// Rust's `regex` crate has no look-behind, so we replicate the upstream
-/// `/(?<![\s]\\)[\n\r]\s*\S/` semantics with a manual byte walk: scan for
-/// a LF / CR followed by optional whitespace and a non-whitespace byte,
-/// permitting `<whitespace>\<newline>` (a bash continuation at a word
-/// boundary) as the **only** exception.
+/// `/(?<![\s]\\)[\n\r]\s*\S/` semantics with a manual byte walk.
 pub fn validate_newlines(ctx: &ValidationContext) -> SecurityResult {
-    let bytes = ctx.original_command().as_bytes();
+    let bytes = ctx.fully_unquoted_pre_strip().as_bytes();
     if !bytes.iter().any(|b| *b == b'\n' || *b == b'\r') {
         return SecurityResult::Passthrough;
     }

@@ -5,19 +5,23 @@
 //! semantic-port contract, deviations from the upstream TypeScript, and the
 //! anti-drift strategy (asymmetric invariant + differential CI).
 //!
-//! ## Slice 2.1.a scope
+//! ## Implemented so far
 //!
-//! This module currently implements:
-//! - [`SecurityCheckId`] — strongly-typed enumeration of all 24 check IDs
-//! - [`SecurityResult`] — port of upstream `PermissionResult` (semantic; not 1:1)
-//! - [`ValidationContext`] — context passed to each validator
-//! - [`ast::parse_for_security`] — Fail-Closed AST wrapper (re-uses
-//!   `dasclaw_shell_command::bash::try_parse_shell`)
-//! - [`early`] — 4 early validators: incomplete commands, newlines (LF),
-//!   carriage return (with quote state machine), unicode whitespace
+//! - Slice 2.1.a — early validators + AST wrapper:
+//!   - [`SecurityCheckId`] / [`SecurityResult`] / [`DecisionReason`]
+//!   - [`ast::parse_for_security`] Fail-Closed AST wrapper
+//!   - [`early`] — 5 early validators (empty / incomplete / newlines / CR /
+//!     unicode whitespace)
+//! - Slice 2.1.b — context & quote infrastructure:
+//!   - [`ValidationContext`] now carries the 5 derived views upstream uses
+//!   - [`quote_extract`] ports `extractQuotedContent`,
+//!     `stripSafeRedirections`, `hasUnescapedChar`
+//!   - AST is parsed once and cached on the context
+//!   - [`early::validate_newlines`] switched to `fully_unquoted_pre_strip`
+//!     to match upstream (no false positive on `echo "line1\nline2"`)
 //!
-//! Phase 2.1.b will add the 19 main validators + deferred-non-misparsing
-//! engine. Phase 2.1.c wires the hook + e2e tests.
+//! Slice 2.1.c will add the 19 main validators + the deferred-non-misparsing
+//! engine. Slice 2.1.d wires the hook + e2e tests.
 //!
 //! ## Asymmetric invariant
 //!
@@ -30,10 +34,14 @@
 pub mod ast;
 pub mod context;
 pub mod early;
+pub mod quote_extract;
 mod types;
 
 pub use ast::{BashAst, ParseFail};
 pub use context::ValidationContext;
+pub use quote_extract::{
+    extract_quoted_content, has_unescaped_char, strip_safe_redirections, QuoteExtraction,
+};
 pub use types::{DecisionReason, SecurityCheckId, SecurityResult};
 
 /// Public entry point for the Phase 2.1 security gate.
