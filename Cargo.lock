@@ -5747,6 +5747,7 @@ version = "0.2.0"
 dependencies = [
  "aho-corasick",
  "async-trait",
+ "dasclaw_hooks",
  "regex",
  "serde_json",
  "thiserror 2.0.18",

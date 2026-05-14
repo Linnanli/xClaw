@@ -203,7 +203,16 @@ Work independently to complete this job. When finished, your final message MUST 
                 // sandbox/secrets/approval still default; container worker is
                 // already inside Docker (no nested sandbox needed) and runs
                 // unattended (auto-approve).
-                &crate::agent::agentic_loop::hook_bundle_with_safety(self.safety.clone()),
+                //
+                // Issue #73 slice A1: workspace defaults to current_dir with
+                // "." fallback — mirrors the convention in
+                // crate::tools::builtin::shell. TODO(#73): replace with the
+                // per-session workspace injection path once that ADR-redline
+                // decision lands.
+                &crate::agent::agentic_loop::hook_bundle_with_safety(
+                    self.safety.clone(),
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+                ),
             )
             .await
         })

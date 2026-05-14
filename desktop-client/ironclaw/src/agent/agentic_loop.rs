@@ -45,6 +45,14 @@ pub(crate) fn host_err_to_error(e: HostError) -> crate::error::Error {
 /// the ironclaw [`crate::safety::SafetyLayer`] via
 /// [`ironclaw_safety::agent_hook::IronclawSafetyHook`].
 ///
+/// `workspace` is forwarded to `IronclawSafetyHook::with_bash_validation`
+/// so bash command-string validation (issue #73 slice A1) runs before
+/// the generic JSON validator. Callers should pass the agent's effective
+/// working directory — the production sites in [`crate::agent::dispatcher`],
+/// [`crate::worker::job`] and [`crate::worker::container`] use
+/// `std::env::current_dir()` with a `.` fallback, mirroring the convention
+/// already in [`crate::tools::builtin::shell`].
+///
 /// `sandbox` / `secrets` / `approval` keep their `Noop` / `InMemory` /
 /// `AutoApprove` defaults — they will be wired in by later Phase 3 steps.
 /// This helper exists so every consumer (chat dispatcher, job worker,
@@ -52,10 +60,13 @@ pub(crate) fn host_err_to_error(e: HostError) -> crate::error::Error {
 /// the safety boundary the moment any one call site forgets to plug it in.
 pub fn hook_bundle_with_safety(
     safety: std::sync::Arc<crate::safety::SafetyLayer>,
+    workspace: std::path::PathBuf,
 ) -> x_claw_agent::HookBundle {
     let mut bundle = x_claw_agent::HookBundle::noop();
-    bundle.safety =
-        std::sync::Arc::new(ironclaw_safety::agent_hook::IronclawSafetyHook::new(safety));
+    bundle.safety = std::sync::Arc::new(
+        ironclaw_safety::agent_hook::IronclawSafetyHook::new(safety)
+            .with_bash_validation(workspace),
+    );
     bundle
 }
 
@@ -77,8 +88,9 @@ pub fn hook_bundle_with_safety_and_secrets(
     safety: std::sync::Arc<crate::safety::SafetyLayer>,
     tools: &std::sync::Arc<crate::tools::ToolRegistry>,
     user_id: impl Into<String>,
+    workspace: std::path::PathBuf,
 ) -> x_claw_agent::HookBundle {
-    let mut bundle = hook_bundle_with_safety(safety);
+    let mut bundle = hook_bundle_with_safety(safety, workspace);
     if let Some(store) = tools.secrets_store() {
         bundle.secrets = std::sync::Arc::new(crate::secrets::agent_provider::AgentSecrets::new(
             store.clone(),
@@ -131,7 +143,7 @@ mod tests {
     async fn safety_only_helper_leaves_secrets_as_noop() {
         let tools = registry_without_secrets();
         let _ = &tools; // silence unused warning when helper does not consume it
-        let bundle = hook_bundle_with_safety(safety_layer());
+        let bundle = hook_bundle_with_safety(safety_layer(), std::path::PathBuf::from("."));
         // The noop secret provider returns None for any key (never errors).
         let got = bundle.secrets.get("any_key").await.unwrap();
         assert!(
@@ -143,7 +155,12 @@ mod tests {
     #[tokio::test]
     async fn with_secrets_helper_exposes_registered_secret() {
         let tools = registry_with_secret("alice", "openai_key", "sk-live-abc").await;
-        let bundle = hook_bundle_with_safety_and_secrets(safety_layer(), &tools, "alice");
+        let bundle = hook_bundle_with_safety_and_secrets(
+            safety_layer(),
+            &tools,
+            "alice",
+            std::path::PathBuf::from("."),
+        );
         let got = bundle
             .secrets
             .get("openai_key")
@@ -156,7 +173,12 @@ mod tests {
     #[tokio::test]
     async fn with_secrets_helper_isolates_by_user_id() {
         let tools = registry_with_secret("alice", "alice_only", "A").await;
-        let bundle = hook_bundle_with_safety_and_secrets(safety_layer(), &tools, "bob");
+        let bundle = hook_bundle_with_safety_and_secrets(
+            safety_layer(),
+            &tools,
+            "bob",
+            std::path::PathBuf::from("."),
+        );
         // Bob must not see alice's secrets.
         let got = bundle.secrets.get("alice_only").await.unwrap();
         assert!(
@@ -169,7 +191,12 @@ mod tests {
     async fn with_secrets_helper_falls_back_to_noop_when_registry_has_no_store() {
         // A registry built without `.with_credentials(...)` has no SecretsStore.
         let tools = registry_without_secrets();
-        let bundle = hook_bundle_with_safety_and_secrets(safety_layer(), &tools, "alice");
+        let bundle = hook_bundle_with_safety_and_secrets(
+            safety_layer(),
+            &tools,
+            "alice",
+            std::path::PathBuf::from("."),
+        );
         let got = bundle.secrets.get("anything").await.unwrap();
         assert!(
             got.is_none(),
@@ -182,7 +209,12 @@ mod tests {
     #[tokio::test]
     async fn with_secrets_helper_preserves_safety_wiring() {
         let tools = registry_with_secret("alice", "k", "v").await;
-        let bundle = hook_bundle_with_safety_and_secrets(safety_layer(), &tools, "alice");
+        let bundle = hook_bundle_with_safety_and_secrets(
+            safety_layer(),
+            &tools,
+            "alice",
+            std::path::PathBuf::from("."),
+        );
         // Exact identity check is not possible across Arc<dyn Trait>, but we
         // can at least assert the safety Arc pointer count > 1 (we hold one,
         // bundle holds one → 2).
