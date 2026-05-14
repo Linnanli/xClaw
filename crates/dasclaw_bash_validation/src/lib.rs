@@ -15,6 +15,7 @@
 use std::path::Path;
 
 pub mod permissions;
+pub mod security;
 pub use permissions::PermissionMode;
 
 /// Result of validating a bash command before execution.

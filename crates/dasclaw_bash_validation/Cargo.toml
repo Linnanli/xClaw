@@ -10,4 +10,16 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
+dasclaw_shell_command = { path = "../dasclaw_shell_command" }
+once_cell = "1.20"
+regex = "1.12"
 thiserror = "1"
+# Only used to name the `tree_sitter::Tree` type returned by
+# `dasclaw_shell_command::bash::try_parse_shell`. We deliberately do NOT
+# depend on `tree-sitter-bash` here — the grammar wiring lives in
+# `dasclaw_shell_command` as the single AST source (plan §4.2).
+tree-sitter = "0.25.10"
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
