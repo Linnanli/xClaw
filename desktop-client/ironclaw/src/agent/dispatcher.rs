@@ -279,10 +279,14 @@ impl Agent {
             // Phase 3 Step F: SecretsStore on the tool registry now also
             // flows into `bundle.secrets` so the agent hook layer can read
             // user-scoped secrets without going through the tool path.
+            // Issue #73 slice A1: workspace defaults to current_dir with
+            // "." fallback. TODO(#73): replace with per-session workspace
+            // injection once that ADR-redline decision lands.
             &crate::agent::agentic_loop::hook_bundle_with_safety_and_secrets(
                 self.safety().clone(),
                 &self.deps.tools,
                 &message.user_id,
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
             ),
         )
         .await
