@@ -1,43 +1,44 @@
 //! Strongly-typed enum of every check ID + result/reason types.
 //!
 //! Ported from upstream `BASH_SECURITY_CHECK_IDS` constants in
-//! `claude-code-main/src/tools/BashTool/bashSecurity.ts` L82-L125. Each
-//! variant corresponds 1:1 to an upstream check ID; the numeric mapping is
-//! preserved via [`SecurityCheckId::as_u32`] so that differential testing can
-//! compare results across the TS / Rust boundary.
+//! `claude-code-main/src/tools/BashTool/bashSecurity.ts` L77-L101 (1:1
+//! numbering). The numeric mapping is preserved via [`SecurityCheckId::as_u32`]
+//! so differential testing can compare results across the TS / Rust boundary.
 
 /// Every distinct security check the engine can emit.
 ///
-/// `numbering` matches upstream `BASH_SECURITY_CHECK_IDS`. New variants must
-/// preserve gaps so existing IDs never shift.
+/// Numbering matches upstream `BASH_SECURITY_CHECK_IDS` exactly (1-23). The
+/// extra [`Self::ParseFailure`] variant (`0`) is a Fail-Closed catch-all that
+/// does not correspond to any upstream ID — emitted by the engine itself
+/// when AST parsing fails before any validator can opine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum SecurityCheckId {
+    /// Synthetic — not in upstream. Engine-level Fail-Closed when AST parse fails.
+    ParseFailure = 0,
     IncompleteCommands = 1,
     JqSystemFunction = 2,
-    XargsRedirection = 3,
-    SafeCommandSubstitution = 4,
-    GitCommit = 5,
-    JqCommand = 6,
-    ShellMetacharacters = 7,
-    DangerousVariables = 8,
-    DangerousPatterns = 9,
-    Redirections = 10,
-    Newlines = 11,
-    IfsInjection = 12,
+    JqFileArguments = 3,
+    ObfuscatedFlags = 4,
+    ShellMetacharacters = 5,
+    DangerousVariables = 6,
+    Newlines = 7,
+    DangerousPatternsCommandSubstitution = 8,
+    DangerousPatternsInputRedirection = 9,
+    DangerousPatternsOutputRedirection = 10,
+    IfsInjection = 11,
+    GitCommitSubstitution = 12,
     ProcEnvironAccess = 13,
     MalformedTokenInjection = 14,
-    ObfuscatedFlags = 15,
-    BackslashEscapedWhitespace = 16,
-    BackslashEscapedOperators = 17,
-    BraceExpansion = 18,
-    UnicodeWhitespace = 19,
-    MidWordHash = 20,
-    CommentQuoteDesync = 21,
-    HeredocQuoted = 22,
-    TrailingBackslash = 23,
-    /// Parse failure — Fail-Closed catch-all.
-    ParseFailure = 24,
+    BackslashEscapedWhitespace = 15,
+    BraceExpansion = 16,
+    ControlCharacters = 17,
+    UnicodeWhitespace = 18,
+    MidWordHash = 19,
+    ZshDangerousCommands = 20,
+    BackslashEscapedOperators = 21,
+    CommentQuoteDesync = 22,
+    QuotedNewline = 23,
 }
 
 impl SecurityCheckId {
@@ -45,34 +46,28 @@ impl SecurityCheckId {
         self as u32
     }
 
-    /// Whether this check is sensitive to upstream misparsing (i.e. its
-    /// `ask` result becomes `block` at the bashPermissions gate).
+    /// Whether this check is sensitive to upstream misparsing.
     ///
-    /// Mirrors upstream `isBashSecurityCheckForMisparsing` (L130-L160). Used
-    /// by the deferred-non-misparsing engine in Slice 2.1.b.
+    /// In upstream's two-phase pipeline (bashSecurity.ts L2343 `nonMisparsingValidators`),
+    /// only `validateNewlines` and `validateRedirections` are explicitly
+    /// non-misparsing — i.e., their `ask` result is *deferred* so that any
+    /// later misparsing-sensitive validator gets priority. All other
+    /// validators in the main pipeline are misparsing-sensitive.
+    ///
+    /// In Phase 2.1 we collapse `ask` → `Block` regardless, but we still
+    /// preserve the deferred-non-misparsing ordering so that the surfaced
+    /// `DecisionReason` matches upstream's user-visible precedence.
     pub fn is_misparsing(self) -> bool {
-        matches!(
+        !matches!(
             self,
-            Self::ShellMetacharacters
-                | Self::DangerousVariables
-                | Self::DangerousPatterns
-                | Self::Redirections
-                | Self::IfsInjection
-                | Self::ProcEnvironAccess
-                | Self::MalformedTokenInjection
-                | Self::ObfuscatedFlags
-                | Self::BackslashEscapedWhitespace
-                | Self::BackslashEscapedOperators
-                | Self::BraceExpansion
-                | Self::MidWordHash
-                | Self::CommentQuoteDesync
-                | Self::TrailingBackslash
-                | Self::ParseFailure
+            Self::Newlines
+                | Self::DangerousPatternsInputRedirection
+                | Self::DangerousPatternsOutputRedirection
         )
     }
 }
 
-/// Why a particular [`SecurityResult::Block`] was emitted.
+/// Why a [`SecurityResult::Block`] was emitted.
 ///
 /// Strongly typed (vs upstream's loose `decisionReason: { type, reason }`)
 /// so downstream policy / telemetry can pattern-match exhaustively.
