@@ -19,6 +19,10 @@
 //!   - AST is parsed once and cached on the context
 //!   - [`early::validate_newlines`] switched to `fully_unquoted_pre_strip`
 //!     to match upstream (no false positive on `echo "line1\nline2"`)
+//! - Slice 2.1.e — engine-level Fail-Closed catch-all:
+//!   - [`ast::validate_parse_failure`] wired as final pipeline entry;
+//!     surfaces [`DecisionReason::ParseFailure`] when tree-sitter refused
+//!     the command and no earlier validator opined.
 //!
 //! Slice 2.1.c will add the 19 main validators + the deferred-non-misparsing
 //! engine. Slice 2.1.d wires the hook + e2e tests.
@@ -172,6 +176,13 @@ pub fn validate_security(command: &str) -> SecurityResult {
             ast_validators::validate_malformed_token_injection,
             SecurityCheckId::MalformedTokenInjection,
         ),
+        // --- Engine-level Fail-Closed catch-all (plan §0 / §6) ---
+        // Misparsing-sensitive: if no earlier validator opined and
+        // tree-sitter refused the command (unterminated quotes, missing
+        // braces, raw ERROR nodes), surface `DecisionReason::ParseFailure`
+        // rather than fall through to Allow. Placed last so that any
+        // concrete validator's diagnosis wins precedence.
+        (ast::validate_parse_failure, SecurityCheckId::ParseFailure),
     ];
 
     let mut deferred: Option<SecurityResult> = None;
