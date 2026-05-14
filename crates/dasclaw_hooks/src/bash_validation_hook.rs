@@ -685,9 +685,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_security_audit_log_contains_rule_id() {
-        // We can't easily intercept tracing here without a subscriber;
-        // the model-visible `reason` is the strongest available audit
-        // surface and is required to carry the rule slug.
+        // This test pins only the **model-visible `reason` string** format:
+        // every security Block must surface `bash_security::<rule>` so the
+        // upstream consumer (model / CLI) can route on the rule slug.
+        //
+        // The complementary **structured tracing audit-log** contract
+        // (fields `tool`, `mode`, `rule_id`, `sub_id`, `message` on the
+        // `bash_security::block` event) is pinned by the integration test
+        // `tests/bash_security_audit_log.rs` using `tracing-test`.
         let d = run_bash(PermissionMode::Prompt, INJECTION_CMD).await;
         let reason = match d {
             SafetyDecision::Block { reason } => reason,
