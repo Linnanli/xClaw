@@ -14,6 +14,7 @@
 pub mod agentic_loop;
 pub mod bash_validation;
 pub mod compaction;
+pub mod composite_safety_hook;
 pub mod context_monitor;
 pub mod hooks;
 pub mod intent;
@@ -36,6 +37,7 @@ pub use bash_validation::{
     CommandIntent, ValidationResult, check_destructive, classify_command, validate_command,
     validate_mode, validate_paths, validate_read_only, validate_sed,
 };
+pub use composite_safety_hook::{CompositeSafetyHook, CompositeSafetyHookBuilder, HookId};
 pub use hooks::{
     ApprovalError, ApprovalGate, ApprovalOutcome, ApprovalRequest, AutoApproveGate, DenyAllGate,
     HookBundle, InMemorySecrets, NoopSafetyHook, NoopSandboxExecutor, RuleAction, RuleSuggestion,

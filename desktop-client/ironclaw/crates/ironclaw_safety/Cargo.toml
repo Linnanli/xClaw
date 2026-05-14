@@ -25,16 +25,12 @@ url = "2"
 # hard dependency on ironclaw.
 async-trait = { version = "0.1", optional = true }
 x_claw_agent = { path = "../../../../crates/x_claw_agent", optional = true }
-# Optional: bash command-string validation hook (issue #73 slice A1). Gated
-# behind the same `agent-hook` feature so non-agent callers stay free of the
-# extra dependency tree.
-dasclaw_hooks = { path = "../../../../crates/dasclaw_hooks", optional = true }
 
 [features]
 default = []
 # Enables the `agent_hook` module: `IronclawSafetyHook` adapter for
 # `x_claw_agent::SafetyHook`.
-agent-hook = ["dep:async-trait", "dep:x_claw_agent", "dep:dasclaw_hooks"]
+agent-hook = ["dep:async-trait", "dep:x_claw_agent"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros", "sync"] }
