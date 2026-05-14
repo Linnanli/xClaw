@@ -50,6 +50,9 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use dasclaw_bash_validation::security::{
+    DecisionReason as SecurityDecisionReason, SecurityResult, validate_security,
+};
 use serde_json::Value;
 use x_claw_agent::bash_validation::{ValidationResult, validate_command};
 use x_claw_agent::permissions::PermissionMode;
@@ -138,6 +141,18 @@ impl SafetyHook for BashValidationHook {
             }
         };
 
+        // Phase 2.1 command-injection gate (Slice 2.1.d).
+        //
+        // Runs BEFORE `validate_command` so security `Block` short-circuits
+        // the permission/mode chain entirely. Per plan §8 the security
+        // gate is mode-independent: even `Allow` / `DangerFullAccess` does
+        // NOT exempt command injection.
+        if let SecurityResult::Block { reason } = validate_security(command) {
+            return Ok(SafetyDecision::Block {
+                reason: format_security_block_reason(tool, self.permission_mode, &reason),
+            });
+        }
+
         match validate_command(command, self.permission_mode, &self.workspace) {
             ValidationResult::Allow => Ok(SafetyDecision::Allow),
             ValidationResult::Block { reason } => Ok(SafetyDecision::Block { reason }),
@@ -217,6 +232,41 @@ fn map_warn_by_mode(tool: &str, mode: PermissionMode, message: String) -> Safety
                 suggestions: Vec::new(),
             }
         }
+    }
+}
+
+/// Formats a Phase 2.1 [`SecurityDecisionReason`] into a model-visible
+/// block reason string and emits a structured audit log line.
+///
+/// The returned string is always prefixed with `bash_security::<rule_id>`
+/// so downstream auditors and the test suite can verify the rule that
+/// fired without parsing the human-readable message.
+fn format_security_block_reason(
+    tool: &str,
+    mode: PermissionMode,
+    reason: &SecurityDecisionReason,
+) -> String {
+    let (rule_id, sub_id, message) = match reason {
+        SecurityDecisionReason::CommandInjection {
+            check_id,
+            sub_id,
+            message,
+        } => (format!("{check_id:?}"), Some(*sub_id), message.as_str()),
+        SecurityDecisionReason::ParseFailure { message } => {
+            ("ParseFailure".to_string(), None, message.as_str())
+        }
+    };
+    tracing::warn!(
+        tool,
+        mode = mode.as_str(),
+        rule_id = %rule_id,
+        sub_id = ?sub_id,
+        %message,
+        "bash_security::block"
+    );
+    match sub_id {
+        Some(sub) => format!("bash_security::{rule_id} (sub_id={sub}): {message}"),
+        None => format!("bash_security::{rule_id}: {message}"),
     }
 }
 
@@ -562,5 +612,101 @@ mod tests {
             .await
             .expect("after_tool_output should not error");
         assert_eq!(output, "tool output", "after_tool_output must not mutate");
+    }
+
+    // ---- Slice 2.1.d — Phase 2.1 security gate e2e tests ----------------
+    //
+    // Naming: `req_security_490_p2_1_d_<scenario>`. These exercise the
+    // `validate_security` short-circuit inserted before the legacy
+    // `validate_command` flow, ensuring that command-injection blocks are
+    // independent of [`PermissionMode`].
+
+    /// Sample command guaranteed to trip the security engine
+    /// (newline-injection, rule `Newlines` / `QuotedNewline`).
+    const INJECTION_CMD: &str = "echo a\nrm -rf /";
+
+    async fn run_bash(mode: PermissionMode, cmd: &str) -> SafetyDecision {
+        let h = hook(mode);
+        let mut args = json!({ "command": cmd });
+        h.before_tool_call("bash", &mut args)
+            .await
+            .expect("hook must not error on string command")
+    }
+
+    #[tokio::test]
+    async fn req_security_490_p2_1_d_injection_blocked_in_workspace_write_mode() {
+        let d = run_bash(PermissionMode::WorkspaceWrite, INJECTION_CMD).await;
+        match d {
+            SafetyDecision::Block { reason } => assert!(
+                reason.starts_with("bash_security::"),
+                "reason must carry rule prefix, got {reason:?}"
+            ),
+            other => panic!("expected Block, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn req_security_490_p2_1_d_injection_blocked_in_bypass_mode() {
+        // `PermissionMode::Allow` is the workspace's "bypass / skip-checks"
+        // mode. Phase 2.1 §8 mandates the security gate ignores it.
+        let d = run_bash(PermissionMode::Allow, INJECTION_CMD).await;
+        assert!(
+            matches!(d, SafetyDecision::Block { .. }),
+            "Allow mode must NOT exempt command injection, got {d:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn req_security_490_p2_1_d_injection_blocked_in_danger_full_access_mode() {
+        let d = run_bash(PermissionMode::DangerFullAccess, INJECTION_CMD).await;
+        assert!(
+            matches!(d, SafetyDecision::Block { .. }),
+            "DangerFullAccess must NOT exempt command injection, got {d:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn req_security_490_p2_1_d_security_block_short_circuits_before_permission_check() {
+        // ReadOnly normally allows `ls` (no Warn from validate_command) but
+        // the injection variant must Block via the security gate, proving
+        // the gate runs BEFORE the legacy pipeline regardless of mode.
+        let d_safe = run_bash(PermissionMode::ReadOnly, "ls -la").await;
+        assert_eq!(d_safe, SafetyDecision::Allow);
+
+        let d_injection = run_bash(PermissionMode::ReadOnly, INJECTION_CMD).await;
+        match d_injection {
+            SafetyDecision::Block { reason } => assert!(
+                reason.starts_with("bash_security::"),
+                "security gate must surface its own rule, not a legacy reason; got {reason:?}"
+            ),
+            other => panic!("expected security Block, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_security_audit_log_contains_rule_id() {
+        // We can't easily intercept tracing here without a subscriber;
+        // the model-visible `reason` is the strongest available audit
+        // surface and is required to carry the rule slug.
+        let d = run_bash(PermissionMode::Prompt, INJECTION_CMD).await;
+        let reason = match d {
+            SafetyDecision::Block { reason } => reason,
+            other => panic!("expected Block, got {other:?}"),
+        };
+        assert!(
+            reason.starts_with("bash_security::"),
+            "audit prefix missing: {reason}"
+        );
+        // Rule slug must be a non-empty alphanumeric identifier (Debug
+        // form of `SecurityCheckId`), not the bare `ParseFailure` synthetic.
+        let after_prefix = reason.trim_start_matches("bash_security::");
+        let rule = after_prefix
+            .split([':', ' '])
+            .next()
+            .expect("rule slug present");
+        assert!(
+            !rule.is_empty() && rule.chars().all(|c| c.is_ascii_alphanumeric()),
+            "rule slug must be alphanumeric, got {rule:?} in {reason:?}"
+        );
     }
 }

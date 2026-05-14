@@ -24,6 +24,10 @@ tracing = "0.1"
 # front-door for both event-style hooks and trait-seam hooks. See ADR-113.
 x_claw_agent = { path = "../x_claw_agent", version = "0.1.0" }
 
+# Phase 2.1 bash command-injection detection engine (Slice 2.1.d wires it
+# into `BashValidationHook::before_tool_call`).
+dasclaw_bash_validation = { path = "../dasclaw_bash_validation", version = "0.0.0-w1" }
+
 [dev-dependencies]
 tokio = { version = "1", features = ["sync", "macros", "time", "rt", "rt-multi-thread"] }
 tracing-test = { version = "0.2", features = ["no-env-filter"] }
