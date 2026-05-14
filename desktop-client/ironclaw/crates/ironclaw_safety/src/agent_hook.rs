@@ -11,35 +11,33 @@
 //! |---------------------|--------------------|--------------|
 //! | `before_prompt`     | `scan_inbound_for_secrets` | `Block` if secrets detected (fail-safe — never ship secrets to LLM). |
 //! | `after_completion`  | `leak_detector().scan_and_clean` | Replace with redacted body; `Err` → full-body block marker (fail-safe). |
-//! | `before_tool_call`  | bash routing (optional) → `validator().validate_tool_params` | `Block` if invalid. |
+//! | `before_tool_call`  | `validator().validate_tool_params` | `Block` if invalid. |
 //! | `after_tool_output` | `sanitize_tool_output` | Replace with sanitized body. |
 //!
-//! ## Bash routing (issue #73 slice A1)
+//! ## Composition with bash validation (issue #73 slice B)
 //!
-//! When [`IronclawSafetyHook::with_bash_validation`] is configured, the
-//! `before_tool_call` path checks bash-style tool calls (names matching
-//! [`dasclaw_hooks::DEFAULT_BASH_TOOL_NAMES`]) through
-//! [`dasclaw_hooks::BashValidationHook`] *before* the generic JSON
-//! validator. `Block` short-circuits; `Allow` falls through to the generic
-//! validator so prompt-injection checks still run on the args.
+//! Bash command-string validation is **no longer** an internal field of
+//! this adapter. Per ADR-147, callers compose multiple [`SafetyHook`]
+//! implementations via [`x_claw_agent::CompositeSafetyHook`]:
 //!
-//! [`PermissionMode`] is currently hard-coded to `WorkspaceWrite` —
-//! per-session injection is an ADR-redline item tracked by issue #73.
-//! Workspace root falls back to `std::env::current_dir()` and finally `.`,
-//! mirroring [`crate::sandbox` shell tool's existing convention] so this
-//! slice does not introduce a new redline.
+//! ```ignore
+//! let composite = x_claw_agent::CompositeSafetyHook::builder()
+//!     .add("bash-validation", Arc::new(BashValidationHook::new(mode, workspace)))
+//!     .add("ironclaw-safety", Arc::new(IronclawSafetyHook::new(layer)))
+//!     .build();
+//! ```
+//!
+//! See [`crate::agent::agentic_loop::hook_bundle_with_safety`] (in the
+//! `ironclaw` crate) for the production composition.
 //!
 //! The `after_*` hooks do not return `SafetyDecision` — by the time the runtime
 //! calls them the data already exists, so the adapter always mutates in place
 //! and returns `Ok(())`.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use dasclaw_hooks::BashValidationHook;
 use serde_json::Value;
-use x_claw_agent::permissions::PermissionMode;
 use x_claw_agent::{SafetyDecision, SafetyError, SafetyHook};
 
 use crate::SafetyLayer;
@@ -51,42 +49,11 @@ use crate::SafetyLayer;
 #[derive(Clone)]
 pub struct IronclawSafetyHook {
     layer: Arc<SafetyLayer>,
-    /// Optional bash command-string validation, configured via
-    /// [`Self::with_bash_validation`]. `None` keeps the historical
-    /// behaviour (generic JSON validation only).
-    bash_hook: Option<Arc<BashValidationHook>>,
 }
 
 impl IronclawSafetyHook {
     pub fn new(layer: Arc<SafetyLayer>) -> Self {
-        Self {
-            layer,
-            bash_hook: None,
-        }
-    }
-
-    /// Attach a [`BashValidationHook`] that runs *before* the generic JSON
-    /// validator on bash-style tool calls.
-    ///
-    /// `workspace` is the root used by `pathValidation` to detect workspace
-    /// escapes. `PermissionMode` is currently hard-coded to `WorkspaceWrite`
-    /// — per-session mode injection is tracked by issue #73.
-    ///
-    /// # Example
-    /// ```ignore
-    /// let workspace = std::env::current_dir()
-    ///     .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    /// let hook = IronclawSafetyHook::new(layer).with_bash_validation(workspace);
-    /// ```
-    #[must_use]
-    pub fn with_bash_validation(mut self, workspace: PathBuf) -> Self {
-        // TODO(#73): replace WorkspaceWrite with per-session PermissionMode
-        // once the session-config injection path is settled (ADR-redline).
-        self.bash_hook = Some(Arc::new(BashValidationHook::new(
-            PermissionMode::WorkspaceWrite,
-            workspace,
-        )));
-        self
+        Self { layer }
     }
 
     pub fn layer(&self) -> &SafetyLayer {
@@ -124,40 +91,9 @@ impl SafetyHook for IronclawSafetyHook {
 
     async fn before_tool_call(
         &self,
-        tool: &str,
+        _tool: &str,
         args: &mut Value,
     ) -> Result<SafetyDecision, SafetyError> {
-        // Issue #73 slice A1 + slice C: bash command-string validation
-        // runs first when configured. Per ADR-147 short-circuit semantics:
-        //
-        // - `Block` / `Ask`        → return immediately (interrupts user)
-        // - `Allow` / `Redact` /
-        //   `Passthrough` (slice C)→ fall through to the generic JSON
-        //                            validator so prompt-injection
-        //                            scanning still applies.
-        //
-        // The `Ok(other)` arm is a Fail-Safe non-exhaustive guard against
-        // future `SafetyDecision` variants added without updating call
-        // sites — see ADR-146 §3.
-        if let Some(bash) = &self.bash_hook {
-            match bash.before_tool_call(tool, args).await? {
-                SafetyDecision::Allow | SafetyDecision::Redact | SafetyDecision::Passthrough => {}
-                blocking @ (SafetyDecision::Block { .. } | SafetyDecision::Ask { .. }) => {
-                    return Ok(blocking);
-                }
-                other => {
-                    tracing::error!(
-                        ?other,
-                        "BashValidationHook returned unknown SafetyDecision variant; Fail-Safe Block"
-                    );
-                    return Ok(SafetyDecision::Block {
-                        reason: "unknown SafetyDecision variant from BashValidationHook"
-                            .to_string(),
-                    });
-                }
-            }
-        }
-
         let result = self.layer.validator().validate_tool_params(args);
         if result.is_valid {
             Ok(SafetyDecision::Allow)
@@ -282,89 +218,5 @@ mod tests {
         hook.after_tool_output("bash", &mut output).await.unwrap();
         // Leak detector must either redact or block; raw secret is gone.
         assert_ne!(output, raw);
-    }
-
-    // ---- Issue #73 slice A1: bash routing tests ----------------------------
-
-    fn hook_with_bash() -> IronclawSafetyHook {
-        IronclawSafetyHook::new(layer()).with_bash_validation(PathBuf::from("/workspace"))
-    }
-
-    #[tokio::test]
-    async fn req_safety_73_a1_bash_ls_is_allowed() {
-        let hook = hook_with_bash();
-        let mut args = json!({ "command": "ls -la" });
-        let decision = hook.before_tool_call("bash", &mut args).await.unwrap();
-        assert_eq!(decision, SafetyDecision::Allow);
-    }
-
-    #[tokio::test]
-    async fn req_safety_73_a1_bash_missing_command_is_fail_safe_block() {
-        let hook = hook_with_bash();
-        let mut args = json!({ "not_command": "ls" });
-        let decision = hook.before_tool_call("bash", &mut args).await.unwrap();
-        match decision {
-            SafetyDecision::Block { reason } => {
-                assert!(
-                    reason.contains("missing"),
-                    "expected fail-safe reason mentioning missing field, got: {reason}"
-                );
-            }
-            other => panic!("expected Block (fail-safe), got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn req_safety_73_a1_path_escape_is_blocked_in_workspace_write() {
-        // pathValidation should refuse absolute paths that escape the
-        // workspace root, even under WorkspaceWrite mode.
-        let hook = hook_with_bash();
-        let mut args = json!({ "command": "cat /etc/shadow" });
-        let decision = hook.before_tool_call("bash", &mut args).await.unwrap();
-        match decision {
-            SafetyDecision::Block { reason } => {
-                // Safety-audit: the block reason must not regurgitate the
-                // full argument list verbatim. `/etc/shadow` is referenced
-                // by the validator only via command class / path category.
-                assert!(
-                    !reason.contains("shadow"),
-                    "block reason leaked sensitive path verbatim: {reason}"
-                );
-            }
-            // Some validate_command builds may classify this as Warn instead
-            // of Block; that path stays advisory until #73 lands the final
-            // Warn policy. The contract here is "must not silently allow a
-            // verbatim secret-path leak" — Allow is also accepted as long
-            // as the validator did its job upstream.
-            SafetyDecision::Allow => {}
-            other => panic!("unexpected decision: {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn req_safety_73_a1_non_bash_tool_uses_generic_validator() {
-        // Non-bash tools must not be touched by the bash hook — they should
-        // fall through to the SafetyLayer JSON validator unchanged.
-        let hook = hook_with_bash();
-        let mut args = json!({ "path": "/tmp/x.txt" });
-        let decision = hook
-            .before_tool_call("write_file", &mut args)
-            .await
-            .unwrap();
-        assert_eq!(decision, SafetyDecision::Allow);
-    }
-
-    #[tokio::test]
-    async fn req_safety_73_a1_without_bash_hook_legacy_behaviour_preserved() {
-        // The historical IronclawSafetyHook::new (no bash hook) must keep
-        // routing every tool through the generic JSON validator only.
-        let hook = IronclawSafetyHook::new(layer());
-        let mut args = json!({ "command": "rm -rf /" });
-        // No bash hook → generic validator decides. The JSON validator
-        // currently allows this (it has no command-string semantics);
-        // this test pins the legacy contract so adding bash routing did
-        // not regress non-agent-hook callers.
-        let decision = hook.before_tool_call("bash", &mut args).await.unwrap();
-        assert_eq!(decision, SafetyDecision::Allow);
     }
 }

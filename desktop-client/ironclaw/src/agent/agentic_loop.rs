@@ -41,17 +41,15 @@ pub(crate) fn host_err_to_error(e: HostError) -> crate::error::Error {
     }
 }
 
-/// Build an `x_claw_agent::HookBundle` whose `safety` slot is wired to
-/// the ironclaw [`crate::safety::SafetyLayer`] via
-/// [`ironclaw_safety::agent_hook::IronclawSafetyHook`].
+/// Build an `x_claw_agent::HookBundle` whose `safety` slot is wired to a
+/// [`x_claw_agent::CompositeSafetyHook`] (per ADR-147) chaining
+/// [`dasclaw_hooks::BashValidationHook`] (bash command-string validation,
+/// issue #73 slice A1) → [`ironclaw_safety::agent_hook::IronclawSafetyHook`]
+/// (generic JSON validation + leak detection).
 ///
-/// `workspace` is forwarded to `IronclawSafetyHook::with_bash_validation`
-/// so bash command-string validation (issue #73 slice A1) runs before
-/// the generic JSON validator. Callers should pass the agent's effective
-/// working directory — the production sites in [`crate::agent::dispatcher`],
-/// [`crate::worker::job`] and [`crate::worker::container`] use
-/// `std::env::current_dir()` with a `.` fallback, mirroring the convention
-/// already in [`crate::tools::builtin::shell`].
+/// `workspace` is the root used by `pathValidation` to detect workspace
+/// escapes. `PermissionMode` is currently hard-coded to `WorkspaceWrite`
+/// — per-session injection is tracked by issue #73 slice D.
 ///
 /// `sandbox` / `secrets` / `approval` keep their `Noop` / `InMemory` /
 /// `AutoApprove` defaults — they will be wired in by later Phase 3 steps.
@@ -62,11 +60,24 @@ pub fn hook_bundle_with_safety(
     safety: std::sync::Arc<crate::safety::SafetyLayer>,
     workspace: std::path::PathBuf,
 ) -> x_claw_agent::HookBundle {
+    use std::sync::Arc;
+    let composite = x_claw_agent::CompositeSafetyHook::builder()
+        .add(
+            "bash-validation",
+            Arc::new(dasclaw_hooks::BashValidationHook::new(
+                // TODO(#73 slice D): replace with per-session PermissionMode
+                // once session-config injection lands.
+                x_claw_agent::permissions::PermissionMode::WorkspaceWrite,
+                workspace,
+            )),
+        )
+        .add(
+            "ironclaw-safety",
+            Arc::new(ironclaw_safety::agent_hook::IronclawSafetyHook::new(safety)),
+        )
+        .build();
     let mut bundle = x_claw_agent::HookBundle::noop();
-    bundle.safety = std::sync::Arc::new(
-        ironclaw_safety::agent_hook::IronclawSafetyHook::new(safety)
-            .with_bash_validation(workspace),
-    );
+    bundle.safety = Arc::new(composite);
     bundle
 }
 
