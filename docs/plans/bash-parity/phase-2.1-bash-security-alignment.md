@@ -263,11 +263,52 @@ prompt-injection 类即使用户开了 `--dangerously-skip-permissions` 也必�
 
 ## 4. 依赖决策
 
+### 4.1 Crate 归属（**回答："代码加哪里？"**）
+
+**决策：仍在 `crates/dasclaw_bash_validation` 内新增 `security/` 子模块，不拆新 crate。**
+
+| 候选 | 选用？ | 理由 |
+|---|---|---|
+| (A) `dasclaw_bash_validation` + `security/` 子模块（本方案） | ✅ | 现有 crate 已是 bash 校验单一入口；`BashValidationHook` 已绑定，hook 层只改一处；编译图不变 |
+| (B) 新 crate `dasclaw_bash_security` | ❌ | 增加 crate 数量；与现有 `validate_command/check_destructive` 形成职责切分但语义连续（都是"bash 命令安全决策"）；过度抽象 |
+| (C) 塞进 `dasclaw_shell_command` | ❌ | 违反单一职责：shell_command 是执行层，不应承担策略判断 |
+
+预计扩展后 `dasclaw_bash_validation` 从 980 LOC → ~2500 LOC（含测试）—— 仍在单 crate 合理上限内（参考现有 `dasclaw_sandbox_linux` 2300+ LOC）。
+
+### 4.2 AST 解析复用（**关键收紧**）
+
+`security/ast.rs` **不直接 import `tree-sitter` / `tree-sitter-bash`**，而是依赖 `dasclaw_shell_command` 复用其已 verified 的解析层：
+
+```toml
+# crates/dasclaw_bash_validation/Cargo.toml (Slice 2.1.a 新增)
+[dependencies]
+dasclaw_shell_command = { path = "../dasclaw_shell_command" }   # ← 复用 tree-sitter wiring
+thiserror = "1"
+```
+
+```rust
+// crates/dasclaw_bash_validation/src/security/ast.rs
+use dasclaw_shell_command::bash::try_parse_shell;   // ← 复用，不重新引 tree-sitter
+
+pub(crate) fn parse_for_security(cmd: &str) -> Result<BashAst, ParseFail> {
+    let tree = try_parse_shell(cmd).ok_or(ParseFail::TreeSitterError)?;
+    // Fail-Closed walk：未识别节点 → Err(UnknownNode)，调用方转 Block
+    walk_with_allowlist(tree.root_node(), cmd.as_bytes())
+}
+```
+
+**理由**：
+- 单一 AST 来源；升级 `tree-sitter-bash` 版本只改 `dasclaw_shell_command` 一处
+- 直接复用 `try_parse_word_only_commands_sequence` 内的 `ALLOWED_KINDS` 集合作为 Fail-Closed 白名单基线
+- 无循环依赖风险：`dasclaw_shell_command` 当前只依赖 `dasclaw_absolute_path` + `dasclaw_protocol`，不依赖 bash_validation
+
+### 4.3 其他依赖
+
 | 项 | 决策 | 理由 |
 |---|---|---|
-| `tree-sitter = "0.25.10"` | ✅ 已存在（`dasclaw_shell_command/Cargo.toml`） | 无新增 dep 审批；复用同版本避免符号冲突 |
-| `tree-sitter-bash = "0.25"` | ✅ 已存在 | 同上 |
-| `regex` | ✅ 引入（如 workspace 未提供） | 上游约 30+ 处 regex，逐条用 `once_cell::sync::Lazy<Regex>` 缓存编译 |
+| `tree-sitter = "0.25.10"` | ✅ 间接复用（经 `dasclaw_shell_command`） | 见 §4.2 |
+| `tree-sitter-bash = "0.25"` | ✅ 间接复用 | 同上 |
+| `regex` | ✅ 直接引入 | 上游约 30+ 处 regex，逐条用 `once_cell::sync::Lazy<Regex>` 缓存编译 |
 | `shell-quote` 等价库 | ❌ 不引入 | 上游 shell-quote 有 single-quote bug；Rust 用 tree-sitter-bash AST 作为单一可信源 |
 | `unicode-general-category` 或等价 | ⚠️ 评估中 | `validateUnicodeWhitespace` 需 unicode WS 检测；优先尝试硬编码 ranges（参考上游 `UNICODE_WS_RE` L1899） |
 | `tree-sitter-bash` binary size | 已接受 | `dasclaw_shell_command` 已承担，不构成新成本 |
