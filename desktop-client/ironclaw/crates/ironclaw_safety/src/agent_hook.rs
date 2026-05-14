@@ -127,14 +127,35 @@ impl SafetyHook for IronclawSafetyHook {
         tool: &str,
         args: &mut Value,
     ) -> Result<SafetyDecision, SafetyError> {
-        // Issue #73 slice A1: bash command-string validation runs first
-        // when configured. `Block` short-circuits; anything else (Allow /
-        // Redact / future variants) falls through to the generic JSON
-        // validator so prompt-injection scanning still applies.
-        if let Some(bash) = &self.bash_hook
-            && let SafetyDecision::Block { reason } = bash.before_tool_call(tool, args).await?
-        {
-            return Ok(SafetyDecision::Block { reason });
+        // Issue #73 slice A1 + slice C: bash command-string validation
+        // runs first when configured. Per ADR-147 short-circuit semantics:
+        //
+        // - `Block` / `Ask`        → return immediately (interrupts user)
+        // - `Allow` / `Redact` /
+        //   `Passthrough` (slice C)→ fall through to the generic JSON
+        //                            validator so prompt-injection
+        //                            scanning still applies.
+        //
+        // The `Ok(other)` arm is a Fail-Safe non-exhaustive guard against
+        // future `SafetyDecision` variants added without updating call
+        // sites — see ADR-146 §3.
+        if let Some(bash) = &self.bash_hook {
+            match bash.before_tool_call(tool, args).await? {
+                SafetyDecision::Allow | SafetyDecision::Redact | SafetyDecision::Passthrough => {}
+                blocking @ (SafetyDecision::Block { .. } | SafetyDecision::Ask { .. }) => {
+                    return Ok(blocking);
+                }
+                other => {
+                    tracing::error!(
+                        ?other,
+                        "BashValidationHook returned unknown SafetyDecision variant; Fail-Safe Block"
+                    );
+                    return Ok(SafetyDecision::Block {
+                        reason: "unknown SafetyDecision variant from BashValidationHook"
+                            .to_string(),
+                    });
+                }
+            }
         }
 
         let result = self.layer.validator().validate_tool_params(args);
