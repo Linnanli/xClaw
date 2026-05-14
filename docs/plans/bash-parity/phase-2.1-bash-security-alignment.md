@@ -463,3 +463,142 @@ cargo nextest run -p dasclaw_bash_validation
 cargo fmt --all && python3.12 scripts/check_no_panics.py --base origin/xClaw
 cargo clippy --no-deps -p dasclaw_bash_validation --all-targets -- -D warnings
 ```
+
+---
+
+## 12. Anti-drift（防能力偏移）策略
+
+semantic port 的核心风险：上游 Block 的 payload 本 port 漏判（**false negative ＝ 安全事故**）。本节列出 **7 层防线 + 1 个差分 CI job + 1 个一次性 corpus 提取脚本**，确保即便走 semantic port 路线，最终能力仍**>=** 上游。
+
+### 12.1 不对称不变式（**最重要**）
+
+```
+∀ command c:
+  upstream_blocks(c)  ⟹  xclaw_blocks(c)        ← 必须成立（security）
+  xclaw_blocks(c)     ⟹⁄ upstream_blocks(c)     ← 不要求（允许我们更严）
+```
+
+- 一侧严格：上游 Block 的 payload，本 port **必须** Block（漏判即安全事故）
+- 另一侧宽松：本 port 可以 Block 更多（false positive，Phase 2.1 可接受；Phase 2.3 Ask UX 后再回头收敛）
+
+差分测试只校验**必要方向**，不强求双向相等 —— 这是 semantic port 与 verbatim port 在测试矩阵上的根本差异。
+
+### 12.2 7 层防线
+
+| # | 防线 | 触发时机 | 漏判后果 | 实现方式 |
+|---|---|---|---|---|
+| 1 | **攻击向量黄金语料库**（per check ID 至少 3 例） | 每个 slice PR | 编译失败 | `tests/fixtures/upstream_corpus.json` 由 §12.4 脚本生成，固化为测试 |
+| 2 | **check ID 覆盖率 enforcement** | `cargo nextest` | 测试失败 | unit test 枚举 `SecurityCheckId::iter()` × 断言每 variant 至少有一条 fixture tagged |
+| 3 | **差分 CI job**（upstream TS vs Rust port） | 每个 slice PR | CI 红 | §12.3 详述 |
+| 4 | **proptest 不对称模糊测试** | 每个 slice PR + nightly cron | 测试失败 | 在 `tests/security_proptest.rs`；shrink 出反例后人工 triage |
+| 5 | **`claude-code-main` 提交锁定** + 升级 ADR | 升级上游时 | review block | 在 `docs/plans/bash-parity/upstream-pin.md` 记录 commit SHA；升级必须重跑差分 CI |
+| 6 | **slice PR 描述手填覆盖率表** | 每个 slice PR review | review block | PR 模板含 23 行 check ID 表格，状态 green/yellow/red + 关联 fixture 文件名 |
+| 7 | **post-merge regression 监控**（nightly） | 每天 02:00 UTC | issue 自动建 | 跑 §12.3 差分 job + 比对历史 baseline，任何 false negative 自动建 P0 issue |
+
+### 12.3 差分 CI job（关键防线）
+
+新增 GH Actions workflow：`.github/workflows/bash-security-differential.yml`
+
+```yaml
+on: { pull_request: { paths: ['crates/dasclaw_bash_validation/**', '.github/workflows/bash-security-differential.yml'] } }
+jobs:
+  bash-security-differential:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate corpus (10K cases)
+        run: cd claude-code-main && pnpm install --frozen-lockfile && node scripts/dump-bash-security-decisions.mjs > /tmp/upstream.jsonl
+      - name: Run Rust port on same corpus
+        run: cargo run -p dasclaw_bash_validation --bin diff_runner -- /tmp/upstream.jsonl > /tmp/xclaw.jsonl
+      - name: Assert asymmetric invariant (no false negatives)
+        run: python3 scripts/bash_security_differential_check.py /tmp/upstream.jsonl /tmp/xclaw.jsonl --invariant=no-false-negatives
+```
+
+`dump-bash-security-decisions.mjs`（一次性写）：跑 `bashCommandIsSafe_DEPRECATED` over a JSONL corpus，每行 `{command, behavior, checkId?}`。
+`bash_security_differential_check.py`：FAIL 条件 = ∃ command where upstream==Block AND xclaw==Allow。
+
+**Corpus 构成**（10K-50K 条）：
+- 100% 包含上游 spec/test 文件里的全部 fixture（高确定性正/负样本）
+- 命令 history 采样（OSS GitHub crawl `*.sh` 文件，去重过滤）
+- proptest 生成的 fuzzed 命令
+- 已知 CVE-style 攻击 payload（OWASP 命令注入 cheat sheet）
+
+### 12.4 一次性 corpus 提取脚本
+
+新增 `scripts/extract_upstream_bashsec_corpus.mjs`（在 PR Slice 2.1.b 内提交）：
+
+```
+功能：
+  1. 解析 claude-code-main/src/tools/BashTool/bashSecurity.spec.ts (TS AST)
+  2. 抽取 it('...', ...) 块的 (输入命令, 期望 behavior, 期望 checkId)
+  3. 输出 crates/dasclaw_bash_validation/tests/fixtures/upstream_spec.json（500+ 条）
+  4. 同时输出 crates/dasclaw_bash_validation/tests/fixtures/upstream_spec.md（人类可读对照表）
+```
+
+合入后该 JSON 直接作为 Rust 测试数据：
+
+```rust
+// tests/security_corpus.rs
+const CORPUS: &str = include_str!("fixtures/upstream_spec.json");
+#[derive(serde::Deserialize)] struct Case { command: String, expect: Expect, check_id: Option<u32> }
+
+#[test]
+fn req_security_490_p2_1_upstream_corpus_no_false_negatives() {
+    for case in parse(CORPUS) {
+        let got = validate_security(&case.command);
+        match case.expect {
+            Expect::Block | Expect::Ask => assert!(matches!(got, ValidationResult::Block { .. }),
+                "FALSE NEGATIVE: upstream blocked `{}` but xclaw allowed", case.command),
+            Expect::Passthrough => { /* OK either way under semantic port */ }
+        }
+    }
+}
+```
+
+### 12.5 升级流程（上游变化时）
+
+1. 升 `claude-code-main` submodule/pin commit
+2. 重跑 `scripts/extract_upstream_bashsec_corpus.mjs` → 比对 JSON delta
+3. 新增/修改的 fixture 加入 Rust 测试（red → green）
+4. 跑差分 CI（§12.3）
+5. 写升级 ADR（含 check ID 变动、新攻击向量、回归测试结果）
+
+### 12.6 偏移指标
+
+每个 slice PR 必须在描述里报告：
+
+```
+Upstream coverage:
+  - check IDs covered:        N / 23
+  - upstream spec fixtures:   N / total
+  - differential CI pass:     ✅/❌
+  - false negatives in last nightly: 0  (else block merge)
+```
+
+如出现 FN（false negative） → 该 PR **不得合并**，必须先开热修。
+
+---
+
+## 13. Slice PR 模板新增字段（防止手写遗漏）
+
+每个 slice 2.1.a/b/c PR description 在 §"验证" 节后必须加：
+
+```markdown
+### Upstream parity table
+
+| Check ID | Name | Fixtures | Rust fn | Status |
+|---|---|---|---|---|
+| 1 | INCOMPLETE_COMMANDS | tests/fixtures/incomplete_*.txt | early::validate_incomplete_commands | ✅ |
+| 2 | JQ_SYSTEM_FUNCTION | ... | rules::jq::system_function | ✅ |
+| ... | ... | ... | ... | ✅/⏳/❌ |
+| 23 | QUOTED_NEWLINE | ... | ... | ... |
+
+### Differential CI
+
+- Corpus size: N
+- False negatives: 0  (else block merge)
+- False positives: N  (acceptable under semantic-port model; track for Phase 2.3)
+```
+
+未填表 / 表内有 ❌ → PR 不可 merge（review 拒收依据）。
+
