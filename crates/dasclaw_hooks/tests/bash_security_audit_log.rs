@@ -16,12 +16,14 @@
 //!   the mode itself would bypass other checks (security gate is mode-
 //!   independent per plan §3.3 / §6).
 //!
-//! `DecisionReason::ParseFailure` is declared in
-//! `dasclaw_bash_validation::security::types` for forward compatibility but
-//! no production code path emits it today — no validator currently surfaces
-//! a parse failure as a synthetic check. Pinning that contract is deferred
-//! until a Phase 2.2 validator (or the differential CI from plan §12)
-//! exercises it.
+//! `DecisionReason::ParseFailure` gained a production emit path with
+//! PR #522 (`ast::validate_parse_failure` as the final pipeline entry —
+//! Fail-Closed catch-all when tree-sitter refuses the input).
+//! `req_security_490_p2_1_d_audit_log_parse_failure_surface_rule_id`
+//! pins its `rule_id=ParseFailure` audit surface. Because the validator
+//! is *positioned last* in the pipeline (and is misparsing-sensitive),
+//! a pipeline reorder that demotes it would silently turn unparseable
+//! commands into Allow — this test guards against that.
 //!
 //! `ControlCharacters` *does* have a production emit path as of PR #519
 //! (first early gate, see
@@ -157,6 +159,53 @@ async fn req_security_490_p2_1_d_audit_log_control_chars_surface_rule_id() {
     assert!(
         logs_contain("rule_id=ControlCharacters"),
         "control-character refusal must surface `rule_id=ControlCharacters`, not a substitute"
+    );
+    assert!(
+        logs_contain("workspace-write"),
+        "audit log must carry the active PermissionMode slug"
+    );
+}
+
+#[tokio::test]
+#[traced_test]
+async fn req_security_490_p2_1_d_audit_log_parse_failure_surface_rule_id() {
+    // PR #522 (Phase 2.1 wrap-up) added `ast::validate_parse_failure` as the
+    // *final* gate in `validate_security`. Pin its audit-log surface so
+    // future refactors of the pipeline order can't silently demote it.
+    //
+    // Why this matters more than the typical pinning test:
+    //
+    // - `validate_parse_failure` is the engine-level Fail-Closed catch-all
+    //   for inputs tree-sitter refuses. If a refactor accidentally moved it
+    //   earlier in the pipeline OR removed it, unparseable commands would
+    //   stop emitting `rule_id=ParseFailure` — they'd either get attributed
+    //   to a less specific later validator OR (much worse) silently Allow.
+    // - Synthetic check id `0` (see `SecurityCheckId::ParseFailure`) is the
+    //   single rule_id whose audit surface is the *direct telemetry signal*
+    //   for "AST refused this input"; SIEM rules that alert on parser
+    //   anomalies in the corpus depend on it.
+    //
+    // Input is an unterminated double-quote — same canonical fixture as the
+    // unit-level tests in `security_parse_failure_unit_tests.rs`. It
+    // deliberately *doesn't* trip any earlier validator (no metacharacters
+    // in unsafe positions, no newlines, no control chars), so the only
+    // surface that can fire is `validate_parse_failure` itself.
+    let decision = fire_bash(PermissionMode::WorkspaceWrite, "echo \"unterminated").await;
+    assert!(
+        matches!(decision, SafetyDecision::Block { .. }),
+        "unterminated quote must Block via Fail-Closed parse-failure; got {decision:?}"
+    );
+
+    assert!(
+        logs_contain("bash_security::block"),
+        "audit tag must fire on parse-failure refusal"
+    );
+    // Exact rule_id — protects against pipeline-reorder regressions that
+    // would let a later (less specific) validator claim the rule_id, or a
+    // demotion that drops the synthetic check id entirely.
+    assert!(
+        logs_contain("rule_id=ParseFailure"),
+        "parse-failure refusal must surface `rule_id=ParseFailure`, not a substitute"
     );
     assert!(
         logs_contain("workspace-write"),
