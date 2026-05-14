@@ -2770,6 +2770,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dasclaw_bash_permissions"
+version = "0.0.0-w1"
+dependencies = [
+ "regex",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "dasclaw_bash_validation"
 version = "0.0.0-w1"
 dependencies = [
