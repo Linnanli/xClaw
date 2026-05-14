@@ -164,6 +164,39 @@ pub fn validate_carriage_return(ctx: &ValidationContext) -> SecurityResult {
     SecurityResult::Passthrough
 }
 
+// ─────────────────────────── validate_control_characters ───────────────────
+
+/// Upstream `CONTROL_CHAR_RE` (`bashSecurity.ts` L2251) — non-printable
+/// control bytes that have no legitimate use in shell commands and that bash
+/// silently drops or ignores. Excludes tab (`0x09`), newline (`0x0A`) and
+/// carriage return (`0x0D`), which are handled by [`validate_newlines`] /
+/// [`validate_carriage_return`].
+///
+/// Pattern: `[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]`.
+fn is_control_character(b: u8) -> bool {
+    matches!(b, 0x00..=0x08 | 0x0B | 0x0C | 0x0E..=0x1F | 0x7F)
+}
+
+/// Upstream `bashSecurity.ts` L2260-L2273 / L2440-L2453 — the absolute first
+/// gate in both the deprecated and modern entry points. Null bytes and other
+/// non-printable bytes are silently dropped by bash but confuse our quote /
+/// AST tracking, letting metacharacters adjacent to them slip through
+/// (`echo safe\x00; rm -rf /`).
+///
+/// Misparsing-sensitive: short-circuits the pipeline on first hit
+/// ([`SecurityCheckId::ControlCharacters`] is the default-true case of
+/// [`SecurityCheckId::is_misparsing`]).
+pub fn validate_control_characters(ctx: &ValidationContext) -> SecurityResult {
+    if ctx.original_command().bytes().any(is_control_character) {
+        return block(
+            SecurityCheckId::ControlCharacters,
+            1,
+            "Command contains non-printable control characters that could be used to bypass security checks",
+        );
+    }
+    SecurityResult::Passthrough
+}
+
 // ─────────────────────────── validate_unicode_whitespace ────────────────────
 
 /// Upstream `UNICODE_WS_RE` (L1899) — the precise set of unicode whitespace
