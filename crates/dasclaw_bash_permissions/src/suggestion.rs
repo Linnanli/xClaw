@@ -126,9 +126,8 @@ fn env_var_assign_re() -> &'static Regex {
 
 fn subcommand_shape_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    // safety: literal pattern
     RE.get_or_init(|| {
-        Regex::new(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$").expect("BUG: subcommand shape regex literal")
+        Regex::new(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$").expect("BUG: literal") // safety: literal regex
     })
 }
 
