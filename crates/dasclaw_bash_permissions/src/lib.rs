@@ -23,6 +23,7 @@ pub mod dangerous_patterns;
 pub mod exact_match;
 pub(crate) mod pipeline;
 pub mod prefix_match;
+pub mod rule_parser;
 pub mod shadowed_rule_detection;
 pub mod shell_rule_matching;
 pub mod strip_env;
@@ -35,6 +36,10 @@ pub use dangerous_patterns::{
 };
 pub use exact_match::{check_exact_match, BASH_TOOL_NAME};
 pub use prefix_match::check_prefix_match;
+pub use rule_parser::{
+    escape_rule_content, get_legacy_tool_names, normalize_legacy_tool_name,
+    permission_rule_value_from_string, permission_rule_value_to_string, unescape_rule_content,
+};
 pub use shadowed_rule_detection::{
     detect_unreachable_rules, is_shared_setting_source, permission_rule_source_display_string,
     DetectUnreachableRulesOptions, ShadowType, UnreachableRule,
