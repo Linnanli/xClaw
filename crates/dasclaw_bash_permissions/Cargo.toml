@@ -10,5 +10,6 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
+dasclaw_shell_command = { path = "../dasclaw_shell_command" }
 regex = "1.12"
 thiserror = "1"
