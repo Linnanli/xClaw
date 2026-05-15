@@ -352,17 +352,15 @@ fn req_perm_490_p2_2_d_19_empty_command_is_passthrough() {
 }
 
 // ---------------------------------------------------------------------------
-// 8. Forward pointer: env-var stripping (slice 2.2.e)
+// 8. Env-var stripping (closed by slice 2.2.f)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn req_perm_490_p2_2_d_20_env_var_wrapper_not_stripped_yet() {
-    // SECURITY GAP forward-pointer to slice 2.2.e: `FOO=bar rm -rf /`
-    // should be matched by `rm:*` AFTER env-var stripping. Today, the
-    // AST parses this as a single command whose command_name is `rm`
-    // with env vars attached — depending on tree-sitter's surface, it
-    // may or may not match. We pin the CURRENT behavior here so 2.2.e
-    // can flip it without surprises.
+fn req_perm_490_p2_2_d_20_env_var_wrapper_now_stripped() {
+    // CLOSED by slice 2.2.f: tree-sitter rejects `FOO=bar rm…` as
+    // non-word-only so we fall back to `check_prefix_match` on the
+    // raw trimmed string. With env-var stripping now wired into the
+    // Deny bucket of `check_prefix_match`, the deny rule `rm:*` fires.
     let mut c = ctx();
     c.add_rule(
         PermissionBehavior::Deny,
@@ -370,12 +368,8 @@ fn req_perm_490_p2_2_d_20_env_var_wrapper_not_stripped_yet() {
         "rm:*",
     );
     let result = check_compound_match("FOO=bar rm -rf /tmp/x", &c);
-    // Today: tree-sitter rejects env-var-prefixed command as
-    // non-word-only (variable_assignment is not in ALLOWED_KINDS),
-    // so we fall back to raw prefix-match which sees `FOO=bar rm…`
-    // not starting with `rm`. Slice 2.2.e MUST change this to Deny.
     assert!(
-        matches!(result, PermissionResult::Passthrough { .. }),
-        "env-var stripping not yet implemented — slice 2.2.e MUST change this to Deny. got {result:?}"
+        matches!(result, PermissionResult::Deny { .. }),
+        "slice 2.2.f: env-var bypass closed via AST fallback — expected Deny, got {result:?}"
     );
 }

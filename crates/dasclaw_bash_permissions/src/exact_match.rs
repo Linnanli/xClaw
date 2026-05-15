@@ -35,7 +35,7 @@
 //!   command. Wildcard matching on unparsed commands allows `foo *` to
 //!   match `foo arg && curl evil.com` since `.*` matches operators.")
 
-use crate::pipeline::{run_pipeline, RulePredicate};
+use crate::pipeline::{run_pipeline, PipelineMessages, RulePredicate};
 use crate::shell_rule_matching::{parse_permission_rule, ShellPermissionRule};
 use crate::types::{PermissionResult, ToolPermissionContext};
 
@@ -67,23 +67,27 @@ const EXACT_PREDICATE: RulePredicate = rule_matches_in_exact_mode;
 /// (`const command = input.command.trim()`). No env-var stripping or
 /// compound-splitting happens here — see slice 2.2.d/e.
 pub fn check_exact_match(command: &str, context: &ToolPermissionContext) -> PermissionResult {
+    let trimmed = command.trim();
     run_pipeline(
-        command,
+        trimmed,
+        &|_behavior| trimmed.to_string(),
         context,
         BASH_TOOL_NAME,
         EXACT_PREDICATE,
-        &|cmd| {
-            format!(
-                "Permission to use {tool} with command {cmd} has been denied.",
-                tool = BASH_TOOL_NAME,
-            )
+        PipelineMessages {
+            deny: &|cmd| {
+                format!(
+                    "Permission to use {tool} with command {cmd} has been denied.",
+                    tool = BASH_TOOL_NAME,
+                )
+            },
+            ask: &|| {
+                format!(
+                    "Claude requested permissions to use {tool}, but you haven't granted it yet.",
+                    tool = BASH_TOOL_NAME,
+                )
+            },
+            passthrough: &|| "This command requires approval".to_string(),
         },
-        &|| {
-            format!(
-                "Claude requested permissions to use {tool}, but you haven't granted it yet.",
-                tool = BASH_TOOL_NAME,
-            )
-        },
-        &|| "This command requires approval".to_string(),
     )
 }

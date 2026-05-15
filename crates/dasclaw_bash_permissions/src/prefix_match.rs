@@ -25,9 +25,12 @@
 //!   `Bash(cd:*)` will currently match `cd /path && rm -rf /` in this
 //!   library-only engine. Pinned by [`tests/prefix_match_test.rs`]
 //!   test `req_perm_490_p2_2_c_18_compound_not_yet_split`.
-//! - Slice 2.2.e → `stripSafeWrappers` / `stripAllLeadingEnvVars` /
-//!   `BINARY_HIJACK_VARS` (upstream L805-L856). Pinned by
-//!   `req_perm_490_p2_2_c_19_env_var_wrapping_not_yet_stripped`.
+//! - **CLOSED in Slice 2.2.f** → `stripSafeWrappers` /
+//!   `stripAllLeadingEnvVars` / `BINARY_HIJACK_VARS`
+//!   (upstream L805-L856). Wired per-behavior via
+//!   [`crate::pipeline::CmdForBehavior`]. The matching forward-pointer
+//!   test in `prefix_match_test.rs` flips from Passthrough to Deny
+//!   under `req_perm_490_p2_2_c_19_env_var_wrapping_now_stripped`.
 //! - Output-redirection stripping (`extractOutputRedirections`,
 //!   upstream L791-L801) — applies to both modes; deferred follow-up.
 //! - Slice 2.2.f → `BashPermissionHook` adapter + `CompositeSafetyHook`
@@ -46,11 +49,12 @@
 //!   `xargs -n1 grep` are NOT matched (natural word boundary).
 //! - **Library-only** until slice 2.2.f.
 
-use crate::pipeline::{run_pipeline, RulePredicate};
+use crate::pipeline::{run_pipeline, PipelineMessages, RulePredicate};
 use crate::shell_rule_matching::{
     match_wildcard_pattern, parse_permission_rule, MatchOptions, ShellPermissionRule,
 };
-use crate::types::{PermissionResult, ToolPermissionContext};
+use crate::strip_env::{strip_all_leading_env_vars, strip_safe_wrappers};
+use crate::types::{PermissionBehavior, PermissionResult, ToolPermissionContext};
 
 /// Bash tool name — same as [`crate::exact_match::BASH_TOOL_NAME`],
 /// re-declared here to keep the prefix module independently usable.
@@ -117,27 +121,51 @@ const PREFIX_PREDICATE: RulePredicate = rule_matches_in_prefix_mode;
 /// `Deny > Ask > Allow > Passthrough` (shared with exact mode via
 /// [`crate::pipeline::run_pipeline`]).
 ///
-/// `command` is trimmed before matching. No env-var stripping,
-/// safe-wrapper stripping, or compound-command splitting happens here
-/// — see module docs.
+/// `command` is trimmed before matching. **Env-var / safe-wrapper
+/// stripping is applied per-behavior** (upstream `permissions.ts`
+/// L805-L856):
+///
+/// - **Deny bucket**: [`strip_all_leading_env_vars`] — aggressive;
+///   closes `FOO=bar denied_command` bypass. Fail-Safe: if a
+///   `LD_*` / `DYLD_*` / `PATH=` hijack-binary env var is detected,
+///   the helper returns the original string so deny rules see the full
+///   hijacked command and still match (`req_perm_490_p2_2_e_08-10`).
+/// - **Allow / Ask bucket**: [`strip_safe_wrappers`] — conservative;
+///   only strips upstream-listed `SAFE_ENV_VARS` and safe wrapper
+///   binaries (`timeout`, `time`, `nice`, `nohup`, `stdbuf`). Anything
+///   unknown stays attached so allow/ask rules don't over-grant on
+///   user-injected env wrappers.
+///
+/// No compound-command splitting happens here — see
+/// [`crate::compound_match::check_compound_match`].
 pub fn check_prefix_match(command: &str, context: &ToolPermissionContext) -> PermissionResult {
+    let trimmed = command.trim();
+    let cmd_for_behavior = |behavior: PermissionBehavior| -> String {
+        match behavior {
+            PermissionBehavior::Deny => strip_all_leading_env_vars(trimmed),
+            PermissionBehavior::Allow | PermissionBehavior::Ask => strip_safe_wrappers(trimmed),
+        }
+    };
     run_pipeline(
-        command,
+        trimmed,
+        &cmd_for_behavior,
         context,
         BASH_TOOL_NAME,
         PREFIX_PREDICATE,
-        &|cmd| {
-            format!(
-                "Permission to use {tool} with command {cmd} has been denied.",
-                tool = BASH_TOOL_NAME,
-            )
+        PipelineMessages {
+            deny: &|cmd| {
+                format!(
+                    "Permission to use {tool} with command {cmd} has been denied.",
+                    tool = BASH_TOOL_NAME,
+                )
+            },
+            ask: &|| {
+                format!(
+                    "Claude requested permissions to use {tool}, but you haven't granted it yet.",
+                    tool = BASH_TOOL_NAME,
+                )
+            },
+            passthrough: &|| "This command requires approval".to_string(),
         },
-        &|| {
-            format!(
-                "Claude requested permissions to use {tool}, but you haven't granted it yet.",
-                tool = BASH_TOOL_NAME,
-            )
-        },
-        &|| "This command requires approval".to_string(),
     )
 }
