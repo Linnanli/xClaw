@@ -17,12 +17,14 @@
 //! - the responsibility contract (`no_safety_rule_in_event_hooks`)
 //! - the Phase 0 red-line definition (`count_hook_systems() == 1`).
 
+pub mod bash_permission_hook;
 pub mod bash_validation_hook;
 pub mod bundled;
 pub mod contract;
 pub mod hook;
 pub mod registry;
 
+pub use bash_permission_hook::BashPermissionHook;
 pub use bash_validation_hook::{BashValidationHook, DEFAULT_BASH_TOOL_NAMES};
 
 pub use bundled::{

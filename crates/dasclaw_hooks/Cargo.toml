@@ -28,6 +28,10 @@ x_claw_agent = { path = "../x_claw_agent", version = "0.1.0" }
 # into `BashValidationHook::before_tool_call`).
 dasclaw_bash_validation = { path = "../dasclaw_bash_validation", version = "0.0.0-w1" }
 
+# Phase 2.2 bash permission rule engine (Slice 2.2.f hook adapter wraps the
+# `check_exact_match` / `check_compound_match` pipeline as `BashPermissionHook`).
+dasclaw_bash_permissions = { path = "../dasclaw_bash_permissions" }
+
 [dev-dependencies]
 tokio = { version = "1", features = ["sync", "macros", "time", "rt", "rt-multi-thread"] }
 tracing-test = { version = "0.2", features = ["no-env-filter"] }
