@@ -19,10 +19,13 @@
 //!   is case-sensitive so default is `false`)
 
 pub mod exact_match;
+pub(crate) mod pipeline;
+pub mod prefix_match;
 pub mod shell_rule_matching;
 pub mod types;
 
 pub use exact_match::{check_exact_match, BASH_TOOL_NAME};
+pub use prefix_match::check_prefix_match;
 pub use shell_rule_matching::{
     has_wildcards, match_wildcard_pattern, parse_permission_rule, permission_rule_extract_prefix,
     MatchOptions, ShellPermissionRule,
