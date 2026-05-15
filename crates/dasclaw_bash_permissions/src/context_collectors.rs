@@ -32,6 +32,9 @@
 //! (which uses `find()`, first-match-wins).
 
 use crate::exact_match::BASH_TOOL_NAME;
+use crate::shadowed_rule_detection::{
+    detect_unreachable_rules, DetectUnreachableRulesOptions, UnreachableRule,
+};
 use crate::types::{
     PermissionBehavior, PermissionRule, PermissionRuleValue, ToolPermissionContext,
     ToolPermissionRulesBySource,
@@ -85,4 +88,30 @@ fn collect(
         }
     }
     out
+}
+
+/// Bridge — Slice 2.2.m (Issue #490 Phase 2.2).
+///
+/// Drives [`detect_unreachable_rules`] directly from a
+/// [`ToolPermissionContext`] by collecting the three behavior buckets
+/// via [`get_allow_rules`] / [`get_ask_rules`] / [`get_deny_rules`].
+///
+/// This is the integration point promised by Slice 2.2.k's reserved
+/// `req_perm_490_p2_2_k_12` smoke slot: callers no longer need to
+/// thread the three lists manually.
+///
+/// Determinism: inherits from `BTreeMap` source ordering in
+/// [`ToolPermissionContext`]; `detect_unreachable_rules` itself uses
+/// first-match-wins (upstream parity).
+///
+/// Fail-Safe: pure delegation. Empty context → empty output, no
+/// allocation beyond the three collector `Vec`s.
+pub fn detect_unreachable_rules_from_context(
+    ctx: &ToolPermissionContext,
+    options: DetectUnreachableRulesOptions,
+) -> Vec<UnreachableRule> {
+    let allows = get_allow_rules(ctx);
+    let asks = get_ask_rules(ctx);
+    let denies = get_deny_rules(ctx);
+    detect_unreachable_rules(&allows, &asks, &denies, options)
 }
