@@ -72,46 +72,75 @@ pub(crate) fn first_matching_rule(
 /// tool-specific (e.g. exact mode wants "with command X has been
 /// denied" while prefix mode may want a different phrasing in later
 /// slices). For now both modes use the same upstream wording.
+/// Per-behavior command resolver: returns the command string to match
+/// against rules of the given behavior bucket.
+///
+/// Modes that need different stripping per behavior (e.g. prefix mode
+/// uses [`crate::strip_env::strip_all_leading_env_vars`] on the Deny
+/// path and [`crate::strip_env::strip_safe_wrappers`] on the
+/// Allow / Ask path — upstream `permissions.ts` L805-L856) supply a
+/// closure that switches on `behavior`. Modes that don't (e.g. exact
+/// mode) return the same trimmed string regardless.
+///
+/// The `&str` returned must live for the duration of one pipeline call.
+/// The trait-object form (`&dyn Fn`) is used to keep the API
+/// monomorphisation-free and avoids leaking the closure type into the
+/// public re-exports of `exact_match` / `prefix_match`.
+pub(crate) type CmdForBehavior<'a> = &'a dyn Fn(PermissionBehavior) -> String;
+
+/// Mode-/tool-specific decision messages bundled into one struct so
+/// [`run_pipeline`] stays under clippy's `too_many_arguments` cap.
+/// Each closure is invoked at most once per call.
+pub(crate) struct PipelineMessages<'a> {
+    /// Invoked when a Deny rule matches; receives the original
+    /// (display) command — never the post-stripped form.
+    pub deny: &'a dyn Fn(&str) -> String,
+    /// Invoked when an Ask rule matches.
+    pub ask: &'a dyn Fn() -> String,
+    /// Invoked when no rule matches.
+    pub passthrough: &'a dyn Fn() -> String,
+}
+
 pub(crate) fn run_pipeline(
-    command: &str,
+    display_command: &str,
+    cmd_for_behavior: CmdForBehavior<'_>,
     context: &ToolPermissionContext,
     tool_name: &str,
     predicate: RulePredicate,
-    deny_message: &dyn Fn(&str) -> String,
-    ask_message: &dyn Fn() -> String,
-    passthrough_message: &dyn Fn() -> String,
+    messages: PipelineMessages<'_>,
 ) -> PermissionResult {
-    let cmd = command.trim();
-
+    let deny_cmd = cmd_for_behavior(PermissionBehavior::Deny);
     if let Some(rule) = first_matching_rule(
         &context.always_deny_rules,
-        cmd,
+        &deny_cmd,
         PermissionBehavior::Deny,
         tool_name,
         predicate,
     ) {
         return PermissionResult::Deny {
-            message: deny_message(cmd),
+            message: (messages.deny)(display_command),
             reason: PermissionDecisionReason::Rule { rule },
         };
     }
 
+    let ask_cmd = cmd_for_behavior(PermissionBehavior::Ask);
     if let Some(rule) = first_matching_rule(
         &context.always_ask_rules,
-        cmd,
+        &ask_cmd,
         PermissionBehavior::Ask,
         tool_name,
         predicate,
     ) {
         return PermissionResult::Ask {
-            message: ask_message(),
+            message: (messages.ask)(),
             reason: PermissionDecisionReason::Rule { rule },
         };
     }
 
+    let allow_cmd = cmd_for_behavior(PermissionBehavior::Allow);
     if let Some(rule) = first_matching_rule(
         &context.always_allow_rules,
-        cmd,
+        &allow_cmd,
         PermissionBehavior::Allow,
         tool_name,
         predicate,
@@ -121,7 +150,7 @@ pub(crate) fn run_pipeline(
         };
     }
 
-    let passthrough = passthrough_message();
+    let passthrough = (messages.passthrough)();
     PermissionResult::Passthrough {
         message: passthrough.clone(),
         reason: PermissionDecisionReason::Other {

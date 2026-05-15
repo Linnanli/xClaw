@@ -296,12 +296,13 @@ fn req_perm_490_p2_2_e_28_safe_env_vars_list_sanity() {
 
 #[test]
 fn req_perm_490_p2_2_e_29_forward_pointer_check_prefix_unchanged() {
-    // PIN — `check_prefix_match` is NOT yet wired to strip env vars
-    // (Slice 2.2.c test 19 + 2.2.d test 20 pin this). This slice ships
-    // helpers only — Slice 2.2.f integrates them at the hook layer.
-    //
-    // This forward-pointer test asserts the helpers are *callable* but
-    // does NOT assert any change to the prefix matcher's behavior.
+    // Helper-level invariants — pinned by 2.2.e and still hold after
+    // Slice 2.2.f wires these helpers into `check_prefix_match`:
+    //   * `strip_all_leading_env_vars` keeps hijack prefixes (Fail-Safe)
+    //   * `strip_safe_wrappers` peels TZ + timeout (allow path)
+    // The wiring-level behavior flips are pinned by
+    // `req_perm_490_p2_2_c_19_env_var_wrapping_now_stripped` and
+    // `req_perm_490_p2_2_d_20_env_var_wrapper_now_stripped`.
     let stripped = strip_all_leading_env_vars("LD_PRELOAD=/x rm -rf /");
     assert_eq!(stripped, "LD_PRELOAD=/x rm -rf /"); // Fail-Safe kept hijack prefix.
     let allow_stripped = strip_safe_wrappers("TZ=UTC timeout 5 rm -rf /");

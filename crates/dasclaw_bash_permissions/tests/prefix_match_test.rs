@@ -9,7 +9,8 @@
 //!
 //! Deferred-gap forward pointers:
 //! - test 18 → slice 2.2.d (compound splitting)
-//! - test 19 → slice 2.2.e (env-var stripping)
+//! - test 19 → **CLOSED in slice 2.2.f** (env-var stripping wired into
+//!   `check_prefix_match`); assertion flipped from Passthrough → Deny.
 
 use dasclaw_bash_permissions::{
     check_prefix_match, PermissionBehavior, PermissionDecisionReason, PermissionResult,
@@ -361,10 +362,10 @@ fn req_perm_490_p2_2_c_18_compound_not_yet_split() {
 }
 
 #[test]
-fn req_perm_490_p2_2_c_19_env_var_wrapping_not_yet_stripped() {
-    // GAP: slice 2.2.e will add `stripAllLeadingEnvVars` so deny rules
-    // can't be circumvented via `FOO=bar denied_command`. Until then,
-    // `Bash(rm:*)` does NOT match `FOO=bar rm -rf /`. Library-only.
+fn req_perm_490_p2_2_c_19_env_var_wrapping_now_stripped() {
+    // CLOSED by slice 2.2.f: `stripAllLeadingEnvVars` is wired into
+    // the Deny bucket so `FOO=bar denied_command` no longer bypasses
+    // deny rules. Upstream `permissions.ts` L805-L856.
     let mut c = ctx();
     c.add_rule(
         PermissionBehavior::Deny,
@@ -373,8 +374,7 @@ fn req_perm_490_p2_2_c_19_env_var_wrapping_not_yet_stripped() {
     );
     let result = check_prefix_match("FOO=bar rm -rf /", &c);
     assert!(
-        matches!(result, PermissionResult::Passthrough { .. }),
-        "current behavior pinned for forward-pointer; slice 2.2.e \
-         MUST change this to Deny (env-var bypass closed)"
+        matches!(result, PermissionResult::Deny { .. }),
+        "slice 2.2.f: env-var bypass closed — expected Deny, got {result:?}"
     );
 }
