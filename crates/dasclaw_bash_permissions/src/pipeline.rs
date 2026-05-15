@@ -150,17 +150,6 @@ pub(crate) fn run_pipeline(
         };
     }
 
-    let passthrough = (messages.passthrough)
-        &allow_cmd,
-        PermissionBehavior::Allow,
-        tool_name,
-        predicate,
-    ) {
-        return PermissionResult::Allow {
-            reason: PermissionDecisionReason::Rule { rule },
-        };
-    }
-
     let passthrough = (messages.passthrough)();
     PermissionResult::Passthrough {
         message: passthrough.clone(),
