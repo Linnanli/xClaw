@@ -61,7 +61,7 @@ pub const CROSS_PLATFORM_CODE_EXEC: &[&str] = &[
 const EXTRA_BASH_PATTERNS: &[&str] = &[
     // Shells (upstream L46-L47)
     "zsh", "fish", // Direct shell exec primitives (upstream L48-L50)
-    "eval", "exec", "env", // Argv-feeders (upstream L51)
+    "eval", "exec", "env",   // Argv-feeders (upstream L51)
     "xargs", // Privilege escalation (upstream L52)
     "sudo",
 ];
