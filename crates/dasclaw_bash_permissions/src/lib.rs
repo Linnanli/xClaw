@@ -18,9 +18,16 @@
 //!   `MatchOptions::case_insensitive` for forward-compat (Bash itself
 //!   is case-sensitive so default is `false`)
 
+pub mod exact_match;
 pub mod shell_rule_matching;
+pub mod types;
 
+pub use exact_match::{check_exact_match, BASH_TOOL_NAME};
 pub use shell_rule_matching::{
     has_wildcards, match_wildcard_pattern, parse_permission_rule, permission_rule_extract_prefix,
     MatchOptions, ShellPermissionRule,
+};
+pub use types::{
+    PermissionBehavior, PermissionDecisionReason, PermissionResult, PermissionRule,
+    PermissionRuleSource, PermissionRuleValue, ToolPermissionContext, ToolPermissionRulesBySource,
 };
