@@ -19,6 +19,7 @@
 //!   is case-sensitive so default is `false`)
 
 pub mod compound_match;
+pub mod dangerous_patterns;
 pub mod exact_match;
 pub(crate) mod pipeline;
 pub mod prefix_match;
@@ -26,6 +27,10 @@ pub mod shell_rule_matching;
 pub mod types;
 
 pub use compound_match::{check_compound_match, MAX_SUBCOMMANDS_FOR_SECURITY_CHECK};
+pub use dangerous_patterns::{
+    dangerous_bash_patterns, is_dangerous_bash_allow_rule, is_dangerous_bash_allow_rule_value,
+    CROSS_PLATFORM_CODE_EXEC,
+};
 pub use exact_match::{check_exact_match, BASH_TOOL_NAME};
 pub use prefix_match::check_prefix_match;
 pub use shell_rule_matching::{
