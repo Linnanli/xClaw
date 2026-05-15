@@ -15,8 +15,12 @@
 use std::path::Path;
 
 pub mod permissions;
+pub mod redirects;
 pub mod security;
 pub use permissions::PermissionMode;
+pub use redirects::{
+    extract_output_redirections, OutputRedirection, RedirectOperator, RedirectionExtraction,
+};
 
 /// Result of validating a bash command before execution.
 #[derive(Debug, Clone, PartialEq, Eq)]
