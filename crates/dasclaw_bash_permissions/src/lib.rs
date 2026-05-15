@@ -19,6 +19,7 @@
 //!   is case-sensitive so default is `false`)
 
 pub mod compound_match;
+pub mod context_collectors;
 pub mod dangerous_patterns;
 pub mod exact_match;
 pub(crate) mod pipeline;
@@ -30,6 +31,7 @@ pub mod strip_env;
 pub mod types;
 
 pub use compound_match::{check_compound_match, MAX_SUBCOMMANDS_FOR_SECURITY_CHECK};
+pub use context_collectors::{get_allow_rules, get_ask_rules, get_deny_rules};
 pub use dangerous_patterns::{
     dangerous_bash_patterns, is_dangerous_bash_allow_rule, is_dangerous_bash_allow_rule_value,
     CROSS_PLATFORM_CODE_EXEC,
