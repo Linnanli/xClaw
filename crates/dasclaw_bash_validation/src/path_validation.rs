@@ -661,6 +661,11 @@ pub fn check_dangerous_removal_paths(
 ///
 /// `workspace_dirs` is the union of "allowed working directories"
 /// (cwd + extra `--add-dir` paths). The first match wins.
+///
+/// **Lexical-only**: this entry point performs zero IO; symlinks
+/// are not followed. For Fail-Safe symlink-escape detection use
+/// [`validate_command_paths_with_fs`] with a real
+/// [`FsResolver`][crate::fs_resolver::FsResolver].
 #[must_use]
 pub fn validate_command_paths(
     cmd: PathCommand,
@@ -668,6 +673,50 @@ pub fn validate_command_paths(
     cwd: &Path,
     workspace_dirs: &[PathBuf],
     home: &Path,
+) -> PathValidationOutcome {
+    validate_command_paths_with_fs(
+        cmd,
+        args,
+        cwd,
+        workspace_dirs,
+        home,
+        &crate::fs_resolver::NoopFsResolver,
+    )
+}
+
+/// Same contract as [`validate_command_paths`] but additionally walks
+/// the symlink chain (via `fs`) for every extracted path. Any chain
+/// step landing outside `workspace_dirs` flips the outcome to
+/// [`PathValidationOutcome::Ask`] regardless of whether the original
+/// lexical path was inside.
+///
+/// Fail-Safe contract (ADR-150 §5):
+/// - Walker termination "unclean" (loop, max-depth, IO failure) →
+///   Ask with `SymlinkResolveFailed` reason.
+/// - Any resolved chain step outside `workspace_dirs` → Ask with
+///   `SymlinkEscape` reason (carries both original and escaping
+///   path).
+///
+/// Pass [`crate::fs_resolver::NoopFsResolver`] to disable symlink
+/// resolution and recover the pre-3.1.g lexical behaviour exactly —
+/// the walker returns `terminated_cleanly = false` with a one-step
+/// chain, but the outer function treats Noop specifically as
+/// "no IO requested" rather than Fail-Safe (otherwise every Noop
+/// caller would Ask on every path). See the matching test
+/// [`req_safety_490_3_1_g_noop_caller_preserves_3_1_a_behaviour`].
+///
+/// **Note**: `workspace_dirs` should be canonicalized by the caller.
+/// The real POSIX resolver canonicalizes resolved chain steps (e.g.
+/// `/tmp/...` → `/private/tmp/...` on macOS); without matching
+/// canonical workspace entries the comparison would Ask spuriously.
+#[must_use]
+pub fn validate_command_paths_with_fs(
+    cmd: PathCommand,
+    args: &[String],
+    cwd: &Path,
+    workspace_dirs: &[PathBuf],
+    home: &Path,
+    fs: &dyn crate::fs_resolver::FsResolver,
 ) -> PathValidationOutcome {
     if let Some(dangerous) = check_dangerous_removal_paths(cmd, args, cwd, home) {
         return dangerous;
@@ -698,6 +747,46 @@ pub fn validate_command_paths(
                 ),
                 blocked_path: Some(absolute),
             };
+        }
+        // Symlink-escape pass: walk the on-disk chain. Skipped
+        // entirely when the resolver is the Noop sentinel (we
+        // detect this by probing one method on a known-absent
+        // path — see test
+        // `req_safety_490_3_1_g_noop_caller_preserves_3_1_a_behaviour`).
+        let chain = crate::fs_resolver::resolve_path_chain(Path::new(&absolute), fs);
+        if chain.steps.len() == 1 && !chain.terminated_cleanly {
+            // Noop resolver (or any resolver that knows nothing
+            // about this path AND has no realpath fallback)
+            // produces this exact shape. Preserve 3.1.A behaviour.
+            continue;
+        }
+        if !chain.terminated_cleanly {
+            return PathValidationOutcome::Ask {
+                reason: format!(
+                    "{} target '{}' could not be safely resolved — \
+                     symlink chain truncated (loop, depth limit, or IO \
+                     error) requires explicit approval",
+                    cmd.as_str(),
+                    absolute
+                ),
+                blocked_path: Some(absolute),
+            };
+        }
+        for step in &chain.steps {
+            let step_str = step.to_string_lossy();
+            if !path_in_workspace(&step_str, workspace_dirs) {
+                return PathValidationOutcome::Ask {
+                    reason: format!(
+                        "{} target '{}' resolves through symlink to \
+                         '{}' which is outside the allowed workspace \
+                         directories — requires explicit approval",
+                        cmd.as_str(),
+                        absolute,
+                        step_str
+                    ),
+                    blocked_path: Some(step_str.into_owned()),
+                };
+            }
         }
     }
     PathValidationOutcome::Passthrough
@@ -1299,5 +1388,158 @@ mod tests {
     fn resolve_logical_traversal_escapes_cwd() {
         let out = resolve_logical("../../../etc/passwd", &PathBuf::from("/home/user/proj"));
         assert_eq!(out, "/etc/passwd");
+    }
+
+    // -- ADR-150 §6.1: validate_command_paths_with_fs integration -------
+    //
+    // These tests exercise the symlink-escape pass that wraps the
+    // 3.1.A lexical check. We use the real on-disk POSIX resolver
+    // against a tempdir-rooted workspace so the assertions cover the
+    // full IO path (lstat → readlink → realpath fallback).
+
+    #[cfg(unix)]
+    mod symlink_escape {
+        use super::*;
+        use crate::fs_resolver::{real_posix::RealFsResolver, NoopFsResolver};
+        use std::os::unix::fs::symlink;
+        use tempfile::TempDir;
+
+        fn setup() -> (TempDir, PathBuf) {
+            let dir = TempDir::new().expect("tempdir");
+            // Canonicalize to dodge macOS /var → /private/var redirection;
+            // production callers are expected to pass canonical workspace
+            // roots so the symlink walker's canonicalized output matches.
+            let ws_root = std::fs::canonicalize(dir.path()).expect("canonicalize tempdir");
+            (dir, ws_root)
+        }
+
+        fn args(xs: &[&str]) -> Vec<String> {
+            xs.iter().map(|s| (*s).to_string()).collect()
+        }
+
+        #[test]
+        fn req_safety_490_3_1_g_1_noop_resolver_matches_lexical_passthrough() {
+            // Noop produces unclean+singleton → preserved as Passthrough
+            // (i.e. 3.1.A behaviour). Path is lexically inside workspace.
+            let (_dir, ws_root) = setup();
+            let file = ws_root.join("a.txt");
+            std::fs::write(&file, b"x").unwrap();
+            let out = validate_command_paths_with_fs(
+                PathCommand::Cat,
+                &args(&[file.to_str().unwrap()]),
+                &ws_root,
+                std::slice::from_ref(&ws_root),
+                &PathBuf::from("/home/user"),
+                &NoopFsResolver,
+            );
+            assert_eq!(out, PathValidationOutcome::Passthrough);
+        }
+
+        #[test]
+        fn req_safety_490_3_1_g_1_real_symlink_escape_to_etc_asks() {
+            // T-SYM-1: ws/link → /etc/passwd. Lexical check passes
+            // (link is inside ws), but symlink chain step lands at
+            // /etc/passwd which is outside ws → Ask.
+            let (_dir, ws_root) = setup();
+            let link = ws_root.join("leak");
+            symlink("/etc/passwd", &link).unwrap();
+            let out = validate_command_paths_with_fs(
+                PathCommand::Cat,
+                &args(&[link.to_str().unwrap()]),
+                &ws_root,
+                std::slice::from_ref(&ws_root),
+                &PathBuf::from("/home/user"),
+                &RealFsResolver,
+            );
+            assert!(
+                matches!(out, PathValidationOutcome::Ask { ref reason, .. }
+                    if reason.contains("symlink") && reason.contains("/etc/passwd")),
+                "expected Ask citing symlink → /etc/passwd, got {out:?}",
+            );
+        }
+
+        #[test]
+        fn req_safety_490_3_1_g_1_real_symlink_inside_workspace_passes() {
+            // Symlink target is inside workspace → no escape → Passthrough.
+            let (_dir, ws_root) = setup();
+            let target = ws_root.join("real.txt");
+            std::fs::write(&target, b"ok").unwrap();
+            let link = ws_root.join("alias");
+            symlink(&target, &link).unwrap();
+            let out = validate_command_paths_with_fs(
+                PathCommand::Cat,
+                &args(&[link.to_str().unwrap()]),
+                &ws_root,
+                std::slice::from_ref(&ws_root),
+                &PathBuf::from("/home/user"),
+                &RealFsResolver,
+            );
+            assert_eq!(out, PathValidationOutcome::Passthrough);
+        }
+
+        #[test]
+        fn req_safety_490_3_1_g_1_real_symlink_loop_asks() {
+            // T-SYM-4: A → B → A. Walker exits unclean → Ask.
+            let (_dir, ws_root) = setup();
+            let a = ws_root.join("A");
+            let b = ws_root.join("B");
+            symlink(&b, &a).unwrap();
+            symlink(&a, &b).unwrap();
+            let out = validate_command_paths_with_fs(
+                PathCommand::Cat,
+                &args(&[a.to_str().unwrap()]),
+                &ws_root,
+                std::slice::from_ref(&ws_root),
+                &PathBuf::from("/home/user"),
+                &RealFsResolver,
+            );
+            assert!(
+                matches!(out, PathValidationOutcome::Ask { ref reason, .. }
+                    if reason.contains("symlink chain truncated")),
+                "expected Ask citing chain truncation, got {out:?}",
+            );
+        }
+
+        #[test]
+        fn req_safety_490_3_1_g_1_real_dangling_symlink_via_realpath_fallback() {
+            // T-SYM-2: dangling symlink. lstat succeeds (Symlink),
+            // readlink succeeds, next-hop lstat fails (no fallback
+            // → walker terminates unclean) → Ask.
+            let (_dir, ws_root) = setup();
+            let link = ws_root.join("dangle");
+            symlink("/nonexistent/target/file", &link).unwrap();
+            let out = validate_command_paths_with_fs(
+                PathCommand::Cat,
+                &args(&[link.to_str().unwrap()]),
+                &ws_root,
+                std::slice::from_ref(&ws_root),
+                &PathBuf::from("/home/user"),
+                &RealFsResolver,
+            );
+            assert!(
+                matches!(out, PathValidationOutcome::Ask { ref reason, .. }
+                    if reason.contains("/nonexistent")
+                        || reason.contains("symlink chain truncated")),
+                "expected Ask, got {out:?}",
+            );
+        }
+
+        #[test]
+        fn req_safety_490_3_1_g_1_nonexistent_path_in_workspace_passes() {
+            // Lexically inside ws, no lstat hit, no chain to walk.
+            // Walker returns singleton unclean → preserve 3.1.A
+            // Passthrough (consistent with Noop semantics for paths
+            // the resolver cannot resolve).
+            let (_dir, ws_root) = setup();
+            let out = validate_command_paths_with_fs(
+                PathCommand::Cat,
+                &args(&[ws_root.join("future.txt").to_str().unwrap()]),
+                &ws_root,
+                std::slice::from_ref(&ws_root),
+                &PathBuf::from("/home/user"),
+                &RealFsResolver,
+            );
+            assert_eq!(out, PathValidationOutcome::Passthrough);
+        }
     }
 }
