@@ -166,7 +166,10 @@ fn is_allow_rule_shadowed_by_ask_rule(
     // (Upstream L141-L148.) Verbatim nested-if shape preserved to match
     // the upstream control flow comment "Fall through to mark as
     // shadowed - shared settings should always warn".
-    #[allow(clippy::collapsible_if, reason = "verbatim upstream control flow L141-L148")]
+    #[allow(
+        clippy::collapsible_if,
+        reason = "verbatim upstream control flow L141-L148"
+    )]
     if tool_name == BASH_TOOL_NAME && options.sandbox_auto_allow_enabled {
         if !is_shared_setting_source(shadowing_ask_rule.source) {
             return ShadowResult::NotShadowed;
