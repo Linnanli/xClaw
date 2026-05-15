@@ -31,7 +31,9 @@ pub mod strip_env;
 pub mod types;
 
 pub use compound_match::{check_compound_match, MAX_SUBCOMMANDS_FOR_SECURITY_CHECK};
-pub use context_collectors::{get_allow_rules, get_ask_rules, get_deny_rules};
+pub use context_collectors::{
+    detect_unreachable_rules_from_context, get_allow_rules, get_ask_rules, get_deny_rules,
+};
 pub use dangerous_patterns::{
     dangerous_bash_patterns, is_dangerous_bash_allow_rule, is_dangerous_bash_allow_rule_value,
     CROSS_PLATFORM_CODE_EXEC,
