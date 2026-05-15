@@ -2773,6 +2773,7 @@ dependencies = [
 name = "dasclaw_bash_permissions"
 version = "0.0.0-w1"
 dependencies = [
+ "dasclaw_shell_command",
  "regex",
  "thiserror 1.0.69",
 ]
