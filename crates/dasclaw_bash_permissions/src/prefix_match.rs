@@ -33,9 +33,10 @@
 //!   under `req_perm_490_p2_2_c_19_env_var_wrapping_now_stripped`.
 //! - Output-redirection stripping (`extractOutputRedirections`,
 //!   upstream L791-L801) — applies to both modes; deferred follow-up.
-//! - Slice 2.2.f → `BashPermissionHook` adapter + `CompositeSafetyHook`
-//!   wiring. Until then this module is library-only — the deferred
-//!   gaps cannot affect runtime safety.
+//! - Slice 2.2.f ✅ — `BashPermissionHook` adapter lives in
+//!   [`dasclaw_hooks::BashPermissionHook`] (tracker: issue #556) and
+//!   composes after `BashValidationHook` in the `CompositeSafetyHook`
+//!   chain.
 //!
 //! ## Security posture
 //!
