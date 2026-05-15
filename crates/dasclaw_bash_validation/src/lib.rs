@@ -14,9 +14,15 @@
 
 use std::path::Path;
 
+pub mod path_validation;
 pub mod permissions;
 pub mod redirects;
 pub mod security;
+pub use path_validation::{
+    check_dangerous_removal_paths, expand_tilde_and_home, extract_paths, has_unsafe_expansion,
+    is_dangerous_removal_path, validate_command_paths, FileOperationType, PathCommand,
+    PathValidationOutcome,
+};
 pub use permissions::PermissionMode;
 pub use redirects::{
     extract_output_redirections, OutputRedirection, RedirectOperator, RedirectionExtraction,
