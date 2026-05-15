@@ -22,6 +22,7 @@ pub mod exact_match;
 pub(crate) mod pipeline;
 pub mod prefix_match;
 pub mod shell_rule_matching;
+pub mod strip_env;
 pub mod types;
 
 pub use exact_match::{check_exact_match, BASH_TOOL_NAME};
@@ -29,6 +30,9 @@ pub use prefix_match::check_prefix_match;
 pub use shell_rule_matching::{
     has_wildcards, match_wildcard_pattern, parse_permission_rule, permission_rule_extract_prefix,
     MatchOptions, ShellPermissionRule,
+};
+pub use strip_env::{
+    is_binary_hijack_var, strip_all_leading_env_vars, strip_safe_wrappers, SAFE_ENV_VARS,
 };
 pub use types::{
     PermissionBehavior, PermissionDecisionReason, PermissionResult, PermissionRule,
