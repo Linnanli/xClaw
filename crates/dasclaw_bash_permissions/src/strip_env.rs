@@ -132,7 +132,7 @@ fn deny_env_var_pattern() -> &'static Regex {
     RE.get_or_init(|| {
         #[expect(clippy::expect_used)]
         Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\+?=[A-Za-z0-9_./:+@~,=\-]*[ \t]+"#)
-            .expect("static deny env-var regex")
+            .expect("static deny env-var regex") // safety: literal regex, compile-time verified by tests
     })
 }
 
@@ -146,7 +146,7 @@ fn allow_env_var_pattern() -> &'static Regex {
     RE.get_or_init(|| {
         #[expect(clippy::expect_used)]
         Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)=([A-Za-z0-9_./:\-]+)[ \t]+"#)
-            .expect("static allow env-var regex")
+            .expect("static allow env-var regex") // safety: literal regex, compile-time verified by tests
     })
 }
 
@@ -204,7 +204,7 @@ fn safe_wrapper_patterns() -> &'static [Regex] {
             .map(|p| {
                 #[expect(clippy::expect_used)]
                 {
-                    Regex::new(p).expect("static safe-wrapper regex")
+                    Regex::new(p).expect("static safe-wrapper regex") // safety: literal regex from SAFE_WRAPPER_PATTERNS const, compile-time verified by tests
                 }
             })
             .collect()
