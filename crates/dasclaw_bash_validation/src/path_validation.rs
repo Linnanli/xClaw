@@ -705,7 +705,7 @@ pub fn validate_command_paths(
 
 // -- internal path helpers ------------------------------------------------
 
-fn strip_outer_quotes(s: &str) -> &str {
+pub(crate) fn strip_outer_quotes(s: &str) -> &str {
     let bytes = s.as_bytes();
     if bytes.len() >= 2 {
         let first = bytes[0];
@@ -724,7 +724,7 @@ fn strip_outer_quotes(s: &str) -> &str {
 ///
 /// Does NOT touch the filesystem; symlink escape is handled by a
 /// later slice (see Phase 3.1 follow-up §6 OQ).
-fn resolve_logical(path: &str, cwd: &Path) -> String {
+pub(crate) fn resolve_logical(path: &str, cwd: &Path) -> String {
     let p = Path::new(path);
     let combined = if p.is_absolute() {
         p.to_path_buf()
@@ -734,7 +734,7 @@ fn resolve_logical(path: &str, cwd: &Path) -> String {
     normalize_path(&combined).to_string_lossy().into_owned()
 }
 
-fn normalize_path(p: &Path) -> PathBuf {
+pub(crate) fn normalize_path(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for comp in p.components() {
         match comp {
@@ -757,7 +757,7 @@ fn normalize_path(p: &Path) -> PathBuf {
     }
 }
 
-fn path_in_workspace(absolute: &str, workspace_dirs: &[PathBuf]) -> bool {
+pub(crate) fn path_in_workspace(absolute: &str, workspace_dirs: &[PathBuf]) -> bool {
     if workspace_dirs.is_empty() {
         return false; // Fail-Closed: empty workspace = no allowed paths
     }
