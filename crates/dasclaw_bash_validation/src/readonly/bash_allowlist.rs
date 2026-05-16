@@ -15,6 +15,11 @@
 //! See `docs/plans/bash-parity/phase-3.2-readonly-validation-deepening.md`
 //! and ADR-129 (verbatim-port discipline).
 
+use std::sync::LazyLock;
+
+use super::external_tables::{
+    DOCKER_READ_ONLY_COMMANDS, PYRIGHT_READ_ONLY_COMMANDS, RIPGREP_READ_ONLY_COMMANDS,
+};
 use super::flag_parser::{validate_flags, CommandConfig, FlagArgType, ValidateOptions};
 
 // ============================================================================
@@ -1036,35 +1041,57 @@ const FDFIND_CONFIG: CommandConfig = CommandConfig {
 // ============================================================================
 
 /// Master command allowlist. Each entry maps a command name to its
-/// [`CommandConfig`]. Looked up by the dispatcher (Phase 3.2.C+).
+/// [`CommandConfig`]. Looked up by the dispatcher.
 ///
-/// Spreads deferred to Phase 3.2.C: git / ripgrep / docker / pyright / gh /
-/// aki tables.
-pub static COMMAND_ALLOWLIST: &[(&str, &CommandConfig)] = &[
-    ("xargs", &XARGS_CONFIG),
-    ("file", &FILE_CONFIG),
-    ("sed", &SED_CONFIG),
-    ("sort", &SORT_CONFIG),
-    ("man", &MAN_CONFIG),
-    ("help", &HELP_CONFIG),
-    ("netstat", &NETSTAT_CONFIG),
-    ("ps", &PS_CONFIG),
-    ("base64", &BASE64_CONFIG),
-    ("grep", &GREP_CONFIG),
-    ("sha256sum", &SHA256SUM_CONFIG),
-    ("sha1sum", &SHA1SUM_CONFIG),
-    ("md5sum", &MD5SUM_CONFIG),
-    ("tree", &TREE_CONFIG),
-    ("date", &DATE_CONFIG),
-    ("hostname", &HOSTNAME_CONFIG),
-    ("info", &INFO_CONFIG),
-    ("lsof", &LSOF_CONFIG),
-    ("pgrep", &PGREP_CONFIG),
-    ("tput", &TPUT_CONFIG),
-    ("ss", &SS_CONFIG),
-    ("fd", &FD_CONFIG),
-    ("fdfind", &FDFIND_CONFIG),
-];
+/// Order is SECURITY-significant — first-match-wins. Inline entries come
+/// first (matching upstream `readOnlyValidation.ts` L128–L1140), followed
+/// by the external tables (upstream L1135–L1136 spreads externals after
+/// inline). Multi-word entries (e.g. `docker logs`) precede any shorter
+/// prefix that could shadow them; none of the current inline entries
+/// collide with the external entries.
+///
+/// Phase 3.2.C.2.a wires DOCKER / RIPGREP / PYRIGHT external tables.
+/// GIT (3.2.C.1) and GH / AKI (3.2.C.2.b) ship in separate PRs.
+pub static COMMAND_ALLOWLIST: LazyLock<Vec<(&'static str, &'static CommandConfig)>> =
+    LazyLock::new(|| {
+        let mut out: Vec<(&'static str, &'static CommandConfig)> = vec![
+            ("xargs", &XARGS_CONFIG),
+            ("file", &FILE_CONFIG),
+            ("sed", &SED_CONFIG),
+            ("sort", &SORT_CONFIG),
+            ("man", &MAN_CONFIG),
+            ("help", &HELP_CONFIG),
+            ("netstat", &NETSTAT_CONFIG),
+            ("ps", &PS_CONFIG),
+            ("base64", &BASE64_CONFIG),
+            ("grep", &GREP_CONFIG),
+            ("sha256sum", &SHA256SUM_CONFIG),
+            ("sha1sum", &SHA1SUM_CONFIG),
+            ("md5sum", &MD5SUM_CONFIG),
+            ("tree", &TREE_CONFIG),
+            ("date", &DATE_CONFIG),
+            ("hostname", &HOSTNAME_CONFIG),
+            ("info", &INFO_CONFIG),
+            ("lsof", &LSOF_CONFIG),
+            ("pgrep", &PGREP_CONFIG),
+            ("tput", &TPUT_CONFIG),
+            ("ss", &SS_CONFIG),
+            ("fd", &FD_CONFIG),
+            ("fdfind", &FDFIND_CONFIG),
+        ];
+        // Append external tables AFTER the 23 inline entries. Upstream
+        // `readOnlyValidation.ts` L1135-L1140 spreads externals at the end
+        // of the inline literal in PYRIGHT → DOCKER order; we likewise
+        // append at the end. The order within externals (DOCKER → RIPGREP
+        // → PYRIGHT) diverges from upstream cosmetically only — none of
+        // these tables' keys collide with each other or with the inline
+        // 23 entries, so first-match-wins behavior is identical to the
+        // upstream order. Verified by Layer 1 audit.
+        out.extend_from_slice(DOCKER_READ_ONLY_COMMANDS);
+        out.extend_from_slice(RIPGREP_READ_ONLY_COMMANDS);
+        out.extend_from_slice(PYRIGHT_READ_ONLY_COMMANDS);
+        out
+    });
 
 /// Phase 3.2.B port of `isCommandSafeViaFlagParsing` (claude-code-main
 /// readOnlyValidation.ts L1245-L1408). Top-level `COMMAND_ALLOWLIST` only —
@@ -1427,5 +1454,90 @@ mod tests {
     fn test_security_pin_absence_fd_list_details_path_hijack() {
         assert!(!is_command_safe_via_flag_parsing("fd -l"));
         assert!(!is_command_safe_via_flag_parsing("fd --list-details"));
+    }
+
+    // ---------- Phase 3.2.C.2.a: external tables ----------
+
+    // DOCKER_READ_ONLY_COMMANDS
+    #[test]
+    fn req_bash_validation_320_c2a_docker_logs() {
+        assert!(is_command_safe_via_flag_parsing(
+            "docker logs --tail 100 abc"
+        ));
+    }
+    #[test]
+    fn req_bash_validation_320_c2a_docker_inspect() {
+        assert!(is_command_safe_via_flag_parsing("docker inspect abc"));
+    }
+
+    // RIPGREP_READ_ONLY_COMMANDS
+    #[test]
+    fn req_bash_validation_320_c2a_rg_basic() {
+        assert!(is_command_safe_via_flag_parsing("rg --hidden pat src"));
+    }
+
+    // PYRIGHT_READ_ONLY_COMMANDS
+    #[test]
+    fn req_bash_validation_320_c2a_pyright_basic() {
+        assert!(is_command_safe_via_flag_parsing("pyright --stats"));
+    }
+    #[test]
+    fn req_bash_validation_320_c2a_pyright_project() {
+        assert!(is_command_safe_via_flag_parsing("pyright --project myproj"));
+    }
+
+    // ---------- SECURITY pin absence (regression guards) for 3.2.C.2.a ----------
+
+    // docker: only `logs` and `inspect` are read-only. ALL state-changing
+    // sub-commands must be rejected because they're not in the allowlist.
+    #[test]
+    fn test_security_docker_dangerous_subcommands_rejected() {
+        assert!(!is_command_safe_via_flag_parsing("docker run alpine"));
+        assert!(!is_command_safe_via_flag_parsing("docker exec abc sh"));
+        assert!(!is_command_safe_via_flag_parsing("docker build ."));
+        assert!(!is_command_safe_via_flag_parsing("docker rm abc"));
+        assert!(!is_command_safe_via_flag_parsing("docker rmi abc"));
+        assert!(!is_command_safe_via_flag_parsing("docker kill abc"));
+        assert!(!is_command_safe_via_flag_parsing("docker stop abc"));
+        assert!(!is_command_safe_via_flag_parsing("docker push abc"));
+        assert!(!is_command_safe_via_flag_parsing("docker pull abc"));
+    }
+
+    // rg: --pre and --pre-glob enable arbitrary command execution.
+    // --search-zip touches the FS in surprising ways.
+    #[test]
+    fn test_security_rg_pre_arbitrary_exec_rejected() {
+        assert!(!is_command_safe_via_flag_parsing("rg --pre /bin/sh pat ."));
+        assert!(!is_command_safe_via_flag_parsing(
+            "rg --pre-glob '*.log' pat ."
+        ));
+        // --search-zip long form must also be rejected (only short form -z is in safe_flags).
+        assert!(!is_command_safe_via_flag_parsing("rg --search-zip pat ."));
+    }
+    #[test]
+    fn test_security_rg_newline_rejected() {
+        // Newline guard already covered by 3.2.B (grep/rg branch),
+        // pinned here for the table-wired path too.
+        assert!(!is_command_safe_via_flag_parsing("rg -i pat\n"));
+    }
+
+    // pyright: --watch makes the process long-lived (not read-only).
+    // --createstub writes files. Both must be absent from safe_flags.
+    #[test]
+    fn test_security_pyright_watch_rejected() {
+        assert!(!is_command_safe_via_flag_parsing("pyright --watch"));
+        assert!(!is_command_safe_via_flag_parsing("pyright -w"));
+    }
+    #[test]
+    fn test_security_pyright_createstub_rejected() {
+        assert!(!is_command_safe_via_flag_parsing(
+            "pyright --createstub mymod"
+        ));
+    }
+
+    // Unknown command after multi-word prefix should still reject.
+    #[test]
+    fn test_unknown_docker_sub_rejected() {
+        assert!(!is_command_safe_via_flag_parsing("docker evilcmd"));
     }
 }
