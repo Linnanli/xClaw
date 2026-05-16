@@ -25,10 +25,11 @@ use std::path::PathBuf;
 use dasclaw_shell_command::bash::try_parse_shell;
 use tree_sitter::Node;
 
+use crate::fs_resolver::{FsResolver, NoopFsResolver};
 use crate::path_validation::expand_tilde_and_home;
 use crate::path_validation::path_in_workspace;
 use crate::path_validation::resolve_logical;
-use crate::path_validation::validate_command_paths;
+use crate::path_validation::validate_command_paths_with_fs;
 use crate::path_validation::PathCommand;
 use crate::path_validation::PathValidationOutcome;
 use crate::redirects::extract_output_redirections;
@@ -114,19 +115,46 @@ fn check_single_redirect(
 ///    classify it safely → Fail-Closed Ask.
 /// 4. For each extracted argv: if the base command is in
 ///    [`PathCommand::parse`]'s allow-list, dispatch to
-///    [`validate_command_paths`]. Unknown base commands are Passthrough
-///    (they are gated by other validators / deny-rules at a higher layer).
+///    [`validate_command_paths_with_fs`] with a [`NoopFsResolver`] (lexical-
+///    only). Unknown base commands are Passthrough (they are gated by other
+///    validators / deny-rules at a higher layer).
 ///
 /// `workspace_dirs` is the caller-provided set of permissible workspace
 /// roots — typically `[project_root, additional_directories…]` from the
 /// IDE/desktop client. An empty list means **no path is allowed** (Ask for
 /// every captured path), which is the safe default.
+///
+/// **Lexical-only**: this entry performs zero IO; symlinks are not
+/// followed. For Fail-Safe symlink-escape detection use
+/// [`check_path_constraints_with_fs`] with a real [`FsResolver`].
 #[must_use]
 pub fn check_path_constraints(
     src: &str,
     cwd: &Path,
     workspace_dirs: &[PathBuf],
     home: &Path,
+) -> PathValidationOutcome {
+    check_path_constraints_with_fs(src, cwd, workspace_dirs, home, &NoopFsResolver)
+}
+
+/// Same contract as [`check_path_constraints`] but additionally walks the
+/// on-disk symlink chain (via `fs`) for every extracted argv path. Any
+/// chain step landing outside `workspace_dirs` flips the outcome to
+/// [`PathValidationOutcome::Ask`] regardless of whether the lexical path
+/// was inside the workspace.
+///
+/// See [`validate_command_paths_with_fs`] for the per-command walker
+/// contract (Fail-Safe on unclean termination, canonicalization caveat).
+///
+/// Pass [`NoopFsResolver`] to recover the pure-lexical behaviour exactly
+/// — the [`check_path_constraints`] wrapper does this for you.
+#[must_use]
+pub fn check_path_constraints_with_fs(
+    src: &str,
+    cwd: &Path,
+    workspace_dirs: &[PathBuf],
+    home: &Path,
+    fs: &dyn FsResolver,
 ) -> PathValidationOutcome {
     // Step 1: redirections (independent of base command dispatch).
     let extraction = extract_output_redirections(src);
@@ -161,7 +189,7 @@ pub fn check_path_constraints(
         let Some(cmd) = PathCommand::parse(base) else {
             continue;
         };
-        let outcome = validate_command_paths(cmd, args, cwd, workspace_dirs, home);
+        let outcome = validate_command_paths_with_fs(cmd, args, cwd, workspace_dirs, home, fs);
         if !matches!(outcome, PathValidationOutcome::Passthrough) {
             return outcome;
         }
