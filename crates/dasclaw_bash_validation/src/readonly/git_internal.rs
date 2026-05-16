@@ -70,14 +70,10 @@ use crate::redirects::extract_output_redirections;
 /// `hooks/pre-commit`, etc. — never `myhooks/` or `repo-hooks`.
 static GIT_INTERNAL_PATTERNS: Lazy<[Regex; 4]> = Lazy::new(|| {
     [
-        // safety: literal pattern, build-time correctness
-        Regex::new(r"^HEAD$").expect("static regex"),
-        // safety: literal pattern, build-time correctness
-        Regex::new(r"^objects(?:/|$)").expect("static regex"),
-        // safety: literal pattern, build-time correctness
-        Regex::new(r"^refs(?:/|$)").expect("static regex"),
-        // safety: literal pattern, build-time correctness
-        Regex::new(r"^hooks(?:/|$)").expect("static regex"),
+        Regex::new(r"^HEAD$").expect("static regex"), // safety: literal pattern
+        Regex::new(r"^objects(?:/|$)").expect("static regex"), // safety: literal pattern
+        Regex::new(r"^refs(?:/|$)").expect("static regex"), // safety: literal pattern
+        Regex::new(r"^hooks(?:/|$)").expect("static regex"), // safety: literal pattern
     ]
 });
 
@@ -93,7 +89,9 @@ static GIT_INTERNAL_PATTERNS: Lazy<[Regex; 4]> = Lazy::new(|| {
 #[must_use]
 pub fn is_git_internal_path(path: &str) -> bool {
     let normalized = strip_leading_dot_slash(path);
-    GIT_INTERNAL_PATTERNS.iter().any(|re| re.is_match(normalized))
+    GIT_INTERNAL_PATTERNS
+        .iter()
+        .any(|re| re.is_match(normalized))
 }
 
 /// Mirror of upstream's `path.replace(/^\.?\//, '')`: strip a single
@@ -171,9 +169,7 @@ pub fn is_normalized_git_command(command: &str) -> bool {
     }
 
     // Fallback — AST parse failed. Mirrors upstream L2591 regex test.
-    static FALLBACK: Lazy<Regex> = Lazy::new(||
-        // safety: literal pattern, build-time correctness
-        Regex::new(r"^git(?:\s|$)").expect("static regex"));
+    static FALLBACK: Lazy<Regex> = Lazy::new(|| Regex::new(r"^git(?:\s|$)").expect("static regex")); // safety: literal pattern
     FALLBACK.is_match(stripped_trim)
 }
 
@@ -423,7 +419,11 @@ fn parse_command_argv_lenient(cmd: Node<'_>, src: &[u8]) -> Option<Vec<String>> 
             _ => {}
         }
     }
-    if words.is_empty() { None } else { Some(words) }
+    if words.is_empty() {
+        None
+    } else {
+        Some(words)
+    }
 }
 
 /// Strip a *single* matching outer quote pair from a tree-sitter
@@ -833,9 +833,7 @@ mod tests {
 
     #[test]
     fn writes_mv_to_objects() {
-        assert!(command_writes_to_git_internal_paths(
-            "mv src objects/aa/bb"
-        ));
+        assert!(command_writes_to_git_internal_paths("mv src objects/aa/bb"));
     }
 
     #[test]
@@ -888,9 +886,7 @@ mod tests {
         // `mkdir hookscript` / `mkdir myhooks` — word-boundary check.
         assert!(!command_writes_to_git_internal_paths("mkdir hookscript"));
         assert!(!command_writes_to_git_internal_paths("mkdir myhooks"));
-        assert!(!command_writes_to_git_internal_paths(
-            "touch HEADER"
-        ));
+        assert!(!command_writes_to_git_internal_paths("touch HEADER"));
     }
 
     #[test]
@@ -931,7 +927,9 @@ mod tests {
     fn writes_with_env_prefix_on_write_cmd() {
         // `NO_COLOR=1 mkdir hooks` — env prefix doesn't change the
         // write target.
-        assert!(command_writes_to_git_internal_paths("NO_COLOR=1 mkdir hooks"));
+        assert!(command_writes_to_git_internal_paths(
+            "NO_COLOR=1 mkdir hooks"
+        ));
     }
 
     #[test]
