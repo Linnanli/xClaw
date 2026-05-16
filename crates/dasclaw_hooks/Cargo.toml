@@ -35,3 +35,4 @@ dasclaw_bash_permissions = { path = "../dasclaw_bash_permissions" }
 [dev-dependencies]
 tokio = { version = "1", features = ["sync", "macros", "time", "rt", "rt-multi-thread"] }
 tracing-test = { version = "0.2", features = ["no-env-filter"] }
+tempfile = "3"

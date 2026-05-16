@@ -27,8 +27,12 @@
 //! 2. **Phase 2.1 command-injection gate** ([`validate_security`]) — runs
 //!    BEFORE the path gate and BEFORE [`validate_command`]. Mode-independent
 //!    (Block fires even under `DangerFullAccess` / `Allow`).
-//! 3. **Phase 3.1 path-constraint gate** ([`check_path_constraints`],
-//!    Slice 3.1.C) — runs BEFORE [`validate_command`]:
+//! 3. **Phase 3.1 path-constraint gate** ([`check_path_constraints_with_fs`],
+//!    Slice 3.1.C + Phase 3.1.g.2 ADR-150 Step 6.2) — runs BEFORE
+//!    [`validate_command`]. On Unix the gate uses `RealFsResolver` so
+//!    symlink chains that escape the workspace flip Passthrough → Ask
+//!    (Fail-Safe); on non-Unix the gate stays lexical-only until ADR-150
+//!    Step 6.3 lands the Windows real resolver:
 //!    - `Passthrough` ⇒ continue to step 4.
 //!    - `Block { reason }` ⇒ [`SafetyDecision::Block`] regardless of mode.
 //!    - `Ask { reason, blocked_path }` ⇒ mapped by mode same as Warn:
@@ -60,7 +64,12 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use dasclaw_bash_validation::check_path_constraints;
+use dasclaw_bash_validation::check_path_constraints_with_fs;
+use dasclaw_bash_validation::fs_resolver::FsResolver;
+#[cfg(not(unix))]
+use dasclaw_bash_validation::fs_resolver::NoopFsResolver;
+#[cfg(unix)]
+use dasclaw_bash_validation::fs_resolver::real_posix::RealFsResolver;
 use dasclaw_bash_validation::path_validation::PathValidationOutcome;
 use dasclaw_bash_validation::security::{
     DecisionReason as SecurityDecisionReason, SecurityResult, validate_security,
@@ -95,8 +104,16 @@ impl BashValidationHook {
     /// reads `$HOME` from the environment for the path-validation home
     /// directory. To override either, chain
     /// [`Self::with_tool_names`] / [`Self::with_home_dir`].
+    ///
+    /// `workspace` is canonicalized via [`std::fs::canonicalize`] so that
+    /// the symlink-walk path-gate (Phase 3.1.g, ADR-150) compares chain
+    /// steps against a real-path workspace root. On platforms / paths
+    /// where canonicalization fails the original `workspace` is kept —
+    /// the path-gate then degrades to lexical matching for that root,
+    /// which preserves the pre-3.1.g behaviour.
     #[must_use]
     pub fn new(permission_mode: PermissionMode, workspace: PathBuf) -> Self {
+        let workspace = std::fs::canonicalize(&workspace).unwrap_or(workspace);
         Self {
             permission_mode,
             workspace,
@@ -135,6 +152,23 @@ impl BashValidationHook {
     /// Returns `true` if `tool` should be treated as a bash invocation.
     fn is_bash_tool(&self, tool: &str) -> bool {
         self.bash_tool_names.iter().any(|n| n == tool)
+    }
+
+    /// Pick the [`FsResolver`] backing the Phase 3.1.g symlink-escape
+    /// walker. Unix targets get the real POSIX resolver (Fail-Safe on
+    /// symlink escape); other targets keep the lexical-only Noop resolver
+    /// until Step 6.3 ships a Windows real resolver (ADR-150 §6.3).
+    fn fs_resolver(&self) -> &'static dyn FsResolver {
+        #[cfg(unix)]
+        {
+            static R: RealFsResolver = RealFsResolver;
+            &R
+        }
+        #[cfg(not(unix))]
+        {
+            static R: NoopFsResolver = NoopFsResolver;
+            &R
+        }
     }
 }
 
@@ -181,20 +215,24 @@ impl SafetyHook for BashValidationHook {
             });
         }
 
-        // Phase 3.1 path-constraint gate (Slice 3.1.C).
+        // Phase 3.1 path-constraint gate (Slice 3.1.C + Phase 3.1.g.2).
         //
         // Runs AFTER the injection gate and BEFORE `validate_command` so
         // that path violations short-circuit the legacy validator with a
         // mode-aware decision. `Passthrough` falls through unchanged.
         //
-        // SECURITY: `Ask` in `ReadOnly` mode is mapped to `Block`
-        // (Fail-Safe). `WorkspaceWrite` / `DangerFullAccess` / `Allow`
-        // log and allow, mirroring [`map_warn_by_mode`].
-        let path_outcome = check_path_constraints(
+        // SECURITY: Phase 3.1.g.2 (ADR-150 Step 6.2) wires the real POSIX
+        // symlink resolver on Unix; non-Unix retains the lexical-only
+        // Noop resolver until Step 6.3. `Ask` in `ReadOnly` mode is
+        // mapped to `Block` (Fail-Safe). `WorkspaceWrite` /
+        // `DangerFullAccess` / `Allow` log and allow, mirroring
+        // [`map_warn_by_mode`].
+        let path_outcome = check_path_constraints_with_fs(
             command,
             &self.workspace,
             std::slice::from_ref(&self.workspace),
             self.home_dir.as_deref().unwrap_or_else(|| Path::new("")),
+            self.fs_resolver(),
         );
         if let Some(decision) = map_path_outcome_by_mode(tool, self.permission_mode, path_outcome) {
             return Ok(decision);
