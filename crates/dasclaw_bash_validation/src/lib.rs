@@ -31,6 +31,9 @@ pub use path_validation::{
     FileOperationType, PathCommand, PathValidationOutcome,
 };
 pub use permissions::PermissionMode;
+pub use readonly::main_entry::{
+    contains_unquoted_expansion, contains_vulnerable_unc_path, is_command_read_only,
+};
 pub use redirects::{
     extract_output_redirections, OutputRedirection, RedirectOperator, RedirectionExtraction,
 };
