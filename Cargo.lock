@@ -2782,6 +2782,7 @@ dependencies = [
 name = "dasclaw_bash_validation"
 version = "0.0.0-w1"
 dependencies = [
+ "dasclaw_bash_permissions",
  "dasclaw_shell_command",
  "once_cell",
  "regex",

@@ -15,4 +15,5 @@ pub mod external_tables;
 pub mod flag_parser;
 pub mod gh_allowlist;
 pub mod git_allowlist;
+pub mod git_internal;
 pub mod main_entry;
