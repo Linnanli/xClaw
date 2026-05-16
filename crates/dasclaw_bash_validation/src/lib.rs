@@ -18,6 +18,7 @@ pub mod fs_resolver;
 pub mod path_constraints;
 pub mod path_validation;
 pub mod permissions;
+pub mod readonly;
 pub mod redirects;
 pub mod security;
 pub use fs_resolver::{FsEntryKind, FsResolver, NoopFsResolver, ResolvedChain, SYMLOOP_MAX};
