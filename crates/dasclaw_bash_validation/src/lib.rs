@@ -14,16 +14,18 @@
 
 use std::path::Path;
 
+pub mod fs_resolver;
 pub mod path_constraints;
 pub mod path_validation;
 pub mod permissions;
 pub mod redirects;
 pub mod security;
+pub use fs_resolver::{FsEntryKind, FsResolver, NoopFsResolver, ResolvedChain, SYMLOOP_MAX};
 pub use path_constraints::{check_path_constraints, validate_output_redirections};
 pub use path_validation::{
     check_dangerous_removal_paths, expand_tilde_and_home, extract_paths, has_unsafe_expansion,
-    is_dangerous_removal_path, validate_command_paths, FileOperationType, PathCommand,
-    PathValidationOutcome,
+    is_dangerous_removal_path, validate_command_paths, validate_command_paths_with_fs,
+    FileOperationType, PathCommand, PathValidationOutcome,
 };
 pub use permissions::PermissionMode;
 pub use redirects::{
