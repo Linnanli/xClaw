@@ -17,6 +17,7 @@ use std::path::Path;
 pub mod path_constraints;
 pub mod path_validation;
 pub mod permissions;
+pub mod readonly;
 pub mod redirects;
 pub mod security;
 pub use path_constraints::{check_path_constraints, validate_output_redirections};
