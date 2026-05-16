@@ -8,9 +8,13 @@
 //! The dispatcher and callbacks integration land in Phase 3.2.C/D/E per
 //! ADR-129 verbatim-port discipline.
 //!
-//! Spreads deferred to Phase 3.2.C: `GIT_READ_ONLY_COMMANDS`,
-//! `RIPGREP_READ_ONLY_COMMANDS`, `DOCKER_READ_ONLY_COMMANDS`,
-//! `PYRIGHT_READ_ONLY_COMMANDS`, `ANT_ONLY_COMMAND_ALLOWLIST` (gh, aki).
+//! Phase 3.2.C wires all external tables: `GIT_READ_ONLY_COMMANDS`
+//! (`super::git_allowlist`), `RIPGREP_READ_ONLY_COMMANDS`,
+//! `DOCKER_READ_ONLY_COMMANDS`, `PYRIGHT_READ_ONLY_COMMANDS`
+//! (`super::external_tables`), and `ANT_ONLY_COMMANDS` (gh + aki,
+//! `super::gh_allowlist`). `get_command_allowlist()` applies the
+//! `USER_TYPE=ant` + Windows-xargs-strip gates that mirror upstream
+//! `getCommandAllowlist()` (readOnlyValidation.ts L1199-L1213).
 //!
 //! See `docs/plans/bash-parity/phase-3.2-readonly-validation-deepening.md`
 //! and ADR-129 (verbatim-port discipline).
@@ -21,6 +25,8 @@ use super::external_tables::{
     DOCKER_READ_ONLY_COMMANDS, PYRIGHT_READ_ONLY_COMMANDS, RIPGREP_READ_ONLY_COMMANDS,
 };
 use super::flag_parser::{validate_flags, CommandConfig, FlagArgType, ValidateOptions};
+use super::gh_allowlist::ANT_ONLY_COMMANDS;
+use super::git_allowlist::GIT_READ_ONLY_COMMANDS;
 
 // ============================================================================
 // Shared safe flags for `fd` and `fdfind` (Debian/Ubuntu package name).
@@ -1040,22 +1046,37 @@ const FDFIND_CONFIG: CommandConfig = CommandConfig {
 // Master allowlist.
 // ============================================================================
 
-/// Master command allowlist. Each entry maps a command name to its
-/// [`CommandConfig`]. Looked up by the dispatcher.
+/// Base allowlist (USER_TYPE != ant). Order is SECURITY-significant —
+/// first-match-wins, matching upstream `readOnlyValidation.ts` L128-L1140.
 ///
-/// Order is SECURITY-significant — first-match-wins. Inline entries come
-/// first (matching upstream `readOnlyValidation.ts` L128–L1140), followed
-/// by the external tables (upstream L1135–L1136 spreads externals after
-/// inline). Multi-word entries (e.g. `docker logs`) precede any shorter
-/// prefix that could shadow them; none of the current inline entries
-/// collide with the external entries.
+/// Layout (in iteration order):
+///   1. 23 inline single-binary entries (xargs..fdfind). On Windows, `xargs`
+///      is omitted because file contents containing UNC paths can be piped
+///      to `xargs cat` to trigger SMB resolution — bypassing string-based
+///      detection (upstream L1193-L1198).
+///   2. DOCKER / RIPGREP / PYRIGHT external tables (multi-word entries like
+///      `docker logs` first, then single-binary `rg` / `pyright`). Order
+///      within externals (DOCKER → RIPGREP → PYRIGHT) differs cosmetically
+///      from upstream (PYRIGHT → DOCKER); since keys don't collide,
+///      first-match-wins behavior is identical.
+///   3. GIT_READ_ONLY_COMMANDS (`git diff`, `git log`, …) — 24 entries in
+///      longest-prefix order (`git remote show` before `git remote`).
 ///
-/// Phase 3.2.C.2.a wires DOCKER / RIPGREP / PYRIGHT external tables.
-/// GIT (3.2.C.1) and GH / AKI (3.2.C.2.b) ship in separate PRs.
-pub static COMMAND_ALLOWLIST: LazyLock<Vec<(&'static str, &'static CommandConfig)>> =
+/// Upstream `COMMAND_ALLOWLIST` interleaves GIT after line 164 and RIPGREP
+/// after line 559; we group all externals at the end because none of the
+/// external keys collide with inline keys (verified by Layer 1 audit), so
+/// first-match-wins lookup yields the same result.
+static COMMAND_ALLOWLIST_BASE: LazyLock<Vec<(&'static str, &'static CommandConfig)>> =
     LazyLock::new(|| {
-        let mut out: Vec<(&'static str, &'static CommandConfig)> = vec![
-            ("xargs", &XARGS_CONFIG),
+        let mut out: Vec<(&'static str, &'static CommandConfig)> = Vec::new();
+        // SECURITY: omit `xargs` on Windows. UNC paths in file contents can
+        // be piped to `xargs cat` triggering SMB resolution; regex-based
+        // detection cannot inspect file contents. Matches upstream
+        // `getCommandAllowlist()` L1193-L1198.
+        if !cfg!(target_os = "windows") {
+            out.push(("xargs", &XARGS_CONFIG));
+        }
+        out.extend_from_slice(&[
             ("file", &FILE_CONFIG),
             ("sed", &SED_CONFIG),
             ("sort", &SORT_CONFIG),
@@ -1078,24 +1099,39 @@ pub static COMMAND_ALLOWLIST: LazyLock<Vec<(&'static str, &'static CommandConfig
             ("ss", &SS_CONFIG),
             ("fd", &FD_CONFIG),
             ("fdfind", &FDFIND_CONFIG),
-        ];
-        // Append external tables AFTER the 23 inline entries. Upstream
-        // `readOnlyValidation.ts` L1135-L1140 spreads externals at the end
-        // of the inline literal in PYRIGHT → DOCKER order; we likewise
-        // append at the end. The order within externals (DOCKER → RIPGREP
-        // → PYRIGHT) diverges from upstream cosmetically only — none of
-        // these tables' keys collide with each other or with the inline
-        // 23 entries, so first-match-wins behavior is identical to the
-        // upstream order. Verified by Layer 1 audit.
+        ]);
         out.extend_from_slice(DOCKER_READ_ONLY_COMMANDS);
         out.extend_from_slice(RIPGREP_READ_ONLY_COMMANDS);
         out.extend_from_slice(PYRIGHT_READ_ONLY_COMMANDS);
+        out.extend(GIT_READ_ONLY_COMMANDS.iter().copied());
         out
     });
 
+/// Ant-extended allowlist (USER_TYPE == ant). Appends `ANT_ONLY_COMMANDS`
+/// (22 gh entries + aki) to the base allowlist. Matches upstream
+/// `{ ...allowlist, ...ANT_ONLY_COMMAND_ALLOWLIST }` (L1212).
+static COMMAND_ALLOWLIST_ANT: LazyLock<Vec<(&'static str, &'static CommandConfig)>> =
+    LazyLock::new(|| {
+        let mut out = COMMAND_ALLOWLIST_BASE.clone();
+        out.extend(ANT_ONLY_COMMANDS.iter().copied());
+        out
+    });
+
+/// Return the effective allowlist for the current process. Reads
+/// `USER_TYPE` on every call (matching upstream `getCommandAllowlist()`
+/// L1201-L1212 which reads `process.env.USER_TYPE` per call). Both base
+/// and ant variants are statically cached, so the per-call cost is one
+/// env lookup and one branch.
+pub fn get_command_allowlist() -> &'static [(&'static str, &'static CommandConfig)] {
+    if std::env::var("USER_TYPE").as_deref() == Ok("ant") {
+        &COMMAND_ALLOWLIST_ANT
+    } else {
+        &COMMAND_ALLOWLIST_BASE
+    }
+}
+
 /// Phase 3.2.B port of `isCommandSafeViaFlagParsing` (claude-code-main
-/// readOnlyValidation.ts L1245-L1408). Top-level `COMMAND_ALLOWLIST` only —
-/// external tables (GIT/GH/RIPGREP/DOCKER/PYRIGHT) deferred to 3.2.C.
+/// readOnlyValidation.ts L1245-L1408).
 pub fn is_command_safe_via_flag_parsing(command: &str) -> bool {
     let tokens = match shell_words::split(command) {
         Ok(t) if !t.is_empty() => t,
@@ -1104,11 +1140,11 @@ pub fn is_command_safe_via_flag_parsing(command: &str) -> bool {
 
     // Multi-word command lookup: first-match-wins, matching upstream
     // `for (cmd, config) of COMMAND_ALLOWLIST.entries()` with early break
-    // (readOnlyValidation.ts L1294-L1303). Order in COMMAND_ALLOWLIST is
-    // therefore SECURITY-significant for Phase 3.2.C when multi-word
-    // entries (e.g. `git diff`) are added.
+    // (readOnlyValidation.ts L1294-L1303). Order is SECURITY-significant:
+    // longest-prefix multi-word entries (e.g. `git remote show`) must
+    // precede shorter prefixes (`git remote`) in the underlying tables.
     let mut matched: Option<(usize, &CommandConfig)> = None;
-    for (cmd_pattern, config) in COMMAND_ALLOWLIST.iter() {
+    for (cmd_pattern, config) in get_command_allowlist().iter() {
         let cmd_tokens: Vec<&str> = cmd_pattern.split(' ').collect();
         if tokens.len() < cmd_tokens.len() {
             continue;
