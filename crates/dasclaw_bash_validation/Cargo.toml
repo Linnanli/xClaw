@@ -13,6 +13,10 @@ path = "src/lib.rs"
 dasclaw_shell_command = { path = "../dasclaw_shell_command" }
 once_cell = "1.20"
 regex = "1.12"
+# Used by `readonly::bash_allowlist::is_command_safe_via_flag_parsing` to
+# tokenize commands with POSIX shell-quote semantics (Phase 3.2.B port of
+# `tryParseShellCommand`'s string-output path).
+shell-words = "1.1"
 thiserror = "1"
 # Only used to name the `tree_sitter::Tree` type returned by
 # `dasclaw_shell_command::bash::try_parse_shell`. We deliberately do NOT
