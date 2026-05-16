@@ -37,6 +37,7 @@ pub use readonly::git_internal::{
 };
 pub use readonly::main_entry::{
     contains_unquoted_expansion, contains_vulnerable_unc_path, is_command_read_only,
+    is_unsafe_xargs_invocation,
 };
 pub use redirects::{
     extract_output_redirections, OutputRedirection, RedirectOperator, RedirectionExtraction,

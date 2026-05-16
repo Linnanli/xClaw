@@ -77,6 +77,9 @@ use dasclaw_bash_permissions::{
     PermissionRule, ToolPermissionContext, check_compound_match, check_exact_match,
     permission_rule_value_to_string, suggestion_for_exact_command,
 };
+use dasclaw_bash_validation::{
+    command_has_any_git, command_writes_to_git_internal_paths, is_unsafe_xargs_invocation,
+};
 use serde_json::Value;
 use x_claw_agent::{RuleAction, RuleSuggestion, SafetyDecision, SafetyError, SafetyHook};
 
@@ -152,6 +155,24 @@ impl SafetyHook for BashPermissionHook {
             }
         };
 
+        // Phase 3.2.E.rest (issue #603): hard-deny sandbox-escape pins
+        // **S21** (`xargs` targeting a non-safe command) and **S22**
+        // (write into `HEAD` / `objects/` / `refs/` / `hooks/` when
+        // the compound also invokes git) BEFORE the rule pipeline.
+        // No user permission rule may legitimately allow these — they
+        // are validator-defeating attacks that bypass the readonly
+        // allowlist or the .git/-relative bare-repo protection.
+        if let Some(reason) = detect_sandbox_escape(command) {
+            return Ok(map_permission_result(
+                tool,
+                command,
+                PermissionResult::Deny {
+                    message: sandbox_escape_message(&reason),
+                    reason,
+                },
+            ));
+        }
+
         // Upstream pipeline (bashPermissions.ts L1663-L1820): exact
         // match wins first (fast path, no AST cost). Only when the
         // engine has no exact opinion do we run the compound /
@@ -212,7 +233,12 @@ fn map_permission_result(tool: &str, command: &str, result: PermissionResult) ->
 /// `"Bash(content)"` rendering of the matching rule's pattern. For
 /// `Other` variants (cap exceeded, empty input, no rule fired) we use
 /// the literal string `"Other"` so audit dashboards have a stable
-/// dimension to filter on.
+/// dimension to filter on. The two sandbox-escape variants
+/// ([`PermissionDecisionReason::FlagNotInAllowlist`] /
+/// [`PermissionDecisionReason::GitInternalPathWrite`], added by Phase
+/// 3.2.E.rest) render as their bare variant name so the
+/// `bash_perm::<rule_id>` audit channel can filter on them
+/// alongside rule-driven blocks.
 fn format_rule_id(reason: &PermissionDecisionReason) -> String {
     match reason {
         PermissionDecisionReason::Rule {
@@ -222,6 +248,8 @@ fn format_rule_id(reason: &PermissionDecisionReason) -> String {
             rule_value.rule_content.as_deref(),
         ),
         PermissionDecisionReason::Other { .. } => "Other".to_string(),
+        PermissionDecisionReason::FlagNotInAllowlist { .. } => "FlagNotInAllowlist".to_string(),
+        PermissionDecisionReason::GitInternalPathWrite { .. } => "GitInternalPathWrite".to_string(),
     }
 }
 
@@ -257,5 +285,64 @@ fn rule_suggestion_from_bash(s: BashRuleSuggestion) -> RuleSuggestion {
         label,
         rule_pattern,
         action,
+    }
+}
+
+/// Sandbox-escape pre-check — runs before the rule pipeline so the
+/// permission engine cannot be coerced into allowing pins **S21** /
+/// **S22** via a user-installed `allow` rule.
+///
+/// Returns `Some(reason)` when the command matches one of the two
+/// validator-defeating patterns documented on
+/// [`PermissionDecisionReason::FlagNotInAllowlist`] /
+/// [`PermissionDecisionReason::GitInternalPathWrite`]:
+///
+/// * **S21** — `xargs` invocation whose target is not in
+///   `SAFE_TARGET_COMMANDS_FOR_XARGS` (delegated to
+///   [`is_unsafe_xargs_invocation`]).
+/// * **S22** — a compound that both contains a git invocation and
+///   writes into one of the four git-internal roots
+///   (`HEAD` / `objects/` / `refs/` / `hooks/`). Both halves of the
+///   conjunction are required (upstream parity, `readOnlyValidation.ts`
+///   L1838-L1842): a bare `echo foo > hooks/x` with no git in the
+///   compound is not the bare-repo masquerade attack and should fall
+///   through to the rule engine.
+///
+/// Precedence: S22 is checked before S21 so the audit log surfaces
+/// the more-specific git-internal reason when both fire (e.g.,
+/// `xargs git commit && echo m > hooks/x`).
+fn detect_sandbox_escape(command: &str) -> Option<PermissionDecisionReason> {
+    if command_has_any_git(command) && command_writes_to_git_internal_paths(command) {
+        return Some(PermissionDecisionReason::GitInternalPathWrite {
+            command: command.to_string(),
+        });
+    }
+    if is_unsafe_xargs_invocation(command) {
+        return Some(PermissionDecisionReason::FlagNotInAllowlist {
+            command: command.to_string(),
+        });
+    }
+    None
+}
+
+/// Renders the user-visible block message for a sandbox-escape reason.
+/// The message text is the audit-log `message` field — kept stable so
+/// SIEM dashboards / snapshot tests can pin on it.
+fn sandbox_escape_message(reason: &PermissionDecisionReason) -> String {
+    match reason {
+        PermissionDecisionReason::FlagNotInAllowlist { command } => format!(
+            "bash sandbox escape S21: `xargs` target / flag is not in the safe allowlist \
+             (command: {command})"
+        ),
+        PermissionDecisionReason::GitInternalPathWrite { command } => format!(
+            "bash sandbox escape S22: command writes into a git-internal path \
+             (HEAD / objects/ / refs/ / hooks/) inside a git-bearing compound \
+             (command: {command})"
+        ),
+        // The other variants are never returned by `detect_sandbox_escape`;
+        // fall back to a generic surface so the function is total.
+        PermissionDecisionReason::Rule { .. } | PermissionDecisionReason::Other { .. } => {
+            "bash sandbox escape".to_string()
+        }
     }
 }

@@ -464,6 +464,50 @@ pub fn is_command_read_only(command: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// is_unsafe_xargs_invocation — sandbox-escape pin S21 detector.
+// Upstream `readOnlyValidation.ts` L1376-L1377 (the xargs-target dispatcher
+// branch in `isCommandSafeViaFlagParsing`), surfaced here as a standalone
+// predicate so [`dasclaw_hooks::BashPermissionHook`] can hard-deny S21 with
+// a structured [`crate::PermissionDecisionReason::FlagNotInAllowlist`].
+//
+// Added by Phase 3.2.E.rest (issue #603).
+// ---------------------------------------------------------------------------
+
+/// Returns `true` when `command` is a single-subcommand `xargs`
+/// invocation whose target command or flag combination is NOT safe per
+/// the allowlist flag-parser. Compound `... | xargs ...` is **not**
+/// inspected here; the leading-pipe-into-xargs surface is rejected by
+/// [`is_command_read_only`] (the whole compound has no matching
+/// allowlist prefix) and by the legacy `validate_read_only` operator
+/// guard — defense in depth.
+///
+/// SECURITY pin **S21**: `xargs -I{} rm {} < list` and any variant
+/// targeting a command outside `SAFE_TARGET_COMMANDS_FOR_XARGS`
+/// (`echo` / `printf` / `wc` / `grep` / `head` / `tail`) returns
+/// `true` so the caller can refuse the invocation regardless of user
+/// permission rules — no rule may legitimately allow `xargs` to
+/// dispatch to arbitrary commands.
+///
+/// Returns `false` for any non-`xargs` leading token so the
+/// permission-hook pre-check can call this on every command without
+/// false positives on unrelated invocations.
+#[must_use]
+pub fn is_unsafe_xargs_invocation(command: &str) -> bool {
+    let trimmed = command.trim();
+    let tokens = match shell_words::split(trimmed) {
+        Ok(t) if !t.is_empty() => t,
+        _ => return false,
+    };
+    if tokens[0] != "xargs" {
+        return false;
+    }
+    // Reuse the dispatcher — it injects SAFE_TARGET_COMMANDS_FOR_XARGS
+    // when tokens[0] == "xargs" and returns false on any flag/target
+    // mismatch.
+    !is_command_safe_via_flag_parsing(trimmed)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
