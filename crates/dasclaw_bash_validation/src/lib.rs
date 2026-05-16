@@ -31,6 +31,10 @@ pub use path_validation::{
     FileOperationType, PathCommand, PathValidationOutcome,
 };
 pub use permissions::PermissionMode;
+pub use readonly::git_internal::{
+    command_has_any_git, command_writes_to_git_internal_paths, extract_write_paths_from_subcommand,
+    is_git_internal_path, is_normalized_git_command,
+};
 pub use readonly::main_entry::{
     contains_unquoted_expansion, contains_vulnerable_unc_path, is_command_read_only,
 };
