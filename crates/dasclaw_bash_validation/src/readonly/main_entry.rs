@@ -19,6 +19,17 @@ use regex::Regex;
 
 use super::bash_allowlist::{is_command_safe_via_flag_parsing, make_regex_for_safe_command};
 
+/// Compile a regex literal that is known correct at build time.
+///
+/// Centralizing this lets the `check_no_panics.py` whitelist comment live
+/// in exactly one place, and shortens the call sites so `rustfmt` doesn't
+/// break the line.
+#[inline]
+fn static_regex(pattern: &str) -> Regex {
+    #[allow(clippy::expect_used)]
+    Regex::new(pattern).expect("static regex") // safety: literal pattern, build-time correctness
+}
+
 // ---------------------------------------------------------------------------
 // EXTERNAL_READONLY_COMMANDS — cross-shell readonly commands.
 // Upstream `readOnlyCommandValidation.ts` L1539-L1542.
@@ -116,63 +127,57 @@ pub(crate) const READONLY_COMMANDS: &[&str] = &[
 static READONLY_COMMAND_REGEXES: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     let mut v: Vec<Regex> = READONLY_COMMANDS
         .iter()
-        .map(|cmd| {
-            Regex::new(&make_regex_for_safe_command(cmd)).expect("static regex")
-            // safety: literal pattern built from constant command name
-        })
+        .map(|cmd| static_regex(&make_regex_for_safe_command(cmd)))
         .collect();
 
     // Echo (upstream L1517-L1520) — allow single-quoted strings, double-quoted
     // strings without `$`/`<>`/newlines, and unquoted tokens free of shell
     // metacharacters. Optional trailing `2>&1`.
     v.push(
-        Regex::new(
+        static_regex(
             r#"^echo(?:\s+(?:'[^']*'|"[^"$<>\n\r]*"|[^|;&`$(){}><#\\!"'\s]+))*(?:\s+2>&1)?\s*$"#,
-        )
-        .expect("static regex"), // safety: literal pattern, compile-time validated
+        ), // safety: literal pattern, compile-time validated
     );
 
     // Claude CLI help (upstream L1523-L1524).
-    v.push(Regex::new(r"^claude -h$").expect("static regex"));
-    v.push(Regex::new(r"^claude --help$").expect("static regex"));
+    v.push(static_regex(r"^claude -h$")); // safety: literal pattern, build-time correctness
+    v.push(static_regex(r"^claude --help$")); // safety: literal pattern, build-time correctness
 
     // uniq — flags-only (upstream L1529). Note redundant `(?:\s|$)\s*$` tail
     // preserved verbatim for parity.
     v.push(
-        Regex::new(r"^uniq(?:\s+(?:-[a-zA-Z]+|--[a-zA-Z-]+(?:=\S+)?|-[fsw]\s+\d+))*(?:\s|$)\s*$")
-            .expect("static regex"), // safety: literal pattern, compile-time validated
+        static_regex(r"^uniq(?:\s+(?:-[a-zA-Z]+|--[a-zA-Z-]+(?:=\S+)?|-[fsw]\s+\d+))*(?:\s|$)\s*$"), // safety: literal pattern, compile-time validated
     );
 
     // pwd / whoami (upstream L1532-L1533).
-    v.push(Regex::new(r"^pwd$").expect("static regex"));
-    v.push(Regex::new(r"^whoami$").expect("static regex"));
+    v.push(static_regex(r"^pwd$")); // safety: literal pattern, build-time correctness
+    v.push(static_regex(r"^whoami$")); // safety: literal pattern, build-time correctness
 
     // Version probes — anchored to defend against `node -v --run <task>`
     // exploit (upstream L1539-L1546).
-    v.push(Regex::new(r"^node -v$").expect("static regex"));
-    v.push(Regex::new(r"^node --version$").expect("static regex"));
-    v.push(Regex::new(r"^python --version$").expect("static regex"));
-    v.push(Regex::new(r"^python3 --version$").expect("static regex"));
+    v.push(static_regex(r"^node -v$")); // safety: literal pattern, build-time correctness
+    v.push(static_regex(r"^node --version$")); // safety: literal pattern, build-time correctness
+    v.push(static_regex(r"^python --version$")); // safety: literal pattern, build-time correctness
+    v.push(static_regex(r"^python3 --version$")); // safety: literal pattern, build-time correctness
 
     // history / alias / arch (upstream L1550-L1553).
-    v.push(Regex::new(r"^history(?:\s+\d+)?\s*$").expect("static regex"));
-    v.push(Regex::new(r"^alias$").expect("static regex"));
-    v.push(Regex::new(r"^arch(?:\s+(?:--help|-h))?\s*$").expect("static regex"));
+    v.push(static_regex(r"^history(?:\s+\d+)?\s*$")); // safety: literal pattern, build-time correctness
+    v.push(static_regex(r"^alias$")); // safety: literal pattern, build-time correctness
+    v.push(static_regex(r"^arch(?:\s+(?:--help|-h))?\s*$")); // safety: literal pattern, build-time correctness
 
     // Network info — strictly no manipulation flags (upstream L1556-L1557).
-    v.push(Regex::new(r"^ip addr$").expect("static regex"));
+    v.push(static_regex(r"^ip addr$")); // safety: literal pattern, build-time correctness
     v.push(
-        Regex::new(r"^ifconfig(?:\s+[a-zA-Z][a-zA-Z0-9_-]*)?\s*$").expect("static regex"), // safety: literal pattern, compile-time validated
+        static_regex(r"^ifconfig(?:\s+[a-zA-Z][a-zA-Z0-9_-]*)?\s*$"), // safety: literal pattern, compile-time validated
     );
 
     // Path navigation / listing (upstream L1572-L1574). `find` has its own
     // dedicated dispatcher (`find_command_matches`) because the upstream regex
     // uses negative-lookahead.
     v.push(
-        Regex::new(r#"^cd(?:\s+(?:'[^']*'|"[^"]*"|[^\s;|&`$(){}><#\\]+))?$"#)
-            .expect("static regex"), // safety: literal pattern, compile-time validated
+        static_regex(r#"^cd(?:\s+(?:'[^']*'|"[^"]*"|[^\s;|&`$(){}><#\\]+))?$"#), // safety: literal pattern, compile-time validated
     );
-    v.push(Regex::new(r"^ls(?:\s+[^<>()$`|{}&;\n\r]*)?$").expect("static regex"));
+    v.push(static_regex(r"^ls(?:\s+[^<>()$`|{}&;\n\r]*)?$")); // safety: literal pattern, build-time correctness
 
     v
 });
@@ -183,10 +188,9 @@ static READONLY_COMMAND_REGEXES: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 // ---------------------------------------------------------------------------
 
 static JQ_BASE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
+    static_regex(
         r#"^jq(?:\s+(?:-[a-zA-Z]+|--[a-zA-Z-]+(?:=\S+)?))*(?:\s+'[^'`]*'|\s+"[^"`]*"|\s+[^-\s'"][^\s]*)+\s*$"#,
     )
-    .expect("static regex") // safety: literal pattern, compile-time validated
 });
 
 static JQ_FORBIDDEN_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -199,10 +203,9 @@ static JQ_FORBIDDEN_RE: LazyLock<Regex> = LazyLock::new(|| {
     // them (so a hypothetical `--from-fileX` would also block). We keep that
     // permissive shape rather than tightening to `(?:\s|$|=)` to avoid a
     // strict-parity divergence.
-    Regex::new(
+    static_regex(
         r"-f\b|--from-file|--rawfile|--slurpfile|--run-tests|-L\b|--library-path|\benv\b|\$ENV\b",
     )
-    .expect("static regex") // safety: literal pattern, compile-time validated
 });
 
 fn jq_command_matches(cmd: &str) -> bool {
@@ -218,13 +221,12 @@ static FIND_BASE_RE: LazyLock<Regex> = LazyLock::new(|| {
     // Each token char must be either `\(` / `\)` escape, a safe non-meta char,
     // or whitespace. `*` / `?` etc are syntactically permitted here but get
     // blocked by `contains_unquoted_expansion` upstream of this match.
-    Regex::new(r"^find(?:\s+(?:\\[()]|[^<>()$`|{}&;\n\r\s]|\s)+)?$").expect("static regex")
+    static_regex(r"^find(?:\s+(?:\\[()]|[^<>()$`|{}&;\n\r\s]|\s)+)?$")
 });
 
 static FIND_FORBIDDEN_RE: LazyLock<Regex> = LazyLock::new(|| {
     // Block path-mutating / exec primitives at flag boundary.
-    Regex::new(r"(?:^|\s)-(?:delete|exec|execdir|ok|okdir|fprint0?|fls|fprintf)(?:\s|$)")
-        .expect("static regex") // safety: literal pattern, compile-time validated
+    static_regex(r"(?:^|\s)-(?:delete|exec|execdir|ok|okdir|fprint0?|fls|fprintf)(?:\s|$)")
 });
 
 fn find_command_matches(cmd: &str) -> bool {
@@ -240,35 +242,29 @@ fn find_command_matches(cmd: &str) -> bool {
 // normal POSIX paths like `//etc/passwd`.
 // ---------------------------------------------------------------------------
 
-static UNC_BACKSLASH_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\\\\[^\s\\/]+(?:@(?:\d+|ssl))?(?:[\\/]|$|\s)").expect("static regex")
-});
+static UNC_BACKSLASH_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"(?i)\\\\[^\s\\/]+(?:@(?:\d+|ssl))?(?:[\\/]|$|\s)"));
 
 static UNC_FORWARD_RE: LazyLock<Regex> = LazyLock::new(|| {
     // Upstream uses negative lookbehind `(?<!:)` to skip `https://` etc.
     // Rust regex crate has no lookbehind; we instead match either start of
     // string OR a non-colon prefix char.
-    Regex::new(r"(?i)(?:^|[^:])//[^\s\\/]+(?:@(?:\d+|ssl))?(?:[\\/]|$|\s)").expect("static regex")
+    static_regex(r"(?i)(?:^|[^:])//[^\s\\/]+(?:@(?:\d+|ssl))?(?:[\\/]|$|\s)")
 });
 
-static UNC_MIXED_FWDBACK_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"/\\{2,}[^\s\\/]").expect("static regex"));
+static UNC_MIXED_FWDBACK_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"/\\{2,}[^\s\\/]")); // safety: literal pattern, build-time correctness
 
-static UNC_MIXED_BACKFWD_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\\{2,}/[^\s\\/]").expect("static regex"));
+static UNC_MIXED_BACKFWD_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"\\{2,}/[^\s\\/]")); // safety: literal pattern, build-time correctness
 
-static UNC_SSL_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)@SSL@\d+|@\d+@SSL").expect("static regex"));
+static UNC_SSL_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"(?i)@SSL@\d+|@\d+@SSL")); // safety: literal pattern, build-time correctness
 
-static UNC_DAVWWW_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)DavWWWRoot").expect("static regex"));
+static UNC_DAVWWW_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"(?i)DavWWWRoot")); // safety: literal pattern, build-time correctness
 
-static UNC_IPV4_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(?:\\\\|//)\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}[\\/]").expect("static regex")
-});
+static UNC_IPV4_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"^(?:\\\\|//)\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}[\\/]"));
 
 static UNC_IPV6_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(?:\\\\|//)\[[\da-fA-F:]+\][\\/]").expect("static regex"));
+    LazyLock::new(|| static_regex(r"^(?:\\\\|//)\[[\da-fA-F:]+\][\\/]")); // safety: literal pattern, build-time correctness
 
 /// Pure regex-based UNC pattern detection (no platform gate).
 ///
@@ -386,12 +382,9 @@ pub fn contains_unquoted_expansion(command: &str) -> bool {
 // Upstream `BashTool/readOnlyValidation.ts` L1678-L1750.
 // ---------------------------------------------------------------------------
 
-static GIT_DASH_C_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\s-c[\s=]").expect("static regex"));
-static GIT_EXEC_PATH_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\s--exec-path[\s=]").expect("static regex"));
-static GIT_CONFIG_ENV_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\s--config-env[\s=]").expect("static regex"));
+static GIT_DASH_C_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"\s-c[\s=]")); // safety: literal pattern, build-time correctness
+static GIT_EXEC_PATH_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"\s--exec-path[\s=]")); // safety: literal pattern, build-time correctness
+static GIT_CONFIG_ENV_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"\s--config-env[\s=]")); // safety: literal pattern, build-time correctness
 
 /// Single-subcommand read-only decision.
 ///
