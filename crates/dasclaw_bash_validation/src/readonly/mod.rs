@@ -10,4 +10,5 @@
 //!
 //! Plan: `docs/plans/bash-parity/phase-3.2-readonly-validation-deepening.md`.
 
+pub mod bash_allowlist;
 pub mod flag_parser;
