@@ -30,7 +30,9 @@ fn rule_content(result: &PermissionResult) -> Option<&str> {
     };
     match reason {
         PermissionDecisionReason::Rule { rule } => rule.rule_value.rule_content.as_deref(),
-        PermissionDecisionReason::Other { .. } => None,
+        PermissionDecisionReason::Other { .. }
+        | PermissionDecisionReason::FlagNotInAllowlist { .. }
+        | PermissionDecisionReason::GitInternalPathWrite { .. } => None,
     }
 }
 

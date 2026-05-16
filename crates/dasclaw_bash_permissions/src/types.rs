@@ -86,6 +86,32 @@ pub enum PermissionDecisionReason {
     /// Catch-all — no rule matched and no other mechanism opined.
     /// Used by the `Passthrough` result to carry a free-form note.
     Other { reason: String },
+    /// Sandbox-escape pin **S21** — the command invokes `xargs` with a
+    /// target that is not in `SAFE_TARGET_COMMANDS_FOR_XARGS`
+    /// (upstream `readOnlyValidation.ts` L1218–L1232). This is a
+    /// hard-deny reason emitted by the hook layer before the
+    /// rule pipeline — no user rule may legitimately allow `xargs`
+    /// targeting an arbitrary command.
+    ///
+    /// Carries the offending command verbatim for audit dashboards;
+    /// the `rule_id` surface renders as `"FlagNotInAllowlist"`.
+    ///
+    /// Added by Phase 3.2.E.rest (issue #603).
+    FlagNotInAllowlist { command: String },
+    /// Sandbox-escape pin **S22** — the command writes to one of the
+    /// four git-internal roots (`HEAD` / `objects/` / `refs/` /
+    /// `hooks/`) inside a compound that also contains a git
+    /// invocation, exploitable for the bare-repo masquerade attack
+    /// documented in
+    /// [`dasclaw_bash_validation::is_git_internal_path`] (upstream
+    /// `readOnlyValidation.ts` L1840–L1865). Hard-deny reason emitted
+    /// by the hook layer before the rule pipeline.
+    ///
+    /// Carries the offending command verbatim; the `rule_id` surface
+    /// renders as `"GitInternalPathWrite"`.
+    ///
+    /// Added by Phase 3.2.E.rest (issue #603).
+    GitInternalPathWrite { command: String },
 }
 
 /// Outcome of running the permission pipeline against a single command.
