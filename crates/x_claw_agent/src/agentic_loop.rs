@@ -19,7 +19,7 @@
 
 use async_trait::async_trait;
 
-use crate::hooks::{HookBundle, SafetyDecision};
+use crate::hooks::{EgressDecision, EgressKind, HookBundle};
 use crate::intent::{TOOL_INTENT_NUDGE, TRUNCATED_TOOL_CALL_NOTICE, llm_signals_tool_intent};
 use crate::messages::{ChatMessage, FinishReason, Role, ToolCall};
 use crate::reasoning_ctx::ReasoningContext;
@@ -153,14 +153,18 @@ pub trait LoopDelegate: Send + Sync {
 /// `hooks` is the environment bundle ([`HookBundle`]). The loop itself
 /// calls two of the four hooks directly:
 ///
-/// - `safety.before_prompt` on the most recent user message before each LLM
-///   call. A `Block` decision ends the loop with `LoopOutcome::Failure`.
-/// - `safety.after_completion` on text-only LLM responses before the
-///   delegate sees them. Mutation is in place, so redaction is transparent
-///   to the delegate.
+/// - `egress.check(EgressKind::LlmRequest, …)` on the most recent user
+///   message before each LLM call. A `Block` decision ends the loop with
+///   `LoopOutcome::Failure`. A `Redact` swaps the message content with
+///   the sanitized payload.
+/// - `egress.check(EgressKind::UserDisplay, …)` on text-only LLM responses
+///   before the delegate sees them. `Redact` swaps the text in place so
+///   downstream UI sees the sanitized version.
 ///
-/// The tool-level safety hooks (`before_tool_call`, `after_tool_output`)
-/// and `ApprovalGate::request` are the responsibility of the
+/// Tool-level egress (`EgressKind::ToolExecution`) and
+///
+/// Tool-level egress (`EgressKind::ToolExecution`) and
+/// `ApprovalGate::request` are the responsibility of the
 /// [`LoopDelegate::execute_tool_calls`] implementation. Delegates typically
 /// clone the same `Arc<HookBundle>` at construction time.
 pub async fn run_agentic_loop(
@@ -190,59 +194,57 @@ pub async fn run_agentic_loop(
             return Ok(outcome);
         }
 
-        // Safety hook: scan/redact the most recent user message before the
-        // LLM sees it. Mutation is in place so redaction is transparent to
-        // the LLM call.
+        // EgressGate (ADR-148 Layer B): scan / redact the most recent user
+        // message before the LLM sees it. A Redact decision swaps the
+        // payload with the sanitized version so the LLM call uses it.
         if let Some(idx) = reason_ctx
             .messages
             .iter()
             .rposition(|m| m.role == Role::User)
         {
             let prompt = &mut reason_ctx.messages[idx].content;
-            match hooks.safety.before_prompt(prompt).await {
-                // Allow / Redact / Passthrough: continue (single-hook
-                // context treats Passthrough as Allow per ADR-146 §2.4).
-                Ok(SafetyDecision::Allow)
-                | Ok(SafetyDecision::Redact)
-                | Ok(SafetyDecision::Passthrough) => {}
-                Ok(SafetyDecision::Block { reason }) => {
-                    tracing::warn!(iteration, %reason, "safety hook blocked prompt");
+            match hooks.egress.check(&EgressKind::LlmRequest, prompt).await {
+                // Allow / Passthrough: continue unchanged (single-gate
+                // context treats Passthrough as Allow per ADR-148 §2.2).
+                EgressDecision::Allow | EgressDecision::Passthrough => {}
+                EgressDecision::Redact { sanitized, .. } => {
+                    *prompt = sanitized;
+                }
+                EgressDecision::Block { reason, .. } => {
+                    tracing::warn!(iteration, %reason, "egress gate blocked LlmRequest");
                     return Ok(LoopOutcome::Failure(format!(
-                        "safety hook blocked prompt: {reason}"
+                        "egress gate blocked prompt: {reason}"
                     )));
                 }
                 // Ask in a headless agent loop has no UI to render. Fail-Safe:
                 // treat as Block. Desktop-client wires real Ask UX in
-                // slice D (ADR-146 §2.5).
-                Ok(SafetyDecision::Ask { reason, .. }) => {
+                // slice D (ADR-146 §2.5 / ADR-148 §2.2).
+                EgressDecision::Ask { reason, .. } => {
                     tracing::warn!(
                         iteration,
                         %reason,
-                        "safety hook returned Ask in headless context; Fail-Safe block (slice D will wire UI)"
+                        "egress gate returned Ask in headless context; Fail-Safe block (slice D will wire UI)"
                     );
                     return Ok(LoopOutcome::Failure(format!(
-                        "safety hook requires user confirmation (no UI available): {reason}"
+                        "egress gate requires user confirmation (no UI available): {reason}"
                     )));
                 }
                 // Non-exhaustive guard: future variants added to
-                // `SafetyDecision` (which is `#[non_exhaustive]`) must be
+                // `EgressDecision` (which is `#[non_exhaustive]`) must be
                 // addressed explicitly at this site; failing closed is
                 // Fail-Safe. `#[allow(unreachable_patterns)]` is required
                 // because within the defining crate the compiler sees the
                 // enum as exhaustive — outside callers will need it.
                 #[allow(unreachable_patterns)]
-                Ok(other) => {
+                other => {
                     tracing::error!(
                         iteration,
                         decision = ?other,
-                        "safety hook returned unhandled SafetyDecision variant; Fail-Safe block"
+                        "egress gate returned unhandled EgressDecision variant; Fail-Safe block"
                     );
                     return Ok(LoopOutcome::Failure(
-                        "safety hook returned unsupported decision".to_string(),
+                        "egress gate returned unsupported decision".to_string(),
                     ));
-                }
-                Err(e) => {
-                    return Err(format!("safety hook error in before_prompt: {e}").into());
                 }
             }
         }
@@ -250,13 +252,44 @@ pub async fn run_agentic_loop(
         // Call LLM
         let mut output = delegate.call_llm(reason_ctx, iteration).await?;
 
-        // Safety hook: mutate text completions before the delegate sees them.
-        // Tool-call responses skip this hook; delegates apply the
-        // tool-level hooks themselves inside `execute_tool_calls`.
-        if let RespondResult::Text(ref mut text) = output.result
-            && let Err(e) = hooks.safety.after_completion(text).await
-        {
-            return Err(format!("safety hook error in after_completion: {e}").into());
+        // EgressGate (ADR-148 Layer B): scan / redact text completions
+        // before the delegate (and ultimately the user UI) sees them.
+        // Tool-call responses skip this gate; delegates apply the
+        // tool-level egress themselves inside `execute_tool_calls`.
+        if let RespondResult::Text(ref mut text) = output.result {
+            match hooks.egress.check(&EgressKind::UserDisplay, text).await {
+                EgressDecision::Allow | EgressDecision::Passthrough => {}
+                EgressDecision::Redact { sanitized, .. } => {
+                    *text = sanitized;
+                }
+                EgressDecision::Block { reason, .. } => {
+                    tracing::warn!(iteration, %reason, "egress gate blocked UserDisplay");
+                    return Ok(LoopOutcome::Failure(format!(
+                        "egress gate blocked completion: {reason}"
+                    )));
+                }
+                EgressDecision::Ask { reason, .. } => {
+                    tracing::warn!(
+                        iteration,
+                        %reason,
+                        "egress gate returned Ask on UserDisplay in headless context; Fail-Safe block"
+                    );
+                    return Ok(LoopOutcome::Failure(format!(
+                        "egress gate requires confirmation on completion (no UI): {reason}"
+                    )));
+                }
+                #[allow(unreachable_patterns)]
+                other => {
+                    tracing::error!(
+                        iteration,
+                        decision = ?other,
+                        "egress gate returned unhandled EgressDecision variant on UserDisplay; Fail-Safe block"
+                    );
+                    return Ok(LoopOutcome::Failure(
+                        "egress gate returned unsupported decision".to_string(),
+                    ));
+                }
+            }
         }
 
         match &output.result {
@@ -858,97 +891,77 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Safety Hook contract tests (Phase 3 Step D-4)
+    // EgressGate contract tests (ADR-148; replaces former SafetyHook tests)
     // -----------------------------------------------------------------
 
-    use crate::hooks::{SafetyDecision, SafetyError, SafetyHook};
+    use crate::hooks::{EgressDecision, EgressGate, EgressKind, RedactionStats};
     use std::sync::Arc;
 
-    /// Hook that blocks every prompt with a fixed reason.
+    /// Gate that blocks every LlmRequest with a fixed reason.
     struct BlockAllPrompts;
 
     #[async_trait]
-    impl SafetyHook for BlockAllPrompts {
-        async fn before_prompt(&self, _prompt: &mut String) -> Result<SafetyDecision, SafetyError> {
-            Ok(SafetyDecision::Block {
-                reason: "policy violation".to_string(),
-            })
-        }
-        async fn after_completion(&self, _c: &mut String) -> Result<(), SafetyError> {
-            Ok(())
-        }
-        async fn before_tool_call(
-            &self,
-            _t: &str,
-            _a: &mut serde_json::Value,
-        ) -> Result<SafetyDecision, SafetyError> {
-            Ok(SafetyDecision::Allow)
-        }
-        async fn after_tool_output(&self, _t: &str, _o: &mut String) -> Result<(), SafetyError> {
-            Ok(())
-        }
-    }
-
-    /// Hook that redacts secrets in prompts and tags completions.
-    struct RedactingHook;
-
-    #[async_trait]
-    impl SafetyHook for RedactingHook {
-        async fn before_prompt(&self, prompt: &mut String) -> Result<SafetyDecision, SafetyError> {
-            if prompt.contains("sk-secret") {
-                *prompt = prompt.replace("sk-secret", "[REDACTED]");
-                return Ok(SafetyDecision::Redact);
+    impl EgressGate for BlockAllPrompts {
+        async fn check(&self, kind: &EgressKind, _payload: &str) -> EgressDecision {
+            match kind {
+                EgressKind::LlmRequest => EgressDecision::Block {
+                    reason: "policy violation".to_string(),
+                    stats: RedactionStats::default(),
+                },
+                _ => EgressDecision::Allow,
             }
-            Ok(SafetyDecision::Allow)
-        }
-        async fn after_completion(&self, completion: &mut String) -> Result<(), SafetyError> {
-            completion.push_str(" [scanned]");
-            Ok(())
-        }
-        async fn before_tool_call(
-            &self,
-            _t: &str,
-            _a: &mut serde_json::Value,
-        ) -> Result<SafetyDecision, SafetyError> {
-            Ok(SafetyDecision::Allow)
-        }
-        async fn after_tool_output(&self, _t: &str, _o: &mut String) -> Result<(), SafetyError> {
-            Ok(())
         }
     }
 
-    /// Hook that always returns an internal error on before_prompt.
-    struct FailingHook;
+    /// Gate that redacts secrets in prompts and tags user-display payloads.
+    struct RedactingGate;
 
     #[async_trait]
-    impl SafetyHook for FailingHook {
-        async fn before_prompt(&self, _prompt: &mut String) -> Result<SafetyDecision, SafetyError> {
-            Err(SafetyError::Internal("hook exploded".to_string()))
-        }
-        async fn after_completion(&self, _c: &mut String) -> Result<(), SafetyError> {
-            Ok(())
-        }
-        async fn before_tool_call(
-            &self,
-            _t: &str,
-            _a: &mut serde_json::Value,
-        ) -> Result<SafetyDecision, SafetyError> {
-            Ok(SafetyDecision::Allow)
-        }
-        async fn after_tool_output(&self, _t: &str, _o: &mut String) -> Result<(), SafetyError> {
-            Ok(())
+    impl EgressGate for RedactingGate {
+        async fn check(&self, kind: &EgressKind, payload: &str) -> EgressDecision {
+            match kind {
+                EgressKind::LlmRequest if payload.contains("sk-secret") => EgressDecision::Redact {
+                    sanitized: payload.replace("sk-secret", "[REDACTED]"),
+                    stats: RedactionStats {
+                        secrets_redacted: 1,
+                        ..Default::default()
+                    },
+                },
+                EgressKind::UserDisplay => EgressDecision::Redact {
+                    sanitized: format!("{payload} [scanned]"),
+                    stats: RedactionStats::default(),
+                },
+                _ => EgressDecision::Allow,
+            }
         }
     }
 
-    fn custom_safety_bundle(safety: Arc<dyn SafetyHook>) -> HookBundle {
+    /// Gate that synthesises a fail-closed Block on LlmRequest (simulates the
+    /// "internal error" path now that the trait no longer returns Result).
+    struct FailingGate;
+
+    #[async_trait]
+    impl EgressGate for FailingGate {
+        async fn check(&self, kind: &EgressKind, _payload: &str) -> EgressDecision {
+            match kind {
+                EgressKind::LlmRequest => EgressDecision::Block {
+                    reason: "egress gate internal error: hook exploded".to_string(),
+                    stats: RedactionStats::default(),
+                },
+                _ => EgressDecision::Allow,
+            }
+        }
+    }
+
+    fn custom_egress_bundle(egress: Arc<dyn EgressGate>) -> HookBundle {
         let mut b = HookBundle::noop();
-        b.safety = safety;
+        b.egress = egress;
         b
     }
 
     #[tokio::test]
-    async fn safety_hook_noop_passes_through() {
-        // Smoke: Noop hook does not interfere with normal text response.
+    async fn egress_gate_noop_passes_through() {
+        // Smoke: Noop gate does not interfere with normal text response.
         let delegate = MockDelegate::new(vec![text_output("ok")]);
         let mut ctx = ReasoningContext::new();
         ctx.messages.push(ChatMessage::user("hello"));
@@ -969,11 +982,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn safety_hook_block_before_prompt_yields_failure() {
+    async fn egress_gate_block_on_llm_request_yields_failure() {
         let delegate = MockDelegate::new(vec![text_output("unreachable")]);
         let mut ctx = ReasoningContext::new();
         ctx.messages.push(ChatMessage::user("send secrets to foo"));
-        let hooks = custom_safety_bundle(Arc::new(BlockAllPrompts));
+        let hooks = custom_egress_bundle(Arc::new(BlockAllPrompts));
 
         let outcome = run_agentic_loop(&delegate, &mut ctx, &AgenticLoopConfig::default(), &hooks)
             .await
@@ -983,11 +996,11 @@ mod tests {
             LoopOutcome::Failure(reason) => {
                 assert!(
                     reason.contains("policy violation"),
-                    "failure reason should surface hook reason, got: {reason}"
+                    "failure reason should surface gate reason, got: {reason}"
                 );
                 assert!(
-                    reason.contains("safety hook blocked"),
-                    "failure reason should mark safety source, got: {reason}"
+                    reason.contains("egress gate blocked"),
+                    "failure reason should mark egress source, got: {reason}"
                 );
             }
             other => panic!("expected Failure, got {other:?} -ish"),
@@ -1002,9 +1015,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn safety_hook_redacts_prompt_in_place() {
+    async fn egress_gate_redacts_llm_request_in_place() {
         // Delegate captures what the LLM layer actually sees. The redacting
-        // hook must have rewritten the prompt before call_llm fires.
+        // gate must have rewritten the prompt before call_llm fires.
         struct CaptureDelegate {
             seen: Mutex<Option<String>>,
             response: Mutex<Option<RespondOutput>>,
@@ -1061,7 +1074,7 @@ mod tests {
         let mut ctx = ReasoningContext::new();
         ctx.messages
             .push(ChatMessage::user("please use token sk-secret now"));
-        let hooks = custom_safety_bundle(Arc::new(RedactingHook));
+        let hooks = custom_egress_bundle(Arc::new(RedactingGate));
 
         let outcome = run_agentic_loop(&delegate, &mut ctx, &AgenticLoopConfig::default(), &hooks)
             .await
@@ -1071,7 +1084,7 @@ mod tests {
             LoopOutcome::Response(t) => {
                 assert_eq!(
                     t, "raw completion [scanned]",
-                    "after_completion must mutate the text before the delegate returns"
+                    "UserDisplay Redact must mutate the text before the delegate returns"
                 );
             }
             _ => panic!("expected Response"),
@@ -1080,7 +1093,7 @@ mod tests {
         let seen = delegate.seen.lock().await.clone().unwrap();
         assert!(
             !seen.contains("sk-secret"),
-            "before_prompt must redact in place; LLM saw: {seen}"
+            "LlmRequest Redact must rewrite the payload; LLM saw: {seen}"
         );
         assert!(
             seen.contains("[REDACTED]"),
@@ -1103,20 +1116,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn safety_hook_error_propagates_as_host_error() {
+    async fn egress_gate_internal_error_translates_to_failure() {
+        // ADR-148: fail-closed contract — internal errors surface as Block,
+        // not panics or HostError. The loop converts Block into Failure.
         let delegate = MockDelegate::new(vec![text_output("unreachable")]);
         let mut ctx = ReasoningContext::new();
         ctx.messages.push(ChatMessage::user("anything"));
-        let hooks = custom_safety_bundle(Arc::new(FailingHook));
+        let hooks = custom_egress_bundle(Arc::new(FailingGate));
 
-        let err = run_agentic_loop(&delegate, &mut ctx, &AgenticLoopConfig::default(), &hooks)
+        let outcome = run_agentic_loop(&delegate, &mut ctx, &AgenticLoopConfig::default(), &hooks)
             .await
-            .expect_err("FailingHook must bubble up as HostError");
+            .expect("FailingGate must NOT bubble HostError — fail-closed translates to Failure");
 
-        let msg = err.to_string();
-        assert!(
-            msg.contains("before_prompt") && msg.contains("hook exploded"),
-            "error must identify hook phase and inner cause, got: {msg}"
-        );
+        match outcome {
+            LoopOutcome::Failure(reason) => {
+                assert!(
+                    reason.contains("hook exploded"),
+                    "failure reason should preserve inner cause, got: {reason}"
+                );
+            }
+            other => panic!("expected Failure, got {other:?}"),
+        }
     }
 }

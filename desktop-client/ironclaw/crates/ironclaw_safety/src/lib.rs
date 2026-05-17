@@ -13,8 +13,8 @@ mod policy;
 mod sanitizer;
 mod validator;
 
-#[cfg(feature = "agent-hook")]
-pub mod agent_hook;
+#[cfg(feature = "egress-gate")]
+pub mod egress_gate;
 
 pub use credential_detect::params_contain_manual_credentials;
 pub use leak_detector::{

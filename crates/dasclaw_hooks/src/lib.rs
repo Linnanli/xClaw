@@ -6,15 +6,17 @@
 //! all event-style lifecycle hooks (audit log, declarative regex transforms,
 //! outbound webhook notifications, plugin/workspace bundles).
 //!
-//! Trait seams — `SafetyHook`, `SandboxExecutor`, `SecretProvider`,
-//! `ApprovalGate`, `SessionHooks` — are owned by [`x_claw_agent`] (per
-//! ADR-001 crate-independence rule) and **reexported here** so callers only
-//! need to depend on `dasclaw_hooks`.
+//! Trait seams — `EgressGate` (ADR-148, replaces `SafetyHook`),
+//! `SandboxExecutor`, `SecretProvider`, `ApprovalGate`, `SessionHooks` —
+//! are owned by [`x_claw_agent`] (per ADR-001 crate-independence rule) and
+//! **reexported here** so callers only need to depend on `dasclaw_hooks`.
 //!
 //! See [`docs/plans/architecture-refactor/adr-113-hook-engine-unification.md`]
+//! and [`docs/plans/architecture-refactor/adr-148-egress-gate-safety-hook-semantics.md`]
 //! for the design rationale, including:
 //! - why the two-layer split (event hooks + trait seams) is preserved
-//! - the responsibility contract (`no_safety_rule_in_event_hooks`)
+//! - the responsibility contract (`no_safety_rule_in_event_hooks`,
+//!   `no_mutation_in_egress_gate`)
 //! - the Phase 0 red-line definition (`count_hook_systems() == 1`).
 
 pub mod bash_permission_hook;
@@ -31,17 +33,23 @@ pub use bundled::{
     HookBundleConfig, HookBundleError, HookRegistrationSummary, HookRuleConfig,
     OutboundWebhookConfig, RegexReplacementConfig, register_bundle, register_bundled_hooks,
 };
-pub use contract::{ContractViolation, count_hook_systems, no_safety_rule_in_event_hooks};
+pub use contract::{
+    ContractViolation, count_hook_systems, no_mutation_in_egress_gate,
+    no_safety_rule_in_event_hooks,
+};
 pub use hook::{Hook, HookContext, HookError, HookEvent, HookFailureMode, HookOutcome, HookPoint};
 pub use registry::HookRegistry;
 
 // Reexport trait seams from `x_claw_agent` so external callers never have to
 // import both crates. The reexports are deliberately type-identity-preserving
 // (`pub use`), not newtype wrappers.
+//
+// ADR-148: `SafetyHook` family was removed; `EgressGate` family replaces it.
 pub use x_claw_agent::{
-    ApprovalError, ApprovalGate, ApprovalOutcome, ApprovalRequest, AutoApproveGate, DenyAllGate,
-    HookBundle, InMemorySecrets, NoopSafetyHook, NoopSandboxExecutor, NoopSessionHooks, RuleAction,
-    RuleSuggestion, SafetyDecision, SafetyError, SafetyHook, SandboxError, SandboxExecOutput,
+    ApprovalError, ApprovalGate, ApprovalOutcome, ApprovalRequest, AutoApproveGate,
+    CompositeEgressGate, CompositeEgressGateBuilder, DenyAllGate, EgressDecision, EgressGate,
+    EgressKind, GateId, HookBundle, InMemorySecrets, NoopEgressGate, NoopSandboxExecutor,
+    NoopSessionHooks, RedactionStats, RuleAction, RuleSuggestion, SandboxError, SandboxExecOutput,
     SandboxExecRequest, SandboxExecutor, SandboxNetworkHint, SecretError, SecretProvider,
     SecretString, SessionHooks,
 };
@@ -94,14 +102,14 @@ mod acceptance_tests {
 
     /// `req_p03_pr1_reexport_trait_seams_identity` — the trait seams reexported
     /// from `x_claw_agent` must be the *same* types (no newtype wrappers), so
-    /// implementors of `x_claw_agent::SafetyHook` are accepted wherever
-    /// `dasclaw_hooks::SafetyHook` is expected.
+    /// implementors of `x_claw_agent::EgressGate` are accepted wherever
+    /// `dasclaw_hooks::EgressGate` is expected.
     #[test]
     fn req_p03_pr1_reexport_trait_seams_identity() {
         fn _assert_same<T: ?Sized>() {}
         // The cast below only type-checks when the two paths resolve to the
         // identical trait object type.
-        let _: fn(&dyn x_claw_agent::SafetyHook) -> &dyn SafetyHook = |x| x;
+        let _: fn(&dyn x_claw_agent::EgressGate) -> &dyn EgressGate = |x| x;
         let _: fn(&dyn x_claw_agent::ApprovalGate) -> &dyn ApprovalGate = |x| x;
         let _: fn(&dyn x_claw_agent::SandboxExecutor) -> &dyn SandboxExecutor = |x| x;
         let _: fn(&dyn x_claw_agent::SecretProvider) -> &dyn SecretProvider = |x| x;
@@ -120,28 +128,29 @@ mod acceptance_tests {
     // ───────────────────── ADR-113 §6.2 PR #2 acceptance ─────────────────────
     //
     // PR #2 落地 Strategy A（实证修订 ADR §2.4）：保留 `HookRegistry.run(Inbound)`
-    // dispatch（承载 declarative bundle 横切层），SafetyLayer 仅经 `HookBundle.safety`
+    // dispatch（承载 declarative bundle 横切层），EgressGate 仅经 `HookBundle.egress`
     // 走 agent loop 直调路径——双调用在代码层面**不存在**，由以下 5 个测试钉死。
 
-    /// `req_p03_pr2_dispatcher_no_double_call_safety` — `SafetyHook` 与
-    /// `Hook`（事件型）是两个互不兼容的 trait，编译器静态保证 `IronclawSafetyHook`
-    /// 这种 `SafetyHook` 实现**无法**作为 `Arc<dyn Hook>` 注册到 `HookRegistry`。
-    /// 这把"双调用风险"在类型系统层封死——比运行期 contract 检查更强。
+    /// `req_p03_pr2_dispatcher_no_double_call_safety` — `EgressGate` (ADR-148)
+    /// 与 `Hook`（事件型）是两个互不兼容的 trait，编译器静态保证
+    /// `IronclawEgressGate` 这种 `EgressGate` 实现**无法**作为
+    /// `Arc<dyn Hook>` 注册到 `HookRegistry`。这把"双调用风险"在类型系统层封死——
+    /// 比运行期 contract 检查更强。
     #[test]
     fn req_p03_pr2_dispatcher_no_double_call_safety() {
         // 静态：两个 trait object 不是同一类型，无法相互赋值/转换。
-        // 若有人把 SafetyHook 误适配为 Hook 注册到 Registry，编译会失败。
+        // 若有人把 EgressGate 误适配为 Hook 注册到 Registry，编译会失败。
         fn _assert_disjoint_traits() {
-            // SafetyHook 必须实现 before_prompt / after_completion / before_tool_call /
-            // after_tool_output（结构化决策）；Hook 只有 execute(HookEvent)（字符串语义）。
-            // 任何"把 dyn SafetyHook 当 dyn Hook 用"的 fn 都不存在编译路径。
+            // EgressGate 暴露单一 `check(kind, payload) -> EgressDecision`，
+            // 而 Hook 只有 `execute(HookEvent)`（字符串语义）。任何
+            // "把 dyn EgressGate 当 dyn Hook 用"的 fn 都不存在编译路径。
             //
-            // 反向 sanity：HookRegistry 不实现 SafetyHook（它只代理事件型 hook）。
-            fn _registry_is_not_safety_hook() {
-                fn _take_safety<T: SafetyHook>(_: &T) {}
-                // 下面这一行被注释——保留作为契约文档：若 HookRegistry 误实现 SafetyHook，
-                // 取消注释后会编译通过，但语义上 HookRegistry 不该承担 safety 决策。
-                // _take_safety(&HookRegistry::new());
+            // 反向 sanity：HookRegistry 不实现 EgressGate（它只代理事件型 hook）。
+            fn _registry_is_not_egress_gate() {
+                fn _take_egress<T: EgressGate>(_: &T) {}
+                // 下面这一行被注释——保留作为契约文档：若 HookRegistry 误实现 EgressGate，
+                // 取消注释后会编译通过，但语义上 HookRegistry 不该承担 egress 决策。
+                // _take_egress(&HookRegistry::new());
             }
         }
         // 同时 contract 兜底：含 secret/redact/safety 关键字的 declarative rule 被拒绝。
@@ -194,7 +203,7 @@ mod acceptance_tests {
         // 与原始类型 ABI 一致：HookBundle 字段类型必须是同一 trait object。
         let bundle: HookBundle = x_claw_agent::HookBundle::noop();
         // 字段层 type identity（编译通过即证）：
-        let _: &std::sync::Arc<dyn SafetyHook> = &bundle.safety;
+        let _: &std::sync::Arc<dyn EgressGate> = &bundle.egress;
         let _: &std::sync::Arc<dyn SandboxExecutor> = &bundle.sandbox;
         let _: &std::sync::Arc<dyn SecretProvider> = &bundle.secrets;
         let _: &std::sync::Arc<dyn ApprovalGate> = &bundle.approval;

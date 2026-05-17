@@ -138,7 +138,7 @@ dasclaw_workspace_cap = { path = "../../crates/dasclaw_workspace_cap", version =
 dasclaw_governance = { path = "../../crates/dasclaw_governance", version = "0.0.0-w1", features = ["tool_visibility"] }
 
 # Safety/sanitization
-ironclaw_safety = { path = "crates/ironclaw_safety", version = "0.2.0", features = ["agent-hook"] }
+ironclaw_safety = { path = "crates/ironclaw_safety", version = "0.2.0", features = ["egress-gate"] }
 regex = "1"
 aho-corasick = "1"
 

@@ -52,10 +52,10 @@ pub(crate) fn host_err_to_error(e: HostError) -> crate::error::Error {
     }
 }
 
-/// Build an `x_claw_agent::HookBundle` whose `safety` slot is wired to a
-/// [`x_claw_agent::CompositeSafetyHook`] (per ADR-147) chaining
+/// Build an `x_claw_agent::HookBundle` whose `egress` slot is wired to a
+/// [`dasclaw_governance::CompositeEgressGate`] (ADR-148) chaining
 /// [`dasclaw_hooks::BashValidationHook`] (bash command-string validation,
-/// issue #73 slice A1) → [`ironclaw_safety::agent_hook::IronclawSafetyHook`]
+/// issue #73 slice A1) → [`ironclaw_safety::egress_gate::IronclawEgressGate`]
 /// (generic JSON validation + leak detection).
 ///
 /// `workspace_cap` is the capability handle for the session workspace
@@ -66,22 +66,16 @@ pub(crate) fn host_err_to_error(e: HostError) -> crate::error::Error {
 /// (issue #73 slice D): callers must pass an explicit mode — typically
 /// [`PermissionMode::WorkspaceWrite`] for regular chat/worker sessions,
 /// or [`PermissionMode::ReadOnly`] for routines that must not mutate.
-/// Threading the mode as an explicit parameter keeps the safety boundary
-/// readable at every call site and lets the future session-config layer
-/// populate it without touching this crate.
 ///
 /// `sandbox` / `secrets` / `approval` keep their `Noop` / `InMemory` /
 /// `AutoApprove` defaults — they will be wired in by later Phase 3 steps.
-/// This helper exists so every consumer (chat dispatcher, job worker,
-/// container worker) constructs an identical bundle and we do not lose
-/// the safety boundary the moment any one call site forgets to plug it in.
 pub fn hook_bundle_with_safety(
     safety: std::sync::Arc<crate::safety::SafetyLayer>,
     workspace_cap: std::sync::Arc<WorkspaceCapability>,
     permission_mode: PermissionMode,
 ) -> x_claw_agent::HookBundle {
     use std::sync::Arc;
-    let composite = x_claw_agent::CompositeSafetyHook::builder()
+    let composite = x_claw_agent::CompositeEgressGate::builder()
         .add(
             "bash-validation",
             Arc::new(dasclaw_hooks::BashValidationHook::new(
@@ -91,22 +85,22 @@ pub fn hook_bundle_with_safety(
         )
         .add(
             "ironclaw-safety",
-            Arc::new(ironclaw_safety::agent_hook::IronclawSafetyHook::new(safety)),
+            Arc::new(ironclaw_safety::egress_gate::IronclawEgressGate::new(
+                safety,
+            )),
         )
         .build();
     let mut bundle = x_claw_agent::HookBundle::noop();
-    bundle.safety = Arc::new(composite);
+    bundle.egress = Arc::new(composite);
     bundle
 }
 
-/// Build a `HookBundle` with both `safety` and `secrets` slots wired in.
+/// Build a `HookBundle` with both `egress` and `secrets` slots wired in.
 ///
-/// - `safety` routes through [`IronclawSafetyHook`](ironclaw_safety::agent_hook::IronclawSafetyHook).
+/// - `egress` routes through [`IronclawEgressGate`](ironclaw_safety::egress_gate::IronclawEgressGate).
 /// - `secrets` routes through [`AgentSecrets`](crate::secrets::agent_provider::AgentSecrets)
 ///   if the tool registry carries a [`SecretsStore`](crate::secrets::SecretsStore);
-///   falls back to the noop provider when the registry has none (which is the
-///   case in test harnesses and in contexts where secrets are injected by the
-///   container runtime instead of by the agent loop).
+///   falls back to the noop provider when the registry has none.
 /// - `sandbox` / `approval` keep their `Noop` / `AutoApprove` defaults until
 ///   ADR-002 Phase 4 lands the real sandbox backends.
 ///
@@ -265,20 +259,24 @@ mod tests {
     /// at the bash gate — proves the mode parameter is consumed.
     #[tokio::test]
     async fn req_safety_73_d_read_only_blocks_destructive_command() {
-        use x_claw_agent::SafetyDecision;
+        use x_claw_agent::{EgressDecision, EgressKind};
         let bundle = hook_bundle_with_safety(
             safety_layer(),
             test_workspace_cap(),
             PermissionMode::ReadOnly,
         );
-        let mut args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_d" });
+        let args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_d" });
         let decision = bundle
-            .safety
-            .before_tool_call("bash", &mut args)
-            .await
-            .unwrap();
+            .egress
+            .check(
+                &EgressKind::ToolExecution {
+                    tool: "bash".to_string(),
+                },
+                &args.to_string(),
+            )
+            .await;
         assert!(
-            matches!(decision, SafetyDecision::Block { .. }),
+            matches!(decision, EgressDecision::Block { .. }),
             "ReadOnly mode must block destructive bash command, got {decision:?}"
         );
     }
@@ -288,39 +286,47 @@ mod tests {
     /// Different mode in == different decision out: the threading works.
     #[tokio::test]
     async fn req_safety_73_d_workspace_write_allows_destructive_command() {
-        use x_claw_agent::SafetyDecision;
+        use x_claw_agent::{EgressDecision, EgressKind};
         let bundle = hook_bundle_with_safety(
             safety_layer(),
             test_workspace_cap(),
             PermissionMode::WorkspaceWrite,
         );
-        let mut args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_d" });
+        let args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_d" });
         let decision = bundle
-            .safety
-            .before_tool_call("bash", &mut args)
-            .await
-            .unwrap();
+            .egress
+            .check(
+                &EgressKind::ToolExecution {
+                    tool: "bash".to_string(),
+                },
+                &args.to_string(),
+            )
+            .await;
         assert!(
-            matches!(decision, SafetyDecision::Allow),
+            matches!(decision, EgressDecision::Allow),
             "WorkspaceWrite mode must allow destructive bash command (Warn -> Allow), got {decision:?}"
         );
     }
 
-    /// `Prompt` mode must surface a `SafetyDecision::Ask` so the UI can
+    /// `Prompt` mode must surface a `EgressDecision::Ask` so the UI can
     /// gate the destructive command behind user confirmation.
     #[tokio::test]
     async fn req_safety_73_d_prompt_mode_asks_on_destructive_command() {
-        use x_claw_agent::SafetyDecision;
+        use x_claw_agent::{EgressDecision, EgressKind};
         let bundle =
             hook_bundle_with_safety(safety_layer(), test_workspace_cap(), PermissionMode::Prompt);
-        let mut args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_d" });
+        let args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_d" });
         let decision = bundle
-            .safety
-            .before_tool_call("bash", &mut args)
-            .await
-            .unwrap();
+            .egress
+            .check(
+                &EgressKind::ToolExecution {
+                    tool: "bash".to_string(),
+                },
+                &args.to_string(),
+            )
+            .await;
         assert!(
-            matches!(decision, SafetyDecision::Ask { .. }),
+            matches!(decision, EgressDecision::Ask { .. }),
             "Prompt mode must Ask for confirmation, got {decision:?}"
         );
     }
@@ -329,20 +335,24 @@ mod tests {
     /// maps Warn → Allow + info-level log).
     #[tokio::test]
     async fn req_safety_73_d_danger_full_access_allows_destructive_command() {
-        use x_claw_agent::SafetyDecision;
+        use x_claw_agent::{EgressDecision, EgressKind};
         let bundle = hook_bundle_with_safety(
             safety_layer(),
             test_workspace_cap(),
             PermissionMode::DangerFullAccess,
         );
-        let mut args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_d" });
+        let args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_d" });
         let decision = bundle
-            .safety
-            .before_tool_call("bash", &mut args)
-            .await
-            .unwrap();
+            .egress
+            .check(
+                &EgressKind::ToolExecution {
+                    tool: "bash".to_string(),
+                },
+                &args.to_string(),
+            )
+            .await;
         assert!(
-            matches!(decision, SafetyDecision::Allow),
+            matches!(decision, EgressDecision::Allow),
             "DangerFullAccess mode must allow destructive bash command, got {decision:?}"
         );
     }
@@ -352,7 +362,7 @@ mod tests {
     /// future refactors that drop the parameter on one path.
     #[tokio::test]
     async fn req_safety_73_d_with_secrets_helper_threads_permission_mode() {
-        use x_claw_agent::SafetyDecision;
+        use x_claw_agent::{EgressDecision, EgressKind};
         let tools = registry_without_secrets();
         let bundle = hook_bundle_with_safety_and_secrets(
             safety_layer(),
@@ -361,14 +371,18 @@ mod tests {
             test_workspace_cap(),
             PermissionMode::ReadOnly,
         );
-        let mut args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_d" });
+        let args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_d" });
         let decision = bundle
-            .safety
-            .before_tool_call("bash", &mut args)
-            .await
-            .unwrap();
+            .egress
+            .check(
+                &EgressKind::ToolExecution {
+                    tool: "bash".to_string(),
+                },
+                &args.to_string(),
+            )
+            .await;
         assert!(
-            matches!(decision, SafetyDecision::Block { .. }),
+            matches!(decision, EgressDecision::Block { .. }),
             "hook_bundle_with_safety_and_secrets must thread ReadOnly to bash hook"
         );
     }
@@ -388,7 +402,7 @@ mod tests {
         // Exact identity check is not possible across Arc<dyn Trait>, but we
         // can at least assert the safety Arc pointer count > 1 (we hold one,
         // bundle holds one → 2).
-        let _ = &bundle.safety;
+        let _ = &bundle.egress;
         // Smoke-check: secrets slot is functional (not the noop).
         assert!(bundle.secrets.get("k").await.unwrap().is_some());
     }
@@ -404,7 +418,7 @@ mod tests {
     /// end-to-end into the bash hook).
     #[tokio::test]
     async fn req_safety_73_e_workspace_cap_threads_through_safety_helper() {
-        use x_claw_agent::SafetyDecision;
+        use x_claw_agent::{EgressDecision, EgressKind};
         let tmp = tempfile::tempdir().expect("tempdir");
         let cap = Arc::new(
             WorkspaceCapability::open(tmp.path())
@@ -413,14 +427,18 @@ mod tests {
         assert_eq!(cap.root(), tmp.path(), "cap root must equal supplied path");
 
         let bundle = hook_bundle_with_safety(safety_layer(), cap, PermissionMode::ReadOnly);
-        let mut args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_e" });
+        let args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_e" });
         let decision = bundle
-            .safety
-            .before_tool_call("bash", &mut args)
-            .await
-            .unwrap();
+            .egress
+            .check(
+                &EgressKind::ToolExecution {
+                    tool: "bash".to_string(),
+                },
+                &args.to_string(),
+            )
+            .await;
         assert!(
-            matches!(decision, SafetyDecision::Block { .. }),
+            matches!(decision, EgressDecision::Block { .. }),
             "cap-rooted bundle must still enforce ReadOnly bash policy, got {decision:?}"
         );
     }
@@ -430,7 +448,7 @@ mod tests {
     /// callers use.
     #[tokio::test]
     async fn req_safety_73_e_workspace_cap_threads_through_secrets_helper() {
-        use x_claw_agent::SafetyDecision;
+        use x_claw_agent::{EgressDecision, EgressKind};
         let tmp = tempfile::tempdir().expect("tempdir");
         let cap = Arc::new(
             WorkspaceCapability::open(tmp.path())
@@ -444,14 +462,18 @@ mod tests {
             cap,
             PermissionMode::ReadOnly,
         );
-        let mut args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_e" });
+        let args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_e" });
         let decision = bundle
-            .safety
-            .before_tool_call("bash", &mut args)
-            .await
-            .unwrap();
+            .egress
+            .check(
+                &EgressKind::ToolExecution {
+                    tool: "bash".to_string(),
+                },
+                &args.to_string(),
+            )
+            .await;
         assert!(
-            matches!(decision, SafetyDecision::Block { .. }),
+            matches!(decision, EgressDecision::Block { .. }),
             "cap-rooted secrets bundle must still enforce ReadOnly, got {decision:?}"
         );
     }

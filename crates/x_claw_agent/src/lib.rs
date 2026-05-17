@@ -3,8 +3,8 @@
 //! This crate starts as an **empty scaffold** (Phase 3 Step B). Subsequent steps
 //! will:
 //!
-//! - Step C: define Hook traits (`SafetyHook`, `SandboxExecutor`, `SecretProvider`,
-//!   `ApprovalGate`) in [`hooks`]. **Done.**
+//! - Step C: define Hook traits (`EgressGate` per ADR-148, `SandboxExecutor`,
+//!   `SecretProvider`, `ApprovalGate`) in [`hooks`]. **Done.**
 //! - Step D: port the runtime loop from ironclaw's `agent/` tree into
 //!   [`runtime`] with hook insertion points. **Pending.**
 //!
@@ -14,7 +14,7 @@
 pub mod agentic_loop;
 pub mod bash_validation;
 pub mod compaction;
-pub mod composite_safety_hook;
+// composite_safety_hook removed by ADR-148; CompositeEgressGate lives in dasclaw_governance::egress.
 pub mod context_monitor;
 pub mod hooks;
 pub mod intent;
@@ -37,12 +37,13 @@ pub use bash_validation::{
     CommandIntent, ValidationResult, check_destructive, classify_command, validate_command,
     validate_mode, validate_paths, validate_read_only, validate_sed,
 };
-pub use composite_safety_hook::{CompositeSafetyHook, CompositeSafetyHookBuilder, HookId};
 pub use hooks::{
-    ApprovalError, ApprovalGate, ApprovalOutcome, ApprovalRequest, AutoApproveGate, DenyAllGate,
-    HookBundle, InMemorySecrets, NoopSafetyHook, NoopSandboxExecutor, RuleAction, RuleSuggestion,
-    SafetyDecision, SafetyError, SafetyHook, SandboxError, SandboxExecOutput, SandboxExecRequest,
-    SandboxExecutor, SandboxNetworkHint, SecretError, SecretProvider, SecretString,
+    ApprovalError, ApprovalGate, ApprovalOutcome, ApprovalRequest, AutoApproveGate,
+    CompositeEgressGate, CompositeEgressGateBuilder, DenyAllGate, EgressDecision, EgressGate,
+    EgressKind, GateId, HookBundle, InMemorySecrets, NoopEgressGate, NoopSandboxExecutor,
+    RedactionStats, RuleAction, RuleSuggestion, SandboxError, SandboxExecOutput,
+    SandboxExecRequest, SandboxExecutor, SandboxNetworkHint, SecretError, SecretProvider,
+    SecretString,
 };
 pub use messages::{
     ChatMessage, CompletionRequest, CompletionResponse, ContentPart, FinishReason, ImageUrl,

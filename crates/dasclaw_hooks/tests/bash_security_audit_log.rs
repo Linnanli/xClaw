@@ -40,20 +40,18 @@ use std::path::PathBuf;
 use dasclaw_hooks::BashValidationHook;
 use serde_json::json;
 use tracing_test::traced_test;
+use x_claw_agent::EgressDecision;
 use x_claw_agent::permissions::PermissionMode;
-use x_claw_agent::{SafetyDecision, SafetyHook};
 
 /// Newline-injection sample — same fixture as the inline Slice 2.1.d
 /// tests; trips `validate_security` via the `Newlines` /
 /// `QuotedNewline` rules.
 const INJECTION_CMD: &str = "echo a\nrm -rf /";
 
-async fn fire_bash(mode: PermissionMode, cmd: &str) -> SafetyDecision {
+async fn fire_bash(mode: PermissionMode, cmd: &str) -> EgressDecision {
     let hook = BashValidationHook::new(mode, PathBuf::from("/workspace"));
-    let mut args = json!({ "command": cmd });
-    hook.before_tool_call("bash", &mut args)
-        .await
-        .expect("hook must not error on string command")
+    let args = json!({ "command": cmd });
+    hook.validate_tool_call("bash", &args)
 }
 
 #[tokio::test]
@@ -61,8 +59,8 @@ async fn fire_bash(mode: PermissionMode, cmd: &str) -> SafetyDecision {
 async fn req_security_490_p2_1_d_audit_log_emits_block_tag_and_rule_id() {
     let decision = fire_bash(PermissionMode::WorkspaceWrite, INJECTION_CMD).await;
     assert!(
-        matches!(decision, SafetyDecision::Block { .. }),
-        "injection must surface as SafetyDecision::Block; got {decision:?}"
+        matches!(decision, EgressDecision::Block { .. }),
+        "injection must surface as EgressDecision::Block; got {decision:?}"
     );
 
     // Audit tag — operators / SIEM filter on this exact string.
@@ -102,7 +100,7 @@ async fn req_security_490_p2_1_d_audit_log_records_mode_under_full_access() {
     // permissive mode at the time of the refused call.
     let decision = fire_bash(PermissionMode::DangerFullAccess, INJECTION_CMD).await;
     assert!(
-        matches!(decision, SafetyDecision::Block { .. }),
+        matches!(decision, EgressDecision::Block { .. }),
         "injection must Block even in DangerFullAccess; got {decision:?}"
     );
 
@@ -121,7 +119,7 @@ async fn req_security_490_p2_1_d_audit_log_records_mode_under_full_access() {
 async fn req_security_490_p2_1_d_audit_log_silent_on_safe_command() {
     let decision = fire_bash(PermissionMode::WorkspaceWrite, "pwd").await;
     assert!(
-        matches!(decision, SafetyDecision::Allow),
+        matches!(decision, EgressDecision::Allow),
         "trivially safe command must not Block; got {decision:?}"
     );
     // No audit event must be emitted on the allow path — the audit tag
@@ -146,7 +144,7 @@ async fn req_security_490_p2_1_d_audit_log_control_chars_surface_rule_id() {
     // non-printable bytes or runs out of order.
     let decision = fire_bash(PermissionMode::WorkspaceWrite, "echo safe\u{0}value").await;
     assert!(
-        matches!(decision, SafetyDecision::Block { .. }),
+        matches!(decision, EgressDecision::Block { .. }),
         "null byte must Block; got {decision:?}"
     );
 
@@ -192,7 +190,7 @@ async fn req_security_490_p2_1_d_audit_log_parse_failure_surface_rule_id() {
     // surface that can fire is `validate_parse_failure` itself.
     let decision = fire_bash(PermissionMode::WorkspaceWrite, "echo \"unterminated").await;
     assert!(
-        matches!(decision, SafetyDecision::Block { .. }),
+        matches!(decision, EgressDecision::Block { .. }),
         "unterminated quote must Block via Fail-Closed parse-failure; got {decision:?}"
     );
 

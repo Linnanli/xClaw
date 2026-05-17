@@ -42,7 +42,7 @@ use dasclaw_bash_permissions::{PermissionBehavior, PermissionRuleSource, ToolPer
 use dasclaw_hooks::BashPermissionHook;
 use serde_json::json;
 use tracing_test::traced_test;
-use x_claw_agent::{SafetyDecision, SafetyHook};
+use x_claw_agent::EgressDecision;
 
 fn empty_ctx() -> ToolPermissionContext {
     ToolPermissionContext::default()
@@ -58,18 +58,16 @@ fn ctx_with(behavior: PermissionBehavior, rule_content: &str) -> ToolPermissionC
     ctx
 }
 
-async fn fire(ctx: ToolPermissionContext, tool: &str, command: &str) -> SafetyDecision {
+async fn fire(ctx: ToolPermissionContext, tool: &str, command: &str) -> EgressDecision {
     let hook = BashPermissionHook::new(ctx);
-    let mut args = json!({ "command": command });
-    hook.before_tool_call(tool, &mut args)
-        .await
-        .expect("hook must not error on a string command")
+    let args = json!({ "command": command });
+    hook.validate_tool_call(tool, &args)
 }
 
-fn block_reason(decision: &SafetyDecision) -> &str {
+fn block_reason(decision: &EgressDecision) -> &str {
     match decision {
-        SafetyDecision::Block { reason } => reason,
-        other => panic!("expected SafetyDecision::Block, got {other:?}"),
+        EgressDecision::Block { reason, .. } => reason,
+        other => panic!("expected EgressDecision::Block, got {other:?}"),
     }
 }
 
@@ -116,7 +114,7 @@ async fn req_security_603_s21_xargs_unsafe_target_rule_cannot_allow() {
     let decision = fire(ctx, "bash", "xargs -I {} rm").await;
 
     assert!(
-        matches!(decision, SafetyDecision::Block { .. }),
+        matches!(decision, EgressDecision::Block { .. }),
         "user allow-rule must NOT bypass S21 hard-deny; got {decision:?}"
     );
     assert!(
@@ -133,7 +131,7 @@ async fn req_security_603_s21_xargs_safe_target_passes_to_rule_engine() {
     // the rule engine (which, with no rules, returns Passthrough).
     let decision = fire(empty_ctx(), "bash", "xargs echo hi").await;
     assert!(
-        matches!(decision, SafetyDecision::Passthrough),
+        matches!(decision, EgressDecision::Passthrough),
         "safe xargs target must fall through to rule engine; got {decision:?}"
     );
     assert!(
@@ -187,7 +185,7 @@ async fn req_security_603_s22_rule_cannot_allow() {
     let decision = fire(ctx, "bash", cmd).await;
 
     assert!(
-        matches!(decision, SafetyDecision::Block { .. }),
+        matches!(decision, EgressDecision::Block { .. }),
         "wildcard allow-rule must NOT bypass S22 hard-deny; got {decision:?}"
     );
     assert!(
@@ -205,7 +203,7 @@ async fn req_security_603_s22_no_git_in_compound_passes_through() {
     // pre-check must NOT fire; the rule engine decides.
     let decision = fire(empty_ctx(), "bash", "echo m > hooks/pre-commit").await;
     assert!(
-        matches!(decision, SafetyDecision::Passthrough),
+        matches!(decision, EgressDecision::Passthrough),
         "non-git hooks/ write must fall through to rule engine; got {decision:?}"
     );
     assert!(

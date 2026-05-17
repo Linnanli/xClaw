@@ -25,7 +25,7 @@ use dasclaw_bash_permissions::{PermissionBehavior, PermissionRuleSource, ToolPer
 use dasclaw_hooks::BashPermissionHook;
 use serde_json::json;
 use tracing_test::traced_test;
-use x_claw_agent::{SafetyDecision, SafetyHook};
+use x_claw_agent::EgressDecision;
 
 fn empty_ctx() -> ToolPermissionContext {
     ToolPermissionContext::default()
@@ -41,11 +41,9 @@ fn ctx_with(behavior: PermissionBehavior, rule_content: &str) -> ToolPermissionC
     ctx
 }
 
-async fn fire_with_hook(hook: BashPermissionHook, command: &str) -> SafetyDecision {
-    let mut args = json!({ "command": command });
-    hook.before_tool_call("bash", &mut args)
-        .await
-        .expect("hook must not error on string command")
+async fn fire_with_hook(hook: BashPermissionHook, command: &str) -> EgressDecision {
+    let args = json!({ "command": command });
+    hook.validate_tool_call("bash", &args)
 }
 
 // --- 01: default (strict off) preserves existing behavior --------------
@@ -59,7 +57,7 @@ async fn req_perm_490_4_2_01_strict_off_default_does_not_upgrade_passthrough() {
     let decision = fire_with_hook(hook, "sed 's/old/new/g'").await;
     assert_eq!(
         decision,
-        SafetyDecision::Passthrough,
+        EgressDecision::Passthrough,
         "strict mode off → safe sed stays Passthrough; got {decision:?}"
     );
 }
@@ -72,7 +70,7 @@ async fn req_perm_490_4_2_02_strict_on_safe_substitution_stdin_upgrades_passthro
     let decision = fire_with_hook(hook, "sed 's/old/new/g'").await;
     assert_eq!(
         decision,
-        SafetyDecision::Allow,
+        EgressDecision::Allow,
         "strict on + allowlist-clean substitution → Allow; got {decision:?}"
     );
 }
@@ -85,7 +83,7 @@ async fn req_perm_490_4_2_03_strict_on_line_print_with_dash_n_upgrades_passthrou
     let decision = fire_with_hook(hook, "sed -n '1,10p' file.txt").await;
     assert_eq!(
         decision,
-        SafetyDecision::Allow,
+        EgressDecision::Allow,
         "strict on + `sed -n` line print → Allow; got {decision:?}"
     );
 }
@@ -102,7 +100,7 @@ async fn req_perm_490_4_2_04_strict_on_upgrades_ask_to_allow_when_safe() {
     let decision = fire_with_hook(hook, "sed 's/foo/bar/'").await;
     assert_eq!(
         decision,
-        SafetyDecision::Allow,
+        EgressDecision::Allow,
         "strict on + Ask rule + safe pattern → upgrade Ask to Allow; got {decision:?}"
     );
 }
@@ -118,7 +116,7 @@ async fn req_perm_490_4_2_05_strict_on_must_not_override_deny() {
     let hook = BashPermissionHook::new(ctx).with_sed_strict_allowlist(false);
     let decision = fire_with_hook(hook, "sed 's/old/new/'").await;
     assert!(
-        matches!(decision, SafetyDecision::Block { .. }),
+        matches!(decision, EgressDecision::Block { .. }),
         "strict on must not override Deny rule; got {decision:?}"
     );
 }
@@ -131,7 +129,7 @@ async fn req_perm_490_4_2_06_strict_on_allow_writes_upgrades_in_place_edit() {
     let decision = fire_with_hook(hook, "sed -i 's/old/new/g' file.txt").await;
     assert_eq!(
         decision,
-        SafetyDecision::Allow,
+        EgressDecision::Allow,
         "strict on + allow_file_writes → `-i` substitution → Allow; got {decision:?}"
     );
 }
@@ -144,7 +142,7 @@ async fn req_perm_490_4_2_07_strict_on_strict_writes_keeps_in_place_passthrough(
     let decision = fire_with_hook(hook, "sed -i 's/old/new/g' file.txt").await;
     assert_eq!(
         decision,
-        SafetyDecision::Passthrough,
+        EgressDecision::Passthrough,
         "strict on + allow_file_writes=false + `-i` → no upgrade; got {decision:?}"
     );
 }
@@ -160,7 +158,7 @@ async fn req_perm_490_4_2_08_strict_on_does_not_touch_non_sed_commands() {
     let decision = fire_with_hook(hook, "ls -la").await;
     assert_eq!(
         decision,
-        SafetyDecision::Passthrough,
+        EgressDecision::Passthrough,
         "strict on must not upgrade non-sed commands; got {decision:?}"
     );
 }
@@ -174,7 +172,7 @@ async fn req_perm_490_4_2_09_strict_on_keeps_passthrough_for_unsafe_sed() {
     let decision = fire_with_hook(hook, "sed -e 's/x/y/' -e 's/a/b/'").await;
     assert_eq!(
         decision,
-        SafetyDecision::Passthrough,
+        EgressDecision::Passthrough,
         "strict on + multi-`-e` not in allowlist → no upgrade; got {decision:?}"
     );
 }
@@ -186,7 +184,7 @@ async fn req_perm_490_4_2_09_strict_on_keeps_passthrough_for_unsafe_sed() {
 async fn req_perm_490_4_2_10_strict_upgrade_emits_audit_log() {
     let hook = BashPermissionHook::new(empty_ctx()).with_sed_strict_allowlist(false);
     let decision = fire_with_hook(hook, "sed 's/old/new/g'").await;
-    assert_eq!(decision, SafetyDecision::Allow);
+    assert_eq!(decision, EgressDecision::Allow);
     assert!(
         logs_contain("bash_perm::allow_sed_strict_upgrade"),
         "strict mode upgrade must emit `bash_perm::allow_sed_strict_upgrade` audit event"
@@ -207,5 +205,5 @@ async fn req_perm_490_4_2_11_strict_on_does_not_re_log_existing_allow() {
     let ctx = ctx_with(PermissionBehavior::Allow, "sed:*");
     let hook = BashPermissionHook::new(ctx).with_sed_strict_allowlist(false);
     let decision = fire_with_hook(hook, "sed 's/old/new/'").await;
-    assert_eq!(decision, SafetyDecision::Allow);
+    assert_eq!(decision, EgressDecision::Allow);
 }

@@ -2,7 +2,7 @@
 //!
 //! These four traits define the crate boundary between the agent runtime
 //! (owned by `x_claw_agent`) and the pluggable surrounding environment
-//! (safety scanning, sandboxed execution, secret storage, approval flow).
+//! (egress gating, sandboxed execution, secret storage, approval flow).
 //!
 //! Design constraints:
 //!
@@ -13,8 +13,15 @@
 //!   can do I/O (Docker exec, DB lookup, IPC to UI) without forcing the
 //!   runtime to switch to blocking threads.
 //! - **Per-trait error type.** Each hook surfaces its own error so the runtime
-//!   can distinguish "safety blocked" from "sandbox failed" from "secret not
+//!   can distinguish "egress blocked" from "sandbox failed" from "secret not
 //!   found" and react appropriately.
+//!
+//! ## ADR-148 — `EgressGate` replaces `SafetyHook`
+//!
+//! The previous four-method `SafetyHook` trait was replaced by the single
+//! `check(kind, payload)` surface defined in
+//! [`dasclaw_governance::egress`]. This module re-exports the new trait
+//! so existing call-sites can switch by changing one import.
 //!
 //! Default Noop/InMemory/AutoApprove implementations are provided so unit
 //! tests of the runtime can construct a trivially-safe agent without wiring
@@ -29,138 +36,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 // ---------------------------------------------------------------------------
-// SafetyHook
+// EgressGate (re-exported from `dasclaw_governance::egress`, ADR-148)
 // ---------------------------------------------------------------------------
 
-/// Decision returned by [`SafetyHook`] methods.
-///
-/// # Variants (5-state, per ADR-146)
-///
-/// - [`SafetyDecision::Allow`]: continue without changes.
-/// - [`SafetyDecision::Redact`]: caller mutated payload in-place; continue
-///   with the mutated value.
-/// - [`SafetyDecision::Block`]: refuse the operation; surface `reason` to
-///   the user.
-/// - [`SafetyDecision::Ask`]: request user confirmation; UX should render
-///   the `suggestions` as actionable buttons (e.g. "Always allow `git
-///   status`", "Deny once"). In headless / non-interactive contexts the
-///   runtime SHOULD treat `Ask` as `Block` (Fail-Safe).
-/// - [`SafetyDecision::Passthrough`]: this hook abstains. In a
-///   [`CompositeSafetyHook`](../composite_safety_hook/) chain the next hook
-///   is consulted; in a single-hook context semantically equivalent to
-///   `Allow` (see ADR-146 §2.4).
-///
-/// The enum is `#[non_exhaustive]`: external `match` arms must include a
-/// `_` fallback so future variants do not break callers.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum SafetyDecision {
-    /// Allow the operation unchanged.
-    Allow,
-    /// Allow but note that the caller already rewrote the payload in-place
-    /// (e.g. redacted a secret). The runtime should continue with the
-    /// mutated value.
-    Redact,
-    /// Refuse the operation; `reason` is safe to surface to the user.
-    Block { reason: String },
-    /// Request user confirmation. `suggestions` may be empty when the hook
-    /// has no rule suggestions to offer.
-    Ask {
-        reason: String,
-        suggestions: Vec<RuleSuggestion>,
-    },
-    /// This hook abstains. `CompositeSafetyHook` continues with the next
-    /// hook; in a single-hook context the runtime should treat this as
-    /// `Allow`.
-    Passthrough,
-}
-
-/// A rule suggestion surfaced alongside [`SafetyDecision::Ask`] so the UX
-/// can render actionable buttons (e.g. "Always allow `git status`").
-///
-/// `suggestions` is typically empty in MVP slice C; later slices populate
-/// it from per-Warn rule pattern generators.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuleSuggestion {
-    /// Human-readable label shown on the button.
-    pub label: String,
-    /// The rule pattern that would be inserted (e.g. `Bash(git status:allow)`).
-    pub rule_pattern: String,
-    /// The action this suggestion encodes.
-    pub action: RuleAction,
-}
-
-/// Action implied by a [`RuleSuggestion`] when the user selects it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum RuleAction {
-    /// Always allow matching invocations.
-    Allow,
-    /// Always deny matching invocations.
-    Deny,
-    /// Continue asking on matching invocations (default).
-    Ask,
-}
-
-/// Errors raised by a [`SafetyHook`] implementation.
-#[derive(Debug, thiserror::Error)]
-pub enum SafetyError {
-    #[error("safety hook internal error: {0}")]
-    Internal(String),
-}
-
-/// Safety scanning applied at prompt / completion / tool-call boundaries.
-///
-/// Mutating `&mut String` / `&mut Value` in place lets the hook redact
-/// secrets without forcing the runtime to clone the whole payload.
-#[async_trait]
-pub trait SafetyHook: Send + Sync {
-    /// Called before a prompt is sent to the LLM. May mutate the prompt.
-    async fn before_prompt(&self, prompt: &mut String) -> Result<SafetyDecision, SafetyError>;
-
-    /// Called with a chunk of completion text before it is surfaced to the
-    /// user or persisted. May mutate the completion.
-    async fn after_completion(&self, completion: &mut String) -> Result<(), SafetyError>;
-
-    /// Called before a tool call is executed. May mutate the arguments.
-    async fn before_tool_call(
-        &self,
-        tool: &str,
-        args: &mut Value,
-    ) -> Result<SafetyDecision, SafetyError>;
-
-    /// Called with a tool output before it is returned to the LLM as a
-    /// tool-result message. May mutate the output (e.g. redact secrets).
-    async fn after_tool_output(&self, tool: &str, output: &mut String) -> Result<(), SafetyError>;
-}
-
-/// Default no-op implementation. Every operation is allowed unchanged.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct NoopSafetyHook;
-
-#[async_trait]
-impl SafetyHook for NoopSafetyHook {
-    async fn before_prompt(&self, _prompt: &mut String) -> Result<SafetyDecision, SafetyError> {
-        Ok(SafetyDecision::Allow)
-    }
-    async fn after_completion(&self, _completion: &mut String) -> Result<(), SafetyError> {
-        Ok(())
-    }
-    async fn before_tool_call(
-        &self,
-        _tool: &str,
-        _args: &mut Value,
-    ) -> Result<SafetyDecision, SafetyError> {
-        Ok(SafetyDecision::Allow)
-    }
-    async fn after_tool_output(
-        &self,
-        _tool: &str,
-        _output: &mut String,
-    ) -> Result<(), SafetyError> {
-        Ok(())
-    }
-}
+pub use dasclaw_governance::egress::{
+    CompositeEgressGate, CompositeEgressGateBuilder, EgressDecision, EgressGate, EgressKind,
+    GateId, NoopEgressGate, RedactionStats, RuleAction, RuleSuggestion,
+};
 
 // ---------------------------------------------------------------------------
 // SandboxExecutor
@@ -462,20 +344,22 @@ impl ApprovalGate for DenyAllGate {
 /// the agent runtime.
 ///
 /// The [`run_agentic_loop`](crate::agentic_loop::run_agentic_loop) takes
-/// `&HookBundle` to call `safety.before_prompt` and `safety.after_completion`
-/// directly. Tool-level hooks (`before_tool_call`, `after_tool_output`) and
+/// `&HookBundle` to call `egress.check(EgressKind::LlmRequest, …)` and
+/// `egress.check(EgressKind::UserDisplay, …)` directly (ADR-148).
+/// Tool-level egress (`EgressKind::ToolExecution`) and
 /// `ApprovalGate::request` are the responsibility of the
 /// [`LoopDelegate::execute_tool_calls`](crate::agentic_loop::LoopDelegate)
 /// implementation — delegates typically hold their own `Arc<HookBundle>`
 /// and call into it during tool iteration.
 ///
-/// Keeping tool-level hooks out of the loop avoids forcing every delegate
+/// Keeping tool-level egress out of the loop avoids forcing every delegate
 /// to re-express the tool execution contract through the loop signature.
 /// The runtime stays narrow; delegates stay in charge of their own
 /// tool dispatch.
 #[derive(Clone)]
 pub struct HookBundle {
-    pub safety: Arc<dyn SafetyHook>,
+    /// ADR-148 Layer B egress gate (replaces former `safety: Arc<dyn SafetyHook>`).
+    pub egress: Arc<dyn EgressGate>,
     pub sandbox: Arc<dyn SandboxExecutor>,
     pub secrets: Arc<dyn SecretProvider>,
     pub approval: Arc<dyn ApprovalGate>,
@@ -487,7 +371,7 @@ impl HookBundle {
     #[must_use]
     pub fn noop() -> Self {
         Self {
-            safety: Arc::new(NoopSafetyHook),
+            egress: Arc::new(NoopEgressGate),
             sandbox: Arc::new(NoopSandboxExecutor),
             secrets: Arc::new(InMemorySecrets::new()),
             approval: Arc::new(AutoApproveGate),
@@ -501,7 +385,7 @@ impl std::fmt::Debug for HookBundle {
         // their internals are often privileged state (approval surfaces,
         // secret stores). Render only the struct shape.
         f.debug_struct("HookBundle")
-            .field("safety", &"<dyn SafetyHook>")
+            .field("egress", &"<dyn EgressGate>")
             .field("sandbox", &"<dyn SandboxExecutor>")
             .field("secrets", &"<dyn SecretProvider>")
             .field("approval", &"<dyn ApprovalGate>")
@@ -519,26 +403,18 @@ mod tests {
     use serde_json::json;
 
     #[tokio::test]
-    async fn noop_safety_hook_allows_all() {
-        let hook = NoopSafetyHook;
-        let mut prompt = "hi".to_string();
-        assert_eq!(
-            hook.before_prompt(&mut prompt).await.unwrap(),
-            SafetyDecision::Allow
-        );
-        assert_eq!(prompt, "hi");
-
-        let mut completion = "reply".to_string();
-        hook.after_completion(&mut completion).await.unwrap();
-
-        let mut args = json!({"x": 1});
-        assert_eq!(
-            hook.before_tool_call("echo", &mut args).await.unwrap(),
-            SafetyDecision::Allow
-        );
-
-        let mut output = "ok".to_string();
-        hook.after_tool_output("echo", &mut output).await.unwrap();
+    async fn noop_egress_gate_allows_all() {
+        let gate = NoopEgressGate;
+        for kind in [
+            EgressKind::LlmRequest,
+            EgressKind::ToolExecution {
+                tool: "echo".into(),
+            },
+            EgressKind::UserDisplay,
+            EgressKind::Persistence,
+        ] {
+            assert_eq!(gate.check(&kind, "payload").await, EgressDecision::Allow);
+        }
     }
 
     #[tokio::test]

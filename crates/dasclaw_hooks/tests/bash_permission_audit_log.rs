@@ -37,7 +37,7 @@ use dasclaw_bash_permissions::{
 use dasclaw_hooks::BashPermissionHook;
 use serde_json::json;
 use tracing_test::traced_test;
-use x_claw_agent::{SafetyDecision, SafetyHook};
+use x_claw_agent::EgressDecision;
 
 /// Project-scope rule context with a single rule. Mirrors
 /// `bash_permission_hook.rs::ctx_with` but kept local — duplicating a
@@ -54,18 +54,16 @@ fn ctx_with(behavior: PermissionBehavior, rule_content: &str) -> ToolPermissionC
 }
 
 /// Fire the hook against `tool` with `command`, returning the decision.
-/// Asserts the hook does not return [`SafetyError`] — every failure
+/// Asserts the hook does not return [``] — every failure
 /// mode of the hook is supposed to be encoded into the
-/// [`SafetyDecision`].
-async fn fire_hook(hook: &BashPermissionHook, tool: &str, command: &str) -> SafetyDecision {
-    let mut args = json!({ "command": command });
-    hook.before_tool_call(tool, &mut args)
-        .await
-        .expect("hook must not error on a string command")
+/// [`EgressDecision`].
+async fn fire_hook(hook: &BashPermissionHook, tool: &str, command: &str) -> EgressDecision {
+    let args = json!({ "command": command });
+    hook.validate_tool_call(tool, &args)
 }
 
 /// Convenience wrapper for the common single-rule-context case.
-async fn fire(ctx: ToolPermissionContext, tool: &str, command: &str) -> SafetyDecision {
+async fn fire(ctx: ToolPermissionContext, tool: &str, command: &str) -> EgressDecision {
     fire_hook(&BashPermissionHook::new(ctx), tool, command).await
 }
 
@@ -82,7 +80,7 @@ async fn req_security_490_p2_2_h_audit_log_rule_id_prefix_syntax() {
     let ctx = ctx_with(PermissionBehavior::Deny, "rm:*");
     let decision = fire(ctx, "bash", "rm -rf /tmp/x").await;
     assert!(
-        matches!(decision, SafetyDecision::Block { .. }),
+        matches!(decision, EgressDecision::Block { .. }),
         "deny rule `rm:*` must Block; got {decision:?}"
     );
 
@@ -106,7 +104,7 @@ async fn req_security_490_p2_2_h_audit_log_rule_id_exact_command() {
     // round-trip rendering for the exact-rule audit surface.
     let ctx = ctx_with(PermissionBehavior::Deny, "git push");
     let decision = fire(ctx, "bash", "git push").await;
-    assert!(matches!(decision, SafetyDecision::Block { .. }));
+    assert!(matches!(decision, EgressDecision::Block { .. }));
 
     assert!(logs_contain("bash_perm::block"));
     assert!(
@@ -126,7 +124,7 @@ async fn req_security_490_p2_2_h_audit_log_rule_id_wildcard_pattern() {
     let ctx = ctx_with(PermissionBehavior::Deny, "git *");
     let decision = fire(ctx, "bash", "git status").await;
     assert!(
-        matches!(decision, SafetyDecision::Block { .. }),
+        matches!(decision, EgressDecision::Block { .. }),
         "wildcard `git *` must Block `git status`; got {decision:?}"
     );
 
@@ -152,7 +150,7 @@ async fn req_security_490_p2_2_h_audit_log_rule_id_other_for_cap_exceeded() {
 
     let decision = fire(ToolPermissionContext::default(), "bash", &command).await;
     assert!(
-        matches!(decision, SafetyDecision::Ask { .. }),
+        matches!(decision, EgressDecision::Ask { .. }),
         "over-cap compound must Ask (upstream-parity, never auto-Deny); got {decision:?}"
     );
 
@@ -173,7 +171,7 @@ async fn req_security_490_p2_2_h_audit_log_rule_id_other_for_cap_exceeded() {
 
 // =====================================================================
 // `message` field — engine copy is the audit surface, not the
-// SafetyDecision wrapper.
+// EgressDecision wrapper.
 // =====================================================================
 
 #[tokio::test]
@@ -187,7 +185,7 @@ async fn req_security_490_p2_2_h_audit_log_message_field_block_carries_engine_co
     // both "denied" and the surrounding tool/command context.
     let ctx = ctx_with(PermissionBehavior::Deny, "rm:*");
     let decision = fire(ctx, "bash", "rm -rf /tmp/x").await;
-    assert!(matches!(decision, SafetyDecision::Block { .. }));
+    assert!(matches!(decision, EgressDecision::Block { .. }));
 
     assert!(logs_contain("bash_perm::block"));
     assert!(
@@ -205,7 +203,7 @@ async fn req_security_490_p2_2_h_audit_log_message_field_ask_carries_engine_copy
     // covered by the `rule_id_other_for_cap_exceeded` pin above).
     let ctx = ctx_with(PermissionBehavior::Ask, "git push:*");
     let decision = fire(ctx, "bash", "git push").await;
-    assert!(matches!(decision, SafetyDecision::Ask { .. }));
+    assert!(matches!(decision, EgressDecision::Ask { .. }));
 
     assert!(logs_contain("bash_perm::ask"));
     assert!(
@@ -223,7 +221,7 @@ async fn req_security_490_p2_2_h_audit_log_message_field_ask_carries_engine_copy
 async fn req_security_490_p2_2_h_audit_log_tool_field_default_bash() {
     let ctx = ctx_with(PermissionBehavior::Deny, "rm:*");
     let decision = fire(ctx, "bash", "rm -rf /tmp/x").await;
-    assert!(matches!(decision, SafetyDecision::Block { .. }));
+    assert!(matches!(decision, EgressDecision::Block { .. }));
 
     // `tracing` renders `tool: &str` as `tool="bash"` under
     // `FmtSubscriber` (see tracing-test 0.2 subscriber config). Allow
@@ -246,7 +244,7 @@ async fn req_security_490_p2_2_h_audit_log_tool_field_custom_allowlist_name() {
     let ctx = ctx_with(PermissionBehavior::Deny, "rm:*");
     let hook = BashPermissionHook::new(ctx).with_tool_names(["RunInTerminal"]);
     let decision = fire_hook(&hook, "RunInTerminal", "rm -rf /tmp/x").await;
-    assert!(matches!(decision, SafetyDecision::Block { .. }));
+    assert!(matches!(decision, EgressDecision::Block { .. }));
 
     assert!(logs_contain("bash_perm::block"));
     assert!(
@@ -273,7 +271,7 @@ async fn req_security_490_p2_2_h_audit_log_tool_field_custom_allowlist_name() {
 async fn req_security_490_p2_2_h_audit_log_silent_on_empty_command_fail_safe() {
     // Issue #559 lists "rule_id = `Other` for empty command" as a
     // defensive pin. Trace through the hook: empty / non-string
-    // command short-circuits to `SafetyDecision::Block` with the
+    // command short-circuits to `EgressDecision::Block` with the
     // `bash tool call missing required 'command' string field`
     // wrapper **before** any engine call. So the right contract is:
     // Fail-Safe Block fires zero `bash_perm::*` audit events (the
@@ -284,7 +282,7 @@ async fn req_security_490_p2_2_h_audit_log_silent_on_empty_command_fail_safe() {
     // events for malformed args, polluting SIEM dashboards).
     let decision = fire(ToolPermissionContext::default(), "bash", "").await;
     assert!(
-        matches!(decision, SafetyDecision::Block { .. }),
+        matches!(decision, EgressDecision::Block { .. }),
         "empty command must Fail-Safe Block; got {decision:?}"
     );
     assert!(
@@ -302,7 +300,7 @@ async fn req_security_490_p2_2_h_audit_log_silent_on_empty_command_fail_safe() {
 async fn req_security_490_p2_2_h_audit_log_silent_on_allow() {
     let ctx = ctx_with(PermissionBehavior::Allow, "git status");
     let decision = fire(ctx, "bash", "git status").await;
-    assert_eq!(decision, SafetyDecision::Allow);
+    assert_eq!(decision, EgressDecision::Allow);
 
     // Mirror `req_security_490_p2_1_d_audit_log_silent_on_safe_command`
     // — Allow path must emit zero `bash_perm::*` events so SIEM rules
@@ -321,10 +319,10 @@ async fn req_security_490_p2_2_h_audit_log_silent_on_allow() {
 #[traced_test]
 async fn req_security_490_p2_2_h_audit_log_silent_on_passthrough() {
     // Empty context → engine returns Passthrough → hook returns
-    // `SafetyDecision::Passthrough`. No audit event should fire
+    // `EgressDecision::Passthrough`. No audit event should fire
     // because the hook abstained.
     let decision = fire(ToolPermissionContext::default(), "bash", "git status").await;
-    assert_eq!(decision, SafetyDecision::Passthrough);
+    assert_eq!(decision, EgressDecision::Passthrough);
 
     assert!(!logs_contain("bash_perm::block"));
     assert!(!logs_contain("bash_perm::ask"));
@@ -347,7 +345,7 @@ async fn req_security_490_p2_2_h_audit_log_event_level_is_warn() {
     // (error implies an unhandled engine failure).
     let ctx = ctx_with(PermissionBehavior::Deny, "rm:*");
     let decision = fire(ctx, "bash", "rm -rf /tmp/x").await;
-    assert!(matches!(decision, SafetyDecision::Block { .. }));
+    assert!(matches!(decision, EgressDecision::Block { .. }));
 
     assert!(logs_contain("bash_perm::block"));
     assert!(

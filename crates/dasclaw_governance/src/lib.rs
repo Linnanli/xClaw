@@ -78,6 +78,19 @@ pub mod task_registry;
 #[cfg(feature = "tool_visibility")]
 pub mod tool_visibility;
 
+// ---- ADR-148 EgressGate: always-on Layer B trait seam ----------------------
+//
+// Unlike the feature-gated W4 6-pack scaffolds above, [`egress`] is core
+// infrastructure consumed by `dasclaw_hooks` / `x_claw_agent` /
+// `ironclaw_safety` and is therefore unconditional. See
+// `docs/plans/architecture-refactor/adr-148-egress-gate-safety-hook-semantics.md`.
+pub mod egress;
+
+pub use egress::{
+    CompositeEgressGate, CompositeEgressGateBuilder, EgressDecision, EgressGate, EgressKind,
+    GateId, NoopEgressGate, RedactionStats, RuleAction, RuleSuggestion,
+};
+
 #[cfg(test)]
 mod tests {
     #[test]
