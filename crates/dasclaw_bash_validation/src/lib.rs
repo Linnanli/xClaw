@@ -21,6 +21,7 @@ pub mod permissions;
 pub mod readonly;
 pub mod redirects;
 pub mod security;
+pub mod sed;
 pub use fs_resolver::{FsEntryKind, FsResolver, NoopFsResolver, ResolvedChain, SYMLOOP_MAX};
 pub use path_constraints::{
     check_path_constraints, check_path_constraints_with_fs, validate_output_redirections,
@@ -42,6 +43,7 @@ pub use readonly::main_entry::{
 pub use redirects::{
     extract_output_redirections, OutputRedirection, RedirectOperator, RedirectionExtraction,
 };
+pub use sed::{contains_dangerous_operations, sed_command_is_allowed_by_allowlist, validate_sed};
 
 /// Result of validating a bash command before execution.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -346,25 +348,12 @@ fn command_targets_outside_workspace(command: &str) -> bool {
 // ---------------------------------------------------------------------------
 // sedValidation
 // ---------------------------------------------------------------------------
-
-/// Validate sed expressions for safety.
-///
-/// Corresponds to upstream `tools/BashTool/sedValidation.ts`.
-#[must_use]
-pub fn validate_sed(command: &str, mode: PermissionMode) -> ValidationResult {
-    let first = extract_first_command(command);
-    if first != "sed" {
-        return ValidationResult::Allow;
-    }
-
-    if mode == PermissionMode::ReadOnly && command.contains(" -i") {
-        return ValidationResult::Block {
-            reason: "sed -i (in-place editing) is not allowed in read-only mode".to_string(),
-        };
-    }
-
-    ValidationResult::Allow
-}
+//
+// Implementation lives in `crate::sed`. The historical "first-word == sed &&
+// contains(' -i')" stub was replaced in Phase 4.1 (ADR-150) with an AST-aware
+// denylist that walks every `sed` invocation in a pipeline and Block-s on
+// `w` / `W` / `e` / `E` commands, block groups, comments, negation, escape
+// tricks, and non-ASCII glyph spoofing. See `crate::sed` for the contract.
 
 // ---------------------------------------------------------------------------
 // pathValidation
