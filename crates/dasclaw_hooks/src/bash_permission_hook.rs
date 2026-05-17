@@ -1,10 +1,10 @@
 //! `BashPermissionHook` — wraps the `dasclaw_bash_permissions` rule
-//! engine (Slices 2.2.a-n) as a [`SafetyHook`] implementation.
+//! engine (Slices 2.2.a-n) as a [`EgressGate`] implementation.
 //!
 //! # Slice 2.2.f (hook adapter)
 //!
 //! Phase 2.2 of [Issue #490][issue-490]. Plan §5 row "2.2.f" defined
-//! this slice as "`BashPermissionHook` impl + 接入 `CompositeSafetyHook`
+//! this slice as "`BashPermissionHook` impl + 接入 `CompositeEgressGate`
 //! 在 `BashValidationHook` 之后". PR #549 used the 2.2.f letter for the
 //! `strip_env` wiring into `prefix_match`/`compound_match`; the hook
 //! adapter — the actual integration point — remained TODO. This module
@@ -14,16 +14,17 @@
 //!
 //! # Pipeline
 //!
-//! Only `before_tool_call` does real work; the other three [`SafetyHook`]
-//! methods pass through so this hook composes cleanly with
-//! `BashValidationHook` (Phase 2.1 command-injection gate) and other
-//! safety hooks in a [`x_claw_agent::CompositeSafetyHook`] chain.
+//! Only the `EgressKind::ToolExecution` branch of `check` does real work;
+//! every other kind returns [`EgressDecision::Allow`] so this gate
+//! composes cleanly with `BashValidationHook` (Phase 2.1 command-injection
+//! gate) and other egress gates in a [`x_claw_agent::CompositeEgressGate`]
+//! chain.
 //!
 //! For tools whose name matches [`BashPermissionHook::bash_tool_names`]
 //! (default `["bash", "shell", "BashTool"]`), the hook:
 //!
 //! 1. Extracts the `command` field from `args`. Missing or non-string
-//!    is Fail-Safe-mapped to [`SafetyDecision::Block`] (same shape as
+//!    is Fail-Safe-mapped to [`EgressDecision::Block`] (same shape as
 //!    [`crate::BashValidationHook`]).
 //! 2. Runs the rule pipeline:
 //!    - [`check_exact_match`] first (upstream `bashPermissions.ts`
@@ -31,18 +32,18 @@
 //!      [`PermissionResult::Passthrough`],
 //!    - [`check_compound_match`] (compound splitting + per-subcommand
 //!      prefix-match, upstream L1050).
-//! 3. Maps the [`PermissionResult`] to a [`SafetyDecision`] per
+//! 3. Maps the [`PermissionResult`] to a [`EgressDecision`] per
 //!    ADR-146:
-//!    - `Allow` ⇒ [`SafetyDecision::Allow`].
-//!    - `Deny { message, reason }` ⇒ [`SafetyDecision::Block { reason }`]
+//!    - `Allow` ⇒ [`EgressDecision::Allow`].
+//!    - `Deny { message, reason }` ⇒ [`EgressDecision::Block { reason }`]
 //!      with audit log `bash_perm::block`.
-//!    - `Ask { message, reason }` ⇒ [`SafetyDecision::Ask`] with audit
+//!    - `Ask { message, reason }` ⇒ [`EgressDecision::Ask`] with audit
 //!      log `bash_perm::ask` and a [`RuleSuggestion`] list built from
 //!      [`suggestion_for_exact_command`] (Slice 2.2.n generators).
-//!    - `Passthrough { .. }` ⇒ [`SafetyDecision::Passthrough`] — this
+//!    - `Passthrough { .. }` ⇒ [`EgressDecision::Passthrough`] — this
 //!      hook abstains and lets later hooks in the chain decide.
 //!
-//! Non-bash tools short-circuit to [`SafetyDecision::Allow`] so the
+//! Non-bash tools short-circuit to [`EgressDecision::Allow`] so the
 //! hook can be registered globally without disturbing other tools.
 //!
 //! # Audit log shape
@@ -51,7 +52,7 @@
 //!
 //! | Field      | Source                                       |
 //! |------------|----------------------------------------------|
-//! | `tool`     | the tool name passed to `before_tool_call`   |
+//! | `tool`     | the tool name passed to `EgressGate::check`  |
 //! | `rule_id`  | Debug of the matched [`PermissionRule`] or `"Other"` |
 //! | `message`  | the engine's `message` string                |
 //!
@@ -106,11 +107,13 @@ use dasclaw_bash_validation::{
     sed_command_is_allowed_by_allowlist,
 };
 use serde_json::Value;
-use x_claw_agent::{RuleAction, RuleSuggestion, SafetyDecision, SafetyError, SafetyHook};
+use x_claw_agent::{
+    EgressDecision, EgressGate, EgressKind, RedactionStats, RuleAction, RuleSuggestion,
+};
 
 use crate::bash_validation_hook::DEFAULT_BASH_TOOL_NAMES;
 
-/// `SafetyHook` adapter for the bash permission rule engine.
+/// `EgressGate` adapter for the bash permission rule engine.
 ///
 /// See module-level documentation for the contract.
 #[derive(Debug, Clone)]
@@ -201,8 +204,8 @@ impl BashPermissionHook {
         &self,
         tool: &str,
         command: &str,
-        decision: SafetyDecision,
-    ) -> SafetyDecision {
+        decision: EgressDecision,
+    ) -> EgressDecision {
         let Some(mode) = self.sed_strict_allowlist else {
             return decision;
         };
@@ -212,7 +215,7 @@ impl BashPermissionHook {
         // and never re-logs an existing Allow.
         if !matches!(
             decision,
-            SafetyDecision::Passthrough | SafetyDecision::Ask { .. }
+            EgressDecision::Passthrough | EgressDecision::Ask { .. }
         ) {
             return decision;
         }
@@ -227,35 +230,26 @@ impl BashPermissionHook {
             allow_file_writes = mode.allow_file_writes,
             "bash_perm::allow_sed_strict_upgrade"
         );
-        SafetyDecision::Allow
+        EgressDecision::Allow
     }
 }
 
-#[async_trait]
-impl SafetyHook for BashPermissionHook {
-    async fn before_prompt(&self, _prompt: &mut String) -> Result<SafetyDecision, SafetyError> {
-        Ok(SafetyDecision::Allow)
-    }
-
-    async fn after_completion(&self, _completion: &mut String) -> Result<(), SafetyError> {
-        Ok(())
-    }
-
-    async fn before_tool_call(
-        &self,
-        tool: &str,
-        args: &mut Value,
-    ) -> Result<SafetyDecision, SafetyError> {
+impl BashPermissionHook {
+    /// Core decision logic — exposed so unit and integration tests can drive
+    /// the gate without serialising args through JSON. Returns
+    /// [`EgressDecision::Allow`] for non-bash tools.
+    pub fn validate_tool_call(&self, tool: &str, args: &Value) -> EgressDecision {
         if !self.is_bash_tool(tool) {
-            return Ok(SafetyDecision::Allow);
+            return EgressDecision::Allow;
         }
 
         let command = match args.get("command").and_then(Value::as_str) {
             Some(s) if !s.is_empty() => s,
             _ => {
-                return Ok(SafetyDecision::Block {
+                return EgressDecision::Block {
                     reason: "bash tool call missing required 'command' string field".to_string(),
-                });
+                    stats: RedactionStats::default(),
+                };
             }
         };
 
@@ -267,14 +261,14 @@ impl SafetyHook for BashPermissionHook {
         // are validator-defeating attacks that bypass the readonly
         // allowlist or the .git/-relative bare-repo protection.
         if let Some(reason) = detect_sandbox_escape(command) {
-            return Ok(map_permission_result(
+            return map_permission_result(
                 tool,
                 command,
                 PermissionResult::Deny {
                     message: sandbox_escape_message(&reason),
                     reason,
                 },
-            ));
+            );
         }
 
         // Upstream pipeline (bashPermissions.ts L1663-L1820): exact
@@ -287,23 +281,39 @@ impl SafetyHook for BashPermissionHook {
         };
 
         let decision = map_permission_result(tool, command, result);
-        Ok(self.maybe_upgrade_sed_strict_allowlist(tool, command, decision))
-    }
-
-    async fn after_tool_output(
-        &self,
-        _tool: &str,
-        _output: &mut String,
-    ) -> Result<(), SafetyError> {
-        Ok(())
+        self.maybe_upgrade_sed_strict_allowlist(tool, command, decision)
     }
 }
 
-/// Maps a [`PermissionResult`] into a [`SafetyDecision`] and emits an
+#[async_trait]
+impl EgressGate for BashPermissionHook {
+    async fn check(&self, kind: &EgressKind, payload: &str) -> EgressDecision {
+        // ADR-148: only the tool-execution egress kind carries bash
+        // command arguments; every other kind is a no-op for this gate.
+        let tool = match kind {
+            EgressKind::ToolExecution { tool } => tool,
+            _ => return EgressDecision::Allow,
+        };
+        // Fail-Safe: a payload that does not deserialise into a JSON
+        // object is treated as a structurally invalid bash call.
+        let args: Value = match serde_json::from_str(payload) {
+            Ok(v) => v,
+            Err(e) => {
+                return EgressDecision::Block {
+                    reason: format!("bash permission gate: malformed tool args payload: {e}"),
+                    stats: RedactionStats::default(),
+                };
+            }
+        };
+        self.validate_tool_call(tool, &args)
+    }
+}
+
+/// Maps a [`PermissionResult`] into a [`EgressDecision`] and emits an
 /// audit log line for `Deny` / `Ask` outcomes.
-fn map_permission_result(tool: &str, command: &str, result: PermissionResult) -> SafetyDecision {
+fn map_permission_result(tool: &str, command: &str, result: PermissionResult) -> EgressDecision {
     match result {
-        PermissionResult::Allow { .. } => SafetyDecision::Allow,
+        PermissionResult::Allow { .. } => EgressDecision::Allow,
         PermissionResult::Deny { message, reason } => {
             let rule_id = format_rule_id(&reason);
             tracing::warn!(
@@ -312,8 +322,9 @@ fn map_permission_result(tool: &str, command: &str, result: PermissionResult) ->
                 %message,
                 "bash_perm::block"
             );
-            SafetyDecision::Block {
+            EgressDecision::Block {
                 reason: format!("bash_perm::{rule_id}: {message}"),
+                stats: RedactionStats::default(),
             }
         }
         PermissionResult::Ask { message, reason } => {
@@ -324,12 +335,12 @@ fn map_permission_result(tool: &str, command: &str, result: PermissionResult) ->
                 %message,
                 "bash_perm::ask"
             );
-            SafetyDecision::Ask {
+            EgressDecision::Ask {
                 reason: message,
                 suggestions: build_rule_suggestions(command),
             }
         }
-        PermissionResult::Passthrough { .. } => SafetyDecision::Passthrough,
+        PermissionResult::Passthrough { .. } => EgressDecision::Passthrough,
     }
 }
 

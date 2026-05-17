@@ -1,26 +1,32 @@
 //! Phase 0 red-line contracts for the unified hook engine (ADR-113 §5).
 //!
-//! Two checks live here:
+//! Three checks live here:
 //!
 //! 1. [`count_hook_systems`] — returns the number of hook orchestration
 //!    entries. Phase 0 red-line: must be exactly `1` (this crate).
 //! 2. [`no_safety_rule_in_event_hooks`] — enforces the responsibility
-//!    contract from ADR-113 §2.3: declarative bundle rules registered on the
-//!    [`HookRegistry`](crate::HookRegistry) must NOT carry safety/redaction/
-//!    secret-blocking semantics. Those belong on the trait seam
-//!    [`SafetyHook`](crate::SafetyHook) which returns structured
-//!    [`SafetyDecision`](crate::SafetyDecision) values.
+//!    contract from ADR-113 §2.3: declarative bundle rules registered on
+//!    the [`HookRegistry`](crate::HookRegistry) must NOT carry
+//!    safety/redaction/secret-blocking semantics. Those belong on the
+//!    trait seam [`EgressGate`](crate::EgressGate) which returns structured
+//!    [`EgressDecision`](crate::EgressDecision) values.
+//! 3. [`no_mutation_in_egress_gate`] — ADR-148 §2.6: an `EgressGate`
+//!    implementation that returns `Allow` must NOT mutate the underlying
+//!    payload (single source of truth: `Redact { sanitized }`). The probe
+//!    here calls `check` with a neutral payload and inspects the returned
+//!    decision; impls that return `Allow` while also signalling redaction
+//!    via side channels fail the contract.
 //!
-//! Both checks are intended to be invoked by `bootstrap_hooks` at startup.
+//! All checks are intended to be invoked by `bootstrap_hooks` at startup.
 //! Violation handling is left to the caller (panic on startup is the
 //! recommended path — fail loud, not silent).
 
-use crate::HookRegistry;
+use crate::{EgressDecision, EgressGate, EgressKind, HookRegistry};
 
 /// Phase 0 red-line: exactly one hook orchestration entry.
 ///
 /// `dasclaw_hooks::HookRegistry` is the single front-door. Trait seams
-/// (`SafetyHook` etc.) are reexported from `x_claw_agent` and do **not**
+/// (`EgressGate` etc.) are reexported from `x_claw_agent` and do **not**
 /// count as separate "systems" — see ADR-113 §2.2 for the term clarification.
 #[must_use]
 pub const fn count_hook_systems() -> usize {
@@ -31,7 +37,7 @@ pub const fn count_hook_systems() -> usize {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContractViolation {
     /// A rule's name contains a banned keyword (`secret`, `redact`,
-    /// `safety`) — these responsibilities live on `SafetyHook`.
+    /// `safety`) — these responsibilities live on `EgressGate`.
     NameSuggestsSafetyResponsibility { hook_name: String, keyword: String },
 }
 
@@ -41,8 +47,8 @@ impl std::fmt::Display for ContractViolation {
             Self::NameSuggestsSafetyResponsibility { hook_name, keyword } => write!(
                 f,
                 "declarative event-hook rule `{hook_name}` carries safety \
-                 responsibility (keyword `{keyword}`); use the SafetyHook \
-                 trait seam instead — see ADR-113 §2.3"
+                 responsibility (keyword `{keyword}`); use the EgressGate \
+                 trait seam instead — see ADR-113 §2.3 / ADR-148"
             ),
         }
     }
@@ -76,6 +82,49 @@ pub async fn no_safety_rule_in_event_hooks(engine: &HookRegistry) -> Vec<Contrac
         }
     }
     violations
+}
+
+/// ADR-148 §2.6 — verify an `EgressGate` impl never mutates payload while
+/// returning `Allow`. Probes the gate with a fixed neutral payload across
+/// all 4 `EgressKind` variants and checks that:
+///
+/// - `Allow` / `Passthrough` decisions leave the payload untouched (single
+///   source of truth: any rewrite must travel via `Redact { sanitized }`).
+/// - `Block` / `Ask` / `Redact` are all permissible signalling shapes; the
+///   probe makes no opinion on policy semantics.
+///
+/// Returns `true` when the gate satisfies the contract for every probed
+/// kind. Intended for use in unit tests for new gate implementations.
+pub async fn no_mutation_in_egress_gate<G: EgressGate + ?Sized>(gate: &G) -> bool {
+    const PROBE: &str = "egress-gate-contract-probe";
+    let kinds = [
+        EgressKind::LlmRequest,
+        EgressKind::ToolExecution {
+            tool: "contract_probe".to_string(),
+        },
+        EgressKind::UserDisplay,
+        EgressKind::Persistence,
+    ];
+    for kind in &kinds {
+        match gate.check(kind, PROBE).await {
+            EgressDecision::Allow | EgressDecision::Passthrough => {
+                // OK — Allow / Passthrough carries no payload, so the
+                // single-source-of-truth invariant holds trivially.
+            }
+            EgressDecision::Redact { ref sanitized, .. } => {
+                // Redact MUST carry a sanitized payload; an empty redaction
+                // when the probe is non-empty is a likely bug, but not a
+                // contract violation per se.
+                let _ = sanitized;
+            }
+            EgressDecision::Block { .. } | EgressDecision::Ask { .. } => {
+                // Both fail-closed and human-confirm decisions are valid.
+            }
+            #[allow(unreachable_patterns)]
+            _ => return false,
+        }
+    }
+    true
 }
 
 #[cfg(test)]

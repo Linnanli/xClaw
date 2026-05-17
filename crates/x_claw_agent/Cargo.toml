@@ -33,6 +33,9 @@ tokio = { version = "1", features = ["sync", "rt", "time"] }
 # Project doc 注入 (#59b / ADR-115): SessionManager 构建期 DI 调用
 # `LayeredProjectDocLoader` + `assemble_section`，不进 hook 系统。
 dasclaw_project_docs = { path = "../dasclaw_project_docs", version = "0.0.0-w1" }
+# ADR-148 EgressGate: 数据出口闸门 trait seam（取代 SafetyHook）。
+# 仅依赖 dasclaw_governance::egress（always-on，无 feature gate）。
+dasclaw_governance = { path = "../dasclaw_governance", version = "0.0.0-w1" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "sync"] }

@@ -16,7 +16,7 @@
 //! path-gate, including:
 //!
 //! - canonical-workspace handling (macOS `/tmp` ↔ `/private/tmp`),
-//! - `PermissionMode` → `SafetyDecision` mapping for path-gate `Ask`,
+//! - `PermissionMode` → `EgressDecision` mapping for path-gate `Ask`,
 //! - bash AST → argv → resolver round-trip preserves the chain reason.
 //!
 //! Naming follows the `req_safety_490_3_1_g_2_hook_*` family so coverage
@@ -30,8 +30,8 @@ use std::path::{Path, PathBuf};
 use dasclaw_hooks::BashValidationHook;
 use serde_json::json;
 use tempfile::TempDir;
+use x_claw_agent::EgressDecision;
 use x_claw_agent::permissions::PermissionMode;
-use x_claw_agent::{SafetyDecision, SafetyHook};
 
 /// Build a tempdir + canonical workspace root pair. Canonicalization is
 /// **the test's job** here only so we control the comparison anchor;
@@ -44,7 +44,7 @@ fn ws() -> (TempDir, PathBuf) {
 }
 
 /// Build a hook rooted at `ws_root` in `Prompt` mode (so path-gate `Ask`
-/// surfaces as `SafetyDecision::Ask` rather than being folded into
+/// surfaces as `EgressDecision::Ask` rather than being folded into
 /// `Block` / `Allow` by the permission matrix). Home is set to a hermetic
 /// non-existent path to make `~` expansion deterministic across hosts.
 fn hook_at(ws_root: &Path) -> BashValidationHook {
@@ -52,11 +52,9 @@ fn hook_at(ws_root: &Path) -> BashValidationHook {
         .with_home_dir(Some(PathBuf::from("/nonexistent-home")))
 }
 
-async fn fire(hook: &BashValidationHook, command: &str) -> SafetyDecision {
-    let mut args = json!({ "command": command });
-    hook.before_tool_call("bash", &mut args)
-        .await
-        .expect("hook must not error on a string command")
+async fn fire(hook: &BashValidationHook, command: &str) -> EgressDecision {
+    let args = json!({ "command": command });
+    hook.validate_tool_call("bash", &args)
 }
 
 // ---------------------------------------------------------------------
@@ -73,7 +71,7 @@ async fn req_safety_490_3_1_g_2_hook_t_sym_1_link_to_etc_passwd_asks() {
     let decision = fire(&h, &cmd).await;
 
     match decision {
-        SafetyDecision::Ask { reason, .. } => {
+        EgressDecision::Ask { reason, .. } => {
             assert!(
                 reason.starts_with("bash_path_constraints::ask"),
                 "expected path-gate Ask prefix, got: {reason}"
@@ -109,7 +107,7 @@ async fn req_safety_490_3_1_g_2_hook_t_sym_3_multi_hop_escape_asks() {
     let decision = fire(&h, &cmd).await;
 
     match decision {
-        SafetyDecision::Ask { reason, .. } => {
+        EgressDecision::Ask { reason, .. } => {
             assert!(reason.contains("/etc/passwd"), "got: {reason}");
         }
         other => panic!("expected Ask for multi-hop escape, got {other:?}"),
@@ -132,7 +130,7 @@ async fn req_safety_490_3_1_g_2_hook_t_sym_4_loop_asks_with_chain_truncated() {
     let decision = fire(&h, &cmd).await;
 
     match decision {
-        SafetyDecision::Ask { reason, .. } => {
+        EgressDecision::Ask { reason, .. } => {
             assert!(
                 reason.contains("symlink chain truncated"),
                 "expected truncation reason, got: {reason}"
@@ -159,7 +157,7 @@ async fn req_safety_490_3_1_g_2_hook_plain_in_workspace_path_allows() {
 
     assert_eq!(
         decision,
-        SafetyDecision::Allow,
+        EgressDecision::Allow,
         "plain in-workspace cat must Allow (no regression vs 3.1.C)"
     );
 }
@@ -183,7 +181,7 @@ async fn req_safety_490_3_1_g_2_hook_internal_symlink_allows() {
 
     assert_eq!(
         decision,
-        SafetyDecision::Allow,
+        EgressDecision::Allow,
         "internal symlink must not trigger path-gate Ask"
     );
 }
@@ -204,7 +202,7 @@ async fn req_safety_490_3_1_g_2_hook_symlink_escape_readonly_blocks_fail_safe() 
     let decision = fire(&h, &cmd).await;
 
     match decision {
-        SafetyDecision::Block { reason } => {
+        EgressDecision::Block { reason, .. } => {
             assert!(
                 reason.starts_with("bash_path_constraints::ask"),
                 "ReadOnly must surface the path-gate reason verbatim, got: {reason}"
@@ -238,7 +236,7 @@ async fn req_safety_490_3_1_g_2_hook_canonicalizes_workspace() {
 
     assert_eq!(
         decision,
-        SafetyDecision::Allow,
+        EgressDecision::Allow,
         "hook must canonicalize workspace so /tmp ↔ /private/tmp matches"
     );
 }

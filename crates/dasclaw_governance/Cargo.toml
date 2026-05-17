@@ -29,7 +29,7 @@ task_registry = ["dep:serde", "dep:serde_json", "task_packet"]
 # `ToolVisibilityPolicy` trait + closed-enum `ToolGateDecision` consumed by
 # `dasclaw_agent` / `ironclaw` to gate tool exposure (L2) and execution (L3).
 # Default OFF (W4 contract); enabled by host crates via Cargo feature.
-tool_visibility = ["dep:async-trait", "dep:serde", "dep:serde_json"]
+tool_visibility = ["dep:serde", "dep:serde_json"]
 # Convenience: enable the full 6-pack + task lifecycle at once (used by integration tests).
 full = [
     "policy_engine",
@@ -50,7 +50,10 @@ full = [
 thiserror = "1"
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
-async-trait = { version = "0.1", optional = true }
+# ADR-148 EgressGate makes `async-trait` part of the public always-on
+# surface, so it is now a required dependency (no longer feature-gated).
+async-trait = "0.1"
+tracing = "0.1"
 
 [dev-dependencies]
 # Test-only async runtime + trait macro for `tool_visibility` surface tests.
