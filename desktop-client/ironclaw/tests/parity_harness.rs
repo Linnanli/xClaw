@@ -228,7 +228,14 @@ async fn run_scenario_with_job_ctx(
     job_ctx: JobContext,
 ) -> ScenarioResult {
     let llm = Arc::new(ScriptedLlm::new(steps));
-    let tools = Arc::new(ToolRegistry::new());
+    // ADR-149 / issue #485 — bridge legacy per-job `feature_flags` into the
+    // registry-wide `BlocklistPolicy` so disabled-tool tests survive the
+    // removal of the bool gate in `execute_tool_with_safety`. The clone is
+    // cheap (Arc) and shares the same underlying set the job uses.
+    let policy: dasclaw_governance::tool_visibility::SharedToolVisibilityPolicy = Arc::new(
+        ironclaw::tools::feature_flags::BlocklistPolicy::new(Arc::clone(&job_ctx.feature_flags)),
+    );
+    let tools = Arc::new(ToolRegistry::new().with_policy(policy));
     tools
         .bootstrap_tools(&ironclaw::tools::bootstrap::BootstrapContext {
             mode: ironclaw::tools::bootstrap::BootstrapMode::Orchestrator {

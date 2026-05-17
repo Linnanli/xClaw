@@ -2650,6 +2650,7 @@ dependencies = [
  "dasclaw_apply_patch",
  "dasclaw_cert_trust",
  "dasclaw_exec",
+ "dasclaw_governance",
  "dasclaw_hooks",
  "dasclaw_llm_provider",
  "dasclaw_net_proxy",
@@ -2871,9 +2872,11 @@ dependencies = [
 name = "dasclaw_governance"
 version = "0.0.0-w1"
 dependencies = [
+ "async-trait",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]

@@ -1659,10 +1659,16 @@ async fn execute_lightweight_with_tools(
                 total_output_tokens,
             );
         } else {
-            // Tool-enabled iteration
+            // Tool-enabled iteration.
+            // ADR-149 / issue #485 — L2 gate; routine engine runs without a
+            // human in the loop → Autonomous env.
             let tool_defs = ctx
                 .tools
-                .tool_definitions()
+                .tool_definitions_for_llm(
+                    &dasclaw_governance::tool_visibility::ToolGateContextSeed::system(
+                        dasclaw_governance::tool_visibility::Env::Autonomous,
+                    ),
+                )
                 .await
                 .into_iter()
                 .filter(|tool| allowed_tools.contains(&tool.name))

@@ -352,7 +352,15 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
         let max_iterations = max_iterations.min(MAX_WORKER_ITERATIONS);
 
         // Initial tool definitions for planning (will be refreshed in loop)
-        reason_ctx.available_tools = self.tools().tool_definitions().await;
+        // ADR-149 / issue #485 — L2 gate; background worker → Autonomous env.
+        reason_ctx.available_tools = self
+            .tools()
+            .tool_definitions_for_llm(
+                &dasclaw_governance::tool_visibility::ToolGateContextSeed::system(
+                    dasclaw_governance::tool_visibility::Env::Autonomous,
+                ),
+            )
+            .await;
 
         // Generate plan if planning is enabled
         let plan = if self.use_planning() {
@@ -1481,8 +1489,17 @@ impl<'a> LoopDelegate for JobDelegate<'a> {
             );
             reason_ctx.available_tools.clear();
         } else {
-            // Refresh tool definitions so newly built tools become visible
-            reason_ctx.available_tools = self.worker.tools().tool_definitions().await;
+            // Refresh tool definitions so newly built tools become visible.
+            // ADR-149 / issue #485 — L2 gate; background worker → Autonomous env.
+            reason_ctx.available_tools = self
+                .worker
+                .tools()
+                .tool_definitions_for_llm(
+                    &dasclaw_governance::tool_visibility::ToolGateContextSeed::system(
+                        dasclaw_governance::tool_visibility::Env::Autonomous,
+                    ),
+                )
+                .await;
         }
 
         // Claude 4.6 rejects assistant prefill; NEAR AI rejects any non-user-ending

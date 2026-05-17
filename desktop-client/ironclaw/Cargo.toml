@@ -133,6 +133,9 @@ dasclaw_hooks = { path = "../../crates/dasclaw_hooks", version = "0.1.0" }
 # W3 #53: codex-protocol apply_patch parser + minimal apply layer
 dasclaw_apply_patch = { path = "../../crates/dasclaw_apply_patch", version = "0.0.0-w1" }
 dasclaw_workspace_cap = { path = "../../crates/dasclaw_workspace_cap", version = "0.1.0" }
+# ADR-149 / issue #485 — Tool Visibility Triple Gate (`ToolVisibilityPolicy`
+# trait + closed-enum decisions). Default-OFF in the crate, host opts in.
+dasclaw_governance = { path = "../../crates/dasclaw_governance", version = "0.0.0-w1", features = ["tool_visibility"] }
 
 # Safety/sanitization
 ironclaw_safety = { path = "crates/ironclaw_safety", version = "0.2.0", features = ["agent-hook"] }

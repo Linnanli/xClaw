@@ -170,8 +170,16 @@ Work independently to complete this job. When finished, your final message MUST 
             job.title, job.description
         )));
 
-        // Load tool definitions
-        reason_ctx.available_tools = self.tools.tool_definitions().await;
+        // Load tool definitions.
+        // ADR-149 / issue #485 — L2 gate; container worker → Container env.
+        reason_ctx.available_tools = self
+            .tools
+            .tool_definitions_for_llm(
+                &dasclaw_governance::tool_visibility::ToolGateContextSeed::system(
+                    dasclaw_governance::tool_visibility::Env::Container,
+                ),
+            )
+            .await;
 
         // Shared iteration tracker — read after the loop to report accurate counts.
         let iteration_tracker = Arc::new(Mutex::new(0u32));
@@ -448,8 +456,16 @@ impl LoopDelegate for ContainerDelegate {
             tracing::warn!("Switching to text-only recovery after malformed tool completions");
             reason_ctx.available_tools.clear();
         } else {
-            // Refresh tools (in case WASM tools were built)
-            reason_ctx.available_tools = self.tools.tool_definitions().await;
+            // Refresh tools (in case WASM tools were built).
+            // ADR-149 / issue #485 — L2 gate; container worker → Container env.
+            reason_ctx.available_tools = self
+                .tools
+                .tool_definitions_for_llm(
+                    &dasclaw_governance::tool_visibility::ToolGateContextSeed::system(
+                        dasclaw_governance::tool_visibility::Env::Container,
+                    ),
+                )
+                .await;
         }
 
         None

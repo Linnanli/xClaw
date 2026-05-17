@@ -75,6 +75,9 @@ pub mod task_packet;
 #[cfg(feature = "task_registry")]
 pub mod task_registry;
 
+#[cfg(feature = "tool_visibility")]
+pub mod tool_visibility;
+
 #[cfg(test)]
 mod tests {
     #[test]
