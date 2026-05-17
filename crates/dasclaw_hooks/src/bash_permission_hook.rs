@@ -70,6 +70,30 @@
 //!   admin-backend / settings files) is Phase 2.3 too. For now callers
 //!   construct the context directly and pass it in at hook
 //!   construction time.
+//!
+//! # Phase 4.2 strict sed allowlist (opt-in)
+//!
+//! Issue #607 / Phase 4.2 of [Issue #490][issue-490]. After PR #606 landed
+//! the upstream-parity strict sed allowlist function
+//! [`dasclaw_bash_validation::sed_command_is_allowed_by_allowlist`], the
+//! hook can optionally use it to **upgrade** a rule-pipeline
+//! `Passthrough` or `Ask` outcome to `Allow` when the command matches
+//! the upstream Pattern 1 (line print with `-n`) or Pattern 2 (single
+//! substitution) constraints. Enable via
+//! [`BashPermissionHook::with_sed_strict_allowlist`]; default off.
+//!
+//! Invariants (pinned by `tests/bash_permission_sed_strict_allowlist.rs`):
+//!
+//! - **Never downgrades**: `Block` / `Allow` are passed through
+//!   untouched. Deny remains sovereign (PR #557 precedence).
+//! - **Only upgrades** `Passthrough` and `Ask` decisions, so the strict
+//!   mode cannot accidentally short-circuit a hook earlier in the chain
+//!   that wanted to Block.
+//! - **Non-sed → no-op**: the allowlist function returns `false` for
+//!   anything that is not a single `sed` simple command, so non-sed
+//!   inputs fall through unchanged.
+//! - Upgrades emit a `tracing::info!` event `bash_perm::allow_sed_strict_upgrade`
+//!   with `tool` + `rule_id="SedAllowlist"` for SIEM dashboards.
 
 use async_trait::async_trait;
 use dasclaw_bash_permissions::{
@@ -79,6 +103,7 @@ use dasclaw_bash_permissions::{
 };
 use dasclaw_bash_validation::{
     command_has_any_git, command_writes_to_git_internal_paths, is_unsafe_xargs_invocation,
+    sed_command_is_allowed_by_allowlist,
 };
 use serde_json::Value;
 use x_claw_agent::{RuleAction, RuleSuggestion, SafetyDecision, SafetyError, SafetyHook};
@@ -92,6 +117,19 @@ use crate::bash_validation_hook::DEFAULT_BASH_TOOL_NAMES;
 pub struct BashPermissionHook {
     context: ToolPermissionContext,
     bash_tool_names: Vec<String>,
+    /// `Some` enables the Phase 4.2 strict sed allowlist upgrade. The
+    /// inner `bool` mirrors upstream `acceptEdits` → when `true`,
+    /// `sed -i` / file-write substitutions are also pre-approved.
+    /// `None` (default) keeps the pre-4.2 behavior.
+    sed_strict_allowlist: Option<SedStrictMode>,
+}
+
+/// Strict sed allowlist configuration for [`BashPermissionHook`]. See
+/// the Phase 4.2 section of the module-level documentation for the
+/// contract.
+#[derive(Debug, Clone, Copy)]
+struct SedStrictMode {
+    allow_file_writes: bool,
 }
 
 impl BashPermissionHook {
@@ -107,7 +145,25 @@ impl BashPermissionHook {
                 .iter()
                 .map(|s| (*s).to_string())
                 .collect(),
+            sed_strict_allowlist: None,
         }
+    }
+
+    /// Enable the Phase 4.2 strict sed allowlist upgrade.
+    ///
+    /// When enabled, after the rule pipeline returns `Passthrough` or
+    /// `Ask`, the hook checks whether the command matches the strict
+    /// upstream sed allowlist (Pattern 1 line print with `-n` or
+    /// Pattern 2 single substitution); if so, the decision is upgraded
+    /// to `Allow`. `Block` and `Allow` are never modified.
+    ///
+    /// `allow_file_writes` mirrors upstream `acceptEdits` mode: when
+    /// `true`, `sed -i ...` and trailing file arguments are tolerated.
+    /// Set to `false` in read-only contexts.
+    #[must_use]
+    pub fn with_sed_strict_allowlist(mut self, allow_file_writes: bool) -> Self {
+        self.sed_strict_allowlist = Some(SedStrictMode { allow_file_writes });
+        self
     }
 
     /// Override the bash tool-name allowlist.
@@ -124,6 +180,54 @@ impl BashPermissionHook {
     /// Returns `true` if `tool` should be treated as a bash invocation.
     fn is_bash_tool(&self, tool: &str) -> bool {
         self.bash_tool_names.iter().any(|n| n == tool)
+    }
+
+    /// Phase 4.2 strict sed allowlist upgrade.
+    ///
+    /// Returns `decision` unchanged unless **all** of the following hold:
+    ///
+    /// 1. Strict mode was enabled via
+    ///    [`Self::with_sed_strict_allowlist`].
+    /// 2. `decision` is `Passthrough` or `Ask` (the only two
+    ///    rule-pipeline outcomes the issue contract allows upgrading).
+    /// 3. [`sed_command_is_allowed_by_allowlist`] returns `true` for
+    ///    the command, i.e. it is a single `sed` invocation matching
+    ///    upstream Pattern 1 or Pattern 2 and denylist-clean.
+    ///
+    /// On upgrade, emits `tracing::info!("bash_perm::allow_sed_strict_upgrade", ...)`
+    /// with `tool` + `rule_id="SedAllowlist"` so SIEM can pin a stable
+    /// channel separate from `bash_perm::block` / `bash_perm::ask`.
+    fn maybe_upgrade_sed_strict_allowlist(
+        &self,
+        tool: &str,
+        command: &str,
+        decision: SafetyDecision,
+    ) -> SafetyDecision {
+        let Some(mode) = self.sed_strict_allowlist else {
+            return decision;
+        };
+
+        // Only Passthrough / Ask are upgrade candidates. Block / Allow
+        // pass through untouched — strict mode never downgrades a Deny
+        // and never re-logs an existing Allow.
+        if !matches!(
+            decision,
+            SafetyDecision::Passthrough | SafetyDecision::Ask { .. }
+        ) {
+            return decision;
+        }
+
+        if !sed_command_is_allowed_by_allowlist(command, mode.allow_file_writes) {
+            return decision;
+        }
+
+        tracing::info!(
+            tool,
+            rule_id = "SedAllowlist",
+            allow_file_writes = mode.allow_file_writes,
+            "bash_perm::allow_sed_strict_upgrade"
+        );
+        SafetyDecision::Allow
     }
 }
 
@@ -182,7 +286,8 @@ impl SafetyHook for BashPermissionHook {
             decided => decided,
         };
 
-        Ok(map_permission_result(tool, command, result))
+        let decision = map_permission_result(tool, command, result);
+        Ok(self.maybe_upgrade_sed_strict_allowlist(tool, command, decision))
     }
 
     async fn after_tool_output(
