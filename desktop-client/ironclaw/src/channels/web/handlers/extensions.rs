@@ -104,7 +104,15 @@ pub async fn extensions_tools_handler(
         "Tool registry not available".to_string(),
     ))?;
 
-    let definitions = registry.tool_definitions().await;
+    // ADR-149 / issue #485 — L2 gate; this handler lists tools for the
+    // user-facing extensions UI, which is interactive.
+    let definitions = registry
+        .tool_definitions_for_llm(
+            &dasclaw_governance::tool_visibility::ToolGateContextSeed::system(
+                dasclaw_governance::tool_visibility::Env::Interactive,
+            ),
+        )
+        .await;
     let tools = definitions
         .into_iter()
         .map(|td| ToolInfo {

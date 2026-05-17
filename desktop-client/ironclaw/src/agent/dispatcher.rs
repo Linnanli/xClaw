@@ -222,7 +222,18 @@ impl Agent {
 
         // Build system prompts once for this turn. Two variants: with tools
         // (normal iterations) and without (force_text final iteration).
-        let initial_tool_defs = self.tools().tool_definitions().await;
+        // ADR-149 / issue #485 — L2 tool visibility gate. Interactive chat
+        // session, so the seed env is `Interactive`. Identity is the W2
+        // placeholder; `grep ToolGateContextSeed::system` surfaces the
+        // migration sites once `dasclaw_identity::ActorRef` lands.
+        let initial_tool_defs = self
+            .tools()
+            .tool_definitions_for_llm(
+                &dasclaw_governance::tool_visibility::ToolGateContextSeed::system(
+                    dasclaw_governance::tool_visibility::Env::Interactive,
+                ),
+            )
+            .await;
         let initial_tool_defs =
             filter_tools_by_disabled_extensions(initial_tool_defs, &disabled_extensions);
         let initial_tool_defs = if !active_skills.is_empty() {
@@ -391,8 +402,17 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
 
         let force_text = iteration >= self.force_text_at;
 
-        // Refresh tool definitions each iteration so newly built tools become visible
-        let tool_defs = self.agent.tools().tool_definitions().await;
+        // Refresh tool definitions each iteration so newly built tools become visible.
+        // ADR-149 / issue #485 — L2 gate; interactive agent loop.
+        let tool_defs = self
+            .agent
+            .tools()
+            .tool_definitions_for_llm(
+                &dasclaw_governance::tool_visibility::ToolGateContextSeed::system(
+                    dasclaw_governance::tool_visibility::Env::Interactive,
+                ),
+            )
+            .await;
         let tool_defs = filter_tools_by_disabled_extensions(tool_defs, &self.disabled_extensions);
 
         // Apply trust-based tool attenuation if skills are active.

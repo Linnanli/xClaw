@@ -3,6 +3,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use dasclaw_governance::tool_visibility::{
+    AllowAllPolicy, SharedToolVisibilityPolicy, ToolGateContext, ToolGateContextSeed,
+    ToolGateDecision, ToolGateLayer, ToolSource as PolicyToolSource,
+};
 use tokio::sync::RwLock;
 
 use crate::context::ContextManager;
@@ -131,6 +135,13 @@ pub struct ToolRegistry {
     /// startup tool collision/visibility view without observing insertion
     /// order.
     registration_log: RwLock<Vec<ToolRegistrationEntry>>,
+    /// ADR-149 / issue #485 — L2 tool visibility gate. Always present (no
+    /// `Option`) to enforce the **Always-Has-Policy invariant**: callers
+    /// can never accidentally bypass the gate by passing `None`. Defaults
+    /// to [`AllowAllPolicy`] (behavioral no-op) so the 20+ existing
+    /// `ToolRegistry::new()` call sites keep working; production wires a
+    /// real policy via [`Self::with_policy`].
+    policy: SharedToolVisibilityPolicy,
 }
 
 impl ToolRegistry {
@@ -153,6 +164,11 @@ impl ToolRegistry {
             rate_limiter: RateLimiter::new(),
             message_tool: RwLock::new(None),
             registration_log: RwLock::new(Vec::new()),
+            // ADR-149 §2.5: default to the explicit no-op policy rather
+            // than `Option<…>`. Real wiring lands in `app.rs` via
+            // [`Self::with_policy`]. `grep AllowAllPolicy` surfaces every
+            // call site still using the placeholder.
+            policy: Arc::new(AllowAllPolicy),
         }
     }
 
@@ -164,6 +180,19 @@ impl ToolRegistry {
     ) -> Self {
         self.credential_registry = Some(credential_registry);
         self.secrets_store = Some(secrets_store);
+        self
+    }
+
+    /// Install a [`ToolVisibilityPolicy`] for the L2 catalog gate.
+    ///
+    /// Builder-style: returns `self` so it composes with
+    /// [`Self::with_credentials`]. Replaces the default
+    /// [`AllowAllPolicy`] set by [`Self::new`].
+    ///
+    /// ADR-149 / issue #485 — production hosts wire a real policy here
+    /// (e.g. `BlocklistPolicy` wrapping `feature_flags::ToolFeatureFlags`).
+    pub fn with_policy(mut self, policy: SharedToolVisibilityPolicy) -> Self {
+        self.policy = policy;
         self
     }
 
@@ -410,6 +439,143 @@ impl ToolRegistry {
             .iter()
             .filter_map(|name| tools.get(*name).map(Self::tool_definition))
             .collect()
+    }
+
+    /// Map a registered tool to the `ToolVisibilityPolicy` source bucket.
+    ///
+    /// BuiltIn vs not-BuiltIn is the only decision that matters for ADR-149
+    /// fail-closed defaults (non-BuiltIn → policy may choose to `Hide`
+    /// until #484 verifier ships). Classification uses the same canonical
+    /// name parser as [`Self::register`].
+    async fn classify_policy_source(&self, tool: &Arc<dyn Tool>) -> PolicyToolSource {
+        let builtin = self.builtin_names.read().await;
+        Self::classify_policy_source_with(tool, &builtin)
+    }
+
+    /// Same as [`Self::classify_policy_source`] but reuses a caller-held
+    /// snapshot of `builtin_names`. Hot iteration paths (L2 catalog build)
+    /// must hold the read lock once across the whole loop to avoid
+    /// per-tool `await` checkpoints — those checkpoints let unrelated
+    /// async tasks (e.g. a background job worker spawned by an earlier
+    /// tool call) interleave between iterations of the agent loop, which
+    /// breaks any shared scripted/replay LLM provider that relies on a
+    /// stable call sequence.
+    fn classify_policy_source_with(
+        tool: &Arc<dyn Tool>,
+        builtin: &std::collections::HashSet<String>,
+    ) -> PolicyToolSource {
+        let name = tool.name();
+        if builtin.contains(name) {
+            return PolicyToolSource::BuiltIn;
+        }
+        let canonical = CanonicalToolName::parse(name, false);
+        match canonical.kind() {
+            CanonicalKind::Mcp => PolicyToolSource::Mcp,
+            CanonicalKind::Wasm => PolicyToolSource::Wasm,
+            CanonicalKind::Extension => PolicyToolSource::Extension,
+            // `parse(_, false)` never returns Builtin (see comment on
+            // `canonical_kind_to_source`); LegacyDynamic captures
+            // dynamically-built tools that don't match a typed prefix.
+            // Treated as `Skill` for policy purposes — the most-restrictive
+            // bucket short of fully unknown.
+            CanonicalKind::Builtin | CanonicalKind::LegacyDynamic => PolicyToolSource::Skill,
+        }
+    }
+
+    /// ADR-149 / issue #485 — get tool definitions for the LLM (L2 gate).
+    ///
+    /// This is the **only** code path that should be used when handing tools
+    /// to the model. It consults the installed [`ToolVisibilityPolicy`] for
+    /// every registered tool at [`ToolGateLayer::LlmDefinitions`] and omits
+    /// any tool whose decision is [`ToolGateDecision::Hide`] or
+    /// [`ToolGateDecision::DenyArgs`]. `Allow` and `RequireApproval` keep
+    /// the tool visible (the L3 executor preflight makes the final
+    /// admit/deny call).
+    ///
+    /// **Cache awareness**: per Anthropic prompt-cache rules, the `tools:[]`
+    /// array participates in the cache key. Hiding a tool *changes* the
+    /// array and busts the cache. Callers SHOULD restrict `Hide` decisions
+    /// to first-turn / cold-cache scenarios and prefer `DenyArgs` once a
+    /// conversation is warm. The policy is the right place to enforce that
+    /// — this registry just applies the decision verbatim.
+    pub async fn tool_definitions_for_llm(
+        &self,
+        seed: &ToolGateContextSeed,
+    ) -> Vec<ToolDefinition> {
+        let tools = self.tools.read().await;
+        // Hoist the builtin-name set read outside the loop. Acquiring it
+        // once per call (rather than per tool) keeps the loop body free of
+        // additional `await` checkpoints, matching the yield profile of
+        // the legacy `tool_definitions_filtered` path. See
+        // `classify_policy_source_with` for the cross-task-interleaving
+        // rationale.
+        let builtin = self.builtin_names.read().await;
+        let mut defs: Vec<ToolDefinition> = Vec::with_capacity(tools.len());
+        for tool in tools.values() {
+            let source = Self::classify_policy_source_with(tool, &builtin);
+            let ctx = ToolGateContext {
+                tool_name: tool.name(),
+                source,
+                layer: ToolGateLayer::LlmDefinitions,
+                actor: &seed.actor,
+                tenant: &seed.tenant,
+                args: None,
+                env: seed.env,
+            };
+            match self.policy.check(&ctx).await {
+                ToolGateDecision::Allow | ToolGateDecision::RequireApproval(_) => {
+                    defs.push(Self::tool_definition(tool));
+                }
+                ToolGateDecision::Hide { .. } | ToolGateDecision::DenyArgs { .. } => {
+                    // omit from L2 catalog
+                }
+            }
+        }
+        defs.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+        defs
+    }
+
+    /// Read-only accessor for the installed visibility policy.
+    ///
+    /// Lets L3 (executor preflight) consult the same policy installed at
+    /// construction without threading a separate `Arc` through every call
+    /// site. Returned reference shares the underlying [`Arc`].
+    pub fn policy(&self) -> &SharedToolVisibilityPolicy {
+        &self.policy
+    }
+
+    /// ADR-149 / issue #485 — L3 executor preflight gate.
+    ///
+    /// Consults the installed [`ToolVisibilityPolicy`] at
+    /// [`ToolGateLayer::ExecutorPreflight`] for a tool that is about to
+    /// execute. Source classification reuses the same logic as
+    /// [`Self::tool_definitions_for_llm`] so L2 and L3 see the same
+    /// `source` for a given tool — there is no second source of truth
+    /// that an attacker could exploit by submitting a hallucinated tool
+    /// call that happens to slip past L2.
+    ///
+    /// Callers MUST treat any non-`Allow` decision as a hard reject and
+    /// surface the reason verbatim into the audit log. `RequireApproval`
+    /// is left to the executor to translate into the appropriate UI
+    /// flow; until that wiring lands the executor should treat it as
+    /// `Deny` (fail-safe).
+    pub async fn policy_check_executor(
+        &self,
+        tool: &Arc<dyn Tool>,
+        seed: &ToolGateContextSeed,
+        args: Option<&serde_json::Value>,
+    ) -> ToolGateDecision {
+        let source = self.classify_policy_source(tool).await;
+        let ctx = ToolGateContext {
+            tool_name: tool.name(),
+            source,
+            layer: ToolGateLayer::ExecutorPreflight,
+            actor: &seed.actor,
+            tenant: &seed.tenant,
+            args,
+            env: seed.env,
+        };
+        self.policy.check(&ctx).await
     }
 
     /// Register all built-in tools.

@@ -314,13 +314,26 @@ impl AppBuilder {
 
         // Initialize tool registry with credential injection support
         let credential_registry = Arc::new(SharedCredentialRegistry::new());
+        // ADR-149 / issue #485 — install the production
+        // `BlocklistPolicy` as the registry-wide visibility policy.
+        //
+        // Default flags = all enabled, mirroring the legacy
+        // `is_tool_enabled` semantics. The Admin Backend will later
+        // push disabled-tool updates via `system_settings`; rebuilding
+        // the policy from those updates is the planned hook point.
+        let feature_flags: crate::tools::feature_flags::SharedFeatureFlags =
+            Arc::new(crate::tools::feature_flags::ToolFeatureFlags::all_enabled());
+        let policy: dasclaw_governance::tool_visibility::SharedToolVisibilityPolicy = Arc::new(
+            crate::tools::feature_flags::BlocklistPolicy::new(Arc::clone(&feature_flags)),
+        );
         let tools = if let Some(ref ss) = self.secrets_store {
             Arc::new(
                 ToolRegistry::new()
-                    .with_credentials(Arc::clone(&credential_registry), Arc::clone(ss)),
+                    .with_credentials(Arc::clone(&credential_registry), Arc::clone(ss))
+                    .with_policy(Arc::clone(&policy)),
             )
         } else {
-            Arc::new(ToolRegistry::new())
+            Arc::new(ToolRegistry::new().with_policy(Arc::clone(&policy)))
         };
         // Build a single bootstrap context that aggregates every tool group
         // available at this init phase, then dispatch via `bootstrap_tools`.

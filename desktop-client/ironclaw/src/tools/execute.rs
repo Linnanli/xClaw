@@ -37,16 +37,47 @@ pub async fn execute_tool_with_safety(
             name: tool_name.to_string(),
         })?;
 
-    // Feature flag gate — reject disabled tools before any parameter work.
-    if !job_ctx.feature_flags.is_tool_enabled(tool_name) {
-        return Err(crate::error::ToolError::Disabled {
-            name: tool_name.to_string(),
-            reason: "disabled by feature flag".to_string(),
-        }
-        .into());
-    }
-
+    // ADR-149 / issue #485 — L3 executor preflight gate.
+    //
+    // Consult the registry's `ToolVisibilityPolicy` before any parameter
+    // work happens. This is the **last line of defense** against:
+    //   - LLM hallucinated tool calls (tool wasn't in L2 catalog)
+    //   - Stale prompt caches offering a tool the policy now hides
+    //   - Jailbreak prompts that try to invoke a disabled tool by name
+    //
+    // The seed encodes who/where; per-tool source classification happens
+    // inside `policy_check_executor` so L2 and L3 see identical sources.
+    // Non-`Allow` decisions are fail-safe: surface as `ToolError::Disabled`
+    // with the policy-provided reason, never silently allow through.
+    let seed = dasclaw_governance::tool_visibility::ToolGateContextSeed::system(
+        dasclaw_governance::tool_visibility::Env::Interactive,
+    );
     let normalized_params = prepare_tool_params(tool.as_ref(), &params);
+    let decision = tools
+        .policy_check_executor(&tool, &seed, Some(&normalized_params))
+        .await;
+    match decision {
+        dasclaw_governance::tool_visibility::ToolGateDecision::Allow => {}
+        dasclaw_governance::tool_visibility::ToolGateDecision::Hide { reason }
+        | dasclaw_governance::tool_visibility::ToolGateDecision::DenyArgs { reason } => {
+            return Err(crate::error::ToolError::Disabled {
+                name: tool_name.to_string(),
+                reason,
+            }
+            .into());
+        }
+        dasclaw_governance::tool_visibility::ToolGateDecision::RequireApproval(_) => {
+            // Until approval routing lands the executor MUST fail-safe.
+            // Surfacing as `Disabled` keeps the caller-side error path
+            // identical to a regular block; a richer UI flow will replace
+            // this branch when approval handling ships.
+            return Err(crate::error::ToolError::Disabled {
+                name: tool_name.to_string(),
+                reason: format!("tool '{tool_name}' requires approval (not yet wired)"),
+            }
+            .into());
+        }
+    }
 
     // Validate tool parameters
     let validation = safety.validator().validate_tool_params(&normalized_params);
@@ -619,7 +650,7 @@ mod tests {
         // BOTH `display` and `stash_content` while neither is dropped.
         let head = "{\"items\":[\"Authorization: ";
         let token = format!("Bearer {}", "a".repeat(40));
-        let filler: String = std::iter::repeat('x').take(500).collect();
+        let filler: String = "x".repeat(500);
         let raw = format!("{}{}\",\"{}\"]}}", head, token, filler);
         assert!(raw.len() > 100, "test payload must exceed cap");
 
