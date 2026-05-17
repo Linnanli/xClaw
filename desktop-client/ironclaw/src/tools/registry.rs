@@ -448,8 +448,24 @@ impl ToolRegistry {
     /// until #484 verifier ships). Classification uses the same canonical
     /// name parser as [`Self::register`].
     async fn classify_policy_source(&self, tool: &Arc<dyn Tool>) -> PolicyToolSource {
+        let builtin = self.builtin_names.read().await;
+        Self::classify_policy_source_with(tool, &builtin)
+    }
+
+    /// Same as [`Self::classify_policy_source`] but reuses a caller-held
+    /// snapshot of `builtin_names`. Hot iteration paths (L2 catalog build)
+    /// must hold the read lock once across the whole loop to avoid
+    /// per-tool `await` checkpoints — those checkpoints let unrelated
+    /// async tasks (e.g. a background job worker spawned by an earlier
+    /// tool call) interleave between iterations of the agent loop, which
+    /// breaks any shared scripted/replay LLM provider that relies on a
+    /// stable call sequence.
+    fn classify_policy_source_with(
+        tool: &Arc<dyn Tool>,
+        builtin: &std::collections::HashSet<String>,
+    ) -> PolicyToolSource {
         let name = tool.name();
-        if self.builtin_names.read().await.contains(name) {
+        if builtin.contains(name) {
             return PolicyToolSource::BuiltIn;
         }
         let canonical = CanonicalToolName::parse(name, false);
@@ -487,9 +503,16 @@ impl ToolRegistry {
         seed: &ToolGateContextSeed,
     ) -> Vec<ToolDefinition> {
         let tools = self.tools.read().await;
+        // Hoist the builtin-name set read outside the loop. Acquiring it
+        // once per call (rather than per tool) keeps the loop body free of
+        // additional `await` checkpoints, matching the yield profile of
+        // the legacy `tool_definitions_filtered` path. See
+        // `classify_policy_source_with` for the cross-task-interleaving
+        // rationale.
+        let builtin = self.builtin_names.read().await;
         let mut defs: Vec<ToolDefinition> = Vec::with_capacity(tools.len());
         for tool in tools.values() {
-            let source = self.classify_policy_source(tool).await;
+            let source = Self::classify_policy_source_with(tool, &builtin);
             let ctx = ToolGateContext {
                 tool_name: tool.name(),
                 source,

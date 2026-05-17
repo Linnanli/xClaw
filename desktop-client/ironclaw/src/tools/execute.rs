@@ -650,7 +650,7 @@ mod tests {
         // BOTH `display` and `stash_content` while neither is dropped.
         let head = "{\"items\":[\"Authorization: ";
         let token = format!("Bearer {}", "a".repeat(40));
-        let filler: String = std::iter::repeat('x').take(500).collect();
+        let filler: String = "x".repeat(500);
         let raw = format!("{}{}\",\"{}\"]}}", head, token, filler);
         assert!(raw.len() > 100, "test payload must exceed cap");
 
