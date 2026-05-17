@@ -541,7 +541,10 @@ static SLASH_THEN_DANGEROUS_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"/[^/]*\s+[wWeE]").expect("static regex")
 });
 
-static MALFORMED_SUBST_RE: Lazy<Regex> = Lazy::new(|| {
+/// Matches a *well-formed* `s/pat/repl/[flags]` substitution (exactly three
+/// unescaped `/` delimiters at top level). Used as `!is_match(...)` to flag
+/// `s/...`-prefixed commands that do not look like a proper substitution.
+static WELL_FORMED_SUBST_RE: Lazy<Regex> = Lazy::new(|| {
     #[allow(clippy::expect_used)]
     Regex::new(r"^s/[^/]*/[^/]*/[^/]*$").expect("static regex")
 });
@@ -614,7 +617,7 @@ pub fn contains_dangerous_operations(expression: &str) -> bool {
         return true;
     }
 
-    if cmd.starts_with("s/") && !MALFORMED_SUBST_RE.is_match(cmd) {
+    if cmd.starts_with("s/") && !WELL_FORMED_SUBST_RE.is_match(cmd) {
         return true;
     }
 
