@@ -10,6 +10,7 @@ pub mod dlp;
 pub mod dlp_integration;
 pub mod enterprise_policy_sync;
 pub mod policy_sync;
+pub mod safety_attachment_scanner;
 pub mod safety_bridge;
 
 // ── IronClaw 嵌入模块 ──────────────────────────────────────────────

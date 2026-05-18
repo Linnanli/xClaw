@@ -39,6 +39,12 @@ mod engine_state_timing_tests {
         };
         let safety = Arc::new(SafetyLayer::new(&safety_config));
         let safety_bridge = Arc::new(SafetyBridge::new(Arc::clone(&safety), None, None));
+        let egress: Arc<dyn x_claw_agent::EgressGate> = Arc::new(
+            ironclaw_safety::egress_gate::IronclawEgressGate::new(Arc::clone(&safety)),
+        );
+        let attachment_scanner = Arc::new(
+            crate::safety_attachment_scanner::AttachmentScanner::new(Arc::clone(&egress)),
+        );
         let tools = Arc::new(ToolRegistry::new());
         let context_manager = Arc::new(ContextManager::new(5));
         let data_reporter = Arc::new(crate::data_reporter::DataReporter::new(
@@ -64,6 +70,8 @@ mod engine_state_timing_tests {
             skills_config: ironclaw::config::SkillsConfig::default(),
             safety,
             safety_bridge,
+            attachment_scanner,
+            egress,
             context_manager,
             conversation_tracker: Arc::new(crate::conversation_tracker::ConversationTracker::new(
                 "test-owner".to_string(),

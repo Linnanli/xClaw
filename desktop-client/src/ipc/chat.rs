@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
 
 use crate::data_reporter::ConversationAttachment;
+use crate::safety_attachment_scanner::{AttachmentDecision, AttachmentScanner};
 use crate::state::EngineState;
 use crate::vercel_ui_protocol::VercelUIStream;
 
@@ -87,7 +88,8 @@ pub async fn send_chat_message(
 ) -> Result<SendMessageResponse, String> {
     let state = state.get()?;
     let message_id = uuid::Uuid::new_v4().to_string();
-    let (incoming_attachments, report_attachments) = build_attachments(attachments)?;
+    let (incoming_attachments, report_attachments) =
+        build_attachments(attachments, state.attachment_scanner.as_ref()).await?;
 
     // ── 配额预检：调用 Admin Backend 检查是否超额 ─────────────────
     if let Err(reason) = quota_precheck(state).await {
@@ -247,8 +249,9 @@ pub async fn ic_finalize_thread(
     Ok(())
 }
 
-fn build_attachments(
+async fn build_attachments(
     attachments: Option<Vec<FrontendAttachment>>,
+    scanner: &AttachmentScanner,
 ) -> Result<(Vec<IncomingAttachment>, Vec<ConversationAttachment>), String> {
     let mut incoming_attachments = Vec::new();
     let mut report_attachments = Vec::new();
@@ -261,13 +264,56 @@ fn build_attachments(
             _ => AttachmentKind::from_mime_type(&attachment.mime_type),
         };
 
+        // ── Attachment DLP gate (issue #92, ADR-148 §6.4) ─────
+        //
+        // Every attachment's `extracted_text` is routed through the
+        // project-wide `EgressGate` chain on **both** the LlmRequest
+        // and Persistence kinds before it reaches the agent loop or
+        // the audit reporter. Binary MIME types are checked against a
+        // small whitelist — anything else is rejected (fail-safe).
+        let has_binary_payload = !attachment.data.is_empty();
+        let decision = scanner
+            .scan(
+                &attachment.mime_type,
+                attachment.extracted_text.as_deref(),
+                has_binary_payload,
+            )
+            .await;
+
+        let extracted_text = match decision {
+            AttachmentDecision::Allow => attachment.extracted_text.clone(),
+            AttachmentDecision::Redact {
+                sanitized_text,
+                kinds_redacted,
+            } => {
+                tracing::info!(
+                    attachment_id = %attachment.id,
+                    mime = %attachment.mime_type,
+                    kinds = ?kinds_redacted,
+                    "attachment text redacted by EgressGate",
+                );
+                Some(sanitized_text)
+            }
+            AttachmentDecision::Block { reason } => {
+                tracing::warn!(
+                    attachment_id = %attachment.id,
+                    mime = %attachment.mime_type,
+                    "attachment blocked by EgressGate: {reason}",
+                );
+                return Err(format!(
+                    "Attachment `{}` was rejected by the DLP gate: {reason}",
+                    attachment.filename.as_deref().unwrap_or("(unnamed)")
+                ));
+            }
+        };
+
         report_attachments.push(ConversationAttachment::from_frontend(
             attachment.id.clone(),
             attachment.kind.clone(),
             attachment.mime_type.clone(),
             attachment.filename.clone(),
             attachment.size_bytes,
-            attachment.extracted_text.clone(),
+            extracted_text.clone(),
             &attachment.data,
             attachment.duration_secs,
         ));
@@ -280,7 +326,7 @@ fn build_attachments(
             size_bytes: attachment.size_bytes,
             source_url: None,
             storage_key: None,
-            extracted_text: attachment.extracted_text,
+            extracted_text,
             data: attachment.data,
             duration_secs: attachment.duration_secs,
         });
