@@ -45,7 +45,7 @@
 //!   line "明确禁止 port ANT-only").
 //! - Returns local [`BashRuleSuggestion`] value type instead of upstream
 //!   `PermissionUpdate[]` —- consumer (`dasclaw_hooks`) wraps into
-//!   `x_claw_agent::RuleSuggestion` at the hook boundary.
+//!   `dasclaw_core::RuleSuggestion` at the hook boundary.
 
 use crate::exact_match::BASH_TOOL_NAME;
 use crate::strip_env::SAFE_ENV_VARS;

@@ -1,4 +1,4 @@
-//! `x_claw_agent::SecretProvider` adapter for [`SecretsStore`].
+//! `dasclaw_core::SecretProvider` adapter for [`SecretsStore`].
 //!
 //! This adapter lets the agent runtime read user-scoped secrets through
 //! ironclaw's encrypted secrets store without depending on ironclaw
@@ -19,7 +19,7 @@
 //!
 //! Phase 3 Step F originally called for extracting `src/secrets/` into a
 //! separate `crates/ironclaw_secrets/` crate. As with sandbox, the
-//! architectural goal (clean `x_claw_agent` boundary) is achieved by
+//! architectural goal (clean `dasclaw_core` boundary) is achieved by
 //! the trait seam alone. The store trait (`SecretsStore`) already
 //! supports multiple backends (Postgres, LibSql, in-memory), so pulling
 //! the crate boundary to a different location adds layout churn without
@@ -40,12 +40,12 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use x_claw_agent::{SecretError as AgentSecretError, SecretProvider, SecretString};
+use dasclaw_core::{SecretError as AgentSecretError, SecretProvider, SecretString};
 
 use crate::secrets::store::SecretsStore;
 use crate::secrets::types::SecretError as IronclawSecretError;
 
-/// Adapter exposing [`SecretsStore`] as an `x_claw_agent::SecretProvider`
+/// Adapter exposing [`SecretsStore`] as an `dasclaw_core::SecretProvider`
 /// for a single user.
 ///
 /// `user_id` scopes every lookup; the underlying store enforces per-user

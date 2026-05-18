@@ -44,7 +44,7 @@
 
 use std::sync::Arc;
 
-use x_claw_agent::{EgressDecision, EgressGate, EgressKind};
+use dasclaw_core::{EgressDecision, EgressGate, EgressKind};
 
 /// Per-attachment scan decision returned by [`AttachmentScanner::scan`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -218,7 +218,7 @@ fn is_binary_mime_allowed(mime: &str) -> bool {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use x_claw_agent::RedactionStats;
+    use dasclaw_core::RedactionStats;
 
     /// Programmable test gate keyed by `EgressKind` discriminant.
     struct ScriptedGate {

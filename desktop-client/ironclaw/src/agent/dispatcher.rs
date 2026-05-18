@@ -22,7 +22,7 @@ use crate::agent::agentic_loop::{
 };
 use crate::llm::{ChatMessage, Reasoning, ReasoningContext};
 use crate::tools::redact_params;
-use x_claw_agent::traits::HostError;
+use dasclaw_core::traits::HostError;
 
 fn disabled_names_from_metadata(message: &IncomingMessage, key: &str) -> HashSet<String> {
     message

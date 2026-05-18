@@ -7,7 +7,7 @@
 //! | Static  | Identity + rules + tool specs + safety policy     | < 1×/week     | Long (1h)   |
 //! | Dynamic | Environment + memory + skills + MCP + admin policy| Every call    | None        |
 //!
-//! A boundary marker (see [`x_claw_agent::PROMPT_CACHE_BOUNDARY`]) separates
+//! A boundary marker (see [`dasclaw_core::PROMPT_CACHE_BOUNDARY`]) separates
 //! the two layers so Anthropic's automatic caching places the cache breakpoint
 //! correctly. Non-Anthropic models receive the combined prompt with no marker.
 
@@ -19,7 +19,7 @@ pub use static_layer::StaticLayer;
 
 use std::sync::Arc;
 
-use x_claw_agent::PROMPT_CACHE_BOUNDARY;
+use dasclaw_core::PROMPT_CACHE_BOUNDARY;
 
 use crate::llm::ToolDefinition;
 

@@ -1,7 +1,7 @@
 //! Agent conversation message types and helpers.
 //!
 //! 这些类型是 agent runtime 的**领域模型**，与具体的 LLM provider 协议无关。
-//! 原位于 `ironclaw::llm::provider`，Phase 3 Step D-0 搬入 `x_claw_agent` 作为
+//! 原位于 `ironclaw::llm::provider`，Phase 3 Step D-0 搬入 `dasclaw_core` 作为
 //! agent 核心的消息抽象。provider trait（`LlmProvider`）保留在应用层，因为它
 //! 依赖 provider 具体错误类型与计价（`rust_decimal`）。
 //!

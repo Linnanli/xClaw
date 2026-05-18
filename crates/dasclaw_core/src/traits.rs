@@ -1,4 +1,4 @@
-//! Collaboration traits used by `x_claw_agent` to talk to the host application
+//! Collaboration traits used by `dasclaw_core` to talk to the host application
 //! (ironclaw) without taking concrete dependencies on it.
 //!
 //! ## Why these exist
@@ -7,12 +7,12 @@
 //! (b) call an LLM with reasoning-cleanup applied. Both capabilities live in
 //! the host crate (ironclaw) and pull in heavy dependencies (`rust_decimal`,
 //! `WorkspaceError`, `Reasoning`, etc.) that we deliberately keep out of
-//! `x_claw_agent`.
+//! `dasclaw_core`.
 //!
 //! Instead we expose two narrow traits here. Ironclaw provides blanket
 //! implementations on its existing `Workspace` and `Reasoning` types in
 //! `desktop-client/ironclaw/src/agent/traits_impl.rs`, so call sites inside
-//! `x_claw_agent` see only `Arc<dyn WorkspaceWriter>` / `Arc<dyn LlmCompleter>`.
+//! `dasclaw_core` see only `Arc<dyn WorkspaceWriter>` / `Arc<dyn LlmCompleter>`.
 //!
 //! ## Scope
 //!
@@ -37,7 +37,7 @@ use crate::messages::CompletionRequest;
 /// Boxed error returned by host-provided trait methods.
 ///
 /// Concrete error types (`WorkspaceError`, `LlmError`, etc.) stay in ironclaw;
-/// `x_claw_agent` only sees the boxed dyn-error and propagates it.
+/// `dasclaw_core` only sees the boxed dyn-error and propagates it.
 pub type HostError = Box<dyn std::error::Error + Send + Sync>;
 
 /// Append-only workspace writer used by context compaction and similar

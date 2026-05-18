@@ -21,16 +21,16 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use dasclaw_core::agentic_loop::{
+    AgenticLoopConfig, LoopDelegate, LoopOutcome, LoopSignal, TextAction, run_agentic_loop,
+};
+use dasclaw_core::messages::FinishReason;
+use dasclaw_core::reasoning_ctx::ReasoningContext;
+use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
+use dasclaw_core::{ChatMessage, HookBundle, HostError, ToolCall};
 use ironclaw_safety::egress_gate::IronclawEgressGate;
 use ironclaw_safety::{SafetyConfig, SafetyLayer};
 use tokio::sync::Mutex;
-use x_claw_agent::agentic_loop::{
-    AgenticLoopConfig, LoopDelegate, LoopOutcome, LoopSignal, TextAction, run_agentic_loop,
-};
-use x_claw_agent::messages::FinishReason;
-use x_claw_agent::reasoning_ctx::ReasoningContext;
-use x_claw_agent::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
-use x_claw_agent::{ChatMessage, HookBundle, HostError, ToolCall};
 
 /// Minimal `LoopDelegate` that returns pre-canned LLM responses.
 struct StubDelegate {

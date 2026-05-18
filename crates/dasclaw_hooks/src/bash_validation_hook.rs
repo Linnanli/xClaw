@@ -1,4 +1,4 @@
-//! `BashValidationHook` — wraps [`x_claw_agent::bash_validation::validate_command`]
+//! `BashValidationHook` — wraps [`dasclaw_core::bash_validation::validate_command`]
 //! as a [`EgressGate`] implementation.
 //!
 //! # Status
@@ -74,10 +74,10 @@ use dasclaw_bash_validation::path_validation::PathValidationOutcome;
 use dasclaw_bash_validation::security::{
     DecisionReason as SecurityDecisionReason, SecurityResult, validate_security,
 };
+use dasclaw_core::bash_validation::{ValidationResult, validate_command};
+use dasclaw_core::permissions::PermissionMode;
+use dasclaw_core::{EgressDecision, EgressGate, EgressKind, RedactionStats};
 use serde_json::Value;
-use x_claw_agent::bash_validation::{ValidationResult, validate_command};
-use x_claw_agent::permissions::PermissionMode;
-use x_claw_agent::{EgressDecision, EgressGate, EgressKind, RedactionStats};
 
 /// Default list of tool names treated as bash invocations.
 ///
@@ -708,7 +708,7 @@ mod tests {
     /// Smoke: `Ask` with non-empty suggestions clones / equates correctly.
     #[test]
     fn req_safety_73_c_ask_with_suggestions_round_trips() {
-        use x_claw_agent::{RuleAction, RuleSuggestion};
+        use dasclaw_core::{RuleAction, RuleSuggestion};
         let d = EgressDecision::Ask {
             reason: "Confirm `rm`?".to_string(),
             suggestions: vec![

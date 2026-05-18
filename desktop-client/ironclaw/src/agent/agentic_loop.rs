@@ -1,7 +1,7 @@
 //! Unified agentic loop engine — re-export shim.
 //!
 //! Phase 3 Step D-4.5: the real engine moved to
-//! [`x_claw_agent::agentic_loop`]. This module now only re-exports the
+//! [`dasclaw_core::agentic_loop`]. This module now only re-exports the
 //! public surface so existing `use crate::agent::agentic_loop::{...}` call
 //! sites (in [`crate::agent::dispatcher`], [`crate::worker::job`],
 //! [`crate::worker::container`]) keep resolving unchanged.
@@ -9,29 +9,29 @@
 //! Route-B: `LoopDelegate::call_llm` and `run_agentic_loop` no longer take
 //! `reasoning: &Reasoning`. Each delegate now owns a `Reasoning` engine as a
 //! field and uses `self.reasoning` directly. Error type at the trait
-//! boundary is `x_claw_agent::traits::HostError`
+//! boundary is `dasclaw_core::traits::HostError`
 //! (`Box<dyn std::error::Error + Send + Sync>`); ironclaw's internal
 //! helpers keep returning `crate::error::Error` and rely on the blanket
 //! `From<E> for Box<dyn Error + Send + Sync>` to cross the boundary via
 //! `?` or `.map_err(Into::into)`.
 
-pub use x_claw_agent::agentic_loop::{
+pub use dasclaw_core::agentic_loop::{
     AgenticLoopConfig, LoopDelegate, LoopOutcome, LoopSignal, TextAction, run_agentic_loop,
 };
-pub use x_claw_agent::intent::truncate_for_preview;
+pub use dasclaw_core::intent::truncate_for_preview;
 // Issue #73 slice D: re-export PermissionMode so call sites (dispatcher,
 // worker/job, worker/container) construct hook bundles without depending
-// directly on x_claw_agent::permissions. The session-config layer that
+// directly on dasclaw_core::permissions. The session-config layer that
 // eventually decides the mode lives in this crate — agent kernel stays
 // agnostic.
-pub use x_claw_agent::permissions::PermissionMode;
+pub use dasclaw_core::permissions::PermissionMode;
 // Issue #73 slice E: workspace boundary is now sourced from a
 // capability-validated `WorkspaceCapability` instead of a raw `PathBuf`.
 // Re-exported so call sites don't have to depend on `dasclaw_workspace_cap`
 // directly.
 pub use dasclaw_workspace_cap::WorkspaceCapability;
 
-use x_claw_agent::traits::HostError;
+use dasclaw_core::traits::HostError;
 
 /// Convert a `HostError` produced by the engine back into ironclaw's
 /// concrete [`crate::error::Error`].
@@ -52,7 +52,7 @@ pub(crate) fn host_err_to_error(e: HostError) -> crate::error::Error {
     }
 }
 
-/// Build an `x_claw_agent::HookBundle` whose `egress` slot is wired to a
+/// Build an `dasclaw_core::HookBundle` whose `egress` slot is wired to a
 /// [`dasclaw_governance::CompositeEgressGate`] (ADR-148) chaining
 /// [`dasclaw_hooks::BashValidationHook`] (bash command-string validation,
 /// issue #73 slice A1) → [`ironclaw_safety::egress_gate::IronclawEgressGate`]
@@ -73,9 +73,9 @@ pub fn hook_bundle_with_safety(
     safety: std::sync::Arc<crate::safety::SafetyLayer>,
     workspace_cap: std::sync::Arc<WorkspaceCapability>,
     permission_mode: PermissionMode,
-) -> x_claw_agent::HookBundle {
+) -> dasclaw_core::HookBundle {
     use std::sync::Arc;
-    let composite = x_claw_agent::CompositeEgressGate::builder()
+    let composite = dasclaw_core::CompositeEgressGate::builder()
         .add(
             "bash-validation",
             Arc::new(dasclaw_hooks::BashValidationHook::new(
@@ -90,7 +90,7 @@ pub fn hook_bundle_with_safety(
             )),
         )
         .build();
-    let mut bundle = x_claw_agent::HookBundle::noop();
+    let mut bundle = dasclaw_core::HookBundle::noop();
     bundle.egress = Arc::new(composite);
     bundle
 }
@@ -113,7 +113,7 @@ pub fn hook_bundle_with_safety_and_secrets(
     user_id: impl Into<String>,
     workspace_cap: std::sync::Arc<WorkspaceCapability>,
     permission_mode: PermissionMode,
-) -> x_claw_agent::HookBundle {
+) -> dasclaw_core::HookBundle {
     let mut bundle = hook_bundle_with_safety(safety, workspace_cap, permission_mode);
     if let Some(store) = tools.secrets_store() {
         bundle.secrets = std::sync::Arc::new(crate::secrets::agent_provider::AgentSecrets::new(
@@ -259,7 +259,7 @@ mod tests {
     /// at the bash gate — proves the mode parameter is consumed.
     #[tokio::test]
     async fn req_safety_73_d_read_only_blocks_destructive_command() {
-        use x_claw_agent::{EgressDecision, EgressKind};
+        use dasclaw_core::{EgressDecision, EgressKind};
         let bundle = hook_bundle_with_safety(
             safety_layer(),
             test_workspace_cap(),
@@ -286,7 +286,7 @@ mod tests {
     /// Different mode in == different decision out: the threading works.
     #[tokio::test]
     async fn req_safety_73_d_workspace_write_allows_destructive_command() {
-        use x_claw_agent::{EgressDecision, EgressKind};
+        use dasclaw_core::{EgressDecision, EgressKind};
         let bundle = hook_bundle_with_safety(
             safety_layer(),
             test_workspace_cap(),
@@ -312,7 +312,7 @@ mod tests {
     /// gate the destructive command behind user confirmation.
     #[tokio::test]
     async fn req_safety_73_d_prompt_mode_asks_on_destructive_command() {
-        use x_claw_agent::{EgressDecision, EgressKind};
+        use dasclaw_core::{EgressDecision, EgressKind};
         let bundle =
             hook_bundle_with_safety(safety_layer(), test_workspace_cap(), PermissionMode::Prompt);
         let args = serde_json::json!({ "command": "rm -rf /tmp/req_safety_73_d" });
@@ -335,7 +335,7 @@ mod tests {
     /// maps Warn → Allow + info-level log).
     #[tokio::test]
     async fn req_safety_73_d_danger_full_access_allows_destructive_command() {
-        use x_claw_agent::{EgressDecision, EgressKind};
+        use dasclaw_core::{EgressDecision, EgressKind};
         let bundle = hook_bundle_with_safety(
             safety_layer(),
             test_workspace_cap(),
@@ -362,7 +362,7 @@ mod tests {
     /// future refactors that drop the parameter on one path.
     #[tokio::test]
     async fn req_safety_73_d_with_secrets_helper_threads_permission_mode() {
-        use x_claw_agent::{EgressDecision, EgressKind};
+        use dasclaw_core::{EgressDecision, EgressKind};
         let tools = registry_without_secrets();
         let bundle = hook_bundle_with_safety_and_secrets(
             safety_layer(),
@@ -418,7 +418,7 @@ mod tests {
     /// end-to-end into the bash hook).
     #[tokio::test]
     async fn req_safety_73_e_workspace_cap_threads_through_safety_helper() {
-        use x_claw_agent::{EgressDecision, EgressKind};
+        use dasclaw_core::{EgressDecision, EgressKind};
         let tmp = tempfile::tempdir().expect("tempdir");
         let cap = Arc::new(
             WorkspaceCapability::open(tmp.path())
@@ -448,7 +448,7 @@ mod tests {
     /// callers use.
     #[tokio::test]
     async fn req_safety_73_e_workspace_cap_threads_through_secrets_helper() {
-        use x_claw_agent::{EgressDecision, EgressKind};
+        use dasclaw_core::{EgressDecision, EgressKind};
         let tmp = tempfile::tempdir().expect("tempdir");
         let cap = Arc::new(
             WorkspaceCapability::open(tmp.path())

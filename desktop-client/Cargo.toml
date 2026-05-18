@@ -47,7 +47,7 @@ dasclaw_sandbox = { path = "../crates/dasclaw_sandbox" }
 # EgressGate trait (ADR-148) — single seam for data leaving the agent's
 # trust boundary. Used to gate attachment extracted_text on both the
 # LlmRequest and Persistence egress kinds.
-x_claw_agent = { path = "../crates/x_claw_agent" }
+dasclaw_core = { path = "../crates/dasclaw_core" }
 
 # IronClaw embedded server (ADR-114 Ⅴ: package was renamed to `dasclaw`,
 # alias the extern name back to `ironclaw` so all `use ironclaw::` imports

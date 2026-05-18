@@ -1,7 +1,7 @@
 //! LLM provider trait.
 //!
 //! Phase 3 Step D-0：消息领域类型（`ChatMessage`、`ToolCall`、`ContentPart` 等）
-//! 已搬到 [`x_claw_agent::messages`]，此处仅保留 provider trait 本身，并通过
+//! 已搬到 [`dasclaw_core::messages`]，此处仅保留 provider trait 本身，并通过
 //! `pub use` 保持原有模块路径的向后兼容，避免成百上千的 `use crate::llm::...`
 //! 需要立即改动。
 //!
@@ -15,7 +15,7 @@ use crate::llm::error::LlmError;
 
 // Re-export the agent-runtime domain model so existing `use crate::llm::ChatMessage`
 // / `crate::llm::provider::ChatMessage` sites keep working unchanged.
-pub use x_claw_agent::messages::{
+pub use dasclaw_core::messages::{
     ChatMessage, CompletionRequest, CompletionResponse, ContentPart, FinishReason, ImageUrl,
     ModelMetadata, Role, ToolCall, ToolCompletionRequest, ToolCompletionResponse, ToolDefinition,
     ToolResult, generate_tool_call_id, sanitize_tool_messages, strip_unsupported_completion_params,

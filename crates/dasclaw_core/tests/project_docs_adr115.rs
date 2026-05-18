@@ -15,7 +15,7 @@ fn project_docs_source() -> PathBuf {
 }
 
 #[test]
-fn req_x_claw_agent_59b_adr115_no_dasclaw_hooks_reference() {
+fn req_dasclaw_core_59b_adr115_no_dasclaw_hooks_reference() {
     let body = fs::read_to_string(project_docs_source())
         .expect("project_docs.rs must exist for #59b injection path");
 

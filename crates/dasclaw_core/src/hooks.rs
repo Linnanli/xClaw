@@ -1,7 +1,7 @@
-//! Hook trait seams exposed by `x_claw_agent`.
+//! Hook trait seams exposed by `dasclaw_core`.
 //!
 //! These four traits define the crate boundary between the agent runtime
-//! (owned by `x_claw_agent`) and the pluggable surrounding environment
+//! (owned by `dasclaw_core`) and the pluggable surrounding environment
 //! (egress gating, sandboxed execution, secret storage, approval flow).
 //!
 //! Design constraints:
@@ -51,7 +51,7 @@ pub use dasclaw_governance::egress::{
 /// Pluggable network-proxy hint passed through to the sandbox runtime.
 ///
 /// Mirrors `dasclaw_net_proxy::NetworkProxy`'s relevant surface for the IPC
-/// boundary but stays dependency-free so `x_claw_agent` can continue to
+/// boundary but stays dependency-free so `dasclaw_core` can continue to
 /// serialize sandbox requests over NDJSON without pulling the proxy crate
 /// (see this module's design constraint "No ironclaw / claw-code
 /// dependency").
@@ -120,7 +120,7 @@ pub enum SandboxError {
 ///
 /// # Phase 3 状态 — 见 ADR-001
 ///
-/// 本 trait 是 `x_claw_agent` 面向未来多 runtime（wasm、进程内 VM 等）的
+/// 本 trait 是 `dasclaw_core` 面向未来多 runtime（wasm、进程内 VM 等）的
 /// **可选 hook 契约**。Phase 3 的 ironclaw 集成中 **不会** 被接线：
 ///
 /// - ironclaw 侧永远注入 [`NoopSandboxExecutor`]；

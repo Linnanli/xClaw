@@ -31,7 +31,7 @@ use crate::worker::autonomous_recovery::{
     EMPTY_TOOL_COMPLETION_NUDGE, FORCE_TEXT_RECOVERY_PROMPT,
 };
 use crate::worker::proxy_llm::ProxyLlmProvider;
-use x_claw_agent::traits::HostError;
+use dasclaw_core::traits::HostError;
 
 /// Configuration for the worker runtime.
 pub struct WorkerConfig {

@@ -35,9 +35,9 @@ use crate::worker::autonomous_recovery::{
     AutonomousRecoveryAction, AutonomousRecoveryState, EMPTY_TOOL_COMPLETION_FAILURE,
     EMPTY_TOOL_COMPLETION_NUDGE, FORCE_TEXT_RECOVERY_PROMPT,
 };
+use dasclaw_core::traits::HostError;
 use dasclaw_hooks::HookRegistry;
 use ironclaw_common::AppEvent;
-use x_claw_agent::traits::HostError;
 
 /// Shared dependencies for worker execution.
 ///
@@ -1858,8 +1858,8 @@ fn selections_to_tool_calls(selections: &[ToolSelection]) -> Vec<ToolCall> {
 }
 
 // Note: `impl From<TaskOutput> for Result<String, Error>` was removed during the
-// x_claw_agent extraction (Phase 3 Step D-1). `TaskOutput` now lives in the
-// external `x_claw_agent` crate, which trips Rust's orphan rules. The impl had
+// dasclaw_core extraction (Phase 3 Step D-1). `TaskOutput` now lives in the
+// external `dasclaw_core` crate, which trips Rust's orphan rules. The impl had
 // no call sites in the workspace; if a conversion is needed again, add a free
 // function here (`fn task_output_to_result(o: TaskOutput) -> Result<String, Error>`).
 

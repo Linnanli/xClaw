@@ -1,4 +1,4 @@
-//! `x_claw_agent` — agent runtime fork of `claw-code` for the x-claw project.
+//! `dasclaw_core` — agent runtime fork of `claw-code` for the x-claw project.
 //!
 //! This crate starts as an **empty scaffold** (Phase 3 Step B). Subsequent steps
 //! will:

@@ -1,4 +1,4 @@
-//! `x_claw_agent::EgressGate` adapter for [`SafetyLayer`] (ADR-148).
+//! `dasclaw_core::EgressGate` adapter for [`SafetyLayer`] (ADR-148).
 //!
 //! This module is gated behind the `egress-gate` feature so `ironclaw_safety`
 //! stays dependency-free for its original callers (HTTP middleware, inbound
@@ -16,17 +16,17 @@
 //!
 //! All paths are **Fail-Safe**: on internal error we return `Block`, never
 //! `Allow`. Composition with bash gates is done at the caller via
-//! [`x_claw_agent::CompositeEgressGate`].
+//! [`dasclaw_core::CompositeEgressGate`].
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use dasclaw_core::{EgressDecision, EgressGate, EgressKind, RedactionStats};
 use serde_json::Value;
-use x_claw_agent::{EgressDecision, EgressGate, EgressKind, RedactionStats};
 
 use crate::SafetyLayer;
 
-/// Adapter that exposes [`SafetyLayer`] as an `x_claw_agent::EgressGate`.
+/// Adapter that exposes [`SafetyLayer`] as an `dasclaw_core::EgressGate`.
 ///
 /// `Arc` is used so the same layer can be shared across the agent runtime,
 /// background jobs, and HTTP middleware without duplicating state.

@@ -138,7 +138,7 @@ fn strip_quoted_strings(line: &str) -> String {
 /// Find the largest valid UTF-8 char boundary at or before `pos`.
 ///
 /// Private copy of ironclaw's `util::floor_char_boundary` polyfill, kept
-/// local so `x_claw_agent` stays free of ironclaw dependencies.
+/// local so `dasclaw_core` stays free of ironclaw dependencies.
 fn floor_char_boundary(s: &str, pos: usize) -> usize {
     if pos >= s.len() {
         return s.len();

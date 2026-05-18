@@ -15,7 +15,7 @@ use uuid::Uuid;
 ///
 /// Uses a boxed `std::error::Error` so handlers defined in downstream crates
 /// (ironclaw application layer or beyond) can return their own domain errors
-/// without `x_claw_agent` pulling those types down into the runtime crate.
+/// without `dasclaw_core` pulling those types down into the runtime crate.
 pub type TaskHandlerError = Box<dyn std::error::Error + Send + Sync>;
 
 /// Result of a task execution.

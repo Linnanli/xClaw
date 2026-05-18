@@ -7,7 +7,7 @@
 //! plan variant C'). The behaviour is identical; the only change is that the
 //! concrete `HookRegistry` dependency is replaced with the
 //! [`SessionHooks`](crate::session_hooks::SessionHooks) trait so this module
-//! lives in the `x_claw_agent` runtime crate.
+//! lives in the `dasclaw_core` runtime crate.
 
 use std::collections::HashMap;
 use std::sync::Arc;

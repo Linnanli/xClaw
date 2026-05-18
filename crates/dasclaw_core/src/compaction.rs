@@ -8,7 +8,7 @@
 //! This module was ported from `ironclaw::agent::compaction` as part of Phase 3
 //! Step D-2. The original depended on ironclaw's concrete `Workspace` and
 //! `Reasoning` types; the port substitutes the [`crate::traits`] host traits so
-//! `x_claw_agent` stays free of application-layer deps (`rust_decimal`,
+//! `dasclaw_core` stays free of application-layer deps (`rust_decimal`,
 //! `WorkspaceError`, `LlmError`). Ironclaw provides blanket impls, so existing
 //! call sites only change by wrapping `Arc<dyn LlmProvider>` in a `Reasoning`
 //! before handing it to `ContextCompactor::new`.

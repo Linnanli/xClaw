@@ -37,11 +37,11 @@
 
 use std::path::PathBuf;
 
+use dasclaw_core::EgressDecision;
+use dasclaw_core::permissions::PermissionMode;
 use dasclaw_hooks::BashValidationHook;
 use serde_json::json;
 use tracing_test::traced_test;
-use x_claw_agent::EgressDecision;
-use x_claw_agent::permissions::PermissionMode;
 
 /// Newline-injection sample — same fixture as the inline Slice 2.1.d
 /// tests; trips `validate_security` via the `Newlines` /

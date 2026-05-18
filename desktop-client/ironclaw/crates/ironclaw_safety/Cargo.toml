@@ -20,17 +20,17 @@ thiserror = "2"
 tracing = "0.1"
 url = "2"
 
-# Optional: adapter that implements `x_claw_agent::EgressGate` so the agent
+# Optional: adapter that implements `dasclaw_core::EgressGate` so the agent
 # runtime can plug SafetyLayer in at the single egress hook point without
 # taking a hard dependency on ironclaw.
 async-trait = { version = "0.1", optional = true }
-x_claw_agent = { path = "../../../../crates/x_claw_agent", optional = true }
+dasclaw_core = { path = "../../../../crates/dasclaw_core", optional = true }
 
 [features]
 default = []
 # Enables the `egress_gate` module: `IronclawEgressGate` adapter for
-# `x_claw_agent::EgressGate` (ADR-148).
-egress-gate = ["dep:async-trait", "dep:x_claw_agent"]
+# `dasclaw_core::EgressGate` (ADR-148).
+egress-gate = ["dep:async-trait", "dep:dasclaw_core"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros", "sync"] }

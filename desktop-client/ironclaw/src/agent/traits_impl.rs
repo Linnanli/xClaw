@@ -1,16 +1,16 @@
-//! Ironclaw-side blanket implementations for the `x_claw_agent::traits`
+//! Ironclaw-side blanket implementations for the `dasclaw_core::traits`
 //! collaboration interfaces.
 //!
 //! Keeping all `impl XHostTrait for IronclawType` blocks in a single file makes
 //! the host-side surface auditable: when a new trait is added to
-//! `x_claw_agent::traits`, exactly one ironclaw file needs to change to wire
+//! `dasclaw_core::traits`, exactly one ironclaw file needs to change to wire
 //! it up.
 //!
-//! See [`x_claw_agent::traits`] for the rationale.
+//! See [`dasclaw_core::traits`] for the rationale.
 
 use async_trait::async_trait;
-use x_claw_agent::messages::CompletionRequest;
-use x_claw_agent::traits::{HostError, LlmCompleter, WorkspaceWriter};
+use dasclaw_core::messages::CompletionRequest;
+use dasclaw_core::traits::{HostError, LlmCompleter, WorkspaceWriter};
 
 use crate::llm::Reasoning;
 use crate::workspace::Workspace;
@@ -37,7 +37,7 @@ impl LlmCompleter for Reasoning {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use x_claw_agent::messages::ChatMessage;
+    use dasclaw_core::messages::ChatMessage;
 
     /// `Workspace` implements `WorkspaceWriter` and is dyn-compatible.
     /// We do not exercise an actual write here because `Workspace::append`
@@ -90,7 +90,7 @@ mod tests {
             ) -> Result<CompletionResponse, LlmError> {
                 Ok(CompletionResponse {
                     content: "<think>scratch</think>final answer".to_string(),
-                    finish_reason: x_claw_agent::messages::FinishReason::Stop,
+                    finish_reason: dasclaw_core::messages::FinishReason::Stop,
                     input_tokens: 1,
                     output_tokens: 2,
                     cache_read_input_tokens: 0,

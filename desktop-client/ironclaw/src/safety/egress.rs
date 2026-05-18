@@ -20,7 +20,7 @@
 //! `Arc<SafetyLayer>` the caller already holds, wraps it in an
 //! [`IronclawEgressGate`] (the canonical adapter from `SafetyLayer` to
 //! [`EgressGate`]), runs the gate, and applies the decision via
-//! [`x_claw_agent::egress_apply::apply_egress_decision`] — the same helper
+//! [`dasclaw_core::egress_apply::apply_egress_decision`] — the same helper
 //! the agentic loop's `LlmRequest`/`UserDisplay` sites use. One Fail-Safe
 //! semantics surface, nine identical call-site rewrites, zero ctor changes.
 //!
@@ -51,10 +51,10 @@
 
 use std::sync::Arc;
 
+use dasclaw_core::egress_apply::{EgressApply, apply_egress_decision};
 use dasclaw_governance::egress::{EgressGate, EgressKind};
 use ironclaw_safety::SafetyLayer;
 use ironclaw_safety::egress_gate::IronclawEgressGate;
-use x_claw_agent::egress_apply::{EgressApply, apply_egress_decision};
 
 /// Run `payload` through the ADR-148 Layer-B egress gate and return the
 /// sanitised string ready to be embedded in LLM context, channel events,

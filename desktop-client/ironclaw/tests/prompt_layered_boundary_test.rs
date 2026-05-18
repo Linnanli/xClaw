@@ -1,7 +1,7 @@
 //! P0-1 红测：Prompt 装配三连收口（W3-A Phase 0 ADR-112 §5）
 //!
 //! 三层断言：
-//! - **(c) 常量统一**：`x_claw_agent::PROMPT_CACHE_BOUNDARY` 是单一权威字面量，
+//! - **(c) 常量统一**：`dasclaw_core::PROMPT_CACHE_BOUNDARY` 是单一权威字面量，
 //!   等于 claw-code 上游基线 `__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__`。
 //! - **(a) Builder 单一路径**：ironclaw `build_system_prompt_with_tools` 对 Claude
 //!   模型永远输出含 boundary 的 prompt，不依赖 `IRONCLAW_PROMPT_LAYERING` 环境变量。
@@ -22,7 +22,7 @@ use std::sync::Arc;
 fn req_p01_c_prompt_cache_boundary_constant_matches_claw_code_baseline() {
     // 字面量沿用 claw-code 上游 SYSTEM_PROMPT_DYNAMIC_BOUNDARY（Q1-A 决策）
     assert_eq!(
-        x_claw_agent::PROMPT_CACHE_BOUNDARY,
+        dasclaw_core::PROMPT_CACHE_BOUNDARY,
         "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__",
         "PROMPT_CACHE_BOUNDARY must match claw-code upstream baseline literal"
     );
@@ -40,7 +40,7 @@ fn req_p01_a_build_system_prompt_with_tools_always_layered_for_claude() {
     let prompt = reasoning.build_system_prompt_with_tools(&[]);
 
     assert!(
-        prompt.contains(x_claw_agent::PROMPT_CACHE_BOUNDARY),
+        prompt.contains(dasclaw_core::PROMPT_CACHE_BOUNDARY),
         "Claude model must always get cache boundary marker (env-independent), \
          got prompt:\n{prompt}"
     );
@@ -55,7 +55,7 @@ fn req_p01_a_build_system_prompt_with_tools_no_boundary_for_non_claude() {
     let prompt = reasoning.build_system_prompt_with_tools(&[]);
 
     assert!(
-        !prompt.contains(x_claw_agent::PROMPT_CACHE_BOUNDARY),
+        !prompt.contains(dasclaw_core::PROMPT_CACHE_BOUNDARY),
         "Non-Claude model must NOT get cache boundary marker"
     );
 }

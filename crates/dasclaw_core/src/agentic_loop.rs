@@ -11,7 +11,7 @@
 //!
 //! The upstream engine took a `&Reasoning` and passed it through every
 //! `call_llm` invocation. That made the engine aware of ironclaw's concrete
-//! LLM engine and forced the `x_claw_agent` port to invent a trait facade.
+//! LLM engine and forced the `dasclaw_core` port to invent a trait facade.
 //!
 //! Route B removes the `reasoning` parameter entirely: each delegate owns
 //! whatever LLM engine it needs internally. The engine only sees

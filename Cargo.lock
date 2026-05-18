@@ -2649,6 +2649,7 @@ dependencies = [
  "dasclaw",
  "dasclaw_apply_patch",
  "dasclaw_cert_trust",
+ "dasclaw_core",
  "dasclaw_exec",
  "dasclaw_governance",
  "dasclaw_hooks",
@@ -2733,7 +2734,6 @@ dependencies = [
  "wasmtime-wasi",
  "webpki-roots 0.26.11",
  "windows 0.58.0",
- "x_claw_agent",
  "zbus",
  "zip",
 ]
@@ -2817,6 +2817,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "dasclaw_core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "dasclaw_governance",
+ "dasclaw_project_docs",
+ "ironclaw_common",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "dasclaw_crash"
 version = "0.0.0-w1"
 dependencies = [
@@ -2888,6 +2906,7 @@ dependencies = [
  "chrono",
  "dasclaw_bash_permissions",
  "dasclaw_bash_validation",
+ "dasclaw_core",
  "regex",
  "reqwest 0.12.28",
  "serde",
@@ -2897,7 +2916,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-test",
- "x_claw_agent",
 ]
 
 [[package]]
@@ -3422,6 +3440,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "dasclaw",
+ "dasclaw_core",
  "dasclaw_sandbox",
  "dirs 6.0.0",
  "dotenvy",
@@ -3452,7 +3471,6 @@ dependencies = [
  "uuid",
  "windows 0.58.0",
  "wiremock",
- "x_claw_agent",
  "zbus",
 ]
 
@@ -5773,13 +5791,13 @@ version = "0.2.0"
 dependencies = [
  "aho-corasick",
  "async-trait",
+ "dasclaw_core",
  "regex",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
  "url",
- "x_claw_agent",
 ]
 
 [[package]]
@@ -14536,24 +14554,6 @@ dependencies = [
  "rusticata-macros",
  "thiserror 2.0.18",
  "time",
-]
-
-[[package]]
-name = "x_claw_agent"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "dasclaw_governance",
- "dasclaw_project_docs",
- "ironclaw_common",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "uuid",
 ]
 
 [[package]]

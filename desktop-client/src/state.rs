@@ -32,6 +32,7 @@
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock, RwLock};
 
+use dasclaw_core::EgressGate;
 use ironclaw::agent::routine_engine::RoutineEngine;
 use ironclaw::channels::web::log_layer::LogBroadcaster;
 use ironclaw::channels::IncomingMessage;
@@ -47,7 +48,6 @@ use ironclaw::tools::ToolRegistry;
 use ironclaw::workspace::Workspace;
 use tokio::sync::mpsc;
 use uuid::Uuid;
-use x_claw_agent::EgressGate;
 
 use crate::conversation_tracker::ConversationTracker;
 use crate::data_reporter::DataReporter;

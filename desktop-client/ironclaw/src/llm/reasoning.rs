@@ -3,7 +3,7 @@
 //! Phase 3 Step D-4: The data types that flow through the agentic loop
 //! (`ReasoningContext`, `TokenUsage`, `RespondOutput`, etc.) and the
 //! tool-intent detection helpers have moved to the
-//! [`x_claw_agent`](../../../../x_claw_agent/index.html) crate. This module
+//! [`dasclaw_core`](../../../../dasclaw_core/index.html) crate. This module
 //! re-exports them so existing `use crate::llm::reasoning::...` /
 //! `crate::llm::{...}` sites keep working unchanged. The `Reasoning` engine
 //! itself stays here because it depends on `LlmProvider` / `LlmError`.
@@ -23,11 +23,11 @@ use crate::llm::{
 // Data types that flow through the agentic loop — re-exported from the
 // agent-runtime crate so downstream `use crate::llm::{ReasoningContext, ...}`
 // keeps resolving.
-pub use x_claw_agent::intent::{
+pub use dasclaw_core::intent::{
     TOOL_INTENT_NUDGE, TRUNCATED_TOOL_CALL_NOTICE, llm_signals_tool_intent,
 };
-pub use x_claw_agent::reasoning_ctx::ReasoningContext;
-pub use x_claw_agent::response_types::{
+pub use dasclaw_core::reasoning_ctx::ReasoningContext;
+pub use dasclaw_core::response_types::{
     RespondOutput, RespondResult, ResponseAnomaly, ResponseMetadata, TokenUsage,
 };
 
@@ -802,7 +802,7 @@ Respond with a JSON plan in this format:
     /// layered path and a string-concat fallback. The fallback was removed and
     /// the env var deleted; the layered path is the single source of truth.
     ///
-    /// [`PROMPT_CACHE_BOUNDARY`]: x_claw_agent::PROMPT_CACHE_BOUNDARY
+    /// [`PROMPT_CACHE_BOUNDARY`]: dasclaw_core::PROMPT_CACHE_BOUNDARY
     pub fn build_system_prompt_with_tools(&self, tools: &[ToolDefinition]) -> String {
         use crate::llm::prompt::{DynamicLayerInput, LayeredPromptBuilder, StaticLayerConfig};
 
@@ -2599,7 +2599,7 @@ That's my plan."#;
         let reasoning = make_test_reasoning().with_model_name("claude-sonnet-4-20250514");
         let prompt = reasoning.build_system_prompt_with_tools(&[]);
         assert!(
-            prompt.contains(x_claw_agent::PROMPT_CACHE_BOUNDARY),
+            prompt.contains(dasclaw_core::PROMPT_CACHE_BOUNDARY),
             "Claude model should get cache boundary marker"
         );
     }
@@ -2609,7 +2609,7 @@ That's my plan."#;
         let reasoning = make_test_reasoning().with_model_name("gpt-4o");
         let prompt = reasoning.build_system_prompt_with_tools(&[]);
         assert!(
-            !prompt.contains(x_claw_agent::PROMPT_CACHE_BOUNDARY),
+            !prompt.contains(dasclaw_core::PROMPT_CACHE_BOUNDARY),
             "Non-Claude model should not get cache boundary marker"
         );
     }

@@ -26,7 +26,7 @@ use crate::{EgressDecision, EgressGate, EgressKind, HookRegistry};
 /// Phase 0 red-line: exactly one hook orchestration entry.
 ///
 /// `dasclaw_hooks::HookRegistry` is the single front-door. Trait seams
-/// (`EgressGate` etc.) are reexported from `x_claw_agent` and do **not**
+/// (`EgressGate` etc.) are reexported from `dasclaw_core` and do **not**
 /// count as separate "systems" — see ADR-113 §2.2 for the term clarification.
 #[must_use]
 pub const fn count_hook_systems() -> usize {
