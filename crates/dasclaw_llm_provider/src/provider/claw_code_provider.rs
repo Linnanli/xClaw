@@ -23,13 +23,13 @@ use dasclaw_llm_provider::{
 use rust_decimal::Decimal;
 use secrecy::ExposeSecret;
 
-use crate::llm::config::{OAUTH_PLACEHOLDER, RegistryProviderConfig};
-use crate::llm::error::LlmError;
-use crate::llm::provider::{
+use crate::provider::config::{OAUTH_PLACEHOLDER, RegistryProviderConfig};
+use crate::provider::error::LlmError;
+use crate::provider::provider::{
     ChatMessage, CompletionRequest, CompletionResponse, ContentPart, FinishReason, LlmProvider,
     Role, ToolCall, ToolCompletionRequest, ToolCompletionResponse, ToolDefinition,
 };
-use crate::llm::registry::ProviderProtocol;
+use crate::provider::registry::ProviderProtocol;
 
 /// 使用 `claw-code-api` 作为底层 HTTP 客户端的 Provider。
 #[derive(Debug)]
@@ -193,7 +193,7 @@ fn split_system_and_messages(messages: &[ChatMessage]) -> (Option<String>, Vec<I
     (system, out)
 }
 
-/// Anthropic prompt cache 边界标注（HTML comment 形态，由 [`crate::llm::prompt::LayeredPromptBuilder`] 注入）。
+/// Anthropic prompt cache 边界标注（HTML comment 形态，由 [`crate::provider::prompt::LayeredPromptBuilder`] 注入）。
 ///
 /// 与 [`dasclaw_core::PROMPT_CACHE_BOUNDARY`] 保持一致：包裹成 HTML 注释后，
 /// 系统提示词中的边界标记不会被任何下游 markdown / 模型行为意外渲染。
@@ -207,7 +207,7 @@ const CACHE_BOUNDARY_COMMENT: &str = concat!("<!-- ", "__SYSTEM_PROMPT_DYNAMIC_B
 ///   （skills + channel + runtime ctx）每轮变化不进缓存。
 /// - **其它情形**：单段 `SystemPrompt::Text`（OpenAI-compat / 无边界标记 / 空文本）。
 ///
-/// 边界检测在请求构造期完成，[`crate::llm::prompt::LayeredPromptBuilder`] 不感知 provider；
+/// 边界检测在请求构造期完成，[`crate::provider::prompt::LayeredPromptBuilder`] 不感知 provider；
 /// 这样 ADR-117 R-1 标记从 *惰性* 变 *实际生效*，并保持 builder 与 provider 解耦。
 fn build_system_prompt(system_text: Option<String>, model: &str) -> Option<SystemPrompt> {
     let text = system_text?;
@@ -1052,7 +1052,7 @@ mod tests {
     // `ClawCodeLlmProvider`，覆盖每一种 `ProviderProtocol` 分支。
     // ========================================================================
 
-    use crate::llm::config::{CacheRetention, RegistryProviderConfig};
+    use crate::provider::config::{CacheRetention, RegistryProviderConfig};
     use dasclaw_llm_provider::ProviderKind;
     use secrecy::SecretString;
 

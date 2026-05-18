@@ -17,13 +17,13 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use rust_decimal::Decimal;
 
-use crate::llm::error::LlmError;
-use crate::llm::provider::{
+use crate::provider::error::LlmError;
+use crate::provider::provider::{
     CompletionRequest, CompletionResponse, LlmProvider, ModelMetadata, ToolCompletionRequest,
     ToolCompletionResponse,
 };
 
-use crate::llm::retry::is_retryable;
+use crate::provider::retry::is_retryable;
 
 /// Configuration for per-provider cooldown behavior.
 ///
@@ -412,7 +412,7 @@ mod tests {
     use std::sync::{Mutex, RwLock};
     use std::time::Duration;
 
-    use crate::llm::provider::{CompletionResponse, FinishReason, ToolCompletionResponse};
+    use crate::provider::provider::{CompletionResponse, FinishReason, ToolCompletionResponse};
 
     /// A mock LLM provider that returns a predetermined result.
     struct MockProvider {
@@ -561,11 +561,11 @@ mod tests {
     }
 
     fn make_request() -> CompletionRequest {
-        CompletionRequest::new(vec![crate::llm::ChatMessage::user("hello")])
+        CompletionRequest::new(vec![crate::provider::ChatMessage::user("hello")])
     }
 
     fn make_tool_request() -> ToolCompletionRequest {
-        ToolCompletionRequest::new(vec![crate::llm::ChatMessage::user("hello")], vec![])
+        ToolCompletionRequest::new(vec![crate::provider::ChatMessage::user("hello")], vec![])
     }
 
     // Test 1: Primary succeeds, no failover occurs.

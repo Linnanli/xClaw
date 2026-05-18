@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::llm::oauth_helpers::OAUTH_CALLBACK_PORT;
+use crate::provider::oauth_helpers::OAUTH_CALLBACK_PORT;
 
 use chrono::{DateTime, Utc};
 use reqwest::Client;
@@ -15,7 +15,7 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 
-use crate::llm::error::LlmError;
+use crate::provider::error::LlmError;
 
 /// Session data persisted to disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -232,7 +232,7 @@ impl SessionManager {
     /// 2. Set NEARAI_API_KEY env var and save to bootstrap .env
     /// 3. No session token saved (different auth model)
     async fn initiate_login(&self) -> Result<(), LlmError> {
-        use crate::llm::oauth_helpers;
+        use crate::provider::oauth_helpers;
 
         let cb_url = oauth_helpers::callback_url();
         let host = oauth_helpers::callback_host();

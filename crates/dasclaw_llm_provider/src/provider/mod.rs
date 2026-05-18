@@ -587,7 +587,7 @@ pub fn create_gemini_oauth_provider(config: &LlmConfig) -> Result<Arc<dyn LlmPro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::config::NearAiConfig;
+    use crate::provider::config::NearAiConfig;
 
     fn test_nearai_config() -> NearAiConfig {
         NearAiConfig {
@@ -702,7 +702,7 @@ mod tests {
         let mut config = test_llm_config();
         config.backend = "gemini_oauth".to_string();
         config.cheap_model = Some("gemini-2.5-flash-lite".to_string());
-        config.gemini_oauth = Some(crate::config::GeminiOauthConfig {
+        config.gemini_oauth = Some(crate::provider::config::GeminiOauthConfig {
             model: "gemini-2.5-pro".to_string(),
             credentials_path: std::path::PathBuf::from("/tmp/nonexistent-creds.json"),
         });

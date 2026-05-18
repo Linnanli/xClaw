@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use dasclaw_core::PROMPT_CACHE_BOUNDARY;
 
-use crate::llm::ToolDefinition;
+use crate::provider::ToolDefinition;
 
 /// HTML-comment-wrapped boundary marker injected between the static and dynamic
 /// layers. The wrapping is inert for the model but anchors Anthropic's cache

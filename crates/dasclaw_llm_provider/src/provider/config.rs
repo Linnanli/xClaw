@@ -5,13 +5,12 @@
 //! extracted into a standalone crate. Resolution logic (reading env vars,
 //! settings) lives in `crate::config::llm`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use secrecy::SecretString;
 
-use crate::bootstrap::dasclaw_base_dir;
-use crate::llm::registry::ProviderProtocol;
-use crate::llm::session::SessionConfig;
+use crate::provider::registry::ProviderProtocol;
+use crate::provider::session::SessionConfig;
 
 /// Sentinel value used as `api_key` when only an OAuth token is present.
 ///
@@ -124,14 +123,19 @@ pub struct OpenAiCodexConfig {
     pub token_refresh_margin_secs: u64,
 }
 
-impl Default for OpenAiCodexConfig {
-    fn default() -> Self {
+impl OpenAiCodexConfig {
+    /// Construct a default config with the session file located under `base_dir`.
+    ///
+    /// `base_dir` is provided by the embedding application (typically the
+    /// per-user dasclaw home directory) so this crate stays free of global
+    /// filesystem assumptions.
+    pub fn new(base_dir: &Path) -> Self {
         Self {
             model: "gpt-5.3-codex".to_string(),
             auth_endpoint: "https://auth.openai.com".to_string(),
             api_base_url: "https://chatgpt.com/backend-api/codex".to_string(),
             client_id: "app_EMoamEEZ73f0CkXaXp7hrann".to_string(),
-            session_path: dasclaw_base_dir().join("openai_codex_session.json"),
+            session_path: base_dir.join("openai_codex_session.json"),
             token_refresh_margin_secs: 300,
         }
     }

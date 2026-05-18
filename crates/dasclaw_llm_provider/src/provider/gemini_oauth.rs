@@ -12,9 +12,9 @@ use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 use url::Url;
 
-use crate::config::GeminiOauthConfig;
-use crate::error::LlmError;
-use crate::llm::provider::{
+use crate::provider::config::GeminiOauthConfig;
+use crate::provider::error::LlmError;
+use crate::provider::provider::{
     ChatMessage, CompletionRequest, CompletionResponse, FinishReason, LlmProvider, ModelMetadata,
     Role, ToolCall, ToolDefinition,
 };
@@ -2057,8 +2057,8 @@ impl LlmProvider for GeminiOauthProvider {
 
     async fn complete_with_tools(
         &self,
-        request: crate::llm::provider::ToolCompletionRequest,
-    ) -> Result<crate::llm::provider::ToolCompletionResponse, LlmError> {
+        request: crate::provider::provider::ToolCompletionRequest,
+    ) -> Result<crate::provider::provider::ToolCompletionResponse, LlmError> {
         let tool_defs = if request.tools.is_empty() {
             None
         } else {
@@ -2077,7 +2077,7 @@ impl LlmProvider for GeminiOauthProvider {
         let resp_json = self.send_request(&req_json).await?;
         let (response, tool_calls) = Self::from_gemini_response(resp_json)?;
 
-        Ok(crate::llm::provider::ToolCompletionResponse {
+        Ok(crate::provider::provider::ToolCompletionResponse {
             content: if response.content.is_empty() {
                 None
             } else {

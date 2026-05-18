@@ -43,6 +43,8 @@
 
 pub mod error;
 pub mod http;
+#[allow(missing_docs, clippy::all)]
+pub mod provider;
 pub mod providers;
 pub mod retry;
 pub mod sse;

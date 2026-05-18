@@ -25,8 +25,8 @@ use async_trait::async_trait;
 use rust_decimal::Decimal;
 use sha2::{Digest, Sha256};
 
-use crate::llm::error::LlmError;
-use crate::llm::provider::{
+use crate::provider::error::LlmError;
+use crate::provider::provider::{
     CompletionRequest, CompletionResponse, LlmProvider, ModelMetadata, ToolCompletionRequest,
     ToolCompletionResponse,
 };
@@ -325,12 +325,12 @@ mod tests {
     use rust_decimal::Decimal;
     use tracing_test::traced_test;
 
-    use crate::llm::error::LlmError;
-    use crate::llm::provider::{
+    use crate::provider::error::LlmError;
+    use crate::provider::provider::{
         ChatMessage, CompletionResponse, FinishReason, ToolCompletionRequest,
         ToolCompletionResponse,
     };
-    use crate::llm::response_cache::*;
+    use crate::provider::response_cache::*;
     use crate::testing::StubLlm;
 
     /// Minimal provider stub that supports `set_model()` — used to test

@@ -1,6 +1,6 @@
 //! Shared test helpers for OpenAI Codex provider tests.
 
-use crate::config::OpenAiCodexConfig;
+use crate::provider::config::OpenAiCodexConfig;
 
 /// Build a minimal JWT for testing (header.payload.signature).
 pub(crate) fn make_test_jwt(account_id: &str) -> String {

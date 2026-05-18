@@ -12,10 +12,10 @@ use async_trait::async_trait;
 use rust_decimal::Decimal;
 use secrecy::ExposeSecret;
 
-use crate::error::LlmError;
-use crate::llm::openai_codex_provider::OpenAiCodexProvider;
-use crate::llm::openai_codex_session::OpenAiCodexSessionManager;
-use crate::llm::provider::{
+use crate::provider::error::LlmError;
+use crate::provider::openai_codex_provider::OpenAiCodexProvider;
+use crate::provider::openai_codex_session::OpenAiCodexSessionManager;
+use crate::provider::provider::{
     CompletionRequest, CompletionResponse, LlmProvider, ModelMetadata, ToolCompletionRequest,
     ToolCompletionResponse,
 };
@@ -161,8 +161,8 @@ impl LlmProvider for TokenRefreshingProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::codex_test_helpers::{make_test_jwt, test_codex_config};
-    use crate::llm::openai_codex_session::OpenAiCodexSessionManager;
+    use crate::provider::codex_test_helpers::{make_test_jwt, test_codex_config};
+    use crate::provider::openai_codex_session::OpenAiCodexSessionManager;
     use tempfile::tempdir;
 
     fn make_provider_and_session() -> (TokenRefreshingProvider, tempfile::TempDir) {

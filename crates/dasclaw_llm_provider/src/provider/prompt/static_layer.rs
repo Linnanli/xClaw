@@ -3,7 +3,7 @@
 //! Includes: identity, core rules, tool specifications, safety policy,
 //! response format, and tool call guidance.
 
-use crate::llm::ToolDefinition;
+use crate::provider::ToolDefinition;
 
 use super::StaticLayerConfig;
 
@@ -116,7 +116,7 @@ impl StaticLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::ToolDefinition;
+    use crate::provider::ToolDefinition;
 
     fn tools() -> Vec<ToolDefinition> {
         vec![ToolDefinition {

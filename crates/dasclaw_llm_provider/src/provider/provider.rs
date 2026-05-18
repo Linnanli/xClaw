@@ -2,7 +2,7 @@
 //!
 //! Phase 3 Step D-0：消息领域类型（`ChatMessage`、`ToolCall`、`ContentPart` 等）
 //! 已搬到 [`dasclaw_core::messages`]，此处仅保留 provider trait 本身，并通过
-//! `pub use` 保持原有模块路径的向后兼容，避免成百上千的 `use crate::llm::...`
+//! `pub use` 保持原有模块路径的向后兼容，避免成百上千的 `use crate::provider::...`
 //! 需要立即改动。
 //!
 //! trait 依赖 `rust_decimal::Decimal`（费用计算）和 `LlmError`（provider 错误），
@@ -11,10 +11,10 @@
 use async_trait::async_trait;
 use rust_decimal::Decimal;
 
-use crate::llm::error::LlmError;
+use crate::provider::error::LlmError;
 
-// Re-export the agent-runtime domain model so existing `use crate::llm::ChatMessage`
-// / `crate::llm::provider::ChatMessage` sites keep working unchanged.
+// Re-export the agent-runtime domain model so existing `use crate::provider::ChatMessage`
+// / `crate::provider::provider::ChatMessage` sites keep working unchanged.
 pub use dasclaw_core::messages::{
     ChatMessage, CompletionRequest, CompletionResponse, ContentPart, FinishReason, ImageUrl,
     ModelMetadata, Role, ToolCall, ToolCompletionRequest, ToolCompletionResponse, ToolDefinition,

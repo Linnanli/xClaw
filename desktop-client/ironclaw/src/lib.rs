@@ -56,7 +56,13 @@ pub mod history;
 pub mod hook_bootstrap;
 #[cfg(feature = "import")]
 pub mod import;
-pub mod llm;
+/// Re-export of ported LLM provider tree (formerly `crate::llm`).
+///
+/// Per ADR-118 / ADR-129 verbatim port: the contents of `desktop-client/ironclaw/src/llm/`
+/// were moved to `crates/dasclaw_llm_provider/src/provider/` so that the desktop client
+/// and any future headless agent share the same outbound LLM logic. The `crate::llm`
+/// path is kept stable for in-tree callers via this re-export.
+pub use dasclaw_llm_provider::provider as llm;
 pub mod migration;
 pub mod observability;
 pub mod orchestrator;

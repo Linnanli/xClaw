@@ -20,9 +20,9 @@ use aws_sdk_bedrockruntime::types::{
 use aws_smithy_types::Document;
 use rust_decimal::Decimal;
 
-use crate::llm::config::BedrockConfig;
-use crate::llm::error::LlmError;
-use crate::llm::provider::{
+use crate::provider::config::BedrockConfig;
+use crate::provider::error::LlmError;
+use crate::provider::provider::{
     CompletionRequest, CompletionResponse, FinishReason, LlmProvider, ModelMetadata, ToolCall,
     ToolCompletionRequest, ToolCompletionResponse, ToolDefinition,
 };
@@ -96,7 +96,7 @@ impl LlmProvider for BedrockProvider {
         let model_id = self.current_model_id();
 
         let mut messages = request.messages;
-        crate::llm::provider::sanitize_tool_messages(&mut messages);
+        crate::provider::provider::sanitize_tool_messages(&mut messages);
         // Bedrock requires toolConfig when messages contain ToolUse/ToolResult
         // blocks. Messages may carry tool history from prior agentic iterations,
         // but complete() has no tools to build a toolConfig — strip them.
@@ -152,7 +152,7 @@ impl LlmProvider for BedrockProvider {
         let model_id = self.current_model_id();
 
         let mut messages = request.messages;
-        crate::llm::provider::sanitize_tool_messages(&mut messages);
+        crate::provider::provider::sanitize_tool_messages(&mut messages);
 
         let tool_config = build_tool_config(&request.tools, request.tool_choice.as_deref())?;
 
@@ -293,8 +293,8 @@ fn build_inference_config(
 /// Note: this intentionally loses structured tool_call_id correlation — the text
 /// representation is sufficient for force_text mode where no further tool dispatch
 /// occurs.
-fn strip_tool_blocks(messages: &mut [crate::llm::provider::ChatMessage]) {
-    use crate::llm::provider::Role;
+fn strip_tool_blocks(messages: &mut [crate::provider::provider::ChatMessage]) {
+    use crate::provider::provider::Role;
 
     let mut stripped = 0u32;
     for msg in messages.iter_mut() {
@@ -335,9 +335,9 @@ fn strip_tool_blocks(messages: &mut [crate::llm::provider::ChatMessage]) {
 /// 3. Consecutive tool results are merged into a single User message.
 /// 4. Bedrock requires strict user/assistant alternation.
 fn convert_messages(
-    messages: &[crate::llm::provider::ChatMessage],
+    messages: &[crate::provider::provider::ChatMessage],
 ) -> Result<(Vec<SystemContentBlock>, Vec<Message>), LlmError> {
-    use crate::llm::provider::Role;
+    use crate::provider::provider::Role;
 
     let mut system_blocks = Vec::new();
     let mut bedrock_messages: Vec<Message> = Vec::new();
@@ -748,7 +748,7 @@ pub(crate) fn document_to_json(doc: &Document) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::provider::{ChatMessage, Role};
+    use crate::provider::provider::{ChatMessage, Role};
 
     #[test]
     fn test_json_to_document_round_trip() {
@@ -811,13 +811,13 @@ mod tests {
 
     #[test]
     fn test_convert_messages_tool_results_merge_into_user() {
-        let tc = crate::llm::provider::ToolCall {
+        let tc = crate::provider::provider::ToolCall {
             id: "call_1".to_string(),
             name: "echo".to_string(),
             arguments: serde_json::json!({"text": "hi"}),
             reasoning: None,
         };
-        let tc2 = crate::llm::provider::ToolCall {
+        let tc2 = crate::provider::provider::ToolCall {
             id: "call_2".to_string(),
             name: "time".to_string(),
             arguments: serde_json::json!({}),
@@ -856,7 +856,7 @@ mod tests {
 
     #[test]
     fn test_convert_messages_assistant_with_tool_calls() {
-        let tc = crate::llm::provider::ToolCall {
+        let tc = crate::provider::provider::ToolCall {
             id: "call_1".to_string(),
             name: "search".to_string(),
             arguments: serde_json::json!({"query": "test"}),
@@ -880,7 +880,7 @@ mod tests {
 
     #[test]
     fn test_convert_messages_empty_assistant_content_with_tool_calls() {
-        let tc = crate::llm::provider::ToolCall {
+        let tc = crate::provider::provider::ToolCall {
             id: "call_1".to_string(),
             name: "echo".to_string(),
             arguments: serde_json::json!({}),
@@ -1045,13 +1045,13 @@ mod tests {
     fn test_full_tool_round_trip_conversation() {
         // Simulate a complete tool-use conversation:
         // system → user → assistant(tool_calls) → tool_results → user follow-up
-        let tc1 = crate::llm::provider::ToolCall {
+        let tc1 = crate::provider::provider::ToolCall {
             id: "call_abc".to_string(),
             name: "get_weather".to_string(),
             arguments: serde_json::json!({"city": "NYC"}),
             reasoning: None,
         };
-        let tc2 = crate::llm::provider::ToolCall {
+        let tc2 = crate::provider::provider::ToolCall {
             id: "call_def".to_string(),
             name: "get_time".to_string(),
             arguments: serde_json::json!({"tz": "EST"}),
@@ -1213,7 +1213,7 @@ mod tests {
 
     #[test]
     fn test_strip_tool_blocks_removes_tool_content() {
-        let tc = crate::llm::provider::ToolCall {
+        let tc = crate::provider::provider::ToolCall {
             id: "call_1".to_string(),
             name: "echo".to_string(),
             arguments: serde_json::json!({"text": "hi"}),
@@ -1257,7 +1257,7 @@ mod tests {
     /// tool history to complete(), which has no toolConfig.
     #[test]
     fn test_strip_tool_blocks_then_convert_produces_no_tool_blocks() {
-        let tc = crate::llm::provider::ToolCall {
+        let tc = crate::provider::provider::ToolCall {
             id: "call_abc".to_string(),
             name: "get_weather".to_string(),
             arguments: serde_json::json!({"city": "NYC"}),
@@ -1273,7 +1273,7 @@ mod tests {
         ];
 
         // Simulate the complete() pipeline
-        crate::llm::provider::sanitize_tool_messages(&mut messages);
+        crate::provider::provider::sanitize_tool_messages(&mut messages);
         strip_tool_blocks(&mut messages);
 
         let (_, bedrock_msgs) = convert_messages(&messages).unwrap();
@@ -1294,7 +1294,7 @@ mod tests {
 
     #[test]
     fn test_complete_with_tools_empty_tools_strips_history() {
-        let tc = crate::llm::provider::ToolCall {
+        let tc = crate::provider::provider::ToolCall {
             id: "call_1".to_string(),
             name: "time".to_string(),
             arguments: serde_json::json!({}),
@@ -1308,7 +1308,7 @@ mod tests {
         ];
 
         // Simulate complete_with_tools() with empty tools
-        crate::llm::provider::sanitize_tool_messages(&mut messages);
+        crate::provider::provider::sanitize_tool_messages(&mut messages);
         let tool_config = build_tool_config(&[], None).unwrap();
         assert!(tool_config.is_none());
 
@@ -1331,7 +1331,7 @@ mod tests {
         // Edge case: assistant message with ONLY tool_calls (no text) becomes
         // empty after stripping. convert_messages() should skip it, and the
         // subsequent tool-result-turned-user message should merge correctly.
-        let tc = crate::llm::provider::ToolCall {
+        let tc = crate::provider::provider::ToolCall {
             id: "call_1".to_string(),
             name: "search".to_string(),
             arguments: serde_json::json!({"q": "test"}),
@@ -1345,7 +1345,7 @@ mod tests {
             ChatMessage::user("Thanks"),
         ];
 
-        crate::llm::provider::sanitize_tool_messages(&mut messages);
+        crate::provider::provider::sanitize_tool_messages(&mut messages);
         strip_tool_blocks(&mut messages);
 
         let (_, bedrock_msgs) = convert_messages(&messages).unwrap();
@@ -1386,7 +1386,7 @@ mod tests {
             parameters: serde_json::json!({"type": "object"}),
         }];
 
-        let tc = crate::llm::provider::ToolCall {
+        let tc = crate::provider::provider::ToolCall {
             id: "call_1".to_string(),
             name: "echo".to_string(),
             arguments: serde_json::json!({}),
@@ -1399,7 +1399,7 @@ mod tests {
             ChatMessage::tool_result("call_1", "echo", "done"),
         ];
 
-        crate::llm::provider::sanitize_tool_messages(&mut messages);
+        crate::provider::provider::sanitize_tool_messages(&mut messages);
         let tool_config = build_tool_config(&tools, Some("none")).unwrap();
         assert!(tool_config.is_none());
 

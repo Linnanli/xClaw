@@ -16,13 +16,13 @@ use rust_decimal::prelude::MathematicalOps;
 use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 
-use crate::llm::config::NearAiConfig;
-use crate::llm::error::LlmError;
-use crate::llm::provider::{
+use crate::provider::config::NearAiConfig;
+use crate::provider::error::LlmError;
+use crate::provider::provider::{
     ChatMessage, CompletionRequest, CompletionResponse, FinishReason, LlmProvider, Role, ToolCall,
     ToolCompletionRequest, ToolCompletionResponse,
 };
-use crate::llm::{costs, session::SessionManager};
+use crate::provider::{costs, session::SessionManager};
 
 /// Information about an available model from NEAR AI API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -258,7 +258,7 @@ impl NearAiChatProvider {
 
         let status = response.status();
         // Extract Retry-After header before consuming the response body.
-        let retry_after_header = Some(crate::llm::retry::parse_retry_after(
+        let retry_after_header = Some(crate::provider::retry::parse_retry_after(
             response.headers().get("retry-after"),
         ));
         let response_text = response.text().await.map_err(|e| LlmError::RequestFailed {
@@ -462,7 +462,7 @@ impl LlmProvider for NearAiChatProvider {
     async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, LlmError> {
         let model = req.model.unwrap_or_else(|| self.active_model_name());
         let mut raw_messages = req.messages;
-        crate::llm::provider::sanitize_tool_messages(&mut raw_messages);
+        crate::provider::provider::sanitize_tool_messages(&mut raw_messages);
         let raw: Vec<ChatCompletionMessage> = raw_messages.into_iter().map(|m| m.into()).collect();
 
         // NEAR AI rejects `role:"tool"` messages even on text-only completion paths.
@@ -527,7 +527,7 @@ impl LlmProvider for NearAiChatProvider {
     ) -> Result<ToolCompletionResponse, LlmError> {
         let model = req.model.unwrap_or_else(|| self.active_model_name());
         let mut raw_messages = req.messages;
-        crate::llm::provider::sanitize_tool_messages(&mut raw_messages);
+        crate::provider::provider::sanitize_tool_messages(&mut raw_messages);
         let messages: Vec<ChatCompletionMessage> =
             raw_messages.into_iter().map(|m| m.into()).collect();
 
@@ -659,7 +659,7 @@ impl LlmProvider for NearAiChatProvider {
         }
     }
 
-    fn set_model(&self, model: &str) -> Result<(), crate::error::LlmError> {
+    fn set_model(&self, model: &str) -> Result<(), crate::provider::error::LlmError> {
         match self.active_model.write() {
             Ok(mut guard) => {
                 *guard = model.to_string();
@@ -698,7 +698,7 @@ struct ChatCompletionRequest {
 #[derive(Debug, Clone)]
 enum MessageContent {
     Text(String),
-    Parts(Vec<crate::llm::ContentPart>),
+    Parts(Vec<crate::provider::ContentPart>),
 }
 
 impl Serialize for MessageContent {
@@ -986,7 +986,7 @@ impl From<ChatMessage> for ChatCompletionMessage {
             None
         } else if !msg.content_parts.is_empty() {
             // Build multimodal content array: text + image parts
-            let mut parts = vec![crate::llm::ContentPart::Text { text: msg.content }];
+            let mut parts = vec![crate::provider::ContentPart::Text { text: msg.content }];
             parts.extend(msg.content_parts);
             Some(MessageContent::Parts(parts))
         } else {
@@ -1095,7 +1095,7 @@ fn parse_usage(usage: Option<&ChatCompletionUsage>) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::session::SessionConfig;
+    use crate::provider::session::SessionConfig;
     use rust_decimal_macros::dec;
 
     fn test_nearai_config(base_url: &str) -> NearAiConfig {
@@ -1172,7 +1172,7 @@ mod tests {
 
     #[test]
     fn test_assistant_with_tool_calls_conversion() {
-        use crate::llm::ToolCall;
+        use crate::provider::ToolCall;
 
         let tool_calls = vec![
             ToolCall {
@@ -1212,7 +1212,7 @@ mod tests {
 
     #[test]
     fn test_tool_call_arguments_serialized_to_string() {
-        use crate::llm::ToolCall;
+        use crate::provider::ToolCall;
 
         let tc = ToolCall {
             id: "call_1".to_string(),

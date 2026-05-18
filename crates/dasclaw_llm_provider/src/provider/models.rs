@@ -337,7 +337,7 @@ pub(crate) fn build_nearai_model_fetch_config() -> crate::config::LlmConfig {
 
     crate::config::LlmConfig {
         backend: "nearai".to_string(),
-        session: crate::llm::session::SessionConfig {
+        session: crate::provider::session::SessionConfig {
             auth_base_url,
             session_path: crate::config::llm::default_session_path(),
         },
