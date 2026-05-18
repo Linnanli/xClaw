@@ -16,6 +16,7 @@ pub mod bash_validation;
 pub mod compaction;
 // composite_safety_hook removed by ADR-148; CompositeEgressGate lives in dasclaw_governance::egress.
 pub mod context_monitor;
+pub mod egress_apply;
 pub mod hooks;
 pub mod intent;
 pub mod llm;
