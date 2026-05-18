@@ -172,6 +172,18 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         None, // DataReporter 在 admin_sync 阶段注入
     ));
 
+    // Build the project-wide `EgressGate` chain. The current desktop
+    // client has a single gate (the IronclawEgressGate wrapping
+    // SafetyLayer); future enterprise scanners append via
+    // `CompositeEgressGate::builder().add(...)` without touching IPC
+    // call sites (ADR-148 §6.4, closes issue #92).
+    let egress: Arc<dyn x_claw_agent::EgressGate> = Arc::new(
+        ironclaw_safety::egress_gate::IronclawEgressGate::new(Arc::clone(&components.safety)),
+    );
+    let attachment_scanner = Arc::new(crate::safety_attachment_scanner::AttachmentScanner::new(
+        Arc::clone(&egress),
+    ));
+
     // ── 模型切换 ──────────────────────────────────────────────────
     // model_override 在 AppState 和 ModelSwitchProvider 之间共享。
     let model_override = Arc::new(std::sync::RwLock::new(None::<String>));
@@ -253,6 +265,8 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         skills_config: config.skills.clone(),
         safety: Arc::clone(&components.safety),
         safety_bridge,
+        attachment_scanner,
+        egress,
         context_manager: Arc::clone(&components.context_manager),
         conversation_tracker: Arc::clone(&tracker),
         data_reporter: Arc::clone(&reporter),

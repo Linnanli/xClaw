@@ -47,9 +47,11 @@ use ironclaw::tools::ToolRegistry;
 use ironclaw::workspace::Workspace;
 use tokio::sync::mpsc;
 use uuid::Uuid;
+use x_claw_agent::EgressGate;
 
 use crate::conversation_tracker::ConversationTracker;
 use crate::data_reporter::DataReporter;
+use crate::safety_attachment_scanner::AttachmentScanner;
 use crate::safety_bridge::SafetyBridge;
 
 /// IronClaw 引擎内部状态。
@@ -77,6 +79,19 @@ pub struct AppState {
     pub safety: Arc<SafetyLayer>,
     /// 安全桥接器（统一 SafetyLayer + DLP 格式保留脱敏）。
     pub safety_bridge: Arc<SafetyBridge>,
+    /// Attachment DLP gate (issue #92, ADR-148 §6.4).
+    ///
+    /// Routes every attachment's `extracted_text` through both
+    /// `EgressKind::LlmRequest` and `EgressKind::Persistence` gates
+    /// before the agent loop or the audit reporter sees it. Wraps the
+    /// project-wide `EgressGate` chain so future enterprise scanners
+    /// (Presidio, etc.) plug in via `CompositeEgressGate` without
+    /// touching the IPC call site.
+    pub attachment_scanner: Arc<AttachmentScanner>,
+    /// Project-wide `EgressGate` instance shared with the attachment
+    /// scanner. Held here so other IPC paths (tool args, persistence
+    /// follow-ups) can reuse the same gate chain without re-wiring.
+    pub egress: Arc<dyn EgressGate>,
     /// 上下文管理器（任务审批等）。
     pub context_manager: Arc<ContextManager>,
     /// 对话追踪器（对话审计与技能使用上报）。

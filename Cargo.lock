@@ -3452,6 +3452,7 @@ dependencies = [
  "uuid",
  "windows 0.58.0",
  "wiremock",
+ "x_claw_agent",
  "zbus",
 ]
 
