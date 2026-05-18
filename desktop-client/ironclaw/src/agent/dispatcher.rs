@@ -591,17 +591,25 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
         reason_ctx: &mut ReasoningContext,
     ) -> Result<Option<LoopOutcome>, HostError> {
         // Extract and sanitize the narrative before consuming `content`.
-        let narrative = content
-            .as_deref()
-            .filter(|c| !c.trim().is_empty())
-            .map(|c| {
-                let sanitized = self
-                    .agent
-                    .safety()
-                    .sanitize_tool_output("agent_narrative", c);
-                sanitized.content
-            })
-            .filter(|c| !c.trim().is_empty());
+        // ADR-148 R2: route through the unified Layer-B egress gate
+        // (`UserDisplay` kind) via `safety::egress::sanitize_tool_output_via_egress`
+        // instead of the legacy `SafetyLayer::sanitize_tool_output` path.
+        let narrative = match content.as_deref().filter(|c| !c.trim().is_empty()) {
+            Some(c) => {
+                let sanitized = crate::safety::egress::sanitize_tool_output_via_egress(
+                    self.agent.safety(),
+                    "agent_narrative",
+                    c,
+                )
+                .await;
+                if sanitized.trim().is_empty() {
+                    None
+                } else {
+                    Some(sanitized)
+                }
+            }
+            None => None,
+        };
 
         // Add the assistant message with tool_calls to context.
         // OpenAI protocol requires this before tool-result messages.
@@ -624,23 +632,25 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
             .await;
 
         // Build per-tool decisions for the reasoning update.
-        // Sanitize each rationale through SafetyLayer (parity with JobDelegate).
-        let decisions: Vec<crate::channels::ToolDecision> = tool_calls
-            .iter()
-            .filter_map(|tc| {
-                tc.reasoning.as_ref().map(|r| {
-                    let sanitized = self
-                        .agent
-                        .safety()
-                        .sanitize_tool_output("tool_rationale", r)
-                        .content;
-                    crate::channels::ToolDecision {
-                        tool_name: tc.name.clone(),
-                        rationale: sanitized,
-                    }
-                })
-            })
-            .collect();
+        // ADR-148 R2: route every tool rationale through the unified
+        // Layer-B egress gate (`UserDisplay` kind). Build sequentially
+        // (`for`) instead of `.filter_map` so each gate call can `.await`.
+        let mut decisions: Vec<crate::channels::ToolDecision> =
+            Vec::with_capacity(tool_calls.len());
+        for tc in tool_calls.iter() {
+            if let Some(r) = tc.reasoning.as_ref() {
+                let sanitized = crate::safety::egress::sanitize_tool_output_via_egress(
+                    self.agent.safety(),
+                    "tool_rationale",
+                    r,
+                )
+                .await;
+                decisions.push(crate::channels::ToolDecision {
+                    tool_name: tc.name.clone(),
+                    rationale: sanitized,
+                });
+            }
+        }
 
         // Emit reasoning update to channels.
         if narrative.is_some() || !decisions.is_empty() {
@@ -669,6 +679,26 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
                 };
                 redacted_args.push(safe);
             }
+            // ADR-148 R2: pre-sanitise each rationale via the unified
+            // Layer-B egress gate *before* taking the session lock — the
+            // gate is async and the session mutex must not be held across
+            // an `.await` (deadlock risk + Send bounds).
+            let mut sanitized_rationales: Vec<Option<String>> =
+                Vec::with_capacity(tool_calls.len());
+            for tc in &tool_calls {
+                let s = match tc.reasoning.as_ref() {
+                    Some(r) => Some(
+                        crate::safety::egress::sanitize_tool_output_via_egress(
+                            self.agent.safety(),
+                            "tool_rationale",
+                            r,
+                        )
+                        .await,
+                    ),
+                    None => None,
+                };
+                sanitized_rationales.push(s);
+            }
             let mut sess = self.session.lock().await;
             if let Some(thread) = sess.threads.get_mut(&self.thread_id)
                 && let Some(turn) = thread.last_turn_mut()
@@ -677,13 +707,11 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
                 if turn.narrative.is_none() {
                     turn.narrative = narrative;
                 }
-                for (tc, safe_args) in tool_calls.iter().zip(redacted_args) {
-                    let sanitized_rationale = tc.reasoning.as_ref().map(|r| {
-                        self.agent
-                            .safety()
-                            .sanitize_tool_output("tool_rationale", r)
-                            .content
-                    });
+                for ((tc, safe_args), sanitized_rationale) in tool_calls
+                    .iter()
+                    .zip(redacted_args)
+                    .zip(sanitized_rationales)
+                {
                     turn.record_tool_call_with_reasoning(
                         &tc.name,
                         safe_args,

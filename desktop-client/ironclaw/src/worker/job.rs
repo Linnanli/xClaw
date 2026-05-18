@@ -733,12 +733,23 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
             }
         }
 
-        // Record action in memory and get the ActionRecord for persistence
+        // Record action in memory and get the ActionRecord for persistence.
+        // ADR-148 R2: route tool output through the unified Layer-B
+        // egress gate (`UserDisplay` kind) via `safety::egress::sanitize_tool_output_via_egress`
+        // instead of the legacy `SafetyLayer::sanitize_tool_output` path.
         let action = match &result {
             Ok(Ok(output)) => {
-                let output_str = serde_json::to_string_pretty(&output.result)
-                    .ok()
-                    .map(|s| deps.safety.sanitize_tool_output(tool_name, &s).content);
+                let output_str = match serde_json::to_string_pretty(&output.result).ok() {
+                    Some(s) => Some(
+                        crate::safety::egress::sanitize_tool_output_via_egress(
+                            &deps.safety,
+                            tool_name,
+                            &s,
+                        )
+                        .await,
+                    ),
+                    None => None,
+                };
                 match deps
                     .context_manager
                     .update_memory(job_id, |mem| {
@@ -858,16 +869,19 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
 
         match result {
             Ok(raw_output) => {
-                let sanitized = self
-                    .deps
-                    .safety
-                    .sanitize_tool_output(&selection.tool_name, &raw_output);
+                // ADR-148 R2: route through unified Layer-B egress gate.
+                let sanitized = crate::safety::egress::sanitize_tool_output_via_egress(
+                    &self.deps.safety,
+                    &selection.tool_name,
+                    &raw_output,
+                )
+                .await;
                 self.log_event(
                     "tool_result",
                     serde_json::json!({
                         "tool_name": selection.tool_name,
                         "success": true,
-                        "output": truncate_for_preview(&sanitized.content, 500),
+                        "output": truncate_for_preview(&sanitized, 500),
                     }),
                 );
                 Ok(())
@@ -1725,37 +1739,38 @@ impl<'a> LoopDelegate for JobDelegate<'a> {
         }
 
         // Emit reasoning event if any tool calls carry reasoning.
-        // Sanitize narrative and per-tool rationale through SafetyLayer
-        // (parity with ChatDelegate in dispatcher.rs).
-        let sanitized_narrative = content
-            .as_deref()
-            .filter(|c| !c.trim().is_empty())
-            .map(|c| {
-                self.worker
-                    .deps
-                    .safety
-                    .sanitize_tool_output("job_narrative", c)
-                    .content
-            })
-            .filter(|c| !c.trim().is_empty())
-            .unwrap_or_default();
-        let decisions: Vec<serde_json::Value> = tool_calls
-            .iter()
-            .filter_map(|tc| {
-                tc.reasoning.as_ref().map(|r| {
-                    let sanitized = self
-                        .worker
-                        .deps
-                        .safety
-                        .sanitize_tool_output("tool_rationale", r)
-                        .content;
-                    serde_json::json!({
-                        "tool_name": tc.name,
-                        "rationale": sanitized,
-                    })
-                })
-            })
-            .collect();
+        // ADR-148 R2: route every narrative / rationale through the unified
+        // Layer-B egress gate (`UserDisplay` kind) via
+        // `safety::egress::sanitize_tool_output_via_egress`. The legacy
+        // `SafetyLayer::sanitize_tool_output` is replaced; build the
+        // `decisions` Vec with a sequential `for` loop so each gate call
+        // can `.await`.
+        let sanitized_narrative = match content.as_deref().filter(|c| !c.trim().is_empty()) {
+            Some(c) => {
+                crate::safety::egress::sanitize_tool_output_via_egress(
+                    &self.worker.deps.safety,
+                    "job_narrative",
+                    c,
+                )
+                .await
+            }
+            None => String::new(),
+        };
+        let mut decisions: Vec<serde_json::Value> = Vec::with_capacity(tool_calls.len());
+        for tc in tool_calls.iter() {
+            if let Some(r) = tc.reasoning.as_ref() {
+                let sanitized = crate::safety::egress::sanitize_tool_output_via_egress(
+                    &self.worker.deps.safety,
+                    "tool_rationale",
+                    r,
+                )
+                .await;
+                decisions.push(serde_json::json!({
+                    "tool_name": tc.name,
+                    "rationale": sanitized,
+                }));
+            }
+        }
         if !decisions.is_empty() {
             self.worker.log_event(
                 "reasoning",
