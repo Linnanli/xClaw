@@ -1709,16 +1709,29 @@ async fn execute_lightweight_with_tools(
             for tc in response.tool_calls {
                 let result = execute_routine_tool(ctx, &job_ctx, &allowed_tools, &tc).await;
 
-                // Sanitize and wrap result (including errors)
+                // Sanitize and wrap result (including errors).
+                // ADR-148 R2: route through the unified Layer-B egress gate
+                // (`UserDisplay` kind) via `safety::egress::sanitize_tool_output_via_egress`
+                // instead of the legacy `SafetyLayer::sanitize_tool_output` path.
                 let result_content = match result {
                     Ok(output) => {
-                        let sanitized = ctx.safety.sanitize_tool_output(&tc.name, &output);
-                        ctx.safety.wrap_for_llm(&tc.name, &sanitized.content)
+                        let sanitized = crate::safety::egress::sanitize_tool_output_via_egress(
+                            &ctx.safety,
+                            &tc.name,
+                            &output,
+                        )
+                        .await;
+                        ctx.safety.wrap_for_llm(&tc.name, &sanitized)
                     }
                     Err(e) => {
                         let error_msg = format!("Tool '{}' failed: {}", tc.name, e);
-                        let sanitized = ctx.safety.sanitize_tool_output(&tc.name, &error_msg);
-                        ctx.safety.wrap_for_llm(&tc.name, &sanitized.content)
+                        let sanitized = crate::safety::egress::sanitize_tool_output_via_egress(
+                            &ctx.safety,
+                            &tc.name,
+                            &error_msg,
+                        )
+                        .await;
+                        ctx.safety.wrap_for_llm(&tc.name, &sanitized)
                     }
                 };
 
