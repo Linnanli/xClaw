@@ -29,6 +29,14 @@ pub mod registry;
 pub use bash_permission_hook::BashPermissionHook;
 pub use bash_validation_hook::{BashValidationHook, DEFAULT_BASH_TOOL_NAMES};
 
+// ADR-152 §3 F2.2 (#626): re-export the rule context type so call sites
+// constructing a `BashPermissionHook` do not need a direct dependency on
+// the `dasclaw_bash_permissions` crate. Real rule ingestion lands in
+// Phase 2.3.
+pub use dasclaw_bash_permissions::{
+    PermissionBehavior, PermissionRuleSource, ToolPermissionContext,
+};
+
 pub use bundled::{
     HookBundleConfig, HookBundleError, HookRegistrationSummary, HookRuleConfig,
     OutboundWebhookConfig, RegexReplacementConfig, register_bundle, register_bundled_hooks,

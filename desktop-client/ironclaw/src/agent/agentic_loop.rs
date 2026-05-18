@@ -30,6 +30,11 @@ pub use dasclaw_core::permissions::PermissionMode;
 // Re-exported so call sites don't have to depend on `dasclaw_workspace_cap`
 // directly.
 pub use dasclaw_workspace_cap::WorkspaceCapability;
+// ADR-152 §3 F2.2 (#626): bash permission rule context is re-exported so
+// call sites construct `BashPermissionHook` rule contexts without taking a
+// direct dependency on the `dasclaw_bash_permissions` crate. Real rule
+// ingestion (from admin-backend / session config) is Phase 2.3.
+pub use dasclaw_hooks::ToolPermissionContext;
 
 use dasclaw_core::traits::HostError;
 
@@ -74,6 +79,40 @@ pub fn hook_bundle_with_safety(
     workspace_cap: std::sync::Arc<WorkspaceCapability>,
     permission_mode: PermissionMode,
 ) -> dasclaw_core::HookBundle {
+    hook_bundle_with_safety_and_permissions(
+        safety,
+        workspace_cap,
+        permission_mode,
+        ToolPermissionContext::default(),
+    )
+}
+
+/// ADR-152 §3 F2.2 (#626) variant of [`hook_bundle_with_safety`] that lets
+/// callers thread a [`ToolPermissionContext`] into the
+/// [`dasclaw_hooks::BashPermissionHook`] step of the egress chain.
+///
+/// Chain order is **bash-validation → bash-permissions → ironclaw-safety**:
+///
+/// 1. [`dasclaw_hooks::BashValidationHook`] — command-string structural /
+///    path-escape validation (security gate, never abstains).
+/// 2. [`dasclaw_hooks::BashPermissionHook`] — Deny/Ask/Allow rule pipeline
+///    over `permission_context`. With the default (empty) context every
+///    decision is `Passthrough`, so this step is a no-op until Phase 2.3
+///    (config ingestion) lands real rules. Inserting it now so the chain
+///    shape is stable and tests can drive the gate end-to-end.
+/// 3. [`ironclaw_safety::egress_gate::IronclawEgressGate`] — generic JSON
+///    validation + leak detection.
+///
+/// Empty-context guarantee: `BashPermissionHook::new(ToolPermissionContext::default())`
+/// returns `Passthrough` for every bash command, so the new step cannot
+/// regress the behaviour of [`hook_bundle_with_safety`] callers that don't
+/// supply rules.
+pub fn hook_bundle_with_safety_and_permissions(
+    safety: std::sync::Arc<crate::safety::SafetyLayer>,
+    workspace_cap: std::sync::Arc<WorkspaceCapability>,
+    permission_mode: PermissionMode,
+    permission_context: ToolPermissionContext,
+) -> dasclaw_core::HookBundle {
     use std::sync::Arc;
     let composite = dasclaw_core::CompositeEgressGate::builder()
         .add(
@@ -82,6 +121,10 @@ pub fn hook_bundle_with_safety(
                 permission_mode,
                 workspace_cap.root().to_path_buf(),
             )),
+        )
+        .add(
+            "bash-permissions",
+            Arc::new(dasclaw_hooks::BashPermissionHook::new(permission_context)),
         )
         .add(
             "ironclaw-safety",
@@ -475,6 +518,121 @@ mod tests {
         assert!(
             matches!(decision, EgressDecision::Block { .. }),
             "cap-rooted secrets bundle must still enforce ReadOnly, got {decision:?}"
+        );
+    }
+
+    // ---- ADR-152 §3 F2.2 (#626): BashPermissionHook wiring ----
+    //
+    // These tests prove the new `bash-permissions` step in the composite
+    // egress chain is reachable end-to-end and honours rule context:
+    //
+    // 1. Empty context: no rule fires → existing safety path is untouched
+    //    (the `req_safety_73_d_*` family above already exercises this
+    //    against `hook_bundle_with_safety` — those tests would have
+    //    regressed if the empty-context Passthrough contract was wrong).
+    // 2. Deny rule fires: a destructive command that bash-validation would
+    //    Allow (under `WorkspaceWrite`) is Blocked because a user-supplied
+    //    Deny rule matches. Proves the new step actually runs.
+    // 3. Ask rule fires: the permission hook surfaces `Ask` so the UI can
+    //    confirm. Distinguishes "hook is wired but only deny works" from
+    //    "hook is wired across all behaviours".
+    //
+    // Full per-behaviour matrix is owned by
+    // `dasclaw_hooks::bash_permission_hook::tests`; ironclaw only tests the
+    // wiring.
+
+    fn ctx_with_rule(
+        behavior: dasclaw_hooks::PermissionBehavior,
+        rule: &str,
+    ) -> ToolPermissionContext {
+        let mut ctx = ToolPermissionContext::default();
+        ctx.add_rule(behavior, dasclaw_hooks::PermissionRuleSource::Session, rule);
+        ctx
+    }
+
+    #[tokio::test]
+    async fn adr152_f22_permission_hook_deny_rule_blocks_bash_command() {
+        use dasclaw_core::{EgressDecision, EgressKind};
+        let ctx = ctx_with_rule(dasclaw_hooks::PermissionBehavior::Deny, "rm:*");
+        let bundle = hook_bundle_with_safety_and_permissions(
+            safety_layer(),
+            test_workspace_cap(),
+            // WorkspaceWrite is the mode under which bash-validation would
+            // Allow `rm -rf /tmp/foo` — so any Block we observe here must
+            // come from the new permission hook step, not the validation
+            // step.
+            PermissionMode::WorkspaceWrite,
+            ctx,
+        );
+        let args = serde_json::json!({ "command": "rm -rf /tmp/adr152_f22" });
+        let decision = bundle
+            .egress
+            .check(
+                &EgressKind::ToolExecution {
+                    tool: "bash".to_string(),
+                },
+                &args.to_string(),
+            )
+            .await;
+        assert!(
+            matches!(decision, EgressDecision::Block { .. }),
+            "Deny rule must block bash command via BashPermissionHook, got {decision:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn adr152_f22_permission_hook_ask_rule_surfaces_ask() {
+        use dasclaw_core::{EgressDecision, EgressKind};
+        let ctx = ctx_with_rule(dasclaw_hooks::PermissionBehavior::Ask, "echo:*");
+        let bundle = hook_bundle_with_safety_and_permissions(
+            safety_layer(),
+            test_workspace_cap(),
+            PermissionMode::WorkspaceWrite,
+            ctx,
+        );
+        // `echo hello` is benign — bash-validation Allows it. Any `Ask`
+        // observed must come from the permission hook.
+        let args = serde_json::json!({ "command": "echo hello" });
+        let decision = bundle
+            .egress
+            .check(
+                &EgressKind::ToolExecution {
+                    tool: "bash".to_string(),
+                },
+                &args.to_string(),
+            )
+            .await;
+        assert!(
+            matches!(decision, EgressDecision::Ask { .. }),
+            "Ask rule must surface EgressDecision::Ask, got {decision:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn adr152_f22_safety_only_helper_uses_empty_permission_context() {
+        use dasclaw_core::{EgressDecision, EgressKind};
+        // `hook_bundle_with_safety` delegates to the permissioned helper
+        // with `ToolPermissionContext::default()`. A benign command under
+        // WorkspaceWrite must Allow — proving the empty context is a true
+        // no-op for the new step (not silently blocking everything).
+        let bundle = hook_bundle_with_safety(
+            safety_layer(),
+            test_workspace_cap(),
+            PermissionMode::WorkspaceWrite,
+        );
+        let args = serde_json::json!({ "command": "echo hello" });
+        let decision = bundle
+            .egress
+            .check(
+                &EgressKind::ToolExecution {
+                    tool: "bash".to_string(),
+                },
+                &args.to_string(),
+            )
+            .await;
+        assert!(
+            matches!(decision, EgressDecision::Allow),
+            "empty permission context must not regress safety-only helper, got {decision:?}"
         );
     }
 }
