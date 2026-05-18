@@ -34,10 +34,10 @@ use dasclaw_bash_permissions::{
     MAX_SUBCOMMANDS_FOR_SECURITY_CHECK, PermissionBehavior, PermissionRuleSource,
     ToolPermissionContext,
 };
+use dasclaw_core::EgressDecision;
 use dasclaw_hooks::BashPermissionHook;
 use serde_json::json;
 use tracing_test::traced_test;
-use x_claw_agent::EgressDecision;
 
 /// Project-scope rule context with a single rule. Mirrors
 /// `bash_permission_hook.rs::ctx_with` but kept local — duplicating a

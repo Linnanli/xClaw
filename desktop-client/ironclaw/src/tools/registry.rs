@@ -204,7 +204,7 @@ impl ToolRegistry {
     /// Get a reference to the injected secrets store, if any.
     ///
     /// Exposed so agent-loop plumbing (e.g. `hook_bundle_with_safety_and_secrets`)
-    /// can forward the same store to the `x_claw_agent::SecretProvider` hook
+    /// can forward the same store to the `dasclaw_core::SecretProvider` hook
     /// without threading a separate copy through every construction site.
     pub fn secrets_store(&self) -> Option<&Arc<dyn SecretsStore + Send + Sync>> {
         self.secrets_store.as_ref()

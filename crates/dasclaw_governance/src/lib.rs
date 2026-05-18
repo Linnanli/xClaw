@@ -81,7 +81,7 @@ pub mod tool_visibility;
 // ---- ADR-148 EgressGate: always-on Layer B trait seam ----------------------
 //
 // Unlike the feature-gated W4 6-pack scaffolds above, [`egress`] is core
-// infrastructure consumed by `dasclaw_hooks` / `x_claw_agent` /
+// infrastructure consumed by `dasclaw_hooks` / `dasclaw_core` /
 // `ironclaw_safety` and is therefore unconditional. See
 // `docs/plans/architecture-refactor/adr-148-egress-gate-safety-hook-semantics.md`.
 pub mod egress;

@@ -8,7 +8,7 @@
 //!
 //! Trait seams — `EgressGate` (ADR-148, replaces `SafetyHook`),
 //! `SandboxExecutor`, `SecretProvider`, `ApprovalGate`, `SessionHooks` —
-//! are owned by [`x_claw_agent`] (per ADR-001 crate-independence rule) and
+//! are owned by [`dasclaw_core`] (per ADR-001 crate-independence rule) and
 //! **reexported here** so callers only need to depend on `dasclaw_hooks`.
 //!
 //! See [`docs/plans/architecture-refactor/adr-113-hook-engine-unification.md`]
@@ -40,12 +40,12 @@ pub use contract::{
 pub use hook::{Hook, HookContext, HookError, HookEvent, HookFailureMode, HookOutcome, HookPoint};
 pub use registry::HookRegistry;
 
-// Reexport trait seams from `x_claw_agent` so external callers never have to
+// Reexport trait seams from `dasclaw_core` so external callers never have to
 // import both crates. The reexports are deliberately type-identity-preserving
 // (`pub use`), not newtype wrappers.
 //
 // ADR-148: `SafetyHook` family was removed; `EgressGate` family replaces it.
-pub use x_claw_agent::{
+pub use dasclaw_core::{
     ApprovalError, ApprovalGate, ApprovalOutcome, ApprovalRequest, AutoApproveGate,
     CompositeEgressGate, CompositeEgressGateBuilder, DenyAllGate, EgressDecision, EgressGate,
     EgressKind, GateId, HookBundle, InMemorySecrets, NoopEgressGate, NoopSandboxExecutor,
@@ -54,7 +54,7 @@ pub use x_claw_agent::{
     SecretString, SessionHooks,
 };
 
-/// Bridge [`HookRegistry`] into the `x_claw_agent::SessionHooks` trait so
+/// Bridge [`HookRegistry`] into the `dasclaw_core::SessionHooks` trait so
 /// `SessionManager` (in the runtime crate) can fire `OnSessionStart` /
 /// `OnSessionEnd` events without depending on a concrete hook engine.
 ///
@@ -65,7 +65,7 @@ pub use x_claw_agent::{
 /// `HookRegistry` is defined here; placing the impl elsewhere would violate
 /// Rust's orphan rule.
 #[async_trait::async_trait]
-impl x_claw_agent::SessionHooks for HookRegistry {
+impl dasclaw_core::SessionHooks for HookRegistry {
     async fn on_session_start(&self, user_id: &str, session_id: &str) {
         let event = HookEvent::SessionStart {
             user_id: user_id.to_string(),
@@ -101,19 +101,19 @@ mod acceptance_tests {
     }
 
     /// `req_p03_pr1_reexport_trait_seams_identity` — the trait seams reexported
-    /// from `x_claw_agent` must be the *same* types (no newtype wrappers), so
-    /// implementors of `x_claw_agent::EgressGate` are accepted wherever
+    /// from `dasclaw_core` must be the *same* types (no newtype wrappers), so
+    /// implementors of `dasclaw_core::EgressGate` are accepted wherever
     /// `dasclaw_hooks::EgressGate` is expected.
     #[test]
     fn req_p03_pr1_reexport_trait_seams_identity() {
         fn _assert_same<T: ?Sized>() {}
         // The cast below only type-checks when the two paths resolve to the
         // identical trait object type.
-        let _: fn(&dyn x_claw_agent::EgressGate) -> &dyn EgressGate = |x| x;
-        let _: fn(&dyn x_claw_agent::ApprovalGate) -> &dyn ApprovalGate = |x| x;
-        let _: fn(&dyn x_claw_agent::SandboxExecutor) -> &dyn SandboxExecutor = |x| x;
-        let _: fn(&dyn x_claw_agent::SecretProvider) -> &dyn SecretProvider = |x| x;
-        let _: fn(&dyn x_claw_agent::SessionHooks) -> &dyn SessionHooks = |x| x;
+        let _: fn(&dyn dasclaw_core::EgressGate) -> &dyn EgressGate = |x| x;
+        let _: fn(&dyn dasclaw_core::ApprovalGate) -> &dyn ApprovalGate = |x| x;
+        let _: fn(&dyn dasclaw_core::SandboxExecutor) -> &dyn SandboxExecutor = |x| x;
+        let _: fn(&dyn dasclaw_core::SecretProvider) -> &dyn SecretProvider = |x| x;
+        let _: fn(&dyn dasclaw_core::SessionHooks) -> &dyn SessionHooks = |x| x;
     }
 
     /// `req_p03_pr1_registry_implements_session_hooks` — `HookRegistry` is
@@ -122,7 +122,7 @@ mod acceptance_tests {
     #[test]
     fn req_p03_pr1_registry_implements_session_hooks() {
         let registry = HookRegistry::new();
-        let _: &dyn x_claw_agent::SessionHooks = &registry;
+        let _: &dyn dasclaw_core::SessionHooks = &registry;
     }
 
     // ───────────────────── ADR-113 §6.2 PR #2 acceptance ─────────────────────
@@ -196,12 +196,12 @@ mod acceptance_tests {
 
     /// `req_p03_pr2_agentic_loop_uses_reexport_bundle` — agent loop 使用
     /// `dasclaw_hooks::HookBundle`（reexport）时，trait seams 类型与
-    /// `x_claw_agent::HookBundle` **完全相同**，可直接互传。
+    /// `dasclaw_core::HookBundle` **完全相同**，可直接互传。
     #[test]
     fn req_p03_pr2_agentic_loop_uses_reexport_bundle() {
         // 构造一个全 noop 的 bundle（agent loop 默认形态），断言 reexport
         // 与原始类型 ABI 一致：HookBundle 字段类型必须是同一 trait object。
-        let bundle: HookBundle = x_claw_agent::HookBundle::noop();
+        let bundle: HookBundle = dasclaw_core::HookBundle::noop();
         // 字段层 type identity（编译通过即证）：
         let _: &std::sync::Arc<dyn EgressGate> = &bundle.egress;
         let _: &std::sync::Arc<dyn SandboxExecutor> = &bundle.sandbox;
@@ -251,7 +251,7 @@ mod acceptance_tests {
                 }))
                 .await;
             // 走 SessionHooks bridge（PR #46 在 lib.rs 实现）。
-            let bridge: &dyn x_claw_agent::SessionHooks = &registry;
+            let bridge: &dyn dasclaw_core::SessionHooks = &registry;
             bridge.on_session_start("u1", "s1").await;
         });
         assert_eq!(

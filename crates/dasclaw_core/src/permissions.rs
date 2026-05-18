@@ -12,7 +12,7 @@
 //! - `bash_validation` is the only current consumer and it uses nothing
 //!   beyond the 5-variant enum + `Copy`/`Eq`/`as_str()`.
 //! - Pulling the full policy engine would drag `RuntimePermissionRuleConfig`
-//!   and the upstream `config` module into `x_claw_agent`, which Phase 3
+//!   and the upstream `config` module into `dasclaw_core`, which Phase 3
 //!   explicitly scope-narrowed away (see `UPSTREAM_BASELINE.md` Step D-3).
 //! - The broader permission-policy story belongs to ironclaw's existing
 //!   `safety` + `tools` + `extensions` surface (policy, DLP, denylist,

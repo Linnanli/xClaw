@@ -441,7 +441,7 @@ impl Scheduler {
 
                 tokio::spawn(async move {
                     // Phase 3 D-1: TaskHandler::run now returns Box<dyn Error + Send + Sync>
-                    // (to keep x_claw_agent free of ironclaw-layer error types). Convert
+                    // (to keep dasclaw_core free of ironclaw-layer error types). Convert
                     // back to ironclaw's Error here for the scheduler channel contract.
                     let result = handler.run(ctx).await.map_err(|e| {
                         Error::Job(JobError::ContextError {

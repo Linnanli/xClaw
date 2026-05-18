@@ -63,7 +63,7 @@ pub mod keychain;
 mod store;
 mod types;
 
-/// `x_claw_agent::SecretProvider` adapter.
+/// `dasclaw_core::SecretProvider` adapter.
 pub mod agent_provider;
 
 pub use crypto::SecretsCrypto;

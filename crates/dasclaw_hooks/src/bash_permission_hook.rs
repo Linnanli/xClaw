@@ -17,7 +17,7 @@
 //! Only the `EgressKind::ToolExecution` branch of `check` does real work;
 //! every other kind returns [`EgressDecision::Allow`] so this gate
 //! composes cleanly with `BashValidationHook` (Phase 2.1 command-injection
-//! gate) and other egress gates in a [`x_claw_agent::CompositeEgressGate`]
+//! gate) and other egress gates in a [`dasclaw_core::CompositeEgressGate`]
 //! chain.
 //!
 //! For tools whose name matches [`BashPermissionHook::bash_tool_names`]
@@ -106,10 +106,10 @@ use dasclaw_bash_validation::{
     command_has_any_git, command_writes_to_git_internal_paths, is_unsafe_xargs_invocation,
     sed_command_is_allowed_by_allowlist,
 };
-use serde_json::Value;
-use x_claw_agent::{
+use dasclaw_core::{
     EgressDecision, EgressGate, EgressKind, RedactionStats, RuleAction, RuleSuggestion,
 };
+use serde_json::Value;
 
 use crate::bash_validation_hook::DEFAULT_BASH_TOOL_NAMES;
 

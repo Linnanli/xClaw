@@ -1,6 +1,6 @@
 //! Contract tests for `SandboxExecRequest.network`.
 //!
-//! These tests pin the IPC-shape guarantees the `x_claw_agent` hook
+//! These tests pin the IPC-shape guarantees the `dasclaw_core` hook
 //! contract makes for sandbox runtime integrations (Wave-C2b sibling of
 //! `dasclaw_sandbox::SandboxExecRequest.network`, but on the
 //! dependency-free hook seam):
@@ -13,13 +13,13 @@
 //!    safely thread proxy endpoints across the JSON boundary.
 //!
 //! These tests deliberately live as an integration test (not a unit
-//! test) so they exercise only the public `x_claw_agent` API surface and
+//! test) so they exercise only the public `dasclaw_core` API surface and
 //! catch any accidental visibility regressions on `SandboxNetworkHint`.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use x_claw_agent::{SandboxExecRequest, SandboxNetworkHint};
+use dasclaw_core::{SandboxExecRequest, SandboxNetworkHint};
 
 #[test]
 fn req_sandbox_exec_request_defaults_network_to_none_on_legacy_payload() {

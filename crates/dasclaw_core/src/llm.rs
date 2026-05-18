@@ -1,4 +1,4 @@
-//! `x_claw_agent::llm` — Facade 合同：未来 `dasclaw_core::llm::claw_code` 的接口边界。
+//! `dasclaw_core::llm` — Facade 合同：未来 `dasclaw_core::llm::claw_code` 的接口边界。
 //!
 //! ## 背景与定位
 //!

@@ -2,7 +2,7 @@
 //! loop and its delegates.
 //!
 //! These types were lifted out of `ironclaw::llm::reasoning` as part of
-//! Phase 3 Step D-4 so the agentic loop can live in `x_claw_agent` without
+//! Phase 3 Step D-4 so the agentic loop can live in `dasclaw_core` without
 //! pulling in the `Reasoning` engine (which depends on `LlmProvider` /
 //! `rust_decimal` / `LlmError`).
 

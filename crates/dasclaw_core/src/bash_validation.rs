@@ -14,7 +14,7 @@
 //!   at upstream baseline `610b3470` (see `UPSTREAM_BASELINE.md`).
 //! - **Deviation from upstream**: the public surface is byte-for-byte
 //!   identical; the only type substitution is `crate::permissions::PermissionMode`
-//!   which, in `x_claw_agent`, is a **sliced port** — only the enum
+//!   which, in `dasclaw_core`, is a **sliced port** — only the enum
 //!   itself, not upstream's `PermissionPolicy`/`PermissionContext`/etc.
 //!   See `permissions.rs` for the rationale.
 //! - **Why ported here and not in ironclaw**: this is the
@@ -22,7 +22,7 @@
 //!   kernel (every host using the kernel wants it), not to the
 //!   ironclaw-specific safety layer. Host callers compose it with their
 //!   own policy engine (ironclaw: `SafetyLayer` + `ToolRegistry`).
-//! - **Host integration**: `x_claw_agent::bash_validation::validate_command`
+//! - **Host integration**: `dasclaw_core::bash_validation::validate_command`
 //!   returns `ValidationResult::{Allow, Warn, Block}`. A host that
 //!   already runs a `SafetyHook::before_tool_call` can call this as the
 //!   first gate inside its own hook implementation and translate

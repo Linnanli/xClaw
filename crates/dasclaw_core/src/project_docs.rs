@@ -108,7 +108,7 @@ mod tests {
     }
 
     #[test]
-    fn req_x_claw_agent_59b_injects_section_when_agents_md_exists() {
+    fn req_dasclaw_core_59b_injects_section_when_agents_md_exists() {
         let tmp = TempDir::new().unwrap();
         let cwd = tmp.path().join("project");
         write(cwd.join("AGENTS.md"), "## test instructions");
@@ -125,7 +125,7 @@ mod tests {
     }
 
     #[test]
-    fn req_x_claw_agent_59b_no_injection_when_no_docs() {
+    fn req_dasclaw_core_59b_no_injection_when_no_docs() {
         let tmp = TempDir::new().unwrap();
         let cwd = tmp.path().join("project");
         fs::create_dir_all(&cwd).unwrap();
@@ -141,7 +141,7 @@ mod tests {
     }
 
     #[test]
-    fn req_x_claw_agent_59b_appends_after_existing_dynamic_boundary() {
+    fn req_dasclaw_core_59b_appends_after_existing_dynamic_boundary() {
         let tmp = TempDir::new().unwrap();
         let cwd = tmp.path().join("project");
         write(cwd.join("AGENTS.md"), "rule-1");
@@ -164,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn req_x_claw_agent_59b_handles_nested_layered_docs() {
+    fn req_dasclaw_core_59b_handles_nested_layered_docs() {
         let tmp = TempDir::new().unwrap();
         // Layered loader walks `home`, `project`, `cwd` independently.
         write(tmp.path().join("home/.dasclaw/AGENTS.md"), "user-global");
@@ -182,7 +182,7 @@ mod tests {
     }
 
     #[test]
-    fn req_x_claw_agent_59b_empty_existing_prompt_replaced_without_boundary() {
+    fn req_dasclaw_core_59b_empty_existing_prompt_replaced_without_boundary() {
         let tmp = TempDir::new().unwrap();
         let cwd = tmp.path().join("project");
         write(cwd.join("AGENTS.md"), "only");
@@ -200,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn req_x_claw_agent_59b_empty_loader_is_noop_with_existing_prompt() {
+    fn req_dasclaw_core_59b_empty_loader_is_noop_with_existing_prompt() {
         let mut ctx = ReasoningContext::new();
         ctx.system_prompt = Some("base".to_string());
 
@@ -215,7 +215,7 @@ mod tests {
     }
 
     #[test]
-    fn req_x_claw_agent_59b_reports_appended_byte_count() {
+    fn req_dasclaw_core_59b_reports_appended_byte_count() {
         let tmp = TempDir::new().unwrap();
         let cwd = tmp.path().join("project");
         write(cwd.join("AGENTS.md"), "abcdef");

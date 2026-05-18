@@ -21,8 +21,8 @@ use crate::context::JobContext;
 use crate::error::Error;
 use crate::llm::{ChatMessage, Reasoning, ToolCall};
 use crate::tools::redact_params;
+use dasclaw_core::WorkspaceWriter;
 use ironclaw_common::truncate_preview;
-use x_claw_agent::WorkspaceWriter;
 
 const FORGED_THREAD_ID_ERROR: &str = "Invalid or unauthorized thread ID.";
 

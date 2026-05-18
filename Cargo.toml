@@ -4,7 +4,7 @@ members = [
 	"admin-backend",
 	"crates/ironclaw_auth",
 	"crates/dasclaw_workspace_cap",
-	"crates/x_claw_agent",
+	"crates/dasclaw_core",
 	# W1 skeletons (17 dasclaw_* crates) — see docs/plans/architecture-refactor/32-execution-plan.md §W1
 	"crates/dasclaw_sandbox",
 	"crates/dasclaw_pty",

@@ -68,7 +68,7 @@ pub enum EgressKind {
 /// Suggestion surfaced alongside [`EgressDecision::Ask`] so the UX can
 /// render actionable buttons ("Always allow `git status`").
 ///
-/// Mirrors the previous `x_claw_agent::RuleSuggestion` API; moved here so
+/// Mirrors the previous `dasclaw_core::RuleSuggestion` API; moved here so
 /// `Ask` decisions remain self-contained in `dasclaw_governance` without
 /// depending on the agent crate.
 #[derive(Debug, Clone, PartialEq, Eq)]

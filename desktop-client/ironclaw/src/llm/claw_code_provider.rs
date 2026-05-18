@@ -195,13 +195,13 @@ fn split_system_and_messages(messages: &[ChatMessage]) -> (Option<String>, Vec<I
 
 /// Anthropic prompt cache 边界标注（HTML comment 形态，由 [`crate::llm::prompt::LayeredPromptBuilder`] 注入）。
 ///
-/// 与 [`x_claw_agent::PROMPT_CACHE_BOUNDARY`] 保持一致：包裹成 HTML 注释后，
+/// 与 [`dasclaw_core::PROMPT_CACHE_BOUNDARY`] 保持一致：包裹成 HTML 注释后，
 /// 系统提示词中的边界标记不会被任何下游 markdown / 模型行为意外渲染。
 const CACHE_BOUNDARY_COMMENT: &str = concat!("<!-- ", "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__", " -->");
 
 /// 把合并好的 system 文本根据 protocol 投影到合适的 [`SystemPrompt`] 形态。
 ///
-/// - **Anthropic 模型 + 含 [`x_claw_agent::PROMPT_CACHE_BOUNDARY`] 标记**：
+/// - **Anthropic 模型 + 含 [`dasclaw_core::PROMPT_CACHE_BOUNDARY`] 标记**：
 ///   切成 `[static_prefix(cache_control=ephemeral), dynamic_suffix]` 两个 [`SystemBlock`]，
 ///   让 Anthropic prompt cache 命中静态前缀（identity + tools + safety）；动态后缀
 ///   （skills + channel + runtime ctx）每轮变化不进缓存。
@@ -1401,10 +1401,10 @@ mod tests {
 
     // -------- Anthropic prompt cache 边界切分 (issue #139, ADR-117 R-1) --------
 
-    /// 边界常量必须与 x_claw_agent 源真理一致（HTML comment 包装版本）。
+    /// 边界常量必须与 dasclaw_core 源真理一致（HTML comment 包装版本）。
     #[test]
     fn cache_boundary_comment_matches_agent_constant() {
-        let expected = format!("<!-- {} -->", x_claw_agent::PROMPT_CACHE_BOUNDARY);
+        let expected = format!("<!-- {} -->", dasclaw_core::PROMPT_CACHE_BOUNDARY);
         assert_eq!(CACHE_BOUNDARY_COMMENT, expected);
     }
 

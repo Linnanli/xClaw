@@ -13,10 +13,10 @@
 //! not silently demote a Deny to an Allow.
 
 use dasclaw_bash_permissions::{PermissionBehavior, PermissionRuleSource, ToolPermissionContext};
+use dasclaw_core::{EgressDecision, RuleAction};
 use dasclaw_hooks::BashPermissionHook;
 use serde_json::json;
 use tracing_test::traced_test;
-use x_claw_agent::{EgressDecision, RuleAction};
 
 fn ctx_with(behavior: PermissionBehavior, rule_content: &str) -> ToolPermissionContext {
     let mut ctx = ToolPermissionContext::default();
@@ -209,7 +209,7 @@ async fn req_perm_490_p2_2_f_hook_11_custom_tool_name_allowlist() {
 async fn req_perm_490_p2_2_f_hook_12_non_tool_execution_kinds_allow() {
     // ADR-148: the bash permission gate only inspects EgressKind::ToolExecution
     // payloads; LlmRequest / UserDisplay / Persistence MUST pass through.
-    use x_claw_agent::{EgressGate, EgressKind};
+    use dasclaw_core::{EgressGate, EgressKind};
     let hook = BashPermissionHook::new(ToolPermissionContext::default());
     for kind in [
         EgressKind::LlmRequest,

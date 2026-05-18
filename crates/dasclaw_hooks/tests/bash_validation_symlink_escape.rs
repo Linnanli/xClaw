@@ -27,11 +27,11 @@
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
+use dasclaw_core::EgressDecision;
+use dasclaw_core::permissions::PermissionMode;
 use dasclaw_hooks::BashValidationHook;
 use serde_json::json;
 use tempfile::TempDir;
-use x_claw_agent::EgressDecision;
-use x_claw_agent::permissions::PermissionMode;
 
 /// Build a tempdir + canonical workspace root pair. Canonicalization is
 /// **the test's job** here only so we control the comparison anchor;

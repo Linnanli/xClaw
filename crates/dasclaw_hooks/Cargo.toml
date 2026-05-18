@@ -20,9 +20,9 @@ thiserror = "1"
 tokio = { version = "1", features = ["sync", "macros", "time", "rt"] }
 tracing = "0.1"
 
-# Reexport `x_claw_agent` trait seams so `dasclaw_hooks` becomes the single
+# Reexport `dasclaw_core` trait seams so `dasclaw_hooks` becomes the single
 # front-door for both event-style hooks and trait-seam hooks. See ADR-113.
-x_claw_agent = { path = "../x_claw_agent", version = "0.1.0" }
+dasclaw_core = { path = "../dasclaw_core", version = "0.1.0" }
 
 # Phase 2.1 bash command-injection detection engine (Slice 2.1.d wires it
 # into `BashValidationHook::before_tool_call`).

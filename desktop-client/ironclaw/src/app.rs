@@ -983,7 +983,7 @@ impl AppBuilder {
         // the concrete `Arc<HookRegistry>` via unsize coercion (the bridge
         // `impl SessionHooks for HookRegistry` lives in `crate::hooks`).
         let hooks_for_session: Arc<HookRegistry> = Arc::clone(&hooks);
-        let session_hooks: Arc<dyn x_claw_agent::SessionHooks> = hooks_for_session;
+        let session_hooks: Arc<dyn dasclaw_core::SessionHooks> = hooks_for_session;
         let agent_session_manager = Arc::new(AgentSessionManager::new().with_hooks(session_hooks));
 
         let (
@@ -1180,7 +1180,7 @@ mod tests {
         hooks.register(Arc::new(SessionStartHook { tx })).await;
 
         let manager = AgentSessionManager::new()
-            .with_hooks(Arc::clone(&hooks) as Arc<dyn x_claw_agent::SessionHooks>);
+            .with_hooks(Arc::clone(&hooks) as Arc<dyn dasclaw_core::SessionHooks>);
         manager.get_or_create_session("user-123").await;
 
         let (user_id, session_id) =

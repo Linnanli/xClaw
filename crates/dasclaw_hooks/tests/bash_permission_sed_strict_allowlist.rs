@@ -22,10 +22,10 @@
 //!   `tool` + `rule_id="SedAllowlist"`.
 
 use dasclaw_bash_permissions::{PermissionBehavior, PermissionRuleSource, ToolPermissionContext};
+use dasclaw_core::EgressDecision;
 use dasclaw_hooks::BashPermissionHook;
 use serde_json::json;
 use tracing_test::traced_test;
-use x_claw_agent::EgressDecision;
 
 fn empty_ctx() -> ToolPermissionContext {
     ToolPermissionContext::default()

@@ -114,7 +114,7 @@ cron = "0.13"
 ironclaw_common = { path = "crates/ironclaw_common", version = "0.1.0" }
 
 # Agent runtime domain model (Phase 3 Step D-0: messages moved from llm/provider.rs)
-x_claw_agent = { path = "../../crates/x_claw_agent", version = "0.1.0" }
+dasclaw_core = { path = "../../crates/dasclaw_core", version = "0.1.0" }
 
 # W3.1a: OS-level sandbox executor (replaces Docker sandbox path)
 dasclaw_exec = { path = "../../crates/dasclaw_exec", version = "0.1.0" }

@@ -109,12 +109,12 @@ impl LoopDelegate for ParityDelegate {
         &self,
         reason_ctx: &mut ReasoningContext,
         _iteration: usize,
-    ) -> Result<RespondOutput, x_claw_agent::HostError> {
+    ) -> Result<RespondOutput, dasclaw_core::HostError> {
         self.iterations.fetch_add(1, Ordering::SeqCst);
         self.reasoning
             .respond_with_tools(reason_ctx)
             .await
-            .map_err(|e| -> x_claw_agent::HostError { Box::new(Error::from(e)) })
+            .map_err(|e| -> dasclaw_core::HostError { Box::new(Error::from(e)) })
     }
 
     async fn handle_text_response(
@@ -131,7 +131,7 @@ impl LoopDelegate for ParityDelegate {
         tool_calls: Vec<ToolCall>,
         _content: Option<String>,
         reason_ctx: &mut ReasoningContext,
-    ) -> Result<Option<LoopOutcome>, x_claw_agent::HostError> {
+    ) -> Result<Option<LoopOutcome>, dasclaw_core::HostError> {
         for tc in &tool_calls {
             let result = execute_tool_with_safety(
                 &self.tools,
@@ -204,7 +204,7 @@ async fn run_scenario(
         &delegate,
         &mut ctx,
         &config,
-        &x_claw_agent::HookBundle::noop(),
+        &dasclaw_core::HookBundle::noop(),
     )
     .await
     .expect("agentic loop should not fail");
@@ -275,7 +275,7 @@ async fn run_scenario_with_job_ctx(
         &delegate,
         &mut ctx,
         &config,
-        &x_claw_agent::HookBundle::noop(),
+        &dasclaw_core::HookBundle::noop(),
     )
     .await
     .expect("agentic loop should not fail");
@@ -1430,7 +1430,7 @@ async fn ps_029_max_iterations_reached() {
         &delegate,
         &mut ctx,
         &config,
-        &x_claw_agent::HookBundle::noop(),
+        &dasclaw_core::HookBundle::noop(),
     )
     .await
     .expect("loop should not error");
@@ -1485,7 +1485,7 @@ async fn ps_030_token_usage_tracked() {
         &delegate,
         &mut ctx,
         &config,
-        &x_claw_agent::HookBundle::noop(),
+        &dasclaw_core::HookBundle::noop(),
     )
     .await
     .expect("loop ok");

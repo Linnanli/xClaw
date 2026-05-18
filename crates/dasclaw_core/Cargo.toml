@@ -1,5 +1,5 @@
 [package]
-name = "x_claw_agent"
+name = "dasclaw_core"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.92"
@@ -12,7 +12,7 @@ publish = false
 dist = false
 
 [lib]
-name = "x_claw_agent"
+name = "dasclaw_core"
 path = "src/lib.rs"
 
 [dependencies]
