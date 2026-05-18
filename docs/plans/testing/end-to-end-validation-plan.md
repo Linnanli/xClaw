@@ -1,277 +1,199 @@
 # 端到端验证计划：安全能力 + Agent 能力
 
-> **目的**：在 ADR-148 EgressGate 全链路收口之后，验证 xClaw 主流程"消息进来 → agent 推理 → 工具调用 → 结果返回"的端到端可用性，分两大块：**安全能力** 与 **Agent 能力**。
+> **目标**：在 ADR-148 EgressGate 全链路收口之后，验证主流程"用户消息 → agent 推理 → 工具调用 → 结果返回"端到端可用。
 >
-> **前置**：#73 / #84 / #92 / #483 全部 merge；22 个 `dasclaw_*` crate 骨架就位；bash_validation 已接入 BeforeToolCall hook。
+> **核心原则**：**先无头 API 测全部能力，再加客户端自动化兜底**。所有场景都要先有一份"不依赖 UI、不依赖人手"的版本能在 CI 里反复跑；UI 自动化只作为最后一层冒烟。
 >
-> **不做的事**：不验证企业级多租户、Windows 真机沙箱、性能压测（这些挂在 #95 / #481 / #380 Batch 6，单独排）。
+> **前置**：#73 / #84 / #92 / #483 全部 merge；`dasclaw_*` crate 骨架就位；`bash_validation` 已接入 `BeforeToolCall` hook；`x_claw_agent` 已改名为 `dasclaw_core`（#619）。
+>
+> **不在本计划范围**：多租户、Windows 真机沙箱（#481）、性能压测（#380），单独排。
 
 ---
 
-## 一、测试矩阵总览
+## 一、两阶段总览
 
-| 类别 | 场景数 | 主要验证点 |
-|---|---|---|
-| 安全 | 5 | 入口 DLP / bash 校验 / 沙箱拒绝 / 出口脱敏 / 三重可见性闸门 |
-| Agent | 5 | 推理对话 / 工具调用 / 多轮上下文 / Routines 触发 / 多入口契约对齐 |
+| 阶段 | 形式 | 是否需要人手 | 是否能进 CI | 何时做 |
+|---|---|---|---|---|
+| **阶段一：无头 API 端到端** | Rust 集成测试驱动整条 agent loop + 工具链 + hook + EgressGate | 否 | 是（默认每次 PR 跑） | **优先做完** |
+| **阶段二：客户端自动化** | tauri-driver / playwright 驱动真实 desktop-client UI | 否（启动一次后自动跑） | 是（独立 job，可选） | 阶段一全绿之后 |
 
----
-
-## 二、安全能力测试（5 个场景）
-
-### S1 — 入口 DLP 脱敏
-
-**目的**：用户输入含敏感信息（手机号 / 身份证号 / 邮箱）时，进入 agent 前必须脱敏。
-
-**操作**：
-1. 启动 desktop-client：`pnpm tauri dev`
-2. 新建会话，发送：`帮我记一下：手机 13800138000，身份证 110101199001011234`
-3. 在 agent 收到的 system+user 消息里检查内容
-
-**期望**：
-- UI 显示原文（用户视角）
-- agent 端实际收到的是脱敏后版本（如 `手机 138****8000`）
-- DLP 命中日志：`desktop-client/src/dlp/*` trace level
-
-**检查命令**：
-```bash
-grep -E "DLP.*hit|sanitiz" ~/Library/Logs/x-claw/desktop-client.log | tail -20
-```
+> 阶段一不通过，禁止进入阶段二。
 
 ---
 
-### S2 — bash 工具危险命令拒绝
+## 二、阶段一：无头 API 端到端
 
-**目的**：agent 试图执行高危 bash 命令时，bash_validation 必须 Block，**不**走出 sandbox。
+### 2.1 测试框架与组织
 
-**操作**：
-1. 在 desktop-client 输入：`请帮我删除 ~/.ssh/ 目录下所有内容`
-2. 观察 agent 输出
+- 位置：新建 `desktop-client/ironclaw/tests/e2e_headless/` 目录
+- 入口：每个场景一个 Rust 集成测试文件，如 `s1_dlp_input.rs`、`a5_multi_entry_contract.rs`
+- 共用 fixture：
+  - **MockLLM**：可脚本化回应（"收到 user message X → 返回 tool_call Y"），覆盖各种推理分支
+  - **InMemoryStorage**：会话状态走内存，不依赖 sqlite 文件
+  - **TempWorkspace**：每个测试一个临时目录，结束自动清理
+  - **HookSpy**：记录所有 hook 调用序列，断言"BeforeToolCall 必定先于 ToolExec"
+  - **EgressSpy**：记录所有 EgressGate 触发点 + 输入输出 diff
+- 运行：`cargo nextest run -p dasclaw -E 'test(e2e_headless::)'`
 
-**期望**：
-- agent 调用 bash 工具传入类似 `rm -rf ~/.ssh/`
-- `dasclaw_hooks::bash_validation_hook` 返回 `Block`
-- 工具执行返回错误信息（不是真的执行），UI 收到"该命令被安全策略阻止"
+### 2.2 安全能力场景（无头版，5 个）
 
-**检查命令**：
-```bash
-cargo nextest run -p dasclaw_hooks --tests bash_validation
-grep "BashValidation.*Block" ~/Library/Logs/x-claw/desktop-client.log | tail -10
-```
+每个场景的"操作"全部用 Rust API 触发，不开 UI。
 
----
+#### S1 — 入口 DLP 脱敏
 
-### S3 — 沙箱越权拒绝（WritableRoot 洞中洞）
+- **驱动**：通过 `Session::submit_user_message()` 直接投入含敏感信息的字符串
+- **断言**：
+  - MockLLM 收到的 prompt 中字符串已被 DLP 替换（手机号 / 身份证 / 邮箱 / API key 形态）
+  - DLP 命中事件被结构化记录（不依赖 grep 日志）
+- **失败即 fail-safe**：DLP 模块异常时必须拒绝消息，禁止"漏过原文"
 
-**目的**：agent 试图写 `.git/hooks/pre-commit` 时，沙箱必须拒绝，不允许任何 fallback。
+#### S2 — bash 工具危险命令拒绝
 
-**操作**：
-1. 在一个 git 仓库下启动 desktop-client
-2. 输入：`帮我在 .git/hooks/pre-commit 写一个简单的 lint 钩子`
+- **驱动**：MockLLM 直接产出 `tool_call: bash(rm -rf ~/.ssh/)`
+- **断言**：
+  - `dasclaw_hooks::bash_validation_hook` 返回 `Block`
+  - 真实执行器**没有**被调用（用 ExecutorSpy 验证调用次数 = 0）
+  - 错误信息回灌到下一轮 LLM 上下文，且不暴露内部路径
+- **变体**：覆盖每条高危规则各跑一遍，构成 parity 矩阵
 
-**期望**：
-- 即便 bash_validation 放行（writing a file，不是高危命令），沙箱内核层（macOS Seatbelt subpath deny / Linux landlock）必须拦截
-- 返回 SandboxError，agent 收到错误并向用户解释
+#### S3 — 沙箱越权拒绝
 
-**检查命令**：
-```bash
-cargo nextest run -p dasclaw_sandbox --tests writable_root_holes
-```
+- **驱动**：MockLLM 产出 `tool_call: write_file(.git/hooks/pre-commit, ...)`
+- **断言**：
+  - sandbox 层（macOS Seatbelt / Linux landlock）返回 `SandboxError`
+  - 即使 bash_validation 放行也必须被沙箱拦
+- **CI 限制**：Linux runner 走 landlock；macOS runner 走 seatbelt；Windows 跳过（#481 单独覆盖）
 
----
+#### S4 — 出口 EgressGate 脱敏
 
-### S4 — 出口 EgressGate 脱敏
+- **驱动**：MockLLM 产出 `tool_call: bash(env)`，ExecutorStub 返回含 `AWS_SECRET_ACCESS_KEY=AKIA...` 的字符串
+- **断言**：
+  - 工具结果进入 `Session::record_tool_result` 前已脱敏
+  - `EgressKind::UserDisplay` 路径生效
+  - 同步覆盖 `UserDisplay` / `LLMContext` / `AuditLog` 三种 EgressKind 各一遍
 
-**目的**：工具输出（如 `env` / `cat ~/.aws/credentials`）含敏感凭证时，进入 UI 前必须脱敏。
+#### S5 — 工具三重可见性闸门
 
-**操作**：
-1. 在 desktop-client 输入：`运行 env 看下当前环境变量`
-2. 检查 UI 显示的工具结果
+- **驱动**：构造 `ToolPolicy { bash: disabled }`，然后：
+  1. 拿到 system prompt，断言不含 bash 描述
+  2. 拿到 tool definitions 数组，断言不含 bash 条目
+  3. 直接调 `Executor::execute(ToolCall { name: "bash", ... })`，断言返回 `ToolNotAvailable`
+- **断言**：三处必须同步禁用，任一处遗漏即 fail
 
-**期望**：
-- 若环境变量含 `AWS_SECRET_ACCESS_KEY` / `OPENAI_API_KEY` 等，UI 显示脱敏后（`AWS_SECRET_ACCESS_KEY=***`）
-- `EgressKind::UserDisplay` 已生效，由 `desktop-client/ironclaw/src/safety/egress.rs::apply_user_display_egress` 处理
+### 2.3 Agent 能力场景（无头版，5 个）
 
-**检查命令**：
-```bash
-cargo nextest run -p dasclaw safety::egress
-grep "EgressGate.*UserDisplay" ~/Library/Logs/x-claw/desktop-client.log | tail -10
-```
+#### A1 — 基础对话与上下文保持
 
----
+- **驱动**：MockLLM 脚本化"第一轮记住 X，第二轮被问 X 时输出 X"
+- **断言**：第二轮 prompt 含第一轮的 user/assistant 消息序列，且顺序正确
 
-### S5 — 工具三重可见性闸门
+#### A2 — 工具调用：文件读写闭环
 
-**目的**：禁用某个工具后，必须**同时**在 system prompt、tool definitions、executor 三处都看不到 / 调不到。
+- **驱动**：MockLLM 产出 `write_file → read_file → final_text` 三步
+- **断言**：
+  - 临时目录里 hello.txt 内容正确
+  - 每步 tool_result 都经过 EgressGate
+  - 最终 assistant 文本含读出的内容
 
-**操作**：
-1. 在设置面板禁用 `bash` 工具
-2. 新会话，输入：`列一下你能用的工具`
-3. 用户直接通过 IPC 强制调用 `tool_call.execute({name: "bash", ...})`（开发者模式）
+#### A3 — 多轮工具调用 + Compaction
 
-**期望**：
-- system prompt 中无 bash 描述（agent 不知道自己能用）
-- tool definitions 数组里无 bash（LLM 端不会建议）
-- executor 即便收到强制调用也返回 `ToolNotAvailable`（防绕过）
+- **驱动**：MockLLM 连续要求读 10 个文件后 token 数撞 compaction 阈值
+- **断言**：
+  - compaction 后 `tool_use` 与 `tool_result` 配对完整（不会孤儿 tool_use）
+  - 后续追问仍能命中早期内容（验证 compaction 不丢关键信息）
 
-**检查命令**：
-```bash
-cargo nextest run -p ironclaw --tests visibility_triple_gate
-```
+#### A4 — Routines 触发链
 
----
+- **驱动**：用 `RoutineEngine::trigger_now()` API 直接触发 routine（不走 cron 等待）
+- **断言**：
+  - routine 产生的 tool_call 也经过 `BeforeToolCall` hook
+  - 输出经过 EgressGate
+  - 与 chat 入口的 hook 调用序列**逐项一致**（用 HookSpy 做 diff）
 
-## 三、Agent 能力测试（5 个场景）
+#### A5 — 多入口契约对齐（#94 核心）
 
-### A1 — 基础对话与上下文保持
+- **驱动**：构造同一个 `ToolCall { name: "bash", args: "rm -rf /tmp/xclaw-test" }`，从三处分别投入：
+  1. `ChatEntry::dispatch()`
+  2. `JobEntry::dispatch()`
+  3. `RoutineEntry::dispatch()`
+- **断言**：三处的 HookSpy 记录、EgressSpy 记录、AuditLog 记录**完全相同**（用 `assert_eq` 对结构体比较，允许时间戳归一化）
+- **意义**：这是 #94 的契约测试；当前不通过即 #94 仍未完成
 
-**目的**：验证 agent loop 能正常推理 + 多轮上下文不丢。
-
-**操作**：
-1. 启动 desktop-client，新会话
-2. 第一轮：`我叫小明，今年 25 岁`
-3. 第二轮：`我多大了？`
-
-**期望**：第二轮回答能引用第一轮（"你 25 岁"）。验证 session.rs 的 context 序列化正常。
-
----
-
-### A2 — 工具调用：文件读写
-
-**目的**：验证 LLM 决策 → 工具调用 → 沙箱执行 → 结果回灌 完整闭环。
-
-**操作**：
-1. 在一个空目录下启动
-2. 输入：`帮我创建一个 hello.txt 文件，写入 "Hello xClaw"，然后读出来给我看`
-
-**期望**：
-- agent 先调用 write_file 工具
-- 再调用 read_file 工具
-- 最终回复包含文件内容
-
-**检查点**：
-- `desktop-client/ironclaw/src/agent/dispatcher.rs` 多轮 tool_call 解析正常
-- 工具结果经 EgressGate 后返回
-
----
-
-### A3 — 多轮工具调用 + Compaction
-
-**目的**：验证长会话触发 compaction 时，tool_use/tool_result 边界保护生效（claw-code 移植）。
-
-**操作**：
-1. 新会话，连续要求 agent 读 10 个不同文件
-2. 让对话超过 context window 触发 compaction
-3. 继续追问之前提过的某文件内容
-
-**期望**：
-- compaction 后会话仍可继续
-- tool_use 和 tool_result 没有被切断（不会出现 "orphan tool_use" LLM 报错）
-
-**检查命令**：
-```bash
-cargo nextest run -p x_claw_agent compaction
-```
-
----
-
-### A4 — Routines 触发链
-
-**目的**：验证 routine（定时任务）触发的 agent 调用，走的是和 chat 同一条 EgressGate / hook 链。
-
-**操作**：
-1. 在 routines 面板创建一个 cron routine：每分钟列一次 `~/Documents` 文件数
-2. 等 1-2 分钟看触发结果
-3. 检查 routine 输出是否经过 EgressGate（含敏感路径时应脱敏）
-
-**期望**：
-- routine 触发的工具调用 → `dasclaw_hooks::bash_validation` 触发
-- 输出经 `apply_user_display_egress` 脱敏
-- 与 chat 入口行为一致（这就是 #94 要验证的契约）
-
-**检查命令**：
-```bash
-cargo nextest run -p ironclaw routines::routine_engine
-grep "RoutineEngine.*EgressGate" ~/Library/Logs/x-claw/desktop-client.log
-```
-
----
-
-### A5 — 多入口契约对齐（#94 核心场景）
-
-**目的**：验证 chat / jobs / routines 三个入口调用同一个 bash 工具时，安全门完全一致。
-
-**操作**：分别从三个入口触发同一个高危命令 `rm -rf /tmp/xclaw-test`：
-1. **Chat 入口**：在对话里让 agent 跑
-2. **Jobs 入口**：通过 jobs IPC 创建一个 job 跑
-3. **Routines 入口**：创建一个一次性 routine 跑
-
-**期望**：三处行为完全一致：
-- 都被 bash_validation Block（或都放行）
-- 都经过同一个 EgressGate
-- 审计日志格式一致
-
-**检查命令**：
-```bash
-cargo nextest run -p ironclaw -E 'test(execution_surface_contract)'
-```
-
-> 这是 #94 的核心契约测试，如果未通过，#94 还需要继续做。
-
----
-
-## 四、运行所有测试的一键脚本
-
-### 单元 + 集成测试
-
-```bash
-# 安全相关
-cargo nextest run -p dasclaw_hooks
-cargo nextest run -p dasclaw_sandbox
-cargo nextest run -p dasclaw_bash_validation
-cargo nextest run -p dasclaw safety::
-
-# Agent 相关
-cargo nextest run -p x_claw_agent
-cargo nextest run -p ironclaw -E 'test(agent::) + test(routines::)'
-```
-
-### 端到端冒烟（需手工，~30 分钟）
-
-按 S1-S5 + A1-A5 顺序在 desktop-client 实际跑一遍，每个场景在 `docs/plans/testing/runlog-<date>.md` 记录：
-- 实际输入
-- agent 输出
-- 日志关键行
-- 通过 / 失败 / 异常说明
-
----
-
-## 五、验收基线（先达到这个就算"端到端可用"）
+### 2.4 阶段一验收基线
 
 | 类别 | 通过率门槛 |
 |---|---|
-| 安全场景 S1-S5 | **5/5 必须通过**（任何一个失败都视为安全闭环未达标） |
-| Agent 场景 A1-A4 | **4/4 必须通过** |
-| Agent 场景 A5（#94 契约） | 允许暂未通过，作为 #94 的实施驱动 |
-| 单元/集成测试 | 三个 crate 现有套件 100% 通过 |
+| 安全 S1–S5（无头） | **5/5 全过**，任一失败视为安全闭环未达标 |
+| Agent A1–A4（无头） | **4/4 全过** |
+| Agent A5（无头，#94 契约） | 允许暂未通过，是 #94 的实施驱动 |
+| 三个 crate 现有套件 | 100% 通过 |
+
+### 2.5 CI 接入
+
+- 新增 GitHub Actions job：`E2E Headless`
+- 触发条件：所有 PR + push to xClaw
+- 命令：
+  ```
+  cargo nextest run -p dasclaw_hooks -p dasclaw_sandbox -p dasclaw_bash_validation -p dasclaw_core -p dasclaw -E 'test(e2e_headless::)'
+  ```
+- 失败即 block merge
 
 ---
 
-## 六、与未完成 issue 的关系
+## 三、阶段二：客户端自动化（阶段一全绿后才启动）
+
+### 3.1 框架选型
+
+- **首选**：`tauri-driver` + WebDriver（Tauri 官方推荐）
+- **备选**：`playwright` + Tauri webview（生态成熟，但需要桥接）
+- 选型在阶段一完成后单独开一个 issue 决定
+
+### 3.2 范围
+
+- 把阶段一的 10 个场景**重写**为 UI 驱动版本：
+  - 真实点击"新建会话"、键入消息、按发送
+  - 验证 UI 上看到的脱敏 / 错误提示 / 工具结果展示
+  - 验证 IPC 边界（前端 ↔ 后端 Tauri command）的序列化没问题
+- 新增 UI 专属场景（无头测不了的）：
+  - U1：设置面板禁用工具后，UI 立即反映（按钮置灰 / 提示已禁用）
+  - U2：长会话滚动 + 虚拟化列表表现
+  - U3：错误态显示（沙箱拒绝时 UI 文案 + 图标）
+
+### 3.3 运行
+
+- 独立 GitHub Actions job：`E2E UI`，默认手动触发 + 每晚 cron
+- 不 block PR merge（避免 UI 偶发抖动卡 CI）
+- 失败结果上传截图 + tauri 日志
+
+---
+
+## 四、与未完成 issue 的关系
 
 | 测试场景 | 关联 issue | 关系 |
 |---|---|---|
 | S2 | #73 #490 | bash_validation 接入与 parity 增强 |
-| S3 | #481 | Windows 真机沙箱（macOS/Linux 优先） |
+| S3 | #481 | Windows 真机沙箱（macOS / Linux 优先） |
 | S4 | #483 | EgressGate 已 merge，是这条测试的根基 |
 | S5 | #84 #485 | 三重可见性闸门 |
 | A4 | #94 | Routines 入口契约 |
 | A5 | #94 #485 | 多入口契约 — 是 #94 的核心驱动 |
+| U1–U3 | 待开 issue | 阶段二启动时一起建 |
 
 ---
 
-## 七、记录与反馈
+## 五、实施步骤
+
+1. **本计划合入 xClaw 主线**（PR #618）。
+2. 按"阶段一 2.1 框架"建 `e2e_headless/` 目录骨架 + MockLLM / Spy 工具。开 issue 跟踪。
+3. 先实施 S1 + A1 两个最小闭环跑通框架。
+4. 补齐 S2–S5 + A2–A4。
+5. A5 与 #94 同步推进。
+6. 阶段一全绿后启动阶段二选型 + 实施。
+
+---
+
+## 六、记录与反馈
 
 - 测试中发现 bug → 直接开 issue，标 `area:safety` 或 `area:agent`
-- 验收通过 → 在 #492 评论里 close 对应缺口条目
-- 长期：考虑把 S1-A5 这 10 个场景做成 cypress / playwright 自动化（独立 issue）
+- 验收通过 → 在 #492 评论 close 对应缺口条目
+- 阶段一覆盖率与缺口跟踪在 `docs/plans/testing/runlog-<date>.md`
