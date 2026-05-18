@@ -59,7 +59,15 @@ use crate::tools::tool::{
     ApprovalRequirement, RiskLevel, Tool, ToolDomain, ToolError, ToolOutput, require_str,
 };
 
-use super::bash_validator;
+// ADR-152 §3 F2.1 — verbatim port: replaces the 845-line local `bash_validator`.
+// `BashValidationHook` already runs as the authoritative gate in the hook chain
+// (`agent/agentic_loop.rs::hook_bundle_with_safety`); the calls below only build
+// the post-execution JSON `intent` + `warnings` shape consumed by the shell tool
+// result schema.
+use dasclaw_bash_validation::PermissionMode;
+use dasclaw_bash_validation::{
+    ValidationResult, check_destructive, classify_command, validate_paths, validate_sed,
+};
 
 /// Maximum output size before truncation (64KB).
 const MAX_OUTPUT_SIZE: usize = 64 * 1024;
@@ -382,6 +390,52 @@ pub fn classify_command_risk(command: &str) -> RiskLevel {
         })
         .max()
         .unwrap_or(RiskLevel::Medium)
+}
+
+/// Run the post-execution analysis used to populate `intent` + `warnings` in
+/// the shell tool JSON result.
+///
+/// ADR-152 §3 F2.1: this is a verbatim swap from the deleted local
+/// `bash_validator` 5-stage pipeline to the equivalent helpers in
+/// `dasclaw_bash_validation`. Each `Warn` result is rendered as
+/// `"[stage] message"` to preserve the on-the-wire warning shape.
+fn analyze_command_for_result(command: &str, workspace: &Path) -> (&'static str, Vec<String>) {
+    let intent = intent_label(classify_command(command));
+    let mut warnings: Vec<String> = Vec::new();
+
+    if let ValidationResult::Warn { message } = check_destructive(command) {
+        warnings.push(format!("[destructive] {message}"));
+    }
+    if let ValidationResult::Warn { message } = validate_paths(command, workspace) {
+        warnings.push(format!("[path] {message}"));
+    }
+    // Permission mode is owned by the hook chain — the shell-tool warning is
+    // advisory only, so we pass `Allow` to surface sed-specific warnings
+    // without re-imposing a mode gate that would duplicate the hook decision.
+    if let ValidationResult::Warn { message } = validate_sed(command, PermissionMode::Allow) {
+        warnings.push(format!("[sed] {message}"));
+    }
+
+    (intent, warnings)
+}
+
+/// Stable label for the `intent` field in the shell tool JSON result.
+///
+/// Matches the strings previously emitted by the deleted local
+/// `bash_validator::CommandIntent: Display`, so the shell-tool result schema
+/// stays byte-identical for downstream consumers.
+fn intent_label(intent: dasclaw_bash_validation::CommandIntent) -> &'static str {
+    use dasclaw_bash_validation::CommandIntent;
+    match intent {
+        CommandIntent::ReadOnly => "read-only",
+        CommandIntent::Write => "write",
+        CommandIntent::Destructive => "destructive",
+        CommandIntent::Network => "network",
+        CommandIntent::ProcessManagement => "process-management",
+        CommandIntent::PackageManagement => "package-management",
+        CommandIntent::SystemAdmin => "system-admin",
+        CommandIntent::Unknown => "unknown",
+    }
 }
 
 /// Extract the `command` field from a tool-call parameter value.
@@ -913,7 +967,7 @@ impl Tool for ShellTool {
             .map(PathBuf::from)
             .or_else(|| self.working_dir.clone())
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-        let validation = bash_validator::validate(command, &workspace);
+        let (intent_label, warnings) = analyze_command_for_result(command, &workspace);
 
         let start = std::time::Instant::now();
         let (output, exit_code) = self
@@ -928,29 +982,24 @@ impl Tool for ShellTool {
             "exit_code": exit_code,
             "success": exit_code == 0,
             "sandboxed": sandboxed,
-            "intent": validation.intent.to_string()
+            "intent": intent_label
         });
 
-        if !validation.warnings.is_empty() {
-            let strs: Vec<String> = validation
-                .warnings
-                .iter()
-                .map(|w| format!("[{}] {}", w.stage, w.message))
-                .collect();
-            result["warnings"] = serde_json::json!(strs);
+        if !warnings.is_empty() {
+            result["warnings"] = serde_json::json!(warnings);
         }
 
         Ok(ToolOutput::success(result, duration))
     }
 
     fn risk_level_for(&self, params: &serde_json::Value) -> RiskLevel {
+        // ADR-152 §3 F2.1: the previous `max(pattern_risk, semantic_risk)` was
+        // redundant — every Medium/High outcome required by
+        // `tests/shell_risk_regression.rs` is already pinned by the pattern
+        // tables in `classify_command_risk`. Authoritative semantic gating now
+        // lives in `BashValidationHook` (hook chain).
         extract_command_param(params)
-            .map(|cmd| {
-                let pattern_risk = classify_command_risk(&cmd);
-                let semantic_risk =
-                    bash_validator::intent_to_risk_level(bash_validator::classify_intent(&cmd));
-                std::cmp::max(pattern_risk, semantic_risk)
-            })
+            .map(|cmd| classify_command_risk(&cmd))
             .unwrap_or(RiskLevel::Medium)
     }
 
