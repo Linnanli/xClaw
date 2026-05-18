@@ -10,7 +10,30 @@ use std::path::{Path, PathBuf};
 use secrecy::SecretString;
 
 use crate::provider::registry::ProviderProtocol;
-use crate::provider::session::SessionConfig;
+
+/// Session-manager configuration: auth endpoint URL and token persistence path.
+///
+/// The provider crate exposes this struct so the embedding application can
+/// build a `SessionManager` against the right endpoint and on-disk location
+/// without the provider tree itself touching the filesystem or environment.
+#[derive(Debug, Clone)]
+pub struct SessionConfig {
+    /// Base URL for auth endpoints (e.g. `https://private.near.ai`).
+    pub auth_base_url: String,
+    /// Path to the session file (e.g. `~/.ironclaw/session.json`).
+    pub session_path: PathBuf,
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self {
+            auth_base_url: "https://private.near.ai".to_string(),
+            // The real path is set by `LlmConfig::resolve()` in the embedding
+            // application. This default is only used in tests.
+            session_path: PathBuf::from("session.json"),
+        }
+    }
+}
 
 /// Sentinel value used as `api_key` when only an OAuth token is present.
 ///

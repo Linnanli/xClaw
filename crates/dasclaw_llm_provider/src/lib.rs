@@ -48,18 +48,20 @@ pub mod provider;
 pub mod providers;
 pub mod retry;
 pub mod sse;
+#[cfg(test)]
+mod testing;
 pub mod types;
 
 pub use error::ApiError;
-pub use http::{build_http_client, build_http_client_with, ProxyConfig};
+pub use http::{ProxyConfig, build_http_client, build_http_client_with};
 pub use providers::{
-    detect_provider_kind, max_tokens_for_model, max_tokens_for_model_with_override,
-    metadata_for_model, model_token_limit, resolve_model_alias, AnthropicClient, AnthropicStream,
-    AuthSource, EnvSnapshot, ModelTokenLimit, OpenAiCompatClient, OpenAiCompatConfig,
-    OpenAiCompatStream, ProviderClient, ProviderKind, ProviderMetadata, ProviderStream,
+    AnthropicClient, AnthropicStream, AuthSource, EnvSnapshot, ModelTokenLimit, OpenAiCompatClient,
+    OpenAiCompatConfig, OpenAiCompatStream, ProviderClient, ProviderKind, ProviderMetadata,
+    ProviderStream, detect_provider_kind, max_tokens_for_model, max_tokens_for_model_with_override,
+    metadata_for_model, model_token_limit, resolve_model_alias,
 };
-pub use retry::{parse_retry_after, RetryPolicy};
-pub use sse::{parse_frame, SseParser};
+pub use retry::{RetryPolicy, parse_retry_after};
+pub use sse::{SseParser, parse_frame};
 pub use types::{
     CacheControl, ContentBlockDelta, ContentBlockDeltaEvent, ContentBlockStartEvent,
     ContentBlockStopEvent, InputContentBlock, InputMessage, MessageDelta, MessageDeltaEvent,

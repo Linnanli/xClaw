@@ -175,7 +175,7 @@ fn truncate_for_error(payload: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_frame, SseParser};
+    use super::{SseParser, parse_frame};
     use crate::types::{
         ContentBlockDelta, ContentBlockDeltaEvent, ContentBlockStartEvent, MessageDelta,
         MessageDeltaEvent, MessageStopEvent, OutputContentBlock, StreamEvent, Usage,

@@ -110,7 +110,7 @@ fn jitter_for_base(base: Duration) -> Duration {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_retry_after, RetryPolicy};
+    use super::{RetryPolicy, parse_retry_after};
     use std::time::Duration;
 
     #[test]

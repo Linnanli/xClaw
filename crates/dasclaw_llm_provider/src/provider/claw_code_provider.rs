@@ -13,13 +13,13 @@
 //!   [`docs/plans/architecture-refactor/04-phase2-claw-code-api.md`]）。
 //! - 编译期裁掉大量历史 rig 适配层的异构类型体操。
 
-use async_trait::async_trait;
-use dasclaw_llm_provider::{
+use crate::{
     AnthropicClient, ApiError, AuthSource, InputContentBlock, InputMessage, MessageRequest,
     MessageResponse, OpenAiCompatClient, OpenAiCompatConfig, OutputContentBlock, ProviderClient,
     SystemBlock, SystemPrompt, ToolChoice as ApiToolChoice, ToolDefinition as ApiToolDefinition,
     ToolResultContentBlock,
 };
+use async_trait::async_trait;
 use rust_decimal::Decimal;
 use secrecy::ExposeSecret;
 
@@ -66,8 +66,7 @@ impl ClawCodeLlmProvider {
     /// 不读取任何环境变量：凭据/URL 都来自显式配置，符合 x-claw 的 keychain 模型。
     pub fn from_registry_config(config: &RegistryProviderConfig) -> Result<Self, LlmError> {
         let configured_model = config.model.clone();
-        let resolved_model =
-            dasclaw_llm_provider::resolve_model_alias(&configured_model).to_string();
+        let resolved_model = crate::resolve_model_alias(&configured_model).to_string();
 
         let client = match config.protocol {
             ProviderProtocol::Anthropic => build_anthropic_client(config)?,
@@ -456,9 +455,7 @@ fn build_anthropic_client(config: &RegistryProviderConfig) -> Result<ProviderCli
 /// 仅基于模型名做静态映射，不读取环境（`EnvSnapshot::default()` 即可），
 /// 因为 ironclaw 的鉴权一律来自 `RegistryProviderConfig` 的显式配置。
 fn pick_openai_compat_config(model: &str) -> (OpenAiCompatConfig, ProviderVariant) {
-    use dasclaw_llm_provider::{
-        EnvSnapshot, ProviderKind, detect_provider_kind, resolve_model_alias,
-    };
+    use crate::{EnvSnapshot, ProviderKind, detect_provider_kind, resolve_model_alias};
     let resolved = resolve_model_alias(model);
     match detect_provider_kind(&resolved, &EnvSnapshot::default()) {
         ProviderKind::Xai => (OpenAiCompatConfig::xai(), ProviderVariant::Xai),
@@ -578,7 +575,7 @@ impl LlmProvider for ClawCodeLlmProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dasclaw_llm_provider::Usage;
+    use crate::Usage;
     use serde_json::json;
 
     fn mk_user(text: &str) -> ChatMessage {
@@ -1052,8 +1049,8 @@ mod tests {
     // `ClawCodeLlmProvider`，覆盖每一种 `ProviderProtocol` 分支。
     // ========================================================================
 
+    use crate::ProviderKind;
     use crate::provider::config::{CacheRetention, RegistryProviderConfig};
-    use dasclaw_llm_provider::ProviderKind;
     use secrecy::SecretString;
 
     fn mk_config(

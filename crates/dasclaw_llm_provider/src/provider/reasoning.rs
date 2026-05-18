@@ -3119,7 +3119,8 @@ That's my plan."#;
             async fn complete(
                 &self,
                 _request: crate::provider::CompletionRequest,
-            ) -> Result<crate::provider::CompletionResponse, crate::provider::LlmError> {
+            ) -> Result<crate::provider::CompletionResponse, crate::provider::LlmError>
+            {
                 unreachable!("tool-mode test should not call complete()")
             }
 
@@ -3470,7 +3471,8 @@ That's my plan."#;
         async fn complete_with_tools(
             &self,
             _request: crate::provider::ToolCompletionRequest,
-        ) -> Result<crate::provider::ToolCompletionResponse, crate::provider::error::LlmError> {
+        ) -> Result<crate::provider::ToolCompletionResponse, crate::provider::error::LlmError>
+        {
             Ok(crate::provider::ToolCompletionResponse {
                 content: Some("I'll write the report.".to_string()),
                 tool_calls: vec![ToolCall {
@@ -3591,7 +3593,9 @@ That's my plan."#;
 
         #[tokio::test]
         async fn tool_calls_returned_without_streaming_text() {
-            use crate::provider::{LlmError, ToolCall, ToolCompletionRequest, ToolCompletionResponse};
+            use crate::provider::{
+                LlmError, ToolCall, ToolCompletionRequest, ToolCompletionResponse,
+            };
             use rust_decimal::Decimal;
 
             struct ToolCallLlm;

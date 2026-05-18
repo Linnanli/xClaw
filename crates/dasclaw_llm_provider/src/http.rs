@@ -140,7 +140,7 @@ fn transport_error(err: reqwest::Error) -> ApiError {
 mod tests {
     use std::collections::HashMap;
 
-    use super::{build_http_client_with, ProxyConfig};
+    use super::{ProxyConfig, build_http_client_with};
 
     fn config_from_map(pairs: &[(&str, &str)]) -> ProxyConfig {
         let map: HashMap<String, String> = pairs
