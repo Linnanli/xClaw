@@ -19,7 +19,8 @@
 
 use async_trait::async_trait;
 
-use crate::hooks::{EgressDecision, EgressKind, HookBundle};
+use crate::egress_apply::{EgressApply, apply_egress_decision};
+use crate::hooks::{EgressKind, HookBundle};
 use crate::intent::{TOOL_INTENT_NUDGE, TRUNCATED_TOOL_CALL_NOTICE, llm_signals_tool_intent};
 use crate::messages::{ChatMessage, FinishReason, Role, ToolCall};
 use crate::reasoning_ctx::ReasoningContext;
@@ -197,55 +198,20 @@ pub async fn run_agentic_loop(
         // EgressGate (ADR-148 Layer B): scan / redact the most recent user
         // message before the LLM sees it. A Redact decision swaps the
         // payload with the sanitized version so the LLM call uses it.
+        // The five-arm decision handling lives in `apply_egress_decision`
+        // so every gate site in the workspace halts identically on
+        // Block / Ask / unknown variant.
         if let Some(idx) = reason_ctx
             .messages
             .iter()
             .rposition(|m| m.role == Role::User)
         {
             let prompt = &mut reason_ctx.messages[idx].content;
-            match hooks.egress.check(&EgressKind::LlmRequest, prompt).await {
-                // Allow / Passthrough: continue unchanged (single-gate
-                // context treats Passthrough as Allow per ADR-148 §2.2).
-                EgressDecision::Allow | EgressDecision::Passthrough => {}
-                EgressDecision::Redact { sanitized, .. } => {
-                    *prompt = sanitized;
-                }
-                EgressDecision::Block { reason, .. } => {
-                    tracing::warn!(iteration, %reason, "egress gate blocked LlmRequest");
-                    return Ok(LoopOutcome::Failure(format!(
-                        "egress gate blocked prompt: {reason}"
-                    )));
-                }
-                // Ask in a headless agent loop has no UI to render. Fail-Safe:
-                // treat as Block. Desktop-client wires real Ask UX in
-                // slice D (ADR-146 §2.5 / ADR-148 §2.2).
-                EgressDecision::Ask { reason, .. } => {
-                    tracing::warn!(
-                        iteration,
-                        %reason,
-                        "egress gate returned Ask in headless context; Fail-Safe block (slice D will wire UI)"
-                    );
-                    return Ok(LoopOutcome::Failure(format!(
-                        "egress gate requires user confirmation (no UI available): {reason}"
-                    )));
-                }
-                // Non-exhaustive guard: future variants added to
-                // `EgressDecision` (which is `#[non_exhaustive]`) must be
-                // addressed explicitly at this site; failing closed is
-                // Fail-Safe. `#[allow(unreachable_patterns)]` is required
-                // because within the defining crate the compiler sees the
-                // enum as exhaustive — outside callers will need it.
-                #[allow(unreachable_patterns)]
-                other => {
-                    tracing::error!(
-                        iteration,
-                        decision = ?other,
-                        "egress gate returned unhandled EgressDecision variant; Fail-Safe block"
-                    );
-                    return Ok(LoopOutcome::Failure(
-                        "egress gate returned unsupported decision".to_string(),
-                    ));
-                }
+            let decision = hooks.egress.check(&EgressKind::LlmRequest, prompt).await;
+            if let EgressApply::Halt(reason) = apply_egress_decision(decision, prompt, "LlmRequest")
+            {
+                tracing::warn!(iteration, %reason, "egress gate halted LlmRequest");
+                return Ok(LoopOutcome::Failure(reason));
             }
         }
 
@@ -257,38 +223,11 @@ pub async fn run_agentic_loop(
         // Tool-call responses skip this gate; delegates apply the
         // tool-level egress themselves inside `execute_tool_calls`.
         if let RespondResult::Text(ref mut text) = output.result {
-            match hooks.egress.check(&EgressKind::UserDisplay, text).await {
-                EgressDecision::Allow | EgressDecision::Passthrough => {}
-                EgressDecision::Redact { sanitized, .. } => {
-                    *text = sanitized;
-                }
-                EgressDecision::Block { reason, .. } => {
-                    tracing::warn!(iteration, %reason, "egress gate blocked UserDisplay");
-                    return Ok(LoopOutcome::Failure(format!(
-                        "egress gate blocked completion: {reason}"
-                    )));
-                }
-                EgressDecision::Ask { reason, .. } => {
-                    tracing::warn!(
-                        iteration,
-                        %reason,
-                        "egress gate returned Ask on UserDisplay in headless context; Fail-Safe block"
-                    );
-                    return Ok(LoopOutcome::Failure(format!(
-                        "egress gate requires confirmation on completion (no UI): {reason}"
-                    )));
-                }
-                #[allow(unreachable_patterns)]
-                other => {
-                    tracing::error!(
-                        iteration,
-                        decision = ?other,
-                        "egress gate returned unhandled EgressDecision variant on UserDisplay; Fail-Safe block"
-                    );
-                    return Ok(LoopOutcome::Failure(
-                        "egress gate returned unsupported decision".to_string(),
-                    ));
-                }
+            let decision = hooks.egress.check(&EgressKind::UserDisplay, text).await;
+            if let EgressApply::Halt(reason) = apply_egress_decision(decision, text, "UserDisplay")
+            {
+                tracing::warn!(iteration, %reason, "egress gate halted UserDisplay");
+                return Ok(LoopOutcome::Failure(reason));
             }
         }
 
