@@ -500,7 +500,7 @@ fn truncate_for_error(body: &str) -> String {
     if body.len() <= LIMIT {
         return body.to_string();
     }
-    let end = crate::util::floor_char_boundary(body, LIMIT);
+    let end = crate::provider::util::floor_char_boundary(body, LIMIT);
     format!("{}...", &body[..end])
 }
 

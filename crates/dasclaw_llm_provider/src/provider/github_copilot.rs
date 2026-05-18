@@ -159,7 +159,7 @@ impl GithubCopilotProvider {
 
             tracing::warn!(
                 status = %status,
-                body = %crate::agent::truncate_for_preview(&response_text, 256),
+                body = %crate::provider::util::truncate_for_preview(&response_text, 256),
                 "Copilot: API error response"
             );
 
@@ -181,7 +181,7 @@ impl GithubCopilotProvider {
                     retry_after,
                 });
             }
-            let truncated = crate::agent::truncate_for_preview(&response_text, 512);
+            let truncated = crate::provider::util::truncate_for_preview(&response_text, 512);
             return Err(LlmError::RequestFailed {
                 provider: "github_copilot".to_string(),
                 reason: format!("HTTP {status}: {truncated}"),
@@ -194,7 +194,7 @@ impl GithubCopilotProvider {
         })?;
 
         serde_json::from_str(&response_text).map_err(|e| {
-            let truncated = crate::agent::truncate_for_preview(&response_text, 512);
+            let truncated = crate::provider::util::truncate_for_preview(&response_text, 512);
             tracing::warn!(
                 error = %e,
                 body = %truncated,

@@ -188,6 +188,14 @@ pub struct LlmConfig {
     /// Enable cascade mode for smart routing (retry with primary if cheap model
     /// response seems uncertain). Default: true. Set via `SMART_ROUTING_CASCADE`.
     pub smart_routing_cascade: bool,
+    /// Per-user dasclaw home directory.
+    ///
+    /// Used by the provider tree to resolve credential file paths
+    /// (`<base_dir>/openai_codex_session.json`, `<base_dir>/session.json`,
+    /// `<base_dir>/providers.json`, ...). Supplied by the embedding application
+    /// so this crate never has to ask `crate::bootstrap` or `dirs::home_dir`
+    /// for an implicit base directory.
+    pub base_dir: PathBuf,
 }
 
 impl LlmConfig {
@@ -243,21 +251,21 @@ pub struct NearAiConfig {
 impl NearAiConfig {
     /// Create a minimal config suitable for listing available models.
     ///
-    /// Reads `NEARAI_API_KEY` from the environment and selects the
-    /// appropriate base URL (cloud-api when API key is present,
-    /// private.near.ai for session-token auth).
-    pub(crate) fn for_model_discovery() -> Self {
-        let api_key = crate::config::helpers::env_or_override("NEARAI_API_KEY")
-            .filter(|k| !k.is_empty())
-            .map(SecretString::from);
-
+    /// Credentials are provided by the caller; this crate never reads
+    /// environment variables on its own (see ADR-118). When `api_key` is
+    /// `None`, the session-token endpoint (`private.near.ai`) is selected;
+    /// otherwise the cloud-api endpoint is used. `base_url_override` lets the
+    /// caller force a custom endpoint regardless of credential mode.
+    pub fn for_model_discovery(
+        api_key: Option<SecretString>,
+        base_url_override: Option<String>,
+    ) -> Self {
         let default_base = if api_key.is_some() {
             "https://cloud-api.near.ai"
         } else {
             "https://private.near.ai"
         };
-        let base_url = crate::config::helpers::env_or_override("NEARAI_BASE_URL")
-            .unwrap_or_else(|| default_base.to_string());
+        let base_url = base_url_override.unwrap_or_else(|| default_base.to_string());
 
         Self {
             model: String::new(),

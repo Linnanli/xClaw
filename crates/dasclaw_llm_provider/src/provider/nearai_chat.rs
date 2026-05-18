@@ -299,7 +299,7 @@ impl NearAiChatProvider {
                 });
             }
 
-            let truncated = crate::agent::truncate_for_preview(&response_text, 512);
+            let truncated = crate::provider::util::truncate_for_preview(&response_text, 512);
             return Err(LlmError::RequestFailed {
                 provider: "nearai_chat".to_string(),
                 reason: format!("HTTP {}: {}", status, truncated),
@@ -307,7 +307,7 @@ impl NearAiChatProvider {
         }
 
         serde_json::from_str(&response_text).map_err(|e| {
-            let truncated = crate::agent::truncate_for_preview(&response_text, 512);
+            let truncated = crate::provider::util::truncate_for_preview(&response_text, 512);
             LlmError::InvalidResponse {
                 provider: "nearai_chat".to_string(),
                 reason: format!("JSON parse error: {}. Raw: {}", e, truncated),
@@ -359,7 +359,7 @@ impl NearAiChatProvider {
                     provider: "nearai_chat".to_string(),
                 });
             }
-            let truncated = crate::agent::truncate_for_preview(&response_text, 512);
+            let truncated = crate::provider::util::truncate_for_preview(&response_text, 512);
             return Err(LlmError::RequestFailed {
                 provider: "nearai_chat".to_string(),
                 reason: format!("HTTP {}: {}", status, truncated),
@@ -451,7 +451,7 @@ impl NearAiChatProvider {
             provider: "nearai_chat".to_string(),
             reason: format!(
                 "No model names found in response: {}",
-                &response_text[..crate::util::floor_char_boundary(&response_text, 300)]
+                &response_text[..crate::provider::util::floor_char_boundary(&response_text, 300)]
             ),
         })
     }
