@@ -8,6 +8,12 @@
 //! - [`job`] — pure job state machine (`JobState`, `StateTransition`,
 //!   `TokenBudgetExceeded`); the headless-framework vocabulary for "what is
 //!   this job doing right now?" (F3.2 phase 2 PR 3).
+//! - [`secrets`] — secret-management vocabulary: pure data types
+//!   (`Secret`, `SecretRef`, `DecryptedSecret`, `SecretError`,
+//!   `CreateSecretParams`, `CredentialLocation`, `CredentialMapping`) and
+//!   the `SecretsStore` trait. Concrete backends (Postgres, LibSQL,
+//!   in-memory, OS keychain) stay in ironclaw and migrate in follow-up
+//!   sub-PRs 4b/4c (F3.2 phase 2 PR 4).
 //!
 //! ## Two-layer `ToolError` model
 //!
@@ -30,6 +36,7 @@
 
 pub mod error;
 pub mod job;
+pub mod secrets;
 
 pub use error::ToolError;
 pub use job::{JobState, StateTransition, TokenBudgetExceeded};
