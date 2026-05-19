@@ -1,6 +1,5 @@
 //! Built-in tools that come with the agent.
 
-pub mod bash_validator;
 mod code_edit;
 mod echo;
 pub mod extension_tools;
@@ -22,6 +21,7 @@ pub mod routine;
 pub mod secrets_tools;
 mod session_fork;
 pub(crate) mod shell;
+pub use shell::classify_command_risk;
 pub mod skill_tools;
 pub mod sub_agent;
 mod time;
