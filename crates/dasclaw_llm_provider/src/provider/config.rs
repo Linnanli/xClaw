@@ -5,13 +5,35 @@
 //! extracted into a standalone crate. Resolution logic (reading env vars,
 //! settings) lives in `crate::config::llm`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use secrecy::SecretString;
 
-use crate::bootstrap::dasclaw_base_dir;
-use crate::llm::registry::ProviderProtocol;
-use crate::llm::session::SessionConfig;
+use crate::provider::registry::ProviderProtocol;
+
+/// Session-manager configuration: auth endpoint URL and token persistence path.
+///
+/// The provider crate exposes this struct so the embedding application can
+/// build a `SessionManager` against the right endpoint and on-disk location
+/// without the provider tree itself touching the filesystem or environment.
+#[derive(Debug, Clone)]
+pub struct SessionConfig {
+    /// Base URL for auth endpoints (e.g. `https://private.near.ai`).
+    pub auth_base_url: String,
+    /// Path to the session file (e.g. `~/.dasclaw/session.json`).
+    pub session_path: PathBuf,
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self {
+            auth_base_url: "https://private.near.ai".to_string(),
+            // The real path is set by `LlmConfig::resolve()` in the embedding
+            // application. This default is only used in tests.
+            session_path: PathBuf::from("session.json"),
+        }
+    }
+}
 
 /// Sentinel value used as `api_key` when only an OAuth token is present.
 ///
@@ -118,20 +140,25 @@ pub struct OpenAiCodexConfig {
     pub api_base_url: String,
     /// OAuth client ID (default: OpenAI's public Codex client).
     pub client_id: String,
-    /// Path to session file (default: ~/.ironclaw/openai_codex_session.json).
+    /// Path to session file (default: ~/.dasclaw/openai_codex_session.json).
     pub session_path: PathBuf,
     /// Seconds before expiry to proactively refresh (default: 300).
     pub token_refresh_margin_secs: u64,
 }
 
-impl Default for OpenAiCodexConfig {
-    fn default() -> Self {
+impl OpenAiCodexConfig {
+    /// Construct a default config with the session file located under `base_dir`.
+    ///
+    /// `base_dir` is provided by the embedding application (typically the
+    /// per-user dasclaw home directory) so this crate stays free of global
+    /// filesystem assumptions.
+    pub fn new(base_dir: &Path) -> Self {
         Self {
             model: "gpt-5.3-codex".to_string(),
             auth_endpoint: "https://auth.openai.com".to_string(),
             api_base_url: "https://chatgpt.com/backend-api/codex".to_string(),
             client_id: "app_EMoamEEZ73f0CkXaXp7hrann".to_string(),
-            session_path: dasclaw_base_dir().join("openai_codex_session.json"),
+            session_path: base_dir.join("openai_codex_session.json"),
             token_refresh_margin_secs: 300,
         }
     }
@@ -239,21 +266,21 @@ pub struct NearAiConfig {
 impl NearAiConfig {
     /// Create a minimal config suitable for listing available models.
     ///
-    /// Reads `NEARAI_API_KEY` from the environment and selects the
-    /// appropriate base URL (cloud-api when API key is present,
-    /// private.near.ai for session-token auth).
-    pub(crate) fn for_model_discovery() -> Self {
-        let api_key = crate::config::helpers::env_or_override("NEARAI_API_KEY")
-            .filter(|k| !k.is_empty())
-            .map(SecretString::from);
-
+    /// Credentials are provided by the caller; this crate never reads
+    /// environment variables on its own (see ADR-118). When `api_key` is
+    /// `None`, the session-token endpoint (`private.near.ai`) is selected;
+    /// otherwise the cloud-api endpoint is used. `base_url_override` lets the
+    /// caller force a custom endpoint regardless of credential mode.
+    pub fn for_model_discovery(
+        api_key: Option<SecretString>,
+        base_url_override: Option<String>,
+    ) -> Self {
         let default_base = if api_key.is_some() {
             "https://cloud-api.near.ai"
         } else {
             "https://private.near.ai"
         };
-        let base_url = crate::config::helpers::env_or_override("NEARAI_BASE_URL")
-            .unwrap_or_else(|| default_base.to_string());
+        let base_url = base_url_override.unwrap_or_else(|| default_base.to_string());
 
         Self {
             model: String::new(),

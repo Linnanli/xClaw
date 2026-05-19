@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::llm::config::NearAiConfig;
 use crate::llm::error::LlmError;
-use crate::llm::provider::{
+use crate::llm::{
     ChatMessage, CompletionRequest, CompletionResponse, FinishReason, LlmProvider, Role, ToolCall,
     ToolCompletionRequest, ToolCompletionResponse,
 };
@@ -299,7 +299,7 @@ impl NearAiChatProvider {
                 });
             }
 
-            let truncated = crate::agent::truncate_for_preview(&response_text, 512);
+            let truncated = crate::llm::util::truncate_for_preview(&response_text, 512);
             return Err(LlmError::RequestFailed {
                 provider: "nearai_chat".to_string(),
                 reason: format!("HTTP {}: {}", status, truncated),
@@ -307,7 +307,7 @@ impl NearAiChatProvider {
         }
 
         serde_json::from_str(&response_text).map_err(|e| {
-            let truncated = crate::agent::truncate_for_preview(&response_text, 512);
+            let truncated = crate::llm::util::truncate_for_preview(&response_text, 512);
             LlmError::InvalidResponse {
                 provider: "nearai_chat".to_string(),
                 reason: format!("JSON parse error: {}. Raw: {}", e, truncated),
@@ -359,7 +359,7 @@ impl NearAiChatProvider {
                     provider: "nearai_chat".to_string(),
                 });
             }
-            let truncated = crate::agent::truncate_for_preview(&response_text, 512);
+            let truncated = crate::llm::util::truncate_for_preview(&response_text, 512);
             return Err(LlmError::RequestFailed {
                 provider: "nearai_chat".to_string(),
                 reason: format!("HTTP {}: {}", status, truncated),
@@ -451,7 +451,7 @@ impl NearAiChatProvider {
             provider: "nearai_chat".to_string(),
             reason: format!(
                 "No model names found in response: {}",
-                &response_text[..crate::util::floor_char_boundary(&response_text, 300)]
+                &response_text[..crate::llm::util::floor_char_boundary(&response_text, 300)]
             ),
         })
     }
@@ -462,7 +462,7 @@ impl LlmProvider for NearAiChatProvider {
     async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, LlmError> {
         let model = req.model.unwrap_or_else(|| self.active_model_name());
         let mut raw_messages = req.messages;
-        crate::llm::provider::sanitize_tool_messages(&mut raw_messages);
+        crate::llm::sanitize_tool_messages(&mut raw_messages);
         let raw: Vec<ChatCompletionMessage> = raw_messages.into_iter().map(|m| m.into()).collect();
 
         // NEAR AI rejects `role:"tool"` messages even on text-only completion paths.
@@ -527,7 +527,7 @@ impl LlmProvider for NearAiChatProvider {
     ) -> Result<ToolCompletionResponse, LlmError> {
         let model = req.model.unwrap_or_else(|| self.active_model_name());
         let mut raw_messages = req.messages;
-        crate::llm::provider::sanitize_tool_messages(&mut raw_messages);
+        crate::llm::sanitize_tool_messages(&mut raw_messages);
         let messages: Vec<ChatCompletionMessage> =
             raw_messages.into_iter().map(|m| m.into()).collect();
 
@@ -659,7 +659,7 @@ impl LlmProvider for NearAiChatProvider {
         }
     }
 
-    fn set_model(&self, model: &str) -> Result<(), crate::error::LlmError> {
+    fn set_model(&self, model: &str) -> Result<(), crate::llm::error::LlmError> {
         match self.active_model.write() {
             Ok(mut guard) => {
                 *guard = model.to_string();

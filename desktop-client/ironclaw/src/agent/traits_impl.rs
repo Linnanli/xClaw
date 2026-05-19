@@ -15,6 +15,23 @@ use dasclaw_core::traits::{HostError, LlmCompleter, WorkspaceWriter};
 use crate::llm::Reasoning;
 use crate::workspace::Workspace;
 
+/// Newtype wrapper that adapts the externally-defined [`Reasoning`] provider
+/// (from `dasclaw_llm_provider`) to the externally-defined [`LlmCompleter`]
+/// trait (from `dasclaw_core`).
+///
+/// Without this wrapper an `impl LlmCompleter for Reasoning` block in
+/// ironclaw violates the orphan rule (E0117): per ADR-118 / ADR-129 the
+/// provider crate must not depend on `dasclaw_core::traits`, and
+/// `dasclaw_core` must not depend on the provider tree, so the adapter has
+/// to live on the host side as a newtype.
+pub struct ReasoningCompleter(pub Reasoning);
+
+impl ReasoningCompleter {
+    pub fn new(reasoning: Reasoning) -> Self {
+        Self(reasoning)
+    }
+}
+
 #[async_trait]
 impl WorkspaceWriter for Workspace {
     async fn append(&self, path: &str, content: &str) -> Result<(), HostError> {
@@ -25,9 +42,9 @@ impl WorkspaceWriter for Workspace {
 }
 
 #[async_trait]
-impl LlmCompleter for Reasoning {
+impl LlmCompleter for ReasoningCompleter {
     async fn complete_text(&self, request: CompletionRequest) -> Result<String, HostError> {
-        let (text, _usage) = Reasoning::complete(self, request)
+        let (text, _usage) = Reasoning::complete(&self.0, request)
             .await
             .map_err(|e| Box::new(e) as HostError)?;
         Ok(text)
@@ -56,7 +73,7 @@ mod tests {
     #[test]
     fn reasoning_impl_is_dyn_compatible() {
         fn assert_dyn(_: &dyn LlmCompleter) {}
-        let _f: fn(&Reasoning) = |r| assert_dyn(r);
+        let _f: fn(&ReasoningCompleter) = |r| assert_dyn(r);
     }
 
     /// `complete_text` round-trip against a fake provider exercises the
@@ -108,7 +125,7 @@ mod tests {
 
         let provider: Arc<dyn LlmProvider> = Arc::new(FakeProvider);
         let reasoning = Reasoning::new(provider);
-        let completer: Arc<dyn LlmCompleter> = Arc::new(reasoning);
+        let completer: Arc<dyn LlmCompleter> = Arc::new(ReasoningCompleter::new(reasoning));
 
         let req = CompletionRequest::new(vec![ChatMessage::user("ping")]);
         let out = completer.complete_text(req).await.unwrap();

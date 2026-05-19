@@ -12,8 +12,8 @@ use rust_decimal::Decimal;
 use serde::Deserialize;
 use tokio::sync::RwLock;
 
-use crate::error::LlmError;
-use crate::llm::provider::{
+use crate::provider::error::LlmError;
+use crate::provider::provider::{
     ChatMessage, CompletionRequest, CompletionResponse, ContentPart, FinishReason, LlmProvider,
     ModelMetadata, Role, ToolCall, ToolCompletionRequest, ToolCompletionResponse, ToolDefinition,
 };
@@ -496,7 +496,7 @@ fn sanitize_tool_name(name: &str) -> String {
 /// Applies strict-mode schema normalization (same as OpenAI Chat Completions):
 /// `additionalProperties: false`, all properties required, optional fields nullable.
 fn convert_tool_definition(tool: &ToolDefinition) -> serde_json::Value {
-    use crate::llm::schema_utils::normalize_schema_strict;
+    use crate::provider::schema_utils::normalize_schema_strict;
 
     serde_json::json!({
         "type": "function",
@@ -800,7 +800,7 @@ fn parse_sse_response(body: &str) -> Result<ParsedResponse, LlmError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::codex_test_helpers::make_test_jwt;
+    use crate::provider::codex_test_helpers::make_test_jwt;
 
     #[test]
     fn test_extract_account_id_success() {

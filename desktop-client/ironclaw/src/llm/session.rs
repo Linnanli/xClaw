@@ -4,7 +4,6 @@
 //! OAuth flow. Tokens are stored in `~/.ironclaw/session.json` and refreshed
 //! automatically when expired.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::llm::oauth_helpers::OAUTH_CALLBACK_PORT;
@@ -27,24 +26,10 @@ pub struct SessionData {
 }
 
 /// Configuration for session management.
-#[derive(Debug, Clone)]
-pub struct SessionConfig {
-    /// Base URL for auth endpoints (e.g., https://private.near.ai).
-    pub auth_base_url: String,
-    /// Path to session file (e.g., ~/.ironclaw/session.json).
-    pub session_path: PathBuf,
-}
-
-impl Default for SessionConfig {
-    fn default() -> Self {
-        Self {
-            auth_base_url: "https://private.near.ai".to_string(),
-            // Real path is set by LlmConfig::resolve() via config/llm.rs.
-            // This default is only used in tests.
-            session_path: PathBuf::from("session.json"),
-        }
-    }
-}
+///
+/// Re-exported from the provider crate so `LlmConfig.session` and the
+/// host-side `SessionManager` operate on the same type.
+pub use dasclaw_llm_provider::provider::config::SessionConfig;
 
 /// Manages NEAR AI session tokens with persistence and automatic renewal.
 pub struct SessionManager {
@@ -196,7 +181,7 @@ impl SessionManager {
 
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        let preview = crate::agent::truncate_for_preview(&body, 200);
+        let preview = crate::llm::util::truncate_for_preview(&body, 200);
         Err(LlmError::SessionRenewalFailed {
             provider: "nearai".to_string(),
             reason: format!("Validation failed: HTTP {status}: {preview}"),
@@ -232,10 +217,11 @@ impl SessionManager {
     /// 2. Set NEARAI_API_KEY env var and save to bootstrap .env
     /// 3. No session token saved (different auth model)
     async fn initiate_login(&self) -> Result<(), LlmError> {
+        use crate::cli::oauth_defaults;
         use crate::llm::oauth_helpers;
 
-        let cb_url = oauth_helpers::callback_url();
-        let host = oauth_helpers::callback_host();
+        let cb_url = oauth_defaults::callback_url();
+        let host = oauth_defaults::callback_host();
 
         // Show auth provider menu BEFORE binding the listener
         println!();
@@ -299,12 +285,12 @@ impl SessionManager {
         }
 
         // OAuth paths: bind the callback listener now
-        let listener = oauth_helpers::bind_callback_listener().await.map_err(|e| {
-            LlmError::SessionRenewalFailed {
+        let listener = oauth_defaults::bind_callback_listener()
+            .await
+            .map_err(|e| LlmError::SessionRenewalFailed {
                 provider: "nearai".to_string(),
                 reason: e.to_string(),
-            }
-        })?;
+            })?;
 
         let (auth_provider, auth_url) = match choice.trim() {
             "2" => {

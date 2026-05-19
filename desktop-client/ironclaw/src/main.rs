@@ -238,7 +238,8 @@ async fn async_main() -> anyhow::Result<()> {
                         .map_err(|e| anyhow::anyhow!("{}", e))?;
                     config.llm.openai_codex.unwrap_or_else(|| {
                         use ironclaw::llm::OpenAiCodexConfig;
-                        let mut cfg = OpenAiCodexConfig::default();
+                        let mut cfg =
+                            OpenAiCodexConfig::new(&ironclaw::bootstrap::dasclaw_base_dir());
                         if let Ok(v) = std::env::var("OPENAI_CODEX_AUTH_URL") {
                             cfg.auth_endpoint = v;
                         }

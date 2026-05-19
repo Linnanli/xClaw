@@ -33,30 +33,20 @@ pub enum OAuthCallbackError {
     Io(String),
 }
 
-/// Returns the OAuth callback base URL.
+/// Build the OAuth callback base URL from explicit inputs.
 ///
-/// Checks `IRONCLAW_OAUTH_CALLBACK_URL` env var first (useful for remote/VPS
-/// deployments where `127.0.0.1` is unreachable from the user's browser),
-/// then falls back to `http://{callback_host()}:{OAUTH_CALLBACK_PORT}`.
-pub fn callback_url() -> String {
-    crate::config::helpers::env_or_override("IRONCLAW_OAUTH_CALLBACK_URL")
-        .unwrap_or_else(|| format!("http://{}:{}", callback_host(), OAUTH_CALLBACK_PORT))
-}
-
-/// Returns the hostname used in OAuth callback URLs.
-///
-/// Reads `OAUTH_CALLBACK_HOST` from the environment (default: `127.0.0.1`).
-///
-/// **Remote server usage:** set `OAUTH_CALLBACK_HOST` to the specific network
-/// interface address you want to listen on (e.g. the server's LAN IP).
-/// Wildcard addresses (`0.0.0.0`, `::`) are rejected — use a specific interface
-/// IP to limit exposure. The callback listener will bind to that address so the
-/// OAuth redirect can reach an external browser.
-/// Note: this transmits the session token over plain HTTP — prefer SSH port
-/// forwarding (`ssh -L 9876:127.0.0.1:9876 user@host`) when possible.
-pub fn callback_host() -> String {
-    crate::config::helpers::env_or_override("OAUTH_CALLBACK_HOST")
-        .unwrap_or_else(|| "127.0.0.1".to_string())
+/// When `override_url` is `Some`, it is returned verbatim (useful for remote
+/// or VPS deployments where `127.0.0.1` is unreachable from the user's
+/// browser). Otherwise the URL is composed from `host` + the fixed callback
+/// port. The embedding application is responsible for sourcing both inputs
+/// (env vars, settings, ...): this crate stays free of environment reads.
+pub fn callback_url(override_url: Option<&str>, host: &str) -> String {
+    if let Some(s) = override_url
+        && !s.is_empty()
+    {
+        return s.to_string();
+    }
+    format!("http://{}:{}", host, OAUTH_CALLBACK_PORT)
 }
 
 /// Returns `true` if `host` is a loopback address that only accepts local connections.
@@ -93,16 +83,19 @@ fn bind_error(e: std::io::Error) -> OAuthCallbackError {
 
 /// Bind the OAuth callback listener on the fixed port.
 ///
-/// When `OAUTH_CALLBACK_HOST` is a loopback address (the default `127.0.0.1`),
-/// binds to `127.0.0.1` first and falls back to `[::1]` so local-only auth
-/// flows remain restricted to the local machine.
+/// When `host` is a loopback address (typically `127.0.0.1`), binds to
+/// `127.0.0.1` first and falls back to `[::1]` so local-only auth flows
+/// remain restricted to the local machine.
 ///
-/// When `OAUTH_CALLBACK_HOST` is set to a remote address, binds to that
-/// specific address so only connections directed to it are accepted.
-pub async fn bind_callback_listener() -> Result<TcpListener, OAuthCallbackError> {
-    let host = callback_host();
-
-    if is_wildcard_host(&host) {
+/// When `host` is a remote address (e.g. a LAN IP), binds to that specific
+/// address so only connections directed to it are accepted. Wildcard
+/// addresses (`0.0.0.0`, `::`) are rejected since they would expose the
+/// session-token-bearing callback to all interfaces.
+///
+/// The embedding application owns the policy for sourcing `host` (env
+/// `OAUTH_CALLBACK_HOST`, settings, etc.); this crate never reads env.
+pub async fn bind_callback_listener(host: &str) -> Result<TcpListener, OAuthCallbackError> {
+    if is_wildcard_host(host) {
         return Err(OAuthCallbackError::Io(format!(
             "OAUTH_CALLBACK_HOST={host} is a wildcard address — this would accept \
              connections on all interfaces, exposing the session token. \
@@ -110,7 +103,7 @@ pub async fn bind_callback_listener() -> Result<TcpListener, OAuthCallbackError>
         )));
     }
 
-    if is_loopback_host(&host) {
+    if is_loopback_host(host) {
         // Local mode: prefer IPv4 loopback, fall back to IPv6.
         let ipv4_addr = format!("127.0.0.1:{}", OAUTH_CALLBACK_PORT);
         match TcpListener::bind(&ipv4_addr).await {
@@ -361,7 +354,6 @@ pub fn landing_html(provider_name: &str, success: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::helpers::lock_env;
 
     #[test]
     fn loopback_detection() {
@@ -390,18 +382,7 @@ mod tests {
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn bind_rejects_wildcard_ipv4() {
-        let _guard = lock_env();
-        let original = std::env::var("OAUTH_CALLBACK_HOST").ok();
-        // SAFETY: Under ENV_MUTEX, no concurrent env access.
-        unsafe { std::env::set_var("OAUTH_CALLBACK_HOST", "0.0.0.0") };
-        let result = bind_callback_listener().await;
-        // SAFETY: Under ENV_MUTEX, no concurrent env access.
-        unsafe {
-            match &original {
-                Some(v) => std::env::set_var("OAUTH_CALLBACK_HOST", v),
-                None => std::env::remove_var("OAUTH_CALLBACK_HOST"),
-            }
-        }
+        let result = bind_callback_listener("0.0.0.0").await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
@@ -414,18 +395,7 @@ mod tests {
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn bind_rejects_wildcard_ipv6() {
-        let _guard = lock_env();
-        let original = std::env::var("OAUTH_CALLBACK_HOST").ok();
-        // SAFETY: Under ENV_MUTEX, no concurrent env access.
-        unsafe { std::env::set_var("OAUTH_CALLBACK_HOST", "::") };
-        let result = bind_callback_listener().await;
-        // SAFETY: Under ENV_MUTEX, no concurrent env access.
-        unsafe {
-            match &original {
-                Some(v) => std::env::set_var("OAUTH_CALLBACK_HOST", v),
-                None => std::env::remove_var("OAUTH_CALLBACK_HOST"),
-            }
-        }
+        let result = bind_callback_listener("::").await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(

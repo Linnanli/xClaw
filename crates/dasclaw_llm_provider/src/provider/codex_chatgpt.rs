@@ -25,7 +25,7 @@ use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 
 use super::codex_auth;
-use crate::error::LlmError;
+use crate::provider::error::LlmError;
 
 use super::provider::{
     ChatMessage, CompletionRequest, CompletionResponse, ContentPart, FinishReason, LlmProvider,

@@ -13,23 +13,23 @@
 //!   [`docs/plans/architecture-refactor/04-phase2-claw-code-api.md`]）。
 //! - 编译期裁掉大量历史 rig 适配层的异构类型体操。
 
-use async_trait::async_trait;
-use dasclaw_llm_provider::{
+use crate::{
     AnthropicClient, ApiError, AuthSource, InputContentBlock, InputMessage, MessageRequest,
     MessageResponse, OpenAiCompatClient, OpenAiCompatConfig, OutputContentBlock, ProviderClient,
     SystemBlock, SystemPrompt, ToolChoice as ApiToolChoice, ToolDefinition as ApiToolDefinition,
     ToolResultContentBlock,
 };
+use async_trait::async_trait;
 use rust_decimal::Decimal;
 use secrecy::ExposeSecret;
 
-use crate::llm::config::{OAUTH_PLACEHOLDER, RegistryProviderConfig};
-use crate::llm::error::LlmError;
-use crate::llm::provider::{
+use crate::provider::config::{OAUTH_PLACEHOLDER, RegistryProviderConfig};
+use crate::provider::error::LlmError;
+use crate::provider::provider::{
     ChatMessage, CompletionRequest, CompletionResponse, ContentPart, FinishReason, LlmProvider,
     Role, ToolCall, ToolCompletionRequest, ToolCompletionResponse, ToolDefinition,
 };
-use crate::llm::registry::ProviderProtocol;
+use crate::provider::registry::ProviderProtocol;
 
 /// 使用 `claw-code-api` 作为底层 HTTP 客户端的 Provider。
 #[derive(Debug)]
@@ -66,8 +66,7 @@ impl ClawCodeLlmProvider {
     /// 不读取任何环境变量：凭据/URL 都来自显式配置，符合 x-claw 的 keychain 模型。
     pub fn from_registry_config(config: &RegistryProviderConfig) -> Result<Self, LlmError> {
         let configured_model = config.model.clone();
-        let resolved_model =
-            dasclaw_llm_provider::resolve_model_alias(&configured_model).to_string();
+        let resolved_model = crate::resolve_model_alias(&configured_model).to_string();
 
         let client = match config.protocol {
             ProviderProtocol::Anthropic => build_anthropic_client(config)?,
@@ -193,7 +192,7 @@ fn split_system_and_messages(messages: &[ChatMessage]) -> (Option<String>, Vec<I
     (system, out)
 }
 
-/// Anthropic prompt cache 边界标注（HTML comment 形态，由 [`crate::llm::prompt::LayeredPromptBuilder`] 注入）。
+/// Anthropic prompt cache 边界标注（HTML comment 形态，由 [`crate::provider::prompt::LayeredPromptBuilder`] 注入）。
 ///
 /// 与 [`dasclaw_core::PROMPT_CACHE_BOUNDARY`] 保持一致：包裹成 HTML 注释后，
 /// 系统提示词中的边界标记不会被任何下游 markdown / 模型行为意外渲染。
@@ -207,7 +206,7 @@ const CACHE_BOUNDARY_COMMENT: &str = concat!("<!-- ", "__SYSTEM_PROMPT_DYNAMIC_B
 ///   （skills + channel + runtime ctx）每轮变化不进缓存。
 /// - **其它情形**：单段 `SystemPrompt::Text`（OpenAI-compat / 无边界标记 / 空文本）。
 ///
-/// 边界检测在请求构造期完成，[`crate::llm::prompt::LayeredPromptBuilder`] 不感知 provider；
+/// 边界检测在请求构造期完成，[`crate::provider::prompt::LayeredPromptBuilder`] 不感知 provider；
 /// 这样 ADR-117 R-1 标记从 *惰性* 变 *实际生效*，并保持 builder 与 provider 解耦。
 fn build_system_prompt(system_text: Option<String>, model: &str) -> Option<SystemPrompt> {
     let text = system_text?;
@@ -456,9 +455,7 @@ fn build_anthropic_client(config: &RegistryProviderConfig) -> Result<ProviderCli
 /// 仅基于模型名做静态映射，不读取环境（`EnvSnapshot::default()` 即可），
 /// 因为 ironclaw 的鉴权一律来自 `RegistryProviderConfig` 的显式配置。
 fn pick_openai_compat_config(model: &str) -> (OpenAiCompatConfig, ProviderVariant) {
-    use dasclaw_llm_provider::{
-        EnvSnapshot, ProviderKind, detect_provider_kind, resolve_model_alias,
-    };
+    use crate::{EnvSnapshot, ProviderKind, detect_provider_kind, resolve_model_alias};
     let resolved = resolve_model_alias(model);
     match detect_provider_kind(&resolved, &EnvSnapshot::default()) {
         ProviderKind::Xai => (OpenAiCompatConfig::xai(), ProviderVariant::Xai),
@@ -578,7 +575,7 @@ impl LlmProvider for ClawCodeLlmProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dasclaw_llm_provider::Usage;
+    use crate::Usage;
     use serde_json::json;
 
     fn mk_user(text: &str) -> ChatMessage {
@@ -1052,8 +1049,8 @@ mod tests {
     // `ClawCodeLlmProvider`，覆盖每一种 `ProviderProtocol` 分支。
     // ========================================================================
 
-    use crate::llm::config::{CacheRetention, RegistryProviderConfig};
-    use dasclaw_llm_provider::ProviderKind;
+    use crate::ProviderKind;
+    use crate::provider::config::{CacheRetention, RegistryProviderConfig};
     use secrecy::SecretString;
 
     fn mk_config(

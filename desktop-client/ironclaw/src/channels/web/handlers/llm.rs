@@ -382,7 +382,7 @@ fn build_llm_providers() -> serde_json::Value {
     use crate::config::helpers::optional_env;
     use crate::llm::registry::ProviderRegistry;
 
-    let registry = ProviderRegistry::load();
+    let registry = ProviderRegistry::load(&crate::bootstrap::dasclaw_base_dir());
 
     // Helper: read env var via optional_env (checks real env + injected overlay).
     // Intentionally swallows ConfigError — this is a best-effort informational

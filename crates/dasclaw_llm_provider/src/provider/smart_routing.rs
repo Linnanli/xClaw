@@ -24,8 +24,8 @@ use async_trait::async_trait;
 use regex::Regex;
 use rust_decimal::Decimal;
 
-use crate::llm::error::LlmError;
-use crate::llm::provider::{
+use crate::provider::error::LlmError;
+use crate::provider::provider::{
     CompletionRequest, CompletionResponse, LlmProvider, ModelMetadata, Role, ToolCompletionRequest,
     ToolCompletionResponse,
 };
@@ -981,7 +981,7 @@ impl LlmProvider for SmartRoutingProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::ChatMessage;
+    use crate::provider::ChatMessage;
     use crate::testing::StubLlm;
 
     fn default_config() -> SmartRoutingConfig {
@@ -1497,7 +1497,7 @@ mod tests {
             content: "I'm not sure.".to_string(),
             input_tokens: 10,
             output_tokens: 5,
-            finish_reason: crate::llm::FinishReason::Stop,
+            finish_reason: crate::provider::FinishReason::Stop,
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
         };
@@ -1510,7 +1510,7 @@ mod tests {
             content: "".to_string(),
             input_tokens: 10,
             output_tokens: 0,
-            finish_reason: crate::llm::FinishReason::Stop,
+            finish_reason: crate::provider::FinishReason::Stop,
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
         };
@@ -1523,7 +1523,7 @@ mod tests {
             content: "Yes.".to_string(),
             input_tokens: 10,
             output_tokens: 1,
-            finish_reason: crate::llm::FinishReason::Stop,
+            finish_reason: crate::provider::FinishReason::Stop,
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
         };
@@ -1537,7 +1537,7 @@ mod tests {
                 .to_string(),
             input_tokens: 10,
             output_tokens: 20,
-            finish_reason: crate::llm::FinishReason::Stop,
+            finish_reason: crate::provider::FinishReason::Stop,
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
         };

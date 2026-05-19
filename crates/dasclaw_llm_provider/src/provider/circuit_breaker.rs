@@ -19,8 +19,8 @@ use async_trait::async_trait;
 use rust_decimal::Decimal;
 use tokio::sync::Mutex;
 
-use crate::llm::error::LlmError;
-use crate::llm::provider::{
+use crate::provider::error::LlmError;
+use crate::provider::provider::{
     CompletionRequest, CompletionResponse, LlmProvider, ModelMetadata, ToolCompletionRequest,
     ToolCompletionResponse,
 };
@@ -337,11 +337,11 @@ mod tests {
     use crate::testing::StubLlm;
 
     fn make_request() -> CompletionRequest {
-        CompletionRequest::new(vec![crate::llm::ChatMessage::user("hello")])
+        CompletionRequest::new(vec![crate::provider::ChatMessage::user("hello")])
     }
 
     fn make_tool_request() -> ToolCompletionRequest {
-        ToolCompletionRequest::new(vec![crate::llm::ChatMessage::user("hello")], vec![])
+        ToolCompletionRequest::new(vec![crate::provider::ChatMessage::user("hello")], vec![])
     }
 
     fn fast_config(threshold: u32) -> CircuitBreakerConfig {

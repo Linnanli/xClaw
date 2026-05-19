@@ -14,8 +14,8 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 
-use crate::config::OpenAiCodexConfig;
-use crate::error::LlmError;
+use crate::provider::config::OpenAiCodexConfig;
+use crate::provider::error::LlmError;
 
 /// Persisted OAuth session data.
 ///
@@ -637,7 +637,7 @@ impl OpenAiCodexSessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::codex_test_helpers::test_codex_config as test_config;
+    use crate::provider::codex_test_helpers::test_codex_config as test_config;
     use tempfile::tempdir;
 
     #[tokio::test]

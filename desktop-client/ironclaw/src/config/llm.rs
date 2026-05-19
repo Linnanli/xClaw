@@ -10,10 +10,24 @@ use crate::llm::registry::{ProviderProtocol, ProviderRegistry};
 use crate::llm::session::SessionConfig;
 use crate::settings::Settings;
 
-impl LlmConfig {
+/// Extension trait for [`LlmConfig`].
+///
+/// `LlmConfig` is defined in `dasclaw_llm_provider::provider::config`, which
+/// (per ADR-118 / ADR-129) cannot depend on ironclaw types like `Settings` or
+/// the env-var helpers. Inherent impls for an external type are blocked by
+/// the orphan rule (E0116), so the host-side resolution logic is exposed via
+/// this extension trait. Bring it into scope (`use crate::config::llm::LlmConfigExt;`)
+/// at call sites that need `LlmConfig::resolve(...)` or `LlmConfig::for_testing()`.
+pub(crate) trait LlmConfigExt: Sized {
+    #[cfg(feature = "libsql")]
+    fn for_testing() -> Self;
+    fn resolve(settings: &Settings) -> Result<Self, ConfigError>;
+}
+
+impl LlmConfigExt for LlmConfig {
     /// Create a test-friendly config without reading env vars.
     #[cfg(feature = "libsql")]
-    pub fn for_testing() -> Self {
+    fn for_testing() -> Self {
         Self {
             backend: "nearai".to_string(),
             session: SessionConfig {
@@ -47,22 +61,8 @@ impl LlmConfig {
     }
 
     /// Resolve a model name from settings.selected_model -> env var -> hardcoded default.
-    fn resolve_model(
-        env_var: &str,
-        settings: &Settings,
-        default: &str,
-    ) -> Result<String, ConfigError> {
-        if let Some(model) = settings.selected_model.clone() {
-            Ok(model)
-        } else if let Some(model) = optional_env(env_var)? {
-            Ok(model)
-        } else {
-            Ok(default.to_string())
-        }
-    }
-
-    pub(crate) fn resolve(settings: &Settings) -> Result<Self, ConfigError> {
-        let registry = ProviderRegistry::load();
+    fn resolve(settings: &Settings) -> Result<Self, ConfigError> {
+        let registry = ProviderRegistry::load(&dasclaw_base_dir());
 
         // Determine backend: db settings > env var > default ("nearai")
         let (backend, backend_source) = if let Some(ref b) = settings.llm_backend {
@@ -188,9 +188,9 @@ impl LlmConfig {
         let provider = if is_nearai || is_bedrock || is_gemini_oauth || is_openai_codex {
             None
         } else if let Some(custom) = custom_provider {
-            Some(Self::resolve_custom_provider(custom, settings)?)
+            Some(resolve_custom_provider(custom, settings)?)
         } else {
-            Some(Self::resolve_registry_provider(
+            Some(resolve_registry_provider(
                 &backend_lower,
                 &registry,
                 settings,
@@ -281,7 +281,7 @@ impl LlmConfig {
         let request_timeout_secs = parse_optional_env("LLM_REQUEST_TIMEOUT_SECS", 120)?;
 
         let gemini_oauth = if backend_lower == "gemini_oauth" || backend_lower == "gemini-oauth" {
-            let model = Self::resolve_model("GEMINI_MODEL", settings, "gemini-2.5-flash")?;
+            let model = resolve_model("GEMINI_MODEL", settings, "gemini-2.5-flash")?;
             let credentials_path = optional_env("GEMINI_CREDENTIALS_PATH")?
                 .map(PathBuf::from)
                 .unwrap_or_else(GeminiOauthConfig::default_credentials_path);
@@ -326,297 +326,304 @@ impl LlmConfig {
             smart_routing_cascade,
         })
     }
+}
 
-    /// Resolve a `RegistryProviderConfig` from a user-defined custom provider.
-    fn resolve_custom_provider(
-        custom: &crate::settings::CustomLlmProviderSettings,
-        settings: &Settings,
-    ) -> Result<RegistryProviderConfig, ConfigError> {
-        tracing::info!(
-            id = %custom.id,
-            adapter = %custom.adapter,
-            base_url = ?custom.base_url,
-            "Resolving custom LLM provider"
-        );
-        let protocol = match custom.adapter.as_str() {
-            "anthropic" => ProviderProtocol::Anthropic,
-            "ollama" => ProviderProtocol::Ollama,
-            _ => ProviderProtocol::OpenAiCompletions,
-        };
+/// Resolve a model name from settings.selected_model -> env var -> hardcoded default.
+fn resolve_model(env_var: &str, settings: &Settings, default: &str) -> Result<String, ConfigError> {
+    if let Some(model) = settings.selected_model.clone() {
+        Ok(model)
+    } else if let Some(model) = optional_env(env_var)? {
+        Ok(model)
+    } else {
+        Ok(default.to_string())
+    }
+}
 
-        let api_key = custom
-            .api_key
-            .as_ref()
-            .filter(|k| !k.is_empty())
-            .map(|k| SecretString::from(k.clone()));
+/// Resolve a `RegistryProviderConfig` from a user-defined custom provider.
+fn resolve_custom_provider(
+    custom: &crate::settings::CustomLlmProviderSettings,
+    settings: &Settings,
+) -> Result<RegistryProviderConfig, ConfigError> {
+    tracing::info!(
+        id = %custom.id,
+        adapter = %custom.adapter,
+        base_url = ?custom.base_url,
+        "Resolving custom LLM provider"
+    );
+    let protocol = match custom.adapter.as_str() {
+        "anthropic" => ProviderProtocol::Anthropic,
+        "ollama" => ProviderProtocol::Ollama,
+        _ => ProviderProtocol::OpenAiCompletions,
+    };
 
-        let base_url = custom.base_url.clone().unwrap_or_default();
-        if base_url.is_empty() {
-            tracing::warn!(id = %custom.id, "Custom provider has no base_url configured — requests will fail");
-        } else {
-            validate_base_url(
-                &base_url,
-                &format!("custom provider '{}' base_url", custom.id),
-            )?;
-        }
+    let api_key = custom
+        .api_key
+        .as_ref()
+        .filter(|k| !k.is_empty())
+        .map(|k| SecretString::from(k.clone()));
 
-        let model = settings
-            .selected_model
-            .clone()
-            .or(optional_env("LLM_MODEL")?)
-            .or_else(|| custom.default_model.clone())
-            .unwrap_or_default();
-        if model.is_empty() {
-            tracing::warn!(id = %custom.id, "Custom provider has no model configured — requests may fail");
-        }
-
-        Ok(RegistryProviderConfig {
-            protocol,
-            provider_id: custom.id.clone(),
-            api_key,
-            base_url,
-            model,
-            extra_headers: Vec::new(),
-            oauth_token: None,
-            is_codex_chatgpt: false,
-            refresh_token: None,
-            auth_path: None,
-            cache_retention: CacheRetention::default(),
-            unsupported_params: Vec::new(),
-            strict_tools_schema: true,
-        })
+    let base_url = custom.base_url.clone().unwrap_or_default();
+    if base_url.is_empty() {
+        tracing::warn!(id = %custom.id, "Custom provider has no base_url configured — requests will fail");
+    } else {
+        validate_base_url(
+            &base_url,
+            &format!("custom provider '{}' base_url", custom.id),
+        )?;
     }
 
-    /// Resolve a `RegistryProviderConfig` from the registry and env vars.
-    fn resolve_registry_provider(
-        backend: &str,
-        registry: &ProviderRegistry,
-        settings: &Settings,
-    ) -> Result<RegistryProviderConfig, ConfigError> {
-        // Look up provider definition. Fall back to openai_compatible if unknown.
-        let def = registry
-            .find(backend)
-            .or_else(|| registry.find("openai_compatible"));
+    let model = settings
+        .selected_model
+        .clone()
+        .or(optional_env("LLM_MODEL")?)
+        .or_else(|| custom.default_model.clone())
+        .unwrap_or_default();
+    if model.is_empty() {
+        tracing::warn!(id = %custom.id, "Custom provider has no model configured — requests may fail");
+    }
 
-        let (
-            canonical_id,
-            protocol,
-            api_key_env,
-            base_url_env,
-            model_env,
-            default_model,
-            default_base_url,
-            extra_headers_env,
-            api_key_required,
-            base_url_required,
-            unsupported_params,
-            strict_tools_schema,
-        ) = if let Some(def) = def {
-            (
-                def.id.as_str(),
-                def.protocol,
-                def.api_key_env.as_deref(),
-                def.base_url_env.as_deref(),
-                def.model_env.as_str(),
-                def.default_model.as_str(),
-                def.default_base_url.as_deref(),
-                def.extra_headers_env.as_deref(),
-                def.api_key_required,
-                def.base_url_required,
-                def.unsupported_params.clone(),
-                def.strict_tools_schema,
-            )
+    Ok(RegistryProviderConfig {
+        protocol,
+        provider_id: custom.id.clone(),
+        api_key,
+        base_url,
+        model,
+        extra_headers: Vec::new(),
+        oauth_token: None,
+        is_codex_chatgpt: false,
+        refresh_token: None,
+        auth_path: None,
+        cache_retention: CacheRetention::default(),
+        unsupported_params: Vec::new(),
+        strict_tools_schema: true,
+    })
+}
+
+/// Resolve a `RegistryProviderConfig` from the registry and env vars.
+fn resolve_registry_provider(
+    backend: &str,
+    registry: &ProviderRegistry,
+    settings: &Settings,
+) -> Result<RegistryProviderConfig, ConfigError> {
+    // Look up provider definition. Fall back to openai_compatible if unknown.
+    let def = registry
+        .find(backend)
+        .or_else(|| registry.find("openai_compatible"));
+
+    let (
+        canonical_id,
+        protocol,
+        api_key_env,
+        base_url_env,
+        model_env,
+        default_model,
+        default_base_url,
+        extra_headers_env,
+        api_key_required,
+        base_url_required,
+        unsupported_params,
+        strict_tools_schema,
+    ) = if let Some(def) = def {
+        (
+            def.id.as_str(),
+            def.protocol,
+            def.api_key_env.as_deref(),
+            def.base_url_env.as_deref(),
+            def.model_env.as_str(),
+            def.default_model.as_str(),
+            def.default_base_url.as_deref(),
+            def.extra_headers_env.as_deref(),
+            def.api_key_required,
+            def.base_url_required,
+            def.unsupported_params.clone(),
+            def.strict_tools_schema,
+        )
+    } else {
+        // Absolute fallback: treat as generic openai_completions
+        (
+            backend,
+            ProviderProtocol::OpenAiCompletions,
+            Some("LLM_API_KEY"),
+            Some("LLM_BASE_URL"),
+            "LLM_MODEL",
+            "default",
+            None,
+            Some("LLM_EXTRA_HEADERS"),
+            false,
+            true,
+            Vec::new(),
+            true,
+        )
+    };
+
+    // Codex auth.json override: when LLM_USE_CODEX_AUTH=true,
+    // credentials from the Codex CLI's auth.json take highest priority
+    // (over env vars AND secrets store). In ChatGPT mode, the base URL
+    // is also overridden to the private ChatGPT backend endpoint.
+    let mut codex_base_url_override: Option<String> = None;
+    let codex_creds = if parse_optional_env("LLM_USE_CODEX_AUTH", false)? {
+        let path = optional_env("CODEX_AUTH_PATH")?
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(crate::llm::codex_auth::default_codex_auth_path);
+        crate::llm::codex_auth::load_codex_credentials(&path)
+    } else {
+        None
+    };
+
+    let codex_refresh_token = codex_creds.as_ref().and_then(|c| c.refresh_token.clone());
+    let codex_auth_path = codex_creds.as_ref().and_then(|c| c.auth_path.clone());
+
+    let api_key = if let Some(creds) = codex_creds {
+        if creds.is_chatgpt_mode {
+            codex_base_url_override = Some(creds.base_url().to_string());
+        }
+        Some(creds.token)
+    } else if let Some(env_var) = api_key_env {
+        // Resolve API key: settings override (DB) > env var (including secrets store overlay)
+        if let Some(key) = settings
+            .llm_builtin_overrides
+            .get(backend)
+            .and_then(|o| o.api_key.as_ref())
+        {
+            Some(SecretString::from(key.clone()))
         } else {
-            // Absolute fallback: treat as generic openai_completions
-            (
-                backend,
-                ProviderProtocol::OpenAiCompletions,
-                Some("LLM_API_KEY"),
-                Some("LLM_BASE_URL"),
-                "LLM_MODEL",
-                "default",
-                None,
-                Some("LLM_EXTRA_HEADERS"),
-                false,
-                true,
-                Vec::new(),
-                true,
-            )
-        };
+            optional_env(env_var)?.map(SecretString::from)
+        }
+    } else {
+        None
+    };
 
-        // Codex auth.json override: when LLM_USE_CODEX_AUTH=true,
-        // credentials from the Codex CLI's auth.json take highest priority
-        // (over env vars AND secrets store). In ChatGPT mode, the base URL
-        // is also overridden to the private ChatGPT backend endpoint.
-        let mut codex_base_url_override: Option<String> = None;
-        let codex_creds = if parse_optional_env("LLM_USE_CODEX_AUTH", false)? {
-            let path = optional_env("CODEX_AUTH_PATH")?
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(crate::llm::codex_auth::default_codex_auth_path);
-            crate::llm::codex_auth::load_codex_credentials(&path)
-        } else {
-            None
-        };
+    if api_key_required && api_key.is_none() {
+        // Don't hard-fail here. The key might be injected later from the secrets store
+        // via inject_llm_keys_from_secrets(). Log a warning instead.
+        if let Some(env_var) = api_key_env {
+            tracing::debug!(
+                "API key not found in {env_var} for backend '{backend}'. \
+                     Will be injected from secrets store if available."
+            );
+        }
+    }
 
-        let codex_refresh_token = codex_creds.as_ref().and_then(|c| c.refresh_token.clone());
-        let codex_auth_path = codex_creds.as_ref().and_then(|c| c.auth_path.clone());
-
-        let api_key = if let Some(creds) = codex_creds {
-            if creds.is_chatgpt_mode {
-                codex_base_url_override = Some(creds.base_url().to_string());
-            }
-            Some(creds.token)
-        } else if let Some(env_var) = api_key_env {
-            // Resolve API key: settings override (DB) > env var (including secrets store overlay)
-            if let Some(key) = settings
+    // Resolve base URL: codex override > builtin_overrides (DB) > legacy settings (DB) > env var > registry default
+    let is_codex_chatgpt = codex_base_url_override.is_some();
+    let env_base_url = if let Some(env_var) = base_url_env {
+        optional_env(env_var)?
+    } else {
+        None
+    };
+    let base_url = codex_base_url_override
+        .or_else(|| {
+            // DB settings: per-provider base_url override
+            settings
                 .llm_builtin_overrides
                 .get(backend)
-                .and_then(|o| o.api_key.as_ref())
-            {
-                Some(SecretString::from(key.clone()))
-            } else {
-                optional_env(env_var)?.map(SecretString::from)
+                .and_then(|o| o.base_url.clone())
+        })
+        .or_else(|| {
+            // DB settings: legacy settings fields
+            match backend {
+                "ollama" => settings.ollama_base_url.clone(),
+                "openai_compatible" | "openrouter" => settings.openai_compatible_base_url.clone(),
+                _ => None,
             }
-        } else {
-            None
-        };
+        })
+        .or(env_base_url)
+        .or_else(|| default_base_url.map(String::from))
+        .unwrap_or_default();
 
-        if api_key_required && api_key.is_none() {
-            // Don't hard-fail here. The key might be injected later from the secrets store
-            // via inject_llm_keys_from_secrets(). Log a warning instead.
-            if let Some(env_var) = api_key_env {
-                tracing::debug!(
-                    "API key not found in {env_var} for backend '{backend}'. \
-                     Will be injected from secrets store if available."
-                );
-            }
-        }
+    if base_url_required
+        && base_url.is_empty()
+        && let Some(env_var) = base_url_env
+    {
+        return Err(ConfigError::MissingRequired {
+            key: env_var.to_string(),
+            hint: format!("Set {env_var} when LLM_BACKEND={backend}"),
+        });
+    }
 
-        // Resolve base URL: codex override > builtin_overrides (DB) > legacy settings (DB) > env var > registry default
-        let is_codex_chatgpt = codex_base_url_override.is_some();
-        let env_base_url = if let Some(env_var) = base_url_env {
-            optional_env(env_var)?
-        } else {
-            None
-        };
-        let base_url = codex_base_url_override
-            .or_else(|| {
-                // DB settings: per-provider base_url override
-                settings
-                    .llm_builtin_overrides
-                    .get(backend)
-                    .and_then(|o| o.base_url.clone())
-            })
-            .or_else(|| {
-                // DB settings: legacy settings fields
-                match backend {
-                    "ollama" => settings.ollama_base_url.clone(),
-                    "openai_compatible" | "openrouter" => {
-                        settings.openai_compatible_base_url.clone()
-                    }
-                    _ => None,
+    // Validate base URL to prevent SSRF (#1103).
+    if !base_url.is_empty() {
+        let field = base_url_env.unwrap_or("LLM_BASE_URL");
+        validate_base_url(&base_url, field)?;
+    }
+
+    // Resolve model: selected_model (DB) > per-provider override (DB) > env var > registry default
+    let model = settings
+        .selected_model
+        .clone()
+        .or_else(|| {
+            settings
+                .llm_builtin_overrides
+                .get(backend)
+                .and_then(|o| o.model.clone())
+        })
+        .or(optional_env(model_env)?)
+        .unwrap_or_else(|| default_model.to_string());
+
+    // Resolve extra headers
+    let extra_headers = if let Some(env_var) = extra_headers_env {
+        optional_env(env_var)?
+            .map(|val| parse_extra_headers_with_key(&val, env_var))
+            .transpose()?
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let extra_headers = if canonical_id == "github_copilot" {
+        merge_extra_headers(
+            crate::llm::github_copilot_auth::default_headers(),
+            extra_headers,
+        )
+    } else {
+        extra_headers
+    };
+
+    // Resolve OAuth token (Anthropic-specific: `claude login` flow).
+    // Only check for OAuth token when the provider is actually Anthropic.
+    let oauth_token = if canonical_id == "anthropic" {
+        optional_env("ANTHROPIC_OAUTH_TOKEN")?.map(SecretString::from)
+    } else {
+        None
+    };
+    let api_key = if api_key.is_none() && oauth_token.is_some() {
+        // OAuth token present but no API key: use a placeholder so the
+        // config block is populated. The provider factory will route to
+        // the OAuth provider instead of the x-api-key client.
+        Some(SecretString::from(OAUTH_PLACEHOLDER.to_string()))
+    } else {
+        api_key
+    };
+
+    // Resolve Anthropic prompt cache retention from env (default: Short).
+    let cache_retention: CacheRetention = if canonical_id == "anthropic" {
+        optional_env("ANTHROPIC_CACHE_RETENTION")?
+            .and_then(|val| match val.parse::<CacheRetention>() {
+                Ok(r) => Some(r),
+                Err(e) => {
+                    tracing::warn!("Invalid ANTHROPIC_CACHE_RETENTION: {e}; defaulting to short");
+                    None
                 }
             })
-            .or(env_base_url)
-            .or_else(|| default_base_url.map(String::from))
-            .unwrap_or_default();
+            .unwrap_or_default()
+    } else {
+        CacheRetention::default()
+    };
 
-        if base_url_required
-            && base_url.is_empty()
-            && let Some(env_var) = base_url_env
-        {
-            return Err(ConfigError::MissingRequired {
-                key: env_var.to_string(),
-                hint: format!("Set {env_var} when LLM_BACKEND={backend}"),
-            });
-        }
-
-        // Validate base URL to prevent SSRF (#1103).
-        if !base_url.is_empty() {
-            let field = base_url_env.unwrap_or("LLM_BASE_URL");
-            validate_base_url(&base_url, field)?;
-        }
-
-        // Resolve model: selected_model (DB) > per-provider override (DB) > env var > registry default
-        let model = settings
-            .selected_model
-            .clone()
-            .or_else(|| {
-                settings
-                    .llm_builtin_overrides
-                    .get(backend)
-                    .and_then(|o| o.model.clone())
-            })
-            .or(optional_env(model_env)?)
-            .unwrap_or_else(|| default_model.to_string());
-
-        // Resolve extra headers
-        let extra_headers = if let Some(env_var) = extra_headers_env {
-            optional_env(env_var)?
-                .map(|val| parse_extra_headers_with_key(&val, env_var))
-                .transpose()?
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-        let extra_headers = if canonical_id == "github_copilot" {
-            merge_extra_headers(
-                crate::llm::github_copilot_auth::default_headers(),
-                extra_headers,
-            )
-        } else {
-            extra_headers
-        };
-
-        // Resolve OAuth token (Anthropic-specific: `claude login` flow).
-        // Only check for OAuth token when the provider is actually Anthropic.
-        let oauth_token = if canonical_id == "anthropic" {
-            optional_env("ANTHROPIC_OAUTH_TOKEN")?.map(SecretString::from)
-        } else {
-            None
-        };
-        let api_key = if api_key.is_none() && oauth_token.is_some() {
-            // OAuth token present but no API key: use a placeholder so the
-            // config block is populated. The provider factory will route to
-            // the OAuth provider instead of the x-api-key client.
-            Some(SecretString::from(OAUTH_PLACEHOLDER.to_string()))
-        } else {
-            api_key
-        };
-
-        // Resolve Anthropic prompt cache retention from env (default: Short).
-        let cache_retention: CacheRetention = if canonical_id == "anthropic" {
-            optional_env("ANTHROPIC_CACHE_RETENTION")?
-                .and_then(|val| match val.parse::<CacheRetention>() {
-                    Ok(r) => Some(r),
-                    Err(e) => {
-                        tracing::warn!(
-                            "Invalid ANTHROPIC_CACHE_RETENTION: {e}; defaulting to short"
-                        );
-                        None
-                    }
-                })
-                .unwrap_or_default()
-        } else {
-            CacheRetention::default()
-        };
-
-        Ok(RegistryProviderConfig {
-            protocol,
-            provider_id: canonical_id.to_string(),
-            api_key,
-            base_url,
-            model,
-            extra_headers,
-            oauth_token,
-            is_codex_chatgpt,
-            refresh_token: codex_refresh_token,
-            auth_path: codex_auth_path,
-            cache_retention,
-            unsupported_params,
-            strict_tools_schema,
-        })
-    }
+    Ok(RegistryProviderConfig {
+        protocol,
+        provider_id: canonical_id.to_string(),
+        api_key,
+        base_url,
+        model,
+        extra_headers,
+        oauth_token,
+        is_codex_chatgpt,
+        refresh_token: codex_refresh_token,
+        auth_path: codex_auth_path,
+        cache_retention,
+        unsupported_params,
+        strict_tools_schema,
+    })
 }
 
 /// Parse `LLM_EXTRA_HEADERS` value into a list of (key, value) pairs.

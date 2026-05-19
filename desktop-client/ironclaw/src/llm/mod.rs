@@ -1,91 +1,54 @@
-//! LLM integration for the agent.
+//! LLM provider tree for the ironclaw desktop client.
 //!
-//! Supports multiple backends:
-//! - **NEAR AI** (default): Session token or API key auth via Chat Completions API
-//! - **OpenAI**: Direct API access with your own key
-//! - **Anthropic**: Direct API access with your own key
-//! - **Ollama**: Local model inference
-//! - **OpenAI-compatible**: Any endpoint that speaks the OpenAI API
-//! - **AWS Bedrock**: Native Converse API via aws-sdk-bedrockruntime
+//! Most wire / HTTP / retry / registry plumbing lives in
+//! [`dasclaw_llm_provider::provider`] so the same backend logic powers the
+//! desktop client and any future headless agent. This module:
+//!
+//! * Re-exports the upstream provider tree wholesale so existing in-tree call
+//!   sites (`crate::llm::ChatMessage`, `crate::llm::ProviderRegistry`, …) keep
+//!   compiling unchanged.
+//! * Hosts the application-coupled pieces deliberately kept next to the
+//!   desktop client: NEAR AI session manager, recording / replay
+//!   interceptors, transcription pipelines, and the high-level provider chain
+//!   factory.
+//!
+//! Per ADR-118 / ADR-129 the provider crate must not depend on
+//! `desktop-client/ironclaw`; this module is the split point.
 
-#[cfg(feature = "bedrock")]
-mod bedrock;
-pub mod circuit_breaker;
-pub mod claw_code_provider;
-pub(crate) mod codex_auth;
-mod codex_chatgpt;
-pub mod config;
-pub mod costs;
-pub mod error;
-pub mod failover;
-pub mod gemini_oauth;
-mod github_copilot;
-pub(crate) mod github_copilot_auth;
-mod nearai_chat;
-pub mod oauth_helpers;
-pub mod openai_codex_provider;
-pub mod openai_codex_session;
-pub mod prompt;
-mod provider;
-mod reasoning;
+pub use dasclaw_llm_provider::provider::*;
+
+pub mod nearai_chat;
 pub mod recording;
-pub mod registry;
-pub mod response_cache;
-pub mod retry;
-pub(crate) mod schema_utils;
 pub mod session;
-pub mod smart_routing;
-mod token_refreshing;
 pub mod transcription;
 
-#[cfg(test)]
-mod codex_test_helpers;
-
-pub mod image_models;
-pub mod models;
-pub mod reasoning_models;
-pub mod vision_models;
-
-pub use circuit_breaker::{CircuitBreakerConfig, CircuitBreakerProvider};
-pub use config::{
-    BedrockConfig, CacheRetention, LlmConfig, NearAiConfig, OAUTH_PLACEHOLDER, OpenAiCodexConfig,
-    RegistryProviderConfig,
-};
-pub use error::LlmError;
-pub use failover::{CooldownConfig, FailoverProvider};
-pub use gemini_oauth::GeminiOauthProvider;
 pub use nearai_chat::{DEFAULT_MODEL, ModelInfo, NearAiChatProvider, default_models};
-pub use openai_codex_provider::OpenAiCodexProvider;
-pub use openai_codex_session::{OpenAiCodexSession, OpenAiCodexSessionManager};
-pub use provider::{
-    ChatMessage, CompletionRequest, CompletionResponse, ContentPart, FinishReason, ImageUrl,
-    LlmProvider, ModelMetadata, Role, ToolCall, ToolCompletionRequest, ToolCompletionResponse,
-    ToolDefinition, ToolResult, generate_tool_call_id,
+pub use recording::{
+    ExpectedToolResult, HttpExchange, HttpExchangeRequest, HttpExchangeResponse, HttpInterceptor,
+    MemorySnapshotEntry, RecordingHttpInterceptor, RecordingLlm, ReplayingHttpInterceptor,
+    RequestHint, TraceFile, TraceResponse, TraceStep, TraceToolCall,
 };
-pub use reasoning::{
-    ActionPlan, Reasoning, ReasoningContext, RespondOutput, RespondResult, ResponseAnomaly,
-    ResponseMetadata, SILENT_REPLY_TOKEN, TOOL_INTENT_NUDGE, TRUNCATED_TOOL_CALL_NOTICE,
-    TokenUsage, ToolSelection, is_silent_reply, llm_signals_tool_intent,
-};
-pub use recording::RecordingLlm;
-pub use registry::{ProviderDefinition, ProviderProtocol, ProviderRegistry};
-pub use response_cache::{CachedProvider, ResponseCacheConfig};
-pub use retry::{RetryConfig, RetryProvider};
-pub use session::{SessionConfig, SessionManager, create_session_manager};
-pub use smart_routing::{SmartRoutingConfig, SmartRoutingProvider, TaskComplexity};
-pub use token_refreshing::TokenRefreshingProvider;
+pub use session::{SessionConfig, SessionData, SessionManager, create_session_manager};
+
+// ===========================================================================
+// Provider factory functions.
+//
+// These used to live in `dasclaw_llm_provider::provider::mod`; they pull
+// together NEAR AI session auth, recording, retry, circuit breaker, smart
+// routing, failover, and cache layers into a single provider chain. Because
+// they need the application-level `SessionManager`, `NearAiChatProvider`,
+// and `RecordingLlm` they live on the desktop-client side of the split.
+// ===========================================================================
 
 use std::sync::Arc;
 
+pub use dasclaw_llm_provider::provider::openai_codex_session::OpenAiCodexSessionManager;
 use secrecy::ExposeSecret;
 
-// LlmConfig, NearAiConfig, RegistryProviderConfig, and LlmError are
-// re-exported via `pub use` above from config and error submodules.
+#[cfg(feature = "bedrock")]
+use dasclaw_llm_provider::provider::bedrock;
 
 /// Create an LLM provider based on configuration.
-///
-/// - NearAI backend: Uses session manager for authentication
-/// - Registry providers: Looked up by protocol and constructed generically
 pub async fn create_llm_provider(
     config: &LlmConfig,
     session: Arc<SessionManager>,
@@ -102,7 +65,6 @@ pub async fn create_llm_provider(
         return create_gemini_oauth_provider(config);
     }
 
-    // Bedrock uses a native AWS SDK, not the claw-code-api registry
     if config.backend == "bedrock" {
         #[cfg(feature = "bedrock")]
         {
@@ -137,9 +99,6 @@ pub async fn create_llm_provider(
 }
 
 /// Create an LLM provider from a `NearAiConfig` directly.
-///
-/// This is useful when constructing additional providers for failover,
-/// where only the model name differs from the primary config.
 pub fn create_llm_provider_with_config(
     config: &NearAiConfig,
     session: Arc<SessionManager>,
@@ -165,26 +124,14 @@ pub fn create_llm_provider_with_config(
 }
 
 /// Create a provider from a registry-resolved config.
-///
-/// Dispatches on `RegistryProviderConfig::protocol` to build the appropriate
-/// claw-code-api client. This single function replaces what used to be 5 separate
-/// `create_*_provider` functions.
-///
-/// # Backend selection (post-Phase 2)
-///
-/// Phase 2 Step I 之后 rig-core 已被彻底移除，[`claw_code_provider::ClawCodeLlmProvider`]
-/// 是 Anthropic / OpenAI / Ollama 协议的唯一生产路径。`GithubCopilot` 与
-/// `CodexChatGpt` 使用各自独立的 provider，不走 claw-code。
 pub fn create_registry_provider(
     config: &RegistryProviderConfig,
     request_timeout_secs: u64,
 ) -> Result<Arc<dyn LlmProvider>, LlmError> {
-    // Codex ChatGPT mode: use the Responses API provider
     if config.is_codex_chatgpt {
         return create_codex_chatgpt_from_registry(config, request_timeout_secs);
     }
 
-    // GitHub Copilot: 独立 provider（token exchange + 直连 HTTP）
     if matches!(config.protocol, ProviderProtocol::GithubCopilot) {
         let provider = github_copilot::GithubCopilotProvider::new(config, request_timeout_secs)?;
         tracing::debug!(
@@ -196,7 +143,6 @@ pub fn create_registry_provider(
         return Ok(Arc::new(provider));
     }
 
-    // 其余 protocol（Anthropic / OpenAiCompletions / Ollama）走 claw-code-api。
     tracing::debug!(
         provider = %config.provider_id,
         model = %config.model,
@@ -208,10 +154,6 @@ pub fn create_registry_provider(
 }
 
 /// Create an OpenAI-compatible provider from raw parameters.
-///
-/// Convenience wrapper for runtime provider switching (e.g., desktop client
-/// cross-provider model switch). Callers pass plain strings instead of
-/// constructing `RegistryProviderConfig` directly (which requires `secrecy`).
 pub fn create_openai_provider(
     base_url: &str,
     api_key: &str,
@@ -291,13 +233,6 @@ async fn create_bedrock_provider(config: &LlmConfig) -> Result<Arc<dyn LlmProvid
     Ok(Arc::new(provider))
 }
 
-/// Create an OpenAI Codex provider with OAuth authentication.
-///
-/// This is async because it needs to ensure authentication before
-/// creating the provider (which requires a valid Bearer token).
-///
-/// Uses the Responses API (`chatgpt.com/backend-api/codex/responses`)
-/// instead of the Chat Completions API, matching OpenClaw's approach.
 async fn create_openai_codex_provider(
     config: &LlmConfig,
 ) -> Result<Arc<dyn LlmProvider>, LlmError> {
@@ -313,7 +248,7 @@ async fn create_openai_codex_provider(
 
     let token = session_mgr.get_access_token().await?;
 
-    let provider = Arc::new(OpenAiCodexProvider::new(
+    let provider = Arc::new(openai_codex_provider::OpenAiCodexProvider::new(
         &codex.model,
         &codex.api_base_url,
         token.expose_secret(),
@@ -332,13 +267,7 @@ async fn create_openai_codex_provider(
     )))
 }
 
-/// Create a cheap/fast LLM provider for lightweight tasks (heartbeat, routing, evaluation).
-///
-/// Resolution order:
-/// 1. `LLM_CHEAP_MODEL` (generic, works with any backend)
-/// 2. `NEARAI_CHEAP_MODEL` (NearAI-only, backward compatibility)
-///
-/// Returns `None` if no cheap model is configured.
+/// Create a cheap/fast LLM provider for lightweight tasks (heartbeat, routing).
 pub fn create_cheap_llm_provider(
     config: &LlmConfig,
     session: Arc<SessionManager>,
@@ -350,12 +279,6 @@ pub fn create_cheap_llm_provider(
     create_cheap_provider_for_backend(config, session, cheap_model)
 }
 
-/// Create a cheap provider for a specific backend.
-///
-/// Handles backend-specific provider construction:
-/// - `nearai` — clones NearAiConfig, swaps model, uses `create_llm_provider_with_config`
-/// - `bedrock` — returns error (smart routing not yet supported)
-/// - All others — clones `RegistryProviderConfig`, swaps model, uses `create_registry_provider`
 fn create_cheap_provider_for_backend(
     config: &LlmConfig,
     session: Arc<SessionManager>,
@@ -389,14 +312,16 @@ fn create_cheap_provider_for_backend(
         return Ok(Some(Arc::new(provider)));
     }
 
-    // Registry-based provider: clone config and swap model
-    let reg_config = config.provider.as_ref().ok_or_else(|| LlmError::RequestFailed {
-        provider: config.backend.clone(),
-        reason: format!(
-            "Cannot create cheap provider for backend '{}': no registry provider config available",
-            config.backend
-        ),
-    })?;
+    let reg_config = config
+        .provider
+        .as_ref()
+        .ok_or_else(|| LlmError::RequestFailed {
+            provider: config.backend.clone(),
+            reason: format!(
+                "Cannot create cheap provider for backend '{}': no registry provider config available",
+                config.backend
+            ),
+        })?;
 
     let mut cheap_reg_config = reg_config.clone();
     cheap_reg_config.model = cheap_model.to_string();
@@ -405,20 +330,6 @@ fn create_cheap_provider_for_backend(
 }
 
 /// Build the full LLM provider chain with all configured wrappers.
-///
-/// Applies decorators in this order:
-/// 1. Raw provider (from config)
-/// 2. RetryProvider (per-provider retry with exponential backoff)
-/// 3. SmartRoutingProvider (cheap/primary split when cheap model is configured)
-/// 4. FailoverProvider (fallback model when primary fails)
-/// 5. CircuitBreakerProvider (fast-fail when backend is degraded)
-/// 6. CachedProvider (in-memory response cache)
-///
-/// Also returns a separate cheap LLM provider for heartbeat/evaluation (not
-/// part of the chain — it's a standalone provider for explicitly cheap tasks).
-///
-/// This is the single source of truth for provider chain construction,
-/// called by both `main.rs` and `app.rs`.
 #[allow(clippy::type_complexity)]
 pub async fn build_provider_chain(
     config: &LlmConfig,
@@ -438,7 +349,6 @@ pub async fn build_provider_chain(
     };
     tracing::debug!("LLM provider initialized: {}", llm.model_name());
 
-    // 1. Retry
     let retry_config = RetryConfig {
         max_retries: config.nearai.max_retries,
     };
@@ -452,7 +362,6 @@ pub async fn build_provider_chain(
         llm
     };
 
-    // 2. Smart routing (cheap/primary split)
     let llm: Arc<dyn LlmProvider> = if let Some(cheap_model) = config.cheap_model_name() {
         let cheap = create_cheap_provider_for_backend(config, session.clone(), cheap_model)?
             .ok_or_else(|| LlmError::RequestFailed {
@@ -484,7 +393,6 @@ pub async fn build_provider_chain(
         llm
     };
 
-    // 3. Failover
     let llm: Arc<dyn LlmProvider> = if let Some(ref fallback_model) = config.nearai.fallback_model {
         if fallback_model == &config.nearai.model {
             tracing::warn!(
@@ -520,7 +428,6 @@ pub async fn build_provider_chain(
         llm
     };
 
-    // 4. Circuit breaker
     let llm: Arc<dyn LlmProvider> = if let Some(threshold) = config.nearai.circuit_breaker_threshold
     {
         let cb_config = CircuitBreakerConfig {
@@ -540,7 +447,6 @@ pub async fn build_provider_chain(
         llm
     };
 
-    // 5. Response cache
     let llm: Arc<dyn LlmProvider> = if config.nearai.response_cache_enabled {
         let rc_config = ResponseCacheConfig {
             ttl: std::time::Duration::from_secs(config.nearai.response_cache_ttl_secs),
@@ -556,7 +462,6 @@ pub async fn build_provider_chain(
         llm
     };
 
-    // 6. Recording (trace capture for replay testing)
     let recording_handle = RecordingLlm::from_env(llm.clone());
     let llm: Arc<dyn LlmProvider> = if let Some(ref recorder) = recording_handle {
         Arc::clone(recorder) as Arc<dyn LlmProvider>
@@ -564,7 +469,6 @@ pub async fn build_provider_chain(
         llm
     };
 
-    // Standalone cheap LLM for heartbeat/evaluation (not part of the chain)
     let cheap_llm = create_cheap_llm_provider(config, session)?;
     if let Some(ref cheap) = cheap_llm {
         tracing::debug!("Cheap LLM provider initialized: {}", cheap.model_name());
@@ -573,6 +477,7 @@ pub async fn build_provider_chain(
     Ok((llm, cheap_llm, recording_handle))
 }
 
+/// Build a Gemini OAuth provider from `LlmConfig`.
 pub fn create_gemini_oauth_provider(config: &LlmConfig) -> Result<Arc<dyn LlmProvider>, LlmError> {
     let gemini_config = config
         .gemini_oauth
@@ -580,14 +485,46 @@ pub fn create_gemini_oauth_provider(config: &LlmConfig) -> Result<Arc<dyn LlmPro
         .ok_or_else(|| LlmError::AuthFailed {
             provider: "gemini_oauth".to_string(),
         })?;
-    let provider = gemini_oauth::GeminiOauthProvider::new(gemini_config)?;
+    let provider = GeminiOauthProvider::new(gemini_config)?;
     Ok(Arc::new(provider))
 }
+
+/// Build the lightweight `LlmConfig` used by NEAR AI model discovery.
+///
+/// Reads `NEARAI_AUTH_URL` from the ironclaw environment (defaulting to
+/// `https://private.near.ai`). Lives on the desktop-client side because env
+/// reads are an application-layer concern (ADR-118 / ADR-129).
+pub fn build_nearai_model_fetch_config() -> LlmConfig {
+    let auth_base_url = crate::config::helpers::env_or_override("NEARAI_AUTH_URL")
+        .unwrap_or_else(|| "https://private.near.ai".to_string());
+    let api_key =
+        crate::config::helpers::env_or_override("NEARAI_API_KEY").map(secrecy::SecretString::from);
+    let base_url_override = crate::config::helpers::env_or_override("NEARAI_BASE_URL");
+
+    LlmConfig {
+        backend: "nearai".to_string(),
+        session: SessionConfig {
+            auth_base_url,
+            session_path: crate::config::llm::default_session_path(),
+        },
+        nearai: NearAiConfig::for_model_discovery(api_key, base_url_override),
+        provider: None,
+        bedrock: None,
+        gemini_oauth: None,
+        request_timeout_secs: 120,
+        cheap_model: None,
+        smart_routing_cascade: false,
+        openai_codex: None,
+    }
+}
+
+// ===========================================================================
+// Tests
+// ===========================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::config::NearAiConfig;
 
     fn test_nearai_config() -> NearAiConfig {
         NearAiConfig {
@@ -702,7 +639,7 @@ mod tests {
         let mut config = test_llm_config();
         config.backend = "gemini_oauth".to_string();
         config.cheap_model = Some("gemini-2.5-flash-lite".to_string());
-        config.gemini_oauth = Some(crate::config::GeminiOauthConfig {
+        config.gemini_oauth = Some(GeminiOauthConfig {
             model: "gemini-2.5-pro".to_string(),
             credentials_path: std::path::PathBuf::from("/tmp/nonexistent-creds.json"),
         });
@@ -710,8 +647,6 @@ mod tests {
         let session = Arc::new(SessionManager::new(SessionConfig::default()));
         let result = create_cheap_llm_provider(&config, session);
 
-        // Should succeed and return a provider (credentials validation is deferred
-        // until the first LLM call, not at construction time).
         let provider = result.expect("gemini_oauth cheap provider should succeed");
         assert!(provider.is_some(), "Should return Some(provider)");
         assert_eq!(
@@ -723,24 +658,20 @@ mod tests {
 
     #[test]
     fn test_cheap_model_name_resolution() {
-        // Generic takes priority
         let mut config = test_llm_config();
         config.cheap_model = Some("generic".to_string());
         config.nearai.cheap_model = Some("nearai".to_string());
         assert_eq!(config.cheap_model_name(), Some("generic"));
 
-        // NearAI fallback when backend is nearai
         let mut config = test_llm_config();
         config.nearai.cheap_model = Some("nearai".to_string());
         assert_eq!(config.cheap_model_name(), Some("nearai"));
 
-        // NearAI ignored for non-nearai backend
         let mut config = test_llm_config();
         config.backend = "openai".to_string();
         config.nearai.cheap_model = Some("nearai".to_string());
         assert_eq!(config.cheap_model_name(), None);
 
-        // None when nothing configured
         let config = test_llm_config();
         assert_eq!(config.cheap_model_name(), None);
     }

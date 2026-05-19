@@ -17,9 +17,9 @@
 //! [`OpenAiCompatClient::stream`]: super::openai_compat::OpenAiCompatClient
 
 use crate::error::ApiError;
+use crate::providers::ProviderKind;
 use crate::providers::anthropic::{AnthropicClient, AnthropicStream};
 use crate::providers::openai_compat::{OpenAiCompatClient, OpenAiCompatStream};
-use crate::providers::ProviderKind;
 use crate::types::{MessageRequest, MessageResponse, StreamEvent};
 
 /// 路由到具体协议 client 的 enum。

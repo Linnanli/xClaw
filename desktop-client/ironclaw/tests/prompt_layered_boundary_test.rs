@@ -90,20 +90,32 @@ fn req_p01_a_build_system_prompt_includes_static_and_dynamic_layers() {
 }
 
 /// (b) Env var 移除断言（元测试）：源码不再引用 IRONCLAW_PROMPT_LAYERING。
+///
+/// 注：F3.1 后 prompt/reasoning 逻辑已迁至 `crates/dasclaw_llm_provider/src/provider/`，
+/// 这里直接扫描 provider crate 的源码 —— 这正是 P0-1 (b) 的语义：
+/// 任何承载 prompt 装配的源文件都不得再读 IRONCLAW_PROMPT_LAYERING。
 #[test]
 fn req_p01_b_env_var_removed_from_source() {
-    // 扫描 ironclaw/src/llm 目录下与 prompt 装配相关的文件
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    // 从 desktop-client/ironclaw/ 上溯到仓库根：../../
+    let repo_root = Path::new(manifest_dir)
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("manifest dir must have grandparent (repo root)");
+    let provider_src = repo_root
+        .join("crates")
+        .join("dasclaw_llm_provider")
+        .join("src")
+        .join("provider");
     let candidates = [
-        "src/llm/reasoning.rs",
-        "src/llm/prompt/mod.rs",
-        "src/llm/prompt/static_layer.rs",
-        "src/llm/prompt/dynamic_layer.rs",
+        provider_src.join("reasoning.rs"),
+        provider_src.join("prompt").join("mod.rs"),
+        provider_src.join("prompt").join("static_layer.rs"),
+        provider_src.join("prompt").join("dynamic_layer.rs"),
     ];
 
-    for rel in candidates {
-        let path = Path::new(manifest_dir).join(rel);
-        let content = std::fs::read_to_string(&path)
+    for path in &candidates {
+        let content = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
         assert!(
             !content.contains("IRONCLAW_PROMPT_LAYERING"),

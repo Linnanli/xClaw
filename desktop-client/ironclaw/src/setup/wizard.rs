@@ -23,9 +23,10 @@ use crate::channels::wasm::{
     ChannelCapabilitiesFile, available_channel_names, install_bundled_channel,
 };
 use crate::config::OAUTH_PLACEHOLDER;
+use crate::llm::build_nearai_model_fetch_config;
 use crate::llm::models::{
-    build_nearai_model_fetch_config, fetch_anthropic_models, fetch_ollama_models,
-    fetch_openai_compatible_models, fetch_openai_models,
+    fetch_anthropic_models, fetch_ollama_models, fetch_openai_compatible_models,
+    fetch_openai_models,
 };
 #[cfg(test)]
 use crate::llm::models::{is_openai_chat_model, sort_openai_models};
@@ -322,7 +323,8 @@ impl SetupWizard {
                     }
                 }
                 self.llm_api_key = Some(SecretString::from(api_key));
-                let registry = crate::llm::ProviderRegistry::load();
+                let registry =
+                    crate::llm::ProviderRegistry::load(&crate::bootstrap::dasclaw_base_dir());
                 if self.settings.selected_model.is_none() {
                     let default = registry
                         .find("anthropic")
@@ -345,7 +347,8 @@ impl SetupWizard {
                     }
                 }
                 self.llm_api_key = Some(SecretString::from(api_key));
-                let registry = crate::llm::ProviderRegistry::load();
+                let registry =
+                    crate::llm::ProviderRegistry::load(&crate::bootstrap::dasclaw_base_dir());
                 if self.settings.selected_model.is_none() {
                     let default = registry
                         .find("openai")
@@ -368,7 +371,8 @@ impl SetupWizard {
                     }
                 }
                 self.llm_api_key = Some(SecretString::from(api_key));
-                let registry = crate::llm::ProviderRegistry::load();
+                let registry =
+                    crate::llm::ProviderRegistry::load(&crate::bootstrap::dasclaw_base_dir());
                 if self.settings.selected_model.is_none() {
                     let default = registry
                         .find("openrouter")
@@ -1190,7 +1194,7 @@ impl SetupWizard {
     /// NearAI is always first (special auth), then all registry providers
     /// that have setup hints.
     async fn step_inference_provider(&mut self) -> Result<(), SetupError> {
-        let registry = crate::llm::ProviderRegistry::load();
+        let registry = crate::llm::ProviderRegistry::load(&crate::bootstrap::dasclaw_base_dir());
 
         // Show current provider if already configured
         if let Some(current) = self.settings.llm_backend.clone() {
@@ -1839,7 +1843,7 @@ impl SetupWizard {
         use crate::config::OpenAiCodexConfig;
         use crate::llm::OpenAiCodexSessionManager;
 
-        let config = OpenAiCodexConfig::default();
+        let config = OpenAiCodexConfig::new(&crate::bootstrap::dasclaw_base_dir());
 
         let mgr = OpenAiCodexSessionManager::new(config).map_err(|e| {
             SetupError::Config(format!("OpenAI Codex session manager init failed: {}", e))
@@ -2078,7 +2082,7 @@ impl SetupWizard {
         }
 
         let backend = self.settings.llm_backend.as_deref().unwrap_or("nearai");
-        let registry = crate::llm::ProviderRegistry::load();
+        let registry = crate::llm::ProviderRegistry::load(&crate::bootstrap::dasclaw_base_dir());
 
         match backend {
             "nearai" => {

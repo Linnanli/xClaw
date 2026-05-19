@@ -24,11 +24,11 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use reqwest::header::HeaderMap;
 use reqwest::StatusCode;
+use reqwest::header::HeaderMap;
 
 use crate::error::ApiError;
-use crate::retry::{parse_retry_after, RetryPolicy};
+use crate::retry::{RetryPolicy, parse_retry_after};
 use crate::sse::SseParser;
 use crate::types::{MessageRequest, MessageResponse, StreamEvent};
 
@@ -402,7 +402,7 @@ fn truncate_body(body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        map_status_to_api_error, parse_anthropic_error_message, AnthropicClient, AuthSource,
+        AnthropicClient, AuthSource, map_status_to_api_error, parse_anthropic_error_message,
     };
     use crate::error::ApiError;
     use reqwest::StatusCode;

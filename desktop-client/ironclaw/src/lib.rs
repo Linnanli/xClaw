@@ -56,6 +56,13 @@ pub mod history;
 pub mod hook_bootstrap;
 #[cfg(feature = "import")]
 pub mod import;
+/// LLM provider tree: pure provider plumbing in [`dasclaw_llm_provider::provider`]
+/// is re-exported wholesale; application-coupled pieces (`SessionManager`,
+/// `NearAiChatProvider`, `RecordingLlm`, transcription, and the high-level
+/// provider chain factory) live in `src/llm/`.
+///
+/// Per ADR-118 / ADR-129 the provider crate must not depend on
+/// `desktop-client/ironclaw`; this module is the split point.
 pub mod llm;
 pub mod migration;
 pub mod observability;

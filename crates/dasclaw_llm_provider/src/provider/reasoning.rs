@@ -4,8 +4,8 @@
 //! (`ReasoningContext`, `TokenUsage`, `RespondOutput`, etc.) and the
 //! tool-intent detection helpers have moved to the
 //! [`dasclaw_core`](../../../../dasclaw_core/index.html) crate. This module
-//! re-exports them so existing `use crate::llm::reasoning::...` /
-//! `crate::llm::{...}` sites keep working unchanged. The `Reasoning` engine
+//! re-exports them so existing `use crate::provider::reasoning::...` /
+//! `crate::provider::{...}` sites keep working unchanged. The `Reasoning` engine
 //! itself stays here because it depends on `LlmProvider` / `LlmError`.
 
 use std::sync::{Arc, LazyLock};
@@ -13,15 +13,15 @@ use std::sync::{Arc, LazyLock};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::llm::error::LlmError;
+use crate::provider::error::LlmError;
 
-use crate::llm::{
+use crate::provider::{
     ChatMessage, CompletionRequest, FinishReason, LlmProvider, Role, ToolCall,
     ToolCompletionRequest, ToolDefinition,
 };
 
 // Data types that flow through the agentic loop — re-exported from the
-// agent-runtime crate so downstream `use crate::llm::{ReasoningContext, ...}`
+// agent-runtime crate so downstream `use crate::provider::{ReasoningContext, ...}`
 // keeps resolving.
 pub use dasclaw_core::intent::{
     TOOL_INTENT_NUDGE, TRUNCATED_TOOL_CALL_NOTICE, llm_signals_tool_intent,
@@ -804,12 +804,12 @@ Respond with a JSON plan in this format:
     ///
     /// [`PROMPT_CACHE_BOUNDARY`]: dasclaw_core::PROMPT_CACHE_BOUNDARY
     pub fn build_system_prompt_with_tools(&self, tools: &[ToolDefinition]) -> String {
-        use crate::llm::prompt::{DynamicLayerInput, LayeredPromptBuilder, StaticLayerConfig};
+        use crate::provider::prompt::{DynamicLayerInput, LayeredPromptBuilder, StaticLayerConfig};
 
         let has_native_thinking = self
             .model_name
             .as_ref()
-            .is_some_and(|n| crate::llm::reasoning_models::has_native_thinking(n));
+            .is_some_and(|n| crate::provider::reasoning_models::has_native_thinking(n));
 
         let is_anthropic = self
             .model_name
@@ -3098,7 +3098,7 @@ That's my plan."#;
 
     #[tokio::test]
     async fn test_respond_with_tools_flags_empty_tool_completion_when_content_is_none() {
-        use crate::llm::{
+        use crate::provider::{
             FinishReason, LlmProvider, ToolCompletionRequest, ToolCompletionResponse,
         };
         use async_trait::async_trait;
@@ -3118,15 +3118,16 @@ That's my plan."#;
 
             async fn complete(
                 &self,
-                _request: crate::llm::CompletionRequest,
-            ) -> Result<crate::llm::CompletionResponse, crate::llm::LlmError> {
+                _request: crate::provider::CompletionRequest,
+            ) -> Result<crate::provider::CompletionResponse, crate::provider::LlmError>
+            {
                 unreachable!("tool-mode test should not call complete()")
             }
 
             async fn complete_with_tools(
                 &self,
                 _request: ToolCompletionRequest,
-            ) -> Result<ToolCompletionResponse, crate::llm::LlmError> {
+            ) -> Result<ToolCompletionResponse, crate::provider::LlmError> {
                 Ok(ToolCompletionResponse {
                     content: None,
                     tool_calls: Vec::new(),
@@ -3335,7 +3336,7 @@ That's my plan."#;
 
     #[test]
     fn test_openai_reasoning_models_not_detected() {
-        use crate::llm::reasoning_models::has_native_thinking;
+        use crate::provider::reasoning_models::has_native_thinking;
         assert!(!has_native_thinking("o1"));
         assert!(!has_native_thinking("o1-mini"));
         assert!(!has_native_thinking("o1-preview"));
@@ -3450,11 +3451,11 @@ That's my plan."#;
 
     /// Mock provider that returns tool calls with a configurable finish_reason.
     struct TruncatingLlm {
-        finish_reason: crate::llm::FinishReason,
+        finish_reason: crate::provider::FinishReason,
     }
 
     #[async_trait::async_trait]
-    impl crate::llm::LlmProvider for TruncatingLlm {
+    impl crate::provider::LlmProvider for TruncatingLlm {
         fn model_name(&self) -> &str {
             "truncating-stub"
         }
@@ -3463,15 +3464,16 @@ That's my plan."#;
         }
         async fn complete(
             &self,
-            _request: crate::llm::CompletionRequest,
-        ) -> Result<crate::llm::CompletionResponse, crate::llm::error::LlmError> {
+            _request: crate::provider::CompletionRequest,
+        ) -> Result<crate::provider::CompletionResponse, crate::provider::error::LlmError> {
             unimplemented!()
         }
         async fn complete_with_tools(
             &self,
-            _request: crate::llm::ToolCompletionRequest,
-        ) -> Result<crate::llm::ToolCompletionResponse, crate::llm::error::LlmError> {
-            Ok(crate::llm::ToolCompletionResponse {
+            _request: crate::provider::ToolCompletionRequest,
+        ) -> Result<crate::provider::ToolCompletionResponse, crate::provider::error::LlmError>
+        {
+            Ok(crate::provider::ToolCompletionResponse {
                 content: Some("I'll write the report.".to_string()),
                 tool_calls: vec![ToolCall {
                     id: "call_1".to_string(),
@@ -3591,7 +3593,9 @@ That's my plan."#;
 
         #[tokio::test]
         async fn tool_calls_returned_without_streaming_text() {
-            use crate::llm::{LlmError, ToolCall, ToolCompletionRequest, ToolCompletionResponse};
+            use crate::provider::{
+                LlmError, ToolCall, ToolCompletionRequest, ToolCompletionResponse,
+            };
             use rust_decimal::Decimal;
 
             struct ToolCallLlm;
@@ -3606,8 +3610,8 @@ That's my plan."#;
                 }
                 async fn complete(
                     &self,
-                    _req: crate::llm::CompletionRequest,
-                ) -> Result<crate::llm::CompletionResponse, LlmError> {
+                    _req: crate::provider::CompletionRequest,
+                ) -> Result<crate::provider::CompletionResponse, LlmError> {
                     unreachable!()
                 }
                 async fn complete_with_tools(

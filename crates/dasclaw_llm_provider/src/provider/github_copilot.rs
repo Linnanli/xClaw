@@ -18,11 +18,11 @@ use rust_decimal::Decimal;
 use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 
-use crate::llm::config::RegistryProviderConfig;
-use crate::llm::costs;
-use crate::llm::error::LlmError;
-use crate::llm::github_copilot_auth::CopilotTokenManager;
-use crate::llm::provider::{
+use crate::provider::config::RegistryProviderConfig;
+use crate::provider::costs;
+use crate::provider::error::LlmError;
+use crate::provider::github_copilot_auth::CopilotTokenManager;
+use crate::provider::provider::{
     ChatMessage, CompletionRequest, CompletionResponse, ContentPart, FinishReason, LlmProvider,
     Role, ToolCall, ToolCompletionRequest, ToolCompletionResponse,
     strip_unsupported_completion_params, strip_unsupported_tool_params,
@@ -112,8 +112,8 @@ impl GithubCopilotProvider {
         let token = self.token_manager.get_token().await.map_err(|e| {
             tracing::warn!(error = %e, "Copilot: token exchange failed");
             match &e {
-                crate::llm::github_copilot_auth::GithubCopilotAuthError::AccessDenied
-                | crate::llm::github_copilot_auth::GithubCopilotAuthError::Expired => {
+                crate::provider::github_copilot_auth::GithubCopilotAuthError::AccessDenied
+                | crate::provider::github_copilot_auth::GithubCopilotAuthError::Expired => {
                     LlmError::AuthFailed {
                         provider: "github_copilot".to_string(),
                     }
@@ -148,7 +148,7 @@ impl GithubCopilotProvider {
 
         if !status.is_success() {
             // Use shared retry-after parser (supports HTTP-date, default 60s)
-            let retry_after = Some(crate::llm::retry::parse_retry_after(
+            let retry_after = Some(crate::provider::retry::parse_retry_after(
                 response.headers().get(reqwest::header::RETRY_AFTER),
             ));
 
@@ -159,7 +159,7 @@ impl GithubCopilotProvider {
 
             tracing::warn!(
                 status = %status,
-                body = %crate::agent::truncate_for_preview(&response_text, 256),
+                body = %crate::provider::util::truncate_for_preview(&response_text, 256),
                 "Copilot: API error response"
             );
 
@@ -181,7 +181,7 @@ impl GithubCopilotProvider {
                     retry_after,
                 });
             }
-            let truncated = crate::agent::truncate_for_preview(&response_text, 512);
+            let truncated = crate::provider::util::truncate_for_preview(&response_text, 512);
             return Err(LlmError::RequestFailed {
                 provider: "github_copilot".to_string(),
                 reason: format!("HTTP {status}: {truncated}"),
@@ -194,7 +194,7 @@ impl GithubCopilotProvider {
         })?;
 
         serde_json::from_str(&response_text).map_err(|e| {
-            let truncated = crate::agent::truncate_for_preview(&response_text, 512);
+            let truncated = crate::provider::util::truncate_for_preview(&response_text, 512);
             tracing::warn!(
                 error = %e,
                 body = %truncated,

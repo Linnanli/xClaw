@@ -23,6 +23,7 @@ pub mod submission;
 pub mod task;
 mod thread_ops;
 mod traits_impl;
+pub use traits_impl::ReasoningCompleter;
 pub mod undo;
 
 // Phase 3 plan H'' (2026-04-23): The routines / guardrails subsystem

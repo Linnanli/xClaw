@@ -3,7 +3,7 @@
 /// Fetch models from the Anthropic API.
 ///
 /// Returns `(model_id, display_label)` pairs. Falls back to static defaults on error.
-pub(crate) async fn fetch_anthropic_models(cached_key: Option<&str>) -> Vec<(String, String)> {
+pub async fn fetch_anthropic_models(cached_key: Option<&str>) -> Vec<(String, String)> {
     let static_defaults = vec![
         (
             "claude-opus-4-6".into(),
@@ -17,18 +17,12 @@ pub(crate) async fn fetch_anthropic_models(cached_key: Option<&str>) -> Vec<(Str
 
     let api_key = cached_key
         .map(String::from)
-        .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
-        .filter(|k| !k.is_empty() && k != crate::config::OAUTH_PLACEHOLDER);
+        .filter(|k| !k.is_empty() && k != crate::provider::config::OAUTH_PLACEHOLDER);
 
-    // Fall back to OAuth token if no API key
-    let oauth_token = if api_key.is_none() {
-        crate::config::helpers::optional_env("ANTHROPIC_OAUTH_TOKEN")
-            .ok()
-            .flatten()
-            .filter(|t| !t.is_empty())
-    } else {
-        None
-    };
+    // OAuth-token fallback is the caller's responsibility: if the caller does
+    // not supply a `cached_key`, this provider crate will not consult any
+    // environment variable (per ADR-118 — provider tree stays env-free).
+    let oauth_token: Option<String> = None;
 
     let (key_or_token, is_oauth) = match (api_key, oauth_token) {
         (Some(k), _) => (k, false),
@@ -88,7 +82,7 @@ pub(crate) async fn fetch_anthropic_models(cached_key: Option<&str>) -> Vec<(Str
 /// Fetch models from the OpenAI API.
 ///
 /// Returns `(model_id, display_label)` pairs. Falls back to static defaults on error.
-pub(crate) async fn fetch_openai_models(cached_key: Option<&str>) -> Vec<(String, String)> {
+pub async fn fetch_openai_models(cached_key: Option<&str>) -> Vec<(String, String)> {
     let static_defaults = vec![
         (
             "gpt-5.3-codex".into(),
@@ -108,10 +102,7 @@ pub(crate) async fn fetch_openai_models(cached_key: Option<&str>) -> Vec<(String
         ("o3".into(), "o3 (reasoning)".into()),
     ];
 
-    let api_key = cached_key
-        .map(String::from)
-        .or_else(|| std::env::var("OPENAI_API_KEY").ok())
-        .filter(|k| !k.is_empty());
+    let api_key = cached_key.map(String::from).filter(|k| !k.is_empty());
 
     let api_key = match api_key {
         Some(k) => k,
@@ -160,7 +151,7 @@ pub(crate) async fn fetch_openai_models(cached_key: Option<&str>) -> Vec<(String
     }
 }
 
-pub(crate) fn is_openai_chat_model(model_id: &str) -> bool {
+pub fn is_openai_chat_model(model_id: &str) -> bool {
     let id = model_id.to_ascii_lowercase();
 
     let is_chat_family = id.starts_with("gpt-")
@@ -181,7 +172,7 @@ pub(crate) fn is_openai_chat_model(model_id: &str) -> bool {
     is_chat_family && !is_non_chat_variant
 }
 
-pub(crate) fn openai_model_priority(model_id: &str) -> usize {
+pub fn openai_model_priority(model_id: &str) -> usize {
     let id = model_id.to_ascii_lowercase();
 
     const EXACT_PRIORITY: &[&str] = &[
@@ -217,7 +208,7 @@ pub(crate) fn openai_model_priority(model_id: &str) -> usize {
     EXACT_PRIORITY.len() + PREFIX_PRIORITY.len() + 1
 }
 
-pub(crate) fn sort_openai_models(models: &mut [(String, String)]) {
+pub fn sort_openai_models(models: &mut [(String, String)]) {
     models.sort_by(|a, b| {
         openai_model_priority(&a.0)
             .cmp(&openai_model_priority(&b.0))
@@ -228,7 +219,7 @@ pub(crate) fn sort_openai_models(models: &mut [(String, String)]) {
 /// Fetch installed models from a local Ollama instance.
 ///
 /// Returns `(model_name, display_label)` pairs. Falls back to static defaults on error.
-pub(crate) async fn fetch_ollama_models(base_url: &str) -> Vec<(String, String)> {
+pub async fn fetch_ollama_models(base_url: &str) -> Vec<(String, String)> {
     let static_defaults = vec![
         ("llama3".into(), "llama3".into()),
         ("mistral".into(), "mistral".into()),
@@ -285,7 +276,7 @@ pub(crate) async fn fetch_ollama_models(base_url: &str) -> Vec<(String, String)>
 /// Fetch models from a generic OpenAI-compatible /v1/models endpoint.
 ///
 /// Used for registry providers like Groq, NVIDIA NIM, etc.
-pub(crate) async fn fetch_openai_compatible_models(
+pub async fn fetch_openai_compatible_models(
     base_url: &str,
     cached_key: Option<&str>,
 ) -> Vec<(String, String)> {
@@ -324,30 +315,5 @@ pub(crate) async fn fetch_openai_compatible_models(
             })
             .collect(),
         Err(_) => vec![],
-    }
-}
-
-/// Build the `LlmConfig` used by `fetch_nearai_models` to list available models.
-///
-/// Uses [`NearAiConfig::for_model_discovery()`] to construct a minimal NEAR AI
-/// config, then wraps it in an `LlmConfig` with session config for auth.
-pub(crate) fn build_nearai_model_fetch_config() -> crate::config::LlmConfig {
-    let auth_base_url = crate::config::helpers::env_or_override("NEARAI_AUTH_URL")
-        .unwrap_or_else(|| "https://private.near.ai".to_string());
-
-    crate::config::LlmConfig {
-        backend: "nearai".to_string(),
-        session: crate::llm::session::SessionConfig {
-            auth_base_url,
-            session_path: crate::config::llm::default_session_path(),
-        },
-        nearai: crate::config::NearAiConfig::for_model_discovery(),
-        provider: None,
-        bedrock: None,
-        gemini_oauth: None,
-        request_timeout_secs: 120,
-        cheap_model: None,
-        smart_routing_cascade: false,
-        openai_codex: None,
     }
 }

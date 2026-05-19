@@ -23,13 +23,13 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::time::Duration;
 
-use reqwest::header::HeaderMap;
 use reqwest::StatusCode;
+use reqwest::header::HeaderMap;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::error::ApiError;
-use crate::retry::{parse_retry_after, RetryPolicy};
+use crate::retry::{RetryPolicy, parse_retry_after};
 use crate::types::{
     ContentBlockDelta, ContentBlockDeltaEvent, ContentBlockStartEvent, ContentBlockStopEvent,
     InputContentBlock, InputMessage, MessageDelta, MessageDeltaEvent, MessageRequest,

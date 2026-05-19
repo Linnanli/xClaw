@@ -233,18 +233,20 @@ impl ProviderRegistry {
 
     /// Load the default registry: built-in providers + user overrides.
     ///
-    /// User providers from `~/.ironclaw/providers.json` are appended,
-    /// with later entries overriding earlier ones by ID/alias.
-    pub fn load() -> Self {
+    /// User providers are appended from `<base_dir>/providers.json`, with
+    /// later entries overriding earlier ones by ID/alias. `base_dir` is the
+    /// per-user dasclaw home directory — supplied by the embedding
+    /// application so this crate never has to call `dirs::home_dir` or read
+    /// env on its own.
+    pub fn load(base_dir: &std::path::Path) -> Self {
         let builtins: Vec<ProviderDefinition> =
             serde_json::from_str(include_str!("../../providers.json"))
                 .expect("built-in providers.json must be valid JSON"); // safety: compile-time embedded file
 
         let mut all = builtins;
 
-        if let Some(user_path) = user_providers_path()
-            && user_path.exists()
-        {
+        let user_path = base_dir.join("providers.json");
+        if user_path.exists() {
             match std::fs::read_to_string(&user_path) {
                 Ok(contents) => match serde_json::from_str::<Vec<ProviderDefinition>>(&contents) {
                     Ok(user_defs) => {
@@ -334,10 +336,6 @@ impl ProviderRegistry {
             .map(|def| def.model_env.as_str())
             .unwrap_or("LLM_MODEL")
     }
-}
-
-fn user_providers_path() -> Option<std::path::PathBuf> {
-    Some(crate::bootstrap::dasclaw_base_dir().join("providers.json"))
 }
 
 #[cfg(test)]

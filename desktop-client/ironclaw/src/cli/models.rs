@@ -91,7 +91,7 @@ fn resolve_active_from_settings(settings: &Settings) -> (String, String) {
         .or_else(|| settings.llm_backend.clone())
         .unwrap_or_else(|| "nearai".to_string());
 
-    let registry = ProviderRegistry::load();
+    let registry = ProviderRegistry::load(&crate::bootstrap::dasclaw_base_dir());
 
     let canonical_backend = registry
         .find(&backend)
@@ -167,7 +167,7 @@ async fn try_fetch_models(provider_id: &str, config_path: Option<&Path>) -> Opti
     // For registry providers, resolve the RegistryProviderConfig if not
     // already set for this backend.
     if provider_id != "nearai" && provider_id != "bedrock" {
-        let registry = ProviderRegistry::load();
+        let registry = ProviderRegistry::load(&crate::bootstrap::dasclaw_base_dir());
         if let Some(def) = registry.find(provider_id)
             && llm_config
                 .provider
@@ -248,7 +248,7 @@ fn sync_to_dotenv(config_path: Option<&Path>, vars: &[(&str, &str)]) {
 fn cmd_status(json: bool, config_path: Option<&Path>) -> anyhow::Result<()> {
     let settings = load_settings(config_path);
     let (backend, model) = resolve_active_from_settings(&settings);
-    let registry = ProviderRegistry::load();
+    let registry = ProviderRegistry::load(&crate::bootstrap::dasclaw_base_dir());
 
     let fallback = std::env::var("NEARAI_FALLBACK_MODEL").ok();
     let cheap = std::env::var("NEARAI_CHEAP_MODEL").ok();
@@ -298,7 +298,7 @@ fn cmd_set_model(model: &str, config_path: Option<&Path>) -> anyhow::Result<()> 
     }
 
     let mut settings = load_settings(config_path);
-    let registry = ProviderRegistry::load();
+    let registry = ProviderRegistry::load(&crate::bootstrap::dasclaw_base_dir());
 
     // Warn if model name doesn't match any known provider's default model
     let known_model = registry.all().iter().any(|d| d.default_model == trimmed)
@@ -354,7 +354,7 @@ fn cmd_set_provider(
     model: Option<&str>,
     config_path: Option<&Path>,
 ) -> anyhow::Result<()> {
-    let registry = ProviderRegistry::load();
+    let registry = ProviderRegistry::load(&crate::bootstrap::dasclaw_base_dir());
 
     // Validate and normalize provider
     let canonical_id = if provider == "nearai" || provider == "near_ai" || provider == "near" {
@@ -426,7 +426,7 @@ async fn cmd_list_providers(
     json: bool,
     config_path: Option<&Path>,
 ) -> anyhow::Result<()> {
-    let registry = ProviderRegistry::load();
+    let registry = ProviderRegistry::load(&crate::bootstrap::dasclaw_base_dir());
     let (active_backend, active_model) = resolve_active(config_path);
 
     if json {
@@ -564,7 +564,7 @@ async fn cmd_show_provider(
     json: bool,
     config_path: Option<&Path>,
 ) -> anyhow::Result<()> {
-    let registry = ProviderRegistry::load();
+    let registry = ProviderRegistry::load(&crate::bootstrap::dasclaw_base_dir());
     let (active_backend, active_model) = resolve_active(config_path);
 
     // Resolve canonical ID for model fetching
@@ -721,7 +721,7 @@ mod tests {
 
     #[test]
     fn registry_loads_all_providers() {
-        let registry = ProviderRegistry::load();
+        let registry = ProviderRegistry::load(&crate::bootstrap::dasclaw_base_dir());
         let all = registry.all();
         assert!(
             all.len() >= 10,
@@ -732,7 +732,7 @@ mod tests {
 
     #[test]
     fn registry_find_by_alias() {
-        let registry = ProviderRegistry::load();
+        let registry = ProviderRegistry::load(&crate::bootstrap::dasclaw_base_dir());
         let def = registry
             .find("claude")
             .expect("claude alias should resolve");
@@ -741,7 +741,7 @@ mod tests {
 
     #[test]
     fn all_providers_have_description() {
-        let registry = ProviderRegistry::load();
+        let registry = ProviderRegistry::load(&crate::bootstrap::dasclaw_base_dir());
         for def in registry.all() {
             assert!(
                 !def.description.is_empty(),
