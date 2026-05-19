@@ -6,7 +6,6 @@ use std::time::Duration;
 use async_trait::async_trait;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
 use crate::context::JobContext;
 
@@ -153,29 +152,16 @@ pub enum ToolDomain {
 }
 
 /// Error type for tool execution.
-#[derive(Debug, Error)]
-pub enum ToolError {
-    #[error("Invalid parameters: {0}")]
-    InvalidParameters(String),
-
-    #[error("Execution failed: {0}")]
-    ExecutionFailed(String),
-
-    #[error("Timeout after {0:?}")]
-    Timeout(Duration),
-
-    #[error("Not authorized: {0}")]
-    NotAuthorized(String),
-
-    #[error("Rate limited, retry after {0:?}")]
-    RateLimited(Option<Duration>),
-
-    #[error("External service error: {0}")]
-    ExternalService(String),
-
-    #[error("Sandbox error: {0}")]
-    Sandbox(String),
-}
+///
+/// Re-exported from [`dasclaw_tool`] (F3.2 phase 2 PR 1, #641). The
+/// implementation now lives in the shared `crates/dasclaw_tool` crate so
+/// that any dasclaw host (desktop, CLI, headless service, admin backend)
+/// can construct and propagate the same inner error without depending on
+/// the ironclaw desktop crate. The struct-shape outer error in
+/// `crate::error::ToolError` (which adds the failing tool's identity)
+/// still lives in ironclaw for now and will move to `dasclaw_runtime`
+/// in PR 2.
+pub use dasclaw_tool::ToolError;
 
 /// Output from a tool execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
