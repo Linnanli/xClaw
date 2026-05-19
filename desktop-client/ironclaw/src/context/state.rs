@@ -1,4 +1,12 @@
 //! Job state machine.
+//!
+//! The pure state-machine vocabulary (`JobState`, `StateTransition`,
+//! `TokenBudgetExceeded`) lives in [`dasclaw_runtime::job`] as of F3.2
+//! phase 2 PR 3 (#641) — any dasclaw host needs the same model. This file
+//! re-exports those types and keeps the ironclaw-specific `JobContext`
+//! god-struct, which still owns GUI/marketplace fields. The god-struct
+//! split into a `JobContextCore` trait + GUI extension is the follow-up
+//! sub-PR.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -6,121 +14,13 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use uuid::Uuid;
+
+pub use dasclaw_runtime::{JobState, StateTransition, TokenBudgetExceeded};
 
 use crate::llm::recording::HttpInterceptor;
 use crate::tools::feature_flags::{SharedFeatureFlags, ToolFeatureFlags};
-
-/// Error returned when a job exceeds its token budget.
-#[derive(Debug, thiserror::Error)]
-#[error("Token budget exceeded: used {used} of {limit} allowed tokens")]
-pub struct TokenBudgetExceeded {
-    /// Total tokens consumed (including the call that exceeded the budget).
-    pub used: u64,
-    /// Configured token limit for this job.
-    pub limit: u64,
-}
-
-/// State of a job.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum JobState {
-    /// Job is waiting to be started.
-    Pending,
-    /// Job is currently being worked on.
-    InProgress,
-    /// Job work is complete, awaiting submission.
-    Completed,
-    /// Job has been submitted for review.
-    Submitted,
-    /// Job was accepted/paid.
-    Accepted,
-    /// Job failed and cannot be completed.
-    Failed,
-    /// Job is stuck and needs repair.
-    Stuck,
-    /// Job was cancelled.
-    Cancelled,
-}
-
-impl JobState {
-    /// Check if this state allows transitioning to another state.
-    pub fn can_transition_to(&self, target: JobState) -> bool {
-        use JobState::*;
-
-        // Allow idempotent Completed -> Completed transition.
-        // Both the execution loop and the worker wrapper may race to mark a
-        // job complete; the second call should be a harmless no-op rather
-        // than an error that masks the successful completion.
-        if matches!((self, target), (Completed, Completed)) {
-            return true;
-        }
-
-        matches!(
-            (self, target),
-            // From Pending
-            (Pending, InProgress) | (Pending, Cancelled) |
-            // From InProgress
-            (InProgress, Completed) | (InProgress, Failed) |
-            (InProgress, Stuck) | (InProgress, Cancelled) |
-            // From Completed
-            (Completed, Submitted) | (Completed, Failed) |
-            // From Submitted
-            (Submitted, Accepted) | (Submitted, Failed) |
-            // From Stuck (can recover or fail)
-            (Stuck, InProgress) | (Stuck, Failed) | (Stuck, Cancelled)
-        )
-    }
-
-    /// Check if this is a terminal state.
-    pub fn is_terminal(&self) -> bool {
-        matches!(self, Self::Accepted | Self::Failed | Self::Cancelled)
-    }
-
-    /// Check if the job is active (not terminal).
-    pub fn is_active(&self) -> bool {
-        !self.is_terminal()
-    }
-
-    /// Check if this job consumes a parallel execution slot.
-    ///
-    /// Only jobs in Pending, InProgress, or Stuck states consume execution resources
-    /// and should count toward the parallel job limit. Completed and Submitted jobs
-    /// are in the state machine but are no longer actively executing.
-    pub fn is_parallel_blocking(&self) -> bool {
-        matches!(self, Self::Pending | Self::InProgress | Self::Stuck)
-    }
-}
-
-impl std::fmt::Display for JobState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            Self::Pending => "pending",
-            Self::InProgress => "in_progress",
-            Self::Completed => "completed",
-            Self::Submitted => "submitted",
-            Self::Accepted => "accepted",
-            Self::Failed => "failed",
-            Self::Stuck => "stuck",
-            Self::Cancelled => "cancelled",
-        };
-        write!(f, "{}", s)
-    }
-}
-
-/// A state transition event.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StateTransition {
-    /// Previous state.
-    pub from: JobState,
-    /// New state.
-    pub to: JobState,
-    /// When the transition occurred.
-    pub timestamp: DateTime<Utc>,
-    /// Reason for the transition.
-    pub reason: Option<String>,
-}
 
 /// Context for a running job.
 #[derive(Debug, Clone, Serialize)]

@@ -2,9 +2,14 @@
 name = "dasclaw_runtime"
 version = "0.0.0-w6"
 edition = "2021"
-description = "Runtime (application-layer) building blocks for any dasclaw host: errors that carry the failing tool's identity, future JobContext, etc."
+description = "Runtime (application-layer) building blocks for any dasclaw host: errors that carry the failing tool's identity, job state machine, future JobContext trait extension, etc."
 license = "MIT OR Apache-2.0"
 
 [dependencies]
 dasclaw_tool = { path = "../dasclaw_tool" }
 thiserror = "1"
+serde = { version = "1", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+serde_json = "1"

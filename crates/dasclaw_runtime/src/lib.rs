@@ -1,6 +1,14 @@
 //! Application-layer runtime types shared across dasclaw hosts (ironclaw,
 //! admin-backend, claw-code, ...).
 //!
+//! ## Modules
+//!
+//! - [`error`] — application-layer `ToolError` carrying the failing tool's
+//!   identity (F3.2 phase 2 PR 2).
+//! - [`job`] — pure job state machine (`JobState`, `StateTransition`,
+//!   `TokenBudgetExceeded`); the headless-framework vocabulary for "what is
+//!   this job doing right now?" (F3.2 phase 2 PR 3).
+//!
 //! ## Two-layer `ToolError` model
 //!
 //! There are *two* `ToolError` types in the codebase and that is intentional:
@@ -21,5 +29,7 @@
 //! [`ToolError::from_tool_impl`].
 
 pub mod error;
+pub mod job;
 
 pub use error::ToolError;
+pub use job::{JobState, StateTransition, TokenBudgetExceeded};
