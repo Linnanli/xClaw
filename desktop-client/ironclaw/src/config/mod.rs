@@ -49,6 +49,7 @@ pub use self::embeddings::{DEFAULT_EMBEDDING_CACHE_SIZE, EmbeddingsConfig};
 pub use self::heartbeat::HeartbeatConfig;
 pub use self::hygiene::HygieneConfig;
 pub use self::job_runtime::{JobRuntimeConfig, JobRuntimeMode, JobRuntimeSettings};
+pub(crate) use self::llm::LlmConfigExt;
 pub use self::llm::default_session_path;
 pub use self::relay::RelayConfig;
 pub use self::routines::RoutineConfig;
@@ -448,7 +449,7 @@ pub async fn inject_llm_keys_from_secrets(
 
     // Dynamically discover secret->env mappings from the provider registry.
     // Uses selectable() which deduplicates user overrides correctly.
-    let registry = crate::llm::ProviderRegistry::load();
+    let registry = crate::llm::ProviderRegistry::load(&crate::bootstrap::dasclaw_base_dir());
     let dynamic_mappings: Vec<(String, String)> = registry
         .selectable()
         .iter()

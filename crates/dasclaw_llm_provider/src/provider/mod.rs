@@ -22,7 +22,7 @@
 pub mod bedrock;
 pub mod circuit_breaker;
 pub mod claw_code_provider;
-pub(crate) mod codex_auth;
+pub mod codex_auth;
 pub mod codex_chatgpt;
 pub mod config;
 pub mod costs;
@@ -30,7 +30,7 @@ pub mod error;
 pub mod failover;
 pub mod gemini_oauth;
 pub mod github_copilot;
-pub(crate) mod github_copilot_auth;
+pub mod github_copilot_auth;
 pub mod oauth_helpers;
 pub mod openai_codex_provider;
 pub mod openai_codex_session;
@@ -40,10 +40,10 @@ pub mod reasoning;
 pub mod registry;
 pub mod response_cache;
 pub mod retry;
-pub(crate) mod schema_utils;
+pub mod schema_utils;
 pub mod smart_routing;
 pub mod token_refreshing;
-pub(crate) mod util;
+pub mod util;
 
 #[cfg(test)]
 mod codex_test_helpers;
@@ -70,7 +70,7 @@ pub use openai_codex_session::{OpenAiCodexSession, OpenAiCodexSessionManager};
 pub use provider::{
     ChatMessage, CompletionRequest, CompletionResponse, ContentPart, FinishReason, ImageUrl,
     LlmProvider, ModelMetadata, Role, ToolCall, ToolCompletionRequest, ToolCompletionResponse,
-    ToolDefinition, ToolResult, generate_tool_call_id,
+    ToolDefinition, ToolResult, generate_tool_call_id, sanitize_tool_messages,
 };
 pub use reasoning::{
     ActionPlan, Reasoning, ReasoningContext, RespondOutput, RespondResult, ResponseAnomaly,

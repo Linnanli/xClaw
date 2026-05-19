@@ -51,8 +51,8 @@ mod libsql_tests {
     }
 
     fn make_compactor(llm: Arc<StubLlm>) -> ContextCompactor {
-        ContextCompactor::new(Arc::new(Reasoning::new(
-            llm as Arc<dyn crate::llm::LlmProvider>,
+        ContextCompactor::new(Arc::new(crate::agent::ReasoningCompleter::new(
+            Reasoning::new(llm as Arc<dyn crate::llm::LlmProvider>),
         )))
     }
 

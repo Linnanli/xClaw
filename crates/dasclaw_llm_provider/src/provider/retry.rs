@@ -103,7 +103,7 @@ pub(crate) fn cap_retry_after(duration: Duration) -> Duration {
 /// §7.1.1 / IMF-fixdate). The implementation uses `chrono::DateTime::parse_from_rfc2822`,
 /// which also accepts RFC 2822-style dates.
 /// Returns `DEFAULT_RETRY_AFTER` (60 s) if the header is missing or unparseable.
-pub(crate) fn parse_retry_after(header: Option<&reqwest::header::HeaderValue>) -> Duration {
+pub fn parse_retry_after(header: Option<&reqwest::header::HeaderValue>) -> Duration {
     header
         .and_then(|v| v.to_str().ok())
         .and_then(|v| {

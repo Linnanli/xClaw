@@ -89,11 +89,37 @@ pub fn hosted_proxy_client_secret(
 // ── Shared callback server ──────────────────────────────────────────────
 
 // Core OAuth callback infrastructure is defined in `crate::llm::oauth_helpers`
-// and re-exported here for backward compatibility.
+// (provider-pure: no env reads). The wrappers below source the loopback host
+// and an optional public override from ironclaw env vars and delegate to the
+// crate-level helpers, preserving the historical zero-arg call surface for
+// in-tree callers.
 pub use crate::llm::oauth_helpers::{
-    OAUTH_CALLBACK_PORT, OAuthCallbackError, bind_callback_listener, callback_host, callback_url,
-    is_loopback_host, landing_html, wait_for_callback,
+    OAUTH_CALLBACK_PORT, OAuthCallbackError, is_loopback_host, landing_html, wait_for_callback,
 };
+
+/// Read the OAuth callback host from `IRONCLAW_OAUTH_CALLBACK_HOST` (legacy
+/// `OAUTH_CALLBACK_HOST` also accepted via `env_or_override`), defaulting to
+/// the loopback address `127.0.0.1` when unset.
+pub fn callback_host() -> String {
+    crate::config::helpers::env_or_override("IRONCLAW_OAUTH_CALLBACK_HOST")
+        .or_else(|| crate::config::helpers::env_or_override("OAUTH_CALLBACK_HOST"))
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "127.0.0.1".to_string())
+}
+
+/// Build the OAuth callback base URL. Honours `IRONCLAW_OAUTH_CALLBACK_URL`
+/// (or legacy `OAUTH_CALLBACK_URL`) as a verbatim override; otherwise composes
+/// `http://{callback_host()}:{OAUTH_CALLBACK_PORT}`.
+pub fn callback_url() -> String {
+    let override_url = crate::config::helpers::env_or_override("IRONCLAW_OAUTH_CALLBACK_URL")
+        .or_else(|| crate::config::helpers::env_or_override("OAUTH_CALLBACK_URL"));
+    crate::llm::oauth_helpers::callback_url(override_url.as_deref(), &callback_host())
+}
+
+/// Bind the OAuth callback listener using the env-sourced host.
+pub async fn bind_callback_listener() -> Result<tokio::net::TcpListener, OAuthCallbackError> {
+    crate::llm::oauth_helpers::bind_callback_listener(&callback_host()).await
+}
 
 // ── Shared OAuth flow steps ─────────────────────────────────────────
 

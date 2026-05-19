@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use crate::bootstrap::dasclaw_base_dir;
 use crate::cli::fmt;
+use crate::config::LlmConfigExt;
 use crate::settings::Settings;
 
 /// Run all diagnostic checks and print results.

@@ -3,7 +3,7 @@
 /// Fetch models from the Anthropic API.
 ///
 /// Returns `(model_id, display_label)` pairs. Falls back to static defaults on error.
-pub(crate) async fn fetch_anthropic_models(cached_key: Option<&str>) -> Vec<(String, String)> {
+pub async fn fetch_anthropic_models(cached_key: Option<&str>) -> Vec<(String, String)> {
     let static_defaults = vec![
         (
             "claude-opus-4-6".into(),
@@ -82,7 +82,7 @@ pub(crate) async fn fetch_anthropic_models(cached_key: Option<&str>) -> Vec<(Str
 /// Fetch models from the OpenAI API.
 ///
 /// Returns `(model_id, display_label)` pairs. Falls back to static defaults on error.
-pub(crate) async fn fetch_openai_models(cached_key: Option<&str>) -> Vec<(String, String)> {
+pub async fn fetch_openai_models(cached_key: Option<&str>) -> Vec<(String, String)> {
     let static_defaults = vec![
         (
             "gpt-5.3-codex".into(),
@@ -151,7 +151,7 @@ pub(crate) async fn fetch_openai_models(cached_key: Option<&str>) -> Vec<(String
     }
 }
 
-pub(crate) fn is_openai_chat_model(model_id: &str) -> bool {
+pub fn is_openai_chat_model(model_id: &str) -> bool {
     let id = model_id.to_ascii_lowercase();
 
     let is_chat_family = id.starts_with("gpt-")
@@ -172,7 +172,7 @@ pub(crate) fn is_openai_chat_model(model_id: &str) -> bool {
     is_chat_family && !is_non_chat_variant
 }
 
-pub(crate) fn openai_model_priority(model_id: &str) -> usize {
+pub fn openai_model_priority(model_id: &str) -> usize {
     let id = model_id.to_ascii_lowercase();
 
     const EXACT_PRIORITY: &[&str] = &[
@@ -208,7 +208,7 @@ pub(crate) fn openai_model_priority(model_id: &str) -> usize {
     EXACT_PRIORITY.len() + PREFIX_PRIORITY.len() + 1
 }
 
-pub(crate) fn sort_openai_models(models: &mut [(String, String)]) {
+pub fn sort_openai_models(models: &mut [(String, String)]) {
     models.sort_by(|a, b| {
         openai_model_priority(&a.0)
             .cmp(&openai_model_priority(&b.0))
@@ -219,7 +219,7 @@ pub(crate) fn sort_openai_models(models: &mut [(String, String)]) {
 /// Fetch installed models from a local Ollama instance.
 ///
 /// Returns `(model_name, display_label)` pairs. Falls back to static defaults on error.
-pub(crate) async fn fetch_ollama_models(base_url: &str) -> Vec<(String, String)> {
+pub async fn fetch_ollama_models(base_url: &str) -> Vec<(String, String)> {
     let static_defaults = vec![
         ("llama3".into(), "llama3".into()),
         ("mistral".into(), "mistral".into()),
@@ -276,7 +276,7 @@ pub(crate) async fn fetch_ollama_models(base_url: &str) -> Vec<(String, String)>
 /// Fetch models from a generic OpenAI-compatible /v1/models endpoint.
 ///
 /// Used for registry providers like Groq, NVIDIA NIM, etc.
-pub(crate) async fn fetch_openai_compatible_models(
+pub async fn fetch_openai_compatible_models(
     base_url: &str,
     cached_key: Option<&str>,
 ) -> Vec<(String, String)> {

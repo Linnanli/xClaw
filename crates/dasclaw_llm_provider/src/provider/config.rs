@@ -20,7 +20,7 @@ use crate::provider::registry::ProviderProtocol;
 pub struct SessionConfig {
     /// Base URL for auth endpoints (e.g. `https://private.near.ai`).
     pub auth_base_url: String,
-    /// Path to the session file (e.g. `~/.ironclaw/session.json`).
+    /// Path to the session file (e.g. `~/.dasclaw/session.json`).
     pub session_path: PathBuf,
 }
 
@@ -140,7 +140,7 @@ pub struct OpenAiCodexConfig {
     pub api_base_url: String,
     /// OAuth client ID (default: OpenAI's public Codex client).
     pub client_id: String,
-    /// Path to session file (default: ~/.ironclaw/openai_codex_session.json).
+    /// Path to session file (default: ~/.dasclaw/openai_codex_session.json).
     pub session_path: PathBuf,
     /// Seconds before expiry to proactively refresh (default: 300).
     pub token_refresh_margin_secs: u64,
@@ -211,14 +211,6 @@ pub struct LlmConfig {
     /// Enable cascade mode for smart routing (retry with primary if cheap model
     /// response seems uncertain). Default: true. Set via `SMART_ROUTING_CASCADE`.
     pub smart_routing_cascade: bool,
-    /// Per-user dasclaw home directory.
-    ///
-    /// Used by the provider tree to resolve credential file paths
-    /// (`<base_dir>/openai_codex_session.json`, `<base_dir>/session.json`,
-    /// `<base_dir>/providers.json`, ...). Supplied by the embedding application
-    /// so this crate never has to ask `crate::bootstrap` or `dirs::home_dir`
-    /// for an implicit base directory.
-    pub base_dir: PathBuf,
 }
 
 impl LlmConfig {

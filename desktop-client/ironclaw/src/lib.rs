@@ -56,13 +56,14 @@ pub mod history;
 pub mod hook_bootstrap;
 #[cfg(feature = "import")]
 pub mod import;
-/// Re-export of ported LLM provider tree (formerly `crate::llm`).
+/// LLM provider tree: pure provider plumbing in [`dasclaw_llm_provider::provider`]
+/// is re-exported wholesale; application-coupled pieces (`SessionManager`,
+/// `NearAiChatProvider`, `RecordingLlm`, transcription, and the high-level
+/// provider chain factory) live in `src/llm/`.
 ///
-/// Per ADR-118 / ADR-129 verbatim port: the contents of `desktop-client/ironclaw/src/llm/`
-/// were moved to `crates/dasclaw_llm_provider/src/provider/` so that the desktop client
-/// and any future headless agent share the same outbound LLM logic. The `crate::llm`
-/// path is kept stable for in-tree callers via this re-export.
-pub use dasclaw_llm_provider::provider as llm;
+/// Per ADR-118 / ADR-129 the provider crate must not depend on
+/// `desktop-client/ironclaw`; this module is the split point.
+pub mod llm;
 pub mod migration;
 pub mod observability;
 pub mod orchestrator;

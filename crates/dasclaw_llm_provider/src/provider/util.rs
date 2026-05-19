@@ -10,7 +10,7 @@
 /// Polyfill for `str::floor_char_boundary` (nightly-only). Use when
 /// truncating strings by byte position to avoid panicking on multi-byte
 /// characters.
-pub(crate) fn floor_char_boundary(s: &str, pos: usize) -> usize {
+pub fn floor_char_boundary(s: &str, pos: usize) -> usize {
     if pos >= s.len() {
         return s.len();
     }
@@ -25,7 +25,7 @@ pub(crate) fn floor_char_boundary(s: &str, pos: usize) -> usize {
 ///
 /// Replaces newlines with spaces, collapses runs of whitespace, and truncates
 /// at `max_chars` Unicode characters (not bytes) appending an ellipsis.
-pub(crate) fn truncate_for_preview(output: &str, max_chars: usize) -> String {
+pub fn truncate_for_preview(output: &str, max_chars: usize) -> String {
     let collapsed: String = output
         .chars()
         .take(max_chars + 50)
