@@ -18,48 +18,11 @@ use uuid::Uuid;
 use crate::secrets::crypto::SecretsCrypto;
 use crate::secrets::types::{CreateSecretParams, DecryptedSecret, Secret, SecretError, SecretRef};
 
-/// Trait for secret storage operations.
-///
-/// Allows for different implementations (PostgreSQL, in-memory for testing).
-#[async_trait]
-pub trait SecretsStore: Send + Sync {
-    /// Store a new secret.
-    async fn create(
-        &self,
-        user_id: &str,
-        params: CreateSecretParams,
-    ) -> Result<Secret, SecretError>;
-
-    /// Get a secret by name (encrypted form).
-    async fn get(&self, user_id: &str, name: &str) -> Result<Secret, SecretError>;
-
-    /// Get and decrypt a secret.
-    async fn get_decrypted(
-        &self,
-        user_id: &str,
-        name: &str,
-    ) -> Result<DecryptedSecret, SecretError>;
-
-    /// Check if a secret exists.
-    async fn exists(&self, user_id: &str, name: &str) -> Result<bool, SecretError>;
-
-    /// List all secret references for a user (no values).
-    async fn list(&self, user_id: &str) -> Result<Vec<SecretRef>, SecretError>;
-
-    /// Delete a secret.
-    async fn delete(&self, user_id: &str, name: &str) -> Result<bool, SecretError>;
-
-    /// Update secret usage tracking.
-    async fn record_usage(&self, secret_id: Uuid) -> Result<(), SecretError>;
-
-    /// Check if a secret is accessible by a tool (based on allowed_secrets).
-    async fn is_accessible(
-        &self,
-        user_id: &str,
-        secret_name: &str,
-        allowed_secrets: &[String],
-    ) -> Result<bool, SecretError>;
-}
+// `SecretsStore` trait migrated to `dasclaw_runtime::secrets::store` (F3.2
+// phase 2 PR 4a, #641). Re-exported here so existing ironclaw call sites
+// (`crate::secrets::SecretsStore` / `crate::secrets::store::SecretsStore`)
+// keep resolving without touching ~20 import paths.
+pub use dasclaw_runtime::secrets::SecretsStore;
 
 /// PostgreSQL implementation of SecretsStore.
 #[cfg(feature = "postgres")]

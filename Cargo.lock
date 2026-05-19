@@ -3094,11 +3094,15 @@ dependencies = [
 name = "dasclaw_runtime"
 version = "0.0.0-w6"
 dependencies = [
+ "async-trait",
  "chrono",
  "dasclaw_tool",
+ "secrecy",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
