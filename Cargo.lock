@@ -3101,12 +3101,15 @@ dependencies = [
  "hkdf",
  "rand 0.8.5",
  "secrecy",
+ "secret-service",
+ "security-framework 3.7.0",
  "serde",
  "serde_json",
  "sha2",
  "thiserror 1.0.69",
  "tokio",
  "uuid",
+ "windows 0.58.0",
 ]
 
 [[package]]
