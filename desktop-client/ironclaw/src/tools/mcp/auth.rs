@@ -1141,6 +1141,11 @@ async fn get_client_credentials(
 }
 
 /// Get the stored access token for an MCP server.
+///
+/// Falls back to the legacy hyphenated secret name (pre-normalization)
+/// before returning `None`, so existing users are not forced to re-auth
+/// after the name-normalization upgrade. Mirrors `ironclaw-main` — see
+/// `McpServerConfig::legacy_token_secret_name` and `gh issue view 628`.
 pub async fn get_access_token(
     server_config: &McpServerConfig,
     secrets: &Arc<dyn SecretsStore + Send + Sync>,
@@ -1151,7 +1156,20 @@ pub async fn get_access_token(
         .await
     {
         Ok(token) => Ok(Some(token.expose().to_string())),
-        Err(crate::secrets::SecretError::NotFound(_)) => Ok(None),
+        Err(crate::secrets::SecretError::NotFound(_)) => {
+            // Fall back to the pre-normalization name. Bare lookup (no refresh)
+            // is sufficient: this path is transitional and self-heals after
+            // one re-auth cycle migrates the token to the canonical name.
+            if let Some(legacy_name) = server_config.legacy_token_secret_name() {
+                match secrets.get_decrypted(user_id, &legacy_name).await {
+                    Ok(token) => Ok(Some(token.expose().to_string())),
+                    Err(crate::secrets::SecretError::NotFound(_)) => Ok(None),
+                    Err(e) => Err(AuthError::Secrets(e.to_string())),
+                }
+            } else {
+                Ok(None)
+            }
+        }
         Err(e) => Err(AuthError::Secrets(e.to_string())),
     }
 }
@@ -1166,11 +1184,21 @@ pub async fn is_authenticated(
     secrets: &Arc<dyn SecretsStore + Send + Sync>,
     user_id: &str,
 ) -> bool {
-    // Check if we have a stored token (from either pre-configured OAuth or DCR)
-    secrets
+    // Check if we have a stored token (from either pre-configured OAuth or DCR).
+    if secrets
         .exists(user_id, &server_config.token_secret_name())
         .await
         .unwrap_or(false)
+    {
+        return true;
+    }
+
+    // Legacy fallback (pre-hyphen-normalization). Mirrors `ironclaw-main`.
+    if let Some(legacy_name) = server_config.legacy_token_secret_name() {
+        return secrets.exists(user_id, &legacy_name).await.unwrap_or(false);
+    }
+
+    false
 }
 
 /// Refresh an access token using the refresh token.

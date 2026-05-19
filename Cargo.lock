@@ -2655,6 +2655,7 @@ dependencies = [
  "dasclaw_governance",
  "dasclaw_hooks",
  "dasclaw_llm_provider",
+ "dasclaw_mcp",
  "dasclaw_net_proxy",
  "dasclaw_process_hardening",
  "dasclaw_sandbox",
@@ -2973,8 +2974,10 @@ dependencies = [
 
 [[package]]
 name = "dasclaw_mcp"
-version = "0.0.0-w1"
+version = "0.0.0-w6"
 dependencies = [
+ "serde",
+ "serde_json",
  "thiserror 1.0.69",
 ]
 

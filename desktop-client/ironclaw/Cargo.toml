@@ -187,6 +187,9 @@ subtle = "2"  # Constant-time comparisons for token validation
 # claw-code 子仓自此只读保留，详见 ADR-118)
 dasclaw_llm_provider = { path = "../../crates/dasclaw_llm_provider" }
 
+# MCP wire types + typed server-name allowlist (F3.2 phase 1; ADR-152 §3).
+dasclaw_mcp = { path = "../../crates/dasclaw_mcp" }
+
 # AWS Bedrock (native Converse API, opt-in via --features bedrock)
 aws-config = { version = "1", features = ["behavior-version-latest"], optional = true }
 aws-sdk-bedrockruntime = { version = "1", optional = true }
