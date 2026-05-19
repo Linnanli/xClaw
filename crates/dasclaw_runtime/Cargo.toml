@@ -1,0 +1,10 @@
+[package]
+name = "dasclaw_runtime"
+version = "0.0.0-w6"
+edition = "2021"
+description = "Runtime (application-layer) building blocks for any dasclaw host: errors that carry the failing tool's identity, future JobContext, etc."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+dasclaw_tool = { path = "../dasclaw_tool" }
+thiserror = "1"

@@ -144,42 +144,15 @@ pub enum ChannelError {
 // LlmError lives in src/llm/error.rs; re-exported here for backward compatibility.
 pub use crate::llm::error::LlmError;
 
-/// Tool execution errors.
-#[derive(Debug, thiserror::Error)]
-pub enum ToolError {
-    #[error("Tool {name} not found")]
-    NotFound { name: String },
-
-    #[error("Tool {name} execution failed: {reason}")]
-    ExecutionFailed { name: String, reason: String },
-
-    #[error("Tool {name} timed out after {timeout:?}")]
-    Timeout { name: String, timeout: Duration },
-
-    #[error("Invalid parameters for tool {name}: {reason}")]
-    InvalidParameters { name: String, reason: String },
-
-    #[error("Tool {name} is disabled: {reason}")]
-    Disabled { name: String, reason: String },
-
-    #[error("Sandbox error for tool {name}: {reason}")]
-    Sandbox { name: String, reason: String },
-
-    #[error("Tool {name} requires authentication")]
-    AuthRequired { name: String },
-
-    #[error("Tool {name} is not available for autonomous execution: {reason}")]
-    AutonomousUnavailable { name: String, reason: String },
-
-    #[error("Tool {name} is rate limited, retry after {retry_after:?}")]
-    RateLimited {
-        name: String,
-        retry_after: Option<Duration>,
-    },
-
-    #[error("Tool builder failed: {0}")]
-    BuilderFailed(String),
-}
+/// Tool execution errors (application layer — carries the failing tool's
+/// identity).
+///
+/// Moved to [`dasclaw_runtime::ToolError`] as part of F3.2 phase 2 PR 2
+/// (#641). Re-exported here so existing `crate::error::ToolError` call sites
+/// keep working. The complementary tool-implementation-layer error lives in
+/// [`dasclaw_tool::ToolError`] (no tool name); cross over with
+/// [`dasclaw_runtime::ToolError::from_tool_impl`].
+pub use dasclaw_runtime::ToolError;
 
 /// Safety/sanitization errors.
 #[derive(Debug, thiserror::Error)]
