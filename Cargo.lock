@@ -3094,12 +3094,16 @@ dependencies = [
 name = "dasclaw_runtime"
 version = "0.0.0-w6"
 dependencies = [
+ "aes-gcm",
  "async-trait",
  "chrono",
  "dasclaw_tool",
+ "hkdf",
+ "rand 0.8.5",
  "secrecy",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 1.0.69",
  "tokio",
  "uuid",
