@@ -13,19 +13,36 @@
 //!   declare their own `const KeychainConfig` to namespace storage —
 //!   the framework crate itself contains no host-brand literals.
 //!
-//! Concrete `SecretsStore` backends (Postgres / LibSQL / in-memory) and the
-//! `SecretsProvider` adapter are intentionally **not** in this crate yet.
-//! They will be migrated in follow-up sub-PR 4c of F3.2 phase 2 (#641).
+//! Concrete storage backends (in-memory, PostgreSQL, libSQL) and the
+//! [`dasclaw_core::SecretProvider`] adapter live in [`store_in_memory`],
+//! [`store_postgres`] (feature `postgres`), [`store_libsql`] (feature
+//! `libsql`), and [`agent_provider`]. Migrated in F3.2 phase 2 PR 4c (#641).
 
+pub mod agent_provider;
 pub mod crypto;
 pub mod keychain;
 pub mod store;
+pub mod store_in_memory;
 pub mod types;
 
+#[cfg(feature = "postgres")]
+pub mod store_postgres;
+
+#[cfg(feature = "libsql")]
+pub mod store_libsql;
+
+pub use agent_provider::AgentSecrets;
 pub use crypto::SecretsCrypto;
 pub use keychain::KeychainConfig;
 pub use store::SecretsStore;
+pub use store_in_memory::InMemorySecretsStore;
 pub use types::{
     CreateSecretParams, CredentialLocation, CredentialMapping, DecryptedSecret, Secret,
     SecretError, SecretRef,
 };
+
+#[cfg(feature = "postgres")]
+pub use store_postgres::PostgresSecretsStore;
+
+#[cfg(feature = "libsql")]
+pub use store_libsql::LibSqlSecretsStore;

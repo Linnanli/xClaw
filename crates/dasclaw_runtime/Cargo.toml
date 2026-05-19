@@ -7,12 +7,16 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 dasclaw_tool = { path = "../dasclaw_tool" }
+# `dasclaw_core::SecretProvider` trait used by the
+# `secrets::agent_provider::AgentSecrets` adapter (F3.2 phase 2 PR 4c, #641).
+dasclaw_core = { path = "../dasclaw_core" }
 thiserror = "1"
 serde = { version = "1", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 secrecy = { version = "0.10", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 async-trait = "0.1"
+tokio = { version = "1", features = ["sync"] }
 aes-gcm = "0.10"
 hkdf = "0.12"
 sha2 = "0.10"
@@ -32,6 +36,28 @@ windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_Security_Credentials",
 ] }
+
+# Optional Postgres backend for `SecretsStore` (`secrets::store_postgres`).
+[dependencies.deadpool-postgres]
+version = "0.14"
+optional = true
+
+[dependencies.tokio-postgres]
+version = "0.7"
+features = ["with-uuid-1", "with-chrono-0_4", "with-serde_json-1"]
+optional = true
+
+# Optional libSQL backend for `SecretsStore` (`secrets::store_libsql`).
+[dependencies.libsql]
+version = "0.6"
+optional = true
+default-features = false
+features = ["core", "replication", "remote", "tls"]
+
+[features]
+default = []
+postgres = ["dep:deadpool-postgres", "dep:tokio-postgres"]
+libsql = ["dep:libsql"]
 
 [dev-dependencies]
 serde_json = "1"

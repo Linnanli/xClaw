@@ -297,8 +297,12 @@ postgres = [
     "dep:refinery",
     "dep:pgvector",
     "rust_decimal/db-tokio-postgres",
+    # F3.2 phase 2 PR 4c (#641): the Postgres secrets store moved into
+    # dasclaw_runtime. Forward our feature flag so its optional deps and
+    # the `PostgresSecretsStore` re-export are pulled in alongside ours.
+    "dasclaw_runtime/postgres",
 ]
-libsql = ["dep:libsql"]
+libsql = ["dep:libsql", "dasclaw_runtime/libsql"]
 # Opt-in feature for especially heavy integration-test targets that run in a
 # dedicated CI job instead of the default Rust test matrix.
 integration = []
