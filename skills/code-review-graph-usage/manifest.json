@@ -1,0 +1,6 @@
+{
+  "version": "1.0.0",
+  "name": "code-review-graph-usage",
+  "description": "x-claw 多 repo 代码知识图的使用规范：什么时候调 code-review-graph、调哪个 patten、6 个已注册 repo 的范围、图谱刷新与跨 repo 查询、常见坑位与回退到 grep 的判定。",
+  "author": "nallylin"
+}
