@@ -3094,7 +3094,10 @@ dependencies = [
 name = "dasclaw_runtime"
 version = "0.0.0-w6"
 dependencies = [
+ "chrono",
  "dasclaw_tool",
+ "serde",
+ "serde_json",
  "thiserror 1.0.69",
 ]
 
