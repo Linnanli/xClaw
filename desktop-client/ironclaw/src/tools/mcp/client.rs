@@ -348,7 +348,15 @@ impl McpClient {
                 .await;
         }
 
-        let request = McpRequest::initialize(self.next_request_id());
+        // Send the wire `clientInfo` with **this** host crate's identity
+        // (resolves at compile time to `dasclaw` / its package version), not
+        // whatever crate happens to own the `McpRequest` type. See
+        // `dasclaw_mcp::protocol::McpRequest::initialize_with_client_info`.
+        let request = McpRequest::initialize_with_client_info(
+            self.next_request_id(),
+            env!("CARGO_PKG_NAME"),
+            env!("CARGO_PKG_VERSION"),
+        );
         let response = self
             .transport
             .send(&request, &self.build_request_headers().await?)

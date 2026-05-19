@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 
+use dasclaw_mcp::server_name::McpServerName;
+
 use crate::bootstrap::dasclaw_base_dir;
 use crate::tools::tool::ToolError;
 
@@ -147,10 +149,15 @@ impl McpServerConfig {
     }
 
     /// Validate the server configuration.
+    ///
+    /// Enforces the [`McpServerName`] allowlist (ASCII alnum + `_`, `.`, `-`)
+    /// before any other check, because the name later flows into the
+    /// filesystem (`~/.dasclaw/secrets/<name>/…`), the `Mcp-Session-Id`
+    /// header, and log lines. See `gh issue view 628` and ADR-152 §F3.2.
     pub fn validate(&self) -> Result<(), ConfigError> {
-        if self.name.is_empty() {
+        if let Err(err) = McpServerName::new(self.name.as_str()) {
             return Err(ConfigError::InvalidConfig {
-                reason: "Server name cannot be empty".to_string(),
+                reason: format!("Invalid MCP server name: {err}"),
             });
         }
 
@@ -247,6 +254,24 @@ impl McpServerConfig {
     /// Get the secret name used to store the access token.
     pub fn token_secret_name(&self) -> String {
         format!("mcp_{}_access_token", self.name)
+    }
+
+    /// Legacy secret name for access tokens (pre-hyphen-normalization).
+    ///
+    /// Before the factory normalised server names (hyphens → underscores),
+    /// access tokens were stored under the original hyphenated name. Used
+    /// as a fallback during lookup to avoid forcing re-authentication on
+    /// existing users after upgrade. Returns `None` when the name contains
+    /// no underscores (nothing to reverse).
+    ///
+    /// Mirrors `ironclaw-main`'s implementation; this method was missing in
+    /// the x-claw fork (see `gh issue view 628#issuecomment-4484408668`).
+    pub fn legacy_token_secret_name(&self) -> Option<String> {
+        let hyphenated = self.name.replace('_', "-");
+        if hyphenated == self.name {
+            return None;
+        }
+        Some(format!("mcp_{}_access_token", hyphenated))
     }
 
     /// Get the secret name used to store the refresh token.

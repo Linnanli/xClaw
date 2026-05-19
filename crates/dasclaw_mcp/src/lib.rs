@@ -1,24 +1,25 @@
-//! MCP client with 6 transports (Stdio / SSE / HTTP / WebSocket / SDK / ManagedProxy).
+//! Model Context Protocol (MCP) building blocks shared across dasclaw hosts.
 //!
-//! W1 skeleton — trait surface only, no impl.
-//! See `docs/plans/architecture-refactor/31-target-architecture.md` §4 for design.
+//! ## Status (F3.2 phase 1)
+//!
+//! Phase 1 ports the **pure** parts of the MCP stack out of
+//! `desktop-client/ironclaw/src/tools/mcp/`:
+//!
+//! - [`protocol`] — wire types (JSON-RPC framing, `McpTool`, `InitializeResult`, …)
+//! - [`server_name`] — typed [`server_name::McpServerName`] with the alnum allowlist
+//!   that the x-claw fork dropped during the rename pass (security delta)
+//!
+//! `auth`, `client`, `config`, `*_transport`, `session`, `process`, `factory`
+//! still live in the ironclaw host crate; they will move in follow-up phases.
+//!
+//! See `gh issue view 628` and ADR-152 §3 phase F3.2 for the rationale.
 
-#![allow(dead_code)]
+pub mod protocol;
+pub mod server_name;
 
-/// Placeholder error type. Replaced with module-specific errors in W2+.
-#[derive(Debug, thiserror::Error)]
-#[error("dasclaw_mcp skeleton error: {0}")]
-pub struct SkeletonError(pub String);
-
-/// Primary entry trait (placeholder). Replaced with full surface in W2+.
-pub trait McpTransport {
-    /// MCP client with 6 transports (Stdio / SSE / HTTP / WebSocket / SDK / ManagedProxy).
-    fn connect(&self) -> Result<(), SkeletonError>;
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn skeleton_compiles() { /* W1 placeholder */
-    }
-}
+pub use protocol::{
+    CallToolResult, ContentBlock, ExecutionTimeHint, InitializeResult, ListToolsResult, McpError,
+    McpRequest, McpResponse, McpTool, McpToolAnnotations, PromptsCapability, ResourcesCapability,
+    ServerCapabilities, ServerInfo, ToolsCapability, PROTOCOL_VERSION,
+};
+pub use server_name::{McpServerName, McpServerNameError};
