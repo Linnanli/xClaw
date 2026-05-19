@@ -21,6 +21,8 @@ members = [
 	"crates/dasclaw_features",
 	# F3.2 phase 2 PR 1 — tool implementation-layer error type (see #641)
 	"crates/dasclaw_tool",
+	# F3.2 phase 2 PR 2 — application-layer error type + future JobContext (see #641)
+	"crates/dasclaw_runtime",
 	"crates/dasclaw_observability",
 	"crates/dasclaw_identity",
 	"crates/dasclaw_crash",

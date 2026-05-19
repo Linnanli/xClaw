@@ -2658,6 +2658,7 @@ dependencies = [
  "dasclaw_mcp",
  "dasclaw_net_proxy",
  "dasclaw_process_hardening",
+ "dasclaw_runtime",
  "dasclaw_sandbox",
  "dasclaw_tool",
  "dasclaw_workspace_cap",
@@ -3086,6 +3087,14 @@ dependencies = [
 name = "dasclaw_routines"
 version = "0.0.0-w1"
 dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dasclaw_runtime"
+version = "0.0.0-w6"
+dependencies = [
+ "dasclaw_tool",
  "thiserror 1.0.69",
 ]
 
