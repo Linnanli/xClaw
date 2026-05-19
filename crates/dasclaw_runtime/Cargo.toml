@@ -18,6 +18,21 @@ hkdf = "0.12"
 sha2 = "0.10"
 rand = "0.8"
 
+# OS keychain integration (`secrets::keychain`).
+# Mirrors ironclaw's per-target deps; pulled in only when targeting the
+# matching OS so that other dasclaw hosts pay zero cost.
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+secret-service = { version = "4", features = ["rt-tokio-crypto-rust"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Security_Credentials",
+] }
+
 [dev-dependencies]
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt"] }

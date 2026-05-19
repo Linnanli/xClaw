@@ -9,19 +9,21 @@
 //!   implement.
 //! - [`crypto`]: AES-256-GCM + HKDF-SHA256 encryption/decryption
 //!   ([`SecretsCrypto`]). Pure crypto layer, no OS/brand coupling.
+//! - [`keychain`]: OS keychain integration ([`KeychainConfig`]). Hosts
+//!   declare their own `const KeychainConfig` to namespace storage —
+//!   the framework crate itself contains no host-brand literals.
 //!
-//! OS-keychain integration and concrete storage backends are intentionally
-//! **not** in this crate (yet). They live in
-//! `desktop-client/ironclaw/src/secrets/` and will be migrated in follow-up
-//! sub-PRs 4b' (keychain — needs `service_name` parameterization to avoid
-//! leaking the host brand) and 4c (Postgres / LibSQL / InMemory impls) of
-//! F3.2 phase 2 (#641).
+//! Concrete `SecretsStore` backends (Postgres / LibSQL / in-memory) and the
+//! `SecretsProvider` adapter are intentionally **not** in this crate yet.
+//! They will be migrated in follow-up sub-PR 4c of F3.2 phase 2 (#641).
 
 pub mod crypto;
+pub mod keychain;
 pub mod store;
 pub mod types;
 
 pub use crypto::SecretsCrypto;
+pub use keychain::KeychainConfig;
 pub use store::SecretsStore;
 pub use types::{
     CreateSecretParams, CredentialLocation, CredentialMapping, DecryptedSecret, Secret,
