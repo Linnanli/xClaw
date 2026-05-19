@@ -2659,6 +2659,7 @@ dependencies = [
  "dasclaw_net_proxy",
  "dasclaw_process_hardening",
  "dasclaw_sandbox",
+ "dasclaw_tool",
  "dasclaw_workspace_cap",
  "deadpool-postgres",
  "dirs 6.0.0",
@@ -3203,6 +3204,13 @@ dependencies = [
  "tree-sitter-bash",
  "url",
  "which 8.0.2",
+]
+
+[[package]]
+name = "dasclaw_tool"
+version = "0.0.0-w6"
+dependencies = [
+ "thiserror 1.0.69",
 ]
 
 [[package]]

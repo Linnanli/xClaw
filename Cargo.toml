@@ -19,6 +19,8 @@ members = [
 	"crates/dasclaw_mcp",
 	"crates/dasclaw_execpolicy",
 	"crates/dasclaw_features",
+	# F3.2 phase 2 PR 1 — tool implementation-layer error type (see #641)
+	"crates/dasclaw_tool",
 	"crates/dasclaw_observability",
 	"crates/dasclaw_identity",
 	"crates/dasclaw_crash",

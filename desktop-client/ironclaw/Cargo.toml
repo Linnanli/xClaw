@@ -190,6 +190,9 @@ dasclaw_llm_provider = { path = "../../crates/dasclaw_llm_provider" }
 # MCP wire types + typed server-name allowlist (F3.2 phase 1; ADR-152 §3).
 dasclaw_mcp = { path = "../../crates/dasclaw_mcp" }
 
+# Tool implementation-layer error type (F3.2 phase 2 PR 1; ADR-152 §3, #641).
+dasclaw_tool = { path = "../../crates/dasclaw_tool" }
+
 # AWS Bedrock (native Converse API, opt-in via --features bedrock)
 aws-config = { version = "1", features = ["behavior-version-latest"], optional = true }
 aws-sdk-bedrockruntime = { version = "1", optional = true }

@@ -1,0 +1,9 @@
+[package]
+name = "dasclaw_tool"
+version = "0.0.0-w6"
+edition = "2021"
+description = "Tool implementation layer building blocks: errors, output, and shared types used by any dasclaw host."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+thiserror = "1"
