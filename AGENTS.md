@@ -77,6 +77,13 @@
 | `adr-compliance-check` | **触及 `crates/dasclaw_*` / `.github/workflows/code_style.yml` / `scripts/check_codex_*_drift.py` / starlark pin / `.ironclaw` 字面量新增或豁免** 的 PR push 前 | 漏掉 verbatim 纯度违规、drift guard 接线缺失、CI roll-up `failure-check` stanza 缺失、PR 描述漏 ADR/Issue cite 等架构纪律问题 |
 | `code-review-expert` | **PR 自审前**（push 之前）、PR 合并前、用户说"review/审查这次改动" | 漏掉 SOLID 违规、安全风险、依赖耦合等高阶问题 |
 
+### 配套查询能力（推荐，不强制）
+
+| Skill | 何时调出 | 作用 |
+|-------|---------|------|
+| `code-review-graph-usage` | **任何"搬迁/拆 crate/改公共类型"PR 开工前**；想查"谁调用了 X""哪些 repo 有相似代码""改动的爆炸半径"时 | 给出本仓 6 个已注册 repo 的查询规范、坑位与回退到 grep 的判定，避免一上来就乱试参数 |
+
+
 **执行顺序（默认管线）**：
 1. 实现完成 → `cargo check -p <touched-crate> --tests` 0 错 0 警（完整 `cargo build` 由 CI 兑现）
 2. `code-quality-audit` 自查（必须）
