@@ -30,6 +30,7 @@
 
 pub mod auth;
 mod client;
+pub mod client_tool;
 pub mod config;
 pub mod factory;
 pub(crate) mod http_transport;
