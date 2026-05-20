@@ -3254,6 +3254,9 @@ dependencies = [
 name = "dasclaw_tool"
 version = "0.0.0-w6"
 dependencies = [
+ "rust_decimal",
+ "serde",
+ "serde_json",
  "thiserror 1.0.69",
 ]
 

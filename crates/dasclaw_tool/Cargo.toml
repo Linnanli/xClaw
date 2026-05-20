@@ -1,9 +1,12 @@
 [package]
 name = "dasclaw_tool"
 version = "0.0.0-w6"
-edition = "2021"
+edition = "2024"
 description = "Tool implementation layer building blocks: errors, output, and shared types used by any dasclaw host."
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+rust_decimal = { version = "1", features = ["serde", "serde-with-str", "maths"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 thiserror = "1"
