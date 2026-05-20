@@ -35,8 +35,14 @@
 //! [`ToolError::from_tool_impl`].
 
 pub mod error;
+pub mod feature_flags;
 pub mod job;
+pub mod job_context;
+pub mod recording;
 pub mod secrets;
 
 pub use error::ToolError;
+pub use feature_flags::{SharedFeatureFlags, ToolFeatureFlags};
 pub use job::{JobState, StateTransition, TokenBudgetExceeded};
+pub use job_context::JobContextCore;
+pub use recording::{HttpExchange, HttpExchangeRequest, HttpExchangeResponse, HttpInterceptor};

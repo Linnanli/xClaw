@@ -284,6 +284,66 @@ impl Default for JobContext {
     }
 }
 
+// ── JobContextCore impl (ADR-154 step 1/2) ────────────────────────
+//
+// The trait exposes only the subset of fields that `Tool::execute`
+// implementations actually read or write across the workspace.
+// GUI / marketplace fields (`budget`, `bid_amount`, `actual_cost`,
+// `transitions`, `created_at`, ...) intentionally do NOT appear here
+// and remain accessible via direct field access on `JobContext`.
+impl dasclaw_runtime::JobContextCore for JobContext {
+    fn job_id(&self) -> Uuid {
+        self.job_id
+    }
+    fn user_id(&self) -> &str {
+        &self.user_id
+    }
+    fn requester_id(&self) -> Option<&str> {
+        self.requester_id.as_deref()
+    }
+    fn conversation_id(&self) -> Option<Uuid> {
+        self.conversation_id
+    }
+    fn set_conversation_id(&mut self, id: Option<Uuid>) {
+        self.conversation_id = id;
+    }
+
+    fn state(&self) -> JobState {
+        self.state
+    }
+
+    fn metadata(&self) -> &serde_json::Value {
+        &self.metadata
+    }
+    fn set_metadata(&mut self, value: serde_json::Value) {
+        self.metadata = value;
+    }
+    fn tool_output_stash(&self) -> Arc<tokio::sync::RwLock<HashMap<String, String>>> {
+        self.tool_output_stash.clone()
+    }
+    fn extra_env(&self) -> Arc<HashMap<String, String>> {
+        self.extra_env.clone()
+    }
+
+    fn user_timezone(&self) -> &str {
+        &self.user_timezone
+    }
+    fn http_interceptor(&self) -> Option<Arc<dyn dasclaw_runtime::HttpInterceptor>> {
+        self.http_interceptor.clone()
+    }
+
+    fn feature_flags(&self) -> SharedFeatureFlags {
+        self.feature_flags.clone()
+    }
+
+    fn title(&self) -> &str {
+        &self.title
+    }
+    fn description(&self) -> &str {
+        &self.description
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
