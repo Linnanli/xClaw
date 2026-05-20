@@ -22,13 +22,20 @@ thiserror = "1"
 # Async filesystem I/O for `load_mcp_servers_from` / `save_mcp_servers_to`,
 # async mutex for the per-(server,user) refresh lock in `auth`, plus
 # `io-util` for `AsyncBufReadExt::lines` / `AsyncWriteExt::write_all` used
-# by `transport`, `rt` for `tokio::spawn` of the JSON-RPC reader task, and
-# `time` for the `stream_transport_send` per-request timeout.
-tokio = { version = "1", features = ["fs", "sync", "io-util", "rt", "time"] }
+# by `transport`, `rt` for `tokio::spawn` of the JSON-RPC reader task,
+# `time` for the `stream_transport_send` per-request timeout, `process`
+# for the child process driving `stdio_transport`, and `net` for the
+# Unix domain socket used by `unix_transport` (PR 6-β, #664).
+tokio = { version = "1", features = ["fs", "sync", "io-util", "rt", "time", "process", "net"] }
 # URL parsing for the localhost / loopback detection in `config::is_localhost_url`.
 url = "2"
-# OAuth discovery / token endpoint HTTP client + RFC 9110 header validation.
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
+# OAuth discovery / token endpoint HTTP client + RFC 9110 header validation,
+# plus the Streamable HTTP transport. `stream` is needed for `bytes_stream`
+# used to parse SSE responses in `http_transport`. `rustls-tls-native-roots`
+# matches ironclaw's TLS backend (PR 6-β, #664).
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls-native-roots"] }
+# `futures::StreamExt` for consuming the SSE byte stream in `http_transport`.
+futures = "0.3"
 # Tracing for OAuth redirect debug logging in `auth`.
 tracing = "0.1"
 # OAuth flow building blocks (PKCE, DCR, token storage) used by `auth`.

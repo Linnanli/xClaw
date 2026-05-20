@@ -1,14 +1,15 @@
-//! Shared MCP transport trait and JSON-RPC framing helpers — ironclaw host shim.
+//! Shared MCP transport trait — ironclaw host shim.
 //!
-//! The host-agnostic implementation (the `McpTransport` trait,
-//! `write_jsonrpc_line`, `spawn_jsonrpc_reader`, and the
-//! `stream_transport_send` helper shared by stream-based transports) lives
-//! in [`dasclaw_mcp::transport`]. This module is kept so that the existing
-//! `crate::tools::mcp::transport::*` imports — particularly from the
-//! still-local `stdio_transport` and `unix_transport` modules — keep
-//! resolving without a workspace-wide rename. New code should import from
-//! `dasclaw_mcp::transport` directly.
+//! The host-agnostic implementation lives in [`dasclaw_mcp::transport`].
+//! `McpTransport` is re-exported because `mcp::client` still resolves it
+//! through this path. `spawn_jsonrpc_reader` was needed by the stdio /
+//! unix transports while they lived in ironclaw; after PR 6-β they live in
+//! `dasclaw_mcp`, so it is re-exported under `allow(unused_imports)` for
+//! parity. `stream_transport_send` was tightened back to `pub(crate)` in
+//! `dasclaw_mcp::transport` and is no longer re-exported here.
 //!
-//! Migrated in F3.2 phase 3 PR 6-α (#661).
+//! Migrated in F3.2 phase 3 PR 6-α (#661, #663); shim trimmed in PR 6-β (#664).
 
-pub use dasclaw_mcp::transport::{McpTransport, spawn_jsonrpc_reader, stream_transport_send};
+pub use dasclaw_mcp::transport::McpTransport;
+#[allow(unused_imports)]
+pub use dasclaw_mcp::transport::spawn_jsonrpc_reader;

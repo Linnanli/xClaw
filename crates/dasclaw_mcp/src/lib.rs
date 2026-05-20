@@ -11,24 +11,30 @@
 //! direct refresh, token storage). The ironclaw host keeps the GUI
 //! orchestration, localhost callback server, and OAuth-proxy refresh path
 //! on top of it.
-//! Phase 3 sub-PR 6-α (#661) adds **`session`** (host-agnostic
+//! Phase 3 sub-PR 6-α (#661, #663) adds **`session`** (host-agnostic
 //! `McpSession` / `McpSessionManager`) and **`transport`** (the
 //! `McpTransport` trait plus the JSON-RPC line framing and pending-
 //! response dispatch helpers used by stream-based transports).
+//! Phase 3 sub-PR 6-β (#661, #664) adds the four concrete transports
+//! (`stdio_transport`, `unix_transport`, `process`, `http_transport`).
 //!
-//! Still in the ironclaw host crate (planned for the remaining sub-PRs):
-//! `client`, `stdio_transport`, `unix_transport`, `http_transport`,
-//! `process`, `factory`, plus the ironclaw-specific default-path /
+//! Still in the ironclaw host crate (planned for the remaining sub-PR):
+//! `client`, `factory`, plus the ironclaw-specific default-path /
 //! database-backed config wrappers and the GUI auth orchestration.
 //!
 //! See `gh issue view 661`, ADR-152 §3 phase F3.2, and PR #641 for context.
 
 pub mod auth;
 pub mod config;
+pub mod http_transport;
+pub mod process;
 pub mod protocol;
 pub mod server_name;
 pub mod session;
+pub mod stdio_transport;
 pub mod transport;
+#[cfg(unix)]
+pub mod unix_transport;
 
 pub use auth::{
     AccessToken, AuthError, AuthorizationServerMetadata, ClientCredentials,
@@ -43,6 +49,8 @@ pub use config::{
     ConfigError, EffectiveTransport, McpServerConfig, McpServersFile, McpTransportConfig,
     OAuthConfig, is_localhost_url, load_mcp_servers_from, save_mcp_servers_to,
 };
+pub use http_transport::HttpMcpTransport;
+pub use process::{McpProcessManager, StdioSpawnConfig};
 pub use protocol::{
     CallToolResult, ContentBlock, ExecutionTimeHint, InitializeResult, ListToolsResult, McpError,
     McpRequest, McpResponse, McpTool, McpToolAnnotations, PROTOCOL_VERSION, PromptsCapability,
@@ -50,6 +58,7 @@ pub use protocol::{
 };
 pub use server_name::{McpServerName, McpServerNameError};
 pub use session::{McpSession, McpSessionManager};
-pub use transport::{
-    McpTransport, spawn_jsonrpc_reader, stream_transport_send, write_jsonrpc_line,
-};
+pub use stdio_transport::StdioMcpTransport;
+pub use transport::{McpTransport, spawn_jsonrpc_reader, write_jsonrpc_line};
+#[cfg(unix)]
+pub use unix_transport::UnixMcpTransport;

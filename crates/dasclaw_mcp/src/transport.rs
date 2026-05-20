@@ -5,12 +5,13 @@
 //! JSON-RPC over byte streams (used by stdio and unix socket transports).
 //!
 //! Migrated from `ironclaw::tools::mcp::transport` in F3.2 phase 3 PR 6-α
-//! (#661). The only edits relative to the previous location are import-path
-//! adjustments (`crate::tools::mcp::protocol` → `crate::protocol`,
-//! `crate::tools::tool::ToolError` → `dasclaw_tool::ToolError`) and raising
-//! the visibility of [`stream_transport_send`] from `pub(crate)` to `pub`
-//! so that the stdio / unix transports — which still live in the ironclaw
-//! host crate until F3.2 phase 3 PR 6-β — can keep calling it.
+//! (#661, #663). The only edits relative to the previous location are
+//! import-path adjustments (`crate::tools::mcp::protocol` →
+//! `crate::protocol`, `crate::tools::tool::ToolError` →
+//! `dasclaw_tool::ToolError`). PR 6-β (#664) restored
+//! [`stream_transport_send`] visibility from the temporary `pub` back to
+//! `pub(crate)` now that the stdio / unix concrete transports also live in
+//! this crate.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -134,12 +135,7 @@ pub fn spawn_jsonrpc_reader<R: AsyncBufRead + Unpin + Send + 'static>(
 /// Handles notification fire-and-forget, pending response registration,
 /// write, timeout, and cleanup. Used by both `StdioMcpTransport` and
 /// `UnixMcpTransport` to avoid duplicating the send logic.
-///
-/// Public so that the concrete stdio / unix transport implementations,
-/// which currently live in the ironclaw host crate, can call it across the
-/// `dasclaw_mcp` boundary. Once those transports are also migrated
-/// (F3.2 phase 3 PR 6-β), this can be tightened back to `pub(crate)`.
-pub async fn stream_transport_send<W: AsyncWrite + Unpin>(
+pub(crate) async fn stream_transport_send<W: AsyncWrite + Unpin>(
     writer: &Mutex<W>,
     pending: &Mutex<HashMap<u64, oneshot::Sender<McpResponse>>>,
     request: &McpRequest,
