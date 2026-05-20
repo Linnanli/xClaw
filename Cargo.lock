@@ -2655,6 +2655,7 @@ dependencies = [
  "dasclaw_governance",
  "dasclaw_hooks",
  "dasclaw_llm_provider",
+ "dasclaw_lsp",
  "dasclaw_mcp",
  "dasclaw_net_proxy",
  "dasclaw_process_hardening",
@@ -2971,7 +2972,11 @@ dependencies = [
 name = "dasclaw_lsp"
 version = "0.0.0-w1"
 dependencies = [
- "thiserror 1.0.69",
+ "dasclaw_tool",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
