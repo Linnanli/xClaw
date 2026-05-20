@@ -1,6 +1,6 @@
 # ADR-153（草稿）：把 x-claw 演化成一个无头 agent 框架
 
-- 状态：Draft（讨论中，尚未拍板）
+- 状态：Accepted（2026-05-20，用户在 PR #675 反馈中拍板）
 - 提案人：Coding Agent（基于 ADR-152 F2 系列交付的观察）
 - 关联：ADR-152（agent and capability fusion）、ADR-129（verbatim port mandate）
 - 时间：2026-05-18

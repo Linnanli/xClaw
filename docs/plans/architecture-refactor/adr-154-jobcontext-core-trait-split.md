@@ -1,8 +1,8 @@
-# ADR-154（草稿）：把 `JobContext` 上帝结构体拆成 `JobContextCore` trait + ironclaw GUI 扩展
+# ADR-154：把 `JobContext` 上帝结构体拆成 `JobContextCore` trait + ironclaw GUI 扩展
 
-- 状态：Draft（讨论中，尚未拍板）
+- 状态：Accepted（2026-05-20，用户在 PR #675 反馈中拍板）
 - 提案人：Coding Agent（受用户授权，基于 #672 阻塞分析）
-- 关联：ADR-152（agent and capability fusion）、ADR-153 草稿（无头 agent 框架）、ADR-129（verbatim port mandate）
+- 关联：ADR-152（agent and capability fusion）、ADR-153（无头 agent 框架）、ADR-129（verbatim port mandate）
 - 关联 issue：#672（解 `JobContext` / `WebhookCapability` 耦合后把 `Tool` trait + `LspQueryTool` 搬到 `dasclaw_tool`）
 - 时间：2026-05-20
 
