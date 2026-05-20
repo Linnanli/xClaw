@@ -4,62 +4,20 @@
 //! runtime without unregistering them from the registry. Disabled tools are
 //! rejected at the `execute_tool_with_safety` gate and excluded from LLM tool
 //! definitions so the model never attempts to call them.
-
-use std::collections::HashSet;
-use std::sync::Arc;
+//!
+//! The bare HashSet-backed vocabulary (`ToolFeatureFlags`,
+//! `SharedFeatureFlags`) was moved to `dasclaw_runtime::feature_flags`
+//! per ADR-154 step 1/2 and is re-exported below so existing callers
+//! that use `crate::tools::feature_flags::ToolFeatureFlags` keep working.
+//! The `BuiltinBlocklistPolicy` adapter (which depends on
+//! `dasclaw_governance::tool_visibility`) stays here.
 
 use async_trait::async_trait;
 use dasclaw_governance::tool_visibility::{
     ToolGateContext, ToolGateDecision, ToolSource, ToolVisibilityPolicy,
 };
 
-/// Tool-level feature flag configuration.
-///
-/// Loaded from `Config.feature_flags` and optionally updated via Admin Backend
-/// `system_settings` KV pushes. The default state is **all tools enabled** —
-/// only tools explicitly listed in `disabled_tools` are rejected.
-#[derive(Debug, Clone)]
-pub struct ToolFeatureFlags {
-    disabled_tools: HashSet<String>,
-}
-
-impl ToolFeatureFlags {
-    /// Create a new instance with all tools enabled.
-    pub fn all_enabled() -> Self {
-        Self {
-            disabled_tools: HashSet::new(),
-        }
-    }
-
-    /// Create from a set of disabled tool names.
-    pub fn with_disabled(disabled: impl IntoIterator<Item = String>) -> Self {
-        Self {
-            disabled_tools: disabled.into_iter().collect(),
-        }
-    }
-
-    /// Check whether a tool is enabled.
-    ///
-    /// Returns `true` unless the tool name is in the disabled set.
-    pub fn is_tool_enabled(&self, tool_name: &str) -> bool {
-        !self.disabled_tools.contains(tool_name)
-    }
-
-    /// Return the set of disabled tool names (for diagnostics / filtering).
-    pub fn disabled_tools(&self) -> &HashSet<String> {
-        &self.disabled_tools
-    }
-}
-
-impl Default for ToolFeatureFlags {
-    fn default() -> Self {
-        Self::all_enabled()
-    }
-}
-
-/// Convenience alias used by `JobContext` and callers that share the flags
-/// across cloned contexts cheaply.
-pub type SharedFeatureFlags = Arc<ToolFeatureFlags>;
+pub use dasclaw_runtime::feature_flags::{SharedFeatureFlags, ToolFeatureFlags};
 
 /// ADR-149 / issue #485 — built-in tool blocklist as a
 /// [`ToolVisibilityPolicy`].
