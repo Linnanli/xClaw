@@ -2984,6 +2984,7 @@ dependencies = [
  "chrono",
  "dasclaw_runtime",
  "dasclaw_tool",
+ "futures",
  "rand 0.8.5",
  "reqwest 0.12.28",
  "secrecy",
