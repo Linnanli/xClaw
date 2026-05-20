@@ -55,5 +55,8 @@ tokio = { version = "1", features = ["fs", "macros", "rt", "rt-multi-thread", "s
 # `libsql` features as needed.
 dasclaw_runtime = { path = "../dasclaw_runtime" }
 secrecy = "0.10"
+# `client` test stubs implement `SecretsStore`, whose `record_usage` takes a
+# `uuid::Uuid` (PR 6-γ, #666).
+uuid = { version = "1", features = ["v4"] }
 # `auth` tests spin up a tiny in-memory HTTP server to record refresh requests.
 axum = "0.8"

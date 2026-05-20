@@ -25,7 +25,9 @@
 //! See `gh issue view 661`, ADR-152 §3 phase F3.2, and PR #641 for context.
 
 pub mod auth;
+pub mod client;
 pub mod config;
+pub mod factory;
 pub mod http_transport;
 pub mod process;
 pub mod protocol;
@@ -45,10 +47,12 @@ pub use auth::{
     get_access_token, is_authenticated, refresh_access_token_direct, refresh_lock, register_client,
     store_client_id, store_client_secret, store_tokens, validate_url_safe,
 };
+pub use client::{McpClient, RefreshAccessTokenFn};
 pub use config::{
     ConfigError, EffectiveTransport, McpServerConfig, McpServersFile, McpTransportConfig,
     OAuthConfig, is_localhost_url, load_mcp_servers_from, save_mcp_servers_to,
 };
+pub use factory::{McpFactoryError, create_client_from_config};
 pub use http_transport::HttpMcpTransport;
 pub use process::{McpProcessManager, StdioSpawnConfig};
 pub use protocol::{

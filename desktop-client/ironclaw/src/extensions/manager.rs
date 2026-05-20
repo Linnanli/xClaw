@@ -4044,8 +4044,8 @@ impl ExtensionManager {
             }
         })?;
 
-        let tool_impls = client
-            .create_tools()
+        let client_arc = Arc::new(client);
+        let tool_impls = crate::tools::mcp::client_tool::create_tools_for(client_arc.clone())
             .await
             .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))?;
 
@@ -4062,7 +4062,7 @@ impl ExtensionManager {
         self.mcp_clients
             .write()
             .await
-            .insert(name.to_string(), Arc::new(client));
+            .insert(name.to_string(), client_arc);
 
         tracing::info!(
             "Activated MCP server '{}' with {} tools",

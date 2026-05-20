@@ -760,7 +760,12 @@ impl AppBuilder {
                                 match client.list_tools().await {
                                     Ok(mcp_tools) => {
                                         let tool_count = mcp_tools.len();
-                                        match client.create_tools().await {
+                                        let client_arc = Arc::new(client);
+                                        match crate::tools::mcp::client_tool::create_tools_for(
+                                            client_arc.clone(),
+                                        )
+                                        .await
+                                        {
                                             Ok(tool_impls) => {
                                                 for tool in tool_impls {
                                                     tools.register(tool).await;
@@ -772,7 +777,7 @@ impl AppBuilder {
                                                 );
                                                 return Some((
                                                     server_name,
-                                                    Arc::new(client),
+                                                    client_arc,
                                                 ));
                                             }
                                             Err(e) => {
