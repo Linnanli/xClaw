@@ -1,6 +1,6 @@
 //! Model Context Protocol (MCP) building blocks shared across dasclaw hosts.
 //!
-//! ## Status (F3.2 phase 2)
+//! ## Status (F3.2 phase 2 / phase 3)
 //!
 //! Phase 1 ported the wire-protocol surface (`protocol`, `server_name`).
 //! Phase 2 sub-PR 5a (#641) adds **`config`** — the host-agnostic
@@ -11,18 +11,24 @@
 //! direct refresh, token storage). The ironclaw host keeps the GUI
 //! orchestration, localhost callback server, and OAuth-proxy refresh path
 //! on top of it.
+//! Phase 3 sub-PR 6-α (#661) adds **`session`** (host-agnostic
+//! `McpSession` / `McpSessionManager`) and **`transport`** (the
+//! `McpTransport` trait plus the JSON-RPC line framing and pending-
+//! response dispatch helpers used by stream-based transports).
 //!
 //! Still in the ironclaw host crate (planned for the remaining sub-PRs):
-//! `client`, `*_transport`, `session`, `process`, `factory`, plus the
-//! ironclaw-specific default-path / database-backed config wrappers and the
-//! GUI auth orchestration.
+//! `client`, `stdio_transport`, `unix_transport`, `http_transport`,
+//! `process`, `factory`, plus the ironclaw-specific default-path /
+//! database-backed config wrappers and the GUI auth orchestration.
 //!
-//! See `gh issue view 628`, ADR-152 §3 phase F3.2, and PR #641 for context.
+//! See `gh issue view 661`, ADR-152 §3 phase F3.2, and PR #641 for context.
 
 pub mod auth;
 pub mod config;
 pub mod protocol;
 pub mod server_name;
+pub mod session;
+pub mod transport;
 
 pub use auth::{
     AccessToken, AuthError, AuthorizationServerMetadata, ClientCredentials,
@@ -43,3 +49,7 @@ pub use protocol::{
     ResourcesCapability, ServerCapabilities, ServerInfo, ToolsCapability,
 };
 pub use server_name::{McpServerName, McpServerNameError};
+pub use session::{McpSession, McpSessionManager};
+pub use transport::{
+    McpTransport, spawn_jsonrpc_reader, stream_transport_send, write_jsonrpc_line,
+};
