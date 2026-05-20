@@ -55,6 +55,20 @@ pub trait JobContextCore: Send + Sync {
 
     /// Current job state.
     fn state(&self) -> JobState;
+    /// Wall-clock time the job was created.
+    ///
+    /// `job.rs` lists active jobs across users and emits each job's
+    /// creation timestamp in RFC 3339, so `JobContextCore` must
+    /// expose this read-only.
+    fn created_at(&self) -> chrono::DateTime<chrono::Utc>;
+    /// Transition to a new lifecycle state, recording the transition
+    /// in the implementor's history and updating internal timestamps.
+    ///
+    /// Returns `Err(reason)` when the transition is illegal under the
+    /// implementor's state machine. `job.rs`, the sub-agent tool, and
+    /// the session-fork tool all drive job transitions through this
+    /// method, so it must remain on the trait surface.
+    fn transition_to(&mut self, new_state: JobState, reason: Option<String>) -> Result<(), String>;
 
     // ── shared tool I/O ──
 
@@ -74,6 +88,9 @@ pub trait JobContextCore: Send + Sync {
 
     /// User's preferred timezone (IANA name, e.g. "America/New_York").
     fn user_timezone(&self) -> &str;
+    /// Replace the user's preferred timezone — used by tests and by
+    /// hosts that rewrite the timezone mid-job after a profile update.
+    fn set_user_timezone(&mut self, timezone: String);
     /// Optional HTTP interceptor for trace recording/replay.
     fn http_interceptor(&self) -> Option<Arc<dyn HttpInterceptor>>;
 
