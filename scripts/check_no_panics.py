@@ -141,9 +141,33 @@ def sanitize_line(line: str, state: LexerState) -> str:
             i += 1
             continue
         if ch == "'":
-            # This can misclassify lifetimes like `'a` as char literals. That only
-            # risks false negatives by masking later code on the same line.
-            state.in_char = True
+            # Distinguish a char literal from a Rust lifetime annotation.
+            #
+            # The previous version always entered char-literal mode on any `'`,
+            # which meant a lifetime such as `&'a str` or `Foo<'_>` would open
+            # an `in_char` state that only closed on the *next* `'` — often
+            # many lines later (e.g. an English apostrophe inside a comment
+            # like `doesn't`). Everything in between was sanitised to spaces,
+            # silently masking `#[cfg(test)]` / `mod tests {` and producing
+            # false-positive panic violations on test-only `assert!` calls.
+            #
+            # Grammar: a Rust char literal is either `'\<escape>...'` or
+            # `'<single-char>'`. A lifetime is `'` followed by an identifier
+            # character (or `_`) without an immediate closing `'`. We use a
+            # bounded look-ahead — no token scan — so we never advance past
+            # the closing quote when it really is a char literal.
+            if nxt == "\\":
+                # Escaped char literal, e.g. `'\n'`, `'\''`, `'\u{1F600}'`.
+                state.in_char = True
+                i += 1
+                continue
+            if i + 2 < len(chars) and chars[i + 2] == "'":
+                # Single-char literal, e.g. `'a'` or `'!'`.
+                state.in_char = True
+                i += 1
+                continue
+            # Treat as a lifetime: skip just the apostrophe and keep scanning
+            # normal code on the rest of the line.
             i += 1
             continue
 
@@ -420,6 +444,47 @@ class CheckNoPanicsTests(unittest.TestCase):
         self.assertFalse(is_test_only_file(pathlib.Path("src/lib.rs")))
         self.assertFalse(is_test_only_file(pathlib.Path("src/seatbelt.rs")))
         self.assertFalse(is_test_only_file(pathlib.Path("src/notests.rs")))
+
+    def test_lifetime_annotation_does_not_swallow_following_lines(self) -> None:
+        # Regression for #657: an `&'a str` lifetime used to open the lexer's
+        # `in_char` state and mask the rest of the file until the next `'`,
+        # so `#[cfg(test)] mod tests { ... }` would never be recognised and
+        # test-only `assert!` calls were flagged as production panics.
+        lines = [
+            "pub enum EffectiveTransport<'a> {\n",
+            "    Stdio { args: &'a [String] },\n",
+            "    Unix { socket_path: &'a str },\n",
+            "}\n",
+            "\n",
+            "#[cfg(test)]\n",
+            "mod tests {\n",
+            "    #[test]\n",
+            "    fn t() {\n",
+            "        assert!(true);\n",
+            "    }\n",
+            "}\n",
+        ]
+
+        contexts = line_test_contexts(lines)
+
+        # The assert! sits inside `mod tests` and must be marked test-context.
+        self.assertTrue(contexts[9], f"contexts={contexts}")
+
+    def test_real_char_literals_still_mask_string_content(self) -> None:
+        # Char literals are still recognised so that e.g. an `assert!`-shaped
+        # token sitting inside `'!'` would not flag — though in practice the
+        # PANIC_PATTERN already requires `!` adjacency. Cover both forms.
+        lines = [
+            "fn f() {\n",
+            "    let c: char = 'a';\n",
+            "    let n: char = '\\n';\n",
+            "    let u: char = '\\u{1F600}';\n",
+            "}\n",
+        ]
+
+        # Should run without panicking and leave context = False (no test).
+        contexts = line_test_contexts(lines)
+        self.assertFalse(any(contexts))
 
 
 if __name__ == "__main__":
