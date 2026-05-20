@@ -45,6 +45,7 @@
 //! assert!(ws.read("/etc/passwd").is_err());
 //! ```
 
+pub mod chunker;
 pub mod policy;
 pub use policy::{
     NetworkAccess, SandboxPolicy, WritableRoot, default_read_only_subpaths_for_writable_root,
