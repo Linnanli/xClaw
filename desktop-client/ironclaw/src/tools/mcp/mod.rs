@@ -33,14 +33,11 @@ mod client;
 pub mod client_tool;
 pub mod config;
 pub mod factory;
-pub(crate) mod http_transport;
 pub(crate) mod process;
 mod protocol;
 pub mod session;
 pub(crate) mod stdio_transport;
 pub(crate) mod transport;
-#[cfg(unix)]
-pub(crate) mod unix_transport;
 
 pub use auth::{is_authenticated, refresh_access_token};
 pub use client::McpClient;
