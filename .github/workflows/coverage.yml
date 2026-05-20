@@ -42,6 +42,15 @@ permissions:
 jobs:
   coverage:
     name: Coverage (${{ matrix.name }})
+    # disabled in xClaw fork: this job's "Build WASM channels" step calls
+    # ./scripts/build-wasm-extensions.sh inherited from ironclaw, which is not
+    # present at the xClaw workspace root (the script only exists under
+    # desktop-client/ironclaw/scripts/ and ironclaw-main/scripts/). The
+    # channels-src/ WIT extensions are not active in this fork, so the
+    # coverage matrix would always exit 127 at that step. Mirrors the same
+    # `if: false` guard already applied in test.yml (wasm-wit-compat,
+    # bench-compile). Re-enable when WASM channels return to xClaw.
+    if: false
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -129,6 +138,10 @@ jobs:
 
   e2e-coverage:
     name: E2E Coverage
+    # disabled in xClaw fork: same reason as the `coverage` job above —
+    # ./scripts/build-wasm-extensions.sh is not present at the xClaw
+    # workspace root, so the "Build WASM channels" step would exit 127.
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
