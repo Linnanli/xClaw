@@ -27,8 +27,8 @@ use crate::secrets::{CreateSecretParams, SecretsStore};
 use crate::tools::ToolRegistry;
 use crate::tools::mcp::McpClient;
 use crate::tools::mcp::auth::{
-    authorize_mcp_server, canonical_resource_uri, discover_full_oauth_metadata,
-    find_available_port, is_authenticated, register_client,
+    DEFAULT_DCR_CLIENT_NAME, authorize_mcp_server, canonical_resource_uri,
+    discover_full_oauth_metadata, find_available_port, is_authenticated, register_client,
 };
 use crate::tools::mcp::config::McpServerConfig;
 use crate::tools::mcp::session::McpSessionManager;
@@ -2783,9 +2783,10 @@ impl ExtensionManager {
             if let Some(ref oauth) = server.oauth {
                 (oauth.client_id.clone(), None, None)
             } else if let Some(ref reg_endpoint) = metadata.registration_endpoint {
-                let registration = register_client(reg_endpoint, &redirect_uri)
-                    .await
-                    .map_err(|e| ExtensionError::AuthFailed(e.to_string()))?;
+                let registration =
+                    register_client(reg_endpoint, &redirect_uri, DEFAULT_DCR_CLIENT_NAME)
+                        .await
+                        .map_err(|e| ExtensionError::AuthFailed(e.to_string()))?;
 
                 (
                     registration.client_id,
