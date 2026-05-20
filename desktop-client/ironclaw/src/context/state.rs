@@ -284,13 +284,14 @@ impl Default for JobContext {
     }
 }
 
-// ── JobContextCore impl (ADR-154 step 1/2) ────────────────────────
+// ── JobContextCore impl (ADR-154 step 2a) ────────────────────────
 //
 // The trait exposes only the subset of fields that `Tool::execute`
 // implementations actually read or write across the workspace.
 // GUI / marketplace fields (`budget`, `bid_amount`, `actual_cost`,
-// `transitions`, `created_at`, ...) intentionally do NOT appear here
-// and remain accessible via direct field access on `JobContext`.
+// `transitions`, ...) intentionally do NOT appear here and remain
+// accessible via direct field access on `JobContext`. `created_at`
+// is exposed because `job.rs` emits it when listing jobs across users.
 impl dasclaw_runtime::JobContextCore for JobContext {
     fn job_id(&self) -> Uuid {
         self.job_id
@@ -311,6 +312,12 @@ impl dasclaw_runtime::JobContextCore for JobContext {
     fn state(&self) -> JobState {
         self.state
     }
+    fn created_at(&self) -> chrono::DateTime<chrono::Utc> {
+        self.created_at
+    }
+    fn transition_to(&mut self, new_state: JobState, reason: Option<String>) -> Result<(), String> {
+        JobContext::transition_to(self, new_state, reason)
+    }
 
     fn metadata(&self) -> &serde_json::Value {
         &self.metadata
@@ -327,6 +334,9 @@ impl dasclaw_runtime::JobContextCore for JobContext {
 
     fn user_timezone(&self) -> &str {
         &self.user_timezone
+    }
+    fn set_user_timezone(&mut self, timezone: String) {
+        self.user_timezone = timezone;
     }
     fn http_interceptor(&self) -> Option<Arc<dyn dasclaw_runtime::HttpInterceptor>> {
         self.http_interceptor.clone()
