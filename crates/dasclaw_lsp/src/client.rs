@@ -16,7 +16,7 @@ use tokio::sync::{Mutex, oneshot};
 use tokio::task::JoinHandle;
 
 use super::protocol::{LspNotification, LspRequest, LspResponse};
-use crate::tools::tool::ToolError;
+use dasclaw_tool::ToolError;
 
 /// Default timeout for individual LSP requests.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);

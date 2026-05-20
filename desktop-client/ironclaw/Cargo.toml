@@ -190,6 +190,9 @@ dasclaw_llm_provider = { path = "../../crates/dasclaw_llm_provider" }
 # MCP wire types + typed server-name allowlist (F3.2 phase 1; ADR-152 §3).
 dasclaw_mcp = { path = "../../crates/dasclaw_mcp" }
 
+# LSP client / registry / protocol / server-config core (F3.3; ADR-152 §3, #629).
+dasclaw_lsp = { path = "../../crates/dasclaw_lsp" }
+
 # Tool implementation-layer error type (F3.2 phase 2 PR 1; ADR-152 §3, #641).
 dasclaw_tool = { path = "../../crates/dasclaw_tool" }
 

@@ -9,9 +9,8 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 
-use super::LspRegistry;
-use super::client::{self, LspClient};
-use super::protocol::LspAction;
+use dasclaw_lsp::{LspAction, LspClient, LspRegistry, path_to_uri};
+
 use crate::context::JobContext;
 use crate::tools::tool::{ApprovalRequirement, RiskLevel, Tool, ToolDomain, ToolError, ToolOutput};
 
@@ -143,7 +142,7 @@ impl Tool for LspQueryTool {
             .await?;
 
         // Read and open the file in the server.
-        let file_uri = client::path_to_uri(&abs_path);
+        let file_uri = path_to_uri(&abs_path);
         let language_id = self
             .registry
             .language_id_for(&abs_path)

@@ -1,24 +1,25 @@
-//! LSP client wrapper (textDocument/* tools, fork private cargo, ~1,694 LOC).
+//! LSP integration: registry, JSON-RPC client, protocol & server mapping.
 //!
-//! W1 skeleton — trait surface only, no impl.
-//! See `docs/plans/architecture-refactor/31-target-architecture.md` §4 for design.
+//! Verbatim port from `desktop-client/ironclaw/src/tools/builtin/lsp/` per
+//! F3.3 (#629). The host-side `LspQueryTool` (the [`Tool`]-trait wiring)
+//! remains in `ironclaw::tools::builtin::lsp` until the [`Tool`] trait moves
+//! into `dasclaw_tool` in a follow-up issue.
+//!
+//! ```text
+//! LspRegistry (host-owned)
+//!     ├─ language → LspClient (lazy start)
+//!     ├─ idle timeout → auto shutdown
+//!     └─ Admin whitelist filtering
+//! ```
+//!
+//! [`Tool`]: https://github.com/Linnanli/x-claw — see `crate::tools::tool::Tool` in the ironclaw crate
 
-#![allow(dead_code)]
+mod client;
+pub(crate) mod protocol;
+mod registry;
+mod server_config;
 
-/// Placeholder error type. Replaced with module-specific errors in W2+.
-#[derive(Debug, thiserror::Error)]
-#[error("dasclaw_lsp skeleton error: {0}")]
-pub struct SkeletonError(pub String);
-
-/// Primary entry trait (placeholder). Replaced with full surface in W2+.
-pub trait LspClient {
-    /// LSP client wrapper (textDocument/* tools, fork private cargo, ~1,694 LOC).
-    fn request(&self, method: &str, params_json: &str) -> Result<String, SkeletonError>;
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn skeleton_compiles() { /* W1 placeholder */
-    }
-}
+pub use client::{LspClient, path_to_uri};
+pub use protocol::LspAction;
+pub use registry::LspRegistry;
+pub use server_config::{LspServerConfig, LspServerMapping};

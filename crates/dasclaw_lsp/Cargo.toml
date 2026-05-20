@@ -1,8 +1,8 @@
 [package]
 name = "dasclaw_lsp"
 version = "0.0.0-w1"
-edition = "2021"
-description = "LSP client wrapper (textDocument/* tools, fork private cargo, ~1,694 LOC)."
+edition = "2024"
+description = "LSP client wrapper (textDocument/* core types, fork private cargo, ~960 LOC verbatim)."
 license = "Apache-2.0 OR MIT"
 publish = false
 
@@ -10,4 +10,8 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
-thiserror = "1"
+dasclaw_tool = { path = "../dasclaw_tool" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
