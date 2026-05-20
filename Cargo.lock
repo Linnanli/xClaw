@@ -2978,14 +2978,23 @@ dependencies = [
 name = "dasclaw_mcp"
 version = "0.0.0-w6"
 dependencies = [
+ "axum 0.8.8",
+ "base64 0.22.1",
+ "chrono",
+ "dasclaw_runtime",
  "dasclaw_tool",
+ "rand 0.8.5",
  "reqwest 0.12.28",
+ "secrecy",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
  "url",
+ "urlencoding",
 ]
 
 [[package]]
