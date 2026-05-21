@@ -1056,7 +1056,7 @@ impl Workspace {
         entry: &str,
         tz: chrono_tz::Tz,
     ) -> Result<String, WorkspaceError> {
-        let now = crate::timezone::now_in_tz(tz);
+        let now = dasclaw_workspace_cap::timezone::now_in_tz(tz);
         let today = now.date_naive();
         let path = format!("daily/{}.md", today.format("%Y-%m-%d"));
         let timestamp = now.format("%H:%M:%S");
@@ -1184,7 +1184,7 @@ impl Workspace {
 
         // Add today's memory context (last 2 days of daily logs)
         let today = match tz {
-            Some(t) => crate::timezone::today_in_tz(t),
+            Some(t) => dasclaw_workspace_cap::timezone::today_in_tz(t),
             None => Utc::now().date_naive(),
         };
         let yesterday = today.pred_opt().unwrap_or(today);
