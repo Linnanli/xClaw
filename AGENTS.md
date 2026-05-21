@@ -125,7 +125,7 @@
     - base 分支不是 `xClaw` 而是上一个 feature branch
     - merge 顺序
     - “请先 merge #X，再看本 PR”
-8. 开完 PR 后，用 `gh pr checks` 或等价方式至少看一轮状态，并把结果同步给用户
+8. 开完 PR 后，**必须用 `gh pr checks <PR#> --watch --fail-fast` 等 CI**（事件驱动，CI 一结束就返回）。**禁止用 `sleep N && gh pr checks` 轮询**——`sleep` 既浪费时间又拿不到精确完成点，违反本规约。把 watch 输出的结果同步给用户。
 9. 若当前闭环 milestone 已完成，按“会话轮换原则”判断是否该建议新会话
 
 #### PR 描述最低要求
@@ -387,7 +387,7 @@ cargo nextest run -p <touched-crate>
 cargo fmt --all
 python3.12 scripts/check_no_panics.py --base origin/<base-branch>
 
-# 4. crate 级 clippy（不跑 workspace clippy，CI 兜底）
+# 4. crate 级 clippy（**只跑直接被改的 crate**，不跑 workspace、也不跑下游大 crate 如 `dasclaw` / `ironclaw`，CI 兜底）
 cargo clippy --no-deps -p <touched-crate> --all-targets -- -D warnings
 ```
 
@@ -395,6 +395,7 @@ cargo clippy --no-deps -p <touched-crate> --all-targets -- -D warnings
 
 - `cargo build` / `cargo check --workspace --all-targets`（超过 10 分钟，CI 会跑）
 - `cargo clippy --workspace`（依赖 ironclaw 等大 crate 的预存 lint，本地跑也是为别人跑）
+- `cargo clippy -p dasclaw` / `cargo clippy -p ironclaw`（下游大 crate，单跑就 5–7 分钟，CI 会跑；只在直接改了它们的 src 时才本地跑）
 - `cargo nextest run --workspace`（包含 heavy integration，CI 事后补跑）
 
 **冒烟 build（可选）**：开发者可随时在本地手动跑 `cargo build -p ironclaw --tests`，但不作为 PR 提交门。
