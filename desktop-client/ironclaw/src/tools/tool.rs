@@ -2,16 +2,15 @@
 //!
 //! Pure-data primitives (`ApprovalRequirement`, `ApprovalContext`,
 //! `RiskLevel`, `ToolDomain`, `ToolOutput`, `ToolSchema`,
-//! `ToolDiscoverySummary`, `ToolRateLimitConfig`) and parameter helpers
-//! (`require_str`, `require_param`, `redact_params`, `validate_tool_schema`)
-//! moved to the shared [`dasclaw_tool`] crate so any dasclaw host
-//! (desktop, CLI, headless, admin backend) can describe and dispatch
-//! tools without depending on this ironclaw crate.
+//! `ToolDiscoverySummary`, `ToolRateLimitConfig`, `WebhookCapability`) and
+//! parameter helpers (`require_str`, `require_param`, `redact_params`,
+//! `validate_tool_schema`) moved to the shared [`dasclaw_tool`] crate so any
+//! dasclaw host (desktop, CLI, headless, admin backend) can describe and
+//! dispatch tools without depending on this ironclaw crate.
 //!
-//! The [`Tool`] trait itself still lives here because it depends on
-//! [`crate::context::JobContext`] and
-//! [`crate::tools::wasm::WebhookCapability`]; decoupling those is
-//! tracked as a follow-up issue.
+//! The [`Tool`] trait itself still lives here because the trait is exercised
+//! by ironclaw-specific tests; the remaining work to physically move it to
+//! `dasclaw_tool` (and the `LspQueryTool` follow-up) is tracked in #672.
 
 use std::time::Duration;
 
@@ -137,7 +136,7 @@ pub trait Tool: Send + Sync {
     ///
     /// When present, `/webhook/tools/{tool}` validates shared secret/signatures
     /// before invoking the tool. Tools should then only handle payload normalization.
-    fn webhook_capability(&self) -> Option<crate::tools::wasm::WebhookCapability> {
+    fn webhook_capability(&self) -> Option<dasclaw_tool::WebhookCapability> {
         None
     }
 

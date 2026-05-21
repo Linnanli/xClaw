@@ -22,6 +22,7 @@
 pub mod error;
 pub mod params;
 pub mod types;
+pub mod webhook_capability;
 
 pub use error::ToolError;
 pub use params::{redact_params, require_param, require_str, validate_tool_schema};
@@ -29,3 +30,4 @@ pub use types::{
     ApprovalContext, ApprovalRequirement, RiskLevel, ToolDiscoverySummary, ToolDomain, ToolOutput,
     ToolRateLimitConfig, ToolSchema,
 };
+pub use webhook_capability::WebhookCapability;

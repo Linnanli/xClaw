@@ -1218,7 +1218,7 @@ impl Tool for WasmToolWrapper {
         Some(self.prepared.limits.timeout)
     }
 
-    fn webhook_capability(&self) -> Option<crate::tools::wasm::WebhookCapability> {
+    fn webhook_capability(&self) -> Option<dasclaw_tool::WebhookCapability> {
         self.capabilities.webhook.clone()
     }
 }
