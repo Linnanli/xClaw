@@ -46,6 +46,7 @@
 //! ```
 
 pub mod chunker;
+pub mod config;
 pub mod document;
 pub mod embedding_cache;
 pub mod embeddings;

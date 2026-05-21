@@ -461,7 +461,10 @@ impl Workspace {
     }
 
     /// Set the default search configuration from workspace search config.
-    pub fn with_search_config(mut self, config: &crate::config::WorkspaceSearchConfig) -> Self {
+    pub fn with_search_config(
+        mut self,
+        config: &dasclaw_workspace_cap::config::WorkspaceSearchConfig,
+    ) -> Self {
         self.search_defaults = SearchConfig::default()
             .with_fusion_strategy(config.fusion_strategy)
             .with_rrf_k(config.rrf_k)
