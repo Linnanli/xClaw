@@ -29,5 +29,24 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 serde_json = "1"
 
+# PostgreSQL persistence (slice 5/N: repository). Optional, gated by `postgres`
+# feature so default builds stay dependency-light. Mirrors ironclaw's existing
+# `postgres` feature set (see desktop-client/ironclaw/Cargo.toml).
+deadpool-postgres = { version = "0.14", optional = true }
+tokio-postgres = { version = "0.7", features = ["with-uuid-1", "with-chrono-0_4", "with-serde_json-1"], optional = true }
+postgres-types = { version = "0.2", features = ["with-serde_json-1"], optional = true }
+pgvector = { version = "0.4", features = ["postgres"], optional = true }
+
+[features]
+default = []
+# Enables `repository` module + PostgreSQL persistence (mirrors ironclaw's
+# `postgres` feature; ADR-152 §3 F3.4 slice 5).
+postgres = [
+    "dep:deadpool-postgres",
+    "dep:tokio-postgres",
+    "dep:postgres-types",
+    "dep:pgvector",
+]
+
 [dev-dependencies]
 tempfile = "3"

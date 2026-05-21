@@ -307,6 +307,10 @@ postgres = [
     # dasclaw_runtime. Forward our feature flag so its optional deps and
     # the `PostgresSecretsStore` re-export are pulled in alongside ours.
     "dasclaw_runtime/postgres",
+    # ADR-152 §3 F3.4 slice 5 (#674): repository moved to dasclaw_workspace_cap.
+    # Forward our feature flag so the optional postgres deps are pulled in
+    # and the `repository` module + `Repository` re-export become available.
+    "dasclaw_workspace_cap/postgres",
 ]
 libsql = ["dep:libsql", "dasclaw_runtime/libsql"]
 # Opt-in feature for especially heavy integration-test targets that run in a
