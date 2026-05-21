@@ -2658,6 +2658,7 @@ dependencies = [
  "dasclaw_lsp",
  "dasclaw_mcp",
  "dasclaw_net_proxy",
+ "dasclaw_observability",
  "dasclaw_process_hardening",
  "dasclaw_runtime",
  "dasclaw_sandbox",
@@ -3042,7 +3043,7 @@ dependencies = [
 name = "dasclaw_observability"
 version = "0.0.0-w1"
 dependencies = [
- "thiserror 1.0.69",
+ "tracing",
 ]
 
 [[package]]

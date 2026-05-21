@@ -193,6 +193,9 @@ dasclaw_mcp = { path = "../../crates/dasclaw_mcp" }
 # LSP client / registry / protocol / server-config core (F3.3; ADR-152 §3, #629).
 dasclaw_lsp = { path = "../../crates/dasclaw_lsp" }
 
+# Observability traits + Noop/Log/Multi observers + PromptCacheMonitor (F3.5; ADR-152 §3, #631).
+dasclaw_observability = { path = "../../crates/dasclaw_observability" }
+
 # Tool implementation-layer error type (F3.2 phase 2 PR 1; ADR-152 §3, #641).
 dasclaw_tool = { path = "../../crates/dasclaw_tool" }
 

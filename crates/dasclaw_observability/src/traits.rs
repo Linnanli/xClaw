@@ -99,7 +99,7 @@ pub enum ObserverMetric {
 
 #[cfg(test)]
 mod tests {
-    use crate::observability::traits::*;
+    use crate::traits::*;
 
     #[test]
     fn event_variants_are_constructible() {
