@@ -1211,8 +1211,9 @@ impl Workspace {
             let mut has_profile_doc = false;
             if let Ok(doc) = self.read(paths::PROFILE).await
                 && !doc.content.is_empty()
-                && let Ok(profile) =
-                    serde_json::from_str::<crate::profile::PsychographicProfile>(&doc.content)
+                && let Ok(profile) = serde_json::from_str::<
+                    dasclaw_workspace_cap::profile::PsychographicProfile,
+                >(&doc.content)
             {
                 has_profile_doc = true;
                 let has_rich_profile = profile.is_populated();
@@ -1308,8 +1309,8 @@ impl Workspace {
                      If the conversation doesn't reveal enough about a dimension, use defaults/unknown.\n\
                      For personality trait scores: 40-60 is average range. Default to 50 if unclear.\n\
                      Only score above 70 or below 30 with strong evidence.",
-                    crate::profile::ANALYSIS_FRAMEWORK,
-                    crate::profile::PROFILE_JSON_SCHEMA,
+                    dasclaw_workspace_cap::profile::ANALYSIS_FRAMEWORK,
+                    dasclaw_workspace_cap::profile::PROFILE_JSON_SCHEMA,
                 ));
             }
 
@@ -1339,11 +1340,11 @@ impl Workspace {
             _ => return Ok(false),
         };
 
-        let profile: crate::profile::PsychographicProfile = match serde_json::from_str(&doc.content)
-        {
-            Ok(p) => p,
-            Err(_) => return Ok(false),
-        };
+        let profile: dasclaw_workspace_cap::profile::PsychographicProfile =
+            match serde_json::from_str(&doc.content) {
+                Ok(p) => p,
+                Err(_) => return Ok(false),
+            };
 
         if !profile.is_populated() {
             return Ok(false);
@@ -1622,7 +1623,10 @@ impl Workspace {
         // Uses read_primary() to avoid false positives from secondary scopes.
         let has_profile = self.read_primary(paths::PROFILE).await.is_ok_and(|d| {
             !d.content.trim().is_empty()
-                && serde_json::from_str::<crate::profile::PsychographicProfile>(&d.content).is_ok()
+                && serde_json::from_str::<dasclaw_workspace_cap::profile::PsychographicProfile>(
+                    &d.content,
+                )
+                .is_ok()
         });
         if is_fresh_workspace && !has_profile {
             if let Err(e) = self.write(paths::BOOTSTRAP, BOOTSTRAP_SEED).await {
@@ -2031,7 +2035,7 @@ mod seed_tests {
         let (ws, _dir) = create_test_workspace().await;
 
         // Pre-create a valid profile.json (existing user upgrading).
-        let profile = crate::profile::PsychographicProfile::default();
+        let profile = dasclaw_workspace_cap::profile::PsychographicProfile::default();
         let profile_json = serde_json::to_string(&profile).expect("serialize profile");
         ws.write(paths::PROFILE, &profile_json)
             .await
