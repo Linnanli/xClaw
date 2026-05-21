@@ -3324,6 +3324,7 @@ dependencies = [
  "chrono",
  "dasclaw_llm_provider",
  "deadpool-postgres",
+ "ironclaw_safety",
  "lru",
  "pgvector",
  "postgres-types",
