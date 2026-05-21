@@ -316,8 +316,7 @@ impl Tool for MemoryWriteTool {
             .unwrap_or(false);
 
         // Parse timezone once for targets that need it (daily_log).
-        let tz =
-            crate::timezone::parse_timezone(ctx.user_timezone()).unwrap_or(chrono_tz::Tz::UTC);
+        let tz = crate::timezone::parse_timezone(ctx.user_timezone()).unwrap_or(chrono_tz::Tz::UTC);
 
         // Resolve the target to a workspace path
         let resolved_path = match target {

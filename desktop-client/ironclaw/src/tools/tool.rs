@@ -18,7 +18,6 @@ use std::time::Duration;
 use async_trait::async_trait;
 use rust_decimal::Decimal;
 
-
 pub use dasclaw_tool::{
     ApprovalContext, ApprovalRequirement, RiskLevel, ToolDiscoverySummary, ToolDomain, ToolError,
     ToolOutput, ToolRateLimitConfig, ToolSchema, redact_params, require_param, require_str,

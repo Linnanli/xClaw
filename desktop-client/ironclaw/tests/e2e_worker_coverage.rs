@@ -14,7 +14,6 @@ mod tests {
     use async_trait::async_trait;
     use serde_json::json;
 
-    
     use ironclaw::tools::{Tool, ToolError, ToolOutput};
 
     use crate::support::test_rig::TestRigBuilder;
