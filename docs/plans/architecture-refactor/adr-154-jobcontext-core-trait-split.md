@@ -218,3 +218,23 @@ let agent = Agent::builder()
 - PR #671（#670 切片 1/2：tool 辅助类型与 helper 已搬走）
 - issue #672（本 ADR 要解锁的工作）
 - `desktop-client/ironclaw/src/context/state.rs` 第 6–9 行（god-struct 拆分预告）
+
+---
+
+## 10. Amendment（2026-05-21，#672 step 3 实施时发现）
+
+§3.1 原文写：
+> 落点选 `dasclaw_runtime` 而非 `dasclaw_tool`：trait 里包含 `JobState`、`Uuid`、`HttpInterceptor` 等运行时类型，`dasclaw_tool` 应保持依赖轻。**`dasclaw_tool` 已经依赖 `dasclaw_runtime`（见 PR #641 把 `JobState` 搬过去那一步）**，所以 `Tool::execute(ctx: &dyn JobContextCore)` 在 `dasclaw_tool` 里能直接引用。
+
+实际依赖方向**反过来**：`dasclaw_runtime` 依赖 `dasclaw_tool`（runtime 的 `error::ToolError::from_tool_impl(&str, dasclaw_tool::ToolError)` 适配器需要 `dasclaw_tool::ToolError`），而 `dasclaw_tool` **没有**依赖 `dasclaw_runtime`。这是 ADR 写作时对依赖图的事实判断失误。
+
+§8 第 4 步原计划"搬 `Tool` trait 到 `dasclaw_tool`"会立刻造成循环依赖，无法执行。
+
+**修正决定**：`Tool` trait 物理落点改为 `crates/dasclaw_runtime/src/tool.rs`（与 `JobContextCore`、`ToolFeatureFlags`、`HttpInterceptor` 等运行时 trait 同居）。理由：
+
+1. trait 的 `execute(ctx: &mut dyn JobContextCore)` 直接引用同 crate 的 `JobContextCore`，零跨 crate 跳跃。
+2. `dasclaw_tool` 维持"实现层纯数据 + 错误"的定位，依赖图保持单向 `runtime → tool`。
+3. 所有真实工具实现（`WasmToolWrapper`、内置工具）已经 transitively 依赖 `dasclaw_runtime`（通过 `JobContextCore`），落点变更对 host 端注册逻辑零成本。
+4. ironclaw 侧 `desktop-client/ironclaw/src/tools/tool.rs` 改为 `pub use dasclaw_runtime::Tool;` 薄壳，所有 `crate::tools::tool::Tool` 旧路径零修改继续编译。
+
+ADR-152 §3 F3.3 字面写"把 `Tool` trait 与所有内置工具搬到 `dasclaw_tool`"，本 amendment 将其细化为：trait 落 `dasclaw_runtime`、内置工具实现仍按原计划随领域拆到对应 crate（如 `dasclaw_lsp::LspQueryTool` 等）。`dasclaw_tool` 继续承担 trait 的入参/出参/错误/能力描述类型。

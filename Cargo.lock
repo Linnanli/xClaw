@@ -3125,6 +3125,7 @@ dependencies = [
  "hkdf",
  "libsql",
  "rand 0.8.5",
+ "rust_decimal",
  "secrecy",
  "secret-service",
  "security-framework 3.7.0",
