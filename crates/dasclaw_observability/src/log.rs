@@ -4,7 +4,7 @@
 //! normal application logs, with no extra dependencies. Good for local
 //! development and debugging.
 
-use crate::observability::traits::{Observer, ObserverEvent, ObserverMetric};
+use crate::traits::{Observer, ObserverEvent, ObserverMetric};
 
 /// Observer that logs events and metrics via `tracing`.
 pub struct LogObserver;
@@ -127,8 +127,8 @@ impl Observer for LogObserver {
 mod tests {
     use std::time::Duration;
 
-    use crate::observability::log::LogObserver;
-    use crate::observability::traits::*;
+    use crate::log::LogObserver;
+    use crate::traits::*;
 
     #[test]
     fn name_is_log() {

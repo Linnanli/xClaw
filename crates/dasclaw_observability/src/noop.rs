@@ -3,7 +3,7 @@
 //! Default backend when observability is disabled. All methods compile to
 //! nothing, so there is zero runtime cost.
 
-use crate::observability::traits::{Observer, ObserverEvent, ObserverMetric};
+use crate::traits::{Observer, ObserverEvent, ObserverMetric};
 
 /// Observer that discards all events and metrics.
 pub struct NoopObserver;
@@ -24,9 +24,9 @@ impl Observer for NoopObserver {
 mod tests {
     use std::time::Duration;
 
-    use crate::observability::traits::*;
+    use crate::traits::*;
 
-    use crate::observability::noop::NoopObserver;
+    use crate::noop::NoopObserver;
 
     #[test]
     fn name_is_noop() {

@@ -2,7 +2,7 @@
 //!
 //! Useful for combining backends, e.g. log + OpenTelemetry simultaneously.
 
-use crate::observability::traits::{Observer, ObserverEvent, ObserverMetric};
+use crate::traits::{Observer, ObserverEvent, ObserverMetric};
 
 /// Dispatches events and metrics to all inner observers.
 pub struct MultiObserver {
@@ -43,12 +43,12 @@ impl Observer for MultiObserver {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
 
-    use crate::observability::multi::MultiObserver;
-    use crate::observability::traits::*;
+    use crate::multi::MultiObserver;
+    use crate::traits::*;
 
     /// Test observer that counts calls via shared atomic counters.
     struct CountingObserver {

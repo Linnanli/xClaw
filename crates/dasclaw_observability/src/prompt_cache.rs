@@ -3,8 +3,8 @@
 //! Tracks cache_read_tokens vs total_input_tokens across LLM requests,
 //! emitting `PromptCache` events and periodic `PromptCacheHitRate` metrics.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use tracing::{info, warn};
 
@@ -118,7 +118,7 @@ pub struct PromptCacheSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::observability::NoopObserver;
+    use crate::NoopObserver;
 
     fn make_monitor() -> PromptCacheMonitor {
         PromptCacheMonitor::new(Arc::new(NoopObserver))
@@ -143,7 +143,7 @@ mod tests {
         let m = make_monitor();
         m.record(1000, 900, 100, false); // 90%
         m.record(1000, 700, 100, false); // 70%
-        // cumulative: 1600 read / 2000 total = 80%
+                                         // cumulative: 1600 read / 2000 total = 80%
         let rate = m.hit_rate();
         assert!((rate - 0.8).abs() < 0.001);
     }

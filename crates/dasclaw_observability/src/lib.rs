@@ -1,26 +1,111 @@
-//! Unified observability + rollout-trace 4 sub-tables (codex + ironclaw).
+//! Observability subsystem: trait-based event and metric recording.
 //!
-//! W1 skeleton — trait surface only, no impl.
-//! See `docs/plans/architecture-refactor/31-target-architecture.md` §4 for design.
+//! Provides a pluggable [`Observer`] trait with multiple backends:
+//!
+//! | Backend | Description |
+//! |---------|-------------|
+//! | `noop`  | Zero overhead, discards everything (default) |
+//! | `log`   | Emits structured events via `tracing` |
+//! | `multi` | Fan-out to multiple backends simultaneously |
+//!
+//! The [`create_observer`] factory builds the right backend from
+//! [`ObservabilityConfig`]. Future backends (OpenTelemetry, Prometheus)
+//! can be added by implementing [`Observer`].
+//!
+//! Verbatim port from `desktop-client/ironclaw/src/observability/` per
+//! ADR-152 §3 F3.5 (issue #631). The ironclaw module is now a thin
+//! `pub use dasclaw_observability::*;` shim.
 
-#![allow(dead_code)]
+mod log;
+mod multi;
+mod noop;
+pub mod prompt_cache;
+pub mod traits;
 
-/// Placeholder error type. Replaced with module-specific errors in W2+.
-#[derive(Debug, thiserror::Error)]
-#[error("dasclaw_observability skeleton error: {0}")]
-pub struct SkeletonError(pub String);
+pub use self::log::LogObserver;
+pub use self::multi::MultiObserver;
+pub use self::noop::NoopObserver;
+pub use self::prompt_cache::{PromptCacheMonitor, PromptCacheSnapshot};
+pub use self::traits::{Observer, ObserverEvent, ObserverMetric};
 
-pub struct ObservabilityEvent;
+/// Configuration for the observability backend.
+#[derive(Debug, Clone)]
+pub struct ObservabilityConfig {
+    /// Backend name: "none", "noop", "log".
+    pub backend: String,
+}
 
-/// Primary entry trait (placeholder). Replaced with full surface in W2+.
-pub trait Observer {
-    /// Unified observability + rollout-trace 4 sub-tables (codex + ironclaw).
-    fn record(&self, event: ObservabilityEvent);
+impl Default for ObservabilityConfig {
+    fn default() -> Self {
+        Self {
+            backend: "none".into(),
+        }
+    }
+}
+
+/// Create an observer from configuration.
+///
+/// Returns a [`NoopObserver`] for "none"/"noop" (or unknown values),
+/// and a [`LogObserver`] for "log".
+pub fn create_observer(config: &ObservabilityConfig) -> Box<dyn Observer> {
+    match config.backend.as_str() {
+        "log" => Box::new(LogObserver),
+        _ => Box::new(NoopObserver),
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn skeleton_compiles() { /* W1 placeholder */
+    fn default_config_is_none() {
+        let cfg = ObservabilityConfig::default();
+        assert_eq!(cfg.backend, "none");
+    }
+
+    #[test]
+    fn factory_returns_noop_for_none() {
+        let cfg = ObservabilityConfig {
+            backend: "none".into(),
+        };
+        let obs = create_observer(&cfg);
+        assert_eq!(obs.name(), "noop");
+    }
+
+    #[test]
+    fn factory_returns_noop_for_empty() {
+        let cfg = ObservabilityConfig {
+            backend: String::new(),
+        };
+        let obs = create_observer(&cfg);
+        assert_eq!(obs.name(), "noop");
+    }
+
+    #[test]
+    fn factory_returns_noop_for_unknown() {
+        let cfg = ObservabilityConfig {
+            backend: "prometheus".into(),
+        };
+        let obs = create_observer(&cfg);
+        assert_eq!(obs.name(), "noop");
+    }
+
+    #[test]
+    fn factory_returns_log_for_log() {
+        let cfg = ObservabilityConfig {
+            backend: "log".into(),
+        };
+        let obs = create_observer(&cfg);
+        assert_eq!(obs.name(), "log");
+    }
+
+    #[test]
+    fn factory_returns_noop_for_noop() {
+        let cfg = ObservabilityConfig {
+            backend: "noop".into(),
+        };
+        let obs = create_observer(&cfg);
+        assert_eq!(obs.name(), "noop");
     }
 }
