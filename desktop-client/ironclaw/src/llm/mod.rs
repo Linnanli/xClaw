@@ -18,9 +18,12 @@
 pub use dasclaw_llm_provider::provider::*;
 
 pub mod nearai_chat;
+pub mod nearai_embeddings;
 pub mod recording;
 pub mod session;
 pub mod transcription;
+
+pub use nearai_embeddings::NearAiEmbeddings;
 
 pub use nearai_chat::{DEFAULT_MODEL, ModelInfo, NearAiChatProvider, default_models};
 pub use recording::{

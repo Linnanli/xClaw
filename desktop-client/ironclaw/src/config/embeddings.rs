@@ -9,7 +9,10 @@ use crate::settings::Settings;
 use crate::workspace::EmbeddingProvider;
 
 /// Default maximum number of cached embeddings.
-pub const DEFAULT_EMBEDDING_CACHE_SIZE: usize = 10_000;
+///
+/// Re-exported from [`dasclaw_workspace_cap::embedding_cache`] to keep the
+/// constant a single source of truth.
+pub use dasclaw_workspace_cap::embedding_cache::DEFAULT_EMBEDDING_CACHE_SIZE;
 
 /// Embeddings provider configuration.
 #[derive(Debug, Clone)]

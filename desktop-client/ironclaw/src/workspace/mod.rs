@@ -42,8 +42,6 @@
 
 mod chunker;
 mod document;
-mod embedding_cache;
-mod embeddings;
 pub mod hygiene;
 pub mod layer;
 pub mod privacy;
@@ -51,14 +49,15 @@ pub mod privacy;
 mod repository;
 mod search;
 
+pub use crate::llm::NearAiEmbeddings;
 pub use chunker::{ChunkConfig, chunk_document};
+pub use dasclaw_workspace_cap::embedding_cache::{CachedEmbeddingProvider, EmbeddingCacheConfig};
+pub use dasclaw_workspace_cap::embeddings::{
+    self, EmbeddingError, EmbeddingProvider, MockEmbeddings, OllamaEmbeddings, OpenAiEmbeddings,
+};
 pub use document::{
     IDENTITY_PATHS, MemoryChunk, MemoryDocument, WorkspaceEntry, is_identity_path,
     merge_workspace_entries, paths,
-};
-pub use embedding_cache::{CachedEmbeddingProvider, EmbeddingCacheConfig};
-pub use embeddings::{
-    EmbeddingProvider, MockEmbeddings, NearAiEmbeddings, OllamaEmbeddings, OpenAiEmbeddings,
 };
 #[cfg(feature = "postgres")]
 pub use repository::Repository;

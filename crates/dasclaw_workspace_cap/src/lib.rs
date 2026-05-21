@@ -47,6 +47,8 @@
 
 pub mod chunker;
 pub mod document;
+pub mod embedding_cache;
+pub mod embeddings;
 pub mod layer;
 pub mod policy;
 pub mod privacy;
