@@ -40,9 +40,11 @@ pub mod job;
 pub mod job_context;
 pub mod recording;
 pub mod secrets;
+pub mod tool;
 
 pub use error::ToolError;
 pub use feature_flags::{SharedFeatureFlags, ToolFeatureFlags};
 pub use job::{JobState, StateTransition, TokenBudgetExceeded};
 pub use job_context::JobContextCore;
 pub use recording::{HttpExchange, HttpExchangeRequest, HttpExchangeResponse, HttpInterceptor};
+pub use tool::Tool;
