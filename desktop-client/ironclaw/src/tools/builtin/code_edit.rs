@@ -14,7 +14,6 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use tokio::fs;
 
-use crate::context::JobContext;
 use crate::tools::builtin::path_utils::{AccessMode, PathPolicy, validate_path_with_policy};
 use crate::tools::tool::{
     ApprovalRequirement, Tool, ToolDomain, ToolError, ToolOutput, require_str,
@@ -92,7 +91,7 @@ impl Tool for CodeEditTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let path_str = require_str(&params, "file_path")?;
         let old_string = require_str(&params, "old_string")?;
@@ -277,6 +276,7 @@ fn find_last_diff_from_end(primary: &[&str], other: &[&str]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::JobContext;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -295,7 +295,7 @@ mod tests {
                     "old_string": "fn foo() {}",
                     "new_string": "fn baz() {}"
                 }),
-                &JobContext::default(),
+                &mut JobContext::default(),
             )
             .await
             .expect("execute");
@@ -324,7 +324,7 @@ mod tests {
                     "new_string": "fn baz() {}",
                     "expected_count": 1
                 }),
-                &JobContext::default(),
+                &mut JobContext::default(),
             )
             .await;
 
@@ -350,7 +350,7 @@ mod tests {
                     "new_string": "fn baz() {}",
                     "expected_count": 2
                 }),
-                &JobContext::default(),
+                &mut JobContext::default(),
             )
             .await
             .expect("execute");
@@ -374,7 +374,7 @@ mod tests {
                     "old_string": "fn foo() {}",
                     "new_string": "fn baz() {}"
                 }),
-                &JobContext::default(),
+                &mut JobContext::default(),
             )
             .await;
 
@@ -397,7 +397,7 @@ mod tests {
                     "old_string": "line3",
                     "new_string": "LINE_THREE"
                 }),
-                &JobContext::default(),
+                &mut JobContext::default(),
             )
             .await
             .expect("execute");
@@ -421,7 +421,7 @@ mod tests {
                     "old_string": "hello",
                     "new_string": "goodbye"
                 }),
-                &JobContext::default(),
+                &mut JobContext::default(),
             )
             .await;
 

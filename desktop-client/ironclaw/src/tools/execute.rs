@@ -6,7 +6,6 @@
 
 use std::borrow::Cow;
 
-use crate::context::JobContext;
 use crate::error::Error;
 use crate::llm::ChatMessage;
 use crate::safety::SafetyLayer;
@@ -22,7 +21,7 @@ pub async fn execute_tool_with_safety(
     safety: &SafetyLayer,
     tool_name: &str,
     params: serde_json::Value,
-    job_ctx: &JobContext,
+    job_ctx: &mut dyn dasclaw_runtime::JobContextCore,
 ) -> Result<String, Error> {
     if tool_name.is_empty() {
         return Err(crate::error::ToolError::NotFound {
@@ -233,7 +232,7 @@ pub async fn execute_tool_simple(
     safety: &SafetyLayer,
     tool_name: &str,
     params: serde_json::Value,
-    job_ctx: &JobContext,
+    job_ctx: &mut dyn dasclaw_runtime::JobContextCore,
 ) -> Result<String, String> {
     execute_tool_with_safety(tools, safety, tool_name, params, job_ctx)
         .await
@@ -243,6 +242,7 @@ pub async fn execute_tool_simple(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::JobContext;
     use crate::tools::tool::{Tool, ToolError, ToolOutput};
     use std::sync::Arc;
     use std::time::Duration;
@@ -263,7 +263,7 @@ mod tests {
         async fn execute(
             &self,
             params: serde_json::Value,
-            _ctx: &JobContext,
+            _ctx: &mut dyn dasclaw_runtime::JobContextCore,
         ) -> Result<ToolOutput, ToolError> {
             Ok(ToolOutput::success(params, Duration::default()))
         }
@@ -288,7 +288,7 @@ mod tests {
         async fn execute(
             &self,
             _: serde_json::Value,
-            _: &JobContext,
+            _: &mut dyn dasclaw_runtime::JobContextCore,
         ) -> Result<ToolOutput, ToolError> {
             Err(ToolError::ExecutionFailed(
                 "intentional failure".to_string(),
@@ -315,7 +315,7 @@ mod tests {
         async fn execute(
             &self,
             _: serde_json::Value,
-            _: &JobContext,
+            _: &mut dyn dasclaw_runtime::JobContextCore,
         ) -> Result<ToolOutput, ToolError> {
             tokio::time::sleep(Duration::from_secs(60)).await;
             unreachable!()
@@ -352,7 +352,7 @@ mod tests {
         async fn execute(
             &self,
             params: serde_json::Value,
-            _ctx: &JobContext,
+            _ctx: &mut dyn dasclaw_runtime::JobContextCore,
         ) -> Result<ToolOutput, ToolError> {
             Ok(ToolOutput::success(params, Duration::default()))
         }
@@ -392,7 +392,7 @@ mod tests {
             &safety,
             "",
             serde_json::json!({}),
-            &test_job_ctx(),
+            &mut test_job_ctx(),
         )
         .await;
 
@@ -414,7 +414,7 @@ mod tests {
         let params = serde_json::json!({"message": "hello"});
 
         let result =
-            execute_tool_with_safety(&registry, &safety, "echo", params, &test_job_ctx()).await;
+            execute_tool_with_safety(&registry, &safety, "echo", params, &mut test_job_ctx()).await;
 
         assert!(result.is_ok(), "Echo tool should succeed");
         let output = result.unwrap();
@@ -434,7 +434,7 @@ mod tests {
             &safety,
             "nonexistent",
             serde_json::json!({}),
-            &test_job_ctx(),
+            &mut test_job_ctx(),
         )
         .await;
 
@@ -457,7 +457,7 @@ mod tests {
             &safety,
             "fail_tool",
             serde_json::json!({}),
-            &test_job_ctx(),
+            &mut test_job_ctx(),
         )
         .await;
 
@@ -481,7 +481,7 @@ mod tests {
             &safety,
             "slow_tool",
             serde_json::json!({}),
-            &test_job_ctx(),
+            &mut test_job_ctx(),
         )
         .await;
         let elapsed = start.elapsed();
@@ -509,7 +509,7 @@ mod tests {
             &safety,
             "array_echo",
             serde_json::json!({"values": "[\"1\", \"2\", 3]"}),
-            &test_job_ctx(),
+            &mut test_job_ctx(),
         )
         .await
         .expect("array_echo should succeed"); // safety: test-only assertion

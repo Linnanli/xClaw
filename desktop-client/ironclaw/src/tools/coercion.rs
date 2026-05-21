@@ -400,7 +400,6 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
-    use crate::context::JobContext;
     use crate::tools::tool::{Tool, ToolError, ToolOutput};
 
     struct StubTool {
@@ -424,7 +423,7 @@ mod tests {
         async fn execute(
             &self,
             params: serde_json::Value,
-            _ctx: &JobContext,
+            _ctx: &mut dyn dasclaw_runtime::JobContextCore,
         ) -> Result<ToolOutput, ToolError> {
             Ok(ToolOutput::success(params, Duration::from_millis(1)))
         }

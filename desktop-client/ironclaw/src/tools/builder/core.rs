@@ -796,8 +796,8 @@ Create alongside the .wasm file to grant capabilities:
         let normalized_params = prepare_tool_params(tool.as_ref(), params);
 
         // Execute with a dummy context (build tools don't need job context)
-        let ctx = JobContext::default();
-        tool.execute(normalized_params, &ctx).await
+        let mut ctx = JobContext::default();
+        tool.execute(normalized_params, &mut ctx).await
     }
 
     /// Find the build artifact based on project type.
@@ -970,7 +970,7 @@ impl Tool for BuildSoftwareTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _ctx: &JobContext,
+        _ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let description = params
             .get("description")

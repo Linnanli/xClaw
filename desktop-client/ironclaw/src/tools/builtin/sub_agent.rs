@@ -14,7 +14,6 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::context::JobContext;
 use crate::tools::tool::{ApprovalRequirement, RiskLevel, Tool, ToolDomain, ToolError, ToolOutput};
 
 /// Role a sub-agent can assume — determines its tool whitelist.
@@ -170,7 +169,7 @@ impl Tool for SubAgentTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -222,7 +221,7 @@ impl Tool for SubAgentTool {
             "inherit_context": inherit_context,
             "tool_whitelist": tool_whitelist,
             "depth": self.current_depth + 1,
-            "thread_id": ctx.conversation_id.map(|id| id.to_string()),
+            "thread_id": ctx.conversation_id().map(|id| id.to_string()),
             "message": format!(
                 "Sub-agent ({}) spawned with goal: '{}'. Max {} turns, {} tools available.",
                 role, goal, max_turns, tool_whitelist.len()
@@ -263,6 +262,7 @@ impl Tool for SubAgentTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::JobContext;
     use serde_json::json;
 
     fn test_ctx() -> JobContext {
@@ -276,7 +276,7 @@ mod tests {
         let tool = SubAgentTool::new();
         let params = json!({"role": "explore", "goal": "Find all usages of foo()"});
         let result = tool
-            .execute(params, &test_ctx())
+            .execute(params, &mut test_ctx())
             .await
             .expect("should succeed");
         assert_eq!(result.result["action"], "spawn_sub_agent");
@@ -294,7 +294,7 @@ mod tests {
         let tool = SubAgentTool::new();
         let params = json!({"role": "verify", "goal": "Check tests pass"});
         let result = tool
-            .execute(params, &test_ctx())
+            .execute(params, &mut test_ctx())
             .await
             .expect("should succeed");
         assert_eq!(result.result["role"], "verify");
@@ -307,7 +307,7 @@ mod tests {
     async fn test_depth_limit_blocks_nested_spawn() {
         let tool = SubAgentTool::at_depth(1);
         let params = json!({"role": "explore", "goal": "nested search"});
-        let err = tool.execute(params, &test_ctx()).await.unwrap_err();
+        let err = tool.execute(params, &mut test_ctx()).await.unwrap_err();
         assert!(matches!(err, ToolError::ExecutionFailed(_)));
         let msg = err.to_string();
         assert!(
@@ -320,7 +320,7 @@ mod tests {
     async fn test_missing_role() {
         let tool = SubAgentTool::new();
         let err = tool
-            .execute(json!({"goal": "do stuff"}), &test_ctx())
+            .execute(json!({"goal": "do stuff"}), &mut test_ctx())
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::InvalidParameters(_)));
@@ -330,7 +330,7 @@ mod tests {
     async fn test_missing_goal() {
         let tool = SubAgentTool::new();
         let err = tool
-            .execute(json!({"role": "explore"}), &test_ctx())
+            .execute(json!({"role": "explore"}), &mut test_ctx())
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::InvalidParameters(_)));
@@ -340,7 +340,7 @@ mod tests {
     async fn test_empty_goal() {
         let tool = SubAgentTool::new();
         let err = tool
-            .execute(json!({"role": "explore", "goal": "  "}), &test_ctx())
+            .execute(json!({"role": "explore", "goal": "  "}), &mut test_ctx())
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::InvalidParameters(_)));
@@ -351,7 +351,7 @@ mod tests {
         let tool = SubAgentTool::new();
         let params = json!({"role": "explore", "goal": "search", "max_turns": 100});
         let result = tool
-            .execute(params, &test_ctx())
+            .execute(params, &mut test_ctx())
             .await
             .expect("should succeed");
         // Clamped to 30
@@ -363,7 +363,7 @@ mod tests {
         let tool = SubAgentTool::new();
         let params = json!({"role": "explore", "goal": "search"});
         let result = tool
-            .execute(params, &test_ctx())
+            .execute(params, &mut test_ctx())
             .await
             .expect("should succeed");
         assert_eq!(result.result["max_turns"], DEFAULT_MAX_TURNS);

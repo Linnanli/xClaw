@@ -9,7 +9,6 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;
 
-use crate::context::JobContext;
 use crate::safety::LeakDetector;
 use crate::secrets::SecretsStore;
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolError, ToolOutput, require_str};
@@ -437,7 +436,7 @@ impl Tool for HttpTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -553,7 +552,7 @@ impl Tool for HttpTool {
             let matched: Vec<crate::secrets::CredentialMapping> = registry.find_for_host(cred_host);
             for mapping in &matched {
                 match store
-                    .get_decrypted(&ctx.user_id, &mapping.secret_name)
+                    .get_decrypted(ctx.user_id(), &mapping.secret_name)
                     .await
                 {
                     Ok(secret) => {
@@ -596,7 +595,7 @@ impl Tool for HttpTool {
         };
 
         // Check HTTP interceptor (replay mode returns pre-recorded response)
-        if let Some(ref interceptor) = ctx.http_interceptor
+        if let Some(ref interceptor) = ctx.http_interceptor()
             && let Some(recorded) = interceptor.before_request(&intercept_req).await
         {
             let headers: HashMap<String, String> = recorded.headers.iter().cloned().collect();
@@ -805,7 +804,7 @@ impl Tool for HttpTool {
         let body_text = String::from_utf8_lossy(&body_bytes).into_owned();
 
         // Record the HTTP exchange if interceptor is present (recording mode)
-        if let Some(ref interceptor) = ctx.http_interceptor {
+        if let Some(ref interceptor) = ctx.http_interceptor() {
             let resp_headers: Vec<(String, String)> = headers
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))

@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use tokio::fs;
 
-use crate::context::JobContext;
 use crate::tools::builtin::path_utils::{AccessMode, PathPolicy, validate_path_with_policy};
 use crate::tools::tool::{
     ApprovalRequirement, Tool, ToolDomain, ToolError, ToolOutput, require_str,
@@ -114,7 +113,7 @@ impl Tool for ReadFileTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let path_str = require_str(&params, "path")?;
 
@@ -255,7 +254,7 @@ impl Tool for WriteFileTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let path_str = require_str(&params, "path")?;
 
@@ -385,7 +384,7 @@ impl Tool for ListDirTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let path_str = params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
@@ -607,7 +606,7 @@ impl Tool for ApplyPatchTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let input = require_str(&params, "input")?;
         let start = std::time::Instant::now();
@@ -671,6 +670,7 @@ impl Tool for ApplyPatchTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::JobContext;
     use crate::tools::builtin::path_utils::{normalize_lexical, validate_path};
     use tempfile::TempDir;
 
@@ -681,12 +681,12 @@ mod tests {
         std::fs::write(&file_path, "line 1\nline 2\nline 3\n").unwrap();
 
         let tool = ReadFileTool::new().with_base_dir(dir.path().to_path_buf());
-        let ctx = JobContext::default();
+        let mut ctx = JobContext::default();
 
         let result = tool
             .execute(
                 serde_json::json!({"path": file_path.to_str().unwrap()}),
-                &ctx,
+                &mut ctx,
             )
             .await
             .unwrap();
@@ -702,7 +702,7 @@ mod tests {
         let file_path = dir.path().join("new_file.txt");
 
         let tool = WriteFileTool::new().with_base_dir(dir.path().to_path_buf());
-        let ctx = JobContext::default();
+        let mut ctx = JobContext::default();
 
         let result = tool
             .execute(
@@ -710,7 +710,7 @@ mod tests {
                     "path": file_path.to_str().unwrap(),
                     "content": "hello world"
                 }),
-                &ctx,
+                &mut ctx,
             )
             .await
             .unwrap();
@@ -729,7 +729,7 @@ mod tests {
         std::fs::write(&code_path, "fn main() {\n    println!(\"old\");\n}\n").unwrap();
 
         let tool = ApplyPatchTool::new().with_base_dir(dir.path().to_path_buf());
-        let ctx = JobContext::default();
+        let mut ctx = JobContext::default();
 
         let envelope = [
             "*** Begin Patch",
@@ -747,7 +747,7 @@ mod tests {
         .join("\n");
 
         let result = tool
-            .execute(serde_json::json!({ "input": envelope }), &ctx)
+            .execute(serde_json::json!({ "input": envelope }), &mut ctx)
             .await
             .unwrap();
 
@@ -776,10 +776,10 @@ mod tests {
     async fn test_apply_patch_rejects_invalid_envelope() {
         let dir = TempDir::new().unwrap();
         let tool = ApplyPatchTool::new().with_base_dir(dir.path().to_path_buf());
-        let ctx = JobContext::default();
+        let mut ctx = JobContext::default();
 
         let result = tool
-            .execute(serde_json::json!({ "input": "not a real patch" }), &ctx)
+            .execute(serde_json::json!({ "input": "not a real patch" }), &mut ctx)
             .await;
         assert!(matches!(result, Err(ToolError::ExecutionFailed(_))));
     }
@@ -788,7 +788,7 @@ mod tests {
     async fn test_write_file_rejects_workspace_paths() {
         let dir = TempDir::new().unwrap();
         let tool = WriteFileTool::new().with_base_dir(dir.path().to_path_buf());
-        let ctx = JobContext::default();
+        let mut ctx = JobContext::default();
 
         let workspace_files = &[
             "HEARTBEAT.md",
@@ -808,7 +808,7 @@ mod tests {
                         "path": path.to_str().unwrap(),
                         "content": "test"
                     }),
-                    &ctx,
+                    &mut ctx,
                 )
                 .await
                 .unwrap_err();
@@ -830,7 +830,7 @@ mod tests {
                         "path": prefix_path,
                         "content": "test"
                     }),
-                    &ctx,
+                    &mut ctx,
                 )
                 .await
                 .unwrap_err();
@@ -850,7 +850,7 @@ mod tests {
                     "path": regular_path.to_str().unwrap(),
                     "content": "fine"
                 }),
-                &ctx,
+                &mut ctx,
             )
             .await;
         assert!(result.is_ok());
@@ -863,12 +863,12 @@ mod tests {
         std::fs::create_dir(dir.path().join("subdir")).unwrap();
 
         let tool = ListDirTool::new();
-        let ctx = JobContext::default();
+        let mut ctx = JobContext::default();
 
         let result = tool
             .execute(
                 serde_json::json!({"path": dir.path().to_str().unwrap()}),
-                &ctx,
+                &mut ctx,
             )
             .await
             .unwrap();

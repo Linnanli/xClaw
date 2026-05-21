@@ -22,7 +22,7 @@ async fn test_audit_plan_mode_invalid_input_does_not_echo_sensitive_plan() {
                     "steps": []
                 }
             }),
-            &test_ctx(),
+            &mut test_ctx(),
         )
         .await
         .expect_err("empty steps should fail");
@@ -42,7 +42,7 @@ async fn test_audit_session_fork_rejects_invalid_turn_without_content_leak() {
                 "at_turn": -1,
                 "reason": "fork around secret 330326199408015618"
             }),
-            &test_ctx(),
+            &mut test_ctx(),
         )
         .await
         .expect_err("negative turn should fail");
@@ -61,7 +61,7 @@ async fn test_audit_sub_agent_depth_limit_is_fail_safe() {
                 "role": "verify",
                 "goal": "inspect prod secret token sk-prod-abcdef"
             }),
-            &test_ctx(),
+            &mut test_ctx(),
         )
         .await
         .expect_err("nested sub-agent should be rejected");
@@ -80,7 +80,7 @@ async fn test_audit_sub_agent_missing_goal_does_not_leak_extra_fields() {
                 "role": "verify",
                 "notes": "secret: 13800138000"
             }),
-            &test_ctx(),
+            &mut test_ctx(),
         )
         .await
         .expect_err("missing goal should fail");

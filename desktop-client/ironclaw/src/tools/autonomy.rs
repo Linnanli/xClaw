@@ -76,7 +76,6 @@ mod tests {
     use secrecy::SecretString;
 
     use super::*;
-    use crate::context::JobContext;
     use crate::extensions::ExtensionManager;
     use crate::secrets::{InMemorySecretsStore, SecretsCrypto, SecretsStore};
     use crate::tools::mcp::{McpProcessManager, McpSessionManager};
@@ -107,7 +106,7 @@ mod tests {
         async fn execute(
             &self,
             _params: serde_json::Value,
-            _ctx: &JobContext,
+            _ctx: &mut dyn dasclaw_runtime::JobContextCore,
         ) -> Result<ToolOutput, ToolError> {
             Ok(ToolOutput::text("ok", Duration::from_millis(1)))
         }

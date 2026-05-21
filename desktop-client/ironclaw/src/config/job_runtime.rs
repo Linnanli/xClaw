@@ -275,12 +275,14 @@ mod tests {
     fn explicit_cloud_requires_endpoint() {
         let _guard = lock_env();
         clear_env();
-        let mut s = Settings::default();
-        s.job_runtime = Some(JobRuntimeSettings {
-            mode: JobRuntimeMode::Cloud {
-                endpoint: "   ".to_string(),
-            },
-        });
+        let s = Settings {
+            job_runtime: Some(JobRuntimeSettings {
+                mode: JobRuntimeMode::Cloud {
+                    endpoint: "   ".to_string(),
+                },
+            }),
+            ..Settings::default()
+        };
         let err = JobRuntimeConfig::resolve(&s).unwrap_err();
         assert!(
             matches!(err, ConfigError::InvalidValue { ref key, .. } if key == "job_runtime.endpoint")

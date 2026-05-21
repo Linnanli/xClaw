@@ -181,13 +181,13 @@ async fn tool_webhook_handler_inner(
         }
     });
 
-    let ctx = JobContext::with_user(
+    let mut ctx = JobContext::with_user(
         state.user_id.clone(),
         format!("webhook:{tool}"),
         "Process external webhook",
     );
 
-    let output = match tool_impl.execute(params, &ctx).await {
+    let output = match tool_impl.execute(params, &mut ctx).await {
         Ok(out) => out,
         Err(e) => {
             tracing::warn!(tool = %tool, error = %e, "Webhook tool execution failed");
@@ -369,7 +369,6 @@ mod tests {
     use axum::body::Body;
     use tower::ServiceExt;
 
-    use crate::context::JobContext;
     use crate::secrets::{CreateSecretParams, InMemorySecretsStore, SecretsCrypto};
     use crate::tools::{Tool, ToolError, ToolOutput, ToolRegistry};
 
@@ -398,7 +397,7 @@ mod tests {
         async fn execute(
             &self,
             _params: serde_json::Value,
-            _ctx: &JobContext,
+            _ctx: &mut dyn dasclaw_runtime::JobContextCore,
         ) -> Result<ToolOutput, ToolError> {
             Ok(ToolOutput::success(
                 serde_json::json!({"emit_events":[]}),
@@ -424,7 +423,7 @@ mod tests {
         async fn execute(
             &self,
             _params: serde_json::Value,
-            _ctx: &JobContext,
+            _ctx: &mut dyn dasclaw_runtime::JobContextCore,
         ) -> Result<ToolOutput, ToolError> {
             Ok(ToolOutput::success(
                 serde_json::json!({"emit_events":[]}),
@@ -458,7 +457,7 @@ mod tests {
         async fn execute(
             &self,
             _params: serde_json::Value,
-            _ctx: &JobContext,
+            _ctx: &mut dyn dasclaw_runtime::JobContextCore,
         ) -> Result<ToolOutput, ToolError> {
             Ok(ToolOutput::success(
                 serde_json::json!({"emit_events":[]}),
@@ -493,7 +492,7 @@ mod tests {
         async fn execute(
             &self,
             _params: serde_json::Value,
-            _ctx: &JobContext,
+            _ctx: &mut dyn dasclaw_runtime::JobContextCore,
         ) -> Result<ToolOutput, ToolError> {
             Ok(ToolOutput::success(
                 serde_json::json!({"emit_events":[]}),

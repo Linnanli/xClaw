@@ -6,7 +6,6 @@
 
 use std::time::Instant;
 
-use crate::context::JobContext;
 use crate::tools::tool::{ApprovalRequirement, RiskLevel, Tool, ToolDomain, ToolError, ToolOutput};
 
 use super::runner::{resolve_workdir, run_git};
@@ -52,7 +51,7 @@ impl Tool for GitStaleCheckTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _ctx: &JobContext,
+        _ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = Instant::now();
         let path = params.get("path").and_then(|v| v.as_str());
@@ -174,8 +173,8 @@ mod tests {
     #[tokio::test]
     async fn test_stale_check_in_repo() {
         let tool = GitStaleCheckTool::new();
-        let ctx = make_ctx();
-        let result = tool.execute(serde_json::json!({}), &ctx).await;
+        let mut ctx = make_ctx();
+        let result = tool.execute(serde_json::json!({}), &mut ctx).await;
 
         match result {
             Ok(output) => {
@@ -196,11 +195,11 @@ mod tests {
     #[tokio::test]
     async fn test_stale_check_bad_path() {
         let tool = GitStaleCheckTool::new();
-        let ctx = make_ctx();
+        let mut ctx = make_ctx();
         let result = tool
             .execute(
                 serde_json::json!({"path": "/nonexistent/path/abc123"}),
-                &ctx,
+                &mut ctx,
             )
             .await;
         assert!(result.is_err(), "should fail for nonexistent path");

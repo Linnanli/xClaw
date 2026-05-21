@@ -14,7 +14,6 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::context::JobContext;
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolError, ToolOutput, require_str};
 
 const USER_AGENT: &str = concat!("IronClaw-WebSearch/", env!("CARGO_PKG_VERSION"),);
@@ -117,7 +116,7 @@ impl Tool for WebSearchTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _job_ctx: &JobContext,
+        _job_ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let query = require_str(&params, "query")?;
         if query.len() > 2000 {

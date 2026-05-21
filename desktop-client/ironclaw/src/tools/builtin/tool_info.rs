@@ -12,7 +12,6 @@ use std::sync::Weak;
 
 use async_trait::async_trait;
 
-use crate::context::JobContext;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::tool::{Tool, ToolDiscoverySummary, ToolError, ToolOutput, require_str};
 
@@ -127,7 +126,7 @@ impl Tool for ToolInfoTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _ctx: &JobContext,
+        _ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
         let name = require_str(&params, "name")?;
@@ -176,6 +175,7 @@ impl Tool for ToolInfoTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::JobContext;
     use crate::tools::builtin::EchoTool;
     use std::sync::Arc;
 
@@ -185,9 +185,9 @@ mod tests {
         registry.register(Arc::new(EchoTool)).await;
 
         let tool = ToolInfoTool::new(Arc::downgrade(&registry));
-        let ctx = JobContext::default();
+        let mut ctx = JobContext::default();
         let result = tool
-            .execute(serde_json::json!({"name": "echo"}), &ctx)
+            .execute(serde_json::json!({"name": "echo"}), &mut ctx)
             .await
             .unwrap();
 
@@ -215,11 +215,11 @@ mod tests {
         registry.register(Arc::new(EchoTool)).await;
 
         let tool = ToolInfoTool::new(Arc::downgrade(&registry));
-        let ctx = JobContext::default();
+        let mut ctx = JobContext::default();
         let result = tool
             .execute(
                 serde_json::json!({"name": "echo", "detail": "summary"}),
-                &ctx,
+                &mut ctx,
             )
             .await
             .unwrap();
@@ -239,11 +239,11 @@ mod tests {
         registry.register(Arc::new(EchoTool)).await;
 
         let tool = ToolInfoTool::new(Arc::downgrade(&registry));
-        let ctx = JobContext::default();
+        let mut ctx = JobContext::default();
         let result = tool
             .execute(
                 serde_json::json!({"name": "echo", "include_schema": true}),
-                &ctx,
+                &mut ctx,
             )
             .await
             .unwrap();
@@ -261,11 +261,11 @@ mod tests {
         registry.register(Arc::new(EchoTool)).await;
 
         let tool = ToolInfoTool::new(Arc::downgrade(&registry));
-        let ctx = JobContext::default();
+        let mut ctx = JobContext::default();
         let result = tool
             .execute(
                 serde_json::json!({"name": "echo", "detail": "verbose"}),
-                &ctx,
+                &mut ctx,
             )
             .await;
         assert!(matches!(result, Err(ToolError::InvalidParameters(_))));
@@ -275,9 +275,9 @@ mod tests {
     async fn test_tool_info_unknown_tool() {
         let registry = Arc::new(ToolRegistry::new());
         let tool = ToolInfoTool::new(Arc::downgrade(&registry));
-        let ctx = JobContext::default();
+        let mut ctx = JobContext::default();
         let result = tool
-            .execute(serde_json::json!({"name": "nonexistent"}), &ctx)
+            .execute(serde_json::json!({"name": "nonexistent"}), &mut ctx)
             .await;
         assert!(result.is_err());
     }
@@ -288,9 +288,9 @@ mod tests {
         let tool = ToolInfoTool::new(Arc::downgrade(&registry));
         drop(registry);
 
-        let ctx = JobContext::default();
+        let mut ctx = JobContext::default();
         let result = tool
-            .execute(serde_json::json!({"name": "echo"}), &ctx)
+            .execute(serde_json::json!({"name": "echo"}), &mut ctx)
             .await;
         assert!(matches!(result, Err(ToolError::ExecutionFailed(_))));
     }

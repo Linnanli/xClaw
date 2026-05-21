@@ -4,7 +4,6 @@ use async_trait::async_trait;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
-use crate::context::JobContext;
 use crate::tools::{Tool, ToolError, ToolOutput};
 
 /// Tool for generating images using FLUX or compatible image generation APIs.
@@ -93,7 +92,7 @@ impl Tool for ImageGenerateTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _ctx: &JobContext,
+        _ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -181,6 +180,7 @@ impl Tool for ImageGenerateTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::JobContext;
     use crate::tools::tool::ApprovalRequirement;
 
     #[test]
@@ -208,8 +208,8 @@ mod tests {
             "test-key".to_string(),
             "flux-1".to_string(),
         );
-        let ctx = JobContext::default();
-        let result = tool.execute(serde_json::json!({}), &ctx).await;
+        let mut ctx = JobContext::default();
+        let result = tool.execute(serde_json::json!({}), &mut ctx).await;
         assert!(result.is_err());
     }
 
@@ -220,11 +220,11 @@ mod tests {
             "test-key".to_string(),
             "flux-1".to_string(),
         );
-        let ctx = JobContext::default();
+        let mut ctx = JobContext::default();
         let result = tool
             .execute(
                 serde_json::json!({"prompt": "a cat", "size": "999x999"}),
-                &ctx,
+                &mut ctx,
             )
             .await;
         assert!(result.is_err());
@@ -237,10 +237,10 @@ mod tests {
             "test-key".to_string(),
             "flux-1".to_string(),
         );
-        let ctx = JobContext::default();
+        let mut ctx = JobContext::default();
         let long_prompt = "x".repeat(4001);
         let result = tool
-            .execute(serde_json::json!({"prompt": long_prompt}), &ctx)
+            .execute(serde_json::json!({"prompt": long_prompt}), &mut ctx)
             .await;
         assert!(result.is_err());
     }

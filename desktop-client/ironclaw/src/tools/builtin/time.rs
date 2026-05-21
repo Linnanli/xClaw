@@ -4,7 +4,6 @@ use async_trait::async_trait;
 use chrono::{DateTime, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Tz;
 
-use crate::context::JobContext;
 use crate::tools::tool::{Tool, ToolError, ToolOutput};
 
 /// Tool for getting current time and date operations.
@@ -69,7 +68,7 @@ impl Tool for TimeTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -102,7 +101,7 @@ impl Tool for TimeTool {
 
 fn execute_now(
     params: &serde_json::Value,
-    ctx: &JobContext,
+    ctx: &dyn dasclaw_runtime::JobContextCore,
 ) -> Result<serde_json::Value, ToolError> {
     let now = Utc::now();
     let mut result = serde_json::json!({
@@ -123,7 +122,7 @@ fn execute_now(
 
 fn execute_parse(
     params: &serde_json::Value,
-    ctx: &JobContext,
+    ctx: &dyn dasclaw_runtime::JobContextCore,
 ) -> Result<serde_json::Value, ToolError> {
     let input = require_input(params)?;
     let parse_tz = resolve_parse_timezone(params, ctx)?;
@@ -138,7 +137,7 @@ fn execute_parse(
 
 fn execute_convert(
     params: &serde_json::Value,
-    ctx: &JobContext,
+    ctx: &dyn dasclaw_runtime::JobContextCore,
 ) -> Result<serde_json::Value, ToolError> {
     let input = require_input(params)?;
     let source_tz = optional_timezone(params, &["from_timezone", "timezone"])?;
@@ -170,7 +169,7 @@ fn execute_convert(
 
 fn execute_format(
     params: &serde_json::Value,
-    ctx: &JobContext,
+    ctx: &dyn dasclaw_runtime::JobContextCore,
 ) -> Result<serde_json::Value, ToolError> {
     let input = require_input(params)?;
     let output_tz = resolve_timezone_for_output(params, ctx)?;
@@ -200,7 +199,7 @@ fn execute_format(
 
 fn execute_diff(
     params: &serde_json::Value,
-    ctx: &JobContext,
+    ctx: &dyn dasclaw_runtime::JobContextCore,
 ) -> Result<serde_json::Value, ToolError> {
     let parse_tz = resolve_parse_timezone(params, ctx)?;
     let ts1 = require_input(params)?;
@@ -237,7 +236,7 @@ fn require_input(params: &serde_json::Value) -> Result<&str, ToolError> {
 
 fn resolve_parse_timezone(
     params: &serde_json::Value,
-    ctx: &JobContext,
+    ctx: &dyn dasclaw_runtime::JobContextCore,
 ) -> Result<Option<Tz>, ToolError> {
     if let Some(tz) = optional_timezone(params, &["from_timezone", "timezone"])? {
         return Ok(Some(tz));
@@ -248,7 +247,7 @@ fn resolve_parse_timezone(
 
 fn resolve_timezone_for_output(
     params: &serde_json::Value,
-    ctx: &JobContext,
+    ctx: &dyn dasclaw_runtime::JobContextCore,
 ) -> Result<Option<(Tz, String)>, ToolError> {
     if let Some(name) = params
         .get("timezone")
@@ -264,23 +263,25 @@ fn resolve_timezone_for_output(
 
 /// Resolve the user's timezone from the JobContext.
 ///
-/// Uses `ctx.user_timezone` (set from main's timezone resolution) as the
+/// Uses `ctx.user_timezone()` (set from main's timezone resolution) as the
 /// primary source. Falls back to metadata fields for backward compatibility.
-fn context_timezone(ctx: &JobContext) -> Result<Option<(Tz, String)>, ToolError> {
+fn context_timezone(
+    ctx: &dyn dasclaw_runtime::JobContextCore,
+) -> Result<Option<(Tz, String)>, ToolError> {
     // Primary: use the dedicated user_timezone field from JobContext
-    if ctx.user_timezone != "UTC"
-        && !ctx.user_timezone.is_empty()
-        && let Some(tz) = crate::timezone::parse_timezone(&ctx.user_timezone)
+    if ctx.user_timezone() != "UTC"
+        && !ctx.user_timezone().is_empty()
+        && let Some(tz) = crate::timezone::parse_timezone(ctx.user_timezone())
     {
         return Ok(Some((tz, tz.to_string())));
     }
 
     // Fallback: check metadata for backward compatibility
     let tz_name = ctx
-        .metadata
+        .metadata()
         .get("user_timezone")
         .and_then(|v| v.as_str())
-        .or_else(|| ctx.metadata.get("timezone").and_then(|v| v.as_str()));
+        .or_else(|| ctx.metadata().get("timezone").and_then(|v| v.as_str()));
 
     match tz_name {
         Some(name) => {
@@ -380,11 +381,12 @@ fn localize_naive_datetime(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::JobContext;
 
     #[tokio::test]
     async fn test_now_accepts_explicit_timezone() {
         let tool = TimeTool;
-        let ctx = JobContext::with_user("test", "chat", "test");
+        let mut ctx = JobContext::with_user("test", "chat", "test");
 
         let output = tool
             .execute(
@@ -392,7 +394,7 @@ mod tests {
                     "operation": "now",
                     "timezone": "America/New_York"
                 }),
-                &ctx,
+                &mut ctx,
             )
             .await
             .expect("execute");
@@ -415,7 +417,7 @@ mod tests {
         ctx.user_timezone = "America/New_York".to_string();
 
         let output = tool
-            .execute(serde_json::json!({"operation": "now"}), &ctx)
+            .execute(serde_json::json!({"operation": "now"}), &mut ctx)
             .await
             .expect("execute");
         assert!(
@@ -438,7 +440,7 @@ mod tests {
         });
 
         let output = tool
-            .execute(serde_json::json!({"operation": "now"}), &ctx)
+            .execute(serde_json::json!({"operation": "now"}), &mut ctx)
             .await
             .expect("execute");
 
@@ -455,11 +457,11 @@ mod tests {
     #[tokio::test]
     async fn test_now_returns_utc_by_default() {
         let tool = TimeTool;
-        let ctx = JobContext::with_user("test", "chat", "test");
+        let mut ctx = JobContext::with_user("test", "chat", "test");
         // Default user_timezone is "UTC" -- context_timezone skips UTC so no
         // local_iso is added, but iso and utc_iso are always present.
         let output = tool
-            .execute(serde_json::json!({"operation": "now"}), &ctx)
+            .execute(serde_json::json!({"operation": "now"}), &mut ctx)
             .await
             .expect("execute");
         assert!(output.result.get("iso").is_some(), "should have iso");
@@ -468,7 +470,7 @@ mod tests {
     #[tokio::test]
     async fn test_convert_across_dst_boundary() {
         let tool = TimeTool;
-        let ctx = JobContext::with_user("test", "chat", "test");
+        let mut ctx = JobContext::with_user("test", "chat", "test");
 
         let output = tool
             .execute(
@@ -477,7 +479,7 @@ mod tests {
                     "input": "2026-03-08T07:30:00Z",
                     "to_timezone": "America/New_York"
                 }),
-                &ctx,
+                &mut ctx,
             )
             .await
             .expect("execute");
@@ -492,7 +494,7 @@ mod tests {
     #[tokio::test]
     async fn test_format_with_timezone() {
         let tool = TimeTool;
-        let ctx = JobContext::with_user("test", "chat", "test");
+        let mut ctx = JobContext::with_user("test", "chat", "test");
 
         let output = tool
             .execute(
@@ -502,7 +504,7 @@ mod tests {
                     "timezone": "America/New_York",
                     "format_string": "%Y-%m-%d %H:%M:%S %Z"
                 }),
-                &ctx,
+                &mut ctx,
             )
             .await
             .expect("execute");
@@ -517,7 +519,7 @@ mod tests {
     #[tokio::test]
     async fn test_invalid_timezone_returns_clear_error() {
         let tool = TimeTool;
-        let ctx = JobContext::with_user("test", "chat", "test");
+        let mut ctx = JobContext::with_user("test", "chat", "test");
 
         let err = tool
             .execute(
@@ -525,7 +527,7 @@ mod tests {
                     "operation": "now",
                     "timezone": "Mars/Olympus"
                 }),
-                &ctx,
+                &mut ctx,
             )
             .await
             .expect_err("expected invalid timezone error");
@@ -551,7 +553,7 @@ mod tests {
         // LLMs sometimes pass "" for optional fields instead of omitting them.
         // Empty timezone should be treated as absent and fall back to UTC.
         let tool = TimeTool;
-        let ctx = JobContext::with_user("test", "chat", "test");
+        let mut ctx = JobContext::with_user("test", "chat", "test");
 
         let output = tool
             .execute(
@@ -559,7 +561,7 @@ mod tests {
                     "operation": "now",
                     "timezone": ""
                 }),
-                &ctx,
+                &mut ctx,
             )
             .await
             .expect("empty timezone string should not error");
@@ -572,7 +574,7 @@ mod tests {
         // LLMs sometimes pass "" for optional fields instead of omitting them.
         // Empty from_timezone should be treated as absent.
         let tool = TimeTool;
-        let ctx = JobContext::with_user("test", "chat", "test");
+        let mut ctx = JobContext::with_user("test", "chat", "test");
 
         let output = tool
             .execute(
@@ -582,7 +584,7 @@ mod tests {
                     "to_timezone": "America/New_York",
                     "from_timezone": ""
                 }),
-                &ctx,
+                &mut ctx,
             )
             .await
             .expect("empty from_timezone string should not error");

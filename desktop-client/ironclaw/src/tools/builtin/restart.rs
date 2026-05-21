@@ -26,7 +26,6 @@
 use async_trait::async_trait;
 use std::time::Duration;
 
-use crate::context::JobContext;
 #[allow(unused_imports)]
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolError, ToolOutput};
 
@@ -66,7 +65,7 @@ impl Tool for RestartTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _ctx: &JobContext,
+        _ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         tracing::info!("[RestartTool::execute] Restart tool invoked");
         let start = std::time::Instant::now();
@@ -214,11 +213,11 @@ mod tests {
     async fn test_restart_tool_delay_parameter_validation() {
         enable_docker_env();
         let tool = RestartTool;
-        let ctx = crate::context::JobContext::new("test", "test restart");
+        let mut ctx = crate::context::JobContext::new("test", "test restart");
 
         // Test with valid delay
         let result = tool
-            .execute(serde_json::json!({"delay_secs": 5}), &ctx)
+            .execute(serde_json::json!({"delay_secs": 5}), &mut ctx)
             .await;
         assert!(result.is_ok());
         let output = result.unwrap();
@@ -226,7 +225,7 @@ mod tests {
         assert!(text.contains("Restarting in 5 second(s)"));
 
         // Test with no delay parameter (should use default 2)
-        let result = tool.execute(serde_json::json!({}), &ctx).await;
+        let result = tool.execute(serde_json::json!({}), &mut ctx).await;
         assert!(result.is_ok());
         let output = result.unwrap();
         let text = output.result.as_str().expect("result should be a string");
@@ -237,11 +236,11 @@ mod tests {
     async fn test_restart_tool_delay_clamping() {
         enable_docker_env();
         let tool = RestartTool;
-        let ctx = crate::context::JobContext::new("test", "test restart");
+        let mut ctx = crate::context::JobContext::new("test", "test restart");
 
         // Test with too small delay (should clamp to 1)
         let result = tool
-            .execute(serde_json::json!({"delay_secs": 0}), &ctx)
+            .execute(serde_json::json!({"delay_secs": 0}), &mut ctx)
             .await;
         assert!(result.is_ok());
         let output = result.unwrap();
@@ -250,7 +249,7 @@ mod tests {
 
         // Test with too large delay (should clamp to 30)
         let result = tool
-            .execute(serde_json::json!({"delay_secs": 100}), &ctx)
+            .execute(serde_json::json!({"delay_secs": 100}), &mut ctx)
             .await;
         assert!(result.is_ok());
         let output = result.unwrap();
@@ -291,11 +290,11 @@ mod tests {
     async fn test_restart_tool_boundary_values() {
         enable_docker_env();
         let tool = RestartTool;
-        let ctx = crate::context::JobContext::new("test", "test restart");
+        let mut ctx = crate::context::JobContext::new("test", "test restart");
 
         // Test minimum boundary (exactly 1)
         let result = tool
-            .execute(serde_json::json!({"delay_secs": 1}), &ctx)
+            .execute(serde_json::json!({"delay_secs": 1}), &mut ctx)
             .await;
         assert!(result.is_ok());
         let output = result.unwrap();
@@ -304,7 +303,7 @@ mod tests {
 
         // Test maximum boundary (exactly 30)
         let result = tool
-            .execute(serde_json::json!({"delay_secs": 30}), &ctx)
+            .execute(serde_json::json!({"delay_secs": 30}), &mut ctx)
             .await;
         assert!(result.is_ok());
         let output = result.unwrap();
@@ -313,7 +312,7 @@ mod tests {
 
         // Test middle value
         let result = tool
-            .execute(serde_json::json!({"delay_secs": 15}), &ctx)
+            .execute(serde_json::json!({"delay_secs": 15}), &mut ctx)
             .await;
         assert!(result.is_ok());
         let output = result.unwrap();
@@ -325,11 +324,11 @@ mod tests {
     async fn test_restart_tool_invalid_parameter_types() {
         enable_docker_env();
         let tool = RestartTool;
-        let ctx = crate::context::JobContext::new("test", "test restart");
+        let mut ctx = crate::context::JobContext::new("test", "test restart");
 
         // String instead of integer - should use default
         let result = tool
-            .execute(serde_json::json!({"delay_secs": "5"}), &ctx)
+            .execute(serde_json::json!({"delay_secs": "5"}), &mut ctx)
             .await;
         assert!(result.is_ok());
         let output = result.unwrap();
@@ -338,7 +337,7 @@ mod tests {
 
         // Null value - should use default
         let result = tool
-            .execute(serde_json::json!({"delay_secs": null}), &ctx)
+            .execute(serde_json::json!({"delay_secs": null}), &mut ctx)
             .await;
         assert!(result.is_ok());
         let output = result.unwrap();
@@ -347,7 +346,7 @@ mod tests {
 
         // Float value - should use default (as_u64 fails on floats)
         let result = tool
-            .execute(serde_json::json!({"delay_secs": 5.5}), &ctx)
+            .execute(serde_json::json!({"delay_secs": 5.5}), &mut ctx)
             .await;
         assert!(result.is_ok());
         let output = result.unwrap();
@@ -359,10 +358,10 @@ mod tests {
     async fn test_restart_tool_output_structure() {
         enable_docker_env();
         let tool = RestartTool;
-        let ctx = crate::context::JobContext::new("test", "test restart");
+        let mut ctx = crate::context::JobContext::new("test", "test restart");
 
         let result = tool
-            .execute(serde_json::json!({"delay_secs": 5}), &ctx)
+            .execute(serde_json::json!({"delay_secs": 5}), &mut ctx)
             .await;
 
         assert!(result.is_ok());
@@ -379,7 +378,7 @@ mod tests {
     async fn test_restart_tool_extra_parameters_ignored() {
         enable_docker_env();
         let tool = RestartTool;
-        let ctx = crate::context::JobContext::new("test", "test restart");
+        let mut ctx = crate::context::JobContext::new("test", "test restart");
 
         // Extra parameters should be ignored
         let result = tool
@@ -389,7 +388,7 @@ mod tests {
                     "extra_field": "should be ignored",
                     "another": 123
                 }),
-                &ctx,
+                &mut ctx,
             )
             .await;
 
@@ -403,11 +402,11 @@ mod tests {
     async fn test_restart_tool_negative_numbers() {
         enable_docker_env();
         let tool = RestartTool;
-        let ctx = crate::context::JobContext::new("test", "test restart");
+        let mut ctx = crate::context::JobContext::new("test", "test restart");
 
         // Negative number should clamp to 1
         let result = tool
-            .execute(serde_json::json!({"delay_secs": -5}), &ctx)
+            .execute(serde_json::json!({"delay_secs": -5}), &mut ctx)
             .await;
         assert!(result.is_ok());
         let output = result.unwrap();
@@ -420,11 +419,11 @@ mod tests {
     async fn test_restart_tool_very_large_numbers() {
         enable_docker_env();
         let tool = RestartTool;
-        let ctx = crate::context::JobContext::new("test", "test restart");
+        let mut ctx = crate::context::JobContext::new("test", "test restart");
 
         // Very large number should clamp to 30
         let result = tool
-            .execute(serde_json::json!({"delay_secs": u64::MAX}), &ctx)
+            .execute(serde_json::json!({"delay_secs": u64::MAX}), &mut ctx)
             .await;
         assert!(result.is_ok());
         let output = result.unwrap();
@@ -436,10 +435,10 @@ mod tests {
     async fn test_restart_tool_empty_object() {
         enable_docker_env();
         let tool = RestartTool;
-        let ctx = crate::context::JobContext::new("test", "test restart");
+        let mut ctx = crate::context::JobContext::new("test", "test restart");
 
         // Empty object params should use all defaults
-        let result = tool.execute(serde_json::json!({}), &ctx).await;
+        let result = tool.execute(serde_json::json!({}), &mut ctx).await;
         assert!(result.is_ok());
         let output = result.unwrap();
         let text = output.result.as_str().unwrap();

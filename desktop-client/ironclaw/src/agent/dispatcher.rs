@@ -339,7 +339,7 @@ impl Agent {
         &self,
         tool_name: &str,
         params: &serde_json::Value,
-        job_ctx: &JobContext,
+        job_ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<String, Error> {
         execute_chat_tool_standalone(self.tools(), self.safety(), tool_name, params, job_ctx).await
     }
@@ -907,10 +907,12 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
                     )
                     .await;
 
-                let result = self
-                    .agent
-                    .execute_chat_tool(&tc.name, &tc.arguments, &self.job_ctx)
-                    .await;
+                let result = {
+                    let mut job_ctx = self.job_ctx.clone();
+                    self.agent
+                        .execute_chat_tool(&tc.name, &tc.arguments, &mut job_ctx)
+                        .await
+                };
 
                 let disp_tool = self.agent.tools().get(&tc.name).await;
                 let _ = self
@@ -948,6 +950,7 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
                 );
 
                 join_set.spawn(async move {
+                    let mut job_ctx = job_ctx;
                     let _ = channels
                         .send_status(
                             &channel,
@@ -963,7 +966,7 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
                         &safety,
                         &tc.name,
                         &tc.arguments,
-                        &job_ctx,
+                        &mut job_ctx,
                     )
                     .await;
 
@@ -1334,7 +1337,7 @@ pub(super) async fn execute_chat_tool_standalone(
     safety: &crate::safety::SafetyLayer,
     tool_name: &str,
     params: &serde_json::Value,
-    job_ctx: &crate::context::JobContext,
+    job_ctx: &mut dyn dasclaw_runtime::JobContextCore,
 ) -> Result<String, Error> {
     crate::tools::execute::execute_tool_with_safety(
         tools,
@@ -2115,14 +2118,14 @@ mod tests {
             injection_check_enabled: false,
         });
 
-        let job_ctx = JobContext::with_user("test", "chat", "test session");
+        let mut job_ctx = JobContext::with_user("test", "chat", "test session");
 
         let result = super::execute_chat_tool_standalone(
             &registry,
             &safety,
             "echo",
             &serde_json::json!({"message": "hello"}),
-            &job_ctx,
+            &mut job_ctx,
         )
         .await;
 
@@ -2143,14 +2146,14 @@ mod tests {
             max_output_length: 100_000,
             injection_check_enabled: false,
         });
-        let job_ctx = JobContext::with_user("test", "chat", "test session");
+        let mut job_ctx = JobContext::with_user("test", "chat", "test session");
 
         let result = super::execute_chat_tool_standalone(
             &registry,
             &safety,
             "nonexistent",
             &serde_json::json!({}),
-            &job_ctx,
+            &mut job_ctx,
         )
         .await;
 

@@ -18,7 +18,6 @@ use std::time::Duration;
 use async_trait::async_trait;
 use rust_decimal::Decimal;
 
-use crate::context::JobContext;
 
 pub use dasclaw_tool::{
     ApprovalContext, ApprovalRequirement, RiskLevel, ToolDiscoverySummary, ToolDomain, ToolError,
@@ -42,7 +41,7 @@ pub trait Tool: Send + Sync {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError>;
 
     /// Estimate the cost of running this tool with the given parameters.
@@ -187,6 +186,7 @@ pub trait Tool: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::JobContext;
 
     /// A simple no-op tool for testing.
     #[derive(Debug)]
@@ -218,7 +218,7 @@ mod tests {
         async fn execute(
             &self,
             params: serde_json::Value,
-            _ctx: &JobContext,
+            _ctx: &mut dyn dasclaw_runtime::JobContextCore,
         ) -> Result<ToolOutput, ToolError> {
             let message = require_str(&params, "message")?;
 
@@ -233,10 +233,10 @@ mod tests {
     #[tokio::test]
     async fn test_echo_tool() {
         let tool = EchoTool;
-        let ctx = JobContext::default();
+        let mut ctx = JobContext::default();
 
         let result = tool
-            .execute(serde_json::json!({"message": "hello"}), &ctx)
+            .execute(serde_json::json!({"message": "hello"}), &mut ctx)
             .await
             .unwrap();
 

@@ -10,6 +10,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use dasclaw_runtime::JobContextCore;
+
 use async_trait::async_trait;
 use chrono::Utc;
 use tokio::sync::RwLock;
@@ -17,7 +19,7 @@ use uuid::Uuid;
 
 use crate::bootstrap::dasclaw_base_dir;
 use crate::channels::IncomingMessage;
-use crate::context::{ContextManager, JobContext, JobState};
+use crate::context::{ContextManager, JobState};
 use crate::db::Database;
 use crate::history::SandboxJobRecord;
 use crate::orchestrator::auth::CredentialGrant;
@@ -308,7 +310,7 @@ impl CreateJobTool {
         &self,
         title: &str,
         description: &str,
-        ctx: &JobContext,
+        ctx: &dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -322,12 +324,12 @@ impl CreateJobTool {
         {
             // Pass the originating conversation_id via metadata so the new job
             // can link back to it for frontend navigation.
-            let metadata = ctx
-                .conversation_id
+            let metadata: Option<serde_json::Value> = ctx
+                .conversation_id()
                 .map(|conv_id| serde_json::json!({ "__conversation_id": conv_id.to_string() }));
 
             return match scheduler
-                .dispatch_job(&ctx.user_id, title, description, metadata)
+                .dispatch_job(ctx.user_id(), title, description, metadata)
                 .await
             {
                 Ok(job_id) => {
@@ -357,7 +359,7 @@ impl CreateJobTool {
         // Fallback: ContextManager-only (scheduler not yet initialized).
         match self
             .context_manager
-            .create_job_for_user(&ctx.user_id, title, description)
+            .create_job_for_user(ctx.user_id(), title, description)
             .await
         {
             Ok(job_id) => {
@@ -386,7 +388,7 @@ impl CreateJobTool {
         wait: bool,
         mode: JobMode,
         credential_grants: Vec<CredentialGrant>,
-        ctx: &JobContext,
+        ctx: &dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
         let jm = self.job_manager.as_ref().ok_or_else(|| {
@@ -417,7 +419,7 @@ impl CreateJobTool {
         // job_events, cancel_job) can find sandbox jobs. Without this, sandbox
         // jobs exist only in the DB and are invisible to the agent.
         self.context_manager
-            .register_sandbox_job(job_id, &ctx.user_id, task, task)
+            .register_sandbox_job(job_id, ctx.user_id(), task, task)
             .await
             .map_err(|e| {
                 ToolError::ExecutionFailed(format!("failed to register sandbox job: {}", e))
@@ -428,7 +430,7 @@ impl CreateJobTool {
             id: job_id,
             task: task.to_string(),
             status: "creating".to_string(),
-            user_id: ctx.user_id.clone(),
+            user_id: ctx.user_id().to_string(),
             project_dir: project_dir_str.clone(),
             success: None,
             failure_reason: None,
@@ -495,7 +497,7 @@ impl CreateJobTool {
                 endpoint: None,
                 credential_grants: credential_grant_names,
             };
-            let _ = etx.send((job_id, ctx.user_id.clone(), audit_event));
+            let _ = etx.send((job_id, ctx.user_id().to_string(), audit_event));
         }
 
         if !wait {
@@ -812,11 +814,13 @@ fn resolve_project_dir(
     Ok((canonical_dir, browse_id))
 }
 
-fn monitor_route_from_ctx(ctx: &JobContext) -> Option<crate::agent::job_monitor::JobMonitorRoute> {
+fn monitor_route_from_ctx(
+    ctx: &dyn dasclaw_runtime::JobContextCore,
+) -> Option<crate::agent::job_monitor::JobMonitorRoute> {
     // notify_channel is required — without it we don't know which channel to
     // route the monitor output to, so return None to skip monitoring entirely.
     let channel = ctx
-        .metadata
+        .metadata()
         .get("notify_channel")
         .and_then(|v| v.as_str())?
         .to_string();
@@ -824,13 +828,13 @@ fn monitor_route_from_ctx(ctx: &JobContext) -> Option<crate::agent::job_monitor:
     // always present. The channel is the routing decision; the user is just
     // for attribution and can default safely.
     let user_id = ctx
-        .metadata
+        .metadata()
         .get("notify_user")
         .and_then(|v| v.as_str())
-        .unwrap_or(&ctx.user_id)
+        .unwrap_or(ctx.user_id())
         .to_string();
     let thread_id = ctx
-        .metadata
+        .metadata()
         .get("notify_thread_id")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
@@ -935,7 +939,7 @@ impl Tool for CreateJobTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let title = require_str(&params, "title")?;
 
@@ -965,7 +969,7 @@ impl Tool for CreateJobTool {
                 .map(PathBuf::from);
 
             // Parse and validate credential grants
-            let credential_grants = self.parse_credentials(&params, &ctx.user_id).await?;
+            let credential_grants = self.parse_credentials(&params, ctx.user_id()).await?;
 
             // Combine title and description into the task prompt for the sub-agent.
             let task = format!("{}\n\n{}", title, description);
@@ -1018,7 +1022,7 @@ impl Tool for ListJobsTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -1028,32 +1032,32 @@ impl Tool for ListJobsTool {
             .unwrap_or("all");
 
         let job_ids = match filter {
-            "active" => self.context_manager.active_jobs_for(&ctx.user_id).await,
-            _ => self.context_manager.all_jobs_for(&ctx.user_id).await,
+            "active" => self.context_manager.active_jobs_for(ctx.user_id()).await,
+            _ => self.context_manager.all_jobs_for(ctx.user_id()).await,
         };
 
         let mut jobs = Vec::new();
         for job_id in job_ids {
             if let Ok(ctx) = self.context_manager.get_context(job_id).await {
                 let include = match filter {
-                    "completed" => ctx.state == JobState::Completed,
-                    "failed" => ctx.state == JobState::Failed,
-                    "active" => ctx.state.is_active(),
+                    "completed" => ctx.state() == JobState::Completed,
+                    "failed" => ctx.state() == JobState::Failed,
+                    "active" => ctx.state().is_active(),
                     _ => true,
                 };
 
                 if include {
                     jobs.push(serde_json::json!({
                         "job_id": job_id.to_string(),
-                        "title": ctx.title,
-                        "status": format!("{:?}", ctx.state),
-                        "created_at": ctx.created_at.to_rfc3339()
+                        "title": ctx.title(),
+                        "status": format!("{:?}", ctx.state()),
+                        "created_at": ctx.created_at().to_rfc3339()
                     }));
                 }
             }
         }
 
-        let summary = self.context_manager.summary_for(&ctx.user_id).await;
+        let summary = self.context_manager.summary_for(ctx.user_id()).await;
 
         let result = serde_json::json!({
             "jobs": jobs,
@@ -1111,17 +1115,17 @@ impl Tool for JobStatusTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
-        let requester_id = ctx.user_id.clone();
+        let requester_id = ctx.user_id().to_string();
 
         let job_id_str = require_str(&params, "job_id")?;
         let job_id = resolve_job_id(job_id_str, &self.context_manager).await?;
 
         match self.context_manager.get_context(job_id).await {
             Ok(job_ctx) => {
-                if job_ctx.user_id != requester_id {
+                if job_ctx.user_id() != requester_id {
                     let result = serde_json::json!({
                         "error": "Job not found".to_string()
                     });
@@ -1129,14 +1133,14 @@ impl Tool for JobStatusTool {
                 }
                 let result = serde_json::json!({
                     "job_id": job_id.to_string(),
-                    "title": job_ctx.title,
-                    "description": job_ctx.description,
-                    "status": format!("{:?}", job_ctx.state),
-                    "created_at": job_ctx.created_at.to_rfc3339(),
+                    "title": job_ctx.title(),
+                    "description": job_ctx.description(),
+                    "status": format!("{:?}", job_ctx.state()),
+                    "created_at": job_ctx.created_at().to_rfc3339(),
                     "started_at": job_ctx.started_at.map(|t| t.to_rfc3339()),
                     "completed_at": job_ctx.completed_at.map(|t| t.to_rfc3339()),
                     "actual_cost": job_ctx.actual_cost.to_string(),
-                    "fallback_deliverable": job_ctx.metadata.get("fallback_deliverable"),
+                    "fallback_deliverable": job_ctx.metadata().get("fallback_deliverable"),
                 });
                 Ok(ToolOutput::success(result, start.elapsed()))
             }
@@ -1212,10 +1216,10 @@ impl Tool for CancelJobTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
-        let requester_id = ctx.user_id.clone();
+        let requester_id = ctx.user_id().to_string();
 
         let job_id_str = require_str(&params, "job_id")?;
         let job_id = resolve_job_id(job_id_str, &self.context_manager).await?;
@@ -1224,7 +1228,7 @@ impl Tool for CancelJobTool {
         match self
             .context_manager
             .update_context(job_id, |ctx| {
-                if ctx.user_id != requester_id {
+                if ctx.user_id() != requester_id {
                     return Err("Job not found".to_string());
                 }
                 ctx.transition_to(JobState::Cancelled, Some("Cancelled by user".to_string()))
@@ -1353,7 +1357,7 @@ impl Tool for JobEventsTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -1377,7 +1381,7 @@ impl Tool for JobEventsTool {
                 ))
             })?;
 
-        if job_ctx.user_id != ctx.user_id {
+        if job_ctx.user_id() != ctx.user_id() {
             return Err(ToolError::ExecutionFailed(format!(
                 "job {} does not belong to current user",
                 job_id
@@ -1491,7 +1495,7 @@ impl Tool for JobPromptTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -1515,7 +1519,7 @@ impl Tool for JobPromptTool {
                 ))
             })?;
 
-        if job_ctx.user_id != ctx.user_id {
+        if job_ctx.user_id() != ctx.user_id() {
             return Err(ToolError::ExecutionFailed(format!(
                 "job {} does not belong to current user",
                 job_id
@@ -1564,6 +1568,7 @@ impl Tool for JobPromptTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::JobContext;
 
     #[tokio::test]
     async fn test_create_job_tool_local() {
@@ -1578,8 +1583,8 @@ mod tests {
             "description": "A test job description"
         });
 
-        let ctx = JobContext::default();
-        let result = tool.execute(params, &ctx).await.unwrap(); // safety: test
+        let mut ctx = JobContext::default();
+        let result = tool.execute(params, &mut ctx).await.unwrap(); // safety: test
 
         let job_id = result.result.get("job_id").unwrap().as_str().unwrap(); // safety: test
         assert!(!job_id.is_empty()); // safety: test
@@ -1649,8 +1654,8 @@ mod tests {
         let tool = ListJobsTool::new(manager);
 
         let params = serde_json::json!({});
-        let ctx = JobContext::default();
-        let result = tool.execute(params, &ctx).await.unwrap(); // safety: test
+        let mut ctx = JobContext::default();
+        let result = tool.execute(params, &mut ctx).await.unwrap(); // safety: test
 
         let jobs = result.result.get("jobs").unwrap().as_array().unwrap(); // safety: test
         assert_eq!(jobs.len(), 2); // safety: test
@@ -1666,8 +1671,8 @@ mod tests {
         let params = serde_json::json!({
             "job_id": job_id.to_string()
         });
-        let ctx = JobContext::default();
-        let result = tool.execute(params, &ctx).await.unwrap(); // safety: test
+        let mut ctx = JobContext::default();
+        let result = tool.execute(params, &mut ctx).await.unwrap(); // safety: test
 
         assert_eq!(
             /* safety: test */
@@ -1680,10 +1685,10 @@ mod tests {
     async fn test_create_job_params() {
         let manager = Arc::new(ContextManager::new(5));
         let tool = CreateJobTool::new(manager);
-        let ctx = JobContext::default();
+        let mut ctx = JobContext::default();
 
         let missing_title = tool
-            .execute(serde_json::json!({ "description": "A test job" }), &ctx)
+            .execute(serde_json::json!({ "description": "A test job" }), &mut ctx)
             .await;
         assert!(missing_title.is_err()); // safety: test
         assert!(
@@ -1695,7 +1700,7 @@ mod tests {
         );
 
         let missing_description = tool
-            .execute(serde_json::json!({ "title": "Test Job" }), &ctx)
+            .execute(serde_json::json!({ "title": "Test Job" }), &mut ctx)
             .await;
         assert!(missing_description.is_err()); // safety: test
         assert!(
@@ -1745,8 +1750,8 @@ mod tests {
             .unwrap(); // safety: test
 
         let tool = ListJobsTool::new(Arc::clone(&manager));
-        let ctx = JobContext::default();
-        let result = tool.execute(serde_json::json!({}), &ctx).await.unwrap(); // safety: test
+        let mut ctx = JobContext::default();
+        let result = tool.execute(serde_json::json!({}), &mut ctx).await.unwrap(); // safety: test
 
         let jobs = result.result.get("jobs").unwrap().as_array().unwrap(); // safety: test
         assert_eq!(jobs.len(), 3); // safety: test
@@ -1790,9 +1795,12 @@ mod tests {
             .unwrap(); // safety: test
 
         let tool = JobStatusTool::new(Arc::clone(&manager));
-        let ctx = JobContext::default();
+        let mut ctx = JobContext::default();
         let result = tool
-            .execute(serde_json::json!({ "job_id": job_id.to_string() }), &ctx)
+            .execute(
+                serde_json::json!({ "job_id": job_id.to_string() }),
+                &mut ctx,
+            )
             .await
             .unwrap(); // safety: test
 
@@ -1819,9 +1827,12 @@ mod tests {
             .unwrap(); // safety: test
 
         let tool = CancelJobTool::new(Arc::clone(&manager));
-        let ctx = JobContext::default();
+        let mut ctx = JobContext::default();
         let result = tool
-            .execute(serde_json::json!({ "job_id": job_id.to_string() }), &ctx)
+            .execute(
+                serde_json::json!({ "job_id": job_id.to_string() }),
+                &mut ctx,
+            )
             .await
             .unwrap(); // safety: test
 
@@ -1851,9 +1862,12 @@ mod tests {
             .unwrap(); // safety: test
 
         let tool = CancelJobTool::new(Arc::clone(&manager));
-        let ctx = JobContext::default();
+        let mut ctx = JobContext::default();
         let result = tool
-            .execute(serde_json::json!({ "job_id": job_id.to_string() }), &ctx)
+            .execute(
+                serde_json::json!({ "job_id": job_id.to_string() }),
+                &mut ctx,
+            )
             .await
             .unwrap(); // safety: test
 
@@ -1892,8 +1906,8 @@ mod tests {
 
         let tool = JobStatusTool::new(manager);
         let params = serde_json::json!({ "job_id": job_id.to_string() });
-        let ctx = JobContext::default();
-        let result = tool.execute(params, &ctx).await.unwrap(); // safety: test
+        let mut ctx = JobContext::default();
+        let result = tool.execute(params, &mut ctx).await.unwrap(); // safety: test
 
         let fb = result.result.get("fallback_deliverable").unwrap(); // safety: test
         assert_eq!(fb.get("partial").unwrap(), true); // safety: test
@@ -2132,8 +2146,8 @@ mod tests {
             "done": false,
         });
 
-        let ctx = JobContext::default();
-        let result = tool.execute(params, &ctx).await.unwrap(); // safety: test
+        let mut ctx = JobContext::default();
+        let result = tool.execute(params, &mut ctx).await.unwrap(); // safety: test
 
         assert_eq!(
             /* safety: test */
@@ -2172,8 +2186,8 @@ mod tests {
             "content": "hello",
         });
 
-        let ctx = JobContext::default();
-        let result = tool.execute(params, &ctx).await;
+        let mut ctx = JobContext::default();
+        let result = tool.execute(params, &mut ctx).await;
         assert!(result.is_err()); // safety: test
     }
 
@@ -2187,8 +2201,8 @@ mod tests {
             "job_id": Uuid::new_v4().to_string(),
         });
 
-        let ctx = JobContext::default();
-        let result = tool.execute(params, &ctx).await;
+        let mut ctx = JobContext::default();
+        let result = tool.execute(params, &mut ctx).await;
         assert!(result.is_err()); // safety: test
     }
 
@@ -2263,12 +2277,12 @@ mod tests {
         });
 
         // Attacker context with a different user_id.
-        let ctx = JobContext {
+        let mut ctx = JobContext {
             user_id: "attacker".to_string(),
             ..Default::default()
         };
 
-        let result = tool.execute(params, &ctx).await;
+        let result = tool.execute(params, &mut ctx).await;
         assert!(result.is_err()); // safety: test
         let err = result.unwrap_err().to_string();
         assert!(

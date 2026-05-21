@@ -11,7 +11,6 @@ use async_trait::async_trait;
 
 use dasclaw_lsp::{LspAction, LspClient, LspRegistry, path_to_uri};
 
-use crate::context::JobContext;
 use crate::tools::tool::{ApprovalRequirement, RiskLevel, Tool, ToolDomain, ToolError, ToolOutput};
 
 /// LSP code intelligence tool.
@@ -82,7 +81,7 @@ impl Tool for LspQueryTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = Instant::now();
 
@@ -529,8 +528,8 @@ fn symbol_kind_name(kind: u64) -> &'static str {
 }
 
 /// Resolve the workspace root from the job context or fall back to CWD.
-fn resolve_workspace_root(ctx: &JobContext) -> PathBuf {
-    ctx.metadata
+fn resolve_workspace_root(ctx: &dyn dasclaw_runtime::JobContextCore) -> PathBuf {
+    ctx.metadata()
         .get("workspace_root")
         .and_then(|v| v.as_str())
         .map(PathBuf::from)

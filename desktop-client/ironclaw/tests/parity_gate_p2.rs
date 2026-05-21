@@ -70,18 +70,18 @@ async fn fp_023_plan_mode_toggle_switches_to_planning() {
 #[tokio::test]
 async fn fp_023b_plan_mode_tool_actions() {
     let tool = PlanModeTool::new();
-    let ctx = make_ctx();
+    let mut ctx = make_ctx();
 
     // Toggle
     let result = tool
-        .execute(serde_json::json!({"action": "toggle"}), &ctx)
+        .execute(serde_json::json!({"action": "toggle"}), &mut ctx)
         .await
         .expect("toggle");
     assert_eq!(result.result["action"], "toggle");
 
     // Status
     let result = tool
-        .execute(serde_json::json!({"action": "status"}), &ctx)
+        .execute(serde_json::json!({"action": "status"}), &mut ctx)
         .await
         .expect("status");
     assert_eq!(result.result["action"], "status");
@@ -100,7 +100,7 @@ async fn fp_023b_plan_mode_tool_actions() {
                     "confidence": 0.85
                 }
             }),
-            &ctx,
+            &mut ctx,
         )
         .await
         .expect("submit");
@@ -282,12 +282,12 @@ async fn fp_026b_fork_does_not_copy_pending_approvals() {
 #[tokio::test]
 async fn fp_027_explore_sub_agent_readonly_whitelist() {
     let tool = SubAgentTool::new();
-    let ctx = make_ctx();
+    let mut ctx = make_ctx();
 
     let result = tool
         .execute(
             serde_json::json!({"role": "explore", "goal": "Find all usages of handle_request()"}),
-            &ctx,
+            &mut ctx,
         )
         .await
         .expect("explore should succeed");
@@ -321,12 +321,12 @@ async fn fp_027_explore_sub_agent_readonly_whitelist() {
 #[tokio::test]
 async fn fp_028_verify_sub_agent_has_shell_and_git_diff() {
     let tool = SubAgentTool::new();
-    let ctx = make_ctx();
+    let mut ctx = make_ctx();
 
     let result = tool
         .execute(
             serde_json::json!({"role": "verify", "goal": "Check test output"}),
-            &ctx,
+            &mut ctx,
         )
         .await
         .expect("verify should succeed");
@@ -358,11 +358,11 @@ async fn fp_028_verify_sub_agent_has_shell_and_git_diff() {
 async fn fp_029_sub_agent_depth_limit() {
     // Agent at depth 0 can spawn
     let tool_d0 = SubAgentTool::new();
-    let ctx = make_ctx();
+    let mut ctx = make_ctx();
     let result = tool_d0
         .execute(
             serde_json::json!({"role": "explore", "goal": "search"}),
-            &ctx,
+            &mut ctx,
         )
         .await
         .expect("depth 0 should succeed");
@@ -373,7 +373,7 @@ async fn fp_029_sub_agent_depth_limit() {
     let err = tool_d1
         .execute(
             serde_json::json!({"role": "explore", "goal": "nested search"}),
-            &ctx,
+            &mut ctx,
         )
         .await;
     assert!(err.is_err(), "depth 1 should fail");
@@ -413,18 +413,18 @@ async fn fp_030_sub_agent_approval_and_risk() {
 #[tokio::test]
 async fn fp_030b_session_fork_tool_validation() {
     let tool = SessionForkTool::new();
-    let ctx = make_ctx();
+    let mut ctx = make_ctx();
 
     // Valid fork
     let result = tool
-        .execute(serde_json::json!({"at_turn": 3}), &ctx)
+        .execute(serde_json::json!({"at_turn": 3}), &mut ctx)
         .await
         .expect("valid fork");
     assert_eq!(result.result["action"], "fork");
     assert_eq!(result.result["at_turn"], 3);
 
     // Missing at_turn → error
-    let err = tool.execute(serde_json::json!({}), &ctx).await;
+    let err = tool.execute(serde_json::json!({}), &mut ctx).await;
     assert!(err.is_err());
 
     // Approval: Never (session fork is a navigational action)
@@ -441,21 +441,21 @@ async fn fp_030b_session_fork_tool_validation() {
 #[tokio::test]
 async fn fp_030c_plan_mode_rejects_invalid() {
     let tool = PlanModeTool::new();
-    let ctx = make_ctx();
+    let mut ctx = make_ctx();
 
     // Missing action
-    assert!(tool.execute(serde_json::json!({}), &ctx).await.is_err());
+    assert!(tool.execute(serde_json::json!({}), &mut ctx).await.is_err());
 
     // Unknown action
     assert!(
-        tool.execute(serde_json::json!({"action": "explode"}), &ctx)
+        tool.execute(serde_json::json!({"action": "explode"}), &mut ctx)
             .await
             .is_err()
     );
 
     // Submit without plan
     assert!(
-        tool.execute(serde_json::json!({"action": "submit"}), &ctx)
+        tool.execute(serde_json::json!({"action": "submit"}), &mut ctx)
             .await
             .is_err()
     );
@@ -464,7 +464,7 @@ async fn fp_030c_plan_mode_rejects_invalid() {
     assert!(
         tool.execute(
             serde_json::json!({"action": "submit", "plan": {"goal": "x", "steps": []}}),
-            &ctx
+            &mut ctx
         )
         .await
         .is_err()

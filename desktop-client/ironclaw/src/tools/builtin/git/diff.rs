@@ -2,7 +2,6 @@
 
 use std::time::Instant;
 
-use crate::context::JobContext;
 use crate::tools::tool::{ApprovalRequirement, RiskLevel, Tool, ToolDomain, ToolError, ToolOutput};
 
 use super::runner::{resolve_workdir, run_git};
@@ -55,7 +54,7 @@ impl Tool for GitDiffTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _ctx: &JobContext,
+        _ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = Instant::now();
         let path = params.get("path").and_then(|v| v.as_str());
@@ -120,9 +119,9 @@ mod tests {
     #[tokio::test]
     async fn test_git_diff_no_changes() {
         let tool = GitDiffTool::new();
-        let ctx = make_ctx();
+        let mut ctx = make_ctx();
         // In a clean working tree, should return "No unstaged changes."
-        let result = tool.execute(serde_json::json!({}), &ctx).await;
+        let result = tool.execute(serde_json::json!({}), &mut ctx).await;
         match result {
             Ok(output) => {
                 let text = output.result.as_str().unwrap_or_default();
@@ -137,9 +136,9 @@ mod tests {
     #[tokio::test]
     async fn test_git_diff_staged() {
         let tool = GitDiffTool::new();
-        let ctx = make_ctx();
+        let mut ctx = make_ctx();
         let result = tool
-            .execute(serde_json::json!({"staged": true}), &ctx)
+            .execute(serde_json::json!({"staged": true}), &mut ctx)
             .await;
         match result {
             Ok(output) => {

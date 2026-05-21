@@ -133,12 +133,13 @@ impl LoopDelegate for ParityDelegate {
         reason_ctx: &mut ReasoningContext,
     ) -> Result<Option<LoopOutcome>, dasclaw_core::HostError> {
         for tc in &tool_calls {
+            let mut job_ctx = self.job_ctx.clone();
             let result = execute_tool_with_safety(
                 &self.tools,
                 &self.safety,
                 &tc.name,
                 tc.arguments.clone(),
-                &self.job_ctx,
+                &mut job_ctx,
             )
             .await;
 

@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::context::JobContext;
 use crate::extensions::{ExtensionKind, ExtensionManager};
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolError, ToolOutput, require_str};
 
@@ -59,7 +58,7 @@ impl Tool for ToolSearchTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _ctx: &JobContext,
+        _ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -133,7 +132,7 @@ impl Tool for ToolInstallTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -153,7 +152,7 @@ impl Tool for ToolInstallTool {
 
         let result = self
             .manager
-            .install(name, url, kind_hint, &ctx.user_id)
+            .install(name, url, kind_hint, ctx.user_id())
             .await
             .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
@@ -208,7 +207,7 @@ impl Tool for ToolAuthTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -216,13 +215,13 @@ impl Tool for ToolAuthTool {
 
         let result = self
             .manager
-            .auth(name, &ctx.user_id)
+            .auth(name, ctx.user_id())
             .await
             .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
         // Auto-activate after successful auth so tools are available immediately
         if result.is_authenticated() {
-            match self.manager.activate(name, &ctx.user_id).await {
+            match self.manager.activate(name, ctx.user_id()).await {
                 Ok(activate_result) => {
                     let output = serde_json::json!({
                         "status": "authenticated_and_activated",
@@ -307,13 +306,13 @@ impl Tool for ToolActivateTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
         let name = require_str(&params, "name")?;
 
-        match self.manager.activate(name, &ctx.user_id).await {
+        match self.manager.activate(name, ctx.user_id()).await {
             Ok(result) => {
                 let output = serde_json::to_value(&result)
                     .unwrap_or_else(|_| serde_json::json!({"error": "serialization failed"}));
@@ -332,12 +331,12 @@ impl Tool for ToolActivateTool {
 
                 // Activation failed due to missing auth; initiate auth flow
                 // so the agent loop can show the auth card.
-                match self.manager.auth(name, &ctx.user_id).await {
+                match self.manager.auth(name, ctx.user_id()).await {
                     Ok(auth_result) if auth_result.is_authenticated() => {
                         // Auth succeeded (e.g. env var was set); retry activation.
                         let result = self
                             .manager
-                            .activate(name, &ctx.user_id)
+                            .activate(name, ctx.user_id())
                             .await
                             .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
                         let output = serde_json::to_value(&result).unwrap_or_else(
@@ -407,7 +406,7 @@ impl Tool for ToolListTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -428,7 +427,7 @@ impl Tool for ToolListTool {
 
         let extensions = self
             .manager
-            .list(kind_filter, include_available, &ctx.user_id)
+            .list(kind_filter, include_available, ctx.user_id())
             .await
             .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
@@ -480,7 +479,7 @@ impl Tool for ToolRemoveTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -488,7 +487,7 @@ impl Tool for ToolRemoveTool {
 
         let message = self
             .manager
-            .remove(name, &ctx.user_id)
+            .remove(name, ctx.user_id())
             .await
             .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
@@ -544,7 +543,7 @@ impl Tool for ToolUpgradeTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -552,7 +551,7 @@ impl Tool for ToolUpgradeTool {
 
         let result = self
             .manager
-            .upgrade(name, &ctx.user_id)
+            .upgrade(name, ctx.user_id())
             .await
             .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
@@ -606,7 +605,7 @@ impl Tool for ExtensionInfoTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -614,7 +613,7 @@ impl Tool for ExtensionInfoTool {
 
         let info = self
             .manager
-            .extension_info(name, &ctx.user_id)
+            .extension_info(name, ctx.user_id())
             .await
             .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
