@@ -46,8 +46,10 @@
 //! ```
 
 pub mod chunker;
+pub mod document;
 pub mod layer;
 pub mod policy;
+pub mod privacy;
 pub use policy::{
     NetworkAccess, SandboxPolicy, WritableRoot, default_read_only_subpaths_for_writable_root,
 };
