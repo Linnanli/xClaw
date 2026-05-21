@@ -2,6 +2,11 @@
 //!
 //! The LLM calls this with an `action`, `file_path`, and optional `position`
 //! to perform code intelligence queries.
+//!
+//! Verbatim-moved from `desktop-client/ironclaw/src/tools/builtin/lsp/tool.rs`
+//! per ADR-152 §3 F3.3 (tracking issue #688). ironclaw retains a
+//! `pub use dasclaw_lsp::LspQueryTool;` shim so existing registration paths
+//! continue to resolve.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -9,9 +14,10 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 
-use dasclaw_lsp::{LspAction, LspClient, LspRegistry, path_to_uri};
+use dasclaw_runtime::{JobContextCore, Tool};
+use dasclaw_tool::{ApprovalRequirement, RiskLevel, ToolDomain, ToolError, ToolOutput};
 
-use crate::tools::tool::{ApprovalRequirement, RiskLevel, Tool, ToolDomain, ToolError, ToolOutput};
+use crate::{LspAction, LspClient, LspRegistry, path_to_uri};
 
 /// LSP code intelligence tool.
 ///
@@ -81,7 +87,7 @@ impl Tool for LspQueryTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &mut dyn dasclaw_runtime::JobContextCore,
+        ctx: &mut dyn JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = Instant::now();
 
@@ -211,18 +217,20 @@ async fn dispatch_action(
             let result = lsp
                 .request(
                     "textDocument/definition",
-                    position_params(file_uri, line, col),
+                    serde_json::Value::Object(position_params(file_uri, line, col)),
                 )
                 .await?;
             Ok(format_locations(&result))
         }
         LspAction::FindReferences => {
             let mut p = position_params(file_uri, line, col);
-            p.as_object_mut().expect("object").insert(
+            p.insert(
                 "context".into(),
                 serde_json::json!({"includeDeclaration": true}),
             );
-            let result = lsp.request("textDocument/references", p).await?;
+            let result = lsp
+                .request("textDocument/references", serde_json::Value::Object(p))
+                .await?;
             Ok(format_locations(&result))
         }
         LspAction::Diagnostics => {
@@ -245,7 +253,10 @@ async fn dispatch_action(
         }
         LspAction::Hover => {
             let result = lsp
-                .request("textDocument/hover", position_params(file_uri, line, col))
+                .request(
+                    "textDocument/hover",
+                    serde_json::Value::Object(position_params(file_uri, line, col)),
+                )
                 .await?;
             Ok(format_hover(&result))
         }
@@ -268,17 +279,17 @@ async fn dispatch_action(
                     ToolError::InvalidParameters("'new_name' is required for rename".into())
                 })?;
             let mut p = position_params(file_uri, line, col);
-            p.as_object_mut()
-                .expect("object")
-                .insert("newName".into(), serde_json::Value::String(new_name.into()));
-            let result = lsp.request("textDocument/rename", p).await?;
+            p.insert("newName".into(), serde_json::Value::String(new_name.into()));
+            let result = lsp
+                .request("textDocument/rename", serde_json::Value::Object(p))
+                .await?;
             Ok(format_workspace_edit(&result))
         }
         LspAction::Completions => {
             let result = lsp
                 .request(
                     "textDocument/completion",
-                    position_params(file_uri, line, col),
+                    serde_json::Value::Object(position_params(file_uri, line, col)),
                 )
                 .await?;
             Ok(format_completions(&result))
@@ -287,14 +298,24 @@ async fn dispatch_action(
 }
 
 /// Build a `TextDocumentPositionParams` JSON value.
-fn position_params(uri: &str, line: Option<u32>, col: Option<u32>) -> serde_json::Value {
-    serde_json::json!({
+fn position_params(
+    uri: &str,
+    line: Option<u32>,
+    col: Option<u32>,
+) -> serde_json::Map<String, serde_json::Value> {
+    let value = serde_json::json!({
         "textDocument": { "uri": uri },
         "position": {
             "line": line.unwrap_or(0),
             "character": col.unwrap_or(0)
         }
-    })
+    });
+    match value {
+        serde_json::Value::Object(map) => map,
+        // Unreachable: the literal above is always an object. Construct an
+        // empty map defensively rather than panicking.
+        _ => serde_json::Map::new(),
+    }
 }
 
 // ---- Formatting helpers ----
@@ -528,7 +549,7 @@ fn symbol_kind_name(kind: u64) -> &'static str {
 }
 
 /// Resolve the workspace root from the job context or fall back to CWD.
-fn resolve_workspace_root(ctx: &dyn dasclaw_runtime::JobContextCore) -> PathBuf {
+fn resolve_workspace_root(ctx: &dyn JobContextCore) -> PathBuf {
     ctx.metadata()
         .get("workspace_root")
         .and_then(|v| v.as_str())

@@ -2972,6 +2972,8 @@ dependencies = [
 name = "dasclaw_lsp"
 version = "0.0.0-w1"
 dependencies = [
+ "async-trait",
+ "dasclaw_runtime",
  "dasclaw_tool",
  "serde",
  "serde_json",
