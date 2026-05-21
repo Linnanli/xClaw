@@ -1257,7 +1257,7 @@ impl Agent {
                 .await;
 
             let tool_result = self
-                .execute_chat_tool(&pending.tool_name, &pending.parameters, &job_ctx)
+                .execute_chat_tool(&pending.tool_name, &pending.parameters, &mut job_ctx)
                 .await;
 
             let tool_ref = self.tools().get(&pending.tool_name).await;
@@ -1426,7 +1426,7 @@ impl Agent {
                         .await;
 
                     let result = self
-                        .execute_chat_tool(&tc.name, &tc.arguments, &job_ctx)
+                        .execute_chat_tool(&tc.name, &tc.arguments, &mut job_ctx)
                         .await;
 
                     let deferred_tool = self.tools().get(&tc.name).await;
@@ -1456,7 +1456,7 @@ impl Agent {
                     let tools = self.tools().clone();
                     let safety = self.safety().clone();
                     let channels = self.channels.clone();
-                    let job_ctx = job_ctx.clone();
+                    let mut job_ctx = job_ctx.clone();
                     let tc = tc.clone();
                     let channel = message.channel.clone();
                     let metadata = crate::channels::tool_enriched_metadata(
@@ -1481,7 +1481,7 @@ impl Agent {
                             &safety,
                             &tc.name,
                             &tc.arguments,
-                            &job_ctx,
+                            &mut job_ctx,
                         )
                         .await;
 

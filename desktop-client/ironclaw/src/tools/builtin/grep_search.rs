@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 
-use crate::context::JobContext;
 use crate::tools::builtin::file_guard;
 use crate::tools::builtin::path_utils::validate_path;
 use crate::tools::tool::{
@@ -85,7 +84,7 @@ impl Tool for GrepSearchTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -369,7 +368,7 @@ mod tests {
     #[test]
     fn binary_file_skipped() {
         let dir = setup_test_dir();
-        fs::write(dir.path().join("binary.bin"), &[0u8, 1, 2, 0, 3]).expect("write");
+        fs::write(dir.path().join("binary.bin"), [0u8, 1, 2, 0, 3]).expect("write");
         let re = regex::Regex::new(".").expect("regex");
         let matches = search_file(&re, &dir.path().join("binary.bin"), 0, 0, 50).expect("search");
         assert!(matches.is_empty());

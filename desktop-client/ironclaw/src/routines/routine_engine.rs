@@ -1615,7 +1615,7 @@ async fn execute_lightweight_with_tools(
 
     // Create a minimal job context for tool execution with unique run ID
     let run_id = Uuid::new_v4();
-    let job_ctx = JobContext {
+    let mut job_ctx = JobContext {
         job_id: run_id,
         user_id: routine.user_id.clone(),
         title: "Lightweight Routine".to_string(),
@@ -1707,7 +1707,7 @@ async fn execute_lightweight_with_tools(
 
             // Execute tools sequentially
             for tc in response.tool_calls {
-                let result = execute_routine_tool(ctx, &job_ctx, &allowed_tools, &tc).await;
+                let result = execute_routine_tool(ctx, &mut job_ctx, &allowed_tools, &tc).await;
 
                 // Sanitize and wrap result (including errors).
                 // ADR-148 R2: route through the unified Layer-B egress gate
@@ -1784,12 +1784,12 @@ fn snapshot_messages_for_tool_iteration(messages: &[ChatMessage]) -> Vec<ChatMes
 /// Execute a single tool for a lightweight routine.
 async fn execute_routine_tool(
     ctx: &EngineContext,
-    job_ctx: &JobContext,
+    job_ctx: &mut dyn dasclaw_runtime::JobContextCore,
     allowed_tools: &std::collections::HashSet<String>,
     tc: &ToolCall,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     if !allowed_tools.contains(&tc.name) {
-        let message = autonomous_unavailable_message(&tc.name, &job_ctx.user_id);
+        let message = autonomous_unavailable_message(&tc.name, job_ctx.user_id());
         return Err(message.into());
     }
 

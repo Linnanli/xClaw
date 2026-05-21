@@ -9,7 +9,6 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::context::JobContext;
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolDomain, ToolError, ToolOutput};
 
 /// Tool for forking a conversation thread at a specific turn.
@@ -64,7 +63,7 @@ impl Tool for SessionForkTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -86,7 +85,7 @@ impl Tool for SessionForkTool {
             "action": "fork",
             "at_turn": at_turn,
             "reason": reason,
-            "thread_id": ctx.conversation_id.map(|id| id.to_string()),
+            "thread_id": ctx.conversation_id().map(|id| id.to_string()),
             "message": format!(
                 "Fork requested at turn {}. A new thread will be created with history up to that point.",
                 at_turn
@@ -112,6 +111,7 @@ impl Tool for SessionForkTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::JobContext;
     use serde_json::json;
 
     fn test_ctx() -> JobContext {
@@ -124,7 +124,7 @@ mod tests {
     async fn test_fork_valid() {
         let tool = SessionForkTool::new();
         let result = tool
-            .execute(json!({"at_turn": 3}), &test_ctx())
+            .execute(json!({"at_turn": 3}), &mut test_ctx())
             .await
             .expect("fork should succeed");
         assert_eq!(result.result["action"], "fork");
@@ -137,7 +137,7 @@ mod tests {
         let result = tool
             .execute(
                 json!({"at_turn": 1, "reason": "try alternative approach"}),
-                &test_ctx(),
+                &mut test_ctx(),
             )
             .await
             .expect("fork should succeed");
@@ -148,7 +148,7 @@ mod tests {
     async fn test_fork_at_zero() {
         let tool = SessionForkTool::new();
         let result = tool
-            .execute(json!({"at_turn": 0}), &test_ctx())
+            .execute(json!({"at_turn": 0}), &mut test_ctx())
             .await
             .expect("fork at 0 should succeed");
         assert_eq!(result.result["at_turn"], 0);
@@ -157,7 +157,7 @@ mod tests {
     #[tokio::test]
     async fn test_fork_missing_at_turn() {
         let tool = SessionForkTool::new();
-        let err = tool.execute(json!({}), &test_ctx()).await.unwrap_err();
+        let err = tool.execute(json!({}), &mut test_ctx()).await.unwrap_err();
         assert!(matches!(err, ToolError::InvalidParameters(_)));
     }
 
@@ -165,7 +165,7 @@ mod tests {
     async fn test_fork_negative_turn() {
         let tool = SessionForkTool::new();
         let err = tool
-            .execute(json!({"at_turn": -1}), &test_ctx())
+            .execute(json!({"at_turn": -1}), &mut test_ctx())
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::InvalidParameters(_)));

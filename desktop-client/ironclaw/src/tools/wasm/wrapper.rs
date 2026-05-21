@@ -16,7 +16,6 @@ use wasmtime::Store;
 use wasmtime::component::Linker;
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiView};
 
-use crate::context::JobContext;
 use crate::llm::recording::{HttpExchangeRequest, HttpExchangeResponse, HttpInterceptor};
 use crate::safety::LeakDetector;
 use crate::secrets::{DecryptedSecret, SecretsStore};
@@ -1123,7 +1122,7 @@ impl Tool for WasmToolWrapper {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = Instant::now();
         let timeout = self.prepared.limits.timeout;
@@ -1131,7 +1130,7 @@ impl Tool for WasmToolWrapper {
         // Pre-resolve host credentials from secrets store (async, before blocking task).
         // This decrypts the secrets once so the sync http_request() host function
         // can inject them without needing async access.
-        let credential_user_id = &ctx.user_id;
+        let credential_user_id = ctx.user_id();
         let host_credentials = resolve_host_credentials(
             &self.capabilities,
             self.secrets_store.as_deref(),
@@ -1140,8 +1139,18 @@ impl Tool for WasmToolWrapper {
         )
         .await;
 
-        // Serialize context for WASM
-        let context_json = serde_json::to_string(ctx).ok();
+        // Serialize context for WASM (build a JSON object from trait methods,
+        // since `dyn JobContextCore` is not directly `Serialize`).
+        let context_json = serde_json::to_string(&serde_json::json!({
+            "job_id": ctx.job_id().to_string(),
+            "user_id": ctx.user_id(),
+            "conversation_id": ctx.conversation_id().map(|u| u.to_string()),
+            "title": ctx.title(),
+            "description": ctx.description(),
+            "metadata": ctx.metadata(),
+            "user_timezone": ctx.user_timezone(),
+        }))
+        .ok();
 
         // Clone what we need for the blocking task
         let runtime = Arc::clone(&self.runtime);
@@ -2484,7 +2493,7 @@ mod tests {
             .await
             .unwrap();
         let store = Arc::new(RecordingSecretsStore::new());
-        let ctx = JobContext::with_user("owner-scope", "owner-scope test", "owner-scope test");
+        let mut ctx = JobContext::with_user("owner-scope", "owner-scope test", "owner-scope test");
 
         store
             .create(
@@ -2514,7 +2523,7 @@ mod tests {
 
         let wrapper = super::WasmToolWrapper::new(Arc::clone(&runtime), prepared, caps)
             .with_secrets_store(store.clone());
-        let result = wrapper.execute(serde_json::json!({}), &ctx).await;
+        let result = wrapper.execute(serde_json::json!({}), &mut ctx).await;
         assert!(result.is_err());
 
         let lookups = store.decrypted_lookups();

@@ -6,7 +6,6 @@ use async_trait::async_trait;
 use base64::Engine;
 use secrecy::{ExposeSecret, SecretString};
 
-use crate::context::JobContext;
 use crate::tools::builtin::path_utils::validate_path;
 use crate::tools::tool::{Tool, ToolError, ToolOutput};
 
@@ -97,7 +96,7 @@ impl Tool for ImageAnalyzeTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 

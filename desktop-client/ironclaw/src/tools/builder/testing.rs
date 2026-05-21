@@ -239,7 +239,8 @@ impl TestHarness {
 
         // Execute with timeout
         let exec_result = tokio::time::timeout(timeout, async {
-            tool.execute(test.input.clone(), &ctx).await
+            let mut ctx = ctx;
+            tool.execute(test.input.clone(), &mut ctx).await
         })
         .await;
 

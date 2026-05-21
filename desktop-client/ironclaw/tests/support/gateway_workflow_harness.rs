@@ -51,7 +51,7 @@ impl Tool for MockGithubWebhookTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _ctx: &ironclaw::context::JobContext,
+        _ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let event = params
             .pointer("/webhook/headers/x-github-event")

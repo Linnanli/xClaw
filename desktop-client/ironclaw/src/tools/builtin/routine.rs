@@ -24,7 +24,6 @@ use crate::agent::routine::{
     routine_verification_status,
 };
 use crate::agent::routine_engine::RoutineEngine;
-use crate::context::JobContext;
 use crate::db::Database;
 use crate::tools::tool::{
     ApprovalRequirement, Tool, ToolDiscoverySummary, ToolError, ToolOutput, require_str,
@@ -684,15 +683,15 @@ pub(crate) fn routine_update_parameters_schema() -> Value {
 
 const ROUTINE_LAST_NAME_STASH_KEY: &str = "__routine_last_name";
 
-async fn stash_last_routine_name(ctx: &JobContext, name: &str) {
-    ctx.tool_output_stash
+async fn stash_last_routine_name(ctx: &dyn dasclaw_runtime::JobContextCore, name: &str) {
+    ctx.tool_output_stash()
         .write()
         .await
         .insert(ROUTINE_LAST_NAME_STASH_KEY.to_string(), name.to_string());
 }
 
-async fn restore_last_routine_name(ctx: &JobContext) -> Option<String> {
-    ctx.tool_output_stash
+async fn restore_last_routine_name(ctx: &dyn dasclaw_runtime::JobContextCore) -> Option<String> {
+    ctx.tool_output_stash()
         .read()
         .await
         .get(ROUTINE_LAST_NAME_STASH_KEY)
@@ -1144,7 +1143,7 @@ impl Tool for RoutineCreateTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
         let normalized = parse_routine_create_request(&params)?;
@@ -1168,7 +1167,7 @@ impl Tool for RoutineCreateTool {
             id: Uuid::new_v4(),
             name: normalized.name.clone(),
             description: normalized.description.clone(),
-            user_id: ctx.user_id.clone(),
+            user_id: ctx.user_id().to_string(),
             enabled: true,
             trigger,
             action,
@@ -1259,13 +1258,13 @@ impl Tool for RoutineListTool {
     async fn execute(
         &self,
         _params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
         let routines = self
             .store
-            .list_routines(&ctx.user_id)
+            .list_routines(ctx.user_id())
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("failed to list routines: {e}")))?;
         let routine_ids: Vec<Uuid> = routines.iter().map(|routine| routine.id).collect();
@@ -1348,7 +1347,7 @@ impl Tool for RoutineUpdateTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -1357,7 +1356,7 @@ impl Tool for RoutineUpdateTool {
 
         let mut routine = self
             .store
-            .get_routine_by_name(&ctx.user_id, name)
+            .get_routine_by_name(ctx.user_id(), name)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("DB error: {e}")))?
             .ok_or_else(|| ToolError::ExecutionFailed(format!("routine '{}' not found", name)))?;
@@ -1518,7 +1517,7 @@ impl Tool for RoutineDeleteTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -1539,7 +1538,7 @@ impl Tool for RoutineDeleteTool {
 
         let routine = self
             .store
-            .get_routine_by_name(&ctx.user_id, &name)
+            .get_routine_by_name(ctx.user_id(), &name)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("DB error: {e}")))?
             .ok_or_else(|| ToolError::ExecutionFailed(format!("routine '{}' not found", name)))?;
@@ -1611,7 +1610,7 @@ impl Tool for RoutineFireTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -1619,7 +1618,7 @@ impl Tool for RoutineFireTool {
 
         let routine = self
             .store
-            .get_routine_by_name(&ctx.user_id, name)
+            .get_routine_by_name(ctx.user_id(), name)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("DB error: {e}")))?
             .ok_or_else(|| ToolError::ExecutionFailed(format!("routine '{}' not found", name)))?;
@@ -1690,7 +1689,7 @@ impl Tool for RoutineHistoryTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -1704,7 +1703,7 @@ impl Tool for RoutineHistoryTool {
 
         let routine = self
             .store
-            .get_routine_by_name(&ctx.user_id, name)
+            .get_routine_by_name(ctx.user_id(), name)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("DB error: {e}")))?
             .ok_or_else(|| ToolError::ExecutionFailed(format!("routine '{}' not found", name)))?;
@@ -1739,7 +1738,7 @@ impl Tool for RoutineHistoryTool {
         // so the user can see the full output of routine runs.
         let (conversation_id, recent_output) = match self
             .store
-            .get_or_create_routine_conversation(routine.id, name, &ctx.user_id)
+            .get_or_create_routine_conversation(routine.id, name, ctx.user_id())
             .await
         {
             Ok(conv_id) => {
@@ -1826,20 +1825,20 @@ impl Tool for EventEmitTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
         let (source, event_type, payload) = parse_event_emit_args(&params)?;
 
         let fired = self
             .engine
-            .emit_system_event(&source, &event_type, &payload, Some(&ctx.user_id))
+            .emit_system_event(&source, &event_type, &payload, Some(ctx.user_id()))
             .await;
 
         let result = serde_json::json!({
             "event_source": &source,
             "event_type": &event_type,
-            "user_id": &ctx.user_id,
+            "user_id": ctx.user_id(),
             "fired_routines": fired,
         });
 

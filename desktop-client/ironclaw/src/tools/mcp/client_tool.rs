@@ -25,7 +25,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::context::JobContext;
 use crate::tools::mcp::protocol::McpTool;
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolError, ToolOutput};
 use dasclaw_mcp::client::{McpClient, RefreshAccessTokenFn};
@@ -88,7 +87,7 @@ impl Tool for McpToolWrapper {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _ctx: &JobContext,
+        _ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 

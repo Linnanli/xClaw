@@ -4,7 +4,6 @@
 
 use std::time::Instant;
 
-use crate::context::JobContext;
 use crate::tools::tool::{ApprovalRequirement, RiskLevel, Tool, ToolDomain, ToolError, ToolOutput};
 
 use super::runner::{resolve_workdir, run_git};
@@ -62,7 +61,7 @@ impl Tool for GitPushTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _ctx: &JobContext,
+        _ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = Instant::now();
         let path = params.get("path").and_then(|v| v.as_str());

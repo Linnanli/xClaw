@@ -524,7 +524,7 @@ mod tests {
         async fn execute(
             &self,
             _params: serde_json::Value,
-            _ctx: &crate::context::JobContext,
+            _ctx: &mut dyn dasclaw_runtime::JobContextCore,
         ) -> Result<crate::tools::ToolOutput, crate::tools::ToolError> {
             unreachable!()
         }

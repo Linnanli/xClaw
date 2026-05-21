@@ -2,7 +2,6 @@
 
 use async_trait::async_trait;
 
-use crate::context::JobContext;
 use crate::tools::tool::{Tool, ToolError, ToolOutput, require_param, require_str};
 
 /// Tool for JSON manipulation (parse, query, transform).
@@ -48,7 +47,7 @@ impl Tool for JsonTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -57,7 +56,8 @@ impl Tool for JsonTool {
         // Resolve data: from stash (via source_tool_call_id) or from params
         let data_value =
             if let Some(ref_id) = params.get("source_tool_call_id").and_then(|v| v.as_str()) {
-                let stash = ctx.tool_output_stash.read().await;
+                let stash_arc = ctx.tool_output_stash();
+                let stash = stash_arc.read().await;
                 let full_output = stash.get(ref_id).ok_or_else(|| {
                     ToolError::InvalidParameters(format!(
                         "no tool output found for call ID '{}'. Available IDs: {:?}",
@@ -225,7 +225,7 @@ mod tests {
     async fn test_query_with_object_data_from_stash() {
         use crate::context::JobContext;
 
-        let ctx = JobContext::with_user("test", "chat", "test-session");
+        let mut ctx = JobContext::with_user("test", "chat", "test-session");
 
         // Simulate stashed output: the http tool stores serialized JSON
         // containing {"status": 200, "body": {"leagues": [{"name": "MLB"}]}}
@@ -242,7 +242,7 @@ mod tests {
             "path": "body.leagues[0].name"
         });
 
-        let result = tool.execute(params, &ctx).await.unwrap();
+        let result = tool.execute(params, &mut ctx).await.unwrap();
         assert_eq!(result.result, serde_json::json!("MLB"));
     }
 
@@ -250,7 +250,7 @@ mod tests {
     async fn test_stringify_with_object_data_from_stash() {
         use crate::context::JobContext;
 
-        let ctx = JobContext::with_user("test", "chat", "test-session");
+        let mut ctx = JobContext::with_user("test", "chat", "test-session");
 
         let stashed = r#"{"key": "value"}"#;
         ctx.tool_output_stash
@@ -264,7 +264,7 @@ mod tests {
             "source_tool_call_id": "call_01"
         });
 
-        let result = tool.execute(params, &ctx).await.unwrap();
+        let result = tool.execute(params, &mut ctx).await.unwrap();
         let stringified = result.result.as_str().unwrap();
         assert!(stringified.contains("\"key\": \"value\""));
     }

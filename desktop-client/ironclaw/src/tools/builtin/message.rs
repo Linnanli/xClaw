@@ -9,7 +9,6 @@ use async_trait::async_trait;
 
 use crate::bootstrap::dasclaw_base_dir;
 use crate::channels::{ChannelManager, OutgoingResponse};
-use crate::context::JobContext;
 use crate::extensions::ExtensionManager;
 use crate::tools::tool::{
     ApprovalRequirement, Tool, ToolError, ToolOutput, ToolRateLimitConfig, require_str,
@@ -224,7 +223,7 @@ impl Tool for MessageTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -240,7 +239,7 @@ impl Tool for MessageTool {
             .get("channel")
             .and_then(|v| v.as_str())
             .map(|value| value.to_string());
-        let metadata_channel = metadata_string(&ctx.metadata, "notify_channel");
+        let metadata_channel = metadata_string(ctx.metadata(), "notify_channel");
         let default_channel = self
             .default_channel
             .read()
@@ -251,8 +250,8 @@ impl Tool for MessageTool {
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        let metadata_target = metadata_notify_user(&ctx.metadata);
-        let owner_scope_target = metadata_owner_id(&ctx.metadata);
+        let metadata_target = metadata_notify_user(ctx.metadata());
+        let owner_scope_target = metadata_owner_id(ctx.metadata());
         let has_execution_routing_metadata =
             metadata_channel.is_some() || metadata_target.is_some() || owner_scope_target.is_some();
 
@@ -285,7 +284,7 @@ impl Tool for MessageTool {
             metadata_channel: metadata_channel.as_deref(),
             default_channel: default_channel.as_deref(),
             has_execution_routing_metadata,
-            ctx_user_id: &ctx.user_id,
+            ctx_user_id: ctx.user_id(),
         })
         .await;
 
@@ -338,7 +337,7 @@ impl Tool for MessageTool {
         // explicitly "gateway", which meant broadcast_all (channel=null) sent
         // a response without a thread_id and the gateway silently dropped it.
         if response.thread_id.is_none()
-            && let Some(thread_id) = metadata_string(&ctx.metadata, "notify_thread_id")
+            && let Some(thread_id) = metadata_string(ctx.metadata(), "notify_thread_id")
         {
             response = response.in_thread(thread_id);
         }
@@ -505,11 +504,11 @@ mod tests {
         tool.set_context(Some("gateway".to_string()), Some("user".to_string()))
             .await;
 
-        let ctx = crate::context::JobContext::new("test", "test");
+        let mut ctx = crate::context::JobContext::new("test", "test");
 
         // "message" alias should not produce InvalidParameters
         let result = tool
-            .execute(serde_json::json!({"message": "hello from alias"}), &ctx)
+            .execute(serde_json::json!({"message": "hello from alias"}), &mut ctx)
             .await;
         // Execution may fail for other reasons (no real channel), but
         // the error must NOT be about a missing 'content' parameter.
@@ -527,9 +526,9 @@ mod tests {
         let tool = MessageTool::new(Arc::new(ChannelManager::new()));
 
         // Initially no defaults set
-        let ctx = crate::context::JobContext::new("test", "test description");
+        let mut ctx = crate::context::JobContext::new("test", "test description");
         let result = tool
-            .execute(serde_json::json!({"content": "hello"}), &ctx)
+            .execute(serde_json::json!({"content": "hello"}), &mut ctx)
             .await;
         assert!(result.is_err()); // Should fail without defaults
 
@@ -539,7 +538,7 @@ mod tests {
 
         // Now execute should use the defaults (though it will fail because channel doesn't exist)
         let result = tool
-            .execute(serde_json::json!({"content": "hello"}), &ctx)
+            .execute(serde_json::json!({"content": "hello"}), &mut ctx)
             .await;
         // Will fail because channel doesn't exist, but should attempt to use the defaults
         assert!(result.is_err());
@@ -556,7 +555,7 @@ mod tests {
             .await;
 
         // Execute with explicit params - should fail but check that it uses explicit params
-        let ctx = crate::context::JobContext::new("test", "test description");
+        let mut ctx = crate::context::JobContext::new("test", "test description");
         let result = tool
             .execute(
                 serde_json::json!({
@@ -564,7 +563,7 @@ mod tests {
                     "channel": "telegram",
                     "target": "@username"
                 }),
-                &ctx,
+                &mut ctx,
             )
             .await;
 
@@ -584,14 +583,14 @@ mod tests {
             .await;
 
         // Execute with attachments outside both sandbox (~/.ironclaw) and /tmp/
-        let ctx = crate::context::JobContext::new("test", "test description");
+        let mut ctx = crate::context::JobContext::new("test", "test description");
         let result = tool
             .execute(
                 serde_json::json!({
                     "content": "hello",
                     "attachments": ["/etc/passwd", "/var/log/syslog"]
                 }),
-                &ctx,
+                &mut ctx,
             )
             .await;
 
@@ -620,14 +619,14 @@ mod tests {
         fs::write(&file1, "test").unwrap();
         fs::write(&file2, "test").unwrap();
 
-        let ctx = crate::context::JobContext::new("test", "test description");
+        let mut ctx = crate::context::JobContext::new("test", "test description");
         let result = tool
             .execute(
                 serde_json::json!({
                     "content": "hello",
                     "attachments": [file1.to_string_lossy(), file2.to_string_lossy()]
                 }),
-                &ctx,
+                &mut ctx,
             )
             .await;
 
@@ -652,14 +651,14 @@ mod tests {
         fs::write(&file1, "fake image data").unwrap();
         fs::write(&file2, "fake pdf data").unwrap();
 
-        let ctx = crate::context::JobContext::new("test", "test description");
+        let mut ctx = crate::context::JobContext::new("test", "test description");
         let result = tool
             .execute(
                 serde_json::json!({
                     "content": "here are the files",
                     "attachments": [file1.to_string_lossy(), file2.to_string_lossy()]
                 }),
-                &ctx,
+                &mut ctx,
             )
             .await;
 
@@ -677,14 +676,14 @@ mod tests {
     async fn message_tool_requires_content() {
         let tool = MessageTool::new(Arc::new(ChannelManager::new()));
 
-        let ctx = crate::context::JobContext::new("test", "test description");
+        let mut ctx = crate::context::JobContext::new("test", "test description");
         let result = tool
             .execute(
                 serde_json::json!({
                     "channel": "signal",
                     "target": "+1234567890"
                 }),
-                &ctx,
+                &mut ctx,
             )
             .await;
 
@@ -721,14 +720,14 @@ mod tests {
         tool.set_context(Some("signal".to_string()), Some("+1234567890".to_string()))
             .await;
 
-        let ctx = crate::context::JobContext::new("test", "test description");
+        let mut ctx = crate::context::JobContext::new("test", "test description");
         let result = tool
             .execute(
                 serde_json::json!({
                     "content": "here's the file",
                     "attachments": ["../../../etc/passwd"]
                 }),
-                &ctx,
+                &mut ctx,
             )
             .await;
 
@@ -753,14 +752,14 @@ mod tests {
         fs::write(&temp_path, "test content").unwrap();
         let temp_path_str = temp_path.to_string_lossy().to_string();
 
-        let ctx = crate::context::JobContext::new("test", "test description");
+        let mut ctx = crate::context::JobContext::new("test", "test description");
         let result = tool
             .execute(
                 serde_json::json!({
                     "content": "here's the file",
                     "attachments": [temp_path_str]
                 }),
-                &ctx,
+                &mut ctx,
             )
             .await;
 
@@ -794,14 +793,14 @@ mod tests {
         let path1 = temp_path1.to_string_lossy().to_string();
         let path2 = temp_path2.to_string_lossy().to_string();
 
-        let ctx = crate::context::JobContext::new("test", "test description");
+        let mut ctx = crate::context::JobContext::new("test", "test description");
         let result = tool
             .execute(
                 serde_json::json!({
                     "content": "files attached",
                     "attachments": [path1, path2]
                 }),
-                &ctx,
+                &mut ctx,
             )
             .await;
 
@@ -845,7 +844,7 @@ mod tests {
 
         // No set_context called — simulates a routine full-job worker
         let result = tool
-            .execute(serde_json::json!({"content": "NEAR price is $5"}), &ctx)
+            .execute(serde_json::json!({"content": "NEAR price is $5"}), &mut ctx)
             .await;
 
         // Should fail at channel broadcast (no real channel), NOT at
@@ -877,7 +876,7 @@ mod tests {
         });
 
         let result = tool
-            .execute(serde_json::json!({"content": "NEAR price is $5"}), &ctx)
+            .execute(serde_json::json!({"content": "NEAR price is $5"}), &mut ctx)
             .await
             .expect("message tool should use owner scope before ctx.user_id");
 
@@ -907,7 +906,7 @@ mod tests {
         });
 
         let result = tool
-            .execute(serde_json::json!({"content": "NEAR price is $5"}), &ctx)
+            .execute(serde_json::json!({"content": "NEAR price is $5"}), &mut ctx)
             .await
             .expect(
                 "message tool should fall back to ctx.user_id when owner scope metadata is absent",
@@ -929,10 +928,10 @@ mod tests {
         // When neither conversation context nor metadata is set, should still
         // return a clear error (target resolution fails).
         let tool = MessageTool::new(Arc::new(ChannelManager::new()));
-        let ctx = crate::context::JobContext::new("orphan-job", "no notify config");
+        let mut ctx = crate::context::JobContext::new("orphan-job", "no notify config");
 
         let result = tool
-            .execute(serde_json::json!({"content": "hello"}), &ctx)
+            .execute(serde_json::json!({"content": "hello"}), &mut ctx)
             .await;
 
         assert!(result.is_err());
@@ -957,7 +956,7 @@ mod tests {
         });
 
         let result = tool
-            .execute(serde_json::json!({"content": "NEAR price is $5"}), &ctx)
+            .execute(serde_json::json!({"content": "NEAR price is $5"}), &mut ctx)
             .await;
 
         // Should fail because no channels are registered (empty ChannelManager),
@@ -993,7 +992,7 @@ mod tests {
         });
 
         let result = tool
-            .execute(serde_json::json!({"content": "hello"}), &ctx)
+            .execute(serde_json::json!({"content": "hello"}), &mut ctx)
             .await
             .expect("message tool should use telegram metadata routing");
         assert_eq!(
@@ -1024,7 +1023,7 @@ mod tests {
         });
 
         let result = tool
-            .execute(serde_json::json!({"content": "hello"}), &ctx)
+            .execute(serde_json::json!({"content": "hello"}), &mut ctx)
             .await
             .expect("message tool should broadcast when only notify_user is provided");
         assert!(
@@ -1057,7 +1056,7 @@ mod tests {
             "notify_thread_id": "thread-123",
         });
 
-        tool.execute(serde_json::json!({"content": "hello"}), &ctx)
+        tool.execute(serde_json::json!({"content": "hello"}), &mut ctx)
             .await
             .expect("gateway routing with thread id should succeed");
 

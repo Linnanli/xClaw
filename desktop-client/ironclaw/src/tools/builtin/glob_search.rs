@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 
-use crate::context::JobContext;
 use crate::tools::builtin::path_utils::validate_path;
 use crate::tools::tool::{
     ApprovalRequirement, Tool, ToolDomain, ToolError, ToolOutput, require_str,
@@ -75,7 +74,7 @@ impl Tool for GlobSearchTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 

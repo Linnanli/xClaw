@@ -1419,7 +1419,7 @@ mod tests {
             async fn execute(
                 &self,
                 _params: serde_json::Value,
-                _ctx: &crate::context::JobContext,
+                _ctx: &mut dyn dasclaw_runtime::JobContextCore,
             ) -> Result<crate::tools::tool::ToolOutput, crate::tools::tool::ToolError> {
                 unreachable!()
             }
@@ -1471,7 +1471,7 @@ mod tests {
             async fn execute(
                 &self,
                 _params: serde_json::Value,
-                _ctx: &crate::context::JobContext,
+                _ctx: &mut dyn dasclaw_runtime::JobContextCore,
             ) -> Result<crate::tools::tool::ToolOutput, crate::tools::tool::ToolError> {
                 unreachable!()
             }
@@ -1509,7 +1509,7 @@ mod tests {
             async fn execute(
                 &self,
                 _params: serde_json::Value,
-                _ctx: &crate::context::JobContext,
+                _ctx: &mut dyn dasclaw_runtime::JobContextCore,
             ) -> Result<crate::tools::tool::ToolOutput, crate::tools::tool::ToolError> {
                 unreachable!()
             }
@@ -1583,7 +1583,7 @@ mod tests {
                     async fn execute(
                         &self,
                         _: serde_json::Value,
-                        _: &crate::context::JobContext,
+                        _: &mut dyn dasclaw_runtime::JobContextCore,
                     ) -> Result<crate::tools::tool::ToolOutput, crate::tools::tool::ToolError> {
                         unreachable!()
                     }
@@ -2009,7 +2009,7 @@ mod tests {
             async fn execute(
                 &self,
                 _params: serde_json::Value,
-                _ctx: &crate::context::JobContext,
+                _ctx: &mut dyn dasclaw_runtime::JobContextCore,
             ) -> Result<crate::tools::tool::ToolOutput, crate::tools::tool::ToolError> {
                 unreachable!("rejected before registration")
             }
@@ -2111,7 +2111,7 @@ mod tests {
         async fn execute(
             &self,
             _params: serde_json::Value,
-            _ctx: &crate::context::JobContext,
+            _ctx: &mut dyn dasclaw_runtime::JobContextCore,
         ) -> Result<crate::tools::tool::ToolOutput, crate::tools::tool::ToolError> {
             unreachable!("not invoked in namespace tests")
         }

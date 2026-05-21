@@ -15,7 +15,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::context::JobContext;
 use crate::secrets::SecretsStore;
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolError, ToolOutput, require_str};
 
@@ -53,13 +52,13 @@ impl Tool for SecretListTool {
     async fn execute(
         &self,
         _params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
         let refs = self
             .store
-            .list(&ctx.user_id)
+            .list(ctx.user_id())
             .await
             .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
@@ -121,7 +120,7 @@ impl Tool for SecretDeleteTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -129,7 +128,7 @@ impl Tool for SecretDeleteTool {
 
         let deleted = self
             .store
-            .delete(&ctx.user_id, name)
+            .delete(ctx.user_id(), name)
             .await
             .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
@@ -175,7 +174,7 @@ mod tests {
     async fn test_secret_list() {
         let store = test_store();
         let list = SecretListTool::new(Arc::clone(&store) as Arc<dyn SecretsStore + Send + Sync>);
-        let ctx = test_ctx();
+        let mut ctx = test_ctx();
 
         store
             .create(
@@ -185,7 +184,7 @@ mod tests {
             .await
             .unwrap();
 
-        let list_result = list.execute(serde_json::json!({}), &ctx).await.unwrap();
+        let list_result = list.execute(serde_json::json!({}), &mut ctx).await.unwrap();
         assert_eq!(list_result.result["count"], 1);
         assert_eq!(list_result.result["secrets"][0]["name"], "openai_key");
         assert!(list_result.result["secrets"][0].get("value").is_none());
@@ -196,7 +195,7 @@ mod tests {
         let store = test_store();
         let delete =
             SecretDeleteTool::new(Arc::clone(&store) as Arc<dyn SecretsStore + Send + Sync>);
-        let ctx = test_ctx();
+        let mut ctx = test_ctx();
 
         store
             .create(&ctx.user_id, CreateSecretParams::new("to_delete", "secret"))
@@ -204,14 +203,14 @@ mod tests {
             .unwrap();
 
         let result = delete
-            .execute(serde_json::json!({"name": "to_delete"}), &ctx)
+            .execute(serde_json::json!({"name": "to_delete"}), &mut ctx)
             .await
             .unwrap();
         assert_eq!(result.result["status"], "deleted");
 
         // Deleting again returns not_found
         let result2 = delete
-            .execute(serde_json::json!({"name": "to_delete"}), &ctx)
+            .execute(serde_json::json!({"name": "to_delete"}), &mut ctx)
             .await
             .unwrap();
         assert_eq!(result2.result["status"], "not_found");

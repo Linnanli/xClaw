@@ -9,7 +9,6 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::context::JobContext;
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolDomain, ToolError, ToolOutput};
 
 /// Tool for toggling plan mode on a thread.
@@ -84,7 +83,7 @@ impl Tool for PlanModeTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &JobContext,
+        ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -100,7 +99,7 @@ impl Tool for PlanModeTool {
                 json!({
                     "action": "toggle",
                     "message": "Plan mode toggle requested. The session layer will switch the thread state.",
-                    "thread_id": ctx.conversation_id.map(|id| id.to_string())
+                    "thread_id": ctx.conversation_id().map(|id| id.to_string())
                 })
             }
             "status" => {
@@ -174,6 +173,7 @@ impl Tool for PlanModeTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::JobContext;
     use serde_json::json;
 
     fn test_ctx() -> JobContext {
@@ -184,7 +184,7 @@ mod tests {
     async fn test_plan_mode_toggle() {
         let tool = PlanModeTool::new();
         let result = tool
-            .execute(json!({"action": "toggle"}), &test_ctx())
+            .execute(json!({"action": "toggle"}), &mut test_ctx())
             .await
             .expect("toggle should succeed");
         assert_eq!(result.result["action"], "toggle");
@@ -194,7 +194,7 @@ mod tests {
     async fn test_plan_mode_status() {
         let tool = PlanModeTool::new();
         let result = tool
-            .execute(json!({"action": "status"}), &test_ctx())
+            .execute(json!({"action": "status"}), &mut test_ctx())
             .await
             .expect("status should succeed");
         assert_eq!(result.result["action"], "status");
@@ -224,7 +224,7 @@ mod tests {
             }
         });
         let result = tool
-            .execute(params, &test_ctx())
+            .execute(params, &mut test_ctx())
             .await
             .expect("submit should succeed");
         assert_eq!(result.result["action"], "submit");
@@ -236,7 +236,7 @@ mod tests {
     async fn test_plan_mode_submit_missing_plan() {
         let tool = PlanModeTool::new();
         let err = tool
-            .execute(json!({"action": "submit"}), &test_ctx())
+            .execute(json!({"action": "submit"}), &mut test_ctx())
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::InvalidParameters(_)));
@@ -253,7 +253,7 @@ mod tests {
                 "confidence": 0.5
             }
         });
-        let err = tool.execute(params, &test_ctx()).await.unwrap_err();
+        let err = tool.execute(params, &mut test_ctx()).await.unwrap_err();
         assert!(matches!(err, ToolError::InvalidParameters(_)));
     }
 
@@ -261,7 +261,7 @@ mod tests {
     async fn test_plan_mode_unknown_action() {
         let tool = PlanModeTool::new();
         let err = tool
-            .execute(json!({"action": "explode"}), &test_ctx())
+            .execute(json!({"action": "explode"}), &mut test_ctx())
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::InvalidParameters(_)));
@@ -270,7 +270,7 @@ mod tests {
     #[tokio::test]
     async fn test_plan_mode_missing_action() {
         let tool = PlanModeTool::new();
-        let err = tool.execute(json!({}), &test_ctx()).await.unwrap_err();
+        let err = tool.execute(json!({}), &mut test_ctx()).await.unwrap_err();
         assert!(matches!(err, ToolError::InvalidParameters(_)));
     }
 }

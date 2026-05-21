@@ -598,7 +598,7 @@ impl LoopDelegate for ContainerDelegate {
             )
             .await;
 
-            let job_ctx = JobContext {
+            let mut job_ctx = JobContext {
                 extra_env: self.extra_env.clone(),
                 ..Default::default()
             };
@@ -608,7 +608,7 @@ impl LoopDelegate for ContainerDelegate {
                 &self.safety,
                 &tc.name,
                 tc.arguments.clone(),
-                &job_ctx,
+                &mut job_ctx,
             )
             .await;
 

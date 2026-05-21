@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 
-use crate::context::JobContext;
 use crate::tools::tool::ToolError;
 
 /// Resolve the effective base directory for file operations.
@@ -17,20 +16,20 @@ use crate::tools::tool::ToolError;
 /// per-conversation workspace root injected at runtime.
 pub fn effective_base_dir<'a>(
     tool_base_dir: Option<&'a Path>,
-    ctx: &'a JobContext,
+    ctx: &'a dyn dasclaw_runtime::JobContextCore,
 ) -> Option<PathBuf> {
     if let Some(dir) = tool_base_dir {
         return Some(dir.to_path_buf());
     }
     let result = ctx
-        .metadata
+        .metadata()
         .get("workspace_root")
         .and_then(|v| v.as_str())
         .map(PathBuf::from);
     if result.is_none() {
         tracing::warn!(
-            conversation_id = ?ctx.conversation_id,
-            metadata_keys = ?ctx.metadata.as_object().map(|o| o.keys().collect::<Vec<_>>()),
+            conversation_id = ?ctx.conversation_id(),
+            metadata_keys = ?ctx.metadata().as_object().map(|o| o.keys().collect::<Vec<_>>()),
             "No workspace_root in job context — file tools will reject relative paths"
         );
     }
@@ -426,6 +425,7 @@ impl PathPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::JobContext;
     use tempfile::tempdir;
 
     #[test]

@@ -698,7 +698,7 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
         let tool_timeout = tool.execution_timeout();
         let start = std::time::Instant::now();
         let result = tokio::time::timeout(tool_timeout, async {
-            tool.execute(effective_params.clone(), &job_ctx).await
+            tool.execute(effective_params.clone(), &mut job_ctx).await
         })
         .await;
         let elapsed = start.elapsed();
@@ -1902,7 +1902,7 @@ mod tests {
         async fn execute(
             &self,
             _params: serde_json::Value,
-            _ctx: &JobContext,
+            _ctx: &mut dyn dasclaw_runtime::JobContextCore,
         ) -> Result<ToolOutput, ToolExecError> {
             let start = std::time::Instant::now();
             tokio::time::sleep(self.delay).await;
@@ -2211,7 +2211,7 @@ mod tests {
         async fn execute(
             &self,
             _params: serde_json::Value,
-            _ctx: &crate::context::JobContext,
+            _ctx: &mut dyn dasclaw_runtime::JobContextCore,
         ) -> Result<ToolOutput, crate::tools::ToolError> {
             Ok(ToolOutput::text(
                 "approved",
@@ -2246,7 +2246,7 @@ mod tests {
         async fn execute(
             &self,
             _params: serde_json::Value,
-            _ctx: &crate::context::JobContext,
+            _ctx: &mut dyn dasclaw_runtime::JobContextCore,
         ) -> Result<ToolOutput, crate::tools::ToolError> {
             Ok(ToolOutput::text(
                 "always",

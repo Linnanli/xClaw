@@ -649,10 +649,10 @@ impl Agent {
                 let params = serde_json::json!({});
 
                 // Create a minimal JobContext for the tool
-                let dummy_ctx =
+                let mut dummy_ctx =
                     crate::context::JobContext::with_user("system", "Restart", "Graceful restart");
 
-                match tool.execute(params, &dummy_ctx).await {
+                match tool.execute(params, &mut dummy_ctx).await {
                     Ok(output) => {
                         tracing::info!("[commands::restart] RestartTool executed successfully");
                         // Extract text from the ToolOutput result

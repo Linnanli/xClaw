@@ -2,7 +2,6 @@
 
 use std::time::Instant;
 
-use crate::context::JobContext;
 use crate::tools::tool::{ApprovalRequirement, RiskLevel, Tool, ToolDomain, ToolError, ToolOutput};
 
 use super::runner::{resolve_workdir, run_git};
@@ -58,7 +57,7 @@ impl Tool for GitLogTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _ctx: &JobContext,
+        _ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = Instant::now();
         let path = params.get("path").and_then(|v| v.as_str());
@@ -128,8 +127,8 @@ mod tests {
     #[tokio::test]
     async fn test_git_log_default() {
         let tool = GitLogTool::new();
-        let ctx = make_ctx();
-        let result = tool.execute(serde_json::json!({}), &ctx).await;
+        let mut ctx = make_ctx();
+        let result = tool.execute(serde_json::json!({}), &mut ctx).await;
         match result {
             Ok(output) => {
                 let text = output.result.as_str().unwrap_or_default();
@@ -143,8 +142,10 @@ mod tests {
     #[tokio::test]
     async fn test_git_log_with_limit() {
         let tool = GitLogTool::new();
-        let ctx = make_ctx();
-        let result = tool.execute(serde_json::json!({"limit": 3}), &ctx).await;
+        let mut ctx = make_ctx();
+        let result = tool
+            .execute(serde_json::json!({"limit": 3}), &mut ctx)
+            .await;
         match result {
             Ok(output) => {
                 let text = output.result.as_str().unwrap_or_default();

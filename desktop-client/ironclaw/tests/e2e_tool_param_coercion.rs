@@ -16,7 +16,6 @@ mod tests {
     use async_trait::async_trait;
     use serde_json::json;
 
-    use ironclaw::context::JobContext;
     use ironclaw::tools::{Tool, ToolError, ToolOutput};
 
     use crate::support::test_rig::TestRigBuilder;
@@ -57,7 +56,7 @@ mod tests {
         async fn execute(
             &self,
             params: serde_json::Value,
-            _ctx: &JobContext,
+            _ctx: &mut dyn dasclaw_runtime::JobContextCore,
         ) -> Result<ToolOutput, ToolError> {
             let rows = params
                 .get("values")
@@ -139,7 +138,7 @@ mod tests {
         async fn execute(
             &self,
             params: serde_json::Value,
-            _ctx: &JobContext,
+            _ctx: &mut dyn dasclaw_runtime::JobContextCore,
         ) -> Result<ToolOutput, ToolError> {
             let requests = params
                 .get("requests")
@@ -454,7 +453,7 @@ mod tests {
         async fn execute(
             &self,
             params: serde_json::Value,
-            _ctx: &JobContext,
+            _ctx: &mut dyn dasclaw_runtime::JobContextCore,
         ) -> Result<ToolOutput, ToolError> {
             // Deserialize exactly like the real github WASM tool does.
             // Without coercion, this fails: `invalid type: string "100", expected u32`

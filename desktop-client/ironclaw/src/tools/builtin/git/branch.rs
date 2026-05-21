@@ -2,7 +2,6 @@
 
 use std::time::Instant;
 
-use crate::context::JobContext;
 use crate::tools::tool::{ApprovalRequirement, RiskLevel, Tool, ToolDomain, ToolError, ToolOutput};
 
 use super::runner::{resolve_workdir, run_git};
@@ -55,7 +54,7 @@ impl Tool for GitBranchTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _ctx: &JobContext,
+        _ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = Instant::now();
         let path = params.get("path").and_then(|v| v.as_str());
@@ -154,8 +153,8 @@ mod tests {
     #[tokio::test]
     async fn test_branch_list() {
         let tool = GitBranchTool::new();
-        let ctx = make_ctx();
-        let result = tool.execute(serde_json::json!({}), &ctx).await;
+        let mut ctx = make_ctx();
+        let result = tool.execute(serde_json::json!({}), &mut ctx).await;
         match result {
             Ok(output) => assert!(!output.result.as_str().unwrap_or_default().is_empty()),
             Err(ToolError::ExecutionFailed(msg)) if msg.contains("spawn git") => {}
@@ -166,9 +165,9 @@ mod tests {
     #[tokio::test]
     async fn test_create_missing_name() {
         let tool = GitBranchTool::new();
-        let ctx = make_ctx();
+        let mut ctx = make_ctx();
         let result = tool
-            .execute(serde_json::json!({"action": "create"}), &ctx)
+            .execute(serde_json::json!({"action": "create"}), &mut ctx)
             .await;
         assert!(matches!(result, Err(ToolError::InvalidParameters(_))));
     }

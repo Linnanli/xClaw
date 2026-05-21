@@ -14,7 +14,6 @@ mod tests {
     use async_trait::async_trait;
     use serde_json::json;
 
-    use ironclaw::context::JobContext;
     use ironclaw::tools::{Tool, ToolError, ToolOutput};
 
     use crate::support::test_rig::TestRigBuilder;
@@ -39,7 +38,7 @@ mod tests {
         async fn execute(
             &self,
             _params: serde_json::Value,
-            _ctx: &JobContext,
+            _ctx: &mut dyn dasclaw_runtime::JobContextCore,
         ) -> Result<ToolOutput, ToolError> {
             Err(ToolError::RateLimited(Some(Duration::from_secs(60))))
         }

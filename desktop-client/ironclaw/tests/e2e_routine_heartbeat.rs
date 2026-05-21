@@ -65,12 +65,12 @@ mod tests {
         async fn execute(
             &self,
             _params: serde_json::Value,
-            ctx: &JobContext,
+            ctx: &mut dyn dasclaw_runtime::JobContextCore,
         ) -> Result<ToolOutput, ToolError> {
             let start = std::time::Instant::now();
             let current = self
                 .store
-                .get_setting(&ctx.user_id, OWNER_GATE_COUNT_SETTING_KEY)
+                .get_setting(ctx.user_id(), OWNER_GATE_COUNT_SETTING_KEY)
                 .await
                 .map_err(|e| {
                     ToolError::ExecutionFailed(format!("failed to read owner gate count: {e}"))
@@ -79,7 +79,7 @@ mod tests {
                 .unwrap_or(0);
             self.store
                 .set_setting(
-                    &ctx.user_id,
+                    ctx.user_id(),
                     OWNER_GATE_COUNT_SETTING_KEY,
                     &serde_json::json!(current + 1),
                 )
@@ -1665,14 +1665,14 @@ mod tests {
         )
         .await;
         let update_tool = RoutineUpdateTool::new(db.clone(), engine);
-        let update_ctx = JobContext::with_user("default", "update", "update legacy routine");
+        let mut update_ctx = JobContext::with_user("default", "update", "update legacy routine");
         update_tool
             .execute(
                 serde_json::json!({
                     "name": legacy_routine.name,
                     "prompt": "Updated legacy description",
                 }),
-                &update_ctx,
+                &mut update_ctx,
             )
             .await
             .expect("routine_update should succeed");

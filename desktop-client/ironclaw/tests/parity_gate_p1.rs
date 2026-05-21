@@ -76,7 +76,7 @@ async fn fp_001_read_file_with_line_numbers() {
     let result = tool
         .execute(
             serde_json::json!({"path": file.to_str().expect("path")}),
-            &make_ctx(),
+            &mut make_ctx(),
         )
         .await
         .expect("FP-001: ReadFileTool should succeed");
@@ -107,7 +107,7 @@ async fn fp_002_grep_search_pattern_match() {
                 "pattern": "fn main",
                 "path": dir.path().to_str().expect("path")
             }),
-            &make_ctx(),
+            &mut make_ctx(),
         )
         .await
         .expect("FP-002: GrepSearchTool should succeed");
@@ -131,7 +131,7 @@ async fn fp_003_glob_search_file_types() {
                 "pattern": "*.rs",
                 "path": dir.path().to_str().expect("path")
             }),
-            &make_ctx(),
+            &mut make_ctx(),
         )
         .await
         .expect("FP-003: GlobSearchTool should succeed");
@@ -159,7 +159,7 @@ async fn fp_004_code_edit_string_replace() {
                 "old_string": "old_name",
                 "new_string": "new_name"
             }),
-            &make_ctx(),
+            &mut make_ctx(),
         )
         .await
         .expect("FP-004: CodeEditTool should succeed");
@@ -313,7 +313,7 @@ async fn fp_012_grep_context_lines() {
                 "context_before": 1,
                 "context_after": 1
             }),
-            &make_ctx(),
+            &mut make_ctx(),
         )
         .await
         .expect("FP-012: grep with context should succeed");

@@ -579,7 +579,7 @@ impl Scheduler {
         })?;
 
         // Get job context
-        let job_ctx: JobContext = context_manager.get_context(job_id).await?;
+        let mut job_ctx: JobContext = context_manager.get_context(job_id).await?;
         if job_ctx.state == JobState::Cancelled {
             return Err(crate::error::ToolError::ExecutionFailed {
                 name: tool_name.to_string(),
@@ -600,7 +600,11 @@ impl Scheduler {
 
         // Delegate to shared tool execution pipeline
         let output_str = crate::tools::execute::execute_tool_with_safety(
-            &tools, &safety, tool_name, params, &job_ctx,
+            &tools,
+            &safety,
+            tool_name,
+            params,
+            &mut job_ctx,
         )
         .await?;
 
@@ -976,7 +980,7 @@ mod tests {
         async fn execute(
             &self,
             _params: serde_json::Value,
-            _ctx: &JobContext,
+            _ctx: &mut dyn dasclaw_runtime::JobContextCore,
         ) -> Result<ToolOutput, ToolError> {
             Ok(ToolOutput::text(
                 "soft_ok",
@@ -1008,7 +1012,7 @@ mod tests {
         async fn execute(
             &self,
             _params: serde_json::Value,
-            _ctx: &JobContext,
+            _ctx: &mut dyn dasclaw_runtime::JobContextCore,
         ) -> Result<ToolOutput, ToolError> {
             Ok(ToolOutput::text(
                 "hard_ok",
@@ -1183,7 +1187,7 @@ mod tests {
         async fn execute(
             &self,
             _params: serde_json::Value,
-            _ctx: &JobContext,
+            _ctx: &mut dyn dasclaw_runtime::JobContextCore,
         ) -> Result<ToolOutput, ToolError> {
             Ok(ToolOutput::text(
                 "normalized_ok",

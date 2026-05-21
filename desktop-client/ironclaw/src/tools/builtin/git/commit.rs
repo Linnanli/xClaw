@@ -5,7 +5,6 @@
 
 use std::time::Instant;
 
-use crate::context::JobContext;
 use crate::tools::tool::{ApprovalRequirement, RiskLevel, Tool, ToolDomain, ToolError, ToolOutput};
 
 use super::runner::{resolve_workdir, run_git};
@@ -61,7 +60,7 @@ impl Tool for GitCommitTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _ctx: &JobContext,
+        _ctx: &mut dyn dasclaw_runtime::JobContextCore,
     ) -> Result<ToolOutput, ToolError> {
         let start = Instant::now();
         let path = params.get("path").and_then(|v| v.as_str());
@@ -128,8 +127,8 @@ mod tests {
     #[tokio::test]
     async fn test_missing_message() {
         let tool = GitCommitTool::new();
-        let ctx = make_ctx();
-        let result = tool.execute(serde_json::json!({}), &ctx).await;
+        let mut ctx = make_ctx();
+        let result = tool.execute(serde_json::json!({}), &mut ctx).await;
         assert!(result.is_err());
         if let Err(ToolError::InvalidParameters(msg)) = result {
             assert!(msg.contains("message"));
@@ -139,9 +138,9 @@ mod tests {
     #[tokio::test]
     async fn test_empty_message() {
         let tool = GitCommitTool::new();
-        let ctx = make_ctx();
+        let mut ctx = make_ctx();
         let result = tool
-            .execute(serde_json::json!({"message": "  "}), &ctx)
+            .execute(serde_json::json!({"message": "  "}), &mut ctx)
             .await;
         assert!(result.is_err());
     }
