@@ -84,65 +84,7 @@ use deadpool_postgres::Pool;
 use uuid::Uuid;
 
 use crate::error::WorkspaceError;
-use crate::safety::{Sanitizer, Severity};
-
-/// Files injected into the system prompt. Writes to these are scanned for
-/// prompt injection patterns and rejected if high-severity matches are found.
-const SYSTEM_PROMPT_FILES: &[&str] = &[
-    paths::SOUL,
-    paths::AGENTS,
-    paths::USER,
-    paths::IDENTITY,
-    paths::MEMORY,
-    paths::TOOLS,
-    paths::HEARTBEAT,
-    paths::BOOTSTRAP,
-    paths::ASSISTANT_DIRECTIVES,
-    paths::PROFILE,
-];
-
-/// Returns true if `path` (already normalized) is a system-prompt-injected file.
-fn is_system_prompt_file(path: &str) -> bool {
-    SYSTEM_PROMPT_FILES
-        .iter()
-        .any(|p| path.eq_ignore_ascii_case(p))
-}
-
-/// Shared sanitizer instance — avoids rebuilding Aho-Corasick + regexes on every write.
-static SANITIZER: std::sync::LazyLock<Sanitizer> = std::sync::LazyLock::new(Sanitizer::new);
-
-/// Scan content for prompt injection. Returns `Err` if high-severity patterns
-/// are detected, otherwise logs warnings and returns `Ok(())`.
-fn reject_if_injected(path: &str, content: &str) -> Result<(), WorkspaceError> {
-    let sanitizer = &*SANITIZER;
-    let warnings = sanitizer.detect(content);
-    let dominated = warnings.iter().any(|w| w.severity >= Severity::High);
-    if dominated {
-        let descriptions: Vec<&str> = warnings
-            .iter()
-            .filter(|w| w.severity >= Severity::High)
-            .map(|w| w.description.as_str())
-            .collect();
-        tracing::warn!(
-            target: "ironclaw::safety",
-            file = %path,
-            "workspace write rejected: prompt injection detected ({})",
-            descriptions.join("; "),
-        );
-        return Err(WorkspaceError::InjectionRejected {
-            path: path.to_string(),
-            reason: descriptions.join("; "),
-        });
-    }
-    for w in &warnings {
-        tracing::warn!(
-            target: "ironclaw::safety",
-            file = %path, severity = ?w.severity, pattern = %w.pattern,
-            "workspace write warning: {}", w.description,
-        );
-    }
-    Ok(())
-}
+use dasclaw_workspace_cap::sanitization::{is_system_prompt_file, reject_if_injected};
 
 /// Internal storage abstraction for Workspace.
 ///
