@@ -312,24 +312,13 @@ impl SecretsCapability {
 /// WASM capabilities use it to configure per-tool HTTP request limits.
 pub use crate::tools::tool::ToolRateLimitConfig as RateLimitConfig;
 
-/// Webhook auth/signature capability configuration for tools.
-#[derive(Debug, Clone, Default)]
-pub struct WebhookCapability {
-    /// Optional header name for shared-secret validation.
-    pub secret_header: Option<String>,
-    /// Secret name in secrets store for shared-secret validation.
-    pub secret_name: Option<String>,
-    /// Secret name in secrets store containing Ed25519 public key (Discord-style).
-    pub signature_key_secret_name: Option<String>,
-    /// Secret name in secrets store for HMAC-SHA256 signing validation.
-    pub hmac_secret_name: Option<String>,
-    /// Header containing signature (e.g. X-Hub-Signature-256 or X-Slack-Signature).
-    pub hmac_signature_header: Option<String>,
-    /// Optional timestamp header. When present, Slack-style v0 signature is used.
-    pub hmac_timestamp_header: Option<String>,
-    /// Optional signature prefix (default: "sha256=" or "v0=" for timestamped mode).
-    pub hmac_prefix: Option<String>,
-}
+/// Webhook auth/signature capability descriptor.
+///
+/// Per [ADR-154 §3.5] the struct lives in `dasclaw_tool::WebhookCapability`.
+/// This re-export keeps `crate::tools::wasm::WebhookCapability` working for
+/// all existing call sites (including `Capabilities.webhook` and the
+/// `Tool::webhook_capability()` default impl re-export path).
+pub use dasclaw_tool::WebhookCapability;
 
 #[cfg(test)]
 mod tests {
