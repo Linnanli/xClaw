@@ -53,6 +53,7 @@ pub mod embeddings;
 pub mod layer;
 pub mod policy;
 pub mod privacy;
+pub mod profile;
 pub mod sanitization;
 pub mod search;
 pub mod timezone;
