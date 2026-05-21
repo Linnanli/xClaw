@@ -1,9 +1,9 @@
-//! LSP integration: registry, JSON-RPC client, protocol & server mapping.
+//! LSP integration: registry, JSON-RPC client, protocol & server mapping,
+//! plus the host-facing `LspQueryTool`.
 //!
-//! Verbatim port from `desktop-client/ironclaw/src/tools/builtin/lsp/` per
-//! F3.3 (#629). The host-side `LspQueryTool` (the [`Tool`]-trait wiring)
-//! remains in `ironclaw::tools::builtin::lsp` until the [`Tool`] trait moves
-//! into `dasclaw_tool` in a follow-up issue.
+//! Core types verbatim-ported from `desktop-client/ironclaw/src/tools/builtin/lsp/`
+//! per ADR-152 §3 F3.3. The `LspQueryTool` joined them under issue #688 once
+//! the `Tool` trait moved to `dasclaw_runtime` (PR #687 / ADR-154 §10).
 //!
 //! ```text
 //! LspRegistry (host-owned)
@@ -11,15 +11,15 @@
 //!     ├─ idle timeout → auto shutdown
 //!     └─ Admin whitelist filtering
 //! ```
-//!
-//! [`Tool`]: https://github.com/Linnanli/x-claw — see `crate::tools::tool::Tool` in the ironclaw crate
 
 mod client;
 pub(crate) mod protocol;
 mod registry;
 mod server_config;
+mod tool;
 
 pub use client::{LspClient, path_to_uri};
 pub use protocol::LspAction;
 pub use registry::LspRegistry;
 pub use server_config::{LspServerConfig, LspServerMapping};
+pub use tool::LspQueryTool;
