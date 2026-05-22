@@ -289,6 +289,108 @@ cap crate 当前 157 个测试全绿，含双 feature（default + postgres）。
 
 F3.6 涉及 `crate::context/`，如果后续也遇到类似"trait 方法签名拖入宿主类型"的阻塞，可参照本次修订模式，单独评估收口策略。
 
+> **更新（#719）**：F3.6 推进到 slice 3 时确实遇到了类似阻塞。详见 §11.8。
+
+---
+
+## 11.8 修订 2：F3.6 阻塞与方向（#719，draft）
+
+> **状态**：草案，待评审决策。
+> **触发**：F3.6 slice 1（#715）+ slice 2（#717）合入后，准备搬 `context::manager` 时发现死结。
+
+### 11.8.1 已完成的零件搬迁
+
+| Slice | 内容 | PR | 落点 |
+|---|---|---|---|
+| 1/6 | `context::memory`（`Memory` / `ConversationMemory` / `ActionRecord`） | #714 | `dasclaw_core::context::memory` |
+| 2/6 | `JobError` | #718 | `dasclaw_core::error` |
+| — | 早先 F3.2 phase 2 PR 3（#641） | 已合入 | `dasclaw_runtime::job` 已含 `JobState` / `StateTransition` / `TokenBudgetExceeded` |
+
+桌面端 `desktop-client/ironclaw/src/{context/mod.rs, error.rs}` 全部用 `pub use` re-export 保持源码层兼容。
+
+### 11.8.2 阻塞事实（三层验证）
+
+1. **manager 生产代码对 JobContext 的访问深度**（grep + 人读）：仅 `ctx.{job_id, state, started_at}` 字段 + `ctx.transition_to()` / `ctx.mark_stuck()` 方法。都属于状态机骨架。
+2. **JobContext 类型定义**（`desktop-client/ironclaw/src/context/state.rs:25-110`）持有桌面端类型：
+   - `Option<Arc<dyn HttpInterceptor>>`（来自 `crate::llm::recording`）
+   - `SharedFeatureFlags` / `ToolFeatureFlags`（来自 `crate::tools::feature_flags`）
+   - `Arc<tokio::sync::RwLock<HashMap<String, String>>>` 工具输出暂存
+3. **依赖方向约束**：`dasclaw_core` 是底层 crate，不能反向依赖宿主 `dasclaw`。
+
+结论：`manager.rs` 不能在 `JobContext` 形态保持现状的前提下 verbatim 搬到 `dasclaw_core`。同理 `state.rs`、`fallback.rs`。
+
+### 11.8.3 候选方向
+
+#### 方向 X：trait 化路线
+
+抽象 `dasclaw_core::context::JobContextCore` trait，含 manager 实际用到的最小方法集：
+
+```rust
+pub trait JobContextCore: Send + Sync {
+    fn job_id(&self) -> Uuid;
+    fn state(&self) -> JobState;
+    fn started_at(&self) -> Option<DateTime<Utc>>;
+    fn transition_to(&mut self, target: JobState, reason: Option<String>)
+        -> Result<(), StateTransitionError>;
+    fn mark_stuck(&mut self, reason: impl Into<String>) -> Result<(), String>;
+    // ...（按 manager grep 结果完整收集）
+}
+```
+
+- 桌面端 `JobContext` 保留所有"私货"字段，新增 `impl JobContextCore for JobContext`。
+- `ContextManager` 改写成 `ContextManager<C: JobContextCore>` 或 `dyn JobContextCore`。
+- 搬到 `dasclaw_core::context::manager`。
+
+**代价**：
+- 破 ADR-129 §1.3 verbatim port 红线（manager.rs 的签名要泛型化或加 `dyn`，不是纯 import rebase）。
+- 触面广：所有用 `ctx: &mut JobContext` 的下游代码（worker / tools / GUI）至少要走 trait method 入口；某些直接读 `ctx.metadata` / `ctx.tools` 的位置需要重新设计访问入口。
+- 测试需要重写 mock。
+- PR 体量大，无法切片化。
+
+#### 方向 Y：F3.6 收口路线（参照 §11.4 模式）
+
+**F3.6 收口于 slice 2/6。`manager.rs`、`state.rs`、`fallback.rs` 留在 ironclaw 作为参考组合。**
+
+- `dasclaw_core::context` 只持有 verbatim 共享零件：`memory`（已有）。
+- `dasclaw_core::error` 已有 `JobError`。
+- `dasclaw_runtime::job` 已有 `JobState` / `StateTransition` / `TokenBudgetExceeded`。
+- 其他宿主想做自己的 context manager，可以直接复用上述零件，自行组合（与 §11.6 的 Workspace 复用规约同形）。
+
+**代价**：
+- F3.6 umbrella issue（#632）从"搬 manager"重定义为"收口 + 文档"。
+- 不会出现 trait 抽象，所有现存调用方零改动。
+
+**收益**：
+- 不破 ADR-129 §1.3 红线。
+- 不引入大 PR。
+- 与 §11.4 决策的"小而专 cap" + "宿主自由组合"哲学一致。
+
+### 11.8.4 推荐与未决
+
+本文档草案默认推荐 **方向 Y（收口）**，理由：
+
+1. 与已经做出的 §11.4 决策同型，避免架构方向左右摇摆。
+2. 无任何代码红线代价。
+3. manager.rs 的真正可复用部分（Memory / JobError / JobState 三件套）已经全部抽到 `dasclaw_core` / `dasclaw_runtime`，剩下的 `ContextManager` 主要是 ironclaw 自己的并发控制器，其他宿主未必要这一种风格。
+
+但方向 X 也有其合理性（如果未来确定要建二号宿主且复用同款 ContextManager）。请评审决定。
+
+### 11.8.5 决策落定后的动作
+
+若选 **Y**：
+
+- F3.6 收口 PR：在 §11.8.6 写明"F3.6 收口于 slice 2"；更新 umbrella #632 描述与状态。
+- ADR-152 §3 F3.6 行：标 "Scope clarified — see §11.8"。
+
+若选 **X**：
+
+- 在 §11.8.6 写 trait 设计冻结结果（字段/方法清单 + dyn vs generic 选择）。
+- 新建一组 sub-issue：trait 设计 PR / 桌面端 impl PR / manager 搬迁 PR / state+fallback 搬迁 PR。
+
+### 11.8.6 决策记录
+
+> 待评审填写。
+
 ### 11.9 F4 修订：ironclaw_safety 路径倒置修复（F4.0）
 
 **问题**
