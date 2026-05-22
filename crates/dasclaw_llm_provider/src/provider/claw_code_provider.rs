@@ -1337,7 +1337,7 @@ mod tests {
     /// 验证干净输入 → 干净输出。
     #[test]
     fn test_audit_leak_detector_clean_on_mapped_safe_content() {
-        use ironclaw_safety::LeakDetector;
+        use dasclaw_safety::LeakDetector;
 
         let clean_user = "帮我查一下东京的天气";
         let clean_tool = "<<<UNTRUSTED-TOOL-OUTPUT tool=weather>>>sunny 22C<<<END>>>";
@@ -1370,7 +1370,7 @@ mod tests {
     /// 否则说明上游把 key 回显进了错误消息——这是 Fail-Open 泄露。
     #[test]
     fn test_audit_observed_qwen_401_error_does_not_leak_key() {
-        use ironclaw_safety::LeakDetector;
+        use dasclaw_safety::LeakDetector;
 
         // Step G 运行时真实抓到的错误字符串（见 test_qwen_invalid_api_key_returns_clear_error）
         let observed = "Provider claw-code-api request failed: api returned 401 Unauthorized \

@@ -178,7 +178,7 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     // `CompositeEgressGate::builder().add(...)` without touching IPC
     // call sites (ADR-148 §6.4, closes issue #92).
     let egress: Arc<dyn dasclaw_core::EgressGate> = Arc::new(
-        ironclaw_safety::egress_gate::IronclawEgressGate::new(Arc::clone(&components.safety)),
+        dasclaw_safety::egress_gate::IronclawEgressGate::new(Arc::clone(&components.safety)),
     );
     let attachment_scanner = Arc::new(crate::safety_attachment_scanner::AttachmentScanner::new(
         Arc::clone(&egress),

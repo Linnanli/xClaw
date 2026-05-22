@@ -3,7 +3,7 @@
 //! 包含中国特色敏感信息检测模式和API密钥检测模式
 
 use crate::dlp::{DlpError, DlpResult};
-use ironclaw_safety::{LeakAction, LeakPattern, LeakSeverity};
+use dasclaw_safety::{LeakAction, LeakPattern, LeakSeverity};
 use regex::Regex;
 
 /// 中国特色敏感信息检测模式

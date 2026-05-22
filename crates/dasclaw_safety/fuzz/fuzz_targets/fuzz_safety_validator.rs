@@ -1,5 +1,5 @@
 #![no_main]
-use ironclaw_safety::Validator;
+use dasclaw_safety::Validator;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

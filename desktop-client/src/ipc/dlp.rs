@@ -413,18 +413,18 @@ pub async fn do_sync_dlp_rules(safety_bridge: &SafetyBridge) -> Result<SyncDlpRe
         };
 
         let severity = match severity_str.to_lowercase().as_str() {
-            "critical" => ironclaw_safety::LeakSeverity::Critical,
-            "high" => ironclaw_safety::LeakSeverity::High,
-            "low" => ironclaw_safety::LeakSeverity::Low,
-            _ => ironclaw_safety::LeakSeverity::Medium,
+            "critical" => dasclaw_safety::LeakSeverity::Critical,
+            "high" => dasclaw_safety::LeakSeverity::High,
+            "low" => dasclaw_safety::LeakSeverity::Low,
+            _ => dasclaw_safety::LeakSeverity::Medium,
         };
 
         let action = match severity_str.to_lowercase().as_str() {
-            "critical" => ironclaw_safety::LeakAction::Block,
-            _ => ironclaw_safety::LeakAction::Redact,
+            "critical" => dasclaw_safety::LeakAction::Block,
+            _ => dasclaw_safety::LeakAction::Redact,
         };
 
-        patterns.push(ironclaw_safety::LeakPattern {
+        patterns.push(dasclaw_safety::LeakPattern {
             name,
             regex: compiled,
             severity,

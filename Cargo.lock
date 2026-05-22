@@ -2661,6 +2661,7 @@ dependencies = [
  "dasclaw_observability",
  "dasclaw_process_hardening",
  "dasclaw_runtime",
+ "dasclaw_safety",
  "dasclaw_sandbox",
  "dasclaw_tool",
  "dasclaw_workspace_cap",
@@ -2683,7 +2684,6 @@ dependencies = [
  "iana-time-zone",
  "insta",
  "ironclaw_common",
- "ironclaw_safety",
  "json5",
  "jsonwebtoken 9.3.1",
  "libsql",
@@ -2945,10 +2945,10 @@ dependencies = [
  "bytes",
  "chrono",
  "dasclaw_core",
+ "dasclaw_safety",
  "dirs 6.0.0",
  "eventsource-stream",
  "futures",
- "ironclaw_safety",
  "open",
  "rand 0.8.5",
  "regex",
@@ -3145,6 +3145,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "dasclaw_safety"
+version = "0.2.0"
+dependencies = [
+ "aho-corasick",
+ "async-trait",
+ "dasclaw_core",
+ "regex",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "dasclaw_sandbox"
 version = "0.0.0-w1"
 dependencies = [
@@ -3326,9 +3341,9 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "dasclaw_llm_provider",
+ "dasclaw_safety",
  "deadpool-postgres",
  "iana-time-zone",
- "ironclaw_safety",
  "lru",
  "pgvector",
  "postgres-types",
@@ -3554,11 +3569,11 @@ dependencies = [
  "chrono",
  "dasclaw",
  "dasclaw_core",
+ "dasclaw_safety",
  "dasclaw_sandbox",
  "dirs 6.0.0",
  "dotenvy",
  "ed25519-dalek",
- "ironclaw_safety",
  "mockito",
  "open",
  "proptest",
@@ -5896,21 +5911,6 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "ironclaw_safety"
-version = "0.2.0"
-dependencies = [
- "aho-corasick",
- "async-trait",
- "dasclaw_core",
- "regex",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "url",
 ]
 
 [[package]]

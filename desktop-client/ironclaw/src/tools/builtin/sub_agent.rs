@@ -5,7 +5,7 @@
 //! rather than interacting with the user directly.
 //!
 //! Design: depth is limited to 1 (sub-agents cannot spawn further sub-agents).
-//! Results are filtered through `ironclaw_safety` before injection into the
+//! Results are filtered through `dasclaw_safety` before injection into the
 //! parent conversation.
 
 use std::time::Duration;

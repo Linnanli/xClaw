@@ -26,7 +26,7 @@
 //! - Does not restrict *child processes* — that is the kernel sandbox
 //!   layer's job.
 //! - Does not enforce DLP / approval policy — that is the
-//!   `ironclaw_safety` tier.
+//!   `dasclaw_safety` tier.
 //! - Does not cap file size / count — caller must enforce before passing
 //!   data in.
 //!

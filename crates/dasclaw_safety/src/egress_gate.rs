@@ -1,6 +1,6 @@
 //! `dasclaw_core::EgressGate` adapter for [`SafetyLayer`] (ADR-148).
 //!
-//! This module is gated behind the `egress-gate` feature so `ironclaw_safety`
+//! This module is gated behind the `egress-gate` feature so `dasclaw_safety`
 //! stays dependency-free for its original callers (HTTP middleware, inbound
 //! message scanners). When the feature is on, the agent runtime can plug
 //! [`IronclawEgressGate`] into the single-method egress contract.

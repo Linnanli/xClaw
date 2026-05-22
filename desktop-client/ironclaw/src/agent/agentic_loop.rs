@@ -60,7 +60,7 @@ pub(crate) fn host_err_to_error(e: HostError) -> crate::error::Error {
 /// Build an `dasclaw_core::HookBundle` whose `egress` slot is wired to a
 /// [`dasclaw_governance::CompositeEgressGate`] (ADR-148) chaining
 /// [`dasclaw_hooks::BashValidationHook`] (bash command-string validation,
-/// issue #73 slice A1) → [`ironclaw_safety::egress_gate::IronclawEgressGate`]
+/// issue #73 slice A1) → [`dasclaw_safety::egress_gate::IronclawEgressGate`]
 /// (generic JSON validation + leak detection).
 ///
 /// `workspace_cap` is the capability handle for the session workspace
@@ -100,7 +100,7 @@ pub fn hook_bundle_with_safety(
 ///    decision is `Passthrough`, so this step is a no-op until Phase 2.3
 ///    (config ingestion) lands real rules. Inserting it now so the chain
 ///    shape is stable and tests can drive the gate end-to-end.
-/// 3. [`ironclaw_safety::egress_gate::IronclawEgressGate`] — generic JSON
+/// 3. [`dasclaw_safety::egress_gate::IronclawEgressGate`] — generic JSON
 ///    validation + leak detection.
 ///
 /// Empty-context guarantee: `BashPermissionHook::new(ToolPermissionContext::default())`
@@ -128,9 +128,7 @@ pub fn hook_bundle_with_safety_and_permissions(
         )
         .add(
             "ironclaw-safety",
-            Arc::new(ironclaw_safety::egress_gate::IronclawEgressGate::new(
-                safety,
-            )),
+            Arc::new(dasclaw_safety::egress_gate::IronclawEgressGate::new(safety)),
         )
         .build();
     let mut bundle = dasclaw_core::HookBundle::noop();
@@ -140,7 +138,7 @@ pub fn hook_bundle_with_safety_and_permissions(
 
 /// Build a `HookBundle` with both `egress` and `secrets` slots wired in.
 ///
-/// - `egress` routes through [`IronclawEgressGate`](ironclaw_safety::egress_gate::IronclawEgressGate).
+/// - `egress` routes through [`IronclawEgressGate`](dasclaw_safety::egress_gate::IronclawEgressGate).
 /// - `secrets` routes through [`AgentSecrets`](crate::secrets::agent_provider::AgentSecrets)
 ///   if the tool registry carries a [`SecretsStore`](crate::secrets::SecretsStore);
 ///   falls back to the noop provider when the registry has none.
@@ -174,7 +172,7 @@ mod tests {
     use crate::secrets::{CreateSecretParams, InMemorySecretsStore, SecretsCrypto, SecretsStore};
     use crate::tools::ToolRegistry;
     use crate::tools::wasm::SharedCredentialRegistry;
-    use ironclaw_safety::SafetyConfig;
+    use dasclaw_safety::SafetyConfig;
     use secrecy::SecretString as SecrecySecretString;
     use std::sync::Arc;
 

@@ -280,6 +280,9 @@ def is_test_only_file(path: pathlib.Path) -> bool:
     2. Cargo integration test convention: anything under a `tests/` or
        `benches/` directory inside a crate is a separate test/bench target,
        always compiled with `cfg(test)`.
+    3. cargo-fuzz convention: anything under a `fuzz/` directory inside a
+       crate is a separate fuzz target, compiled with `cfg(fuzzing)` and
+       expected to call `assert!` / `unwrap()` to surface invariant breaks.
     """
 
     name = path.name
@@ -288,7 +291,7 @@ def is_test_only_file(path: pathlib.Path) -> bool:
     if name.endswith("_tests.rs"):
         return True
     parts = path.parts
-    if "tests" in parts or "benches" in parts:
+    if "tests" in parts or "benches" in parts or "fuzz" in parts:
         return True
     return False
 

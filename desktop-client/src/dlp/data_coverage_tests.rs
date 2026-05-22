@@ -36,12 +36,12 @@ mod data_coverage_tests {
             assert_eq!(*severity, deserialized);
         }
 
-        // 测试从ironclaw_safety的转换
+        // 测试从dasclaw_safety的转换
         let safety_severities = [
-            ironclaw_safety::LeakSeverity::Low,
-            ironclaw_safety::LeakSeverity::Medium,
-            ironclaw_safety::LeakSeverity::High,
-            ironclaw_safety::LeakSeverity::Critical,
+            dasclaw_safety::LeakSeverity::Low,
+            dasclaw_safety::LeakSeverity::Medium,
+            dasclaw_safety::LeakSeverity::High,
+            dasclaw_safety::LeakSeverity::Critical,
         ];
 
         for (i, safety_severity) in safety_severities.iter().enumerate() {
@@ -62,11 +62,11 @@ mod data_coverage_tests {
             assert_eq!(*action, deserialized);
         }
 
-        // 测试从ironclaw_safety的转换
+        // 测试从dasclaw_safety的转换
         let safety_actions = [
-            ironclaw_safety::LeakAction::Warn,
-            ironclaw_safety::LeakAction::Redact,
-            ironclaw_safety::LeakAction::Block,
+            dasclaw_safety::LeakAction::Warn,
+            dasclaw_safety::LeakAction::Redact,
+            dasclaw_safety::LeakAction::Block,
         ];
 
         for (i, safety_action) in safety_actions.iter().enumerate() {
@@ -329,8 +329,8 @@ mod data_coverage_tests {
             let custom_pattern = CustomPattern::new(
                 format!("test_{}", desc),
                 pattern.to_string(),
-                ironclaw_safety::LeakSeverity::Medium,
-                ironclaw_safety::LeakAction::Redact,
+                dasclaw_safety::LeakSeverity::Medium,
+                dasclaw_safety::LeakAction::Redact,
             );
 
             let leak_pattern_result = custom_pattern.to_leak_pattern();
@@ -355,8 +355,8 @@ mod data_coverage_tests {
         let custom_pattern = CustomPattern::new(
             "invalid".to_string(),
             "[invalid(".to_string(),
-            ironclaw_safety::LeakSeverity::Medium,
-            ironclaw_safety::LeakAction::Redact,
+            dasclaw_safety::LeakSeverity::Medium,
+            dasclaw_safety::LeakAction::Redact,
         );
         let result = custom_pattern.to_leak_pattern();
         assert!(result.is_err());
