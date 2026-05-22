@@ -513,6 +513,72 @@ impl DerefMut for JobContext { ... }
 
 **待 slice A 完成后**：在本节追加"slice A 完成于 PR #N"标记；slice B 决策另写。
 
+### 11.8.8 事实更正（v4，撤回 X 决策）
+
+> 本节为 v4 commit 追加。v1（推荐 Y）→ v2（推荐 X）→ v3（决策 X + 字段清单）→ **v4：撤回 X，改纯 verbatim 搬迁**。
+
+#### 11.8.8.1 事实错误
+
+§11.8.2 第 2 条"`JobContext` 持有桌面端类型"是**事实错误**。重新核实当前代码：
+
+| 之前以为是桌面端类型 | 真实落点 | 桌面端形态 |
+|---|---|---|
+| `HttpInterceptor` trait | `dasclaw_runtime::recording::HttpInterceptor` | `crate::llm::recording` 是 re-export shim（行 32 `pub use ...HttpInterceptor`） |
+| `SharedFeatureFlags` / `ToolFeatureFlags` | `dasclaw_runtime::feature_flags` | `crate::tools::feature_flags` 是 re-export shim（行 20 `pub use dasclaw_runtime::feature_flags::{...}`） |
+| `JobContextCore` trait | `dasclaw_runtime::job_context` | `JobContext` 已 `impl JobContextCore`（state.rs 行 269+） |
+
+`dasclaw_core` 已经依赖 `dasclaw_runtime`，所以以上 trait/类型在 `dasclaw_core::context::state` 中可以直接 `use dasclaw_runtime::recording::HttpInterceptor` 等正常引用。
+
+#### 11.8.8.2 真实情况
+
+- **`state.rs` 共 492 行**：实际 outside-crate 引用只有 `std`、`chrono`、`rust_decimal`、`serde`、`uuid`、`dasclaw_runtime`、`crate::llm::recording`（shim）、`crate::tools::feature_flags`（shim）。
+- **`manager.rs` 共 1392 行**：唯一 outside-context 引用是 `use crate::error::JobError`（已搬入 `dasclaw_core::error`）。
+- **`fallback.rs` 共 319 行**：grep 显示无任何桌面端独有 crate 引用。
+
+**结论**：三个文件全部满足 ADR-129 §1.3 verbatim port 形态——只改 import 路径，不动结构、不动业务逻辑、不动字段、不动 trait method 签名。
+
+#### 11.8.8.3 撤回 X 路线、撤回红线豁免
+
+- §11.8.4 推荐方向 X（字段拆分）：**撤回**。X 解决的是不存在的问题。
+- §11.8.5 ADR-129 §1.3 一次性红线豁免条款：**撤回**。verbatim 搬迁本身就符合红线，无需豁免。
+- §11.8.6 X 的 slice A 字段拆分计划：**撤回**。
+- §11.8.7 决策 = X：**撤回**。
+
+#### 11.8.8.4 新方向：verbatim 一刀搬迁
+
+**slice A'（替代 §11.8.6 slice A）**：
+
+- `git mv desktop-client/ironclaw/src/context/state.rs` → `crates/dasclaw_core/src/context/state.rs`
+- `git mv desktop-client/ironclaw/src/context/manager.rs` → `crates/dasclaw_core/src/context/manager.rs`
+- `git mv desktop-client/ironclaw/src/context/fallback.rs` → `crates/dasclaw_core/src/context/fallback.rs`
+- 三个文件内部仅改 import：
+  - `crate::llm::recording::HttpInterceptor` → `dasclaw_runtime::recording::HttpInterceptor`
+  - `crate::tools::feature_flags::{SharedFeatureFlags, ToolFeatureFlags}` → `dasclaw_runtime::feature_flags::{SharedFeatureFlags, ToolFeatureFlags}`
+  - `crate::error::JobError` → `crate::error::JobError`（在新 crate 内仍叫这个名，dasclaw_core::error::JobError 已就位）
+  - `crate::context::{JobContext, JobState, Memory}` → `crate::context::{JobContext, Memory}` + `dasclaw_runtime::JobState`
+- `crates/dasclaw_core/src/context/mod.rs` 暴露 `pub mod state; pub mod manager; pub mod fallback;` + 顶层 re-export `pub use state::JobContext; pub use manager::{ContextManager, ContextSummary};` 等。
+- 桌面端 `desktop-client/ironclaw/src/context/mod.rs` 改为 `pub use dasclaw_core::context::{Memory, JobContext, ContextManager, ContextSummary, ...};`（与 slice 1 同形）。
+- 桌面端 `state.rs` / `manager.rs` / `fallback.rs` 物理删除（git mv 已带走）。
+
+**ADR-154 step 2 影响**：因为 `JobContext` 现在落在 dasclaw_core 而不再 ironclaw 私有，`impl JobContextCore for JobContext` 也跟着搬过去，但不构成结构性改动（同样是纯 import rebase）。
+
+#### 11.8.8.5 slice A' 验证清单
+
+- `cargo check -p dasclaw_core -p dasclaw --tests`
+- `cargo nextest run -p dasclaw_core -p dasclaw`
+- `cargo fmt --all`
+- `python3.12 scripts/check_no_panics.py --base origin/xClaw`
+- `cargo clippy --no-deps -p dasclaw_core -p dasclaw --all-targets -- -D warnings`
+- PR body 列出三个 `git mv` 命令 + 改动的 import 行号（review 可对照确认 verbatim）。
+
+#### 11.8.8.6 教训
+
+读旧注释（"the god-struct split is the follow-up sub-PR"）就接受了它，没核实当前事实。源码注释会过期，做迁移决策前必须先 grep 当前代码确认类型实际落点。三层验证应该包含"事实核实"层。
+
+#### 11.8.8.7 新决策
+
+**新决策 = verbatim 一刀搬迁（slice A'）**。slice B（fallback.rs）已并入 slice A'，剩下只需在 slice A' 合入后关闭 umbrella #632 + 标 §3 F3.6 行 "Done"。
+
 ### 11.9 F4 修订：ironclaw_safety 路径倒置修复（F4.0）
 
 **问题**
