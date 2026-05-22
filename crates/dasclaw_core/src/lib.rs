@@ -18,6 +18,7 @@ pub mod compaction;
 pub mod context;
 pub mod context_monitor;
 pub mod egress_apply;
+pub mod error;
 pub mod hooks;
 pub mod intent;
 pub mod llm;
@@ -39,6 +40,7 @@ pub use bash_validation::{
     CommandIntent, ValidationResult, check_destructive, classify_command, validate_command,
     validate_mode, validate_paths, validate_read_only, validate_sed,
 };
+pub use error::JobError;
 pub use hooks::{
     ApprovalError, ApprovalGate, ApprovalOutcome, ApprovalRequest, AutoApproveGate,
     CompositeEgressGate, CompositeEgressGateBuilder, DenyAllGate, EgressDecision, EgressGate,
