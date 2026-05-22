@@ -45,7 +45,7 @@ dasclaw_llm_provider = { path = "../dasclaw_llm_provider" }
 
 # Prompt-injection scanner (slice 7 preparatory: sanitization helpers used by
 # Workspace write paths). Mirrors the dep already used by dasclaw_llm_provider.
-ironclaw_safety = { path = "../../desktop-client/ironclaw/crates/ironclaw_safety" }
+dasclaw_safety = { path = "../dasclaw_safety" }
 
 # PostgreSQL persistence (slice 5/N: repository). Optional, gated by `postgres`
 # feature so default builds stay dependency-light. Mirrors ironclaw's existing

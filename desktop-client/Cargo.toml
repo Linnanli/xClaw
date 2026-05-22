@@ -41,7 +41,7 @@ open = "5"
 # `egress-gate` feature exposes the `IronclawEgressGate` adapter so this
 # crate can plug `SafetyLayer` into the project-wide `EgressGate` trait
 # (ADR-148 §6.4, closes issue #92 attachment DLP gate).
-ironclaw_safety = { path = "./ironclaw/crates/ironclaw_safety", features = ["egress-gate"] }
+dasclaw_safety = { path = "../crates/dasclaw_safety", features = ["egress-gate"] }
 dasclaw_sandbox = { path = "../crates/dasclaw_sandbox" }
 
 # EgressGate trait (ADR-148) — single seam for data leaving the agent's

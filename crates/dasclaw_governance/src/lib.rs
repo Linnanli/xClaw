@@ -82,7 +82,7 @@ pub mod tool_visibility;
 //
 // Unlike the feature-gated W4 6-pack scaffolds above, [`egress`] is core
 // infrastructure consumed by `dasclaw_hooks` / `dasclaw_core` /
-// `ironclaw_safety` and is therefore unconditional. See
+// `dasclaw_safety` and is therefore unconditional. See
 // `docs/plans/architecture-refactor/adr-148-egress-gate-safety-hook-semantics.md`.
 pub mod egress;
 

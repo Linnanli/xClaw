@@ -7,7 +7,7 @@
 //! prompt-injection patterns; high-severity hits are rejected, lower-severity
 //! ones are logged.
 
-use ironclaw_safety::{Sanitizer, Severity};
+use dasclaw_safety::{Sanitizer, Severity};
 
 use crate::document::paths;
 use crate::error::WorkspaceError;

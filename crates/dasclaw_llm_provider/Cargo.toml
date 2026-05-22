@@ -57,4 +57,4 @@ tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time"] 
 wiremock = "0.6"
 tempfile = "3"
 tracing-test = "0.2"
-ironclaw_safety = { path = "../../desktop-client/ironclaw/crates/ironclaw_safety" }
+dasclaw_safety = { path = "../dasclaw_safety" }

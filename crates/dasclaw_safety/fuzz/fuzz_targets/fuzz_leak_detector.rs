@@ -1,5 +1,5 @@
 #![no_main]
-use ironclaw_safety::LeakDetector;
+use dasclaw_safety::LeakDetector;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

@@ -1,5 +1,5 @@
 [package]
-name = "ironclaw_safety"
+name = "dasclaw_safety"
 version = "0.2.0"
 edition = "2024"
 rust-version = "1.92"
@@ -24,7 +24,7 @@ url = "2"
 # runtime can plug SafetyLayer in at the single egress hook point without
 # taking a hard dependency on ironclaw.
 async-trait = { version = "0.1", optional = true }
-dasclaw_core = { path = "../../../../crates/dasclaw_core", optional = true }
+dasclaw_core = { path = "../dasclaw_core", optional = true }
 
 [features]
 default = []

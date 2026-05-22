@@ -53,8 +53,8 @@ use std::sync::Arc;
 
 use dasclaw_core::egress_apply::{EgressApply, apply_egress_decision};
 use dasclaw_governance::egress::{EgressGate, EgressKind};
-use ironclaw_safety::SafetyLayer;
-use ironclaw_safety::egress_gate::IronclawEgressGate;
+use dasclaw_safety::SafetyLayer;
+use dasclaw_safety::egress_gate::IronclawEgressGate;
 
 /// Run `payload` through the ADR-148 Layer-B egress gate and return the
 /// sanitised string ready to be embedded in LLM context, channel events,
@@ -95,7 +95,7 @@ pub async fn sanitize_tool_output_via_egress(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ironclaw_safety::SafetyConfig;
+    use dasclaw_safety::SafetyConfig;
 
     fn make_safety() -> Arc<SafetyLayer> {
         Arc::new(SafetyLayer::new(&SafetyConfig {

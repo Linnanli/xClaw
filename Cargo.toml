@@ -67,7 +67,7 @@ members = [
 	"crates/dasclaw_cert_trust",
 	"desktop-client/ironclaw",
 	"desktop-client/ironclaw/crates/ironclaw_common",
-	"desktop-client/ironclaw/crates/ironclaw_safety",
+	"crates/dasclaw_safety",
 ]
 exclude = ["ironclaw", "claw-code", "vendor"]
 resolver = "2"

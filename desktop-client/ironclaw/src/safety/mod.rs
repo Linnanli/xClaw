@@ -1,6 +1,6 @@
 //! Safety layer for prompt injection defense.
 //!
-//! This module re-exports everything from the `ironclaw_safety` crate,
+//! This module re-exports everything from the `dasclaw_safety` crate,
 //! keeping `crate::safety::*` imports working throughout the codebase.
 //!
 //! The [`egress`] sub-module provides the ADR-148 R2 helper
@@ -10,4 +10,4 @@
 
 pub mod egress;
 
-pub use ironclaw_safety::*;
+pub use dasclaw_safety::*;

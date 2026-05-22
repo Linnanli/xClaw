@@ -121,7 +121,7 @@ unused-allowed-license = "allow"
 multiple-versions = "warn"
 # xClaw fork: downgrade wildcards to "warn".
 # Workspace binaries (admin-backend, desktop-client) and vendored
-# sub-crates (ironclaw, ironclaw_safety) all carry license fields (needed
+# sub-crates (ironclaw, dasclaw_safety) all carry license fields (needed
 # for the cargo-deny licenses phase) which makes cargo-deny classify them
 # as "public". When public, `allow-wildcard-paths = true` no longer applies
 # because crates.io disallows path deps — but these crates are not

@@ -1,9 +1,9 @@
 //! DLP 检测器核心实现
 //!
-//! 基于 ironclaw_safety crate 的 LeakDetector，扩展支持中国特色敏感信息检测
+//! 基于 dasclaw_safety crate 的 LeakDetector，扩展支持中国特色敏感信息检测
 
 use crate::dlp::{DlpError, DlpResult};
-use ironclaw_safety::{
+use dasclaw_safety::{
     LeakAction as SafetyLeakAction, LeakDetector, LeakMatch as SafetyLeakMatch, LeakScanResult,
     LeakSeverity as SafetyLeakSeverity,
 };
@@ -141,7 +141,7 @@ impl DlpDetector {
     }
 
     /// 使用自定义模式创建检测器
-    pub fn with_custom_patterns(patterns: Vec<ironclaw_safety::LeakPattern>) -> Self {
+    pub fn with_custom_patterns(patterns: Vec<dasclaw_safety::LeakPattern>) -> Self {
         Self {
             leak_detector: LeakDetector::with_patterns(patterns),
         }
@@ -200,7 +200,7 @@ impl DlpDetector {
     }
 
     /// 添加自定义模式
-    pub fn add_patterns(&mut self, patterns: Vec<ironclaw_safety::LeakPattern>) {
+    pub fn add_patterns(&mut self, patterns: Vec<dasclaw_safety::LeakPattern>) {
         for pattern in patterns {
             self.leak_detector.add_pattern(pattern);
         }

@@ -1,5 +1,5 @@
 #![no_main]
-use ironclaw_safety::{Sanitizer, Severity};
+use dasclaw_safety::{Sanitizer, Severity};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

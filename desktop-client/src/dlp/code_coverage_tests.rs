@@ -154,8 +154,8 @@ mod code_coverage_tests {
         let custom_valid = CustomPattern::new(
             "test_valid".to_string(),
             r"\d{4}".to_string(),
-            ironclaw_safety::LeakSeverity::Medium,
-            ironclaw_safety::LeakAction::Redact,
+            dasclaw_safety::LeakSeverity::Medium,
+            dasclaw_safety::LeakAction::Redact,
         );
         let pattern_result = custom_valid.to_leak_pattern();
         assert!(pattern_result.is_ok());
@@ -164,8 +164,8 @@ mod code_coverage_tests {
         let custom_invalid = CustomPattern::new(
             "test_invalid".to_string(),
             r"[invalid(".to_string(), // 无效正则
-            ironclaw_safety::LeakSeverity::Medium,
-            ironclaw_safety::LeakAction::Redact,
+            dasclaw_safety::LeakSeverity::Medium,
+            dasclaw_safety::LeakAction::Redact,
         );
         let pattern_result_invalid = custom_invalid.to_leak_pattern();
         assert!(pattern_result_invalid.is_err());
@@ -277,8 +277,8 @@ mod code_coverage_tests {
         let invalid_pattern = CustomPattern::new(
             "invalid".to_string(),
             "[invalid regex(".to_string(),
-            ironclaw_safety::LeakSeverity::Medium,
-            ironclaw_safety::LeakAction::Redact,
+            dasclaw_safety::LeakSeverity::Medium,
+            dasclaw_safety::LeakAction::Redact,
         );
 
         let result = invalid_pattern.to_leak_pattern();

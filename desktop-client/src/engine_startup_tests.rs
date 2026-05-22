@@ -40,7 +40,7 @@ mod engine_state_timing_tests {
         let safety = Arc::new(SafetyLayer::new(&safety_config));
         let safety_bridge = Arc::new(SafetyBridge::new(Arc::clone(&safety), None, None));
         let egress: Arc<dyn dasclaw_core::EgressGate> = Arc::new(
-            ironclaw_safety::egress_gate::IronclawEgressGate::new(Arc::clone(&safety)),
+            dasclaw_safety::egress_gate::IronclawEgressGate::new(Arc::clone(&safety)),
         );
         let attachment_scanner = Arc::new(
             crate::safety_attachment_scanner::AttachmentScanner::new(Arc::clone(&egress)),

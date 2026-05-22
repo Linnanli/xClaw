@@ -6,7 +6,7 @@ use crate::dlp::patterns::{get_all_builtin_patterns, CustomPattern};
 use crate::dlp::{
     DlpDetector, DlpError, DlpResult, DlpSanitizer, SanitizationConfig, SanitizationResult,
 };
-use ironclaw_safety::LeakPattern;
+use dasclaw_safety::LeakPattern;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -348,31 +348,31 @@ impl DlpIntegration {
             }
 
             let severity = match custom_config.severity.as_str() {
-                "Low" | "low" => ironclaw_safety::LeakSeverity::Low,
-                "Medium" | "medium" => ironclaw_safety::LeakSeverity::Medium,
-                "High" | "high" => ironclaw_safety::LeakSeverity::High,
-                "Critical" | "critical" => ironclaw_safety::LeakSeverity::Critical,
+                "Low" | "low" => dasclaw_safety::LeakSeverity::Low,
+                "Medium" | "medium" => dasclaw_safety::LeakSeverity::Medium,
+                "High" | "high" => dasclaw_safety::LeakSeverity::High,
+                "Critical" | "critical" => dasclaw_safety::LeakSeverity::Critical,
                 _ => {
                     warn!(
                         pattern_name = custom_config.name,
                         invalid_severity = custom_config.severity,
                         "Invalid severity, defaulting to Medium"
                     );
-                    ironclaw_safety::LeakSeverity::Medium
+                    dasclaw_safety::LeakSeverity::Medium
                 }
             };
 
             let action = match custom_config.action.as_str() {
-                "Warn" => ironclaw_safety::LeakAction::Warn,
-                "Redact" => ironclaw_safety::LeakAction::Redact,
-                "Block" => ironclaw_safety::LeakAction::Block,
+                "Warn" => dasclaw_safety::LeakAction::Warn,
+                "Redact" => dasclaw_safety::LeakAction::Redact,
+                "Block" => dasclaw_safety::LeakAction::Block,
                 _ => {
                     warn!(
                         pattern_name = custom_config.name,
                         invalid_action = custom_config.action,
                         "Invalid action, defaulting to Redact"
                     );
-                    ironclaw_safety::LeakAction::Redact
+                    dasclaw_safety::LeakAction::Redact
                 }
             };
 

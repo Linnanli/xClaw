@@ -28,8 +28,8 @@ use dasclaw_core::messages::FinishReason;
 use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
 use dasclaw_core::{ChatMessage, HookBundle, HostError, ToolCall};
-use ironclaw_safety::egress_gate::IronclawEgressGate;
-use ironclaw_safety::{SafetyConfig, SafetyLayer};
+use dasclaw_safety::egress_gate::IronclawEgressGate;
+use dasclaw_safety::{SafetyConfig, SafetyLayer};
 use tokio::sync::Mutex;
 
 /// Minimal `LoopDelegate` that returns pre-canned LLM responses.
