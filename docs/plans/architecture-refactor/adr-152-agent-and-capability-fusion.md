@@ -70,7 +70,7 @@
 | F3.1 | `src/llm/{bedrock,codex_*,github_copilot*,gemini_oauth,nearai_chat,claw_code_provider,circuit_breaker,failover,response_cache,recording,retry,reasoning(+models),image_models,oauth_helpers,error,costs}` | `dasclaw_llm_provider` | W6 现有计划 |
 | F3.2 | `src/tools/mcp/{auth,client,config,factory,*_transport,process,protocol,session,mod}` + `cli/mcp` | `dasclaw_mcp` | 新建 W6 子 issue |
 | F3.3 | `src/tools/builtin/lsp/{client,protocol,server_config,tool,mod}` | `dasclaw_lsp` | 新建子 issue |
-| F3.4 | `src/workspace/{chunker,document,embedding_cache,embeddings,hygiene,layer,privacy,repository,search,mod}` | `dasclaw_workspace_cap` | 新建子 issue |
+| F3.4 | `src/workspace/{chunker,document,embedding_cache,embeddings,layer,privacy,repository,search}` + `profile.rs` + `timezone.rs` + `WorkspaceError`（**收口 2026-05-22，见 §11**；`mod.rs` 本体、`hygiene.rs`、`db/*` 留 ironclaw） | `dasclaw_workspace_cap` | #698 / #700 / #703 / #705 / #707 / #709 / #711 |
 | F3.5 | `src/observability/{log,multi,noop,prompt_cache,traits,mod}` | `dasclaw_observability` | 新建子 issue |
 | F3.6 | `src/context/{manager,memory,fallback,state,mod}` + `agent/context_monitor.rs` | `dasclaw_core::context` 子模块 | 新建子 issue |
 
@@ -207,6 +207,79 @@ PR 描述必须含上述三项命令的实际输出。
 - [docs/plans/architecture-refactor/dual-graph-stats.md](dual-graph-stats.md)（PR #622）
 - [docs/plans/architecture-refactor/capability-comparison.md](capability-comparison.md)（PR #623）
 - [docs/plans/testing/end-to-end-validation-plan.md](../testing/end-to-end-validation-plan.md)
+
+## 11. F3.4 修订（2026-05-22）
+
+> 修订人：本次会话 agent；签字关联 issue #712。
+
+### 11.1 原计划
+
+把 `src/workspace/` 整目录 + Workspace 本体 verbatim 搬到 `dasclaw_workspace_cap`。
+
+### 11.2 实际进展
+
+10 个 preparatory slice 已合入 `xClaw`（PR #698 / #700 / #703 / #705 / #707 / #709 / #711 等）。已搬迁的零件：
+
+- 数据层：`document`（含 `MemoryDocument` / `MemoryChunk` / `WorkspaceEntry`）、`embeddings`、`embedding_cache`、`chunker`
+- 算法层：`search`（FTS / 向量 / RRF）、`layer`、`privacy`、`policy`
+- 工具层：`sanitization`（含 `is_system_prompt_file` / `reject_if_injected`）、`profile`（含 `PsychographicProfile` + `ANALYSIS_FRAMEWORK` + `PROFILE_JSON_SCHEMA`）、`timezone`
+- 基础：`error::WorkspaceError`、`config::WorkspaceSearchConfig`、`repository`（postgres feature 门控）
+
+cap crate 当前 157 个测试全绿，含双 feature（default + postgres）。
+
+### 11.3 阻塞事实（三层验证）
+
+准备搬 Workspace 本体 + `db::Database` trait 时调研得到：
+
+1. `desktop-client/ironclaw/src/db/mod.rs:32-42` import 头：
+
+    ```rust
+    use crate::agent::BrokenTool;
+    use crate::agent::routine::{Routine, RoutineRun, RunStatus};
+    use crate::context::{ActionRecord, JobContext, JobState};
+    use crate::history::{...};
+    ```
+
+2. 这些类型进入 `Database` trait 方法签名（非临时局部使用）。
+
+3. 三棵子树体量：
+   - `src/context/` = 5 文件
+   - `src/history/` = 3 文件
+   - `src/agent/` = 18 文件
+
+4. 这三棵子树属于宿主职责（IO 适配 / 对话状态 / 运行时调度），不属于 Workspace 能力域。把它们 verbatim 搬到 `dasclaw_workspace_cap` 会让 cap 失去"小而专"的属性，违背 ADR-152 §1 的"反向吸收"目标。
+
+### 11.4 决策
+
+**F3.4 收口于 slice 10。Workspace 本体（`workspace/mod.rs`）和 `hygiene.rs` 留 ironclaw 作为参考组合。**
+
+理由：
+
+1. **架构层面**：cap 已经提供所有可复用的数据 + 算法零件。其他宿主想用 Workspace，可以基于 cap 零件自行组装；不必继承 ironclaw 的那一份具体组合。这正符合 Hexagonal / Ports & Adapters 推荐方向：核心域不知道数据库存在。
+2. **红线层面**：继续搬需要要么破 ADR-129 §1.3 verbatim 红线（引入新抽象 trait），要么把 context/history/agent 整树搬过去（cap 失去定位）。两个都比"收口"代价大。
+3. **零返工**：已合入的 10 个 slice 全部保留收益，不需要回退任何代码。
+
+### 11.5 未迁移项清单（明确留 ironclaw）
+
+| 文件 | 原因 |
+|---|---|
+| `desktop-client/ironclaw/src/workspace/mod.rs`（Workspace 本体） | 内部持有 `Arc<dyn crate::db::Database>`，与 IO 抽象耦合 |
+| `desktop-client/ironclaw/src/workspace/hygiene.rs` | 依赖 Workspace + `crate::bootstrap::dasclaw_base_dir`（宿主路径策略） |
+| `desktop-client/ironclaw/src/db/` 整树 | 数据库适配层，属于宿主职责 |
+
+### 11.6 后续宿主复用规约
+
+其他宿主（codex / claw-code / 第三方）若想复用 Workspace 能力：
+
+1. **零件**：直接 `use dasclaw_workspace_cap::{document, search, embeddings, ...}` 即可
+2. **组合**：自行实现 Workspace 等价物，决定自己的持久化方式（不必 `dyn Database`）
+3. **参考**：可对照 ironclaw `workspace/mod.rs` 的组合方式，但不强制继承
+
+### 11.7 对 F3.5 / F3.6 的影响
+
+无。F3.5（observability）和 F3.6（context manager）的范围、目标、ADR-129 verbatim 约束不变。
+
+F3.6 涉及 `crate::context/`，如果后续也遇到类似"trait 方法签名拖入宿主类型"的阻塞，可参照本次修订模式，单独评估收口策略。
 
 ---
 
