@@ -1,19 +1,12 @@
-//! Per-job context isolation and state management.
+//! Per-job context: re-export shim.
 //!
-//! Each job runs with its own isolated context that includes:
-//! - Conversation history
-//! - Action history
-//! - State machine
-//! - Resource tracking
+//! ADR-152 §3 F3.6 (slice 1 / slice 2 / slice A''): `Memory` + `JobError`
+//! live in `dasclaw_core`; `state` + `manager` + `fallback` live in
+//! `dasclaw_runtime::context`. This shim keeps existing `crate::context::*`
+//! call sites source-compatible.
 
-pub mod fallback;
-mod manager;
-mod state;
-
-pub use fallback::FallbackDeliverable;
-pub use manager::ContextManager;
-// ADR-152 §3 F3.6 slice 1: `memory` was moved into `dasclaw_core::context::memory`.
-// Re-export keeps existing `crate::context::{ActionRecord, ConversationMemory, Memory}`
-// call sites (e.g. `worker::job`) source-compatible.
 pub use dasclaw_core::context::memory::{ActionRecord, ConversationMemory, Memory};
-pub use state::{JobContext, JobState, StateTransition, TokenBudgetExceeded};
+pub use dasclaw_runtime::context::{
+    ContextManager, ContextSummary, FallbackDeliverable, JobContext,
+};
+pub use dasclaw_runtime::{JobState, StateTransition, TokenBudgetExceeded};

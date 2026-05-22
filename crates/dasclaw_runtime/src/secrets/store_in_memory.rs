@@ -79,10 +79,10 @@ impl SecretsStore for InMemorySecretsStore {
             .cloned()
             .ok_or_else(|| SecretError::NotFound(name.clone()))?;
 
-        if let Some(expires_at) = secret.expires_at {
-            if expires_at < Utc::now() {
-                return Err(SecretError::Expired);
-            }
+        if let Some(expires_at) = secret.expires_at
+            && expires_at < Utc::now()
+        {
+            return Err(SecretError::Expired);
         }
 
         Ok(secret)
@@ -148,10 +148,10 @@ impl SecretsStore for InMemorySecretsStore {
             if pattern_lower == secret_name_lower {
                 return Ok(true);
             }
-            if let Some(prefix) = pattern_lower.strip_suffix('*') {
-                if secret_name_lower.starts_with(prefix) {
-                    return Ok(true);
-                }
+            if let Some(prefix) = pattern_lower.strip_suffix('*')
+                && secret_name_lower.starts_with(prefix)
+            {
+                return Ok(true);
             }
         }
         Ok(false)
@@ -254,10 +254,11 @@ mod tests {
     async fn req_dasclaw_runtime_secrets_store_in_memory_security_is_accessible_exact() {
         let s = store();
         s.create("u", params("github_token", "v")).await.unwrap();
-        assert!(s
-            .is_accessible("u", "github_token", &["github_token".to_string()])
-            .await
-            .unwrap());
+        assert!(
+            s.is_accessible("u", "github_token", &["github_token".to_string()])
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -265,15 +266,17 @@ mod tests {
         let s = store();
         s.create("u", params("github_token", "v")).await.unwrap();
         // Wildcard `github_*` permits `github_token`
-        assert!(s
-            .is_accessible("u", "github_token", &["github_*".to_string()])
-            .await
-            .unwrap());
+        assert!(
+            s.is_accessible("u", "github_token", &["github_*".to_string()])
+                .await
+                .unwrap()
+        );
         // But a stricter `slack_*` rule must not match
-        assert!(!s
-            .is_accessible("u", "github_token", &["slack_*".to_string()])
-            .await
-            .unwrap());
+        assert!(
+            !s.is_accessible("u", "github_token", &["slack_*".to_string()])
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -283,9 +286,10 @@ mod tests {
         // otherwise a tool could "pre-declare" access and later trigger
         // a write to obtain the secret.
         let s = store();
-        assert!(!s
-            .is_accessible("u", "ghost", &["*".to_string()])
-            .await
-            .unwrap());
+        assert!(
+            !s.is_accessible("u", "ghost", &["*".to_string()])
+                .await
+                .unwrap()
+        );
     }
 }

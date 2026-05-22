@@ -193,10 +193,11 @@ mod tests {
             .await
             .unwrap();
         assert!(!s.is_accessible("u1", "k", &[]).await.unwrap());
-        assert!(s
-            .is_accessible("u1", "k", &["k".to_string()])
-            .await
-            .unwrap());
+        assert!(
+            s.is_accessible("u1", "k", &["k".to_string()])
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
