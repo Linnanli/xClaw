@@ -680,7 +680,7 @@ impl Tool for MemoryTreeTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::JobContext;
+    use dasclaw_runtime::context::JobContext;
 
     #[test]
     fn detects_filesystem_paths() {

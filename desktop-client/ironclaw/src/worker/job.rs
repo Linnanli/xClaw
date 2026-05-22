@@ -18,7 +18,6 @@ use crate::agent::agentic_loop::{
 };
 use crate::agent::scheduler::WorkerMessage;
 use crate::channels::web::types::ToolDecisionDto;
-use crate::context::{ContextManager, JobState};
 use crate::error::Error;
 use crate::llm::{
     ActionPlan, ChatMessage, LlmProvider, Reasoning, ReasoningContext, RespondResult,
@@ -37,6 +36,8 @@ use crate::worker::autonomous_recovery::{
 };
 use dasclaw_core::traits::HostError;
 use dasclaw_hooks::HookRegistry;
+use dasclaw_runtime::JobState;
+use dasclaw_runtime::context::ContextManager;
 use ironclaw_common::AppEvent;
 
 /// Shared dependencies for worker execution.
@@ -1126,7 +1127,7 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
         job_id: uuid::Uuid,
         channels: Arc<crate::channels::ChannelManager>,
         content: String,
-        context_manager: Arc<crate::context::ContextManager>,
+        context_manager: Arc<dasclaw_runtime::context::ContextManager>,
         store: Option<crate::tenant::AdminScope>,
     ) {
         let ctx = match context_manager.get_context(job_id).await {
@@ -1223,7 +1224,10 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
     }
 
     /// Build a [`FallbackDeliverable`] from the current job context and memory.
-    async fn build_fallback(&self, reason: &str) -> Option<crate::context::FallbackDeliverable> {
+    async fn build_fallback(
+        &self,
+        reason: &str,
+    ) -> Option<dasclaw_runtime::context::FallbackDeliverable> {
         let memory = match self.context_manager().get_memory(self.job_id).await {
             Ok(memory) => memory,
             Err(e) => {
@@ -1244,7 +1248,7 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
                 return None;
             }
         };
-        Some(crate::context::FallbackDeliverable::build(
+        Some(dasclaw_runtime::context::FallbackDeliverable::build(
             &ctx, &memory, reason,
         ))
     }
@@ -1252,8 +1256,8 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
 
 /// Store a fallback deliverable in the job context's metadata.
 fn store_fallback_in_metadata(
-    ctx: &mut crate::context::JobContext,
-    fallback: Option<&crate::context::FallbackDeliverable>,
+    ctx: &mut dasclaw_runtime::context::JobContext,
+    fallback: Option<&dasclaw_runtime::context::FallbackDeliverable>,
 ) {
     let Some(fb) = fallback else {
         return;
@@ -1872,7 +1876,6 @@ mod tests {
 
     use super::*;
     use crate::config::SafetyConfig;
-    use crate::context::JobContext;
     use crate::llm::{
         CompletionRequest, CompletionResponse, LlmProvider, ToolCompletionRequest,
         ToolCompletionResponse,
@@ -1881,6 +1884,7 @@ mod tests {
     use crate::testing::{BroadcastCapture, RecordingBroadcastChannel};
     use crate::tools::builtin::MessageTool;
     use crate::tools::{Tool, ToolError as ToolExecError, ToolOutput};
+    use dasclaw_runtime::context::JobContext;
 
     /// A test tool that sleeps for a configurable duration before returning.
     struct SlowTool {
@@ -1948,7 +1952,7 @@ mod tests {
             registry.register(t).await;
         }
 
-        let cm = Arc::new(crate::context::ContextManager::new(5));
+        let cm = Arc::new(dasclaw_runtime::context::ContextManager::new(5));
         let job_id = cm.create_job("test", "test job").await.unwrap(); // safety: test
 
         let deps = WorkerDeps {
@@ -2169,7 +2173,7 @@ mod tests {
             registry.register(t).await;
         }
 
-        let cm = Arc::new(crate::context::ContextManager::new(5));
+        let cm = Arc::new(dasclaw_runtime::context::ContextManager::new(5));
         let job_id = cm.create_job("test", "test job").await.unwrap(); // safety: test
 
         let deps = WorkerDeps {
@@ -2603,10 +2607,10 @@ mod tests {
 
     #[test]
     fn test_store_fallback_in_metadata_roundtrip() {
-        use crate::context::FallbackDeliverable;
+        use dasclaw_runtime::context::FallbackDeliverable;
 
         let mut ctx = JobContext::new("Test", "fallback roundtrip");
-        let memory = crate::context::Memory::new(ctx.job_id);
+        let memory = dasclaw_core::context::memory::Memory::new(ctx.job_id);
         let fb = FallbackDeliverable::build(&ctx, &memory, "test failure");
 
         // Store into metadata
@@ -2624,12 +2628,12 @@ mod tests {
 
     #[test]
     fn test_store_fallback_handles_non_object_metadata() {
-        use crate::context::FallbackDeliverable;
+        use dasclaw_runtime::context::FallbackDeliverable;
 
         let mut ctx = JobContext::new("Test", "non-object metadata");
         ctx.metadata = serde_json::json!("not an object");
 
-        let memory = crate::context::Memory::new(ctx.job_id);
+        let memory = dasclaw_core::context::memory::Memory::new(ctx.job_id);
         let fb = FallbackDeliverable::build(&ctx, &memory, "failed");
 
         store_fallback_in_metadata(&mut ctx, Some(&fb));

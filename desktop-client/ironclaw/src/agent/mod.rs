@@ -15,7 +15,6 @@ pub mod agentic_loop;
 mod attachments;
 mod commands;
 pub mod compaction;
-pub mod context_monitor;
 mod dispatcher;
 mod router;
 pub mod session;
@@ -43,7 +42,7 @@ pub use crate::routines::self_repair;
 pub(crate) use agent_loop::truncate_for_preview;
 pub use agent_loop::{Agent, AgentDeps};
 pub use compaction::{CompactionResult, ContextCompactor};
-pub use context_monitor::{CompactionStrategy, ContextBreakdown, ContextMonitor};
+pub use dasclaw_core::context_monitor::{CompactionStrategy, ContextBreakdown, ContextMonitor};
 pub(crate) use dispatcher::strip_suggestions;
 pub use heartbeat::{
     HeartbeatConfig, HeartbeatResult, HeartbeatRunner, spawn_heartbeat, spawn_multi_user_heartbeat,

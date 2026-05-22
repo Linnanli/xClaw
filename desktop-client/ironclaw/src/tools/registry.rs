@@ -9,7 +9,6 @@ use dasclaw_governance::tool_visibility::{
 };
 use tokio::sync::RwLock;
 
-use crate::context::ContextManager;
 use crate::db::Database;
 use crate::extensions::ExtensionManager;
 use crate::llm::{LlmProvider, ToolDefinition};
@@ -41,6 +40,7 @@ use crate::tools::wasm::{
     WasmStorageError, WasmToolRuntime, WasmToolStore, WasmToolWrapper,
 };
 use crate::workspace::Workspace;
+use dasclaw_runtime::context::ContextManager;
 
 /// Names of built-in tools that cannot be shadowed by dynamic registrations.
 /// This prevents a dynamically built or installed tool from replacing a
@@ -1805,8 +1805,8 @@ mod tests {
     // `JobToolsConfig` field-gate dispatch — so future regressions surface as
     // a focused test failure rather than a generic build break.
 
-    use crate::context::ContextManager;
     use crate::tools::bootstrap::JobToolsConfig;
+    use dasclaw_runtime::context::ContextManager;
 
     #[tokio::test]
     async fn req_p02_pr4_a_job_config_minimum_registers_core_job_tools() {

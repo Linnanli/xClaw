@@ -12,7 +12,6 @@ use std::sync::Arc;
 use futures::StreamExt;
 use uuid::Uuid;
 
-use crate::agent::context_monitor::ContextMonitor;
 use crate::agent::heartbeat::{spawn_heartbeat, spawn_multi_user_heartbeat};
 use crate::agent::routine_engine::{RoutineEngine, spawn_cron_ticker};
 use crate::agent::self_repair::{DefaultSelfRepair, RepairResult, SelfRepair};
@@ -23,7 +22,6 @@ use crate::agent::{
 };
 use crate::channels::{ChannelManager, IncomingMessage, OutgoingResponse, StatusUpdate};
 use crate::config::{AgentConfig, HeartbeatConfig, RoutineConfig, SkillsConfig};
-use crate::context::ContextManager;
 use crate::db::Database;
 use crate::error::{ChannelError, Error};
 use crate::extensions::ExtensionManager;
@@ -32,7 +30,9 @@ use crate::safety::SafetyLayer;
 use crate::skills::SkillRegistry;
 use crate::tools::ToolRegistry;
 use crate::workspace::Workspace;
+use dasclaw_core::context_monitor::ContextMonitor;
 use dasclaw_hooks::HookRegistry;
+use dasclaw_runtime::context::ContextManager;
 
 /// spawn task 的返回值，指示主循环是否应该退出。
 enum MessageAction {
@@ -156,7 +156,7 @@ pub(crate) fn chat_tool_execution_metadata(message: &IncomingMessage) -> serde_j
 /// This allows all tools to read `ctx.metadata["workspace_root"]` at runtime
 /// without needing a compile-time `base_dir`.
 pub(crate) async fn enrich_workspace_root(
-    job_ctx: &mut crate::context::JobContext,
+    job_ctx: &mut dasclaw_runtime::context::JobContext,
     store: Option<&std::sync::Arc<dyn crate::db::Database>>,
 ) {
     let Some(store) = store else {
@@ -1898,8 +1898,8 @@ mod tests {
     /// 且 effective_base_dir 能读取它。
     #[tokio::test]
     async fn test_contract_workspace_chain_with_metadata() {
-        use crate::context::JobContext;
         use crate::tools::builtin::path_utils::effective_base_dir;
+        use dasclaw_runtime::context::JobContext;
         use std::path::PathBuf;
 
         let mut ctx = JobContext::with_user("u", "chat", "test");
@@ -1915,8 +1915,8 @@ mod tests {
     /// validate_path 对相对路径报错而非回退到 CWD。
     #[test]
     fn test_contract_missing_workspace_rejects_relative_path() {
-        use crate::context::JobContext;
         use crate::tools::builtin::path_utils::{effective_base_dir, validate_path};
+        use dasclaw_runtime::context::JobContext;
 
         let ctx = JobContext::with_user("u", "chat", "test");
         let base = effective_base_dir(None, &ctx);

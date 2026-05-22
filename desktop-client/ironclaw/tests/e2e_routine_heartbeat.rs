@@ -18,6 +18,7 @@ mod tests {
     use uuid::Uuid;
 
     use dasclaw_hooks::HookRegistry;
+    use dasclaw_runtime::context::{ContextManager, JobContext};
     use ironclaw::agent::routine::{
         NotifyConfig, Routine, RoutineAction, RoutineGuardrails, RoutineRun, RunStatus, Trigger,
     };
@@ -25,7 +26,6 @@ mod tests {
     use ironclaw::agent::{HeartbeatConfig, HeartbeatRunner, Scheduler, SchedulerDeps};
     use ironclaw::channels::IncomingMessage;
     use ironclaw::config::{AgentConfig, RoutineConfig, SafetyConfig};
-    use ironclaw::context::{ContextManager, JobContext};
     use ironclaw::db::{Database, libsql::LibSqlBackend};
     use ironclaw::extensions::ExtensionManager;
     use ironclaw::llm::LlmProvider;

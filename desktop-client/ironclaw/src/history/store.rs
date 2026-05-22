@@ -15,9 +15,11 @@ use crate::channels::{AttachmentKind, IncomingAttachment};
 #[cfg(feature = "postgres")]
 use crate::config::DatabaseConfig;
 #[cfg(feature = "postgres")]
-use crate::context::{ActionRecord, JobContext, JobState};
-#[cfg(feature = "postgres")]
 use crate::error::DatabaseError;
+#[cfg(feature = "postgres")]
+use dasclaw_core::context::memory::ActionRecord;
+use dasclaw_runtime::JobState;
+use dasclaw_runtime::context::JobContext;
 
 /// Record for an LLM call to be persisted.
 #[derive(Debug, Clone)]
@@ -2993,7 +2995,7 @@ mod tests {
     #[ignore]
     async fn test_save_job_persists_user_id() {
         use crate::config::Config;
-        use crate::context::JobContext;
+        use dasclaw_runtime::context::JobContext;
 
         let _ = dotenvy::dotenv();
         let config = Config::from_env().await.expect("Failed to load config");

@@ -12,7 +12,6 @@ use std::sync::Arc;
 use crate::agent::SessionManager as AgentSessionManager;
 use crate::channels::web::log_layer::LogBroadcaster;
 use crate::config::Config;
-use crate::context::ContextManager;
 use crate::db::Database;
 use crate::extensions::ExtensionManager;
 use crate::llm::{LlmProvider, RecordingLlm, SessionManager};
@@ -27,6 +26,7 @@ use crate::tools::wasm::SharedCredentialRegistry;
 use crate::tools::wasm::WasmToolRuntime;
 use crate::workspace::{EmbeddingCacheConfig, EmbeddingProvider, Workspace};
 use dasclaw_hooks::HookRegistry;
+use dasclaw_runtime::context::ContextManager;
 
 /// Fully initialized application components, ready for channel wiring
 /// and agent construction.

@@ -213,7 +213,7 @@ mod tests {
     async fn test_restart_tool_delay_parameter_validation() {
         enable_docker_env();
         let tool = RestartTool;
-        let mut ctx = crate::context::JobContext::new("test", "test restart");
+        let mut ctx = dasclaw_runtime::context::JobContext::new("test", "test restart");
 
         // Test with valid delay
         let result = tool
@@ -236,7 +236,7 @@ mod tests {
     async fn test_restart_tool_delay_clamping() {
         enable_docker_env();
         let tool = RestartTool;
-        let mut ctx = crate::context::JobContext::new("test", "test restart");
+        let mut ctx = dasclaw_runtime::context::JobContext::new("test", "test restart");
 
         // Test with too small delay (should clamp to 1)
         let result = tool
@@ -290,7 +290,7 @@ mod tests {
     async fn test_restart_tool_boundary_values() {
         enable_docker_env();
         let tool = RestartTool;
-        let mut ctx = crate::context::JobContext::new("test", "test restart");
+        let mut ctx = dasclaw_runtime::context::JobContext::new("test", "test restart");
 
         // Test minimum boundary (exactly 1)
         let result = tool
@@ -324,7 +324,7 @@ mod tests {
     async fn test_restart_tool_invalid_parameter_types() {
         enable_docker_env();
         let tool = RestartTool;
-        let mut ctx = crate::context::JobContext::new("test", "test restart");
+        let mut ctx = dasclaw_runtime::context::JobContext::new("test", "test restart");
 
         // String instead of integer - should use default
         let result = tool
@@ -358,7 +358,7 @@ mod tests {
     async fn test_restart_tool_output_structure() {
         enable_docker_env();
         let tool = RestartTool;
-        let mut ctx = crate::context::JobContext::new("test", "test restart");
+        let mut ctx = dasclaw_runtime::context::JobContext::new("test", "test restart");
 
         let result = tool
             .execute(serde_json::json!({"delay_secs": 5}), &mut ctx)
@@ -378,7 +378,7 @@ mod tests {
     async fn test_restart_tool_extra_parameters_ignored() {
         enable_docker_env();
         let tool = RestartTool;
-        let mut ctx = crate::context::JobContext::new("test", "test restart");
+        let mut ctx = dasclaw_runtime::context::JobContext::new("test", "test restart");
 
         // Extra parameters should be ignored
         let result = tool
@@ -402,7 +402,7 @@ mod tests {
     async fn test_restart_tool_negative_numbers() {
         enable_docker_env();
         let tool = RestartTool;
-        let mut ctx = crate::context::JobContext::new("test", "test restart");
+        let mut ctx = dasclaw_runtime::context::JobContext::new("test", "test restart");
 
         // Negative number should clamp to 1
         let result = tool
@@ -419,7 +419,7 @@ mod tests {
     async fn test_restart_tool_very_large_numbers() {
         enable_docker_env();
         let tool = RestartTool;
-        let mut ctx = crate::context::JobContext::new("test", "test restart");
+        let mut ctx = dasclaw_runtime::context::JobContext::new("test", "test restart");
 
         // Very large number should clamp to 30
         let result = tool
@@ -435,7 +435,7 @@ mod tests {
     async fn test_restart_tool_empty_object() {
         enable_docker_env();
         let tool = RestartTool;
-        let mut ctx = crate::context::JobContext::new("test", "test restart");
+        let mut ctx = dasclaw_runtime::context::JobContext::new("test", "test restart");
 
         // Empty object params should use all defaults
         let result = tool.execute(serde_json::json!({}), &mut ctx).await;

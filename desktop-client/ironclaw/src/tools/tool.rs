@@ -28,7 +28,7 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
-    use crate::context::JobContext;
+    use dasclaw_runtime::context::JobContext;
 
     /// A simple no-op tool for testing.
     #[derive(Debug)]

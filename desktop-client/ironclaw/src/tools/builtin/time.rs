@@ -381,7 +381,7 @@ fn localize_naive_datetime(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::JobContext;
+    use dasclaw_runtime::context::JobContext;
 
     #[tokio::test]
     async fn test_now_accepts_explicit_timezone() {

@@ -180,8 +180,8 @@ impl Tool for ImageGenerateTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::JobContext;
     use crate::tools::tool::ApprovalRequirement;
+    use dasclaw_runtime::context::JobContext;
 
     #[test]
     fn test_tool_metadata() {

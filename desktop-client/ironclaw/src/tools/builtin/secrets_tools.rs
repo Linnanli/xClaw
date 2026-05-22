@@ -158,9 +158,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::context::JobContext;
     use crate::secrets::CreateSecretParams;
     use crate::testing::credentials::{TEST_OPENAI_API_KEY_SHORT, test_secrets_store};
+    use dasclaw_runtime::context::JobContext;
 
     fn test_store() -> Arc<crate::secrets::InMemorySecretsStore> {
         Arc::new(test_secrets_store())

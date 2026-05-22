@@ -173,7 +173,7 @@ impl Tool for PlanModeTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::JobContext;
+    use dasclaw_runtime::context::JobContext;
     use serde_json::json;
 
     fn test_ctx() -> JobContext {

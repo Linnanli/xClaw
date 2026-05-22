@@ -3,8 +3,9 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::context::{ActionRecord, JobContext};
 use crate::error::EvaluationError;
+use dasclaw_core::context::memory::ActionRecord;
+use dasclaw_runtime::context::JobContext;
 
 /// Result of evaluating job success.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,8 +65,9 @@ pub trait SuccessEvaluator: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::{ActionRecord, JobContext};
     use crate::error::EvaluationError;
+    use dasclaw_core::context::memory::ActionRecord;
+    use dasclaw_runtime::context::JobContext;
 
     /// Rule-based success evaluator (test-only; no production callers).
     struct RuleBasedEvaluator {
@@ -144,15 +146,15 @@ mod tests {
                 }
             }
 
-            if job.state != crate::context::JobState::Completed
-                && job.state != crate::context::JobState::Submitted
+            if job.state != dasclaw_runtime::JobState::Completed
+                && job.state != dasclaw_runtime::JobState::Submitted
             {
                 issues.push(format!("Job not in completed state: {:?}", job.state));
             }
 
             let quality_score = if issues.is_empty() {
                 let base_score = (success_rate * 80.0) as u32;
-                let completion_bonus = if job.state == crate::context::JobState::Completed {
+                let completion_bonus = if job.state == dasclaw_runtime::JobState::Completed {
                     20
                 } else {
                     0
@@ -193,9 +195,9 @@ mod tests {
         let evaluator = RuleBasedEvaluator::new();
 
         let mut job = JobContext::new("Test", "Test job");
-        job.transition_to(crate::context::JobState::InProgress, None)
+        job.transition_to(dasclaw_runtime::JobState::InProgress, None)
             .unwrap();
-        job.transition_to(crate::context::JobState::Completed, None)
+        job.transition_to(dasclaw_runtime::JobState::Completed, None)
             .unwrap();
 
         let actions = vec![
@@ -246,9 +248,9 @@ mod tests {
 
     fn completed_job(title: &str) -> JobContext {
         let mut job = JobContext::new(title, "test job");
-        job.transition_to(crate::context::JobState::InProgress, None)
+        job.transition_to(dasclaw_runtime::JobState::InProgress, None)
             .unwrap();
-        job.transition_to(crate::context::JobState::Completed, None)
+        job.transition_to(dasclaw_runtime::JobState::Completed, None)
             .unwrap();
         job
     }
@@ -364,11 +366,11 @@ mod tests {
     async fn test_submitted_state_counts_as_completed() {
         let eval = RuleBasedEvaluator::new();
         let mut job = JobContext::new("submitted", "test");
-        job.transition_to(crate::context::JobState::InProgress, None)
+        job.transition_to(dasclaw_runtime::JobState::InProgress, None)
             .unwrap();
-        job.transition_to(crate::context::JobState::Completed, None)
+        job.transition_to(dasclaw_runtime::JobState::Completed, None)
             .unwrap();
-        job.transition_to(crate::context::JobState::Submitted, None)
+        job.transition_to(dasclaw_runtime::JobState::Submitted, None)
             .unwrap();
         let actions = vec![create_action(true)];
         let result = eval.evaluate(&job, &actions, None).await.unwrap();

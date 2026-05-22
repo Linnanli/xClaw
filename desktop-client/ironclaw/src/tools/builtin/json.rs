@@ -223,7 +223,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_query_with_object_data_from_stash() {
-        use crate::context::JobContext;
+        use dasclaw_runtime::context::JobContext;
 
         let mut ctx = JobContext::with_user("test", "chat", "test-session");
 
@@ -248,7 +248,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_stringify_with_object_data_from_stash() {
-        use crate::context::JobContext;
+        use dasclaw_runtime::context::JobContext;
 
         let mut ctx = JobContext::with_user("test", "chat", "test-session");
 

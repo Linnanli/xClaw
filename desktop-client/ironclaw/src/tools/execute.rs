@@ -242,8 +242,8 @@ pub async fn execute_tool_simple(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::JobContext;
     use crate::tools::tool::{Tool, ToolError, ToolOutput};
+    use dasclaw_runtime::context::JobContext;
     use std::sync::Arc;
     use std::time::Duration;
 

@@ -468,9 +468,9 @@ mod tests {
     fn test_job_tool_schemas() {
         use std::sync::Arc;
 
-        use crate::context::ContextManager;
         use crate::tools::Tool;
         use crate::tools::builtin::{CancelJobTool, CreateJobTool, JobStatusTool, ListJobsTool};
+        use dasclaw_runtime::context::ContextManager;
 
         let ctx_mgr = Arc::new(ContextManager::new(5));
 

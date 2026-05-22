@@ -25,7 +25,6 @@ use uuid::Uuid;
 use crate::agent::BrokenTool;
 use crate::agent::cost_guard::{CostGuard, CostLimitExceeded};
 use crate::agent::routine::{Routine, RoutineRun, RunStatus};
-use crate::context::{ActionRecord, JobContext, JobState};
 use crate::db::Database;
 use crate::error::DatabaseError;
 use crate::history::{
@@ -33,6 +32,9 @@ use crate::history::{
     SandboxJobRecord, SandboxJobSummary, SettingRow,
 };
 use crate::workspace::Workspace;
+use dasclaw_core::context::memory::ActionRecord;
+use dasclaw_runtime::JobState;
+use dasclaw_runtime::context::JobContext;
 
 // ---------------------------------------------------------------------------
 // TenantScope — scoped database access (default tier)

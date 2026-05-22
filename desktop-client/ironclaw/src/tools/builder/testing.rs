@@ -10,9 +10,9 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::context::JobContext;
 use crate::tools::tool::Tool;
 use crate::tools::wasm::{Capabilities, WasmError, WasmToolRuntime, WasmToolWrapper};
+use dasclaw_runtime::context::JobContext;
 
 /// Errors during testing.
 #[derive(Debug, Error)]

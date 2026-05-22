@@ -23,7 +23,6 @@ use uuid::Uuid;
 
 use crate::channels::{IncomingMessage, OutgoingResponse};
 use crate::config::RoutineConfig;
-use crate::context::{JobContext, JobState};
 use crate::error::RoutineError;
 use crate::extensions::ExtensionManager;
 use crate::llm::{
@@ -40,6 +39,8 @@ use crate::tools::{
     prepare_tool_params,
 };
 use crate::workspace::Workspace;
+use dasclaw_runtime::JobState;
+use dasclaw_runtime::context::JobContext;
 use dasclaw_safety::SafetyLayer;
 
 enum EventMatcher {
@@ -1067,8 +1068,8 @@ impl FullJobWatcher {
         (final_status, Some(summary))
     }
 
-    fn map_job_state(state: &crate::context::JobState) -> RunStatus {
-        use crate::context::JobState;
+    fn map_job_state(state: &dasclaw_runtime::JobState) -> RunStatus {
+        use dasclaw_runtime::JobState;
         match state {
             JobState::Failed | JobState::Cancelled => RunStatus::Failed,
             _ => RunStatus::Ok, // Completed / Submitted / Accepted
@@ -2470,7 +2471,7 @@ mod tests {
     /// Regression test for #1317: FullJobWatcher maps terminal job states correctly.
     #[test]
     fn test_full_job_watcher_state_mapping() {
-        use crate::context::JobState;
+        use dasclaw_runtime::JobState;
 
         // Failed/Cancelled → RunStatus::Failed
         assert_eq!(
@@ -2496,7 +2497,7 @@ mod tests {
     /// Verify that job state to run status mapping covers all expected cases.
     #[test]
     fn test_job_state_to_run_status_mapping() {
-        use crate::context::JobState;
+        use dasclaw_runtime::JobState;
 
         // Success states
         for state in [JobState::Completed, JobState::Submitted, JobState::Accepted] {

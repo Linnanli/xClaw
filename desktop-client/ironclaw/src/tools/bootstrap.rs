@@ -47,7 +47,6 @@ use std::sync::Arc;
 
 use crate::agent::routine_engine::RoutineEngine;
 use crate::channels::{ChannelManager, IncomingMessage};
-use crate::context::ContextManager;
 use crate::db::Database;
 use crate::extensions::ExtensionManager;
 use crate::orchestrator::job_manager::ContainerJobManager;
@@ -57,6 +56,7 @@ use crate::skills::catalog::SkillCatalog;
 use crate::skills::registry::SkillRegistry;
 use crate::tools::builtin::{PromptQueue, SchedulerSlot, memory::WorkspaceResolver};
 use crate::workspace::Workspace;
+use dasclaw_runtime::context::ContextManager;
 
 /// Deployment mode that selects which tool groups are registered by default.
 ///
@@ -442,7 +442,7 @@ mod tests {
     #[test]
     fn req_adr119_f3_local_container_invokes_builder() {
         use crate::config::JobRuntimeMode;
-        use crate::context::ContextManager;
+        use dasclaw_runtime::context::ContextManager;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let calls = AtomicUsize::new(0);
@@ -457,7 +457,7 @@ mod tests {
     #[test]
     fn req_adr119_f3_cloud_invokes_builder() {
         use crate::config::JobRuntimeMode;
-        use crate::context::ContextManager;
+        use dasclaw_runtime::context::ContextManager;
 
         let result = job_tools_for_mode(
             &JobRuntimeMode::Cloud {
