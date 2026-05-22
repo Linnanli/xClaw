@@ -4,8 +4,8 @@
 //! was missing, making callers believe the message was delivered when it wasn't.
 //! These tests ensure that missing routing info produces an explicit error.
 
-use crate::channels::channel::{Channel, IncomingMessage, OutgoingResponse};
 use crate::channels::web::GatewayChannel;
+use crate::channels::{Channel, IncomingMessage, OutgoingResponse};
 use crate::config::GatewayConfig;
 use crate::error::ChannelError;
 

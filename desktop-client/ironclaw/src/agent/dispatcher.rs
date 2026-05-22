@@ -920,7 +920,7 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
                     .channels
                     .send_status(
                         &self.message.channel,
-                        StatusUpdate::tool_completed(
+                        crate::channels::status::build_tool_completed(
                             tc.name.clone(),
                             &result,
                             &tc.arguments,
@@ -974,7 +974,7 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
                     let _ = channels
                         .send_status(
                             &channel,
-                            StatusUpdate::tool_completed(
+                            crate::channels::status::build_tool_completed(
                                 tc.name.clone(),
                                 &result,
                                 &tc.arguments,

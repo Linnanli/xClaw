@@ -1265,7 +1265,7 @@ impl Agent {
                 .channels
                 .send_status(
                     &message.channel,
-                    StatusUpdate::tool_completed(
+                    crate::channels::status::build_tool_completed(
                         pending.tool_name.clone(),
                         &tool_result,
                         &pending.display_parameters,
@@ -1434,7 +1434,7 @@ impl Agent {
                         .channels
                         .send_status(
                             &message.channel,
-                            StatusUpdate::tool_completed(
+                            crate::channels::status::build_tool_completed(
                                 tc.name.clone(),
                                 &result,
                                 &tc.arguments,
@@ -1489,7 +1489,7 @@ impl Agent {
                         let _ = channels
                             .send_status(
                                 &channel,
-                                StatusUpdate::tool_completed(
+                                crate::channels::status::build_tool_completed(
                                     tc.name.clone(),
                                     &result,
                                     &tc.arguments,

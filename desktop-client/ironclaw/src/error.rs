@@ -109,35 +109,12 @@ pub enum DatabaseError {
 }
 
 /// Channel-related errors.
-#[derive(Debug, thiserror::Error)]
-pub enum ChannelError {
-    #[error("Channel {name} failed to start: {reason}")]
-    StartupFailed { name: String, reason: String },
-
-    #[error("Channel {name} disconnected: {reason}")]
-    Disconnected { name: String, reason: String },
-
-    #[error("Failed to send response on channel {name}: {reason}")]
-    SendFailed { name: String, reason: String },
-
-    #[error("Channel {name} is missing a routing target: {reason}")]
-    MissingRoutingTarget { name: String, reason: String },
-
-    #[error("Invalid message format: {0}")]
-    InvalidMessage(String),
-
-    #[error("Authentication failed for channel {name}: {reason}")]
-    AuthFailed { name: String, reason: String },
-
-    #[error("Rate limited on channel {name}")]
-    RateLimited { name: String },
-
-    #[error("HTTP error: {0}")]
-    Http(String),
-
-    #[error("Channel health check failed: {name}")]
-    HealthCheckFailed { name: String },
-}
+///
+/// Re-export shim. Definition lives in [`dasclaw_channels::ChannelError`]
+/// per ADR-152 §3 F4.5 (verbatim port). Kept here so existing
+/// `crate::error::ChannelError` call sites and the top-level
+/// `Error::Channel(#[from] _)` conversion keep working.
+pub use dasclaw_channels::ChannelError;
 
 // LlmError lives in src/llm/error.rs; re-exported here for backward compatibility.
 pub use crate::llm::error::LlmError;
@@ -330,20 +307,6 @@ mod tests {
 
         let err = DatabaseError::Query("syntax error near SELECT".to_string());
         assert!(err.to_string().contains("syntax error"));
-    }
-
-    #[test]
-    fn channel_error_display() {
-        let err = ChannelError::StartupFailed {
-            name: "telegram".to_string(),
-            reason: "invalid token".to_string(),
-        };
-        let msg = err.to_string();
-        assert!(msg.contains("telegram"), "Should mention channel: {msg}");
-        assert!(
-            msg.contains("invalid token"),
-            "Should mention reason: {msg}"
-        );
     }
 
     #[test]

@@ -2650,6 +2650,7 @@ dependencies = [
  "dasclaw_apply_patch",
  "dasclaw_bash_validation",
  "dasclaw_cert_trust",
+ "dasclaw_channels",
  "dasclaw_core",
  "dasclaw_exec",
  "dasclaw_governance",
@@ -2821,6 +2822,28 @@ dependencies = [
  "tracing",
  "windows 0.58.0",
  "x509-parser",
+]
+
+[[package]]
+name = "dasclaw_channels"
+version = "0.0.0-w1"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "futures",
+ "hex",
+ "hmac",
+ "reqwest 0.12.28",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
