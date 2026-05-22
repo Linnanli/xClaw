@@ -45,7 +45,6 @@ pub mod bootstrap;
 pub mod channels;
 pub mod cli;
 pub mod config;
-pub mod context;
 pub mod db;
 pub mod document_extraction;
 pub mod error;
@@ -99,10 +98,11 @@ pub use error::{Error, Result};
 pub mod prelude {
     pub use crate::channels::{Channel, IncomingMessage, MessageStream};
     pub use crate::config::Config;
-    pub use crate::context::{JobContext, JobState};
     pub use crate::error::{Error, Result};
     pub use crate::llm::LlmProvider;
     pub use crate::safety::{SanitizedOutput, Sanitizer};
     pub use crate::tools::{Tool, ToolOutput, ToolRegistry};
     pub use crate::workspace::{MemoryDocument, Workspace};
+    pub use dasclaw_runtime::JobState;
+    pub use dasclaw_runtime::context::JobContext;
 }

@@ -17,11 +17,11 @@ use crate::agent::dispatcher::{
 use crate::agent::session::{MAX_PENDING_MESSAGES, PendingApproval, Session, ThreadState};
 use crate::agent::submission::SubmissionResult;
 use crate::channels::{IncomingMessage, StatusUpdate};
-use crate::context::JobContext;
 use crate::error::Error;
 use crate::llm::{ChatMessage, Reasoning, ToolCall};
 use crate::tools::redact_params;
 use dasclaw_core::WorkspaceWriter;
+use dasclaw_runtime::context::JobContext;
 use ironclaw_common::truncate_preview;
 
 const FORGED_THREAD_ID_ERROR: &str = "Invalid or unauthorized thread ID.";
@@ -1084,7 +1084,7 @@ impl Agent {
             .context_monitor
             .suggest_compaction(&messages)
             .unwrap_or(
-                crate::agent::context_monitor::CompactionStrategy::Summarize { keep_recent: 5 },
+                dasclaw_core::context_monitor::CompactionStrategy::Summarize { keep_recent: 5 },
             );
 
         let compactor = ContextCompactor::new(Arc::new(crate::agent::ReasoningCompleter::new(

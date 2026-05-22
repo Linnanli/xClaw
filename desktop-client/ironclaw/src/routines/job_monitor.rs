@@ -21,7 +21,8 @@ use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use crate::channels::IncomingMessage;
-use crate::context::{ContextManager, JobState};
+use dasclaw_runtime::JobState;
+use dasclaw_runtime::context::ContextManager;
 use ironclaw_common::AppEvent;
 
 /// Route context for forwarding job monitor events back to the user's channel.
@@ -401,7 +402,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_monitor_transitions_context_on_completion() {
-        use crate::context::{ContextManager, JobState};
+        use dasclaw_runtime::JobState;
+        use dasclaw_runtime::context::ContextManager;
 
         let cm = Arc::new(ContextManager::new(5));
         let job_id = Uuid::new_v4();
@@ -450,7 +452,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_monitor_transitions_context_on_failure() {
-        use crate::context::{ContextManager, JobState};
+        use dasclaw_runtime::JobState;
+        use dasclaw_runtime::context::ContextManager;
 
         let cm = Arc::new(ContextManager::new(5));
         let job_id = Uuid::new_v4();
@@ -499,7 +502,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_completion_watcher_transitions_on_result() {
-        use crate::context::{ContextManager, JobState};
+        use dasclaw_runtime::JobState;
+        use dasclaw_runtime::context::ContextManager;
 
         let cm = Arc::new(ContextManager::new(5));
         let job_id = Uuid::new_v4();

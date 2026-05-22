@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::state::EngineState;
 use crate::vercel_ui_protocol::VercelUIStream;
-use ironclaw::context::JobState;
+use dasclaw_runtime::JobState;
 
 // ─── 数据类型 ────────────────────────────────────────────────────────
 
@@ -79,7 +79,7 @@ pub struct JobPromptResponse {
 
 fn ensure_owned_job(
     state: &crate::state::AppState,
-    job: &ironclaw::context::JobContext,
+    job: &dasclaw_runtime::context::JobContext,
 ) -> Result<(), String> {
     if job.user_id == state.scope_id {
         return Ok(());
@@ -120,7 +120,7 @@ fn emit_job_status(app_handle: &AppHandle, job_id: Uuid, title: &str, status: &s
     let _ = crate::tauri_channel::emit_chat_stream(app_handle, None, &event);
 }
 
-fn restart_job_title(job: &ironclaw::context::JobContext, failure_reason: &str) -> String {
+fn restart_job_title(job: &dasclaw_runtime::context::JobContext, failure_reason: &str) -> String {
     if failure_reason.is_empty() || matches!(job.state, JobState::Cancelled) {
         return job.title.clone();
     }
@@ -341,7 +341,7 @@ pub async fn ic_cancel_job(
 #[cfg(test)]
 mod cancel_tests {
     use super::stop_active_job;
-    use ironclaw::context::JobState;
+    use dasclaw_runtime::JobState;
     use uuid::Uuid;
 
     #[tokio::test]

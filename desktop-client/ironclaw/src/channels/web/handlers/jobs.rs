@@ -252,7 +252,7 @@ pub async fn jobs_detail_handler(
             // Stuck jobs have no active worker loop, so messages would be silently dropped.
             let is_promptable = matches!(
                 ctx.state,
-                crate::context::JobState::Pending | crate::context::JobState::InProgress
+                dasclaw_runtime::JobState::Pending | dasclaw_runtime::JobState::InProgress
             );
             Ok(Json(JobDetailResponse {
                 id: ctx.job_id,
@@ -348,7 +348,7 @@ pub async fn jobs_cancel_handler(
                     store
                         .update_job_status(
                             job_id,
-                            crate::context::JobState::Cancelled,
+                            dasclaw_runtime::JobState::Cancelled,
                             Some("Cancelled by user"),
                         )
                         .await

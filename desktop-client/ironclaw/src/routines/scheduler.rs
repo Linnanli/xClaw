@@ -10,7 +10,6 @@ use uuid::Uuid;
 
 use crate::agent::task::{Task, TaskContext, TaskOutput};
 use crate::config::AgentConfig;
-use crate::context::{ContextManager, JobContext, JobState};
 use crate::error::{Error, JobError};
 use crate::extensions::ExtensionManager;
 use crate::llm::LlmProvider;
@@ -22,6 +21,8 @@ use crate::tools::{
 };
 use crate::worker::job::{Worker, WorkerDeps};
 use dasclaw_hooks::HookRegistry;
+use dasclaw_runtime::JobState;
+use dasclaw_runtime::context::{ContextManager, JobContext};
 
 /// Message to send to a worker.
 #[derive(Debug)]

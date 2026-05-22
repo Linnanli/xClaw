@@ -439,7 +439,7 @@ mod tests {
     };
     use crate::safety_bridge::SafetyBridge;
     use crate::state::AppState;
-    use ironclaw::context::ContextManager;
+    use dasclaw_runtime::context::ContextManager;
     use ironclaw::safety::{SafetyConfig, SafetyLayer};
     use ironclaw::tools::ToolRegistry;
 

@@ -25,11 +25,11 @@ use serde_json::json;
 use tempfile::TempDir;
 use tokio::sync::Mutex;
 
+use dasclaw_runtime::context::JobContext;
 use ironclaw::agent::agentic_loop::{
     AgenticLoopConfig, LoopDelegate, LoopOutcome, LoopSignal, TextAction, run_agentic_loop,
 };
 use ironclaw::config::SafetyConfig;
-use ironclaw::context::JobContext;
 use ironclaw::error::Error;
 use ironclaw::llm::{
     Reasoning, ReasoningContext, RespondOutput, ResponseMetadata, ToolCall, ToolDefinition,

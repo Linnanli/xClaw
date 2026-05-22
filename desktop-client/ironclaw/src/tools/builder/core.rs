@@ -38,13 +38,13 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::context::JobContext;
 use crate::error::ToolError as AgentToolError;
 use crate::llm::{
     ChatMessage, LlmProvider, Reasoning, ReasoningContext, RespondResult, ToolDefinition,
 };
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolError, ToolOutput};
 use crate::tools::{ToolRegistry, prepare_tool_params};
+use dasclaw_runtime::context::JobContext;
 
 fn process_builder_tool_result(
     tool_name: &str,

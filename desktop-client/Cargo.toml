@@ -49,6 +49,11 @@ dasclaw_sandbox = { path = "../crates/dasclaw_sandbox" }
 # LlmRequest and Persistence egress kinds.
 dasclaw_core = { path = "../crates/dasclaw_core" }
 
+# ADR-152 §3 F4.1 — `context` / `context_monitor` 已搬迁到 dasclaw_runtime / dasclaw_core，
+# desktop-client 顶层 crate 直接引用 dasclaw_runtime::context::{JobContext, ContextManager}
+# 与 dasclaw_runtime::JobState（state.rs / ipc/jobs.rs / ipc/extensions.rs / engine_startup_tests.rs）。
+dasclaw_runtime = { path = "../crates/dasclaw_runtime" }
+
 # IronClaw embedded server (ADR-114 Ⅴ: package was renamed to `dasclaw`,
 # alias the extern name back to `ironclaw` so all `use ironclaw::` imports
 # in this crate keep resolving.)

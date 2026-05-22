@@ -19,13 +19,14 @@ use uuid::Uuid;
 
 use crate::bootstrap::dasclaw_base_dir;
 use crate::channels::IncomingMessage;
-use crate::context::{ContextManager, JobState};
 use crate::db::Database;
 use crate::history::SandboxJobRecord;
 use crate::orchestrator::auth::CredentialGrant;
 use crate::orchestrator::job_manager::{ContainerJobManager, JobMode};
 use crate::secrets::SecretsStore;
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolError, ToolOutput, require_str};
+use dasclaw_runtime::JobState;
+use dasclaw_runtime::context::ContextManager;
 use ironclaw_common::AppEvent;
 
 /// Lazy scheduler reference, filled after Agent::new creates the Scheduler.
@@ -1568,7 +1569,7 @@ impl Tool for JobPromptTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::JobContext;
+    use dasclaw_runtime::context::JobContext;
 
     #[tokio::test]
     async fn test_create_job_tool_local() {

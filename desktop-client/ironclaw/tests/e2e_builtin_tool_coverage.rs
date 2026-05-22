@@ -10,8 +10,9 @@ mod support;
 mod tests {
     use std::time::Duration;
 
+    use dasclaw_runtime::JobState;
+    use dasclaw_runtime::context::JobContext;
     use ironclaw::agent::routine::{RoutineAction, Trigger};
-    use ironclaw::context::{JobContext, JobState};
     use uuid::Uuid;
 
     use crate::support::test_rig::{TestRig, TestRigBuilder};

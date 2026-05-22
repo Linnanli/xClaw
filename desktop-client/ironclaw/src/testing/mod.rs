@@ -960,7 +960,9 @@ mod tests {
     #[cfg(feature = "libsql")]
     #[tokio::test]
     async fn test_job_action_persistence() {
-        use crate::context::{ActionRecord, JobContext, JobState};
+        use dasclaw_core::context::memory::ActionRecord;
+        use dasclaw_runtime::JobState;
+        use dasclaw_runtime::context::JobContext;
 
         let harness = TestHarnessBuilder::new().build().await;
         let db = &harness.db;
@@ -1642,7 +1644,8 @@ mod tests {
         let db = &harness.db;
 
         // Create a job first
-        let job_ctx = crate::context::JobContext::with_user("user1", "Estimate test", "testing");
+        let job_ctx =
+            dasclaw_runtime::context::JobContext::with_user("user1", "Estimate test", "testing");
         let job_id = job_ctx.job_id;
         db.save_job(&job_ctx).await.expect("save job");
 

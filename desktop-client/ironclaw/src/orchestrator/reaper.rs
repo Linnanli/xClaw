@@ -18,9 +18,9 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use crate::context::ContextManager;
 use crate::orchestrator::job_manager::ContainerJobManager;
 use crate::sandbox::connect_docker;
+use dasclaw_runtime::context::ContextManager;
 
 /// Configuration for the sandbox reaper.
 #[derive(Debug, Clone)]
@@ -331,7 +331,7 @@ mod tests {
 
     #[tokio::test]
     async fn terminal_job_is_treated_as_orphaned() {
-        use crate::context::JobState;
+        use dasclaw_runtime::JobState;
 
         let ctx_mgr = Arc::new(ContextManager::new(5));
         let job_id = ctx_mgr
@@ -519,7 +519,7 @@ mod tests {
     // Test: failed job allows cleanup (terminal state)
     #[tokio::test]
     async fn failed_job_allows_cleanup() {
-        use crate::context::JobState;
+        use dasclaw_runtime::JobState;
 
         let ctx_mgr = Arc::new(ContextManager::new(5));
         let job_id = ctx_mgr
@@ -575,7 +575,7 @@ mod tests {
     // Test: reaper correctly identifies which containers to cleanup
     #[tokio::test]
     async fn reaper_cleanup_decision_matrix() {
-        use crate::context::JobState;
+        use dasclaw_runtime::JobState;
 
         let ctx_mgr = Arc::new(ContextManager::new(5));
 

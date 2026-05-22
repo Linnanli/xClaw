@@ -175,8 +175,8 @@ impl Tool for ToolInfoTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::JobContext;
     use crate::tools::builtin::EchoTool;
+    use dasclaw_runtime::context::JobContext;
     use std::sync::Arc;
 
     #[tokio::test]

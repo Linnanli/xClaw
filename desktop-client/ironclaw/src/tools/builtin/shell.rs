@@ -1061,7 +1061,7 @@ fn truncate_for_error(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::JobContext;
+    use dasclaw_runtime::context::JobContext;
 
     #[tokio::test]
     async fn test_echo_command() {

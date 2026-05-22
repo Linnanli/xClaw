@@ -22,7 +22,7 @@
 mod engine_state_timing_tests {
     use std::sync::Arc;
 
-    use ironclaw::context::ContextManager;
+    use dasclaw_runtime::context::ContextManager;
     use ironclaw::safety::{SafetyConfig, SafetyLayer};
     use ironclaw::tools::ToolRegistry;
     use tokio::sync::mpsc;

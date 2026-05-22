@@ -670,8 +670,8 @@ impl Tool for ApplyPatchTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::JobContext;
     use crate::tools::builtin::path_utils::{normalize_lexical, validate_path};
+    use dasclaw_runtime::context::JobContext;
     use tempfile::TempDir;
 
     #[tokio::test]

@@ -1810,11 +1810,11 @@ mod tests {
     use tokio::sync::{Mutex as AsyncMutex, oneshot};
     use uuid::Uuid;
 
-    use crate::context::JobContext;
     use crate::secrets::{
         CreateSecretParams, DecryptedSecret, InMemorySecretsStore, Secret, SecretError, SecretRef,
         SecretsStore,
     };
+    use dasclaw_runtime::context::JobContext;
 
     use crate::testing::credentials::{
         TEST_BEARER_TOKEN_123, TEST_GOOGLE_OAUTH_FRESH, TEST_GOOGLE_OAUTH_LEGACY,

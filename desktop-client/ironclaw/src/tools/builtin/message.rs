@@ -504,7 +504,7 @@ mod tests {
         tool.set_context(Some("gateway".to_string()), Some("user".to_string()))
             .await;
 
-        let mut ctx = crate::context::JobContext::new("test", "test");
+        let mut ctx = dasclaw_runtime::context::JobContext::new("test", "test");
 
         // "message" alias should not produce InvalidParameters
         let result = tool
@@ -526,7 +526,7 @@ mod tests {
         let tool = MessageTool::new(Arc::new(ChannelManager::new()));
 
         // Initially no defaults set
-        let mut ctx = crate::context::JobContext::new("test", "test description");
+        let mut ctx = dasclaw_runtime::context::JobContext::new("test", "test description");
         let result = tool
             .execute(serde_json::json!({"content": "hello"}), &mut ctx)
             .await;
@@ -555,7 +555,7 @@ mod tests {
             .await;
 
         // Execute with explicit params - should fail but check that it uses explicit params
-        let mut ctx = crate::context::JobContext::new("test", "test description");
+        let mut ctx = dasclaw_runtime::context::JobContext::new("test", "test description");
         let result = tool
             .execute(
                 serde_json::json!({
@@ -583,7 +583,7 @@ mod tests {
             .await;
 
         // Execute with attachments outside both sandbox (~/.ironclaw) and /tmp/
-        let mut ctx = crate::context::JobContext::new("test", "test description");
+        let mut ctx = dasclaw_runtime::context::JobContext::new("test", "test description");
         let result = tool
             .execute(
                 serde_json::json!({
@@ -619,7 +619,7 @@ mod tests {
         fs::write(&file1, "test").unwrap();
         fs::write(&file2, "test").unwrap();
 
-        let mut ctx = crate::context::JobContext::new("test", "test description");
+        let mut ctx = dasclaw_runtime::context::JobContext::new("test", "test description");
         let result = tool
             .execute(
                 serde_json::json!({
@@ -651,7 +651,7 @@ mod tests {
         fs::write(&file1, "fake image data").unwrap();
         fs::write(&file2, "fake pdf data").unwrap();
 
-        let mut ctx = crate::context::JobContext::new("test", "test description");
+        let mut ctx = dasclaw_runtime::context::JobContext::new("test", "test description");
         let result = tool
             .execute(
                 serde_json::json!({
@@ -676,7 +676,7 @@ mod tests {
     async fn message_tool_requires_content() {
         let tool = MessageTool::new(Arc::new(ChannelManager::new()));
 
-        let mut ctx = crate::context::JobContext::new("test", "test description");
+        let mut ctx = dasclaw_runtime::context::JobContext::new("test", "test description");
         let result = tool
             .execute(
                 serde_json::json!({
@@ -720,7 +720,7 @@ mod tests {
         tool.set_context(Some("signal".to_string()), Some("+1234567890".to_string()))
             .await;
 
-        let mut ctx = crate::context::JobContext::new("test", "test description");
+        let mut ctx = dasclaw_runtime::context::JobContext::new("test", "test description");
         let result = tool
             .execute(
                 serde_json::json!({
@@ -752,7 +752,7 @@ mod tests {
         fs::write(&temp_path, "test content").unwrap();
         let temp_path_str = temp_path.to_string_lossy().to_string();
 
-        let mut ctx = crate::context::JobContext::new("test", "test description");
+        let mut ctx = dasclaw_runtime::context::JobContext::new("test", "test description");
         let result = tool
             .execute(
                 serde_json::json!({
@@ -793,7 +793,7 @@ mod tests {
         let path1 = temp_path1.to_string_lossy().to_string();
         let path2 = temp_path2.to_string_lossy().to_string();
 
-        let mut ctx = crate::context::JobContext::new("test", "test description");
+        let mut ctx = dasclaw_runtime::context::JobContext::new("test", "test description");
         let result = tool
             .execute(
                 serde_json::json!({
@@ -836,7 +836,7 @@ mod tests {
         // JobContext metadata instead of returning "No target specified".
         let tool = MessageTool::new(Arc::new(ChannelManager::new()));
 
-        let mut ctx = crate::context::JobContext::new("routine-job", "price alert");
+        let mut ctx = dasclaw_runtime::context::JobContext::new("routine-job", "price alert");
         ctx.metadata = serde_json::json!({
             "notify_channel": "telegram",
             "notify_user": "123456789",
@@ -868,8 +868,11 @@ mod tests {
         let (tool, gateway_captures, telegram_captures) =
             message_tool_with_recording_channels().await;
 
-        let mut ctx =
-            crate::context::JobContext::with_user("telegram", "routine-job", "price alert");
+        let mut ctx = dasclaw_runtime::context::JobContext::with_user(
+            "telegram",
+            "routine-job",
+            "price alert",
+        );
         ctx.metadata = serde_json::json!({
             "notify_channel": "telegram",
             "owner_id": "owner-scope",
@@ -896,7 +899,7 @@ mod tests {
         let (tool, gateway_captures, telegram_captures) =
             message_tool_with_recording_channels().await;
 
-        let mut ctx = crate::context::JobContext::with_user(
+        let mut ctx = dasclaw_runtime::context::JobContext::with_user(
             "interactive-chat-user",
             "routine-job",
             "price alert",
@@ -928,7 +931,7 @@ mod tests {
         // When neither conversation context nor metadata is set, should still
         // return a clear error (target resolution fails).
         let tool = MessageTool::new(Arc::new(ChannelManager::new()));
-        let mut ctx = crate::context::JobContext::new("orphan-job", "no notify config");
+        let mut ctx = dasclaw_runtime::context::JobContext::new("orphan-job", "no notify config");
 
         let result = tool
             .execute(serde_json::json!({"content": "hello"}), &mut ctx)
@@ -950,7 +953,7 @@ mod tests {
         // with "No channel specified".
         let tool = MessageTool::new(Arc::new(ChannelManager::new()));
 
-        let mut ctx = crate::context::JobContext::new("routine-job", "price alert");
+        let mut ctx = dasclaw_runtime::context::JobContext::new("routine-job", "price alert");
         ctx.metadata = serde_json::json!({
             "notify_user": "123456789",
         });
@@ -985,7 +988,8 @@ mod tests {
         )
         .await;
 
-        let mut ctx = crate::context::JobContext::with_user("owner-scope", "test", "test");
+        let mut ctx =
+            dasclaw_runtime::context::JobContext::with_user("owner-scope", "test", "test");
         ctx.metadata = serde_json::json!({
             "notify_channel": "telegram",
             "notify_user": "424242",
@@ -1017,7 +1021,8 @@ mod tests {
         )
         .await;
 
-        let mut ctx = crate::context::JobContext::with_user("owner-scope", "test", "test");
+        let mut ctx =
+            dasclaw_runtime::context::JobContext::with_user("owner-scope", "test", "test");
         ctx.metadata = serde_json::json!({
             "notify_user": "424242",
         });
@@ -1049,7 +1054,8 @@ mod tests {
         let (tool, gateway_captures, telegram_captures) =
             message_tool_with_recording_channels().await;
 
-        let mut ctx = crate::context::JobContext::with_user("owner-scope", "test", "test");
+        let mut ctx =
+            dasclaw_runtime::context::JobContext::with_user("owner-scope", "test", "test");
         ctx.metadata = serde_json::json!({
             "notify_channel": "gateway",
             "notify_user": "owner-scope",

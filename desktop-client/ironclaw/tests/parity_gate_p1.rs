@@ -13,7 +13,7 @@ use dasclaw_bash_validation::{
     CommandIntent, PermissionMode, ValidationResult, check_destructive, classify_command,
     validate_sed,
 };
-use ironclaw::context::JobContext;
+use dasclaw_runtime::context::JobContext;
 use ironclaw::llm::ToolDefinition;
 use ironclaw::llm::prompt::{DynamicLayerInput, LayeredPromptBuilder, StaticLayerConfig};
 use ironclaw::observability::{NoopObserver, PromptCacheMonitor};

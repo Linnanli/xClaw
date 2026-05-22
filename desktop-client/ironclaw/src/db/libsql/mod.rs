@@ -26,10 +26,10 @@ use rust_decimal::Decimal;
 use crate::agent::routine::{
     NotifyConfig, Routine, RoutineAction, RoutineGuardrails, RoutineRun, RunStatus, Trigger,
 };
-use crate::context::JobState;
 use crate::db::Database;
 use crate::error::DatabaseError;
 use crate::workspace::MemoryDocument;
+use dasclaw_runtime::JobState;
 
 use crate::db::libsql_migrations;
 
@@ -525,8 +525,8 @@ mod tests {
     /// Regression test: save_job must persist user_id and get_job must return it.
     #[tokio::test]
     async fn test_save_job_persists_user_id() {
-        use crate::context::JobContext;
         use crate::db::JobStore;
+        use dasclaw_runtime::context::JobContext;
 
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test_user_id.db");

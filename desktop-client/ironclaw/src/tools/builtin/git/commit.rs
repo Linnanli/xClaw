@@ -118,7 +118,7 @@ impl Tool for GitCommitTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::JobContext;
+    use dasclaw_runtime::context::JobContext;
 
     fn make_ctx() -> JobContext {
         JobContext::default()

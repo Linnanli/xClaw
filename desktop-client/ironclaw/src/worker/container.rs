@@ -19,7 +19,6 @@ use crate::agent::agentic_loop::{
     AgenticLoopConfig, LoopDelegate, LoopOutcome, LoopSignal, TextAction, truncate_for_preview,
 };
 use crate::config::SafetyConfig;
-use crate::context::JobContext;
 use crate::error::WorkerError;
 use crate::llm::{ChatMessage, LlmProvider, Reasoning, ReasoningContext, ResponseMetadata};
 use crate::safety::SafetyLayer;
@@ -32,6 +31,7 @@ use crate::worker::autonomous_recovery::{
 };
 use crate::worker::proxy_llm::ProxyLlmProvider;
 use dasclaw_core::traits::HostError;
+use dasclaw_runtime::context::JobContext;
 
 /// Configuration for the worker runtime.
 pub struct WorkerConfig {

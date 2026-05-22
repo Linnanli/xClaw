@@ -13,9 +13,9 @@ use uuid::Uuid;
 use crate::agent::Agent;
 use crate::agent::session::{PendingApproval, Session, ThreadState};
 use crate::channels::{IncomingMessage, StatusUpdate};
-use crate::context::JobContext;
 use crate::error::Error;
 use async_trait::async_trait;
+use dasclaw_runtime::context::JobContext;
 
 use crate::agent::agentic_loop::{
     AgenticLoopConfig, LoopDelegate, LoopOutcome, LoopSignal, TextAction,
@@ -1600,7 +1600,6 @@ mod tests {
     use crate::agent::session::Session;
     use crate::channels::ChannelManager;
     use crate::config::{AgentConfig, SafetyConfig, SkillsConfig};
-    use crate::context::ContextManager;
     use crate::error::Error;
     use crate::llm::{
         CompletionRequest, CompletionResponse, FinishReason, LlmProvider, ToolCall,
@@ -1609,6 +1608,7 @@ mod tests {
     use crate::safety::SafetyLayer;
     use crate::tools::ToolRegistry;
     use dasclaw_hooks::HookRegistry;
+    use dasclaw_runtime::context::ContextManager;
 
     use super::{
         check_auth_required, disabled_names_from_metadata, filter_tools_by_disabled_extensions,
@@ -2105,10 +2105,10 @@ mod tests {
     #[tokio::test]
     async fn test_execute_chat_tool_standalone_success() {
         use crate::config::SafetyConfig;
-        use crate::context::JobContext;
         use crate::safety::SafetyLayer;
         use crate::tools::ToolRegistry;
         use crate::tools::builtin::EchoTool;
+        use dasclaw_runtime::context::JobContext;
 
         let registry = ToolRegistry::new();
         registry.register(std::sync::Arc::new(EchoTool)).await;
@@ -2137,9 +2137,9 @@ mod tests {
     #[tokio::test]
     async fn test_execute_chat_tool_standalone_not_found() {
         use crate::config::SafetyConfig;
-        use crate::context::JobContext;
         use crate::safety::SafetyLayer;
         use crate::tools::ToolRegistry;
+        use dasclaw_runtime::context::JobContext;
 
         let registry = ToolRegistry::new();
         let safety = SafetyLayer::new(&SafetyConfig {

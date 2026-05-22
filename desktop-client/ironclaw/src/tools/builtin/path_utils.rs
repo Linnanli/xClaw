@@ -425,7 +425,7 @@ impl PathPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::JobContext;
+    use dasclaw_runtime::context::JobContext;
     use tempfile::tempdir;
 
     #[test]

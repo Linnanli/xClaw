@@ -14,7 +14,6 @@ use uuid::Uuid;
 use crate::agent::BrokenTool;
 use crate::agent::routine::{Routine, RoutineRun, RunStatus};
 use crate::config::DatabaseConfig;
-use crate::context::{ActionRecord, JobContext, JobState};
 use crate::db::{
     ApiTokenRecord, ConversationStore, Database, JobStore, RoutineStore, SandboxStore,
     SettingsStore, ToolFailureStore, UserRecord, UserStore, WorkspaceStore,
@@ -27,6 +26,9 @@ use crate::history::{
 use crate::workspace::{
     MemoryChunk, MemoryDocument, Repository, SearchConfig, SearchResult, WorkspaceEntry,
 };
+use dasclaw_core::context::memory::ActionRecord;
+use dasclaw_runtime::JobState;
+use dasclaw_runtime::context::JobContext;
 
 /// PostgreSQL database backend.
 ///

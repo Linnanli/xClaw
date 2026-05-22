@@ -31,7 +31,6 @@ use uuid::Uuid;
 
 use crate::agent::BrokenTool;
 use crate::agent::routine::{Routine, RoutineRun, RunStatus};
-use crate::context::{ActionRecord, JobContext, JobState};
 use crate::error::DatabaseError;
 use crate::error::WorkspaceError;
 use crate::history::{
@@ -40,6 +39,9 @@ use crate::history::{
 };
 use crate::workspace::{MemoryChunk, MemoryDocument, WorkspaceEntry};
 use crate::workspace::{SearchConfig, SearchResult};
+use dasclaw_core::context::memory::ActionRecord;
+use dasclaw_runtime::JobState;
+use dasclaw_runtime::context::JobContext;
 
 /// Create a database backend from configuration, run migrations, and return it.
 ///

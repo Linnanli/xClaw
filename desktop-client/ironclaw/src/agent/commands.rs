@@ -12,9 +12,9 @@ use crate::agent::session::Session;
 use crate::agent::submission::SubmissionResult;
 use crate::agent::{Agent, MessageIntent};
 use crate::channels::{IncomingMessage, StatusUpdate};
-use crate::context::JobState;
 use crate::error::Error;
 use crate::llm::{ChatMessage, Reasoning};
+use dasclaw_runtime::JobState;
 
 /// Format a count with a suffix, using K/M abbreviations for large numbers.
 fn format_count(n: u64, suffix: &str) -> String {
@@ -286,7 +286,7 @@ impl Agent {
             return Err(crate::error::JobError::NotFound { id: uuid }.into());
         }
 
-        if ctx.state == crate::context::JobState::Stuck {
+        if ctx.state == dasclaw_runtime::JobState::Stuck {
             // Attempt recovery
             self.context_manager
                 .update_context(uuid, |ctx| ctx.attempt_recovery())
@@ -649,8 +649,11 @@ impl Agent {
                 let params = serde_json::json!({});
 
                 // Create a minimal JobContext for the tool
-                let mut dummy_ctx =
-                    crate::context::JobContext::with_user("system", "Restart", "Graceful restart");
+                let mut dummy_ctx = dasclaw_runtime::context::JobContext::with_user(
+                    "system",
+                    "Restart",
+                    "Graceful restart",
+                );
 
                 match tool.execute(params, &mut dummy_ctx).await {
                     Ok(output) => {

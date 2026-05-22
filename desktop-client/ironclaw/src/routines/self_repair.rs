@@ -7,10 +7,11 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use crate::context::{ContextManager, JobState};
 use crate::error::RepairError;
 use crate::tenant::AdminScope;
 use crate::tools::{BuildRequirement, Language, SoftwareBuilder, SoftwareType, ToolRegistry};
+use dasclaw_runtime::JobState;
+use dasclaw_runtime::context::ContextManager;
 
 /// A job that has been detected as stuck.
 #[derive(Debug, Clone)]

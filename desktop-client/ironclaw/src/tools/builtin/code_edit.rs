@@ -276,7 +276,7 @@ fn find_last_diff_from_end(primary: &[&str], other: &[&str]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::JobContext;
+    use dasclaw_runtime::context::JobContext;
     use tempfile::TempDir;
 
     #[tokio::test]
