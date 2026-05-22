@@ -289,6 +289,359 @@ cap crate 当前 157 个测试全绿，含双 feature（default + postgres）。
 
 F3.6 涉及 `crate::context/`，如果后续也遇到类似"trait 方法签名拖入宿主类型"的阻塞，可参照本次修订模式，单独评估收口策略。
 
+> **更新（#719）**：F3.6 推进到 slice 3 时确实遇到了类似阻塞。详见 §11.8。
+
+---
+
+## 11.8 修订 2：F3.6 阻塞与方向（#719，draft）
+
+> **状态**：草案，待评审决策。
+> **触发**：F3.6 slice 1（#715）+ slice 2（#717）合入后，准备搬 `context::manager` 时发现死结。
+
+### 11.8.1 已完成的零件搬迁
+
+| Slice | 内容 | PR | 落点 |
+|---|---|---|---|
+| 1/6 | `context::memory`（`Memory` / `ConversationMemory` / `ActionRecord`） | #714 | `dasclaw_core::context::memory` |
+| 2/6 | `JobError` | #718 | `dasclaw_core::error` |
+| — | 早先 F3.2 phase 2 PR 3（#641） | 已合入 | `dasclaw_runtime::job` 已含 `JobState` / `StateTransition` / `TokenBudgetExceeded` |
+
+桌面端 `desktop-client/ironclaw/src/{context/mod.rs, error.rs}` 全部用 `pub use` re-export 保持源码层兼容。
+
+### 11.8.2 阻塞事实（三层验证）
+
+1. **manager 生产代码对 JobContext 的访问深度**（grep + 人读）：仅 `ctx.{job_id, state, started_at}` 字段 + `ctx.transition_to()` / `ctx.mark_stuck()` 方法。都属于状态机骨架。
+2. **JobContext 类型定义**（`desktop-client/ironclaw/src/context/state.rs:25-110`）持有桌面端类型：
+   - `Option<Arc<dyn HttpInterceptor>>`（来自 `crate::llm::recording`）
+   - `SharedFeatureFlags` / `ToolFeatureFlags`（来自 `crate::tools::feature_flags`）
+   - `Arc<tokio::sync::RwLock<HashMap<String, String>>>` 工具输出暂存
+3. **依赖方向约束**：`dasclaw_core` 是底层 crate，不能反向依赖宿主 `dasclaw`。
+
+结论：`manager.rs` 不能在 `JobContext` 形态保持现状的前提下 verbatim 搬到 `dasclaw_core`。同理 `state.rs`、`fallback.rs`。
+
+### 11.8.3 第一性问题：无头 agent 框架需不需要 ContextManager？
+
+在挑搬迁路线之前，先回答 ADR-152 的本来问题：**这块代码是不是"反向吸收"目标的一部分**。
+
+`ContextManager`（1392 行 / 20 个公开方法）实际承担的能力：
+
+| 能力 | 方法 | 无头 agent 框架是否需要 |
+|---|---|---|
+| 多 job 并发上限 + TOCTOU 保护 | `create_job` / `insert_context` / `MaxJobsExceeded` | **需要**：任何同时跑多个任务的 runtime 都要并发上限 |
+| 按 user_id 分桶 | `active_jobs_for` / `all_jobs_for` / `parallel_blocking_count_for` | **需要**：多用户 / 多 tenant 隔离 |
+| 容器化任务 ID 预分配 | `register_sandbox_job` | **需要**：sandbox / Docker 标签必须在容器创建前拿到 UUID |
+| stuck job 检测 | `find_stuck_jobs` / `find_stuck_jobs_with_threshold` | **需要**：长跑 agent 必备的看门狗 |
+| summary 聚合 | `summary` / `summary_for` | **需要**：监控 / 健康检查 |
+| memory + context 双 RwLock 协调 | `update_context_and_get` / `update_memory` | **需要**：和 `Memory`（已搬入 dasclaw_core）天然配对 |
+
+结论：**ContextManager 不是 ironclaw 私货，它是任何无头 agent 框架都要重写一遍的基础设施**。和 §11.4 的 Workspace（强 GUI / 强 DB 绑定）性质不一样。Workspace 适合收口，ContextManager **不适合收口**。
+
+### 11.8.4 候选方向（修订）
+
+#### 方向 X：JobContext 字段拆分 + ContextManager 搬迁（推荐）
+
+关键观察：**ContextManager 没碰 `JobContext` 的桌面端字段**——它不读不写 `http_interceptor` / `feature_flags` / `tool_output_stash` / `tools` / `metadata`，只摸状态机骨架。"god-struct"的污染范围比看上去窄。
+
+拆分方案：
+
+```rust
+// dasclaw_core::context::state
+pub struct JobContextCore {
+    pub job_id: Uuid,
+    pub state: JobState,
+    pub started_at: Option<DateTime<Utc>>,
+    pub user_id: String,
+    pub title: String,
+    pub description: String,
+    pub timezone: Option<Tz>,
+    pub requester_id: Option<String>,
+    pub cost_usd: f64,
+    pub tokens_used: u64,
+    pub token_budget: Option<u64>,
+    // 状态机方法
+    pub fn transition_to(...) -> Result<...>;
+    pub fn mark_stuck(...) -> Result<...>;
+    pub fn elapsed() -> ...;
+    pub fn add_cost(...) / pub fn add_tokens(...);
+    pub fn budget_exceeded() -> bool;
+}
+```
+
+桌面端：
+
+```rust
+// desktop-client/ironclaw/src/context/state.rs
+pub struct JobContext {
+    pub core: JobContextCore,                              // 共享骨架
+    pub http_interceptor: Option<Arc<dyn HttpInterceptor>>, // 桌面私货
+    pub feature_flags: SharedFeatureFlags,
+    pub tool_output_stash: Arc<RwLock<HashMap<String, String>>>,
+    pub tools: ...,
+    pub metadata: ...,
+}
+impl Deref for JobContext { type Target = JobContextCore; fn deref(&self) -> &JobContextCore { &self.core } }
+impl DerefMut for JobContext { fn deref_mut(&mut self) -> &mut JobContextCore { &mut self.core } }
+```
+
+ContextManager 搬到 `dasclaw_core::context::manager`，泛型化为 `ContextManager<C = JobContextCore>` 或直接持 `JobContextCore`，桌面端实例化时仍可由 worker 单独维护一个 `HashMap<Uuid, DesktopExtensions>`（持有 http_interceptor 等）副向表。
+
+**代价**：
+
+- 破 ADR-129 §1.3 verbatim port 红线。本草案为这一次破例提供依据（详 §11.8.5 的红线豁免条款）。
+- 触面：所有读 `ctx.http_interceptor` / `ctx.feature_flags` 等字段的位置要改为读 `desktop_extensions` 侧表，或保留 `JobContext` 直接字段（如上 struct 定义所示，桌面端 `JobContext` 仍持有这些字段）。
+- 测试需要少量调整（mock JobContextCore 或直接构造 JobContext）。
+- PR 体量中等，可切片化：拆 struct（slice A）→ 搬 manager（slice B）→ 搬 state.rs 剩余部分（slice C）→ 桌面端 mod.rs shim（slice D）。
+
+**收益**：
+
+- 真正达成 ADR-152 §1 的"反向吸收"目标：把 agent runtime 必需的多 job 控制器交给所有宿主复用。
+- 不需要 trait 抽象（字段拆分比 trait 简单且零运行时开销）。
+- `JobContext::core` 暴露后，桌面端外的宿主可以 `let ctx = JobContextCore::new(...)` 直接用。
+
+#### 方向 X'：trait 化（不推荐）
+
+抽 `JobContextCore` trait 而非拆 struct。比字段拆分复杂（要写 trait method 转发）、有动态分发开销、桌面端要写 `impl JobContextCore for JobContext`。除非有"同一 manager 同时管多种 context 类型"的需求（目前没有），否则不应选这条。
+
+#### 方向 Y：F3.6 收口（不推荐）
+
+> ~~本草案 v1 推荐 Y。修订后撤回。~~
+
+参照 §11.4 模式，停在 slice 2。理由曾是"避免破 verbatim 红线"+"避免大重构"。
+
+**为什么撤回**：
+
+- §11.8.3 表格已证明 ContextManager 是无头 agent 必需基础设施，不是 ironclaw 私货。
+- §11.4 收口的 Workspace 是 GUI / DB 强绑定，与 ContextManager 性质不同。
+- 收口意味着任何想做无头 agent 的宿主都要重写 1392 行类似代码，违反 ADR-152 §1 的反向吸收目标。
+
+### 11.8.5 ADR-129 §1.3 红线一次性豁免
+
+本草案为 F3.6 的字段拆分申请 **ADR-129 §1.3 verbatim port 红线一次性豁免**，条件：
+
+1. 仅限 `JobContext` 一个类型的字段拆分（不蔓延到其他 god-struct）。
+2. 拆分后 `JobContextCore` 字段集合与原 `JobContext` 中可被桌面端外宿主复用的字段**一一对应**（不增不减、不改语义）。
+3. 拆分 PR 必须附 before/after 字段映射表，由 reviewer 逐项核对。
+4. 桌面端 `JobContext` 在拆分后仍能通过 `Deref` 提供原字段访问语法，调用方代码改动量限制在 **机械化 `ctx.field` → `ctx.core.field` 之外不动业务逻辑**。
+5. 拆分 PR 自身不引入新功能、不改并发模型、不动状态机语义。
+
+### 11.8.6 决策落定后的动作
+
+若选 **X（字段拆分，推荐）**：
+
+- 在 §11.8.7 写下字段分配最终清单（哪些进 `JobContextCore` / 哪些留桌面端）。
+- 拆 **两刀**（不再细分到 5 个 slice，避免开发拖太久）：
+  - **slice A — 字段拆分 + ContextManager 搬迁一刀到位**：
+    `JobContextCore` struct 拆分 + `state.rs` 共享部分 + `ContextManager` / `manager.rs` 整体搬入 `dasclaw_core::context`；桌面端 `JobContext` 改组合 + `Deref`/`DerefMut`；桌面端 `context/mod.rs` 同步改 re-export shim。一个 PR 闭环。
+  - **slice B — `fallback.rs` 评估 + 收尾**：
+    判定 `fallback.rs` 是搬还是留 ironclaw（按是否含桌面端字段依赖决定）；清理桌面端剩余 import；关闭 umbrella #632。
+
+若选 **X'（trait 化，不推荐但允许）**：
+
+- 在 §11.8.7 冻结 trait method 清单 + dyn vs generic 选择。
+- 同样按"字段/trait 拆 + manager 搬迁"两刀，不细切。
+
+若选 **Y（收口，不推荐）**：
+
+- §11.8.7 写明"F3.6 收口于 slice 2"+ 承认产品上放弃 ContextManager 复用。
+- 更新 umbrella #632；标 §3 F3.6 行 "Scope clarified — see §11.8"。
+
+### 11.8.7 决策记录
+
+**决策**：**X（JobContext 字段拆分 + ContextManager 搬迁）**
+
+**决策时间**：随本 PR commit v3。
+
+**决策理由**：见 §11.8.3 表格——ContextManager 是任何无头 agent 框架必备基础设施，符合 ADR-152 §1 反向吸收目标；且 manager 不碰 JobContext 桌面端字段，字段拆分（X）比 trait 化（X'）干净。
+
+**字段分配清单**（slice A 实施时按本表执行，PR 内附 before/after 字段映射核对表）：
+
+进 `dasclaw_core::context::JobContextCore` 的字段（manager + 任何无头 agent runtime 都需要的状态机骨架 + 计费 + 元数据）：
+
+- `job_id: Uuid`
+- `state: JobState`
+- `started_at: Option<DateTime<Utc>>`
+- `user_id: String`
+- `title: String`
+- `description: String`
+- `timezone: Option<Tz>`
+- `requester_id: Option<String>`
+- `cost_usd: f64`
+- `tokens_used: u64`
+- `token_budget: Option<u64>`
+- （其他原 JobContext 中**不依赖桌面端类型**的字段，slice A PR 内 grep 一遍补齐）
+
+进 `dasclaw_core::context::JobContextCore` 的方法（manager 已经在用 + 状态机基础动作）：
+
+- `new` / `with_user` / `with_timezone` / `with_feature_flags`（如果不引入桌面端类型）/ `with_requester_id`
+- `transition_to`
+- `mark_stuck`
+- `attempt_recovery`
+- `elapsed`
+- `add_cost` / `add_tokens` / `budget_exceeded`
+
+留桌面端 `JobContext` 的字段（桌面端 GUI / LLM 录制 / 工具系统私货）：
+
+- `http_interceptor: Option<Arc<dyn HttpInterceptor>>`
+- `feature_flags: SharedFeatureFlags`
+- `tool_output_stash: Arc<RwLock<HashMap<String, String>>>`
+- `tools: ...`
+- `metadata: ...`
+- 任何其他依赖 `crate::llm::*` / `crate::tools::*` / `crate::gui::*` 的字段（slice A PR 内 grep 补齐）
+
+**桌面端 `JobContext` 形态**：
+
+```rust
+pub struct JobContext {
+    pub core: JobContextCore,
+    pub http_interceptor: Option<Arc<dyn HttpInterceptor>>,
+    pub feature_flags: SharedFeatureFlags,
+    pub tool_output_stash: Arc<RwLock<HashMap<String, String>>>,
+    // ...
+}
+impl Deref for JobContext { type Target = JobContextCore; ... }
+impl DerefMut for JobContext { ... }
+```
+
+**slice A 验证清单**（PR 必跑）：
+
+- `cargo check -p dasclaw_core -p dasclaw --tests`
+- `cargo nextest run -p dasclaw_core -p dasclaw`
+- `cargo fmt --all`
+- `python3.12 scripts/check_no_panics.py --base origin/xClaw`
+- `cargo clippy --no-deps -p dasclaw_core -p dasclaw --all-targets -- -D warnings`
+- PR body 附 before/after 字段映射表（§11.8.5 第 3 条要求）
+
+**待 slice A 完成后**：在本节追加"slice A 完成于 PR #N"标记；slice B 决策另写。
+
+### 11.8.8 事实更正（v4，撤回 X 决策）
+
+> 本节为 v4 commit 追加。v1（推荐 Y）→ v2（推荐 X）→ v3（决策 X + 字段清单）→ **v4：撤回 X，改纯 verbatim 搬迁**。
+
+#### 11.8.8.1 事实错误
+
+§11.8.2 第 2 条"`JobContext` 持有桌面端类型"是**事实错误**。重新核实当前代码：
+
+| 之前以为是桌面端类型 | 真实落点 | 桌面端形态 |
+|---|---|---|
+| `HttpInterceptor` trait | `dasclaw_runtime::recording::HttpInterceptor` | `crate::llm::recording` 是 re-export shim（行 32 `pub use ...HttpInterceptor`） |
+| `SharedFeatureFlags` / `ToolFeatureFlags` | `dasclaw_runtime::feature_flags` | `crate::tools::feature_flags` 是 re-export shim（行 20 `pub use dasclaw_runtime::feature_flags::{...}`） |
+| `JobContextCore` trait | `dasclaw_runtime::job_context` | `JobContext` 已 `impl JobContextCore`（state.rs 行 269+） |
+
+`dasclaw_core` 已经依赖 `dasclaw_runtime`，所以以上 trait/类型在 `dasclaw_core::context::state` 中可以直接 `use dasclaw_runtime::recording::HttpInterceptor` 等正常引用。
+
+#### 11.8.8.2 真实情况
+
+- **`state.rs` 共 492 行**：实际 outside-crate 引用只有 `std`、`chrono`、`rust_decimal`、`serde`、`uuid`、`dasclaw_runtime`、`crate::llm::recording`（shim）、`crate::tools::feature_flags`（shim）。
+- **`manager.rs` 共 1392 行**：唯一 outside-context 引用是 `use crate::error::JobError`（已搬入 `dasclaw_core::error`）。
+- **`fallback.rs` 共 319 行**：grep 显示无任何桌面端独有 crate 引用。
+
+**结论**：三个文件全部满足 ADR-129 §1.3 verbatim port 形态——只改 import 路径，不动结构、不动业务逻辑、不动字段、不动 trait method 签名。
+
+#### 11.8.8.3 撤回 X 路线、撤回红线豁免
+
+- §11.8.4 推荐方向 X（字段拆分）：**撤回**。X 解决的是不存在的问题。
+- §11.8.5 ADR-129 §1.3 一次性红线豁免条款：**撤回**。verbatim 搬迁本身就符合红线，无需豁免。
+- §11.8.6 X 的 slice A 字段拆分计划：**撤回**。
+- §11.8.7 决策 = X：**撤回**。
+
+#### 11.8.8.4 新方向：verbatim 一刀搬迁
+
+**slice A'（替代 §11.8.6 slice A）**：
+
+- `git mv desktop-client/ironclaw/src/context/state.rs` → `crates/dasclaw_core/src/context/state.rs`
+- `git mv desktop-client/ironclaw/src/context/manager.rs` → `crates/dasclaw_core/src/context/manager.rs`
+- `git mv desktop-client/ironclaw/src/context/fallback.rs` → `crates/dasclaw_core/src/context/fallback.rs`
+- 三个文件内部仅改 import：
+  - `crate::llm::recording::HttpInterceptor` → `dasclaw_runtime::recording::HttpInterceptor`
+  - `crate::tools::feature_flags::{SharedFeatureFlags, ToolFeatureFlags}` → `dasclaw_runtime::feature_flags::{SharedFeatureFlags, ToolFeatureFlags}`
+  - `crate::error::JobError` → `crate::error::JobError`（在新 crate 内仍叫这个名，dasclaw_core::error::JobError 已就位）
+  - `crate::context::{JobContext, JobState, Memory}` → `crate::context::{JobContext, Memory}` + `dasclaw_runtime::JobState`
+- `crates/dasclaw_core/src/context/mod.rs` 暴露 `pub mod state; pub mod manager; pub mod fallback;` + 顶层 re-export `pub use state::JobContext; pub use manager::{ContextManager, ContextSummary};` 等。
+- 桌面端 `desktop-client/ironclaw/src/context/mod.rs` 改为 `pub use dasclaw_core::context::{Memory, JobContext, ContextManager, ContextSummary, ...};`（与 slice 1 同形）。
+- 桌面端 `state.rs` / `manager.rs` / `fallback.rs` 物理删除（git mv 已带走）。
+
+**ADR-154 step 2 影响**：因为 `JobContext` 现在落在 dasclaw_core 而不再 ironclaw 私有，`impl JobContextCore for JobContext` 也跟着搬过去，但不构成结构性改动（同样是纯 import rebase）。
+
+#### 11.8.8.5 slice A' 验证清单
+
+- `cargo check -p dasclaw_core -p dasclaw --tests`
+- `cargo nextest run -p dasclaw_core -p dasclaw`
+- `cargo fmt --all`
+- `python3.12 scripts/check_no_panics.py --base origin/xClaw`
+- `cargo clippy --no-deps -p dasclaw_core -p dasclaw --all-targets -- -D warnings`
+- PR body 列出三个 `git mv` 命令 + 改动的 import 行号（review 可对照确认 verbatim）。
+
+#### 11.8.8.6 教训
+
+读旧注释（"the god-struct split is the follow-up sub-PR"）就接受了它，没核实当前事实。源码注释会过期，做迁移决策前必须先 grep 当前代码确认类型实际落点。三层验证应该包含"事实核实"层。
+
+#### 11.8.8.7 新决策
+
+**新决策 = verbatim 一刀搬迁（slice A'）**。slice B（fallback.rs）已并入 slice A'，剩下只需在 slice A' 合入后关闭 umbrella #632 + 标 §3 F3.6 行 "Done"。
+
+### 11.8.9 第二次事实更正（v5，落点改为 dasclaw_runtime）
+
+> v4 提出"verbatim 搬到 dasclaw_core::context"。实际尝试时撞 cargo cyclic package dependency：`dasclaw_core → dasclaw_runtime → dasclaw_core`。
+
+#### 11.8.9.1 真实依赖方向
+
+`crates/dasclaw_runtime/Cargo.toml` 行 12 已经 `dasclaw_core = { path = "../dasclaw_core" }`，runtime 使用 `dasclaw_core::SecretProvider`（见 `secrets/agent_provider.rs`）。**dasclaw_runtime 是 dasclaw_core 的上层 crate**，不是反过来。
+
+`JobState` / `JobContextCore` / `HttpInterceptor` / `SharedFeatureFlags` 都在 `dasclaw_runtime`，所以 `context::{state, manager, fallback}` 的正确落点是 `dasclaw_runtime::context`，**不是 `dasclaw_core::context`**。
+
+#### 11.8.9.2 slice 1 / slice 2 落点不冲突但分散
+
+- slice 1：`Memory` 已落 `dasclaw_core::context::memory`（合理，Memory 不依赖 runtime 类型）。
+- slice 2：`JobError` 已落 `dasclaw_core::error`（合理，不依赖 runtime 类型）。
+- slice A''（替代 §11.8.8 的 slice A'）：`state` + `manager` + `fallback` 落 `dasclaw_runtime::context`。`manager` 内对 `Memory` / `JobError` 通过 cross-crate 引用 `dasclaw_core::context::memory::Memory` / `dasclaw_core::error::JobError`，runtime → core 单向依赖成立。
+
+最终格局：
+
+| 模块 | crate | 落点 | 原因 |
+|---|---|---|---|
+| `memory` | dasclaw_core | `dasclaw_core::context::memory` | 无 runtime 依赖 |
+| `JobError` | dasclaw_core | `dasclaw_core::error` | 无 runtime 依赖 |
+| `state` | **dasclaw_runtime** | `dasclaw_runtime::context::state` | 依赖 runtime 的 JobState / HttpInterceptor / FeatureFlags |
+| `manager` | **dasclaw_runtime** | `dasclaw_runtime::context::manager` | 依赖 state 的 JobContext |
+| `fallback` | **dasclaw_runtime** | `dasclaw_runtime::context::fallback` | 依赖 state 的 JobContext |
+
+#### 11.8.9.3 slice A'' 实施步骤
+
+- `git mv desktop-client/ironclaw/src/context/state.rs` → `crates/dasclaw_runtime/src/context/state.rs`
+- `git mv desktop-client/ironclaw/src/context/manager.rs` → `crates/dasclaw_runtime/src/context/manager.rs`
+- `git mv desktop-client/ironclaw/src/context/fallback.rs` → `crates/dasclaw_runtime/src/context/fallback.rs`
+- 创建 `crates/dasclaw_runtime/src/context/mod.rs`：
+  ```rust
+  pub mod fallback;
+  pub mod manager;
+  pub mod state;
+  pub use fallback::FallbackDeliverable;
+  pub use manager::{ContextManager, ContextSummary};
+  pub use state::JobContext;
+  ```
+- `crates/dasclaw_runtime/src/lib.rs` 加 `pub mod context;`
+- 三个文件 import rebase：
+  - `state.rs`：`pub use dasclaw_runtime::{...}` → `pub use crate::job::{JobState, StateTransition, TokenBudgetExceeded}; pub use crate::job_context::JobContextCore;`；`use crate::llm::recording::HttpInterceptor` → `use crate::recording::HttpInterceptor`；`use crate::tools::feature_flags::{...}` → `use crate::feature_flags::{...}`；末尾 `impl dasclaw_runtime::JobContextCore for JobContext` → `impl JobContextCore for JobContext`。
+  - `manager.rs`：`use crate::context::{JobContext, JobState, Memory}` → `use crate::context::JobContext; use crate::JobState; use dasclaw_core::context::memory::Memory`；`use crate::error::JobError` → `use dasclaw_core::error::JobError`。
+  - `fallback.rs`：`use crate::context::Memory` → `use dasclaw_core::context::memory::Memory`；`use crate::context::state::JobContext` → 不变（同 crate）。
+- 桌面端 `desktop-client/ironclaw/src/context/mod.rs` 改成 `pub use dasclaw_runtime::context::{...}` + `pub use dasclaw_core::context::memory::{...}`（Memory 一组）+ `pub use dasclaw_runtime::{JobState, StateTransition, TokenBudgetExceeded};` 维持源码层兼容。
+
+#### 11.8.9.4 验证清单
+
+- `cargo check -p dasclaw_runtime -p dasclaw --tests`
+- `cargo nextest run -p dasclaw_runtime -p dasclaw`
+- `cargo fmt --all`
+- `python3.12 scripts/check_no_panics.py --base origin/xClaw`
+- `cargo clippy --no-deps -p dasclaw_runtime -p dasclaw --all-targets -- -D warnings`
+
+#### 11.8.9.5 教训追加
+
+定迁移落点前必须 `grep Cargo.toml` 确认目标 crate 与 source crate 的依赖方向，避免 cyclic dependency。源码 use 路径有时反映已搬迁的事实（如 state.rs 顶部 `use dasclaw_runtime::JobState`），但这不能反推"目标 crate 可以反向依赖 dasclaw_runtime"。
+
+#### 11.8.9.6 新决策
+
+**新决策 = slice A''：state + manager + fallback 一刀 verbatim 搬到 `dasclaw_runtime::context`**。slice 1（Memory）和 slice 2（JobError）落点不变，由 manager 跨 crate 引用。
+
 ### 11.9 F4 修订：ironclaw_safety 路径倒置修复（F4.0）
 
 **问题**
@@ -297,6 +650,34 @@ ADR-152 §3 F4 原条款"`ironclaw_safety` 保留代码不动"在 F3 推进过�
 
 - `crates/dasclaw_llm_provider/Cargo.toml` 通过 `path = "../../desktop-client/ironclaw/crates/ironclaw_safety"` 反向引用桌面端 crate（`LeakDetector` 调用）。
 - `crates/dasclaw_workspace_cap/Cargo.toml` 同样反向 path 引用（`Sanitizer`、`Severity`、`SafetyLayer`）。
+- 顶层 `Cargo.toml` workspace `members` 已把 `desktop-client/ironclaw/crates/ironclaw_safety` 列为成员。
+- 全工作区 `use ironclaw_safety::*` 调用共 65 处（排除上游参考目录 `ironclaw-main/`）。
+
+这违反 `crates/` 作为底层框架不应反向依赖上层 `desktop-client/` 的依赖方向原则，且 crate 命名空间不符 `dasclaw_*` 约定。
+
+**修订**
+
+1. F4 增设 **F4.0 子波次**：把 `ironclaw_safety` 整 crate 物理搬到 `crates/dasclaw_safety`，含本体 + `fuzz/` + `tests/` + `benches/` + corpus 文件。
+2. crate 重命名 `ironclaw_safety` → `dasclaw_safety`，所有 `use ironclaw_safety::*` 改为 `use dasclaw_safety::*`（约 65 处机械替换）。
+3. 同步修正 8 处 `Cargo.toml`：
+   - 顶层 `Cargo.toml` workspace `members` 列表
+   - `crates/dasclaw_llm_provider/Cargo.toml` path 引用改为 `../dasclaw_safety`
+   - `crates/dasclaw_workspace_cap/Cargo.toml` path 引用改为 `../dasclaw_safety`
+   - `desktop-client/Cargo.toml`、`desktop-client/ironclaw/Cargo.toml` 改 path
+   - 本体 `Cargo.toml`、`fuzz/Cargo.toml` 改 name
+4. 上游参考目录 `ironclaw-main/crates/ironclaw_safety/` 不动（属上游镜像，不在工作区构建）。
+
+**约束**
+
+- 严格遵守 ADR-129 §1.3 verbatim：只动 crate 物理位置 + name + import path，**不动任何逻辑、API、测试用例**。
+- 单 PR revertable：`git revert <merge-sha>` 必须能干净回滚。
+- 验证门：`cargo nextest run -p dasclaw_safety` + `cargo nextest run -p dasclaw_llm_provider -p dasclaw_workspace_cap -p dasclaw` 全绿，`cargo clippy --workspace -- -D warnings` 通过。
+
+**对其他子波次的影响**
+
+- 修复路径倒置后，`dasclaw_llm_provider` / `dasclaw_workspace_cap` 不再反向引用 desktop。
+- 不影响 F3.6 收尾（F4.1）、`routines`/`orchestrator`/`channels` 搬迁（F4.2–F4.5）的范围与顺序。
+- SafetyHook trait 装配 HookEngine 的设计（原 F4 条款）仍有效，可在 F4.0 之后作为 F4 后续工作单独推进。
 - 顶层 `Cargo.toml` workspace `members` 已把 `desktop-client/ironclaw/crates/ironclaw_safety` 列为成员。
 - 全工作区 `use ironclaw_safety::*` 调用共 65 处（排除上游参考目录 `ironclaw-main/`）。
 
