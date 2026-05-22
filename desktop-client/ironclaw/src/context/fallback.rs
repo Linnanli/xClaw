@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::context::memory::Memory;
+use crate::context::Memory;
 use crate::context::state::JobContext;
 
 /// Structured summary of a failed or stuck job.
@@ -115,7 +115,7 @@ fn truncate_str(s: &str, max_len: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::memory::Memory;
+    use crate::context::Memory;
     use crate::context::state::JobContext;
     use chrono::{Duration, Utc};
     use rust_decimal::Decimal;

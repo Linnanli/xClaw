@@ -8,10 +8,12 @@
 
 pub mod fallback;
 mod manager;
-mod memory;
 mod state;
 
 pub use fallback::FallbackDeliverable;
 pub use manager::ContextManager;
-pub use memory::{ActionRecord, ConversationMemory, Memory};
+// ADR-152 §3 F3.6 slice 1: `memory` was moved into `dasclaw_core::context::memory`.
+// Re-export keeps existing `crate::context::{ActionRecord, ConversationMemory, Memory}`
+// call sites (e.g. `worker::job`) source-compatible.
+pub use dasclaw_core::context::memory::{ActionRecord, ConversationMemory, Memory};
 pub use state::{JobContext, JobState, StateTransition, TokenBudgetExceeded};

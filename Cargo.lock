@@ -2831,6 +2831,7 @@ dependencies = [
  "dasclaw_governance",
  "dasclaw_project_docs",
  "ironclaw_common",
+ "rust_decimal",
  "serde",
  "serde_json",
  "tempfile",
