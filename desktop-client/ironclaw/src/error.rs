@@ -1,7 +1,5 @@
 //! Error types for IronClaw.
 
-use std::time::Duration;
-
 use uuid::Uuid;
 
 /// Top-level error type for the agent.
@@ -174,30 +172,12 @@ pub enum SafetyError {
 }
 
 /// Job-related errors.
-#[derive(Debug, thiserror::Error)]
-pub enum JobError {
-    #[error("Job {id} not found")]
-    NotFound { id: Uuid },
-
-    #[error("Job {id} already in state {state}, cannot transition to {target}")]
-    InvalidTransition {
-        id: Uuid,
-        state: String,
-        target: String,
-    },
-
-    #[error("Job {id} failed: {reason}")]
-    Failed { id: Uuid, reason: String },
-
-    #[error("Job {id} stuck for {duration:?}")]
-    Stuck { id: Uuid, duration: Duration },
-
-    #[error("Maximum parallel jobs ({max}) exceeded")]
-    MaxJobsExceeded { max: usize },
-
-    #[error("Job {id} context error: {reason}")]
-    ContextError { id: Uuid, reason: String },
-}
+///
+/// Re-export shim. Definition lives in [`dasclaw_core::error::JobError`]
+/// per ADR-152 §3 F3.6 slice 2 (#717). Kept here so existing
+/// `crate::error::JobError` call sites and the top-level `Error::Job(#[from] _)`
+/// conversion keep working.
+pub use dasclaw_core::JobError;
 
 /// Estimation errors.
 #[derive(Debug, thiserror::Error)]
@@ -406,21 +386,6 @@ mod tests {
         assert!(
             msg.contains("invalid token"),
             "Should mention reason: {msg}"
-        );
-    }
-
-    #[test]
-    fn job_error_display() {
-        let err = JobError::MaxJobsExceeded { max: 5 };
-        let msg = err.to_string();
-        assert!(msg.contains("5"), "Should mention max: {msg}");
-
-        let id = Uuid::new_v4();
-        let err = JobError::NotFound { id };
-        let msg = err.to_string();
-        assert!(
-            msg.contains(&id.to_string()),
-            "Should mention job id: {msg}"
         );
     }
 
