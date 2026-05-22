@@ -429,17 +429,16 @@ ContextManager 搬到 `dasclaw_core::context::manager`，泛型化为 `ContextMa
 若选 **X（字段拆分，推荐）**：
 
 - 在 §11.8.7 写下字段分配最终清单（哪些进 `JobContextCore` / 哪些留桌面端）。
-- 新建 sub-issue：
-  - slice A：`JobContextCore` struct 拆分（仅 state.rs 内部，桌面端零调用方改动）
-  - slice B：`ContextManager` + `manager.rs` 搬入 `dasclaw_core::context`
-  - slice C：`state.rs` 剩余共享部分搬入 `dasclaw_core::context`
-  - slice D：`fallback.rs` 评估（如有共享价值同搬，否则记入 §11.8.7 留 ironclaw）
-  - slice E：桌面端 `context/mod.rs` 改 re-export shim
+- 拆 **两刀**（不再细分到 5 个 slice，避免开发拖太久）：
+  - **slice A — 字段拆分 + ContextManager 搬迁一刀到位**：
+    `JobContextCore` struct 拆分 + `state.rs` 共享部分 + `ContextManager` / `manager.rs` 整体搬入 `dasclaw_core::context`；桌面端 `JobContext` 改组合 + `Deref`/`DerefMut`；桌面端 `context/mod.rs` 同步改 re-export shim。一个 PR 闭环。
+  - **slice B — `fallback.rs` 评估 + 收尾**：
+    判定 `fallback.rs` 是搬还是留 ironclaw（按是否含桌面端字段依赖决定）；清理桌面端剩余 import；关闭 umbrella #632。
 
 若选 **X'（trait 化，不推荐但允许）**：
 
 - 在 §11.8.7 冻结 trait method 清单 + dyn vs generic 选择。
-- 新建一组 sub-issue 拆 PR。
+- 同样按"字段/trait 拆 + manager 搬迁"两刀，不细切。
 
 若选 **Y（收口，不推荐）**：
 
@@ -448,7 +447,71 @@ ContextManager 搬到 `dasclaw_core::context::manager`，泛型化为 `ContextMa
 
 ### 11.8.7 决策记录
 
-> 待评审填写。
+**决策**：**X（JobContext 字段拆分 + ContextManager 搬迁）**
+
+**决策时间**：随本 PR commit v3。
+
+**决策理由**：见 §11.8.3 表格——ContextManager 是任何无头 agent 框架必备基础设施，符合 ADR-152 §1 反向吸收目标；且 manager 不碰 JobContext 桌面端字段，字段拆分（X）比 trait 化（X'）干净。
+
+**字段分配清单**（slice A 实施时按本表执行，PR 内附 before/after 字段映射核对表）：
+
+进 `dasclaw_core::context::JobContextCore` 的字段（manager + 任何无头 agent runtime 都需要的状态机骨架 + 计费 + 元数据）：
+
+- `job_id: Uuid`
+- `state: JobState`
+- `started_at: Option<DateTime<Utc>>`
+- `user_id: String`
+- `title: String`
+- `description: String`
+- `timezone: Option<Tz>`
+- `requester_id: Option<String>`
+- `cost_usd: f64`
+- `tokens_used: u64`
+- `token_budget: Option<u64>`
+- （其他原 JobContext 中**不依赖桌面端类型**的字段，slice A PR 内 grep 一遍补齐）
+
+进 `dasclaw_core::context::JobContextCore` 的方法（manager 已经在用 + 状态机基础动作）：
+
+- `new` / `with_user` / `with_timezone` / `with_feature_flags`（如果不引入桌面端类型）/ `with_requester_id`
+- `transition_to`
+- `mark_stuck`
+- `attempt_recovery`
+- `elapsed`
+- `add_cost` / `add_tokens` / `budget_exceeded`
+
+留桌面端 `JobContext` 的字段（桌面端 GUI / LLM 录制 / 工具系统私货）：
+
+- `http_interceptor: Option<Arc<dyn HttpInterceptor>>`
+- `feature_flags: SharedFeatureFlags`
+- `tool_output_stash: Arc<RwLock<HashMap<String, String>>>`
+- `tools: ...`
+- `metadata: ...`
+- 任何其他依赖 `crate::llm::*` / `crate::tools::*` / `crate::gui::*` 的字段（slice A PR 内 grep 补齐）
+
+**桌面端 `JobContext` 形态**：
+
+```rust
+pub struct JobContext {
+    pub core: JobContextCore,
+    pub http_interceptor: Option<Arc<dyn HttpInterceptor>>,
+    pub feature_flags: SharedFeatureFlags,
+    pub tool_output_stash: Arc<RwLock<HashMap<String, String>>>,
+    // ...
+}
+impl Deref for JobContext { type Target = JobContextCore; ... }
+impl DerefMut for JobContext { ... }
+```
+
+**slice A 验证清单**（PR 必跑）：
+
+- `cargo check -p dasclaw_core -p dasclaw --tests`
+- `cargo nextest run -p dasclaw_core -p dasclaw`
+- `cargo fmt --all`
+- `python3.12 scripts/check_no_panics.py --base origin/xClaw`
+- `cargo clippy --no-deps -p dasclaw_core -p dasclaw --all-targets -- -D warnings`
+- PR body 附 before/after 字段映射表（§11.8.5 第 3 条要求）
+
+**待 slice A 完成后**：在本节追加"slice A 完成于 PR #N"标记；slice B 决策另写。
 
 ### 11.9 F4 修订：ironclaw_safety 路径倒置修复（F4.0）
 
