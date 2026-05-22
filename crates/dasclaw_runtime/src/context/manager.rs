@@ -6,8 +6,10 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use crate::context::{JobContext, JobState, Memory};
-use crate::error::JobError;
+use crate::JobState;
+use crate::context::JobContext;
+use dasclaw_core::context::memory::Memory;
+use dasclaw_core::error::JobError;
 
 /// Manages contexts for multiple concurrent jobs.
 pub struct ContextManager {
@@ -655,7 +657,7 @@ mod tests {
         // Update memory by adding a message
         manager
             .update_memory(job_id, |m| {
-                m.add_message(crate::llm::ChatMessage::user("hello from test"));
+                m.add_message(dasclaw_core::ChatMessage::user("hello from test"));
             })
             .await
             .unwrap();

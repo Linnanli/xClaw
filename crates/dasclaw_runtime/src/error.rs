@@ -7,6 +7,10 @@ use std::time::Duration;
 
 use thiserror::Error;
 
+// ADR-152 §3 F3.6 slice A'' verbatim 兼容 re-export：搬过来的 `manager.rs`
+// 测试代码使用 `crate::error::JobError` 全路径。
+pub use dasclaw_core::error::JobError;
+
 /// Error returned by the tool dispatcher to the rest of the application.
 ///
 /// Every variant that originates from a specific tool carries that tool's

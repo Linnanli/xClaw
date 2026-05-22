@@ -34,6 +34,7 @@
 //! Instead, callers must attach the name explicitly at the boundary using
 //! [`ToolError::from_tool_impl`].
 
+pub mod context;
 pub mod error;
 pub mod feature_flags;
 pub mod job;

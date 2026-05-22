@@ -84,8 +84,8 @@ impl KeychainConfig {
 
 /// Generate a random 32-byte master key.
 pub fn generate_master_key() -> Vec<u8> {
-    use rand::rngs::OsRng;
     use rand::RngCore;
+    use rand::rngs::OsRng;
     let mut key = vec![0u8; 32];
     OsRng.fill_bytes(&mut key);
     key
@@ -304,12 +304,12 @@ mod platform {
     use std::ffi::c_void;
     use std::slice;
 
-    use windows::core::{PCWSTR, PWSTR};
     use windows::Win32::Foundation::{ERROR_NOT_FOUND, FILETIME};
     use windows::Win32::Security::Credentials::{
-        CredDeleteW, CredFree, CredReadW, CredWriteW, CREDENTIALW, CRED_FLAGS,
-        CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC,
+        CRED_FLAGS, CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC, CREDENTIALW, CredDeleteW,
+        CredFree, CredReadW, CredWriteW,
     };
+    use windows::core::{PCWSTR, PWSTR};
 
     use super::*;
 

@@ -10,8 +10,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::context::Memory;
 use crate::context::state::JobContext;
+use dasclaw_core::context::memory::Memory;
 
 /// Structured summary of a failed or stuck job.
 ///
@@ -109,7 +109,7 @@ impl FallbackDeliverable {
 
 /// Truncate a string to at most `max_len` bytes on a char boundary.
 fn truncate_str(s: &str, max_len: usize) -> &str {
-    &s[..crate::util::floor_char_boundary(s, max_len)]
+    &s[..super::util::floor_char_boundary(s, max_len)]
 }
 
 #[cfg(test)]

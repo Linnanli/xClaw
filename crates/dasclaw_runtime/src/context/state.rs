@@ -17,10 +17,11 @@ use rust_decimal::Decimal;
 use serde::Serialize;
 use uuid::Uuid;
 
-pub use dasclaw_runtime::{JobState, StateTransition, TokenBudgetExceeded};
+pub use crate::job::{JobState, StateTransition, TokenBudgetExceeded};
 
-use crate::llm::recording::HttpInterceptor;
-use crate::tools::feature_flags::{SharedFeatureFlags, ToolFeatureFlags};
+use crate::feature_flags::{SharedFeatureFlags, ToolFeatureFlags};
+use crate::job_context::JobContextCore;
+use crate::recording::HttpInterceptor;
 
 /// Context for a running job.
 #[derive(Debug, Clone, Serialize)]
@@ -292,7 +293,7 @@ impl Default for JobContext {
 // `transitions`, ...) intentionally do NOT appear here and remain
 // accessible via direct field access on `JobContext`. `created_at`
 // is exposed because `job.rs` emits it when listing jobs across users.
-impl dasclaw_runtime::JobContextCore for JobContext {
+impl JobContextCore for JobContext {
     fn job_id(&self) -> Uuid {
         self.job_id
     }
@@ -338,7 +339,7 @@ impl dasclaw_runtime::JobContextCore for JobContext {
     fn set_user_timezone(&mut self, timezone: String) {
         self.user_timezone = timezone;
     }
-    fn http_interceptor(&self) -> Option<Arc<dyn dasclaw_runtime::HttpInterceptor>> {
+    fn http_interceptor(&self) -> Option<Arc<dyn HttpInterceptor>> {
         self.http_interceptor.clone()
     }
 

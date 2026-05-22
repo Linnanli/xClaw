@@ -1,7 +1,7 @@
 [package]
 name = "dasclaw_runtime"
 version = "0.0.0-w6"
-edition = "2021"
+edition = "2024"
 description = "Runtime (application-layer) building blocks for any dasclaw host: errors that carry the failing tool's identity, job state machine, future JobContext trait extension, etc."
 license = "MIT OR Apache-2.0"
 
@@ -19,6 +19,7 @@ secrecy = { version = "0.10", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 async-trait = "0.1"
 tokio = { version = "1", features = ["sync"] }
+tracing = "0.1"
 aes-gcm = "0.10"
 hkdf = "0.12"
 sha2 = "0.10"

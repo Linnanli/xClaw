@@ -14,8 +14,8 @@
 //! have the same plaintext, they'll have different ciphertexts.
 
 use aes_gcm::{
-    aead::{Aead, AeadCore, OsRng},
     Aes256Gcm, KeyInit, Nonce,
+    aead::{Aead, AeadCore, OsRng},
 };
 use hkdf::Hkdf;
 use secrecy::{ExposeSecret, SecretString};
