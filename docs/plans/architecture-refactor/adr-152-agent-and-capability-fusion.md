@@ -78,10 +78,18 @@
 
 ### 阶段 F4：C 类清理
 
-仅做依赖图收敛，不动业务逻辑：
+仅做依赖图收敛，不动业务逻辑。子波次清单（见 §11.9 修订）：
 
-- `ironclaw_safety` 通过 SafetyHook trait 装配到 core HookEngine（F1.2 完成后自动生效），保留代码不动。
-- `routines` / `orchestrator` / `channels` / `import` / `secrets` / `tools_builtin` 检查依赖是否还指向 ironclaw 内部已删除的模块；如有则改 import 到 core。
+- **F4.0**：`ironclaw_safety` 整 crate 物理搬到 `crates/dasclaw_safety`（含 fuzz/、tests/、benches/），同步修复 `dasclaw_llm_provider`、`dasclaw_workspace_cap` 等 crate 对桌面端 path 的反向引用。**原"保留代码不动"条款作废**，理由见 §11.9。
+- **F4.1**：F3.6 收尾——删 desktop 端 `context/mod.rs`、`agent/context_monitor.rs` 两个薄壳，约 130 处调用方 import 重写。
+- **F4.2**：`routines` 实搬——填充 `dasclaw_routines`（当前为 W1 空壳，24 行 trait skeleton），把 desktop `routines/` 的 8.7K LoC verbatim 搬入。
+- **F4.3**：`secrets` 桌面薄壳清理——约 60 处调用方 import 改写。
+- **F4.4**：`orchestrator` 落点决策 + 搬迁（3.3K LoC）。需补 ADR 决定落点（候选：`dasclaw_runtime::orchestrator` 或新 crate）。
+- **F4.5**：`channels` 拆分——抽核心子集（trait + relay + wasm + manager）到新 crate，REPL/HTTP/Signal/Webhook/Web/Telegram 留 ironclaw。
+- **F4.6+**：`tools/builtin` 分批搬（21.5K LoC、28 工具，建议 6-8 刀按职能分组）。
+- **不纳入 F4**：`import/openclaw`（桌面端历史数据迁移工具，非 headless 核心）。
+
+每个子波次单独 PR、单独可 revert，按 ADR-129 §1.3 verbatim 红线推进。
 
 ## 4. 灰度策略
 
@@ -280,6 +288,43 @@ cap crate 当前 157 个测试全绿，含双 feature（default + postgres）。
 无。F3.5（observability）和 F3.6（context manager）的范围、目标、ADR-129 verbatim 约束不变。
 
 F3.6 涉及 `crate::context/`，如果后续也遇到类似"trait 方法签名拖入宿主类型"的阻塞，可参照本次修订模式，单独评估收口策略。
+
+### 11.9 F4 修订：ironclaw_safety 路径倒置修复（F4.0）
+
+**问题**
+
+ADR-152 §3 F4 原条款"`ironclaw_safety` 保留代码不动"在 F3 推进过程中被实际依赖图证伪：
+
+- `crates/dasclaw_llm_provider/Cargo.toml` 通过 `path = "../../desktop-client/ironclaw/crates/ironclaw_safety"` 反向引用桌面端 crate（`LeakDetector` 调用）。
+- `crates/dasclaw_workspace_cap/Cargo.toml` 同样反向 path 引用（`Sanitizer`、`Severity`、`SafetyLayer`）。
+- 顶层 `Cargo.toml` workspace `members` 已把 `desktop-client/ironclaw/crates/ironclaw_safety` 列为成员。
+- 全工作区 `use ironclaw_safety::*` 调用共 65 处（排除上游参考目录 `ironclaw-main/`）。
+
+这违反 `crates/` 作为底层框架不应反向依赖上层 `desktop-client/` 的依赖方向原则，且 crate 命名空间不符 `dasclaw_*` 约定。
+
+**修订**
+
+1. F4 增设 **F4.0 子波次**：把 `ironclaw_safety` 整 crate 物理搬到 `crates/dasclaw_safety`，含本体 + `fuzz/` + `tests/` + `benches/` + corpus 文件。
+2. crate 重命名 `ironclaw_safety` → `dasclaw_safety`，所有 `use ironclaw_safety::*` 改为 `use dasclaw_safety::*`（约 65 处机械替换）。
+3. 同步修正 8 处 `Cargo.toml`：
+   - 顶层 `Cargo.toml` workspace `members` 列表
+   - `crates/dasclaw_llm_provider/Cargo.toml` path 引用改为 `../dasclaw_safety`
+   - `crates/dasclaw_workspace_cap/Cargo.toml` path 引用改为 `../dasclaw_safety`
+   - `desktop-client/Cargo.toml`、`desktop-client/ironclaw/Cargo.toml` 改 path
+   - 本体 `Cargo.toml`、`fuzz/Cargo.toml` 改 name
+4. 上游参考目录 `ironclaw-main/crates/ironclaw_safety/` 不动（属上游镜像，不在工作区构建）。
+
+**约束**
+
+- 严格遵守 ADR-129 §1.3 verbatim：只动 crate 物理位置 + name + import path，**不动任何逻辑、API、测试用例**。
+- 单 PR revertable：`git revert <merge-sha>` 必须能干净回滚。
+- 验证门：`cargo nextest run -p dasclaw_safety` + `cargo nextest run -p dasclaw_llm_provider -p dasclaw_workspace_cap -p dasclaw` 全绿，`cargo clippy --workspace -- -D warnings` 通过。
+
+**对其他子波次的影响**
+
+- 修复路径倒置后，`dasclaw_llm_provider` / `dasclaw_workspace_cap` 不再反向引用 desktop。
+- 不影响 F3.6 收尾（F4.1）、`routines`/`orchestrator`/`channels` 搬迁（F4.2–F4.5）的范围与顺序。
+- SafetyHook trait 装配 HookEngine 的设计（原 F4 条款）仍有效，可在 F4.0 之后作为 F4 后续工作单独推进。
 
 ---
 
