@@ -169,7 +169,7 @@ impl Trigger {
                     .get("timezone")
                     .and_then(|v| v.as_str())
                     .and_then(|tz| {
-                        if crate::timezone::parse_timezone(tz).is_some() {
+                        if dasclaw_workspace_cap::timezone::parse_timezone(tz).is_some() {
                             Some(tz.to_string())
                         } else {
                             tracing::warn!(
@@ -330,7 +330,11 @@ fn default_max_tool_rounds() -> u32 {
 }
 
 /// Hard upper bound for max_tool_rounds to prevent runaway loops and cost explosion.
-pub(crate) const MAX_TOOL_ROUNDS_LIMIT: u32 = 20;
+///
+/// F4.2.0: 可见性从 `pub(crate)` 提升为 `pub`——`routine.rs` 跨 crate 搬迁后，
+/// desktop 侧 `tools/builtin/routine.rs` 仍以 `crate::agent::routine::MAX_TOOL_ROUNDS_LIMIT`
+/// 引用此常量。ADR-129 §1.3 允许 verbatim 搬迁中执行此类最小可见性调整。
+pub const MAX_TOOL_ROUNDS_LIMIT: u32 = 20;
 
 /// Clamp max_tool_rounds to [1, MAX_TOOL_ROUNDS_LIMIT].
 /// Accepts u64 to avoid truncation before clamping.
@@ -754,7 +758,7 @@ pub fn next_cron_fire(
         cron::Schedule::from_str(&normalized).map_err(|e| RoutineError::InvalidCron {
             reason: e.to_string(),
         })?;
-    if let Some(tz) = timezone.and_then(crate::timezone::parse_timezone) {
+    if let Some(tz) = timezone.and_then(dasclaw_workspace_cap::timezone::parse_timezone) {
         Ok(cron_schedule
             .upcoming(tz)
             .next()
@@ -929,7 +933,7 @@ pub fn describe_cron(schedule: &str, timezone: Option<&str>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::routines::routine::{
+    use crate::routine::{
         MAX_TOOL_ROUNDS_LIMIT, NotifyConfig, Routine, RoutineAction, RoutineGuardrails,
         RoutineVerificationStatus, RunStatus, Trigger, apply_routine_verification_result,
         content_hash, describe_cron, next_cron_fire, normalize_cron_expression,
