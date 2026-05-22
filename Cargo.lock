@@ -2660,6 +2660,7 @@ dependencies = [
  "dasclaw_net_proxy",
  "dasclaw_observability",
  "dasclaw_process_hardening",
+ "dasclaw_routines",
  "dasclaw_runtime",
  "dasclaw_safety",
  "dasclaw_sandbox",
@@ -3113,7 +3114,16 @@ dependencies = [
 name = "dasclaw_routines"
 version = "0.0.0-w1"
 dependencies = [
+ "chrono",
+ "cron",
+ "dasclaw_workspace_cap",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
  "thiserror 1.0.69",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
