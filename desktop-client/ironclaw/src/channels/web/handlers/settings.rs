@@ -12,7 +12,7 @@ use secrecy::SecretString;
 use crate::channels::web::auth::AuthenticatedUser;
 use crate::channels::web::server::GatewayState;
 use crate::channels::web::types::*;
-use crate::secrets::{CreateSecretParams, SecretsStore};
+use dasclaw_runtime::secrets::{CreateSecretParams, SecretsStore};
 
 /// Sentinel value the frontend sends to mean "key is unchanged, don't touch it".
 const API_KEY_UNCHANGED: &str = "••••••••";
@@ -663,12 +663,12 @@ mod tests {
 
     fn test_secrets_store() -> Arc<dyn SecretsStore + Send + Sync> {
         let crypto = Arc::new(
-            crate::secrets::SecretsCrypto::new(secrecy::SecretString::from(
+            dasclaw_runtime::secrets::SecretsCrypto::new(secrecy::SecretString::from(
                 crate::secrets::keychain::generate_master_key_hex(),
             ))
             .unwrap(),
         );
-        Arc::new(crate::secrets::InMemorySecretsStore::new(crypto))
+        Arc::new(dasclaw_runtime::secrets::InMemorySecretsStore::new(crypto))
     }
 
     fn test_gateway_state(secrets: Arc<dyn SecretsStore + Send + Sync>) -> GatewayState {

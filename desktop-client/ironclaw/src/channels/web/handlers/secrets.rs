@@ -14,7 +14,7 @@ use axum::{
 
 use crate::channels::web::auth::AdminUser;
 use crate::channels::web::server::GatewayState;
-use crate::secrets::CreateSecretParams;
+use dasclaw_runtime::secrets::CreateSecretParams;
 
 /// PUT /api/admin/users/{user_id}/secrets/{name} — create or update a secret.
 ///

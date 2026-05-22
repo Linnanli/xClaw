@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::secrets::CredentialMapping;
+use dasclaw_runtime::secrets::CredentialMapping;
 
 /// All capabilities that can be granted to a WASM tool.
 ///

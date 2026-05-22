@@ -13,14 +13,14 @@ use secrecy::{ExposeSecret, SecretString};
 use url::Url;
 use uuid::Uuid;
 
-#[cfg(feature = "postgres")]
-use crate::secrets::SecretsCrypto;
-use crate::secrets::{CreateSecretParams, SecretsStore};
 use crate::settings::{Settings, TunnelSettings};
 use crate::setup::prompts::{
     confirm, input, optional_input, print_error, print_info, print_success, print_warning,
     secret_input, select_one,
 };
+#[cfg(feature = "postgres")]
+use dasclaw_runtime::secrets::SecretsCrypto;
+use dasclaw_runtime::secrets::{CreateSecretParams, SecretsStore};
 
 /// Typed errors for channel setup flows.
 #[derive(Debug, thiserror::Error)]
@@ -60,7 +60,9 @@ impl SecretsContext {
     #[cfg(feature = "postgres")]
     pub fn new(pool: deadpool_postgres::Pool, crypto: Arc<SecretsCrypto>, user_id: &str) -> Self {
         Self {
-            store: Arc::new(crate::secrets::PostgresSecretsStore::new(pool, crypto)),
+            store: Arc::new(dasclaw_runtime::secrets::PostgresSecretsStore::new(
+                pool, crypto,
+            )),
             user_id: user_id.to_string(),
         }
     }
@@ -1138,12 +1140,12 @@ mod tests {
     use base64::Engine;
     use std::sync::Arc;
 
-    use crate::secrets::{InMemorySecretsStore, SecretsCrypto, SecretsStore};
     use crate::setup::channels::{
         SecretsContext, generate_webhook_secret, http_webhook_secret_hint,
         substitute_validation_placeholders, validate_cloudflare_token_format,
         validate_public_https_url,
     };
+    use dasclaw_runtime::secrets::{InMemorySecretsStore, SecretsCrypto, SecretsStore};
 
     fn test_secrets_context() -> SecretsContext {
         use secrecy::SecretString;

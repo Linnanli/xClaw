@@ -31,7 +31,6 @@ use crate::llm::models::{
 #[cfg(test)]
 use crate::llm::models::{is_openai_chat_model, sort_openai_models};
 use crate::llm::{SessionConfig, SessionManager};
-use crate::secrets::{SecretsCrypto, SecretsStore};
 use crate::settings::{KeySource, Settings};
 use crate::setup::channels::{
     SecretsContext, setup_http, setup_signal, setup_tunnel, setup_wasm_channel,
@@ -40,6 +39,7 @@ use crate::setup::prompts::{
     confirm, input, optional_input, print_banner, print_error, print_header, print_info,
     print_step, print_success, secret_input, select_many, select_one,
 };
+use dasclaw_runtime::secrets::{SecretsCrypto, SecretsStore};
 
 // unused const, keep commented for clarity / future use
 // const CHANNEL_INDEX_CLI: usize = 0;
@@ -2482,10 +2482,9 @@ impl SetupWizard {
             }
         };
 
-        let store: Arc<dyn SecretsStore> = Arc::new(crate::secrets::PostgresSecretsStore::new(
-            pool,
-            Arc::clone(crypto),
-        ));
+        let store: Arc<dyn SecretsStore> = Arc::new(
+            dasclaw_runtime::secrets::PostgresSecretsStore::new(pool, Arc::clone(crypto)),
+        );
         Ok(Some(store))
     }
 
@@ -2496,10 +2495,11 @@ impl SetupWizard {
         crypto: &Arc<SecretsCrypto>,
     ) -> Result<Option<Arc<dyn SecretsStore>>, SetupError> {
         if let Some(ref backend) = self.db_backend {
-            let store: Arc<dyn SecretsStore> = Arc::new(crate::secrets::LibSqlSecretsStore::new(
-                backend.shared_db(),
-                Arc::clone(crypto),
-            ));
+            let store: Arc<dyn SecretsStore> =
+                Arc::new(dasclaw_runtime::secrets::LibSqlSecretsStore::new(
+                    backend.shared_db(),
+                    Arc::clone(crypto),
+                ));
             Ok(Some(store))
         } else {
             Ok(None)
@@ -4221,7 +4221,7 @@ mod tests {
     /// secrets_crypto so subsequent steps can encrypt API keys.
     #[test]
     fn test_env_var_security_initializes_crypto() {
-        use crate::secrets::SecretsCrypto;
+        use dasclaw_runtime::secrets::SecretsCrypto;
         use secrecy::SecretString;
 
         // Simulate what option 1 in step_security() does after the fix:

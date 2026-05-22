@@ -345,7 +345,7 @@ impl Cli {
 /// Shared helper for CLI subcommands (`mcp auth`, `tool auth`, etc.) that need
 /// access to encrypted secrets without spinning up the full AppBuilder.
 pub async fn init_secrets_store()
--> anyhow::Result<Arc<dyn crate::secrets::SecretsStore + Send + Sync>> {
+-> anyhow::Result<Arc<dyn dasclaw_runtime::secrets::SecretsStore + Send + Sync>> {
     let config = crate::config::Config::from_env().await?;
     let master_key = config.secrets.master_key().ok_or_else(|| {
         anyhow::anyhow!(
@@ -353,7 +353,9 @@ pub async fn init_secrets_store()
         )
     })?;
 
-    let crypto = Arc::new(crate::secrets::SecretsCrypto::new(master_key.clone())?);
+    let crypto = Arc::new(dasclaw_runtime::secrets::SecretsCrypto::new(
+        master_key.clone(),
+    )?);
 
     Ok(crate::db::create_secrets_store(&config.database, crypto).await?)
 }

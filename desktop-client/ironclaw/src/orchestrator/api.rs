@@ -19,12 +19,12 @@ use crate::db::Database;
 use crate::llm::{CompletionRequest, LlmProvider, ToolCompletionRequest};
 use crate::orchestrator::auth::{TokenStore, worker_auth_middleware};
 use crate::orchestrator::job_manager::ContainerJobManager;
-use crate::secrets::SecretsStore;
 use crate::worker::api::JobEventPayload;
 use crate::worker::api::{
     CompletionReport, CredentialResponse, JobDescription, ProxyCompletionRequest,
     ProxyCompletionResponse, ProxyToolCompletionRequest, ProxyToolCompletionResponse, StatusUpdate,
 };
+use dasclaw_runtime::secrets::SecretsStore;
 use ironclaw_common::AppEvent;
 
 /// A follow-up prompt queued for a Claude Code bridge.
@@ -732,7 +732,7 @@ mod tests {
         secrets_store
             .create(
                 "default",
-                crate::secrets::CreateSecretParams {
+                dasclaw_runtime::secrets::CreateSecretParams {
                     name: "test_secret".to_string(),
                     value: SecretString::from("supersecretvalue".to_string()),
                     provider: None,

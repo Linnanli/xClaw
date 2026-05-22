@@ -19,7 +19,7 @@ use crate::channels::wasm::schema::ChannelCapabilitiesFile;
 use crate::channels::wasm::wrapper::WasmChannel;
 use crate::db::SettingsStore;
 use crate::pairing::PairingStore;
-use crate::secrets::SecretsStore;
+use dasclaw_runtime::secrets::SecretsStore;
 
 /// Loads WASM channels from the filesystem.
 pub struct WasmChannelLoader {

@@ -13,7 +13,6 @@ use crate::db::Database;
 use crate::extensions::ExtensionManager;
 use crate::llm::{LlmProvider, ToolDefinition};
 use crate::orchestrator::job_manager::ContainerJobManager;
-use crate::secrets::SecretsStore;
 use crate::skills::catalog::SkillCatalog;
 use crate::skills::registry::SkillRegistry;
 use crate::tools::builder::{
@@ -41,6 +40,7 @@ use crate::tools::wasm::{
 };
 use crate::workspace::Workspace;
 use dasclaw_runtime::context::ContextManager;
+use dasclaw_runtime::secrets::SecretsStore;
 
 /// Names of built-in tools that cannot be shadowed by dynamic registrations.
 /// This prevents a dynamically built or installed tool from replacing a
@@ -958,7 +958,10 @@ impl ToolRegistry {
     /// Private helper invoked by [`Self::bootstrap_tools`] when `secrets_store`
     /// is set. Values are never returned to the LLM; only names and metadata
     /// are exposed.
-    fn register_secrets_tools(&self, store: Arc<dyn crate::secrets::SecretsStore + Send + Sync>) {
+    fn register_secrets_tools(
+        &self,
+        store: Arc<dyn dasclaw_runtime::secrets::SecretsStore + Send + Sync>,
+    ) {
         use crate::tools::builtin::{SecretDeleteTool, SecretListTool};
         self.register_sync(Arc::new(SecretListTool::new(Arc::clone(&store))));
         self.register_sync(Arc::new(SecretDeleteTool::new(store)));
@@ -1187,7 +1190,7 @@ impl ToolRegistry {
             .await?;
 
         // Extract credential mappings before capabilities are moved into the wrapper
-        let credential_mappings: Vec<crate::secrets::CredentialMapping> = reg
+        let credential_mappings: Vec<dasclaw_runtime::secrets::CredentialMapping> = reg
             .capabilities
             .http
             .as_ref()
@@ -1694,8 +1697,8 @@ mod tests {
         // for every other field-gated group (extension / skill / routine /
         // image / vision); secrets is the simplest to wire because
         // InMemorySecretsStore needs no async setup.
-        use crate::secrets::SecretsStore;
         use crate::testing::credentials::test_secrets_store;
+        use dasclaw_runtime::secrets::SecretsStore;
 
         // Without secrets_store: secret tools must be absent.
         let registry_a = Arc::new(ToolRegistry::new());
@@ -1737,8 +1740,8 @@ mod tests {
         // calls must accumulate groups rather than fail — the underlying
         // `register_sync` is HashMap::insert-style, so identical inputs
         // are naturally idempotent and new fields just add new tools.
-        use crate::secrets::SecretsStore;
         use crate::testing::credentials::test_secrets_store;
+        use dasclaw_runtime::secrets::SecretsStore;
 
         let registry = Arc::new(ToolRegistry::new());
 
@@ -1895,8 +1898,8 @@ mod tests {
         // later phase wires more deps). Stage-1 wires the job group;
         // stage-2 attaches a secrets store on top. Both groups must coexist
         // after the second call without re-running the legacy register paths.
-        use crate::secrets::SecretsStore;
         use crate::testing::credentials::test_secrets_store;
+        use dasclaw_runtime::secrets::SecretsStore;
 
         let registry = Arc::new(ToolRegistry::new());
         let ctx_mgr = Arc::new(ContextManager::new(8));

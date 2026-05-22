@@ -51,12 +51,12 @@ use crate::db::Database;
 use crate::extensions::ExtensionManager;
 use crate::orchestrator::job_manager::ContainerJobManager;
 use crate::sandbox::{OsExecutor, SandboxPolicy};
-use crate::secrets::SecretsStore;
 use crate::skills::catalog::SkillCatalog;
 use crate::skills::registry::SkillRegistry;
 use crate::tools::builtin::{PromptQueue, SchedulerSlot, memory::WorkspaceResolver};
 use crate::workspace::Workspace;
 use dasclaw_runtime::context::ContextManager;
+use dasclaw_runtime::secrets::SecretsStore;
 
 /// Deployment mode that selects which tool groups are registered by default.
 ///

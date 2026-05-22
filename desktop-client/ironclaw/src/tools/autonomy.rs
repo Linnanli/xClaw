@@ -77,10 +77,10 @@ mod tests {
 
     use super::*;
     use crate::extensions::ExtensionManager;
-    use crate::secrets::{InMemorySecretsStore, SecretsCrypto, SecretsStore};
     use crate::tools::mcp::{McpProcessManager, McpSessionManager};
     use crate::tools::{Tool, ToolError, ToolOutput};
     use dasclaw_hooks::HookRegistry;
+    use dasclaw_runtime::secrets::{InMemorySecretsStore, SecretsCrypto, SecretsStore};
 
     struct FakeTool {
         name: &'static str,

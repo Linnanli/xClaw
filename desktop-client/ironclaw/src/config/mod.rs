@@ -320,7 +320,7 @@ impl Config {
         store: Option<&(dyn crate::db::SettingsStore + Sync)>,
         user_id: &str,
         toml_path: Option<&std::path::Path>,
-        secrets: Option<&(dyn crate::secrets::SecretsStore + Send + Sync)>,
+        secrets: Option<&(dyn dasclaw_runtime::secrets::SecretsStore + Send + Sync)>,
     ) -> Result<(), ConfigError> {
         let mut settings = if let Some(store) = store {
             // TOML as base, then DB on top (DB wins).
@@ -436,7 +436,7 @@ pub(crate) fn resolve_owner_id(settings: &Settings) -> Result<String, ConfigErro
 /// Also loads tokens from OS credential stores (macOS Keychain / Linux
 /// credentials files) which don't require the secrets DB.
 pub async fn inject_llm_keys_from_secrets(
-    secrets: &dyn crate::secrets::SecretsStore,
+    secrets: &dyn dasclaw_runtime::secrets::SecretsStore,
     user_id: &str,
 ) {
     // Static mappings for well-known providers.
@@ -551,7 +551,7 @@ fn inject_os_credential_store_tokens(injected: &mut HashMap<String, String>) {
 /// write path and stored encrypted in the secrets store instead.
 pub async fn hydrate_llm_keys_from_secrets(
     settings: &mut Settings,
-    secrets: &(dyn crate::secrets::SecretsStore + Send + Sync),
+    secrets: &(dyn dasclaw_runtime::secrets::SecretsStore + Send + Sync),
     user_id: &str,
 ) {
     // Hydrate builtin overrides
@@ -583,7 +583,7 @@ pub async fn hydrate_llm_keys_from_secrets(
 /// After migration, strips plaintext keys from the settings table.
 pub async fn migrate_plaintext_llm_keys(
     settings_store: &(dyn crate::db::SettingsStore + Sync),
-    secrets: &(dyn crate::secrets::SecretsStore + Send + Sync),
+    secrets: &(dyn dasclaw_runtime::secrets::SecretsStore + Send + Sync),
     user_id: &str,
 ) {
     let settings_map = match settings_store.get_all_settings(user_id).await {
@@ -609,7 +609,7 @@ pub async fn migrate_plaintext_llm_keys(
                     && let Err(e) = secrets
                         .create(
                             user_id,
-                            crate::secrets::CreateSecretParams {
+                            dasclaw_runtime::secrets::CreateSecretParams {
                                 name: secret_name.clone(),
                                 value: secrecy::SecretString::from(api_key.to_string()),
                                 provider: Some(provider_id.clone()),
@@ -665,7 +665,7 @@ pub async fn migrate_plaintext_llm_keys(
                     && let Err(e) = secrets
                         .create(
                             user_id,
-                            crate::secrets::CreateSecretParams {
+                            dasclaw_runtime::secrets::CreateSecretParams {
                                 name: secret_name.clone(),
                                 value: secrecy::SecretString::from(api_key.to_string()),
                                 provider: Some(provider_id.to_string()),
@@ -707,14 +707,14 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    fn test_secrets_store() -> Arc<dyn crate::secrets::SecretsStore + Send + Sync> {
+    fn test_secrets_store() -> Arc<dyn dasclaw_runtime::secrets::SecretsStore + Send + Sync> {
         let crypto = Arc::new(
-            crate::secrets::SecretsCrypto::new(secrecy::SecretString::from(
+            dasclaw_runtime::secrets::SecretsCrypto::new(secrecy::SecretString::from(
                 crate::secrets::keychain::generate_master_key_hex(),
             ))
             .unwrap(),
         );
-        Arc::new(crate::secrets::InMemorySecretsStore::new(crypto))
+        Arc::new(dasclaw_runtime::secrets::InMemorySecretsStore::new(crypto))
     }
 
     #[tokio::test]
@@ -723,7 +723,7 @@ mod tests {
         secrets
             .create(
                 "test",
-                crate::secrets::CreateSecretParams {
+                dasclaw_runtime::secrets::CreateSecretParams {
                     name: "llm_builtin_openai_api_key".to_string(),
                     value: secrecy::SecretString::from("sk-from-vault".to_string()),
                     provider: Some("openai".to_string()),
@@ -769,7 +769,7 @@ mod tests {
         secrets
             .create(
                 "test",
-                crate::secrets::CreateSecretParams {
+                dasclaw_runtime::secrets::CreateSecretParams {
                     name: "llm_custom_my-llm_api_key".to_string(),
                     value: secrecy::SecretString::from("gsk-custom".to_string()),
                     provider: Some("my-llm".to_string()),
@@ -807,7 +807,7 @@ mod tests {
         secrets
             .create(
                 "test",
-                crate::secrets::CreateSecretParams {
+                dasclaw_runtime::secrets::CreateSecretParams {
                     name: "llm_builtin_openai_api_key".to_string(),
                     value: secrecy::SecretString::from("sk-from-vault".to_string()),
                     provider: Some("openai".to_string()),

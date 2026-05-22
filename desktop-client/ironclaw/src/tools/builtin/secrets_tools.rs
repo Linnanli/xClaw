@@ -15,8 +15,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::secrets::SecretsStore;
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolError, ToolOutput, require_str};
+use dasclaw_runtime::secrets::SecretsStore;
 
 // ── secret_list ──────────────────────────────────────────────────────────────
 
@@ -158,11 +158,11 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::secrets::CreateSecretParams;
     use crate::testing::credentials::{TEST_OPENAI_API_KEY_SHORT, test_secrets_store};
     use dasclaw_runtime::context::JobContext;
+    use dasclaw_runtime::secrets::CreateSecretParams;
 
-    fn test_store() -> Arc<crate::secrets::InMemorySecretsStore> {
+    fn test_store() -> Arc<dasclaw_runtime::secrets::InMemorySecretsStore> {
         Arc::new(test_secrets_store())
     }
 

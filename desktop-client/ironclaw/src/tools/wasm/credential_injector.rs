@@ -25,7 +25,7 @@
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-use crate::secrets::{
+use dasclaw_runtime::secrets::{
     CredentialLocation, CredentialMapping, DecryptedSecret, SecretError, SecretsStore,
 };
 
@@ -366,13 +366,13 @@ fn base64_encode(input: &[u8]) -> String {
 mod tests {
     use std::collections::HashMap;
 
-    use crate::secrets::{
-        CreateSecretParams, CredentialLocation, CredentialMapping, InMemorySecretsStore,
-        SecretsStore,
-    };
     use crate::testing::credentials::{TEST_OPENAI_API_KEY, test_secrets_store};
     use crate::tools::wasm::credential_injector::{
         CredentialInjector, base64_encode, host_matches_pattern,
+    };
+    use dasclaw_runtime::secrets::{
+        CreateSecretParams, CredentialLocation, CredentialMapping, InMemorySecretsStore,
+        SecretsStore,
     };
 
     fn test_store() -> InMemorySecretsStore {

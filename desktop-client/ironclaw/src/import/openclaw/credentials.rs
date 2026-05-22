@@ -5,7 +5,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::secrets::CreateSecretParams;
+    use dasclaw_runtime::secrets::CreateSecretParams;
     use secrecy::SecretString;
 
     #[test]

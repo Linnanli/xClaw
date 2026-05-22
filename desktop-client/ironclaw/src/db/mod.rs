@@ -132,8 +132,8 @@ pub async fn connect_with_handles(
 /// pattern of [`connect_from_config`] but returns a secrets-specific store.
 pub async fn create_secrets_store(
     config: &crate::config::DatabaseConfig,
-    crypto: Arc<crate::secrets::SecretsCrypto>,
-) -> Result<Arc<dyn crate::secrets::SecretsStore + Send + Sync>, DatabaseError> {
+    crypto: Arc<dasclaw_runtime::secrets::SecretsCrypto>,
+) -> Result<Arc<dyn dasclaw_runtime::secrets::SecretsStore + Send + Sync>, DatabaseError> {
     match config.backend {
         #[cfg(feature = "libsql")]
         crate::config::DatabaseBackend::LibSql => {
@@ -158,7 +158,7 @@ pub async fn create_secrets_store(
             };
             backend.run_migrations().await?;
 
-            Ok(Arc::new(crate::secrets::LibSqlSecretsStore::new(
+            Ok(Arc::new(dasclaw_runtime::secrets::LibSqlSecretsStore::new(
                 backend.shared_db(),
                 crypto,
             )))
@@ -170,10 +170,9 @@ pub async fn create_secrets_store(
                 .map_err(|e| DatabaseError::Pool(e.to_string()))?;
             pg.run_migrations().await?;
 
-            Ok(Arc::new(crate::secrets::PostgresSecretsStore::new(
-                pg.pool(),
-                crypto,
-            )))
+            Ok(Arc::new(
+                dasclaw_runtime::secrets::PostgresSecretsStore::new(pg.pool(), crypto),
+            ))
         }
         #[allow(unreachable_patterns)]
         _ => Err(DatabaseError::Pool(format!(
@@ -972,7 +971,7 @@ mod tests {
         };
 
         let master_key = SecretString::from("a]".repeat(16));
-        let crypto = Arc::new(crate::secrets::SecretsCrypto::new(master_key).unwrap());
+        let crypto = Arc::new(dasclaw_runtime::secrets::SecretsCrypto::new(master_key).unwrap());
 
         let store = create_secrets_store(&config, crypto).await;
         assert!(
