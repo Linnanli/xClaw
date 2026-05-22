@@ -7,8 +7,8 @@
 
 use std::sync::Arc;
 
+use dasclaw_runtime::secrets::{CreateSecretParams, SecretsCrypto, SecretsStore};
 use ironclaw::db::DatabaseHandles;
-use ironclaw::secrets::{CreateSecretParams, SecretsCrypto, SecretsStore};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -188,8 +188,8 @@ async fn both_secrets_factories_produce_compatible_stores() {
 
 #[tokio::test]
 async fn extension_manager_with_process_manager_constructs() {
+    use dasclaw_runtime::secrets::InMemorySecretsStore;
     use ironclaw::extensions::ExtensionManager;
-    use ironclaw::secrets::InMemorySecretsStore;
     use ironclaw::tools::ToolRegistry;
     use ironclaw::tools::mcp::McpProcessManager;
     use ironclaw::tools::mcp::McpSessionManager;

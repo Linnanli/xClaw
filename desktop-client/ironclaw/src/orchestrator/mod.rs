@@ -48,7 +48,7 @@ use uuid::Uuid;
 
 use crate::db::Database;
 use crate::llm::LlmProvider;
-use crate::secrets::SecretsStore;
+use dasclaw_runtime::secrets::SecretsStore;
 use ironclaw_common::AppEvent;
 
 /// Resolve the orchestrator port from the `ORCHESTRATOR_PORT` environment

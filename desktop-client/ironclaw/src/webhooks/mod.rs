@@ -16,9 +16,9 @@ use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 
 use crate::agent::routine_engine::RoutineEngine;
-use crate::secrets::SecretsStore;
 use crate::tools::ToolRegistry;
 use dasclaw_runtime::context::JobContext;
+use dasclaw_runtime::secrets::SecretsStore;
 
 /// Shared routine engine slot, populated by Agent after startup.
 pub type RoutineEngineSlot = Arc<tokio::sync::RwLock<Option<Arc<RoutineEngine>>>>;
@@ -369,8 +369,8 @@ mod tests {
     use axum::body::Body;
     use tower::ServiceExt;
 
-    use crate::secrets::{CreateSecretParams, InMemorySecretsStore, SecretsCrypto};
     use crate::tools::{Tool, ToolError, ToolOutput, ToolRegistry};
+    use dasclaw_runtime::secrets::{CreateSecretParams, InMemorySecretsStore, SecretsCrypto};
 
     use super::*;
 

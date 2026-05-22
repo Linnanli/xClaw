@@ -9,6 +9,7 @@ use secrecy::SecretString;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
+use dasclaw_runtime::secrets::SecretsStore;
 use ironclaw::agent::routine_engine::RoutineEngine;
 use ironclaw::agent::{Agent, AgentDeps, SessionManager as AgentSessionManager};
 use ironclaw::app::{AppBuilder, AppBuilderFlags};
@@ -27,7 +28,6 @@ use ironclaw::llm::registry::ProviderProtocol;
 use ironclaw::llm::{
     SessionConfig as LlmSessionConfig, SessionManager as LlmSessionManager, create_llm_provider,
 };
-use ironclaw::secrets::SecretsStore;
 use ironclaw::tools::{Tool, ToolError, ToolOutput};
 
 use crate::support::test_channel::{TestChannel, TestChannelHandle};
@@ -315,16 +315,18 @@ impl GatewayWorkflowHarness {
         .await
         .expect("failed to start gateway server");
 
-        let webhook_secrets = Arc::new(ironclaw::secrets::InMemorySecretsStore::new(Arc::new(
-            ironclaw::secrets::SecretsCrypto::new(SecretString::from(
-                "test-key-at-least-32-chars-long!!".to_string(),
-            ))
-            .expect("crypto"),
-        )));
+        let webhook_secrets = Arc::new(dasclaw_runtime::secrets::InMemorySecretsStore::new(
+            Arc::new(
+                dasclaw_runtime::secrets::SecretsCrypto::new(SecretString::from(
+                    "test-key-at-least-32-chars-long!!".to_string(),
+                ))
+                .expect("crypto"),
+            ),
+        ));
         webhook_secrets
             .create(
                 &user_id,
-                ironclaw::secrets::CreateSecretParams::new(
+                dasclaw_runtime::secrets::CreateSecretParams::new(
                     "github_webhook_secret",
                     "test-webhook-secret",
                 ),
@@ -336,7 +338,7 @@ impl GatewayWorkflowHarness {
             routine_engine: Arc::clone(&routine_slot),
             user_id: user_id.clone(),
             secrets_store: Some(
-                webhook_secrets as Arc<dyn ironclaw::secrets::SecretsStore + Send + Sync>,
+                webhook_secrets as Arc<dyn dasclaw_runtime::secrets::SecretsStore + Send + Sync>,
             ),
         };
         let webhook_app = ironclaw::webhooks::routes(webhook_state);

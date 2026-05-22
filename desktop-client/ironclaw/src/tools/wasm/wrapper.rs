@@ -18,7 +18,6 @@ use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiView};
 
 use crate::llm::recording::{HttpExchangeRequest, HttpExchangeResponse, HttpInterceptor};
 use crate::safety::LeakDetector;
-use crate::secrets::{DecryptedSecret, SecretsStore};
 use crate::tools::tool::{Tool, ToolError, ToolOutput};
 use crate::tools::wasm::capabilities::Capabilities;
 use crate::tools::wasm::credential_injector::{
@@ -28,6 +27,7 @@ use crate::tools::wasm::error::WasmError;
 use crate::tools::wasm::host::{HostState, LogLevel};
 use crate::tools::wasm::limits::{ResourceLimits, WasmResourceLimiter};
 use crate::tools::wasm::runtime::{EPOCH_TICK_INTERVAL, PreparedModule, WasmToolRuntime};
+use dasclaw_runtime::secrets::{DecryptedSecret, SecretsStore};
 
 // Generate component model bindings from the WIT file.
 //
@@ -1417,8 +1417,10 @@ async fn persist_refreshed_oauth_tokens(
     refresh_name: &str,
     token_response: oauth_defaults::OAuthTokenResponse,
 ) -> bool {
-    let mut access_params =
-        crate::secrets::CreateSecretParams::new(&config.secret_name, &token_response.access_token);
+    let mut access_params = dasclaw_runtime::secrets::CreateSecretParams::new(
+        &config.secret_name,
+        &token_response.access_token,
+    );
     if let Some(ref provider) = config.provider {
         access_params = access_params.with_provider(provider);
     }
@@ -1433,7 +1435,8 @@ async fn persist_refreshed_oauth_tokens(
     }
 
     if let Some(new_refresh) = token_response.refresh_token.as_deref() {
-        let mut refresh_params = crate::secrets::CreateSecretParams::new(refresh_name, new_refresh);
+        let mut refresh_params =
+            dasclaw_runtime::secrets::CreateSecretParams::new(refresh_name, new_refresh);
         if let Some(ref provider) = config.provider {
             refresh_params = refresh_params.with_provider(provider);
         }
@@ -1497,7 +1500,7 @@ async fn resolve_host_credentials(
                 None => false,
             },
             // Expired error from store means we definitely need to refresh
-            Err(crate::secrets::SecretError::Expired) => true,
+            Err(dasclaw_runtime::secrets::SecretError::Expired) => true,
             // Not found or other errors: skip refresh, let the normal flow handle it
             Err(_) => false,
         };
@@ -1526,7 +1529,7 @@ async fn resolve_host_credentials(
         // Skip UrlPath credentials, they're handled by placeholder substitution
         if matches!(
             mapping.location,
-            crate::secrets::CredentialLocation::UrlPath { .. }
+            dasclaw_runtime::secrets::CredentialLocation::UrlPath { .. }
         ) {
             continue;
         }
@@ -1810,11 +1813,11 @@ mod tests {
     use tokio::sync::{Mutex as AsyncMutex, oneshot};
     use uuid::Uuid;
 
-    use crate::secrets::{
+    use dasclaw_runtime::context::JobContext;
+    use dasclaw_runtime::secrets::{
         CreateSecretParams, DecryptedSecret, InMemorySecretsStore, Secret, SecretError, SecretRef,
         SecretsStore,
     };
-    use dasclaw_runtime::context::JobContext;
 
     use crate::testing::credentials::{
         TEST_BEARER_TOKEN_123, TEST_GOOGLE_OAUTH_FRESH, TEST_GOOGLE_OAUTH_LEGACY,
@@ -2394,11 +2397,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_host_credentials_bearer() {
-        use crate::secrets::{
-            CreateSecretParams, CredentialLocation, CredentialMapping, SecretsStore,
-        };
         use crate::tools::wasm::capabilities::HttpCapability;
         use crate::tools::wasm::wrapper::resolve_host_credentials;
+        use dasclaw_runtime::secrets::{
+            CreateSecretParams, CredentialLocation, CredentialMapping, SecretsStore,
+        };
 
         let store = test_secrets_store();
 
@@ -2439,11 +2442,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_host_credentials_owner_scope_bearer() {
-        use crate::secrets::{
-            CreateSecretParams, CredentialLocation, CredentialMapping, SecretsStore,
-        };
         use crate::tools::wasm::capabilities::HttpCapability;
         use crate::tools::wasm::wrapper::resolve_host_credentials;
+        use dasclaw_runtime::secrets::{
+            CreateSecretParams, CredentialLocation, CredentialMapping, SecretsStore,
+        };
 
         let store = test_secrets_store();
         let ctx = JobContext::with_user("owner-scope", "owner-scope test", "owner-scope test");
@@ -2484,8 +2487,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_resolves_host_credentials_from_owner_scope_context() {
-        use crate::secrets::{CredentialLocation, CredentialMapping};
         use crate::tools::wasm::capabilities::HttpCapability;
+        use dasclaw_runtime::secrets::{CredentialLocation, CredentialMapping};
 
         let runtime = Arc::new(WasmToolRuntime::new(WasmRuntimeConfig::for_testing()).unwrap());
         let prepared = runtime
@@ -2533,9 +2536,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_host_credentials_missing_secret() {
-        use crate::secrets::{CredentialLocation, CredentialMapping};
         use crate::tools::wasm::capabilities::HttpCapability;
         use crate::tools::wasm::wrapper::resolve_host_credentials;
+        use dasclaw_runtime::secrets::{CredentialLocation, CredentialMapping};
 
         let store = test_secrets_store();
 
@@ -2564,11 +2567,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_host_credentials_skips_refresh_when_not_expired() {
-        use crate::secrets::{
-            CreateSecretParams, CredentialLocation, CredentialMapping, SecretsStore,
-        };
         use crate::tools::wasm::capabilities::HttpCapability;
         use crate::tools::wasm::wrapper::{OAuthRefreshConfig, resolve_host_credentials};
+        use dasclaw_runtime::secrets::{
+            CreateSecretParams, CredentialLocation, CredentialMapping, SecretsStore,
+        };
 
         let store = test_secrets_store();
 
@@ -2623,11 +2626,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_host_credentials_skips_refresh_no_config() {
-        use crate::secrets::{
-            CreateSecretParams, CredentialLocation, CredentialMapping, SecretsStore,
-        };
         use crate::tools::wasm::capabilities::HttpCapability;
         use crate::tools::wasm::wrapper::resolve_host_credentials;
+        use dasclaw_runtime::secrets::{
+            CreateSecretParams, CredentialLocation, CredentialMapping, SecretsStore,
+        };
 
         let store = test_secrets_store();
 
@@ -2666,11 +2669,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_host_credentials_skips_refresh_no_expires_at() {
-        use crate::secrets::{
-            CreateSecretParams, CredentialLocation, CredentialMapping, SecretsStore,
-        };
         use crate::tools::wasm::capabilities::HttpCapability;
         use crate::tools::wasm::wrapper::{OAuthRefreshConfig, resolve_host_credentials};
+        use dasclaw_runtime::secrets::{
+            CreateSecretParams, CredentialLocation, CredentialMapping, SecretsStore,
+        };
 
         let store = test_secrets_store();
 
@@ -2724,11 +2727,11 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_host_credentials_refreshes_via_proxy_without_direct_token_url_validation()
     {
-        use crate::secrets::{
-            CreateSecretParams, CredentialLocation, CredentialMapping, SecretsStore,
-        };
         use crate::tools::wasm::capabilities::HttpCapability;
         use crate::tools::wasm::wrapper::{OAuthRefreshConfig, resolve_host_credentials};
+        use dasclaw_runtime::secrets::{
+            CreateSecretParams, CredentialLocation, CredentialMapping, SecretsStore,
+        };
 
         let proxy = MockProxyServer::start().await;
         let store = test_secrets_store();
@@ -2834,11 +2837,11 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_host_credentials_skips_refresh_token_lookup_without_oauth_proxy_auth_token()
      {
-        use crate::secrets::{
-            CreateSecretParams, CredentialLocation, CredentialMapping, SecretsStore,
-        };
         use crate::tools::wasm::capabilities::HttpCapability;
         use crate::tools::wasm::wrapper::{OAuthRefreshConfig, resolve_host_credentials};
+        use dasclaw_runtime::secrets::{
+            CreateSecretParams, CredentialLocation, CredentialMapping, SecretsStore,
+        };
 
         let store = RecordingSecretsStore::new();
 
@@ -2901,11 +2904,11 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_host_credentials_skips_refresh_token_lookup_for_invalid_direct_token_url()
     {
-        use crate::secrets::{
-            CreateSecretParams, CredentialLocation, CredentialMapping, SecretsStore,
-        };
         use crate::tools::wasm::capabilities::HttpCapability;
         use crate::tools::wasm::wrapper::{OAuthRefreshConfig, resolve_host_credentials};
+        use dasclaw_runtime::secrets::{
+            CreateSecretParams, CredentialLocation, CredentialMapping, SecretsStore,
+        };
 
         let store = RecordingSecretsStore::new();
 
@@ -3139,9 +3142,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_host_credentials_fallback_to_default_user() {
-        use crate::secrets::{CredentialLocation, CredentialMapping, SecretsStore};
         use crate::tools::wasm::capabilities::HttpCapability;
         use crate::tools::wasm::wrapper::resolve_host_credentials;
+        use dasclaw_runtime::secrets::{CredentialLocation, CredentialMapping, SecretsStore};
 
         let store = test_secrets_store();
 
@@ -3149,7 +3152,10 @@ mod tests {
         store
             .create(
                 "default",
-                crate::secrets::CreateSecretParams::new("google_oauth_token", "global_token_value"),
+                dasclaw_runtime::secrets::CreateSecretParams::new(
+                    "google_oauth_token",
+                    "global_token_value",
+                ),
             )
             .await
             .expect("Failed to store global token"); // safety: test code only
@@ -3185,8 +3191,8 @@ mod tests {
     }
 
     fn test_capabilities_with_google_oauth() -> Capabilities {
-        use crate::secrets::{CredentialLocation, CredentialMapping};
         use crate::tools::wasm::capabilities::HttpCapability;
+        use dasclaw_runtime::secrets::{CredentialLocation, CredentialMapping};
 
         let mut creds = std::collections::HashMap::new();
         creds.insert(
@@ -3212,8 +3218,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_host_credentials_prefers_user_specific_over_default() {
-        use crate::secrets::SecretsStore;
         use crate::tools::wasm::wrapper::resolve_host_credentials;
+        use dasclaw_runtime::secrets::SecretsStore;
 
         let store = test_secrets_store();
 
@@ -3221,7 +3227,10 @@ mod tests {
         store
             .create(
                 "default",
-                crate::secrets::CreateSecretParams::new("google_oauth_token", "global_token"),
+                dasclaw_runtime::secrets::CreateSecretParams::new(
+                    "google_oauth_token",
+                    "global_token",
+                ),
             )
             .await
             .expect("Failed to store global token"); // safety: test code only
@@ -3230,7 +3239,7 @@ mod tests {
         store
             .create(
                 "user_123",
-                crate::secrets::CreateSecretParams::new(
+                dasclaw_runtime::secrets::CreateSecretParams::new(
                     "google_oauth_token",
                     "user_specific_token",
                 ),
@@ -3251,8 +3260,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_host_credentials_no_fallback_when_already_default() {
-        use crate::secrets::SecretsStore;
         use crate::tools::wasm::wrapper::resolve_host_credentials;
+        use dasclaw_runtime::secrets::SecretsStore;
 
         let store = test_secrets_store();
 
@@ -3260,7 +3269,10 @@ mod tests {
         store
             .create(
                 "default",
-                crate::secrets::CreateSecretParams::new("google_oauth_token", "default_token"),
+                dasclaw_runtime::secrets::CreateSecretParams::new(
+                    "google_oauth_token",
+                    "default_token",
+                ),
             )
             .await
             .expect("Failed to store default token"); // safety: test code only

@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 
-use crate::secrets::{CreateSecretParams, SecretsStore};
+use dasclaw_runtime::secrets::{CreateSecretParams, SecretsStore};
 
 // ── Built-in credentials ────────────────────────────────────────────────
 

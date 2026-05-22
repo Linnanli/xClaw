@@ -48,6 +48,6 @@ pub fn default_allowlist() -> Vec<String> {
 }
 
 /// Default credential mappings getter (re-export for convenience).
-pub fn default_credential_mappings() -> Vec<crate::secrets::CredentialMapping> {
+pub fn default_credential_mappings() -> Vec<dasclaw_runtime::secrets::CredentialMapping> {
     config::default_credential_mappings()
 }

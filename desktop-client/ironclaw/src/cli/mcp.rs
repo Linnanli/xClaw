@@ -10,13 +10,13 @@ use clap::{Args, Subcommand};
 
 use crate::config::Config;
 use crate::db::Database;
-use crate::secrets::SecretsStore;
 use crate::tools::mcp::{
     McpClient, McpProcessManager, McpServerConfig, McpSessionManager, OAuthConfig,
     auth::{authorize_mcp_server, is_authenticated},
     config::{self, EffectiveTransport, McpServersFile},
     factory::create_client_from_config,
 };
+use dasclaw_runtime::secrets::SecretsStore;
 
 /// Arguments for the `mcp add` subcommand.
 #[derive(Args, Debug, Clone)]

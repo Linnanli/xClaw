@@ -309,7 +309,7 @@ impl GatewayChannel {
     /// Inject the secrets store for admin secret provisioning.
     pub fn with_secrets_store(
         mut self,
-        store: Arc<dyn crate::secrets::SecretsStore + Send + Sync>,
+        store: Arc<dyn dasclaw_runtime::secrets::SecretsStore + Send + Sync>,
     ) -> Self {
         self.rebuild_state(|s| s.secrets_store = Some(store));
         self

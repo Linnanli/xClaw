@@ -139,8 +139,8 @@ pub fn hook_bundle_with_safety_and_permissions(
 /// Build a `HookBundle` with both `egress` and `secrets` slots wired in.
 ///
 /// - `egress` routes through [`IronclawEgressGate`](dasclaw_safety::egress_gate::IronclawEgressGate).
-/// - `secrets` routes through [`AgentSecrets`](crate::secrets::agent_provider::AgentSecrets)
-///   if the tool registry carries a [`SecretsStore`](crate::secrets::SecretsStore);
+/// - `secrets` routes through [`AgentSecrets`](dasclaw_runtime::secrets::agent_provider::AgentSecrets)
+///   if the tool registry carries a [`SecretsStore`](dasclaw_runtime::secrets::SecretsStore);
 ///   falls back to the noop provider when the registry has none.
 /// - `sandbox` / `approval` keep their `Noop` / `AutoApprove` defaults until
 ///   ADR-002 Phase 4 lands the real sandbox backends.
@@ -157,10 +157,9 @@ pub fn hook_bundle_with_safety_and_secrets(
 ) -> dasclaw_core::HookBundle {
     let mut bundle = hook_bundle_with_safety(safety, workspace_cap, permission_mode);
     if let Some(store) = tools.secrets_store() {
-        bundle.secrets = std::sync::Arc::new(crate::secrets::agent_provider::AgentSecrets::new(
-            store.clone(),
-            user_id,
-        ));
+        bundle.secrets = std::sync::Arc::new(
+            dasclaw_runtime::secrets::agent_provider::AgentSecrets::new(store.clone(), user_id),
+        );
     }
     bundle
 }
@@ -169,9 +168,11 @@ pub fn hook_bundle_with_safety_and_secrets(
 mod tests {
     use super::*;
     use crate::safety::SafetyLayer;
-    use crate::secrets::{CreateSecretParams, InMemorySecretsStore, SecretsCrypto, SecretsStore};
     use crate::tools::ToolRegistry;
     use crate::tools::wasm::SharedCredentialRegistry;
+    use dasclaw_runtime::secrets::{
+        CreateSecretParams, InMemorySecretsStore, SecretsCrypto, SecretsStore,
+    };
     use dasclaw_safety::SafetyConfig;
     use secrecy::SecretString as SecrecySecretString;
     use std::sync::Arc;

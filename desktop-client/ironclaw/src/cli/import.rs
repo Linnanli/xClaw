@@ -89,7 +89,7 @@ async fn run_import_openclaw(
     // Initialize secrets store with master key from env or keychain
     let secrets_crypto = if let Ok(master_key_hex) = std::env::var("SECRETS_MASTER_KEY") {
         Arc::new(
-            crate::secrets::SecretsCrypto::new(SecretString::from(master_key_hex))
+            dasclaw_runtime::secrets::SecretsCrypto::new(SecretString::from(master_key_hex))
                 .map_err(|e| anyhow::anyhow!("Failed to initialize secrets: {}", e))?,
         )
     } else {
@@ -97,7 +97,7 @@ async fn run_import_openclaw(
             Ok(key_bytes) => {
                 let key_hex: String = key_bytes.iter().map(|b| format!("{:02x}", b)).collect();
                 Arc::new(
-                    crate::secrets::SecretsCrypto::new(SecretString::from(key_hex))
+                    dasclaw_runtime::secrets::SecretsCrypto::new(SecretString::from(key_hex))
                         .map_err(|e| anyhow::anyhow!("Failed to initialize secrets: {}", e))?,
                 )
             }
@@ -109,8 +109,8 @@ async fn run_import_openclaw(
         }
     };
 
-    let secrets: Arc<dyn crate::secrets::SecretsStore> = Arc::new(
-        crate::secrets::InMemorySecretsStore::new(secrets_crypto.clone()),
+    let secrets: Arc<dyn dasclaw_runtime::secrets::SecretsStore> = Arc::new(
+        dasclaw_runtime::secrets::InMemorySecretsStore::new(secrets_crypto.clone()),
     );
 
     // Initialize workspace

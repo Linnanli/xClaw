@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use crate::db::Database;
 use crate::import::{ImportError, ImportOptions, ImportStats};
-use crate::secrets::SecretsStore;
 use crate::workspace::Workspace;
+use dasclaw_runtime::secrets::SecretsStore;
 
 pub use reader::OpenClawReader;
 
@@ -117,7 +117,7 @@ impl OpenClawImporter {
             for (name, value) in creds {
                 use secrecy::ExposeSecret;
                 let exposed = value.expose_secret().to_string();
-                let params = crate::secrets::CreateSecretParams::new(name, exposed);
+                let params = dasclaw_runtime::secrets::CreateSecretParams::new(name, exposed);
                 if let Err(e) = self.secrets.create(&self.opts.user_id, params).await {
                     tracing::warn!("Failed to import credential: {}", e);
                 } else {

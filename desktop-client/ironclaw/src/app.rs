@@ -16,7 +16,6 @@ use crate::db::Database;
 use crate::extensions::ExtensionManager;
 use crate::llm::{LlmProvider, RecordingLlm, SessionManager};
 use crate::safety::SafetyLayer;
-use crate::secrets::SecretsStore;
 use crate::skills::SkillRegistry;
 use crate::skills::catalog::SkillCatalog;
 use crate::tools::ToolRegistry;
@@ -27,6 +26,7 @@ use crate::tools::wasm::WasmToolRuntime;
 use crate::workspace::{EmbeddingCacheConfig, EmbeddingProvider, Workspace};
 use dasclaw_hooks::HookRegistry;
 use dasclaw_runtime::context::ContextManager;
+use dasclaw_runtime::secrets::SecretsStore;
 
 /// Fully initialized application components, ready for channel wiring
 /// and agent construction.
@@ -219,7 +219,7 @@ impl AppBuilder {
             }
         };
 
-        let crypto = match crate::secrets::SecretsCrypto::new(master_key.clone()) {
+        let crypto = match dasclaw_runtime::secrets::SecretsCrypto::new(master_key.clone()) {
             Ok(c) => Arc::new(c),
             Err(e) => {
                 tracing::warn!("Failed to initialize secrets crypto: {}", e);
@@ -885,18 +885,18 @@ impl AppBuilder {
 
         // Create extension manager. Use ephemeral in-memory secrets if no
         // persistent store is configured (listing/install/activate still work).
-        let ext_secrets: Arc<dyn crate::secrets::SecretsStore + Send + Sync> = if let Some(ref s) =
-            self.secrets_store
-        {
-            Arc::clone(s)
-        } else {
-            use crate::secrets::{InMemorySecretsStore, SecretsCrypto};
-            let ephemeral_key =
-                secrecy::SecretString::from(crate::secrets::keychain::generate_master_key_hex());
-            let crypto = Arc::new(SecretsCrypto::new(ephemeral_key).expect("ephemeral crypto"));
-            tracing::debug!("Using ephemeral in-memory secrets store for extension manager");
-            Arc::new(InMemorySecretsStore::new(crypto))
-        };
+        let ext_secrets: Arc<dyn dasclaw_runtime::secrets::SecretsStore + Send + Sync> =
+            if let Some(ref s) = self.secrets_store {
+                Arc::clone(s)
+            } else {
+                use dasclaw_runtime::secrets::{InMemorySecretsStore, SecretsCrypto};
+                let ephemeral_key = secrecy::SecretString::from(
+                    crate::secrets::keychain::generate_master_key_hex(),
+                );
+                let crypto = Arc::new(SecretsCrypto::new(ephemeral_key).expect("ephemeral crypto"));
+                tracing::debug!("Using ephemeral in-memory secrets store for extension manager");
+                Arc::new(InMemorySecretsStore::new(crypto))
+            };
         let extension_manager = {
             let manager = Arc::new(ExtensionManager::new(
                 Arc::clone(&mcp_session_manager),

@@ -19,6 +19,7 @@ mod tests {
 
     use dasclaw_hooks::HookRegistry;
     use dasclaw_runtime::context::{ContextManager, JobContext};
+    use dasclaw_runtime::secrets::{InMemorySecretsStore, SecretsCrypto, SecretsStore};
     use ironclaw::agent::routine::{
         NotifyConfig, Routine, RoutineAction, RoutineGuardrails, RoutineRun, RunStatus, Trigger,
     };
@@ -30,7 +31,6 @@ mod tests {
     use ironclaw::extensions::ExtensionManager;
     use ironclaw::llm::LlmProvider;
     use ironclaw::safety::SafetyLayer;
-    use ironclaw::secrets::{InMemorySecretsStore, SecretsCrypto, SecretsStore};
     use ironclaw::tools::builtin::routine::RoutineUpdateTool;
     use ironclaw::tools::mcp::{McpProcessManager, McpSessionManager};
     use ironclaw::tools::{ApprovalRequirement, Tool, ToolError, ToolOutput, ToolRegistry};

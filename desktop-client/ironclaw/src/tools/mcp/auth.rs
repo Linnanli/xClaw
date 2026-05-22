@@ -62,8 +62,8 @@ pub use dasclaw_mcp::auth::{
 };
 
 use crate::cli::oauth_defaults::{self, OAUTH_CALLBACK_PORT};
-use crate::secrets::SecretsStore;
 use crate::tools::mcp::config::McpServerConfig;
+use dasclaw_runtime::secrets::SecretsStore;
 
 /// Perform the OAuth 2.1 authorization flow for an MCP server (desktop GUI).
 ///
@@ -290,7 +290,10 @@ pub async fn refresh_access_token(
                 scope: None,
             });
         }
-        Err(crate::secrets::SecretError::NotFound(_) | crate::secrets::SecretError::Expired) => {}
+        Err(
+            dasclaw_runtime::secrets::SecretError::NotFound(_)
+            | dasclaw_runtime::secrets::SecretError::Expired,
+        ) => {}
         Err(e) => return Err(AuthError::Secrets(e.to_string())),
     }
 
@@ -301,12 +304,13 @@ pub async fn refresh_access_token(
         .await
     {
         Ok(token) => token,
-        Err(crate::secrets::SecretError::NotFound(_) | crate::secrets::SecretError::Expired) => {
-            secrets
-                .get_decrypted(user_id, &server_config.legacy_refresh_token_secret_name())
-                .await
-                .map_err(|e| AuthError::RefreshFailed(format!("No refresh token: {}", e)))?
-        }
+        Err(
+            dasclaw_runtime::secrets::SecretError::NotFound(_)
+            | dasclaw_runtime::secrets::SecretError::Expired,
+        ) => secrets
+            .get_decrypted(user_id, &server_config.legacy_refresh_token_secret_name())
+            .await
+            .map_err(|e| AuthError::RefreshFailed(format!("No refresh token: {}", e)))?,
         Err(e) => {
             return Err(AuthError::RefreshFailed(format!(
                 "Failed to read refresh token: {e}"
@@ -381,8 +385,8 @@ mod tests {
     use tokio::sync::Mutex;
 
     use crate::config::helpers::lock_env;
-    use crate::secrets::{CreateSecretParams, InMemorySecretsStore, SecretsCrypto};
     use crate::testing::credentials::TEST_GATEWAY_CRYPTO_KEY;
+    use dasclaw_runtime::secrets::{CreateSecretParams, InMemorySecretsStore, SecretsCrypto};
 
     #[derive(Clone, Debug, Default)]
     struct RecordedRefreshRequest {

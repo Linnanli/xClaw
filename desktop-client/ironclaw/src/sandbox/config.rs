@@ -227,8 +227,8 @@ pub fn default_allowlist() -> Vec<String> {
 }
 
 /// Default credential mappings for common APIs.
-pub fn default_credential_mappings() -> Vec<crate::secrets::CredentialMapping> {
-    use crate::secrets::CredentialMapping;
+pub fn default_credential_mappings() -> Vec<dasclaw_runtime::secrets::CredentialMapping> {
+    use dasclaw_runtime::secrets::CredentialMapping;
 
     vec![
         CredentialMapping::bearer("OPENAI_API_KEY", "api.openai.com"),

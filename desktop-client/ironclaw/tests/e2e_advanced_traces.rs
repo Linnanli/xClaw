@@ -658,7 +658,7 @@ mod advanced {
             .secrets()
             .create(
                 TEST_USER_ID,
-                ironclaw::secrets::CreateSecretParams::new(secret_name, "mock-access-token")
+                dasclaw_runtime::secrets::CreateSecretParams::new(secret_name, "mock-access-token")
                     .with_provider("mcp:mock-notion".to_string()),
             )
             .await

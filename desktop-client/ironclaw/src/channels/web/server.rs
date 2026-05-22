@@ -399,7 +399,7 @@ pub struct GatewayState {
     /// Snapshot of active (resolved) configuration for the frontend.
     pub active_config: ActiveConfigSnapshot,
     /// Secrets store for admin secret provisioning.
-    pub secrets_store: Option<Arc<dyn crate::secrets::SecretsStore + Send + Sync>>,
+    pub secrets_store: Option<Arc<dyn dasclaw_runtime::secrets::SecretsStore + Send + Sync>>,
     /// DB auth cache for invalidation on security-critical actions.
     pub db_auth: Option<Arc<crate::channels::web::auth::DbAuthenticator>>,
 }
@@ -1009,8 +1009,11 @@ async fn oauth_callback_handler(
         // Persist the client_id for flows that need it after the session ends
         // (for example DCR-based MCP refresh).
         if let Some(ref client_id_secret) = flow.client_id_secret_name {
-            let params = crate::secrets::CreateSecretParams::new(client_id_secret, &flow.client_id)
-                .with_provider(flow.provider.as_ref().cloned().unwrap_or_default());
+            let params = dasclaw_runtime::secrets::CreateSecretParams::new(
+                client_id_secret,
+                &flow.client_id,
+            )
+            .with_provider(flow.provider.as_ref().cloned().unwrap_or_default());
             flow.secrets
                 .create(&flow.user_id, params)
                 .await
@@ -1029,9 +1032,11 @@ async fn oauth_callback_handler(
             flow.client_secret_secret_name.as_ref(),
             flow.client_secret.as_deref(),
         ) {
-            let mut params =
-                crate::secrets::CreateSecretParams::new(client_secret_name, client_secret)
-                    .with_provider(flow.provider.as_ref().cloned().unwrap_or_default());
+            let mut params = dasclaw_runtime::secrets::CreateSecretParams::new(
+                client_secret_name,
+                client_secret,
+            )
+            .with_provider(flow.provider.as_ref().cloned().unwrap_or_default());
             if let Some(expires_at) = flow.client_secret_expires_at
                 && let Some(dt) =
                     chrono::DateTime::<chrono::Utc>::from_timestamp(expires_at as i64, 0)
@@ -3204,7 +3209,7 @@ mod tests {
     }
 
     fn fresh_pending_oauth_flow(
-        secrets: Arc<dyn crate::secrets::SecretsStore + Send + Sync>,
+        secrets: Arc<dyn dasclaw_runtime::secrets::SecretsStore + Send + Sync>,
         sse_manager: Option<Arc<SseManager>>,
         oauth_proxy_auth_token: Option<String>,
     ) -> crate::cli::oauth_defaults::PendingOAuthFlow {
@@ -3527,13 +3532,14 @@ mod tests {
         use tower::ServiceExt;
 
         // Build an ExtensionManager so the handler can look up flows
-        let secrets: Arc<dyn crate::secrets::SecretsStore + Send + Sync> =
-            Arc::new(crate::secrets::InMemorySecretsStore::new(Arc::new(
-                crate::secrets::SecretsCrypto::new(secrecy::SecretString::from(
+        let secrets: Arc<dyn dasclaw_runtime::secrets::SecretsStore + Send + Sync> = Arc::new(
+            dasclaw_runtime::secrets::InMemorySecretsStore::new(Arc::new(
+                dasclaw_runtime::secrets::SecretsCrypto::new(secrecy::SecretString::from(
                     TEST_GATEWAY_CRYPTO_KEY.to_string(),
                 ))
                 .expect("crypto"),
-            )));
+            )),
+        );
         let (ext_mgr, _wasm_tools_dir, _wasm_channels_dir) = test_ext_mgr(secrets);
 
         let state = test_gateway_state(Some(ext_mgr));
@@ -3561,13 +3567,14 @@ mod tests {
         use axum::body::Body;
         use tower::ServiceExt;
 
-        let secrets: Arc<dyn crate::secrets::SecretsStore + Send + Sync> =
-            Arc::new(crate::secrets::InMemorySecretsStore::new(Arc::new(
-                crate::secrets::SecretsCrypto::new(secrecy::SecretString::from(
+        let secrets: Arc<dyn dasclaw_runtime::secrets::SecretsStore + Send + Sync> = Arc::new(
+            dasclaw_runtime::secrets::InMemorySecretsStore::new(Arc::new(
+                dasclaw_runtime::secrets::SecretsCrypto::new(secrecy::SecretString::from(
                     TEST_GATEWAY_CRYPTO_KEY.to_string(),
                 ))
                 .expect("crypto"),
-            )));
+            )),
+        );
         let (ext_mgr, _wasm_tools_dir, _wasm_channels_dir) = test_ext_mgr(secrets.clone());
         let Some(created_at) = expired_flow_created_at() else {
             eprintln!("Skipping expired OAuth flow test: monotonic uptime below expiry window");
@@ -3631,13 +3638,14 @@ mod tests {
         use axum::body::Body;
         use tower::ServiceExt;
 
-        let secrets: Arc<dyn crate::secrets::SecretsStore + Send + Sync> =
-            Arc::new(crate::secrets::InMemorySecretsStore::new(Arc::new(
-                crate::secrets::SecretsCrypto::new(secrecy::SecretString::from(
+        let secrets: Arc<dyn dasclaw_runtime::secrets::SecretsStore + Send + Sync> = Arc::new(
+            dasclaw_runtime::secrets::InMemorySecretsStore::new(Arc::new(
+                dasclaw_runtime::secrets::SecretsCrypto::new(secrecy::SecretString::from(
                     TEST_GATEWAY_CRYPTO_KEY.to_string(),
                 ))
                 .expect("crypto"),
-            )));
+            )),
+        );
         let (ext_mgr, _wasm_tools_dir, _wasm_channels_dir) = test_ext_mgr(secrets.clone());
 
         let sse_mgr = Arc::new(SseManager::new());
@@ -3734,13 +3742,14 @@ mod tests {
         use axum::body::Body;
         use tower::ServiceExt;
 
-        let secrets: Arc<dyn crate::secrets::SecretsStore + Send + Sync> =
-            Arc::new(crate::secrets::InMemorySecretsStore::new(Arc::new(
-                crate::secrets::SecretsCrypto::new(secrecy::SecretString::from(
+        let secrets: Arc<dyn dasclaw_runtime::secrets::SecretsStore + Send + Sync> = Arc::new(
+            dasclaw_runtime::secrets::InMemorySecretsStore::new(Arc::new(
+                dasclaw_runtime::secrets::SecretsCrypto::new(secrecy::SecretString::from(
                     TEST_GATEWAY_CRYPTO_KEY.to_string(),
                 ))
                 .expect("crypto"),
-            )));
+            )),
+        );
         let (ext_mgr, _wasm_tools_dir, _wasm_channels_dir) = test_ext_mgr(secrets.clone());
 
         // Insert a flow keyed by raw nonce "test_nonce" (without instance prefix).
@@ -3827,13 +3836,14 @@ mod tests {
         use axum::body::Body;
         use tower::ServiceExt;
 
-        let secrets: Arc<dyn crate::secrets::SecretsStore + Send + Sync> =
-            Arc::new(crate::secrets::InMemorySecretsStore::new(Arc::new(
-                crate::secrets::SecretsCrypto::new(secrecy::SecretString::from(
+        let secrets: Arc<dyn dasclaw_runtime::secrets::SecretsStore + Send + Sync> = Arc::new(
+            dasclaw_runtime::secrets::InMemorySecretsStore::new(Arc::new(
+                dasclaw_runtime::secrets::SecretsCrypto::new(secrecy::SecretString::from(
                     TEST_GATEWAY_CRYPTO_KEY.to_string(),
                 ))
                 .expect("crypto"),
-            )));
+            )),
+        );
         let (ext_mgr, _wasm_tools_dir, _wasm_channels_dir) = test_ext_mgr(secrets.clone());
 
         let Some(created_at) = expired_flow_created_at() else {
@@ -3908,13 +3918,14 @@ mod tests {
         use axum::body::Body;
         use tower::ServiceExt;
 
-        let secrets: Arc<dyn crate::secrets::SecretsStore + Send + Sync> =
-            Arc::new(crate::secrets::InMemorySecretsStore::new(Arc::new(
-                crate::secrets::SecretsCrypto::new(secrecy::SecretString::from(
+        let secrets: Arc<dyn dasclaw_runtime::secrets::SecretsStore + Send + Sync> = Arc::new(
+            dasclaw_runtime::secrets::InMemorySecretsStore::new(Arc::new(
+                dasclaw_runtime::secrets::SecretsCrypto::new(secrecy::SecretString::from(
                     TEST_GATEWAY_CRYPTO_KEY.to_string(),
                 ))
                 .expect("crypto"),
-            )));
+            )),
+        );
         let (ext_mgr, _wasm_tools_dir, _wasm_channels_dir) = test_ext_mgr(secrets.clone());
 
         let Some(created_at) = expired_flow_created_at() else {
@@ -4194,17 +4205,19 @@ mod tests {
             .with_state(state)
     }
 
-    fn test_secrets_store() -> Arc<dyn crate::secrets::SecretsStore + Send + Sync> {
-        Arc::new(crate::secrets::InMemorySecretsStore::new(Arc::new(
-            crate::secrets::SecretsCrypto::new(secrecy::SecretString::from(
-                "test-key-at-least-32-chars-long!!".to_string(),
-            ))
-            .expect("crypto"),
-        )))
+    fn test_secrets_store() -> Arc<dyn dasclaw_runtime::secrets::SecretsStore + Send + Sync> {
+        Arc::new(dasclaw_runtime::secrets::InMemorySecretsStore::new(
+            Arc::new(
+                dasclaw_runtime::secrets::SecretsCrypto::new(secrecy::SecretString::from(
+                    "test-key-at-least-32-chars-long!!".to_string(),
+                ))
+                .expect("crypto"),
+            ),
+        ))
     }
 
     fn test_ext_mgr(
-        secrets: Arc<dyn crate::secrets::SecretsStore + Send + Sync>,
+        secrets: Arc<dyn dasclaw_runtime::secrets::SecretsStore + Send + Sync>,
     ) -> (Arc<ExtensionManager>, tempfile::TempDir, tempfile::TempDir) {
         let tool_registry = Arc::new(ToolRegistry::new());
         let mcp_sm = Arc::new(crate::tools::mcp::session::McpSessionManager::new());
@@ -4270,7 +4283,7 @@ mod tests {
         secrets
             .create(
                 "test",
-                crate::secrets::CreateSecretParams::new(
+                dasclaw_runtime::secrets::CreateSecretParams::new(
                     format!("relay:{}:oauth_state", DEFAULT_RELAY_NAME),
                     "correct-nonce-value",
                 ),
@@ -4315,7 +4328,7 @@ mod tests {
         secrets
             .create(
                 "test",
-                crate::secrets::CreateSecretParams::new(
+                dasclaw_runtime::secrets::CreateSecretParams::new(
                     format!("relay:{}:oauth_state", DEFAULT_RELAY_NAME),
                     nonce,
                 ),

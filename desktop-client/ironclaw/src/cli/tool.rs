@@ -11,8 +11,8 @@ use clap::Subcommand;
 use tokio::fs;
 
 use crate::bootstrap::dasclaw_base_dir;
-use crate::secrets::{CreateSecretParams, SecretsStore};
 use crate::tools::wasm::{CapabilitiesFile, compute_binary_hash};
+use dasclaw_runtime::secrets::{CreateSecretParams, SecretsStore};
 
 /// Default tools directory.
 fn default_tools_dir() -> PathBuf {
@@ -1287,8 +1287,8 @@ async fn setup_tool(name: String, dir: Option<PathBuf>, user_id: String) -> anyh
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::secrets::{CreateSecretParams, SecretsStore};
     use crate::testing::credentials::test_secrets_store;
+    use dasclaw_runtime::secrets::{CreateSecretParams, SecretsStore};
 
     #[test]
     fn test_format_size() {

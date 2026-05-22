@@ -32,11 +32,11 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::secrets::{CredentialLocation, CredentialMapping};
 use crate::tools::wasm::{
     Capabilities, EndpointPattern, HttpCapability, RateLimitConfig, SecretsCapability,
     ToolInvokeCapability, WebhookCapability, WorkspaceCapability,
 };
+use dasclaw_runtime::secrets::{CredentialLocation, CredentialMapping};
 
 /// Root schema for a capabilities JSON file.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

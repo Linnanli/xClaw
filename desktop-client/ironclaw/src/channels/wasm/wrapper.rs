@@ -54,12 +54,12 @@ use crate::channels::{Channel, IncomingMessage, MessageStream, OutgoingResponse,
 use crate::error::ChannelError;
 use crate::pairing::PairingStore;
 use crate::safety::LeakDetector;
-use crate::secrets::SecretsStore;
 use crate::tools::wasm::LogLevel;
 use crate::tools::wasm::WasmResourceLimiter;
 use crate::tools::wasm::credential_injector::{
     InjectedCredentials, host_matches_pattern, inject_credential,
 };
+use dasclaw_runtime::secrets::SecretsStore;
 
 const WEBSOCKET_EVENT_QUEUE_RELATIVE_PATH: &str = "state/gateway_event_queue";
 const WEBSOCKET_EVENT_PROCESSING_QUEUE_RELATIVE_PATH: &str = "state/gateway_event_queue_processing";
@@ -4035,7 +4035,7 @@ async fn resolve_channel_host_credentials(
         // Skip UrlPath credentials; they're handled by placeholder substitution
         if matches!(
             mapping.location,
-            crate::secrets::CredentialLocation::UrlPath { .. }
+            dasclaw_runtime::secrets::CredentialLocation::UrlPath { .. }
         ) {
             continue;
         }
@@ -4214,9 +4214,9 @@ mod tests {
         let mut http = HttpCapability::new(vec![EndpointPattern::host("gateway.discord.gg")]);
         http.credentials.insert(
             "discord_bot_token".to_string(),
-            crate::secrets::CredentialMapping {
+            dasclaw_runtime::secrets::CredentialMapping {
                 secret_name: "discord_bot_token".to_string(),
-                location: crate::secrets::CredentialLocation::Header {
+                location: dasclaw_runtime::secrets::CredentialLocation::Header {
                     name: "Authorization".to_string(),
                     prefix: Some("Bot ".to_string()),
                 },

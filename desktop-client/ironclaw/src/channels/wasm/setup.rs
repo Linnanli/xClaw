@@ -15,7 +15,7 @@ use crate::config::Config;
 use crate::db::Database;
 use crate::extensions::ExtensionManager;
 use crate::pairing::PairingStore;
-use crate::secrets::SecretsStore;
+use dasclaw_runtime::secrets::SecretsStore;
 
 /// Result of WASM channel setup.
 pub struct WasmChannelSetup {

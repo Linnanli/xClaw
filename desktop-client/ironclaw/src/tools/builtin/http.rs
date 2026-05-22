@@ -10,9 +10,9 @@ use futures::StreamExt;
 use reqwest::Client;
 
 use crate::safety::LeakDetector;
-use crate::secrets::SecretsStore;
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolError, ToolOutput, require_str};
 use crate::tools::wasm::{InjectedCredentials, SharedCredentialRegistry, inject_credential};
+use dasclaw_runtime::secrets::SecretsStore;
 
 #[cfg(feature = "html-to-markdown")]
 use crate::tools::builtin::convert_html_to_markdown;
@@ -549,7 +549,8 @@ impl Tool for HttpTool {
             self.secrets_store.as_ref(),
         ) {
             let cred_host = parsed_url.host_str().unwrap_or("");
-            let matched: Vec<crate::secrets::CredentialMapping> = registry.find_for_host(cred_host);
+            let matched: Vec<dasclaw_runtime::secrets::CredentialMapping> =
+                registry.find_for_host(cred_host);
             for mapping in &matched {
                 match store
                     .get_decrypted(ctx.user_id(), &mapping.secret_name)
@@ -1242,8 +1243,8 @@ mod tests {
 
     #[test]
     fn test_host_with_credential_mapping_returns_unless_auto_approved() {
-        use crate::secrets::CredentialMapping;
         use crate::tools::wasm::SharedCredentialRegistry;
+        use dasclaw_runtime::secrets::CredentialMapping;
 
         let registry = Arc::new(SharedCredentialRegistry::new());
         registry.add_mappings(vec![CredentialMapping::bearer(
@@ -1424,8 +1425,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn requires_approval_multi_thread_no_panic() {
-        use crate::secrets::CredentialMapping;
         use crate::tools::wasm::SharedCredentialRegistry;
+        use dasclaw_runtime::secrets::CredentialMapping;
 
         // Test with credential registry (uses std::sync::RwLock - should be safe)
         let registry = Arc::new(SharedCredentialRegistry::new());

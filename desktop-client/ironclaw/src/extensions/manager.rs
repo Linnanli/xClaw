@@ -23,7 +23,6 @@ use crate::extensions::{
     UpgradeOutcome, UpgradeResult, VerificationChallenge,
 };
 use crate::pairing::PairingStore;
-use crate::secrets::{CreateSecretParams, SecretsStore};
 use crate::tools::ToolRegistry;
 use crate::tools::mcp::McpClient;
 use crate::tools::mcp::auth::{
@@ -34,6 +33,7 @@ use crate::tools::mcp::config::McpServerConfig;
 use crate::tools::mcp::session::McpSessionManager;
 use crate::tools::wasm::{WasmToolLoader, WasmToolRuntime, discover_tools};
 use dasclaw_hooks::HookRegistry;
+use dasclaw_runtime::secrets::{CreateSecretParams, SecretsStore};
 
 /// Pending OAuth authorization state.
 struct PendingAuth {
@@ -5273,7 +5273,7 @@ impl ExtensionManager {
                     }
                     token
                 }
-                Err(crate::secrets::SecretError::NotFound(_)) => {
+                Err(dasclaw_runtime::secrets::SecretError::NotFound(_)) => {
                     return Err(ExtensionError::ValidationFailed(
                         "Telegram bot token is required before owner verification".to_string(),
                     ));
@@ -6377,8 +6377,8 @@ mod tests {
         VerificationChallenge,
     };
     use crate::pairing::PairingStore;
-    use crate::secrets::CreateSecretParams;
     use crate::tools::mcp::McpServerConfig;
+    use dasclaw_runtime::secrets::CreateSecretParams;
 
     fn require(condition: bool, message: impl Into<String>) -> Result<(), String> {
         if condition {
@@ -6646,16 +6646,16 @@ mod tests {
         channels_dir: std::path::PathBuf,
         store: Option<Arc<dyn crate::db::Database>>,
     ) -> crate::extensions::manager::ExtensionManager {
-        use crate::secrets::{InMemorySecretsStore, SecretsCrypto};
         use crate::tools::mcp::process::McpProcessManager;
         use crate::tools::mcp::session::McpSessionManager;
+        use dasclaw_runtime::secrets::{InMemorySecretsStore, SecretsCrypto};
 
         std::fs::create_dir_all(&tools_dir).ok();
         std::fs::create_dir_all(&channels_dir).ok();
 
         let key = secrecy::SecretString::from(crate::secrets::keychain::generate_master_key_hex());
         let crypto = Arc::new(SecretsCrypto::new(key).expect("crypto"));
-        let secrets: Arc<dyn crate::secrets::SecretsStore + Send + Sync> =
+        let secrets: Arc<dyn dasclaw_runtime::secrets::SecretsStore + Send + Sync> =
             Arc::new(InMemorySecretsStore::new(crypto));
         let tools = Arc::new(crate::tools::ToolRegistry::new());
         let mcp = Arc::new(McpSessionManager::new());
@@ -7045,11 +7045,11 @@ mod tests {
         tools_dir: std::path::PathBuf,
         channels_dir: std::path::PathBuf,
     ) -> ExtensionManager {
-        use crate::secrets::{InMemorySecretsStore, SecretsCrypto};
         use crate::testing::credentials::TEST_CRYPTO_KEY;
         use crate::tools::ToolRegistry;
         use crate::tools::mcp::process::McpProcessManager;
         use crate::tools::mcp::session::McpSessionManager;
+        use dasclaw_runtime::secrets::{InMemorySecretsStore, SecretsCrypto};
 
         std::fs::create_dir_all(&tools_dir).ok();
         std::fs::create_dir_all(&channels_dir).ok();
@@ -7198,11 +7198,11 @@ mod tests {
 
         let (db, _db_tmp) = crate::testing::test_db().await;
         let manager = {
-            use crate::secrets::{InMemorySecretsStore, SecretsCrypto};
             use crate::testing::credentials::TEST_CRYPTO_KEY;
             use crate::tools::ToolRegistry;
             use crate::tools::mcp::process::McpProcessManager;
             use crate::tools::mcp::session::McpSessionManager;
+            use dasclaw_runtime::secrets::{InMemorySecretsStore, SecretsCrypto};
 
             let master_key = secrecy::SecretString::from(TEST_CRYPTO_KEY.to_string());
             let crypto = Arc::new(
@@ -7460,11 +7460,11 @@ mod tests {
         std::fs::create_dir_all(&tools_dir).ok();
         std::fs::create_dir_all(&channels_dir).ok();
 
-        use crate::secrets::{InMemorySecretsStore, SecretsCrypto};
         use crate::testing::credentials::TEST_CRYPTO_KEY;
         use crate::tools::ToolRegistry;
         use crate::tools::mcp::process::McpProcessManager;
         use crate::tools::mcp::session::McpSessionManager;
+        use dasclaw_runtime::secrets::{InMemorySecretsStore, SecretsCrypto};
 
         let master_key = secrecy::SecretString::from(TEST_CRYPTO_KEY.to_string());
         let crypto = Arc::new(
@@ -8410,13 +8410,13 @@ mod tests {
 
     /// Build a minimal ExtensionManager with a custom tunnel_url.
     fn make_manager_with_tunnel(tunnel_url: Option<String>) -> ExtensionManager {
-        use crate::secrets::{InMemorySecretsStore, SecretsCrypto};
         use crate::tools::mcp::process::McpProcessManager;
         use crate::tools::mcp::session::McpSessionManager;
+        use dasclaw_runtime::secrets::{InMemorySecretsStore, SecretsCrypto};
 
         let key = secrecy::SecretString::from(crate::secrets::keychain::generate_master_key_hex());
         let crypto = Arc::new(SecretsCrypto::new(key).expect("crypto"));
-        let secrets: Arc<dyn crate::secrets::SecretsStore + Send + Sync> =
+        let secrets: Arc<dyn dasclaw_runtime::secrets::SecretsStore + Send + Sync> =
             Arc::new(InMemorySecretsStore::new(crypto));
         let tools = Arc::new(crate::tools::ToolRegistry::new());
         let mcp = Arc::new(McpSessionManager::new());
@@ -8697,7 +8697,7 @@ mod tests {
         mgr.secrets
             .create(
                 "test",
-                crate::secrets::CreateSecretParams::new("SECRET_A", "value-a"),
+                dasclaw_runtime::secrets::CreateSecretParams::new("SECRET_A", "value-a"),
             )
             .await
             .expect("store SECRET_A");
@@ -9106,7 +9106,7 @@ mod tests {
         mgr.secrets
             .create(
                 "test",
-                crate::secrets::CreateSecretParams::new("google_oauth_token", "token")
+                dasclaw_runtime::secrets::CreateSecretParams::new("google_oauth_token", "token")
                     .with_provider("google-docs"),
             )
             .await
@@ -9114,7 +9114,7 @@ mod tests {
         mgr.secrets
             .create(
                 "test",
-                crate::secrets::CreateSecretParams::new(
+                dasclaw_runtime::secrets::CreateSecretParams::new(
                     "google_oauth_token_scopes",
                     "https://www.googleapis.com/auth/documents",
                 )
@@ -9290,15 +9290,18 @@ mod tests {
         mgr.secrets
             .create(
                 "test",
-                crate::secrets::CreateSecretParams::new("google_oauth_token", "managed-token")
-                    .with_provider("google-docs"),
+                dasclaw_runtime::secrets::CreateSecretParams::new(
+                    "google_oauth_token",
+                    "managed-token",
+                )
+                .with_provider("google-docs"),
             )
             .await
             .map_err(|err| format!("store token: {err}"))?;
         mgr.secrets
             .create(
                 "test",
-                crate::secrets::CreateSecretParams::new(
+                dasclaw_runtime::secrets::CreateSecretParams::new(
                     "google_oauth_token_scopes",
                     "https://www.googleapis.com/auth/documents",
                 )

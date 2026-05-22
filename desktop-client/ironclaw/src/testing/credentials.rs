@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use secrecy::SecretString;
 
-use crate::secrets::{InMemorySecretsStore, SecretsCrypto};
+use dasclaw_runtime::secrets::{InMemorySecretsStore, SecretsCrypto};
 
 // ── Encryption keys ──────────────────────────────────────────────────────
 

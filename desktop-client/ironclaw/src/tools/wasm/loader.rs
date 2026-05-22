@@ -39,12 +39,12 @@ use std::sync::Arc;
 
 use tokio::fs;
 
-use crate::secrets::SecretsStore;
 use crate::tools::registry::{ToolRegistry, WasmRegistrationError, WasmToolRegistration};
 use crate::tools::wasm::capabilities_schema::CapabilitiesFile;
 use crate::tools::wasm::{
     Capabilities, OAuthRefreshConfig, WasmError, WasmStorageError, WasmToolRuntime, WasmToolStore,
 };
+use dasclaw_runtime::secrets::SecretsStore;
 
 /// Error during WASM tool loading.
 #[derive(Debug, thiserror::Error)]
