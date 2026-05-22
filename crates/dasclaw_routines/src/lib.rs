@@ -1,24 +1,14 @@
 //! Routine orchestration (fork ironclaw 0.24 routines module promotion).
 //!
-//! W1 skeleton — trait surface only, no impl.
-//! See `docs/plans/architecture-refactor/31-target-architecture.md` §4 for design.
+//! F4.2.0: `routine.rs` 与 `RoutineError` 已从 `desktop-client/ironclaw`
+//! 按 verbatim 方式搬迁过来（ADR-129 §1.3 / ADR-152 §3 F4.2 / §11.8.9.3）。
+//!
+//! routines 子系统其余模块（`routine_engine` / `scheduler` / `cost_guard` /
+//! `heartbeat` / `job_monitor` / `self_repair`）仍引用大量尚未 crate 化的 desktop
+//! 模块（详见 `docs/plans/architecture-refactor/f42-preflight-dependency-assessment.md`），
+//! 留待后续切片。
 
-#![allow(dead_code)]
+pub mod error;
+pub mod routine;
 
-/// Placeholder error type. Replaced with module-specific errors in W2+.
-#[derive(Debug, thiserror::Error)]
-#[error("dasclaw_routines skeleton error: {0}")]
-pub struct SkeletonError(pub String);
-
-/// Primary entry trait (placeholder). Replaced with full surface in W2+.
-pub trait RoutineRunner {
-    /// Routine orchestration (fork ironclaw 0.24 routines module promotion).
-    fn execute(&self, routine_id: &str) -> Result<(), SkeletonError>;
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn skeleton_compiles() { /* W1 placeholder */
-    }
-}
+pub use error::RoutineError;

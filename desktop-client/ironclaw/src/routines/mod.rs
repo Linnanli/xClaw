@@ -25,7 +25,9 @@
 pub mod cost_guard;
 pub mod heartbeat;
 pub mod job_monitor;
-pub mod routine;
+/// F4.2.0 起 `routine` 模块物理位于 `dasclaw_routines::routine`，
+/// 通过 re-export 保留 `crate::routines::routine` 旧路径（ADR-129 §1.3 / ADR-152 §3 F4.2）。
+pub use dasclaw_routines::routine;
 pub mod routine_engine;
 pub(crate) mod scheduler;
 pub mod self_repair;
