@@ -43,6 +43,7 @@ ignore = [
     "RUSTSEC-2026-0095",
     "RUSTSEC-2026-0096",
     "RUSTSEC-2026-0104",
+    "RUSTSEC-2026-0149",  # wasmtime-wasi GHSA-2r75-cxrj-cmph (path_open TRUNCATE bypasses FilePerms::WRITE)
 
     # rsa crate Marvin Attack timing sidechannel (RUSTSEC-2023-0071) — pulled
     # in by jsonwebtoken 10.x's `rust_crypto` backend. ironclaw_auth ONLY uses
