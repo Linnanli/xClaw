@@ -10,9 +10,9 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
-use crate::channels::relay::client::{ChannelEvent, RelayClient};
-use crate::channels::{Channel, IncomingMessage, MessageStream, OutgoingResponse, StatusUpdate};
+use crate::channel::{Channel, IncomingMessage, MessageStream, OutgoingResponse, StatusUpdate};
 use crate::error::ChannelError;
+use crate::relay::client::{ChannelEvent, RelayClient};
 
 /// Default channel name for the Slack relay integration.
 pub const DEFAULT_RELAY_NAME: &str = "slack-relay";
@@ -121,7 +121,7 @@ impl RelayChannel {
         team_id: &str,
         method: &str,
         body: serde_json::Value,
-    ) -> Result<serde_json::Value, crate::channels::relay::client::RelayError> {
+    ) -> Result<serde_json::Value, crate::relay::client::RelayError> {
         self.client
             .proxy_provider(self.provider.as_str(), team_id, method, body)
             .await

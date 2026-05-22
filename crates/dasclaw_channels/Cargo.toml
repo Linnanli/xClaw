@@ -1,0 +1,28 @@
+[package]
+name = "dasclaw_channels"
+version = "0.0.0-w1"
+edition = "2024"
+description = "Channel core abstractions (fork ironclaw 0.24 channels module promotion)."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+futures = "0.3"
+hex = "0.4.3"
+hmac = "0.12"
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls-native-roots", "stream"] }
+secrecy = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2"
+thiserror = "1"
+tokio = { version = "1", features = ["sync", "macros", "rt"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }
