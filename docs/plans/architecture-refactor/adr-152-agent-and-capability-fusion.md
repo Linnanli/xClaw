@@ -319,75 +319,134 @@ F3.6 涉及 `crate::context/`，如果后续也遇到类似"trait 方法签名�
 
 结论：`manager.rs` 不能在 `JobContext` 形态保持现状的前提下 verbatim 搬到 `dasclaw_core`。同理 `state.rs`、`fallback.rs`。
 
-### 11.8.3 候选方向
+### 11.8.3 第一性问题：无头 agent 框架需不需要 ContextManager？
 
-#### 方向 X：trait 化路线
+在挑搬迁路线之前，先回答 ADR-152 的本来问题：**这块代码是不是"反向吸收"目标的一部分**。
 
-抽象 `dasclaw_core::context::JobContextCore` trait，含 manager 实际用到的最小方法集：
+`ContextManager`（1392 行 / 20 个公开方法）实际承担的能力：
+
+| 能力 | 方法 | 无头 agent 框架是否需要 |
+|---|---|---|
+| 多 job 并发上限 + TOCTOU 保护 | `create_job` / `insert_context` / `MaxJobsExceeded` | **需要**：任何同时跑多个任务的 runtime 都要并发上限 |
+| 按 user_id 分桶 | `active_jobs_for` / `all_jobs_for` / `parallel_blocking_count_for` | **需要**：多用户 / 多 tenant 隔离 |
+| 容器化任务 ID 预分配 | `register_sandbox_job` | **需要**：sandbox / Docker 标签必须在容器创建前拿到 UUID |
+| stuck job 检测 | `find_stuck_jobs` / `find_stuck_jobs_with_threshold` | **需要**：长跑 agent 必备的看门狗 |
+| summary 聚合 | `summary` / `summary_for` | **需要**：监控 / 健康检查 |
+| memory + context 双 RwLock 协调 | `update_context_and_get` / `update_memory` | **需要**：和 `Memory`（已搬入 dasclaw_core）天然配对 |
+
+结论：**ContextManager 不是 ironclaw 私货，它是任何无头 agent 框架都要重写一遍的基础设施**。和 §11.4 的 Workspace（强 GUI / 强 DB 绑定）性质不一样。Workspace 适合收口，ContextManager **不适合收口**。
+
+### 11.8.4 候选方向（修订）
+
+#### 方向 X：JobContext 字段拆分 + ContextManager 搬迁（推荐）
+
+关键观察：**ContextManager 没碰 `JobContext` 的桌面端字段**——它不读不写 `http_interceptor` / `feature_flags` / `tool_output_stash` / `tools` / `metadata`，只摸状态机骨架。"god-struct"的污染范围比看上去窄。
+
+拆分方案：
 
 ```rust
-pub trait JobContextCore: Send + Sync {
-    fn job_id(&self) -> Uuid;
-    fn state(&self) -> JobState;
-    fn started_at(&self) -> Option<DateTime<Utc>>;
-    fn transition_to(&mut self, target: JobState, reason: Option<String>)
-        -> Result<(), StateTransitionError>;
-    fn mark_stuck(&mut self, reason: impl Into<String>) -> Result<(), String>;
-    // ...（按 manager grep 结果完整收集）
+// dasclaw_core::context::state
+pub struct JobContextCore {
+    pub job_id: Uuid,
+    pub state: JobState,
+    pub started_at: Option<DateTime<Utc>>,
+    pub user_id: String,
+    pub title: String,
+    pub description: String,
+    pub timezone: Option<Tz>,
+    pub requester_id: Option<String>,
+    pub cost_usd: f64,
+    pub tokens_used: u64,
+    pub token_budget: Option<u64>,
+    // 状态机方法
+    pub fn transition_to(...) -> Result<...>;
+    pub fn mark_stuck(...) -> Result<...>;
+    pub fn elapsed() -> ...;
+    pub fn add_cost(...) / pub fn add_tokens(...);
+    pub fn budget_exceeded() -> bool;
 }
 ```
 
-- 桌面端 `JobContext` 保留所有"私货"字段，新增 `impl JobContextCore for JobContext`。
-- `ContextManager` 改写成 `ContextManager<C: JobContextCore>` 或 `dyn JobContextCore`。
-- 搬到 `dasclaw_core::context::manager`。
+桌面端：
+
+```rust
+// desktop-client/ironclaw/src/context/state.rs
+pub struct JobContext {
+    pub core: JobContextCore,                              // 共享骨架
+    pub http_interceptor: Option<Arc<dyn HttpInterceptor>>, // 桌面私货
+    pub feature_flags: SharedFeatureFlags,
+    pub tool_output_stash: Arc<RwLock<HashMap<String, String>>>,
+    pub tools: ...,
+    pub metadata: ...,
+}
+impl Deref for JobContext { type Target = JobContextCore; fn deref(&self) -> &JobContextCore { &self.core } }
+impl DerefMut for JobContext { fn deref_mut(&mut self) -> &mut JobContextCore { &mut self.core } }
+```
+
+ContextManager 搬到 `dasclaw_core::context::manager`，泛型化为 `ContextManager<C = JobContextCore>` 或直接持 `JobContextCore`，桌面端实例化时仍可由 worker 单独维护一个 `HashMap<Uuid, DesktopExtensions>`（持有 http_interceptor 等）副向表。
 
 **代价**：
-- 破 ADR-129 §1.3 verbatim port 红线（manager.rs 的签名要泛型化或加 `dyn`，不是纯 import rebase）。
-- 触面广：所有用 `ctx: &mut JobContext` 的下游代码（worker / tools / GUI）至少要走 trait method 入口；某些直接读 `ctx.metadata` / `ctx.tools` 的位置需要重新设计访问入口。
-- 测试需要重写 mock。
-- PR 体量大，无法切片化。
 
-#### 方向 Y：F3.6 收口路线（参照 §11.4 模式）
-
-**F3.6 收口于 slice 2/6。`manager.rs`、`state.rs`、`fallback.rs` 留在 ironclaw 作为参考组合。**
-
-- `dasclaw_core::context` 只持有 verbatim 共享零件：`memory`（已有）。
-- `dasclaw_core::error` 已有 `JobError`。
-- `dasclaw_runtime::job` 已有 `JobState` / `StateTransition` / `TokenBudgetExceeded`。
-- 其他宿主想做自己的 context manager，可以直接复用上述零件，自行组合（与 §11.6 的 Workspace 复用规约同形）。
-
-**代价**：
-- F3.6 umbrella issue（#632）从"搬 manager"重定义为"收口 + 文档"。
-- 不会出现 trait 抽象，所有现存调用方零改动。
+- 破 ADR-129 §1.3 verbatim port 红线。本草案为这一次破例提供依据（详 §11.8.5 的红线豁免条款）。
+- 触面：所有读 `ctx.http_interceptor` / `ctx.feature_flags` 等字段的位置要改为读 `desktop_extensions` 侧表，或保留 `JobContext` 直接字段（如上 struct 定义所示，桌面端 `JobContext` 仍持有这些字段）。
+- 测试需要少量调整（mock JobContextCore 或直接构造 JobContext）。
+- PR 体量中等，可切片化：拆 struct（slice A）→ 搬 manager（slice B）→ 搬 state.rs 剩余部分（slice C）→ 桌面端 mod.rs shim（slice D）。
 
 **收益**：
-- 不破 ADR-129 §1.3 红线。
-- 不引入大 PR。
-- 与 §11.4 决策的"小而专 cap" + "宿主自由组合"哲学一致。
 
-### 11.8.4 推荐与未决
+- 真正达成 ADR-152 §1 的"反向吸收"目标：把 agent runtime 必需的多 job 控制器交给所有宿主复用。
+- 不需要 trait 抽象（字段拆分比 trait 简单且零运行时开销）。
+- `JobContext::core` 暴露后，桌面端外的宿主可以 `let ctx = JobContextCore::new(...)` 直接用。
 
-本文档草案默认推荐 **方向 Y（收口）**，理由：
+#### 方向 X'：trait 化（不推荐）
 
-1. 与已经做出的 §11.4 决策同型，避免架构方向左右摇摆。
-2. 无任何代码红线代价。
-3. manager.rs 的真正可复用部分（Memory / JobError / JobState 三件套）已经全部抽到 `dasclaw_core` / `dasclaw_runtime`，剩下的 `ContextManager` 主要是 ironclaw 自己的并发控制器，其他宿主未必要这一种风格。
+抽 `JobContextCore` trait 而非拆 struct。比字段拆分复杂（要写 trait method 转发）、有动态分发开销、桌面端要写 `impl JobContextCore for JobContext`。除非有"同一 manager 同时管多种 context 类型"的需求（目前没有），否则不应选这条。
 
-但方向 X 也有其合理性（如果未来确定要建二号宿主且复用同款 ContextManager）。请评审决定。
+#### 方向 Y：F3.6 收口（不推荐）
 
-### 11.8.5 决策落定后的动作
+> ~~本草案 v1 推荐 Y。修订后撤回。~~
 
-若选 **Y**：
+参照 §11.4 模式，停在 slice 2。理由曾是"避免破 verbatim 红线"+"避免大重构"。
 
-- F3.6 收口 PR：在 §11.8.6 写明"F3.6 收口于 slice 2"；更新 umbrella #632 描述与状态。
-- ADR-152 §3 F3.6 行：标 "Scope clarified — see §11.8"。
+**为什么撤回**：
 
-若选 **X**：
+- §11.8.3 表格已证明 ContextManager 是无头 agent 必需基础设施，不是 ironclaw 私货。
+- §11.4 收口的 Workspace 是 GUI / DB 强绑定，与 ContextManager 性质不同。
+- 收口意味着任何想做无头 agent 的宿主都要重写 1392 行类似代码，违反 ADR-152 §1 的反向吸收目标。
 
-- 在 §11.8.6 写 trait 设计冻结结果（字段/方法清单 + dyn vs generic 选择）。
-- 新建一组 sub-issue：trait 设计 PR / 桌面端 impl PR / manager 搬迁 PR / state+fallback 搬迁 PR。
+### 11.8.5 ADR-129 §1.3 红线一次性豁免
 
-### 11.8.6 决策记录
+本草案为 F3.6 的字段拆分申请 **ADR-129 §1.3 verbatim port 红线一次性豁免**，条件：
+
+1. 仅限 `JobContext` 一个类型的字段拆分（不蔓延到其他 god-struct）。
+2. 拆分后 `JobContextCore` 字段集合与原 `JobContext` 中可被桌面端外宿主复用的字段**一一对应**（不增不减、不改语义）。
+3. 拆分 PR 必须附 before/after 字段映射表，由 reviewer 逐项核对。
+4. 桌面端 `JobContext` 在拆分后仍能通过 `Deref` 提供原字段访问语法，调用方代码改动量限制在 **机械化 `ctx.field` → `ctx.core.field` 之外不动业务逻辑**。
+5. 拆分 PR 自身不引入新功能、不改并发模型、不动状态机语义。
+
+### 11.8.6 决策落定后的动作
+
+若选 **X（字段拆分，推荐）**：
+
+- 在 §11.8.7 写下字段分配最终清单（哪些进 `JobContextCore` / 哪些留桌面端）。
+- 新建 sub-issue：
+  - slice A：`JobContextCore` struct 拆分（仅 state.rs 内部，桌面端零调用方改动）
+  - slice B：`ContextManager` + `manager.rs` 搬入 `dasclaw_core::context`
+  - slice C：`state.rs` 剩余共享部分搬入 `dasclaw_core::context`
+  - slice D：`fallback.rs` 评估（如有共享价值同搬，否则记入 §11.8.7 留 ironclaw）
+  - slice E：桌面端 `context/mod.rs` 改 re-export shim
+
+若选 **X'（trait 化，不推荐但允许）**：
+
+- 在 §11.8.7 冻结 trait method 清单 + dyn vs generic 选择。
+- 新建一组 sub-issue 拆 PR。
+
+若选 **Y（收口，不推荐）**：
+
+- §11.8.7 写明"F3.6 收口于 slice 2"+ 承认产品上放弃 ContextManager 复用。
+- 更新 umbrella #632；标 §3 F3.6 行 "Scope clarified — see §11.8"。
+
+### 11.8.7 决策记录
 
 > 待评审填写。
 
