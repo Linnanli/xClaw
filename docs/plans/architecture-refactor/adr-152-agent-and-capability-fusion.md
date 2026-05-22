@@ -579,6 +579,69 @@ impl DerefMut for JobContext { ... }
 
 **新决策 = verbatim 一刀搬迁（slice A'）**。slice B（fallback.rs）已并入 slice A'，剩下只需在 slice A' 合入后关闭 umbrella #632 + 标 §3 F3.6 行 "Done"。
 
+### 11.8.9 第二次事实更正（v5，落点改为 dasclaw_runtime）
+
+> v4 提出"verbatim 搬到 dasclaw_core::context"。实际尝试时撞 cargo cyclic package dependency：`dasclaw_core → dasclaw_runtime → dasclaw_core`。
+
+#### 11.8.9.1 真实依赖方向
+
+`crates/dasclaw_runtime/Cargo.toml` 行 12 已经 `dasclaw_core = { path = "../dasclaw_core" }`，runtime 使用 `dasclaw_core::SecretProvider`（见 `secrets/agent_provider.rs`）。**dasclaw_runtime 是 dasclaw_core 的上层 crate**，不是反过来。
+
+`JobState` / `JobContextCore` / `HttpInterceptor` / `SharedFeatureFlags` 都在 `dasclaw_runtime`，所以 `context::{state, manager, fallback}` 的正确落点是 `dasclaw_runtime::context`，**不是 `dasclaw_core::context`**。
+
+#### 11.8.9.2 slice 1 / slice 2 落点不冲突但分散
+
+- slice 1：`Memory` 已落 `dasclaw_core::context::memory`（合理，Memory 不依赖 runtime 类型）。
+- slice 2：`JobError` 已落 `dasclaw_core::error`（合理，不依赖 runtime 类型）。
+- slice A''（替代 §11.8.8 的 slice A'）：`state` + `manager` + `fallback` 落 `dasclaw_runtime::context`。`manager` 内对 `Memory` / `JobError` 通过 cross-crate 引用 `dasclaw_core::context::memory::Memory` / `dasclaw_core::error::JobError`，runtime → core 单向依赖成立。
+
+最终格局：
+
+| 模块 | crate | 落点 | 原因 |
+|---|---|---|---|
+| `memory` | dasclaw_core | `dasclaw_core::context::memory` | 无 runtime 依赖 |
+| `JobError` | dasclaw_core | `dasclaw_core::error` | 无 runtime 依赖 |
+| `state` | **dasclaw_runtime** | `dasclaw_runtime::context::state` | 依赖 runtime 的 JobState / HttpInterceptor / FeatureFlags |
+| `manager` | **dasclaw_runtime** | `dasclaw_runtime::context::manager` | 依赖 state 的 JobContext |
+| `fallback` | **dasclaw_runtime** | `dasclaw_runtime::context::fallback` | 依赖 state 的 JobContext |
+
+#### 11.8.9.3 slice A'' 实施步骤
+
+- `git mv desktop-client/ironclaw/src/context/state.rs` → `crates/dasclaw_runtime/src/context/state.rs`
+- `git mv desktop-client/ironclaw/src/context/manager.rs` → `crates/dasclaw_runtime/src/context/manager.rs`
+- `git mv desktop-client/ironclaw/src/context/fallback.rs` → `crates/dasclaw_runtime/src/context/fallback.rs`
+- 创建 `crates/dasclaw_runtime/src/context/mod.rs`：
+  ```rust
+  pub mod fallback;
+  pub mod manager;
+  pub mod state;
+  pub use fallback::FallbackDeliverable;
+  pub use manager::{ContextManager, ContextSummary};
+  pub use state::JobContext;
+  ```
+- `crates/dasclaw_runtime/src/lib.rs` 加 `pub mod context;`
+- 三个文件 import rebase：
+  - `state.rs`：`pub use dasclaw_runtime::{...}` → `pub use crate::job::{JobState, StateTransition, TokenBudgetExceeded}; pub use crate::job_context::JobContextCore;`；`use crate::llm::recording::HttpInterceptor` → `use crate::recording::HttpInterceptor`；`use crate::tools::feature_flags::{...}` → `use crate::feature_flags::{...}`；末尾 `impl dasclaw_runtime::JobContextCore for JobContext` → `impl JobContextCore for JobContext`。
+  - `manager.rs`：`use crate::context::{JobContext, JobState, Memory}` → `use crate::context::JobContext; use crate::JobState; use dasclaw_core::context::memory::Memory`；`use crate::error::JobError` → `use dasclaw_core::error::JobError`。
+  - `fallback.rs`：`use crate::context::Memory` → `use dasclaw_core::context::memory::Memory`；`use crate::context::state::JobContext` → 不变（同 crate）。
+- 桌面端 `desktop-client/ironclaw/src/context/mod.rs` 改成 `pub use dasclaw_runtime::context::{...}` + `pub use dasclaw_core::context::memory::{...}`（Memory 一组）+ `pub use dasclaw_runtime::{JobState, StateTransition, TokenBudgetExceeded};` 维持源码层兼容。
+
+#### 11.8.9.4 验证清单
+
+- `cargo check -p dasclaw_runtime -p dasclaw --tests`
+- `cargo nextest run -p dasclaw_runtime -p dasclaw`
+- `cargo fmt --all`
+- `python3.12 scripts/check_no_panics.py --base origin/xClaw`
+- `cargo clippy --no-deps -p dasclaw_runtime -p dasclaw --all-targets -- -D warnings`
+
+#### 11.8.9.5 教训追加
+
+定迁移落点前必须 `grep Cargo.toml` 确认目标 crate 与 source crate 的依赖方向，避免 cyclic dependency。源码 use 路径有时反映已搬迁的事实（如 state.rs 顶部 `use dasclaw_runtime::JobState`），但这不能反推"目标 crate 可以反向依赖 dasclaw_runtime"。
+
+#### 11.8.9.6 新决策
+
+**新决策 = slice A''：state + manager + fallback 一刀 verbatim 搬到 `dasclaw_runtime::context`**。slice 1（Memory）和 slice 2（JobError）落点不变，由 manager 跨 crate 引用。
+
 ### 11.9 F4 修订：ironclaw_safety 路径倒置修复（F4.0）
 
 **问题**
@@ -587,6 +650,34 @@ ADR-152 §3 F4 原条款"`ironclaw_safety` 保留代码不动"在 F3 推进过�
 
 - `crates/dasclaw_llm_provider/Cargo.toml` 通过 `path = "../../desktop-client/ironclaw/crates/ironclaw_safety"` 反向引用桌面端 crate（`LeakDetector` 调用）。
 - `crates/dasclaw_workspace_cap/Cargo.toml` 同样反向 path 引用（`Sanitizer`、`Severity`、`SafetyLayer`）。
+- 顶层 `Cargo.toml` workspace `members` 已把 `desktop-client/ironclaw/crates/ironclaw_safety` 列为成员。
+- 全工作区 `use ironclaw_safety::*` 调用共 65 处（排除上游参考目录 `ironclaw-main/`）。
+
+这违反 `crates/` 作为底层框架不应反向依赖上层 `desktop-client/` 的依赖方向原则，且 crate 命名空间不符 `dasclaw_*` 约定。
+
+**修订**
+
+1. F4 增设 **F4.0 子波次**：把 `ironclaw_safety` 整 crate 物理搬到 `crates/dasclaw_safety`，含本体 + `fuzz/` + `tests/` + `benches/` + corpus 文件。
+2. crate 重命名 `ironclaw_safety` → `dasclaw_safety`，所有 `use ironclaw_safety::*` 改为 `use dasclaw_safety::*`（约 65 处机械替换）。
+3. 同步修正 8 处 `Cargo.toml`：
+   - 顶层 `Cargo.toml` workspace `members` 列表
+   - `crates/dasclaw_llm_provider/Cargo.toml` path 引用改为 `../dasclaw_safety`
+   - `crates/dasclaw_workspace_cap/Cargo.toml` path 引用改为 `../dasclaw_safety`
+   - `desktop-client/Cargo.toml`、`desktop-client/ironclaw/Cargo.toml` 改 path
+   - 本体 `Cargo.toml`、`fuzz/Cargo.toml` 改 name
+4. 上游参考目录 `ironclaw-main/crates/ironclaw_safety/` 不动（属上游镜像，不在工作区构建）。
+
+**约束**
+
+- 严格遵守 ADR-129 §1.3 verbatim：只动 crate 物理位置 + name + import path，**不动任何逻辑、API、测试用例**。
+- 单 PR revertable：`git revert <merge-sha>` 必须能干净回滚。
+- 验证门：`cargo nextest run -p dasclaw_safety` + `cargo nextest run -p dasclaw_llm_provider -p dasclaw_workspace_cap -p dasclaw` 全绿，`cargo clippy --workspace -- -D warnings` 通过。
+
+**对其他子波次的影响**
+
+- 修复路径倒置后，`dasclaw_llm_provider` / `dasclaw_workspace_cap` 不再反向引用 desktop。
+- 不影响 F3.6 收尾（F4.1）、`routines`/`orchestrator`/`channels` 搬迁（F4.2–F4.5）的范围与顺序。
+- SafetyHook trait 装配 HookEngine 的设计（原 F4 条款）仍有效，可在 F4.0 之后作为 F4 后续工作单独推进。
 - 顶层 `Cargo.toml` workspace `members` 已把 `desktop-client/ironclaw/crates/ironclaw_safety` 列为成员。
 - 全工作区 `use ironclaw_safety::*` 调用共 65 处（排除上游参考目录 `ironclaw-main/`）。
 
