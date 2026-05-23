@@ -94,7 +94,9 @@ pub fn hosted_proxy_client_secret(
 // crate-level helpers, preserving the historical zero-arg call surface for
 // in-tree callers.
 pub use crate::llm::oauth_helpers::{
-    OAUTH_CALLBACK_PORT, OAuthCallbackError, is_loopback_host, landing_html, wait_for_callback,
+    OAUTH_CALLBACK_PORT, OAuthCallbackError, OAuthTokenResponse, ProxyRefreshTokenRequest,
+    is_loopback_host, landing_html, oauth_token_response_from_json, refresh_token_via_proxy,
+    wait_for_callback,
 };
 
 /// Read the OAuth callback host from `IRONCLAW_OAUTH_CALLBACK_HOST` (legacy
@@ -122,15 +124,6 @@ pub async fn bind_callback_listener() -> Result<tokio::net::TcpListener, OAuthCa
 }
 
 // ── Shared OAuth flow steps ─────────────────────────────────────────
-
-/// Response from the OAuth token exchange.
-pub struct OAuthTokenResponse {
-    pub access_token: String,
-    pub refresh_token: Option<String>,
-    pub expires_in: Option<u64>,
-    pub token_type: Option<String>,
-    pub scope: Option<String>,
-}
 
 /// Result of building an OAuth 2.0 authorization URL.
 pub struct OAuthUrlResult {
@@ -802,59 +795,6 @@ pub struct ProxyTokenExchangeRequest<'a> {
     pub extra_token_params: &'a HashMap<String, String>,
 }
 
-pub struct ProxyRefreshTokenRequest<'a> {
-    pub proxy_url: &'a str,
-    /// OAuth proxy auth token.
-    /// Kept as `gateway_token` for public API compatibility.
-    pub gateway_token: &'a str,
-    pub token_url: &'a str,
-    pub client_id: &'a str,
-    pub client_secret: Option<&'a str>,
-    pub refresh_token: &'a str,
-    pub resource: Option<&'a str>,
-    pub provider: Option<&'a str>,
-}
-
-fn oauth_token_response_from_json(
-    token_data: serde_json::Value,
-    access_token_field: &str,
-) -> Result<OAuthTokenResponse, OAuthCallbackError> {
-    let access_token = token_data
-        .get(access_token_field)
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            let fields: Vec<&str> = token_data
-                .as_object()
-                .map(|o| o.keys().map(|k| k.as_str()).collect())
-                .unwrap_or_default();
-            OAuthCallbackError::Io(format!(
-                "No '{}' field in proxy response (fields present: {:?})",
-                access_token_field, fields
-            ))
-        })?
-        .to_string();
-
-    let refresh_token = token_data
-        .get("refresh_token")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-    let expires_in = token_data.get("expires_in").and_then(|v| v.as_u64());
-
-    Ok(OAuthTokenResponse {
-        access_token,
-        refresh_token,
-        expires_in,
-        token_type: token_data
-            .get("token_type")
-            .and_then(|v| v.as_str())
-            .map(String::from),
-        scope: token_data
-            .get("scope")
-            .and_then(|v| v.as_str())
-            .map(String::from),
-    })
-}
-
 /// Exchange an OAuth authorization code via the platform's token exchange proxy.
 ///
 /// Authenticated via an OAuth proxy auth token (Bearer header). The caller may
@@ -920,69 +860,6 @@ pub async fn exchange_via_proxy(
         .await
         .map_err(|e| OAuthCallbackError::Io(format!("Failed to parse proxy response: {}", e)))?;
     oauth_token_response_from_json(token_data, request.access_token_field)
-}
-
-/// Refresh an OAuth access token via the platform's token refresh proxy.
-///
-/// Authenticated via an OAuth proxy auth token (Bearer header). The caller may
-/// either rely on proxy-side secret lookup or forward a `client_secret` when
-/// the provider requires it.
-pub async fn refresh_token_via_proxy(
-    request: ProxyRefreshTokenRequest<'_>,
-) -> Result<OAuthTokenResponse, OAuthCallbackError> {
-    if request.gateway_token.is_empty() {
-        return Err(OAuthCallbackError::Io(
-            "OAuth proxy auth token is required for proxy token refresh".to_string(),
-        ));
-    }
-
-    let refresh_url = format!("{}/oauth/refresh", request.proxy_url.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|e| OAuthCallbackError::Io(format!("Failed to build HTTP client: {}", e)))?;
-
-    let mut params = vec![
-        ("refresh_token", request.refresh_token.to_string()),
-        ("token_url", request.token_url.to_string()),
-        ("client_id", request.client_id.to_string()),
-    ];
-    if let Some(secret) = request.client_secret {
-        params.push(("client_secret", secret.to_string()));
-    }
-    if let Some(resource) = request.resource {
-        params.push(("resource", resource.to_string()));
-    }
-    if let Some(provider) = request.provider {
-        params.push(("provider", provider.to_string()));
-    }
-
-    let response = client
-        .post(&refresh_url)
-        .bearer_auth(request.gateway_token)
-        .form(&params)
-        .send()
-        .await
-        .map_err(|e| {
-            OAuthCallbackError::Io(format!("Token refresh proxy request failed: {}", e))
-        })?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(OAuthCallbackError::Io(format!(
-            "Token refresh proxy failed: {} - {}",
-            status, body
-        )));
-    }
-
-    let token_data: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| OAuthCallbackError::Io(format!("Failed to parse proxy response: {}", e)))?;
-
-    oauth_token_response_from_json(token_data, "access_token")
 }
 
 #[cfg(test)]

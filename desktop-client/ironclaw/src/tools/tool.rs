@@ -17,7 +17,7 @@ pub use dasclaw_runtime::Tool;
 
 pub use dasclaw_tool::{
     ApprovalContext, ApprovalRequirement, RiskLevel, ToolDiscoverySummary, ToolDomain, ToolError,
-    ToolOutput, ToolRateLimitConfig, ToolSchema, redact_params, require_param, require_str,
+    ToolOutput, ToolRateLimitConfig, redact_params, require_param, require_str,
     validate_tool_schema,
 };
 

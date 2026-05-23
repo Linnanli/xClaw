@@ -11,8 +11,8 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 use wasmtime::{Config, Engine, OptLevel};
 
-use crate::tools::wasm::error::WasmError;
-use crate::tools::wasm::limits::{FuelConfig, ResourceLimits};
+use crate::error::WasmError;
+use crate::limits::{FuelConfig, ResourceLimits};
 
 /// Default epoch tick interval. Each tick increments the engine's epoch counter,
 /// which causes any store with an expired epoch deadline to trap.
@@ -270,26 +270,23 @@ impl WasmToolRuntime {
             // Briefly instantiate to extract metadata (description + schema)
             // from the tool's exports, analogous to MCP's list_tools().
             let effective_limits = limits.clone().unwrap_or(default_limits.clone());
-            let (description, schema) = crate::tools::wasm::wrapper::extract_wasm_metadata(
-                &engine,
-                &component,
-                &effective_limits,
-            )
-            .unwrap_or_else(|e| {
-                tracing::warn!(
-                    name = %name,
-                    error = %e,
-                    "WASM metadata extraction failed, using fallbacks"
-                );
-                (
-                    "WASM sandboxed tool".to_string(),
-                    serde_json::json!({
-                        "type": "object",
-                        "properties": {},
-                        "additionalProperties": true
-                    }),
-                )
-            });
+            let (description, schema) =
+                crate::wrapper::extract_wasm_metadata(&engine, &component, &effective_limits)
+                    .unwrap_or_else(|e| {
+                        tracing::warn!(
+                            name = %name,
+                            error = %e,
+                            "WASM metadata extraction failed, using fallbacks"
+                        );
+                        (
+                            "WASM sandboxed tool".to_string(),
+                            serde_json::json!({
+                                "type": "object",
+                                "properties": {},
+                                "additionalProperties": true
+                            }),
+                        )
+                    });
 
             Ok::<_, WasmError>(PreparedModule {
                 name: name.clone(),
@@ -352,8 +349,8 @@ impl std::fmt::Debug for WasmToolRuntime {
 
 #[cfg(test)]
 mod tests {
-    use crate::tools::wasm::limits::ResourceLimits;
-    use crate::tools::wasm::runtime::{WasmRuntimeConfig, WasmToolRuntime};
+    use crate::limits::ResourceLimits;
+    use crate::runtime::{WasmRuntimeConfig, WasmToolRuntime};
 
     #[test]
     fn test_runtime_config_default() {
@@ -404,7 +401,7 @@ mod tests {
     /// produce a valid TOML config that wasmtime can load.
     #[test]
     fn test_enable_compilation_cache_with_explicit_dir() {
-        use crate::tools::wasm::runtime::enable_compilation_cache;
+        use crate::runtime::enable_compilation_cache;
 
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
         let cache_dir = tmp.path().join("custom-cache");
@@ -432,7 +429,7 @@ mod tests {
     /// so that their file locks do not conflict. Regression test for #448.
     #[test]
     fn test_enable_compilation_cache_label_isolation() {
-        use crate::tools::wasm::runtime::enable_compilation_cache;
+        use crate::runtime::enable_compilation_cache;
 
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
         let base = tmp.path().join("isolation");
