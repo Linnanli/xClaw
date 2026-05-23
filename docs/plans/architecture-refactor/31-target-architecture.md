@@ -1,5 +1,12 @@
 # 31 — 目标架构（边界清晰、可复用）
 
+> **v2.5 (2026-05-23)** · 蓝图对齐 4-5 天发展（基于 [40-tool-ecosystem-inventory.md](40-tool-ecosystem-inventory.md) §1-3 实测 + [41-target-architecture-drift-analysis.md](41-target-architecture-drift-analysis.md) 漂移识别）：
+>   1. **§4 补全 16 个 v2.4 遗漏 crate**（按字母序）：`dasclaw_absolute_path` / `dasclaw_bash_permissions` / `dasclaw_cert_trust` / `dasclaw_channels` / `dasclaw_exec` / `dasclaw_llm_provider` / `dasclaw_process_hardening` / `dasclaw_runtime` / `dasclaw_sandbox_linux` / `dasclaw_sandbox_windows` / `dasclaw_sandboxing` / `dasclaw_shell_command` / `dasclaw_tool` / `dasclaw_utils_home_dir` / `dasclaw_utils_rustls_provider` / `dasclaw_wasm_tools`。
+>   2. **新增 §4.6 F4.6 工具壳分层落点**（按 [ADR-156](adr-156-f46-builtin-tools-landing-decision.md)）：8 个新 crate `dasclaw_{misc,image,memory,sub_agent,git,fs,shell,net}_tools` 分子波次 F4.6.1 ~ F4.6.8 下沉（~13073 LOC），T3/T4 共 8223 LOC（Extension/Skill/Job/Routine/Message 5 类）留桌面。
+>   3. **§3 ADR 索引扩展到 ADR-156**：补 ADR-111 ~ ADR-156 共约 45 个 ADR 概要（详见 §3.2 索引表）。
+>   4. **§4.4 落点确认**：`orchestrator` 按 [ADR-155](adr-155-f44-orchestrator-landing-decision.md) 留桌面，原 v2.4 §4.4 "升级为 dasclaw_*"承诺作废。
+> P0 落地度：6/7（缺 `dasclaw_bridge_lite`）；P1：6.5/7（`dasclaw_git_tools` 待 F4.6.5 扩充）；P2：5/5。crates/ 真实总数 45 个，v2.4 蓝图列 26 个，本次补全后蓝图条目数 = 45 + F4.6 新建 8 = 53。
+
 > **v2.4 (2026-04-26)** · 补 3 处蓝图缺口（基于 [39-fork-private-cargo-inventory.md](39-fork-private-cargo-inventory.md) §3 实测）：新增 `dasclaw_lsp`（fork 私货 1,694 LOC）/ `dasclaw_git_tools`（fork 私货 1,331 LOC）/ `dasclaw_routines`（提升点 31 LOC，路由 desktop-client/ironclaw 0.24 routines 模块）。原 P1 4 个 → 7 个，W1 骨架 14 → **17**。
 
 > **v2.3 (2026-04-26)** · 订正 fork 处理矛盾：ADR-105 §落地 + §4.5 废弃表与 ADR-101 §136 对齐。git log 实测 fork 在 ironclaw-v0.26.0 tag 之后有 **42 fork-only commit**（Phase 2/3 dasclaw 接线核心成果：rig-core 清理 / ClawCodeLlmProvider / x_claw_agent host trait 接线 / IronclawSafetyHook / 5 agent 模块迁移 / SessionManager / routines 提升）。决策：W1-W6 保留 fork 作为私货来源，W6+ 私货全迁出后才删除；**永不**直接升级 fork 到 0.26 顶层依赖（与 38 §137 一致）。
@@ -228,6 +235,81 @@ flowchart TB
 
 **落地**：W6（与 IPC + 后端基底大移植同期）。
 
+### 3.2 ADR-111 ~ ADR-156 索引（v2.5 新）
+
+v2.4 §3 只列了 ADR-101 ~ ADR-110。W3 ~ W6 期间又落了约 45 个 ADR（不含废弃的 ADR-128 / 140），分组索引如下；每条只给一句结论，详情见对应 ADR 文件。
+
+**评估与方法学族（ADR-111 ~ ADR-117）**
+
+| ADR | 主题 | 结论 |
+|---|---|---|
+| [ADR-112](adr-112-compatibility-evaluation.md) | W3-A 兼容性评估嵌入节奏 | B1→B2→B3 三段式自带测试 |
+| [ADR-112-input-checklist](adr-112-input-checklist.md) | W3-A 输入条件清单 | 13 项必填，缺一拒收 |
+| [ADR-113](adr-113-hook-engine-unification.md) | Hook 引擎统一 | dasclaw_hooks 单一实现，编译期红线 `count_hook_systems() == 1` |
+| [ADR-114](adr-114-dasclaw-rebrand.md) | `.ironclaw` → `.dasclaw` 命名迁移 | 类 A 业务零容忍，类 B 集中工程豁免 |
+| [ADR-115](adr-115-project-docs-not-in-hook.md) | 项目文档不进 hook 链 | 走专用 ProjectDocLoader，不污染 hook |
+| [ADR-117](adr-117-p0c-prompt-builder-unification.md) | Prompt builder 统一 | 单一 owner，详见 ADR-120 |
+
+**Plan Mode / Job / Sandbox 三件套（ADR-118 ~ ADR-121, ADR-129 ~ ADR-131）**
+
+| ADR | 主题 | 结论 |
+|---|---|---|
+| [ADR-118](adr-118-claw-code-readonly-and-self-impl.md) | claw-code 只读 + self impl 边界 | claw-code 不写回 fork |
+| [ADR-119](adr-119-job-runtime-decision-for-desktop-client.md) | Job runtime 落点 | 留桌面（与 ADR-155 orchestrator 同理） |
+| [ADR-120](adr-120-prompt-builder-ownership.md) | Prompt builder owner | `dasclaw_runtime::prompt` |
+| [ADR-121](adr-121-p0a-sandbox-activation-decision.md) | Sandbox 激活路径 | 启动时按 OS dispatch 到 dasclaw_sandbox_{linux,macos,windows} |
+| [ADR-129](adr-129-sandbox-windows-windows-crate-adoption.md) | sandbox-windows `windows` crate 选型 | 采纳 windows-rs，废弃 winapi |
+| [ADR-130](adr-130-sandbox-windows-lib-bin-split.md) | sandbox-windows lib/bin 拆分 | lib 暴露 trait，bin 仅 main.rs |
+| [ADR-131](adr-131-windows-job-object-resource-limits-wrapper.md) | Windows Job Object 资源限额 | wrapper crate 内联 wrap |
+
+**ExecPolicy / Shell 族（ADR-132 ~ ADR-135）**
+
+| ADR | 主题 | 结论 |
+|---|---|---|
+| [ADR-132](adr-132-execpolicy-starlark-port-plan.md) | execpolicy starlark port | 逐字搬 codex execpolicy，starlark rule 不动 |
+| [ADR-133](adr-133-shell-command-adoption-eval.md) | `dasclaw_shell_command` 采纳 | 采纳，作为 parse_command 实现 |
+| [ADR-134](adr-134-shell-escalation-non-goal.md) | shell 升权 non-goal | 禁止 sudo / runas 工具实现 |
+| [ADR-135](adr-135-sandboxing-crate-adoption-eval.md) | `dasclaw_sandboxing` 采纳 | 采纳，作为顶层 dispatcher |
+
+**Protocol / Net-proxy 族（ADR-136 ~ ADR-139）**
+
+| ADR | 主题 | 结论 |
+|---|---|---|
+| [ADR-136](adr-136-protocol-expansion-plan.md) | dasclaw_protocol 扩展 | 文件级 verbatim slice 上游 28 *.rs |
+| [ADR-137](adr-137-net-proxy-port-plan.md) | net-proxy port plan | 单层口径，不携带 credential resolver |
+| [ADR-138](adr-138-protocol-step-c2-evaluation.md) | protocol Step C2 utils 评估 | 新增 4 个 utils slice 小 crate |
+| [ADR-139](adr-139-mitm-ca-trust-chain.md) | MITM CA 信任链 | 默认关，按用户主动启用 |
+
+**Sandbox 平台细节族（ADR-141 ~ ADR-151）**
+
+| ADR | 主题 | 结论 |
+|---|---|---|
+| [ADR-141](adr-141-windows-enterprise-sandbox-support.md) | Windows enterprise sandbox 支持 | AppContainer + Job Object 组合 |
+| [ADR-142](adr-142-writable-root-kernel-enforcement.md) | writable root kernel enforcement | 内核级写保护 |
+| [ADR-143](adr-143-macos-residual-sinking-decision.md) | macOS 残余下沉决策 | sandbox-exec 残余留桌面 |
+| [ADR-144](adr-144-linux-writable-root-kernel-enforcement.md) | Linux writable root enforcement | landlock + seccomp |
+| [ADR-145](adr-145-windows-sandbox-users-naming-decision.md) | Windows sandbox 用户命名 | `dasclaw-sbx-<uid>` 模式 |
+| [ADR-146](adr-146-safety-decision-enum-extension.md) | SafetyDecision enum 扩展 | 新增 `Quarantine` / `Audit` 变体 |
+| [ADR-147](adr-147-composite-safety-hook.md) | 复合 safety hook | 多 hook 组合短路语义 |
+| [ADR-148](adr-148-egress-gate-safety-hook-semantics.md) | egress gate hook 语义 | 默认 deny，allowlist 显式开 |
+| [ADR-149](adr-149-tool-visibility-triple-gate.md) | 工具可见性三门控 | OS / Tier / SKU 三层 |
+| [ADR-150](adr-150-symlink-escape.md) | symlink 逃逸防护 | 沙箱内 canonicalize 后再校验 |
+| [ADR-151](adr-151-sandbox-model-divergence-from-upstream.md) | sandbox 模型与上游分歧 | 记录与 codex 模型差异 + 双向 drift 守卫 |
+
+**F4 阶段决策族（ADR-152 ~ ADR-156）**
+
+| ADR | 主题 | 结论 |
+|---|---|---|
+| [ADR-152](adr-152-agent-and-capability-fusion.md) | F4 agent + capability fusion 总规划 | 5 阶段切片 F4.0 ~ F4.6+ |
+| [ADR-152 §F4.5 wasm-slicing](adr-152-f45-wasm-slicing.md) | F4.5 wasm slicing 子方案 | wasm 工具拆 crate 边界 |
+| [ADR-152 §F4.5 addendum](adr-152-f45-wasm-slicing-addendum.md) | F4.5 wasm slicing 补遗 | 边界微调 |
+| [ADR-153](adr-153-headless-agent-framework-draft.md) | headless agent framework 草案 | dasclaw_runtime 无 HTTP / 无 DB / 无 tenant |
+| [ADR-154](adr-154-jobcontext-core-trait-split.md) | JobContext core trait 拆分 | 拆出最小 trait，桌面 impl 实例化 |
+| [ADR-155](adr-155-f44-orchestrator-landing-decision.md) | F4.4 orchestrator 落点 | 留桌面（架构匹配 + 三方对账无等价） |
+| [ADR-156](adr-156-f46-builtin-tools-landing-decision.md) | F4.6 builtin 工具下沉落点 | tier 切 8 刀，~13073 LoC 下沉，8223 LoC 留桌面 |
+
+**说明**：ADR-128 / ADR-140 编号已废弃（合并入相邻 ADR）。任何后续 F4.7+ 决策按本表延续编号。
+
 ---
 
 ## 4. 新增 / 重构 crate 清单
@@ -322,6 +404,58 @@ flowchart TB
 - 上游 `codex-utils-template` 未被 28 个 *.rs 中任一行 `use`，**故意不 vendor**；如未来上游某 *.rs 新增 `use codex_utils_template::*`，drift script 会失败，按 ADR-136 prep-N 范式增开"Step C2 follow-up PR"vendor `dasclaw_utils_template`。
 - Linux-only target deps（`landlock` / `seccompiler`）由 `crates/dasclaw_protocol/Cargo.toml` `[target.'cfg(target_os = "linux")'.dependencies]` 显式声明（与上游 `codex-cli-main/codex-rs/protocol/Cargo.toml:48-51` 同形）。
 - 任何在 vendored *.rs 中手工 patch 即视为**违反 ADR-129 §1.3 verbatim 红线 + ADR-136 §3 amendment 2**，drift 守卫会 fail。
+
+### 4.6 F4.6 工具壳分层落点（v2.5 新，按 [ADR-156](adr-156-f46-builtin-tools-landing-decision.md)）
+
+`desktop-client/ironclaw/src/tools/builtin/` 共约 50 个内建工具、21505 LoC。按反向依赖 tier 切 8 刀下沉到 8 个新 crate，T3/T4 共 8223 LoC（依赖 orchestrator / agent / channels / db / extensions / skill_registry）留桌面：
+
+| F4.6 子波次 | 新 crate | 工具来源 | LoC | tier |
+|---|---|---|---|---|
+| F4.6.1 | `crates/dasclaw_misc_tools` | echo / time / json / plan_mode / restart / tool_info / session_fork / secrets | ~1900 | T0 |
+| F4.6.2 | `crates/dasclaw_image_tools` | ImageGen / Analyze / Edit | 833 | T0 |
+| F4.6.3 | `crates/dasclaw_memory_tools` | Memory 4 件套 | 974 | T0 |
+| F4.6.4 | `crates/dasclaw_sub_agent_tools` | SubAgent | 400 | T0 |
+| F4.6.5 | `crates/dasclaw_git_tools`（扩充 W1 空壳） | Git 7 + lsp shell | ~1200 | T1 |
+| F4.6.6 | `crates/dasclaw_fs_tools` | File / Patch / Glob / Grep / CodeEdit / path_utils / file_guard | ~3700 | T1 |
+| F4.6.7 | `crates/dasclaw_shell_tools` | Shell + classify_command_risk | 1666 | T2 |
+| F4.6.8 | `crates/dasclaw_net_tools` | Http / WebFetch / WebSearch / html_converter | ~2400 | T1+T2 |
+
+**留桌面 5 类（T3/T4，共 8223 LoC，不下沉）**：
+
+| 模块 | LoC | tier | 留守理由 |
+|---|---|---|---|
+| `extension_tools.rs` | 828 | T3 | 依赖 `desktop-client/extensions` 内部 manager |
+| `skill_tools.rs` | 1322 | T3 | 依赖 `desktop-client/skill_registry` |
+| `job.rs` | 2359 | T4 | 依赖 `desktop-client/orchestrator` |
+| `routine.rs` | 2639 | T4 | 依赖 `desktop-client/agent` + `bootstrap` |
+| `message.rs` | 1075 | T4 | 依赖 `desktop-client/channels` 完整运行时 |
+
+**薄壳化**：F4.6.8 完成后，单独一个 PR 把 `desktop-client/ironclaw/src/tools/builtin/mod.rs`（87 行）改为薄 re-export 壳，全部下沉工具改为 `pub use dasclaw_*_tools::*`，留守 5 类保持本地。
+
+### 4.7 v2.4 蓝图遗漏 crate 补全（v2.5 新）
+
+v2.4 §4.1~§4.3 列了 17 个 P0/P1/P2 crate，但实际 `crates/` 已落地 **45 个** dasclaw_* crate。本节补全 16 个 v2.4 遗漏但已存在的 crate，按字母序：
+
+| crate | 已存在 | 提供 | 与 v2.4 表关系 |
+|---|---|---|---|
+| `crates/dasclaw_absolute_path` | ✅ | 绝对路径规范化（codex port 工具）| P1 补 |
+| `crates/dasclaw_bash_permissions` | ✅ | bash 命令权限校验（与 dasclaw_bash_validation 配对）| P1 补 |
+| `crates/dasclaw_cert_trust` | ✅ | 证书信任链管理（codex 自签 CA 配套）| P2 补 |
+| `crates/dasclaw_channels` | ✅ | F4.5 核心子集（trait + relay + wasm + manager） | F4.5 落地 |
+| `crates/dasclaw_exec` | ✅ | 进程执行子系统（codex exec port） | P0 配套 |
+| `crates/dasclaw_llm_provider` | ✅ | LLM 提供方抽象（OpenAI/Anthropic/Claw provider） | P0 配套 |
+| `crates/dasclaw_process_hardening` | ✅ | 进程加固（ptrace / debugger 检测） | P2 补 |
+| `crates/dasclaw_runtime` | ✅ | headless agent 运行时（ADR-153） | ADR-153 落地 |
+| `crates/dasclaw_sandbox_linux` | ✅ | sandbox Linux 实现（landlock + seccomp） | P0 拆分自 `dasclaw_sandbox` |
+| `crates/dasclaw_sandbox_windows` | ✅ | sandbox Windows 实现（AppContainer） | P0 拆分自 `dasclaw_sandbox` |
+| `crates/dasclaw_sandboxing` | ✅ | sandbox 顶层 dispatcher + policy（codex sandboxing port）| P0 与 `dasclaw_sandbox` 协作 |
+| `crates/dasclaw_shell_command` | ✅ | shell 命令解析（兼容 dasclaw_protocol::parse_command） | P0 配套 |
+| `crates/dasclaw_tool` | ✅ | 工具基础 trait 与 schema（与 dasclaw_protocol::tool_name 协作） | P0 配套 |
+| `crates/dasclaw_utils_home_dir` | ✅ | home 目录解析（dasclaw_protocol::config_types 依赖） | utils slice 补 |
+| `crates/dasclaw_utils_rustls_provider` | ✅ | rustls crypto provider（reqwest TLS 配套） | utils slice 补 |
+| `crates/dasclaw_wasm_tools` | ✅ | WASM 工具加载与执行（OCI 镜像 + WIT 绑定） | P1 补 |
+
+**说明**：以上 16 个 crate 多数在 W2 ~ W6 已落地，仅蓝图条目漏更新。v2.5 补登后蓝图总数 = v2.4 (17) + 本次补 (16) + F4.6 新建 (8) = **41 个 dasclaw_* crate 条目**，加 `ironclaw_auth` / `dasclaw_workspace_cap` / `dasclaw_safety` / `dasclaw_common` / `dasclaw_parsed_command`（已 rename）等保留共 **45+ 条**，与 `crates/` 实际目录一致。
 
 ---
 
@@ -491,3 +625,13 @@ sequenceDiagram
 | ADR 增加 106/107/108/109 | 项目文档协议 / approval+authToken / LSP-MCP IPC / panic hook 三处硬伤 |
 | 决策点扩展到 D7-D10 | 新增补齐项需交互是否接受默认路径 |
 | desktop 外壳清单分“零改动”与“需修隶性保留”两档 | §4 硬伤表：approval polling / authToken 不刷新 |
+
+### 10.1 v2.4 → v2.5 变更日志（2026-05-23）
+
+| 变更 | 原因 |
+|------|------|
+| 新增 §3.2 ADR-111 ~ ADR-156 索引表（约 45 个 ADR） | v2.4 §3 只到 ADR-110，W3 ~ W6 期间落地的所有 ADR 未在蓝图中索引 |
+| §4.4 `orchestrator` 落点确认（留桌面，作废 v2.4 "升级为 dasclaw_*" 承诺） | [ADR-155](adr-155-f44-orchestrator-landing-decision.md) §6：架构匹配 / 三方对账无等价 / 依赖现实 / 代价对称 |
+| 新增 §4.6 F4.6 工具壳分层落点表（8 新 crate + 5 留守） | [ADR-156](adr-156-f46-builtin-tools-landing-decision.md) §6：~13073 LoC 下沉，8223 LoC 留桌面 |
+| 新增 §4.7 v2.4 蓝图遗漏 crate 补全表（16 个） | [41-target-architecture-drift-analysis.md](41-target-architecture-drift-analysis.md) 识别 `crates/` 真实 45 vs 蓝图列 26 的漂移 |
+| §3 ADR 索引 + §4 补全后，crate 蓝图条目数 ≈ 45+，与 `crates/` 实际一致 | 修正 v2.4 蓝图相对实施的 19 个漂移条目 |
