@@ -84,9 +84,9 @@
 - **F4.1**：F3.6 收尾——删 desktop 端 `context/mod.rs`、`agent/context_monitor.rs` 两个薄壳，约 130 处调用方 import 重写。
 - **F4.2**：`routines` 实搬——填充 `dasclaw_routines`（当前为 W1 空壳，24 行 trait skeleton），把 desktop `routines/` 的 8.7K LoC verbatim 搬入。
 - **F4.3**：`secrets` 桌面薄壳清理——约 60 处调用方 import 改写。
-- **F4.4**：`orchestrator` 落点决策 + 搬迁（3.3K LoC）。需补 ADR 决定落点（候选：`dasclaw_runtime::orchestrator` 或新 crate）。
+- **F4.4**：`orchestrator` 落点已按 [ADR-155](adr-155-f44-orchestrator-landing-decision.md) 决议为"留在 `desktop-client/ironclaw/src/orchestrator/`"，作为桌面后端独占模块，**不搬到 crates/**。原"必须搬（3.3K LoC）"条款作废，理由见 ADR-155 §6（架构匹配 / 三方对账无等价 / 依赖现实 / 代价对称）。
 - **F4.5**：`channels` 拆分——抽核心子集（trait + relay + wasm + manager）到新 crate，REPL/HTTP/Signal/Webhook/Web/Telegram 留 ironclaw。
-- **F4.6+**：`tools/builtin` 分批搬（21.5K LoC、28 工具，建议 6-8 刀按职能分组）。
+- **F4.6**：`tools/builtin` 按 [ADR-156](adr-156-f46-builtin-tools-landing-decision.md) 决议切 8 刀下沉（21505 LoC、约 50 工具实际盘点），分子波次 F4.6.1 ~ F4.6.8，下沉到 `crates/dasclaw_{misc,image,memory,sub_agent,git,fs,shell,net}_tools`，下沉 ~13073 LoC；T3/T4 共 8223 LoC（Extension/Skill/Job/Routine/Message 5 类工具）留桌面。原"建议 6-8 刀按职能分组"条款细化为 ADR-156 §6 的反向依赖 tier 切分。
 - **不纳入 F4**：`import/openclaw`（桌面端历史数据迁移工具，非 headless 核心）。
 
 每个子波次单独 PR、单独可 revert，按 ADR-129 §1.3 verbatim 红线推进。
