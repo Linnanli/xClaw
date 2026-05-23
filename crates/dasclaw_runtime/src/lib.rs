@@ -34,6 +34,7 @@
 //! Instead, callers must attach the name explicitly at the boundary using
 //! [`ToolError::from_tool_impl`].
 
+pub mod agent;
 pub mod context;
 pub mod error;
 pub mod feature_flags;
@@ -44,6 +45,7 @@ pub mod recording;
 pub mod secrets;
 pub mod tool;
 
+pub use agent::{Agent, AgentBuilder, AgentConfig, AgentError, AgentResponder};
 pub use error::ToolError;
 pub use feature_flags::{SharedFeatureFlags, ToolFeatureFlags};
 pub use job::{JobState, StateTransition, TokenBudgetExceeded};
