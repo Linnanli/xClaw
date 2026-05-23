@@ -91,15 +91,15 @@ impl From<std::io::Error> for WasmError {
     }
 }
 
-impl From<WasmError> for crate::tools::ToolError {
+impl From<WasmError> for dasclaw_tool::ToolError {
     fn from(e: WasmError) -> Self {
-        crate::tools::ToolError::Sandbox(e.to_string())
+        dasclaw_tool::ToolError::Sandbox(e.to_string())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::tools::wasm::error::WasmError;
+    use crate::error::WasmError;
 
     #[test]
     fn test_error_display() {
@@ -117,9 +117,9 @@ mod tests {
     #[test]
     fn test_conversion_to_tool_error() {
         let wasm_err = WasmError::Trapped("test trap".to_string());
-        let tool_err: crate::tools::ToolError = wasm_err.into();
+        let tool_err: dasclaw_tool::ToolError = wasm_err.into();
         match tool_err {
-            crate::tools::ToolError::Sandbox(msg) => {
+            dasclaw_tool::ToolError::Sandbox(msg) => {
                 assert!(msg.contains("test trap"));
             }
             _ => panic!("Expected Sandbox variant"),

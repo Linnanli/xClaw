@@ -1,77 +1,11 @@
 //! WASM sandbox for untrusted tool execution.
 //!
-//! This module provides Wasmtime-based sandboxed execution for tools,
-//! following patterns from NEAR blockchain and modern WASM best practices:
-//!
-//! - **Compile once, instantiate fresh**: Tools are validated and compiled
-//!   at registration time. Each execution creates a fresh instance.
-//!
-//! - **Fuel metering**: CPU usage is limited via Wasmtime's fuel system.
-//!
-//! - **Memory limits**: Memory growth is bounded via ResourceLimiter.
-//!
-//! - **Extended host API (V2)**: log, time, workspace, HTTP, tool invoke, secrets
-//!
-//! - **Capability-based security**: Features are opt-in via Capabilities.
-//!
-//! # Architecture (V2)
-//!
-//! ```text
-//! ┌─────────────────────────────────────────────────────────────────────────────┐
-//! │                              WASM Tool Execution                             │
-//! │                                                                              │
-//! │   WASM Tool ──▶ Host Function ──▶ Allowlist ──▶ Credential ──▶ Execute     │
-//! │   (untrusted)   (boundary)        Validator     Injector       Request      │
-//! │                                                                    │        │
-//! │                                                                    ▼        │
-//! │                              ◀────── Leak Detector ◀────── Response        │
-//! │                          (sanitized, no secrets)                            │
-//! └─────────────────────────────────────────────────────────────────────────────┘
-//! ```
-//!
-//! # Security Constraints
-//!
-//! | Threat | Mitigation |
-//! |--------|------------|
-//! | CPU exhaustion | Fuel metering |
-//! | Memory exhaustion | ResourceLimiter, 10MB default |
-//! | Infinite loops | Epoch interruption + tokio timeout |
-//! | Filesystem access | No WASI FS, only host workspace_read |
-//! | Network access | Allowlisted endpoints only |
-//! | Credential exposure | Injection at host boundary only |
-//! | Secret exfiltration | Leak detector scans all outputs |
-//! | Log spam | Max 1000 entries, 4KB per message |
-//! | Path traversal | Validate paths (no `..`, no `/` prefix) |
-//! | Trap recovery | Discard instance, never reuse |
-//! | Side channels | Fresh instance per execution |
-//! | Rate abuse | Per-tool rate limiting |
-//! | WASM tampering | BLAKE3 hash verification on load |
-//! | Direct tool access | Tool aliasing (indirection layer) |
-//!
-//! # Example
-//!
-//! ```ignore
-//! use ironclaw::tools::wasm::{WasmToolRuntime, WasmRuntimeConfig, WasmToolWrapper};
-//! use ironclaw::tools::wasm::Capabilities;
-//! use std::sync::Arc;
-//!
-//! // Create runtime
-//! let runtime = Arc::new(WasmToolRuntime::new(WasmRuntimeConfig::default())?);
-//!
-//! // Prepare a tool from WASM bytes
-//! let wasm_bytes = std::fs::read("my_tool.wasm")?;
-//! let prepared = runtime.prepare("my_tool", &wasm_bytes, None).await?;
-//!
-//! // Create wrapper with HTTP capability
-//! let capabilities = Capabilities::none()
-//!     .with_http(HttpCapability::new(vec![
-//!         EndpointPattern::host("api.openai.com").with_path_prefix("/v1/"),
-//!     ]));
-//! let tool = WasmToolWrapper::new(runtime, prepared, capabilities);
-//!
-//! // Execute (implements Tool trait)
-//! let output = tool.execute(serde_json::json!({"input": "test"}), &ctx).await?;
-//! ```
+//! Most primitives (allowlist, capabilities, capabilities_schema,
+//! credential_injector, error, host, limits, storage) have been moved to the
+//! `dasclaw_wasm_tools` crate under ADR-152 F4.5.3. This module re-exports
+//! them so existing `crate::tools::wasm::*` call sites keep compiling, and
+//! keeps the four still-desktop-coupled modules (loader, rate_limiter,
+//! runtime, wrapper) in place.
 
 /// Host WIT version for tool extensions.
 ///
@@ -82,49 +16,47 @@ pub const WIT_TOOL_VERSION: &str = "0.3.0";
 /// Host WIT version for channel extensions.
 pub const WIT_CHANNEL_VERSION: &str = "0.3.0";
 
-mod allowlist;
-mod capabilities;
-mod capabilities_schema;
-pub(crate) mod credential_injector;
-mod error;
-mod host;
-mod limits;
+// Re-export moved modules so `crate::tools::wasm::<mod>::*` paths still resolve.
+pub use dasclaw_wasm_tools::{
+    allowlist, capabilities, capabilities_schema, credential_injector, error, host, limits, storage,
+};
+
+// Modules still kept in the desktop crate.
 pub(crate) mod loader;
 mod rate_limiter;
 mod runtime;
-pub(crate) mod storage;
 mod wrapper;
 
 // Core types
-pub use error::WasmError;
-pub use host::{HostState, LogEntry, LogLevel};
-pub use limits::{
+pub use dasclaw_wasm_tools::WasmError;
+pub use dasclaw_wasm_tools::{
     DEFAULT_FUEL_LIMIT, DEFAULT_MEMORY_LIMIT, DEFAULT_TIMEOUT, FuelConfig, ResourceLimits,
     WasmResourceLimiter,
 };
+pub use dasclaw_wasm_tools::{HostState, LogEntry, LogLevel};
 pub use runtime::{PreparedModule, WasmRuntimeConfig, WasmToolRuntime, enable_compilation_cache};
 pub use wrapper::{OAuthRefreshConfig, WasmToolWrapper};
 
 // Capabilities (V2)
-pub use capabilities::{
+pub use dasclaw_wasm_tools::{
     Capabilities, EndpointPattern, HttpCapability, RateLimitConfig, SecretsCapability,
     ToolInvokeCapability, WebhookCapability, WorkspaceCapability, WorkspaceReader,
 };
 
 // Security components (V2)
-pub use allowlist::{AllowlistResult, AllowlistValidator, DenyReason};
-pub(crate) use credential_injector::inject_credential;
-pub use credential_injector::{
+pub use dasclaw_wasm_tools::inject_credential;
+pub use dasclaw_wasm_tools::{AllowlistResult, AllowlistValidator, DenyReason};
+pub use dasclaw_wasm_tools::{
     CredentialInjector, InjectedCredentials, InjectionError, SharedCredentialRegistry,
 };
 pub use rate_limiter::{LimitType, RateLimitError, RateLimitResult, RateLimiter};
 
 // Storage (V2)
 #[cfg(feature = "libsql")]
-pub use storage::LibSqlWasmToolStore;
+pub use dasclaw_wasm_tools::LibSqlWasmToolStore;
 #[cfg(feature = "postgres")]
-pub use storage::PostgresWasmToolStore;
-pub use storage::{
+pub use dasclaw_wasm_tools::PostgresWasmToolStore;
+pub use dasclaw_wasm_tools::{
     StoreToolParams, StoredCapabilities, StoredWasmTool, StoredWasmToolWithBinary, ToolStatus,
     TrustLevel, WasmStorageError, WasmToolStore, compute_binary_hash, verify_binary_integrity,
 };
@@ -137,7 +69,7 @@ pub use loader::{
 };
 
 // Capabilities schema (for parsing *.capabilities.json files)
-pub use capabilities_schema::{
+pub use dasclaw_wasm_tools::{
     AuthCapabilitySchema, CapabilitiesFile, OAuthConfigSchema, RateLimitSchema,
     ToolFieldSetupSchema, ToolSetupFieldInputType, ToolSetupSchema, ValidationEndpointSchema,
 };

@@ -1,0 +1,43 @@
+[package]
+name = "dasclaw_wasm_tools"
+version = "0.0.0-w1"
+edition = "2024"
+description = "WASM sandbox primitives for tool execution (verbatim port from desktop-client/ironclaw/src/tools/wasm)."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+blake3 = "1"
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["sync"] }
+tracing = "0.1"
+url = "2"
+urlencoding = "2"
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
+wasmtime = { version = "28", features = ["component-model"] }
+
+# Workspace crates
+dasclaw_runtime = { path = "../dasclaw_runtime" }
+dasclaw_tool = { path = "../dasclaw_tool" }
+
+# Optional storage backends
+deadpool-postgres = { version = "0.14", optional = true }
+tokio-postgres = { version = "0.7", optional = true }
+libsql = { version = "0.6", optional = true, default-features = false, features = ["core", "replication", "remote", "tls"] }
+
+[features]
+default = []
+postgres = ["dep:deadpool-postgres", "dep:tokio-postgres", "dasclaw_runtime/postgres"]
+libsql = ["dep:libsql", "dasclaw_runtime/libsql"]
+
+[dev-dependencies]
+secrecy = "0.10"
+tokio = { version = "1", features = ["sync", "rt", "macros"] }

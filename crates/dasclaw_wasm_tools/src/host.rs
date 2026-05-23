@@ -24,8 +24,8 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::tools::wasm::capabilities::Capabilities;
-use crate::tools::wasm::error::WasmError;
+use crate::capabilities::Capabilities;
+use crate::error::WasmError;
 
 /// Maximum log entries per execution (prevents log spam attacks).
 const MAX_LOG_ENTRIES: usize = 1000;
@@ -260,7 +260,7 @@ impl HostState {
             .ok_or_else(|| "HTTP capability not granted".to_string())?;
 
         // Use the allowlist validator
-        use crate::tools::wasm::allowlist::AllowlistValidator;
+        use crate::allowlist::AllowlistValidator;
 
         let validator = AllowlistValidator::new(capability.allowlist.clone());
         let result = validator.validate(url, method);
@@ -381,10 +381,10 @@ fn validate_workspace_path(path: &str) -> Result<(), WasmError> {
 mod tests {
     use std::sync::Arc;
 
-    use crate::tools::wasm::capabilities::{
+    use crate::capabilities::{
         Capabilities, SecretsCapability, WorkspaceCapability, WorkspaceReader,
     };
-    use crate::tools::wasm::host::{
+    use crate::host::{
         HostState, LogLevel, MAX_LOG_ENTRIES, MAX_LOG_MESSAGE_BYTES, validate_workspace_path,
     };
 
@@ -566,7 +566,7 @@ mod tests {
     fn test_http_request_rate_limit() {
         // Create state with HTTP capability enabled
         let capabilities = Capabilities {
-            http: Some(crate::tools::wasm::capabilities::HttpCapability::default()),
+            http: Some(crate::capabilities::HttpCapability::default()),
             ..Default::default()
         };
         let mut state = HostState::new(capabilities);
@@ -584,7 +584,7 @@ mod tests {
     fn test_tool_invoke_rate_limit() {
         // Create state with tool invoke capability enabled
         let capabilities = Capabilities {
-            tool_invoke: Some(crate::tools::wasm::capabilities::ToolInvokeCapability::default()),
+            tool_invoke: Some(crate::capabilities::ToolInvokeCapability::default()),
             ..Default::default()
         };
         let mut state = HostState::new(capabilities);

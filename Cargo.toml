@@ -33,6 +33,8 @@ members = [
 	"crates/dasclaw_routines",
 	# F4.5 first slice — channel core trait + manager + relay extracted from desktop
 	"crates/dasclaw_channels",
+	# F4.5.3 — wasm sandbox primitives extracted from desktop tools/wasm/
+	"crates/dasclaw_wasm_tools",
 	# W2.6 接线层：组合 sandbox + pty + workspace_cap policy
 	"crates/dasclaw_exec",
 	# W6-C 主仓自实现 LLM provider —— 替代 claw-code-api path-dep（ADR-118 PR-A.0 骨架）
