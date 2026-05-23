@@ -2666,6 +2666,7 @@ dependencies = [
  "dasclaw_safety",
  "dasclaw_sandbox",
  "dasclaw_tool",
+ "dasclaw_wasm_tools",
  "dasclaw_workspace_cap",
  "deadpool-postgres",
  "dirs 6.0.0",
@@ -3363,6 +3364,31 @@ version = "0.0.0-w7"
 dependencies = [
  "pretty_assertions",
  "regex-lite",
+]
+
+[[package]]
+name = "dasclaw_wasm_tools"
+version = "0.0.0-w1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "blake3",
+ "chrono",
+ "dasclaw_runtime",
+ "dasclaw_tool",
+ "deadpool-postgres",
+ "libsql",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-postgres",
+ "tracing",
+ "url",
+ "urlencoding",
+ "uuid",
+ "wasmtime",
 ]
 
 [[package]]

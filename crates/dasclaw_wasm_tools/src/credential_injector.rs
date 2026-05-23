@@ -271,7 +271,7 @@ impl CredentialInjector {
 }
 
 /// Inject a single credential into the result.
-pub(crate) fn inject_credential(
+pub fn inject_credential(
     result: &mut InjectedCredentials,
     location: &CredentialLocation,
     secret: &DecryptedSecret,
@@ -310,7 +310,7 @@ pub(crate) fn inject_credential(
 }
 
 /// Check if a host matches a pattern (supports wildcards).
-pub(crate) fn host_matches_pattern(host: &str, pattern: &str) -> bool {
+pub fn host_matches_pattern(host: &str, pattern: &str) -> bool {
     if pattern == host {
         return true;
     }
@@ -366,17 +366,26 @@ fn base64_encode(input: &[u8]) -> String {
 mod tests {
     use std::collections::HashMap;
 
-    use crate::testing::credentials::{TEST_OPENAI_API_KEY, test_secrets_store};
-    use crate::tools::wasm::credential_injector::{
-        CredentialInjector, base64_encode, host_matches_pattern,
-    };
+    use crate::credential_injector::{CredentialInjector, base64_encode, host_matches_pattern};
     use dasclaw_runtime::secrets::{
         CreateSecretParams, CredentialLocation, CredentialMapping, InMemorySecretsStore,
-        SecretsStore,
+        SecretsCrypto, SecretsStore,
     };
+    use secrecy::SecretString;
+    use std::sync::Arc;
+
+    /// Fake API key used across tests. Mirrors the legacy
+    /// `crate::testing::credentials::TEST_OPENAI_API_KEY` constant.
+    const TEST_OPENAI_API_KEY: &str = "sk-test123";
 
     fn test_store() -> InMemorySecretsStore {
-        test_secrets_store()
+        let crypto = Arc::new(
+            SecretsCrypto::new(SecretString::from(
+                "0123456789abcdef0123456789abcdef".to_string(),
+            ))
+            .unwrap(),
+        );
+        InMemorySecretsStore::new(crypto)
     }
 
     #[test]
@@ -535,7 +544,7 @@ mod tests {
 
     // ── SharedCredentialRegistry tests ─────────────────────────────────
 
-    use crate::tools::wasm::credential_injector::SharedCredentialRegistry;
+    use crate::credential_injector::SharedCredentialRegistry;
 
     #[test]
     fn test_shared_registry_empty() {

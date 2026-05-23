@@ -207,6 +207,11 @@ dasclaw_tool = { path = "../../crates/dasclaw_tool" }
 # (F3.2 phase 2 PR 2; ADR-152 §3, #641).
 dasclaw_runtime = { path = "../../crates/dasclaw_runtime" }
 
+# WASM sandbox primitives (allowlist / capabilities / credential injector /
+# host / limits / storage / error). Extracted from desktop tools/wasm/ under
+# ADR-152 F4.5.3.
+dasclaw_wasm_tools = { path = "../../crates/dasclaw_wasm_tools" }
+
 # AWS Bedrock (native Converse API, opt-in via --features bedrock)
 aws-config = { version = "1", features = ["behavior-version-latest"], optional = true }
 aws-sdk-bedrockruntime = { version = "1", optional = true }
@@ -315,8 +320,11 @@ postgres = [
     # Forward our feature flag so the optional postgres deps are pulled in
     # and the `repository` module + `Repository` re-export become available.
     "dasclaw_workspace_cap/postgres",
+    # ADR-152 F4.5.3: forward postgres feature to the new wasm-tools crate so
+    # the `PostgresWasmToolStore` re-export resolves.
+    "dasclaw_wasm_tools/postgres",
 ]
-libsql = ["dep:libsql", "dasclaw_runtime/libsql"]
+libsql = ["dep:libsql", "dasclaw_runtime/libsql", "dasclaw_wasm_tools/libsql"]
 # Opt-in feature for especially heavy integration-test targets that run in a
 # dedicated CI job instead of the default Rust test matrix.
 integration = []
