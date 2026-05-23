@@ -10,6 +10,9 @@ dasclaw_tool = { path = "../dasclaw_tool" }
 # `dasclaw_core::SecretProvider` trait used by the
 # `secrets::agent_provider::AgentSecrets` adapter (F3.2 phase 2 PR 4c, #641).
 dasclaw_core = { path = "../dasclaw_core" }
+# `agent::LlmProviderResponder` adapts any `LlmProvider` impl into the
+# `AgentResponder` trait (ADR-153 step 2 sub-step A2).
+dasclaw_llm_provider = { path = "../dasclaw_llm_provider" }
 thiserror = "1"
 rust_decimal = { version = "1", features = ["serde", "serde-with-str", "maths"] }
 serde = { version = "1", features = ["derive"] }

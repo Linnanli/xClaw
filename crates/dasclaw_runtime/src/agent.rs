@@ -14,19 +14,22 @@
 //! let text = agent.run("Hello!").await?;
 //! ```
 //!
-//! ## Scope of this sub-step (A1)
+//! ## Scope (A1 + A2)
 //!
-//! - Defines the public shape (`Agent`, `AgentBuilder`, `AgentConfig`,
-//!   `AgentError`).
-//! - Wraps [`dasclaw_core::agentic_loop::run_agentic_loop`] with an
-//!   internal `HeadlessDelegate` and `HookBundle::noop()`.
-//! - Exposes a narrow [`AgentResponder`] trait — the single seam where a
-//!   concrete LLM provider gets plugged in. The runtime calls it once per
-//!   loop iteration to obtain a `RespondOutput`.
-//! - Tool execution is **not** wired yet: if the responder returns
-//!   `ToolCalls`, the loop ends with `AgentError::ToolsNotSupported`. The
-//!   tool-binding builder methods (`tools_default`, `tools_with`) land in
-//!   sub-step A2 together with the `dasclaw_llm_provider` adapter.
+//! - **A1** — public shape (`Agent`, `AgentBuilder`, `AgentConfig`,
+//!   `AgentError`), wraps [`dasclaw_core::agentic_loop::run_agentic_loop`]
+//!   with an internal `HeadlessDelegate` and a configurable `HookBundle`.
+//!   The narrow [`AgentResponder`] trait is the single seam where any LLM
+//!   adapter plugs in.
+//! - **A2** — tool execution wiring. A second narrow trait
+//!   [`ToolExecutor`] lets callers plug in a real tool runner. When wired,
+//!   the loop dispatches each tool call through the executor and feeds the
+//!   results back into [`ReasoningContext`] as assistant + tool_result
+//!   messages. When no executor is wired and the model emits tool calls,
+//!   the loop still ends with [`AgentError::ToolsNotSupported`].
+//! - **A2** — ships [`llm_adapter::LlmProviderResponder`] in a sibling
+//!   module, adapting any [`dasclaw_llm_provider::provider::LlmProvider`]
+//!   into an [`AgentResponder`].
 //!
 //! ## Why a new `AgentResponder` trait instead of `LlmCompleter`
 //!
@@ -45,7 +48,7 @@ use dasclaw_core::agentic_loop::{
     AgenticLoopConfig, LoopDelegate, LoopOutcome, LoopSignal, TextAction, run_agentic_loop,
 };
 use dasclaw_core::hooks::HookBundle;
-use dasclaw_core::messages::{ChatMessage, ToolCall};
+use dasclaw_core::messages::{ChatMessage, ToolCall, ToolDefinition, ToolResult};
 use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, ResponseMetadata};
 use dasclaw_core::traits::HostError;
@@ -62,6 +65,28 @@ pub trait AgentResponder: Send + Sync {
     async fn respond(&self, ctx: &mut ReasoningContext) -> Result<RespondOutput, HostError>;
 }
 
+/// Narrow tool-execution seam used by [`Agent`] (ADR-153 step 2 sub-step A2).
+///
+/// Wraps a concrete tool runner — a `dasclaw_tool` registry, an MCP
+/// gateway, a recorder, or a mock — and runs a single tool call to
+/// completion. The runtime calls `execute` once per tool call emitted by
+/// the model, sequentially, and stores the resulting [`ToolResult`] in
+/// the conversation as the canonical assistant + tool_result pair before
+/// looping back into the next LLM call.
+///
+/// When no executor is plugged in and the model still emits a tool call,
+/// the agent ends the loop with [`AgentError::ToolsNotSupported`].
+#[async_trait]
+pub trait ToolExecutor: Send + Sync {
+    /// Run a single tool call and return its result.
+    ///
+    /// Implementations are responsible for their own approval, egress and
+    /// sandbox enforcement. The runtime does not retry on error — return
+    /// a `ToolResult` with `is_error = true` to feed the failure back to
+    /// the model.
+    async fn execute(&self, call: &ToolCall) -> Result<ToolResult, HostError>;
+}
+
 /// Errors surfaced by [`Agent::run`].
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
@@ -73,9 +98,11 @@ pub enum AgentError {
     #[error("agent loop exceeded max_iterations ({0})")]
     MaxIterations(usize),
 
-    /// The LLM asked to call a tool but no tools are wired (sub-step A1).
-    /// Tool support lands in sub-step A2.
-    #[error("tool calls are not supported yet (ADR-153 step 2 sub-step A2)")]
+    /// The LLM asked to call a tool but no [`ToolExecutor`] is wired.
+    /// Plug one in via [`AgentBuilder::tool_executor`].
+    #[error(
+        "tool calls are not supported: no ToolExecutor wired (see AgentBuilder::tool_executor)"
+    )]
     ToolsNotSupported,
 
     /// The loop ended with `LoopOutcome::Failure(reason)`, typically from
@@ -110,6 +137,12 @@ pub struct AgentConfig {
     /// Per-user model override; passed straight through to the responder
     /// via [`ReasoningContext::model_override`].
     pub model: Option<String>,
+    /// Tool definitions advertised to the model. When empty, the agent is
+    /// in text-only mode and any tool call from the model triggers
+    /// [`AgentError::ToolsNotSupported`] (unless a [`ToolExecutor`] is
+    /// nevertheless wired and the model still emits one — same outcome,
+    /// the empty advert deters the model up front).
+    pub tools: Vec<ToolDefinition>,
     /// Loop tuning. When `None`, [`AgenticLoopConfig::default`] is used
     /// (50 iterations, intent nudges enabled). Not `Clone` upstream, so we
     /// own a fresh value here.
@@ -120,6 +153,7 @@ pub struct AgentConfig {
 /// and a configurable [`HookBundle`].
 pub struct Agent {
     responder: Arc<dyn AgentResponder>,
+    tool_executor: Option<Arc<dyn ToolExecutor>>,
     hooks: HookBundle,
     config: AgentConfig,
 }
@@ -141,6 +175,9 @@ impl Agent {
         if let Some(ref model) = self.config.model {
             ctx.model_override = Some(model.clone());
         }
+        if !self.config.tools.is_empty() {
+            ctx.available_tools = self.config.tools.clone();
+        }
         ctx.messages.push(ChatMessage::user(prompt));
 
         let loop_config = self
@@ -152,6 +189,7 @@ impl Agent {
 
         let delegate = HeadlessDelegate {
             responder: Arc::clone(&self.responder),
+            tool_executor: self.tool_executor.clone(),
         };
 
         let outcome = run_agentic_loop(&delegate, &mut ctx, &loop_config, &self.hooks)
@@ -175,6 +213,7 @@ fn clone_loop_config(src: &AgenticLoopConfig) -> AgenticLoopConfig {
 #[derive(Default)]
 pub struct AgentBuilder {
     responder: Option<Arc<dyn AgentResponder>>,
+    tool_executor: Option<Arc<dyn ToolExecutor>>,
     hooks: Option<HookBundle>,
     config: AgentConfig,
 }
@@ -192,6 +231,30 @@ impl AgentBuilder {
     #[must_use]
     pub fn responder_arc(mut self, responder: Arc<dyn AgentResponder>) -> Self {
         self.responder = Some(responder);
+        self
+    }
+
+    /// Plug in a tool executor. Required only if the model is expected to
+    /// emit tool calls; otherwise the agent stays in text-only mode.
+    #[must_use]
+    pub fn tool_executor(mut self, executor: impl ToolExecutor + 'static) -> Self {
+        self.tool_executor = Some(Arc::new(executor));
+        self
+    }
+
+    /// Same as [`Self::tool_executor`] but accepts a pre-built `Arc`.
+    #[must_use]
+    pub fn tool_executor_arc(mut self, executor: Arc<dyn ToolExecutor>) -> Self {
+        self.tool_executor = Some(executor);
+        self
+    }
+
+    /// Advertise tool definitions to the model. Without an accompanying
+    /// [`Self::tool_executor`], any tool call still maps to
+    /// [`AgentError::ToolsNotSupported`].
+    #[must_use]
+    pub fn tools(mut self, tools: Vec<ToolDefinition>) -> Self {
+        self.config.tools = tools;
         self
     }
 
@@ -230,6 +293,7 @@ impl AgentBuilder {
         let hooks = self.hooks.unwrap_or_else(HookBundle::noop);
         Ok(Agent {
             responder,
+            tool_executor: self.tool_executor,
             hooks,
             config: self.config,
         })
@@ -238,10 +302,12 @@ impl AgentBuilder {
 
 /// Internal `LoopDelegate` that bridges the agentic loop to a single
 /// [`AgentResponder`]. The agent has already seeded the reasoning
-/// context with the user prompt, system prompt and model override before
-/// the loop starts, so the delegate keeps no extra state.
+/// context with the user prompt, system prompt, model override and
+/// advertised tools before the loop starts, so the delegate only needs
+/// the responder and an optional tool executor.
 struct HeadlessDelegate {
     responder: Arc<dyn AgentResponder>,
+    tool_executor: Option<Arc<dyn ToolExecutor>>,
 }
 
 #[async_trait]
@@ -277,18 +343,43 @@ impl LoopDelegate for HeadlessDelegate {
 
     async fn execute_tool_calls(
         &self,
-        _tool_calls: Vec<ToolCall>,
-        _content: Option<String>,
-        _ctx: &mut ReasoningContext,
+        tool_calls: Vec<ToolCall>,
+        content: Option<String>,
+        ctx: &mut ReasoningContext,
     ) -> Result<Option<LoopOutcome>, HostError> {
-        // Tool wiring lands in ADR-153 step 2 sub-step A2. Returning
-        // Failure here makes the loop end deterministically; `Agent::run`
-        // maps it to `AgentError::ToolsNotSupported` via the dedicated
-        // failure-reason match below.
-        Ok(Some(LoopOutcome::Failure(
-            TOOLS_NOT_SUPPORTED_REASON.to_string(),
-        )))
+        // No executor → emit the sentinel and let `map_outcome` raise
+        // `AgentError::ToolsNotSupported`. This keeps the A1 contract
+        // intact when callers use text-only agents.
+        let Some(executor) = self.tool_executor.as_ref() else {
+            return Ok(Some(LoopOutcome::Failure(
+                TOOLS_NOT_SUPPORTED_REASON.to_string(),
+            )));
+        };
+
+        push_assistant_tool_calls(ctx, content, &tool_calls);
+        for call in &tool_calls {
+            let result = executor.execute(call).await?;
+            ctx.messages.push(ChatMessage::tool_result(
+                &result.tool_call_id,
+                &result.name,
+                &result.content,
+            ));
+        }
+        Ok(None)
     }
+}
+
+/// Record the assistant's tool-call turn so the next LLM call sees the
+/// canonical Anthropic-style assistant + tool_result pairing.
+fn push_assistant_tool_calls(
+    ctx: &mut ReasoningContext,
+    content: Option<String>,
+    tool_calls: &[ToolCall],
+) {
+    ctx.messages.push(ChatMessage::assistant_with_tool_calls(
+        content,
+        tool_calls.to_vec(),
+    ));
 }
 
 /// Sentinel string emitted by [`HeadlessDelegate::execute_tool_calls`]
@@ -431,5 +522,132 @@ mod tests {
             .expect("build");
         let out = agent.run("hi").await.expect("run");
         assert_eq!(out, "ok");
+    }
+
+    // -----------------------------------------------------------------
+    // A2 tests — tool executor wiring
+    // -----------------------------------------------------------------
+
+    use dasclaw_core::messages::{ToolDefinition, ToolResult};
+
+    /// Executor that returns a fixed `ToolResult` and counts invocations.
+    struct ScriptedExecutor {
+        result_content: String,
+        calls: tokio::sync::Mutex<Vec<ToolCall>>,
+    }
+
+    impl ScriptedExecutor {
+        fn new(result_content: impl Into<String>) -> Self {
+            Self {
+                result_content: result_content.into(),
+                calls: tokio::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ToolExecutor for ScriptedExecutor {
+        async fn execute(&self, call: &ToolCall) -> Result<ToolResult, HostError> {
+            self.calls.lock().await.push(call.clone());
+            Ok(ToolResult {
+                tool_call_id: call.id.clone(),
+                name: call.name.clone(),
+                content: self.result_content.clone(),
+                is_error: false,
+            })
+        }
+    }
+
+    fn tool_call_output_named(name: &str, id: &str) -> RespondOutput {
+        RespondOutput {
+            result: RespondResult::ToolCalls {
+                tool_calls: vec![ToolCall {
+                    id: id.into(),
+                    name: name.into(),
+                    arguments: serde_json::json!({"x": 1}),
+                    reasoning: None,
+                }],
+                content: Some("let me call it".into()),
+            },
+            usage: TokenUsage::default(),
+            finish_reason: FinishReason::ToolUse,
+            metadata: ResponseMetadata::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn req_dasclaw_runtime_agent_a2_tools_advertised_in_context() {
+        struct ToolSpy;
+        #[async_trait]
+        impl AgentResponder for ToolSpy {
+            async fn respond(
+                &self,
+                ctx: &mut ReasoningContext,
+            ) -> Result<RespondOutput, HostError> {
+                assert_eq!(ctx.available_tools.len(), 1);
+                assert_eq!(ctx.available_tools[0].name, "echo");
+                Ok(text_output("done"))
+            }
+        }
+        let agent = Agent::builder()
+            .responder(ToolSpy)
+            .tools(vec![ToolDefinition {
+                name: "echo".into(),
+                description: "echo back".into(),
+                parameters: serde_json::json!({"type": "object"}),
+            }])
+            .build()
+            .expect("build");
+        let out = agent.run("hi").await.expect("run");
+        assert_eq!(out, "done");
+    }
+
+    #[tokio::test]
+    async fn req_dasclaw_runtime_agent_a2_executor_runs_and_loop_continues() {
+        // First LLM turn → tool call; second turn → text response.
+        let responder = ScriptedResponder::new(vec![
+            tool_call_output_named("echo", "call_1"),
+            text_output("all done"),
+        ]);
+        let executor = ScriptedExecutor::new("echo result");
+        let agent = Agent::builder()
+            .responder(responder)
+            .tool_executor(executor)
+            .build()
+            .expect("build");
+        let out = agent.run("please call echo").await.expect("run");
+        assert_eq!(out, "all done");
+    }
+
+    #[tokio::test]
+    async fn req_dasclaw_runtime_agent_a2_executor_error_propagates_as_responder_error() {
+        struct ExplodingExecutor;
+        #[async_trait]
+        impl ToolExecutor for ExplodingExecutor {
+            async fn execute(&self, _call: &ToolCall) -> Result<ToolResult, HostError> {
+                Err("tool blew up".into())
+            }
+        }
+        let responder = ScriptedResponder::new(vec![tool_call_output_named("boom", "call_x")]);
+        let agent = Agent::builder()
+            .responder(responder)
+            .tool_executor(ExplodingExecutor)
+            .build()
+            .expect("build");
+        let err = agent.run("hi").await.unwrap_err();
+        assert!(matches!(err, AgentError::Responder(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn req_dasclaw_runtime_agent_a2_missing_executor_still_yields_tools_not_supported() {
+        // Regression: A2 keeps the A1 contract — no executor, model emits
+        // a tool call, agent maps to `ToolsNotSupported`.
+        let responder = ScriptedResponder::new(vec![tool_call_output_named("x", "call_x")]);
+        let agent = Agent::builder()
+            .responder(responder)
+            .build()
+            .expect("build");
+        let err = agent.run("hi").await.unwrap_err();
+        assert!(matches!(err, AgentError::ToolsNotSupported), "got {err:?}");
     }
 }
