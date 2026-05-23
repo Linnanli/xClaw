@@ -16,18 +16,17 @@ use wasmtime::Store;
 use wasmtime::component::Linker;
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiView};
 
-use crate::llm::recording::{HttpExchangeRequest, HttpExchangeResponse, HttpInterceptor};
-use crate::safety::LeakDetector;
-use crate::tools::tool::{Tool, ToolError, ToolOutput};
-use crate::tools::wasm::capabilities::Capabilities;
-use crate::tools::wasm::credential_injector::{
-    InjectedCredentials, host_matches_pattern, inject_credential,
-};
-use crate::tools::wasm::error::WasmError;
-use crate::tools::wasm::host::{HostState, LogLevel};
-use crate::tools::wasm::limits::{ResourceLimits, WasmResourceLimiter};
-use crate::tools::wasm::runtime::{EPOCH_TICK_INTERVAL, PreparedModule, WasmToolRuntime};
+use crate::capabilities::Capabilities;
+use crate::credential_injector::{InjectedCredentials, host_matches_pattern, inject_credential};
+use crate::error::WasmError;
+use crate::host::{HostState, LogLevel};
+use crate::limits::{ResourceLimits, WasmResourceLimiter};
+use crate::runtime::{EPOCH_TICK_INTERVAL, PreparedModule, WasmToolRuntime};
+use dasclaw_runtime::Tool;
+use dasclaw_runtime::recording::{HttpExchangeRequest, HttpExchangeResponse, HttpInterceptor};
 use dasclaw_runtime::secrets::{DecryptedSecret, SecretsStore};
+use dasclaw_safety::LeakDetector;
+use dasclaw_tool::{ToolError, ToolOutput};
 
 // Generate component model bindings from the WIT file.
 //
@@ -43,7 +42,7 @@ wasmtime::component::bindgen!({
 });
 
 // Alias the export interface types for convenience.
-use crate::cli::oauth_defaults;
+use dasclaw_llm_provider::provider::oauth_helpers as oauth_defaults;
 use exports::near::agent::tool as wit_tool;
 
 /// Configuration needed to refresh an expired OAuth access token.
@@ -934,7 +933,7 @@ impl WasmToolWrapper {
         params: serde_json::Value,
         context_json: Option<String>,
         host_credentials: Vec<ResolvedHostCredential>,
-    ) -> Result<(String, Vec<crate::tools::wasm::host::LogEntry>), WasmError> {
+    ) -> Result<(String, Vec<crate::host::LogEntry>), WasmError> {
         let engine = self.runtime.engine();
         let limits = &self.prepared.limits;
 
@@ -982,7 +981,7 @@ impl WasmToolWrapper {
                         "{msg}. This usually means the extension was compiled against \
                          a different WIT version than the host supports. \
                          Rebuild the extension against the current WIT (host: {}).",
-                        crate::tools::wasm::WIT_TOOL_VERSION
+                        crate::WIT_TOOL_VERSION
                     ))
                 } else {
                     WasmError::InstantiationFailed(msg)
@@ -1103,7 +1102,7 @@ impl Tool for WasmToolWrapper {
     /// a hint to the description directing the LLM to call `tool_info` for the
     /// full parameter schema. This keeps the raw description clean while still
     /// guiding the LLM.
-    fn schema(&self) -> crate::tools::tool::ToolSchema {
+    fn schema(&self) -> dasclaw_tool::ToolSchema {
         let description = if self.schemas.is_advertised_permissive() {
             format!(
                 "{} (call tool_info(name: \"{}\", include_schema: true) for parameter schema)",
@@ -1112,7 +1111,7 @@ impl Tool for WasmToolWrapper {
         } else {
             self.description.clone()
         };
-        crate::tools::tool::ToolSchema {
+        dasclaw_tool::ToolSchema {
             name: self.prepared.name.clone(),
             description,
             parameters: self.schemas.advertised(),
@@ -1819,14 +1818,14 @@ mod tests {
         SecretsStore,
     };
 
-    use crate::testing::credentials::{
+    use crate::capabilities::Capabilities;
+    use crate::runtime::{WasmRuntimeConfig, WasmToolRuntime};
+    use crate::test_credentials::{
         TEST_BEARER_TOKEN_123, TEST_GOOGLE_OAUTH_FRESH, TEST_GOOGLE_OAUTH_LEGACY,
         TEST_GOOGLE_OAUTH_TOKEN, TEST_OAUTH_CLIENT_ID, TEST_OAUTH_CLIENT_SECRET,
         test_secrets_store,
     };
-    use crate::tools::tool::Tool;
-    use crate::tools::wasm::capabilities::Capabilities;
-    use crate::tools::wasm::runtime::{WasmRuntimeConfig, WasmToolRuntime};
+    use dasclaw_runtime::Tool;
 
     struct RecordingSecretsStore {
         inner: InMemorySecretsStore,
@@ -2247,7 +2246,7 @@ mod tests {
 
     #[test]
     fn test_extract_host_from_url() {
-        use crate::tools::wasm::wrapper::extract_host_from_url;
+        use crate::wrapper::extract_host_from_url;
 
         assert_eq!(
             extract_host_from_url("https://www.googleapis.com/calendar/v3/events"),
@@ -2280,7 +2279,7 @@ mod tests {
 
     #[test]
     fn test_inject_host_credentials_bearer() {
-        use crate::tools::wasm::wrapper::{ResolvedHostCredential, StoreData};
+        use crate::wrapper::{ResolvedHostCredential, StoreData};
         use std::collections::HashMap;
 
         let host_credentials = vec![ResolvedHostCredential {
@@ -2322,7 +2321,7 @@ mod tests {
 
     #[test]
     fn test_inject_host_credentials_query_params() {
-        use crate::tools::wasm::wrapper::{ResolvedHostCredential, StoreData};
+        use crate::wrapper::{ResolvedHostCredential, StoreData};
         use std::collections::HashMap;
 
         let host_credentials = vec![ResolvedHostCredential {
@@ -2352,7 +2351,7 @@ mod tests {
 
     #[test]
     fn test_redact_credentials_includes_host_credentials() {
-        use crate::tools::wasm::wrapper::{ResolvedHostCredential, StoreData};
+        use crate::wrapper::{ResolvedHostCredential, StoreData};
         use std::collections::HashMap;
 
         let host_credentials = vec![ResolvedHostCredential {
@@ -2377,7 +2376,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_host_credentials_no_store() {
-        use crate::tools::wasm::wrapper::resolve_host_credentials;
+        use crate::wrapper::resolve_host_credentials;
 
         let caps = Capabilities::default();
         let result = resolve_host_credentials(&caps, None, "user1", None).await;
@@ -2386,7 +2385,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_host_credentials_no_http_cap() {
-        use crate::tools::wasm::wrapper::resolve_host_credentials;
+        use crate::wrapper::resolve_host_credentials;
 
         let store = test_secrets_store();
 
@@ -2397,8 +2396,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_host_credentials_bearer() {
-        use crate::tools::wasm::capabilities::HttpCapability;
-        use crate::tools::wasm::wrapper::resolve_host_credentials;
+        use crate::capabilities::HttpCapability;
+        use crate::wrapper::resolve_host_credentials;
         use dasclaw_runtime::secrets::{
             CreateSecretParams, CredentialLocation, CredentialMapping, SecretsStore,
         };
@@ -2442,8 +2441,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_host_credentials_owner_scope_bearer() {
-        use crate::tools::wasm::capabilities::HttpCapability;
-        use crate::tools::wasm::wrapper::resolve_host_credentials;
+        use crate::capabilities::HttpCapability;
+        use crate::wrapper::resolve_host_credentials;
         use dasclaw_runtime::secrets::{
             CreateSecretParams, CredentialLocation, CredentialMapping, SecretsStore,
         };
@@ -2487,7 +2486,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_resolves_host_credentials_from_owner_scope_context() {
-        use crate::tools::wasm::capabilities::HttpCapability;
+        use crate::capabilities::HttpCapability;
         use dasclaw_runtime::secrets::{CredentialLocation, CredentialMapping};
 
         let runtime = Arc::new(WasmToolRuntime::new(WasmRuntimeConfig::for_testing()).unwrap());
@@ -2536,8 +2535,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_host_credentials_missing_secret() {
-        use crate::tools::wasm::capabilities::HttpCapability;
-        use crate::tools::wasm::wrapper::resolve_host_credentials;
+        use crate::capabilities::HttpCapability;
+        use crate::wrapper::resolve_host_credentials;
         use dasclaw_runtime::secrets::{CredentialLocation, CredentialMapping};
 
         let store = test_secrets_store();
@@ -2567,8 +2566,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_host_credentials_skips_refresh_when_not_expired() {
-        use crate::tools::wasm::capabilities::HttpCapability;
-        use crate::tools::wasm::wrapper::{OAuthRefreshConfig, resolve_host_credentials};
+        use crate::capabilities::HttpCapability;
+        use crate::wrapper::{OAuthRefreshConfig, resolve_host_credentials};
         use dasclaw_runtime::secrets::{
             CreateSecretParams, CredentialLocation, CredentialMapping, SecretsStore,
         };
@@ -2626,8 +2625,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_host_credentials_skips_refresh_no_config() {
-        use crate::tools::wasm::capabilities::HttpCapability;
-        use crate::tools::wasm::wrapper::resolve_host_credentials;
+        use crate::capabilities::HttpCapability;
+        use crate::wrapper::resolve_host_credentials;
         use dasclaw_runtime::secrets::{
             CreateSecretParams, CredentialLocation, CredentialMapping, SecretsStore,
         };
@@ -2669,8 +2668,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_host_credentials_skips_refresh_no_expires_at() {
-        use crate::tools::wasm::capabilities::HttpCapability;
-        use crate::tools::wasm::wrapper::{OAuthRefreshConfig, resolve_host_credentials};
+        use crate::capabilities::HttpCapability;
+        use crate::wrapper::{OAuthRefreshConfig, resolve_host_credentials};
         use dasclaw_runtime::secrets::{
             CreateSecretParams, CredentialLocation, CredentialMapping, SecretsStore,
         };
@@ -2727,8 +2726,8 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_host_credentials_refreshes_via_proxy_without_direct_token_url_validation()
     {
-        use crate::tools::wasm::capabilities::HttpCapability;
-        use crate::tools::wasm::wrapper::{OAuthRefreshConfig, resolve_host_credentials};
+        use crate::capabilities::HttpCapability;
+        use crate::wrapper::{OAuthRefreshConfig, resolve_host_credentials};
         use dasclaw_runtime::secrets::{
             CreateSecretParams, CredentialLocation, CredentialMapping, SecretsStore,
         };
@@ -2837,8 +2836,8 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_host_credentials_skips_refresh_token_lookup_without_oauth_proxy_auth_token()
      {
-        use crate::tools::wasm::capabilities::HttpCapability;
-        use crate::tools::wasm::wrapper::{OAuthRefreshConfig, resolve_host_credentials};
+        use crate::capabilities::HttpCapability;
+        use crate::wrapper::{OAuthRefreshConfig, resolve_host_credentials};
         use dasclaw_runtime::secrets::{
             CreateSecretParams, CredentialLocation, CredentialMapping, SecretsStore,
         };
@@ -2904,8 +2903,8 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_host_credentials_skips_refresh_token_lookup_for_invalid_direct_token_url()
     {
-        use crate::tools::wasm::capabilities::HttpCapability;
-        use crate::tools::wasm::wrapper::{OAuthRefreshConfig, resolve_host_credentials};
+        use crate::capabilities::HttpCapability;
+        use crate::wrapper::{OAuthRefreshConfig, resolve_host_credentials};
         use dasclaw_runtime::secrets::{
             CreateSecretParams, CredentialLocation, CredentialMapping, SecretsStore,
         };
@@ -3093,7 +3092,7 @@ mod tests {
     /// tool's own legitimate outbound request.
     #[test]
     fn test_leak_scan_runs_before_credential_injection() {
-        use crate::safety::LeakDetector;
+        use dasclaw_safety::LeakDetector;
 
         // Simulate pre-injection headers: WASM only sees the placeholder, not the real token.
         let raw_headers: Vec<(String, String)> = vec![
@@ -3142,8 +3141,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_host_credentials_fallback_to_default_user() {
-        use crate::tools::wasm::capabilities::HttpCapability;
-        use crate::tools::wasm::wrapper::resolve_host_credentials;
+        use crate::capabilities::HttpCapability;
+        use crate::wrapper::resolve_host_credentials;
         use dasclaw_runtime::secrets::{CredentialLocation, CredentialMapping, SecretsStore};
 
         let store = test_secrets_store();
@@ -3174,7 +3173,7 @@ mod tests {
             http: Some(HttpCapability {
                 allowlist: vec![],
                 credentials: creds,
-                rate_limit: crate::tools::wasm::capabilities::RateLimitConfig::default(),
+                rate_limit: crate::capabilities::RateLimitConfig::default(),
                 max_request_bytes: 1024 * 1024,
                 max_response_bytes: 10 * 1024 * 1024,
                 timeout: std::time::Duration::from_secs(30),
@@ -3191,7 +3190,7 @@ mod tests {
     }
 
     fn test_capabilities_with_google_oauth() -> Capabilities {
-        use crate::tools::wasm::capabilities::HttpCapability;
+        use crate::capabilities::HttpCapability;
         use dasclaw_runtime::secrets::{CredentialLocation, CredentialMapping};
 
         let mut creds = std::collections::HashMap::new();
@@ -3207,7 +3206,7 @@ mod tests {
             http: Some(HttpCapability {
                 allowlist: vec![],
                 credentials: creds,
-                rate_limit: crate::tools::wasm::capabilities::RateLimitConfig::default(),
+                rate_limit: crate::capabilities::RateLimitConfig::default(),
                 max_request_bytes: 1024 * 1024,
                 max_response_bytes: 10 * 1024 * 1024,
                 timeout: std::time::Duration::from_secs(30),
@@ -3218,7 +3217,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_host_credentials_prefers_user_specific_over_default() {
-        use crate::tools::wasm::wrapper::resolve_host_credentials;
+        use crate::wrapper::resolve_host_credentials;
         use dasclaw_runtime::secrets::SecretsStore;
 
         let store = test_secrets_store();
@@ -3260,7 +3259,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_host_credentials_no_fallback_when_already_default() {
-        use crate::tools::wasm::wrapper::resolve_host_credentials;
+        use crate::wrapper::resolve_host_credentials;
         use dasclaw_runtime::secrets::SecretsStore;
 
         let store = test_secrets_store();
@@ -3290,7 +3289,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_host_credentials_missing_secret_warns() {
-        use crate::tools::wasm::wrapper::resolve_host_credentials;
+        use crate::wrapper::resolve_host_credentials;
 
         let store = test_secrets_store();
 

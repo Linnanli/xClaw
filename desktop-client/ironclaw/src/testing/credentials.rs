@@ -4,16 +4,16 @@
 //! audits trivial (one file to verify) and eliminates duplication across
 //! the test suite.
 
-use std::sync::Arc;
-
-use secrecy::SecretString;
-
-use dasclaw_runtime::secrets::{InMemorySecretsStore, SecretsCrypto};
+// WASM-tool-relevant fixtures live upstream in `dasclaw_wasm_tools::test_credentials`
+// so the moved wrapper.rs tests do not depend on the desktop crate. We re-export
+// them here so existing desktop callers (oauth_defaults, loader, channels, config,
+// orchestrator tests) continue to work unchanged.
+pub use dasclaw_wasm_tools::test_credentials::{
+    TEST_BEARER_TOKEN_123, TEST_CRYPTO_KEY, TEST_GOOGLE_OAUTH_FRESH, TEST_GOOGLE_OAUTH_LEGACY,
+    TEST_GOOGLE_OAUTH_TOKEN, TEST_OAUTH_CLIENT_ID, TEST_OAUTH_CLIENT_SECRET, test_secrets_store,
+};
 
 // ── Encryption keys ──────────────────────────────────────────────────────
-
-/// 32-character key string for `SecretsCrypto::new()` in tests.
-pub const TEST_CRYPTO_KEY: &str = "0123456789abcdef0123456789abcdef";
 
 /// 32+ char key for web gateway `SecretsCrypto` in tests.
 pub const TEST_GATEWAY_CRYPTO_KEY: &str = "test-key-at-least-32-chars-long!!";
@@ -47,15 +47,8 @@ pub const TEST_ANTHROPIC_OAUTH_BASIC: &str = "sk-ant-oat01-basic";
 pub const TEST_ANTHROPIC_OAUTH_NESTED: &str = "sk-ant-oat01-primary-token";
 
 // ── Google OAuth ─────────────────────────────────────────────────────────
-
-/// Google OAuth access token (standard test).
-pub const TEST_GOOGLE_OAUTH_TOKEN: &str = "ya29.test-token";
-
-/// Google OAuth access token (fresh/non-expired variant).
-pub const TEST_GOOGLE_OAUTH_FRESH: &str = "ya29.fresh-token";
-
-/// Google OAuth access token (legacy/no-expiry variant).
-pub const TEST_GOOGLE_OAUTH_LEGACY: &str = "ya29.legacy-token";
+// `TEST_GOOGLE_OAUTH_TOKEN`, `TEST_GOOGLE_OAUTH_FRESH`, `TEST_GOOGLE_OAUTH_LEGACY`
+// are re-exported from `dasclaw_wasm_tools::test_credentials` at the top.
 
 // ── GitHub ───────────────────────────────────────────────────────────────
 
@@ -68,20 +61,16 @@ pub const TEST_GITHUB_TOKEN: &str = "ghp_test123";
 pub const TEST_TELEGRAM_BOT_TOKEN: &str = "telegram-test-bot-token-not-a-real-token";
 
 // ── OAuth client credentials ────────────────────────────────────────────
-
-/// OAuth client ID for token refresh tests.
-pub const TEST_OAUTH_CLIENT_ID: &str = "test-client-id";
-
-/// OAuth client secret for token refresh tests.
-pub const TEST_OAUTH_CLIENT_SECRET: &str = "test-client-secret";
+// `TEST_OAUTH_CLIENT_ID`, `TEST_OAUTH_CLIENT_SECRET` are re-exported from
+// `dasclaw_wasm_tools::test_credentials` at the top.
 
 // ── Bearer/auth tokens ──────────────────────────────────────────────────
 
 /// Generic test bearer token.
 pub const TEST_BEARER_TOKEN: &str = "test-token";
 
-/// Bearer token with suffix (wasm wrapper credential injection).
-pub const TEST_BEARER_TOKEN_123: &str = "test-token-123";
+// `TEST_BEARER_TOKEN_123` is re-exported from `dasclaw_wasm_tools::test_credentials`
+// at the top.
 
 /// Auth token used by web gateway middleware tests.
 pub const TEST_AUTH_SECRET_TOKEN: &str = "secret-token";
@@ -121,14 +110,5 @@ pub const TEST_SECRET_VALUE: &str = "sk-test-12345";
 /// HTTP webhook secret for channel tests.
 pub const TEST_HTTP_SECRET: &str = "test-secret-123";
 
-// ── Helpers ──────────────────────────────────────────────────────────────
-
-/// Create an `InMemorySecretsStore` backed by [`TEST_CRYPTO_KEY`].
-///
-/// Replaces the duplicated `test_store()` pattern found across multiple
-/// test modules.
-pub fn test_secrets_store() -> InMemorySecretsStore {
-    let crypto =
-        Arc::new(SecretsCrypto::new(SecretString::from(TEST_CRYPTO_KEY.to_string())).unwrap());
-    InMemorySecretsStore::new(crypto)
-}
+// `test_secrets_store` is re-exported from `dasclaw_wasm_tools::test_credentials`
+// at the top.

@@ -3372,15 +3372,21 @@ version = "0.0.0-w1"
 dependencies = [
  "anyhow",
  "async-trait",
+ "axum 0.8.8",
  "blake3",
  "chrono",
+ "dasclaw_llm_provider",
  "dasclaw_runtime",
+ "dasclaw_safety",
  "dasclaw_tool",
  "deadpool-postgres",
+ "dirs 6.0.0",
  "libsql",
+ "reqwest 0.12.28",
  "secrecy",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-postgres",
@@ -3389,6 +3395,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "wasmtime",
+ "wasmtime-wasi",
 ]
 
 [[package]]

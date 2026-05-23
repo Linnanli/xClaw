@@ -1,31 +1,27 @@
 //! WASM sandbox for untrusted tool execution.
 //!
 //! Most primitives (allowlist, capabilities, capabilities_schema,
-//! credential_injector, error, host, limits, storage) have been moved to the
-//! `dasclaw_wasm_tools` crate under ADR-152 F4.5.3. This module re-exports
-//! them so existing `crate::tools::wasm::*` call sites keep compiling, and
-//! keeps the four still-desktop-coupled modules (loader, rate_limiter,
-//! runtime, wrapper) in place.
+//! credential_injector, error, host, limits, storage, runtime, wrapper) have
+//! been moved to the `dasclaw_wasm_tools` crate under ADR-152 F4.5.3 + F4.5.4.
+//! This module re-exports them so existing `crate::tools::wasm::*` call sites
+//! keep compiling, and keeps the two still-desktop-coupled modules (loader,
+//! rate_limiter) in place.
 
 /// Host WIT version for tool extensions.
 ///
 /// Extensions declaring a `wit_version` in their capabilities file are checked
 /// against this at load time: same major, not greater than host.
-pub const WIT_TOOL_VERSION: &str = "0.3.0";
-
-/// Host WIT version for channel extensions.
-pub const WIT_CHANNEL_VERSION: &str = "0.3.0";
+pub use dasclaw_wasm_tools::{WIT_CHANNEL_VERSION, WIT_TOOL_VERSION};
 
 // Re-export moved modules so `crate::tools::wasm::<mod>::*` paths still resolve.
 pub use dasclaw_wasm_tools::{
-    allowlist, capabilities, capabilities_schema, credential_injector, error, host, limits, storage,
+    allowlist, capabilities, capabilities_schema, credential_injector, error, host, limits,
+    runtime, storage, wrapper,
 };
 
 // Modules still kept in the desktop crate.
 pub(crate) mod loader;
 mod rate_limiter;
-mod runtime;
-mod wrapper;
 
 // Core types
 pub use dasclaw_wasm_tools::WasmError;
@@ -34,8 +30,10 @@ pub use dasclaw_wasm_tools::{
     WasmResourceLimiter,
 };
 pub use dasclaw_wasm_tools::{HostState, LogEntry, LogLevel};
-pub use runtime::{PreparedModule, WasmRuntimeConfig, WasmToolRuntime, enable_compilation_cache};
-pub use wrapper::{OAuthRefreshConfig, WasmToolWrapper};
+pub use dasclaw_wasm_tools::{
+    OAuthRefreshConfig, PreparedModule, WasmRuntimeConfig, WasmToolRuntime, WasmToolWrapper,
+    enable_compilation_cache,
+};
 
 // Capabilities (V2)
 pub use dasclaw_wasm_tools::{
