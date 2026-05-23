@@ -51,8 +51,8 @@ pub const TEST_BEARER_TOKEN_123: &str = "test-token-123";
 /// Replaces the duplicated `test_store()` pattern found across multiple
 /// test modules.
 pub fn test_secrets_store() -> InMemorySecretsStore {
-    // safety: test-only helper with a 32-byte hard-coded key; cannot fail.
-    let crypto =
-        Arc::new(SecretsCrypto::new(SecretString::from(TEST_CRYPTO_KEY.to_string())).unwrap());
+    let crypto = Arc::new(
+        SecretsCrypto::new(SecretString::from(TEST_CRYPTO_KEY.to_string())).unwrap(), // safety: test helper with hard-coded 32-byte key; never fails.
+    );
     InMemorySecretsStore::new(crypto)
 }
