@@ -2,7 +2,8 @@
 
 use async_trait::async_trait;
 
-use crate::tools::tool::{Tool, ToolError, ToolOutput, require_param, require_str};
+use dasclaw_runtime::Tool;
+use dasclaw_tool::{ToolError, ToolOutput, require_param, require_str};
 
 /// Tool for JSON manipulation (parse, query, transform).
 pub struct JsonTool;

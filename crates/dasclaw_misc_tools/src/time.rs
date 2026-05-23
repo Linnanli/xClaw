@@ -4,7 +4,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Tz;
 
-use crate::tools::tool::{Tool, ToolError, ToolOutput};
+use dasclaw_runtime::Tool;
+use dasclaw_tool::{ToolError, ToolOutput};
 
 /// Tool for getting current time and date operations.
 pub struct TimeTool;
@@ -271,7 +272,7 @@ fn context_timezone(
     // Primary: use the dedicated user_timezone field from JobContext
     if ctx.user_timezone() != "UTC"
         && !ctx.user_timezone().is_empty()
-        && let Some(tz) = crate::timezone::parse_timezone(ctx.user_timezone())
+        && let Some(tz) = dasclaw_workspace_cap::timezone::parse_timezone(ctx.user_timezone())
     {
         return Ok(Some((tz, tz.to_string())));
     }

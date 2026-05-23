@@ -2,7 +2,8 @@
 
 use async_trait::async_trait;
 
-use crate::tools::tool::{Tool, ToolError, ToolOutput, require_str};
+use dasclaw_runtime::Tool;
+use dasclaw_tool::{ToolError, ToolOutput, require_str};
 
 /// Simple echo tool for testing.
 pub struct EchoTool;

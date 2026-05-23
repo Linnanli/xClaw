@@ -2658,6 +2658,7 @@ dependencies = [
  "dasclaw_llm_provider",
  "dasclaw_lsp",
  "dasclaw_mcp",
+ "dasclaw_misc_tools",
  "dasclaw_net_proxy",
  "dasclaw_observability",
  "dasclaw_process_hardening",
@@ -3031,6 +3032,22 @@ dependencies = [
  "tracing",
  "url",
  "urlencoding",
+ "uuid",
+]
+
+[[package]]
+name = "dasclaw_misc_tools"
+version = "0.0.0-w6"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "chrono-tz",
+ "dasclaw_runtime",
+ "dasclaw_tool",
+ "dasclaw_workspace_cap",
+ "serde_json",
+ "tokio",
+ "tracing",
  "uuid",
 ]
 

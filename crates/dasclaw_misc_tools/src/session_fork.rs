@@ -9,7 +9,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::tools::tool::{ApprovalRequirement, Tool, ToolDomain, ToolError, ToolOutput};
+use dasclaw_runtime::Tool;
+use dasclaw_tool::{ApprovalRequirement, ToolDomain, ToolError, ToolOutput};
 
 /// Tool for forking a conversation thread at a specific turn.
 ///
