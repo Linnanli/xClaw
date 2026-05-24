@@ -2653,6 +2653,7 @@ dependencies = [
  "dasclaw_channels",
  "dasclaw_core",
  "dasclaw_exec",
+ "dasclaw_fs_tools",
  "dasclaw_governance",
  "dasclaw_hooks",
  "dasclaw_llm_provider",
@@ -2910,6 +2911,18 @@ name = "dasclaw_features"
 version = "0.0.0-w1"
 dependencies = [
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dasclaw_fs_tools"
+version = "0.0.0-w6"
+dependencies = [
+ "dasclaw_runtime",
+ "dasclaw_tool",
+ "globset",
+ "serde_json",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]

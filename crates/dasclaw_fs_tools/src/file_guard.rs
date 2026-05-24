@@ -8,8 +8,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::tools::builtin::path_utils::validate_path;
-use crate::tools::tool::ToolError;
+use crate::path_utils::validate_path;
+use dasclaw_tool::ToolError;
 
 /// Default maximum file size: 10 MB.
 const DEFAULT_MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;

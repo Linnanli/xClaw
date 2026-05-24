@@ -3,7 +3,6 @@
 mod code_edit;
 pub mod extension_tools;
 mod file;
-pub mod file_guard;
 pub mod git;
 mod glob_search;
 mod grep_search;
@@ -12,7 +11,6 @@ mod job;
 pub mod lsp;
 pub mod memory;
 mod message;
-pub mod path_utils;
 pub mod routine;
 pub mod secrets_tools;
 pub(crate) mod shell;
@@ -22,6 +20,15 @@ pub mod sub_agent;
 mod tool_info;
 mod web_fetch;
 mod web_search;
+
+// F4.6.6-a (ADR-156 §6.3): `path_utils` + `file_guard` extracted to
+// `dasclaw_fs_tools`. Re-exported at the original module paths so the
+// 13 in-tree consumers (`tools::builtin::path_utils::*` /
+// `tools::builtin::file_guard::*`) and external `tests/parity_gate_*`
+// imports keep working without changes. Subsequent F4.6.6-b/-c will
+// migrate the higher-tier fs tools (file/code_edit/glob/grep) onto this
+// base.
+pub use dasclaw_fs_tools::{file_guard, path_utils};
 
 // F4.6.1 — echo/time/json/plan_mode/restart/session_fork were extracted to
 // `crates/dasclaw_misc_tools` per ADR-156 §6.3. The thin re-export below
