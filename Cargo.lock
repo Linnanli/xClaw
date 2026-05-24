@@ -2653,7 +2653,6 @@ dependencies = [
  "dasclaw_channels",
  "dasclaw_core",
  "dasclaw_exec",
- "dasclaw_git_tools",
  "dasclaw_governance",
  "dasclaw_hooks",
  "dasclaw_llm_provider",
@@ -2915,13 +2914,9 @@ dependencies = [
 
 [[package]]
 name = "dasclaw_git_tools"
-version = "0.0.0-w6"
+version = "0.0.0-w1"
 dependencies = [
- "async-trait",
- "dasclaw_runtime",
- "dasclaw_tool",
- "serde_json",
- "tokio",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
