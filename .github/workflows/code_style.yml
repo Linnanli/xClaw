@@ -187,6 +187,18 @@ jobs:
     - name: Verify dasclaw_execpolicy + dasclaw_absolute_path are byte-equal to upstream
       run: python3 scripts/check_codex_execpolicy_drift.py
 
+  blueprint-sync:
+    name: Blueprint ↔ crates/ sync guard
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v6
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: Verify crates/dasclaw_* matches blueprint §4 mentions
+      run: python3.12 scripts/check_blueprint_sync.py
+
   codex-process-hardening-drift:
     name: ADR-129 verbatim drift (dasclaw_process_hardening)
     runs-on: ubuntu-latest
@@ -378,7 +390,7 @@ jobs:
     name: Code Style (fmt + clippy + deny)
     runs-on: ubuntu-latest
     if: always()
-    needs: [format, clippy, clippy-windows, deny-check, no-panics, claw-code-readonly, no-new-ironclaw-literal, codex-execpolicy-drift, codex-process-hardening-drift, codex-shell-command-drift, codex-protocol-drift, codex-utils-home-dir-drift, codex-utils-rustls-provider-drift, codex-net-proxy-drift, codex-async-utils-drift, codex-utils-string-drift, codex-utils-cache-drift, codex-utils-image-drift, codex-sandboxing-drift, codex-linux-sandbox-drift, codex-sandbox-windows-drift]
+    needs: [format, clippy, clippy-windows, deny-check, no-panics, claw-code-readonly, no-new-ironclaw-literal, blueprint-sync, codex-execpolicy-drift, codex-process-hardening-drift, codex-shell-command-drift, codex-protocol-drift, codex-utils-home-dir-drift, codex-utils-rustls-provider-drift, codex-net-proxy-drift, codex-async-utils-drift, codex-utils-string-drift, codex-utils-cache-drift, codex-utils-image-drift, codex-sandboxing-drift, codex-linux-sandbox-drift, codex-sandbox-windows-drift]
     steps:
       - run: |
           if [[ "${{ needs.format.result }}" != "success" || "${{ needs.clippy.result }}" != "success" || "${{ needs.deny-check.result }}" != "success" || "${{ needs.no-panics.result }}" != "success" || "${{ needs.claw-code-readonly.result }}" != "success" || "${{ needs.codex-execpolicy-drift.result }}" != "success" ]]; then
@@ -392,6 +404,10 @@ jobs:
           fi
           if [[ "${{ needs.codex-process-hardening-drift.result }}" != "success" ]]; then
             echo "ADR-129 verbatim drift guard failed: ${{ needs.codex-process-hardening-drift.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.blueprint-sync.result }}" != "success" ]]; then
+            echo "Blueprint ↔ crates/ sync guard failed: ${{ needs.blueprint-sync.result }}"
             exit 1
           fi
           if [[ "${{ needs.codex-shell-command-drift.result }}" != "success" ]]; then
