@@ -5,8 +5,9 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use secrecy::{ExposeSecret, SecretString};
 
-use crate::tools::builtin::path_utils::validate_path;
-use crate::tools::tool::{Tool, ToolError, ToolOutput};
+use dasclaw_fs_tools::path_utils::validate_path;
+use dasclaw_runtime::Tool;
+use dasclaw_tool::{ToolError, ToolOutput};
 
 /// Tool for editing images using an AI image editing API.
 pub struct ImageEditTool {
@@ -120,7 +121,8 @@ impl Tool for ImageEditTool {
         }
 
         // Read binary image bytes directly from filesystem
-        let effective = super::path_utils::effective_base_dir(self.base_dir.as_deref(), ctx);
+        let effective =
+            dasclaw_fs_tools::path_utils::effective_base_dir(self.base_dir.as_deref(), ctx);
         let image_bytes = self
             .read_image_bytes(image_path, effective.as_deref())
             .await?;
@@ -130,7 +132,7 @@ impl Tool for ImageEditTool {
             ));
         }
 
-        let media_type = super::media_type_from_path(image_path);
+        let media_type = crate::media_type_from_path(image_path);
 
         // Use multipart form for image edit API
         let url = format!(
@@ -268,7 +270,7 @@ impl ImageEditTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::tool::ApprovalRequirement;
+    use dasclaw_tool::ApprovalRequirement;
     use tempfile::TempDir;
 
     #[test]

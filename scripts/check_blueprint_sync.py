@@ -45,8 +45,8 @@ PLANNED: dict[str, str] = {
     # F4.6.8; remove an entry from PLANNED the moment its crate directory
     # is created.
     # F4.6.1 (`dasclaw_misc_tools`) landed in PR #761 — entry removed.
-    "dasclaw_image_tools": "ADR-156 F4.6.2 planned",
     "dasclaw_memory_tools": "ADR-156 F4.6.3 planned",
+    # F4.6.2 (`dasclaw_image_tools`) landed — entry removed.
     # F4.6.4 (`dasclaw_sub_agent_tools`) landed — entry removed.
     # F4.6.6-a (`dasclaw_fs_tools`) landed — entry removed.
     "dasclaw_shell_tools": "ADR-156 F4.6.7 planned",
