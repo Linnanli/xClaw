@@ -2917,11 +2917,14 @@ dependencies = [
 name = "dasclaw_fs_tools"
 version = "0.0.0-w6"
 dependencies = [
+ "async-trait",
  "dasclaw_runtime",
  "dasclaw_tool",
  "globset",
+ "regex",
  "serde_json",
  "tempfile",
+ "tokio",
  "tracing",
 ]
 

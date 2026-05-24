@@ -1,11 +1,8 @@
 //! Built-in tools that come with the agent.
 
-mod code_edit;
 pub mod extension_tools;
 mod file;
 pub mod git;
-mod glob_search;
-mod grep_search;
 mod http;
 mod job;
 pub mod lsp;
@@ -20,14 +17,15 @@ mod tool_info;
 mod web_fetch;
 mod web_search;
 
-// F4.6.6-a (ADR-156 §6.3): `path_utils` + `file_guard` extracted to
-// `dasclaw_fs_tools`. Re-exported at the original module paths so the
-// 13 in-tree consumers (`tools::builtin::path_utils::*` /
-// `tools::builtin::file_guard::*`) and external `tests/parity_gate_*`
-// imports keep working without changes. Subsequent F4.6.6-b/-c will
-// migrate the higher-tier fs tools (file/code_edit/glob/grep) onto this
-// base.
-pub use dasclaw_fs_tools::{file_guard, path_utils};
+// F4.6.6-a/-b (ADR-156 §6.3): `path_utils` + `file_guard` + `code_edit` +
+// `glob_search` + `grep_search` were extracted to `dasclaw_fs_tools`.
+// Re-exported at the original module paths so existing in-tree consumers
+// (`tools::builtin::path_utils::*` / `tools::builtin::file_guard::*` /
+// `tools::builtin::code_edit::*` / `tools::builtin::glob_search::*` /
+// `tools::builtin::grep_search::*`) and external `tests/parity_gate_*`
+// imports keep working without changes. F4.6.6-c will migrate `file`
+// once `workspace::paths` extraction is decided.
+pub use dasclaw_fs_tools::{code_edit, file_guard, glob_search, grep_search, path_utils};
 
 // F4.6.1 — echo/time/json/plan_mode/restart/session_fork were extracted to
 // `crates/dasclaw_misc_tools` per ADR-156 §6.3. F4.6.1b added
