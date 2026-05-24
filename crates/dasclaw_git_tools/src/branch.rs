@@ -2,7 +2,8 @@
 
 use std::time::Instant;
 
-use crate::tools::tool::{ApprovalRequirement, RiskLevel, Tool, ToolDomain, ToolError, ToolOutput};
+use dasclaw_runtime::Tool;
+use dasclaw_tool::{ApprovalRequirement, RiskLevel, ToolDomain, ToolError, ToolOutput};
 
 use super::runner::{resolve_workdir, run_git};
 

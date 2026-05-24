@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use crate::tools::tool::ToolError;
+use dasclaw_tool::ToolError;
 
 /// Default timeout for git commands (30 seconds).
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
