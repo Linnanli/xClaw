@@ -11,7 +11,6 @@ pub mod routine;
 pub(crate) mod shell;
 pub use shell::classify_command_risk;
 pub mod skill_tools;
-pub mod sub_agent;
 mod tool_info;
 mod web_fetch;
 mod web_search;
@@ -44,6 +43,11 @@ pub use dasclaw_git_tools::{
     GitStatusTool,
 };
 
+// F4.6.4 — SubAgentTool / SubAgentRole were extracted to
+// `crates/dasclaw_sub_agent_tools` per ADR-156 §6.3. Thin re-export keeps
+// existing call sites compiling unchanged.
+pub use dasclaw_sub_agent_tools::{SubAgentRole, SubAgentTool};
+
 pub use code_edit::CodeEditTool;
 pub use extension_tools::{
     ExtensionInfoTool, ToolActivateTool, ToolAuthTool, ToolInstallTool, ToolListTool,
@@ -66,7 +70,6 @@ pub use routine::{
 };
 pub use shell::ShellTool;
 pub use skill_tools::{SkillInstallTool, SkillListTool, SkillRemoveTool, SkillSearchTool};
-pub use sub_agent::{SubAgentRole, SubAgentTool};
 pub use tool_info::ToolInfoTool;
 pub use web_fetch::WebFetchTool;
 pub use web_search::WebSearchTool;

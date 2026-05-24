@@ -14,7 +14,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::tools::tool::{ApprovalRequirement, RiskLevel, Tool, ToolDomain, ToolError, ToolOutput};
+use dasclaw_runtime::Tool;
+use dasclaw_tool::{ApprovalRequirement, RiskLevel, ToolDomain, ToolError, ToolOutput};
 
 /// Role a sub-agent can assume — determines its tool whitelist.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -32,7 +32,7 @@ pub enum JobMode {
     /// Lightweight sub-agent with restricted tool access and depth limit.
     SubAgent {
         /// Role determining the tool whitelist.
-        role: crate::tools::builtin::sub_agent::SubAgentRole,
+        role: crate::tools::builtin::SubAgentRole,
         /// Explicit tool whitelist (overrides role defaults if non-empty).
         tool_whitelist: Vec<String>,
         /// Maximum turns before the sub-agent must return a summary.
