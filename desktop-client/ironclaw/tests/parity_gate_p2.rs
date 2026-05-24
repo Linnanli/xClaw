@@ -11,7 +11,7 @@
 
 use dasclaw_runtime::context::JobContext;
 use ironclaw::agent::session::{PendingPlan, PlanStep, Session, Thread, ThreadState};
-use ironclaw::tools::builtin::sub_agent::SubAgentRole;
+use ironclaw::tools::builtin::SubAgentRole;
 use ironclaw::tools::builtin::{PlanModeTool, SessionForkTool, SubAgentTool};
 use ironclaw::tools::{ApprovalRequirement, RiskLevel, Tool};
 
