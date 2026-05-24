@@ -1,0 +1,16 @@
+[package]
+name = "dasclaw_shell_tools"
+version = "0.0.0-w6"
+edition = "2024"
+description = "Shell-tool sandbox-independent helpers (risk classification, injection detection, env scrubbing list, output truncation, command param extraction) extracted from desktop-client/ironclaw per ADR-156 §6.3 F4.6.7 Phase 1."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+serde_json = "1"
+
+dasclaw_bash_validation = { path = "../dasclaw_bash_validation" }
+dasclaw_tool = { path = "../dasclaw_tool" }
