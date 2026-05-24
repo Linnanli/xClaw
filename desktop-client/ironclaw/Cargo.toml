@@ -220,6 +220,9 @@ dasclaw_misc_tools = { path = "../../crates/dasclaw_misc_tools" }
 # extracted from desktop tools/builtin/ per ADR-156 §6.3.
 dasclaw_image_tools = { path = "../../crates/dasclaw_image_tools" }
 
+# F4.6.8 (phase 1, web_fetch) — network/web LLM tools per ADR-156 §6.3.
+dasclaw_net_tools = { path = "../../crates/dasclaw_net_tools" }
+
 # F4.6.6-a — fs leaf utilities (path_utils + file_guard) per ADR-156 §6.3.
 dasclaw_fs_tools = { path = "../../crates/dasclaw_fs_tools" }
 

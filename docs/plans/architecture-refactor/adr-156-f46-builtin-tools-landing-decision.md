@@ -274,14 +274,35 @@ let agent = Agent::builder()
 |--------|-------|--------|--------------|
 | F4.6.1 | `dasclaw_misc_tools` | F4.5 全绿 | `cargo nextest run -p dasclaw_misc_tools` + 该 crate 自带 unit 测试 |
 | F4.6.2 | `dasclaw_image_tools` | F4.6.1 merge | 同上 |
-| F4.6.3 | `dasclaw_memory_tools` | F4.6.2 merge | 同上 |
-| F4.6.4 | `dasclaw_sub_agent_tools` | F4.6.3 merge | 同上 |
+| ~~F4.6.3~~ | ~~`dasclaw_memory_tools`~~ | **取消下沉** | 见 §6.3.1 决策依据 |
+| F4.6.4 | `dasclaw_sub_agent_tools` | F4.6.3 决策 | 同上 |
 | F4.6.5 | `dasclaw_git_tools`（扩充）| F4.6.4 merge | 同上 + 把 lsp 薄壳合入 |
 | F4.6.6 | `dasclaw_fs_tools` | F4.6.5 merge | 同上 + 跨 crate path 校验测试 |
 | F4.6.7 | `dasclaw_shell_tools` | F4.6.6 merge | 同上 + `classify_command_risk` 回归 |
 | F4.6.8 | `dasclaw_net_tools` | F4.6.7 merge | 同上 + wasm_tools 集成 |
 
 **节奏特征**：先搬 T0 简单工具（F4.6.1~F4.6.5），再搬 T1/T2 有依赖工具（F4.6.6~F4.6.8）。每个 PR 单独可 revert，符合 ADR-152 §4.2。
+
+### 6.3.1 F4.6.3 决策：memory_tools 取消下沉，标记 desktop-only
+
+**结论**：`memory.rs`（MemorySearch / MemoryWrite / MemoryRead / MemoryTree 四个工具，974 行）**不下沉到 `crates/`**，继续留在 `desktop-client/ironclaw/src/tools/builtin/`。
+
+**依据**：
+
+1. **真实依赖偏离 T0**：原表格把 `dasclaw_memory_tools` 列为 T0（依赖 `dasclaw_tool + dasclaw_runtime`），但 memory.rs 实际依赖 `desktop-client/ironclaw/src/workspace/` 运行时模块——一整套 PostgreSQL/SQLite 双后端 + 向量 embeddings + 文档分块（chunker）+ 隐私分层（layer / privacy）+ 内容卫生（hygiene）+ 混合检索（FTS + 余弦相似度）的 RAG 系统。这与 F4.6.6 file.rs 只用 `dasclaw_workspace_cap::document::paths`（轻量常量）的情况完全不同。
+
+2. **无头 agent 框架不需要 RAG 记忆**：
+   - codex 无头：无持久记忆，每次 session 独立
+   - claw-code / ironclaw-main：用文件系统 + `CLAUDE.md` / `AGENTS.md` 做文件级记忆
+   - `dasclaw_fs_tools` 的 `read_file` / `write_file` / `list_directory` 已覆盖纯无头 CLI 的记忆需求
+
+3. **强行下沉会污染共享层依赖**：把 PostgreSQL、sqlx、向量 embeddings、隐私分类等重依赖引入 `crates/` 会让所有下游（包括纯 CLI）背上数据库依赖，违反 ADR-156 §4「无头 agent 共享层应保持依赖最小」的原则。
+
+4. **desktop 部署不受影响**：Tool trait 注册机制是开放的——desktop-client 在自己的 agent 启动代码里实例化 `Workspace` 并注册四个 MemoryTool，与"代码住在哪个 crate"无关。memory_tools 留在 desktop 不影响 desktop 的 agent 用上它们。
+
+5. **未来需求的正确解法**：如果将来出现第三方客户端需要 RAG 向量记忆能力，应单独立 ADR 规划 "workspace 运行时下沉" 工程（含数据库选型、embeddings 后端、隐私层定义等），届时 memory_tools 跟随一起搬。**不属于 F4.6 节奏。**
+
+**后续编号调整**：F4.6.3 槽位保留（不复用，避免历史 PR 编号混乱），F4.6.4 ~ F4.6.8 编号不变。本决策由 PR #775 之后的对账发现并落入 ADR。
 
 ### 6.4 desktop `tools/builtin/mod.rs` 薄壳化（独立 PR）
 
