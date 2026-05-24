@@ -216,6 +216,10 @@ dasclaw_wasm_tools = { path = "../../crates/dasclaw_wasm_tools" }
 # extracted from desktop tools/builtin/ per ADR-156 §6.3.
 dasclaw_misc_tools = { path = "../../crates/dasclaw_misc_tools" }
 
+# F4.6.2 — vision/image LLM tools (image_analyze/image_edit/image_generate)
+# extracted from desktop tools/builtin/ per ADR-156 §6.3.
+dasclaw_image_tools = { path = "../../crates/dasclaw_image_tools" }
+
 # F4.6.6-a — fs leaf utilities (path_utils + file_guard) per ADR-156 §6.3.
 dasclaw_fs_tools = { path = "../../crates/dasclaw_fs_tools" }
 

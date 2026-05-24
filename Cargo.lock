@@ -2657,6 +2657,7 @@ dependencies = [
  "dasclaw_git_tools",
  "dasclaw_governance",
  "dasclaw_hooks",
+ "dasclaw_image_tools",
  "dasclaw_llm_provider",
  "dasclaw_lsp",
  "dasclaw_mcp",
@@ -2980,6 +2981,25 @@ name = "dasclaw_identity"
 version = "0.0.0-w1"
 dependencies = [
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dasclaw_image_tools"
+version = "0.0.0-w6"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "dasclaw_fs_tools",
+ "dasclaw_runtime",
+ "dasclaw_tool",
+ "mime_guess",
+ "reqwest 0.12.28",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

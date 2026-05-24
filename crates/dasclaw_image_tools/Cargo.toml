@@ -1,0 +1,29 @@
+[package]
+name = "dasclaw_image_tools"
+version = "0.0.0-w6"
+edition = "2024"
+description = "Vision/image LLM tools (image_analyze, image_edit, image_generate) extracted from desktop-client/ironclaw per ADR-156 §6.3 F4.6.2."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+async-trait = "0.1"
+base64 = "0.22"
+mime_guess = "2.0"
+secrecy = { version = "0.10", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["fs", "rt", "macros"] }
+tracing = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls-native-roots", "stream"] }
+
+dasclaw_runtime = { path = "../dasclaw_runtime" }
+dasclaw_tool = { path = "../dasclaw_tool" }
+dasclaw_fs_tools = { path = "../dasclaw_fs_tools" }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["fs", "rt", "macros", "rt-multi-thread"] }

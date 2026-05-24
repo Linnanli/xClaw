@@ -4,7 +4,8 @@ use async_trait::async_trait;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
-use crate::tools::{Tool, ToolError, ToolOutput};
+use dasclaw_runtime::Tool;
+use dasclaw_tool::{ToolError, ToolOutput};
 
 /// Tool for generating images using FLUX or compatible image generation APIs.
 pub struct ImageGenerateTool {
@@ -180,8 +181,8 @@ impl Tool for ImageGenerateTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::tool::ApprovalRequirement;
     use dasclaw_runtime::context::JobContext;
+    use dasclaw_tool::ApprovalRequirement;
 
     #[test]
     fn test_tool_metadata() {

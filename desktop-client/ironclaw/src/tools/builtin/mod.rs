@@ -72,21 +72,6 @@ pub use tool_info::ToolInfoTool;
 pub use web_fetch::WebFetchTool;
 pub use web_search::WebSearchTool;
 mod html_converter;
-pub mod image_analyze;
-pub mod image_edit;
-pub mod image_gen;
 
+pub use dasclaw_image_tools::{ImageAnalyzeTool, ImageEditTool, ImageGenerateTool};
 pub use html_converter::convert_html_to_markdown;
-pub use image_analyze::ImageAnalyzeTool;
-pub use image_edit::ImageEditTool;
-pub use image_gen::ImageGenerateTool;
-
-/// Detect image media type from file extension via `mime_guess`.
-/// Falls back to `image/jpeg` for unrecognized or non-image extensions.
-pub(crate) fn media_type_from_path(path: &str) -> String {
-    mime_guess::from_path(path)
-        .first_raw()
-        .filter(|m| m.starts_with("image/"))
-        .unwrap_or("image/jpeg")
-        .to_string()
-}

@@ -6,8 +6,9 @@ use async_trait::async_trait;
 use base64::Engine;
 use secrecy::{ExposeSecret, SecretString};
 
-use crate::tools::builtin::path_utils::validate_path;
-use crate::tools::tool::{Tool, ToolError, ToolOutput};
+use dasclaw_fs_tools::path_utils::validate_path;
+use dasclaw_runtime::Tool;
+use dasclaw_tool::{ToolError, ToolOutput};
 
 /// Tool for analyzing images using a vision-capable model.
 pub struct ImageAnalyzeTool {
@@ -113,7 +114,8 @@ impl Tool for ImageAnalyzeTool {
             .unwrap_or("Describe this image in detail.");
 
         // Read binary image bytes directly from filesystem
-        let effective = super::path_utils::effective_base_dir(self.base_dir.as_deref(), ctx);
+        let effective =
+            dasclaw_fs_tools::path_utils::effective_base_dir(self.base_dir.as_deref(), ctx);
         let image_bytes = self
             .read_image_bytes(image_path, effective.as_deref())
             .await?;
@@ -123,7 +125,7 @@ impl Tool for ImageAnalyzeTool {
             ));
         }
 
-        let media_type = super::media_type_from_path(image_path);
+        let media_type = crate::media_type_from_path(image_path);
         let b64 = base64::engine::general_purpose::STANDARD.encode(&image_bytes);
         let data_url = format!("data:{media_type};base64,{b64}");
 
@@ -185,9 +187,9 @@ impl Tool for ImageAnalyzeTool {
 
 #[cfg(test)]
 mod tests {
-    use super::super::media_type_from_path;
     use super::*;
-    use crate::tools::tool::ApprovalRequirement;
+    use crate::media_type_from_path;
+    use dasclaw_tool::ApprovalRequirement;
     use tempfile::TempDir;
 
     #[test]

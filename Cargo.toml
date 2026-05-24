@@ -37,6 +37,8 @@ members = [
 	"crates/dasclaw_wasm_tools",
 	# F4.6.1 — misc builtin tools (echo/time/json/plan_mode/restart/session_fork) per ADR-156 §6.3
 	"crates/dasclaw_misc_tools",
+	# F4.6.2 — vision/image LLM tools (image_analyze/image_edit/image_generate) per ADR-156 §6.3
+	"crates/dasclaw_image_tools",
 	# F4.6.6-a — fs leaf utilities (path_utils + file_guard) per ADR-156 §6.3
 	"crates/dasclaw_fs_tools",
 	# F4.6.4 — sub_agent builtin tool (SubAgentTool / SubAgentRole) per ADR-156 §6.3
