@@ -2,7 +2,6 @@
 
 pub mod extension_tools;
 mod file;
-pub mod git;
 mod http;
 mod job;
 pub mod lsp;
@@ -37,16 +36,20 @@ pub use dasclaw_misc_tools::{
     SessionForkTool, TimeTool,
 };
 
+// F4.6.5 — git tools were extracted to `crates/dasclaw_git_tools` per
+// ADR-156 §6.3. Re-exported here so `crate::tools::builtin::GitStatusTool`
+// (etc.) call sites keep compiling unchanged.
+pub use dasclaw_git_tools::{
+    GitBranchTool, GitCommitTool, GitDiffTool, GitLogTool, GitPushTool, GitStaleCheckTool,
+    GitStatusTool,
+};
+
 pub use code_edit::CodeEditTool;
 pub use extension_tools::{
     ExtensionInfoTool, ToolActivateTool, ToolAuthTool, ToolInstallTool, ToolListTool,
     ToolRemoveTool, ToolSearchTool, ToolUpgradeTool,
 };
 pub use file::{ApplyPatchTool, ListDirTool, ReadFileTool, WriteFileTool};
-pub use git::{
-    GitBranchTool, GitCommitTool, GitDiffTool, GitLogTool, GitPushTool, GitStaleCheckTool,
-    GitStatusTool,
-};
 pub use glob_search::GlobSearchTool;
 pub use grep_search::GrepSearchTool;
 pub use http::HttpTool;
