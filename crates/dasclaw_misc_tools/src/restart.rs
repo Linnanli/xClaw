@@ -27,7 +27,13 @@ use async_trait::async_trait;
 use std::time::Duration;
 
 #[allow(unused_imports)]
-use crate::tools::tool::{ApprovalRequirement, Tool, ToolError, ToolOutput};
+use dasclaw_runtime::Tool;
+// `ApprovalRequirement` is referenced only by the `#[cfg(test)]` module below
+// (assertions on `tool.approval_requirement()`). Keep it on the top-level use
+// line to preserve the verbatim shape of the original desktop port; suppress
+// the lib-build unused-imports warning explicitly.
+#[allow(unused_imports)]
+use dasclaw_tool::{ApprovalRequirement, ToolError, ToolOutput};
 
 /// Tool for triggering a graceful process restart via exit code 0.
 ///

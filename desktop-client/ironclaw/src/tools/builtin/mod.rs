@@ -1,7 +1,6 @@
 //! Built-in tools that come with the agent.
 
 mod code_edit;
-mod echo;
 pub mod extension_tools;
 mod file;
 pub mod file_guard;
@@ -10,27 +9,29 @@ mod glob_search;
 mod grep_search;
 mod http;
 mod job;
-mod json;
 pub mod lsp;
 pub mod memory;
 mod message;
 pub mod path_utils;
-mod plan_mode;
-mod restart;
 pub mod routine;
 pub mod secrets_tools;
-mod session_fork;
 pub(crate) mod shell;
 pub use shell::classify_command_risk;
 pub mod skill_tools;
 pub mod sub_agent;
-mod time;
 mod tool_info;
 mod web_fetch;
 mod web_search;
 
+// F4.6.1 — echo/time/json/plan_mode/restart/session_fork were extracted to
+// `crates/dasclaw_misc_tools` per ADR-156 §6.3. The thin re-export below
+// keeps every existing `crate::tools::builtin::EchoTool` (etc.) call site
+// compiling unchanged.
+pub use dasclaw_misc_tools::{
+    EchoTool, JsonTool, PlanModeTool, RestartTool, SessionForkTool, TimeTool,
+};
+
 pub use code_edit::CodeEditTool;
-pub use echo::EchoTool;
 pub use extension_tools::{
     ExtensionInfoTool, ToolActivateTool, ToolAuthTool, ToolInstallTool, ToolListTool,
     ToolRemoveTool, ToolSearchTool, ToolUpgradeTool,
@@ -47,22 +48,17 @@ pub use job::{
     CancelJobTool, CreateJobTool, JobEventsTool, JobPromptTool, JobStatusTool, ListJobsTool,
     PromptQueue, SchedulerSlot,
 };
-pub use json::JsonTool;
 pub use lsp::LspQueryTool;
 pub use memory::{MemoryReadTool, MemorySearchTool, MemoryTreeTool, MemoryWriteTool};
 pub use message::MessageTool;
-pub use plan_mode::PlanModeTool;
-pub use restart::RestartTool;
 pub use routine::{
     EventEmitTool, RoutineCreateTool, RoutineDeleteTool, RoutineFireTool, RoutineHistoryTool,
     RoutineListTool, RoutineUpdateTool,
 };
 pub use secrets_tools::{SecretDeleteTool, SecretListTool};
-pub use session_fork::SessionForkTool;
 pub use shell::ShellTool;
 pub use skill_tools::{SkillInstallTool, SkillListTool, SkillRemoveTool, SkillSearchTool};
 pub use sub_agent::{SubAgentRole, SubAgentTool};
-pub use time::TimeTool;
 pub use tool_info::ToolInfoTool;
 pub use web_fetch::WebFetchTool;
 pub use web_search::WebSearchTool;

@@ -212,6 +212,10 @@ dasclaw_runtime = { path = "../../crates/dasclaw_runtime" }
 # ADR-152 F4.5.3.
 dasclaw_wasm_tools = { path = "../../crates/dasclaw_wasm_tools" }
 
+# F4.6.1 — misc builtin tools (echo/time/json/plan_mode/restart/session_fork)
+# extracted from desktop tools/builtin/ per ADR-156 §6.3.
+dasclaw_misc_tools = { path = "../../crates/dasclaw_misc_tools" }
+
 # AWS Bedrock (native Converse API, opt-in via --features bedrock)
 aws-config = { version = "1", features = ["behavior-version-latest"], optional = true }
 aws-sdk-bedrockruntime = { version = "1", optional = true }
