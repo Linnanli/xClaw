@@ -10,7 +10,8 @@
 // orchestrator tests) continue to work unchanged.
 pub use dasclaw_wasm_tools::test_credentials::{
     TEST_BEARER_TOKEN_123, TEST_CRYPTO_KEY, TEST_GOOGLE_OAUTH_FRESH, TEST_GOOGLE_OAUTH_LEGACY,
-    TEST_GOOGLE_OAUTH_TOKEN, TEST_OAUTH_CLIENT_ID, TEST_OAUTH_CLIENT_SECRET, test_secrets_store,
+    TEST_GOOGLE_OAUTH_TOKEN, TEST_OAUTH_CLIENT_ID, TEST_OAUTH_CLIENT_SECRET,
+    TEST_OPENAI_API_KEY_SHORT, test_secrets_store,
 };
 
 // ── Encryption keys ──────────────────────────────────────────────────────
@@ -25,9 +26,6 @@ pub const TEST_OPENAI_API_KEY: &str = "sk-test123";
 
 /// OpenAI API key with longer format (config round-trip tests).
 pub const TEST_OPENAI_API_KEY_LONG: &str = "sk-test-key-1234567890";
-
-/// Short OpenAI-style key for secrets store accessibility tests.
-pub const TEST_OPENAI_API_KEY_SHORT: &str = "sk-test";
 
 /// OpenAI API key used in embeddings config issue-129 test.
 pub const TEST_OPENAI_API_KEY_ISSUE_129: &str = "sk-test-key-for-issue-129";

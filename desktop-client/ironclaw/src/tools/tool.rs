@@ -9,7 +9,7 @@
 //! Pure-data primitives (`ApprovalRequirement`, `ApprovalContext`,
 //! `RiskLevel`, `ToolDomain`, `ToolOutput`, `ToolSchema`,
 //! `ToolDiscoverySummary`, `ToolRateLimitConfig`, `WebhookCapability`) and
-//! parameter helpers (`require_str`, `require_param`, `redact_params`,
+//! parameter helpers (`require_str`, `redact_params`,
 //! `validate_tool_schema`) continue to live in the shared `dasclaw_tool`
 //! crate.
 
@@ -17,8 +17,7 @@ pub use dasclaw_runtime::Tool;
 
 pub use dasclaw_tool::{
     ApprovalContext, ApprovalRequirement, RiskLevel, ToolDiscoverySummary, ToolDomain, ToolError,
-    ToolOutput, ToolRateLimitConfig, redact_params, require_param, require_str,
-    validate_tool_schema,
+    ToolOutput, ToolRateLimitConfig, redact_params, require_str, validate_tool_schema,
 };
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 name = "dasclaw_misc_tools"
 version = "0.0.0-w6"
 edition = "2024"
-description = "Miscellaneous builtin tools (echo, time, json, plan_mode, restart, session_fork) extracted from desktop-client/ironclaw per ADR-156 §6.3 F4.6.1."
+description = "Miscellaneous builtin tools (echo, time, json, plan_mode, restart, secrets_tools, session_fork) extracted from desktop-client/ironclaw per ADR-156 §6.3 F4.6.1 / F4.6.1b."
 license = "Apache-2.0 OR MIT"
 publish = false
 
@@ -24,3 +24,4 @@ dasclaw_workspace_cap = { path = "../dasclaw_workspace_cap", version = "0.1.0" }
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 uuid = { version = "1", features = ["v4"] }
+dasclaw_wasm_tools = { path = "../dasclaw_wasm_tools" }

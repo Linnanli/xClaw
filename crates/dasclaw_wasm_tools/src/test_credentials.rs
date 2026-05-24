@@ -44,6 +44,18 @@ pub const TEST_OAUTH_CLIENT_SECRET: &str = "test-client-secret";
 /// Bearer token with suffix (wasm wrapper credential injection).
 pub const TEST_BEARER_TOKEN_123: &str = "test-token-123";
 
+// ── OpenAI-style API keys ───────────────────────────────────────────────
+
+/// Short OpenAI-style key for secrets store accessibility tests.
+///
+/// Hoisted from `desktop-client/ironclaw/src/testing/credentials.rs` to
+/// support F4.6.1b: `dasclaw_misc_tools::secrets_tools` tests now consume
+/// this constant directly so the misc-tools crate no longer depends on
+/// the desktop crate. The downstream `testing/credentials` module
+/// re-exports this symbol so existing desktop callers continue to work
+/// unchanged.
+pub const TEST_OPENAI_API_KEY_SHORT: &str = "sk-test";
+
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 /// Create an `InMemorySecretsStore` backed by [`TEST_CRYPTO_KEY`].

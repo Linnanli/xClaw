@@ -3057,6 +3057,7 @@ dependencies = [
  "chrono-tz",
  "dasclaw_runtime",
  "dasclaw_tool",
+ "dasclaw_wasm_tools",
  "dasclaw_workspace_cap",
  "serde_json",
  "tokio",
