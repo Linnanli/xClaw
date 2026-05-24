@@ -34,20 +34,24 @@
 //! Instead, callers must attach the name explicitly at the boundary using
 //! [`ToolError::from_tool_impl`].
 
+pub mod agent;
 pub mod context;
 pub mod error;
 pub mod feature_flags;
 pub mod job;
 pub mod job_context;
+pub mod llm_adapter;
 pub mod rate_limit;
 pub mod recording;
 pub mod secrets;
 pub mod tool;
 
+pub use agent::{Agent, AgentBuilder, AgentConfig, AgentError, AgentResponder, ToolExecutor};
 pub use error::ToolError;
 pub use feature_flags::{SharedFeatureFlags, ToolFeatureFlags};
 pub use job::{JobState, StateTransition, TokenBudgetExceeded};
 pub use job_context::JobContextCore;
+pub use llm_adapter::LlmProviderResponder;
 pub use rate_limit::{LimitType, RateLimitError, RateLimitResult, RateLimiter};
 pub use recording::{HttpExchange, HttpExchangeRequest, HttpExchangeResponse, HttpInterceptor};
 pub use tool::Tool;

@@ -3175,6 +3175,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "dasclaw_core",
+ "dasclaw_llm_provider",
  "dasclaw_tool",
  "deadpool-postgres",
  "hkdf",
