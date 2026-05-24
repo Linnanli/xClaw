@@ -1,0 +1,21 @@
+[package]
+name = "dasclaw_fs_tools"
+version = "0.0.0-w6"
+edition = "2024"
+description = "Filesystem path validation + file guard primitives (leaf layer) extracted from desktop-client/ironclaw per ADR-156 §6.3 F4.6.6-a."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+globset = "0.4"
+tracing = "0.1"
+
+dasclaw_runtime = { path = "../dasclaw_runtime" }
+dasclaw_tool = { path = "../dasclaw_tool" }
+
+[dev-dependencies]
+serde_json = "1"
+tempfile = "3"

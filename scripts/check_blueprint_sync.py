@@ -48,7 +48,6 @@ PLANNED: dict[str, str] = {
     "dasclaw_image_tools": "ADR-156 F4.6.2 planned",
     "dasclaw_memory_tools": "ADR-156 F4.6.3 planned",
     "dasclaw_sub_agent_tools": "ADR-156 F4.6.4 planned",
-    "dasclaw_fs_tools": "ADR-156 F4.6.6 planned",
     "dasclaw_shell_tools": "ADR-156 F4.6.7 planned",
     "dasclaw_net_tools": "ADR-156 F4.6.8 planned",
 }

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 
-use crate::tools::tool::ToolError;
+use dasclaw_tool::ToolError;
 
 /// Resolve the effective base directory for file operations.
 ///
