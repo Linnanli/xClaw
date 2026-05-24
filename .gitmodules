@@ -1,11 +1,11 @@
 [submodule "ironclaw"]
 	path = desktop-client/ironclaw
-	url = https://github.com/Linnanli/xclaw-ironclaw.git
+	url = ../xclaw-ironclaw.git
 	branch = x-claw-core
 [submodule "claw-code"]
 	path = claw-code
-	url = https://github.com/Linnanli/xclaw-claw-code.git
+	url = ../xclaw-claw-code.git
 	branch = x-claw
 [submodule "codex-cli-main"]
 	path = codex-cli-main
-	url = https://github.com/Linnanli/xclaw-codex-cli-main.git
+	url = ../xclaw-codex-cli-main.git
