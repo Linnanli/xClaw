@@ -14,7 +14,6 @@ pub mod memory;
 mod message;
 pub mod path_utils;
 pub mod routine;
-pub mod secrets_tools;
 pub(crate) mod shell;
 pub use shell::classify_command_risk;
 pub mod skill_tools;
@@ -24,11 +23,13 @@ mod web_fetch;
 mod web_search;
 
 // F4.6.1 — echo/time/json/plan_mode/restart/session_fork were extracted to
-// `crates/dasclaw_misc_tools` per ADR-156 §6.3. The thin re-export below
-// keeps every existing `crate::tools::builtin::EchoTool` (etc.) call site
-// compiling unchanged.
+// `crates/dasclaw_misc_tools` per ADR-156 §6.3. F4.6.1b added
+// secrets_tools (SecretListTool / SecretDeleteTool) into the same crate.
+// The thin re-export below keeps every existing
+// `crate::tools::builtin::EchoTool` (etc.) call site compiling unchanged.
 pub use dasclaw_misc_tools::{
-    EchoTool, JsonTool, PlanModeTool, RestartTool, SessionForkTool, TimeTool,
+    EchoTool, JsonTool, PlanModeTool, RestartTool, SecretDeleteTool, SecretListTool,
+    SessionForkTool, TimeTool,
 };
 
 pub use code_edit::CodeEditTool;
@@ -55,7 +56,6 @@ pub use routine::{
     EventEmitTool, RoutineCreateTool, RoutineDeleteTool, RoutineFireTool, RoutineHistoryTool,
     RoutineListTool, RoutineUpdateTool,
 };
-pub use secrets_tools::{SecretDeleteTool, SecretListTool};
 pub use shell::ShellTool;
 pub use skill_tools::{SkillInstallTool, SkillListTool, SkillRemoveTool, SkillSearchTool};
 pub use sub_agent::{SubAgentRole, SubAgentTool};
