@@ -2,7 +2,7 @@
 name = "dasclaw_shell_tools"
 version = "0.0.0-w6"
 edition = "2024"
-description = "Shell-tool sandbox-independent helpers (risk classification, injection detection, env scrubbing list, output truncation, command param extraction) extracted from desktop-client/ironclaw per ADR-156 §6.3 F4.6.7 Phase 1."
+description = "Shell-tool helpers + ShellTool struct + sandboxed shell executor extracted from desktop-client/ironclaw per ADR-156 §6.3 F4.6.7."
 license = "Apache-2.0 OR MIT"
 publish = false
 
@@ -10,7 +10,17 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "sync", "time"] }
+tracing = "0.1"
 
 dasclaw_bash_validation = { path = "../dasclaw_bash_validation" }
+dasclaw_exec = { path = "../dasclaw_exec" }
+dasclaw_net_proxy = { path = "../dasclaw_net_proxy" }
+dasclaw_runtime = { path = "../dasclaw_runtime" }
+dasclaw_sandbox = { path = "../dasclaw_sandbox" }
 dasclaw_tool = { path = "../dasclaw_tool" }
+dasclaw_workspace_cap = { path = "../dasclaw_workspace_cap" }

@@ -50,13 +50,14 @@ use crate::channels::{ChannelManager, IncomingMessage};
 use crate::db::Database;
 use crate::extensions::ExtensionManager;
 use crate::orchestrator::job_manager::ContainerJobManager;
-use crate::sandbox::{OsExecutor, SandboxPolicy};
 use crate::skills::catalog::SkillCatalog;
 use crate::skills::registry::SkillRegistry;
 use crate::tools::builtin::{PromptQueue, SchedulerSlot, memory::WorkspaceResolver};
 use crate::workspace::Workspace;
 use dasclaw_runtime::context::ContextManager;
 use dasclaw_runtime::secrets::SecretsStore;
+use dasclaw_shell_tools::SandboxedShellExecutor;
+use dasclaw_workspace_cap::policy::SandboxPolicy as CapPolicy;
 
 /// Deployment mode that selects which tool groups are registered by default.
 ///
@@ -264,13 +265,23 @@ pub struct BootstrapContext {
     /// vendored Codex `sandbox-pref`). When `None`, `ShellTool` runs
     /// directly without isolation — only acceptable in dev mode
     /// (`ExecutionMode::Direct`) per ADR-121 D0.
-    pub sandbox_executor: Option<Arc<OsExecutor>>,
+    ///
+    /// F4.6.7 Phase 2+3: type swapped from the local `OsExecutor` shim to
+    /// [`SandboxedShellExecutor`] (in `dasclaw_shell_tools`) which talks to
+    /// `dasclaw_exec::SandboxedExecutor` directly using the 4-variant
+    /// `dasclaw_workspace_cap` policy.
+    pub sandbox_executor: Option<Arc<SandboxedShellExecutor>>,
 
     /// W3 — Sandbox policy applied by [`crate::tools::builtin::ShellTool`]
-    /// when `sandbox_executor` is set. Per ADR-121 D5, defaults to
-    /// `WorkspaceWrite` so dev workflows (build/test/format) succeed
-    /// out-of-the-box; tighten via policy file or env override.
-    pub sandbox_policy: SandboxPolicy,
+    /// when `sandbox_executor` is set. `None` means "no sandbox wired";
+    /// `register_dev_tools` only sets the policy on `ShellTool` when both
+    /// fields are populated.
+    ///
+    /// F4.6.7 Phase 2+3: type swapped from the local 3-variant
+    /// `SandboxPolicy` to the 4-variant `dasclaw_workspace_cap` policy.
+    /// `app.rs::activate_sandbox` performs the 3→4 variant translation at
+    /// the config-parse boundary.
+    pub sandbox_policy: Option<CapPolicy>,
 
     /// W3 — Extra env vars forwarded into every sandboxed shell command.
     ///
@@ -414,9 +425,9 @@ mod tests {
         let ctx = BootstrapContext::default();
         assert!(ctx.sandbox_executor.is_none());
         assert!(ctx.proxy_env.is_empty());
-        // Default policy on the bootstrap context is the most restrictive
-        // value — `app.rs` overrides it explicitly when activating.
-        assert_eq!(ctx.sandbox_policy, SandboxPolicy::ReadOnly);
+        // Default has no policy wired — `app.rs::activate_sandbox` is
+        // the only writer and only fills it when `OsSandbox` is active.
+        assert!(ctx.sandbox_policy.is_none());
     }
 
     // ─── ADR-119 F3: job_tools_for_mode dispatch ──────────────────────────

@@ -497,11 +497,18 @@ impl AppBuilder {
     ///   warning so enterprise misconfiguration is loud (D1=B fail-CLOSED
     ///   guidance: enterprise installs must override `SANDBOX_EXECUTION_MODE`
     ///   away from `Direct`).
-    /// * `OsSandbox` — builds [`OsExecutor`], starts
-    ///   [`crate::sandbox::net_proxy::start_network_proxy`], stamps
-    ///   `proxy_env_vars` into `ctx.proxy_env`, and writes the `SandboxPolicy`
-    ///   resolved from config (default `WorkspaceWrite` per D5=E).
+    /// * `OsSandbox` — builds [`dasclaw_shell_tools::SandboxedShellExecutor`],
+    ///   starts [`crate::sandbox::net_proxy::start_network_proxy`], stamps
+    ///   `proxy_env_vars` into `ctx.proxy_env`, and writes the policy
+    ///   resolved from config (default `WorkspaceWrite` per D5=E), already
+    ///   translated to the 4-variant `dasclaw_workspace_cap::policy::SandboxPolicy`.
     /// * `Docker` — left to the legacy worker pipeline; no dev-tool wiring.
+    ///
+    /// F4.6.7 Phase 2+3 (ADR-156 §6.3): the local 3-variant
+    /// [`crate::sandbox::SandboxPolicy`] is the config-parsing enum only;
+    /// every consumer below the boundary uses the 4-variant
+    /// [`dasclaw_workspace_cap::policy::SandboxPolicy`] returned by
+    /// [`crate::sandbox::config::legacy_policy_to_cap`].
     ///
     /// On `OsSandbox` activation failure (e.g. proxy port bind error,
     /// missing secrets store), emits an error and returns `None`. The
@@ -514,6 +521,8 @@ impl AppBuilder {
         _credential_registry: &Arc<SharedCredentialRegistry>,
     ) -> Result<Option<Arc<crate::sandbox::net_proxy::NetworkProxyHandle>>, anyhow::Error> {
         use crate::sandbox::ExecutionMode;
+        use crate::sandbox::config::legacy_policy_to_cap;
+        use dasclaw_shell_tools::SandboxedShellExecutor;
         use std::time::Duration;
 
         let sb = &self.config.sandbox;
@@ -557,17 +566,12 @@ impl AppBuilder {
                     policy = crate::sandbox::SandboxPolicy::WorkspaceWrite;
                 }
 
-                // Network proxy no longer requires a secrets store: the
-                // codex-network-proxy port (W7 / ADR-137 PR-N23) enforces
-                // domain allowlist + optional MITM TLS audit only.
-                // Credential injection lives in tools/builtin/http.rs
-                // (host-side reqwest layer) where it actually works for
-                // HTTPS, see crate::sandbox::net_proxy module docs.
-                //
-                // W3.2-C2b（ADR-135 §3 PR-C2b）：先启代理拿到句柄，再用
-                // 句柄构造 OsExecutor。OsExecutor 持有的 NetworkProxy 会
-                // 被 SandboxedExecutor → dasclaw_sandbox → seatbelt profile
-                // 透传，从而在 sandbox 内自动 hole-punch 出代理地址。
+                // Translate to the 4-variant codex policy at the
+                // config-parsing boundary; everything below this point
+                // (NetworkProxy startup, SandboxedShellExecutor, ShellTool)
+                // sees only the workspace_cap representation.
+                let cap_policy = legacy_policy_to_cap(policy);
+
                 let mut sandbox_cfg = sb.to_sandbox_config();
                 // Override policy with the (possibly downgraded) one.
                 sandbox_cfg.policy = policy;
@@ -580,7 +584,7 @@ impl AppBuilder {
                         ctx.proxy_env = env_vec.into_iter().collect();
                         tracing::info!(
                             addr = %handle.addr,
-                            policy = ?policy,
+                            policy = ?cap_policy,
                             "OS sandbox activated with allowlist HTTPS proxy"
                         );
                         Some(handle)
@@ -597,16 +601,18 @@ impl AppBuilder {
                     }
                 };
 
-                // W3.2-C2b: 把代理句柄注入 OsExecutor。proxy=None 时退化为
-                // 沙箱内部完全禁网（fail-safe）。
-                let executor = Arc::new(crate::sandbox::OsExecutor::new(
+                // W3.2-C2b: 把代理句柄注入 SandboxedShellExecutor。
+                // proxy=None 时退化为沙箱内部完全禁网（fail-safe）。
+                // NetworkProxy 是 Clone（内部 Arc），克隆廉价。
+                let network = proxy.as_ref().map(|h| (*h.proxy).clone());
+                let executor = Arc::new(SandboxedShellExecutor::new(
                     Duration::from_secs(sb.timeout_secs),
                     sb.allow_full_access,
-                    proxy.as_ref().map(|h| h.proxy.clone()),
+                    network,
                 ));
 
                 ctx.sandbox_executor = Some(executor);
-                ctx.sandbox_policy = policy;
+                ctx.sandbox_policy = Some(cap_policy);
                 Ok(proxy)
             }
         }
