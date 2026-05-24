@@ -2,7 +2,7 @@
 name = "dasclaw_net_tools"
 version = "0.0.0-w6"
 edition = "2024"
-description = "Network/web LLM tools (web_fetch, …) extracted from desktop-client/ironclaw per ADR-156 §6.3 F4.6.8."
+description = "Network/web LLM tools (web_fetch, http, …) extracted from desktop-client/ironclaw per ADR-156 §6.3 F4.6.8."
 license = "Apache-2.0 OR MIT"
 publish = false
 
@@ -11,12 +11,29 @@ path = "src/lib.rs"
 
 [dependencies]
 async-trait = "0.1"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }
+bytes = "1"
+futures = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls-native-roots", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tokio = { version = "1", features = ["fs", "macros", "net", "rt", "time"] }
+tracing = "0.1"
+
+# Optional: HTML-to-Markdown conversion for http tool responses.
+html-to-markdown-rs = { version = "2.3", optional = true }
+readabilityrs = { version = "0.1.2", optional = true }
 
 dasclaw_runtime = { path = "../dasclaw_runtime" }
+dasclaw_safety = { path = "../dasclaw_safety" }
 dasclaw_tool = { path = "../dasclaw_tool" }
+dasclaw_fs_tools = { path = "../dasclaw_fs_tools" }
+dasclaw_wasm_tools = { path = "../dasclaw_wasm_tools" }
+
+[features]
+default = []
+# Mirrors desktop-client/ironclaw `html-to-markdown` feature so http response
+# bodies can be reduced to markdown before being returned to the model.
+html-to-markdown = ["dep:html-to-markdown-rs", "dep:readabilityrs"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

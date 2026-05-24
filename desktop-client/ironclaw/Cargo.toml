@@ -261,9 +261,9 @@ mime_guess = "2.0.5"
 clap_complete = "4.5.0"
 lru = "0.16.3"
 
-# HTML to Markdown conversion (feature gated)
-html-to-markdown-rs = { version = "2.3", optional = true }
-readabilityrs = { version = "0.1.2", optional = true }
+# HTML to Markdown conversion (feature gated) — moved to `dasclaw_net_tools`
+# per ADR-156 §6.3 F4.6.8 phase 2. The desktop crate forwards its
+# `html-to-markdown` feature to `dasclaw_net_tools/html-to-markdown` below.
 ed25519-dalek = { version = "2.2.0", features = ["std"] }
 hex = "0.4.3"
 
@@ -350,7 +350,7 @@ libsql = ["dep:libsql", "dasclaw_runtime/libsql", "dasclaw_wasm_tools/libsql"]
 # Opt-in feature for especially heavy integration-test targets that run in a
 # dedicated CI job instead of the default Rust test matrix.
 integration = []
-html-to-markdown = ["dep:html-to-markdown-rs", "dep:readabilityrs"]
+html-to-markdown = ["dasclaw_net_tools/html-to-markdown"]
 bedrock = ["dep:aws-config", "dep:aws-sdk-bedrockruntime", "dep:aws-smithy-types"]
 import = ["dep:json5", "libsql"]
 

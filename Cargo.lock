@@ -2686,7 +2686,6 @@ dependencies = [
  "hex",
  "hkdf",
  "hmac",
- "html-to-markdown-rs",
  "http-body-util",
  "hyper 1.8.1",
  "hyper-util",
@@ -2706,7 +2705,6 @@ dependencies = [
  "pretty_assertions",
  "pty-process",
  "rand 0.8.5",
- "readabilityrs",
  "refinery",
  "regex",
  "reqwest 0.12.28",
@@ -3133,12 +3131,20 @@ name = "dasclaw_net_tools"
 version = "0.0.0-w6"
 dependencies = [
  "async-trait",
+ "bytes",
+ "dasclaw_fs_tools",
  "dasclaw_runtime",
+ "dasclaw_safety",
  "dasclaw_tool",
+ "dasclaw_wasm_tools",
+ "futures",
+ "html-to-markdown-rs",
+ "readabilityrs",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

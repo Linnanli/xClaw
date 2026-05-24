@@ -1,7 +1,6 @@
 //! Built-in tools that come with the agent.
 
 pub mod extension_tools;
-mod http;
 mod job;
 pub mod lsp;
 pub mod memory;
@@ -53,7 +52,6 @@ pub use extension_tools::{
 pub use file::{ApplyPatchTool, ListDirTool, ReadFileTool, WriteFileTool};
 pub use glob_search::GlobSearchTool;
 pub use grep_search::GrepSearchTool;
-pub use http::HttpTool;
 pub use job::{
     CancelJobTool, CreateJobTool, JobEventsTool, JobPromptTool, JobStatusTool, ListJobsTool,
     PromptQueue, SchedulerSlot,
@@ -69,11 +67,10 @@ pub use shell::ShellTool;
 pub use skill_tools::{SkillInstallTool, SkillListTool, SkillRemoveTool, SkillSearchTool};
 pub use tool_info::ToolInfoTool;
 pub use web_search::WebSearchTool;
-mod html_converter;
 
 pub use dasclaw_image_tools::{ImageAnalyzeTool, ImageEditTool, ImageGenerateTool};
 
-// F4.6.8 (phase 1) — web_fetch was extracted to `crates/dasclaw_net_tools` per
-// ADR-156 §6.3. Thin re-export keeps existing call sites compiling unchanged.
-pub use dasclaw_net_tools::WebFetchTool;
-pub use html_converter::convert_html_to_markdown;
+// F4.6.8 (phase 1 + 2) — `web_fetch`, `http`, and the `html_converter` helper
+// were extracted to `crates/dasclaw_net_tools` per ADR-156 §6.3. Thin
+// re-exports keep existing call sites compiling unchanged.
+pub use dasclaw_net_tools::{HttpTool, WebFetchTool, convert_html_to_markdown};

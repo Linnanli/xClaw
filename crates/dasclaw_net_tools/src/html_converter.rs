@@ -3,7 +3,7 @@
 //! Two-stage pipeline: readability (extract article) -> html-to-markdown-rs (convert to md).
 //! When the `html-to-markdown` feature is disabled, passthrough only.
 
-use crate::tools::tool::ToolError;
+use dasclaw_tool::ToolError;
 
 #[cfg(feature = "html-to-markdown")]
 use html_to_markdown_rs::convert;

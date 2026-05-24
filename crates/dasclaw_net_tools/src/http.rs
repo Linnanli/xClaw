@@ -9,13 +9,14 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;
 
-use crate::safety::LeakDetector;
-use crate::tools::tool::{ApprovalRequirement, Tool, ToolError, ToolOutput, require_str};
-use crate::tools::wasm::{InjectedCredentials, SharedCredentialRegistry, inject_credential};
+use dasclaw_runtime::Tool;
 use dasclaw_runtime::secrets::SecretsStore;
+use dasclaw_safety::LeakDetector;
+use dasclaw_tool::{ApprovalRequirement, ToolError, ToolOutput, require_str};
+use dasclaw_wasm_tools::{InjectedCredentials, SharedCredentialRegistry, inject_credential};
 
 #[cfg(feature = "html-to-markdown")]
-use crate::tools::builtin::convert_html_to_markdown;
+use crate::convert_html_to_markdown;
 
 /// Maximum response body size for text responses (5 MB).
 ///
@@ -94,7 +95,7 @@ fn validate_save_to_path(save_to: &str) -> Result<std::path::PathBuf, ToolError>
     // Validate path BEFORE creating directories to prevent traversal-based
     // directory creation outside /tmp (e.g. `/tmp/../../etc/passwd`).
     let tmp_base = std::path::Path::new("/tmp");
-    let validated = crate::tools::builtin::path_utils::validate_path(save_to, Some(tmp_base))?;
+    let validated = dasclaw_fs_tools::path_utils::validate_path(save_to, Some(tmp_base))?;
     // Only create parent directories for the validated (safe) path
     if let Some(parent) = validated.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
@@ -586,7 +587,7 @@ impl Tool for HttpTool {
             .map_err(|e| ToolError::NotAuthorized(format!("{}", e)))?;
 
         // Build the interceptor request descriptor for recording/replay
-        let intercept_req = crate::llm::recording::HttpExchangeRequest {
+        let intercept_req = dasclaw_runtime::recording::HttpExchangeRequest {
             method: method_upper,
             url: parsed_url.to_string(),
             headers: headers_vec.clone(),
@@ -813,7 +814,7 @@ impl Tool for HttpTool {
             interceptor
                 .after_response(
                     &intercept_req,
-                    &crate::llm::recording::HttpExchangeResponse {
+                    &dasclaw_runtime::recording::HttpExchangeResponse {
                         status,
                         headers: resp_headers,
                         body: body_text.clone(),
@@ -857,7 +858,7 @@ impl Tool for HttpTool {
     }
 
     fn requires_approval(&self, params: &serde_json::Value) -> ApprovalRequirement {
-        let has_credentials = crate::safety::params_contain_manual_credentials(params)
+        let has_credentials = dasclaw_safety::params_contain_manual_credentials(params)
             || (self.credential_registry.as_ref().is_some_and(|registry| {
                 extract_host_from_params(params)
                     .is_some_and(|host| registry.has_credentials_for_host(&host))
@@ -876,15 +877,21 @@ impl Tool for HttpTool {
         ApprovalRequirement::UnlessAutoApproved
     }
 
-    fn rate_limit_config(&self) -> Option<crate::tools::tool::ToolRateLimitConfig> {
-        Some(crate::tools::tool::ToolRateLimitConfig::new(30, 500))
+    fn rate_limit_config(&self) -> Option<dasclaw_tool::ToolRateLimitConfig> {
+        Some(dasclaw_tool::ToolRateLimitConfig::new(30, 500))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::credentials::{TEST_OPENAI_API_KEY, test_secrets_store};
+    // Sourced upstream from `dasclaw_wasm_tools::test_credentials` (re-exported
+    // through `desktop-client/ironclaw::testing::credentials` in the original).
+    // `TEST_OPENAI_API_KEY_SHORT` (= "sk-test") is functionally equivalent for
+    // bearer-token approval-gate assertions.
+    use dasclaw_wasm_tools::test_credentials::{
+        TEST_OPENAI_API_KEY_SHORT as TEST_OPENAI_API_KEY, test_secrets_store,
+    };
 
     #[test]
     fn test_http_tool_schema_headers_is_array() {
@@ -1243,8 +1250,8 @@ mod tests {
 
     #[test]
     fn test_host_with_credential_mapping_returns_unless_auto_approved() {
-        use crate::tools::wasm::SharedCredentialRegistry;
         use dasclaw_runtime::secrets::CredentialMapping;
+        use dasclaw_wasm_tools::SharedCredentialRegistry;
 
         let registry = Arc::new(SharedCredentialRegistry::new());
         registry.add_mappings(vec![CredentialMapping::bearer(
@@ -1270,7 +1277,7 @@ mod tests {
 
     #[test]
     fn test_get_host_without_credential_mapping_returns_never() {
-        use crate::tools::wasm::SharedCredentialRegistry;
+        use dasclaw_wasm_tools::SharedCredentialRegistry;
 
         let registry = Arc::new(SharedCredentialRegistry::new());
         // Empty registry - no credential mappings
@@ -1355,7 +1362,7 @@ mod tests {
 
     #[test]
     fn test_requires_approval_with_stringified_http_params() {
-        use crate::tools::wasm::SharedCredentialRegistry;
+        use dasclaw_wasm_tools::SharedCredentialRegistry;
 
         let tool = HttpTool::new().with_credentials(
             Arc::new(SharedCredentialRegistry::new()),
@@ -1425,8 +1432,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn requires_approval_multi_thread_no_panic() {
-        use crate::tools::wasm::SharedCredentialRegistry;
         use dasclaw_runtime::secrets::CredentialMapping;
+        use dasclaw_wasm_tools::SharedCredentialRegistry;
 
         // Test with credential registry (uses std::sync::RwLock - should be safe)
         let registry = Arc::new(SharedCredentialRegistry::new());
