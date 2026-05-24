@@ -3,7 +3,7 @@
 //! Two-stage pipeline: readability (extract article) -> html-to-markdown-rs (convert to md).
 //! When the `html-to-markdown` feature is disabled, passthrough only.
 
-use crate::tools::tool::ToolError;
+use dasclaw_tool::ToolError;
 
 #[cfg(feature = "html-to-markdown")]
 use html_to_markdown_rs::convert;
@@ -41,21 +41,17 @@ mod tests {
     #[cfg(not(feature = "html-to-markdown"))]
     #[test]
     fn passthrough_returns_input_unchanged_when_feature_disabled() {
-        {
-            let html = "<html><body>raw</body></html>";
-            let out = convert_html_to_markdown(html, "https://example.com/").unwrap();
-            assert_eq!(out, html);
-        }
+        let html = "<html><body>raw</body></html>";
+        let out = convert_html_to_markdown(html, "https://example.com/").unwrap();
+        assert_eq!(out, html);
     }
 
     #[cfg(not(feature = "html-to-markdown"))]
     #[test]
     fn passthrough_ignores_url_when_feature_disabled() {
-        {
-            let html = "anything";
-            let _ = convert_html_to_markdown(html, "").unwrap();
-            let _ = convert_html_to_markdown(html, "https://example.com/page").unwrap();
-        }
+        let html = "anything";
+        let _ = convert_html_to_markdown(html, "").unwrap();
+        let _ = convert_html_to_markdown(html, "https://example.com/page").unwrap();
     }
 
     #[cfg(feature = "html-to-markdown")]
@@ -76,25 +72,10 @@ mod tests {
 <footer><p>Footer</p></footer>
 </body></html>"#;
         let out = convert_html_to_markdown(html, "https://example.com/article").unwrap();
-        assert!(
-            out.contains("Test Title"),
-            "expected title in output: {}",
-            out
-        );
-        assert!(
-            out.contains("First paragraph"),
-            "expected content in output: {}",
-            out
-        );
-        assert!(
-            out.contains("Second paragraph"),
-            "expected content in output: {}",
-            out
-        );
-        assert!(
-            !out.contains("<article>"),
-            "expected markdown, not raw HTML"
-        );
+        assert!(out.contains("Test Title"), "expected title in output: {}", out);
+        assert!(out.contains("First paragraph"), "expected content in output: {}", out);
+        assert!(out.contains("Second paragraph"), "expected content in output: {}", out);
+        assert!(!out.contains("<article>"), "expected markdown, not raw HTML");
     }
 
     #[cfg(feature = "html-to-markdown")]

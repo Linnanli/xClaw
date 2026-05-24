@@ -14,7 +14,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::tools::tool::{ApprovalRequirement, Tool, ToolError, ToolOutput, require_str};
+use dasclaw_runtime::Tool;
+use dasclaw_tool::{ApprovalRequirement, ToolError, ToolOutput, require_str};
 
 const USER_AGENT: &str = concat!("IronClaw-WebSearch/", env!("CARGO_PKG_VERSION"),);
 
@@ -504,10 +505,7 @@ mod tests {
         let domains = vec!["example.com".to_string(), "rust-lang.org".to_string()];
         assert!(host_matches_list("https://www.example.com/page", &domains));
         assert!(host_matches_list("https://example.com/", &domains));
-        assert!(host_matches_list(
-            "https://doc.rust-lang.org/book/",
-            &domains
-        ));
+        assert!(host_matches_list("https://doc.rust-lang.org/book/", &domains));
         assert!(!host_matches_list("https://other.com/", &domains));
     }
 
