@@ -15,7 +15,8 @@ use reqwest::Client;
 use serde::Serialize;
 use serde_json::json;
 
-use crate::tools::tool::{ApprovalRequirement, Tool, ToolError, ToolOutput, require_str};
+use dasclaw_runtime::Tool;
+use dasclaw_tool::{ApprovalRequirement, ToolError, ToolOutput, require_str};
 
 const USER_AGENT: &str = concat!("IronClaw-WebFetch/", env!("CARGO_PKG_VERSION"),);
 

@@ -2663,6 +2663,7 @@ dependencies = [
  "dasclaw_mcp",
  "dasclaw_misc_tools",
  "dasclaw_net_proxy",
+ "dasclaw_net_tools",
  "dasclaw_observability",
  "dasclaw_process_hardening",
  "dasclaw_routines",
@@ -3125,6 +3126,19 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "dasclaw_net_tools"
+version = "0.0.0-w6"
+dependencies = [
+ "async-trait",
+ "dasclaw_runtime",
+ "dasclaw_tool",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
