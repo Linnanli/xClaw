@@ -10,7 +10,6 @@ pub(crate) mod shell;
 pub use shell::classify_command_risk;
 pub mod skill_tools;
 mod tool_info;
-mod web_search;
 
 // F4.6.6-a/-b/-c (ADR-156 §6.3): `path_utils` + `file_guard` + `code_edit` +
 // `glob_search` + `grep_search` + `file` were extracted to `dasclaw_fs_tools`.
@@ -66,11 +65,10 @@ pub use routine::{
 pub use shell::ShellTool;
 pub use skill_tools::{SkillInstallTool, SkillListTool, SkillRemoveTool, SkillSearchTool};
 pub use tool_info::ToolInfoTool;
-pub use web_search::WebSearchTool;
 
 pub use dasclaw_image_tools::{ImageAnalyzeTool, ImageEditTool, ImageGenerateTool};
 
-// F4.6.8 (phase 1 + 2) — `web_fetch`, `http`, and the `html_converter` helper
-// were extracted to `crates/dasclaw_net_tools` per ADR-156 §6.3. Thin
-// re-exports keep existing call sites compiling unchanged.
-pub use dasclaw_net_tools::{HttpTool, WebFetchTool, convert_html_to_markdown};
+// F4.6.8 (phase 1 + 2 + 3) — `web_fetch`, `http`, `html_converter`, and
+// `web_search` were extracted to `crates/dasclaw_net_tools` per ADR-156 §6.3.
+// Thin re-exports keep existing call sites compiling unchanged.
+pub use dasclaw_net_tools::{HttpTool, WebFetchTool, WebSearchTool, convert_html_to_markdown};
