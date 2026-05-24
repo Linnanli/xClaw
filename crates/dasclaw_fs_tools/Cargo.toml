@@ -2,7 +2,7 @@
 name = "dasclaw_fs_tools"
 version = "0.0.0-w6"
 edition = "2024"
-description = "Filesystem tools (path validation, file guard, code_edit, glob_search, grep_search) extracted from desktop-client/ironclaw per ADR-156 §6.3 F4.6.6-a/-b."
+description = "Filesystem tools (path validation, file guard, code_edit, glob_search, grep_search, file ops, apply_patch) extracted from desktop-client/ironclaw per ADR-156 §6.3 F4.6.6-a/-b/-c."
 license = "Apache-2.0 OR MIT"
 publish = false
 
@@ -19,6 +19,8 @@ tracing = "0.1"
 
 dasclaw_runtime = { path = "../dasclaw_runtime" }
 dasclaw_tool = { path = "../dasclaw_tool" }
+dasclaw_workspace_cap = { path = "../dasclaw_workspace_cap" }
+dasclaw_apply_patch = { path = "../dasclaw_apply_patch" }
 
 [dev-dependencies]
 tempfile = "3"

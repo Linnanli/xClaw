@@ -2920,8 +2920,10 @@ name = "dasclaw_fs_tools"
 version = "0.0.0-w6"
 dependencies = [
  "async-trait",
+ "dasclaw_apply_patch",
  "dasclaw_runtime",
  "dasclaw_tool",
+ "dasclaw_workspace_cap",
  "globset",
  "regex",
  "serde_json",
