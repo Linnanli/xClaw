@@ -10,13 +10,12 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use tokio::fs;
 
-use crate::tools::builtin::path_utils::{AccessMode, PathPolicy, validate_path_with_policy};
-use crate::tools::tool::{
-    ApprovalRequirement, Tool, ToolDomain, ToolError, ToolOutput, require_str,
-};
-use crate::workspace::paths as ws_paths;
+use crate::path_utils::{AccessMode, PathPolicy, validate_path_with_policy};
+use dasclaw_runtime::Tool;
+use dasclaw_tool::{ApprovalRequirement, ToolDomain, ToolError, ToolOutput, require_str};
+use dasclaw_workspace_cap::document::paths as ws_paths;
 
-use super::file_guard;
+use crate::file_guard;
 
 /// Well-known workspace filenames that must go through memory_write, not write_file.
 ///
@@ -122,7 +121,7 @@ impl Tool for ReadFileTool {
 
         let start = std::time::Instant::now();
 
-        let effective = super::path_utils::effective_base_dir(self.base_dir.as_deref(), ctx);
+        let effective = crate::path_utils::effective_base_dir(self.base_dir.as_deref(), ctx);
         let path = validate_path_with_policy(
             path_str,
             effective.as_deref(),
@@ -280,7 +279,7 @@ impl Tool for WriteFileTool {
             )));
         }
 
-        let effective = super::path_utils::effective_base_dir(self.base_dir.as_deref(), ctx);
+        let effective = crate::path_utils::effective_base_dir(self.base_dir.as_deref(), ctx);
         let path = validate_path_with_policy(
             path_str,
             effective.as_deref(),
@@ -321,8 +320,8 @@ impl Tool for WriteFileTool {
         ToolDomain::Container
     }
 
-    fn rate_limit_config(&self) -> Option<crate::tools::tool::ToolRateLimitConfig> {
-        Some(crate::tools::tool::ToolRateLimitConfig::new(20, 200))
+    fn rate_limit_config(&self) -> Option<dasclaw_tool::ToolRateLimitConfig> {
+        Some(dasclaw_tool::ToolRateLimitConfig::new(20, 200))
     }
 }
 
@@ -400,7 +399,7 @@ impl Tool for ListDirTool {
 
         let start = std::time::Instant::now();
 
-        let effective = super::path_utils::effective_base_dir(self.base_dir.as_deref(), ctx);
+        let effective = crate::path_utils::effective_base_dir(self.base_dir.as_deref(), ctx);
         let path = validate_path_with_policy(
             path_str,
             effective.as_deref(),
@@ -614,7 +613,7 @@ impl Tool for ApplyPatchTool {
         let args = dasclaw_apply_patch::parse_patch(input)
             .map_err(|e| ToolError::ExecutionFailed(format!("invalid patch: {e}")))?;
 
-        let effective = super::path_utils::effective_base_dir(self.base_dir.as_deref(), ctx);
+        let effective = crate::path_utils::effective_base_dir(self.base_dir.as_deref(), ctx);
 
         // Validate every destination path through the configured policy *before*
         // touching the filesystem; the apply layer then enforces base_dir again
@@ -662,15 +661,15 @@ impl Tool for ApplyPatchTool {
         ToolDomain::Container
     }
 
-    fn rate_limit_config(&self) -> Option<crate::tools::tool::ToolRateLimitConfig> {
-        Some(crate::tools::tool::ToolRateLimitConfig::new(20, 200))
+    fn rate_limit_config(&self) -> Option<dasclaw_tool::ToolRateLimitConfig> {
+        Some(dasclaw_tool::ToolRateLimitConfig::new(20, 200))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::builtin::path_utils::{normalize_lexical, validate_path};
+    use crate::path_utils::{normalize_lexical, validate_path};
     use dasclaw_runtime::context::JobContext;
     use tempfile::TempDir;
 

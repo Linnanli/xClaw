@@ -7,7 +7,10 @@
 //! - F4.6.6-b (middle): `code_edit`, `glob_search`, `grep_search` — built on
 //!   top of the leaf layer; expose `Tool` implementations consumed by the
 //!   desktop tool registry.
-//! - F4.6.6-c (heavy): `file` — pending workspace::paths extraction.
+//! - F4.6.6-c (heavy): `file` — `ReadFileTool` / `WriteFileTool` /
+//!   `ListDirTool` / `ApplyPatchTool` built on top of the leaf layer plus
+//!   `dasclaw_workspace_cap::document::paths` for well-known memory filenames
+//!   and `dasclaw_apply_patch` for envelope parsing.
 //!
 //! # Modules
 //!
@@ -19,8 +22,10 @@
 //!   and unified-diff preview.
 //! - [`glob_search`] — `find`-like file path matching via glob patterns.
 //! - [`grep_search`] — `grep`-like regex content search with optional context.
+//! - [`file`] — `read_file` / `write_file` / `list_dir` / `apply_patch` tools.
 
 pub mod code_edit;
+pub mod file;
 pub mod file_guard;
 pub mod glob_search;
 pub mod grep_search;
