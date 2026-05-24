@@ -14,12 +14,10 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use tokio::fs;
 
-use crate::tools::builtin::path_utils::{AccessMode, PathPolicy, validate_path_with_policy};
-use crate::tools::tool::{
-    ApprovalRequirement, Tool, ToolDomain, ToolError, ToolOutput, require_str,
-};
-
-use super::file_guard;
+use crate::file_guard;
+use crate::path_utils::{AccessMode, PathPolicy, validate_path_with_policy};
+use dasclaw_runtime::Tool;
+use dasclaw_tool::{ApprovalRequirement, ToolDomain, ToolError, ToolOutput, require_str};
 
 /// Maximum file size for editing (10MB).
 const MAX_EDIT_SIZE: u64 = 10 * 1024 * 1024;
@@ -176,8 +174,8 @@ impl Tool for CodeEditTool {
         ToolDomain::Container
     }
 
-    fn rate_limit_config(&self) -> Option<crate::tools::tool::ToolRateLimitConfig> {
-        Some(crate::tools::tool::ToolRateLimitConfig::new(20, 200))
+    fn rate_limit_config(&self) -> Option<dasclaw_tool::ToolRateLimitConfig> {
+        Some(dasclaw_tool::ToolRateLimitConfig::new(20, 200))
     }
 }
 

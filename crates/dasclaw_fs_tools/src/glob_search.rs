@@ -8,10 +8,9 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 
-use crate::tools::builtin::path_utils::validate_path;
-use crate::tools::tool::{
-    ApprovalRequirement, Tool, ToolDomain, ToolError, ToolOutput, require_str,
-};
+use crate::path_utils::validate_path;
+use dasclaw_runtime::Tool;
+use dasclaw_tool::{ApprovalRequirement, ToolDomain, ToolError, ToolOutput, require_str};
 
 /// Maximum results returned by default.
 const DEFAULT_MAX_RESULTS: usize = 100;
