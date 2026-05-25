@@ -12,9 +12,7 @@ mod fixtures;
 use dasclaw_runtime::Agent;
 use serde_json::json;
 
-use fixtures::{
-    RecordingToolExecutor, ScriptedResponder, no_tool_defs, text_turn, tool_call_turn,
-};
+use fixtures::{RecordingToolExecutor, ScriptedResponder, no_tool_defs, text_turn, tool_call_turn};
 
 #[tokio::test]
 async fn req_dasclaw_cli_loop_e20_namespace_collision_routes_to_b() {
