@@ -23,8 +23,8 @@ use dasclaw_runtime::Agent;
 mod safety_fixtures;
 
 use safety_fixtures::{
-    BlockingToolExecGate, RecordingEgressGate, RecordingToolExecutor, ScriptedResponder,
-    text_turn, tool_call_turn,
+    BlockingToolExecGate, RecordingEgressGate, RecordingToolExecutor, ScriptedResponder, text_turn,
+    tool_call_turn,
 };
 
 #[tokio::test]

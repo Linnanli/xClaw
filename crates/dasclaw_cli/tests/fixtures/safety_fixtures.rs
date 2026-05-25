@@ -184,7 +184,9 @@ pub struct BlockingToolExecGate {
 
 impl BlockingToolExecGate {
     pub fn new(reason: impl Into<String>) -> Self {
-        Self { reason: reason.into() }
+        Self {
+            reason: reason.into(),
+        }
     }
 }
 
@@ -294,7 +296,9 @@ pub struct LeakyToolExecutor {
 
 impl LeakyToolExecutor {
     pub fn new(content: impl Into<String>) -> Self {
-        Self { content: content.into() }
+        Self {
+            content: content.into(),
+        }
     }
 }
 

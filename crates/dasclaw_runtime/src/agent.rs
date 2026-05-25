@@ -368,8 +368,8 @@ impl LoopDelegate for HeadlessDelegate {
             // `Redact` → callers that want argument rewriting should
             // implement their own ToolExecutor wrapper; here we honour
             // the sanitized payload only as a tracing hint and proceed.
-            let args_payload = serde_json::to_string(&call.arguments)
-                .unwrap_or_else(|_| String::from("{}"));
+            let args_payload =
+                serde_json::to_string(&call.arguments).unwrap_or_else(|_| String::from("{}"));
             let kind = EgressKind::ToolExecution {
                 tool: call.name.clone(),
             };
@@ -400,14 +400,17 @@ impl LoopDelegate for HeadlessDelegate {
                 .egress
                 .check(&EgressKind::UserDisplay, &content_buf)
                 .await;
-            let pushed_content =
-                match apply_egress_decision(decision, &mut content_buf, &post_label) {
-                    EgressApply::Continue => content_buf,
-                    EgressApply::Halt(reason) => {
-                        tracing::warn!(tool = %result.name, %reason, "egress gate blocked tool output");
-                        format!("[redacted: {reason}]")
-                    }
-                };
+            let pushed_content = match apply_egress_decision(
+                decision,
+                &mut content_buf,
+                &post_label,
+            ) {
+                EgressApply::Continue => content_buf,
+                EgressApply::Halt(reason) => {
+                    tracing::warn!(tool = %result.name, %reason, "egress gate blocked tool output");
+                    format!("[redacted: {reason}]")
+                }
+            };
             ctx.messages.push(ChatMessage::tool_result(
                 &result.tool_call_id,
                 &result.name,
