@@ -89,7 +89,13 @@ impl EchoResponder {
 
     /// Number of times [`AgentResponder::respond`] has been called.
     pub fn call_count(&self) -> usize {
-        *self.call_count.lock().expect("call_count mutex poisoned")
+        // Mutex poisoning here only happens if a previous holder panicked.
+        // The counter has no invariants to protect, so recovering the inner
+        // value is safe and lets us stay panic-free in production code.
+        *self
+            .call_count
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -102,7 +108,12 @@ impl Default for EchoResponder {
 #[async_trait]
 impl AgentResponder for EchoResponder {
     async fn respond(&self, ctx: &mut ReasoningContext) -> Result<RespondOutput, HostError> {
-        *self.call_count.lock().expect("call_count mutex poisoned") += 1;
+        // See call_count(): a poisoned mutex around a plain counter has no
+        // invariants to protect, so recover instead of panicking.
+        *self
+            .call_count
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) += 1;
         let last_user_text = ctx
             .messages
             .iter()
