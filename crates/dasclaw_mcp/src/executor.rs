@@ -236,10 +236,7 @@ mod tests {
             _request: &McpRequest,
             _headers: &HashMap<String, String>,
         ) -> Result<McpResponse, ToolError> {
-            let mut q = self
-                .responses
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
+            let mut q = self.responses.lock().unwrap_or_else(|p| p.into_inner());
             if q.is_empty() {
                 return Err(ToolError::ExternalService(
                     "no more stub responses".to_string(),
@@ -313,10 +310,8 @@ mod tests {
     async fn req_dasclaw_mcp_executor_b2_definitions_are_qualified_and_sorted() {
         // Two clients (alpha, beta) each exposing a `ping` tool. The
         // qualified names should be `alpha_ping` < `beta_ping`.
-        let transport_a: Arc<dyn McpTransport> =
-            Arc::new(StubTransport::new(vec![]));
-        let transport_b: Arc<dyn McpTransport> =
-            Arc::new(StubTransport::new(vec![]));
+        let transport_a: Arc<dyn McpTransport> = Arc::new(StubTransport::new(vec![]));
+        let transport_b: Arc<dyn McpTransport> = Arc::new(StubTransport::new(vec![]));
         let client_a = build_client("alpha", transport_a);
         let client_b = build_client("beta", transport_b);
 
