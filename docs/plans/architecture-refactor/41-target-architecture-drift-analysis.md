@@ -232,3 +232,68 @@
 - ✅ ADR-155 PR #751 commit `f0c1750c` 已合并验证
 - ✅ AGENTS.md 三层规约：semantic_search → vscode_listCodeUsages → grep，本次第一层因 embeddings=0 失败已回退 grep
 - ✅ ADR-114 类 A 守卫：本文档不含 `.ironclaw` / `IRONCLAW_BASE_DIR` 新增字面量
+
+---
+
+## 11. 执行进度回顾（2026-05-25 更新）
+
+> 本节是对 §1~§10 历史快照（2026-04-30）的增量状态覆盖。原文按时间封存，不重写。
+> 当前 base：`origin/xClaw` @ PR #792（ADR-156 §6.4 mod.rs 薄壳化）合并后。
+
+### 11.1 §9 推荐顺序的执行情况
+
+| 步骤 | 状态 | 落地证据 |
+|---|---|---|
+| 1. F4.6 落点决策 ADR | ✅ 完成 | ADR-156（`adr-156-f46-builtin-tools-landing-decision.md` 已合入主线） |
+| 2. F4.6 实施 | ✅ phases 4.6.1 ~ 4.6.8 + §6.4 全部完成 | PR #784 / #786 / #788 / #790 / #792 已合并 |
+| 3. 31 v2.5 升级 | ⏳ 待启动 | 计划下一个 PR 处理（本文件状态同步是其前置） |
+
+### 11.2 crate 清单状态变化（41 § 2~3 表格的更新）
+
+- **总数**：从 §1 写作时的 45 → 当前 47（新增 `dasclaw_fs_tools`、`dasclaw_misc_tools`、`dasclaw_image_tools`、`dasclaw_net_tools`、`dasclaw_shell_tools`、`dasclaw_sub_agent_tools` 等 F4.6 系列下沉 crate，部分名字源自 §3 当时未列项）。
+- **§2.2 P1**：`dasclaw_git_tools` 当时标记"⚠️ 空壳 24 行"，现已落地为完整 git 工具 crate（F4.6 系列 PR）。
+- **§2.4 升级未完成项**：`dasclaw_common` 仍为 MISSING（ADR-156 未涵盖，留 ADR-101 后续）；`dasclaw_bridge_lite` 同样仍为 MISSING（仍属 ADR-156 §6 PLANNED 清单的合法待办）。
+- **`check_blueprint_sync.py`** 当前自检：`47 crates on disk, 2 planned`（`dasclaw_bridge_lite` + `dasclaw_memory_tools`，后者按 ADR-156 §6.3.1 取消下沉，留 PLANNED 项见 ADR-101 后续清理）。
+
+### 11.3 §4 / §6.1 工具壳层下沉的最终落点
+
+ADR-156 落地后，原 28 个 builtin `*.rs` 的处置：
+
+| 类型 | 处置 | 涉及 |
+|---|---|---|
+| 下沉到独立 crate | ✅ 完成 | `fs_tools` / `git_tools` / `image_tools` / `misc_tools` / `net_tools` / `shell_tools` / `sub_agent_tools` / `lsp`（共 8 个）|
+| 留守 desktop（ADR-156 §6.3.1 / §8 + ADR-155） | ✅ 维持 | `memory` / `tool_info` / `extension_tools` / `skill_tools` / `job` / `routine` / `message`（7 个） |
+| 入口聚合层 | ✅ 已薄壳化（§6.4） | `desktop-client/ironclaw/src/tools/builtin/mod.rs` 改为 wildcard re-export + 留守 `pub mod`，shim `shell.rs` / `lsp/mod.rs` 已删 |
+
+§ 1 的"3 类漂移"中，"工具壳层下沉规划缺失"项已被 ADR-156 全面覆盖，不再属于漂移。
+
+### 11.4 §5 ADR 清单进展
+
+§5 表格列出 5 条最近 ADR，本次新增重要 ADR：
+
+| ADR | 状态 | 内容 |
+|---|---|---|
+| ADR-156 | ✅ 已落地（F4.6 全部 phase + §6.4 收尾合并） | F4.6 builtin 工具壳下沉决策 |
+
+### 11.5 §6.4 决策点 D1-D10 增量
+
+| 决策点 | §6.4 状态 | 本次更新 |
+|---|---|---|
+| D8（Approval 推送）| 未推进 | 仍未推进 |
+| D9（crash 后端）| 未推进 | 仍未推进 |
+
+（其余决策点维持 §6.4 标注。）
+
+### 11.6 §7 落后矩阵的状态更新
+
+| 维度 | §7 标注 | 当前状态 |
+|---|---|---|
+| 工具壳下沉规划 | 🟡 中等 | 🟢 已闭环（ADR-156 落地 + 实施完毕） |
+| crate 数量遗漏 | 🔴 严重 | 🟡 部分闭环（数量已稳定 47，蓝图 §4 仍未升级 — 等 31 v2.5） |
+| ADR 清单时效性 | 🔴 严重 | 🟡 维持（待 31 v2.5 整合 ADR-156） |
+| desktop 留守清单 | 🟡 中等 | 🟢 已收敛（ADR-156 §6.3.1 + §8 已明确） |
+
+### 11.7 下一步
+
+按 §9 推荐顺序，下一步是 **31 v2.5 升级**（选项 A）：把 §4 crate 清单从 24 扩到 47、§3 ADR 清单补齐 ADR-111~156、新增 F4.6 落地总结小节。该任务作为本 PR 的后续 PR 独立提交。
+
