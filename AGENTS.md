@@ -125,6 +125,10 @@
     - base 分支不是 `xClaw` 而是上一个 feature branch
     - merge 顺序
     - “请先 merge #X，再看本 PR”
+    - **合并下层 PR 时，必须在以下两条路径里二选一，禁止两条都不做就直接 squash + delete branch**：
+      - **路径 A（推荐）**：合并下层 PR 时**不要勾选 "Delete branch"**，等所有 stacked 上层 PR 都已 rebase + 合并完，再统一清理分支
+      - **路径 B**：合并下层 PR 后，**在下层分支被删之前**，立刻在 GitHub 上把上层 PR 的 base 切到 `xClaw`（或下一层仍存活的 base）
+    - 若两条路径都没做、下层分支已删，GitHub 会**自动关闭上层 PR 且无法 reopen**（GraphQL 报 "base ref 已删，无法 reopen"），届时只能本地 `git rebase --onto origin/<base> <lower-tip>` 后**新开 PR 替代**，原 PR 编号永久失效。实证：2026-05-25 #816 因合 #814 后 base 被删自动关闭，被迫开 #817 替代
 8. 开完 PR 后，**必须用 `gh pr checks <PR#> --watch --fail-fast` 等 CI**（事件驱动，CI 一结束就返回）。**禁止用 `sleep N && gh pr checks` 轮询**——`sleep` 既浪费时间又拿不到精确完成点，违反本规约。把 watch 输出的结果同步给用户。
 9. 若当前闭环 milestone 已完成，按“会话轮换原则”判断是否该建议新会话
 
@@ -139,6 +143,7 @@
 
 - ❌ 还没跑基本验证就开 PR
 - ❌ stacked PR 不写 base / merge 顺序
+- ❌ 合并 stacked 下层 PR 时既未保留分支、也未提前把上层 PR 的 base 切到 xClaw（会导致上层 PR 自动关闭且无法 reopen）
 - ❌ PR 标题和 commit / 实际改动边界不一致
 - ❌ 一个 PR 混入多个互不相干的主题
 - ❌ 明明已经完成闭环 milestone，却继续在同一会话无限追加新阶段

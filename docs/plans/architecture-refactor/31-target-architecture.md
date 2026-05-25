@@ -1,5 +1,13 @@
 # 31 — 目标架构（边界清晰、可复用）
 
+> **v2.7 (2026-05-25)** · ADR-153 §4.4 主流程收尾（基于已合并 PR #800 / #802 / #804 / #806 / #812 / #814 / #817）：
+>   1. **ADR-153 §4.4 step 6 落点**：`crates/dasclaw_cli` 引入 `tools` 模块（`StaticToolExecutor` + `default_builtins()` 内置 `echo` / `now`），新增 `run --enable-tools` 开关；`dasclaw_cli::run_with_tools` 作为第二个库入口与 `run` 并存，不破坏零工具路径。证明 headless agent 可在零 desktop 依赖下完成 LLM ↔ 本地工具的完整往返（PR #804）。
+>   2. **ADR-153 §4.4 step 7 落点**：`dasclaw_mcp` 新增 `McpToolExecutor`，把一个或多个 `Arc<McpClient>` 包成 `dasclaw_runtime::ToolExecutor`；工具名按 `<server>_<tool>` 限定避免多 server 冲突；未知工具 / 传输错误一律返回 `is_error=true` 的 `ToolResult`，喂回 LLM 而不是抛进 agent loop。该桥接住在 `dasclaw_mcp` 而非 `dasclaw_cli`，因为任何无头宿主都需要它（PR #806）。
+>   3. **ADR-153 §4.4 step 8 落点**：`crates/dasclaw_cli` 新增 `mcp` 模块（stdio + HTTP 两种 transport，按 JSON config entry 形状路由），新增 `run --mcp-config <path>` 子开关；`dasclaw_runtime` 新增 `CompositeToolExecutor`，把 `StaticToolExecutor` 与 `McpToolExecutor` 按工具名求并、按 name 分发，`--enable-tools` 与 `--mcp-config` 可同时启用。配 `tests/mcp_e2e.rs` 端到端测试（stdio 子进程 + e1 成功 + e2 未知工具错误注入）。`#816 → #817` 实证：合并 stacked 下层 PR 时未保留分支也未提前切上层 base，会触发 GitHub 自动关闭且无法 reopen 的失败模式，AGENTS.md "标准流程" §7 已新增"路径 A / 路径 B"硬规则与对应禁止事项（PR #812 + #814 + #817）。
+>   4. **ADR-153 主流程闭环宣告**：step 1（F3.x）/ step 2（dasclaw_runtime）/ step 4 ~ 8（CLI 五子步）全部落地；step 3（dasclaw_session）按 ADR 原文「等到有第二个调用方时再抽」保持暂搁；§4.4.6 必要性表里标"必要"的 4 项全部完成，"暂不必要"的 5 项（OAuth-backed MCP / 审批 / streaming / 工具白名单 / inline `--mcp-stdio` flag）按计划留给后续 ADR。
+>   5. **crate 总数**：仍为 47；本期无新增 crate，全部能力以模块形式落入已有 `dasclaw_cli` / `dasclaw_runtime` / `dasclaw_mcp`。
+> 本次升级是状态同步性质，不改架构决策，不重画 §1 总览图。
+
 > **v2.6 (2026-05-25)** · ADR-156 落地收尾（基于已合并 PR #784 / #786 / #788 / #790 / #792）：
 >   1. **§4.6 F4.6 工具壳全部执行完毕**：8 个子波次 F4.6.1 ~ F4.6.8 + §6.4 mod.rs 薄壳化对应 PR 全部合入 xClaw。原 v2.5 "计划落点"现转为"已落地"状态（详见 §4.6 表格的"PR / 状态"列）。
 >   2. **F4.6.3 `dasclaw_memory_tools` 取消下沉**：按 [ADR-156 §6.3.1](adr-156-f46-builtin-tools-landing-decision.md) 决定，`memory` 模块依赖 `runtime` workspace crate（mtime / 大小 / 路径治理），强行下沉会绕过 ADR-153 边界，故 `memory` 留 desktop（与 §4.6 "留桌面 5 类"合并为 6 类：memory / extension / skill / job / routine / message）。
