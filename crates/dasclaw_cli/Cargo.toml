@@ -42,6 +42,14 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
+# W6.1: egress-gate feature is what lets dasclaw_safety::IronclawEgressGate
+# implement dasclaw_core::EgressGate, which is the trait that test cases
+# e7–e16 (ADR-153-cli-test-matrix §1) inject through run_with_tools_and_hooks.
+# Kept as dev-dependency: dasclaw_cli the library stays safety-stack-agnostic;
+# downstream callers wire their own HookBundle from whichever safety crate
+# they prefer.
+dasclaw_safety = { path = "../dasclaw_safety", features = ["egress-gate"] }
+dasclaw_governance = { path = "../dasclaw_governance" }
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
 wiremock = "0.6"

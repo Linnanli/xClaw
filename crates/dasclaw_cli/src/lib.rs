@@ -31,10 +31,19 @@
 //! used by `dasclaw-cli run --enable-tools` (ADR-153 §4.4 step 6).
 //! Drive it through [`run_with_tools`] when the agent should be allowed
 //! to call tools.
+//!
+//! ## Hook wiring (W6.1)
+//!
+//! See [`run_with_tools_and_hooks`] for the entry that lets callers
+//! inject a [`dasclaw_core::hooks::HookBundle`] (EgressGate, approval,
+//! sandbox, audit). This is the single point at which the 9-layer
+//! defence stack from `13-security-capability-inventory.md` can be
+//! opted-in from a headless caller.
 
 use std::sync::Mutex;
 
 use async_trait::async_trait;
+use dasclaw_core::hooks::HookBundle;
 use dasclaw_core::messages::{FinishReason, Role, ToolDefinition};
 use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
@@ -103,6 +112,44 @@ where
         .responder(responder)
         .tool_executor(tool_executor)
         .tools(tool_definitions)
+        .system_prompt(system_prompt)
+        .build()
+        .map_err(|e| CliError::Build(e.to_string()))?;
+    let reply = agent.run(user_prompt).await?;
+    Ok(reply)
+}
+
+/// Variant of [`run_with_tools`] that also wires a [`HookBundle`].
+///
+/// The hook bundle is the only path through which a headless caller can
+/// opt into the layered defences enumerated in
+/// `docs/plans/architecture-refactor/13-security-capability-inventory.md`
+/// (EgressGate, approval, sandbox bridge, audit, …). Without this entry
+/// the only available bundle is [`HookBundle::noop`], which makes the
+/// library "unsafe by default and impossible to opt-in to safety" — see
+/// ADR-153-cli-test-matrix §1.3 G1 for the full rationale.
+///
+/// Like [`run`] and [`run_with_tools`], this is intentionally a separate
+/// entry rather than an optional parameter on `run_with_tools`. The
+/// existing entries stay byte-for-byte stable so the e1–e6 integration
+/// tests continue to exercise the noop-hook path verbatim.
+pub async fn run_with_tools_and_hooks<R, E>(
+    responder: R,
+    tool_executor: E,
+    tool_definitions: Vec<ToolDefinition>,
+    hooks: HookBundle,
+    system_prompt: &str,
+    user_prompt: &str,
+) -> Result<String, CliError>
+where
+    R: AgentResponder + 'static,
+    E: ToolExecutor + 'static,
+{
+    let agent: Agent = Agent::builder()
+        .responder(responder)
+        .tool_executor(tool_executor)
+        .tools(tool_definitions)
+        .hooks(hooks)
         .system_prompt(system_prompt)
         .build()
         .map_err(|e| CliError::Build(e.to_string()))?;
