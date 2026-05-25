@@ -30,8 +30,7 @@ use serde_json::{Value, json};
 ///
 /// Returning `Err(_)` becomes a [`ToolResult`] with `is_error = true`,
 /// which the runtime feeds back to the model as a tool_result block.
-pub type ToolHandler =
-    Arc<dyn Fn(&Value) -> Result<String, String> + Send + Sync + 'static>;
+pub type ToolHandler = Arc<dyn Fn(&Value) -> Result<String, String> + Send + Sync + 'static>;
 
 /// One named CLI tool: its LLM-facing schema plus its local handler.
 #[derive(Clone)]
@@ -154,9 +153,7 @@ pub fn builtin_echo() -> CliTool {
             args.get("message")
                 .and_then(Value::as_str)
                 .map(str::to_owned)
-                .ok_or_else(|| {
-                    "echo: missing required string argument `message`".to_string()
-                })
+                .ok_or_else(|| "echo: missing required string argument `message`".to_string())
         },
     )
 }
@@ -264,11 +261,7 @@ mod tests {
     #[test]
     fn definitions_are_sorted_and_complete() {
         let executor = default_builtins();
-        let names: Vec<_> = executor
-            .definitions()
-            .into_iter()
-            .map(|d| d.name)
-            .collect();
+        let names: Vec<_> = executor.definitions().into_iter().map(|d| d.name).collect();
         assert_eq!(names, vec!["echo".to_string(), "now".to_string()]);
     }
 }
