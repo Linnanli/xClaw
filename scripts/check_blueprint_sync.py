@@ -49,8 +49,8 @@ PLANNED: dict[str, str] = {
     # F4.6.2 (`dasclaw_image_tools`) landed — entry removed.
     # F4.6.4 (`dasclaw_sub_agent_tools`) landed — entry removed.
     # F4.6.6-a (`dasclaw_fs_tools`) landed — entry removed.
-    # F4.6.7 (`dasclaw_shell_tools`) phase 1 landed — entry removed.
-    # F4.6.8 (`dasclaw_net_tools`) phase 1 (web_fetch) landed — entry removed.
+    # F4.6.7 (`dasclaw_shell_tools`) landed — entry removed.
+    # F4.6.8 (`dasclaw_net_tools`) landed (phases 1/2/3) — entry removed.
 }
 
 # Symbols that look like crate names but are not. Examples: conceptual

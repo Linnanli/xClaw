@@ -1247,8 +1247,8 @@ mod tests {
 
     #[test]
     fn test_host_with_credential_mapping_returns_unless_auto_approved() {
-        use dasclaw_wasm_tools::SharedCredentialRegistry;
         use dasclaw_runtime::secrets::CredentialMapping;
+        use dasclaw_wasm_tools::SharedCredentialRegistry;
 
         let registry = Arc::new(SharedCredentialRegistry::new());
         registry.add_mappings(vec![CredentialMapping::bearer(
@@ -1429,8 +1429,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn requires_approval_multi_thread_no_panic() {
-        use dasclaw_wasm_tools::SharedCredentialRegistry;
         use dasclaw_runtime::secrets::CredentialMapping;
+        use dasclaw_wasm_tools::SharedCredentialRegistry;
 
         // Test with credential registry (uses std::sync::RwLock - should be safe)
         let registry = Arc::new(SharedCredentialRegistry::new());
