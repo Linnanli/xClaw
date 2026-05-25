@@ -81,6 +81,9 @@ members = [
 	"crates/dasclaw_sandbox_linux",
 	# W8 ADR-139 §4.5 PR1 — MITM CA trust-chain manager (dasclaw original, not verbatim)
 	"crates/dasclaw_cert_trust",
+	# ADR-153 §4.4 step 4 — headless agent CLI (proof that dasclaw_runtime::Agent
+	# runs without desktop: no Tauri, no DB, no HTTP server)
+	"crates/dasclaw_cli",
 	"desktop-client/ironclaw",
 	"desktop-client/ironclaw/crates/ironclaw_common",
 	"crates/dasclaw_safety",

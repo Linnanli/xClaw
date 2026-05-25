@@ -2853,6 +2853,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "dasclaw_cli"
+version = "0.0.0-w6"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "clap",
+ "dasclaw_core",
+ "dasclaw_runtime",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "dasclaw_core"
 version = "0.1.0"
 dependencies = [
