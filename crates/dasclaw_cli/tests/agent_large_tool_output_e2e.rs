@@ -216,7 +216,11 @@ async fn req_dasclaw_cli_loop_e22_no_sanitizer_forwards_verbatim_baseline() {
     let tool_payload = format!("verbatim: {secret_like}");
 
     let script = vec![
-        tool_call_turn("read_file", "call_read_1", json!({ "path": "verbatim.txt" })),
+        tool_call_turn(
+            "read_file",
+            "call_read_1",
+            json!({ "path": "verbatim.txt" }),
+        ),
         text_turn("ok"),
     ];
     let responder = Arc::new(CapturingResponder::new(script));

@@ -282,10 +282,7 @@ impl AgentBuilder {
     /// the redacted payload. When unset (default), output is forwarded
     /// verbatim — matching the pre-W6.5b behaviour.
     #[must_use]
-    pub fn tool_output_sanitizer(
-        mut self,
-        sanitizer: impl ToolOutputSanitizer + 'static,
-    ) -> Self {
+    pub fn tool_output_sanitizer(mut self, sanitizer: impl ToolOutputSanitizer + 'static) -> Self {
         self.tool_output_sanitizer = Some(Arc::new(sanitizer));
         self
     }
@@ -293,10 +290,7 @@ impl AgentBuilder {
     /// Same as [`Self::tool_output_sanitizer`] but accepts a pre-built
     /// `Arc` so callers can share a single sanitizer across agents.
     #[must_use]
-    pub fn tool_output_sanitizer_arc(
-        mut self,
-        sanitizer: Arc<dyn ToolOutputSanitizer>,
-    ) -> Self {
+    pub fn tool_output_sanitizer_arc(mut self, sanitizer: Arc<dyn ToolOutputSanitizer>) -> Self {
         self.tool_output_sanitizer = Some(sanitizer);
         self
     }

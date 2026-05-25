@@ -48,8 +48,7 @@ pub mod secrets;
 pub mod tool;
 
 pub use agent::{
-    Agent, AgentBuilder, AgentConfig, AgentError, AgentResponder, ToolExecutor,
-    ToolOutputSanitizer,
+    Agent, AgentBuilder, AgentConfig, AgentError, AgentResponder, ToolExecutor, ToolOutputSanitizer,
 };
 pub use composite_executor::{CompositeError, CompositeToolExecutor};
 pub use error::ToolError;
