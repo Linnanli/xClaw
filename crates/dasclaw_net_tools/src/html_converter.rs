@@ -72,10 +72,25 @@ mod tests {
 <footer><p>Footer</p></footer>
 </body></html>"#;
         let out = convert_html_to_markdown(html, "https://example.com/article").unwrap();
-        assert!(out.contains("Test Title"), "expected title in output: {}", out);
-        assert!(out.contains("First paragraph"), "expected content in output: {}", out);
-        assert!(out.contains("Second paragraph"), "expected content in output: {}", out);
-        assert!(!out.contains("<article>"), "expected markdown, not raw HTML");
+        assert!(
+            out.contains("Test Title"),
+            "expected title in output: {}",
+            out
+        );
+        assert!(
+            out.contains("First paragraph"),
+            "expected content in output: {}",
+            out
+        );
+        assert!(
+            out.contains("Second paragraph"),
+            "expected content in output: {}",
+            out
+        );
+        assert!(
+            !out.contains("<article>"),
+            "expected markdown, not raw HTML"
+        );
     }
 
     #[cfg(feature = "html-to-markdown")]

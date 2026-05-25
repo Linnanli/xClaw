@@ -505,7 +505,10 @@ mod tests {
         let domains = vec!["example.com".to_string(), "rust-lang.org".to_string()];
         assert!(host_matches_list("https://www.example.com/page", &domains));
         assert!(host_matches_list("https://example.com/", &domains));
-        assert!(host_matches_list("https://doc.rust-lang.org/book/", &domains));
+        assert!(host_matches_list(
+            "https://doc.rust-lang.org/book/",
+            &domains
+        ));
         assert!(!host_matches_list("https://other.com/", &domains));
     }
 
