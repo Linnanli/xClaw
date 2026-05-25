@@ -222,6 +222,47 @@ impl ToolExecutor for FlakyToolExecutor {
     }
 }
 
+/// [`ToolExecutor`] that returns `is_error=true` on **every** call.
+/// Used by e19 (B3) to drive the max_iterations cap when the model
+/// keeps retrying a permanently-broken tool.
+pub struct AlwaysFailingToolExecutor {
+    calls: Arc<Mutex<Vec<ToolInvocation>>>,
+    error_message: String,
+}
+
+impl AlwaysFailingToolExecutor {
+    pub fn new(error_message: impl Into<String>) -> Self {
+        Self {
+            calls: Arc::new(Mutex::new(Vec::new())),
+            error_message: error_message.into(),
+        }
+    }
+
+    pub fn calls(&self) -> Arc<Mutex<Vec<ToolInvocation>>> {
+        Arc::clone(&self.calls)
+    }
+}
+
+#[async_trait]
+impl ToolExecutor for AlwaysFailingToolExecutor {
+    async fn execute(&self, call: &ToolCall) -> Result<ToolResult, HostError> {
+        self.calls
+            .lock()
+            .expect("always-failing executor mutex")
+            .push(ToolInvocation {
+                name: call.name.clone(),
+                call_id: call.id.clone(),
+                arguments: call.arguments.clone(),
+            });
+        Ok(ToolResult {
+            tool_call_id: call.id.clone(),
+            name: call.name.clone(),
+            content: self.error_message.clone(),
+            is_error: true,
+        })
+    }
+}
+
 /// [`EgressGate`] that returns `Block { reason }` when an
 /// [`EgressKind::LlmRequest`] payload contains any of the configured
 /// bait phrases (case-insensitive). All other kinds Pass through.
