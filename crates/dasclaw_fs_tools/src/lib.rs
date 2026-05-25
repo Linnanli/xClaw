@@ -30,3 +30,8 @@ pub mod file_guard;
 pub mod glob_search;
 pub mod grep_search;
 pub mod path_utils;
+
+pub use code_edit::CodeEditTool;
+pub use file::{ApplyPatchTool, ListDirTool, ReadFileTool, WriteFileTool};
+pub use glob_search::GlobSearchTool;
+pub use grep_search::GrepSearchTool;

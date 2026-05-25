@@ -1813,7 +1813,7 @@ mod tests {
         // classify_command_risk() classifies destructive commands as High, which
         // maps to ApprovalRequirement::Always in ShellTool::requires_approval().
         use crate::tools::RiskLevel;
-        use crate::tools::builtin::shell::classify_command_risk;
+        use crate::tools::builtin::classify_command_risk;
 
         let destructive_cmds = [
             "rm -rf /tmp/test",

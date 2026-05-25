@@ -832,7 +832,7 @@ impl ToolRegistry {
         self.register_sync(Arc::new(GitStaleCheckTool::new()));
 
         // LSP code intelligence
-        let lsp_registry = Arc::new(crate::tools::builtin::lsp::LspRegistry::new());
+        let lsp_registry = Arc::new(crate::tools::builtin::LspRegistry::new());
         self.register_sync(Arc::new(LspQueryTool::new(lsp_registry)));
 
         // P2: Plan mode, session fork, sub-agent

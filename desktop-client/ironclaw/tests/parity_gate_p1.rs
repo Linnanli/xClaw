@@ -17,9 +17,9 @@ use dasclaw_runtime::context::JobContext;
 use ironclaw::llm::ToolDefinition;
 use ironclaw::llm::prompt::{DynamicLayerInput, LayeredPromptBuilder, StaticLayerConfig};
 use ironclaw::observability::{NoopObserver, PromptCacheMonitor};
+use ironclaw::tools::builtin::LspRegistry;
 use ironclaw::tools::builtin::classify_command_risk;
 use ironclaw::tools::builtin::file_guard;
-use ironclaw::tools::builtin::lsp::LspRegistry;
 use ironclaw::tools::builtin::path_utils;
 use ironclaw::tools::builtin::{CodeEditTool, GlobSearchTool, GrepSearchTool, ReadFileTool};
 use ironclaw::tools::builtin::{
