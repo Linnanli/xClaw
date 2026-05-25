@@ -11,9 +11,7 @@ mod fixtures;
 use dasclaw_runtime::Agent;
 use serde_json::json;
 
-use fixtures::{
-    FlakyToolExecutor, ScriptedResponder, no_tool_defs, text_turn, tool_call_turn,
-};
+use fixtures::{FlakyToolExecutor, ScriptedResponder, no_tool_defs, text_turn, tool_call_turn};
 
 #[tokio::test]
 async fn req_dasclaw_cli_loop_e18_retry_recovers_after_enoent() {

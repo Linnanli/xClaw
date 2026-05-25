@@ -12,20 +12,14 @@ mod fixtures;
 use dasclaw_runtime::Agent;
 use serde_json::json;
 
-use fixtures::{
-    RecordingToolExecutor, ScriptedResponder, no_tool_defs, text_turn, tool_call_turn,
-};
+use fixtures::{RecordingToolExecutor, ScriptedResponder, no_tool_defs, text_turn, tool_call_turn};
 
 #[tokio::test]
 async fn req_dasclaw_cli_loop_e17_multitool_chain_completes() {
     // Three LLM turns: list_files → read_file → final text.
     let script = vec![
         tool_call_turn("list_files", "call_list_1", json!({ "path": "." })),
-        tool_call_turn(
-            "read_file",
-            "call_read_1",
-            json!({ "path": "fileA.txt" }),
-        ),
+        tool_call_turn("read_file", "call_read_1", json!({ "path": "fileA.txt" })),
         text_turn("done: listed=[fileA.txt,fileB.txt], read=contents-of-fileA"),
     ];
     let responder = ScriptedResponder::with_queue(script);

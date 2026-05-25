@@ -18,9 +18,7 @@ use async_trait::async_trait;
 use dasclaw_core::hooks::{EgressDecision, EgressGate, EgressKind, RedactionStats};
 use dasclaw_core::messages::{FinishReason, ToolCall, ToolDefinition, ToolResult};
 use dasclaw_core::reasoning_ctx::ReasoningContext;
-use dasclaw_core::response_types::{
-    RespondOutput, RespondResult, ResponseMetadata, TokenUsage,
-};
+use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
 use dasclaw_core::traits::HostError;
 use dasclaw_runtime::{AgentResponder, ToolExecutor};
 use serde_json::Value as JsonValue;

@@ -11,9 +11,7 @@ use dasclaw_core::agentic_loop::AgenticLoopConfig;
 use dasclaw_runtime::{Agent, AgentError};
 use serde_json::json;
 
-use fixtures::{
-    RecordingToolExecutor, ScriptedResponder, no_tool_defs, tool_call_turn,
-};
+use fixtures::{RecordingToolExecutor, ScriptedResponder, no_tool_defs, tool_call_turn};
 
 #[tokio::test]
 async fn req_dasclaw_cli_loop_e21_max_iterations_3_exact_count() {
@@ -21,13 +19,7 @@ async fn req_dasclaw_cli_loop_e21_max_iterations_3_exact_count() {
     // visibly leave headroom in the queue. Every turn is a tool call so
     // the loop never reaches a terminal text state on its own.
     let script = (0..10)
-        .map(|i| {
-            tool_call_turn(
-                "noop",
-                format!("call_noop_{i}"),
-                json!({ "iteration": i }),
-            )
-        })
+        .map(|i| tool_call_turn("noop", format!("call_noop_{i}"), json!({ "iteration": i })))
         .collect();
     let responder = ScriptedResponder::with_queue(script);
 
@@ -54,7 +46,10 @@ async fn req_dasclaw_cli_loop_e21_max_iterations_3_exact_count() {
 
     match err {
         AgentError::MaxIterations(n) => {
-            assert_eq!(n, 3, "AgentError::MaxIterations must echo the configured cap");
+            assert_eq!(
+                n, 3,
+                "AgentError::MaxIterations must echo the configured cap"
+            );
         }
         other => panic!("expected MaxIterations(3), got {other:?}"),
     }

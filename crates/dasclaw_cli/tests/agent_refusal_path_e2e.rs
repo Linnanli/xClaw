@@ -8,9 +8,7 @@ mod fixtures;
 
 use std::sync::Arc;
 
-use dasclaw_core::hooks::{
-    AutoApproveGate, HookBundle, InMemorySecrets, NoopSandboxExecutor,
-};
+use dasclaw_core::hooks::{AutoApproveGate, HookBundle, InMemorySecrets, NoopSandboxExecutor};
 use dasclaw_runtime::{Agent, AgentError};
 
 use fixtures::{
