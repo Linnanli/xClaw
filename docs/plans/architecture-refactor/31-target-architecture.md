@@ -6,6 +6,7 @@
 >   3. **§4.6 薄壳化已完成**：`desktop-client/ironclaw/src/tools/builtin/mod.rs` 已转为 wildcard re-export 入口（PR #792），同时为下沉 crate 留 `pub mod` 仅限留守 6 类；shim `shell.rs` / `lsp/mod.rs` 已删。
 >   4. **crate 总数**：47（v2.5 写作时 45，新增 `dasclaw_misc_tools` 等本期产物）；`scripts/check_blueprint_sync.py` 自检为 `47 crates on disk / 2 planned`（剩 `dasclaw_bridge_lite` + `dasclaw_memory_tools` 处于 PLANNED 状态，后者按 ADR-156 §6.3.1 永久搁置）。
 >   5. **ADR-153 §4.4 step 4 落点**：新增 `crates/dasclaw_cli`（headless agent CLI，骨架 + EchoResponder 端到端 demo），证明 `dasclaw_runtime::Agent` 在零 desktop 依赖（无 Tauri / 无 DB / 无 HTTP server）下可独立运行；真实 LLM provider 与 tool executor 接线留待 ADR-153 后续 slice。
+>   6. **ADR-153 §4.4 step 5 落点**：`crates/dasclaw_cli` 引入 `provider` 模块，把 `dasclaw_llm_provider::ClawCodeLlmProvider` 通过 `dasclaw_runtime::LlmProviderResponder` 接入 headless agent，新增 `dasclaw-cli run --provider {anthropic|openai|openai_compat|ollama}` 子命令 + wiremock 端到端集成测试，证明真实 LLM 走 `Agent` 完整回路（无 desktop / 无 Tauri / 无 HTTP server）。Tool executor 接线仍留待后续 slice。
 > 本次升级是状态同步性质，不改架构决策，不重画 §1 总览图。原 v2.5 内容保留（§4.6 表格仅增"PR / 状态"列覆盖）。
 
 > **v2.5 (2026-05-23)** · 蓝图对齐 4-5 天发展（基于 [40-tool-ecosystem-inventory.md](40-tool-ecosystem-inventory.md) §1-3 实测 + [41-target-architecture-drift-analysis.md](41-target-architecture-drift-analysis.md) 漂移识别）：
