@@ -1,8 +1,9 @@
 //! MCP server wiring for the headless CLI (ADR-153 §4.4 sub-step 8).
 //!
-//! Loads a JSON file listing one or more MCP servers, spawns each one
-//! over stdio via [`dasclaw_mcp::StdioMcpTransport`], wraps them as
-//! [`dasclaw_mcp::McpClient`] instances and builds a
+//! Loads a JSON file listing one or more MCP servers, starts each one
+//! via the appropriate [`dasclaw_mcp`] transport (`StdioMcpTransport`
+//! for stdio entries or `HttpMcpTransport` for HTTP entries), wraps
+//! them as [`dasclaw_mcp::McpClient`] instances and builds a
 //! [`dasclaw_mcp::McpToolExecutor`] that the CLI feeds into
 //! [`crate::run_with_tools`].
 //!
@@ -16,22 +17,31 @@
 //!       "command": "npx",
 //!       "args": ["@modelcontextprotocol/server-filesystem", "/tmp"],
 //!       "env": { "EXTRA": "value" }
+//!     },
+//!     {
+//!       "name": "remote",
+//!       "url": "https://mcp.example.com/v1",
+//!       "headers": { "Authorization": "Bearer ${TOKEN}" }
 //!     }
 //!   ]
 //! }
 //! ```
 //!
-//! This sub-step only supports stdio servers. HTTP/UDS support stays in
-//! `dasclaw_mcp` and is reachable from code; the CLI surface picks the
-//! smallest config that's still useful from a single `--mcp-config`
-//! flag. Hosted (OAuth-backed) servers are out of scope because the CLI
-//! has no persistent secrets store.
+//! Entries are dispatched by shape: an entry with `command` is treated
+//! as stdio; an entry with `url` is treated as HTTP. Mixing both
+//! `command` and `url` in the same entry, or omitting both, is a config
+//! error reported at parse time.
+//!
+//! Hosted (OAuth-backed) servers are out of scope for the CLI because
+//! it has no persistent secrets store; the HTTP transport here uses
+//! whatever static headers the user provides in `headers` and does not
+//! wire `Mcp-Session-Id`/`SecretsStore`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use dasclaw_mcp::{McpClient, McpToolExecutor, StdioMcpTransport};
+use dasclaw_mcp::{HttpMcpTransport, McpClient, McpToolExecutor, StdioMcpTransport};
 use serde::Deserialize;
 
 /// Errors surfaced while loading and starting MCP servers from a config
@@ -77,21 +87,48 @@ pub struct McpConfig {
     pub servers: Vec<McpServerSpec>,
 }
 
-/// One stdio MCP server entry.
+/// One MCP server entry. Logical `name` lives at the top level; the
+/// transport-specific fields are flattened in so the JSON stays flat
+/// (`{ "name": "fs", "command": "npx", ... }` or
+/// `{ "name": "fs", "url": "https://...", ... }`).
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub struct McpServerSpec {
     /// Logical server name. Used both for log lines and as the prefix in
     /// the qualified tool name (`<name>_<tool>`).
     pub name: String,
-    /// Executable to spawn (e.g. `npx`, `uvx`, `/usr/bin/my-server`).
-    pub command: String,
-    /// Arguments passed to `command`. Default empty.
-    #[serde(default)]
-    pub args: Vec<String>,
-    /// Extra environment variables for the child process. Default empty.
-    /// The parent process's environment is also inherited.
-    #[serde(default)]
-    pub env: BTreeMap<String, String>,
+    /// Transport-specific configuration. Selected by which fields the
+    /// entry actually carries (`command` ⇒ stdio, `url` ⇒ HTTP).
+    #[serde(flatten)]
+    pub transport: McpTransportSpec,
+}
+
+/// Transport selector for an MCP server entry. `untagged` so the JSON
+/// shape matches whichever variant's required fields are present.
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum McpTransportSpec {
+    /// Local subprocess launched over stdio.
+    Stdio {
+        /// Executable to spawn (e.g. `npx`, `uvx`, `/usr/bin/my-server`).
+        command: String,
+        /// Arguments passed to `command`. Default empty.
+        #[serde(default)]
+        args: Vec<String>,
+        /// Extra environment variables for the child process. Default
+        /// empty. The parent process's environment is also inherited.
+        #[serde(default)]
+        env: BTreeMap<String, String>,
+    },
+    /// Remote MCP server reached over HTTP (Streamable HTTP transport).
+    Http {
+        /// Full URL of the MCP endpoint (e.g.
+        /// `https://mcp.example.com/v1`).
+        url: String,
+        /// Static headers applied to every request (e.g.
+        /// `Authorization: Bearer …`). Default empty.
+        #[serde(default)]
+        headers: BTreeMap<String, String>,
+    },
 }
 
 impl McpConfig {
@@ -102,7 +139,7 @@ impl McpConfig {
     }
 }
 
-/// Read `path`, spawn one stdio MCP server per entry, and return an
+/// Read `path`, start one MCP server per entry, and return an
 /// [`McpToolExecutor`] aware of every advertised tool.
 ///
 /// This function is async because each server's `tools/list` round-trip
@@ -120,28 +157,46 @@ pub async fn load_executor(path: &Path) -> Result<McpToolExecutor, McpConfigErro
     spawn_executor(config).await
 }
 
-/// Spawn every server in `config` and return the assembled executor.
+/// Start every server in `config` and return the assembled executor.
 ///
-/// Split out from [`load_executor`] so unit tests can exercise the spawn
-/// branch with an in-memory config (no file I/O).
+/// Split out from [`load_executor`] so unit tests can exercise the
+/// transport branches with in-memory configs (no file I/O).
 async fn spawn_executor(config: McpConfig) -> Result<McpToolExecutor, McpConfigError> {
     let mut clients: Vec<Arc<McpClient>> = Vec::with_capacity(config.servers.len());
     for spec in config.servers {
-        let transport =
-            StdioMcpTransport::spawn(spec.name.clone(), &spec.command, &spec.args, spec.env)
-                .await
-                .map_err(|source| McpConfigError::Spawn {
-                    server: spec.name.clone(),
-                    source,
-                })?;
-        let client = McpClient::new_with_transport(
-            spec.name,
-            Arc::new(transport),
-            None,
-            None,
-            "dasclaw-cli",
-            None,
-        );
+        let McpServerSpec { name, transport } = spec;
+        let client = match transport {
+            McpTransportSpec::Stdio { command, args, env } => {
+                let transport = StdioMcpTransport::spawn(name.clone(), &command, &args, env)
+                    .await
+                    .map_err(|source| McpConfigError::Spawn {
+                        server: name.clone(),
+                        source,
+                    })?;
+                McpClient::new_with_transport(
+                    name,
+                    Arc::new(transport),
+                    None,
+                    None,
+                    "dasclaw-cli",
+                    None,
+                )
+            }
+            McpTransportSpec::Http { url, headers } => {
+                // BTreeMap → HashMap for HttpMcpTransport.
+                let header_map: HashMap<String, String> = headers.into_iter().collect();
+                let transport =
+                    HttpMcpTransport::new(url, name.clone()).with_custom_headers(header_map);
+                McpClient::new_with_transport(
+                    name,
+                    Arc::new(transport),
+                    None,
+                    None,
+                    "dasclaw-cli",
+                    None,
+                )
+            }
+        };
         clients.push(Arc::new(client));
     }
     McpToolExecutor::from_clients(clients)
@@ -160,9 +215,14 @@ mod tests {
                 .expect("parse");
         assert_eq!(cfg.servers.len(), 1);
         assert_eq!(cfg.servers[0].name, "fs");
-        assert_eq!(cfg.servers[0].command, "uvx");
-        assert!(cfg.servers[0].args.is_empty());
-        assert!(cfg.servers[0].env.is_empty());
+        match &cfg.servers[0].transport {
+            McpTransportSpec::Stdio { command, args, env } => {
+                assert_eq!(command, "uvx");
+                assert!(args.is_empty());
+                assert!(env.is_empty());
+            }
+            other => panic!("expected Stdio, got {other:?}"),
+        }
     }
 
     #[test]
@@ -180,14 +240,19 @@ mod tests {
             }"#,
         )
         .expect("parse");
-        assert_eq!(
-            cfg.servers[0].args,
-            vec![
-                "@modelcontextprotocol/server-filesystem".to_string(),
-                "/tmp".to_string()
-            ]
-        );
-        assert_eq!(cfg.servers[0].env.get("K").map(String::as_str), Some("V"));
+        match &cfg.servers[0].transport {
+            McpTransportSpec::Stdio { args, env, .. } => {
+                assert_eq!(
+                    *args,
+                    vec![
+                        "@modelcontextprotocol/server-filesystem".to_string(),
+                        "/tmp".to_string()
+                    ]
+                );
+                assert_eq!(env.get("K").map(String::as_str), Some("V"));
+            }
+            other => panic!("expected Stdio, got {other:?}"),
+        }
     }
 
     #[test]
@@ -206,14 +271,80 @@ mod tests {
     }
 
     #[test]
-    fn req_dasclaw_cli_mcp_c4_rejects_missing_required_field() {
-        // `command` is required; serde should reject this.
+    fn req_dasclaw_cli_mcp_c4_rejects_entry_without_command_or_url() {
+        // Neither `command` nor `url` ⇒ untagged enum has no matching
+        // variant ⇒ parse error.
         let err = McpConfig::from_json_str(r#"{ "servers": [ { "name": "x" } ] }"#)
             .expect_err("must reject");
+        let msg = err.to_string();
         assert!(
-            err.to_string().contains("command"),
-            "error should mention missing field `command`, got: {err}"
+            msg.contains("variant") || msg.contains("McpTransportSpec") || msg.contains("data"),
+            "error should mention untagged-enum failure, got: {msg}"
         );
+    }
+
+    #[test]
+    fn req_dasclaw_cli_mcp_c8_parses_minimal_http_entry() {
+        let cfg = McpConfig::from_json_str(
+            r#"{ "servers": [ { "name": "remote", "url": "https://mcp.example.com/v1" } ] }"#,
+        )
+        .expect("parse");
+        assert_eq!(cfg.servers[0].name, "remote");
+        match &cfg.servers[0].transport {
+            McpTransportSpec::Http { url, headers } => {
+                assert_eq!(url, "https://mcp.example.com/v1");
+                assert!(headers.is_empty());
+            }
+            other => panic!("expected Http, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn req_dasclaw_cli_mcp_c9_parses_http_with_headers() {
+        let cfg = McpConfig::from_json_str(
+            r#"{
+                "servers": [
+                    {
+                        "name": "remote",
+                        "url": "https://mcp.example.com/v1",
+                        "headers": { "Authorization": "Bearer T", "X-Trace": "1" }
+                    }
+                ]
+            }"#,
+        )
+        .expect("parse");
+        match &cfg.servers[0].transport {
+            McpTransportSpec::Http { headers, .. } => {
+                assert_eq!(
+                    headers.get("Authorization").map(String::as_str),
+                    Some("Bearer T")
+                );
+                assert_eq!(headers.get("X-Trace").map(String::as_str), Some("1"));
+            }
+            other => panic!("expected Http, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn req_dasclaw_cli_mcp_c10_parses_mixed_stdio_and_http_entries() {
+        let cfg = McpConfig::from_json_str(
+            r#"{
+                "servers": [
+                    { "name": "fs",     "command": "npx", "args": ["x"] },
+                    { "name": "remote", "url": "https://m.example.com" }
+                ]
+            }"#,
+        )
+        .expect("parse");
+        assert_eq!(cfg.servers.len(), 2);
+        assert!(matches!(
+            cfg.servers[0].transport,
+            McpTransportSpec::Stdio { .. }
+        ));
+        assert!(matches!(
+            cfg.servers[1].transport,
+            McpTransportSpec::Http { .. }
+        ));
     }
 
     #[tokio::test]
@@ -243,9 +374,11 @@ mod tests {
         let cfg = McpConfig {
             servers: vec![McpServerSpec {
                 name: "ghost".to_string(),
-                command: "/definitely/not/a/binary".to_string(),
-                args: vec![],
-                env: BTreeMap::new(),
+                transport: McpTransportSpec::Stdio {
+                    command: "/definitely/not/a/binary".to_string(),
+                    args: vec![],
+                    env: BTreeMap::new(),
+                },
             }],
         };
         match spawn_executor(cfg).await {

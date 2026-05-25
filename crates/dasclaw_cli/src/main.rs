@@ -7,10 +7,11 @@
 //! - `run` — wires a real `dasclaw_llm_provider`-backed responder via
 //!   [`dasclaw_cli::provider::ProviderArgs`] (step 5). Honours
 //!   `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DASCLAW_API_KEY`.
-//!   Tool dispatch is opt-in via either `--enable-tools` (builtin
-//!   `echo` / `now`, step 6) or `--mcp-config <path>` (MCP servers,
-//!   step 8). The two flags are mutually exclusive in this sub-step;
-//!   a future composite executor will let them combine.
+//!   Tool dispatch is opt-in via `--enable-tools` (builtin
+//!   `echo` / `now`, step 6) and/or `--mcp-config <path>` (MCP servers
+//!   over stdio or HTTP, step 8). When both flags are set the two
+//!   tool sources are merged via
+//!   [`dasclaw_runtime::CompositeToolExecutor`].
 //!
 //! Both subcommands accept `--prompt` or read the user prompt from stdin
 //! and share `--system` for the system message.
@@ -18,6 +19,7 @@
 use std::io::{self, Read};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
@@ -25,7 +27,7 @@ use dasclaw_cli::mcp::load_executor as load_mcp_executor;
 use dasclaw_cli::provider::{ProviderArgs, build_responder};
 use dasclaw_cli::tools::default_builtins;
 use dasclaw_cli::{EchoResponder, run, run_with_tools};
-
+use dasclaw_runtime::{CompositeToolExecutor, ToolExecutor};
 const DEFAULT_SYSTEM: &str = "You are dasclaw, a headless agent.";
 
 /// Headless dasclaw agent CLI.
@@ -61,23 +63,20 @@ enum Command {
 ///
 /// Kept in a flattened group so future tool sources land here without
 /// churning the top-level CLI shape. `--enable-tools` and
-/// `--mcp-config` are currently mutually exclusive (clap enforces this);
-/// composing them is deferred to a follow-up that introduces a
-/// composite [`ToolExecutor`].
+/// `--mcp-config` may be combined: when both are set the two
+/// executors are merged via
+/// [`dasclaw_runtime::CompositeToolExecutor`].
 #[derive(Debug, Args)]
 struct ToolArgs {
     /// Advertise the builtin demo tools (`echo`, `now`) to the model and
     /// dispatch them locally. Defaults to off so the bare `run`
     /// subcommand stays a pure chat-completion driver.
-    #[arg(
-        long = "enable-tools",
-        default_value_t = false,
-        conflicts_with = "mcp_config"
-    )]
+    #[arg(long = "enable-tools", default_value_t = false)]
     enable_tools: bool,
 
-    /// Path to an MCP server config JSON file. Each entry is spawned as
-    /// a stdio child process; its tools are advertised to the model
+    /// Path to an MCP server config JSON file. Each entry is started
+    /// either as a stdio child process (`command` field) or as an HTTP
+    /// client (`url` field); its tools are advertised to the model
     /// under the `<server_name>_<tool>` qualified name.
     #[arg(long = "mcp-config")]
     mcp_config: Option<PathBuf>,
@@ -108,24 +107,56 @@ async fn real_main() -> Result<()> {
             .context("echo agent run failed")?,
         Command::Run { provider, tools } => {
             let responder = build_responder(&provider).context("building LLM responder")?;
-            if let Some(path) = tools.mcp_config.as_deref() {
-                let executor = load_mcp_executor(path)
+
+            // Step 8 (ADR-153 §4.4.5): assemble the tool stack from
+            // whichever sources the user opted in to. Branch explicitly
+            // on the four (enable_tools × mcp_config) combinations to
+            // keep the `run_with_tools` generic signature happy.
+            match (tools.enable_tools, tools.mcp_config.as_deref()) {
+                (false, None) => run(responder, &cli.system, prompt)
                     .await
-                    .with_context(|| format!("loading MCP config {}", path.display()))?;
-                let definitions = executor.definitions();
-                run_with_tools(responder, executor, definitions, &cli.system, prompt)
-                    .await
-                    .context("LLM agent (with MCP tools) run failed")?
-            } else if tools.enable_tools {
-                let executor = default_builtins();
-                let definitions = executor.definitions();
-                run_with_tools(responder, executor, definitions, &cli.system, prompt)
-                    .await
-                    .context("LLM agent (with tools) run failed")?
-            } else {
-                run(responder, &cli.system, prompt)
-                    .await
-                    .context("LLM agent run failed")?
+                    .context("LLM agent run failed")?,
+                (true, None) => {
+                    let executor = default_builtins();
+                    let definitions = executor.definitions();
+                    run_with_tools(responder, executor, definitions, &cli.system, prompt)
+                        .await
+                        .context("LLM agent (with builtin tools) run failed")?
+                }
+                (false, Some(path)) => {
+                    let executor = load_mcp_executor(path)
+                        .await
+                        .with_context(|| format!("loading MCP config {}", path.display()))?;
+                    let definitions = executor.definitions();
+                    run_with_tools(responder, executor, definitions, &cli.system, prompt)
+                        .await
+                        .context("LLM agent (with MCP tools) run failed")?
+                }
+                (true, Some(path)) => {
+                    let static_exec = default_builtins();
+                    let static_defs = static_exec.definitions();
+                    let static_names: Vec<String> =
+                        static_defs.iter().map(|d| d.name.clone()).collect();
+
+                    let mcp_exec = load_mcp_executor(path)
+                        .await
+                        .with_context(|| format!("loading MCP config {}", path.display()))?;
+                    let mcp_defs = mcp_exec.definitions();
+                    let mcp_names: Vec<String> = mcp_defs.iter().map(|d| d.name.clone()).collect();
+
+                    let mut definitions = static_defs;
+                    definitions.extend(mcp_defs);
+
+                    let composite = CompositeToolExecutor::new([
+                        (static_names, Arc::new(static_exec) as Arc<dyn ToolExecutor>),
+                        (mcp_names, Arc::new(mcp_exec) as Arc<dyn ToolExecutor>),
+                    ])
+                    .context("merging tool executors (duplicate tool name?)")?;
+
+                    run_with_tools(responder, composite, definitions, &cli.system, prompt)
+                        .await
+                        .context("LLM agent (with composite tools) run failed")?
+                }
             }
         }
     };
