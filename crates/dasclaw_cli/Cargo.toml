@@ -9,6 +9,17 @@ license = "MIT OR Apache-2.0"
 name = "dasclaw-cli"
 path = "src/main.rs"
 
+# ADR-153 §4.4 step 8 e2e: stdio MCP fixture used by tests/mcp_e2e.rs.
+# Path lives under `tests/fixtures/` so scripts/check_no_panics.py treats
+# it as test-only code. Not installed; cargo emits the binary purely to
+# populate `CARGO_BIN_EXE_stdio_echo_mcp_fixture` for the integration test.
+[[bin]]
+name = "stdio_echo_mcp_fixture"
+path = "tests/fixtures/stdio_echo_mcp.rs"
+test = false
+bench = false
+doc = false
+
 [lib]
 path = "src/lib.rs"
 
