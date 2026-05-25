@@ -17,7 +17,6 @@
 //!
 //! ## Out of scope (deliberately not in this slice)
 //!
-//! - Tool execution wiring ([`dasclaw_runtime::ToolExecutor`]).
 //! - Streaming / interactive REPL. The first slice is request-response.
 //!
 //! ## Real LLM provider wiring
@@ -25,17 +24,25 @@
 //! See [`provider`] for the [`ProviderArgs`](provider::ProviderArgs) →
 //! [`LlmProviderResponder`](dasclaw_runtime::LlmProviderResponder)
 //! factory used by the binary's non-echo mode (ADR-153 §4.4 step 5).
+//!
+//! ## Tool dispatch
+//!
+//! See [`tools`] for the in-memory [`StaticToolExecutor`](tools::StaticToolExecutor)
+//! used by `dasclaw-cli run --enable-tools` (ADR-153 §4.4 step 6).
+//! Drive it through [`run_with_tools`] when the agent should be allowed
+//! to call tools.
 
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use dasclaw_core::messages::{FinishReason, Role};
+use dasclaw_core::messages::{FinishReason, Role, ToolDefinition};
 use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
 use dasclaw_core::traits::HostError;
-use dasclaw_runtime::{Agent, AgentError, AgentResponder};
+use dasclaw_runtime::{Agent, AgentError, AgentResponder, ToolExecutor};
 
 pub mod provider;
+pub mod tools;
 
 /// Errors surfaced by the CLI library layer.
 #[derive(Debug, thiserror::Error)]
@@ -66,6 +73,35 @@ where
 {
     let agent: Agent = Agent::builder()
         .responder(responder)
+        .system_prompt(system_prompt)
+        .build()
+        .map_err(|e| CliError::Build(e.to_string()))?;
+    let reply = agent.run(user_prompt).await?;
+    Ok(reply)
+}
+
+/// Variant of [`run`] that wires a [`ToolExecutor`] and advertises its
+/// tool definitions to the model.
+///
+/// `tool_definitions` is normally [`tools::StaticToolExecutor::definitions`].
+/// Keeping [`run`] and `run_with_tools` as separate entries avoids a
+/// patch-style optional parameter on the original signature and keeps
+/// the no-tools call-path free of executor plumbing.
+pub async fn run_with_tools<R, E>(
+    responder: R,
+    tool_executor: E,
+    tool_definitions: Vec<ToolDefinition>,
+    system_prompt: &str,
+    user_prompt: &str,
+) -> Result<String, CliError>
+where
+    R: AgentResponder + 'static,
+    E: ToolExecutor + 'static,
+{
+    let agent: Agent = Agent::builder()
+        .responder(responder)
+        .tool_executor(tool_executor)
+        .tools(tool_definitions)
         .system_prompt(system_prompt)
         .build()
         .map_err(|e| CliError::Build(e.to_string()))?;
