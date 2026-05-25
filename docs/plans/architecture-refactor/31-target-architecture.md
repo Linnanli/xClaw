@@ -1,5 +1,12 @@
 # 31 — 目标架构（边界清晰、可复用）
 
+> **v2.6 (2026-05-25)** · ADR-156 落地收尾（基于已合并 PR #784 / #786 / #788 / #790 / #792）：
+>   1. **§4.6 F4.6 工具壳全部执行完毕**：8 个子波次 F4.6.1 ~ F4.6.8 + §6.4 mod.rs 薄壳化对应 PR 全部合入 xClaw。原 v2.5 "计划落点"现转为"已落地"状态（详见 §4.6 表格的"PR / 状态"列）。
+>   2. **F4.6.3 `dasclaw_memory_tools` 取消下沉**：按 [ADR-156 §6.3.1](adr-156-f46-builtin-tools-landing-decision.md) 决定，`memory` 模块依赖 `runtime` workspace crate（mtime / 大小 / 路径治理），强行下沉会绕过 ADR-153 边界，故 `memory` 留 desktop（与 §4.6 "留桌面 5 类"合并为 6 类：memory / extension / skill / job / routine / message）。
+>   3. **§4.6 薄壳化已完成**：`desktop-client/ironclaw/src/tools/builtin/mod.rs` 已转为 wildcard re-export 入口（PR #792），同时为下沉 crate 留 `pub mod` 仅限留守 6 类；shim `shell.rs` / `lsp/mod.rs` 已删。
+>   4. **crate 总数**：47（v2.5 写作时 45，新增 `dasclaw_misc_tools` 等本期产物）；`scripts/check_blueprint_sync.py` 自检为 `47 crates on disk / 2 planned`（剩 `dasclaw_bridge_lite` + `dasclaw_memory_tools` 处于 PLANNED 状态，后者按 ADR-156 §6.3.1 永久搁置）。
+> 本次升级是状态同步性质，不改架构决策，不重画 §1 总览图。原 v2.5 内容保留（§4.6 表格仅增"PR / 状态"列覆盖）。
+
 > **v2.5 (2026-05-23)** · 蓝图对齐 4-5 天发展（基于 [40-tool-ecosystem-inventory.md](40-tool-ecosystem-inventory.md) §1-3 实测 + [41-target-architecture-drift-analysis.md](41-target-architecture-drift-analysis.md) 漂移识别）：
 >   1. **§4 补全 16 个 v2.4 遗漏 crate**（按字母序）：`dasclaw_absolute_path` / `dasclaw_bash_permissions` / `dasclaw_cert_trust` / `dasclaw_channels` / `dasclaw_exec` / `dasclaw_llm_provider` / `dasclaw_process_hardening` / `dasclaw_runtime` / `dasclaw_sandbox_linux` / `dasclaw_sandbox_windows` / `dasclaw_sandboxing` / `dasclaw_shell_command` / `dasclaw_tool` / `dasclaw_utils_home_dir` / `dasclaw_utils_rustls_provider` / `dasclaw_wasm_tools`。
 >   2. **新增 §4.6 F4.6 工具壳分层落点**（按 [ADR-156](adr-156-f46-builtin-tools-landing-decision.md)）：8 个新 crate `dasclaw_{misc,image,memory,sub_agent,git,fs,shell,net}_tools` 分子波次 F4.6.1 ~ F4.6.8 下沉（~13073 LOC），T3/T4 共 8223 LOC（Extension/Skill/Job/Routine/Message 5 类）留桌面。
@@ -409,28 +416,30 @@ v2.4 §3 只列了 ADR-101 ~ ADR-110。W3 ~ W6 期间又落了约 45 个 ADR（�
 
 `desktop-client/ironclaw/src/tools/builtin/` 共约 50 个内建工具、21505 LoC。按反向依赖 tier 切 8 刀下沉到 8 个新 crate，T3/T4 共 8223 LoC（依赖 orchestrator / agent / channels / db / extensions / skill_registry）留桌面：
 
-| F4.6 子波次 | 新 crate | 工具来源 | LoC | tier |
-|---|---|---|---|---|
-| F4.6.1 | `crates/dasclaw_misc_tools` | echo / time / json / plan_mode / restart / tool_info / session_fork / secrets | ~1900 | T0 |
-| F4.6.2 | `crates/dasclaw_image_tools` | ImageGen / Analyze / Edit | 833 | T0 |
-| F4.6.3 | `crates/dasclaw_memory_tools` | Memory 4 件套 | 974 | T0 |
-| F4.6.4 | `crates/dasclaw_sub_agent_tools` | SubAgent | 400 | T0 |
-| F4.6.5 | `crates/dasclaw_git_tools`（扩充 W1 空壳） | Git 7 + lsp shell | ~1200 | T1 |
-| F4.6.6 | `crates/dasclaw_fs_tools` | File / Patch / Glob / Grep / CodeEdit / path_utils / file_guard | ~3700 | T1 |
-| F4.6.7 | `crates/dasclaw_shell_tools` | Shell + classify_command_risk | 1666 | T2 |
-| F4.6.8 | `crates/dasclaw_net_tools` | Http / WebFetch / WebSearch / html_converter | ~2400 | T1+T2 |
+| F4.6 子波次 | 新 crate | 工具来源 | LoC | tier | PR / 状态（v2.6） |
+|---|---|---|---|---|---|
+| F4.6.1 | `crates/dasclaw_misc_tools` | echo / time / json / plan_mode / restart / tool_info / session_fork / secrets | ~1900 | T0 | ✅ 已合入 |
+| F4.6.2 | `crates/dasclaw_image_tools` | ImageGen / Analyze / Edit | 833 | T0 | ✅ 已合入 |
+| F4.6.3 | `crates/dasclaw_memory_tools` | Memory 4 件套 | 974 | T0 | ❌ 取消下沉（ADR-156 §6.3.1）：依赖 `dasclaw_runtime`，强行下沉违反 ADR-153；memory 留 desktop |
+| F4.6.4 | `crates/dasclaw_sub_agent_tools` | SubAgent | 400 | T0 | ✅ 已合入 |
+| F4.6.5 | `crates/dasclaw_git_tools`（扩充 W1 空壳） | Git 7 + lsp shell | ~1200 | T1 | ✅ 已合入 |
+| F4.6.6 | `crates/dasclaw_fs_tools` | File / Patch / Glob / Grep / CodeEdit / path_utils / file_guard | ~3700 | T1 | ✅ 已合入 |
+| F4.6.7 | `crates/dasclaw_shell_tools` | Shell + classify_command_risk | 1666 | T2 | ✅ 已合入（PR #784 / #786） |
+| F4.6.8 | `crates/dasclaw_net_tools` | Http / WebFetch / WebSearch / html_converter | ~2400 | T1+T2 | ✅ 已合入（PR #788 / #790） |
+| F4.6 §6.4 | — (mod.rs 薄壳化) | `desktop-client/ironclaw/src/tools/builtin/mod.rs` + 删除 `shell.rs` / `lsp/mod.rs` shim | — | — | ✅ 已合入（PR #792） |
 
-**留桌面 5 类（T3/T4，共 8223 LoC，不下沉）**：
+**留桌面 6 类（T3/T4，共 9197 LoC，不下沉；v2.6 把 `memory` 加入此列表，见顶部 v2.6 §2）**：
 
 | 模块 | LoC | tier | 留守理由 |
 |---|---|---|---|
+| `memory.rs` | 974 | T3 | 依赖 `dasclaw_runtime`（mtime / 大小 / 路径治理），ADR-156 §6.3.1 取消下沉 |
 | `extension_tools.rs` | 828 | T3 | 依赖 `desktop-client/extensions` 内部 manager |
 | `skill_tools.rs` | 1322 | T3 | 依赖 `desktop-client/skill_registry` |
 | `job.rs` | 2359 | T4 | 依赖 `desktop-client/orchestrator` |
 | `routine.rs` | 2639 | T4 | 依赖 `desktop-client/agent` + `bootstrap` |
 | `message.rs` | 1075 | T4 | 依赖 `desktop-client/channels` 完整运行时 |
 
-**薄壳化**：F4.6.8 完成后，单独一个 PR 把 `desktop-client/ironclaw/src/tools/builtin/mod.rs`（87 行）改为薄 re-export 壳，全部下沉工具改为 `pub use dasclaw_*_tools::*`，留守 5 类保持本地。
+**薄壳化**：F4.6.8 完成后，单独一个 PR 把 `desktop-client/ironclaw/src/tools/builtin/mod.rs`（原 87 行）改为薄 re-export 壳，全部下沉工具改为 `pub use dasclaw_*_tools::*`，留守 6 类保持本地 `pub mod`。**已落地于 PR #792（v2.6）**。
 
 ### 4.7 v2.4 蓝图遗漏 crate 补全（v2.5 新）
 
