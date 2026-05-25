@@ -2,11 +2,13 @@
 //!
 //! This module provides sandboxing primitives for the agent's tool layer:
 //!
-//! - **OS-level isolation** ([`os_executor`]): codex-style platform sandboxes
+//! - **OS-level isolation**: codex-style platform sandboxes
 //!   (macOS Seatbelt / Linux Landlock+seccomp / Windows Restricted Token),
 //!   delegated to `dasclaw_exec::SandboxedExecutor` and
-//!   `dasclaw_sandbox::Sandbox`. Replaces the previous Docker-based execution
-//!   path (`SandboxManager`, removed in W3.1c).
+//!   `dasclaw_sandbox::Sandbox`. F4.6.7 Phase 2+3: the previous
+//!   `os_executor::OsExecutor` shim was sunk into
+//!   [`dasclaw_shell_tools::SandboxedShellExecutor`]; this module now
+//!   only owns config parsing and the network proxy.
 //! - **Docker daemon detection** ([`detect`]): read-only probe used by the
 //!   setup wizard, boot screen, and `ironclaw doctor` to surface Docker
 //!   availability for the **separate** background-job container layer
@@ -32,15 +34,13 @@ pub mod docker_conn;
 pub mod error;
 /// W3.2b-4: bridge to [`dasclaw_net_proxy`] for sandbox egress enforcement.
 pub mod net_proxy;
-/// W3.1a: codex-style OS-level executor (replaces Docker `SandboxManager` for
-/// tool execution). See [`os_executor::OsExecutor`].
-pub mod os_executor;
 
-pub use config::{ExecutionMode, ResourceLimits, SandboxConfig, SandboxPolicy};
+pub use config::{
+    ExecutionMode, ResourceLimits, SandboxConfig, SandboxPolicy, legacy_policy_to_cap,
+};
 pub use detect::{DockerDetection, DockerStatus, Platform, check_docker};
 pub use docker_conn::connect_docker;
 pub use error::{Result, SandboxError};
-pub use os_executor::{ExecOutput, OsExecutor};
 
 /// Default allowlist getter (re-export for convenience).
 pub fn default_allowlist() -> Vec<String> {

@@ -3392,9 +3392,19 @@ dependencies = [
 name = "dasclaw_shell_tools"
 version = "0.0.0-w6"
 dependencies = [
+ "async-trait",
  "dasclaw_bash_validation",
+ "dasclaw_exec",
+ "dasclaw_net_proxy",
+ "dasclaw_runtime",
+ "dasclaw_sandbox",
  "dasclaw_tool",
+ "dasclaw_workspace_cap",
+ "serde",
  "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

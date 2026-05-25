@@ -123,12 +123,36 @@ impl std::str::FromStr for SandboxPolicy {
     }
 }
 
+/// Translate the local 3-variant config enum into the 4-variant codex
+/// policy understood by [`dasclaw_workspace_cap::policy::SandboxPolicy`]
+/// (and through it by [`dasclaw_exec::SandboxedExecutor`]).
+///
+/// F4.6.7 Phase 2+3 (ADR-156 §6.3) extraction note: this helper used to
+/// live inside `crate::sandbox::os_executor`. It now lives at the
+/// config-parsing layer so every consumer that already imports the
+/// 3-variant enum can perform the boundary translation in one place.
+///
+/// Network access is left disabled for `ReadOnly` / `WorkspaceWrite`
+/// because egress is enforced by the allowlist proxy *outside* the
+/// sandbox profile.
+pub fn legacy_policy_to_cap(policy: SandboxPolicy) -> dasclaw_workspace_cap::policy::SandboxPolicy {
+    use dasclaw_workspace_cap::policy::SandboxPolicy as CapPolicy;
+    match policy {
+        SandboxPolicy::ReadOnly => CapPolicy::ReadOnly {
+            network_access: false,
+        },
+        SandboxPolicy::WorkspaceWrite => CapPolicy::new_workspace_write_policy(),
+        SandboxPolicy::FullAccess => CapPolicy::DangerFullAccess,
+    }
+}
+
 /// Execution mode for shell / dev tools (ADR-121 D0=C).
 ///
 /// Selects how the orchestrator runs untrusted commands. The ironclaw
-/// boot path branches on this value to either build an [`OsExecutor`] +
-/// network proxy (`OsSandbox`) or run commands directly (`Direct`,
-/// dev-only) or hand off to the Docker worker pipeline (`Docker`).
+/// boot path branches on this value to either build a
+/// [`dasclaw_shell_tools::SandboxedShellExecutor`] + network proxy
+/// (`OsSandbox`) or run commands directly (`Direct`, dev-only) or hand
+/// off to the Docker worker pipeline (`Docker`).
 ///
 /// W3 (#128) wires `Direct` and `OsSandbox`. `Docker` is reserved for
 /// the existing container worker path and is not exercised by the
@@ -142,7 +166,8 @@ pub enum ExecutionMode {
     /// when the policy enforces sandboxing and `Direct` is selected.
     Direct,
 
-    /// OS-level sandbox via [`crate::sandbox::OsExecutor`] (Linux: bwrap
+    /// OS-level sandbox via
+    /// [`dasclaw_shell_tools::SandboxedShellExecutor`] (Linux: bwrap
     /// landlock-style isolation) plus a forced HTTPS allowlist proxy
     /// (`start_network_proxy`). The default for the W3 activation path on
     /// Linux. Windows = fork epic #241; macOS = best-effort (Codex

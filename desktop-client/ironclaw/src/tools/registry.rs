@@ -795,9 +795,10 @@ impl ToolRegistry {
     fn register_shell_tool(&self, ctx: &crate::tools::bootstrap::BootstrapContext) {
         let mut shell = ShellTool::new();
         if let Some(executor) = ctx.sandbox_executor.as_ref() {
-            shell = shell
-                .with_sandbox(Arc::clone(executor))
-                .with_sandbox_policy(ctx.sandbox_policy);
+            shell = shell.with_sandbox(Arc::clone(executor));
+            if let Some(policy) = ctx.sandbox_policy.as_ref() {
+                shell = shell.with_sandbox_policy(policy.clone());
+            }
         }
         if !ctx.proxy_env.is_empty() {
             shell = shell.with_extra_env(ctx.proxy_env.clone());
