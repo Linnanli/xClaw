@@ -1,33 +1,51 @@
-//! Headless `dasclaw` CLI binary (ADR-153 §4.4 step 4).
+//! Headless `dasclaw` CLI binary (ADR-153 §4.4 steps 4 + 5).
 //!
-//! Thin wrapper around [`dasclaw_cli::run`]. Parses argv with `clap`,
-//! initialises `tracing`, acquires the prompt (from `--prompt` or stdin),
-//! invokes the agent, prints the reply, and maps errors to exit codes.
+//! Thin wrapper around [`dasclaw_cli::run`]. Two subcommands:
 //!
-//! For programmatic use, depend on the `dasclaw_cli` library directly.
+//! - `echo` — built-in deterministic responder, no LLM key needed.
+//!   Default smoke driver inherited from the step-4 skeleton.
+//! - `run` — wires a real `dasclaw_llm_provider`-backed responder via
+//!   [`dasclaw_cli::provider::ProviderArgs`] (step 5). Honours
+//!   `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DASCLAW_API_KEY`.
+//!
+//! Both subcommands accept `--prompt` or read the user prompt from stdin
+//! and share `--system` for the system message.
 
 use std::io::{self, Read};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, Subcommand};
+use dasclaw_cli::provider::{ProviderArgs, build_responder};
 use dasclaw_cli::{EchoResponder, run};
 
+const DEFAULT_SYSTEM: &str = "You are dasclaw, a headless agent.";
+
 /// Headless dasclaw agent CLI.
-///
-/// Runs a single prompt through a `dasclaw_runtime::Agent` and prints the
-/// reply. The default responder is a deterministic echo for smoke
-/// testing — wire a real LLM responder in once provider selection lands.
 #[derive(Debug, Parser)]
 #[command(name = "dasclaw-cli", version, about, long_about = None)]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// User prompt. When omitted, the prompt is read from stdin.
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     prompt: Option<String>,
 
     /// System prompt prepended to the conversation.
-    #[arg(short, long, default_value = "You are dasclaw, a headless agent.")]
+    #[arg(short, long, default_value = DEFAULT_SYSTEM, global = true)]
     system: String,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Run the deterministic built-in echo responder (no LLM, no network).
+    Echo,
+    /// Run a real LLM-backed responder via `dasclaw_llm_provider`.
+    Run {
+        #[command(flatten)]
+        provider: ProviderArgs,
+    },
 }
 
 #[tokio::main]
@@ -40,6 +58,31 @@ async fn main() -> ExitCode {
 }
 
 async fn real_main() -> Result<()> {
+    init_tracing();
+
+    let cli = Cli::parse();
+    let prompt = match cli.prompt.as_deref() {
+        Some(p) => p.to_string(),
+        None => read_stdin_prompt().context("reading prompt from stdin")?,
+    };
+    let prompt = prompt.trim();
+
+    let reply = match cli.command.unwrap_or(Command::Echo) {
+        Command::Echo => run(EchoResponder::new(), &cli.system, prompt)
+            .await
+            .context("echo agent run failed")?,
+        Command::Run { provider } => {
+            let responder = build_responder(&provider).context("building LLM responder")?;
+            run(responder, &cli.system, prompt)
+                .await
+                .context("LLM agent run failed")?
+        }
+    };
+    println!("{reply}");
+    Ok(())
+}
+
+fn init_tracing() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -48,18 +91,6 @@ async fn real_main() -> Result<()> {
         .with_writer(io::stderr)
         .try_init()
         .ok();
-
-    let cli = Cli::parse();
-    let prompt = match cli.prompt {
-        Some(p) => p,
-        None => read_stdin_prompt().context("reading prompt from stdin")?,
-    };
-
-    let reply = run(EchoResponder::new(), &cli.system, prompt.trim())
-        .await
-        .context("agent run failed")?;
-    println!("{reply}");
-    Ok(())
 }
 
 fn read_stdin_prompt() -> io::Result<String> {
