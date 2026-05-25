@@ -35,6 +35,7 @@
 //! [`ToolError::from_tool_impl`].
 
 pub mod agent;
+pub mod composite_executor;
 pub mod context;
 pub mod error;
 pub mod feature_flags;
@@ -47,6 +48,7 @@ pub mod secrets;
 pub mod tool;
 
 pub use agent::{Agent, AgentBuilder, AgentConfig, AgentError, AgentResponder, ToolExecutor};
+pub use composite_executor::{CompositeError, CompositeToolExecutor};
 pub use error::ToolError;
 pub use feature_flags::{SharedFeatureFlags, ToolFeatureFlags};
 pub use job::{JobState, StateTransition, TokenBudgetExceeded};
