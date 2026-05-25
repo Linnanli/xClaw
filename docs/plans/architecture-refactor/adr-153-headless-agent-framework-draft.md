@@ -112,7 +112,7 @@ async fn main() -> anyhow::Result<()> {
 
 为什么这一步独立成 PR 而不是塞进 CLI：`McpToolExecutor` 是一个**通用**桥接，无头 agent 框架的任何宿主（CLI、ironclaw 桌面后端、第三方进程）都会用到它，让它住在 `dasclaw_mcp` 里、不依赖任何 CLI 概念，是正确的分层。
 
-#### 4.4.5 子步骤 8：CLI 接 MCP 服务器（下一步）
+#### 4.4.5 子步骤 8：CLI 接 MCP 服务器（已落地，PR #812 + #814 + #817）
 
 把 #806 的 `McpToolExecutor` 真正接进 `dasclaw-cli`，让用户能在不写代码的情况下把任意 MCP 服务器挂上 agent。设计要点：
 
@@ -152,6 +152,34 @@ async fn main() -> anyhow::Result<()> {
 | OAuth-backed MCP / 审批 / streaming / 工具白名单 | **暂不必要** | 这些都属于「桌面后端 / 企业部署」层的关注点，无头 CLI 的最小目标是验证 dasclaw_* 能独立工作，不应一次性把全部生态搬过来 |
 
 完成这 4 步以后，desktop-client/ironclaw 就是一个**纯粹的「桌面后端业务皮」**——HTTP + 数据库 + 租户 + Web 钩子，里面调 `dasclaw_runtime::Agent` 来真正跑 agent。
+
+#### 4.4.7 主流程完成里程碑（2026-05-25）
+
+§4.4 规划的 5 个 CLI 子步骤（step 4 ~ 8）全部落地：
+
+| 子步 | PR | 内容 |
+|------|------|------|
+| 4 | #800 | CLI 骨架 + `EchoResponder` + `echo` 子命令 |
+| 5 | #802 | `provider` 模块 + `run --provider {anthropic\|openai\|openai_compat\|ollama}` + wiremock e2e |
+| 6 | #804 | `tools` 模块 + `StaticToolExecutor` + `--enable-tools` + `run_with_tools` |
+| 7 | #806 | `dasclaw_mcp::McpToolExecutor`（住在 `dasclaw_mcp`，不在 CLI） |
+| 8 | #812 + #814 + #817 | `mcp` 模块（stdio + HTTP transport）+ `--mcp-config` + `dasclaw_runtime::CompositeToolExecutor` 合并器 |
+
+集成测试就位（[crates/dasclaw_cli/tests/](../../../crates/dasclaw_cli/tests/)）：
+
+- `end_to_end.rs` — echo / provider 基线
+- `live_provider.rs` — wiremock LLM round-trip
+- `tool_e2e.rs` — `--enable-tools` 路径
+- `mcp_e2e.rs` — stdio MCP server 子进程端到端（成功 + 未知工具错误注入）
+
+PR #817 CI 实测 Tests (default) 3m26s 通过、Clippy (default) 11m49s 通过。
+
+**仍待事项（均按 ADR 原文规划留给后续 slice，非本路径阻塞）**：
+
+- step 3 `dasclaw_session`：ADR §4.3 标「可选，等到有第二个调用方时再抽」，当前仍只有 ironclaw 桌面后端一个调用方，暂搁。
+- §4.4.6 列「暂不必要」的 5 项：OAuth-backed MCP / 审批 / streaming / 工具白名单 / inline `--mcp-stdio` flag — 全部属于桌面后端 / 企业部署关注点，按规划另开 ADR。
+
+**过程教训沉淀**：本批次 step 8 的 PR #816 因合并 stacked 下层 PR #814 时 base 分支被同时删除，触发 GitHub 自动关闭且无法 reopen 的失败模式（GraphQL 报 `base ref deleted`），被迫开 #817 替代、原 PR 编号永久失效。AGENTS.md "标准流程" §7 已新增「路径 A / 路径 B」硬规则与对应禁止事项条款。
 
 ## 5. 不属于本 ADR 范围
 
