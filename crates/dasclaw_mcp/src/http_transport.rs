@@ -52,7 +52,12 @@ impl HttpMcpTransport {
     }
 
     /// Set custom headers that will be sent with every request.
-    #[cfg(test)]
+    ///
+    /// Used by hosts that need to inject static credentials or routing
+    /// hints (e.g. `Authorization` for a bearer-token-protected MCP
+    /// endpoint). Per-request headers from
+    /// [`McpClient`](crate::client::McpClient) (such as `Mcp-Session-Id`)
+    /// are applied on top of these and override on key collision.
     pub fn with_custom_headers(mut self, headers: HashMap<String, String>) -> Self {
         self.custom_headers = headers;
         self
