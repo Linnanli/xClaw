@@ -27,6 +27,7 @@
 pub mod auth;
 pub mod client;
 pub mod config;
+pub mod executor;
 pub mod factory;
 pub mod http_transport;
 pub mod process;
@@ -52,6 +53,7 @@ pub use config::{
     ConfigError, EffectiveTransport, McpServerConfig, McpServersFile, McpTransportConfig,
     OAuthConfig, is_localhost_url, load_mcp_servers_from, save_mcp_servers_to,
 };
+pub use executor::McpToolExecutor;
 pub use factory::{McpFactoryError, create_client_from_config};
 pub use http_transport::HttpMcpTransport;
 pub use process::{McpProcessManager, StdioSpawnConfig};
