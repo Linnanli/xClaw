@@ -13,9 +13,7 @@
 use std::sync::Arc;
 
 use dasclaw_cli::{CliError, run_with_tools_and_hooks};
-use dasclaw_core::hooks::{
-    AutoApproveGate, HookBundle, InMemorySecrets, NoopSandboxExecutor,
-};
+use dasclaw_core::hooks::{AutoApproveGate, HookBundle, InMemorySecrets, NoopSandboxExecutor};
 use dasclaw_core::messages::ToolDefinition;
 use dasclaw_core::traits::HostError;
 use dasclaw_core::{ToolCall, ToolResult};

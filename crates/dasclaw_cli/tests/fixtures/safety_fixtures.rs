@@ -49,24 +49,15 @@ impl ScriptedResponder {
 
     /// Number of times `respond` has been invoked.
     pub fn call_count(&self) -> usize {
-        *self
-            .call_count
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+        *self.call_count.lock().unwrap_or_else(|p| p.into_inner())
     }
 }
 
 #[async_trait]
 impl AgentResponder for ScriptedResponder {
     async fn respond(&self, _ctx: &mut ReasoningContext) -> Result<RespondOutput, HostError> {
-        *self
-            .call_count
-            .lock()
-            .unwrap_or_else(|p| p.into_inner()) += 1;
-        let mut q = self
-            .queued
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        *self.call_count.lock().unwrap_or_else(|p| p.into_inner()) += 1;
+        let mut q = self.queued.lock().unwrap_or_else(|p| p.into_inner());
         if q.is_empty() {
             return Err("ScriptedResponder queue exhausted".into());
         }
