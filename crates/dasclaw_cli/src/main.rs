@@ -1,4 +1,4 @@
-//! Headless `dasclaw` CLI binary (ADR-153 §4.4 steps 4 + 5).
+//! Headless `dasclaw` CLI binary (ADR-153 §4.4 steps 4 + 5 + 6 + 8).
 //!
 //! Thin wrapper around [`dasclaw_cli::run`]. Two subcommands:
 //!
@@ -7,15 +7,21 @@
 //! - `run` — wires a real `dasclaw_llm_provider`-backed responder via
 //!   [`dasclaw_cli::provider::ProviderArgs`] (step 5). Honours
 //!   `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DASCLAW_API_KEY`.
+//!   Tool dispatch is opt-in via either `--enable-tools` (builtin
+//!   `echo` / `now`, step 6) or `--mcp-config <path>` (MCP servers,
+//!   step 8). The two flags are mutually exclusive in this sub-step;
+//!   a future composite executor will let them combine.
 //!
 //! Both subcommands accept `--prompt` or read the user prompt from stdin
 //! and share `--system` for the system message.
 
 use std::io::{self, Read};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
+use dasclaw_cli::mcp::load_executor as load_mcp_executor;
 use dasclaw_cli::provider::{ProviderArgs, build_responder};
 use dasclaw_cli::tools::default_builtins;
 use dasclaw_cli::{EchoResponder, run, run_with_tools};
@@ -53,15 +59,28 @@ enum Command {
 
 /// Tool-dispatch knobs for the `run` subcommand.
 ///
-/// Kept in a flattened group so the future MCP-backed executor can land
-/// next to `--enable-tools` without churning the top-level CLI shape.
+/// Kept in a flattened group so future tool sources land here without
+/// churning the top-level CLI shape. `--enable-tools` and
+/// `--mcp-config` are currently mutually exclusive (clap enforces this);
+/// composing them is deferred to a follow-up that introduces a
+/// composite [`ToolExecutor`].
 #[derive(Debug, Args)]
 struct ToolArgs {
     /// Advertise the builtin demo tools (`echo`, `now`) to the model and
     /// dispatch them locally. Defaults to off so the bare `run`
     /// subcommand stays a pure chat-completion driver.
-    #[arg(long = "enable-tools", default_value_t = false)]
+    #[arg(
+        long = "enable-tools",
+        default_value_t = false,
+        conflicts_with = "mcp_config"
+    )]
     enable_tools: bool,
+
+    /// Path to an MCP server config JSON file. Each entry is spawned as
+    /// a stdio child process; its tools are advertised to the model
+    /// under the `<server_name>_<tool>` qualified name.
+    #[arg(long = "mcp-config")]
+    mcp_config: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -89,7 +108,15 @@ async fn real_main() -> Result<()> {
             .context("echo agent run failed")?,
         Command::Run { provider, tools } => {
             let responder = build_responder(&provider).context("building LLM responder")?;
-            if tools.enable_tools {
+            if let Some(path) = tools.mcp_config.as_deref() {
+                let executor = load_mcp_executor(path)
+                    .await
+                    .with_context(|| format!("loading MCP config {}", path.display()))?;
+                let definitions = executor.definitions();
+                run_with_tools(responder, executor, definitions, &cli.system, prompt)
+                    .await
+                    .context("LLM agent (with MCP tools) run failed")?
+            } else if tools.enable_tools {
                 let executor = default_builtins();
                 let definitions = executor.definitions();
                 run_with_tools(responder, executor, definitions, &cli.system, prompt)
