@@ -47,7 +47,10 @@ pub mod recording;
 pub mod secrets;
 pub mod tool;
 
-pub use agent::{Agent, AgentBuilder, AgentConfig, AgentError, AgentResponder, ToolExecutor};
+pub use agent::{
+    Agent, AgentBuilder, AgentConfig, AgentError, AgentResponder, ToolExecutor,
+    ToolOutputSanitizer,
+};
 pub use composite_executor::{CompositeError, CompositeToolExecutor};
 pub use error::ToolError;
 pub use feature_flags::{SharedFeatureFlags, ToolFeatureFlags};
