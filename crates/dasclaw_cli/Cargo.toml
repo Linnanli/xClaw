@@ -1,0 +1,27 @@
+[package]
+name = "dasclaw_cli"
+version = "0.0.0-w6"
+edition = "2024"
+description = "Headless agent CLI binary (ADR-153 §4.4 step 4). Demonstrates dasclaw_runtime::Agent::builder() end-to-end without desktop dependencies (no Tauri, no database, no HTTP server)."
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "dasclaw-cli"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+dasclaw_runtime = { path = "../dasclaw_runtime" }
+dasclaw_core = { path = "../dasclaw_core" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util"] }
+async-trait = "0.1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }

@@ -5,6 +5,7 @@
 >   2. **F4.6.3 `dasclaw_memory_tools` 取消下沉**：按 [ADR-156 §6.3.1](adr-156-f46-builtin-tools-landing-decision.md) 决定，`memory` 模块依赖 `runtime` workspace crate（mtime / 大小 / 路径治理），强行下沉会绕过 ADR-153 边界，故 `memory` 留 desktop（与 §4.6 "留桌面 5 类"合并为 6 类：memory / extension / skill / job / routine / message）。
 >   3. **§4.6 薄壳化已完成**：`desktop-client/ironclaw/src/tools/builtin/mod.rs` 已转为 wildcard re-export 入口（PR #792），同时为下沉 crate 留 `pub mod` 仅限留守 6 类；shim `shell.rs` / `lsp/mod.rs` 已删。
 >   4. **crate 总数**：47（v2.5 写作时 45，新增 `dasclaw_misc_tools` 等本期产物）；`scripts/check_blueprint_sync.py` 自检为 `47 crates on disk / 2 planned`（剩 `dasclaw_bridge_lite` + `dasclaw_memory_tools` 处于 PLANNED 状态，后者按 ADR-156 §6.3.1 永久搁置）。
+>   5. **ADR-153 §4.4 step 4 落点**：新增 `crates/dasclaw_cli`（headless agent CLI，骨架 + EchoResponder 端到端 demo），证明 `dasclaw_runtime::Agent` 在零 desktop 依赖（无 Tauri / 无 DB / 无 HTTP server）下可独立运行；真实 LLM provider 与 tool executor 接线留待 ADR-153 后续 slice。
 > 本次升级是状态同步性质，不改架构决策，不重画 §1 总览图。原 v2.5 内容保留（§4.6 表格仅增"PR / 状态"列覆盖）。
 
 > **v2.5 (2026-05-23)** · 蓝图对齐 4-5 天发展（基于 [40-tool-ecosystem-inventory.md](40-tool-ecosystem-inventory.md) §1-3 实测 + [41-target-architecture-drift-analysis.md](41-target-architecture-drift-analysis.md) 漂移识别）：
