@@ -15,9 +15,10 @@ use std::io::{self, Read};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use dasclaw_cli::provider::{ProviderArgs, build_responder};
-use dasclaw_cli::{EchoResponder, run};
+use dasclaw_cli::tools::default_builtins;
+use dasclaw_cli::{EchoResponder, run, run_with_tools};
 
 const DEFAULT_SYSTEM: &str = "You are dasclaw, a headless agent.";
 
@@ -45,7 +46,22 @@ enum Command {
     Run {
         #[command(flatten)]
         provider: ProviderArgs,
+        #[command(flatten)]
+        tools: ToolArgs,
     },
+}
+
+/// Tool-dispatch knobs for the `run` subcommand.
+///
+/// Kept in a flattened group so the future MCP-backed executor can land
+/// next to `--enable-tools` without churning the top-level CLI shape.
+#[derive(Debug, Args)]
+struct ToolArgs {
+    /// Advertise the builtin demo tools (`echo`, `now`) to the model and
+    /// dispatch them locally. Defaults to off so the bare `run`
+    /// subcommand stays a pure chat-completion driver.
+    #[arg(long = "enable-tools", default_value_t = false)]
+    enable_tools: bool,
 }
 
 #[tokio::main]
@@ -71,11 +87,19 @@ async fn real_main() -> Result<()> {
         Command::Echo => run(EchoResponder::new(), &cli.system, prompt)
             .await
             .context("echo agent run failed")?,
-        Command::Run { provider } => {
+        Command::Run { provider, tools } => {
             let responder = build_responder(&provider).context("building LLM responder")?;
-            run(responder, &cli.system, prompt)
-                .await
-                .context("LLM agent run failed")?
+            if tools.enable_tools {
+                let executor = default_builtins();
+                let definitions = executor.definitions();
+                run_with_tools(responder, executor, definitions, &cli.system, prompt)
+                    .await
+                    .context("LLM agent (with tools) run failed")?
+            } else {
+                run(responder, &cli.system, prompt)
+                    .await
+                    .context("LLM agent run failed")?
+            }
         }
     };
     println!("{reply}");
