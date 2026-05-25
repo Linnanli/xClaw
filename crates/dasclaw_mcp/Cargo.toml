@@ -10,6 +10,10 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
+# `dasclaw_core::messages::{ToolCall,ToolResult,ToolDefinition}` and
+# `dasclaw_core::traits::HostError` are used by the
+# `executor::McpToolExecutor` bridge (ADR-153 step 7).
+dasclaw_core = { path = "../dasclaw_core" }
 # `dasclaw_tool::ToolError` is the application-layer error returned by
 # config helpers (added in F3.2 phase 2 PR 5a, #641).
 dasclaw_tool = { path = "../dasclaw_tool" }
