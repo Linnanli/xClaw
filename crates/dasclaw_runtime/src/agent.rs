@@ -47,7 +47,8 @@ use async_trait::async_trait;
 use dasclaw_core::agentic_loop::{
     AgenticLoopConfig, LoopDelegate, LoopOutcome, LoopSignal, TextAction, run_agentic_loop,
 };
-use dasclaw_core::hooks::HookBundle;
+use dasclaw_core::egress_apply::{EgressApply, apply_egress_decision};
+use dasclaw_core::hooks::{EgressKind, HookBundle};
 use dasclaw_core::messages::{ChatMessage, ToolCall, ToolDefinition, ToolResult};
 use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, ResponseMetadata};
@@ -190,6 +191,7 @@ impl Agent {
         let delegate = HeadlessDelegate {
             responder: Arc::clone(&self.responder),
             tool_executor: self.tool_executor.clone(),
+            hooks: self.hooks.clone(),
         };
 
         let outcome = run_agentic_loop(&delegate, &mut ctx, &loop_config, &self.hooks)
@@ -308,6 +310,7 @@ impl AgentBuilder {
 struct HeadlessDelegate {
     responder: Arc<dyn AgentResponder>,
     tool_executor: Option<Arc<dyn ToolExecutor>>,
+    hooks: HookBundle,
 }
 
 #[async_trait]
@@ -358,11 +361,57 @@ impl LoopDelegate for HeadlessDelegate {
 
         push_assistant_tool_calls(ctx, content, &tool_calls);
         for call in &tool_calls {
+            // ADR-148 Layer B + ADR-153 §1.1 e8/A2:
+            // Pre-execute egress gate scans serialised tool arguments.
+            // `Block` → executor is never invoked; an is_error
+            // tool_result is fed back to the model so it can react.
+            // `Redact` → callers that want argument rewriting should
+            // implement their own ToolExecutor wrapper; here we honour
+            // the sanitized payload only as a tracing hint and proceed.
+            let args_payload = serde_json::to_string(&call.arguments)
+                .unwrap_or_else(|_| String::from("{}"));
+            let kind = EgressKind::ToolExecution {
+                tool: call.name.clone(),
+            };
+            let mut args_buf = args_payload;
+            let pre_label = format!("ToolExecution:{}", call.name);
+            let decision = self.hooks.egress.check(&kind, &args_buf).await;
+            if let EgressApply::Halt(reason) =
+                apply_egress_decision(decision, &mut args_buf, &pre_label)
+            {
+                tracing::warn!(tool = %call.name, %reason, "egress gate blocked tool call");
+                let error_body = format!("Error: {reason}");
+                ctx.messages
+                    .push(ChatMessage::tool_result(&call.id, &call.name, &error_body));
+                continue;
+            }
+
             let result = executor.execute(call).await?;
+
+            // ADR-148 Layer B + ADR-153 §1.1 e15/A9:
+            // Post-execute egress gate sanitises tool output before it
+            // becomes part of ReasoningContext. `Redact` swaps content
+            // in place; `Block` substitutes a `[redacted: …]` placeholder
+            // so the conversation keeps making progress without leaking.
+            let mut content_buf = result.content.clone();
+            let post_label = format!("ToolOutput:{}", result.name);
+            let decision = self
+                .hooks
+                .egress
+                .check(&EgressKind::UserDisplay, &content_buf)
+                .await;
+            let pushed_content =
+                match apply_egress_decision(decision, &mut content_buf, &post_label) {
+                    EgressApply::Continue => content_buf,
+                    EgressApply::Halt(reason) => {
+                        tracing::warn!(tool = %result.name, %reason, "egress gate blocked tool output");
+                        format!("[redacted: {reason}]")
+                    }
+                };
             ctx.messages.push(ChatMessage::tool_result(
                 &result.tool_call_id,
                 &result.name,
-                &result.content,
+                &pushed_content,
             ));
         }
         Ok(None)
