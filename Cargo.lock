@@ -3061,6 +3061,7 @@ dependencies = [
  "axum 0.8.8",
  "base64 0.22.1",
  "chrono",
+ "dasclaw_core",
  "dasclaw_runtime",
  "dasclaw_tool",
  "futures",
