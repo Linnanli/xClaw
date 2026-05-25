@@ -2860,11 +2860,15 @@ dependencies = [
  "async-trait",
  "clap",
  "dasclaw_core",
+ "dasclaw_llm_provider",
  "dasclaw_runtime",
+ "secrecy",
+ "serde_json",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "wiremock",
 ]
 
 [[package]]

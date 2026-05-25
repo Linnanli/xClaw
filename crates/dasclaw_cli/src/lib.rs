@@ -17,12 +17,14 @@
 //!
 //! ## Out of scope (deliberately not in this slice)
 //!
-//! - Real LLM provider wiring (would expose
-//!   `dasclaw_llm_provider` config surface; lands in a follow-up PR once
-//!   provider selection mechanism is settled).
-//! - Tool execution wiring ([`dasclaw_runtime::ToolExecutor`]). Same
-//!   reason.
+//! - Tool execution wiring ([`dasclaw_runtime::ToolExecutor`]).
 //! - Streaming / interactive REPL. The first slice is request-response.
+//!
+//! ## Real LLM provider wiring
+//!
+//! See [`provider`] for the [`ProviderArgs`](provider::ProviderArgs) →
+//! [`LlmProviderResponder`](dasclaw_runtime::LlmProviderResponder)
+//! factory used by the binary's non-echo mode (ADR-153 §4.4 step 5).
 
 use std::sync::Mutex;
 
@@ -32,6 +34,8 @@ use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
 use dasclaw_core::traits::HostError;
 use dasclaw_runtime::{Agent, AgentError, AgentResponder};
+
+pub mod provider;
 
 /// Errors surfaced by the CLI library layer.
 #[derive(Debug, thiserror::Error)]
