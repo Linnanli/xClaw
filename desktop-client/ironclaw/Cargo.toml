@@ -234,6 +234,11 @@ dasclaw_git_tools = { path = "../../crates/dasclaw_git_tools" }
 # extracted from desktop tools/builtin/ per ADR-156 §6.3.
 dasclaw_sub_agent_tools = { path = "../../crates/dasclaw_sub_agent_tools" }
 
+# F4.6.7 Phase 1 — shell-tool sandbox-independent helpers (risk classification,
+# injection detection, env scrubbing list, output truncation) extracted from
+# desktop tools/builtin/shell.rs per ADR-156 §6.3.
+dasclaw_shell_tools = { path = "../../crates/dasclaw_shell_tools" }
+
 # AWS Bedrock (native Converse API, opt-in via --features bedrock)
 aws-config = { version = "1", features = ["behavior-version-latest"], optional = true }
 aws-sdk-bedrockruntime = { version = "1", optional = true }

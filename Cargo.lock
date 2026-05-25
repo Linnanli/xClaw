@@ -2670,6 +2670,7 @@ dependencies = [
  "dasclaw_runtime",
  "dasclaw_safety",
  "dasclaw_sandbox",
+ "dasclaw_shell_tools",
  "dasclaw_sub_agent_tools",
  "dasclaw_tool",
  "dasclaw_wasm_tools",
@@ -3385,6 +3386,15 @@ dependencies = [
  "tree-sitter-bash",
  "url",
  "which 8.0.2",
+]
+
+[[package]]
+name = "dasclaw_shell_tools"
+version = "0.0.0-w6"
+dependencies = [
+ "dasclaw_bash_validation",
+ "dasclaw_tool",
+ "serde_json",
 ]
 
 [[package]]
