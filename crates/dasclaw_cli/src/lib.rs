@@ -41,6 +41,7 @@ use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadat
 use dasclaw_core::traits::HostError;
 use dasclaw_runtime::{Agent, AgentError, AgentResponder, ToolExecutor};
 
+pub mod mcp;
 pub mod provider;
 pub mod tools;
 

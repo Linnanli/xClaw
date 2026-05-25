@@ -16,16 +16,21 @@ path = "src/lib.rs"
 dasclaw_runtime = { path = "../dasclaw_runtime" }
 dasclaw_core = { path = "../dasclaw_core" }
 dasclaw_llm_provider = { path = "../dasclaw_llm_provider" }
+# ADR-153 §4.4 sub-step 8: CLI wires MCP-backed ToolExecutor.
+dasclaw_mcp = { path = "../dasclaw_mcp" }
+dasclaw_tool = { path = "../dasclaw_tool" }
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 secrecy = "0.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util"] }
 async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
+tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
 wiremock = "0.6"
