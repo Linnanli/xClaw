@@ -1,7 +1,6 @@
 //! Built-in tools that come with the agent.
 
 pub mod extension_tools;
-mod http;
 mod job;
 pub mod lsp;
 pub mod memory;
@@ -52,7 +51,6 @@ pub use extension_tools::{
 pub use file::{ApplyPatchTool, ListDirTool, ReadFileTool, WriteFileTool};
 pub use glob_search::GlobSearchTool;
 pub use grep_search::GrepSearchTool;
-pub use http::HttpTool;
 pub use job::{
     CancelJobTool, CreateJobTool, JobEventsTool, JobPromptTool, JobStatusTool, ListJobsTool,
     PromptQueue, SchedulerSlot,
@@ -70,9 +68,8 @@ pub use tool_info::ToolInfoTool;
 
 pub use dasclaw_image_tools::{ImageAnalyzeTool, ImageEditTool, ImageGenerateTool};
 
-// F4.6.8 (phase 1) — web_fetch was extracted to `crates/dasclaw_net_tools` per
-// ADR-156 §6.3. Thin re-export keeps existing call sites compiling unchanged.
-// F4.6.8 (phase 2) — web_search + html_converter::convert_html_to_markdown were
-// also extracted into `dasclaw_net_tools`. ToolInfoTool stays in desktop because
-// it reflects on `Weak<ToolRegistry>`, which lives here.
-pub use dasclaw_net_tools::{WebFetchTool, WebSearchTool, convert_html_to_markdown};
+// F4.6.8 — web_fetch (phase 1), web_search + html_converter (phase 2), and
+// HttpTool (phase 3) all live in `crates/dasclaw_net_tools` per ADR-156 §6.3.
+// Thin re-exports keep existing call sites compiling unchanged. ToolInfoTool
+// stays in desktop because it reflects on `Weak<ToolRegistry>`, which lives here.
+pub use dasclaw_net_tools::{HttpTool, WebFetchTool, WebSearchTool, convert_html_to_markdown};
