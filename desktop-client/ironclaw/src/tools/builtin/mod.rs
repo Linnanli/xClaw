@@ -1,75 +1,54 @@
 //! Built-in tools that come with the agent.
+//!
+//! Per ADR-156 §6.4, after the F4.6.1 ~ F4.6.8 sink waves landed this
+//! module is now a thin re-export entry point: each builtin tool family
+//! that was extracted lives in `crates/dasclaw_*_tools` and is wildcard
+//! re-exported here so every historical
+//! `crate::tools::builtin::<Tool>` call site keeps compiling unchanged.
+//! Only T3/T4 modules that intentionally stay desktop-resident
+//! (see ADR-156 §6.3.1 and §8) keep `pub mod` declarations below.
 
+// Sunk crates (F4.6.1 ~ F4.6.8 + ADR-152 F3.3 / dasclaw_lsp).
+pub use dasclaw_fs_tools::*;
+pub use dasclaw_git_tools::*;
+pub use dasclaw_image_tools::*;
+pub use dasclaw_lsp::*;
+pub use dasclaw_misc_tools::*;
+pub use dasclaw_net_tools::*;
+pub use dasclaw_shell_tools::*;
+pub use dasclaw_sub_agent_tools::*;
+
+// T3/T4 desktop-resident tools (留守).
+//
+// - `memory` — ADR-156 §6.3.1 explicitly cancels the sink (desktop-only,
+//   `runtime` workspace dep) so it stays a local module.
+// - `tool_info` — `ToolInfoTool` reflects on `Weak<ToolRegistry>` which
+//   lives in desktop (F4.6.8 note in §6.4).
+// - `extension_tools` / `skill_tools` — T3 host-bound extension /
+//   skill management.
+// - `job` / `routine` / `message` — T4 desktop-backend-only orchestrator
+//   tools (ADR-155).
 pub mod extension_tools;
 mod job;
-pub mod lsp;
 pub mod memory;
 mod message;
 pub mod routine;
-pub(crate) mod shell;
-pub use shell::classify_command_risk;
 pub mod skill_tools;
 mod tool_info;
 
-// F4.6.6-a/-b/-c (ADR-156 §6.3): `path_utils` + `file_guard` + `code_edit` +
-// `glob_search` + `grep_search` + `file` were extracted to `dasclaw_fs_tools`.
-// Re-exported at the original module paths so existing in-tree consumers
-// (`tools::builtin::path_utils::*` / `tools::builtin::file_guard::*` /
-// `tools::builtin::code_edit::*` / `tools::builtin::glob_search::*` /
-// `tools::builtin::grep_search::*` / `tools::builtin::file::*`) and external
-// `tests/parity_gate_*` imports keep working without changes.
-pub use dasclaw_fs_tools::{code_edit, file, file_guard, glob_search, grep_search, path_utils};
-
-// F4.6.1 — echo/time/json/plan_mode/restart/session_fork were extracted to
-// `crates/dasclaw_misc_tools` per ADR-156 §6.3. F4.6.1b added
-// secrets_tools (SecretListTool / SecretDeleteTool) into the same crate.
-// The thin re-export below keeps every existing
-// `crate::tools::builtin::EchoTool` (etc.) call site compiling unchanged.
-pub use dasclaw_misc_tools::{
-    EchoTool, JsonTool, PlanModeTool, RestartTool, SecretDeleteTool, SecretListTool,
-    SessionForkTool, TimeTool,
-};
-
-// F4.6.5 — git tools were extracted to `crates/dasclaw_git_tools` per
-// ADR-156 §6.3. Re-exported here so `crate::tools::builtin::GitStatusTool`
-// (etc.) call sites keep compiling unchanged.
-pub use dasclaw_git_tools::{
-    GitBranchTool, GitCommitTool, GitDiffTool, GitLogTool, GitPushTool, GitStaleCheckTool,
-    GitStatusTool,
-};
-
-// F4.6.4 — SubAgentTool / SubAgentRole were extracted to
-// `crates/dasclaw_sub_agent_tools` per ADR-156 §6.3. Thin re-export keeps
-// existing call sites compiling unchanged.
-pub use dasclaw_sub_agent_tools::{SubAgentRole, SubAgentTool};
-
-pub use code_edit::CodeEditTool;
 pub use extension_tools::{
     ExtensionInfoTool, ToolActivateTool, ToolAuthTool, ToolInstallTool, ToolListTool,
     ToolRemoveTool, ToolSearchTool, ToolUpgradeTool,
 };
-pub use file::{ApplyPatchTool, ListDirTool, ReadFileTool, WriteFileTool};
-pub use glob_search::GlobSearchTool;
-pub use grep_search::GrepSearchTool;
 pub use job::{
     CancelJobTool, CreateJobTool, JobEventsTool, JobPromptTool, JobStatusTool, ListJobsTool,
     PromptQueue, SchedulerSlot,
 };
-pub use lsp::LspQueryTool;
 pub use memory::{MemoryReadTool, MemorySearchTool, MemoryTreeTool, MemoryWriteTool};
 pub use message::MessageTool;
 pub use routine::{
     EventEmitTool, RoutineCreateTool, RoutineDeleteTool, RoutineFireTool, RoutineHistoryTool,
     RoutineListTool, RoutineUpdateTool,
 };
-pub use shell::ShellTool;
 pub use skill_tools::{SkillInstallTool, SkillListTool, SkillRemoveTool, SkillSearchTool};
 pub use tool_info::ToolInfoTool;
-
-pub use dasclaw_image_tools::{ImageAnalyzeTool, ImageEditTool, ImageGenerateTool};
-
-// F4.6.8 — web_fetch (phase 1), web_search + html_converter (phase 2), and
-// HttpTool (phase 3) all live in `crates/dasclaw_net_tools` per ADR-156 §6.3.
-// Thin re-exports keep existing call sites compiling unchanged. ToolInfoTool
-// stays in desktop because it reflects on `Weak<ToolRegistry>`, which lives here.
-pub use dasclaw_net_tools::{HttpTool, WebFetchTool, WebSearchTool, convert_html_to_markdown};
