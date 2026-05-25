@@ -304,6 +304,29 @@ let agent = Agent::builder()
 
 **后续编号调整**：F4.6.3 槽位保留（不复用，避免历史 PR 编号混乱），F4.6.4 ~ F4.6.8 编号不变。本决策由 PR #775 之后的对账发现并落入 ADR。
 
+### 6.3.2 配套评估：`llm/session.rs` 不在 F4.6 范围（保持 desktop）
+
+**结论**：`desktop-client/ironclaw/src/llm/session.rs`（823 行，NEAR AI session token / OAuth renewal / 文件 + DB 持久化）**不**列入 F4.6 任何子波次，也不另立 `dasclaw_session` crate。
+
+**依据**：
+
+1. **真实依赖 T3 级**：`SessionManager` 持有 `Arc<dyn crate::db::Database>` store，依赖 desktop 的 db 抽象；与 `memory.rs` 依赖 desktop `workspace` 同属 T3，下沉同样会把 desktop db trait 牵到共享层。
+
+2. **抽象边界已正确**：`SessionConfig` 已在 [`dasclaw_llm_provider::provider::config`](../../crates/dasclaw_llm_provider/src/provider/config.rs) 落地，desktop 仅 re-export；剩余 823 行是 NEAR AI OAuth 回调端口 + `~/.ironclaw/session.json` 文件持久化 + DB settings 表读写，全部是 desktop UX/部署细节。
+
+3. **无头 agent 不需要 NEAR AI OAuth**：
+   - `dasclaw_runtime`（ADR-153）走 API key 直注入，无 OAuth 流程；
+   - 第三方无头集成走自己的认证；
+   - `SessionConfig` trait 抽象足够，不需要把 `SessionManager` 实现搬到共享层。
+
+4. **代码评审三层确认（2026-05-25）**：
+   - `semantic_search` / `grep_search`：无 `dasclaw_session` crate，无同名子模块；`crates/dasclaw_*` 全部 47 个 crate 名单中无 session 项。
+   - `desktop-client/ironclaw/src/agent/session.rs` 已是 4 行 shim → `dasclaw_core::session`（F3 已下沉）；
+   - `desktop-client/ironclaw/src/tools/mcp/session.rs` 已是 11 行 shim → `dasclaw_mcp::session`（F3.2 phase 3 PR #661 已下沉）；
+   - 仅剩 `llm/session.rs` 仍在 desktop，且按本节判定不应下沉。
+
+**与 §6.3.1 关系**：本节与 §6.3.1 同形——两者都是「依赖 desktop 运行时抽象 → 强行下沉会污染共享层 → 抽象 trait 已下沉，实现留 desktop」的 T3 模式。本节并入 ADR-156 是为了把同类决策集中归档，避免日后误以为「凡是带 `session` 命名的都该有 `dasclaw_*` crate」。
+
 ### 6.4 desktop `tools/builtin/mod.rs` 薄壳化（独立 PR）
 
 F4.6.8 全部 merge 后，单独开 PR 把 `desktop-client/ironclaw/src/tools/builtin/mod.rs` 改为：
