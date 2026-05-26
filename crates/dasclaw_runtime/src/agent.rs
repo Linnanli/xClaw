@@ -88,6 +88,28 @@ pub trait ToolExecutor: Send + Sync {
     async fn execute(&self, call: &ToolCall) -> Result<ToolResult, HostError>;
 }
 
+/// Narrow tool-output sanitization seam used by [`Agent`]
+/// (ADR-153 §1.1 B6 / e22 wiring).
+///
+/// Sits between [`ToolExecutor::execute`] and the message-history push,
+/// so the redacted content is what the **next** LLM iteration sees in
+/// its `tool_result` block. Implementations typically delegate to a
+/// safety crate (e.g. `dasclaw_safety::SafetyLayer::sanitize_for_stash`),
+/// but the runtime stays safety-stack-agnostic: any `Fn`-like wrapper
+/// works as long as it returns the post-redaction string.
+///
+/// When no sanitizer is wired (the default), tool output is forwarded
+/// to the LLM **verbatim**. The trait is sync because production
+/// sanitizers run regex passes that don't await, and forcing async would
+/// push spurious `Box::pin` allocations into the hot loop path.
+pub trait ToolOutputSanitizer: Send + Sync {
+    /// Return the sanitized content for `tool_name`'s output. The
+    /// implementation owns any redaction, masking, policy enforcement
+    /// and length capping; the runtime treats the return value as
+    /// authoritative and pushes it straight into the conversation.
+    fn sanitize(&self, tool_name: &str, content: &str) -> String;
+}
+
 /// Errors surfaced by [`Agent::run`].
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
@@ -155,6 +177,7 @@ pub struct AgentConfig {
 pub struct Agent {
     responder: Arc<dyn AgentResponder>,
     tool_executor: Option<Arc<dyn ToolExecutor>>,
+    tool_output_sanitizer: Option<Arc<dyn ToolOutputSanitizer>>,
     hooks: HookBundle,
     config: AgentConfig,
 }
@@ -192,6 +215,7 @@ impl Agent {
             responder: Arc::clone(&self.responder),
             tool_executor: self.tool_executor.clone(),
             hooks: self.hooks.clone(),
+            tool_output_sanitizer: self.tool_output_sanitizer.clone(),
         };
 
         let outcome = run_agentic_loop(&delegate, &mut ctx, &loop_config, &self.hooks)
@@ -216,6 +240,7 @@ fn clone_loop_config(src: &AgenticLoopConfig) -> AgenticLoopConfig {
 pub struct AgentBuilder {
     responder: Option<Arc<dyn AgentResponder>>,
     tool_executor: Option<Arc<dyn ToolExecutor>>,
+    tool_output_sanitizer: Option<Arc<dyn ToolOutputSanitizer>>,
     hooks: Option<HookBundle>,
     config: AgentConfig,
 }
@@ -248,6 +273,25 @@ impl AgentBuilder {
     #[must_use]
     pub fn tool_executor_arc(mut self, executor: Arc<dyn ToolExecutor>) -> Self {
         self.tool_executor = Some(executor);
+        self
+    }
+
+    /// Plug in a tool-output sanitizer. When set, every `ToolResult`'s
+    /// `content` is run through [`ToolOutputSanitizer::sanitize`] before
+    /// being appended to the conversation, so the **next** LLM call sees
+    /// the redacted payload. When unset (default), output is forwarded
+    /// verbatim — matching the pre-W6.5b behaviour.
+    #[must_use]
+    pub fn tool_output_sanitizer(mut self, sanitizer: impl ToolOutputSanitizer + 'static) -> Self {
+        self.tool_output_sanitizer = Some(Arc::new(sanitizer));
+        self
+    }
+
+    /// Same as [`Self::tool_output_sanitizer`] but accepts a pre-built
+    /// `Arc` so callers can share a single sanitizer across agents.
+    #[must_use]
+    pub fn tool_output_sanitizer_arc(mut self, sanitizer: Arc<dyn ToolOutputSanitizer>) -> Self {
+        self.tool_output_sanitizer = Some(sanitizer);
         self
     }
 
@@ -296,6 +340,7 @@ impl AgentBuilder {
         Ok(Agent {
             responder,
             tool_executor: self.tool_executor,
+            tool_output_sanitizer: self.tool_output_sanitizer,
             hooks,
             config: self.config,
         })
@@ -311,6 +356,7 @@ struct HeadlessDelegate {
     responder: Arc<dyn AgentResponder>,
     tool_executor: Option<Arc<dyn ToolExecutor>>,
     hooks: HookBundle,
+    tool_output_sanitizer: Option<Arc<dyn ToolOutputSanitizer>>,
 }
 
 #[async_trait]
@@ -400,7 +446,7 @@ impl LoopDelegate for HeadlessDelegate {
                 .egress
                 .check(&EgressKind::UserDisplay, &content_buf)
                 .await;
-            let pushed_content = match apply_egress_decision(
+            let post_gate_content = match apply_egress_decision(
                 decision,
                 &mut content_buf,
                 &post_label,
@@ -410,6 +456,14 @@ impl LoopDelegate for HeadlessDelegate {
                     tracing::warn!(tool = %result.name, %reason, "egress gate blocked tool output");
                     format!("[redacted: {reason}]")
                 }
+            };
+
+            // ADR-153 §1.1 e22/B6: chain a second sanitizer seam after the
+            // egress gate. Callers can inject SafetyLayer::sanitize_for_stash
+            // (or any other strategy) without touching the hook stack.
+            let pushed_content = match self.tool_output_sanitizer.as_ref() {
+                Some(sanitizer) => sanitizer.sanitize(&result.name, &post_gate_content),
+                None => post_gate_content,
             };
             ctx.messages.push(ChatMessage::tool_result(
                 &result.tool_call_id,

@@ -45,6 +45,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # W6.1: egress-gate feature is what lets dasclaw_safety::IronclawEgressGate
 # implement dasclaw_core::EgressGate, which is the trait that test cases
 # e7–e16 (ADR-153-cli-test-matrix §1) inject through run_with_tools_and_hooks.
+# W6.5b B6: same crate also provides SafetyLayer::sanitize_for_stash, which is
+# wired into the agent loop via the ToolOutputSanitizer seam (e22).
 # Kept as dev-dependency: dasclaw_cli the library stays safety-stack-agnostic;
 # downstream callers wire their own HookBundle from whichever safety crate
 # they prefer.
