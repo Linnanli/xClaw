@@ -14,10 +14,16 @@ The only mechanical edits allowed are:
      imports inside the slice.
   3. Other `use codex_utils_*::X` → `use dasclaw_*::X` swaps as upstream
      transitive deps get sliced (e.g. dasclaw_absolute_path).
+  4. Dasclaw-specific local extensions wrapped in
+     `// CODEX-DRIFT-IGNORE-START: <reason>` / `// CODEX-DRIFT-IGNORE-END`
+     marker pairs. Each block must cite an issue or ADR in the START
+     comment so PR review can audit it as an intentional local extension
+     rather than upstream drift. Authorized by ADR-136 amendment 3 (#874).
 
-This script normalizes the swaps + sorts consecutive `use` blocks before
-hashing, then compares each file against its upstream peer. Any other diff
-is treated as drift and exits non-zero so CI can block patch-style edits.
+This script normalizes the swaps + strips marker-wrapped local extensions
++ sorts consecutive `use` blocks before hashing, then compares each file
+against its upstream peer. Any other diff is treated as drift and exits
+non-zero so CI can block patch-style edits.
 
 Run: python3.12 scripts/check_codex_protocol_drift.py
 """
@@ -94,6 +100,53 @@ SWAP_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 
 _USE_RE = re.compile(r"^use\s+")
 
+# Marker comments that delimit dasclaw-local extensions inside an otherwise
+# verbatim-ported file. Lines between a START / END pair are stripped before
+# hashing so they don't show up as drift. See module docstring + ADR-136
+# amendment 3 (#874) for the authorization.
+_DRIFT_IGNORE_START_RE = re.compile(r"^\s*//\s*CODEX-DRIFT-IGNORE-START\b")
+_DRIFT_IGNORE_END_RE = re.compile(r"^\s*//\s*CODEX-DRIFT-IGNORE-END\b")
+
+
+def _strip_drift_ignore_blocks(text: str, source_label: str) -> str:
+    """Remove lines between paired CODEX-DRIFT-IGNORE markers.
+
+    When a marker block is preceded by a blank line that exists solely to
+    separate the local extension from the upstream code above, that blank
+    line is also dropped so the surrounding whitespace matches upstream
+    after the block is removed.
+
+    Raises SystemExit if a START marker has no matching END (or vice
+    versa) so misuse fails loudly rather than silently widening the
+    exemption surface.
+    """
+    out: list[str] = []
+    skip = False
+    for lineno, line in enumerate(text.split("\n"), start=1):
+        if not skip and _DRIFT_IGNORE_START_RE.match(line):
+            # Drop the blank-line spacer that separated the marker block
+            # from the preceding upstream code, if any.
+            if out and out[-1] == "":
+                out.pop()
+            skip = True
+            continue
+        if skip and _DRIFT_IGNORE_END_RE.match(line):
+            skip = False
+            continue
+        if not skip and _DRIFT_IGNORE_END_RE.match(line):
+            raise SystemExit(
+                f"ERROR: {source_label}:{lineno}: stray "
+                f"// CODEX-DRIFT-IGNORE-END without matching START"
+            )
+        if not skip:
+            out.append(line)
+    if skip:
+        raise SystemExit(
+            f"ERROR: {source_label}: unterminated // CODEX-DRIFT-IGNORE-START "
+            f"block; missing matching // CODEX-DRIFT-IGNORE-END"
+        )
+    return "\n".join(out)
+
 
 def _sort_use_blocks(text: str) -> str:
     """Sort consecutive `use ...;` lines alphabetically.
@@ -120,7 +173,8 @@ def _sort_use_blocks(text: str) -> str:
     return "\n".join(out)
 
 
-def normalize(text: str) -> str:
+def normalize(text: str, source_label: str) -> str:
+    text = _strip_drift_ignore_blocks(text, source_label)
     for pat, repl in SWAP_PATTERNS:
         text = pat.sub(repl, text)
     return _sort_use_blocks(text)
@@ -144,7 +198,10 @@ def main() -> int:
         if not upstream.exists():
             missing.append(f"upstream missing: {upstream.relative_to(REPO_ROOT)}")
             continue
-        local_norm = normalize(local.read_text(encoding="utf-8"))
+        local_norm = normalize(
+            local.read_text(encoding="utf-8"),
+            str(local.relative_to(REPO_ROOT)),
+        )
         upstream_norm = normalize_upstream(upstream.read_text(encoding="utf-8"))
         if sha(local_norm) != sha(upstream_norm):
             drift.append(

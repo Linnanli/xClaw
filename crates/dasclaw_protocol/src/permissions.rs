@@ -450,6 +450,12 @@ impl FileSystemSandboxPolicy {
             &mut file_system_policy.entries,
             ".codex",
         );
+        // CODEX-DRIFT-IGNORE-START: dasclaw .dasclaw project-root carve-out (#874, ADR-136 amendment 3)
+        append_default_read_only_project_root_subpath_if_no_explicit_rule(
+            &mut file_system_policy.entries,
+            ".dasclaw",
+        );
+        // CODEX-DRIFT-IGNORE-END
         for writable_root in writable_roots {
             for protected_path in default_read_only_subpaths_for_writable_root(
                 writable_root,
@@ -1313,6 +1319,17 @@ fn default_read_only_subpaths_for_writable_root(
         subpaths.push(top_level_codex);
     }
 
+    // CODEX-DRIFT-IGNORE-START: dasclaw .dasclaw carve-out (#874, ADR-136 amendment 3)
+    // Symmetric carve-out for dasclaw-native project metadata. Same protection
+    // semantics as `.codex` above: protect even before the directory exists
+    // when the workspace root itself is being projected, so first-time
+    // creation flows through the protected-path approval path.
+    let top_level_dasclaw = writable_root.join(".dasclaw");
+    if protect_missing_dot_codex || top_level_dasclaw.as_path().is_dir() {
+        subpaths.push(top_level_dasclaw);
+    }
+    // CODEX-DRIFT-IGNORE-END
+
     dedup_absolute_paths(subpaths, /*normalize_effective_paths*/ false)
 }
 
@@ -1587,6 +1604,14 @@ mod tests {
                     },
                     access: FileSystemAccessMode::Read,
                 },
+                // CODEX-DRIFT-IGNORE-START: dasclaw .dasclaw carve-out expectation (#874, ADR-136 amendment 3)
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::project_roots(Some(".dasclaw".into())),
+                    },
+                    access: FileSystemAccessMode::Read,
+                },
+                // CODEX-DRIFT-IGNORE-END
             ])
         );
     }
@@ -1662,6 +1687,15 @@ mod tests {
                 .join(".codex"),
         )
         .expect("absolute dot codex");
+        // CODEX-DRIFT-IGNORE-START: dasclaw .dasclaw carve-out expectation (#874, ADR-136 amendment 3)
+        let expected_dot_dasclaw = AbsolutePathBuf::from_absolute_path(
+            std::env::current_dir()
+                .expect("current dir")
+                .join(relative_cwd)
+                .join(".dasclaw"),
+        )
+        .expect("absolute dot dasclaw");
+        // CODEX-DRIFT-IGNORE-END
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: false,
@@ -1693,6 +1727,14 @@ mod tests {
                     },
                     access: FileSystemAccessMode::Read,
                 },
+                // CODEX-DRIFT-IGNORE-START: dasclaw .dasclaw carve-out expectation (#874, ADR-136 amendment 3)
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: expected_dot_dasclaw,
+                    },
+                    access: FileSystemAccessMode::Read,
+                },
+                // CODEX-DRIFT-IGNORE-END
             ])
         );
         assert!(
