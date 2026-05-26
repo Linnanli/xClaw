@@ -1,6 +1,7 @@
 name: Regression Test Check
 
 on:
+  workflow_dispatch:
   pull_request:
     # xClaw fork: doc-only PRs don't require regression tests.
     paths-ignore:

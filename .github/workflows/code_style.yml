@@ -1,5 +1,6 @@
 name: Code Style
 on:
+  workflow_dispatch:
   pull_request:
     # xClaw fork: skip lint/format/deny/no-panics on doc-only PRs
     # (Markdown / docs / IDE config / license-only changes can't break code).
