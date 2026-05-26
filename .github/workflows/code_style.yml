@@ -72,6 +72,10 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
       with:
         components: clippy
+        # wasm32-wasip2 is required by `dasclaw_wasm_tools/build.rs`
+        # to compile the no-HTTP-capability fixture component used by
+        # W6.6c WASM tool tests (ADR-153 §2.1 / e26).
+        targets: wasm32-wasip2
     - uses: Swatinem/rust-cache@v2
       with:
         key: clippy-${{ matrix.name }}
