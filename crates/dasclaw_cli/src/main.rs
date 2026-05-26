@@ -81,6 +81,16 @@ struct ToolArgs {
     /// under the `<server_name>_<tool>` qualified name.
     #[arg(long = "mcp-config")]
     mcp_config: Option<PathBuf>,
+
+    /// Path to a `wasm32-wasip2` component file. Loaded under the
+    /// default-deny capability policy (no http, no workspace writes, no
+    /// secrets — see ADR-153 §1.1 A7 / e13). The tool's name is the
+    /// file stem; calls that touch ungated host imports surface as
+    /// `ToolResult { is_error: true, .. }` carrying the host gate
+    /// message verbatim. Capability grant flags are tracked as #869.
+    #[cfg(feature = "wasm-tools")]
+    #[arg(long = "wasm-tool")]
+    wasm_tool: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -152,6 +162,17 @@ async fn assemble_tool_executor(
             .with_context(|| format!("loading MCP config {}", path.display()))?;
         let defs = exec.definitions();
         push_source(&mut sources, &mut definitions, defs, Arc::new(exec));
+    }
+
+    #[cfg(feature = "wasm-tools")]
+    if let Some(path) = tools.wasm_tool.as_deref() {
+        let loaded = dasclaw_cli::wasm::load_wasm_tool(path).await?;
+        push_source(
+            &mut sources,
+            &mut definitions,
+            vec![loaded.definition],
+            Arc::new(loaded.executor),
+        );
     }
 
     if sources.is_empty() {

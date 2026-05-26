@@ -23,6 +23,16 @@ doc = false
 [lib]
 path = "src/lib.rs"
 
+# ADR-153 §1.1 A7 / #867: `wasm-tools` feature gates the optional
+# `--wasm-tool` CLI flag and its dependency on `dasclaw_wasm_tools`
+# (which pulls in wasmtime, ~50–80 MB to the shipped binary). Default-on
+# so the headless CLI keeps its W6.6c e13 capability story; downstream
+# consumers that want a leaner binary can opt out with
+# `--no-default-features`.
+[features]
+default = ["wasm-tools"]
+wasm-tools = ["dep:dasclaw_wasm_tools"]
+
 [dependencies]
 dasclaw_runtime = { path = "../dasclaw_runtime" }
 dasclaw_core = { path = "../dasclaw_core" }
@@ -30,6 +40,9 @@ dasclaw_llm_provider = { path = "../dasclaw_llm_provider" }
 # ADR-153 §4.4 sub-step 8: CLI wires MCP-backed ToolExecutor.
 dasclaw_mcp = { path = "../dasclaw_mcp" }
 dasclaw_tool = { path = "../dasclaw_tool" }
+# Optional: only pulled in when the `wasm-tools` feature is enabled. See
+# the `[features]` block above for the binary-size rationale.
+dasclaw_wasm_tools = { path = "../dasclaw_wasm_tools", optional = true }
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 secrecy = "0.10"
@@ -63,6 +76,8 @@ dasclaw_workspace_cap = { path = "../dasclaw_workspace_cap" }
 # the outbound request without touching the real network (the host
 # SSRF blocklist refuses 127.0.0.1, so wiremock is not usable here).
 dasclaw_net_tools = { path = "../dasclaw_net_tools" }
+# W6.6c (ADR-153 §1.1 A7 / e13): wasm fixture also reused by the prod
+# `--wasm-tool` flag e2e in tests/cli_wasm_tool_flag_e2e.rs.
 dasclaw_wasm_tools = { path = "../dasclaw_wasm_tools" }
 # W6.6b (ADR-153 §1.1 A6 / e12, L2 sub-process sandbox default-deny):
 # tests/safety_sandbox_default_deny_e2e.rs wires a `bash` tool whose
