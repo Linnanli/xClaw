@@ -1,0 +1,22 @@
+[package]
+name = "dasclaw-wasm-tools-fixture-minimal-http"
+version = "0.0.0"
+edition = "2021"
+description = "Minimal WASM component fixture for dasclaw_wasm_tools capability opt-in tests (#854)."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.36"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+# Standalone — do not inherit parent workspace
+[workspace]

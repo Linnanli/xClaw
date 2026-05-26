@@ -3357,4 +3357,31 @@ mod tests {
         headers.insert("content-length".to_string(), "0".to_string());
         assert!(!super::needs_content_length_zero("POST", &headers));
     }
+
+    /// #854 — fixture component without `http` capability must surface
+    /// the host gate string ("HTTP capability not granted") to the
+    /// caller. Wired here so the dasclaw_cli A7 e2e (#853) can drive
+    /// the same fixture through the CLI surface.
+    #[tokio::test]
+    async fn req_wasm_tools_854_no_http_capability_returns_gate_error() {
+        // Fixture is a real wasip2 component; it requests ~17 memory pages
+        // (~1.1 MB) at instantiation, above the 1 MB `for_testing` cap.
+        let mut config = WasmRuntimeConfig::for_testing();
+        config.default_limits = config.default_limits.with_memory(4 * 1024 * 1024);
+        let runtime = Arc::new(WasmToolRuntime::new(config).unwrap());
+        let prepared = runtime
+            .prepare("no_http_fixture", crate::NO_HTTP_CAP_WASM, None)
+            .await
+            .expect("fixture component must prepare");
+        let wrapper =
+            super::WasmToolWrapper::new(Arc::clone(&runtime), prepared, Capabilities::default());
+        let mut ctx = JobContext::new("Test", "no-http capability gate");
+        let result = wrapper.execute(serde_json::json!({}), &mut ctx).await;
+        let err = result.expect_err("execute must fail without http capability");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("HTTP capability not granted"),
+            "expected host gate string in error, got: {msg}"
+        );
+    }
 }
