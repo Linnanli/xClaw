@@ -159,3 +159,144 @@ async fn req_dasclaw_cli_safety_e14_recorder_must_not_see_raw_token() {
         request.headers
     );
 }
+
+/// Boundary snapshot: when the caller already supplies an
+/// `Authorization` header **and** a `CredentialMapping` matches the same
+/// host, the host injection path **appends** the host header rather than
+/// replacing the caller's. Both end up in the outbound exchange.
+///
+/// This is not necessarily the *desired* long-term behaviour (see ADR-153
+/// §1.1 e14 follow-ups), but it is the contract the production
+/// `dasclaw_net_tools::HttpTool` exposes today. We pin it here so that
+/// any future override-vs-append decision becomes a deliberate
+/// design change rather than a silent regression.
+#[tokio::test(flavor = "multi_thread")]
+async fn req_dasclaw_cli_safety_e14_caller_authorization_header_is_preserved_alongside_injection() {
+    const CALLER_TOKEN: &str = "callertokenbbbbbbbbbbbbbbbb";
+    const HOST_SECRET_NAME: &str = "host_secret";
+    const HOST_SECRET_VALUE: &str = "hosttokenaaaaaaaaaaaaaaaaaa";
+
+    let store = test_secrets_store();
+    seed_secret(&store, TEST_USER, HOST_SECRET_NAME, HOST_SECRET_VALUE).await;
+
+    let registry = Arc::new(SharedCredentialRegistry::new());
+    registry.add_mappings([CredentialMapping::bearer(HOST_SECRET_NAME, TEST_HOST)]);
+
+    let tool = HttpTool::new().with_credentials(registry, store);
+
+    let interceptor = Arc::new(RecordingHttpInterceptor::new("{\"ok\":true}"));
+    let mut ctx = JobContext::with_user(TEST_USER, "e14-coexist", "caller + host authz");
+    ctx.http_interceptor = Some(interceptor.clone());
+
+    let caller_bearer = format!("Bearer {}", CALLER_TOKEN);
+    let args = json!({
+        "method": "GET",
+        "url": format!("https://{}/v1/things", TEST_HOST),
+        "headers": { "Authorization": caller_bearer.clone() },
+    });
+
+    let output = tool
+        .execute(args, &mut ctx)
+        .await
+        .expect("HttpTool::execute should succeed under the interceptor short-circuit");
+    assert!(
+        output.result.get("status").and_then(|s| s.as_u64()) == Some(200),
+        "interceptor short-circuit should surface status 200, got {:?}",
+        output.result
+    );
+
+    let captured = interceptor.captured();
+    assert_eq!(
+        captured.len(),
+        1,
+        "interceptor should observe exactly one outbound request, saw {}",
+        captured.len()
+    );
+    let request = &captured[0];
+
+    let auth_values: Vec<&String> = request
+        .headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+        .map(|(_, value)| value)
+        .collect();
+    assert_eq!(
+        auth_values.len(),
+        2,
+        "expected both caller and host Authorization headers, saw {} (all headers = {:?})",
+        auth_values.len(),
+        request.headers
+    );
+
+    let host_bearer = format!("Bearer {}", HOST_SECRET_VALUE);
+    assert!(
+        auth_values.iter().any(|v| **v == caller_bearer),
+        "caller's Authorization header missing from outbound request; auth_values = {:?}",
+        auth_values
+    );
+    assert!(
+        auth_values.iter().any(|v| **v == host_bearer),
+        "host-injected Authorization header missing from outbound request; auth_values = {:?}",
+        auth_values
+    );
+}
+
+/// Fail-safe: when the secret bound to a host mapping is shaped like an
+/// OpenAI API key (`sk-(?:proj-)?[A-Za-z0-9]{20,}`), the outbound
+/// [`LeakDetector::scan_http_request`] **Block**s the request before any
+/// network exchange is handed to interceptors / recorders. This pins the
+/// ADR-153 §1.1 e14 Fail-Safe contract: the secret never escapes the
+/// host, and the interceptor must see zero requests.
+#[tokio::test(flavor = "multi_thread")]
+async fn req_dasclaw_cli_safety_e14_leak_detector_blocks_openai_shaped_secret_injection() {
+    use dasclaw_tool::ToolError;
+
+    const OPENAI_SHAPED_SECRET_NAME: &str = "openai_key";
+    const OPENAI_SHAPED_SECRET_VALUE: &str = "sk-proj-test1234567890abcdefghij";
+
+    let store = test_secrets_store();
+    seed_secret(
+        &store,
+        TEST_USER,
+        OPENAI_SHAPED_SECRET_NAME,
+        OPENAI_SHAPED_SECRET_VALUE,
+    )
+    .await;
+
+    let registry = Arc::new(SharedCredentialRegistry::new());
+    registry.add_mappings([CredentialMapping::bearer(
+        OPENAI_SHAPED_SECRET_NAME,
+        TEST_HOST,
+    )]);
+
+    let tool = HttpTool::new().with_credentials(registry, store);
+
+    let interceptor = Arc::new(RecordingHttpInterceptor::new("{\"ok\":true}"));
+    let mut ctx = JobContext::with_user(TEST_USER, "e14-failsafe", "leak detector blocks openai");
+    ctx.http_interceptor = Some(interceptor.clone());
+
+    let result = tool
+        .execute(
+            json!({
+                "method": "GET",
+                "url": format!("https://{}/v1/things", TEST_HOST),
+            }),
+            &mut ctx,
+        )
+        .await;
+
+    let err = result.expect_err(
+        "LeakDetector must Block an openai-shaped secret before the outbound exchange leaves the host",
+    );
+    assert!(
+        matches!(err, ToolError::NotAuthorized(_)),
+        "expected ToolError::NotAuthorized from LeakDetector Block, got {:?}",
+        err
+    );
+
+    assert!(
+        interceptor.captured().is_empty(),
+        "interceptor must not observe any outbound request when LeakDetector Blocks; captured = {:?}",
+        interceptor.captured()
+    );
+}
