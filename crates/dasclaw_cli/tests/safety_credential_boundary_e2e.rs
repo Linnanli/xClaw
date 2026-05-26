@@ -4,23 +4,22 @@
 //! Asserts that `dasclaw_net_tools::HttpTool`, wired with a
 //! `SharedCredentialRegistry` + `InMemorySecretsStore`, injects a
 //! secret-backed `Authorization: Bearer …` header into the outbound
-//! request **before** the HTTP exchange leaves the host process, and
-//! that the caller-supplied `params` JSON never contained the raw
-//! secret in the first place.
+//! `reqwest` request **before** the HTTP exchange leaves the host
+//! process, while keeping the post-W6.4c invariant that recorders /
+//! interceptors never observe the raw host-injected secret.
 //!
 //! The host `HttpTool` rejects loopback (`127.0.0.1`) via its SSRF
 //! blocklist, so we cannot stand up a `wiremock` server. Instead we
 //! plug a `RecordingHttpInterceptor` into `JobContext.http_interceptor`,
 //! which short-circuits the real network call and captures the
-//! post-injection request descriptor. See
+//! pre-injection (caller-only) request descriptor. See
 //! `crates/dasclaw_net_tools/src/http.rs` ("Canonical credential
 //! injection path") for the production path this test exercises.
 //!
-//! W6.4b-i delivers the green-path assertion. The companion red test
-//! `req_dasclaw_cli_safety_e14_recorder_must_not_see_raw_token` is
-//! `#[ignore]`-tracked under W6.4c (issue #840), which will land the
-//! caller-headers snapshot fix so that pre-injection headers are
-//! reported to recorders and leak detectors.
+//! W6.4b-i delivers the green-path assertion. W6.4c landed the
+//! caller-headers snapshot fix (issue #840) so that pre-injection
+//! headers are what reach recorders, while the production injection
+//! still mutates the outbound `reqwest` builder.
 //!
 //! Cross-cuts: ADR-114 类 A (no new legacy namespace literals introduced);
 //! ADR-129 verbatim (tests only — production path untouched);
@@ -89,8 +88,12 @@ async fn req_dasclaw_cli_safety_e14_outbound_http_credential_injection_works() {
         output.result
     );
 
-    // Assert: the host injected `Authorization: Bearer <secret>` before the
-    // outbound exchange was handed to the interceptor.
+    // Assert (post-W6.4c): the interceptor sees the **pre-injection**
+    // snapshot, so the host-injected `Authorization: Bearer <secret>` is
+    // **not** observable here. The injection still happens on the
+    // outbound `reqwest` builder (covered by the LeakDetector-block
+    // companion test), but recorders / replay traces never see the raw
+    // secret. See ADR-153 §1.1 e14 and issue #840.
     let captured = interceptor.captured();
     assert_eq!(
         captured.len(),
@@ -102,13 +105,12 @@ async fn req_dasclaw_cli_safety_e14_outbound_http_credential_injection_works() {
     assert_eq!(request.method, "GET");
     assert_eq!(request.url, format!("https://{}/v1/things", TEST_HOST));
 
-    let expected_bearer = format!("Bearer {}", TEST_SECRET_VALUE);
-    let injected = request.headers.iter().any(|(name, value)| {
-        name.eq_ignore_ascii_case("authorization") && value == &expected_bearer
+    let leaked = request.headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("authorization") && value.contains(TEST_SECRET_VALUE)
     });
     assert!(
-        injected,
-        "Authorization: Bearer <secret> header was not injected; captured headers = {:?}",
+        !leaked,
+        "pre-injection snapshot must not contain the raw bearer secret; captured headers = {:?}",
         request.headers
     );
 }
@@ -118,12 +120,11 @@ async fn req_dasclaw_cli_safety_e14_outbound_http_credential_injection_works() {
 /// headers, not the post-injection ones, so that trace/replay artifacts
 /// and leak detectors cannot accidentally persist the raw secret.
 ///
-/// Currently `dasclaw_net_tools::HttpTool` snapshots `headers_vec.clone()`
-/// for the `HttpExchangeRequest` **after** the injection block has
-/// pushed the bearer header, so this assertion fails. Re-enable once
-/// W6.4c lands the pre-injection snapshot.
+/// W6.4c landed the pre-injection `caller_headers_snapshot` in
+/// `dasclaw_net_tools::HttpTool`, so `HttpExchangeRequest.headers`
+/// observed by interceptors / recorders now contains only caller-supplied
+/// headers — never the host-injected bearer secret.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "tracks W6.4c (issue #840): caller-headers snapshot fix for e14"]
 async fn req_dasclaw_cli_safety_e14_recorder_must_not_see_raw_token() {
     let store = test_secrets_store();
     seed_secret(&store, TEST_USER, TEST_SECRET_NAME, TEST_SECRET_VALUE).await;
@@ -160,16 +161,14 @@ async fn req_dasclaw_cli_safety_e14_recorder_must_not_see_raw_token() {
     );
 }
 
-/// Boundary snapshot: when the caller already supplies an
+/// Boundary snapshot (post-W6.4c): when the caller already supplies an
 /// `Authorization` header **and** a `CredentialMapping` matches the same
-/// host, the host injection path **appends** the host header rather than
-/// replacing the caller's. Both end up in the outbound exchange.
+/// host, the host injection path still appends the host header on the
+/// outbound wire (so reqwest sees two `Authorization` headers), but the
+/// pre-injection snapshot handed to `HttpInterceptor` only carries the
+/// caller's header — the host-injected secret never reaches recorders.
 ///
-/// This is not necessarily the *desired* long-term behaviour (see ADR-153
-/// §1.1 e14 follow-ups), but it is the contract the production
-/// `dasclaw_net_tools::HttpTool` exposes today. We pin it here so that
-/// any future override-vs-append decision becomes a deliberate
-/// design change rather than a silent regression.
+/// See ADR-153 §1.1 e14 and issue #840.
 #[tokio::test(flavor = "multi_thread")]
 async fn req_dasclaw_cli_safety_e14_caller_authorization_header_is_preserved_alongside_injection() {
     const CALLER_TOKEN: &str = "callertokenbbbbbbbbbbbbbbbb";
@@ -222,8 +221,8 @@ async fn req_dasclaw_cli_safety_e14_caller_authorization_header_is_preserved_alo
         .collect();
     assert_eq!(
         auth_values.len(),
-        2,
-        "expected both caller and host Authorization headers, saw {} (all headers = {:?})",
+        1,
+        "expected exactly the caller's Authorization in pre-injection snapshot, saw {} (all headers = {:?})",
         auth_values.len(),
         request.headers
     );
@@ -231,12 +230,12 @@ async fn req_dasclaw_cli_safety_e14_caller_authorization_header_is_preserved_alo
     let host_bearer = format!("Bearer {}", HOST_SECRET_VALUE);
     assert!(
         auth_values.iter().any(|v| **v == caller_bearer),
-        "caller's Authorization header missing from outbound request; auth_values = {:?}",
+        "caller's Authorization header missing from pre-injection snapshot; auth_values = {:?}",
         auth_values
     );
     assert!(
-        auth_values.iter().any(|v| **v == host_bearer),
-        "host-injected Authorization header missing from outbound request; auth_values = {:?}",
+        auth_values.iter().all(|v| **v != host_bearer),
+        "host-injected Authorization must NOT appear in pre-injection snapshot (would leak raw secret); auth_values = {:?}",
         auth_values
     );
 }

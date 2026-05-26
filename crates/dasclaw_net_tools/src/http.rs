@@ -545,6 +545,13 @@ impl Tool for HttpTool {
         // Red line: do NOT add credential injection to
         // `crates/dasclaw_net_proxy` — the verbatim drift guard
         // (`scripts/check_codex_net_proxy_drift.py`) will fail.
+        // W6.4c: snapshot headers before credential injection so recorders /
+        // replay traces never observe the raw host-injected secret. The
+        // post-injection `headers_vec` is still used by `LeakDetector` and the
+        // outbound `reqwest` builder; only the `HttpExchangeRequest` descriptor
+        // handed to `HttpInterceptor` uses this pre-injection snapshot.
+        // See ADR-153 §1.1 e14 and issue #840.
+        let caller_headers_snapshot = headers_vec.clone();
         if let (Some(registry), Some(store)) = (
             self.credential_registry.as_ref(),
             self.secrets_store.as_ref(),
@@ -590,7 +597,7 @@ impl Tool for HttpTool {
         let intercept_req = dasclaw_runtime::recording::HttpExchangeRequest {
             method: method_upper,
             url: parsed_url.to_string(),
-            headers: headers_vec.clone(),
+            headers: caller_headers_snapshot,
             body: body_bytes
                 .as_ref()
                 .map(|b| String::from_utf8_lossy(b).into_owned()),
