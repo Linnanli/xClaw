@@ -41,6 +41,17 @@ pub const WIT_TOOL_VERSION: &str = "0.3.0";
 /// Channel WIT interface version (matches `desktop-client/ironclaw/wit/channel.wit`).
 pub const WIT_CHANNEL_VERSION: &str = "0.3.0";
 
+/// Minimal HTTP fixture WASM component for capability opt-in tests (#854).
+///
+/// Built from `tests/fixtures/minimal_http_component/` via `build.rs`. On
+/// `execute()` the fixture attempts a host `http-request`; when the host has
+/// no `http` capability granted, the host returns the error string
+/// `"HTTP capability not granted"`, which surfaces in the tool response.
+///
+/// Used by `dasclaw_wasm_tools` self-tests and downstream `dasclaw_cli` A7 e2e.
+pub const NO_HTTP_CAP_WASM: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/minimal_http_component.wasm"));
+
 // Core re-exports (mirror of the historical `tools/wasm/mod.rs` block, minus
 // the two modules that stay in the desktop crate).
 pub use error::WasmError;
