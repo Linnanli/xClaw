@@ -52,6 +52,7 @@ use dasclaw_runtime::{Agent, AgentError, AgentResponder, ToolExecutor};
 
 pub mod mcp;
 pub mod provider;
+pub mod sandbox_exec;
 pub mod tools;
 #[cfg(feature = "wasm-tools")]
 pub mod wasm;
