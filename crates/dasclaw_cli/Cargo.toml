@@ -52,6 +52,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # they prefer.
 dasclaw_safety = { path = "../dasclaw_safety", features = ["egress-gate"] }
 dasclaw_governance = { path = "../dasclaw_governance" }
+# W6.4 e11 (ADR-153 §1.1, A5 L1 path-escape): tests/safety_path_escape_e2e.rs
+# constructs a capability-bound workspace and asserts that paths escaping
+# the root surface as a tool error rather than a host crash.
+dasclaw_workspace_cap = { path = "../dasclaw_workspace_cap" }
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
 wiremock = "0.6"
