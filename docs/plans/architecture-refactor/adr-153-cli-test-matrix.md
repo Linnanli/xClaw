@@ -196,6 +196,7 @@ python3.12 scripts/check_no_panics.py --base origin/xClaw
 
 - **R1**：A6（L2 sandbox）需要 `dasclaw_sandbox` 暴露一个 "default-deny policy 工厂"；当前接口可能要新增 `default_policy_headless()`。**先 issue，不在本批 PR 内做**。
 - **R2**：A7（WASM capability）需要 fixture .wasm 二进制；`dasclaw_wasm_tools` 是否已有 test fixture wasm 待确认；若无要么放进 W6.6，要么用 wasm-bindgen-test 现造。
+  - **2026 W6.6c 评估结论**：`dasclaw_wasm_tools` **没有** fixture wasm；CLI tests 目录也无 `.wasm`/`.wat`。W6.6c 选择 **路径 C**：A7 阻塞于 fixture 缺失，先在 `dasclaw_wasm_tools`（capability owner）开 fixture issue，CLI A7 e2e 等 fixture 落地后再做。理由：把 fixture 工程做在 wasm_tools owner crate 内，desktop/CLI 共享；CLI 单独造会跨边界拉 `cargo-component` / `wit-component` 依赖。
 - **R3**：B6 大 payload 测试需要确认 `dasclaw_runtime` 是否真的把 `sanitize_for_stash` 接到回路。Round 0 验证：`rg "sanitize_for_stash" crates/dasclaw_runtime/` —— 若 0 命中，B6 也变成 "接线 + 测试" 两步。
 - **R4**：所有 P0 case 都依赖 G1 改造。G1 改造若用 builder pattern，会牵动现有 `tool_e2e.rs` / `mcp_e2e.rs` 的调用形式；改 API 时**保持 `run` / `run_with_tools` 兼容签名不动**，新增 `run_with_hooks`，避免连锁炸现有 e1–e6。
 
