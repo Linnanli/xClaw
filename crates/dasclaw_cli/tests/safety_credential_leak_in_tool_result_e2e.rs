@@ -63,8 +63,14 @@ async fn req_dasclaw_cli_safety_e9_tool_result_credential_redacted() {
         .build()
         .expect("build agent");
 
-    let reply = agent.run("dump env").await.expect("agent.run should succeed");
-    assert_eq!(reply, FINAL_REPLY, "final reply should match scripted turn 2");
+    let reply = agent
+        .run("dump env")
+        .await
+        .expect("agent.run should succeed");
+    assert_eq!(
+        reply, FINAL_REPLY,
+        "final reply should match scripted turn 2"
+    );
 
     // --- Assertion 1: second LLM turn's ctx.messages tool_result is redacted.
     let snapshot = responder
