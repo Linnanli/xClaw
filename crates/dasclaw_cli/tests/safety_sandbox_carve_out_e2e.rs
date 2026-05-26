@@ -22,11 +22,12 @@
 //!
 //! The decision-layer policy in `dasclaw_workspace_cap` also carves out
 //! `.dasclaw/` (with `protect_missing_project_meta=true`), but the
-//! kernel projection in `dasclaw_protocol::permissions` currently only
-//! emits `.git` + `.codex` exclusions to seatbelt. This test pins **only
-//! the kernel-enforced subset** so it reflects what actually happens on
-//! the wire; tightening kernel-layer `.dasclaw` enforcement is tracked
-//! separately and is out of scope for #870.
+//! kernel projection in `dasclaw_protocol::permissions::
+//! default_read_only_subpaths_for_writable_root` currently only emits
+//! `.git` + `.codex` exclusions to seatbelt. The `.dasclaw` row below
+//! is therefore **expected to fail** today; it is intentionally shipped
+//! red as a TDD pin against the missing kernel projection. Follow-up
+//! work to extend the projection to `.dasclaw/` is tracked in #874.
 //!
 //! ## Test rows
 //!
@@ -34,7 +35,10 @@
 //!    policy actually emits the carve-out (`.git` / `.codex` carves
 //!    only trigger when the directory is present, mirroring upstream
 //!    `codex` behaviour).
-//! 2. Regular subdir control — proves the carve-out is targeted and
+//! 2. `.dasclaw/state` — RED. Pins the policy gap: the decision layer
+//!    intends to carve `.dasclaw/`, but kernel projection does not
+//!    emit the exclusion, so the write currently lands on disk.
+//! 3. Regular subdir control — proves the carve-out is targeted and
 //!    not just "WorkspaceWrite denies everything".
 
 #![cfg(target_os = "macos")]
@@ -57,8 +61,8 @@ use sandbox_bash_executor::{
 /// the rationale: on macOS `tempfile::tempdir` lives under `$TMPDIR`,
 /// and a `$TMPDIR` writable root only carries cwd-bound carve-outs when
 /// `root == cwd`. Excluding both `/tmp` and `$TMPDIR` keeps cwd the
-/// only writable root, so the `.git` / `.codex` carve-outs are the
-/// only thing standing between the agent and the sensitive file.
+/// only writable root, so the `.git` / `.dasclaw` / `.codex` carve-outs
+/// are the only thing standing between the agent and the sensitive file.
 fn cwd_only_workspace_write() -> SandboxPolicy {
     SandboxPolicy::WorkspaceWrite {
         writable_roots: Vec::new(),
@@ -127,6 +131,54 @@ async fn req_dasclaw_cli_loop_a6c_carve_out_denies_dot_git_and_dot_codex() {
     assert!(
         !codex_target.exists(),
         ".codex carve-out breached: file created at {codex_target:?}"
+    );
+}
+
+/// A6c **RED** — `.dasclaw/` should be carved out alongside `.git` and
+/// `.codex`, but the kernel projection in
+/// `dasclaw_protocol::permissions::default_read_only_subpaths_for_writable_root`
+/// currently does not emit it. This test is shipped failing on purpose
+/// as a TDD pin; flip green once the projection is extended (see #874).
+#[tokio::test]
+async fn req_dasclaw_cli_loop_a6c_carve_out_denies_dot_dasclaw() {
+    let tempdir = tempfile::tempdir().expect("create tempdir");
+    let cwd = tempdir.path();
+    let dot_dasclaw = cwd.join(".dasclaw");
+    fs::create_dir(&dot_dasclaw).expect("seed .dasclaw dir so policy emits carve-out");
+
+    let dasclaw_target = dot_dasclaw.join("state");
+    let dasclaw_path_str = dasclaw_target.to_string_lossy().into_owned();
+
+    let executor = SandboxedBashExecutor::new(cwd_only_workspace_write(), cwd.to_path_buf());
+
+    let responder = ScriptedResponder::with_queue(vec![
+        tool_call_turn(
+            "bash",
+            "call-carve-dasclaw-1",
+            json!({ "command": format!("echo pwn > {dasclaw_path_str}") }),
+        ),
+        ack_turn(),
+    ]);
+
+    let outcome = dasclaw_cli::run_with_tools_and_hooks(
+        responder,
+        executor,
+        vec![bash_tool_def()],
+        HookBundle::noop(),
+        "you are running inside a sandboxed CLI",
+        "please attempt to write inside .dasclaw",
+    )
+    .await;
+
+    assert!(
+        outcome.is_ok(),
+        "agent loop must not crash on carve-out denial, got {outcome:?}"
+    );
+    assert!(
+        !dasclaw_target.exists(),
+        ".dasclaw carve-out breached: file created at {dasclaw_target:?} \
+         (kernel projection in default_read_only_subpaths_for_writable_root \
+          does not emit .dasclaw; tracked by #874)"
     );
 }
 

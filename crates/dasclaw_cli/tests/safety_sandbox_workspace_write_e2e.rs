@@ -21,7 +21,7 @@
 //!   territory; see [`cli_sandbox_default_deny_e2e.rs`] for the A6
 //!   binary-seam contract).
 //! - Not exercising the writable-root hole-in-hole carve-out logic
-//!   (`.git` / `.codex`). That is A6c, lives in
+//!   (`.git` / `.dasclaw` / `.codex`). That is A6c, lives in
 //!   [`safety_sandbox_carve_out_e2e.rs`].
 
 #![cfg(target_os = "macos")]
