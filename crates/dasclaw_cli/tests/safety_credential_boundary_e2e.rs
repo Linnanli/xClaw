@@ -22,7 +22,7 @@
 //! caller-headers snapshot fix so that pre-injection headers are
 //! reported to recorders and leak detectors.
 //!
-//! Cross-cuts: ADR-114 类 A (no new `.ironclaw` literals);
+//! Cross-cuts: ADR-114 类 A (no new legacy namespace literals introduced);
 //! ADR-129 verbatim (tests only — production path untouched);
 //! ADR-153 §1.1 e14.
 
@@ -38,7 +38,7 @@ use serde_json::json;
 #[path = "fixtures/credential_test_helpers.rs"]
 mod credential_test_helpers;
 
-use credential_test_helpers::{seed_secret, test_secrets_store, RecordingHttpInterceptor};
+use credential_test_helpers::{RecordingHttpInterceptor, seed_secret, test_secrets_store};
 
 const TEST_USER: &str = "test-user-e14";
 const TEST_SECRET_NAME: &str = "openai_api_key";
@@ -103,10 +103,9 @@ async fn req_dasclaw_cli_safety_e14_outbound_http_credential_injection_works() {
     assert_eq!(request.url, format!("https://{}/v1/things", TEST_HOST));
 
     let expected_bearer = format!("Bearer {}", TEST_SECRET_VALUE);
-    let injected = request
-        .headers
-        .iter()
-        .any(|(name, value)| name.eq_ignore_ascii_case("authorization") && value == &expected_bearer);
+    let injected = request.headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("authorization") && value == &expected_bearer
+    });
     assert!(
         injected,
         "Authorization: Bearer <secret> header was not injected; captured headers = {:?}",
@@ -151,10 +150,9 @@ async fn req_dasclaw_cli_safety_e14_recorder_must_not_see_raw_token() {
     let captured = interceptor.captured();
     assert_eq!(captured.len(), 1);
     let request = &captured[0];
-    let leaked = request
-        .headers
-        .iter()
-        .any(|(name, value)| name.eq_ignore_ascii_case("authorization") && value.contains(TEST_SECRET_VALUE));
+    let leaked = request.headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("authorization") && value.contains(TEST_SECRET_VALUE)
+    });
     assert!(
         !leaked,
         "recorder snapshot must not contain the raw bearer secret; captured headers = {:?}",

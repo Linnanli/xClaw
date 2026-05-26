@@ -8,7 +8,7 @@
 //! `JobContext` and captures the post-injection `HttpExchangeRequest`
 //! before any TLS handshake occurs.
 //!
-//! Cross-cuts: ADR-114 类 A (no new `.ironclaw` literals);
+//! Cross-cuts: ADR-114 类 A (no new legacy namespace literals introduced);
 //! ADR-129 verbatim discipline (no behaviour changes to the production
 //! injection path under test).
 
@@ -32,10 +32,8 @@ const TEST_MASTER_KEY: &str = "0123456789abcdef0123456789abcdef";
 
 /// Build a fresh `InMemorySecretsStore` wired to a 32-byte test master key.
 pub fn test_secrets_store() -> Arc<InMemorySecretsStore> {
-    let crypto =
-        SecretsCrypto::new(SecretString::from(TEST_MASTER_KEY.to_string())).expect(
-            "32-byte master key must satisfy SecretsCrypto::new minimum-length check",
-        );
+    let crypto = SecretsCrypto::new(SecretString::from(TEST_MASTER_KEY.to_string()))
+        .expect("32-byte master key must satisfy SecretsCrypto::new minimum-length check");
     Arc::new(InMemorySecretsStore::new(Arc::new(crypto)))
 }
 
@@ -90,10 +88,7 @@ impl RecordingHttpInterceptor {
 
 #[async_trait]
 impl HttpInterceptor for RecordingHttpInterceptor {
-    async fn before_request(
-        &self,
-        request: &HttpExchangeRequest,
-    ) -> Option<HttpExchangeResponse> {
+    async fn before_request(&self, request: &HttpExchangeRequest) -> Option<HttpExchangeResponse> {
         self.captured
             .lock()
             .expect("RecordingHttpInterceptor mutex poisoned")
