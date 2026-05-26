@@ -64,6 +64,13 @@ dasclaw_workspace_cap = { path = "../dasclaw_workspace_cap" }
 # SSRF blocklist refuses 127.0.0.1, so wiremock is not usable here).
 dasclaw_net_tools = { path = "../dasclaw_net_tools" }
 dasclaw_wasm_tools = { path = "../dasclaw_wasm_tools" }
+# W6.6b (ADR-153 §1.1 A6 / e12, L2 sub-process sandbox default-deny):
+# tests/safety_sandbox_default_deny_e2e.rs wires a `bash` tool whose
+# ToolExecutor runs commands through SandboxedExecutor under the
+# headless ReadOnly policy and asserts that writes are kernel-enforced
+# denied (macOS Seatbelt path; Linux + Windows tracked separately).
+dasclaw_exec = { path = "../dasclaw_exec" }
+dasclaw_sandbox = { path = "../dasclaw_sandbox" }
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util", "sync"] }
 wiremock = "0.6"
