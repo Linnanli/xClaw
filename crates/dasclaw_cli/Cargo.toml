@@ -56,6 +56,14 @@ dasclaw_governance = { path = "../dasclaw_governance" }
 # constructs a capability-bound workspace and asserts that paths escaping
 # the root surface as a tool error rather than a host crash.
 dasclaw_workspace_cap = { path = "../dasclaw_workspace_cap" }
+# W6.4b-i (ADR-153 §1.1 e14, outbound HTTP credential injection):
+# tests/safety_credential_boundary_e2e.rs builds HttpTool with a
+# SharedCredentialRegistry + InMemorySecretsStore, then uses an
+# HttpInterceptor short-circuit to assert the secret is injected into
+# the outbound request without touching the real network (the host
+# SSRF blocklist refuses 127.0.0.1, so wiremock is not usable here).
+dasclaw_net_tools = { path = "../dasclaw_net_tools" }
+dasclaw_wasm_tools = { path = "../dasclaw_wasm_tools" }
 tempfile = "3"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util", "sync"] }
 wiremock = "0.6"
