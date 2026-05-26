@@ -27,6 +27,7 @@ use dasclaw_cli::mcp::load_executor as load_mcp_executor;
 use dasclaw_cli::provider::{ProviderArgs, build_responder};
 use dasclaw_cli::tools::default_builtins;
 use dasclaw_cli::{EchoResponder, run, run_with_tools};
+use dasclaw_core::messages::ToolDefinition;
 use dasclaw_runtime::{CompositeToolExecutor, ToolExecutor};
 const DEFAULT_SYSTEM: &str = "You are dasclaw, a headless agent.";
 
@@ -107,61 +108,72 @@ async fn real_main() -> Result<()> {
             .context("echo agent run failed")?,
         Command::Run { provider, tools } => {
             let responder = build_responder(&provider).context("building LLM responder")?;
-
-            // Step 8 (ADR-153 §4.4.5): assemble the tool stack from
-            // whichever sources the user opted in to. Branch explicitly
-            // on the four (enable_tools × mcp_config) combinations to
-            // keep the `run_with_tools` generic signature happy.
-            match (tools.enable_tools, tools.mcp_config.as_deref()) {
-                (false, None) => run(responder, &cli.system, prompt)
+            let assembled = assemble_tool_executor(&tools).await?;
+            match assembled {
+                None => run(responder, &cli.system, prompt)
                     .await
                     .context("LLM agent run failed")?,
-                (true, None) => {
-                    let executor = default_builtins();
-                    let definitions = executor.definitions();
+                Some((executor, definitions)) => {
                     run_with_tools(responder, executor, definitions, &cli.system, prompt)
                         .await
-                        .context("LLM agent (with builtin tools) run failed")?
-                }
-                (false, Some(path)) => {
-                    let executor = load_mcp_executor(path)
-                        .await
-                        .with_context(|| format!("loading MCP config {}", path.display()))?;
-                    let definitions = executor.definitions();
-                    run_with_tools(responder, executor, definitions, &cli.system, prompt)
-                        .await
-                        .context("LLM agent (with MCP tools) run failed")?
-                }
-                (true, Some(path)) => {
-                    let static_exec = default_builtins();
-                    let static_defs = static_exec.definitions();
-                    let static_names: Vec<String> =
-                        static_defs.iter().map(|d| d.name.clone()).collect();
-
-                    let mcp_exec = load_mcp_executor(path)
-                        .await
-                        .with_context(|| format!("loading MCP config {}", path.display()))?;
-                    let mcp_defs = mcp_exec.definitions();
-                    let mcp_names: Vec<String> = mcp_defs.iter().map(|d| d.name.clone()).collect();
-
-                    let mut definitions = static_defs;
-                    definitions.extend(mcp_defs);
-
-                    let composite = CompositeToolExecutor::new([
-                        (static_names, Arc::new(static_exec) as Arc<dyn ToolExecutor>),
-                        (mcp_names, Arc::new(mcp_exec) as Arc<dyn ToolExecutor>),
-                    ])
-                    .context("merging tool executors (duplicate tool name?)")?;
-
-                    run_with_tools(responder, composite, definitions, &cli.system, prompt)
-                        .await
-                        .context("LLM agent (with composite tools) run failed")?
+                        .context("LLM agent (with tools) run failed")?
                 }
             }
         }
     };
     println!("{reply}");
     Ok(())
+}
+
+/// Collect every tool source the user opted into and merge them via
+/// [`CompositeToolExecutor`].
+///
+/// Returns `None` when no source is enabled — the caller falls back to
+/// the plain [`run`] entry. Returning `Some((executor, defs))` for the
+/// uniform `≥1 source` case keeps the call site free of the
+/// combinatorial branch explosion that the original
+/// `(enable_tools × mcp_config × …)` match would grow into as each new
+/// tool source (e.g. ADR-153 §1.1 A7 wasm tools) lands.
+async fn assemble_tool_executor(
+    tools: &ToolArgs,
+) -> Result<Option<(CompositeToolExecutor, Vec<ToolDefinition>)>> {
+    let mut sources: Vec<(Vec<String>, Arc<dyn ToolExecutor>)> = Vec::new();
+    let mut definitions: Vec<ToolDefinition> = Vec::new();
+
+    if tools.enable_tools {
+        let exec = default_builtins();
+        let defs = exec.definitions();
+        push_source(&mut sources, &mut definitions, defs, Arc::new(exec));
+    }
+
+    if let Some(path) = tools.mcp_config.as_deref() {
+        let exec = load_mcp_executor(path)
+            .await
+            .with_context(|| format!("loading MCP config {}", path.display()))?;
+        let defs = exec.definitions();
+        push_source(&mut sources, &mut definitions, defs, Arc::new(exec));
+    }
+
+    if sources.is_empty() {
+        return Ok(None);
+    }
+    let composite = CompositeToolExecutor::new(sources)
+        .context("merging tool executors (duplicate tool name?)")?;
+    Ok(Some((composite, definitions)))
+}
+
+/// Push one tool source into the accumulator: the executor is stored
+/// keyed by the tool names it owns, and the matching [`ToolDefinition`]s
+/// are appended to the advertised schema list.
+fn push_source(
+    sources: &mut Vec<(Vec<String>, Arc<dyn ToolExecutor>)>,
+    definitions: &mut Vec<ToolDefinition>,
+    defs: Vec<ToolDefinition>,
+    executor: Arc<dyn ToolExecutor>,
+) {
+    let names: Vec<String> = defs.iter().map(|d| d.name.clone()).collect();
+    definitions.extend(defs);
+    sources.push((names, executor));
 }
 
 fn init_tracing() {
