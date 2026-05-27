@@ -89,7 +89,7 @@ fn ensure_owned_job(
 }
 
 async fn stop_active_job(
-    scheduler: Option<std::sync::Arc<ironclaw::agent::Scheduler>>,
+    scheduler: Option<std::sync::Arc<ironclaw::agent::JobDispatcher>>,
     job_id: Uuid,
     job_state: JobState,
 ) -> Result<(), String> {
