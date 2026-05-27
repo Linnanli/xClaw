@@ -1431,6 +1431,15 @@ mod tests {
                 "--ro-bind".to_string(),
                 "/dev/null".to_string(),
                 "/.codex".to_string(),
+                // CODEX-DRIFT-IGNORE-START: dasclaw .dasclaw carve-out (#874, ADR-136 amendment 3)
+                // Symmetric carve-out for the dasclaw-native `.dasclaw`
+                // subpath. Projected right after `.codex` to mirror the
+                // protocol-layer subpath ordering emitted by
+                // `default_read_only_subpaths_for_writable_root`.
+                "--ro-bind".to_string(),
+                "/dev/null".to_string(),
+                "/.dasclaw".to_string(),
+                // CODEX-DRIFT-IGNORE-END
                 // Rebind /dev after the root bind so device nodes remain
                 // writable/usable inside the writable root.
                 "--bind".to_string(),

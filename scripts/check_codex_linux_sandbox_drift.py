@@ -81,6 +81,51 @@ SWAP_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 _USE_RE = re.compile(r"^\s*use\s+")
 _ATTR_RE = re.compile(r"^\s*#\[")
 
+# Marker comments that delimit dasclaw-local extensions inside an otherwise
+# verbatim-ported file. Lines between a START / END pair are stripped before
+# hashing so they don't show up as drift. Mirrors the same machinery in
+# check_codex_protocol_drift.py (ADR-136 amendment 3 / #874 authorization).
+_DRIFT_IGNORE_START_RE = re.compile(r"^\s*//\s*CODEX-DRIFT-IGNORE-START\b")
+_DRIFT_IGNORE_END_RE = re.compile(r"^\s*//\s*CODEX-DRIFT-IGNORE-END\b")
+
+
+def _strip_drift_ignore_blocks(text: str, source_label: str) -> str:
+    """Remove lines between paired CODEX-DRIFT-IGNORE markers.
+
+    When a marker block is preceded by a blank line that exists solely to
+    separate the local extension from the upstream code above, that blank
+    line is also dropped so the surrounding whitespace matches upstream
+    after the block is removed.
+
+    Raises SystemExit if a START marker has no matching END (or vice
+    versa) so misuse fails loudly rather than silently widening the
+    exemption surface.
+    """
+    out: list[str] = []
+    skip = False
+    for lineno, line in enumerate(text.split("\n"), start=1):
+        if not skip and _DRIFT_IGNORE_START_RE.match(line):
+            if out and out[-1] == "":
+                out.pop()
+            skip = True
+            continue
+        if skip and _DRIFT_IGNORE_END_RE.match(line):
+            skip = False
+            continue
+        if not skip and _DRIFT_IGNORE_END_RE.match(line):
+            raise SystemExit(
+                f"ERROR: {source_label}:{lineno}: stray "
+                f"// CODEX-DRIFT-IGNORE-END without matching START"
+            )
+        if not skip:
+            out.append(line)
+    if skip:
+        raise SystemExit(
+            f"ERROR: {source_label}: unterminated // CODEX-DRIFT-IGNORE-START "
+            f"block; missing matching // CODEX-DRIFT-IGNORE-END"
+        )
+    return "\n".join(out)
+
 
 def _sort_use_blocks(text: str) -> str:
     """Sort consecutive `use ...;` lines alphabetically.
@@ -151,7 +196,8 @@ def _collapse_ws(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def normalize_local(text: str) -> str:
+def normalize_local(text: str, source_label: str) -> str:
+    text = _strip_drift_ignore_blocks(text, source_label)
     for pat, repl in SWAP_PATTERNS:
         text = pat.sub(repl, text)
     return _collapse_ws(_sort_use_blocks(text))
@@ -173,7 +219,12 @@ def _check_pair(local: Path, upstream: Path, *, swap: bool) -> str | None:
         return f"upstream missing: {upstream.relative_to(REPO_ROOT)}"
     local_text = local.read_text(encoding="utf-8")
     upstream_text = upstream.read_text(encoding="utf-8")
-    local_norm = normalize_local(local_text) if swap else local_text
+    source_label = str(local.relative_to(REPO_ROOT))
+    local_norm = (
+        normalize_local(local_text, source_label)
+        if swap
+        else _strip_drift_ignore_blocks(local_text, source_label)
+    )
     upstream_norm = normalize_upstream(upstream_text) if swap else upstream_text
     if sha(local_norm) != sha(upstream_norm):
         suffix = (
