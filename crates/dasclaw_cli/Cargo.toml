@@ -111,3 +111,9 @@ predicates = "3"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util", "sync"] }
 wiremock = "0.6"
+# PR3 demo: insta snapshot testing. One demo test in
+# tests/insta_snapshot_demo_e2e.rs pins the `dasclaw-cli --help` output so
+# unintended CLI surface drift surfaces as a snapshot diff. Other tests
+# can opt in by adding their own `insta::assert_snapshot!(...)` calls and
+# committing the generated `tests/snapshots/*.snap` baseline.
+insta = "1.46.3"

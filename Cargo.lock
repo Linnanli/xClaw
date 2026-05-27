@@ -2889,6 +2889,7 @@ dependencies = [
  "dasclaw_tool",
  "dasclaw_wasm_tools",
  "dasclaw_workspace_cap",
+ "insta",
  "predicates",
  "secrecy",
  "serde",

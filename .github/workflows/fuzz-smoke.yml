@@ -1,0 +1,113 @@
+# Nightly fuzz smoke workflow (PR3).
+#
+# Runs every cargo-fuzz target in this fork for a short bounded duration
+# so regressions in the safety/tools parsers surface within 24h instead of
+# waiting for an opportunistic manual run.
+#
+# Scope:
+#   - crates/dasclaw_safety/fuzz/ (5 targets)
+#   - desktop-client/ironclaw/fuzz/ (1 target)
+#
+# This workflow is NOT wired into PR gates or `coverage-gate`. It runs
+# nightly on schedule and on manual dispatch only. Per-step failures do
+# not fail the whole job — corpus artifacts are uploaded for triage.
+#
+# Budget: 6 targets × 60s ≈ 6 min total runtime, well under the 30 min cap.
+
+name: Fuzz Smoke (nightly)
+
+on:
+  schedule:
+    # 06:00 UTC daily (~14:00 CST / 23:00 PT)
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: fuzz-smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz-smoke:
+    name: Fuzz smoke (libfuzzer, bounded)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Run dasclaw_safety fuzz targets
+        id: safety_fuzz
+        continue-on-error: true
+        working-directory: crates/dasclaw_safety/fuzz
+        run: |
+          set +e
+          failed=0
+          for target in fuzz_config_env fuzz_credential_detect fuzz_leak_detector fuzz_safety_sanitizer fuzz_safety_validator; do
+            echo "::group::dasclaw_safety :: $target"
+            cargo fuzz run "$target" -- -runs=10000 -max_total_time=60
+            rc=$?
+            echo "::endgroup::"
+            if [ "$rc" -ne 0 ]; then
+              echo "FAIL: dasclaw_safety/$target (exit $rc)"
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+      - name: Run ironclaw fuzz targets
+        id: ironclaw_fuzz
+        continue-on-error: true
+        working-directory: desktop-client/ironclaw/fuzz
+        run: |
+          set +e
+          failed=0
+          for target in fuzz_tool_params; do
+            echo "::group::ironclaw :: $target"
+            cargo fuzz run "$target" -- -runs=10000 -max_total_time=60
+            rc=$?
+            echo "::endgroup::"
+            if [ "$rc" -ne 0 ]; then
+              echo "FAIL: ironclaw/$target (exit $rc)"
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+      - name: Upload dasclaw_safety crash artifacts (on failure)
+        if: steps.safety_fuzz.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-dasclaw_safety
+          path: crates/dasclaw_safety/fuzz/artifacts/**
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload ironclaw crash artifacts (on failure)
+        if: steps.ironclaw_fuzz.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-ironclaw
+          path: desktop-client/ironclaw/fuzz/artifacts/**
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Summarize fuzz run
+        if: always()
+        run: |
+          echo "## Fuzz smoke summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- dasclaw_safety: ${{ steps.safety_fuzz.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ironclaw: ${{ steps.ironclaw_fuzz.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.safety_fuzz.outcome }}" = "failure" ] || [ "${{ steps.ironclaw_fuzz.outcome }}" = "failure" ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "One or more fuzz targets failed. See uploaded \`fuzz-artifacts-*\` for crash corpora." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
