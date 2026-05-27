@@ -13,7 +13,7 @@ ADR-153 把 x-claw 演化成 headless agent 框架；落地后必须回答两个
 1. **安全侧**：headless 入口（`dasclaw_cli`）是否真的把 13-md 的 9 层防御接到 Agent 主回路？没接线时默认是否 Fail-Safe？
 2. **解题侧**：Agent 在多工具协作、错误恢复、长程推理、上下文管理等维度下能否稳定完成任务？
 
-本 ADR 给出 **18 个 e2e 集成测试用例（e7–e26）** 的设计矩阵 + **2 条代码接线缺口（G1/G2）** + **6 波 PR 节奏（W6.1–W6.6）**。
+本 ADR 给出 **20 个 e2e 集成测试用例（e7–e26）** 的设计矩阵 + **2 条代码接线缺口（G1/G2）** + **6 波 PR 节奏（W6.1–W6.6）**。
 
 ---
 
@@ -194,11 +194,24 @@ python3.12 scripts/check_no_panics.py --base origin/xClaw
 
 ## 5. 风险与未解问题
 
-- **R1**：A6（L2 sandbox）需要 `dasclaw_sandbox` 暴露一个 "default-deny policy 工厂"；当前接口可能要新增 `default_policy_headless()`。**先 issue，不在本批 PR 内做**。
-- **R2**：A7（WASM capability）需要 fixture .wasm 二进制；`dasclaw_wasm_tools` 是否已有 test fixture wasm 待确认；若无要么放进 W6.6，要么用 wasm-bindgen-test 现造。
-  - **2026 W6.6c 评估结论**：`dasclaw_wasm_tools` **没有** fixture wasm；CLI tests 目录也无 `.wasm`/`.wat`。W6.6c 选择 **路径 C**：A7 阻塞于 fixture 缺失，先在 `dasclaw_wasm_tools`（capability owner）开 fixture issue，CLI A7 e2e 等 fixture 落地后再做。理由：把 fixture 工程做在 wasm_tools owner crate 内，desktop/CLI 共享；CLI 单独造会跨边界拉 `cargo-component` / `wit-component` 依赖。
-- **R3**：B6 大 payload 测试需要确认 `dasclaw_runtime` 是否真的把 `sanitize_for_stash` 接到回路。Round 0 验证：`rg "sanitize_for_stash" crates/dasclaw_runtime/` —— 若 0 命中，B6 也变成 "接线 + 测试" 两步。
+- **R1**：A6（L2 sandbox）原计划需要 `dasclaw_sandbox` 暴露一个 "default-deny policy 工厂"（`default_policy_headless()`）。
+  - **2026-05-25 修订**：实际由 PR #879（sandbox-exec subcommand）+ PR #880（ShellTool via ToolToExecutorAdapter）走另一条路径落地，原 `default_policy_headless()` API 提案作废。R1 状态：**已交付**（走变通路径）。
+- **R2**：A7（WASM capability）需要 fixture .wasm 二进制。
+  - **2026-05-25 修订**：`crates/dasclaw_wasm_tools/tests/fixtures/minimal_http_component/` 下已存在 `dasclaw_wasm_tools_fixture_minimal_http.wasm`，fixture 阻塞已解除。CLI 侧已存在 `safety_wasm_capability_optin_e2e.rs` 及三个相关 capability 测试文件。剩余工作（核对是否真用了 fixture、是否跑通）已开 issue #883 跟踪。R2 状态：**fixture 已就绪，落地核对追踪中**。
+- **R3**：B6 大 payload 测试需要确认 `dasclaw_runtime` 是否真的把 `sanitize_for_stash` 接到回路。
+  - **2026-05-25 修订**：`rg sanitize_for_stash crates/dasclaw_runtime/` 仅命中 `agent.rs:97,462` 两处注释，原文是"调用方可以注入"——runtime 默认回路**未接线**。B6/e22 测试是靠测试侧手动注入 SafetyLayer 才过。已开 issue #882 跟踪 runtime 默认接线工作。R3 状态：**未接线，issue 跟踪中**。
 - **R4**：所有 P0 case 都依赖 G1 改造。G1 改造若用 builder pattern，会牵动现有 `tool_e2e.rs` / `mcp_e2e.rs` 的调用形式；改 API 时**保持 `run` / `run_with_tools` 兼容签名不动**，新增 `run_with_hooks`，避免连锁炸现有 e1–e6。
+  - **2026-05-25 修订**：G1 已通过 `crates/dasclaw_cli/tests/run_with_hooks_wiring.rs` 完成接线，e1–e6 未受影响。R4 状态：**已交付**。
+
+### 5.1 P2 / W6.6 收尾 issue（2026-05-25 开）
+
+| ADR 矩阵编号 | issue | 内容 |
+|---|---|---|
+| A7 / §5 R2 | #883 | WASM capability opt-in 实测核对（fixture 已就绪） |
+| A10 | #884 | egress audit log e2e |
+| B9 | #885 | agent cancel 语义 |
+| B10 | #886 | stdio + HTTP MCP merge |
+| §5 R3 接线 | #882 | runtime 默认接 `sanitize_for_stash` |
 
 ---
 
