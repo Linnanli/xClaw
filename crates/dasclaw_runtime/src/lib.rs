@@ -46,6 +46,7 @@ pub mod rate_limit;
 pub mod recording;
 pub mod secrets;
 pub mod tool;
+pub mod tool_to_executor_adapter;
 
 pub use agent::{
     Agent, AgentBuilder, AgentConfig, AgentError, AgentResponder, ToolExecutor, ToolOutputSanitizer,
@@ -59,3 +60,4 @@ pub use llm_adapter::LlmProviderResponder;
 pub use rate_limit::{LimitType, RateLimitError, RateLimitResult, RateLimiter};
 pub use recording::{HttpExchange, HttpExchangeRequest, HttpExchangeResponse, HttpInterceptor};
 pub use tool::Tool;
+pub use tool_to_executor_adapter::ToolToExecutorAdapter;

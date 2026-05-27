@@ -51,6 +51,12 @@ dasclaw_workspace_cap = { path = "../dasclaw_workspace_cap" }
 # Optional: only pulled in when the `wasm-tools` feature is enabled. See
 # the `[features]` block above for the binary-size rationale.
 dasclaw_wasm_tools = { path = "../dasclaw_wasm_tools", optional = true }
+# ADR-153 §1.1 A6 (issue #868): `--enable-shell-tool` wires the
+# in-tree ShellTool through ToolToExecutorAdapter so headless agents
+# get the same sandboxed write-deny default that desktop ironclaw
+# enforces. Kept as a prod dep (not dev) because main.rs constructs
+# the tool at startup when the user passes the flag.
+dasclaw_shell_tools = { path = "../dasclaw_shell_tools" }
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 secrecy = "0.10"
