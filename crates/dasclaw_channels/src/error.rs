@@ -2,8 +2,10 @@
 //!
 //! F4.5 verbatim port from `desktop-client/ironclaw/src/error.rs` (ADR-129 §1.3).
 
+use serde::Serialize;
+
 /// Channel-related errors.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Serialize)]
 pub enum ChannelError {
     #[error("Channel {name} failed to start: {reason}")]
     StartupFailed { name: String, reason: String },

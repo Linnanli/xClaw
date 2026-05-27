@@ -6,12 +6,13 @@ use std::pin::Pin;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::Stream;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::ChannelError;
 
 /// Kind of attachment carried on an incoming message.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AttachmentKind {
     /// Audio content (voice notes, audio files).
     Audio,
@@ -36,7 +37,7 @@ impl AttachmentKind {
 }
 
 /// A file or media attachment on an incoming message.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IncomingAttachment {
     /// Unique identifier within the channel (e.g., Telegram file_id).
     pub id: String,
@@ -61,7 +62,7 @@ pub struct IncomingAttachment {
 }
 
 /// A message received from an external channel.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IncomingMessage {
     /// Unique message ID.
     pub id: Uuid,
@@ -229,7 +230,7 @@ pub fn routing_target_from_metadata(metadata: &serde_json::Value) -> Option<Stri
 pub type MessageStream = Pin<Box<dyn Stream<Item = IncomingMessage> + Send>>;
 
 /// Response to send back to a channel.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutgoingResponse {
     /// The content to send.
     pub content: String,
@@ -266,7 +267,7 @@ impl OutgoingResponse {
 }
 
 /// A single tool decision within a reasoning update.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDecision {
     /// Tool name.
     pub tool_name: String,
@@ -275,7 +276,7 @@ pub struct ToolDecision {
 }
 
 /// Status update types for showing agent activity.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StatusUpdate {
     /// Agent is thinking/processing.
     Thinking(String),

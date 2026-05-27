@@ -20,12 +20,12 @@
 //!    non-tool keys untouched).
 //! 5. `routing_target_from_metadata` parses `target` from both strings
 //!    and numbers; `OutgoingResponse::text` default field state.
-//!
-//! Note: these types deliberately do **not** derive `serde::Serialize`
-//! (only `Debug, Clone`), so we can't pin them via
-//! `serde_json::to_value`. Structural assertions are the available
-//! contract surface today; promoting `StatusUpdate` to `Serialize` is
-//! a separate decision.
+//! 6. Issue #895 follow-up: real `serde_json` round-trips and `insta`
+//!    snapshots now that `StatusUpdate` / `OutgoingResponse` /
+//!    `IncomingMessage` derive `Serialize` + `Deserialize`. These pin the
+//!    wire shape so a renamed field or a re-tagged enum variant fails
+//!    the test instead of silently breaking GUI consumers that ingest
+//!    the JSON.
 
 use dasclaw_channels::{
     AttachmentKind, IncomingAttachment, IncomingMessage, OutgoingResponse, StatusUpdate,
@@ -283,4 +283,233 @@ fn req_dasclaw_cli_channels_pr2_incoming_attachment_round_trip() {
     assert_eq!(att.kind, AttachmentKind::Image);
     assert!(att.data.is_empty());
     assert!(att.filename.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Issue #895: real `serde_json` round-trip + `insta` snapshot pins for the
+// public wire shapes now that `dasclaw_channels` derives `Serialize` +
+// `Deserialize`. Snapshots use `assert_json_snapshot!` so a renamed field or
+// a re-tagged enum variant fails the test instead of silently drifting from
+// GUI consumers that ingest the JSON.
+// ---------------------------------------------------------------------------
+
+use chrono::TimeZone;
+use uuid::Uuid;
+
+/// Build a deterministic `IncomingMessage` for snapshot tests (fixed UUID +
+/// timestamp so `cargo insta review` only flags real surface changes).
+fn fixed_incoming_message() -> IncomingMessage {
+    let mut msg = IncomingMessage::new("cli", "alice", "hello");
+    msg.id = Uuid::nil();
+    msg.received_at = chrono::Utc.with_ymd_and_hms(2024, 1, 2, 3, 4, 5).unwrap();
+    msg
+}
+
+/// `req_dasclaw_cli_channels_pr3_attachment_kind_json_roundtrip` — the
+/// serde representation of `AttachmentKind` must round-trip losslessly.
+/// Default external tagging emits the variant name as a bare string.
+#[test]
+fn req_dasclaw_cli_channels_pr3_attachment_kind_json_roundtrip() {
+    for kind in [
+        AttachmentKind::Image,
+        AttachmentKind::Audio,
+        AttachmentKind::Document,
+    ] {
+        let json = serde_json::to_value(&kind).expect("AttachmentKind must serialize");
+        let back: AttachmentKind =
+            serde_json::from_value(json.clone()).expect("AttachmentKind must deserialize");
+        assert_eq!(kind, back, "AttachmentKind round-trip must be lossless");
+    }
+}
+
+/// `req_dasclaw_cli_channels_pr3_tool_decision_json_roundtrip` — the
+/// `StatusUpdate::ReasoningUpdate.decisions` payload is consumed by the GUI
+/// reasoning panel; pin the JSON shape so a field rename breaks the test.
+#[test]
+fn req_dasclaw_cli_channels_pr3_tool_decision_json_roundtrip() {
+    let decision = ToolDecision {
+        tool_name: "shell".into(),
+        rationale: "list files to confirm path".into(),
+    };
+    let json = serde_json::to_value(&decision).expect("ToolDecision serializes");
+    assert_eq!(json["tool_name"], json!("shell"));
+    assert_eq!(json["rationale"], json!("list files to confirm path"));
+    let back: ToolDecision = serde_json::from_value(json).expect("ToolDecision deserializes");
+    assert_eq!(decision.tool_name, back.tool_name);
+    assert_eq!(decision.rationale, back.rationale);
+}
+
+/// `req_dasclaw_cli_channels_pr3_incoming_message_json_roundtrip` —
+/// `IncomingMessage` is the primary inbound payload. Round-trip both the
+/// default-state and a fully populated form so every optional field is
+/// exercised through serde.
+#[test]
+fn req_dasclaw_cli_channels_pr3_incoming_message_json_roundtrip() {
+    let mut msg = fixed_incoming_message();
+    msg.user_name = Some("Alice".into());
+    msg.thread_id = Some("T-1".into());
+    msg.conversation_scope_id = Some("scope-1".into());
+    msg.metadata = json!({"target": "chat-42"});
+    msg.timezone = Some("America/New_York".into());
+    msg.attachments.push(IncomingAttachment {
+        id: "f1".into(),
+        kind: AttachmentKind::Image,
+        mime_type: "image/png".into(),
+        filename: Some("snap.png".into()),
+        size_bytes: Some(42),
+        source_url: None,
+        storage_key: None,
+        extracted_text: None,
+        data: vec![1, 2, 3],
+        duration_secs: None,
+    });
+
+    let json = serde_json::to_value(&msg).expect("IncomingMessage serializes");
+    assert_eq!(json["channel"], json!("cli"));
+    assert_eq!(json["user_id"], json!("alice"));
+    assert_eq!(json["owner_id"], json!("alice"));
+    assert_eq!(json["is_internal"], json!(false));
+    assert_eq!(json["attachments"][0]["mime_type"], json!("image/png"));
+
+    let back: IncomingMessage = serde_json::from_value(json).expect("IncomingMessage deserializes");
+    assert_eq!(msg.id, back.id);
+    assert_eq!(msg.user_id, back.user_id);
+    assert_eq!(msg.thread_id, back.thread_id);
+    assert_eq!(msg.attachments.len(), back.attachments.len());
+    assert_eq!(msg.attachments[0].kind, back.attachments[0].kind);
+    assert_eq!(msg.received_at, back.received_at);
+}
+
+/// `req_dasclaw_cli_channels_pr3_outgoing_response_json_roundtrip` — pin
+/// the outbound payload shape so the GUI's response renderer doesn't drift.
+#[test]
+fn req_dasclaw_cli_channels_pr3_outgoing_response_json_roundtrip() {
+    let response = OutgoingResponse::text("hi")
+        .in_thread("T-1")
+        .with_attachments(vec!["a.png".into(), "b.png".into()]);
+
+    let json = serde_json::to_value(&response).expect("OutgoingResponse serializes");
+    assert_eq!(json["content"], json!("hi"));
+    assert_eq!(json["thread_id"], json!("T-1"));
+    assert_eq!(json["attachments"], json!(["a.png", "b.png"]));
+    assert_eq!(json["metadata"], serde_json::Value::Null);
+
+    let back: OutgoingResponse =
+        serde_json::from_value(json).expect("OutgoingResponse deserializes");
+    assert_eq!(response.content, back.content);
+    assert_eq!(response.thread_id, back.thread_id);
+    assert_eq!(response.attachments, back.attachments);
+}
+
+/// `req_dasclaw_cli_channels_pr3_status_update_json_roundtrip` — exercise
+/// every `StatusUpdate` variant through serde. Pairs with the
+/// pattern-exhaustive matcher above so a new variant fails both the
+/// compile-time guard and the round-trip guard.
+#[test]
+fn req_dasclaw_cli_channels_pr3_status_update_json_roundtrip() {
+    let samples = vec![
+        StatusUpdate::Thinking("think".into()),
+        StatusUpdate::ToolStarted {
+            name: "shell".into(),
+        },
+        StatusUpdate::ToolCompleted {
+            name: "shell".into(),
+            success: true,
+            error: None,
+            parameters: Some("{\"cmd\":\"ls\"}".into()),
+        },
+        StatusUpdate::ToolResult {
+            name: "shell".into(),
+            preview: "ok".into(),
+        },
+        StatusUpdate::StreamChunk("chunk".into()),
+        StatusUpdate::Status("status".into()),
+        StatusUpdate::JobStarted {
+            job_id: "j1".into(),
+            title: "t".into(),
+            browse_url: "/jobs/j1".into(),
+        },
+        StatusUpdate::ApprovalNeeded {
+            request_id: "r1".into(),
+            tool_name: "shell".into(),
+            description: "rm -rf /".into(),
+            parameters: json!({"cmd": "rm"}),
+            allow_always: false,
+        },
+        StatusUpdate::AuthRequired {
+            extension_name: "gh".into(),
+            instructions: Some("install".into()),
+            auth_url: None,
+            setup_url: None,
+        },
+        StatusUpdate::AuthCompleted {
+            extension_name: "gh".into(),
+            success: true,
+            message: "ok".into(),
+        },
+        StatusUpdate::ImageGenerated {
+            data_url: "data:image/png;base64,AAA".into(),
+            path: Some("/tmp/x.png".into()),
+        },
+        StatusUpdate::Suggestions {
+            suggestions: vec!["a".into(), "b".into()],
+        },
+        StatusUpdate::ReasoningUpdate {
+            narrative: "n".into(),
+            decisions: vec![ToolDecision {
+                tool_name: "shell".into(),
+                rationale: "test".into(),
+            }],
+        },
+        StatusUpdate::TurnCost {
+            input_tokens: 1,
+            output_tokens: 2,
+            cost_usd: "0.001".into(),
+        },
+    ];
+    for sample in &samples {
+        let json = serde_json::to_value(sample).expect("StatusUpdate serializes");
+        let back: StatusUpdate = serde_json::from_value(json).expect("StatusUpdate deserializes");
+        // Re-serialize both sides and compare as JSON: `StatusUpdate` does
+        // not implement `PartialEq` (it carries `serde_json::Value` and
+        // free-form strings), so JSON equality is the contract here.
+        let lhs = serde_json::to_value(sample).expect("lhs serializes");
+        let rhs = serde_json::to_value(&back).expect("rhs serializes");
+        assert_eq!(lhs, rhs, "StatusUpdate round-trip must be JSON-stable");
+    }
+}
+
+/// `req_dasclaw_cli_channels_pr3_status_update_snapshot_tool_completed` —
+/// insta snapshot of `StatusUpdate::ToolCompleted`. Pins the externally
+/// tagged enum shape so a `#[serde(rename_all)]` or a variant rename fails
+/// the snapshot.
+#[test]
+fn req_dasclaw_cli_channels_pr3_status_update_snapshot_tool_completed() {
+    let sample = StatusUpdate::ToolCompleted {
+        name: "shell".into(),
+        success: true,
+        error: None,
+        parameters: Some("{\"cmd\":\"ls\"}".into()),
+    };
+    insta::assert_json_snapshot!("status_update_tool_completed", sample);
+}
+
+/// `req_dasclaw_cli_channels_pr3_outgoing_response_snapshot_text` — insta
+/// snapshot of the default `OutgoingResponse::text` builder output. Pins
+/// the field set and null-metadata default.
+#[test]
+fn req_dasclaw_cli_channels_pr3_outgoing_response_snapshot_text() {
+    let sample = OutgoingResponse::text("hi")
+        .in_thread("T-1")
+        .with_attachments(vec!["a.png".into()]);
+    insta::assert_json_snapshot!("outgoing_response_text", sample);
+}
+
+/// `req_dasclaw_cli_channels_pr3_incoming_message_snapshot_default` — insta
+/// snapshot of the minimal `IncomingMessage::new` output. Uses a fixed UUID
+/// and timestamp so the snapshot is deterministic.
+#[test]
+fn req_dasclaw_cli_channels_pr3_incoming_message_snapshot_default() {
+    let sample = fixed_incoming_message();
+    insta::assert_json_snapshot!("incoming_message_default", sample);
 }

@@ -117,6 +117,17 @@ dasclaw_wasm_tools = { path = "../dasclaw_wasm_tools" }
 # binary via `assert_cmd` to pin the on-deny exit-code + stderr
 # contract.
 assert_cmd = "2"
+# Issue #895: deterministic timestamp/UUID construction for the
+# `dasclaw_channels` JSON snapshot tests in
+# tests/channels_status_contract_e2e.rs. `serde` features pulled in so the
+# fixtures match the production serializers.
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+# Issue #895: snapshot pinning of `dasclaw_channels` JSON wire shapes from a
+# non-GUI consumer. Used by tests/channels_status_contract_e2e.rs. Matches the
+# version selected for nightly-fuzz parity in PR #893; consolidated here so
+# this PR remains self-contained on top of PR #891.
+insta = { version = "1.46.3", features = ["json"] }
 predicates = "3"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util", "sync"] }

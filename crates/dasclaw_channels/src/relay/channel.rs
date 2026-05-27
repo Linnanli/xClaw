@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::channel::{Channel, IncomingMessage, MessageStream, OutgoingResponse, StatusUpdate};
@@ -18,7 +19,7 @@ use crate::relay::client::{ChannelEvent, RelayClient};
 pub const DEFAULT_RELAY_NAME: &str = "slack-relay";
 
 /// The messaging provider backing a relay channel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RelayProvider {
     Slack,
 }
