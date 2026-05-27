@@ -40,6 +40,14 @@ dasclaw_llm_provider = { path = "../dasclaw_llm_provider" }
 # ADR-153 §4.4 sub-step 8: CLI wires MCP-backed ToolExecutor.
 dasclaw_mcp = { path = "../dasclaw_mcp" }
 dasclaw_tool = { path = "../dasclaw_tool" }
+# ADR-153 §1.1 A6 / e12 binary-level slice (#868):
+# `dasclaw-cli sandbox-exec` runs `/bin/bash -c <cmd>` under the headless
+# CLI's default-deny ReadOnly policy. The three crates below were
+# previously dev-only (library-seam e2e in tests/) but become runtime
+# deps now that the subcommand ships in the binary.
+dasclaw_exec = { path = "../dasclaw_exec" }
+dasclaw_sandbox = { path = "../dasclaw_sandbox" }
+dasclaw_workspace_cap = { path = "../dasclaw_workspace_cap" }
 # Optional: only pulled in when the `wasm-tools` feature is enabled. See
 # the `[features]` block above for the binary-size rationale.
 dasclaw_wasm_tools = { path = "../dasclaw_wasm_tools", optional = true }
@@ -71,10 +79,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # they prefer.
 dasclaw_safety = { path = "../dasclaw_safety", features = ["egress-gate"] }
 dasclaw_governance = { path = "../dasclaw_governance" }
-# W6.4 e11 (ADR-153 §1.1, A5 L1 path-escape): tests/safety_path_escape_e2e.rs
-# constructs a capability-bound workspace and asserts that paths escaping
-# the root surface as a tool error rather than a host crash.
-dasclaw_workspace_cap = { path = "../dasclaw_workspace_cap" }
+# W6.4 e11 (ADR-153 §1.1, A5 L1 path-escape) plus binary-level A6/e12
+# (#868): `dasclaw_workspace_cap` is now a runtime dep (see
+# [dependencies]); the dev-deps row is intentionally omitted to avoid
+# duplicate-listing.
 # W6.4b-i (ADR-153 §1.1 e14, outbound HTTP credential injection):
 # tests/safety_credential_boundary_e2e.rs builds HttpTool with a
 # SharedCredentialRegistry + InMemorySecretsStore, then uses an
@@ -85,19 +93,16 @@ dasclaw_net_tools = { path = "../dasclaw_net_tools" }
 # W6.6c (ADR-153 §1.1 A7 / e13): wasm fixture also reused by the prod
 # `--wasm-tool` flag e2e in tests/cli_wasm_tool_flag_e2e.rs.
 dasclaw_wasm_tools = { path = "../dasclaw_wasm_tools" }
-# W6.6b (ADR-153 §1.1 A6 / e12, L2 sub-process sandbox default-deny):
-# tests/safety_sandbox_default_deny_e2e.rs wires a `bash` tool whose
-# ToolExecutor runs commands through SandboxedExecutor under the
-# headless ReadOnly policy and asserts that writes are kernel-enforced
-# denied (macOS Seatbelt path; Linux + Windows tracked separately).
-dasclaw_exec = { path = "../dasclaw_exec" }
-dasclaw_sandbox = { path = "../dasclaw_sandbox" }
+# W6.6b (ADR-153 §1.1 A6 / e12) library-seam test in
+# tests/safety_sandbox_default_deny_e2e.rs reuses the same crates that
+# the binary now consumes (`dasclaw_exec`, `dasclaw_sandbox`); see
+# [dependencies] above.
+# #868 binary-level slice (ADR-153 §1.1 A6 / e12):
+# tests/cli_sandbox_default_deny_e2e.rs drives the real `dasclaw-cli`
+# binary via `assert_cmd` to pin the on-deny exit-code + stderr
+# contract.
+assert_cmd = "2"
+predicates = "3"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util", "sync"] }
 wiremock = "0.6"
-# ADR-153 §1.1 A6 issue #868: assert_cmd drives the compiled
-# `dasclaw-cli` binary in tests/cli_sandbox_default_deny_e2e.rs so the
-# CLI exit / stdout / stderr contract is locked at the artifact level,
-# not just at the library seam.
-assert_cmd = "2"
-predicates = "3"

@@ -26,6 +26,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use dasclaw_cli::mcp::load_executor as load_mcp_executor;
 use dasclaw_cli::provider::{ProviderArgs, build_responder};
+use dasclaw_cli::sandbox_exec::run_sandbox_exec;
 use dasclaw_cli::tools::default_builtins;
 use dasclaw_cli::{EchoResponder, run, run_with_tools};
 use dasclaw_core::messages::ToolDefinition;
@@ -59,6 +60,22 @@ enum Command {
         provider: ProviderArgs,
         #[command(flatten)]
         tools: ToolArgs,
+    },
+    /// Run a single `bash -c <command>` under the headless CLI's
+    /// default-deny `ReadOnly` sandbox policy (ADR-153 §1.1 A6 / e12).
+    ///
+    /// On sandbox denial or non-zero exit the process exits non-zero
+    /// with `sandbox: ...` on stderr; on success the captured stdout is
+    /// forwarded verbatim. Used by the binary-level e2e in
+    /// [`tests/cli_sandbox_default_deny_e2e.rs`](../../tests/cli_sandbox_default_deny_e2e.rs)
+    /// to pin the exit-code + stderr contract that the library-seam
+    /// `safety_sandbox_default_deny_e2e.rs` test cannot observe.
+    ///
+    /// Ignores the global `--prompt` / `--system` flags.
+    SandboxExec {
+        /// Bash command line. Passed verbatim to `/bin/bash -c <CMD>`.
+        #[arg(long = "command")]
+        command: String,
     },
 }
 
@@ -116,25 +133,35 @@ async fn real_main() -> Result<()> {
     init_tracing();
 
     let cli = Cli::parse();
-    let prompt = match cli.prompt.as_deref() {
-        Some(p) => p.to_string(),
-        None => read_stdin_prompt().context("reading prompt from stdin")?,
-    };
-    let prompt = prompt.trim();
+    let command = cli.command.unwrap_or(Command::Echo);
 
-    let reply = match cli.command.unwrap_or(Command::Echo) {
-        Command::Echo => run(EchoResponder::new(), &cli.system, prompt)
-            .await
-            .context("echo agent run failed")?,
+    // Each subcommand owns its own input-resolution policy. `sandbox-exec`
+    // takes its payload through `--command` and would otherwise stall on
+    // stdin if the global `--prompt` flag were resolved up-front for
+    // every code path.
+    let reply = match command {
+        Command::SandboxExec { command: cmd_str } => {
+            let cwd = std::env::current_dir().context("sandbox: resolving current directory")?;
+            let stdout = run_sandbox_exec(&cmd_str, cwd).await?;
+            print!("{stdout}");
+            return Ok(());
+        }
+        Command::Echo => {
+            let prompt = resolve_prompt(cli.prompt.as_deref())?;
+            run(EchoResponder::new(), &cli.system, prompt.trim())
+                .await
+                .context("echo agent run failed")?
+        }
         Command::Run { provider, tools } => {
+            let prompt = resolve_prompt(cli.prompt.as_deref())?;
             let responder = build_responder(&provider).context("building LLM responder")?;
             let assembled = assemble_tool_executor(&tools).await?;
             match assembled {
-                None => run(responder, &cli.system, prompt)
+                None => run(responder, &cli.system, prompt.trim())
                     .await
                     .context("LLM agent run failed")?,
                 Some((executor, definitions)) => {
-                    run_with_tools(responder, executor, definitions, &cli.system, prompt)
+                    run_with_tools(responder, executor, definitions, &cli.system, prompt.trim())
                         .await
                         .context("LLM agent (with tools) run failed")?
                 }
@@ -149,6 +176,15 @@ async fn real_main() -> Result<()> {
 /// enables `--enable-shell-tool`. Matches `dasclaw_shell_tools::DEFAULT_TIMEOUT`
 /// (120 s); kept literal here so this crate doesn't depend on the constant.
 const SHELL_TOOL_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Resolve the user prompt for chat-style subcommands: prefer the
+/// `--prompt` flag, otherwise drain stdin until EOF.
+fn resolve_prompt(prompt_flag: Option<&str>) -> Result<String> {
+    match prompt_flag {
+        Some(p) => Ok(p.to_string()),
+        None => read_stdin_prompt().context("reading prompt from stdin"),
+    }
+}
 
 /// Collect every tool source the user opted into and merge them via
 /// [`CompositeToolExecutor`].
