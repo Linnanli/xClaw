@@ -111,7 +111,10 @@ impl ToolExecutor for std::sync::Arc<dyn ToolExecutor> {
 /// its `tool_result` block. Implementations typically delegate to a
 /// safety crate (e.g. `dasclaw_safety::SafetyLayer::sanitize_for_stash`),
 /// but the runtime stays safety-stack-agnostic: any `Fn`-like wrapper
-/// works as long as it returns the post-redaction string.
+/// works as long as it returns the post-redaction string. The production
+/// binding is provided by `dasclaw_cli::run_with_tools_and_safety_sanitizer`
+/// (issue #882), which installs the safety-layer-backed adapter as the
+/// default for the CLI agent loop.
 ///
 /// When no sanitizer is wired (the default), tool output is forwarded
 /// to the LLM **verbatim**. The trait is sync because production
@@ -474,8 +477,10 @@ impl LoopDelegate for HeadlessDelegate {
             };
 
             // ADR-153 §1.1 e22/B6: chain a second sanitizer seam after the
-            // egress gate. Callers can inject SafetyLayer::sanitize_for_stash
-            // (or any other strategy) without touching the hook stack.
+            // egress gate. Production default is bound by
+            // `dasclaw_cli::run_with_tools_and_safety_sanitizer` (issue #882),
+            // which wraps `SafetyLayer::sanitize_for_stash`; alternative
+            // strategies can be injected without touching the hook stack.
             let pushed_content = match self.tool_output_sanitizer.as_ref() {
                 Some(sanitizer) => sanitizer.sanitize(&result.name, &post_gate_content),
                 None => post_gate_content,

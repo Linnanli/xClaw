@@ -39,6 +39,17 @@
 //! sandbox, audit). This is the single point at which the 9-layer
 //! defence stack from `13-security-capability-inventory.md` can be
 //! opted-in from a headless caller.
+//!
+//! ## Default tool-output sanitization (ADR-153 §1.1 B6 / e22 / #882)
+//!
+//! See [`run_with_tools_and_safety_sanitizer`] for the entry the
+//! shipped binary uses by default. It wires
+//! [`sanitizer::SafetyStashSanitizer`] through
+//! [`dasclaw_runtime::ToolOutputSanitizer`] so `tool_result` payloads
+//! are redacted **before** the next LLM call observes them. The plain
+//! [`run_with_tools`] entry stays as the no-sanitizer escape hatch so
+//! the e22 negative-control test can still pin the runtime's
+//! forward-verbatim contract.
 
 use std::sync::Mutex;
 
@@ -53,6 +64,7 @@ use dasclaw_runtime::{Agent, AgentError, AgentResponder, ToolExecutor};
 pub mod mcp;
 pub mod provider;
 pub mod sandbox_exec;
+pub mod sanitizer;
 pub mod tools;
 #[cfg(feature = "wasm-tools")]
 pub mod wasm;
@@ -153,6 +165,44 @@ where
         .tool_executor(tool_executor)
         .tools(tool_definitions)
         .hooks(hooks)
+        .system_prompt(system_prompt)
+        .build()
+        .map_err(|e| CliError::Build(e.to_string()))?;
+    let reply = agent.run(user_prompt).await?;
+    Ok(reply)
+}
+
+/// Variant of [`run_with_tools`] that wires the default
+/// [`sanitizer::SafetyStashSanitizer`] before handing tool output back
+/// to the LLM (ADR-153 §1.1 B6 / e22 / issue #882).
+///
+/// This is the entry the binary now uses for tool-enabled runs, so the
+/// shipped `dasclaw-cli` never feeds raw tool output to a model. The
+/// existing [`run_with_tools`] entry stays byte-for-byte stable so
+/// downstream callers that want **no** sanitizer (the verbatim
+/// `tool_result` contract checked by the e22 negative-control test) can
+/// still opt in by routing through the original signature.
+///
+/// Like [`run_with_tools_and_hooks`], this is a separate entry rather
+/// than an optional parameter. The CLI's `run_*` family has standardised
+/// on additive entries so each new capability adds one well-typed path
+/// instead of growing a combinatorial signature.
+pub async fn run_with_tools_and_safety_sanitizer<R, E>(
+    responder: R,
+    tool_executor: E,
+    tool_definitions: Vec<ToolDefinition>,
+    system_prompt: &str,
+    user_prompt: &str,
+) -> Result<String, CliError>
+where
+    R: AgentResponder + 'static,
+    E: ToolExecutor + 'static,
+{
+    let agent: Agent = Agent::builder()
+        .responder(responder)
+        .tool_executor(tool_executor)
+        .tools(tool_definitions)
+        .tool_output_sanitizer_arc(sanitizer::default_safety_sanitizer())
         .system_prompt(system_prompt)
         .build()
         .map_err(|e| CliError::Build(e.to_string()))?;

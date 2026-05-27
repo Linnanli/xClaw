@@ -4,36 +4,25 @@
 //! is the redacted payload — not the raw secret returned by the tool.
 //!
 //! The test deliberately runs the **full** runtime → safety chain. It
-//! does **not** mock `sanitize_for_stash`; it constructs a real
-//! `SafetyLayer` with the default leak-detector and asserts the
-//! conversation snapshot taken by a capturing responder on iteration 2.
+//! does **not** mock `sanitize_for_stash`; it pulls the
+//! `SafetyStashSanitizer` adapter that the CLI binary uses by default
+//! (`dasclaw_cli::sanitizer`, ADR-153 §1.1 B6 / issue #882) so the
+//! test path stays byte-for-byte aligned with the production wiring.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use dasclaw_cli::sanitizer::SafetyStashSanitizer;
 use dasclaw_core::messages::{
     ChatMessage, FinishReason, Role, ToolCall, ToolDefinition, ToolResult,
 };
 use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
 use dasclaw_core::traits::HostError;
-use dasclaw_runtime::{Agent, AgentResponder, ToolExecutor, ToolOutputSanitizer};
+use dasclaw_runtime::{Agent, AgentResponder, ToolExecutor};
 use dasclaw_safety::{SafetyConfig, SafetyLayer};
 use serde_json::json;
-
-/// Adapter wiring `SafetyLayer::sanitize_for_stash` (redact-only, no
-/// length cap) into the `ToolOutputSanitizer` seam. Lives in the test
-/// because `dasclaw_runtime` stays safety-stack-agnostic by design.
-struct SafetyStashSanitizer {
-    layer: Arc<SafetyLayer>,
-}
-
-impl ToolOutputSanitizer for SafetyStashSanitizer {
-    fn sanitize(&self, tool_name: &str, content: &str) -> String {
-        self.layer.sanitize_for_stash(tool_name, content).content
-    }
-}
 
 /// Responder that **captures** `ctx.messages.clone()` on every call
 /// before popping a scripted reply. Lets the test assert what the LLM
@@ -155,9 +144,7 @@ async fn req_dasclaw_cli_loop_e22_tool_output_redacted_before_next_llm_call() {
         max_output_length: 65_536,
         injection_check_enabled: false,
     }));
-    let sanitizer = SafetyStashSanitizer {
-        layer: Arc::clone(&safety),
-    };
+    let sanitizer = SafetyStashSanitizer::new(Arc::clone(&safety));
 
     let agent = Agent::builder()
         .responder_arc(responder.clone())
