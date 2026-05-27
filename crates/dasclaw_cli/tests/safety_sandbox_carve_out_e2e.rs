@@ -20,14 +20,13 @@
 //!
 //! ## Scope vs. policy decision layer
 //!
-//! The decision-layer policy in `dasclaw_workspace_cap` also carves out
-//! `.dasclaw/` (with `protect_missing_project_meta=true`), but the
-//! kernel projection in `dasclaw_protocol::permissions::
-//! default_read_only_subpaths_for_writable_root` currently only emits
-//! `.git` + `.codex` exclusions to seatbelt. The `.dasclaw` row below
-//! is therefore **expected to fail** today; it is intentionally shipped
-//! red as a TDD pin against the missing kernel projection. Follow-up
-//! work to extend the projection to `.dasclaw/` is tracked in #874.
+//! The decision-layer policy in `dasclaw_workspace_cap` carves out
+//! `.dasclaw/` (with `protect_missing_project_meta=true`), and as of
+//! #874 the kernel projection in `dasclaw_protocol::permissions::
+//! default_read_only_subpaths_for_writable_root` also emits `.dasclaw`
+//! alongside `.git` and `.codex`. All three rows below are therefore
+//! green; any future regression that lets `.dasclaw` writes through
+//! must be treated as a contract break, not a known gap.
 //!
 //! ## Test rows
 //!
@@ -35,9 +34,8 @@
 //!    policy actually emits the carve-out (`.git` / `.codex` carves
 //!    only trigger when the directory is present, mirroring upstream
 //!    `codex` behaviour).
-//! 2. `.dasclaw/state` — RED. Pins the policy gap: the decision layer
-//!    intends to carve `.dasclaw/`, but kernel projection does not
-//!    emit the exclusion, so the write currently lands on disk.
+//! 2. `.dasclaw/state` — green post-#874. Pins the kernel-side carve-out
+//!    for the dasclaw project-meta directory.
 //! 3. Regular subdir control — proves the carve-out is targeted and
 //!    not just "WorkspaceWrite denies everything".
 
@@ -134,11 +132,11 @@ async fn req_dasclaw_cli_loop_a6c_carve_out_denies_dot_git_and_dot_codex() {
     );
 }
 
-/// A6c **RED** — `.dasclaw/` should be carved out alongside `.git` and
-/// `.codex`, but the kernel projection in
+/// A6c — `.dasclaw/` is carved out alongside `.git` and `.codex` via
+/// the kernel projection in
 /// `dasclaw_protocol::permissions::default_read_only_subpaths_for_writable_root`
-/// currently does not emit it. This test is shipped failing on purpose
-/// as a TDD pin; flip green once the projection is extended (see #874).
+/// (extended in #874). A write into the carve-out must be refused by
+/// seatbelt even though the surrounding cwd is writable.
 #[tokio::test]
 async fn req_dasclaw_cli_loop_a6c_carve_out_denies_dot_dasclaw() {
     let tempdir = tempfile::tempdir().expect("create tempdir");
@@ -176,9 +174,7 @@ async fn req_dasclaw_cli_loop_a6c_carve_out_denies_dot_dasclaw() {
     );
     assert!(
         !dasclaw_target.exists(),
-        ".dasclaw carve-out breached: file created at {dasclaw_target:?} \
-         (kernel projection in default_read_only_subpaths_for_writable_root \
-          does not emit .dasclaw; tracked by #874)"
+        ".dasclaw carve-out breached: file created at {dasclaw_target:?}"
     );
 }
 
