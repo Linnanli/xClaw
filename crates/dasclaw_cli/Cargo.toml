@@ -43,6 +43,12 @@ dasclaw_tool = { path = "../dasclaw_tool" }
 # Optional: only pulled in when the `wasm-tools` feature is enabled. See
 # the `[features]` block above for the binary-size rationale.
 dasclaw_wasm_tools = { path = "../dasclaw_wasm_tools", optional = true }
+# ADR-153 §1.1 A6 (issue #868): `--enable-shell-tool` wires the
+# in-tree ShellTool through ToolToExecutorAdapter so headless agents
+# get the same sandboxed write-deny default that desktop ironclaw
+# enforces. Kept as a prod dep (not dev) because main.rs constructs
+# the tool at startup when the user passes the flag.
+dasclaw_shell_tools = { path = "../dasclaw_shell_tools" }
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 secrecy = "0.10"
@@ -89,3 +95,9 @@ dasclaw_sandbox = { path = "../dasclaw_sandbox" }
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util", "sync"] }
 wiremock = "0.6"
+# ADR-153 §1.1 A6 issue #868: assert_cmd drives the compiled
+# `dasclaw-cli` binary in tests/cli_sandbox_default_deny_e2e.rs so the
+# CLI exit / stdout / stderr contract is locked at the artifact level,
+# not just at the library seam.
+assert_cmd = "2"
+predicates = "3"

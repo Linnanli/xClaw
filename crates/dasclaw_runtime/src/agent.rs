@@ -88,6 +88,21 @@ pub trait ToolExecutor: Send + Sync {
     async fn execute(&self, call: &ToolCall) -> Result<ToolResult, HostError>;
 }
 
+/// Forward [`ToolExecutor`] through an `Arc<dyn ToolExecutor>` so callers
+/// that erase the concrete type (CLI dispatch, plugin registries,
+/// dynamically-assembled tool stacks) can still feed the agent loop.
+///
+/// Without this blanket impl, [`crate::Agent`]'s generic
+/// `E: ToolExecutor + 'static` bound rejects `Arc<dyn ToolExecutor>`
+/// even though the trait object itself satisfies the trait via dynamic
+/// dispatch — Rust does not auto-implement traits for `Arc<dyn Trait>`.
+#[async_trait]
+impl ToolExecutor for std::sync::Arc<dyn ToolExecutor> {
+    async fn execute(&self, call: &ToolCall) -> Result<ToolResult, HostError> {
+        (**self).execute(call).await
+    }
+}
+
 /// Narrow tool-output sanitization seam used by [`Agent`]
 /// (ADR-153 §1.1 B6 / e22 wiring).
 ///

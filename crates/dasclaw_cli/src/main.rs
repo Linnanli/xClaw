@@ -20,6 +20,7 @@ use std::io::{self, Read};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
@@ -28,7 +29,8 @@ use dasclaw_cli::provider::{ProviderArgs, build_responder};
 use dasclaw_cli::tools::default_builtins;
 use dasclaw_cli::{EchoResponder, run, run_with_tools};
 use dasclaw_core::messages::ToolDefinition;
-use dasclaw_runtime::{CompositeToolExecutor, ToolExecutor};
+use dasclaw_runtime::{CompositeToolExecutor, Tool, ToolExecutor, ToolToExecutorAdapter};
+use dasclaw_shell_tools::{SandboxedShellExecutor, ShellTool};
 const DEFAULT_SYSTEM: &str = "You are dasclaw, a headless agent.";
 
 /// Headless dasclaw agent CLI.
@@ -74,6 +76,14 @@ struct ToolArgs {
     /// subcommand stays a pure chat-completion driver.
     #[arg(long = "enable-tools", default_value_t = false)]
     enable_tools: bool,
+
+    /// Advertise the in-tree `shell` tool (ADR-153 §1.1 A6). Commands run
+    /// through [`dasclaw_shell_tools::SandboxedShellExecutor`] under the
+    /// headless `ReadOnly` policy — writes outside the workspace are
+    /// kernel-denied (macOS Seatbelt; Linux/Windows tracked under #481).
+    /// Defaults to off so the bare `run` subcommand stays read-only chat.
+    #[arg(long = "enable-shell-tool", default_value_t = false)]
+    enable_shell_tool: bool,
 
     /// Path to an MCP server config JSON file. Each entry is started
     /// either as a stdio child process (`command` field) or as an HTTP
@@ -135,6 +145,11 @@ async fn real_main() -> Result<()> {
     Ok(())
 }
 
+/// Default timeout passed to [`SandboxedShellExecutor::new`] when the user
+/// enables `--enable-shell-tool`. Matches `dasclaw_shell_tools::DEFAULT_TIMEOUT`
+/// (120 s); kept literal here so this crate doesn't depend on the constant.
+const SHELL_TOOL_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// Collect every tool source the user opted into and merge them via
 /// [`CompositeToolExecutor`].
 ///
@@ -143,7 +158,7 @@ async fn real_main() -> Result<()> {
 /// uniform `≥1 source` case keeps the call site free of the
 /// combinatorial branch explosion that the original
 /// `(enable_tools × mcp_config × …)` match would grow into as each new
-/// tool source (e.g. ADR-153 §1.1 A7 wasm tools) lands.
+/// tool source (e.g. ADR-153 §1.1 A7 wasm tools, A6 shell tool) lands.
 async fn assemble_tool_executor(
     tools: &ToolArgs,
 ) -> Result<Option<(CompositeToolExecutor, Vec<ToolDefinition>)>> {
@@ -154,6 +169,28 @@ async fn assemble_tool_executor(
         let exec = default_builtins();
         let defs = exec.definitions();
         push_source(&mut sources, &mut definitions, defs, Arc::new(exec));
+    }
+
+    if tools.enable_shell_tool {
+        // ADR-153 §1.1 A6 (issue #868): the in-tree ShellTool is a
+        // `dasclaw_runtime::Tool`, not a `ToolExecutor`. We bridge through
+        // the framework-level `ToolToExecutorAdapter<T: Tool>` so any future
+        // `Tool` impl plugs into the same accumulator without bespoke glue.
+        //
+        // `SandboxedShellExecutor::new(timeout, allow_full_access, network_proxy)`:
+        //   - `false` => default-deny sandbox (no host FS escape, no extra writable roots)
+        //   - `None`  => no upstream network proxy; combined with `allow_full_access=false`
+        //                this leaves the policy at `CapPolicy::ReadOnly { network_access: false }`
+        //                which the platform sandbox (macOS Seatbelt / Linux Landlock) enforces.
+        let sandbox = Arc::new(SandboxedShellExecutor::new(SHELL_TOOL_TIMEOUT, false, None));
+        let shell = ShellTool::new().with_sandbox(sandbox);
+        let defs = vec![ToolDefinition {
+            name: shell.name().to_string(),
+            description: shell.description().to_string(),
+            parameters: shell.parameters_schema(),
+        }];
+        let adapter = Arc::new(ToolToExecutorAdapter::new(shell)) as Arc<dyn ToolExecutor>;
+        push_source(&mut sources, &mut definitions, defs, adapter);
     }
 
     if let Some(path) = tools.mcp_config.as_deref() {
