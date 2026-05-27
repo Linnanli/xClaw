@@ -28,7 +28,7 @@ use dasclaw_cli::mcp::load_executor as load_mcp_executor;
 use dasclaw_cli::provider::{ProviderArgs, build_responder};
 use dasclaw_cli::sandbox_exec::run_sandbox_exec;
 use dasclaw_cli::tools::default_builtins;
-use dasclaw_cli::{EchoResponder, run, run_with_tools};
+use dasclaw_cli::{EchoResponder, run, run_with_tools_and_safety_sanitizer};
 use dasclaw_core::messages::ToolDefinition;
 use dasclaw_runtime::{CompositeToolExecutor, Tool, ToolExecutor, ToolToExecutorAdapter};
 use dasclaw_shell_tools::{SandboxedShellExecutor, ShellTool};
@@ -160,11 +160,15 @@ async fn real_main() -> Result<()> {
                 None => run(responder, &cli.system, prompt.trim())
                     .await
                     .context("LLM agent run failed")?,
-                Some((executor, definitions)) => {
-                    run_with_tools(responder, executor, definitions, &cli.system, prompt.trim())
-                        .await
-                        .context("LLM agent (with tools) run failed")?
-                }
+                Some((executor, definitions)) => run_with_tools_and_safety_sanitizer(
+                    responder,
+                    executor,
+                    definitions,
+                    &cli.system,
+                    prompt.trim(),
+                )
+                .await
+                .context("LLM agent (with tools) run failed")?,
             }
         }
     };

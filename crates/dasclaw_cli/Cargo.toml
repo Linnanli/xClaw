@@ -57,6 +57,15 @@ dasclaw_wasm_tools = { path = "../dasclaw_wasm_tools", optional = true }
 # enforces. Kept as a prod dep (not dev) because main.rs constructs
 # the tool at startup when the user passes the flag.
 dasclaw_shell_tools = { path = "../dasclaw_shell_tools" }
+# ADR-153 §1.1 B6 / e22 / issue #882: the binary defaults to wiring
+# `SafetyLayer::sanitize_for_stash` through the `ToolOutputSanitizer`
+# seam so the LLM never sees raw tool output that contains secrets.
+# The `sanitizer` module exposes `SafetyStashSanitizer` as the default
+# adapter; callers that want a different safety stack can still go
+# through `Agent::builder().tool_output_sanitizer(...)` directly. The
+# `egress-gate` feature is also what lets `IronclawEgressGate`
+# implement `dasclaw_core::EgressGate` for the e7–e16 hook tests.
+dasclaw_safety = { path = "../dasclaw_safety", features = ["egress-gate"] }
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 secrecy = "0.10"
@@ -69,15 +78,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
-# W6.1: egress-gate feature is what lets dasclaw_safety::IronclawEgressGate
-# implement dasclaw_core::EgressGate, which is the trait that test cases
-# e7–e16 (ADR-153-cli-test-matrix §1) inject through run_with_tools_and_hooks.
-# W6.5b B6: same crate also provides SafetyLayer::sanitize_for_stash, which is
-# wired into the agent loop via the ToolOutputSanitizer seam (e22).
-# Kept as dev-dependency: dasclaw_cli the library stays safety-stack-agnostic;
-# downstream callers wire their own HookBundle from whichever safety crate
-# they prefer.
-dasclaw_safety = { path = "../dasclaw_safety", features = ["egress-gate"] }
+# W6.1 e7–e16: the `egress-gate` feature is enabled via the production
+# dependency above. `dasclaw_safety` itself is now a `[dependencies]`
+# entry so the binary's default `SafetyStashSanitizer` can be wired
+# without forcing every downstream lib consumer to opt into the safety
+# stack. See the `[dependencies]` comment for the rationale.
 dasclaw_governance = { path = "../dasclaw_governance" }
 # W6.4 e11 (ADR-153 §1.1, A5 L1 path-escape) plus binary-level A6/e12
 # (#868): `dasclaw_workspace_cap` is now a runtime dep (see
