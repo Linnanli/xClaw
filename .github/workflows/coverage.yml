@@ -256,6 +256,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
+          # The dasclaw_wasm_tools build script compiles a wasm32-wasip2
+          # fixture component (see crates/dasclaw_wasm_tools/build.rs +
+          # tests/fixtures/minimal_http_component/). Without this target the
+          # wasm_tools crate (which dasclaw_runtime/cli/safety transitively
+          # link in tests) fails with E0463 "can't find crate for `core`".
+          targets: wasm32-wasip2
 
       - uses: Swatinem/rust-cache@v2
         with:
