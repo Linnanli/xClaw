@@ -377,7 +377,7 @@ impl RelayClient {
 }
 
 /// Errors from relay client operations.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Serialize)]
 pub enum RelayError {
     #[error("Network error: {0}")]
     Network(String),

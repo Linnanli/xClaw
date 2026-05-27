@@ -1,0 +1,20 @@
+---
+source: crates/dasclaw_cli/tests/channels_status_contract_e2e.rs
+expression: sample
+---
+{
+  "id": "00000000-0000-0000-0000-000000000000",
+  "channel": "cli",
+  "user_id": "alice",
+  "owner_id": "alice",
+  "sender_id": "alice",
+  "user_name": null,
+  "content": "hello",
+  "thread_id": null,
+  "conversation_scope_id": null,
+  "received_at": "2024-01-02T03:04:05Z",
+  "metadata": null,
+  "timezone": null,
+  "attachments": [],
+  "is_internal": false
+}

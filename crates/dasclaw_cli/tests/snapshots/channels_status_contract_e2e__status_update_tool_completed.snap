@@ -1,0 +1,12 @@
+---
+source: crates/dasclaw_cli/tests/channels_status_contract_e2e.rs
+expression: sample
+---
+{
+  "ToolCompleted": {
+    "name": "shell",
+    "success": true,
+    "error": null,
+    "parameters": "{\"cmd\":\"ls\"}"
+  }
+}
