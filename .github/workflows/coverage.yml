@@ -30,6 +30,13 @@ name: Code Coverage
 on:
   push:
     branches: [xClaw]
+  pull_request:
+    branches: [xClaw]
+    paths:
+      - 'crates/dasclaw_cli/**'
+      - 'crates/dasclaw_safety/**'
+      - 'crates/dasclaw_runtime/**'
+      - '.github/workflows/coverage.yml'
 
 concurrency:
   group: coverage-${{ github.workflow }}-${{ github.ref }}
@@ -234,14 +241,82 @@ jobs:
           path: tests/e2e/screenshots/
           if-no-files-found: ignore
 
+  coverage-dasclaw-core:
+    # Lean coverage job for the xClaw fork's headless crates. Bypasses the
+    # WASM channel build and PostgreSQL service that gate the legacy
+    # ironclaw-flavored jobs above (which remain `if: false` until the
+    # `scripts/build-wasm-extensions.sh` script returns to the xClaw root).
+    # Scoped to the three crates that ADR-153 §1.1 + §2.1 cover end-to-end.
+    name: Coverage (dasclaw-core lean)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage-dasclaw-core
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Generate coverage
+        run: |
+          cargo llvm-cov nextest \
+            -p dasclaw_cli \
+            -p dasclaw_safety \
+            -p dasclaw_runtime \
+            --lcov --output-path lcov-dasclaw-core.info
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov-dasclaw-core.info
+          flags: dasclaw-core
+          disable_search: true
+          use_oidc: true
+          # Soft-fail on Codecov upload: the artifact itself is the source of
+          # truth for the gate; Codecov outage should not block the merge
+          # train. The artifact upload below preserves the lcov for review.
+          fail_ci_if_error: false
+
+      - name: Upload lcov artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lcov-dasclaw-core
+          path: lcov-dasclaw-core.info
+          if-no-files-found: error
+
   coverage-gate:
     name: Coverage
     runs-on: ubuntu-latest
     if: always()
-    needs: [coverage, e2e-coverage]
+    needs: [coverage, e2e-coverage, coverage-dasclaw-core]
     steps:
-      - run: |
-          if [[ "${{ needs.coverage.result }}" != "success" || "${{ needs.e2e-coverage.result }}" != "success" ]]; then
-            echo "One or more coverage jobs failed"
-            exit 1
+      - name: Evaluate coverage results
+        run: |
+          # Legacy `coverage` / `e2e-coverage` jobs are intentionally disabled
+          # in the xClaw fork (see `if: false` guards above). Treat their
+          # `skipped` result as acceptable, but still hard-fail on any real
+          # failure. The lean `coverage-dasclaw-core` job is mandatory.
+          set -euo pipefail
+          fail=0
+          if [[ "${{ needs.coverage-dasclaw-core.result }}" != "success" ]]; then
+            echo "coverage-dasclaw-core failed: ${{ needs.coverage-dasclaw-core.result }}"
+            fail=1
           fi
+          for r in "${{ needs.coverage.result }}" "${{ needs.e2e-coverage.result }}"; do
+            if [[ "$r" != "success" && "$r" != "skipped" ]]; then
+              echo "Legacy coverage job in unexpected state: $r"
+              fail=1
+            fi
+          done
+          exit $fail
