@@ -83,7 +83,17 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # entry so the binary's default `SafetyStashSanitizer` can be wired
 # without forcing every downstream lib consumer to opt into the safety
 # stack. See the `[dependencies]` comment for the rationale.
-dasclaw_governance = { path = "../dasclaw_governance" }
+#
+# `tool_visibility` feature enables the ADR-149 `ToolVisibilityPolicy`
+# trait + closed-enum surface; consumed by tests/governance_tool_visibility_e2e.rs
+# to pin downstream-consumer wiring of the gate from the CLI side.
+dasclaw_governance = { path = "../dasclaw_governance", features = ["tool_visibility"] }
+# PR2 GUI-only blind-spot coverage: `dasclaw_channels` and `dasclaw_routines`
+# are consumed only by the GUI today. The two e2e files below pin their
+# public surface from a non-GUI consumer so cross-crate breakage shows up
+# in the CLI test matrix (closes the headless gap called out in ADR-153 §1).
+dasclaw_channels = { path = "../dasclaw_channels" }
+dasclaw_routines = { path = "../dasclaw_routines" }
 # W6.4 e11 (ADR-153 §1.1, A5 L1 path-escape) plus binary-level A6/e12
 # (#868): `dasclaw_workspace_cap` is now a runtime dep (see
 # [dependencies]); the dev-deps row is intentionally omitted to avoid
