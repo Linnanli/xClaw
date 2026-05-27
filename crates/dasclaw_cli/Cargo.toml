@@ -123,11 +123,12 @@ assert_cmd = "2"
 # fixtures match the production serializers.
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
-# Issue #895: snapshot pinning of `dasclaw_channels` JSON wire shapes from a
-# non-GUI consumer. Used by tests/channels_status_contract_e2e.rs. Matches the
-# version selected for nightly-fuzz parity in PR #893; consolidated here so
-# this PR remains self-contained on top of PR #891.
-insta = { version = "1.46.3", features = ["json"] }
+# Issue #895 + PR3 demo: snapshot pinning of `dasclaw_channels` JSON wire
+# shapes (tests/channels_status_contract_e2e.rs) and the `dasclaw-cli --help`
+# surface (tests/insta_snapshot_demo_e2e.rs). Version is centrally pinned
+# via the root `[workspace.dependencies]` table (issues #898 / #899); the
+# `json` feature is enabled there for all workspace consumers.
+insta = { workspace = true }
 predicates = "3"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util", "sync"] }
@@ -137,4 +138,3 @@ wiremock = "0.6"
 # unintended CLI surface drift surfaces as a snapshot diff. Other tests
 # can opt in by adding their own `insta::assert_snapshot!(...)` calls and
 # committing the generated `tests/snapshots/*.snap` baseline.
-insta = "1.46.3"

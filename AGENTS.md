@@ -645,6 +645,29 @@ tests/
 
 详细案例分析、代码示例和 E2E 测试模式见 `docs/testing-guide.md`。
 
+### Snapshot 测试工作流（insta）
+
+**版本来源**：`insta` 在根 `Cargo.toml` 的 `[workspace.dependencies]` 中精确 pin 为 `=1.47.2`（issues #898 / #899）。成员 crate 通过 `insta = { workspace = true }` 引用，不允许在成员 crate 里写浮动版本，避免 SemVer 漂移导致快照行为变化。
+
+**首次准备**：
+
+```bash
+cargo install cargo-insta --locked
+```
+
+**新增 / 修改快照测试的流程**：
+
+1. 写 `insta::assert_snapshot!(...)`（或 `assert_json_snapshot!`、`assert_debug_snapshot!` 等），首次跑测试会生成 `tests/snapshots/*.snap.new`。
+2. 用 `cargo insta review -p <crate>` 交互式审核每个 `.snap.new`，按 `a` 接受、`r` 拒绝、`s` 跳过；接受后会落盘为 `*.snap`，必须随本 PR 一起 commit。
+3. 一次性接受全部（确认无意外 diff 时）：`cargo insta accept -p <crate>`。
+4. 一次性运行 + 自动接受（CI 不要用）：`INSTA_UPDATE=auto cargo nextest run -p <crate> --test <name>`。
+
+**升级 `insta` 版本时的纪律**：
+
+- 只能改根 `[workspace.dependencies]` 里的 pin，禁止在成员 crate 单独提版本。
+- 升级 PR 必须重新跑全部既有快照，用 `cargo insta review` 逐个确认 diff（通常是格式 / redaction 行为变化），把更新后的 `*.snap` 一并 commit；不允许只升版本不刷 baseline。
+- 升级范围注意：当前快照测试在 `crates/dasclaw_cli/tests/` 与 `desktop-client/ironclaw/tests/` 两处，至少这两个 crate 要全跑。
+
 ---
 
 ## Admin Backend 冒烟测试（integration_smoke_tests.rs）

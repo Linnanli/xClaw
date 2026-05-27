@@ -1,5 +1,9 @@
 //! PR3 demo: `insta` snapshot test for `dasclaw-cli --help`.
 //!
+//! First time authoring snapshot tests? Install the CLI once:
+//!   `cargo install cargo-insta --locked`
+//! Workflow reference: AGENTS.md → "Snapshot 测试工作流（insta）".
+//!
 //! Purpose
 //! -------
 //! Establish a working insta baseline in the dasclaw_cli crate so the rest

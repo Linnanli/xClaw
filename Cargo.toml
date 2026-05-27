@@ -91,6 +91,22 @@ members = [
 exclude = ["ironclaw", "claw-code", "vendor"]
 resolver = "2"
 
+# Workspace-pinned third-party deps. Only deps shared across multiple
+# member crates and benefiting from a single source of truth live here.
+# Verbatim-port crates (e.g. dasclaw_async_utils, dasclaw_utils_*,
+# dasclaw_sandbox_linux) intentionally inline their versions — see their
+# crate-level comments — so do NOT migrate them here.
+#
+# Issues #898 / #899: `insta` is pinned to an exact version (`=1.47.2`)
+# so all snapshot-test consumers (`crates/dasclaw_cli`,
+# `desktop-client/ironclaw`) see the same engine version. Upgrading
+# requires re-accepting all `*.snap` baselines (see AGENTS.md →
+# "Snapshot 测试工作流（insta）"). The `json` feature is the union of
+# what current consumers request; extra features are inert for consumers
+# that don't use them.
+[workspace.dependencies]
+insta = { version = "=1.47.2", features = ["json"] }
+
 [profile.dev]
 opt-level = 0                       # 本 crate 不优化，编译快
 incremental = true                  # 增量编译
