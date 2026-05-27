@@ -1,0 +1,8 @@
+---
+source: crates/dasclaw_runtime/tests/serde_agent_error_contract.rs
+expression: "AgentError::LoopFailure(\"hook blocked egress\".into())"
+---
+{
+  "kind": "loop_failure",
+  "data": "hook blocked egress"
+}

@@ -18,6 +18,7 @@
 //! `RespondOutput` values — it doesn't know an "LLM" exists.
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
 use crate::egress_apply::{EgressApply, apply_egress_decision};
 use crate::hooks::{EgressKind, HookBundle};
@@ -47,7 +48,8 @@ pub enum TextAction {
 }
 
 /// Final outcome of the agentic loop.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum LoopOutcome {
     /// Completed with a text response.
     Response(String),

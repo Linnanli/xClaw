@@ -53,6 +53,7 @@ use dasclaw_core::messages::{ChatMessage, ToolCall, ToolDefinition, ToolResult};
 use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, ResponseMetadata};
 use dasclaw_core::traits::HostError;
+use serde::{Deserialize, Serialize};
 
 /// Narrow LLM seam used by [`Agent`].
 ///
@@ -129,6 +130,22 @@ pub trait ToolOutputSanitizer: Send + Sync {
 }
 
 /// Errors surfaced by [`Agent::run`].
+///
+/// Serialized via a private adjacent-tagged wire format
+/// (`{"kind": "...", "data": ...}`) so a GUI/IPC consumer can render a
+/// discriminated union without a hand-written adapter. The
+/// [`AgentError::Responder`] variant carries a
+/// `Box<dyn std::error::Error + Send + Sync>` (`HostError`) which is not
+/// itself `Serialize`/`Deserialize`; we serialize it as its `Display`
+/// string and deserialize it back into a lossless [`StringHostError`]
+/// shim. The original error type is therefore not preserved across a
+/// round trip — by design, since GUI consumers only need a human-readable
+/// message. This is the “stringify” option called out in issue #909.
+///
+/// `Serialize`/`Deserialize` are implemented by hand (not derived)
+/// because serde's adjacent-tagged derive emits a `HostError: Deserialize`
+/// bound for the missing-content fallback path, which `Box<dyn Error>`
+/// cannot satisfy even when `deserialize_with` is supplied.
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
     /// The builder was missing a responder.
@@ -166,6 +183,73 @@ pub enum AgentError {
     #[error("responder error: {0}")]
     Responder(#[source] HostError),
 }
+
+/// Private wire format mirror for [`AgentError`]. Drives the manual
+/// `Serialize`/`Deserialize` impls so the public type stays untouched.
+///
+/// Kept private because GUI consumers should match on the JSON `kind`
+/// discriminant, not on this Rust type.
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+enum AgentErrorWire {
+    MissingResponder,
+    MaxIterations(usize),
+    ToolsNotSupported,
+    LoopFailure(String),
+    Stopped,
+    ApprovalRequested,
+    Responder(String),
+}
+
+impl Serialize for AgentError {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let wire = match self {
+            AgentError::MissingResponder => AgentErrorWire::MissingResponder,
+            AgentError::MaxIterations(n) => AgentErrorWire::MaxIterations(*n),
+            AgentError::ToolsNotSupported => AgentErrorWire::ToolsNotSupported,
+            AgentError::LoopFailure(s) => AgentErrorWire::LoopFailure(s.clone()),
+            AgentError::Stopped => AgentErrorWire::Stopped,
+            AgentError::ApprovalRequested => AgentErrorWire::ApprovalRequested,
+            AgentError::Responder(err) => AgentErrorWire::Responder(err.to_string()),
+        };
+        wire.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for AgentError {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = AgentErrorWire::deserialize(deserializer)?;
+        Ok(match wire {
+            AgentErrorWire::MissingResponder => AgentError::MissingResponder,
+            AgentErrorWire::MaxIterations(n) => AgentError::MaxIterations(n),
+            AgentErrorWire::ToolsNotSupported => AgentError::ToolsNotSupported,
+            AgentErrorWire::LoopFailure(s) => AgentError::LoopFailure(s),
+            AgentErrorWire::Stopped => AgentError::Stopped,
+            AgentErrorWire::ApprovalRequested => AgentError::ApprovalRequested,
+            AgentErrorWire::Responder(s) => AgentError::Responder(Box::new(StringHostError(s))),
+        })
+    }
+}
+
+/// Lossless shim that carries a host-error message across a
+/// serialize/deserialize round trip. The original concrete error type is
+/// erased — see [`AgentError::Responder`] for the rationale.
+#[derive(Debug)]
+pub struct StringHostError(pub String);
+
+impl std::fmt::Display for StringHostError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for StringHostError {}
 
 /// Static configuration for [`Agent`].
 ///

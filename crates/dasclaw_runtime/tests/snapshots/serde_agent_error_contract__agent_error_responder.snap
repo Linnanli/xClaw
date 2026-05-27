@@ -1,0 +1,8 @@
+---
+source: crates/dasclaw_runtime/tests/serde_agent_error_contract.rs
+expression: sample
+---
+{
+  "kind": "responder",
+  "data": "upstream provider 502 Bad Gateway"
+}

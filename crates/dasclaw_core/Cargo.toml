@@ -42,3 +42,6 @@ dasclaw_governance = { path = "../dasclaw_governance", version = "0.0.0-w1" }
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "sync"] }
 tempfile = "3"
+# Snapshot tests pin the GUI/IPC JSON wire shape for serde derives added in
+# issue #909. Version centrally pinned via [workspace.dependencies] (PR #903).
+insta = { workspace = true }

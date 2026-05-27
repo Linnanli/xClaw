@@ -68,3 +68,6 @@ libsql = ["dep:libsql"]
 [dev-dependencies]
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt"] }
+# Snapshot tests pin the GUI/IPC JSON wire shape for serde derives added in
+# issue #909. Version centrally pinned via [workspace.dependencies] (PR #903).
+insta = { workspace = true }
