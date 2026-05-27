@@ -888,12 +888,12 @@ impl ToolRegistry {
     /// migrated to the unified `bootstrap_tools` entry point — tracked as
     /// follow-up work). When sandbox deps are present, `create_job`
     /// automatically delegates to Docker containers; otherwise it dispatches
-    /// via the Scheduler (which persists to DB and spawns a worker).
+    /// via the JobDispatcher (which persists to DB and spawns a worker).
     #[allow(clippy::too_many_arguments)]
     pub fn register_job_tools(
         &self,
         context_manager: Arc<ContextManager>,
-        scheduler_slot: Option<crate::tools::builtin::SchedulerSlot>,
+        scheduler_slot: Option<crate::tools::builtin::JobDispatcherSlot>,
         job_manager: Option<Arc<ContainerJobManager>>,
         store: Option<Arc<dyn Database>>,
         job_event_tx: Option<

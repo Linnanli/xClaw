@@ -29,6 +29,7 @@ mod autonomous_recovery;
 pub mod claude_bridge;
 pub mod container;
 pub mod job;
+pub mod job_dispatcher;
 pub mod proxy_llm;
 
 pub use api::WorkerHttpClient;

@@ -610,10 +610,10 @@ async fn async_main() -> anyhow::Result<()> {
     // Reuse the shared agent session manager prepared by AppBuilder.
     let session_manager = Arc::clone(&components.agent_session_manager);
 
-    // Lazy scheduler slot — filled after Agent::new creates the Scheduler.
-    // Allows CreateJobTool to dispatch local jobs via the Scheduler even though
-    // the Scheduler is created after tools are registered (chicken-and-egg).
-    let scheduler_slot: ironclaw::tools::builtin::SchedulerSlot =
+    // Lazy scheduler slot — filled after Agent::new creates the JobDispatcher.
+    // Allows CreateJobTool to dispatch local jobs via the JobDispatcher even though
+    // the JobDispatcher is created after tools are registered (chicken-and-egg).
+    let scheduler_slot: ironclaw::tools::builtin::JobDispatcherSlot =
         Arc::new(tokio::sync::RwLock::new(None));
 
     // Register job tools (sandbox deps auto-injected when container_job_manager is available)
@@ -1042,7 +1042,7 @@ async fn async_main() -> anyhow::Result<()> {
         Some(session_manager),
     );
 
-    // Fill the scheduler slot now that Agent (and its Scheduler) exist.
+    // Fill the scheduler slot now that Agent (and its JobDispatcher) exist.
     *scheduler_slot.write().await = Some(agent.scheduler());
 
     // Spawn sandbox reaper for orphaned container cleanup

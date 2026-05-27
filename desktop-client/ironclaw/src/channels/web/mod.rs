@@ -259,7 +259,7 @@ impl GatewayChannel {
     }
 
     /// Inject the scheduler for sending follow-up messages to agent jobs.
-    pub fn with_scheduler(mut self, slot: crate::tools::builtin::SchedulerSlot) -> Self {
+    pub fn with_scheduler(mut self, slot: crate::tools::builtin::JobDispatcherSlot) -> Self {
         self.rebuild_state(|s| s.scheduler = Some(slot));
         self
     }

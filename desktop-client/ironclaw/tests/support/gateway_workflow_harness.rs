@@ -214,7 +214,7 @@ impl GatewayWorkflowHarness {
             }
         });
 
-        let scheduler_slot: ironclaw::tools::builtin::SchedulerSlot =
+        let scheduler_slot: ironclaw::tools::builtin::JobDispatcherSlot =
             Arc::new(tokio::sync::RwLock::new(None));
         let agent_session_manager = Arc::new(AgentSessionManager::new());
 

@@ -52,7 +52,7 @@ use crate::extensions::ExtensionManager;
 use crate::orchestrator::job_manager::ContainerJobManager;
 use crate::skills::catalog::SkillCatalog;
 use crate::skills::registry::SkillRegistry;
-use crate::tools::builtin::{PromptQueue, SchedulerSlot, memory::WorkspaceResolver};
+use crate::tools::builtin::{JobDispatcherSlot, PromptQueue, memory::WorkspaceResolver};
 use crate::workspace::Workspace;
 use dasclaw_runtime::context::ContextManager;
 use dasclaw_runtime::secrets::SecretsStore;
@@ -112,7 +112,7 @@ pub enum BootstrapError {
 #[derive(Clone)]
 pub struct JobToolsConfig {
     pub context_manager: Arc<ContextManager>,
-    pub scheduler_slot: Option<SchedulerSlot>,
+    pub scheduler_slot: Option<JobDispatcherSlot>,
     pub job_manager: Option<Arc<ContainerJobManager>>,
     pub store: Option<Arc<dyn Database>>,
     pub job_event_tx:

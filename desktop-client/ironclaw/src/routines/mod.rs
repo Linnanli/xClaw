@@ -5,14 +5,18 @@
 //!
 //! - [`routine`] / [`routine_engine`]: user-owned persistent tasks with
 //!   cron / event / manual triggers (lightweight single-call or full-job).
-//! - [`scheduler`]: parallel job scheduling for full-job routines and
-//!   autonomous worker execution.
 //! - [`self_repair`]: stuck-job detection and broken-tool auto-rebuild.
 //! - [`cost_guard`]: cost / rate limits per day / hour / user.
 //! - [`heartbeat`]: proactive periodic agent turns driven by
 //!   `HEARTBEAT.md`.
 //! - [`job_monitor`]: bridge from sandbox sub-job events back into the main
 //!   agent message stream.
+//!
+//! Note: the concurrent LLM job dispatcher (previously
+//! `routines::scheduler`) was renamed and moved to
+//! [`crate::worker::job_dispatcher::JobDispatcher`] (issue #896) — it is
+//! a *dispatcher*, not a cron scheduler, and the actual triggers live in
+//! `routine_engine` and `heartbeat` within this module.
 //!
 //! Previously these lived under `crate::agent::*`. The move to
 //! `crate::routines::*` (Phase 3, plan H'') keeps them from cluttering the
@@ -29,5 +33,4 @@ pub mod job_monitor;
 /// 通过 re-export 保留 `crate::routines::routine` 旧路径（ADR-129 §1.3 / ADR-152 §3 F4.2）。
 pub use dasclaw_routines::routine;
 pub mod routine_engine;
-pub(crate) mod scheduler;
 pub mod self_repair;

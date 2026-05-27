@@ -18,7 +18,8 @@ use crate::agent::self_repair::{DefaultSelfRepair, RepairResult, SelfRepair};
 use crate::agent::session::ThreadState;
 use crate::agent::submission::{Submission, SubmissionParser, SubmissionResult};
 use crate::agent::{
-    HeartbeatConfig as AgentHeartbeatConfig, Router, Scheduler, SchedulerDeps, SessionManager,
+    HeartbeatConfig as AgentHeartbeatConfig, JobDispatcher, JobDispatcherDeps, Router,
+    SessionManager,
 };
 use crate::channels::{ChannelManager, IncomingMessage, OutgoingResponse, StatusUpdate};
 use crate::config::{AgentConfig, HeartbeatConfig, RoutineConfig, SkillsConfig};
@@ -250,7 +251,7 @@ pub struct Agent {
     pub(super) deps: AgentDeps,
     pub(super) channels: Arc<ChannelManager>,
     pub(super) context_manager: Arc<ContextManager>,
-    pub(super) scheduler: Arc<Scheduler>,
+    pub(super) scheduler: Arc<JobDispatcher>,
     pub(super) router: Router,
     pub(super) session_manager: Arc<SessionManager>,
     pub(super) context_monitor: ContextMonitor,
@@ -296,12 +297,12 @@ impl Agent {
 
         let session_manager = session_manager.unwrap_or_else(|| Arc::new(SessionManager::new()));
 
-        let mut scheduler = Scheduler::new(
+        let mut scheduler = JobDispatcher::new(
             config.clone(),
             context_manager.clone(),
             deps.llm.clone(),
             deps.safety.clone(),
-            SchedulerDeps {
+            JobDispatcherDeps {
                 tools: deps.tools.clone(),
                 extension_manager: deps.extension_manager.clone(),
                 store: deps
@@ -357,7 +358,7 @@ impl Agent {
     // Convenience accessors
 
     /// Get the scheduler (for external wiring, e.g. CreateJobTool).
-    pub fn scheduler(&self) -> Arc<Scheduler> {
+    pub fn scheduler(&self) -> Arc<JobDispatcher> {
         Arc::clone(&self.scheduler)
     }
 

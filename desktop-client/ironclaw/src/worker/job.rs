@@ -16,7 +16,6 @@ use crate::agent::agentic_loop::{
     AgenticLoopConfig, LoopDelegate, LoopOutcome, LoopSignal, TextAction, run_agentic_loop,
     truncate_for_preview,
 };
-use crate::agent::scheduler::WorkerMessage;
 use crate::channels::web::types::ToolDecisionDto;
 use crate::error::Error;
 use crate::llm::{
@@ -34,6 +33,7 @@ use crate::worker::autonomous_recovery::{
     AutonomousRecoveryAction, AutonomousRecoveryState, EMPTY_TOOL_COMPLETION_FAILURE,
     EMPTY_TOOL_COMPLETION_NUDGE, FORCE_TEXT_RECOVERY_PROMPT,
 };
+use crate::worker::job_dispatcher::WorkerMessage;
 use dasclaw_core::traits::HostError;
 use dasclaw_hooks::HookRegistry;
 use dasclaw_runtime::JobState;

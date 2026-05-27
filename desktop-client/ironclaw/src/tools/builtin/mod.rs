@@ -41,8 +41,8 @@ pub use extension_tools::{
     ToolRemoveTool, ToolSearchTool, ToolUpgradeTool,
 };
 pub use job::{
-    CancelJobTool, CreateJobTool, JobEventsTool, JobPromptTool, JobStatusTool, ListJobsTool,
-    PromptQueue, SchedulerSlot,
+    CancelJobTool, CreateJobTool, JobDispatcherSlot, JobEventsTool, JobPromptTool, JobStatusTool,
+    ListJobsTool, PromptQueue,
 };
 pub use memory::{MemoryReadTool, MemorySearchTool, MemoryTreeTool, MemoryWriteTool};
 pub use message::MessageTool;
