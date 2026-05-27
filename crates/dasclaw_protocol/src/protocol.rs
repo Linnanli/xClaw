@@ -4457,6 +4457,11 @@ mod tests {
                 .expect("canonical docs/public");
         let expected_dot_codex = AbsolutePathBuf::from_absolute_path(canonical_cwd.join(".codex"))
             .expect("canonical .codex");
+        // CODEX-DRIFT-IGNORE-START: dasclaw .dasclaw carve-out expectation (#874, ADR-136 amendment 3)
+        let expected_dot_dasclaw =
+            AbsolutePathBuf::from_absolute_path(canonical_cwd.join(".dasclaw"))
+                .expect("canonical .dasclaw");
+        // CODEX-DRIFT-IGNORE-END
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -4482,6 +4487,9 @@ mod tests {
                     canonical_cwd,
                     vec![
                         expected_dot_codex.to_path_buf(),
+                        // CODEX-DRIFT-IGNORE-START: dasclaw .dasclaw carve-out expectation (#874, ADR-136 amendment 3)
+                        expected_dot_dasclaw.to_path_buf(),
+                        // CODEX-DRIFT-IGNORE-END
                         expected_docs.to_path_buf()
                     ],
                 ),
