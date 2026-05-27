@@ -308,7 +308,11 @@ tracing-test = "0.2"
 testcontainers-modules = { version = "0.11", features = ["postgres"] }
 pretty_assertions = "1"
 tempfile = "3"
-insta = "1.46.3"
+# Snapshot tests. Version is centrally pinned via the root
+# `[workspace.dependencies]` table (issues #898 / #899); the workspace
+# entry also enables the `json` feature, which is inert for tests that
+# only use `assert_snapshot!`.
+insta = { workspace = true }
 criterion = "0.5"
 
 [[bench]]
