@@ -24,7 +24,7 @@ mod tests {
         NotifyConfig, Routine, RoutineAction, RoutineGuardrails, RoutineRun, RunStatus, Trigger,
     };
     use ironclaw::agent::routine_engine::RoutineEngine;
-    use ironclaw::agent::{HeartbeatConfig, HeartbeatRunner, Scheduler, SchedulerDeps};
+    use ironclaw::agent::{HeartbeatConfig, HeartbeatRunner, JobDispatcher, JobDispatcherDeps};
     use ironclaw::channels::IncomingMessage;
     use ironclaw::config::{AgentConfig, RoutineConfig, SafetyConfig};
     use ironclaw::db::{Database, libsql::LibSqlBackend};
@@ -336,12 +336,12 @@ mod tests {
         let llm: Arc<dyn LlmProvider> = Arc::new(TraceLlm::from_trace(trace));
         let extension_manager = extension_owner_id
             .map(|owner_id| make_test_extension_manager(registry.clone(), tools_dir, owner_id));
-        let scheduler = Arc::new(Scheduler::new(
+        let scheduler = Arc::new(JobDispatcher::new(
             AgentConfig::for_testing(),
             Arc::new(ContextManager::new(5)),
             llm.clone(),
             safety.clone(),
-            SchedulerDeps {
+            JobDispatcherDeps {
                 tools: registry.clone(),
                 extension_manager: extension_manager.clone(),
                 store: Some(ironclaw::tenant::AdminScope::new(db.clone())),

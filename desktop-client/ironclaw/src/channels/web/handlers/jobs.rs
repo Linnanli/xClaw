@@ -502,7 +502,7 @@ pub async fn jobs_restart_handler(
 
             let slot = state.scheduler.as_ref().ok_or((
                 StatusCode::SERVICE_UNAVAILABLE,
-                "Scheduler not available".to_string(),
+                "JobDispatcher not available".to_string(),
             ))?;
             let scheduler_guard = slot.read().await;
             let scheduler = scheduler_guard.as_ref().ok_or((

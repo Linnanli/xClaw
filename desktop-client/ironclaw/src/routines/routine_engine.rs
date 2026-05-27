@@ -8,7 +8,7 @@
 //! - An **event matcher** called synchronously from the agent main loop
 //!
 //! Lightweight routines execute inline (single LLM call, no scheduler slot).
-//! Full-job routines are delegated to the existing `Scheduler`.
+//! Full-job routines are delegated to the existing `JobDispatcher`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -32,12 +32,12 @@ use crate::routines::routine::{
     NotifyConfig, Routine, RoutineAction, RoutineRun, RunStatus, Trigger,
     apply_routine_verification_result, next_cron_fire, routine_verification_fingerprint,
 };
-use crate::routines::scheduler::Scheduler;
 use crate::tenant::AdminScope;
 use crate::tools::{
     ToolError, ToolRegistry, autonomous_allowed_tool_names, autonomous_unavailable_message,
     prepare_tool_params,
 };
+use crate::worker::job_dispatcher::JobDispatcher;
 use crate::workspace::Workspace;
 use dasclaw_runtime::JobState;
 use dasclaw_runtime::context::JobContext;
@@ -110,8 +110,8 @@ pub struct RoutineEngine {
     running_count: Arc<AtomicUsize>,
     /// Cached matchers for all event-driven routines.
     event_cache: Arc<RwLock<Vec<EventMatcher>>>,
-    /// Scheduler for dispatching jobs (FullJob mode).
-    scheduler: Option<Arc<Scheduler>>,
+    /// JobDispatcher for dispatching jobs (FullJob mode).
+    scheduler: Option<Arc<JobDispatcher>>,
     /// Owner-scoped extension activation state for autonomous tool resolution.
     extension_manager: Option<Arc<ExtensionManager>>,
     /// Tool registry for lightweight routine tool execution.
@@ -134,7 +134,7 @@ impl RoutineEngine {
         llm: Arc<dyn LlmProvider>,
         workspace: Arc<Workspace>,
         notify_tx: mpsc::Sender<OutgoingResponse>,
-        scheduler: Option<Arc<Scheduler>>,
+        scheduler: Option<Arc<JobDispatcher>>,
         extension_manager: Option<Arc<ExtensionManager>>,
         tools: Arc<ToolRegistry>,
         safety: Arc<SafetyLayer>,
@@ -1085,7 +1085,7 @@ struct EngineContext {
     workspace: Arc<Workspace>,
     notify_tx: mpsc::Sender<OutgoingResponse>,
     running_count: Arc<AtomicUsize>,
-    scheduler: Option<Arc<Scheduler>>,
+    scheduler: Option<Arc<JobDispatcher>>,
     extension_manager: Option<Arc<ExtensionManager>>,
     tools: Arc<ToolRegistry>,
     safety: Arc<SafetyLayer>,
@@ -1253,7 +1253,7 @@ fn sanitize_routine_name(name: &str) -> String {
 
 /// Execute a full-job routine by dispatching to the scheduler.
 ///
-/// Fire-and-forget: creates a job via `Scheduler::dispatch_job` (which handles
+/// Fire-and-forget: creates a job via `JobDispatcher::dispatch_job` (which handles
 /// creation, metadata, persistence, and scheduling), links the routine run to
 /// the job, then watches it via `FullJobWatcher` until it reaches a
 /// non-active state (not Pending/InProgress/Stuck). Returns the final

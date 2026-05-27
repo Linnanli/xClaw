@@ -36,9 +36,9 @@ pub use crate::routines::heartbeat;
 pub use crate::routines::job_monitor;
 pub use crate::routines::routine;
 pub use crate::routines::routine_engine;
-pub(crate) use crate::routines::scheduler;
 pub use crate::routines::self_repair;
 
+pub use crate::worker::job_dispatcher::{JobDispatcher, JobDispatcherDeps};
 pub(crate) use agent_loop::truncate_for_preview;
 pub use agent_loop::{Agent, AgentDeps};
 pub use compaction::{CompactionResult, ContextCompactor};
@@ -50,7 +50,6 @@ pub use heartbeat::{
 pub use router::{MessageIntent, Router};
 pub use routine::{Routine, RoutineAction, RoutineRun, Trigger};
 pub use routine_engine::{RoutineEngine, SandboxReadiness};
-pub use scheduler::{Scheduler, SchedulerDeps};
 pub use self_repair::{BrokenTool, RepairResult, RepairTask, SelfRepair, StuckJob};
 pub use session::{PendingApproval, PendingAuth, Session, Thread, ThreadState, Turn, TurnState};
 // `SessionManager` now lives in the `dasclaw_core` runtime crate (Phase 3

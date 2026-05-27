@@ -234,3 +234,5 @@ python3.12 scripts/check_no_panics.py --base origin/xClaw
 - WASM runtime 内核行为（归 `dasclaw_wasm_tools` fuzz）
 - Docker 容器实启动（归 `desktop-client/ironclaw/sandbox/`）
 - admin-backend 审批工单链路（归 `admin-backend/tests/integration_smoke_tests.rs`）
+
+**并发 LLM job 派发**（ironclaw 内部 `worker::JobDispatcher`，原名 `routines::scheduler::Scheduler`）属于 GUI/daemon 业务，不抽到 headless agent crate。`dasclaw_cli` 在当前阶段始终单 job 同步跑完，不需要并发派发能力。若未来引入 `dasclaw serve` daemon 模式，需要独立 follow-up ADR 评估抽取必要性（issue #896）。

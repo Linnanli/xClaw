@@ -29,11 +29,11 @@ use dasclaw_runtime::context::ContextManager;
 use dasclaw_runtime::secrets::SecretsStore;
 use ironclaw_common::AppEvent;
 
-/// Lazy scheduler reference, filled after Agent::new creates the Scheduler.
+/// Lazy scheduler reference, filled after Agent::new creates the JobDispatcher.
 ///
-/// Solves the chicken-and-egg: tools are registered before the Scheduler exists
-/// (Scheduler needs the ToolRegistry). Created empty, filled after Agent::new.
-pub type SchedulerSlot = Arc<RwLock<Option<Arc<crate::agent::Scheduler>>>>;
+/// Solves the chicken-and-egg: tools are registered before the JobDispatcher exists
+/// (JobDispatcher needs the ToolRegistry). Created empty, filled after Agent::new.
+pub type JobDispatcherSlot = Arc<RwLock<Option<Arc<crate::worker::job_dispatcher::JobDispatcher>>>>;
 
 /// Resolve a job ID from a full UUID or a short prefix (like git short SHAs).
 ///
@@ -84,7 +84,7 @@ async fn resolve_job_id(input: &str, context_manager: &ContextManager) -> Result
 pub struct CreateJobTool {
     context_manager: Arc<ContextManager>,
     /// Lazy scheduler for dispatching local (non-sandbox) jobs.
-    scheduler_slot: Option<SchedulerSlot>,
+    scheduler_slot: Option<JobDispatcherSlot>,
     job_manager: Option<Arc<ContainerJobManager>>,
     store: Option<Arc<dyn Database>>,
     /// Broadcast sender for job events (used to subscribe a monitor).
@@ -137,7 +137,7 @@ impl CreateJobTool {
     }
 
     /// Inject a lazy scheduler slot for dispatching local (non-sandbox) jobs.
-    pub fn with_scheduler_slot(mut self, slot: SchedulerSlot) -> Self {
+    pub fn with_scheduler_slot(mut self, slot: JobDispatcherSlot) -> Self {
         self.scheduler_slot = Some(slot);
         self
     }
@@ -305,7 +305,7 @@ impl CreateJobTool {
         }
     }
 
-    /// Execute via Scheduler (persists to DB + spawns worker), or fall back to
+    /// Execute via JobDispatcher (persists to DB + spawns worker), or fall back to
     /// ContextManager-only if the scheduler isn't available yet.
     async fn execute_local(
         &self,

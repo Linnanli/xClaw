@@ -1,4 +1,19 @@
-//! Job scheduler for parallel execution.
+//! Parallel LLM job dispatcher (NOT a cron scheduler).
+//!
+//! `JobDispatcher` owns the concurrent execution of LLM-driven jobs and
+//! their sub-tasks: it spawns worker tasks, tracks running jobs and
+//! sub-tasks, forwards SSE / channel events, and enforces per-job token
+//! budgets. It does **not** decide *when* a job should run.
+//!
+//! The actual trigger surfaces (cron expressions, heartbeat ticks, event
+//! matchers, manual user submissions) live in
+//! [`crate::routines::routine_engine`] and [`crate::routines::heartbeat`].
+//! Those modules decide that a routine / heartbeat turn needs to run and
+//! then delegate the actual concurrent dispatch to a `JobDispatcher`.
+//!
+//! Renamed from `routines::scheduler::Scheduler` (issue #896) — the old
+//! "scheduler" name was misleading because it lived next to the real
+//! cron / event triggers in `routines/`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -50,7 +65,7 @@ struct ScheduledSubtask {
 }
 
 /// Shared scheduler-owned dependencies that are forwarded into autonomous runs.
-pub struct SchedulerDeps {
+pub struct JobDispatcherDeps {
     pub tools: Arc<ToolRegistry>,
     pub extension_manager: Option<Arc<ExtensionManager>>,
     pub store: Option<AdminScope>,
@@ -58,7 +73,7 @@ pub struct SchedulerDeps {
 }
 
 /// Schedules and manages parallel job execution.
-pub struct Scheduler {
+pub struct JobDispatcher {
     config: AgentConfig,
     context_manager: Arc<ContextManager>,
     llm: Arc<dyn LlmProvider>,
@@ -81,14 +96,14 @@ pub struct Scheduler {
     subtasks: Arc<RwLock<HashMap<Uuid, ScheduledSubtask>>>,
 }
 
-impl Scheduler {
+impl JobDispatcher {
     /// Create a new scheduler.
     pub fn new(
         config: AgentConfig,
         context_manager: Arc<ContextManager>,
         llm: Arc<dyn LlmProvider>,
         safety: Arc<SafetyLayer>,
-        deps: SchedulerDeps,
+        deps: JobDispatcherDeps,
     ) -> Self {
         Self {
             config,
@@ -591,7 +606,7 @@ impl Scheduler {
 
         let normalized_params = prepare_tool_params(tool.as_ref(), &params);
 
-        // Scheduler-specific approval check
+        // JobDispatcher-specific approval check
         let requirement = tool.requires_approval(&normalized_params);
         let blocked =
             ApprovalContext::is_blocked_or_default(&approval_context, tool_name, requirement);
@@ -820,11 +835,11 @@ mod tests {
         }
     }
 
-    /// Create a Scheduler for token-budget tests. The LLM stub will fail if a
+    /// Create a JobDispatcher for token-budget tests. The LLM stub will fail if a
     /// worker actually tries to call it, but `dispatch_job` sets the token
     /// budget *before* spawning the worker so we can inspect the context
     /// immediately after dispatch.
-    fn make_test_scheduler(max_tokens_per_job: u64) -> Scheduler {
+    fn make_test_scheduler(max_tokens_per_job: u64) -> JobDispatcher {
         let config = AgentConfig {
             name: "test".to_string(),
             max_parallel_jobs: 5,
@@ -856,12 +871,12 @@ mod tests {
         let tools = Arc::new(ToolRegistry::new());
         let hooks = Arc::new(HookRegistry::default());
 
-        Scheduler::new(
+        JobDispatcher::new(
             config,
             cm,
             llm,
             safety,
-            SchedulerDeps {
+            JobDispatcherDeps {
                 tools,
                 extension_manager: None,
                 store: None,
@@ -1058,7 +1073,7 @@ mod tests {
         let (tools, cm, safety, job_id) = setup_tools_and_job().await;
 
         // Without approval context, UnlessAutoApproved is blocked
-        let result = Scheduler::execute_tool_task(
+        let result = JobDispatcher::execute_tool_task(
             tools.clone(),
             cm.clone(),
             safety.clone(),
@@ -1074,7 +1089,7 @@ mod tests {
         );
 
         // Always is also blocked
-        let result = Scheduler::execute_tool_task(
+        let result = JobDispatcher::execute_tool_task(
             tools,
             cm,
             safety,
@@ -1095,7 +1110,7 @@ mod tests {
         let (tools, cm, safety, job_id) = setup_tools_and_job().await;
 
         // Autonomous execution only allows tools explicitly in scope.
-        let result = Scheduler::execute_tool_task(
+        let result = JobDispatcher::execute_tool_task(
             tools.clone(),
             cm.clone(),
             safety.clone(),
@@ -1113,7 +1128,7 @@ mod tests {
         );
 
         // But still blocks Always
-        let result = Scheduler::execute_tool_task(
+        let result = JobDispatcher::execute_tool_task(
             tools,
             cm,
             safety,
@@ -1139,7 +1154,7 @@ mod tests {
             "hard_gate".to_string(),
         ]);
 
-        let result = Scheduler::execute_tool_task(
+        let result = JobDispatcher::execute_tool_task(
             tools.clone(),
             cm.clone(),
             safety.clone(),
@@ -1151,7 +1166,7 @@ mod tests {
         .await;
         assert!(result.is_ok(), "soft_gate should pass");
 
-        let result = Scheduler::execute_tool_task(
+        let result = JobDispatcher::execute_tool_task(
             tools,
             cm,
             safety,
@@ -1224,7 +1239,7 @@ mod tests {
             injection_check_enabled: false,
         }));
 
-        let result = Scheduler::execute_tool_task(
+        let result = JobDispatcher::execute_tool_task(
             Arc::new(registry),
             cm,
             safety,

@@ -294,7 +294,7 @@ mod advanced {
     //
     // Exercises the full routine execution stack:
     //   routine_create → routine_fire → RoutineEngine::fire_manual →
-    //   Scheduler::dispatch_job_with_context → Worker (autonomous) →
+    //   JobDispatcher::dispatch_job_with_context → Worker (autonomous) →
     //   http + memory_write + message (broadcast to test channel)
     // -----------------------------------------------------------------------
 
