@@ -25,7 +25,7 @@ use crate::hooks::{EgressKind, HookBundle};
 use crate::intent::{TOOL_INTENT_NUDGE, TRUNCATED_TOOL_CALL_NOTICE, llm_signals_tool_intent};
 use crate::messages::{ChatMessage, FinishReason, Role, ToolCall};
 use crate::reasoning_ctx::ReasoningContext;
-use crate::response_types::{RespondOutput, RespondResult, ResponseMetadata};
+use crate::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
 use crate::session::PendingApproval;
 use crate::traits::HostError;
 
@@ -123,19 +123,30 @@ pub trait LoopDelegate: Send + Sync {
     /// Handle a text-only response from the LLM.
     /// Return `TextAction::Return` to exit the loop, `TextAction::Continue`
     /// to proceed.
+    ///
+    /// `usage` is the per-turn token usage from the call that produced
+    /// `text`. Delegates that persist the assistant turn (e.g. to a session
+    /// transcript) MUST attach it via [`ChatMessage::with_usage`] so the
+    /// stored history matches claw-code's `ConversationMessage.usage` shape.
     async fn handle_text_response(
         &self,
         text: &str,
         metadata: ResponseMetadata,
+        usage: TokenUsage,
         reason_ctx: &mut ReasoningContext,
     ) -> TextAction;
 
     /// Execute tool calls and add results to context.
     /// Return `Some(outcome)` to break the loop (e.g. approval needed).
+    ///
+    /// `usage` is the per-turn token usage from the call that produced
+    /// `tool_calls`. Delegates that record the assistant tool-call turn
+    /// MUST attach it via [`ChatMessage::with_usage`].
     async fn execute_tool_calls(
         &self,
         tool_calls: Vec<ToolCall>,
         content: Option<String>,
+        usage: TokenUsage,
         reason_ctx: &mut ReasoningContext,
     ) -> Result<Option<LoopOutcome>, HostError>;
 
@@ -259,6 +270,7 @@ pub async fn run_agentic_loop(
 
         match output.result {
             RespondResult::Text(text) => {
+                let usage = output.usage;
                 // Tool intent nudge: if the LLM says "let me search..."
                 // without actually calling a tool, inject a nudge message.
                 if config.enable_tool_intent_nudge
@@ -273,7 +285,9 @@ pub async fn run_agentic_loop(
                         "LLM expressed tool intent without calling a tool, nudging"
                     );
                     delegate.on_tool_intent_nudge(&text, reason_ctx).await;
-                    reason_ctx.messages.push(ChatMessage::assistant(&text));
+                    reason_ctx
+                        .messages
+                        .push(ChatMessage::assistant(&text).with_usage(usage));
                     reason_ctx
                         .messages
                         .push(ChatMessage::user(TOOL_INTENT_NUDGE));
@@ -288,7 +302,7 @@ pub async fn run_agentic_loop(
                 }
 
                 match delegate
-                    .handle_text_response(&text, output.metadata, reason_ctx)
+                    .handle_text_response(&text, output.metadata, usage, reason_ctx)
                     .await
                 {
                     TextAction::Return(outcome) => return Ok(outcome),
@@ -299,6 +313,7 @@ pub async fn run_agentic_loop(
                 tool_calls,
                 content,
             } => {
+                let usage = output.usage;
                 // If the response was truncated, tool call parameters are
                 // likely incomplete. Discard them and tell the LLM to try a
                 // different approach rather than executing malformed calls.
@@ -312,7 +327,9 @@ pub async fn run_agentic_loop(
                         "Discarding truncated tool calls (finish_reason=Length)"
                     );
                     if let Some(ref text) = content {
-                        reason_ctx.messages.push(ChatMessage::assistant(text));
+                        reason_ctx
+                            .messages
+                            .push(ChatMessage::assistant(text).with_usage(usage));
                     }
                     reason_ctx
                         .messages
@@ -331,7 +348,7 @@ pub async fn run_agentic_loop(
                 truncation_count = 0;
 
                 if let Some(outcome) = delegate
-                    .execute_tool_calls(tool_calls, content, reason_ctx)
+                    .execute_tool_calls(tool_calls, content, usage, reason_ctx)
                     .await?
                 {
                     return Ok(outcome);
@@ -452,6 +469,7 @@ mod tests {
             &self,
             text: &str,
             _metadata: ResponseMetadata,
+            _usage: TokenUsage,
             _reason_ctx: &mut ReasoningContext,
         ) -> TextAction {
             TextAction::Return(LoopOutcome::Response(text.to_string()))
@@ -461,6 +479,7 @@ mod tests {
             &self,
             _tool_calls: Vec<ToolCall>,
             _content: Option<String>,
+            _usage: TokenUsage,
             reason_ctx: &mut ReasoningContext,
         ) -> Result<Option<LoopOutcome>, HostError> {
             self.tool_exec_count.fetch_add(1, Ordering::SeqCst);
@@ -598,6 +617,7 @@ mod tests {
                 &self,
                 _: &str,
                 metadata: ResponseMetadata,
+                _: TokenUsage,
                 _: &mut ReasoningContext,
             ) -> TextAction {
                 assert_eq!(metadata.anomaly, Some(ResponseAnomaly::EmptyToolCompletion));
@@ -610,6 +630,7 @@ mod tests {
                 &self,
                 _: Vec<ToolCall>,
                 _: Option<String>,
+                _: TokenUsage,
                 _: &mut ReasoningContext,
             ) -> Result<Option<LoopOutcome>, HostError> {
                 Ok(None)
@@ -659,6 +680,7 @@ mod tests {
                 &self,
                 _: &str,
                 _: ResponseMetadata,
+                _: TokenUsage,
                 ctx: &mut ReasoningContext,
             ) -> TextAction {
                 ctx.messages.push(ChatMessage::assistant("still working"));
@@ -668,6 +690,7 @@ mod tests {
                 &self,
                 _: Vec<ToolCall>,
                 _: Option<String>,
+                _: TokenUsage,
                 _: &mut ReasoningContext,
             ) -> Result<Option<LoopOutcome>, HostError> {
                 Ok(None)
@@ -994,6 +1017,7 @@ mod tests {
                 &self,
                 text: &str,
                 _: ResponseMetadata,
+                _: TokenUsage,
                 _: &mut ReasoningContext,
             ) -> TextAction {
                 TextAction::Return(LoopOutcome::Response(text.to_string()))
@@ -1002,6 +1026,7 @@ mod tests {
                 &self,
                 _: Vec<ToolCall>,
                 _: Option<String>,
+                _: TokenUsage,
                 _: &mut ReasoningContext,
             ) -> Result<Option<LoopOutcome>, HostError> {
                 Ok(None)

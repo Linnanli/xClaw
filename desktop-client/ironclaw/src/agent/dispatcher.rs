@@ -575,6 +575,7 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
         &self,
         text: &str,
         _metadata: crate::llm::ResponseMetadata,
+        _usage: dasclaw_core::TokenUsage,
         _reason_ctx: &mut ReasoningContext,
     ) -> TextAction {
         // Strip internal "[Called tool ...]" text that can leak when
@@ -588,6 +589,7 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
         &self,
         tool_calls: Vec<crate::llm::ToolCall>,
         content: Option<String>,
+        usage: dasclaw_core::TokenUsage,
         reason_ctx: &mut ReasoningContext,
     ) -> Result<Option<LoopOutcome>, HostError> {
         // Extract and sanitize the narrative before consuming `content`.
@@ -613,12 +615,9 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
 
         // Add the assistant message with tool_calls to context.
         // OpenAI protocol requires this before tool-result messages.
-        reason_ctx
-            .messages
-            .push(ChatMessage::assistant_with_tool_calls(
-                content,
-                tool_calls.clone(),
-            ));
+        reason_ctx.messages.push(
+            ChatMessage::assistant_with_tool_calls(content, tool_calls.clone()).with_usage(usage),
+        );
 
         // Execute tools and add results to context
         let _ = self

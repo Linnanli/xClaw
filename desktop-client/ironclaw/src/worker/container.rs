@@ -487,6 +487,7 @@ impl LoopDelegate for ContainerDelegate {
         &self,
         text: &str,
         metadata: ResponseMetadata,
+        usage: dasclaw_core::TokenUsage,
         reason_ctx: &mut ReasoningContext,
     ) -> TextAction {
         let action = {
@@ -553,7 +554,9 @@ impl LoopDelegate for ContainerDelegate {
             return TextAction::Return(LoopOutcome::Response(output));
         }
 
-        reason_ctx.messages.push(ChatMessage::assistant(text));
+        reason_ctx
+            .messages
+            .push(ChatMessage::assistant(text).with_usage(usage));
         TextAction::Continue
     }
 
@@ -561,6 +564,7 @@ impl LoopDelegate for ContainerDelegate {
         &self,
         tool_calls: Vec<crate::llm::ToolCall>,
         content: Option<String>,
+        usage: dasclaw_core::TokenUsage,
         reason_ctx: &mut ReasoningContext,
     ) -> Result<Option<LoopOutcome>, HostError> {
         {
@@ -580,12 +584,9 @@ impl LoopDelegate for ContainerDelegate {
         }
 
         // Add assistant message with tool_calls (OpenAI protocol)
-        reason_ctx
-            .messages
-            .push(ChatMessage::assistant_with_tool_calls(
-                content,
-                tool_calls.clone(),
-            ));
+        reason_ctx.messages.push(
+            ChatMessage::assistant_with_tool_calls(content, tool_calls.clone()).with_usage(usage),
+        );
 
         // Execute tools sequentially (container context — no parallel execution)
         for tc in tool_calls {

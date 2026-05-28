@@ -78,6 +78,7 @@ impl LoopDelegate for StubDelegate {
         &self,
         text: &str,
         _metadata: ResponseMetadata,
+        _usage: TokenUsage,
         _reason_ctx: &mut ReasoningContext,
     ) -> TextAction {
         TextAction::Return(LoopOutcome::Response(text.to_string()))
@@ -87,6 +88,7 @@ impl LoopDelegate for StubDelegate {
         &self,
         _tool_calls: Vec<ToolCall>,
         _content: Option<String>,
+        _usage: TokenUsage,
         _reason_ctx: &mut ReasoningContext,
     ) -> Result<Option<LoopOutcome>, HostError> {
         Ok(None)
