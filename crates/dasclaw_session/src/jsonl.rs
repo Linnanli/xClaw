@@ -206,7 +206,7 @@ struct SessionMetaRecord<'a> {
 struct MessageRecord<'a> {
     #[serde(rename = "type")]
     kind: &'a str,
-    message: ClawMessage,
+    message: &'a ClawMessage,
 }
 
 #[derive(Debug, Serialize)]
@@ -261,9 +261,10 @@ fn render_jsonl(snapshot: &SessionSnapshot) -> Result<Vec<u8>, SessionError> {
         out.push(b'\n');
     }
     for message in &snapshot.messages {
+        let claw_message = chat_message_to_claw(message);
         let record = MessageRecord {
             kind: "message",
-            message: chat_message_to_claw(message),
+            message: &claw_message,
         };
         serde_json::to_writer(&mut out, &record)?;
         out.push(b'\n');
