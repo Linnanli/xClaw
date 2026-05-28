@@ -14,7 +14,7 @@
 //!   `ContentBlock` has no image variant, so the conversion keeps
 //!   the text content only. Documented behaviour, explicitly tested.
 
-use dasclaw_core::messages::{ChatMessage, ContentPart, ImageUrl, Role, ToolCall};
+use dasclaw_core::messages::{ChatMessage, ContentPart, ImageUrl, Role, TokenUsage, ToolCall};
 use dasclaw_session::claw_compat::{
     ClawContentBlock, ClawMessage, ClawRole, chat_message_to_claw, claw_to_chat_message,
 };
@@ -231,4 +231,128 @@ fn req_dasclaw_session_d1_tool_result_claw_code_wire_parses() {
         }
         other => panic!("expected ToolResult, got {other:?}"),
     }
+}
+
+#[test]
+fn req_dasclaw_session_929_tool_error_round_trips() {
+    // #929 step 3: ChatMessage::tool_result + explicit tool_error=Some(true)
+    // must persist via ClawContentBlock::ToolResult { is_error: true } and
+    // come back with tool_error=Some(true). Defaulting to false on the way
+    // out is acceptable when the source did not set it, but a non-default
+    // value must not be silently dropped.
+    let mut original = ChatMessage::tool_result("call_err", "shell", "command not found");
+    original.tool_error = Some(true);
+
+    let claw = chat_message_to_claw(&original);
+    match &claw.blocks[..] {
+        [ClawContentBlock::ToolResult { is_error, .. }] => {
+            assert!(
+                *is_error,
+                "tool_error=Some(true) must serialize as is_error=true"
+            );
+        }
+        other => panic!("expected ToolResult, got {other:?}"),
+    }
+
+    let back = claw_to_chat_message(&claw);
+    assert_eq!(back.tool_error, Some(true));
+    assert_eq!(back.content, "command not found");
+}
+
+#[test]
+fn req_dasclaw_session_929_tool_result_unspecified_error_flattens_to_false() {
+    // When tool_error is None (legacy / unset), the claw wire schema
+    // still requires a bool, so we emit false. Round-trip then gives
+    // tool_error=Some(false) — that's a forward step, not data loss.
+    let original = ChatMessage::tool_result("call_ok", "shell", "ok");
+    assert!(original.tool_error.is_none());
+
+    let claw = chat_message_to_claw(&original);
+    match &claw.blocks[..] {
+        [ClawContentBlock::ToolResult { is_error, .. }] => assert!(!is_error),
+        other => panic!("expected ToolResult, got {other:?}"),
+    }
+
+    let back = claw_to_chat_message(&claw);
+    assert_eq!(back.tool_error, Some(false));
+}
+
+#[test]
+fn req_dasclaw_session_929_assistant_usage_round_trips() {
+    // #929 step 3: ChatMessage.usage on an assistant turn must land on
+    // ClawMessage.usage and survive the round-trip. The wire layout
+    // must use the same field names claw-code's `ConversationMessage`
+    // emits (input_tokens / output_tokens / cache_creation_input_tokens
+    // / cache_read_input_tokens).
+    let usage = TokenUsage {
+        input_tokens: 100,
+        output_tokens: 25,
+        cache_creation_input_tokens: 4,
+        cache_read_input_tokens: 2,
+    };
+    let original = ChatMessage::assistant("the answer is 42").with_usage(usage);
+
+    let claw = chat_message_to_claw(&original);
+    assert_eq!(claw.usage, Some(usage));
+
+    // Wire shape must match claw-code: usage object beside blocks,
+    // with the canonical four field names.
+    let json = serde_json::to_value(&claw).expect("ser");
+    let u = json
+        .get("usage")
+        .expect("usage emitted on assistant message");
+    assert_eq!(u["input_tokens"], 100);
+    assert_eq!(u["output_tokens"], 25);
+    assert_eq!(u["cache_creation_input_tokens"], 4);
+    assert_eq!(u["cache_read_input_tokens"], 2);
+
+    let back = claw_to_chat_message(&claw);
+    assert_eq!(back.usage, Some(usage));
+    assert_eq!(back.content, "the answer is 42");
+}
+
+#[test]
+fn req_dasclaw_session_929_assistant_without_usage_omits_field_on_wire() {
+    // Backward-compat: when assistant has no usage, the wire shape
+    // must not emit a "usage" key (claw-code's optional schema
+    // matches `skip_serializing_if = Option::is_none`).
+    let original = ChatMessage::assistant("no usage here");
+    let claw = chat_message_to_claw(&original);
+    assert!(claw.usage.is_none());
+
+    let json = serde_json::to_value(&claw).expect("ser");
+    assert!(
+        json.get("usage").is_none(),
+        "usage field must be omitted on the wire when None, got: {json}"
+    );
+}
+
+#[test]
+fn req_dasclaw_session_929_assistant_usage_wire_parses_back() {
+    // A claw-code-shaped JSON line with `usage` must parse cleanly
+    // through ClawMessage and back to ChatMessage::usage = Some(...).
+    let raw = r#"{
+        "role": "assistant",
+        "blocks": [{"type": "text", "text": "ok"}],
+        "usage": {
+            "input_tokens": 7,
+            "output_tokens": 3,
+            "cache_creation_input_tokens": 1,
+            "cache_read_input_tokens": 0
+        }
+    }"#;
+    let parsed: ClawMessage = serde_json::from_str(raw).expect("parse claw with usage");
+    assert_eq!(
+        parsed.usage,
+        Some(TokenUsage {
+            input_tokens: 7,
+            output_tokens: 3,
+            cache_creation_input_tokens: 1,
+            cache_read_input_tokens: 0,
+        })
+    );
+
+    let back = claw_to_chat_message(&parsed);
+    assert_eq!(back.role, Role::Assistant);
+    assert_eq!(back.usage.map(|u| u.input_tokens), Some(7));
 }
