@@ -3431,6 +3431,10 @@ dependencies = [
  "async-trait",
  "dasclaw_core",
  "dasclaw_runtime",
+ "insta",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
  "tokio",
  "tokio-util",
 ]

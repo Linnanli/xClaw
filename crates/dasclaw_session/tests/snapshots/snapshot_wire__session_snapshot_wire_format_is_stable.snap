@@ -1,0 +1,21 @@
+---
+source: crates/dasclaw_session/tests/snapshot_wire.rs
+expression: snap
+---
+{
+  "session_id": "session-1700000000000-0",
+  "version": 1,
+  "created_at_ms": 1700000000000,
+  "updated_at_ms": 1700000000500,
+  "model": "test-model",
+  "messages": [
+    {
+      "role": "user",
+      "content": "ping"
+    },
+    {
+      "role": "assistant",
+      "content": "pong"
+    }
+  ]
+}
