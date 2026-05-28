@@ -1,6 +1,30 @@
 //! Application-layer runtime types shared across dasclaw hosts (ironclaw,
 //! admin-backend, claw-code, ...).
 //!
+//! ## Multi-turn `Session` quick start (issue #907)
+//!
+//! ```ignore
+//! use std::sync::Arc;
+//! use dasclaw_runtime::{Agent, Session};
+//! use tokio_util::sync::CancellationToken;
+//!
+//! let token = CancellationToken::new();
+//! let agent = Arc::new(
+//!     Agent::builder()
+//!         .responder(my_responder)
+//!         .system_prompt("be concise")
+//!         .cancellation_token(token.clone())   // GUI "stop" button
+//!         .build()?,
+//! );
+//!
+//! let mut session = Session::new(agent.clone());
+//! let reply1 = session.run("what's 2 + 2?").await?;
+//! let reply2 = session.run("and times 10?").await?; // sees prior turn
+//!
+//! // From the GUI thread:
+//! token.cancel();                                   // halts in-flight run
+//! ```
+//!
 //! ## Modules
 //!
 //! - [`error`] — application-layer `ToolError` carrying the failing tool's
@@ -45,6 +69,7 @@ pub mod llm_adapter;
 pub mod rate_limit;
 pub mod recording;
 pub mod secrets;
+pub mod session;
 pub mod tool;
 pub mod tool_to_executor_adapter;
 
@@ -59,5 +84,6 @@ pub use job_context::JobContextCore;
 pub use llm_adapter::LlmProviderResponder;
 pub use rate_limit::{LimitType, RateLimitError, RateLimitResult, RateLimiter};
 pub use recording::{HttpExchange, HttpExchangeRequest, HttpExchangeResponse, HttpInterceptor};
+pub use session::Session;
 pub use tool::Tool;
 pub use tool_to_executor_adapter::ToolToExecutorAdapter;

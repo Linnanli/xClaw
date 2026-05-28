@@ -54,6 +54,7 @@ use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, ResponseMetadata};
 use dasclaw_core::traits::HostError;
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 
 /// Narrow LLM seam used by [`Agent`].
 ///
@@ -282,6 +283,10 @@ pub struct Agent {
     tool_output_sanitizer: Option<Arc<dyn ToolOutputSanitizer>>,
     hooks: HookBundle,
     config: AgentConfig,
+    /// Optional cancellation token wired through [`HeadlessDelegate::check_signals`].
+    /// When set and tripped, the agentic loop exits with
+    /// [`AgentError::Stopped`] on the next signal check. See issue #907.
+    cancellation_token: Option<CancellationToken>,
 }
 
 impl Agent {
@@ -291,10 +296,21 @@ impl Agent {
         AgentBuilder::default()
     }
 
-    /// Run a single user prompt through the loop and return the final
-    /// text response.
-    pub async fn run(&self, prompt: &str) -> Result<String, AgentError> {
-        let mut ctx = ReasoningContext::new();
+    /// Return a clone of the configured cancellation token, or `None` if
+    /// the agent was built without one. Callers (typically a GUI "stop"
+    /// button) cancel the returned handle to halt any in-flight
+    /// [`Agent::run`] or [`crate::Session::run`] at the next signal
+    /// check. See issue #907.
+    #[must_use]
+    pub fn cancel_handle(&self) -> Option<CancellationToken> {
+        self.cancellation_token.clone()
+    }
+
+    /// Seed a fresh [`ReasoningContext`] with the agent's static
+    /// configuration (system prompt, model override, advertised tools).
+    /// Shared by [`Agent::run`] and [`crate::Session::new`] so the
+    /// initialisation stays in one place.
+    pub(crate) fn seed_context(&self, ctx: &mut ReasoningContext) {
         if let Some(ref sp) = self.config.system_prompt {
             ctx.system_prompt = Some(sp.clone());
         }
@@ -304,6 +320,17 @@ impl Agent {
         if !self.config.tools.is_empty() {
             ctx.available_tools = self.config.tools.clone();
         }
+    }
+
+    /// Append `prompt` as a user message to `ctx` and drive the agentic
+    /// loop to completion. Called by [`Agent::run`] (after seeding a
+    /// fresh context) and by [`crate::Session::run`] (carrying the
+    /// session's accumulated context across turns).
+    pub(crate) async fn run_in_context(
+        &self,
+        ctx: &mut ReasoningContext,
+        prompt: &str,
+    ) -> Result<String, AgentError> {
         ctx.messages.push(ChatMessage::user(prompt));
 
         let loop_config = self
@@ -318,13 +345,34 @@ impl Agent {
             tool_executor: self.tool_executor.clone(),
             hooks: self.hooks.clone(),
             tool_output_sanitizer: self.tool_output_sanitizer.clone(),
+            cancellation_token: self.cancellation_token.clone(),
         };
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &loop_config, &self.hooks)
+        let outcome = run_agentic_loop(&delegate, ctx, &loop_config, &self.hooks)
             .await
             .map_err(AgentError::Responder)?;
 
-        map_outcome(outcome, loop_config.max_iterations)
+        let result = map_outcome(outcome, loop_config.max_iterations);
+        // The core loop's `handle_text_response` returns the final text
+        // straight to the caller without recording it as an assistant
+        // turn in `ctx`. For single-shot `Agent::run` that doesn't
+        // matter (the context is thrown away). For multi-turn
+        // `Session::run` it does: without this push the next call would
+        // not see what the model just said. Mirroring the
+        // `assistant_with_tool_calls` push already done by
+        // `execute_tool_calls` keeps the history shape consistent.
+        if let Ok(text) = &result {
+            ctx.messages.push(ChatMessage::assistant(text));
+        }
+        result
+    }
+
+    /// Run a single user prompt through the loop and return the final
+    /// text response.
+    pub async fn run(&self, prompt: &str) -> Result<String, AgentError> {
+        let mut ctx = ReasoningContext::new();
+        self.seed_context(&mut ctx);
+        self.run_in_context(&mut ctx, prompt).await
     }
 }
 
@@ -345,6 +393,7 @@ pub struct AgentBuilder {
     tool_output_sanitizer: Option<Arc<dyn ToolOutputSanitizer>>,
     hooks: Option<HookBundle>,
     config: AgentConfig,
+    cancellation_token: Option<CancellationToken>,
 }
 
 impl AgentBuilder {
@@ -435,6 +484,18 @@ impl AgentBuilder {
         self
     }
 
+    /// Wire a [`CancellationToken`] that the headless delegate consults
+    /// on each loop signal check. Cancelling the token from outside
+    /// (typically via [`Agent::cancel_handle`]) halts an in-flight
+    /// [`Agent::run`] or [`crate::Session::run`] with
+    /// [`AgentError::Stopped`] at the next iteration boundary. See issue
+    /// #907.
+    #[must_use]
+    pub fn cancellation_token(mut self, token: CancellationToken) -> Self {
+        self.cancellation_token = Some(token);
+        self
+    }
+
     /// Finalise the agent.
     pub fn build(self) -> Result<Agent, AgentError> {
         let responder = self.responder.ok_or(AgentError::MissingResponder)?;
@@ -445,6 +506,7 @@ impl AgentBuilder {
             tool_output_sanitizer: self.tool_output_sanitizer,
             hooks,
             config: self.config,
+            cancellation_token: self.cancellation_token,
         })
     }
 }
@@ -459,12 +521,16 @@ struct HeadlessDelegate {
     tool_executor: Option<Arc<dyn ToolExecutor>>,
     hooks: HookBundle,
     tool_output_sanitizer: Option<Arc<dyn ToolOutputSanitizer>>,
+    cancellation_token: Option<CancellationToken>,
 }
 
 #[async_trait]
 impl LoopDelegate for HeadlessDelegate {
     async fn check_signals(&self) -> LoopSignal {
-        LoopSignal::Continue
+        match self.cancellation_token.as_ref() {
+            Some(token) if token.is_cancelled() => LoopSignal::Stop,
+            _ => LoopSignal::Continue,
+        }
     }
 
     async fn before_llm_call(
