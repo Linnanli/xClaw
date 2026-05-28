@@ -308,9 +308,15 @@ impl Agent {
 
     /// Seed a fresh [`ReasoningContext`] with the agent's static
     /// configuration (system prompt, model override, advertised tools).
-    /// Shared by [`Agent::run`] and [`crate::Session::new`] so the
-    /// initialisation stays in one place.
-    pub(crate) fn seed_context(&self, ctx: &mut ReasoningContext) {
+    /// Shared by [`Agent::run`] and `dasclaw_session::Session::new` so
+    /// the initialisation stays in one place.
+    ///
+    /// This is part of the support API consumed by the
+    /// [`dasclaw_session`](https://docs.rs/dasclaw_session) crate; it is
+    /// public so that crate can build a multi-turn facade without
+    /// duplicating the seeding logic. End-host code should prefer
+    /// [`Agent::run`] or `dasclaw_session::Session`.
+    pub fn seed_context(&self, ctx: &mut ReasoningContext) {
         if let Some(ref sp) = self.config.system_prompt {
             ctx.system_prompt = Some(sp.clone());
         }
@@ -324,9 +330,12 @@ impl Agent {
 
     /// Append `prompt` as a user message to `ctx` and drive the agentic
     /// loop to completion. Called by [`Agent::run`] (after seeding a
-    /// fresh context) and by [`crate::Session::run`] (carrying the
-    /// session's accumulated context across turns).
-    pub(crate) async fn run_in_context(
+    /// fresh context) and by `dasclaw_session::Session::run` (carrying
+    /// the session's accumulated context across turns).
+    ///
+    /// Part of the same support API as [`Agent::seed_context`]; see
+    /// that method's docs for the rationale.
+    pub async fn run_in_context(
         &self,
         ctx: &mut ReasoningContext,
         prompt: &str,

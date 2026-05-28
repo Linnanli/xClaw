@@ -1,0 +1,18 @@
+[package]
+name = "dasclaw_session"
+version = "0.0.0-w6"
+edition = "2024"
+description = "Multi-turn `Session` facade over `dasclaw_runtime::Agent` (issue #907 Action 2, ADR-153 §4.3 phase 1). Future home for the richer `claw-code`-parity Session port (issue #914 PR-B/C: fork / compaction / jsonl persistence)."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# Provides `ChatMessage`, `ReasoningContext` — the conversation primitives.
+dasclaw_core = { path = "../dasclaw_core" }
+# Provides `Agent`, `AgentError`, and the `seed_context` / `run_in_context`
+# support API that `Session` delegates to.
+dasclaw_runtime = { path = "../dasclaw_runtime" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
+tokio-util = "0.7"
+async-trait = "0.1"

@@ -3425,6 +3425,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dasclaw_session"
+version = "0.0.0-w6"
+dependencies = [
+ "async-trait",
+ "dasclaw_core",
+ "dasclaw_runtime",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "dasclaw_shell_command"
 version = "0.0.0-w5"
 dependencies = [
