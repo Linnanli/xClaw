@@ -590,6 +590,8 @@ mod tests {
             tool_call_id: None,
             name: None,
             tool_calls: None,
+            tool_error: None,
+            usage: None,
         }
     }
 
@@ -657,6 +659,8 @@ mod tests {
             tool_call_id: None,
             name: None,
             tool_calls: None,
+            tool_error: None,
+            usage: None,
         };
         let im = map_user_message(&m);
         assert_eq!(im.content.len(), 2);
@@ -678,6 +682,8 @@ mod tests {
                 arguments: json!({"cmd": "ls"}),
                 reasoning: None,
             }]),
+            tool_error: None,
+            usage: None,
         };
         let im = map_assistant_message(&m);
         assert_eq!(im.content.len(), 2);
@@ -709,6 +715,8 @@ mod tests {
                 arguments: json!({"q": "rust"}),
                 reasoning: None,
             }]),
+            tool_error: None,
+            usage: None,
         };
         let im = map_assistant_message(&m);
         assert_eq!(im.content.len(), 1);
@@ -1017,6 +1025,8 @@ mod tests {
                     arguments: json!({"cmd": "ls /"}),
                     reasoning: None,
                 }]),
+                tool_error: None,
+                usage: None,
             },
             ChatMessage::tool_result("call-1", "shell", "bin\netc\nusr"),
         ];

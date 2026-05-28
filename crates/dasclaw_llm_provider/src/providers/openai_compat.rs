@@ -1009,13 +1009,13 @@ impl StreamState {
         }
 
         for state in self.tool_calls.values_mut() {
-            if !state.started {
-                if let Some(start_event) = state.start_event() {
-                    state.started = true;
-                    events.push(StreamEvent::ContentBlockStart(start_event));
-                    if let Some(delta_event) = state.delta_event() {
-                        events.push(StreamEvent::ContentBlockDelta(delta_event));
-                    }
+            if !state.started
+                && let Some(start_event) = state.start_event()
+            {
+                state.started = true;
+                events.push(StreamEvent::ContentBlockStart(start_event));
+                if let Some(delta_event) = state.delta_event() {
+                    events.push(StreamEvent::ContentBlockDelta(delta_event));
                 }
             }
             if state.started && !state.stopped {
