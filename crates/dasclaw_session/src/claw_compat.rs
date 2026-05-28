@@ -201,6 +201,8 @@ pub fn claw_to_chat_message(message: &ClawMessage) -> ChatMessage {
         tool_call_id: None,
         name: None,
         tool_calls: None,
+        tool_error: None,
+        usage: None,
     };
     if !tool_calls.is_empty() {
         msg.tool_calls = Some(tool_calls);

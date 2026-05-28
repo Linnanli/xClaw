@@ -7,7 +7,6 @@
 //! provider crate's unit tests can run standalone, without pulling ironclaw
 //! into the provider crate's dependency graph.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use async_trait::async_trait;
@@ -103,11 +102,6 @@ impl Default for StubLlm {
     fn default() -> Self {
         Self::new("OK")
     }
-}
-
-/// Helper for cheaply constructing a shared stub.
-pub fn stub(response: impl Into<String>) -> Arc<StubLlm> {
-    Arc::new(StubLlm::new(response))
 }
 
 #[async_trait]

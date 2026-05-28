@@ -248,10 +248,10 @@ async fn stream_dispatch_through_provider_client_returns_same_events() {
 
     let mut text = String::new();
     while let Some(event) = stream.next_event().await.expect("next ok") {
-        if let StreamEvent::ContentBlockDelta(delta) = event {
-            if let ContentBlockDelta::TextDelta { text: chunk } = delta.delta {
-                text.push_str(&chunk);
-            }
+        if let StreamEvent::ContentBlockDelta(delta) = event
+            && let ContentBlockDelta::TextDelta { text: chunk } = delta.delta
+        {
+            text.push_str(&chunk);
         }
     }
     assert_eq!(text, "hi");

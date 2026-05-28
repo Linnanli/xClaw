@@ -43,6 +43,21 @@ pub struct ImageUrl {
     pub detail: Option<String>,
 }
 
+/// Token counters accumulated for a single chat completion turn.
+///
+/// Field layout mirrors `claw-code`'s `runtime::TokenUsage` exactly so the
+/// two ecosystems can share session jsonl history without lossy conversion.
+/// Also matches the per-turn fields already emitted on
+/// [`CompletionResponse`] (`input_tokens` / `output_tokens` /
+/// `cache_creation_input_tokens` / `cache_read_input_tokens`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenUsage {
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub cache_creation_input_tokens: u32,
+    pub cache_read_input_tokens: u32,
+}
+
 /// A message in a conversation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -63,6 +78,18 @@ pub struct ChatMessage {
     /// to appear on the assistant message preceding tool result messages).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
+    /// Whether this tool-result message represents a tool execution error.
+    /// Only meaningful when `role == Role::Tool`. `None` means "unspecified"
+    /// (legacy callers that did not set it); `Some(false)` means success;
+    /// `Some(true)` means the tool reported an error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_error: Option<bool>,
+    /// Token usage attributed to this assistant message, if known.
+    /// Only meaningful when `role == Role::Assistant`. Providers may fill
+    /// this in when they hand back the assistant turn so session storage
+    /// can persist per-turn cost data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<TokenUsage>,
 }
 
 impl ChatMessage {
@@ -75,6 +102,8 @@ impl ChatMessage {
             tool_call_id: None,
             name: None,
             tool_calls: None,
+            tool_error: None,
+            usage: None,
         }
     }
 
@@ -87,6 +116,8 @@ impl ChatMessage {
             tool_call_id: None,
             name: None,
             tool_calls: None,
+            tool_error: None,
+            usage: None,
         }
     }
 
@@ -101,6 +132,8 @@ impl ChatMessage {
             tool_call_id: None,
             name: None,
             tool_calls: None,
+            tool_error: None,
+            usage: None,
         }
     }
 
@@ -113,6 +146,8 @@ impl ChatMessage {
             tool_call_id: None,
             name: None,
             tool_calls: None,
+            tool_error: None,
+            usage: None,
         }
     }
 
@@ -132,6 +167,8 @@ impl ChatMessage {
             } else {
                 Some(tool_calls)
             },
+            tool_error: None,
+            usage: None,
         }
     }
 
@@ -148,7 +185,31 @@ impl ChatMessage {
             tool_call_id: Some(tool_call_id.into()),
             name: Some(name.into()),
             tool_calls: None,
+            tool_error: None,
+            usage: None,
         }
+    }
+
+    /// Attach a tool-error flag to a tool-result message and return `self`.
+    ///
+    /// Convenience for `Self::tool_result(...).with_tool_error(is_error)`.
+    /// `is_error: false` is recorded explicitly (not erased to `None`) so
+    /// round-trips with `claw-code`'s `ContentBlock::ToolResult.is_error`
+    /// preserve the original signal.
+    #[must_use]
+    pub fn with_tool_error(mut self, is_error: bool) -> Self {
+        self.tool_error = Some(is_error);
+        self
+    }
+
+    /// Attach token usage to an assistant message and return `self`.
+    ///
+    /// Convenience for providers that want to record per-turn token counts
+    /// on the assistant message so the session store can persist them.
+    #[must_use]
+    pub fn with_usage(mut self, usage: TokenUsage) -> Self {
+        self.usage = Some(usage);
+        self
     }
 }
 
@@ -699,5 +760,66 @@ mod tests {
         strip_unsupported_tool_params(&unsupported, &mut req);
 
         assert!(req.stop_sequences.is_none()); // safety: test assertion for explicit strip behavior
+    }
+
+    #[test]
+    fn req_dasclaw_core_929_chat_message_tool_error_defaults_to_none() {
+        let msg = ChatMessage::tool_result("call-1", "shell", "ok");
+        assert!(msg.tool_error.is_none());
+    }
+
+    #[test]
+    fn req_dasclaw_core_929_with_tool_error_records_explicit_flag() {
+        let ok = ChatMessage::tool_result("call-1", "shell", "ok").with_tool_error(false);
+        let err = ChatMessage::tool_result("call-2", "shell", "boom").with_tool_error(true);
+        assert_eq!(ok.tool_error, Some(false));
+        assert_eq!(err.tool_error, Some(true));
+    }
+
+    #[test]
+    fn req_dasclaw_core_929_chat_message_usage_defaults_to_none() {
+        let msg = ChatMessage::assistant("hi");
+        assert!(msg.usage.is_none());
+    }
+
+    #[test]
+    fn req_dasclaw_core_929_with_usage_records_token_counts() {
+        let usage = TokenUsage {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_creation_input_tokens: 10,
+            cache_read_input_tokens: 20,
+        };
+        let msg = ChatMessage::assistant("hi").with_usage(usage);
+        assert_eq!(msg.usage, Some(usage));
+    }
+
+    #[test]
+    fn req_dasclaw_core_929_legacy_chat_message_json_round_trips_without_new_fields() {
+        // Pre-#929 callers serialized ChatMessage with no `tool_error` / `usage` keys;
+        // those wire payloads must still deserialize and re-serialize cleanly.
+        let legacy = serde_json::json!({
+            "role": "assistant",
+            "content": "hello",
+        });
+        let parsed: ChatMessage = serde_json::from_value(legacy.clone()).expect("legacy parse");
+        assert!(parsed.tool_error.is_none());
+        assert!(parsed.usage.is_none());
+        let reserialized = serde_json::to_value(&parsed).expect("reserialize");
+        assert!(reserialized.get("tool_error").is_none());
+        assert!(reserialized.get("usage").is_none());
+    }
+
+    #[test]
+    fn req_dasclaw_core_929_token_usage_round_trips_through_serde() {
+        let usage = TokenUsage {
+            input_tokens: 1,
+            output_tokens: 2,
+            cache_creation_input_tokens: 3,
+            cache_read_input_tokens: 4,
+        };
+        let json = serde_json::to_value(usage).expect("serialize");
+        let back: TokenUsage = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(back, usage);
     }
 }

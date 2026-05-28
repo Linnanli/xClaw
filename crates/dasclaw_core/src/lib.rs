@@ -51,8 +51,8 @@ pub use hooks::{
 };
 pub use messages::{
     ChatMessage, CompletionRequest, CompletionResponse, ContentPart, FinishReason, ImageUrl,
-    ModelMetadata, Role, ToolCall, ToolCompletionRequest, ToolCompletionResponse, ToolDefinition,
-    ToolResult, UnsupportedParam, generate_tool_call_id, sanitize_tool_messages,
+    ModelMetadata, Role, TokenUsage, ToolCall, ToolCompletionRequest, ToolCompletionResponse,
+    ToolDefinition, ToolResult, UnsupportedParam, generate_tool_call_id, sanitize_tool_messages,
     strip_unsupported_completion_params, strip_unsupported_tool_params,
 };
 pub use permissions::PermissionMode;
