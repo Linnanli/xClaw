@@ -138,3 +138,20 @@ wiremock = "0.6"
 # unintended CLI surface drift surfaces as a snapshot diff. Other tests
 # can opt in by adding their own `insta::assert_snapshot!(...)` calls and
 # committing the generated `tests/snapshots/*.snap` baseline.
+# Issue #911 (B5 — claw-code interop demo on GUI path): the example
+# `examples/claw_code_interop.rs` and the matching e2e
+# `tests/claw_code_interop_e2e.rs` wire `BashValidationHook` as
+# `HookBundle.egress`, then have the scripted tool executor delegate to
+# `dasclaw_apply_patch::{parse_patch, apply}` for the `apply_patch`
+# tool. Both the example and the e2e drive the shared demo entry point
+# `dasclaw_cli::claw_code_interop_demo::run_demo`.
+dasclaw_hooks = { path = "../dasclaw_hooks" }
+dasclaw_bash_validation = { path = "../dasclaw_bash_validation" }
+dasclaw_apply_patch = { path = "../dasclaw_apply_patch" }
+
+# Issue #911 (B5): executable proof for the three-lineage fusion on the
+# GUI/headless agent path. See `docs/INTEROP_DASCLAW.md` for the
+# claw-code → dasclaw_* concept map this example demonstrates.
+[[example]]
+name = "claw_code_interop"
+path = "examples/claw_code_interop.rs"
