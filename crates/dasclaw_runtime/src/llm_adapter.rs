@@ -36,8 +36,9 @@ use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
 use dasclaw_core::traits::HostError;
 use dasclaw_llm_provider::provider::provider::LlmProvider;
+use tokio::sync::mpsc;
 
-use crate::agent::AgentResponder;
+use crate::agent::{AgentEvent, AgentResponder};
 
 /// Adapt any [`LlmProvider`] into an [`AgentResponder`].
 ///
@@ -62,20 +63,72 @@ impl<P: LlmProvider> LlmProviderResponder<P> {
 #[async_trait]
 impl<P: LlmProvider + 'static> AgentResponder for LlmProviderResponder<P> {
     async fn respond(&self, ctx: &mut ReasoningContext) -> Result<RespondOutput, HostError> {
-        let mut messages = ctx.messages.clone();
-        sanitize_tool_messages(&mut messages);
-
-        let mut request = ToolCompletionRequest::new(messages, ctx.available_tools.clone());
-        if let Some(model) = ctx.model_override.as_ref() {
-            request = request.with_model(model);
-        }
-        if !ctx.metadata.is_empty() {
-            request.metadata = ctx.metadata.clone();
-        }
-
+        let request = build_request(ctx);
         let response = self.provider.complete_with_tools(request).await?;
         Ok(map_to_respond_output(response))
     }
+
+    /// Forward token-level text deltas to `event_tx` while the
+    /// underlying provider streams the response (issue #908).
+    ///
+    /// We bridge the provider's `UnboundedSender<String>` chunk channel
+    /// onto the agent-level `mpsc::Sender<AgentEvent>` via a forwarder
+    /// task: the LLM call only finishes once the provider closes its
+    /// chunk sender, so the forwarder always drains to completion. A
+    /// closed `event_tx` (consumer hung up) is treated as best-effort —
+    /// we keep draining the LLM chunks to avoid stalling the provider's
+    /// underlying SSE stream.
+    async fn respond_streaming(
+        &self,
+        ctx: &mut ReasoningContext,
+        event_tx: mpsc::Sender<AgentEvent>,
+    ) -> Result<RespondOutput, HostError> {
+        let request = build_request(ctx);
+        let (chunk_tx, mut chunk_rx) = mpsc::unbounded_channel::<String>();
+
+        // Forwarder runs concurrently with `complete_with_tools_stream`:
+        // the provider call won't return until it closes `chunk_tx`, at
+        // which point `chunk_rx` yields `None` and the forwarder exits.
+        let forwarder = tokio::spawn(async move {
+            while let Some(chunk) = chunk_rx.recv().await {
+                if event_tx.send(AgentEvent::TextChunk(chunk)).await.is_err() {
+                    // Consumer hung up — drain the rest silently so
+                    // the provider stream isn't back-pressured.
+                    while chunk_rx.recv().await.is_some() {}
+                    break;
+                }
+            }
+        });
+
+        let response = self
+            .provider
+            .complete_with_tools_stream(request, chunk_tx)
+            .await;
+        // Whether the call succeeded or failed, wait for the forwarder
+        // to drain so all already-sent chunks reach `event_tx` before
+        // the caller observes the FinishReason event in `call_llm`.
+        let _ = forwarder.await;
+        Ok(map_to_respond_output(response?))
+    }
+}
+
+/// Build a [`ToolCompletionRequest`] from the agent's reasoning context.
+///
+/// Extracted out of [`AgentResponder::respond`] so the streaming
+/// variant produces a byte-identical request — keeping the two paths in
+/// sync without duplicating the message-sanitisation rules.
+fn build_request(ctx: &ReasoningContext) -> ToolCompletionRequest {
+    let mut messages = ctx.messages.clone();
+    sanitize_tool_messages(&mut messages);
+
+    let mut request = ToolCompletionRequest::new(messages, ctx.available_tools.clone());
+    if let Some(model) = ctx.model_override.as_ref() {
+        request = request.with_model(model);
+    }
+    if !ctx.metadata.is_empty() {
+        request.metadata = ctx.metadata.clone();
+    }
+    request
 }
 
 /// Translate a provider [`ToolCompletionResponse`] into the
@@ -262,5 +315,80 @@ mod tests {
             _ => panic!("expected ToolCalls"),
         }
         assert_eq!(output.finish_reason, FinishReason::ToolUse);
+    }
+
+    /// Provider that overrides the streaming entry point with a real
+    /// chunked emission so we can verify the adapter forwards every
+    /// chunk on `event_tx` and still returns the full `RespondOutput`.
+    struct StreamingMockProvider {
+        chunks: Vec<String>,
+    }
+
+    #[async_trait]
+    impl LlmProvider for StreamingMockProvider {
+        fn model_name(&self) -> &str {
+            "mock-stream"
+        }
+
+        fn cost_per_token(&self) -> (Decimal, Decimal) {
+            (Decimal::ZERO, Decimal::ZERO)
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, LlmError> {
+            unreachable!()
+        }
+
+        async fn complete_with_tools(
+            &self,
+            _request: ToolCompletionRequest,
+        ) -> Result<ToolCompletionResponse, LlmError> {
+            unreachable!("streaming path should be exercised")
+        }
+
+        fn supports_streaming(&self) -> bool {
+            true
+        }
+
+        async fn complete_with_tools_stream(
+            &self,
+            _request: ToolCompletionRequest,
+            chunk_tx: tokio::sync::mpsc::UnboundedSender<String>,
+        ) -> Result<ToolCompletionResponse, LlmError> {
+            for chunk in &self.chunks {
+                // A closed receiver shouldn't block real providers either.
+                let _ = chunk_tx.send(chunk.clone());
+            }
+            Ok(text_response(&self.chunks.concat()))
+        }
+    }
+
+    #[tokio::test]
+    async fn req_dasclaw_runtime_agent_b2_adapter_respond_streaming_forwards_chunks() {
+        let provider = Arc::new(StreamingMockProvider {
+            chunks: vec!["foo ".into(), "bar ".into(), "baz".into()],
+        });
+        let responder = LlmProviderResponder::new(Arc::clone(&provider));
+        let mut ctx = ReasoningContext::new();
+        ctx.messages.push(ChatMessage::user("hi"));
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::AgentEvent>(16);
+        let output = responder.respond_streaming(&mut ctx, tx).await.unwrap();
+
+        let mut got = Vec::new();
+        while let Some(ev) = rx.recv().await {
+            match ev {
+                crate::AgentEvent::TextChunk(s) => got.push(s),
+                other => panic!("unexpected event from adapter: {other:?}"),
+            }
+        }
+        assert_eq!(got, vec!["foo ", "bar ", "baz"]);
+
+        match output.result {
+            RespondResult::Text(t) => assert_eq!(t, "foo bar baz"),
+            _ => panic!("expected Text"),
+        }
     }
 }

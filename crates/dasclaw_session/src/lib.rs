@@ -25,7 +25,6 @@
 //!
 //! - **No fork / compaction** — see issue #914 PR-D.
 //! - **No prompt_history** — see issue #914 PR-D.
-//! - **No streaming** — see issue B2.
 //! - **No on-disk store** — see issue #914 PR-C.
 //!
 //! ## Example
@@ -78,7 +77,8 @@ use std::sync::Arc;
 
 use dasclaw_core::messages::ChatMessage;
 use dasclaw_core::reasoning_ctx::ReasoningContext;
-use dasclaw_runtime::{Agent, AgentError};
+use dasclaw_runtime::{Agent, AgentError, AgentEvent};
+use tokio::sync::mpsc;
 
 /// Stateful, multi-turn conversation handle around an [`Agent`].
 ///
@@ -172,6 +172,35 @@ impl Session {
         ctx.messages = std::mem::take(&mut self.state.messages);
 
         let result = self.agent.run_in_context(&mut ctx, prompt).await;
+
+        self.state.messages = std::mem::take(&mut ctx.messages);
+        if result.is_ok() {
+            self.state.touch();
+        }
+        result
+    }
+
+    /// Streaming variant of [`Session::run`] (issue #908, GUI blocker
+    /// B2). Replays the session's prior messages into a fresh
+    /// [`ReasoningContext`] and delegates to
+    /// [`Agent::run_in_context_streaming`], forwarding [`AgentEvent`]s
+    /// on `event_tx` as the agentic loop progresses. The final
+    /// assistant text is appended to the session snapshot on success,
+    /// matching [`Session::run`]'s history-shape contract so callers
+    /// can mix streaming and non-streaming turns freely.
+    pub async fn run_streaming(
+        &mut self,
+        prompt: &str,
+        event_tx: mpsc::Sender<AgentEvent>,
+    ) -> Result<String, AgentError> {
+        let mut ctx = ReasoningContext::new();
+        self.agent.seed_context(&mut ctx);
+        ctx.messages = std::mem::take(&mut self.state.messages);
+
+        let result = self
+            .agent
+            .run_in_context_streaming(&mut ctx, prompt, event_tx)
+            .await;
 
         self.state.messages = std::mem::take(&mut ctx.messages);
         if result.is_ok() {
