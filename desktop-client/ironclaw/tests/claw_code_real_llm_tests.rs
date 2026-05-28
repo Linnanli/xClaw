@@ -356,6 +356,8 @@ async fn test_qwen_full_tool_round_trip_with_final_answer() {
         tool_call_id: None,
         name: None,
         tool_calls: Some(first_resp.tool_calls.clone()),
+        tool_error: None,
+        usage: None,
     };
     history.push(assistant_msg);
 
