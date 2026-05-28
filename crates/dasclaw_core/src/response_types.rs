@@ -8,24 +8,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::messages::TokenUsage;
 use crate::messages::{FinishReason, ToolCall};
-
-/// Token usage from a single LLM call.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-pub struct TokenUsage {
-    pub input_tokens: u32,
-    pub output_tokens: u32,
-    /// Tokens served from the provider's server-side prompt cache (Anthropic).
-    pub cache_read_input_tokens: u32,
-    /// Tokens written to the provider's prompt cache (Anthropic).
-    pub cache_creation_input_tokens: u32,
-}
-
-impl TokenUsage {
-    pub fn total(&self) -> u32 {
-        self.input_tokens + self.output_tokens
-    }
-}
 
 /// Structured anomaly classification for LLM responses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

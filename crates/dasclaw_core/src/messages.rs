@@ -54,8 +54,17 @@ pub struct ImageUrl {
 pub struct TokenUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,
+    /// Tokens written to the provider's prompt cache (Anthropic).
     pub cache_creation_input_tokens: u32,
+    /// Tokens served from the provider's server-side prompt cache (Anthropic).
     pub cache_read_input_tokens: u32,
+}
+
+impl TokenUsage {
+    /// Sum of `input_tokens` and `output_tokens` (does not include cache fields).
+    pub fn total(&self) -> u32 {
+        self.input_tokens + self.output_tokens
+    }
 }
 
 /// A message in a conversation.
