@@ -64,7 +64,7 @@ pub mod store;
 pub use error::SessionError;
 pub use id::{SESSION_VERSION, generate_session_id};
 pub use jsonl::{JsonlSessionStore, MAX_ROTATED_FILES, ROTATE_AFTER_BYTES};
-pub use snapshot::{SessionMetadata, SessionSnapshot};
+pub use snapshot::{SessionCompaction, SessionMetadata, SessionSnapshot};
 pub use store::{InMemorySessionStore, SessionStore};
 
 use std::path::PathBuf;
@@ -172,5 +172,21 @@ impl Session {
             self.state.touch();
         }
         result
+    }
+
+    /// Compact the conversation by dropping the oldest `remove_count`
+    /// messages and inserting a single summary system message at the
+    /// front. Delegates to [`SessionSnapshot::compact_oldest`];
+    /// touches `updated_at_ms` when a non-trivial pass actually runs.
+    pub fn compact_oldest<F>(&mut self, remove_count: usize, summarizer: F)
+    where
+        F: FnOnce(&[ChatMessage]) -> String,
+    {
+        let prior_pass_count = self.state.compaction.as_ref().map(|c| c.count);
+        self.state.compact_oldest(remove_count, summarizer);
+        let new_pass_count = self.state.compaction.as_ref().map(|c| c.count);
+        if prior_pass_count != new_pass_count {
+            self.state.touch();
+        }
     }
 }

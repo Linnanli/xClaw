@@ -52,7 +52,7 @@ use dasclaw_core::messages::ChatMessage;
 
 use crate::error::SessionError;
 use crate::id::SESSION_VERSION;
-use crate::snapshot::{SessionMetadata, SessionSnapshot};
+use crate::snapshot::{SessionCompaction, SessionMetadata, SessionSnapshot};
 use crate::store::SessionStore;
 
 /// Live files larger than this trigger a rotate on the next save.
@@ -204,6 +204,15 @@ struct MessageRecord<'a> {
     message: &'a ChatMessage,
 }
 
+#[derive(Debug, Serialize)]
+struct CompactionRecord<'a> {
+    #[serde(rename = "type")]
+    kind: &'a str,
+    count: u32,
+    removed_message_count: usize,
+    summary: &'a str,
+}
+
 fn render_jsonl(snapshot: &SessionSnapshot) -> Result<Vec<u8>, SessionError> {
     let meta = SessionMetaRecord {
         kind: "session_meta",
@@ -218,6 +227,16 @@ fn render_jsonl(snapshot: &SessionSnapshot) -> Result<Vec<u8>, SessionError> {
     let mut out = Vec::with_capacity(256 + snapshot.messages.len() * 128);
     serde_json::to_writer(&mut out, &meta)?;
     out.push(b'\n');
+    if let Some(compaction) = &snapshot.compaction {
+        let record = CompactionRecord {
+            kind: "compaction",
+            count: compaction.count,
+            removed_message_count: compaction.removed_message_count,
+            summary: &compaction.summary,
+        };
+        serde_json::to_writer(&mut out, &record)?;
+        out.push(b'\n');
+    }
     for message in &snapshot.messages {
         let record = MessageRecord {
             kind: "message",
@@ -240,6 +259,7 @@ fn parse_jsonl(bytes: &[u8]) -> Result<SessionSnapshot, SessionError> {
     let mut updated_at_ms = None;
     let mut workspace_root = None;
     let mut model = None;
+    let mut compaction: Option<SessionCompaction> = None;
     let mut messages: Vec<ChatMessage> = Vec::new();
 
     for (idx, raw) in text.lines().enumerate() {
@@ -321,6 +341,53 @@ fn parse_jsonl(bytes: &[u8]) -> Result<SessionSnapshot, SessionError> {
                 let msg: ChatMessage = serde_json::from_value(message_value.clone())?;
                 messages.push(msg);
             }
+            "compaction" => {
+                let count_raw = object.get("count").and_then(Value::as_u64).ok_or_else(|| {
+                    SessionError::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("compaction record at line {} missing \"count\"", idx + 1),
+                    ))
+                })?;
+                let count = u32::try_from(count_raw).map_err(|_| {
+                    SessionError::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "compaction.count out of u32 range",
+                    ))
+                })?;
+                let removed_raw = object
+                    .get("removed_message_count")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| {
+                        SessionError::Io(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!(
+                                "compaction record at line {} missing \"removed_message_count\"",
+                                idx + 1
+                            ),
+                        ))
+                    })?;
+                let removed_message_count = usize::try_from(removed_raw).map_err(|_| {
+                    SessionError::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "compaction.removed_message_count out of usize range",
+                    ))
+                })?;
+                let summary = object
+                    .get("summary")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        SessionError::Io(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("compaction record at line {} missing \"summary\"", idx + 1),
+                        ))
+                    })?
+                    .to_string();
+                compaction = Some(SessionCompaction {
+                    count,
+                    removed_message_count,
+                    summary,
+                });
+            }
             other => {
                 return Err(SessionError::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -347,6 +414,7 @@ fn parse_jsonl(bytes: &[u8]) -> Result<SessionSnapshot, SessionError> {
         updated_at_ms,
         workspace_root,
         model,
+        compaction,
         messages,
     })
 }
