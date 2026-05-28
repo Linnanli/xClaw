@@ -73,10 +73,11 @@ detected, the doctor message includes a hint to run
 
 - Binary / crate rename (`ironclaw` → `dasclaw`) — tracked separately
   by ADR-114 Ⅴ / issue #110.
-- Production-deployment systemd unit at
-  `desktop-client/ironclaw/deploy/ironclaw.service` is a Docker host
-  unit on cloud VMs and is **not** in scope for the user-side migrate
-  flow. Operators of that unit must rename it manually together with
-  their deploy automation.
+- Production-deployment systemd units that used to live at
+  `desktop-client/ironclaw/deploy/ironclaw.service` were Docker host
+  units on cloud VMs and are **not** in scope for the user-side
+  migrate flow. That sub-tree has been removed from the xClaw fork as
+  pure upstream remnants; operators of any inherited unit must rename
+  it manually together with their deploy automation.
 - `IRONCLAW_BASE_DIR` / data directory rename — handled by the
   ADR-114 Ⅱ / Ⅲ work that already shipped.
