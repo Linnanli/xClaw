@@ -57,11 +57,13 @@
 
 pub mod error;
 pub mod id;
+pub mod jsonl;
 pub mod snapshot;
 pub mod store;
 
 pub use error::SessionError;
 pub use id::{SESSION_VERSION, generate_session_id};
+pub use jsonl::{JsonlSessionStore, MAX_ROTATED_FILES, ROTATE_AFTER_BYTES};
 pub use snapshot::{SessionMetadata, SessionSnapshot};
 pub use store::{InMemorySessionStore, SessionStore};
 
