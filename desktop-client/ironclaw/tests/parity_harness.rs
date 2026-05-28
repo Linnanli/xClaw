@@ -121,6 +121,7 @@ impl LoopDelegate for ParityDelegate {
         &self,
         text: &str,
         _metadata: ResponseMetadata,
+        _usage: dasclaw_core::TokenUsage,
         _reason_ctx: &mut ReasoningContext,
     ) -> TextAction {
         TextAction::Return(LoopOutcome::Response(text.to_string()))
@@ -130,6 +131,7 @@ impl LoopDelegate for ParityDelegate {
         &self,
         tool_calls: Vec<ToolCall>,
         _content: Option<String>,
+        _usage: dasclaw_core::TokenUsage,
         reason_ctx: &mut ReasoningContext,
     ) -> Result<Option<LoopOutcome>, dasclaw_core::HostError> {
         for tc in &tool_calls {
