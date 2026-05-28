@@ -29,7 +29,8 @@ use dasclaw_core::messages::{ChatMessage, FinishReason};
 use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
 use dasclaw_core::traits::HostError;
-use dasclaw_runtime::{Agent, AgentError, AgentResponder, Session};
+use dasclaw_runtime::{Agent, AgentError, AgentResponder};
+use dasclaw_session::Session;
 use tokio_util::sync::CancellationToken;
 
 /// Scripted responder: returns text outputs in order, and records the

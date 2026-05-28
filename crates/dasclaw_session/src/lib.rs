@@ -17,22 +17,26 @@
 //!   and re-enters the loop, so the responder sees the full conversation
 //!
 //! Cancellation is inherited from the agent: if the agent was built with
-//! [`crate::AgentBuilder::cancellation_token`], cancelling the handle
-//! halts the in-flight `Session::run` with [`AgentError::Stopped`] at
-//! the next loop signal check.
+//! [`dasclaw_runtime::AgentBuilder::cancellation_token`], cancelling the
+//! handle halts the in-flight `Session::run` with [`AgentError::Stopped`]
+//! at the next loop signal check.
 //!
-//! ## Non-goals
+//! ## Non-goals (phase 1)
 //!
-//! - **No serde / persistence / fork / compaction.** Those land in a
-//!   follow-up issue that ports the rich `claw-code::Session` features
-//!   into a dedicated `dasclaw_session` crate (ADR-153 §4.3 B+).
+//! This crate ships intentionally minimal so PR #913 can land the GUI
+//! blocker fix without a large new surface. The richer features land in
+//! follow-up PRs against issue #914:
+//!
+//! - **No serde / persistence / fork / compaction.** Phase 2 (#914 PR-B/C)
+//!   ports those from `claw-code::Session` (ADR-153 §4.3 B+).
 //! - **No streaming.** See issue B2.
 //!
 //! ## Example
 //!
 //! ```ignore
 //! use std::sync::Arc;
-//! use dasclaw_runtime::{Agent, Session};
+//! use dasclaw_runtime::Agent;
+//! use dasclaw_session::Session;
 //!
 //! let agent = Arc::new(
 //!     Agent::builder()
@@ -49,8 +53,7 @@ use std::sync::Arc;
 
 use dasclaw_core::messages::ChatMessage;
 use dasclaw_core::reasoning_ctx::ReasoningContext;
-
-use crate::agent::{Agent, AgentError};
+use dasclaw_runtime::{Agent, AgentError};
 
 /// Stateful, multi-turn conversation handle around an [`Agent`].
 ///

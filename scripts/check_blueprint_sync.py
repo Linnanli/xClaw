@@ -51,11 +51,9 @@ PLANNED: dict[str, str] = {
     # F4.6.6-a (`dasclaw_fs_tools`) landed — entry removed.
     # F4.6.7 (`dasclaw_shell_tools`) landed — entry removed.
     # F4.6.8 (`dasclaw_net_tools`) landed (phases 1/2/3) — entry removed.
-    # ADR-153 §4.3 step 3 — optional session crate, deliberately deferred
-    # until a second caller appears. Mentioned in 31-target-architecture.md
-    # §ADR-153 closure note (footnote: "step 3 暂搁"). Keep here so the
-    # blueprint can reference the planned name without the guard going red.
-    "dasclaw_session": "ADR-153 §4.3 step 3 — deferred until 2nd caller emerges",
+    # ADR-153 §4.3 step 3 (`dasclaw_session`) landed in PR #916 — entry
+    # removed. Subsequent persistence work (PR-B/C/D under issue #914)
+    # extends the same crate.
 }
 
 # Symbols that look like crate names but are not. Examples: conceptual

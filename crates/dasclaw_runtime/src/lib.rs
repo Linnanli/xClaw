@@ -1,11 +1,17 @@
 //! Application-layer runtime types shared across dasclaw hosts (ironclaw,
 //! admin-backend, claw-code, ...).
 //!
-//! ## Multi-turn `Session` quick start (issue #907)
+//! ## Multi-turn `Session` (issue #907 / #914)
+//!
+//! The multi-turn conversation facade lives in the
+//! [`dasclaw_session`](https://docs.rs/dasclaw_session) crate. This
+//! crate exposes the building blocks (`Agent`, `AgentBuilder`,
+//! `AgentError`, `cancel_handle`) that `Session` wraps. Typical usage:
 //!
 //! ```ignore
 //! use std::sync::Arc;
-//! use dasclaw_runtime::{Agent, Session};
+//! use dasclaw_runtime::Agent;
+//! use dasclaw_session::Session;
 //! use tokio_util::sync::CancellationToken;
 //!
 //! let token = CancellationToken::new();
@@ -69,7 +75,6 @@ pub mod llm_adapter;
 pub mod rate_limit;
 pub mod recording;
 pub mod secrets;
-pub mod session;
 pub mod tool;
 pub mod tool_to_executor_adapter;
 
@@ -84,6 +89,5 @@ pub use job_context::JobContextCore;
 pub use llm_adapter::LlmProviderResponder;
 pub use rate_limit::{LimitType, RateLimitError, RateLimitResult, RateLimiter};
 pub use recording::{HttpExchange, HttpExchangeRequest, HttpExchangeResponse, HttpInterceptor};
-pub use session::Session;
 pub use tool::Tool;
 pub use tool_to_executor_adapter::ToolToExecutorAdapter;
