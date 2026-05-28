@@ -206,8 +206,8 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         Arc::new(tokio::sync::RwLock::new(None));
 
     // 创建共享 scheduler slot — Agent 构建完成后填充，
-    // 使 CreateJobTool 能通过 Scheduler 调度本地任务并写入 agent_jobs 表。
-    let scheduler_slot: ironclaw::tools::builtin::SchedulerSlot =
+    // 使 CreateJobTool 能通过 JobDispatcher 调度本地任务并写入 agent_jobs 表。
+    let scheduler_slot: ironclaw::tools::builtin::JobDispatcherSlot =
         Arc::new(tokio::sync::RwLock::new(None));
 
     let mut disabled_skills = load_name_set(

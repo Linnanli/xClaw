@@ -1,0 +1,10 @@
+---
+source: crates/dasclaw_core/tests/serde_ipc_contract.rs
+expression: sample
+---
+{
+  "input_tokens": 10,
+  "output_tokens": 20,
+  "cache_read_input_tokens": 3,
+  "cache_creation_input_tokens": 4
+}

@@ -1,0 +1,5 @@
+---
+source: crates/dasclaw_core/tests/serde_ipc_contract.rs
+expression: "FinishReason::ToolUse"
+---
+"tool_use"

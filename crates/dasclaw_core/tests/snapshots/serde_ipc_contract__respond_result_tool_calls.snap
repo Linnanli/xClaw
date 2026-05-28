@@ -1,0 +1,19 @@
+---
+source: crates/dasclaw_core/tests/serde_ipc_contract.rs
+expression: sample
+---
+{
+  "kind": "tool_calls",
+  "data": {
+    "tool_calls": [
+      {
+        "id": "abc123def",
+        "name": "shell",
+        "arguments": {
+          "cmd": "ls"
+        }
+      }
+    ],
+    "content": "calling shell"
+  }
+}

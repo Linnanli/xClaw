@@ -1,0 +1,8 @@
+---
+source: crates/dasclaw_runtime/tests/serde_agent_error_contract.rs
+expression: "AgentError::MaxIterations(50)"
+---
+{
+  "kind": "max_iterations",
+  "data": 50
+}

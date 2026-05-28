@@ -213,7 +213,8 @@ pub struct CompletionResponse {
 }
 
 /// Why the completion finished.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FinishReason {
     Stop,
     Length,
@@ -269,7 +270,7 @@ pub fn generate_tool_call_id(seed_a: usize, seed_b: usize) -> String {
 }
 
 /// Result of a tool execution to send back to the LLM.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
     pub tool_call_id: String,
     pub name: String,

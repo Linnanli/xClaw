@@ -43,7 +43,7 @@ use ironclaw::extensions::ExtensionManager;
 use ironclaw::safety::SafetyLayer;
 use ironclaw::skills::catalog::SkillCatalog;
 use ironclaw::skills::SkillRegistry;
-use ironclaw::tools::builtin::SchedulerSlot;
+use ironclaw::tools::builtin::JobDispatcherSlot;
 use ironclaw::tools::ToolRegistry;
 use ironclaw::workspace::Workspace;
 use tokio::sync::mpsc;
@@ -130,7 +130,10 @@ pub struct AppState {
     /// Routine engine slot — 引擎就绪后填充，供 ic_fire_routine 使用。
     pub routine_engine_slot: Arc<tokio::sync::RwLock<Option<Arc<RoutineEngine>>>>,
     /// Scheduler slot — Agent 构建完成后填充，供任务取消/重试命令使用。
-    pub scheduler_slot: SchedulerSlot,
+    ///
+    /// 类型为 `JobDispatcherSlot`（原 `SchedulerSlot`，随 ironclaw 内部重命名跟进）；
+    /// 字段名保留 `scheduler_slot` 以避免大规模 rename 越界本 PR 范围。
+    pub scheduler_slot: JobDispatcherSlot,
     /// 被用户禁用的技能名集合（仅影响 desktop-client IPC 行为）。
     pub disabled_skills: std::sync::RwLock<HashSet<String>>,
     /// 被用户禁用的扩展名集合（仅影响 desktop-client IPC 行为）。

@@ -1,0 +1,7 @@
+---
+source: crates/dasclaw_runtime/tests/serde_agent_error_contract.rs
+expression: "AgentError::MissingResponder"
+---
+{
+  "kind": "missing_responder"
+}

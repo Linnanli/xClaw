@@ -1,0 +1,8 @@
+---
+source: crates/dasclaw_core/tests/serde_ipc_contract.rs
+expression: "LoopOutcome::Response(\"done\".into())"
+---
+{
+  "kind": "response",
+  "data": "done"
+}

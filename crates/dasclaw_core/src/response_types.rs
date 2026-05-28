@@ -6,10 +6,12 @@
 //! pulling in the `Reasoning` engine (which depends on `LlmProvider` /
 //! `rust_decimal` / `LlmError`).
 
+use serde::{Deserialize, Serialize};
+
 use crate::messages::{FinishReason, ToolCall};
 
 /// Token usage from a single LLM call.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct TokenUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,
@@ -26,7 +28,8 @@ impl TokenUsage {
 }
 
 /// Structured anomaly classification for LLM responses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
 pub enum ResponseAnomaly {
     /// Tool mode was requested, but the provider returned no usable tool calls
     /// and no recoverable text content.
@@ -37,7 +40,7 @@ pub enum ResponseAnomaly {
 
 /// Metadata attached to `RespondOutput` so callers can react to malformed
 /// provider behavior without inferring it from fallback strings.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResponseMetadata {
     pub anomaly: Option<ResponseAnomaly>,
 }
@@ -46,7 +49,8 @@ pub struct ResponseMetadata {
 ///
 /// Used by the agent loop to handle tool execution before returning a final
 /// response.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum RespondResult {
     /// A text response (no tools needed).
     Text(String),
@@ -61,7 +65,7 @@ pub enum RespondResult {
 
 /// A `RespondResult` bundled with the token usage from the LLM call that
 /// produced it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RespondOutput {
     pub result: RespondResult,
     pub usage: TokenUsage,

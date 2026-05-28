@@ -15,13 +15,15 @@ description: "x-claw 使用 code-review-graph CLI（v2.3.2）来跨 6 个 repo �
 | 二进制 | `/Users/nallylin/.local/bin/code-review-graph` |
 | venv | `/Users/nallylin/.local/share/code-review-graph-venv/` |
 | Python | 3.12.13（x86_64 macOS；**3.13 上 torch 无 wheel**） |
-| 包版本 | code-review-graph 2.3.2 / torch 2.2.2 / sentence-transformers 5.5.1 / transformers 4.57.6 / numpy 1.26.4 |
+| 包版本 | code-review-graph 2.3.2 / torch 2.2.2 / sentence-transformers 5.5.1 / transformers 4.57.6 / numpy 1.26.4 / **rich 13.9.4** / **igraph 1.0.0** |
 | 嵌入模型 | `all-MiniLM-L6-v2`（384 维，CPU，本地推理） |
 
 **踩坑记录（已修）**：
 - `transformers>=5.0` 有坏注解（`tuple[..., list[nn.Module]]`），会在 `import sentence_transformers` 时 `NameError`。锁 `transformers<5`。
 - `numpy>=2.0` 与 torch 2.2 ABI 不兼容（`_ARRAY_API not found`）。锁 `numpy<2`。
 - Python 3.13 + Intel macOS 没 torch wheel，venv 必须用 3.12。
+- **`rich>=14`（含 15.0.0）移除了 `from rich import traceback` 入口**，工具内部 `import rich.traceback` 直接报 `ModuleNotFoundError: No module named 'rich.traceback'`，导致 `get_knowledge_gaps_tool` / `get_suggested_questions_tool` / `get_hub_nodes_tool` 等高层 MCP 工具全部不可用。锁 `rich<14`。
+- **`igraph` 未安装时社区检测降级成 file-based**（按目录硬切，cohesion ~0.1，整个 `crates/` 会被合并成 1 个超大社区）。装 `igraph` 后走 Leiden 算法，实测从 10 个目录式 → **1761 个**真正基于耦合的社区。必装。
 
 如果以后要重建 venv：
 
@@ -29,21 +31,27 @@ description: "x-claw 使用 code-review-graph CLI（v2.3.2）来跨 6 个 repo �
 python3.12 -m venv /Users/nallylin/.local/share/code-review-graph-venv
 /Users/nallylin/.local/share/code-review-graph-venv/bin/pip install \
   'code-review-graph==2.3.2' 'torch==2.2.*' \
-  'sentence-transformers' 'transformers<5' 'numpy<2'
+  'sentence-transformers' 'transformers<5' 'numpy<2' \
+  'rich>=13,<14' 'igraph'
 ```
 
-## 6 个已注册 repo（`code-review-graph repos`）
+## 8 个已注册 repo（`code-review-graph repos`）
 
 ```
-  /Users/nallylin/Documents/code/x-claw/desktop-client/ironclaw  (ironclaw)   ← MCP 默认 repo
-  /Users/nallylin/Documents/code/x-claw/crates                  (xclaw-core)
-  /Users/nallylin/Documents/code/x-claw/ironclaw-main           (ironclaw-main)
-  /Users/nallylin/Documents/code/x-claw/codex-cli-main          (codex-cli)
-  /Users/nallylin/Documents/code/x-claw/claw-code               (claw-code)
-  /Users/nallylin/Documents/code/x-claw/claude-code-main        (claude-code)
+  /Users/nallylin/Documents/code/x-claw/desktop-client/ironclaw  (ironclaw)         ← MCP 默认 repo
+  /Users/nallylin/Documents/code/x-claw/desktop-client/src       (desktop-client-app)  Tauri Rust backend
+  /Users/nallylin/Documents/code/x-claw/desktop-client/src-ui    (desktop-client-ui)   React TS/TSX 前端
+  /Users/nallylin/Documents/code/x-claw/crates                   (xclaw-core)
+  /Users/nallylin/Documents/code/x-claw/ironclaw-main            (ironclaw-main)
+  /Users/nallylin/Documents/code/x-claw/codex-cli-main           (codex-cli)
+  /Users/nallylin/Documents/code/x-claw/claw-code                (claw-code)
+  /Users/nallylin/Documents/code/x-claw/claude-code-main         (claude-code)
 ```
 
 `xclaw-core` 是所有 `dasclaw_*` crate 的图（截至 2026-05：6871 节点 / 45882 边 / 333 文件 / 6538 嵌入）。
+
+`desktop-client-app` / `desktop-client-ui` 是 Tauri 桌面客户端两份分库（Rust backend + React 前端拆开），
+避免跨语言合库拖低 Leiden 聊类质量。`ironclaw` 独立保留。
 
 ## CLI 子命令清单（全部实测）
 
@@ -303,6 +311,73 @@ code-review-graph detect-changes --base origin/xClaw --brief --repo <path>
 
 切了分支会显示 "Graph was built on 'A' but you are now on 'B'"。日常 `update` 足够，
 **只有在跨大功能分支（比如从 feat/* 切回 main）才需要 `build` 全量重建**。
+
+### 坑位 7：高层 MCP 工具报 `No module named 'rich.traceback'`
+
+症状：`get_knowledge_gaps_tool` / `get_suggested_questions_tool` / `get_hub_nodes_tool` 等
+带 `rich` traceback 装饰的工具调用一次全报错。
+
+原因：venv 里 `rich==15.0.0`（或任何 14+）已移除 `rich.traceback` 子模块。
+
+修复：
+
+```bash
+/Users/nallylin/.local/share/code-review-graph-venv/bin/pip install 'rich>=13,<14'
+# 然后 reload VS Code 或重启 MCP server 让进程重新加载 rich
+```
+
+### 坑位 8：社区粒度异常粗（按目录切）
+
+症状：`list_communities_tool` 返回的社区只有 10 个左右，`description` 全是
+`Directory-based community: <dir>`，单个社区动辄 1 万+ 节点，cohesion < 0.15。
+
+原因：`igraph` 未安装，build/postprocess 日志会有一行
+`INFO: igraph not available, using file-based community detection`。
+
+修复：
+
+```bash
+/Users/nallylin/.local/share/code-review-graph-venv/bin/pip install igraph
+code-review-graph postprocess --repo <path>
+```
+
+实测 x-claw 根 DB（25862 节点）跑 Leiden ~30s，输出 **1761 个**真社区，cohesion 显著上升。
+**接新 repo 或重建 venv 后务必同时装 igraph**。
+
+### 坑位 9：每个子目录都有 `.code-review-graph/graph.db` —— 是分库
+
+实测 7 份独立 DB（不是想象中的全局一份）：
+
+```
+./.code-review-graph                        364M   (xClaw root，混语言)
+./crates/.code-review-graph                  75M   (xclaw-core)
+./desktop-client/ironclaw/.code-review-graph 176M  (ironclaw)
+./ironclaw-main/.code-review-graph          272M
+./codex-cli-main/.code-review-graph         464M
+./claw-code/.code-review-graph               49M
+./claude-code-main/.code-review-graph          0   (空，没建过)
+```
+
+**关键**：`build` / `update` 不带 `--repo` 时会 auto-detect 到 `.git` 根，写入根 DB，**不会写子库**。
+要写子库必须显式 `--repo <绝对路径>`，例如：
+
+```bash
+code-review-graph build --repo /Users/nallylin/Documents/code/x-claw/crates
+```
+
+MCP 默认 repo 是 `ironclaw`（即 `desktop-client/ironclaw/.code-review-graph`），不是根 DB。
+查 dasclaw_* crate 时要走 `xclaw-core` 别名或 CLI 显式 `--repo crates/`。
+
+### 坑位 10：`register` 必须在 build 之后才能跑
+
+症状：`code-review-graph register <path> --alias <name>` 报
+`ERROR: Path does not look like a repository (no .git or .code-review-graph)`。
+
+原因：`register` 权衡的是「路径里已有 .git 或 .code-review-graph」。子目录（没独立 .git）
+首次接入时两者都没有。
+
+修复：先 `code-review-graph build --repo <绝对路径>`（会创建 `.code-review-graph/`），再 `register`。
+顺序不能反。
 
 ## Token 预算（保留上游纪律）
 

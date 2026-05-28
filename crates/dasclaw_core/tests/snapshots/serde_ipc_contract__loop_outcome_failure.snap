@@ -1,0 +1,8 @@
+---
+source: crates/dasclaw_core/tests/serde_ipc_contract.rs
+expression: "LoopOutcome::Failure(\"hook blocked egress\".into())"
+---
+{
+  "kind": "failure",
+  "data": "hook blocked egress"
+}
