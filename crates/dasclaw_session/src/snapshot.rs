@@ -25,6 +25,29 @@ use serde::{Deserialize, Serialize};
 
 use crate::id::{SESSION_VERSION, current_time_millis, generate_session_id};
 
+/// Bookkeeping for a context-compaction event.
+///
+/// Each call to [`SessionSnapshot::compact_oldest`] (and therefore
+/// [`crate::Session::compact_oldest`]) replaces the in-snapshot value:
+/// `count` accumulates across calls so callers can see how many
+/// passes a session has undergone, while `removed_message_count` and
+/// `summary` describe the *most recent* pass only.
+///
+/// The on-disk JSONL record for this struct is `{"type":"compaction", …}`
+/// and is positioned between the `session_meta` line and the first
+/// `message` line — same layout as `claw-code`'s session files.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionCompaction {
+    /// Number of compaction passes the session has been through.
+    pub count: u32,
+    /// How many messages the *latest* pass removed.
+    pub removed_message_count: usize,
+    /// Human-readable summary the latest pass produced; this string
+    /// is also injected into the conversation as the new leading
+    /// system message.
+    pub summary: String,
+}
+
 /// Lightweight identifier + timestamps view returned from
 /// [`crate::store::SessionStore::list`].
 ///
@@ -82,6 +105,10 @@ pub struct SessionSnapshot {
     /// Optional model name the session was driven with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Latest compaction bookkeeping. `None` until the session has
+    /// undergone at least one [`SessionSnapshot::compact_oldest`] pass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction: Option<SessionCompaction>,
     /// Full conversation history, in turn order.
     pub messages: Vec<ChatMessage>,
 }
@@ -99,6 +126,7 @@ impl SessionSnapshot {
             updated_at_ms: now,
             workspace_root: None,
             model: None,
+            compaction: None,
             messages: Vec::new(),
         }
     }
@@ -106,5 +134,39 @@ impl SessionSnapshot {
     /// Refresh `updated_at_ms` to the current wall-clock time.
     pub fn touch(&mut self) {
         self.updated_at_ms = current_time_millis();
+    }
+
+    /// Drop the oldest `remove_count` messages and prepend a single
+    /// system message containing the summary returned by `summarizer`.
+    ///
+    /// `remove_count` is clamped to the available message count, so
+    /// passing a value larger than `self.messages.len()` removes
+    /// everything and the recorded `removed_message_count` matches
+    /// what was actually dropped. Passing `0` is a no-op: neither
+    /// the message vector nor the [`SessionCompaction`] bookkeeping
+    /// is touched, and `summarizer` is not invoked.
+    ///
+    /// On a non-trivial pass, [`SessionCompaction::count`]
+    /// monotonically increments (so callers can tell "how many
+    /// passes has this session been through"), while
+    /// `removed_message_count` and `summary` describe the latest
+    /// pass.
+    pub fn compact_oldest<F>(&mut self, remove_count: usize, summarizer: F)
+    where
+        F: FnOnce(&[ChatMessage]) -> String,
+    {
+        if remove_count == 0 || self.messages.is_empty() {
+            return;
+        }
+        let effective = remove_count.min(self.messages.len());
+        let removed: Vec<ChatMessage> = self.messages.drain(0..effective).collect();
+        let summary = summarizer(&removed);
+        let prior_count = self.compaction.as_ref().map_or(0, |c| c.count);
+        self.compaction = Some(SessionCompaction {
+            count: prior_count.saturating_add(1),
+            removed_message_count: effective,
+            summary: summary.clone(),
+        });
+        self.messages.insert(0, ChatMessage::system(summary));
     }
 }

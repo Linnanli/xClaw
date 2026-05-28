@@ -22,6 +22,7 @@ fn fixture_snapshot() -> SessionSnapshot {
         updated_at_ms: 1_700_000_000_500,
         workspace_root: Some(PathBuf::from("/tmp/ws")),
         model: Some("test-model".to_string()),
+        compaction: None,
         messages: vec![ChatMessage::user("ping"), ChatMessage::assistant("pong")],
     }
 }

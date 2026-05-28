@@ -176,3 +176,42 @@ async fn req_dasclaw_runtime_session_b1_external_cancel_stops_session_run() {
         "expected AgentError::Stopped, got {err:?}"
     );
 }
+
+/// Regression for PR-C2 reviewer finding: `Session::compact_oldest`
+/// must advance `updated_at_ms` whenever a compaction pass actually
+/// runs — including the edge case where `remove_count == 1` and the
+/// post-compaction message count happens to equal the pre-compaction
+/// one (drain 1 + insert 1 summary = same length, but the snapshot
+/// has nevertheless changed).
+#[tokio::test]
+async fn req_dasclaw_session_c2_session_compact_oldest_touches_updated_at_ms() {
+    use dasclaw_session::SessionSnapshot;
+
+    let responder = ScriptedResponder::new(vec!["unused"]);
+    let agent = Arc::new(
+        Agent::builder()
+            .responder(responder)
+            .build()
+            .expect("build agent"),
+    );
+
+    let mut snap = SessionSnapshot::fresh();
+    snap.updated_at_ms = 0; // pin to a fixed value so we can detect any forward motion
+    snap.messages
+        .push(ChatMessage::user("only original message"));
+
+    let mut session = Session::from_snapshot(agent, snap);
+    let before = session.snapshot().updated_at_ms;
+
+    session.compact_oldest(1, |_removed| "summary".to_string());
+
+    let after = session.snapshot().updated_at_ms;
+    assert!(
+        after > before,
+        "updated_at_ms must advance on a real compaction pass (before={before}, after={after})"
+    );
+    assert!(
+        session.snapshot().compaction.is_some(),
+        "compaction field must be recorded"
+    );
+}
