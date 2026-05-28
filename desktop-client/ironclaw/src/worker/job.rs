@@ -1610,6 +1610,7 @@ impl<'a> LoopDelegate for JobDelegate<'a> {
         &self,
         text: &str,
         metadata: ResponseMetadata,
+        usage: dasclaw_core::TokenUsage,
         reason_ctx: &mut ReasoningContext,
     ) -> TextAction {
         let action = {
@@ -1705,7 +1706,9 @@ impl<'a> LoopDelegate for JobDelegate<'a> {
             .store(true, std::sync::atomic::Ordering::Relaxed);
 
         // Add assistant response to context
-        reason_ctx.messages.push(ChatMessage::assistant(&text));
+        reason_ctx
+            .messages
+            .push(ChatMessage::assistant(&text).with_usage(usage));
 
         self.worker.log_event(
             "message",
@@ -1722,6 +1725,7 @@ impl<'a> LoopDelegate for JobDelegate<'a> {
         &self,
         tool_calls: Vec<crate::llm::ToolCall>,
         content: Option<String>,
+        usage: dasclaw_core::TokenUsage,
         reason_ctx: &mut ReasoningContext,
     ) -> Result<Option<LoopOutcome>, HostError> {
         {
@@ -1786,12 +1790,9 @@ impl<'a> LoopDelegate for JobDelegate<'a> {
         }
 
         // Add assistant message with tool_calls (OpenAI protocol)
-        reason_ctx
-            .messages
-            .push(ChatMessage::assistant_with_tool_calls(
-                content,
-                tool_calls.clone(),
-            ));
+        reason_ctx.messages.push(
+            ChatMessage::assistant_with_tool_calls(content, tool_calls.clone()).with_usage(usage),
+        );
 
         // Convert to ToolSelections
         let selections: Vec<ToolSelection> = tool_calls
@@ -2464,6 +2465,7 @@ mod tests {
             .handle_text_response(
                 "Weekly review created in Notion and notification sent.",
                 ResponseMetadata::default(),
+                dasclaw_core::TokenUsage::default(),
                 &mut reason_ctx,
             )
             .await;
