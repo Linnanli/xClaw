@@ -51,7 +51,7 @@ use dasclaw_core::egress_apply::{EgressApply, apply_egress_decision};
 use dasclaw_core::hooks::{EgressKind, HookBundle};
 use dasclaw_core::messages::{ChatMessage, FinishReason, ToolCall, ToolDefinition, ToolResult};
 use dasclaw_core::reasoning_ctx::ReasoningContext;
-use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata};
+use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
 use dasclaw_core::traits::HostError;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -481,19 +481,14 @@ impl Agent {
             .await
             .map_err(AgentError::Responder)?;
 
-        let result = map_outcome(outcome, loop_config.max_iterations);
-        // The core loop's `handle_text_response` returns the final text
-        // straight to the caller without recording it as an assistant
-        // turn in `ctx`. For single-shot `Agent::run` that doesn't
-        // matter (the context is thrown away). For multi-turn
-        // `Session::run` it does: without this push the next call would
-        // not see what the model just said. Mirroring the
-        // `assistant_with_tool_calls` push already done by
-        // `execute_tool_calls` keeps the history shape consistent.
-        if let Ok(text) = &result {
-            ctx.messages.push(ChatMessage::assistant(text));
-        }
-        result
+        // History continuity: `HeadlessDelegate::handle_text_response`
+        // records the final assistant turn into `ctx` (with token usage
+        // attached) before returning the response text, mirroring the
+        // push that `execute_tool_calls` already performs on the
+        // tool-call branch. That keeps the next call in a multi-turn
+        // `Session::run` aware of what the model just said without
+        // requiring the caller to plumb usage out of `LoopOutcome`.
+        map_outcome(outcome, loop_config.max_iterations)
     }
 
     /// Run a single user prompt through the loop and return the final
@@ -729,8 +724,11 @@ impl LoopDelegate for HeadlessDelegate {
         &self,
         text: &str,
         _metadata: ResponseMetadata,
-        _ctx: &mut ReasoningContext,
+        usage: TokenUsage,
+        ctx: &mut ReasoningContext,
     ) -> TextAction {
+        ctx.messages
+            .push(ChatMessage::assistant(text).with_usage(usage));
         TextAction::Return(LoopOutcome::Response(text.to_string()))
     }
 
@@ -738,6 +736,7 @@ impl LoopDelegate for HeadlessDelegate {
         &self,
         tool_calls: Vec<ToolCall>,
         content: Option<String>,
+        usage: TokenUsage,
         ctx: &mut ReasoningContext,
     ) -> Result<Option<LoopOutcome>, HostError> {
         // No executor → emit the sentinel and let `map_outcome` raise
@@ -749,7 +748,7 @@ impl LoopDelegate for HeadlessDelegate {
             )));
         };
 
-        push_assistant_tool_calls(ctx, content, &tool_calls);
+        push_assistant_tool_calls(ctx, content, &tool_calls, usage);
         for call in &tool_calls {
             // Streaming hosts learn the tool name + arguments as soon as
             // the loop commits to invoking the tool, before any egress
@@ -852,11 +851,11 @@ fn push_assistant_tool_calls(
     ctx: &mut ReasoningContext,
     content: Option<String>,
     tool_calls: &[ToolCall],
+    usage: TokenUsage,
 ) {
-    ctx.messages.push(ChatMessage::assistant_with_tool_calls(
-        content,
-        tool_calls.to_vec(),
-    ));
+    ctx.messages.push(
+        ChatMessage::assistant_with_tool_calls(content, tool_calls.to_vec()).with_usage(usage),
+    );
 }
 
 /// Sentinel string emitted by [`HeadlessDelegate::execute_tool_calls`]
@@ -941,6 +940,38 @@ mod tests {
             .expect("build agent");
         let out = agent.run("hi").await.expect("run");
         assert_eq!(out, "hello world");
+    }
+
+    #[tokio::test]
+    async fn req_dasclaw_runtime_agent_929_text_branch_persists_usage_to_context() {
+        // #929 step 2: the final assistant ChatMessage recorded by
+        // HeadlessDelegate::handle_text_response must carry the per-turn
+        // TokenUsage from the LLM call that produced it, so multi-turn
+        // Session::run can persist real cost data.
+        let usage = TokenUsage {
+            input_tokens: 42,
+            output_tokens: 7,
+            cache_creation_input_tokens: 3,
+            cache_read_input_tokens: 1,
+        };
+        let mut output = text_output("done");
+        output.usage = usage;
+        let responder = ScriptedResponder::new(vec![output]);
+        let agent = Agent::builder()
+            .responder(responder)
+            .build()
+            .expect("build agent");
+        let mut ctx = ReasoningContext::new();
+        let out = agent
+            .run_in_context(&mut ctx, "ping")
+            .await
+            .expect("run_in_context");
+        assert_eq!(out, "done");
+        let last = ctx
+            .messages
+            .last()
+            .expect("ctx should contain final assistant message");
+        assert_eq!(last.usage, Some(usage));
     }
 
     #[tokio::test]
