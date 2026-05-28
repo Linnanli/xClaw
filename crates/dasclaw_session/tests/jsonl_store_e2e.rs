@@ -22,6 +22,8 @@ fn fixture_snapshot(session_id: &str, messages: Vec<ChatMessage>) -> SessionSnap
         workspace_root: Some(PathBuf::from("/tmp/ws")),
         model: Some("test-model".to_string()),
         compaction: None,
+        fork: None,
+        prompt_history: Vec::new(),
         messages,
     }
 }

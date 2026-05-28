@@ -27,6 +27,8 @@ fn snapshot_with_messages(messages: Vec<ChatMessage>) -> SessionSnapshot {
         workspace_root: Some(PathBuf::from("/tmp/ws")),
         model: Some("test-model".to_string()),
         compaction: None,
+        fork: None,
+        prompt_history: Vec::new(),
         messages,
     }
 }

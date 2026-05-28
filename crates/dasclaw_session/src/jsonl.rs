@@ -43,7 +43,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 use tokio::fs;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -52,7 +52,9 @@ use dasclaw_core::messages::ChatMessage;
 
 use crate::error::SessionError;
 use crate::id::SESSION_VERSION;
-use crate::snapshot::{SessionCompaction, SessionMetadata, SessionSnapshot};
+use crate::snapshot::{
+    SessionCompaction, SessionFork, SessionMetadata, SessionPromptEntry, SessionSnapshot,
+};
 use crate::store::SessionStore;
 
 /// Live files larger than this trigger a rotate on the next save.
@@ -183,7 +185,7 @@ impl SessionStore for JsonlSessionStore {
 // Wire records
 // -------------------------------------------------------------------
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 struct SessionMetaRecord<'a> {
     #[serde(rename = "type")]
     kind: &'a str,
@@ -195,6 +197,8 @@ struct SessionMetaRecord<'a> {
     workspace_root: Option<&'a Path>,
     #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fork: Option<&'a SessionFork>,
 }
 
 #[derive(Debug, Serialize)]
@@ -213,6 +217,14 @@ struct CompactionRecord<'a> {
     summary: &'a str,
 }
 
+#[derive(Debug, Serialize)]
+struct PromptHistoryRecord<'a> {
+    #[serde(rename = "type")]
+    kind: &'a str,
+    timestamp_ms: u64,
+    text: &'a str,
+}
+
 fn render_jsonl(snapshot: &SessionSnapshot) -> Result<Vec<u8>, SessionError> {
     let meta = SessionMetaRecord {
         kind: "session_meta",
@@ -222,6 +234,7 @@ fn render_jsonl(snapshot: &SessionSnapshot) -> Result<Vec<u8>, SessionError> {
         updated_at_ms: snapshot.updated_at_ms,
         workspace_root: snapshot.workspace_root.as_deref(),
         model: snapshot.model.as_deref(),
+        fork: snapshot.fork.as_ref(),
     };
 
     let mut out = Vec::with_capacity(256 + snapshot.messages.len() * 128);
@@ -233,6 +246,15 @@ fn render_jsonl(snapshot: &SessionSnapshot) -> Result<Vec<u8>, SessionError> {
             count: compaction.count,
             removed_message_count: compaction.removed_message_count,
             summary: &compaction.summary,
+        };
+        serde_json::to_writer(&mut out, &record)?;
+        out.push(b'\n');
+    }
+    for entry in &snapshot.prompt_history {
+        let record = PromptHistoryRecord {
+            kind: "prompt_history",
+            timestamp_ms: entry.timestamp_ms,
+            text: &entry.text,
         };
         serde_json::to_writer(&mut out, &record)?;
         out.push(b'\n');
@@ -260,6 +282,8 @@ fn parse_jsonl(bytes: &[u8]) -> Result<SessionSnapshot, SessionError> {
     let mut workspace_root = None;
     let mut model = None;
     let mut compaction: Option<SessionCompaction> = None;
+    let mut fork: Option<SessionFork> = None;
+    let mut prompt_history: Vec<SessionPromptEntry> = Vec::new();
     let mut messages: Vec<ChatMessage> = Vec::new();
 
     for (idx, raw) in text.lines().enumerate() {
@@ -327,6 +351,10 @@ fn parse_jsonl(bytes: &[u8]) -> Result<SessionSnapshot, SessionError> {
                     .get("model")
                     .and_then(Value::as_str)
                     .map(String::from);
+                fork = object
+                    .get("fork")
+                    .map(|v| serde_json::from_value::<SessionFork>(v.clone()))
+                    .transpose()?;
             }
             "message" => {
                 let message_value = object.get("message").ok_or_else(|| {
@@ -388,6 +416,34 @@ fn parse_jsonl(bytes: &[u8]) -> Result<SessionSnapshot, SessionError> {
                     summary,
                 });
             }
+            "prompt_history" => {
+                let ts = object
+                    .get("timestamp_ms")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| {
+                        SessionError::Io(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!(
+                                "prompt_history record at line {} missing \"timestamp_ms\"",
+                                idx + 1
+                            ),
+                        ))
+                    })?;
+                let text = object
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        SessionError::Io(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("prompt_history record at line {} missing \"text\"", idx + 1),
+                        ))
+                    })?
+                    .to_string();
+                prompt_history.push(SessionPromptEntry {
+                    timestamp_ms: ts,
+                    text,
+                });
+            }
             other => {
                 return Err(SessionError::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -415,6 +471,8 @@ fn parse_jsonl(bytes: &[u8]) -> Result<SessionSnapshot, SessionError> {
         workspace_root,
         model,
         compaction,
+        fork,
+        prompt_history,
         messages,
     })
 }

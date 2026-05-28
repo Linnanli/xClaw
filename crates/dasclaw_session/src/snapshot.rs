@@ -48,6 +48,33 @@ pub struct SessionCompaction {
     pub summary: String,
 }
 
+/// Provenance recorded when a session is forked off another session
+/// via [`SessionSnapshot::fork`].
+///
+/// On the JSONL wire this struct is embedded *inside* the
+/// `session_meta` record (mirroring `claw-code` layout) rather than
+/// emitted as its own line: it identifies the session, it is not an
+/// event in the conversation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionFork {
+    /// `session_id` of the snapshot this child was forked from.
+    pub parent_session_id: String,
+    /// Optional human-friendly branch label (e.g. `"experiment"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_name: Option<String>,
+}
+
+/// One user prompt entered into the session, captured for audit /
+/// history rendering. Independent of `messages` so it survives
+/// [`SessionSnapshot::compact_oldest`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionPromptEntry {
+    /// Unix milliseconds the prompt was submitted.
+    pub timestamp_ms: u64,
+    /// The raw prompt text the user typed.
+    pub text: String,
+}
+
 /// Lightweight identifier + timestamps view returned from
 /// [`crate::store::SessionStore::list`].
 ///
@@ -109,6 +136,13 @@ pub struct SessionSnapshot {
     /// undergone at least one [`SessionSnapshot::compact_oldest`] pass.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compaction: Option<SessionCompaction>,
+    /// Fork provenance. `Some` only when this snapshot was produced
+    /// by [`SessionSnapshot::fork`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork: Option<SessionFork>,
+    /// Append-only log of user prompts. Survives `compact_oldest`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prompt_history: Vec<SessionPromptEntry>,
     /// Full conversation history, in turn order.
     pub messages: Vec<ChatMessage>,
 }
@@ -127,6 +161,8 @@ impl SessionSnapshot {
             workspace_root: None,
             model: None,
             compaction: None,
+            fork: None,
+            prompt_history: Vec::new(),
             messages: Vec::new(),
         }
     }
@@ -134,6 +170,45 @@ impl SessionSnapshot {
     /// Refresh `updated_at_ms` to the current wall-clock time.
     pub fn touch(&mut self) {
         self.updated_at_ms = current_time_millis();
+    }
+
+    /// Append a [`SessionPromptEntry`] for `text` with the current
+    /// wall-clock timestamp and bump `updated_at_ms`.
+    pub fn record_prompt(&mut self, text: impl Into<String>) {
+        let now = current_time_millis();
+        self.prompt_history.push(SessionPromptEntry {
+            timestamp_ms: now,
+            text: text.into(),
+        });
+        self.updated_at_ms = now;
+    }
+
+    /// Create a child snapshot that diverges from `self`.
+    ///
+    /// The child gets a freshly generated `session_id` and its own
+    /// `created_at_ms` / `updated_at_ms` (= now). Messages,
+    /// `compaction`, `workspace_root`, `model`, and `prompt_history`
+    /// are cloned verbatim — forking preserves the conversation so
+    /// the child can continue exactly where the parent left off.
+    /// [`SessionFork`] records the parent identity for auditability.
+    #[must_use]
+    pub fn fork(&self, branch_name: Option<String>) -> Self {
+        let now = current_time_millis();
+        Self {
+            session_id: generate_session_id(),
+            version: self.version,
+            created_at_ms: now,
+            updated_at_ms: now,
+            workspace_root: self.workspace_root.clone(),
+            model: self.model.clone(),
+            compaction: self.compaction.clone(),
+            fork: Some(SessionFork {
+                parent_session_id: self.session_id.clone(),
+                branch_name,
+            }),
+            prompt_history: self.prompt_history.clone(),
+            messages: self.messages.clone(),
+        }
     }
 
     /// Drop the oldest `remove_count` messages and prepend a single
