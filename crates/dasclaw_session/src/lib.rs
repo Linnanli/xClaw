@@ -64,7 +64,9 @@ pub mod store;
 pub use error::SessionError;
 pub use id::{SESSION_VERSION, generate_session_id};
 pub use jsonl::{JsonlSessionStore, MAX_ROTATED_FILES, ROTATE_AFTER_BYTES};
-pub use snapshot::{SessionCompaction, SessionMetadata, SessionSnapshot};
+pub use snapshot::{
+    SessionCompaction, SessionFork, SessionMetadata, SessionPromptEntry, SessionSnapshot,
+};
 pub use store::{InMemorySessionStore, SessionStore};
 
 use std::path::PathBuf;
@@ -187,6 +189,23 @@ impl Session {
         let new_pass_count = self.state.compaction.as_ref().map(|c| c.count);
         if prior_pass_count != new_pass_count {
             self.state.touch();
+        }
+    }
+
+    /// Record `text` as a user prompt in `prompt_history`.
+    /// Delegates to [`SessionSnapshot::record_prompt`].
+    pub fn record_prompt(&mut self, text: impl Into<String>) {
+        self.state.record_prompt(text);
+    }
+
+    /// Create a forked `Session` that shares this session's [`Agent`]
+    /// but carries an independent [`SessionSnapshot`] descended from
+    /// the current one (see [`SessionSnapshot::fork`]).
+    #[must_use]
+    pub fn fork(&self, branch_name: Option<String>) -> Self {
+        Self {
+            agent: self.agent.clone(),
+            state: self.state.fork(branch_name),
         }
     }
 }

@@ -63,6 +63,8 @@ fn sample_snapshot(session_id: &str) -> SessionSnapshot {
         workspace_root: None,
         model: Some("test-model".to_string()),
         compaction: None,
+        fork: None,
+        prompt_history: Vec::new(),
         messages: vec![
             ChatMessage::user("hi"),
             ChatMessage::assistant("hello back"),

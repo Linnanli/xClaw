@@ -22,6 +22,8 @@ fn fixture() -> SessionSnapshot {
             removed_message_count: 3,
             summary: "earlier discussion summarized".to_string(),
         }),
+        fork: None,
+        prompt_history: Vec::new(),
         messages: vec![
             ChatMessage::system("earlier discussion summarized"),
             ChatMessage::user("now what?"),
