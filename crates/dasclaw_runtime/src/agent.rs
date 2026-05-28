@@ -49,23 +49,107 @@ use dasclaw_core::agentic_loop::{
 };
 use dasclaw_core::egress_apply::{EgressApply, apply_egress_decision};
 use dasclaw_core::hooks::{EgressKind, HookBundle};
-use dasclaw_core::messages::{ChatMessage, ToolCall, ToolDefinition, ToolResult};
+use dasclaw_core::messages::{ChatMessage, FinishReason, ToolCall, ToolDefinition, ToolResult};
 use dasclaw_core::reasoning_ctx::ReasoningContext;
-use dasclaw_core::response_types::{RespondOutput, ResponseMetadata};
+use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata};
 use dasclaw_core::traits::HostError;
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+
+/// Streaming event emitted by [`Agent::run_streaming`] and
+/// [`crate::Session::run_streaming`] (issue #908, GUI blocker B2).
+///
+/// One event per observable step in the agentic loop:
+///
+/// - [`AgentEvent::TextChunk`] — a fragment of model output as it
+///   arrives from the LLM. For providers without true token streaming
+///   the chunk arrives in a single piece; consumers should not depend
+///   on a particular chunk size.
+/// - [`AgentEvent::ToolCallStart`] — the model asked to invoke a tool;
+///   emitted before [`ToolExecutor::execute`] runs.
+/// - [`AgentEvent::ToolResult`] — the tool finished; payload is the
+///   sanitized content that the **next** LLM iteration will see in its
+///   `tool_result` block (post-egress, post-sanitizer).
+/// - [`AgentEvent::FinishReason`] — one per LLM iteration boundary,
+///   carrying the model's stop reason. Use it to render "stopped",
+///   "needs tool", etc. in a GUI.
+///
+/// Wire format is adjacent-tagged JSON
+/// (`{"kind": "text_chunk", "data": "..."}`) so a TypeScript discriminated
+/// union renders directly from `serde_json::to_string(&event)`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+pub enum AgentEvent {
+    /// A fragment of model text output.
+    TextChunk(String),
+    /// The model requested a tool invocation.
+    ToolCallStart {
+        /// Tool name as emitted by the model.
+        name: String,
+        /// Tool arguments as raw JSON.
+        arguments: serde_json::Value,
+    },
+    /// A tool finished; `content` is the post-sanitization payload that
+    /// is fed back into the next LLM iteration.
+    ToolResult {
+        /// Tool name as it appeared in the matching
+        /// [`AgentEvent::ToolCallStart`].
+        name: String,
+        /// Sanitized tool output that the LLM will see next iteration.
+        content: String,
+        /// `true` when the executor returned an error tool_result or the
+        /// egress gate replaced the content with a `[redacted: …]`
+        /// placeholder.
+        is_error: bool,
+    },
+    /// Stop reason for the LLM iteration that just ended.
+    FinishReason(FinishReason),
+}
 
 /// Narrow LLM seam used by [`Agent`].
 ///
 /// Adapters wrap a concrete LLM client (`dasclaw_llm_provider`, a mock,
 /// a recorder, …) and translate from the provider-native response into a
-/// [`RespondOutput`]. The runtime calls `respond` once per iteration of
-/// the agentic loop.
+/// [`RespondOutput`]. The runtime calls [`Self::respond`] once per
+/// iteration of the agentic loop in non-streaming mode, and
+/// [`Self::respond_streaming`] when the host wants token-level events.
 #[async_trait]
 pub trait AgentResponder: Send + Sync {
     /// Produce the next response for the given context.
     async fn respond(&self, ctx: &mut ReasoningContext) -> Result<RespondOutput, HostError>;
+
+    /// Streaming-aware variant used by [`Agent::run_streaming`]
+    /// (issue #908, GUI blocker B2).
+    ///
+    /// `event_tx` is the same channel the agent loop forwards
+    /// [`AgentEvent`]s on. Implementations emit one or more
+    /// [`AgentEvent::TextChunk`] events as the model produces text and
+    /// then return the final [`RespondOutput`] so the loop can dispatch
+    /// to tool execution or finish.
+    ///
+    /// The default implementation calls [`Self::respond`] and forwards
+    /// the final text (if any) as a single chunk, so every existing
+    /// adapter stays wire-compatible without code changes. Adapters
+    /// backed by streaming providers (`LlmProviderResponder`) override
+    /// this method to forward token-level deltas as they arrive.
+    ///
+    /// `ToolCallStart`, `ToolResult` and `FinishReason` events are emitted
+    /// by the agent loop itself — implementations should only emit
+    /// [`AgentEvent::TextChunk`].
+    async fn respond_streaming(
+        &self,
+        ctx: &mut ReasoningContext,
+        event_tx: mpsc::Sender<AgentEvent>,
+    ) -> Result<RespondOutput, HostError> {
+        let out = self.respond(ctx).await?;
+        if let RespondResult::Text(ref text) = out.result {
+            // Drop on closed channel is fine: the consumer hung up, but
+            // the loop still needs to return the full RespondOutput.
+            let _ = event_tx.send(AgentEvent::TextChunk(text.clone())).await;
+        }
+        Ok(out)
+    }
 }
 
 /// Narrow tool-execution seam used by [`Agent`] (ADR-153 step 2 sub-step A2).
@@ -340,6 +424,41 @@ impl Agent {
         ctx: &mut ReasoningContext,
         prompt: &str,
     ) -> Result<String, AgentError> {
+        self.run_in_context_inner(ctx, prompt, None).await
+    }
+
+    /// Streaming variant of [`Agent::run_in_context`] (issue #908).
+    ///
+    /// Events are forwarded to `event_tx` in the order they happen:
+    /// [`AgentEvent::TextChunk`] from the responder, then
+    /// [`AgentEvent::FinishReason`] at each iteration boundary, with
+    /// [`AgentEvent::ToolCallStart`] / [`AgentEvent::ToolResult`]
+    /// interleaved when the model calls tools. On return the agent's
+    /// final assistant turn is also recorded in `ctx` so a
+    /// [`crate::Session`] picks up the history exactly as it does for
+    /// non-streaming runs.
+    ///
+    /// Part of the same support API as [`Agent::seed_context`].
+    pub async fn run_in_context_streaming(
+        &self,
+        ctx: &mut ReasoningContext,
+        prompt: &str,
+        event_tx: mpsc::Sender<AgentEvent>,
+    ) -> Result<String, AgentError> {
+        self.run_in_context_inner(ctx, prompt, Some(event_tx)).await
+    }
+
+    /// Shared loop driver for both streaming and non-streaming runs.
+    /// The single `event_tx: Option<...>` field on [`HeadlessDelegate`]
+    /// routes each iteration to [`AgentResponder::respond_streaming`] or
+    /// [`AgentResponder::respond`] and gates the `ToolCallStart` /
+    /// `ToolResult` / `FinishReason` emits.
+    async fn run_in_context_inner(
+        &self,
+        ctx: &mut ReasoningContext,
+        prompt: &str,
+        event_tx: Option<mpsc::Sender<AgentEvent>>,
+    ) -> Result<String, AgentError> {
         ctx.messages.push(ChatMessage::user(prompt));
 
         let loop_config = self
@@ -355,6 +474,7 @@ impl Agent {
             hooks: self.hooks.clone(),
             tool_output_sanitizer: self.tool_output_sanitizer.clone(),
             cancellation_token: self.cancellation_token.clone(),
+            event_tx,
         };
 
         let outcome = run_agentic_loop(&delegate, ctx, &loop_config, &self.hooks)
@@ -382,6 +502,24 @@ impl Agent {
         let mut ctx = ReasoningContext::new();
         self.seed_context(&mut ctx);
         self.run_in_context(&mut ctx, prompt).await
+    }
+
+    /// Streaming variant of [`Agent::run`] (issue #908, GUI blocker B2).
+    ///
+    /// Drives one user prompt through the loop while forwarding
+    /// [`AgentEvent`]s on `event_tx`. Returns the final assistant text
+    /// (the concatenation of every [`AgentEvent::TextChunk`] from the
+    /// last iteration), matching [`Agent::run`]'s contract so callers
+    /// can opt into streaming without changing their result handling.
+    pub async fn run_streaming(
+        &self,
+        prompt: &str,
+        event_tx: mpsc::Sender<AgentEvent>,
+    ) -> Result<String, AgentError> {
+        let mut ctx = ReasoningContext::new();
+        self.seed_context(&mut ctx);
+        self.run_in_context_streaming(&mut ctx, prompt, event_tx)
+            .await
     }
 }
 
@@ -525,12 +663,29 @@ impl AgentBuilder {
 /// context with the user prompt, system prompt, model override and
 /// advertised tools before the loop starts, so the delegate only needs
 /// the responder and an optional tool executor.
+///
+/// When `event_tx` is `Some`, the delegate routes each iteration through
+/// [`AgentResponder::respond_streaming`] and forwards
+/// [`AgentEvent::ToolCallStart`], [`AgentEvent::ToolResult`] and
+/// [`AgentEvent::FinishReason`] events to the host (issue #908, GUI
+/// blocker B2). When `None`, the delegate behaves exactly like the
+/// pre-#908 non-streaming path.
 struct HeadlessDelegate {
     responder: Arc<dyn AgentResponder>,
     tool_executor: Option<Arc<dyn ToolExecutor>>,
     hooks: HookBundle,
     tool_output_sanitizer: Option<Arc<dyn ToolOutputSanitizer>>,
     cancellation_token: Option<CancellationToken>,
+    event_tx: Option<mpsc::Sender<AgentEvent>>,
+}
+
+impl HeadlessDelegate {
+    /// Best-effort emit; a closed receiver is not a loop-fatal error.
+    async fn emit(&self, event: AgentEvent) {
+        if let Some(tx) = self.event_tx.as_ref() {
+            let _ = tx.send(event).await;
+        }
+    }
 }
 
 #[async_trait]
@@ -555,7 +710,19 @@ impl LoopDelegate for HeadlessDelegate {
         ctx: &mut ReasoningContext,
         _iteration: usize,
     ) -> Result<RespondOutput, HostError> {
-        self.responder.respond(ctx).await
+        // Streaming and non-streaming routes split at the responder
+        // seam: when an event channel is wired we go through
+        // `respond_streaming`, which the default trait impl falls back
+        // to `respond` for adapters that don't override it. Either way
+        // we forward the trailing `FinishReason` so a GUI knows the
+        // iteration boundary even when the model emitted no text.
+        let output = match self.event_tx.as_ref() {
+            Some(tx) => self.responder.respond_streaming(ctx, tx.clone()).await?,
+            None => self.responder.respond(ctx).await?,
+        };
+        self.emit(AgentEvent::FinishReason(output.finish_reason))
+            .await;
+        Ok(output)
     }
 
     async fn handle_text_response(
@@ -584,6 +751,18 @@ impl LoopDelegate for HeadlessDelegate {
 
         push_assistant_tool_calls(ctx, content, &tool_calls);
         for call in &tool_calls {
+            // Streaming hosts learn the tool name + arguments as soon as
+            // the loop commits to invoking the tool, before any egress
+            // gate runs. The post-egress sanitized payload is forwarded
+            // in the matching `ToolResult` event below, so a redacted
+            // arguments preview stays consistent with what the LLM sees
+            // next iteration.
+            self.emit(AgentEvent::ToolCallStart {
+                name: call.name.clone(),
+                arguments: call.arguments.clone(),
+            })
+            .await;
+
             // ADR-148 Layer B + ADR-153 §1.1 e8/A2:
             // Pre-execute egress gate scans serialised tool arguments.
             // `Block` → executor is never invoked; an is_error
@@ -606,10 +785,17 @@ impl LoopDelegate for HeadlessDelegate {
                 let error_body = format!("Error: {reason}");
                 ctx.messages
                     .push(ChatMessage::tool_result(&call.id, &call.name, &error_body));
+                self.emit(AgentEvent::ToolResult {
+                    name: call.name.clone(),
+                    content: error_body,
+                    is_error: true,
+                })
+                .await;
                 continue;
             }
 
             let result = executor.execute(call).await?;
+            let executor_is_error = result.is_error;
 
             // ADR-148 Layer B + ADR-153 §1.1 e15/A9:
             // Post-execute egress gate sanitises tool output before it
@@ -623,15 +809,15 @@ impl LoopDelegate for HeadlessDelegate {
                 .egress
                 .check(&EgressKind::UserDisplay, &content_buf)
                 .await;
-            let post_gate_content = match apply_egress_decision(
+            let (post_gate_content, gate_halted) = match apply_egress_decision(
                 decision,
                 &mut content_buf,
                 &post_label,
             ) {
-                EgressApply::Continue => content_buf,
+                EgressApply::Continue => (content_buf, false),
                 EgressApply::Halt(reason) => {
                     tracing::warn!(tool = %result.name, %reason, "egress gate blocked tool output");
-                    format!("[redacted: {reason}]")
+                    (format!("[redacted: {reason}]"), true)
                 }
             };
 
@@ -649,6 +835,12 @@ impl LoopDelegate for HeadlessDelegate {
                 &result.name,
                 &pushed_content,
             ));
+            self.emit(AgentEvent::ToolResult {
+                name: result.name.clone(),
+                content: pushed_content,
+                is_error: executor_is_error || gate_halted,
+            })
+            .await;
         }
         Ok(None)
     }
@@ -934,5 +1126,212 @@ mod tests {
             .expect("build");
         let err = agent.run("hi").await.unwrap_err();
         assert!(matches!(err, AgentError::ToolsNotSupported), "got {err:?}");
+    }
+
+    // -----------------------------------------------------------------
+    // Issue #908 — Agent::run_streaming (GUI blocker B2)
+    // -----------------------------------------------------------------
+
+    /// Responder that emits a fixed list of text chunks via
+    /// `respond_streaming` and returns the concatenation as the final
+    /// `RespondOutput`. Mirrors how `LlmProviderResponder` will forward
+    /// real provider chunks at the seam.
+    struct ChunkedResponder {
+        chunks: Vec<String>,
+    }
+
+    #[async_trait]
+    impl AgentResponder for ChunkedResponder {
+        async fn respond(&self, _ctx: &mut ReasoningContext) -> Result<RespondOutput, HostError> {
+            Ok(text_output(&self.chunks.concat()))
+        }
+
+        async fn respond_streaming(
+            &self,
+            _ctx: &mut ReasoningContext,
+            event_tx: mpsc::Sender<AgentEvent>,
+        ) -> Result<RespondOutput, HostError> {
+            for chunk in &self.chunks {
+                event_tx
+                    .send(AgentEvent::TextChunk(chunk.clone()))
+                    .await
+                    .expect("event_rx alive");
+            }
+            Ok(text_output(&self.chunks.concat()))
+        }
+    }
+
+    #[tokio::test]
+    async fn req_dasclaw_runtime_agent_b2_run_streaming_orders_chunks_and_finish() {
+        let responder = ChunkedResponder {
+            chunks: ["Hel", "lo, ", "wor", "ld", "!"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+        };
+        let agent = Agent::builder()
+            .responder(responder)
+            .build()
+            .expect("build");
+
+        let (tx, mut rx) = mpsc::channel::<AgentEvent>(16);
+        let final_text = agent.run_streaming("hi", tx).await.expect("run");
+
+        let mut events = Vec::new();
+        while let Some(ev) = rx.recv().await {
+            events.push(ev);
+        }
+
+        assert_eq!(events.len(), 6, "5 TextChunk + 1 FinishReason: {events:?}");
+        let chunks: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::TextChunk(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(chunks, vec!["Hel", "lo, ", "wor", "ld", "!"]);
+        assert!(
+            matches!(
+                events.last(),
+                Some(AgentEvent::FinishReason(FinishReason::Stop))
+            ),
+            "last must be FinishReason::Stop: {events:?}"
+        );
+        assert_eq!(final_text, chunks.join(""));
+    }
+
+    #[tokio::test]
+    async fn req_dasclaw_runtime_agent_b2_run_streaming_default_impl_falls_back_to_respond() {
+        // A responder that doesn't override `respond_streaming` must
+        // still surface its final text as a single `TextChunk`
+        // courtesy of the default trait impl. This is what guarantees
+        // pre-#908 adapters keep working untouched.
+        let responder = ScriptedResponder::new(vec![text_output("one shot")]);
+        let agent = Agent::builder()
+            .responder(responder)
+            .build()
+            .expect("build");
+
+        let (tx, mut rx) = mpsc::channel::<AgentEvent>(4);
+        let final_text = agent.run_streaming("hi", tx).await.expect("run");
+
+        let mut events = Vec::new();
+        while let Some(ev) = rx.recv().await {
+            events.push(ev);
+        }
+        assert_eq!(
+            events,
+            vec![
+                AgentEvent::TextChunk("one shot".to_string()),
+                AgentEvent::FinishReason(FinishReason::Stop),
+            ]
+        );
+        assert_eq!(final_text, "one shot");
+    }
+
+    #[tokio::test]
+    async fn req_dasclaw_runtime_agent_b2_run_streaming_emits_tool_events_in_order() {
+        // First iteration → tool call; second iteration → final text.
+        // Expected event order:
+        //   FinishReason::ToolUse        (iter 1 LLM)
+        //   ToolCallStart { name=echo }  (loop wires tool)
+        //   ToolResult   { name=echo }   (executor finished)
+        //   TextChunk("all done")        (iter 2 LLM streaming chunk)
+        //   FinishReason::Stop           (iter 2 LLM)
+        let responder = ScriptedResponder::new(vec![
+            tool_call_output_named("echo", "call_1"),
+            text_output("all done"),
+        ]);
+        let executor = ScriptedExecutor::new("echo result");
+        let agent = Agent::builder()
+            .responder(responder)
+            .tool_executor(executor)
+            .tools(vec![ToolDefinition {
+                name: "echo".into(),
+                description: "echo".into(),
+                parameters: serde_json::json!({"type": "object"}),
+            }])
+            .build()
+            .expect("build");
+
+        let (tx, mut rx) = mpsc::channel::<AgentEvent>(16);
+        let final_text = agent.run_streaming("call echo", tx).await.expect("run");
+
+        let mut events = Vec::new();
+        while let Some(ev) = rx.recv().await {
+            events.push(ev);
+        }
+
+        assert!(
+            matches!(
+                events.first(),
+                Some(AgentEvent::FinishReason(FinishReason::ToolUse))
+            ),
+            "first event = ToolUse FinishReason: {events:?}"
+        );
+        let tool_start_idx = events
+            .iter()
+            .position(|e| matches!(e, AgentEvent::ToolCallStart { name, .. } if name == "echo"))
+            .expect("ToolCallStart missing");
+        let tool_result_idx = events
+            .iter()
+            .position(|e| matches!(e, AgentEvent::ToolResult { name, content, is_error: false } if name == "echo" && content == "echo result"))
+            .expect("ToolResult missing");
+        assert!(
+            tool_start_idx < tool_result_idx,
+            "ToolCallStart must precede ToolResult: {events:?}"
+        );
+        assert!(
+            matches!(
+                events.last(),
+                Some(AgentEvent::FinishReason(FinishReason::Stop))
+            ),
+            "last event = Stop FinishReason: {events:?}"
+        );
+        assert_eq!(final_text, "all done");
+    }
+
+    #[tokio::test]
+    async fn req_dasclaw_runtime_agent_b2_run_streaming_serializes_to_adjacent_tagged_json() {
+        // Wire format guard: AgentEvent uses adjacent-tagged JSON so a
+        // TypeScript discriminated union renders directly. Pin the
+        // four variants so we notice if anything reshapes the wire.
+        let chunks = vec![
+            AgentEvent::TextChunk("hi".into()),
+            AgentEvent::ToolCallStart {
+                name: "echo".into(),
+                arguments: serde_json::json!({"x": 1}),
+            },
+            AgentEvent::ToolResult {
+                name: "echo".into(),
+                content: "ok".into(),
+                is_error: false,
+            },
+            AgentEvent::FinishReason(FinishReason::Stop),
+        ];
+        let json: Vec<String> = chunks
+            .iter()
+            .map(|c| serde_json::to_string(c).expect("serialize"))
+            .collect();
+        assert_eq!(json[0], r#"{"kind":"text_chunk","data":"hi"}"#);
+        assert!(
+            json[1].starts_with(r#"{"kind":"tool_call_start","data":{"name":"echo""#),
+            "got {}",
+            json[1]
+        );
+        assert!(
+            json[2].contains(r#""kind":"tool_result""#) && json[2].contains(r#""is_error":false"#),
+            "got {}",
+            json[2]
+        );
+        assert_eq!(json[3], r#"{"kind":"finish_reason","data":"stop"}"#);
+
+        // Round-trip every variant.
+        for original in chunks {
+            let s = serde_json::to_string(&original).expect("ser");
+            let back: AgentEvent = serde_json::from_str(&s).expect("de");
+            assert_eq!(back, original);
+        }
     }
 }

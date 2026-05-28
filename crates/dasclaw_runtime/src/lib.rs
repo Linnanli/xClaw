@@ -79,7 +79,8 @@ pub mod tool;
 pub mod tool_to_executor_adapter;
 
 pub use agent::{
-    Agent, AgentBuilder, AgentConfig, AgentError, AgentResponder, ToolExecutor, ToolOutputSanitizer,
+    Agent, AgentBuilder, AgentConfig, AgentError, AgentEvent, AgentResponder, ToolExecutor,
+    ToolOutputSanitizer,
 };
 pub use composite_executor::{CompositeError, CompositeToolExecutor};
 pub use error::ToolError;
