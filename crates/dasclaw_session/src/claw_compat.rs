@@ -29,7 +29,7 @@
 //!   the return trip. Non-JSON-object arguments (rare in practice)
 //!   are serialized as their literal JSON form.
 
-use dasclaw_core::messages::{ChatMessage, Role, ToolCall};
+use dasclaw_core::messages::{ChatMessage, Role, TokenUsage, ToolCall};
 use serde::{Deserialize, Serialize};
 
 /// Claw-code's message-level role tag. Serializes as lowercase to
@@ -67,12 +67,18 @@ pub enum ClawContentBlock {
 
 /// Claw-code-shaped persisted message. Mirrors
 /// `claw-code::runtime::session::ConversationMessage` exactly on the
-/// wire, minus `usage` (token-usage fields land in
-/// [`crate::SessionSnapshot`] when we wire them up in a later PR).
+/// wire, including the optional per-turn `usage` field that travels
+/// with assistant messages.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClawMessage {
     pub role: ClawRole,
     pub blocks: Vec<ClawContentBlock>,
+    /// Token usage attributed to this message. Only populated for
+    /// assistant turns when the upstream `ChatMessage` carries
+    /// `usage = Some(...)`. Skipped on the wire when absent so the
+    /// jsonl shape matches claw-code's optional layout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<TokenUsage>,
 }
 
 /// Convert from the OpenAI-shaped [`ChatMessage`] to a claw-code-shaped
@@ -80,15 +86,17 @@ pub struct ClawMessage {
 ///
 /// Mapping:
 /// - System / User text-only → single `Text` block carrying `content`
-/// - Assistant text-only → single `Text` block
+/// - Assistant text-only → single `Text` block; `usage` propagates
+///   to `ClawMessage::usage` when set
 /// - Assistant with `tool_calls`: optional leading `Text` block (if
 ///   `content` is non-empty) followed by one `ToolUse` block per
-///   call, with `input` = JSON-stringified `arguments`
+///   call, with `input` = JSON-stringified `arguments`; `usage`
+///   propagates to `ClawMessage::usage`
 /// - Tool result → single `ToolResult` block reading `tool_call_id`,
-///   `name`, and `content`; `is_error` is recorded as `false` (the
-///   dasclaw `ChatMessage::tool_result` constructor does not yet
-///   surface an error flag — adding one is a forward-compatible
-///   change because `is_error` is required by the claw wire schema)
+///   `name`, and `content`. `is_error` is sourced from
+///   `ChatMessage::tool_error` (`None` flattens to `false` because
+///   the claw wire schema requires the field; `Some(b)` round-trips
+///   `b` faithfully).
 #[must_use]
 pub fn chat_message_to_claw(message: &ChatMessage) -> ClawMessage {
     match message.role {
@@ -97,12 +105,14 @@ pub fn chat_message_to_claw(message: &ChatMessage) -> ClawMessage {
             blocks: vec![ClawContentBlock::Text {
                 text: message.content.clone(),
             }],
+            usage: None,
         },
         Role::User => ClawMessage {
             role: ClawRole::User,
             blocks: vec![ClawContentBlock::Text {
                 text: message.content.clone(),
             }],
+            usage: None,
         },
         Role::Assistant => {
             let mut blocks: Vec<ClawContentBlock> = Vec::new();
@@ -123,6 +133,7 @@ pub fn chat_message_to_claw(message: &ChatMessage) -> ClawMessage {
             ClawMessage {
                 role: ClawRole::Assistant,
                 blocks,
+                usage: message.usage,
             }
         }
         Role::Tool => ClawMessage {
@@ -131,8 +142,9 @@ pub fn chat_message_to_claw(message: &ChatMessage) -> ClawMessage {
                 tool_use_id: message.tool_call_id.clone().unwrap_or_default(),
                 tool_name: message.name.clone().unwrap_or_default(),
                 output: message.content.clone(),
-                is_error: false,
+                is_error: message.tool_error.unwrap_or(false),
             }],
+            usage: None,
         },
     }
 }
@@ -164,10 +176,12 @@ pub fn claw_to_chat_message(message: &ClawMessage) -> ChatMessage {
             tool_use_id,
             tool_name,
             output,
-            is_error: _,
+            is_error,
         }) = message.blocks.first()
     {
-        return ChatMessage::tool_result(tool_use_id, tool_name, output);
+        let mut msg = ChatMessage::tool_result(tool_use_id, tool_name, output);
+        msg.tool_error = Some(*is_error);
+        return msg;
     }
 
     let mut text_parts: Vec<&str> = Vec::new();
@@ -202,7 +216,7 @@ pub fn claw_to_chat_message(message: &ClawMessage) -> ChatMessage {
         name: None,
         tool_calls: None,
         tool_error: None,
-        usage: None,
+        usage: message.usage,
     };
     if !tool_calls.is_empty() {
         msg.tool_calls = Some(tool_calls);
