@@ -55,12 +55,16 @@
 //! assert_eq!(resumed.messages().len(), session.messages().len());
 //! ```
 
+pub mod claw_compat;
 pub mod error;
 pub mod id;
 pub mod jsonl;
 pub mod snapshot;
 pub mod store;
 
+pub use claw_compat::{
+    ClawContentBlock, ClawMessage, ClawRole, chat_message_to_claw, claw_to_chat_message,
+};
 pub use error::SessionError;
 pub use id::{SESSION_VERSION, generate_session_id};
 pub use jsonl::{JsonlSessionStore, MAX_ROTATED_FILES, ROTATE_AFTER_BYTES};

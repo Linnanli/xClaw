@@ -3,5 +3,5 @@ source: crates/dasclaw_session/tests/jsonl_wire.rs
 expression: text
 ---
 {"type":"session_meta","version":1,"session_id":"session-1700000000000-0","created_at_ms":1700000000000,"updated_at_ms":1700000000500,"workspace_root":"/tmp/ws","model":"test-model"}
-{"type":"message","message":{"role":"user","content":"ping"}}
-{"type":"message","message":{"role":"assistant","content":"pong"}}
+{"type":"message","message":{"role":"user","blocks":[{"type":"text","text":"ping"}]}}
+{"type":"message","message":{"role":"assistant","blocks":[{"type":"text","text":"pong"}]}}

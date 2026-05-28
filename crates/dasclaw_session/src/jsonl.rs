@@ -8,17 +8,17 @@
 //!
 //! ```text
 //! {"type":"session_meta","version":1,"session_id":"…","created_at_ms":…,"updated_at_ms":…,"workspace_root":"…","model":"…"}
-//! {"type":"message","message":{"role":"user","content":"ping"}}
-//! {"type":"message","message":{"role":"assistant","content":"pong"}}
+//! {"type":"message","message":{"role":"user","blocks":[{"type":"text","text":"ping"}]}}
+//! {"type":"message","message":{"role":"assistant","blocks":[{"type":"text","text":"pong"}]}}
 //! ```
 //!
 //! The outer framing (`type` discriminant, `session_meta` and
-//! `message` record kinds) deliberately mirrors `claw-code`'s session
-//! jsonl layout so a future migration tool can bridge the two
-//! ecosystems at the line level. The inner `message` body uses
-//! [`dasclaw_core::messages::ChatMessage`]'s serde shape, which differs
-//! from `claw-code`'s richer block-based message; full bidirectional
-//! interop is intentionally out of scope for #914 PR-C1.
+//! `message` record kinds) and the inner `message` body shape both
+//! mirror `claw-code`'s on-disk session jsonl exactly
+//! ([`crate::claw_compat`] holds the type definitions and the
+//! lossy edges of the [`ChatMessage`] bridge). Sessions written by
+//! this crate are line-level compatible with `claw-code` and vice
+//! versa.
 //!
 //! ## Rotation
 //!
@@ -50,6 +50,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 use dasclaw_core::messages::ChatMessage;
 
+use crate::claw_compat::{ClawMessage, chat_message_to_claw, claw_to_chat_message};
 use crate::error::SessionError;
 use crate::id::SESSION_VERSION;
 use crate::snapshot::{
@@ -205,7 +206,7 @@ struct SessionMetaRecord<'a> {
 struct MessageRecord<'a> {
     #[serde(rename = "type")]
     kind: &'a str,
-    message: &'a ChatMessage,
+    message: ClawMessage,
 }
 
 #[derive(Debug, Serialize)]
@@ -262,7 +263,7 @@ fn render_jsonl(snapshot: &SessionSnapshot) -> Result<Vec<u8>, SessionError> {
     for message in &snapshot.messages {
         let record = MessageRecord {
             kind: "message",
-            message,
+            message: chat_message_to_claw(message),
         };
         serde_json::to_writer(&mut out, &record)?;
         out.push(b'\n');
@@ -366,8 +367,8 @@ fn parse_jsonl(bytes: &[u8]) -> Result<SessionSnapshot, SessionError> {
                         ),
                     ))
                 })?;
-                let msg: ChatMessage = serde_json::from_value(message_value.clone())?;
-                messages.push(msg);
+                let claw: ClawMessage = serde_json::from_value(message_value.clone())?;
+                messages.push(claw_to_chat_message(&claw));
             }
             "compaction" => {
                 let count_raw = object.get("count").and_then(Value::as_u64).ok_or_else(|| {
