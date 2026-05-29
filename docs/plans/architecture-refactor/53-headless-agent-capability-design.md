@@ -136,17 +136,48 @@ flowchart TB
 | `SessionStore` 内存实现的位置 | 已在 `dasclaw_session`，但 jsonl 落盘版还在 PR #914 PR-C 待落 | 跟进 PR #914，落盘版进 `dasclaw_session` 而不是 `ironclaw` | 已计划，无需新决策 |
 | `Agent` 与 `Session` 的合并入口 | `Agent::run` 与 `Session::run` 接口各自独立，没有"四行代码起 agent + 会话续接"的合并门面 | `dasclaw_session::Session::with_agent(agent)` 已经做到，把这个写进 `dasclaw_runtime` 顶层 README | 0 代码 |
 
-### 4.2 P1 — 不动也能用，但第三方接入摩擦大
+### 4.2 P1 — 已经实现（更新：原列为缺口属脑补，已勘误）
 
-| 缺口 | 现状 | 补法 | 影响范围 |
-|---|---|---|---|
-| MCP 工具直接给 `ToolExecutor` 用的桥 | `crates/dasclaw_mcp` 有客户端，但没有现成 `impl ToolExecutor for McpClient` | 新增 `dasclaw_runtime::mcp_executor::McpToolExecutor`（约 80 LOC）+ 一个测试 | 新文件，零侵入 |
-| 多 ToolExecutor 组合 | `dasclaw_cli` 里有 `CompositeToolExecutor`，但只在 CLI 内部 | 把它升到 `dasclaw_runtime::composite`，让 CLI 与第三方共用 | 搬迁 + 公共化，约 50 LOC |
-| `AgentError::ApprovalRequested` 标 `#[deprecated]` 后的迁移指引 | 已 deprecate 但没写迁移 doc | `dasclaw_runtime/MIGRATION.md` 写清楚"自定义 LoopDelegate 接 `Agent::respond_to_approval`"的范例 | 纯文档 |
+> **勘误**：本节初稿列出两个 P1 缺口（MCP executor 桥 + Composite 提升），均为伪缺口。原因是初稿写作时违反 [AGENTS.md](../../AGENTS.md) 三层验证红线，未做 `semantic_search` 核验直接落笔。
+
+**事实**：
+
+| 原列缺口 | 实际状态 | 证据 |
+|---|---|---|
+| ~~新增 `dasclaw_runtime::mcp_executor::McpToolExecutor`（约 80 LOC）~~ | **已存在**：`dasclaw_mcp::McpToolExecutor` 早就 `impl ToolExecutor`，约 110 LOC | `crates/dasclaw_mcp/src/executor.rs:51-167`；`crates/dasclaw_cli/src/mcp.rs:148` 早已消费 |
+| ~~把 `CompositeToolExecutor` 从 cli 升到 runtime（约 50 LOC）~~ | **早已在 runtime**：定义在 `crates/dasclaw_runtime/src/composite_executor.rs`，`lib.rs` 已 `pub use composite_executor::{CompositeError, CompositeToolExecutor};` | cli `main.rs` 是消费方而非定义方 |
+| 自定义 LoopDelegate 接 `Agent::respond_to_approval` 的迁移指引 | **真缺**，但份量仅纯文档 | 见 §6 PR-3 |
+
+**结论**：P1 整段从迁移路径中移除；剩余 P0 见 §4.1 + §6。
+
+**桌面端继续保留独立 MCP 适配**（`desktop-client/ironclaw/src/tools/mcp/client_tool.rs`）**属合理多态**：那里走的是 `Tool` trait + 自带 `strip_top_level_nulls` 防守 + 通过 `ToolToExecutorAdapter` 桥接，结构性选择不是冗余复制。详见 §5。
 
 ### 4.3 P2 — 桌面端迁移到 `Agent` 门面（最大、最后做、最有争议）
 
-**结论：不该做。** 详见 [52 — 复盘](52-gui-readiness-reassessment.md) §3。桌面端 `ChatDelegate` 与 `Agent` 是两套**不同并发模型**的并存（持久化重启 vs 内存阻塞），不是重复造轮子。桌面端真正的合并诉求要等 ADR-153 后续阶段的"持久化恢复"做完才有意义。
+**结论：不该做。** 这是有意识的设计选择，不是"还没做"。
+
+**`ChatDelegate`（`desktop-client/ironclaw/src/agent/dispatcher.rs:354`）与 `HeadlessDelegate` 的 6 维度差异**：
+
+| 维度 | `HeadlessDelegate` | `ChatDelegate` |
+|---|---|---|
+| **字段数** | 8（responder / tool_executor / hooks / sanitizer / token / event_tx / policy / inbox） | 15（含 tenant / `Arc<Mutex<Session>>` / thread_id / job_ctx / active_skills / disabled_extensions / 两个 cached_prompt / nudge_at / force_text_at / user_tz / Reasoning 引擎） |
+| **持久化** | 纯内存，run 结束销毁 | **写数据库**：LLM call 落库，跨进程重启可恢复（[dispatcher.rs:553-567](../../desktop-client/ironclaw/src/agent/dispatcher.rs#L553)） |
+| **工具派发** | 单次顺序循环 | **3 阶段**：preflight 审批 → 并行执行 → post-flight DLP/hooks（[dispatcher.rs:351](../../desktop-client/ironclaw/src/agent/dispatcher.rs#L351) 注释） |
+| **审批模型** | `ApprovalInbox` + oneshot + `AgentEvent::ApprovalNeeded`（B4） | 直推 `StatusUpdate::ApprovalNeeded` 到 Tauri channel，不经 ApprovalInbox |
+| **取消信号** | `CancellationToken` | 检查 `Session::ThreadState::Interrupted`（[dispatcher.rs:383-390](../../desktop-client/ironclaw/src/agent/dispatcher.rs#L383)） |
+| **多租户 / Skills** | 无 tenant、无 skill | 每轮按 `tenant` + `active_skills` 重建 `tool_definitions_for_llm` |
+
+**强迁的代价**：要让桌面端走 `Agent`，必须把上面 6 件事塞进 `dasclaw_runtime`。`Agent` 会从"窄门面"变成"宽超集"，CLI / 第三方反而被迫吃下不需要的多租户、Mutex 共享、Reasoning 引擎、3 阶段派发。**这违反 ADR-153 §4.4 "headless CLI 不依赖 DB / HTTP"**。
+
+**不迁的代价**：净重复约 ~150 LOC（两个 LoopDelegate 实现）。但底层共享同一份 `dasclaw_core::agentic_loop::run_agentic_loop`（`desktop-client/ironclaw/src/agent/agentic_loop.rs:18` 即 `pub use dasclaw_core::agentic_loop::*`），共享同一份 `HookBundle`、同一份 `ToolExecutor` / `Tool` trait。**对换的是 `dasclaw_runtime` 公共面保持窄。这是个好交易。**
+
+**未来真要合并的前置**（不在本次范围）：
+
+1. `dasclaw_session` 能持久化桌面端的 `ThreadState` / `Tenant` / `Skills` schema
+2. `dasclaw_runtime` 加可插拔的"3 阶段派发器"（hooks 强化版）
+3. 审批完全统一到 `ApprovalInbox`
+
+三件事都落地后，迁移成本会从"重写 ChatDelegate"降到"换三个 trait 实现"。在此之前迁是负价值。
 
 ---
 
@@ -161,24 +192,27 @@ flowchart TB
 | 工具派发循环 2 处 | **部分冗余**。`HeadlessDelegate` 走简单顺序派发；`ChatDelegate` 走三段式（前置审批 + 并行 + 后置安全） | 桌面端三段式有产品诉求（并行 + 审批 + DLP），不应强压到 headless；headless 简洁是其卖点。**不动** |
 | Guardian 自动复审只在 codex | **业务专属**。深度耦合 codex 会话/轮次上下文 | 不动 |
 
-**唯一可消减的真冗余**：MCP 工具适配在 `desktop-client/ironclaw/src/tools/mcp/client_tool.rs` 与 `crates/dasclaw_cli` 内各自实现一遍。按 §4.2 抽到 `dasclaw_runtime::mcp_executor` 后可消掉。
+**唯一可消减的真冗余候选**：原以为是 MCP 工具适配，但调研发现 `desktop-client/ironclaw/src/tools/mcp/client_tool.rs`（70 LOC，`Tool` trait + `strip_top_level_nulls` 防守）和 `dasclaw_mcp::McpToolExecutor`（110 LOC，`ToolExecutor` trait）走两条不同 trait 路径，是结构性多态而非冗余复制。强行合并需要先重构 ironclaw 的 Tool registry 模型，代价远超收益。**暂不合并**。
 
 ---
 
 ## 6. 迁移路径（按优先级、单 PR 边界）
 
-每一刀都是小而完整的 PR，不重叠、可独立 review。
+> **修订**：初稿列了 6 PR，调研后发现 §4.2 整段是伪缺口，实际剩余只有 3 个纯文档 PR。
 
-| 顺序 | PR | 内容 | 预估改动 | 依赖 |
+| 顺序 | PR | 内容 | 预估改动 | 状态 |
 |---|---|---|---|---|
-| 1 | docs(runtime): 起步指南 + 样例 demo | `dasclaw_runtime/README.md` 起步章节 + `dasclaw_cli/examples/headless_agent_starter.rs` | 文档 + 1 个新示例文件 | 无 |
-| 2 | feat(runtime): MCP tool executor 桥 | 新增 `dasclaw_runtime::mcp_executor::McpToolExecutor` + 单元/契约测试 | 约 80 LOC + 测试 | 无 |
-| 3 | refactor(runtime): 提升 `CompositeToolExecutor` 到 runtime | 从 `dasclaw_cli` 搬到 `dasclaw_runtime::composite`，CLI 改为消费 | 约 50 LOC 搬迁 | 依赖 PR-2 |
-| 4 | docs(runtime): `AgentError::ApprovalRequested` 迁移指南 | `MIGRATION.md` + 在 deprecation 注释里指向它 | 纯文档 | 无 |
-| 5 | feat(session): jsonl 落盘 store（如 PR #914 未合并） | 在 `dasclaw_session::store` 下新增 `JsonlSessionStore` | 约 150 LOC | 与 #914 协调 |
-| 6 | docs(arch): 把本文升级为 ADR-156（无头 agent 框架边界） | 加 §"决策记录" + 反向链接到 49/52 | 文档 | 1–5 之一合并后 |
+| 1 | docs(runtime): 起步指南 + 样例 demo | `dasclaw_runtime/README.md` 起步章节 + `dasclaw_cli/examples/headless_agent_starter.rs` | 文档 + 1 个新示例文件 | **#945 in flight** |
+| 2 | docs(repo): 顶层指针 | 仓库 `README.md` / `docs/INTEROP_DASCLAW.md` 增加"想嵌入无头 agent 看这里"指针 | ~10 行 docs | 待开 |
+| 3 | docs(arch): 升 ADR-156 | 把本文升级为 ADR-156（无头 agent 框架能力边界）+ 反向链接到 ADR-153 / 49 / 52；同时把 `AgentError::ApprovalRequested` 迁移指引写进 ADR-156 附录或 `dasclaw_runtime/MIGRATION.md` | 文档 | 待用户拍板 §9.4 后开 |
 
-**不在路径里的**：桌面端从 `ChatDelegate` 迁到 `Agent`、统一审批多态、统一会话 schema —— 暂不做，理由见 §5。
+**取消的 PR**（原列为 PR-2/3/5）：
+
+- ~~PR-2 MCP executor 桥~~：已在 `dasclaw_mcp::McpToolExecutor`
+- ~~PR-3 提升 CompositeToolExecutor~~：已在 `dasclaw_runtime::composite_executor`
+- ~~PR-5 jsonl session store~~：PR #914 PR-C 已在飞，跟进即可
+
+**不在路径里的**：桌面端从 `ChatDelegate` 迁到 `Agent`、统一审批多态、统一会话 schema —— 暂不做，理由见 §4.3 + §5。
 
 ---
 
