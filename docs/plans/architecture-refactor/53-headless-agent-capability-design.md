@@ -1,5 +1,7 @@
 # 53 — 无头 Agent 框架能力设计
 
+> **状态更新（2026-05-29）**：本文核心结论已升格为 [ADR-157](adr-157-headless-agent-framework-capability-boundary.md)。本文继续作为详细论证材料保留；后续 PR 引用决策时请 cite ADR-157。
+
 **主题**：分析"模型调用 / 工具注册 / 会话状态 / 持久化 / 多端分发"五项能力是否抽入 `crates/` 下的无头 agent 框架；给出分层归属与迁移路径。
 
 **前置**：
@@ -203,8 +205,8 @@ flowchart TB
 | 顺序 | PR | 内容 | 预估改动 | 状态 |
 |---|---|---|---|---|
 | 1 | docs(runtime): 起步指南 + 样例 demo | `dasclaw_runtime/README.md` 起步章节 + `dasclaw_cli/examples/headless_agent_starter.rs` | 文档 + 1 个新示例文件 | **#945 in flight** |
-| 2 | docs(repo): 顶层指针 | 仓库 `README.md` / `docs/INTEROP_DASCLAW.md` 增加"想嵌入无头 agent 看这里"指针 | ~10 行 docs | 待开 |
-| 3 | docs(arch): 升 ADR-156 | 把本文升级为 ADR-156（无头 agent 框架能力边界）+ 反向链接到 ADR-153 / 49 / 52；同时把 `AgentError::ApprovalRequested` 迁移指引写进 ADR-156 附录或 `dasclaw_runtime/MIGRATION.md` | 文档 | 待用户拍板 §9.4 后开 |
+| 2 | docs(repo): 顶层指针 | 仓库 `README.md` / `docs/INTEROP_DASCLAW.md` 增加"想嵌入无头 agent 看这里"指针 | ~10 行 docs | **#950 已合** |
+| 3 | docs(arch): 升 ADR-157 | 把本文升级为 ADR-157（无头 agent 框架能力边界）+ 反向链接到 ADR-153 / 49 / 52；同时把 `AgentError::ApprovalRequested` 迁移指引写进 ADR-157 附录 A | 文档 | 已完成 |
 
 **取消的 PR**（原列为 PR-2/3/5）：
 
@@ -242,7 +244,7 @@ flowchart TB
 1. **接受四层架构归属**（§3 + §2 表格）作为后续所有"是否抽到通用 crate"判断依据？
 2. **接受 §4.1 / §4.2 的 5 个 P0/P1 缺口** 作为下一阶段实施清单？
 3. **接受桌面端不迁 `Agent`** 的判断（详见 52 §3 + 本文 §4.3）？
-4. **本文是否升级为正式 ADR-156**？升级后会作为后续 PR 的 ADR cite 锚点。
+4. **本文是否升级为正式 ADR-157**？升级后会作为后续 PR 的 ADR cite 锚点。（ADR-156 已被 F4.6 builtin 工具落点决策占用）
 
 ---
 
