@@ -17,6 +17,8 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
+use dasclaw_core::agentic_loop::LoopOutcome;
 use dasclaw_core::egress_apply::{EgressApply, apply_egress_decision};
 use dasclaw_core::hooks::{EgressGate, EgressKind};
 use dasclaw_core::messages::{ChatMessage, ToolCall};
@@ -30,7 +32,6 @@ use uuid::Uuid;
 use crate::AgentEvent;
 use crate::agent::{ToolExecutor, ToolOutputSanitizer};
 use crate::approval::{ApprovalDecision, ApprovalInbox, ApprovalPolicy};
-use dasclaw_core::agentic_loop::LoopOutcome;
 
 /// Sentinel prefix for `LoopOutcome::Failure` strings produced when an
 /// `ApprovalPolicy` flagged a tool call and the GUI replied
@@ -77,22 +78,68 @@ fn push_assistant_tool_calls(
     );
 }
 
+/// L2 seam (ADR-160 §3): drive a single agentic-loop iteration's
+/// tool calls through whatever pipeline the host wires up.
+///
+/// The only in-tree impl today is [`SequentialDispatcher`], which
+/// preserves the ADR-153 §1.1 5-step pipeline byte-for-byte. Future
+/// `AgenticLoop`-level implementations (parallel dispatch, replay,
+/// fakes for testing) plug in here without touching
+/// `HeadlessDelegate` or `run_agentic_loop`.
+#[async_trait]
+pub trait ToolDispatcher: Send + Sync {
+    /// Execute one iteration's worth of tool calls.
+    ///
+    /// Returning `Ok(Some(outcome))` short-circuits the agentic loop
+    /// (e.g. approval rejection, fatal sandbox refusal). Returning
+    /// `Ok(None)` lets the loop run another model turn.
+    async fn dispatch(
+        &self,
+        tool_calls: Vec<ToolCall>,
+        content: Option<String>,
+        usage: TokenUsage,
+        ctx: &mut ReasoningContext,
+    ) -> Result<Option<LoopOutcome>, HostError>;
+}
+
 /// Sequential implementation of the ADR-153 §1.1 tool dispatch
 /// pipeline. Executes the supplied `tool_calls` one after another;
 /// short-circuits on approval rejection.
-pub(crate) struct SequentialDispatcher {
-    pub(crate) executor: Arc<dyn ToolExecutor>,
-    pub(crate) egress: Arc<dyn EgressGate>,
-    pub(crate) approval_policy: Arc<dyn ApprovalPolicy>,
-    pub(crate) approval_inbox: ApprovalInbox,
-    pub(crate) tool_output_sanitizer: Option<Arc<dyn ToolOutputSanitizer>>,
-    pub(crate) event_tx: Option<mpsc::Sender<AgentEvent>>,
+pub struct SequentialDispatcher {
+    executor: Arc<dyn ToolExecutor>,
+    egress: Arc<dyn EgressGate>,
+    approval_policy: Arc<dyn ApprovalPolicy>,
+    approval_inbox: ApprovalInbox,
+    tool_output_sanitizer: Option<Arc<dyn ToolOutputSanitizer>>,
+    event_tx: Option<mpsc::Sender<AgentEvent>>,
 }
 
 impl SequentialDispatcher {
-    /// Drive one iteration's worth of tool calls through the full
-    /// 5-step pipeline.
-    pub(crate) async fn dispatch(
+    /// Wire up a dispatcher with the runtime's shared collaborators.
+    /// All `Arc` handles are cheap to clone, so a fresh dispatcher
+    /// per loop iteration is acceptable.
+    pub fn new(
+        executor: Arc<dyn ToolExecutor>,
+        egress: Arc<dyn EgressGate>,
+        approval_policy: Arc<dyn ApprovalPolicy>,
+        approval_inbox: ApprovalInbox,
+        tool_output_sanitizer: Option<Arc<dyn ToolOutputSanitizer>>,
+        event_tx: Option<mpsc::Sender<AgentEvent>>,
+    ) -> Self {
+        Self {
+            executor,
+            egress,
+            approval_policy,
+            approval_inbox,
+            tool_output_sanitizer,
+            event_tx,
+        }
+    }
+}
+
+#[async_trait]
+impl ToolDispatcher for SequentialDispatcher {
+    async fn dispatch(
         &self,
         tool_calls: Vec<ToolCall>,
         content: Option<String>,
@@ -189,7 +236,9 @@ impl SequentialDispatcher {
         }
         Ok(None)
     }
+}
 
+impl SequentialDispatcher {
     async fn emit(&self, event: AgentEvent) {
         emit_event(self.event_tx.as_ref(), event).await;
     }
