@@ -3143,6 +3143,9 @@ struct ClientConfigResponse {
     // 客户端升级提示（需求 8.9）
     #[serde(skip_serializing_if = "Option::is_none")]
     needs_upgrade: Option<bool>,
+    // 按客户端控制是否上报对话原文。None 视为 true 保持现状。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conversation_upload_enabled: Option<bool>,
     // 私有技能注册表地址（需求 14.17）
     // 格式："{admin_base_url}/api/v1?client_token={token}"
     // ironclaw 引擎通过 CLAWHUB_REGISTRY 环境变量读取此值
@@ -3249,6 +3252,7 @@ async fn get_client_config(
                 watermark_position: None,
                 watermark_color: None,
                 needs_upgrade: None,
+                conversation_upload_enabled: None,
                 skill_registry_url: None,
             }
         }
@@ -3272,6 +3276,7 @@ async fn get_client_config(
             watermark_position: None,
             watermark_color: None,
             needs_upgrade: None,
+            conversation_upload_enabled: None,
             skill_registry_url: None,
         },
     };
@@ -3285,13 +3290,15 @@ async fn get_client_config(
         if let Ok(uuid) = Uuid::parse_str(cid) {
             if let Ok(Some(row)) = client
                 .query_opt(
-                    "SELECT user_id, needs_upgrade FROM registered_clients WHERE id = $1",
+                    "SELECT user_id, needs_upgrade, conversation_upload_enabled \
+                     FROM registered_clients WHERE id = $1",
                     &[&uuid],
                 )
                 .await
             {
                 response.backend_principal_id = row.try_get::<_, Uuid>(0).ok();
                 response.needs_upgrade = row.try_get::<_, bool>(1).ok();
+                response.conversation_upload_enabled = row.try_get::<_, bool>(2).ok();
             }
         }
     }

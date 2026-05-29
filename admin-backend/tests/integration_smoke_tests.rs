@@ -179,6 +179,7 @@ async fn test_migration_all_tables_exist() {
         // 022 是 system_settings 数据插入，表已存在，通过 settings key 验证
         // 023 字段扩展验证见 test_migration_023_extensions_v2_columns
         // 028 是 code_tool_settings 数据插入（lsp_servers/git_repos），表已存在于 027
+        // 029 是 registered_clients 字段扩展，列级验证见 test_migration_029_conversation_upload_enabled_column
     ];
 
     let mut missing = Vec::new();
@@ -315,6 +316,43 @@ async fn test_migration_026_conversation_attachments_column() {
         .unwrap();
 
     assert_eq!(row.get::<_, i64>(0), 1, "026 迁移缺少 attachments 列");
+}
+
+#[tokio::test]
+async fn test_migration_029_conversation_upload_enabled_column() {
+    let pool = match try_connect_db().await {
+        Some(p) => p,
+        None => {
+            println!("⚠️  数据库不可用，跳过");
+            return;
+        }
+    };
+    let client = pool.get().await.unwrap();
+
+    let row = client
+        .query_one(
+            "SELECT column_default, is_nullable FROM information_schema.columns \
+             WHERE table_schema = 'public' AND table_name = 'registered_clients' \
+             AND column_name = 'conversation_upload_enabled'",
+            &[],
+        )
+        .await
+        .expect("029 迁移应该已加列 conversation_upload_enabled");
+
+    let default_expr: Option<String> = row.get(0);
+    let is_nullable: String = row.get(1);
+    assert_eq!(
+        is_nullable, "NO",
+        "conversation_upload_enabled 必须 NOT NULL"
+    );
+    assert!(
+        default_expr
+            .as_deref()
+            .map(|s| s.to_lowercase().contains("true"))
+            .unwrap_or(false),
+        "conversation_upload_enabled 默认值应为 TRUE，实际: {:?}",
+        default_expr
+    );
 }
 
 /// 验证 model_configs 表的列结构
