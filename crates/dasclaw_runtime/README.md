@@ -87,7 +87,8 @@ dedicated `AgentResponder`.
 | `ToolsNotSupported` | Model asked for a tool but no `ToolExecutor` was wired. |
 | `LoopFailure(reason)` | `LoopOutcome::Failure(_)`, typically from an egress hook. |
 | `Stopped` | External `LoopSignal::Stop` halted the loop. |
-| `ApprovalRequested` | Headless delegate refuses approval prompts. |
+| `ApprovalRequested` | **Deprecated** (issue #910). Only surfaced by custom `LoopDelegate` impls that bypass the approval inbox; the headless delegate now emits `AgentEvent::ApprovalNeeded` instead. |
+| `ApprovalRejected { tool_name, reason }` | The GUI replied `ApprovalDecision::Reject` for a tool call. |
 | `Responder(HostError)` | Underlying responder / hook errored. |
 
 The runtime **does not retry**. If a tool fails, the implementation should
@@ -157,6 +158,36 @@ builder API — `dasclaw_runtime` does not wrap it.
 surface** consumed by `dasclaw_cli` and (in flight) by ironclaw / admin-backend.
 Everything else is in-flight and may break before ADR-153 closes — pin to the
 exact patch version if you depend on those modules.
+
+## Approval flow (GUI integration, issue #910)
+
+GUIs that want a user-in-the-loop confirmation for risky tool calls
+wire three pieces:
+
+1. `.approval_policy(Arc::new(MyPolicy))` on the builder — decides
+   whether a given `ToolCall` needs human approval.
+2. `Agent::run_streaming(prompt, tx)` — the loop emits an
+   `AgentEvent::ApprovalNeeded { request_id, tool_name, … }` whenever
+   the policy flags a call, then parks until a decision arrives.
+3. `Agent::respond_to_approval(request_id, ApprovalDecision::Approve)`
+   (or `Reject { reason }` / `ApproveAlways`) from the UI handler.
+
+`ApprovalDecision` and `ApprovalRequest` are pure data — no channels
+or `oneshot::Sender` leak through the public surface — so the same
+shape serialises to a TypeScript discriminated union for a Tauri
+frontend, an HTTP JSON payload, or a `wasm-bindgen` callback.
+
+End-to-end runnable example (≈170 lines):
+[`dasclaw_cli/examples/headless_agent_starter.rs`](../dasclaw_cli/examples/headless_agent_starter.rs).
+
+Run with:
+
+```bash
+cargo run -p dasclaw_cli --example headless_agent_starter
+```
+
+It shows both the approve path (final text `ok`) and the reject path
+(an `AgentError::ApprovalRejected` carrying the policy reason).
 
 ## See also
 
