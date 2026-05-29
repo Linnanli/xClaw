@@ -1,0 +1,11 @@
+---
+source: crates/dasclaw_runtime/tests/serde_agent_error_contract.rs
+expression: "AgentError::ApprovalRejected { tool_name: \"web_fetch\".into(), reason: None, }"
+---
+{
+  "kind": "approval_rejected",
+  "data": {
+    "tool_name": "web_fetch",
+    "reason": null
+  }
+}

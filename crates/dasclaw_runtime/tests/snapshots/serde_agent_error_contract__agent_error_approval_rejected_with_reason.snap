@@ -1,0 +1,11 @@
+---
+source: crates/dasclaw_runtime/tests/serde_agent_error_contract.rs
+expression: "AgentError::ApprovalRejected\n{ tool_name: \"bash\".into(), reason: Some(\"user denied\".into()), }"
+---
+{
+  "kind": "approval_rejected",
+  "data": {
+    "tool_name": "bash",
+    "reason": "user denied"
+  }
+}

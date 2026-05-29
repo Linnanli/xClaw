@@ -56,6 +56,11 @@ use dasclaw_core::traits::HostError;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
+
+use crate::approval::{
+    ApprovalDecision, ApprovalDispatchError, ApprovalInbox, ApprovalPolicy, NoApprovalPolicy,
+};
 
 /// Streaming event emitted by [`Agent::run_streaming`] and
 /// [`crate::Session::run_streaming`] (issue #908, GUI blocker B2).
@@ -105,6 +110,31 @@ pub enum AgentEvent {
     },
     /// Stop reason for the LLM iteration that just ended.
     FinishReason(FinishReason),
+    /// The configured [`crate::ApprovalPolicy`] flagged a tool call as
+    /// needing human approval (issue #910, GUI blocker B4).
+    ///
+    /// The agent loop has paused waiting for
+    /// [`Agent::respond_to_approval`] to dispatch a matching
+    /// [`crate::ApprovalDecision`] for `request_id`. Until then no
+    /// further [`AgentEvent`]s are emitted for this turn.
+    ApprovalNeeded {
+        /// Unique handle the GUI feeds back into
+        /// [`Agent::respond_to_approval`].
+        request_id: Uuid,
+        /// Tool name as emitted by the model.
+        tool_name: String,
+        /// Raw tool arguments, mirroring the matching
+        /// [`AgentEvent::ToolCallStart`] payload.
+        tool_arguments: serde_json::Value,
+        /// Human-readable description supplied by the policy.
+        description: String,
+        /// Sanitised parameters preview the GUI should render — *not*
+        /// the raw arguments.
+        display_parameters: serde_json::Value,
+        /// `true` when the GUI may surface an "approve always"
+        /// affordance.
+        allow_always: bool,
+    },
 }
 
 /// Narrow LLM seam used by [`Agent`].
@@ -259,10 +289,35 @@ pub enum AgentError {
     #[error("agent loop stopped before producing a final response")]
     Stopped,
 
-    /// A tool approval was requested. Approval flow is delegate-specific
-    /// and the headless delegate does not implement it.
+    /// A tool approval was requested but the active [`crate::ApprovalPolicy`]
+    /// path produced no [`crate::AgentEvent::ApprovalNeeded`] for it.
+    ///
+    /// This variant only fires when a custom [`LoopDelegate`] surfaces
+    /// [`LoopOutcome::NeedApproval`] outside the headless
+    /// approval-inbox pipeline; the GUI-friendly path is
+    /// [`crate::AgentEvent::ApprovalNeeded`] + [`Agent::respond_to_approval`]
+    /// + [`AgentError::ApprovalRejected`].
+    ///
+    /// Kept for wire backwards compatibility with issue #909 consumers.
+    #[deprecated(
+        since = "0.0.0-w6",
+        note = "GUI hosts should listen for AgentEvent::ApprovalNeeded and reply via Agent::respond_to_approval; only custom LoopDelegate impls that bypass the approval inbox should still surface this variant"
+    )]
     #[error("agent loop requested approval, which is not supported in headless mode")]
     ApprovalRequested,
+
+    /// The GUI replied [`crate::ApprovalDecision::Reject`] for a pending
+    /// approval prompt (issue #910, GUI blocker B4). The matching
+    /// `tool_result` has already been pushed into the conversation as
+    /// an error, so callers can inspect history if they want the LLM
+    /// view; this surface is the host-facing summary.
+    #[error("approval rejected for tool {tool_name}{}", reason.as_deref().map(|r| format!(": {r}")).unwrap_or_default())]
+    ApprovalRejected {
+        /// Tool whose call the user declined.
+        tool_name: String,
+        /// Free-form rationale the GUI supplied, if any.
+        reason: Option<String>,
+    },
 
     /// The underlying responder (or hook) returned an error.
     #[error("responder error: {0}")]
@@ -283,6 +338,10 @@ enum AgentErrorWire {
     LoopFailure(String),
     Stopped,
     ApprovalRequested,
+    ApprovalRejected {
+        tool_name: String,
+        reason: Option<String>,
+    },
     Responder(String),
 }
 
@@ -291,6 +350,10 @@ impl Serialize for AgentError {
     where
         S: serde::Serializer,
     {
+        // The match below names the deprecated `AgentError::ApprovalRequested`
+        // variant; allow it locally so the wire mirror keeps full
+        // bidirectional coverage without a crate-wide allow.
+        #[allow(deprecated)]
         let wire = match self {
             AgentError::MissingResponder => AgentErrorWire::MissingResponder,
             AgentError::MaxIterations(n) => AgentErrorWire::MaxIterations(*n),
@@ -298,6 +361,12 @@ impl Serialize for AgentError {
             AgentError::LoopFailure(s) => AgentErrorWire::LoopFailure(s.clone()),
             AgentError::Stopped => AgentErrorWire::Stopped,
             AgentError::ApprovalRequested => AgentErrorWire::ApprovalRequested,
+            AgentError::ApprovalRejected { tool_name, reason } => {
+                AgentErrorWire::ApprovalRejected {
+                    tool_name: tool_name.clone(),
+                    reason: reason.clone(),
+                }
+            }
             AgentError::Responder(err) => AgentErrorWire::Responder(err.to_string()),
         };
         wire.serialize(serializer)
@@ -310,6 +379,8 @@ impl<'de> Deserialize<'de> for AgentError {
         D: serde::Deserializer<'de>,
     {
         let wire = AgentErrorWire::deserialize(deserializer)?;
+        // Same rationale as the serialize impl above.
+        #[allow(deprecated)]
         Ok(match wire {
             AgentErrorWire::MissingResponder => AgentError::MissingResponder,
             AgentErrorWire::MaxIterations(n) => AgentError::MaxIterations(n),
@@ -317,6 +388,9 @@ impl<'de> Deserialize<'de> for AgentError {
             AgentErrorWire::LoopFailure(s) => AgentError::LoopFailure(s),
             AgentErrorWire::Stopped => AgentError::Stopped,
             AgentErrorWire::ApprovalRequested => AgentError::ApprovalRequested,
+            AgentErrorWire::ApprovalRejected { tool_name, reason } => {
+                AgentError::ApprovalRejected { tool_name, reason }
+            }
             AgentErrorWire::Responder(s) => AgentError::Responder(Box::new(StringHostError(s))),
         })
     }
@@ -371,6 +445,14 @@ pub struct Agent {
     /// When set and tripped, the agentic loop exits with
     /// [`AgentError::Stopped`] on the next signal check. See issue #907.
     cancellation_token: Option<CancellationToken>,
+    /// GUI approval policy (issue #910, GUI blocker B4). Defaults to
+    /// [`NoApprovalPolicy`] so existing callers keep their zero-event
+    /// behaviour bit-for-bit.
+    approval_policy: Arc<dyn ApprovalPolicy>,
+    /// Pending approval inbox shared with [`HeadlessDelegate`] for the
+    /// lifetime of the agent. [`Agent::respond_to_approval`] dispatches
+    /// into this inbox once the GUI replies.
+    approval_inbox: ApprovalInbox,
 }
 
 impl Agent {
@@ -388,6 +470,24 @@ impl Agent {
     #[must_use]
     pub fn cancel_handle(&self) -> Option<CancellationToken> {
         self.cancellation_token.clone()
+    }
+
+    /// Reply to a pending [`AgentEvent::ApprovalNeeded`] event
+    /// (issue #910, GUI blocker B4).
+    ///
+    /// Looks up the matching request in the agent's approval inbox and
+    /// hands the [`ApprovalDecision`] to the headless delegate that is
+    /// currently parked on its oneshot receiver. Returns
+    /// [`ApprovalDispatchError::Unknown`] when the id is unknown (stale
+    /// or duplicate click) and [`ApprovalDispatchError::Closed`] when
+    /// the receiver has already been dropped (loop cancellation, agent
+    /// shutdown, …).
+    pub fn respond_to_approval(
+        &self,
+        request_id: Uuid,
+        decision: ApprovalDecision,
+    ) -> Result<(), ApprovalDispatchError> {
+        self.approval_inbox.dispatch(request_id, decision)
     }
 
     /// Seed a fresh [`ReasoningContext`] with the agent's static
@@ -475,6 +575,8 @@ impl Agent {
             tool_output_sanitizer: self.tool_output_sanitizer.clone(),
             cancellation_token: self.cancellation_token.clone(),
             event_tx,
+            approval_policy: Arc::clone(&self.approval_policy),
+            approval_inbox: self.approval_inbox.clone(),
         };
 
         let outcome = run_agentic_loop(&delegate, ctx, &loop_config, &self.hooks)
@@ -536,6 +638,7 @@ pub struct AgentBuilder {
     hooks: Option<HookBundle>,
     config: AgentConfig,
     cancellation_token: Option<CancellationToken>,
+    approval_policy: Option<Arc<dyn ApprovalPolicy>>,
 }
 
 impl AgentBuilder {
@@ -638,10 +741,23 @@ impl AgentBuilder {
         self
     }
 
+    /// Wire an [`ApprovalPolicy`] (issue #910, GUI blocker B4). When
+    /// unset, [`NoApprovalPolicy`] is installed so every tool call is
+    /// auto-approved and no [`AgentEvent::ApprovalNeeded`] events are
+    /// emitted — the pre-B4 contract.
+    #[must_use]
+    pub fn approval_policy(mut self, policy: Arc<dyn ApprovalPolicy>) -> Self {
+        self.approval_policy = Some(policy);
+        self
+    }
+
     /// Finalise the agent.
     pub fn build(self) -> Result<Agent, AgentError> {
         let responder = self.responder.ok_or(AgentError::MissingResponder)?;
         let hooks = self.hooks.unwrap_or_else(HookBundle::noop);
+        let approval_policy = self
+            .approval_policy
+            .unwrap_or_else(|| Arc::new(NoApprovalPolicy));
         Ok(Agent {
             responder,
             tool_executor: self.tool_executor,
@@ -649,6 +765,8 @@ impl AgentBuilder {
             hooks,
             config: self.config,
             cancellation_token: self.cancellation_token,
+            approval_policy,
+            approval_inbox: ApprovalInbox::new(),
         })
     }
 }
@@ -672,6 +790,8 @@ struct HeadlessDelegate {
     tool_output_sanitizer: Option<Arc<dyn ToolOutputSanitizer>>,
     cancellation_token: Option<CancellationToken>,
     event_tx: Option<mpsc::Sender<AgentEvent>>,
+    approval_policy: Arc<dyn ApprovalPolicy>,
+    approval_inbox: ApprovalInbox,
 }
 
 impl HeadlessDelegate {
@@ -761,6 +881,23 @@ impl LoopDelegate for HeadlessDelegate {
                 arguments: call.arguments.clone(),
             })
             .await;
+
+            // ADR-153 / issue #910 — GUI approval loop B4:
+            // ApprovalPolicy is the single gate that decides whether
+            // this call needs human approval. Three outcomes:
+            //   * NotRequired / Approved → fall through to egress + execute
+            //   * Rejected                → push tool-error, emit, return
+            //                                APPROVAL_REJECTED sentinel
+            //   * ChannelClosed           → treat as Reject("approval
+            //                                channel closed") so the loop
+            //                                degrades gracefully instead
+            //                                of leaking the pending entry
+            match self.await_approval_for(call).await {
+                ApprovalOutcome::NotRequired | ApprovalOutcome::Approved => {}
+                ApprovalOutcome::Rejected { reason } => {
+                    return Ok(Some(self.push_rejection(ctx, call, reason).await));
+                }
+            }
 
             // ADR-148 Layer B + ADR-153 §1.1 e8/A2:
             // Pre-execute egress gate scans serialised tool arguments.
@@ -862,6 +999,117 @@ fn push_assistant_tool_calls(
 /// and re-mapped to [`AgentError::ToolsNotSupported`] by [`map_outcome`].
 const TOOLS_NOT_SUPPORTED_REASON: &str = "headless-agent::tools-not-supported";
 
+/// Sentinel prefix for [`LoopOutcome::Failure`] strings produced when an
+/// [`crate::ApprovalPolicy`] flagged a tool call and the GUI replied
+/// [`crate::ApprovalDecision::Reject`] (issue #910, GUI blocker B4).
+///
+/// The remainder of the failure string after the prefix is a
+/// JSON-encoded [`RejectedPayload`]. [`map_outcome`] strips and decodes
+/// it back into [`AgentError::ApprovalRejected`] so the public surface
+/// remains structured. We piggy-back on `LoopOutcome::Failure(String)`
+/// instead of patching the `dasclaw_core` enum because issue #910
+/// explicitly forbids touching the `LoopOutcome` / `LoopDelegate` /
+/// `agentic_loop` public contract.
+const APPROVAL_REJECTED_SENTINEL_PREFIX: &str = "headless-agent::approval-rejected:";
+
+#[derive(Serialize, Deserialize)]
+struct RejectedPayload {
+    tool_name: String,
+    reason: Option<String>,
+}
+
+/// Outcome of [`HeadlessDelegate::await_approval_for`].
+///
+/// `ChannelClosed` is folded into [`ApprovalOutcome::Rejected`] before
+/// it leaves the helper so the caller's match stays exhaustive without
+/// a fall-through arm — keeps `execute_tool_calls` in the
+/// "evaluate → decide → execute-or-reject" 3-step shape ADR-153 wants.
+enum ApprovalOutcome {
+    NotRequired,
+    Approved,
+    Rejected { reason: Option<String> },
+}
+
+impl HeadlessDelegate {
+    /// Step 1 of the per-call pipeline in [`Self::execute_tool_calls`]:
+    /// ask the policy, emit `ApprovalNeeded` if needed, await the GUI
+    /// reply.
+    async fn await_approval_for(&self, call: &ToolCall) -> ApprovalOutcome {
+        let Some(request) = self.approval_policy.evaluate(call).await else {
+            return ApprovalOutcome::NotRequired;
+        };
+
+        let request_id = Uuid::new_v4();
+        let rx = self.approval_inbox.register(request_id);
+
+        self.emit(AgentEvent::ApprovalNeeded {
+            request_id,
+            tool_name: call.name.clone(),
+            tool_arguments: call.arguments.clone(),
+            description: request.description,
+            display_parameters: request.display_parameters,
+            allow_always: request.allow_always,
+        })
+        .await;
+
+        match rx.await {
+            Ok(ApprovalDecision::Approve) | Ok(ApprovalDecision::ApproveAlways) => {
+                ApprovalOutcome::Approved
+            }
+            Ok(ApprovalDecision::Reject { reason }) => ApprovalOutcome::Rejected { reason },
+            Err(_) => {
+                // Sender dropped without dispatching: forget the entry
+                // so a late respond_to_approval call still hits
+                // ApprovalDispatchError::Unknown rather than leaking the
+                // pending request forever.
+                self.approval_inbox.forget(request_id);
+                ApprovalOutcome::Rejected {
+                    reason: Some(String::from(
+                        "approval channel closed before the GUI replied",
+                    )),
+                }
+            }
+        }
+    }
+
+    /// Step 3b of the per-call pipeline: when the GUI rejected the
+    /// call, push the matching tool-error `tool_result` so the LLM sees
+    /// a well-formed history, emit the streaming `ToolResult` event for
+    /// the GUI, and return the sentinel-encoded
+    /// [`LoopOutcome::Failure`] that [`map_outcome`] reverses into
+    /// [`AgentError::ApprovalRejected`].
+    async fn push_rejection(
+        &self,
+        ctx: &mut ReasoningContext,
+        call: &ToolCall,
+        reason: Option<String>,
+    ) -> LoopOutcome {
+        let body = match reason.as_deref() {
+            Some(r) => format!("Error: approval rejected: {r}"),
+            None => String::from("Error: approval rejected"),
+        };
+        ctx.messages
+            .push(ChatMessage::tool_result(&call.id, &call.name, &body).with_tool_error(true));
+        self.emit(AgentEvent::ToolResult {
+            name: call.name.clone(),
+            content: body,
+            is_error: true,
+        })
+        .await;
+        let payload = RejectedPayload {
+            tool_name: call.name.clone(),
+            reason,
+        };
+        // `serde_json::to_string` on a two-field POD struct cannot fail
+        // under normal conditions; the fallback keeps the call panic-free
+        // (AGENTS.md production-code rule) and still lands on a
+        // recognisable sentinel for `map_outcome`.
+        let encoded = serde_json::to_string(&payload)
+            .unwrap_or_else(|_| String::from("{\"tool_name\":\"\"}"));
+        LoopOutcome::Failure(format!("{APPROVAL_REJECTED_SENTINEL_PREFIX}{encoded}"))
+    }
+}
+
 fn map_outcome(outcome: LoopOutcome, max_iterations: usize) -> Result<String, AgentError> {
     match outcome {
         LoopOutcome::Response(text) => Ok(text),
@@ -869,8 +1117,27 @@ fn map_outcome(outcome: LoopOutcome, max_iterations: usize) -> Result<String, Ag
         LoopOutcome::Failure(reason) if reason == TOOLS_NOT_SUPPORTED_REASON => {
             Err(AgentError::ToolsNotSupported)
         }
-        LoopOutcome::Failure(reason) => Err(AgentError::LoopFailure(reason)),
+        LoopOutcome::Failure(reason) => {
+            if let Some(rest) = reason.strip_prefix(APPROVAL_REJECTED_SENTINEL_PREFIX) {
+                match serde_json::from_str::<RejectedPayload>(rest) {
+                    Ok(payload) => Err(AgentError::ApprovalRejected {
+                        tool_name: payload.tool_name,
+                        reason: payload.reason,
+                    }),
+                    // Malformed sentinel: fall back to LoopFailure with
+                    // the raw reason so debugging is not silently lost.
+                    Err(_) => Err(AgentError::LoopFailure(reason)),
+                }
+            } else {
+                Err(AgentError::LoopFailure(reason))
+            }
+        }
         LoopOutcome::Stopped => Err(AgentError::Stopped),
+        // Custom LoopDelegate impls that surface NeedApproval bypass the
+        // approval-inbox pipeline; keep the deprecated wire variant so
+        // they keep compiling. New GUI hosts should rely on
+        // AgentEvent::ApprovalNeeded + Agent::respond_to_approval.
+        #[allow(deprecated)]
         LoopOutcome::NeedApproval(_) => Err(AgentError::ApprovalRequested),
     }
 }
