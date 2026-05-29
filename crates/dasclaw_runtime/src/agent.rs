@@ -61,7 +61,8 @@ use crate::approval::{
     ApprovalDecision, ApprovalDispatchError, ApprovalInbox, ApprovalPolicy, NoApprovalPolicy,
 };
 use crate::tool_dispatch::{
-    APPROVAL_REJECTED_SENTINEL_PREFIX, RejectedPayload, SequentialDispatcher, emit_event,
+    APPROVAL_REJECTED_SENTINEL_PREFIX, RejectedPayload, SequentialDispatcher, ToolDispatcher,
+    emit_event,
 };
 
 /// Streaming event emitted by [`Agent::run_streaming`] and
@@ -868,14 +869,14 @@ impl LoopDelegate for HeadlessDelegate {
             )));
         };
 
-        let dispatcher = SequentialDispatcher {
-            executor: executor.clone(),
-            egress: self.hooks.egress.clone(),
-            approval_policy: self.approval_policy.clone(),
-            approval_inbox: self.approval_inbox.clone(),
-            tool_output_sanitizer: self.tool_output_sanitizer.clone(),
-            event_tx: self.event_tx.clone(),
-        };
+        let dispatcher = SequentialDispatcher::new(
+            executor.clone(),
+            self.hooks.egress.clone(),
+            self.approval_policy.clone(),
+            self.approval_inbox.clone(),
+            self.tool_output_sanitizer.clone(),
+            self.event_tx.clone(),
+        );
         dispatcher.dispatch(tool_calls, content, usage, ctx).await
     }
 }
