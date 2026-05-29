@@ -279,6 +279,17 @@ External content passes through multiple security layers:
 | **Workspace** | Persistent memory with hybrid search |
 | **Safety Layer** | Prompt injection defense and content sanitization |
 
+### Embed the headless agent loop in your own product
+
+The core agent loop, tool dispatch, approval gating, hook bundle and session
+store are packaged as a library — you do not need to fork IronClaw to embed an
+agent in your CLI, daemon, or backend.
+
+- Library entry point: [`crates/dasclaw_runtime`](crates/dasclaw_runtime) (start at its `README.md`)
+- Minimum runnable example: [`crates/dasclaw_cli/examples/headless_agent_starter.rs`](crates/dasclaw_cli/examples/headless_agent_starter.rs)
+- Architectural boundary and capability matrix: [`docs/plans/architecture-refactor/53-headless-agent-capability-design.md`](docs/plans/architecture-refactor/53-headless-agent-capability-design.md)
+- Three-lineage interop mapping: [`docs/INTEROP_DASCLAW.md`](docs/INTEROP_DASCLAW.md)
+
 ## Usage
 
 ```bash
