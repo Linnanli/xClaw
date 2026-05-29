@@ -59,6 +59,7 @@ use uuid::Uuid;
 
 use crate::approval::{
     ApprovalDecision, ApprovalDispatchError, ApprovalInbox, ApprovalPolicy, NoApprovalPolicy,
+    PolicyApprover,
 };
 use crate::tool_dispatch::{
     APPROVAL_REJECTED_SENTINEL_PREFIX, RejectedPayload, SequentialDispatcher, ToolDispatcher,
@@ -872,8 +873,10 @@ impl LoopDelegate for HeadlessDelegate {
         let dispatcher = SequentialDispatcher::new(
             executor.clone(),
             self.hooks.egress.clone(),
-            self.approval_policy.clone(),
-            self.approval_inbox.clone(),
+            Arc::new(PolicyApprover::new(
+                self.approval_policy.clone(),
+                self.approval_inbox.clone(),
+            )),
             self.tool_output_sanitizer.clone(),
             self.event_tx.clone(),
         );
