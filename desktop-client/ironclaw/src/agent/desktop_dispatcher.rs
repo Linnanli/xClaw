@@ -1,48 +1,61 @@
-//! W7.1 byte-equivalent extraction of `ChatDelegate::execute_tool_calls`
-//! (ADR-160 §3 L2 desktop dispatcher implementation).
+//! ADR-160 §3 L2 desktop dispatcher.
 //!
-//! W7.2 will let this struct `impl dasclaw_runtime::ToolDispatcher`;
-//! W7.3 will wire it through `AgenticLoop`. This slice keeps behaviour
-//! unchanged — the original method now delegates to `dispatch`.
+//! W7.1 extracted the body verbatim from `ChatDelegate::execute_tool_calls`.
+//! W7.2 makes the struct owned (no borrows) and implements
+//! `dasclaw_runtime::ToolDispatcher` so an `AgenticLoop` can drive it.
+//!
+//! Per ADR-160 §3 L2 interface segregation, the dispatcher holds only the
+//! handful of `Agent` collaborators it actually needs (safety, tools, hooks,
+//! channels, config) rather than `Arc<Agent>` — avoiding an `Arc<Self>`
+//! cascade through `process_user_input` / `process_approval`.
 
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
-use crate::agent::Agent;
 use crate::agent::agentic_loop::LoopOutcome;
 use crate::agent::session::{PendingApproval, Session};
-use crate::channels::{IncomingMessage, StatusUpdate};
+use crate::channels::{ChannelManager, IncomingMessage, StatusUpdate};
+use crate::config::AgentConfig;
 use crate::error::Error;
 use crate::llm::{ChatMessage, ReasoningContext};
-use crate::tools::redact_params;
+use crate::safety::SafetyLayer;
+use crate::tools::{ToolRegistry, redact_params};
 use dasclaw_core::traits::HostError;
+use dasclaw_hooks::HookRegistry;
 use dasclaw_runtime::context::JobContext;
+use dasclaw_runtime::tool_dispatch::ToolDispatcher;
 
 use super::dispatcher::{
     PreflightOutcome, check_auth_required, contextual_tool_message, execute_chat_tool_standalone,
     is_tool_disabled_by_extensions, parse_auth_result, preflight_rejection_tool_message,
 };
 
-pub(super) struct DesktopDispatcher<'a> {
-    pub(super) agent: &'a Agent,
-    pub(super) message: &'a IncomingMessage,
-    pub(super) session: &'a Arc<Mutex<Session>>,
+pub(super) struct DesktopDispatcher {
+    pub(super) safety: Arc<SafetyLayer>,
+    pub(super) tools: Arc<ToolRegistry>,
+    pub(super) hooks: Arc<HookRegistry>,
+    pub(super) channels: Arc<ChannelManager>,
+    pub(super) config: AgentConfig,
+    pub(super) message: Arc<IncomingMessage>,
+    pub(super) session: Arc<Mutex<Session>>,
     pub(super) thread_id: Uuid,
-    pub(super) job_ctx: &'a JobContext,
-    pub(super) disabled_extensions: &'a HashSet<String>,
+    pub(super) job_ctx: JobContext,
+    pub(super) disabled_extensions: HashSet<String>,
     pub(super) user_tz: chrono_tz::Tz,
 }
 
-impl<'a> DesktopDispatcher<'a> {
-    pub(super) async fn dispatch(
+#[async_trait]
+impl ToolDispatcher for DesktopDispatcher {
+    async fn dispatch(
         &self,
-        tool_calls: Vec<crate::llm::ToolCall>,
+        tool_calls: Vec<dasclaw_core::messages::ToolCall>,
         content: Option<String>,
-        usage: dasclaw_core::TokenUsage,
+        usage: dasclaw_core::response_types::TokenUsage,
         reason_ctx: &mut ReasoningContext,
     ) -> Result<Option<LoopOutcome>, HostError> {
         // Extract and sanitize the narrative before consuming `content`.
@@ -52,7 +65,7 @@ impl<'a> DesktopDispatcher<'a> {
         let narrative = match content.as_deref().filter(|c| !c.trim().is_empty()) {
             Some(c) => {
                 let sanitized = crate::safety::egress::sanitize_tool_output_via_egress(
-                    self.agent.safety(),
+                    &self.safety,
                     "agent_narrative",
                     c,
                 )
@@ -74,7 +87,6 @@ impl<'a> DesktopDispatcher<'a> {
 
         // Execute tools and add results to context
         let _ = self
-            .agent
             .channels
             .send_status(
                 &self.message.channel,
@@ -92,7 +104,7 @@ impl<'a> DesktopDispatcher<'a> {
         for tc in tool_calls.iter() {
             if let Some(r) = tc.reasoning.as_ref() {
                 let sanitized = crate::safety::egress::sanitize_tool_output_via_egress(
-                    self.agent.safety(),
+                    &self.safety,
                     "tool_rationale",
                     r,
                 )
@@ -107,7 +119,6 @@ impl<'a> DesktopDispatcher<'a> {
         // Emit reasoning update to channels.
         if narrative.is_some() || !decisions.is_empty() {
             let _ = self
-                .agent
                 .channels
                 .send_status(
                     &self.message.channel,
@@ -124,7 +135,7 @@ impl<'a> DesktopDispatcher<'a> {
         {
             let mut redacted_args: Vec<serde_json::Value> = Vec::with_capacity(tool_calls.len());
             for tc in &tool_calls {
-                let safe = if let Some(tool) = self.agent.tools().get(&tc.name).await {
+                let safe = if let Some(tool) = self.tools.get(&tc.name).await {
                     redact_params(&tc.arguments, tool.sensitive_params())
                 } else {
                     tc.arguments.clone()
@@ -141,7 +152,7 @@ impl<'a> DesktopDispatcher<'a> {
                 let s = match tc.reasoning.as_ref() {
                     Some(r) => Some(
                         crate::safety::egress::sanitize_tool_output_via_egress(
-                            self.agent.safety(),
+                            &self.safety,
                             "tool_rationale",
                             r,
                         )
@@ -200,7 +211,7 @@ impl<'a> DesktopDispatcher<'a> {
 
             // Plan mode interception: non-readonly tools get a dry-run preview
             // instead of actual execution.
-            if is_plan_mode && let Some(tool) = self.agent.tools().get(&tc.name).await {
+            if is_plan_mode && let Some(tool) = self.tools.get(&tc.name).await {
                 let risk = tool.risk_level_for(&tc.arguments);
                 if risk > crate::tools::RiskLevel::Low {
                     preflight.push((
@@ -215,7 +226,7 @@ impl<'a> DesktopDispatcher<'a> {
                 }
             }
 
-            if is_tool_disabled_by_extensions(&tc.name, self.disabled_extensions) {
+            if is_tool_disabled_by_extensions(&tc.name, &self.disabled_extensions) {
                 preflight.push((
                     tc,
                     PreflightOutcome::Rejected(
@@ -225,7 +236,7 @@ impl<'a> DesktopDispatcher<'a> {
                 continue;
             }
 
-            let tool_opt = self.agent.tools().get(&tc.name).await;
+            let tool_opt = self.tools.get(&tc.name).await;
             let sensitive = tool_opt
                 .as_ref()
                 .map(|t| t.sensitive_params())
@@ -239,7 +250,7 @@ impl<'a> DesktopDispatcher<'a> {
                 user_id: self.message.user_id.clone(),
                 context: "chat".to_string(),
             };
-            match self.agent.hooks().run(&event).await {
+            match self.hooks.run(&event).await {
                 Err(dasclaw_hooks::HookError::Rejected { reason }) => {
                     preflight.push((
                         tc,
@@ -285,7 +296,7 @@ impl<'a> DesktopDispatcher<'a> {
             }
 
             // Check if tool requires approval
-            if !self.agent.config.auto_approve_tools
+            if !self.config.auto_approve_tools
                 && let Some(tool) = tool_opt
             {
                 use crate::tools::ApprovalRequirement;
@@ -348,7 +359,6 @@ impl<'a> DesktopDispatcher<'a> {
                     Some(&tc.arguments),
                 );
                 let _ = self
-                    .agent
                     .channels
                     .send_status(
                         &self.message.channel,
@@ -361,14 +371,18 @@ impl<'a> DesktopDispatcher<'a> {
 
                 let result = {
                     let mut job_ctx = self.job_ctx.clone();
-                    self.agent
-                        .execute_chat_tool(&tc.name, &tc.arguments, &mut job_ctx)
-                        .await
+                    execute_chat_tool_standalone(
+                        &self.tools,
+                        &self.safety,
+                        &tc.name,
+                        &tc.arguments,
+                        &mut job_ctx,
+                    )
+                    .await
                 };
 
-                let disp_tool = self.agent.tools().get(&tc.name).await;
+                let disp_tool = self.tools.get(&tc.name).await;
                 let _ = self
-                    .agent
                     .channels
                     .send_status(
                         &self.message.channel,
@@ -389,9 +403,9 @@ impl<'a> DesktopDispatcher<'a> {
 
             for (pf_idx, tc) in &runnable {
                 let pf_idx = *pf_idx;
-                let tools = self.agent.tools().clone();
-                let safety = self.agent.safety().clone();
-                let channels = self.agent.channels.clone();
+                let tools = self.tools.clone();
+                let safety = self.safety.clone();
+                let channels = self.channels.clone();
                 let job_ctx = self.job_ctx.clone();
                 let tc = tc.clone();
                 let channel = self.message.channel.clone();
@@ -478,7 +492,7 @@ impl<'a> DesktopDispatcher<'a> {
             match outcome {
                 PreflightOutcome::Rejected(error_msg) => {
                     let sanitized = preflight_rejection_tool_message(
-                        self.agent.safety(),
+                        &self.safety,
                         &tc.name,
                         &tc.id,
                         &error_msg,
@@ -525,7 +539,6 @@ impl<'a> DesktopDispatcher<'a> {
                                 );
                             } else {
                                 let _ = self
-                                    .agent
                                     .channels
                                     .send_status(
                                         &self.message.channel,
@@ -547,7 +560,7 @@ impl<'a> DesktopDispatcher<'a> {
                     // (#93): raw tool output must never reach previews or stash.
                     let is_tool_error = tool_result.is_err();
                     let sanitized = crate::tools::execute::process_tool_result(
-                        self.agent.safety(),
+                        &self.safety,
                         &tc.name,
                         &tc.id,
                         &tool_result,
@@ -561,7 +574,6 @@ impl<'a> DesktopDispatcher<'a> {
                             None,
                         );
                         let _ = self
-                            .agent
                             .channels
                             .send_status(
                                 &self.message.channel,
@@ -590,7 +602,6 @@ impl<'a> DesktopDispatcher<'a> {
                             }
                         }
                         let _ = self
-                            .agent
                             .channels
                             .send_status(
                                 &self.message.channel,
