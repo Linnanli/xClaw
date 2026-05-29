@@ -23,6 +23,7 @@ fn roundtrip(value: &AgentError) -> AgentError {
 // because the inner types are `String` / `usize` which derive serde.
 
 #[test]
+#[allow(deprecated)] // exercises the `ApprovalRequested` wire-compat variant
 fn req_dasclaw_runtime_909_agent_error_simple_variants_roundtrip() {
     let samples = [
         AgentError::MissingResponder,
@@ -31,6 +32,14 @@ fn req_dasclaw_runtime_909_agent_error_simple_variants_roundtrip() {
         AgentError::LoopFailure("hook blocked".into()),
         AgentError::Stopped,
         AgentError::ApprovalRequested,
+        AgentError::ApprovalRejected {
+            tool_name: "bash".into(),
+            reason: Some("user denied".into()),
+        },
+        AgentError::ApprovalRejected {
+            tool_name: "web_fetch".into(),
+            reason: None,
+        },
     ];
     for sample in samples {
         let back = roundtrip(&sample);
@@ -99,6 +108,28 @@ fn req_dasclaw_runtime_909_snapshot_agent_error_loop_failure() {
     insta::assert_json_snapshot!(
         "agent_error_loop_failure",
         AgentError::LoopFailure("hook blocked egress".into())
+    );
+}
+
+#[test]
+fn req_dasclaw_runtime_b4_snapshot_agent_error_approval_rejected_with_reason() {
+    insta::assert_json_snapshot!(
+        "agent_error_approval_rejected_with_reason",
+        AgentError::ApprovalRejected {
+            tool_name: "bash".into(),
+            reason: Some("user denied".into()),
+        }
+    );
+}
+
+#[test]
+fn req_dasclaw_runtime_b4_snapshot_agent_error_approval_rejected_no_reason() {
+    insta::assert_json_snapshot!(
+        "agent_error_approval_rejected_no_reason",
+        AgentError::ApprovalRejected {
+            tool_name: "web_fetch".into(),
+            reason: None,
+        }
     );
 }
 

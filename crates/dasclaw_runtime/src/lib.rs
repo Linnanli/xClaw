@@ -65,6 +65,7 @@
 //! [`ToolError::from_tool_impl`].
 
 pub mod agent;
+pub mod approval;
 pub mod composite_executor;
 pub mod context;
 pub mod error;
@@ -81,6 +82,10 @@ pub mod tool_to_executor_adapter;
 pub use agent::{
     Agent, AgentBuilder, AgentConfig, AgentError, AgentEvent, AgentResponder, ToolExecutor,
     ToolOutputSanitizer,
+};
+pub use approval::{
+    ApprovalDecision, ApprovalDispatchError, ApprovalInbox, ApprovalPolicy, ApprovalRequest,
+    NoApprovalPolicy,
 };
 pub use composite_executor::{CompositeError, CompositeToolExecutor};
 pub use error::ToolError;
