@@ -100,11 +100,14 @@ AgenticLoop (concrete struct)
 
 ## 3. 新分层模型
 
+> **落地状态（W6.5，2026-05-29 更新）**：L1 / L2 / L5（Approver 横切）已在 `dasclaw_runtime` 落地。
+> 详见 §7 的 W6.2a/b / W6.3 / W6.4 行。L3（HookChain）/ L4（EgressGate）/ L5（SessionStore）三层原本就已是 trait，本波次不涉及。
+
 ```
-L1 AgenticLoop          concrete struct，单一实现
+L1 AgenticLoop          concrete struct，单一实现           ✅ W6.4 · PR #965
                         run loop = LLM call → tool_calls → dispatcher.dispatch → results → 继续
 
-L2 ToolDispatcher trait async fn dispatch(calls: Vec<ToolCall>, ctx: &DispatchCtx) -> Vec<ToolResult>
+L2 ToolDispatcher trait async fn dispatch(...)                ✅ W6.2a/b · PR #962 / #963
                         默认 SequentialDispatcher / ConcurrentDispatcher
                         桌面端自己写 DesktopDispatcher（含 stash 切分）
 
@@ -118,9 +121,9 @@ L5 SessionStore trait   已有 (dasclaw_session)
                         SessionSnapshot concrete + version + migration
                         不做扩展槽
 
-(横切) Approver trait   新增，替代 ApprovalInbox 直耦合
-                        async fn approve(req: ApprovalRequest) -> ApprovalDecision
-                        实现：AgentEventApprover (headless) / TauriApprover (desktop)
+(横切) Approver trait   新增，替代 ApprovalInbox 直耦合         ✅ W6.3 · PR #964
+                        async fn await_approval(...) -> ApprovalOutcome
+                        实现：PolicyApprover (默认) / 第三方 TauriApprover等
 ```
 
 ---
@@ -162,11 +165,14 @@ L5 SessionStore trait   已有 (dasclaw_session)
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| W6 | ADR-160 锁定。在 `dasclaw_runtime` 起 `AgenticLoop` concrete struct（旁路 `LoopDelegate`）+ `ToolDispatcher` / `Approver` trait | 待启动 |
+| W6.2a | 在 `dasclaw_runtime` 抽 `SequentialDispatcher`（5 步流水线字节级搬迁，保留 `pub(crate)`） | ✅ 已落地 · PR [#962](https://github.com/Linnanli/xClaw/pull/962) |
+| W6.2b | 引入 `pub trait ToolDispatcher`，`SequentialDispatcher` 升为 `pub` 并从 `lib.rs` 导出 | ✅ 已落地 · PR [#963](https://github.com/Linnanli/xClaw/pull/963) |
+| W6.3 | 抽 `Approver` trait + `PolicyApprover` 默认实现（横切层落地） | ✅ 已落地 · PR [#964](https://github.com/Linnanli/xClaw/pull/964) |
+| W6.4 | `AgenticLoop` 提取为 concrete struct，注入 `ToolDispatcher` + `Approver`；删除 `HeadlessDelegate` | ✅ 已落地 · PR [#965](https://github.com/Linnanli/xClaw/pull/965) |
 | W7 | `ChatDelegate` 改为基于 `AgenticLoop` 的装配。保留旧 `ChatDelegate` API 作为薄门面 | 待启动 |
-| W8 | `HeadlessDelegate` 同上 | 待启动 |
+| W8 | `HeadlessDelegate` 同上（注：W6.4 已删除 `dasclaw_runtime` 侧 `HeadlessDelegate`；W8 范围收缩为桌面端遗留 delegate） | 待启动 |
 | W9 | `LoopDelegate` 标 `#[deprecated]`，保留 1 个 release | 待启动 |
-| W10 | 删除 `LoopDelegate` 和 `HeadlessDelegate` / `ChatDelegate` 旧实现 | 待启动 |
+| W10 | 删除 `LoopDelegate` 和桌面端旧 delegate 实现 | 待启动 |
 
 每个阶段独立 PR，独立可回滚。
 
@@ -186,10 +192,11 @@ L5 SessionStore trait   已有 (dasclaw_session)
 ## 9. DoD（启用 ADR-160 的最小完成度）
 
 - [ ] 本 doc 升 ADR-160（accepted），关联 ADR-157 §2.3 改为"按 ADR-160 实施"
-- [ ] #957 / #959 issue body 改为 ADR-160 方向
-- [ ] PR #958（前置 1 RFC，原扩展槽方向）改写或关闭
-- [ ] `crates/dasclaw_runtime/src/agent.rs` 起 `AgenticLoop` concrete struct PoC
-- [ ] `crates/dasclaw_runtime/src/dispatcher/mod.rs` 起 `ToolDispatcher` trait + `SequentialDispatcher`
+- [x] #957 / #959 issue body 改为 ADR-160 方向
+- [x] PR #958（前置 1 RFC，原扩展槽方向）改写或关闭
+- [x] `crates/dasclaw_runtime/src/agentic_loop.rs` 起 `AgenticLoop` concrete struct（W6.4 · PR #965，已删除旧 `HeadlessDelegate`，非 PoC）
+- [x] `crates/dasclaw_runtime/src/tool_dispatch.rs` 起 `ToolDispatcher` trait + `SequentialDispatcher`（W6.2a/b · PR #962 / #963）
+- [x] `crates/dasclaw_runtime/src/approval.rs` 起 `Approver` trait + `PolicyApprover`（W6.3 · PR #964，横切层补充）
 
 ---
 
