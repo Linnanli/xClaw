@@ -33,8 +33,10 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use dasclaw_core::messages::ToolCall;
 use serde::{Deserialize, Serialize};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
+
+use crate::AgentEvent;
 
 /// What the GUI tells the runtime once the user (dis)approves a call.
 ///
@@ -195,6 +197,107 @@ impl ApprovalInbox {
             Err(poisoned) => poisoned.into_inner(),
         };
         guard.remove(&request_id);
+    }
+}
+
+/// L5 cross-cutting seam (ADR-160 §3): outcome the runtime receives
+/// from an [`Approver`] for a single tool call.
+///
+/// Crate-internal control flow only; the GUI's wire format remains
+/// [`ApprovalDecision`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum ApprovalOutcome {
+    /// No approval policy fired; continue dispatch.
+    NotRequired,
+    /// User (or default policy) said yes.
+    Approved,
+    /// User refused; the dispatcher must short-circuit the loop with
+    /// an [`crate::AgentError::ApprovalRejected`].
+    Rejected { reason: Option<String> },
+}
+
+/// L5 cross-cutting seam (ADR-160 §3): asks the host whether a tool
+/// call may proceed before the dispatcher runs the executor.
+///
+/// Implementations are responsible for emitting any user-facing
+/// approval prompts (e.g. [`crate::AgentEvent::ApprovalNeeded`]) and
+/// for blocking until the host replies. The default in-tree impl is
+/// [`PolicyApprover`], which drives an [`ApprovalPolicy`] +
+/// [`ApprovalInbox`] pair just like the pre-W6.3 inline pipeline did.
+#[async_trait]
+pub trait Approver: Send + Sync {
+    /// Inspect `call` and return the host's verdict. `event_tx` is the
+    /// loop's event channel — implementations may push
+    /// [`AgentEvent`]s through it to surface a GUI prompt.
+    async fn await_approval(
+        &self,
+        call: &ToolCall,
+        event_tx: Option<&mpsc::Sender<AgentEvent>>,
+    ) -> ApprovalOutcome;
+}
+
+/// Default in-tree [`Approver`]: drives an [`ApprovalPolicy`] +
+/// [`ApprovalInbox`] pair. Behaviour is byte-identical to the
+/// pre-W6.3 inline `SequentialDispatcher::await_approval_for`.
+pub struct PolicyApprover {
+    policy: Arc<dyn ApprovalPolicy>,
+    inbox: ApprovalInbox,
+}
+
+impl PolicyApprover {
+    /// Wire up an approver around an existing policy + inbox pair.
+    #[must_use]
+    pub fn new(policy: Arc<dyn ApprovalPolicy>, inbox: ApprovalInbox) -> Self {
+        Self { policy, inbox }
+    }
+}
+
+#[async_trait]
+impl Approver for PolicyApprover {
+    async fn await_approval(
+        &self,
+        call: &ToolCall,
+        event_tx: Option<&mpsc::Sender<AgentEvent>>,
+    ) -> ApprovalOutcome {
+        let Some(request) = self.policy.evaluate(call).await else {
+            return ApprovalOutcome::NotRequired;
+        };
+
+        let request_id = Uuid::new_v4();
+        let rx = self.inbox.register(request_id);
+
+        if let Some(tx) = event_tx {
+            // Best-effort emit; a closed receiver is not fatal.
+            let _ = tx
+                .send(AgentEvent::ApprovalNeeded {
+                    request_id,
+                    tool_name: call.name.clone(),
+                    tool_arguments: call.arguments.clone(),
+                    description: request.description,
+                    display_parameters: request.display_parameters,
+                    allow_always: request.allow_always,
+                })
+                .await;
+        }
+
+        match rx.await {
+            Ok(ApprovalDecision::Approve) | Ok(ApprovalDecision::ApproveAlways) => {
+                ApprovalOutcome::Approved
+            }
+            Ok(ApprovalDecision::Reject { reason }) => ApprovalOutcome::Rejected { reason },
+            Err(_) => {
+                // Sender dropped without dispatching: forget the entry
+                // so a late respond_to_approval call still hits
+                // ApprovalDispatchError::Unknown rather than leaking the
+                // pending request forever.
+                self.inbox.forget(request_id);
+                ApprovalOutcome::Rejected {
+                    reason: Some(String::from(
+                        "approval channel closed before the GUI replied",
+                    )),
+                }
+            }
+        }
     }
 }
 

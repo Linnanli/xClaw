@@ -85,8 +85,8 @@ pub use agent::{
     ToolOutputSanitizer,
 };
 pub use approval::{
-    ApprovalDecision, ApprovalDispatchError, ApprovalInbox, ApprovalPolicy, ApprovalRequest,
-    NoApprovalPolicy,
+    ApprovalDecision, ApprovalDispatchError, ApprovalInbox, ApprovalOutcome, ApprovalPolicy,
+    ApprovalRequest, Approver, NoApprovalPolicy, PolicyApprover,
 };
 pub use composite_executor::{CompositeError, CompositeToolExecutor};
 pub use error::ToolError;

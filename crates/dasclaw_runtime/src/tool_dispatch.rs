@@ -27,11 +27,10 @@ use dasclaw_core::response_types::TokenUsage;
 use dasclaw_core::traits::HostError;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
-use uuid::Uuid;
 
 use crate::AgentEvent;
 use crate::agent::{ToolExecutor, ToolOutputSanitizer};
-use crate::approval::{ApprovalDecision, ApprovalInbox, ApprovalPolicy};
+use crate::approval::{ApprovalOutcome, Approver};
 
 /// Sentinel prefix for `LoopOutcome::Failure` strings produced when an
 /// `ApprovalPolicy` flagged a tool call and the GUI replied
@@ -45,13 +44,6 @@ pub(crate) const APPROVAL_REJECTED_SENTINEL_PREFIX: &str = "headless-agent::appr
 pub(crate) struct RejectedPayload {
     pub(crate) tool_name: String,
     pub(crate) reason: Option<String>,
-}
-
-/// Outcome of `SequentialDispatcher::await_approval_for`.
-enum ApprovalOutcome {
-    NotRequired,
-    Approved,
-    Rejected { reason: Option<String> },
 }
 
 /// Best-effort emit; a closed receiver is not a loop-fatal error.
@@ -108,8 +100,7 @@ pub trait ToolDispatcher: Send + Sync {
 pub struct SequentialDispatcher {
     executor: Arc<dyn ToolExecutor>,
     egress: Arc<dyn EgressGate>,
-    approval_policy: Arc<dyn ApprovalPolicy>,
-    approval_inbox: ApprovalInbox,
+    approver: Arc<dyn Approver>,
     tool_output_sanitizer: Option<Arc<dyn ToolOutputSanitizer>>,
     event_tx: Option<mpsc::Sender<AgentEvent>>,
 }
@@ -121,16 +112,14 @@ impl SequentialDispatcher {
     pub fn new(
         executor: Arc<dyn ToolExecutor>,
         egress: Arc<dyn EgressGate>,
-        approval_policy: Arc<dyn ApprovalPolicy>,
-        approval_inbox: ApprovalInbox,
+        approver: Arc<dyn Approver>,
         tool_output_sanitizer: Option<Arc<dyn ToolOutputSanitizer>>,
         event_tx: Option<mpsc::Sender<AgentEvent>>,
     ) -> Self {
         Self {
             executor,
             egress,
-            approval_policy,
-            approval_inbox,
+            approver,
             tool_output_sanitizer,
             event_tx,
         }
@@ -161,7 +150,11 @@ impl ToolDispatcher for SequentialDispatcher {
             .await;
 
             // ADR-153 / issue #910 — GUI approval loop B4.
-            match self.await_approval_for(call).await {
+            match self
+                .approver
+                .await_approval(call, self.event_tx.as_ref())
+                .await
+            {
                 ApprovalOutcome::NotRequired | ApprovalOutcome::Approved => {}
                 ApprovalOutcome::Rejected { reason } => {
                     return Ok(Some(self.push_rejection(ctx, call, reason).await));
@@ -241,44 +234,6 @@ impl ToolDispatcher for SequentialDispatcher {
 impl SequentialDispatcher {
     async fn emit(&self, event: AgentEvent) {
         emit_event(self.event_tx.as_ref(), event).await;
-    }
-
-    async fn await_approval_for(&self, call: &ToolCall) -> ApprovalOutcome {
-        let Some(request) = self.approval_policy.evaluate(call).await else {
-            return ApprovalOutcome::NotRequired;
-        };
-
-        let request_id = Uuid::new_v4();
-        let rx = self.approval_inbox.register(request_id);
-
-        self.emit(AgentEvent::ApprovalNeeded {
-            request_id,
-            tool_name: call.name.clone(),
-            tool_arguments: call.arguments.clone(),
-            description: request.description,
-            display_parameters: request.display_parameters,
-            allow_always: request.allow_always,
-        })
-        .await;
-
-        match rx.await {
-            Ok(ApprovalDecision::Approve) | Ok(ApprovalDecision::ApproveAlways) => {
-                ApprovalOutcome::Approved
-            }
-            Ok(ApprovalDecision::Reject { reason }) => ApprovalOutcome::Rejected { reason },
-            Err(_) => {
-                // Sender dropped without dispatching: forget the entry
-                // so a late respond_to_approval call still hits
-                // ApprovalDispatchError::Unknown rather than leaking the
-                // pending request forever.
-                self.approval_inbox.forget(request_id);
-                ApprovalOutcome::Rejected {
-                    reason: Some(String::from(
-                        "approval channel closed before the GUI replied",
-                    )),
-                }
-            }
-        }
     }
 
     async fn push_rejection(
