@@ -44,26 +44,24 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use dasclaw_core::agentic_loop::{
-    AgenticLoopConfig, LoopDelegate, LoopOutcome, LoopSignal, TextAction, run_agentic_loop,
-};
+use dasclaw_core::agentic_loop::{AgenticLoopConfig, LoopOutcome};
 use dasclaw_core::hooks::HookBundle;
 use dasclaw_core::messages::{ChatMessage, FinishReason, ToolCall, ToolDefinition, ToolResult};
 use dasclaw_core::reasoning_ctx::ReasoningContext;
-use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
+use dasclaw_core::response_types::{RespondOutput, RespondResult};
 use dasclaw_core::traits::HostError;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::agentic_loop::AgenticLoop;
 use crate::approval::{
     ApprovalDecision, ApprovalDispatchError, ApprovalInbox, ApprovalPolicy, NoApprovalPolicy,
     PolicyApprover,
 };
 use crate::tool_dispatch::{
     APPROVAL_REJECTED_SENTINEL_PREFIX, RejectedPayload, SequentialDispatcher, ToolDispatcher,
-    emit_event,
 };
 
 /// Streaming event emitted by [`Agent::run_streaming`] and
@@ -553,10 +551,11 @@ impl Agent {
     }
 
     /// Shared loop driver for both streaming and non-streaming runs.
-    /// The single `event_tx: Option<...>` field on [`HeadlessDelegate`]
-    /// routes each iteration to [`AgentResponder::respond_streaming`] or
-    /// [`AgentResponder::respond`] and gates the `ToolCallStart` /
-    /// `ToolResult` / `FinishReason` emits.
+    /// The optional `event_tx` is forwarded to the
+    /// [`AgenticLoop`] which routes each iteration to
+    /// [`AgentResponder::respond_streaming`] or [`AgentResponder::respond`]
+    /// and gates the `ToolCallStart` / `ToolResult` / `FinishReason`
+    /// emits.
     async fn run_in_context_inner(
         &self,
         ctx: &mut ReasoningContext,
@@ -572,26 +571,41 @@ impl Agent {
             .map(clone_loop_config)
             .unwrap_or_default();
 
-        let delegate = HeadlessDelegate {
-            responder: Arc::clone(&self.responder),
-            tool_executor: self.tool_executor.clone(),
-            hooks: self.hooks.clone(),
-            tool_output_sanitizer: self.tool_output_sanitizer.clone(),
-            cancellation_token: self.cancellation_token.clone(),
-            event_tx,
-            approval_policy: Arc::clone(&self.approval_policy),
-            approval_inbox: self.approval_inbox.clone(),
-        };
+        // Build the L2 dispatcher once for the lifetime of this run
+        // (pre-W6.4 rebuilt it on every iteration inside
+        // `HeadlessDelegate::execute_tool_calls`). When no executor is
+        // wired, leave the dispatcher unset so the loop emits the
+        // `TOOLS_NOT_SUPPORTED_REASON` sentinel just like before.
+        let dispatcher: Option<Arc<dyn ToolDispatcher>> = self.tool_executor.as_ref().map(|exec| {
+            Arc::new(SequentialDispatcher::new(
+                Arc::clone(exec),
+                Arc::clone(&self.hooks.egress),
+                Arc::new(PolicyApprover::new(
+                    Arc::clone(&self.approval_policy),
+                    self.approval_inbox.clone(),
+                )),
+                self.tool_output_sanitizer.clone(),
+                event_tx.clone(),
+            )) as Arc<dyn ToolDispatcher>
+        });
 
-        let outcome = run_agentic_loop(&delegate, ctx, &loop_config, &self.hooks)
+        let agentic_loop = AgenticLoop::new(
+            Arc::clone(&self.responder),
+            dispatcher,
+            self.cancellation_token.clone(),
+            event_tx,
+        );
+
+        let outcome = agentic_loop
+            .run(ctx, &loop_config, &self.hooks)
             .await
             .map_err(AgentError::Responder)?;
 
-        // History continuity: `HeadlessDelegate::handle_text_response`
-        // records the final assistant turn into `ctx` (with token usage
-        // attached) before returning the response text, mirroring the
-        // push that `execute_tool_calls` already performs on the
-        // tool-call branch. That keeps the next call in a multi-turn
+        // History continuity: the agentic loop records the final
+        // assistant turn into `ctx` (with token usage attached) before
+        // returning the response text, mirroring the push that
+        // `SequentialDispatcher` already performs on the tool-call
+        // branch. That keeps the next call in a multi-turn
         // `Session::run` aware of what the model just said without
         // requiring the caller to plumb usage out of `LoopOutcome`.
         map_outcome(outcome, loop_config.max_iterations)
@@ -775,118 +789,10 @@ impl AgentBuilder {
     }
 }
 
-/// Internal `LoopDelegate` that bridges the agentic loop to a single
-/// [`AgentResponder`]. The agent has already seeded the reasoning
-/// context with the user prompt, system prompt, model override and
-/// advertised tools before the loop starts, so the delegate only needs
-/// the responder and an optional tool executor.
-///
-/// When `event_tx` is `Some`, the delegate routes each iteration through
-/// [`AgentResponder::respond_streaming`] and forwards
-/// [`AgentEvent::ToolCallStart`], [`AgentEvent::ToolResult`] and
-/// [`AgentEvent::FinishReason`] events to the host (issue #908, GUI
-/// blocker B2). When `None`, the delegate behaves exactly like the
-/// pre-#908 non-streaming path.
-struct HeadlessDelegate {
-    responder: Arc<dyn AgentResponder>,
-    tool_executor: Option<Arc<dyn ToolExecutor>>,
-    hooks: HookBundle,
-    tool_output_sanitizer: Option<Arc<dyn ToolOutputSanitizer>>,
-    cancellation_token: Option<CancellationToken>,
-    event_tx: Option<mpsc::Sender<AgentEvent>>,
-    approval_policy: Arc<dyn ApprovalPolicy>,
-    approval_inbox: ApprovalInbox,
-}
-
-impl HeadlessDelegate {
-    /// Best-effort emit; a closed receiver is not a loop-fatal error.
-    async fn emit(&self, event: AgentEvent) {
-        emit_event(self.event_tx.as_ref(), event).await;
-    }
-}
-
-#[async_trait]
-impl LoopDelegate for HeadlessDelegate {
-    async fn check_signals(&self) -> LoopSignal {
-        match self.cancellation_token.as_ref() {
-            Some(token) if token.is_cancelled() => LoopSignal::Stop,
-            _ => LoopSignal::Continue,
-        }
-    }
-
-    async fn before_llm_call(
-        &self,
-        _ctx: &mut ReasoningContext,
-        _iteration: usize,
-    ) -> Option<LoopOutcome> {
-        None
-    }
-
-    async fn call_llm(
-        &self,
-        ctx: &mut ReasoningContext,
-        _iteration: usize,
-    ) -> Result<RespondOutput, HostError> {
-        // Streaming and non-streaming routes split at the responder
-        // seam: when an event channel is wired we go through
-        // `respond_streaming`, which the default trait impl falls back
-        // to `respond` for adapters that don't override it. Either way
-        // we forward the trailing `FinishReason` so a GUI knows the
-        // iteration boundary even when the model emitted no text.
-        let output = match self.event_tx.as_ref() {
-            Some(tx) => self.responder.respond_streaming(ctx, tx.clone()).await?,
-            None => self.responder.respond(ctx).await?,
-        };
-        self.emit(AgentEvent::FinishReason(output.finish_reason))
-            .await;
-        Ok(output)
-    }
-
-    async fn handle_text_response(
-        &self,
-        text: &str,
-        _metadata: ResponseMetadata,
-        usage: TokenUsage,
-        ctx: &mut ReasoningContext,
-    ) -> TextAction {
-        ctx.messages
-            .push(ChatMessage::assistant(text).with_usage(usage));
-        TextAction::Return(LoopOutcome::Response(text.to_string()))
-    }
-
-    async fn execute_tool_calls(
-        &self,
-        tool_calls: Vec<ToolCall>,
-        content: Option<String>,
-        usage: TokenUsage,
-        ctx: &mut ReasoningContext,
-    ) -> Result<Option<LoopOutcome>, HostError> {
-        // No executor → emit the sentinel and let `map_outcome` raise
-        // `AgentError::ToolsNotSupported`. This keeps the A1 contract
-        // intact when callers use text-only agents.
-        let Some(executor) = self.tool_executor.as_ref() else {
-            return Ok(Some(LoopOutcome::Failure(
-                TOOLS_NOT_SUPPORTED_REASON.to_string(),
-            )));
-        };
-
-        let dispatcher = SequentialDispatcher::new(
-            executor.clone(),
-            self.hooks.egress.clone(),
-            Arc::new(PolicyApprover::new(
-                self.approval_policy.clone(),
-                self.approval_inbox.clone(),
-            )),
-            self.tool_output_sanitizer.clone(),
-            self.event_tx.clone(),
-        );
-        dispatcher.dispatch(tool_calls, content, usage, ctx).await
-    }
-}
-
-/// Sentinel string emitted by [`HeadlessDelegate::execute_tool_calls`]
-/// and re-mapped to [`AgentError::ToolsNotSupported`] by [`map_outcome`].
-const TOOLS_NOT_SUPPORTED_REASON: &str = "headless-agent::tools-not-supported";
+/// Sentinel string emitted by [`AgenticLoop`]'s tool-call branch when
+/// no [`ToolDispatcher`] is wired, then re-mapped to
+/// [`AgentError::ToolsNotSupported`] by [`map_outcome`].
+pub(crate) const TOOLS_NOT_SUPPORTED_REASON: &str = "headless-agent::tools-not-supported";
 
 fn map_outcome(outcome: LoopOutcome, max_iterations: usize) -> Result<String, AgentError> {
     match outcome {
@@ -924,7 +830,7 @@ fn map_outcome(outcome: LoopOutcome, max_iterations: usize) -> Result<String, Ag
 mod tests {
     use super::*;
     use dasclaw_core::messages::{FinishReason, ToolCall};
-    use dasclaw_core::response_types::{RespondResult, TokenUsage};
+    use dasclaw_core::response_types::{RespondResult, ResponseMetadata, TokenUsage};
 
     /// Mock responder driven by a fixed sequence of pre-built outputs.
     struct ScriptedResponder {

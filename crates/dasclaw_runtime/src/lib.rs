@@ -65,6 +65,7 @@
 //! [`ToolError::from_tool_impl`].
 
 pub mod agent;
+pub mod agentic_loop;
 pub mod approval;
 pub mod composite_executor;
 pub mod context;
@@ -84,6 +85,7 @@ pub use agent::{
     Agent, AgentBuilder, AgentConfig, AgentError, AgentEvent, AgentResponder, ToolExecutor,
     ToolOutputSanitizer,
 };
+pub use agentic_loop::AgenticLoop;
 pub use approval::{
     ApprovalDecision, ApprovalDispatchError, ApprovalInbox, ApprovalOutcome, ApprovalPolicy,
     ApprovalRequest, Approver, NoApprovalPolicy, PolicyApprover,
