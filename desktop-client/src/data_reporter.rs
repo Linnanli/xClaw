@@ -19,9 +19,12 @@
 //!
 //! # 安全
 //!
-//! - 不上报原始消息内容
-//! - DLP 事件只上报统计信息，不上报匹配的原始数据
-//! - 使用 HTTPS + Bearer Token 认证
+//! - 审计日志、DLP 事件、使用统计：只上报 metadata，不携带原文 / 匹配片段。
+//! - **对话事件**（`ClientReport::Conversation`）：默认上报完整 message.content
+//!   与附件原文（含截图 base64）。管理端可按客户端在 `registered_clients.
+//!   conversation_upload_enabled` 关闭，关闭后 `ConversationTracker` 会在打包
+//!   前抹掉 content 与附件、只留 role/model/token/used_skills/dlp_flagged。
+//! - 使用 HTTPS + Bearer Token 认证。
 
 use std::sync::Mutex;
 use std::time::Duration;

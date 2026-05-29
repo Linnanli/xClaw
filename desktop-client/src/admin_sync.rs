@@ -63,6 +63,12 @@ pub struct AdminClientConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backend_principal_id: Option<Uuid>,
 
+    /// 是否上报对话原文。`None` 视为 `true` 保持现状；`Some(false)` 时
+    /// 客户端只上报对话 metadata（role/token/技能命中等），不携带 message.content
+    /// 与附件原文。详见 admin-backend 迁移 029。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation_upload_enabled: Option<bool>,
+
     // === 水印 ===
     /// 是否启用水印
     pub watermark_enabled: Option<bool>,
@@ -194,6 +200,7 @@ pub struct AdminConfigSync {
     current_config: Arc<RwLock<AdminClientConfig>>,
     /// 后台主身份同步出口。
     backend_user_id: Option<Arc<std::sync::RwLock<Option<Uuid>>>>,
+    upload_payload_sink: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// 同步间隔（用于 run_sync_loop）
     sync_interval: Duration,
     /// 版本检查间隔（用于 run_sync_loop_with_version_check）
@@ -220,6 +227,7 @@ impl AdminConfigSync {
                 .unwrap_or_default(),
             current_config: Arc::new(RwLock::new(AdminClientConfig::default())),
             backend_user_id: None,
+            upload_payload_sink: None,
             sync_interval: Duration::from_secs(300), // 5 分钟
             version_check_interval: Duration::from_secs(30), // 30 秒
         }
@@ -230,6 +238,13 @@ impl AdminConfigSync {
         backend_user_id: Arc<std::sync::RwLock<Option<Uuid>>>,
     ) -> Self {
         self.backend_user_id = Some(backend_user_id);
+        self
+    }
+
+    /// 注入上报对话原文的开关锐导，使 ConversationTracker 进行打包前能读到最新值。
+    /// 开关默认 true；Admin Backend 返回 `Some(false)` 时切为 metadata-only。
+    pub fn with_upload_payload_sink(mut self, sink: Arc<std::sync::atomic::AtomicBool>) -> Self {
+        self.upload_payload_sink = Some(sink);
         self
     }
 
@@ -275,6 +290,7 @@ impl AdminConfigSync {
             .map_err(|e| format!("Failed to parse response: {}", e))?;
 
         self.publish_backend_principal_id(config.backend_principal_id);
+        self.publish_upload_payload_enabled(config.conversation_upload_enabled);
 
         // 更新内存缓存
         {
@@ -305,6 +321,15 @@ impl AdminConfigSync {
                     tracing::warn!(error = %error, "Failed to publish backend principal id");
                 }
             }
+        }
+    }
+
+    fn publish_upload_payload_enabled(&self, enabled: Option<bool>) {
+        if let Some(target) = &self.upload_payload_sink {
+            target.store(
+                enabled.unwrap_or(true),
+                std::sync::atomic::Ordering::Relaxed,
+            );
         }
     }
 

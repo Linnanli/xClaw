@@ -20,6 +20,7 @@
 //! - 上报失败不影响主流程（DataReporter 有重试机制）
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
@@ -72,6 +73,9 @@ pub struct ConversationTracker {
     buffers: Mutex<HashMap<String, ThreadBuffer>>,
     scope_id: String,
     backend_user_id: Arc<std::sync::RwLock<Option<Uuid>>>,
+    /// 是否上报对话原文。默认 true；Admin Backend 下发 false 时 build_report
+    /// 会抹掉 message.content 与附件原文，只保留 metadata。
+    upload_payload: Arc<AtomicBool>,
     pub idle_timeout: Duration,
 }
 
@@ -81,6 +85,7 @@ impl ConversationTracker {
             buffers: Mutex::new(HashMap::new()),
             scope_id,
             backend_user_id: Arc::new(std::sync::RwLock::new(None)),
+            upload_payload: Arc::new(AtomicBool::new(true)),
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
         }
     }
@@ -90,6 +95,12 @@ impl ConversationTracker {
         backend_user_id: Arc<std::sync::RwLock<Option<Uuid>>>,
     ) -> Self {
         self.backend_user_id = backend_user_id;
+        self
+    }
+
+    /// 共享上报开关，使 admin_sync 能推送最新值。
+    pub fn with_upload_payload_sink(mut self, sink: Arc<AtomicBool>) -> Self {
+        self.upload_payload = sink;
         self
     }
 
@@ -239,6 +250,22 @@ impl ConversationTracker {
             .map(|user_id: Uuid| user_id.to_string())
             .unwrap_or_else(|| self.scope_id.clone());
 
+        let messages = if self.upload_payload.load(Ordering::Relaxed) {
+            buf.messages
+        } else {
+            buf.messages
+                .into_iter()
+                .map(|m| ConversationMessage {
+                    role: m.role,
+                    content: String::new(),
+                    attachments: Vec::new(),
+                    model_id: m.model_id,
+                    input_tokens: m.input_tokens,
+                    output_tokens: m.output_tokens,
+                })
+                .collect()
+        };
+
         Some(ClientReport::Conversation {
             client_conversation_id: format!("{}-{}-{}", self.scope_id, thread_id, buf.report_id),
             user_id: report_user_id,
@@ -247,7 +274,7 @@ impl ConversationTracker {
             dlp_flagged: Some(buf.dlp_flagged),
             dlp_details: None,
             used_skills,
-            messages: buf.messages,
+            messages,
         })
     }
 
@@ -490,5 +517,107 @@ mod tests {
         } else {
             panic!("Expected Conversation report");
         }
+    }
+
+    fn make_attachment() -> ConversationAttachment {
+        ConversationAttachment {
+            id: "att-1".to_string(),
+            kind: "image".to_string(),
+            mime_type: "image/png".to_string(),
+            filename: Some("shot.png".to_string()),
+            size_bytes: Some(1024),
+            extracted_text: Some("secret".to_string()),
+            image_data_base64: Some("AAAA".to_string()),
+            duration_secs: None,
+        }
+    }
+
+    #[test]
+    fn test_payload_uploaded_by_default() {
+        let tracker = make_tracker();
+        let reporter = make_reporter();
+
+        tracker.record_user_message("t-on", "secret prompt", false, &[make_attachment()]);
+        tracker.record_assistant_message("t-on", "secret reply", Some("gpt-4o"), 10, 5);
+        tracker.finish_thread("t-on", &reporter);
+
+        let reports = reporter.drain_for_test();
+        if let ClientReport::Conversation { messages, .. } = &reports[0] {
+            assert_eq!(messages[0].content, "secret prompt");
+            assert_eq!(messages[0].attachments.len(), 1);
+            assert_eq!(
+                messages[0].attachments[0].image_data_base64.as_deref(),
+                Some("AAAA")
+            );
+            assert_eq!(messages[1].content, "secret reply");
+        } else {
+            panic!("Expected Conversation report");
+        }
+    }
+
+    #[test]
+    fn test_payload_stripped_when_toggle_off() {
+        let sink = Arc::new(AtomicBool::new(false));
+        let tracker = ConversationTracker::new("scope-off".to_string())
+            .with_upload_payload_sink(Arc::clone(&sink));
+        let reporter = make_reporter();
+
+        tracker.record_user_message("t-off", "secret prompt", true, &[make_attachment()]);
+        tracker.record_assistant_message("t-off", "secret reply", Some("gpt-4o"), 11, 7);
+        tracker.finish_thread("t-off", &reporter);
+
+        let reports = reporter.drain_for_test();
+        if let ClientReport::Conversation {
+            messages,
+            dlp_flagged,
+            model_id,
+            ..
+        } = &reports[0]
+        {
+            assert_eq!(messages.len(), 2);
+            assert_eq!(messages[0].role, "user");
+            assert_eq!(messages[0].content, "");
+            assert!(messages[0].attachments.is_empty());
+            assert_eq!(messages[1].role, "assistant");
+            assert_eq!(messages[1].content, "");
+            assert_eq!(messages[1].input_tokens, 11);
+            assert_eq!(messages[1].output_tokens, 7);
+            assert_eq!(messages[1].model_id.as_deref(), Some("gpt-4o"));
+            assert_eq!(*dlp_flagged, Some(true));
+            assert_eq!(model_id.as_deref(), Some("gpt-4o"));
+        } else {
+            panic!("Expected Conversation report");
+        }
+    }
+
+    #[test]
+    fn test_toggle_flip_takes_effect_on_next_report() {
+        let sink = Arc::new(AtomicBool::new(true));
+        let tracker = ConversationTracker::new("scope-flip".to_string())
+            .with_upload_payload_sink(Arc::clone(&sink));
+        let reporter = make_reporter();
+
+        tracker.record_user_message("t-1", "first", false, &[]);
+        tracker.record_assistant_message("t-1", "reply-1", None, 1, 1);
+        tracker.finish_thread("t-1", &reporter);
+
+        sink.store(false, Ordering::Relaxed);
+
+        tracker.record_user_message("t-2", "second", false, &[]);
+        tracker.record_assistant_message("t-2", "reply-2", None, 2, 2);
+        tracker.finish_thread("t-2", &reporter);
+
+        let reports = reporter.drain_for_test();
+        let on = match &reports[0] {
+            ClientReport::Conversation { messages, .. } => messages.clone(),
+            _ => panic!("Expected Conversation report"),
+        };
+        let off = match &reports[1] {
+            ClientReport::Conversation { messages, .. } => messages.clone(),
+            _ => panic!("Expected Conversation report"),
+        };
+        assert_eq!(on[0].content, "first");
+        assert_eq!(off[0].content, "");
+        assert_eq!(off[1].content, "");
     }
 }

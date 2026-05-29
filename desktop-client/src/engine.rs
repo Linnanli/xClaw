@@ -116,12 +116,14 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         std::env::var("ADMIN_BACKEND_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
     let client_token = std::env::var("ADMIN_AUTH_TOKEN").unwrap_or_default();
     let backend_user_id = Arc::new(std::sync::RwLock::new(None::<Uuid>));
+    let upload_payload_enabled = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let admin_config_sync = if client_token.is_empty() {
         None
     } else {
         Some(
             crate::admin_sync::AdminConfigSync::new(admin_url.clone(), client_token.clone())
-                .with_backend_user_id_sink(Arc::clone(&backend_user_id)),
+                .with_backend_user_id_sink(Arc::clone(&backend_user_id))
+                .with_upload_payload_sink(Arc::clone(&upload_payload_enabled)),
         )
     };
 
@@ -133,13 +135,18 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
                 if let Ok(mut current) = backend_user_id.write() {
                     *current = cached.backend_principal_id;
                 }
+                upload_payload_enabled.store(
+                    cached.conversation_upload_enabled.unwrap_or(true),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
             }
         }
     }
 
     let tracker = Arc::new(
         crate::conversation_tracker::ConversationTracker::new(scope_id.clone())
-            .with_backend_user_id_sink(Arc::clone(&backend_user_id)),
+            .with_backend_user_id_sink(Arc::clone(&backend_user_id))
+            .with_upload_payload_sink(Arc::clone(&upload_payload_enabled)),
     );
     let reporter = Arc::new(crate::data_reporter::DataReporter::new(
         admin_url.clone(),
