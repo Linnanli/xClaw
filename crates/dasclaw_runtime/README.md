@@ -87,7 +87,8 @@ dedicated `AgentResponder`.
 | `ToolsNotSupported` | Model asked for a tool but no `ToolExecutor` was wired. |
 | `LoopFailure(reason)` | `LoopOutcome::Failure(_)`, typically from an egress hook. |
 | `Stopped` | External `LoopSignal::Stop` halted the loop. |
-| `ApprovalRequested` | Headless delegate refuses approval prompts. |
+| `ApprovalRequested` | **Deprecated** (issue #910). Only surfaced by custom `LoopDelegate` impls that bypass the approval inbox; the headless delegate now emits `AgentEvent::ApprovalNeeded` instead. |
+| `ApprovalRejected { tool_name, reason }` | The GUI replied `ApprovalDecision::Reject` for a tool call. |
 | `Responder(HostError)` | Underlying responder / hook errored. |
 
 The runtime **does not retry**. If a tool fails, the implementation should
@@ -158,10 +159,76 @@ surface** consumed by `dasclaw_cli` and (in flight) by ironclaw / admin-backend.
 Everything else is in-flight and may break before ADR-153 closes — pin to the
 exact patch version if you depend on those modules.
 
+## Approval flow (GUI integration, issue #910)
+
+GUIs that want a user-in-the-loop confirmation for risky tool calls
+wire three pieces:
+
+1. `.approval_policy(Arc::new(MyPolicy))` on the builder — decides
+   whether a given `ToolCall` needs human approval.
+2. `Agent::run_streaming(prompt, tx)` — the loop emits an
+   `AgentEvent::ApprovalNeeded { request_id, tool_name, … }` whenever
+   the policy flags a call, then parks until a decision arrives.
+3. `Agent::respond_to_approval(request_id, ApprovalDecision::Approve)`
+   (or `Reject { reason }` / `ApproveAlways`) from the UI handler.
+
+`ApprovalDecision` and `ApprovalRequest` are pure data — no channels
+or `oneshot::Sender` leak through the public surface — so the same
+shape serialises to a TypeScript discriminated union for a Tauri
+frontend, an HTTP JSON payload, or a `wasm-bindgen` callback.
+
+End-to-end runnable example (≈170 lines):
+[`dasclaw_cli/examples/headless_agent_starter.rs`](../dasclaw_cli/examples/headless_agent_starter.rs).
+
+Run with:
+
+```bash
+cargo run -p dasclaw_cli --example headless_agent_starter
+```
+
+It shows both the approve path (final text `ok`) and the reject path
+(an `AgentError::ApprovalRejected` carrying the policy reason).
+
+## Combine `Agent` with `Session` for replay and persistence
+
+`dasclaw_runtime::Agent` is stateless across turns by design — each
+`agent.run(prompt)` call is independent. When a host wants conversation
+memory, snapshot/replay, or forks (e.g. branching a chat), wrap the
+agent in [`dasclaw_session::Session`](../dasclaw_session/src/lib.rs):
+
+```rust
+use std::sync::Arc;
+use dasclaw_runtime::Agent;
+use dasclaw_session::Session;
+
+let agent = Arc::new(Agent::builder().responder(my_responder).build()?);
+let mut session = Session::new(Arc::clone(&agent))
+    .with_model("claude-3-5-sonnet")
+    .with_workspace_root("/path/to/project");
+
+session.record_prompt("Hello!");
+let snapshot = session.snapshot();           // borrow current state
+let branch = session.fork(Some("alt".into())); // diverge from this turn
+```
+
+Backends are pluggable through the
+[`SessionStore`](../dasclaw_session/src/store.rs) trait. The crate
+ships [`JsonlSessionStore`](../dasclaw_session/src/jsonl.rs) — an
+append-only `.jsonl` file per session for replay across runs. If you
+only need an in-process scratchpad, skip the store entirely and use
+`Session::snapshot()` directly; the `SessionSnapshot` it returns is
+plain `Serialize` data.
+
+The session layer never touches the LLM directly; it only holds
+`Arc<Agent>` plus a `SessionSnapshot`. That keeps replay deterministic:
+re-creating the same `Agent` config + same snapshot reproduces every
+turn.
+
 ## See also
 
 - [`dasclaw_cli`](../dasclaw_cli/README.md) — the headless CLI built on this runtime; ADR-153 proof-point.
 - [`dasclaw_core`](../dasclaw_core/) — the agentic loop primitives this runtime wraps.
 - [`dasclaw_llm_provider`](../dasclaw_llm_provider/) — concrete LLM clients adapted via `LlmProviderResponder`.
 - [`dasclaw_mcp`](../dasclaw_mcp/) — MCP transports and `McpToolExecutor` (plugged in by `dasclaw_cli`).
+- [`dasclaw_session`](../dasclaw_session/) — `Session` wrapper for replay, snapshots and forks (combine with `Agent` as above).
 - ADR-153 — headless agent framework rationale and milestones.
