@@ -189,10 +189,46 @@ cargo run -p dasclaw_cli --example headless_agent_starter
 It shows both the approve path (final text `ok`) and the reject path
 (an `AgentError::ApprovalRejected` carrying the policy reason).
 
+## Combine `Agent` with `Session` for replay and persistence
+
+`dasclaw_runtime::Agent` is stateless across turns by design — each
+`agent.run(prompt)` call is independent. When a host wants conversation
+memory, snapshot/replay, or forks (e.g. branching a chat), wrap the
+agent in [`dasclaw_session::Session`](../dasclaw_session/src/lib.rs):
+
+```rust
+use std::sync::Arc;
+use dasclaw_runtime::Agent;
+use dasclaw_session::Session;
+
+let agent = Arc::new(Agent::builder().responder(my_responder).build()?);
+let mut session = Session::new(Arc::clone(&agent))
+    .with_model("claude-3-5-sonnet")
+    .with_workspace_root("/path/to/project");
+
+session.record_prompt("Hello!");
+let snapshot = session.snapshot();           // borrow current state
+let branch = session.fork(Some("alt".into())); // diverge from this turn
+```
+
+Backends are pluggable through the
+[`SessionStore`](../dasclaw_session/src/store.rs) trait. The crate
+ships [`JsonlSessionStore`](../dasclaw_session/src/jsonl.rs) — an
+append-only `.jsonl` file per session for replay across runs. If you
+only need an in-process scratchpad, skip the store entirely and use
+`Session::snapshot()` directly; the `SessionSnapshot` it returns is
+plain `Serialize` data.
+
+The session layer never touches the LLM directly; it only holds
+`Arc<Agent>` plus a `SessionSnapshot`. That keeps replay deterministic:
+re-creating the same `Agent` config + same snapshot reproduces every
+turn.
+
 ## See also
 
 - [`dasclaw_cli`](../dasclaw_cli/README.md) — the headless CLI built on this runtime; ADR-153 proof-point.
 - [`dasclaw_core`](../dasclaw_core/) — the agentic loop primitives this runtime wraps.
 - [`dasclaw_llm_provider`](../dasclaw_llm_provider/) — concrete LLM clients adapted via `LlmProviderResponder`.
 - [`dasclaw_mcp`](../dasclaw_mcp/) — MCP transports and `McpToolExecutor` (plugged in by `dasclaw_cli`).
+- [`dasclaw_session`](../dasclaw_session/) — `Session` wrapper for replay, snapshots and forks (combine with `Agent` as above).
 - ADR-153 — headless agent framework rationale and milestones.
