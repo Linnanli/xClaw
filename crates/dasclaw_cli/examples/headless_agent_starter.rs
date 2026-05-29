@@ -59,7 +59,7 @@ async fn main() -> Result<()> {
 
 /// Build the agent, spawn it, and drive the approval loop with `decision`.
 async fn run_demo(decision: ApprovalDecision) -> Result<String, AgentError> {
-    let agent = Arc::new(build_agent());
+    let agent = Arc::new(build_agent()?);
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(16);
 
     let agent_for_task = Arc::clone(&agent);
@@ -92,7 +92,7 @@ async fn run_demo(decision: ApprovalDecision) -> Result<String, AgentError> {
 }
 
 /// Wire the four headless pieces together via [`AgentBuilder`].
-fn build_agent() -> Agent {
+fn build_agent() -> Result<Agent, AgentError> {
     AgentBuilder::default()
         .responder(ScriptedResponder::default())
         .tool_executor(EchoExecutor)
@@ -107,7 +107,6 @@ fn build_agent() -> Agent {
         }])
         .approval_policy(Arc::new(AlwaysAskPolicy))
         .build()
-        .expect("builder has a responder")
 }
 
 /// Two-turn script: turn 1 calls `compute`, turn 2 emits final text `ok`.
