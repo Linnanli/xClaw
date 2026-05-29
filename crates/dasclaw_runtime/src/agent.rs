@@ -47,8 +47,7 @@ use async_trait::async_trait;
 use dasclaw_core::agentic_loop::{
     AgenticLoopConfig, LoopDelegate, LoopOutcome, LoopSignal, TextAction, run_agentic_loop,
 };
-use dasclaw_core::egress_apply::{EgressApply, apply_egress_decision};
-use dasclaw_core::hooks::{EgressKind, HookBundle};
+use dasclaw_core::hooks::HookBundle;
 use dasclaw_core::messages::{ChatMessage, FinishReason, ToolCall, ToolDefinition, ToolResult};
 use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
@@ -60,6 +59,9 @@ use uuid::Uuid;
 
 use crate::approval::{
     ApprovalDecision, ApprovalDispatchError, ApprovalInbox, ApprovalPolicy, NoApprovalPolicy,
+};
+use crate::tool_dispatch::{
+    APPROVAL_REJECTED_SENTINEL_PREFIX, RejectedPayload, SequentialDispatcher, emit_event,
 };
 
 /// Streaming event emitted by [`Agent::run_streaming`] and
@@ -797,9 +799,7 @@ struct HeadlessDelegate {
 impl HeadlessDelegate {
     /// Best-effort emit; a closed receiver is not a loop-fatal error.
     async fn emit(&self, event: AgentEvent) {
-        if let Some(tx) = self.event_tx.as_ref() {
-            let _ = tx.send(event).await;
-        }
+        emit_event(self.event_tx.as_ref(), event).await;
     }
 }
 
@@ -868,247 +868,21 @@ impl LoopDelegate for HeadlessDelegate {
             )));
         };
 
-        push_assistant_tool_calls(ctx, content, &tool_calls, usage);
-        for call in &tool_calls {
-            // Streaming hosts learn the tool name + arguments as soon as
-            // the loop commits to invoking the tool, before any egress
-            // gate runs. The post-egress sanitized payload is forwarded
-            // in the matching `ToolResult` event below, so a redacted
-            // arguments preview stays consistent with what the LLM sees
-            // next iteration.
-            self.emit(AgentEvent::ToolCallStart {
-                name: call.name.clone(),
-                arguments: call.arguments.clone(),
-            })
-            .await;
-
-            // ADR-153 / issue #910 — GUI approval loop B4:
-            // ApprovalPolicy is the single gate that decides whether
-            // this call needs human approval. Three outcomes:
-            //   * NotRequired / Approved → fall through to egress + execute
-            //   * Rejected                → push tool-error, emit, return
-            //                                APPROVAL_REJECTED sentinel
-            //   * ChannelClosed           → treat as Reject("approval
-            //                                channel closed") so the loop
-            //                                degrades gracefully instead
-            //                                of leaking the pending entry
-            match self.await_approval_for(call).await {
-                ApprovalOutcome::NotRequired | ApprovalOutcome::Approved => {}
-                ApprovalOutcome::Rejected { reason } => {
-                    return Ok(Some(self.push_rejection(ctx, call, reason).await));
-                }
-            }
-
-            // ADR-148 Layer B + ADR-153 §1.1 e8/A2:
-            // Pre-execute egress gate scans serialised tool arguments.
-            // `Block` → executor is never invoked; an is_error
-            // tool_result is fed back to the model so it can react.
-            // `Redact` → callers that want argument rewriting should
-            // implement their own ToolExecutor wrapper; here we honour
-            // the sanitized payload only as a tracing hint and proceed.
-            let args_payload =
-                serde_json::to_string(&call.arguments).unwrap_or_else(|_| String::from("{}"));
-            let kind = EgressKind::ToolExecution {
-                tool: call.name.clone(),
-            };
-            let mut args_buf = args_payload;
-            let pre_label = format!("ToolExecution:{}", call.name);
-            let decision = self.hooks.egress.check(&kind, &args_buf).await;
-            if let EgressApply::Halt(reason) =
-                apply_egress_decision(decision, &mut args_buf, &pre_label)
-            {
-                tracing::warn!(tool = %call.name, %reason, "egress gate blocked tool call");
-                let error_body = format!("Error: {reason}");
-                ctx.messages
-                    .push(ChatMessage::tool_result(&call.id, &call.name, &error_body));
-                self.emit(AgentEvent::ToolResult {
-                    name: call.name.clone(),
-                    content: error_body,
-                    is_error: true,
-                })
-                .await;
-                continue;
-            }
-
-            let result = executor.execute(call).await?;
-            let executor_is_error = result.is_error;
-
-            // ADR-148 Layer B + ADR-153 §1.1 e15/A9:
-            // Post-execute egress gate sanitises tool output before it
-            // becomes part of ReasoningContext. `Redact` swaps content
-            // in place; `Block` substitutes a `[redacted: …]` placeholder
-            // so the conversation keeps making progress without leaking.
-            let mut content_buf = result.content.clone();
-            let post_label = format!("ToolOutput:{}", result.name);
-            let decision = self
-                .hooks
-                .egress
-                .check(&EgressKind::UserDisplay, &content_buf)
-                .await;
-            let (post_gate_content, gate_halted) = match apply_egress_decision(
-                decision,
-                &mut content_buf,
-                &post_label,
-            ) {
-                EgressApply::Continue => (content_buf, false),
-                EgressApply::Halt(reason) => {
-                    tracing::warn!(tool = %result.name, %reason, "egress gate blocked tool output");
-                    (format!("[redacted: {reason}]"), true)
-                }
-            };
-
-            // ADR-153 §1.1 e22/B6: chain a second sanitizer seam after the
-            // egress gate. Production default is bound by
-            // `dasclaw_cli::run_with_tools_and_safety_sanitizer` (issue #882),
-            // which wraps `SafetyLayer::sanitize_for_stash`; alternative
-            // strategies can be injected without touching the hook stack.
-            let pushed_content = match self.tool_output_sanitizer.as_ref() {
-                Some(sanitizer) => sanitizer.sanitize(&result.name, &post_gate_content),
-                None => post_gate_content,
-            };
-            ctx.messages.push(ChatMessage::tool_result(
-                &result.tool_call_id,
-                &result.name,
-                &pushed_content,
-            ));
-            self.emit(AgentEvent::ToolResult {
-                name: result.name.clone(),
-                content: pushed_content,
-                is_error: executor_is_error || gate_halted,
-            })
-            .await;
-        }
-        Ok(None)
+        let dispatcher = SequentialDispatcher {
+            executor: executor.clone(),
+            egress: self.hooks.egress.clone(),
+            approval_policy: self.approval_policy.clone(),
+            approval_inbox: self.approval_inbox.clone(),
+            tool_output_sanitizer: self.tool_output_sanitizer.clone(),
+            event_tx: self.event_tx.clone(),
+        };
+        dispatcher.dispatch(tool_calls, content, usage, ctx).await
     }
-}
-
-/// Record the assistant's tool-call turn so the next LLM call sees the
-/// canonical Anthropic-style assistant + tool_result pairing.
-fn push_assistant_tool_calls(
-    ctx: &mut ReasoningContext,
-    content: Option<String>,
-    tool_calls: &[ToolCall],
-    usage: TokenUsage,
-) {
-    ctx.messages.push(
-        ChatMessage::assistant_with_tool_calls(content, tool_calls.to_vec()).with_usage(usage),
-    );
 }
 
 /// Sentinel string emitted by [`HeadlessDelegate::execute_tool_calls`]
 /// and re-mapped to [`AgentError::ToolsNotSupported`] by [`map_outcome`].
 const TOOLS_NOT_SUPPORTED_REASON: &str = "headless-agent::tools-not-supported";
-
-/// Sentinel prefix for [`LoopOutcome::Failure`] strings produced when an
-/// [`crate::ApprovalPolicy`] flagged a tool call and the GUI replied
-/// [`crate::ApprovalDecision::Reject`] (issue #910, GUI blocker B4).
-///
-/// The remainder of the failure string after the prefix is a
-/// JSON-encoded [`RejectedPayload`]. [`map_outcome`] strips and decodes
-/// it back into [`AgentError::ApprovalRejected`] so the public surface
-/// remains structured. We piggy-back on `LoopOutcome::Failure(String)`
-/// instead of patching the `dasclaw_core` enum because issue #910
-/// explicitly forbids touching the `LoopOutcome` / `LoopDelegate` /
-/// `agentic_loop` public contract.
-const APPROVAL_REJECTED_SENTINEL_PREFIX: &str = "headless-agent::approval-rejected:";
-
-#[derive(Serialize, Deserialize)]
-struct RejectedPayload {
-    tool_name: String,
-    reason: Option<String>,
-}
-
-/// Outcome of [`HeadlessDelegate::await_approval_for`].
-///
-/// `ChannelClosed` is folded into [`ApprovalOutcome::Rejected`] before
-/// it leaves the helper so the caller's match stays exhaustive without
-/// a fall-through arm — keeps `execute_tool_calls` in the
-/// "evaluate → decide → execute-or-reject" 3-step shape ADR-153 wants.
-enum ApprovalOutcome {
-    NotRequired,
-    Approved,
-    Rejected { reason: Option<String> },
-}
-
-impl HeadlessDelegate {
-    /// Step 1 of the per-call pipeline in [`Self::execute_tool_calls`]:
-    /// ask the policy, emit `ApprovalNeeded` if needed, await the GUI
-    /// reply.
-    async fn await_approval_for(&self, call: &ToolCall) -> ApprovalOutcome {
-        let Some(request) = self.approval_policy.evaluate(call).await else {
-            return ApprovalOutcome::NotRequired;
-        };
-
-        let request_id = Uuid::new_v4();
-        let rx = self.approval_inbox.register(request_id);
-
-        self.emit(AgentEvent::ApprovalNeeded {
-            request_id,
-            tool_name: call.name.clone(),
-            tool_arguments: call.arguments.clone(),
-            description: request.description,
-            display_parameters: request.display_parameters,
-            allow_always: request.allow_always,
-        })
-        .await;
-
-        match rx.await {
-            Ok(ApprovalDecision::Approve) | Ok(ApprovalDecision::ApproveAlways) => {
-                ApprovalOutcome::Approved
-            }
-            Ok(ApprovalDecision::Reject { reason }) => ApprovalOutcome::Rejected { reason },
-            Err(_) => {
-                // Sender dropped without dispatching: forget the entry
-                // so a late respond_to_approval call still hits
-                // ApprovalDispatchError::Unknown rather than leaking the
-                // pending request forever.
-                self.approval_inbox.forget(request_id);
-                ApprovalOutcome::Rejected {
-                    reason: Some(String::from(
-                        "approval channel closed before the GUI replied",
-                    )),
-                }
-            }
-        }
-    }
-
-    /// Step 3b of the per-call pipeline: when the GUI rejected the
-    /// call, push the matching tool-error `tool_result` so the LLM sees
-    /// a well-formed history, emit the streaming `ToolResult` event for
-    /// the GUI, and return the sentinel-encoded
-    /// [`LoopOutcome::Failure`] that [`map_outcome`] reverses into
-    /// [`AgentError::ApprovalRejected`].
-    async fn push_rejection(
-        &self,
-        ctx: &mut ReasoningContext,
-        call: &ToolCall,
-        reason: Option<String>,
-    ) -> LoopOutcome {
-        let body = match reason.as_deref() {
-            Some(r) => format!("Error: approval rejected: {r}"),
-            None => String::from("Error: approval rejected"),
-        };
-        ctx.messages
-            .push(ChatMessage::tool_result(&call.id, &call.name, &body).with_tool_error(true));
-        self.emit(AgentEvent::ToolResult {
-            name: call.name.clone(),
-            content: body,
-            is_error: true,
-        })
-        .await;
-        let payload = RejectedPayload {
-            tool_name: call.name.clone(),
-            reason,
-        };
-        // `serde_json::to_string` on a two-field POD struct cannot fail
-        // under normal conditions; the fallback keeps the call panic-free
-        // (AGENTS.md production-code rule) and still lands on a
-        // recognisable sentinel for `map_outcome`.
-        let encoded = serde_json::to_string(&payload)
-            .unwrap_or_else(|_| String::from("{\"tool_name\":\"\"}"));
-        LoopOutcome::Failure(format!("{APPROVAL_REJECTED_SENTINEL_PREFIX}{encoded}"))
-    }
-}
 
 fn map_outcome(outcome: LoopOutcome, max_iterations: usize) -> Result<String, AgentError> {
     match outcome {
