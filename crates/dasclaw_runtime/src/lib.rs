@@ -77,6 +77,7 @@ pub mod rate_limit;
 pub mod recording;
 pub mod secrets;
 pub mod tool;
+pub(crate) mod tool_dispatch;
 pub mod tool_to_executor_adapter;
 
 pub use agent::{
