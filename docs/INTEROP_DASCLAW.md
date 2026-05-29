@@ -69,3 +69,11 @@ grep contract from Issue #911:
 - [`docs/plans/architecture-refactor/49-gui-readiness-assessment.md`](plans/architecture-refactor/49-gui-readiness-assessment.md)
   §5 (GUI readiness gaps) and §9 (B5 row)
 - ADR-153 §1.1 (B-series rollout for headless agent loop)
+- [`docs/plans/architecture-refactor/53-headless-agent-capability-design.md`](plans/architecture-refactor/53-headless-agent-capability-design.md)
+  (headless agent framework capability boundary; defines what is / is not part
+  of the headless library surface)
+- [`crates/dasclaw_runtime/README.md`](../crates/dasclaw_runtime/README.md)
+  (library-side getting-started for embedders) and
+  [`crates/dasclaw_cli/examples/headless_agent_starter.rs`](../crates/dasclaw_cli/examples/headless_agent_starter.rs)
+  (minimum runnable embed example covering responder + tool executor + approval
+  policy + event stream)
