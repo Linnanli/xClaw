@@ -52,9 +52,17 @@ fn main() {
     tracing::info!("Starting IronClaw Desktop Client (embedded mode)");
 
     // ── 启动 Tauri ────────────────────────────────────────────────
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_fs::init());
+
+    // Debug-only WebDriver automation plugin: starts an HTTP server on :4445
+    // that bridges W3C WebDriver commands into WKWebView. NEVER ship in
+    // production (gated by both feature flag AND debug_assertions).
+    #[cfg(all(debug_assertions, feature = "webdriver"))]
+    let builder = builder.plugin(tauri_plugin_webdriver::init());
+
+    builder
         .manage(desktop_client::state::EngineState::new())
         .manage(desktop_client::approval_polling::PendingTicketStore::init())
         // LogBroadcaster 作为 managed state 传给引擎，避免重复创建
