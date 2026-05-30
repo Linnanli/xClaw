@@ -27,6 +27,30 @@
 //! - **No prompt_history** — see issue #914 PR-D.
 //! - **No on-disk store** — see issue #914 PR-C.
 //!
+//! ## Extending session state without modifying `SessionSnapshot`
+//!
+//! Per ADR-160 / doc 56 §2.2, [`SessionSnapshot`] is a concrete struct,
+//! **not** an extension-slotted blob (no `extensions: serde_json::Value`,
+//! no `metadata: Map<String, Value>`). Third-party agents that need to
+//! persist extra state alongside the framework's session should use the
+//! **`WrappedSession`** pattern:
+//!
+//! ```ignore
+//! struct MyWrappedSession {
+//!     inner: SessionSnapshot,       // framework-owned, persisted via SessionStore
+//!     my_custom_state: MyState,     // wrapper-owned, persisted separately
+//! }
+//! ```
+//!
+//! The framework persists `inner` via [`SessionStore`]; the wrapper
+//! persists `my_custom_state` independently (its own JSONL file, sidecar
+//! table, etc.). When a field is meaningful to *all* agents, propose
+//! adding it to `SessionSnapshot` directly and bump [`SESSION_VERSION`]
+//! via the migration scaffolding in [`migration`].
+//!
+//! See `desktop-client/ironclaw` for a real wrapper that layers extension
+//! state on top of the framework snapshot.
+//!
 //! ## Example
 //!
 //! ```ignore
@@ -58,6 +82,7 @@ pub mod claw_compat;
 pub mod error;
 pub mod id;
 pub mod jsonl;
+pub mod migration;
 pub mod snapshot;
 pub mod store;
 
@@ -67,6 +92,7 @@ pub use claw_compat::{
 pub use error::SessionError;
 pub use id::{SESSION_VERSION, generate_session_id};
 pub use jsonl::{JsonlSessionStore, MAX_ROTATED_FILES, ROTATE_AFTER_BYTES};
+pub use migration::{MigrationError, migrate_to_latest, migrate_v1_to_v2};
 pub use snapshot::{
     SessionCompaction, SessionFork, SessionMetadata, SessionPromptEntry, SessionSnapshot,
 };
