@@ -197,7 +197,7 @@ agentic_loop 决定调 tool X
 **关键代码点**：
 - `crates/x_claw_agent/src/permissions.rs`
 - `desktop-client/ironclaw/crates/ironclaw_safety/src/policy.rs`
-- ApprovalGate 弹窗 IPC：`desktop-client/src-ui/`
+- ApprovalGate 弹窗 IPC：`desktop-client/ui/`
 
 **联动到 admin-backend**：ApprovalGate 规则来自 §7 `/api/policies/sensitive-ops`，contract test 必须覆盖"策略下发后立即生效"。
 

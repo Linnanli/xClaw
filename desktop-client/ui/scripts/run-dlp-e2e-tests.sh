@@ -42,7 +42,7 @@ echo ""
 
 # 第二步：启动前端开发服务器
 echo "🎨 Starting frontend dev server..."
-cd desktop-client/src-ui
+cd desktop-client/ui
 npm run dev &
 FRONTEND_PID=$!
 echo "   Frontend PID: $FRONTEND_PID"

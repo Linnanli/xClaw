@@ -427,7 +427,7 @@ Thread A: T1 → T2 → T3 → T4
 ### 4.1 当前 UI 组件结构
 
 ```
-src-ui/src/app/components/
+ui/src/app/components/
 ├── tabs/
 │   ├── ChatTabTauri.tsx      ← 主聊天界面
 │   ├── LogsTab.tsx           ← 日志
@@ -456,7 +456,7 @@ src-ui/src/app/components/
 
 ```
 新增组件:
-src-ui/src/app/components/assistant-ui/
+ui/src/app/components/assistant-ui/
 ├── tool-renderers/
 │   ├── FileReadRenderer.tsx     ← 语法高亮 + 行号 + 搜索
 │   ├── FileEditRenderer.tsx     ← inline diff 视图 (before/after)
@@ -493,7 +493,7 @@ src-ui/src/app/components/assistant-ui/
 
 ```
 新增组件:
-src-ui/src/app/components/tabs/
+ui/src/app/components/tabs/
 ├── WorkspaceTab.tsx         ← 工作区总览
 │   ├── FileTreeView.tsx     ← 文件树（glob 驱动，不是全量扫描）
 │   ├── GitStatusBar.tsx     ← 分支 + modified files + stale 警告
@@ -716,7 +716,7 @@ let normalized_params = prepare_tool_params(tool.as_ref(), &params);
 **方案**: 用 EchoTool 做最小技术 spike
 
 ```tsx
-// src-ui/src/app/components/assistant-ui/tool-renderers/echo-renderer.tsx
+// ui/src/app/components/assistant-ui/tool-renderers/echo-renderer.tsx
 // 最小验证：为 echo 工具注册自定义渲染器，确认 part.toolUI 被正确填充
 
 import { makeAssistantToolUI } from "@assistant-ui/react";
@@ -1470,7 +1470,7 @@ P2:
 ## 附录 B: 前端组件文件清单（新增）
 
 ```
-src-ui/src/app/components/
+ui/src/app/components/
 ├── assistant-ui/
 │   ├── tool-renderers/
 │   │   ├── index.ts                    ← 统一导出

@@ -3,7 +3,7 @@
 > 状态：**已实施（Phase 1 完成）**  
 > 创建时间：2026-04-20  
 > 实施时间：2026-04-20  
-> 涉及模块：`desktop-client/src/tauri_channel.rs`、`desktop-client/ironclaw/`、`desktop-client/src-ui/`
+> 涉及模块：`desktop-client/src/tauri_channel.rs`、`desktop-client/ironclaw/`、`desktop-client/ui/`
 
 ---
 
@@ -259,7 +259,7 @@ if !tc.parameters.is_null() {
 
 ##### 4.2.4 前端层 — TauriChatTransport
 
-**文件**: 新增 `desktop-client/src-ui/src/app/runtime/TauriChatTransport.ts`
+**文件**: 新增 `desktop-client/ui/src/app/runtime/TauriChatTransport.ts`
 
 实现 assistant-ui 的 transport 接口，将 Tauri IPC 事件桥接为 `useChatRuntime` 可消费的 ReadableStream。
 
@@ -279,7 +279,7 @@ export class TauriChatTransport {
 
 ##### 4.2.5 前端层 — TauriRuntimeProvider 简化
 
-**文件**: `desktop-client/src-ui/src/app/runtime/TauriRuntimeProvider.tsx`
+**文件**: `desktop-client/ui/src/app/runtime/TauriRuntimeProvider.tsx`
 
 核心变更：将 `useExternalStoreRuntime` + 手动事件处理 替换为 `useChatRuntime` + `TauriChatTransport`。
 
@@ -300,7 +300,7 @@ const runtime = useChatRuntime({ transport });
 
 ##### 4.2.6 前端层 — thread.tsx 消除双重渲染
 
-**文件**: `desktop-client/src-ui/src/app/components/assistant-ui/thread.tsx`
+**文件**: `desktop-client/ui/src/app/components/assistant-ui/thread.tsx`
 
 删除 `ToolStepIndicator` 时间线渲染块。`useChatRuntime` 会自动生成正确的 tool-call parts，由 `ToolFallback` 或注册的 `makeAssistantToolUI` 统一渲染。
 

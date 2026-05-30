@@ -266,7 +266,7 @@ desktop_client::ipc::toggle_plan_mode,   // 切换规划/执行模式
 #### 前端 UI 增强
 
 ```
-src-ui/src/app/
+ui/src/app/
 ├── components/
 │   ├── CodeEditor/           # 新增：代码编辑器面板 (Monaco 或 CodeMirror)
 │   │   ├── FileExplorer.tsx  #   文件树浏览器

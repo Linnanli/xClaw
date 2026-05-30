@@ -189,7 +189,7 @@ describe('SSE Tests (Real)', () => {
 
 ```bash
 cargo run -- run --cli-only --no-onboard &
-cd desktop-client/src-ui && npm run dev &
+cd desktop-client/ui && npm run dev &
 npm run test:e2e
 ```
 

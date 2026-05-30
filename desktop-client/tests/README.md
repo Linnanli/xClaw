@@ -40,10 +40,10 @@ tests/
     └── test_server.rs
 ```
 
-### 前端测试 (`src-ui/src/` 目录)
+### 前端测试 (`ui/src/` 目录)
 
 ```
-src-ui/src/app/
+ui/src/app/
 ├── components/
 │   ├── common/__tests__/ (7 个组件测试)
 │   │   ├── ConnectionStatus.test.tsx
@@ -116,7 +116,7 @@ cargo test --test chat_integration_tests
 ### 运行所有前端测试
 
 ```bash
-cd desktop-client/src-ui
+cd desktop-client/ui
 npm run test
 ```
 
@@ -133,7 +133,7 @@ npm run test -- components/common
 ### 运行 E2E 测试
 
 ```bash
-cd desktop-client/src-ui
+cd desktop-client/ui
 npm run test:e2e
 ```
 
@@ -149,7 +149,7 @@ cargo tarpaulin --out Html --output-dir coverage/
 ### 生成前端覆盖率报告
 
 ```bash
-cd desktop-client/src-ui
+cd desktop-client/ui
 npm run test:coverage
 ```
 

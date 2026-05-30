@@ -33,10 +33,10 @@
 前置：
 
 - `desktop-client/.env` 含 `LLM_BACKEND=anthropic` + `LLM_API_KEY=...`（或环境变量、或管理端 `~/Library/Application Support/ironclaw-desktop/admin_config.json`）
-- `cd desktop-client/src-ui && npm install`（首跑自动执行）
+- `cd desktop-client/ui && npm install`（首跑自动执行）
 - 已装 `cargo-tauri`（脚本调 `cargo tauri dev`）
 
-脚本流程：清 5173 端口 → `npm run dev`（前端 dev server）→ 探活 30s → `cargo tauri dev`（Rust + WebView）。前端：[desktop-client/src-ui/](../../../desktop-client/src-ui/)；引擎：嵌入式 [desktop-client/ironclaw/](../../../desktop-client/ironclaw/)（在 [desktop-client/Cargo.toml](../../../desktop-client/Cargo.toml#L60-L62) 中以 `ironclaw = { path = "./ironclaw", package = "dasclaw" }` 形式拉入，已和 dasclaw_runtime / dasclaw_safety / dasclaw_sandbox 联通）。
+脚本流程：清 5173 端口 → `npm run dev`（前端 dev server）→ 探活 30s → `cargo tauri dev`（Rust + WebView）。前端：[desktop-client/ui/](../../../desktop-client/ui/)；引擎：嵌入式 [desktop-client/ironclaw/](../../../desktop-client/ironclaw/)（在 [desktop-client/Cargo.toml](../../../desktop-client/Cargo.toml#L60-L62) 中以 `ironclaw = { path = "./ironclaw", package = "dasclaw" }` 形式拉入，已和 dasclaw_runtime / dasclaw_safety / dasclaw_sandbox 联通）。
 
 最近五次合并（PR #938 / #939 / #940 / #941 / #942）对启动链**零破坏**：
 

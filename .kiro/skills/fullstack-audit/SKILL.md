@@ -112,7 +112,7 @@ description: >
 
 #### 4c. 桌面客户端（Tauri）
 - `desktop-client/src/` — Tauri 命令
-- `desktop-client/src-ui/` — 前端 UI 和 invoke 调用
+- `desktop-client/ui/` — 前端 UI 和 invoke 调用
 - `desktop-client/src/lib.rs` 中的 `all_tauri_commands!()` — 命令注册
 
 注意：不是所有功能都需要客户端接入。用第二步的"消费方分析"判断——

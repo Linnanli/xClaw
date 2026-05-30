@@ -414,7 +414,7 @@ npm run dev
 ├── ironclaw/                    # 主项目（子模块）
 │   └── 后端服务（端口 3000）
 ├── desktop-client/              # 桌面客户端
-│   ├── src-ui/                  # 前端（端口 5173）
+│   ├── ui/                  # 前端（端口 5173）
 │   └── src-tauri/               # Tauri 应用
 ├── admin-backend/               # 管理后台（独立）
 │   ├── src/                     # 后端服务（端口 3000）

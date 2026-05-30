@@ -6,21 +6,21 @@
 
 **macOS/Linux:**
 ```bash
-cd desktop-client/src-ui
+cd desktop-client/ui
 chmod +x scripts/cypress/install.sh
 ./scripts/cypress/install.sh
 ```
 
 **Windows:**
 ```cmd
-cd desktop-client\src-ui
+cd desktop-client\ui
 scripts\cypress\install.bat
 ```
 
 ### 或使用 npm 脚本
 
 ```bash
-cd desktop-client/src-ui
+cd desktop-client/ui
 npm run install-cypress
 ```
 
@@ -38,8 +38,8 @@ npm run install-cypress
 
 | 文件 | 位置 | 说明 |
 |------|------|------|
-| `.npmrc` | `desktop-client/src-ui/.npmrc` | NPM 镜像配置 |
-| `.env.cypress` | `desktop-client/src-ui/.env.cypress` | Cypress 环境变量 |
+| `.npmrc` | `desktop-client/ui/.npmrc` | NPM 镜像配置 |
+| `.env.cypress` | `desktop-client/ui/.env.cypress` | Cypress 环境变量 |
 
 ## 🌍 镜像源配置
 

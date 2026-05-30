@@ -16,7 +16,7 @@ git clone <repository-url>
 cd x-claw/desktop-client
 
 # 2. 安装前端依赖
-cd src-ui
+cd ui
 npm install
 cd ..
 ```
@@ -28,7 +28,7 @@ cd ..
 ### 终端 1: 前端开发服务器
 
 ```bash
-cd desktop-client/src-ui
+cd desktop-client/ui
 npm run dev
 ```
 
@@ -54,7 +54,7 @@ cargo tauri dev
 
 ### 修改前端代码
 
-1. 编辑 `src-ui/src/` 中的文件
+1. 编辑 `ui/src/` 中的文件
 2. 保存 → 自动刷新 (1-2秒)
 
 ### 修改后端代码
@@ -77,7 +77,7 @@ cargo tauri dev
 cargo test
 
 # 前端测试
-cd src-ui
+cd ui
 npm run test
 ```
 
@@ -89,7 +89,7 @@ cargo clippy
 cargo fmt --check
 
 # 前端
-cd src-ui
+cd ui
 npm run lint
 ```
 
@@ -97,7 +97,7 @@ npm run lint
 
 ```bash
 # 1. 构建前端
-cd src-ui
+cd ui
 npm run build
 cd ..
 
@@ -118,7 +118,7 @@ desktop-client/
 │   ├── main.rs            # 应用入口
 │   ├── commands.rs        # Tauri 命令
 │   └── ...
-├── src-ui/                # React 前端
+├── ui/                # React 前端
 │   ├── src/
 │   │   ├── app/
 │   │   │   ├── components/  # UI 组件
@@ -148,7 +148,7 @@ taskkill /PID <PID> /F
 ```bash
 # 清除缓存
 cargo clean
-cd src-ui && rm -rf node_modules dist && npm install && cd ..
+cd ui && rm -rf node_modules dist && npm install && cd ..
 
 # 重新编译
 cargo tauri dev
