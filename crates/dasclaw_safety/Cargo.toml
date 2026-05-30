@@ -35,3 +35,8 @@ egress-gate = ["dep:async-trait", "dep:dasclaw_core"]
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros", "sync"] }
 async-trait = "0.1"
+# W10.0 (ADR-160): integration test drives the loop via the unified
+# `AgenticLoop` + `AgentResponder` surface re-exported by `dasclaw_runtime`.
+# Always pulled in for tests; the integration test itself is gated on the
+# `egress-gate` feature (which pulls in `dasclaw_core`).
+dasclaw_runtime = { path = "../dasclaw_runtime" }
