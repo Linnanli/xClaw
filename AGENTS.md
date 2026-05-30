@@ -128,7 +128,7 @@
     - **合并下层 PR 时，必须在以下两条路径里二选一，禁止两条都不做就直接 squash + delete branch**：
       - **路径 A（推荐）**：合并下层 PR 时**不要勾选 "Delete branch"**，等所有 stacked 上层 PR 都已 rebase + 合并完，再统一清理分支
       - **路径 B**：合并下层 PR 后，**在下层分支被删之前**，立刻在 GitHub 上把上层 PR 的 base 切到 `xClaw`（或下一层仍存活的 base）
-    - 若两条路径都没做、下层分支已删，GitHub 会**自动关闭上层 PR 且无法 reopen**（GraphQL 报 "base ref 已删，无法 reopen"），届时只能本地 `git rebase --onto origin/<base> <lower-tip>` 后**新开 PR 替代**，原 PR 编号永久失效。实证：2026-05-25 #816 因合 #814 后 base 被删自动关闭，被迫开 #817 替代
+    - 若两条路径都没做、下层分支已删，GitHub 会**自动关闭上层 PR 且无法 reopen**（GraphQL 报 "base ref 已删，无法 reopen"），届时只能本地 `git rebase --onto origin/<base> <lower-tip>` 后**新开 PR 替代**，原 PR 编号永久失效。实证：2026-05-25 #816 因合 #814 后 base 被删自动关闭，被迫开 #817 替代；2026-05-30 W8 系列 #975 / #976 / #977 因连环忽略路径 A/B，依次被迫重开为 #978 / #979 / #980，每层多花一个 PR 编号 + 一次本地 rebase
 8. 开完 PR 后，**必须用 `gh pr checks <PR#> --watch --fail-fast` 等 CI**（事件驱动，CI 一结束就返回）。**禁止用 `sleep N && gh pr checks` 轮询**——`sleep` 既浪费时间又拿不到精确完成点，违反本规约。把 watch 输出的结果同步给用户。
 9. 若当前闭环 milestone 已完成，按“会话轮换原则”判断是否该建议新会话
 
