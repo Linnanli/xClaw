@@ -5,7 +5,8 @@
 //! Streams real-time events (message, tool_use, tool_result, result) through
 //! the orchestrator's job event pipeline for UI visibility.
 //!
-//! Uses the shared `AgenticLoop` engine via `ContainerDelegate`.
+//! Drives the shared `dasclaw_runtime::AgenticLoop` via `ContainerResponder`
+//! (LLM seam) and `ContainerDispatcher` (tool seam) — ADR-160 §3 L2.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -15,12 +16,12 @@ use async_trait::async_trait;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::agent::agentic_loop::{
-    AgenticLoopConfig, LoopDelegate, LoopOutcome, LoopSignal, TextAction, truncate_for_preview,
-};
+use crate::agent::agentic_loop::{AgenticLoopConfig, truncate_for_preview};
 use crate::config::SafetyConfig;
 use crate::error::WorkerError;
-use crate::llm::{ChatMessage, LlmProvider, Reasoning, ReasoningContext, ResponseMetadata};
+use crate::llm::{
+    ChatMessage, LlmProvider, Reasoning, ReasoningContext, RespondOutput, ResponseMetadata,
+};
 use crate::safety::SafetyLayer;
 use crate::tools::ToolRegistry;
 use crate::tools::execute::{execute_tool_simple, process_tool_result};
@@ -30,8 +31,12 @@ use crate::worker::autonomous_recovery::{
     EMPTY_TOOL_COMPLETION_NUDGE, FORCE_TEXT_RECOVERY_PROMPT,
 };
 use crate::worker::proxy_llm::ProxyLlmProvider;
+use dasclaw_core::TokenUsage;
+use dasclaw_core::messages::ToolCall;
 use dasclaw_core::traits::HostError;
 use dasclaw_runtime::context::JobContext;
+use dasclaw_runtime::tool_dispatch::ToolDispatcher;
+use dasclaw_runtime::{AgentResponder, AgenticLoop, LoopOutcome, TextAction};
 
 /// Configuration for the worker runtime.
 pub struct WorkerConfig {
@@ -196,16 +201,26 @@ Work independently to complete this job. When finished, your final message MUST 
         );
 
         // Run with timeout using the shared agentic loop
+        let last_output = Arc::new(Mutex::new(String::new()));
+        let recovery_state = Arc::new(Mutex::new(AutonomousRecoveryState::default()));
+
         let result = tokio::time::timeout(self.config.timeout, async {
-            let delegate = ContainerDelegate {
+            let responder = ContainerResponder {
+                client: self.client.clone(),
+                tools: self.tools.clone(),
+                last_output: last_output.clone(),
+                iteration_tracker: iteration_tracker.clone(),
+                recovery_state: recovery_state.clone(),
+                reasoning,
+            };
+
+            let dispatcher = ContainerDispatcher {
                 client: self.client.clone(),
                 safety: self.safety.clone(),
                 tools: self.tools.clone(),
                 extra_env: self.extra_env.clone(),
-                last_output: Mutex::new(String::new()),
-                iteration_tracker: iteration_tracker.clone(),
-                recovery_state: Mutex::new(AutonomousRecoveryState::default()),
-                reasoning,
+                last_output: last_output.clone(),
+                recovery_state: recovery_state.clone(),
             };
 
             let config = AgenticLoopConfig {
@@ -214,26 +229,28 @@ Work independently to complete this job. When finished, your final message MUST 
                 max_tool_intent_nudges: 2,
             };
 
-            crate::agent::agentic_loop::run_agentic_loop(
-                &delegate,
-                &mut reason_ctx,
-                &config,
-                // Phase 3 Step G: SafetyLayer wired in via IronclawSafetyHook.
-                // sandbox/secrets/approval still default; container worker is
-                // already inside Docker (no nested sandbox needed) and runs
-                // unattended (auto-approve).
-                //
-                // Issue #73 slice D: PermissionMode threaded explicitly.
-                // Issue #73 slice E: workspace boundary is capability-validated;
-                // container workers run inside an isolated Docker FS so the
-                // capability handle is over the in-container cwd.
-                &crate::agent::agentic_loop::hook_bundle_with_safety(
-                    self.safety.clone(),
-                    workspace_cap.clone(),
-                    crate::agent::agentic_loop::PermissionMode::WorkspaceWrite,
-                ),
-            )
-            .await
+            // Phase 3 Step G: SafetyLayer wired in via IronclawSafetyHook.
+            // sandbox/secrets/approval still default; container worker is
+            // already inside Docker (no nested sandbox needed) and runs
+            // unattended (auto-approve).
+            //
+            // Issue #73 slice D: PermissionMode threaded explicitly.
+            // Issue #73 slice E: workspace boundary is capability-validated;
+            // container workers run inside an isolated Docker FS so the
+            // capability handle is over the in-container cwd.
+            let hooks = crate::agent::agentic_loop::hook_bundle_with_safety(
+                self.safety.clone(),
+                workspace_cap.clone(),
+                crate::agent::agentic_loop::PermissionMode::WorkspaceWrite,
+            );
+
+            // ADR-160 §3 L2: drive the shared engine with responder + dispatcher.
+            // No cancellation token — container worker lifecycle is owned by the
+            // orchestrator (check_signals always Continue). No event channel —
+            // events are streamed via WorkerHttpClient::post_event instead.
+            AgenticLoop::new(Arc::new(responder), Some(Arc::new(dispatcher)), None, None)
+                .run(&mut reason_ctx, &config, &hooks)
+                .await
         })
         .await;
 
@@ -357,36 +374,38 @@ Work independently to complete this job. When finished, your final message MUST 
     }
 }
 
-/// Container delegate: implements `LoopDelegate` for the Docker container context.
+/// Free helper so both responder and dispatcher can post job events without
+/// duplicating the small async wrapper.
+async fn post_job_event(client: &WorkerHttpClient, event_type: &str, data: serde_json::Value) {
+    client
+        .post_event(&JobEventPayload {
+            event_type: event_type.to_string(),
+            data,
+        })
+        .await;
+}
+
+/// LLM seam for the container worker — ADR-160 §3 L2.
 ///
-/// Tools execute sequentially. Events are posted to the orchestrator via HTTP.
-/// Completion is detected via `llm_signals_completion()`.
-struct ContainerDelegate {
+/// Owns the `Reasoning` engine and the autonomous-recovery decisions taken on
+/// each iteration / text response. Shares `last_output` and `recovery_state`
+/// with `ContainerDispatcher` via `Arc<Mutex<_>>`.
+struct ContainerResponder {
     client: Arc<WorkerHttpClient>,
-    safety: Arc<SafetyLayer>,
     tools: Arc<ToolRegistry>,
-    extra_env: Arc<HashMap<String, String>>,
-    /// Tracks the last successful tool output for the final response.
-    last_output: Mutex<String>,
+    /// Last successful tool output — read here to back-fill the final response
+    /// when the model signals completion with an empty text body.
+    last_output: Arc<Mutex<String>>,
     /// Tracks the current iteration — shared with the outer `run` method so
     /// `CompletionReport` can include accurate iteration counts.
     iteration_tracker: Arc<Mutex<u32>>,
-    recovery_state: Mutex<AutonomousRecoveryState>,
-    /// Route-B (D-4.5): the delegate owns the LLM reasoning engine instead
-    /// of receiving it as a loop parameter.
+    /// Shared with `ContainerDispatcher` (Arc<Mutex>): responder runs
+    /// `begin_iteration` + `on_text_response`, dispatcher runs `on_valid_tool_call`.
+    recovery_state: Arc<Mutex<AutonomousRecoveryState>>,
     reasoning: Reasoning,
 }
 
-impl ContainerDelegate {
-    async fn post_event(&self, event_type: &str, data: serde_json::Value) {
-        self.client
-            .post_event(&JobEventPayload {
-                event_type: event_type.to_string(),
-                data,
-            })
-            .await;
-    }
-
+impl ContainerResponder {
     /// Poll the orchestrator for a follow-up prompt. If one is available,
     /// inject it as a user message into the reasoning context.
     async fn poll_and_inject_prompt(&self, reason_ctx: &mut ReasoningContext) {
@@ -396,7 +415,8 @@ impl ContainerDelegate {
                     "Received follow-up prompt: {}",
                     truncate_for_preview(&prompt.content, 100)
                 );
-                self.post_event(
+                post_job_event(
+                    &self.client,
                     "message",
                     serde_json::json!({
                         "role": "user",
@@ -415,12 +435,7 @@ impl ContainerDelegate {
 }
 
 #[async_trait]
-impl LoopDelegate for ContainerDelegate {
-    async fn check_signals(&self) -> LoopSignal {
-        // Container runtime has no stop signals — the orchestrator manages lifecycle.
-        LoopSignal::Continue
-    }
-
+impl AgentResponder for ContainerResponder {
     async fn before_llm_call(
         &self,
         reason_ctx: &mut ReasoningContext,
@@ -471,11 +486,7 @@ impl LoopDelegate for ContainerDelegate {
         None
     }
 
-    async fn call_llm(
-        &self,
-        reason_ctx: &mut ReasoningContext,
-        _iteration: usize,
-    ) -> Result<crate::llm::RespondOutput, HostError> {
+    async fn respond(&self, reason_ctx: &mut ReasoningContext) -> Result<RespondOutput, HostError> {
         // Container uses respond_with_tools (which may return either text or tool calls)
         self.reasoning
             .respond_with_tools(reason_ctx)
@@ -487,7 +498,7 @@ impl LoopDelegate for ContainerDelegate {
         &self,
         text: &str,
         metadata: ResponseMetadata,
-        usage: dasclaw_core::TokenUsage,
+        usage: TokenUsage,
         reason_ctx: &mut ReasoningContext,
     ) -> TextAction {
         let action = {
@@ -497,7 +508,8 @@ impl LoopDelegate for ContainerDelegate {
         match action {
             AutonomousRecoveryAction::ToolModeNudge => {
                 tracing::warn!("Malformed empty tool completion detected; retrying in tool mode");
-                self.post_event(
+                post_job_event(
+                    &self.client,
                     "status",
                     serde_json::json!({
                         "message": "Model returned an empty tool-completion response; retrying with a stronger tool-use nudge.",
@@ -513,7 +525,8 @@ impl LoopDelegate for ContainerDelegate {
                 tracing::warn!(
                     "Repeated malformed tool completions detected; switching to text-only recovery"
                 );
-                self.post_event(
+                post_job_event(
+                    &self.client,
                     "status",
                     serde_json::json!({
                         "message": "Model returned repeated empty tool-completion responses; requesting a final status update without tools.",
@@ -534,7 +547,8 @@ impl LoopDelegate for ContainerDelegate {
             AutonomousRecoveryAction::Continue => {}
         }
 
-        self.post_event(
+        post_job_event(
+            &self.client,
             "message",
             serde_json::json!({
                 "role": "assistant",
@@ -560,11 +574,46 @@ impl LoopDelegate for ContainerDelegate {
         TextAction::Continue
     }
 
-    async fn execute_tool_calls(
+    async fn on_tool_intent_nudge(&self, text: &str, _reason_ctx: &mut ReasoningContext) {
+        post_job_event(
+            &self.client,
+            "message",
+            serde_json::json!({
+                "role": "assistant",
+                "content": truncate_for_preview(text, 2000),
+                "nudge": true,
+            }),
+        )
+        .await;
+    }
+
+    async fn after_iteration(&self, _iteration: usize) {
+        // Brief pause between iterations
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Tool seam for the container worker — ADR-160 §3 L2.
+///
+/// Executes tools sequentially (no parallel execution in container context)
+/// and streams `tool_use` / `tool_result` events back to the orchestrator.
+/// Shares `last_output` and `recovery_state` with `ContainerResponder`.
+struct ContainerDispatcher {
+    client: Arc<WorkerHttpClient>,
+    safety: Arc<SafetyLayer>,
+    tools: Arc<ToolRegistry>,
+    extra_env: Arc<HashMap<String, String>>,
+    last_output: Arc<Mutex<String>>,
+    recovery_state: Arc<Mutex<AutonomousRecoveryState>>,
+}
+
+#[async_trait]
+impl ToolDispatcher for ContainerDispatcher {
+    async fn dispatch(
         &self,
-        tool_calls: Vec<crate::llm::ToolCall>,
+        tool_calls: Vec<ToolCall>,
         content: Option<String>,
-        usage: dasclaw_core::TokenUsage,
+        usage: TokenUsage,
         reason_ctx: &mut ReasoningContext,
     ) -> Result<Option<LoopOutcome>, HostError> {
         {
@@ -573,7 +622,8 @@ impl LoopDelegate for ContainerDelegate {
         }
 
         if let Some(ref text) = content {
-            self.post_event(
+            post_job_event(
+                &self.client,
                 "message",
                 serde_json::json!({
                     "role": "assistant",
@@ -590,7 +640,8 @@ impl LoopDelegate for ContainerDelegate {
 
         // Execute tools sequentially (container context — no parallel execution)
         for tc in tool_calls {
-            self.post_event(
+            post_job_event(
+                &self.client,
                 "tool_use",
                 serde_json::json!({
                     "tool_name": tc.name,
@@ -613,7 +664,8 @@ impl LoopDelegate for ContainerDelegate {
             )
             .await;
 
-            self.post_event(
+            post_job_event(
+                &self.client,
                 "tool_result",
                 serde_json::json!({
                     "tool_name": tc.name,
@@ -636,23 +688,6 @@ impl LoopDelegate for ContainerDelegate {
         }
 
         Ok(None)
-    }
-
-    async fn on_tool_intent_nudge(&self, text: &str, _reason_ctx: &mut ReasoningContext) {
-        self.post_event(
-            "message",
-            serde_json::json!({
-                "role": "assistant",
-                "content": truncate_for_preview(text, 2000),
-                "nudge": true,
-            }),
-        )
-        .await;
-    }
-
-    async fn after_iteration(&self, _iteration: usize) {
-        // Brief pause between iterations
-        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
