@@ -10,8 +10,8 @@ homepage = "https://github.com/nearai/ironclaw"
 repository = "https://github.com/nearai/ironclaw"
 # ADR-114 Ⅴ — invoke the canonical `dasclaw` binary by default. The legacy
 # `ironclaw` binary is kept as a deprecation shim that prints a warning and
-# then runs the same code path; see `[[bin]]` blocks below and the argv[0]
-# branch at the top of `fn main()` in `src/main.rs`.
+# then runs the same code path; both entry points live under `src/bin/` and
+# delegate to the shared `ironclaw::entry::run` helper.
 default-run = "dasclaw"
 
 [package.metadata.wix]
@@ -29,18 +29,12 @@ eula = false
 name = "ironclaw"
 path = "src/lib.rs"
 
-# ADR-114 Ⅴ — canonical entry point.
-[[bin]]
-name = "dasclaw"
-path = "src/main.rs"
-
-# ADR-114 Ⅴ — legacy entry point retained for one release cycle as a
-# compatibility alias. The same `src/main.rs` is compiled twice; the
-# binary detects argv[0] == "ironclaw" and emits a single deprecation
-# warning to stderr before delegating to the normal startup flow.
-[[bin]]
-name = "ironclaw"
-path = "src/main.rs"
+# ADR-114 Ⅴ — the canonical `dasclaw` and legacy `ironclaw` entry points
+# are auto-discovered from `src/bin/dasclaw.rs` and `src/bin/ironclaw.rs`
+# respectively. Each is a thin wrapper around `ironclaw::entry::run` so
+# the startup flow stays single-sourced without forcing cargo to compile
+# `src/main.rs` into two binaries (which produced a
+# "file ... found to be present in multiple build targets" warning).
 
 [dependencies]
 # Async runtime
@@ -121,7 +115,9 @@ dasclaw_core = { path = "../../crates/dasclaw_core", version = "0.1.0" }
 dasclaw_exec = { path = "../../crates/dasclaw_exec", version = "0.1.0" }
 dasclaw_sandbox = { path = "../../crates/dasclaw_sandbox", version = "0.0.0-w1" }
 # #324 sub-task 1 — pre-main hardening (disable core dumps / ptrace / dangerous
-# env vars). Wired via `#[ctor::ctor] fn pre_main()` at the top of main.rs.
+# env vars). Wired via `#[ctor::ctor] fn pre_main()` at the top of each
+# `src/bin/*.rs` so it fires only when an actual binary is invoked (not on
+# library loads from tests / downstream crates).
 # Pattern matches codex `responses-api-proxy/src/main.rs:4-7`.
 dasclaw_process_hardening = { path = "../../crates/dasclaw_process_hardening" }
 ctor = "0.2"
