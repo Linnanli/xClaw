@@ -1,24 +1,16 @@
-//! IronClaw - Main entry point.
-
-/// #324 sub-task 1 — Pre-main process hardening hook.
-///
-/// Runs before `fn main()` (via `#[ctor::ctor]`) to disable core dumps,
-/// block ptrace attach, and scrub dangerous environment variables
-/// (`LD_PRELOAD`, `DYLD_*`, macOS malloc stack-logging controls, …).
-///
-/// Pattern mirrors codex `responses-api-proxy/src/main.rs:4-7`. Applies to
-/// both the `dasclaw` and `ironclaw` binaries (same `[[bin]] path`).
-#[ctor::ctor]
-fn pre_main() {
-    dasclaw_process_hardening::pre_main_hardening();
-}
+//! Shared synchronous + async entry point for the `dasclaw` and `ironclaw` binaries.
+//!
+//! ADR-114 Ⅴ — the package ships two binaries: `dasclaw` (canonical) and
+//! `ironclaw` (deprecated legacy alias). Each `src/bin/*.rs` is a thin
+//! wrapper that calls [`run`] with an optional deprecation marker so the
+//! actual startup flow remains single-sourced here.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
 
-use ironclaw::{
+use crate::{
     agent::{Agent, AgentDeps},
     app::{AppBuilder, AppBuilderFlags},
     channels::{
@@ -42,32 +34,26 @@ use ironclaw::{
 };
 
 #[cfg(unix)]
-use ironclaw::channels::ChannelSecretUpdater;
+use crate::channels::ChannelSecretUpdater;
 #[cfg(any(feature = "postgres", feature = "libsql"))]
-use ironclaw::setup::{SetupConfig, SetupWizard};
+use crate::setup::{SetupConfig, SetupWizard};
 
 /// Synchronous entry point. Loads `.env` files before the Tokio runtime
 /// starts so that `std::env::set_var` is safe (no worker threads yet).
-fn main() -> anyhow::Result<()> {
-    // ADR-114 Ⅴ — same `src/main.rs` is compiled into two binaries:
-    // `dasclaw` (canonical) and `ironclaw` (legacy compatibility shim).
-    // When invoked through the legacy name, emit a single deprecation
-    // warning to stderr before continuing with the normal startup flow.
-    // We inspect argv[0] (`current_exe()`) instead of a compile-time flag
-    // so that one source file backs both `[[bin]]` entries — keeping the
-    // entry point logic single-sourced (no patch-style duplication).
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(stem) = exe.file_stem().and_then(|s| s.to_str())
-        && stem.eq_ignore_ascii_case("ironclaw")
-    {
+///
+/// When invoked through the legacy `ironclaw` binary, `legacy_alias`
+/// carries `Some("ironclaw")` so a single deprecation warning is emitted
+/// to stderr before the normal startup flow.
+pub fn run(legacy_alias: Option<&str>) -> anyhow::Result<()> {
+    if let Some(alias) = legacy_alias {
         eprintln!(
-            "warning: the `ironclaw` binary is deprecated and will be removed in a future \
+            "warning: the `{alias}` binary is deprecated and will be removed in a future \
              release; use `dasclaw` instead. (ADR-114 Ⅴ — Cargo package + binary rename)"
         );
     }
 
     let _ = dotenvy::dotenv();
-    ironclaw::bootstrap::load_ironclaw_env();
+    crate::bootstrap::load_ironclaw_env();
 
     let result = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -82,7 +68,7 @@ fn main() -> anyhow::Result<()> {
 
 /// Format a top-level error with color and recovery hints.
 fn format_top_level_error(err: &anyhow::Error) {
-    use ironclaw::cli::fmt;
+    use crate::cli::fmt;
     let msg = format!("{err:#}");
 
     eprintln!();
@@ -125,23 +111,20 @@ async fn async_main() -> anyhow::Result<()> {
         }
         Some(Command::Config(config_cmd)) => {
             init_cli_tracing();
-            return ironclaw::cli::run_config_command(config_cmd.clone()).await;
+            return crate::cli::run_config_command(config_cmd.clone()).await;
         }
         Some(Command::Registry(registry_cmd)) => {
             init_cli_tracing();
-            return ironclaw::cli::run_registry_command(registry_cmd.clone()).await;
+            return crate::cli::run_registry_command(registry_cmd.clone()).await;
         }
         Some(Command::Channels(channels_cmd)) => {
             init_cli_tracing();
-            return ironclaw::cli::run_channels_command(
-                channels_cmd.clone(),
-                cli.config.as_deref(),
-            )
-            .await;
+            return crate::cli::run_channels_command(channels_cmd.clone(), cli.config.as_deref())
+                .await;
         }
         Some(Command::Routines(routines_cmd)) => {
             init_cli_tracing();
-            return ironclaw::cli::run_routines_cli(routines_cmd, cli.config.as_deref()).await;
+            return crate::cli::run_routines_cli(routines_cmd, cli.config.as_deref()).await;
         }
         Some(Command::Mcp(mcp_cmd)) => {
             init_cli_tracing();
@@ -149,7 +132,7 @@ async fn async_main() -> anyhow::Result<()> {
         }
         Some(Command::Memory(mem_cmd)) => {
             init_cli_tracing();
-            return ironclaw::cli::run_memory_command(mem_cmd).await;
+            return crate::cli::run_memory_command(mem_cmd).await;
         }
         Some(Command::Pairing(pairing_cmd)) => {
             init_cli_tracing();
@@ -161,30 +144,27 @@ async fn async_main() -> anyhow::Result<()> {
         }
         Some(Command::Skills(skills_cmd)) => {
             init_cli_tracing();
-            return ironclaw::cli::run_skills_command(skills_cmd.clone(), cli.config.as_deref())
-                .await;
+            return crate::cli::run_skills_command(skills_cmd.clone(), cli.config.as_deref()).await;
         }
         Some(Command::Cert(cert_cmd)) => {
             init_cli_tracing();
-            return ironclaw::cli::run_cert_command(cert_cmd.clone());
+            return crate::cli::run_cert_command(cert_cmd.clone());
         }
         Some(Command::Hooks(hooks_cmd)) => {
             init_cli_tracing();
-            return ironclaw::cli::run_hooks_command(hooks_cmd.clone(), cli.config.as_deref())
-                .await;
+            return crate::cli::run_hooks_command(hooks_cmd.clone(), cli.config.as_deref()).await;
         }
         Some(Command::Logs(logs_cmd)) => {
             init_cli_tracing();
-            return ironclaw::cli::run_logs_command(logs_cmd.clone(), cli.config.as_deref()).await;
+            return crate::cli::run_logs_command(logs_cmd.clone(), cli.config.as_deref()).await;
         }
         Some(Command::Models(models_cmd)) => {
             init_cli_tracing();
-            return ironclaw::cli::run_models_command(models_cmd.clone(), cli.config.as_deref())
-                .await;
+            return crate::cli::run_models_command(models_cmd.clone(), cli.config.as_deref()).await;
         }
         Some(Command::Doctor) => {
             init_cli_tracing();
-            return ironclaw::cli::run_doctor_command().await;
+            return crate::cli::run_doctor_command().await;
         }
         Some(Command::Status) => {
             init_cli_tracing();
@@ -192,7 +172,7 @@ async fn async_main() -> anyhow::Result<()> {
         }
         Some(Command::Migrate(migrate_cmd)) => {
             init_cli_tracing();
-            return ironclaw::cli::run_migrate_command(migrate_cmd.clone());
+            return crate::cli::run_migrate_command(migrate_cmd.clone());
         }
         Some(Command::Completion(completion)) => {
             init_cli_tracing();
@@ -201,8 +181,8 @@ async fn async_main() -> anyhow::Result<()> {
         #[cfg(feature = "import")]
         Some(Command::Import(import_cmd)) => {
             init_cli_tracing();
-            let config = ironclaw::config::Config::from_env().await?;
-            return ironclaw::cli::run_import_command(import_cmd, &config).await;
+            let config = crate::config::Config::from_env().await?;
+            return crate::cli::run_import_command(import_cmd, &config).await;
         }
         Some(Command::Worker {
             job_id,
@@ -210,7 +190,7 @@ async fn async_main() -> anyhow::Result<()> {
             max_iterations,
         }) => {
             init_worker_tracing();
-            return ironclaw::worker::run_worker(*job_id, orchestrator_url, *max_iterations).await;
+            return crate::worker::run_worker(*job_id, orchestrator_url, *max_iterations).await;
         }
         Some(Command::ClaudeBridge {
             job_id,
@@ -219,13 +199,8 @@ async fn async_main() -> anyhow::Result<()> {
             model,
         }) => {
             init_worker_tracing();
-            return ironclaw::worker::run_claude_bridge(
-                *job_id,
-                orchestrator_url,
-                *max_turns,
-                model,
-            )
-            .await;
+            return crate::worker::run_claude_bridge(*job_id, orchestrator_url, *max_turns, model)
+                .await;
         }
         Some(Command::Login { openai_codex }) => {
             init_cli_tracing();
@@ -237,9 +212,8 @@ async fn async_main() -> anyhow::Result<()> {
                         .await
                         .map_err(|e| anyhow::anyhow!("{}", e))?;
                     config.llm.openai_codex.unwrap_or_else(|| {
-                        use ironclaw::llm::OpenAiCodexConfig;
-                        let mut cfg =
-                            OpenAiCodexConfig::new(&ironclaw::bootstrap::dasclaw_base_dir());
+                        use crate::llm::OpenAiCodexConfig;
+                        let mut cfg = OpenAiCodexConfig::new(&crate::bootstrap::dasclaw_base_dir());
                         if let Ok(v) = std::env::var("OPENAI_CODEX_AUTH_URL") {
                             cfg.auth_endpoint = v;
                         }
@@ -255,7 +229,7 @@ async fn async_main() -> anyhow::Result<()> {
                         cfg
                     })
                 };
-                let mgr = ironclaw::llm::OpenAiCodexSessionManager::new(codex_config)
+                let mgr = crate::llm::OpenAiCodexSessionManager::new(codex_config)
                     .map_err(|e| anyhow::anyhow!("{}", e))?;
                 mgr.device_code_login()
                     .await
@@ -302,14 +276,14 @@ async fn async_main() -> anyhow::Result<()> {
     }
 
     // ── PID lock (prevent multiple instances) ────────────────────────
-    let _pid_lock = match ironclaw::bootstrap::PidLock::acquire() {
+    let _pid_lock = match crate::bootstrap::PidLock::acquire() {
         Ok(lock) => Some(lock),
-        Err(ironclaw::bootstrap::PidLockError::AlreadyRunning { pid }) => {
+        Err(crate::bootstrap::PidLockError::AlreadyRunning { pid }) => {
             anyhow::bail!(
                 "Another IronClaw instance is already running (PID {}). \
                  If this is incorrect, remove the stale PID file: {}",
                 pid,
-                ironclaw::bootstrap::pid_lock_path().display()
+                crate::bootstrap::pid_lock_path().display()
             );
         }
         Err(e) => {
@@ -326,7 +300,7 @@ async fn async_main() -> anyhow::Result<()> {
     // Enhanced first-run detection
     #[cfg(any(feature = "postgres", feature = "libsql"))]
     if !cli.no_onboard
-        && let Some(reason) = ironclaw::setup::check_onboard_needed()
+        && let Some(reason) = crate::setup::check_onboard_needed()
     {
         println!("Onboarding needed: {}", reason);
         println!();
@@ -347,7 +321,7 @@ async fn async_main() -> anyhow::Result<()> {
     let toml_path = cli.config.as_deref();
     let config = match Config::from_env_with_toml(toml_path).await {
         Ok(c) => c,
-        Err(ironclaw::error::ConfigError::MissingRequired { key, hint }) => {
+        Err(crate::error::ConfigError::MissingRequired { key, hint }) => {
             anyhow::bail!(
                 "Configuration error: Missing required setting '{}'. {}. \
                  Run 'ironclaw onboard' to configure, or set the required environment variables.",
@@ -367,7 +341,7 @@ async fn async_main() -> anyhow::Result<()> {
     // Initialize tracing with a reloadable EnvFilter so the gateway can switch
     // log levels at runtime without restarting.
     let log_level_handle =
-        ironclaw::channels::web::log_layer::init_tracing(Arc::clone(&log_broadcaster));
+        crate::channels::web::log_layer::init_tracing(Arc::clone(&log_broadcaster));
 
     tracing::debug!("Starting IronClaw...");
     tracing::debug!("Loaded configuration for agent: {}", config.agent.name);
@@ -390,11 +364,11 @@ async fn async_main() -> anyhow::Result<()> {
 
     // ── Tunnel setup ───────────────────────────────────────────────────
 
-    let (config, active_tunnel) = ironclaw::tunnel::start_managed_tunnel(config).await;
+    let (config, active_tunnel) = crate::tunnel::start_managed_tunnel(config).await;
 
     // ── Orchestrator / container job manager ────────────────────────────
 
-    let orch = ironclaw::orchestrator::setup_orchestrator(
+    let orch = crate::orchestrator::setup_orchestrator(
         &config,
         &components.llm,
         components.db.as_ref(),
@@ -414,12 +388,12 @@ async fn async_main() -> anyhow::Result<()> {
 
     // Derive user-facing warning from docker_status for channel notification
     let docker_user_warning: Option<String> = match docker_status {
-        ironclaw::sandbox::DockerStatus::NotInstalled => Some(
+        crate::sandbox::DockerStatus::NotInstalled => Some(
             "Sandbox is enabled but Docker is not installed -- \
              full_job routines will fail until Docker is available."
                 .to_string(),
         ),
-        ironclaw::sandbox::DockerStatus::NotRunning => Some(
+        crate::sandbox::DockerStatus::NotRunning => Some(
             "Sandbox is enabled but Docker is not running -- \
              full_job routines will fail until Docker is started."
                 .to_string(),
@@ -464,7 +438,7 @@ async fn async_main() -> anyhow::Result<()> {
     }
 
     // Shared routine engine slot for gateway + generic webhook ingress.
-    let shared_routine_engine_slot: ironclaw::channels::web::server::RoutineEngineSlot =
+    let shared_routine_engine_slot: crate::channels::web::server::RoutineEngineSlot =
         Arc::new(tokio::sync::RwLock::new(None));
 
     // Collect webhook route fragments; a single WebhookServer hosts them all.
@@ -490,7 +464,7 @@ async fn async_main() -> anyhow::Result<()> {
         );
     }
     if config.channels.wasm_channels_enabled && config.channels.wasm_channels_dir.exists() {
-        let wasm_result = ironclaw::channels::wasm::setup_wasm_channels(
+        let wasm_result = crate::channels::wasm::setup_wasm_channels(
             &config,
             &components.secrets_store,
             components.extension_manager.as_ref(),
@@ -537,7 +511,7 @@ async fn async_main() -> anyhow::Result<()> {
     // Add HTTP channel if configured and not CLI-only mode.
     let mut webhook_server_addr: Option<std::net::SocketAddr> = None;
     #[cfg(unix)]
-    let mut http_channel_state: Option<Arc<ironclaw::channels::HttpChannelState>> = None;
+    let mut http_channel_state: Option<Arc<crate::channels::HttpChannelState>> = None;
     if !cli.cli_only
         && let Some(ref http_config) = config.channels.http
     {
@@ -613,7 +587,7 @@ async fn async_main() -> anyhow::Result<()> {
     // Lazy scheduler slot — filled after Agent::new creates the JobDispatcher.
     // Allows CreateJobTool to dispatch local jobs via the JobDispatcher even though
     // the JobDispatcher is created after tools are registered (chicken-and-egg).
-    let scheduler_slot: ironclaw::tools::builtin::JobDispatcherSlot =
+    let scheduler_slot: crate::tools::builtin::JobDispatcherSlot =
         Arc::new(tokio::sync::RwLock::new(None));
 
     // Register job tools (sandbox deps auto-injected when container_job_manager is available)
@@ -628,7 +602,7 @@ async fn async_main() -> anyhow::Result<()> {
             // create_job / list_jobs / job_status / cancel_job /
             // job_events / job_prompt entirely. The LLM never sees these
             // 6 tool definitions in Disabled mode.
-            job_config: ironclaw::tools::bootstrap::job_tools_for_mode(
+            job_config: crate::tools::bootstrap::job_tools_for_mode(
                 &config.job_runtime.mode,
                 || JobToolsConfig {
                     context_manager: Arc::clone(&components.context_manager),
@@ -654,7 +628,7 @@ async fn async_main() -> anyhow::Result<()> {
     // ── Gateway channel ────────────────────────────────────────────────
 
     let mut gateway_url: Option<String> = None;
-    let mut sse_manager: Option<std::sync::Arc<ironclaw::channels::web::sse::SseManager>> = None;
+    let mut sse_manager: Option<std::sync::Arc<crate::channels::web::sse::SseManager>> = None;
     if let Some(ref gw_config) = config.channels.gateway {
         let mut gw = GatewayChannel::new(gw_config.clone(), config.owner_id.clone());
         gw = gw.with_llm_provider(Arc::clone(&components.llm));
@@ -663,10 +637,10 @@ async fn async_main() -> anyhow::Result<()> {
         }
         // Create per-user workspace pool for multi-user mode.
         if let Some(ref db) = components.db {
-            let emb_cache_config = ironclaw::workspace::EmbeddingCacheConfig {
+            let emb_cache_config = crate::workspace::EmbeddingCacheConfig {
                 max_entries: config.embeddings.cache_size,
             };
-            let pool = Arc::new(ironclaw::channels::web::server::WorkspacePool::new(
+            let pool = Arc::new(crate::channels::web::server::WorkspacePool::new(
                 Arc::clone(db),
                 components.embeddings.clone(),
                 emb_cache_config,
@@ -704,7 +678,7 @@ async fn async_main() -> anyhow::Result<()> {
             // so the owner appears in the Users admin panel immediately.
             if let Ok(false) = d.has_any_users().await {
                 let now = chrono::Utc::now();
-                let user = ironclaw::db::UserRecord {
+                let user = crate::db::UserRecord {
                     id: config.owner_id.clone(),
                     email: None,
                     display_name: config.owner_id.clone(),
@@ -723,7 +697,7 @@ async fn async_main() -> anyhow::Result<()> {
                         tracing::warn!("Failed to bootstrap admin user: {}", e);
                     }
                 } else {
-                    use ironclaw::channels::web::auth::hash_token;
+                    use crate::channels::web::auth::hash_token;
                     let hash = hash_token(auth_token);
                     let prefix = if auth_token.len() >= 8 {
                         &auth_token[..8]
@@ -763,7 +737,7 @@ async fn async_main() -> anyhow::Result<()> {
             let active_model = components.llm.model_name().to_string();
             let mut enabled = channel_names.clone();
             enabled.push("gateway".into());
-            gw = gw.with_active_config(ironclaw::channels::web::server::ActiveConfigSnapshot {
+            gw = gw.with_active_config(crate::channels::web::server::ActiveConfigSnapshot {
                 llm_backend: config.llm.backend.to_string(),
                 llm_model: active_model,
                 enabled_channels: enabled,
@@ -838,7 +812,7 @@ async fn async_main() -> anyhow::Result<()> {
         .map(|c| c.model_name().to_string());
 
     if config.channels.cli.enabled && cli.message.is_none() {
-        let boot_info = ironclaw::boot_screen::BootInfo {
+        let boot_info = crate::boot_screen::BootInfo {
             version: env!("CARGO_PKG_VERSION").to_string(),
             agent_name: config.agent.name.clone(),
             llm_backend: config.llm.backend.to_string(),
@@ -873,7 +847,7 @@ async fn async_main() -> anyhow::Result<()> {
             tunnel_provider: active_tunnel.as_ref().map(|t| t.name().to_string()),
             startup_elapsed: Some(startup_start.elapsed()),
         };
-        ironclaw::boot_screen::print_boot_screen(&boot_info);
+        crate::boot_screen::print_boot_screen(&boot_info);
     }
 
     // ── Run the agent ──────────────────────────────────────────────────
@@ -974,10 +948,10 @@ async fn async_main() -> anyhow::Result<()> {
 
     // Capture db reference for SIGHUP handler before it's moved into AgentDeps (Unix only)
     #[cfg(unix)]
-    let sighup_settings_store: Option<Arc<dyn ironclaw::db::SettingsStore>> = components
+    let sighup_settings_store: Option<Arc<dyn crate::db::SettingsStore>> = components
         .db
         .as_ref()
-        .map(|db| Arc::clone(db) as Arc<dyn ironclaw::db::SettingsStore>);
+        .map(|db| Arc::clone(db) as Arc<dyn crate::db::SettingsStore>);
 
     let deps = AgentDeps {
         owner_id: config.owner_id.clone(),
@@ -997,35 +971,34 @@ async fn async_main() -> anyhow::Result<()> {
         job_event_sink: None,
         channels_for_jobs: None,
         http_interceptor,
-        transcription: config.transcription.create_provider().map(|p| {
-            Arc::new(ironclaw::llm::transcription::TranscriptionMiddleware::new(
-                p,
-            ))
-        }),
+        transcription: config
+            .transcription
+            .create_provider()
+            .map(|p| Arc::new(crate::llm::transcription::TranscriptionMiddleware::new(p))),
         document_extraction: Some(Arc::new(
-            ironclaw::document_extraction::DocumentExtractionMiddleware::new(),
+            crate::document_extraction::DocumentExtractionMiddleware::new(),
         )),
         sandbox_readiness: if !config.sandbox.enabled {
-            ironclaw::agent::routine_engine::SandboxReadiness::DisabledByConfig
+            crate::agent::routine_engine::SandboxReadiness::DisabledByConfig
         } else if docker_status.is_ok() {
-            ironclaw::agent::routine_engine::SandboxReadiness::Available
+            crate::agent::routine_engine::SandboxReadiness::Available
         } else {
-            ironclaw::agent::routine_engine::SandboxReadiness::DockerUnavailable
+            crate::agent::routine_engine::SandboxReadiness::DockerUnavailable
         },
         builder: components.builder,
         llm_backend: config.llm.backend.clone(),
-        tenant_rates: Arc::new(ironclaw::tenant::TenantRateRegistry::new(
+        tenant_rates: Arc::new(crate::tenant::TenantRateRegistry::new(
             config.agent.max_llm_concurrent_per_user.unwrap_or(4),
             config.agent.max_jobs_concurrent_per_user.unwrap_or(3),
         )),
         cache_monitor: {
-            let obs_config = ironclaw::observability::ObservabilityConfig {
+            let obs_config = crate::observability::ObservabilityConfig {
                 backend: "log".to_string(),
             };
-            let observer: std::sync::Arc<dyn ironclaw::observability::Observer> =
-                std::sync::Arc::from(ironclaw::observability::create_observer(&obs_config));
+            let observer: std::sync::Arc<dyn crate::observability::Observer> =
+                std::sync::Arc::from(crate::observability::create_observer(&obs_config));
             Some(std::sync::Arc::new(
-                ironclaw::observability::PromptCacheMonitor::new(observer),
+                crate::observability::PromptCacheMonitor::new(observer),
             ))
         },
     };
@@ -1116,7 +1089,7 @@ async fn async_main() -> anyhow::Result<()> {
                     {
                         // Thread-safe: Uses INJECTED_VARS mutex instead of unsafe std::env::set_var
                         // Config::from_env() will read from the overlay via optional_env()
-                        ironclaw::config::inject_single_var(
+                        crate::config::inject_single_var(
                             "HTTP_WEBHOOK_SECRET",
                             webhook_secret.expose(),
                         );
@@ -1127,9 +1100,9 @@ async fn async_main() -> anyhow::Result<()> {
                 // Reload config (now with secrets injected into environment)
                 let new_config = match &sighup_settings_store_clone {
                     Some(store) => {
-                        ironclaw::config::Config::from_db(store.as_ref(), &sighup_owner_id).await
+                        crate::config::Config::from_db(store.as_ref(), &sighup_owner_id).await
                     }
-                    None => ironclaw::config::Config::from_env().await,
+                    None => crate::config::Config::from_env().await,
                 };
 
                 let new_config = match new_config {
@@ -1245,7 +1218,7 @@ async fn async_main() -> anyhow::Result<()> {
             // 5s is generous but avoids the message being lost on slow startups.
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             tracing::debug!("Sending sandbox-unavailable warning to connected channels");
-            let response = ironclaw::channels::OutgoingResponse {
+            let response = crate::channels::OutgoingResponse {
                 content: format!("Warning: {warning}"),
                 thread_id: None,
                 attachments: Vec::new(),
