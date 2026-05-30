@@ -66,10 +66,10 @@ The two **traits you actually have to implement** to integrate a new host are
 
 ### Why two narrow traits instead of one fat one
 
-`AgentResponder` mirrors `LoopDelegate::call_llm` one-to-one and is a single
-method. `ToolExecutor` is likewise single-method. Splitting along the LLM ↔
-tool seam means an adapter author only implements the side they care about, and
-the runtime never has to construct a no-op tool executor for text-only flows.
+`AgentResponder` is the LLM seam and is a single method.  `ToolExecutor` is
+likewise single-method. Splitting along the LLM ↔ tool seam means an adapter
+author only implements the side they care about, and the runtime never has to
+construct a no-op tool executor for text-only flows.
 
 `dasclaw_core::traits::LlmCompleter` exists too but is **text-only** — it
 returns `String`, not `RespondOutput`, so it cannot carry tool calls or finish
@@ -87,7 +87,7 @@ dedicated `AgentResponder`.
 | `ToolsNotSupported` | Model asked for a tool but no `ToolExecutor` was wired. |
 | `LoopFailure(reason)` | `LoopOutcome::Failure(_)`, typically from an egress hook. |
 | `Stopped` | External `LoopSignal::Stop` halted the loop. |
-| `ApprovalRequested` | **Deprecated** (issue #910). Only surfaced by custom `LoopDelegate` impls that bypass the approval inbox; the headless delegate now emits `AgentEvent::ApprovalNeeded` instead. |
+| `ApprovalRequested` | **Deprecated** (issue #910). Only surfaced by custom tool-dispatch paths that bypass the approval inbox; the built-in `SequentialDispatcher` emits `AgentEvent::ApprovalNeeded` instead. |
 | `ApprovalRejected { tool_name, reason }` | The GUI replied `ApprovalDecision::Reject` for a tool call. |
 | `Responder(HostError)` | Underlying responder / hook errored. |
 
@@ -138,7 +138,7 @@ builder API — `dasclaw_runtime` does not wrap it.
 
 | Module | Sketch |
 |---|---|
-| [`agent`](src/agent.rs) | `Agent`, `AgentBuilder`, `AgentResponder`, `ToolExecutor`, `AgentError`, `AgentConfig`, internal `HeadlessDelegate`. |
+| [`agent`](src/agent.rs) | `Agent`, `AgentBuilder`, re-exports `AgentResponder` from core, `ToolExecutor`, `AgentError`, `AgentConfig`. |
 | [`composite_executor`](src/composite_executor.rs) | `CompositeToolExecutor` + `CompositeError`. |
 | [`context`](src/context/) | Per-job context object & helpers. |
 | [`error`](src/error.rs) | App-layer `ToolError`. |

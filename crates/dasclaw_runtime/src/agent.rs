@@ -17,10 +17,10 @@
 //! ## Scope (A1 + A2)
 //!
 //! - **A1** — public shape (`Agent`, `AgentBuilder`, `AgentConfig`,
-//!   `AgentError`), wraps [`dasclaw_core::agentic_loop::run_agentic_loop`]
-//!   with an internal `HeadlessDelegate` and a configurable `HookBundle`.
-//!   The narrow [`AgentResponder`] trait is the single seam where any LLM
-//!   adapter plugs in.
+//!   `AgentError`), wraps the [`AgenticLoop`] runtime engine with a
+//!   configurable [`HookBundle`]. The narrow [`AgentResponder`] trait
+//!   (re-exported from [`dasclaw_core::agentic_loop`]) is the single
+//!   seam where any LLM adapter plugs in.
 //! - **A2** — tool execution wiring. A second narrow trait
 //!   [`ToolExecutor`] lets callers plug in a real tool runner. When wired,
 //!   the loop dispatches each tool call through the executor and feeds the
@@ -37,18 +37,19 @@
 //! intended for compaction summaries and similar one-shot helpers — it
 //! returns a `String`, not a `RespondOutput`, so it cannot carry tool
 //! calls or finish reasons. The agent loop fundamentally needs
-//! `RespondOutput`, so the seam here mirrors `LoopDelegate::call_llm`'s
-//! signature one-to-one and stays single-method to keep the wire-up cost
-//! for adapter authors trivial.
+//! `RespondOutput`, so the [`AgentResponder`] seam is a dedicated
+//! single-method trait — adapter authors only ever need to implement
+//! `respond` (and optionally `respond_streaming` for token streaming).
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use dasclaw_core::agentic_loop::{AgenticLoopConfig, LoopOutcome, LoopSignal, TextAction};
+pub(crate) use dasclaw_core::agentic_loop::TOOLS_NOT_SUPPORTED_REASON;
+pub use dasclaw_core::agentic_loop::{AgentEvent, AgentResponder};
+use dasclaw_core::agentic_loop::{AgenticLoopConfig, LoopOutcome};
 use dasclaw_core::hooks::HookBundle;
-use dasclaw_core::messages::{ChatMessage, FinishReason, ToolCall, ToolDefinition, ToolResult};
+use dasclaw_core::messages::{ChatMessage, ToolCall, ToolDefinition, ToolResult};
 use dasclaw_core::reasoning_ctx::ReasoningContext;
-use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
 use dasclaw_core::traits::HostError;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -63,185 +64,6 @@ use crate::approval::{
 use crate::tool_dispatch::{
     APPROVAL_REJECTED_SENTINEL_PREFIX, RejectedPayload, SequentialDispatcher, ToolDispatcher,
 };
-
-/// Streaming event emitted by [`Agent::run_streaming`] and
-/// [`crate::Session::run_streaming`] (issue #908, GUI blocker B2).
-///
-/// One event per observable step in the agentic loop:
-///
-/// - [`AgentEvent::TextChunk`] — a fragment of model output as it
-///   arrives from the LLM. For providers without true token streaming
-///   the chunk arrives in a single piece; consumers should not depend
-///   on a particular chunk size.
-/// - [`AgentEvent::ToolCallStart`] — the model asked to invoke a tool;
-///   emitted before [`ToolExecutor::execute`] runs.
-/// - [`AgentEvent::ToolResult`] — the tool finished; payload is the
-///   sanitized content that the **next** LLM iteration will see in its
-///   `tool_result` block (post-egress, post-sanitizer).
-/// - [`AgentEvent::FinishReason`] — one per LLM iteration boundary,
-///   carrying the model's stop reason. Use it to render "stopped",
-///   "needs tool", etc. in a GUI.
-///
-/// Wire format is adjacent-tagged JSON
-/// (`{"kind": "text_chunk", "data": "..."}`) so a TypeScript discriminated
-/// union renders directly from `serde_json::to_string(&event)`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
-pub enum AgentEvent {
-    /// A fragment of model text output.
-    TextChunk(String),
-    /// The model requested a tool invocation.
-    ToolCallStart {
-        /// Tool name as emitted by the model.
-        name: String,
-        /// Tool arguments as raw JSON.
-        arguments: serde_json::Value,
-    },
-    /// A tool finished; `content` is the post-sanitization payload that
-    /// is fed back into the next LLM iteration.
-    ToolResult {
-        /// Tool name as it appeared in the matching
-        /// [`AgentEvent::ToolCallStart`].
-        name: String,
-        /// Sanitized tool output that the LLM will see next iteration.
-        content: String,
-        /// `true` when the executor returned an error tool_result or the
-        /// egress gate replaced the content with a `[redacted: …]`
-        /// placeholder.
-        is_error: bool,
-    },
-    /// Stop reason for the LLM iteration that just ended.
-    FinishReason(FinishReason),
-    /// The configured [`crate::ApprovalPolicy`] flagged a tool call as
-    /// needing human approval (issue #910, GUI blocker B4).
-    ///
-    /// The agent loop has paused waiting for
-    /// [`Agent::respond_to_approval`] to dispatch a matching
-    /// [`crate::ApprovalDecision`] for `request_id`. Until then no
-    /// further [`AgentEvent`]s are emitted for this turn.
-    ApprovalNeeded {
-        /// Unique handle the GUI feeds back into
-        /// [`Agent::respond_to_approval`].
-        request_id: Uuid,
-        /// Tool name as emitted by the model.
-        tool_name: String,
-        /// Raw tool arguments, mirroring the matching
-        /// [`AgentEvent::ToolCallStart`] payload.
-        tool_arguments: serde_json::Value,
-        /// Human-readable description supplied by the policy.
-        description: String,
-        /// Sanitised parameters preview the GUI should render — *not*
-        /// the raw arguments.
-        display_parameters: serde_json::Value,
-        /// `true` when the GUI may surface an "approve always"
-        /// affordance.
-        allow_always: bool,
-    },
-}
-
-/// Narrow LLM seam used by [`Agent`].
-///
-/// Adapters wrap a concrete LLM client (`dasclaw_llm_provider`, a mock,
-/// a recorder, …) and translate from the provider-native response into a
-/// [`RespondOutput`]. The runtime calls [`Self::respond`] once per
-/// iteration of the agentic loop in non-streaming mode, and
-/// [`Self::respond_streaming`] when the host wants token-level events.
-#[async_trait]
-pub trait AgentResponder: Send + Sync {
-    /// Produce the next response for the given context.
-    async fn respond(&self, ctx: &mut ReasoningContext) -> Result<RespondOutput, HostError>;
-
-    /// Streaming-aware variant used by [`Agent::run_streaming`]
-    /// (issue #908, GUI blocker B2).
-    ///
-    /// `event_tx` is the same channel the agent loop forwards
-    /// [`AgentEvent`]s on. Implementations emit one or more
-    /// [`AgentEvent::TextChunk`] events as the model produces text and
-    /// then return the final [`RespondOutput`] so the loop can dispatch
-    /// to tool execution or finish.
-    ///
-    /// The default implementation calls [`Self::respond`] and forwards
-    /// the final text (if any) as a single chunk, so every existing
-    /// adapter stays wire-compatible without code changes. Adapters
-    /// backed by streaming providers (`LlmProviderResponder`) override
-    /// this method to forward token-level deltas as they arrive.
-    ///
-    /// `ToolCallStart`, `ToolResult` and `FinishReason` events are emitted
-    /// by the agent loop itself — implementations should only emit
-    /// [`AgentEvent::TextChunk`].
-    async fn respond_streaming(
-        &self,
-        ctx: &mut ReasoningContext,
-        event_tx: mpsc::Sender<AgentEvent>,
-    ) -> Result<RespondOutput, HostError> {
-        let out = self.respond(ctx).await?;
-        if let RespondResult::Text(ref text) = out.result {
-            // Drop on closed channel is fine: the consumer hung up, but
-            // the loop still needs to return the full RespondOutput.
-            let _ = event_tx.send(AgentEvent::TextChunk(text.clone())).await;
-        }
-        Ok(out)
-    }
-
-    /// Per-iteration signal check (W8.0).
-    ///
-    /// Returned every loop turn before any LLM call. The default keeps
-    /// the loop running; hosts that drain a stop / cancellation channel
-    /// override this. The [`AgenticLoop`]'s own cancellation token is
-    /// honoured independently — a `Continue` here cannot override an
-    /// already-cancelled token.
-    async fn check_signals(&self) -> LoopSignal {
-        LoopSignal::Continue
-    }
-
-    /// Pre-LLM iteration setup (W8.0).
-    ///
-    /// Runs after [`Self::check_signals`] and before [`Self::respond`].
-    /// Hosts use it to mutate the context (inject prompts, swap tool
-    /// tables, force text mode) or short-circuit the loop by returning
-    /// `Some(outcome)`. The default is a no-op.
-    async fn before_llm_call(
-        &self,
-        _ctx: &mut ReasoningContext,
-        _iteration: usize,
-    ) -> Option<LoopOutcome> {
-        None
-    }
-
-    /// React to a pure-text LLM response (W8.0).
-    ///
-    /// Called when [`Self::respond`] yields a [`RespondResult::Text`]
-    /// payload. The default appends the assistant message to `ctx` and
-    /// terminates the loop with [`LoopOutcome::Response`], matching the
-    /// pre-W8.0 `LoopAdapter` behaviour. Hosts that need recovery /
-    /// completion-detection logic override this and may return
-    /// [`TextAction::Continue`] to keep iterating.
-    async fn handle_text_response(
-        &self,
-        text: &str,
-        _metadata: ResponseMetadata,
-        usage: TokenUsage,
-        ctx: &mut ReasoningContext,
-    ) -> TextAction {
-        ctx.messages
-            .push(ChatMessage::assistant(text).with_usage(usage));
-        TextAction::Return(LoopOutcome::Response(text.to_string()))
-    }
-
-    /// React to a tool-intent nudge being injected (W8.0).
-    ///
-    /// Called when the loop detects the model produced text that looked
-    /// like a tool intent and injects a corrective nudge. Default is a
-    /// no-op; hosts override to emit a UI event.
-    async fn on_tool_intent_nudge(&self, _text: &str, _ctx: &mut ReasoningContext) {}
-
-    /// End-of-iteration callback (W8.0).
-    ///
-    /// Called after every successful iteration that did not return an
-    /// outcome. Default is a no-op; hosts use it for throttling /
-    /// progress reporting.
-    async fn after_iteration(&self, _iteration: usize) {}
-}
 
 /// Narrow tool-execution seam used by [`Agent`] (ADR-153 step 2 sub-step A2).
 ///
@@ -353,7 +175,7 @@ pub enum AgentError {
     /// A tool approval was requested but the active [`crate::ApprovalPolicy`]
     /// path produced no [`crate::AgentEvent::ApprovalNeeded`] for it.
     ///
-    /// This variant only fires when a custom [`LoopDelegate`] surfaces
+    /// This variant only fires when the agent loop surfaces
     /// [`LoopOutcome::NeedApproval`] outside the headless
     /// approval-inbox pipeline; the GUI-friendly path is
     /// [`crate::AgentEvent::ApprovalNeeded`] + [`Agent::respond_to_approval`]
@@ -362,7 +184,7 @@ pub enum AgentError {
     /// Kept for wire backwards compatibility with issue #909 consumers.
     #[deprecated(
         since = "0.0.0-w6",
-        note = "GUI hosts should listen for AgentEvent::ApprovalNeeded and reply via Agent::respond_to_approval; only custom LoopDelegate impls that bypass the approval inbox should still surface this variant"
+        note = "GUI hosts should listen for AgentEvent::ApprovalNeeded and reply via Agent::respond_to_approval; only custom tool-dispatch paths that bypass the approval inbox should still surface this variant"
     )]
     #[error("agent loop requested approval, which is not supported in headless mode")]
     ApprovalRequested,
@@ -502,7 +324,8 @@ pub struct Agent {
     tool_output_sanitizer: Option<Arc<dyn ToolOutputSanitizer>>,
     hooks: HookBundle,
     config: AgentConfig,
-    /// Optional cancellation token wired through [`HeadlessDelegate::check_signals`].
+    /// Optional cancellation token forwarded to
+    /// [`dasclaw_core::agentic_loop::run_agentic_loop`].
     /// When set and tripped, the agentic loop exits with
     /// [`AgentError::Stopped`] on the next signal check. See issue #907.
     cancellation_token: Option<CancellationToken>,
@@ -510,9 +333,10 @@ pub struct Agent {
     /// [`NoApprovalPolicy`] so existing callers keep their zero-event
     /// behaviour bit-for-bit.
     approval_policy: Arc<dyn ApprovalPolicy>,
-    /// Pending approval inbox shared with [`HeadlessDelegate`] for the
-    /// lifetime of the agent. [`Agent::respond_to_approval`] dispatches
-    /// into this inbox once the GUI replies.
+    /// Pending approval inbox shared with the internal
+    /// `SequentialDispatcher` for the lifetime of the agent.
+    /// [`Agent::respond_to_approval`] dispatches into this inbox once
+    /// the GUI replies.
     approval_inbox: ApprovalInbox,
 }
 
@@ -630,11 +454,9 @@ impl Agent {
             .map(clone_loop_config)
             .unwrap_or_default();
 
-        // Build the L2 dispatcher once for the lifetime of this run
-        // (pre-W6.4 rebuilt it on every iteration inside
-        // `HeadlessDelegate::execute_tool_calls`). When no executor is
-        // wired, leave the dispatcher unset so the loop emits the
-        // `TOOLS_NOT_SUPPORTED_REASON` sentinel just like before.
+        // Build the L2 dispatcher once for the lifetime of this run.
+        // When no executor is wired, leave the dispatcher unset so the
+        // loop emits the `TOOLS_NOT_SUPPORTED_REASON` sentinel.
         let dispatcher: Option<Arc<dyn ToolDispatcher>> = self.tool_executor.as_ref().map(|exec| {
             Arc::new(SequentialDispatcher::new(
                 Arc::clone(exec),
@@ -848,11 +670,6 @@ impl AgentBuilder {
     }
 }
 
-/// Sentinel string emitted by [`AgenticLoop`]'s tool-call branch when
-/// no [`ToolDispatcher`] is wired, then re-mapped to
-/// [`AgentError::ToolsNotSupported`] by [`map_outcome`].
-pub(crate) const TOOLS_NOT_SUPPORTED_REASON: &str = "headless-agent::tools-not-supported";
-
 fn map_outcome(outcome: LoopOutcome, max_iterations: usize) -> Result<String, AgentError> {
     match outcome {
         LoopOutcome::Response(text) => Ok(text),
@@ -876,7 +693,7 @@ fn map_outcome(outcome: LoopOutcome, max_iterations: usize) -> Result<String, Ag
             }
         }
         LoopOutcome::Stopped => Err(AgentError::Stopped),
-        // Custom LoopDelegate impls that surface NeedApproval bypass the
+        // Custom tool-dispatch paths that surface NeedApproval bypass the
         // approval-inbox pipeline; keep the deprecated wire variant so
         // they keep compiling. New GUI hosts should rely on
         // AgentEvent::ApprovalNeeded + Agent::respond_to_approval.
@@ -889,7 +706,9 @@ fn map_outcome(outcome: LoopOutcome, max_iterations: usize) -> Result<String, Ag
 mod tests {
     use super::*;
     use dasclaw_core::messages::{FinishReason, ToolCall};
-    use dasclaw_core::response_types::{RespondResult, ResponseMetadata, TokenUsage};
+    use dasclaw_core::response_types::{
+        RespondOutput, RespondResult, ResponseMetadata, TokenUsage,
+    };
 
     /// Mock responder driven by a fixed sequence of pre-built outputs.
     struct ScriptedResponder {
@@ -954,8 +773,8 @@ mod tests {
 
     #[tokio::test]
     async fn req_dasclaw_runtime_agent_929_text_branch_persists_usage_to_context() {
-        // #929 step 2: the final assistant ChatMessage recorded by
-        // HeadlessDelegate::handle_text_response must carry the per-turn
+        // #929 step 2: the final assistant ChatMessage recorded on the
+        // text branch of run_agentic_loop must carry the per-turn
         // TokenUsage from the LLM call that produced it, so multi-turn
         // Session::run can persist real cost data.
         let usage = TokenUsage {

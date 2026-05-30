@@ -6,7 +6,8 @@
 //! that wants a "user-in-the-loop" workflow for dangerous tool calls.
 //!
 //! This module supplies the pieces the GUI loop needs without touching
-//! the `dasclaw_core` `LoopDelegate` / `LoopOutcome` public contract:
+//! the `dasclaw_core` `AgentResponder` / `ToolDispatcher` / `LoopOutcome`
+//! public contract:
 //!
 //! - [`ApprovalPolicy`] — pluggable rule that decides whether a given
 //!   [`dasclaw_core::messages::ToolCall`] needs human approval. Default
@@ -22,8 +23,8 @@
 //!   is unknown or its channel has been dropped.
 //!
 //! The runtime owns one [`ApprovalInbox`] per [`crate::Agent`]; the
-//! `HeadlessDelegate` inserts a one-shot sender when it emits
-//! [`crate::AgentEvent::ApprovalNeeded`] and the GUI calls
+//! internal `SequentialDispatcher` inserts a one-shot sender when it
+//! emits [`crate::AgentEvent::ApprovalNeeded`] and the GUI calls
 //! [`crate::Agent::respond_to_approval`] to resolve it.
 
 use std::collections::HashMap;

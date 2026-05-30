@@ -348,14 +348,14 @@ impl ApprovalGate for DenyAllGate {
 /// `egress.check(EgressKind::UserDisplay, …)` directly (ADR-148).
 /// Tool-level egress (`EgressKind::ToolExecution`) and
 /// `ApprovalGate::request` are the responsibility of the
-/// [`LoopDelegate::execute_tool_calls`](crate::agentic_loop::LoopDelegate)
-/// implementation — delegates typically hold their own `Arc<HookBundle>`
+/// [`ToolDispatcher::dispatch`](crate::agentic_loop::ToolDispatcher)
+/// implementation — dispatchers typically hold their own `Arc<HookBundle>`
 /// and call into it during tool iteration.
 ///
-/// Keeping tool-level egress out of the loop avoids forcing every delegate
-/// to re-express the tool execution contract through the loop signature.
-/// The runtime stays narrow; delegates stay in charge of their own
-/// tool dispatch.
+/// Keeping tool-level egress out of the loop avoids forcing every
+/// dispatcher to re-express the tool execution contract through the loop
+/// signature. The runtime stays narrow; dispatchers stay in charge of
+/// their own tool dispatch.
 #[derive(Clone)]
 pub struct HookBundle {
     /// ADR-148 Layer B egress gate (replaces former `safety: Arc<dyn SafetyHook>`).
