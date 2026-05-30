@@ -15,6 +15,7 @@ use crate::channels::{IncomingMessage, StatusUpdate};
 use crate::error::Error;
 use async_trait::async_trait;
 use dasclaw_runtime::context::JobContext;
+use dasclaw_runtime::tool_dispatch::ToolDispatcher;
 
 use crate::agent::agentic_loop::{
     AgenticLoopConfig, LoopDelegate, LoopOutcome, LoopSignal, TextAction,
@@ -81,7 +82,7 @@ impl Agent {
     ///
     pub(super) async fn run_agentic_loop(
         &self,
-        message: &IncomingMessage,
+        message: Arc<IncomingMessage>,
         tenant: crate::tenant::TenantCtx,
         session: Arc<Mutex<Session>>,
         thread_id: Uuid,
@@ -127,8 +128,8 @@ impl Agent {
         // Select and prepare active skills (if skills system is enabled)
         let (disabled_skills, disabled_extensions) = if message.channel == "tauri" {
             (
-                disabled_names_from_metadata(message, "disabled_skills"),
-                disabled_names_from_metadata(message, "disabled_extensions"),
+                disabled_names_from_metadata(&message, "disabled_skills"),
+                disabled_names_from_metadata(&message, "disabled_extensions"),
             )
         } else {
             (
@@ -201,7 +202,7 @@ impl Agent {
                 .with_requester_id(&message.sender_id);
         job_ctx.http_interceptor = self.deps.http_interceptor.clone();
         job_ctx.user_timezone = user_tz.name().to_string();
-        job_ctx.metadata = crate::agent::agent_loop::chat_tool_execution_metadata(message);
+        job_ctx.metadata = crate::agent::agent_loop::chat_tool_execution_metadata(&message);
         // Link the job context to the current conversation so that tools like
         // CreateJobTool can pass the conversation_id to spawned background jobs,
         // enabling the frontend to navigate back to this thread when the job completes.
@@ -254,7 +255,7 @@ impl Agent {
             tenant,
             session: session.clone(),
             thread_id,
-            message,
+            message: message.clone(),
             job_ctx,
             active_skills,
             disabled_extensions,
@@ -357,7 +358,7 @@ struct ChatDelegate<'a> {
     tenant: crate::tenant::TenantCtx,
     session: Arc<Mutex<Session>>,
     thread_id: Uuid,
-    message: &'a IncomingMessage,
+    message: Arc<IncomingMessage>,
     job_ctx: JobContext,
     active_skills: Vec<crate::skills::LoadedSkill>,
     disabled_extensions: HashSet<String>,
@@ -594,12 +595,16 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
         reason_ctx: &mut ReasoningContext,
     ) -> Result<Option<LoopOutcome>, HostError> {
         let dispatcher = super::desktop_dispatcher::DesktopDispatcher {
-            agent: self.agent,
-            message: self.message,
-            session: &self.session,
+            safety: self.agent.safety().clone(),
+            tools: self.agent.tools().clone(),
+            hooks: self.agent.hooks().clone(),
+            channels: self.agent.channels.clone(),
+            config: self.agent.config.clone(),
+            message: self.message.clone(),
+            session: self.session.clone(),
             thread_id: self.thread_id,
-            job_ctx: &self.job_ctx,
-            disabled_extensions: &self.disabled_extensions,
+            job_ctx: self.job_ctx.clone(),
+            disabled_extensions: self.disabled_extensions.clone(),
             user_tz: self.user_tz,
         };
         dispatcher
@@ -2091,7 +2096,13 @@ mod tests {
         // timeout will fire and the test will fail.
         let result = tokio::time::timeout(
             Duration::from_secs(5),
-            agent.run_agentic_loop(&message, tenant, session, thread_id, initial_messages),
+            agent.run_agentic_loop(
+                Arc::new(message),
+                tenant,
+                session,
+                thread_id,
+                initial_messages,
+            ),
         )
         .await;
 
@@ -2207,7 +2218,13 @@ mod tests {
         // max_tool_iterations.
         let result = tokio::time::timeout(
             Duration::from_secs(5),
-            agent.run_agentic_loop(&message, tenant, session, thread_id, initial_messages),
+            agent.run_agentic_loop(
+                Arc::new(message),
+                tenant,
+                session,
+                thread_id,
+                initial_messages,
+            ),
         )
         .await;
 

@@ -481,7 +481,13 @@ impl Agent {
 
         // Run the agentic tool execution loop
         let result = self
-            .run_agentic_loop(message, tenant, session.clone(), thread_id, turn_messages)
+            .run_agentic_loop(
+                Arc::new(message.clone()),
+                tenant,
+                session.clone(),
+                thread_id,
+                turn_messages,
+            )
             .await;
 
         // Re-acquire lock and check if interrupted
@@ -1679,7 +1685,7 @@ impl Agent {
             // Continue the agentic loop (a tool was already executed this turn)
             let result = self
                 .run_agentic_loop(
-                    message,
+                    Arc::new(message.clone()),
                     self.tenant_ctx(&message.user_id).await,
                     session.clone(),
                     thread_id,
