@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use uuid::Uuid;
@@ -23,10 +23,8 @@ use crate::observability::PromptCacheMonitor;
 
 pub(super) struct DesktopResponder {
     // Invariant: must be constructed per turn. The `model_override_applied`
-    // and `iteration` sentinels below are reset on each `new()`; reusing
-    // one instance across turns would silently disable per-user
-    // `selected_model` overrides and skew the iteration-driven nudge /
-    // force-text gates.
+    // sentinel below is reset on each `new()`; reusing one instance across
+    // turns would silently disable per-user `selected_model` overrides.
     reasoning: Reasoning,
     llm: Arc<dyn LlmProvider>,
     llm_backend: String,
@@ -45,10 +43,6 @@ pub(super) struct DesktopResponder {
     cached_prompt_no_tools: String,
     nudge_at: usize,
     force_text_at: usize,
-    // Per-turn iteration counter; replaces the `iteration` parameter the
-    // old `LoopDelegate::before_llm_call` received but `AgentResponder`
-    // does not expose.
-    iteration: AtomicUsize,
     model_override_applied: AtomicBool,
 }
 
@@ -89,77 +83,8 @@ impl DesktopResponder {
             cached_prompt_no_tools,
             nudge_at,
             force_text_at,
-            iteration: AtomicUsize::new(0),
             model_override_applied: AtomicBool::new(false),
         }
-    }
-
-    /// Pre-LLM iteration setup: tool table refresh, nudge injection,
-    /// force-text gating, prompt swap, status broadcast. Moved verbatim
-    /// from the deleted `ChatDelegate::before_llm_call`.
-    async fn before_llm_call(&self, reason_ctx: &mut ReasoningContext, iteration: usize) {
-        if iteration == self.nudge_at {
-            reason_ctx.messages.push(ChatMessage::system(
-                "You are approaching the tool call limit. \
-                 Provide your best final answer on the next response \
-                 using the information you have gathered so far. \
-                 Do not call any more tools.",
-            ));
-        }
-
-        let force_text = iteration >= self.force_text_at;
-
-        let tool_defs = self
-            .tools
-            .tool_definitions_for_llm(
-                &dasclaw_governance::tool_visibility::ToolGateContextSeed::system(
-                    dasclaw_governance::tool_visibility::Env::Interactive,
-                ),
-            )
-            .await;
-        let tool_defs = super::dispatcher::filter_tools_by_disabled_extensions(
-            tool_defs,
-            &self.disabled_extensions,
-        );
-        let tool_defs = if !self.active_skills.is_empty() {
-            let result = crate::skills::attenuate_tools(&tool_defs, &self.active_skills);
-            tracing::debug!(
-                min_trust = %result.min_trust,
-                tools_available = result.tools.len(),
-                tools_removed = result.removed_tools.len(),
-                removed = ?result.removed_tools,
-                explanation = %result.explanation,
-                "Tool attenuation applied"
-            );
-            result.tools
-        } else {
-            tool_defs
-        };
-
-        reason_ctx.available_tools = tool_defs;
-        let force_text = force_text || reason_ctx.force_text;
-        reason_ctx.system_prompt = Some(if force_text {
-            self.cached_prompt_no_tools.clone()
-        } else {
-            self.cached_prompt.clone()
-        });
-        reason_ctx.force_text = force_text;
-
-        if force_text {
-            tracing::info!(
-                iteration,
-                "Forcing text-only response (iteration limit reached)"
-            );
-        }
-
-        let _ = self
-            .channels
-            .send_status(
-                &self.channel,
-                StatusUpdate::Thinking(format!("Thinking (step {iteration})...")),
-                &self.metadata,
-            )
-            .await;
     }
 
     /// Non-streaming LLM call with context-exceeded retry.
@@ -258,10 +183,81 @@ impl DesktopResponder {
 
 #[async_trait]
 impl AgentResponder for DesktopResponder {
-    async fn respond(&self, reason_ctx: &mut ReasoningContext) -> Result<RespondOutput, HostError> {
-        let iteration = self.iteration.fetch_add(1, Ordering::Relaxed);
-        self.before_llm_call(reason_ctx, iteration).await;
+    /// Pre-LLM iteration setup: tool table refresh, nudge injection,
+    /// force-text gating, prompt swap, status broadcast. Moved verbatim
+    /// from the deleted `ChatDelegate::before_llm_call`.
+    async fn before_llm_call(
+        &self,
+        reason_ctx: &mut ReasoningContext,
+        iteration: usize,
+    ) -> Option<dasclaw_runtime::LoopOutcome> {
+        if iteration == self.nudge_at {
+            reason_ctx.messages.push(ChatMessage::system(
+                "You are approaching the tool call limit. \
+                 Provide your best final answer on the next response \
+                 using the information you have gathered so far. \
+                 Do not call any more tools.",
+            ));
+        }
 
+        let force_text = iteration >= self.force_text_at;
+
+        let tool_defs = self
+            .tools
+            .tool_definitions_for_llm(
+                &dasclaw_governance::tool_visibility::ToolGateContextSeed::system(
+                    dasclaw_governance::tool_visibility::Env::Interactive,
+                ),
+            )
+            .await;
+        let tool_defs = super::dispatcher::filter_tools_by_disabled_extensions(
+            tool_defs,
+            &self.disabled_extensions,
+        );
+        let tool_defs = if !self.active_skills.is_empty() {
+            let result = crate::skills::attenuate_tools(&tool_defs, &self.active_skills);
+            tracing::debug!(
+                min_trust = %result.min_trust,
+                tools_available = result.tools.len(),
+                tools_removed = result.removed_tools.len(),
+                removed = ?result.removed_tools,
+                explanation = %result.explanation,
+                "Tool attenuation applied"
+            );
+            result.tools
+        } else {
+            tool_defs
+        };
+
+        reason_ctx.available_tools = tool_defs;
+        let force_text = force_text || reason_ctx.force_text;
+        reason_ctx.system_prompt = Some(if force_text {
+            self.cached_prompt_no_tools.clone()
+        } else {
+            self.cached_prompt.clone()
+        });
+        reason_ctx.force_text = force_text;
+
+        if force_text {
+            tracing::info!(
+                iteration,
+                "Forcing text-only response (iteration limit reached)"
+            );
+        }
+
+        let _ = self
+            .channels
+            .send_status(
+                &self.channel,
+                StatusUpdate::Thinking(format!("Thinking (step {iteration})...")),
+                &self.metadata,
+            )
+            .await;
+
+        None
+    }
+
+    async fn respond(&self, reason_ctx: &mut ReasoningContext) -> Result<RespondOutput, HostError> {
         if let Err(limit) = self.tenant.check_cost_allowed().await {
             return Err(crate::error::LlmError::InvalidResponse {
                 provider: "agent".to_string(),

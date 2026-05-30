@@ -38,7 +38,7 @@ use dasclaw_core::agentic_loop::{
     AgenticLoopConfig, LoopDelegate, LoopOutcome, LoopSignal, TextAction, run_agentic_loop,
 };
 use dasclaw_core::hooks::HookBundle;
-use dasclaw_core::messages::{ChatMessage, ToolCall};
+use dasclaw_core::messages::ToolCall;
 use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, ResponseMetadata, TokenUsage};
 use dasclaw_core::traits::HostError;
@@ -117,18 +117,23 @@ impl<'a> LoopAdapter<'a> {
 #[async_trait]
 impl<'a> LoopDelegate for LoopAdapter<'a> {
     async fn check_signals(&self) -> LoopSignal {
-        match self.inner.cancellation_token.as_ref() {
-            Some(token) if token.is_cancelled() => LoopSignal::Stop,
-            _ => LoopSignal::Continue,
+        // Cancellation token short-circuits the responder hook: a
+        // cancelled token always wins even if the responder would
+        // return `Continue`.
+        if let Some(token) = self.inner.cancellation_token.as_ref()
+            && token.is_cancelled()
+        {
+            return LoopSignal::Stop;
         }
+        self.inner.responder.check_signals().await
     }
 
     async fn before_llm_call(
         &self,
-        _ctx: &mut ReasoningContext,
-        _iteration: usize,
+        ctx: &mut ReasoningContext,
+        iteration: usize,
     ) -> Option<LoopOutcome> {
-        None
+        self.inner.responder.before_llm_call(ctx, iteration).await
     }
 
     async fn call_llm(
@@ -159,13 +164,14 @@ impl<'a> LoopDelegate for LoopAdapter<'a> {
     async fn handle_text_response(
         &self,
         text: &str,
-        _metadata: ResponseMetadata,
+        metadata: ResponseMetadata,
         usage: TokenUsage,
         ctx: &mut ReasoningContext,
     ) -> TextAction {
-        ctx.messages
-            .push(ChatMessage::assistant(text).with_usage(usage));
-        TextAction::Return(LoopOutcome::Response(text.to_string()))
+        self.inner
+            .responder
+            .handle_text_response(text, metadata, usage, ctx)
+            .await
     }
 
     async fn execute_tool_calls(
@@ -184,5 +190,13 @@ impl<'a> LoopDelegate for LoopAdapter<'a> {
             )));
         };
         dispatcher.dispatch(tool_calls, content, usage, ctx).await
+    }
+
+    async fn on_tool_intent_nudge(&self, text: &str, ctx: &mut ReasoningContext) {
+        self.inner.responder.on_tool_intent_nudge(text, ctx).await;
+    }
+
+    async fn after_iteration(&self, iteration: usize) {
+        self.inner.responder.after_iteration(iteration).await;
     }
 }

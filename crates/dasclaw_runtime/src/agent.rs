@@ -44,11 +44,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use dasclaw_core::agentic_loop::{AgenticLoopConfig, LoopOutcome};
+use dasclaw_core::agentic_loop::{AgenticLoopConfig, LoopOutcome, LoopSignal, TextAction};
 use dasclaw_core::hooks::HookBundle;
 use dasclaw_core::messages::{ChatMessage, FinishReason, ToolCall, ToolDefinition, ToolResult};
 use dasclaw_core::reasoning_ctx::ReasoningContext;
-use dasclaw_core::response_types::{RespondOutput, RespondResult};
+use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
 use dasclaw_core::traits::HostError;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -182,6 +182,65 @@ pub trait AgentResponder: Send + Sync {
         }
         Ok(out)
     }
+
+    /// Per-iteration signal check (W8.0).
+    ///
+    /// Returned every loop turn before any LLM call. The default keeps
+    /// the loop running; hosts that drain a stop / cancellation channel
+    /// override this. The [`AgenticLoop`]'s own cancellation token is
+    /// honoured independently — a `Continue` here cannot override an
+    /// already-cancelled token.
+    async fn check_signals(&self) -> LoopSignal {
+        LoopSignal::Continue
+    }
+
+    /// Pre-LLM iteration setup (W8.0).
+    ///
+    /// Runs after [`Self::check_signals`] and before [`Self::respond`].
+    /// Hosts use it to mutate the context (inject prompts, swap tool
+    /// tables, force text mode) or short-circuit the loop by returning
+    /// `Some(outcome)`. The default is a no-op.
+    async fn before_llm_call(
+        &self,
+        _ctx: &mut ReasoningContext,
+        _iteration: usize,
+    ) -> Option<LoopOutcome> {
+        None
+    }
+
+    /// React to a pure-text LLM response (W8.0).
+    ///
+    /// Called when [`Self::respond`] yields a [`RespondResult::Text`]
+    /// payload. The default appends the assistant message to `ctx` and
+    /// terminates the loop with [`LoopOutcome::Response`], matching the
+    /// pre-W8.0 `LoopAdapter` behaviour. Hosts that need recovery /
+    /// completion-detection logic override this and may return
+    /// [`TextAction::Continue`] to keep iterating.
+    async fn handle_text_response(
+        &self,
+        text: &str,
+        _metadata: ResponseMetadata,
+        usage: TokenUsage,
+        ctx: &mut ReasoningContext,
+    ) -> TextAction {
+        ctx.messages
+            .push(ChatMessage::assistant(text).with_usage(usage));
+        TextAction::Return(LoopOutcome::Response(text.to_string()))
+    }
+
+    /// React to a tool-intent nudge being injected (W8.0).
+    ///
+    /// Called when the loop detects the model produced text that looked
+    /// like a tool intent and injects a corrective nudge. Default is a
+    /// no-op; hosts override to emit a UI event.
+    async fn on_tool_intent_nudge(&self, _text: &str, _ctx: &mut ReasoningContext) {}
+
+    /// End-of-iteration callback (W8.0).
+    ///
+    /// Called after every successful iteration that did not return an
+    /// outcome. Default is a no-op; hosts use it for throttling /
+    /// progress reporting.
+    async fn after_iteration(&self, _iteration: usize) {}
 }
 
 /// Narrow tool-execution seam used by [`Agent`] (ADR-153 step 2 sub-step A2).
