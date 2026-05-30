@@ -13,7 +13,6 @@ use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
-use crate::agent::agentic_loop::truncate_for_preview;
 use crate::channels::web::types::ToolDecisionDto;
 use crate::error::Error;
 use crate::llm::{
@@ -33,6 +32,7 @@ use crate::worker::autonomous_recovery::{
 };
 use crate::worker::job_dispatcher::WorkerMessage;
 use dasclaw_core::agentic_loop::AgenticLoopConfig;
+use dasclaw_core::intent::truncate_for_preview;
 use dasclaw_core::traits::HostError;
 use dasclaw_hooks::HookRegistry;
 use dasclaw_runtime::JobState;
@@ -468,19 +468,19 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
         // workers run on user-scoped workspaces so default is
         // `WorkspaceWrite`.
         // Issue #73 slice E: workspace boundary is capability-validated.
-        let hooks = crate::agent::agentic_loop::hook_bundle_with_safety_and_secrets(
+        let hooks = crate::agent::hook_bundle::hook_bundle_with_safety_and_secrets(
             self.safety().clone(),
             self.tools(),
             &job_user_id,
             std::sync::Arc::new(
-                crate::agent::agentic_loop::WorkspaceCapability::open(
+                dasclaw_workspace_cap::WorkspaceCapability::open(
                     std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
                 )
                 .map_err(|e| crate::error::WorkspaceError::IoError {
                     reason: format!("failed to open workspace capability: {e}"),
                 })?,
             ),
-            crate::agent::agentic_loop::PermissionMode::WorkspaceWrite,
+            dasclaw_core::permissions::PermissionMode::WorkspaceWrite,
         );
 
         // No cancellation token — `JobResponder::check_signals` already
@@ -489,7 +489,7 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
         let outcome = AgenticLoop::new(Arc::new(responder), Some(Arc::new(dispatcher)), None, None)
             .run(reason_ctx, &config, &hooks)
             .await
-            .map_err(crate::agent::agentic_loop::host_err_to_error)?;
+            .map_err(crate::agent::hook_bundle::host_err_to_error)?;
 
         match outcome {
             LoopOutcome::Response(_) => {

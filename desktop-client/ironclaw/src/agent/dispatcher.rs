@@ -13,9 +13,9 @@ use crate::agent::Agent;
 use crate::agent::session::{PendingApproval, Session, ThreadState};
 use crate::channels::IncomingMessage;
 use crate::error::Error;
+use dasclaw_core::agentic_loop::{AgenticLoopConfig, LoopOutcome};
 use dasclaw_runtime::context::JobContext;
 
-use crate::agent::agentic_loop::{AgenticLoopConfig, LoopOutcome};
 use crate::llm::{ChatMessage, Reasoning, ReasoningContext};
 
 fn disabled_names_from_metadata(message: &IncomingMessage, key: &str) -> HashSet<String> {
@@ -333,19 +333,19 @@ impl Agent {
         // secrets without going through the tool path.
         // Issue #73 slice D/E: PermissionMode + workspace boundary threaded
         // explicitly so the session-config layer can override per chat session.
-        let hooks = crate::agent::agentic_loop::hook_bundle_with_safety_and_secrets(
+        let hooks = crate::agent::hook_bundle::hook_bundle_with_safety_and_secrets(
             self.safety().clone(),
             &self.deps.tools,
             &message.user_id,
             std::sync::Arc::new(
-                crate::agent::agentic_loop::WorkspaceCapability::open(
+                dasclaw_workspace_cap::WorkspaceCapability::open(
                     std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
                 )
                 .map_err(|e| crate::error::WorkspaceError::IoError {
                     reason: format!("failed to open workspace capability: {e}"),
                 })?,
             ),
-            crate::agent::agentic_loop::PermissionMode::WorkspaceWrite,
+            dasclaw_core::permissions::PermissionMode::WorkspaceWrite,
         );
 
         let outcome = dasclaw_runtime::AgenticLoop::new(
@@ -356,7 +356,7 @@ impl Agent {
         )
         .run(&mut reason_ctx, &loop_config, &hooks)
         .await
-        .map_err(crate::agent::agentic_loop::host_err_to_error);
+        .map_err(crate::agent::hook_bundle::host_err_to_error);
 
         // Stop the watcher regardless of how the loop terminated.
         cancel_token.cancel();

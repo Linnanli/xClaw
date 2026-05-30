@@ -11,13 +11,13 @@
 //! - Context compaction for long conversations
 
 mod agent_loop;
-pub mod agentic_loop;
 mod attachments;
 mod commands;
 pub mod compaction;
 mod desktop_dispatcher;
 mod desktop_responder;
 mod dispatcher;
+pub(crate) mod hook_bundle;
 mod router;
 pub mod session;
 pub mod submission;

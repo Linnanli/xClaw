@@ -1,42 +1,16 @@
-//! Unified agentic loop engine — re-export shim.
+//! Ironclaw-specific `HookBundle` builders and the `HostError` → ironclaw
+//! `Error` shim.
 //!
-//! Phase 3 Step D-4.5: the real engine moved to
-//! [`dasclaw_core::agentic_loop`]. This module now only re-exports the
-//! public surface so existing `use crate::agent::agentic_loop::{...}` call
-//! sites (in [`crate::agent::dispatcher`], [`crate::worker::job`],
-//! [`crate::worker::container`]) keep resolving unchanged.
-//!
-//! Route-B: `LoopDelegate::call_llm` and `run_agentic_loop` no longer take
-//! `reasoning: &Reasoning`. Each delegate now owns a `Reasoning` engine as a
-//! field and uses `self.reasoning` directly. Error type at the trait
-//! boundary is `dasclaw_core::traits::HostError`
-//! (`Box<dyn std::error::Error + Send + Sync>`); ironclaw's internal
-//! helpers keep returning `crate::error::Error` and rely on the blanket
-//! `From<E> for Box<dyn Error + Send + Sync>` to cross the boundary via
-//! `?` or `.map_err(Into::into)`.
+//! These helpers are the only code that used to live in the now-deleted
+//! `agent/agentic_loop.rs` re-export shim. Pure re-exports of
+//! `dasclaw_core::agentic_loop::*`, `dasclaw_core::permissions::*`,
+//! `dasclaw_workspace_cap::*` and `dasclaw_hooks::*` are gone — call sites
+//! now import those names from their original crates.
 
-pub use dasclaw_core::agentic_loop::{
-    AgenticLoopConfig, LoopDelegate, LoopOutcome, LoopSignal, TextAction, run_agentic_loop,
-};
-pub use dasclaw_core::intent::truncate_for_preview;
-// Issue #73 slice D: re-export PermissionMode so call sites (dispatcher,
-// worker/job, worker/container) construct hook bundles without depending
-// directly on dasclaw_core::permissions. The session-config layer that
-// eventually decides the mode lives in this crate — agent kernel stays
-// agnostic.
-pub use dasclaw_core::permissions::PermissionMode;
-// Issue #73 slice E: workspace boundary is now sourced from a
-// capability-validated `WorkspaceCapability` instead of a raw `PathBuf`.
-// Re-exported so call sites don't have to depend on `dasclaw_workspace_cap`
-// directly.
-pub use dasclaw_workspace_cap::WorkspaceCapability;
-// ADR-152 §3 F2.2 (#626): bash permission rule context is re-exported so
-// call sites construct `BashPermissionHook` rule contexts without taking a
-// direct dependency on the `dasclaw_bash_permissions` crate. Real rule
-// ingestion (from admin-backend / session config) is Phase 2.3.
-pub use dasclaw_hooks::ToolPermissionContext;
-
+use dasclaw_core::permissions::PermissionMode;
 use dasclaw_core::traits::HostError;
+use dasclaw_hooks::ToolPermissionContext;
+use dasclaw_workspace_cap::WorkspaceCapability;
 
 /// Convert a `HostError` produced by the engine back into ironclaw's
 /// concrete [`crate::error::Error`].
