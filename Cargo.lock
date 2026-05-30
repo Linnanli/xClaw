@@ -2742,6 +2742,7 @@ dependencies = [
  "tokio-stream",
  "tokio-test",
  "tokio-tungstenite 0.26.2",
+ "tokio-util",
  "toml 0.8.23",
  "tower 0.5.3",
  "tower-http 0.6.8",
@@ -12349,6 +12350,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

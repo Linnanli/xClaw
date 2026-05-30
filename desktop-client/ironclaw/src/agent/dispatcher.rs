@@ -11,17 +11,12 @@ use uuid::Uuid;
 
 use crate::agent::Agent;
 use crate::agent::session::{PendingApproval, Session, ThreadState};
-use crate::channels::{IncomingMessage, StatusUpdate};
+use crate::channels::IncomingMessage;
 use crate::error::Error;
-use async_trait::async_trait;
 use dasclaw_runtime::context::JobContext;
-use dasclaw_runtime::tool_dispatch::ToolDispatcher;
 
-use crate::agent::agentic_loop::{
-    AgenticLoopConfig, LoopDelegate, LoopOutcome, LoopSignal, TextAction,
-};
+use crate::agent::agentic_loop::{AgenticLoopConfig, LoopOutcome};
 use crate::llm::{ChatMessage, Reasoning, ReasoningContext};
-use dasclaw_core::traits::HostError;
 
 fn disabled_names_from_metadata(message: &IncomingMessage, key: &str) -> HashSet<String> {
     message
@@ -38,7 +33,7 @@ fn disabled_names_from_metadata(message: &IncomingMessage, key: &str) -> HashSet
         .unwrap_or_default()
 }
 
-fn filter_tools_by_disabled_extensions(
+pub(super) fn filter_tools_by_disabled_extensions(
     tools: Vec<crate::llm::ToolDefinition>,
     disabled_extensions: &HashSet<String>,
 ) -> Vec<crate::llm::ToolDefinition> {
@@ -250,38 +245,75 @@ impl Agent {
         let force_text_at = max_tool_iterations;
         let nudge_at = max_tool_iterations.saturating_sub(1);
 
-        let responder = Arc::new(super::desktop_responder::DesktopResponder::new(
-            reasoning,
-            self.llm().clone(),
-            self.deps.llm_backend.clone(),
-            self.deps.cache_monitor.clone(),
-            tenant.clone(),
-            thread_id,
-            self.channels.clone(),
-            message.channel.clone(),
-            message.metadata.clone(),
-        ));
+        let responder: Arc<dyn dasclaw_runtime::AgentResponder> =
+            Arc::new(super::desktop_responder::DesktopResponder::new(
+                reasoning,
+                self.llm().clone(),
+                self.deps.llm_backend.clone(),
+                self.deps.cache_monitor.clone(),
+                tenant.clone(),
+                thread_id,
+                self.channels.clone(),
+                message.channel.clone(),
+                message.metadata.clone(),
+                self.tools().clone(),
+                active_skills,
+                disabled_extensions.clone(),
+                cached_prompt.clone(),
+                cached_prompt_no_tools,
+                nudge_at,
+                force_text_at,
+            ));
 
-        let delegate = ChatDelegate {
-            agent: self,
-            session: session.clone(),
-            thread_id,
-            message: message.clone(),
-            job_ctx,
-            active_skills,
-            disabled_extensions,
-            cached_prompt,
-            cached_prompt_no_tools,
-            nudge_at,
-            force_text_at,
-            user_tz,
-            responder,
+        let dispatcher: Arc<dyn dasclaw_runtime::tool_dispatch::ToolDispatcher> =
+            Arc::new(super::desktop_dispatcher::DesktopDispatcher {
+                safety: self.safety().clone(),
+                tools: self.tools().clone(),
+                hooks: self.hooks().clone(),
+                channels: self.channels.clone(),
+                config: self.config.clone(),
+                message: message.clone(),
+                session: session.clone(),
+                thread_id,
+                job_ctx,
+                disabled_extensions,
+                user_tz,
+            });
+
+        // Bridge `ThreadState::Interrupted` (poll-based check in the old
+        // `ChatDelegate::check_signals`) onto `CancellationToken`, which is
+        // what `dasclaw_runtime::AgenticLoop` consults each iteration.
+        // A background watcher polls the session state every 100 ms and
+        // cancels the token on transition to `Interrupted`; the watcher is
+        // aborted when the loop returns.
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        let watcher_handle = {
+            let token = cancel_token.clone();
+            let session_clone = session.clone();
+            let thread_id_for_watcher = thread_id;
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    tokio::select! {
+                        _ = token.cancelled() => break,
+                        _ = interval.tick() => {}
+                    }
+                    let sess = session_clone.lock().await;
+                    if let Some(thread) = sess.threads.get(&thread_id_for_watcher)
+                        && thread.state == ThreadState::Interrupted
+                    {
+                        token.cancel();
+                        break;
+                    }
+                }
+            })
         };
 
         let mut reason_ctx = ReasoningContext::new()
             .with_messages(initial_messages)
             .with_tools(initial_tool_defs)
-            .with_system_prompt(delegate.cached_prompt.clone())
+            .with_system_prompt(cached_prompt)
             .with_metadata({
                 let mut m = std::collections::HashMap::new();
                 m.insert("thread_id".to_string(), thread_id.to_string());
@@ -295,39 +327,52 @@ impl Agent {
             max_tool_intent_nudges: 2,
         };
 
-        let outcome = crate::agent::agentic_loop::run_agentic_loop(
-            &delegate,
-            &mut reason_ctx,
-            &loop_config,
-            // Phase 3 Step G: SafetyLayer wired in via IronclawSafetyHook.
-            // Phase 3 Step F: SecretsStore on the tool registry now also
-            // flows into `bundle.secrets` so the agent hook layer can read
-            // user-scoped secrets without going through the tool path.
-            // Issue #73 slice D: PermissionMode threaded explicitly so the
-            // session-config layer can override per chat session.
-            // Issue #73 slice E: workspace boundary is sourced from a
-            // capability-validated `WorkspaceCapability`; `.` is the
-            // current chat session's working directory.
-            &crate::agent::agentic_loop::hook_bundle_with_safety_and_secrets(
-                self.safety().clone(),
-                &self.deps.tools,
-                &message.user_id,
-                std::sync::Arc::new(
-                    crate::agent::agentic_loop::WorkspaceCapability::open(
-                        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-                    )
-                    .map_err(|e| crate::error::WorkspaceError::IoError {
-                        reason: format!("failed to open workspace capability: {e}"),
-                    })?,
-                ),
-                crate::agent::agentic_loop::PermissionMode::WorkspaceWrite,
+        // Phase 3 Step G: SafetyLayer wired in via IronclawSafetyHook.
+        // Phase 3 Step F: SecretsStore on the tool registry now also flows
+        // into `bundle.secrets` so the agent hook layer can read user-scoped
+        // secrets without going through the tool path.
+        // Issue #73 slice D/E: PermissionMode + workspace boundary threaded
+        // explicitly so the session-config layer can override per chat session.
+        let hooks = crate::agent::agentic_loop::hook_bundle_with_safety_and_secrets(
+            self.safety().clone(),
+            &self.deps.tools,
+            &message.user_id,
+            std::sync::Arc::new(
+                crate::agent::agentic_loop::WorkspaceCapability::open(
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+                )
+                .map_err(|e| crate::error::WorkspaceError::IoError {
+                    reason: format!("failed to open workspace capability: {e}"),
+                })?,
             ),
+            crate::agent::agentic_loop::PermissionMode::WorkspaceWrite,
+        );
+
+        let outcome = dasclaw_runtime::AgenticLoop::new(
+            responder,
+            Some(dispatcher),
+            Some(cancel_token.clone()),
+            None,
         )
+        .run(&mut reason_ctx, &loop_config, &hooks)
         .await
-        .map_err(crate::agent::agentic_loop::host_err_to_error)?;
+        .map_err(crate::agent::agentic_loop::host_err_to_error);
+
+        // Stop the watcher regardless of how the loop terminated.
+        cancel_token.cancel();
+        let _ = watcher_handle.await;
+
+        let outcome = outcome?;
 
         match outcome {
-            LoopOutcome::Response(text) => Ok(AgenticLoopResult::Response(text)),
+            LoopOutcome::Response(text) => {
+                // Strip internal "[Called tool ...]" text that can leak when
+                // provider flattening (e.g. NEAR AI) converts tool_calls to
+                // plain text and the LLM echoes it back. Previously this
+                // lived in `ChatDelegate::handle_text_response`.
+                let sanitized = strip_internal_tool_call_text(&text);
+                Ok(AgenticLoopResult::Response(sanitized))
+            }
             LoopOutcome::Stopped => Err(crate::error::JobError::ContextError {
                 id: thread_id,
                 reason: "Interrupted".to_string(),
@@ -357,170 +402,6 @@ impl Agent {
         execute_chat_tool_standalone(self.tools(), self.safety(), tool_name, params, job_ctx).await
     }
 }
-
-/// Delegate for the chat (dispatcher) context.
-///
-/// Implements `LoopDelegate` to customize the shared agentic loop for
-/// interactive chat sessions with the full 3-phase tool execution
-/// (preflight → parallel exec → post-flight), approval flow, hooks,
-/// auth intercept, and cost tracking.
-struct ChatDelegate<'a> {
-    agent: &'a Agent,
-    session: Arc<Mutex<Session>>,
-    thread_id: Uuid,
-    message: Arc<IncomingMessage>,
-    job_ctx: JobContext,
-    active_skills: Vec<crate::skills::LoadedSkill>,
-    disabled_extensions: HashSet<String>,
-    cached_prompt: String,
-    cached_prompt_no_tools: String,
-    nudge_at: usize,
-    force_text_at: usize,
-    user_tz: chrono_tz::Tz,
-    /// W7.3: LLM call + cost guard + DB persistence delegated to here.
-    responder: Arc<super::desktop_responder::DesktopResponder>,
-}
-
-#[async_trait]
-impl<'a> LoopDelegate for ChatDelegate<'a> {
-    async fn check_signals(&self) -> LoopSignal {
-        let sess = self.session.lock().await;
-        if let Some(thread) = sess.threads.get(&self.thread_id)
-            && thread.state == ThreadState::Interrupted
-        {
-            return LoopSignal::Stop;
-        }
-        LoopSignal::Continue
-    }
-
-    async fn before_llm_call(
-        &self,
-        reason_ctx: &mut ReasoningContext,
-        iteration: usize,
-    ) -> Option<LoopOutcome> {
-        // Inject a nudge message when approaching the iteration limit so the
-        // LLM is aware it should produce a final answer on the next turn.
-        if iteration == self.nudge_at {
-            reason_ctx.messages.push(ChatMessage::system(
-                "You are approaching the tool call limit. \
-                 Provide your best final answer on the next response \
-                 using the information you have gathered so far. \
-                 Do not call any more tools.",
-            ));
-        }
-
-        let force_text = iteration >= self.force_text_at;
-
-        // Refresh tool definitions each iteration so newly built tools become visible.
-        // ADR-149 / issue #485 — L2 gate; interactive agent loop.
-        let tool_defs = self
-            .agent
-            .tools()
-            .tool_definitions_for_llm(
-                &dasclaw_governance::tool_visibility::ToolGateContextSeed::system(
-                    dasclaw_governance::tool_visibility::Env::Interactive,
-                ),
-            )
-            .await;
-        let tool_defs = filter_tools_by_disabled_extensions(tool_defs, &self.disabled_extensions);
-
-        // Apply trust-based tool attenuation if skills are active.
-        let tool_defs = if !self.active_skills.is_empty() {
-            let result = crate::skills::attenuate_tools(&tool_defs, &self.active_skills);
-            tracing::debug!(
-                min_trust = %result.min_trust,
-                tools_available = result.tools.len(),
-                tools_removed = result.removed_tools.len(),
-                removed = ?result.removed_tools,
-                explanation = %result.explanation,
-                "Tool attenuation applied"
-            );
-            result.tools
-        } else {
-            tool_defs
-        };
-
-        // Update context for this iteration
-        reason_ctx.available_tools = tool_defs;
-        // Preserve force_text if already set (e.g. by truncation escalation).
-        let force_text = force_text || reason_ctx.force_text;
-        reason_ctx.system_prompt = Some(if force_text {
-            self.cached_prompt_no_tools.clone()
-        } else {
-            self.cached_prompt.clone()
-        });
-        reason_ctx.force_text = force_text;
-
-        if force_text {
-            tracing::info!(
-                iteration,
-                "Forcing text-only response (iteration limit reached)"
-            );
-        }
-
-        let _ = self
-            .agent
-            .channels
-            .send_status(
-                &self.message.channel,
-                StatusUpdate::Thinking(format!("Thinking (step {iteration})...")),
-                &self.message.metadata,
-            )
-            .await;
-
-        None
-    }
-
-    async fn call_llm(
-        &self,
-        reason_ctx: &mut ReasoningContext,
-        _iteration: usize,
-    ) -> Result<crate::llm::RespondOutput, HostError> {
-        use dasclaw_runtime::AgentResponder;
-        self.responder.respond(reason_ctx).await
-    }
-
-    async fn handle_text_response(
-        &self,
-        text: &str,
-        _metadata: crate::llm::ResponseMetadata,
-        _usage: dasclaw_core::TokenUsage,
-        _reason_ctx: &mut ReasoningContext,
-    ) -> TextAction {
-        // Strip internal "[Called tool ...]" text that can leak when
-        // provider flattening (e.g. NEAR AI) converts tool_calls to
-        // plain text and the LLM echoes it back.
-        let sanitized = strip_internal_tool_call_text(text);
-        TextAction::Return(LoopOutcome::Response(sanitized))
-    }
-
-    async fn execute_tool_calls(
-        &self,
-        tool_calls: Vec<crate::llm::ToolCall>,
-        content: Option<String>,
-        usage: dasclaw_core::TokenUsage,
-        reason_ctx: &mut ReasoningContext,
-    ) -> Result<Option<LoopOutcome>, HostError> {
-        let dispatcher = super::desktop_dispatcher::DesktopDispatcher {
-            safety: self.agent.safety().clone(),
-            tools: self.agent.tools().clone(),
-            hooks: self.agent.hooks().clone(),
-            channels: self.agent.channels.clone(),
-            config: self.agent.config.clone(),
-            message: self.message.clone(),
-            session: self.session.clone(),
-            thread_id: self.thread_id,
-            job_ctx: self.job_ctx.clone(),
-            disabled_extensions: self.disabled_extensions.clone(),
-            user_tz: self.user_tz,
-        };
-        dispatcher
-            .dispatch(tool_calls, content, usage, reason_ctx)
-            .await
-    }
-}
-
-// ── Private helpers for ChatDelegate ────────────────────────────────────
 
 /// Execute a chat tool without requiring `&Agent`.
 ///
