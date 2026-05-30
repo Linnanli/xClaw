@@ -1,0 +1,4 @@
+# Python bytecode & pytest cache — 别让 cargo tauri dev 监视这些
+__pycache__/
+*.pyc
+.pytest_cache/
