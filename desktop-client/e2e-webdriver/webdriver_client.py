@@ -210,3 +210,94 @@ def wait_assistant_message_count(
 
     return poll(_check, timeout=timeout, interval=interval)
 
+
+# ---------------------------------------------------------------------------
+# 审批卡片（场景 4）
+# ---------------------------------------------------------------------------
+
+def wait_approval_card(
+    session_id: str,
+    timeout: float = 120.0,
+    interval: float = 1.5,
+) -> Optional[dict]:
+    """轮询直到 `[data-testid="approval-card"]` 出现，返回当时的 snapshot。
+
+    超时返回 None。LLM 是否选择走需审批工具与模型/提示词有关——把这一判断
+    留给上层断言（含可读的诊断 message）。
+    """
+
+    def _check():
+        s = snapshot(session_id)
+        return s if s["approvalCard"] else None
+
+    return poll(_check, timeout=timeout, interval=interval)
+
+
+def click_approval(session_id: str, decision: str) -> None:
+    """点击审批卡片的 `批准` 或 `拒绝` 按钮。
+
+    decision 必须是 "approve" 或 "deny"，对应 `[data-testid="approval-approve"]`
+    / `[data-testid="approval-deny"]`（见 approval-tool-ui.tsx）。
+
+    找不到按钮时抛 RuntimeError，避免静默失败。
+    """
+    if decision not in ("approve", "deny"):
+        raise ValueError(f"decision 必须是 'approve' 或 'deny'，得到 {decision!r}")
+    testid = f"approval-{decision}"
+    script = (
+        "const [tid] = arguments;"
+        "const btn = document.querySelector(`[data-testid=\"${tid}\"]`);"
+        "if (!btn) return false;"
+        "btn.click();"
+        "return true;"
+    )
+    ok = execjs(session_id, script, [testid])
+    if not ok:
+        raise RuntimeError(f"找不到审批按钮 [data-testid=\"{testid}\"]")
+
+
+def read_approval_decision(session_id: str) -> Optional[bool]:
+    """读 `[data-testid="approval-result"]` 上的 `data-approved` 属性。
+
+    返回 True / False / None（横幅尚未出现或属性缺失）。
+    """
+    script = (
+        "const e = document.querySelector('[data-testid=\"approval-result\"]');"
+        "if (!e) return null;"
+        "const v = e.getAttribute('data-approved');"
+        "if (v === 'true') return true;"
+        "if (v === 'false') return false;"
+        "return null;"
+    )
+    return execjs(session_id, script)
+
+
+def wait_approval_decision(
+    session_id: str,
+    expected_approved: bool,
+    timeout: float = 30.0,
+    interval: float = 1.0,
+) -> bool:
+    """轮询直到 `data-approved` 等于 expected_approved，返回是否命中。"""
+
+    def _check():
+        v = read_approval_decision(session_id)
+        return True if v is expected_approved else None
+
+    return bool(poll(_check, timeout=timeout, interval=interval))
+
+
+def clear_pending_approval(session_id: str, timeout: float = 5.0) -> bool:
+    """若存在挂起的审批卡片，点 deny 把它清掉。
+
+    用例之间共享同一 WKWebView，前一条用例可能留下未点击的卡片；本函数让
+    每条用例从"无挂起审批"的干净状态开始。返回是否实际清理过。
+    """
+    s = snapshot(session_id)
+    if not s["approvalCard"]:
+        return False
+    click_approval(session_id, "deny")
+    # 等横幅出现，确保 SDK 已把状态推进，避免下一条用例还看到旧卡片
+    wait_approval_decision(session_id, expected_approved=False, timeout=timeout)
+    return True
+
