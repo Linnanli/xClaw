@@ -12,11 +12,11 @@ cd desktop-client
 cargo test
 
 # 前端测试
-cd desktop-client/src-ui
+cd desktop-client/ui
 npm run test
 
 # E2E 测试
-cd desktop-client/src-ui
+cd desktop-client/ui
 npm run test:e2e
 ```
 
@@ -355,7 +355,7 @@ jobs:
       # 前端测试
       - name: Run frontend tests
         run: |
-          cd src-ui
+          cd ui
           npm install
           npm run test
 ```

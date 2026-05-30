@@ -58,7 +58,7 @@
 ```mermaid
 flowchart TB
     subgraph L1["L1 表现层 / Presentation"]
-        UI["Tauri 桌面 GUI<br/>desktop-client/src-ui (React + assistant-ui)"]
+        UI["Tauri 桌面 GUI<br/>desktop-client/ui (React + assistant-ui)"]
     end
 
     subgraph L2["L2 客户端外壳 / Client Shell"]

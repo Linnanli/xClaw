@@ -41,7 +41,7 @@ Desktop Client 是一个基于 Tauri 的桌面应用,采用前后端分离架构
 
 **目录结构**:
 ```
-src-ui/
+ui/
 ├── src/
 │   ├── app/
 │   │   ├── components/  # UI 组件

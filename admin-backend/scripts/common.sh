@@ -461,7 +461,7 @@ start_tauri_serial() {
     
     # ── 第一步：启动前端 dev server ──────────────────────────────
     log_info "启动前端 dev server..."
-    (cd "$DESKTOP_CLIENT_DIR/src-ui" && npm run dev) > /tmp/desktop-frontend.log 2>&1 &
+    (cd "$DESKTOP_CLIENT_DIR/ui" && npm run dev) > /tmp/desktop-frontend.log 2>&1 &
     local FRONTEND_PID=$!
 
     log_info "等待前端 http://localhost:5173 就绪..."

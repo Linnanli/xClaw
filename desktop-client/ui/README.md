@@ -67,7 +67,7 @@ npm run e2e
 ## 📁 项目结构
 
 ```
-desktop-client/src-ui/
+desktop-client/ui/
 ├── scripts/
 │   └── cypress/              # Cypress 安装脚本和文档
 │       ├── install.sh        # macOS/Linux 安装脚本

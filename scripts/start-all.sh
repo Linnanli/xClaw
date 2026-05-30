@@ -196,9 +196,9 @@ log_info "Desktop Client 使用嵌入式模式，跳过外部 IronClaw 服务器
 log_section "启动 Desktop Client"
 
 # 检查前端依赖（Tauri 不会自动 npm install）
-if [ ! -d "$PROJECT_ROOT/desktop-client/src-ui/node_modules" ]; then
+if [ ! -d "$PROJECT_ROOT/desktop-client/ui/node_modules" ]; then
     log_info "安装 Desktop Client 前端依赖..."
-    (cd "$PROJECT_ROOT/desktop-client/src-ui" && npm install)
+    (cd "$PROJECT_ROOT/desktop-client/ui" && npm install)
 fi
 
 # ── Tauri 启动（含嵌入式 IronClaw 引擎）──────────────────────────
@@ -223,7 +223,7 @@ else
     # tauri.conf.json 中已移除 beforeDevCommand，由脚本显式管理前端生命周期，
     # 避免 nvm 等工具安装的 node/npm 在 Tauri 内部 shell 中找不到的问题。
     log_info "启动前端 dev server..."
-    (cd "$PROJECT_ROOT/desktop-client/src-ui" && npm run dev) > /tmp/desktop-frontend.log 2>&1 &
+    (cd "$PROJECT_ROOT/desktop-client/ui" && npm run dev) > /tmp/desktop-frontend.log 2>&1 &
     DESKTOP_FRONTEND_PID=$!
 
     # 等待前端就绪（最多 30 秒）

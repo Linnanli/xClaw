@@ -40,7 +40,7 @@ python3.12 -m venv /Users/nallylin/.local/share/code-review-graph-venv
 ```
   /Users/nallylin/Documents/code/x-claw/desktop-client/ironclaw  (ironclaw)         ← MCP 默认 repo
   /Users/nallylin/Documents/code/x-claw/desktop-client/src       (desktop-client-app)  Tauri Rust backend
-  /Users/nallylin/Documents/code/x-claw/desktop-client/src-ui    (desktop-client-ui)   React TS/TSX 前端
+  /Users/nallylin/Documents/code/x-claw/desktop-client/ui    (desktop-client-ui)   React TS/TSX 前端
   /Users/nallylin/Documents/code/x-claw/crates                   (xclaw-core)
   /Users/nallylin/Documents/code/x-claw/ironclaw-main            (ironclaw-main)
   /Users/nallylin/Documents/code/x-claw/codex-cli-main           (codex-cli)

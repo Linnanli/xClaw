@@ -235,13 +235,13 @@ case 'approval_needed': {
 
 | 文件 | Phase | 改动类型 |
 |------|-------|---------|
-| `src-ui/src/app/components/tabs/ChatTabTauri.tsx` | 1 | 替换 Provider |
-| `src-ui/src/app/runtime/TauriRuntimeProvider.tsx` | 2,3 | 加 modelId prop, DLP 补齐, stream_chunk |
-| `src-ui/src/app/components/assistant-ui/thread.tsx` | 1 | useDlpState 导入源 |
+| `ui/src/app/components/tabs/ChatTabTauri.tsx` | 1 | 替换 Provider |
+| `ui/src/app/runtime/TauriRuntimeProvider.tsx` | 2,3 | 加 modelId prop, DLP 补齐, stream_chunk |
+| `ui/src/app/components/assistant-ui/thread.tsx` | 1 | useDlpState 导入源 |
 | `src/ipc/chat.rs` | 2 | send_chat_message 加 model_id 参数 |
 | `src/ipc/chat_tests.rs` | 2 | 更新测试 |
 | `tests/tauri_command_contract_tests.rs` | 2 | 验证参数变更兼容性 |
-| `src-ui/src/app/runtime/ChatRuntimeProvider.tsx` | 4 | 保留或删除 |
+| `ui/src/app/runtime/ChatRuntimeProvider.tsx` | 4 | 保留或删除 |
 | `docs/ai-chat-architecture.md` | 4 | 更新 |
 
 ---

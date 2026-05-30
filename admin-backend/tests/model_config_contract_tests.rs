@@ -6,7 +6,7 @@
 //! 契约来源：
 //! - 后端：`admin-backend/src/models.rs` → `ClientModelConfig`
 //! - 前端：`desktop-client/src/ipc/models.rs` → `ModelConfig`
-//! - TS：`desktop-client/src-ui/src/app/utils/tauri.ts` → `ModelConfigItem`
+//! - TS：`desktop-client/ui/src/app/utils/tauri.ts` → `ModelConfigItem`
 
 use serde_json::json;
 

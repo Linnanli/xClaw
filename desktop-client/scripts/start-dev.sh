@@ -76,10 +76,10 @@ echo "📋 配置来源:"
 echo "   📁 数据目录: $APP_DATA_DIR"
 
 # ── 检查前端依赖 ────────────────────────────────────────────────
-if [ ! -d "$PROJECT_DIR/src-ui/node_modules" ]; then
+if [ ! -d "$PROJECT_DIR/ui/node_modules" ]; then
     echo ""
     echo "📦 安装前端依赖..."
-    (cd "$PROJECT_DIR/src-ui" && npm install)
+    (cd "$PROJECT_DIR/ui" && npm install)
 fi
 
 # ── 启动前端 dev server ────────────────────────────────────────
@@ -96,7 +96,7 @@ fi
 
 echo ""
 echo "🌐 启动前端 dev server..."
-(cd "$PROJECT_DIR/src-ui" && npm run dev) &
+(cd "$PROJECT_DIR/ui" && npm run dev) &
 FRONTEND_PID=$!
 
 # 等待前端就绪（最多 30 秒）

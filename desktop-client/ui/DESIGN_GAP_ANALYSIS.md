@@ -1,6 +1,6 @@
 # 设计图 vs 代码实现差距分析
 
-> 设计图文件：`desktop-client/src-ui/design/client-design.pen`
+> 设计图文件：`desktop-client/ui/design/client-design.pen`
 > 分析日期：2026-03-24
 
 ## ✅ 已实现功能

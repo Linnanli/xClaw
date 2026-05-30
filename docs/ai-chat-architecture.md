@@ -174,7 +174,7 @@ Desktop Client 存在两条独立的对话路径：
 
 | 项目 | 说明 |
 |------|------|
-| 位置 | `desktop-client/src-ui/src/app/` |
+| 位置 | `desktop-client/ui/src/app/` |
 | 框架 | React 18 + TypeScript + Vite |
 | AI 对话库 | `@assistant-ui/react` + `@assistant-ui/react-ai-sdk` |
 | 构建工具 | Vite (Tauri 集成) |
@@ -601,9 +601,9 @@ main.rs
 
 | 你想找... | 去这里 |
 |-----------|--------|
-| 前端对话 UI 组件 | `desktop-client/src-ui/src/app/components/ai/` |
-| 前端运行时配置 | `desktop-client/src-ui/src/app/runtime/ChatRuntimeProvider.tsx` |
-| 前端 DLP hooks | `desktop-client/src-ui/src/app/hooks/useDlpScan.ts` |
+| 前端对话 UI 组件 | `desktop-client/ui/src/app/components/ai/` |
+| 前端运行时配置 | `desktop-client/ui/src/app/runtime/ChatRuntimeProvider.tsx` |
+| 前端 DLP hooks | `desktop-client/ui/src/app/hooks/useDlpScan.ts` |
 | Tauri IPC 命令 | `desktop-client/src/ipc/*.rs` |
 | Tauri 事件定义 | `desktop-client/src/tauri_channel.rs` (ChatEvent enum) |
 | 引擎启动逻辑 | `desktop-client/src/engine.rs` |

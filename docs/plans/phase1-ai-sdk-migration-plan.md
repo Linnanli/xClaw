@@ -116,7 +116,7 @@ TauriRuntimeProvider 订阅的 `ChatEvent` 共 **10 个 variant**，全部通过
 
 **产出**：ChatRuntimeProvider 从 153 → ~220 行；新增 3 个 Context ~450 行。E2E 跑 ChatTabTauriExperimental 验证模型切换、审批弹窗、引擎未就绪友好提示。
 
-**前置依赖 ⚠️**：`ChatTabTauriExperimental` 目前在 `src-ui/` 没有任何入口引用（MainApp 只 import `ChatTabTauri`）。**Phase 1.2 开始前必须先在 MainApp 加个 dev-only 切换**（feature flag / URL param / 隐藏 tab）让 Experimental 渲染起来，否则"实验 tab 并行验证"这条安全网是空的。这个切换在 Phase 1.5 合并时一并拆掉。
+**前置依赖 ⚠️**：`ChatTabTauriExperimental` 目前在 `ui/` 没有任何入口引用（MainApp 只 import `ChatTabTauri`）。**Phase 1.2 开始前必须先在 MainApp 加个 dev-only 切换**（feature flag / URL param / 隐藏 tab）让 Experimental 渲染起来，否则"实验 tab 并行验证"这条安全网是空的。这个切换在 Phase 1.5 合并时一并拆掉。
 
 **Experimental 依赖缺口清单**（必须在 Phase 1.2 新 Context 完成后立即接入 Experimental，否则 E2E 验证只能覆盖 DLP + 单模型）：
 
@@ -221,4 +221,4 @@ Phase 1.2 只在前端建 Context、订阅同一条 `chat-stream`、按 `data-cu
 
 - 本方案是 Phase 1 **总纲**。下一次开工时从 Phase 1.1 开始，每个阶段结束更新本文件的 Phase 1.x 对应段落，记录实际落地情况。
 - Phase 1 全程**不需要后端改动**（已修订），所以没有后端阻塞风险。
-- D-5 保持 deferred 不受影响——Phase 1 **只动 `desktop-client/src-ui/`**，完全不碰 Rust 侧。
+- D-5 保持 deferred 不受影响——Phase 1 **只动 `desktop-client/ui/`**，完全不碰 Rust 侧。

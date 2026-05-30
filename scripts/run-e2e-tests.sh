@@ -111,7 +111,7 @@ start_backend() {
 start_frontend() {
     log_info "Starting frontend dev server..."
     
-    cd desktop-client/src-ui
+    cd desktop-client/ui
     
     # 安装依赖（如果需要）
     if [ ! -d "node_modules" ]; then

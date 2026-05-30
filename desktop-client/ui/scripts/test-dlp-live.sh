@@ -23,7 +23,7 @@ echo ""
 echo "2️⃣ 检查前端服务..."
 if ! curl -s http://localhost:5173 > /dev/null 2>&1; then
     echo "❌ 前端服务未运行"
-    echo "   请先启动前端: cd desktop-client/src-ui && npm run dev"
+    echo "   请先启动前端: cd desktop-client/ui && npm run dev"
     exit 1
 fi
 echo "✅ 前端服务正常"

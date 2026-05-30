@@ -39,7 +39,7 @@
 
 ### 桌面客户端（Tauri）
 - Rust 源码：`desktop-client/src/`
-- 前端 UI：`desktop-client/src-ui/`
+- 前端 UI：`desktop-client/ui/`
 - 命令注册：`desktop-client/src/lib.rs`（`all_tauri_commands!()` 宏）
 - Tauri 配置：`desktop-client/tauri.conf.json`
 

@@ -52,7 +52,7 @@ done
 # ── 路径 ──────────────────────────────────────────────────────────────────────
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DESKTOP_RUST="$ROOT/desktop-client"
-DESKTOP_UI="$ROOT/desktop-client/src-ui"
+DESKTOP_UI="$ROOT/desktop-client/ui"
 ADMIN_RUST="$ROOT/admin-backend"
 ADMIN_UI="$ROOT/admin-backend/ui"
 
@@ -227,16 +227,16 @@ run_desktop_fe() {
 
     if [[ ! -d "$DESKTOP_UI/node_modules" ]]; then
         warn "node_modules 不存在，先安装依赖..."
-        run_step "desktop-client/src-ui: npm install" \
+        run_step "desktop-client/ui: npm install" \
             npm install --prefix "$DESKTOP_UI"
     fi
 
     # 单元测试（单次运行，不进入 watch 模式）
-    run_step "desktop-client/src-ui: vitest 单元测试" \
+    run_step "desktop-client/ui: vitest 单元测试" \
         npm run test --prefix "$DESKTOP_UI" -- --run
 
     # 覆盖率报告
-    run_step "desktop-client/src-ui: vitest 覆盖率" \
+    run_step "desktop-client/ui: vitest 覆盖率" \
         npm run test:coverage --prefix "$DESKTOP_UI" -- --run
 }
 
@@ -266,10 +266,10 @@ run_e2e() {
 
     # Desktop Client E2E
     if [[ -f "$DESKTOP_UI/cypress.config.ts" ]]; then
-        run_step "desktop-client/src-ui: cypress e2e" \
+        run_step "desktop-client/ui: cypress e2e" \
             npm run e2e --prefix "$DESKTOP_UI"
     else
-        warn "desktop-client/src-ui: 无 cypress.config.ts，跳过"
+        warn "desktop-client/ui: 无 cypress.config.ts，跳过"
     fi
 
     # Admin Backend E2E

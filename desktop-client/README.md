@@ -1,7 +1,7 @@
 建议工作流：
 sccache
 
-只改前端：直接 cd desktop-client/src-ui && npm run dev，浏览器访问 localhost:5173
+只改前端：直接 cd desktop-client/ui && npm run dev，浏览器访问 localhost:5173
 只改 Rust：cargo build -p desktop-client --lib 单独编译，确认无错后再启动
 需要完整 Tauri：才用 start-desktop.sh
 
