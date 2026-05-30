@@ -86,11 +86,15 @@ pub use agent::{
     ToolOutputSanitizer,
 };
 pub use agentic_loop::AgenticLoop;
+// W8.0: re-export the loop control vocabulary so AgentResponder impls
+// (and the desktop responder/dispatchers downstream) don't need a direct
+// `dasclaw_core::agentic_loop` import to spell return types.
 pub use approval::{
     ApprovalDecision, ApprovalDispatchError, ApprovalInbox, ApprovalOutcome, ApprovalPolicy,
     ApprovalRequest, Approver, NoApprovalPolicy, PolicyApprover,
 };
 pub use composite_executor::{CompositeError, CompositeToolExecutor};
+pub use dasclaw_core::agentic_loop::{LoopOutcome, LoopSignal, TextAction};
 pub use error::ToolError;
 pub use feature_flags::{SharedFeatureFlags, ToolFeatureFlags};
 pub use job::{JobState, StateTransition, TokenBudgetExceeded};
