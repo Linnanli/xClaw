@@ -8,12 +8,14 @@
 //!   downstream wrappers invoke the canonical binary.
 //! * `[lib].name` MUST stay `"ironclaw"` so the 200+ `use ironclaw::…`
 //!   imports across the workspace continue to resolve unchanged.
-//! * Two `[[bin]]` entries MUST exist — `dasclaw` (canonical) and
-//!   `ironclaw` (deprecation shim) — both pointing at `src/main.rs`.
+//! * The two binary entry points MUST exist on disk under `src/bin/` —
+//!   `dasclaw.rs` (canonical) and `ironclaw.rs` (deprecation shim) — and
+//!   are auto-discovered by Cargo, so `Cargo.toml` MUST NOT carry stale
+//!   explicit `[[bin]]` entries pointing at the old `src/main.rs`.
 //!
-//! The test is a pure string-level scan of `Cargo.toml`. It does not pull
-//! in `toml` or `cargo_metadata` to keep the dev-dep surface small and
-//! the test fast (< 5 ms).
+//! The test is a pure file-system + string scan. It does not pull in
+//! `toml` or `cargo_metadata` to keep the dev-dep surface small and the
+//! test fast (< 5 ms).
 
 use std::fs;
 use std::path::PathBuf;
@@ -59,21 +61,25 @@ fn req_110_lib_name_preserved_as_ironclaw() {
 
 #[test]
 fn req_110_dual_bin_targets_present() {
-    let text = cargo_toml_text();
-    let dasclaw_bin = text.contains("[[bin]]")
-        && text
-            .split("[[bin]]")
-            .any(|s| s.contains("name = \"dasclaw\"") && s.contains("path = \"src/main.rs\""));
-    let ironclaw_bin = text
-        .split("[[bin]]")
-        .any(|s| s.contains("name = \"ironclaw\"") && s.contains("path = \"src/main.rs\""));
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let dasclaw_bin = manifest_dir.join("src/bin/dasclaw.rs");
+    let ironclaw_bin = manifest_dir.join("src/bin/ironclaw.rs");
     assert!(
-        dasclaw_bin,
-        "req_110: missing [[bin]] dasclaw → src/main.rs (canonical entry)"
+        dasclaw_bin.is_file(),
+        "req_110: missing src/bin/dasclaw.rs (canonical entry, auto-discovered)"
     );
     assert!(
-        ironclaw_bin,
-        "req_110: missing [[bin]] ironclaw → src/main.rs (deprecation shim)"
+        ironclaw_bin.is_file(),
+        "req_110: missing src/bin/ironclaw.rs (deprecation shim, auto-discovered)"
+    );
+    // Guard against accidental reintroduction of an explicit [[bin]] entry
+    // pointing at the deleted `src/main.rs`, which would resurrect the
+    // "file present in multiple build targets" warning the split fixed.
+    let text = cargo_toml_text();
+    assert!(
+        !text.contains("path = \"src/main.rs\""),
+        "req_110: stale path = \"src/main.rs\" found in Cargo.toml; \
+         both bins must stay auto-discovered from src/bin/"
     );
 }
 
