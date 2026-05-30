@@ -487,6 +487,36 @@ pub async fn unsubscribe_chat_events() -> Result<(), String> {
     Ok(())
 }
 
+/// 引擎就绪状态快照（可查询）。
+///
+/// 三态对应 [`EngineState`]：`Starting`（`ready=false, failed=false`）、
+/// `Ready`（`ready=true`）、`Failed`（`failed=true` 且 `error` 填充）。
+#[derive(Debug, Clone, Serialize)]
+pub struct EngineStatus {
+    /// 引擎是否已就绪。
+    pub ready: bool,
+    /// 引擎是否启动失败。
+    pub failed: bool,
+    /// 启动失败原因（仅 `failed` 为 true 时填充）。
+    pub error: Option<String>,
+}
+
+/// 查询当前引擎就绪状态。
+///
+/// 与一次性的 `connection_status` 广播事件互补：广播负责"启动 → 就绪"
+/// 的实时通知；本命令负责"前端任意时刻（含 webview 刷新后）查询当前状态"，
+/// 从根上消除"刷新后错过一次性事件 → 永久卡在引擎启动中"的问题。
+#[tauri::command]
+pub async fn get_engine_status(engine: State<'_, EngineState>) -> Result<EngineStatus, String> {
+    let failed = engine.is_failed();
+    let error = if failed { engine.get().err() } else { None };
+    Ok(EngineStatus {
+        ready: engine.is_ready(),
+        failed,
+        error,
+    })
+}
+
 // ── 模型切换辅助函数 ─────────────────────────────────────────────
 
 /// 模型切换类型。

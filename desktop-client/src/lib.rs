@@ -93,6 +93,7 @@ macro_rules! all_tauri_commands {
             desktop_client::ipc::ic_finalize_thread,
             desktop_client::ipc::subscribe_chat_events,
             desktop_client::ipc::unsubscribe_chat_events,
+            desktop_client::ipc::get_engine_status,
             // ── 线程管理 ────────────────────────────────────────
             desktop_client::ipc::ic_list_threads,
             desktop_client::ipc::ic_create_thread,

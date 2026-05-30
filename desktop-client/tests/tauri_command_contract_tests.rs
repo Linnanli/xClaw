@@ -20,6 +20,7 @@ const FRONTEND_INVOKED_COMMANDS: &[&str] = &[
     "ic_finalize_thread",
     "subscribe_chat_events",
     "unsubscribe_chat_events",
+    "get_engine_status",
     // ── 线程管理 ────────────────────────────────────────────────
     "ic_list_threads",
     "ic_create_thread",
@@ -122,6 +123,7 @@ const REGISTERED_COMMANDS: &[&str] = &[
     "ic_finalize_thread",
     "subscribe_chat_events",
     "unsubscribe_chat_events",
+    "get_engine_status",
     "ic_list_threads",
     "ic_create_thread",
     "ic_get_thread_history",

@@ -11,6 +11,12 @@ tauri = { version = "2.11", features = ["protocol-asset"] }
 tauri-build = "2.0"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
+# Debug-only WebDriver automation plugin (Choochmeque/tauri-plugin-webdriver).
+# 安全门由两层有效机制保证，不依赖 cfg(debug_assertions) 选依赖（那在 target 表里无效）：
+#   1) optional + `webdriver` feature：未开 feature 时根本不编译该依赖；
+#   2) main.rs 仅在 cfg(all(debug_assertions, feature = "webdriver")) 下注册插件，
+#      release 构建即便误开 feature 也不会暴露 :4445 自动化 HTTP 服务（JS eval 面）。
+tauri-plugin-webdriver = { version = "0.2", optional = true }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -105,3 +111,4 @@ tauri-build = "2.0"
 [features]
 default = ["claw-code-llm"]
 claw-code-llm = ["ironclaw/claw-code-llm"]
+webdriver = ["dep:tauri-plugin-webdriver"]

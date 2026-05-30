@@ -9,6 +9,7 @@
 
 import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
 import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 
 interface EngineReadyState {
   /** 引擎是否已就绪 */
@@ -24,6 +25,24 @@ export function EngineReadyProvider({ children }: { children: ReactNode }) {
   const [readyKey, setReadyKey] = useState(0);
 
   useEffect(() => {
+    let cancelled = false;
+
+    const markReady = () => {
+      if (cancelled) return;
+      setReady(true);
+      setReadyKey((k) => k + 1);
+    };
+
+    // 1) 挂载时主动查询当前引擎状态作为初始值。
+    //    引擎就绪事件是一次性广播，webview 刷新后会错过，
+    //    必须在挂载时回查可查询状态，否则会永久卡在"引擎启动中…"。
+    invoke<{ ready: boolean }>('get_engine_status')
+      .then((status) => {
+        if (status?.ready) markReady();
+      })
+      .catch(() => {});
+
+    // 2) 订阅后续就绪事件（覆盖"挂载时引擎尚未就绪"的情况）。
     const unlistenPromise = listen<{ type: string; data?: { type?: string; connected?: boolean } }>(
       'chat-stream',
       (event) => {
@@ -33,13 +52,15 @@ export function EngineReadyProvider({ children }: { children: ReactNode }) {
           event.payload.data?.type === 'connection_status' &&
           event.payload.data?.connected
         ) {
-          setReady(true);
-          setReadyKey((k) => k + 1);
+          markReady();
         }
       },
     );
 
-    return () => { unlistenPromise.then((fn) => fn()).catch(() => {}); };
+    return () => {
+      cancelled = true;
+      unlistenPromise.then((fn) => fn()).catch(() => {});
+    };
   }, []);
 
   return (
