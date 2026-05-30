@@ -43,5 +43,5 @@ pytest desktop-client/e2e-webdriver/tests/test_scenario_01_engine_readiness.py -
 | 场景 | 状态 |
 |------|------|
 | §1 引擎就绪与刷新韧性 | ✅ 已落地 |
-| §2 Agent 基础执行 | ⬜ 待落地 |
+| §2 Agent 基础执行 | ✅ 已落地（需 LLM 可达） |
 | §3–§7 | ⬜ 待落地（按 plan §1–§7 顺序推进） |

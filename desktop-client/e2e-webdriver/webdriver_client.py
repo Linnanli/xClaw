@@ -114,11 +114,18 @@ def invoke(session_id: str, command: str, payload: Optional[dict] = None) -> Any
 
 
 def poll(fn: Callable[[], Any], timeout: float = 30.0, interval: float = 1.0) -> Any:
-    """轮询直到 fn() 返回真值或超时；返回最后一次结果。"""
+    """轮询直到 fn() 返回真值或超时；返回最后一次结果。
+
+    fn() 抛 `URLError` / `HTTPError` / `OSError` 视为"页面还没准备好"，
+    继续重试——典型场景是上一条用例刚 `location.reload()`，page agent 还在重启。
+    """
     last = None
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        last = fn()
+        try:
+            last = fn()
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError):
+            last = None
         if last:
             return last
         time.sleep(interval)
@@ -146,3 +153,31 @@ return JSON.stringify({
 def snapshot(session_id: str) -> dict:
     """便捷封装：跑 SNAPSHOT 探针并解析为 dict。"""
     return json.loads(execjs(session_id, SNAPSHOT))
+
+
+# 通过原生 setter 注入文本，绕过 React 受控组件的 onChange 监听。
+_INJECT_COMPOSER = r"""
+const [text] = arguments;
+const ta = document.querySelector('textarea.aui-composer-input');
+if (!ta) return false;
+const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+setter.call(ta, text);
+ta.dispatchEvent(new Event('input', { bubbles: true }));
+return true;
+"""
+
+
+def type_into_composer(session_id: str, text: str) -> None:
+    """把 text 注入 `textarea.aui-composer-input` 并触发 React 的 onChange。"""
+    ok = execjs(session_id, _INJECT_COMPOSER, [text])
+    if not ok:
+        raise RuntimeError("找不到 textarea.aui-composer-input")
+
+
+def click_send(session_id: str) -> None:
+    """点击 `button.aui-composer-send`。"""
+    execjs(
+        session_id,
+        "document.querySelector('button.aui-composer-send').click(); return true;",
+    )
+
