@@ -15,6 +15,7 @@ pub mod agentic_loop;
 mod attachments;
 mod commands;
 pub mod compaction;
+mod desktop_dispatcher;
 mod dispatcher;
 mod router;
 pub mod session;
