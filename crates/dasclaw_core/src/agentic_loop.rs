@@ -1,11 +1,17 @@
 //! Unified agentic loop engine.
 //!
-//! Ported from ironclaw `agent/agentic_loop.rs` as part of Phase 3 Step D-4.
+//! Ported from ironclaw `agent/agentic_loop.rs` as part of Phase 3 Step D-4,
+//! then collapsed in W10.1 (issue #982) onto a thinner two-seam contract:
+//! the loop drives an [`AgentResponder`] for LLM I/O and an optional
+//! [`ToolDispatcher`] for tool execution. The prior `LoopDelegate` trait
+//! that lumped both seams together is gone — see the W10 PR series for the
+//! migration trail.
 //!
 //! The engine runs the core LLM call → tool execution → result processing →
 //! context update → repeat cycle. Three consumers (chat dispatcher, job
-//! worker, container runtime) customize behavior via the [`LoopDelegate`]
-//! trait.
+//! worker, container runtime) plug in by implementing the two narrow
+//! traits and (in the desktop case) building their own `AgenticLoop`
+//! wrapper in `dasclaw_runtime`.
 //!
 //! ## Route B (scope-narrowing vs. ironclaw's pre-port version)
 //!
@@ -13,12 +19,15 @@
 //! `call_llm` invocation. That made the engine aware of ironclaw's concrete
 //! LLM engine and forced the `dasclaw_core` port to invent a trait facade.
 //!
-//! Route B removes the `reasoning` parameter entirely: each delegate owns
+//! Route B removes the `reasoning` parameter entirely: each responder owns
 //! whatever LLM engine it needs internally. The engine only sees
-//! `RespondOutput` values — it doesn't know an "LLM" exists.
+//! [`RespondOutput`] values — it doesn't know an "LLM" exists.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use crate::egress_apply::{EgressApply, apply_egress_decision};
 use crate::hooks::{EgressKind, HookBundle};
@@ -29,7 +38,7 @@ use crate::response_types::{RespondOutput, RespondResult, ResponseMetadata, Toke
 use crate::session::PendingApproval;
 use crate::traits::HostError;
 
-/// Signal from the delegate indicating how the loop should proceed.
+/// Signal from the responder indicating how the loop should proceed.
 pub enum LoopSignal {
     /// Continue normally.
     Continue,
@@ -80,89 +89,247 @@ impl Default for AgenticLoopConfig {
     }
 }
 
-/// Strategy trait — each consumer implements this to customize I/O and
-/// lifecycle.
+/// Sentinel surfaced as `LoopOutcome::Failure` when the model emits a
+/// tool call but no [`ToolDispatcher`] was wired up. The runtime maps
+/// this back to `AgentError::ToolsNotSupported` (see
+/// `dasclaw_runtime::AgentError`).
+pub const TOOLS_NOT_SUPPORTED_REASON: &str = "headless-agent::tools-not-supported";
+
+/// Streaming event emitted by the loop and forwarded to GUI / CLI hosts
+/// (issue #908, GUI blocker B2).
 ///
-/// The shared loop calls these methods at well-defined points. Consumers
-/// implement only the behavior that differs between chat, job, and
-/// container contexts. The loop itself handles the common logic: tool
-/// intent nudge, iteration counting, truncation handling, and the
-/// respond → execute → process cycle.
+/// One event per observable step in the agentic loop:
+///
+/// - `TextChunk` — a fragment of model output as it arrives from the LLM.
+///   For providers without true token streaming the chunk arrives in a
+///   single piece; consumers should not depend on a particular chunk size.
+/// - `ToolCallStart` — the model asked to invoke a tool; emitted before
+///   tool execution.
+/// - `ToolResult` — the tool finished; payload is the sanitized content
+///   that the **next** LLM iteration will see in its `tool_result` block
+///   (post-egress, post-sanitizer).
+/// - `FinishReason` — one per LLM iteration boundary, carrying the
+///   model's stop reason. Use it to render "stopped", "needs tool", etc.
+///   in a GUI.
+/// - `ApprovalNeeded` — the configured approval policy flagged a tool
+///   call as needing human approval; the loop has paused until the host
+///   replies with a matching decision.
+///
+/// Wire format is adjacent-tagged JSON
+/// (`{"kind": "text_chunk", "data": "..."}`) so a TypeScript discriminated
+/// union renders directly from `serde_json::to_string(&event)`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+pub enum AgentEvent {
+    /// A fragment of model text output.
+    TextChunk(String),
+    /// The model requested a tool invocation.
+    ToolCallStart {
+        /// Tool name as emitted by the model.
+        name: String,
+        /// Tool arguments as raw JSON.
+        arguments: serde_json::Value,
+    },
+    /// A tool finished; `content` is the post-sanitization payload that
+    /// is fed back into the next LLM iteration.
+    ToolResult {
+        /// Tool name as it appeared in the matching `ToolCallStart`.
+        name: String,
+        /// Sanitized tool output that the LLM will see next iteration.
+        content: String,
+        /// `true` when the executor returned an error tool_result or the
+        /// egress gate replaced the content with a `[redacted: …]`
+        /// placeholder.
+        is_error: bool,
+    },
+    /// Stop reason for the LLM iteration that just ended.
+    FinishReason(FinishReason),
+    /// The configured approval policy flagged a tool call as needing
+    /// human approval (issue #910, GUI blocker B4).
+    ///
+    /// The agent loop has paused waiting for the host to dispatch a
+    /// matching approval decision for `request_id`. Until then no
+    /// further [`AgentEvent`]s are emitted for this turn.
+    ApprovalNeeded {
+        /// Unique handle the GUI feeds back into the approval inbox.
+        request_id: Uuid,
+        /// Tool name as emitted by the model.
+        tool_name: String,
+        /// Raw tool arguments, mirroring the matching `ToolCallStart`
+        /// payload.
+        tool_arguments: serde_json::Value,
+        /// Human-readable description supplied by the policy.
+        description: String,
+        /// Sanitised parameters preview the GUI should render — *not*
+        /// the raw arguments.
+        display_parameters: serde_json::Value,
+        /// `true` when the GUI may surface an "approve always"
+        /// affordance.
+        allow_always: bool,
+    },
+}
+
+/// Best-effort emit; a closed receiver is not a loop-fatal error.
+async fn emit_event(tx: Option<&mpsc::Sender<AgentEvent>>, event: AgentEvent) {
+    if let Some(tx) = tx {
+        let _ = tx.send(event).await;
+    }
+}
+
+/// Narrow LLM seam driven by [`run_agentic_loop`].
+///
+/// Adapters wrap a concrete LLM client (`dasclaw_llm_provider`, a mock,
+/// a recorder, …) and translate from the provider-native response into a
+/// [`RespondOutput`]. The loop calls [`Self::respond`] once per iteration
+/// in non-streaming mode, and [`Self::respond_streaming`] when the host
+/// wired up an event channel for token-level streaming.
+///
+/// The remaining methods replace the old `LoopDelegate` lifecycle hooks
+/// (`check_signals` / `before_llm_call` / `handle_text_response` /
+/// `on_tool_intent_nudge` / `after_iteration`). All have defaults so a
+/// minimal "headless agent" responder only has to implement
+/// [`Self::respond`].
 ///
 /// # `Send + Sync` requirement
 ///
 /// This trait requires `Send + Sync` because the loop accepts
-/// `&dyn LoopDelegate`. Delegates using borrowed references (e.g.
-/// `ChatDelegate<'a>`) must ensure all borrowed fields are `Send + Sync`.
-/// This is a load-bearing constraint: if a delegate needs to be spawned
-/// into a detached task, it must use `Arc`-based ownership instead of
-/// borrows.
+/// `&dyn AgentResponder`. Responders using borrowed references (e.g.
+/// scoped `ChatResponder<'a>`) must ensure all borrowed fields are
+/// `Send + Sync`. This is load-bearing: a responder that needs to be
+/// spawned into a detached task must use `Arc`-based ownership instead
+/// of borrows.
 #[async_trait]
-pub trait LoopDelegate: Send + Sync {
-    /// Called at the start of each iteration. Check for external signals
-    /// (cancellation, user messages, stop requests).
-    async fn check_signals(&self) -> LoopSignal;
+pub trait AgentResponder: Send + Sync {
+    /// Produce the next response for the given context.
+    async fn respond(&self, ctx: &mut ReasoningContext) -> Result<RespondOutput, HostError>;
 
-    /// Called before the LLM call. Allows the delegate to refresh tool
-    /// definitions, enforce cost guards, or inject messages.
-    /// Return `Some(outcome)` to break the loop early.
+    /// Streaming-aware variant used when the host wired up an event
+    /// channel (issue #908, GUI blocker B2).
+    ///
+    /// `event_tx` is the same channel the agent loop forwards
+    /// [`AgentEvent`]s on. Implementations emit one or more
+    /// [`AgentEvent::TextChunk`] events as the model produces text and
+    /// then return the final [`RespondOutput`] so the loop can dispatch
+    /// to tool execution or finish.
+    ///
+    /// The default implementation calls [`Self::respond`] and forwards
+    /// the final text (if any) as a single chunk, so every existing
+    /// adapter stays wire-compatible without code changes. Adapters
+    /// backed by streaming providers override this method to forward
+    /// token-level deltas as they arrive.
+    ///
+    /// `ToolCallStart`, `ToolResult` and `FinishReason` events are emitted
+    /// by the agent loop itself — implementations should only emit
+    /// [`AgentEvent::TextChunk`].
+    async fn respond_streaming(
+        &self,
+        ctx: &mut ReasoningContext,
+        event_tx: mpsc::Sender<AgentEvent>,
+    ) -> Result<RespondOutput, HostError> {
+        let out = self.respond(ctx).await?;
+        if let RespondResult::Text(ref text) = out.result {
+            // Drop on closed channel is fine: the consumer hung up, but
+            // the loop still needs to return the full RespondOutput.
+            let _ = event_tx.send(AgentEvent::TextChunk(text.clone())).await;
+        }
+        Ok(out)
+    }
+
+    /// Per-iteration signal check.
+    ///
+    /// Returned every loop turn before any LLM call. The default keeps
+    /// the loop running; hosts that drain a stop / cancellation channel
+    /// override this. The loop's own cancellation token (passed to
+    /// [`run_agentic_loop`]) is honoured independently — a `Continue`
+    /// here cannot override an already-cancelled token.
+    async fn check_signals(&self) -> LoopSignal {
+        LoopSignal::Continue
+    }
+
+    /// Pre-LLM iteration setup.
+    ///
+    /// Runs after [`Self::check_signals`] and before [`Self::respond`].
+    /// Hosts use it to mutate the context (inject prompts, swap tool
+    /// tables, force text mode) or short-circuit the loop by returning
+    /// `Some(outcome)`. The default is a no-op.
     async fn before_llm_call(
         &self,
-        reason_ctx: &mut ReasoningContext,
-        iteration: usize,
-    ) -> Option<LoopOutcome>;
+        _ctx: &mut ReasoningContext,
+        _iteration: usize,
+    ) -> Option<LoopOutcome> {
+        None
+    }
 
-    /// Call the LLM and return the result. Delegates own the LLM engine
-    /// themselves — the loop doesn't care what produces `RespondOutput`.
-    async fn call_llm(
-        &self,
-        reason_ctx: &mut ReasoningContext,
-        iteration: usize,
-    ) -> Result<RespondOutput, HostError>;
-
-    /// Handle a text-only response from the LLM.
-    /// Return `TextAction::Return` to exit the loop, `TextAction::Continue`
-    /// to proceed.
+    /// React to a pure-text LLM response.
     ///
-    /// `usage` is the per-turn token usage from the call that produced
-    /// `text`. Delegates that persist the assistant turn (e.g. to a session
-    /// transcript) MUST attach it via [`ChatMessage::with_usage`] so the
-    /// stored history matches claw-code's `ConversationMessage.usage` shape.
+    /// Called when [`Self::respond`] yields a [`RespondResult::Text`]
+    /// payload. The default appends the assistant message to `ctx` and
+    /// terminates the loop with [`LoopOutcome::Response`], matching the
+    /// pre-W10 headless-agent behaviour. Hosts that need recovery /
+    /// completion-detection logic override this and may return
+    /// [`TextAction::Continue`] to keep iterating.
     async fn handle_text_response(
         &self,
         text: &str,
-        metadata: ResponseMetadata,
+        _metadata: ResponseMetadata,
         usage: TokenUsage,
-        reason_ctx: &mut ReasoningContext,
-    ) -> TextAction;
+        ctx: &mut ReasoningContext,
+    ) -> TextAction {
+        ctx.messages
+            .push(ChatMessage::assistant(text).with_usage(usage));
+        TextAction::Return(LoopOutcome::Response(text.to_string()))
+    }
 
-    /// Execute tool calls and add results to context.
-    /// Return `Some(outcome)` to break the loop (e.g. approval needed).
+    /// React to a tool-intent nudge being injected.
     ///
-    /// `usage` is the per-turn token usage from the call that produced
-    /// `tool_calls`. Delegates that record the assistant tool-call turn
-    /// MUST attach it via [`ChatMessage::with_usage`].
-    async fn execute_tool_calls(
+    /// Called when the loop detects the model produced text that looked
+    /// like a tool intent and injects a corrective nudge. Default is a
+    /// no-op; hosts override to emit a UI event.
+    async fn on_tool_intent_nudge(&self, _text: &str, _ctx: &mut ReasoningContext) {}
+
+    /// End-of-iteration callback.
+    ///
+    /// Called after every successful iteration that did not return an
+    /// outcome. Default is a no-op; hosts use it for throttling /
+    /// progress reporting.
+    async fn after_iteration(&self, _iteration: usize) {}
+}
+
+/// Narrow tool-execution seam driven by [`run_agentic_loop`].
+///
+/// Wraps a concrete tool-dispatch pipeline (ADR-153 §1.1 5-step pipeline,
+/// a parallel dispatcher, a replay engine, a mock, …) and drives a
+/// single iteration's worth of tool calls. The loop calls
+/// [`Self::dispatch`] once per iteration that produced tool calls;
+/// dispatchers that need to record the assistant tool-call turn into
+/// the context must do so themselves before executing.
+///
+/// When no dispatcher is wired and the model still emits a tool call,
+/// the loop ends with [`LoopOutcome::Failure`] carrying
+/// [`TOOLS_NOT_SUPPORTED_REASON`].
+#[async_trait]
+pub trait ToolDispatcher: Send + Sync {
+    /// Execute one iteration's worth of tool calls.
+    ///
+    /// Returning `Ok(Some(outcome))` short-circuits the agentic loop
+    /// (e.g. approval rejection, fatal sandbox refusal). Returning
+    /// `Ok(None)` lets the loop run another model turn.
+    async fn dispatch(
         &self,
         tool_calls: Vec<ToolCall>,
         content: Option<String>,
         usage: TokenUsage,
-        reason_ctx: &mut ReasoningContext,
+        ctx: &mut ReasoningContext,
     ) -> Result<Option<LoopOutcome>, HostError>;
-
-    /// Called when the LLM expresses tool intent without actually calling a
-    /// tool. Delegates can use this to emit events or log the nudge for
-    /// observability.
-    async fn on_tool_intent_nudge(&self, _text: &str, _reason_ctx: &mut ReasoningContext) {}
-
-    /// Called after each successful iteration (no error, no early return).
-    async fn after_iteration(&self, _iteration: usize) {}
 }
 
 /// Run the unified agentic loop.
 ///
-/// This is the single implementation used by all consumers. The `delegate`
-/// provides consumer-specific behavior via the [`LoopDelegate`] trait.
+/// `responder` provides LLM I/O and per-iteration lifecycle hooks.
+/// `dispatcher` is optional: when `None`, tool calls from the model
+/// surface as [`LoopOutcome::Failure`] with [`TOOLS_NOT_SUPPORTED_REASON`].
+/// `cancellation_token` and `event_tx` are also optional — passing both
+/// `None` yields the minimum "headless" loop.
 ///
 /// `hooks` is the environment bundle ([`HookBundle`]). The loop itself
 /// calls two of the four hooks directly:
@@ -172,17 +339,18 @@ pub trait LoopDelegate: Send + Sync {
 ///   `LoopOutcome::Failure`. A `Redact` swaps the message content with
 ///   the sanitized payload.
 /// - `egress.check(EgressKind::UserDisplay, …)` on text-only LLM responses
-///   before the delegate sees them. `Redact` swaps the text in place so
+///   before the responder sees them. `Redact` swaps the text in place so
 ///   downstream UI sees the sanitized version.
 ///
-/// Tool-level egress (`EgressKind::ToolExecution`) and
-///
-/// Tool-level egress (`EgressKind::ToolExecution`) and
-/// `ApprovalGate::request` are the responsibility of the
-/// [`LoopDelegate::execute_tool_calls`] implementation. Delegates typically
-/// clone the same `Arc<HookBundle>` at construction time.
+/// Tool-level egress (`EgressKind::ToolExecution`) and approval gating
+/// are the responsibility of the [`ToolDispatcher`] implementation.
+/// Dispatchers typically clone the same `Arc<HookBundle>` at
+/// construction time.
 pub async fn run_agentic_loop(
-    delegate: &dyn LoopDelegate,
+    responder: &dyn AgentResponder,
+    dispatcher: Option<&dyn ToolDispatcher>,
+    cancellation_token: Option<&CancellationToken>,
+    event_tx: Option<&mpsc::Sender<AgentEvent>>,
     reason_ctx: &mut ReasoningContext,
     config: &AgenticLoopConfig,
     hooks: &HookBundle,
@@ -193,8 +361,15 @@ pub async fn run_agentic_loop(
     let mut truncation_count: u32 = 0;
 
     for iteration in 1..=config.max_iterations {
-        // Check for external signals (stop, cancellation, user messages)
-        match delegate.check_signals().await {
+        // Check for external signals (stop, cancellation, user messages).
+        // A cancelled token always wins even if the responder would
+        // return `Continue`.
+        let signal = if cancellation_token.is_some_and(CancellationToken::is_cancelled) {
+            LoopSignal::Stop
+        } else {
+            responder.check_signals().await
+        };
+        match signal {
             LoopSignal::Continue => {}
             LoopSignal::Stop => return Ok(LoopOutcome::Stopped),
             LoopSignal::InjectMessage(msg) => {
@@ -204,7 +379,7 @@ pub async fn run_agentic_loop(
 
         // Pre-LLM call hook (cost guard, tool refresh, iteration limit
         // nudge)
-        if let Some(outcome) = delegate.before_llm_call(reason_ctx, iteration).await {
+        if let Some(outcome) = responder.before_llm_call(reason_ctx, iteration).await {
             return Ok(outcome);
         }
 
@@ -228,13 +403,19 @@ pub async fn run_agentic_loop(
             }
         }
 
-        // Call LLM
-        let mut output = delegate.call_llm(reason_ctx, iteration).await?;
+        // Call LLM (streaming when an event channel is wired, plain
+        // otherwise). Forward the trailing `FinishReason` so a GUI knows
+        // the iteration boundary even when the model emitted no text.
+        let mut output = match event_tx {
+            Some(tx) => responder.respond_streaming(reason_ctx, tx.clone()).await?,
+            None => responder.respond(reason_ctx).await?,
+        };
+        emit_event(event_tx, AgentEvent::FinishReason(output.finish_reason)).await;
 
         // EgressGate (ADR-148 Layer B): scan / redact text completions
-        // before the delegate (and ultimately the user UI) sees them.
-        // Tool-call responses skip this gate; delegates apply the
-        // tool-level egress themselves inside `execute_tool_calls`.
+        // before the responder (and ultimately the user UI) sees them.
+        // Tool-call responses skip this gate; dispatchers apply the
+        // tool-level egress themselves inside `dispatch`.
         if let RespondResult::Text(ref mut text) = output.result {
             let decision = hooks.egress.check(&EgressKind::UserDisplay, text).await;
             if let EgressApply::Halt(reason) = apply_egress_decision(decision, text, "UserDisplay")
@@ -284,14 +465,14 @@ pub async fn run_agentic_loop(
                         iteration,
                         "LLM expressed tool intent without calling a tool, nudging"
                     );
-                    delegate.on_tool_intent_nudge(&text, reason_ctx).await;
+                    responder.on_tool_intent_nudge(&text, reason_ctx).await;
                     reason_ctx
                         .messages
                         .push(ChatMessage::assistant(&text).with_usage(usage));
                     reason_ctx
                         .messages
                         .push(ChatMessage::user(TOOL_INTENT_NUDGE));
-                    delegate.after_iteration(iteration).await;
+                    responder.after_iteration(iteration).await;
                     continue;
                 }
 
@@ -301,7 +482,7 @@ pub async fn run_agentic_loop(
                     consecutive_tool_intent_nudges = 0;
                 }
 
-                match delegate
+                match responder
                     .handle_text_response(&text, output.metadata, usage, reason_ctx)
                     .await
                 {
@@ -340,23 +521,26 @@ pub async fn run_agentic_loop(
                     if truncation_count >= 3 {
                         reason_ctx.force_text = true;
                     }
-                    delegate.after_iteration(iteration).await;
+                    responder.after_iteration(iteration).await;
                     continue;
                 }
 
                 consecutive_tool_intent_nudges = 0;
                 truncation_count = 0;
 
-                if let Some(outcome) = delegate
-                    .execute_tool_calls(tool_calls, content, usage, reason_ctx)
-                    .await?
-                {
+                // No dispatcher wired → emit the sentinel and let the
+                // host map it back to `AgentError::ToolsNotSupported`.
+                let outcome_opt = match dispatcher {
+                    Some(d) => d.dispatch(tool_calls, content, usage, reason_ctx).await?,
+                    None => Some(LoopOutcome::Failure(TOOLS_NOT_SUPPORTED_REASON.to_string())),
+                };
+                if let Some(outcome) = outcome_opt {
                     return Ok(outcome);
                 }
             }
         }
 
-        delegate.after_iteration(iteration).await;
+        responder.after_iteration(iteration).await;
     }
 
     Ok(LoopOutcome::MaxIterations)
@@ -367,6 +551,7 @@ mod tests {
     use super::*;
     use crate::messages::{Role, ToolCall, ToolDefinition};
     use crate::response_types::{ResponseAnomaly, TokenUsage};
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Mutex;
 
@@ -395,24 +580,34 @@ mod tests {
         }
     }
 
-    /// Configurable mock delegate for testing `run_agentic_loop`.
-    struct MockDelegate {
+    /// Default invocation: run with no dispatcher / cancellation / event
+    /// channel, matching the legacy `run_agentic_loop(&delegate, …)`
+    /// shape used by the pre-W10.1 tests.
+    async fn run_with(
+        responder: &dyn AgentResponder,
+        ctx: &mut ReasoningContext,
+        config: &AgenticLoopConfig,
+        hooks: &HookBundle,
+    ) -> Result<LoopOutcome, HostError> {
+        run_agentic_loop(responder, None, None, None, ctx, config, hooks).await
+    }
+
+    /// Configurable mock responder + dispatcher pair for driving
+    /// `run_agentic_loop`. Splits the old `MockDelegate` cleanly along the
+    /// new trait boundary.
+    struct MockResponder {
         signal: Mutex<LoopSignal>,
         llm_responses: Mutex<Vec<RespondOutput>>,
-        tool_exec_count: AtomicUsize,
-        tool_exec_outcome: Mutex<Option<LoopOutcome>>,
         iterations_seen: Mutex<Vec<usize>>,
         early_exit: Mutex<Option<(usize, LoopOutcome)>>,
         nudge_count: AtomicUsize,
     }
 
-    impl MockDelegate {
+    impl MockResponder {
         fn new(responses: Vec<RespondOutput>) -> Self {
             Self {
                 signal: Mutex::new(LoopSignal::Continue),
                 llm_responses: Mutex::new(responses),
-                tool_exec_count: AtomicUsize::new(0),
-                tool_exec_outcome: Mutex::new(None),
                 iterations_seen: Mutex::new(Vec::new()),
                 early_exit: Mutex::new(None),
                 nudge_count: AtomicUsize::new(0),
@@ -431,7 +626,16 @@ mod tests {
     }
 
     #[async_trait]
-    impl LoopDelegate for MockDelegate {
+    impl AgentResponder for MockResponder {
+        async fn respond(&self, _ctx: &mut ReasoningContext) -> Result<RespondOutput, HostError> {
+            let mut responses = self.llm_responses.lock().await;
+            assert!(
+                !responses.is_empty(),
+                "MockResponder: no more LLM responses queued"
+            );
+            Ok(responses.remove(0))
+        }
+
         async fn check_signals(&self) -> LoopSignal {
             let mut sig = self.signal.lock().await;
             std::mem::replace(&mut *sig, LoopSignal::Continue)
@@ -439,7 +643,7 @@ mod tests {
 
         async fn before_llm_call(
             &self,
-            _reason_ctx: &mut ReasoningContext,
+            _ctx: &mut ReasoningContext,
             iteration: usize,
         ) -> Option<LoopOutcome> {
             let mut guard = self.early_exit.lock().await;
@@ -453,44 +657,19 @@ mod tests {
             }
         }
 
-        async fn call_llm(
-            &self,
-            _reason_ctx: &mut ReasoningContext,
-            _iteration: usize,
-        ) -> Result<RespondOutput, HostError> {
-            let mut responses = self.llm_responses.lock().await;
-            if responses.is_empty() {
-                panic!("MockDelegate: no more LLM responses queued");
-            }
-            Ok(responses.remove(0))
-        }
-
         async fn handle_text_response(
             &self,
             text: &str,
             _metadata: ResponseMetadata,
             _usage: TokenUsage,
-            _reason_ctx: &mut ReasoningContext,
+            _ctx: &mut ReasoningContext,
         ) -> TextAction {
+            // Override the default (which appends + Returns) so the
+            // assertion shape of the pre-W10 tests carries over unchanged.
             TextAction::Return(LoopOutcome::Response(text.to_string()))
         }
 
-        async fn execute_tool_calls(
-            &self,
-            _tool_calls: Vec<ToolCall>,
-            _content: Option<String>,
-            _usage: TokenUsage,
-            reason_ctx: &mut ReasoningContext,
-        ) -> Result<Option<LoopOutcome>, HostError> {
-            self.tool_exec_count.fetch_add(1, Ordering::SeqCst);
-            reason_ctx
-                .messages
-                .push(ChatMessage::user("tool result stub"));
-            let outcome = self.tool_exec_outcome.lock().await.take();
-            Ok(outcome)
-        }
-
-        async fn on_tool_intent_nudge(&self, _text: &str, _reason_ctx: &mut ReasoningContext) {
+        async fn on_tool_intent_nudge(&self, _text: &str, _ctx: &mut ReasoningContext) {
             self.nudge_count.fetch_add(1, Ordering::SeqCst);
         }
 
@@ -499,23 +678,52 @@ mod tests {
         }
     }
 
+    struct MockDispatcher {
+        tool_exec_count: AtomicUsize,
+        tool_exec_outcome: Mutex<Option<LoopOutcome>>,
+    }
+
+    impl MockDispatcher {
+        fn new() -> Self {
+            Self {
+                tool_exec_count: AtomicUsize::new(0),
+                tool_exec_outcome: Mutex::new(None),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ToolDispatcher for MockDispatcher {
+        async fn dispatch(
+            &self,
+            _tool_calls: Vec<ToolCall>,
+            _content: Option<String>,
+            _usage: TokenUsage,
+            ctx: &mut ReasoningContext,
+        ) -> Result<Option<LoopOutcome>, HostError> {
+            self.tool_exec_count.fetch_add(1, Ordering::SeqCst);
+            ctx.messages.push(ChatMessage::user("tool result stub"));
+            Ok(self.tool_exec_outcome.lock().await.take())
+        }
+    }
+
     // --- Tests ---
 
     #[tokio::test]
     async fn test_text_response_returns_immediately() {
-        let delegate = MockDelegate::new(vec![text_output("Hello, world!")]);
+        let responder = MockResponder::new(vec![text_output("Hello, world!")]);
         let mut ctx = ReasoningContext::new();
         let config = AgenticLoopConfig::default();
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop())
+        let outcome = run_with(&responder, &mut ctx, &config, &HookBundle::noop())
             .await
-            .unwrap();
+            .expect("loop completes");
 
         match outcome {
             LoopOutcome::Response(text) => assert_eq!(text, "Hello, world!"),
-            _ => panic!("Expected LoopOutcome::Response"),
+            other => panic!("expected LoopOutcome::Response, got {other:?}-ish"),
         }
-        assert!(delegate.iterations_seen.lock().await.is_empty());
+        assert!(responder.iterations_seen.lock().await.is_empty());
     }
 
     #[tokio::test]
@@ -526,50 +734,104 @@ mod tests {
             arguments: serde_json::json!({}),
             reasoning: None,
         };
-        let delegate = MockDelegate::new(vec![
+        let responder = MockResponder::new(vec![
             tool_calls_output(vec![tool_call]),
             text_output("Done!"),
         ]);
+        let dispatcher = MockDispatcher::new();
         let mut ctx = ReasoningContext::new();
         let config = AgenticLoopConfig::default();
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop())
-            .await
-            .unwrap();
+        let outcome = run_agentic_loop(
+            &responder,
+            Some(&dispatcher),
+            None,
+            None,
+            &mut ctx,
+            &config,
+            &HookBundle::noop(),
+        )
+        .await
+        .expect("loop completes");
 
         match outcome {
             LoopOutcome::Response(text) => assert_eq!(text, "Done!"),
-            _ => panic!("Expected LoopOutcome::Response"),
+            other => panic!("expected LoopOutcome::Response, got {other:?}-ish"),
         }
-        assert_eq!(delegate.tool_exec_count.load(Ordering::SeqCst), 1);
-        assert_eq!(*delegate.iterations_seen.lock().await, vec![1]);
+        assert_eq!(dispatcher.tool_exec_count.load(Ordering::SeqCst), 1);
+        assert_eq!(*responder.iterations_seen.lock().await, vec![1]);
+    }
+
+    #[tokio::test]
+    async fn test_tool_call_without_dispatcher_yields_tools_not_supported() {
+        let tool_call = ToolCall {
+            id: "call_1".to_string(),
+            name: "echo".to_string(),
+            arguments: serde_json::json!({}),
+            reasoning: None,
+        };
+        let responder = MockResponder::new(vec![tool_calls_output(vec![tool_call])]);
+        let mut ctx = ReasoningContext::new();
+        let config = AgenticLoopConfig::default();
+
+        let outcome = run_with(&responder, &mut ctx, &config, &HookBundle::noop())
+            .await
+            .expect("loop completes");
+
+        match outcome {
+            LoopOutcome::Failure(reason) => assert_eq!(reason, TOOLS_NOT_SUPPORTED_REASON),
+            other => panic!("expected Failure(tools_not_supported), got {other:?}-ish"),
+        }
     }
 
     #[tokio::test]
     async fn test_stop_signal_exits_immediately() {
-        let delegate =
-            MockDelegate::new(vec![text_output("unreachable")]).with_signal(LoopSignal::Stop);
+        let responder =
+            MockResponder::new(vec![text_output("unreachable")]).with_signal(LoopSignal::Stop);
         let mut ctx = ReasoningContext::new();
         let config = AgenticLoopConfig::default();
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop())
+        let outcome = run_with(&responder, &mut ctx, &config, &HookBundle::noop())
             .await
-            .unwrap();
+            .expect("loop completes");
 
         assert!(matches!(outcome, LoopOutcome::Stopped));
-        assert!(delegate.iterations_seen.lock().await.is_empty());
+        assert!(responder.iterations_seen.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_cancellation_token_short_circuits() {
+        let responder = MockResponder::new(vec![text_output("unreachable")]);
+        let token = CancellationToken::new();
+        token.cancel();
+        let mut ctx = ReasoningContext::new();
+        let config = AgenticLoopConfig::default();
+
+        let outcome = run_agentic_loop(
+            &responder,
+            None,
+            Some(&token),
+            None,
+            &mut ctx,
+            &config,
+            &HookBundle::noop(),
+        )
+        .await
+        .expect("loop completes");
+
+        assert!(matches!(outcome, LoopOutcome::Stopped));
     }
 
     #[tokio::test]
     async fn test_inject_message_adds_user_message() {
-        let delegate = MockDelegate::new(vec![text_output("Got it")])
+        let responder = MockResponder::new(vec![text_output("Got it")])
             .with_signal(LoopSignal::InjectMessage("injected prompt".to_string()));
         let mut ctx = ReasoningContext::new();
         let config = AgenticLoopConfig::default();
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop())
+        let outcome = run_with(&responder, &mut ctx, &config, &HookBundle::noop())
             .await
-            .unwrap();
+            .expect("loop completes");
 
         assert!(matches!(outcome, LoopOutcome::Response(_)));
         assert!(
@@ -585,24 +847,8 @@ mod tests {
         struct FailOnMalformedResponse;
 
         #[async_trait]
-        impl LoopDelegate for FailOnMalformedResponse {
-            async fn check_signals(&self) -> LoopSignal {
-                LoopSignal::Continue
-            }
-
-            async fn before_llm_call(
-                &self,
-                _: &mut ReasoningContext,
-                _: usize,
-            ) -> Option<LoopOutcome> {
-                None
-            }
-
-            async fn call_llm(
-                &self,
-                _: &mut ReasoningContext,
-                _: usize,
-            ) -> Result<RespondOutput, HostError> {
+        impl AgentResponder for FailOnMalformedResponse {
+            async fn respond(&self, _: &mut ReasoningContext) -> Result<RespondOutput, HostError> {
                 Ok(RespondOutput {
                     result: RespondResult::Text("fallback".to_string()),
                     usage: zero_usage(),
@@ -625,28 +871,18 @@ mod tests {
                     "malformed tool completion".to_string(),
                 ))
             }
-
-            async fn execute_tool_calls(
-                &self,
-                _: Vec<ToolCall>,
-                _: Option<String>,
-                _: TokenUsage,
-                _: &mut ReasoningContext,
-            ) -> Result<Option<LoopOutcome>, HostError> {
-                Ok(None)
-            }
         }
 
-        let delegate = FailOnMalformedResponse;
+        let responder = FailOnMalformedResponse;
         let mut ctx = ReasoningContext::new();
-        let outcome = run_agentic_loop(
-            &delegate,
+        let outcome = run_with(
+            &responder,
             &mut ctx,
             &AgenticLoopConfig::default(),
             &HookBundle::noop(),
         )
         .await
-        .unwrap();
+        .expect("loop completes");
 
         assert!(
             matches!(outcome, LoopOutcome::Failure(ref reason) if reason == "malformed tool completion")
@@ -655,25 +891,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_max_iterations_reached() {
-        struct ContinueDelegate;
+        struct ContinueResponder;
 
         #[async_trait]
-        impl LoopDelegate for ContinueDelegate {
-            async fn check_signals(&self) -> LoopSignal {
-                LoopSignal::Continue
-            }
-            async fn before_llm_call(
-                &self,
-                _: &mut ReasoningContext,
-                _: usize,
-            ) -> Option<LoopOutcome> {
-                None
-            }
-            async fn call_llm(
-                &self,
-                _: &mut ReasoningContext,
-                _: usize,
-            ) -> Result<RespondOutput, HostError> {
+        impl AgentResponder for ContinueResponder {
+            async fn respond(&self, _: &mut ReasoningContext) -> Result<RespondOutput, HostError> {
                 Ok(text_output("still working"))
             }
             async fn handle_text_response(
@@ -686,27 +908,18 @@ mod tests {
                 ctx.messages.push(ChatMessage::assistant("still working"));
                 TextAction::Continue
             }
-            async fn execute_tool_calls(
-                &self,
-                _: Vec<ToolCall>,
-                _: Option<String>,
-                _: TokenUsage,
-                _: &mut ReasoningContext,
-            ) -> Result<Option<LoopOutcome>, HostError> {
-                Ok(None)
-            }
         }
 
-        let delegate = ContinueDelegate;
+        let responder = ContinueResponder;
         let mut ctx = ReasoningContext::new();
         let config = AgenticLoopConfig {
             max_iterations: 3,
             ..Default::default()
         };
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop())
+        let outcome = run_with(&responder, &mut ctx, &config, &HookBundle::noop())
             .await
-            .unwrap();
+            .expect("loop completes");
 
         assert!(matches!(outcome, LoopOutcome::MaxIterations));
         let assistant_count = ctx
@@ -719,7 +932,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_intent_nudge_fires_and_caps() {
-        let delegate = MockDelegate::new(vec![
+        let responder = MockResponder::new(vec![
             text_output("Let me search for that file"),
             text_output("Let me search for that file"),
             text_output("Let me search for that file"),
@@ -736,12 +949,12 @@ mod tests {
             max_tool_intent_nudges: 2,
         };
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop())
+        let outcome = run_with(&responder, &mut ctx, &config, &HookBundle::noop())
             .await
-            .unwrap();
+            .expect("loop completes");
 
         assert!(matches!(outcome, LoopOutcome::Response(_)));
-        assert_eq!(delegate.nudge_count.load(Ordering::SeqCst), 2);
+        assert_eq!(responder.nudge_count.load(Ordering::SeqCst), 2);
         let nudge_messages = ctx
             .messages
             .iter()
@@ -757,17 +970,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_before_llm_call_early_exit() {
-        let delegate = MockDelegate::new(vec![text_output("unreachable")])
+        let responder = MockResponder::new(vec![text_output("unreachable")])
             .with_early_exit(1, LoopOutcome::Stopped);
         let mut ctx = ReasoningContext::new();
         let config = AgenticLoopConfig::default();
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop())
+        let outcome = run_with(&responder, &mut ctx, &config, &HookBundle::noop())
             .await
-            .unwrap();
+            .expect("loop completes");
 
         assert!(matches!(outcome, LoopOutcome::Stopped));
-        assert!(delegate.iterations_seen.lock().await.is_empty());
+        assert!(responder.iterations_seen.lock().await.is_empty());
     }
 
     #[tokio::test]
@@ -787,18 +1000,27 @@ mod tests {
             finish_reason: FinishReason::Length,
             metadata: ResponseMetadata::default(),
         };
-        let delegate = MockDelegate::new(vec![truncated_output, text_output("Summarized it.")]);
+        let responder = MockResponder::new(vec![truncated_output, text_output("Summarized it.")]);
+        let dispatcher = MockDispatcher::new();
         let mut ctx = ReasoningContext::new();
         let config = AgenticLoopConfig {
             max_iterations: 5,
             ..Default::default()
         };
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop())
-            .await
-            .unwrap();
+        let outcome = run_agentic_loop(
+            &responder,
+            Some(&dispatcher),
+            None,
+            None,
+            &mut ctx,
+            &config,
+            &HookBundle::noop(),
+        )
+        .await
+        .expect("loop completes");
 
-        assert_eq!(delegate.tool_exec_count.load(Ordering::SeqCst), 0);
+        assert_eq!(dispatcher.tool_exec_count.load(Ordering::SeqCst), 0);
         assert!(matches!(outcome, LoopOutcome::Response(ref t) if t == "Summarized it."));
         assert!(
             ctx.messages
@@ -830,24 +1052,33 @@ mod tests {
             finish_reason: FinishReason::Length,
             metadata: ResponseMetadata::default(),
         };
-        let delegate = MockDelegate::new(vec![
+        let responder = MockResponder::new(vec![
             make_truncated(),
             make_truncated(),
             make_truncated(),
             text_output("Gave up on tool calls."),
         ]);
+        let dispatcher = MockDispatcher::new();
         let mut ctx = ReasoningContext::new();
         let config = AgenticLoopConfig {
             max_iterations: 5,
             ..Default::default()
         };
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &HookBundle::noop())
-            .await
-            .unwrap();
+        let outcome = run_agentic_loop(
+            &responder,
+            Some(&dispatcher),
+            None,
+            None,
+            &mut ctx,
+            &config,
+            &HookBundle::noop(),
+        )
+        .await
+        .expect("loop completes");
 
         assert!(matches!(outcome, LoopOutcome::Response(_)));
-        assert_eq!(delegate.tool_exec_count.load(Ordering::SeqCst), 0);
+        assert_eq!(dispatcher.tool_exec_count.load(Ordering::SeqCst), 0);
         assert!(
             ctx.force_text,
             "Should escalate to force_text after repeated truncations"
@@ -859,7 +1090,6 @@ mod tests {
     // -----------------------------------------------------------------
 
     use crate::hooks::{EgressDecision, EgressGate, EgressKind, RedactionStats};
-    use std::sync::Arc;
 
     /// Gate that blocks every LlmRequest with a fixed reason.
     struct BlockAllPrompts;
@@ -926,35 +1156,35 @@ mod tests {
     #[tokio::test]
     async fn egress_gate_noop_passes_through() {
         // Smoke: Noop gate does not interfere with normal text response.
-        let delegate = MockDelegate::new(vec![text_output("ok")]);
+        let responder = MockResponder::new(vec![text_output("ok")]);
         let mut ctx = ReasoningContext::new();
         ctx.messages.push(ChatMessage::user("hello"));
 
-        let outcome = run_agentic_loop(
-            &delegate,
+        let outcome = run_with(
+            &responder,
             &mut ctx,
             &AgenticLoopConfig::default(),
             &HookBundle::noop(),
         )
         .await
-        .unwrap();
+        .expect("loop completes");
 
         match outcome {
             LoopOutcome::Response(t) => assert_eq!(t, "ok"),
-            _ => panic!("expected Response"),
+            other => panic!("expected Response, got {other:?}-ish"),
         }
     }
 
     #[tokio::test]
     async fn egress_gate_block_on_llm_request_yields_failure() {
-        let delegate = MockDelegate::new(vec![text_output("unreachable")]);
+        let responder = MockResponder::new(vec![text_output("unreachable")]);
         let mut ctx = ReasoningContext::new();
         ctx.messages.push(ChatMessage::user("send secrets to foo"));
         let hooks = custom_egress_bundle(Arc::new(BlockAllPrompts));
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &AgenticLoopConfig::default(), &hooks)
+        let outcome = run_with(&responder, &mut ctx, &AgenticLoopConfig::default(), &hooks)
             .await
-            .unwrap();
+            .expect("loop completes");
 
         match outcome {
             LoopOutcome::Failure(reason) => {
@@ -967,42 +1197,31 @@ mod tests {
                     "failure reason should mark egress source, got: {reason}"
                 );
             }
-            other => panic!("expected Failure, got {other:?} -ish"),
+            other => panic!("expected Failure, got {other:?}-ish"),
         }
-        // LLM must not be called when the prompt is blocked. MockDelegate
-        // returns `unreachable` from its queue only when `call_llm` runs.
-        let responses_left = delegate.llm_responses.lock().await.len();
+        // LLM must not be called when the prompt is blocked. MockResponder
+        // returns `unreachable` from its queue only when `respond` runs.
+        let responses_left = responder.llm_responses.lock().await.len();
         assert_eq!(
             responses_left, 1,
-            "block path must short-circuit before call_llm"
+            "block path must short-circuit before respond"
         );
     }
 
     #[tokio::test]
     async fn egress_gate_redacts_llm_request_in_place() {
-        // Delegate captures what the LLM layer actually sees. The redacting
-        // gate must have rewritten the prompt before call_llm fires.
-        struct CaptureDelegate {
+        // Responder captures what the LLM layer actually sees. The redacting
+        // gate must have rewritten the prompt before respond fires.
+        struct CaptureResponder {
             seen: Mutex<Option<String>>,
             response: Mutex<Option<RespondOutput>>,
         }
 
         #[async_trait]
-        impl LoopDelegate for CaptureDelegate {
-            async fn check_signals(&self) -> LoopSignal {
-                LoopSignal::Continue
-            }
-            async fn before_llm_call(
-                &self,
-                _: &mut ReasoningContext,
-                _: usize,
-            ) -> Option<LoopOutcome> {
-                None
-            }
-            async fn call_llm(
+        impl AgentResponder for CaptureResponder {
+            async fn respond(
                 &self,
                 ctx: &mut ReasoningContext,
-                _: usize,
             ) -> Result<RespondOutput, HostError> {
                 let last_user = ctx
                     .messages
@@ -1011,8 +1230,14 @@ mod tests {
                     .find(|m| m.role == Role::User)
                     .map(|m| m.content.clone());
                 *self.seen.lock().await = last_user;
-                Ok(self.response.lock().await.take().expect("one response"))
+                Ok(self
+                    .response
+                    .lock()
+                    .await
+                    .take()
+                    .expect("one response queued"))
             }
+
             async fn handle_text_response(
                 &self,
                 text: &str,
@@ -1022,18 +1247,9 @@ mod tests {
             ) -> TextAction {
                 TextAction::Return(LoopOutcome::Response(text.to_string()))
             }
-            async fn execute_tool_calls(
-                &self,
-                _: Vec<ToolCall>,
-                _: Option<String>,
-                _: TokenUsage,
-                _: &mut ReasoningContext,
-            ) -> Result<Option<LoopOutcome>, HostError> {
-                Ok(None)
-            }
         }
 
-        let delegate = CaptureDelegate {
+        let responder = CaptureResponder {
             seen: Mutex::new(None),
             response: Mutex::new(Some(text_output("raw completion"))),
         };
@@ -1042,21 +1258,26 @@ mod tests {
             .push(ChatMessage::user("please use token sk-secret now"));
         let hooks = custom_egress_bundle(Arc::new(RedactingGate));
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &AgenticLoopConfig::default(), &hooks)
+        let outcome = run_with(&responder, &mut ctx, &AgenticLoopConfig::default(), &hooks)
             .await
-            .unwrap();
+            .expect("loop completes");
 
         match outcome {
             LoopOutcome::Response(t) => {
                 assert_eq!(
                     t, "raw completion [scanned]",
-                    "UserDisplay Redact must mutate the text before the delegate returns"
+                    "UserDisplay Redact must mutate the text before the responder returns"
                 );
             }
-            _ => panic!("expected Response"),
+            other => panic!("expected Response, got {other:?}-ish"),
         }
 
-        let seen = delegate.seen.lock().await.clone().unwrap();
+        let seen = responder
+            .seen
+            .lock()
+            .await
+            .clone()
+            .expect("respond saw a user message");
         assert!(
             !seen.contains("sk-secret"),
             "LlmRequest Redact must rewrite the payload; LLM saw: {seen}"
@@ -1066,13 +1287,11 @@ mod tests {
             "redaction token must be present; LLM saw: {seen}"
         );
 
-        // Redacted content must persist in ctx.messages so the next
-        // iteration also sees the clean text.
         let stored = ctx
             .messages
             .iter()
             .find(|m| m.role == Role::User)
-            .unwrap()
+            .expect("ctx still has the user message")
             .content
             .clone();
         assert!(
@@ -1085,12 +1304,12 @@ mod tests {
     async fn egress_gate_internal_error_translates_to_failure() {
         // ADR-148: fail-closed contract — internal errors surface as Block,
         // not panics or HostError. The loop converts Block into Failure.
-        let delegate = MockDelegate::new(vec![text_output("unreachable")]);
+        let responder = MockResponder::new(vec![text_output("unreachable")]);
         let mut ctx = ReasoningContext::new();
         ctx.messages.push(ChatMessage::user("anything"));
         let hooks = custom_egress_bundle(Arc::new(FailingGate));
 
-        let outcome = run_agentic_loop(&delegate, &mut ctx, &AgenticLoopConfig::default(), &hooks)
+        let outcome = run_with(&responder, &mut ctx, &AgenticLoopConfig::default(), &hooks)
             .await
             .expect("FailingGate must NOT bubble HostError — fail-closed translates to Failure");
 
@@ -1101,7 +1320,7 @@ mod tests {
                     "failure reason should preserve inner cause, got: {reason}"
                 );
             }
-            other => panic!("expected Failure, got {other:?}"),
+            other => panic!("expected Failure, got {other:?}-ish"),
         }
     }
 }

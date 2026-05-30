@@ -1,24 +1,20 @@
-//! Sequential tool dispatcher extracted from `HeadlessDelegate`.
+//! Sequential tool dispatcher (ADR-153 §1.1 5-step pipeline).
 //!
-//! Encapsulates the per-iteration 5-step pipeline ADR-153 §1.1 locks
-//! in (emit `ToolCallStart` → approval gate → pre-execute egress →
-//! `ToolExecutor::execute` → post-execute egress + sanitizer + emit
-//! `ToolResult`) so that:
+//! Encapsulates the per-iteration pipeline (emit `ToolCallStart` →
+//! approval gate → pre-execute egress → `ToolExecutor::execute` →
+//! post-execute egress + sanitizer + emit `ToolResult`) so that the
+//! agentic loop's tool-execution branch reduces to a one-shot
+//! `SequentialDispatcher::dispatch` call via the
+//! [`ToolDispatcher`](dasclaw_core::agentic_loop::ToolDispatcher) trait
+//! re-exported below.
 //!
-//! * `HeadlessDelegate::execute_tool_calls` reduces to a one-shot
-//!   `SequentialDispatcher::dispatch` call, and
-//! * a future `AgenticLoop` (ADR-160 §3 L1) can reuse the same
-//!   implementation by injecting a `ToolDispatcher` trait whose
-//!   default impl is this struct.
-//!
-//! This module is a pure refactor: behaviour is byte-identical to the
-//! pre-extraction inline pipeline. The `agent.rs` tests cover the
-//! shape end-to-end.
+//! The `agent.rs` tests cover the shape end-to-end.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use dasclaw_core::agentic_loop::LoopOutcome;
+pub use dasclaw_core::agentic_loop::ToolDispatcher;
 use dasclaw_core::egress_apply::{EgressApply, apply_egress_decision};
 use dasclaw_core::hooks::{EgressGate, EgressKind};
 use dasclaw_core::messages::{ChatMessage, ToolCall};
@@ -48,9 +44,10 @@ pub(crate) struct RejectedPayload {
 
 /// Best-effort emit; a closed receiver is not a loop-fatal error.
 ///
-/// Shared between the `HeadlessDelegate` (which emits `FinishReason`
-/// outside the tool pipeline) and `SequentialDispatcher` so the two
-/// sites cannot drift.
+/// Used by [`SequentialDispatcher`] for `ToolCallStart` / `ToolResult`
+/// events. The core agentic loop has its own private `emit_event` for
+/// `FinishReason` emission; keeping a runtime-side copy avoids
+/// publishing helper internals from `dasclaw_core`.
 pub(crate) async fn emit_event(tx: Option<&mpsc::Sender<AgentEvent>>, event: AgentEvent) {
     if let Some(tx) = tx {
         let _ = tx.send(event).await;
@@ -70,29 +67,11 @@ fn push_assistant_tool_calls(
     );
 }
 
-/// L2 seam (ADR-160 §3): drive a single agentic-loop iteration's
-/// tool calls through whatever pipeline the host wires up.
-///
-/// The only in-tree impl today is [`SequentialDispatcher`], which
-/// preserves the ADR-153 §1.1 5-step pipeline byte-for-byte. Future
-/// `AgenticLoop`-level implementations (parallel dispatch, replay,
-/// fakes for testing) plug in here without touching
-/// `HeadlessDelegate` or `run_agentic_loop`.
-#[async_trait]
-pub trait ToolDispatcher: Send + Sync {
-    /// Execute one iteration's worth of tool calls.
-    ///
-    /// Returning `Ok(Some(outcome))` short-circuits the agentic loop
-    /// (e.g. approval rejection, fatal sandbox refusal). Returning
-    /// `Ok(None)` lets the loop run another model turn.
-    async fn dispatch(
-        &self,
-        tool_calls: Vec<ToolCall>,
-        content: Option<String>,
-        usage: TokenUsage,
-        ctx: &mut ReasoningContext,
-    ) -> Result<Option<LoopOutcome>, HostError>;
-}
+// `ToolDispatcher` itself now lives in `dasclaw_core::agentic_loop`
+// (re-exported above) so that downstream tool dispatchers and the
+// core loop share the exact same trait object. The only in-tree impl
+// today is `SequentialDispatcher` (below), which preserves the
+// ADR-153 §1.1 5-step pipeline byte-for-byte.
 
 /// Sequential implementation of the ADR-153 §1.1 tool dispatch
 /// pipeline. Executes the supplied `tool_calls` one after another;

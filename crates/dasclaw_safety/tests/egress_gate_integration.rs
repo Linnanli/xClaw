@@ -13,11 +13,9 @@
 //! secrets. A contract test at this layer is the only place that catches
 //! "the loop was refactored and the gate stopped firing".
 //!
-//! W10.0 (ADR-160): the driver is now `dasclaw_runtime::AgenticLoop`
-//! wired with `StubResponder` (impl `AgentResponder`); no
-//! `ToolDispatcher` is needed because these scenarios never emit tool
-//! calls. The prior `StubDelegate : LoopDelegate` shape is gone in
-//! preparation for W10.1 deleting the `LoopDelegate` trait.
+//! W10.1 (ADR-160): the driver is `dasclaw_runtime::AgenticLoop` wired
+//! with `StubResponder` (impl `AgentResponder`); no `ToolDispatcher`
+//! is needed because these scenarios never emit tool calls.
 //!
 //! Gated on `egress-gate` feature so this test only builds when the
 //! adapter itself is compiled in.
