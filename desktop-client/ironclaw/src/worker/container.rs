@@ -16,7 +16,6 @@ use async_trait::async_trait;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::agent::agentic_loop::{AgenticLoopConfig, truncate_for_preview};
 use crate::config::SafetyConfig;
 use crate::error::WorkerError;
 use crate::llm::{
@@ -32,6 +31,8 @@ use crate::worker::autonomous_recovery::{
 };
 use crate::worker::proxy_llm::ProxyLlmProvider;
 use dasclaw_core::TokenUsage;
+use dasclaw_core::agentic_loop::AgenticLoopConfig;
+use dasclaw_core::intent::truncate_for_preview;
 use dasclaw_core::messages::ToolCall;
 use dasclaw_core::traits::HostError;
 use dasclaw_runtime::context::JobContext;
@@ -192,7 +193,7 @@ Work independently to complete this job. When finished, your final message MUST 
         // Issue #73 slice E: open the workspace capability before the
         // timeout block so `?` propagates cleanly via this fn's error type.
         let workspace_cap = Arc::new(
-            crate::agent::agentic_loop::WorkspaceCapability::open(
+            dasclaw_workspace_cap::WorkspaceCapability::open(
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
             )
             .map_err(|e| crate::error::WorkerError::ExecutionFailed {
@@ -238,10 +239,10 @@ Work independently to complete this job. When finished, your final message MUST 
             // Issue #73 slice E: workspace boundary is capability-validated;
             // container workers run inside an isolated Docker FS so the
             // capability handle is over the in-container cwd.
-            let hooks = crate::agent::agentic_loop::hook_bundle_with_safety(
+            let hooks = crate::agent::hook_bundle::hook_bundle_with_safety(
                 self.safety.clone(),
                 workspace_cap.clone(),
-                crate::agent::agentic_loop::PermissionMode::WorkspaceWrite,
+                dasclaw_core::permissions::PermissionMode::WorkspaceWrite,
             );
 
             // ADR-160 §3 L2: drive the shared engine with responder + dispatcher.
@@ -693,7 +694,7 @@ impl ToolDispatcher for ContainerDispatcher {
 
 #[cfg(test)]
 mod tests {
-    use crate::agent::agentic_loop::truncate_for_preview;
+    use dasclaw_core::intent::truncate_for_preview;
 
     #[test]
     fn test_truncate_within_limit() {

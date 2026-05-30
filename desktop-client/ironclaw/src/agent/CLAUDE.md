@@ -14,8 +14,9 @@ Core agent logic. This is the most complex subsystem — read this before workin
 | `session_manager.rs` | Lifecycle: create/lookup sessions, map external thread IDs to internal UUIDs, prune stale sessions, manage undo managers. |
 | `router.rs` | Routes explicit `/commands` to `MessageIntent`. Natural language bypasses the router entirely. |
 | `scheduler.rs` | Parallel job scheduling. Maintains `jobs` map (full LLM-driven) and `subtasks` map (tool-exec/background). |
-| *(moved to `src/worker/job.rs`)* | Per-job execution now lives in `src/worker/job.rs` as `JobDelegate`, using the shared `run_agentic_loop()` engine. |
-| `agentic_loop.rs` | Shared agentic loop engine: `run_agentic_loop()`, `LoopDelegate` trait, `LoopOutcome`, `LoopSignal`, `TextAction`. All three execution paths (chat, job, container) delegate to this. |
+| *(moved to `src/worker/job.rs`)* | Per-job execution now lives in `src/worker/job.rs`, driven by the shared engine `dasclaw_runtime::AgenticLoop`. |
+| *(removed — see `dasclaw_runtime::AgenticLoop`)* | Per ADR-160 W8, the shared agentic loop engine moved to `dasclaw_runtime`. Chat / job / container paths now implement `AgentResponder` + `ToolDispatcher` (see `dasclaw_runtime`) instead of the legacy `LoopDelegate` trait. |
+| `hook_bundle.rs` | Ironclaw-specific helpers retained after the shim was deleted: `hook_bundle_with_safety` / `..._and_permissions` / `..._and_secrets` builders and `host_err_to_error`. |
 | `compaction.rs` | Context window management: summarize old turns, write to workspace daily log, trim context. Three strategies. |
 | `context_monitor.rs` | Detects memory pressure. Suggests `CompactionStrategy` based on usage level. |
 | `self_repair.rs` | Detects stuck jobs and broken tools, attempts recovery. |
@@ -48,30 +49,21 @@ Session (per user)
 - `ThreadState` values: `Idle`, `Processing`, `AwaitingApproval`, `Completed`, `Interrupted`.
 - `SessionManager` maps `(user_id, channel, external_thread_id)` → internal UUID. Prunes idle sessions every 10 minutes (warns at 1000 sessions).
 
-## Agentic Loop (dispatcher.rs)
+## Agentic Loop (shared engine)
 
-All three execution paths (chat, job, container) now use the shared `run_agentic_loop()` engine in `agentic_loop.rs`, each providing their own `LoopDelegate` implementation:
+Per ADR-160 W8, the agentic loop engine lives in `dasclaw_runtime::AgenticLoop` (driven by the `AgentResponder` + `ToolDispatcher` traits). The previous `desktop-client/ironclaw/src/agent/agentic_loop.rs` shim and its `LoopDelegate` trait were deleted in W8.3; all three execution paths now plug into the shared engine directly:
 
-- **`ChatDelegate`** (`dispatcher.rs`) — conversational turns, tool approval, skill context injection
-- **`JobDelegate`** (`src/worker/job.rs`) — background scheduler jobs, planning support, completion detection
-- **`ContainerDelegate`** (`src/worker/container.rs`) — Docker container worker, sequential tool exec, HTTP event streaming
+- **Chat path** (`dispatcher.rs`) — conversational turns, tool approval, skill context injection.
+- **Job path** (`src/worker/job.rs`) — background scheduler jobs, planning support, completion detection.
+- **Container path** (`src/worker/container.rs`) — Docker container worker, sequential tool exec, HTTP event streaming.
 
-```
-run_agentic_loop(delegate, reasoning, reason_ctx, config)
-  1. Check signals (stop/cancel) via delegate.check_signals()
-  2. Pre-LLM hook via delegate.before_llm_call()
-  3. LLM call via delegate.call_llm()
-  4. If text response → delegate.handle_text_response() → Continue or Return
-  5. If tool calls → delegate.execute_tool_calls() → Continue or Return
-  6. Post-iteration hook via delegate.after_iteration()
-  7. Repeat until LoopOutcome returned or max_iterations reached
-```
+All three configure the engine via `dasclaw_core::agentic_loop::AgenticLoopConfig` and consume `LoopOutcome` / `LoopSignal` / `TextAction` re-exported from `dasclaw_core::agentic_loop`. Ironclaw-specific glue (hook bundle builders, `HostError` → `Error` conversion) stays in `hook_bundle.rs`.
 
-**Tool approval:** Tools flagged `requires_approval` pause the loop — `ChatDelegate` returns `LoopOutcome::NeedApproval(pending)`. The web gateway stores the `PendingApproval` in session state and sends an `approval_needed` SSE event. The user's approval/deny resumes the loop.
+**Tool approval:** Tools flagged `requires_approval` pause the loop — the chat path returns `LoopOutcome::NeedApproval(pending)`. The web gateway stores the `PendingApproval` in session state and sends an `approval_needed` SSE event. The user's approval/deny resumes the loop.
 
-**Shared tool execution:** `tools/execute.rs` provides `execute_tool_with_safety()` (validate → timeout → execute → serialize) and `process_tool_result()` (sanitize → wrap → ChatMessage), used by all three delegates.
+**Shared tool execution:** `tools/execute.rs` provides `execute_tool_with_safety()` (validate → timeout → execute → serialize) and `process_tool_result()` (sanitize → wrap → ChatMessage), used by all three paths.
 
-**ChatDelegate vs JobDelegate:** `ChatDelegate` runs for user-initiated conversational turns (holds session lock, tracks turns). `JobDelegate` is spawned by the `Scheduler` for background jobs created via `CreateJob` / `/job` — it runs independently of the session and has planning support (`use_planning` flag).
+**Chat vs job path:** the chat path runs for user-initiated conversational turns (holds session lock, tracks turns). The job path is spawned by the `Scheduler` for background jobs created via `CreateJob` / `/job` — it runs independently of the session and has planning support (`use_planning` flag).
 
 ## Command Routing (router.rs)
 

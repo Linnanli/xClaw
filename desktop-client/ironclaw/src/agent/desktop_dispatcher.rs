@@ -17,7 +17,6 @@ use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
-use crate::agent::agentic_loop::LoopOutcome;
 use crate::agent::session::{PendingApproval, Session};
 use crate::channels::{ChannelManager, IncomingMessage, StatusUpdate};
 use crate::config::AgentConfig;
@@ -25,6 +24,7 @@ use crate::error::Error;
 use crate::llm::{ChatMessage, ReasoningContext};
 use crate::safety::SafetyLayer;
 use crate::tools::{ToolRegistry, redact_params};
+use dasclaw_core::agentic_loop::LoopOutcome;
 use dasclaw_core::traits::HostError;
 use dasclaw_hooks::HookRegistry;
 use dasclaw_runtime::context::JobContext;
