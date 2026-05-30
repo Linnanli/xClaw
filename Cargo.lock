@@ -3323,6 +3323,7 @@ dependencies = [
  "aho-corasick",
  "async-trait",
  "dasclaw_core",
+ "dasclaw_runtime",
  "regex",
  "serde_json",
  "thiserror 2.0.18",

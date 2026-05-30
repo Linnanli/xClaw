@@ -1,17 +1,23 @@
-//! End-to-end contract test: `IronclawEgressGate` inside `run_agentic_loop` (ADR-148).
+//! End-to-end contract test: `IronclawEgressGate` inside the agentic
+//! loop (ADR-148).
 //!
 //! The unit tests in `src/egress_gate.rs` prove the adapter's `check`
 //! method behaves correctly per `EgressKind`. These integration tests
 //! prove the full chain: `HookBundle { egress: IronclawEgressGate, .. }`
-//! + `run_agentic_loop` actually fires the gate at the documented
-//!   insertion points (Layer B, between delegate output and downstream
-//!   actions).
+//! + `AgenticLoop` actually fires the gate at the documented insertion
+//!   points (Layer B, between responder output and downstream actions).
 //!
 //! Why this matters: per `DLP_TESTING_LESSONS_LEARNED.md`, earlier DLP
 //! regressions were caused by tests that only covered the happy path or
 //! only the adapter — the integration boundary silently shipped raw
 //! secrets. A contract test at this layer is the only place that catches
 //! "the loop was refactored and the gate stopped firing".
+//!
+//! W10.0 (ADR-160): the driver is now `dasclaw_runtime::AgenticLoop`
+//! wired with `StubResponder` (impl `AgentResponder`); no
+//! `ToolDispatcher` is needed because these scenarios never emit tool
+//! calls. The prior `StubDelegate : LoopDelegate` shape is gone in
+//! preparation for W10.1 deleting the `LoopDelegate` trait.
 //!
 //! Gated on `egress-gate` feature so this test only builds when the
 //! adapter itself is compiled in.
@@ -21,23 +27,22 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use dasclaw_core::agentic_loop::{
-    AgenticLoopConfig, LoopDelegate, LoopOutcome, LoopSignal, TextAction, run_agentic_loop,
-};
+use dasclaw_core::agentic_loop::AgenticLoopConfig;
 use dasclaw_core::messages::FinishReason;
 use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
-use dasclaw_core::{ChatMessage, HookBundle, HostError, ToolCall};
+use dasclaw_core::{ChatMessage, HookBundle, HostError};
+use dasclaw_runtime::{AgentResponder, AgenticLoop, LoopOutcome};
 use dasclaw_safety::egress_gate::IronclawEgressGate;
 use dasclaw_safety::{SafetyConfig, SafetyLayer};
 use tokio::sync::Mutex;
 
-/// Minimal `LoopDelegate` that returns pre-canned LLM responses.
-struct StubDelegate {
+/// Minimal [`AgentResponder`] that returns pre-canned LLM responses.
+struct StubResponder {
     queued: Mutex<Vec<RespondOutput>>,
 }
 
-impl StubDelegate {
+impl StubResponder {
     fn with_text(text: impl Into<String>) -> Self {
         Self {
             queued: Mutex::new(vec![RespondOutput {
@@ -48,50 +53,22 @@ impl StubDelegate {
             }]),
         }
     }
+
+    async fn remaining(&self) -> usize {
+        self.queued.lock().await.len()
+    }
 }
 
 #[async_trait]
-impl LoopDelegate for StubDelegate {
-    async fn check_signals(&self) -> LoopSignal {
-        LoopSignal::Continue
-    }
-
-    async fn before_llm_call(
-        &self,
-        _reason_ctx: &mut ReasoningContext,
-        _iteration: usize,
-    ) -> Option<LoopOutcome> {
-        None
-    }
-
-    async fn call_llm(
-        &self,
-        _reason_ctx: &mut ReasoningContext,
-        _iteration: usize,
-    ) -> Result<RespondOutput, HostError> {
+impl AgentResponder for StubResponder {
+    async fn respond(&self, _ctx: &mut ReasoningContext) -> Result<RespondOutput, HostError> {
         let mut q = self.queued.lock().await;
-        assert!(!q.is_empty(), "StubDelegate exhausted");
-        Ok(q.remove(0))
-    }
-
-    async fn handle_text_response(
-        &self,
-        text: &str,
-        _metadata: ResponseMetadata,
-        _usage: TokenUsage,
-        _reason_ctx: &mut ReasoningContext,
-    ) -> TextAction {
-        TextAction::Return(LoopOutcome::Response(text.to_string()))
-    }
-
-    async fn execute_tool_calls(
-        &self,
-        _tool_calls: Vec<ToolCall>,
-        _content: Option<String>,
-        _usage: TokenUsage,
-        _reason_ctx: &mut ReasoningContext,
-    ) -> Result<Option<LoopOutcome>, HostError> {
-        Ok(None)
+        let next = q
+            .first()
+            .cloned()
+            .ok_or_else(|| -> HostError { "StubResponder exhausted".into() })?;
+        q.remove(0);
+        Ok(next)
     }
 }
 
@@ -108,6 +85,17 @@ fn bundle_with(layer: Arc<SafetyLayer>) -> HookBundle {
     b
 }
 
+async fn run_with(
+    responder: Arc<StubResponder>,
+    ctx: &mut ReasoningContext,
+    bundle: &HookBundle,
+) -> Result<LoopOutcome, HostError> {
+    let config = AgenticLoopConfig::default();
+    AgenticLoop::new(responder, None, None, None)
+        .run(ctx, &config, bundle)
+        .await
+}
+
 /// LLM returns a completion containing a fake OpenAI key. The outcome
 /// reaching the caller MUST NOT contain the raw secret — the egress
 /// gate fires inside the loop and scrubs (or blocks) before the
@@ -117,13 +105,12 @@ async fn run_agentic_loop_with_egress_gate_scrubs_secret_from_completion() {
     let raw_secret = format!("sk-{}", "Z".repeat(48));
     let completion = format!("here is the key: {raw_secret}");
 
-    let delegate = StubDelegate::with_text(completion.clone());
+    let responder = Arc::new(StubResponder::with_text(completion.clone()));
     let bundle = bundle_with(safety_layer());
     let mut ctx = ReasoningContext::new();
     ctx.messages.push(ChatMessage::user("give me the key"));
-    let config = AgenticLoopConfig::default();
 
-    let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &bundle)
+    let outcome = run_with(responder, &mut ctx, &bundle)
         .await
         .expect("loop should not bubble HostError");
 
@@ -150,15 +137,14 @@ async fn run_agentic_loop_with_egress_gate_scrubs_secret_from_completion() {
 #[tokio::test]
 async fn run_agentic_loop_with_egress_gate_blocks_leaky_prompt() {
     let raw_secret = format!("sk-{}", "Q".repeat(48));
-    let delegate = StubDelegate::with_text("unreached");
+    let responder = Arc::new(StubResponder::with_text("unreached"));
     let bundle = bundle_with(safety_layer());
 
     let mut ctx = ReasoningContext::new();
     ctx.messages
         .push(ChatMessage::user(format!("please use {raw_secret}")));
-    let config = AgenticLoopConfig::default();
 
-    let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &bundle)
+    let outcome = run_with(Arc::clone(&responder), &mut ctx, &bundle)
         .await
         .expect("Block should surface as Failure, not Err");
 
@@ -173,20 +159,19 @@ async fn run_agentic_loop_with_egress_gate_blocks_leaky_prompt() {
     }
 
     // Confirm the LLM was not dialed: the queued response is still there.
-    assert_eq!(delegate.queued.lock().await.len(), 1);
+    assert_eq!(responder.remaining().await, 1);
 }
 
 /// Clean prompt + clean completion — the gate must be transparent.
 /// Guards against a regression where the gate wrongly rewrites benign text.
 #[tokio::test]
 async fn run_agentic_loop_with_egress_gate_transparent_on_clean_input() {
-    let delegate = StubDelegate::with_text("all good");
+    let responder = Arc::new(StubResponder::with_text("all good"));
     let bundle = bundle_with(safety_layer());
     let mut ctx = ReasoningContext::new();
     ctx.messages.push(ChatMessage::user("how are things?"));
-    let config = AgenticLoopConfig::default();
 
-    let outcome = run_agentic_loop(&delegate, &mut ctx, &config, &bundle)
+    let outcome = run_with(responder, &mut ctx, &bundle)
         .await
         .expect("loop should succeed");
 

@@ -2,7 +2,9 @@
 //!
 //! Based on claw-code's `mock_parity_harness.rs`, adapted to ironclaw's
 //! in-process architecture using `TestHarnessBuilder` + `ScriptedLlm` +
-//! a `ParityDelegate` that drives `run_agentic_loop` with real tool execution.
+//! a `ParityDelegate` test handle that drives
+//! `dasclaw_runtime::AgenticLoop` with real tool execution (W10.0,
+//! ADR-160 §3 L2).
 //!
 //! Coverage: 50 scenarios across 11 groups:
 //!   Group 1  (PS-001..006): Core tool round-trips
@@ -25,10 +27,10 @@ use serde_json::json;
 use tempfile::TempDir;
 use tokio::sync::Mutex;
 
-use dasclaw_core::agentic_loop::{
-    AgenticLoopConfig, LoopDelegate, LoopOutcome, LoopSignal, TextAction, run_agentic_loop,
-};
+use dasclaw_core::agentic_loop::AgenticLoopConfig;
 use dasclaw_runtime::context::JobContext;
+use dasclaw_runtime::tool_dispatch::ToolDispatcher;
+use dasclaw_runtime::{AgentResponder, AgenticLoop, LoopOutcome, TextAction};
 use ironclaw::config::SafetyConfig;
 use ironclaw::error::Error;
 use ironclaw::llm::{
@@ -56,13 +58,20 @@ struct ToolRecord {
 
 /// Delegate that performs real tool execution against a temp workspace,
 /// while using a ScriptedLlm for pre-programmed LLM responses.
+///
+/// W10.0 (ADR-160): this is now a test-side wiring handle. It owns the
+/// shared `Arc`s consumed by [`ParityResponder`] (the LLM seam) and
+/// [`ParityDispatcher`] (the tool seam), and drives them through the
+/// unified [`AgenticLoop`]. Post-run accessors (`recorded_tools`,
+/// `iterations`) keep the same shape as the pre-W10.0 `LoopDelegate`
+/// impl so the 50 PS/SP scenarios stay byte-identical.
 struct ParityDelegate {
     tools: Arc<ToolRegistry>,
     safety: Arc<SafetyLayer>,
     job_ctx: JobContext,
     reasoning: Arc<Reasoning>,
     tool_records: Arc<Mutex<Vec<ToolRecord>>>,
-    iterations: AtomicUsize,
+    iterations: Arc<AtomicUsize>,
 }
 
 impl ParityDelegate {
@@ -82,33 +91,54 @@ impl ParityDelegate {
             job_ctx,
             reasoning,
             tool_records: Arc::new(Mutex::new(Vec::new())),
-            iterations: AtomicUsize::new(0),
+            iterations: Arc::new(AtomicUsize::new(0)),
         }
     }
 
     async fn recorded_tools(&self) -> Vec<ToolRecord> {
         self.tool_records.lock().await.clone()
     }
+
+    /// Drive [`AgenticLoop`] with this delegate's responder/dispatcher
+    /// pair. Replaces the pre-W10.0 `run_agentic_loop(&delegate, …)`
+    /// call site without changing observable test behaviour.
+    async fn run(
+        &self,
+        ctx: &mut ReasoningContext,
+        config: &AgenticLoopConfig,
+        hooks: &dasclaw_core::HookBundle,
+    ) -> Result<LoopOutcome, dasclaw_core::HostError> {
+        let responder: Arc<dyn AgentResponder> = Arc::new(ParityResponder {
+            reasoning: Arc::clone(&self.reasoning),
+            iterations: Arc::clone(&self.iterations),
+        });
+        let dispatcher: Arc<dyn ToolDispatcher> = Arc::new(ParityDispatcher {
+            tools: Arc::clone(&self.tools),
+            safety: Arc::clone(&self.safety),
+            job_ctx: self.job_ctx.clone(),
+            tool_records: Arc::clone(&self.tool_records),
+        });
+        AgenticLoop::new(responder, Some(dispatcher), None, None)
+            .run(ctx, config, hooks)
+            .await
+    }
+}
+
+/// LLM seam: dial the scripted `Reasoning` and bump the iteration
+/// counter. Overrides `handle_text_response` so the final assistant
+/// message is *not* appended to `ctx` — the pre-W10.0 `LoopDelegate`
+/// impl returned `TextAction::Return` without pushing, and the PS/SP
+/// assertions depend on that contract.
+struct ParityResponder {
+    reasoning: Arc<Reasoning>,
+    iterations: Arc<AtomicUsize>,
 }
 
 #[async_trait]
-impl LoopDelegate for ParityDelegate {
-    async fn check_signals(&self) -> LoopSignal {
-        LoopSignal::Continue
-    }
-
-    async fn before_llm_call(
-        &self,
-        _reason_ctx: &mut ReasoningContext,
-        _iteration: usize,
-    ) -> Option<LoopOutcome> {
-        None
-    }
-
-    async fn call_llm(
+impl AgentResponder for ParityResponder {
+    async fn respond(
         &self,
         reason_ctx: &mut ReasoningContext,
-        _iteration: usize,
     ) -> Result<RespondOutput, dasclaw_core::HostError> {
         self.iterations.fetch_add(1, Ordering::SeqCst);
         self.reasoning
@@ -126,8 +156,22 @@ impl LoopDelegate for ParityDelegate {
     ) -> TextAction {
         TextAction::Return(LoopOutcome::Response(text.to_string()))
     }
+}
 
-    async fn execute_tool_calls(
+/// Tool seam: execute each call through the real registry + safety
+/// layer, record an audit row, and append the sanitized assistant
+/// message back onto `ctx`. Byte-identical port of the pre-W10.0
+/// `ParityDelegate::execute_tool_calls` body.
+struct ParityDispatcher {
+    tools: Arc<ToolRegistry>,
+    safety: Arc<SafetyLayer>,
+    job_ctx: JobContext,
+    tool_records: Arc<Mutex<Vec<ToolRecord>>>,
+}
+
+#[async_trait]
+impl ToolDispatcher for ParityDispatcher {
+    async fn dispatch(
         &self,
         tool_calls: Vec<ToolCall>,
         _content: Option<String>,
@@ -203,14 +247,10 @@ async fn run_scenario(
         max_tool_intent_nudges: 0,
     };
 
-    let outcome = run_agentic_loop(
-        &delegate,
-        &mut ctx,
-        &config,
-        &dasclaw_core::HookBundle::noop(),
-    )
-    .await
-    .expect("agentic loop should not fail");
+    let outcome = delegate
+        .run(&mut ctx, &config, &dasclaw_core::HookBundle::noop())
+        .await
+        .expect("agentic loop should not fail");
 
     let tool_records = delegate.recorded_tools().await;
     let iterations = delegate.iterations.load(Ordering::SeqCst);
@@ -261,7 +301,7 @@ async fn run_scenario_with_job_ctx(
         job_ctx,
         reasoning: Arc::clone(&reasoning),
         tool_records: Arc::new(Mutex::new(Vec::new())),
-        iterations: AtomicUsize::new(0),
+        iterations: Arc::new(AtomicUsize::new(0)),
     };
 
     let mut ctx = ReasoningContext::new();
@@ -274,14 +314,10 @@ async fn run_scenario_with_job_ctx(
         max_tool_intent_nudges: 0,
     };
 
-    let outcome = run_agentic_loop(
-        &delegate,
-        &mut ctx,
-        &config,
-        &dasclaw_core::HookBundle::noop(),
-    )
-    .await
-    .expect("agentic loop should not fail");
+    let outcome = delegate
+        .run(&mut ctx, &config, &dasclaw_core::HookBundle::noop())
+        .await
+        .expect("agentic loop should not fail");
 
     let tool_records = delegate.recorded_tools().await;
     let iterations = delegate.iterations.load(Ordering::SeqCst);
@@ -1429,14 +1465,10 @@ async fn ps_029_max_iterations_reached() {
         max_tool_intent_nudges: 0,
     };
 
-    let outcome = run_agentic_loop(
-        &delegate,
-        &mut ctx,
-        &config,
-        &dasclaw_core::HookBundle::noop(),
-    )
-    .await
-    .expect("loop should not error");
+    let outcome = delegate
+        .run(&mut ctx, &config, &dasclaw_core::HookBundle::noop())
+        .await
+        .expect("loop should not error");
 
     // Should hit MaxIterations, not Response
     match outcome {
@@ -1484,14 +1516,10 @@ async fn ps_030_token_usage_tracked() {
         max_tool_intent_nudges: 0,
     };
 
-    let outcome = run_agentic_loop(
-        &delegate,
-        &mut ctx,
-        &config,
-        &dasclaw_core::HookBundle::noop(),
-    )
-    .await
-    .expect("loop ok");
+    let outcome = delegate
+        .run(&mut ctx, &config, &dasclaw_core::HookBundle::noop())
+        .await
+        .expect("loop ok");
 
     match outcome {
         LoopOutcome::Response(text) => {
