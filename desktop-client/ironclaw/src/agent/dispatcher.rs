@@ -250,9 +250,20 @@ impl Agent {
         let force_text_at = max_tool_iterations;
         let nudge_at = max_tool_iterations.saturating_sub(1);
 
+        let responder = Arc::new(super::desktop_responder::DesktopResponder::new(
+            reasoning,
+            self.llm().clone(),
+            self.deps.llm_backend.clone(),
+            self.deps.cache_monitor.clone(),
+            tenant.clone(),
+            thread_id,
+            self.channels.clone(),
+            message.channel.clone(),
+            message.metadata.clone(),
+        ));
+
         let delegate = ChatDelegate {
             agent: self,
-            tenant,
             session: session.clone(),
             thread_id,
             message: message.clone(),
@@ -264,7 +275,7 @@ impl Agent {
             nudge_at,
             force_text_at,
             user_tz,
-            reasoning,
+            responder,
         };
 
         let mut reason_ctx = ReasoningContext::new()
@@ -355,7 +366,6 @@ impl Agent {
 /// auth intercept, and cost tracking.
 struct ChatDelegate<'a> {
     agent: &'a Agent,
-    tenant: crate::tenant::TenantCtx,
     session: Arc<Mutex<Session>>,
     thread_id: Uuid,
     message: Arc<IncomingMessage>,
@@ -367,11 +377,8 @@ struct ChatDelegate<'a> {
     nudge_at: usize,
     force_text_at: usize,
     user_tz: chrono_tz::Tz,
-    /// Route-B (D-4.5): the delegate owns the LLM reasoning engine instead
-    /// of receiving it as a loop parameter. Inherent helpers
-    /// (`call_llm_non_streaming` / `call_llm_streaming`) still take
-    /// `reasoning: &Reasoning` and are invoked with `&self.reasoning`.
-    reasoning: Reasoning,
+    /// W7.3: LLM call + cost guard + DB persistence delegated to here.
+    responder: Arc<super::desktop_responder::DesktopResponder>,
 }
 
 #[async_trait]
@@ -467,110 +474,10 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
     async fn call_llm(
         &self,
         reason_ctx: &mut ReasoningContext,
-        iteration: usize,
+        _iteration: usize,
     ) -> Result<crate::llm::RespondOutput, HostError> {
-        let reasoning = &self.reasoning;
-        // Enforce cost guardrails before the LLM call (global + per-user)
-        if let Err(limit) = self.tenant.check_cost_allowed().await {
-            return Err(crate::error::LlmError::InvalidResponse {
-                provider: "agent".to_string(),
-                reason: limit.to_string(),
-            }
-            .into());
-        }
-
-        // Apply per-user model override from settings (first iteration only
-        // to avoid repeated DB lookups within the same agentic loop).
-        // Uses "selected_model" — the same key the /model command persists to
-        // via SettingsStore (per-user scoped via TenantScope).
-        if iteration == 0
-            && let Some(store) = self.tenant.store()
-            && let Ok(Some(value)) = store.get_setting("selected_model").await
-            && let Some(model) = value.as_str()
-        {
-            let model = model.trim();
-            if !model.is_empty() {
-                reason_ctx.model_override = Some(model.to_string());
-            }
-        }
-
-        let use_streaming = self.agent.llm().supports_streaming();
-        let output = if use_streaming {
-            self.call_llm_streaming(reasoning, reason_ctx, iteration)
-                .await?
-        } else {
-            self.call_llm_non_streaming(reasoning, reason_ctx, iteration)
-                .await?
-        };
-
-        // Record cost and track token usage (global + per-user).
-        // Use the provider's effective_model_name so cost attribution matches
-        // the model that actually served the request. When the override is
-        // honoured (e.g. NearAI), this returns the override name; when the
-        // provider ignores overrides (e.g. Rig-based), it returns the active
-        // model, keeping attribution accurate in both cases.
-        let model_name = self
-            .agent
-            .llm()
-            .effective_model_name(reason_ctx.model_override.as_deref());
-        let cost_per_token = if reason_ctx.model_override.is_some() {
-            // Override may use different pricing; let CostGuard fall back to
-            // costs::model_cost() for the effective model.
-            None
-        } else {
-            Some(self.agent.llm().cost_per_token())
-        };
-        let read_discount = self.agent.llm().cache_read_discount();
-        let write_multiplier = self.agent.llm().cache_write_multiplier();
-        let call_cost = self
-            .tenant
-            .record_llm_call(
-                &model_name,
-                output.usage.input_tokens,
-                output.usage.output_tokens,
-                output.usage.cache_read_input_tokens,
-                output.usage.cache_creation_input_tokens,
-                read_discount,
-                write_multiplier,
-                cost_per_token,
-            )
-            .await;
-        tracing::debug!(
-            "LLM call used {} input + {} output tokens (${:.6})",
-            output.usage.input_tokens,
-            output.usage.output_tokens,
-            call_cost,
-        );
-
-        // Record cache metrics for the prompt cache monitor.
-        if let Some(ref monitor) = self.agent.deps.cache_monitor {
-            monitor.record(
-                output.usage.input_tokens,
-                output.usage.cache_read_input_tokens,
-                output.usage.cache_creation_input_tokens,
-                false,
-            );
-        }
-
-        // Persist LLM call to DB so usage stats survive restarts.
-        // Chat turns don't create agent_jobs, so job_id is None.
-        if let Some(store) = self.tenant.store() {
-            let record = crate::history::LlmCallRecord {
-                job_id: None,
-                conversation_id: Some(self.thread_id),
-                provider: &self.agent.deps.llm_backend,
-                model: &model_name,
-                input_tokens: output.usage.input_tokens,
-                output_tokens: output.usage.output_tokens,
-                cost: call_cost,
-                purpose: Some("chat"),
-            };
-            if let Err(e) = store.record_llm_call(&record).await {
-                tracing::warn!("Failed to persist LLM call to DB: {}", e);
-            }
-        }
-
-        Ok(output)
+        use dasclaw_runtime::AgentResponder;
+        self.responder.respond(reason_ctx).await
     }
 
     async fn handle_text_response(
@@ -614,109 +521,6 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
 }
 
 // ── Private helpers for ChatDelegate ────────────────────────────────────
-
-impl<'a> ChatDelegate<'a> {
-    /// Non-streaming LLM call with context-exceeded retry.
-    async fn call_llm_non_streaming(
-        &self,
-        reasoning: &Reasoning,
-        reason_ctx: &mut ReasoningContext,
-        iteration: usize,
-    ) -> Result<crate::llm::RespondOutput, Error> {
-        match reasoning.respond_with_tools(reason_ctx).await {
-            Ok(output) => Ok(output),
-            Err(crate::error::LlmError::ContextLengthExceeded { used, limit }) => {
-                tracing::warn!(
-                    used,
-                    limit,
-                    iteration,
-                    "Context length exceeded, compacting messages and retrying"
-                );
-                reason_ctx.messages = compact_messages_for_retry(&reason_ctx.messages);
-                if reason_ctx.force_text {
-                    reason_ctx.available_tools.clear();
-                }
-                reasoning
-                    .respond_with_tools(reason_ctx)
-                    .await
-                    .map_err(|retry_err| {
-                        tracing::error!(
-                            original_used = used,
-                            original_limit = limit,
-                            retry_error = %retry_err,
-                            "Retry after auto-compaction also failed"
-                        );
-                        crate::error::Error::from(retry_err)
-                    })
-            }
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    /// Streaming LLM call: forwards text chunks to the channel while the
-    /// response is being generated, with context-exceeded retry fallback.
-    async fn call_llm_streaming(
-        &self,
-        reasoning: &Reasoning,
-        reason_ctx: &mut ReasoningContext,
-        iteration: usize,
-    ) -> Result<crate::llm::RespondOutput, Error> {
-        let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-
-        let channels = self.agent.channels.clone();
-        let channel_name = self.message.channel.clone();
-        let metadata = self.message.metadata.clone();
-
-        // Spawn a task that drains text chunks and forwards them as
-        // StatusUpdate::StreamChunk to the frontend.
-        let forward_handle = tokio::spawn(async move {
-            while let Some(chunk) = chunk_rx.recv().await {
-                let _ = channels
-                    .send_status(&channel_name, StatusUpdate::StreamChunk(chunk), &metadata)
-                    .await;
-            }
-        });
-
-        let result = reasoning
-            .respond_with_tools_streaming(reason_ctx, chunk_tx)
-            .await;
-
-        // Wait for the forwarding task to finish draining queued chunks
-        // before returning to the caller.
-        let _ = forward_handle.await;
-
-        match result {
-            Ok(output) => Ok(output),
-            Err(crate::error::LlmError::ContextLengthExceeded { used, limit }) => {
-                tracing::warn!(
-                    used,
-                    limit,
-                    iteration,
-                    "Context length exceeded (streaming), compacting and retrying non-streaming"
-                );
-                reason_ctx.messages = compact_messages_for_retry(&reason_ctx.messages);
-                if reason_ctx.force_text {
-                    reason_ctx.available_tools.clear();
-                }
-                // Retry falls back to non-streaming to avoid creating another
-                // forwarding task for a likely-small compacted context.
-                reasoning
-                    .respond_with_tools(reason_ctx)
-                    .await
-                    .map_err(|retry_err| {
-                        tracing::error!(
-                            original_used = used,
-                            original_limit = limit,
-                            retry_error = %retry_err,
-                            "Retry after auto-compaction also failed (streaming)"
-                        );
-                        crate::error::Error::from(retry_err)
-                    })
-            }
-            Err(e) => Err(e.into()),
-        }
-    }
-}
 
 /// Execute a chat tool without requiring `&Agent`.
 ///
@@ -836,7 +640,7 @@ pub(super) fn contextual_tool_message(tool_calls: &[crate::llm::ToolCall]) -> St
 /// finds the last `User` message, and retains it plus every subsequent message
 /// (the current turn's assistant tool calls and tool results). A short note is
 /// inserted so the LLM knows earlier history was dropped.
-fn compact_messages_for_retry(messages: &[ChatMessage]) -> Vec<ChatMessage> {
+pub(super) fn compact_messages_for_retry(messages: &[ChatMessage]) -> Vec<ChatMessage> {
     use crate::llm::Role;
 
     let mut compacted = Vec::new();
