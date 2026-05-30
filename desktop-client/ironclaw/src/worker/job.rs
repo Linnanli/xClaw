@@ -1,8 +1,9 @@
 //! Job worker execution via the shared `AgenticLoop`.
 //!
-//! Replaces `src/agent/worker.rs` with a `JobDelegate` that implements
-//! `LoopDelegate`. The `Worker` struct and `WorkerDeps` remain as the
-//! public API consumed by `scheduler.rs`.
+//! Drives the shared `dasclaw_runtime::AgenticLoop` via `JobResponder`
+//! (LLM seam) and `JobDispatcher` (tool seam) — ADR-160 §3 L2. The
+//! `Worker` struct and `WorkerDeps` remain as the public API consumed
+//! by `scheduler.rs`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,10 +13,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
-use crate::agent::agentic_loop::{
-    AgenticLoopConfig, LoopDelegate, LoopOutcome, LoopSignal, TextAction, run_agentic_loop,
-    truncate_for_preview,
-};
+use crate::agent::agentic_loop::truncate_for_preview;
 use crate::channels::web::types::ToolDecisionDto;
 use crate::error::Error;
 use crate::llm::{
@@ -34,10 +32,13 @@ use crate::worker::autonomous_recovery::{
     EMPTY_TOOL_COMPLETION_NUDGE, FORCE_TEXT_RECOVERY_PROMPT,
 };
 use crate::worker::job_dispatcher::WorkerMessage;
+use dasclaw_core::agentic_loop::AgenticLoopConfig;
 use dasclaw_core::traits::HostError;
 use dasclaw_hooks::HookRegistry;
 use dasclaw_runtime::JobState;
 use dasclaw_runtime::context::ContextManager;
+use dasclaw_runtime::tool_dispatch::ToolDispatcher;
+use dasclaw_runtime::{AgentResponder, AgenticLoop, LoopOutcome, LoopSignal, TextAction};
 use ironclaw_common::AppEvent;
 
 /// Shared dependencies for worker execution.
@@ -264,12 +265,16 @@ impl Worker {
             Some(WorkerMessage::Ping) | Some(WorkerMessage::UserMessage(_)) => {}
         }
 
+        // ADR-160 §3 L2: wrap `Worker` in `Arc` so it can be shared between
+        // `JobResponder` and `JobDispatcher` (both run inside `AgenticLoop`).
+        let worker = Arc::new(self);
+
         // Get job context
-        let job_ctx = self.context_manager().get_context(self.job_id).await?;
+        let job_ctx = worker.context_manager().get_context(worker.job_id).await?;
 
         // Create reasoning engine
         let reasoning =
-            Reasoning::new(self.llm().clone()).with_model_name(self.llm().active_model_name());
+            Reasoning::new(worker.llm().clone()).with_model_name(worker.llm().active_model_name());
 
         // Build initial reasoning context (tool definitions refreshed each iteration in execution_loop)
         let mut reason_ctx = ReasoningContext::new().with_job(&job_ctx.description);
@@ -288,19 +293,18 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
         )));
 
         // Main execution loop with timeout
-        let result = tokio::time::timeout(self.timeout(), async {
-            self.execution_loop(&mut rx, &reasoning, &mut reason_ctx)
-                .await
+        let result = tokio::time::timeout(worker.timeout(), async {
+            worker.execution_loop(rx, reasoning, &mut reason_ctx).await
         })
         .await;
 
         match result {
             Ok(Ok(())) => {
-                tracing::info!("Worker for job {} completed successfully", self.job_id);
+                tracing::info!("Worker for job {} completed successfully", worker.job_id);
                 // Only mark completed if still in an active, non-stuck state.
-                let current_state = self
+                let current_state = worker
                     .context_manager()
-                    .get_context(self.job_id)
+                    .get_context(worker.job_id)
                     .await
                     .map(|ctx| ctx.state);
                 match current_state {
@@ -309,27 +313,27 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
                     Ok(JobState::Stuck) => {
                         tracing::info!(
                             "Job {} returned Ok but is Stuck — leaving for self-repair",
-                            self.job_id
+                            worker.job_id
                         );
                     }
                     Ok(_) => {
-                        self.mark_completed().await?;
+                        worker.mark_completed().await?;
                     }
                     Err(e) => {
                         tracing::warn!(
-                            job_id = %self.job_id,
+                            job_id = %worker.job_id,
                             "Failed to get job context, cannot mark as completed: {}", e
                         );
                     }
                 }
             }
             Ok(Err(e)) => {
-                tracing::error!("Worker for job {} failed: {}", self.job_id, e);
-                self.mark_failed(&e.to_string()).await?;
+                tracing::error!("Worker for job {} failed: {}", worker.job_id, e);
+                worker.mark_failed(&e.to_string()).await?;
             }
             Err(_) => {
-                tracing::warn!("Worker for job {} timed out", self.job_id);
-                self.mark_stuck("Execution timeout").await?;
+                tracing::warn!("Worker for job {} timed out", worker.job_id);
+                worker.mark_stuck("Execution timeout").await?;
             }
         }
 
@@ -337,9 +341,9 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
     }
 
     async fn execution_loop(
-        &self,
-        rx: &mut mpsc::Receiver<WorkerMessage>,
-        reasoning: &Reasoning,
+        self: &Arc<Self>,
+        mut rx: mpsc::Receiver<WorkerMessage>,
+        reasoning: Reasoning,
         reason_ctx: &mut ReasoningContext,
     ) -> Result<(), Error> {
         const MAX_WORKER_ITERATIONS: usize = 500;
@@ -411,7 +415,8 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
 
         // If we have a plan, execute it.
         if let Some(ref plan) = plan {
-            self.execute_plan(rx, reasoning, reason_ctx, plan).await?;
+            self.execute_plan(&mut rx, &reasoning, reason_ctx, plan)
+                .await?;
 
             if let Ok(ctx) = self.context_manager().get_context(self.job_id).await
                 && (ctx.state.is_terminal()
@@ -422,14 +427,21 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
             }
         }
 
-        // Build the delegate and run the shared agentic loop
-        let delegate = JobDelegate {
-            worker: self,
+        // ADR-160 §3 L2: drive the shared engine via responder + dispatcher.
+        // `recovery_state` is shared so the responder runs `begin_iteration` /
+        // `on_text_response` while the dispatcher runs `on_valid_tool_call`.
+        let recovery_state = Arc::new(tokio::sync::Mutex::new(AutonomousRecoveryState::default()));
+        let responder = JobResponder {
+            worker: Arc::clone(self),
             rx: tokio::sync::Mutex::new(rx),
-            consecutive_rate_limits: std::sync::atomic::AtomicUsize::new(0),
-            recovery_state: tokio::sync::Mutex::new(AutonomousRecoveryState::default()),
-            has_text_response: std::sync::atomic::AtomicBool::new(false),
             reasoning,
+            consecutive_rate_limits: std::sync::atomic::AtomicUsize::new(0),
+            recovery_state: Arc::clone(&recovery_state),
+            has_text_response: std::sync::atomic::AtomicBool::new(false),
+        };
+        let dispatcher = JobDispatcher {
+            worker: Arc::clone(self),
+            recovery_state,
         };
 
         let config = AgenticLoopConfig {
@@ -449,34 +461,35 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
             .map(|ctx| ctx.user_id.clone())
             .unwrap_or_else(|_| "unknown".to_string());
 
-        let outcome = run_agentic_loop(
-            &delegate,
-            reason_ctx,
-            &config,
-            // Phase 3 Step G: SafetyLayer wired in via IronclawSafetyHook.
-            // Phase 3 Step F: SecretsStore wired in via AgentSecrets,
-            // scoped to the job owner (resolved just above).
-            // Issue #73 slice D: PermissionMode threaded explicitly; job
-            // workers run on user-scoped workspaces so default is
-            // `WorkspaceWrite`.
-            // Issue #73 slice E: workspace boundary is capability-validated.
-            &crate::agent::agentic_loop::hook_bundle_with_safety_and_secrets(
-                self.safety().clone(),
-                self.tools(),
-                &job_user_id,
-                std::sync::Arc::new(
-                    crate::agent::agentic_loop::WorkspaceCapability::open(
-                        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-                    )
-                    .map_err(|e| crate::error::WorkspaceError::IoError {
-                        reason: format!("failed to open workspace capability: {e}"),
-                    })?,
-                ),
-                crate::agent::agentic_loop::PermissionMode::WorkspaceWrite,
+        // Phase 3 Step G: SafetyLayer wired in via IronclawSafetyHook.
+        // Phase 3 Step F: SecretsStore wired in via AgentSecrets,
+        // scoped to the job owner (resolved just above).
+        // Issue #73 slice D: PermissionMode threaded explicitly; job
+        // workers run on user-scoped workspaces so default is
+        // `WorkspaceWrite`.
+        // Issue #73 slice E: workspace boundary is capability-validated.
+        let hooks = crate::agent::agentic_loop::hook_bundle_with_safety_and_secrets(
+            self.safety().clone(),
+            self.tools(),
+            &job_user_id,
+            std::sync::Arc::new(
+                crate::agent::agentic_loop::WorkspaceCapability::open(
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+                )
+                .map_err(|e| crate::error::WorkspaceError::IoError {
+                    reason: format!("failed to open workspace capability: {e}"),
+                })?,
             ),
-        )
-        .await
-        .map_err(crate::agent::agentic_loop::host_err_to_error)?;
+            crate::agent::agentic_loop::PermissionMode::WorkspaceWrite,
+        );
+
+        // No cancellation token — `JobResponder::check_signals` already
+        // observes the `WorkerMessage::Stop` channel signal. No event
+        // channel — events are streamed via `Worker::log_event` instead.
+        let outcome = AgenticLoop::new(Arc::new(responder), Some(Arc::new(dispatcher)), None, None)
+            .run(reason_ctx, &config, &hooks)
+            .await
+            .map_err(crate::agent::agentic_loop::host_err_to_error)?;
 
         match outcome {
             LoopOutcome::Response(_) => {
@@ -1278,7 +1291,6 @@ fn store_fallback_in_metadata(
     }
 }
 
-/// Job delegate: implements `LoopDelegate` for the background job context.
 /// Whether an LLM error represents a completion-eligible empty response.
 ///
 /// Only `EmptyResponse` (provider returned no choices/content) qualifies.
@@ -1288,26 +1300,30 @@ fn is_completion_eligible_error(error: &crate::error::LlmError) -> bool {
     matches!(error, crate::error::LlmError::EmptyResponse { .. })
 }
 
+/// LLM-seam delegate (ADR-160 §3 L2): drives the agentic loop's
+/// `AgentResponder` side.
 ///
-/// Handles: signal channel (stop/ping/user messages), cancellation checks,
-/// rate-limit retry, parallel tool execution, DB persistence, SSE broadcasting.
-struct JobDelegate<'a> {
-    worker: &'a Worker,
-    rx: tokio::sync::Mutex<&'a mut mpsc::Receiver<WorkerMessage>>,
+/// Handles signal channel draining (stop/ping/user messages),
+/// rate-limit retry/back-off, autonomous-recovery iteration hooks,
+/// and the completion-on-text path. Tool dispatch lives on
+/// [`JobDispatcher`] so both sides can share `recovery_state`.
+struct JobResponder {
+    worker: Arc<Worker>,
+    rx: tokio::sync::Mutex<mpsc::Receiver<WorkerMessage>>,
     /// Tracks consecutive rate-limit errors to fail fast instead of burning iterations.
     consecutive_rate_limits: std::sync::atomic::AtomicUsize,
-    recovery_state: tokio::sync::Mutex<AutonomousRecoveryState>,
+    recovery_state: Arc<tokio::sync::Mutex<AutonomousRecoveryState>>,
     /// Whether a substantive (non-empty) text response has been produced.
     /// When true, an empty follow-up response is treated as job completion
     /// rather than a retry signal (prevents spurious failures in routines).
     has_text_response: std::sync::atomic::AtomicBool,
-    /// Route-B (D-4.5): the delegate borrows the LLM reasoning engine
-    /// instead of receiving it as a loop parameter. Borrowed because
-    /// `execution_loop` needs `&reasoning` both before and during the loop.
-    reasoning: &'a Reasoning,
+    /// Owned LLM reasoning engine for this job run. Owned (not borrowed)
+    /// because the responder lives inside `Arc<dyn AgentResponder>` for
+    /// the entire `AgenticLoop::run` call.
+    reasoning: Reasoning,
 }
 
-impl<'a> JobDelegate<'a> {
+impl JobResponder {
     const MAX_CONSECUTIVE_RATE_LIMITS: usize = 10;
 
     /// Handle a rate-limit error: back off, increment counter, and fail fast
@@ -1359,7 +1375,9 @@ impl<'a> JobDelegate<'a> {
         })
     }
 
-    /// Mark the job as completed, logging a warning on failure.
+    /// Mark the job as completed, logging a warning instead of returning the
+    /// error if the transition fails. Used in completion-on-text paths where
+    /// the loop has already produced a final response.
     async fn mark_completed_or_warn(&self, context: &str) {
         if let Err(e) = self.worker.mark_completed().await {
             tracing::warn!(
@@ -1409,7 +1427,7 @@ impl<'a> JobDelegate<'a> {
 }
 
 #[async_trait]
-impl<'a> LoopDelegate for JobDelegate<'a> {
+impl AgentResponder for JobResponder {
     async fn check_signals(&self) -> LoopSignal {
         // Drain the entire message channel, prioritizing Stop over user messages.
         // Scope the lock so it's dropped before any .await below.
@@ -1527,12 +1545,11 @@ impl<'a> LoopDelegate for JobDelegate<'a> {
         None
     }
 
-    async fn call_llm(
+    async fn respond(
         &self,
         reason_ctx: &mut ReasoningContext,
-        _iteration: usize,
     ) -> Result<crate::llm::RespondOutput, HostError> {
-        let reasoning = self.reasoning;
+        let reasoning = &self.reasoning;
         // Try select_tools first, fall back to respond_with_tools
         match reasoning.select_tools(reason_ctx).await {
             Ok(s) if !s.is_empty() => {
@@ -1721,9 +1738,41 @@ impl<'a> LoopDelegate for JobDelegate<'a> {
         TextAction::Return(LoopOutcome::Response(text))
     }
 
-    async fn execute_tool_calls(
+    async fn on_tool_intent_nudge(&self, text: &str, _reason_ctx: &mut ReasoningContext) {
+        self.worker.log_event(
+            "message",
+            serde_json::json!({
+                "role": "assistant",
+                "content": truncate_for_preview(text, 2000),
+                "nudge": true,
+            }),
+        );
+    }
+
+    async fn after_iteration(&self, _iteration: usize) {
+        // Small delay between iterations
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Tool-seam delegate (ADR-160 §3 L2): drives the agentic loop's
+/// `ToolDispatcher` side.
+///
+/// Receives validated tool-call batches from the loop, broadcasts the
+/// accompanying narrative/reasoning, executes the tools (in parallel
+/// when the batch has more than one), and records the results back into
+/// the reasoning context. Shares `recovery_state` with [`JobResponder`]
+/// so a successful tool call resets the malformed-completion counter.
+struct JobDispatcher {
+    worker: Arc<Worker>,
+    recovery_state: Arc<tokio::sync::Mutex<AutonomousRecoveryState>>,
+}
+
+#[async_trait]
+impl ToolDispatcher for JobDispatcher {
+    async fn dispatch(
         &self,
-        tool_calls: Vec<crate::llm::ToolCall>,
+        tool_calls: Vec<ToolCall>,
         content: Option<String>,
         usage: dasclaw_core::TokenUsage,
         reason_ctx: &mut ReasoningContext,
@@ -1826,22 +1875,6 @@ impl<'a> LoopDelegate for JobDelegate<'a> {
         }
 
         Ok(None)
-    }
-
-    async fn on_tool_intent_nudge(&self, text: &str, _reason_ctx: &mut ReasoningContext) {
-        self.worker.log_event(
-            "message",
-            serde_json::json!({
-                "role": "assistant",
-                "content": truncate_for_preview(text, 2000),
-                "nudge": true,
-            }),
-        );
-    }
-
-    async fn after_iteration(&self, _iteration: usize) {
-        // Small delay between iterations
-        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -2447,21 +2480,22 @@ mod tests {
             .unwrap() // safety: test
             .unwrap(); // safety: test
 
-        let (_, mut rx) = tokio::sync::mpsc::channel(1);
+        let (_, rx) = tokio::sync::mpsc::channel(1);
         let reasoning = Reasoning::new(worker.llm().clone());
-        let delegate = JobDelegate {
-            worker: &worker,
-            rx: tokio::sync::Mutex::new(&mut rx),
+        let worker = Arc::new(worker);
+        let responder = JobResponder {
+            worker: Arc::clone(&worker),
+            rx: tokio::sync::Mutex::new(rx),
             consecutive_rate_limits: std::sync::atomic::AtomicUsize::new(0),
-            recovery_state: tokio::sync::Mutex::new(AutonomousRecoveryState::default()),
+            recovery_state: Arc::new(tokio::sync::Mutex::new(AutonomousRecoveryState::default())),
             has_text_response: std::sync::atomic::AtomicBool::new(false),
-            reasoning: &reasoning,
+            reasoning,
         };
 
         let mut reason_ctx = ReasoningContext::new();
 
         // Text that a real LLM would produce but doesn't match llm_signals_completion
-        let action = delegate
+        let action = responder
             .handle_text_response(
                 "Weekly review created in Notion and notification sent.",
                 ResponseMetadata::default(),
