@@ -181,3 +181,32 @@ def click_send(session_id: str) -> None:
         "document.querySelector('button.aui-composer-send').click(); return true;",
     )
 
+
+def wait_composer_ready(session_id: str, timeout: float = 60.0) -> Optional[dict]:
+    """轮询直到 composer 出现且 boot 占位消失，返回当时的 snapshot。
+
+    场景 2/3 的统一前置：发送消息前必须等聊天输入框就绪，否则 React 还没挂载
+    完毕，注入文本会找不到元素。
+    """
+
+    def _check():
+        s = snapshot(session_id)
+        return s if (s["composer"] > 0 and not s["boot"]) else None
+
+    return poll(_check, timeout=timeout, interval=1.0)
+
+
+def wait_assistant_message_count(
+    session_id: str,
+    baseline: int,
+    timeout: float = 120.0,
+    interval: float = 2.0,
+) -> Optional[dict]:
+    """轮询直到 assistantMsgs 严格大于 baseline，返回当时的 snapshot。"""
+
+    def _check():
+        s = snapshot(session_id)
+        return s if s["assistantMsgs"] > baseline else None
+
+    return poll(_check, timeout=timeout, interval=interval)
+
