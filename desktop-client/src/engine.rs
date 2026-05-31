@@ -490,6 +490,10 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         String::new(),
     );
 
+    // 对齐 bootstrap_tools() 行为：发出 `tools: N accepted` 汇总日志，供 E2E 与日志巡检验证。
+    // 见 desktop-client/docs/e2e-webdriver-test-plan.md §10-G2。
+    components.tools.log_registration_report(None).await;
+
     // ── Phase 8: 构建 Agent ───────────────────────────────────────
     let session_manager = Arc::clone(&components.agent_session_manager);
 
