@@ -41,14 +41,16 @@ mod tests {
 
     #[test]
     fn test_contract_thinking_event() {
+        // AI SDK v5 拒收空 id 的 reasoning-delta；lifecycle 必须分配有效 id。
         let event = VercelUIStream::ReasoningDelta {
-            id: String::new(),
+            id: "r-42".into(),
             delta: "processing".into(),
             provider_metadata: None,
         };
         let json: serde_json::Value = serde_json::to_value(&event).unwrap();
 
         assert_eq!(json["type"], "reasoning-delta");
+        assert_eq!(json["id"], "r-42");
         assert!(json["delta"].is_string());
     }
 
@@ -460,7 +462,7 @@ mod tests {
         let empty = json!({});
 
         let cases: Vec<(StatusUpdate, &serde_json::Value)> = vec![
-            (StatusUpdate::Thinking("test".into()), &empty),
+            // Thinking 不走纯映射；由 emit_status_stream 按 lifecycle 处理，见 reasoning_* 系列测试。
             (
                 StatusUpdate::ToolStarted {
                     name: "test".into(),
