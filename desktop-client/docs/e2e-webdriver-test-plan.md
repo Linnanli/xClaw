@@ -473,10 +473,10 @@ execjs(sid, "document.querySelector('button.aui-composer-send').click(); return 
 | # | 缺口 | 证据 | 对测试计划的影响 |
 |---|---|---|---|
 | G1 | ~~**聊天输入框/发送按钮无 `data-testid`**~~ ✅ 已修复 | [thread.tsx:211/250](../ui/src/app/components/assistant-ui/thread.tsx) 已补 `data-testid="composer-input"` 与 `composer-send`；[webdriver_client.py](../e2e-webdriver/webdriver_client.py) 选择器已切换为 testid 优先 + class 回退。 |
-| G2 | **桌面端不输出 `tools: N accepted` 汇总日志** | `summary_line()`/`log_registration_report()` 仅由 `bootstrap_tools()` 调用（[registry.rs:385/725](../ironclaw/src/tools/registry.rs)）；[engine.rs](../src/engine.rs) 手动调 `register_message_tools`+`register_job_tools`，未走 `bootstrap_tools`，全仓 grep `tools: .*accepted` 无运行期匹配 | 场景 3 不能断言"日志出现 `tools: 61 accepted`"。改为经 `ToolRegistry::count()` 或 UI 读真实条数，或新增显式 report 调用。 |
-| G3 | **`AGENT_AUTO_APPROVE_TOOLS` 环境变量不存在** | 全仓（`crates/**` + `desktop-client/**`，`*.rs/*.ts/*.tsx`）grep `AGENT_AUTO_APPROVE_TOOLS`/`AUTO_APPROVE` 零匹配 | 场景 4 不能用该变量断言"默认不自动批准"。Fail-Safe 不变量改为**行为级**：直接断言 `approval-card` 出现且工具未静默执行。 |
+| G2 | ~~**桌面端不输出 `tools: N accepted` 汇总日志**~~ ✅ 已修复 | [engine.rs](../src/engine.rs) Phase 7 末尾补 `components.tools.log_registration_report(None).await;`（对齐 `bootstrap_tools()` 行为）。`tracing` 日志 `target=ironclaw::tools::startup` 现可被 §3 / 日志巡检断言。 |
+| G3 | ~~**`AGENT_AUTO_APPROVE_TOOLS` 环境变量不存在**~~ ⚠️ won't-fix（已转行为级断言） | 全仓 grep `AGENT_AUTO_APPROVE_TOOLS`/`AUTO_APPROVE` 零匹配。代码侧默认值正确（[ironclaw/src/settings.rs:590](../ironclaw/src/settings.rs#L590) `auto_approve_tools: false`）。场景 4 Fail-Safe 不变量已改为**行为级**：直接断言 `approval-card` 出现且工具未静默执行，不再依赖环变量。 |
 | G4 | **无纯自然语言 jailbreak 硬阻断** | `dasclaw_safety` 防御=secret 拦截（`scan_inbound_for_secrets`）+ 内容包裹（`wrap_for_llm`/`wrap_external_content`）+ 定界符中和（`Sanitizer`），[dasclaw_safety/src/lib.rs](../../crates/dasclaw_safety/src/lib.rs)；无"忽略规则/导出密钥"语义分类器 | 场景 7 对**不含密钥**的越权指令"被安全层拦截"的断言不成立。须降级为"不泄露系统提示/拒答"语义断言，或单列为待建能力。 |
-| G5 | **`tauri-plugin-webdriver` 接线为试跑态、未固化** | 会话记忆 `tauri-webdriver-trial-handoff.md`：插件放在 `cfg(debug_assertions)` 依赖写法不生效、Tauri 包版本漂移告警、首次冷编译极慢 | 跑 E2E 前需先把插件改回 `optional + feature gate` 并对齐 `@tauri-apps/api` 版本，否则 4445 可能不监听。 |
+| G5 | ~~**`tauri-plugin-webdriver` 接线为试跑态、未固化**~~ ✅ 已修复 | [Cargo.toml:19](../Cargo.toml#L19) `tauri-plugin-webdriver = { version = "0.2", optional = true }` + [Cargo.toml:114](../Cargo.toml#L114) `webdriver = ["dep:tauri-plugin-webdriver"]`；[src/lib.rs](../src/lib.rs) 接线用 `#[cfg(all(debug_assertions, feature = "webdriver"))]` 双重保护。激活命令 `cargo tauri dev -f webdriver` 已稳定。 |
 
 ---
 
