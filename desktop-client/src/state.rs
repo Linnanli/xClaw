@@ -305,6 +305,10 @@ pub struct EngineState {
     inner: OnceLock<AppState>,
     /// 引擎启动失败的原因。
     failure: RwLock<Option<String>>,
+    /// 轻量级 DLP 入口：safety_bridge 在 `initialize()` 时同步填充，
+    /// 允许 DLP 命令（`scan_user_input` 等）在冷启动期间无需等待
+    /// agents/tools/sessions 等其他组件就绪。详见 issue #1017。
+    safety_bridge: OnceLock<Arc<SafetyBridge>>,
 }
 
 impl EngineState {
@@ -313,6 +317,7 @@ impl EngineState {
         Self {
             inner: OnceLock::new(),
             failure: RwLock::new(None),
+            safety_bridge: OnceLock::new(),
         }
     }
 
@@ -320,6 +325,8 @@ impl EngineState {
     ///
     /// 只能调用一次，重复调用返回 `Err`。
     pub fn initialize(&self, state: AppState) -> Result<(), String> {
+        // 先单独发布 safety_bridge，让 DLP 命令在 OnceLock 设值之间不卡住。
+        let _ = self.safety_bridge.set(Arc::clone(&state.safety_bridge));
         self.inner
             .set(state)
             .map_err(|_| "EngineState already initialized".to_string())
@@ -373,6 +380,37 @@ impl EngineState {
     pub fn is_failed(&self) -> bool {
         self.failure.read().map(|f| f.is_some()).unwrap_or(false)
     }
+
+    /// 获取 SafetyBridge 而无需等待完整引擎就绪（issue #1017）。
+    ///
+    /// DLP IPC 命令（`scan_user_input` / `scan_outbound_request` 等）只需要
+    /// safety_bridge，不依赖 agents、tools、sessions 等其他组件。
+    /// 使用此入口可在冷启动期间快速响应，避免 `get()` 的 all-or-nothing 等待。
+    ///
+    /// 返回值：
+    /// - `Ok(Arc<SafetyBridge>)` — DLP 组件就绪
+    /// - `Err(json)` — 启动失败或仍在 safety_bridge 初始化之前；payload 与 `get()` 同结构
+    pub fn safety_bridge(&self) -> Result<Arc<SafetyBridge>, String> {
+        if let Some(bridge) = self.safety_bridge.get() {
+            return Ok(Arc::clone(bridge));
+        }
+
+        if let Ok(guard) = self.failure.read() {
+            if let Some(reason) = guard.as_ref() {
+                return Err(engine_error_payload(
+                    "ENGINE_START_FAILED",
+                    &format!("引擎启动失败: {}", reason),
+                    false,
+                ));
+            }
+        }
+
+        Err(engine_error_payload(
+            "ENGINE_NOT_READY",
+            "DLP 组件正在初始化中，请稍后重试",
+            true,
+        ))
+    }
 }
 
 /// 把引擎状态错误序列化成结构化 JSON 字符串。
@@ -425,5 +463,35 @@ mod engine_state_error_tests {
             .as_str()
             .unwrap_or_default()
             .contains("config missing"));
+    }
+
+    // issue #1017: safety_bridge() 不依赖完整 engine ready
+    #[test]
+    fn safety_bridge_before_init_returns_not_ready() {
+        let state = EngineState::new();
+        let err = state
+            .safety_bridge()
+            .err()
+            .expect("uninitialized safety_bridge must return Err");
+        let v = parse(&err);
+        assert_eq!(v["code"], "ENGINE_NOT_READY");
+        assert_eq!(v["retryable"], true);
+        assert!(
+            v["message"].as_str().unwrap_or_default().contains("DLP"),
+            "safety_bridge() 失败消息应明确指向 DLP 组件，便于排障"
+        );
+    }
+
+    #[test]
+    fn safety_bridge_after_failure_returns_non_retryable() {
+        let state = EngineState::new();
+        state.set_failed("dlp init failed".to_string());
+        let err = state
+            .safety_bridge()
+            .err()
+            .expect("failed state must surface error via safety_bridge()");
+        let v = parse(&err);
+        assert_eq!(v["code"], "ENGINE_START_FAILED");
+        assert_eq!(v["retryable"], false);
     }
 }

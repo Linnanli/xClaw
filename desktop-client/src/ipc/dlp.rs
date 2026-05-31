@@ -112,8 +112,8 @@ pub async fn scan_user_input(
     state: State<'_, EngineState>,
     content: String,
 ) -> Result<DlpScanResponse, String> {
-    let state = state.get()?;
-    let result = state.safety_bridge.scan_user_input(&content);
+    let bridge = state.safety_bridge()?;
+    let result = bridge.scan_user_input(&content);
     Ok(DlpScanResponse::from(result))
 }
 
@@ -125,8 +125,8 @@ pub async fn scan_outbound_request(
     state: State<'_, EngineState>,
     body: String,
 ) -> Result<DlpScanResponse, String> {
-    let state = state.get()?;
-    let result = state.safety_bridge.scan_outbound(&body);
+    let bridge = state.safety_bridge()?;
+    let result = bridge.scan_outbound(&body);
     Ok(DlpScanResponse::from(result))
 }
 
@@ -138,8 +138,8 @@ pub async fn sanitize_for_storage(
     state: State<'_, EngineState>,
     content: String,
 ) -> Result<String, String> {
-    let state = state.get()?;
-    state.safety_bridge.sanitize_for_storage(&content)
+    let bridge = state.safety_bridge()?;
+    bridge.sanitize_for_storage(&content)
 }
 
 /// 检查 HTTP 请求是否包含敏感信息。
@@ -153,9 +153,9 @@ pub async fn check_http_request(
     headers: Vec<(String, String)>,
     body: Option<Vec<u8>>,
 ) -> Result<(), String> {
-    let state = state.get()?;
+    let bridge = state.safety_bridge()?;
     // 扫描 URL
-    let url_result = state.safety_bridge.scan_outbound(&url);
+    let url_result = bridge.scan_outbound(&url);
     if url_result.was_blocked {
         return Err(format!(
             "URL contains sensitive data: {}",
@@ -166,7 +166,7 @@ pub async fn check_http_request(
     // 扫描 headers
     for (key, value) in &headers {
         let header_str = format!("{}: {}", key, value);
-        let header_result = state.safety_bridge.scan_outbound(&header_str);
+        let header_result = bridge.scan_outbound(&header_str);
         if header_result.was_blocked {
             return Err(format!("Header '{}' contains sensitive data", key));
         }
@@ -175,7 +175,7 @@ pub async fn check_http_request(
     // 扫描 body
     if let Some(body_bytes) = body {
         if let Ok(body_str) = String::from_utf8(body_bytes) {
-            let body_result = state.safety_bridge.scan_outbound(&body_str);
+            let body_result = bridge.scan_outbound(&body_str);
             if body_result.was_blocked {
                 return Err(format!(
                     "Request body contains sensitive data: {}",
