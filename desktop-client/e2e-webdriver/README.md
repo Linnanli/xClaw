@@ -47,4 +47,5 @@ pytest desktop-client/e2e-webdriver/tests/test_scenario_01_engine_readiness.py -
 | §3 工具注册与发现 | ✅ 已落地（只读工具 `list_dir` 分发链路；需 LLM 可达） |
 | §4 工具分发与审批（Fail-Safe） | ✅ 已落地（写工具触发审批卡片 + deny 路径；approve 路径 skip，见用例说明） |
 | §5 DLP 出站脱敏与拦截（Fail-Safe） | ✅ 已落地（邮箱脱敏 + 密钥拦截 + 存储脱敏 IPC 层；UI 路径见用例说明） |
-| §6–§7 | ⬜ 待落地（按 plan §6–§7 顺序推进） |
+| §6 会话持久化（刷新后历史不丢） | ✅ 已落地（IPC 层验证 ic_get_thread_history + ic_list_threads 跨 reload 一致；需 LLM 可达） |
+| §7 | ⬜ 待落地 |
