@@ -15,6 +15,7 @@ use std::sync::Arc;
 use ironclaw::channels::{AttachmentKind, IncomingAttachment, IncomingMessage};
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
+use tracing::Instrument;
 
 use crate::data_reporter::ConversationAttachment;
 use crate::safety_attachment_scanner::{AttachmentDecision, AttachmentScanner};
@@ -88,17 +89,45 @@ pub async fn send_chat_message(
 ) -> Result<SendMessageResponse, String> {
     let state = state.get()?;
     let message_id = uuid::Uuid::new_v4().to_string();
+
+    // Instrumentation for issue #1016: per-step latency under target
+    // `ironclaw::startup_latency`. Filter with
+    // `RUST_LOG=ironclaw::startup_latency=info`.
+    let attach_span = tracing::info_span!(
+        target: "ironclaw::startup_latency",
+        "send_chat_message.build_attachments",
+        message_id = %message_id,
+    );
     let (incoming_attachments, report_attachments) =
-        build_attachments(attachments, state.attachment_scanner.as_ref()).await?;
+        build_attachments(attachments, state.attachment_scanner.as_ref())
+            .instrument(attach_span)
+            .await?;
 
     // ── 配额预检：调用 Admin Backend 检查是否超额 ─────────────────
-    if let Err(reason) = quota_precheck(state).await {
+    let quota_span = tracing::info_span!(
+        target: "ironclaw::startup_latency",
+        "send_chat_message.quota_precheck",
+        message_id = %message_id,
+    );
+    if let Err(reason) = quota_precheck(state).instrument(quota_span).await {
         tracing::warn!(message_id = %message_id, "Quota precheck rejected: {}", reason);
         return Err(reason);
     }
 
     // ── SafetyBridge 扫描：密钥检测 + PII 脱敏 ────────────────────
+    tracing::info!(
+        target: "ironclaw::startup_latency",
+        message_id = %message_id,
+        "send_chat_message.scan_user_input.start"
+    );
     let scan_result = state.safety_bridge.scan_user_input(&content);
+    tracing::info!(
+        target: "ironclaw::startup_latency",
+        message_id = %message_id,
+        had_sensitive_data = scan_result.had_sensitive_data,
+        was_blocked = scan_result.was_blocked,
+        "send_chat_message.scan_user_input.end"
+    );
 
     if scan_result.was_blocked {
         tracing::warn!(
@@ -149,6 +178,11 @@ pub async fn send_chat_message(
     let is_command = safe_content.starts_with('/');
     if !is_command {
         if let Some(ref id) = model_id {
+            tracing::info!(
+                target: "ironclaw::startup_latency",
+                message_id = %message_id,
+                "send_chat_message.model_switch.start"
+            );
             let switch_kind = classify_switch(state, api_base_url.as_deref());
             tracing::info!(
                 message_id = %message_id,
@@ -174,13 +208,34 @@ pub async fn send_chat_message(
                 active_model_after = %state.llm.active_model_name(),
                 "Model switch complete"
             );
+            tracing::info!(
+                target: "ironclaw::startup_latency",
+                message_id = %message_id,
+                "send_chat_message.model_switch.end"
+            );
         }
     }
 
     // ── Skill 激活通知（desktop-client 侧扩展）────────────────────
+    tracing::info!(
+        target: "ironclaw::startup_latency",
+        message_id = %message_id,
+        "send_chat_message.detect_skills.start"
+    );
     let activated_skills =
         detect_and_emit_skills_activated(&app_handle, state, &thread_id, &safe_content);
+    tracing::info!(
+        target: "ironclaw::startup_latency",
+        message_id = %message_id,
+        activated = activated_skills.len(),
+        "send_chat_message.detect_skills.end"
+    );
 
+    tracing::info!(
+        target: "ironclaw::startup_latency",
+        message_id = %message_id,
+        "send_chat_message.record_user_message.start"
+    );
     state.conversation_tracker.record_user_message(
         &thread_id,
         &safe_content,
@@ -190,6 +245,11 @@ pub async fn send_chat_message(
     state
         .conversation_tracker
         .record_activated_skills(&thread_id, &activated_skills);
+    tracing::info!(
+        target: "ironclaw::startup_latency",
+        message_id = %message_id,
+        "send_chat_message.record_user_message.end"
+    );
 
     let mut msg = IncomingMessage::new("tauri", &state.scope_id, &safe_content)
         .with_thread(&thread_id)
@@ -204,9 +264,15 @@ pub async fn send_chat_message(
         msg = msg.with_metadata(metadata);
     }
 
+    let send_span = tracing::info_span!(
+        target: "ironclaw::startup_latency",
+        "send_chat_message.msg_sender_send",
+        message_id = %message_id,
+    );
     state
         .msg_sender
         .send(msg)
+        .instrument(send_span)
         .await
         .map_err(|e| format!("Failed to send message to agent: {}", e))?;
 
@@ -680,6 +746,7 @@ fn switch_model_in_place(state: &crate::state::AppState, model_id: &str) {
 ///
 /// Fail-Safe 设计：如果预检接口不可用（网络错误、超时），拒绝请求。
 /// 政企场景下安全优先，宁可暂时不可用也不能超额使用。
+#[tracing::instrument(target = "ironclaw::startup_latency", skip(state))]
 async fn quota_precheck(state: &crate::state::AppState) -> Result<(), String> {
     let admin_url = std::env::var("ADMIN_API_URL").unwrap_or_default();
     if admin_url.is_empty() {

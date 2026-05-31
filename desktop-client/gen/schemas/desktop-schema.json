@@ -5833,12 +5833,6 @@
           "type": "string",
           "const": "fs:write-files",
           "markdownDescription": "This enables all file write related commands without any pre-configured accessible paths."
-        },
-        {
-          "description": "Default permissions for the plugin",
-          "type": "string",
-          "const": "webdriver:default",
-          "markdownDescription": "Default permissions for the plugin"
         }
       ]
     },

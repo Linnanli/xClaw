@@ -134,6 +134,11 @@ pub async fn ic_create_thread(state: State<'_, EngineState>) -> Result<String, S
 
 /// 获取线程消息历史。
 #[tauri::command]
+#[tracing::instrument(
+    target = "ironclaw::startup_latency",
+    skip(state),
+    fields(thread_id = %thread_id, limit = ?limit),
+)]
 pub async fn ic_get_thread_history(
     state: State<'_, EngineState>,
     thread_id: String,

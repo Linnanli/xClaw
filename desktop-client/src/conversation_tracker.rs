@@ -105,6 +105,11 @@ impl ConversationTracker {
     }
 
     /// 记录用户消息。
+    #[tracing::instrument(
+        target = "ironclaw::startup_latency",
+        skip(self, content, attachments),
+        fields(thread_id = %thread_id, content_len = content.len(), dlp_flagged),
+    )]
     pub fn record_user_message(
         &self,
         thread_id: &str,

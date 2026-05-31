@@ -139,6 +139,7 @@ impl SafetyBridge {
     ///
     /// 用新的 `LeakPattern` 列表替换当前 DlpDetector 中的自定义规则，
     /// 内置规则（中文手机号、身份证等）保留。
+    #[tracing::instrument(target = "ironclaw::startup_latency", skip(self, patterns), fields(patterns_len = patterns.len()))]
     pub fn reload_patterns(&self, patterns: Vec<dasclaw_safety::LeakPattern>) {
         let config = {
             let r = self.sanitizer.read().unwrap_or_else(|p| p.into_inner());
