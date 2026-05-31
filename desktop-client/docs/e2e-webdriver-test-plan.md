@@ -19,6 +19,8 @@
 >   不直接"执行"。
 > 一句话：**作为"要执行什么、怎么执行、为什么这么设计"的依据，它是终稿级**；但要变成 CI 里
 > 一键回归的套件，还需按 §14.5 / §15.3 把建议测试**实现成代码**（那是下一步、不在本文档任务内）。
+>
+> **GA 就绪度看 §16**。本文档已不止描述 e2e 测试，还沉淀了"距 GA 还差哪些工作"的执行路线。
 
 ---
 
@@ -478,6 +480,8 @@ execjs(sid, "document.querySelector('button.aui-composer-send').click(); return 
 | G4 | **无纯自然语言 jailbreak 硬阻断** | `dasclaw_safety` 防御=secret 拦截（`scan_inbound_for_secrets`）+ 内容包裹（`wrap_for_llm`/`wrap_external_content`）+ 定界符中和（`Sanitizer`），[dasclaw_safety/src/lib.rs](../../crates/dasclaw_safety/src/lib.rs)；无"忽略规则/导出密钥"语义分类器 | 场景 7 对**不含密钥**的越权指令"被安全层拦截"的断言不成立。须降级为"不泄露系统提示/拒答"语义断言，或单列为待建能力。 |
 | G5 | ~~**`tauri-plugin-webdriver` 接线为试跑态、未固化**~~ ✅ 已修复 | [Cargo.toml:19](../Cargo.toml#L19) `tauri-plugin-webdriver = { version = "0.2", optional = true }` + [Cargo.toml:114](../Cargo.toml#L114) `webdriver = ["dep:tauri-plugin-webdriver"]`；[src/lib.rs](../src/lib.rs) 接线用 `#[cfg(all(debug_assertions, feature = "webdriver"))]` 双重保护。激活命令 `cargo tauri dev -f webdriver` 已稳定。 |
 
+> **§16 已把 G4/G6-G9 升级为 GA P0/P1 工作项；G1/G2/G3/G5 在 PR #1013 #1014 #1018 #1027 #1028 闭合后已视为已交付。**
+
 ---
 
 ## 11. WebDriver 与"浏览器 MCP"的关系（能否配合）
@@ -883,3 +887,103 @@ loop 的入口唯一**：
 > bootstrap 状态机这类内部不变量必须用 Rust 集成测试在 `system_prompt_for_context_inner`
 > 这个唯一接缝上断言**。③ 本节所有定位（组装函数、注入入口、现有测试、缺口）均由
 > code-review-graph + grep 双证，未凭印象。
+
+---
+
+## 16. GA 就绪度评估与剩余 epic 路线（2026-05-31 评估）
+
+### 16.1 当前可发布状态结论
+
+**现状**：桌面客户端已具备**安全 MVP**级可用性——通过 §1–§7 与 §12 I-1~I-5 的测试覆盖，核心链路
+（聊天 / 工具 / DLP / 审批 / 持久化）经 E2E 验证安全无虞。**但与"通用型 GA（General Availability）"仍有距离**。
+
+**核心差距**（见 §16.2）：
+
+1. **功能广度缺 60%**：仅覆盖 5 个 IPC 命令族，剩余 9 族（记忆·技能·扩展·任务·日程·日志·工作区·文件·认证）未纳入真链路验证。
+2. **UX 阻断缺陷 2 个**：#1015（webview reload ~10s IPC 延迟）、#1016（冷启动 60-120s 才持久化）——第一印象灾难。
+3. **安全防御不完备**：#1021（纯自然语言 jailbreak 无硬阻断，仅靠系统提示软拒）、#1024（提示词组装顺序无测试断言）。
+4. **数据可信度缺陷**：#955（libsql 会话导出/备份未实现）、审计日志缺完整性验证。
+
+**结论**：已交付"用户能安心对话且系统安全的内核"；待补"企业可信赖、功能齐全、体验顺畅的正式版"。
+
+### 16.2 GA 缺口分类
+
+#### A. 功能维度（IPC 命令族覆盖 ~40%，待补 9 族）
+
+**已覆盖**（§13 表 ✅ 段）：聊天（6）/ 线程（3）/ 工具审批（2）/ DLP（7）/ 模型（3）/ Plan/Fork（4）/ Sandbox（2）。**小计** ~31 命令 / ~80 总数 ≈ 40%。
+
+**完全未覆盖**（§13 表 ⬜ 段）：
+
+- **记忆**（5）：`ic_memory_list` / `read` / `write` / `delete` / `search`
+- **技能**（6）：`ic_list_skills` / `search` / `install` / `uninstall` / `enable` / `disable`
+- **扩展**（6+）：`ic_list_extensions` / `install` / `setup` / `setup_submit` / ...
+- **任务**（5）：`ic_list_jobs` / `ic_job_events` / `ic_job_prompt` / `ic_cancel_job` / `ic_restart_job`
+- **日程**（6）：`ic_list_routines` / `create` / `toggle` / `delete` / `fire` / `ic_routine_runs`
+- **日志**（5）：`ic_get_logs` / `search` / `filter` / `export` / `clear`
+- **工作区**（4）：`ic_workspace_git_status` / `ic_workspace_root` / `ic_import_workspace` / `ic_active_servers`
+- **文件操作**（2）：`ic_undo_file_edit` / `ic_open_file_at_line`
+- **应用/认证**（5）：`get_auth_token` / `get_app_version` / `check_for_updates` / `submit_approval_ticket` / `get_watermark_config`
+
+**小计** ~44 命令待补。升级路线：按 §12 分层原则，CRUD 类用**命令级集成测试**批量补（I-1~I-5 已示范），UI 强交互类（任务·日程）保留少量 E2E。
+
+#### B. UX bug 阻断（2 个高优先级）
+
+| Issue | 描述 | 影响 | 预期修复形式 |
+|---|---|---|---|
+| #1016 | 冷启动消息延迟持久化 60-120s | 用户首次发消息感觉"像没发出去"→ 灾难首印象 | desktop-client 数据流管道优化 |
+| #1015 | webview reload 后 IPC 通道延迟 ~10s | 刷新页面卡顿，信任下降 | Tauri IPC 连接池 / 心跳管理优化 |
+
+#### C. 安全防御缺陷（2 个进度项）
+
+| Issue | 缺陷 | 现状 | 补修方案 |
+|---|---|---|---|
+| #1021 | 纯自然语言 jailbreak 无硬阻断 | 仅靠系统提示软拒（G4）；含密钥越权被 §5 截断 | 补语义分类器或升级纯 LLM 拒答；§7 可降级为"助手不泄露系统提示"语义断言 |
+| #1024 | 提示词组装顺序无测试断言 | G6-G9：组装/分层/门控/bootstrap 仪式缺测（§15.2） | 补进 `ironclaw/tests/` 的 A-1~A-5 Rust 集成测试（§15.3） |
+
+#### D. 数据/合规缺陷
+
+| Issue | 缺陷 | 企业影响 | 补修方案 |
+|---|---|---|---|
+| #955 | libsql 会话导出/备份未实现 | 用户数据无迁移通道 → 厂商锁定感 | 新增 `export_session` / `backup_session` 命令 + E2E |
+| 待开 | 审计日志完整性验证缺失 | 合规审查无证链 | 补 §14.4 日志序断言进 CI；补 `ic_export_logs` 命令 |
+
+### 16.3 P0/P1/P2 路线表
+
+| 优先级 | 工作项 | 涉及 issue | 类型 | 落地形式 |
+|--------|------|--------|------|----------|
+| **P0** | 修 #1016 冷启动延迟 | #1016 | UX bug | desktop-client 消息流改造 |
+| **P0** | 修 #1015 webview reload 延迟 | #1015 | UX bug | Tauri IPC 优化 |
+| **P0** | jailbreak 防御升级 | #1021 | 安全 | 新增分类器 OR 行为级 Rust 集成测试（方案待 ADR） |
+| **P0** | libsql 会话导出 | #955 | 数据 | 新增 `export_session` 命令 + §13 扩展 + E2E 冒烟 |
+| **P0** | 记忆 CRUD E2E | 待开 | 功能验证 | §13 记忆族命令级集成测试 |
+| **P0** | 技能安装 E2E | 待开 | 功能验证 | §13 技能族命令级集成测试 |
+| **P0** | 审批规则配置面 E2E | #608 | 功能/UX | §1-§7 扩展或命令级 + 前端联调 |
+| **P1** | 提示词组装顺序 A-1~A-5 | #1024 | 安全不变量 | `ironclaw/tests/` Rust 集成（§15.3） |
+| **P1** | Extension setup 流程 E2E | 待开 | 功能验证 | §13 扩展族 |
+| **P1** | 工作区 + Git 冒烟 | 待开 | 功能验证 | §13 工作区族 |
+| **P1** | 日志审计完整性 | 待开 | 数据验证 | §14.4 日志序断言进 CI + `ic_export_logs` |
+| **P2** | 任务管理 UI E2E | 待开 | 功能验证 | §13 任务族 |
+| **P2** | 日程 UI E2E | 待开 | 功能验证 | §13 日程族 |
+| **P2** | 文件 Undo E2E | 待开 | 功能验证 | §13 文件操作族 |
+
+> **说明**：P0 涵盖 UX 阻断、关键安全升级、最小数据可信（会话导出）、核心功能入场验证（记忆·技能·审批）。
+> P1 为安全测试补缺、可选功能完整性、中等数据验证。P2 为长尾功能 UI。
+
+### 16.4 与 §10/§12/§13/§15 的对齐
+
+本节**不是平行清单**，而是把已有各节内容升级为"面向 GA 发布的执行排期"：
+
+- **§10 缺口表 G1-G5 现状**：G1/G2/G3/G5 ✅ 已闭合；G4 → §16.3 P0；G6-G9 → §16.3 P1（A-1~A-5）。
+- **§13 IPC 命令矩阵**：已覆盖 5 族（~40%）即基线；待补 9 族（~60%）即 §16.3 P0/P1 的"功能验证"工作项；新增命令（如 `export_session`、`ic_export_logs`）落地后需扩展 §13。
+- **§12 分层集成 I-1~I-5**：是 §16.3 表中"功能验证"工作项的范式；后续补记忆·技能·日程命令时复用同一模板，**不新建平行测试**。
+- **§15.3 A-1~A-5**：直接落进 §16.3 表 P1"提示词组装顺序"行；测试名与命名规范已在 §15.3 给出。
+
+### 16.5 术语
+
+**GA（General Availability，正式发布版）**：区别于 alpha/beta/RC，是对外公开宣称**稳定、生产可用、支持生命周期**的版本。本计划中：
+
+- **必要条件**：核心功能（聊天·工具·审批·DLP）E2E 验证 + 严重 UX bug 已修 + 安全防御覆盖率 >90%。
+- **充分条件**：外围功能（记忆·技能·日程等）基础验证覆盖 + 审计日志可审 + 用户数据可导出/备份。
+- **非 GA 信号**：已知未修复崩溃、单点功能 0% 覆盖、敏感操作无审计痕迹。
+
+本计划发布时桌面端代码状态属 **Pre-GA（安全 MVP）**；§16.3 表执行完毕后属 **GA Candidate**。
