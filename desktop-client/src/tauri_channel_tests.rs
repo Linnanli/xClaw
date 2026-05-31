@@ -158,12 +158,13 @@ mod tests {
     #[test]
     fn test_contract_text_delta() {
         let event = VercelUIStream::TextDelta {
-            id: String::new(),
+            id: "t-42".into(),
             delta: "partial".into(),
             provider_metadata: None,
         };
         let json: serde_json::Value = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "text-delta");
+        assert_eq!(json["id"], "t-42");
         assert_eq!(json["delta"], "partial");
     }
 
@@ -494,7 +495,6 @@ mod tests {
                 },
                 &meta,
             ),
-            (StatusUpdate::StreamChunk("test".into()), &empty),
             (StatusUpdate::Status("test".into()), &empty),
             (
                 StatusUpdate::JobStarted {
