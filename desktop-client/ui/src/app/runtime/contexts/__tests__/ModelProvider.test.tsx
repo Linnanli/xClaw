@@ -25,6 +25,12 @@ vi.mock('@utils/tauri', async (importOriginal) => {
   };
 });
 
+// ModelProvider 现在依赖 useEngineReady，让单测默认走"已就绪"路径；
+// 就绪 gate 行为在 useEngineReady 自身的测试里覆盖。
+vi.mock('../../../hooks/useEngineReady', () => ({
+  useEngineReady: () => ({ ready: true, readyKey: 1 }),
+}));
+
 const mockModels: ModelConfigItem[] = [
   {
     model_id: 'deepseek-chat',

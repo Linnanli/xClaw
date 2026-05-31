@@ -16,6 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ModelContext } from '../../contexts/ModelContext';
+import { useEngineReady } from '../../hooks/useEngineReady';
 import { modelApi, type ModelConfigItem } from '@utils/tauri';
 import { tracing } from '../../utils/tracing';
 
@@ -40,6 +41,7 @@ export function ModelProvider({
   const [loading, setLoading] = useState(true);
   // 用 ref 让闭包始终读到最新的选中 id，避免切换时闭包被冻结
   const selectedModelIdRef = useRef<string>(initialModelId ?? '');
+  const { ready, readyKey } = useEngineReady();
 
   const loadModels = useCallback(async () => {
     try {
@@ -65,8 +67,11 @@ export function ModelProvider({
   }, [onModelChange]);
 
   useEffect(() => {
+    // 引擎就绪前不拉模型：fetch_admin_models / query_provider_models 都需要 engine 引用，
+    // 早调会静默降级到 builtin 兜底（GPT-4o）。等 ready 翻转后由 readyKey 触发重拉。
+    if (!ready) return;
     void loadModels();
-  }, [loadModels]);
+  }, [loadModels, ready, readyKey]);
 
   const selectModel = useCallback(
     (modelId: string) => {
