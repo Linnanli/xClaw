@@ -45,4 +45,5 @@ pytest desktop-client/e2e-webdriver/tests/test_scenario_01_engine_readiness.py -
 | §1 引擎就绪与刷新韧性 | ✅ 已落地 |
 | §2 Agent 基础执行 | ✅ 已落地（需 LLM 可达） |
 | §3 工具注册与发现 | ✅ 已落地（只读工具 `list_dir` 分发链路；需 LLM 可达） |
-| §4–§7 | ⬜ 待落地（按 plan §4–§7 顺序推进） |
+| §4 工具分发与审批（Fail-Safe） | ✅ 已落地（写工具触发审批卡片 + deny 路径；approve 路径 skip，见用例说明） |
+| §5–§7 | ⬜ 待落地（按 plan §5–§7 顺序推进） |
