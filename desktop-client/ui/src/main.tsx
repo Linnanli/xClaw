@@ -8,6 +8,11 @@ async function bootstrap() {
 		setupCypressTauriMock();
 	}
 
+	if (import.meta.env.DEV) {
+		const { installE2EChatStreamCapture } = await import('./app/testing/e2eChatStreamCapture');
+		await installE2EChatStreamCapture();
+	}
+
 	createRoot(document.getElementById("root")!).render(<App />);
 }
 

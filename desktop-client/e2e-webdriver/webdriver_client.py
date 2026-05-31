@@ -303,3 +303,122 @@ def clear_pending_approval(session_id: str, timeout: float = 5.0) -> bool:
     wait_approval_decision(session_id, expected_approved=False, timeout=timeout)
     return True
 
+
+# ---------------------------------------------------------------------------
+# chat-stream 事件捕获（场景 8）
+# ---------------------------------------------------------------------------
+
+def is_e2e_capture_installed(session_id: str) -> bool:
+    """探测 dev hook `window.__E2E_GET_EVENTS` 是否就绪。"""
+    return bool(execjs(session_id, "return typeof window.__E2E_GET_EVENTS === 'function';"))
+
+
+def clear_chat_stream_events(session_id: str) -> None:
+    """清空已捕获的 chat-stream 事件缓冲（每条用例开始前调用）。"""
+    execjs(
+        session_id,
+        "if (typeof window.__E2E_CLEAR_EVENTS === 'function') window.__E2E_CLEAR_EVENTS(); return true;",
+    )
+
+
+def get_chat_stream_events(session_id: str) -> list[dict]:
+    """回读自上次 clear 起捕获到的全部 chat-stream payload。
+
+    每条结构：`{ "timestamp": <ms>, "payload": <VercelUIStream envelope> }`。
+    """
+    raw = execjs(
+        session_id,
+        "return typeof window.__E2E_GET_EVENTS === 'function' ? window.__E2E_GET_EVENTS() : [];",
+    )
+    return raw if isinstance(raw, list) else []
+
+
+def wait_chat_stream_finish(
+    session_id: str,
+    timeout: float = 180.0,
+    interval: float = 1.0,
+) -> Optional[list[dict]]:
+    """轮询直到事件流出现 `finish` 帧，返回当时已捕获的全部事件。
+
+    `finish` 是 Vercel AI SDK 协议里 turn 结束的标志（见 vercel_ui_protocol.rs::Finish）。
+    超时返回 None；调用方应据此区分"模型没回复"与"协议本身坏了"。
+    """
+
+    def _check():
+        evts = get_chat_stream_events(session_id)
+        for e in evts:
+            p = e.get("payload") if isinstance(e, dict) else None
+            if isinstance(p, dict) and p.get("type") == "finish":
+                return evts
+        return None
+
+    return poll(_check, timeout=timeout, interval=interval)
+
+
+def assert_reasoning_frame_sequence(
+    events: list[dict],
+    *,
+    require_reasoning: bool = False,
+) -> None:
+    """断言所有 reasoning 帧成对闭合（Start→Delta*→End），id 同段一致非空。
+
+    require_reasoning=False（默认）：流中没有 reasoning 帧时视为 OK，仅校验
+    存在的帧成对闭合。
+    require_reasoning=True：流中必须至少出现一段完整 reasoning 生命周期，
+    否则 AssertionError——用于显式期望 thinking 路径被触发的场景，防止
+    模型未走 reasoning 时测试假绿。
+
+    一旦出现任意 reasoning-* 帧，则必须满足：
+      1. 第一帧是 `reasoning-start`，id 非空
+      2. 同一 id 后续可有 0..N 个 `reasoning-delta`
+      3. 同一 id 必须以 `reasoning-end` 闭合
+      4. 出现 `reasoning-start` 时不能有未闭合的旧 id
+    """
+    reasoning_types = {"reasoning-start", "reasoning-delta", "reasoning-end"}
+    active_id: Optional[str] = None
+    seen_any = False
+    for idx, e in enumerate(events):
+        p = e.get("payload") if isinstance(e, dict) else None
+        if not isinstance(p, dict):
+            continue
+        t = p.get("type")
+        if t not in reasoning_types:
+            continue
+        seen_any = True
+        fid = p.get("id")
+        if not isinstance(fid, str) or not fid:
+            raise AssertionError(
+                f"reasoning 帧 #{idx} ({t}) 的 id 为空或非字符串：{p!r}"
+            )
+        if t == "reasoning-start":
+            if active_id is not None:
+                raise AssertionError(
+                    f"reasoning-start (id={fid}) 出现时仍有未闭合段 (active_id={active_id})"
+                )
+            active_id = fid
+        elif t == "reasoning-delta":
+            if active_id is None:
+                raise AssertionError(
+                    f"reasoning-delta (id={fid}) 出现在 reasoning-start 之前 —— 这正是 PR #1036 修复前的报错"
+                )
+            if fid != active_id:
+                raise AssertionError(
+                    f"reasoning-delta id={fid} 与活跃段 id={active_id} 不一致"
+                )
+        else:  # reasoning-end
+            if active_id is None:
+                raise AssertionError(f"reasoning-end (id={fid}) 出现时无活跃段")
+            if fid != active_id:
+                raise AssertionError(
+                    f"reasoning-end id={fid} 与活跃段 id={active_id} 不一致"
+                )
+            active_id = None
+    if seen_any and active_id is not None:
+        raise AssertionError(f"reasoning 段未闭合：active_id={active_id}（缺 reasoning-end）")
+    if require_reasoning and not seen_any:
+        raise AssertionError(
+            "期望至少一段 reasoning（require_reasoning=True），但流中零个 reasoning-* 帧——"
+            "可能模型未走 thinking 路径或上游协议根本未生成 reasoning 帧"
+        )
+
+
