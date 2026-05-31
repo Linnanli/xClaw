@@ -140,8 +140,8 @@ return JSON.stringify({
   boot:        !!document.querySelector('[data-testid="chat-runtime-boot-placeholder"]'),
   bootstrap:   !!document.querySelector('[data-testid="chat-runtime-bootstrap-placeholder"]'),
   historyLoad: !!document.querySelector('[data-testid="chat-runtime-history-loading"]'),
-  composer:    q('textarea.aui-composer-input'),
-  sendBtn:     q('button.aui-composer-send'),
+  composer:    q('[data-testid="composer-input"]') || q('textarea.aui-composer-input'),
+  sendBtn:     q('[data-testid="composer-send"]') || q('button.aui-composer-send'),
   assistantMsgs: q('.aui-assistant-message-root, [data-role="assistant"]'),
   approvalCard: !!document.querySelector('[data-testid="approval-card"]'),
   approvalResult: txt('[data-testid="approval-result"]'),
@@ -155,10 +155,11 @@ def snapshot(session_id: str) -> dict:
     return json.loads(execjs(session_id, SNAPSHOT))
 
 
-# 通过原生 setter 注入文本，绕过 React 受控组件的 onChange 监听。
+# 优先 data-testid 选择器（plan §10-G1 修复后），回退 .aui-composer-input class 选择器。
 _INJECT_COMPOSER = r"""
 const [text] = arguments;
-const ta = document.querySelector('textarea.aui-composer-input');
+const ta = document.querySelector('[data-testid="composer-input"]')
+         || document.querySelector('textarea.aui-composer-input');
 if (!ta) return false;
 const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
 setter.call(ta, text);
@@ -168,17 +169,18 @@ return true;
 
 
 def type_into_composer(session_id: str, text: str) -> None:
-    """把 text 注入 `textarea.aui-composer-input` 并触发 React 的 onChange。"""
+    """把 text 注入 composer textarea 并触发 React 的 onChange。"""
     ok = execjs(session_id, _INJECT_COMPOSER, [text])
     if not ok:
-        raise RuntimeError("找不到 textarea.aui-composer-input")
+        raise RuntimeError("找不到 composer-input（既无 data-testid 也无 .aui-composer-input）")
 
 
 def click_send(session_id: str) -> None:
-    """点击 `button.aui-composer-send`。"""
+    """点击发送按钮：优先 [data-testid="composer-send"]，回退 .aui-composer-send。"""
     execjs(
         session_id,
-        "document.querySelector('button.aui-composer-send').click(); return true;",
+        "(document.querySelector('[data-testid=\"composer-send\"]') "
+        "|| document.querySelector('button.aui-composer-send')).click(); return true;",
     )
 
 

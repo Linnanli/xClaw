@@ -208,6 +208,7 @@ const Composer: FC = () => {
         rows={1}
         autoFocus
         aria-label="聊天输入"
+        data-testid="composer-input"
       />
       <ComposerSendButton onSend={handleSend} />
     </div>
@@ -246,6 +247,7 @@ const ComposerSendButton: FC<{ onSend: () => void }> = ({ onSend }) => {
             className="aui-composer-send size-8 rounded-[10px] bg-primary text-primary-foreground hover:bg-primary/90"
             aria-label="发送消息"
             onClick={onSend}
+            data-testid="composer-send"
           >
             <ArrowUpIcon className="aui-composer-send-icon size-4" />
           </TooltipIconButton>

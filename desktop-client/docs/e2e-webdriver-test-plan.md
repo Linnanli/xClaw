@@ -472,7 +472,7 @@ execjs(sid, "document.querySelector('button.aui-composer-send').click(); return 
 
 | # | 缺口 | 证据 | 对测试计划的影响 |
 |---|---|---|---|
-| G1 | **聊天输入框/发送按钮无 `data-testid`** | [thread.tsx:205-207](../ui/src/app/components/assistant-ui/thread.tsx)（`ComposerPrimitive.Input className="aui-composer-input"`）、[:246](../ui/src/app/components/assistant-ui/thread.tsx)（`aui-composer-send`）；全 `ui/` 无 composer 相关 testid | 场景 2/3/4/5/6/7 必须用 `.aui-composer-input` / `.aui-composer-send` class 选择器，脆于样式重构。建议补 `data-testid="composer-input"`/`"composer-send"`。 |
+| G1 | ~~**聊天输入框/发送按钮无 `data-testid`**~~ ✅ 已修复 | [thread.tsx:211/250](../ui/src/app/components/assistant-ui/thread.tsx) 已补 `data-testid="composer-input"` 与 `composer-send`；[webdriver_client.py](../e2e-webdriver/webdriver_client.py) 选择器已切换为 testid 优先 + class 回退。 |
 | G2 | **桌面端不输出 `tools: N accepted` 汇总日志** | `summary_line()`/`log_registration_report()` 仅由 `bootstrap_tools()` 调用（[registry.rs:385/725](../ironclaw/src/tools/registry.rs)）；[engine.rs](../src/engine.rs) 手动调 `register_message_tools`+`register_job_tools`，未走 `bootstrap_tools`，全仓 grep `tools: .*accepted` 无运行期匹配 | 场景 3 不能断言"日志出现 `tools: 61 accepted`"。改为经 `ToolRegistry::count()` 或 UI 读真实条数，或新增显式 report 调用。 |
 | G3 | **`AGENT_AUTO_APPROVE_TOOLS` 环境变量不存在** | 全仓（`crates/**` + `desktop-client/**`，`*.rs/*.ts/*.tsx`）grep `AGENT_AUTO_APPROVE_TOOLS`/`AUTO_APPROVE` 零匹配 | 场景 4 不能用该变量断言"默认不自动批准"。Fail-Safe 不变量改为**行为级**：直接断言 `approval-card` 出现且工具未静默执行。 |
 | G4 | **无纯自然语言 jailbreak 硬阻断** | `dasclaw_safety` 防御=secret 拦截（`scan_inbound_for_secrets`）+ 内容包裹（`wrap_for_llm`/`wrap_external_content`）+ 定界符中和（`Sanitizer`），[dasclaw_safety/src/lib.rs](../../crates/dasclaw_safety/src/lib.rs)；无"忽略规则/导出密钥"语义分类器 | 场景 7 对**不含密钥**的越权指令"被安全层拦截"的断言不成立。须降级为"不泄露系统提示/拒答"语义断言，或单列为待建能力。 |
