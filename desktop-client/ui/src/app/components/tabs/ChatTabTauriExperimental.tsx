@@ -69,12 +69,15 @@ export function ChatTabTauriExperimental({
   outboundCommand,
   onOutboundCommandHandled,
 }: ChatTabTauriExperimentalProps) {
+  const { ready } = useEngineReady();
   useEffect(() => {
     TokenManager.getToken().catch((err) => console.error('Failed to load token:', err));
+    // 引擎就绪后再同步 DLP 规则；否则后端会返回"引擎正在启动中"
+    if (!ready) return;
     invoke('sync_dlp_rules_from_admin').catch((err: unknown) =>
       console.warn('DLP rules sync failed:', err),
     );
-  }, []);
+  }, [ready]);
 
   return (
     <ModelProvider

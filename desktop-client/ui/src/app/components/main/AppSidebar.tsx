@@ -93,11 +93,13 @@ export function AppSidebar({
     yesterday: true,
     older: false,
   });
-  const { readyKey } = useEngineReady();
+  const { ready, readyKey } = useEngineReady();
 
   useEffect(() => {
+    // 引擎未就绪时跳过；readyKey 初值为 0，挂载即触发会撞上 ic_list_threads 的 ready gate
+    if (!ready) return;
     loadThreads();
-  }, [refreshKey, readyKey]); // refreshKey 或引擎就绪时重新加载
+  }, [refreshKey, ready, readyKey]);
 
   const loadThreads = async () => {
     try {
