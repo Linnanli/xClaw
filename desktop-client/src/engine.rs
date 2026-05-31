@@ -306,7 +306,15 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     {
         let engine_state = app_handle.state::<EngineState>();
         if let Ok(state) = engine_state.get() {
+            tracing::info!(
+                target: "ironclaw::startup_latency",
+                "engine.init_default_provider.start"
+            );
             init_default_provider(state).await;
+            tracing::info!(
+                target: "ironclaw::startup_latency",
+                "engine.init_default_provider.end"
+            );
         }
     }
 
@@ -314,19 +322,29 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     // 非阻塞：同步失败不影响引擎启动，仅使用内置规则
     {
         let app_handle_clone = app_handle.clone();
+        tracing::info!(
+            target: "ironclaw::startup_latency",
+            "engine.dlp_sync.spawn"
+        );
         tauri::async_runtime::spawn(async move {
             // 等待引擎完全就绪后再同步
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            tracing::info!(
+                target: "ironclaw::startup_latency",
+                "engine.dlp_sync.start"
+            );
             let engine_state = app_handle_clone.state::<EngineState>();
             match engine_state.get() {
                 Ok(state) => match crate::ipc::dlp::do_sync_dlp_rules(&state.safety_bridge).await {
                     Ok(result) => tracing::info!(
+                        target: "ironclaw::startup_latency",
                         rules = result.rules_synced,
-                        "DLP rules synced from admin backend on startup"
+                        "engine.dlp_sync.complete"
                     ),
                     Err(e) => tracing::warn!(
+                        target: "ironclaw::startup_latency",
                         error = %e,
-                        "Failed to sync DLP rules from admin backend (using built-in rules)"
+                        "engine.dlp_sync.failed (using built-in rules)"
                     ),
                 },
                 Err(e) => tracing::warn!("Engine not ready for DLP sync: {}", e),
