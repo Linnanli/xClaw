@@ -338,23 +338,30 @@ impl EngineState {
     ///
     /// 返回值：
     /// - `Ok(&AppState)` — 引擎就绪
-    /// - `Err("引擎启动失败: ...")` — 引擎启动失败
-    /// - `Err("引擎正在启动中，请稍后重试")` — 引擎正在启动
+    /// - `Err(json)` — 启动失败 / 启动中；error message 是 JSON 字符串，
+    ///   形如 `{"code":"ENGINE_NOT_READY","message":"...","retryable":true}`。
+    ///   前端 `invokeTauri` wrapper 可 `JSON.parse` 拿到 `code` 后自动等待重试；
+    ///   旧调用方把它当字符串展示也无副作用（仍包含中文 message）。
     pub fn get(&self) -> Result<&AppState, String> {
-        // 优先检查是否已就绪
         if let Some(state) = self.inner.get() {
             return Ok(state);
         }
 
-        // 检查是否启动失败
         if let Ok(guard) = self.failure.read() {
             if let Some(reason) = guard.as_ref() {
-                return Err(format!("引擎启动失败: {}", reason));
+                return Err(engine_error_payload(
+                    "ENGINE_START_FAILED",
+                    &format!("引擎启动失败: {}", reason),
+                    false,
+                ));
             }
         }
 
-        // 仍在启动中
-        Err("引擎正在启动中，请稍后重试".to_string())
+        Err(engine_error_payload(
+            "ENGINE_NOT_READY",
+            "引擎正在启动中，请稍后重试",
+            true,
+        ))
     }
 
     /// 引擎是否已就绪。
@@ -365,5 +372,58 @@ impl EngineState {
     /// 引擎是否启动失败。
     pub fn is_failed(&self) -> bool {
         self.failure.read().map(|f| f.is_some()).unwrap_or(false)
+    }
+}
+
+/// 把引擎状态错误序列化成结构化 JSON 字符串。
+///
+/// IPC handler 签名是 `Result<T, String>`，把 String 内容做成 JSON 而不是引入新错误类型，
+/// 可以让前端 `invokeTauri` wrapper 用 `JSON.parse` 拿到 `code` 做自动重试，
+/// 同时保持所有 62 处 `state.get()?` handler 签名零变更。
+fn engine_error_payload(code: &str, message: &str, retryable: bool) -> String {
+    serde_json::json!({
+        "code": code,
+        "message": message,
+        "retryable": retryable,
+    })
+    .to_string()
+}
+
+#[cfg(test)]
+mod engine_state_error_tests {
+    use super::*;
+
+    fn parse(payload: &str) -> serde_json::Value {
+        serde_json::from_str(payload).expect("engine error payload must be valid JSON")
+    }
+
+    #[test]
+    fn not_ready_returns_structured_payload() {
+        let state = EngineState::new();
+        let err = state
+            .get()
+            .err()
+            .expect("uninitialized state must return Err");
+        let v = parse(&err);
+        assert_eq!(v["code"], "ENGINE_NOT_READY");
+        assert_eq!(v["retryable"], true);
+        assert!(
+            v["message"].as_str().unwrap_or_default().contains("引擎"),
+            "message 应保留中文供旧调用方降级显示"
+        );
+    }
+
+    #[test]
+    fn failed_returns_non_retryable_payload() {
+        let state = EngineState::new();
+        state.set_failed("config missing".to_string());
+        let err = state.get().err().expect("failed state must return Err");
+        let v = parse(&err);
+        assert_eq!(v["code"], "ENGINE_START_FAILED");
+        assert_eq!(v["retryable"], false);
+        assert!(v["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("config missing"));
     }
 }
