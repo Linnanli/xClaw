@@ -6,14 +6,93 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { ThreadMessageLike } from '@assistant-ui/react';
 
+// ── EngineNotReady 自动等待 + 重试 ────────────────────────────────
+//
+// 后端 EngineState::get() 在引擎未就绪时返回 JSON 字符串 error
+// （形如 {"code":"ENGINE_NOT_READY","retryable":true,"message":"…"}）。
+// 历史上后端返回纯中文 "引擎正在启动中"，这里同时支持两种以兼容未升级的后端。
+//
+// 策略：识别 → 单例轮询 get_engine_status → ready 后重试**一次**。
+// 多个并发 IPC 在等待期共享同一个轮询 Promise，避免 N 处同时刷接口。
+
+const READY_POLL_INTERVAL_MS = 200;
+const READY_POLL_TIMEOUT_MS = 15_000;
+
+let pendingReadyWait: Promise<boolean> | null = null;
+
+function extractErrorMessage(error: unknown): string {
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object') {
+    const msg = (error as { message?: unknown }).message;
+    if (typeof msg === 'string') return msg;
+  }
+  return '';
+}
+
+/** 判定一个 invoke 错误是否表示"引擎未就绪、可重试"。 */
+export function isEngineNotReadyError(error: unknown): boolean {
+  const raw = extractErrorMessage(error);
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw) as { code?: unknown; retryable?: unknown };
+    if (parsed && typeof parsed === 'object') {
+      if (parsed.code === 'ENGINE_NOT_READY') return true;
+      // 结构化错误明确说不可重试就尊重它（例如 ENGINE_START_FAILED）
+      if (parsed.retryable === false) return false;
+    }
+  } catch {
+    // 不是 JSON，走字符串兼容
+  }
+  return raw.includes('引擎正在启动中');
+}
+
+async function waitForEngineReady(): Promise<boolean> {
+  if (pendingReadyWait) return pendingReadyWait;
+  pendingReadyWait = (async () => {
+    const deadline = Date.now() + READY_POLL_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      try {
+        const status = await invoke<{ ready: boolean }>('get_engine_status');
+        if (status?.ready) return true;
+      } catch {
+        // 轮询失败本身不致命，继续直到超时
+      }
+      await new Promise((resolve) => setTimeout(resolve, READY_POLL_INTERVAL_MS));
+    }
+    return false;
+  })();
+  try {
+    return await pendingReadyWait;
+  } finally {
+    pendingReadyWait = null;
+  }
+}
+
+/** 仅用于测试：在每个 case 之间复位单例等待状态。 */
+export function __resetEngineReadyWaitForTesting(): void {
+  pendingReadyWait = null;
+}
+
 // Helper function to invoke Tauri commands with error handling
 export async function invokeTauri<T = any>(
   command: string,
-  args: Record<string, any> = {}
+  args: Record<string, any> = {},
+  options: { _retriedForEngineReady?: boolean } = {},
 ): Promise<T> {
   try {
     return await invoke<T>(command, args);
   } catch (error) {
+    // 防递归：get_engine_status 自身用于探测就绪状态，绝不能再触发等待
+    const canRetry =
+      !options._retriedForEngineReady &&
+      command !== 'get_engine_status' &&
+      isEngineNotReadyError(error);
+    if (canRetry) {
+      const ready = await waitForEngineReady();
+      if (ready) {
+        return invokeTauri<T>(command, args, { _retriedForEngineReady: true });
+      }
+    }
     console.error(`Tauri command '${command}' failed:`, error);
     throw error;
   }
