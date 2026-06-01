@@ -494,7 +494,7 @@ mod tests {
                 },
                 &meta,
             ),
-            (StatusUpdate::StreamChunk("test".into()), &empty),
+            // StreamChunk 不走纯映射；由 emit_status_stream 按 TextSessions lifecycle 处理，见 text_* 系列测试。
             (StatusUpdate::Status("test".into()), &empty),
             (
                 StatusUpdate::JobStarted {
