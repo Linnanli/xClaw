@@ -1,6 +1,0 @@
-{
-  "version": "1.0.0",
-  "name": "code-review-expert",
-  "description": "以资深工程师的视角对当前 Git 代码变更进行专家级代码审查。检测 SOLID 原则违规、安全风险，并提出切实可行的改进方案。",
-  "author": "nallylin"
-}
