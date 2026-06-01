@@ -14,21 +14,11 @@ interface CapturedEvent {
   payload: unknown;
 }
 
-interface CapturedInvoke {
-  timestamp: number;
-  command: string;
-  args: unknown;
-}
-
 interface E2EWindow {
   __E2E_GET_EVENTS?: () => CapturedEvent[];
   __E2E_CLEAR_EVENTS?: () => void;
   __E2E_EVENT_COUNT?: () => number;
-  __E2E_GET_INVOKES?: () => CapturedInvoke[];
-  __E2E_CLEAR_INVOKES?: () => void;
-  __TAURI_INTERNALS__?: {
-    invoke?: (command: string, args?: unknown, options?: unknown) => Promise<unknown>;
-  };
+  __TAURI_INTERNALS__?: unknown;
 }
 
 export async function installE2EChatStreamCapture(): Promise<void> {
@@ -42,16 +32,6 @@ export async function installE2EChatStreamCapture(): Promise<void> {
   }
 
   const events: CapturedEvent[] = [];
-  const invokes: CapturedInvoke[] = [];
-
-  const originalInvoke = win.__TAURI_INTERNALS__.invoke;
-  if (typeof originalInvoke === 'function') {
-    win.__TAURI_INTERNALS__.invoke = function capturedInvoke(command, args, options) {
-      invokes.push({ timestamp: Date.now(), command, args });
-      return originalInvoke.call(this, command, args, options);
-    };
-  }
-
   await listen<unknown>('chat-stream', (event) => {
     events.push({ timestamp: Date.now(), payload: event.payload });
   });
@@ -61,8 +41,4 @@ export async function installE2EChatStreamCapture(): Promise<void> {
     events.length = 0;
   };
   win.__E2E_EVENT_COUNT = () => events.length;
-  win.__E2E_GET_INVOKES = () => invokes.slice();
-  win.__E2E_CLEAR_INVOKES = () => {
-    invokes.length = 0;
-  };
 }
