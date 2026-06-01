@@ -7,8 +7,8 @@
 //!
 //! 统一使用 `chat-stream` 通道，发送 `VercelUIStream` 事件：
 //! - 工具事件 → `ToolInputStart/Available`, `ToolOutputAvailable/Error`
-//! - 文本流 → `TextDelta`
-//! - 思考链 → `ReasoningDelta`
+//! - 文本流 → `TextStart` → `TextDelta`... → `TextEnd`（lifecycle，参见 [`TextSessions`]）
+//! - 思考链 → `ReasoningStart` → `ReasoningDelta`... → `ReasoningEnd`（lifecycle，参见 [`ReasoningSessions`]）
 //! - 非标准事件 → `DataCustom { data: {"type": "...", ...} }`
 //!
 //! ```text
@@ -33,70 +33,130 @@ use crate::conversation_tracker::ConversationTracker;
 use crate::vercel_ui_protocol::VercelUIStream;
 
 // ---------------------------------------------------------------------------
-// Frame session lifecycle (used by reasoning + text streaming)
+// Reasoning session lifecycle
 // ---------------------------------------------------------------------------
 
-/// Decision returned by [`FrameSessions::step`] describing which lifecycle
+/// Decision returned by [`ReasoningSessions::step`] describing which lifecycle
 /// frames need to be emitted around an incoming status.
 ///
-/// AI SDK v5 拒收没有先发 `*-start` 的 `*-delta`，也拒收空 `id`。该结构负责把
-/// "是否需要 Start / End / 当前 delta 用哪个 id" 一次性算清楚，调用方按顺序发帧即可。
-/// 同一类型同时服务 reasoning-* 与 text-* 两套 lifecycle。
+/// AI SDK v5 拒收没有先发 `reasoning-start` 的 `reasoning-delta`，
+/// 也拒收空 `id`。该结构负责把"是否需要 Start / End / 当前 delta 用哪个 id"
+/// 一次性算清楚，调用方按顺序发帧即可。
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub(crate) struct FrameSessionStep {
-    /// 若 Some，应在状态映射前发送对应的 `*-end { id }`（切出旧段）。
+pub(crate) struct ReasoningStep {
+    /// 若 Some，应在状态映射前发送 `ReasoningEnd { id }`（切出 reasoning 段）。
     pub emit_end: Option<String>,
-    /// 若 Some，应在状态映射前发送对应的 `*-start { id }`（进入新段）。
+    /// 若 Some，应在状态映射前发送 `ReasoningStart { id }`（进入新 reasoning 段）。
     pub emit_start: Option<String>,
-    /// 若 Some，对应的 `*-delta` 必须使用此 id。
+    /// 若 Some，`StatusUpdate::Thinking` 映射的 `ReasoningDelta` 必须使用此 id。
     pub delta_id: Option<String>,
 }
 
-/// 按 `thread_id` 跟踪某一类流式段（reasoning 或 text）的活跃状态。
+/// 按 `thread_id` 跟踪 reasoning 段的活跃状态。
 ///
 /// 状态机：
-/// - 同类事件 + 无活跃段 → 生成新 UUID，emit Start + delta_id
-/// - 同类事件 + 有活跃段 → 复用 id 作 delta_id
-/// - 异类事件 + 有活跃段 → emit End，清除
-/// - 异类事件 + 无活跃段 → 无动作
+/// - `Thinking` + 无活跃段 → 生成新 UUID，emit Start + delta_id
+/// - `Thinking` + 有活跃段 → 复用 id 作 delta_id
+/// - 其他 status + 有活跃段 → emit End，清除
+/// - 其他 status + 无活跃段 → 无动作
 #[derive(Debug, Default)]
-pub(crate) struct FrameSessions {
+pub(crate) struct ReasoningSessions {
     inner: Mutex<HashMap<String, String>>,
 }
 
-impl FrameSessions {
+impl ReasoningSessions {
     pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    pub(crate) async fn step(&self, thread_key: &str, keep_active: bool) -> FrameSessionStep {
+    pub(crate) async fn step(&self, thread_key: &str, is_thinking: bool) -> ReasoningStep {
         let mut sessions = self.inner.lock().await;
-        match (sessions.get(thread_key).cloned(), keep_active) {
+        match (sessions.get(thread_key).cloned(), is_thinking) {
             (None, true) => {
                 let id = uuid::Uuid::new_v4().to_string();
                 sessions.insert(thread_key.to_string(), id.clone());
-                FrameSessionStep {
+                ReasoningStep {
                     emit_start: Some(id.clone()),
                     delta_id: Some(id),
                     ..Default::default()
                 }
             }
-            (Some(id), true) => FrameSessionStep {
+            (Some(id), true) => ReasoningStep {
                 delta_id: Some(id),
                 ..Default::default()
             },
             (Some(id), false) => {
                 sessions.remove(thread_key);
-                FrameSessionStep {
+                ReasoningStep {
                     emit_end: Some(id),
                     ..Default::default()
                 }
             }
-            (None, false) => FrameSessionStep::default(),
+            (None, false) => ReasoningStep::default(),
         }
     }
 
-    /// 强制结束该 thread 的段（用于 turn 结束 / shutdown）。
+    /// 强制结束该 thread 的 reasoning 段（用于 turn 结束 / shutdown）。
+    pub(crate) async fn flush(&self, thread_key: &str) -> Option<String> {
+        self.inner.lock().await.remove(thread_key)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Text session lifecycle
+// ---------------------------------------------------------------------------
+
+/// Decision returned by [`TextSessions::step`] describing which lifecycle
+/// frames need to be emitted around an incoming text chunk.
+///
+/// 与 [`ReasoningStep`] 同形：AI SDK v5 拒收没有先发 `text-start` 的 `text-delta`，
+/// 也拒收空 `id`。
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct TextStep {
+    /// 若 Some，应在 delta 前发送 `TextStart { id }`（进入新 text 段）。
+    pub emit_start: Option<String>,
+    /// 若 Some，`StatusUpdate::StreamChunk` 映射的 `TextDelta` 必须使用此 id。
+    pub delta_id: Option<String>,
+}
+
+/// 按 `thread_id` 跟踪 text 段的活跃状态。
+///
+/// 与 [`ReasoningSessions`] 同构，但状态机退化更简单——StreamChunk 没有
+/// "对立信号"主动闭合段（reasoning 用任何非 Thinking 事件闭合），text 段的
+/// 自然终止点是 `respond()`，由调用方显式 [`flush`](Self::flush)。
+///
+/// 状态机：
+/// - `StreamChunk` + 无活跃段 → 生成新 UUID，emit Start + delta_id
+/// - `StreamChunk` + 有活跃段 → 复用 id 作 delta_id
+#[derive(Debug, Default)]
+pub(crate) struct TextSessions {
+    inner: Mutex<HashMap<String, String>>,
+}
+
+impl TextSessions {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) async fn step(&self, thread_key: &str) -> TextStep {
+        let mut sessions = self.inner.lock().await;
+        match sessions.get(thread_key).cloned() {
+            None => {
+                let id = uuid::Uuid::new_v4().to_string();
+                sessions.insert(thread_key.to_string(), id.clone());
+                TextStep {
+                    emit_start: Some(id.clone()),
+                    delta_id: Some(id),
+                }
+            }
+            Some(id) => TextStep {
+                emit_start: None,
+                delta_id: Some(id),
+            },
+        }
+    }
+
+    /// 强制结束该 thread 的 text 段，返回活跃 id（用于 `respond()` 决定如何收尾）。
     pub(crate) async fn flush(&self, thread_key: &str) -> Option<String> {
         self.inner.lock().await.remove(thread_key)
     }
@@ -211,9 +271,9 @@ pub struct TauriChannel {
     /// 对话追踪器，用于收集 Token 消耗并在对话结束时上报。
     pub conversation_tracker: Option<Arc<ConversationTracker>>,
     /// 按 thread 维护活跃 reasoning 段，保证 Start/Delta/End 帧序与 id 一致。
-    reasoning_sessions: Arc<FrameSessions>,
-    /// 按 thread 维护活跃 text 流式段，保证 Start/Delta/End 帧序与 id 一致。
-    text_sessions: Arc<FrameSessions>,
+    reasoning_sessions: Arc<ReasoningSessions>,
+    /// 按 thread 维护活跃 text 段，保证 Start/Delta/End 帧序与 id 一致。
+    text_sessions: Arc<TextSessions>,
 }
 
 impl TauriChannel {
@@ -232,8 +292,8 @@ impl TauriChannel {
             incoming_tx: tx,
             incoming_rx: Mutex::new(Some(rx)),
             conversation_tracker: None,
-            reasoning_sessions: Arc::new(FrameSessions::new()),
-            text_sessions: Arc::new(FrameSessions::new()),
+            reasoning_sessions: Arc::new(ReasoningSessions::new()),
+            text_sessions: Arc::new(TextSessions::new()),
         }
     }
 
@@ -267,48 +327,16 @@ impl TauriChannel {
 
     /// 将 `StatusUpdate` 映射为 `VercelUIStream` 事件并发送。
     ///
-    /// - `Thinking` → 走 reasoning [`FrameSessions`] 完整 lifecycle（Start/Delta/End），需 thread_id
-    /// - `StreamChunk` → 走 text [`FrameSessions`] 完整 lifecycle（Start/Delta/End），需 thread_id
-    /// - 进入 reasoning 段时先关闭当前活跃 text 段（反之亦然）
-    /// - 其他事件 → 两类活跃段都关闭后，走 [`map_status_to_stream`] 纯映射
+    /// - `Thinking` → 走 [`ReasoningSessions`] 完整 lifecycle（Start/Delta/End），需 thread_id
+    /// - `StreamChunk` → 走 [`TextSessions`] lifecycle（Start/Delta），End 由 `respond()` 触发，需 thread_id
+    /// - 非 `Thinking` 事件且当前线程有活跃 reasoning 段 → 先 emit `ReasoningEnd` 切段
+    /// - 其他事件 → 走 [`map_status_to_stream`] 纯映射
     pub(crate) async fn emit_status_stream(
         &self,
         thread_id: Option<&str>,
         status: &StatusUpdate,
         metadata: &serde_json::Value,
     ) -> Result<(), ChannelError> {
-        let keep_reasoning = matches!(status, StatusUpdate::Thinking(_));
-        let keep_text = matches!(status, StatusUpdate::StreamChunk(_));
-
-        // 关闭与本事件不同类的活跃段：Thinking 中断 text、StreamChunk 中断 reasoning、
-        // 其他事件两者均关。无 thread_id 时无法归属段——只能跳过。
-        if let Some(tid) = thread_id {
-            if !keep_reasoning {
-                let step = self.reasoning_sessions.step(tid, false).await;
-                if let Some(end_id) = step.emit_end {
-                    self.emit_stream(
-                        thread_id,
-                        &VercelUIStream::ReasoningEnd {
-                            id: end_id,
-                            provider_metadata: None,
-                        },
-                    )?;
-                }
-            }
-            if !keep_text {
-                let step = self.text_sessions.step(tid, false).await;
-                if let Some(end_id) = step.emit_end {
-                    self.emit_stream(
-                        thread_id,
-                        &VercelUIStream::TextEnd {
-                            id: end_id,
-                            provider_metadata: None,
-                        },
-                    )?;
-                }
-            }
-        }
-
         // Reasoning lifecycle 必须挂在 thread context 上才能保证 Start→Delta→End 闭合；
         // 无 thread_id 的 Thinking 直接丢弃（前端没法把它归属到具体会话）。
         if let StatusUpdate::Thinking(msg) = status {
@@ -338,12 +366,13 @@ impl TauriChannel {
             return Ok(());
         }
 
-        // Text streaming lifecycle 同理：无 thread_id 的 StreamChunk 丢弃。
+        // Text streaming：与 Reasoning 同形，但 End 由 respond() 显式触发
+        // （StreamChunk 没有对立信号能告诉我们 "流结束了"）。
         if let StatusUpdate::StreamChunk(content) = status {
             let Some(tid) = thread_id else {
                 return Ok(());
             };
-            let step = self.text_sessions.step(tid, true).await;
+            let step = self.text_sessions.step(tid).await;
             if let Some(start_id) = step.emit_start {
                 self.emit_stream(
                     thread_id,
@@ -366,15 +395,28 @@ impl TauriChannel {
             return Ok(());
         }
 
+        if let Some(tid) = thread_id {
+            let step = self.reasoning_sessions.step(tid, false).await;
+            if let Some(end_id) = step.emit_end {
+                self.emit_stream(
+                    thread_id,
+                    &VercelUIStream::ReasoningEnd {
+                        id: end_id,
+                        provider_metadata: None,
+                    },
+                )?;
+            }
+        }
+
         for event in map_status_to_stream(status, metadata) {
             self.emit_stream(thread_id, &event)?;
         }
         Ok(())
     }
 
-    /// 若该 thread 仍有活跃 reasoning / text 段，立即发送对应 `*-end` 帧并清除。
+    /// 若该 thread 仍有活跃 reasoning 段，立即发送 `ReasoningEnd` 并清除。
     /// 用于 turn 结束 / shutdown 等"自然终止点"。
-    async fn flush_lifecycles(&self, thread_id: &str) -> Result<(), ChannelError> {
+    async fn flush_reasoning(&self, thread_id: &str) -> Result<(), ChannelError> {
         if let Some(id) = self.reasoning_sessions.flush(thread_id).await {
             self.emit_stream(
                 Some(thread_id),
@@ -384,28 +426,86 @@ impl TauriChannel {
                 },
             )?;
         }
-        if let Some(id) = self.text_sessions.flush(thread_id).await {
-            self.emit_stream(
-                Some(thread_id),
-                &VercelUIStream::TextEnd {
-                    id,
-                    provider_metadata: None,
-                },
-            )?;
-        }
         Ok(())
     }
+
+    /// 若该 thread 仍有活跃 text 段，返回其 id 供调用方决定 end 时机。
+    /// 与 `flush_reasoning` 不同：text 段必须由 `respond()` 显式收尾，不能在这里就 emit End，
+    /// 因为 `respond()` 还要根据 "是否有活跃 streaming" 决定是否补 TextStart/Delta（non-streaming 路径）。
+    async fn take_active_text_id(&self, thread_id: &str) -> Option<String> {
+        self.text_sessions.flush(thread_id).await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 纯函数 — 构造 respond() 的 wire 帧序列
+// ---------------------------------------------------------------------------
+
+/// 决定 `respond()` 应发送的 wire 帧序列（纯函数，便于单元测试）。
+///
+/// 协议契约（AI SDK v5 + 向后兼容）：
+/// - **streaming 路径**（`active_text_id = Some(_)`）：streaming chunks 已通过 `TextDelta` 把
+///   `response.content` 累积完整，此处只需 `TextEnd` 闭合段；DataCustom + Finish 紧随。
+/// - **non-streaming 路径**（`active_text_id = None`）：发完整 `TextStart` → `TextDelta(content)`
+///   → `TextEnd` 三段（id 复用 `msg_id`），再 DataCustom + Finish。
+///
+/// 保留 `DataCustom { type: "response" }` 是为了向后兼容 legacy `useAiChatTauri` hook，
+/// 它仍消费该事件（assistant-ui / `TauriChatTransport` 走 text-* 标准帧）。
+pub(crate) fn build_respond_frames(
+    active_text_id: Option<String>,
+    msg_id: &str,
+    content: &str,
+    source: &str,
+    thread_id: &str,
+) -> Vec<VercelUIStream> {
+    let mut frames = Vec::with_capacity(5);
+    match active_text_id {
+        Some(id) => {
+            frames.push(VercelUIStream::TextEnd {
+                id,
+                provider_metadata: None,
+            });
+        }
+        None => {
+            frames.push(VercelUIStream::TextStart {
+                id: msg_id.to_string(),
+                provider_metadata: None,
+            });
+            frames.push(VercelUIStream::TextDelta {
+                id: msg_id.to_string(),
+                delta: content.to_string(),
+                provider_metadata: None,
+            });
+            frames.push(VercelUIStream::TextEnd {
+                id: msg_id.to_string(),
+                provider_metadata: None,
+            });
+        }
+    }
+    frames.push(VercelUIStream::DataCustom {
+        id: None,
+        data: json!({
+            "type": "response",
+            "message_id": msg_id,
+            "content": content,
+            "thread_id": thread_id,
+            "source": source,
+        }),
+    });
+    frames.push(VercelUIStream::Finish {
+        id: msg_id.to_string(),
+    });
+    frames
 }
 
 // ---------------------------------------------------------------------------
 // 纯映射函数 — StatusUpdate → Vec<VercelUIStream>
 // ---------------------------------------------------------------------------
 
-/// 将非生命周期类 `StatusUpdate` + metadata 映射为 `VercelUIStream` 事件列表（纯函数）。
+/// 将非 reasoning 类 `StatusUpdate` + metadata 映射为 `VercelUIStream` 事件列表（纯函数）。
 ///
-/// `StatusUpdate::Thinking` 与 `StatusUpdate::StreamChunk` 不在此处映射；由
-/// [`TauriChannel::emit_status_stream`] 按 reasoning / text lifecycle 单独处理
-/// （确保 Start/Delta/End 帧序与 id 一致）。
+/// `StatusUpdate::Thinking` 不在此处映射；由 [`TauriChannel::emit_status_stream`] 按
+/// reasoning 段 lifecycle 单独处理（确保 Start/Delta/End 帧序与 id 一致）。
 pub(crate) fn map_status_to_stream(
     status: &StatusUpdate,
     metadata: &serde_json::Value,
@@ -419,6 +519,8 @@ pub(crate) fn map_status_to_stream(
     }
 
     match status {
+        // Thinking 和 StreamChunk 都不在此处映射——它们由
+        // `emit_status_stream` 按 lifecycle 处理（保证 Start/Delta/End 帧序与 id 一致）。
         StatusUpdate::Thinking(_) | StatusUpdate::StreamChunk(_) => vec![],
 
         StatusUpdate::ToolStarted { name } => {
@@ -658,34 +760,29 @@ impl Channel for TauriChannel {
         response: OutgoingResponse,
     ) -> Result<(), ChannelError> {
         let thread_id = msg.thread_id.clone().unwrap_or_default();
+        let msg_id = msg.id.to_string();
 
         // 记录 assistant 消息到对话追踪器（Token 数在后续 TokenUsage 事件中更新）
         if let Some(tracker) = &self.conversation_tracker {
             tracker.record_assistant_message(&thread_id, &response.content, None, 0, 0);
         }
 
-        // turn 终止前关闭可能仍开着的 reasoning / text 段，避免下一轮 Start 时残留 id
-        self.flush_lifecycles(&thread_id).await?;
+        // turn 终止前关闭可能仍开着的 reasoning 段，避免下一轮 Start 时残留 id
+        self.flush_reasoning(&thread_id).await?;
 
-        self.emit_stream(
-            Some(&thread_id),
-            &VercelUIStream::DataCustom {
-                id: None,
-                data: json!({
-                    "type": "response",
-                    "message_id": msg.id.to_string(),
-                    "content": response.content,
-                    "thread_id": thread_id,
-                    "source": "chat",
-                }),
-            },
-        )?;
-        self.emit_stream(
-            Some(&thread_id),
-            &VercelUIStream::Finish {
-                id: msg.id.to_string(),
-            },
-        )
+        // 取走活跃 text 段 id（streaming 路径），交给纯函数决定帧序
+        let active_text_id = self.take_active_text_id(&thread_id).await;
+        let frames = build_respond_frames(
+            active_text_id,
+            &msg_id,
+            &response.content,
+            "chat",
+            &thread_id,
+        );
+        for frame in &frames {
+            self.emit_stream(Some(&thread_id), frame)?;
+        }
+        Ok(())
     }
 
     async fn send_status(
@@ -936,17 +1033,26 @@ mod tests {
         assert_eq!(json["data"]["source"], "chat");
     }
 
-    /// `map_status_to_stream` 不再处理 Thinking（返回空）；Thinking 由
-    /// `emit_status_stream` 按 lifecycle 处理，详见下方 reasoning_* 系列测试。
+    /// `map_status_to_stream` 不再处理 Thinking / StreamChunk（返回空）；他们由
+    /// `emit_status_stream` 按 lifecycle 处理，详见下方 reasoning_* / text_* 系列测试。
     #[test]
-    fn test_thinking_is_not_mapped_by_pure_function() {
-        let events = map_status_to_stream(
+    fn test_lifecycle_owned_statuses_are_not_mapped_by_pure_function() {
+        let thinking = map_status_to_stream(
             &StatusUpdate::Thinking("analyzing...".into()),
             &empty_meta(),
         );
         assert!(
-            events.is_empty(),
-            "Thinking must not produce frames via pure mapper; lifecycle owns reasoning frames"
+            thinking.is_empty(),
+            "Thinking must not produce frames via pure mapper; reasoning lifecycle owns it"
+        );
+
+        let stream_chunk = map_status_to_stream(
+            &StatusUpdate::StreamChunk("hello world".into()),
+            &empty_meta(),
+        );
+        assert!(
+            stream_chunk.is_empty(),
+            "StreamChunk must not produce frames via pure mapper; text lifecycle owns it (regression: empty-id TextDelta bug)"
         );
     }
 
@@ -1054,25 +1160,13 @@ mod tests {
         );
     }
 
-    /// 防回归：StreamChunk 不再走 map_status_to_stream（避免空 id TextDelta）。
-    /// lifecycle 改由 TauriChannel::emit_status_stream 与 FrameSessions 接管。
-    #[test]
-    fn test_stream_chunk_not_mapped_to_text_delta_directly() {
-        let status = StatusUpdate::StreamChunk("hello".into());
-        let events = map_status_to_stream(&status, &empty_meta());
-        assert!(
-            events.is_empty(),
-            "StreamChunk must be handled via FrameSessions lifecycle, not via map_status_to_stream"
-        );
-    }
-
     // ── Envelope 测试：chat-stream payload 注入 threadId ────────────────────
 
-    // ── FrameSessions 生命周期 ─────────────────────────────────────────
+    // ── ReasoningSessions 生命周期 ─────────────────────────────────────────
 
     #[tokio::test]
     async fn reasoning_first_thinking_emits_start_and_delta_id() {
-        let sessions = FrameSessions::new();
+        let sessions = ReasoningSessions::new();
         let step = sessions.step("t-1", true).await;
         let start_id = step.emit_start.expect("first Thinking must emit Start");
         assert_eq!(step.delta_id.as_deref(), Some(start_id.as_str()));
@@ -1082,7 +1176,7 @@ mod tests {
 
     #[tokio::test]
     async fn reasoning_subsequent_thinking_reuses_id_without_start() {
-        let sessions = FrameSessions::new();
+        let sessions = ReasoningSessions::new();
         let first = sessions.step("t-1", true).await;
         let second = sessions.step("t-1", true).await;
         assert!(second.emit_start.is_none());
@@ -1092,7 +1186,7 @@ mod tests {
 
     #[tokio::test]
     async fn reasoning_transition_to_non_thinking_emits_end_once() {
-        let sessions = FrameSessions::new();
+        let sessions = ReasoningSessions::new();
         let started = sessions.step("t-1", true).await;
         let opened_id = started.delta_id.unwrap();
         let ended = sessions.step("t-1", false).await;
@@ -1106,7 +1200,7 @@ mod tests {
 
     #[tokio::test]
     async fn reasoning_sessions_are_isolated_per_thread() {
-        let sessions = FrameSessions::new();
+        let sessions = ReasoningSessions::new();
         let a = sessions.step("t-A", true).await.delta_id.unwrap();
         let b = sessions.step("t-B", true).await.delta_id.unwrap();
         assert_ne!(a, b);
@@ -1119,7 +1213,7 @@ mod tests {
 
     #[tokio::test]
     async fn reasoning_flush_returns_active_id_and_clears() {
-        let sessions = FrameSessions::new();
+        let sessions = ReasoningSessions::new();
         let id = sessions.step("t-1", true).await.delta_id.unwrap();
         assert_eq!(sessions.flush("t-1").await, Some(id));
         assert_eq!(sessions.flush("t-1").await, None);
@@ -1130,7 +1224,7 @@ mod tests {
 
     #[tokio::test]
     async fn reasoning_sessions_remain_isolated_under_concurrency() {
-        let sessions = Arc::new(FrameSessions::new());
+        let sessions = Arc::new(ReasoningSessions::new());
         let mut handles = Vec::new();
         for n in 0..16 {
             let s = Arc::clone(&sessions);
@@ -1150,6 +1244,148 @@ mod tests {
         for h in handles {
             h.await.unwrap();
         }
+    }
+
+    // ── TextSessions 生命周期 ──────────────────────────────────
+
+    #[tokio::test]
+    async fn text_first_chunk_emits_start_and_nonempty_delta_id() {
+        let sessions = TextSessions::new();
+        let step = sessions.step("t-1").await;
+        let start_id = step.emit_start.expect("first StreamChunk must emit Start");
+        assert_eq!(step.delta_id.as_deref(), Some(start_id.as_str()));
+        assert!(
+            !start_id.is_empty(),
+            "text id must be non-empty (regression: AI SDK v5 rejects empty id)"
+        );
+    }
+
+    #[tokio::test]
+    async fn text_subsequent_chunks_reuse_id_without_start() {
+        let sessions = TextSessions::new();
+        let first = sessions.step("t-1").await;
+        let second = sessions.step("t-1").await;
+        assert!(second.emit_start.is_none());
+        assert_eq!(second.delta_id, first.delta_id);
+    }
+
+    #[tokio::test]
+    async fn text_sessions_are_isolated_per_thread() {
+        let sessions = TextSessions::new();
+        let a = sessions.step("t-A").await.delta_id.unwrap();
+        let b = sessions.step("t-B").await.delta_id.unwrap();
+        assert_ne!(a, b);
+    }
+
+    #[tokio::test]
+    async fn text_flush_returns_active_id_and_clears() {
+        let sessions = TextSessions::new();
+        let id = sessions.step("t-1").await.delta_id.unwrap();
+        assert_eq!(sessions.flush("t-1").await, Some(id));
+        assert_eq!(sessions.flush("t-1").await, None);
+        // flush 后再来 StreamChunk 应当生成新 Start
+        let next = sessions.step("t-1").await;
+        assert!(next.emit_start.is_some());
+    }
+
+    #[tokio::test]
+    async fn text_sessions_remain_isolated_under_concurrency() {
+        let sessions = Arc::new(TextSessions::new());
+        let mut handles = Vec::new();
+        for n in 0..16 {
+            let s = Arc::clone(&sessions);
+            handles.push(tokio::spawn(async move {
+                let tid = format!("t-{n}");
+                let first = s.step(&tid).await;
+                let id = first.delta_id.clone().expect("first step must emit id");
+                assert_eq!(first.emit_start.as_ref(), Some(&id));
+                let second = s.step(&tid).await;
+                assert!(
+                    second.emit_start.is_none(),
+                    "id must not reset within a turn"
+                );
+                assert_eq!(second.delta_id, Some(id));
+            }));
+        }
+        for h in handles {
+            h.await.unwrap();
+        }
+    }
+
+    // ── build_respond_frames 纯函数 ──────────────────────────────
+
+    /// streaming 路径：TextDelta 已累积完整内容，只需 TextEnd 闭合 + DataCustom + Finish。
+    #[test]
+    fn respond_with_active_text_session_only_closes_text() {
+        let frames = build_respond_frames(
+            Some("text-id-xyz".into()),
+            "msg-1",
+            "hello world",
+            "chat",
+            "t-1",
+        );
+        assert_eq!(
+            frames.len(),
+            3,
+            "streaming path: TextEnd + DataCustom + Finish"
+        );
+        assert!(matches!(
+            &frames[0],
+            VercelUIStream::TextEnd { id, .. } if id == "text-id-xyz"
+        ));
+        assert!(matches!(&frames[1], VercelUIStream::DataCustom { .. }));
+        assert!(matches!(
+            &frames[2],
+            VercelUIStream::Finish { id } if id == "msg-1"
+        ));
+    }
+
+    /// non-streaming 路径：没有任何 streaming chunks，需完整发
+    /// TextStart → TextDelta(content) → TextEnd → DataCustom → Finish。
+    /// id 使用 msg_id 以便前端关联 message part。
+    #[test]
+    fn respond_without_active_text_session_emits_full_text_lifecycle() {
+        let frames = build_respond_frames(None, "msg-1", "hello", "chat", "t-1");
+        assert_eq!(
+            frames.len(),
+            5,
+            "non-streaming path: TextStart + TextDelta + TextEnd + DataCustom + Finish"
+        );
+        assert!(matches!(
+            &frames[0],
+            VercelUIStream::TextStart { id, .. } if id == "msg-1"
+        ));
+        assert!(matches!(
+            &frames[1],
+            VercelUIStream::TextDelta { id, delta, .. } if id == "msg-1" && delta == "hello"
+        ));
+        assert!(matches!(
+            &frames[2],
+            VercelUIStream::TextEnd { id, .. } if id == "msg-1"
+        ));
+        assert!(matches!(&frames[3], VercelUIStream::DataCustom { .. }));
+        assert!(matches!(
+            &frames[4],
+            VercelUIStream::Finish { id } if id == "msg-1"
+        ));
+    }
+
+    /// 向后兼容：DataCustom { type: "response" } 字段保持不变，供 legacy `useAiChatTauri` hook 消费。
+    #[test]
+    fn respond_frames_preserve_data_custom_response_for_legacy_hook() {
+        let frames = build_respond_frames(None, "msg-9", "body", "chat", "t-9");
+        let custom = frames
+            .iter()
+            .find_map(|f| match f {
+                VercelUIStream::DataCustom { data, .. } => Some(data.clone()),
+                _ => None,
+            })
+            .expect("DataCustom must be present for legacy compat");
+        assert_eq!(custom["type"], "response");
+        assert_eq!(custom["message_id"], "msg-9");
+        assert_eq!(custom["content"], "body");
+        assert_eq!(custom["thread_id"], "t-9");
+        assert_eq!(custom["source"], "chat");
     }
 
     /// 线程专属事件：顶层应含 `threadId` 字段，type 字段保持不变。

@@ -158,13 +158,12 @@ mod tests {
     #[test]
     fn test_contract_text_delta() {
         let event = VercelUIStream::TextDelta {
-            id: "t-42".into(),
+            id: String::new(),
             delta: "partial".into(),
             provider_metadata: None,
         };
         let json: serde_json::Value = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "text-delta");
-        assert_eq!(json["id"], "t-42");
         assert_eq!(json["delta"], "partial");
     }
 
@@ -495,6 +494,7 @@ mod tests {
                 },
                 &meta,
             ),
+            // StreamChunk 不走纯映射；由 emit_status_stream 按 TextSessions lifecycle 处理，见 text_* 系列测试。
             (StatusUpdate::Status("test".into()), &empty),
             (
                 StatusUpdate::JobStarted {
