@@ -204,15 +204,66 @@ fn set_if_absent(key: &str, value: &str) {
 
 /// 管理端配置 JSON key → 环境变量的映射表。
 ///
-/// 后续新增管理端下发的配置项，只需在此表中添加一行。
-const ADMIN_CONFIG_MAPPINGS: &[(&str, &str)] = &[
-    ("llm_backend", "LLM_BACKEND"),
-    ("llm_api_key", "LLM_API_KEY"),
-    ("llm_model", "LLM_MODEL"),
-    ("llm_base_url", "LLM_BASE_URL"),
-    ("skill_registry_url", "CLAWHUB_REGISTRY"),
-    ("managed_mode", "MANAGED_MODE"),
+/// `requires_companion_keys` 用于切换 `LLM_BACKEND` 时校验依赖 key 是否到位：
+/// 若任一候选 env 已存在（含本轮刚写入的），则允许写入；否则跳过并 `warn!`。
+/// 这避免 admin 单独推 backend 但客户端 env 缺少对应 API key 导致启动失败。
+const ADMIN_CONFIG_MAPPINGS: &[AdminConfigMapping] = &[
+    AdminConfigMapping {
+        json_key: "llm_api_key",
+        env_key: "LLM_API_KEY",
+        requires_companion_keys: None,
+    },
+    AdminConfigMapping {
+        json_key: "llm_model",
+        env_key: "LLM_MODEL",
+        requires_companion_keys: None,
+    },
+    AdminConfigMapping {
+        json_key: "llm_base_url",
+        env_key: "LLM_BASE_URL",
+        requires_companion_keys: None,
+    },
+    AdminConfigMapping {
+        json_key: "llm_backend",
+        env_key: "LLM_BACKEND",
+        requires_companion_keys: Some(backend_companion_keys),
+    },
+    AdminConfigMapping {
+        json_key: "skill_registry_url",
+        env_key: "CLAWHUB_REGISTRY",
+        requires_companion_keys: None,
+    },
+    AdminConfigMapping {
+        json_key: "managed_mode",
+        env_key: "MANAGED_MODE",
+        requires_companion_keys: None,
+    },
 ];
+
+struct AdminConfigMapping {
+    json_key: &'static str,
+    env_key: &'static str,
+    /// 若 `Some(f)`，写入前调用 `f(value)` 获取候选 companion env key 列表。
+    /// 空切片表示该值无需任何 companion key（如 nearai 走 session token）。
+    requires_companion_keys: Option<fn(&str) -> &'static [&'static str]>,
+}
+
+/// 给定 backend 值，返回可接受的 companion API key env var 候选列表。
+///
+/// 返回空切片表示该 backend 不依赖任何静态 env key（如 nearai 用 session token）。
+/// 列表里只要有一个 key 在 env 中存在，就视为前置条件满足。
+///
+/// `LLM_API_KEY` 作为通用 fallback 列入 openai/anthropic 候选，
+/// 以兼容"admin 同一次推送 backend + llm_api_key"的常见场景。
+fn backend_companion_keys(backend: &str) -> &'static [&'static str] {
+    match backend {
+        "openai" => &["OPENAI_API_KEY", "LLM_API_KEY"],
+        "anthropic" => &["ANTHROPIC_API_KEY", "LLM_API_KEY"],
+        "openai_compatible" => &["LLM_API_KEY"],
+        "nearai" => &[],
+        _ => &[],
+    }
+}
 
 /// 敏感字段（日志中不打印值）。
 const ADMIN_CONFIG_SENSITIVE_KEYS: &[&str] = &["LLM_API_KEY", "ADMIN_API_KEY"];
@@ -260,27 +311,214 @@ fn apply_admin_overrides() {
         }
     };
 
-    let mut injected = 0u32;
-    for &(json_key, env_key) in ADMIN_CONFIG_MAPPINGS {
-        let val = config.get(json_key).and_then(|v| match v {
-            serde_json::Value::String(s) if !s.is_empty() => Some(s.clone()),
-            serde_json::Value::Bool(b) => Some(b.to_string()),
-            serde_json::Value::Number(n) => Some(n.to_string()),
-            _ => None,
-        });
-        if let Some(val) = val {
-            env::set_var(env_key, &val);
-            injected += 1;
+    let current_env: std::collections::HashMap<String, String> = env::vars().collect();
+    let resolved = resolve_overrides(&config, &current_env);
 
-            if ADMIN_CONFIG_SENSITIVE_KEYS.contains(&env_key) {
-                tracing::info!("Admin override: {}=***", env_key);
-            } else {
-                tracing::info!("Admin override: {}={}", env_key, val);
-            }
+    for (env_key, val) in &resolved {
+        env::set_var(env_key, val);
+        if ADMIN_CONFIG_SENSITIVE_KEYS.contains(&env_key.as_str()) {
+            tracing::info!("Admin override: {}=***", env_key);
+        } else {
+            tracing::info!("Admin override: {}={}", env_key, val);
         }
     }
 
-    if injected > 0 {
-        tracing::info!("Applied {} admin config overrides", injected);
+    if !resolved.is_empty() {
+        tracing::info!("Applied {} admin config overrides", resolved.len());
+    }
+}
+
+/// 纯函数：把 admin 配置 JSON 解析成将要写入的 `(env_key, value)` 列表。
+///
+/// 两遍处理：
+/// 1. 先解析所有不带 `requires_companion_keys` 的字段（API key / model / base_url 等），
+///    把它们累加到 `simulated_env`（process env 快照 + 第一遍刚写的值）。
+/// 2. 再处理 backend 等带 companion 校验的字段；若候选 env 列表非空但全都缺失，
+///    跳过该项并 `tracing::warn!`，避免推下去导致引擎启动 `LlmError::AuthFailed`。
+///
+/// 抽成独立函数便于测试：调用方传入虚拟 env 即可断言行为。
+fn resolve_overrides(
+    config: &serde_json::Value,
+    current_env: &std::collections::HashMap<String, String>,
+) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut simulated_env: std::collections::HashMap<String, String> = current_env.clone();
+
+    // Pass 1: 写所有非 companion-gated 字段。
+    let mut deferred: Vec<(&AdminConfigMapping, String)> = Vec::new();
+    for m in ADMIN_CONFIG_MAPPINGS {
+        let Some(val) = extract_admin_value(config, m.json_key) else {
+            continue;
+        };
+        if m.requires_companion_keys.is_some() {
+            deferred.push((m, val));
+        } else {
+            simulated_env.insert(m.env_key.to_string(), val.clone());
+            out.push((m.env_key.to_string(), val));
+        }
+    }
+
+    // Pass 2: companion-gated 字段（如 LLM_BACKEND）。
+    for (m, val) in deferred {
+        if let Some(check) = m.requires_companion_keys {
+            let candidates = check(&val);
+            if !candidates.is_empty() && !candidates.iter().any(|k| simulated_env.contains_key(*k))
+            {
+                tracing::warn!(
+                    env_key = %m.env_key,
+                    value = %val,
+                    candidates = ?candidates,
+                    "Admin override skipped: switching {} to {} requires one of {:?} in env",
+                    m.env_key, val, candidates
+                );
+                continue;
+            }
+        }
+        simulated_env.insert(m.env_key.to_string(), val.clone());
+        out.push((m.env_key.to_string(), val));
+    }
+
+    out
+}
+
+fn extract_admin_value(config: &serde_json::Value, key: &str) -> Option<String> {
+    config.get(key).and_then(|v| match v {
+        serde_json::Value::String(s) if !s.is_empty() => Some(s.clone()),
+        serde_json::Value::Bool(b) => Some(b.to_string()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    })
+}
+
+#[cfg(test)]
+mod apply_admin_overrides_tests {
+    use super::{resolve_overrides, ADMIN_CONFIG_MAPPINGS};
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    /// 校验测试和生产代码引用同一份映射表（防漂移）。
+    #[test]
+    fn test_contract_mappings_include_backend_with_companion_check() {
+        let backend = ADMIN_CONFIG_MAPPINGS
+            .iter()
+            .find(|m| m.env_key == "LLM_BACKEND")
+            .expect("LLM_BACKEND mapping must exist");
+        assert!(
+            backend.requires_companion_keys.is_some(),
+            "LLM_BACKEND must be guarded by companion key check"
+        );
+    }
+
+    #[test]
+    fn test_failure_backend_skipped_when_companion_key_missing() {
+        let config = json!({ "llm_backend": "openai" });
+        let env = HashMap::new();
+        let resolved = resolve_overrides(&config, &env);
+        assert!(
+            !resolved.iter().any(|(k, _)| k == "LLM_BACKEND"),
+            "openai backend must be skipped when no OPENAI_API_KEY/LLM_API_KEY in env, got: {:?}",
+            resolved
+        );
+    }
+
+    #[test]
+    fn req_admin_override_backend_applied_when_companion_key_present() {
+        let config = json!({ "llm_backend": "openai" });
+        let mut env = HashMap::new();
+        env.insert("OPENAI_API_KEY".to_string(), "sk-pre-set".to_string());
+        let resolved = resolve_overrides(&config, &env);
+        assert!(
+            resolved
+                .iter()
+                .any(|(k, v)| k == "LLM_BACKEND" && v == "openai"),
+            "backend should be applied when OPENAI_API_KEY pre-exists, got: {:?}",
+            resolved
+        );
+    }
+
+    #[test]
+    fn req_admin_override_backend_applied_when_admin_pushes_key_too() {
+        let config = json!({
+            "llm_backend": "openai",
+            "llm_api_key": "sk-from-admin",
+        });
+        let env = HashMap::new(); // 空 env
+        let resolved = resolve_overrides(&config, &env);
+        // Pass 1 写 LLM_API_KEY，Pass 2 校验 openai 的候选含 LLM_API_KEY → 通过。
+        assert!(
+            resolved
+                .iter()
+                .any(|(k, v)| k == "LLM_API_KEY" && v == "sk-from-admin"),
+            "LLM_API_KEY should be written in pass 1, got: {:?}",
+            resolved
+        );
+        assert!(
+            resolved
+                .iter()
+                .any(|(k, v)| k == "LLM_BACKEND" && v == "openai"),
+            "LLM_BACKEND should pass companion check via just-written LLM_API_KEY, got: {:?}",
+            resolved
+        );
+    }
+
+    #[test]
+    fn req_admin_override_openai_compatible_requires_llm_api_key() {
+        // 无 LLM_API_KEY 时 openai_compatible 必须跳过。
+        let config = json!({ "llm_backend": "openai_compatible" });
+        let env = HashMap::new();
+        let resolved = resolve_overrides(&config, &env);
+        assert!(
+            !resolved.iter().any(|(k, _)| k == "LLM_BACKEND"),
+            "openai_compatible must be skipped without LLM_API_KEY, got: {:?}",
+            resolved
+        );
+
+        // 同一次 admin 推送 backend + key → 通过。
+        let config_ok = json!({
+            "llm_backend": "openai_compatible",
+            "llm_api_key": "sk-compat",
+        });
+        let resolved_ok = resolve_overrides(&config_ok, &env);
+        assert!(
+            resolved_ok
+                .iter()
+                .any(|(k, v)| k == "LLM_BACKEND" && v == "openai_compatible"),
+            "openai_compatible must pass with admin-pushed llm_api_key, got: {:?}",
+            resolved_ok
+        );
+    }
+
+    #[test]
+    fn req_admin_override_nearai_backend_no_key_required() {
+        let config = json!({ "llm_backend": "nearai" });
+        let env = HashMap::new(); // 空 env
+        let resolved = resolve_overrides(&config, &env);
+        assert!(
+            resolved
+                .iter()
+                .any(|(k, v)| k == "LLM_BACKEND" && v == "nearai"),
+            "nearai backend uses session token, must apply without any API key env, got: {:?}",
+            resolved
+        );
+    }
+
+    #[test]
+    fn test_security_audit_companion_check_does_not_leak_key_value() {
+        // 此测试确保 resolve_overrides 不返回 env 里的原始 key，
+        // 它只读 env 判断 contains_key，不传递 value。
+        let config = json!({ "llm_backend": "openai" });
+        let mut env = HashMap::new();
+        env.insert(
+            "OPENAI_API_KEY".to_string(),
+            "sk-secret-must-not-leak".into(),
+        );
+        let resolved = resolve_overrides(&config, &env);
+        for (_, v) in &resolved {
+            assert!(
+                !v.contains("sk-secret-must-not-leak"),
+                "resolve_overrides leaked env value: {:?}",
+                resolved
+            );
+        }
     }
 }

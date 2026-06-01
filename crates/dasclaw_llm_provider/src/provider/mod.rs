@@ -40,6 +40,7 @@ pub mod reasoning;
 pub mod registry;
 pub mod response_cache;
 pub mod retry;
+pub mod runtime;
 pub mod schema_utils;
 pub mod smart_routing;
 pub mod token_refreshing;
@@ -80,5 +81,6 @@ pub use reasoning::{
 pub use registry::{ProviderDefinition, ProviderProtocol, ProviderRegistry};
 pub use response_cache::{CachedProvider, ResponseCacheConfig};
 pub use retry::{RetryConfig, RetryProvider};
+pub use runtime::{LlmReloadHandle, ProviderChainComponents, SwappableLlmProvider};
 pub use smart_routing::{SmartRoutingConfig, SmartRoutingProvider, TaskComplexity};
 pub use token_refreshing::TokenRefreshingProvider;
