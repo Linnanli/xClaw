@@ -58,3 +58,7 @@ claude-code-main
 /codex-cli-main/
 /docs/repomix-out/
 .copilot-handoff/
+
+# Graphify generated artifacts
+/graphify-out/
+**/graphify-out/
