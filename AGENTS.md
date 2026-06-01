@@ -49,6 +49,35 @@
 - 仅 fmt 或 lint 自动修复
 - 用户明确要求先跳过 review
 
+## 图谱工具协同规范（code-review-graph + Graphify）
+
+结论：两者可配合使用，推荐“结构图谱用 code-review-graph，跨域语义图谱用 Graphify”的双轨模式。
+
+1. code-review-graph（主）
+- 适用：Rust/TS 代码结构、调用链、影响面、变更审查。
+- 优势：增量快、查询稳定、结构化强（适合 PR review 与架构核验）。
+
+2. Graphify（辅）
+- 适用：跨仓库、跨类型资产（代码 + 文档 + 研究材料）的知识图谱与社区聚类。
+- 优势：可输出 `graphify-out/graph.json`、`GRAPH_REPORT.md`、HTML 树图，适合探索性分析。
+
+3. 协同使用顺序（默认）
+- 第一步：先用 code-review-graph 做精确定位（callers/callees/importers/影响半径）。
+- 第二步：再用 Graphify 做跨仓库语义探索（`query`/`path`/`explain`）。
+- 第三步：结论落文档时，保留两类证据：结构证据（code-review-graph）+ 语义证据（Graphify）。
+
+4. 本仓建议拓扑
+- 分仓维护 Graphify 图：`crates/`、`desktop-client/ironclaw/`、`claude-code-main/`、`codex-cli-main/`、`ironclaw-main/`、`claw-code/`。
+- 需要全局对比时，使用 Graphify merge 生成根目录 `graphify-out/merged-graph.json`。
+
+5. Graphify skill 可用性（官方）
+- 官方 skill 已可用，触发词：`/graphify`。
+- Copilot skill 安装位置：`~/.copilot/skills/graphify/SKILL.md`。
+- 在 agent 场景中可直接用 `/graphify <path>`、`/graphify <path> --update`、`/graphify query "..."`。
+
+6. 产物管理
+- `graphify-out/` 及其 cache 属可再生产物，默认不入库（见 `.gitignore` 规则）。
+
 ## GitHub PR 最小流程
 
 1. 先完成当前切片实现与最小充分验证。
