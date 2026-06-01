@@ -176,6 +176,20 @@ jobs:
         BASE="${{ github.event.pull_request.base.sha }}"
         python3 scripts/check_no_new_ironclaw_literal.py --base "$BASE" --head HEAD
 
+  e2e-hooks-bundle-check:
+    name: E2E hook bundle guard (tauri_plugin_webdriver gated)
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v6
+      with:
+        submodules: recursive
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: Reject ungated E2E hook references in desktop-client/src
+      run: python3 scripts/check_e2e_hooks_not_in_bundle.py
+
   codex-execpolicy-drift:
     name: ADR-132 verbatim drift guard (codex execpolicy)
     runs-on: ubuntu-latest
@@ -394,7 +408,7 @@ jobs:
     name: Code Style (fmt + clippy + deny)
     runs-on: ubuntu-latest
     if: always()
-    needs: [format, clippy, clippy-windows, deny-check, no-panics, claw-code-readonly, no-new-ironclaw-literal, blueprint-sync, codex-execpolicy-drift, codex-process-hardening-drift, codex-shell-command-drift, codex-protocol-drift, codex-utils-home-dir-drift, codex-utils-rustls-provider-drift, codex-net-proxy-drift, codex-async-utils-drift, codex-utils-string-drift, codex-utils-cache-drift, codex-utils-image-drift, codex-sandboxing-drift, codex-linux-sandbox-drift, codex-sandbox-windows-drift]
+    needs: [format, clippy, clippy-windows, deny-check, no-panics, claw-code-readonly, no-new-ironclaw-literal, e2e-hooks-bundle-check, blueprint-sync, codex-execpolicy-drift, codex-process-hardening-drift, codex-shell-command-drift, codex-protocol-drift, codex-utils-home-dir-drift, codex-utils-rustls-provider-drift, codex-net-proxy-drift, codex-async-utils-drift, codex-utils-string-drift, codex-utils-cache-drift, codex-utils-image-drift, codex-sandboxing-drift, codex-linux-sandbox-drift, codex-sandbox-windows-drift]
     steps:
       - run: |
           if [[ "${{ needs.format.result }}" != "success" || "${{ needs.clippy.result }}" != "success" || "${{ needs.deny-check.result }}" != "success" || "${{ needs.no-panics.result }}" != "success" || "${{ needs.claw-code-readonly.result }}" != "success" || "${{ needs.codex-execpolicy-drift.result }}" != "success" ]]; then
@@ -404,6 +418,10 @@ jobs:
           # no-new-ironclaw-literal is skipped on adr-114-class-b PRs (by design); skipped is acceptable but failure is not
           if [[ "${{ needs.no-new-ironclaw-literal.result }}" != "success" && "${{ needs.no-new-ironclaw-literal.result }}" != "skipped" ]]; then
             echo "ADR-114 grep guard failed: ${{ needs.no-new-ironclaw-literal.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.e2e-hooks-bundle-check.result }}" != "success" ]]; then
+            echo "E2E hook bundle guard failed: ${{ needs.e2e-hooks-bundle-check.result }}"
             exit 1
           fi
           if [[ "${{ needs.codex-process-hardening-drift.result }}" != "success" ]]; then
