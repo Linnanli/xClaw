@@ -9,6 +9,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use dasclaw_hooks::Hook;
 use ironclaw::agent::{Agent, AgentDeps};
 use ironclaw::app::{AppBuilder, AppBuilderFlags};
 use ironclaw::channels::web::log_layer::LogBroadcaster;
@@ -420,6 +421,7 @@ pub struct TestRigBuilder {
     extra_tools: Vec<Arc<dyn Tool>>,
     wasm_tools: Vec<WasmToolSpec>,
     keep_bootstrap: bool,
+    event_hooks: Vec<Arc<dyn Hook>>,
 }
 
 impl TestRigBuilder {
@@ -437,6 +439,7 @@ impl TestRigBuilder {
             extra_tools: Vec::new(),
             wasm_tools: Vec::new(),
             keep_bootstrap: false,
+            event_hooks: Vec::new(),
         }
     }
 
@@ -484,6 +487,12 @@ impl TestRigBuilder {
     /// Register additional custom tools (e.g. stub tools for testing).
     pub fn with_extra_tools(mut self, tools: Vec<Arc<dyn Tool>>) -> Self {
         self.extra_tools = tools;
+        self
+    }
+
+    /// Register test-only event hooks before the background agent starts.
+    pub fn with_hook(mut self, hook: Arc<dyn Hook>) -> Self {
+        self.event_hooks.push(hook);
         self
     }
 
@@ -556,6 +565,7 @@ impl TestRigBuilder {
             extra_tools,
             wasm_tools,
             keep_bootstrap,
+            event_hooks,
         } = self;
 
         // 1. Create temp dir + libSQL database + run migrations.
@@ -635,6 +645,10 @@ impl TestRigBuilder {
             .build_all()
             .await
             .expect("AppBuilder::build_all() failed in test rig");
+
+        for hook in event_hooks {
+            components.hooks.register(hook).await;
+        }
 
         // Clear the *owner* workspace bootstrap flag so tests don't get an
         // unexpected proactive greeting on startup (unless the test explicitly

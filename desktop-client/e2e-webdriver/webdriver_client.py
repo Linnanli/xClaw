@@ -333,6 +333,40 @@ def get_chat_stream_events(session_id: str) -> list[dict]:
     return raw if isinstance(raw, list) else []
 
 
+def clear_tauri_invokes(session_id: str) -> None:
+    """清空 DEV hook 捕获到的 Tauri invoke 调用。"""
+    execjs(
+        session_id,
+        "if (typeof window.__E2E_CLEAR_INVOKES === 'function') window.__E2E_CLEAR_INVOKES(); return true;",
+    )
+
+
+def get_tauri_invokes(session_id: str) -> list[dict]:
+    """回读 DEV hook 捕获到的 Tauri invoke 调用。"""
+    raw = execjs(
+        session_id,
+        "return typeof window.__E2E_GET_INVOKES === 'function' ? window.__E2E_GET_INVOKES() : [];",
+    )
+    return raw if isinstance(raw, list) else []
+
+
+def wait_tauri_invoke(
+    session_id: str,
+    command: str,
+    timeout: float = 30.0,
+    interval: float = 1.0,
+) -> Optional[dict]:
+    """轮询直到捕获到指定 Tauri command 的 invoke 调用。"""
+
+    def _check():
+        for item in get_tauri_invokes(session_id):
+            if isinstance(item, dict) and item.get("command") == command:
+                return item
+        return None
+
+    return poll(_check, timeout=timeout, interval=interval)
+
+
 def wait_chat_stream_finish(
     session_id: str,
     timeout: float = 180.0,

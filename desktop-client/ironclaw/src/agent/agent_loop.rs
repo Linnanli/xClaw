@@ -1056,6 +1056,7 @@ impl Agent {
                 let final_response = match self.hooks().run(&event).await {
                     Err(err) => {
                         tracing::warn!("BeforeOutbound hook blocked response: {}", err);
+                        self.respond_blocked_outbound(message).await;
                         return MessageAction::Continue;
                     }
                     Ok(dasclaw_hooks::HookOutcome::Continue {
@@ -1104,6 +1105,21 @@ impl Agent {
                 }
                 MessageAction::Continue
             }
+        }
+    }
+
+    async fn respond_blocked_outbound(&self, message: &IncomingMessage) {
+        let blocked_response = "Error: outbound response blocked by policy";
+        if let Err(e) = self
+            .channels
+            .respond(message, OutgoingResponse::text(blocked_response))
+            .await
+        {
+            tracing::error!(
+                channel = %message.channel,
+                error = %e,
+                "Failed to send blocked outbound response to channel"
+            );
         }
     }
 

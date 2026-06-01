@@ -93,6 +93,27 @@ describe('TauriChatTransport', () => {
     });
   });
 
+  it('uses currentThreadId for backend invoke when assistant-ui chatId is local', async () => {
+    const { getHandler } = setupListenCapture();
+    const transport = new TauriChatTransport({
+      currentThreadId: () => 'real-thread-uuid',
+    });
+
+    const stream = await transport.sendMessages({
+      chatId: '__LOCALID_abc123',
+      messages: [makeUserMessage('hello')],
+      abortSignal: undefined,
+    });
+
+    getHandler()!({ payload: { type: 'finish', threadId: 'real-thread-uuid' } });
+    await drainStream(stream);
+
+    expect(invokeMock).toHaveBeenCalledWith(
+      'send_chat_message',
+      expect.objectContaining({ threadId: 'real-thread-uuid' }),
+    );
+  });
+
   it('forwards text-delta / tool-* events as UIMessageChunk', async () => {
     const { getHandler } = setupListenCapture();
     const transport = new TauriChatTransport();

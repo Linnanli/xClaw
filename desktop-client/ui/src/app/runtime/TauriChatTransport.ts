@@ -21,7 +21,14 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { ChatTransport, UIMessage, UIMessageChunk, ChatRequestOptions } from 'ai';
+
+type TextMessagePart = { type: 'text'; text: string };
+type UIMessageLike = {
+  role: string;
+  parts?: ReadonlyArray<Record<string, unknown>>;
+};
+type UIMessageChunk = { type: string; [key: string]: unknown };
+type ChatRequestOptions = Record<string, unknown>;
 
 // ---------------------------------------------------------------------------
 // 后端事件 → UIMessageChunk 映射
@@ -116,13 +123,13 @@ function toUIMessageChunk(ev: BackendStreamEvent): UIMessageChunk | null {
 // ---------------------------------------------------------------------------
 
 /** 从 AI SDK `UIMessage[]` 提取最后一条 user 消息的纯文本内容。 */
-function extractUserContent(messages: readonly UIMessage[]): string {
+function extractUserContent(messages: readonly UIMessageLike[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
     if (m.role !== 'user') continue;
     const parts = m.parts ?? [];
     return parts
-      .filter((p): p is { type: 'text'; text: string } => p.type === 'text' && typeof (p as { text?: unknown }).text === 'string')
+      .filter((p): p is TextMessagePart => p.type === 'text' && typeof (p as { text?: unknown }).text === 'string')
       .map((p) => p.text)
       .join('');
   }
@@ -166,9 +173,7 @@ export function extractEnvelopeThreadId(payload: unknown): string | null {
  * 单窗口单活跃会话假设：同一时刻只有一个 thread 在流式输出。
  * 多线程并发场景下 `chat-stream` 需带 thread_id 标签，当前暂不处理。
  */
-export class TauriChatTransport<UI_MESSAGE extends UIMessage = UIMessage>
-  implements ChatTransport<UI_MESSAGE>
-{
+export class TauriChatTransport<UI_MESSAGE extends UIMessageLike = UIMessageLike> {
   private readonly modelIdFn: () => string | null;
   private readonly apiBaseUrlFn: () => string | null;
   private readonly apiKeyFn: () => string | null;
@@ -190,6 +195,7 @@ export class TauriChatTransport<UI_MESSAGE extends UIMessage = UIMessage>
   ): Promise<ReadableStream<UIMessageChunk>> {
     const { chatId, messages, abortSignal } = options;
     const content = extractUserContent(messages);
+    const backendThreadId = this.currentThreadIdFn() ?? chatId;
 
     let unlisten: UnlistenFn | null = null;
     let abortHandler: (() => void) | null = null;
@@ -258,7 +264,7 @@ export class TauriChatTransport<UI_MESSAGE extends UIMessage = UIMessage>
         // 3. invoke send_chat_message（异步启动 Agent，不等流完结）
         try {
           await invoke('send_chat_message', {
-            threadId: chatId,
+            threadId: backendThreadId,
             content,
             modelId: this.modelIdFn(),
             apiBaseUrl: this.apiBaseUrlFn(),
