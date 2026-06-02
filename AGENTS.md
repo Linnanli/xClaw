@@ -306,17 +306,6 @@ cargo sweep --time 3
 
 详细工作流（含 sccache、`cargo build -p desktop-client --lib` 增量编译）见 [desktop-client/README.md](desktop-client/README.md)。
 
-### 外部库使用
-
-- **先搜索项目中该库的现有用法**（`rg "libsql::" src/`），参考项目代码而非外部文档
-- **优先使用成熟社区库**，避免重复造轮子（如 `config-rs`、`reqwest`、`serde`）
-- 检查 `Cargo.toml` 中的依赖版本，注意 breaking changes
-- 分阶段实现，先验证核心功能编译通过
-
-### 编码标准参考
-
-详细的 Rust 编码规范、错误处理模式、测试代码示例和质量门禁脚本用法见 `.kiro/steering/rust-coding-standards.md`（手动引用）。
-
 ### 数据库访问层迁移策略（Admin Backend）
 
 Admin Backend 正在从 `tokio-postgres + deadpool-postgres` 逐步迁移到 **SQLx**。
@@ -425,45 +414,6 @@ COV_ALL_TARGETS=1 ./scripts/coverage.sh
 ```
 
 安装：`cargo install cargo-llvm-cov`
-
-### 测试文件组织
-
-```
-tests/
-├── {module}_unit_tests.rs           # 单元测试
-├── {module}_failure_tests.rs        # 失败路径测试
-├── {module}_integration_tests.rs    # 集成测试
-├── {module}_contract_tests.rs       # 契约测试
-├── {module}_security_audit_tests.rs # 安全审计测试
-├── {module}_reliability_tests.rs    # 可靠性测试
-├── {module}_regression_tests.rs     # 回归测试
-└── integration_smoke_tests.rs       # 编译+迁移+路由冒烟（全局唯一）
-```
-
-### 测试命名规范
-
-- 需求测试: `req_{module}_{id}_{description}`
-- 安全测试: `test_security_{attack_type}`
-- 失败路径: `test_failure_{scenario}`
-- 契约测试: `test_contract_{interface}_{case}`
-- 审计测试: `test_audit_{security_concern}`
-- 可靠性: `test_{failure_scenario}_recovery`
-- 回归测试: `test_{feature}_backward_compatibility`
-
-### 历史教训摘要
-
-以下是项目中真实发生过的测试盲区，新功能开发时必须警惕：
-
-| 盲区 | 教训 | 防护措施 |
-|------|------|---------|
-| DLP 失败路径缺失 | 测试只覆盖成功路径，降级逻辑允许原始消息发送 | 每个功能必须有失败路径测试 |
-| model-configs 404 | `cargo test` 通过但 `cargo build` 失败，迁移文件存在但未执行 | `integration_smoke_tests.rs` 三层防护 |
-| client-models 缺字段 | 测试主动断言了错误行为，把错误设计固化为"规范" | 契约测试从业务目标出发 |
-| SSE 事件名不匹配 | 测试用模拟数据，未验证真实后端事件格式 | 真实环境集成测试 + 参考已有实现 |
-| Tauri state not managed | 单元测试绕过 Tauri 状态注入，运行时 panic | 启动时序测试 + 冒烟测试 |
-| tokio-postgres JSONB 类型 | `row.get::<_, String>()` 对 JSONB 列运行时 panic，编译期不报错；`tokio::time::interval` 首次 tick 立即触发，启动即崩溃 | 写 `row.get` 前核对迁移文件中列的实际类型；启动时立即执行的后台任务必须有冒烟测试覆盖 |
-
-详细案例分析、代码示例和 E2E 测试模式见 `docs/testing-guide.md`。
 
 ### Snapshot 测试工作流（insta）
 
