@@ -31,6 +31,12 @@ const ALL_POINTS: &[HookPoint] = &[
 /// Minimal pass-through hook bound to all six lifecycle points.
 struct AllPointsHook;
 
+struct RecordingHook {
+    name: &'static str,
+    points: &'static [HookPoint],
+    calls: Arc<tokio::sync::Mutex<Vec<&'static str>>>,
+}
+
 #[async_trait]
 impl Hook for AllPointsHook {
     fn name(&self) -> &str {
@@ -54,6 +60,34 @@ impl Hook for AllPointsHook {
         _event: &HookEvent,
         _ctx: &HookContext,
     ) -> Result<HookOutcome, HookError> {
+        Ok(HookOutcome::ok())
+    }
+}
+
+#[async_trait]
+impl Hook for RecordingHook {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn hook_points(&self) -> &[HookPoint] {
+        self.points
+    }
+
+    fn timeout(&self) -> Duration {
+        Duration::from_secs(1)
+    }
+
+    fn failure_mode(&self) -> HookFailureMode {
+        HookFailureMode::FailClosed
+    }
+
+    async fn execute(
+        &self,
+        _event: &HookEvent,
+        _ctx: &HookContext,
+    ) -> Result<HookOutcome, HookError> {
+        self.calls.lock().await.push(self.name);
         Ok(HookOutcome::ok())
     }
 }
@@ -178,4 +212,38 @@ async fn req_hooks_60_per_hook_log_includes_hook_name_and_event_type() {
         logs_contain("hook_point=beforeToolCall"),
         "per-hook log must carry hook_point field"
     );
+}
+
+#[tokio::test]
+async fn req_hooks_lifecycle_order() {
+    let registry = HookRegistry::new();
+    let calls = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+
+    registry
+        .register(Arc::new(RecordingHook {
+            name: "first",
+            points: &[HookPoint::BeforeInbound],
+            calls: calls.clone(),
+        }))
+        .await;
+    registry
+        .register(Arc::new(RecordingHook {
+            name: "second",
+            points: &[HookPoint::BeforeInbound],
+            calls: calls.clone(),
+        }))
+        .await;
+
+    registry
+        .run(&HookEvent::Inbound {
+            user_id: "u".into(),
+            channel: "c".into(),
+            content: "in".into(),
+            thread_id: None,
+        })
+        .await
+        .expect("hooks should execute");
+
+    let actual = calls.lock().await.clone();
+    assert_eq!(actual, vec!["first", "second"]);
 }

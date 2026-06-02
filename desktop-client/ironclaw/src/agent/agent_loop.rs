@@ -1655,6 +1655,26 @@ impl Agent {
             Submission::Heartbeat => self.process_heartbeat().await,
             Submission::Summarize => self.process_summarize(session, thread_id).await,
             Submission::Suggest => self.process_suggest(session, thread_id).await,
+            Submission::TogglePlanMode => self.process_toggle_plan_mode(session, thread_id).await,
+            Submission::ApprovePlan { plan_id } => {
+                self.process_approve_plan(session, thread_id, &plan_id)
+                    .await
+            }
+            Submission::RevisePlan { plan_id, feedback } => {
+                self.process_revise_plan(
+                    message,
+                    tenant.clone(),
+                    session,
+                    thread_id,
+                    &plan_id,
+                    &feedback,
+                )
+                .await
+            }
+            Submission::ForkThread { at_turn } => {
+                self.process_fork_thread(message, session, thread_id, at_turn)
+                    .await
+            }
             Submission::JobStatus { job_id } => {
                 self.process_job_status(&tenant, job_id.as_deref()).await
             }
