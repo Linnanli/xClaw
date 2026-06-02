@@ -8,8 +8,8 @@
 #[cfg(test)]
 mod tests {
     use crate::ipc::chat::{
-        build_thread_control_message, usage_report_backend_user_id, FrontendAttachment,
-        SendMessageResponse, reject_blocked_scan,
+        build_thread_control_message, reject_blocked_scan, usage_report_backend_user_id,
+        FrontendAttachment, SendMessageResponse,
     };
     use crate::safety_bridge::SafetyBridge;
     use ironclaw::safety::{SafetyConfig, SafetyLayer};
