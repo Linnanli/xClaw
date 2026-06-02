@@ -8,17 +8,23 @@
 > 文件 + 符号/行号。凡标 ⚠️ 的为**核实后发现的真实缺口**（见 §10）。
 
 > **这份文档是"最终拿去执行"的吗？——定位说明（先读这段）。**
-> 它是**测试设计 / 计划文档**，不是已落库、点一下就全自动跑的测试套件。按"可执行程度"分三类：
+> 它最初是**测试设计 / 计划文档**；截至 2026-06-02，§1–§9 的 WebDriver 套件、§12
+> 的分层 IPC 场景，以及 §14.5 / §15.3 中一批 Rust 集成/单元测试已落地。按"可执行程度"
+> 分三类：
 > - **可直接照抄执行**：§0 的启动命令 + WebDriver 会话样板、§1–§7 七个场景的操作步骤与
 >   断言、§14.4-C 的"经 IPC 自查日志比顺序"示例——这些是具体到命令/代码片段、可手动或
 >   脚本化跑起来的，属于"现在就能执行"的部分。
-> - **设计 / 待落地为代码**：§12、§14.5、§15.3 列的 Rust 集成/单元测试（如提示词组装顺序
->   A-1~A-5、各顺序不变量）是**建议补的测试**，需要按命名落进对应测试族后才能跑——本任务
->   按约束**只设计、不写生产/测试代码**。
+> - **已落地但有边界**：§12 I-1~I-5 已由 #1053 覆盖；§15.3 A-1~A-5 已由 #1055
+>   覆盖；§14.5 的 DLP / 审批 / hook / sandbox 不变量也有代码级测试，但其中 DLP、hook、
+>   sandbox 仍保留更强断言缺口（见 §14.5 的 2026-06-02 状态表）。
+> - **仍待落地为代码**：§4 approve 分支当前 skip（#1056）；§14.4-C WebDriver 日志序
+>   断言（#1058）；完整 `send_chat_message` blocked 零副作用测试（#1059）；真实 hook
+>   生命周期顺序（#1057）；sandbox 真实逃逸/绕过样本（#1060）；以及 §15.3 A-6 的 E2E
+>   冒烟仍为可选补测。
 > - **结论 / 知识沉淀**：§10–§16 的缺口、适用性、日志分层等是判断与建议，供决策与后续排期，
 >   不直接"执行"。
 > 一句话：**作为"要执行什么、怎么执行、为什么这么设计"的依据，它是终稿级**；但要变成 CI 里
-> 一键回归的套件，还需按 §14.5 / §15.3 把建议测试**实现成代码**（那是下一步、不在本文档任务内）。
+> 一键回归的完整套件，仍需把上面的剩余缺口继续落到现有测试族。
 >
 > **GA 就绪度看 §16**。本文档已不止描述 e2e 测试，还沉淀了"距 GA 还差哪些工作"的执行路线。
 
@@ -142,6 +148,27 @@ def test_xxx(session_id):  # conftest 提供
     s = poll(lambda: snapshot(session_id) if snapshot(session_id)["composer"] > 0 else None, 60)
     # … 业务断言
 ```
+
+### 0.5 当前自动化落地状态（2026-06-02）
+
+`python3 -m pytest desktop-client/e2e-webdriver --collect-only -q` 当前可收集 **18 个**
+WebDriver 测试。`conftest.py` 会在 `127.0.0.1:4445` 未监听时整体 skip，避免把"未启动
+Tauri WebDriver"误报成产品失败。
+
+| 场景 | 当前状态 | 依赖 / 跟踪 |
+|---|---|---|
+| §1 引擎就绪与刷新韧性 | 已落地 | WebDriver + `get_engine_status` |
+| §2 Agent 基础执行 | 已落地但依赖 LLM 可达 | #998 |
+| §3 工具注册 / list_dir | 已落地但依赖 LLM 选中只读工具 | #1000 / #1009 |
+| §4 审批 fail-safe | card + deny 已落地；approve 分支 skip | #1001 / #1009；approve 补测 #1056 |
+| §5 DLP 出站脱敏 | 已落地 | 仍需日志序增强 #1058、完整零副作用 #1059 |
+| §6 会话持久化 | 已落地；核心断言看用户 marker 回放 | 发送路径仍受模型/后端可用性影响 |
+| §7 提示注入安全 | 已落地 | 纯自然语言 jailbreak 硬阻断仍看 #1021 |
+| §8 stream protocol | 已落地；依赖 dev hook + 模型产生 finish/reasoning | #1035 / #1036 / #1037 |
+| §9 thread id routing | 已落地；依赖 dev hook + finish frame | commit `dda38c71b`，暂无单独 issue |
+
+> `window.__E2E_GET_EVENTS` 是 dev-only hook，§8 / §9 因此只适合作为 dev build / CI
+> WebDriver 场景；release bundle 不应暴露该 hook。
 
 ---
 
@@ -307,6 +334,15 @@ assert denied, "拒绝后未出现 data-approved=false 横幅"
 **通过/失败判据**：
 - ✅ 写操作触发审批卡片且不自动执行；拒绝→`data-approved=false`，批准→`data-approved=true`。
 - ❌ Fail-Open：写文件未弹审批直接执行。
+
+**2026-06-02 落地状态**：
+
+- `test_write_tool_triggers_approval_card` 与 `test_deny_yields_approved_false` 已落地，覆盖
+  "需审批工具必须弹卡"与"拒绝后 `data-approved=false`"。
+- `test_approve_yields_approved_true` 当前显式 skip：approve 会真实写入 `e2e_probe.txt` 到
+  `desktop-client` 工作目录，造成跨用例污染。后续应先改为 sandbox/临时 cwd 或补 teardown，
+  再启用 approve 分支。跟踪 issue：#1056。
+- 因此本节现状是 **Fail-Safe 主干已覆盖，approve happy path 尚未进入自动回归**。
 
 > ⚠️ **环境变量缺口**：题目中的 `AGENT_AUTO_APPROVE_TOOLS=false` 在全仓
 > （`crates/` + `desktop-client/`）**无任何匹配**（见 §10-G3）。不能用它来断言
@@ -480,7 +516,7 @@ execjs(sid, "document.querySelector('button.aui-composer-send').click(); return 
 | G4 | **无纯自然语言 jailbreak 硬阻断** | `dasclaw_safety` 防御=secret 拦截（`scan_inbound_for_secrets`）+ 内容包裹（`wrap_for_llm`/`wrap_external_content`）+ 定界符中和（`Sanitizer`），[dasclaw_safety/src/lib.rs](../../crates/dasclaw_safety/src/lib.rs)；无"忽略规则/导出密钥"语义分类器 | 场景 7 对**不含密钥**的越权指令"被安全层拦截"的断言不成立。须降级为"不泄露系统提示/拒答"语义断言，或单列为待建能力。 |
 | G5 | ~~**`tauri-plugin-webdriver` 接线为试跑态、未固化**~~ ✅ 已修复 | [Cargo.toml:19](../Cargo.toml#L19) `tauri-plugin-webdriver = { version = "0.2", optional = true }` + [Cargo.toml:114](../Cargo.toml#L114) `webdriver = ["dep:tauri-plugin-webdriver"]`；[src/lib.rs](../src/lib.rs) 接线用 `#[cfg(all(debug_assertions, feature = "webdriver"))]` 双重保护。激活命令 `cargo tauri dev -f webdriver` 已稳定。 |
 
-> **§16 已把 G4/G6-G9 升级为 GA P0/P1 工作项；G1/G2/G3/G5 在 PR #1013 #1014 #1018 #1027 #1028 闭合后已视为已交付。**
+> **§16 已把 G4 升级为 GA P0 工作项；G6-G9 已由 #1055 / #1024 闭合；G1/G2/G3/G5 在 PR #1013 #1014 #1018 #1027 #1028 闭合后已视为已交付。**
 
 ---
 
@@ -776,6 +812,16 @@ RUST_LOG=desktop_client=debug,ironclaw=debug,dasclaw_hooks=trace cargo tauri dev
 | sandbox 不可绕过 | crate 集成 | `dasclaw_sandbox` tests | `test_security_sandbox_no_bypass` |
 | 端到端"该拦的拦/该批的批" | E2E（本文 §4/§5/§7） | WebDriver | 见各场景断言 |
 
+**2026-06-02 落地状态与剩余边界**：
+
+| 不变量 | #1055 / 当前代码状态 | 仍缺什么 | 跟踪 |
+|---|---|---|---|
+| DLP 先于派发、被拦零派发 | 已有 `req_chat_dlp_block_before_dispatch`，覆盖 `reject_blocked_scan` seam + toy sender 计数 | 尚未覆盖完整 `send_chat_message` 路径下的零副作用；WebDriver 也尚未做 `ic_search_logs` 顺序断言 | #1059 / #1058 |
+| 审批先于工具执行 | 已有 `req_approval_gate_before_tool_exec`，用 `RecordingTool` 证明首个需审批工具会中断，后续工具未执行 | WebDriver approve 分支仍 skip，未覆盖 `data-approved=true` happy path | #1056 |
+| Hook 生命周期顺序 | 已有 `req_hooks_lifecycle_order`，但它实际验证同一 `HookPoint::BeforeInbound` 内的注册顺序 | 尚未验证 `PreToolUse -> tool execution -> PostToolUse` 真实生命周期顺序 | #1057 |
+| sandbox 不可绕过 | 已有 `test_security_sandbox_no_bypass`，覆盖 enterprise gate pure decision fail-closed | 尚未覆盖真实或半真实进程级逃逸/绕过样本 | #1060 |
+| 端到端"该拦的拦/该批的批" | §4 card/deny、§5 DLP、§7 注入防御已有 WebDriver 覆盖 | approve 分支、日志序、部分场景 LLM/dev hook 依赖仍需显式管理 | #1056 / #1058 |
+
 ### 14.6 结论
 
 - **完备性（是否具备能力 + 结果是否 Fail-Safe）**：**适合**用 E2E 测，本文 §1–§7 即是。
@@ -823,7 +869,7 @@ loop 的入口唯一**：
 并带**安全特性**：身份/配置文件用 `read_primary()` 防跨 scope 身份串味；`BOOTSTRAP.md`
 属 `SYSTEM_PROMPT_FILES`，写入会被注入扫描（high/critical → 拒绝）。
 
-### 15.2 现状：提示词组装的测试**部分存在、但有缺口**（grounded）
+### 15.2 现状：提示词组装测试已由 #1055 补齐主干（grounded）
 
 代码图反查到的现有相关测试：
 
@@ -833,38 +879,44 @@ loop 的入口唯一**：
 | `workspace_integration.rs:394`（`system_prompt()`） | 组装可跑通 | [ironclaw/tests/workspace_integration.rs](../ironclaw/tests/workspace_integration.rs) |
 | `test_system_prompt_file_matching` / `test_non_system_prompt_file_skips_scanning` | **哪些文件算系统提示文件**（注入扫描范围） | workspace/mod.rs |
 
-**真实缺口（代码图证实当前无对应断言）**：
-- **G6 组装顺序无断言**：没有测试断言 6 段的**相对顺序**（Bootstrap 必须最前、身份按
-  AGENTS→SOUL→USER→IDENTITY）。顺序回归不会被现有测试发现。
-- **G7 group-chat 上下文抑制无断言**：`is_group_chat=true` 时 `MEMORY.md` 与心理画像
-  **必须不出现**——这是隐私不变量，当前无测试守护。
-- **G8 profile 分层门控无断言**：Tier 2 仅在 `confidence > 0.6` 注入，无测试覆盖
-  "低置信度不注入 Tier 2"。
-- **G9 bootstrap 仪式无端到端断言**：首启注入 + 完成后抑制（`profile_onboarding_completed`
-  已置位则不再注入）这条状态机无测试。
+**2026-06-02 更新**：#1055 已把 G6-G9 对应的主干断言落到
+`desktop-client/ironclaw/src/workspace/mod.rs` 测试中：
 
-### 15.3 新增 Agent 能力测试场景（穿透提示词组装，落到现有测试族）
+| 原缺口 | #1055 落地测试 | 当前状态 |
+|---|---|---|
+| G6 组装顺序无断言 | `req_prompt_assembly_section_order` | 已闭合 |
+| G7 group-chat 上下文抑制无断言 | `req_prompt_group_chat_suppresses_memory_profile` | 已闭合 |
+| G8 profile 分层门控无断言 | `req_prompt_profile_tier_gate` | 已闭合 |
+| G9 bootstrap 仪式无端到端断言 | `req_prompt_bootstrap_ritual_once` | 已闭合 |
+| system-prompt 文件注入防御 | `test_security_prompt_file_injection_rejected` | 已闭合 |
 
-按 AGENTS.md「不新建平行测试」，下列场景补进 `ironclaw/tests/` 既有提示词/workspace 族：
+剩余边界：A-6 的 WebDriver 冒烟仍可选；它不替代 A-1~A-5 的 Rust 断言，只用于确认
+普通消息确实进入 agent loop，并可与 §14.4-C / #1058 的日志序断言合并实现。
+
+### 15.3 Agent 能力测试场景状态（穿透提示词组装，落到现有测试族）
+
+按 AGENTS.md「不新建平行测试」，下列场景已补进既有 workspace / prompt 测试族或保留为
+可选 E2E：
 
 - **A-1（组装顺序与分层）**：构造含全部文件的 workspace，调 `system_prompt_for_context(false)`，
   断言输出中各 `##` 段**出现顺序**为 Bootstrap → Agent Instructions → Core Values →
   User Context → Identity → Tool Notes → Long-Term Memory → Today/Yesterday → Interaction
-  Style。命名 `req_prompt_assembly_section_order`。
+  Style。命名 `req_prompt_assembly_section_order`。**已由 #1055 落地**。
 - **A-2（group-chat 抑制）**：同一 workspace 分别 `false` / `true` 调用，断言
   `is_group_chat=true` 的输出**不含** `Long-Term Memory` 与 `Interaction Style`。
-  命名 `req_prompt_group_chat_suppresses_memory_profile`。
+  命名 `req_prompt_group_chat_suppresses_memory_profile`。**已由 #1055 落地**。
 - **A-3（profile Tier 门控）**：低 confidence profile 断言只出 Tier 1 摘要、不出 Tier 2；
-  高 confidence 出 Tier 2。命名 `req_prompt_profile_tier_gate`。
+  高 confidence 出 Tier 2。命名 `req_prompt_profile_tier_gate`。**已由 #1055 落地**。
 - **A-4（bootstrap 仪式状态机）**：首启注入 `First-Run Bootstrap`；置 `onboarding_completed`
   后即便 `BOOTSTRAP.md` 仍在也**不再注入**（断言 warn 日志 + 输出不含该段）。
-  命名 `req_prompt_bootstrap_ritual_once`。
+  命名 `req_prompt_bootstrap_ritual_once`。**已由 #1055 落地**。
 - **A-5（system-prompt 文件注入防御）**：向 `BOOTSTRAP.md` 写入含注入载荷的内容，断言
   被扫描**拒绝**（high/critical），组装结果不含被注入文本。命名
   `test_security_prompt_file_injection_rejected`（与 §7 提示注入呼应，但这是**写入侧**硬防御）。
+  **已由 #1055 落地**。
 - **A-6（E2E 冒烟，可选）**：WebDriver 发一条普通消息后，经 `ic_search_logs` 确认进入
   agent loop 的日志出现（§14.4），间接验证"提示词已组装并喂入 agent"——黑盒只做存在性
-  冒烟，**顺序/分层断言交给 A-1~A-4 的 Rust 测试**。
+  冒烟，**顺序/分层断言交给 A-1~A-4 的 Rust 测试**。可与 #1058 合并。
 
 ### 15.4 代码图驱动的"Agent 能力 → 测试形态"覆盖矩阵
 
@@ -872,25 +924,24 @@ loop 的入口唯一**：
 
 | Agent 能力 | 代码图定位（引擎侧） | 现有测试 | 建议补测 |
 |---|---|---|---|
-| 提示词组装 | `system_prompt_for_context_inner` | 仅 scope 隔离 | **A-1~A-5**（顺序/抑制/门控/仪式/注入） |
+| 提示词组装 | `system_prompt_for_context_inner` | scope 隔离 + #1055 A-1~A-5 | A-6 E2E 冒烟可选（可并入 #1058） |
 | Agent 主循环派发 | `agent/dispatcher.rs` | 部分 | 集成：提示词→工具调用→结果回灌闭环 |
 | 工具注册/发现 | §3 + `tools/registry.rs` | 单测 | §3 E2E + 注册数日志断言（补 G2） |
 | 工具审批 gate | §4 + 审批 seam | 部分 | §4 E2E + `req_approval_gate_before_tool_exec` |
-| Hook 生命周期 | `dasclaw_hooks` | crate 测试 | `req_hooks_lifecycle_order`（§14.5） |
+| Hook 生命周期 | `dasclaw_hooks` | crate 测试 | 真实 `PreToolUse -> exec -> PostToolUse` 顺序（#1057） |
 | 记忆读写 | `tools/builtin/memory.rs` | 单测 | I-类集成：写入→提示词注入闭环（接 A-1） |
 | 计划模式/Fork | §12 I-1 | 部分 | I-1 集成 |
-| 沙箱不可绕过 | `dasclaw_sandbox` | crate 测试 | `test_security_sandbox_no_bypass`（§14.5） |
+| 沙箱不可绕过 | `dasclaw_sandbox` | pure decision 测试 | 真实逃逸/绕过样本（#1060） |
 
-> **小结**：① **提示词组装有测试，但只测了"跨 scope 不串味"这一个安全切面，缺组装
-> 顺序/分层/抑制/门控/写入注入防御**（G6–G9，已在 §15.3 给出补测）。② Agent 能力完备性
-> 不能只靠黑盒 E2E——E2E 做"能力存在 + 结果安全"的冒烟，**组装顺序、profile 门控、
-> bootstrap 状态机这类内部不变量必须用 Rust 集成测试在 `system_prompt_for_context_inner`
-> 这个唯一接缝上断言**。③ 本节所有定位（组装函数、注入入口、现有测试、缺口）均由
-> code-review-graph + grep 双证，未凭印象。
+> **小结**：① **提示词组装主干已由 #1055 补齐**，G6–G9 不再是开放缺口；A-6 只是
+> E2E 冒烟增强。② Agent 能力完备性仍不能只靠黑盒 E2E——E2E 做"能力存在 + 结果安全"的
+> 冒烟，**组装顺序、profile 门控、bootstrap 状态机这类内部不变量必须用 Rust 集成测试在
+> `system_prompt_for_context_inner` 这个唯一接缝上断言**。③ 本节所有定位（组装函数、注入入口、
+> 现有测试、缺口）均由 code-review-graph + grep 双证，未凭印象。
 
 ---
 
-## 16. GA 就绪度评估与剩余 epic 路线（2026-05-31 评估）
+## 16. GA 就绪度评估与剩余 epic 路线（2026-06-02 更新）
 
 ### 16.1 当前可发布状态结论
 
@@ -901,8 +952,8 @@ loop 的入口唯一**：
 
 1. **功能广度缺 60%**：仅覆盖 5 个 IPC 命令族，剩余 9 族（记忆·技能·扩展·任务·日程·日志·工作区·文件·认证）未纳入真链路验证。
 2. **UX 阻断缺陷 2 个**：#1015（webview reload ~10s IPC 延迟）、#1016（冷启动 60-120s 才持久化）——第一印象灾难。
-3. **安全防御不完备**：#1021（纯自然语言 jailbreak 无硬阻断，仅靠系统提示软拒）、#1024（提示词组装顺序无测试断言）。
-4. **数据可信度缺陷**：#955（libsql 会话导出/备份未实现）、审计日志缺完整性验证。
+3. **安全防御不完备**：#1021（纯自然语言 jailbreak 无硬阻断，仅靠系统提示软拒）；#1057 / #1059 / #1060 保留更强执行顺序与 fail-closed 证明。
+4. **数据可信度缺陷**：#955（libsql 会话导出/备份未实现）、#1058（审计日志顺序 / 完整性断言未进入 WebDriver 回归）。
 
 **结论**：已交付"用户能安心对话且系统安全的内核"；待补"企业可信赖、功能齐全、体验顺畅的正式版"。
 
@@ -933,19 +984,22 @@ loop 的入口唯一**：
 | #1016 | 冷启动消息延迟持久化 60-120s | 用户首次发消息感觉"像没发出去"→ 灾难首印象 | desktop-client 数据流管道优化 |
 | #1015 | webview reload 后 IPC 通道延迟 ~10s | 刷新页面卡顿，信任下降 | Tauri IPC 连接池 / 心跳管理优化 |
 
-#### C. 安全防御缺陷（2 个进度项）
+#### C. 安全防御与执行顺序缺口
 
 | Issue | 缺陷 | 现状 | 补修方案 |
 |---|---|---|---|
 | #1021 | 纯自然语言 jailbreak 无硬阻断 | 仅靠系统提示软拒（G4）；含密钥越权被 §5 截断 | 补语义分类器或升级纯 LLM 拒答；§7 可降级为"助手不泄露系统提示"语义断言 |
-| #1024 | 提示词组装顺序无测试断言 | G6-G9：组装/分层/门控/bootstrap 仪式缺测（§15.2） | 补进 `ironclaw/tests/` 的 A-1~A-5 Rust 集成测试（§15.3） |
+| #1024 | 提示词组装顺序无测试断言 | **已由 #1055 闭合**：A-1~A-5 已落地（§15.2 / §15.3） | 无剩余主干缺口；A-6 E2E 冒烟可并入 #1058 |
+| #1057 | Hook 生命周期顺序未真实验证 | 当前 `req_hooks_lifecycle_order` 只测同 HookPoint 注册顺序 | 补 `PreToolUse -> tool execution -> PostToolUse` 调用序记录测试 |
+| #1059 | DLP blocked 路径还不是完整 command 级零副作用断言 | #1055 只覆盖 `reject_blocked_scan` seam + toy sender | 补完整 `send_chat_message` 或等价 seam，断言无持久化 / 无 skill detection / 无 `msg_sender.send` |
+| #1060 | sandbox 只有 pure decision fail-closed | #1055 未覆盖真实进程级逃逸/绕过样本 | 补 symlink / nested path / read-only subpath 等真实或半真实样本 |
 
 #### D. 数据/合规缺陷
 
 | Issue | 缺陷 | 企业影响 | 补修方案 |
 |---|---|---|---|
 | #955 | libsql 会话导出/备份未实现 | 用户数据无迁移通道 → 厂商锁定感 | 新增 `export_session` / `backup_session` 命令 + E2E |
-| 待开 | 审计日志完整性验证缺失 | 合规审查无证链 | 补 §14.4 日志序断言进 CI；补 `ic_export_logs` 命令 |
+| #1058 | 审计日志顺序 / 完整性验证缺失 | 合规审查无证链 | `ic_export_logs` 已存在；补 §14.4-C 的 `ic_search_logs` / `ic_filter_logs` 日志序断言进 WebDriver/CI |
 
 ### 16.3 P0/P1/P2 路线表
 
@@ -958,10 +1012,14 @@ loop 的入口唯一**：
 | **P0** | 记忆 CRUD E2E | 待开 | 功能验证 | §13 记忆族命令级集成测试 |
 | **P0** | 技能安装 E2E | 待开 | 功能验证 | §13 技能族命令级集成测试 |
 | **P0** | 审批规则配置面 E2E | #608 | 功能/UX | §1-§7 扩展或命令级 + 前端联调 |
-| **P1** | 提示词组装顺序 A-1~A-5 | #1024 | 安全不变量 | `ironclaw/tests/` Rust 集成（§15.3） |
+| **P1** | WebDriver approve 分支补回归 | #1056 | 安全/UX 不变量 | sandbox/临时 cwd + `data-approved=true` 断言 |
+| **P1** | Hook 生命周期真实顺序 | #1057 | 安全不变量 | `PreToolUse -> exec -> PostToolUse` 记录器测试 |
+| **P1** | DLP 日志序审计 | #1058 | 数据/安全验证 | §14.4-C 日志序断言进 WebDriver/CI |
+| **P1** | DLP blocked 完整零副作用 | #1059 | 安全不变量 | 完整 `send_chat_message` 或等价 seam 断言 |
+| **P1** | sandbox 真实绕过样本 | #1060 | 安全不变量 | 真实/半真实逃逸样本 + fail-closed |
 | **P1** | Extension setup 流程 E2E | 待开 | 功能验证 | §13 扩展族 |
 | **P1** | 工作区 + Git 冒烟 | 待开 | 功能验证 | §13 工作区族 |
-| **P1** | 日志审计完整性 | 待开 | 数据验证 | §14.4 日志序断言进 CI + `ic_export_logs` |
+| **P1** | 提示词组装 A-6 E2E 冒烟 | 可并入 #1058 | 可选验证 | 经日志确认普通消息进入 agent loop |
 | **P2** | 任务管理 UI E2E | 待开 | 功能验证 | §13 任务族 |
 | **P2** | 日程 UI E2E | 待开 | 功能验证 | §13 日程族 |
 | **P2** | 文件 Undo E2E | 待开 | 功能验证 | §13 文件操作族 |
@@ -973,10 +1031,10 @@ loop 的入口唯一**：
 
 本节**不是平行清单**，而是把已有各节内容升级为"面向 GA 发布的执行排期"：
 
-- **§10 缺口表 G1-G5 现状**：G1/G2/G3/G5 ✅ 已闭合；G4 → §16.3 P0；G6-G9 → §16.3 P1（A-1~A-5）。
-- **§13 IPC 命令矩阵**：已覆盖 5 族（~40%）即基线；待补 9 族（~60%）即 §16.3 P0/P1 的"功能验证"工作项；新增命令（如 `export_session`、`ic_export_logs`）落地后需扩展 §13。
+- **§10 缺口表 G1-G5 现状**：G1/G2/G3/G5 ✅ 已闭合；G4 → §16.3 P0；G6-G9 已由 #1055 / #1024 闭合。
+- **§13 IPC 命令矩阵**：已覆盖 5 族（~40%）即基线；待补 9 族（~60%）即 §16.3 P0/P1 的"功能验证"工作项；新增命令（如 `export_session`）落地后需扩展 §13，已存在但未进回归的日志命令（如 `ic_export_logs`）需纳入日志族验证。
 - **§12 分层集成 I-1~I-5**：是 §16.3 表中"功能验证"工作项的范式；后续补记忆·技能·日程命令时复用同一模板，**不新建平行测试**。
-- **§15.3 A-1~A-5**：直接落进 §16.3 表 P1"提示词组装顺序"行；测试名与命名规范已在 §15.3 给出。
+- **§15.3 A-1~A-5**：已由 #1055 落地；A-6 E2E 冒烟可与 #1058 的日志序断言合并。
 
 ### 16.5 术语
 
