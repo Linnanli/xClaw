@@ -19,6 +19,7 @@ use tracing::Instrument;
 
 use crate::data_reporter::ConversationAttachment;
 use crate::safety_attachment_scanner::{AttachmentDecision, AttachmentScanner};
+use crate::safety_bridge::BridgeScanResult;
 use crate::state::EngineState;
 use crate::vercel_ui_protocol::VercelUIStream;
 
@@ -129,16 +130,7 @@ pub async fn send_chat_message(
         "send_chat_message.scan_user_input.end"
     );
 
-    if scan_result.was_blocked {
-        tracing::warn!(
-            message_id = %message_id,
-            thread_id = %thread_id,
-            "Message blocked by SafetyBridge"
-        );
-        return Err(scan_result
-            .block_reason
-            .unwrap_or_else(|| "消息包含敏感信息，已被安全策略拦截".to_string()));
-    }
+    reject_blocked_scan(&scan_result, &message_id, &thread_id)?;
 
     let dlp_redacted_stats = dlp_stats
         .map(|stats| {
@@ -289,6 +281,26 @@ pub async fn send_chat_message(
     })
 }
 
+pub(crate) fn reject_blocked_scan(
+    scan_result: &BridgeScanResult,
+    message_id: &str,
+    thread_id: &str,
+) -> Result<(), String> {
+    if !scan_result.was_blocked {
+        return Ok(());
+    }
+
+    tracing::warn!(
+        message_id = %message_id,
+        thread_id = %thread_id,
+        "Message blocked by SafetyBridge"
+    );
+    Err(scan_result
+        .block_reason
+        .clone()
+        .unwrap_or_else(|| "消息包含敏感信息，已被安全策略拦截".to_string()))
+}
+
 #[tauri::command]
 pub async fn ic_interrupt_thread(
     state: State<'_, EngineState>,
@@ -406,15 +418,25 @@ async fn send_thread_control_message(
     thread_id: &str,
     content: &str,
 ) -> Result<(), String> {
-    let msg = IncomingMessage::new("tauri", &state.scope_id, content)
-        .with_thread(thread_id)
-        .with_owner_id(&state.scope_id);
-
     state
         .msg_sender
-        .send(msg)
+        .send(build_thread_control_message(
+            &state.scope_id,
+            thread_id,
+            content,
+        ))
         .await
         .map_err(|e| format!("Failed to send thread control message: {}", e))
+}
+
+pub(crate) fn build_thread_control_message(
+    scope_id: &str,
+    thread_id: &str,
+    content: &str,
+) -> IncomingMessage {
+    IncomingMessage::new("tauri", scope_id, content)
+        .with_thread(thread_id)
+        .with_owner_id(scope_id)
 }
 
 fn build_message_metadata(

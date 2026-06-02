@@ -41,6 +41,35 @@ impl SubmissionParser {
         if lower == "/suggest" {
             return Submission::Suggest;
         }
+        if lower == "/plan-mode" {
+            return Submission::TogglePlanMode;
+        }
+        if let Some(plan_id) = lower.strip_prefix("/approve-plan ") {
+            let plan_id = plan_id.trim();
+            if !plan_id.is_empty() {
+                return Submission::ApprovePlan {
+                    plan_id: plan_id.to_string(),
+                };
+            }
+        }
+        if let Some(rest) = trimmed.strip_prefix("/revise-plan ") {
+            let mut parts = rest.splitn(2, char::is_whitespace);
+            if let (Some(plan_id), Some(feedback)) = (parts.next(), parts.next()) {
+                let plan_id = plan_id.trim();
+                let feedback = feedback.trim();
+                if !plan_id.is_empty() && !feedback.is_empty() {
+                    return Submission::RevisePlan {
+                        plan_id: plan_id.to_string(),
+                        feedback: feedback.to_string(),
+                    };
+                }
+            }
+        }
+        if let Some(at_turn) = lower.strip_prefix("/fork ")
+            && let Ok(at_turn) = at_turn.trim().parse::<usize>()
+        {
+            return Submission::ForkThread { at_turn };
+        }
         if lower == "/thread new" || lower == "/new" {
             return Submission::NewThread;
         }
@@ -271,6 +300,29 @@ pub enum Submission {
     /// Suggest next steps based on the current thread.
     Suggest,
 
+    /// Toggle plan mode on the current thread.
+    TogglePlanMode,
+
+    /// Approve a pending plan by ID.
+    ApprovePlan {
+        /// Plan ID supplied by the UI.
+        plan_id: String,
+    },
+
+    /// Ask the agent to revise a pending plan using user feedback.
+    RevisePlan {
+        /// Plan ID supplied by the UI.
+        plan_id: String,
+        /// User feedback for the revision turn.
+        feedback: String,
+    },
+
+    /// Fork the current thread at a specific turn.
+    ForkThread {
+        /// Turn index to fork from.
+        at_turn: usize,
+    },
+
     /// Check job status. No job_id shows all jobs; with job_id shows a specific job.
     JobStatus {
         /// Optional job ID (UUID or short prefix). If None, shows all jobs.
@@ -367,6 +419,10 @@ impl Submission {
                 | Self::Heartbeat
                 | Self::Summarize
                 | Self::Suggest
+                | Self::TogglePlanMode
+                | Self::ApprovePlan { .. }
+                | Self::RevisePlan { .. }
+                | Self::ForkThread { .. }
                 | Self::JobStatus { .. }
                 | Self::JobCancel { .. }
                 | Self::SystemCommand { .. }
@@ -553,6 +609,30 @@ mod tests {
     fn test_parser_suggest() {
         let submission = SubmissionParser::parse("/suggest");
         assert!(matches!(submission, Submission::Suggest));
+    }
+
+    #[test]
+    fn req_plan_fork_control_commands_parse_to_executable_submissions() {
+        assert!(matches!(
+            SubmissionParser::parse("/plan-mode"),
+            Submission::TogglePlanMode
+        ));
+
+        assert!(matches!(
+            SubmissionParser::parse("/approve-plan plan-1"),
+            Submission::ApprovePlan { plan_id } if plan_id == "plan-1"
+        ));
+
+        assert!(matches!(
+            SubmissionParser::parse("/revise-plan plan-1 add more tests"),
+            Submission::RevisePlan { plan_id, feedback }
+                if plan_id == "plan-1" && feedback == "add more tests"
+        ));
+
+        assert!(matches!(
+            SubmissionParser::parse("/fork 2"),
+            Submission::ForkThread { at_turn: 2 }
+        ));
     }
 
     #[test]

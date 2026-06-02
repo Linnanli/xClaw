@@ -101,6 +101,28 @@ fn req_dasclaw_exec_windows_enterprise_fail_closed_when_kernel_setup_incomplete(
 }
 
 #[test]
+fn test_security_sandbox_no_bypass() {
+    let mut config = enterprise_windows_config();
+    config
+        .read_only_subpaths
+        .push(PathBuf::from("/workspace/.git/hooks"));
+
+    for (sandbox_type, setup_complete) in [
+        (SandboxType::None, true),
+        (SandboxType::WindowsRestrictedToken, false),
+        (SandboxType::MacosSeatbelt, false),
+        (SandboxType::LinuxSeccomp, false),
+    ] {
+        let outcome = check_enterprise_gate(&config, sandbox_type, setup_complete);
+        assert_eq!(
+            outcome,
+            EnterpriseGateOutcome::DenyNoKernelSandbox,
+            "enterprise carve-out enforcement must fail closed before process dispatch for {sandbox_type:?}"
+        );
+    }
+}
+
+#[test]
 fn req_dasclaw_exec_windows_enterprise_allow_when_no_carveouts() {
     // OQ-W3-3 sign-off 2026-05-11+：原 PR-W1+W2 用
     // `writable_roots.is_empty()` 做 gate signal 是错的——WorkspaceWrite

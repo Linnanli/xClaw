@@ -7,8 +7,15 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::ipc::chat::{usage_report_backend_user_id, FrontendAttachment, SendMessageResponse};
+    use crate::ipc::chat::{
+        build_thread_control_message, reject_blocked_scan, usage_report_backend_user_id,
+        FrontendAttachment, SendMessageResponse,
+    };
+    use crate::safety_bridge::SafetyBridge;
+    use ironclaw::safety::{SafetyConfig, SafetyLayer};
+    use std::sync::Arc;
     use std::sync::RwLock;
+    use tokio::sync::mpsc;
     use uuid::Uuid;
 
     // =========================================================================
@@ -223,5 +230,58 @@ mod tests {
             .expect_err("poisoned backend user id lock should fail");
 
         assert_eq!(error, "后台用户身份读取失败，跳过费用上报");
+    }
+    #[tokio::test]
+    async fn req_chat_dlp_block_before_dispatch() {
+        let safety = Arc::new(SafetyLayer::new(&SafetyConfig {
+            max_output_length: 100_000,
+            injection_check_enabled: true,
+        }));
+        let bridge = SafetyBridge::new(safety, None, None);
+        let scan = bridge.scan_user_input("send ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx onward");
+        let (tx, mut rx) = mpsc::channel::<ironclaw::channels::IncomingMessage>(1);
+
+        assert!(scan.was_blocked, "secret-bearing input must be blocked");
+        let error = match reject_blocked_scan(&scan, "msg-1", "thread-a") {
+            Ok(()) => {
+                tx.send(ironclaw::channels::IncomingMessage::new(
+                    "tauri", "owner-1", "secret",
+                ))
+                .await
+                .expect("test channel should accept messages");
+                String::new()
+            }
+            Err(error) => error,
+        };
+
+        assert!(error.contains("密钥") || error.contains("secret"));
+        assert!(
+            rx.try_recv().is_err(),
+            "blocked scan must not enqueue a message"
+        );
+    }
+
+    #[test]
+    fn req_chat_i4_interrupt_control_message_targets_existing_thread() {
+        let msg = build_thread_control_message("owner-1", "thread-a", "/interrupt");
+
+        assert_eq!(msg.channel, "tauri");
+        assert_eq!(msg.user_id, "owner-1");
+        assert_eq!(msg.owner_id, "owner-1");
+        assert_eq!(msg.thread_id.as_deref(), Some("thread-a"));
+        assert_eq!(msg.conversation_scope(), Some("thread-a"));
+        assert_eq!(msg.content, "/interrupt");
+    }
+
+    #[test]
+    fn req_chat_i4_finalize_thread_enqueues_conversation_report() {
+        let tracker = crate::conversation_tracker::ConversationTracker::new("owner-1".to_string());
+        let reporter = crate::data_reporter::DataReporter::new(String::new(), String::new());
+
+        tracker.record_user_message("thread-a", "hello", false, &[]);
+        tracker.record_assistant_message("thread-a", "done", Some("model-a"), 3, 2);
+        tracker.finish_thread("thread-a", &reporter);
+
+        assert_eq!(reporter.queue_len(), 1);
     }
 }
