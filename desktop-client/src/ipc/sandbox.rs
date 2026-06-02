@@ -248,4 +248,33 @@ mod tests {
         assert!(r.dasclaw_home.is_none());
         assert!(r.action_hint.is_none());
     }
+
+    #[tokio::test]
+    async fn req_sandbox_i2_smoke_and_status_share_backend_contract() {
+        let status = ic_sandbox_status().await.expect("status");
+        let smoke = ic_sandbox_smoke_test().await.expect("smoke");
+
+        assert!([
+            "none",
+            "macos_seatbelt",
+            "linux_seccomp",
+            "windows_restricted_token",
+            "unknown",
+        ]
+        .contains(&status.backend.as_str()));
+        assert!([
+            "none",
+            "macos_seatbelt",
+            "linux_seccomp",
+            "windows_restricted_token"
+        ]
+        .contains(&smoke.backend.as_str()));
+
+        if smoke.success {
+            assert_eq!(smoke.stdout, "dasclaw");
+            assert!(smoke.note.is_none());
+        } else {
+            assert!(smoke.note.is_some());
+        }
+    }
 }
