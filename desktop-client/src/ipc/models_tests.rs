@@ -6,6 +6,8 @@
 //! - 安全审计测试：API Key 不泄露
 
 use super::models::*;
+use wiremock::matchers::{body_json, header, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 // ============================================================================
 // 单元测试 - 正常路径
@@ -231,4 +233,64 @@ fn test_audit_custom_model_debug_output_contains_key() {
         debug_output.contains("sk-secret-key-12345"),
         "Debug 输出包含 api_key（注意：不要在生产日志中使用 Debug 打印 CustomModel）"
     );
+}
+
+#[tokio::test]
+async fn req_models_i5_invalid_model_connection_returns_recoverable_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(header("authorization", "Bearer test-key"))
+        .and(body_json(serde_json::json!({
+            "model": "invalid-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 5,
+        })))
+        .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+            "error": {"message": "model not found"}
+        })))
+        .mount(&server)
+        .await;
+
+    let result = test_model_connection(
+        server.uri(),
+        "test-key".to_string(),
+        "invalid-model".to_string(),
+    )
+    .await
+    .expect("HTTP error status should be returned as recoverable payload");
+
+    assert_eq!(result["success"], false);
+    assert_eq!(result["status"], 404);
+    assert!(result["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("连接失败"));
+    assert!(result["error"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("model not found"));
+}
+
+#[tokio::test]
+async fn req_models_i5_valid_model_connection_reports_success() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "choices": [{"message": {"content": "ok"}}]
+        })))
+        .mount(&server)
+        .await;
+
+    let result = test_model_connection(
+        server.uri(),
+        "test-key".to_string(),
+        "valid-model".to_string(),
+    )
+    .await
+    .expect("successful probe should return payload");
+
+    assert_eq!(result["success"], true);
+    assert_eq!(result["status"], 200);
 }

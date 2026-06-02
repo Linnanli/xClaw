@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
+use tokio::sync::mpsc;
 
 use ironclaw::channels::IncomingMessage;
 
@@ -53,16 +54,14 @@ pub async fn ic_toggle_plan_mode(
     thread_id: String,
 ) -> Result<PlanModeResponse, String> {
     let state = state.get()?;
-
-    let msg = IncomingMessage::new("tauri", &state.scope_id, "/plan-mode")
-        .with_thread(&thread_id)
-        .with_owner_id(&state.scope_id);
-
-    state
-        .msg_sender
-        .send(msg)
-        .await
-        .map_err(|e| format!("Failed to toggle plan mode: {}", e))?;
+    dispatch_control_message(
+        &state.msg_sender,
+        &state.scope_id,
+        &thread_id,
+        "/plan-mode",
+        "toggle plan mode",
+    )
+    .await?;
 
     Ok(PlanModeResponse {
         thread_id,
@@ -87,15 +86,14 @@ pub async fn ic_approve_plan(
     let state = state.get()?;
 
     let content = format!("/approve-plan {plan_id}");
-    let msg = IncomingMessage::new("tauri", &state.scope_id, &content)
-        .with_thread(&thread_id)
-        .with_owner_id(&state.scope_id);
-
-    state
-        .msg_sender
-        .send(msg)
-        .await
-        .map_err(|e| format!("Failed to approve plan: {}", e))?;
+    dispatch_control_message(
+        &state.msg_sender,
+        &state.scope_id,
+        &thread_id,
+        &content,
+        "approve plan",
+    )
+    .await?;
 
     Ok(PlanApprovalResponse {
         thread_id,
@@ -121,15 +119,14 @@ pub async fn ic_revise_plan(
     let state = state.get()?;
 
     let content = format!("/revise-plan {plan_id} {feedback}");
-    let msg = IncomingMessage::new("tauri", &state.scope_id, &content)
-        .with_thread(&thread_id)
-        .with_owner_id(&state.scope_id);
-
-    state
-        .msg_sender
-        .send(msg)
-        .await
-        .map_err(|e| format!("Failed to revise plan: {}", e))?;
+    dispatch_control_message(
+        &state.msg_sender,
+        &state.scope_id,
+        &thread_id,
+        &content,
+        "revise plan",
+    )
+    .await?;
 
     Ok(PlanApprovalResponse {
         thread_id,
@@ -156,15 +153,14 @@ pub async fn ic_fork_thread(
     let state = state.get()?;
 
     let content = format!("/fork {at_turn}");
-    let msg = IncomingMessage::new("tauri", &state.scope_id, &content)
-        .with_thread(&thread_id)
-        .with_owner_id(&state.scope_id);
-
-    state
-        .msg_sender
-        .send(msg)
-        .await
-        .map_err(|e| format!("Failed to fork thread: {}", e))?;
+    dispatch_control_message(
+        &state.msg_sender,
+        &state.scope_id,
+        &thread_id,
+        &content,
+        "fork thread",
+    )
+    .await?;
 
     // 实际的 new_thread_id 由 Agent 异步通过 chat-stream 返回
     Ok(ForkResponse {
@@ -172,4 +168,77 @@ pub async fn ic_fork_thread(
         new_thread_id: String::new(),
         at_turn,
     })
+}
+
+fn build_control_message(scope_id: &str, thread_id: &str, content: &str) -> IncomingMessage {
+    IncomingMessage::new("tauri", scope_id, content)
+        .with_thread(thread_id)
+        .with_owner_id(scope_id)
+}
+
+async fn dispatch_control_message(
+    sender: &mpsc::Sender<IncomingMessage>,
+    scope_id: &str,
+    thread_id: &str,
+    content: &str,
+    operation: &str,
+) -> Result<(), String> {
+    sender
+        .send(build_control_message(scope_id, thread_id, content))
+        .await
+        .map_err(|e| format!("Failed to {operation}: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_control_message(msg: IncomingMessage, content: &str) {
+        assert_eq!(msg.channel, "tauri");
+        assert_eq!(msg.user_id, "owner-1");
+        assert_eq!(msg.owner_id, "owner-1");
+        assert_eq!(msg.thread_id.as_deref(), Some("thread-a"));
+        assert_eq!(msg.conversation_scope(), Some("thread-a"));
+        assert_eq!(msg.content, content);
+    }
+
+    #[tokio::test]
+    async fn req_plan_mode_i1_control_sequence_preserves_thread_scope() {
+        let (tx, mut rx) = mpsc::channel(4);
+        for content in [
+            "/plan-mode".to_string(),
+            "/approve-plan plan-1".to_string(),
+            "/revise-plan plan-1 add more tests".to_string(),
+            "/fork 2".to_string(),
+        ] {
+            dispatch_control_message(&tx, "owner-1", "thread-a", &content, "test")
+                .await
+                .expect("control message should dispatch");
+            let msg = rx.recv().await.expect("message should be queued");
+            assert_control_message(msg, &content);
+        }
+    }
+
+    #[test]
+    fn req_plan_mode_i1_response_contracts_are_stable() {
+        let approval = PlanApprovalResponse {
+            thread_id: "thread-a".to_string(),
+            plan_id: "plan-1".to_string(),
+            status: "approved".to_string(),
+        };
+        let fork = ForkResponse {
+            source_thread_id: "thread-a".to_string(),
+            new_thread_id: String::new(),
+            at_turn: 2,
+        };
+
+        let approval_json = serde_json::to_value(approval).expect("approval serializes");
+        assert_eq!(approval_json["status"], "approved");
+        assert_eq!(approval_json["thread_id"], "thread-a");
+
+        let fork_json = serde_json::to_value(fork).expect("fork serializes");
+        assert_eq!(fork_json["source_thread_id"], "thread-a");
+        assert_eq!(fork_json["new_thread_id"], "");
+        assert_eq!(fork_json["at_turn"], 2);
+    }
 }

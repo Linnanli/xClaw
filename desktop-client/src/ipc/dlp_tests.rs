@@ -10,6 +10,8 @@
 mod tests {
     use crate::ipc::dlp::*;
     use crate::safety_bridge::{BridgeScanResult, BridgeStats};
+    use ironclaw::safety::{SafetyConfig, SafetyLayer};
+    use std::sync::Arc;
 
     // ========================================================================
     // 单元测试：类型转换
@@ -360,8 +362,48 @@ mod tests {
         };
 
         let response = DlpScanResponse::from(bridge_result);
-
         assert_eq!(response.sanitized_content, "🔑 密码 العربية emoji 🎉");
+    }
+
+    #[tokio::test]
+    async fn req_dlp_i3_admin_rule_sync_updates_scan_behavior() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/api/dlp-rules")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "rules": [
+                        {
+                            "name": "critical-token",
+                            "pattern": "ACME-TOKEN-[0-9]+",
+                            "rule_type": "regex",
+                            "severity": "critical",
+                            "enabled": true
+                        }
+                    ]
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        let safety = Arc::new(SafetyLayer::new(&SafetyConfig {
+            max_output_length: 100_000,
+            injection_check_enabled: true,
+        }));
+        let bridge = crate::safety_bridge::SafetyBridge::new(safety, None, None);
+
+        let sync = do_sync_dlp_rules_from_admin_url(&bridge, &server.url())
+            .await
+            .expect("rules sync");
+        assert!(sync.success);
+        assert_eq!(sync.rules_synced, 1);
+
+        let scan = bridge.scan_user_input("please handle ACME-TOKEN-42");
+        assert!(scan.had_sensitive_data);
+        assert!(scan.was_blocked);
+        assert!(scan.sanitized_content.is_empty());
     }
 
     #[test]

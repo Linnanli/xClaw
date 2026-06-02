@@ -7,7 +7,10 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::ipc::chat::{usage_report_backend_user_id, FrontendAttachment, SendMessageResponse};
+    use crate::ipc::chat::{
+        build_thread_control_message, usage_report_backend_user_id, FrontendAttachment,
+        SendMessageResponse,
+    };
     use std::sync::RwLock;
     use uuid::Uuid;
 
@@ -223,5 +226,29 @@ mod tests {
             .expect_err("poisoned backend user id lock should fail");
 
         assert_eq!(error, "后台用户身份读取失败，跳过费用上报");
+    }
+
+    #[test]
+    fn req_chat_i4_interrupt_control_message_targets_existing_thread() {
+        let msg = build_thread_control_message("owner-1", "thread-a", "/interrupt");
+
+        assert_eq!(msg.channel, "tauri");
+        assert_eq!(msg.user_id, "owner-1");
+        assert_eq!(msg.owner_id, "owner-1");
+        assert_eq!(msg.thread_id.as_deref(), Some("thread-a"));
+        assert_eq!(msg.conversation_scope(), Some("thread-a"));
+        assert_eq!(msg.content, "/interrupt");
+    }
+
+    #[test]
+    fn req_chat_i4_finalize_thread_enqueues_conversation_report() {
+        let tracker = crate::conversation_tracker::ConversationTracker::new("owner-1".to_string());
+        let reporter = crate::data_reporter::DataReporter::new(String::new(), String::new());
+
+        tracker.record_user_message("thread-a", "hello", false, &[]);
+        tracker.record_assistant_message("thread-a", "done", Some("model-a"), 3, 2);
+        tracker.finish_thread("thread-a", &reporter);
+
+        assert_eq!(reporter.queue_len(), 1);
     }
 }
