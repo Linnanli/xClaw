@@ -262,7 +262,13 @@ pub async fn do_sync_dlp_rules(safety_bridge: &SafetyBridge) -> Result<SyncDlpRe
 
     let admin_url =
         std::env::var("ADMIN_BACKEND_URL").unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
+    do_sync_dlp_rules_from_admin_url(safety_bridge, &admin_url).await
+}
 
+pub(crate) async fn do_sync_dlp_rules_from_admin_url(
+    safety_bridge: &SafetyBridge,
+    admin_url: &str,
+) -> Result<SyncDlpResult, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()

@@ -8,7 +8,8 @@
 #[cfg(test)]
 mod tests {
     use crate::ipc::chat::{
-        reject_blocked_scan, usage_report_backend_user_id, FrontendAttachment, SendMessageResponse,
+        build_thread_control_message, usage_report_backend_user_id, FrontendAttachment,
+        SendMessageResponse, reject_blocked_scan,
     };
     use crate::safety_bridge::SafetyBridge;
     use ironclaw::safety::{SafetyConfig, SafetyLayer};
@@ -258,5 +259,29 @@ mod tests {
             rx.try_recv().is_err(),
             "blocked scan must not enqueue a message"
         );
+    }
+
+    #[test]
+    fn req_chat_i4_interrupt_control_message_targets_existing_thread() {
+        let msg = build_thread_control_message("owner-1", "thread-a", "/interrupt");
+
+        assert_eq!(msg.channel, "tauri");
+        assert_eq!(msg.user_id, "owner-1");
+        assert_eq!(msg.owner_id, "owner-1");
+        assert_eq!(msg.thread_id.as_deref(), Some("thread-a"));
+        assert_eq!(msg.conversation_scope(), Some("thread-a"));
+        assert_eq!(msg.content, "/interrupt");
+    }
+
+    #[test]
+    fn req_chat_i4_finalize_thread_enqueues_conversation_report() {
+        let tracker = crate::conversation_tracker::ConversationTracker::new("owner-1".to_string());
+        let reporter = crate::data_reporter::DataReporter::new(String::new(), String::new());
+
+        tracker.record_user_message("thread-a", "hello", false, &[]);
+        tracker.record_assistant_message("thread-a", "done", Some("model-a"), 3, 2);
+        tracker.finish_thread("thread-a", &reporter);
+
+        assert_eq!(reporter.queue_len(), 1);
     }
 }

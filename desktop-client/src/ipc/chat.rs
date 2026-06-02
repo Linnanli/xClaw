@@ -418,15 +418,25 @@ async fn send_thread_control_message(
     thread_id: &str,
     content: &str,
 ) -> Result<(), String> {
-    let msg = IncomingMessage::new("tauri", &state.scope_id, content)
-        .with_thread(thread_id)
-        .with_owner_id(&state.scope_id);
-
     state
         .msg_sender
-        .send(msg)
+        .send(build_thread_control_message(
+            &state.scope_id,
+            thread_id,
+            content,
+        ))
         .await
         .map_err(|e| format!("Failed to send thread control message: {}", e))
+}
+
+pub(crate) fn build_thread_control_message(
+    scope_id: &str,
+    thread_id: &str,
+    content: &str,
+) -> IncomingMessage {
+    IncomingMessage::new("tauri", scope_id, content)
+        .with_thread(thread_id)
+        .with_owner_id(scope_id)
 }
 
 fn build_message_metadata(
