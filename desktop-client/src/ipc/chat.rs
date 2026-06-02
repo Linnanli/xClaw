@@ -19,6 +19,7 @@ use tracing::Instrument;
 
 use crate::data_reporter::ConversationAttachment;
 use crate::safety_attachment_scanner::{AttachmentDecision, AttachmentScanner};
+use crate::safety_bridge::BridgeScanResult;
 use crate::state::EngineState;
 use crate::vercel_ui_protocol::VercelUIStream;
 
@@ -129,16 +130,7 @@ pub async fn send_chat_message(
         "send_chat_message.scan_user_input.end"
     );
 
-    if scan_result.was_blocked {
-        tracing::warn!(
-            message_id = %message_id,
-            thread_id = %thread_id,
-            "Message blocked by SafetyBridge"
-        );
-        return Err(scan_result
-            .block_reason
-            .unwrap_or_else(|| "消息包含敏感信息，已被安全策略拦截".to_string()));
-    }
+    reject_blocked_scan(&scan_result, &message_id, &thread_id)?;
 
     let dlp_redacted_stats = dlp_stats
         .map(|stats| {
@@ -287,6 +279,26 @@ pub async fn send_chat_message(
         message_id,
         success: true,
     })
+}
+
+pub(crate) fn reject_blocked_scan(
+    scan_result: &BridgeScanResult,
+    message_id: &str,
+    thread_id: &str,
+) -> Result<(), String> {
+    if !scan_result.was_blocked {
+        return Ok(());
+    }
+
+    tracing::warn!(
+        message_id = %message_id,
+        thread_id = %thread_id,
+        "Message blocked by SafetyBridge"
+    );
+    Err(scan_result
+        .block_reason
+        .clone()
+        .unwrap_or_else(|| "消息包含敏感信息，已被安全策略拦截".to_string()))
 }
 
 #[tauri::command]

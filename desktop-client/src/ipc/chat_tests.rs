@@ -7,8 +7,14 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::ipc::chat::{usage_report_backend_user_id, FrontendAttachment, SendMessageResponse};
+    use crate::ipc::chat::{
+        reject_blocked_scan, usage_report_backend_user_id, FrontendAttachment, SendMessageResponse,
+    };
+    use crate::safety_bridge::SafetyBridge;
+    use ironclaw::safety::{SafetyConfig, SafetyLayer};
+    use std::sync::Arc;
     use std::sync::RwLock;
+    use tokio::sync::mpsc;
     use uuid::Uuid;
 
     // =========================================================================
@@ -223,5 +229,34 @@ mod tests {
             .expect_err("poisoned backend user id lock should fail");
 
         assert_eq!(error, "后台用户身份读取失败，跳过费用上报");
+    }
+    #[tokio::test]
+    async fn req_chat_dlp_block_before_dispatch() {
+        let safety = Arc::new(SafetyLayer::new(&SafetyConfig {
+            max_output_length: 100_000,
+            injection_check_enabled: true,
+        }));
+        let bridge = SafetyBridge::new(safety, None, None);
+        let scan = bridge.scan_user_input("send ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx onward");
+        let (tx, mut rx) = mpsc::channel::<ironclaw::channels::IncomingMessage>(1);
+
+        assert!(scan.was_blocked, "secret-bearing input must be blocked");
+        let error = match reject_blocked_scan(&scan, "msg-1", "thread-a") {
+            Ok(()) => {
+                tx.send(ironclaw::channels::IncomingMessage::new(
+                    "tauri", "owner-1", "secret",
+                ))
+                .await
+                .expect("test channel should accept messages");
+                String::new()
+            }
+            Err(error) => error,
+        };
+
+        assert!(error.contains("密钥") || error.contains("secret"));
+        assert!(
+            rx.try_recv().is_err(),
+            "blocked scan must not enqueue a message"
+        );
     }
 }

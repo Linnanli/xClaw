@@ -684,3 +684,146 @@ impl ToolDispatcher for DesktopDispatcher {
         Ok(None)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use crate::safety::SafetyConfig;
+    use crate::tools::{ApprovalRequirement, Tool, ToolOutput};
+    use dasclaw_core::messages::{TokenUsage, ToolCall};
+
+    #[derive(Debug)]
+    struct ApprovalTool;
+
+    #[async_trait]
+    impl Tool for ApprovalTool {
+        fn name(&self) -> &str {
+            "needs_approval"
+        }
+
+        fn description(&self) -> &str {
+            "requires explicit approval"
+        }
+
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        async fn execute(
+            &self,
+            _params: serde_json::Value,
+            _ctx: &mut dyn dasclaw_runtime::JobContextCore,
+        ) -> Result<ToolOutput, crate::tools::ToolError> {
+            Ok(ToolOutput::text("approved", Duration::from_millis(1)))
+        }
+
+        fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
+            ApprovalRequirement::Always
+        }
+    }
+
+    #[derive(Debug)]
+    struct RecordingTool {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Tool for RecordingTool {
+        fn name(&self) -> &str {
+            "recording_tool"
+        }
+
+        fn description(&self) -> &str {
+            "records executions"
+        }
+
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        async fn execute(
+            &self,
+            _params: serde_json::Value,
+            _ctx: &mut dyn dasclaw_runtime::JobContextCore,
+        ) -> Result<ToolOutput, crate::tools::ToolError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(ToolOutput::text("executed", Duration::from_millis(1)))
+        }
+    }
+
+    fn test_config() -> AgentConfig {
+        let mut config = AgentConfig::for_testing();
+        config.auto_approve_tools = false;
+        config
+    }
+
+    async fn dispatcher_with_tools(registry: Arc<ToolRegistry>) -> DesktopDispatcher {
+        let session = Arc::new(Mutex::new(Session::new("user-1")));
+        let thread_id = {
+            let mut session_guard = session.lock().await;
+            let thread = session_guard.create_thread();
+            thread.start_turn("run tools");
+            thread.id
+        };
+
+        DesktopDispatcher {
+            safety: Arc::new(SafetyLayer::new(&SafetyConfig {
+                max_output_length: 100_000,
+                injection_check_enabled: false,
+            })),
+            tools: registry,
+            hooks: Arc::new(HookRegistry::new()),
+            channels: Arc::new(ChannelManager::new()),
+            config: test_config(),
+            message: Arc::new(IncomingMessage::new("test", "user-1", "run tools")),
+            session: session.clone(),
+            thread_id,
+            job_ctx: JobContext::default(),
+            disabled_extensions: HashSet::new(),
+            user_tz: chrono_tz::UTC,
+        }
+    }
+
+    fn tool_call(name: &str) -> ToolCall {
+        ToolCall {
+            id: format!("call-{name}"),
+            name: name.to_string(),
+            arguments: serde_json::json!({}),
+            reasoning: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn req_approval_gate_before_tool_exec() {
+        let registry = Arc::new(ToolRegistry::new());
+        registry.register(Arc::new(ApprovalTool)).await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        registry
+            .register(Arc::new(RecordingTool {
+                calls: calls.clone(),
+            }))
+            .await;
+        let dispatcher = dispatcher_with_tools(registry).await;
+
+        let outcome = dispatcher
+            .dispatch(
+                vec![tool_call("needs_approval"), tool_call("recording_tool")],
+                Some("I will use tools".to_string()),
+                TokenUsage::default(),
+                &mut ReasoningContext::new(),
+            )
+            .await
+            .expect("dispatch should pause for approval");
+
+        let Some(LoopOutcome::NeedApproval(pending)) = outcome else {
+            panic!("expected NeedApproval before downstream execution");
+        };
+        assert_eq!(pending.tool_name, "needs_approval");
+        assert_eq!(pending.deferred_tool_calls.len(), 1);
+        assert_eq!(pending.deferred_tool_calls[0].name, "recording_tool");
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+}

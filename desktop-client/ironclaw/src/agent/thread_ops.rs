@@ -14,7 +14,7 @@ use crate::agent::compaction::ContextCompactor;
 use crate::agent::dispatcher::{
     AgenticLoopResult, check_auth_required, execute_chat_tool_standalone, parse_auth_result,
 };
-use crate::agent::session::{MAX_PENDING_MESSAGES, PendingApproval, Session, ThreadState};
+use crate::agent::session::{MAX_PENDING_MESSAGES, PendingApproval, Session, Thread, ThreadState};
 use crate::agent::submission::SubmissionResult;
 use crate::channels::{IncomingMessage, StatusUpdate};
 use crate::error::Error;
@@ -25,6 +25,32 @@ use dasclaw_runtime::context::JobContext;
 use ironclaw_common::truncate_preview;
 
 const FORGED_THREAD_ID_ERROR: &str = "Invalid or unauthorized thread ID.";
+
+fn plan_id_matches(actual: Uuid, expected: &str) -> bool {
+    Uuid::parse_str(expected).is_ok_and(|expected| expected == actual)
+}
+
+fn toggle_thread_plan_mode(thread: &mut Thread) -> SubmissionResult {
+    let enabled = thread.toggle_plan_mode();
+    SubmissionResult::ok_with_message(format!(
+        "Plan mode {}.",
+        if enabled { "enabled" } else { "disabled" }
+    ))
+}
+
+fn approve_thread_plan(thread: &mut Thread, plan_id: &str) -> SubmissionResult {
+    let Some(pending_plan) = thread.pending_plan.as_ref() else {
+        return SubmissionResult::error("No pending plan to approve.");
+    };
+    if !plan_id_matches(pending_plan.plan_id, plan_id) {
+        return SubmissionResult::error("Plan ID mismatch.");
+    }
+
+    let Some(approved) = thread.approve_plan() else {
+        return SubmissionResult::error("No pending plan to approve.");
+    };
+    SubmissionResult::ok_with_message(format!("Plan approved: {}", approved.plan_id))
+}
 
 fn requires_preexisting_uuid_thread(channel: &str) -> bool {
     // Gateway-style channels send server-issued conversation UUIDs.
@@ -1139,6 +1165,94 @@ impl Agent {
         Ok(SubmissionResult::ok_with_message("Thread cleared."))
     }
 
+    pub(super) async fn process_toggle_plan_mode(
+        &self,
+        session: Arc<Mutex<Session>>,
+        thread_id: Uuid,
+    ) -> Result<SubmissionResult, Error> {
+        let mut sess = session.lock().await;
+        let thread = sess
+            .threads
+            .get_mut(&thread_id)
+            .ok_or_else(|| Error::from(crate::error::JobError::NotFound { id: thread_id }))?;
+        Ok(toggle_thread_plan_mode(thread))
+    }
+
+    pub(super) async fn process_approve_plan(
+        &self,
+        session: Arc<Mutex<Session>>,
+        thread_id: Uuid,
+        plan_id: &str,
+    ) -> Result<SubmissionResult, Error> {
+        let mut sess = session.lock().await;
+        let thread = sess
+            .threads
+            .get_mut(&thread_id)
+            .ok_or_else(|| Error::from(crate::error::JobError::NotFound { id: thread_id }))?;
+
+        Ok(approve_thread_plan(thread, plan_id))
+    }
+
+    pub(super) async fn process_revise_plan(
+        &self,
+        message: &IncomingMessage,
+        tenant: crate::tenant::TenantCtx,
+        session: Arc<Mutex<Session>>,
+        thread_id: Uuid,
+        plan_id: &str,
+        feedback: &str,
+    ) -> Result<SubmissionResult, Error> {
+        {
+            let sess = session.lock().await;
+            let thread = sess
+                .threads
+                .get(&thread_id)
+                .ok_or_else(|| Error::from(crate::error::JobError::NotFound { id: thread_id }))?;
+            let Some(pending_plan) = thread.pending_plan.as_ref() else {
+                return Ok(SubmissionResult::error("No pending plan to revise."));
+            };
+            if !plan_id_matches(pending_plan.plan_id, plan_id) {
+                return Ok(SubmissionResult::error("Plan ID mismatch."));
+            }
+        }
+
+        let revision_request = format!("Revise plan {plan_id} with this feedback: {feedback}");
+        self.process_user_input(message, tenant, session, thread_id, &revision_request)
+            .await
+    }
+
+    pub(super) async fn process_fork_thread(
+        &self,
+        message: &IncomingMessage,
+        session: Arc<Mutex<Session>>,
+        source_thread_id: Uuid,
+        at_turn: usize,
+    ) -> Result<SubmissionResult, Error> {
+        let new_thread_id = {
+            let mut sess = session.lock().await;
+            sess.fork_thread(source_thread_id, at_turn)
+        };
+
+        let Some(new_thread_id) = new_thread_id else {
+            return Ok(SubmissionResult::error(
+                "Unable to fork thread at requested turn.",
+            ));
+        };
+
+        self.session_manager
+            .register_thread(
+                &message.user_id,
+                &message.channel,
+                new_thread_id,
+                Arc::clone(&session),
+            )
+            .await;
+        Ok(SubmissionResult::ok_with_message(format!(
+            "Forked thread: {}",
+            new_thread_id
+        )))
+    }
+
     /// Process an approval or rejection of a pending tool execution.
     pub(super) async fn process_approval(
         &self,
@@ -2181,6 +2295,8 @@ fn rebuild_user_chat_message(msg: &crate::history::ConversationMessage) -> ChatM
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::session::{PendingPlan, PlanStep};
+    use chrono::Utc;
 
     #[test]
     fn test_rebuild_chat_messages_user_assistant_only() {
@@ -2245,6 +2361,72 @@ mod tests {
         // final assistant
         assert_eq!(result[4].role, crate::llm::Role::Assistant);
         assert_eq!(result[4].content, "I found some results.");
+    }
+
+    #[test]
+    fn req_plan_control_mutates_thread_state() {
+        let mut thread = Thread::new(Uuid::new_v4());
+        assert!(!thread.is_plan_mode());
+
+        let result = toggle_thread_plan_mode(&mut thread);
+
+        assert!(matches!(result, SubmissionResult::Ok { .. }));
+        assert!(thread.is_plan_mode());
+        assert_eq!(thread.state, ThreadState::Planning);
+    }
+
+    #[test]
+    fn req_plan_approval_requires_matching_plan_id() {
+        let mut thread = Thread::new(Uuid::new_v4());
+        thread.toggle_plan_mode();
+        let plan_id = Uuid::new_v4();
+        thread.set_pending_plan(PendingPlan {
+            plan_id,
+            goal: "ship plan controls".to_string(),
+            steps: vec![PlanStep {
+                step: 1,
+                description: "wire parser".to_string(),
+                tool_name: "read_file".to_string(),
+                parameters: serde_json::json!({}),
+                risk: "low".to_string(),
+                files: Vec::new(),
+                executed: false,
+                result: None,
+            }],
+            confidence: 0.9,
+            created_at: Utc::now(),
+        });
+
+        assert!(!plan_id_matches(plan_id, &Uuid::new_v4().to_string()));
+        assert!(plan_id_matches(plan_id, &plan_id.to_string()));
+
+        let mismatch = approve_thread_plan(&mut thread, &Uuid::new_v4().to_string());
+        assert!(matches!(mismatch, SubmissionResult::Error { .. }));
+
+        let approved = approve_thread_plan(&mut thread, &plan_id.to_string());
+        assert!(matches!(approved, SubmissionResult::Ok { .. }));
+        assert!(!thread.is_plan_mode());
+        assert_eq!(thread.state, ThreadState::Processing);
+    }
+
+    #[test]
+    fn req_fork_control_creates_independent_thread() {
+        let mut session = Session::new("user-1");
+        let source_id = {
+            let thread = session.create_thread();
+            thread.start_turn("first turn");
+            thread.id
+        };
+
+        let fork_id = session
+            .fork_thread(source_id, 1)
+            .expect("fork should create a thread");
+        let forked = session.threads.get(&fork_id).expect("forked thread exists");
+
+        assert_eq!(forked.forked_from, Some(source_id));
+        assert_eq!(forked.fork_point, Some(1));
+        assert_eq!(forked.turns.len(), 1);
+        assert_eq!(forked.state, ThreadState::Idle);
     }
 
     #[test]
