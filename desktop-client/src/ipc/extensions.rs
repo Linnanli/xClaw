@@ -8,6 +8,8 @@ use tauri::State;
 use super::persistence::{load_string_set, persist_disabled_items};
 use crate::managed_policy::load_verified_policy_from_store;
 use crate::state::{AppState, EngineState};
+use ironclaw::channels::web::types::SetupFieldInfo;
+use ironclaw::extensions::{ConfigureResult, InstalledExtension, SearchResult};
 
 const DISABLED_EXTENSIONS_SETTING_KEY: &str = "desktop_disabled_extensions";
 const MANAGED_ALLOWED_EXTENSIONS_SETTING_KEY: &str = "desktop_managed_allowed_extensions";
@@ -48,6 +50,52 @@ fn validate_extension_install_source(managed_mode: bool, url: Option<&str>) -> R
         );
     }
     Ok(())
+}
+
+fn installed_extension_to_info(
+    extension: InstalledExtension,
+    is_soft_enabled: bool,
+) -> ExtensionInfo {
+    ExtensionInfo {
+        name: extension.name,
+        display_name: extension.display_name,
+        kind: extension.kind.to_string(),
+        installed: extension.installed,
+        active: effective_active(extension.active, is_soft_enabled),
+        authenticated: extension.authenticated,
+        tools: extension.tools,
+    }
+}
+
+fn setup_field_to_response_field(field: SetupFieldInfo) -> ExtensionSetupField {
+    ExtensionSetupField {
+        name: field.name,
+        prompt: field.prompt,
+        optional: field.optional,
+        provided: field.provided,
+        input_type: format!("{:?}", field.input_type),
+    }
+}
+
+fn setup_submit_response_from_result(result: ConfigureResult) -> ExtensionSetupSubmitResponse {
+    ExtensionSetupSubmitResponse {
+        success: result.activated || result.verification.is_some(),
+        message: result.message,
+        activated: result.activated,
+        auth_url: result.auth_url,
+    }
+}
+
+fn search_result_to_info(result: SearchResult) -> ExtensionInfo {
+    ExtensionInfo {
+        name: result.entry.name,
+        display_name: Some(result.entry.display_name),
+        kind: result.entry.kind.to_string(),
+        installed: false,
+        active: false,
+        authenticated: false,
+        tools: Vec::new(),
+    }
 }
 
 async fn ensure_extension_allowed_in_managed_mode(
@@ -100,14 +148,9 @@ pub async fn ic_list_extensions(
 
     Ok(extensions
         .into_iter()
-        .map(|e| ExtensionInfo {
-            name: e.name.clone(),
-            display_name: e.display_name.clone(),
-            kind: format!("{}", e.kind),
-            installed: e.installed,
-            active: effective_active(e.active, state.extension_enabled(&e.name)),
-            authenticated: e.authenticated,
-            tools: e.tools.clone(),
+        .map(|extension| {
+            let is_soft_enabled = state.extension_enabled(&extension.name);
+            installed_extension_to_info(extension, is_soft_enabled)
         })
         .collect())
 }
@@ -273,13 +316,7 @@ pub async fn ic_extension_setup(
     let fields: Vec<ExtensionSetupField> = secrets
         .fields
         .into_iter()
-        .map(|s| ExtensionSetupField {
-            name: s.name,
-            prompt: s.prompt,
-            optional: s.optional,
-            provided: s.provided,
-            input_type: format!("{:?}", s.input_type),
-        })
+        .map(setup_field_to_response_field)
         .collect();
 
     tracing::debug!(extension = %name, fields = fields.len(), "Extension setup schema loaded");
@@ -322,12 +359,7 @@ pub async fn ic_extension_setup_submit(
         "Extension configured"
     );
 
-    Ok(ExtensionSetupSubmitResponse {
-        success: result.activated || result.verification.is_some(),
-        message: result.message,
-        activated: result.activated,
-        auth_url: result.auth_url,
-    })
+    Ok(setup_submit_response_from_result(result))
 }
 
 /// 搜索扩展。
@@ -347,18 +379,7 @@ pub async fn ic_search_extensions(
         .await
         .map_err(|e| format!("Failed to search extensions: {}", e))?;
 
-    Ok(results
-        .into_iter()
-        .map(|r| ExtensionInfo {
-            name: r.entry.name.clone(),
-            display_name: Some(r.entry.display_name.clone()),
-            kind: format!("{}", r.entry.kind),
-            installed: false,
-            active: false,
-            authenticated: false,
-            tools: Vec::new(),
-        })
-        .collect())
+    Ok(results.into_iter().map(search_result_to_info).collect())
 }
 
 async fn ensure_extension_installed(state: &AppState, name: &str) -> Result<(), String> {
@@ -434,8 +455,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        effective_active, extension_name_exists, set_extension_enabled_with_persist,
-        validate_extension_install_source,
+        effective_active, extension_name_exists, installed_extension_to_info,
+        search_result_to_info, set_extension_enabled_with_persist, setup_field_to_response_field,
+        setup_submit_response_from_result, validate_extension_install_source,
     };
     use crate::safety_bridge::SafetyBridge;
     use crate::state::AppState;
@@ -563,6 +585,110 @@ mod tests {
         assert!(!effective_active(true, false));
         assert!(!effective_active(false, true));
         assert!(!effective_active(false, false));
+    }
+
+    #[test]
+    fn req_extensions_list_mapping_combines_runtime_and_soft_enable() {
+        let extension = ironclaw::extensions::InstalledExtension {
+            name: "github".to_string(),
+            kind: ironclaw::extensions::ExtensionKind::McpServer,
+            display_name: Some("GitHub".to_string()),
+            description: Some("GitHub MCP".to_string()),
+            url: Some("https://mcp.example.com".to_string()),
+            authenticated: true,
+            active: true,
+            tools: vec!["repo_search".to_string()],
+            needs_setup: true,
+            has_auth: true,
+            installed: true,
+            activation_error: Some("transient".to_string()),
+            version: Some("1.2.3".to_string()),
+        };
+
+        let info = installed_extension_to_info(extension, false);
+
+        assert_eq!(info.name, "github");
+        assert_eq!(info.display_name.as_deref(), Some("GitHub"));
+        assert_eq!(info.kind, "mcp_server");
+        assert!(info.installed);
+        assert!(
+            !info.active,
+            "soft-disabled extensions must render inactive"
+        );
+        assert!(info.authenticated);
+        assert_eq!(info.tools, vec!["repo_search".to_string()]);
+    }
+
+    #[test]
+    fn req_extensions_search_mapping_marks_results_available_not_installed() {
+        let result = ironclaw::extensions::SearchResult {
+            entry: ironclaw::extensions::RegistryEntry {
+                name: "slack".to_string(),
+                display_name: "Slack".to_string(),
+                kind: ironclaw::extensions::ExtensionKind::ChannelRelay,
+                description: "Team messages".to_string(),
+                keywords: vec!["chat".to_string()],
+                source: ironclaw::extensions::ExtensionSource::ChannelRelay {
+                    relay_url: "https://relay.example.com".to_string(),
+                },
+                fallback_source: None,
+                auth_hint: ironclaw::extensions::AuthHint::ChannelRelayOAuth,
+                version: Some("0.3.0".to_string()),
+            },
+            source: ironclaw::extensions::ResultSource::Registry,
+            validated: true,
+        };
+
+        let info = search_result_to_info(result);
+
+        assert_eq!(info.name, "slack");
+        assert_eq!(info.display_name.as_deref(), Some("Slack"));
+        assert_eq!(info.kind, "channel_relay");
+        assert!(!info.installed);
+        assert!(!info.active);
+        assert!(!info.authenticated);
+        assert!(info.tools.is_empty());
+    }
+
+    #[test]
+    fn req_extensions_setup_field_mapping_preserves_prompt_state() {
+        let field = ironclaw::channels::web::types::SetupFieldInfo {
+            name: "api_key".to_string(),
+            prompt: "API key".to_string(),
+            optional: false,
+            provided: true,
+            input_type: ironclaw::tools::wasm::ToolSetupFieldInputType::Password,
+        };
+
+        let response_field = setup_field_to_response_field(field);
+
+        assert_eq!(response_field.name, "api_key");
+        assert_eq!(response_field.prompt, "API key");
+        assert!(!response_field.optional);
+        assert!(response_field.provided);
+        assert_eq!(response_field.input_type, "Password");
+    }
+
+    #[test]
+    fn req_extensions_setup_submit_succeeds_for_manual_verification() {
+        let result = ironclaw::extensions::ConfigureResult {
+            message: "Verification required".to_string(),
+            activated: false,
+            restart_required: false,
+            auth_url: None,
+            verification: Some(ironclaw::extensions::VerificationChallenge {
+                code: "ABC123".to_string(),
+                instructions: "Send this code".to_string(),
+                deep_link: None,
+            }),
+        };
+
+        let response = setup_submit_response_from_result(result);
+
+        assert!(response.success);
+        assert_eq!(response.message, "Verification required");
+        assert!(!response.activated);
+        assert!(response.auth_url.is_none());
     }
 
     #[tokio::test]
