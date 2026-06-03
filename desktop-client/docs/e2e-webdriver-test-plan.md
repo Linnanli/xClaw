@@ -610,14 +610,14 @@ L5 LLM·通道·持久化 / L6 基础设施。E2E（WebDriver）是**自顶向�
 | 扩展 | `ic_list_extensions`/`install`/`setup`/`setup_submit`/… | ⬜ 待补 |
 | 任务 | `ic_list_jobs`/`ic_job_events`/`ic_job_prompt`/`ic_cancel_job`/`ic_restart_job` | ⬜ 待补 |
 | 日程 | `ic_list_routines`/`create`/`toggle`/`delete`/`fire`/`ic_routine_runs` | ⬜ 待补 |
-| 日志 | `ic_get_logs`/`search`/`filter`/`export`/`clear` | ⬜ 待补 |
-| 工作区 | `ic_workspace_git_status`/`ic_workspace_root`/`ic_import_workspace`/`ic_active_servers` | ⬜ 待补 |
-| 文件操作 | `ic_undo_file_edit`/`ic_open_file_at_line` | ⬜ 待补 |
-| 应用/认证 | `get_auth_token`/`get_app_version`/`check_for_updates`/`submit_approval_ticket`/`get_watermark_config` | ⬜ 待补 |
+| 日志 | `ic_get_logs`/`search`/`filter`/`export`/`clear` | ✅ Rust 命令级 helper 覆盖（#1025） |
+| 工作区 | `ic_workspace_git_status`/`ic_workspace_root`/`ic_import_workspace`/`ic_active_servers` | 🟨 Rust 命令级契约覆盖（#1025，仍缺导入真实状态夹具） |
+| 文件操作 | `ic_undo_file_edit`/`ic_open_file_at_line` | ✅ Rust 命令级 helper 覆盖（#1025） |
+| 应用/认证 | `get_auth_token`/`get_app_version`/`check_for_updates`/`submit_approval_ticket`/`get_watermark_config` | 🟨 Rust 命令级 helper 覆盖（#1025，认证 token 仍靠注册/类型契约） |
 
-> **粗略覆盖度**：~80 命令中本计划直接/间接命中约 40%（聊天·线程·审批·DLP·模型·
-> Plan/Fork·Sandbox）。记忆已补 Rust helper 级 DTO 映射 / 默认值覆盖，但仍缺真实
-> AppState + Workspace 回环；技能/扩展/任务/日程/日志/工作区/文件/认证 8 个段尚未覆盖。
+> **粗略覆盖度**：~80 命令中本计划直接/间接命中约 48%（聊天·线程·审批·DLP·模型·
+> Plan/Fork·Sandbox·日志·文件操作）。#1025 已补记忆 Rust helper 级 DTO 映射 / 默认值覆盖、日志/文件操作 Rust 命令级 helper 覆盖，并补工作区/
+> 应用认证的部分命令级契约覆盖；记忆真实 AppState 回环、技能/扩展/任务/日程、工作区导入与认证 HTTP 路径仍是主要未覆盖段。
 > 若要补到 ~80%，按 §12 分层原则：CRUD 类（记忆/技能/扩展/日程/日志）用**命令级
 > 集成测试**批量覆盖，UI 强交互类（任务流式、文件 Undo）保留少量 E2E。
 
@@ -626,7 +626,7 @@ L5 LLM·通道·持久化 / L6 基础设施。E2E（WebDriver）是**自顶向�
 > `desktop-client/ironclaw`（引擎，**10479 节点 / 105234 边 / 610 社群**）。用
 > `callees_of(send_chat_message)` 反查证实其同文件调用链为
 > `quota_precheck → scan_user_input → …(模型切换)… → msg_sender.send`，与下文 §14
-> 的顺序铁证一致。后续可用 `affected_flows` / `impact_radius` 把上表 ⬜ 9 段映射到具体
+> 的顺序铁证一致。后续可用 `affected_flows` / `impact_radius` 把上表 ⬜/🟨 段映射到具体
 > agent flow，量化"哪些命令背后的 flow 缺测"——属可选增强，不阻塞本计划落地。
 
 ---
@@ -951,7 +951,7 @@ loop 的入口唯一**：
 
 **核心差距**（见 §16.2）：
 
-1. **功能广度缺 60%**：仅覆盖 5 个 IPC 命令族，剩余 9 族（记忆·技能·扩展·任务·日程·日志·工作区·文件·认证）未纳入真链路验证。
+1. **功能广度仍缺约 50%**：已覆盖或部分覆盖 9 个 IPC 命令族，但记忆·工作区·应用/认证仍缺真实状态或 HTTP 路径，技能·扩展·任务·日程尚未纳入真链路验证。
 2. **UX 阻断缺陷 2 个**：#1015（webview reload ~10s IPC 延迟）、#1016（冷启动 60-120s 才持久化）——第一印象灾难。
 3. **安全防御不完备**：#1021（纯自然语言 jailbreak 无硬阻断，仅靠系统提示软拒）；#1057 / #1059 / #1060 保留更强执行顺序与 fail-closed 证明。
 4. **数据可信度缺陷**：#955（libsql 会话导出/备份未实现）、#1058（审计日志顺序 / 完整性断言未进入 WebDriver 回归）。
@@ -960,9 +960,9 @@ loop 的入口唯一**：
 
 ### 16.2 GA 缺口分类
 
-#### A. 功能维度（IPC 命令族覆盖 ~40%，待补 8 族 + 1 族需真实状态夹具）
+#### A. 功能维度（IPC 命令族覆盖 ~48%，剩余待补 4 族 + 3 族需真实状态 / 集成路径）
 
-**已覆盖**（§13 表 ✅ 段）：聊天（6）/ 线程（3）/ 工具审批（2）/ DLP（7）/ 模型（3）/ Plan/Fork（4）/ Sandbox（2）。**小计** ~31 命令 / ~80 总数 ≈ 40%。
+**已覆盖**（§13 表 ✅ 段）：聊天（6）/ 线程（3）/ 工具审批（2）/ DLP（7）/ 模型（3）/ Plan/Fork（4）/ Sandbox（2）/ 日志（5）/ 文件操作（2）。**小计** ~38 命令 / ~80 总数 ≈ 48%。
 
 **完全未覆盖**（§13 表 ⬜ 段）：
 
@@ -970,17 +970,15 @@ loop 的入口唯一**：
 - **扩展**（6+）：`ic_list_extensions` / `install` / `setup` / `setup_submit` / ...
 - **任务**（5）：`ic_list_jobs` / `ic_job_events` / `ic_job_prompt` / `ic_cancel_job` / `ic_restart_job`
 - **日程**（6）：`ic_list_routines` / `create` / `toggle` / `delete` / `fire` / `ic_routine_runs`
-- **日志**（5）：`ic_get_logs` / `search` / `filter` / `export` / `clear`
-- **工作区**（4）：`ic_workspace_git_status` / `ic_workspace_root` / `ic_import_workspace` / `ic_active_servers`
-- **文件操作**（2）：`ic_undo_file_edit` / `ic_open_file_at_line`
-- **应用/认证**（5）：`get_auth_token` / `get_app_version` / `check_for_updates` / `submit_approval_ticket` / `get_watermark_config`
 
-**部分覆盖，仍需真实状态夹具 / WebDriver 回环**：
+**部分覆盖，仍需真实状态夹具 / Admin Backend stub**：
 
 - **记忆**（5）：已覆盖 `ic_memory_list` / `read` / `search` 的 DTO 映射与默认值 helper；仍需真实
   `AppState.workspace` 夹具覆盖 `list` / `read` / `write` / `delete` / `search` 回环。
+- **工作区**（4）：已覆盖 `ic_workspace_git_status` 输出解释、活跃服务器 DTO；仍需 `ic_import_workspace` / `ic_get_thread_workspace` 的真实 `AppState` + DB metadata 夹具。
+- **应用/认证**（5）：已覆盖版本号、更新检查 URL/响应映射、水印默认值、审批工单 payload；`get_auth_token` 和 HTTP 成功/失败路径仍需命令级集成测试。
 
-**小计** ~39 命令待补，另有记忆 5 命令需从 helper 覆盖升级到真实回环。升级路线：按 §12 分层原则，CRUD 类用**命令级集成测试**批量补（I-1~I-5 已示范），UI 强交互类（任务·日程）保留少量 E2E。
+**小计** ~30 命令待补，另有记忆 / 工作区 / 应用认证 3 族需从 helper 或类型契约覆盖升级到真实回环。升级路线：按 §12 分层原则，CRUD 类用**命令级集成测试**批量补（I-1~I-5 已示范），UI 强交互类（任务·日程）保留少量 E2E。
 
 #### B. UX bug 阻断（2 个高优先级）
 
@@ -1037,7 +1035,7 @@ loop 的入口唯一**：
 本节**不是平行清单**，而是把已有各节内容升级为"面向 GA 发布的执行排期"：
 
 - **§10 缺口表 G1-G5 现状**：G1/G2/G3/G5 ✅ 已闭合；G4 → §16.3 P0；G6-G9 已由 #1055 / #1024 闭合。
-- **§13 IPC 命令矩阵**：已覆盖 5 族（~40%）即基线；待补 9 族（~60%）即 §16.3 P0/P1 的"功能验证"工作项；新增命令（如 `export_session`）落地后需扩展 §13，已存在但未进回归的日志命令（如 `ic_export_logs`）需纳入日志族验证。
+- **§13 IPC 命令矩阵**：已覆盖或部分覆盖 9 族（~48%）即基线；待补 4 族 + 3 个部分覆盖族即 §16.3 P0/P1 的"功能验证"工作项；新增命令（如 `export_session`）落地后需扩展 §13，已存在但未进回归的日志命令（如 `ic_export_logs`）需纳入日志族验证。
 - **§12 分层集成 I-1~I-5**：是 §16.3 表中"功能验证"工作项的范式；后续补记忆·技能·日程命令时复用同一模板，**不新建平行测试**。
 - **§15.3 A-1~A-5**：已由 #1055 落地；A-6 E2E 冒烟可与 #1058 的日志序断言合并。
 
