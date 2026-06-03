@@ -31,6 +31,53 @@ fn admin_env() -> (String, String) {
     (url, token)
 }
 
+fn client_config_url(admin_url: &str, client_token: &str) -> Result<String> {
+    let mut url = reqwest::Url::parse(admin_url)
+        .map_err(|e| Error::ConfigError(format!("Invalid ADMIN_BACKEND_URL: {e}")))?;
+    url.path_segments_mut()
+        .map_err(|_| Error::ConfigError("Invalid ADMIN_BACKEND_URL".to_string()))?
+        .extend(["api", "client-config"]);
+    if !client_token.is_empty() {
+        url.query_pairs_mut().append_pair("client_id", client_token);
+    }
+    Ok(url.to_string())
+}
+
+fn update_status_response(config: &serde_json::Value) -> serde_json::Value {
+    let needs_upgrade = config
+        .get("needs_upgrade")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    serde_json::json!({
+        "needs_upgrade": needs_upgrade,
+        "current_version": env!("CARGO_PKG_VERSION"),
+    })
+}
+
+fn watermark_config_response(settings: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "watermark_enabled": settings.get("watermark_enabled").and_then(|v| v.as_bool()).unwrap_or(false),
+        "watermark_template": settings.get("watermark_template").and_then(|v| v.as_str()).unwrap_or("{username} | {datetime}"),
+        "watermark_font_size": settings.get("watermark_font_size").and_then(|v| v.as_i64()).unwrap_or(16),
+        "watermark_opacity": settings.get("watermark_opacity").and_then(|v| v.as_f64()).unwrap_or(0.1),
+        "watermark_position": settings.get("watermark_position").and_then(|v| v.as_str()).unwrap_or("diagonal"),
+        "watermark_color": settings.get("watermark_color").and_then(|v| v.as_str()).unwrap_or("#000000"),
+    })
+}
+
+fn approval_operation_name(tool_name: &str) -> String {
+    let trimmed = tool_name.trim();
+    if trimmed.is_empty() {
+        return "工具审批".to_string();
+    }
+    format!("工具审批: {trimmed}")
+}
+
+fn approval_reason(request_id: &str, thread_id: &str, content: &str) -> String {
+    format!("request_id={request_id}\nthread_id={thread_id}\n{content}")
+}
+
 fn resolve_applicant_id_value(backend_user_id: &std::sync::RwLock<Option<Uuid>>) -> Result<Uuid> {
     crate::state::require_backend_user_id_value(backend_user_id, "审批申请人身份")
         .map_err(Error::ConfigError)
@@ -87,11 +134,7 @@ pub async fn check_for_updates() -> Result<serde_json::Value> {
     let http = build_http_client(5)?;
 
     // client_id 参数让后端返回该客户端的 needs_upgrade 状态
-    let url = if client_token.is_empty() {
-        format!("{}/api/client-config", admin_url)
-    } else {
-        format!("{}/api/client-config?client_id={}", admin_url, client_token)
-    };
+    let url = client_config_url(&admin_url, &client_token)?;
 
     let config: serde_json::Value = http
         .get(&url)
@@ -103,15 +146,7 @@ pub async fn check_for_updates() -> Result<serde_json::Value> {
         .await
         .map_err(|e| Error::ConfigError(format!("Failed to parse config: {}", e)))?;
 
-    let needs_upgrade = config
-        .get("needs_upgrade")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-
-    Ok(serde_json::json!({
-        "needs_upgrade": needs_upgrade,
-        "current_version": env!("CARGO_PKG_VERSION"),
-    }))
+    Ok(update_status_response(&config))
 }
 
 /// 获取水印配置（从 Admin Backend API 读取）。
@@ -133,14 +168,7 @@ pub async fn get_watermark_config() -> Result<serde_json::Value> {
         .await
         .map_err(|e| Error::ConfigError(format!("Failed to parse settings: {}", e)))?;
 
-    Ok(serde_json::json!({
-        "watermark_enabled": settings.get("watermark_enabled").and_then(|v| v.as_bool()).unwrap_or(false),
-        "watermark_template": settings.get("watermark_template").and_then(|v| v.as_str()).unwrap_or("{username} | {datetime}"),
-        "watermark_font_size": settings.get("watermark_font_size").and_then(|v| v.as_i64()).unwrap_or(16),
-        "watermark_opacity": settings.get("watermark_opacity").and_then(|v| v.as_f64()).unwrap_or(0.1),
-        "watermark_position": settings.get("watermark_position").and_then(|v| v.as_str()).unwrap_or("diagonal"),
-        "watermark_color": settings.get("watermark_color").and_then(|v| v.as_str()).unwrap_or("#000000"),
-    }))
+    Ok(watermark_config_response(&settings))
 }
 
 /// 提交审批工单并启动后台轮询任务（需求 23.10）。
@@ -184,12 +212,8 @@ pub async fn submit_approval_ticket(
 
     let applicant_id = resolve_applicant_id(state)?;
     let http = build_http_client(10)?;
-    let operation_name = if tool_name.trim().is_empty() {
-        "工具审批".to_string()
-    } else {
-        format!("工具审批: {}", tool_name.trim())
-    };
-    let reason = format!("request_id={request_id}\nthread_id={thread_id}\n{content}");
+    let operation_name = approval_operation_name(&tool_name);
+    let reason = approval_reason(&request_id, &thread_id, &content);
 
     let payload = ApprovalTicketPayload {
         applicant_id,
@@ -255,7 +279,97 @@ pub async fn submit_approval_ticket(
 }
 
 #[cfg(test)]
-mod tests {
+mod app_command_tests {
+    use super::{
+        approval_operation_name, approval_reason, client_config_url, get_app_version,
+        update_status_response, watermark_config_response,
+    };
+
+    #[test]
+    fn req_app_get_version_matches_package_version() {
+        assert_eq!(get_app_version(), env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn req_app_check_updates_builds_client_config_url_without_token() {
+        let url = client_config_url("http://localhost:3000", "").expect("url");
+
+        assert_eq!(url, "http://localhost:3000/api/client-config");
+    }
+
+    #[test]
+    fn req_app_check_updates_url_encodes_client_token() {
+        let url = client_config_url("http://localhost:3000/base", "client token/1").expect("url");
+
+        assert_eq!(
+            url,
+            "http://localhost:3000/base/api/client-config?client_id=client+token%2F1"
+        );
+    }
+
+    #[test]
+    fn req_app_check_updates_defaults_missing_flag_to_false() {
+        let response = update_status_response(&serde_json::json!({}));
+
+        assert_eq!(response["needs_upgrade"], false);
+        assert_eq!(response["current_version"], env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn req_app_watermark_config_applies_defaults() {
+        let response = watermark_config_response(&serde_json::json!({}));
+
+        assert_eq!(response["watermark_enabled"], false);
+        assert_eq!(response["watermark_template"], "{username} | {datetime}");
+        assert_eq!(response["watermark_font_size"], 16);
+        assert_eq!(response["watermark_position"], "diagonal");
+    }
+
+    #[test]
+    fn req_app_watermark_config_uses_backend_values() {
+        let response = watermark_config_response(&serde_json::json!({
+            "watermark_enabled": true,
+            "watermark_template": "{email}",
+            "watermark_font_size": 22,
+            "watermark_opacity": 0.25,
+            "watermark_position": "grid",
+            "watermark_color": "#123456"
+        }));
+
+        assert_eq!(response["watermark_enabled"], true);
+        assert_eq!(response["watermark_template"], "{email}");
+        assert_eq!(response["watermark_font_size"], 22);
+        assert_eq!(response["watermark_opacity"], 0.25);
+        assert_eq!(response["watermark_position"], "grid");
+        assert_eq!(response["watermark_color"], "#123456");
+    }
+
+    #[test]
+    fn req_app_submit_approval_ticket_names_blank_tool_generically() {
+        assert_eq!(approval_operation_name("  "), "工具审批");
+    }
+
+    #[test]
+    fn req_app_submit_approval_ticket_trims_tool_name() {
+        assert_eq!(
+            approval_operation_name("  write_file  "),
+            "工具审批: write_file"
+        );
+    }
+
+    #[test]
+    fn req_app_submit_approval_ticket_reason_preserves_context() {
+        let reason = approval_reason("req-1", "thread-1", "please approve");
+
+        assert_eq!(
+            reason,
+            "request_id=req-1\nthread_id=thread-1\nplease approve"
+        );
+    }
+}
+
+#[cfg(test)]
+mod applicant_id_tests {
     use super::resolve_applicant_id_value;
     use crate::Error;
     use std::sync::RwLock;

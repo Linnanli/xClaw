@@ -3,11 +3,15 @@
 //! 测试策略：直接构造 `LogBroadcaster` + `AppState` 的最小替代，
 //! 调用内部辅助逻辑，不依赖 Tauri State 注入。
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use ironclaw::channels::web::log_layer::{LogBroadcaster, LogEntry};
 
-use crate::ipc::logs::LogEntryDto;
+use crate::ipc::logs::{
+    clear_log_offset, entries_after_offset_from, export_entries_json, filter_entries,
+    search_entries, visible_limit, LogEntryDto,
+};
 
 // ── 测试辅助 ─────────────────────────────────────────────────────
 
@@ -29,60 +33,6 @@ fn broadcaster_with(entries: &[(&str, &str, &str)]) -> Arc<LogBroadcaster> {
     b
 }
 
-// ── entries_after_offset 逻辑（提取为可测试的纯函数）────────────
-
-fn entries_after_offset_pure(
-    broadcaster: &LogBroadcaster,
-    offset: usize,
-    limit: usize,
-) -> Vec<LogEntryDto> {
-    let all = broadcaster.recent_entries();
-    let sliced: Vec<_> = all.into_iter().skip(offset).collect();
-    let start = sliced.len().saturating_sub(limit);
-    sliced.into_iter().skip(start).map(Into::into).collect()
-}
-
-fn search_pure(
-    broadcaster: &LogBroadcaster,
-    offset: usize,
-    query: &str,
-    limit: usize,
-) -> Vec<LogEntryDto> {
-    let q = query.to_lowercase();
-    let filtered: Vec<_> = broadcaster
-        .recent_entries()
-        .into_iter()
-        .skip(offset)
-        .filter(|e| e.message.to_lowercase().contains(&q) || e.target.to_lowercase().contains(&q))
-        .collect();
-    let start = filtered.len().saturating_sub(limit);
-    filtered.into_iter().skip(start).map(Into::into).collect()
-}
-
-fn filter_pure(
-    broadcaster: &LogBroadcaster,
-    offset: usize,
-    level: &str,
-    module: &str,
-    limit: usize,
-) -> Vec<LogEntryDto> {
-    let level_filter = level.to_uppercase();
-    let module_filter = module.to_lowercase();
-    let filtered: Vec<_> = broadcaster
-        .recent_entries()
-        .into_iter()
-        .skip(offset)
-        .filter(|e| {
-            let level_ok = level_filter.is_empty() || e.level.to_uppercase() == level_filter;
-            let module_ok =
-                module_filter.is_empty() || e.target.to_lowercase().contains(&module_filter);
-            level_ok && module_ok
-        })
-        .collect();
-    let start = filtered.len().saturating_sub(limit);
-    filtered.into_iter().skip(start).map(Into::into).collect()
-}
-
 // ── 正常路径测试 ─────────────────────────────────────────────────
 
 #[test]
@@ -92,7 +42,7 @@ fn test_get_logs_returns_all_entries() {
         ("WARN", "mod_b", "msg 2"),
         ("ERROR", "mod_c", "msg 3"),
     ]);
-    let result = entries_after_offset_pure(&b, 0, 100);
+    let result = entries_after_offset_from(&b, 0, 100);
     assert_eq!(result.len(), 3);
     assert_eq!(result[0].message, "msg 1");
     assert_eq!(result[2].message, "msg 3");
@@ -108,7 +58,7 @@ fn test_get_logs_respects_limit() {
         ("INFO", "m", "e"),
     ]);
     // limit=3 应返回最新的 3 条（c, d, e）
-    let result = entries_after_offset_pure(&b, 0, 3);
+    let result = entries_after_offset_from(&b, 0, 3);
     assert_eq!(result.len(), 3);
     assert_eq!(result[0].message, "c");
     assert_eq!(result[2].message, "e");
@@ -117,7 +67,7 @@ fn test_get_logs_respects_limit() {
 #[test]
 fn test_get_logs_empty_broadcaster() {
     let b = Arc::new(LogBroadcaster::new());
-    let result = entries_after_offset_pure(&b, 0, 100);
+    let result = entries_after_offset_from(&b, 0, 100);
     assert!(result.is_empty());
 }
 
@@ -131,7 +81,7 @@ fn test_clear_hides_existing_entries() {
     assert_eq!(offset, 2);
 
     // 清空后查询应为空
-    let result = entries_after_offset_pure(&b, offset, 100);
+    let result = entries_after_offset_from(&b, offset, 100);
     assert!(result.is_empty());
 }
 
@@ -144,7 +94,7 @@ fn test_new_entries_visible_after_clear() {
     b.send(make_entry("INFO", "m", "new 1"));
     b.send(make_entry("INFO", "m", "new 2"));
 
-    let result = entries_after_offset_pure(&b, offset, 100);
+    let result = entries_after_offset_from(&b, offset, 100);
     assert_eq!(result.len(), 2);
     assert_eq!(result[0].message, "new 1");
     assert_eq!(result[1].message, "new 2");
@@ -154,7 +104,7 @@ fn test_new_entries_visible_after_clear() {
 fn test_clear_offset_zero_returns_all() {
     let b = broadcaster_with(&[("INFO", "m", "a"), ("INFO", "m", "b")]);
     // offset=0 等同于未清空
-    let result = entries_after_offset_pure(&b, 0, 100);
+    let result = entries_after_offset_from(&b, 0, 100);
     assert_eq!(result.len(), 2);
 }
 
@@ -167,7 +117,7 @@ fn test_search_matches_message() {
         ("INFO", "mod", "DLP rules synced"),
         ("INFO", "mod", "engine ready"),
     ]);
-    let result = search_pure(&b, 0, "engine", 100);
+    let result = search_entries(&b, 0, "engine", 100);
     assert_eq!(result.len(), 2);
     assert!(result.iter().all(|e| e.message.contains("engine")));
 }
@@ -179,21 +129,21 @@ fn test_search_matches_module() {
         ("INFO", "desktop_client::engine", "starting"),
         ("INFO", "ironclaw::agent", "ready"),
     ]);
-    let result = search_pure(&b, 0, "ironclaw", 100);
+    let result = search_entries(&b, 0, "ironclaw", 100);
     assert_eq!(result.len(), 2);
 }
 
 #[test]
 fn test_search_case_insensitive() {
     let b = broadcaster_with(&[("INFO", "mod", "Engine Started")]);
-    let result = search_pure(&b, 0, "engine", 100);
+    let result = search_entries(&b, 0, "engine", 100);
     assert_eq!(result.len(), 1);
 }
 
 #[test]
 fn test_search_no_match_returns_empty() {
     let b = broadcaster_with(&[("INFO", "mod", "hello world")]);
-    let result = search_pure(&b, 0, "xyz_not_found", 100);
+    let result = search_entries(&b, 0, "xyz_not_found", 100);
     assert!(result.is_empty());
 }
 
@@ -201,7 +151,7 @@ fn test_search_no_match_returns_empty() {
 fn test_search_respects_offset() {
     let b = broadcaster_with(&[("INFO", "mod", "engine old"), ("INFO", "mod", "engine new")]);
     // 清空后只有第 2 条可见
-    let result = search_pure(&b, 1, "engine", 100);
+    let result = search_entries(&b, 1, "engine", 100);
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].message, "engine new");
 }
@@ -215,7 +165,7 @@ fn test_filter_by_level() {
         ("WARN", "mod", "warn msg"),
         ("ERROR", "mod", "error msg"),
     ]);
-    let result = filter_pure(&b, 0, "warn", "", 100);
+    let result = filter_entries(&b, 0, "warn", "", 100);
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].level, "WARN");
 }
@@ -224,7 +174,7 @@ fn test_filter_by_level() {
 fn test_filter_level_case_insensitive() {
     let b = broadcaster_with(&[("ERROR", "mod", "boom")]);
     // 前端传来的可能是小写
-    let result = filter_pure(&b, 0, "error", "", 100);
+    let result = filter_entries(&b, 0, "error", "", 100);
     assert_eq!(result.len(), 1);
 }
 
@@ -235,7 +185,7 @@ fn test_filter_by_module() {
         ("INFO", "desktop_client::ipc", "ipc msg"),
         ("INFO", "ironclaw::config", "config msg"),
     ]);
-    let result = filter_pure(&b, 0, "", "ironclaw", 100);
+    let result = filter_entries(&b, 0, "", "ironclaw", 100);
     assert_eq!(result.len(), 2);
     assert!(result.iter().all(|e| e.module.contains("ironclaw")));
 }
@@ -247,7 +197,7 @@ fn test_filter_level_and_module_combined() {
         ("WARN", "ironclaw::agent", "agent warn"),
         ("ERROR", "desktop_client", "client error"),
     ]);
-    let result = filter_pure(&b, 0, "error", "ironclaw", 100);
+    let result = filter_entries(&b, 0, "error", "ironclaw", 100);
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].message, "agent error");
 }
@@ -256,14 +206,14 @@ fn test_filter_level_and_module_combined() {
 fn test_filter_empty_strings_returns_all() {
     let b = broadcaster_with(&[("INFO", "mod_a", "a"), ("WARN", "mod_b", "b")]);
     // level="" module="" 不过滤
-    let result = filter_pure(&b, 0, "", "", 100);
+    let result = filter_entries(&b, 0, "", "", 100);
     assert_eq!(result.len(), 2);
 }
 
 #[test]
 fn test_filter_respects_offset() {
     let b = broadcaster_with(&[("ERROR", "mod", "old error"), ("ERROR", "mod", "new error")]);
-    let result = filter_pure(&b, 1, "error", "", 100);
+    let result = filter_entries(&b, 1, "error", "", 100);
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].message, "new error");
 }
@@ -273,8 +223,7 @@ fn test_filter_respects_offset() {
 #[test]
 fn test_export_produces_valid_json() {
     let b = broadcaster_with(&[("INFO", "mod", "hello"), ("ERROR", "mod", "world")]);
-    let entries: Vec<LogEntryDto> = b.recent_entries().into_iter().map(Into::into).collect();
-    let json = serde_json::to_string_pretty(&entries).expect("should serialize");
+    let json = export_entries_json(&b, 0).expect("should serialize");
 
     // 验证是合法 JSON 数组
     let parsed: Vec<serde_json::Value> = serde_json::from_str(&json).expect("should parse");
@@ -286,8 +235,7 @@ fn test_export_produces_valid_json() {
 #[test]
 fn test_export_empty_is_empty_array() {
     let b = Arc::new(LogBroadcaster::new());
-    let entries: Vec<LogEntryDto> = b.recent_entries().into_iter().map(Into::into).collect();
-    let json = serde_json::to_string_pretty(&entries).expect("should serialize");
+    let json = export_entries_json(&b, 0).expect("should serialize");
     assert_eq!(json.trim(), "[]");
 }
 // ── LogEntryDto From 转换测试 ─────────────────────────────────────
@@ -307,8 +255,7 @@ fn test_log_entry_dto_field_mapping() {
 #[test]
 fn test_export_logs_json_is_valid_and_contains_all_entries() {
     let b = broadcaster_with(&[("INFO", "mod", "hello"), ("ERROR", "mod", "world")]);
-    let entries: Vec<LogEntryDto> = b.recent_entries().into_iter().map(Into::into).collect();
-    let json = serde_json::to_string_pretty(&entries).expect("should serialize");
+    let json = export_entries_json(&b, 0).expect("should serialize");
 
     let parsed: Vec<serde_json::Value> = serde_json::from_str(&json).expect("should parse");
     assert_eq!(parsed.len(), 2);
@@ -320,13 +267,7 @@ fn test_export_logs_json_is_valid_and_contains_all_entries() {
 fn test_export_logs_respects_clear_offset() {
     let b = broadcaster_with(&[("INFO", "mod", "old"), ("INFO", "mod", "new")]);
     let offset = 1; // 清空后只有第 2 条可见
-    let entries: Vec<LogEntryDto> = b
-        .recent_entries()
-        .into_iter()
-        .skip(offset)
-        .map(Into::into)
-        .collect();
-    let json = serde_json::to_string_pretty(&entries).expect("should serialize");
+    let json = export_entries_json(&b, offset).expect("should serialize");
     let parsed: Vec<serde_json::Value> = serde_json::from_str(&json).expect("should parse");
     assert_eq!(parsed.len(), 1);
     assert_eq!(parsed[0]["message"], "new");
@@ -335,8 +276,7 @@ fn test_export_logs_respects_clear_offset() {
 #[test]
 fn test_export_logs_writes_to_temp_dir() {
     let b = broadcaster_with(&[("INFO", "mod", "test entry")]);
-    let entries: Vec<LogEntryDto> = b.recent_entries().into_iter().map(Into::into).collect();
-    let json = serde_json::to_string_pretty(&entries).expect("should serialize");
+    let json = export_entries_json(&b, 0).expect("should serialize");
 
     // 模拟写文件逻辑
     let dir = std::env::temp_dir();
@@ -349,4 +289,25 @@ fn test_export_logs_writes_to_temp_dir() {
 
     // 清理
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn req_logs_clear_command_records_current_buffer_len() {
+    let b = broadcaster_with(&[("INFO", "mod", "old 1"), ("INFO", "mod", "old 2")]);
+    let offset = AtomicUsize::new(0);
+
+    clear_log_offset(&b, &offset);
+    b.send(make_entry("INFO", "mod", "new"));
+
+    assert_eq!(offset.load(Ordering::Relaxed), 2);
+    let visible = entries_after_offset_from(&b, offset.load(Ordering::Relaxed), 100);
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0].message, "new");
+}
+
+#[test]
+fn req_logs_limit_defaults_and_caps_to_one_thousand() {
+    assert_eq!(visible_limit(None), 100);
+    assert_eq!(visible_limit(Some(5)), 5);
+    assert_eq!(visible_limit(Some(5_000)), 1_000);
 }
