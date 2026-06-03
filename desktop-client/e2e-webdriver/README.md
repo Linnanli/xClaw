@@ -21,8 +21,12 @@ cd desktop-client
 set -a && source ./.env && set +a
 export MANAGED_MODE=false
 export OPENAI_API_KEY="$LLM_API_KEY"
+export RUST_LOG=desktop_client=debug,ironclaw=debug,tower_http=warn
 cargo tauri dev -f webdriver
 ```
+
+`desktop_client=debug` 会打开场景 5 的 SafetyBridge / agent dispatch 日志序断言；
+`ironclaw=debug` 保留引擎侧调试日志。未显式设置时，debug 级别日志可能缺失并导致 #1058 回归测试假阴。
 
 等到终端出现 WebView 起来 + `lsof -ti:4445` 有进程后再跑测试。
 
