@@ -9,7 +9,8 @@
 #[cfg(test)]
 mod tests {
     use crate::ipc::routines::{
-        CreateRoutineRequest, RoutineInfo, RoutineRun, RoutineRunsResponse,
+        normalize_cron_timezone, routine_next_fire_at, CreateRoutineRequest, RoutineInfo,
+        RoutineRun, RoutineRunsResponse,
     };
 
     // =========================================================================
@@ -349,15 +350,16 @@ mod tests {
     /// 永远找不到该任务，cron 任务永远不会被触发。
     #[test]
     fn test_regression_cron_next_fire_at_is_computed_on_create() {
-        use ironclaw::agent::routine::next_cron_fire;
+        use ironclaw::agent::routine::Trigger;
 
-        // 模拟 ic_create_routine 中的逻辑：对 cron trigger 计算 next_fire_at
-        let schedule = "55 12 * * *"; // 每天 12:55
-        let next = next_cron_fire(schedule, None)
+        let trigger = Trigger::Cron {
+            schedule: "55 12 * * *".to_string(),
+            timezone: Some("UTC".to_string()),
+        };
+        let next = routine_next_fire_at(&trigger)
             .expect("valid cron expression should not error")
             .expect("cron should always have a next fire time");
 
-        // next_fire_at 必须在未来
         assert!(
             next > chrono::Utc::now(),
             "next_fire_at must be in the future, got: {next}"
@@ -367,7 +369,7 @@ mod tests {
     /// manual 和 event 触发器不应计算 next_fire_at（应为 None）。
     #[test]
     fn test_regression_non_cron_triggers_have_no_next_fire_at() {
-        use ironclaw::agent::routine::{next_cron_fire, Trigger};
+        use ironclaw::agent::routine::Trigger;
 
         let non_cron_triggers = vec![
             serde_json::json!({"type": "manual"}),
@@ -377,20 +379,30 @@ mod tests {
         for trigger_json in non_cron_triggers {
             let trigger: Trigger =
                 serde_json::from_value(trigger_json.clone()).expect("should parse trigger");
-
-            // 只有 Cron 变体才调用 next_cron_fire
-            let next_fire_at = match &trigger {
-                Trigger::Cron { schedule, timezone } => {
-                    next_cron_fire(schedule, timezone.as_deref()).expect("valid cron")
-                }
-                _ => None,
-            };
+            let next_fire_at = routine_next_fire_at(&trigger).expect("trigger should be valid");
 
             assert!(
                 next_fire_at.is_none(),
                 "non-cron trigger {:?} should have next_fire_at = None",
                 trigger_json["type"]
             );
+        }
+    }
+
+    #[test]
+    fn req_routines_create_fills_missing_cron_timezone_before_scheduling() {
+        use ironclaw::agent::routine::Trigger;
+
+        let trigger = normalize_cron_timezone(Trigger::Cron {
+            schedule: "0 9 * * *".to_string(),
+            timezone: None,
+        });
+
+        match trigger {
+            Trigger::Cron { timezone, .. } => {
+                assert!(timezone.is_some(), "cron timezone should be filled");
+            }
+            other => panic!("expected cron trigger, got {other:?}"),
         }
     }
 

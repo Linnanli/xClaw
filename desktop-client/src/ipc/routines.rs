@@ -90,6 +90,32 @@ fn maybe_upgrade_legacy_lightweight(routine: &mut Routine) -> bool {
     true
 }
 
+pub(crate) fn normalize_cron_timezone(trigger: Trigger) -> Trigger {
+    match trigger {
+        Trigger::Cron {
+            schedule,
+            timezone: None,
+        } => {
+            let local_tz = ironclaw::timezone::detect_system_timezone().to_string();
+            Trigger::Cron {
+                schedule,
+                timezone: Some(local_tz),
+            }
+        }
+        other => other,
+    }
+}
+
+pub(crate) fn routine_next_fire_at(
+    trigger: &Trigger,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>, String> {
+    match trigger {
+        Trigger::Cron { schedule, timezone } => next_cron_fire(schedule, timezone.as_deref())
+            .map_err(|e| format!("Invalid cron expression: {}", e)),
+        _ => Ok(None),
+    }
+}
+
 /// 等待 routine run 被链接到 job（异步调度存在短暂落库延迟）。
 async fn wait_for_run_job_link(
     db: &std::sync::Arc<dyn ironclaw::db::Database>,
@@ -164,28 +190,8 @@ pub async fn ic_create_routine(
     let trigger: Trigger = serde_json::from_value(request.trigger)
         .map_err(|e| format!("Invalid trigger format: {}", e))?;
 
-    // 对 cron 触发器：若前端未指定 timezone，自动填充系统本地时区，
-    // 确保用户输入的时间按本地时间解释而非 UTC。
-    let trigger = match trigger {
-        Trigger::Cron {
-            schedule,
-            timezone: None,
-        } => {
-            let local_tz = ironclaw::timezone::detect_system_timezone().to_string();
-            Trigger::Cron {
-                schedule,
-                timezone: Some(local_tz),
-            }
-        }
-        other => other,
-    };
-
-    // 对 cron 触发器计算初始 next_fire_at，否则引擎永远不会调度该任务
-    let next_fire_at = match &trigger {
-        Trigger::Cron { schedule, timezone } => next_cron_fire(schedule, timezone.as_deref())
-            .map_err(|e| format!("Invalid cron expression: {}", e))?,
-        _ => None,
-    };
+    let trigger = normalize_cron_timezone(trigger);
+    let next_fire_at = routine_next_fire_at(&trigger)?;
 
     let now = chrono::Utc::now();
     let routine = Routine {
