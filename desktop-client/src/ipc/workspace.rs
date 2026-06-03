@@ -28,12 +28,20 @@ pub async fn ic_workspace_git_status(state: State<'_, EngineState>) -> Result<St
         .await
         .map_err(|e| format!("Failed to run git: {e}"))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    git_status_result(output.status.success(), &output.stdout, &output.stderr)
+}
+
+pub(crate) fn git_status_result(
+    success: bool,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> Result<String, String> {
+    if !success {
+        let stderr = String::from_utf8_lossy(stderr);
         return Err(format!("git status failed: {stderr}"));
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(String::from_utf8_lossy(stdout).into_owned())
 }
 
 /// 返回当前工作目录路径。
@@ -167,4 +175,55 @@ pub async fn ic_list_sandbox_workspaces() -> Result<Vec<SandboxWorkspace>, Strin
 pub struct SandboxWorkspace {
     pub name: String,
     pub path: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{git_status_result, ActiveServer, SandboxWorkspace};
+
+    #[test]
+    fn req_workspace_git_status_returns_stdout_on_success() {
+        let stdout = b"On branch xClaw\nnothing to commit, working tree clean\n";
+
+        let result = git_status_result(true, stdout, b"").expect("status should succeed");
+
+        assert!(result.contains("On branch xClaw"));
+        assert!(result.contains("working tree clean"));
+    }
+
+    #[test]
+    fn test_workspace_failure_git_status_surfaces_stderr() {
+        let err = git_status_result(false, b"", b"fatal: not a git repository")
+            .expect_err("status should fail");
+
+        assert!(err.contains("git status failed"));
+        assert!(err.contains("not a git repository"));
+    }
+
+    #[test]
+    fn req_workspace_active_server_contract_renames_type_field() {
+        let server = ActiveServer {
+            name: "filesystem".to_string(),
+            server_type: "mcp".to_string(),
+        };
+
+        let json = serde_json::to_value(&server).expect("serialize active server");
+
+        assert_eq!(json["name"], "filesystem");
+        assert_eq!(json["type"], "mcp");
+        assert!(json.get("server_type").is_none());
+    }
+
+    #[test]
+    fn req_workspace_sandbox_workspace_contract_matches_frontend() {
+        let workspace = SandboxWorkspace {
+            name: "thread-123".to_string(),
+            path: "/tmp/thread-123".to_string(),
+        };
+
+        let json = serde_json::to_value(&workspace).expect("serialize workspace");
+
+        assert_eq!(json["name"], "thread-123");
+        assert_eq!(json["path"], "/tmp/thread-123");
+    }
 }

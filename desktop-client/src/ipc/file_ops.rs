@@ -28,8 +28,16 @@ pub async fn ic_undo_file_edit(
 ) -> Result<String, String> {
     // 确保引擎就绪（统一的前置检查）
     let _state = state.get()?;
+    undo_file_edit(&path, &old_string, &new_string, count).await
+}
 
-    let file_path = std::path::Path::new(&path);
+pub(crate) async fn undo_file_edit(
+    path: &str,
+    old_string: &str,
+    new_string: &str,
+    count: usize,
+) -> Result<String, String> {
+    let file_path = std::path::Path::new(path);
     if !file_path.exists() {
         return Err(format!("文件不存在: {}", path));
     }
@@ -46,7 +54,7 @@ pub async fn ic_undo_file_edit(
         ));
     }
 
-    let restored = replace_first_n(&content, &new_string, &old_string, count);
+    let restored = replace_first_n(&content, new_string, old_string, count);
 
     tokio::fs::write(file_path, &restored)
         .await
@@ -66,14 +74,10 @@ pub async fn ic_open_file_at_line(path: String, line: Option<u32>) -> Result<(),
         return Err(format!("文件不存在: {}", path));
     }
 
-    // 优先尝试 VS Code CLI
-    let vscode_arg = match line {
-        Some(l) => format!("--goto {}:{}", path, l),
-        None => path.clone(),
-    };
+    let vscode_args = vscode_args(&path, line);
 
     let vscode_result = tokio::process::Command::new("code")
-        .args(vscode_arg.split_whitespace())
+        .args(&vscode_args)
         .status()
         .await;
 
@@ -91,6 +95,13 @@ pub async fn ic_open_file_at_line(path: String, line: Option<u32>) -> Result<(),
     // 回退: 使用 `open` (macOS) / `xdg-open` (Linux) / `start` (Windows)
     open::that(&path).map_err(|e| format!("无法打开文件: {}", e))?;
     Ok(())
+}
+
+pub(crate) fn vscode_args(path: &str, line: Option<u32>) -> Vec<String> {
+    match line {
+        Some(line) => vec!["--goto".to_string(), format!("{}:{}", path, line)],
+        None => vec![path.to_string()],
+    }
 }
 
 /// 替换字符串中前 `n` 次出现的 `from` 为 `to`。
@@ -155,5 +166,53 @@ mod tests {
         let input = "hello";
         let result = replace_first_n(input, "", "x", 5);
         assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn req_files_open_file_at_line_preserves_paths_with_spaces() {
+        let args = vscode_args("/tmp/project with spaces/main.rs", Some(42));
+
+        assert_eq!(args, vec!["--goto", "/tmp/project with spaces/main.rs:42"]);
+    }
+
+    #[test]
+    fn req_files_open_file_without_line_uses_single_path_arg() {
+        let args = vscode_args("/tmp/project with spaces/main.rs", None);
+
+        assert_eq!(args, vec!["/tmp/project with spaces/main.rs"]);
+    }
+
+    #[tokio::test]
+    async fn req_files_undo_file_edit_roundtrip() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("sample.txt");
+        tokio::fs::write(&path, "alpha new beta new gamma")
+            .await
+            .expect("write fixture");
+
+        let message = undo_file_edit(path.to_str().expect("utf8 path"), "old", "new", 2)
+            .await
+            .expect("undo should succeed");
+        let restored = tokio::fs::read_to_string(&path)
+            .await
+            .expect("read restored");
+
+        assert_eq!(message, "已撤回 2 处替换");
+        assert_eq!(restored, "alpha old beta old gamma");
+    }
+
+    #[tokio::test]
+    async fn test_files_failure_undo_rejects_changed_content() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("sample.txt");
+        tokio::fs::write(&path, "alpha new beta")
+            .await
+            .expect("write fixture");
+
+        let err = undo_file_edit(path.to_str().expect("utf8 path"), "old", "new", 2)
+            .await
+            .expect_err("undo should reject drifted content");
+
+        assert!(err.contains("文件内容已变更"));
     }
 }
