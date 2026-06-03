@@ -79,6 +79,15 @@ pub fn load_embedded_bundles() -> HashMap<String, BundleDefinition> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::registry::manifest::ManifestKind;
+
+    fn artifact_url(manifest: &ExtensionManifest) -> &str {
+        manifest
+            .artifacts
+            .get("wasm32-wasip2")
+            .and_then(|artifact| artifact.url.as_deref())
+            .expect("wasm32-wasip2 artifact URL should be embedded")
+    }
 
     #[test]
     fn test_load_embedded_parses() {
@@ -99,5 +108,26 @@ mod tests {
             bundles.is_empty() || bundles.contains_key("default"),
             "Expected either empty bundles or 'default' bundle"
         );
+    }
+
+    #[test]
+    fn req_registry_1205_embedded_slack_artifacts_use_kind_prefixed_urls() {
+        let manifests = load_embedded();
+
+        let slack_tool = manifests
+            .get("tools/slack-tool")
+            .expect("embedded catalog should include Slack tool by manifest name");
+        let slack_channel = manifests
+            .get("channels/slack")
+            .expect("embedded catalog should include Slack channel");
+
+        assert_eq!(slack_tool.name, "slack-tool");
+        assert_eq!(slack_tool.kind, ManifestKind::Tool);
+        assert!(artifact_url(slack_tool).contains("/tool-slack-"));
+        assert!(!artifact_url(slack_tool).contains("/slack-tool-wasm32-wasip2.tar.gz"));
+
+        assert_eq!(slack_channel.name, "slack");
+        assert_eq!(slack_channel.kind, ManifestKind::Channel);
+        assert!(artifact_url(slack_channel).contains("/channel-slack-"));
     }
 }
