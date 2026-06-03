@@ -14,11 +14,10 @@
 > - **可直接照抄执行**：§0 的启动命令 + WebDriver 会话样板、§1–§7 七个场景的操作步骤与
 >   断言、§14.4-C 的"经 IPC 自查日志比顺序"示例——这些是具体到命令/代码片段、可手动或
 >   脚本化跑起来的，属于"现在就能执行"的部分。
-> - **已落地但有边界**：§12 I-1~I-5 已由 #1053 覆盖；§15.3 A-1~A-5 已由 #1055
+> - **已落地但有边界**：§4 approve 分支已由 #1056 覆盖；§12 I-1~I-5 已由 #1053 覆盖；§15.3 A-1~A-5 已由 #1055
 >   覆盖；§14.5 的 DLP / 审批 / hook / sandbox 不变量也有代码级测试，但其中 DLP、hook、
 >   sandbox 仍保留更强断言缺口（见 §14.5 的 2026-06-02 状态表）。
-> - **仍待落地为代码**：§4 approve 分支当前 skip（#1056）；§14.4-C WebDriver 日志序
->   断言（#1058）；完整 `send_chat_message` blocked 零副作用测试（#1059）；真实 hook
+> - **仍待落地为代码**：§14.4-C WebDriver 日志序断言（#1058）；完整 `send_chat_message` blocked 零副作用测试（#1059）；真实 hook
 >   生命周期顺序（#1057）；sandbox 真实逃逸/绕过样本（#1060）；以及 §15.3 A-6 的 E2E
 >   冒烟仍为可选补测。
 > - **结论 / 知识沉淀**：§10–§16 的缺口、适用性、日志分层等是判断与建议，供决策与后续排期，
@@ -160,7 +159,7 @@ Tauri WebDriver"误报成产品失败。
 | §1 引擎就绪与刷新韧性 | 已落地 | WebDriver + `get_engine_status` |
 | §2 Agent 基础执行 | 已落地但依赖 LLM 可达 | #998 |
 | §3 工具注册 / list_dir | 已落地但依赖 LLM 选中只读工具 | #1000 / #1009 |
-| §4 审批 fail-safe | card + deny 已落地；approve 分支 skip | #1001 / #1009；approve 补测 #1056 |
+| §4 审批 fail-safe | card + deny + approve 已落地；approve 探针文件自动清理 | #1001 / #1009 / #1056 |
 | §5 DLP 出站脱敏 | 已落地 | 仍需日志序增强 #1058、完整零副作用 #1059 |
 | §6 会话持久化 | 已落地；核心断言看用户 marker 回放 | 发送路径仍受模型/后端可用性影响 |
 | §7 提示注入安全 | 已落地 | 纯自然语言 jailbreak 硬阻断仍看 #1021 |
@@ -335,14 +334,13 @@ assert denied, "拒绝后未出现 data-approved=false 横幅"
 - ✅ 写操作触发审批卡片且不自动执行；拒绝→`data-approved=false`，批准→`data-approved=true`。
 - ❌ Fail-Open：写文件未弹审批直接执行。
 
-**2026-06-02 落地状态**：
+**2026-06-03 落地状态**：
 
 - `test_write_tool_triggers_approval_card` 与 `test_deny_yields_approved_false` 已落地，覆盖
   "需审批工具必须弹卡"与"拒绝后 `data-approved=false`"。
-- `test_approve_yields_approved_true` 当前显式 skip：approve 会真实写入 `e2e_probe.txt` 到
-  `desktop-client` 工作目录，造成跨用例污染。后续应先改为 sandbox/临时 cwd 或补 teardown，
-  再启用 approve 分支。跟踪 issue：#1056。
-- 因此本节现状是 **Fail-Safe 主干已覆盖，approve happy path 尚未进入自动回归**。
+- `test_approve_yields_approved_true` 已启用：approve 写入 `e2e-webdriver/.tmp/` 下的探针文件，
+  断言 `data-approved=true` 与文件内容后通过 fixture 清理探针文件和空目录。跟踪 issue：#1056。
+- 因此本节现状是 **Fail-Safe 主干与 approve happy path 均已进入自动回归**。
 
 > ⚠️ **环境变量缺口**：题目中的 `AGENT_AUTO_APPROVE_TOOLS=false` 在全仓
 > （`crates/` + `desktop-client/`）**无任何匹配**（见 §10-G3）。不能用它来断言
@@ -818,10 +816,10 @@ RUST_LOG=desktop_client=debug,ironclaw=debug,dasclaw_hooks=trace cargo tauri dev
 | 不变量 | #1055 / 当前代码状态 | 仍缺什么 | 跟踪 |
 |---|---|---|---|
 | DLP 先于派发、被拦零派发 | 已有 `req_chat_dlp_block_before_dispatch`，覆盖 `reject_blocked_scan` seam + toy sender 计数 | 尚未覆盖完整 `send_chat_message` 路径下的零副作用；WebDriver 也尚未做 `ic_search_logs` 顺序断言 | #1059 / #1058 |
-| 审批先于工具执行 | 已有 `req_approval_gate_before_tool_exec`，用 `RecordingTool` 证明首个需审批工具会中断，后续工具未执行 | WebDriver approve 分支仍 skip，未覆盖 `data-approved=true` happy path | #1056 |
+| 审批先于工具执行 | 已有 `req_approval_gate_before_tool_exec`，用 `RecordingTool` 证明首个需审批工具会中断，后续工具未执行；WebDriver approve 分支已覆盖 `data-approved=true` happy path | 仍受 LLM 选中写工具与 WebDriver 环境可达性影响 | #1056 |
 | Hook 生命周期顺序 | 已有 `req_hooks_lifecycle_order`，但它实际验证同一 `HookPoint::BeforeInbound` 内的注册顺序 | 尚未验证 `PreToolUse -> tool execution -> PostToolUse` 真实生命周期顺序 | #1057 |
 | sandbox 不可绕过 | 已有 `test_security_sandbox_no_bypass`，覆盖 enterprise gate pure decision fail-closed | 尚未覆盖真实或半真实进程级逃逸/绕过样本 | #1060 |
-| 端到端"该拦的拦/该批的批" | §4 card/deny、§5 DLP、§7 注入防御已有 WebDriver 覆盖 | approve 分支、日志序、部分场景 LLM/dev hook 依赖仍需显式管理 | #1056 / #1058 |
+| 端到端"该拦的拦/该批的批" | §4 card/deny/approve、§5 DLP、§7 注入防御已有 WebDriver 覆盖 | 日志序、部分场景 LLM/dev hook 依赖仍需显式管理 | #1058 |
 
 ### 14.6 结论
 
@@ -1015,7 +1013,6 @@ loop 的入口唯一**：
 | **P0** | 记忆 CRUD 真回环 | 待开 | 功能验证 | §13 记忆族 AppState + Workspace 命令级集成测试 |
 | **P0** | 技能安装 E2E | 待开 | 功能验证 | §13 技能族命令级集成测试 |
 | **P0** | 审批规则配置面 E2E | #608 | 功能/UX | §1-§7 扩展或命令级 + 前端联调 |
-| **P1** | WebDriver approve 分支补回归 | #1056 | 安全/UX 不变量 | sandbox/临时 cwd + `data-approved=true` 断言 |
 | **P1** | Hook 生命周期真实顺序 | #1057 | 安全不变量 | `PreToolUse -> exec -> PostToolUse` 记录器测试 |
 | **P1** | DLP 日志序审计 | #1058 | 数据/安全验证 | §14.4-C 日志序断言进 WebDriver/CI |
 | **P1** | DLP blocked 完整零副作用 | #1059 | 安全不变量 | 完整 `send_chat_message` 或等价 seam 断言 |

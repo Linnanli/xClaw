@@ -6,22 +6,24 @@
 验证：
   1. 触发需审批的写操作 → 必须弹出审批卡片（**不能**静默执行，Fail-Safe）
   2. 点击「拒绝」→ 结果横幅 `data-approved=false`
+    3. 点击「批准」→ 结果横幅 `data-approved=true`，且探针文件被测试清理
 
 为什么不断言 `AGENT_AUTO_APPROVE_TOOLS=false` 环境变量（plan §10-G3）：
   该变量在全仓 `crates/` + `desktop-client/` 下零匹配，是文档残留的伪不变量。
   正确的 Fail-Safe 判据是 **行为级**：写操作触发审批卡片，而不是检查某个不存在的开关。
 
-为什么 `approve` 分支被 skip：
-  审批通过后会真把 `e2e_probe.txt` 写到 desktop-client 工作目录（同一 cwd 持久化），
-  造成跨用例污染 + 需要清理逻辑。Deny 分支已经覆盖了完整的「卡片 → 决策 → 横幅」链路，
-  Approve 分支差异仅在 `data-approved=true` 这一布尔值，相对成本/价值不划算。
-  若后续要补，应优先重构成 sandbox 子目录或可清理的临时路径。
+approve 分支的污染控制：
+    审批通过后会真实写文件，因此用例只允许写入 e2e-webdriver/.tmp/ 下的探针文件，
+    并在测试前后清理该路径与旧版 e2e_probe.txt 探针，避免跨用例 / 跨运行污染。
 
 测试之间用 `clear_pending_approval` 在开头清掉上一条用例可能留下的挂起卡片，
 避免共享同一 WKWebView 时的串扰。
 """
 
 from __future__ import annotations
+
+from contextlib import suppress
+from pathlib import Path
 
 import pytest
 
@@ -36,9 +38,14 @@ from webdriver_client import (
     wait_composer_ready,
 )
 
+DESKTOP_CLIENT_DIR = Path(__file__).resolve().parents[2]
+PROBE_RELATIVE_PATH = "e2e-webdriver/.tmp/e2e_probe_approval.txt"
+PROBE_PATH = DESKTOP_CLIENT_DIR / PROBE_RELATIVE_PATH
+LEGACY_PROBE_PATH = DESKTOP_CLIENT_DIR / "e2e_probe.txt"
+
 # 提示词照搬 plan §4，最大概率让 LLM 选择走写文件类需审批工具。
 WRITE_PROMPT = (
-    "请立即调用 write_file 工具在当前工作目录创建文件 e2e_probe.txt，"
+    f"请立即调用 write_file 工具在当前工作目录创建文件 {PROBE_RELATIVE_PATH}，"
     "内容为字符串 hello。不要先解释，不要先用 read_file/list_dir 探查，"
     "也不要建议我用其它方式——直接调用 write_file。"
 )
@@ -48,7 +55,29 @@ WRITE_PROMPT = (
 CARD_TIMEOUT = 120.0
 
 
-def test_write_tool_triggers_approval_card(session_id):
+def cleanup_probe_files() -> None:
+    """清理本场景可能产生的探针文件。"""
+    PROBE_PATH.unlink(missing_ok=True)
+    LEGACY_PROBE_PATH.unlink(missing_ok=True)
+    with suppress(OSError):
+        PROBE_PATH.parent.rmdir()
+
+
+def prepare_probe_dir() -> None:
+    cleanup_probe_files()
+    PROBE_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+
+@pytest.fixture
+def probe_workspace():
+    prepare_probe_dir()
+    try:
+        yield
+    finally:
+        cleanup_probe_files()
+
+
+def test_write_tool_triggers_approval_card(session_id, probe_workspace):
     """Fail-Safe：发"新建文件"指令 → 审批卡片出现，且不点按钮。
 
     这是 plan §4 的核心 Fail-Safe 不变量——写操作**绝不能**绕过审批静默执行。
@@ -71,12 +100,13 @@ def test_write_tool_triggers_approval_card(session_id):
         f" 末态 snapshot={snapshot(session_id)}"
     )
     assert s1["approvalCard"] is True, "snapshot 自相矛盾"
+    assert not PROBE_PATH.exists(), "审批前探针文件已被写入，疑似 Fail-Open 回归"
 
     # 清掉挂起审批，避免污染后续用例
     clear_pending_approval(session_id)
 
 
-def test_deny_yields_approved_false(session_id):
+def test_deny_yields_approved_false(session_id, probe_workspace):
     """完整链路：发指令 → 等卡片 → 点拒绝 → 等 `data-approved=false` 横幅。
 
     覆盖前端 `ic_deny_tool` IPC → 后端 `Submission::ExecApproval` → SDK 把工具调用
@@ -106,30 +136,33 @@ def test_deny_yields_approved_false(session_id):
         "(a) ic_deny_tool IPC 未送达；(b) 后端未把虚拟工具推进到 complete；"
         f"(c) ApprovalResultBanner 渲染失败。 末态 snapshot={snapshot(session_id)}"
     )
+    assert not PROBE_PATH.exists(), "拒绝审批后探针文件仍被写入，疑似审批 gate 失效"
 
 
-@pytest.mark.skip(
-    reason=(
-        "approve 会真把 e2e_probe.txt 写入 desktop-client 工作目录，造成跨用例污染；"
-        "deny 分支已覆盖完整链路，approve 分支差异仅 data-approved=true 这个布尔值。"
-        "若后续要补，应先把工作目录改成 sandbox 临时路径或加 teardown 清理。"
-    )
-)
-def test_approve_yields_approved_true(session_id):
-    """（保留占位）批准路径——见 skip reason。"""
+def test_approve_yields_approved_true(session_id, probe_workspace):
+    """批准路径：发指令 → 等卡片 → 点批准 → 横幅 true → 探针文件落地后清理。"""
     clear_pending_approval(session_id)
 
     s0 = wait_composer_ready(session_id, timeout=60.0)
-    assert s0 is not None
+    assert s0 is not None, "composer 未就绪"
 
     type_into_composer(session_id, WRITE_PROMPT)
     click_send(session_id)
 
     s1 = wait_approval_card(session_id, timeout=CARD_TIMEOUT)
-    assert s1 is not None
+    assert s1 is not None, (
+        f"{CARD_TIMEOUT:.0f}s 内未出现审批卡片，无法继续验证批准路径。"
+        f" 末态 snapshot={snapshot(session_id)}"
+    )
 
     click_approval(session_id, "approve")
     approved = wait_approval_decision(
         session_id, expected_approved=True, timeout=30.0
     )
-    assert approved
+    assert approved, (
+        "点 approve 后 30s 内未出现 `data-approved=true` 横幅——可能："
+        "(a) ic_approve_tool IPC 未送达；(b) 后端未执行批准后的工具调用；"
+        f"(c) ApprovalResultBanner 渲染失败。 末态 snapshot={snapshot(session_id)}"
+    )
+    assert PROBE_PATH.exists(), f"批准后探针文件未落地：{PROBE_PATH}"
+    assert PROBE_PATH.read_text(encoding="utf-8").strip() == "hello"
