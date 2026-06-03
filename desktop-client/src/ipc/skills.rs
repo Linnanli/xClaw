@@ -103,6 +103,32 @@ fn filter_skill_infos_by_allowlist(
     }
 }
 
+fn loaded_skill_to_info(skill: &ironclaw::skills::LoadedSkill, enabled: bool) -> SkillInfo {
+    let source = match &skill.source {
+        ironclaw::skills::SkillSource::Workspace(_) | ironclaw::skills::SkillSource::Bundled(_) => {
+            "workspace"
+        }
+        ironclaw::skills::SkillSource::User(_) => "user",
+    };
+
+    SkillInfo {
+        name: skill.manifest.name.clone(),
+        version: skill.manifest.version.clone(),
+        description: skill.manifest.description.clone(),
+        source: source.to_string(),
+        trust: skill.trust.to_string(),
+        keywords: skill
+            .manifest
+            .activation
+            .keywords
+            .iter()
+            .take(5)
+            .cloned()
+            .collect(),
+        enabled,
+    }
+}
+
 fn skill_allowed_by_policy(name: &str, allowed: Option<&HashSet<String>>) -> bool {
     match allowed {
         Some(allowed_names) => allowed_names.contains(name),
@@ -212,33 +238,7 @@ pub async fn ic_list_skills(state: State<'_, EngineState>) -> Result<Vec<SkillIn
     let result = guard
         .skills()
         .iter()
-        .map(|s| {
-            let source = match &s.source {
-                ironclaw::skills::SkillSource::Workspace(_)
-                | ironclaw::skills::SkillSource::Bundled(_) => "workspace",
-                ironclaw::skills::SkillSource::User(_) => "user",
-            };
-            let trust = match s.trust {
-                ironclaw::skills::SkillTrust::Trusted => "trusted",
-                ironclaw::skills::SkillTrust::Installed => "installed",
-            };
-            SkillInfo {
-                name: s.manifest.name.clone(),
-                version: s.manifest.version.clone(),
-                description: s.manifest.description.clone(),
-                source: source.to_string(),
-                trust: trust.to_string(),
-                keywords: s
-                    .manifest
-                    .activation
-                    .keywords
-                    .iter()
-                    .take(5)
-                    .cloned()
-                    .collect(),
-                enabled: state.skill_enabled(&s.manifest.name),
-            }
-        })
+        .map(|skill| loaded_skill_to_info(skill, state.skill_enabled(&skill.manifest.name)))
         .collect();
 
     let filtered = filter_skill_infos_by_allowlist(result, allowed.as_ref());
@@ -786,13 +786,44 @@ async fn set_skill_enabled_with_persist(
 mod tests {
     use super::{
         extract_skill_name_from_content, filter_skill_infos_by_allowlist,
-        install_missing_allowed_skills, missing_allowed_skill_names, skill_allowed_by_policy,
-        validate_skill_catalog_registry_policy, validate_skill_install_source, SkillInfo,
+        install_missing_allowed_skills, loaded_skill_to_info, missing_allowed_skill_names,
+        skill_allowed_by_policy, validate_skill_catalog_registry_policy,
+        validate_skill_install_source, SkillInfo,
     };
     use std::collections::HashSet;
+    use std::path::PathBuf;
     use std::sync::{Arc, RwLock};
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn loaded_skill(
+        name: &str,
+        source: ironclaw::skills::SkillSource,
+        trust: ironclaw::skills::SkillTrust,
+        keywords: Vec<&str>,
+    ) -> ironclaw::skills::LoadedSkill {
+        let activation = ironclaw::skills::ActivationCriteria {
+            keywords: keywords.into_iter().map(str::to_string).collect(),
+            ..Default::default()
+        };
+        ironclaw::skills::LoadedSkill {
+            manifest: ironclaw::skills::SkillManifest {
+                name: name.to_string(),
+                version: "1.2.3".to_string(),
+                description: "Mapped skill".to_string(),
+                activation,
+                metadata: None,
+            },
+            prompt_content: "Prompt".to_string(),
+            trust,
+            source,
+            content_hash: "hash".to_string(),
+            compiled_patterns: Vec::new(),
+            lowercased_keywords: Vec::new(),
+            lowercased_exclude_keywords: Vec::new(),
+            lowercased_tags: Vec::new(),
+        }
+    }
 
     fn sample_skill(name: &str) -> SkillInfo {
         SkillInfo {
@@ -908,6 +939,43 @@ mod tests {
         assert!(skill_allowed_by_policy("code-simplifier", Some(&allowed)));
         assert!(!skill_allowed_by_policy("other-skill", Some(&allowed)));
         assert!(skill_allowed_by_policy("other-skill", None));
+    }
+
+    #[test]
+    fn req_skills_list_maps_loaded_skill_to_frontend_info() {
+        let skill = loaded_skill(
+            "code-review-expert",
+            ironclaw::skills::SkillSource::User(PathBuf::from("/tmp/skills/code-review-expert")),
+            ironclaw::skills::SkillTrust::Installed,
+            vec!["review", "audit"],
+        );
+
+        let info = loaded_skill_to_info(&skill, false);
+
+        assert_eq!(info.name, "code-review-expert");
+        assert_eq!(info.version, "1.2.3");
+        assert_eq!(info.description, "Mapped skill");
+        assert_eq!(info.source, "user");
+        assert_eq!(info.trust, "installed");
+        assert_eq!(info.keywords, vec!["review", "audit"]);
+        assert!(!info.enabled);
+    }
+
+    #[test]
+    fn req_skills_list_caps_keywords_from_loaded_skill() {
+        let skill = loaded_skill(
+            "verbose-skill",
+            ironclaw::skills::SkillSource::Workspace(PathBuf::from("/tmp/workspace/skills")),
+            ironclaw::skills::SkillTrust::Trusted,
+            vec!["one", "two", "three", "four", "five", "six"],
+        );
+
+        let info = loaded_skill_to_info(&skill, true);
+
+        assert_eq!(info.source, "workspace");
+        assert_eq!(info.trust, "trusted");
+        assert_eq!(info.keywords, vec!["one", "two", "three", "four", "five"]);
+        assert!(info.enabled);
     }
 
     #[test]
