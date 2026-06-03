@@ -9,7 +9,9 @@ use uuid::Uuid;
 
 use crate::state::EngineState;
 use crate::vercel_ui_protocol::VercelUIStream;
-use dasclaw_runtime::JobState;
+use dasclaw_runtime::{context::JobContext, JobState};
+use ironclaw::channels::IncomingMessage;
+use ironclaw::history::{AgentJobRecord, JobEventRecord};
 
 // ─── 数据类型 ────────────────────────────────────────────────────────
 
@@ -120,7 +122,7 @@ fn emit_job_status(app_handle: &AppHandle, job_id: Uuid, title: &str, status: &s
     let _ = crate::tauri_channel::emit_chat_stream(app_handle, None, &event);
 }
 
-fn restart_job_title(job: &dasclaw_runtime::context::JobContext, failure_reason: &str) -> String {
+fn restart_job_title(job: &JobContext, failure_reason: &str) -> String {
     if failure_reason.is_empty() || matches!(job.state, JobState::Cancelled) {
         return job.title.clone();
     }
@@ -129,6 +131,68 @@ fn restart_job_title(job: &dasclaw_runtime::context::JobContext, failure_reason:
         "Previous attempt failed: {}. Retry: {}",
         failure_reason, job.title
     )
+}
+
+fn job_record_to_info(job: AgentJobRecord, conversation_id: Option<Uuid>) -> JobInfoResponse {
+    JobInfoResponse {
+        id: job.id.to_string(),
+        title: job.title,
+        status: job.status,
+        created_at: job.created_at.to_rfc3339(),
+        started_at: job.started_at.map(|time| time.to_rfc3339()),
+        completed_at: job.completed_at.map(|time| time.to_rfc3339()),
+        conversation_id: conversation_id.map(|id| id.to_string()),
+    }
+}
+
+fn job_event_to_response(event: JobEventRecord) -> JobEvent {
+    JobEvent {
+        id: event.id,
+        event_type: event.event_type,
+        data: event.data,
+        created_at: event.created_at.to_rfc3339(),
+    }
+}
+
+fn job_events_response(job_id: String, events: Vec<JobEventRecord>) -> JobEventsResponse {
+    JobEventsResponse {
+        job_id,
+        events: events.into_iter().map(job_event_to_response).collect(),
+    }
+}
+
+fn job_detail_to_response(
+    job_id: String,
+    ctx: JobContext,
+    failure_reason: Option<String>,
+    events: Vec<JobEventRecord>,
+) -> JobDetailResponse {
+    JobDetailResponse {
+        id: job_id,
+        title: ctx.title,
+        description: ctx.description,
+        status: ctx.state.to_string(),
+        source: "direct".to_string(),
+        created_at: ctx.created_at.to_rfc3339(),
+        started_at: ctx.started_at.map(|time| time.to_rfc3339()),
+        completed_at: ctx.completed_at.map(|time| time.to_rfc3339()),
+        conversation_id: ctx.conversation_id.map(|id| id.to_string()),
+        failure_reason,
+        total_tokens_used: (ctx.total_tokens_used > 0).then_some(ctx.total_tokens_used),
+        events: events.into_iter().map(job_event_to_response).collect(),
+    }
+}
+
+fn build_job_prompt_message(scope_id: &str, job_id: Uuid, content: &str) -> IncomingMessage {
+    let prompt_content = format!("!prompt {} {}", job_id, content);
+    IncomingMessage::new("tauri", scope_id, prompt_content).with_owner_id(scope_id)
+}
+
+fn job_prompt_response(job_id: String) -> JobPromptResponse {
+    JobPromptResponse {
+        status: "sent".to_string(),
+        job_id,
+    }
 }
 
 // ─── Tauri Commands ──────────────────────────────────────────────────
@@ -153,20 +217,8 @@ pub async fn ic_list_jobs(state: State<'_, EngineState>) -> Result<Vec<JobInfoRe
                 .await
                 .ok()
                 .flatten()
-                .and_then(|ctx| ctx.conversation_id)
-                .map(|id| id.to_string());
-            (
-                idx,
-                JobInfoResponse {
-                    id: j.id.to_string(),
-                    title: j.title,
-                    status: j.status,
-                    created_at: j.created_at.to_rfc3339(),
-                    started_at: j.started_at.map(|t| t.to_rfc3339()),
-                    completed_at: j.completed_at.map(|t| t.to_rfc3339()),
-                    conversation_id,
-                },
-            )
+                .and_then(|ctx| ctx.conversation_id);
+            (idx, job_record_to_info(j, conversation_id))
         });
     }
 
@@ -206,33 +258,9 @@ pub async fn ic_get_job_detail(
         None
     };
 
-    let events = db
-        .list_job_events(uuid, None)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|e| JobEvent {
-            id: e.id,
-            event_type: e.event_type,
-            data: e.data,
-            created_at: e.created_at.to_rfc3339(),
-        })
-        .collect();
+    let events = db.list_job_events(uuid, None).await.unwrap_or_default();
 
-    Ok(JobDetailResponse {
-        id: job_id,
-        title: ctx.title,
-        description: ctx.description,
-        status: ctx.state.to_string(),
-        source: "direct".to_string(),
-        created_at: ctx.created_at.to_rfc3339(),
-        started_at: ctx.started_at.map(|t| t.to_rfc3339()),
-        completed_at: ctx.completed_at.map(|t| t.to_rfc3339()),
-        conversation_id: ctx.conversation_id.map(|id| id.to_string()),
-        failure_reason,
-        total_tokens_used: (ctx.total_tokens_used > 0).then_some(ctx.total_tokens_used),
-        events,
-    })
+    Ok(job_detail_to_response(job_id, ctx, failure_reason, events))
 }
 
 /// 获取任务事件历史。
@@ -253,22 +281,11 @@ pub async fn ic_job_events(
         .await
         .map_err(|e| format!("Failed to load job events: {}", e))?;
 
-    let items: Vec<JobEvent> = events
-        .into_iter()
-        .map(|e| JobEvent {
-            id: e.id,
-            event_type: e.event_type,
-            data: e.data,
-            created_at: e.created_at.to_rfc3339(),
-        })
-        .collect();
+    let response = job_events_response(job_id, events);
 
-    tracing::debug!(job_id = %job_id, count = items.len(), "Job events loaded");
+    tracing::debug!(job_id = %response.job_id, count = response.events.len(), "Job events loaded");
 
-    Ok(JobEventsResponse {
-        job_id,
-        events: items,
-    })
+    Ok(response)
 }
 
 /// 向运行中的任务发送后续提示。
@@ -287,11 +304,7 @@ pub async fn ic_job_prompt(
     let state = state.get()?;
     let uuid = Uuid::parse_str(&job_id).map_err(|_| format!("Invalid job ID: {}", job_id))?;
 
-    // 通过消息系统发送后续提示
-    let prompt_content = format!("!prompt {} {}", uuid, content);
-
-    let msg = ironclaw::channels::IncomingMessage::new("tauri", &state.scope_id, &prompt_content)
-        .with_owner_id(&state.scope_id);
+    let msg = build_job_prompt_message(&state.scope_id, uuid, &content);
 
     state
         .msg_sender
@@ -301,10 +314,7 @@ pub async fn ic_job_prompt(
 
     tracing::info!(job_id = %job_id, "Follow-up prompt sent");
 
-    Ok(JobPromptResponse {
-        status: "sent".to_string(),
-        job_id,
-    })
+    Ok(job_prompt_response(job_id))
 }
 
 /// 取消运行中的 agent 任务。
@@ -336,34 +346,6 @@ pub async fn ic_cancel_job(
     emit_job_status(&app_handle, uuid, &job.title, "cancelled");
     tracing::info!(job_id = %uuid, "Job cancelled");
     Ok(())
-}
-
-#[cfg(test)]
-mod cancel_tests {
-    use super::stop_active_job;
-    use dasclaw_runtime::JobState;
-    use uuid::Uuid;
-
-    #[tokio::test]
-    async fn active_job_without_scheduler_is_rejected() {
-        let error = stop_active_job(None, Uuid::nil(), JobState::InProgress)
-            .await
-            .expect_err("active jobs require scheduler stop before marking cancelled");
-
-        assert_eq!(
-            error,
-            "Failed to cancel job: active job scheduler unavailable"
-        );
-    }
-
-    #[tokio::test]
-    async fn inactive_job_without_scheduler_is_allowed() {
-        // Use a terminal state — Completed is NOT terminal in this state machine
-        // (Completed → Submitted → Accepted), so is_active() returns true for it.
-        stop_active_job(None, Uuid::nil(), JobState::Failed)
-            .await
-            .expect("inactive job should not require scheduler stop");
-    }
 }
 
 /// 重试一个已结束的 agent 任务。
@@ -415,4 +397,181 @@ pub async fn ic_restart_job(
     emit_job_status(&app_handle, new_job_id, &title, "in_progress");
     tracing::info!(old_job_id = %uuid, new_job_id = %new_job_id, "Job restarted");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_job_prompt_message, job_detail_to_response, job_event_to_response,
+        job_events_response, job_prompt_response, job_record_to_info, restart_job_title,
+        stop_active_job,
+    };
+    use chrono::{TimeZone, Utc};
+    use dasclaw_runtime::{context::JobContext, JobState};
+    use ironclaw::history::{AgentJobRecord, JobEventRecord};
+    use uuid::Uuid;
+
+    fn utc_time(second: u32) -> chrono::DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 6, 3, 10, 20, second)
+            .single()
+            .expect("test timestamp should be valid")
+    }
+
+    fn sample_event(id: i64, job_id: Uuid, event_type: &str) -> JobEventRecord {
+        JobEventRecord {
+            id,
+            job_id,
+            event_type: event_type.to_string(),
+            data: serde_json::json!({"step": id}),
+            created_at: utc_time(id as u32),
+        }
+    }
+
+    #[test]
+    fn req_jobs_list_maps_record_without_internal_owner_fields() {
+        let job_id = Uuid::nil();
+        let conversation_id = Uuid::new_v4();
+        let record = AgentJobRecord {
+            id: job_id,
+            title: "Nightly report".to_string(),
+            status: "in_progress".to_string(),
+            user_id: "owner-1".to_string(),
+            created_at: utc_time(1),
+            started_at: Some(utc_time(2)),
+            completed_at: None,
+            failure_reason: Some("hidden".to_string()),
+        };
+
+        let response = job_record_to_info(record, Some(conversation_id));
+        let json = serde_json::to_string(&response).expect("should serialize");
+
+        assert_eq!(response.id, job_id.to_string());
+        assert_eq!(response.title, "Nightly report");
+        assert_eq!(response.status, "in_progress");
+        assert_eq!(response.conversation_id, Some(conversation_id.to_string()));
+        assert!(!json.contains("owner-1"));
+        assert!(!json.contains("hidden"));
+    }
+
+    #[test]
+    fn req_jobs_events_maps_records_in_order() {
+        let job_id = Uuid::new_v4();
+        let response = job_events_response(
+            job_id.to_string(),
+            vec![
+                sample_event(1, job_id, "started"),
+                sample_event(2, job_id, "completed"),
+            ],
+        );
+
+        assert_eq!(response.job_id, job_id.to_string());
+        assert_eq!(response.events.len(), 2);
+        assert_eq!(response.events[0].event_type, "started");
+        assert_eq!(response.events[1].data, serde_json::json!({"step": 2}));
+    }
+
+    #[test]
+    fn req_jobs_detail_maps_context_failure_and_events() {
+        let job_id = Uuid::new_v4();
+        let conversation_id = Uuid::new_v4();
+        let mut context = JobContext::with_user("owner-1", "Report", "Build summary");
+        context.job_id = job_id;
+        context.state = JobState::Failed;
+        context.conversation_id = Some(conversation_id);
+        context.created_at = utc_time(3);
+        context.started_at = Some(utc_time(4));
+        context.completed_at = Some(utc_time(5));
+        context.total_tokens_used = 42;
+
+        let response = job_detail_to_response(
+            job_id.to_string(),
+            context,
+            Some("tool failed".to_string()),
+            vec![sample_event(6, job_id, "error")],
+        );
+
+        assert_eq!(response.id, job_id.to_string());
+        assert_eq!(response.title, "Report");
+        assert_eq!(response.description, "Build summary");
+        assert_eq!(response.status, "failed");
+        assert_eq!(response.source, "direct");
+        assert_eq!(response.conversation_id, Some(conversation_id.to_string()));
+        assert_eq!(response.failure_reason.as_deref(), Some("tool failed"));
+        assert_eq!(response.total_tokens_used, Some(42));
+        assert_eq!(response.events[0].event_type, "error");
+    }
+
+    #[test]
+    fn req_jobs_prompt_message_targets_scope_owner() {
+        let job_id = Uuid::nil();
+        let message = build_job_prompt_message("owner-1", job_id, "continue");
+
+        assert_eq!(message.channel, "tauri");
+        assert_eq!(message.user_id, "owner-1");
+        assert_eq!(message.owner_id, "owner-1");
+        assert_eq!(message.sender_id, "owner-1");
+        assert_eq!(message.content, format!("!prompt {} continue", job_id));
+        assert!(message.thread_id.is_none());
+    }
+
+    #[test]
+    fn req_jobs_prompt_response_reports_sent_status() {
+        let response = job_prompt_response("job-1".to_string());
+
+        assert_eq!(response.status, "sent");
+        assert_eq!(response.job_id, "job-1");
+    }
+
+    #[test]
+    fn req_jobs_restart_title_prefixes_failed_attempt_reason() {
+        let mut context = JobContext::with_user("owner-1", "Nightly report", "Build summary");
+        context.state = JobState::Failed;
+
+        let title = restart_job_title(&context, "network timeout");
+
+        assert_eq!(
+            title,
+            "Previous attempt failed: network timeout. Retry: Nightly report"
+        );
+    }
+
+    #[test]
+    fn req_jobs_restart_title_keeps_cancelled_title() {
+        let mut context = JobContext::with_user("owner-1", "Nightly report", "Build summary");
+        context.state = JobState::Cancelled;
+
+        let title = restart_job_title(&context, "user cancelled");
+
+        assert_eq!(title, "Nightly report");
+    }
+
+    #[tokio::test]
+    async fn active_job_without_scheduler_is_rejected() {
+        let error = stop_active_job(None, Uuid::nil(), JobState::InProgress)
+            .await
+            .expect_err("active jobs require scheduler stop before marking cancelled");
+
+        assert_eq!(
+            error,
+            "Failed to cancel job: active job scheduler unavailable"
+        );
+    }
+
+    #[tokio::test]
+    async fn inactive_job_without_scheduler_is_allowed() {
+        stop_active_job(None, Uuid::nil(), JobState::Failed)
+            .await
+            .expect("inactive job should not require scheduler stop");
+    }
+
+    #[test]
+    fn req_jobs_event_mapping_preserves_timestamp_and_payload() {
+        let job_id = Uuid::new_v4();
+        let response = job_event_to_response(sample_event(7, job_id, "thinking"));
+
+        assert_eq!(response.id, 7);
+        assert_eq!(response.event_type, "thinking");
+        assert_eq!(response.data, serde_json::json!({"step": 7}));
+        assert!(response.created_at.starts_with("2026-06-03T10:20:07"));
+    }
 }
