@@ -176,7 +176,7 @@ impl TextSessions {
 /// Envelope 结构：在 `VercelUIStream` 序列化结果的顶层注入 `threadId` 字段。
 /// AI SDK v5 `UIMessageChunk` 不使用该字段，完全向后兼容。
 pub fn emit_chat_stream(
-    app_handle: &tauri::AppHandle,
+    app_handle: &tauri::AppHandle<impl tauri::Runtime>,
     thread_id: Option<&str>,
     event: &VercelUIStream,
 ) -> Result<(), tauri::Error> {
