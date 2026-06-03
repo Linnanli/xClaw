@@ -605,7 +605,7 @@ L5 LLM·通道·持久化 / L6 基础设施。E2E（WebDriver）是**自顶向�
 | 模型配置 | `get_available_models`/`*_custom_model`/`test_model_connection` | ✅ 附 + I-5 |
 | Plan/Fork | `ic_toggle_plan_mode`/`ic_approve_plan`/`ic_revise_plan`/`ic_fork_thread` | ✅ I-1 |
 | Sandbox | `ic_sandbox_smoke_test`/`ic_sandbox_status` | ✅ I-2 |
-| 记忆 | `ic_memory_list`/`read`/`write`/`delete`/`search` | ⬜ 待补 |
+| 记忆 | `ic_memory_list`/`read`/`write`/`delete`/`search` | 🟨 Rust helper 覆盖 DTO 映射 / 默认值；仍缺真实 AppState + Workspace 回环 |
 | 技能 | `ic_list_skills`/`search`/`install`/`uninstall`/`enable`/`disable` | ⬜ 待补 |
 | 扩展 | `ic_list_extensions`/`install`/`setup`/`setup_submit`/… | ⬜ 待补 |
 | 任务 | `ic_list_jobs`/`ic_job_events`/`ic_job_prompt`/`ic_cancel_job`/`ic_restart_job` | ⬜ 待补 |
@@ -616,7 +616,8 @@ L5 LLM·通道·持久化 / L6 基础设施。E2E（WebDriver）是**自顶向�
 | 应用/认证 | `get_auth_token`/`get_app_version`/`check_for_updates`/`submit_approval_ticket`/`get_watermark_config` | ⬜ 待补 |
 
 > **粗略覆盖度**：~80 命令中本计划直接/间接命中约 40%（聊天·线程·审批·DLP·模型·
-> Plan/Fork·Sandbox）。记忆/技能/扩展/任务/日程/日志/工作区/文件/认证 9 个段尚未覆盖。
+> Plan/Fork·Sandbox）。记忆已补 Rust helper 级 DTO 映射 / 默认值覆盖，但仍缺真实
+> AppState + Workspace 回环；技能/扩展/任务/日程/日志/工作区/文件/认证 8 个段尚未覆盖。
 > 若要补到 ~80%，按 §12 分层原则：CRUD 类（记忆/技能/扩展/日程/日志）用**命令级
 > 集成测试**批量覆盖，UI 强交互类（任务流式、文件 Undo）保留少量 E2E。
 
@@ -959,13 +960,12 @@ loop 的入口唯一**：
 
 ### 16.2 GA 缺口分类
 
-#### A. 功能维度（IPC 命令族覆盖 ~40%，待补 9 族）
+#### A. 功能维度（IPC 命令族覆盖 ~40%，待补 8 族 + 1 族需真实状态夹具）
 
 **已覆盖**（§13 表 ✅ 段）：聊天（6）/ 线程（3）/ 工具审批（2）/ DLP（7）/ 模型（3）/ Plan/Fork（4）/ Sandbox（2）。**小计** ~31 命令 / ~80 总数 ≈ 40%。
 
 **完全未覆盖**（§13 表 ⬜ 段）：
 
-- **记忆**（5）：`ic_memory_list` / `read` / `write` / `delete` / `search`
 - **技能**（6）：`ic_list_skills` / `search` / `install` / `uninstall` / `enable` / `disable`
 - **扩展**（6+）：`ic_list_extensions` / `install` / `setup` / `setup_submit` / ...
 - **任务**（5）：`ic_list_jobs` / `ic_job_events` / `ic_job_prompt` / `ic_cancel_job` / `ic_restart_job`
@@ -975,7 +975,12 @@ loop 的入口唯一**：
 - **文件操作**（2）：`ic_undo_file_edit` / `ic_open_file_at_line`
 - **应用/认证**（5）：`get_auth_token` / `get_app_version` / `check_for_updates` / `submit_approval_ticket` / `get_watermark_config`
 
-**小计** ~44 命令待补。升级路线：按 §12 分层原则，CRUD 类用**命令级集成测试**批量补（I-1~I-5 已示范），UI 强交互类（任务·日程）保留少量 E2E。
+**部分覆盖，仍需真实状态夹具 / WebDriver 回环**：
+
+- **记忆**（5）：已覆盖 `ic_memory_list` / `read` / `search` 的 DTO 映射与默认值 helper；仍需真实
+  `AppState.workspace` 夹具覆盖 `list` / `read` / `write` / `delete` / `search` 回环。
+
+**小计** ~39 命令待补，另有记忆 5 命令需从 helper 覆盖升级到真实回环。升级路线：按 §12 分层原则，CRUD 类用**命令级集成测试**批量补（I-1~I-5 已示范），UI 强交互类（任务·日程）保留少量 E2E。
 
 #### B. UX bug 阻断（2 个高优先级）
 
@@ -1009,7 +1014,7 @@ loop 的入口唯一**：
 | **P0** | 修 #1015 webview reload 延迟 | #1015 | UX bug | Tauri IPC 优化 |
 | **P0** | jailbreak 防御升级 | #1021 | 安全 | 新增分类器 OR 行为级 Rust 集成测试（方案待 ADR） |
 | **P0** | libsql 会话导出 | #955 | 数据 | 新增 `export_session` 命令 + §13 扩展 + E2E 冒烟 |
-| **P0** | 记忆 CRUD E2E | 待开 | 功能验证 | §13 记忆族命令级集成测试 |
+| **P0** | 记忆 CRUD 真回环 | 待开 | 功能验证 | §13 记忆族 AppState + Workspace 命令级集成测试 |
 | **P0** | 技能安装 E2E | 待开 | 功能验证 | §13 技能族命令级集成测试 |
 | **P0** | 审批规则配置面 E2E | #608 | 功能/UX | §1-§7 扩展或命令级 + 前端联调 |
 | **P1** | WebDriver approve 分支补回归 | #1056 | 安全/UX 不变量 | sandbox/临时 cwd + `data-approved=true` 断言 |

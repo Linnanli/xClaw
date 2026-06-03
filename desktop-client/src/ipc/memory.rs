@@ -7,6 +7,8 @@ use tauri::State;
 
 use crate::state::EngineState;
 
+const DEFAULT_MEMORY_SEARCH_LIMIT: usize = 10;
+
 /// 记忆条目（目录列表用）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryEntry {
@@ -32,6 +34,46 @@ pub struct MemorySearchResult {
     pub score: f32,
 }
 
+pub(crate) fn memory_list_path(path: Option<&str>) -> &str {
+    path.unwrap_or("/")
+}
+
+pub(crate) fn memory_search_limit(limit: Option<usize>) -> usize {
+    limit.unwrap_or(DEFAULT_MEMORY_SEARCH_LIMIT)
+}
+
+pub(crate) fn workspace_entry_to_memory_entry(
+    entry: ironclaw::workspace::WorkspaceEntry,
+) -> MemoryEntry {
+    MemoryEntry {
+        name: entry.name().to_string(),
+        path: entry.path,
+        is_directory: entry.is_directory,
+        content_preview: entry.content_preview,
+    }
+}
+
+pub(crate) fn workspace_document_to_memory_document(
+    path: String,
+    document: ironclaw::workspace::MemoryDocument,
+) -> MemoryDocument {
+    MemoryDocument {
+        path,
+        content: document.content,
+        updated_at: Some(document.updated_at.to_rfc3339()),
+    }
+}
+
+pub(crate) fn workspace_search_result_to_memory_search_result(
+    result: ironclaw::workspace::SearchResult,
+) -> MemorySearchResult {
+    MemorySearchResult {
+        path: result.document_path,
+        content: result.content,
+        score: result.score,
+    }
+}
+
 /// 列出记忆目录。
 #[tauri::command]
 pub async fn ic_memory_list(
@@ -41,7 +83,7 @@ pub async fn ic_memory_list(
     let state = state.get()?;
     let ws = state.workspace.as_ref().ok_or("Workspace not available")?;
 
-    let dir = path.as_deref().unwrap_or("/");
+    let dir = memory_list_path(path.as_deref());
     let entries = ws
         .list(dir)
         .await
@@ -49,12 +91,7 @@ pub async fn ic_memory_list(
 
     Ok(entries
         .into_iter()
-        .map(|e| MemoryEntry {
-            name: e.name().to_string(),
-            path: e.path.clone(),
-            is_directory: e.is_directory,
-            content_preview: e.content_preview.clone(),
-        })
+        .map(workspace_entry_to_memory_entry)
         .collect())
 }
 
@@ -72,11 +109,7 @@ pub async fn ic_memory_read(
         .await
         .map_err(|e| format!("Failed to read memory: {}", e))?;
 
-    Ok(MemoryDocument {
-        path,
-        content: doc.content,
-        updated_at: Some(doc.updated_at.to_rfc3339()),
-    })
+    Ok(workspace_document_to_memory_document(path, doc))
 }
 
 /// 写入记忆文档。
@@ -122,16 +155,12 @@ pub async fn ic_memory_search(
     let ws = state.workspace.as_ref().ok_or("Workspace not available")?;
 
     let results = ws
-        .search(&query, limit.unwrap_or(10))
+        .search(&query, memory_search_limit(limit))
         .await
         .map_err(|e| format!("Failed to search memory: {}", e))?;
 
     Ok(results
         .into_iter()
-        .map(|r| MemorySearchResult {
-            path: r.document_path,
-            content: r.content,
-            score: r.score,
-        })
+        .map(workspace_search_result_to_memory_search_result)
         .collect())
 }

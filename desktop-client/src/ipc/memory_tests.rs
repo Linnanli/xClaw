@@ -9,7 +9,51 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::ipc::memory::{MemoryDocument, MemoryEntry, MemorySearchResult};
+    use chrono::{DateTime, Utc};
+    use ironclaw::workspace::{
+        MemoryDocument as WorkspaceMemoryDocument, SearchResult as WorkspaceSearchResult,
+        WorkspaceEntry,
+    };
+    use serde_json::json;
+    use uuid::Uuid;
+
+    use crate::ipc::memory::{
+        memory_list_path, memory_search_limit, workspace_document_to_memory_document,
+        workspace_entry_to_memory_entry, workspace_search_result_to_memory_search_result,
+        MemoryDocument, MemoryEntry, MemorySearchResult,
+    };
+
+    fn fixed_time() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-06-03T10:11:12Z")
+            .expect("fixed timestamp should parse")
+            .with_timezone(&Utc)
+    }
+
+    fn workspace_document(path: &str, content: &str) -> WorkspaceMemoryDocument {
+        let timestamp = fixed_time();
+        WorkspaceMemoryDocument {
+            id: Uuid::new_v4(),
+            user_id: "user-1".into(),
+            agent_id: Some(Uuid::new_v4()),
+            path: path.into(),
+            content: content.into(),
+            created_at: timestamp,
+            updated_at: timestamp,
+            metadata: json!({"private": true}),
+        }
+    }
+
+    fn workspace_search_result(path: &str, content: &str) -> WorkspaceSearchResult {
+        WorkspaceSearchResult {
+            document_id: Uuid::new_v4(),
+            document_path: path.into(),
+            chunk_id: Uuid::new_v4(),
+            content: content.into(),
+            score: 0.75,
+            fts_rank: Some(1),
+            vector_rank: Some(2),
+        }
+    }
 
     // =========================================================================
     // 单元测试 — 正常路径
@@ -80,6 +124,69 @@ mod tests {
         let entry: MemoryEntry = serde_json::from_str(json).unwrap();
         assert_eq!(entry.name, "config.toml");
         assert!(entry.content_preview.is_none());
+    }
+
+    #[test]
+    fn req_memory_list_defaults_to_root_path() {
+        assert_eq!(memory_list_path(None), "/");
+        assert_eq!(memory_list_path(Some("/projects")), "/projects");
+    }
+
+    #[test]
+    fn req_memory_search_uses_default_limit() {
+        assert_eq!(memory_search_limit(None), 10);
+        assert_eq!(memory_search_limit(Some(3)), 3);
+        assert_eq!(memory_search_limit(Some(0)), 0);
+    }
+
+    #[test]
+    fn req_memory_list_maps_workspace_entries() {
+        let entry = WorkspaceEntry {
+            path: "/projects/alpha/README.md".into(),
+            is_directory: false,
+            updated_at: Some(fixed_time()),
+            content_preview: Some("# Alpha".into()),
+        };
+
+        let dto = workspace_entry_to_memory_entry(entry);
+
+        assert_eq!(dto.name, "README.md");
+        assert_eq!(dto.path, "/projects/alpha/README.md");
+        assert!(!dto.is_directory);
+        assert_eq!(dto.content_preview.as_deref(), Some("# Alpha"));
+    }
+
+    #[test]
+    fn req_memory_read_maps_workspace_document_without_internal_ids() {
+        let dto = workspace_document_to_memory_document(
+            "/notes/todo.md".into(),
+            workspace_document("/storage/internal.md", "ship memory coverage"),
+        );
+        let json = serde_json::to_string(&dto).expect("dto should serialize");
+
+        assert_eq!(dto.path, "/notes/todo.md");
+        assert_eq!(dto.content, "ship memory coverage");
+        assert_eq!(dto.updated_at.as_deref(), Some("2026-06-03T10:11:12+00:00"));
+        assert!(!json.contains("user_id"));
+        assert!(!json.contains("agent_id"));
+        assert!(!json.contains("metadata"));
+    }
+
+    #[test]
+    fn req_memory_search_maps_workspace_results_without_rank_ids() {
+        let dto = workspace_search_result_to_memory_search_result(workspace_search_result(
+            "/docs/api.md",
+            "memory search hit",
+        ));
+        let json = serde_json::to_string(&dto).expect("dto should serialize");
+
+        assert_eq!(dto.path, "/docs/api.md");
+        assert_eq!(dto.content, "memory search hit");
+        assert!((dto.score - 0.75).abs() < f32::EPSILON);
+        assert!(!json.contains("document_id"));
+        assert!(!json.contains("chunk_id"));
+        assert!(!json.contains("fts_rank"));
+        assert!(!json.contains("vector_rank"));
     }
 
     // =========================================================================
