@@ -263,9 +263,11 @@ describe('ExtensionsTab', () => {
             prompt: 'GitHub API Key',
             optional: false,
             provided: false,
+            input_type: 'Password',
             auto_generate: false,
           },
         ],
+        fields: [],
       });
 
       renderExtensionsTab();
@@ -288,6 +290,7 @@ describe('ExtensionsTab', () => {
         name: 'ext-github',
         kind: 'secrets',
         secrets: [],
+        fields: [],
       });
 
       renderExtensionsTab();
@@ -320,9 +323,11 @@ describe('ExtensionsTab', () => {
             prompt: 'GitHub API Key',
             optional: false,
             provided: false,
+            input_type: 'Password',
             auto_generate: false,
           },
         ],
+        fields: [],
       });
       mockSetupApi.submitSetup.mockResolvedValue({
         success: true,
@@ -351,9 +356,13 @@ describe('ExtensionsTab', () => {
       fireEvent.click(screen.getByText('保存配置'));
 
       await waitFor(() => {
-        expect(mockSetupApi.submitSetup).toHaveBeenCalledWith('ext-github', {
-          api_key: 'test-key-123',
-        });
+        expect(mockSetupApi.submitSetup).toHaveBeenCalledWith(
+          'ext-github',
+          {
+            api_key: 'test-key-123',
+          },
+          {},
+        );
       });
     });
 
@@ -367,9 +376,11 @@ describe('ExtensionsTab', () => {
             prompt: 'GitHub API Key',
             optional: false,
             provided: false,
+            input_type: 'Password',
             auto_generate: false,
           },
         ],
+        fields: [],
       });
       mockSetupApi.submitSetup.mockResolvedValue({
         success: false,
