@@ -351,6 +351,7 @@ mod tests {
             optional: false,
             provided: false,
             input_type: "Text".into(),
+            auto_generate: false,
         };
         let json = serde_json::to_value(&field).unwrap();
         assert_eq!(json["name"], "api_key");
@@ -358,6 +359,7 @@ mod tests {
         assert_eq!(json["optional"], false);
         assert_eq!(json["provided"], false);
         assert_eq!(json["input_type"], "Text");
+        assert_eq!(json["auto_generate"], false);
     }
 
     #[test]
@@ -368,12 +370,14 @@ mod tests {
             optional: true,
             provided: true,
             input_type: "AutoGenerate".into(),
+            auto_generate: true,
         };
         let json = serde_json::to_string(&original).unwrap();
         let parsed: ExtensionSetupField = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.name, original.name);
         assert_eq!(parsed.optional, original.optional);
         assert_eq!(parsed.input_type, original.input_type);
+        assert_eq!(parsed.auto_generate, original.auto_generate);
     }
 
     #[test]
@@ -388,6 +392,7 @@ mod tests {
                     optional: false,
                     provided: false,
                     input_type: "Text".into(),
+                    auto_generate: false,
                 },
                 ExtensionSetupField {
                     name: "webhook_secret".into(),
@@ -395,13 +400,16 @@ mod tests {
                     optional: true,
                     provided: false,
                     input_type: "AutoGenerate".into(),
+                    auto_generate: true,
                 },
             ],
+            fields: vec![],
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["name"], "telegram");
         assert_eq!(json["kind"], "WasmChannel");
         assert_eq!(json["secrets"].as_array().unwrap().len(), 2);
+        assert_eq!(json["fields"].as_array().unwrap().len(), 0);
     }
 
     #[test]
@@ -443,7 +451,8 @@ mod tests {
     ///   prompt: string;
     ///   optional: boolean;
     ///   provided: boolean;
-    ///   input_type: boolean;
+    ///   input_type: string;
+    ///   auto_generate: boolean;
     /// }
     /// ```
     #[test]
@@ -454,6 +463,7 @@ mod tests {
             optional: false,
             provided: true,
             input_type: "Text".into(),
+            auto_generate: false,
         };
         let json = serde_json::to_value(&field).unwrap();
 
@@ -462,18 +472,20 @@ mod tests {
         assert!(json.get("optional").is_some());
         assert!(json.get("provided").is_some());
         assert!(json.get("input_type").is_some());
+        assert!(json.get("auto_generate").is_some());
 
         assert!(json["name"].is_string());
         assert!(json["prompt"].is_string());
         assert!(json["optional"].is_boolean());
         assert!(json["provided"].is_boolean());
         assert!(json["input_type"].is_string());
+        assert!(json["auto_generate"].is_boolean());
 
         let obj = json.as_object().unwrap();
         assert_eq!(
             obj.len(),
-            5,
-            "ExtensionSetupField should have exactly 5 fields"
+            6,
+            "ExtensionSetupField should have exactly 6 fields"
         );
     }
 
@@ -525,7 +537,9 @@ mod tests {
                 optional: false,
                 provided: true, // 已配置，但不应包含实际值
                 input_type: "Text".into(),
+                auto_generate: false,
             }],
+            fields: vec![],
         };
         let json_str = serde_json::to_string(&resp).unwrap();
 

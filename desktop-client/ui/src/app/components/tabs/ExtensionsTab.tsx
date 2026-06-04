@@ -53,6 +53,7 @@ export function ExtensionsTab() {
   // Setup modal state
   const [setupExtName, setSetupExtName] = useState<string | null>(null);
   const [setupFields, setSetupFields] = useState<ExtensionSetupField[]>([]);
+  const [setupFieldNames, setSetupFieldNames] = useState<Set<string>>(new Set());
   const [setupValues, setSetupValues] = useState<Record<string, string>>({});
   const [setupLoading, setSetupLoading] = useState(false);
   const [setupResult, setSetupResult] = useState<ExtensionSetupSubmitResponse | null>(null);
@@ -177,12 +178,15 @@ export function ExtensionsTab() {
     setSetupLoading(true);
     try {
       const schema = await extensionSetupApi.getSetupSchema(name);
-      setSetupFields(schema.secrets);
+      const allFields = [...schema.secrets, ...schema.fields];
+      setSetupFields(allFields);
+      setSetupFieldNames(new Set(schema.fields.map((field) => field.name)));
       const initial: Record<string, string> = {};
-      schema.secrets.forEach((f) => { initial[f.name] = ''; });
+      allFields.forEach((f) => { initial[f.name] = ''; });
       setSetupValues(initial);
     } catch {
       setSetupFields([]);
+      setSetupFieldNames(new Set());
     } finally {
       setSetupLoading(false);
     }
@@ -192,7 +196,16 @@ export function ExtensionsTab() {
     if (!setupExtName) return;
     setSetupLoading(true);
     try {
-      const result = await extensionSetupApi.submitSetup(setupExtName, setupValues);
+      const secrets: Record<string, string> = {};
+      const fields: Record<string, string> = {};
+      Object.entries(setupValues).forEach(([name, value]) => {
+        if (setupFieldNames.has(name)) {
+          fields[name] = value;
+        } else {
+          secrets[name] = value;
+        }
+      });
+      const result = await extensionSetupApi.submitSetup(setupExtName, secrets, fields);
       setSetupResult(result);
       if (result.activated) await loadExtensions();
       if (result.auth_url) window.open(result.auth_url, '_blank');
@@ -310,7 +323,7 @@ export function ExtensionsTab() {
                       )}
                     </label>
                     <input
-                      type="password"
+                      type={field.input_type === 'Password' ? 'password' : 'text'}
                       value={setupValues[field.name] || ''}
                       onChange={(e) =>
                         setSetupValues((prev) => ({
@@ -350,6 +363,7 @@ export function ExtensionsTab() {
                 onClick={() => {
                   setSetupExtName(null);
                   setSetupResult(null);
+                  setSetupFieldNames(new Set());
                 }}
                 className="rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent"
               >

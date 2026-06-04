@@ -287,6 +287,7 @@ export interface ExtensionSetupField {
   prompt: string;
   optional: boolean;
   provided: boolean;
+  input_type: string;
   auto_generate: boolean;
 }
 
@@ -294,6 +295,7 @@ export interface ExtensionSetupResponse {
   name: string;
   kind: string;
   secrets: ExtensionSetupField[];
+  fields: ExtensionSetupField[];
 }
 
 export interface ExtensionSetupSubmitResponse {
@@ -306,8 +308,16 @@ export interface ExtensionSetupSubmitResponse {
 export const extensionSetupApi = {
   getSetupSchema: (name: string) =>
     invokeTauri<ExtensionSetupResponse>('ic_extension_setup', { name }),
-  submitSetup: (name: string, secrets: Record<string, string>) =>
-    invokeTauri<ExtensionSetupSubmitResponse>('ic_extension_setup_submit', { name, secrets }),
+  submitSetup: (
+    name: string,
+    secrets: Record<string, string>,
+    fields: Record<string, string> = {},
+  ) =>
+    invokeTauri<ExtensionSetupSubmitResponse>('ic_extension_setup_submit', {
+      name,
+      secrets,
+      fields,
+    }),
 };
 
 // ============================================================================

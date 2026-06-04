@@ -8,7 +8,7 @@ use tauri::State;
 use super::persistence::{load_string_set, persist_disabled_items};
 use crate::managed_policy::load_verified_policy_from_store;
 use crate::state::{AppState, EngineState};
-use ironclaw::channels::web::types::SetupFieldInfo;
+use ironclaw::channels::web::types::{SecretFieldInfo, SetupFieldInfo};
 use ironclaw::extensions::{ConfigureResult, InstalledExtension, SearchResult};
 
 const DISABLED_EXTENSIONS_SETTING_KEY: &str = "desktop_disabled_extensions";
@@ -74,6 +74,22 @@ fn setup_field_to_response_field(field: SetupFieldInfo) -> ExtensionSetupField {
         optional: field.optional,
         provided: field.provided,
         input_type: format!("{:?}", field.input_type),
+        auto_generate: false,
+    }
+}
+
+fn secret_field_to_response_field(field: SecretFieldInfo) -> ExtensionSetupField {
+    ExtensionSetupField {
+        name: field.name,
+        prompt: field.prompt,
+        optional: field.optional,
+        provided: field.provided,
+        input_type: if field.auto_generate {
+            "AutoGenerate".to_string()
+        } else {
+            "Password".to_string()
+        },
+        auto_generate: field.auto_generate,
     }
 }
 
@@ -130,12 +146,10 @@ async fn ensure_extension_allowed_in_managed_mode(
 }
 
 /// 列出扩展。
-#[tauri::command]
-pub async fn ic_list_extensions(
-    state: State<'_, EngineState>,
+pub(crate) async fn list_extensions_from_state(
+    state: &AppState,
     include_available: Option<bool>,
 ) -> Result<Vec<ExtensionInfo>, String> {
-    let state = state.get()?;
     let ext_mgr = state
         .extension_manager
         .as_ref()
@@ -155,26 +169,40 @@ pub async fn ic_list_extensions(
         .collect())
 }
 
+#[tauri::command]
+pub async fn ic_list_extensions(
+    state: State<'_, EngineState>,
+    include_available: Option<bool>,
+) -> Result<Vec<ExtensionInfo>, String> {
+    list_extensions_from_state(state.get()?, include_available).await
+}
+
 /// 启用扩展。
 #[tauri::command]
 pub async fn ic_enable_extension(
     state: State<'_, EngineState>,
     name: String,
 ) -> Result<(), String> {
-    let state = state.get()?;
+    enable_extension_from_state(state.get()?, &name).await
+}
+
+pub(crate) async fn enable_extension_from_state(
+    state: &AppState,
+    name: &str,
+) -> Result<(), String> {
     let ext_mgr = state
         .extension_manager
         .as_ref()
         .ok_or("Extension manager not available")?;
 
-    ensure_extension_installed(state, &name).await?;
-    ensure_extension_allowed_in_managed_mode(state, &name).await?;
+    ensure_extension_installed(state, name).await?;
+    ensure_extension_allowed_in_managed_mode(state, name).await?;
     ext_mgr
-        .activate(&name, &state.scope_id)
+        .activate(name, &state.scope_id)
         .await
         .map_err(|e| format!("Failed to enable extension: {}", e))?;
-    if let Err(error) = set_extension_enabled_with_persist(state, &name, true).await {
-        let _ = soft_deactivate_extension_runtime(state, &name).await;
+    if let Err(error) = set_extension_enabled_with_persist(state, name, true).await {
+        let _ = soft_deactivate_extension_runtime(state, name).await;
         return Err(error);
     }
     tracing::info!(extension = %name, "Extension enabled");
@@ -187,16 +215,22 @@ pub async fn ic_disable_extension(
     state: State<'_, EngineState>,
     name: String,
 ) -> Result<(), String> {
-    let state = state.get()?;
+    disable_extension_from_state(state.get()?, &name).await
+}
+
+pub(crate) async fn disable_extension_from_state(
+    state: &AppState,
+    name: &str,
+) -> Result<(), String> {
     let ext_mgr = state
         .extension_manager
         .as_ref()
         .ok_or("Extension manager not available")?;
 
-    ensure_extension_installed(state, &name).await?;
-    soft_deactivate_extension_runtime(state, &name).await?;
-    if let Err(error) = set_extension_enabled_with_persist(state, &name, false).await {
-        if let Err(reactivate_error) = ext_mgr.activate(&name, &state.scope_id).await {
+    ensure_extension_installed(state, name).await?;
+    soft_deactivate_extension_runtime(state, name).await?;
+    if let Err(error) = set_extension_enabled_with_persist(state, name, false).await {
+        if let Err(reactivate_error) = ext_mgr.activate(name, &state.scope_id).await {
             return Err(format!(
                 "{}; failed to reactivate extension after rollback: {}",
                 error, reactivate_error
@@ -216,16 +250,23 @@ pub async fn ic_install_extension(
     name: String,
     url: Option<String>,
 ) -> Result<String, String> {
-    let state = state.get()?;
-    validate_extension_install_source(managed_mode_enabled(), url.as_deref())?;
-    ensure_extension_allowed_in_managed_mode(state, &name).await?;
+    install_extension_from_state(state.get()?, &name, url.as_deref()).await
+}
+
+pub(crate) async fn install_extension_from_state(
+    state: &AppState,
+    name: &str,
+    url: Option<&str>,
+) -> Result<String, String> {
+    validate_extension_install_source(managed_mode_enabled(), url)?;
+    ensure_extension_allowed_in_managed_mode(state, name).await?;
     let ext_mgr = state
         .extension_manager
         .as_ref()
         .ok_or("Extension manager not available")?;
 
     let result = ext_mgr
-        .install(&name, url.as_deref(), None, &state.scope_id)
+        .install(name, url, None, &state.scope_id)
         .await
         .map_err(|e| format!("Failed to install extension: {}", e))?;
 
@@ -239,14 +280,20 @@ pub async fn ic_uninstall_extension(
     state: State<'_, EngineState>,
     name: String,
 ) -> Result<String, String> {
-    let state = state.get()?;
+    uninstall_extension_from_state(state.get()?, &name).await
+}
+
+pub(crate) async fn uninstall_extension_from_state(
+    state: &AppState,
+    name: &str,
+) -> Result<String, String> {
     let ext_mgr = state
         .extension_manager
         .as_ref()
         .ok_or("Extension manager not available")?;
 
     let message = ext_mgr
-        .remove(&name, &state.scope_id)
+        .remove(name, &state.scope_id)
         .await
         .map_err(|e| format!("Failed to uninstall extension: {}", e))?;
 
@@ -264,6 +311,7 @@ pub struct ExtensionSetupField {
     pub optional: bool,
     pub provided: bool,
     pub input_type: String,
+    pub auto_generate: bool,
 }
 
 /// 扩展配置 Schema 响应。
@@ -272,6 +320,7 @@ pub struct ExtensionSetupResponse {
     pub name: String,
     pub kind: String,
     pub secrets: Vec<ExtensionSetupField>,
+    pub fields: Vec<ExtensionSetupField>,
 }
 
 /// 扩展配置提交响应。
@@ -294,14 +343,20 @@ pub async fn ic_extension_setup(
     state: State<'_, EngineState>,
     name: String,
 ) -> Result<ExtensionSetupResponse, String> {
-    let state = state.get()?;
+    extension_setup_from_state(state.get()?, &name).await
+}
+
+pub(crate) async fn extension_setup_from_state(
+    state: &AppState,
+    name: &str,
+) -> Result<ExtensionSetupResponse, String> {
     let ext_mgr = state
         .extension_manager
         .as_ref()
         .ok_or("Extension manager not available")?;
 
-    let secrets = ext_mgr
-        .get_setup_schema(&name, &state.scope_id)
+    let setup = ext_mgr
+        .get_setup_schema(name, &state.scope_id)
         .await
         .map_err(|e| format!("Failed to get setup schema: {}", e))?;
 
@@ -313,7 +368,12 @@ pub async fn ic_extension_setup(
         .map(|e| e.kind.to_string())
         .unwrap_or_default();
 
-    let fields: Vec<ExtensionSetupField> = secrets
+    let secrets: Vec<ExtensionSetupField> = setup
+        .secrets
+        .into_iter()
+        .map(secret_field_to_response_field)
+        .collect();
+    let fields: Vec<ExtensionSetupField> = setup
         .fields
         .into_iter()
         .map(setup_field_to_response_field)
@@ -322,9 +382,10 @@ pub async fn ic_extension_setup(
     tracing::debug!(extension = %name, fields = fields.len(), "Extension setup schema loaded");
 
     Ok(ExtensionSetupResponse {
-        name,
+        name: name.to_string(),
         kind,
-        secrets: fields,
+        secrets,
+        fields,
     })
 }
 
@@ -336,20 +397,25 @@ pub async fn ic_extension_setup_submit(
     state: State<'_, EngineState>,
     name: String,
     secrets: std::collections::HashMap<String, String>,
+    fields: Option<std::collections::HashMap<String, String>>,
 ) -> Result<ExtensionSetupSubmitResponse, String> {
-    let state = state.get()?;
+    let fields = fields.unwrap_or_default();
+    extension_setup_submit_from_state(state.get()?, &name, &secrets, &fields).await
+}
+
+pub(crate) async fn extension_setup_submit_from_state(
+    state: &AppState,
+    name: &str,
+    secrets: &std::collections::HashMap<String, String>,
+    fields: &std::collections::HashMap<String, String>,
+) -> Result<ExtensionSetupSubmitResponse, String> {
     let ext_mgr = state
         .extension_manager
         .as_ref()
         .ok_or("Extension manager not available")?;
 
     let result = ext_mgr
-        .configure(
-            &name,
-            &secrets,
-            &std::collections::HashMap::new(),
-            &state.scope_id,
-        )
+        .configure(name, secrets, fields, &state.scope_id)
         .await
         .map_err(|e| format!("Failed to configure extension: {}", e))?;
 
@@ -368,14 +434,20 @@ pub async fn ic_search_extensions(
     state: State<'_, EngineState>,
     query: String,
 ) -> Result<Vec<ExtensionInfo>, String> {
-    let state = state.get()?;
+    search_extensions_from_state(state.get()?, &query).await
+}
+
+pub(crate) async fn search_extensions_from_state(
+    state: &AppState,
+    query: &str,
+) -> Result<Vec<ExtensionInfo>, String> {
     let ext_mgr = state
         .extension_manager
         .as_ref()
         .ok_or("Extension manager not available")?;
 
     let results = ext_mgr
-        .search(&query, true)
+        .search(query, true)
         .await
         .map_err(|e| format!("Failed to search extensions: {}", e))?;
 
@@ -451,17 +523,23 @@ async fn soft_deactivate_extension_runtime(state: &AppState, name: &str) -> Resu
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
     use super::{
-        effective_active, extension_name_exists, installed_extension_to_info,
-        search_result_to_info, set_extension_enabled_with_persist, setup_field_to_response_field,
-        setup_submit_response_from_result, validate_extension_install_source,
+        disable_extension_from_state, effective_active, enable_extension_from_state,
+        extension_name_exists, extension_setup_from_state, extension_setup_submit_from_state,
+        install_extension_from_state, installed_extension_to_info, list_extensions_from_state,
+        search_extensions_from_state, search_result_to_info, secret_field_to_response_field,
+        set_extension_enabled_with_persist, setup_field_to_response_field,
+        setup_submit_response_from_result, uninstall_extension_from_state,
+        validate_extension_install_source, DISABLED_EXTENSIONS_SETTING_KEY,
     };
     use crate::safety_bridge::SafetyBridge;
     use crate::state::AppState;
     use dasclaw_runtime::context::ContextManager;
+    use dasclaw_runtime::secrets::{InMemorySecretsStore, SecretsStore};
+    use ironclaw::extensions::{AuthHint, ExtensionKind, ExtensionSource, RegistryEntry};
     use ironclaw::safety::{SafetyConfig, SafetyLayer};
     use ironclaw::tools::ToolRegistry;
 
@@ -499,6 +577,20 @@ mod tests {
     }
 
     fn create_test_app_state(disabled_extensions: &[&str]) -> AppState {
+        create_test_app_state_with_components(
+            disabled_extensions,
+            None,
+            None,
+            Arc::new(ToolRegistry::new()),
+        )
+    }
+
+    fn create_test_app_state_with_components(
+        disabled_extensions: &[&str],
+        db: Option<Arc<dyn ironclaw::db::Database>>,
+        extension_manager: Option<Arc<ironclaw::extensions::ExtensionManager>>,
+        tools: Arc<ToolRegistry>,
+    ) -> AppState {
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let safety = Arc::new(SafetyLayer::new(&SafetyConfig {
             max_output_length: 100_000,
@@ -511,12 +603,8 @@ mod tests {
         let attachment_scanner = Arc::new(
             crate::safety_attachment_scanner::AttachmentScanner::new(Arc::clone(&egress)),
         );
-        let tools = Arc::new(ToolRegistry::new());
         let context_manager = Arc::new(ContextManager::new(5));
-        let data_reporter = Arc::new(crate::data_reporter::DataReporter::new(
-            "http://localhost:3000".to_string(),
-            "test-token".to_string(),
-        ));
+        let data_reporter = Arc::new(crate::data_reporter::DataReporter::new_for_test());
 
         let model_override = Arc::new(std::sync::RwLock::new(None));
         let stub_llm: Arc<dyn ironclaw::llm::LlmProvider> = Arc::new(StubLlmProvider);
@@ -527,10 +615,10 @@ mod tests {
 
         AppState {
             msg_sender: tx,
-            db: None,
+            db,
             workspace: None,
             tools,
-            extension_manager: None,
+            extension_manager,
             skill_registry: None,
             skill_catalog: None,
             skills_config: ironclaw::config::SkillsConfig::default(),
@@ -563,6 +651,79 @@ mod tests {
                     .collect(),
             ),
         }
+    }
+
+    async fn test_db(tempdir: &tempfile::TempDir) -> Arc<dyn ironclaw::db::Database> {
+        let db_path = tempdir.path().join("extensions-state.db");
+        let backend = ironclaw::db::libsql::LibSqlBackend::new_local(&db_path)
+            .await
+            .expect("file-backed libsql backend should initialize");
+        <ironclaw::db::libsql::LibSqlBackend as ironclaw::db::Database>::run_migrations(&backend)
+            .await
+            .expect("migrations should run");
+        Arc::new(backend)
+    }
+
+    fn channel_relay_entry(name: &str) -> RegistryEntry {
+        RegistryEntry {
+            name: name.to_string(),
+            display_name: "Roundtrip Relay".to_string(),
+            kind: ExtensionKind::ChannelRelay,
+            description: "Roundtrip channel relay extension".to_string(),
+            keywords: vec!["roundtrip".to_string(), "relay".to_string()],
+            source: ExtensionSource::ChannelRelay {
+                relay_url: "https://relay.example.test".to_string(),
+            },
+            fallback_source: None,
+            auth_hint: AuthHint::ChannelRelayOAuth,
+            version: Some("1.0.0".to_string()),
+        }
+    }
+
+    fn test_secrets_store() -> Arc<dyn SecretsStore + Send + Sync> {
+        let master_key = ironclaw::secrets::keychain::generate_master_key_hex();
+        let crypto =
+            ironclaw::secrets::crypto_from_hex(&master_key).expect("test crypto should initialize");
+        Arc::new(InMemorySecretsStore::new(crypto))
+    }
+
+    fn test_extension_manager(
+        tempdir: &tempfile::TempDir,
+        db: Arc<dyn ironclaw::db::Database>,
+        tools: Arc<ToolRegistry>,
+        catalog_entries: Vec<RegistryEntry>,
+    ) -> Arc<ironclaw::extensions::ExtensionManager> {
+        Arc::new(ironclaw::extensions::ExtensionManager::new(
+            Arc::new(ironclaw::tools::mcp::session::McpSessionManager::new()),
+            Arc::new(ironclaw::tools::mcp::McpProcessManager::new()),
+            test_secrets_store(),
+            tools,
+            None,
+            None,
+            tempdir.path().join("wasm-tools"),
+            tempdir.path().join("wasm-channels"),
+            None,
+            "test-owner".to_string(),
+            Some(db),
+            catalog_entries,
+        ))
+    }
+
+    async fn test_app_state_with_extensions(
+        catalog_entries: Vec<RegistryEntry>,
+    ) -> (AppState, tempfile::TempDir) {
+        let tempdir = tempfile::tempdir().expect("tempdir should be created");
+        let db = test_db(&tempdir).await;
+        let tools = Arc::new(ToolRegistry::new());
+        let extension_manager = test_extension_manager(
+            &tempdir,
+            Arc::clone(&db),
+            Arc::clone(&tools),
+            catalog_entries,
+        );
+        let state =
+            create_test_app_state_with_components(&[], Some(db), Some(extension_manager), tools);
+        (state, tempdir)
     }
 
     #[test]
@@ -667,6 +828,24 @@ mod tests {
         assert!(!response_field.optional);
         assert!(response_field.provided);
         assert_eq!(response_field.input_type, "Password");
+        assert!(!response_field.auto_generate);
+    }
+
+    #[test]
+    fn req_extensions_setup_secret_mapping_preserves_auto_generate_state() {
+        let field = ironclaw::channels::web::types::SecretFieldInfo {
+            name: "webhook_secret".to_string(),
+            prompt: "Webhook secret".to_string(),
+            optional: true,
+            provided: false,
+            auto_generate: true,
+        };
+
+        let response_field = secret_field_to_response_field(field);
+
+        assert_eq!(response_field.name, "webhook_secret");
+        assert_eq!(response_field.input_type, "AutoGenerate");
+        assert!(response_field.auto_generate);
     }
 
     #[test]
@@ -689,6 +868,150 @@ mod tests {
         assert_eq!(response.message, "Verification required");
         assert!(!response.activated);
         assert!(response.auth_url.is_none());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn req_extensions_channel_relay_state_round_trip() {
+        std::env::remove_var("MANAGED_MODE");
+
+        let extension_name = "roundtrip-relay";
+        let (state, _tempdir) =
+            test_app_state_with_extensions(vec![channel_relay_entry(extension_name)]).await;
+
+        let search_results = search_extensions_from_state(&state, "roundtrip")
+            .await
+            .expect("search should read registry entries from real manager");
+        let result = search_results
+            .iter()
+            .find(|extension| extension.name == extension_name)
+            .expect("registry extension should be searchable before install");
+        assert!(!result.installed);
+        assert_eq!(result.kind, "channel_relay");
+
+        let install_message = install_extension_from_state(&state, extension_name, None)
+            .await
+            .expect("registry channel relay install should update manager state");
+        assert!(
+            install_message.contains("installed"),
+            "install response should come from real manager, actual: {install_message}"
+        );
+
+        let listed = list_extensions_from_state(&state, Some(false))
+            .await
+            .expect("list should read installed manager state");
+        let extension = listed
+            .iter()
+            .find(|extension| extension.name == extension_name)
+            .expect("installed extension should be listed");
+        assert!(extension.installed);
+        assert_eq!(extension.display_name.as_deref(), Some("Roundtrip Relay"));
+        assert_eq!(extension.kind, "channel_relay");
+        assert!(!extension.active, "relay is not active before auth/setup");
+
+        let setup = extension_setup_from_state(&state, extension_name)
+            .await
+            .expect("setup schema should be loaded from installed extension");
+        assert_eq!(setup.name, extension_name);
+        assert_eq!(setup.kind, "channel_relay");
+        let relay_url_field = setup
+            .fields
+            .iter()
+            .find(|field| field.name == "relay_url")
+            .expect("channel relay setup should expose relay_url field");
+        assert_eq!(relay_url_field.input_type, "Text");
+        assert!(!relay_url_field.provided);
+
+        let relay_url = "https://relay.local.test";
+        let setup_response = extension_setup_submit_from_state(
+            &state,
+            extension_name,
+            &HashMap::new(),
+            &HashMap::from([("relay_url".to_string(), relay_url.to_string())]),
+        )
+        .await
+        .expect("setup submit should save relay_url even when activation cannot complete");
+        assert!(!setup_response.success);
+        assert!(!setup_response.activated);
+        assert!(
+            setup_response.message.contains("Configuration saved"),
+            "setup response should distinguish saved config from activation failure: {}",
+            setup_response.message
+        );
+
+        let relay_setting = state
+            .db
+            .as_ref()
+            .expect("db should exist")
+            .get_setting(
+                &state.scope_id,
+                &format!("extensions.{extension_name}.relay_url"),
+            )
+            .await
+            .expect("relay_url setting should be readable")
+            .expect("relay_url setting should be persisted");
+        assert_eq!(relay_setting, serde_json::json!(relay_url));
+
+        let setup = extension_setup_from_state(&state, extension_name)
+            .await
+            .expect("setup schema should reflect persisted relay_url");
+        let relay_url_field = setup
+            .fields
+            .iter()
+            .find(|field| field.name == "relay_url")
+            .expect("channel relay setup should still expose relay_url field");
+        assert!(relay_url_field.provided);
+
+        disable_extension_from_state(&state, extension_name)
+            .await
+            .expect("disable should persist soft-disabled state");
+        let disabled = state
+            .db
+            .as_ref()
+            .expect("db should exist")
+            .get_setting(&state.scope_id, DISABLED_EXTENSIONS_SETTING_KEY)
+            .await
+            .expect("disabled extension setting should be readable")
+            .expect("disabled extension setting should be persisted");
+        assert_eq!(disabled, serde_json::json!([extension_name]));
+
+        let enable_error = enable_extension_from_state(&state, extension_name)
+            .await
+            .expect_err("enable should fail without relay auth/team configuration");
+        assert!(
+            enable_error.contains("Failed to enable extension"),
+            "enable failure should come from real activation path, actual: {enable_error}"
+        );
+        let disabled = state
+            .db
+            .as_ref()
+            .expect("db should exist")
+            .get_setting(&state.scope_id, DISABLED_EXTENSIONS_SETTING_KEY)
+            .await
+            .expect("disabled extension setting should remain readable")
+            .expect("disabled extension setting should remain persisted");
+        assert_eq!(
+            disabled,
+            serde_json::json!([extension_name]),
+            "failed enable must not clear the persisted soft-disabled state"
+        );
+
+        let uninstall_message = uninstall_extension_from_state(&state, extension_name)
+            .await
+            .expect("uninstall should remove extension from manager state");
+        assert!(
+            uninstall_message.contains("Removed"),
+            "uninstall response should come from real manager, actual: {uninstall_message}"
+        );
+        let listed = list_extensions_from_state(&state, Some(false))
+            .await
+            .expect("list should read post-uninstall manager state");
+        assert!(
+            listed
+                .iter()
+                .all(|extension| extension.name != extension_name),
+            "uninstalled extension should no longer be listed"
+        );
     }
 
     #[tokio::test]
