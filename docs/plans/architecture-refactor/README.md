@@ -26,6 +26,7 @@
 | 36 | [36-claw-code-capability-inventory.md](36-claw-code-capability-inventory.md) | claw-code 全量盘点（治理 6 件套 / mock-anthropic 27 场景） | v1 |
 | 37 | [37-ironclaw-main-capability-inventory.md](37-ironclaw-main-capability-inventory.md) | ironclaw-main 上游 v0.26 全量盘点（464,222 LOC） | v1 |
 | 38 | [38-desktop-client-ironclaw-fork-inventory.md](38-desktop-client-ironclaw-fork-inventory.md) | desktop-client/ironclaw fork 全量盘点（295,658 LOC） | v1 || 39 | [39-fork-private-cargo-inventory.md](39-fork-private-cargo-inventory.md) | **fork 私货迁移地图**：49 独家文件 / 93 修改文件 / ≈14,800 LOC + W6+ 删 fork 前置 checklist | **v1** |
+| 41 | [41-desktop-host-runtime-boundary.md](41-desktop-host-runtime-boundary.md) | #1054：desktop IPC / IronClaw host / dasclaw runtime 分层边界 + Plan/Fork 执行级验证 | v1 |
 ### 📝 架构评审
 
 | 文档 | 内容 |

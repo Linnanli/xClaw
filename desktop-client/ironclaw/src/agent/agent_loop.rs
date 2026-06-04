@@ -1753,11 +1753,150 @@ impl Agent {
 #[cfg(test)]
 mod tests {
     use super::{
-        chat_tool_execution_metadata, is_single_message_repl, resolve_routine_notification_user,
-        should_fallback_routine_notification, truncate_for_preview,
+        Agent, AgentDeps, chat_tool_execution_metadata, is_single_message_repl,
+        resolve_routine_notification_user, should_fallback_routine_notification,
+        truncate_for_preview,
     };
     use crate::channels::IncomingMessage;
+    use crate::config::{AgentConfig, SafetyConfig, SkillsConfig};
     use crate::error::ChannelError;
+    use crate::llm::{
+        CompletionRequest, CompletionResponse, FinishReason, LlmProvider, ToolCompletionRequest,
+        ToolCompletionResponse,
+    };
+    use crate::safety::SafetyLayer;
+    use crate::tools::ToolRegistry;
+    use async_trait::async_trait;
+    use dasclaw_hooks::HookRegistry;
+    use dasclaw_runtime::context::ContextManager;
+    use rust_decimal::Decimal;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    struct StaticLlmProvider;
+
+    #[async_trait]
+    impl LlmProvider for StaticLlmProvider {
+        fn model_name(&self) -> &str {
+            "static-mock"
+        }
+
+        fn cost_per_token(&self) -> (Decimal, Decimal) {
+            (Decimal::ZERO, Decimal::ZERO)
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, crate::error::LlmError> {
+            Ok(CompletionResponse {
+                content: "ok".to_string(),
+                input_tokens: 0,
+                output_tokens: 0,
+                finish_reason: FinishReason::Stop,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+            })
+        }
+
+        async fn complete_with_tools(
+            &self,
+            _request: ToolCompletionRequest,
+        ) -> Result<ToolCompletionResponse, crate::error::LlmError> {
+            Ok(ToolCompletionResponse {
+                content: Some("ok".to_string()),
+                tool_calls: Vec::new(),
+                input_tokens: 0,
+                output_tokens: 0,
+                finish_reason: FinishReason::Stop,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+            })
+        }
+    }
+
+    fn test_agent_config() -> AgentConfig {
+        AgentConfig {
+            name: "test-agent".to_string(),
+            max_parallel_jobs: 1,
+            job_timeout: Duration::from_secs(60),
+            stuck_threshold: Duration::from_secs(60),
+            repair_check_interval: Duration::from_secs(30),
+            max_repair_attempts: 1,
+            use_planning: false,
+            session_idle_timeout: Duration::from_secs(300),
+            allow_local_tools: false,
+            max_cost_per_day_cents: None,
+            max_actions_per_hour: None,
+            max_cost_per_user_per_day_cents: None,
+            max_tool_iterations: 50,
+            auto_approve_tools: false,
+            default_timezone: "UTC".to_string(),
+            max_jobs_per_user: None,
+            max_tokens_per_job: 0,
+            multi_tenant: false,
+            max_llm_concurrent_per_user: None,
+            max_jobs_concurrent_per_user: None,
+        }
+    }
+
+    fn make_test_agent() -> Agent {
+        let deps = AgentDeps {
+            owner_id: "owner-scope".to_string(),
+            store: None,
+            llm: Arc::new(StaticLlmProvider),
+            cheap_llm: None,
+            safety: Arc::new(SafetyLayer::new(&SafetyConfig {
+                max_output_length: 100_000,
+                injection_check_enabled: false,
+            })),
+            tools: Arc::new(ToolRegistry::new()),
+            workspace: None,
+            extension_manager: None,
+            skill_registry: None,
+            skill_catalog: None,
+            skills_config: SkillsConfig::default(),
+            hooks: Arc::new(HookRegistry::new()),
+            cost_guard: Arc::new(crate::agent::cost_guard::CostGuard::new(
+                crate::agent::cost_guard::CostGuardConfig::default(),
+            )),
+            sse_tx: None,
+            job_event_sink: None,
+            channels_for_jobs: None,
+            http_interceptor: None,
+            transcription: None,
+            document_extraction: None,
+            sandbox_readiness: crate::agent::routine_engine::SandboxReadiness::DisabledByConfig,
+            builder: None,
+            llm_backend: "nearai".to_string(),
+            tenant_rates: Arc::new(crate::tenant::TenantRateRegistry::new(4, 3)),
+            cache_monitor: None,
+        };
+
+        Agent::new(
+            test_agent_config(),
+            deps,
+            Arc::new(crate::channels::ChannelManager::new()),
+            None,
+            None,
+            None,
+            Some(Arc::new(ContextManager::new(1))),
+            None,
+        )
+    }
+
+    async fn resolve_test_thread(
+        agent: &Agent,
+        external_thread_id: &str,
+    ) -> (
+        Arc<tokio::sync::Mutex<crate::agent::session::Session>>,
+        uuid::Uuid,
+    ) {
+        agent
+            .session_manager
+            .resolve_thread("owner-scope", "tauri", Some(external_thread_id))
+            .await
+    }
 
     #[test]
     fn test_truncate_short_input() {
@@ -1927,6 +2066,80 @@ mod tests {
         assert!(is_single_message_repl(&repl)); // safety: test-only assertion
         assert!(!is_single_message_repl(&gateway)); // safety: test-only assertion
         assert!(!is_single_message_repl(&plain_repl)); // safety: test-only assertion
+    }
+
+    #[tokio::test]
+    async fn req_1054_plan_mode_message_loop_updates_thread_state() {
+        let agent = make_test_agent();
+        let external_thread_id = "thread-plan-mode";
+        let (session, thread_id) = resolve_test_thread(&agent, external_thread_id).await;
+
+        let message = IncomingMessage::new("tauri", "owner-scope", "/plan-mode")
+            .with_thread(external_thread_id);
+        let response = agent
+            .handle_message(&message)
+            .await
+            .expect("plan-mode message should be handled");
+
+        assert_eq!(response.as_deref(), Some("Plan mode enabled."));
+        let sess = session.lock().await;
+        let thread = sess
+            .threads
+            .get(&thread_id)
+            .expect("thread remains registered after plan toggle");
+        assert!(thread.is_plan_mode());
+        assert_eq!(thread.state, crate::agent::session::ThreadState::Planning);
+    }
+
+    #[tokio::test]
+    async fn req_1054_fork_message_loop_creates_registered_thread() {
+        let agent = make_test_agent();
+        let external_thread_id = "thread-fork-source";
+        let (session, source_thread_id) = resolve_test_thread(&agent, external_thread_id).await;
+        {
+            let mut sess = session.lock().await;
+            let source = sess
+                .threads
+                .get_mut(&source_thread_id)
+                .expect("source thread should exist");
+            source.start_turn("first turn");
+            source.complete_turn("first response");
+            source.start_turn("second turn");
+            source.complete_turn("second response");
+        }
+
+        let message =
+            IncomingMessage::new("tauri", "owner-scope", "/fork 1").with_thread(external_thread_id);
+        let response = agent
+            .handle_message(&message)
+            .await
+            .expect("fork message should be handled")
+            .expect("fork command should return an acknowledgement");
+        let forked_thread_id = response
+            .strip_prefix("Forked thread: ")
+            .and_then(|id| uuid::Uuid::parse_str(id).ok())
+            .expect("acknowledgement should include the new thread id");
+
+        let sess = session.lock().await;
+        assert_eq!(sess.active_thread, Some(forked_thread_id));
+        let forked = sess
+            .threads
+            .get(&forked_thread_id)
+            .expect("forked thread should be stored in the session");
+        assert_eq!(forked.forked_from, Some(source_thread_id));
+        assert_eq!(forked.fork_point, Some(1));
+        assert_eq!(forked.turns.len(), 1);
+        assert_eq!(
+            forked.turns[0].user_input, "first turn",
+            "fork should copy history only up to the requested turn"
+        );
+        drop(sess);
+
+        let (_, resolved_fork_id) = agent
+            .session_manager
+            .resolve_thread("owner-scope", "tauri", Some(&forked_thread_id.to_string()))
+            .await;
+        assert_eq!(resolved_fork_id, forked_thread_id);
     }
 
     // ── IPC 接缝契约测试 ────────────────────────────────────────
