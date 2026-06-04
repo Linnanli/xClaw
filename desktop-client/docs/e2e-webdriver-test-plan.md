@@ -409,24 +409,27 @@ execjs(sid, "document.querySelector('button.aui-composer-send').click(); return 
 ```python
 sid = new_session(); poll(lambda: json.loads(execjs(sid, SNAPSHOT))["composer"] > 0, 60)
 
-# (a) 取当前 thread 列表，记录一个 thread_id
-threads = execjs(sid, "return window.__TAURI_INTERNALS__.invoke('ic_list_threads', {});")
-tid = threads[0]["id"] if threads else None
-
 execjs(sid, INJECT, ["记住这句话：E2E-MARKER-7788"])
 execjs(sid, "document.querySelector('button.aui-composer-send').click(); return true;")
 poll(lambda: json.loads(execjs(sid, SNAPSHOT))["assistantMsgs"] > 0, 60)
 
-# (b) 刷新后用 ic_get_thread_history 回读，应含 marker
+# (a) 发送后取后端最近活跃 thread，避免把 ic_list_threads()[0] 误当 UI 当前线程
+tid = invoke("ic_get_active_thread_id", {})
+hist0 = invoke("ic_get_thread_history", {"threadId": tid, "limit": 50})
+assert json.dumps(hist0, ensure_ascii=False).find("E2E-MARKER-7788") >= 0
+
+# (b) 刷新后 active thread 应保持一致，且 ic_get_thread_history 回读应含 marker
 execjs(sid, "location.reload();")
 poll(lambda: json.loads(execjs(sid, SNAPSHOT))["composer"] > 0, 30)
+assert invoke("ic_get_active_thread_id", {}) == tid
 hist = execjs(sid, "const [t]=arguments;"
     "return window.__TAURI_INTERNALS__.invoke('ic_get_thread_history',{threadId:t});", [tid])
 assert json.dumps(hist, ensure_ascii=False).find("E2E-MARKER-7788") >= 0, "刷新后历史丢失"
 ```
 
 **断言**：
-- 线程/历史命令：`ic_list_threads` / `ic_get_thread_history` / `ic_create_thread`
+- 线程/历史命令：`ic_get_active_thread_id` / `ic_list_threads` /
+  `ic_get_thread_history` / `ic_create_thread`
   （[lib.rs 线程管理段](../src/lib.rs)）。
 - 刷新后 `ThreadHistoryLoader`（`chat-runtime-history-loading`，
   [ThreadHistoryLoader.tsx:101](../ui/src/app/runtime/ThreadHistoryLoader.tsx)）重载历史。

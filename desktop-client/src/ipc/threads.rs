@@ -89,6 +89,26 @@ pub async fn ic_list_threads(
         .collect())
 }
 
+/// 获取后端持久化层最近活跃的对话线程 ID。
+///
+/// Desktop UI 的 selectedThreadId 由前端状态持有；后端能权威提供的是按
+/// `last_activity DESC` 排序后的最近活跃 thread。E2E 用它对账发送路径写入的
+/// 真实目标线程，避免把 `ic_list_threads()[0]` 当作 UI 当前线程。
+#[tauri::command]
+pub async fn ic_get_active_thread_id(
+    state: State<'_, EngineState>,
+) -> Result<Option<String>, String> {
+    let state = state.get()?;
+    let db = state.db.as_ref().ok_or("Database not available")?;
+
+    let conversations = db
+        .list_conversations_all_channels(&state.scope_id, 1)
+        .await
+        .map_err(|e| format!("Failed to get active thread: {}", e))?;
+
+    Ok(conversations.into_iter().next().map(|c| c.id.to_string()))
+}
+
 /// 创建新对话线程。
 ///
 /// Automatically creates a sandboxed workspace directory under

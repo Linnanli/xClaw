@@ -125,6 +125,7 @@ const REGISTERED_COMMANDS: &[&str] = &[
     "unsubscribe_chat_events",
     "get_engine_status",
     "ic_list_threads",
+    "ic_get_active_thread_id",
     "ic_create_thread",
     "ic_get_thread_history",
     "ic_memory_list",
