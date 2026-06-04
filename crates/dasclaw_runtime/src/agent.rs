@@ -127,6 +127,47 @@ pub trait ToolOutputSanitizer: Send + Sync {
     fn sanitize(&self, tool_name: &str, content: &str) -> String;
 }
 
+/// Lifecycle stage emitted around a real [`ToolExecutor::execute`] call.
+///
+/// This is intentionally runtime-level production API, not a test helper:
+/// hosts can attach tracing, audit, or compliance observers to the exact
+/// executor boundary the agent loop uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolLifecycleStage {
+    /// Immediately before the executor is invoked, after approval and
+    /// pre-execute egress have allowed the call.
+    PreToolUse,
+    /// Immediately after the executor returns a [`ToolResult`], before
+    /// post-execute egress and output sanitization rewrite the payload.
+    PostToolUse,
+}
+
+/// Metadata for one tool lifecycle callback.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolLifecycleEvent {
+    pub stage: ToolLifecycleStage,
+    pub tool_call_id: String,
+    pub tool_name: String,
+}
+
+/// Observer for production tool lifecycle callbacks.
+#[async_trait]
+pub trait ToolLifecycleObserver: Send + Sync {
+    /// Called by the runtime around real tool execution.
+    async fn observe(&self, event: ToolLifecycleEvent) -> Result<(), HostError>;
+}
+
+/// Default observer used when hosts do not need lifecycle callbacks.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopToolLifecycleObserver;
+
+#[async_trait]
+impl ToolLifecycleObserver for NoopToolLifecycleObserver {
+    async fn observe(&self, _event: ToolLifecycleEvent) -> Result<(), HostError> {
+        Ok(())
+    }
+}
+
 /// Errors surfaced by [`Agent::run`].
 ///
 /// Serialized via a private adjacent-tagged wire format
@@ -322,6 +363,7 @@ pub struct Agent {
     responder: Arc<dyn AgentResponder>,
     tool_executor: Option<Arc<dyn ToolExecutor>>,
     tool_output_sanitizer: Option<Arc<dyn ToolOutputSanitizer>>,
+    tool_lifecycle_observer: Arc<dyn ToolLifecycleObserver>,
     hooks: HookBundle,
     config: AgentConfig,
     /// Optional cancellation token forwarded to
@@ -466,6 +508,7 @@ impl Agent {
                     self.approval_inbox.clone(),
                 )),
                 self.tool_output_sanitizer.clone(),
+                Arc::clone(&self.tool_lifecycle_observer),
                 event_tx.clone(),
             )) as Arc<dyn ToolDispatcher>
         });
@@ -534,6 +577,7 @@ pub struct AgentBuilder {
     responder: Option<Arc<dyn AgentResponder>>,
     tool_executor: Option<Arc<dyn ToolExecutor>>,
     tool_output_sanitizer: Option<Arc<dyn ToolOutputSanitizer>>,
+    tool_lifecycle_observer: Option<Arc<dyn ToolLifecycleObserver>>,
     hooks: Option<HookBundle>,
     config: AgentConfig,
     cancellation_token: Option<CancellationToken>,
@@ -587,6 +631,24 @@ impl AgentBuilder {
     #[must_use]
     pub fn tool_output_sanitizer_arc(mut self, sanitizer: Arc<dyn ToolOutputSanitizer>) -> Self {
         self.tool_output_sanitizer = Some(sanitizer);
+        self
+    }
+
+    /// Attach a production lifecycle observer around real tool execution.
+    #[must_use]
+    pub fn tool_lifecycle_observer(
+        mut self,
+        observer: impl ToolLifecycleObserver + 'static,
+    ) -> Self {
+        self.tool_lifecycle_observer = Some(Arc::new(observer));
+        self
+    }
+
+    /// Same as [`Self::tool_lifecycle_observer`] but accepts a pre-built
+    /// `Arc` so hosts can share an observer across agents.
+    #[must_use]
+    pub fn tool_lifecycle_observer_arc(mut self, observer: Arc<dyn ToolLifecycleObserver>) -> Self {
+        self.tool_lifecycle_observer = Some(observer);
         self
     }
 
@@ -661,6 +723,9 @@ impl AgentBuilder {
             responder,
             tool_executor: self.tool_executor,
             tool_output_sanitizer: self.tool_output_sanitizer,
+            tool_lifecycle_observer: self
+                .tool_lifecycle_observer
+                .unwrap_or_else(|| Arc::new(NoopToolLifecycleObserver)),
             hooks,
             config: self.config,
             cancellation_token: self.cancellation_token,
@@ -954,6 +1019,79 @@ mod tests {
             .expect("build");
         let out = agent.run("please call echo").await.expect("run");
         assert_eq!(out, "all done");
+    }
+
+    struct RecordingLifecycleObserver {
+        calls: Arc<tokio::sync::Mutex<Vec<&'static str>>>,
+    }
+
+    #[async_trait]
+    impl ToolLifecycleObserver for RecordingLifecycleObserver {
+        async fn observe(&self, event: ToolLifecycleEvent) -> Result<(), HostError> {
+            assert_eq!(event.tool_call_id, "call_1");
+            assert_eq!(event.tool_name, "echo");
+            let label = match event.stage {
+                ToolLifecycleStage::PreToolUse => "pre",
+                ToolLifecycleStage::PostToolUse => "post",
+            };
+            self.calls.lock().await.push(label);
+            Ok(())
+        }
+    }
+
+    struct RecordingOrderExecutor {
+        calls: Arc<tokio::sync::Mutex<Vec<&'static str>>>,
+    }
+
+    #[async_trait]
+    impl ToolExecutor for RecordingOrderExecutor {
+        async fn execute(&self, call: &ToolCall) -> Result<ToolResult, HostError> {
+            self.calls.lock().await.push("exec");
+            Ok(ToolResult {
+                tool_call_id: call.id.clone(),
+                name: call.name.clone(),
+                content: "echo result".to_string(),
+                is_error: false,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn req_1057_tool_lifecycle_wraps_real_executor_order() {
+        // Regression for issue #1057: this must exercise the production
+        // Agent -> SequentialDispatcher -> ToolExecutor path. The test
+        // records lifecycle callbacks and the actual executor invocation
+        // into one log, proving the real order is:
+        //   PreToolUse -> execute -> PostToolUse
+        let calls = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let responder = ScriptedResponder::new(vec![
+            tool_call_output_named("echo", "call_1"),
+            text_output("all done"),
+        ]);
+        let observer = Arc::new(RecordingLifecycleObserver {
+            calls: Arc::clone(&calls),
+        });
+        let executor = RecordingOrderExecutor {
+            calls: Arc::clone(&calls),
+        };
+
+        let agent = Agent::builder()
+            .responder(responder)
+            .tool_executor(executor)
+            .tool_lifecycle_observer_arc(observer)
+            .tools(vec![ToolDefinition {
+                name: "echo".into(),
+                description: "echo".into(),
+                parameters: serde_json::json!({"type": "object"}),
+            }])
+            .build()
+            .expect("build");
+
+        let out = agent.run("please call echo").await.expect("run");
+        assert_eq!(out, "all done");
+
+        let actual = calls.lock().await.clone();
+        assert_eq!(actual, vec!["pre", "exec", "post"]);
     }
 
     #[tokio::test]

@@ -83,7 +83,7 @@ pub mod tool_to_executor_adapter;
 
 pub use agent::{
     Agent, AgentBuilder, AgentConfig, AgentError, AgentEvent, AgentResponder, ToolExecutor,
-    ToolOutputSanitizer,
+    ToolLifecycleEvent, ToolLifecycleObserver, ToolLifecycleStage, ToolOutputSanitizer,
 };
 pub use agentic_loop::AgenticLoop;
 // W8.0: re-export the loop control vocabulary so AgentResponder impls
