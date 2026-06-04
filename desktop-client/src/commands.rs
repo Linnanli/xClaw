@@ -36,10 +36,21 @@ fn client_config_url(admin_url: &str, client_token: &str) -> Result<String> {
         .map_err(|e| Error::ConfigError(format!("Invalid ADMIN_BACKEND_URL: {e}")))?;
     url.path_segments_mut()
         .map_err(|_| Error::ConfigError("Invalid ADMIN_BACKEND_URL".to_string()))?
+        .pop_if_empty()
         .extend(["api", "client-config"]);
     if !client_token.is_empty() {
         url.query_pairs_mut().append_pair("client_id", client_token);
     }
+    Ok(url.to_string())
+}
+
+fn settings_url(admin_url: &str) -> Result<String> {
+    let mut url = reqwest::Url::parse(admin_url)
+        .map_err(|e| Error::ConfigError(format!("Invalid ADMIN_BACKEND_URL: {e}")))?;
+    url.path_segments_mut()
+        .map_err(|_| Error::ConfigError("Invalid ADMIN_BACKEND_URL".to_string()))?
+        .pop_if_empty()
+        .extend(["api", "settings"]);
     Ok(url.to_string())
 }
 
@@ -87,13 +98,7 @@ fn resolve_applicant_id(state: &crate::state::AppState) -> Result<Uuid> {
     resolve_applicant_id_value(&state.backend_user_id)
 }
 
-/// 获取认证令牌。
-///
-/// 从本地文件加载或自动生成 64 位十六进制 token，
-/// 并验证格式合法性后返回给前端。
-#[tauri::command]
-pub async fn get_auth_token() -> Result<String> {
-    let token_manager = AuthTokenManager::new();
+fn get_auth_token_from_manager(token_manager: &AuthTokenManager) -> Result<String> {
     let token = token_manager
         .load_or_generate()
         .map_err(|e| Error::ConfigError(e.to_string()))?;
@@ -116,6 +121,92 @@ pub async fn get_auth_token() -> Result<String> {
     Ok(token)
 }
 
+async fn json_response(response: reqwest::Response, context: &str) -> Result<serde_json::Value> {
+    let status = response.status();
+    if !status.is_success() {
+        return Err(Error::ConfigError(format!(
+            "{context}: server returned {status}"
+        )));
+    }
+
+    response
+        .json()
+        .await
+        .map_err(|e| Error::ConfigError(format!("Failed to parse {context}: {e}")))
+}
+
+async fn fetch_json_or_empty(
+    request: reqwest::RequestBuilder,
+    context: &str,
+    fallback: &'static str,
+) -> serde_json::Value {
+    match request.send().await {
+        Ok(response) => match json_response(response, context).await {
+            Ok(json) => json,
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    fallback,
+                    "Admin HTTP response rejected; using default command response"
+                );
+                serde_json::json!({})
+            }
+        },
+        Err(_) => {
+            tracing::warn!(
+                fallback,
+                "Admin HTTP request failed; using default command response"
+            );
+            serde_json::json!({})
+        }
+    }
+}
+
+async fn check_for_updates_from_admin(
+    http: &reqwest::Client,
+    admin_url: &str,
+    client_token: &str,
+) -> Result<serde_json::Value> {
+    // client_id 参数让后端返回该客户端的 needs_upgrade 状态
+    let url = client_config_url(admin_url, client_token)?;
+
+    let config = fetch_json_or_empty(
+        http.get(&url).bearer_auth(client_token),
+        "client config",
+        "default update status",
+    )
+    .await;
+
+    Ok(update_status_response(&config))
+}
+
+async fn get_watermark_config_from_admin(
+    http: &reqwest::Client,
+    admin_url: &str,
+    token: &str,
+) -> Result<serde_json::Value> {
+    let url = settings_url(admin_url)?;
+
+    let settings = fetch_json_or_empty(
+        http.get(&url).bearer_auth(token),
+        "settings",
+        "default watermark settings",
+    )
+    .await;
+
+    Ok(watermark_config_response(&settings))
+}
+
+/// 获取认证令牌。
+///
+/// 从本地文件加载或自动生成 64 位十六进制 token，
+/// 并验证格式合法性后返回给前端。
+#[tauri::command]
+pub async fn get_auth_token() -> Result<String> {
+    let token_manager = AuthTokenManager::new();
+    get_auth_token_from_manager(&token_manager)
+}
+
 /// 获取应用版本号。
 ///
 /// 从 Cargo.toml 编译期注入的 `CARGO_PKG_VERSION` 读取，格式为 `x.y.z`。
@@ -133,20 +224,7 @@ pub async fn check_for_updates() -> Result<serde_json::Value> {
     let (admin_url, client_token) = admin_env();
     let http = build_http_client(5)?;
 
-    // client_id 参数让后端返回该客户端的 needs_upgrade 状态
-    let url = client_config_url(&admin_url, &client_token)?;
-
-    let config: serde_json::Value = http
-        .get(&url)
-        .bearer_auth(&client_token)
-        .send()
-        .await
-        .map_err(|_| Error::ConfigError("Admin Backend 不可用".into()))?
-        .json()
-        .await
-        .map_err(|e| Error::ConfigError(format!("Failed to parse config: {}", e)))?;
-
-    Ok(update_status_response(&config))
+    check_for_updates_from_admin(&http, &admin_url, &client_token).await
 }
 
 /// 获取水印配置（从 Admin Backend API 读取）。
@@ -158,17 +236,7 @@ pub async fn get_watermark_config() -> Result<serde_json::Value> {
     let (admin_url, token) = admin_env();
     let http = build_http_client(5)?;
 
-    let settings: serde_json::Value = http
-        .get(format!("{}/api/settings", admin_url))
-        .bearer_auth(&token)
-        .send()
-        .await
-        .map_err(|e| Error::ConfigError(format!("Failed to fetch settings: {}", e)))?
-        .json()
-        .await
-        .map_err(|e| Error::ConfigError(format!("Failed to parse settings: {}", e)))?;
-
-    Ok(watermark_config_response(&settings))
+    get_watermark_config_from_admin(&http, &admin_url, &token).await
 }
 
 /// 提交审批工单并启动后台轮询任务（需求 23.10）。
@@ -281,13 +349,55 @@ pub async fn submit_approval_ticket(
 #[cfg(test)]
 mod app_command_tests {
     use super::{
-        approval_operation_name, approval_reason, client_config_url, get_app_version,
-        update_status_response, watermark_config_response,
+        approval_operation_name, approval_reason, check_for_updates_from_admin, client_config_url,
+        get_app_version, get_auth_token_from_manager, get_watermark_config_from_admin,
+        settings_url, update_status_response, watermark_config_response,
     };
+    use crate::auth_token_manager::AuthTokenManager;
+    use wiremock::matchers::{header, method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn test_http_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("test HTTP client should build")
+    }
 
     #[test]
     fn req_app_get_version_matches_package_version() {
         assert_eq!(get_app_version(), env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn req_app_get_auth_token_generates_and_reuses_file_token() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let token_file = temp_dir.path().join("auth-token");
+        let token_manager = AuthTokenManager::new_with_path(token_file.clone());
+
+        let first = get_auth_token_from_manager(&token_manager).expect("first token");
+        let second = get_auth_token_from_manager(&token_manager).expect("second token");
+
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 64);
+        assert!(first.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(
+            std::fs::read_to_string(token_file).expect("persisted token"),
+            first
+        );
+    }
+
+    #[test]
+    fn req_app_get_auth_token_replaces_invalid_file_token() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let token_file = temp_dir.path().join("auth-token");
+        std::fs::write(&token_file, "not-a-valid-token").expect("write invalid token");
+        let token_manager = AuthTokenManager::new_with_path(token_file);
+
+        let token = get_auth_token_from_manager(&token_manager).expect("generated replacement");
+
+        assert_eq!(token.len(), 64);
+        assert!(token.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     #[test]
@@ -305,6 +415,61 @@ mod app_command_tests {
             url,
             "http://localhost:3000/base/api/client-config?client_id=client+token%2F1"
         );
+    }
+
+    #[test]
+    fn req_app_check_updates_builds_client_config_url_after_trailing_slash() {
+        let url = client_config_url("http://localhost:3000/base/", "client-1").expect("url");
+
+        assert_eq!(
+            url,
+            "http://localhost:3000/base/api/client-config?client_id=client-1"
+        );
+    }
+
+    #[test]
+    fn req_app_watermark_config_builds_settings_url() {
+        let url = settings_url("http://localhost:3000/base/").expect("url");
+
+        assert_eq!(url, "http://localhost:3000/base/api/settings");
+    }
+
+    #[tokio::test]
+    async fn req_app_check_updates_reads_successful_http_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/client-config"))
+            .and(query_param("client_id", "client-1"))
+            .and(header("authorization", "Bearer client-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "needs_upgrade": true
+            })))
+            .mount(&server)
+            .await;
+
+        let response = check_for_updates_from_admin(&test_http_client(), &server.uri(), "client-1")
+            .await
+            .expect("update check should parse successful response");
+
+        assert_eq!(response["needs_upgrade"], true);
+        assert_eq!(response["current_version"], env!("CARGO_PKG_VERSION"));
+    }
+
+    #[tokio::test]
+    async fn req_app_check_updates_falls_back_on_http_failure_status() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/client-config"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let response = check_for_updates_from_admin(&test_http_client(), &server.uri(), "")
+            .await
+            .expect("server failure should fall back to default payload");
+
+        assert_eq!(response["needs_upgrade"], false);
+        assert_eq!(response["current_version"], env!("CARGO_PKG_VERSION"));
     }
 
     #[test]
@@ -342,6 +507,55 @@ mod app_command_tests {
         assert_eq!(response["watermark_opacity"], 0.25);
         assert_eq!(response["watermark_position"], "grid");
         assert_eq!(response["watermark_color"], "#123456");
+    }
+
+    #[tokio::test]
+    async fn req_app_watermark_config_reads_successful_http_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/settings"))
+            .and(header("authorization", "Bearer admin-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "watermark_enabled": true,
+                "watermark_template": "{email}",
+                "watermark_font_size": 20,
+                "watermark_opacity": 0.4,
+                "watermark_position": "grid",
+                "watermark_color": "#abcdef"
+            })))
+            .mount(&server)
+            .await;
+
+        let response =
+            get_watermark_config_from_admin(&test_http_client(), &server.uri(), "admin-token")
+                .await
+                .expect("watermark settings should parse successful response");
+
+        assert_eq!(response["watermark_enabled"], true);
+        assert_eq!(response["watermark_template"], "{email}");
+        assert_eq!(response["watermark_font_size"], 20);
+        assert_eq!(response["watermark_opacity"], 0.4);
+        assert_eq!(response["watermark_position"], "grid");
+        assert_eq!(response["watermark_color"], "#abcdef");
+    }
+
+    #[tokio::test]
+    async fn req_app_watermark_config_falls_back_on_http_failure_status() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/settings"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let response = get_watermark_config_from_admin(&test_http_client(), &server.uri(), "")
+            .await
+            .expect("server failure should fall back to default payload");
+
+        assert_eq!(response["watermark_enabled"], false);
+        assert_eq!(response["watermark_template"], "{username} | {datetime}");
+        assert_eq!(response["watermark_font_size"], 16);
+        assert_eq!(response["watermark_position"], "diagonal");
     }
 
     #[test]
