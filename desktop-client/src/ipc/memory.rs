@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::state::EngineState;
+use crate::state::{AppState, EngineState};
 
 const DEFAULT_MEMORY_SEARCH_LIMIT: usize = 10;
 
@@ -42,12 +42,23 @@ pub(crate) fn memory_search_limit(limit: Option<usize>) -> usize {
     limit.unwrap_or(DEFAULT_MEMORY_SEARCH_LIMIT)
 }
 
+pub(crate) fn memory_display_path(path: &str) -> String {
+    if path.is_empty() || path == "/" {
+        return "/".to_string();
+    }
+    if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    }
+}
+
 pub(crate) fn workspace_entry_to_memory_entry(
     entry: ironclaw::workspace::WorkspaceEntry,
 ) -> MemoryEntry {
     MemoryEntry {
         name: entry.name().to_string(),
-        path: entry.path,
+        path: memory_display_path(&entry.path),
         is_directory: entry.is_directory,
         content_preview: entry.content_preview,
     }
@@ -68,22 +79,24 @@ pub(crate) fn workspace_search_result_to_memory_search_result(
     result: ironclaw::workspace::SearchResult,
 ) -> MemorySearchResult {
     MemorySearchResult {
-        path: result.document_path,
+        path: memory_display_path(&result.document_path),
         content: result.content,
         score: result.score,
     }
 }
 
-/// 列出记忆目录。
-#[tauri::command]
-pub async fn ic_memory_list(
-    state: State<'_, EngineState>,
-    path: Option<String>,
-) -> Result<Vec<MemoryEntry>, String> {
-    let state = state.get()?;
-    let ws = state.workspace.as_ref().ok_or("Workspace not available")?;
+fn app_workspace(state: &AppState) -> Result<&ironclaw::workspace::Workspace, String> {
+    state
+        .workspace
+        .as_deref()
+        .ok_or("Workspace not available".to_string())
+}
 
-    let dir = memory_list_path(path.as_deref());
+pub(crate) async fn memory_list_from_workspace(
+    ws: &ironclaw::workspace::Workspace,
+    path: Option<&str>,
+) -> Result<Vec<MemoryEntry>, String> {
+    let dir = memory_list_path(path);
     let entries = ws
         .list(dir)
         .await
@@ -95,6 +108,69 @@ pub async fn ic_memory_list(
         .collect())
 }
 
+pub(crate) async fn memory_read_from_workspace(
+    ws: &ironclaw::workspace::Workspace,
+    path: String,
+) -> Result<MemoryDocument, String> {
+    let doc = ws
+        .read(&path)
+        .await
+        .map_err(|e| format!("Failed to read memory: {}", e))?;
+
+    Ok(workspace_document_to_memory_document(path, doc))
+}
+
+pub(crate) async fn memory_write_from_workspace(
+    ws: &ironclaw::workspace::Workspace,
+    path: &str,
+    content: &str,
+) -> Result<(), String> {
+    ws.write(path, content)
+        .await
+        .map_err(|e| format!("Failed to write memory: {}", e))?;
+
+    tracing::debug!(path = %path, "Memory written");
+    Ok(())
+}
+
+pub(crate) async fn memory_delete_from_workspace(
+    ws: &ironclaw::workspace::Workspace,
+    path: &str,
+) -> Result<(), String> {
+    ws.delete(path)
+        .await
+        .map_err(|e| format!("Failed to delete memory: {}", e))?;
+
+    tracing::debug!(path = %path, "Memory deleted");
+    Ok(())
+}
+
+pub(crate) async fn memory_search_from_workspace(
+    ws: &ironclaw::workspace::Workspace,
+    query: &str,
+    limit: Option<usize>,
+) -> Result<Vec<MemorySearchResult>, String> {
+    let results = ws
+        .search(query, memory_search_limit(limit))
+        .await
+        .map_err(|e| format!("Failed to search memory: {}", e))?;
+
+    Ok(results
+        .into_iter()
+        .map(workspace_search_result_to_memory_search_result)
+        .collect())
+}
+
+/// 列出记忆目录。
+#[tauri::command]
+pub async fn ic_memory_list(
+    state: State<'_, EngineState>,
+    path: Option<String>,
+) -> Result<Vec<MemoryEntry>, String> {
+    let state = state.get()?;
+    memory_list_from_workspace(app_workspace(state)?, path.as_deref()).await
+}
+
 /// 读取记忆文档。
 #[tauri::command]
 pub async fn ic_memory_read(
@@ -102,14 +178,7 @@ pub async fn ic_memory_read(
     path: String,
 ) -> Result<MemoryDocument, String> {
     let state = state.get()?;
-    let ws = state.workspace.as_ref().ok_or("Workspace not available")?;
-
-    let doc = ws
-        .read(&path)
-        .await
-        .map_err(|e| format!("Failed to read memory: {}", e))?;
-
-    Ok(workspace_document_to_memory_document(path, doc))
+    memory_read_from_workspace(app_workspace(state)?, path).await
 }
 
 /// 写入记忆文档。
@@ -120,28 +189,14 @@ pub async fn ic_memory_write(
     content: String,
 ) -> Result<(), String> {
     let state = state.get()?;
-    let ws = state.workspace.as_ref().ok_or("Workspace not available")?;
-
-    ws.write(&path, &content)
-        .await
-        .map_err(|e| format!("Failed to write memory: {}", e))?;
-
-    tracing::debug!(path = %path, "Memory written");
-    Ok(())
+    memory_write_from_workspace(app_workspace(state)?, &path, &content).await
 }
 
 /// 删除记忆文档。
 #[tauri::command]
 pub async fn ic_memory_delete(state: State<'_, EngineState>, path: String) -> Result<(), String> {
     let state = state.get()?;
-    let ws = state.workspace.as_ref().ok_or("Workspace not available")?;
-
-    ws.delete(&path)
-        .await
-        .map_err(|e| format!("Failed to delete memory: {}", e))?;
-
-    tracing::debug!(path = %path, "Memory deleted");
-    Ok(())
+    memory_delete_from_workspace(app_workspace(state)?, &path).await
 }
 
 /// 搜索记忆。
@@ -152,15 +207,5 @@ pub async fn ic_memory_search(
     limit: Option<usize>,
 ) -> Result<Vec<MemorySearchResult>, String> {
     let state = state.get()?;
-    let ws = state.workspace.as_ref().ok_or("Workspace not available")?;
-
-    let results = ws
-        .search(&query, memory_search_limit(limit))
-        .await
-        .map_err(|e| format!("Failed to search memory: {}", e))?;
-
-    Ok(results
-        .into_iter()
-        .map(workspace_search_result_to_memory_search_result)
-        .collect())
+    memory_search_from_workspace(app_workspace(state)?, &query, limit).await
 }

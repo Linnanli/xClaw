@@ -9,16 +9,21 @@
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use chrono::{DateTime, Utc};
+    use ironclaw::db::libsql::LibSqlBackend;
     use ironclaw::workspace::{
         MemoryDocument as WorkspaceMemoryDocument, SearchResult as WorkspaceSearchResult,
-        WorkspaceEntry,
+        Workspace, WorkspaceEntry,
     };
     use serde_json::json;
     use uuid::Uuid;
 
     use crate::ipc::memory::{
-        memory_list_path, memory_search_limit, workspace_document_to_memory_document,
+        memory_delete_from_workspace, memory_display_path, memory_list_from_workspace,
+        memory_list_path, memory_read_from_workspace, memory_search_from_workspace,
+        memory_search_limit, memory_write_from_workspace, workspace_document_to_memory_document,
         workspace_entry_to_memory_entry, workspace_search_result_to_memory_search_result,
         MemoryDocument, MemoryEntry, MemorySearchResult,
     };
@@ -53,6 +58,19 @@ mod tests {
             fts_rank: Some(1),
             vector_rank: Some(2),
         }
+    }
+
+    async fn workspace_with_memory_db() -> (Workspace, tempfile::TempDir) {
+        let temp_dir = tempfile::tempdir().expect("temporary db directory should be created");
+        let db_path = temp_dir.path().join("memory-ipc.db");
+        let backend = LibSqlBackend::new_local(&db_path)
+            .await
+            .expect("file-backed libsql backend should initialize");
+        <LibSqlBackend as ironclaw::db::Database>::run_migrations(&backend)
+            .await
+            .expect("workspace migrations should run");
+        let db: Arc<dyn ironclaw::db::Database> = Arc::new(backend);
+        (Workspace::new_with_db("memory-ipc-user", db), temp_dir)
     }
 
     // =========================================================================
@@ -140,6 +158,19 @@ mod tests {
     }
 
     #[test]
+    fn req_memory_display_path_uses_frontend_absolute_shape() {
+        assert_eq!(
+            memory_display_path("projects/alpha.md"),
+            "/projects/alpha.md"
+        );
+        assert_eq!(
+            memory_display_path("/projects/alpha.md"),
+            "/projects/alpha.md"
+        );
+        assert_eq!(memory_display_path(""), "/");
+    }
+
+    #[test]
     fn req_memory_list_maps_workspace_entries() {
         let entry = WorkspaceEntry {
             path: "/projects/alpha/README.md".into(),
@@ -175,7 +206,7 @@ mod tests {
     #[test]
     fn req_memory_search_maps_workspace_results_without_rank_ids() {
         let dto = workspace_search_result_to_memory_search_result(workspace_search_result(
-            "/docs/api.md",
+            "docs/api.md",
             "memory search hit",
         ));
         let json = serde_json::to_string(&dto).expect("dto should serialize");
@@ -187,6 +218,68 @@ mod tests {
         assert!(!json.contains("chunk_id"));
         assert!(!json.contains("fts_rank"));
         assert!(!json.contains("vector_rank"));
+    }
+
+    #[tokio::test]
+    async fn req_memory_workspace_crud_search_round_trip() {
+        let (workspace, _temp_dir) = workspace_with_memory_db().await;
+        let path = "/projects/alpha/notes.md";
+        let content = "alpha launch notes mention hermetic workspace memory";
+
+        memory_write_from_workspace(&workspace, path, content)
+            .await
+            .expect("write should hit the real workspace");
+
+        let doc = memory_read_from_workspace(&workspace, path.to_string())
+            .await
+            .expect("read should return the persisted document");
+        assert_eq!(doc.path, path);
+        assert_eq!(doc.content, content);
+        assert!(
+            doc.updated_at.is_some(),
+            "real workspace documents should carry updated_at"
+        );
+
+        let root_entries = memory_list_from_workspace(&workspace, None)
+            .await
+            .expect("root list should use the default path");
+        assert!(
+            root_entries
+                .iter()
+                .any(|entry| entry.name == "projects" && entry.is_directory),
+            "root list should expose the virtual projects directory"
+        );
+
+        let project_entries = memory_list_from_workspace(&workspace, Some("/projects/alpha"))
+            .await
+            .expect("nested list should read real workspace entries");
+        assert!(
+            project_entries
+                .iter()
+                .any(|entry| entry.name == "notes.md" && !entry.is_directory),
+            "nested list should expose the written document"
+        );
+
+        let results = memory_search_from_workspace(&workspace, "hermetic", Some(5))
+            .await
+            .expect("search should query indexed workspace chunks");
+        assert!(
+            results
+                .iter()
+                .any(|result| result.path == path && result.content.contains("hermetic")),
+            "search should find content written through the IPC path"
+        );
+
+        memory_delete_from_workspace(&workspace, path)
+            .await
+            .expect("delete should remove the workspace document");
+        let err = memory_read_from_workspace(&workspace, path.to_string())
+            .await
+            .expect_err("deleted document should no longer be readable");
+        assert!(
+            err.contains("Failed to read memory"),
+            "delete/read failure should preserve the IPC error prefix: {err}"
+        );
     }
 
     // =========================================================================
