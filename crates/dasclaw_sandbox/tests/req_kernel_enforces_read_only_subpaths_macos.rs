@@ -18,6 +18,7 @@
 #![cfg(target_os = "macos")]
 
 use std::fs;
+use std::os::unix::fs::symlink;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -35,14 +36,10 @@ fn make_workspace() -> (tempfile::TempDir, PathBuf) {
     (tmp, hook)
 }
 
-#[test]
-fn req_dasclaw_sandbox_kernel_blocks_git_hooks_under_workspace_write_macos() {
-    let (tmp, hook) = make_workspace();
-    let workspace_root = tmp.path().to_path_buf();
-
-    let policy = SandboxBackendConfig {
+fn workspace_write_policy(workspace_root: PathBuf) -> SandboxBackendConfig {
+    SandboxBackendConfig {
         readable_roots: vec![PathBuf::from("/")],
-        writable_roots: vec![workspace_root.clone()],
+        writable_roots: vec![workspace_root],
         read_only_subpaths: vec![],
         allow_network: false,
         allow_spawn: true,
@@ -50,17 +47,30 @@ fn req_dasclaw_sandbox_kernel_blocks_git_hooks_under_workspace_write_macos() {
         resource_limits: Default::default(),
         enterprise_mode: false,
         linux_sandbox_exe: None,
-    };
+    }
+}
+
+fn shell_redirect_to(path: &std::path::Path, content: &str) -> Command {
+    let mut cmd = Command::new("/bin/sh");
+    cmd.arg("-c").arg(format!(
+        "echo {content} > {}",
+        path.to_string_lossy().replace('\'', "'\\''")
+    ));
+    cmd
+}
+
+#[test]
+fn req_dasclaw_sandbox_kernel_blocks_git_hooks_under_workspace_write_macos() {
+    let (tmp, hook) = make_workspace();
+    let workspace_root = tmp.path().to_path_buf();
+
+    let policy = workspace_write_policy(workspace_root.clone());
 
     // Attempt to overwrite the hook from inside the sandbox. With kernel-
     // layer 洞中洞 enforcement wired (Wave-C1), sandbox-exec must reject
     // the write even though `.git/hooks/` is nominally under a writable
     // root.
-    let mut cmd = Command::new("/bin/sh");
-    cmd.arg("-c").arg(format!(
-        "echo malicious > {}",
-        hook.to_string_lossy().replace('\'', "'\\''")
-    ));
+    let mut cmd = shell_redirect_to(&hook, "malicious");
     cmd.current_dir(&workspace_root);
 
     let req = SandboxExecRequest {
@@ -92,6 +102,43 @@ fn req_dasclaw_sandbox_kernel_blocks_git_hooks_under_workspace_write_macos() {
 }
 
 #[test]
+fn req_dasclaw_sandbox_kernel_blocks_symlink_escape_to_git_hooks_macos() {
+    let (tmp, hook) = make_workspace();
+    let workspace_root = tmp.path().to_path_buf();
+    let link = workspace_root.join("hook-via-symlink");
+    symlink(&hook, &link).expect("create symlink to protected hook");
+    let policy = workspace_write_policy(workspace_root.clone());
+
+    let mut cmd = shell_redirect_to(&link, "malicious-symlink");
+    cmd.current_dir(&workspace_root);
+
+    let req = SandboxExecRequest {
+        command: cmd,
+        policy,
+        preference: SandboxablePreference::Require,
+        windows_sandbox_enabled: false,
+        windows_sandbox_level: dasclaw_protocol::config_types::WindowsSandboxLevel::Disabled,
+        network: None,
+    };
+    let out = SeatbeltSandbox::new()
+        .execute(req)
+        .expect("seatbelt should run symlink bypass sample");
+
+    assert!(
+        !out.status.success(),
+        "expected sandbox-exec to block symlink write into .git/hooks, but shell exited {:?}\nstderr={}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let after = fs::read_to_string(&hook).expect("read back hook");
+    assert!(
+        !after.contains("malicious-symlink"),
+        "kernel-layer regression: symlink under writable root overwrote protected hook — got: {after:?}"
+    );
+}
+
+#[test]
 fn req_dasclaw_sandbox_kernel_allows_write_to_non_hole_path_macos() {
     // Sibling positive contract: writes to the writable root that are NOT
     // covered by the 洞中洞 (e.g. a regular file in the workspace root)
@@ -101,21 +148,9 @@ fn req_dasclaw_sandbox_kernel_allows_write_to_non_hole_path_macos() {
     let workspace_root = tmp.path().to_path_buf();
     let target = workspace_root.join("notes.txt");
 
-    let policy = SandboxBackendConfig {
-        readable_roots: vec![PathBuf::from("/")],
-        writable_roots: vec![workspace_root.clone()],
-        read_only_subpaths: vec![],
-        allow_network: false,
-        allow_spawn: true,
-        proxy_loopback_ports: vec![],
-        resource_limits: Default::default(),
-        enterprise_mode: false,
-        linux_sandbox_exe: None,
-    };
+    let policy = workspace_write_policy(workspace_root.clone());
 
-    let mut cmd = Command::new("/bin/sh");
-    cmd.arg("-c")
-        .arg(format!("echo ok > {}", target.to_string_lossy()));
+    let mut cmd = shell_redirect_to(&target, "ok");
     cmd.current_dir(&workspace_root);
 
     let req = SandboxExecRequest {
