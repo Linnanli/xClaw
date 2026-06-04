@@ -6,7 +6,8 @@
 验证：
   1. 发消息后通过 ic_get_thread_history 能读回内容
   2. location.reload() 后再次读 history，原 marker 仍在
-  3. ic_list_threads 在刷新前后返回相同集合（强一致）
+  3. ic_get_active_thread_id 指向真实写入的最近活跃 thread
+  4. ic_list_threads 在刷新前后返回相同集合（强一致）
 
 依赖：
   - 引擎就绪 + LLM 可达（与场景 2/3/4 相同前置）
@@ -14,7 +15,7 @@
 
 不依赖：
   - 不依赖助手回复内容（只要 user 消息被持久化即可，回复早晚都行）
-  - 不依赖具体 thread 数量（取 `ic_list_threads` 头部那个或新建）
+  - 不依赖具体 thread 数量，也不把 `ic_list_threads` 头部误当当前 thread
 """
 
 from __future__ import annotations
@@ -94,32 +95,34 @@ def test_thread_history_survives_reload(session_id):
     invoke(session_id, "ic_list_threads", {})
 
     # UI 当前的活跃 thread 不一定是 `ic_list_threads` 的第一项（实测会自动新建
-    # 一个空 thread 给 composer），所以发送前不要假定 thread_id，发送后用
-    # marker 反查。
+    # 一个空 thread 给 composer），所以发送后用后端最近活跃 thread 对账。
     type_into_composer(session_id, PROMPT_TEMPLATE.format(marker=marker))
     click_send(session_id)
     time.sleep(2)  # 给 click_send → send_chat_message 留点 IPC 启动窗口
 
-    def _find_thread_with_marker():
+    last_active_seen = None
+
+    def _active_thread_with_marker():
+        nonlocal last_active_seen
         try:
-            threads = invoke(session_id, "ic_list_threads", {})
+            tid = invoke(session_id, "ic_get_active_thread_id", {})
+            if not isinstance(tid, str) or not tid:
+                return None
+            hist = invoke(session_id, "ic_get_thread_history",
+                          {"threadId": tid, "limit": 50})
         except RuntimeError:
             return None
-        for t in threads[:10]:  # 检查最近 10 个 thread 足够
-            try:
-                hist = invoke(session_id, "ic_get_thread_history",
-                              {"threadId": t["id"], "limit": 50})
-            except RuntimeError:
-                continue
-            if any(marker in (m.get("content") or "") for m in hist):
-                return (t["id"], hist)
+        if any(marker in (m.get("content") or "") for m in hist):
+            return (tid, hist)
+        last_active_seen = {"tid": tid, "message_count": len(hist)}
         return None
 
-    found = poll(_find_thread_with_marker, timeout=SEND_TIMEOUT, interval=1.0)
-    assert found is not None, (
-        f"{SEND_TIMEOUT:.0f}s 内 marker {marker!r} 未出现在任何 thread"
+    found = poll(_active_thread_with_marker, timeout=SEND_TIMEOUT, interval=1.0)
+    assert isinstance(found, tuple), (
+        f"{SEND_TIMEOUT:.0f}s 内 active thread 未包含 marker {marker!r}"
         " ——可能：(a) send_chat_message 未成功；(b) 持久化层未写入；"
-        "(c) SafetyBridge 拦截"
+        "(c) SafetyBridge 拦截；(d) active thread 对账指向错误线程。"
+        f" last_seen={last_active_seen!r}"
     )
     tid, _ = found
 
@@ -135,6 +138,12 @@ def test_thread_history_survives_reload(session_id):
     # 90s 仍不返）；空转 10s 让后端 ThreadHistoryLoader / IPC dispatcher 重新绑定后就能
     # 1s 内返。原因未完全查清，这里用固定延迟兑现可靠性。
     time.sleep(10)
+
+    active_after = _invoke_polling(session_id, "ic_get_active_thread_id", {}, timeout=90.0)
+    assert active_after == tid, (
+        "⚠️ 持久化回归：reload 后 active thread 对账变化——"
+        f"before={tid!r} after={active_after!r}"
+    )
 
     hist_after = _invoke_polling(session_id, "ic_get_thread_history",
                                  {"threadId": tid, "limit": 200},

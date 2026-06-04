@@ -324,4 +324,15 @@ mod tests {
         let result = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000");
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn test_active_thread_id_contract_serializes_as_nullable_string() {
+        let active = Some("550e8400-e29b-41d4-a716-446655440000".to_string());
+        let json = serde_json::to_value(&active).unwrap();
+        assert_eq!(json, "550e8400-e29b-41d4-a716-446655440000");
+
+        let none: Option<String> = None;
+        let json = serde_json::to_value(&none).unwrap();
+        assert!(json.is_null());
+    }
 }
