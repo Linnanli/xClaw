@@ -77,8 +77,9 @@ pub struct FrontendAttachment {
 /// - 消息内容不写入日志（防止敏感信息泄露）
 /// - 仅记录 message_id 和 thread_id 用于追踪
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn send_chat_message(
-    app_handle: tauri::AppHandle,
+    app_handle: tauri::AppHandle<impl tauri::Runtime>,
     state: State<'_, EngineState>,
     thread_id: String,
     content: String,
@@ -484,8 +485,8 @@ fn build_message_metadata(
 ///
 /// 使用 ironclaw 已有的 `prefilter_skills` 函数，不修改 ironclaw 任何代码。
 /// 失败时静默跳过（skill 通知是 best-effort，不影响消息发送）。
-fn detect_and_emit_skills_activated(
-    app_handle: &tauri::AppHandle,
+fn detect_and_emit_skills_activated<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
     state: &crate::state::AppState,
     thread_id: &str,
     content: &str,
@@ -547,7 +548,7 @@ pub async fn subscribe_chat_events(app_handle: tauri::AppHandle) -> Result<(), S
 
     if app_handle
         .try_state::<crate::state::EngineState>()
-        .map_or(false, |es| es.is_ready())
+        .is_some_and(|es| es.is_ready())
     {
         // 系统级广播：前端所有 Transport 透传
         crate::tauri_channel::emit_chat_stream(

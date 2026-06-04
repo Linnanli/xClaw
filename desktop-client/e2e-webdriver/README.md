@@ -21,8 +21,12 @@ cd desktop-client
 set -a && source ./.env && set +a
 export MANAGED_MODE=false
 export OPENAI_API_KEY="$LLM_API_KEY"
+export RUST_LOG=desktop_client=debug,ironclaw=debug,tower_http=warn
 cargo tauri dev -f webdriver
 ```
+
+`desktop_client=debug` 会打开场景 5 的 SafetyBridge / agent dispatch 日志序断言；
+`ironclaw=debug` 保留引擎侧调试日志。未显式设置时，debug 级别日志可能缺失并导致 #1058 回归测试假阴。
 
 等到终端出现 WebView 起来 + `lsof -ti:4445` 有进程后再跑测试。
 
@@ -45,7 +49,7 @@ pytest desktop-client/e2e-webdriver/tests/test_scenario_01_engine_readiness.py -
 | §1 引擎就绪与刷新韧性 | ✅ 已落地 |
 | §2 Agent 基础执行 | ✅ 已落地（需 LLM 可达） |
 | §3 工具注册与发现 | ✅ 已落地（只读工具 `list_dir` 分发链路；需 LLM 可达） |
-| §4 工具分发与审批（Fail-Safe） | ✅ 已落地（写工具触发审批卡片 + deny 路径；approve 路径 skip，见用例说明） |
+| §4 工具分发与审批（Fail-Safe） | ✅ 已落地（写工具触发审批卡片 + deny / approve 路径；approve 探针文件自动清理） |
 | §5 DLP 出站脱敏与拦截（Fail-Safe） | ✅ 已落地（邮箱脱敏 + 密钥拦截 + 存储脱敏 IPC 层；UI 路径见用例说明） |
 | §6 会话持久化（刷新后历史不丢） | ✅ 已落地（IPC 层验证 ic_get_thread_history + ic_list_threads 跨 reload 一致；需 LLM 可达） |
 | §7 提示注入防护 | ✅ 已落地（注入+密钥 / 纯语义 / 多段拼接三类 IPC 层断言；契约钉子见用例说明） |

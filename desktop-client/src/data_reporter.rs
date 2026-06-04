@@ -231,6 +231,26 @@ impl DataReporter {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn new_for_test() -> Self {
+        Self {
+            queue: Mutex::new(Vec::new()),
+            admin_url: "http://localhost:3000".to_string(),
+            client_token: "test-token".to_string(),
+            http_client: reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(15))
+                .build()
+                .unwrap_or_default(),
+            flush_interval: Duration::from_secs(30),
+            max_queue_size: 10_000,
+            health_status_min_interval: Duration::from_secs(
+                DEFAULT_HEALTH_STATUS_MIN_INTERVAL_SECS,
+            ),
+            last_health_status: Mutex::new(None),
+        }
+    }
+
     /// 设置上报间隔。
     pub fn with_flush_interval(mut self, interval: Duration) -> Self {
         self.flush_interval = interval;

@@ -8,15 +8,151 @@
 #[cfg(test)]
 mod tests {
     use crate::ipc::chat::{
-        build_thread_control_message, reject_blocked_scan, usage_report_backend_user_id,
-        FrontendAttachment, SendMessageResponse,
+        build_thread_control_message, reject_blocked_scan, send_chat_message,
+        usage_report_backend_user_id, FrontendAttachment, SendMessageResponse,
     };
     use crate::safety_bridge::SafetyBridge;
+    use crate::state::{AppState, EngineState};
+    use dasclaw_runtime::context::ContextManager;
     use ironclaw::safety::{SafetyConfig, SafetyLayer};
+    use ironclaw::tools::ToolRegistry;
     use std::sync::Arc;
     use std::sync::RwLock;
+    use tauri::Manager;
     use tokio::sync::mpsc;
     use uuid::Uuid;
+
+    struct StubLlmProvider;
+
+    #[async_trait::async_trait]
+    impl ironclaw::llm::LlmProvider for StubLlmProvider {
+        fn model_name(&self) -> &str {
+            "stub-model"
+        }
+
+        fn cost_per_token(&self) -> (rust_decimal::Decimal, rust_decimal::Decimal) {
+            (rust_decimal::Decimal::ZERO, rust_decimal::Decimal::ZERO)
+        }
+
+        async fn complete(
+            &self,
+            _req: ironclaw::llm::CompletionRequest,
+        ) -> Result<ironclaw::llm::CompletionResponse, ironclaw::error::LlmError> {
+            Err(ironclaw::error::LlmError::RequestFailed {
+                provider: "stub".into(),
+                reason: "not implemented".into(),
+            })
+        }
+
+        async fn complete_with_tools(
+            &self,
+            _req: ironclaw::llm::ToolCompletionRequest,
+        ) -> Result<ironclaw::llm::ToolCompletionResponse, ironclaw::error::LlmError> {
+            Err(ironclaw::error::LlmError::RequestFailed {
+                provider: "stub".into(),
+                reason: "not implemented".into(),
+            })
+        }
+    }
+
+    struct TestSafetyParts {
+        safety: Arc<SafetyLayer>,
+        safety_bridge: Arc<SafetyBridge>,
+        attachment_scanner: Arc<crate::safety_attachment_scanner::AttachmentScanner>,
+        egress: Arc<dyn dasclaw_core::EgressGate>,
+    }
+
+    struct TestModelParts {
+        llm: Arc<dyn ironclaw::llm::LlmProvider>,
+        model_override: Arc<std::sync::RwLock<Option<String>>>,
+        model_switch: Arc<crate::model_switch::ModelSwitchProvider>,
+        initial_provider: Arc<dyn ironclaw::llm::LlmProvider>,
+    }
+
+    fn create_test_safety_parts() -> TestSafetyParts {
+        let safety = Arc::new(SafetyLayer::new(&SafetyConfig {
+            max_output_length: 100_000,
+            injection_check_enabled: true,
+        }));
+        let safety_bridge = Arc::new(SafetyBridge::new(Arc::clone(&safety), None, None));
+        let egress: Arc<dyn dasclaw_core::EgressGate> = Arc::new(
+            dasclaw_safety::egress_gate::IronclawEgressGate::new(Arc::clone(&safety)),
+        );
+        let attachment_scanner = Arc::new(
+            crate::safety_attachment_scanner::AttachmentScanner::new(Arc::clone(&egress)),
+        );
+
+        TestSafetyParts {
+            safety,
+            safety_bridge,
+            attachment_scanner,
+            egress,
+        }
+    }
+
+    fn create_test_model_parts() -> TestModelParts {
+        let model_override = Arc::new(std::sync::RwLock::new(None));
+        let stub_llm: Arc<dyn ironclaw::llm::LlmProvider> = Arc::new(StubLlmProvider);
+        let model_switch = Arc::new(crate::model_switch::ModelSwitchProvider::new(
+            Arc::clone(&stub_llm),
+            Arc::clone(&model_override),
+        ));
+
+        TestModelParts {
+            llm: Arc::clone(&model_switch) as _,
+            model_override,
+            model_switch,
+            initial_provider: Arc::clone(&stub_llm),
+        }
+    }
+
+    fn create_test_app_state() -> (
+        AppState,
+        mpsc::Receiver<ironclaw::channels::IncomingMessage>,
+    ) {
+        let (tx, rx) = mpsc::channel(1);
+        let safety = create_test_safety_parts();
+        let model = create_test_model_parts();
+
+        let app_state = AppState {
+            msg_sender: tx,
+            db: None,
+            workspace: None,
+            tools: Arc::new(ToolRegistry::new()),
+            extension_manager: None,
+            skill_registry: None,
+            skill_catalog: None,
+            skills_config: ironclaw::config::SkillsConfig::default(),
+            safety: safety.safety,
+            safety_bridge: safety.safety_bridge,
+            attachment_scanner: safety.attachment_scanner,
+            egress: safety.egress,
+            context_manager: Arc::new(ContextManager::new(5)),
+            conversation_tracker: Arc::new(crate::conversation_tracker::ConversationTracker::new(
+                "test-owner".to_string(),
+            )),
+            data_reporter: Arc::new(crate::data_reporter::DataReporter::new(
+                String::new(),
+                String::new(),
+            )),
+            scope_id: "test-owner".to_string(),
+            backend_user_id: Arc::new(std::sync::RwLock::new(None)),
+            llm: model.llm,
+            model_override: model.model_override,
+            model_switch: model.model_switch,
+            provider_base_url: std::sync::RwLock::new(String::new()),
+            initial_provider: model.initial_provider,
+            initial_base_url: String::new(),
+            log_broadcaster: Arc::new(ironclaw::channels::web::log_layer::LogBroadcaster::new()),
+            log_clear_offset: std::sync::atomic::AtomicUsize::new(0),
+            routine_engine_slot: Arc::new(tokio::sync::RwLock::new(None)),
+            scheduler_slot: Arc::new(tokio::sync::RwLock::new(None)),
+            disabled_skills: std::sync::RwLock::new(std::collections::HashSet::new()),
+            disabled_extensions: std::sync::RwLock::new(std::collections::HashSet::new()),
+        };
+
+        (app_state, rx)
+    }
 
     // =========================================================================
     // 单元测试 — 正常路径
@@ -258,6 +394,55 @@ mod tests {
         assert!(
             rx.try_recv().is_err(),
             "blocked scan must not enqueue a message"
+        );
+    }
+
+    #[tokio::test]
+    async fn req_chat_blocked_send_message_has_zero_side_effects() {
+        let secret = "send ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx onward";
+        let thread_id = "thread-blocked-zero".to_string();
+        let (app_state, mut rx) = create_test_app_state();
+        let tracker = Arc::clone(&app_state.conversation_tracker);
+        let reporter = Arc::clone(&app_state.data_reporter);
+
+        let engine_state = EngineState::new();
+        engine_state
+            .initialize(app_state)
+            .expect("test EngineState should initialize once");
+        let app = tauri::test::mock_builder()
+            .manage(engine_state)
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock Tauri app should build");
+
+        let error = send_chat_message(
+            app.handle().clone(),
+            app.state::<EngineState>(),
+            thread_id.clone(),
+            secret.to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect_err("secret-bearing input must be blocked");
+
+        assert!(error.contains("密钥") || error.contains("secret"));
+        assert!(
+            !error.contains(secret),
+            "blocked error must not leak raw secret"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "blocked input must not reach msg_sender"
+        );
+
+        tracker.finish_thread(&thread_id, &reporter);
+        assert_eq!(
+            reporter.queue_len(),
+            0,
+            "blocked input must not be recorded"
         );
     }
 

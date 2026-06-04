@@ -113,6 +113,19 @@ def invoke(session_id: str, command: str, payload: Optional[dict] = None) -> Any
     return result["value"]
 
 
+def clear_logs(session_id: str) -> None:
+    """清空应用内日志视图偏移，隔离后续日志断言窗口。"""
+    invoke(session_id, "ic_clear_logs", {})
+
+
+def search_logs(session_id: str, query: str, limit: int = 100) -> list[dict]:
+    """通过 IPC 搜索应用内日志，返回时间正序的日志条目。"""
+    logs = invoke(session_id, "ic_search_logs", {"query": query, "limit": limit})
+    if not isinstance(logs, list):
+        raise RuntimeError(f"ic_search_logs 返回非 list：{logs!r}")
+    return logs
+
+
 def poll(fn: Callable[[], Any], timeout: float = 30.0, interval: float = 1.0) -> Any:
     """轮询直到 fn() 返回真值或超时；返回最后一次结果。
 
