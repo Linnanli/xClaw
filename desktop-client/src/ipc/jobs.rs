@@ -195,12 +195,9 @@ fn job_prompt_response(job_id: String) -> JobPromptResponse {
     }
 }
 
-// ─── Tauri Commands ──────────────────────────────────────────────────
-
-/// 列出当前用户的所有任务。
-#[tauri::command]
-pub async fn ic_list_jobs(state: State<'_, EngineState>) -> Result<Vec<JobInfoResponse>, String> {
-    let state = state.get()?;
+async fn list_jobs_from_state(
+    state: &crate::state::AppState,
+) -> Result<Vec<JobInfoResponse>, String> {
     let db = state.db.as_ref().ok_or("Database not available")?.clone();
 
     let jobs = db
@@ -232,16 +229,10 @@ pub async fn ic_list_jobs(state: State<'_, EngineState>) -> Result<Vec<JobInfoRe
     Ok(ordered.into_iter().flatten().collect())
 }
 
-/// 获取任务详情（含运行结果、失败原因、事件历史）。
-///
-/// 聚合多个数据库查询，供前端任务详情视图使用。
-/// 适用于手动、定时、事件三种任务类型。
-#[tauri::command]
-pub async fn ic_get_job_detail(
-    state: State<'_, EngineState>,
+async fn get_job_detail_from_state(
+    state: &crate::state::AppState,
     job_id: String,
 ) -> Result<JobDetailResponse, String> {
-    let state = state.get()?;
     let uuid = Uuid::parse_str(&job_id).map_err(|_| format!("Invalid job ID: {}", job_id))?;
 
     let db = state.db.as_ref().ok_or("Database not available")?;
@@ -251,6 +242,8 @@ pub async fn ic_get_job_detail(
         .await
         .map_err(|e| format!("Failed to load job: {}", e))?
         .ok_or_else(|| format!("Job not found: {}", job_id))?;
+
+    ensure_owned_job(state, &ctx)?;
 
     let failure_reason = if ctx.state == JobState::Failed {
         db.get_agent_job_failure_reason(uuid).await.unwrap_or(None)
@@ -263,18 +256,20 @@ pub async fn ic_get_job_detail(
     Ok(job_detail_to_response(job_id, ctx, failure_reason, events))
 }
 
-/// 获取任务事件历史。
-///
-/// 从数据库加载持久化的任务事件，用于页面打开时的历史回放。
-#[tauri::command]
-pub async fn ic_job_events(
-    state: State<'_, EngineState>,
+async fn job_events_from_state(
+    state: &crate::state::AppState,
     job_id: String,
 ) -> Result<JobEventsResponse, String> {
-    let state = state.get()?;
     let uuid = Uuid::parse_str(&job_id).map_err(|_| format!("Invalid job ID: {}", job_id))?;
 
     let db = state.db.as_ref().ok_or("Database not available")?;
+
+    let job = db
+        .get_job(uuid)
+        .await
+        .map_err(|e| format!("Failed to load job: {}", e))?
+        .ok_or_else(|| format!("Job not found: {}", job_id))?;
+    ensure_owned_job(state, &job)?;
 
     let events = db
         .list_job_events(uuid, None)
@@ -288,21 +283,20 @@ pub async fn ic_job_events(
     Ok(response)
 }
 
-/// 向运行中的任务发送后续提示。
-///
-/// 支持两种任务类型：
-/// - Agent 任务 → 通过消息系统注入
-/// - Sandbox 任务 → 不支持（需要 scheduler，当前客户端无直接访问）
-///
-/// 客户端侧通过消息系统实现：发送格式化的 prompt 消息到对应线程。
-#[tauri::command]
-pub async fn ic_job_prompt(
-    state: State<'_, EngineState>,
+async fn job_prompt_from_state(
+    state: &crate::state::AppState,
     job_id: String,
     content: String,
 ) -> Result<JobPromptResponse, String> {
-    let state = state.get()?;
     let uuid = Uuid::parse_str(&job_id).map_err(|_| format!("Invalid job ID: {}", job_id))?;
+
+    let db = state.db.as_ref().ok_or("Database not available")?;
+    let job = db
+        .get_job(uuid)
+        .await
+        .map_err(|e| format!("Failed to load job: {}", e))?
+        .ok_or_else(|| format!("Job not found: {}", job_id))?;
+    ensure_owned_job(state, &job)?;
 
     let msg = build_job_prompt_message(&state.scope_id, uuid, &content);
 
@@ -317,14 +311,10 @@ pub async fn ic_job_prompt(
     Ok(job_prompt_response(job_id))
 }
 
-/// 取消运行中的 agent 任务。
-#[tauri::command]
-pub async fn ic_cancel_job(
-    app_handle: tauri::AppHandle,
-    state: State<'_, EngineState>,
+async fn cancel_job_from_state(
+    state: &crate::state::AppState,
     job_id: String,
-) -> Result<(), String> {
-    let state = state.get()?;
+) -> Result<(Uuid, String), String> {
     let uuid = Uuid::parse_str(&job_id).map_err(|_| format!("Invalid job ID: {}", job_id))?;
     let db = state.db.as_ref().ok_or("Database not available")?;
 
@@ -343,19 +333,14 @@ pub async fn ic_cancel_job(
         .await
         .map_err(|e| format!("Failed to cancel job: {}", e))?;
 
-    emit_job_status(&app_handle, uuid, &job.title, "cancelled");
     tracing::info!(job_id = %uuid, "Job cancelled");
-    Ok(())
+    Ok((uuid, job.title))
 }
 
-/// 重试一个已结束的 agent 任务。
-#[tauri::command]
-pub async fn ic_restart_job(
-    app_handle: tauri::AppHandle,
-    state: State<'_, EngineState>,
+async fn restart_job_from_state(
+    state: &crate::state::AppState,
     job_id: String,
-) -> Result<(), String> {
-    let state = state.get()?;
+) -> Result<(Uuid, String), String> {
     let uuid = Uuid::parse_str(&job_id).map_err(|_| format!("Invalid job ID: {}", job_id))?;
     let db = state.db.as_ref().ok_or("Database not available")?;
 
@@ -394,22 +379,149 @@ pub async fn ic_restart_job(
         .await
         .map_err(|e| format!("Failed to restart job: {}", e))?;
 
-    emit_job_status(&app_handle, new_job_id, &title, "in_progress");
     tracing::info!(old_job_id = %uuid, new_job_id = %new_job_id, "Job restarted");
+    Ok((new_job_id, title))
+}
+
+// ─── Tauri Commands ──────────────────────────────────────────────────
+
+/// 列出当前用户的所有任务。
+#[tauri::command]
+pub async fn ic_list_jobs(state: State<'_, EngineState>) -> Result<Vec<JobInfoResponse>, String> {
+    let state = state.get()?;
+    list_jobs_from_state(state).await
+}
+
+/// 获取任务详情（含运行结果、失败原因、事件历史）。
+///
+/// 聚合多个数据库查询，供前端任务详情视图使用。
+/// 适用于手动、定时、事件三种任务类型。
+#[tauri::command]
+pub async fn ic_get_job_detail(
+    state: State<'_, EngineState>,
+    job_id: String,
+) -> Result<JobDetailResponse, String> {
+    let state = state.get()?;
+    get_job_detail_from_state(state, job_id).await
+}
+
+/// 获取任务事件历史。
+///
+/// 从数据库加载持久化的任务事件，用于页面打开时的历史回放。
+#[tauri::command]
+pub async fn ic_job_events(
+    state: State<'_, EngineState>,
+    job_id: String,
+) -> Result<JobEventsResponse, String> {
+    let state = state.get()?;
+    job_events_from_state(state, job_id).await
+}
+
+/// 向运行中的任务发送后续提示。
+///
+/// 支持两种任务类型：
+/// - Agent 任务 → 通过消息系统注入
+/// - Sandbox 任务 → 不支持（需要 scheduler，当前客户端无直接访问）
+///
+/// 客户端侧通过消息系统实现：发送格式化的 prompt 消息到对应线程。
+#[tauri::command]
+pub async fn ic_job_prompt(
+    state: State<'_, EngineState>,
+    job_id: String,
+    content: String,
+) -> Result<JobPromptResponse, String> {
+    let state = state.get()?;
+    job_prompt_from_state(state, job_id, content).await
+}
+
+/// 取消运行中的 agent 任务。
+#[tauri::command]
+pub async fn ic_cancel_job(
+    app_handle: tauri::AppHandle,
+    state: State<'_, EngineState>,
+    job_id: String,
+) -> Result<(), String> {
+    let state = state.get()?;
+    let (uuid, title) = cancel_job_from_state(state, job_id).await?;
+    emit_job_status(&app_handle, uuid, &title, "cancelled");
+    Ok(())
+}
+
+/// 重试一个已结束的 agent 任务。
+#[tauri::command]
+pub async fn ic_restart_job(
+    app_handle: tauri::AppHandle,
+    state: State<'_, EngineState>,
+    job_id: String,
+) -> Result<(), String> {
+    let state = state.get()?;
+    let (new_job_id, title) = restart_job_from_state(state, job_id).await?;
+    emit_job_status(&app_handle, new_job_id, &title, "in_progress");
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        build_job_prompt_message, job_detail_to_response, job_event_to_response,
-        job_events_response, job_prompt_response, job_record_to_info, restart_job_title,
-        stop_active_job,
+        build_job_prompt_message, cancel_job_from_state, get_job_detail_from_state,
+        job_detail_to_response, job_event_to_response, job_events_from_state, job_events_response,
+        job_prompt_from_state, job_prompt_response, job_record_to_info, list_jobs_from_state,
+        restart_job_from_state, restart_job_title, stop_active_job,
     };
+    use crate::safety_bridge::SafetyBridge;
+    use crate::state::AppState;
     use chrono::{TimeZone, Utc};
     use dasclaw_runtime::{context::JobContext, JobState};
+    use ironclaw::channels::IncomingMessage;
+    use ironclaw::db::libsql::LibSqlBackend;
+    use ironclaw::db::Database;
     use ironclaw::history::{AgentJobRecord, JobEventRecord};
+    use ironclaw::safety::{SafetyConfig, SafetyLayer};
+    use ironclaw::tools::ToolRegistry;
+    use std::collections::HashSet;
+    use std::sync::Arc;
+    use tokio::sync::mpsc;
     use uuid::Uuid;
+
+    struct StubLlmProvider;
+
+    #[async_trait::async_trait]
+    impl ironclaw::llm::LlmProvider for StubLlmProvider {
+        fn model_name(&self) -> &str {
+            "stub-model"
+        }
+
+        fn cost_per_token(&self) -> (rust_decimal::Decimal, rust_decimal::Decimal) {
+            (rust_decimal::Decimal::ZERO, rust_decimal::Decimal::ZERO)
+        }
+
+        async fn complete(
+            &self,
+            _req: ironclaw::llm::CompletionRequest,
+        ) -> Result<ironclaw::llm::CompletionResponse, ironclaw::error::LlmError> {
+            Err(ironclaw::error::LlmError::RequestFailed {
+                provider: "stub".into(),
+                reason: "not implemented".into(),
+            })
+        }
+
+        async fn complete_with_tools(
+            &self,
+            _req: ironclaw::llm::ToolCompletionRequest,
+        ) -> Result<ironclaw::llm::ToolCompletionResponse, ironclaw::error::LlmError> {
+            Err(ironclaw::error::LlmError::RequestFailed {
+                provider: "stub".into(),
+                reason: "not implemented".into(),
+            })
+        }
+    }
+
+    struct JobsStateFixture {
+        state: AppState,
+        db: Arc<dyn Database>,
+        rx: mpsc::Receiver<IncomingMessage>,
+        _tempdir: tempfile::TempDir,
+    }
 
     fn utc_time(second: u32) -> chrono::DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 6, 3, 10, 20, second)
@@ -425,6 +537,96 @@ mod tests {
             data: serde_json::json!({"step": id}),
             created_at: utc_time(id as u32),
         }
+    }
+
+    async fn create_jobs_state_fixture() -> JobsStateFixture {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let db_path = tempdir.path().join("jobs.db");
+        let backend = LibSqlBackend::new_local(&db_path)
+            .await
+            .expect("create libsql backend");
+        backend.run_migrations().await.expect("run migrations");
+        let db: Arc<dyn Database> = Arc::new(backend);
+
+        let (tx, rx) = mpsc::channel(8);
+        let safety = Arc::new(SafetyLayer::new(&SafetyConfig {
+            max_output_length: 100_000,
+            injection_check_enabled: true,
+        }));
+        let safety_bridge = Arc::new(SafetyBridge::new(Arc::clone(&safety), None, None));
+        let egress: Arc<dyn dasclaw_core::EgressGate> = Arc::new(
+            dasclaw_safety::egress_gate::IronclawEgressGate::new(Arc::clone(&safety)),
+        );
+        let attachment_scanner = Arc::new(
+            crate::safety_attachment_scanner::AttachmentScanner::new(Arc::clone(&egress)),
+        );
+        let model_override = Arc::new(std::sync::RwLock::new(None));
+        let stub_llm: Arc<dyn ironclaw::llm::LlmProvider> = Arc::new(StubLlmProvider);
+        let model_switch = Arc::new(crate::model_switch::ModelSwitchProvider::new(
+            Arc::clone(&stub_llm),
+            Arc::clone(&model_override),
+        ));
+
+        let state = AppState {
+            msg_sender: tx,
+            db: Some(Arc::clone(&db)),
+            workspace: None,
+            tools: Arc::new(ToolRegistry::new()),
+            extension_manager: None,
+            skill_registry: None,
+            skill_catalog: None,
+            skills_config: ironclaw::config::SkillsConfig::default(),
+            safety,
+            safety_bridge,
+            attachment_scanner,
+            egress,
+            context_manager: Arc::new(dasclaw_runtime::context::ContextManager::new(5)),
+            conversation_tracker: Arc::new(crate::conversation_tracker::ConversationTracker::new(
+                "test-owner".to_string(),
+            )),
+            data_reporter: Arc::new(crate::data_reporter::DataReporter::new_for_test()),
+            scope_id: "test-owner".to_string(),
+            backend_user_id: Arc::new(std::sync::RwLock::new(None)),
+            llm: Arc::clone(&model_switch) as _,
+            model_override,
+            model_switch,
+            provider_base_url: std::sync::RwLock::new(String::new()),
+            initial_provider: Arc::clone(&stub_llm),
+            initial_base_url: String::new(),
+            log_broadcaster: Arc::new(ironclaw::channels::web::log_layer::LogBroadcaster::new()),
+            log_clear_offset: std::sync::atomic::AtomicUsize::new(0),
+            routine_engine_slot: Arc::new(tokio::sync::RwLock::new(None)),
+            scheduler_slot: Arc::new(tokio::sync::RwLock::new(None)),
+            disabled_skills: std::sync::RwLock::new(HashSet::new()),
+            disabled_extensions: std::sync::RwLock::new(HashSet::new()),
+        };
+
+        JobsStateFixture {
+            state,
+            db,
+            rx,
+            _tempdir: tempdir,
+        }
+    }
+
+    async fn save_test_job(
+        db: &Arc<dyn Database>,
+        user_id: &str,
+        title: &str,
+        job_state: JobState,
+    ) -> JobContext {
+        let mut job = JobContext::with_user(user_id, title, "Build summary");
+        job.state = job_state;
+        job.created_at = utc_time(10);
+        job.started_at = Some(utc_time(11));
+        job.completed_at = Some(utc_time(12));
+        job.conversation_id = Some(
+            db.create_conversation("tauri", user_id, None)
+                .await
+                .expect("create conversation"),
+        );
+        db.save_job(&job).await.expect("save job");
+        job
     }
 
     #[test]
@@ -562,6 +764,145 @@ mod tests {
         stop_active_job(None, Uuid::nil(), JobState::Failed)
             .await
             .expect("inactive job should not require scheduler stop");
+    }
+
+    #[tokio::test]
+    async fn req_jobs_state_round_trip_lists_details_events_prompts_and_cancels() {
+        let mut fixture = create_jobs_state_fixture().await;
+        let job = save_test_job(
+            &fixture.db,
+            "test-owner",
+            "Nightly report",
+            JobState::Failed,
+        )
+        .await;
+        fixture
+            .db
+            .update_job_status(job.job_id, JobState::Failed, Some("tool failed"))
+            .await
+            .expect("persist failure reason");
+        fixture
+            .db
+            .save_job_event(
+                job.job_id,
+                "failed",
+                &serde_json::json!({"reason": "tool failed"}),
+            )
+            .await
+            .expect("save event");
+        save_test_job(&fixture.db, "other-owner", "Hidden job", JobState::Failed).await;
+
+        let jobs = list_jobs_from_state(&fixture.state)
+            .await
+            .expect("list jobs");
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].id, job.job_id.to_string());
+        assert_eq!(jobs[0].title, "Nightly report");
+        assert_eq!(
+            jobs[0].conversation_id,
+            job.conversation_id.map(|id| id.to_string())
+        );
+
+        let detail = get_job_detail_from_state(&fixture.state, job.job_id.to_string())
+            .await
+            .expect("job detail");
+        assert_eq!(detail.id, job.job_id.to_string());
+        assert_eq!(detail.failure_reason.as_deref(), Some("tool failed"));
+        assert_eq!(detail.events.len(), 1);
+        assert_eq!(detail.events[0].event_type, "failed");
+
+        let events = job_events_from_state(&fixture.state, job.job_id.to_string())
+            .await
+            .expect("job events");
+        assert_eq!(events.job_id, job.job_id.to_string());
+        assert_eq!(
+            events.events[0].data,
+            serde_json::json!({"reason": "tool failed"})
+        );
+
+        let prompt = job_prompt_from_state(
+            &fixture.state,
+            job.job_id.to_string(),
+            "continue with summary".to_string(),
+        )
+        .await
+        .expect("job prompt");
+        assert_eq!(prompt.status, "sent");
+        let message = fixture.rx.recv().await.expect("prompt message");
+        assert_eq!(message.owner_id, "test-owner");
+        assert_eq!(
+            message.content,
+            format!("!prompt {} continue with summary", job.job_id)
+        );
+
+        let (cancelled_id, cancelled_title) =
+            cancel_job_from_state(&fixture.state, job.job_id.to_string())
+                .await
+                .expect("cancel failed job");
+        assert_eq!(cancelled_id, job.job_id);
+        assert_eq!(cancelled_title, "Nightly report");
+        let cancelled = fixture
+            .db
+            .get_job(job.job_id)
+            .await
+            .expect("load cancelled job")
+            .expect("job should remain");
+        assert_eq!(cancelled.state, JobState::Cancelled);
+        let cancel_reason = fixture
+            .db
+            .get_agent_job_failure_reason(job.job_id)
+            .await
+            .expect("load cancel reason");
+        assert_eq!(cancel_reason.as_deref(), Some("Cancelled by user"));
+    }
+
+    #[tokio::test]
+    async fn req_jobs_state_rejects_unowned_detail_events_and_prompt() {
+        let mut fixture = create_jobs_state_fixture().await;
+        let job = save_test_job(&fixture.db, "other-owner", "Hidden job", JobState::Failed).await;
+        fixture
+            .db
+            .save_job_event(job.job_id, "hidden", &serde_json::json!({"secret": true}))
+            .await
+            .expect("save event");
+
+        let detail_error = get_job_detail_from_state(&fixture.state, job.job_id.to_string())
+            .await
+            .expect_err("detail should enforce owner scope");
+        assert_eq!(detail_error, "Job not found or access denied");
+
+        let events_error = job_events_from_state(&fixture.state, job.job_id.to_string())
+            .await
+            .expect_err("events should enforce owner scope");
+        assert_eq!(events_error, "Job not found or access denied");
+
+        let prompt_error = job_prompt_from_state(
+            &fixture.state,
+            job.job_id.to_string(),
+            "leak please".to_string(),
+        )
+        .await
+        .expect_err("prompt should enforce owner scope");
+        assert_eq!(prompt_error, "Job not found or access denied");
+        assert!(fixture.rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn req_jobs_restart_rejects_active_job_before_scheduler_dispatch() {
+        let fixture = create_jobs_state_fixture().await;
+        let job = save_test_job(
+            &fixture.db,
+            "test-owner",
+            "Still running",
+            JobState::InProgress,
+        )
+        .await;
+
+        let error = restart_job_from_state(&fixture.state, job.job_id.to_string())
+            .await
+            .expect_err("active job should not restart");
+
+        assert_eq!(error, "Cannot restart active job in state 'in_progress'");
     }
 
     #[test]
