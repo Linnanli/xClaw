@@ -214,10 +214,7 @@ pub struct CatalogSearchResult {
 }
 
 /// 列出已安装技能。
-#[tauri::command]
-pub async fn ic_list_skills(state: State<'_, EngineState>) -> Result<Vec<SkillInfo>, String> {
-    let state = state.get()?;
-
+pub(crate) async fn list_skills_from_state(state: &AppState) -> Result<Vec<SkillInfo>, String> {
     if let Err(error) = sync_managed_allowed_skills(state).await {
         tracing::warn!(error = %error, "Managed skills sync before list failed");
     }
@@ -249,6 +246,11 @@ pub async fn ic_list_skills(state: State<'_, EngineState>) -> Result<Vec<SkillIn
         "ic_list_skills: returning filtered skill list"
     );
     Ok(filtered)
+}
+
+#[tauri::command]
+pub async fn ic_list_skills(state: State<'_, EngineState>) -> Result<Vec<SkillInfo>, String> {
+    list_skills_from_state(state.get()?).await
 }
 
 /// Run managed skills sync at engine startup.
@@ -606,22 +608,28 @@ async fn install_managed_skill_on_demand(state: &AppState, name: &str) -> Result
 
 #[tauri::command]
 pub async fn ic_enable_skill(state: State<'_, EngineState>, name: String) -> Result<(), String> {
-    let state = state.get()?;
-    ensure_skill_allowed_by_policy(state, &name).await?;
-    if !has_skill(state, &name)? {
-        install_managed_skill_on_demand(state, &name).await?;
+    enable_skill_from_state(state.get()?, &name).await
+}
+
+pub(crate) async fn enable_skill_from_state(state: &AppState, name: &str) -> Result<(), String> {
+    ensure_skill_allowed_by_policy(state, name).await?;
+    if !has_skill(state, name)? {
+        install_managed_skill_on_demand(state, name).await?;
     }
-    ensure_skill_exists(state, &name)?;
-    set_skill_enabled_with_persist(state, &name, true).await?;
+    ensure_skill_exists(state, name)?;
+    set_skill_enabled_with_persist(state, name, true).await?;
     tracing::info!(skill = %name, "Skill enabled");
     Ok(())
 }
 
 #[tauri::command]
 pub async fn ic_disable_skill(state: State<'_, EngineState>, name: String) -> Result<(), String> {
-    let state = state.get()?;
-    ensure_skill_exists(state, &name)?;
-    set_skill_enabled_with_persist(state, &name, false).await?;
+    disable_skill_from_state(state.get()?, &name).await
+}
+
+pub(crate) async fn disable_skill_from_state(state: &AppState, name: &str) -> Result<(), String> {
+    ensure_skill_exists(state, name)?;
+    set_skill_enabled_with_persist(state, name, false).await?;
     tracing::info!(skill = %name, "Skill disabled");
     Ok(())
 }
@@ -667,9 +675,15 @@ pub async fn ic_install_skill(
     state: State<'_, EngineState>,
     content: String,
 ) -> Result<String, String> {
+    install_skill_content_from_state(state.get()?, &content).await
+}
+
+pub(crate) async fn install_skill_content_from_state(
+    state: &AppState,
+    content: &str,
+) -> Result<String, String> {
     validate_skill_install_source(managed_mode_enabled())?;
 
-    let state = state.get()?;
     let registry = state.skill_registry.as_ref().ok_or("Skills not enabled")?;
 
     // 获取安装目标目录（短锁，立即释放）
@@ -681,13 +695,10 @@ pub async fn ic_install_skill(
     };
 
     // Phase 1: 写入文件系统（无锁，可 await）
-    let (name, loaded) = ironclaw::skills::SkillRegistry::prepare_install_to_disk(
-        &install_dir,
-        "_pending",
-        &content,
-    )
-    .await
-    .map_err(|e| format!("Failed to install skill: {}", e))?;
+    let (name, loaded) =
+        ironclaw::skills::SkillRegistry::prepare_install_to_disk(&install_dir, "_pending", content)
+            .await
+            .map_err(|e| format!("Failed to install skill: {}", e))?;
 
     // Phase 2: 更新内存注册表（短锁，同步）
     {
@@ -711,7 +722,10 @@ pub async fn ic_install_skill(
 /// 3. `commit_remove()` — 更新内存注册表（短锁，同步）
 #[tauri::command]
 pub async fn ic_uninstall_skill(state: State<'_, EngineState>, name: String) -> Result<(), String> {
-    let state = state.get()?;
+    uninstall_skill_from_state(state.get()?, &name).await
+}
+
+pub(crate) async fn uninstall_skill_from_state(state: &AppState, name: &str) -> Result<(), String> {
     let registry = state.skill_registry.as_ref().ok_or("Skills not enabled")?;
 
     // Phase 1: 验证并获取路径（短锁，同步）
@@ -720,7 +734,7 @@ pub async fn ic_uninstall_skill(state: State<'_, EngineState>, name: String) -> 
             .read()
             .map_err(|e| format!("Lock poisoned: {}", e))?;
         guard
-            .validate_remove(&name)
+            .validate_remove(name)
             .map_err(|e| format!("Failed to validate removal: {}", e))?
     };
 
@@ -735,7 +749,7 @@ pub async fn ic_uninstall_skill(state: State<'_, EngineState>, name: String) -> 
             .write()
             .map_err(|e| format!("Lock poisoned: {}", e))?;
         guard
-            .commit_remove(&name)
+            .commit_remove(name)
             .map_err(|e| format!("Failed to commit removal: {}", e))?;
     }
 
@@ -785,14 +799,19 @@ async fn set_skill_enabled_with_persist(
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_skill_name_from_content, filter_skill_infos_by_allowlist,
-        install_missing_allowed_skills, loaded_skill_to_info, missing_allowed_skill_names,
-        skill_allowed_by_policy, validate_skill_catalog_registry_policy,
-        validate_skill_install_source, SkillInfo,
+        disable_skill_from_state, enable_skill_from_state, extract_skill_name_from_content,
+        filter_skill_infos_by_allowlist, install_missing_allowed_skills,
+        install_skill_content_from_state, list_skills_from_state, loaded_skill_to_info,
+        missing_allowed_skill_names, skill_allowed_by_policy, uninstall_skill_from_state,
+        validate_skill_catalog_registry_policy, validate_skill_install_source, SkillInfo,
+        DISABLED_SKILLS_SETTING_KEY,
     };
+    use crate::state::AppState;
+    use dasclaw_runtime::context::ContextManager;
     use std::collections::HashSet;
     use std::path::PathBuf;
     use std::sync::{Arc, RwLock};
+    use tokio::sync::mpsc;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -839,6 +858,129 @@ mod tests {
 
     fn managed_skill_content(name: &str) -> String {
         format!("---\nname: {name}\ndescription: Installed skill\n---\n\nPrompt.\n")
+    }
+
+    fn local_skill_content(name: &str) -> String {
+        format!(
+            "---\nname: {name}\nversion: 1.0.0\ndescription: Local round trip skill\nactivation:\n  keywords:\n    - roundtrip\n---\n\nUse this skill for round trip tests.\n"
+        )
+    }
+
+    async fn test_db(tempdir: &tempfile::TempDir) -> Arc<dyn ironclaw::db::Database> {
+        let db_path = tempdir.path().join("skills-state.db");
+        let backend = ironclaw::db::libsql::LibSqlBackend::new_local(&db_path)
+            .await
+            .expect("file-backed libsql backend should initialize");
+        <ironclaw::db::libsql::LibSqlBackend as ironclaw::db::Database>::run_migrations(&backend)
+            .await
+            .expect("migrations should run");
+        Arc::new(backend)
+    }
+
+    fn test_registry(tempdir: &tempfile::TempDir) -> Arc<RwLock<ironclaw::skills::SkillRegistry>> {
+        Arc::new(RwLock::new(
+            ironclaw::skills::SkillRegistry::new(tempdir.path().join("user-skills"))
+                .with_installed_dir(tempdir.path().join("installed-skills")),
+        ))
+    }
+
+    async fn test_app_state_with_skills() -> (AppState, tempfile::TempDir) {
+        let tempdir = tempfile::tempdir().expect("tempdir should be created");
+        let db = test_db(&tempdir).await;
+        let registry = test_registry(&tempdir);
+        let (tx, _rx) = mpsc::channel(1);
+
+        let safety_config = ironclaw::safety::SafetyConfig {
+            max_output_length: 100_000,
+            injection_check_enabled: true,
+        };
+        let safety = Arc::new(ironclaw::safety::SafetyLayer::new(&safety_config));
+        let safety_bridge = Arc::new(crate::safety_bridge::SafetyBridge::new(
+            Arc::clone(&safety),
+            None,
+            None,
+        ));
+        let egress: Arc<dyn dasclaw_core::EgressGate> = Arc::new(
+            dasclaw_safety::egress_gate::IronclawEgressGate::new(Arc::clone(&safety)),
+        );
+        let attachment_scanner = Arc::new(
+            crate::safety_attachment_scanner::AttachmentScanner::new(Arc::clone(&egress)),
+        );
+        let model_override = Arc::new(std::sync::RwLock::new(None));
+        let stub_llm: Arc<dyn ironclaw::llm::LlmProvider> = Arc::new(StubLlmProvider);
+        let model_switch = Arc::new(crate::model_switch::ModelSwitchProvider::new(
+            Arc::clone(&stub_llm),
+            Arc::clone(&model_override),
+        ));
+
+        let state = AppState {
+            msg_sender: tx,
+            db: Some(db),
+            workspace: None,
+            tools: Arc::new(ironclaw::tools::ToolRegistry::new()),
+            extension_manager: None,
+            skill_registry: Some(registry),
+            skill_catalog: None,
+            skills_config: ironclaw::config::SkillsConfig::default(),
+            safety,
+            safety_bridge,
+            attachment_scanner,
+            egress,
+            context_manager: Arc::new(ContextManager::new(5)),
+            conversation_tracker: Arc::new(crate::conversation_tracker::ConversationTracker::new(
+                "skills-ipc-owner".to_string(),
+            )),
+            data_reporter: Arc::new(crate::data_reporter::DataReporter::new_for_test()),
+            scope_id: "skills-ipc-owner".to_string(),
+            backend_user_id: Arc::new(std::sync::RwLock::new(None)),
+            llm: Arc::clone(&model_switch) as _,
+            model_override,
+            model_switch,
+            provider_base_url: std::sync::RwLock::new(String::new()),
+            initial_provider: Arc::clone(&stub_llm),
+            initial_base_url: String::new(),
+            log_broadcaster: Arc::new(ironclaw::channels::web::log_layer::LogBroadcaster::new()),
+            log_clear_offset: std::sync::atomic::AtomicUsize::new(0),
+            routine_engine_slot: Arc::new(tokio::sync::RwLock::new(None)),
+            scheduler_slot: Arc::new(tokio::sync::RwLock::new(None)),
+            disabled_skills: std::sync::RwLock::new(std::collections::HashSet::new()),
+            disabled_extensions: std::sync::RwLock::new(std::collections::HashSet::new()),
+        };
+
+        (state, tempdir)
+    }
+
+    struct StubLlmProvider;
+
+    #[async_trait::async_trait]
+    impl ironclaw::llm::LlmProvider for StubLlmProvider {
+        fn model_name(&self) -> &str {
+            "stub-model"
+        }
+
+        fn cost_per_token(&self) -> (rust_decimal::Decimal, rust_decimal::Decimal) {
+            (rust_decimal::Decimal::ZERO, rust_decimal::Decimal::ZERO)
+        }
+
+        async fn complete(
+            &self,
+            _req: ironclaw::llm::CompletionRequest,
+        ) -> Result<ironclaw::llm::CompletionResponse, ironclaw::error::LlmError> {
+            Err(ironclaw::error::LlmError::RequestFailed {
+                provider: "stub".into(),
+                reason: "not implemented".into(),
+            })
+        }
+
+        async fn complete_with_tools(
+            &self,
+            _req: ironclaw::llm::ToolCompletionRequest,
+        ) -> Result<ironclaw::llm::ToolCompletionResponse, ironclaw::error::LlmError> {
+            Err(ironclaw::error::LlmError::RequestFailed {
+                provider: "stub".into(),
+                reason: "not implemented".into(),
+            })
+        }
     }
 
     #[test]
@@ -890,6 +1032,87 @@ mod tests {
         assert!(
             result.is_ok(),
             "non-managed mode should allow missing CLAWHUB_REGISTRY"
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn req_skills_install_enable_disable_uninstall_state_round_trip() {
+        std::env::remove_var("MANAGED_MODE");
+        std::env::remove_var("CLAWHUB_REGISTRY");
+
+        let (state, _tempdir) = test_app_state_with_skills().await;
+        let skill_name = "roundtrip-skill";
+
+        let installed = install_skill_content_from_state(&state, &local_skill_content(skill_name))
+            .await
+            .expect("local SKILL.md install should update the real registry");
+        assert_eq!(installed, skill_name);
+
+        let listed = list_skills_from_state(&state)
+            .await
+            .expect("list should read installed registry state");
+        let skill = listed
+            .iter()
+            .find(|skill| skill.name == skill_name)
+            .expect("installed skill should be listed");
+        assert_eq!(skill.source, "user");
+        assert_eq!(skill.trust, "installed");
+        assert!(skill.enabled, "newly installed skills should be enabled");
+
+        disable_skill_from_state(&state, skill_name)
+            .await
+            .expect("disable should persist state");
+        let listed = list_skills_from_state(&state)
+            .await
+            .expect("list should reflect disabled state");
+        let skill = listed
+            .iter()
+            .find(|skill| skill.name == skill_name)
+            .expect("disabled skill should still be listed");
+        assert!(!skill.enabled, "disabled skill should be reflected in DTO");
+
+        let disabled = state
+            .db
+            .as_ref()
+            .expect("db should exist")
+            .get_setting(&state.scope_id, DISABLED_SKILLS_SETTING_KEY)
+            .await
+            .expect("disabled skill setting should be readable")
+            .expect("disabled skill setting should be persisted");
+        assert_eq!(disabled, serde_json::json!([skill_name]));
+
+        enable_skill_from_state(&state, skill_name)
+            .await
+            .expect("enable should persist state");
+        let listed = list_skills_from_state(&state)
+            .await
+            .expect("list should reflect enabled state");
+        let skill = listed
+            .iter()
+            .find(|skill| skill.name == skill_name)
+            .expect("enabled skill should still be listed");
+        assert!(skill.enabled, "enabled skill should be reflected in DTO");
+
+        let disabled = state
+            .db
+            .as_ref()
+            .expect("db should exist")
+            .get_setting(&state.scope_id, DISABLED_SKILLS_SETTING_KEY)
+            .await
+            .expect("disabled skill setting should be readable")
+            .expect("disabled skill setting should remain persisted");
+        assert_eq!(disabled, serde_json::json!([]));
+
+        uninstall_skill_from_state(&state, skill_name)
+            .await
+            .expect("uninstall should update registry and disk state");
+        let listed = list_skills_from_state(&state)
+            .await
+            .expect("list should read post-uninstall registry state");
+        assert!(
+            listed.iter().all(|skill| skill.name != skill_name),
+            "uninstalled skill should no longer be listed"
         );
     }
 
