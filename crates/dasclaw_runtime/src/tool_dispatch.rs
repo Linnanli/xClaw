@@ -25,7 +25,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::AgentEvent;
-use crate::agent::{ToolExecutor, ToolOutputSanitizer};
+use crate::agent::{
+    ToolExecutor, ToolLifecycleEvent, ToolLifecycleObserver, ToolLifecycleStage,
+    ToolOutputSanitizer,
+};
 use crate::approval::{ApprovalOutcome, Approver};
 
 /// Sentinel prefix for `LoopOutcome::Failure` strings produced when an
@@ -81,6 +84,7 @@ pub struct SequentialDispatcher {
     egress: Arc<dyn EgressGate>,
     approver: Arc<dyn Approver>,
     tool_output_sanitizer: Option<Arc<dyn ToolOutputSanitizer>>,
+    tool_lifecycle_observer: Arc<dyn ToolLifecycleObserver>,
     event_tx: Option<mpsc::Sender<AgentEvent>>,
 }
 
@@ -93,6 +97,7 @@ impl SequentialDispatcher {
         egress: Arc<dyn EgressGate>,
         approver: Arc<dyn Approver>,
         tool_output_sanitizer: Option<Arc<dyn ToolOutputSanitizer>>,
+        tool_lifecycle_observer: Arc<dyn ToolLifecycleObserver>,
         event_tx: Option<mpsc::Sender<AgentEvent>>,
     ) -> Self {
         Self {
@@ -100,6 +105,7 @@ impl SequentialDispatcher {
             egress,
             approver,
             tool_output_sanitizer,
+            tool_lifecycle_observer,
             event_tx,
         }
     }
@@ -165,7 +171,9 @@ impl ToolDispatcher for SequentialDispatcher {
                 continue;
             }
 
+            self.observe(call, ToolLifecycleStage::PreToolUse).await?;
             let result = self.executor.execute(call).await?;
+            self.observe(call, ToolLifecycleStage::PostToolUse).await?;
             let executor_is_error = result.is_error;
 
             // ADR-148 Layer B + ADR-153 §1.1 e15/A9:
@@ -213,6 +221,16 @@ impl ToolDispatcher for SequentialDispatcher {
 impl SequentialDispatcher {
     async fn emit(&self, event: AgentEvent) {
         emit_event(self.event_tx.as_ref(), event).await;
+    }
+
+    async fn observe(&self, call: &ToolCall, stage: ToolLifecycleStage) -> Result<(), HostError> {
+        self.tool_lifecycle_observer
+            .observe(ToolLifecycleEvent {
+                stage,
+                tool_call_id: call.id.clone(),
+                tool_name: call.name.clone(),
+            })
+            .await
     }
 
     async fn push_rejection(
