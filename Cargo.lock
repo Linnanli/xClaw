@@ -2786,6 +2786,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "dasclaw_app_server"
+version = "0.0.0-p0"
+dependencies = [
+ "dasclaw_app_server_protocol",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dasclaw_app_server_client"
+version = "0.0.0-p0"
+dependencies = [
+ "dasclaw_app_server",
+ "dasclaw_app_server_protocol",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "dasclaw_app_server_protocol"
+version = "0.0.0-p0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "dasclaw_apply_patch"
 version = "0.0.0-w1"
 dependencies = [

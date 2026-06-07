@@ -1,0 +1,19 @@
+[package]
+name = "dasclaw_app_server_client"
+version = "0.0.0-p0"
+edition = "2024"
+description = "Minimal dasclaw app-server client helpers for in-process and stdio JSON-RPC transports."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+dasclaw_app_server_protocol = { path = "../dasclaw_app_server_protocol" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+
+[dev-dependencies]
+dasclaw_app_server = { path = "../dasclaw_app_server" }
