@@ -32,6 +32,15 @@ log_section() {
     echo ""
 }
 
+ensure_admin_rust_log() {
+    if [ -z "${RUST_LOG:-}" ]; then
+        export RUST_LOG="info"
+        log_info "RUST_LOG 未设置，已默认使用 info"
+    else
+        log_info "RUST_LOG=$RUST_LOG"
+    fi
+}
+
 # 检查 Docker 依赖
 check_docker_dependencies() {
     log_section "检查 Docker 依赖"
@@ -335,6 +344,7 @@ start_admin_backend() {
     cd "$ADMIN_BACKEND_DIR"
     
     log_info "启动后端..."
+    ensure_admin_rust_log
     cargo run > /tmp/admin-backend.log 2>&1 &
     local BACKEND_PID=$!
     
@@ -560,6 +570,7 @@ start_admin_backend_serial() {
     cd "$ADMIN_BACKEND_DIR"
     
     log_info "启动后端..."
+    ensure_admin_rust_log
     echo ""
     
     cargo run > /tmp/admin-backend.log 2>&1 &

@@ -62,3 +62,4 @@ claude-code-main
 # Graphify generated artifacts
 /graphify-out/
 **/graphify-out/
+/reference-projects/
