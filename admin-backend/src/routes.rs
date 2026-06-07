@@ -26,7 +26,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
-use tracing::{debug, info, instrument};
+use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
 async fn ensure_parent_department_exists(
@@ -3283,6 +3283,7 @@ async fn get_client_config(
 
     // 合并水印配置
     let mut response = response;
+    merge_default_model_config(&client, &mut response).await;
     merge_watermark_settings(&client, &mut response).await;
 
     // 如果请求携带了 client_id，查询该客户端的 needs_upgrade 状态
@@ -3344,6 +3345,82 @@ async fn get_client_config(
 
     debug!(version = response.config_version, "Client config served");
     Ok(Json(response))
+}
+
+/// 从默认启用模型生成 client-config 的 LLM 字段。
+///
+/// `client_configs` 保留客户端策略/开关等 legacy 配置；后台模型页维护的真实
+/// LLM 配置在 `model_configs`。这里始终用默认模型覆盖响应里的 LLM 字段，
+/// 避免 legacy 表中的旧模型（例如 qwen-max）继续污染客户端启动配置。
+async fn merge_default_model_config(
+    client: &deadpool_postgres::Object,
+    response: &mut ClientConfigResponse,
+) {
+    response.llm_backend = None;
+    response.llm_api_key = None;
+    response.llm_model = None;
+    response.llm_base_url = None;
+
+    let row = match client
+        .query_opt(
+            "SELECT model_id, provider, api_base_url, api_key, \
+                    COALESCE(extra_config->>'api_format', 'openai') \
+             FROM model_configs \
+             WHERE enabled = true \
+             ORDER BY is_default DESC, sort_order, display_name \
+             LIMIT 1",
+            &[],
+        )
+        .await
+    {
+        Ok(row) => row,
+        Err(error) => {
+            warn!(error = %error, "Failed to load default model config for client-config");
+            return;
+        }
+    };
+
+    let Some(row) = row else {
+        return;
+    };
+
+    let model_id: String = row.get(0);
+    let provider: String = row.get(1);
+    let api_base_url: Option<String> = row.get(2);
+    let api_key: Option<String> = row.get(3);
+    let api_format: String = row.get(4);
+
+    response.llm_backend = Some(client_config_llm_backend(
+        &provider,
+        &api_format,
+        api_base_url.as_deref(),
+    ));
+    response.llm_model = Some(model_id);
+    response.llm_base_url = api_base_url;
+    response.llm_api_key = api_key.as_deref().map(mask_api_key);
+}
+
+fn client_config_llm_backend(
+    provider: &str,
+    api_format: &str,
+    api_base_url: Option<&str>,
+) -> String {
+    let provider = provider.trim().to_ascii_lowercase();
+    let api_format = api_format.trim().to_ascii_lowercase();
+
+    if provider == "anthropic" || api_format == "anthropic" {
+        return "anthropic".to_string();
+    }
+
+    if provider == "openai" && api_base_url.is_none_or(is_official_openai_base_url) {
+        return "openai".to_string();
+    }
+
+    "openai_compatible".to_string()
+}
+
+fn is_official_openai_base_url(base_url: &str) -> bool {
+    base_url.to_ascii_lowercase().contains("api.openai.com")
 }
 
 #[instrument(skip(state))]
@@ -5878,13 +5955,16 @@ async fn test_model_connection(
 
 /// GET /api/client-models — 客户端拉取可用模型列表
 ///
-/// 支持通过 user_id 查询参数按部门白名单过滤。
-/// 未传 user_id 或用户无部门或部门无白名单时，返回所有已启用模型。
+/// 必须通过 client_id 查询参数确定客户端身份，再按部门白名单过滤。
+/// 用户无部门或部门无白名单时，返回所有已启用模型。
 #[instrument(skip(state))]
 async fn get_client_models(
     State(state): State<AppState>,
     Query(params): Query<ClientModelsQuery>,
 ) -> Result<Json<Vec<models::ClientModelConfig>>> {
+    let client_id = params
+        .client_id
+        .ok_or_else(|| Error::Validation("client_id is required".into()))?;
     let client = state
         .db_pool
         .get()
@@ -5892,7 +5972,7 @@ async fn get_client_models(
         .map_err(|e| Error::Database(e.to_string()))?;
 
     // 确定白名单过滤条件
-    let whitelist_model_ids = resolve_whitelist(&client, params.user_id).await?;
+    let (user_id, whitelist_model_ids) = resolve_client_model_whitelist(&client, client_id).await?;
 
     let rows = client
         .query(
@@ -5941,35 +6021,56 @@ async fn get_client_models(
         })
         .collect();
 
+    let default_model = models
+        .iter()
+        .find(|model| model.is_default)
+        .map(|model| model.model_id.as_str())
+        .unwrap_or("<none>");
+    let first_model = models
+        .first()
+        .map(|model| model.model_id.as_str())
+        .unwrap_or("<none>");
+    info!(
+        client_id = %client_id,
+        user_id = %user_id,
+        whitelist_applied = whitelist_model_ids.is_some(),
+        count = models.len(),
+        default_model,
+        first_model,
+        "Client model list served"
+    );
+
     Ok(Json(models))
 }
 
 #[derive(Debug, Deserialize)]
 struct ClientModelsQuery {
-    user_id: Option<Uuid>,
+    client_id: Option<Uuid>,
 }
 
-/// 查询用户所属部门的模型白名单。
+/// 从客户端注册 ID 解析真实用户及其所属部门模型白名单。
 /// 返回 None 表示不过滤（无部门或部门无白名单）。
-async fn resolve_whitelist(
+async fn resolve_client_model_whitelist(
     client: &deadpool_postgres::Object,
-    user_id: Option<Uuid>,
-) -> Result<Option<Vec<Uuid>>> {
-    let uid = match user_id {
-        Some(id) => id,
-        None => return Ok(None),
-    };
-
-    // 查用户部门
+    client_id: Uuid,
+) -> Result<(Uuid, Option<Vec<Uuid>>)> {
     let dept_row = client
-        .query_opt("SELECT department_id FROM users WHERE id = $1", &[&uid])
+        .query_opt(
+            "SELECT rc.user_id, u.department_id \
+             FROM registered_clients rc \
+             JOIN users u ON u.id = rc.user_id \
+             WHERE rc.id = $1",
+            &[&client_id],
+        )
         .await
-        .map_err(|e| Error::Database(e.to_string()))?;
+        .map_err(|e| Error::Database(e.to_string()))?
+        .ok_or_else(|| Error::Validation("client_id is not registered".into()))?;
 
-    let dept_id: Option<Uuid> = dept_row.and_then(|r| r.get(0));
+    let user_id: Uuid = dept_row.get(0);
+    let dept_id: Option<Uuid> = dept_row.get(1);
     let dept_id = match dept_id {
         Some(id) => id,
-        None => return Ok(None),
+        None => return Ok((user_id, None)),
     };
 
     // 查白名单
@@ -5982,10 +6083,10 @@ async fn resolve_whitelist(
         .map_err(|e| Error::Database(e.to_string()))?;
 
     if rows.is_empty() {
-        return Ok(None); // 无白名单 = 不过滤
+        return Ok((user_id, None)); // 无白名单 = 不过滤
     }
 
-    Ok(Some(rows.iter().map(|r| r.get(0)).collect()))
+    Ok((user_id, Some(rows.iter().map(|r| r.get(0)).collect())))
 }
 
 /// 规范化 API base URL：去掉 LLM SDK 会自动拼接的路径后缀。

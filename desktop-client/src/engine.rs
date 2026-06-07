@@ -5,12 +5,13 @@
 //!
 //! # 启动时序
 //!
-//! 1. `Config::from_env()` — 加载配置（env vars 已由 `admin_sync` 注入）
-//! 2. `AppBuilder::build_all()` — 初始化 DB、LLM、Tools、Extensions 等
-//! 3. 创建 `TauriChannel` + `ChannelManager`
-//! 4. 构建 `AgentDeps` + `Agent::new()`
-//! 5. `app_handle.manage(AppState)` — 注入 Tauri 全局状态
-//! 6. `agent.run()` — 阻塞运行消息循环
+//! 1. 从 live Admin `/api/client-models` 尝试种植启动 LLM 配置
+//! 2. `Config::from_env()` — 加载配置（显式 env 优先，runtime overlay 兜底）
+//! 3. `AppBuilder::build_all()` — 初始化 DB、LLM、Tools、Extensions 等
+//! 4. 创建 `TauriChannel` + `ChannelManager`
+//! 5. 构建 `AgentDeps` + `Agent::new()`
+//! 6. `app_handle.manage(AppState)` — 注入 Tauri 全局状态
+//! 7. `agent.run()` — 阻塞运行消息循环
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -54,6 +55,9 @@ const DISABLED_EXTENSIONS_SETTING_KEY: &str = "desktop_disabled_extensions";
 /// 返回 `anyhow::Error`，调用方应捕获并通过 `VercelUIStream::Error` 通知前端。
 pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> {
     tracing::info!("Starting IronClaw embedded engine...");
+
+    // ── Phase 0: 从 live Admin 模型接口种植启动 LLM 配置 ─────────────
+    hydrate_startup_llm_from_admin_models().await;
 
     // ── Phase 1: 加载配置 ──────────────────────────────────────────
     let config = Config::from_env()
@@ -301,8 +305,7 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
     tracing::info!("AppState injected into EngineState");
 
     // ── 初始化默认 LLM Provider ───────────────────────────────────
-    // 从 Admin Backend 拉取默认模型，覆盖 .env 里的 fallback 配置。
-    // 确保定时任务和聊天使用相同的默认模型。
+    // 从 Admin Backend 拉取默认模型，确保定时任务和聊天使用同一默认模型。
     {
         let engine_state = app_handle.state::<EngineState>();
         if let Ok(state) = engine_state.get() {
@@ -686,12 +689,17 @@ fn find_builtin_skills_source(app_handle: &AppHandle) -> Option<std::path::PathB
 /// 从 Admin Backend 拉取默认模型配置，初始化 LLM provider。
 ///
 /// 在引擎就绪后调用，确保定时任务和聊天使用相同的默认模型，
-/// 而不是 .env 里的 fallback 配置。
+/// 并让运行时 provider 与 Admin 当前默认模型收敛。
 ///
-/// 失败时静默降级（继续使用 .env 配置），不影响引擎正常运行。
+/// 失败时静默降级（继续使用启动时 provider），不影响引擎正常运行。
 pub(crate) async fn init_default_provider(state: &AppState) {
-    let backend_user_id = state.backend_user_id.read().ok().and_then(|value| *value);
-    match fetch_default_model(backend_user_id).await {
+    let client_token = std::env::var("ADMIN_AUTH_TOKEN").unwrap_or_default();
+    let Ok(client_id) = Uuid::parse_str(client_token.trim()) else {
+        tracing::debug!("Skipping default provider init: client token unavailable");
+        return;
+    };
+
+    match fetch_default_model(client_id).await {
         Ok(Some(model)) => apply_default_model(state, &model),
         Ok(None) => tracing::debug!("No models returned from admin backend"),
         Err(e) => tracing::debug!(error = %e, "Skipping default provider init"),
@@ -700,18 +708,15 @@ pub(crate) async fn init_default_provider(state: &AppState) {
 
 /// 从 Admin Backend 拉取模型列表，返回默认模型（is_default 优先，否则取第一个）。
 async fn fetch_default_model(
-    backend_user_id: Option<Uuid>,
+    client_id: Uuid,
 ) -> Result<Option<crate::ipc::models::ModelConfig>, String> {
     let admin_url =
         std::env::var("ADMIN_BACKEND_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
 
-    let url = if let Some(user_id) = backend_user_id {
-        format!("{}/api/client-models?user_id={}", admin_url, user_id)
-    } else {
-        format!("{}/api/client-models", admin_url)
-    };
+    let url = format!("{}/api/client-models?client_id={}", admin_url, client_id);
 
     let client = reqwest::Client::builder()
+        .no_proxy()
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
@@ -733,12 +738,155 @@ async fn fetch_default_model(
         .map_err(|e| format!("Failed to parse model list: {e}"))?;
 
     if models.is_empty() {
+        tracing::info!(url = %url, "Admin client model list is empty");
         return Ok(None);
     }
 
     // is_default 优先；没有标记时取第一个
     let idx = models.iter().position(|m| m.is_default).unwrap_or(0);
+    let default_model = models
+        .iter()
+        .find(|model| model.is_default)
+        .map(|model| model.model_id.as_str())
+        .unwrap_or("<none>");
+    let first_model = models
+        .first()
+        .map(|model| model.model_id.as_str())
+        .unwrap_or("<none>");
+    let selected_model = models[idx].model_id.as_str();
+    let selected_provider = models[idx].provider.as_str();
+    let selected_is_default = models[idx].is_default;
+    tracing::info!(
+        url = %url,
+        count = models.len(),
+        default_model,
+        first_model,
+        selected_model,
+        selected_provider,
+        selected_is_default,
+        "Admin client model list fetched"
+    );
     Ok(Some(models.swap_remove(idx)))
+}
+
+async fn hydrate_startup_llm_from_admin_models() {
+    if ironclaw::config::env_or_override("LLM_BACKEND").is_some() {
+        tracing::debug!("LLM_BACKEND already configured, skipping Admin startup model hydration");
+        return;
+    }
+
+    let client_token = std::env::var("ADMIN_AUTH_TOKEN").unwrap_or_default();
+    let Ok(client_id) = Uuid::parse_str(client_token.trim()) else {
+        tracing::debug!("Skipping startup LLM hydration: client token unavailable");
+        return;
+    };
+
+    let model = match fetch_default_model(client_id).await {
+        Ok(Some(model)) => model,
+        Ok(None) => {
+            tracing::debug!("No Admin default model available for startup LLM hydration");
+            return;
+        }
+        Err(error) => {
+            tracing::debug!(error = %error, "Skipping startup LLM hydration from Admin models");
+            return;
+        }
+    };
+
+    let overrides = match startup_llm_env_overrides(&model) {
+        Ok(overrides) => overrides,
+        Err(error) => {
+            tracing::warn!(
+                model = %model.model_id,
+                provider = %model.provider,
+                error = %error,
+                "Admin default model cannot seed startup LLM config"
+            );
+            return;
+        }
+    };
+
+    for (key, value) in &overrides {
+        ironclaw::config::set_runtime_env(key, value);
+        if is_sensitive_runtime_env_key(key) {
+            tracing::info!(
+                env_key = *key,
+                "Seeded startup LLM config from Admin default model"
+            );
+        } else {
+            tracing::info!(
+                env_key = *key,
+                value = %value,
+                "Seeded startup LLM config from Admin default model"
+            );
+        }
+    }
+}
+
+fn startup_llm_env_overrides(
+    model: &crate::ipc::models::ModelConfig,
+) -> Result<Vec<(&'static str, String)>, String> {
+    let model_id = model.model_id.trim();
+    if model_id.is_empty() {
+        return Err("model_id is empty".to_string());
+    }
+
+    let provider = model.provider.trim().to_ascii_lowercase();
+    let api_format = model.api_format.trim().to_ascii_lowercase();
+    let base_url = model
+        .api_base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let api_key = model
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    if api_format == "anthropic" || provider == "anthropic" {
+        let api_key = api_key.ok_or_else(|| format!("model {model_id} is missing api_key"))?;
+        let mut out = vec![
+            ("LLM_BACKEND", "anthropic".to_string()),
+            ("ANTHROPIC_API_KEY", api_key.to_string()),
+            ("ANTHROPIC_MODEL", model_id.to_string()),
+        ];
+        if let Some(base_url) = base_url {
+            out.push(("ANTHROPIC_BASE_URL", base_url.to_string()));
+        }
+        return Ok(out);
+    }
+
+    let official_openai = provider == "openai"
+        && base_url
+            .map(|url| url.contains("api.openai.com"))
+            .unwrap_or(true);
+
+    if official_openai {
+        let api_key = api_key.ok_or_else(|| format!("model {model_id} is missing api_key"))?;
+        let mut out = vec![
+            ("LLM_BACKEND", "openai".to_string()),
+            ("OPENAI_API_KEY", api_key.to_string()),
+            ("OPENAI_MODEL", model_id.to_string()),
+        ];
+        if let Some(base_url) = base_url {
+            out.push(("OPENAI_BASE_URL", base_url.to_string()));
+        }
+        return Ok(out);
+    }
+
+    let base_url = base_url.ok_or_else(|| format!("model {model_id} is missing api_base_url"))?;
+    let api_key = api_key.ok_or_else(|| format!("model {model_id} is missing api_key"))?;
+    Ok(vec![
+        ("LLM_BACKEND", "openai_compatible".to_string()),
+        ("LLM_API_KEY", api_key.to_string()),
+        ("LLM_BASE_URL", base_url.to_string()),
+        ("LLM_MODEL", model_id.to_string()),
+    ])
+}
+
+fn is_sensitive_runtime_env_key(key: &str) -> bool {
+    matches!(key, "LLM_API_KEY" | "OPENAI_API_KEY" | "ANTHROPIC_API_KEY")
 }
 
 /// 将拉取到的模型配置应用为当前活跃 provider。
@@ -785,9 +933,7 @@ async fn load_cached_policy_snapshot(
     db: Option<&Arc<dyn ironclaw::db::Database>>,
     scope_id: &str,
 ) -> Option<ManagedPolicySnapshot> {
-    let Some(db) = db else {
-        return None;
-    };
+    let db = db?;
 
     match load_verified_policy_from_store(db.as_ref(), scope_id).await {
         Ok(policy) => policy,
@@ -818,6 +964,7 @@ async fn resolve_managed_policy(
 
     if !client_token.is_empty() {
         let http_client = reqwest::Client::builder()
+            .no_proxy()
             .timeout(std::time::Duration::from_secs(5))
             .build()
             .unwrap_or_default();
@@ -1085,4 +1232,102 @@ async fn refresh_runtime_policy_restrictions(
     *extension_guard = disabled_extensions;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod startup_llm_env_tests {
+    use super::startup_llm_env_overrides;
+
+    fn model(
+        provider: &str,
+        api_format: &str,
+        base_url: Option<&str>,
+    ) -> crate::ipc::models::ModelConfig {
+        crate::ipc::models::ModelConfig {
+            model_id: "model-a".to_string(),
+            display_name: "Model A".to_string(),
+            provider: provider.to_string(),
+            provider_display_name: None,
+            description: None,
+            is_default: true,
+            capabilities: serde_json::json!([]),
+            api_base_url: base_url.map(str::to_string),
+            api_key: Some("sk-test".to_string()),
+            api_format: api_format.to_string(),
+            source: "admin".to_string(),
+        }
+    }
+
+    #[test]
+    fn req_startup_llm_env_uses_anthropic_specific_keys() {
+        let model = model("anthropic", "anthropic", Some("https://api.anthropic.com"));
+
+        let overrides = startup_llm_env_overrides(&model).expect("overrides");
+
+        assert_eq!(
+            overrides,
+            vec![
+                ("LLM_BACKEND", "anthropic".to_string()),
+                ("ANTHROPIC_API_KEY", "sk-test".to_string()),
+                ("ANTHROPIC_MODEL", "model-a".to_string()),
+                (
+                    "ANTHROPIC_BASE_URL",
+                    "https://api.anthropic.com".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn req_startup_llm_env_uses_openai_model_env_for_official_openai() {
+        let model = model("openai", "openai", Some("https://api.openai.com/v1"));
+
+        let overrides = startup_llm_env_overrides(&model).expect("overrides");
+
+        assert_eq!(
+            overrides,
+            vec![
+                ("LLM_BACKEND", "openai".to_string()),
+                ("OPENAI_API_KEY", "sk-test".to_string()),
+                ("OPENAI_MODEL", "model-a".to_string()),
+                ("OPENAI_BASE_URL", "https://api.openai.com/v1".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn req_startup_llm_env_uses_generic_compat_for_custom_openai_wire() {
+        let model = model(
+            "dashscope",
+            "openai",
+            Some("https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        );
+
+        let overrides = startup_llm_env_overrides(&model).expect("overrides");
+
+        assert_eq!(
+            overrides,
+            vec![
+                ("LLM_BACKEND", "openai_compatible".to_string()),
+                ("LLM_API_KEY", "sk-test".to_string()),
+                (
+                    "LLM_BASE_URL",
+                    "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string(),
+                ),
+                ("LLM_MODEL", "model-a".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn req_startup_llm_env_rejects_missing_generic_base_url() {
+        let model = model("dashscope", "openai", None);
+
+        let error = startup_llm_env_overrides(&model).expect_err("missing base_url");
+
+        assert!(
+            error.contains("api_base_url"),
+            "error should explain missing base url: {error}"
+        );
+    }
 }

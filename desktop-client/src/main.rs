@@ -9,23 +9,23 @@
 //!
 //! ## 配置优先级（高 → 低）
 //!
-//! 1. **管理端下发** — `admin_config.json` 缓存，`set_var` 强制覆盖
-//! 2. **显式环境变量** — shell `export` 或命令行传入
-//! 3. **本地 .env** — `desktop-client/.env`（dotenvy 不覆盖已有变量）
+//! 1. **显式环境变量** — shell `export` 或命令行传入
+//! 2. **管理端默认模型** — live `/api/client-models`，仅用于启动 LLM provider
+//! 3. **管理端策略缓存** — `admin_config.json` 缓存，仅用于非 LLM 启动策略
 //! 4. **客户端默认值** — `ensure_client_defaults()` 兜底
 //!
 //! ## 启动流程
 //!
 //! ```text
 //! init_logging()
-//!   → load_client_env()        // .env 文件 + 客户端隔离默认值
-//!   → apply_admin_overrides()  // 管理端配置覆盖（最高优先级）
+//!   → load_client_env()        // 客户端隔离默认值
+//!   → apply_admin_overrides()  // 管理端非 LLM 策略覆盖
 //!   → Tauri::setup()
 //!     → start_ironclaw_engine()  // Config::from_env() → AppBuilder
 //! ```
 
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use ironclaw::channels::web::log_layer::{init_tracing, LogBroadcaster};
@@ -119,16 +119,14 @@ fn engine_data_dir() -> PathBuf {
     app_data_dir().join(ENGINE_SUBDIR)
 }
 
-/// 加载客户端环境变量。
+/// 加载客户端环境变量默认值。
 ///
-/// 1. 从 `desktop-client/.env` 加载用户配置
-/// 2. 设置客户端隔离默认值（`IRONCLAW_BASE_DIR`、`DATABASE_BACKEND` 等）
+/// 只设置客户端隔离默认值（引擎根目录、`DATABASE_BACKEND` 等）。
+/// LLM 配置由显式环境变量或 live `/api/client-models` 提供，客户端启动时不再自动读取
+/// `desktop-client/.env*`，避免后端下发配置与本地文件混用。
 ///
-/// dotenvy 不覆盖已有环境变量，所以显式 `export` 的变量优先级更高。
+/// 显式 `export` 的变量仍优先于客户端默认值。
 fn load_client_env() {
-    // ── 加载 .env 文件 ────────────────────────────────────────────
-    load_env_file("desktop-client/.env");
-
     let environment = env::var("ENVIRONMENT").unwrap_or_else(|_| {
         if cfg!(debug_assertions) {
             "development"
@@ -137,22 +135,10 @@ fn load_client_env() {
         }
         .into()
     });
-    load_env_file(&format!("desktop-client/.env.{}", environment));
     env::set_var("ENVIRONMENT", &environment);
 
     // ── 客户端隔离默认值 ──────────────────────────────────────────
     ensure_client_defaults();
-}
-
-/// 加载指定路径的 .env 文件（存在则加载，不存在则跳过）。
-fn load_env_file(path: &str) {
-    let path = Path::new(path);
-    if path.exists() {
-        match dotenvy::from_path(path) {
-            Ok(_) => tracing::info!("Loaded {}", path.display()),
-            Err(e) => tracing::warn!("Failed to load {}: {}", path.display(), e),
-        }
-    }
 }
 
 /// 设置客户端隔离默认值。
@@ -161,7 +147,7 @@ fn load_env_file(path: &str) {
 /// 不会读取或写入全局 `~/.ironclaw/` 目录。
 ///
 /// 只在对应环境变量未设置时生效（`set_if_absent`），
-/// 所以 `.env` 文件和显式环境变量可以覆盖这些默认值。
+/// 所以显式环境变量可以覆盖这些默认值。
 ///
 /// # 隔离策略
 ///
@@ -202,76 +188,40 @@ fn set_if_absent(key: &str, value: &str) {
 // 管理端配置
 // ═══════════════════════════════════════════════════════════════════
 
-/// 管理端配置 JSON key → 环境变量的映射表。
+/// 管理端缓存 JSON key → 启动环境变量的映射表。
 ///
-/// `requires_companion_keys` 用于切换 `LLM_BACKEND` 时校验依赖 key 是否到位：
-/// 若任一候选 env 已存在（含本轮刚写入的），则允许写入；否则跳过并 `warn!`。
-/// 这避免 admin 单独推 backend 但客户端 env 缺少对应 API key 导致启动失败。
+/// LLM 配置不再从本地缓存注入，避免旧 `admin_config.json` 在 Admin Backend
+/// 已清空 `/api/client-config` 后继续污染启动。Rust 引擎启动链路会从 live
+/// `/api/client-models` 拉取默认模型，运行中 legacy client-config 变更仍由
+/// `AdminConfigSync` 处理。
 const ADMIN_CONFIG_MAPPINGS: &[AdminConfigMapping] = &[
-    AdminConfigMapping {
-        json_key: "llm_api_key",
-        env_key: "LLM_API_KEY",
-        requires_companion_keys: None,
-    },
-    AdminConfigMapping {
-        json_key: "llm_model",
-        env_key: "LLM_MODEL",
-        requires_companion_keys: None,
-    },
-    AdminConfigMapping {
-        json_key: "llm_base_url",
-        env_key: "LLM_BASE_URL",
-        requires_companion_keys: None,
-    },
-    AdminConfigMapping {
-        json_key: "llm_backend",
-        env_key: "LLM_BACKEND",
-        requires_companion_keys: Some(backend_companion_keys),
-    },
     AdminConfigMapping {
         json_key: "skill_registry_url",
         env_key: "CLAWHUB_REGISTRY",
-        requires_companion_keys: None,
     },
     AdminConfigMapping {
         json_key: "managed_mode",
         env_key: "MANAGED_MODE",
-        requires_companion_keys: None,
     },
 ];
 
 struct AdminConfigMapping {
     json_key: &'static str,
     env_key: &'static str,
-    /// 若 `Some(f)`，写入前调用 `f(value)` 获取候选 companion env key 列表。
-    /// 空切片表示该值无需任何 companion key（如 nearai 走 session token）。
-    requires_companion_keys: Option<fn(&str) -> &'static [&'static str]>,
-}
-
-/// 给定 backend 值，返回可接受的 companion API key env var 候选列表。
-///
-/// 返回空切片表示该 backend 不依赖任何静态 env key（如 nearai 用 session token）。
-/// 列表里只要有一个 key 在 env 中存在，就视为前置条件满足。
-///
-/// `LLM_API_KEY` 作为通用 fallback 列入 openai/anthropic 候选，
-/// 以兼容"admin 同一次推送 backend + llm_api_key"的常见场景。
-fn backend_companion_keys(backend: &str) -> &'static [&'static str] {
-    match backend {
-        "openai" => &["OPENAI_API_KEY", "LLM_API_KEY"],
-        "anthropic" => &["ANTHROPIC_API_KEY", "LLM_API_KEY"],
-        "openai_compatible" => &["LLM_API_KEY"],
-        "nearai" => &[],
-        _ => &[],
-    }
 }
 
 /// 敏感字段（日志中不打印值）。
-const ADMIN_CONFIG_SENSITIVE_KEYS: &[&str] = &["LLM_API_KEY", "ADMIN_API_KEY"];
+const ADMIN_CONFIG_SENSITIVE_KEYS: &[&str] = &[
+    "LLM_API_KEY",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "ADMIN_API_KEY",
+];
 
-/// 从本地缓存加载管理端配置并注入环境变量。
+/// 从本地缓存加载管理端非 LLM 策略并注入环境变量。
 ///
-/// 管理端可下发 LLM API Key、模型名称、安全策略等配置。
-/// 使用 `set_var` 强制覆盖，确保管理端配置拥有最高优先级。
+/// LLM API Key、模型名称和 Base URL 不再从缓存注入；这些字段必须来自显式
+/// 环境变量、启动期 live `/api/client-models`，或运行中 `AdminConfigSync` 的新配置。
 ///
 /// # 配置文件路径
 ///
@@ -284,9 +234,7 @@ const ADMIN_CONFIG_SENSITIVE_KEYS: &[&str] = &["LLM_API_KEY", "ADMIN_API_KEY"];
 ///
 /// # 后续改造
 ///
-/// 当前从本地 JSON 缓存读取。后续改为管理端下发时，只需：
-/// 1. `admin_sync.rs` 定期从管理端拉取配置并写入缓存文件
-/// 2. 此函数无需修改 — 它只负责"缓存 → 环境变量"这一步
+/// 此函数只负责"缓存 → 非 LLM 环境变量"这一步。
 fn apply_admin_overrides() {
     let cache_path = app_data_dir().join("admin_config.json");
 
@@ -328,53 +276,17 @@ fn apply_admin_overrides() {
     }
 }
 
-/// 纯函数：把 admin 配置 JSON 解析成将要写入的 `(env_key, value)` 列表。
-///
-/// 两遍处理：
-/// 1. 先解析所有不带 `requires_companion_keys` 的字段（API key / model / base_url 等），
-///    把它们累加到 `simulated_env`（process env 快照 + 第一遍刚写的值）。
-/// 2. 再处理 backend 等带 companion 校验的字段；若候选 env 列表非空但全都缺失，
-///    跳过该项并 `tracing::warn!`，避免推下去导致引擎启动 `LlmError::AuthFailed`。
-///
-/// 抽成独立函数便于测试：调用方传入虚拟 env 即可断言行为。
+/// 纯函数：把 admin 缓存 JSON 解析成启动时允许写入的 `(env_key, value)` 列表。
 fn resolve_overrides(
     config: &serde_json::Value,
-    current_env: &std::collections::HashMap<String, String>,
+    _current_env: &std::collections::HashMap<String, String>,
 ) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
-    let mut simulated_env: std::collections::HashMap<String, String> = current_env.clone();
 
-    // Pass 1: 写所有非 companion-gated 字段。
-    let mut deferred: Vec<(&AdminConfigMapping, String)> = Vec::new();
     for m in ADMIN_CONFIG_MAPPINGS {
         let Some(val) = extract_admin_value(config, m.json_key) else {
             continue;
         };
-        if m.requires_companion_keys.is_some() {
-            deferred.push((m, val));
-        } else {
-            simulated_env.insert(m.env_key.to_string(), val.clone());
-            out.push((m.env_key.to_string(), val));
-        }
-    }
-
-    // Pass 2: companion-gated 字段（如 LLM_BACKEND）。
-    for (m, val) in deferred {
-        if let Some(check) = m.requires_companion_keys {
-            let candidates = check(&val);
-            if !candidates.is_empty() && !candidates.iter().any(|k| simulated_env.contains_key(*k))
-            {
-                tracing::warn!(
-                    env_key = %m.env_key,
-                    value = %val,
-                    candidates = ?candidates,
-                    "Admin override skipped: switching {} to {} requires one of {:?} in env",
-                    m.env_key, val, candidates
-                );
-                continue;
-            }
-        }
-        simulated_env.insert(m.env_key.to_string(), val.clone());
         out.push((m.env_key.to_string(), val));
     }
 
@@ -396,129 +308,56 @@ mod apply_admin_overrides_tests {
     use serde_json::json;
     use std::collections::HashMap;
 
-    /// 校验测试和生产代码引用同一份映射表（防漂移）。
     #[test]
-    fn test_contract_mappings_include_backend_with_companion_check() {
-        let backend = ADMIN_CONFIG_MAPPINGS
-            .iter()
-            .find(|m| m.env_key == "LLM_BACKEND")
-            .expect("LLM_BACKEND mapping must exist");
-        assert!(
-            backend.requires_companion_keys.is_some(),
-            "LLM_BACKEND must be guarded by companion key check"
-        );
-    }
+    fn req_cached_startup_mappings_exclude_llm_config() {
+        let forbidden = [
+            "LLM_BACKEND",
+            "LLM_API_KEY",
+            "LLM_MODEL",
+            "LLM_BASE_URL",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+        ];
 
-    #[test]
-    fn test_failure_backend_skipped_when_companion_key_missing() {
-        let config = json!({ "llm_backend": "openai" });
-        let env = HashMap::new();
-        let resolved = resolve_overrides(&config, &env);
-        assert!(
-            !resolved.iter().any(|(k, _)| k == "LLM_BACKEND"),
-            "openai backend must be skipped when no OPENAI_API_KEY/LLM_API_KEY in env, got: {:?}",
-            resolved
-        );
-    }
-
-    #[test]
-    fn req_admin_override_backend_applied_when_companion_key_present() {
-        let config = json!({ "llm_backend": "openai" });
-        let mut env = HashMap::new();
-        env.insert("OPENAI_API_KEY".to_string(), "sk-pre-set".to_string());
-        let resolved = resolve_overrides(&config, &env);
-        assert!(
-            resolved
-                .iter()
-                .any(|(k, v)| k == "LLM_BACKEND" && v == "openai"),
-            "backend should be applied when OPENAI_API_KEY pre-exists, got: {:?}",
-            resolved
-        );
-    }
-
-    #[test]
-    fn req_admin_override_backend_applied_when_admin_pushes_key_too() {
-        let config = json!({
-            "llm_backend": "openai",
-            "llm_api_key": "sk-from-admin",
-        });
-        let env = HashMap::new(); // 空 env
-        let resolved = resolve_overrides(&config, &env);
-        // Pass 1 写 LLM_API_KEY，Pass 2 校验 openai 的候选含 LLM_API_KEY → 通过。
-        assert!(
-            resolved
-                .iter()
-                .any(|(k, v)| k == "LLM_API_KEY" && v == "sk-from-admin"),
-            "LLM_API_KEY should be written in pass 1, got: {:?}",
-            resolved
-        );
-        assert!(
-            resolved
-                .iter()
-                .any(|(k, v)| k == "LLM_BACKEND" && v == "openai"),
-            "LLM_BACKEND should pass companion check via just-written LLM_API_KEY, got: {:?}",
-            resolved
-        );
-    }
-
-    #[test]
-    fn req_admin_override_openai_compatible_requires_llm_api_key() {
-        // 无 LLM_API_KEY 时 openai_compatible 必须跳过。
-        let config = json!({ "llm_backend": "openai_compatible" });
-        let env = HashMap::new();
-        let resolved = resolve_overrides(&config, &env);
-        assert!(
-            !resolved.iter().any(|(k, _)| k == "LLM_BACKEND"),
-            "openai_compatible must be skipped without LLM_API_KEY, got: {:?}",
-            resolved
-        );
-
-        // 同一次 admin 推送 backend + key → 通过。
-        let config_ok = json!({
-            "llm_backend": "openai_compatible",
-            "llm_api_key": "sk-compat",
-        });
-        let resolved_ok = resolve_overrides(&config_ok, &env);
-        assert!(
-            resolved_ok
-                .iter()
-                .any(|(k, v)| k == "LLM_BACKEND" && v == "openai_compatible"),
-            "openai_compatible must pass with admin-pushed llm_api_key, got: {:?}",
-            resolved_ok
-        );
-    }
-
-    #[test]
-    fn req_admin_override_nearai_backend_no_key_required() {
-        let config = json!({ "llm_backend": "nearai" });
-        let env = HashMap::new(); // 空 env
-        let resolved = resolve_overrides(&config, &env);
-        assert!(
-            resolved
-                .iter()
-                .any(|(k, v)| k == "LLM_BACKEND" && v == "nearai"),
-            "nearai backend uses session token, must apply without any API key env, got: {:?}",
-            resolved
-        );
-    }
-
-    #[test]
-    fn test_security_audit_companion_check_does_not_leak_key_value() {
-        // 此测试确保 resolve_overrides 不返回 env 里的原始 key，
-        // 它只读 env 判断 contains_key，不传递 value。
-        let config = json!({ "llm_backend": "openai" });
-        let mut env = HashMap::new();
-        env.insert(
-            "OPENAI_API_KEY".to_string(),
-            "sk-secret-must-not-leak".into(),
-        );
-        let resolved = resolve_overrides(&config, &env);
-        for (_, v) in &resolved {
+        for mapping in ADMIN_CONFIG_MAPPINGS {
             assert!(
-                !v.contains("sk-secret-must-not-leak"),
-                "resolve_overrides leaked env value: {:?}",
-                resolved
+                !forbidden.contains(&mapping.env_key),
+                "cached startup mapping must not inject LLM config: {}",
+                mapping.env_key
             );
         }
+    }
+
+    #[test]
+    fn req_cached_startup_ignores_llm_fields() {
+        let config = json!({
+            "llm_backend": "openai",
+            "llm_api_key": "sk-from-stale-cache",
+            "llm_model": "stale-admin-model",
+            "llm_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "managed_mode": true,
+        });
+        let resolved = resolve_overrides(&config, &HashMap::new());
+
+        assert_eq!(
+            resolved,
+            vec![("MANAGED_MODE".to_string(), "true".to_string())]
+        );
+    }
+
+    #[test]
+    fn req_cached_startup_applies_non_llm_policy_fields() {
+        let config = json!({
+            "managed_mode": true,
+            "skill_registry_url": "http://localhost:3000/api/v1?client_token=test",
+        });
+        let resolved = resolve_overrides(&config, &HashMap::new());
+
+        assert!(resolved
+            .iter()
+            .any(|(k, v)| k == "MANAGED_MODE" && v == "true"));
+        assert!(resolved.iter().any(|(k, v)| {
+            k == "CLAWHUB_REGISTRY" && v == "http://localhost:3000/api/v1?client_token=test"
+        }));
     }
 }

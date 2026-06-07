@@ -1,7 +1,8 @@
 //! 管理端配置同步模块。
 //!
-//! 负责从 Admin Backend 拉取客户端配置（LLM Key、安全策略、功能开关等），
-//! 并缓存到本地文件系统。支持离线启动（使用缓存配置）。
+//! 负责从 Admin Backend 拉取 legacy 客户端配置（安全策略、功能开关等），
+//! 并缓存到本地文件系统。LLM 启动配置改由 live `/api/client-models`
+//! 在 `engine` 启动期种植，避免旧缓存污染首启 provider。
 //!
 //! # 架构
 //!
@@ -9,10 +10,10 @@
 //! Admin Backend                    Desktop Client
 //! ┌──────────────┐                ┌──────────────────────┐
 //! │ GET /api/    │  ◄── HTTPS ──  │ AdminConfigSync       │
-//! │ client-config│                │  ├── 启动时拉取       │
+//! │ client-config│                │  ├── 运行中刷新       │
 //! │              │                │  ├── 定时刷新(5min)   │
-//! │              │                │  ├── 本地加密缓存     │
-//! │              │                │  └── 注入 env vars    │
+//! │              │                │  ├── 本地缓存         │
+//! │              │                │  └── 注入 runtime cfg │
 //! └──────────────┘                └──────────────────────┘
 //! ```
 //!
@@ -95,33 +96,14 @@ pub struct AdminClientConfig {
 }
 
 impl AdminClientConfig {
-    /// 将管理端配置注入为环境变量。
+    /// 将管理端非 LLM 配置注入为环境变量。
     ///
     /// # 安全
     ///
-    /// - API Key 不记录到日志
+    /// - LLM 启动与模型切换使用 live `/api/client-models`，不从 legacy
+    ///   `/api/client-config` 注入，避免脱敏 key 污染运行时 provider
     /// - 仅注入非空值，不覆盖已有环境变量中的有效值
     pub fn inject_to_env(&self) {
-        let mappings: &[(&Option<String>, &str, bool)] = &[
-            (&self.llm_backend, "LLM_BACKEND", false),
-            (&self.llm_api_key, "LLM_API_KEY", true), // sensitive
-            (&self.llm_model, "LLM_MODEL", false),
-            (&self.llm_base_url, "LLM_BASE_URL", false),
-        ];
-
-        for (value, env_key, is_sensitive) in mappings {
-            if let Some(val) = value {
-                if !val.is_empty() {
-                    std::env::set_var(env_key, val);
-                    if *is_sensitive {
-                        tracing::info!("Injected {} from admin config (***)", env_key);
-                    } else {
-                        tracing::info!("Injected {}={} from admin config", env_key, val);
-                    }
-                }
-            }
-        }
-
         // Boolean 和数值类型
         if let Some(enabled) = self.safety_enabled {
             std::env::set_var("SAFETY_ENABLED", enabled.to_string());
@@ -222,6 +204,7 @@ impl AdminConfigSync {
             admin_url,
             client_token,
             http_client: reqwest::Client::builder()
+                .no_proxy()
                 .timeout(Duration::from_secs(10))
                 .build()
                 .unwrap_or_default(),
@@ -364,8 +347,9 @@ impl AdminConfigSync {
     ///
     /// # 首次拉取
     ///
-    /// 首次拉取时仅记录版本号，不调用 `inject_to_env()`，
-    /// 因为启动时已通过 `apply_admin_overrides()` 完成注入。
+    /// 首次拉取时仅记录版本号，不调用 `inject_to_env()`。启动时的非 LLM
+    /// 策略由 `apply_admin_overrides()` 从缓存处理，启动 LLM provider 由
+    /// `engine` 从 live `/api/client-models` 种植。
     pub async fn run_sync_loop_with_version_check(&self) {
         let mut interval = tokio::time::interval(self.version_check_interval);
         let mut last_version: Option<u64> = None;

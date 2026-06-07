@@ -615,13 +615,13 @@ enum SwitchKind {
     InPlace,
     /// 模型需要不同的 base_url，创建新 provider
     CrossProvider,
-    /// 模型回到初始 provider（恢复 .env 配置的 provider）
+    /// 模型回到启动时解析出的初始 provider
     RestoreInitial,
 }
 
 /// 根据目标模型的 api_base_url 判断切换类型。
 fn classify_switch(state: &crate::state::AppState, api_base_url: Option<&str>) -> SwitchKind {
-    // api_base_url 为空时，目标是初始 provider（DashScope 等 .env 配置的 provider）
+    // api_base_url 为空时，目标是启动时解析出的初始 provider
     let new_url = match api_base_url.filter(|u| !u.is_empty()) {
         Some(u) => normalize_base_url(u),
         None => normalize_base_url(&state.initial_base_url),
@@ -717,7 +717,7 @@ pub(crate) fn normalize_base_url(url: &str) -> String {
     trimmed.to_string()
 }
 
-/// 恢复到初始 provider（.env 配置的 provider）。
+/// 恢复到启动时解析出的初始 provider。
 ///
 /// 跨 provider 切换后，用户选回初始 provider 的模型时调用。
 /// 用保存的初始 provider 引用恢复，然后 set_model 切换模型名。

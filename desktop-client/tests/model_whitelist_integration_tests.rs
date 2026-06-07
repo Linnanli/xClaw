@@ -1,20 +1,20 @@
 //! 模型白名单集成测试。
 //!
-//! 验证客户端拉取模型列表时正确传递 user_id，
+//! 验证客户端拉取模型列表时正确传递 client_id，
 //! 后端根据部门白名单过滤模型。
 
 #[cfg(test)]
 mod model_whitelist_tests {
     #[test]
-    fn test_fetch_admin_models_includes_user_id() {
-        // 验证 fetch_admin_models 函数构造的 URL 包含 user_id 参数
-        let user_id = "test-user-123";
+    fn test_fetch_admin_models_includes_client_id() {
+        // 验证 fetch_admin_models 函数构造的 URL 包含 client_id 参数
+        let client_id = "550e8400-e29b-41d4-a716-446655440000";
         let admin_url = "http://localhost:3000";
-        let expected_url = format!("{}/api/client-models?user_id={}", admin_url, user_id);
+        let expected_url = format!("{}/api/client-models?client_id={}", admin_url, client_id);
 
         // 这个测试验证 URL 格式正确
-        assert!(expected_url.contains("user_id="));
-        assert!(expected_url.contains(user_id));
+        assert!(expected_url.contains("client_id="));
+        assert!(expected_url.contains(client_id));
     }
 
     #[test]
