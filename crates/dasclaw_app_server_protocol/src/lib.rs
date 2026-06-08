@@ -34,6 +34,9 @@ pub mod event {
     pub const LOG_ENTRY: &str = "log/entry";
     pub const THREAD_CREATED: &str = "thread/created";
     pub const TURN_STARTED: &str = "turn/started";
+    pub const TURN_DELTA: &str = "turn/delta";
+    pub const TURN_COMPLETED: &str = "turn/completed";
+    pub const TURN_FAILED: &str = "turn/failed";
     pub const TURN_CANCELLED: &str = "turn/cancelled";
 }
 
@@ -352,7 +355,7 @@ impl CapabilityMatrix {
                 &[event::HEALTH_CHANGED, event::CAPABILITIES_CHANGED],
             ),
             logs: declared_future_capability("logs"),
-            session: Capability::declared_contract(
+            session: Capability::implemented(
                 "session",
                 &[
                     method::THREAD_CREATE,
@@ -366,9 +369,11 @@ impl CapabilityMatrix {
                 &[
                     event::THREAD_CREATED,
                     event::TURN_STARTED,
+                    event::TURN_DELTA,
+                    event::TURN_COMPLETED,
+                    event::TURN_FAILED,
                     event::TURN_CANCELLED,
                 ],
-                "thread and turn protocol skeleton is declared; runtime session host is not wired in Phase 1",
             ),
             approval: declared_future_capability("approval"),
             dlp_policy: declared_future_capability("dlp_policy"),
@@ -569,6 +574,9 @@ fn phase_one_events() -> Vec<EventSchema> {
         EventSchema::new(event::LOG_ENTRY, "logs", "LogEntryEvent"),
         EventSchema::new(event::THREAD_CREATED, "session", "ThreadCreatedEvent"),
         EventSchema::new(event::TURN_STARTED, "session", "TurnStartedEvent"),
+        EventSchema::new(event::TURN_DELTA, "session", "TurnDeltaEvent"),
+        EventSchema::new(event::TURN_COMPLETED, "session", "TurnCompletedEvent"),
+        EventSchema::new(event::TURN_FAILED, "session", "TurnFailedEvent"),
         EventSchema::new(event::TURN_CANCELLED, "session", "TurnCancelledEvent"),
     ]
 }
@@ -727,6 +735,8 @@ pub struct TurnStartParams {
 #[serde(rename_all = "snake_case")]
 pub enum TurnStatus {
     Pending,
+    Completed,
+    Failed,
     Cancelled,
 }
 
@@ -759,6 +769,10 @@ pub struct TurnSummary {
     pub thread_id: String,
     pub turn_id: String,
     pub status: TurnStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -798,6 +812,32 @@ pub struct TurnStartedEvent {
     pub thread_id: String,
     pub turn_id: String,
     pub status: TurnStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnDeltaEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub delta: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnCompletedEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub status: TurnStatus,
+    pub output: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnFailedEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub status: TurnStatus,
+    pub error: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -905,6 +945,18 @@ impl ServerNotification {
         Self::new(event::TURN_STARTED, event)
     }
 
+    pub fn turn_delta(event: TurnDeltaEvent) -> Result<Self, serde_json::Error> {
+        Self::new(event::TURN_DELTA, event)
+    }
+
+    pub fn turn_completed(event: TurnCompletedEvent) -> Result<Self, serde_json::Error> {
+        Self::new(event::TURN_COMPLETED, event)
+    }
+
+    pub fn turn_failed(event: TurnFailedEvent) -> Result<Self, serde_json::Error> {
+        Self::new(event::TURN_FAILED, event)
+    }
+
     pub fn turn_cancelled(event: TurnCancelledEvent) -> Result<Self, serde_json::Error> {
         Self::new(event::TURN_CANCELLED, event)
     }
@@ -1008,7 +1060,7 @@ mod tests {
         assert_eq!(matrix.lifecycle.status, CapabilityStatus::Implemented);
         assert_eq!(matrix.health.status, CapabilityStatus::Implemented);
         assert_eq!(matrix.logs.status, CapabilityStatus::Declared);
-        assert_eq!(matrix.session.status, CapabilityStatus::Declared);
+        assert_eq!(matrix.session.status, CapabilityStatus::Implemented);
         assert!(
             matrix
                 .session
@@ -1051,6 +1103,24 @@ mod tests {
                 .methods
                 .contains(&method::TURN_READ.to_string())
         );
+        assert!(
+            matrix
+                .session
+                .events
+                .contains(&event::TURN_DELTA.to_string())
+        );
+        assert!(
+            matrix
+                .session
+                .events
+                .contains(&event::TURN_COMPLETED.to_string())
+        );
+        assert!(
+            matrix
+                .session
+                .events
+                .contains(&event::TURN_FAILED.to_string())
+        );
         assert_eq!(matrix.approval.status, CapabilityStatus::Declared);
         assert_eq!(matrix.dlp_policy.status, CapabilityStatus::Declared);
     }
@@ -1083,6 +1153,9 @@ mod tests {
         assert!(event_names.contains(&event::LIFECYCLE_CHANGED));
         assert!(event_names.contains(&event::CAPABILITIES_CHANGED));
         assert!(event_names.contains(&event::THREAD_CREATED));
+        assert!(event_names.contains(&event::TURN_DELTA));
+        assert!(event_names.contains(&event::TURN_COMPLETED));
+        assert!(event_names.contains(&event::TURN_FAILED));
         assert_eq!(schema.capabilities.logs.status, CapabilityStatus::Declared);
     }
 
@@ -1098,6 +1171,7 @@ mod tests {
             schema.capabilities.protocol.methods,
             schema.capabilities.lifecycle.methods,
             schema.capabilities.health.methods,
+            schema.capabilities.session.methods,
         ]
         .concat();
 

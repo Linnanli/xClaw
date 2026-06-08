@@ -39,6 +39,19 @@
 
 已检查 `dasclaw app-server ownership matrix / protocol skeleton` 是否已有，结论：目标 worktree 中已有 app-server 架构计划和 desktop/runtime 边界文档，但未发现专门的 `desktop-client -> dasclaw_app_server` ownership matrix，也未发现可直接复用的 dasclaw-native app-server protocol skeleton 文档。
 
+### 0.3 Codex app-server compatibility update (2026-06-08)
+
+后续客户端基座会复用 open-cowork 对 Codex app-server 的消费模型，因此本文件的 Codex 边界需要细化：
+
+| Layer | Decision |
+|---|---|
+| Codex `app-server-protocol` v2 method/event/schema shape | 作为新客户端兼容目标，优先对齐 Thread / Turn / Item wire profile |
+| Codex `app-server-client` transport/client discipline | 可借鉴 typed request、notification drain、lag/disconnect、in-process/stdio/remote client 边界 |
+| Codex `MessageProcessor` / `CodexMessageProcessor` | 不整体迁入；它们绑定 Codex core、auth、account、MCP、plugins、fs、review、dynamic tools、state DB 等产品服务 |
+| Dasclaw execution boundary | 继续通过 `dasclaw_runtime::Agent` 和既有 `ToolExecutor` 执行，不在 app-server 内重写 Agent loop |
+
+因此，下一阶段不是定义一套新的 replacement-client 私有协议，而是建立 `Codex-compatible dasclaw app-server profile`，再把 dasclaw runtime/service 能力映射进去。
+
 ## 1. 一句话边界
 
 `dasclaw_app_server` 是 local service host / GUI control plane，负责把现有 headless runtime 和本地产品服务稳定暴露给 Electron shell。
@@ -76,7 +89,7 @@ Electron / open-cowork shell
 | MCP tools | `crates/dasclaw_mcp` and desktop IPC wrappers | app-server tool registry composition | future `mcp/*` | Phase 1 declared/stub | 不阻塞 initialize/health |
 | Sandbox status | `desktop-client/src/ipc/sandbox.rs` + sandbox crates | app-server platform adapter | future `sandbox/status` | Phase 1 declared/stub | health/status 不等于 agent turn |
 | Logs/audit/reporting | desktop logger / data reporter | app-server local audit service | `log/entry` | Phase 1 可定义 event | 内容必须避免敏感数据泄露 |
-| Codex app-server protocol | `codex-cli-main/codex-rs/app-server-protocol` | reference only | design reference | 不整体搬迁 | 借鉴 request/event/client 形态 |
+| Codex app-server protocol | `codex-cli-main/codex-rs/app-server-protocol` | compatibility reference | Codex-compatible `thread/start`、`turn/start`、`item/*`、`turn/completed` subset | 对齐 wire profile，不整体搬迁 | 借鉴 v2 request/event/schema/client 形态 |
 | Codex app-server processor | `codex-cli-main/codex-rs/app-server` | none | none | 不搬入 Phase 0/1 | goal/thread processor 产品耦合重 |
 
 ## 3. Phase 0/1 最小切片
@@ -121,6 +134,6 @@ Phase 1 才新增 crate，且新增前需要再跑一次三层核验并在 commi
 | Question | Recommended default |
 |---|---|
 | Phase 1 transport 先用什么？ | stdio JSON-RPC for sidecar PoC；保留 Unix socket / named pipe 作为后续 transport |
-| protocol crate 是否复用 `crates/dasclaw_protocol`？ | 先新增 `dasclaw_app_server_protocol`，依赖/复用 `dasclaw_protocol` 的共享模型，避免把 OpenAI/Codex protocol 面直接暴露给 GUI |
+| protocol crate 是否复用 `crates/dasclaw_protocol`？ | `dasclaw_app_server_protocol` 继续拥有 dasclaw 边界类型，但新增 client-facing 能力时优先对齐 Codex app-server v2 wire profile；避免暴露 Codex 产品耦合 processor，而不是避免兼容 Codex method/event 形态 |
 | DLP/policy 什么时候迁移？ | initialize/health/capability skeleton 之后，先迁 local service 状态，再迁 enforcement |
-| Codex app-server 代码是否搬迁？ | 不整体搬；可 selective port protocol/client helper，必须逐块说明产品耦合剥离 |
+| Codex app-server 代码是否搬迁？ | 不整体搬；可 selective port protocol/client/schema/test helper，必须逐块说明产品耦合剥离 |

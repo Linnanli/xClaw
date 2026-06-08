@@ -299,6 +299,8 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
         .map_err(|e| anyhow::anyhow!(e))?;
 
     tracing::info!("AppState injected into EngineState");
+    spawn_app_server_sidecar_startup_smoke();
+    spawn_app_server_sidecar_supervisor_if_enabled();
 
     // ── 初始化默认 LLM Provider ───────────────────────────────────
     // 从 Admin Backend 拉取默认模型，覆盖 .env 里的 fallback 配置。
@@ -581,7 +583,16 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
 
     // ── Phase 9: 运行 Agent ───────────────────────────────────────
     // agent.run() 阻塞直到所有 channel stream 结束或收到 Ctrl+C。
-    if let Err(e) = agent.run().await {
+    let run_result = agent.run().await;
+    let supervisor_status =
+        crate::embedded_server::shutdown_app_server_sidecar_supervisor_if_running().await;
+    tracing::debug!(
+        state = ?supervisor_status.state,
+        restart_count = supervisor_status.restart_count,
+        "App-server sidecar supervisor shutdown complete"
+    );
+
+    if let Err(e) = run_result {
         tracing::error!(error = %e, "Agent exited with error");
         let _ = crate::tauri_channel::emit_chat_stream(
             &app_handle,
@@ -598,6 +609,42 @@ pub async fn start_ironclaw_engine(app_handle: AppHandle) -> anyhow::Result<()> 
 }
 
 // ── 内部辅助函数 ──────────────────────────────────────────────────
+
+fn spawn_app_server_sidecar_startup_smoke() {
+    if !crate::embedded_server::app_server_startup_smoke_enabled() {
+        tracing::debug!(
+            env = crate::embedded_server::APP_SERVER_STARTUP_SMOKE_ENV,
+            "Skipping app-server sidecar startup smoke"
+        );
+        return;
+    }
+
+    tauri::async_runtime::spawn(async {
+        tracing::info!("Starting app-server sidecar startup smoke");
+        match crate::embedded_server::check_app_server_sidecar_stdio().await {
+            Ok(report) => tracing::info!(
+                notifications = report.notification_count,
+                session_status = %report.session_status,
+                runtime_health_status = %report.runtime_health_status,
+                shutdown_state = %report.shutdown_state,
+                "App-server sidecar startup smoke completed"
+            ),
+            Err(error) => tracing::warn!(
+                error = %error,
+                "App-server sidecar startup smoke failed"
+            ),
+        }
+    });
+}
+
+fn spawn_app_server_sidecar_supervisor_if_enabled() {
+    if crate::embedded_server::start_app_server_sidecar_supervisor_if_enabled() {
+        tracing::info!(
+            env = crate::embedded_server::APP_SERVER_SUPERVISOR_ENV,
+            "App-server sidecar supervisor started"
+        );
+    }
+}
 
 /// 将内置 skills 种植到 ironclaw 的 `installed_dir`。
 ///

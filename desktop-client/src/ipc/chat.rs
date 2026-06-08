@@ -10,8 +10,24 @@
 //! - `subscribe_chat_events` — 订阅事件（新架构下为 no-op）
 //! - `unsubscribe_chat_events` — 取消订阅（新架构下为 no-op）
 
+use std::ffi::OsString;
+#[cfg(test)]
+use std::io::BufReader;
+#[cfg(test)]
+use std::process::{Command, Stdio};
 use std::sync::Arc;
+#[cfg(test)]
+use std::time::{Duration, Instant};
 
+#[cfg(test)]
+use dasclaw_app_server_client::LineDelimitedTransport;
+use dasclaw_app_server_client::{AppServerClient, AppServerNotification, InProcessTransport};
+use dasclaw_app_server_protocol::{
+    ClientInfo, InitializeParams, ProtocolVersion, ThreadCreateParams, TransportKind,
+    TurnStartParams, TurnStatus,
+};
+#[cfg(test)]
+use dasclaw_app_server_protocol::{ShutdownParams, ShutdownReason};
 use ironclaw::channels::{AttachmentKind, IncomingAttachment, IncomingMessage};
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
@@ -22,6 +38,12 @@ use crate::safety_attachment_scanner::{AttachmentDecision, AttachmentScanner};
 use crate::safety_bridge::BridgeScanResult;
 use crate::state::EngineState;
 use crate::vercel_ui_protocol::VercelUIStream;
+
+pub const APP_SERVER_CHAT_INPROCESS_PROBE_ENV: &str = "DASCLAW_APP_SERVER_CHAT_INPROCESS_PROBE";
+pub const APP_SERVER_CHAT_SIDECAR_PROBE_ENV: &str = "DASCLAW_APP_SERVER_CHAT_SIDECAR_PROBE";
+pub const APP_SERVER_CHAT_SIDECAR_DISPATCH_ENV: &str = "DASCLAW_APP_SERVER_CHAT_SIDECAR_DISPATCH";
+#[cfg(test)]
+const APP_SERVER_CHAT_SIDECAR_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// 发送消息的响应。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -244,6 +266,18 @@ pub async fn send_chat_message(
         "send_chat_message.record_user_message.end"
     );
 
+    if dispatch_sidecar_app_server_chat_if_enabled(&app_handle, &thread_id, &safe_content).await? {
+        tracing::debug!(
+            message_id = %message_id,
+            thread_id = %thread_id,
+            "Message dispatched through app-server sidecar opt-in path"
+        );
+        return Ok(SendMessageResponse {
+            message_id,
+            success: true,
+        });
+    }
+
     let mut msg = IncomingMessage::new("tauri", &state.scope_id, &safe_content)
         .with_thread(&thread_id)
         .with_owner_id(&state.scope_id);
@@ -280,6 +314,478 @@ pub async fn send_chat_message(
         message_id,
         success: true,
     })
+}
+
+fn probe_in_process_app_server_chat_if_enabled(thread_id: &str, content: &str) {
+    if !app_server_chat_inprocess_probe_enabled_value(std::env::var_os(
+        APP_SERVER_CHAT_INPROCESS_PROBE_ENV,
+    )) {
+        return;
+    }
+
+    if let Err(error) = probe_in_process_app_server_chat(thread_id, content) {
+        tracing::warn!(
+            thread_id,
+            error = %error,
+            "app-server chat in-process probe failed"
+        );
+    }
+}
+
+pub(crate) fn app_server_chat_inprocess_probe_enabled_value(value: Option<OsString>) -> bool {
+    app_server_chat_probe_enabled_value(value)
+}
+
+pub(crate) fn app_server_chat_sidecar_probe_enabled_value(value: Option<OsString>) -> bool {
+    app_server_chat_probe_enabled_value(value)
+}
+
+pub(crate) fn app_server_chat_sidecar_dispatch_enabled_value(value: Option<OsString>) -> bool {
+    app_server_chat_probe_enabled_value(value)
+}
+
+fn app_server_chat_probe_enabled_value(value: Option<OsString>) -> bool {
+    value
+        .and_then(|value| value.into_string().ok())
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+}
+
+async fn dispatch_sidecar_app_server_chat_if_enabled(
+    app_handle: &tauri::AppHandle<impl tauri::Runtime>,
+    thread_id: &str,
+    content: &str,
+) -> Result<bool, String> {
+    if app_server_chat_sidecar_dispatch_enabled_value(std::env::var_os(
+        APP_SERVER_CHAT_SIDECAR_DISPATCH_ENV,
+    )) {
+        dispatch_sidecar_app_server_chat(app_handle, thread_id, content).await?;
+        return Ok(true);
+    }
+
+    probe_in_process_app_server_chat_if_enabled(thread_id, content);
+    probe_sidecar_app_server_chat_if_enabled(app_handle, thread_id, content).await;
+    Ok(false)
+}
+
+async fn dispatch_sidecar_app_server_chat(
+    app_handle: &tauri::AppHandle<impl tauri::Runtime>,
+    thread_id: &str,
+    content: &str,
+) -> Result<(), String> {
+    let report = crate::embedded_server::probe_app_server_sidecar_chat_via_supervisor(
+        thread_id.to_string(),
+        content.to_string(),
+    )
+    .await?;
+    emit_app_server_sidecar_chat_notifications(app_handle, report, true)
+}
+
+async fn probe_sidecar_app_server_chat_if_enabled(
+    app_handle: &tauri::AppHandle<impl tauri::Runtime>,
+    thread_id: &str,
+    content: &str,
+) {
+    if !app_server_chat_sidecar_probe_enabled_value(std::env::var_os(
+        APP_SERVER_CHAT_SIDECAR_PROBE_ENV,
+    )) {
+        return;
+    }
+
+    let thread_id = thread_id.to_string();
+    let content = content.to_string();
+    match crate::embedded_server::probe_app_server_sidecar_chat_via_supervisor(
+        thread_id.clone(),
+        content,
+    )
+    .await
+    {
+        Ok(report) => {
+            if let Err(error) =
+                emit_app_server_sidecar_chat_notifications(app_handle, report, false)
+            {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    error = %error,
+                    "app-server chat sidecar probe UI bridge failed"
+                );
+            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                thread_id = %thread_id,
+                error = %error,
+                "app-server chat sidecar supervisor probe failed"
+            );
+        }
+    }
+}
+
+fn emit_app_server_sidecar_chat_notifications(
+    app_handle: &tauri::AppHandle<impl tauri::Runtime>,
+    report: crate::embedded_server::AppServerSupervisorChatReport,
+    emit_finish: bool,
+) -> Result<(), String> {
+    for event in app_server_sidecar_chat_frames(&report, emit_finish)? {
+        crate::tauri_channel::emit_chat_stream(app_handle, Some(&report.desktop_thread_id), &event)
+            .map_err(|error| error.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn app_server_sidecar_chat_frames(
+    report: &crate::embedded_server::AppServerSupervisorChatReport,
+    emit_finish: bool,
+) -> Result<Vec<VercelUIStream>, String> {
+    let mut text_started = false;
+    let mut accumulated_text = String::new();
+    let mut frames = Vec::new();
+    for notification in report.notifications.clone() {
+        let notification =
+            AppServerNotification::try_from(notification).map_err(|error| error.to_string())?;
+        match notification {
+            AppServerNotification::TurnDelta(event)
+                if event.thread_id == report.app_server_thread_id
+                    && event.turn_id == report.turn_id =>
+            {
+                push_app_server_text_start_if_needed(
+                    &mut frames,
+                    &report.turn_id,
+                    &mut text_started,
+                );
+                frames.push(VercelUIStream::TextDelta {
+                    id: report.turn_id.clone(),
+                    delta: event.delta.clone(),
+                    provider_metadata: None,
+                });
+                accumulated_text.push_str(&event.delta);
+            }
+            AppServerNotification::TurnCompleted(event)
+                if event.thread_id == report.app_server_thread_id
+                    && event.turn_id == report.turn_id =>
+            {
+                let completion_delta =
+                    app_server_completion_delta(&accumulated_text, &event.output);
+                if !completion_delta.is_empty() {
+                    push_app_server_text_start_if_needed(
+                        &mut frames,
+                        &report.turn_id,
+                        &mut text_started,
+                    );
+                    frames.push(VercelUIStream::TextDelta {
+                        id: report.turn_id.clone(),
+                        delta: completion_delta.clone(),
+                        provider_metadata: None,
+                    });
+                    accumulated_text.push_str(&completion_delta);
+                }
+                push_app_server_text_end_if_started(
+                    &mut frames,
+                    &report.turn_id,
+                    &mut text_started,
+                );
+                push_app_server_terminal_frames(
+                    &mut frames,
+                    report,
+                    "completed",
+                    None,
+                    emit_finish,
+                );
+            }
+            AppServerNotification::TurnFailed(event)
+                if event.thread_id == report.app_server_thread_id
+                    && event.turn_id == report.turn_id =>
+            {
+                push_app_server_text_end_if_started(
+                    &mut frames,
+                    &report.turn_id,
+                    &mut text_started,
+                );
+                push_app_server_terminal_frames(
+                    &mut frames,
+                    report,
+                    "failed",
+                    Some(&event.error),
+                    emit_finish,
+                );
+            }
+            AppServerNotification::TurnCancelled(event)
+                if event.thread_id == report.app_server_thread_id
+                    && event.turn_id == report.turn_id =>
+            {
+                push_app_server_text_end_if_started(
+                    &mut frames,
+                    &report.turn_id,
+                    &mut text_started,
+                );
+                push_app_server_terminal_frames(
+                    &mut frames,
+                    report,
+                    "cancelled",
+                    None,
+                    emit_finish,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    Ok(frames)
+}
+
+fn app_server_completion_delta(accumulated_text: &str, completed_output: &str) -> String {
+    if completed_output.is_empty() {
+        return String::new();
+    }
+    if accumulated_text.is_empty() {
+        return completed_output.to_string();
+    }
+    completed_output
+        .strip_prefix(accumulated_text)
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn push_app_server_text_start_if_needed(
+    frames: &mut Vec<VercelUIStream>,
+    turn_id: &str,
+    text_started: &mut bool,
+) {
+    if *text_started {
+        return;
+    }
+    frames.push(VercelUIStream::TextStart {
+        id: turn_id.to_string(),
+        provider_metadata: None,
+    });
+    *text_started = true;
+}
+
+fn push_app_server_text_end_if_started(
+    frames: &mut Vec<VercelUIStream>,
+    turn_id: &str,
+    text_started: &mut bool,
+) {
+    if !*text_started {
+        return;
+    }
+    frames.push(VercelUIStream::TextEnd {
+        id: turn_id.to_string(),
+        provider_metadata: None,
+    });
+    *text_started = false;
+}
+
+fn push_app_server_terminal_frames(
+    frames: &mut Vec<VercelUIStream>,
+    report: &crate::embedded_server::AppServerSupervisorChatReport,
+    status: &str,
+    error: Option<&str>,
+    emit_finish: bool,
+) {
+    let data = serde_json::json!({
+        "type": "app_server_turn",
+        "status": status,
+        "thread_id": report.desktop_thread_id,
+        "app_server_thread_id": report.app_server_thread_id,
+        "turn_id": report.turn_id,
+        "turn_status": report.turn_status,
+        "connection_generation": report.connection_generation,
+        "error": error,
+    });
+    frames.push(VercelUIStream::DataCustom { id: None, data });
+    if emit_finish {
+        frames.push(VercelUIStream::Finish {
+            id: report.turn_id.clone(),
+        });
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn app_server_sidecar_chat_frames_for_test(
+    report: &crate::embedded_server::AppServerSupervisorChatReport,
+    emit_finish: bool,
+) -> Result<Vec<VercelUIStream>, String> {
+    app_server_sidecar_chat_frames(report, emit_finish)
+}
+
+pub(crate) fn probe_in_process_app_server_chat(
+    thread_id: &str,
+    content: &str,
+) -> Result<(), String> {
+    let mut server = dasclaw_app_server::AppServer::new();
+    let transport = InProcessTransport::new(|line: &str| {
+        let response = server.handle_json_rpc(line);
+        if response.is_some() {
+            for _notification in server.drain_json_rpc_notifications() {}
+        }
+        response
+    });
+    let mut client = AppServerClient::new(transport);
+
+    run_typed_app_server_chat_probe(
+        &mut client,
+        "desktop-client-chat-inprocess-probe",
+        thread_id,
+        content,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn probe_sidecar_app_server_chat_with_command(
+    command: &mut Command,
+    thread_id: &str,
+    content: &str,
+) -> Result<(), String> {
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("failed to spawn app-server sidecar: {error}"))?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "app-server sidecar stdin is unavailable".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "app-server sidecar stdout is unavailable".to_string())?;
+    let transport = LineDelimitedTransport::new(BufReader::new(stdout), stdin);
+    let mut client = AppServerClient::new(transport);
+
+    let result = run_sidecar_app_server_chat_probe(&mut client, thread_id, content);
+    drop(client);
+
+    if let Err(error) = result {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(error);
+    }
+
+    wait_for_sidecar_exit(&mut child, APP_SERVER_CHAT_SIDECAR_EXIT_TIMEOUT)
+}
+
+fn run_typed_app_server_chat_probe<T>(
+    client: &mut AppServerClient<T>,
+    client_name: &str,
+    thread_id: &str,
+    content: &str,
+) -> Result<(), String>
+where
+    T: dasclaw_app_server_client::AppServerTransport,
+{
+    client
+        .initialize(InitializeParams {
+            client: ClientInfo {
+                name: client_name.to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                transport: TransportKind::Stdio,
+            },
+            protocol_version: ProtocolVersion::current(),
+            workspace: None,
+            requested_capabilities: vec!["session".to_string()],
+        })
+        .map_err(|error| error.to_string())?;
+
+    let thread = client
+        .thread_create(ThreadCreateParams {
+            title: Some(format!("desktop in-process probe {thread_id}")),
+            workspace_root: None,
+        })
+        .map_err(|error| error.to_string())?;
+    let turn = client
+        .turn_start(TurnStartParams {
+            thread_id: thread.thread_id,
+            prompt: content.to_string(),
+        })
+        .map_err(|error| error.to_string())?;
+
+    if turn.status != TurnStatus::Pending {
+        return Err(format!(
+            "app-server returned unexpected turn status: {:?}",
+            turn.status
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+fn run_sidecar_app_server_chat_probe<T>(
+    client: &mut AppServerClient<T>,
+    thread_id: &str,
+    content: &str,
+) -> Result<(), String>
+where
+    T: dasclaw_app_server_client::AppServerTransport,
+{
+    client
+        .initialize(InitializeParams {
+            client: ClientInfo {
+                name: "desktop-client-chat-sidecar-probe".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                transport: TransportKind::Stdio,
+            },
+            protocol_version: ProtocolVersion::current(),
+            workspace: None,
+            requested_capabilities: vec!["session".to_string()],
+        })
+        .map_err(|error| error.to_string())?;
+
+    let thread = client
+        .thread_create(ThreadCreateParams {
+            title: Some(format!("desktop sidecar probe {thread_id}")),
+            workspace_root: None,
+        })
+        .map_err(|error| error.to_string())?;
+    let turn = client
+        .turn_start(TurnStartParams {
+            thread_id: thread.thread_id,
+            prompt: content.to_string(),
+        })
+        .map_err(|error| error.to_string())?;
+
+    if turn.status != TurnStatus::Pending {
+        return Err(format!(
+            "app-server sidecar returned unexpected turn status: {:?}",
+            turn.status
+        ));
+    }
+
+    client
+        .shutdown(ShutdownParams {
+            reason: Some(ShutdownReason::ClientExit),
+            timeout_ms: Some(1_000),
+        })
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+fn wait_for_sidecar_exit(child: &mut std::process::Child, timeout: Duration) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => {
+                return Err(format!("app-server sidecar exited with {status}"));
+            }
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "app-server sidecar did not exit within {}ms",
+                    timeout.as_millis()
+                ));
+            }
+            Err(error) => return Err(format!("failed to wait for app-server sidecar: {error}")),
+        }
+    }
 }
 
 pub(crate) fn reject_blocked_scan(

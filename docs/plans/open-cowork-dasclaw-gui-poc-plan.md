@@ -149,6 +149,31 @@ flowchart LR
 | 不泄漏内部 | Contract 不暴露 Rust 内部临时结构和 Tauri 专属概念 |
 | 生命周期可靠 | app-server 启动失败、崩溃、版本不兼容都有明确状态 |
 
+### Phase 1 progress sync (2026-06-08)
+
+当前代码状态已经完成了 Phase 1 的一部分基础接线，但还没有进入 Electron 闭环：
+
+| Area | Status | Notes |
+|---|---|---|
+| Protocol / app-server / client crates | implemented | `dasclaw_app_server_protocol`、`dasclaw_app_server`、`dasclaw_app_server_client` 已落地。 |
+| Stdio JSON-RPC transport | implemented | 当前 PoC 先以 line-delimited stdio JSON-RPC 作为默认 transport。 |
+| Runtime bridge boundary | implemented | App-server 已能通过 `RuntimeBridge` 复用 `dasclaw_runtime::Agent`，并发出 `turn/delta` / `turn/completed` / `turn/failed`。 |
+| Thread / turn contract | implemented | `thread/*`、`turn/*` 已有可运行的 app-server contract，包含初始化守卫、取消、shutdown 语义和 schema/router consistency guard。 |
+| Legacy desktop diagnostics | implemented | `desktop-client` 已有 sidecar stdio smoke helper、启动时 opt-in smoke、`ic_app_server_status` 命令与前端诊断入口；诊断状态也会上报 supervisor state/restart/connection generation/health。 |
+| App-server lifecycle manager | partial | 已有 desktop opt-in sidecar supervisor lifecycle，覆盖常驻 spawn、health loop、shutdown、失败 restart/backoff、connection generation 和 supervisor-owned chat probe/dispatch 队列；transport 失败时可在重启并重新 initialize 后重放 pending chat command。Electron main 接入、active turn durable recovery 和默认主聊天接入仍在后续切片。 |
+| Chat stream contract mapping | partial | app-server 已能发 turn delta/completed/failed；`send_chat_message` 已有 opt-in in-process probe、supervisor-owned stdio sidecar probe 与实验性 `DASCLAW_APP_SERVER_CHAT_SIDECAR_DISPATCH=1`；匹配的 sidecar turn delta/terminal 通知（含 response 后 delayed runtime notifications）会桥接到现有 `chat-stream` compat 帧。probe 不发 `Finish`，dispatch 发 `Finish` 并跳过 legacy `msg_sender`；默认聊天执行仍走 legacy Agent loop。 |
+| Codex-compatible client readiness | partial | 后续客户端会直接消费 app-server protocol，且 open-cowork 基座已有 Codex app-server 消费模型；当前阶段优先补 Codex v2 compatibility profile 与 app-server integration tests，而不是继续深接旧 desktop UI 或发明 dasclaw-only replacement-client contract。第一批 direct JSON-RPC turn lifecycle integration tests 已覆盖 multi-delta completed、runtime failed、pending cancel；line-delimited client 已覆盖 response-first completed/failed/cancelled typed notifications。旧 UI adapter 保留为 opt-in smoke/diagnostics 层。 |
+| Approval / diff / DLP contract | not started | 这些仍停留在总体计划层，没有迁入 app-server contract 主线。 |
+
+因此，Phase 1 当前可以认为：
+
+- `P1-2`、`P1-5`、`P1-7` 已基本落地到代码与协议。
+- `P1-8` 已完成 `spawn/smoke/ready/health/shutdown/version check`，并补上 desktop opt-in supervisor lifecycle 的 `restart/backoff`、连接 generation、诊断上报、supervisor-owned chat probe/dispatch 队列，以及 transport 失败后的 pending chat command reconnect replay 骨架；Electron main 接入和 active turn durable recovery 仍留到后续切片。
+- 主聊天路径已补 `DASCLAW_APP_SERVER_CHAT_INPROCESS_PROBE=1`、`DASCLAW_APP_SERVER_CHAT_SIDECAR_PROBE=1` 与实验性 `DASCLAW_APP_SERVER_CHAT_SIDECAR_DISPATCH=1`，用 app-server client 验证 in-process 和 supervisor-owned stdio sidecar 的 `thread/create -> turn/start` 合约；sidecar probe 已能把本轮 `turn/delta` / terminal 通知映射到不含 `Finish` 的 `chat-stream` compat 帧，dispatch 模式会发 `Finish` 并跳过 legacy `msg_sender`，默认 Agent loop 接管仍留到后续切片。
+- 因后续会换新客户端，旧 desktop UI 接线不再作为主验证面；后续优先把协议、runtime bridge、streaming、cancel/failure/reconnect 边界沉淀为 app-server integration tests。由于 open-cowork 的客户端基座接入 Codex app-server 能力，新客户端 contract 应先做 Codex v2 compatibility profile，再让 dasclaw runtime bridge 适配它，而不是另起一套 replacement-client 私有协议。第一批 app-server JSON-RPC integration tests 已覆盖 `initialize -> thread/create -> turn/start` 的 multi-delta completed、runtime failed 和 pending cancel 路径，并补上 line-delimited client response-first terminal notification 覆盖。
+- `P1-3`、`P1-4` 只完成了 session/turn 流的一部分，尚未覆盖 approval、diff、tool call、plan 等完整 UI contract。
+- `P1-1`、`P1-6` 仍未形成完整的 `DasclawRuntimeClient` / approval runtime contract 闭环。
+
 ### Phase 2：最小 Electron 壳子体验验证
 
 目标：验证 Electron 壳与 Rust app-server 能形成最小产品闭环。
@@ -339,22 +364,25 @@ PoC 结束时，不以“写了多少代码”为成功标准，而以能否回�
 
 | Issue | 标题 | 范围 |
 |---|---|---|
-| A | `Define DasclawRuntimeClient contract for Electron shell` | 先抽 Electron 可消费的 runtime contract |
-| B | `Map current desktop-client capabilities to app-server contracts` | 从 `all_tauri_commands!()` 拆 capability groups |
-| C | `Build Rust app-server lifecycle manager` | spawn / health / restart / shutdown / version check |
-| D | `Spike open-cowork Electron shell with dasclaw app-server` | 验证 Electron 壳闭环 |
-| E | `Electron replacement implementation decision record` | 用 PoC 证据决定替换实施顺序 |
+| A | `Add app-server integration tests for turn lifecycle` | `initialize -> thread/create -> turn/start`、post-response notifications、completed/failed/cancelled |
+| B | `Harden app-server transport contract tests` | in-process/stdio client、unexpected id、JSON-RPC error、protocol error、timeout、reconnect boundary |
+| C | `Define Codex-compatible app-server profile` | 最小 `initialize` / `thread/start` / `turn/start` / `item/*` / `turn/completed` / error schema，对比当前 v0 alias/差异 |
+| D | `Add Codex-compatible contract fixtures` | 用 app-server integration tests 固定 Thread / Turn / Item wire shape，不依赖旧 desktop UI |
+| E | `Map current desktop-client capabilities to app-server contracts` | 从 `all_tauri_commands!()` 拆 capability groups，标记哪些进新客户端 |
+| F | `Spike open-cowork Electron shell with dasclaw app-server` | 验证 Electron 壳消费 Codex-compatible dasclaw app-server |
+| G | `Electron replacement implementation decision record` | 用 PoC 证据决定替换实施顺序 |
 
 ## 11. 第一周建议执行顺序
 
 | 顺序 | 任务 | 预期结果 |
 |---|---|---|
-| 1 | 从 `all_tauri_commands!()` 拆 capability groups | 明确当前能力边界 |
-| 2 | 写 `DasclawRuntimeClient` 最小接口草案 | Electron shell 有稳定目标 |
-| 3 | 明确 app-server transport 与 lifecycle | Electron main 不直接绑临时 CLI stdout |
-| 4 | 固定 Electron PoC 目录和构建方式 | 避免污染当前 `desktop-client` |
-| 5 | 打通 Electron shell 的 stream / approval / diff 展示 | 得到最小产品闭环 |
-| 6 | 写第一版 Electron replacement 决策记录 | 明确替换实施顺序和保留能力 |
+| 1 | 定义 Codex v2 compatibility profile | 先确定 dasclaw 对 `thread/start`、`turn/interrupt`、`item/agentMessage/delta`、`turn/completed` 的兼容策略 |
+| 2 | 补 Codex-compatible Thread / Turn / Item contract fixtures | 新客户端前先固定核心 wire shape |
+| 3 | 补 app-server turn lifecycle integration tests | completed/failed/cancelled/multi-delta 都由 app-server contract 覆盖 |
+| 4 | 补 runtime bridge fake/test integration matrix | 保持 Agent loop / ToolExecutor 委托给 `dasclaw_runtime` |
+| 5 | 补 stdio/in-process transport contract tests | transport 和 JSON-RPC 边界可独立验证 |
+| 6 | 从 `all_tauri_commands!()` 拆 capability groups | 明确哪些能力迁入 app-server / 新客户端 |
+| 7 | 固定 Electron/open-cowork shell 的 lifecycle 接线 | 只消费已测 Codex-compatible app-server contract |
 
 ## 12. 与既有文档的关系
 

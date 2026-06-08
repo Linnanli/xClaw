@@ -961,6 +961,34 @@ export interface AppInitInfo {
   log_level: string;
 }
 
+export interface AppServerSmokeReport {
+  notificationCount: number;
+  sessionStatus: string;
+  runtimeHealthStatus: string;
+  shutdownState: string;
+}
+
+export interface AppServerStatusReport {
+  binary: string;
+  startupSmokeEnabled: boolean;
+  supervisorEnabled: boolean;
+  supervisor: {
+    state: string;
+    restartCount: number;
+    notificationCount: number;
+    runtimeHealthStatus?: string;
+    lastError?: string;
+  };
+  smokeRun: boolean;
+  smoke?: AppServerSmokeReport;
+  error?: string;
+}
+
+export const appServerApi = {
+  getStatus: (runSmoke = false): Promise<AppServerStatusReport> =>
+    invokeTauri<AppServerStatusReport>('ic_app_server_status', { runSmoke }),
+};
+
 export const appApi = {
   getAppInitInfo: async (): Promise<AppInitInfo> => ({
     auth_token: 'embedded-token',

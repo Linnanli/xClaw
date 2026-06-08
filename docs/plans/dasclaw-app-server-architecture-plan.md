@@ -1,7 +1,7 @@
 # Dasclaw App Server 架构与实施计划
 
-> 状态：草案  
-> 日期：2026-06-06  
+> 状态：更新至 2026-06-08 runtime bridge / sidecar diagnostics
+> 日期：2026-06-08
 > 目标：在迁移 Electron / open-cowork 客户端壳之前，先把当前 `desktop-client` 后端能力、无头 agent framework、未来 `dasclaw_app_server` 的边界理清楚，避免把 Tauri 时代的脏边界复制到新客户端。
 
 ## 0. 过程透明记录
@@ -912,7 +912,7 @@ app-server 完成时至少满足：
 | P1-5 protocol version / capability matrix | 已完成 skeleton | `dasclaw_app_server_protocol::CapabilityMatrix::phase_one()` |
 | JSON-RPC router | 已完成 in-process line payload router | `AppServer::handle_json_rpc` |
 | stdio sidecar loop | 已完成 line-delimited skeleton | `dasclaw_app_server` binary |
-| lifecycle/capability notifications | 已完成 response 后逐行输出 skeleton | `ServerNotification` + `AppServer::drain_json_rpc_notifications` |
+| lifecycle/capability notifications | 已完成 line-delimited notification 输出 skeleton | `ServerNotification` + `AppServer::drain_json_rpc_notifications` |
 | notification bus | 已完成最小内存队列 skeleton | `NotificationBus` |
 | capability handler consistency | 已补测试防止 implemented method 虚报 | `implemented_capability_methods_are_routable` |
 | method/event string constants | 已完成协议常量收敛，降低 GUI/router/capability matrix 漂移 | `dasclaw_app_server_protocol::{method,event}` |
@@ -935,7 +935,7 @@ app-server 完成时至少满足：
 | approval orchestration | 未做 |
 | DLP/policy local service | 未做 |
 | jobs/routines/skills/MCP/sandbox 接入 | 未做 |
-| Electron sidecar supervisor | 未做 |
+| Desktop sidecar supervisor helper | 已补启动、health loop、shutdown、restart/backoff helper（落点：`desktop-client/src/embedded_server.rs`） |
 
 当前实现仍遵守 Phase 0/1 约束：app-server 是 local service host / GUI control plane，不重新实现 `AgenticLoop` / `ToolExecutor`，也不复制 Tauri-specific state。
 
@@ -958,7 +958,7 @@ Completed in the Phase 1 skeleton slice:
 | Area | Status | Notes |
 |---|---|---|
 | Initialize lifecycle sequence | implemented | `initialize` now emits `starting -> initializing -> ready` lifecycle notifications before capability refresh. |
-| Stdio notification ordering | implemented | The stdio sidecar loop preserves response-first output, followed by lifecycle notifications and `capabilities/changed`. |
+| Stdio notification ordering | implemented | The stdio sidecar loop emits pending same-round-trip notifications before the matching response and keeps draining runtime notifications after the response during the EOF/idle window. |
 
 Still out of scope for this slice: runtime Agent bridge, ToolExecutor, session/thread host, approval orchestration, DLP/policy migration, jobs, skills, MCP, sandbox, and Electron sidecar supervision.
 
@@ -1061,6 +1061,8 @@ Completed in the Phase 1 skeleton slice:
 
 Still out of scope for this slice: runtime Agent bridge, ToolExecutor, session/thread host, approval orchestration, DLP/policy migration, jobs, skills, MCP, sandbox, and Electron sidecar supervision.
 
+Historical note: the Phase 1 / 1.5 slices below preserve the 2026-06-07 checkpoint narrative. Where a line conflicts with the current implementation, the 2026-06-08 Phase 1.6 sync later in this document is authoritative.
+
 ### Phase 1 status sync: thread and turn interface skeletons (2026-06-07)
 
 Completed in the Phase 1 skeleton slice:
@@ -1068,9 +1070,9 @@ Completed in the Phase 1 skeleton slice:
 | Area | Status | Notes |
 |---|---|---|
 | Thread create skeleton | implemented | Added `thread/create` params/response schema and app-server route returning structured `CAPABILITY_UNAVAILABLE`. Superseded in Phase 1.5 by in-memory thread creation. |
-| Turn start skeleton | implemented | Added `turn/start` params/response schema and app-server route returning structured `CAPABILITY_UNAVAILABLE`; no runtime Agent bridge is wired. |
-| Turn cancel skeleton | implemented | Added `turn/cancel` params/response schema and app-server route returning structured `CAPABILITY_UNAVAILABLE`; no turn cancellation host is wired. |
-| Session capability contract | implemented | `session` remains `declared`, with thread/turn methods and events visible for protocol review without claiming runtime support. |
+| Turn start skeleton | implemented | Added `turn/start` params/response schema and initial router shape. Superseded in Phase 1.6 by runtime-backed pending turn creation through `RuntimeBridge`. |
+| Turn cancel skeleton | implemented | Added `turn/cancel` params/response schema and initial router shape. Superseded in Phase 1.6 by runtime-aware cancellation routing through `RuntimeBridge`. |
+| Session capability contract | implemented | Historical Phase 1 snapshot kept session as `declared`; superseded in Phase 1.6 by `session=implemented` with runtime-backed turn notifications. |
 
 Still out of scope for this slice: runtime Agent bridge, ToolExecutor, real session/thread host, approval orchestration, DLP/policy migration, jobs, skills, MCP, sandbox, and Electron sidecar supervision.
 
@@ -1082,7 +1084,7 @@ Completed in the Phase 1.5 follow-up slice:
 |---|---|---|
 | Client crate | implemented | Added `crates/dasclaw_app_server_client` as a minimal JSON-RPC client helper crate. |
 | In-process transport | implemented | Added closure-backed in-process transport for legacy adapter/tests without spawning a sidecar process. |
-| Line-delimited stdio transport | implemented | Added stdio JSONL transport that writes one request per line and skips notifications until the matching response id. |
+| Line-delimited stdio transport | implemented | Added stdio JSONL transport that writes one request per line, collects JSON-RPC notifications before the matching response id, can explicitly read post-response notifications for streaming turns, and fails fast on an unexpected response id in the current single-flight client. |
 | Typed client helpers | implemented | Added typed helpers for initialize, health, capabilities, lifecycle, schema, shutdown, and thread/turn skeleton methods. |
 
 Still out of scope for this slice: Electron process supervision, async background reader, reconnect logic, runtime Agent bridge, ToolExecutor, real session/thread host, approval orchestration, DLP/policy migration, jobs, skills, MCP, and sandbox.
@@ -1095,7 +1097,7 @@ Completed in the Phase 1.5 follow-up slice:
 |---|---|---|
 | In-memory thread host | implemented | Added a minimal `SessionThreadHost` that allocates stable local `thread_N` ids and stores thread metadata in memory. |
 | `thread/create` route | implemented | `thread/create` now returns `ThreadCreateResponse` and emits `thread/created` instead of returning `CAPABILITY_UNAVAILABLE`. |
-| Turn boundary | unchanged | `turn/start` and `turn/cancel` remain routable skeleton methods returning `CAPABILITY_UNAVAILABLE`; no runtime Agent bridge is wired. |
+| Turn boundary | historical | This Phase 1.5 snapshot stopped at in-memory routing. Superseded in Phase 1.6 by runtime bridge start/cancel wiring plus streamed turn updates. |
 
 Still out of scope for this slice: runtime Agent bridge, ToolExecutor, durable thread persistence, turn execution, approval orchestration, DLP/policy migration, jobs, skills, MCP, sandbox, and Electron sidecar supervision.
 
@@ -1119,7 +1121,7 @@ Completed in the Phase 1.5 follow-up slice:
 |---|---|---|
 | Turn initialize guard | implemented | `turn/start` and `turn/cancel` now enforce initialize before reaching the skeleton unavailable path. |
 | Thread existence guard | implemented | Turn methods validate `threadId` against the in-memory thread host and return `INVALID_PARAMS` for unknown threads. |
-| Runtime boundary | unchanged | Existing-thread turn methods still return `CAPABILITY_UNAVAILABLE`; no runtime Agent bridge or turn execution is wired. |
+| Runtime boundary | historical | Existing-thread turn methods no longer stop at `CAPABILITY_UNAVAILABLE`; see the 2026-06-08 runtime bridge status sync below. |
 
 Still out of scope for this slice: runtime Agent bridge, ToolExecutor, durable thread persistence, turn execution, approval orchestration, DLP/policy migration, jobs, skills, MCP, sandbox, and Electron sidecar supervision.
 
@@ -1142,8 +1144,8 @@ Completed in the Phase 1.5 follow-up slice:
 | Area | Status | Notes |
 |---|---|---|
 | In-memory turn host | implemented | Added minimal in-memory `TurnRecord` storage with `pending` and `cancelled` statuses; raw prompts are not persisted. |
-| `turn/start` route | implemented | Existing-thread `turn/start` now creates a pending in-memory turn and emits `turn/started`; no runtime Agent bridge or model provider is wired. |
-| `turn/cancel` route | implemented | Known pending turns can be marked cancelled and emit `turn/cancelled`; unknown turns return `INVALID_PARAMS`. |
+| `turn/start` route | implemented | Historical Phase 1.5 slice created pending in-memory turns; superseded in Phase 1.6 by `RuntimeBridge::start_turn` plus streamed runtime updates. |
+| `turn/cancel` route | implemented | Historical Phase 1.5 slice marked pending turns cancelled locally; superseded in Phase 1.6 by runtime-aware cancellation and terminal-turn guards. |
 | Client typed helpers | updated | Existing `turn_start` and `turn_cancel` helpers now decode successful in-memory turn responses. |
 
 Still out of scope for this slice: runtime Agent bridge, ToolExecutor, model/provider execution, durable turn persistence, prompt/message history, approval orchestration, DLP/policy migration, jobs, skills, MCP, sandbox, and Electron sidecar supervision.
@@ -1157,7 +1159,7 @@ Completed in the Phase 1.5 follow-up slice:
 | `turn/list` route | implemented | Added initialize-guarded in-memory turn listing for known threads. |
 | `turn/read` route | implemented | Added initialize-guarded read of a known in-memory turn summary; unknown turns return `INVALID_PARAMS`. |
 | Client typed helpers | implemented | Added `turn_list` and `turn_read` helpers to `dasclaw_app_server_client`. |
-| Prompt/data boundary | preserved | Turn summaries expose ids and status only; raw prompts and model output are not stored or returned by the skeleton. |
+| Prompt/data boundary | historical | Raw prompts are still not persisted, but Phase 1.6 now allows completed/failed turn summaries to expose `output` / `error` from runtime updates. |
 
 Still out of scope for this slice: runtime Agent bridge, ToolExecutor, model/provider execution, durable turn persistence, prompt/message history, approval orchestration, DLP/policy migration, jobs, skills, MCP, sandbox, and Electron sidecar supervision.
 
@@ -1179,8 +1181,8 @@ Completed in the Phase 1.5 follow-up slice:
 
 | Area | Status | Notes |
 |---|---|---|
-| Session health service | implemented | Added `session` to `ServiceName` and reports it as `degraded` while only the in-memory session host is available. |
-| No capability overclaim | preserved | Health explicitly distinguishes local in-memory thread/turn bookkeeping from runtime Agent-backed turn execution. |
+| Session health service | implemented | Historical Phase 1.5 slice reported `session=degraded`. Superseded in Phase 1.6 by `session=ready` and `runtime=degraded` when the default host still needs a runtime adapter. |
+| No capability overclaim | preserved | Health still distinguishes session bookkeeping from runtime adapter readiness; the degraded service moved from `session` to `runtime`. |
 | Protocol documentation | implemented | Updated health schema and Phase 1 health expectations with session degraded semantics. |
 
 Still out of scope for this slice: runtime Agent bridge, ToolExecutor, model/provider execution, durable turn persistence, prompt/message history, approval orchestration, DLP/policy migration, jobs, skills, MCP, sandbox, and Electron sidecar supervision.
@@ -1233,21 +1235,136 @@ This section consolidates the current app-server skeleton state before moving in
 | [x] | Self-check smoke | `--self-check` runs initialize, health/capability/schema probes, and in-memory thread/turn smoke. |
 | [x] | Guard semantics | Session/turn methods distinguish pre-initialize retryable errors from stopped non-retryable errors. |
 | [x] | Schema consistency guards | Protocol schema methods are checked against implemented capability methods and app-server router support. |
+| [x] | Runtime bridge boundary | `AppServer` accepts an injectable `RuntimeBridge`; the default host is `NoopRuntimeBridge`, and `DasclawAgentRuntimeBridge` delegates to `dasclaw_runtime::Agent`. |
+| [x] | Runtime-backed turn streaming | `turn/start` invokes the runtime bridge, turn updates emit `turn/delta` / `turn/completed` / `turn/failed`, and turn summaries may carry `output` / `error`. |
+| [x] | Runtime-aware cancellation/shutdown | `turn/cancel` routes through the runtime bridge and shutdown cancels pending runtime turns before stopping the lifecycle. |
+| [x] | Desktop sidecar smoke helpers | `desktop-client` can spawn `dasclaw-app-server`, run initialize/health/capabilities/shutdown over stdio, and parse the probe transcript. |
+| [x] | Desktop diagnostics entry | `ic_app_server_status(run_smoke)` and the Settings "诊断" entry expose binary config, optional smoke results, and current supervisor status to the GUI. |
+| [x] | Desktop sidecar supervisor lifecycle | `desktop-client` can opt into a long-lived sidecar supervisor through `DASCLAW_APP_SERVER_SUPERVISOR=1`; the helper covers spawn, initialize, recurring `health/check`, shutdown coordination, dropped-handle shutdown, and bounded restart/backoff behavior. |
+| [x] | Desktop chat in-process probe | `send_chat_message` can opt into `DASCLAW_APP_SERVER_CHAT_INPROCESS_PROBE=1`, run an in-process app-server client initialize/thread/create/turn/start probe, and still dispatch the real message through the legacy Agent loop. |
 
 ### Explicit non-goals still preserved
 
 | Area | Status |
 |---|---|
-| Runtime Agent bridge | Not wired in this skeleton. |
+| Runtime Agent bridge | Implemented at the app-server boundary, but the desktop chat path is not switched end to end to app-server yet. |
 | ToolExecutor / tool registry | Not reimplemented or wired in app-server. |
-| Model/provider execution | Not wired. |
+| Model/provider execution | No dedicated app-server model service is wired; runtime-backed turn execution only works when a real agent/responder is injected. |
 | Prompt/message history | Not stored or returned by the skeleton. |
 | Durable thread/turn persistence | Not implemented. |
 | Approval orchestration | Not implemented. |
 | DLP/policy local service | Not migrated. |
 | Jobs/routines/skills/MCP/sandbox | Not migrated. |
-| Electron sidecar supervisor | Not implemented. |
-| Async process-spawn client/reconnect logic | Not implemented. |
+| Electron sidecar supervisor | Desktop lifecycle wiring exists; Electron main/open-cowork integration remains a follow-up. |
+| Async process-spawn client/reconnect logic | Restart/backoff lifecycle exists, and supervisor-owned chat commands now have a minimal reconnect replay skeleton for transport failures. Durable active-turn recovery remains a follow-up. |
+| Desktop chat execution through app-server | Not switched end to end by default; only opt-in probe/dispatch paths exercise the app-server client contract before or instead of legacy dispatch. |
+
+### Phase 1.6 status sync: runtime bridge and streamed turn execution (2026-06-08)
+
+Completed in the Phase 1.6 follow-up slice:
+
+| Area | Status | Notes |
+|---|---|---|
+| Runtime bridge boundary | implemented | Added `RuntimeBridge`, `RuntimeTurnUpdateSink`, `NoopRuntimeBridge`, and `DasclawAgentRuntimeBridge`; the real bridge constructs `dasclaw_runtime::Agent` without reimplementing the agent loop or `ToolExecutor`. |
+| Session capability status | implemented | `session` is now advertised as `implemented`, with thread/turn methods plus `turn/delta`, `turn/completed`, `turn/failed`, and `turn/cancelled` events. |
+| Runtime-backed turn execution | implemented | `turn/start` allocates a pending turn, invokes `RuntimeBridge::start_turn`, and later applies async delta/completion/failure updates into the turn host. |
+| Runtime-aware cancellation | implemented | `turn/cancel` drains pending updates, rejects already terminal turns, and routes cancellation through `RuntimeBridge::cancel_turn` before recording `cancelled`. |
+| Shutdown semantics | implemented | `shutdown` drains pending runtime updates, calls `runtime_bridge.shutdown()`, cancels pending turns, and emits `turn/cancelled` before transitioning lifecycle to `stopped`. |
+| Health semantics | updated | `session` now reports `ready`; `runtime` is the degraded service when the default host still requires a runtime adapter. |
+
+Still out of scope for this slice: ToolExecutor wiring, approval orchestration, DLP/policy migration, jobs, skills, MCP, sandbox, durable persistence, and desktop end-to-end chat switching to app-server.
+
+### Phase 1.6 status sync: desktop sidecar smoke and diagnostics (2026-06-08)
+
+Completed in the Phase 1.6 follow-up slice:
+
+| Area | Status | Notes |
+|---|---|---|
+| Stdio sidecar smoke helper | implemented | `desktop-client` can spawn the configured `dasclaw-app-server` binary, send initialize/health/capabilities/shutdown requests, and parse the stdio transcript. |
+| Startup smoke gate | implemented | `engine.rs` now supports opt-in startup smoke through `DASCLAW_APP_SERVER_STARTUP_SMOKE`, logging success or failure without blocking normal startup. |
+| Diagnostics Tauri command | implemented | Added `ic_app_server_status(run_smoke)` to expose binary path, startup smoke flag, current supervisor status, and optional smoke results without forcing sidecar launch by default. |
+| Frontend diagnostics entry | implemented | Settings "诊断" page now shows app-server binary/config state, supervisor status, and lets the user explicitly run a smoke probe. |
+
+### Phase 1.6 status sync: desktop sidecar supervisor lifecycle (2026-06-08)
+
+Completed in this follow-up slice:
+
+| Area | Status | Notes |
+|---|---|---|
+| Sidecar supervisor helper | implemented | Added `spawn_app_server_sidecar_supervisor` with configurable binary/args, initialize handshake, recurring `health/check`, status snapshot, and explicit shutdown. |
+| Desktop opt-in lifecycle | implemented | `engine.rs` starts the supervisor when `DASCLAW_APP_SERVER_SUPERVISOR=1` is set and shuts it down after the legacy Agent loop exits. |
+| Diagnostics status | implemented | `ic_app_server_status(run_smoke)` reports whether the supervisor env gate is enabled plus state, restart count, connection generation, notification count, runtime health, and last error. |
+| Restart/backoff | implemented | Startup and health failures move through `Restarting` and retry up to `max_restarts` before `Failed`. |
+| Reconnect replay skeleton | implemented | If the supervisor-owned sidecar stdio transport fails while handling a queued chat command, the command is held, the replacement sidecar is spawned and initialized, and the command is replayed on the next connection generation. Explicit app-server JSON-RPC errors, request timeouts, and protocol/shape errors are returned to the caller without restarting or replaying the command. |
+| Shutdown coordination | implemented | Explicit `shutdown()` sends app-server `shutdown`; dropped handles are also treated as shutdown so detached supervisor tasks do not spin. |
+| Supervisor tests | implemented | Covered env gating, global one-shot start/status/shutdown, ready+shutdown, repeated start failure, dropped-handle shutdown, reconnect replay, JSON-RPC command errors, and protocol errors that must not replay with shell-backed sidecar fixtures. |
+
+Still out of scope for this slice: durable recovery of active turns after restart, default routing of real chat traffic through the app-server client, and Electron main/open-cowork lifecycle integration.
+
+### Phase 1.6 status sync: desktop chat app-server probes (2026-06-08)
+
+Completed in this follow-up slice:
+
+| Area | Status | Notes |
+|---|---|---|
+| Chat opt-in gates | implemented | Added `DASCLAW_APP_SERVER_CHAT_INPROCESS_PROBE=1` for in-process probing and `DASCLAW_APP_SERVER_CHAT_SIDECAR_PROBE=1` for real stdio sidecar probing; default `send_chat_message` behavior remains unchanged. |
+| App-server client probe | implemented | The opt-in diagnostic path uses `dasclaw_app_server_client::AppServerClient` with in-process `InProcessTransport` to run `initialize`, `thread/create`, and `turn/start`; it does not connect to the sidecar supervisor. |
+| Stdio sidecar chat probe | implemented | The sidecar probe now reuses the supervisor-owned long-lived stdio sidecar session, queues `thread/create -> turn/start` through the supervisor connection holder, and does not spawn a one-shot sidecar from `send_chat_message`. |
+| Chat-stream compat bridge | partial | The sidecar probe translates matching app-server `turn/delta` and terminal turn notifications, including post-response delayed runtime notifications, into the existing `chat-stream` / `VercelUIStream` text lifecycle for opt-in diagnostics. It deliberately does not emit `Finish`, so the probe cannot close the legacy chat stream before the legacy Agent loop responds. |
+| Opt-in sidecar dispatch | partial | Added `DASCLAW_APP_SERVER_CHAT_SIDECAR_DISPATCH=1` as an experimental switch that sends the sanitized text prompt through the supervisor-owned app-server sidecar and skips legacy `msg_sender` dispatch. Dispatch mode emits `Finish`; default behavior remains legacy. |
+| Legacy dispatch preservation | implemented | After the in-process probe, `send_chat_message` still enqueues the sanitized message through the existing `msg_sender`, so DLP, skill detection, history recording, Agent loop, and ToolExecutor remain in the legacy path. Probe failures are logged and do not block this dispatch. |
+| Probe/dispatch tests | implemented | Tests cover env gating, in-process and stdio app-server client thread/turn contracts, supervisor-owned sidecar routing, strict method/params matching, delayed turn delta UI frame mapping, chat-stream envelope thread routing, shutdown transcript verification, JSON-RPC command errors preserving legacy `msg_sender`, probe mode preserving legacy `msg_sender`, and dispatch mode skipping legacy `msg_sender` on both success and app-server failure. |
+
+Still out of scope for this slice: promoting sidecar dispatch into the default chat execution path, durable recovery of active chat state after supervisor restart, attachments/prompt history persistence, durable thread/turn persistence, and the full approval/diff/tool-call/plan UI contract.
+
+### Phase 1.7 planning update: integration-first before new client (2026-06-08)
+
+The next client is expected to consume the app-server protocol directly, so the remaining desktop `chat-stream` wiring should stay thin and opt-in. The old desktop UI adapter is useful for smoke coverage and diagnostics, but it should not become the primary place where new app-server behavior is specified.
+
+Cross-project check against `codex-cli-main` and the open-cowork/Electron app-server consumer path changes the next planning target: the replacement client should not receive a new dasclaw-only contract first. It should receive a **Codex app-server v2 compatibility profile** backed by dasclaw runtime execution. Codex app-server is a useful reference for protocol shape, schema discipline, typed client behavior, in-process/stdio/remote transports, and Thread / Turn / Item event semantics. Codex `message_processor` and `codex_message_processor` remain reference-only because they are coupled to Codex core services, auth/account, thread manager, config, fs, MCP, plugins, review, dynamic tools, and other product-specific services.
+
+Verified compatibility anchors:
+
+| Anchor | Codex reference | Dasclaw implication |
+|---|---|---|
+| Request model | `ClientRequest` variants such as `thread/start`, `thread/read`, `turn/start`, `turn/interrupt`, `turn/steer` | Add a compatibility decision slice before client work; do not extend `thread/create` / `turn/cancel` as the only new-client surface. |
+| Event model | `ServerNotification` variants such as `thread/started`, `turn/started`, `item/started`, `item/agentMessage/delta`, `item/completed`, `turn/completed` | Move new streaming tests toward item-level notifications; keep `turn/delta` for transitional diagnostics. |
+| Client lifecycle | `initialize` plus client `notifications/initialized`, capability opt-outs, bounded event queues, lag/disconnect signaling | Evaluate acknowledgement and notification opt-out support in dasclaw compatibility fixtures. |
+| Reverse request model | approval, user input, dynamic tool call, auth refresh request variants | Reserve this as the future approval/tool UI contract; do not migrate it in the current app-server-only slice. |
+| Processor boundary | Codex `MessageProcessor` / `CodexMessageProcessor` | Do not port wholesale; keep execution delegated through `dasclaw_runtime::Agent` and existing runtime bridge. |
+
+Recommended validation center for the next slice:
+
+| Priority | Area | Scope |
+|---|---|---|
+| P0 | Codex compatibility profile | Define the minimal method/event subset needed by open-cowork: `initialize`, `thread/start`, `thread/read`, `turn/start`, `turn/interrupt`, `item/started`, `item/agentMessage/delta`, `item/completed`, `turn/completed`, and `error`. |
+| P0 | Compatibility fixture tests | Add JSON fixtures or golden tests that compare dasclaw app-server wire shape against the Codex-compatible subset before adding new client UI. |
+| P0 | App-server integration tests | Cover `initialize -> thread/create -> turn/start`, post-response notifications, `turn/delta`, `turn/completed`, `turn/failed`, and `turn/cancelled` without depending on the legacy desktop UI. |
+| P0 | Runtime bridge contract tests | Use fake/test runtime bridges to drive delta/completed/failed/cancelled paths while keeping Agent loop and ToolExecutor delegated to `dasclaw_runtime`. |
+| P0 | Transport contract tests | Exercise in-process and line-delimited stdio client behavior, including JSON-RPC errors, unexpected ids, protocol errors, timeouts, and post-response notification drain. |
+| P1 | Old UI smoke adapter | Keep Settings diagnostics and opt-in `DASCLAW_APP_SERVER_CHAT_SIDECAR_DISPATCH=1`; only assert the minimal `chat-stream` compat contract needed for smoke runs. |
+| P1 | Reconnect boundary | Keep pending-command replay only for clear transport failures; leave durable active-turn recovery for a later persistence slice. |
+
+Do not expand the old UI adapter into the source of truth for approval, diff, tool-call, plan, or durable thread semantics. Those contracts should be specified and tested at the app-server protocol/integration layer first, then consumed by the replacement client.
+
+First integration-test slice completed:
+
+| Area | Status | Notes |
+|---|---|---|
+| JSON-RPC turn lifecycle integration | implemented | Added direct app-server JSON-RPC tests for `initialize -> thread/create -> turn/start` with multi-delta completion, runtime failure, and pending turn cancellation. |
+| Runtime bridge fake matrix | partial | Added a sequenced test runtime bridge that emits multiple `turn/delta` updates before terminal `turn/completed` or `turn/failed`. |
+| Client post-response terminal notifications | implemented | Added line-delimited client tests for response-first `turn/completed`, `turn/failed`, and `turn/cancelled` typed notifications. |
+| UI adapter scope | unchanged | No additional legacy desktop UI wiring was added in this slice. |
+
+Next task list after the Codex compatibility check:
+
+| Order | Task | Done when |
+|---|---|---|
+| 1 | Write the Codex v2 compatibility matrix for the minimal chat subset | The docs and tests state which dasclaw methods are aliases, which are deprecated transitional helpers, and which Codex methods are intentionally unsupported. |
+| 2 | Add compatibility contract tests for Thread / Turn / Item wire shapes | `thread/start -> turn/start -> item/agentMessage/delta -> turn/completed` is covered without legacy desktop UI. |
+| 3 | Add typed client helpers or aliases for the compatibility subset | New client-facing helpers prefer Codex method names while preserving existing v0 tests. |
+| 4 | Add server-to-client request placeholders only when approval/tool UI work starts | Approval, diff, tool-call, plan, MCP, skills, DLP, jobs, and sandbox remain out of this slice. |
+| 5 | Spike open-cowork consumption against the compatibility fixtures | The new client can consume app-server protocol directly before any default desktop chat switch. |
 
 ### Recommended next-session starting point
 
@@ -1281,4 +1398,3 @@ Open a fresh session before real wiring. Recommended prompt:
 3. 保持 DLP/jobs/skills/MCP/sandbox 不迁移
 4. 跑窄范围 cargo fmt/check
 ```
-

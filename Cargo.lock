@@ -2789,10 +2789,15 @@ dependencies = [
 name = "dasclaw_app_server"
 version = "0.0.0-p0"
 dependencies = [
+ "async-trait",
  "dasclaw_app_server_protocol",
+ "dasclaw_core",
+ "dasclaw_runtime",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -3862,6 +3867,9 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "dasclaw",
+ "dasclaw_app_server",
+ "dasclaw_app_server_client",
+ "dasclaw_app_server_protocol",
  "dasclaw_core",
  "dasclaw_runtime",
  "dasclaw_safety",

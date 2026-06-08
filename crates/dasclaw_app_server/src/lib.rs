@@ -1,9 +1,14 @@
-//! Minimal dasclaw app-server host skeleton.
+//! Minimal dasclaw app-server host.
 //!
-//! Phase 1 deliberately stops at lifecycle, initialize, health, and
-//! capability reporting. It does not wire `dasclaw_runtime::Agent`, DLP,
-//! jobs, skills, MCP, or sandbox execution yet.
+//! Phase 1 deliberately starts with lifecycle, initialize, health, and
+//! capability reporting. Runtime execution is injected through
+//! [`RuntimeBridge`]: the default host is a no-op bridge, while
+//! [`DasclawAgentRuntimeBridge`] delegates to `dasclaw_runtime::Agent`.
+//! DLP, jobs, skills, MCP, and sandbox execution stay outside this crate.
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use dasclaw_app_server_protocol::{
@@ -15,13 +20,14 @@ use dasclaw_app_server_protocol::{
     ServerNotification, ServiceHealth, ServiceName, ShutdownParams, ShutdownReason,
     ShutdownResponse, ThreadCreateParams, ThreadCreateResponse, ThreadCreatedEvent,
     ThreadListResponse, ThreadReadParams, ThreadReadResponse, ThreadSummary, TurnCancelParams,
-    TurnCancelResponse, TurnCancelledEvent, TurnListParams, TurnListResponse, TurnReadParams,
-    TurnReadResponse, TurnStartParams, TurnStartResponse, TurnStartedEvent, TurnStatus,
-    TurnSummary,
+    TurnCancelResponse, TurnCancelledEvent, TurnCompletedEvent, TurnDeltaEvent, TurnFailedEvent,
+    TurnListParams, TurnListResponse, TurnReadParams, TurnReadResponse, TurnStartParams,
+    TurnStartResponse, TurnStartedEvent, TurnStatus, TurnSummary,
 };
 use dasclaw_app_server_protocol::{JSON_RPC_VERSION, method};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 
 pub const SERVER_NAME: &str = "dasclaw_app_server";
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -34,6 +40,8 @@ pub struct AppServer {
     client: Option<ClientInfo>,
     notifications: NotificationBus,
     threads: SessionThreadHost,
+    runtime_bridge: Arc<dyn RuntimeBridge>,
+    runtime_turn_updates: RuntimeTurnUpdateSink,
 }
 
 impl Default for AppServer {
@@ -61,7 +69,22 @@ impl AppServer {
             client: None,
             notifications: NotificationBus::new(),
             threads: SessionThreadHost::new(),
+            runtime_bridge: Arc::new(NoopRuntimeBridge),
+            runtime_turn_updates: RuntimeTurnUpdateSink::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_runtime_bridge(runtime_bridge: Arc<dyn RuntimeBridge>) -> Self {
+        let mut server = Self::new();
+        server.runtime_bridge = runtime_bridge;
+        server
+    }
+
+    #[must_use]
+    pub fn with_runtime_responder(responder: Arc<dyn dasclaw_runtime::AgentResponder>) -> Self {
+        let bridge = DasclawAgentRuntimeBridge::from_responder(responder);
+        Self::with_runtime_bridge(Arc::new(bridge))
     }
 
     pub fn initialize(
@@ -118,7 +141,7 @@ impl AppServer {
         self.lifecycle = lifecycle_snapshot(
             LifecycleState::Ready,
             LifecycleReason::RuntimeReady,
-            Some("minimal app-server skeleton initialized".to_string()),
+            Some("minimal app-server initialized".to_string()),
             Vec::new(),
         );
         self.emit_lifecycle_changed(previous_state);
@@ -206,7 +229,17 @@ impl AppServer {
     ) -> Result<TurnStartResponse, AppServerError> {
         self.require_initialized("session")?;
         self.require_thread_exists(&params.thread_id)?;
-        let turn_id = self.threads.start_turn(&params.thread_id);
+        let turn_id = self.threads.next_turn_id();
+        self.runtime_bridge
+            .start_turn(RuntimeTurnStartRequest {
+                thread_id: params.thread_id.clone(),
+                turn_id: turn_id.clone(),
+                prompt: params.prompt,
+                updates: self.runtime_turn_updates.clone(),
+            })
+            .map_err(AppServerError::runtime_bridge)?;
+        self.threads
+            .record_started_turn(&params.thread_id, turn_id.clone());
         self.notifications.emit_turn_started(TurnStartedEvent {
             thread_id: params.thread_id,
             turn_id: turn_id.clone(),
@@ -225,7 +258,23 @@ impl AppServer {
         params: TurnCancelParams,
     ) -> Result<TurnCancelResponse, AppServerError> {
         self.require_initialized("session")?;
+        self.drain_runtime_turn_updates();
         self.require_thread_exists(&params.thread_id)?;
+        let current = self.turn_summary_or_error(&params.thread_id, &params.turn_id)?;
+        if matches!(current.status, TurnStatus::Completed | TurnStatus::Failed) {
+            return Err(AppServerError::invalid_request(
+                "session",
+                format!("turn is already terminal: {}", params.turn_id),
+            ));
+        }
+        if current.status != TurnStatus::Cancelled {
+            self.runtime_bridge
+                .cancel_turn(RuntimeTurnCancelRequest {
+                    thread_id: params.thread_id.clone(),
+                    turn_id: params.turn_id.clone(),
+                })
+                .map_err(AppServerError::runtime_bridge)?;
+        }
         let changed = self
             .threads
             .cancel_turn(&params.thread_id, &params.turn_id)
@@ -250,16 +299,24 @@ impl AppServer {
         })
     }
 
-    pub fn turn_list(&self, params: TurnListParams) -> Result<TurnListResponse, AppServerError> {
+    pub fn turn_list(
+        &mut self,
+        params: TurnListParams,
+    ) -> Result<TurnListResponse, AppServerError> {
         self.require_initialized("session")?;
+        self.drain_runtime_turn_updates();
         self.require_thread_exists(&params.thread_id)?;
         Ok(TurnListResponse {
             turns: self.threads.list_turns(&params.thread_id),
         })
     }
 
-    pub fn turn_read(&self, params: TurnReadParams) -> Result<TurnReadResponse, AppServerError> {
+    pub fn turn_read(
+        &mut self,
+        params: TurnReadParams,
+    ) -> Result<TurnReadResponse, AppServerError> {
         self.require_initialized("session")?;
+        self.drain_runtime_turn_updates();
         self.require_thread_exists(&params.thread_id)?;
         Ok(TurnReadResponse {
             turn: self.turn_summary_or_error(&params.thread_id, &params.turn_id)?,
@@ -287,6 +344,16 @@ impl AppServer {
             };
         }
 
+        self.drain_runtime_turn_updates();
+        self.runtime_bridge.shutdown();
+        for turn in self.threads.cancel_pending_turns() {
+            self.notifications.emit_turn_cancelled(TurnCancelledEvent {
+                thread_id: turn.thread_id,
+                turn_id: turn.turn_id,
+                status: TurnStatus::Cancelled,
+            });
+        }
+
         let reason = params.reason.unwrap_or(ShutdownReason::ClientExit);
         let previous_state = self.lifecycle.state;
         self.lifecycle = lifecycle_snapshot(
@@ -304,10 +371,12 @@ impl AppServer {
     }
 
     pub fn drain_notifications(&mut self) -> Vec<ServerNotification> {
+        self.drain_runtime_turn_updates();
         self.notifications.drain()
     }
 
     pub fn drain_json_rpc_notifications(&mut self) -> Vec<String> {
+        self.drain_runtime_turn_updates();
         self.notifications.drain_json_rpc()
     }
 
@@ -412,14 +481,11 @@ impl AppServer {
         vec![
             ServiceHealth::ready(ServiceName::Protocol),
             ServiceHealth::ready(ServiceName::Lifecycle),
-            ServiceHealth::degraded(
-                ServiceName::Session,
-                "in-memory session host is available; runtime turn execution is not wired",
-            ),
+            ServiceHealth::ready(ServiceName::Session),
             ServiceHealth::disabled(ServiceName::Logs, "log source is not wired in Phase 1"),
-            ServiceHealth::disabled(
+            ServiceHealth::degraded(
                 ServiceName::Runtime,
-                "runtime bridge is not wired in Phase 1",
+                "runtime bridge boundary is available; default host requires a runtime adapter",
             ),
             ServiceHealth::unavailable_fail_safe(
                 ServiceName::DlpPolicy,
@@ -535,6 +601,324 @@ impl AppServer {
                 AppServerError::invalid_request("session", format!("unknown turn id: {turn_id}"))
             })
     }
+
+    fn drain_runtime_turn_updates(&mut self) {
+        for update in self.runtime_turn_updates.drain() {
+            match update.outcome {
+                RuntimeTurnOutcome::Delta { delta } => {
+                    if self
+                        .threads
+                        .turn_is_pending(&update.thread_id, &update.turn_id)
+                    {
+                        self.notifications.emit_turn_delta(TurnDeltaEvent {
+                            thread_id: update.thread_id,
+                            turn_id: update.turn_id,
+                            delta,
+                        });
+                    }
+                }
+                outcome => {
+                    let update = RuntimeTurnUpdate { outcome, ..update };
+                    if let Some(summary) = self.threads.apply_runtime_turn_update(update) {
+                        match summary.status {
+                            TurnStatus::Completed => {
+                                self.notifications.emit_turn_completed(TurnCompletedEvent {
+                                    thread_id: summary.thread_id,
+                                    turn_id: summary.turn_id,
+                                    status: TurnStatus::Completed,
+                                    output: summary.output.unwrap_or_default(),
+                                });
+                            }
+                            TurnStatus::Failed => {
+                                self.notifications.emit_turn_failed(TurnFailedEvent {
+                                    thread_id: summary.thread_id,
+                                    turn_id: summary.turn_id,
+                                    status: TurnStatus::Failed,
+                                    error: summary.error.unwrap_or_default(),
+                                });
+                            }
+                            TurnStatus::Pending | TurnStatus::Cancelled => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub trait RuntimeBridge: std::fmt::Debug + Send + Sync {
+    fn start_turn(&self, request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError>;
+    fn cancel_turn(&self, request: RuntimeTurnCancelRequest) -> Result<(), RuntimeBridgeError>;
+    fn shutdown(&self);
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeTurnStartRequest {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub prompt: String,
+    pub updates: RuntimeTurnUpdateSink,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeTurnCancelRequest {
+    pub thread_id: String,
+    pub turn_id: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeTurnUpdateSink {
+    updates: Arc<Mutex<Vec<RuntimeTurnUpdate>>>,
+}
+
+impl RuntimeTurnUpdateSink {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn complete(&self, thread_id: String, turn_id: String, output: String) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::Completed { output },
+        });
+    }
+
+    pub fn fail(&self, thread_id: String, turn_id: String, error: String) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::Failed { error },
+        });
+    }
+
+    pub fn delta(&self, thread_id: String, turn_id: String, delta: String) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::Delta { delta },
+        });
+    }
+
+    fn drain(&self) -> Vec<RuntimeTurnUpdate> {
+        self.updates
+            .lock()
+            .map(|mut updates| std::mem::take(&mut *updates))
+            .unwrap_or_default()
+    }
+
+    fn push(&self, update: RuntimeTurnUpdate) {
+        if let Ok(mut updates) = self.updates.lock() {
+            updates.push(update);
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeTurnUpdate {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub outcome: RuntimeTurnOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeTurnOutcome {
+    Delta { delta: String },
+    Completed { output: String },
+    Failed { error: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{message}")]
+pub struct RuntimeBridgeError {
+    message: String,
+    retryable: bool,
+}
+
+impl RuntimeBridgeError {
+    #[must_use]
+    pub fn retryable(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            retryable: true,
+        }
+    }
+
+    #[must_use]
+    pub fn fatal(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            retryable: false,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct NoopRuntimeBridge;
+
+impl RuntimeBridge for NoopRuntimeBridge {
+    fn start_turn(&self, _request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
+        Ok(())
+    }
+
+    fn cancel_turn(&self, _request: RuntimeTurnCancelRequest) -> Result<(), RuntimeBridgeError> {
+        Ok(())
+    }
+
+    fn shutdown(&self) {}
+}
+
+#[derive(Clone)]
+pub struct DasclawAgentRuntimeBridge {
+    agent_factory: Arc<AgentFactory>,
+    in_flight: Arc<Mutex<HashMap<String, CancellationToken>>>,
+}
+
+type AgentFactory = dyn Fn(CancellationToken) -> Result<dasclaw_runtime::Agent, RuntimeBridgeError>
+    + Send
+    + Sync
+    + 'static;
+
+impl std::fmt::Debug for DasclawAgentRuntimeBridge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DasclawAgentRuntimeBridge")
+            .finish_non_exhaustive()
+    }
+}
+
+impl DasclawAgentRuntimeBridge {
+    #[must_use]
+    pub fn new(
+        agent_factory: impl Fn(CancellationToken) -> Result<dasclaw_runtime::Agent, RuntimeBridgeError>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self {
+            agent_factory: Arc::new(agent_factory),
+            in_flight: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    #[must_use]
+    pub fn from_responder(responder: Arc<dyn dasclaw_runtime::AgentResponder>) -> Self {
+        Self::new(move |token| {
+            dasclaw_runtime::Agent::builder()
+                .responder_arc(Arc::clone(&responder))
+                .cancellation_token(token)
+                .build()
+                .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+        })
+    }
+
+    fn remove_in_flight_turn(&self, turn_id: &str) {
+        if let Ok(mut in_flight) = self.in_flight.lock() {
+            in_flight.remove(turn_id);
+        }
+    }
+}
+
+impl RuntimeBridge for DasclawAgentRuntimeBridge {
+    fn start_turn(&self, request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
+        let token = CancellationToken::new();
+        let agent = (self.agent_factory)(token.clone())?;
+        let mut in_flight = self
+            .in_flight
+            .lock()
+            .map_err(|_| RuntimeBridgeError::retryable("runtime turn registry lock poisoned"))?;
+        in_flight.insert(request.turn_id.clone(), token);
+        drop(in_flight);
+
+        let bridge = self.clone();
+        let thread_id = request.thread_id;
+        let turn_id = request.turn_id;
+        let runtime_cleanup_turn_id = turn_id.clone();
+        let spawn_cleanup_turn_id = turn_id.clone();
+        let prompt = request.prompt;
+        let updates = request.updates;
+        thread::Builder::new()
+            .name(format!("dasclaw-app-server-{turn_id}"))
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build();
+
+                let result = match runtime {
+                    Ok(runtime) => {
+                        let (event_tx, mut event_rx) =
+                            tokio::sync::mpsc::channel::<dasclaw_runtime::AgentEvent>(64);
+                        let delta_updates = updates.clone();
+                        let delta_thread_id = thread_id.clone();
+                        let delta_turn_id = turn_id.clone();
+                        runtime.block_on(async move {
+                            let event_pump = async move {
+                                while let Some(event) = event_rx.recv().await {
+                                    if let dasclaw_runtime::AgentEvent::TextChunk(delta) = event {
+                                        delta_updates.delta(
+                                            delta_thread_id.clone(),
+                                            delta_turn_id.clone(),
+                                            delta,
+                                        );
+                                    }
+                                }
+                            };
+                            let run = agent.run_streaming(&prompt, event_tx);
+                            let (result, ()) = tokio::join!(run, event_pump);
+                            result
+                        })
+                    }
+                    Err(error) => Err(dasclaw_runtime::AgentError::LoopFailure(format!(
+                        "failed to create tokio runtime: {error}"
+                    ))),
+                };
+
+                bridge.remove_in_flight_turn(&runtime_cleanup_turn_id);
+                match result {
+                    Ok(output) => updates.complete(thread_id, turn_id, output),
+                    Err(error) => updates.fail(thread_id, turn_id, error.to_string()),
+                }
+            })
+            .map_err(|error| {
+                self.remove_in_flight_turn(&spawn_cleanup_turn_id);
+                RuntimeBridgeError::retryable(format!(
+                    "failed to start dasclaw runtime turn: {error}"
+                ))
+            })?;
+
+        Ok(())
+    }
+
+    fn cancel_turn(&self, request: RuntimeTurnCancelRequest) -> Result<(), RuntimeBridgeError> {
+        let in_flight = self
+            .in_flight
+            .lock()
+            .map_err(|_| RuntimeBridgeError::retryable("runtime turn registry lock poisoned"))?;
+        let Some(token) = in_flight.get(&request.turn_id).cloned() else {
+            return Err(RuntimeBridgeError::retryable(format!(
+                "runtime turn is not in flight: {}",
+                request.turn_id
+            )));
+        };
+        token.cancel();
+        Ok(())
+    }
+
+    fn shutdown(&self) {
+        let tokens = self
+            .in_flight
+            .lock()
+            .map(|mut in_flight| {
+                in_flight
+                    .drain()
+                    .map(|(_turn_id, token)| token)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for token in tokens {
+            token.cancel();
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -578,15 +962,53 @@ impl SessionThreadHost {
             .map(ThreadRecord::to_summary)
     }
 
-    fn start_turn(&mut self, thread_id: &str) -> String {
-        let turn_id = format!("turn_{}", self.next_turn_id);
+    fn next_turn_id(&self) -> String {
+        format!("turn_{}", self.next_turn_id)
+    }
+
+    fn record_started_turn(&mut self, thread_id: &str, turn_id: String) {
         self.next_turn_id += 1;
         self.turns.push(TurnRecord {
             thread_id: thread_id.to_string(),
-            turn_id: turn_id.clone(),
+            turn_id,
             status: TurnStatus::Pending,
+            output: None,
+            error: None,
         });
-        turn_id
+    }
+
+    fn apply_runtime_turn_update(&mut self, update: RuntimeTurnUpdate) -> Option<TurnSummary> {
+        let turn = self
+            .turns
+            .iter_mut()
+            .find(|turn| turn.thread_id == update.thread_id && turn.turn_id == update.turn_id)?;
+        if turn.status == TurnStatus::Cancelled {
+            return None;
+        }
+
+        match update.outcome {
+            RuntimeTurnOutcome::Delta { .. } => return None,
+            RuntimeTurnOutcome::Completed { output } => {
+                turn.status = TurnStatus::Completed;
+                turn.output = Some(output);
+                turn.error = None;
+            }
+            RuntimeTurnOutcome::Failed { error } => {
+                turn.status = TurnStatus::Failed;
+                turn.output = None;
+                turn.error = Some(error);
+            }
+        }
+
+        Some(turn.to_summary())
+    }
+
+    fn turn_is_pending(&self, thread_id: &str, turn_id: &str) -> bool {
+        self.turns.iter().any(|turn| {
+            turn.thread_id == thread_id
+                && turn.turn_id == turn_id
+                && turn.status == TurnStatus::Pending
+        })
     }
 
     fn cancel_turn(&mut self, thread_id: &str, turn_id: &str) -> Option<bool> {
@@ -600,6 +1022,19 @@ impl SessionThreadHost {
 
         turn.status = TurnStatus::Cancelled;
         Some(true)
+    }
+
+    fn cancel_pending_turns(&mut self) -> Vec<TurnSummary> {
+        let mut cancelled = Vec::new();
+        for turn in &mut self.turns {
+            if turn.status == TurnStatus::Pending {
+                turn.status = TurnStatus::Cancelled;
+                turn.output = None;
+                turn.error = None;
+                cancelled.push(turn.to_summary());
+            }
+        }
+        cancelled
     }
 
     fn list_turns(&self, thread_id: &str) -> Vec<TurnSummary> {
@@ -657,6 +1092,8 @@ pub struct TurnRecord {
     pub thread_id: String,
     pub turn_id: String,
     pub status: TurnStatus,
+    pub output: Option<String>,
+    pub error: Option<String>,
 }
 
 impl TurnRecord {
@@ -665,6 +1102,8 @@ impl TurnRecord {
             thread_id: self.thread_id.clone(),
             turn_id: self.turn_id.clone(),
             status: self.status,
+            output: self.output.clone(),
+            error: self.error.clone(),
         }
     }
 }
@@ -705,6 +1144,18 @@ impl NotificationBus {
 
     pub fn emit_turn_started(&mut self, event: TurnStartedEvent) {
         self.push(ServerNotification::turn_started(event));
+    }
+
+    pub fn emit_turn_delta(&mut self, event: TurnDeltaEvent) {
+        self.push(ServerNotification::turn_delta(event));
+    }
+
+    pub fn emit_turn_completed(&mut self, event: TurnCompletedEvent) {
+        self.push(ServerNotification::turn_completed(event));
+    }
+
+    pub fn emit_turn_failed(&mut self, event: TurnFailedEvent) {
+        self.push(ServerNotification::turn_failed(event));
     }
 
     pub fn emit_turn_cancelled(&mut self, event: TurnCancelledEvent) {
@@ -776,10 +1227,13 @@ fn invalid_params_response(id: Option<Value>, message: String) -> JsonRpcRespons
 
 fn app_error_response(id: Option<Value>, error: AppServerError) -> JsonRpcResponse {
     match error {
-        AppServerError::Protocol { data } => JsonRpcResponse::error(
-            id,
-            JsonRpcError::new(app_error_code(data.code), data.message.clone(), Some(data)),
-        ),
+        AppServerError::Protocol { data } => {
+            let data = *data;
+            JsonRpcResponse::error(
+                id,
+                JsonRpcError::new(app_error_code(data.code), data.message.clone(), Some(data)),
+            )
+        }
     }
 }
 
@@ -920,58 +1374,65 @@ fn serialize_response(response: &JsonRpcResponse) -> String {
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum AppServerError {
     #[error("{data:?}")]
-    Protocol { data: ErrorData },
+    Protocol { data: Box<ErrorData> },
 }
 
 impl AppServerError {
-    fn version_mismatch(lifecycle: LifecycleSnapshot) -> Self {
+    fn protocol(data: ErrorData) -> Self {
         Self::Protocol {
-            data: ErrorData {
-                code: ErrorCode::VersionMismatch,
-                message: "client protocol major version is incompatible".to_string(),
-                lifecycle: Some(lifecycle),
-                capability: Some("protocol".to_string()),
-                retryable: false,
-            },
+            data: Box::new(data),
         }
+    }
+
+    fn version_mismatch(lifecycle: LifecycleSnapshot) -> Self {
+        Self::protocol(ErrorData {
+            code: ErrorCode::VersionMismatch,
+            message: "client protocol major version is incompatible".to_string(),
+            lifecycle: Some(lifecycle),
+            capability: Some("protocol".to_string()),
+            retryable: false,
+        })
     }
 
     fn server_stopped(lifecycle: LifecycleSnapshot) -> Self {
-        Self::Protocol {
-            data: ErrorData {
-                code: ErrorCode::ServiceDegraded,
-                message:
-                    "app-server is stopped and cannot be initialized again; restart the process"
-                        .to_string(),
-                lifecycle: Some(lifecycle),
-                capability: Some("lifecycle".to_string()),
-                retryable: false,
-            },
-        }
+        Self::protocol(ErrorData {
+            code: ErrorCode::ServiceDegraded,
+            message: "app-server is stopped and cannot be initialized again; restart the process"
+                .to_string(),
+            lifecycle: Some(lifecycle),
+            capability: Some("lifecycle".to_string()),
+            retryable: false,
+        })
     }
 
     fn not_initialized(capability: impl Into<String>, lifecycle: LifecycleSnapshot) -> Self {
-        Self::Protocol {
-            data: ErrorData {
-                code: ErrorCode::NotInitialized,
-                message: "initialize must complete before this method can be called".to_string(),
-                lifecycle: Some(lifecycle),
-                capability: Some(capability.into()),
-                retryable: true,
-            },
-        }
+        Self::protocol(ErrorData {
+            code: ErrorCode::NotInitialized,
+            message: "initialize must complete before this method can be called".to_string(),
+            lifecycle: Some(lifecycle),
+            capability: Some(capability.into()),
+            retryable: true,
+        })
     }
 
     fn invalid_request(capability: impl Into<String>, message: impl Into<String>) -> Self {
-        Self::Protocol {
-            data: ErrorData {
-                code: ErrorCode::InvalidParams,
-                message: message.into(),
-                lifecycle: None,
-                capability: Some(capability.into()),
-                retryable: false,
-            },
-        }
+        Self::protocol(ErrorData {
+            code: ErrorCode::InvalidParams,
+            message: message.into(),
+            lifecycle: None,
+            capability: Some(capability.into()),
+            retryable: false,
+        })
+    }
+
+    fn runtime_bridge(error: RuntimeBridgeError) -> Self {
+        Self::protocol(ErrorData {
+            code: ErrorCode::ServiceDegraded,
+            message: error.message,
+            lifecycle: None,
+            capability: Some("runtime".to_string()),
+            retryable: error.retryable,
+        })
     }
 }
 
@@ -1018,9 +1479,19 @@ fn unix_timestamp_string() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
     use dasclaw_app_server_protocol::{
         CapabilityStatus, ServiceStatus, TransportKind, WorkspaceInfo, WorkspaceTrust,
     };
+    use dasclaw_core::messages::FinishReason;
+    use dasclaw_core::reasoning_ctx::ReasoningContext;
+    use dasclaw_core::response_types::{
+        RespondOutput, RespondResult, ResponseMetadata, TokenUsage,
+    };
+    use dasclaw_core::traits::HostError;
+    use tokio::sync::mpsc;
 
     use super::*;
 
@@ -1170,7 +1641,7 @@ mod tests {
     }
 
     #[test]
-    fn health_reports_disabled_future_services_without_claiming_handlers() {
+    fn health_reports_runtime_boundary_without_claiming_future_services() {
         let mut server = AppServer::new();
         server
             .initialize(InitializeParams {
@@ -1203,7 +1674,10 @@ mod tests {
                 .any(|service| service.service == ServiceName::Runtime)
         );
         assert!(health.services.iter().any(|service| {
-            service.service == ServiceName::Session && service.status == ServiceStatus::Degraded
+            service.service == ServiceName::Session && service.status == ServiceStatus::Ready
+        }));
+        assert!(health.services.iter().any(|service| {
+            service.service == ServiceName::Runtime && service.status == ServiceStatus::Degraded
         }));
     }
 
@@ -1247,6 +1721,37 @@ mod tests {
         });
         assert_eq!(second.lifecycle.state, LifecycleState::Stopped);
         assert!(server.drain_notifications().is_empty());
+    }
+
+    #[test]
+    fn shutdown_cancels_pending_session_turns() {
+        let mut server = initialized_server();
+        let thread = server
+            .thread_create(ThreadCreateParams {
+                title: Some("Draft".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread should be created");
+        let started = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                prompt: "hello".to_string(),
+            })
+            .expect("turn should start");
+        let _ = server.drain_notifications();
+
+        let shutdown = server.shutdown(ShutdownParams {
+            reason: Some(ShutdownReason::Test),
+            timeout_ms: None,
+        });
+        assert_eq!(shutdown.lifecycle.state, LifecycleState::Stopped);
+
+        let notifications = server.drain_notifications();
+        assert_eq!(notifications.len(), 2);
+        assert_eq!(notifications[0].method, "turn/cancelled");
+        assert_eq!(notifications[0].params["turnId"], started.turn_id);
+        assert_eq!(notifications[1].method, "lifecycle/changed");
+        assert_eq!(notifications[1].params["lifecycle"]["state"], "stopped");
     }
 
     #[test]
@@ -1356,6 +1861,7 @@ mod tests {
             matrix.protocol.methods,
             matrix.lifecycle.methods,
             matrix.health.methods,
+            matrix.session.methods,
             matrix.logs.methods,
         ]
         .concat();
@@ -1573,7 +2079,7 @@ mod tests {
             .handle_json_rpc(
                 r#"{"jsonrpc":"2.0","id":"turn-start","method":"turn/start","params":{"threadId":"thread_1","prompt":"hello"}}"#,
             )
-            .expect("turn/start skeleton should return a structured response");
+            .expect("turn/start should return a structured response");
         let start_value: Value = serde_json::from_str(&start).expect("start response JSON");
 
         assert_eq!(start_value["error"]["data"]["code"], "NOT_INITIALIZED");
@@ -1587,7 +2093,7 @@ mod tests {
             .handle_json_rpc(
                 r#"{"jsonrpc":"2.0","id":"turn-start","method":"turn/start","params":{"threadId":"missing","prompt":"hello"}}"#,
             )
-            .expect("turn/start skeleton should return a structured response");
+            .expect("turn/start should return a structured response");
         let start_value: Value = serde_json::from_str(&start).expect("start response JSON");
 
         assert_eq!(start_value["error"]["code"], -32602);
@@ -1611,7 +2117,7 @@ mod tests {
                 r#"{{"jsonrpc":"2.0","id":"turn-start","method":"turn/start","params":{{"threadId":"{}","prompt":"hello"}}}}"#,
                 thread.thread_id
             ))
-            .expect("turn/start skeleton should return a structured response");
+            .expect("turn/start should return a structured response");
         let start_value: Value = serde_json::from_str(&start).expect("start response JSON");
 
         assert_eq!(start_value["result"]["turnId"], "turn_1");
@@ -1625,7 +2131,7 @@ mod tests {
                 r#"{{"jsonrpc":"2.0","id":"turn-cancel","method":"turn/cancel","params":{{"threadId":"{}","turnId":"turn_1"}}}}"#,
                 thread.thread_id
             ))
-            .expect("turn/cancel skeleton should return a structured response");
+            .expect("turn/cancel should return a structured response");
         let cancel_value: Value = serde_json::from_str(&cancel).expect("cancel response JSON");
 
         assert_eq!(cancel_value["result"]["accepted"], true);
@@ -1633,6 +2139,795 @@ mod tests {
         let cancelled = server.drain_notifications();
         assert_eq!(cancelled.len(), 1);
         assert_eq!(cancelled[0].method, "turn/cancelled");
+    }
+
+    #[test]
+    fn turn_start_invokes_runtime_bridge_before_recording_pending_turn() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        let thread = server
+            .thread_create(ThreadCreateParams {
+                title: Some("Draft".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread should be created");
+
+        let start = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                prompt: "hello runtime".to_string(),
+            })
+            .expect("turn should start through runtime bridge");
+
+        assert_eq!(start.turn_id, "turn_1");
+        assert_eq!(start.status, TurnStatus::Pending);
+        let calls = bridge.calls.lock().expect("calls lock");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].thread_id, thread.thread_id);
+        assert_eq!(calls[0].turn_id, "turn_1");
+        assert_eq!(calls[0].prompt, "hello runtime");
+
+        let turns = server
+            .turn_list(TurnListParams {
+                thread_id: calls[0].thread_id.clone(),
+            })
+            .expect("turn/list should still use session bookkeeping");
+        assert_eq!(turns.turns.len(), 1);
+        assert_eq!(turns.turns[0].status, TurnStatus::Pending);
+    }
+
+    #[test]
+    fn json_rpc_turn_start_runtime_bridge_error_does_not_record_turn() {
+        let bridge = Arc::new(RecordingRuntimeBridge::with_result(Err(
+            RuntimeBridgeError::retryable("runtime unavailable"),
+        )));
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread = server
+            .thread_create(ThreadCreateParams {
+                title: Some("Draft".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread should be created");
+        let _ = server.drain_notifications();
+
+        let response = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"turn-start","method":"turn/start","params":{{"threadId":"{}","prompt":"hello"}}}}"#,
+                thread.thread_id
+            ))
+            .expect("turn/start should return a structured runtime error");
+        let value: Value = serde_json::from_str(&response).expect("start response JSON");
+
+        assert_eq!(value["error"]["code"], -32005);
+        assert_eq!(value["error"]["data"]["code"], "SERVICE_DEGRADED");
+        assert_eq!(value["error"]["data"]["capability"], "runtime");
+        assert_eq!(value["error"]["data"]["retryable"], true);
+        let turns = server
+            .turn_list(TurnListParams {
+                thread_id: thread.thread_id,
+            })
+            .expect("turn/list should still work after bridge error");
+        assert!(turns.turns.is_empty());
+        assert!(server.drain_notifications().is_empty());
+    }
+
+    #[test]
+    fn json_rpc_turn_lifecycle_integration_streams_multi_delta_then_completed() {
+        let bridge = Arc::new(DelayedSequencedRuntimeBridge::new([
+            RuntimeTurnOutcome::Delta {
+                delta: "Hel".to_string(),
+            },
+            RuntimeTurnOutcome::Delta {
+                delta: "lo".to_string(),
+            },
+            RuntimeTurnOutcome::Completed {
+                output: "Hello".to_string(),
+            },
+        ]));
+        let mut server = AppServer::with_runtime_bridge(bridge);
+
+        let initialize = json_rpc_value(
+            server
+                .handle_json_rpc(initialized_request_json())
+                .expect("initialize should return a JSON-RPC response"),
+        );
+        assert_eq!(initialize["result"]["lifecycle"]["state"], "ready");
+        let initialize_notifications = json_rpc_values(server.drain_json_rpc_notifications());
+        assert_eq!(
+            methods_from_values(&initialize_notifications),
+            vec![
+                "lifecycle/changed",
+                "lifecycle/changed",
+                "capabilities/changed"
+            ]
+        );
+
+        let thread = json_rpc_value(
+            server
+                .handle_json_rpc(
+                    r#"{"jsonrpc":"2.0","id":"thread","method":"thread/create","params":{"title":"Draft"}}"#,
+                )
+                .expect("thread/create should return a JSON-RPC response"),
+        );
+        let thread_id = thread["result"]["threadId"]
+            .as_str()
+            .expect("threadId should be returned")
+            .to_string();
+        let thread_notifications = json_rpc_values(server.drain_json_rpc_notifications());
+        assert_eq!(
+            methods_from_values(&thread_notifications),
+            vec!["thread/created"]
+        );
+
+        let turn = json_rpc_value(
+            server
+                .handle_json_rpc(&format!(
+                    r#"{{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{{"threadId":"{thread_id}","prompt":"hello"}}}}"#
+                ))
+                .expect("turn/start should return a JSON-RPC response"),
+        );
+        let turn_id = turn["result"]["turnId"]
+            .as_str()
+            .expect("turnId should be returned")
+            .to_string();
+        assert_eq!(turn["result"]["status"], "pending");
+
+        let immediate_notifications = json_rpc_values(server.drain_json_rpc_notifications());
+        assert_eq!(
+            methods_from_values(&immediate_notifications),
+            vec!["turn/started"],
+            "turn/start must return pending before delayed runtime terminal notifications"
+        );
+
+        let turn_notifications =
+            drain_json_rpc_until_method(&mut server, "turn/completed", Duration::from_secs(1));
+        assert_eq!(
+            methods_from_values(&turn_notifications),
+            vec!["turn/delta", "turn/delta", "turn/completed"]
+        );
+        assert_eq!(turn_notifications[0]["params"]["delta"], "Hel");
+        assert_eq!(turn_notifications[1]["params"]["delta"], "lo");
+        assert_eq!(turn_notifications[2]["params"]["output"], "Hello");
+
+        let read = json_rpc_value(
+            server
+                .handle_json_rpc(&format!(
+                    r#"{{"jsonrpc":"2.0","id":"read","method":"turn/read","params":{{"threadId":"{thread_id}","turnId":"{turn_id}"}}}}"#
+                ))
+                .expect("turn/read should return a JSON-RPC response"),
+        );
+        assert_eq!(read["result"]["turn"]["status"], "completed");
+        assert_eq!(read["result"]["turn"]["output"], "Hello");
+        assert!(server.drain_json_rpc_notifications().is_empty());
+    }
+
+    #[test]
+    fn json_rpc_turn_lifecycle_integration_reports_runtime_failed_turn() {
+        let bridge = Arc::new(SequencedRuntimeBridge::new([RuntimeTurnOutcome::Failed {
+            error: "runtime failed".to_string(),
+        }]));
+        let mut server = AppServer::with_runtime_bridge(bridge);
+        let _initialize = json_rpc_value(
+            server
+                .handle_json_rpc(initialized_request_json())
+                .expect("initialize should return a JSON-RPC response"),
+        );
+        let _ = server.drain_json_rpc_notifications();
+        let thread = json_rpc_value(
+            server
+                .handle_json_rpc(
+                    r#"{"jsonrpc":"2.0","id":"thread","method":"thread/create","params":{"title":"Draft"}}"#,
+                )
+                .expect("thread/create should return a JSON-RPC response"),
+        );
+        let thread_id = thread["result"]["threadId"]
+            .as_str()
+            .expect("threadId should be returned")
+            .to_string();
+        let _ = server.drain_json_rpc_notifications();
+
+        let turn = json_rpc_value(
+            server
+                .handle_json_rpc(&format!(
+                    r#"{{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{{"threadId":"{}","prompt":"hello"}}}}"#,
+                    thread_id
+                ))
+                .expect("turn/start should return a JSON-RPC response"),
+        );
+        let turn_id = turn["result"]["turnId"]
+            .as_str()
+            .expect("turnId should be returned")
+            .to_string();
+
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+        assert_eq!(
+            methods_from_values(&notifications),
+            vec!["turn/started", "turn/failed"]
+        );
+        assert_eq!(notifications[1]["params"]["error"], "runtime failed");
+
+        let read = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"read","method":"turn/read","params":{{"threadId":"{thread_id}","turnId":"{turn_id}"}}}}"#
+            ))
+            .expect("turn/read should return a JSON-RPC response");
+        let read = json_rpc_value(read);
+        assert_eq!(read["result"]["turn"]["status"], "failed");
+        assert_eq!(read["result"]["turn"]["error"], "runtime failed");
+    }
+
+    #[test]
+    fn json_rpc_turn_lifecycle_integration_cancels_pending_turn() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = AppServer::with_runtime_bridge(bridge.clone());
+        let _initialize = json_rpc_value(
+            server
+                .handle_json_rpc(initialized_request_json())
+                .expect("initialize should return a JSON-RPC response"),
+        );
+        let _ = server.drain_json_rpc_notifications();
+        let thread = json_rpc_value(
+            server
+                .handle_json_rpc(
+                    r#"{"jsonrpc":"2.0","id":"thread","method":"thread/create","params":{"title":"Draft"}}"#,
+                )
+                .expect("thread/create should return a JSON-RPC response"),
+        );
+        let thread_id = thread["result"]["threadId"]
+            .as_str()
+            .expect("threadId should be returned")
+            .to_string();
+        let _ = server.drain_json_rpc_notifications();
+
+        let turn = json_rpc_value(
+            server
+                .handle_json_rpc(&format!(
+                    r#"{{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{{"threadId":"{}","prompt":"hello"}}}}"#,
+                    thread_id
+                ))
+                .expect("turn/start should return a JSON-RPC response"),
+        );
+        let turn_id = turn["result"]["turnId"]
+            .as_str()
+            .expect("turnId should be returned")
+            .to_string();
+        assert_eq!(
+            methods_from_values(&json_rpc_values(server.drain_json_rpc_notifications())),
+            vec!["turn/started"]
+        );
+
+        let cancel = json_rpc_value(
+            server
+                .handle_json_rpc(&format!(
+                    r#"{{"jsonrpc":"2.0","id":"cancel","method":"turn/cancel","params":{{"threadId":"{thread_id}","turnId":"{turn_id}"}}}}"#
+                ))
+                .expect("turn/cancel should return a JSON-RPC response"),
+        );
+        assert_eq!(cancel["result"]["accepted"], true);
+        assert_eq!(cancel["result"]["status"], "cancelled");
+        assert_eq!(
+            methods_from_values(&json_rpc_values(server.drain_json_rpc_notifications())),
+            vec!["turn/cancelled"]
+        );
+
+        let cancel_calls = bridge.cancel_calls.lock().expect("cancel calls lock");
+        assert_eq!(cancel_calls.len(), 1);
+        assert_eq!(cancel_calls[0].turn_id, turn_id);
+
+        let read = json_rpc_value(
+            server
+                .handle_json_rpc(&format!(
+                    r#"{{"jsonrpc":"2.0","id":"read","method":"turn/read","params":{{"threadId":"{thread_id}","turnId":"{}"}}}}"#,
+                    cancel_calls[0].turn_id
+                ))
+                .expect("turn/read should return a JSON-RPC response"),
+        );
+        assert_eq!(read["result"]["turn"]["status"], "cancelled");
+    }
+
+    #[test]
+    fn turn_read_applies_runtime_completion_update() {
+        let bridge = Arc::new(RecordingRuntimeBridge::with_completion(
+            RuntimeTurnOutcome::Completed {
+                output: "hello from runtime".to_string(),
+            },
+        ));
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread = server
+            .thread_create(ThreadCreateParams {
+                title: Some("Draft".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread should be created");
+        let start = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                prompt: "hello".to_string(),
+            })
+            .expect("turn should start");
+        let notifications = server.drain_notifications();
+        assert_eq!(notifications.len(), 3);
+        assert_eq!(notifications[0].method, "thread/created");
+        assert_eq!(notifications[1].method, "turn/started");
+        assert_eq!(notifications[2].method, "turn/completed");
+        assert_eq!(notifications[2].params["output"], "hello from runtime");
+
+        let read = server
+            .turn_read(TurnReadParams {
+                thread_id: thread.thread_id,
+                turn_id: start.turn_id,
+            })
+            .expect("turn/read should apply completion update");
+
+        assert_eq!(read.turn.status, TurnStatus::Completed);
+        assert_eq!(read.turn.output.as_deref(), Some("hello from runtime"));
+        assert_eq!(read.turn.error, None);
+        assert!(server.drain_notifications().is_empty());
+    }
+
+    #[test]
+    fn turn_list_applies_runtime_failure_update() {
+        let bridge = Arc::new(RecordingRuntimeBridge::with_completion(
+            RuntimeTurnOutcome::Failed {
+                error: "runtime failed".to_string(),
+            },
+        ));
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread = server
+            .thread_create(ThreadCreateParams {
+                title: Some("Draft".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread should be created");
+        let start = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                prompt: "hello".to_string(),
+            })
+            .expect("turn should start");
+        let notifications = server.drain_notifications();
+        assert_eq!(notifications.len(), 3);
+        assert_eq!(notifications[0].method, "thread/created");
+        assert_eq!(notifications[1].method, "turn/started");
+        assert_eq!(notifications[2].method, "turn/failed");
+        assert_eq!(notifications[2].params["error"], "runtime failed");
+
+        let list = server
+            .turn_list(TurnListParams {
+                thread_id: thread.thread_id,
+            })
+            .expect("turn/list should apply failure update");
+
+        assert_eq!(list.turns.len(), 1);
+        assert_eq!(list.turns[0].turn_id, start.turn_id);
+        assert_eq!(list.turns[0].status, TurnStatus::Failed);
+        assert_eq!(list.turns[0].output, None);
+        assert_eq!(list.turns[0].error.as_deref(), Some("runtime failed"));
+        assert!(server.drain_notifications().is_empty());
+    }
+
+    #[test]
+    fn drain_notifications_emits_runtime_delta_without_finishing_turn() {
+        let bridge = Arc::new(RecordingRuntimeBridge::with_completion(
+            RuntimeTurnOutcome::Delta {
+                delta: "hel".to_string(),
+            },
+        ));
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread = server
+            .thread_create(ThreadCreateParams {
+                title: Some("Draft".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread should be created");
+        let start = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                prompt: "hello".to_string(),
+            })
+            .expect("turn should start");
+        let notifications = server.drain_notifications();
+        assert_eq!(notifications.len(), 3);
+        assert_eq!(notifications[0].method, "thread/created");
+        assert_eq!(notifications[1].method, "turn/started");
+        assert_eq!(notifications[2].method, "turn/delta");
+        assert_eq!(notifications[2].params["delta"], "hel");
+
+        let read = server
+            .turn_read(TurnReadParams {
+                thread_id: thread.thread_id,
+                turn_id: start.turn_id,
+            })
+            .expect("turn/read should apply delta update");
+
+        assert_eq!(read.turn.status, TurnStatus::Pending);
+        assert_eq!(read.turn.output, None);
+        assert_eq!(read.turn.error, None);
+        assert!(server.drain_notifications().is_empty());
+    }
+
+    #[test]
+    fn drain_json_rpc_notifications_emits_runtime_updates() {
+        let bridge = Arc::new(RecordingRuntimeBridge::with_completion(
+            RuntimeTurnOutcome::Completed {
+                output: "json rpc output".to_string(),
+            },
+        ));
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread = server
+            .thread_create(ThreadCreateParams {
+                title: Some("Draft".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread should be created");
+        let _start = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id,
+                prompt: "hello".to_string(),
+            })
+            .expect("turn should start");
+
+        let lines = server.drain_json_rpc_notifications();
+        assert_eq!(lines.len(), 3);
+        let values = lines
+            .iter()
+            .map(|line| serde_json::from_str::<Value>(line).expect("notification JSON"))
+            .collect::<Vec<_>>();
+        assert_eq!(values[0]["method"], "thread/created");
+        assert_eq!(values[1]["method"], "turn/started");
+        assert_eq!(values[2]["method"], "turn/completed");
+        assert_eq!(values[2]["params"]["output"], "json rpc output");
+    }
+
+    #[test]
+    fn turn_cancel_invokes_runtime_bridge_before_recording_cancelled_turn() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        let thread = server
+            .thread_create(ThreadCreateParams {
+                title: Some("Draft".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread should be created");
+        let start = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                prompt: "hello".to_string(),
+            })
+            .expect("turn should start");
+        let _ = server.drain_notifications();
+
+        let cancelled = server
+            .turn_cancel(TurnCancelParams {
+                thread_id: thread.thread_id.clone(),
+                turn_id: start.turn_id.clone(),
+            })
+            .expect("turn/cancel should call runtime bridge first");
+
+        assert_eq!(cancelled.status, TurnStatus::Cancelled);
+        let cancel_calls = bridge.cancel_calls.lock().expect("cancel calls lock");
+        assert_eq!(cancel_calls.len(), 1);
+        assert_eq!(cancel_calls[0].thread_id, thread.thread_id);
+        assert_eq!(cancel_calls[0].turn_id, start.turn_id);
+    }
+
+    #[test]
+    fn turn_cancel_runtime_bridge_error_does_not_record_cancelled_turn() {
+        let bridge = Arc::new(RecordingRuntimeBridge::with_cancel_result(Err(
+            RuntimeBridgeError::retryable("cancel unavailable"),
+        )));
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread = server
+            .thread_create(ThreadCreateParams {
+                title: Some("Draft".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread should be created");
+        let start = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                prompt: "hello".to_string(),
+            })
+            .expect("turn should start");
+        let _ = server.drain_notifications();
+
+        let error = server
+            .turn_cancel(TurnCancelParams {
+                thread_id: thread.thread_id.clone(),
+                turn_id: start.turn_id.clone(),
+            })
+            .expect_err("runtime cancel failure should surface");
+        match error {
+            AppServerError::Protocol { data } => {
+                assert_eq!(data.code, ErrorCode::ServiceDegraded);
+                assert_eq!(data.capability.as_deref(), Some("runtime"));
+                assert!(data.retryable);
+            }
+        }
+
+        let read = server
+            .turn_read(TurnReadParams {
+                thread_id: thread.thread_id,
+                turn_id: start.turn_id,
+            })
+            .expect("turn/read should still find the pending turn");
+        assert_eq!(read.turn.status, TurnStatus::Pending);
+        assert!(server.drain_notifications().is_empty());
+    }
+
+    #[test]
+    fn dasclaw_runtime_bridge_creates_a_distinct_cancel_token_per_turn_start() {
+        let captured_tokens = Arc::new(Mutex::new(Vec::new()));
+        let factory_tokens = Arc::clone(&captured_tokens);
+        let bridge = DasclawAgentRuntimeBridge::new(move |token| {
+            factory_tokens
+                .lock()
+                .expect("factory tokens lock")
+                .push(token);
+            Err(RuntimeBridgeError::fatal("test factory stops before run"))
+        });
+
+        for turn_id in ["turn_a", "turn_b"] {
+            let error = bridge
+                .start_turn(RuntimeTurnStartRequest {
+                    thread_id: "thread_1".to_string(),
+                    turn_id: turn_id.to_string(),
+                    prompt: "hello".to_string(),
+                    updates: RuntimeTurnUpdateSink::new(),
+                })
+                .expect_err("test factory should stop before spawning");
+            assert_eq!(error.message, "test factory stops before run");
+        }
+
+        let tokens = captured_tokens.lock().expect("captured tokens lock");
+        assert_eq!(tokens.len(), 2);
+        tokens[0].cancel();
+        assert!(tokens[0].is_cancelled());
+        assert!(!tokens[1].is_cancelled());
+    }
+
+    #[test]
+    fn dasclaw_runtime_bridge_cancel_targets_only_the_requested_turn_token() {
+        let bridge =
+            DasclawAgentRuntimeBridge::new(|_| Err(RuntimeBridgeError::fatal("unused factory")));
+        let first_token = CancellationToken::new();
+        let second_token = CancellationToken::new();
+        {
+            let mut in_flight = bridge.in_flight.lock().expect("in-flight lock");
+            in_flight.insert("turn_a".to_string(), first_token.clone());
+            in_flight.insert("turn_b".to_string(), second_token.clone());
+        }
+
+        bridge
+            .cancel_turn(RuntimeTurnCancelRequest {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_b".to_string(),
+            })
+            .expect("turn_b should be cancellable");
+
+        assert!(!first_token.is_cancelled());
+        assert!(second_token.is_cancelled());
+    }
+
+    #[test]
+    fn dasclaw_runtime_bridge_streams_delta_and_completion_from_real_agent() {
+        let bridge = Arc::new(DasclawAgentRuntimeBridge::new(|token| {
+            dasclaw_runtime::Agent::builder()
+                .responder(ChunkedRuntimeResponder::new(["Hel", "lo"]))
+                .cancellation_token(token)
+                .build()
+                .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+        }));
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread = server
+            .thread_create(ThreadCreateParams {
+                title: Some("Draft".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread should be created");
+        let started = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                prompt: "hello".to_string(),
+            })
+            .expect("turn should start");
+
+        let notifications =
+            drain_until_method(&mut server, "turn/completed", Duration::from_secs(2));
+        let methods = notifications
+            .iter()
+            .map(|notification| notification.method.as_str())
+            .collect::<Vec<_>>();
+        assert!(methods.contains(&"thread/created"));
+        assert!(methods.contains(&"turn/started"));
+        assert!(methods.contains(&"turn/delta"));
+        assert!(methods.contains(&"turn/completed"));
+        let deltas = notifications
+            .iter()
+            .filter(|notification| notification.method == "turn/delta")
+            .map(|notification| notification.params["delta"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(deltas, vec!["Hel", "lo"]);
+
+        let completed = notifications
+            .iter()
+            .find(|notification| notification.method == "turn/completed")
+            .expect("completion notification should be emitted");
+        assert_eq!(completed.params["output"], "Hello");
+        let read = server
+            .turn_read(TurnReadParams {
+                thread_id: thread.thread_id,
+                turn_id: started.turn_id,
+            })
+            .expect("turn/read should observe completed runtime result");
+        assert_eq!(read.turn.status, TurnStatus::Completed);
+        assert_eq!(read.turn.output.as_deref(), Some("Hello"));
+    }
+
+    #[test]
+    fn app_server_runtime_responder_constructor_wires_real_agent_bridge() {
+        let responder = Arc::new(ChunkedRuntimeResponder::new(["res", "ponder"]));
+        let mut server = AppServer::with_runtime_responder(responder);
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+            })
+            .expect("initialize should succeed");
+        let _ = server.drain_notifications();
+        let thread = server
+            .thread_create(ThreadCreateParams {
+                title: Some("Draft".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread should be created");
+        let started = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                prompt: "hello".to_string(),
+            })
+            .expect("turn should start through runtime responder");
+
+        let notifications =
+            drain_until_method(&mut server, "turn/completed", Duration::from_secs(2));
+        assert!(
+            notifications
+                .iter()
+                .any(|notification| notification.method == "turn/delta"),
+            "runtime responder should stream deltas: {notifications:?}"
+        );
+        assert!(
+            notifications
+                .iter()
+                .any(|notification| notification.method == "turn/completed"),
+            "runtime responder should complete the turn: {notifications:?}"
+        );
+
+        let read = server
+            .turn_read(TurnReadParams {
+                thread_id: thread.thread_id,
+                turn_id: started.turn_id,
+            })
+            .expect("turn/read should observe runtime responder result");
+        assert_eq!(read.turn.status, TurnStatus::Completed);
+        assert_eq!(read.turn.output.as_deref(), Some("responder"));
+    }
+
+    #[test]
+    fn dasclaw_runtime_bridge_cancel_preserves_cancelled_turn_after_runtime_stops() {
+        let bridge = Arc::new(DasclawAgentRuntimeBridge::new(|token| {
+            dasclaw_runtime::Agent::builder()
+                .responder(CancelAwareRuntimeResponder::new(token.clone()))
+                .cancellation_token(token)
+                .build()
+                .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+        }));
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread = server
+            .thread_create(ThreadCreateParams {
+                title: Some("Draft".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread should be created");
+        let started = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                prompt: "hello".to_string(),
+            })
+            .expect("turn should start");
+        let _ = server.drain_notifications();
+
+        let cancelled = server
+            .turn_cancel(TurnCancelParams {
+                thread_id: thread.thread_id.clone(),
+                turn_id: started.turn_id.clone(),
+            })
+            .expect("turn/cancel should cancel runtime token");
+        assert!(cancelled.accepted);
+        assert_eq!(cancelled.status, TurnStatus::Cancelled);
+
+        let notifications = drain_for(&mut server, Duration::from_millis(150));
+        assert!(
+            notifications
+                .iter()
+                .any(|notification| notification.method == "turn/cancelled"),
+            "cancel notification should be emitted: {notifications:?}"
+        );
+        assert!(
+            notifications
+                .iter()
+                .all(|notification| notification.method != "turn/failed"),
+            "runtime stopped update must not override cancellation: {notifications:?}"
+        );
+
+        let read = server
+            .turn_read(TurnReadParams {
+                thread_id: thread.thread_id,
+                turn_id: started.turn_id,
+            })
+            .expect("turn/read should keep cancelled status");
+        assert_eq!(read.turn.status, TurnStatus::Cancelled);
+        assert_eq!(read.turn.output, None);
+        assert_eq!(read.turn.error, None);
+    }
+
+    #[test]
+    fn shutdown_cancels_real_runtime_bridge_turn_without_failure_notification() {
+        let bridge = Arc::new(DasclawAgentRuntimeBridge::new(|token| {
+            dasclaw_runtime::Agent::builder()
+                .responder(CancelAwareRuntimeResponder::new(token.clone()))
+                .cancellation_token(token)
+                .build()
+                .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+        }));
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread = server
+            .thread_create(ThreadCreateParams {
+                title: Some("Draft".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread should be created");
+        let started = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                prompt: "hello".to_string(),
+            })
+            .expect("turn should start");
+        let _ = server.drain_notifications();
+
+        let shutdown = server.shutdown(ShutdownParams {
+            reason: Some(ShutdownReason::Test),
+            timeout_ms: None,
+        });
+        assert_eq!(shutdown.lifecycle.state, LifecycleState::Stopped);
+
+        let notifications = drain_for(&mut server, Duration::from_millis(150));
+        assert!(
+            notifications
+                .iter()
+                .any(|notification| notification.method == "turn/cancelled"),
+            "shutdown should cancel pending runtime turn: {notifications:?}"
+        );
+        assert!(
+            notifications
+                .iter()
+                .all(|notification| notification.method != "turn/failed"),
+            "runtime stopped update must not emit failure after shutdown: {notifications:?}"
+        );
+
+        let read = server
+            .threads
+            .turn_summary(&thread.thread_id, &started.turn_id);
+        assert_eq!(
+            read.expect("turn should still be recorded").status,
+            TurnStatus::Cancelled
+        );
     }
 
     #[test]
@@ -1745,7 +3040,11 @@ mod tests {
     }
 
     fn initialized_server() -> AppServer {
-        let mut server = AppServer::new();
+        initialized_server_with_bridge(Arc::new(NoopRuntimeBridge))
+    }
+
+    fn initialized_server_with_bridge(bridge: Arc<dyn RuntimeBridge>) -> AppServer {
+        let mut server = AppServer::with_runtime_bridge(bridge);
         server
             .initialize(InitializeParams {
                 client: ClientInfo {
@@ -1760,6 +3059,345 @@ mod tests {
             .expect("initialize should succeed");
         let _ = server.drain_notifications();
         server
+    }
+
+    fn initialized_request_json() -> &'static str {
+        r#"{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"client":{"name":"open-cowork","version":"0.0.0","transport":"stdio"},"protocolVersion":{"major":0,"minor":1,"patch":0},"requestedCapabilities":[]}}"#
+    }
+
+    fn json_rpc_value(line: String) -> Value {
+        serde_json::from_str(&line).expect("JSON-RPC line should decode")
+    }
+
+    fn json_rpc_values(lines: Vec<String>) -> Vec<Value> {
+        lines.into_iter().map(json_rpc_value).collect()
+    }
+
+    fn methods_from_values(values: &[Value]) -> Vec<&str> {
+        values
+            .iter()
+            .filter_map(|value| value.get("method").and_then(Value::as_str))
+            .collect()
+    }
+
+    fn drain_json_rpc_until_method(
+        server: &mut AppServer,
+        method: &str,
+        timeout: Duration,
+    ) -> Vec<Value> {
+        let deadline = Instant::now() + timeout;
+        let mut notifications = Vec::new();
+        loop {
+            notifications.extend(json_rpc_values(server.drain_json_rpc_notifications()));
+            if notifications
+                .iter()
+                .any(|notification| notification["method"] == method)
+                || Instant::now() >= deadline
+            {
+                return notifications;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn drain_until_method(
+        server: &mut AppServer,
+        method: &str,
+        timeout: Duration,
+    ) -> Vec<ServerNotification> {
+        let deadline = Instant::now() + timeout;
+        let mut notifications = Vec::new();
+        loop {
+            notifications.extend(server.drain_notifications());
+            if notifications
+                .iter()
+                .any(|notification| notification.method == method)
+                || Instant::now() >= deadline
+            {
+                return notifications;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn drain_for(server: &mut AppServer, duration: Duration) -> Vec<ServerNotification> {
+        let deadline = Instant::now() + duration;
+        let mut notifications = Vec::new();
+        while Instant::now() < deadline {
+            notifications.extend(server.drain_notifications());
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        notifications.extend(server.drain_notifications());
+        notifications
+    }
+
+    struct ChunkedRuntimeResponder {
+        chunks: Vec<String>,
+    }
+
+    impl ChunkedRuntimeResponder {
+        fn new(chunks: impl IntoIterator<Item = &'static str>) -> Self {
+            Self {
+                chunks: chunks.into_iter().map(String::from).collect(),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl dasclaw_runtime::AgentResponder for ChunkedRuntimeResponder {
+        async fn respond(&self, _ctx: &mut ReasoningContext) -> Result<RespondOutput, HostError> {
+            Ok(text_output(&self.chunks.concat()))
+        }
+
+        async fn respond_streaming(
+            &self,
+            _ctx: &mut ReasoningContext,
+            event_tx: mpsc::Sender<dasclaw_runtime::AgentEvent>,
+        ) -> Result<RespondOutput, HostError> {
+            for chunk in &self.chunks {
+                let _ = event_tx
+                    .send(dasclaw_runtime::AgentEvent::TextChunk(chunk.clone()))
+                    .await;
+            }
+            Ok(text_output(&self.chunks.concat()))
+        }
+    }
+
+    struct CancelAwareRuntimeResponder {
+        token: CancellationToken,
+    }
+
+    impl CancelAwareRuntimeResponder {
+        fn new(token: CancellationToken) -> Self {
+            Self { token }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl dasclaw_runtime::AgentResponder for CancelAwareRuntimeResponder {
+        async fn respond(&self, _ctx: &mut ReasoningContext) -> Result<RespondOutput, HostError> {
+            Ok(text_output("unexpected response"))
+        }
+
+        async fn check_signals(&self) -> dasclaw_runtime::LoopSignal {
+            for _ in 0..200 {
+                if self.token.is_cancelled() {
+                    return dasclaw_runtime::LoopSignal::Stop;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            dasclaw_runtime::LoopSignal::Continue
+        }
+    }
+
+    fn text_output(text: &str) -> RespondOutput {
+        RespondOutput {
+            result: RespondResult::Text(text.to_string()),
+            usage: TokenUsage::default(),
+            finish_reason: FinishReason::Stop,
+            metadata: ResponseMetadata::default(),
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct RecordingRuntimeBridge {
+        calls: Mutex<Vec<RuntimeTurnStartRequest>>,
+        cancel_calls: Mutex<Vec<RuntimeTurnCancelRequest>>,
+        result: Mutex<Option<Result<(), RuntimeBridgeError>>>,
+        cancel_result: Mutex<Option<Result<(), RuntimeBridgeError>>>,
+        completion: Mutex<Option<RuntimeTurnOutcome>>,
+    }
+
+    impl RecordingRuntimeBridge {
+        fn with_result(result: Result<(), RuntimeBridgeError>) -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                cancel_calls: Mutex::new(Vec::new()),
+                result: Mutex::new(Some(result)),
+                cancel_result: Mutex::new(None),
+                completion: Mutex::new(None),
+            }
+        }
+
+        fn with_completion(completion: RuntimeTurnOutcome) -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                cancel_calls: Mutex::new(Vec::new()),
+                result: Mutex::new(None),
+                cancel_result: Mutex::new(None),
+                completion: Mutex::new(Some(completion)),
+            }
+        }
+
+        fn with_cancel_result(result: Result<(), RuntimeBridgeError>) -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                cancel_calls: Mutex::new(Vec::new()),
+                result: Mutex::new(None),
+                cancel_result: Mutex::new(Some(result)),
+                completion: Mutex::new(None),
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct SequencedRuntimeBridge {
+        outcomes: Vec<RuntimeTurnOutcome>,
+    }
+
+    impl SequencedRuntimeBridge {
+        fn new(outcomes: impl IntoIterator<Item = RuntimeTurnOutcome>) -> Self {
+            Self {
+                outcomes: outcomes.into_iter().collect(),
+            }
+        }
+    }
+
+    impl RuntimeBridge for SequencedRuntimeBridge {
+        fn start_turn(&self, request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
+            for outcome in &self.outcomes {
+                match outcome {
+                    RuntimeTurnOutcome::Delta { delta } => {
+                        request.updates.delta(
+                            request.thread_id.clone(),
+                            request.turn_id.clone(),
+                            delta.clone(),
+                        );
+                    }
+                    RuntimeTurnOutcome::Completed { output } => {
+                        request.updates.complete(
+                            request.thread_id.clone(),
+                            request.turn_id.clone(),
+                            output.clone(),
+                        );
+                    }
+                    RuntimeTurnOutcome::Failed { error } => {
+                        request.updates.fail(
+                            request.thread_id.clone(),
+                            request.turn_id.clone(),
+                            error.clone(),
+                        );
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        fn cancel_turn(
+            &self,
+            _request: RuntimeTurnCancelRequest,
+        ) -> Result<(), RuntimeBridgeError> {
+            Ok(())
+        }
+
+        fn shutdown(&self) {}
+    }
+
+    #[derive(Debug)]
+    struct DelayedSequencedRuntimeBridge {
+        outcomes: Vec<RuntimeTurnOutcome>,
+    }
+
+    impl DelayedSequencedRuntimeBridge {
+        fn new(outcomes: impl IntoIterator<Item = RuntimeTurnOutcome>) -> Self {
+            Self {
+                outcomes: outcomes.into_iter().collect(),
+            }
+        }
+    }
+
+    impl RuntimeBridge for DelayedSequencedRuntimeBridge {
+        fn start_turn(&self, request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
+            let outcomes = self.outcomes.clone();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(25));
+                for outcome in outcomes {
+                    match outcome {
+                        RuntimeTurnOutcome::Delta { delta } => {
+                            request.updates.delta(
+                                request.thread_id.clone(),
+                                request.turn_id.clone(),
+                                delta,
+                            );
+                        }
+                        RuntimeTurnOutcome::Completed { output } => {
+                            request.updates.complete(
+                                request.thread_id.clone(),
+                                request.turn_id.clone(),
+                                output,
+                            );
+                        }
+                        RuntimeTurnOutcome::Failed { error } => {
+                            request.updates.fail(
+                                request.thread_id.clone(),
+                                request.turn_id.clone(),
+                                error,
+                            );
+                        }
+                    }
+                }
+            });
+            Ok(())
+        }
+
+        fn cancel_turn(
+            &self,
+            _request: RuntimeTurnCancelRequest,
+        ) -> Result<(), RuntimeBridgeError> {
+            Ok(())
+        }
+
+        fn shutdown(&self) {}
+    }
+
+    impl RuntimeBridge for RecordingRuntimeBridge {
+        fn start_turn(&self, request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
+            if let Some(completion) = self.completion.lock().expect("completion lock").clone() {
+                match completion {
+                    RuntimeTurnOutcome::Delta { delta } => {
+                        request.updates.delta(
+                            request.thread_id.clone(),
+                            request.turn_id.clone(),
+                            delta,
+                        );
+                    }
+                    RuntimeTurnOutcome::Completed { output } => {
+                        request.updates.complete(
+                            request.thread_id.clone(),
+                            request.turn_id.clone(),
+                            output,
+                        );
+                    }
+                    RuntimeTurnOutcome::Failed { error } => {
+                        request.updates.fail(
+                            request.thread_id.clone(),
+                            request.turn_id.clone(),
+                            error,
+                        );
+                    }
+                }
+            }
+            self.calls.lock().expect("calls lock").push(request);
+            self.result
+                .lock()
+                .expect("result lock")
+                .clone()
+                .unwrap_or(Ok(()))
+        }
+
+        fn cancel_turn(&self, request: RuntimeTurnCancelRequest) -> Result<(), RuntimeBridgeError> {
+            self.cancel_calls
+                .lock()
+                .expect("cancel calls lock")
+                .push(request);
+            self.cancel_result
+                .lock()
+                .expect("cancel result lock")
+                .clone()
+                .unwrap_or(Ok(()))
+        }
+
+        fn shutdown(&self) {}
     }
 
     #[test]
@@ -1817,7 +3455,7 @@ mod tests {
             .expect("parse errors should return an error response");
         let value: Value = serde_json::from_str(&response).expect("response should be JSON");
 
-        assert_eq!(value["id"], "missing-method");
+        assert!(value["id"].is_null());
         assert_eq!(value["error"]["code"], -32700);
         assert_eq!(value["error"]["data"]["code"], "INVALID_PARAMS");
     }
@@ -1830,7 +3468,7 @@ mod tests {
             .expect("invalid request shapes should return an error response");
         let value: Value = serde_json::from_str(&response).expect("response should be JSON");
 
-        assert!(value["id"].is_null());
+        assert_eq!(value["id"], "missing-method");
         assert_eq!(value["error"]["code"], -32600);
         assert_eq!(value["error"]["data"]["code"], "INVALID_PARAMS");
     }

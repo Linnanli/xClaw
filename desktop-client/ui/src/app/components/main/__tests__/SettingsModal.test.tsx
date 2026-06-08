@@ -5,8 +5,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { SettingsModal } from '../SettingsModal';
+
+const mockGetAppServerStatus = vi.hoisted(() => vi.fn());
 
 // Mock child tabs to isolate SettingsModal logic
 vi.mock('../../tabs/SkillsTab', () => ({
@@ -23,12 +25,29 @@ vi.mock('../../ui/scroll-area', () => ({
     <div data-testid="scroll-area" className={className}>{children}</div>
   ),
 }));
+vi.mock('../../../utils/tauri', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../utils/tauri')>()),
+  appServerApi: {
+    getStatus: mockGetAppServerStatus,
+  },
+}));
 
 describe('SettingsModal', () => {
   const defaultProps = { open: true, onOpenChange: vi.fn() };
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetAppServerStatus.mockResolvedValue({
+      binary: 'dasclaw-app-server',
+      startupSmokeEnabled: false,
+      supervisorEnabled: false,
+      supervisor: {
+        state: 'stopped',
+        restartCount: 0,
+        notificationCount: 0,
+      },
+      smokeRun: false,
+    });
   });
 
   // ── 单元测试 ──
@@ -46,7 +65,7 @@ describe('SettingsModal', () => {
 
   it('应该显示所有导航项', () => {
     render(<SettingsModal {...defaultProps} />);
-    const navLabels = ['用量统计', '技能管理', '记忆', '关于我们'];
+    const navLabels = ['用量统计', '诊断', '技能管理', '记忆', '关于我们'];
     navLabels.forEach((label) => {
       expect(screen.getByText(label)).toBeTruthy();
     });
@@ -68,6 +87,174 @@ describe('SettingsModal', () => {
     fireEvent.click(screen.getByText('用量统计'));
     expect(screen.getByText('本月对话数')).toBeTruthy();
     expect(screen.getByText('Token 使用量')).toBeTruthy();
+  });
+
+  it('点击诊断应加载 app-server 轻量状态', async () => {
+    render(<SettingsModal {...defaultProps} />);
+    fireEvent.click(screen.getByText('诊断'));
+
+    await waitFor(() => expect(mockGetAppServerStatus).toHaveBeenCalledWith(false));
+    expect(screen.getByText('dasclaw app-server')).toBeTruthy();
+    expectMetricValue('启动 smoke', '未启用');
+    expectMetricValue('Supervisor', '未启用');
+    expect(screen.getByText('未运行')).toBeTruthy();
+    expect(screen.getByText('stopped')).toBeTruthy();
+  });
+
+  it('诊断刷新应运行 app-server smoke 并显示结果', async () => {
+    mockGetAppServerStatus
+      .mockResolvedValueOnce({
+        binary: 'dasclaw-app-server',
+        startupSmokeEnabled: false,
+        supervisorEnabled: false,
+        supervisor: {
+          state: 'stopped',
+          restartCount: 0,
+          notificationCount: 0,
+        },
+        smokeRun: false,
+      })
+      .mockResolvedValueOnce({
+        binary: '/tmp/dasclaw-app-server',
+        startupSmokeEnabled: true,
+        supervisorEnabled: true,
+        supervisor: {
+          state: 'ready',
+          restartCount: 1,
+          notificationCount: 2,
+          runtimeHealthStatus: 'degraded',
+        },
+        smokeRun: true,
+        smoke: {
+          notificationCount: 3,
+          sessionStatus: 'implemented',
+          runtimeHealthStatus: 'degraded',
+          shutdownState: 'stopped',
+        },
+      });
+
+    render(<SettingsModal {...defaultProps} />);
+    fireEvent.click(screen.getByText('诊断'));
+
+    await waitFor(() => expect(mockGetAppServerStatus).toHaveBeenCalledWith(false));
+    fireEvent.click(screen.getByText('刷新'));
+
+    await waitFor(() => expect(mockGetAppServerStatus).toHaveBeenCalledWith(true));
+    expect(screen.getByText('implemented')).toBeTruthy();
+    expect(screen.getByText('degraded')).toBeTruthy();
+    expect(screen.getByText('ready')).toBeTruthy();
+    expect(screen.getByText('Supervisor 通知 2 条，restart: 1')).toBeTruthy();
+    expect(screen.getByText('通知 3 条，shutdown: stopped')).toBeTruthy();
+  });
+
+  it('诊断刷新失败应显示错误且不伪装为 smoke 成功', async () => {
+    mockGetAppServerStatus
+      .mockResolvedValueOnce({
+        binary: 'dasclaw-app-server',
+        startupSmokeEnabled: false,
+        supervisorEnabled: false,
+        supervisor: {
+          state: 'stopped',
+          restartCount: 0,
+          notificationCount: 0,
+        },
+        smokeRun: false,
+      })
+      .mockResolvedValueOnce({
+        binary: 'missing-app-server',
+        startupSmokeEnabled: false,
+        supervisorEnabled: false,
+        supervisor: {
+          state: 'stopped',
+          restartCount: 0,
+          notificationCount: 0,
+        },
+        smokeRun: true,
+        error: 'spawn failed',
+      });
+
+    render(<SettingsModal {...defaultProps} />);
+    fireEvent.click(screen.getByText('诊断'));
+
+    await waitFor(() => expect(mockGetAppServerStatus).toHaveBeenCalledWith(false));
+    fireEvent.click(screen.getByText('刷新'));
+
+    await waitFor(() => expect(screen.getByText('spawn failed')).toBeTruthy());
+    expect(screen.queryByText(/通知 3 条/)).toBeNull();
+    expect(screen.queryByText('implemented')).toBeNull();
+  });
+
+  it('诊断刷新 IPC rejected 时应显示错误且不伪装为 smoke 成功', async () => {
+    mockGetAppServerStatus
+      .mockResolvedValueOnce({
+        binary: 'dasclaw-app-server',
+        startupSmokeEnabled: false,
+        supervisorEnabled: false,
+        supervisor: {
+          state: 'stopped',
+          restartCount: 0,
+          notificationCount: 0,
+        },
+        smokeRun: false,
+      })
+      .mockRejectedValueOnce(new Error('ipc failed'));
+
+    render(<SettingsModal {...defaultProps} />);
+    fireEvent.click(screen.getByText('诊断'));
+
+    await waitFor(() => expect(mockGetAppServerStatus).toHaveBeenCalledWith(false));
+    fireEvent.click(screen.getByText('刷新'));
+
+    await waitFor(() => expect(screen.getByText('ipc failed')).toBeTruthy());
+    expect(screen.queryByText(/通知 3 条/)).toBeNull();
+    expect(screen.queryByText('implemented')).toBeNull();
+  });
+
+  it('诊断成功后再次 IPC rejected 应清掉旧 smoke 成功态', async () => {
+    mockGetAppServerStatus
+      .mockResolvedValueOnce({
+        binary: 'dasclaw-app-server',
+        startupSmokeEnabled: false,
+        supervisorEnabled: false,
+        supervisor: {
+          state: 'stopped',
+          restartCount: 0,
+          notificationCount: 0,
+        },
+        smokeRun: false,
+      })
+      .mockResolvedValueOnce({
+        binary: '/tmp/dasclaw-app-server',
+        startupSmokeEnabled: true,
+        supervisorEnabled: true,
+        supervisor: {
+          state: 'ready',
+          restartCount: 1,
+          notificationCount: 2,
+          runtimeHealthStatus: 'degraded',
+        },
+        smokeRun: true,
+        smoke: {
+          notificationCount: 3,
+          sessionStatus: 'implemented',
+          runtimeHealthStatus: 'degraded',
+          shutdownState: 'stopped',
+        },
+      })
+      .mockRejectedValueOnce(new Error('ipc failed'));
+
+    render(<SettingsModal {...defaultProps} />);
+    fireEvent.click(screen.getByText('诊断'));
+
+    await waitFor(() => expect(mockGetAppServerStatus).toHaveBeenCalledWith(false));
+    fireEvent.click(screen.getByText('刷新'));
+    await waitFor(() => expect(screen.getByText('implemented')).toBeTruthy());
+
+    fireEvent.click(screen.getByText('刷新'));
+    await waitFor(() => expect(screen.getByText('ipc failed')).toBeTruthy());
+    expect(screen.queryByText('implemented')).toBeNull();
+    expect(screen.queryByText('Supervisor 通知 2 条，restart: 1')).toBeNull();
+    expect(screen.queryByText('通知 3 条，shutdown: stopped')).toBeNull();
   });
 
   it('点击技能管理应渲染 SkillsTab', () => {
@@ -164,3 +351,9 @@ describe('SettingsModal', () => {
     confirmSpy.mockRestore();
   });
 });
+
+function expectMetricValue(label: string, value: string): void {
+  const metric = screen.getByText(label).closest('div');
+  expect(metric).not.toBeNull();
+  expect(within(metric as HTMLElement).getByText(value)).toBeTruthy();
+}
