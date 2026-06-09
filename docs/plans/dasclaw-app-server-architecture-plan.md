@@ -846,9 +846,9 @@ app-server 完成时至少满足：
 |---|---|
 | 是否新增 `dasclaw_app_server_protocol` crate | protocol schema 需要被 Electron、Tauri legacy、测试共同引用 |
 | 第一版 transport 选什么 | 推荐 stdio JSONL；若选 socket/HTTP，必须说明本地安全边界 |
-| `VercelUIStream` 是保留还是替换 | 如果 assistant-ui 仍依赖，可作为 compat event；核心 protocol 不应只等于 Vercel frame |
+| `VercelUIStream` 是保留还是替换 | 仅保留为旧 desktop UI 内部事件；不得作为 app-server compatibility event 或 open-cowork 接入契约 |
 | DLP/policy 服务先迁还是后迁 | 建议先迁 status/sync/gate，保证安全闭环 |
-| Tauri legacy 是否也走 app-server | 建议走，这样 Electron/Tauri 共用后端 contract，减少双实现 |
+| Tauri legacy 是否也走 app-server | 当前不作为目标；open-cowork 直接消费 Codex-compatible app-server protocol，desktop 只保留诊断/烟测 |
 
 ## 15. 最小可交付切片
 
@@ -1241,7 +1241,7 @@ This section consolidates the current app-server skeleton state before moving in
 | [x] | Desktop sidecar smoke helpers | `desktop-client` can spawn `dasclaw-app-server`, run initialize/health/capabilities/shutdown over stdio, and parse the probe transcript. |
 | [x] | Desktop diagnostics entry | `ic_app_server_status(run_smoke)` and the Settings "诊断" entry expose binary config, optional smoke results, and current supervisor status to the GUI. |
 | [x] | Desktop sidecar supervisor lifecycle | `desktop-client` can opt into a long-lived sidecar supervisor through `DASCLAW_APP_SERVER_SUPERVISOR=1`; the helper covers spawn, initialize, recurring `health/check`, shutdown coordination, dropped-handle shutdown, and bounded restart/backoff behavior. |
-| [x] | Desktop chat in-process probe | `send_chat_message` can opt into `DASCLAW_APP_SERVER_CHAT_INPROCESS_PROBE=1`, run an in-process app-server client initialize/thread/create/turn/start probe, and still dispatch the real message through the legacy Agent loop. |
+| [x] | Legacy desktop chat app-server adapter removed | `send_chat_message` no longer exposes app-server chat probe/dispatch gates; open-cowork compatibility is specified at the app-server protocol/client layer instead of the legacy `chat-stream` bridge. |
 
 ### Explicit non-goals still preserved
 
@@ -1256,8 +1256,8 @@ This section consolidates the current app-server skeleton state before moving in
 | DLP/policy local service | Not migrated. |
 | Jobs/routines/skills/MCP/sandbox | Not migrated. |
 | Electron sidecar supervisor | Desktop lifecycle wiring exists; Electron main/open-cowork integration remains a follow-up. |
-| Async process-spawn client/reconnect logic | Restart/backoff lifecycle exists, and supervisor-owned chat commands now have a minimal reconnect replay skeleton for transport failures. Durable active-turn recovery remains a follow-up. |
-| Desktop chat execution through app-server | Not switched end to end by default; only opt-in probe/dispatch paths exercise the app-server client contract before or instead of legacy dispatch. |
+| Async process-spawn client/reconnect logic | Restart/backoff lifecycle exists for sidecar health. Chat command replay through the desktop supervisor is removed and is not part of the compatibility surface. |
+| Desktop chat execution through app-server | Not switched end to end; old opt-in probe/dispatch paths were removed so desktop-client does not define the app-server chat contract. |
 
 ### Phase 1.6 status sync: runtime bridge and streamed turn execution (2026-06-08)
 
@@ -1295,31 +1295,29 @@ Completed in this follow-up slice:
 | Desktop opt-in lifecycle | implemented | `engine.rs` starts the supervisor when `DASCLAW_APP_SERVER_SUPERVISOR=1` is set and shuts it down after the legacy Agent loop exits. |
 | Diagnostics status | implemented | `ic_app_server_status(run_smoke)` reports whether the supervisor env gate is enabled plus state, restart count, connection generation, notification count, runtime health, and last error. |
 | Restart/backoff | implemented | Startup and health failures move through `Restarting` and retry up to `max_restarts` before `Failed`. |
-| Reconnect replay skeleton | implemented | If the supervisor-owned sidecar stdio transport fails while handling a queued chat command, the command is held, the replacement sidecar is spawned and initialized, and the command is replayed on the next connection generation. Explicit app-server JSON-RPC errors, request timeouts, and protocol/shape errors are returned to the caller without restarting or replaying the command. |
+| Health restart boundary | implemented | Startup and health transport failures restart the sidecar within the bounded backoff policy. The supervisor no longer owns desktop chat commands, so there is no chat command replay path in desktop-client. |
 | Shutdown coordination | implemented | Explicit `shutdown()` sends app-server `shutdown`; dropped handles are also treated as shutdown so detached supervisor tasks do not spin. |
-| Supervisor tests | implemented | Covered env gating, global one-shot start/status/shutdown, ready+shutdown, repeated start failure, dropped-handle shutdown, reconnect replay, JSON-RPC command errors, and protocol errors that must not replay with shell-backed sidecar fixtures. |
+| Supervisor tests | implemented | Covered env gating, global one-shot start/status/shutdown, ready+shutdown, repeated start failure, and dropped-handle shutdown with shell-backed sidecar fixtures. |
 
 Still out of scope for this slice: durable recovery of active turns after restart, default routing of real chat traffic through the app-server client, and Electron main/open-cowork lifecycle integration.
 
-### Phase 1.6 status sync: desktop chat app-server probes (2026-06-08)
+### Phase 1.6 cleanup: remove legacy desktop chat app-server adapter (2026-06-09)
 
-Completed in this follow-up slice:
+This cleanup reverses the experimental desktop chat probe/dispatch path and keeps the app-server work anchored to the Codex-compatible protocol boundary. The old adapter was useful for early smoke confidence, but it mapped app-server turn/item notifications into `chat-stream` / `VercelUIStream` and therefore risked making the legacy desktop-client contract the source of truth for open-cowork.
 
 | Area | Status | Notes |
 |---|---|---|
-| Chat opt-in gates | implemented | Added `DASCLAW_APP_SERVER_CHAT_INPROCESS_PROBE=1` for in-process probing and `DASCLAW_APP_SERVER_CHAT_SIDECAR_PROBE=1` for real stdio sidecar probing; default `send_chat_message` behavior remains unchanged. |
-| App-server client probe | implemented | The opt-in diagnostic path uses `dasclaw_app_server_client::AppServerClient` with in-process `InProcessTransport` to run `initialize`, `thread/create`, and `turn/start`; it does not connect to the sidecar supervisor. |
-| Stdio sidecar chat probe | implemented | The sidecar probe now reuses the supervisor-owned long-lived stdio sidecar session, queues `thread/create -> turn/start` through the supervisor connection holder, and does not spawn a one-shot sidecar from `send_chat_message`. |
-| Chat-stream compat bridge | partial | The sidecar probe translates matching app-server `turn/delta` and terminal turn notifications, including post-response delayed runtime notifications, into the existing `chat-stream` / `VercelUIStream` text lifecycle for opt-in diagnostics. It deliberately does not emit `Finish`, so the probe cannot close the legacy chat stream before the legacy Agent loop responds. |
-| Opt-in sidecar dispatch | partial | Added `DASCLAW_APP_SERVER_CHAT_SIDECAR_DISPATCH=1` as an experimental switch that sends the sanitized text prompt through the supervisor-owned app-server sidecar and skips legacy `msg_sender` dispatch. Dispatch mode emits `Finish`; default behavior remains legacy. |
-| Legacy dispatch preservation | implemented | After the in-process probe, `send_chat_message` still enqueues the sanitized message through the existing `msg_sender`, so DLP, skill detection, history recording, Agent loop, and ToolExecutor remain in the legacy path. Probe failures are logged and do not block this dispatch. |
-| Probe/dispatch tests | implemented | Tests cover env gating, in-process and stdio app-server client thread/turn contracts, supervisor-owned sidecar routing, strict method/params matching, delayed turn delta UI frame mapping, chat-stream envelope thread routing, shutdown transcript verification, JSON-RPC command errors preserving legacy `msg_sender`, probe mode preserving legacy `msg_sender`, and dispatch mode skipping legacy `msg_sender` on both success and app-server failure. |
+| Chat opt-in gates | removed | `DASCLAW_APP_SERVER_CHAT_INPROCESS_PROBE`, `DASCLAW_APP_SERVER_CHAT_SIDECAR_PROBE`, and `DASCLAW_APP_SERVER_CHAT_SIDECAR_DISPATCH` are removed from `send_chat_message`. |
+| Chat-stream compat bridge | removed | App-server `turn/*` and `item/*` events are no longer translated into legacy `VercelUIStream` frames in desktop-client. |
+| Supervisor chat command queue | removed | The sidecar supervisor remains a lifecycle/health diagnostic helper only; it no longer accepts queued desktop chat probes, dispatches, or replay-on-reconnect chat commands. |
+| Legacy chat path | unchanged | Default desktop chat still uses the existing Agent loop / ToolExecutor path; app-server does not reimplement either. |
+| Compatibility source of truth | protocol/client tests | Future open-cowork work must target Codex-compatible app-server methods and fixtures directly, not the old desktop `chat-stream` adapter. |
 
-Still out of scope for this slice: promoting sidecar dispatch into the default chat execution path, durable recovery of active chat state after supervisor restart, attachments/prompt history persistence, durable thread/turn persistence, and the full approval/diff/tool-call/plan UI contract.
+Still out of scope: promoting app-server into default legacy desktop chat execution, approval/diff/tool-call/plan UI, DLP/policy migration, jobs, skills, MCP, sandbox, and durable active-turn recovery.
 
 ### Phase 1.7 planning update: integration-first before new client (2026-06-08)
 
-The next client is expected to consume the app-server protocol directly, so the remaining desktop `chat-stream` wiring should stay thin and opt-in. The old desktop UI adapter is useful for smoke coverage and diagnostics, but it should not become the primary place where new app-server behavior is specified.
+The next client is expected to consume the app-server protocol directly. The remaining desktop support should stay limited to Settings diagnostics, stdio smoke, and supervisor lifecycle/health visibility; desktop `chat-stream` wiring is not a compatibility surface for new app-server behavior.
 
 Cross-project check against `codex-cli-main` and the open-cowork/Electron app-server consumer path changes the next planning target: the replacement client should not receive a new dasclaw-only contract first. It should receive a **Codex app-server v2 compatibility profile** backed by dasclaw runtime execution. Codex app-server is a useful reference for protocol shape, schema discipline, typed client behavior, in-process/stdio/remote transports, and Thread / Turn / Item event semantics. Codex `message_processor` and `codex_message_processor` remain reference-only because they are coupled to Codex core services, auth/account, thread manager, config, fs, MCP, plugins, review, dynamic tools, and other product-specific services.
 
@@ -1329,7 +1327,7 @@ Verified compatibility anchors:
 |---|---|---|
 | Request model | `ClientRequest` variants such as `thread/start`, `thread/read`, `turn/start`, `turn/interrupt`, `turn/steer` | Add a compatibility decision slice before client work; do not extend `thread/create` / `turn/cancel` as the only new-client surface. |
 | Event model | `ServerNotification` variants such as `thread/started`, `turn/started`, `item/started`, `item/agentMessage/delta`, `item/completed`, `turn/completed` | Move new streaming tests toward item-level notifications; keep `turn/delta` for transitional diagnostics. |
-| Client lifecycle | `initialize` plus client `notifications/initialized`, capability opt-outs, bounded event queues, lag/disconnect signaling | Evaluate acknowledgement and notification opt-out support in dasclaw compatibility fixtures. |
+| Client lifecycle | `initialize` plus client `notifications/initialized`, capability opt-outs, bounded event queues, lag/disconnect signaling | Implement the minimal chat-subset acknowledgement in dasclaw compatibility fixtures; keep richer lifecycle/reconnect behavior at the app-server/client layer. |
 | Reverse request model | approval, user input, dynamic tool call, auth refresh request variants | Reserve this as the future approval/tool UI contract; do not migrate it in the current app-server-only slice. |
 | Processor boundary | Codex `MessageProcessor` / `CodexMessageProcessor` | Do not port wholesale; keep execution delegated through `dasclaw_runtime::Agent` and existing runtime bridge. |
 
@@ -1337,34 +1335,34 @@ Recommended validation center for the next slice:
 
 | Priority | Area | Scope |
 |---|---|---|
-| P0 | Codex compatibility profile | Define the minimal method/event subset needed by open-cowork: `initialize`, `thread/start`, `thread/read`, `turn/start`, `turn/interrupt`, `item/started`, `item/agentMessage/delta`, `item/completed`, `turn/completed`, and `error`. |
+| P0 | Codex compatibility profile | Define the minimal method/event subset needed by open-cowork: `initialize`, `notifications/initialized`, `thread/start`, `thread/read`, `turn/start(input)`, `turn/interrupt`, `thread/started`, `item/started`, `item/agentMessage/delta`, `item/completed`, `turn/completed`, and `error`. |
 | P0 | Compatibility fixture tests | Add JSON fixtures or golden tests that compare dasclaw app-server wire shape against the Codex-compatible subset before adding new client UI. |
 | P0 | App-server integration tests | Cover `initialize -> thread/create -> turn/start`, post-response notifications, `turn/delta`, `turn/completed`, `turn/failed`, and `turn/cancelled` without depending on the legacy desktop UI. |
 | P0 | Runtime bridge contract tests | Use fake/test runtime bridges to drive delta/completed/failed/cancelled paths while keeping Agent loop and ToolExecutor delegated to `dasclaw_runtime`. |
 | P0 | Transport contract tests | Exercise in-process and line-delimited stdio client behavior, including JSON-RPC errors, unexpected ids, protocol errors, timeouts, and post-response notification drain. |
-| P1 | Old UI smoke adapter | Keep Settings diagnostics and opt-in `DASCLAW_APP_SERVER_CHAT_SIDECAR_DISPATCH=1`; only assert the minimal `chat-stream` compat contract needed for smoke runs. |
-| P1 | Reconnect boundary | Keep pending-command replay only for clear transport failures; leave durable active-turn recovery for a later persistence slice. |
+| P1 | Old UI smoke adapter | Do not keep a chat-stream adapter. Settings diagnostics, stdio smoke, and supervisor lifecycle/health status may remain; protocol compatibility belongs in app-server/client fixtures. |
+| P1 | Reconnect boundary | Define replacement-client transport reconnect semantics at the app-server/client layer; leave durable active-turn recovery for a later persistence slice. |
 
-Do not expand the old UI adapter into the source of truth for approval, diff, tool-call, plan, or durable thread semantics. Those contracts should be specified and tested at the app-server protocol/integration layer first, then consumed by the replacement client.
+Do not reintroduce the old UI adapter as the source of truth for approval, diff, tool-call, plan, or durable thread semantics. Those contracts should be specified and tested at the app-server protocol/integration layer first, then consumed by the replacement client.
 
 First integration-test slice completed:
 
 | Area | Status | Notes |
 |---|---|---|
-| JSON-RPC turn lifecycle integration | implemented | Added direct app-server JSON-RPC tests for `initialize -> thread/create -> turn/start` with multi-delta completion, runtime failure, and pending turn cancellation. |
+| JSON-RPC turn lifecycle integration | implemented | Added direct app-server JSON-RPC tests for `initialize -> thread/create/thread_start -> turn/start` with multi-delta completion, runtime failure, pending turn cancellation, Codex-style string `input` alias normalization, and compatibility `thread/started` notifications. |
 | Runtime bridge fake matrix | partial | Added a sequenced test runtime bridge that emits multiple `turn/delta` updates before terminal `turn/completed` or `turn/failed`. |
-| Client post-response terminal notifications | implemented | Added line-delimited client tests for response-first `turn/completed`, `turn/failed`, and `turn/cancelled` typed notifications. |
+| Client post-response terminal notifications | implemented | Added line-delimited client tests for response-first `turn/completed`, `turn/failed`, and `turn/cancelled` typed notifications; client helpers now include explicit `turn_start_input*` methods for the compatibility subset. |
+| Codex v2 lifecycle compatibility | implemented | `codex_app_server_v2` initialization now emits `notifications/initialized`, advertises capability opt-outs and bounded queue policy, and signals overflow with a single retryable `NOTIFICATION_QUEUE_OVERFLOW` error notification. |
 | UI adapter scope | unchanged | No additional legacy desktop UI wiring was added in this slice. |
 
 Next task list after the Codex compatibility check:
 
 | Order | Task | Done when |
 |---|---|---|
-| 1 | Write the Codex v2 compatibility matrix for the minimal chat subset | The docs and tests state which dasclaw methods are aliases, which are deprecated transitional helpers, and which Codex methods are intentionally unsupported. |
-| 2 | Add compatibility contract tests for Thread / Turn / Item wire shapes | `thread/start -> turn/start -> item/agentMessage/delta -> turn/completed` is covered without legacy desktop UI. |
-| 3 | Add typed client helpers or aliases for the compatibility subset | New client-facing helpers prefer Codex method names while preserving existing v0 tests. |
+| 1 | Expand compatibility contract fixtures only at the protocol boundary | Keep `initialize -> notifications/initialized -> thread/start -> turn/start(input) -> item/agentMessage/delta -> turn/completed` covered without legacy desktop UI; add fixtures only when new client-facing method/event shapes are introduced. |
+| 2 | Decide `thread/read` / `turn/read` Codex-compatible response aliases | Add helpers or aliases only if the replacement client needs Codex-shaped history reads before UI wiring. |
+| 3 | Spike open-cowork consumption against the compatibility fixtures | The new client can consume app-server protocol directly before any default desktop chat switch. |
 | 4 | Add server-to-client request placeholders only when approval/tool UI work starts | Approval, diff, tool-call, plan, MCP, skills, DLP, jobs, and sandbox remain out of this slice. |
-| 5 | Spike open-cowork consumption against the compatibility fixtures | The new client can consume app-server protocol directly before any default desktop chat switch. |
 
 ### Recommended next-session starting point
 

@@ -4,11 +4,9 @@
 //! is written as one stdout line so Electron can supervise this process as a
 //! simple sidecar before we commit to a longer-lived socket transport.
 
-use std::io::{self, BufRead, Write};
-use std::sync::mpsc::{self, RecvTimeoutError};
-use std::time::{Duration, Instant};
+use std::io;
 
-use dasclaw_app_server::AppServer;
+use dasclaw_app_server::{AppServer, run_stdio_server};
 use dasclaw_app_server_protocol::{
     CapabilitiesListResponse, ClientInfo, HealthCheckParams, HealthCheckResponse, InitializeParams,
     InitializeResponse, LifecycleStatusResponse, ProtocolSchemaResponse, ProtocolVersion,
@@ -84,7 +82,7 @@ fn print_version_json() {
 }
 
 fn print_health_once() {
-    let server = AppServer::new();
+    let mut server = AppServer::new();
     let health = server.health_check(HealthCheckParams {
         include_details: true,
     });
@@ -98,7 +96,7 @@ fn print_health_once() {
 }
 
 fn print_capabilities_once() {
-    let server = AppServer::new();
+    let mut server = AppServer::new();
     match serde_json::to_string(&server.capabilities()) {
         Ok(line) => println!("{line}"),
         Err(error) => {
@@ -226,90 +224,6 @@ struct SelfCheckSessionReport {
     pending_notifications: usize,
 }
 
-const STDIO_NOTIFICATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
-const STDIO_EOF_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
-
-fn run_stdio_server<R, W>(reader: R, writer: W) -> io::Result<()>
-where
-    R: BufRead + Send + 'static,
-    W: Write,
-{
-    run_stdio_server_with_app_server(AppServer::new(), reader, writer)
-}
-
-fn run_stdio_server_with_app_server<R, W>(
-    mut server: AppServer,
-    reader: R,
-    mut writer: W,
-) -> io::Result<()>
-where
-    R: BufRead + Send + 'static,
-    W: Write,
-{
-    let (line_sender, line_receiver) = mpsc::channel();
-    let _reader_thread = std::thread::spawn(move || {
-        for line in reader.lines() {
-            if line_sender.send(line).is_err() {
-                break;
-            }
-        }
-    });
-
-    let mut input_closed_at = None;
-    loop {
-        match line_receiver.recv_timeout(STDIO_NOTIFICATION_POLL_INTERVAL) {
-            Ok(Ok(line)) => {
-                input_closed_at = None;
-                if !line.trim().is_empty() {
-                    let response = server.handle_json_rpc(&line);
-                    write_pending_notifications(&mut server, &mut writer)?;
-                    if let Some(response) = response {
-                        writeln!(writer, "{response}")?;
-                    }
-                    writer.flush()?;
-                    if server.is_stopped() {
-                        break;
-                    }
-                }
-            }
-            Ok(Err(error)) => return Err(error),
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => {
-                input_closed_at.get_or_insert_with(Instant::now);
-            }
-        }
-
-        if write_pending_notifications(&mut server, &mut writer)? {
-            writer.flush()?;
-            if input_closed_at.is_some() {
-                input_closed_at = Some(Instant::now());
-            }
-        }
-        if server.is_stopped() {
-            break;
-        }
-        if input_closed_at.is_some_and(|closed_at| closed_at.elapsed() >= STDIO_EOF_DRAIN_TIMEOUT) {
-            break;
-        }
-    }
-
-    write_pending_notifications(&mut server, &mut writer)?;
-    writer.flush()?;
-    Ok(())
-}
-
-fn write_pending_notifications<W>(server: &mut AppServer, writer: &mut W) -> io::Result<bool>
-where
-    W: Write,
-{
-    let mut wrote = false;
-    for notification in server.drain_json_rpc_notifications() {
-        writeln!(writer, "{notification}")?;
-        wrote = true;
-    }
-    Ok(wrote)
-}
-
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
@@ -322,7 +236,9 @@ mod tests {
     };
     use serde_json::Value;
 
-    use super::{RunMode, parse_run_mode, run_stdio_server, run_stdio_server_with_app_server};
+    use dasclaw_app_server::run_stdio_server_with_app_server;
+
+    use super::{RunMode, parse_run_mode, run_stdio_server};
 
     #[test]
     fn parse_run_mode_defaults_to_stdio() {
@@ -468,6 +384,162 @@ mod tests {
     }
 
     #[test]
+    fn stdio_loop_supports_codex_v2_chat_subset_transcript() {
+        let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"client":{"name":"codex","version":"2.0.0","transport":"stdio"},"protocolVersion":{"major":0,"minor":1,"patch":0},"requestedCapabilities":["codex_app_server_v2"]}}"#;
+        let thread_start =
+            r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"title":"Draft"}}"#;
+        let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":"hello"}}"#;
+        let mut output = Vec::new();
+        let bridge = Arc::new(CompletingRuntimeBridge::default());
+        let server = dasclaw_app_server::AppServer::with_runtime_bridge(bridge);
+
+        run_stdio_server_with_app_server(
+            server,
+            Cursor::new(format!("{initialize}\n{thread_start}\n{turn_start}\n")),
+            &mut output,
+        )
+        .expect("stdio loop should support the Codex v2 chat subset transcript");
+
+        let response = String::from_utf8(output).expect("response should be utf8");
+        let values = response
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("line should be JSON"))
+            .collect::<Vec<_>>();
+        let initialize_response = values
+            .iter()
+            .find(|value| value["id"] == "init")
+            .expect("initialize response should be present");
+        let profile = initialize_response["result"]["compatibilityProfiles"]
+            .as_array()
+            .expect("compatibility profiles should be an array")
+            .iter()
+            .find(|profile| profile["id"] == "codex_app_server_v2")
+            .expect("Codex v2 profile should be advertised");
+        let methods = values
+            .iter()
+            .filter_map(|value| value.get("method").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+
+        assert_eq!(profile["scope"], "chat_session_subset");
+        assert!(
+            values.iter().any(|value| {
+                value["id"] == "thread" && value["result"]["threadId"] == "thread_1"
+            })
+        );
+        assert!(
+            values
+                .iter()
+                .any(|value| { value["id"] == "turn" && value["result"]["turnId"] == "turn_1" })
+        );
+        assert!(methods.contains(&"notifications/initialized"));
+        assert!(methods.contains(&"item/started"));
+        assert!(methods.contains(&"item/completed"));
+        assert!(methods.contains(&"turn/completed"));
+        assert!(!methods.contains(&"turn/delta"));
+        let item_completed_position = methods
+            .iter()
+            .position(|method| *method == "item/completed")
+            .expect("item/completed should be present");
+        let turn_completed_position = methods
+            .iter()
+            .position(|method| *method == "turn/completed")
+            .expect("turn/completed should be present");
+        assert!(item_completed_position < turn_completed_position);
+    }
+
+    #[test]
+    fn stdio_loop_emits_codex_v2_failure_item_terminal_and_error_events() {
+        let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"client":{"name":"codex","version":"2.0.0","transport":"stdio"},"protocolVersion":{"major":0,"minor":1,"patch":0},"requestedCapabilities":["codex_app_server_v2"]}}"#;
+        let thread_start =
+            r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"title":"Draft"}}"#;
+        let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":"hello"}}"#;
+        let mut output = Vec::new();
+        let bridge = Arc::new(FailingRuntimeBridge);
+        let server = dasclaw_app_server::AppServer::with_runtime_bridge(bridge);
+
+        run_stdio_server_with_app_server(
+            server,
+            Cursor::new(format!("{initialize}\n{thread_start}\n{turn_start}\n")),
+            &mut output,
+        )
+        .expect("stdio loop should emit Codex v2 failure events");
+
+        let response = String::from_utf8(output).expect("response should be utf8");
+        let values = response
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("line should be JSON"))
+            .collect::<Vec<_>>();
+
+        assert!(values.iter().any(|value| value["method"] == "turn/failed"));
+        assert!(values.iter().any(|value| {
+            value["method"] == "item/completed" && value["params"]["status"] == "failed"
+        }));
+        assert!(values.iter().any(|value| {
+            value["method"] == "error" && value["params"]["message"] == "runtime failed"
+        }));
+        let item_completed_position = values
+            .iter()
+            .position(|value| value["method"] == "item/completed")
+            .expect("item/completed should be present");
+        let turn_failed_position = values
+            .iter()
+            .position(|value| value["method"] == "turn/failed")
+            .expect("turn/failed should be present");
+        let error_position = values
+            .iter()
+            .position(|value| value["method"] == "error")
+            .expect("error should be present");
+        assert!(item_completed_position < turn_failed_position);
+        assert!(turn_failed_position < error_position);
+    }
+
+    #[test]
+    fn stdio_loop_emits_codex_v2_interrupt_item_terminal_events() {
+        let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"client":{"name":"codex","version":"2.0.0","transport":"stdio"},"protocolVersion":{"major":0,"minor":1,"patch":0},"requestedCapabilities":["codex_app_server_v2"]}}"#;
+        let thread_start =
+            r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"title":"Draft"}}"#;
+        let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":"hello"}}"#;
+        let interrupt = r#"{"jsonrpc":"2.0","id":"interrupt","method":"turn/interrupt","params":{"threadId":"thread_1","turnId":"turn_1"}}"#;
+        let mut output = Vec::new();
+
+        run_stdio_server_with_app_server(
+            dasclaw_app_server::AppServer::new(),
+            Cursor::new(format!(
+                "{initialize}\n{thread_start}\n{turn_start}\n{interrupt}\n"
+            )),
+            &mut output,
+        )
+        .expect("stdio loop should emit Codex v2 interrupt events");
+
+        let response = String::from_utf8(output).expect("response should be utf8");
+        let values = response
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("line should be JSON"))
+            .collect::<Vec<_>>();
+
+        assert!(
+            values
+                .iter()
+                .any(|value| value["method"] == "turn/cancelled")
+        );
+        assert!(values.iter().any(|value| {
+            value["method"] == "item/completed" && value["params"]["status"] == "cancelled"
+        }));
+        assert!(values.iter().any(|value| {
+            value["id"] == "interrupt" && value["result"]["status"] == "cancelled"
+        }));
+        let item_completed_position = values
+            .iter()
+            .position(|value| value["method"] == "item/completed")
+            .expect("item/completed should be present");
+        let turn_cancelled_position = values
+            .iter()
+            .position(|value| value["method"] == "turn/cancelled")
+            .expect("turn/cancelled should be present");
+        assert!(item_completed_position < turn_cancelled_position);
+    }
+
+    #[test]
     fn stdio_loop_streams_runtime_notifications_after_response_without_another_request() {
         let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"client":{"name":"open-cowork","version":"0.0.0","transport":"stdio"},"protocolVersion":{"major":0,"minor":1,"patch":0},"requestedCapabilities":[]}}"#;
         let create = r#"{"jsonrpc":"2.0","id":"thread","method":"thread/create","params":{"title":"Draft"}}"#;
@@ -499,6 +571,39 @@ mod tests {
             .expect("delayed turn/completed notification should be written");
 
         assert!(completed_position > turn_response_position);
+    }
+
+    #[test]
+    fn stdio_loop_disconnects_after_notification_queue_overflow() {
+        let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"client":{"name":"open-cowork","version":"0.0.0","transport":"stdio"},"protocolVersion":{"major":0,"minor":1,"patch":0},"requestedCapabilities":[]}}"#;
+        let create = r#"{"jsonrpc":"2.0","id":"thread","method":"thread/create","params":{"title":"overflow"}}"#;
+        let start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","prompt":"overflow"}}"#;
+        let after_overflow =
+            r#"{"jsonrpc":"2.0","id":"after_overflow","method":"lifecycle/status"}"#;
+        let mut output = Vec::new();
+        let server =
+            dasclaw_app_server::AppServer::with_runtime_bridge(Arc::new(OverflowingRuntimeBridge));
+
+        run_stdio_server_with_app_server(
+            server,
+            Cursor::new(format!(
+                "{initialize}\n{create}\n{start}\n{after_overflow}\n"
+            )),
+            &mut output,
+        )
+        .expect("stdio loop should write overflow and disconnect cleanly");
+
+        let response = String::from_utf8(output).expect("response should be utf8");
+        let values = response
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("line should be JSON"))
+            .collect::<Vec<_>>();
+
+        assert!(values.iter().any(|value| {
+            value["method"] == "error" && value["params"]["code"] == "NOTIFICATION_QUEUE_OVERFLOW"
+        }));
+        assert!(!values.iter().any(|value| value["id"] == "turn"));
+        assert!(!values.iter().any(|value| value["id"] == "after_overflow"));
     }
 
     #[test]
@@ -541,7 +646,7 @@ mod tests {
 
     #[test]
     fn health_once_shape_is_serializable() {
-        let server = dasclaw_app_server::AppServer::new();
+        let mut server = dasclaw_app_server::AppServer::new();
         let health = server.health_check(dasclaw_app_server_protocol::HealthCheckParams {
             include_details: true,
         });
@@ -564,7 +669,7 @@ mod tests {
 
     #[test]
     fn capabilities_once_shape_is_serializable() {
-        let server = dasclaw_app_server::AppServer::new();
+        let mut server = dasclaw_app_server::AppServer::new();
         let value =
             serde_json::to_value(server.capabilities()).expect("capabilities should serialize");
 
@@ -618,7 +723,7 @@ mod tests {
             1
         );
         assert_eq!(value["session"]["turnRead"]["turn"]["status"], "cancelled");
-        assert_eq!(value["session"]["pendingNotifications"], 3);
+        assert_eq!(value["session"]["pendingNotifications"], 5);
     }
 
     #[derive(Debug, Default)]
@@ -651,6 +756,29 @@ mod tests {
     }
 
     #[derive(Debug)]
+    struct FailingRuntimeBridge;
+
+    impl RuntimeBridge for FailingRuntimeBridge {
+        fn start_turn(&self, request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
+            request.updates.fail(
+                request.thread_id,
+                request.turn_id,
+                "runtime failed".to_string(),
+            );
+            Ok(())
+        }
+
+        fn cancel_turn(
+            &self,
+            _request: RuntimeTurnCancelRequest,
+        ) -> Result<(), RuntimeBridgeError> {
+            Ok(())
+        }
+
+        fn shutdown(&self) {}
+    }
+
+    #[derive(Debug)]
     struct DelayedCompletingRuntimeBridge;
 
     impl RuntimeBridge for DelayedCompletingRuntimeBridge {
@@ -663,6 +791,31 @@ mod tests {
                     format!("runtime saw: {}", request.prompt),
                 );
             });
+            Ok(())
+        }
+
+        fn cancel_turn(
+            &self,
+            _request: RuntimeTurnCancelRequest,
+        ) -> Result<(), RuntimeBridgeError> {
+            Ok(())
+        }
+
+        fn shutdown(&self) {}
+    }
+
+    #[derive(Debug)]
+    struct OverflowingRuntimeBridge;
+
+    impl RuntimeBridge for OverflowingRuntimeBridge {
+        fn start_turn(&self, request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
+            for index in 0..=dasclaw_app_server_protocol::DEFAULT_MAX_PENDING_NOTIFICATIONS {
+                request.updates.delta(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    format!("chunk {index}"),
+                );
+            }
             Ok(())
         }
 

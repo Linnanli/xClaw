@@ -4,6 +4,7 @@
 //! does not define agent-loop internals or tool-execution traits; those stay
 //! in `dasclaw_runtime`.
 
+use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL_MAJOR: u16 = 0;
@@ -19,25 +20,33 @@ pub mod method {
     pub const LIFECYCLE_STATUS: &str = "lifecycle/status";
     pub const SHUTDOWN: &str = "shutdown";
     pub const THREAD_CREATE: &str = "thread/create";
+    pub const THREAD_START: &str = "thread/start";
     pub const THREAD_LIST: &str = "thread/list";
     pub const THREAD_READ: &str = "thread/read";
     pub const TURN_START: &str = "turn/start";
     pub const TURN_CANCEL: &str = "turn/cancel";
+    pub const TURN_INTERRUPT: &str = "turn/interrupt";
     pub const TURN_LIST: &str = "turn/list";
     pub const TURN_READ: &str = "turn/read";
 }
 
 pub mod event {
+    pub const NOTIFICATIONS_INITIALIZED: &str = "notifications/initialized";
     pub const LIFECYCLE_CHANGED: &str = "lifecycle/changed";
     pub const HEALTH_CHANGED: &str = "health/changed";
     pub const CAPABILITIES_CHANGED: &str = "capabilities/changed";
     pub const LOG_ENTRY: &str = "log/entry";
     pub const THREAD_CREATED: &str = "thread/created";
+    pub const THREAD_STARTED: &str = "thread/started";
     pub const TURN_STARTED: &str = "turn/started";
     pub const TURN_DELTA: &str = "turn/delta";
     pub const TURN_COMPLETED: &str = "turn/completed";
     pub const TURN_FAILED: &str = "turn/failed";
     pub const TURN_CANCELLED: &str = "turn/cancelled";
+    pub const ITEM_STARTED: &str = "item/started";
+    pub const ITEM_AGENT_MESSAGE_DELTA: &str = "item/agentMessage/delta";
+    pub const ITEM_COMPLETED: &str = "item/completed";
+    pub const ERROR: &str = "error";
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -197,6 +206,8 @@ pub struct InitializeResponse {
     pub lifecycle: LifecycleSnapshot,
     pub capabilities: CapabilityMatrix,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compatibility_profiles: Vec<CompatibilityProfile>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unavailable_requested_capabilities: Vec<String>,
 }
 
@@ -342,7 +353,7 @@ impl CapabilityMatrix {
             protocol: Capability::implemented(
                 "protocol",
                 &[method::INITIALIZE, method::PROTOCOL_SCHEMA],
-                &[],
+                &[event::NOTIFICATIONS_INITIALIZED],
             ),
             lifecycle: Capability::implemented(
                 "lifecycle",
@@ -359,20 +370,27 @@ impl CapabilityMatrix {
                 "session",
                 &[
                     method::THREAD_CREATE,
+                    method::THREAD_START,
                     method::THREAD_LIST,
                     method::THREAD_READ,
                     method::TURN_START,
                     method::TURN_CANCEL,
+                    method::TURN_INTERRUPT,
                     method::TURN_LIST,
                     method::TURN_READ,
                 ],
                 &[
                     event::THREAD_CREATED,
+                    event::THREAD_STARTED,
                     event::TURN_STARTED,
                     event::TURN_DELTA,
                     event::TURN_COMPLETED,
                     event::TURN_FAILED,
                     event::TURN_CANCELLED,
+                    event::ITEM_STARTED,
+                    event::ITEM_AGENT_MESSAGE_DELTA,
+                    event::ITEM_COMPLETED,
+                    event::ERROR,
                 ],
             ),
             approval: declared_future_capability("approval"),
@@ -401,6 +419,8 @@ pub struct ProtocolSchemaResponse {
     pub methods: Vec<MethodSchema>,
     pub events: Vec<EventSchema>,
     pub capabilities: CapabilityMatrix,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compatibility_profiles: Vec<CompatibilityProfile>,
 }
 
 impl ProtocolSchemaResponse {
@@ -411,8 +431,170 @@ impl ProtocolSchemaResponse {
             methods: phase_one_methods(),
             events: phase_one_events(),
             capabilities,
+            compatibility_profiles: vec![CompatibilityProfile::codex_app_server_v2()],
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompatibilityProfile {
+    pub id: String,
+    pub version: String,
+    pub scope: CompatibilityProfileScope,
+    pub description: String,
+    pub methods: Vec<String>,
+    pub events: Vec<String>,
+    pub aliases: Vec<CompatibilityAlias>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capability_opt_outs: Vec<CapabilityOptOut>,
+    pub event_queue: NotificationQueuePolicy,
+}
+
+impl CompatibilityProfile {
+    pub const CODEX_APP_SERVER_V2_ID: &'static str = "codex_app_server_v2";
+
+    #[must_use]
+    pub fn codex_app_server_v2() -> Self {
+        Self {
+            id: Self::CODEX_APP_SERVER_V2_ID.to_string(),
+            version: "2.0.0-compat".to_string(),
+            scope: CompatibilityProfileScope::ChatSessionSubset,
+            description: "Codex app-server v2 compatibility profile for initialize/thread/turn chat session streaming only".to_string(),
+            methods: vec![
+                method::INITIALIZE.to_string(),
+                method::THREAD_START.to_string(),
+                method::THREAD_READ.to_string(),
+                method::TURN_START.to_string(),
+                method::TURN_INTERRUPT.to_string(),
+            ],
+            events: CODEX_APP_SERVER_V2_EVENTS
+                .iter()
+                .map(|event| (*event).to_string())
+                .collect(),
+            aliases: vec![
+                CompatibilityAlias::new(
+                    method::THREAD_CREATE,
+                    method::THREAD_START,
+                    CompatibilityAliasKind::LegacySmokeSurface,
+                ),
+                CompatibilityAlias::new(
+                    method::TURN_CANCEL,
+                    method::TURN_INTERRUPT,
+                    CompatibilityAliasKind::Alias,
+                ),
+                CompatibilityAlias::new(
+                    event::TURN_DELTA,
+                    event::ITEM_AGENT_MESSAGE_DELTA,
+                    CompatibilityAliasKind::LegacySmokeSurface,
+                ),
+            ],
+            capability_opt_outs: vec![
+                CapabilityOptOut::phase_one("codex.rich_input"),
+                CapabilityOptOut::phase_one("codex.tool_calls"),
+                CapabilityOptOut::phase_one("codex.approvals"),
+                CapabilityOptOut::phase_one("codex.diff"),
+                CapabilityOptOut::phase_one("codex.plan"),
+                CapabilityOptOut::phase_one("tools"),
+                CapabilityOptOut::phase_one("mcp"),
+                CapabilityOptOut::phase_one("skills"),
+                CapabilityOptOut::phase_one("dlp_policy"),
+                CapabilityOptOut::phase_one("jobs"),
+                CapabilityOptOut::phase_one("sandbox"),
+            ],
+            event_queue: NotificationQueuePolicy::bounded_lag_disconnect(),
+        }
+    }
+}
+
+const CODEX_APP_SERVER_V2_EVENTS: &[&str] = &[
+    event::NOTIFICATIONS_INITIALIZED,
+    event::LIFECYCLE_CHANGED,
+    event::CAPABILITIES_CHANGED,
+    event::THREAD_CREATED,
+    event::THREAD_STARTED,
+    event::TURN_STARTED,
+    event::TURN_DELTA,
+    event::TURN_COMPLETED,
+    event::TURN_FAILED,
+    event::TURN_CANCELLED,
+    event::ITEM_STARTED,
+    event::ITEM_AGENT_MESSAGE_DELTA,
+    event::ITEM_COMPLETED,
+    event::ERROR,
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompatibilityProfileScope {
+    ChatSessionSubset,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompatibilityAlias {
+    pub legacy: String,
+    pub compatible: String,
+    pub kind: CompatibilityAliasKind,
+}
+
+impl CompatibilityAlias {
+    fn new(legacy: &'static str, compatible: &'static str, kind: CompatibilityAliasKind) -> Self {
+        Self {
+            legacy: legacy.to_string(),
+            compatible: compatible.to_string(),
+            kind,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompatibilityAliasKind {
+    Alias,
+    DeprecatedHelper,
+    LegacySmokeSurface,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilityOptOut {
+    pub capability: String,
+    pub reason: String,
+}
+
+impl CapabilityOptOut {
+    fn phase_one(capability: &'static str) -> Self {
+        Self {
+            capability: capability.to_string(),
+            reason: "phase_1_chat_session_subset".to_string(),
+        }
+    }
+}
+
+pub const DEFAULT_MAX_PENDING_NOTIFICATIONS: u16 = 256;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationQueuePolicy {
+    pub max_pending_notifications: u16,
+    pub overflow: NotificationQueueOverflowPolicy,
+}
+
+impl NotificationQueuePolicy {
+    #[must_use]
+    pub fn bounded_lag_disconnect() -> Self {
+        Self {
+            max_pending_notifications: DEFAULT_MAX_PENDING_NOTIFICATIONS,
+            overflow: NotificationQueueOverflowPolicy::LagDisconnect,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationQueueOverflowPolicy {
+    LagDisconnect,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -514,6 +696,13 @@ fn phase_one_methods() -> Vec<MethodSchema> {
             true,
         ),
         MethodSchema::new(
+            method::THREAD_START,
+            "session",
+            Some("ThreadCreateParams"),
+            "ThreadCreateResponse",
+            true,
+        ),
+        MethodSchema::new(
             method::THREAD_LIST,
             "session",
             None,
@@ -542,6 +731,13 @@ fn phase_one_methods() -> Vec<MethodSchema> {
             true,
         ),
         MethodSchema::new(
+            method::TURN_INTERRUPT,
+            "session",
+            Some("TurnCancelParams"),
+            "TurnCancelResponse",
+            true,
+        ),
+        MethodSchema::new(
             method::TURN_LIST,
             "session",
             Some("TurnListParams"),
@@ -561,6 +757,11 @@ fn phase_one_methods() -> Vec<MethodSchema> {
 fn phase_one_events() -> Vec<EventSchema> {
     vec![
         EventSchema::new(
+            event::NOTIFICATIONS_INITIALIZED,
+            "protocol",
+            "NotificationsInitializedEvent",
+        ),
+        EventSchema::new(
             event::LIFECYCLE_CHANGED,
             "lifecycle",
             "LifecycleChangedEvent",
@@ -573,11 +774,20 @@ fn phase_one_events() -> Vec<EventSchema> {
         ),
         EventSchema::new(event::LOG_ENTRY, "logs", "LogEntryEvent"),
         EventSchema::new(event::THREAD_CREATED, "session", "ThreadCreatedEvent"),
+        EventSchema::new(event::THREAD_STARTED, "session", "ThreadStartedEvent"),
         EventSchema::new(event::TURN_STARTED, "session", "TurnStartedEvent"),
         EventSchema::new(event::TURN_DELTA, "session", "TurnDeltaEvent"),
         EventSchema::new(event::TURN_COMPLETED, "session", "TurnCompletedEvent"),
         EventSchema::new(event::TURN_FAILED, "session", "TurnFailedEvent"),
         EventSchema::new(event::TURN_CANCELLED, "session", "TurnCancelledEvent"),
+        EventSchema::new(event::ITEM_STARTED, "session", "ItemStartedEvent"),
+        EventSchema::new(
+            event::ITEM_AGENT_MESSAGE_DELTA,
+            "session",
+            "AgentMessageDeltaEvent",
+        ),
+        EventSchema::new(event::ITEM_COMPLETED, "session", "ItemCompletedEvent"),
+        EventSchema::new(event::ERROR, "session", "ErrorEvent"),
     ]
 }
 
@@ -678,6 +888,8 @@ pub struct HealthCheckResponse {
 #[serde(rename_all = "camelCase")]
 pub struct CapabilitiesListResponse {
     pub capabilities: CapabilityMatrix,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compatibility_profiles: Vec<CompatibilityProfile>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -724,11 +936,56 @@ pub struct ThreadReadResponse {
     pub thread: ThreadSummary,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnStartParams {
     pub thread_id: String,
     pub prompt: String,
+}
+
+impl TurnStartParams {
+    #[must_use]
+    pub fn from_input(thread_id: impl Into<String>, input: impl Into<String>) -> Self {
+        Self {
+            thread_id: thread_id.into(),
+            prompt: input.into(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for TurnStartParams {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct RawTurnStartParams {
+            thread_id: String,
+            #[serde(default)]
+            prompt: Option<String>,
+            #[serde(default)]
+            input: Option<String>,
+        }
+
+        let raw = RawTurnStartParams::deserialize(deserializer)?;
+        let prompt = match (raw.prompt, raw.input) {
+            (Some(prompt), Some(input)) if prompt != input => {
+                return Err(de::Error::custom(
+                    "turn/start prompt and input must match when both are provided",
+                ));
+            }
+            (Some(prompt), _) | (None, Some(prompt)) => prompt,
+            (None, None) => {
+                return Err(de::Error::missing_field("prompt or input"));
+            }
+        };
+
+        Ok(Self {
+            thread_id: raw.thread_id,
+            prompt,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -808,6 +1065,12 @@ pub struct ThreadCreatedEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ThreadStartedEvent {
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TurnStartedEvent {
     pub thread_id: String,
     pub turn_id: String,
@@ -846,6 +1109,51 @@ pub struct TurnCancelledEvent {
     pub thread_id: String,
     pub turn_id: String,
     pub status: TurnStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ItemType {
+    AgentMessage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemStartedEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub item_type: ItemType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentMessageDeltaEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub delta: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemCompletedEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub status: TurnStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ErrorEvent {
+    pub code: ErrorCode,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    pub retryable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -910,6 +1218,16 @@ pub struct CapabilitiesChangedEvent {
     pub reason: CapabilitiesChangedReason,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationsInitializedEvent {
+    pub lifecycle: LifecycleSnapshot,
+    pub compatibility_profiles: Vec<CompatibilityProfile>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unavailable_requested_capabilities: Vec<String>,
+    pub event_queue: NotificationQueuePolicy,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerNotification {
@@ -919,6 +1237,12 @@ pub struct ServerNotification {
 }
 
 impl ServerNotification {
+    pub fn notifications_initialized(
+        event: NotificationsInitializedEvent,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::NOTIFICATIONS_INITIALIZED, event)
+    }
+
     pub fn lifecycle_changed(event: LifecycleChangedEvent) -> Result<Self, serde_json::Error> {
         Self::new(event::LIFECYCLE_CHANGED, event)
     }
@@ -941,6 +1265,10 @@ impl ServerNotification {
         Self::new(event::THREAD_CREATED, event)
     }
 
+    pub fn thread_started(event: ThreadStartedEvent) -> Result<Self, serde_json::Error> {
+        Self::new(event::THREAD_STARTED, event)
+    }
+
     pub fn turn_started(event: TurnStartedEvent) -> Result<Self, serde_json::Error> {
         Self::new(event::TURN_STARTED, event)
     }
@@ -959,6 +1287,22 @@ impl ServerNotification {
 
     pub fn turn_cancelled(event: TurnCancelledEvent) -> Result<Self, serde_json::Error> {
         Self::new(event::TURN_CANCELLED, event)
+    }
+
+    pub fn item_started(event: ItemStartedEvent) -> Result<Self, serde_json::Error> {
+        Self::new(event::ITEM_STARTED, event)
+    }
+
+    pub fn agent_message_delta(event: AgentMessageDeltaEvent) -> Result<Self, serde_json::Error> {
+        Self::new(event::ITEM_AGENT_MESSAGE_DELTA, event)
+    }
+
+    pub fn item_completed(event: ItemCompletedEvent) -> Result<Self, serde_json::Error> {
+        Self::new(event::ITEM_COMPLETED, event)
+    }
+
+    pub fn error(event: ErrorEvent) -> Result<Self, serde_json::Error> {
+        Self::new(event::ERROR, event)
     }
 
     fn new(method: impl Into<String>, params: impl Serialize) -> Result<Self, serde_json::Error> {
@@ -1008,6 +1352,8 @@ pub enum ErrorCode {
     OperationInProgress,
     #[error("service degraded")]
     ServiceDegraded,
+    #[error("notification queue overflow")]
+    NotificationQueueOverflow,
     #[error("internal error")]
     InternalError,
 }
@@ -1259,5 +1605,280 @@ mod tests {
         assert_eq!(value["jsonrpc"], JSON_RPC_VERSION);
         assert_eq!(value["id"], "req_1");
         assert_eq!(value["error"]["data"]["code"], "UNKNOWN_METHOD");
+    }
+
+    #[test]
+    fn codex_v2_profile_declares_compatible_surface_and_legacy_alias_decisions() {
+        let profile = CompatibilityProfile::codex_app_server_v2();
+
+        assert_eq!(profile.id, CompatibilityProfile::CODEX_APP_SERVER_V2_ID);
+        assert_eq!(profile.scope, CompatibilityProfileScope::ChatSessionSubset);
+        assert!(profile.description.contains("chat session streaming"));
+        assert_eq!(
+            profile.methods,
+            vec![
+                method::INITIALIZE,
+                method::THREAD_START,
+                method::THREAD_READ,
+                method::TURN_START,
+                method::TURN_INTERRUPT,
+            ]
+        );
+        assert_eq!(
+            profile.events,
+            CODEX_APP_SERVER_V2_EVENTS
+                .iter()
+                .map(|event| (*event).to_string())
+                .collect::<Vec<_>>()
+        );
+        assert!(profile.aliases.iter().any(|alias| {
+            alias.legacy == method::THREAD_CREATE
+                && alias.compatible == method::THREAD_START
+                && alias.kind == CompatibilityAliasKind::LegacySmokeSurface
+        }));
+        assert!(profile.aliases.iter().any(|alias| {
+            alias.legacy == method::TURN_CANCEL
+                && alias.compatible == method::TURN_INTERRUPT
+                && alias.kind == CompatibilityAliasKind::Alias
+        }));
+        assert!(profile.aliases.iter().any(|alias| {
+            alias.legacy == event::TURN_DELTA
+                && alias.compatible == event::ITEM_AGENT_MESSAGE_DELTA
+                && alias.kind == CompatibilityAliasKind::LegacySmokeSurface
+        }));
+        assert_eq!(
+            profile.event_queue,
+            NotificationQueuePolicy::bounded_lag_disconnect()
+        );
+        assert!(profile.capability_opt_outs.iter().any(|opt_out| {
+            opt_out.capability == "codex.rich_input"
+                && opt_out.reason == "phase_1_chat_session_subset"
+        }));
+        assert!(profile.capability_opt_outs.iter().any(|opt_out| {
+            opt_out.capability == "mcp" && opt_out.reason == "phase_1_chat_session_subset"
+        }));
+        assert!(!profile.methods.iter().any(|method| {
+            method.contains("approval") || method.contains("diff") || method.contains("tool")
+        }));
+        assert!(!profile.events.iter().any(|event| {
+            event.contains("approval") || event.contains("diff") || event.contains("tool")
+        }));
+    }
+
+    #[test]
+    fn capabilities_response_can_advertise_compatibility_profiles() {
+        let response = CapabilitiesListResponse {
+            capabilities: CapabilityMatrix::phase_one(),
+            compatibility_profiles: vec![CompatibilityProfile::codex_app_server_v2()],
+        };
+        let value = serde_json::to_value(response).expect("capabilities should serialize");
+
+        assert_eq!(
+            value["compatibilityProfiles"][0]["id"],
+            CompatibilityProfile::CODEX_APP_SERVER_V2_ID
+        );
+        assert_eq!(
+            value["compatibilityProfiles"][0]["scope"],
+            "chat_session_subset"
+        );
+    }
+
+    #[test]
+    fn turn_start_params_accept_codex_v2_input_alias_without_changing_legacy_shape() {
+        let from_input: TurnStartParams = serde_json::from_value(serde_json::json!({
+            "threadId": "thread_1",
+            "input": "hello from input"
+        }))
+        .expect("turn/start should accept Codex-style input string");
+        let from_prompt: TurnStartParams = serde_json::from_value(serde_json::json!({
+            "threadId": "thread_1",
+            "prompt": "hello from prompt"
+        }))
+        .expect("turn/start should keep accepting legacy prompt");
+        let mismatch = serde_json::from_value::<TurnStartParams>(serde_json::json!({
+            "threadId": "thread_1",
+            "prompt": "legacy",
+            "input": "codex"
+        }))
+        .expect_err("conflicting prompt/input fields should not be silently normalized");
+
+        assert_eq!(from_input.prompt, "hello from input");
+        assert_eq!(from_prompt.prompt, "hello from prompt");
+        assert!(mismatch.to_string().contains("prompt and input must match"));
+        assert_eq!(
+            serde_json::to_value(TurnStartParams::from_input("thread_1", "hello"))
+                .expect("turn/start params should serialize"),
+            serde_json::json!({"threadId": "thread_1", "prompt": "hello"})
+        );
+    }
+
+    #[test]
+    fn codex_v2_contract_fixtures_use_json_rpc_and_item_event_shapes() {
+        let requests = vec![
+            JsonRpcRequest {
+                jsonrpc: JSON_RPC_VERSION.to_string(),
+                id: Some(serde_json::json!("init")),
+                method: method::INITIALIZE.to_string(),
+                params: Some(serde_json::json!({
+                    "client": {"name": "codex", "version": "2.0.0", "transport": "stdio"},
+                    "protocolVersion": {"major": 0, "minor": 1, "patch": 0},
+                    "requestedCapabilities": [CompatibilityProfile::CODEX_APP_SERVER_V2_ID]
+                })),
+            },
+            JsonRpcRequest {
+                jsonrpc: JSON_RPC_VERSION.to_string(),
+                id: Some(serde_json::json!("thread")),
+                method: method::THREAD_START.to_string(),
+                params: Some(serde_json::json!({"title": "Draft"})),
+            },
+            JsonRpcRequest {
+                jsonrpc: JSON_RPC_VERSION.to_string(),
+                id: Some(serde_json::json!("read")),
+                method: method::THREAD_READ.to_string(),
+                params: Some(serde_json::json!({"threadId": "thread_1"})),
+            },
+            JsonRpcRequest {
+                jsonrpc: JSON_RPC_VERSION.to_string(),
+                id: Some(serde_json::json!("turn")),
+                method: method::TURN_START.to_string(),
+                params: Some(serde_json::json!({"threadId": "thread_1", "input": "hello"})),
+            },
+            JsonRpcRequest {
+                jsonrpc: JSON_RPC_VERSION.to_string(),
+                id: Some(serde_json::json!("interrupt")),
+                method: method::TURN_INTERRUPT.to_string(),
+                params: Some(serde_json::json!({"threadId": "thread_1", "turnId": "turn_1"})),
+            },
+        ];
+        let methods = requests
+            .iter()
+            .map(|request| request.method.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            methods,
+            vec![
+                method::INITIALIZE,
+                method::THREAD_START,
+                method::THREAD_READ,
+                method::TURN_START,
+                method::TURN_INTERRUPT,
+            ]
+        );
+        for request in requests {
+            let value = serde_json::to_value(request).expect("fixture should serialize");
+            assert_eq!(value["jsonrpc"], JSON_RPC_VERSION);
+            assert!(value.get("id").is_some());
+        }
+
+        let events = [
+            ServerNotification::notifications_initialized(NotificationsInitializedEvent {
+                lifecycle: LifecycleSnapshot {
+                    state: LifecycleState::Ready,
+                    reason: LifecycleReason::RuntimeReady,
+                    message: None,
+                    since: "0".to_string(),
+                    degraded_services: Vec::new(),
+                },
+                compatibility_profiles: vec![CompatibilityProfile::codex_app_server_v2()],
+                unavailable_requested_capabilities: Vec::new(),
+                event_queue: NotificationQueuePolicy::bounded_lag_disconnect(),
+            })
+            .expect("notifications/initialized fixture should serialize"),
+            ServerNotification::lifecycle_changed(LifecycleChangedEvent {
+                lifecycle: LifecycleSnapshot {
+                    state: LifecycleState::Running,
+                    reason: LifecycleReason::RequestInProgress,
+                    message: None,
+                    since: "1".to_string(),
+                    degraded_services: Vec::new(),
+                },
+                previous_state: Some(LifecycleState::Ready),
+            })
+            .expect("lifecycle/changed fixture should serialize"),
+            ServerNotification::capabilities_changed(CapabilitiesChangedEvent {
+                capabilities: CapabilityMatrix::phase_one(),
+                reason: CapabilitiesChangedReason::Initialize,
+            })
+            .expect("capabilities/changed fixture should serialize"),
+            ServerNotification::thread_created(ThreadCreatedEvent {
+                thread_id: "thread_1".to_string(),
+            })
+            .expect("thread/created fixture should serialize"),
+            ServerNotification::thread_started(ThreadStartedEvent {
+                thread_id: "thread_1".to_string(),
+            })
+            .expect("thread/started fixture should serialize"),
+            ServerNotification::turn_started(TurnStartedEvent {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                status: TurnStatus::Pending,
+            })
+            .expect("turn/started fixture should serialize"),
+            ServerNotification::turn_delta(TurnDeltaEvent {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                delta: "hel".to_string(),
+            })
+            .expect("turn/delta fixture should serialize"),
+            ServerNotification::turn_completed(TurnCompletedEvent {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                status: TurnStatus::Completed,
+                output: "hello".to_string(),
+            })
+            .expect("turn/completed fixture should serialize"),
+            ServerNotification::turn_failed(TurnFailedEvent {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                status: TurnStatus::Failed,
+                error: "runtime failed".to_string(),
+            })
+            .expect("turn/failed fixture should serialize"),
+            ServerNotification::turn_cancelled(TurnCancelledEvent {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                status: TurnStatus::Cancelled,
+            })
+            .expect("turn/cancelled fixture should serialize"),
+            ServerNotification::item_started(ItemStartedEvent {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                item_id: "turn_1".to_string(),
+                item_type: ItemType::AgentMessage,
+            })
+            .expect("item/started fixture should serialize"),
+            ServerNotification::agent_message_delta(AgentMessageDeltaEvent {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                item_id: "turn_1".to_string(),
+                delta: "hel".to_string(),
+            })
+            .expect("item delta fixture should serialize"),
+            ServerNotification::item_completed(ItemCompletedEvent {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                item_id: "turn_1".to_string(),
+                status: TurnStatus::Completed,
+            })
+            .expect("item/completed fixture should serialize"),
+            ServerNotification::error(ErrorEvent {
+                code: ErrorCode::ServiceDegraded,
+                message: "runtime failed".to_string(),
+                thread_id: Some("thread_1".to_string()),
+                turn_id: Some("turn_1".to_string()),
+                retryable: true,
+            })
+            .expect("error fixture should serialize"),
+        ];
+        let event_names = events
+            .iter()
+            .map(|event| event.method.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(event_names, CODEX_APP_SERVER_V2_EVENTS);
+        assert_eq!(events[0].params["eventQueue"]["overflow"], "lag_disconnect");
+        assert_eq!(events[10].params["itemType"], "agent_message");
+        assert_eq!(events[11].params["delta"], "hel");
     }
 }

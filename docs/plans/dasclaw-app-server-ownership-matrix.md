@@ -137,3 +137,4 @@ Phase 1 才新增 crate，且新增前需要再跑一次三层核验并在 commi
 | protocol crate 是否复用 `crates/dasclaw_protocol`？ | `dasclaw_app_server_protocol` 继续拥有 dasclaw 边界类型，但新增 client-facing 能力时优先对齐 Codex app-server v2 wire profile；避免暴露 Codex 产品耦合 processor，而不是避免兼容 Codex method/event 形态 |
 | DLP/policy 什么时候迁移？ | initialize/health/capability skeleton 之后，先迁 local service 状态，再迁 enforcement |
 | Codex app-server 代码是否搬迁？ | 不整体搬；可 selective port protocol/client/schema/test helper，必须逐块说明产品耦合剥离 |
+| desktop-client 旧 chat adapter 是否继续保留？ | 不保留；Settings diagnostics / stdio smoke / supervisor health 可以存在，但 `chat-stream` / `VercelUIStream` 适配不作为 open-cowork app-server 接入路径 |

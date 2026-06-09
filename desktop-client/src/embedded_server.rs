@@ -3,10 +3,9 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use dasclaw_app_server_protocol::ServerNotification;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::info;
 
@@ -23,7 +22,6 @@ const APP_SERVER_SUPERVISOR_MAX_RESTARTS: usize = 3;
 const SUPERVISOR_INIT_ID: &str = "supervisor-init";
 const SUPERVISOR_HEALTH_ID: &str = "supervisor-health";
 const SUPERVISOR_STOP_ID: &str = "supervisor-stop";
-const SUPERVISOR_COMMAND_BUFFER: usize = 8;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 type AppServerSupervisorSlot = Arc<Mutex<Option<AppServerSupervisorHandle>>>;
@@ -95,7 +93,6 @@ impl Default for AppServerSupervisorConfig {
 pub struct AppServerSupervisorHandle {
     status: Arc<Mutex<AppServerSupervisorStatus>>,
     shutdown: watch::Sender<bool>,
-    commands: mpsc::Sender<AppServerSupervisorCommand>,
     join: JoinHandle<()>,
 }
 
@@ -111,29 +108,9 @@ impl AppServerSupervisorHandle {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct AppServerSupervisorChatReport {
-    pub desktop_thread_id: String,
-    pub app_server_thread_id: String,
-    pub turn_id: String,
-    pub turn_status: String,
-    pub connection_generation: u64,
-    pub notifications: Vec<ServerNotification>,
-}
-
-#[derive(Debug)]
-enum AppServerSupervisorCommand {
-    ChatProbe {
-        desktop_thread_id: String,
-        content: String,
-        response: oneshot::Sender<Result<AppServerSupervisorChatReport, String>>,
-    },
-}
-
 #[derive(Debug)]
 struct AppServerSupervisorFailure {
     error: String,
-    retry_command: Option<AppServerSupervisorCommand>,
 }
 
 #[derive(Debug)]
@@ -142,12 +119,6 @@ enum SupervisorRequestError {
     Timeout(String),
     JsonRpc(String),
     Protocol(String),
-}
-
-impl SupervisorRequestError {
-    fn reconnectable(&self) -> bool {
-        matches!(self, Self::Transport(_))
-    }
 }
 
 impl std::fmt::Display for SupervisorRequestError {
@@ -242,16 +213,14 @@ pub fn spawn_app_server_sidecar_supervisor(
 ) -> AppServerSupervisorHandle {
     let status = Arc::new(Mutex::new(AppServerSupervisorStatus::default()));
     let (shutdown, shutdown_rx) = watch::channel(false);
-    let (commands, command_rx) = mpsc::channel(SUPERVISOR_COMMAND_BUFFER);
     let supervisor_status = Arc::clone(&status);
     let join = tokio::spawn(async move {
-        run_app_server_sidecar_supervisor(config, supervisor_status, shutdown_rx, command_rx).await;
+        run_app_server_sidecar_supervisor(config, supervisor_status, shutdown_rx).await;
     });
 
     AppServerSupervisorHandle {
         status,
         shutdown,
-        commands,
         join,
     }
 }
@@ -301,30 +270,6 @@ pub async fn shutdown_app_server_sidecar_supervisor_if_running() -> AppServerSup
     }
 }
 
-pub async fn probe_app_server_sidecar_chat_via_supervisor(
-    desktop_thread_id: String,
-    content: String,
-) -> Result<AppServerSupervisorChatReport, String> {
-    let command_tx = app_server_supervisor_slot()
-        .lock()
-        .map_err(|_| "app-server supervisor slot lock poisoned".to_string())?
-        .as_ref()
-        .map(|handle| handle.commands.clone())
-        .ok_or_else(|| "app-server sidecar supervisor is not running".to_string())?;
-    let (response, result) = oneshot::channel();
-    command_tx
-        .send(AppServerSupervisorCommand::ChatProbe {
-            desktop_thread_id,
-            content,
-            response,
-        })
-        .await
-        .map_err(|_| "app-server sidecar supervisor is not accepting chat probes".to_string())?;
-    result
-        .await
-        .map_err(|_| "app-server sidecar supervisor chat probe response dropped".to_string())?
-}
-
 pub fn app_server_sidecar_binary() -> OsString {
     std::env::var_os(APP_SERVER_BINARY_ENV).unwrap_or_else(|| OsString::from("dasclaw-app-server"))
 }
@@ -360,11 +305,9 @@ async fn run_app_server_sidecar_supervisor(
     config: AppServerSupervisorConfig,
     status: Arc<Mutex<AppServerSupervisorStatus>>,
     mut shutdown: watch::Receiver<bool>,
-    mut commands: mpsc::Receiver<AppServerSupervisorCommand>,
 ) {
     let mut restart_count = 0;
     let mut connection_generation = 0;
-    let mut pending_command = None;
 
     loop {
         if *shutdown.borrow() {
@@ -398,9 +341,7 @@ async fn run_app_server_sidecar_supervisor(
                     &config,
                     &status,
                     &mut shutdown,
-                    &mut commands,
                     &mut sidecar,
-                    pending_command.take(),
                 )
                 .await;
                 let Some(error) = failure else {
@@ -408,9 +349,7 @@ async fn run_app_server_sidecar_supervisor(
                 };
 
                 shutdown_supervised_child(&mut sidecar.child).await;
-                pending_command = error.retry_command;
                 if restart_count >= config.max_restarts {
-                    respond_to_pending_supervisor_command(&mut pending_command, &error.error);
                     set_supervisor_status(&status, |current| {
                         current.state = AppServerSupervisorState::Failed;
                         current.restart_count = restart_count;
@@ -430,7 +369,6 @@ async fn run_app_server_sidecar_supervisor(
             }
             Err(error) => {
                 if restart_count >= config.max_restarts {
-                    respond_to_pending_supervisor_command(&mut pending_command, &error.to_string());
                     set_supervisor_status(&status, |current| {
                         current.state = AppServerSupervisorState::Failed;
                         current.restart_count = restart_count;
@@ -469,7 +407,6 @@ struct SupervisedSidecar {
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     connection_generation: u64,
-    chat_request_seq: u64,
     notification_count: usize,
     runtime_health_status: Option<String>,
 }
@@ -509,7 +446,7 @@ async fn start_supervised_app_server_sidecar(
                 "transport": "stdio"
             },
             "protocolVersion": { "major": 0, "minor": 1, "patch": 0 },
-            "requestedCapabilities": ["protocol", "lifecycle", "health", "session"]
+            "requestedCapabilities": ["protocol", "lifecycle", "health", "session", "codex_app_server_v2"]
         })),
         config.request_timeout,
         &mut notification_count,
@@ -532,7 +469,6 @@ async fn start_supervised_app_server_sidecar(
         stdin,
         stdout,
         connection_generation: 0,
-        chat_request_seq: 0,
         notification_count,
         runtime_health_status,
     })
@@ -542,22 +478,12 @@ async fn supervise_running_app_server_sidecar(
     config: &AppServerSupervisorConfig,
     status: &Arc<Mutex<AppServerSupervisorStatus>>,
     shutdown: &mut watch::Receiver<bool>,
-    commands: &mut mpsc::Receiver<AppServerSupervisorCommand>,
     sidecar: &mut SupervisedSidecar,
-    mut pending_command: Option<AppServerSupervisorCommand>,
 ) -> Option<AppServerSupervisorFailure> {
     let mut interval = tokio::time::interval(config.health_interval);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
-        if let Some(command) = pending_command.take() {
-            if let Err(failure) = process_supervisor_command(config, status, sidecar, command).await
-            {
-                return Some(failure);
-            }
-            continue;
-        }
-
         tokio::select! {
             changed = shutdown.changed() => {
                 if changed.is_err() || *shutdown.borrow() {
@@ -568,23 +494,10 @@ async fn supervise_running_app_server_sidecar(
                     return None;
                 }
             }
-            command = commands.recv() => {
-                let Some(command) = command else {
-                    shutdown_app_server_sidecar_session(config, sidecar).await;
-                    set_supervisor_status(status, |current| {
-                        current.state = AppServerSupervisorState::Stopped;
-                    });
-                    return None;
-                };
-                if let Err(failure) = process_supervisor_command(config, status, sidecar, command).await {
-                    return Some(failure);
-                }
-            }
             _ = interval.tick() => {
                 if let Err(error) = ensure_supervised_child_running(&mut sidecar.child) {
                     return Some(AppServerSupervisorFailure {
                         error: error.to_string(),
-                        retry_command: None,
                     });
                 }
 
@@ -610,180 +523,12 @@ async fn supervise_running_app_server_sidecar(
                     Err(error) => {
                         return Some(AppServerSupervisorFailure {
                             error: error.to_string(),
-                            retry_command: None,
                         });
                     }
                 }
             }
         }
     }
-}
-
-async fn process_supervisor_command(
-    config: &AppServerSupervisorConfig,
-    status: &Arc<Mutex<AppServerSupervisorStatus>>,
-    sidecar: &mut SupervisedSidecar,
-    command: AppServerSupervisorCommand,
-) -> Result<(), AppServerSupervisorFailure> {
-    if let Err(error) = ensure_supervised_child_running(&mut sidecar.child) {
-        return Err(AppServerSupervisorFailure {
-            error: error.to_string(),
-            retry_command: Some(command),
-        });
-    }
-    let result = handle_supervisor_command(config, sidecar, command).await;
-    match result {
-        AppServerSupervisorCommandResult::Completed => {
-            set_supervisor_status(status, |current| {
-                current.state = AppServerSupervisorState::Ready;
-                current.notification_count = sidecar.notification_count;
-                current.runtime_health_status = sidecar.runtime_health_status.clone();
-                current.last_error = None;
-            });
-            Ok(())
-        }
-        AppServerSupervisorCommandResult::RetryAfterReconnect { command, error } => {
-            Err(AppServerSupervisorFailure {
-                error,
-                retry_command: Some(command),
-            })
-        }
-    }
-}
-
-#[derive(Debug)]
-enum AppServerSupervisorCommandResult {
-    Completed,
-    RetryAfterReconnect {
-        command: AppServerSupervisorCommand,
-        error: String,
-    },
-}
-
-async fn handle_supervisor_command(
-    config: &AppServerSupervisorConfig,
-    sidecar: &mut SupervisedSidecar,
-    command: AppServerSupervisorCommand,
-) -> AppServerSupervisorCommandResult {
-    match command {
-        AppServerSupervisorCommand::ChatProbe {
-            desktop_thread_id,
-            content,
-            response,
-        } => {
-            match run_supervisor_chat_probe(
-                config,
-                sidecar,
-                desktop_thread_id.clone(),
-                content.clone(),
-            )
-            .await
-            {
-                Ok(report) => {
-                    let _ = response.send(Ok(report));
-                }
-                Err(error) => {
-                    if error.reconnectable() {
-                        return AppServerSupervisorCommandResult::RetryAfterReconnect {
-                            command: AppServerSupervisorCommand::ChatProbe {
-                                desktop_thread_id,
-                                content,
-                                response,
-                            },
-                            error: error.to_string(),
-                        };
-                    }
-                    let _ = response.send(Err(error.to_string()));
-                }
-            }
-        }
-    }
-    AppServerSupervisorCommandResult::Completed
-}
-
-fn respond_to_supervisor_command(
-    command: AppServerSupervisorCommand,
-    result: Result<AppServerSupervisorChatReport, String>,
-) {
-    match command {
-        AppServerSupervisorCommand::ChatProbe { response, .. } => {
-            let _ = response.send(result);
-        }
-    }
-}
-
-fn respond_to_pending_supervisor_command(
-    pending_command: &mut Option<AppServerSupervisorCommand>,
-    error: &str,
-) {
-    if let Some(command) = pending_command.take() {
-        respond_to_supervisor_command(command, Err(error.to_string()));
-    }
-}
-
-async fn run_supervisor_chat_probe(
-    config: &AppServerSupervisorConfig,
-    sidecar: &mut SupervisedSidecar,
-    desktop_thread_id: String,
-    content: String,
-) -> Result<AppServerSupervisorChatReport, SupervisorRequestError> {
-    sidecar.chat_request_seq += 1;
-    let request_seq = sidecar.chat_request_seq;
-    let thread_request_id = format!("supervisor-chat-thread-{request_seq}");
-    let turn_request_id = format!("supervisor-chat-turn-{request_seq}");
-    let mut notifications = Vec::new();
-
-    let thread_round_trip = send_supervisor_request_with_notifications(
-        &mut sidecar.stdin,
-        &mut sidecar.stdout,
-        &thread_request_id,
-        "thread/create",
-        Some(serde_json::json!({
-            "title": format!("desktop sidecar probe {desktop_thread_id}"),
-            "workspaceRoot": null,
-        })),
-        config.request_timeout,
-        &mut sidecar.notification_count,
-    )
-    .await?;
-    notifications.extend(thread_round_trip.notifications);
-    let app_server_thread_id = string_pointer(&thread_round_trip.response, "/result/threadId")?;
-
-    let turn_round_trip = send_supervisor_request_with_notifications(
-        &mut sidecar.stdin,
-        &mut sidecar.stdout,
-        &turn_request_id,
-        "turn/start",
-        Some(serde_json::json!({
-            "threadId": app_server_thread_id,
-            "prompt": content,
-        })),
-        config.request_timeout,
-        &mut sidecar.notification_count,
-    )
-    .await?;
-    notifications.extend(turn_round_trip.notifications);
-    let turn_id = string_pointer(&turn_round_trip.response, "/result/turnId")?;
-    let turn_status = string_pointer(&turn_round_trip.response, "/result/status")?;
-    notifications.extend(
-        drain_supervisor_turn_notifications_until_terminal(
-            &mut sidecar.stdout,
-            &app_server_thread_id,
-            &turn_id,
-            config.request_timeout,
-            &mut sidecar.notification_count,
-        )
-        .await?,
-    );
-
-    Ok(AppServerSupervisorChatReport {
-        desktop_thread_id,
-        app_server_thread_id,
-        turn_id,
-        turn_status,
-        connection_generation: sidecar.connection_generation,
-        notifications,
-    })
 }
 
 async fn shutdown_app_server_sidecar_session(
@@ -817,7 +562,7 @@ where
     W: AsyncWrite + Unpin,
     R: AsyncBufRead + Unpin,
 {
-    Ok(send_supervisor_request_with_notifications(
+    Ok(send_supervisor_request_round_trip(
         stdin,
         stdout,
         id,
@@ -830,12 +575,11 @@ where
     .response)
 }
 
-struct SupervisorRoundTrip {
+struct SupervisorResponseRoundTrip {
     response: serde_json::Value,
-    notifications: Vec<ServerNotification>,
 }
 
-async fn send_supervisor_request_with_notifications<W, R>(
+async fn send_supervisor_request_round_trip<W, R>(
     stdin: &mut W,
     stdout: &mut R,
     id: &str,
@@ -843,7 +587,7 @@ async fn send_supervisor_request_with_notifications<W, R>(
     params: Option<serde_json::Value>,
     timeout: Duration,
     notification_count: &mut usize,
-) -> Result<SupervisorRoundTrip, SupervisorRequestError>
+) -> Result<SupervisorResponseRoundTrip, SupervisorRequestError>
 where
     W: AsyncWrite + Unpin,
     R: AsyncBufRead + Unpin,
@@ -865,7 +609,7 @@ where
 
     tokio::time::timeout(
         timeout,
-        read_supervisor_response_with_notifications(stdout, id, notification_count),
+        read_supervisor_response_round_trip(stdout, id, notification_count),
     )
     .await
     .map_err(|_| {
@@ -886,22 +630,21 @@ where
     R: AsyncBufRead + Unpin,
 {
     Ok(
-        read_supervisor_response_with_notifications(stdout, expected_id, notification_count)
+        read_supervisor_response_round_trip(stdout, expected_id, notification_count)
             .await?
             .response,
     )
 }
 
-async fn read_supervisor_response_with_notifications<R>(
+async fn read_supervisor_response_round_trip<R>(
     stdout: &mut R,
     expected_id: &str,
     notification_count: &mut usize,
-) -> Result<SupervisorRoundTrip, SupervisorRequestError>
+) -> Result<SupervisorResponseRoundTrip, SupervisorRequestError>
 where
     R: AsyncBufRead + Unpin,
 {
     let mut line = String::new();
-    let mut notifications = Vec::new();
     loop {
         line.clear();
         let bytes = stdout
@@ -923,18 +666,13 @@ where
         if value.get("id").is_none() && value.get("method").is_some() {
             validate_app_server_notification(&value)
                 .map_err(|error| SupervisorRequestError::Protocol(error.to_string()))?;
+            reject_supervisor_queue_overflow_notification(&value)?;
             *notification_count += 1;
-            let notification = serde_json::from_value::<ServerNotification>(value)
-                .map_err(|error| SupervisorRequestError::Protocol(error.to_string()))?;
-            notifications.push(notification);
             continue;
         }
         reject_supervisor_json_rpc_error(&value)?;
         if value.get("id").and_then(serde_json::Value::as_str) == Some(expected_id) {
-            return Ok(SupervisorRoundTrip {
-                response: value,
-                notifications,
-            });
+            return Ok(SupervisorResponseRoundTrip { response: value });
         }
         if let Some(actual_id) = value.get("id") {
             return Err(SupervisorRequestError::Protocol(format!(
@@ -945,121 +683,6 @@ where
             "app-server supervisor line is neither response nor notification".to_string(),
         ));
     }
-}
-
-fn string_pointer(
-    value: &serde_json::Value,
-    pointer: &str,
-) -> Result<String, SupervisorRequestError> {
-    value
-        .pointer(pointer)
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| {
-            SupervisorRequestError::Protocol(format!("missing string pointer: {pointer}"))
-        })
-}
-
-async fn drain_supervisor_turn_notifications_until_terminal<R>(
-    stdout: &mut R,
-    thread_id: &str,
-    turn_id: &str,
-    timeout: Duration,
-    notification_count: &mut usize,
-) -> Result<Vec<ServerNotification>, SupervisorRequestError>
-where
-    R: AsyncBufRead + Unpin,
-{
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut notifications = Vec::new();
-    loop {
-        let now = tokio::time::Instant::now();
-        if now >= deadline {
-            return Ok(notifications);
-        }
-        let remaining = deadline.saturating_duration_since(now);
-        let notification =
-            match tokio::time::timeout(remaining, read_supervisor_notification(stdout)).await {
-                Ok(Ok(notification)) => notification,
-                Ok(Err(error)) => return Err(error),
-                Err(_) => return Ok(notifications),
-            };
-        validate_app_server_notification_value(&notification)
-            .map_err(|error| SupervisorRequestError::Protocol(error.to_string()))?;
-        *notification_count += 1;
-        let is_terminal = is_matching_terminal_turn_notification(&notification, thread_id, turn_id);
-        notifications.push(notification);
-        if is_terminal {
-            return Ok(notifications);
-        }
-    }
-}
-
-async fn read_supervisor_notification<R>(
-    stdout: &mut R,
-) -> Result<ServerNotification, SupervisorRequestError>
-where
-    R: AsyncBufRead + Unpin,
-{
-    let mut line = String::new();
-    loop {
-        line.clear();
-        let bytes = stdout
-            .read_line(&mut line)
-            .await
-            .map_err(|error| SupervisorRequestError::Transport(error.to_string()))?;
-        if bytes == 0 {
-            return Err(SupervisorRequestError::Transport(
-                "app-server supervisor stdout closed".to_string(),
-            ));
-        }
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let value = serde_json::from_str::<serde_json::Value>(trimmed)
-            .map_err(|error| SupervisorRequestError::Protocol(error.to_string()))?;
-        if value.get("id").is_none() && value.get("method").is_some() {
-            return serde_json::from_value::<ServerNotification>(value)
-                .map_err(|error| SupervisorRequestError::Protocol(error.to_string()));
-        }
-        if let Some(actual) = value.get("id") {
-            return Err(SupervisorRequestError::Protocol(format!(
-                "unexpected app-server response id while draining notifications: {actual}"
-            )));
-        }
-        return Err(SupervisorRequestError::Protocol(
-            "app-server supervisor line is neither response nor notification".to_string(),
-        ));
-    }
-}
-
-fn validate_app_server_notification_value(
-    notification: &ServerNotification,
-) -> Result<(), BoxError> {
-    let value = serde_json::to_value(notification)?;
-    validate_app_server_notification(&value)
-}
-
-fn is_matching_terminal_turn_notification(
-    notification: &ServerNotification,
-    thread_id: &str,
-    turn_id: &str,
-) -> bool {
-    matches!(
-        notification.method.as_str(),
-        "turn/completed" | "turn/failed" | "turn/cancelled"
-    ) && notification
-        .params
-        .get("threadId")
-        .and_then(serde_json::Value::as_str)
-        == Some(thread_id)
-        && notification
-            .params
-            .get("turnId")
-            .and_then(serde_json::Value::as_str)
-            == Some(turn_id)
 }
 
 fn ensure_supervised_child_running(child: &mut Child) -> Result<(), BoxError> {
@@ -1125,6 +748,7 @@ pub fn parse_app_server_stdio_smoke_stdout(
         let value = serde_json::from_str::<serde_json::Value>(line)?;
         if value.get("method").is_some() && value.get("id").is_none() {
             validate_app_server_notification(&value)?;
+            reject_queue_overflow_notification(&value)?;
             notification_count += 1;
             continue;
         }
@@ -1253,6 +877,44 @@ fn reject_supervisor_json_rpc_error(
     Ok(())
 }
 
+fn reject_supervisor_queue_overflow_notification(
+    value: &serde_json::Value,
+) -> Result<(), SupervisorRequestError> {
+    if !is_queue_overflow_notification(value) {
+        return Ok(());
+    }
+
+    let message = value
+        .pointer("/params/message")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("app-server notification queue overflowed; reconnect required");
+    Err(SupervisorRequestError::Protocol(format!(
+        "app-server supervisor notification queue overflow: {message}"
+    )))
+}
+
+fn reject_queue_overflow_notification(value: &serde_json::Value) -> Result<(), BoxError> {
+    if !is_queue_overflow_notification(value) {
+        return Ok(());
+    }
+
+    let message = value
+        .pointer("/params/message")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("app-server notification queue overflowed; reconnect required");
+    Err(invalid_data(format!(
+        "app-server notification queue overflow: {message}"
+    )))
+}
+
+fn is_queue_overflow_notification(value: &serde_json::Value) -> bool {
+    value.get("method").and_then(serde_json::Value::as_str) == Some("error")
+        && value
+            .pointer("/params/code")
+            .and_then(serde_json::Value::as_str)
+            == Some("NOTIFICATION_QUEUE_OVERFLOW")
+}
+
 fn validate_app_server_notification(value: &serde_json::Value) -> Result<(), BoxError> {
     let method = value
         .get("method")
@@ -1260,16 +922,22 @@ fn validate_app_server_notification(value: &serde_json::Value) -> Result<(), Box
         .ok_or_else(|| invalid_data("app-server notification method must be a string"))?;
     if !matches!(
         method,
-        "lifecycle/changed"
+        "notifications/initialized"
+            | "lifecycle/changed"
             | "health/changed"
             | "capabilities/changed"
             | "log/entry"
             | "thread/created"
+            | "thread/started"
             | "turn/started"
             | "turn/delta"
             | "turn/completed"
             | "turn/failed"
             | "turn/cancelled"
+            | "item/started"
+            | "item/agentMessage/delta"
+            | "item/completed"
+            | "error"
     ) {
         return Err(invalid_data(format!(
             "unexpected app-server notification method: {method}"
@@ -1370,6 +1038,7 @@ mod tests {
     fn parses_app_server_stdio_smoke_transcript() {
         let stdout = [
             r#"{"jsonrpc":"2.0","method":"lifecycle/changed","params":{"lifecycle":{"state":"initializing","reason":"initialize_requested","since":"0"},"previousState":"starting"}}"#,
+            r#"{"jsonrpc":"2.0","method":"thread/started","params":{"threadId":"thread_1"}}"#,
             r#"{"jsonrpc":"2.0","id":"init","result":{"lifecycle":{"state":"ready"}}}"#,
             r#"{"jsonrpc":"2.0","id":"health","result":{"ok":true,"services":[{"service":"runtime","status":"degraded","failSafe":false}]}}"#,
             r#"{"jsonrpc":"2.0","id":"capabilities","result":{"capabilities":{"session":{"status":"implemented","methods":["thread/create","turn/start"]}}}}"#,
@@ -1380,7 +1049,7 @@ mod tests {
 
         let report = parse_app_server_stdio_smoke_stdout(&stdout).expect("transcript should parse");
 
-        assert_eq!(report.notification_count, 2);
+        assert_eq!(report.notification_count, 3);
         assert_eq!(report.session_status, "implemented");
         assert_eq!(report.runtime_health_status, "degraded");
         assert_eq!(report.shutdown_state, "stopped");
@@ -1487,6 +1156,23 @@ mod tests {
             .contains("unexpected app-server notification method"));
     }
 
+    #[test]
+    fn rejects_app_server_stdio_smoke_queue_overflow_notification() {
+        let stdout = [
+            r#"{"jsonrpc":"2.0","method":"error","params":{"code":"NOTIFICATION_QUEUE_OVERFLOW","message":"client notification queue exceeded bounded capacity; reconnect required","retryable":true}}"#,
+            r#"{"jsonrpc":"2.0","id":"init","result":{"lifecycle":{"state":"ready"}}}"#,
+            r#"{"jsonrpc":"2.0","id":"health","result":{"ok":true,"services":[{"service":"runtime","status":"degraded","failSafe":false}]}}"#,
+            r#"{"jsonrpc":"2.0","id":"capabilities","result":{"capabilities":{"session":{"status":"implemented","methods":["turn/start"]}}}}"#,
+            r#"{"jsonrpc":"2.0","id":"stop","result":{"accepted":true,"lifecycle":{"state":"stopped"}}}"#,
+        ]
+        .join("\n");
+
+        let error = parse_app_server_stdio_smoke_stdout(&stdout)
+            .expect_err("queue overflow should fail sidecar smoke parsing");
+
+        assert!(error.to_string().contains("notification queue overflow"));
+    }
+
     #[tokio::test]
     async fn supervisor_response_rejects_unexpected_response_id() {
         let stdout = r#"{"jsonrpc":"2.0","id":"wrong","result":{"ok":true}}"#.to_string() + "\n";
@@ -1521,6 +1207,44 @@ mod tests {
         assert!(error
             .to_string()
             .contains("neither response nor notification"));
+        assert_eq!(notification_count, 0);
+    }
+
+    #[tokio::test]
+    async fn supervisor_response_accepts_codex_thread_started_notification() {
+        let stdout = [
+            r#"{"jsonrpc":"2.0","method":"thread/started","params":{"threadId":"thread_1"}}"#,
+            r#"{"jsonrpc":"2.0","id":"health","result":{"ok":true}}"#,
+        ]
+        .join("\n")
+            + "\n";
+        let mut stdout = BufReader::new(stdout.as_bytes());
+        let mut notification_count = 0;
+
+        let response = read_supervisor_response(&mut stdout, "health", &mut notification_count)
+            .await
+            .expect("thread/started should be a valid app-server notification");
+
+        assert_eq!(response["id"], "health");
+        assert_eq!(notification_count, 1);
+    }
+
+    #[tokio::test]
+    async fn supervisor_response_rejects_notification_queue_overflow() {
+        let stdout = [
+            r#"{"jsonrpc":"2.0","method":"error","params":{"code":"NOTIFICATION_QUEUE_OVERFLOW","message":"client notification queue exceeded bounded capacity; reconnect required","retryable":true}}"#,
+            r#"{"jsonrpc":"2.0","id":"health","result":{"ok":true}}"#,
+        ]
+        .join("\n")
+            + "\n";
+        let mut stdout = BufReader::new(stdout.as_bytes());
+        let mut notification_count = 0;
+
+        let error = read_supervisor_response(&mut stdout, "health", &mut notification_count)
+            .await
+            .expect_err("queue overflow notifications should force supervisor reconnect handling");
+
+        assert!(error.to_string().contains("notification queue overflow"));
         assert_eq!(notification_count, 0);
     }
 
@@ -1568,7 +1292,7 @@ mod tests {
         )
         .await;
         assert_eq!(ready.state, AppServerSupervisorState::Ready);
-        assert_eq!(ready.notification_count, 1);
+        assert_eq!(ready.notification_count, 2);
         assert_eq!(ready.runtime_health_status.as_deref(), Some("degraded"));
 
         let stopped = handle.shutdown().await;
@@ -1604,176 +1328,6 @@ mod tests {
         );
 
         let _ = handle.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn app_server_supervisor_reconnects_and_replays_pending_chat_command() {
-        let transcript_dir = tempfile::tempdir().expect("transcript dir");
-        let transcript_path = transcript_dir.path().join("supervisor-reconnect.jsonl");
-        let attempt_path = transcript_dir.path().join("turn-attempt.txt");
-        let config = shell_supervisor_config(
-            &reconnecting_supervisor_chat_script(&transcript_path, &attempt_path),
-            1,
-        );
-        let handle = spawn_app_server_sidecar_supervisor(config);
-
-        let ready = wait_for_supervisor_state(
-            &handle,
-            AppServerSupervisorState::Ready,
-            Duration::from_secs(1),
-        )
-        .await;
-        assert_eq!(ready.connection_generation, 1);
-
-        let (response, report) = oneshot::channel();
-        handle
-            .commands
-            .send(AppServerSupervisorCommand::ChatProbe {
-                desktop_thread_id: "desktop-thread-reconnect".to_string(),
-                content: "hello after reconnect".to_string(),
-                response,
-            })
-            .await
-            .expect("supervisor command queue should accept chat probe");
-
-        let report = tokio::time::timeout(Duration::from_secs(2), report)
-            .await
-            .expect("replayed chat command should complete after reconnect")
-            .expect("supervisor should respond to chat probe")
-            .expect("chat probe should succeed after reconnect");
-        assert_eq!(report.connection_generation, 2);
-        assert_eq!(report.app_server_thread_id, "reconnected-thread");
-        assert_eq!(report.turn_id, "reconnected-turn");
-        assert_eq!(report.turn_status, "pending");
-
-        let ready = wait_for_supervisor_generation(&handle, 2, Duration::from_secs(1)).await;
-        assert_eq!(ready.state, AppServerSupervisorState::Ready);
-        assert_eq!(ready.restart_count, 1);
-        assert_eq!(ready.connection_generation, 2);
-
-        let transcript = std::fs::read_to_string(&transcript_path).expect("supervisor transcript");
-        assert_eq!(
-            transcript.matches(r#""method":"initialize""#).count(),
-            2,
-            "supervisor should reinitialize the replacement sidecar; transcript:\n{transcript}"
-        );
-        assert_eq!(
-            transcript
-                .matches(r#""id":"supervisor-chat-turn-1""#)
-                .count(),
-            2,
-            "pending chat command should be replayed once; transcript:\n{transcript}"
-        );
-
-        let stopped = handle.shutdown().await;
-        assert_eq!(stopped.state, AppServerSupervisorState::Stopped);
-    }
-
-    #[tokio::test]
-    async fn app_server_supervisor_keeps_sidecar_ready_for_json_rpc_chat_errors() {
-        let transcript_dir = tempfile::tempdir().expect("transcript dir");
-        let transcript_path = transcript_dir
-            .path()
-            .join("supervisor-json-rpc-error.jsonl");
-        let config =
-            shell_supervisor_config(&json_rpc_error_supervisor_chat_script(&transcript_path), 1);
-        let handle = spawn_app_server_sidecar_supervisor(config);
-
-        let ready = wait_for_supervisor_state(
-            &handle,
-            AppServerSupervisorState::Ready,
-            Duration::from_secs(1),
-        )
-        .await;
-        assert_eq!(ready.connection_generation, 1);
-
-        let (response, report) = oneshot::channel();
-        handle
-            .commands
-            .send(AppServerSupervisorCommand::ChatProbe {
-                desktop_thread_id: "desktop-thread-error".to_string(),
-                content: "reject me".to_string(),
-                response,
-            })
-            .await
-            .expect("supervisor command queue should accept chat probe");
-
-        let error = tokio::time::timeout(Duration::from_secs(1), report)
-            .await
-            .expect("JSON-RPC error should be returned without reconnect wait")
-            .expect("supervisor should respond to chat probe")
-            .expect_err("chat probe should report JSON-RPC error");
-        assert!(error.contains("app-server JSON-RPC error"));
-
-        let ready = wait_for_supervisor_state(
-            &handle,
-            AppServerSupervisorState::Ready,
-            Duration::from_secs(1),
-        )
-        .await;
-        assert_eq!(ready.restart_count, 0);
-        assert_eq!(ready.connection_generation, 1);
-
-        let stopped = handle.shutdown().await;
-        assert_eq!(stopped.state, AppServerSupervisorState::Stopped);
-    }
-
-    #[tokio::test]
-    async fn app_server_supervisor_does_not_replay_protocol_chat_errors() {
-        let transcript_dir = tempfile::tempdir().expect("transcript dir");
-        let transcript_path = transcript_dir
-            .path()
-            .join("supervisor-protocol-error.jsonl");
-        let config =
-            shell_supervisor_config(&protocol_error_supervisor_chat_script(&transcript_path), 1);
-        let handle = spawn_app_server_sidecar_supervisor(config);
-
-        let ready = wait_for_supervisor_state(
-            &handle,
-            AppServerSupervisorState::Ready,
-            Duration::from_secs(1),
-        )
-        .await;
-        assert_eq!(ready.connection_generation, 1);
-
-        let (response, report) = oneshot::channel();
-        handle
-            .commands
-            .send(AppServerSupervisorCommand::ChatProbe {
-                desktop_thread_id: "desktop-thread-protocol-error".to_string(),
-                content: "malformed thread response".to_string(),
-                response,
-            })
-            .await
-            .expect("supervisor command queue should accept chat probe");
-
-        let error = tokio::time::timeout(Duration::from_secs(1), report)
-            .await
-            .expect("protocol error should be returned without reconnect wait")
-            .expect("supervisor should respond to chat probe")
-            .expect_err("chat probe should report protocol error");
-        assert!(error.contains("missing string pointer: /result/threadId"));
-
-        let ready = wait_for_supervisor_state(
-            &handle,
-            AppServerSupervisorState::Ready,
-            Duration::from_secs(1),
-        )
-        .await;
-        assert_eq!(ready.restart_count, 0);
-        assert_eq!(ready.connection_generation, 1);
-
-        let transcript = std::fs::read_to_string(&transcript_path).expect("supervisor transcript");
-        assert_eq!(
-            transcript
-                .matches(r#""id":"supervisor-chat-thread-1""#)
-                .count(),
-            1,
-            "protocol errors must not replay thread/create; transcript:\n{transcript}"
-        );
-
-        let stopped = handle.shutdown().await;
-        assert_eq!(stopped.state, AppServerSupervisorState::Stopped);
     }
 
     #[tokio::test]
@@ -1861,6 +1415,7 @@ mod tests {
         if ready_notification {
             script.push_str(
                 r#"    echo '{"jsonrpc":"2.0","method":"lifecycle/changed","params":{"lifecycle":{"state":"ready"}}}'
+    echo '{"jsonrpc":"2.0","method":"notifications/initialized","params":{"lifecycle":{"state":"ready"},"compatibilityProfiles":[{"id":"codex_app_server_v2","version":"2.0.0-compat","scope":"chat_session_subset","description":"test profile","methods":["initialize"],"events":["notifications/initialized"],"aliases":[],"eventQueue":{"maxPendingNotifications":256,"overflow":"lag_disconnect"}}],"eventQueue":{"maxPendingNotifications":256,"overflow":"lag_disconnect"}}}'
 "#,
             );
         }
@@ -1884,124 +1439,20 @@ done"#,
         script
     }
 
-    fn reconnecting_supervisor_chat_script(transcript_path: &Path, attempt_path: &Path) -> String {
-        format!(
-            r#"while IFS= read -r line; do
-  printf '%s\n' "$line" >> {}
-  case "$line" in
-    *'"id":"supervisor-init"'*'"method":"initialize"'*)
-      echo '{{"jsonrpc":"2.0","id":"supervisor-init","result":{{"lifecycle":{{"state":"ready"}}}}}}'
-      ;;
-    *'"id":"supervisor-health"'*'"method":"health/check"'*)
-      echo '{{"jsonrpc":"2.0","id":"supervisor-health","result":{{"ok":true,"services":[{{"service":"runtime","status":"degraded","failSafe":false}}]}}}}'
-      ;;
-    *'"id":"supervisor-chat-thread-1"'*'"method":"thread/create"'*)
-      echo '{{"jsonrpc":"2.0","id":"supervisor-chat-thread-1","result":{{"threadId":"reconnected-thread","lifecycle":{{"state":"ready","reason":"runtime_ready","since":"0"}}}}}}'
-      ;;
-    *'"id":"supervisor-chat-turn-1"'*'"method":"turn/start"'*)
-      attempt="$(cat {} 2>/dev/null || echo 0)"
-      if [ "$attempt" = "0" ]; then
-        printf '1\n' > {}
-        exit 9
-      fi
-      echo '{{"jsonrpc":"2.0","id":"supervisor-chat-turn-1","result":{{"turnId":"reconnected-turn","status":"pending","lifecycle":{{"state":"running","reason":"request_in_progress","since":"1"}}}}}}'
-      echo '{{"jsonrpc":"2.0","method":"turn/delta","params":{{"threadId":"reconnected-thread","turnId":"reconnected-turn","delta":"hello"}}}}'
-      echo '{{"jsonrpc":"2.0","method":"turn/completed","params":{{"threadId":"reconnected-thread","turnId":"reconnected-turn","status":"completed","output":"hello after reconnect"}}}}'
-      ;;
-    *'"id":"supervisor-stop"'*'"method":"shutdown"'*)
-      echo '{{"jsonrpc":"2.0","id":"supervisor-stop","result":{{"accepted":true,"lifecycle":{{"state":"stopped"}}}}}}'
-      exit 0
-      ;;
-    *)
-      echo '{{"jsonrpc":"2.0","id":"unexpected","error":{{"code":-32601,"message":"unexpected reconnect request"}}}}'
-      exit 2
-      ;;
-  esac
-done"#,
-            shell_quote(&transcript_path.to_string_lossy()),
-            shell_quote(&attempt_path.to_string_lossy()),
-            shell_quote(&attempt_path.to_string_lossy())
-        )
-    }
-
-    fn json_rpc_error_supervisor_chat_script(transcript_path: &Path) -> String {
-        format!(
-            r#"while IFS= read -r line; do
-  printf '%s\n' "$line" >> {}
-  case "$line" in
-    *'"id":"supervisor-init"'*'"method":"initialize"'*)
-      echo '{{"jsonrpc":"2.0","id":"supervisor-init","result":{{"lifecycle":{{"state":"ready"}}}}}}'
-      ;;
-    *'"id":"supervisor-health"'*'"method":"health/check"'*)
-      echo '{{"jsonrpc":"2.0","id":"supervisor-health","result":{{"ok":true,"services":[{{"service":"runtime","status":"degraded","failSafe":false}}]}}}}'
-      ;;
-    *'"id":"supervisor-chat-thread-1"'*'"method":"thread/create"'*)
-      echo '{{"jsonrpc":"2.0","id":"supervisor-chat-thread-1","error":{{"code":-32000,"message":"thread create rejected"}}}}'
-      ;;
-    *'"id":"supervisor-stop"'*'"method":"shutdown"'*)
-      echo '{{"jsonrpc":"2.0","id":"supervisor-stop","result":{{"accepted":true,"lifecycle":{{"state":"stopped"}}}}}}'
-      exit 0
-      ;;
-    *)
-      echo '{{"jsonrpc":"2.0","id":"unexpected","error":{{"code":-32601,"message":"unexpected JSON-RPC error request"}}}}'
-      exit 2
-      ;;
-  esac
-done"#,
-            shell_quote(&transcript_path.to_string_lossy())
-        )
-    }
-
-    fn protocol_error_supervisor_chat_script(transcript_path: &Path) -> String {
-        format!(
-            r#"while IFS= read -r line; do
-  printf '%s\n' "$line" >> {}
-  case "$line" in
-    *'"id":"supervisor-init"'*'"method":"initialize"'*)
-      echo '{{"jsonrpc":"2.0","id":"supervisor-init","result":{{"lifecycle":{{"state":"ready"}}}}}}'
-      ;;
-    *'"id":"supervisor-health"'*'"method":"health/check"'*)
-      echo '{{"jsonrpc":"2.0","id":"supervisor-health","result":{{"ok":true,"services":[{{"service":"runtime","status":"degraded","failSafe":false}}]}}}}'
-      ;;
-    *'"id":"supervisor-chat-thread-1"'*'"method":"thread/create"'*)
-      echo '{{"jsonrpc":"2.0","id":"supervisor-chat-thread-1","result":{{"lifecycle":{{"state":"ready","reason":"runtime_ready","since":"0"}}}}}}'
-      ;;
-    *'"id":"supervisor-stop"'*'"method":"shutdown"'*)
-      echo '{{"jsonrpc":"2.0","id":"supervisor-stop","result":{{"accepted":true,"lifecycle":{{"state":"stopped"}}}}}}'
-      exit 0
-      ;;
-    *)
-      echo '{{"jsonrpc":"2.0","id":"unexpected","error":{{"code":-32601,"message":"unexpected protocol error request"}}}}'
-      exit 2
-      ;;
-  esac
-done"#,
-            shell_quote(&transcript_path.to_string_lossy())
-        )
+    fn shell_quote(value: &str) -> String {
+        format!("'{}'", value.replace('\'', r#"'\''"#))
     }
 
     fn assert_supervisor_transcript_includes_shutdown(path: &Path) {
-        let transcript = std::fs::read_to_string(path).expect("supervisor transcript");
-        let matched = transcript
-            .lines()
-            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-            .any(|value| {
-                value.get("id").and_then(serde_json::Value::as_str) == Some(SUPERVISOR_STOP_ID)
-                    && value.get("method").and_then(serde_json::Value::as_str) == Some("shutdown")
-                    && value
-                        .pointer("/params/reason")
-                        .and_then(serde_json::Value::as_str)
-                        == Some("client_exit")
-            });
-
+        let transcript =
+            std::fs::read_to_string(path).expect("supervisor transcript should be readable");
         assert!(
-            matched,
-            "supervisor did not send the expected shutdown request; transcript:\n{transcript}"
+            transcript
+                .lines()
+                .any(|line| line.contains(r#""id":"supervisor-stop""#)
+                    && line.contains(r#""method":"shutdown""#)),
+            "supervisor transcript should include shutdown request:\n{transcript}"
         );
-    }
-
-    fn shell_quote(value: &str) -> String {
-        format!("'{}'", value.replace('\'', r#"'\''"#))
     }
 
     async fn wait_for_supervisor_state(
@@ -2010,23 +1461,6 @@ done"#,
         timeout: Duration,
     ) -> AppServerSupervisorStatus {
         wait_for_status_snapshot(&handle.status, state, timeout).await
-    }
-
-    async fn wait_for_supervisor_generation(
-        handle: &AppServerSupervisorHandle,
-        generation: u64,
-        timeout: Duration,
-    ) -> AppServerSupervisorStatus {
-        let deadline = tokio::time::Instant::now() + timeout;
-        loop {
-            let snapshot = supervisor_status_snapshot(&handle.status);
-            if snapshot.connection_generation >= generation
-                || tokio::time::Instant::now() >= deadline
-            {
-                return snapshot;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
     }
 
     async fn wait_for_status_snapshot(
