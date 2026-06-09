@@ -699,7 +699,7 @@ fn phase_one_methods() -> Vec<MethodSchema> {
             method::THREAD_START,
             "session",
             Some("ThreadCreateParams"),
-            "ThreadCreateResponse",
+            "ThreadStartResponse",
             true,
         ),
         MethodSchema::new(
@@ -904,6 +904,13 @@ pub struct ThreadCreateParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadCreateResponse {
+    pub thread_id: String,
+    pub lifecycle: LifecycleSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadStartResponse {
     pub thread_id: String,
     pub lifecycle: LifecycleSnapshot,
 }

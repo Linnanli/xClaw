@@ -23,10 +23,10 @@ use dasclaw_app_server_protocol::{
     ProtocolSchemaResponse, ProtocolVersion, ServerInfo, ServerNotification, ServiceHealth,
     ServiceName, ShutdownParams, ShutdownReason, ShutdownResponse, ThreadCreateParams,
     ThreadCreateResponse, ThreadCreatedEvent, ThreadListResponse, ThreadReadParams,
-    ThreadReadResponse, ThreadStartedEvent, ThreadSummary, TurnCancelParams, TurnCancelResponse,
-    TurnCancelledEvent, TurnCompletedEvent, TurnDeltaEvent, TurnFailedEvent, TurnListParams,
-    TurnListResponse, TurnReadParams, TurnReadResponse, TurnStartParams, TurnStartResponse,
-    TurnStartedEvent, TurnStatus, TurnSummary,
+    ThreadReadResponse, ThreadStartResponse, ThreadStartedEvent, ThreadSummary, TurnCancelParams,
+    TurnCancelResponse, TurnCancelledEvent, TurnCompletedEvent, TurnDeltaEvent, TurnFailedEvent,
+    TurnListParams, TurnListResponse, TurnReadParams, TurnReadResponse, TurnStartParams,
+    TurnStartResponse, TurnStartedEvent, TurnStatus, TurnSummary,
 };
 use dasclaw_app_server_protocol::{JSON_RPC_VERSION, method};
 use serde::{Deserialize, Serialize};
@@ -224,6 +224,17 @@ impl AppServer {
         Ok(ThreadCreateResponse {
             thread_id,
             lifecycle: self.lifecycle.clone(),
+        })
+    }
+
+    pub fn thread_start(
+        &mut self,
+        params: ThreadCreateParams,
+    ) -> Result<ThreadStartResponse, AppServerError> {
+        let created = self.thread_create(params)?;
+        Ok(ThreadStartResponse {
+            thread_id: created.thread_id,
+            lifecycle: created.lifecycle,
         })
     }
 
@@ -486,9 +497,14 @@ impl AppServer {
             method::SHUTDOWN => route_with_optional_params(request.id, request.params, |params| {
                 Ok(self.shutdown(params))
             }),
-            method::THREAD_CREATE | method::THREAD_START => {
+            method::THREAD_CREATE => {
                 route_with_params(request.id, request.params, |params: ThreadCreateParams| {
                     self.thread_create(params)
+                })
+            }
+            method::THREAD_START => {
+                route_with_params(request.id, request.params, |params: ThreadCreateParams| {
+                    self.thread_start(params)
                 })
             }
             method::THREAD_LIST => {

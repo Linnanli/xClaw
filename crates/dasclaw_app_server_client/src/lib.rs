@@ -13,10 +13,11 @@ use dasclaw_app_server_protocol::{
     JsonRpcRequest, JsonRpcResponse, LifecycleChangedEvent, LifecycleStatusResponse, LogEntryEvent,
     NotificationsInitializedEvent, ProtocolSchemaResponse, ServerNotification, ShutdownParams,
     ShutdownResponse, ThreadCreateParams, ThreadCreateResponse, ThreadCreatedEvent,
-    ThreadListResponse, ThreadReadParams, ThreadReadResponse, ThreadStartedEvent, TurnCancelParams,
-    TurnCancelResponse, TurnCancelledEvent, TurnCompletedEvent, TurnDeltaEvent, TurnFailedEvent,
-    TurnListParams, TurnListResponse, TurnReadParams, TurnReadResponse, TurnStartParams,
-    TurnStartResponse, TurnStartedEvent, WorkspaceInfo, event, method,
+    ThreadListResponse, ThreadReadParams, ThreadReadResponse, ThreadStartResponse,
+    ThreadStartedEvent, TurnCancelParams, TurnCancelResponse, TurnCancelledEvent,
+    TurnCompletedEvent, TurnDeltaEvent, TurnFailedEvent, TurnListParams, TurnListResponse,
+    TurnReadParams, TurnReadResponse, TurnStartParams, TurnStartResponse, TurnStartedEvent,
+    WorkspaceInfo, event, method,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -237,14 +238,14 @@ where
     pub fn thread_start(
         &mut self,
         params: ThreadCreateParams,
-    ) -> Result<ThreadCreateResponse, AppServerClientError> {
+    ) -> Result<ThreadStartResponse, AppServerClientError> {
         self.request(method::THREAD_START, Some(params))
     }
 
     pub fn thread_start_with_notifications(
         &mut self,
         params: ThreadCreateParams,
-    ) -> Result<AppServerClientRoundTrip<ThreadCreateResponse>, AppServerClientError> {
+    ) -> Result<AppServerClientRoundTrip<ThreadStartResponse>, AppServerClientError> {
         self.request_with_notifications(method::THREAD_START, Some(params))
     }
 
