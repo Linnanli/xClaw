@@ -1,6 +1,8 @@
-# desktop-client 替换候选评估：reference-projects 四库对比
+# desktop-client 替换候选评估：reference-projects 五库对比
 
 日期：2026-06-05
+
+补充：2026-06-08，加入 `reference-projects/1code` 与 `open-cowork` 的 app-server 接入适配评估。
 
 ## 结论先行
 
@@ -12,14 +14,17 @@
 2. 中期：以 `crates/dasclaw_cli` / `dasclaw_runtime` 为核心，新增一个 thin daemon 或 app-server 兼容层，再让前端客户端连接这个协议层。
 3. 长期：如果确实要换客户端壳，优先从 `CodexMonitor` 分叉改造；如果愿意接受 Electron/Node 技术栈，可把 `open-cowork` 作为消费级客户端 shell 的第二候选；如果要多 agent、多运行时、大量治理 UI，则参考 `desktop-cc-gui`，但不建议直接替换；`open-design` 不适合作为我们的主客户端替代品，只适合作为 daemon / adapter / plugin marketplace 的架构参考。
 
+2026-06-08 补充判断：如果只在 `1code` 与 `open-cowork` 之间选，`1code` 的成品客户端能力更宽，尤其是 Codex / Claude 双运行时、Git worktree、内建终端、diff、远端会话浏览；但更适合接入我们的 `dasclaw app-server` 的仍是 `open-cowork`。原因是 `open-cowork` 的本地 MCP / Skills / permission / VM sandbox 已经以 Electron main + preload API 形式成体系存在，PoC 只需要把 `ClaudeAgentRunner` 替换为 `DasclawRuntimeClient`；`1code` 的远端 sandbox / background agent 明显依赖 21st.dev 后端，接入时要先拆掉云服务耦合和 Codex/Claude 专用 router。
+
 候选排序：
 
 | 排名 | 参考库 | 适合作为主客户端吗 | 核心判断 |
 |---|---|---:|---|
 | 1 | `reference-projects/CodexMonitor` | 中高 | Tauri + React + Codex app-server，体量最小，替换成本最低，适合改造成 `dasclaw_cli` 的 GUI 壳 |
-| 2 | `reference-projects/open-cowork` | 中 | Electron + React + Claude/pi-coding-agent runner，MCP/Skills/权限/VM sandbox 很完整；若核心改接 `dasclaw_cli`，需要重写 agent runner |
-| 3 | `reference-projects/desktop-cc-gui` | 中 | 功能最完整，Codex/Claude/OpenCode 运行时抽象更强，但复杂度高，适合借鉴能力，不适合一口气替换 |
-| 4 | `reference-projects/open-design` | 低 | Electron + Node daemon + 设计 artifact 平台，产品方向不同，适合作为 adapter / plugin / daemon 思路参考 |
+| 2 | `reference-projects/open-cowork` | 中 | Electron + React + Claude/pi-coding-agent runner，MCP/Skills/权限/VM sandbox 很完整；若核心改接 `dasclaw app-server`，需要替换 agent runner，但壳层能力最贴近 PoC 计划 |
+| 3 | `reference-projects/1code` | 中 | Electron + React + tRPC IPC，Codex/Claude/Git/worktree/terminal/远端会话能力更强；但云端 sandbox 和 background agents 依赖 21st.dev 后端，适合做产品能力参考，不如 `open-cowork` 适合作为 app-server PoC 基座 |
+| 4 | `reference-projects/desktop-cc-gui` | 中 | 功能最完整，Codex/Claude/OpenCode 运行时抽象更强，但复杂度高，适合借鉴能力，不适合一口气替换 |
+| 5 | `reference-projects/open-design` | 低 | Electron + Node daemon + 设计 artifact 平台，产品方向不同，适合作为 adapter / plugin / daemon 思路参考 |
 
 ## 方法与工具
 
@@ -45,6 +50,10 @@
 
 `过程记录：本轮新增本文档；语义搜索 MCP / vscode_listCodeUsages 未暴露，不能声称完成仓库规约里的三层验证。已用 code-review-graph 图谱/FTS、精确 rg、README 与关键源码阅读交叉整理；本文所有“未观察到/不建议”均是有限工具下的评估措辞。`
 
+2026-06-08 补充过程记录：
+
+`过程记录：本轮更新本文档，比较 1code 与 open-cowork 谁更强、谁更适合接入 dasclaw app-server。semantic_search / vscode_listCodeUsages 工具仍未暴露；已用 code-review-graph CLI status、graph.db 节点/FTS 查询、rg 字面量搜索与关键源码阅读交叉验证。已检查 1code 是否比 open-cowork 更适合作为 app-server 接入基座，结论：1code 产品能力更宽，open-cowork 更适合作为 Electron app-server PoC 基座。`
+
 ## 图谱规模对比
 
 `code-review-graph status --repo <path>` 显示四个参考库已有现成图谱：
@@ -53,6 +62,7 @@
 |---|---:|---:|---:|---|---|
 | `CodexMonitor` | 5,021 | 60,806 | 664 | bash, javascript, rust, c, tsx, typescript | 2026-06-05 10:30 |
 | `open-cowork` | 3,945 | 37,017 | 381 | python, javascript, powershell, bash, typescript, tsx | 2026-06-05 13:55 |
+| `1code` | 3,227 | 24,794 | 511 | typescript, javascript, bash, tsx | 2026-06-08 17:16 |
 | `desktop-cc-gui` | 21,725 | 290,024 | 2,014 | bash, javascript, python, typescript, rust, tsx | 2026-06-05 10:31 |
 | `open-design` | 26,069 | 327,104 | 2,071 | bash, powershell, typescript, javascript, tsx, python | 2026-06-05 10:31 |
 
@@ -62,10 +72,81 @@
 |---|---:|---:|---:|---:|---:|---|
 | `CodexMonitor` | 49 | 21 | 62 | 1 | 7 | 单应用 Tauri 客户端，Rust 后端较集中 |
 | `open-cowork` | 0 | 0 | 143 | 2 | 13 | 单应用 Electron 客户端，Node 主进程内 agent runner / MCP / sandbox |
+| `1code` | 0 | 0 | 主要为 TS/TSX | 1 | 多个 README / openspec / AGENTS 文档 | 单应用 Electron 客户端，tRPC IPC 聚合 Claude / Codex / Git / terminal / plugins / sandbox-import |
 | `desktop-cc-gui` | 73 | 44 | 146 | 1 | 69 | 单应用 Tauri 客户端，但运行时/治理逻辑明显膨胀 |
 | `open-design` | 0 | 0 | 111 | 22 | 623 | pnpm monorepo，Electron/Next/daemon/skills/插件平台 |
 | 当前 `desktop-client` | 0 | 171 | 4 | 1 | 21 | Rust/Tauri 嵌入式 engine 为主，前端不是主要复杂度 |
 | `crates/dasclaw_cli` | 0 | 57 | 0 | 0 | 1 | headless CLI / library proof point |
+
+## 补充：1code vs open-cowork
+
+### 一句话结论
+
+`1code` 的成品能力更强，`open-cowork` 更适合接入我们的 `dasclaw app-server`。
+
+更具体地说：如果目标是“抄一个现代 AI coding desktop 的成品体验”，`1code` 值得重点看；如果目标是“用 Electron 壳消费我们已经在推进的 Rust app-server / sidecar contract”，`open-cowork` 仍是更合适的 PoC 基座。
+
+### code-review-graph 概念命中
+
+以下为 `code-review-graph` 生成的 graph.db 节点/FTS 命中，配合 `rg` 与关键源码阅读使用：
+
+| 概念 | `1code` | `open-cowork` | 判断 |
+|---|---:|---:|---|
+| `trpc` | 168 | 0 | `1code` 的本地 IPC 类型化更成熟，适合参考 Electron main / renderer API 组织 |
+| `codex` | 107 | 0 | `1code` 明确支持 Codex runtime / ACP provider；`open-cowork` 当前主 runner 不在 Codex |
+| `claude` | 109 | 481 | `open-cowork` 核心强耦合 Claude/pi-coding-agent；`1code` 是 Claude + Codex 双路径 |
+| `mcp` | 78 | 292 | `open-cowork` MCP 管理更集中，server lifecycle / transport / tool discovery 更完整 |
+| `skill` | 19 | 409 | `open-cowork` skills/plugin runtime 更重，适合 dasclaw GUI PoC 的壳层插件参考 |
+| `plugin` | 19 | 137 | 同上，`open-cowork` 插件生态面更明显 |
+| `sandbox` | 7 | 366 | `open-cowork` 有本地 WSL/Lima sandbox；`1code` 主要是远端 sandbox import / preview |
+| `permission` | 0 | 53 | `open-cowork` 已有 permission request / response / timeout deny 流程 |
+| `terminal` | 174 | 2 | `1code` 内建终端能力明显更强 |
+| `git` | 222 | 4 | `1code` Git / changes / PR / worktree 能力明显更强 |
+| `worktree` | 67 | 0 | `1code` 每会话 worktree 隔离更成熟 |
+| `remote` | 40 | 285 | 两者都涉及 remote；`1code` 更多是 21st.dev 远端会话/云端 sandbox，`open-cowork` 更多是远程控制和 sandbox/agent 运行环境语义 |
+
+### 1code 的强项
+
+`1code` 是一个更完整的成品 AI coding client：
+
+| 能力 | 证据 | 对我们的价值 |
+|---|---|---|
+| Electron + tRPC IPC 架构 | `src/main/windows/main.ts` 用 `createIPCHandler` 挂 `createAppRouter`；`src/main/lib/trpc/routers/index.ts` 聚合 projects/chats/claude/codex/terminal/files/skills/plugins/changes | 可参考它的 Electron typed IPC 和 router 分层 |
+| Codex / Claude 双运行时 | `src/main/lib/trpc/routers/codex.ts` 有 ACP provider、active stream、MCP snapshot、`streamText` subscription；`claude-code.ts` 管 Anthropic OAuth / integration | 产品能力宽，适合作 Codex/Claude 体验参考 |
+| Git / worktree / PR / diff | DB schema 中 chat 有 `worktreePath`、`branch`、`baseBranch`、`prUrl`、`prNumber`；图谱 `git=222`、`worktree=67` | 可参考会话隔离、changes UI、PR 工作流 |
+| 内建终端 | `src/main/lib/terminal/manager.ts` 管 PTY session、resize、fallback shell、port manager；图谱 `terminal=174` | 可参考 terminal panel / port preview 体验 |
+| 本地持久化 | `src/main/lib/db/index.ts` 使用 `better-sqlite3` + Drizzle migrations；schema 覆盖 projects/chats/sub_chats/accounts | 可参考 Electron 本地状态模型 |
+
+### 1code 的 app-server 接入风险
+
+| 风险 | 证据 | 影响 |
+|---|---|---|
+| 远端 sandbox / background agent 依赖 21st.dev | `remote-trpc.ts` 类型引用 `web/server/api/root`，用 `signedFetch` 调 `https://21st.dev`；`claude-code.ts` 注释写 server creates sandbox，并调 `/api/auth/claude-code/start` | 如果接 dasclaw app-server，需要先拆远端 backend 耦合，不能把云端 sandbox 当作本地可复用实现 |
+| 本地 chat runner 是 Codex/Claude 专用 router | `codex.chat` subscription 内部直接构造 ACP provider、MCP snapshot、AI SDK `streamText` | 要接 app-server 需要新增 `dasclawRouter` 或替换 chat path，迁移面大于“换 runner” |
+| sandbox 不是本地执行隔离 | 图谱 sandbox 节点集中在 `sandbox-import`、remote API diff/file、preview URL | 对我们 DLP / policy / enterprise sandbox 的映射帮助有限 |
+
+### open-cowork 的 app-server 适配优势
+
+`open-cowork` 更贴近现有 PoC 计划里的“Electron shell + Rust app-server / sidecar”：
+
+| 能力 | 证据 | 对接 dasclaw app-server 的意义 |
+|---|---|---|
+| 单一 runner 接缝 | `SessionManager` 明确 `Delegates AI execution to ClaudeAgentRunner`，并通过 `AgentRunner` interface 暴露 `run/cancel` | 可以把 `ClaudeAgentRunner` 替换成 `DasclawRuntimeClient`，renderer/session/store 不必一开始全量重写 |
+| 本地 MCP 管理 | `MCPManager` 管 stdio / SSE / Streamable HTTP、server lifecycle、tool/resource/prompt discovery | 可作为 dasclaw MCP 设置页和工具发现 UI 的直接参考 |
+| Skills / plugin runtime | `SessionManager` 注入 `PluginRuntimeService` 和 `AgentRuntimeExtensionManager`；图谱 `skill=409`、`plugin=137` | 更贴合 PoC 计划中“JS 生态用于壳层，Rust 核心保留”的路线 |
+| Permission bridge | `requestPermission` 60 秒超时默认 `deny`，向 renderer 发 `permission.request` | 可映射到 app-server 的 approval request / response contract |
+| 本地 VM sandbox | preload 暴露 `sandbox.getStatus/checkWSL/checkLima/startLimaInstance`；Lima agent 有 path containment / validateCommand / executeCommand | 可借鉴为 dasclaw app-server 的可选 sandbox backend UI，而不是依赖第三方云 |
+
+### 二选一建议
+
+| 目标 | 推荐 |
+|---|---|
+| 做 Electron + dasclaw app-server 最小 PoC | `open-cowork` |
+| 借鉴成熟产品体验、Codex/Claude 双 runtime、Git/worktree/terminal | `1code` |
+| 做云端 background agent | 不能直接从 `1code` 复用，需另找 21st.dev 后端实现或自建 app-server/cloud runner |
+| 保留 Rust safety / DLP / approval / app-server contract | 两者都要重接，但 `open-cowork` 的 permission/sandbox 壳更接近我们要的 contract |
+
+结论：`1code` 更像“完整 AI coding client 产品参考”，`open-cowork` 更像“可替换 runner 的 Electron shell PoC 基座”。因此，当前 `open-cowork based dasclaw GUI PoC` 计划不需要因为 `1code` 加入而改主线；建议把 `1code` 降级为产品体验参考库，重点吸收它的 tRPC IPC、Codex/Claude 切换、Git/worktree、terminal 和远端会话浏览设计。
 
 ## 候选一：CodexMonitor
 
