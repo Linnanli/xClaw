@@ -1,10 +1,12 @@
 //! Tauri 命令 — 仅包含需要在 IPC 层直接暴露的命令。
 //!
-//! 大部分命令已迁移到 `ipc/` 模块，此文件仅保留 `get_auth_token`。
+//! 大部分功能域命令已迁移到 `ipc/` 模块；这里保留跨域应用信息、
+//! 认证、审批和诊断类命令。
 
 use crate::auth_token_manager::AuthTokenManager;
 use crate::{Error, Result};
 use serde::Serialize;
+use std::ffi::OsString;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize)]
@@ -13,6 +15,73 @@ struct ApprovalTicketPayload {
     operation_type: String,
     operation_name: String,
     reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppServerStatusReport {
+    pub binary: String,
+    pub startup_smoke_enabled: bool,
+    pub supervisor_enabled: bool,
+    pub supervisor: AppServerSupervisorStatusReport,
+    pub smoke_run: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub smoke: Option<AppServerSmokeReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppServerSmokeReport {
+    pub notification_count: usize,
+    pub session_status: String,
+    pub runtime_health_status: String,
+    pub shutdown_state: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppServerSupervisorStatusReport {
+    pub state: String,
+    pub restart_count: usize,
+    pub connection_generation: u64,
+    pub notification_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_health_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
+impl From<crate::embedded_server::AppServerSidecarSmokeReport> for AppServerSmokeReport {
+    fn from(report: crate::embedded_server::AppServerSidecarSmokeReport) -> Self {
+        Self {
+            notification_count: report.notification_count,
+            session_status: report.session_status,
+            runtime_health_status: report.runtime_health_status,
+            shutdown_state: report.shutdown_state,
+        }
+    }
+}
+
+impl From<crate::embedded_server::AppServerSupervisorStatus> for AppServerSupervisorStatusReport {
+    fn from(status: crate::embedded_server::AppServerSupervisorStatus) -> Self {
+        Self {
+            state: match status.state {
+                crate::embedded_server::AppServerSupervisorState::Stopped => "stopped",
+                crate::embedded_server::AppServerSupervisorState::Starting => "starting",
+                crate::embedded_server::AppServerSupervisorState::Ready => "ready",
+                crate::embedded_server::AppServerSupervisorState::Restarting => "restarting",
+                crate::embedded_server::AppServerSupervisorState::Failed => "failed",
+            }
+            .to_string(),
+            restart_count: status.restart_count,
+            connection_generation: status.connection_generation,
+            notification_count: status.notification_count,
+            runtime_health_status: status.runtime_health_status,
+            last_error: status.last_error,
+        }
+    }
 }
 
 /// 构建带超时的 HTTP 客户端。
@@ -121,6 +190,31 @@ fn get_auth_token_from_manager(token_manager: &AuthTokenManager) -> Result<Strin
     Ok(token)
 }
 
+fn app_server_status_report(
+    binary: OsString,
+    startup_smoke_enabled: bool,
+    supervisor_enabled: bool,
+    supervisor: crate::embedded_server::AppServerSupervisorStatus,
+    smoke: Option<std::result::Result<crate::embedded_server::AppServerSidecarSmokeReport, String>>,
+) -> AppServerStatusReport {
+    let smoke_run = smoke.is_some();
+    let (smoke, error) = match smoke {
+        Some(Ok(report)) => (Some(report.into()), None),
+        Some(Err(error)) => (None, Some(error)),
+        None => (None, None),
+    };
+
+    AppServerStatusReport {
+        binary: binary.to_string_lossy().into_owned(),
+        startup_smoke_enabled,
+        supervisor_enabled,
+        supervisor: supervisor.into(),
+        smoke_run,
+        smoke,
+        error,
+    }
+}
+
 async fn json_response(response: reqwest::Response, context: &str) -> Result<serde_json::Value> {
     let status = response.status();
     if !status.is_success() {
@@ -225,6 +319,35 @@ pub async fn check_for_updates() -> Result<serde_json::Value> {
     let http = build_http_client(5)?;
 
     check_for_updates_from_admin(&http, &admin_url, &client_token).await
+}
+
+/// 查询 dasclaw app-server sidecar 配置与可选 stdio smoke 结果。
+///
+/// 默认只返回本地配置，不启动 sidecar。传入 `run_smoke = true` 时才执行
+/// initialize/health/capabilities/shutdown 的 stdio smoke，供诊断面板或开发者工具使用。
+#[tauri::command]
+pub async fn ic_app_server_status(run_smoke: Option<bool>) -> AppServerStatusReport {
+    let binary = crate::embedded_server::app_server_sidecar_binary();
+    let startup_smoke_enabled = crate::embedded_server::app_server_startup_smoke_enabled();
+    let supervisor_enabled = crate::embedded_server::app_server_supervisor_enabled();
+    let supervisor = crate::embedded_server::app_server_sidecar_supervisor_status();
+    let smoke = if run_smoke.unwrap_or(false) {
+        Some(
+            crate::embedded_server::check_app_server_sidecar_stdio_at(binary.clone())
+                .await
+                .map_err(|error| error.to_string()),
+        )
+    } else {
+        None
+    };
+
+    app_server_status_report(
+        binary,
+        startup_smoke_enabled,
+        supervisor_enabled,
+        supervisor,
+        smoke,
+    )
 }
 
 /// 获取水印配置（从 Admin Backend API 读取）。
@@ -349,11 +472,16 @@ pub async fn submit_approval_ticket(
 #[cfg(test)]
 mod app_command_tests {
     use super::{
-        approval_operation_name, approval_reason, check_for_updates_from_admin, client_config_url,
-        get_app_version, get_auth_token_from_manager, get_watermark_config_from_admin,
-        settings_url, update_status_response, watermark_config_response,
+        app_server_status_report, approval_operation_name, approval_reason,
+        check_for_updates_from_admin, client_config_url, get_app_version,
+        get_auth_token_from_manager, get_watermark_config_from_admin, settings_url,
+        update_status_response, watermark_config_response,
     };
     use crate::auth_token_manager::AuthTokenManager;
+    use crate::embedded_server::{
+        AppServerSidecarSmokeReport, AppServerSupervisorState, AppServerSupervisorStatus,
+    };
+    use std::ffi::OsString;
     use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -367,6 +495,82 @@ mod app_command_tests {
     #[test]
     fn req_app_get_version_matches_package_version() {
         assert_eq!(get_app_version(), env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn req_app_server_status_reports_lightweight_config_without_smoke() {
+        let report = app_server_status_report(
+            OsString::from("dasclaw-app-server"),
+            false,
+            false,
+            AppServerSupervisorStatus::default(),
+            None,
+        );
+        let json = serde_json::to_value(&report).expect("status report serializes");
+
+        assert_eq!(json["binary"], "dasclaw-app-server");
+        assert_eq!(json["startupSmokeEnabled"], false);
+        assert_eq!(json["supervisorEnabled"], false);
+        assert_eq!(json["supervisor"]["state"], "stopped");
+        assert_eq!(json["smokeRun"], false);
+        assert!(json.get("smoke").is_none());
+        assert!(json.get("error").is_none());
+    }
+
+    #[test]
+    fn req_app_server_status_maps_successful_smoke() {
+        let report = app_server_status_report(
+            OsString::from("/tmp/dasclaw-app-server"),
+            true,
+            true,
+            AppServerSupervisorStatus {
+                state: AppServerSupervisorState::Ready,
+                restart_count: 1,
+                connection_generation: 2,
+                notification_count: 2,
+                runtime_health_status: Some("degraded".to_string()),
+                last_error: None,
+            },
+            Some(Ok(AppServerSidecarSmokeReport {
+                notification_count: 3,
+                session_status: "implemented".to_string(),
+                runtime_health_status: "degraded".to_string(),
+                shutdown_state: "stopped".to_string(),
+            })),
+        );
+        let json = serde_json::to_value(&report).expect("status report serializes");
+
+        assert_eq!(json["binary"], "/tmp/dasclaw-app-server");
+        assert_eq!(json["startupSmokeEnabled"], true);
+        assert_eq!(json["supervisorEnabled"], true);
+        assert_eq!(json["supervisor"]["state"], "ready");
+        assert_eq!(json["supervisor"]["restartCount"], 1);
+        assert_eq!(json["supervisor"]["connectionGeneration"], 2);
+        assert_eq!(json["supervisor"]["notificationCount"], 2);
+        assert_eq!(json["supervisor"]["runtimeHealthStatus"], "degraded");
+        assert_eq!(json["smokeRun"], true);
+        assert_eq!(json["smoke"]["notificationCount"], 3);
+        assert_eq!(json["smoke"]["sessionStatus"], "implemented");
+        assert_eq!(json["smoke"]["runtimeHealthStatus"], "degraded");
+        assert_eq!(json["smoke"]["shutdownState"], "stopped");
+        assert!(json.get("error").is_none());
+    }
+
+    #[test]
+    fn req_app_server_status_maps_smoke_error_without_failing_command() {
+        let report = app_server_status_report(
+            OsString::from("missing-app-server"),
+            false,
+            false,
+            AppServerSupervisorStatus::default(),
+            Some(Err("spawn failed".to_string())),
+        );
+        let json = serde_json::to_value(&report).expect("status report serializes");
+
+        assert_eq!(json["binary"], "missing-app-server");
+        assert_eq!(json["smokeRun"], true);
+        assert_eq!(json["error"], "spawn failed");
+        assert!(json.get("smoke").is_none());
     }
 
     #[test]

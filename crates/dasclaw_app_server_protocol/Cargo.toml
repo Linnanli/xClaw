@@ -1,0 +1,15 @@
+[package]
+name = "dasclaw_app_server_protocol"
+version = "0.0.0-p0"
+edition = "2024"
+description = "Dasclaw app-server protocol types for local GUI control-plane hosts."
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"

@@ -59,6 +59,9 @@ dasclaw_core = { path = "../crates/dasclaw_core" }
 # desktop-client 顶层 crate 直接引用 dasclaw_runtime::context::{JobContext, ContextManager}
 # 与 dasclaw_runtime::JobState（state.rs / ipc/jobs.rs / ipc/extensions.rs / engine_startup_tests.rs）。
 dasclaw_runtime = { path = "../crates/dasclaw_runtime" }
+dasclaw_app_server = { path = "../crates/dasclaw_app_server" }
+dasclaw_app_server_client = { path = "../crates/dasclaw_app_server_client" }
+dasclaw_app_server_protocol = { path = "../crates/dasclaw_app_server_protocol" }
 
 # IronClaw embedded server (ADR-114 Ⅴ: package was renamed to `dasclaw`,
 # alias the extern name back to `ironclaw` so all `use ironclaw::` imports

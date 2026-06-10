@@ -10,10 +10,9 @@
 //! - `subscribe_chat_events` — 订阅事件（新架构下为 no-op）
 //! - `unsubscribe_chat_events` — 取消订阅（新架构下为 no-op）
 
-use std::sync::Arc;
-
 use ironclaw::channels::{AttachmentKind, IncomingAttachment, IncomingMessage};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tauri::{Manager, State};
 use tracing::Instrument;
 

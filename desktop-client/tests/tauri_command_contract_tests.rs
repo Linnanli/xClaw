@@ -87,6 +87,7 @@ const FRONTEND_INVOKED_COMMANDS: &[&str] = &[
     // ── 应用信息 ────────────────────────────────────────────────
     "get_app_version",
     "check_for_updates",
+    "ic_app_server_status",
     // ── 审批工单 ────────────────────────────────────────────────
     "submit_approval_ticket",
     // ── 日志查询 ────────────────────────────────────────────────
@@ -181,6 +182,7 @@ const REGISTERED_COMMANDS: &[&str] = &[
     // ── 应用信息 ────────────────────────────────────────────────
     "get_app_version",
     "check_for_updates",
+    "ic_app_server_status",
     // ── 审批工单 ────────────────────────────────────────────────
     "submit_approval_ticket",
     // ── 日志查询 ────────────────────────────────────────────────

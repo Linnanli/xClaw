@@ -367,6 +367,7 @@ mod tests {
 
         assert_eq!(error, "后台用户身份读取失败，跳过费用上报");
     }
+
     #[tokio::test]
     async fn req_chat_dlp_block_before_dispatch() {
         let safety = Arc::new(SafetyLayer::new(&SafetyConfig {
@@ -444,6 +445,41 @@ mod tests {
             0,
             "blocked input must not be recorded"
         );
+    }
+
+    #[tokio::test]
+    async fn req_chat_send_message_enqueues_legacy_agent_loop_message() {
+        let thread_id = "thread-legacy-send".to_string();
+        let (app_state, mut rx) = create_test_app_state();
+        let engine_state = EngineState::new();
+        engine_state
+            .initialize(app_state)
+            .expect("test EngineState should initialize once");
+        let app = tauri::test::mock_builder()
+            .manage(engine_state)
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock Tauri app should build");
+
+        let response = send_chat_message(
+            app.handle().clone(),
+            app.state::<EngineState>(),
+            thread_id.clone(),
+            "hello legacy agent loop".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("normal chat send should dispatch through legacy Agent loop");
+
+        assert!(response.success);
+        let message = rx
+            .try_recv()
+            .expect("legacy msg_sender must receive normal chat messages");
+        assert_eq!(message.thread_id.as_deref(), Some(thread_id.as_str()));
+        assert_eq!(message.content, "hello legacy agent loop");
     }
 
     #[test]

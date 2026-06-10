@@ -161,6 +161,7 @@ macro_rules! all_tauri_commands {
             // ── 应用信息 ────────────────────────────────────────
             desktop_client::commands::get_app_version,
             desktop_client::commands::check_for_updates,
+            desktop_client::commands::ic_app_server_status,
             // ── 审批工单 ────────────────────────────────────────
             desktop_client::commands::submit_approval_ticket,
             // ── 日志查询 ────────────────────────────────────────

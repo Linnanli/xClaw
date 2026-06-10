@@ -19,6 +19,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 import { invoke } from '@tauri-apps/api/core';
 import {
+  appServerApi,
   invokeTauri,
   isEngineNotReadyError,
   __resetEngineReadyWaitForTesting,
@@ -99,6 +100,36 @@ describe('invokeTauri - 正常路径', () => {
     mockedInvoke.mockRejectedValueOnce('real failure');
     await expect(invokeTauri('some_cmd')).rejects.toBe('real failure');
     expect(mockedInvoke).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('appServerApi - Tauri 参数契约', () => {
+  it('getStatus 显式传递 runSmoke 参数', async () => {
+    mockedInvoke
+      .mockResolvedValueOnce({
+        binary: 'dasclaw-app-server',
+        startupSmokeEnabled: false,
+        supervisorEnabled: false,
+        supervisor: { state: 'stopped', restartCount: 0, notificationCount: 0 },
+        smokeRun: false,
+      })
+      .mockResolvedValueOnce({
+        binary: 'dasclaw-app-server',
+        startupSmokeEnabled: false,
+        supervisorEnabled: true,
+        supervisor: { state: 'ready', restartCount: 0, notificationCount: 1 },
+        smokeRun: true,
+      });
+
+    await appServerApi.getStatus();
+    await appServerApi.getStatus(true);
+
+    expect(mockedInvoke).toHaveBeenNthCalledWith(1, 'ic_app_server_status', {
+      runSmoke: false,
+    });
+    expect(mockedInvoke).toHaveBeenNthCalledWith(2, 'ic_app_server_status', {
+      runSmoke: true,
+    });
   });
 });
 
