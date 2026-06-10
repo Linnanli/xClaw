@@ -15,9 +15,9 @@ use dasclaw_app_server_protocol::{
     ShutdownResponse, ThreadCreateParams, ThreadCreateResponse, ThreadCreatedEvent,
     ThreadListResponse, ThreadReadParams, ThreadReadResponse, ThreadStartResponse,
     ThreadStartedEvent, TurnCancelParams, TurnCancelResponse, TurnCancelledEvent,
-    TurnCompletedEvent, TurnDeltaEvent, TurnFailedEvent, TurnListParams, TurnListResponse,
-    TurnReadParams, TurnReadResponse, TurnStartParams, TurnStartResponse, TurnStartedEvent,
-    WorkspaceInfo, event, method,
+    TurnCompletedEvent, TurnDeltaEvent, TurnFailedEvent, TurnInterruptResponse, TurnListParams,
+    TurnListResponse, TurnReadParams, TurnReadResponse, TurnStartParams, TurnStartResponse,
+    TurnStartedEvent, WorkspaceInfo, event, method,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -326,14 +326,14 @@ where
     pub fn turn_interrupt(
         &mut self,
         params: TurnCancelParams,
-    ) -> Result<TurnCancelResponse, AppServerClientError> {
+    ) -> Result<TurnInterruptResponse, AppServerClientError> {
         self.request(method::TURN_INTERRUPT, Some(params))
     }
 
     pub fn turn_interrupt_with_notifications(
         &mut self,
         params: TurnCancelParams,
-    ) -> Result<AppServerClientRoundTrip<TurnCancelResponse>, AppServerClientError> {
+    ) -> Result<AppServerClientRoundTrip<TurnInterruptResponse>, AppServerClientError> {
         self.request_with_notifications(method::TURN_INTERRUPT, Some(params))
     }
 
@@ -1121,11 +1121,7 @@ mod tests {
             })
             .expect("turn/interrupt should cancel a pending turn");
 
-        assert!(interrupted.accepted);
-        assert_eq!(
-            interrupted.status,
-            dasclaw_app_server_protocol::TurnStatus::Cancelled
-        );
+        assert_eq!(interrupted, TurnInterruptResponse {});
     }
 
     #[test]
@@ -1354,10 +1350,7 @@ mod tests {
             })
             .expect("turn/interrupt should cancel the pending turn");
 
-        assert_eq!(
-            interrupt.result.status,
-            dasclaw_app_server_protocol::TurnStatus::Cancelled
-        );
+        assert_eq!(interrupt.result, TurnInterruptResponse {});
         let terminal_events = interrupt
             .notifications
             .iter()

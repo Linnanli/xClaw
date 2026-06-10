@@ -734,7 +734,7 @@ fn phase_one_methods() -> Vec<MethodSchema> {
             method::TURN_INTERRUPT,
             "session",
             Some("TurnCancelParams"),
-            "TurnCancelResponse",
+            "TurnInterruptResponse",
             true,
         ),
         MethodSchema::new(
@@ -1026,6 +1026,10 @@ pub struct TurnCancelResponse {
     pub status: TurnStatus,
     pub lifecycle: LifecycleSnapshot,
 }
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnInterruptResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -5,8 +5,10 @@
 //! simple sidecar before we commit to a longer-lived socket transport.
 
 use std::io;
+use std::sync::Arc;
 
-use dasclaw_app_server::{AppServer, run_stdio_server};
+use async_trait::async_trait;
+use dasclaw_app_server::{AppServer, run_stdio_server_with_app_server};
 use dasclaw_app_server_protocol::{
     CapabilitiesListResponse, ClientInfo, HealthCheckParams, HealthCheckResponse, InitializeParams,
     InitializeResponse, LifecycleStatusResponse, ProtocolSchemaResponse, ProtocolVersion,
@@ -14,14 +16,28 @@ use dasclaw_app_server_protocol::{
     ThreadReadResponse, TransportKind, TurnCancelParams, TurnCancelResponse, TurnListParams,
     TurnListResponse, TurnReadParams, TurnReadResponse, TurnStartParams, TurnStartResponse,
 };
+use dasclaw_core::agentic_loop::AgentResponder;
+use dasclaw_core::messages::{FinishReason, Role};
+use dasclaw_core::reasoning_ctx::ReasoningContext;
+use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
+use dasclaw_core::traits::HostError;
 use serde::Serialize;
 
 fn main() {
     match parse_run_mode(std::env::args().skip(1)) {
         Ok(RunMode::Stdio) => {
-            if let Err(error) =
-                run_stdio_server(io::BufReader::new(io::stdin()), io::stdout().lock())
-            {
+            let server = match build_stdio_app_server() {
+                Ok(server) => server,
+                Err(error) => {
+                    eprintln!("{error}");
+                    std::process::exit(2);
+                }
+            };
+            if let Err(error) = run_stdio_server_with_app_server(
+                server,
+                io::BufReader::new(io::stdin()),
+                io::stdout().lock(),
+            ) {
                 eprintln!("dasclaw-app-server stdio loop failed: {error}");
                 std::process::exit(1);
             }
@@ -68,6 +84,43 @@ fn parse_run_mode(args: impl IntoIterator<Item = String>) -> Result<RunMode, Str
 
 fn usage() -> &'static str {
     "usage: dasclaw-app-server [--health-once | --version-json | --capabilities-once | --schema-once | --self-check | --help]"
+}
+
+fn build_stdio_app_server() -> Result<AppServer, String> {
+    app_server_for_runtime_mode(std::env::var("DASCLAW_APP_SERVER_RUNTIME").ok().as_deref())
+}
+
+fn app_server_for_runtime_mode(mode: Option<&str>) -> Result<AppServer, String> {
+    match mode {
+        Some("echo") => Ok(AppServer::with_runtime_responder(Arc::new(EchoResponder))),
+        Some("noop") | None => Ok(AppServer::new()),
+        Some(other) => Err(format!(
+            "unknown DASCLAW_APP_SERVER_RUNTIME: {other}; expected echo or noop"
+        )),
+    }
+}
+
+#[derive(Debug)]
+struct EchoResponder;
+
+#[async_trait]
+impl AgentResponder for EchoResponder {
+    async fn respond(&self, ctx: &mut ReasoningContext) -> Result<RespondOutput, HostError> {
+        let last_user_text = ctx
+            .messages
+            .iter()
+            .rev()
+            .find(|message| matches!(message.role, Role::User))
+            .map(|message| message.content.clone())
+            .unwrap_or_default();
+
+        Ok(RespondOutput {
+            result: RespondResult::Text(format!("echo: {last_user_text}")),
+            usage: TokenUsage::default(),
+            finish_reason: FinishReason::Stop,
+            metadata: ResponseMetadata::default(),
+        })
+    }
 }
 
 fn print_version_json() {
@@ -236,9 +289,9 @@ mod tests {
     };
     use serde_json::Value;
 
-    use dasclaw_app_server::run_stdio_server_with_app_server;
+    use dasclaw_app_server::{run_stdio_server, run_stdio_server_with_app_server};
 
-    use super::{RunMode, parse_run_mode, run_stdio_server};
+    use super::{RunMode, app_server_for_runtime_mode, parse_run_mode};
 
     #[test]
     fn parse_run_mode_defaults_to_stdio() {
@@ -448,6 +501,42 @@ mod tests {
     }
 
     #[test]
+    fn echo_runtime_mode_streams_real_runtime_completion_over_stdio() {
+        let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"client":{"name":"open-cowork","version":"0.0.0","transport":"stdio"},"protocolVersion":{"major":0,"minor":1,"patch":0},"requestedCapabilities":["codex_app_server_v2"]}}"#;
+        let thread_start =
+            r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"title":"Draft"}}"#;
+        let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":"hello echo"}}"#;
+        let mut output = Vec::new();
+        let server = app_server_for_runtime_mode(Some("echo")).expect("echo mode should build");
+
+        run_stdio_server_with_app_server(
+            server,
+            Cursor::new(format!("{initialize}\n{thread_start}\n{turn_start}\n")),
+            &mut output,
+        )
+        .expect("echo runtime mode should produce a stdio transcript");
+
+        let response = String::from_utf8(output).expect("response should be utf8");
+        let values = response
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("line should be JSON"))
+            .collect::<Vec<_>>();
+
+        assert!(values.iter().any(|value| {
+            value["method"] == "item/agentMessage/delta"
+                && value["params"]["delta"] == "echo: hello echo"
+        }));
+        assert!(values.iter().any(|value| {
+            value["method"] == "turn/completed" && value["params"]["output"] == "echo: hello echo"
+        }));
+    }
+
+    #[test]
+    fn runtime_mode_rejects_unknown_values() {
+        assert!(app_server_for_runtime_mode(Some("future")).is_err());
+    }
+
+    #[test]
     fn stdio_loop_emits_codex_v2_failure_item_terminal_and_error_events() {
         let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"client":{"name":"codex","version":"2.0.0","transport":"stdio"},"protocolVersion":{"major":0,"minor":1,"patch":0},"requestedCapabilities":["codex_app_server_v2"]}}"#;
         let thread_start =
@@ -526,7 +615,7 @@ mod tests {
             value["method"] == "item/completed" && value["params"]["status"] == "cancelled"
         }));
         assert!(values.iter().any(|value| {
-            value["id"] == "interrupt" && value["result"]["status"] == "cancelled"
+            value["id"] == "interrupt" && value["result"] == serde_json::json!({})
         }));
         let item_completed_position = values
             .iter()

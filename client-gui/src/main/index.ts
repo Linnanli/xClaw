@@ -87,6 +87,7 @@ import {
 } from './utils/logger';
 import { listRecentWorkspaceFiles } from './utils/recent-workspace-files';
 import { buildDiagnosticsSummary } from './utils/diagnostics-summary';
+import { DasclawAppServerSessionBridge } from './dasclaw/app-server-session-bridge';
 
 // Current working directory (persisted between sessions)
 let currentWorkingDir: string | null = null;
@@ -116,6 +117,7 @@ let skillsManager: SkillsManager | null = null;
 let pluginRuntimeService: PluginRuntimeService | null = null;
 let memoryService: MemoryService | null = null;
 let scheduledTaskManager: ScheduledTaskManager | null = null;
+let dasclawSessionBridge: DasclawAppServerSessionBridge | null = null;
 
 function sanitizeDiagnosticBaseUrl(value: string | undefined): string | null {
   if (!value) {
@@ -841,6 +843,7 @@ app
     // Initialize session manager before creating an interactive window.
     // This avoids session.start racing the startup path and hitting a null manager.
     sessionManager = new SessionManager(db, sendToRenderer, pluginRuntimeService, extensionManager);
+    dasclawSessionBridge = new DasclawAppServerSessionBridge(db, sendToRenderer);
     skillsManager = new SkillsManager(db, {
       getConfiguredGlobalSkillsPath: () => configStore.get('globalSkillsPath') || '',
       setConfiguredGlobalSkillsPath: (nextPath: string) => {
@@ -1042,6 +1045,8 @@ async function cleanupSandboxResources(): Promise<void> {
   isCleaningUp = true;
 
   stopNavServer();
+  dasclawSessionBridge?.dispose();
+  dasclawSessionBridge = null;
   skillsManager?.stopStorageMonitoring();
   scheduledTaskManager?.stop();
   tray?.destroy();
@@ -2673,6 +2678,13 @@ async function handleClientEvent(event: ClientEvent): Promise<unknown> {
     return null;
   }
 
+  if (shouldUseDasclawAppServerBridge()) {
+    const bridged = await handleDasclawSessionEvent(event);
+    if (bridged.handled) {
+      return bridged.result;
+    }
+  }
+
   if (eventRequiresSessionManager(event) && !sessionManager) {
     throw new Error('Session manager not initialized');
   }
@@ -2804,4 +2816,56 @@ async function handleClientEvent(event: ClientEvent): Promise<unknown> {
       logWarn('Unknown event type:', event);
       return null;
   }
+}
+
+async function handleDasclawSessionEvent(
+  event: ClientEvent
+): Promise<{ handled: false } | { handled: true; result: unknown }> {
+  if (
+    event.type !== 'session.start' &&
+    event.type !== 'session.continue' &&
+    event.type !== 'session.stop'
+  ) {
+    return { handled: false };
+  }
+
+  if (!dasclawSessionBridge) {
+    throw new Error('Dasclaw app-server bridge not initialized');
+  }
+
+  switch (event.type) {
+    case 'session.start': {
+      const unsupportedReason = getWorkspacePathUnsupportedReason(event.payload.cwd);
+      if (unsupportedReason) {
+        sendToRenderer({
+          type: 'error',
+          payload: { message: unsupportedReason },
+        });
+        return { handled: true, result: null };
+      }
+      const session = await dasclawSessionBridge.startSession(
+        event.payload.title,
+        event.payload.prompt,
+        event.payload.cwd,
+        event.payload.allowedTools,
+        event.payload.content,
+        event.payload.memoryEnabled
+      );
+      return { handled: true, result: session };
+    }
+    case 'session.continue':
+      await dasclawSessionBridge.continueSession(
+        event.payload.sessionId,
+        event.payload.prompt,
+        event.payload.content
+      );
+      return { handled: true, result: undefined };
+    case 'session.stop':
+      await dasclawSessionBridge.stopSession(event.payload.sessionId);
+      return { handled: true, result: undefined };
+  }
+}
+
+function shouldUseDasclawAppServerBridge(): boolean {
+  return process.env.OPEN_COWORK_AGENT_RUNNER === 'dasclaw';
 }

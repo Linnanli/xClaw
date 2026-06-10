@@ -25,8 +25,8 @@ use dasclaw_app_server_protocol::{
     ThreadCreateResponse, ThreadCreatedEvent, ThreadListResponse, ThreadReadParams,
     ThreadReadResponse, ThreadStartResponse, ThreadStartedEvent, ThreadSummary, TurnCancelParams,
     TurnCancelResponse, TurnCancelledEvent, TurnCompletedEvent, TurnDeltaEvent, TurnFailedEvent,
-    TurnListParams, TurnListResponse, TurnReadParams, TurnReadResponse, TurnStartParams,
-    TurnStartResponse, TurnStartedEvent, TurnStatus, TurnSummary,
+    TurnInterruptResponse, TurnListParams, TurnListResponse, TurnReadParams, TurnReadResponse,
+    TurnStartParams, TurnStartResponse, TurnStartedEvent, TurnStatus, TurnSummary,
 };
 use dasclaw_app_server_protocol::{JSON_RPC_VERSION, method};
 use serde::{Deserialize, Serialize};
@@ -344,6 +344,14 @@ impl AppServer {
         })
     }
 
+    pub fn turn_interrupt(
+        &mut self,
+        params: TurnCancelParams,
+    ) -> Result<TurnInterruptResponse, AppServerError> {
+        let _ = self.turn_cancel(params)?;
+        Ok(TurnInterruptResponse {})
+    }
+
     pub fn turn_list(
         &mut self,
         params: TurnListParams,
@@ -520,9 +528,14 @@ impl AppServer {
                     self.turn_start(params)
                 })
             }
-            method::TURN_CANCEL | method::TURN_INTERRUPT => {
+            method::TURN_CANCEL => {
                 route_with_params(request.id, request.params, |params: TurnCancelParams| {
                     self.turn_cancel(params)
+                })
+            }
+            method::TURN_INTERRUPT => {
+                route_with_params(request.id, request.params, |params: TurnCancelParams| {
+                    self.turn_interrupt(params)
                 })
             }
             method::TURN_LIST => {
@@ -3852,8 +3865,7 @@ mod tests {
             .expect("turn/interrupt should return a JSON-RPC response");
         let value: Value = serde_json::from_str(&interrupt).expect("interrupt response JSON");
 
-        assert_eq!(value["result"]["accepted"], true);
-        assert_eq!(value["result"]["status"], "cancelled");
+        assert_eq!(value["result"], serde_json::json!({}));
     }
 
     #[test]

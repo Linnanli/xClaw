@@ -31,7 +31,7 @@ Compatibility implication:
 | Area | Current dasclaw v0 | Codex app-server v2 reference | Next direction |
 |---|---|---|---|
 | Thread creation | `thread/create` + `thread/created` | `thread/start` + `thread/started` | Add a compatibility decision/test slice before new client work; prefer Codex method names for new client-facing APIs, keep current v0 helpers only as transitional aliases if needed. |
-| Turn cancellation | `turn/cancel` + `turn/cancelled` | `turn/interrupt` returns `{}` and terminal turn status becomes interrupted | Add a v2 compatibility mapping test; do not change runtime cancellation semantics underneath. |
+| Turn cancellation | `turn/cancel` + `turn/cancelled` | `turn/interrupt` returns `{}` while dasclaw keeps internal cancellation status as `cancelled` | Compatibility mapping implemented for the chat-session subset; richer interrupted status can wait until the runtime distinguishes interrupt from cancel. |
 | Streaming text | `turn/delta` | `item/agentMessage/delta` with `item/started` / `item/completed` | Promote item-level events for new client compatibility; keep `turn/delta` as legacy smoke/diagnostic bridge until consumers move. |
 | Terminal event | `turn/completed` / `turn/failed` / `turn/cancelled` | `turn/completed` with `Turn.status` and optional error | Collapse terminal variants behind Codex-style turn status for compatibility fixtures, while preserving explicit internal runtime updates. |
 | Initialize handshake | `initialize` request; Codex v2 profile additionally emits `notifications/initialized` | `initialize` request followed by `notifications/initialized` client notification | Implemented for the chat-session subset when `codex_app_server_v2` is requested; legacy initialization keeps the existing lifecycle/capability notifications only. |
@@ -512,9 +512,13 @@ type TurnCancelResponse = {
   status: "pending" | "completed" | "failed" | "cancelled";
   lifecycle: LifecycleSnapshot;
 };
+
+type TurnInterruptResponse = {};
 ```
 
 Phase 1.6 behavior: app-server first enforces `initialize`, validates that `threadId` exists, drains pending runtime updates, and routes cancellation through `RuntimeBridge::cancel_turn`. Known non-terminal turns are marked `cancelled` and emit `turn/cancelled`; unknown turns return `INVALID_PARAMS`, and already terminal turns are rejected as invalid requests.
+
+Codex v2 compatibility behavior: `turn/interrupt` uses the same fail-safe runtime cancellation path as `turn/cancel`, but returns an empty `{}` result to match the Codex-style request/response surface consumed by new clients. The terminal notification stream remains explicit through `item/completed` and `turn/cancelled`; dasclaw does not claim a separate `interrupted` runtime status until the underlying runtime models it distinctly.
 
 ### 5.12 `turn/list` skeleton
 

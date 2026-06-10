@@ -4,6 +4,8 @@
 > 日期：2026-06-06  
 > 目标：以 Electron / `open-cowork` 作为新客户端壳基座，当前 Rust `desktop-client` 中的核心能力收敛为 dasclaw app-server / Rust sidecar 接入；PoC 通过后进入替换评估。
 
+> 最新同步：2026-06-10 `client-gui` 已接入最小 dasclaw app-server bridge，并新增可重复 Electron smoke：`npm run smoke:dasclaw-app-server`。该 smoke 通过真实 main / preload / renderer / app-server sidecar 验证 `initialize -> thread/start -> turn/start(input) -> item/agentMessage/delta -> idle` 闭环。
+
 ## 0. 过程透明记录
 
 本计划属于新增架构计划文档，按仓库规则本应先使用 `semantic_search` 查找等价实现，再用符号层与字面量层交叉验证。当前会话未暴露 `semantic_search` / `vscode_listCodeUsages` 工具，因此本轮采用可用替代路径：
@@ -30,7 +32,7 @@
 | `codex-electron` | 适合作为 Codex-style 产品体验参考，优点是 UI 和 app-server 体验成熟，但当前参考库更像打包产物，不适合作为直接可维护基座 |
 | 当前 `desktop-client` | 仍是现有主客户端，不能在 PoC 通过前直接替换 |
 
-因此，本计划不是“用 JS 重写 Rust 能力”，而是“换壳不换核”：Electron 负责产品壳、插件生态和 UI 迭代，Rust app-server 负责 engine、DLP、policy、approval、jobs、skills、memory、sandbox 等核心能力。
+因此，本计划不是“用 JS 重写 Rust 能力”，而是“换壳不换核”：Electron 负责产品壳、插件生态和 UI 迭代；本轮 PoC 只把 Rust app-server 作为稳定 sidecar / protocol bridge 接入。DLP、policy、approval、jobs、skills、memory、sandbox 等仍是后续 capability surface 或既有 Rust 能力边界，不是当前 bridge 切片的迁移目标。
 
 ## 3. 目标
 
@@ -164,6 +166,72 @@ flowchart LR
 | Chat stream contract mapping | partial | app-server 已能发 turn delta/completed/failed；`send_chat_message` 已有 opt-in in-process probe、supervisor-owned stdio sidecar probe 与实验性 `DASCLAW_APP_SERVER_CHAT_SIDECAR_DISPATCH=1`；匹配的 sidecar turn delta/terminal 通知（含 response 后 delayed runtime notifications）会桥接到现有 `chat-stream` compat 帧。probe 不发 `Finish`，dispatch 发 `Finish` 并跳过 legacy `msg_sender`；默认聊天执行仍走 legacy Agent loop。 |
 | Codex-compatible client readiness | partial | 后续客户端会直接消费 app-server protocol，且 open-cowork 基座已有 Codex app-server 消费模型；当前阶段优先补 Codex v2 compatibility profile 与 app-server integration tests，而不是继续深接旧 desktop UI 或发明 dasclaw-only replacement-client contract。第一批 direct JSON-RPC turn lifecycle integration tests 已覆盖 multi-delta completed、runtime failed、pending cancel；line-delimited client 已覆盖 response-first completed/failed/cancelled typed notifications。旧 UI adapter 保留为 opt-in smoke/diagnostics 层。 |
 | Approval / diff / DLP contract | not started | 这些仍停留在总体计划层，没有迁入 app-server contract 主线。 |
+
+Note: the legacy `chat-stream` / `VercelUIStream` mentions above describe the old desktop-client adapter and diagnostics path only. The Electron `client-gui` bridge treats the app-server protocol as the source of truth and consumes Codex-style item/turn notifications directly.
+
+### Phase 1 progress sync (2026-06-09)
+
+`client-gui/` 已成为本 PoC 的 open-cowork 基座目录，并已生成独立 code-review-graph 图谱。该图谱是一次性 build 结果，不会自动 watch；后续每次修改 `client-gui` 后应手动运行 `code-review-graph update --repo client-gui`，或在明确需要时再启动 watch。
+
+当前 app-server 方向继续收敛为 Codex v2 compatibility subset：
+
+| Area | Status | Notes |
+|---|---|---|
+| `client-gui` source baseline | implemented | 已复制 open-cowork 源码到 `client-gui/`，保留 MIT 许可声明，不把上游 `.git` 历史混入当前仓库。 |
+| `client-gui` code graph | implemented | `code-review-graph build --repo client-gui` 已完成，便于后续查 open-cowork 消费 app-server 的调用面。 |
+| `turn/interrupt` response shape | implemented | app-server 继续走 dasclaw runtime cancel path，但 Codex-style `turn/interrupt` 返回 `{}`；终态仍通过 `item/completed` / `turn/cancelled` 通知表达。 |
+| Next client wiring target | pending | 先在 `client-gui` main/preload/runtime client 层接 `initialize -> notifications/initialized -> thread/start -> turn/start(input)`，再进入 UI 状态改造。 |
+
+### Phase 2 progress sync (2026-06-10)
+
+`client-gui` 现在已有最小 Electron main bridge：
+
+| Area | Status | Notes |
+|---|---|---|
+| Electron main app-server bridge | implemented | `OPEN_COWORK_AGENT_RUNNER=dasclaw` 时，`session.start` / `session.continue` / `session.stop` 走 dasclaw app-server protocol；默认仍走 legacy `SessionManager`。 |
+| Sidecar runtime mode | implemented | `DASCLAW_APP_SERVER_RUNTIME=echo` 用于 PoC smoke；未知 runtime mode 会 fail fast；packaged 场景要求 `DASCLAW_APP_SERVER_BIN`。 |
+| Renderer smoke | implemented | `client-gui/scripts/dasclaw-app-server-smoke.mjs` 会构建 GUI、启动 `vite preview`、用临时 `--user-data-dir` 启动 Electron、通过 CDP 调真实 `window.electronAPI`，并断言只收到一个 `stream.partial`。 |
+| Legacy compatibility event handling | tightened | GUI bridge 只消费 Codex-style `item/agentMessage/delta`，不再同时消费 legacy `turn/delta`，避免 renderer 文本重复。 |
+| Bridge failure mapping | implemented | `turn/start` / `turn/interrupt` request failure and active-turn app-server transport exit now update the bound GUI session to `error` with a renderer-visible message; idle transport exit resets the RPC client so the next start/continue call reinitializes the app-server. |
+
+Smoke 命令：
+
+```bash
+cd client-gui
+npm run smoke:dasclaw-app-server
+```
+
+该 smoke 的非目标：不验证 approval、diff、MCP、skills、DLP、jobs、sandbox，也不把 legacy desktop `chat-stream` 当兼容真相。它只固定 Electron shell 消费 app-server protocol 的最小会话闭环。
+
+### Recommended new-session prompt (2026-06-09)
+
+```text
+继续 open-cowork / dasclaw GUI PoC。
+工作区只允许：/Users/nallylin/Documents/code/x-claw-open-cowork-gui-poc
+所有回答中文，先显式回答 AGENTS.md 任务启动 4 问。
+
+当前状态：
+- `client-gui/` 已复制 open-cowork 源码，并已创建 code-review-graph 图谱。
+- Rust app-server 已有 `dasclaw_app_server_protocol` / `dasclaw_app_server` / `dasclaw_app_server_client`。
+- 当前默认 transport 是 line-delimited stdio JSON-RPC。
+- 已实现 initialize / notifications/initialized / health / lifecycle / shutdown / capabilities / protocol/schema。
+- 已实现 thread/create、thread/start、thread/list、thread/read。
+- 已实现 turn/start，支持 Codex-style string `input` alias。
+- 已实现 item/started、item/agentMessage/delta、item/completed、turn/completed/error/cancelled 等兼容通知。
+- `turn/interrupt` 已按 Codex-style 返回 `{}`，底层仍复用 dasclaw runtime cancel path。
+
+开发要求：
+- 禁止补丁式代码；每轮完成一个可解释、可验证的完整切片。
+- 不要在 app-server 里重新实现 Agent loop / ToolExecutor。
+- 新客户端应直接消费 app-server protocol，不要把 legacy desktop `chat-stream` 作为兼容真相。
+- 涉及新增文件/模块、否定性结论、跨项目对账、架构文档时按 AGENTS.md 三层验证。
+- app-server 非平凡实现完成后，使用可用的 code-review-graph / 子 agent / review 工具检查是否存在测试侧适配或掩盖客户端 bug。
+
+建议下一切片：
+1. 读取 `client-gui` 中 Codex/open-cowork runtime client 或 app-server consumer 入口。
+2. 只做最小 Electron main/preload 连接 spike：spawn/connect dasclaw app-server、initialize、thread/start、turn/start(input)、消费 item/agentMessage/delta 与 terminal notification。
+3. 不迁移 approval / diff / MCP / skills / DLP / jobs / sandbox，先保证会话闭环。
+```
 
 因此，Phase 1 当前可以认为：
 
