@@ -517,6 +517,29 @@ function createWindow() {
     }
   });
 
+  if (isDev) {
+    mainWindow.webContents.on('context-menu', (_event, params) => {
+      const menu = Menu.buildFromTemplate([
+        { role: 'copy' },
+        { role: 'paste' },
+        { type: 'separator' },
+        {
+          label: '检查元素',
+          click: () => mainWindow?.webContents.inspectElement(params.x, params.y),
+        },
+        {
+          label: '打开控制台',
+          click: () => mainWindow?.webContents.openDevTools({ mode: 'undocked' }),
+        },
+        {
+          label: '刷新页面',
+          click: () => mainWindow?.webContents.reload(),
+        },
+      ]);
+      menu.popup({ window: mainWindow ?? undefined });
+    });
+  }
+
   // Load the app
   if (process.env.VITE_DEV_SERVER_URL) {
     const devServerUrl = process.env.VITE_DEV_SERVER_URL;

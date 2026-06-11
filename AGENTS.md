@@ -8,8 +8,8 @@
 
 开始任何代码 / 文档 / 架构任务之前，先在脑里或对话中**显式回答**这 4 个问题，按答案决定是否触发分析工具（详细规则见下方"分析工具使用规范"section）：
 
-1. **是否新增模块 / crate / 文件？** → 是 → 必须先用 `semantic_search` 找等价实现
-2. **结论里是否含"X 没有 Y / X 缺 Y / X 是独家"等否定语？** → 是 → 必须三层验证（`semantic_search` → `vscode_listCodeUsages` → `rg`）
+1. **是否新增模块 / crate / 文件？** → 是 → 必须先用 `semantic_search_nodes_tool` 找等价实现
+2. **结论里是否含"X 没有 Y / X 缺 Y / X 是独家"等否定语？** → 是 → 必须三层验证（`semantic_search_nodes_tool` → `execute_lsp` → `rg`）
 3. **是否做跨项目对账（codex / claw-code / ironclaw / desktop-client）？** → 是 → 必须三层验证
 4. **是否写架构对账类文档（如 ADR / 14-md / 对比矩阵）？** → 是 → 必须三层验证
 
@@ -59,52 +59,14 @@
 
 **遗忘检测**：每次准备 push 前，先问自己"刚才有没有跑过 code-quality-audit、adr-compliance-check（适用时）和 code-review-expert？"，如果没有，回到对应步骤补做。
 
-### GitHub PR 工作流
-
-#### 默认原则
-
-- **先完成局部闭环，再开 PR**：实现、验证、必要的自审都完成后再提交，不要把“未验证草稿”直接推成 PR
-- **PR 要小而完整**：优先拆成可 review 的小 PR，但每个 PR 都必须有明确边界、验证结果和 merge 顺序
-- **能 stacked 就 stacked，不要把无关改动塞进同一个 PR**
-
-#### 标准流程
-
-1. 完成当前切片实现
-2. 运行最小充分验证：先窄测试，再必要的 build / workspace build
-3. 按 Skills 管线完成 `code-quality-audit` → `code-simplifier`（verbatim port 跳过）→ `adr-compliance-check`（触及 ADR 红线时）→ `code-review-expert`（适用时）
-4. commit，commit message 说明当前切片的真实边界
-5. push 分支
-6. 开 PR，并在 PR 描述中写清：
-    - 这个 PR 做了什么
-    - 明确没做什么
-    - 验证命令和结果
-    - 风险 / 后续步骤
-7. 开完 PR 后，**必须用 `gh pr checks <PR#> --watch --fail-fast` 等 CI**（事件驱动，CI 一结束就返回）。**禁止用 `sleep N && gh pr checks` 轮询**——`sleep` 既浪费时间又拿不到精确完成点，违反本规约。把 watch 输出的结果同步给用户。
-
-#### PR 描述最低要求
-
-- 背景 / 目标
-- 改动范围
-- 非目标（What’s NOT in this PR）
-- 验证- **Cross-cuts**：声明本 PR 与 ADR-114（`.ironclaw` → `.dasclaw` 命名迁移）的关系。三选一：`类A`（无新增 `.ironclaw` / `IRONCLAW_BASE_DIR` 字面量）/ `类B issue#XXX`（集中工程，需带 `adr-114-class-b` label 豁免 grep guard）/ `不涉及`- 后续 PR / 下一步
-
-#### 禁止事项
-
-- ❌ 还没跑基本验证就开 PR
-- ❌ stacked PR 不写 base / merge 顺序
-- ❌ 合并 stacked 下层 PR 时既未保留分支、也未提前把上层 PR 的 base 切到 xClaw（会导致上层 PR 自动关闭且无法 reopen）
-- ❌ PR 标题和 commit / 实际改动边界不一致
-- ❌ 一个 PR 混入多个互不相干的主题
-- ❌ 明明已经完成闭环 milestone，却继续在同一会话无限追加新阶段
-
 ### 分析工具使用规范
 
 **重大架构决策/能力盘点/跨项目对比前，必须按三级顺序使用工具**：
 
 | 级别 | 工具 | 使用场景 |
 |------|------|---------|
-| Level 1 语义层 | `semantic_search` | 概念搜索（跨命名等价实现），**必须先用** |
-| Level 2 符号层 | `vscode_listCodeUsages` | LSP 引用/定义/实现图，核验判断 |
+| Level 1 语义层 | `semantic_search_nodes_tool` | 概念搜索（跨命名等价实现），**必须先用** |
+| Level 2 符号层 | `execute_lsp` | LSP 引用/定义/实现图，核验判断 |
 | Level 3 字面量层 | `rg` / `grep` | 已知确切词后再用 |
 
 **反模式（禁止）**：
@@ -114,8 +76,8 @@
 - ❌ 写架构对账文档时没有先按本规范核验能力表每一格 — 会把主观猜测当结论
 
 **执行流程（最低标准）**：
-1. 先用 `semantic_search` 搜概念（≥ 2 种语义表达）
-2. 若有符号级疑问，用 `vscode_listCodeUsages` 打引用图
+1. 先用 `semantic_search_nodes_tool` 搜概念（≥ 2 种语义表达）
+2. 若有符号级疑问，用 `execute_lsp` 打引用图
 3. 最后才用 `rg` 定位确切位置
 4. 对于"X 没有 Y"这类否定性结论，**必须明确给出 Level 1 + Level 3 双证据**才能落笔
 
@@ -124,7 +86,7 @@
 | 场景 | 是否必须做三层验证 |
 |------|---------------------|
 | 否定性结论："X 没有 Y" / "X 是独家的" / "缺失 Y" | ✅ 必须 |
-| 新增模块 / 新建 crate / 新建文件 | ✅ 必须（先 semantic_search 是否已有等价） |
+| 新增模块 / 新建 crate / 新建文件 | ✅ 必须（先 `semantic_search_nodes_tool` 是否已有等价） |
 | 跨项目对账（codex / claw-code / ironclaw 能力对比） | ✅ 必须 |
 | 架构对账文档（如 14-md） | ✅ 必须（Round 17/18 实证错误率 4/19） |
 | 已知模块内 bug 修复 | ❌ 不需要 |
@@ -134,46 +96,77 @@
 
 **教训来源**：
 - Round 1-15 多次误判（"codex 没 forkSubagent"、"ironclaw Prompt Cache 独家"）的根因均为字面量搜索陷阱。
-- **Round 18 实证**：14 文档 Round 17 版本列出的 4 项 P0/P1 "缺口"（`<system-reminder>` 标签 / CYBER_RISK_INSTRUCTION 文本 / 多层 CLAUDE.md 加载 / 压缩阈值），经 `semantic_search` 验证全部是**伪缺口** —— claw-code `runtime/src/prompt.rs:480` 与 `prompt.rs:197`、codex `openai_models.rs:306` 早已实现。4/19 的文档错误率直接证明：**不做 semantic_search 就动笔写对账文档是不合格的**。
+- **Round 18 实证**：14 文档 Round 17 版本列出的 4 项 P0/P1 "缺口"（`<system-reminder>` 标签 / CYBER_RISK_INSTRUCTION 文本 / 多层 CLAUDE.md 加载 / 压缩阈值），经 `semantic_search_nodes_tool` 验证全部是**伪缺口** —— claw-code `runtime/src/prompt.rs:480` 与 `prompt.rs:197`、codex `openai_models.rs:306` 早已实现。4/19 的文档错误率直接证明：**不做语义搜索就动笔写对账文档是不合格的**。
 
 ---
 
 
 ## 代码图谱与打包工具（2026-04-29 启用）
 
+### LSP MCP（Codex HTTP 服务）
+
+Codex 本地已注册 `lsp-mcp`：
+- 地址：`http://127.0.0.1:9527/mcp`
+- 当前实测可完成 MCP `initialize`、`tools/list` 与 `execute_lsp`
+- 适合：`document_symbols`、`workspace_symbols`、`definition`、`references`、`rename`、调用层级查询
+
+使用建议：
+- 想查文件符号树、workspace symbol、definition / references 时，优先走 `lsp-mcp`
+- 当前 Codex 里真实可调用的 MCP tool name 是 `execute_lsp`；`vscode_listCodeUsages` 视为旧文档叫法，不再作为调用名使用
+- 语义相似实现搜索不走 LSP，仍优先用 `code-review-graph semantic_search_nodes_tool`
+
 ### code-review-graph 增量图谱
 
-CLI: `/Users/nallylin/.local/bin/code-review-graph`（多 repo registry 已注册 4 个）：
+CLI: `/Users/nallylin/.local/bin/code-review-graph`
 
-| alias | path | nodes | edges | files |
-|---|---|---|---|---|
-| `ironclaw` | `desktop-client/ironclaw` | 20519 | 196690 | 1116 |
-| `codex-cli` | `codex-cli-main` | 34382 | 336693 | 2273 |
-| `claw-code` | `claw-code` | 4522 | 37559 | 156 |
-| `ironclaw-main` | `ironclaw-main` | 23674 | 220750 | 846 |
+核心能力：
+- `detect-changes` / `impact_radius`：看改动波及哪些调用方、测试、流程
+- `semantic_search_nodes_tool`：按语义找相近实现，避免重复造轮子
+- `minimal_context`：给 LLM 提供最小可读上下文，而不是整文件硬塞
+- `community` / `affected_flows`：看模块耦合、调用流、社群结构
+
+当前推荐 repo 选择：
+- `client-gui` / React 前端任务：优先用 `desktop-client/ui`
+- `ironclaw` engine / routines / tool runtime：优先用 `desktop-client/ironclaw`
+- 整仓 `x-claw` 根图只适合宽范围摸排；对前端语义搜索噪音较大，容易混入 `ironclaw` / `admin-backend`
+- 已注册 repo 以 `code-review-graph repos` 实时输出为准，不要在文档里硬记数量
+
+MCP 接入：
+- `.vscode/mcp.json` 当前接到 `desktop-client/ironclaw`
+- Codex 本地配置当前接到 `desktop-client/ui`
+- 常见工具名：`get_impact_radius_tool` / `get_affected_flows_tool` / `get_review_context_tool` / `semantic_search_nodes_tool` / `list_communities_tool` / `get_minimal_context_tool`
+
+语义搜索实测（2026-06-11）：
+- `desktop-client/ui` 图谱现有 `1756` 条 embeddings，`semantic_search_nodes_tool` 返回 `search_mode=hybrid`
+- 查询 `"approval dialog for tool execution"` 可直接命中 `ApprovalCardView` / `ApprovalToolRenderer` / `ApprovalProvider`
+- 查询 `"chat composer attachments image preview"` 可直接命中 `AttachmentPreview` / `AttachmentUI` / `AttachmentPreviewDialog`
+- 查实现时优先加 `kind=Function`，否则测试名常排在前面，干扰阅读
+- 语义搜索是**条件增强**：有 embeddings 时走 hybrid（FTS + vector）；没有 embeddings 时退化成关键词匹配，不要把 fallback 当真语义搜索
+
+何时使用：
+- PR review 前评估改动影响半径：`detect-changes --base origin/xClaw`
+- 重构前查调用方 / 被调用方：`impact_radius` / `affected_flows`
+- 找语义相近实现：`semantic_search_nodes_tool`
+- 给外部 LLM 或子 agent 喂最小上下文：`minimal_context`
+- 看模块耦合 / 社群结构：`community`
+
+不适合：
+- 纯文档变更（图谱不索引）
+- 模块全貌讲解或长文打包 → 改用 Repomix 或 `read_file`
+- 精确符号跳转 / 引用核验 → 改用 `lsp-mcp execute_lsp`
 
 常用命令：
 - `code-review-graph repos` — 列出已注册 repo
 - `code-review-graph build --repo <path>` — 全量重建
 - `code-review-graph update --repo <path>` — 增量更新
-- `code-review-graph watch --repo <path>` — 自动增量（**仅 desktop-client/ironclaw 启用**）
+- `code-review-graph watch --repo <path>` — 自动增量（当前主要用于 `desktop-client/ironclaw`）
 - `code-review-graph detect-changes --base HEAD~N [--brief]` — impact radius 报告
-- `code-review-graph status` — 图谱统计
-
-MCP 接入：`.vscode/mcp.json` 中 `code-review-graph` server 已指向 `desktop-client/ironclaw`，提供 `mcp_code-review-g_*` 工具集（impact_radius / affected_flows / review_context / semantic_search_nodes / community / minimal_context 等）。
+- `code-review-graph status --repo <path>` — 图谱统计
 
 注意事项：
 - `register` 要求路径下有 `.git` 或 `.code-review-graph`；首次对子目录用 `build` 自动创建后再 register
 - `watch` 是后台守护进程，改文件即触发增量；不要并发对同一 repo 跑 build/update（共享 SQLite）
-- `detect-changes` 风险评分: ≥0.7 高风险，需重点 review；untested 列表标记缺测试
-
-**何时使用 code-review-graph**（适合「精确定位 / 影响面分析」）：
-- PR review 前评估改动影响半径：`detect-changes --base origin/xClaw` → 看 impact_radius 与 untested
-- 重构前查调用方/被调用方：`mcp_code-review-g_impact_radius` / `affected_flows`
-- 找语义相近的实现避免重复造轮子：`mcp_code-review-g_semantic_search_nodes`
-- 给 LLM 提供「最小可读上下文」而非整文件：`mcp_code-review-g_minimal_context`
-- 探索代码社群结构 / 模块耦合：`mcp_code-review-g_community`
-- ⚠️ **不适合**：纯文档变更（图谱不索引）、模块全貌讲解 → 改用 Repomix 或 `read_file`
+- `detect-changes` 风险评分 ≥ `0.7` 视为高风险，需重点 review
 
 ### 工具选型速查
 
@@ -181,7 +174,8 @@ MCP 接入：`.vscode/mcp.json` 中 `code-review-graph` server 已指向 `deskto
 |---|---|
 | 「改了 X，会波及哪些测试 / 调用方」 | code-review-graph `detect-changes` / `impact_radius` |
 | 「找一个名字叫 XXX 的函数」 | `grep_search` / `file_search` |
-| 「找一个『大概是这意思』的实现」 | code-review-graph `semantic_search_nodes` |
+| 「找一个『大概是这意思』的实现」 | code-review-graph `semantic_search_nodes_tool` |
+| 「想核对某个符号被谁引用 / 定义落点在哪」 | `lsp-mcp execute_lsp` |
 | 「贴给外部 LLM 让它出方案」 | Repomix 打包 |
 | 「PR 评审清单 / 风险打分」 | code-review-graph `detect-changes --brief` |
 
