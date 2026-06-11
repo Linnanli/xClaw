@@ -3820,7 +3820,7 @@ mod tests {
 
         let response = server
             .handle_json_rpc(&format!(
-                r#"{{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{{"threadId":"{}","input":"hello input"}}}}"#,
+                r#"{{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{{"threadId":"{}","input":[{{"type":"text","text":"hello input","text_elements":[]}}]}}}}"#,
                 thread.thread_id
             ))
             .expect("turn/start should return a JSON-RPC response");
@@ -3848,7 +3848,7 @@ mod tests {
 
         let turn_response = server
             .handle_json_rpc(&format!(
-                r#"{{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{{"threadId":"{thread_id}","input":"hello"}}}}"#
+                r#"{{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{{"threadId":"{thread_id}","input":[{{"type":"text","text":"hello","text_elements":[]}}]}}}}"#
             ))
             .expect("turn/start should return a JSON-RPC response");
         let turn: Value = serde_json::from_str(&turn_response).expect("turn response JSON");

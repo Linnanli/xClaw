@@ -441,7 +441,7 @@ mod tests {
         let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"client":{"name":"codex","version":"2.0.0","transport":"stdio"},"protocolVersion":{"major":0,"minor":1,"patch":0},"requestedCapabilities":["codex_app_server_v2"]}}"#;
         let thread_start =
             r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"title":"Draft"}}"#;
-        let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":"hello"}}"#;
+        let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"hello","text_elements":[]}]}}"#;
         let mut output = Vec::new();
         let bridge = Arc::new(CompletingRuntimeBridge::default());
         let server = dasclaw_app_server::AppServer::with_runtime_bridge(bridge);
@@ -505,7 +505,7 @@ mod tests {
         let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"client":{"name":"open-cowork","version":"0.0.0","transport":"stdio"},"protocolVersion":{"major":0,"minor":1,"patch":0},"requestedCapabilities":["codex_app_server_v2"]}}"#;
         let thread_start =
             r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"title":"Draft"}}"#;
-        let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":"hello echo"}}"#;
+        let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"hello echo","text_elements":[]}]}}"#;
         let mut output = Vec::new();
         let server = app_server_for_runtime_mode(Some("echo")).expect("echo mode should build");
 
@@ -541,7 +541,7 @@ mod tests {
         let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"client":{"name":"codex","version":"2.0.0","transport":"stdio"},"protocolVersion":{"major":0,"minor":1,"patch":0},"requestedCapabilities":["codex_app_server_v2"]}}"#;
         let thread_start =
             r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"title":"Draft"}}"#;
-        let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":"hello"}}"#;
+        let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"hello","text_elements":[]}]}}"#;
         let mut output = Vec::new();
         let bridge = Arc::new(FailingRuntimeBridge);
         let server = dasclaw_app_server::AppServer::with_runtime_bridge(bridge);
@@ -587,7 +587,7 @@ mod tests {
         let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"client":{"name":"codex","version":"2.0.0","transport":"stdio"},"protocolVersion":{"major":0,"minor":1,"patch":0},"requestedCapabilities":["codex_app_server_v2"]}}"#;
         let thread_start =
             r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"title":"Draft"}}"#;
-        let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":"hello"}}"#;
+        let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"hello","text_elements":[]}]}}"#;
         let interrupt = r#"{"jsonrpc":"2.0","id":"interrupt","method":"turn/interrupt","params":{"threadId":"thread_1","turnId":"turn_1"}}"#;
         let mut output = Vec::new();
 
@@ -617,6 +617,11 @@ mod tests {
         assert!(values.iter().any(|value| {
             value["id"] == "interrupt" && value["result"] == serde_json::json!({})
         }));
+        assert!(
+            !values
+                .iter()
+                .any(|value| value["method"] == "turn/completed")
+        );
         let item_completed_position = values
             .iter()
             .position(|value| value["method"] == "item/completed")

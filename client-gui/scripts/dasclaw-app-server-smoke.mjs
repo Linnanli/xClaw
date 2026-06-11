@@ -80,8 +80,11 @@ async function main() {
   if (!result.electronAPI) {
     throw new Error('renderer did not expose window.electronAPI');
   }
-  if (!result.afterConfigured) {
-    throw new Error('temporary config did not satisfy app credential guard');
+  if (result.afterConfigured) {
+    throw new Error('smoke user data should remain without legacy provider credentials');
+  }
+  if (result.hitLegacyCredentialGuard) {
+    throw new Error('dasclaw default app-server path was blocked by legacy credential guard');
   }
   if (!result.threadId) {
     throw new Error('session did not bind to a dasclaw thread id');
@@ -112,11 +115,15 @@ async function main() {
 function buildElectronEnv() {
   const env = {
     ...process.env,
-    OPEN_COWORK_AGENT_RUNNER: 'dasclaw',
     DASCLAW_APP_SERVER_RUNTIME: 'echo',
     DASCLAW_REPO_ROOT: REPO_ROOT,
     VITE_DEV_SERVER_URL: `http://${HOST}:${PREVIEW_PORT}/`,
   };
+  if (process.env.DASCLAW_SMOKE_AGENT_RUNNER) {
+    env.OPEN_COWORK_AGENT_RUNNER = process.env.DASCLAW_SMOKE_AGENT_RUNNER;
+  } else {
+    delete env.OPEN_COWORK_AGENT_RUNNER;
+  }
 
   for (const key of [
     'ANTHROPIC_API_KEY',
@@ -347,16 +354,6 @@ function rendererSmokeExpression() {
   const off = window.electronAPI.on((event) => events.push(event));
   await sleep(500);
   const before = await window.electronAPI.config.get();
-  await window.electronAPI.config.save({
-    provider: 'openai',
-    activeProfileKey: 'openai',
-    apiKey: 'sk-dasclaw-smoke',
-    baseUrl: 'https://api.openai.com/v1',
-    model: 'gpt-5.4',
-    sandboxEnabled: false,
-    memoryEnabled: false
-  });
-  await sleep(500);
   const after = await window.electronAPI.config.get();
   const session = await window.electronAPI.invoke({
     type: 'session.start',
@@ -369,6 +366,18 @@ function rendererSmokeExpression() {
       memoryEnabled: false
     }
   });
+  if (!session) {
+    await sleep(500);
+    off?.();
+    const errorEvents = events.filter((event) => event.type === 'error');
+    return {
+      electronAPI: !!window.electronAPI,
+      beforeConfigured: !!before?.isConfigured,
+      afterConfigured: !!after?.isConfigured,
+      errorEvents,
+      hitLegacyCredentialGuard: errorEvents.some((event) => event.payload?.code === 'CONFIG_REQUIRED_ACTIVE_SET')
+    };
+  }
 
   const deadline = Date.now() + 30000;
   while (Date.now() < deadline) {
@@ -385,6 +394,7 @@ function rendererSmokeExpression() {
 
   const partials = events.filter((event) => event.type === 'stream.partial' && event.payload?.sessionId === session.id);
   const statusEvents = events.filter((event) => event.type === 'session.status' && event.payload?.sessionId === session.id);
+  const errorEvents = events.filter((event) => event.type === 'error');
   return {
     electronAPI: !!window.electronAPI,
     beforeConfigured: !!before?.isConfigured,
@@ -394,6 +404,8 @@ function rendererSmokeExpression() {
     partialCount: partials.length,
     partials,
     statusEvents,
+    errorEvents,
+    hitLegacyCredentialGuard: errorEvents.some((event) => event.payload?.code === 'CONFIG_REQUIRED_ACTIVE_SET'),
     hasEchoDelta: partials.some((event) => String(event.payload?.delta || '').includes(${JSON.stringify(EXPECTED_DELTA)})),
     hasIdle: statusEvents.some((event) => event.payload?.status === 'idle')
   };

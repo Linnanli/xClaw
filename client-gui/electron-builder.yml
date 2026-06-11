@@ -71,6 +71,8 @@ win:
   extraResources:
     - from: .bundle-resources/mcp
       to: mcp
+    - from: .bundle-resources/dasclaw-app-server
+      to: dasclaw-app-server
     - from: resources/node/win32-x64
       to: node
     - from: resources/node/win32-x64/node_modules/npm
@@ -99,6 +101,8 @@ mac:
   extraResources:
     - from: .bundle-resources/mcp
       to: mcp
+    - from: .bundle-resources/dasclaw-app-server
+      to: dasclaw-app-server
     - from: resources/node/darwin-${arch}
       to: node
     - from: resources/node/darwin-${arch}/lib/node_modules/npm
@@ -124,6 +128,8 @@ linux:
   extraResources:
     - from: .bundle-resources/mcp
       to: mcp
+    - from: .bundle-resources/dasclaw-app-server
+      to: dasclaw-app-server
     - from: resources/node/linux-x64
       to: node
     - from: resources/node/linux-x64/lib/node_modules/npm

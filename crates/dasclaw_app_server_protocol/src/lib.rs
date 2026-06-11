@@ -947,6 +947,9 @@ pub struct ThreadReadResponse {
 #[serde(rename_all = "camelCase")]
 pub struct TurnStartParams {
     pub thread_id: String,
+    /// Phase-one compatibility boundary: canonical Codex `input` arrays are
+    /// accepted only for text UserInput items and normalized into the legacy
+    /// prompt string consumed by the current runtime.
     pub prompt: String,
 }
 
@@ -972,11 +975,15 @@ impl<'de> Deserialize<'de> for TurnStartParams {
             #[serde(default)]
             prompt: Option<String>,
             #[serde(default)]
-            input: Option<String>,
+            input: Option<serde_json::Value>,
         }
 
         let raw = RawTurnStartParams::deserialize(deserializer)?;
-        let prompt = match (raw.prompt, raw.input) {
+        let input_prompt = raw
+            .input
+            .map(codex_turn_input_to_prompt::<D::Error>)
+            .transpose()?;
+        let prompt = match (raw.prompt, input_prompt) {
             (Some(prompt), Some(input)) if prompt != input => {
                 return Err(de::Error::custom(
                     "turn/start prompt and input must match when both are provided",
@@ -993,6 +1000,55 @@ impl<'de> Deserialize<'de> for TurnStartParams {
             prompt,
         })
     }
+}
+
+fn codex_turn_input_to_prompt<E>(input: serde_json::Value) -> Result<String, E>
+where
+    E: de::Error,
+{
+    match input {
+        serde_json::Value::String(prompt) => Ok(prompt),
+        serde_json::Value::Array(items) => codex_text_only_items_to_prompt::<E>(items),
+        _ => Err(de::Error::custom(
+            "turn/start input must be a string or an array of Codex UserInput text items",
+        )),
+    }
+}
+
+fn codex_text_only_items_to_prompt<E>(items: Vec<serde_json::Value>) -> Result<String, E>
+where
+    E: de::Error,
+{
+    if items.is_empty() {
+        return Err(de::Error::custom(
+            "turn/start text-only input array must contain at least one text item",
+        ));
+    }
+
+    let mut text_parts = Vec::new();
+    for item in items {
+        let object = item.as_object().ok_or_else(|| {
+            de::Error::custom("turn/start text-only input items must be Codex UserInput objects")
+        })?;
+        let item_type = object
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| de::Error::custom("turn/start text-only input item is missing type"))?;
+
+        if item_type != "text" {
+            return Err(de::Error::custom(format!(
+                "unsupported turn/start text-only input item type: {item_type}"
+            )));
+        }
+
+        let text = object
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| de::Error::custom("turn/start text-only input item is missing text"))?;
+        text_parts.push(text.to_string());
+    }
+
+    Ok(text_parts.join("\n"))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1695,7 +1751,7 @@ mod tests {
     }
 
     #[test]
-    fn turn_start_params_accept_codex_v2_input_alias_without_changing_legacy_shape() {
+    fn turn_start_params_accept_string_input_and_prompt_aliases_without_changing_legacy_shape() {
         let from_input: TurnStartParams = serde_json::from_value(serde_json::json!({
             "threadId": "thread_1",
             "input": "hello from input"
@@ -1720,6 +1776,55 @@ mod tests {
             serde_json::to_value(TurnStartParams::from_input("thread_1", "hello"))
                 .expect("turn/start params should serialize"),
             serde_json::json!({"threadId": "thread_1", "prompt": "hello"})
+        );
+    }
+
+    #[test]
+    fn turn_start_params_accept_codex_v2_user_input_text_array() {
+        let from_array: TurnStartParams = serde_json::from_value(serde_json::json!({
+            "threadId": "thread_1",
+            "input": [
+                {"type": "text", "text": "hello", "text_elements": []},
+                {"type": "text", "text": "world", "text_elements": []}
+            ]
+        }))
+        .expect("turn/start should accept Codex v2 UserInput text arrays");
+        let matching_prompt: TurnStartParams = serde_json::from_value(serde_json::json!({
+            "threadId": "thread_1",
+            "prompt": "hello\nworld",
+            "input": [
+                {"type": "text", "text": "hello", "text_elements": []},
+                {"type": "text", "text": "world", "text_elements": []}
+            ]
+        }))
+        .expect("matching prompt and Codex input array should deserialize");
+
+        assert_eq!(from_array.prompt, "hello\nworld");
+        assert_eq!(matching_prompt.prompt, "hello\nworld");
+    }
+
+    #[test]
+    fn turn_start_params_reject_unsupported_codex_user_input_items() {
+        let unsupported = serde_json::from_value::<TurnStartParams>(serde_json::json!({
+            "threadId": "thread_1",
+            "input": [{"type": "image", "url": "file:///tmp/image.png"}]
+        }))
+        .expect_err("non-text Codex input variants are not silently dropped");
+        let empty = serde_json::from_value::<TurnStartParams>(serde_json::json!({
+            "threadId": "thread_1",
+            "input": []
+        }))
+        .expect_err("empty Codex input arrays should not produce an empty prompt");
+
+        assert!(
+            unsupported
+                .to_string()
+                .contains("unsupported turn/start text-only input item type: image")
+        );
+        assert!(
+            empty
+                .to_string()
+                .contains("text-only input array must contain at least one text item")
         );
     }
 
@@ -1752,7 +1857,10 @@ mod tests {
                 jsonrpc: JSON_RPC_VERSION.to_string(),
                 id: Some(serde_json::json!("turn")),
                 method: method::TURN_START.to_string(),
-                params: Some(serde_json::json!({"threadId": "thread_1", "input": "hello"})),
+                params: Some(serde_json::json!({
+                    "threadId": "thread_1",
+                    "input": [{"type": "text", "text": "hello", "text_elements": []}]
+                })),
             },
             JsonRpcRequest {
                 jsonrpc: JSON_RPC_VERSION.to_string(),

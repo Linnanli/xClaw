@@ -40,6 +40,10 @@ class FakeRpc implements AppServerRpc {
       if (!threadId || !this.threads.has(threadId)) {
         throw new Error(`unknown thread id: ${threadId ?? '<missing>'}`);
       }
+      const prompt = codexTextInputParam(params);
+      if (!prompt) {
+        throw new Error('turn/start must use Codex UserInput text array params');
+      }
       const turnId = `turn_${this.nextTurnNumber++}`;
       return { turnId, status: 'pending' } as T;
     }
@@ -86,6 +90,20 @@ function stringParam(params: unknown, key: string): string | undefined {
   if (!params || typeof params !== 'object' || Array.isArray(params)) return undefined;
   const value = (params as Record<string, unknown>)[key];
   return typeof value === 'string' ? value : undefined;
+}
+
+function codexTextInputParam(params: unknown): string | undefined {
+  if (!params || typeof params !== 'object' || Array.isArray(params)) return undefined;
+  const input = (params as Record<string, unknown>).input;
+  if (!Array.isArray(input) || input.length !== 1) return undefined;
+  const [item] = input;
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined;
+  const record = item as Record<string, unknown>;
+  return record.type === 'text' &&
+    typeof record.text === 'string' &&
+    Array.isArray(record.text_elements)
+    ? record.text
+    : undefined;
 }
 
 function createDb(): DatabaseInstance {
@@ -149,7 +167,7 @@ describe('DasclawAppServerSessionBridge', () => {
     ]);
     expect(rpc.requests[2].params).toMatchObject({
       threadId: 'thread_1',
-      input: 'hello',
+      input: [{ type: 'text', text: 'hello', text_elements: [] }],
     });
     expect(db.sessions.get(session.id)?.claude_session_id).toBe('thread_1');
     expect(db.messages.getBySessionId(session.id)).toHaveLength(1);
@@ -160,6 +178,13 @@ describe('DasclawAppServerSessionBridge', () => {
       itemId: 'item_1',
       delta: 'hel',
     });
+    rpc.emit('item/completed', {
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      itemId: 'item_1',
+      status: 'completed',
+    });
+    expect(events.filter((event) => event.type === 'stream.message')).toHaveLength(0);
     rpc.emit('turn/completed', {
       threadId: 'thread_1',
       turnId: 'turn_1',
@@ -381,7 +406,7 @@ describe('DasclawAppServerSessionBridge', () => {
     ]);
     expect(rpcs[1].requests[2].params).toMatchObject({
       threadId: 'thread_1',
-      input: 'again',
+      input: [{ type: 'text', text: 'again', text_elements: [] }],
     });
     expect(db.sessions.get(session.id)?.claude_session_id).toBe('thread_1');
     expect(events).toContainEqual({

@@ -2665,7 +2665,13 @@ ipcMain.handle('sandbox.retrySetup', async () => {
 });
 
 async function handleClientEvent(event: ClientEvent): Promise<unknown> {
-  // Check if configured before starting sessions
+  if (shouldUseDasclawAppServerBridge()) {
+    const bridged = await handleDasclawSessionEvent(event);
+    if (bridged.handled) {
+      return bridged.result;
+    }
+  }
+
   if (event.type === 'session.start' && !configStore.hasUsableCredentialsForActiveSet()) {
     sendToRenderer({
       type: 'error',
@@ -2678,13 +2684,6 @@ async function handleClientEvent(event: ClientEvent): Promise<unknown> {
     return null;
   }
 
-  if (shouldUseDasclawAppServerBridge()) {
-    const bridged = await handleDasclawSessionEvent(event);
-    if (bridged.handled) {
-      return bridged.result;
-    }
-  }
-
   if (eventRequiresSessionManager(event) && !sessionManager) {
     throw new Error('Session manager not initialized');
   }
@@ -2694,11 +2693,12 @@ async function handleClientEvent(event: ClientEvent): Promise<unknown> {
 
   switch (event.type) {
     case 'session.start':
-      if (getWorkspacePathUnsupportedReason(event.payload.cwd)) {
+      const unsupportedReason = getWorkspacePathUnsupportedReason(event.payload.cwd);
+      if (unsupportedReason) {
         sendToRenderer({
           type: 'error',
           payload: {
-            message: getWorkspacePathUnsupportedReason(event.payload.cwd)!,
+            message: unsupportedReason,
           },
         });
         return null;
@@ -2867,5 +2867,20 @@ async function handleDasclawSessionEvent(
 }
 
 function shouldUseDasclawAppServerBridge(): boolean {
-  return process.env.OPEN_COWORK_AGENT_RUNNER === 'dasclaw';
+  return resolveAgentRunnerMode(process.env.OPEN_COWORK_AGENT_RUNNER) === 'dasclaw';
+}
+
+function resolveAgentRunnerMode(runner: string | undefined): 'dasclaw' | 'legacy' {
+  const normalizedRunner = runner?.trim().toLowerCase();
+  if (!normalizedRunner || normalizedRunner === 'dasclaw') {
+    return 'dasclaw';
+  }
+  if (normalizedRunner === 'legacy' || normalizedRunner === 'session-manager') {
+    return 'legacy';
+  }
+
+  logWarn(
+    `[AgentRunner] Unknown OPEN_COWORK_AGENT_RUNNER="${runner}", using legacy session-manager path`
+  );
+  return 'legacy';
 }

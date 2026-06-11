@@ -7,6 +7,12 @@ import { StdioAppServerRpc, type AppServerRpc, type JsonRpcNotification } from '
 
 type AppServerRpcFactory = () => AppServerRpc;
 
+interface CodexTextOnlyUserInput {
+  type: 'text';
+  text: string;
+  text_elements: [];
+}
+
 interface ThreadStartResponse {
   threadId: string;
 }
@@ -266,7 +272,7 @@ export class DasclawAppServerSessionBridge {
     try {
       response = await rpc.request<TurnStartResponse>('turn/start', {
         threadId,
-        input,
+        input: codexTextOnlyInput(input),
       });
     } catch (error) {
       if (binding.terminalTurnIds.size === terminalTurnCount && !this.isSessionInError(sessionId)) {
@@ -482,6 +488,10 @@ export class DasclawAppServerSessionBridge {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function codexTextOnlyInput(text: string): CodexTextOnlyUserInput[] {
+  return [{ type: 'text', text, text_elements: [] }];
 }
 
 function stringField(value: Record<string, unknown>, key: string): string | undefined {
