@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use dasclaw_app_server_protocol::ClientModelConfig;
 use dasclaw_app_server_protocol::{
     AgentMessageDeltaEvent, CapabilitiesChangedEvent, CapabilitiesChangedReason,
     CapabilitiesListResponse, CapabilityMatrix, ClientInfo, CompatibilityProfile,
@@ -19,7 +20,8 @@ use dasclaw_app_server_protocol::{
     HealthCheckResponse, InitializeParams, InitializeResponse, ItemCompletedEvent,
     ItemStartedEvent, ItemType, JsonRpcError, JsonRpcRequest, JsonRpcResponse,
     LifecycleChangedEvent, LifecycleReason, LifecycleSnapshot, LifecycleState,
-    LifecycleStatusResponse, NotificationQueuePolicy, NotificationsInitializedEvent,
+    LifecycleStatusResponse, ModelProviderInitializeConfig, ModelProviderSelectForNextTurnParams,
+    ModelProviderSelectForNextTurnResponse, NotificationQueuePolicy, NotificationsInitializedEvent,
     ProtocolSchemaResponse, ProtocolVersion, ServerInfo, ServerNotification, ServiceHealth,
     ServiceName, ShutdownParams, ShutdownReason, ShutdownResponse, ThreadCreateParams,
     ThreadCreateResponse, ThreadCreatedEvent, ThreadListResponse, ThreadReadParams,
@@ -29,6 +31,11 @@ use dasclaw_app_server_protocol::{
     TurnStartParams, TurnStartResponse, TurnStartedEvent, TurnStatus, TurnSummary,
 };
 use dasclaw_app_server_protocol::{JSON_RPC_VERSION, method};
+use dasclaw_llm_provider::provider::claw_code_provider::ClawCodeLlmProvider;
+use dasclaw_llm_provider::provider::config::{CacheRetention, RegistryProviderConfig};
+use dasclaw_llm_provider::provider::registry::ProviderProtocol;
+use dasclaw_runtime::LlmProviderResponder;
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
@@ -48,6 +55,7 @@ pub struct AppServer {
     threads: SessionThreadHost,
     runtime_bridge: Arc<dyn RuntimeBridge>,
     runtime_turn_updates: RuntimeTurnUpdateSink,
+    model_provider: ModelProviderState,
     codex_v2_compat_enabled: bool,
 }
 
@@ -55,6 +63,260 @@ impl Default for AppServer {
     fn default() -> Self {
         Self::new()
     }
+}
+
+#[derive(Clone, Default)]
+struct ModelProviderState {
+    models: HashMap<String, ClientModelConfig>,
+    selected_model_id: Option<String>,
+}
+
+impl std::fmt::Debug for ModelProviderState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ModelProviderState")
+            .field("model_count", &self.models.len())
+            .field("selected_model_id", &self.selected_model_id)
+            .finish()
+    }
+}
+
+impl ModelProviderState {
+    fn from_config(config: ModelProviderInitializeConfig) -> Result<Self, AppServerError> {
+        if config.models.is_empty() {
+            return Err(AppServerError::invalid_request(
+                "model_provider",
+                "modelProvider.models must contain at least one model",
+            ));
+        }
+
+        validate_client_model(&config.selected_model, "selectedModel")?;
+        let selected_model_id = config.selected_model.model_id.clone();
+        let mut models = HashMap::new();
+        for model in config.models {
+            validate_client_model(&model, "models")?;
+            if models.insert(model.model_id.clone(), model).is_some() {
+                return Err(AppServerError::invalid_request(
+                    "model_provider",
+                    "modelProvider.models contains duplicate modelId",
+                ));
+            }
+        }
+
+        if !models.contains_key(&selected_model_id) {
+            return Err(AppServerError::invalid_request(
+                "model_provider",
+                format!(
+                    "selected model is not present in modelProvider.models: {selected_model_id}"
+                ),
+            ));
+        }
+
+        Ok(Self {
+            models,
+            selected_model_id: Some(selected_model_id),
+        })
+    }
+
+    fn selected_snapshot(&self) -> Result<RuntimeModelProviderSnapshot, AppServerError> {
+        let selected_model_id = self.selected_model_id.as_deref().ok_or_else(|| {
+            AppServerError::invalid_request(
+                "model_provider",
+                "model provider config is required before starting a turn",
+            )
+        })?;
+
+        let model = self.models.get(selected_model_id).ok_or_else(|| {
+            AppServerError::invalid_request(
+                "model_provider",
+                "selected model is not available; refresh model provider config",
+            )
+        })?;
+
+        RuntimeModelProviderSnapshot::from_client_model(model)
+    }
+
+    fn select_for_next_turn(&mut self, model_id: String) -> Result<String, AppServerError> {
+        if self.selected_model_id.is_none() {
+            return Err(AppServerError::invalid_request(
+                "model_provider",
+                "model provider config is required before selecting a model",
+            ));
+        }
+
+        let model_id = model_id.trim();
+        if model_id.is_empty() {
+            return Err(AppServerError::invalid_request(
+                "model_provider",
+                "modelId is required",
+            ));
+        }
+
+        if !self.models.contains_key(model_id) {
+            return Err(AppServerError::invalid_request(
+                "model_provider",
+                format!("unknown modelId: {model_id}"),
+            ));
+        }
+
+        let selected_model_id = model_id.to_string();
+        self.selected_model_id = Some(selected_model_id.clone());
+        Ok(selected_model_id)
+    }
+
+    fn health(&self) -> ServiceHealth {
+        if self.selected_model_id.is_some() {
+            ServiceHealth::ready(ServiceName::ModelProvider)
+        } else {
+            ServiceHealth::unavailable_fail_safe(
+                ServiceName::ModelProvider,
+                "model provider config is required before starting a turn",
+            )
+        }
+    }
+}
+
+fn validate_client_model(model: &ClientModelConfig, field: &str) -> Result<(), AppServerError> {
+    validate_required_model_field(&model.model_id, field, "modelId")?;
+    validate_required_model_option(
+        model.provider.as_deref(),
+        field,
+        "provider",
+        &model.model_id,
+    )?;
+    validate_required_model_option(
+        model.api_base_url.as_deref(),
+        field,
+        "apiBaseUrl",
+        &model.model_id,
+    )?;
+    validate_required_model_option(model.api_key.as_deref(), field, "apiKey", &model.model_id)?;
+    validate_required_model_option(
+        model.api_format.as_deref(),
+        field,
+        "apiFormat",
+        &model.model_id,
+    )?;
+    Ok(())
+}
+
+fn validate_required_model_field(
+    value: &str,
+    field: &str,
+    name: &str,
+) -> Result<(), AppServerError> {
+    if value.trim().is_empty() {
+        return Err(AppServerError::invalid_request(
+            "model_provider",
+            format!("modelProvider.{field}.{name} is required"),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_required_model_option(
+    value: Option<&str>,
+    field: &str,
+    name: &str,
+    model_id: &str,
+) -> Result<(), AppServerError> {
+    if value.map(str::trim).is_none_or(str::is_empty) {
+        return Err(AppServerError::invalid_request(
+            "model_provider",
+            format!("modelProvider.{field}.{name} is required for modelId: {model_id}"),
+        ));
+    }
+
+    Ok(())
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct RuntimeModelProviderSnapshot {
+    pub model_id: String,
+    pub provider: String,
+    pub api_base_url: String,
+    pub api_key: String,
+    pub api_format: String,
+}
+
+impl std::fmt::Debug for RuntimeModelProviderSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RuntimeModelProviderSnapshot")
+            .field("model_id", &self.model_id)
+            .field("provider", &self.provider)
+            .field("api_base_url", &self.api_base_url)
+            .field("api_key", &"<redacted>")
+            .field("api_format", &self.api_format)
+            .finish()
+    }
+}
+
+impl RuntimeModelProviderSnapshot {
+    fn from_client_model(model: &ClientModelConfig) -> Result<Self, AppServerError> {
+        Ok(Self {
+            model_id: required_snapshot_field(&model.model_id, "modelId", &model.model_id)?,
+            provider: required_snapshot_option(
+                model.provider.as_deref(),
+                "provider",
+                &model.model_id,
+            )?,
+            api_base_url: required_snapshot_option(
+                model.api_base_url.as_deref(),
+                "apiBaseUrl",
+                &model.model_id,
+            )?,
+            api_key: required_snapshot_option(model.api_key.as_deref(), "apiKey", &model.model_id)?,
+            api_format: required_snapshot_option(
+                model.api_format.as_deref(),
+                "apiFormat",
+                &model.model_id,
+            )?,
+        })
+    }
+
+    fn provider_protocol(&self) -> Result<ProviderProtocol, RuntimeBridgeError> {
+        match self.api_format.trim().to_ascii_lowercase().as_str() {
+            "anthropic" => Ok(ProviderProtocol::Anthropic),
+            "openai" | "openai_compat" | "openai-compatible" | "openai_completions" => {
+                Ok(ProviderProtocol::OpenAiCompletions)
+            }
+            "ollama" => Ok(ProviderProtocol::Ollama),
+            other => Err(RuntimeBridgeError::fatal(format!(
+                "unsupported model provider apiFormat for modelId {}: {other}",
+                self.model_id
+            ))),
+        }
+    }
+}
+
+fn required_snapshot_field(
+    value: &str,
+    name: &str,
+    model_id: &str,
+) -> Result<String, AppServerError> {
+    if value.trim().is_empty() {
+        return Err(AppServerError::invalid_request(
+            "model_provider",
+            format!("selected model {name} is required for modelId: {model_id}"),
+        ));
+    }
+
+    Ok(value.trim().to_string())
+}
+
+fn required_snapshot_option(
+    value: Option<&str>,
+    name: &str,
+    model_id: &str,
+) -> Result<String, AppServerError> {
+    let value = value.map(str::trim).ok_or_else(|| {
+        AppServerError::invalid_request(
+            "model_provider",
+            format!("selected model {name} is required for modelId: {model_id}"),
+        )
+    })?;
+
+    required_snapshot_field(value, name, model_id)
 }
 
 impl AppServer {
@@ -78,6 +340,7 @@ impl AppServer {
             threads: SessionThreadHost::new(),
             runtime_bridge: Arc::new(NoopRuntimeBridge),
             runtime_turn_updates: RuntimeTurnUpdateSink::new(),
+            model_provider: ModelProviderState::default(),
             codex_v2_compat_enabled: false,
         }
     }
@@ -125,11 +388,18 @@ impl AppServer {
             .any(|capability| capability == CompatibilityProfile::CODEX_APP_SERVER_V2_ID);
         let unavailable_requested_capabilities =
             self.unavailable_requested_capabilities(&params.requested_capabilities);
+        let model_provider = params
+            .model_provider
+            .map(ModelProviderState::from_config)
+            .transpose()?;
 
         if matches!(
             self.lifecycle.state,
             LifecycleState::Ready | LifecycleState::Running | LifecycleState::Degraded
         ) {
+            if let Some(model_provider) = model_provider {
+                self.model_provider = model_provider;
+            }
             self.codex_v2_compat_enabled = codex_v2_compat_requested;
             self.client = Some(params.client);
             return Ok(InitializeResponse {
@@ -151,6 +421,9 @@ impl AppServer {
         self.emit_lifecycle_changed(previous_state);
 
         self.codex_v2_compat_enabled = codex_v2_compat_requested;
+        if let Some(model_provider) = model_provider {
+            self.model_provider = model_provider;
+        }
         self.client = Some(params.client);
         let previous_state = self.lifecycle.state;
         self.lifecycle = lifecycle_snapshot(
@@ -261,12 +534,14 @@ impl AppServer {
     ) -> Result<TurnStartResponse, AppServerError> {
         self.require_initialized("session")?;
         self.require_thread_exists(&params.thread_id)?;
+        let model_provider = self.model_provider.selected_snapshot()?;
         let turn_id = self.threads.next_turn_id();
         self.runtime_bridge
             .start_turn(RuntimeTurnStartRequest {
                 thread_id: params.thread_id.clone(),
                 turn_id: turn_id.clone(),
                 prompt: params.prompt,
+                model_provider,
                 updates: self.runtime_turn_updates.clone(),
             })
             .map_err(AppServerError::runtime_bridge)?;
@@ -290,6 +565,16 @@ impl AppServer {
             status: TurnStatus::Pending,
             lifecycle: self.lifecycle.clone(),
         })
+    }
+
+    pub fn model_provider_select_for_next_turn(
+        &mut self,
+        params: ModelProviderSelectForNextTurnParams,
+    ) -> Result<ModelProviderSelectForNextTurnResponse, AppServerError> {
+        self.require_initialized("model_provider")?;
+        let selected_model_id = self.model_provider.select_for_next_turn(params.model_id)?;
+
+        Ok(ModelProviderSelectForNextTurnResponse { selected_model_id })
     }
 
     pub fn turn_cancel(
@@ -548,6 +833,13 @@ impl AppServer {
                     self.turn_read(params)
                 })
             }
+            method::MODEL_PROVIDER_SELECT_FOR_NEXT_TURN => route_with_params(
+                request.id,
+                request.params,
+                |params: ModelProviderSelectForNextTurnParams| {
+                    self.model_provider_select_for_next_turn(params)
+                },
+            ),
             _ => method_not_found_response(request.id, request.method),
         };
 
@@ -568,10 +860,7 @@ impl AppServer {
                 ServiceName::DlpPolicy,
                 "DLP/policy service is declared but not migrated in Phase 1",
             ),
-            ServiceHealth::disabled(
-                ServiceName::ModelProvider,
-                "model provider service is not wired in Phase 1",
-            ),
+            self.model_provider.health(),
             ServiceHealth::disabled(ServiceName::Tools, "tool registry is not wired in Phase 1"),
             ServiceHealth::disabled(
                 ServiceName::Sandbox,
@@ -972,6 +1261,7 @@ pub struct RuntimeTurnStartRequest {
     pub thread_id: String,
     pub turn_id: String,
     pub prompt: String,
+    pub model_provider: RuntimeModelProviderSnapshot,
     pub updates: RuntimeTurnUpdateSink,
 }
 
@@ -1090,7 +1380,10 @@ pub struct DasclawAgentRuntimeBridge {
     in_flight: Arc<Mutex<HashMap<String, CancellationToken>>>,
 }
 
-type AgentFactory = dyn Fn(CancellationToken) -> Result<dasclaw_runtime::Agent, RuntimeBridgeError>
+type AgentFactory = dyn Fn(
+        CancellationToken,
+        RuntimeModelProviderSnapshot,
+    ) -> Result<dasclaw_runtime::Agent, RuntimeBridgeError>
     + Send
     + Sync
     + 'static;
@@ -1110,10 +1403,28 @@ impl DasclawAgentRuntimeBridge {
         + Sync
         + 'static,
     ) -> Self {
+        Self::new_with_model_provider(move |token, _snapshot| agent_factory(token))
+    }
+
+    #[must_use]
+    pub fn new_with_model_provider(
+        agent_factory: impl Fn(
+            CancellationToken,
+            RuntimeModelProviderSnapshot,
+        ) -> Result<dasclaw_runtime::Agent, RuntimeBridgeError>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
         Self {
             agent_factory: Arc::new(agent_factory),
             in_flight: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    #[must_use]
+    pub fn from_model_provider_snapshot() -> Self {
+        Self::new_with_model_provider(agent_from_model_provider_snapshot)
     }
 
     #[must_use]
@@ -1137,7 +1448,7 @@ impl DasclawAgentRuntimeBridge {
 impl RuntimeBridge for DasclawAgentRuntimeBridge {
     fn start_turn(&self, request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
         let token = CancellationToken::new();
-        let agent = (self.agent_factory)(token.clone())?;
+        let agent = (self.agent_factory)(token.clone(), request.model_provider.clone())?;
         let mut in_flight = self
             .in_flight
             .lock()
@@ -1234,6 +1545,51 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
             token.cancel();
         }
     }
+}
+
+fn agent_from_model_provider_snapshot(
+    token: CancellationToken,
+    snapshot: RuntimeModelProviderSnapshot,
+) -> Result<dasclaw_runtime::Agent, RuntimeBridgeError> {
+    let config = registry_config_from_snapshot(&snapshot)?;
+    let provider = ClawCodeLlmProvider::from_registry_config(&config).map_err(|error| {
+        RuntimeBridgeError::fatal(redact_snapshot_secret(&error.to_string(), &snapshot))
+    })?;
+    let responder = LlmProviderResponder::new(Arc::new(provider));
+
+    dasclaw_runtime::Agent::builder()
+        .responder(responder)
+        .cancellation_token(token)
+        .build()
+        .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+}
+
+fn registry_config_from_snapshot(
+    snapshot: &RuntimeModelProviderSnapshot,
+) -> Result<RegistryProviderConfig, RuntimeBridgeError> {
+    Ok(RegistryProviderConfig {
+        protocol: snapshot.provider_protocol()?,
+        provider_id: snapshot.provider.clone(),
+        api_key: Some(SecretString::new(snapshot.api_key.clone().into())),
+        base_url: snapshot.api_base_url.clone(),
+        model: snapshot.model_id.clone(),
+        extra_headers: Vec::new(),
+        oauth_token: None,
+        is_codex_chatgpt: false,
+        refresh_token: None,
+        auth_path: None,
+        cache_retention: CacheRetention::default(),
+        unsupported_params: Vec::new(),
+        strict_tools_schema: true,
+    })
+}
+
+fn redact_snapshot_secret(message: &str, snapshot: &RuntimeModelProviderSnapshot) -> String {
+    if snapshot.api_key.is_empty() {
+        return message.to_string();
+    }
+
+    message.replace(&snapshot.api_key, "<redacted>")
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1849,6 +2205,7 @@ pub fn supported_methods() -> &'static [&'static str] {
         method::TURN_INTERRUPT,
         method::TURN_LIST,
         method::TURN_READ,
+        method::MODEL_PROVIDER_SELECT_FOR_NEXT_TURN,
     ]
 }
 
@@ -1891,6 +2248,7 @@ mod tests {
         RespondOutput, RespondResult, ResponseMetadata, TokenUsage,
     };
     use dasclaw_core::traits::HostError;
+    use secrecy::ExposeSecret;
     use tokio::sync::mpsc;
 
     use super::*;
@@ -1911,6 +2269,7 @@ mod tests {
                     trust: WorkspaceTrust::Unknown,
                 }),
                 requested_capabilities: Vec::new(),
+                model_provider: None,
             })
             .expect("compatible v0 client should initialize");
 
@@ -1942,6 +2301,7 @@ mod tests {
                 },
                 workspace: None,
                 requested_capabilities: Vec::new(),
+                model_provider: None,
             })
             .expect_err("incompatible major version should fail");
 
@@ -1971,6 +2331,7 @@ mod tests {
                     "unknown_future".to_string(),
                     "dlp_policy".to_string(),
                 ],
+                model_provider: None,
             })
             .expect("initialize should tolerate unavailable requested capabilities");
 
@@ -1995,6 +2356,7 @@ mod tests {
                 requested_capabilities: vec![
                     CompatibilityProfile::CODEX_APP_SERVER_V2_ID.to_string(),
                 ],
+                model_provider: None,
             })
             .expect("initialize should accept the compatibility profile");
         let profile = response
@@ -2048,6 +2410,7 @@ mod tests {
             protocol_version: ProtocolVersion::current(),
             workspace: None,
             requested_capabilities: Vec::new(),
+            model_provider: None,
         };
 
         let first = server
@@ -2081,6 +2444,7 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: Vec::new(),
+                model_provider: None,
             })
             .expect_err("stopped process should require a restart");
 
@@ -2109,6 +2473,7 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
             })
             .expect("server should initialize");
 
@@ -2135,6 +2500,127 @@ mod tests {
         assert!(health.services.iter().any(|service| {
             service.service == ServiceName::Runtime && service.status == ServiceStatus::Degraded
         }));
+        assert!(health.services.iter().any(|service| {
+            service.service == ServiceName::ModelProvider && service.status == ServiceStatus::Ready
+        }));
+    }
+
+    #[test]
+    fn health_reports_fail_safe_when_model_provider_is_missing() {
+        let mut server = AppServer::new();
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: None,
+            })
+            .expect("server should initialize without starting turns");
+
+        let health = server.health_check(HealthCheckParams {
+            include_details: true,
+        });
+
+        assert!(health.services.iter().any(|service| {
+            service.service == ServiceName::ModelProvider
+                && service.status == ServiceStatus::Unavailable
+                && service.fail_safe
+        }));
+    }
+
+    #[test]
+    fn initialize_rejects_invalid_model_provider_config() {
+        let mut server = AppServer::new();
+        let mut selected_model = test_model_config("gpt-test");
+        selected_model.api_key = None;
+        let error = server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: Some(ModelProviderInitializeConfig {
+                    models: vec![selected_model.clone()],
+                    selected_model,
+                }),
+            })
+            .expect_err("selected model without apiKey must be rejected");
+
+        match error {
+            AppServerError::Protocol { data } => {
+                assert_eq!(data.code, ErrorCode::InvalidParams);
+                assert_eq!(data.capability.as_deref(), Some("model_provider"));
+            }
+        }
+        assert_eq!(
+            server.lifecycle_status().lifecycle.state,
+            LifecycleState::Starting
+        );
+    }
+
+    #[test]
+    fn model_provider_select_for_next_turn_accepts_known_model_and_rejects_unknown() {
+        let mut server = initialized_server();
+        let response = server
+            .model_provider_select_for_next_turn(ModelProviderSelectForNextTurnParams {
+                model_id: "gpt-next".to_string(),
+            })
+            .expect("known model should be selected for the next turn");
+
+        assert_eq!(response.selected_model_id, "gpt-next");
+
+        let error = server
+            .model_provider_select_for_next_turn(ModelProviderSelectForNextTurnParams {
+                model_id: "missing-model".to_string(),
+            })
+            .expect_err("unknown model should be rejected");
+
+        match error {
+            AppServerError::Protocol { data } => {
+                assert_eq!(data.code, ErrorCode::InvalidParams);
+                assert_eq!(data.capability.as_deref(), Some("model_provider"));
+            }
+        }
+    }
+
+    #[test]
+    fn model_provider_select_for_next_turn_fails_safe_without_config() {
+        let mut server = AppServer::new();
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: None,
+            })
+            .expect("initialize may complete before a model provider is injected");
+
+        let error = server
+            .model_provider_select_for_next_turn(ModelProviderSelectForNextTurnParams {
+                model_id: "gpt-next".to_string(),
+            })
+            .expect_err("selecting without config must fail safe");
+
+        match error {
+            AppServerError::Protocol { data } => {
+                assert_eq!(data.code, ErrorCode::InvalidParams);
+                assert_eq!(data.capability.as_deref(), Some("model_provider"));
+            }
+        }
     }
 
     #[test]
@@ -2266,6 +2752,7 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
             })
             .expect("server should initialize");
 
@@ -2292,6 +2779,7 @@ mod tests {
                     CompatibilityProfile::CODEX_APP_SERVER_V2_ID.to_string(),
                     "mcp".to_string(),
                 ],
+                model_provider: None,
             })
             .expect("server should initialize");
 
@@ -2404,6 +2892,7 @@ mod tests {
             matrix.lifecycle.methods,
             matrix.health.methods,
             matrix.session.methods,
+            matrix.model_provider.methods,
             matrix.logs.methods,
         ]
         .concat();
@@ -2513,6 +3002,20 @@ mod tests {
     }
 
     #[test]
+    fn json_rpc_model_provider_select_for_next_turn_routes_to_server_method() {
+        let mut server = initialized_server();
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"model","method":"modelProvider/selectForNextTurn","params":{"modelId":"gpt-next"}}"#,
+            )
+            .expect("modelProvider/selectForNextTurn should return a structured response");
+        let value: Value = serde_json::from_str(&response).expect("response should be JSON");
+
+        assert_eq!(value["id"], "model");
+        assert_eq!(value["result"]["selectedModelId"], "gpt-next");
+    }
+
+    #[test]
     fn json_rpc_thread_create_returns_thread_id_after_initialize() {
         let mut server = AppServer::new();
         server
@@ -2525,6 +3028,7 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
             })
             .expect("initialize should succeed");
         let _ = server.drain_notifications();
@@ -2714,6 +3218,12 @@ mod tests {
         assert_eq!(calls[0].thread_id, thread.thread_id);
         assert_eq!(calls[0].turn_id, "turn_1");
         assert_eq!(calls[0].prompt, "hello runtime");
+        assert_eq!(calls[0].model_provider.model_id, "gpt-test");
+        assert_eq!(
+            calls[0].model_provider.api_base_url,
+            "http://localhost:11434/v1"
+        );
+        assert_eq!(calls[0].model_provider.api_key, "test-api-key");
 
         let turns = server
             .turn_list(TurnListParams {
@@ -2722,6 +3232,91 @@ mod tests {
             .expect("turn/list should still use session bookkeeping");
         assert_eq!(turns.turns.len(), 1);
         assert_eq!(turns.turns[0].status, TurnStatus::Pending);
+    }
+
+    #[test]
+    fn turn_start_without_model_provider_fails_before_runtime_bridge() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = AppServer::with_runtime_bridge(bridge.clone());
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: None,
+            })
+            .expect("initialize may complete before turns are started");
+        let _ = server.drain_notifications();
+        let thread = server
+            .thread_create(ThreadCreateParams {
+                title: Some("Draft".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread should be created before model selection is needed");
+
+        let error = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                prompt: "hello runtime".to_string(),
+            })
+            .expect_err("missing model provider must fail safe before runtime");
+
+        match error {
+            AppServerError::Protocol { data } => {
+                assert_eq!(data.code, ErrorCode::InvalidParams);
+                assert_eq!(data.capability.as_deref(), Some("model_provider"));
+            }
+        }
+        assert!(bridge.calls.lock().expect("calls lock").is_empty());
+        let turns = server
+            .turn_list(TurnListParams {
+                thread_id: thread.thread_id,
+            })
+            .expect("turn/list should still work after fail-safe rejection");
+        assert!(turns.turns.is_empty());
+    }
+
+    #[test]
+    fn model_provider_selection_applies_to_next_turn_snapshot_only() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        let thread = server
+            .thread_create(ThreadCreateParams {
+                title: Some("Draft".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread should be created");
+
+        let first = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                prompt: "first".to_string(),
+            })
+            .expect("first turn should use initial model");
+        let response = server
+            .model_provider_select_for_next_turn(ModelProviderSelectForNextTurnParams {
+                model_id: "gpt-next".to_string(),
+            })
+            .expect("known model should be selected");
+        let second = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id,
+                prompt: "second".to_string(),
+            })
+            .expect("second turn should use newly selected model");
+
+        assert_eq!(response.selected_model_id, "gpt-next");
+        assert_eq!(first.turn_id, "turn_1");
+        assert_eq!(second.turn_id, "turn_2");
+        let calls = bridge.calls.lock().expect("calls lock");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].model_provider.model_id, "gpt-test");
+        assert_eq!(calls[1].model_provider.model_id, "gpt-next");
     }
 
     #[test]
@@ -3437,6 +4032,7 @@ mod tests {
                     thread_id: "thread_1".to_string(),
                     turn_id: turn_id.to_string(),
                     prompt: "hello".to_string(),
+                    model_provider: test_runtime_model_snapshot(),
                     updates: RuntimeTurnUpdateSink::new(),
                 })
                 .expect_err("test factory should stop before spawning");
@@ -3448,6 +4044,91 @@ mod tests {
         tokens[0].cancel();
         assert!(tokens[0].is_cancelled());
         assert!(!tokens[1].is_cancelled());
+    }
+
+    #[test]
+    fn dasclaw_runtime_bridge_passes_model_snapshot_to_agent_factory() {
+        let captured_snapshots = Arc::new(Mutex::new(Vec::new()));
+        let factory_snapshots = Arc::clone(&captured_snapshots);
+        let bridge = DasclawAgentRuntimeBridge::new_with_model_provider(move |_token, snapshot| {
+            factory_snapshots
+                .lock()
+                .expect("factory snapshots lock")
+                .push(snapshot);
+            Err(RuntimeBridgeError::fatal("test factory stops before run"))
+        });
+
+        let error = bridge
+            .start_turn(RuntimeTurnStartRequest {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                prompt: "hello".to_string(),
+                model_provider: test_runtime_model_snapshot(),
+                updates: RuntimeTurnUpdateSink::new(),
+            })
+            .expect_err("test factory should stop before spawning");
+
+        assert_eq!(error.message, "test factory stops before run");
+        let snapshots = captured_snapshots.lock().expect("captured snapshots lock");
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].model_id, "gpt-test");
+        assert_eq!(snapshots[0].api_key, "test-api-key");
+    }
+
+    #[test]
+    fn runtime_model_provider_snapshot_debug_redacts_api_key() {
+        let snapshot = test_runtime_model_snapshot();
+        let debug = format!("{snapshot:?}");
+
+        assert!(debug.contains("RuntimeModelProviderSnapshot"));
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("test-api-key"));
+    }
+
+    #[test]
+    fn registry_config_from_snapshot_uses_only_snapshot_values() {
+        let snapshot = RuntimeModelProviderSnapshot {
+            model_id: "snapshot-model".to_string(),
+            provider: "snapshot-provider".to_string(),
+            api_base_url: "http://snapshot-host/v1".to_string(),
+            api_key: "snapshot-api-key".to_string(),
+            api_format: "anthropic".to_string(),
+        };
+
+        let config =
+            registry_config_from_snapshot(&snapshot).expect("snapshot should build config");
+
+        assert!(matches!(config.protocol, ProviderProtocol::Anthropic));
+        assert_eq!(config.provider_id, "snapshot-provider");
+        assert_eq!(config.base_url, "http://snapshot-host/v1");
+        assert_eq!(config.model, "snapshot-model");
+        let api_key = config.api_key.expect("api key should come from snapshot");
+        assert_eq!(api_key.expose_secret(), "snapshot-api-key");
+    }
+
+    #[test]
+    fn snapshot_runtime_bridge_rejects_unknown_api_format_without_leaking_key() {
+        let bridge = DasclawAgentRuntimeBridge::from_model_provider_snapshot();
+        let mut snapshot = test_runtime_model_snapshot();
+        snapshot.api_format = "future-format".to_string();
+        snapshot.api_key = "super-secret-key".to_string();
+
+        let error = bridge
+            .start_turn(RuntimeTurnStartRequest {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                prompt: "hello".to_string(),
+                model_provider: snapshot,
+                updates: RuntimeTurnUpdateSink::new(),
+            })
+            .expect_err("unknown api format should be rejected before spawning");
+
+        assert!(
+            error
+                .message
+                .contains("unsupported model provider apiFormat")
+        );
+        assert!(!error.message.contains("super-secret-key"));
     }
 
     #[test]
@@ -3542,6 +4223,7 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
             })
             .expect("initialize should succeed");
         let _ = server.drain_notifications();
@@ -3891,6 +4573,7 @@ mod tests {
                 requested_capabilities: vec![
                     CompatibilityProfile::CODEX_APP_SERVER_V2_ID.to_string(),
                 ],
+                model_provider: Some(test_model_provider_config()),
             })
             .expect("initialize should succeed");
         let initialize_notifications = server.drain_notifications();
@@ -3972,7 +4655,8 @@ mod tests {
                         "transport": "stdio"
                     },
                     "protocolVersion": ProtocolVersion::current(),
-                    "requestedCapabilities": [CompatibilityProfile::CODEX_APP_SERVER_V2_ID]
+                    "requestedCapabilities": [CompatibilityProfile::CODEX_APP_SERVER_V2_ID],
+                    "modelProvider": test_model_provider_config()
                 }
             }),
             serde_json::json!({
@@ -4100,14 +4784,46 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: Vec::new(),
+                model_provider: Some(test_model_provider_config()),
             })
             .expect("initialize should succeed");
         let _ = server.drain_notifications();
         server
     }
 
+    fn test_model_provider_config() -> ModelProviderInitializeConfig {
+        let selected_model = test_model_config("gpt-test");
+        ModelProviderInitializeConfig {
+            models: vec![selected_model.clone(), test_model_config("gpt-next")],
+            selected_model,
+        }
+    }
+
+    fn test_model_config(model_id: &str) -> ClientModelConfig {
+        ClientModelConfig {
+            model_id: model_id.to_string(),
+            display_name: Some(model_id.to_string()),
+            provider: Some("openai".to_string()),
+            api_base_url: Some("http://localhost:11434/v1".to_string()),
+            api_key: Some("test-api-key".to_string()),
+            api_format: Some("openai".to_string()),
+            source: Some("test".to_string()),
+            capabilities: Vec::new(),
+        }
+    }
+
+    fn test_runtime_model_snapshot() -> RuntimeModelProviderSnapshot {
+        RuntimeModelProviderSnapshot {
+            model_id: "gpt-test".to_string(),
+            provider: "openai".to_string(),
+            api_base_url: "http://localhost:11434/v1".to_string(),
+            api_key: "test-api-key".to_string(),
+            api_format: "openai".to_string(),
+        }
+    }
+
     fn initialized_request_json() -> &'static str {
-        r#"{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"client":{"name":"open-cowork","version":"0.0.0","transport":"stdio"},"protocolVersion":{"major":0,"minor":1,"patch":0},"requestedCapabilities":[]}}"#
+        r#"{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"client":{"name":"open-cowork","version":"0.0.0","transport":"stdio"},"protocolVersion":{"major":0,"minor":1,"patch":0},"requestedCapabilities":[],"modelProvider":{"models":[{"modelId":"gpt-test","displayName":"gpt-test","provider":"openai","apiBaseUrl":"http://localhost:11434/v1","apiKey":"test-api-key","apiFormat":"openai","source":"test"},{"modelId":"gpt-next","displayName":"gpt-next","provider":"openai","apiBaseUrl":"http://localhost:11434/v1","apiKey":"test-api-key","apiFormat":"openai","source":"test"}],"selectedModel":{"modelId":"gpt-test","displayName":"gpt-test","provider":"openai","apiBaseUrl":"http://localhost:11434/v1","apiKey":"test-api-key","apiFormat":"openai","source":"test"}}}}"#
     }
 
     fn json_rpc_value(line: String) -> Value {

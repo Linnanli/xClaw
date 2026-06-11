@@ -8,13 +8,14 @@ use std::io;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use dasclaw_app_server::{AppServer, run_stdio_server_with_app_server};
+use dasclaw_app_server::{AppServer, DasclawAgentRuntimeBridge, run_stdio_server_with_app_server};
 use dasclaw_app_server_protocol::{
-    CapabilitiesListResponse, ClientInfo, HealthCheckParams, HealthCheckResponse, InitializeParams,
-    InitializeResponse, LifecycleStatusResponse, ProtocolSchemaResponse, ProtocolVersion,
-    ThreadCreateParams, ThreadCreateResponse, ThreadListResponse, ThreadReadParams,
-    ThreadReadResponse, TransportKind, TurnCancelParams, TurnCancelResponse, TurnListParams,
-    TurnListResponse, TurnReadParams, TurnReadResponse, TurnStartParams, TurnStartResponse,
+    CapabilitiesListResponse, ClientInfo, ClientModelConfig, HealthCheckParams,
+    HealthCheckResponse, InitializeParams, InitializeResponse, LifecycleStatusResponse,
+    ModelProviderInitializeConfig, ProtocolSchemaResponse, ProtocolVersion, ThreadCreateParams,
+    ThreadCreateResponse, ThreadListResponse, ThreadReadParams, ThreadReadResponse, TransportKind,
+    TurnCancelParams, TurnCancelResponse, TurnListParams, TurnListResponse, TurnReadParams,
+    TurnReadResponse, TurnStartParams, TurnStartResponse,
 };
 use dasclaw_core::agentic_loop::AgentResponder;
 use dasclaw_core::messages::{FinishReason, Role};
@@ -92,8 +93,11 @@ fn build_stdio_app_server() -> Result<AppServer, String> {
 
 fn app_server_for_runtime_mode(mode: Option<&str>) -> Result<AppServer, String> {
     match mode {
+        None => Ok(AppServer::with_runtime_bridge(Arc::new(
+            DasclawAgentRuntimeBridge::from_model_provider_snapshot(),
+        ))),
         Some("echo") => Ok(AppServer::with_runtime_responder(Arc::new(EchoResponder))),
-        Some("noop") | None => Ok(AppServer::new()),
+        Some("noop") => Ok(AppServer::new()),
         Some(other) => Err(format!(
             "unknown DASCLAW_APP_SERVER_RUNTIME: {other}; expected echo or noop"
         )),
@@ -201,6 +205,7 @@ fn self_check_report() -> Result<SelfCheckReport, dasclaw_app_server::AppServerE
             "lifecycle".to_string(),
             "health".to_string(),
         ],
+        model_provider: Some(self_check_model_provider_config()),
     })?;
     let pending_notifications = server.drain_notifications().len();
     let thread_create = server.thread_create(ThreadCreateParams {
@@ -251,6 +256,27 @@ fn self_check_report() -> Result<SelfCheckReport, dasclaw_app_server::AppServerE
     })
 }
 
+fn self_check_model_provider_config() -> ModelProviderInitializeConfig {
+    let selected_model = self_check_model_config("self-check-model");
+    ModelProviderInitializeConfig {
+        models: vec![selected_model.clone()],
+        selected_model,
+    }
+}
+
+fn self_check_model_config(model_id: &str) -> ClientModelConfig {
+    ClientModelConfig {
+        model_id: model_id.to_string(),
+        display_name: Some(model_id.to_string()),
+        provider: Some("self_check".to_string()),
+        api_base_url: Some("http://localhost/self-check/v1".to_string()),
+        api_key: Some("self-check-api-key".to_string()),
+        api_format: Some("openai".to_string()),
+        source: Some("self_check".to_string()),
+        capabilities: Vec::new(),
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SelfCheckReport {
@@ -287,6 +313,7 @@ mod tests {
     use dasclaw_app_server::{
         RuntimeBridge, RuntimeBridgeError, RuntimeTurnCancelRequest, RuntimeTurnStartRequest,
     };
+    use dasclaw_app_server_protocol::ProtocolVersion;
     use serde_json::Value;
 
     use dasclaw_app_server::{run_stdio_server, run_stdio_server_with_app_server};
@@ -404,7 +431,7 @@ mod tests {
 
     #[test]
     fn stdio_loop_can_run_with_injected_app_server_runtime_bridge() {
-        let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"client":{"name":"open-cowork","version":"0.0.0","transport":"stdio"},"protocolVersion":{"major":0,"minor":1,"patch":0},"requestedCapabilities":[]}}"#;
+        let initialize = initialize_request("open-cowork", []);
         let create = r#"{"jsonrpc":"2.0","id":"thread","method":"thread/create","params":{"title":"Draft"}}"#;
         let start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","prompt":"hello"}}"#;
         let mut output = Vec::new();
@@ -438,7 +465,7 @@ mod tests {
 
     #[test]
     fn stdio_loop_supports_codex_v2_chat_subset_transcript() {
-        let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"client":{"name":"codex","version":"2.0.0","transport":"stdio"},"protocolVersion":{"major":0,"minor":1,"patch":0},"requestedCapabilities":["codex_app_server_v2"]}}"#;
+        let initialize = initialize_request("codex", ["codex_app_server_v2"]);
         let thread_start =
             r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"title":"Draft"}}"#;
         let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"hello","text_elements":[]}]}}"#;
@@ -502,7 +529,7 @@ mod tests {
 
     #[test]
     fn echo_runtime_mode_streams_real_runtime_completion_over_stdio() {
-        let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"client":{"name":"open-cowork","version":"0.0.0","transport":"stdio"},"protocolVersion":{"major":0,"minor":1,"patch":0},"requestedCapabilities":["codex_app_server_v2"]}}"#;
+        let initialize = initialize_request("open-cowork", ["codex_app_server_v2"]);
         let thread_start =
             r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"title":"Draft"}}"#;
         let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"hello echo","text_elements":[]}]}}"#;
@@ -532,13 +559,111 @@ mod tests {
     }
 
     #[test]
+    fn default_runtime_mode_uses_model_provider_snapshot_bridge() {
+        let initialize = initialize_request_with_model_provider(
+            "open-cowork",
+            [],
+            serde_json::json!({
+                "models": [test_model_config_with_api_format("gpt-test", "unsupported")],
+                "selectedModel": test_model_config_with_api_format("gpt-test", "unsupported")
+            }),
+        );
+        let thread_start =
+            r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"title":"Draft"}}"#;
+        let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"hello","text_elements":[]}]}}"#;
+        let mut output = Vec::new();
+        let server = app_server_for_runtime_mode(None).expect("default runtime mode should build");
+
+        run_stdio_server_with_app_server(
+            server,
+            Cursor::new(format!("{initialize}\n{thread_start}\n{turn_start}\n")),
+            &mut output,
+        )
+        .expect("stdio loop should process the default runtime mode transcript");
+
+        let response = String::from_utf8(output).expect("response should be utf8");
+        let values = response
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("line should be JSON"))
+            .collect::<Vec<_>>();
+        let turn_response = values
+            .iter()
+            .find(|value| value["id"] == "turn")
+            .expect("turn response should be present");
+        let thread_response = values
+            .iter()
+            .find(|value| value["id"] == "thread")
+            .expect("thread response should be present");
+
+        assert_eq!(thread_response["result"]["threadId"], "thread_1");
+        assert!(turn_response.get("error").is_some());
+        assert!(turn_response.get("result").is_none());
+    }
+
+    fn initialize_request(
+        client_name: &str,
+        requested_capabilities: impl IntoIterator<Item = &'static str>,
+    ) -> String {
+        initialize_request_with_model_provider(
+            client_name,
+            requested_capabilities,
+            serde_json::json!({
+                "models": [
+                    test_model_config("gpt-test"),
+                    test_model_config("gpt-next")
+                ],
+                "selectedModel": test_model_config("gpt-test")
+            }),
+        )
+    }
+
+    fn initialize_request_with_model_provider(
+        client_name: &str,
+        requested_capabilities: impl IntoIterator<Item = &'static str>,
+        model_provider: Value,
+    ) -> String {
+        serde_json::to_string(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "init",
+            "method": "initialize",
+            "params": {
+                "client": {
+                    "name": client_name,
+                    "version": "0.0.0",
+                    "transport": "stdio"
+                },
+                "protocolVersion": ProtocolVersion::current(),
+                "requestedCapabilities": requested_capabilities.into_iter().collect::<Vec<_>>(),
+                "modelProvider": model_provider
+            }
+        }))
+        .expect("initialize request should serialize")
+    }
+
+    fn test_model_config(model_id: &str) -> Value {
+        test_model_config_with_api_format(model_id, "openai")
+    }
+
+    fn test_model_config_with_api_format(model_id: &str, api_format: &str) -> Value {
+        serde_json::json!({
+            "modelId": model_id,
+            "displayName": model_id,
+            "provider": "openai",
+            "apiBaseUrl": "http://localhost:11434/v1",
+            "apiKey": "test-api-key",
+            "apiFormat": api_format,
+            "source": "test"
+        })
+    }
+
+    #[test]
     fn runtime_mode_rejects_unknown_values() {
         assert!(app_server_for_runtime_mode(Some("future")).is_err());
     }
 
     #[test]
     fn stdio_loop_emits_codex_v2_failure_item_terminal_and_error_events() {
-        let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"client":{"name":"codex","version":"2.0.0","transport":"stdio"},"protocolVersion":{"major":0,"minor":1,"patch":0},"requestedCapabilities":["codex_app_server_v2"]}}"#;
+        let initialize = initialize_request("codex", ["codex_app_server_v2"]);
         let thread_start =
             r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"title":"Draft"}}"#;
         let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"hello","text_elements":[]}]}}"#;
@@ -584,7 +709,7 @@ mod tests {
 
     #[test]
     fn stdio_loop_emits_codex_v2_interrupt_item_terminal_events() {
-        let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"client":{"name":"codex","version":"2.0.0","transport":"stdio"},"protocolVersion":{"major":0,"minor":1,"patch":0},"requestedCapabilities":["codex_app_server_v2"]}}"#;
+        let initialize = initialize_request("codex", ["codex_app_server_v2"]);
         let thread_start =
             r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"title":"Draft"}}"#;
         let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"hello","text_elements":[]}]}}"#;
@@ -635,7 +760,7 @@ mod tests {
 
     #[test]
     fn stdio_loop_streams_runtime_notifications_after_response_without_another_request() {
-        let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"client":{"name":"open-cowork","version":"0.0.0","transport":"stdio"},"protocolVersion":{"major":0,"minor":1,"patch":0},"requestedCapabilities":[]}}"#;
+        let initialize = initialize_request("open-cowork", []);
         let create = r#"{"jsonrpc":"2.0","id":"thread","method":"thread/create","params":{"title":"Draft"}}"#;
         let start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","prompt":"hello"}}"#;
         let mut output = Vec::new();
@@ -669,7 +794,7 @@ mod tests {
 
     #[test]
     fn stdio_loop_disconnects_after_notification_queue_overflow() {
-        let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"client":{"name":"open-cowork","version":"0.0.0","transport":"stdio"},"protocolVersion":{"major":0,"minor":1,"patch":0},"requestedCapabilities":[]}}"#;
+        let initialize = initialize_request("open-cowork", []);
         let create = r#"{"jsonrpc":"2.0","id":"thread","method":"thread/create","params":{"title":"overflow"}}"#;
         let start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","prompt":"overflow"}}"#;
         let after_overflow =

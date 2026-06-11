@@ -12,6 +12,8 @@ export function eventRequiresSessionManager(event: ClientEvent): boolean {
     case 'session.getTraceSteps':
     case 'permission.response':
       return true;
+    case 'modelProvider.list':
+    case 'modelProvider.selectForNextTurn':
     default:
       return false;
   }

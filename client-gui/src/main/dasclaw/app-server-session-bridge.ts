@@ -4,6 +4,13 @@ import type { DatabaseInstance, MessageRow, SessionRow } from '../db/database';
 import { configStore } from '../config/config-store';
 import { log, logError } from '../utils/logger';
 import { StdioAppServerRpc, type AppServerRpc, type JsonRpcNotification } from './app-server-rpc';
+import {
+  AdminBackendModelProviderService,
+  type AppServerClientModelConfig,
+  type ModelProviderService,
+  type RendererModelProviderConfig,
+  type ResolvedModelProviderConfig,
+} from './model-provider-service';
 
 type AppServerRpcFactory = () => AppServerRpc;
 
@@ -42,13 +49,38 @@ export class DasclawAppServerSessionBridge {
   private removeTransportClosedListener: (() => void) | null = null;
   private readonly bindingsBySessionId = new Map<string, SessionBinding>();
   private readonly sessionIdByThreadId = new Map<string, string>();
+  private modelProviderConfig: ResolvedModelProviderConfig | null = null;
+  private modelProviderConfigPromise: Promise<ResolvedModelProviderConfig> | null = null;
+  private rendererModelProviderConfig: RendererModelProviderConfig | null = null;
+  private modelSelectionQueue: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly db: DatabaseInstance,
     private readonly sendToRenderer: (event: ServerEvent) => void,
-    rpcFactory: AppServerRpcFactory = () => new StdioAppServerRpc()
+    rpcFactory: AppServerRpcFactory = () => new StdioAppServerRpc(),
+    private readonly modelProviderService: ModelProviderService = new AdminBackendModelProviderService()
   ) {
     this.rpcFactory = rpcFactory;
+  }
+
+  getRendererModelProviderConfig(): RendererModelProviderConfig | null {
+    return this.rendererModelProviderConfig;
+  }
+
+  async getModelProviderConfigForRenderer(): Promise<RendererModelProviderConfig> {
+    const config = await this.loadModelProviderConfig();
+    return config.renderer;
+  }
+
+  async selectModelForNextTurn(modelId: string): Promise<RendererModelProviderConfig> {
+    const selection = this.modelSelectionQueue.then(() =>
+      this.applyModelSelectionForNextTurn(modelId)
+    );
+    this.modelSelectionQueue = selection.then(
+      () => undefined,
+      () => undefined
+    );
+    return selection;
   }
 
   async startSession(
@@ -59,6 +91,7 @@ export class DasclawAppServerSessionBridge {
     content?: ContentBlock[],
     memoryEnabled?: boolean
   ): Promise<Session> {
+    await this.waitForPendingModelSelection();
     const rpc = await this.ensureInitialized(cwd);
     const thread = await rpc.request<ThreadStartResponse>('thread/start', {
       title,
@@ -88,6 +121,7 @@ export class DasclawAppServerSessionBridge {
       throw new Error(`Session ${sessionId} is not bound to a dasclaw thread`);
     }
 
+    await this.waitForPendingModelSelection();
     const rpc = await this.ensureInitialized(session.cwd ?? undefined);
     const binding = this.bindSession(sessionId, storedThreadId);
     const threadId = await this.ensureThreadForTurn(session, binding, rpc);
@@ -128,6 +162,93 @@ export class DasclawAppServerSessionBridge {
     this.rpc?.dispose();
     this.rpc = null;
     this.initializePromise = null;
+    this.modelProviderConfig = null;
+    this.modelProviderConfigPromise = null;
+    this.rendererModelProviderConfig = null;
+    this.modelSelectionQueue = Promise.resolve();
+  }
+
+  private async loadModelProviderConfig(): Promise<ResolvedModelProviderConfig> {
+    if (this.modelProviderConfig) {
+      return this.modelProviderConfig;
+    }
+
+    if (!this.modelProviderConfigPromise) {
+      this.modelProviderConfigPromise = this.modelProviderService
+        .load()
+        .then((config) => {
+          this.modelProviderConfig = config;
+          this.rendererModelProviderConfig = config.renderer;
+          return config;
+        })
+        .catch((error) => {
+          this.modelProviderConfigPromise = null;
+          throw error;
+        });
+    }
+
+    return this.modelProviderConfigPromise;
+  }
+
+  private async waitForPendingModelSelection(): Promise<void> {
+    await this.modelSelectionQueue;
+  }
+
+  private async applyModelSelectionForNextTurn(
+    requestedModelId: string
+  ): Promise<RendererModelProviderConfig> {
+    const modelId = requestedModelId.trim();
+    if (!modelId) {
+      throw new Error('modelProvider/selectForNextTurn requires a non-empty modelId');
+    }
+
+    const config = await this.loadModelProviderConfig();
+    const selectedModel = config.runtime.models.find((model) => model.modelId === modelId);
+    if (!selectedModel) {
+      throw new Error(`Unknown modelProvider modelId: ${modelId}`);
+    }
+
+    if (this.rpc && this.initializePromise) {
+      await this.initializePromise;
+      const response = await this.rpc.request<{ selectedModelId: string }>(
+        'modelProvider/selectForNextTurn',
+        { modelId: selectedModel.modelId }
+      );
+      if (response.selectedModelId !== selectedModel.modelId) {
+        throw new Error(
+          `app-server acknowledged unexpected selected modelId: ${response.selectedModelId}`
+        );
+      }
+    }
+
+    return this.commitSelectedModel(config, selectedModel);
+  }
+
+  private commitSelectedModel(
+    config: ResolvedModelProviderConfig,
+    selectedModel: AppServerClientModelConfig
+  ): RendererModelProviderConfig {
+    const rendererModel = config.renderer.models.find(
+      (model) => model.modelId === selectedModel.modelId
+    );
+    if (!rendererModel) {
+      throw new Error(`Renderer modelProvider config missing modelId: ${selectedModel.modelId}`);
+    }
+
+    const nextConfig: ResolvedModelProviderConfig = {
+      runtime: {
+        ...config.runtime,
+        selectedModel,
+      },
+      renderer: {
+        ...config.renderer,
+        selectedModelId: rendererModel.modelId,
+      },
+    };
+    this.modelProviderConfig = nextConfig;
+    this.modelProviderConfigPromise = Promise.resolve(nextConfig);
+    this.rendererModelProviderConfig = nextConfig.renderer;
+    return nextConfig.renderer;
   }
 
   private async ensureInitialized(workspaceRoot?: string): Promise<AppServerRpc> {
@@ -142,8 +263,10 @@ export class DasclawAppServerSessionBridge {
     }
 
     if (!this.initializePromise) {
-      this.initializePromise = this.rpc
-        .request('initialize', {
+      const rpc = this.rpc;
+      this.initializePromise = (async () => {
+        const modelProviderConfig = await this.loadModelProviderConfig();
+        await rpc.request('initialize', {
           client: {
             name: 'open-cowork-dasclaw-gui-poc',
             version: '0.0.0',
@@ -152,14 +275,13 @@ export class DasclawAppServerSessionBridge {
           protocolVersion: { major: 0, minor: 1, patch: 0 },
           workspace: workspaceRoot ? { root: workspaceRoot, trust: 'unknown' } : undefined,
           requestedCapabilities: [CODEX_V2_PROFILE],
-        })
-        .then(() => {
-          log('[DasclawAppServer] Initialized app-server protocol session');
-        })
-        .catch((error) => {
-          this.initializePromise = null;
-          throw error;
+          modelProvider: modelProviderConfig.runtime,
         });
+        log('[DasclawAppServer] Initialized app-server protocol session');
+      })().catch((error) => {
+        this.initializePromise = null;
+        throw error;
+      });
     }
 
     await this.initializePromise;
@@ -188,7 +310,8 @@ export class DasclawAppServerSessionBridge {
       mountedPaths: cwd ? [{ virtual: WORKSPACE_MOUNT_VIRTUAL_PATH, real: cwd }] : [],
       allowedTools: allowedTools ?? [],
       memoryEnabled: resolvedMemoryEnabled,
-      model: configStore.get('model') || undefined,
+      model:
+        this.rendererModelProviderConfig?.selectedModelId || configStore.get('model') || undefined,
       createdAt: now,
       updatedAt: now,
     };

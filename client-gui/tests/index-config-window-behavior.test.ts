@@ -7,7 +7,8 @@ const indexPath = path.resolve(process.cwd(), 'src/main/index.ts');
 describe('Main process window/config behavior', () => {
   it('second-instance path focuses existing window and only recreates when none found', () => {
     const source = fs.readFileSync(indexPath, 'utf8');
-    const secondInstanceBlock = source.match(/app\.on\('second-instance'[\s\S]*?\n  }\);\n}/)?.[0] || '';
+    const secondInstanceBlock =
+      source.match(/app\.on\('second-instance'[\s\S]*?\n  }\);\n}/)?.[0] || '';
 
     expect(secondInstanceBlock).toContain('BrowserWindow.getAllWindows()');
     expect(secondInstanceBlock).toContain('focused existing window');
@@ -17,7 +18,7 @@ describe('Main process window/config behavior', () => {
 
   it('keeps credential guard on the legacy session-manager path only', () => {
     const source = fs.readFileSync(indexPath, 'utf8');
-    const bridgePathIndex = source.indexOf('if (shouldUseDasclawAppServerBridge())');
+    const bridgePathIndex = source.indexOf("if (runnerDecision.runner === 'dasclaw')");
     const credentialGuardIndex = source.indexOf(
       "event.type === 'session.start' && !configStore.hasUsableCredentialsForActiveSet()"
     );
@@ -37,20 +38,26 @@ describe('Main process window/config behavior', () => {
 
   it('uses dasclaw app-server by default unless the runner explicitly selects legacy', () => {
     const source = fs.readFileSync(indexPath, 'utf8');
-    const selector =
-      source.match(/function shouldUseDasclawAppServerBridge\(\)[\s\S]*?function resolveAgentRunnerMode/)?.[0] ||
+    const runnerDecisionResolver =
+      source.match(/function resolveAgentRunnerDecision\([\s\S]*?\n}/)?.[0] || '';
+    const handleClientEventBlock =
+      source.match(/async function handleClientEvent\([\s\S]*?const sm = sessionManager!;/)?.[0] ||
       '';
-    const runnerModeResolver =
-      source.match(/function resolveAgentRunnerMode\([\s\S]*?\n}/)?.[0] || '';
 
-    expect(selector).toContain(
-      "resolveAgentRunnerMode(process.env.OPEN_COWORK_AGENT_RUNNER) === 'dasclaw'"
-    );
-    expect(runnerModeResolver).toContain("normalizedRunner === 'dasclaw'");
-    expect(runnerModeResolver).toContain("normalizedRunner === 'legacy'");
-    expect(runnerModeResolver).toContain("normalizedRunner === 'session-manager'");
-    expect(runnerModeResolver).toContain('Unknown OPEN_COWORK_AGENT_RUNNER');
-    expect(runnerModeResolver).toContain("return 'legacy'");
-    expect(selector).not.toContain("OPEN_COWORK_AGENT_RUNNER === 'dasclaw'");
+    expect(source).not.toContain('function shouldUseDasclawAppServerBridge');
+    expect(handleClientEventBlock).toContain('const runnerDecision = resolveAgentRunnerDecision');
+    expect(handleClientEventBlock).toContain('process.env.OPEN_COWORK_AGENT_RUNNER');
+    expect(handleClientEventBlock).toContain("runnerDecision.runner === 'dasclaw'");
+    expect(runnerDecisionResolver).toContain("runner === 'dasclaw'");
+    expect(runnerDecisionResolver).toContain("runner === 'legacy'");
+    expect(runnerDecisionResolver).toContain("runner === 'session-manager'");
+    expect(runnerDecisionResolver).toContain("reason: 'explicit-dev-opt-in'");
+    expect(runnerDecisionResolver).not.toContain('toLowerCase');
+    expect(runnerDecisionResolver).not.toContain("runner.trim() === 'legacy'");
+    expect(runnerDecisionResolver).toContain('Unknown OPEN_COWORK_AGENT_RUNNER');
+    expect(runnerDecisionResolver).toContain('using dasclaw app-server path');
+    expect(runnerDecisionResolver).toContain("reason: 'unknown-fail-closed'");
+    expect(runnerDecisionResolver).not.toContain("return { runner: 'legacy' }");
+    expect(handleClientEventBlock).not.toContain("OPEN_COWORK_AGENT_RUNNER === 'dasclaw'");
   });
 });

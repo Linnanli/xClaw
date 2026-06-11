@@ -4,6 +4,8 @@
 //! does not define agent-loop internals or tool-execution traits; those stay
 //! in `dasclaw_runtime`.
 
+use std::fmt;
+
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +30,7 @@ pub mod method {
     pub const TURN_INTERRUPT: &str = "turn/interrupt";
     pub const TURN_LIST: &str = "turn/list";
     pub const TURN_READ: &str = "turn/read";
+    pub const MODEL_PROVIDER_SELECT_FOR_NEXT_TURN: &str = "modelProvider/selectForNextTurn";
 }
 
 pub mod event {
@@ -181,6 +184,63 @@ pub struct InitializeParams {
     pub workspace: Option<WorkspaceInfo>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requested_capabilities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_provider: Option<ModelProviderInitializeConfig>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientModelConfig {
+    pub model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
+}
+
+impl fmt::Debug for ClientModelConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClientModelConfig")
+            .field("model_id", &self.model_id)
+            .field("display_name", &self.display_name)
+            .field("provider", &self.provider)
+            .field("api_base_url", &self.api_base_url)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .field("api_format", &self.api_format)
+            .field("source", &self.source)
+            .field("capabilities", &self.capabilities)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelProviderInitializeConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<ClientModelConfig>,
+    pub selected_model: ClientModelConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelProviderSelectForNextTurnParams {
+    pub model_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelProviderSelectForNextTurnResponse {
+    pub selected_model_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -395,7 +455,11 @@ impl CapabilityMatrix {
             ),
             approval: declared_future_capability("approval"),
             dlp_policy: declared_future_capability("dlp_policy"),
-            model_provider: declared_future_capability("model_provider"),
+            model_provider: Capability::implemented(
+                "model_provider",
+                &[method::MODEL_PROVIDER_SELECT_FOR_NEXT_TURN],
+                &[],
+            ),
             tools: declared_future_capability("tools"),
             jobs: declared_future_capability("jobs"),
             skills: declared_future_capability("skills"),
@@ -749,6 +813,13 @@ fn phase_one_methods() -> Vec<MethodSchema> {
             "session",
             Some("TurnReadParams"),
             "TurnReadResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::MODEL_PROVIDER_SELECT_FOR_NEXT_TURN,
+            "model_provider",
+            Some("ModelProviderSelectForNextTurnParams"),
+            "ModelProviderSelectForNextTurnResponse",
             true,
         ),
     ]
@@ -1536,6 +1607,13 @@ mod tests {
         );
         assert_eq!(matrix.approval.status, CapabilityStatus::Declared);
         assert_eq!(matrix.dlp_policy.status, CapabilityStatus::Declared);
+        assert_eq!(matrix.model_provider.status, CapabilityStatus::Implemented);
+        assert!(
+            matrix
+                .model_provider
+                .methods
+                .contains(&method::MODEL_PROVIDER_SELECT_FOR_NEXT_TURN.to_string())
+        );
     }
 
     #[test]
@@ -1563,6 +1641,7 @@ mod tests {
         assert!(method_names.contains(&method::TURN_CANCEL));
         assert!(method_names.contains(&method::TURN_LIST));
         assert!(method_names.contains(&method::TURN_READ));
+        assert!(method_names.contains(&method::MODEL_PROVIDER_SELECT_FOR_NEXT_TURN));
         assert!(event_names.contains(&event::LIFECYCLE_CHANGED));
         assert!(event_names.contains(&event::CAPABILITIES_CHANGED));
         assert!(event_names.contains(&event::THREAD_CREATED));
@@ -1585,6 +1664,7 @@ mod tests {
             schema.capabilities.lifecycle.methods,
             schema.capabilities.health.methods,
             schema.capabilities.session.methods,
+            schema.capabilities.model_provider.methods,
         ]
         .concat();
 

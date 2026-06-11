@@ -50,6 +50,7 @@ import type {
   DiagnosticInput,
   ProviderModelInfo,
   PermissionRule,
+  ClientModelProviderConfig,
 } from '../renderer/types';
 import { remoteManager, type AgentExecutor } from './remote/remote-manager';
 import { remoteConfigStore } from './remote/remote-config-store';
@@ -118,6 +119,10 @@ let pluginRuntimeService: PluginRuntimeService | null = null;
 let memoryService: MemoryService | null = null;
 let scheduledTaskManager: ScheduledTaskManager | null = null;
 let dasclawSessionBridge: DasclawAppServerSessionBridge | null = null;
+
+type AgentRunnerDecision =
+  | { runner: 'dasclaw'; reason: 'default' | 'explicit' | 'unknown-fail-closed' }
+  | { runner: 'legacy'; reason: 'explicit-dev-opt-in' };
 
 function sanitizeDiagnosticBaseUrl(value: string | undefined): string | null {
   if (!value) {
@@ -2665,7 +2670,8 @@ ipcMain.handle('sandbox.retrySetup', async () => {
 });
 
 async function handleClientEvent(event: ClientEvent): Promise<unknown> {
-  if (shouldUseDasclawAppServerBridge()) {
+  const runnerDecision = resolveAgentRunnerDecision(process.env.OPEN_COWORK_AGENT_RUNNER);
+  if (runnerDecision.runner === 'dasclaw') {
     const bridged = await handleDasclawSessionEvent(event);
     if (bridged.handled) {
       return bridged.result;
@@ -2692,6 +2698,12 @@ async function handleClientEvent(event: ClientEvent): Promise<unknown> {
   const sm = sessionManager!;
 
   switch (event.type) {
+    case 'modelProvider.list':
+      return getDasclawModelProviderConfigForRenderer();
+
+    case 'modelProvider.selectForNextTurn':
+      return selectDasclawModelForNextTurn(event.payload.modelId);
+
     case 'session.start':
       const unsupportedReason = getWorkspacePathUnsupportedReason(event.payload.cwd);
       if (unsupportedReason) {
@@ -2818,6 +2830,25 @@ async function handleClientEvent(event: ClientEvent): Promise<unknown> {
   }
 }
 
+async function getDasclawModelProviderConfigForRenderer(): Promise<ClientModelProviderConfig> {
+  if (!dasclawSessionBridge) {
+    throw new Error('Dasclaw app-server bridge not initialized');
+  }
+  return dasclawSessionBridge.getModelProviderConfigForRenderer();
+}
+
+async function selectDasclawModelForNextTurn(modelId: string): Promise<ClientModelProviderConfig> {
+  if (!dasclawSessionBridge) {
+    throw new Error('Dasclaw app-server bridge not initialized');
+  }
+  const config = await dasclawSessionBridge.selectModelForNextTurn(modelId);
+  sendToRenderer({
+    type: 'modelProvider.changed',
+    payload: config,
+  });
+  return config;
+}
+
 async function handleDasclawSessionEvent(
   event: ClientEvent
 ): Promise<{ handled: false } | { handled: true; result: unknown }> {
@@ -2866,21 +2897,19 @@ async function handleDasclawSessionEvent(
   }
 }
 
-function shouldUseDasclawAppServerBridge(): boolean {
-  return resolveAgentRunnerMode(process.env.OPEN_COWORK_AGENT_RUNNER) === 'dasclaw';
-}
-
-function resolveAgentRunnerMode(runner: string | undefined): 'dasclaw' | 'legacy' {
-  const normalizedRunner = runner?.trim().toLowerCase();
-  if (!normalizedRunner || normalizedRunner === 'dasclaw') {
-    return 'dasclaw';
+function resolveAgentRunnerDecision(runner: string | undefined): AgentRunnerDecision {
+  if (!runner || runner.trim() === '') {
+    return { runner: 'dasclaw', reason: 'default' };
   }
-  if (normalizedRunner === 'legacy' || normalizedRunner === 'session-manager') {
-    return 'legacy';
+  if (runner === 'dasclaw') {
+    return { runner: 'dasclaw', reason: 'explicit' };
+  }
+  if (runner === 'legacy' || runner === 'session-manager') {
+    return { runner: 'legacy', reason: 'explicit-dev-opt-in' };
   }
 
   logWarn(
-    `[AgentRunner] Unknown OPEN_COWORK_AGENT_RUNNER="${runner}", using legacy session-manager path`
+    `[AgentRunner] Unknown OPEN_COWORK_AGENT_RUNNER="${runner}", using dasclaw app-server path`
   );
-  return 'legacy';
+  return { runner: 'dasclaw', reason: 'unknown-fail-closed' };
 }

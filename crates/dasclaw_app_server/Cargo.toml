@@ -17,7 +17,9 @@ path = "src/main.rs"
 async-trait = "0.1"
 dasclaw_core = { path = "../dasclaw_core" }
 dasclaw_app_server_protocol = { path = "../dasclaw_app_server_protocol" }
+dasclaw_llm_provider = { path = "../dasclaw_llm_provider" }
 dasclaw_runtime = { path = "../dasclaw_runtime" }
+secrecy = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"

@@ -20,6 +20,10 @@ function makeEvent(type: ClientEvent['type']): ClientEvent {
       return { type, payload: {} };
     case 'permission.response':
       return { type, payload: { toolUseId: 'tool-1', result: 'allow' } };
+    case 'modelProvider.list':
+      return { type, payload: {} };
+    case 'modelProvider.selectForNextTurn':
+      return { type, payload: { modelId: 'admin-gpt' } };
     case 'workdir.set':
       return { type, payload: { path: '/tmp/demo' } };
     case 'workdir.select':
@@ -56,6 +60,8 @@ describe('eventRequiresSessionManager', () => {
       'workdir.get',
       'workdir.set',
       'workdir.select',
+      'modelProvider.list',
+      'modelProvider.selectForNextTurn',
     ];
 
     for (const type of optionalTypes) {
