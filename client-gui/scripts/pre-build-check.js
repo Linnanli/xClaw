@@ -32,6 +32,9 @@ const RESET = '\x1b[0m';
  * @returns {CheckSpec[]}
  */
 function buildCheckList(platform, arch) {
+  const appServerBinary =
+    platform === 'win32' ? 'dasclaw-app-server.exe' : 'dasclaw-app-server';
+
   /** @type {CheckSpec[]} */
   const checks = [
     // Common checks (all platforms, FATAL)
@@ -63,6 +66,12 @@ function buildCheckList(platform, arch) {
       label: 'Built-in skills directory (.claude/skills/)',
       relPath: '.claude/skills',
       type: 'dir',
+      severity: 'fatal',
+    },
+    {
+      label: 'Dasclaw app-server binary',
+      relPath: `.bundle-resources/dasclaw-app-server/${appServerBinary}`,
+      type: 'file',
       severity: 'fatal',
     },
   ];

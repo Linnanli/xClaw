@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { EventEmitter } from 'events';
+import { existsSync } from 'fs';
 import { join, resolve } from 'path';
 import { app } from 'electron';
 import { log, logError, logWarn } from '../utils/logger';
@@ -44,6 +45,7 @@ type PendingRequest = {
 export type AppServerProcessFactory = () => ChildProcessWithoutNullStreams;
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const BUNDLED_APP_SERVER_DIR = 'dasclaw-app-server';
 
 export class StdioAppServerRpc implements AppServerRpc {
   private readonly child: ChildProcessWithoutNullStreams;
@@ -192,7 +194,7 @@ export class StdioAppServerRpc implements AppServerRpc {
   }
 }
 
-function spawnDefaultAppServer(): ChildProcessWithoutNullStreams {
+export function spawnDefaultAppServer(): ChildProcessWithoutNullStreams {
   const explicitBinary = process.env.DASCLAW_APP_SERVER_BIN;
   const env = { ...process.env };
   if (explicitBinary) {
@@ -201,7 +203,18 @@ function spawnDefaultAppServer(): ChildProcessWithoutNullStreams {
   }
 
   if (app.isPackaged) {
-    throw new Error('Packaged dasclaw app-server requires DASCLAW_APP_SERVER_BIN');
+    const bundledBinary = resolveBundledAppServerBinary(process.resourcesPath, process.platform);
+    if (bundledBinary) {
+      log('[DasclawAppServer] Spawning bundled binary:', bundledBinary);
+      return spawn(bundledBinary, [], { stdio: 'pipe', env });
+    }
+
+    throw new Error(
+      `Packaged dasclaw app-server binary was not found under ${join(
+        process.resourcesPath,
+        BUNDLED_APP_SERVER_DIR
+      )}; set DASCLAW_APP_SERVER_BIN to override`
+    );
   }
 
   const repoRoot = resolveDasclawRepoRoot();
@@ -215,6 +228,18 @@ function spawnDefaultAppServer(): ChildProcessWithoutNullStreams {
       env,
     }
   );
+}
+
+export function resolveBundledAppServerBinary(
+  resourcesPath: string,
+  platform: NodeJS.Platform = process.platform
+): string | null {
+  const binaryName = platform === 'win32' ? 'dasclaw-app-server.exe' : 'dasclaw-app-server';
+  const candidates = [
+    join(resourcesPath, BUNDLED_APP_SERVER_DIR, binaryName),
+    join(resourcesPath, BUNDLED_APP_SERVER_DIR, 'bin', binaryName),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
 }
 
 function resolveDasclawRepoRoot(): string {

@@ -31,12 +31,26 @@ describe('dev script guard', () => {
       'utf-8'
     );
 
-    expect(smokeScript).toContain("OPEN_COWORK_AGENT_RUNNER: 'dasclaw'");
+    expect(smokeScript).not.toContain("OPEN_COWORK_AGENT_RUNNER: 'dasclaw'");
+    expect(smokeScript).toContain('DASCLAW_SMOKE_AGENT_RUNNER');
     expect(smokeScript).toContain("DASCLAW_APP_SERVER_RUNTIME: 'echo'");
     expect(smokeScript).toContain('DASCLAW_SMOKE_SKIP_BUILD');
     expect(smokeScript).toContain('--user-data-dir=');
     expect(smokeScript).toContain('window.__getNavStatus');
     expect(smokeScript).toContain('result.partialCount !== 1');
     expect(smokeScript).toContain('CDP request timed out');
+  });
+
+  it('packages dasclaw app-server as a bundled default runtime resource', () => {
+    const packageJson = readPackageJson();
+    const builderConfig = readFileSync(resolve(__dirname, '../electron-builder.yml'), 'utf-8');
+    const preBuildCheck = readFileSync(resolve(__dirname, '../scripts/pre-build-check.js'), 'utf-8');
+
+    expect(packageJson.scripts?.['build:dasclaw-app-server']).toBe(
+      'node scripts/build-dasclaw-app-server.mjs'
+    );
+    expect(packageJson.scripts?.build).toContain('npm run build:dasclaw-app-server');
+    expect(builderConfig.match(/to: dasclaw-app-server/g)).toHaveLength(3);
+    expect(preBuildCheck).toContain('.bundle-resources/dasclaw-app-server/${appServerBinary}');
   });
 });

@@ -342,6 +342,9 @@ v2.4 §3 只列了 ADR-101 ~ ADR-110。W3 ~ W6 期间又落了约 45 个 ADR（�
 | `crates/dasclaw_apply_patch` | codex port | Lark 语法 patch 协议 |
 | `crates/dasclaw_project_docs` | codex/claw 合并 | AGENTS.md / CLAUDE.md 多层加载 |
 | `crates/dasclaw_pty` | codex/exec-server port | portable-pty 信号转发 + resize |
+| `crates/dasclaw_app_server` | codex app-server 协议接入与服务端骨架 | agent 会话生命周期（thread/turn）与事件流转发 |
+| `crates/dasclaw_app_server_client` | codex app-server 协议 client 客户端 | JSON-RPC 客户端调用封装 |
+| `crates/dasclaw_app_server_protocol` | codex protocol 语义向下投射 | `turn/start` / `thread` / 通知事件协议类型定义 |
 
 ### 4.2 新建（P1 推荐，7 个） — v2.4 补 3
 
