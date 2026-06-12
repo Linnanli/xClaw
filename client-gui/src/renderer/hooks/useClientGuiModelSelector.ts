@@ -2,13 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAppStore } from '../store';
 import { useAppConfig } from '../store/selectors';
 import { useIPC } from './useIPC';
-import type { ClientModelProviderConfig, ProviderModelInfo } from '../types';
 import {
   normalizeConfigModelOptions,
   normalizeServerModelOptions,
   type AssistantModelOption,
   type AssistantModelSelectorMode,
-} from '../components/assistant-ui/AssistantModelSelector';
+} from '../components/assistant-ui/model-selector-utils';
+import type { ClientModelProviderConfig } from '../types';
 
 interface UseClientGuiModelSelectorResult {
   mode: AssistantModelSelectorMode;
@@ -85,7 +85,7 @@ export function useClientGuiModelSelector(): UseClientGuiModelSelectorResult {
       });
 
       setMode('config');
-      setModels(normalizeConfigModelOptions(discovered as ProviderModelInfo[]));
+      setModels(normalizeConfigModelOptions(discovered));
       return;
     } catch (configError) {
       const message = configError instanceof Error ? configError.message : 'No models available';
