@@ -8,13 +8,17 @@ import type {
 import type { DatabaseInstance, MessageRow, SessionRow } from '../src/main/db/database';
 import type { ServerEvent } from '../src/renderer/types';
 
+const mockConfigModelValue = { value: 'dasclaw-test-model' };
+const mockConfigStoreSet = vi.fn();
+
 vi.mock('../src/main/config/config-store', () => ({
   configStore: {
     get: (key: string) => {
       if (key === 'memoryEnabled') return true;
-      if (key === 'model') return 'dasclaw-test-model';
+      if (key === 'model') return mockConfigModelValue.value;
       return undefined;
     },
+    set: (key: string, value: string) => mockConfigStoreSet(key, value),
   },
 }));
 
@@ -273,6 +277,11 @@ function createBridge(
 }
 
 describe('DasclawAppServerSessionBridge', () => {
+  beforeEach(() => {
+    mockConfigModelValue.value = 'dasclaw-test-model';
+    mockConfigStoreSet.mockClear();
+  });
+
   it('starts a dasclaw thread and maps stream notifications to renderer events', async () => {
     const rpc = new FakeRpc();
     const events: ServerEvent[] = [];
@@ -363,6 +372,8 @@ describe('DasclawAppServerSessionBridge', () => {
   });
 
   it('selects a model locally before initialization and injects it into app-server initialize', async () => {
+    mockConfigModelValue.value = 'admin-next';
+    mockConfigStoreSet.mockClear();
     const rpc = new FakeRpc();
     const db = createDb();
     const bridge = createBridge(db, () => {}, rpc);
@@ -385,7 +396,25 @@ describe('DasclawAppServerSessionBridge', () => {
     expect(session.model).toBe('admin-next');
   });
 
+  it('hydrates model selection from persisted config store on startup', async () => {
+    mockConfigModelValue.value = 'admin-next';
+    const rpc = new FakeRpc();
+    const db = createDb();
+    const bridge = createBridge(db, () => {}, rpc);
+
+    const session = await bridge.startSession('Draft', 'hello', '/tmp/workspace');
+
+    expect(rpc.requests[0].params).toMatchObject({
+      modelProvider: {
+        selectedModel: expect.objectContaining({ modelId: 'admin-next' }),
+      },
+    });
+    expect(session.model).toBe('admin-next');
+  });
+
   it('selects the next-turn model through app-server after initialization', async () => {
+    mockConfigStoreSet.mockClear();
+    mockConfigModelValue.value = 'admin-gpt';
     const rpc = new FakeRpc();
     const db = createDb();
     const bridge = createBridge(db, () => {}, rpc);
@@ -405,6 +434,7 @@ describe('DasclawAppServerSessionBridge', () => {
       params: { modelId: 'admin-next' },
     });
     expect(bridge.getRendererModelProviderConfig()?.selectedModelId).toBe('admin-next');
+    expect(mockConfigStoreSet).toHaveBeenCalledWith('model', 'admin-next');
   });
 
   it('does not commit a model switch if app-server rejects the acknowledgement', async () => {

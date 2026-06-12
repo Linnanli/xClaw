@@ -177,9 +177,10 @@ export class DasclawAppServerSessionBridge {
       this.modelProviderConfigPromise = this.modelProviderService
         .load()
         .then((config) => {
-          this.modelProviderConfig = config;
-          this.rendererModelProviderConfig = config.renderer;
-          return config;
+          const configWithSelection = this.applyPersistedModelSelection(config);
+          this.modelProviderConfig = configWithSelection;
+          this.rendererModelProviderConfig = configWithSelection.renderer;
+          return configWithSelection;
         })
         .catch((error) => {
           this.modelProviderConfigPromise = null;
@@ -221,7 +222,46 @@ export class DasclawAppServerSessionBridge {
       }
     }
 
-    return this.commitSelectedModel(config, selectedModel);
+    const nextConfig = this.commitSelectedModel(config, selectedModel);
+    try {
+      configStore.set('model', selectedModel.modelId);
+    } catch (error) {
+      logError(
+        '[DasclawAppServer] Failed to persist selected model to config store:',
+        error
+      );
+    }
+    return nextConfig;
+  }
+
+  private applyPersistedModelSelection(config: ResolvedModelProviderConfig): ResolvedModelProviderConfig {
+    const modelId = configStore.get('model')?.trim();
+    if (!modelId) {
+      return config;
+    }
+
+    const selectedModel = config.runtime.models.find((model) => model.modelId === modelId);
+    if (!selectedModel || selectedModel.modelId === config.runtime.selectedModel.modelId) {
+      return config;
+    }
+
+    const rendererModel = config.renderer.models.find(
+      (model) => model.modelId === selectedModel.modelId
+    );
+    if (!rendererModel) {
+      return config;
+    }
+
+    return {
+      runtime: {
+        ...config.runtime,
+        selectedModel,
+      },
+      renderer: {
+        ...config.renderer,
+        selectedModelId: rendererModel.modelId,
+      },
+    };
   }
 
   private commitSelectedModel(
