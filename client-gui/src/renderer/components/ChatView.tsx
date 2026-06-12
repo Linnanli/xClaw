@@ -8,7 +8,6 @@ import {
   useActiveTurn,
   usePendingTurns,
   useActiveExecutionClock,
-  useAppConfig,
 } from '../store/selectors';
 import { useAppStore } from '../store';
 import { useIPC } from '../hooks/useIPC';
@@ -25,6 +24,7 @@ import {
   type ComposerImage,
 } from './composer/composerAdapters';
 import { ComposerAttachmentTray } from './composer/ComposerAttachmentTray';
+import { AssistantModelSelector } from './assistant-ui/AssistantModelSelector';
 
 export function ChatView() {
   const { t } = useTranslation();
@@ -36,7 +36,6 @@ export function ChatView() {
   const activeTurn = useActiveTurn();
   const pendingTurns = usePendingTurns();
   const executionClock = useActiveExecutionClock();
-  const appConfig = useAppConfig();
   const setGlobalNotice = useAppStore((s) => s.setGlobalNotice);
   const { continueSession, stopSession, isElectron } = useIPC();
   const [prompt, setPrompt] = useState('');
@@ -586,10 +585,9 @@ export function ChatView() {
               />
 
               <div className="flex items-center gap-2">
-                {/* Model display */}
-                <span className="hidden sm:inline-flex px-2.5 py-1 rounded-full border border-border-subtle bg-background/60 text-xs text-text-muted">
-                  {appConfig?.model || t('chat.noModel')}
-                </span>
+                <div className="hidden sm:block">
+                  <AssistantModelSelector />
+                </div>
 
                 {canStop && (
                   <button

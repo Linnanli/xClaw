@@ -3,6 +3,7 @@ import { useAppStore } from '../store';
 import type {
   AppConfig,
   ClientEvent,
+  ClientModelProviderConfig,
   ServerEvent,
   PermissionResult,
   Session,
@@ -245,6 +246,15 @@ export function useIPC() {
           case 'config.status': {
             console.log('[useIPC] config.status received:', event.payload.isConfigured);
             applyConfigSnapshot(event.payload.config, event.payload.isConfigured);
+            break;
+          }
+
+          case 'modelProvider.changed': {
+            console.log(
+              '[useIPC] modelProvider.changed received:',
+              event.payload.selectedModelId
+            );
+            store.setModelProviderConfig(event.payload as ClientModelProviderConfig);
             break;
           }
 

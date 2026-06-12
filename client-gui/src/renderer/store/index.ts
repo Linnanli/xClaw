@@ -7,6 +7,7 @@ import type {
   SudoPasswordRequest,
   Settings,
   AppConfig,
+  ClientModelProviderConfig,
   SandboxSetupProgress,
   SandboxSyncStatus,
   SkillsStorageChangeEvent,
@@ -98,6 +99,7 @@ interface AppState {
 
   // App Config (API settings)
   appConfig: AppConfig | null;
+  modelProviderConfig: ClientModelProviderConfig | null;
   isConfigured: boolean;
   showConfigModal: boolean;
   hasSeenInitialConfigStatus: boolean;
@@ -164,6 +166,7 @@ interface AppState {
 
   // Config actions
   setAppConfig: (config: AppConfig | null) => void;
+  setModelProviderConfig: (config: ClientModelProviderConfig | null) => void;
   setIsConfigured: (configured: boolean) => void;
   setShowConfigModal: (show: boolean) => void;
   markInitialConfigStatusSeen: () => void;
@@ -231,6 +234,7 @@ export const useAppStore = create<AppState>((set) => ({
   pendingSudoPassword: null,
   settings: defaultSettings,
   appConfig: null,
+  modelProviderConfig: null,
   isConfigured: false,
   showConfigModal: false,
   hasSeenInitialConfigStatus: false,
@@ -568,6 +572,7 @@ export const useAppStore = create<AppState>((set) => ({
 
   // Config actions
   setAppConfig: (config) => set({ appConfig: config }),
+  setModelProviderConfig: (config) => set({ modelProviderConfig: config }),
   setIsConfigured: (configured) => set({ isConfigured: configured }),
   setShowConfigModal: (show) => set({ showConfigModal: show }),
   markInitialConfigStatusSeen: () => set({ hasSeenInitialConfigStatus: true }),
