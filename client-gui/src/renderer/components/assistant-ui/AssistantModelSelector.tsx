@@ -2,10 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, ChevronRight, CirclePlus, Sparkles, Settings2 } from 'lucide-react';
 import { useClientGuiModelSelector } from '../../hooks/useClientGuiModelSelector';
-import {
-  resolveModelDisplayName,
-  type AssistantModelOption,
-} from './model-selector-utils';
+import { resolveModelDisplayName } from './model-selector-utils';
 
 export function AssistantModelSelector(): JSX.Element {
   const { t } = useTranslation();
@@ -118,7 +115,10 @@ export function AssistantModelSelector(): JSX.Element {
 
           <button
             type="button"
-            onClick={openSettings}
+            onClick={() => {
+              setOpen(false);
+              openSettings();
+            }}
             className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm text-text-primary transition-colors hover:bg-surface-hover"
             data-testid="model-selector-settings"
           >

@@ -3,7 +3,7 @@ import {
   normalizeConfigModelOptions,
   normalizeServerModelOptions,
   resolveModelDisplayName,
-} from '../src/renderer/components/assistant-ui/AssistantModelSelector';
+} from '../src/renderer/components/assistant-ui/model-selector-utils';
 import type { ClientModelProviderConfig } from '../src/renderer/types';
 
 describe('AssistantModelSelector helpers', () => {

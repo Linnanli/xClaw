@@ -62,6 +62,7 @@ export function useClientGuiModelSelector(): UseClientGuiModelSelectorResult {
       setMode('server');
       setModels(normalizeServerModelOptions(serverConfig));
       setModelProviderConfig(serverConfig);
+      setLoading(false);
       return;
     } catch (serverError) {
       console.log('[useClientGuiModelSelector] modelProvider.list unavailable:', serverError);
@@ -75,6 +76,7 @@ export function useClientGuiModelSelector(): UseClientGuiModelSelectorResult {
       if (!provider || !apiKey) {
         setMode('unavailable');
         setModels([]);
+        setLoading(false);
         return;
       }
 
