@@ -2,7 +2,6 @@ import { useState, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAppStore } from '../store';
 import { useIPC } from '../hooks/useIPC';
-import type { ContentBlock } from '../types';
 import { getInitialSessionTitle } from '../../shared/session-title';
 import {
   buildContentBlocksFromComposerData,
@@ -13,7 +12,6 @@ import {
   type ComposerFileAttachment,
   type ComposerImage,
 } from './composer/composerAdapters';
-import { ComposerAttachmentTray } from './composer/ComposerAttachmentTray';
 import {
   FileText,
   BarChart3,
