@@ -210,7 +210,7 @@ export function ChatView() {
 
     prevMessageCountRef.current = messageCount;
     prevPartialLengthRef.current = partialLength;
-  }, [messages.length, partialMessage.length, partialThinking.length]);
+  }, [messages.length, partialMessage.length, partialThinking.length, scrollToBottom]);
 
   // Additional scroll trigger for content height changes (e.g., TodoWrite expand/collapse)
   useEffect(() => {
@@ -231,7 +231,7 @@ export function ChatView() {
     return () => {
       resizeObserver.disconnect();
     };
-  }, []); // ResizeObserver is stable — no need to recreate on message count changes
+  }, [scrollToBottom]); // ResizeObserver is stable — keep scroll callback in sync
 
   // Cleanup scroll timeouts on unmount
   useEffect(() => {
