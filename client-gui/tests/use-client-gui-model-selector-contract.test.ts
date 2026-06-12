@@ -17,5 +17,8 @@ describe('useClientGuiModelSelector contract', () => {
     expect(hookSource).toContain('setModelProviderConfig(config)');
     expect(hookSource).toContain("window.electronAPI.config.listModels({");
     expect(hookSource).toContain("window.electronAPI.config.save({ model: modelId })");
+    expect(hookSource).toContain("type: 'modelProvider.selectForNextTurn'");
+    expect(hookSource).toContain('setGlobalNotice({');
+    expect(hookSource).toContain("type: 'error'");
   });
 });
