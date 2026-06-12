@@ -231,7 +231,7 @@ export function ChatView() {
     return () => {
       resizeObserver.disconnect();
     };
-  }, []); // ResizeObserver is stable — no need to recreate on message count changes
+  }, [scrollToBottom]); // ResizeObserver is stable — keep scroll callback in sync
 
   // Cleanup scroll timeouts on unmount
   useEffect(() => {
