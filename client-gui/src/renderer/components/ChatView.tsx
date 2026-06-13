@@ -11,9 +11,8 @@ import {
 } from '../store/selectors';
 import { useAppStore } from '../store';
 import { useIPC } from '../hooks/useIPC';
-import { MessageCard } from './MessageCard';
 import type { Message, ContentBlock } from '../types';
-import { Send, Square, Plus, Loader2, Plug, Clock } from 'lucide-react';
+import { Send, Square, Plus, Loader2, Clock } from 'lucide-react';
 import {
   buildContentBlocksFromComposerData,
   buildFileAttachmentsFromPaths,
@@ -23,8 +22,10 @@ import {
   type ComposerFileAttachment,
   type ComposerImage,
 } from './composer/composerAdapters';
-import { ComposerAttachmentTray } from './composer/ComposerAttachmentTray';
 import { AssistantModelSelector } from './assistant-ui/AssistantModelSelector';
+import { AssistantChatShell } from './assistant-ui/AssistantChatShell';
+import { AssistantComposer } from './assistant-ui/composer/AssistantComposer';
+import { AssistantThreadView } from './assistant-ui/thread/AssistantThreadView';
 
 export function ChatView() {
   const { t } = useTranslation();
@@ -40,13 +41,6 @@ export function ChatView() {
   const { continueSession, stopSession, isElectron } = useIPC();
   const [prompt, setPrompt] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [activeConnectors, setActiveConnectors] = useState<
-    { id: string; name: string; connected: boolean; toolCount: number }[]
-  >([]);
-  const [showConnectorLabel, setShowConnectorLabel] = useState(true);
-  const headerRef = useRef<HTMLDivElement>(null);
-  const titleRef = useRef<HTMLHeadingElement>(null);
-  const connectorMeasureRef = useRef<HTMLDivElement>(null);
   const [pastedImages, setPastedImages] = useState<ComposerImage[]>([]);
   const [attachedFiles, setAttachedFiles] = useState<ComposerFileAttachment[]>([]);
   const [isDragging, setIsDragging] = useState(false);
@@ -54,7 +48,6 @@ export function ChatView() {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const isUserAtBottomRef = useRef(true);
-  const isComposingRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const prevMessageCountRef = useRef(0);
   const prevPartialLengthRef = useRef(0);
@@ -95,6 +88,7 @@ export function ChatView() {
       role: 'assistant',
       content: contentBlocks,
       timestamp: Date.now(),
+      streaming: true,
     };
 
     return [...messages.slice(0, insertIndex), streamingMessage, ...messages.slice(insertIndex)];
@@ -331,64 +325,12 @@ export function ChatView() {
     }
   };
 
-  // Load active MCP connectors
-  useEffect(() => {
-    if (isElectron && typeof window !== 'undefined' && window.electronAPI) {
-      const loadConnectors = async () => {
-        try {
-          const statuses = await window.electronAPI.mcp.getServerStatus();
-          const active =
-            (
-              statuses as Array<{ id: string; name: string; connected: boolean; toolCount: number }>
-            )?.filter((s) => s.connected && s.toolCount > 0) || [];
-          setActiveConnectors(active);
-        } catch (err) {
-          console.error('Failed to load MCP connectors:', err);
-        }
-      };
-      loadConnectors();
-      // Refresh every 5 seconds
-      const interval = setInterval(loadConnectors, 5000);
-      return () => clearInterval(interval);
-    }
-  }, [isElectron]);
+  const isSendDisabled =
+    (!prompt.trim() && pastedImages.length === 0 && attachedFiles.length === 0) || isSubmitting;
 
-  useEffect(() => {
-    const titleEl = titleRef.current;
-    const headerEl = headerRef.current;
-    const measureEl = connectorMeasureRef.current;
-    if (!titleEl || !headerEl || !measureEl) {
-      setShowConnectorLabel(true);
-      return;
-    }
-    const updateLabelVisibility = () => {
-      const isTruncated = titleEl.scrollWidth > titleEl.clientWidth;
-      const headerStyle = window.getComputedStyle(headerEl);
-      const paddingLeft = Number.parseFloat(headerStyle.paddingLeft) || 0;
-      const paddingRight = Number.parseFloat(headerStyle.paddingRight) || 0;
-      const contentWidth = headerEl.clientWidth - paddingLeft - paddingRight;
-      const titleWidth = titleEl.getBoundingClientRect().width;
-      const rightColumnWidth = Math.max(0, (contentWidth - titleWidth) / 2);
-      const connectorFullWidth = measureEl.getBoundingClientRect().width;
-      setShowConnectorLabel(!isTruncated && rightColumnWidth >= connectorFullWidth);
-    };
-    updateLabelVisibility();
-    const observer = new ResizeObserver(() => {
-      updateLabelVisibility();
-    });
-    observer.observe(titleEl);
-    observer.observe(headerEl);
-    return () => observer.disconnect();
-  }, [activeSession?.title, activeConnectors.length]);
-
-  const handleSubmit = async (e?: React.FormEvent) => {
-    e?.preventDefault();
-
-    // Get value from ref to handle both controlled and uncontrolled cases
-    const currentPrompt = textareaRef.current?.value || prompt;
-
+  const handleSubmit = useCallback(async () => {
     if (
-      (!currentPrompt.trim() && pastedImages.length === 0 && attachedFiles.length === 0) ||
+      (!prompt.trim() && pastedImages.length === 0 && attachedFiles.length === 0) ||
       !activeSessionId ||
       isSubmitting
     )
@@ -397,7 +339,7 @@ export function ChatView() {
     setIsSubmitting(true);
     try {
       const contentBlocks = buildContentBlocksFromComposerData({
-        prompt: currentPrompt,
+        prompt,
         pastedImages,
         attachedFiles,
       });
@@ -407,22 +349,19 @@ export function ChatView() {
 
       // Clean up
       setPrompt('');
-      if (textareaRef.current) {
-        textareaRef.current.value = '';
-      }
       pastedImages.forEach((img) => URL.revokeObjectURL(img.url));
       setPastedImages([]);
       setAttachedFiles([]);
     } finally {
       setIsSubmitting(false);
     }
-  };
+  }, [activeSessionId, attachedFiles, continueSession, isSubmitting, pastedImages, prompt]);
 
-  const handleStop = () => {
+  const handleStop = useCallback(() => {
     if (activeSessionId) {
       stopSession(activeSessionId);
     }
-  };
+  }, [activeSessionId, stopSession]);
 
   if (!activeSession) {
     return (
@@ -432,196 +371,113 @@ export function ChatView() {
     );
   }
 
+  const statusIndicators = (
+    <>
+      {hasActiveTurn && (!partialMessage || partialMessage.trim() === '') && !partialThinking && (
+        <div className="flex items-center gap-3 px-4 py-3 rounded-full bg-background/80 border border-border-subtle max-w-fit">
+          <Loader2 className="w-4 h-4 text-accent animate-spin" />
+          <span className="text-sm text-text-secondary">{t('chat.processing')}</span>
+        </div>
+      )}
+
+      {liveElapsed > 0 && (
+        <div className="flex items-center gap-1.5 text-[11px] text-text-muted mt-1 ml-0.5">
+          <Clock className="w-3 h-3" />
+          <span>
+            {timerActive
+              ? formatExecutionTime(liveElapsed)
+              : t('messageCard.executionTime', { time: formatExecutionTime(liveElapsed) })}
+          </span>
+        </div>
+      )}
+    </>
+  );
+
   return (
-    <div className="flex-1 flex flex-col overflow-hidden bg-background">
-      {/* Header */}
-      <div
-        ref={headerRef}
-        className="relative h-12 border-b border-border-muted grid grid-cols-[1fr_auto_1fr] items-center px-4 lg:px-8 bg-background/88 backdrop-blur-md"
-      >
-        <div className="text-[11px] font-medium tracking-[0.08em] uppercase text-text-muted">
-          Open Cowork
-        </div>
-        <h2
-          ref={titleRef}
-          className="text-[15px] font-medium text-text-primary text-center truncate max-w-[40vw] lg:max-w-[32rem]"
-        >
-          {activeSession.title}
-        </h2>
-        {activeConnectors.length > 0 && (
-          <>
-            <div
-              ref={connectorMeasureRef}
-              aria-hidden="true"
-              className="absolute left-0 top-0 -z-10 opacity-0 pointer-events-none"
+    <AssistantChatShell
+      title={activeSession.title}
+      headerLabel="Open Cowork"
+      messages={displayedMessages}
+      isRunning={canStop}
+      isSendDisabled={isSendDisabled}
+      onNew={handleSubmit}
+      onCancel={handleStop}
+      scrollContainerRef={scrollContainerRef}
+      messagesContainerRef={messagesContainerRef}
+      messagesEndRef={messagesEndRef}
+      thread={
+        <AssistantThreadView
+          messages={displayedMessages}
+          className="space-y-5"
+          emptyPlaceholder={t('chat.startConversation')}
+        />
+      }
+      statusIndicators={statusIndicators}
+      composer={
+        <AssistantComposer
+          prompt={prompt}
+          onPromptChange={setPrompt}
+          textareaRef={textareaRef}
+          isSubmitting={isSubmitting}
+          pastedImages={pastedImages}
+          attachedFiles={attachedFiles}
+          onRemoveImage={removeImage}
+          onRemoveFile={removeFile}
+          onPaste={handlePaste}
+          onSubmit={handleSubmit}
+          placeholder={t('chat.typeMessage')}
+          attachmentImageAlt={(index) => t('common.pastedImageAlt', { index: index + 1 })}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          textareaMinHeight={48}
+          composerClassName={`relative w-full p-3.5 rounded-[1.75rem] bg-background/88 border border-border-muted shadow-soft transition-colors ${
+            isDragging ? 'ring-2 ring-accent bg-accent/5' : ''
+          }`}
+          textareaClassName="flex-1 resize-none bg-transparent border-none outline-none text-text-primary placeholder:text-text-muted text-[15px] py-2"
+          leftActions={
+            <button
+              type="button"
+              onClick={handleFileSelect}
+              className="w-9 h-9 rounded-2xl flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-surface-hover transition-colors"
+              title={t('welcome.attachFiles')}
             >
-              <div className="flex items-center gap-2 px-2 py-1 rounded-lg border border-mcp/20">
-                <Plug className="w-3.5 h-3.5" />
-                <span className="text-xs font-medium whitespace-nowrap">
-                  {t('chat.connectorCount', { count: activeConnectors.length })}
-                </span>
+              <Plus className="w-5 h-5" />
+            </button>
+          }
+          rightActions={
+            <div className="flex items-center gap-2">
+              <div className="hidden sm:block">
+                <AssistantModelSelector />
               </div>
-            </div>
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-mcp/8 border border-mcp/15 justify-self-end">
-              <Plug className="w-3.5 h-3.5 text-mcp" />
-              <span className="text-xs text-mcp font-medium">
-                {showConnectorLabel
-                  ? t('chat.connectorCount', { count: activeConnectors.length })
-                  : activeConnectors.length}
-              </span>
-            </div>
-          </>
-        )}
-      </div>
 
-      {/* Messages */}
-      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto">
-        <div
-          ref={messagesContainerRef}
-          className="w-full max-w-[920px] mx-auto py-8 px-5 lg:px-8 space-y-5"
-        >
-          {displayedMessages.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-28 text-text-muted space-y-3 text-center">
-              <p className="text-[11px] uppercase tracking-[0.16em] text-text-muted/80">
-                Open Cowork
-              </p>
-              <p className="text-base text-text-secondary">{t('chat.startConversation')}</p>
-            </div>
-          ) : (
-            displayedMessages.map((message) => {
-              const isStreaming =
-                typeof message.id === 'string' && message.id.startsWith('partial-');
-              return (
-                <div key={message.id}>
-                  <MessageCard message={message} isStreaming={isStreaming} />
-                </div>
-              );
-            })
-          )}
-
-          {/* Processing indicator - show when we have an active turn but no streaming content yet */}
-          {hasActiveTurn &&
-            (!partialMessage || partialMessage.trim() === '') &&
-            !partialThinking && (
-              <div className="flex items-center gap-3 px-4 py-3 rounded-full bg-background/80 border border-border-subtle max-w-fit">
-                <Loader2 className="w-4 h-4 text-accent animate-spin" />
-                <span className="text-sm text-text-secondary">{t('chat.processing')}</span>
-              </div>
-            )}
-
-          {/* Real-time execution timer */}
-          {liveElapsed > 0 && (
-            <div className="flex items-center gap-1.5 text-[11px] text-text-muted mt-1 ml-0.5">
-              <Clock className="w-3 h-3" />
-              <span>
-                {timerActive
-                  ? formatExecutionTime(liveElapsed)
-                  : t('messageCard.executionTime', { time: formatExecutionTime(liveElapsed) })}
-              </span>
-            </div>
-          )}
-
-          <div ref={messagesEndRef} />
-        </div>
-      </div>
-
-      {/* Input */}
-      <div className="border-t border-border-muted bg-background/92 backdrop-blur-md">
-        <div className="max-w-[920px] mx-auto px-5 lg:px-8 py-5">
-          <form
-            onSubmit={handleSubmit}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            className="relative w-full"
-          >
-            <ComposerAttachmentTray
-              pastedImages={pastedImages}
-              attachedFiles={attachedFiles}
-              onRemoveImage={removeImage}
-              onRemoveFile={removeFile}
-              getPastedImageAlt={(index) => t('common.pastedImageAlt', { index: index + 1 })}
-            />
-
-            <div
-              className={`flex items-end gap-2 p-3.5 rounded-[1.75rem] bg-background/88 border border-border-muted shadow-soft transition-colors ${
-                isDragging ? 'ring-2 ring-accent bg-accent/5' : ''
-              }`}
-            >
-              <button
-                type="button"
-                onClick={handleFileSelect}
-                className="w-9 h-9 rounded-2xl flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-surface-hover transition-colors"
-                title={t('welcome.attachFiles')}
-              >
-                <Plus className="w-5 h-5" />
-              </button>
-
-              <textarea
-                ref={textareaRef}
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                onCompositionStart={() => {
-                  isComposingRef.current = true;
-                }}
-                onCompositionEnd={() => {
-                  isComposingRef.current = false;
-                }}
-                onPaste={handlePaste}
-                onKeyDown={(e) => {
-                  // Enter to send, Shift+Enter for new line
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    if (e.nativeEvent.isComposing || isComposingRef.current || e.keyCode === 229) {
-                      return;
-                    }
-                    e.preventDefault();
-                    handleSubmit();
-                  }
-                }}
-                placeholder={t('chat.typeMessage')}
-                disabled={isSubmitting}
-                rows={1}
-                className="flex-1 resize-none bg-transparent border-none outline-none text-text-primary placeholder:text-text-muted text-[15px] py-2"
-              />
-
-              <div className="flex items-center gap-2">
-                <div className="hidden sm:block">
-                  <AssistantModelSelector />
-                </div>
-
-                {canStop && (
-                  <button
-                    type="button"
-                    onClick={handleStop}
-                    className="w-9 h-9 rounded-2xl flex items-center justify-center bg-error/10 text-error hover:bg-error/20 transition-colors"
-                    title={t('chat.stop')}
-                  >
-                    <Square className="w-4 h-4" />
-                  </button>
-                )}
+              {canStop && (
                 <button
-                  type="submit"
-                  disabled={
-                    (!prompt.trim() &&
-                      !textareaRef.current?.value.trim() &&
-                      pastedImages.length === 0 &&
-                      attachedFiles.length === 0) ||
-                    isSubmitting
-                  }
-                  className="w-9 h-9 rounded-2xl flex items-center justify-center bg-accent text-background disabled:opacity-50 disabled:cursor-not-allowed hover:bg-accent-hover transition-colors"
-                  title={t('chat.sendMessage')}
+                  type="button"
+                  onClick={handleStop}
+                  className="w-9 h-9 rounded-2xl flex items-center justify-center bg-error/10 text-error hover:bg-error/20 transition-colors"
+                  title={t('chat.stop')}
                 >
-                  <Send className="w-4 h-4" />
+                  <Square className="w-4 h-4" />
                 </button>
-              </div>
+              )}
+              <button
+                type="submit"
+                disabled={isSendDisabled}
+                className="w-9 h-9 rounded-2xl flex items-center justify-center bg-accent text-background disabled:opacity-50 disabled:cursor-not-allowed hover:bg-accent-hover transition-colors"
+                title={t('chat.sendMessage')}
+              >
+                <Send className="w-4 h-4" />
+              </button>
             </div>
-
+          }
+          footer={
             <p className="text-[11px] text-text-muted/60 text-center mt-2.5">
               {t('chat.disclaimer')}
             </p>
-          </form>
-        </div>
-      </div>
-    </div>
+          }
+        />
+      }
+    />
   );
 }

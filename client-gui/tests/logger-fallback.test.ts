@@ -1,18 +1,67 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const FALLBACK_USER_DATA_DIR = path.join(process.cwd(), '.cowork-user-data');
 const FALLBACK_LOGS_DIR = path.join(FALLBACK_USER_DATA_DIR, 'logs');
 
+let capturedWriteStream: fs.WriteStream | null = null;
+
+async function closeAndReadLog(
+  logger: typeof import('../src/main/utils/logger'),
+  logFilePath: string
+): Promise<string> {
+  const stream = capturedWriteStream;
+
+  const waitForFlush =
+    stream && !stream.writableFinished
+      ? new Promise<void>((resolve) => {
+          stream.once('finish', resolve);
+          stream.once('close', resolve);
+        })
+      : new Promise<void>((resolve) => {
+          setTimeout(resolve, 50);
+        });
+
+  logger.closeLogFile();
+  await waitForFlush;
+
+  if (!fs.existsSync(logFilePath)) {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 50);
+    });
+  }
+
+  if (!fs.existsSync(logFilePath) && stream && !stream.destroyed) {
+    await new Promise<void>((resolve) => {
+      stream.once('finish', resolve);
+      stream.once('close', resolve);
+    });
+  }
+
+  return fs.readFileSync(logFilePath, 'utf8');
+}
+
 describe('logger fallback behavior', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.restoreAllMocks();
+    capturedWriteStream = null;
+
+    const realCreateWriteStream = fs.createWriteStream.bind(fs);
+    vi.spyOn(fs, 'createWriteStream').mockImplementation(
+      (...args: Parameters<typeof fs.createWriteStream>) => {
+        const stream = realCreateWriteStream(...args);
+        capturedWriteStream = stream;
+        return stream;
+      }
+    );
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    capturedWriteStream = null;
   });
 
   it('uses fallback userData path when electron app path API is unavailable', async () => {
@@ -69,10 +118,7 @@ describe('logger fallback behavior', () => {
     expect(logFilePath).toBeTruthy();
 
     logger.logError('[test] expected-error', new Error('boom logger error'));
-    logger.closeLogFile();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    const content = fs.readFileSync(logFilePath!, 'utf8');
+    const content = await closeAndReadLog(logger, logFilePath!);
     expect(content).toContain('[test] expected-error');
     expect(content).toContain('boom logger error');
   });
@@ -96,6 +142,38 @@ describe('logger fallback behavior', () => {
     expect(secondLogPath).not.toBe(firstLogPath);
   });
 
+  it('does not delete recently-created log files during cleanup', async () => {
+    const testUserDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cowork-logger-cleanup-'));
+    vi.doMock('electron', () => ({
+      app: {
+        getPath: (_name: string) => testUserDataDir,
+        getVersion: () => 'test',
+      },
+    }));
+
+    const logsDir = path.join(testUserDataDir, 'logs');
+    fs.mkdirSync(logsDir, { recursive: true });
+    const recentLogPath = path.join(logsDir, 'app-2099-01-01_00-00-00-000-recent.log');
+
+    fs.writeFileSync(recentLogPath, 'recent active peer log');
+    for (let index = 0; index < 8; index += 1) {
+      const oldLogPath = path.join(logsDir, `app-2000-01-01_00-00-00-00${index}.log`);
+      fs.writeFileSync(oldLogPath, 'old log');
+      const oldDate = new Date(Date.now() - 120_000 - index * 1000);
+      fs.utimesSync(oldLogPath, oldDate, oldDate);
+    }
+
+    const logger = await import('../src/main/utils/logger');
+    logger.log('trigger cleanup');
+    const logFilePath = logger.getLogFilePath();
+    expect(logFilePath).toBeTruthy();
+    await closeAndReadLog(logger, logFilePath!);
+
+    expect(fs.existsSync(recentLogPath)).toBe(true);
+
+    fs.rmSync(testUserDataDir, { recursive: true, force: true });
+  });
+
   it('swallows broken pipe errors from console output', async () => {
     vi.doMock('electron', () => ({
       app: {},
@@ -112,5 +190,4 @@ describe('logger fallback behavior', () => {
     consoleSpy.mockRestore();
     logger.closeLogFile();
   });
-
 });

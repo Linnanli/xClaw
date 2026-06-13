@@ -1,6 +1,8 @@
 import { memo } from 'react';
+import { AuiIf, ThreadPrimitive } from '@assistant-ui/react';
 import { AssistantMessage } from '../message/AssistantMessage';
 import type { Message } from '../../../types';
+import { useClientMessageByAssistantId } from '../runtime/AssistantRuntimeAdapter';
 
 interface AssistantThreadViewProps {
   messages: Message[];
@@ -8,28 +10,31 @@ interface AssistantThreadViewProps {
   emptyPlaceholder?: string;
 }
 
-/**
- * Thread-level renderer for assistant UI migration.
- *
- * This is intentionally lightweight and adapter-focused:
- * it consumes canonical message state from the existing store and renders
- * one assistant message row per Message object.
- */
+function AssistantThreadMessage({ messageId }: { messageId: string }): JSX.Element | null {
+  const message = useClientMessageByAssistantId(messageId);
+  if (!message) {
+    return null;
+  }
+
+  return <AssistantMessage message={message} isStreaming={message.streaming === true} />;
+}
+
 export const AssistantThreadView = memo(function AssistantThreadView({
   messages,
   className,
   emptyPlaceholder,
 }: AssistantThreadViewProps): JSX.Element {
-  if (messages.length === 0) {
-    return <div className={className}>{emptyPlaceholder ?? 'No messages yet'}</div>;
-  }
-
   return (
-    <div className={className}>
-      {messages.map((message) => (
-        <AssistantMessage key={message.id} message={message} />
-      ))}
-    </div>
+    <ThreadPrimitive.Root data-message-count={messages.length}>
+      <ThreadPrimitive.Viewport className={className} autoScroll={false}>
+        <AuiIf condition={(state) => state.thread.isEmpty}>
+          <div>{emptyPlaceholder ?? 'No messages yet'}</div>
+        </AuiIf>
+
+        <ThreadPrimitive.Messages>
+          {({ message }) => <AssistantThreadMessage messageId={message.id} />}
+        </ThreadPrimitive.Messages>
+      </ThreadPrimitive.Viewport>
+    </ThreadPrimitive.Root>
   );
-}
-);
+});

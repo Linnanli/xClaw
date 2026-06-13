@@ -1,7 +1,9 @@
-import { useState, memo, useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { ActionBarPrimitive, MessagePrimitive } from '@assistant-ui/react';
 import { Check, Clock, Copy, XCircle } from 'lucide-react';
-import type { Message, ContentBlock, ToolUseContent, ToolResultContent } from '../../../types';
+import type { Message, ToolResultContent } from '../../../types';
+import { getMergedToolResultIds, resolveAssistantContentBlocks } from '../assistantAdapters';
 import { AssistantContentBlock } from './AssistantContentBlock';
 
 interface AssistantMessageProps {
@@ -10,21 +12,13 @@ interface AssistantMessageProps {
   className?: string;
 }
 
-const resolveContentBlocks = (message: Message): ContentBlock[] => {
-  const rawContent = message.content as unknown;
-  if (Array.isArray(rawContent)) {
-    return rawContent as ContentBlock[];
-  }
-  return [{ type: 'text', text: String(rawContent ?? '') } as ContentBlock];
-};
-
 /**
  * Renders one message node for the assistant-ui thread.
  *
  * Preserves existing semantics:
  * - user bubble styling
  * - assistant messages render blocks directly
- * - copied text from text blocks
+ * - copy action text from assistant-ui converted text parts
  * - tool_result blocks are merged with matching tool_use blocks
  */
 export const AssistantMessage = memo(function AssistantMessage({
@@ -36,50 +30,15 @@ export const AssistantMessage = memo(function AssistantMessage({
   const isUser = message.role === 'user';
   const isQueued = message.localStatus === 'queued';
   const isCancelled = message.localStatus === 'cancelled';
-  const contentBlocks = resolveContentBlocks(message);
-  const [copied, setCopied] = useState(false);
-
-  const mergedResultIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const block of contentBlocks) {
-      if (block.type === 'tool_use') {
-        const tu = block as ToolUseContent;
-        const matchingResult = contentBlocks.find(
-          (candidate) =>
-            candidate.type === 'tool_result' &&
-            (candidate as ToolResultContent).toolUseId === tu.id,
-        );
-        if (matchingResult) {
-          ids.add((matchingResult as ToolResultContent).toolUseId);
-        }
-      }
-    }
-    return ids;
-  }, [contentBlocks]);
-
-  const getTextContent = (): string =>
-    contentBlocks
-      .filter((block) => block.type === 'text')
-      .map((block) => (block as { type: 'text'; text: string }).text)
-      .join('\n');
-
-  const handleCopy = async () => {
-    const text = getTextContent();
-    if (!text) {
-      return;
-    }
-
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard unavailable in some embedded environments.
-    }
-  };
+  const contentBlocks = resolveAssistantContentBlocks(message);
+  const mergedResultIds = useMemo(() => getMergedToolResultIds(contentBlocks), [contentBlocks]);
 
   return (
-    <div className={className}>
+    <MessagePrimitive.Root
+      className={className}
+      data-client-message-id={message.id}
+      data-client-message-role={message.role}
+    >
       {isUser ? (
         <div className="flex items-start gap-2 justify-end group">
           <div
@@ -119,18 +78,18 @@ export const AssistantMessage = memo(function AssistantMessage({
             )}
           </div>
 
-          <button
-            onClick={handleCopy}
-            className="mt-1 w-6 h-6 flex items-center justify-center rounded-md bg-surface-muted hover:bg-surface-active transition-all opacity-0 group-hover:opacity-100 flex-shrink-0"
-            title={t('messageCard.copyMessage')}
-            type="button"
-          >
-            {copied ? (
-              <Check className="w-3 h-3 text-success" />
-            ) : (
-              <Copy className="w-3 h-3 text-text-muted" />
-            )}
-          </button>
+          <ActionBarPrimitive.Root>
+            <ActionBarPrimitive.Copy asChild copiedDuration={2000}>
+              <button
+                className="group/copy mt-1 w-6 h-6 flex items-center justify-center rounded-md bg-surface-muted hover:bg-surface-active transition-all opacity-0 group-hover:opacity-100 flex-shrink-0"
+                title={t('messageCard.copyMessage')}
+                type="button"
+              >
+                <Check className="w-3 h-3 text-success hidden group-data-[copied=true]/copy:block" />
+                <Copy className="w-3 h-3 text-text-muted block group-data-[copied=true]/copy:hidden" />
+              </button>
+            </ActionBarPrimitive.Copy>
+          </ActionBarPrimitive.Root>
         </div>
       ) : (
         <div className="space-y-1.5">
@@ -163,6 +122,6 @@ export const AssistantMessage = memo(function AssistantMessage({
           )}
         </div>
       )}
-    </div>
+    </MessagePrimitive.Root>
   );
 });

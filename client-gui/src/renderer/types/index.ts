@@ -28,6 +28,7 @@ export interface Message {
   role: MessageRole;
   content: ContentBlock[];
   timestamp: number;
+  streaming?: boolean;
   api?: string;
   provider?: string;
   model?: string;

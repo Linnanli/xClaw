@@ -2727,7 +2727,7 @@ async function handleClientEvent(event: ClientEvent): Promise<unknown> {
     case 'modelProvider.selectForNextTurn':
       return selectDasclawModelForNextTurn(event.payload.modelId);
 
-    case 'session.start':
+    case 'session.start': {
       const unsupportedReason = getWorkspacePathUnsupportedReason(event.payload.cwd);
       if (unsupportedReason) {
         sendToRenderer({
@@ -2746,6 +2746,7 @@ async function handleClientEvent(event: ClientEvent): Promise<unknown> {
         event.payload.content,
         event.payload.memoryEnabled
       );
+    }
 
     case 'session.continue':
       return sm.continueSession(

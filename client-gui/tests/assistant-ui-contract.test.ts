@@ -1,38 +1,49 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-
-const assistantUiDir = path.resolve(
-  process.cwd(),
-  'src/renderer/components/assistant-ui',
-);
-
-const read = (relativePath: string) =>
-  fs.readFileSync(path.join(assistantUiDir, relativePath), 'utf8');
+import { assistantPrimitiveCoverage } from '../src/renderer/components/assistant-ui/primitiveCoverage';
 
 describe('assistant-ui renderer contract', () => {
-  it('keeps the thread view as a thin adapter over AssistantMessage', () => {
-    const source = read('thread/AssistantThreadView.tsx');
+  it('declares @assistant-ui/react as a real client-gui dependency', () => {
+    const packageJson = JSON.parse(
+      fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf8')
+    ) as { dependencies?: Record<string, string> };
 
-    expect(source).toContain("import { AssistantMessage } from '../message/AssistantMessage';");
-    expect(source).toContain('messages.map((message) => (');
-    expect(source).toContain('emptyPlaceholder ?? \'No messages yet\'');
+    expect(packageJson.dependencies?.['@assistant-ui/react']).toBe('0.12.28');
   });
 
-  it('delegates content rendering to the existing ContentBlockView implementation', () => {
-    const source = read('message/AssistantContentBlock.tsx');
+  it('keeps the primitive coverage matrix focused on the adopted assistant-ui surfaces', () => {
+    const coveredPrimitives = assistantPrimitiveCoverage.map((row) => row.primitive);
 
-    expect(source).toContain("import { ContentBlockView } from '../../message/ContentBlockView';");
-    expect(source).toContain('ContentBlockView');
-    expect(source).toContain('block as ContentBlock');
+    expect(coveredPrimitives).toEqual(
+      expect.arrayContaining([
+        'AssistantRuntimeProvider + useExternalStoreRuntime',
+        'ThreadPrimitive.Root + ThreadPrimitive.Viewport + ThreadPrimitive.Messages',
+        'MessagePrimitive.Root',
+        'ActionBarPrimitive.Root + ActionBarPrimitive.Copy',
+        'ComposerPrimitive.Root',
+        'ComposerPrimitive.Input',
+        'AttachmentPrimitive.Root',
+        'ThreadPrimitive.Suggestion',
+        'ChainOfThoughtPrimitive.Root',
+      ])
+    );
   });
 
-  it('preserves the assistant message behaviors needed for the current baseline', () => {
-    const source = read('message/AssistantMessage.tsx');
+  it('documents adapter ownership instead of hiding fallback state', () => {
+    expect(
+      assistantPrimitiveCoverage.find((row) => row.primitive === 'ComposerPrimitive.Input')
+        ?.canonicalStateRead
+    ).toContain('prompt remains controlled by ChatView/WelcomeView');
 
-    expect(source).toContain('navigator.clipboard.writeText(text)');
-    expect(source).toContain('mergedResultIds');
-    expect(source).toContain("className={`rounded-[1.65rem] px-4 py-3 max-w-[80%] min-w-0 break-words message-user");
-    expect(source).toContain('contentBlocks.map((block, index) =>');
+    expect(
+      assistantPrimitiveCoverage.find((row) => row.primitive === 'AttachmentPrimitive.Root')
+        ?.fallback
+    ).toContain('AttachmentPrimitive.Name/Remove stay unused');
+
+    expect(
+      assistantPrimitiveCoverage.find((row) => row.primitive === 'ThreadPrimitive.Suggestion')
+        ?.chosenImplementation
+    ).toContain('AssistantSuggestionList');
   });
 });

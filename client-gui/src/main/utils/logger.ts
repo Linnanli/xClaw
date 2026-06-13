@@ -49,6 +49,7 @@ let logFilePath: string | null = null;
 let logStream: fs.WriteStream | null = null;
 const MAX_LOG_SIZE = 10 * 1024 * 1024; // 10MB
 const MAX_LOG_FILES = 5; // Keep last 5 log files
+const LOG_CLEANUP_RECENT_FILE_GRACE_MS = 60_000;
 let logFileSequence = 0;
 /** Number of log entries written since last rotation check. */
 let logWriteCounter = 0;
@@ -188,9 +189,11 @@ function cleanupOldLogs(logsDir: string): void {
     // Delete old files
     if (files.length > MAX_LOG_FILES) {
       const activeLogFilePath = logFilePath;
+      const now = Date.now();
       const filesToDelete = files
         .slice(MAX_LOG_FILES)
-        .filter((file) => !activeLogFilePath || file.path !== activeLogFilePath);
+        .filter((file) => !activeLogFilePath || file.path !== activeLogFilePath)
+        .filter((file) => now - file.mtime >= LOG_CLEANUP_RECENT_FILE_GRACE_MS);
       for (const file of filesToDelete) {
         try {
           fs.unlinkSync(file.path);
