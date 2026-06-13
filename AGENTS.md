@@ -2,7 +2,7 @@
 
 ## 前置说明
 
-desktop-client客户端代码已废弃只做参考
+desktop-client、client-gui客户端代码已废弃只做参考
 
 ## 语言规则
 
