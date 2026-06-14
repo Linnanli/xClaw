@@ -55,9 +55,11 @@ import {
 } from 'react'
 
 import { ModelSelector } from './components/assistant-ui'
-import { assistantModelOptions } from './lib/assistantMessages'
 import { cn } from './lib/utils'
-import { useDasclawAssistantRuntime } from './hooks/useDasclawAssistantRuntime'
+import {
+  useAppServerModelSelectorState,
+  useDasclawAssistantRuntime
+} from './hooks/useDasclawAssistantRuntime'
 
 type AppServerSidebarProps = {
   collapsed: boolean
@@ -888,6 +890,7 @@ function Composer(): React.JSX.Element {
     fallbackIcon: SlashIcon,
     iconMap: slashIconMap
   })
+  const modelSelector = useAppServerModelSelectorState()
 
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
@@ -903,7 +906,13 @@ function Composer(): React.JSX.Element {
           />
           <div className="aui-composer-action-wrapper relative flex items-center justify-between">
             <div className="flex items-center gap-1">
-              <ModelSelector models={assistantModelOptions} variant="ghost" size="sm" />
+              <ModelSelector
+                models={modelSelector.models}
+                value={modelSelector.value}
+                onValueChange={modelSelector.onValueChange}
+                variant="ghost"
+                size="sm"
+              />
             </div>
             <div className="flex items-center gap-1.5">
               <AuiIf condition={(state) => !state.thread.isRunning}>

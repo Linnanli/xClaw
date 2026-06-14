@@ -32,7 +32,15 @@ function createWindow(): void {
       mainWindow.webContents.send('app-server:status-change', status)
     }
   })
-  mainWindow.on('closed', unsubscribeStatus)
+  const unsubscribeNotifications = appServerManager.onNotification((notification) => {
+    if (!mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('app-server:notification', notification)
+    }
+  })
+  mainWindow.on('closed', () => {
+    unsubscribeStatus()
+    unsubscribeNotifications()
+  })
 
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.
@@ -60,15 +68,25 @@ app.whenReady().then(() => {
 
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
-  ipcMain.handle('app-server:start', () => appServerManager.start())
+  ipcMain.handle('app-server:request', (_, payload: unknown) => {
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('app-server request payload must be an object')
+    }
+    const request = payload as { method?: unknown; params?: unknown; hostId?: unknown }
+    if (typeof request.method !== 'string') {
+      throw new Error('app-server request method must be a string')
+    }
+    if (request.hostId !== undefined && typeof request.hostId !== 'string') {
+      throw new Error('app-server request hostId must be a string')
+    }
+    return appServerManager.request(request.method, request.params, { hostId: request.hostId })
+  })
   ipcMain.handle('app-server:stop', () => appServerManager.stop())
   ipcMain.handle('app-server:get-status', () => appServerManager.getStatus())
   ipcMain.handle('app-server:check-health', () => appServerManager.checkHealth())
-  ipcMain.handle('app-server:send-message', (_, prompt: string) =>
-    appServerManager.sendMessage(prompt)
-  )
 
   createWindow()
+  void appServerManager.preconnect()
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the

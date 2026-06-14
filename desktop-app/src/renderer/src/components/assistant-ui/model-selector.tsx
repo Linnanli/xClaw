@@ -488,6 +488,7 @@ function ModelSelectorItem({
       keywords={[model.name, ...(model.keywords ?? [])]}
       {...(model.disabled ? { disabled: true } : undefined)}
       onSelect={(selectedValue) => {
+        if (model.disabled) return
         setValue(model.id);
         setOpen(false);
         onSelect?.(selectedValue);

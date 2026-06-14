@@ -1,6 +1,38 @@
-import { describe, expect, it } from 'vitest'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
 
-import { JsonRpcLineParser, buildJsonRpcRequestLine, classifyJsonRpcMessage } from './appServerRpc'
+import {
+  JsonRpcLineParser,
+  buildJsonRpcRequestLine,
+  classifyJsonRpcMessage,
+  resolveBundledAppServerBinary,
+  resolveDefaultAppServerLaunchOptions
+} from './appServerRpc'
+
+const tempDirs: string[] = []
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+function tempResourcesDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'desktop-app-server-rpc-'))
+  tempDirs.push(dir)
+  return dir
+}
+
+function createBundledBinary(resourcesPath: string, platform: NodeJS.Platform): string {
+  const bundleDir = join(resourcesPath, 'dasclaw-app-server')
+  const binaryName = platform === 'win32' ? 'dasclaw-app-server.exe' : 'dasclaw-app-server'
+  mkdirSync(bundleDir, { recursive: true })
+  const binary = join(bundleDir, binaryName)
+  writeFileSync(binary, 'binary')
+  return binary
+}
 
 describe('app-server JSON-RPC helpers', () => {
   it('builds line-delimited JSON-RPC requests', () => {
@@ -42,5 +74,60 @@ describe('app-server JSON-RPC helpers', () => {
         params: { delta: 'Hi' }
       }
     ])
+  })
+})
+
+describe('app-server process resolution', () => {
+  it('uses the bundled app-server binary for packaged apps', () => {
+    const resourcesPath = tempResourcesDir()
+    const binary = createBundledBinary(resourcesPath, 'darwin')
+
+    expect(resolveBundledAppServerBinary(resourcesPath, 'darwin')).toBe(binary)
+    expect(
+      resolveDefaultAppServerLaunchOptions({
+        env: {},
+        isPackaged: true,
+        platform: 'darwin',
+        resourcesPath
+      })
+    ).toEqual({
+      command: binary,
+      args: [],
+      displayBinary: binary,
+      env: {}
+    })
+  })
+
+  it('uses cargo from the workspace root in development instead of a bare PATH lookup', () => {
+    const mainDir = resolve('/repo/desktop-app/out/main')
+
+    expect(
+      resolveDefaultAppServerLaunchOptions({
+        env: {},
+        isPackaged: false,
+        mainDir
+      })
+    ).toEqual({
+      command: 'cargo',
+      args: ['run', '--quiet', '-p', 'dasclaw_app_server', '--bin', 'dasclaw-app-server'],
+      cwd: resolve('/repo'),
+      displayBinary: 'cargo run --quiet -p dasclaw_app_server --bin dasclaw-app-server',
+      env: {}
+    })
+  })
+
+  it('lets DASCLAW_APP_SERVER_BIN override packaged and development resolution', () => {
+    expect(
+      resolveDefaultAppServerLaunchOptions({
+        env: { DASCLAW_APP_SERVER_BIN: '/custom/dasclaw-app-server' },
+        isPackaged: true,
+        resourcesPath: '/missing'
+      })
+    ).toEqual({
+      command: '/custom/dasclaw-app-server',
+      args: [],
+      displayBinary: '/custom/dasclaw-app-server',
+      env: { DASCLAW_APP_SERVER_BIN: '/custom/dasclaw-app-server' }
+    })
   })
 })

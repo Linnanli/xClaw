@@ -1,51 +1,108 @@
 import {
   ChildProcessAppServerRpcClient,
   type AppServerRpcClient,
-  type JsonRpcNotification
+  type JsonRpcNotification,
+  resolveDefaultAppServerLaunchOptions
 } from './appServerRpc'
-import type { AppServerRunState, AppServerStatus, ChatSendResponse } from '../shared/appServerApi'
+import { app } from 'electron'
+import type {
+  AppServerNotification,
+  AppServerRequestOptions,
+  AppServerRunState,
+  AppServerStatus,
+  ModelProviderSelectForNextTurnResponse,
+  RendererClientModelConfig,
+  RendererModelProviderConfig
+} from '../shared/appServerApi'
 
-export type { AppServerRunState, AppServerStatus, ChatSendResponse }
-
-type TurnCompletion = {
-  threadId: string
-  turnId: string
-  output?: string
-  error?: string
-}
+export type { AppServerNotification, AppServerRequestOptions, AppServerRunState, AppServerStatus }
 
 type AppServerManagerOptions = {
+  hostId?: string
   binary?: string
   createClient?: () => AppServerRpcClient
+  loadModelProviderConfig?: ModelProviderConfigLoader
 }
 
-const DEFAULT_BINARY = process.env.DASCLAW_APP_SERVER_BIN ?? 'dasclaw-app-server'
-const TURN_COMPLETION_TIMEOUT_MS = 120_000
+const LOCAL_HOST_ID = 'local'
+const DEFAULT_ADMIN_BACKEND_URL = 'http://localhost:3000'
+const DEFAULT_MODEL_PROVIDER_FETCH_TIMEOUT_MS = 5000
+
+export type AdminClientModelConfig = {
+  model_id: string
+  display_name: string
+  provider: string
+  is_default: boolean
+  description?: string | null
+  capabilities?: unknown
+  api_base_url?: string | null
+  api_key?: string | null
+  api_format?: string | null
+  source?: string | null
+}
+
+export type AppServerClientModelConfig = {
+  modelId: string
+  displayName?: string
+  description?: string
+  provider: string
+  apiBaseUrl: string
+  apiKey: string
+  apiFormat: string
+  source?: string
+  capabilities: string[]
+}
+
+export type AppServerModelProviderConfig = {
+  models: AppServerClientModelConfig[]
+  selectedModel: AppServerClientModelConfig
+}
+
+export type ModelProviderConfigLoader = () => Promise<AppServerModelProviderConfig>
+
+export class ModelProviderConfigError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ModelProviderConfigError'
+  }
+}
 
 export class AppServerManager {
   private client: AppServerRpcClient | undefined
+  private startPromise: Promise<AppServerStatus> | undefined
   private unsubscribeNotifications: (() => void) | undefined
   private status: AppServerStatus
   private readonly createClient: () => AppServerRpcClient
+  private readonly loadModelProviderConfig: ModelProviderConfigLoader
+  private readonly hostId: string
   private readonly statusListeners = new Set<(status: AppServerStatus) => void>()
-  private readonly pendingTurns = new Map<
-    string,
-    { resolve: (completion: TurnCompletion) => void; reject: (error: Error) => void }
-  >()
-  private readonly completedTurns = new Map<string, TurnCompletion>()
+  private readonly notificationListeners = new Set<(notification: AppServerNotification) => void>()
+  private modelProviderConfig: AppServerModelProviderConfig | undefined
 
   constructor(options: AppServerManagerOptions = {}) {
-    const binary = options.binary ?? DEFAULT_BINARY
+    this.hostId = options.hostId ?? LOCAL_HOST_ID
     this.createClient =
       options.createClient ??
       (() => {
-        const client = new ChildProcessAppServerRpcClient(binary)
-        this.status = { ...this.status, pid: client.pid }
+        const launchOptions = options.binary
+          ? { command: options.binary, args: [], displayBinary: options.binary, env: process.env }
+          : resolveDefaultAppServerLaunchOptions({
+              env: process.env,
+              isPackaged: app.isPackaged,
+              mainDir: __dirname,
+              platform: process.platform,
+              resourcesPath: process.resourcesPath
+            })
+        const client = new ChildProcessAppServerRpcClient(launchOptions)
+        this.status = { ...this.status, binary: launchOptions.displayBinary, pid: client.pid }
         return client
       })
+    this.loadModelProviderConfig =
+      options.loadModelProviderConfig ?? createModelProviderConfigLoader()
     this.status = {
       state: 'stopped',
-      binary,
+      hostId: this.hostId,
+      binary: options.binary ?? process.env.DASCLAW_APP_SERVER_BIN ?? 'dasclaw-app-server',
       notificationCount: 0
     }
   }
@@ -60,20 +117,44 @@ export class AppServerManager {
     return () => this.statusListeners.delete(listener)
   }
 
+  onNotification(listener: (notification: AppServerNotification) => void): () => void {
+    this.notificationListeners.add(listener)
+    return () => this.notificationListeners.delete(listener)
+  }
+
   async start(): Promise<AppServerStatus> {
     if (this.client && this.status.state === 'ready') return this.getStatus()
+    if (this.startPromise) return this.startPromise
 
+    this.startPromise = this.startConnection().finally(() => {
+      this.startPromise = undefined
+    })
+    return this.startPromise
+  }
+
+  preconnect(): Promise<AppServerStatus> {
+    return this.start()
+  }
+
+  private async startConnection(): Promise<AppServerStatus> {
     this.setStatus({ state: 'starting', lastError: undefined })
-    this.client = this.createClient()
-    this.unsubscribeNotifications = this.client.onNotification((notification) =>
-      this.handleNotification(notification)
-    )
-
     try {
+      this.client = this.createClient()
+      this.unsubscribeNotifications = this.client.onNotification((notification) =>
+        this.handleNotification(notification)
+      )
+      const modelProvider = await this.getModelProviderConfig()
       await this.client.request('initialize', {
         client: { name: 'desktop-app', version: '0.1.0', transport: 'stdio' },
         protocolVersion: { major: 0, minor: 1, patch: 0 },
-        requestedCapabilities: ['protocol', 'lifecycle', 'health', 'session', 'codex_app_server_v2']
+        requestedCapabilities: [
+          'protocol',
+          'lifecycle',
+          'health',
+          'session',
+          'codex_app_server_v2'
+        ],
+        modelProvider
       })
       const health = await this.client.request('health/check', { includeDetails: true })
       this.setStatus({
@@ -83,13 +164,33 @@ export class AppServerManager {
       })
     } catch (error) {
       this.unsubscribeNotifications?.()
-      this.client.dispose()
+      this.client?.dispose()
       this.client = undefined
       this.unsubscribeNotifications = undefined
       this.fail(error)
     }
 
     return this.getStatus()
+  }
+
+  async request<T>(
+    method: string,
+    params?: unknown,
+    options: AppServerRequestOptions = {}
+  ): Promise<T> {
+    this.assertHostRegistered(options.hostId ?? this.hostId)
+    if (!method.trim()) throw new Error('app-server request method is required')
+
+    if (method === 'modelProvider/list') {
+      return this.getRendererModelProviderConfig() as Promise<T>
+    }
+
+    await this.ensureReady()
+    if (method === 'modelProvider/selectForNextTurn') {
+      return this.selectModelForNextTurn(params) as Promise<T>
+    }
+
+    return this.requireClient().request<T>(method, params)
   }
 
   async stop(): Promise<AppServerStatus> {
@@ -104,7 +205,6 @@ export class AppServerManager {
     } catch {
       // Shutdown is best-effort; dispose below still owns process cleanup.
     } finally {
-      this.rejectPendingTurns(new Error('dasclaw-app-server 已停止'))
       this.unsubscribeNotifications?.()
       this.client.dispose()
       this.client = undefined
@@ -127,28 +227,6 @@ export class AppServerManager {
     return this.getStatus()
   }
 
-  async sendMessage(prompt: string): Promise<ChatSendResponse> {
-    const trimmedPrompt = prompt.trim()
-    if (!trimmedPrompt) throw new Error('请输入消息内容')
-
-    await this.ensureReady()
-    const client = this.requireClient()
-    const threadId = await this.ensureThread(client, trimmedPrompt)
-    const started = await client.request<{ turnId: string }>('turn/start', {
-      threadId,
-      input: [{ type: 'text', text: trimmedPrompt }]
-    })
-
-    const completion = await this.waitForTurnCompletion(started.turnId)
-    if (completion.error) throw new Error(completion.error)
-
-    return {
-      threadId: completion.threadId,
-      turnId: completion.turnId,
-      output: completion.output ?? ''
-    }
-  }
-
   private async ensureReady(): Promise<void> {
     if (this.status.state === 'ready' && this.client) return
     const status = await this.start()
@@ -157,70 +235,28 @@ export class AppServerManager {
     }
   }
 
-  private async ensureThread(client: AppServerRpcClient, prompt: string): Promise<string> {
-    if (this.status.threadId) return this.status.threadId
-
-    const title = prompt.length > 48 ? `${prompt.slice(0, 45)}...` : prompt
-    const response = await client.request<{ threadId: string }>('thread/start', { title })
-    this.setStatus({ threadId: response.threadId })
-    return response.threadId
-  }
-
-  private waitForTurnCompletion(turnId: string): Promise<TurnCompletion> {
-    const completed = this.completedTurns.get(turnId)
-    if (completed) {
-      this.completedTurns.delete(turnId)
-      return Promise.resolve(completed)
-    }
-
-    return new Promise<TurnCompletion>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.pendingTurns.delete(turnId)
-        reject(new Error('等待 dasclaw-app-server 响应超时'))
-      }, TURN_COMPLETION_TIMEOUT_MS)
-
-      this.pendingTurns.set(turnId, {
-        resolve: (completion) => {
-          clearTimeout(timeout)
-          resolve(completion)
-        },
-        reject: (error) => {
-          clearTimeout(timeout)
-          reject(error)
-        }
-      })
-    })
-  }
-
   private handleNotification(notification: JsonRpcNotification): void {
+    const envelope: AppServerNotification = {
+      hostId: this.hostId,
+      method: notification.method,
+      params: notification.params
+    }
     this.setStatus({
       notificationCount: this.status.notificationCount + 1,
-      lastNotification: notification
+      lastNotification: envelope
     })
-
-    if (notification.method === 'turn/completed' || notification.method === 'turn/failed') {
-      const params = notification.params as Partial<TurnCompletion> | undefined
-      if (!params?.turnId || !params.threadId) return
-
-      const completion: TurnCompletion = {
-        threadId: params.threadId,
-        turnId: params.turnId,
-        output: params.output,
-        error: params.error
-      }
-      const pending = this.pendingTurns.get(params.turnId)
-      if (pending) {
-        this.pendingTurns.delete(params.turnId)
-        pending.resolve(completion)
-      } else {
-        this.completedTurns.set(params.turnId, completion)
-      }
-    }
+    for (const listener of this.notificationListeners) listener(envelope)
   }
 
   private requireClient(): AppServerRpcClient {
     if (!this.client) throw new Error('dasclaw-app-server client is not started')
     return this.client
+  }
+
+  private assertHostRegistered(hostId: string): void {
+    if (hostId !== this.hostId) {
+      throw new Error(`No app-server connection registered for host ${hostId}`)
+    }
   }
 
   private fail(error: unknown): void {
@@ -230,14 +266,218 @@ export class AppServerManager {
     })
   }
 
-  private rejectPendingTurns(error: Error): void {
-    for (const pending of this.pendingTurns.values()) pending.reject(error)
-    this.pendingTurns.clear()
-  }
-
   private setStatus(patch: Partial<AppServerStatus>): void {
     this.status = { ...this.status, ...patch }
     const status = this.getStatus()
     for (const listener of this.statusListeners) listener(status)
+  }
+
+  private async getModelProviderConfig(): Promise<AppServerModelProviderConfig> {
+    if (!this.modelProviderConfig) {
+      this.modelProviderConfig = await this.loadModelProviderConfig()
+    }
+    return this.modelProviderConfig
+  }
+
+  private async getRendererModelProviderConfig(): Promise<RendererModelProviderConfig> {
+    try {
+      return toRendererModelProviderConfig(await this.getModelProviderConfig())
+    } catch (error) {
+      return {
+        models: [],
+        unavailableReason: errorMessage(error)
+      }
+    }
+  }
+
+  private async selectModelForNextTurn(
+    params: unknown
+  ): Promise<ModelProviderSelectForNextTurnResponse> {
+    const modelId = readRequestedModelId(params)
+    const config = await this.getModelProviderConfig()
+    const selectedModel = config.models.find((model) => model.modelId === modelId)
+    if (!selectedModel) {
+      throw new Error(`Unknown modelProvider modelId: ${modelId}`)
+    }
+
+    const response = await this.requireClient().request<ModelProviderSelectForNextTurnResponse>(
+      'modelProvider/selectForNextTurn',
+      { modelId }
+    )
+    if (response.selectedModelId !== selectedModel.modelId) {
+      throw new Error(
+        `app-server acknowledged unexpected selected modelId: ${response.selectedModelId}`
+      )
+    }
+
+    this.modelProviderConfig = {
+      ...config,
+      selectedModel
+    }
+    return response
+  }
+}
+
+export function createModelProviderConfigLoader(
+  options: {
+    adminBackendUrl?: string
+    fetchImpl?: typeof fetch
+    timeoutMs?: number
+    userId?: string
+  } = {}
+): ModelProviderConfigLoader {
+  const adminBackendUrl =
+    options.adminBackendUrl?.trim() ||
+    process.env.ADMIN_BACKEND_URL?.trim() ||
+    DEFAULT_ADMIN_BACKEND_URL
+  const fetchImpl = options.fetchImpl ?? fetch
+  const timeoutMs = options.timeoutMs ?? DEFAULT_MODEL_PROVIDER_FETCH_TIMEOUT_MS
+  const userId = options.userId?.trim() || undefined
+
+  return async () => {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), timeoutMs)
+
+    try {
+      const response = await fetchImpl(clientModelsUrl(adminBackendUrl, userId), {
+        method: 'GET',
+        signal: controller.signal
+      })
+      if (!response.ok) {
+        throw new ModelProviderConfigError(
+          `admin backend /api/client-models returned HTTP ${response.status}`
+        )
+      }
+
+      return normalizeAdminClientModels(await response.json())
+    } catch (error) {
+      if (error instanceof ModelProviderConfigError) throw error
+      throw new ModelProviderConfigError(
+        `failed to fetch admin backend /api/client-models: ${errorMessage(error)}`
+      )
+    } finally {
+      clearTimeout(timeout)
+    }
+  }
+}
+
+export function clientModelsUrl(adminBackendUrl: string, userId?: string): string {
+  const base = adminBackendUrl.trim().replace(/\/+$/, '') || DEFAULT_ADMIN_BACKEND_URL
+  const url = new URL(`${base}/api/client-models`)
+  if (userId?.trim()) url.searchParams.set('user_id', userId.trim())
+  return url.toString()
+}
+
+export function normalizeAdminClientModels(body: unknown): AppServerModelProviderConfig {
+  if (!Array.isArray(body) || body.length === 0) {
+    throw new ModelProviderConfigError('admin backend /api/client-models returned no models')
+  }
+
+  const seenModelIds = new Set<string>()
+  const models = body.map((value, index) => normalizeAdminClientModel(value, index))
+  for (const model of models) {
+    if (seenModelIds.has(model.runtime.modelId)) {
+      throw new ModelProviderConfigError(
+        `admin backend /api/client-models returned duplicate model_id: ${model.runtime.modelId}`
+      )
+    }
+    seenModelIds.add(model.runtime.modelId)
+  }
+
+  const selectedModel = models.find((model) => model.isDefault)?.runtime ?? models[0].runtime
+  return {
+    models: models.map((model) => model.runtime),
+    selectedModel
+  }
+}
+
+type NormalizedAdminClientModel = {
+  runtime: AppServerClientModelConfig
+  isDefault: boolean
+}
+
+function normalizeAdminClientModel(value: unknown, index: number): NormalizedAdminClientModel {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new ModelProviderConfigError(`model[${index}] must be an object`)
+  }
+
+  const raw = value as Partial<AdminClientModelConfig>
+  const modelId = requiredString(raw.model_id, `model[${index}].model_id`)
+  const displayName = requiredString(raw.display_name, `model[${index}].display_name`)
+  const provider = requiredString(raw.provider, `model[${index}].provider`)
+  const apiBaseUrl = requiredString(raw.api_base_url, `model[${index}].api_base_url`)
+  const apiKey = requiredString(raw.api_key, `model[${index}].api_key`)
+  const apiFormat = optionalString(raw.api_format)?.trim() || 'openai'
+  const source = optionalString(raw.source)?.trim() || 'admin'
+  const description = optionalString(raw.description)?.trim()
+
+  return {
+    runtime: {
+      modelId,
+      displayName,
+      ...(description ? { description } : {}),
+      provider,
+      apiBaseUrl,
+      apiKey,
+      apiFormat,
+      source,
+      capabilities: normalizeCapabilities(raw.capabilities)
+    },
+    isDefault: raw.is_default === true
+  }
+}
+
+function requiredString(value: unknown, field: string): string {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new ModelProviderConfigError(`${field} is required`)
+  }
+  return value.trim()
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
+}
+
+function normalizeCapabilities(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is string => typeof item === 'string')
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function readRequestedModelId(params: unknown): string {
+  if (!params || typeof params !== 'object' || Array.isArray(params)) {
+    throw new Error('modelProvider/selectForNextTurn requires params')
+  }
+
+  const modelId = (params as { modelId?: unknown }).modelId
+  if (typeof modelId !== 'string' || modelId.trim() === '') {
+    throw new Error('modelProvider/selectForNextTurn requires a non-empty modelId')
+  }
+  return modelId.trim()
+}
+
+function toRendererModelProviderConfig(
+  config: AppServerModelProviderConfig
+): RendererModelProviderConfig {
+  return {
+    models: config.models.map(toRendererClientModelConfig),
+    selectedModelId: config.selectedModel.modelId
+  }
+}
+
+function toRendererClientModelConfig(model: AppServerClientModelConfig): RendererClientModelConfig {
+  return {
+    modelId: model.modelId,
+    displayName: model.displayName ?? model.modelId,
+    ...(model.description ? { description: model.description } : {}),
+    provider: model.provider,
+    apiBaseUrl: model.apiBaseUrl,
+    apiFormat: model.apiFormat,
+    source: model.source ?? 'admin',
+    capabilities: model.capabilities,
+    apiKeyConfigured: model.apiKey.trim() !== ''
   }
 }

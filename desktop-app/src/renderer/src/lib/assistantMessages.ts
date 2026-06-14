@@ -4,10 +4,14 @@ import type {
   ThreadMessage,
   ThreadUserMessage
 } from '@assistant-ui/react'
+import type { RendererModelProviderConfig } from '../../../shared/appServerApi'
 
 export type AssistantModelOption = {
   id: string
   name: string
+  description?: string
+  disabled?: boolean
+  keywords?: readonly string[]
 }
 
 export const defaultAssistantModelId = 'dasclaw-default'
@@ -17,6 +21,21 @@ export const assistantModelOptions: AssistantModelOption[] = [
   { id: 'dasclaw-fast', name: 'Dasclaw Fast' },
   { id: 'dasclaw-deep', name: 'Dasclaw Deep' }
 ]
+
+export function modelOptionsFromProviderConfig(
+  config: RendererModelProviderConfig
+): AssistantModelOption[] {
+  return config.models.map((model) => {
+    const isConfigured = model.apiKeyConfigured
+    return {
+      id: model.modelId,
+      name: model.displayName,
+      description: model.description ?? (isConfigured ? undefined : 'API Key 未配置'),
+      ...(isConfigured ? {} : { disabled: true }),
+      keywords: [model.provider, model.source].filter(Boolean)
+    }
+  })
+}
 
 export function initialAssistantMessages(): ThreadMessage[] {
   return []

@@ -1,15 +1,18 @@
 // @vitest-environment jsdom
 
-import { act, createElement } from 'react'
+import { act, createElement, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { ModelContext } from '@assistant-ui/react'
+import type { AppendMessage, ModelContext } from '@assistant-ui/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AppServerNotification } from '../../../shared/appServerApi'
+import type { AppServerModelSelectorState } from '../hooks/useDasclawAssistantRuntime'
 
 type ModelContextRegistration = {
   getModelContext: () => ModelContext
 }
 
 type ExternalStoreAdapterCapture = {
+  onNew?: (message: AppendMessage) => Promise<void>
   onEdit?: unknown
 }
 
@@ -38,7 +41,10 @@ vi.mock('@assistant-ui/react', async () => {
 })
 
 import { ModelSelector } from '../components/assistant-ui'
-import { useDasclawAssistantRuntime } from '../hooks/useDasclawAssistantRuntime'
+import {
+  useAppServerModelSelectorState,
+  useDasclawAssistantRuntime
+} from '../hooks/useDasclawAssistantRuntime'
 
 import {
   assistantModelOptions,
@@ -46,6 +52,7 @@ import {
   defaultAssistantModelId,
   extractTextFromAppendMessage,
   initialAssistantMessages,
+  modelOptionsFromProviderConfig,
   userMessage
 } from './assistantMessages'
 
@@ -82,6 +89,34 @@ describe('assistant-ui message helpers', () => {
 
   it('defines a selectable default assistant model', () => {
     expect(assistantModelOptions.some((model) => model.id === defaultAssistantModelId)).toBe(true)
+  })
+
+  it('marks models without configured API keys as disabled options', () => {
+    expect(
+      modelOptionsFromProviderConfig({
+        models: [
+          {
+            modelId: 'missing-key',
+            displayName: 'Missing Key',
+            provider: 'openai',
+            apiBaseUrl: 'https://api.test/v1',
+            apiFormat: 'openai',
+            source: 'admin',
+            capabilities: ['chat'],
+            apiKeyConfigured: false
+          }
+        ],
+        selectedModelId: 'missing-key'
+      })
+    ).toEqual([
+      {
+        id: 'missing-key',
+        name: 'Missing Key',
+        description: 'API Key 未配置',
+        disabled: true,
+        keywords: ['openai', 'admin']
+      }
+    ])
   })
 })
 
@@ -135,10 +170,144 @@ describe('ModelSelector', () => {
   })
 })
 
+describe('useAppServerModelSelectorState', () => {
+  let container: HTMLDivElement
+  let root: ReturnType<typeof createRoot>
+  let latestState: AppServerModelSelectorState | undefined
+  let requestMock: ReturnType<typeof vi.fn>
+
+  function ModelSelectorStateProbe(): null {
+    const state = useAppServerModelSelectorState()
+    useEffect(() => {
+      latestState = state
+    }, [state])
+    return null
+  }
+
+  beforeEach(() => {
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    latestState = undefined
+    requestMock = vi.fn(async (method: string, params?: unknown) => {
+      if (method === 'modelProvider/list') {
+        return {
+          models: [
+            {
+              modelId: 'server-gpt',
+              displayName: 'Server GPT',
+              description: 'From admin backend',
+              provider: 'openai',
+              apiBaseUrl: 'https://api.test/v1',
+              apiFormat: 'openai',
+              source: 'admin',
+              capabilities: ['chat'],
+              apiKeyConfigured: true
+            },
+            {
+              modelId: 'server-next',
+              displayName: 'Server Next',
+              provider: 'openai',
+              apiBaseUrl: 'https://api.test/v1',
+              apiFormat: 'openai',
+              source: 'admin',
+              capabilities: ['chat'],
+              apiKeyConfigured: true
+            }
+          ],
+          selectedModelId: 'server-gpt'
+        }
+      }
+      if (method === 'modelProvider/selectForNextTurn') {
+        expect(params).toEqual({ modelId: 'server-next' })
+        return { selectedModelId: 'server-next' }
+      }
+      throw new Error(`unexpected method ${method}`)
+    })
+    window.desktopAppServer = {
+      request: requestMock as Window['desktopAppServer']['request'],
+      stop: vi.fn().mockResolvedValue(undefined),
+      getStatus: vi.fn().mockResolvedValue(undefined),
+      checkHealth: vi.fn().mockResolvedValue(undefined),
+      onStatusChange: vi.fn(() => vi.fn()),
+      onNotification: vi.fn(() => vi.fn())
+    }
+  })
+
+  afterEach(() => {
+    act(() => {
+      root.unmount()
+    })
+    container.remove()
+  })
+
+  it('loads app-server models for ModelSelector and sends selection changes back', async () => {
+    await act(async () => {
+      root.render(createElement(ModelSelectorStateProbe))
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(latestState?.models).toEqual([
+      {
+        id: 'server-gpt',
+        name: 'Server GPT',
+        description: 'From admin backend',
+        keywords: ['openai', 'admin']
+      },
+      {
+        id: 'server-next',
+        name: 'Server Next',
+        description: undefined,
+        keywords: ['openai', 'admin']
+      }
+    ])
+    expect(latestState?.value).toBe('server-gpt')
+
+    await act(async () => {
+      await latestState?.onValueChange('server-next')
+    })
+
+    expect(requestMock.mock.calls.map(([method]) => method)).toEqual([
+      'modelProvider/list',
+      'modelProvider/selectForNextTurn'
+    ])
+    expect(latestState?.value).toBe('server-next')
+  })
+
+  it('shows an unavailable model option when app-server reports model config load failure', async () => {
+    requestMock.mockResolvedValueOnce({
+      models: [],
+      unavailableReason: 'failed to fetch admin backend /api/client-models: fetch failed'
+    })
+
+    await act(async () => {
+      root.render(createElement(ModelSelectorStateProbe))
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(latestState?.models).toEqual([
+      {
+        id: 'model-provider-unavailable',
+        name: '模型配置不可用',
+        description: 'failed to fetch admin backend /api/client-models: fetch failed',
+        disabled: true
+      }
+    ])
+    expect(latestState?.value).toBeUndefined()
+  })
+})
+
 describe('useDasclawAssistantRuntime', () => {
   let container: HTMLDivElement
   let root: ReturnType<typeof createRoot>
   let removeStatusListener: () => void
+  let removeNotificationListener: () => void
+  let notificationListener: ((notification: AppServerNotification) => void) | undefined
+  let requestMock: ReturnType<typeof vi.fn>
 
   function RuntimeProbe(): null {
     useDasclawAssistantRuntime()
@@ -151,15 +320,36 @@ describe('useDasclawAssistantRuntime', () => {
     root = createRoot(container)
     runtimeAdapterCapture.latest = undefined
     removeStatusListener = vi.fn()
+    removeNotificationListener = vi.fn()
+    notificationListener = undefined
+    requestMock = vi.fn(async (method: string) => {
+      if (method === 'thread/start') return { threadId: 'thread-1' }
+      if (method === 'turn/start') {
+        queueMicrotask(() => {
+          notificationListener?.({
+            hostId: 'local',
+            method: 'turn/completed',
+            params: {
+              threadId: 'thread-1',
+              turnId: 'turn-1',
+              output: 'ok'
+            }
+          })
+        })
+        return { turnId: 'turn-1' }
+      }
+      throw new Error(`unexpected method ${method}`)
+    })
     window.desktopAppServer = {
-      start: vi.fn().mockResolvedValue(undefined),
+      request: requestMock as Window['desktopAppServer']['request'],
       stop: vi.fn().mockResolvedValue(undefined),
       getStatus: vi.fn().mockResolvedValue(undefined),
       checkHealth: vi.fn().mockResolvedValue(undefined),
       onStatusChange: vi.fn(() => removeStatusListener),
-      sendMessage: vi
-        .fn()
-        .mockResolvedValue({ threadId: 'thread-1', turnId: 'turn-1', output: 'ok' })
+      onNotification: vi.fn((callback) => {
+        notificationListener = callback
+        return removeNotificationListener
+      })
     }
   })
 
@@ -176,5 +366,30 @@ describe('useDasclawAssistantRuntime', () => {
     })
 
     expect(runtimeAdapterCapture.latest?.onEdit).toEqual(expect.any(Function))
+  })
+
+  it('sends renderer app-server requests through the request envelope', async () => {
+    act(() => {
+      root.render(createElement(RuntimeProbe))
+    })
+
+    await act(async () => {
+      await runtimeAdapterCapture.latest?.onNew?.({
+        role: 'user',
+        content: [{ type: 'text', text: 'ping' }],
+        attachments: [],
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        parentId: null,
+        sourceId: null,
+        runConfig: undefined,
+        metadata: { custom: {} }
+      })
+    })
+
+    expect(requestMock.mock.calls.map(([method]) => method)).toEqual(['thread/start', 'turn/start'])
+    expect(requestMock.mock.calls[1][1]).toEqual({
+      threadId: 'thread-1',
+      input: [{ type: 'text', text: 'ping' }]
+    })
   })
 })

@@ -26,9 +26,13 @@ type PrimitiveProps = {
   className?: string
 }
 
-vi.mock('./hooks/useDasclawAssistantRuntime', () => ({
-  useDasclawAssistantRuntime: () => ({ runtime: {} })
-}))
+vi.mock('./hooks/useDasclawAssistantRuntime', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./hooks/useDasclawAssistantRuntime')>()
+  return {
+    ...actual,
+    useDasclawAssistantRuntime: () => ({ runtime: {} })
+  }
+})
 
 vi.mock('@assistant-ui/react-lexical', () => ({
   LexicalComposerInput: ({ placeholder, directiveChip, className }: PrimitiveProps) => (

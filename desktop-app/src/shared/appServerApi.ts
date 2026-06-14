@@ -8,6 +8,7 @@ export type AppServerRunState =
 
 export type AppServerStatus = {
   state: AppServerRunState
+  hostId: string
   binary: string
   pid?: number
   startedAt?: string
@@ -18,17 +19,47 @@ export type AppServerStatus = {
   threadId?: string
 }
 
-export type ChatSendResponse = {
-  threadId: string
-  turnId: string
-  output: string
+export type AppServerRequestOptions = {
+  hostId?: string
+}
+
+export type AppServerNotification = {
+  hostId: string
+  method: string
+  params?: unknown
+}
+
+export type RendererClientModelConfig = {
+  modelId: string
+  displayName: string
+  description?: string
+  provider: string
+  apiBaseUrl: string
+  apiFormat: string
+  source: string
+  capabilities: string[]
+  apiKeyConfigured: boolean
+}
+
+export type RendererModelProviderConfig = {
+  models: RendererClientModelConfig[]
+  selectedModelId?: string
+  unavailableReason?: string
+}
+
+export type ModelProviderSelectForNextTurnResponse = {
+  selectedModelId: string
 }
 
 export type DesktopAppServerApi = {
-  start(): Promise<AppServerStatus>
+  request<T = unknown>(
+    method: string,
+    params?: unknown,
+    options?: AppServerRequestOptions
+  ): Promise<T>
   stop(): Promise<AppServerStatus>
   getStatus(): Promise<AppServerStatus>
   checkHealth(): Promise<AppServerStatus>
-  sendMessage(prompt: string): Promise<ChatSendResponse>
   onStatusChange(callback: (status: AppServerStatus) => void): () => void
+  onNotification(callback: (notification: AppServerNotification) => void): () => void
 }

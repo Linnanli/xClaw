@@ -1,4 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 
 export type JsonRpcId = number | string
@@ -24,9 +26,96 @@ export type AppServerRpcClient = {
   dispose(): void
 }
 
+export type AppServerLaunchOptions = {
+  command: string
+  args: string[]
+  cwd?: string
+  displayBinary: string
+  env?: NodeJS.ProcessEnv
+}
+
 type PendingRequest = {
   resolve: (value: unknown) => void
   reject: (error: Error) => void
+}
+
+type DefaultAppServerLaunchOptionsInput = {
+  env?: NodeJS.ProcessEnv
+  isPackaged?: boolean
+  mainDir?: string
+  platform?: NodeJS.Platform
+  resourcesPath?: string
+}
+
+const BUNDLED_APP_SERVER_DIR = 'dasclaw-app-server'
+const CARGO_APP_SERVER_ARGS = [
+  'run',
+  '--quiet',
+  '-p',
+  'dasclaw_app_server',
+  '--bin',
+  'dasclaw-app-server'
+]
+
+export function resolveBundledAppServerBinary(
+  resourcesPath: string,
+  platform: NodeJS.Platform = process.platform
+): string | null {
+  const binaryName = platform === 'win32' ? 'dasclaw-app-server.exe' : 'dasclaw-app-server'
+  const candidates = [
+    join(resourcesPath, BUNDLED_APP_SERVER_DIR, binaryName),
+    join(resourcesPath, BUNDLED_APP_SERVER_DIR, 'bin', binaryName)
+  ]
+
+  return candidates.find((candidate) => existsSync(candidate)) ?? null
+}
+
+export function resolveDefaultAppServerLaunchOptions(
+  options: DefaultAppServerLaunchOptionsInput = {}
+): AppServerLaunchOptions {
+  const env = options.env ?? process.env
+  const explicitBinary = env.DASCLAW_APP_SERVER_BIN
+  if (explicitBinary) {
+    return {
+      command: explicitBinary,
+      args: [],
+      displayBinary: explicitBinary,
+      env
+    }
+  }
+
+  const platform = options.platform ?? process.platform
+  if (options.isPackaged) {
+    const resourcesPath = options.resourcesPath ?? process.resourcesPath
+    const bundledBinary = resolveBundledAppServerBinary(resourcesPath, platform)
+    if (!bundledBinary) {
+      throw new Error(
+        `Packaged dasclaw-app-server binary was not found under ${join(
+          resourcesPath,
+          BUNDLED_APP_SERVER_DIR
+        )}; set DASCLAW_APP_SERVER_BIN to override`
+      )
+    }
+
+    return {
+      command: bundledBinary,
+      args: [],
+      displayBinary: bundledBinary,
+      env
+    }
+  }
+
+  return {
+    command: 'cargo',
+    args: [...CARGO_APP_SERVER_ARGS],
+    cwd: resolveDasclawRepoRoot(options.mainDir ?? __dirname, env),
+    displayBinary: `cargo ${CARGO_APP_SERVER_ARGS.join(' ')}`,
+    env
+  }
+}
+
+function resolveDasclawRepoRoot(mainDir: string, env: NodeJS.ProcessEnv): string {
+  return env.DASCLAW_REPO_ROOT ?? resolve(mainDir, '..', '..', '..')
 }
 
 export function buildJsonRpcRequestLine(id: JsonRpcId, method: string, params?: unknown): string {
@@ -86,10 +175,21 @@ export class ChildProcessAppServerRpcClient implements AppServerRpcClient {
   private readonly child: ChildProcessWithoutNullStreams
   private stderr = ''
 
-  constructor(binary: string) {
-    this.child = spawn(binary, [], {
+  constructor(launchOptions: string | AppServerLaunchOptions) {
+    const launch =
+      typeof launchOptions === 'string'
+        ? {
+            command: launchOptions,
+            args: [],
+            displayBinary: launchOptions,
+            env: process.env
+          }
+        : launchOptions
+
+    this.child = spawn(launch.command, launch.args, {
+      cwd: launch.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: process.env
+      env: launch.env ?? process.env
     })
 
     const stdout = createInterface({ input: this.child.stdout })

@@ -15,11 +15,12 @@
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
+    "build:dasclaw-app-server": "node scripts/build-dasclaw-app-server.mjs",
     "postinstall": "electron-builder install-app-deps",
-    "build:unpack": "npm run build && electron-builder --dir",
-    "build:win": "npm run build && electron-builder --win",
-    "build:mac": "electron-vite build && electron-builder --mac",
-    "build:linux": "electron-vite build && electron-builder --linux"
+    "build:unpack": "npm run build && npm run build:dasclaw-app-server && electron-builder --dir",
+    "build:win": "npm run build && npm run build:dasclaw-app-server && electron-builder --win",
+    "build:mac": "npm run build && npm run build:dasclaw-app-server && electron-builder --mac",
+    "build:linux": "npm run build && npm run build:dasclaw-app-server && electron-builder --linux"
   },
   "dependencies": {
     "@assistant-ui/react": "^0.14.18",
