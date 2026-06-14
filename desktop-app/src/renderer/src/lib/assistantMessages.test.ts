@@ -9,6 +9,14 @@ type ModelContextRegistration = {
   getModelContext: () => ModelContext
 }
 
+type ExternalStoreAdapterCapture = {
+  onEdit?: unknown
+}
+
+const runtimeAdapterCapture = vi.hoisted(() => ({
+  latest: undefined as ExternalStoreAdapterCapture | undefined
+}))
+
 const modelContextRegister = vi.fn<(registration: ModelContextRegistration) => () => void>(() =>
   vi.fn()
 )
@@ -17,6 +25,10 @@ vi.mock('@assistant-ui/react', async () => {
   const actual = await vi.importActual<typeof import('@assistant-ui/react')>('@assistant-ui/react')
   return {
     ...actual,
+    useExternalStoreRuntime: (adapter: ExternalStoreAdapterCapture) => {
+      runtimeAdapterCapture.latest = adapter
+      return {}
+    },
     useAui: () => ({
       modelContext: () => ({
         register: modelContextRegister
@@ -26,6 +38,7 @@ vi.mock('@assistant-ui/react', async () => {
 })
 
 import { ModelSelector } from '../components/assistant-ui'
+import { useDasclawAssistantRuntime } from '../hooks/useDasclawAssistantRuntime'
 
 import {
   assistantModelOptions,
@@ -119,5 +132,49 @@ describe('ModelSelector', () => {
         modelName: assistantModelOptions[1].id
       }
     })
+  })
+})
+
+describe('useDasclawAssistantRuntime', () => {
+  let container: HTMLDivElement
+  let root: ReturnType<typeof createRoot>
+  let removeStatusListener: () => void
+
+  function RuntimeProbe(): null {
+    useDasclawAssistantRuntime()
+    return null
+  }
+
+  beforeEach(() => {
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    runtimeAdapterCapture.latest = undefined
+    removeStatusListener = vi.fn()
+    window.desktopAppServer = {
+      start: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
+      getStatus: vi.fn().mockResolvedValue(undefined),
+      checkHealth: vi.fn().mockResolvedValue(undefined),
+      onStatusChange: vi.fn(() => removeStatusListener),
+      sendMessage: vi
+        .fn()
+        .mockResolvedValue({ threadId: 'thread-1', turnId: 'turn-1', output: 'ok' })
+    }
+  })
+
+  afterEach(() => {
+    act(() => {
+      root.unmount()
+    })
+    container.remove()
+  })
+
+  it('enables assistant-ui message editing on the external store runtime', () => {
+    act(() => {
+      root.render(createElement(RuntimeProbe))
+    })
+
+    expect(runtimeAdapterCapture.latest?.onEdit).toEqual(expect.any(Function))
   })
 })

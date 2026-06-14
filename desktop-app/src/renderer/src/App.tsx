@@ -1,15 +1,19 @@
 import {
   ActionBarPrimitive,
   AssistantRuntimeProvider,
+  AttachmentPrimitive,
   AuiIf,
   BranchPickerPrimitive,
   ComposerPrimitive,
   type AssistantState,
   MessagePrimitive,
+  ThreadListItemMorePrimitive,
   ThreadListItemPrimitive,
   ThreadListPrimitive,
   ThreadPrimitive,
   type Unstable_DirectiveFormatter,
+  type QuoteMessagePartProps,
+  type TextMessagePartProps,
   type Unstable_SlashCommand,
   type Unstable_TriggerItem,
   unstable_defaultDirectiveFormatter,
@@ -21,6 +25,7 @@ import {
 import { LexicalComposerInput, type DirectiveChipProps } from '@assistant-ui/react-lexical'
 import {
   ActivityIcon,
+  ArchiveIcon,
   ArrowDownIcon,
   ArrowUpIcon,
   CheckIcon,
@@ -29,12 +34,15 @@ import {
   CopyIcon,
   FileTextIcon,
   HelpCircleIcon,
+  MoreHorizontalIcon,
   PanelLeftIcon,
   PencilIcon,
   PlusIcon,
+  QuoteIcon,
   RefreshCwIcon,
   SlashIcon,
   SquareIcon,
+  TrashIcon,
   WrenchIcon
 } from 'lucide-react'
 import {
@@ -231,11 +239,49 @@ function ThreadList(): React.JSX.Element {
 
 function ThreadListItem(): React.JSX.Element {
   return (
-    <ThreadListItemPrimitive.Root className="flex min-h-8 items-center rounded-md transition-colors hover:bg-muted data-[active]:bg-muted">
-      <ThreadListItemPrimitive.Trigger className="min-w-0 flex-1 truncate px-3 text-left text-sm font-medium text-foreground outline-none">
-        <ThreadListItemPrimitive.Title fallback="New Chat" />
+    <ThreadListItemPrimitive.Root className="group flex min-h-8 items-center gap-1 rounded-md transition-colors hover:bg-muted focus-visible:bg-muted data-[active]:bg-muted">
+      <ThreadListItemPrimitive.Trigger className="flex min-w-0 flex-1 items-center px-3 text-left text-sm font-medium text-foreground outline-none">
+        <span className="min-w-0 flex-1 truncate">
+          <ThreadListItemPrimitive.Title fallback="New Chat" />
+        </span>
       </ThreadListItemPrimitive.Trigger>
+      <ThreadListItemActions />
     </ThreadListItemPrimitive.Root>
+  )
+}
+
+function ThreadListItemActions(): React.JSX.Element {
+  return (
+    <ThreadListItemMorePrimitive.Root>
+      <ThreadListItemMorePrimitive.Trigger asChild>
+        <IconButton
+          className="mr-1.5 size-6 opacity-0 transition-opacity group-hover:opacity-100 group-data-[active]:opacity-100 data-[state=open]:bg-accent data-[state=open]:opacity-100"
+          label="更多线程选项"
+          title="更多线程选项"
+        >
+          <MoreHorizontalIcon className="size-3.5" />
+        </IconButton>
+      </ThreadListItemMorePrimitive.Trigger>
+      <ThreadListItemMorePrimitive.Content
+        align="start"
+        className="z-50 min-w-32 overflow-hidden rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+        side="right"
+        sideOffset={6}
+      >
+        <ThreadListItemPrimitive.Archive asChild>
+          <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-sm outline-none select-none hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground">
+            <ArchiveIcon className="size-4" />
+            Archive
+          </ThreadListItemMorePrimitive.Item>
+        </ThreadListItemPrimitive.Archive>
+        <ThreadListItemPrimitive.Delete asChild>
+          <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-sm text-destructive outline-none select-none hover:bg-destructive/10 hover:text-destructive focus:bg-destructive/10 focus:text-destructive">
+            <TrashIcon className="size-4" />
+            Delete
+          </ThreadListItemMorePrimitive.Item>
+        </ThreadListItemPrimitive.Delete>
+      </ThreadListItemMorePrimitive.Content>
+    </ThreadListItemMorePrimitive.Root>
   )
 }
 
@@ -295,7 +341,11 @@ function ChatThread(): React.JSX.Element {
         </AuiIf>
         <div data-slot="aui_message-group" className="mb-14 flex flex-col gap-y-6 empty:hidden">
           <ThreadPrimitive.Messages>
-            {({ message }) => (message.role === 'user' ? <UserMessage /> : <AssistantMessage />)}
+            {({ message }) => {
+              if (message.composer.isEditing) return <EditComposer />
+              if (message.role === 'user') return <UserMessage />
+              return <AssistantMessage />
+            }}
           </ThreadPrimitive.Messages>
         </div>
         <ThreadPrimitive.ViewportFooter
@@ -459,22 +509,145 @@ function UserMessage(): React.JSX.Element {
       data-role="user"
       className="mx-auto grid w-full max-w-(--thread-max-width) auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 animate-in fade-in slide-in-from-bottom-1 [&:where(>*)]:col-start-2"
     >
-      <div
-        data-slot="aui_user-message-content"
-        className="col-start-2 row-start-1 max-w-[min(85%,560px)] rounded-xl bg-muted px-4 py-2 text-foreground wrap-break-word whitespace-pre-wrap empty:hidden"
+      <UserMessageAttachments />
+
+      <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
+        <div className="aui-user-message-content peer rounded-xl bg-muted px-4 py-2 text-foreground wrap-break-word empty:hidden">
+          <MessagePrimitive.Quote>{(quote) => <QuoteBlock {...quote} />}</MessagePrimitive.Quote>
+          <MessagePrimitive.Parts components={{ Text: DirectiveText }} />
+        </div>
+        <div className="aui-user-action-bar-wrapper absolute top-1/2 left-0 -translate-x-full -translate-y-1/2 pr-2 peer-empty:hidden">
+          <UserActionBar />
+        </div>
+      </div>
+
+      <BranchPicker
+        data-slot="aui_user-branch-picker"
+        className="col-span-full col-start-1 row-start-3 -mr-1 justify-end"
+      />
+    </MessagePrimitive.Root>
+  )
+}
+
+function UserMessageAttachments(): React.JSX.Element {
+  return (
+    <div className="aui-user-message-attachments-end col-span-full col-start-1 row-start-1 flex w-full flex-row justify-end gap-2">
+      <MessagePrimitive.Attachments>{() => <UserMessageAttachment />}</MessagePrimitive.Attachments>
+    </div>
+  )
+}
+
+function UserMessageAttachment(): React.JSX.Element {
+  return (
+    <AttachmentPrimitive.Root className="aui-attachment-root relative">
+      <div className="aui-attachment-tile flex size-14 items-center justify-center overflow-hidden rounded-md border bg-muted text-muted-foreground">
+        <AttachmentPrimitive.unstable_Thumb className="size-full object-cover" />
+        <FileTextIcon className="size-6" />
+      </div>
+      <span className="sr-only">
+        <AttachmentPrimitive.Name />
+      </span>
+    </AttachmentPrimitive.Root>
+  )
+}
+
+function QuoteBlock({ text }: QuoteMessagePartProps): React.JSX.Element {
+  return (
+    <div data-slot="quote-block" className="mb-2 flex items-start gap-1.5">
+      <QuoteIcon
+        data-slot="quote-block-icon"
+        className="mt-0.5 size-3 shrink-0 text-muted-foreground/60"
+      />
+      <p
+        data-slot="quote-block-text"
+        className="line-clamp-2 min-w-0 text-sm text-muted-foreground/80 italic"
       >
-        <MessagePrimitive.Content />
-      </div>
-      <div className="col-start-1 row-start-1 self-center justify-self-end pr-2">
-        <ActionBarPrimitive.Root hideWhenRunning autohide="not-last">
-          <ActionBarPrimitive.Edit asChild>
-            <IconButton label="编辑" title="编辑">
-              <PencilIcon className="size-4" />
-            </IconButton>
-          </ActionBarPrimitive.Edit>
-        </ActionBarPrimitive.Root>
-      </div>
-      <BranchPicker className="col-span-full justify-end pr-1" />
+        {text}
+      </p>
+    </div>
+  )
+}
+
+function DirectiveText({ text }: TextMessagePartProps): React.JSX.Element {
+  const segments = unstable_defaultDirectiveFormatter.parse(text)
+
+  if (segments.length === 1 && segments[0]?.kind === 'text') return <>{text}</>
+
+  return (
+    <>
+      {segments.map((segment, index) => {
+        if (segment.kind === 'text') {
+          return (
+            <span key={index} className="whitespace-pre-wrap">
+              {segment.text}
+            </span>
+          )
+        }
+
+        return (
+          <span
+            key={index}
+            className="aui-directive-chip inline-flex items-baseline rounded-md bg-blue-100 px-1.5 py-0.5 text-[13px] leading-none font-medium text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"
+            data-directive-id={segment.id}
+            data-directive-type={segment.type}
+          >
+            {segment.label}
+          </span>
+        )
+      })}
+    </>
+  )
+}
+
+function UserActionBar(): React.JSX.Element {
+  return (
+    <ActionBarPrimitive.Root
+      hideWhenRunning
+      autohide="not-last"
+      className="aui-user-action-bar-root flex flex-col items-end"
+    >
+      <ActionBarPrimitive.Edit asChild>
+        <IconButton className="aui-user-action-edit" label="编辑" title="编辑">
+          <PencilIcon className="size-4" />
+        </IconButton>
+      </ActionBarPrimitive.Edit>
+    </ActionBarPrimitive.Root>
+  )
+}
+
+function EditComposer(): React.JSX.Element {
+  return (
+    <MessagePrimitive.Root
+      data-slot="aui_edit-composer-wrapper"
+      className="mx-auto flex w-full max-w-(--thread-max-width) flex-col px-2"
+    >
+      <ComposerPrimitive.Unstable_TriggerPopoverRoot>
+        <ComposerPrimitive.Root className="aui-edit-composer-root ml-auto flex w-full max-w-[85%] flex-col rounded-3xl border border-border/60 bg-background shadow-[0_4px_16px_-8px_rgba(0,0,0,0.08),0_1px_2px_rgba(0,0,0,0.04)] dark:border-muted-foreground/15 dark:bg-muted/30 dark:shadow-none">
+          <LexicalComposerInput
+            autoFocus
+            directiveChip={DirectiveChip}
+            className="aui-edit-composer-input min-h-14 w-full resize-none bg-transparent px-4 pt-3 pb-1 text-base text-foreground outline-none [&_.aui-directive-chip]:inline-flex [&_.aui-directive-chip]:items-baseline [&_.aui-directive-chip]:gap-1 [&_.aui-directive-chip]:rounded-md [&_.aui-directive-chip]:bg-blue-100 [&_.aui-directive-chip]:px-1.5 [&_.aui-directive-chip]:py-0.5 [&_.aui-directive-chip]:text-[13px] [&_.aui-directive-chip]:leading-none [&_.aui-directive-chip]:font-medium [&_.aui-directive-chip]:text-blue-700 [&_.aui-directive-chip-icon]:self-center [&_.aui-lexical-input]:min-h-lh [&_.aui-lexical-input]:outline-none dark:[&_.aui-directive-chip]:bg-blue-900/50 dark:[&_.aui-directive-chip]:text-blue-300"
+          />
+          <div className="aui-edit-composer-footer mx-2.5 mb-2.5 flex items-center gap-1.5 self-end">
+            <ComposerPrimitive.Cancel asChild>
+              <button
+                className="h-8 rounded-full px-3.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                type="button"
+              >
+                取消
+              </button>
+            </ComposerPrimitive.Cancel>
+            <ComposerPrimitive.Send asChild>
+              <button
+                className="h-8 rounded-full bg-primary px-3.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+                type="button"
+              >
+                更新
+              </button>
+            </ComposerPrimitive.Send>
+          </div>
+        </ComposerPrimitive.Root>
+      </ComposerPrimitive.Unstable_TriggerPopoverRoot>
     </MessagePrimitive.Root>
   )
 }

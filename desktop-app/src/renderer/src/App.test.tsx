@@ -6,9 +6,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
+const threadMessageState = vi.hoisted(() => ({
+  message: {
+    composer: {
+      isEditing: false
+    },
+    role: 'user'
+  }
+}))
+
 type PrimitiveProps = {
   children?: ReactNode | ((value: unknown) => ReactNode)
   asChild?: boolean
+  components?: Record<string, unknown>
   condition?: ((state: unknown) => boolean) | boolean
   char?: string
   placeholder?: string
@@ -85,6 +95,11 @@ vi.mock('@assistant-ui/react', () => {
       Root: primitive('ActionBar.Root')
     },
     AssistantRuntimeProvider: primitive('AssistantRuntimeProvider'),
+    AttachmentPrimitive: {
+      Name: primitive('Attachment.Name'),
+      Root: primitive('Attachment.Root'),
+      unstable_Thumb: primitive('Attachment.Thumb')
+    },
     AuiIf: ({ children, condition }: PrimitiveProps) => {
       const visible = typeof condition === 'function' ? condition(assistantState) : condition
       return visible ? <>{renderChildren(children)}</> : null
@@ -130,14 +145,25 @@ vi.mock('@assistant-ui/react', () => {
       Unstable_TriggerPopoverRoot: primitive('Composer.TriggerPopoverRoot')
     },
     MessagePrimitive: {
+      Attachments: primitive('Message.Attachments'),
       Content: primitive('Message.Content'),
       Error: primitive('Message.Error'),
+      Parts: primitive('Message.Parts'),
+      Quote: primitive('Message.Quote'),
       Root: primitive('Message.Root')
     },
     ThreadListItemPrimitive: {
+      Archive: primitive('ThreadListItem.Archive'),
+      Delete: primitive('ThreadListItem.Delete'),
       Root: primitive('ThreadListItem.Root'),
       Title: primitive('ThreadListItem.Title'),
       Trigger: primitive('ThreadListItem.Trigger')
+    },
+    ThreadListItemMorePrimitive: {
+      Content: primitive('ThreadListItemMore.Content'),
+      Item: primitive('ThreadListItemMore.Item'),
+      Root: primitive('ThreadListItemMore.Root'),
+      Trigger: primitive('ThreadListItemMore.Trigger')
     },
     ThreadListPrimitive: {
       Items: primitive('ThreadList.Items'),
@@ -145,7 +171,11 @@ vi.mock('@assistant-ui/react', () => {
       Root: primitive('ThreadList.Root')
     },
     ThreadPrimitive: {
-      Messages: primitive('Thread.Messages'),
+      Messages: ({ children }: PrimitiveProps) => (
+        <div data-primitive="Thread.Messages">
+          {typeof children === 'function' ? children(threadMessageState) : children}
+        </div>
+      ),
       Root: primitive('Thread.Root'),
       ScrollToBottom: primitive('Thread.ScrollToBottom'),
       Viewport: primitive('Thread.Viewport'),
@@ -177,6 +207,7 @@ describe('App composer', () => {
   let root: Root
 
   beforeEach(() => {
+    threadMessageState.message.composer.isEditing = false
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
@@ -212,5 +243,41 @@ describe('App composer', () => {
     )
     expect(container.querySelector('[data-testid="plain-composer-input"]')).toBeNull()
     expect(triggerChars).toEqual(['/', '@'])
+  })
+
+  it('renders thread list item actions for archive and delete', () => {
+    act(() => {
+      root.render(<App />)
+    })
+
+    expect(container.querySelector('[data-primitive="ThreadListItemMore.Trigger"]')).not.toBeNull()
+    expect(container.querySelector('[data-primitive="ThreadListItem.Archive"]')).not.toBeNull()
+    expect(container.querySelector('[data-primitive="ThreadListItem.Delete"]')).not.toBeNull()
+  })
+
+  it('renders user messages with the assistant-ui base message structure', () => {
+    act(() => {
+      root.render(<App />)
+    })
+
+    expect(container.querySelector('[data-primitive="Message.Attachments"]')).not.toBeNull()
+    expect(container.querySelector('.aui-user-message-content-wrapper')).not.toBeNull()
+    expect(container.querySelector('.aui-user-message-content')).not.toBeNull()
+    expect(container.querySelector('[data-primitive="Message.Quote"]')).not.toBeNull()
+    expect(container.querySelector('[data-primitive="Message.Parts"]')).not.toBeNull()
+    expect(container.querySelector('.aui-user-action-bar-wrapper')).not.toBeNull()
+    expect(container.querySelector('.aui-user-action-bar-root')).not.toBeNull()
+  })
+
+  it('renders the edit composer when a user message enters editing state', () => {
+    threadMessageState.message.composer.isEditing = true
+
+    act(() => {
+      root.render(<App />)
+    })
+
+    expect(container.querySelector('[data-slot="aui_edit-composer-wrapper"]')).not.toBeNull()
+    expect(container.querySelector('.aui-edit-composer-root')).not.toBeNull()
+    expect(container.querySelector('.aui-user-message-content-wrapper')).toBeNull()
   })
 })

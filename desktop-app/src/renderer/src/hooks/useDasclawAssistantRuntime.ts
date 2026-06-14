@@ -72,14 +72,63 @@ export function useDasclawAssistantRuntime(): DasclawAssistantRuntime {
     }
   }, [])
 
+  const onEdit = useCallback(async (message: AppendMessage) => {
+    const prompt = extractTextFromAppendMessage(message)
+    const editedMessageId = message.parentId ?? message.sourceId
+    if (!prompt || !editedMessageId) return
+
+    const pendingId = `assistant-${crypto.randomUUID()}`
+    setMessages((current) => {
+      const editedIndex = current.findIndex((item) => item.id === editedMessageId)
+      if (editedIndex === -1) return current
+
+      return [
+        ...current.slice(0, editedIndex),
+        userMessage(editedMessageId, prompt),
+        assistantMessage(pendingId, 'Dasclaw 正在处理...', { type: 'running' })
+      ]
+    })
+    setIsRunning(true)
+
+    try {
+      const response = await window.desktopAppServer.sendMessage(prompt)
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === pendingId
+            ? assistantMessage(
+                pendingId,
+                response.output || 'dasclaw-app-server 已完成本轮，但没有返回文本输出。'
+              )
+            : item
+        )
+      )
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === pendingId
+            ? assistantMessage(pendingId, `请求失败：${errorMessage}`, {
+                type: 'incomplete',
+                reason: 'error',
+                error: errorMessage
+              })
+            : item
+        )
+      )
+    } finally {
+      setIsRunning(false)
+    }
+  }, [])
+
   const runtime = useExternalStoreRuntime<ThreadMessage>(
     useMemo(
       () => ({
         messages,
         isRunning,
-        onNew
+        onNew,
+        onEdit
       }),
-      [messages, isRunning, onNew]
+      [messages, isRunning, onNew, onEdit]
     )
   )
 
