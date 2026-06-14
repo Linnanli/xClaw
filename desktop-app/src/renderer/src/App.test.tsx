@@ -204,6 +204,12 @@ describe('App composer', () => {
     expect(lexicalInput).not.toBeNull()
     expect(lexicalInput?.getAttribute('data-has-directive-chip')).toBe('true')
     expect(lexicalInput?.getAttribute('data-placeholder')).toContain('@')
+    expect(container.querySelector('[data-slot="aui_composer-shell"]')?.className).toContain(
+      'bg-background'
+    )
+    expect(container.querySelector('[data-slot="aui_composer-shell"]')?.className).toContain(
+      'dark:bg-muted/30'
+    )
     expect(container.querySelector('[data-testid="plain-composer-input"]')).toBeNull()
     expect(triggerChars).toEqual(['/', '@'])
   })
