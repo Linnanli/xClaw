@@ -9,9 +9,16 @@ import {
   ThreadListItemPrimitive,
   ThreadListPrimitive,
   ThreadPrimitive,
+  type Unstable_DirectiveFormatter,
+  type Unstable_SlashCommand,
+  type Unstable_TriggerItem,
+  unstable_defaultDirectiveFormatter,
+  unstable_useMentionAdapter,
+  unstable_useSlashCommandAdapter,
   useAui,
   useAuiState
 } from '@assistant-ui/react'
+import { LexicalComposerInput, type DirectiveChipProps } from '@assistant-ui/react-lexical'
 import {
   ActivityIcon,
   ArrowDownIcon,
@@ -20,13 +27,24 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   CopyIcon,
+  FileTextIcon,
+  HelpCircleIcon,
   PanelLeftIcon,
   PencilIcon,
   PlusIcon,
   RefreshCwIcon,
-  SquareIcon
+  SlashIcon,
+  SquareIcon,
+  WrenchIcon
 } from 'lucide-react'
-import { forwardRef, useState, type ButtonHTMLAttributes, type ReactNode } from 'react'
+import {
+  forwardRef,
+  useState,
+  type ButtonHTMLAttributes,
+  type ComponentPropsWithoutRef,
+  type FC,
+  type ReactNode
+} from 'react'
 
 import { ModelSelector } from './components/assistant-ui'
 import { assistantModelOptions } from './lib/assistantMessages'
@@ -44,6 +62,74 @@ type HeaderProps = {
 
 type IconButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   label: string
+}
+
+type IconComponent = FC<{ className?: string }>
+
+type DirectiveBehaviorProps = {
+  formatter?: Unstable_DirectiveFormatter
+  onInserted?: (item: Unstable_TriggerItem) => void
+}
+
+type ActionBehaviorProps = {
+  formatter?: Unstable_DirectiveFormatter
+  onExecute: (item: Unstable_TriggerItem) => void
+  removeOnExecute?: boolean
+}
+
+type ComposerTriggerPopoverBaseProps = Omit<
+  ComponentPropsWithoutRef<typeof ComposerPrimitive.Unstable_TriggerPopover>,
+  'children'
+> & {
+  backLabel?: string
+  emptyCategoriesLabel?: string
+  emptyItemsLabel?: string
+  fallbackIcon?: IconComponent
+  iconMap?: Record<string, IconComponent>
+}
+
+type ComposerTriggerPopoverProps = ComposerTriggerPopoverBaseProps &
+  (
+    | {
+        action?: never
+        directive: DirectiveBehaviorProps
+      }
+    | {
+        action: ActionBehaviorProps
+        directive?: never
+      }
+  )
+
+const noopSlashCommand = (): void => {}
+
+const slashCommands: readonly Unstable_SlashCommand[] = [
+  {
+    id: 'explain-changes',
+    label: '解释改动',
+    description: '总结当前工作区里的主要变化',
+    icon: 'FileText',
+    execute: noopSlashCommand
+  },
+  {
+    id: 'draft-pr',
+    label: '生成 PR 描述',
+    description: '整理背景、范围和验证信息',
+    icon: 'Pencil',
+    execute: noopSlashCommand
+  },
+  {
+    id: 'review-risks',
+    label: '审查风险',
+    description: '查找潜在回归和遗漏测试',
+    icon: 'HelpCircle',
+    execute: noopSlashCommand
+  }
+]
+
+const slashIconMap: Record<string, IconComponent> = {
+  FileText: FileTextIcon,
+  HelpCircle: HelpCircleIcon,
+  Pencil: PencilIcon
 }
 
 function App(): React.JSX.Element {
@@ -449,53 +535,233 @@ function BranchPicker({
   )
 }
 
-function Composer(): React.JSX.Element {
+function DirectiveChip({
+  directiveId,
+  directiveType,
+  label
+}: DirectiveChipProps): React.JSX.Element {
+  const showWrench = directiveType !== 'command'
+
   return (
-    <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
-      <div
-        data-slot="aui_composer-shell"
-        className="flex w-full flex-col gap-2 rounded-3xl border border-border/60 bg-background p-(--composer-padding) shadow-[0_4px_16px_-8px_rgba(0,0,0,0.08),0_1px_2px_rgba(0,0,0,0.04)] transition-[border-color,box-shadow] focus-within:border-border focus-within:shadow-[0_6px_24px_-8px_rgba(0,0,0,0.12),0_1px_2px_rgba(0,0,0,0.05)]"
-      >
-        <ComposerPrimitive.Input
-          className="aui-composer-input max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-6 outline-none placeholder:text-muted-foreground/80"
-          placeholder="输入消息，按 Enter 发送"
-          rows={1}
-        />
-        <div className="aui-composer-action-wrapper relative flex items-center justify-between">
-          <div className="flex items-center gap-1">
-            <ModelSelector
-              models={assistantModelOptions}
-              variant="ghost"
-              size="sm"
-            />
-          </div>
-          <div className="flex items-center gap-1.5">
-            <AuiIf condition={(state) => !state.thread.isRunning}>
-              <ComposerPrimitive.Send asChild>
-                <IconButton
-                  className="aui-composer-send size-7 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground"
-                  label="发送消息"
-                  title="发送消息"
+    <span
+      className="aui-directive-chip"
+      data-directive-id={directiveId}
+      data-directive-type={directiveType}
+    >
+      {showWrench ? (
+        <span className="aui-directive-chip-icon">
+          <WrenchIcon className="size-3" />
+        </span>
+      ) : null}
+      <span className="aui-directive-chip-label">{label}</span>
+    </span>
+  )
+}
+
+function resolveTriggerIcon(
+  iconKey: string | undefined,
+  iconMap: Record<string, IconComponent> | undefined,
+  fallbackIcon: IconComponent
+): IconComponent {
+  if (iconKey && iconMap?.[iconKey]) return iconMap[iconKey]
+  return fallbackIcon
+}
+
+function TriggerPopoverCategories({
+  emptyLabel,
+  fallbackIcon,
+  iconMap
+}: {
+  emptyLabel: string
+  fallbackIcon: IconComponent
+  iconMap?: Record<string, IconComponent>
+}): React.JSX.Element {
+  return (
+    <ComposerPrimitive.Unstable_TriggerPopoverCategories>
+      {(categories) => (
+        <div className="flex flex-col py-1" data-slot="composer-trigger-popover-categories">
+          {categories.map((category) => {
+            const Icon = resolveTriggerIcon(category.id, iconMap, fallbackIcon)
+
+            return (
+              <ComposerPrimitive.Unstable_TriggerPopoverCategoryItem
+                key={category.id}
+                categoryId={category.id}
+                className="flex cursor-pointer items-center justify-between gap-2 px-3 py-2 text-sm transition-colors outline-none hover:bg-accent focus:bg-accent data-[highlighted]:bg-accent"
+              >
+                <span className="flex items-center gap-2">
+                  <Icon className="size-4 text-muted-foreground" />
+                  {category.label}
+                </span>
+                <ChevronRightIcon className="size-4 text-muted-foreground" />
+              </ComposerPrimitive.Unstable_TriggerPopoverCategoryItem>
+            )
+          })}
+          {categories.length === 0 ? (
+            <div className="px-3 py-2 text-sm text-muted-foreground">{emptyLabel}</div>
+          ) : null}
+        </div>
+      )}
+    </ComposerPrimitive.Unstable_TriggerPopoverCategories>
+  )
+}
+
+function TriggerPopoverItems({
+  backLabel,
+  emptyLabel,
+  fallbackIcon,
+  iconMap
+}: {
+  backLabel: string
+  emptyLabel: string
+  fallbackIcon: IconComponent
+  iconMap?: Record<string, IconComponent>
+}): React.JSX.Element {
+  return (
+    <ComposerPrimitive.Unstable_TriggerPopoverItems>
+      {(items) => (
+        <div className="flex flex-col" data-slot="composer-trigger-popover-items">
+          <ComposerPrimitive.Unstable_TriggerPopoverBack className="flex cursor-pointer items-center gap-1.5 border-b px-3 py-2 text-xs text-muted-foreground uppercase transition-colors hover:bg-accent">
+            <ChevronLeftIcon className="size-3.5" />
+            {backLabel}
+          </ComposerPrimitive.Unstable_TriggerPopoverBack>
+
+          <div className="py-1">
+            {items.map((item, index) => {
+              const iconKey =
+                typeof item.metadata?.icon === 'string' ? item.metadata.icon : undefined
+              const Icon = resolveTriggerIcon(iconKey, iconMap, fallbackIcon)
+
+              return (
+                <ComposerPrimitive.Unstable_TriggerPopoverItem
+                  key={item.id}
+                  item={item}
+                  index={index}
+                  className="flex w-full cursor-pointer flex-col items-start gap-0.5 px-3 py-2 text-start transition-colors outline-none hover:bg-accent focus:bg-accent data-[highlighted]:bg-accent"
                 >
-                  <ArrowUpIcon className="size-4.5" />
-                </IconButton>
-              </ComposerPrimitive.Send>
-            </AuiIf>
-            <AuiIf condition={(state) => state.thread.isRunning}>
-              <ComposerPrimitive.Cancel asChild>
-                <IconButton
-                  className="aui-composer-cancel size-7 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground"
-                  label="停止生成"
-                  title="停止生成"
-                >
-                  <SquareIcon className="size-3.5 fill-current" />
-                </IconButton>
-              </ComposerPrimitive.Cancel>
-            </AuiIf>
+                  <span className="flex items-center gap-2 text-sm font-medium">
+                    <Icon className="size-3.5 text-primary" />
+                    {item.label}
+                  </span>
+                  {item.description ? (
+                    <span className="ms-5.5 text-xs leading-tight text-muted-foreground">
+                      {item.description}
+                    </span>
+                  ) : null}
+                </ComposerPrimitive.Unstable_TriggerPopoverItem>
+              )
+            })}
+            {items.length === 0 ? (
+              <div className="px-3 py-2 text-sm text-muted-foreground">{emptyLabel}</div>
+            ) : null}
           </div>
         </div>
-      </div>
-    </ComposerPrimitive.Root>
+      )}
+    </ComposerPrimitive.Unstable_TriggerPopoverItems>
+  )
+}
+
+function ComposerTriggerPopover({
+  action,
+  backLabel = '返回',
+  className,
+  directive,
+  emptyCategoriesLabel = '没有可用项目',
+  emptyItemsLabel = '没有匹配项',
+  fallbackIcon = SlashIcon,
+  iconMap,
+  ...props
+}: ComposerTriggerPopoverProps): React.JSX.Element {
+  return (
+    <ComposerPrimitive.Unstable_TriggerPopover
+      className={cn(
+        'aui-composer-trigger-popover absolute bottom-full start-0 z-50 mb-2 w-64 overflow-hidden rounded-xl border bg-popover text-popover-foreground shadow-lg',
+        className
+      )}
+      data-slot="composer-trigger-popover"
+      {...props}
+    >
+      {directive ? (
+        <ComposerPrimitive.Unstable_TriggerPopover.Directive
+          formatter={directive.formatter ?? unstable_defaultDirectiveFormatter}
+          onInserted={directive.onInserted}
+        />
+      ) : (
+        <ComposerPrimitive.Unstable_TriggerPopover.Action
+          formatter={action.formatter ?? unstable_defaultDirectiveFormatter}
+          onExecute={action.onExecute}
+          removeOnExecute={action.removeOnExecute}
+        />
+      )}
+      <TriggerPopoverCategories
+        emptyLabel={emptyCategoriesLabel}
+        fallbackIcon={fallbackIcon}
+        iconMap={iconMap}
+      />
+      <TriggerPopoverItems
+        backLabel={backLabel}
+        emptyLabel={emptyItemsLabel}
+        fallbackIcon={fallbackIcon}
+        iconMap={iconMap}
+      />
+    </ComposerPrimitive.Unstable_TriggerPopover>
+  )
+}
+
+function Composer(): React.JSX.Element {
+  const mention = unstable_useMentionAdapter({ fallbackIcon: WrenchIcon })
+  const slash = unstable_useSlashCommandAdapter({
+    commands: slashCommands,
+    fallbackIcon: SlashIcon,
+    iconMap: slashIconMap
+  })
+
+  return (
+    <ComposerPrimitive.Unstable_TriggerPopoverRoot>
+      <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
+        <div
+          data-slot="aui_composer-shell"
+          className="flex w-full flex-col gap-2 rounded-3xl border border-border/60 bg-background p-(--composer-padding) shadow-[0_4px_16px_-8px_rgba(0,0,0,0.08),0_1px_2px_rgba(0,0,0,0.04)] transition-[border-color,box-shadow] focus-within:border-border focus-within:shadow-[0_6px_24px_-8px_rgba(0,0,0,0.12),0_1px_2px_rgba(0,0,0,0.05)]"
+        >
+          <LexicalComposerInput
+            className="aui-composer-input relative max-h-32 min-h-10 w-full resize-none overflow-y-auto bg-transparent px-2.5 py-1 text-base leading-6 outline-none [&_.aui-directive-chip]:inline-flex [&_.aui-directive-chip]:items-baseline [&_.aui-directive-chip]:gap-1 [&_.aui-directive-chip]:rounded-md [&_.aui-directive-chip]:bg-blue-100 [&_.aui-directive-chip]:px-1.5 [&_.aui-directive-chip]:py-0.5 [&_.aui-directive-chip]:text-[13px] [&_.aui-directive-chip]:leading-none [&_.aui-directive-chip]:font-medium [&_.aui-directive-chip]:text-blue-700 [&_.aui-directive-chip-icon]:self-center [&_.aui-lexical-input]:min-h-lh [&_.aui-lexical-input]:outline-none [&_.aui-lexical-placeholder]:pointer-events-none [&_.aui-lexical-placeholder]:absolute [&_.aui-lexical-placeholder]:inset-x-0 [&_.aui-lexical-placeholder]:top-0 [&_.aui-lexical-placeholder]:truncate [&_.aui-lexical-placeholder]:px-2.5 [&_.aui-lexical-placeholder]:py-1 [&_.aui-lexical-placeholder]:text-muted-foreground/80 dark:[&_.aui-directive-chip]:bg-blue-900/50 dark:[&_.aui-directive-chip]:text-blue-300"
+            directiveChip={DirectiveChip}
+            placeholder="输入消息（@ 提及工具，/ 输入命令）"
+          />
+          <div className="aui-composer-action-wrapper relative flex items-center justify-between">
+            <div className="flex items-center gap-1">
+              <ModelSelector models={assistantModelOptions} variant="ghost" size="sm" />
+            </div>
+            <div className="flex items-center gap-1.5">
+              <AuiIf condition={(state) => !state.thread.isRunning}>
+                <ComposerPrimitive.Send asChild>
+                  <IconButton
+                    className="aui-composer-send size-7 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground"
+                    label="发送消息"
+                    title="发送消息"
+                  >
+                    <ArrowUpIcon className="size-4.5" />
+                  </IconButton>
+                </ComposerPrimitive.Send>
+              </AuiIf>
+              <AuiIf condition={(state) => state.thread.isRunning}>
+                <ComposerPrimitive.Cancel asChild>
+                  <IconButton
+                    className="aui-composer-cancel size-7 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground"
+                    label="停止生成"
+                    title="停止生成"
+                  >
+                    <SquareIcon className="size-3.5 fill-current" />
+                  </IconButton>
+                </ComposerPrimitive.Cancel>
+              </AuiIf>
+            </div>
+          </div>
+        </div>
+        <ComposerTriggerPopover char="@" {...mention} />
+        <ComposerTriggerPopover char="/" emptyItemsLabel="没有匹配命令" {...slash} />
+      </ComposerPrimitive.Root>
+    </ComposerPrimitive.Unstable_TriggerPopoverRoot>
   )
 }
 

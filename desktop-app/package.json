@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@assistant-ui/react": "^0.14.18",
+    "@assistant-ui/react-lexical": "^0.2.3",
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
     "class-variance-authority": "^0.7.1",
