@@ -1,5 +1,7 @@
 "use client";
 
+/* eslint-disable react-refresh/only-export-components, @typescript-eslint/explicit-function-return-type */
+
 import {
   memo,
   useCallback,
