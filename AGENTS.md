@@ -4,6 +4,8 @@
 
 desktop-client、client-gui客户端代码已废弃只做参考
 
+assistant-ui组件可以使用assistant-ui mcp获取文档和示例信息
+
 ## 语言规则
 
 **所有回答必须用中文。**

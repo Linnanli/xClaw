@@ -1,7 +1,11 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, Menu } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import { AppServerManager } from './appServerManager'
+import { installWindowContextMenu } from './contextMenu'
+
+const appServerManager = new AppServerManager()
 
 function createWindow(): void {
   // Create the browser window.
@@ -25,6 +29,14 @@ function createWindow(): void {
     shell.openExternal(details.url)
     return { action: 'deny' }
   })
+  installWindowContextMenu(mainWindow, Menu)
+
+  const unsubscribeStatus = appServerManager.onStatusChange((status) => {
+    if (!mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('app-server:status-change', status)
+    }
+  })
+  mainWindow.on('closed', unsubscribeStatus)
 
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.
@@ -51,6 +63,13 @@ app.whenReady().then(() => {
 
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
+  ipcMain.handle('app-server:start', () => appServerManager.start())
+  ipcMain.handle('app-server:stop', () => appServerManager.stop())
+  ipcMain.handle('app-server:get-status', () => appServerManager.getStatus())
+  ipcMain.handle('app-server:check-health', () => appServerManager.checkHealth())
+  ipcMain.handle('app-server:send-message', (_, prompt: string) =>
+    appServerManager.sendMessage(prompt)
+  )
 
   createWindow()
 
@@ -68,6 +87,10 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+app.on('before-quit', () => {
+  void appServerManager.stop()
 })
 
 // In this file you can include the rest of your app's specific main process
