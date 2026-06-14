@@ -1,25 +1,21 @@
-import { app, shell, BrowserWindow, ipcMain, Menu } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, Menu, nativeTheme } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { AppServerManager } from './appServerManager'
 import { installWindowContextMenu } from './contextMenu'
+import { createMainWindowOptions } from './windowOptions'
 
 const appServerManager = new AppServerManager()
 
 function createWindow(): void {
   // Create the browser window.
-  const mainWindow = new BrowserWindow({
-    width: 900,
-    height: 670,
-    show: false,
-    autoHideMenuBar: true,
-    ...(process.platform === 'linux' ? { icon } : {}),
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      sandbox: false
-    }
-  })
+  const mainWindow = new BrowserWindow(
+    createMainWindowOptions({
+      preloadPath: join(__dirname, '../preload/index.js'),
+      icon
+    })
+  )
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
@@ -53,6 +49,7 @@ function createWindow(): void {
 app.whenReady().then(() => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
+  nativeTheme.themeSource = 'system'
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
