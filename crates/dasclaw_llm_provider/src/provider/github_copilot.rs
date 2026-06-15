@@ -330,6 +330,7 @@ impl LlmProvider for GithubCopilotProvider {
 
         Ok(ToolCompletionResponse {
             content,
+            reasoning: None,
             tool_calls,
             finish_reason,
             input_tokens: response

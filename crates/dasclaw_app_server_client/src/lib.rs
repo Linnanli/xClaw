@@ -11,13 +11,13 @@ use dasclaw_app_server_protocol::{
     ErrorEvent, HealthChangedEvent, HealthCheckParams, HealthCheckResponse, InitializeParams,
     InitializeResponse, ItemCompletedEvent, ItemStartedEvent, JSON_RPC_VERSION, JsonRpcError,
     JsonRpcRequest, JsonRpcResponse, LifecycleChangedEvent, LifecycleStatusResponse, LogEntryEvent,
-    NotificationsInitializedEvent, ProtocolSchemaResponse, ServerNotification, ShutdownParams,
-    ShutdownResponse, ThreadCreateParams, ThreadCreateResponse, ThreadCreatedEvent,
-    ThreadListResponse, ThreadReadParams, ThreadReadResponse, ThreadStartResponse,
-    ThreadStartedEvent, TurnCancelParams, TurnCancelResponse, TurnCancelledEvent,
-    TurnCompletedEvent, TurnDeltaEvent, TurnFailedEvent, TurnInterruptResponse, TurnListParams,
-    TurnListResponse, TurnReadParams, TurnReadResponse, TurnStartParams, TurnStartResponse,
-    TurnStartedEvent, WorkspaceInfo, event, method,
+    NotificationsInitializedEvent, ProtocolSchemaResponse, ReasoningSummaryTextDeltaEvent,
+    ServerNotification, ShutdownParams, ShutdownResponse, ThreadCreateParams, ThreadCreateResponse,
+    ThreadCreatedEvent, ThreadListResponse, ThreadReadParams, ThreadReadResponse,
+    ThreadStartResponse, ThreadStartedEvent, TurnCancelParams, TurnCancelResponse,
+    TurnCancelledEvent, TurnCompletedEvent, TurnDeltaEvent, TurnFailedEvent, TurnInterruptResponse,
+    TurnListParams, TurnListResponse, TurnReadParams, TurnReadResponse, TurnStartParams,
+    TurnStartResponse, TurnStartedEvent, WorkspaceInfo, event, method,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -75,6 +75,7 @@ pub enum AppServerNotification {
     TurnCancelled(TurnCancelledEvent),
     ItemStarted(ItemStartedEvent),
     AgentMessageDelta(AgentMessageDeltaEvent),
+    ReasoningSummaryTextDelta(ReasoningSummaryTextDeltaEvent),
     ItemCompleted(ItemCompletedEvent),
     ProtocolError(ErrorEvent),
     Unknown(ServerNotification),
@@ -113,6 +114,9 @@ impl TryFrom<ServerNotification> for AppServerNotification {
             event::ITEM_STARTED => Self::ItemStarted(decode_notification_params(notification)?),
             event::ITEM_AGENT_MESSAGE_DELTA => {
                 Self::AgentMessageDelta(decode_notification_params(notification)?)
+            }
+            event::ITEM_REASONING_SUMMARY_TEXT_DELTA => {
+                Self::ReasoningSummaryTextDelta(decode_notification_params(notification)?)
             }
             event::ITEM_COMPLETED => Self::ItemCompleted(decode_notification_params(notification)?),
             event::ERROR => Self::ProtocolError(decode_notification_params(notification)?),
@@ -856,6 +860,7 @@ fn codex_v2_chat_subset_initialize_params(
         requested_capabilities: vec![
             dasclaw_app_server_protocol::CompatibilityProfile::CODEX_APP_SERVER_V2_ID.to_string(),
         ],
+        model_provider: None,
     }
 }
 
@@ -894,6 +899,7 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: vec!["protocol".to_string()],
+                model_provider: None,
             })
             .expect("initialize should succeed");
         let schema = client.protocol_schema().expect("schema should decode");
@@ -929,6 +935,7 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: Vec::new(),
+                model_provider: None,
             })
             .expect("initialize should succeed before session methods");
         let _ = client.drain_notifications();
@@ -968,6 +975,7 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: Vec::new(),
+                model_provider: None,
             })
             .expect("initialize should succeed before session methods");
         let thread = client
@@ -1041,6 +1049,7 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: Vec::new(),
+                model_provider: None,
             })
             .expect("initialize should succeed");
         let initialize_notifications = initialize.notifications;
@@ -1103,6 +1112,7 @@ mod tests {
                     dasclaw_app_server_protocol::CompatibilityProfile::CODEX_APP_SERVER_V2_ID
                         .to_string(),
                 ],
+                model_provider: None,
             })
             .expect("initialize should succeed");
         let thread = client
@@ -1421,6 +1431,39 @@ mod tests {
     }
 
     #[test]
+    fn line_delimited_transport_decodes_reasoning_notification_before_response() {
+        let reader = Cursor::new(
+            [
+                r#"{"jsonrpc":"2.0","method":"item/reasoning/summaryTextDelta","params":{"threadId":"thread_1","turnId":"turn_1","itemId":"turn_1:reasoning","summaryIndex":0,"delta":"private scratch"}}"#,
+                r#"{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"thread_1","turnId":"turn_1","itemId":"turn_1","delta":"final answer"}}"#,
+                r#"{"jsonrpc":"2.0","id":1,"result":{"ok":true}}"#,
+            ]
+            .join("\n"),
+        );
+        let writer = Cursor::new(Vec::<u8>::new());
+        let transport = LineDelimitedTransport::new(reader, writer);
+        let mut client = AppServerClient::new(transport);
+
+        let round_trip = client
+            .request_value_with_notifications(method::HEALTH_CHECK, None::<()>)
+            .expect("line-delimited transport should decode reasoning notifications");
+
+        assert_eq!(round_trip.result, json!({"ok": true}));
+        assert_eq!(round_trip.notifications.len(), 2);
+        assert!(matches!(
+            round_trip.notifications[0],
+            AppServerNotification::ReasoningSummaryTextDelta(
+                ReasoningSummaryTextDeltaEvent { ref delta, .. }
+            ) if delta == "private scratch"
+        ));
+        assert!(matches!(
+            round_trip.notifications[1],
+            AppServerNotification::AgentMessageDelta(AgentMessageDeltaEvent { ref delta, .. })
+                if delta == "final answer"
+        ));
+    }
+
+    #[test]
     fn plain_request_preserves_raw_legacy_and_codex_notification_order_for_later_drain() {
         let reader = Cursor::new(
             [
@@ -1533,6 +1576,7 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: Vec::new(),
+                model_provider: None,
             })
             .expect("initialize should return result and notifications");
 
@@ -1573,6 +1617,7 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: Vec::new(),
+                model_provider: None,
             })
             .expect("plain initialize should succeed");
 
@@ -1609,6 +1654,7 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: Vec::new(),
+                model_provider: None,
             })
             .expect("initialize should succeed");
         let thread = client
@@ -1961,6 +2007,7 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: Vec::new(),
+                model_provider: None,
             })
             .expect("initialize should consume the real server response");
         let thread = client
@@ -2058,6 +2105,7 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: Vec::new(),
+                model_provider: None,
             })
             .expect("initialize should decode");
         let thread = client

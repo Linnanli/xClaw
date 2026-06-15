@@ -201,6 +201,7 @@ impl LlmProvider for BedrockProvider {
 
         Ok(ToolCompletionResponse {
             content: if text.is_empty() { None } else { Some(text) },
+            reasoning: None,
             tool_calls,
             input_tokens,
             output_tokens,

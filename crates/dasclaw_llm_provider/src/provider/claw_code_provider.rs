@@ -339,6 +339,7 @@ fn map_tool_choice(choice: &str) -> Option<ApiToolChoice> {
 
 pub(crate) fn map_message_response(resp: MessageResponse) -> ToolCompletionResponse {
     let mut text = String::new();
+    let mut reasoning = String::new();
     let mut tool_calls: Vec<ToolCall> = Vec::new();
 
     for block in resp.content {
@@ -358,16 +359,11 @@ pub(crate) fn map_message_response(resp: MessageResponse) -> ToolCompletionRespo
                 });
             }
             OutputContentBlock::Thinking { thinking, .. } => {
-                // 思考链：包装成 `<think>...</think>` 前置进 content，与 ironclaw
-                // 下游 reasoning pipeline（`strip_thinking_tags_regex` 等）既有
-                // 约定一致。空 thinking 不推（避免产生空 `<think></think>`）。
                 if !thinking.is_empty() {
-                    let wrapped = format!("<think>{thinking}</think>");
-                    if text.is_empty() {
-                        text = wrapped;
-                    } else {
-                        text = format!("{wrapped}\n{text}");
+                    if !reasoning.is_empty() {
+                        reasoning.push('\n');
                     }
+                    reasoning.push_str(&thinking);
                 }
             }
             OutputContentBlock::RedactedThinking { .. } => {
@@ -383,6 +379,11 @@ pub(crate) fn map_message_response(resp: MessageResponse) -> ToolCompletionRespo
 
     ToolCompletionResponse {
         content: if text.is_empty() { None } else { Some(text) },
+        reasoning: if reasoning.is_empty() {
+            None
+        } else {
+            Some(reasoning)
+        },
         tool_calls,
         input_tokens: resp.usage.input_tokens,
         output_tokens: resp.usage.output_tokens,
@@ -884,10 +885,8 @@ mod tests {
         assert_eq!(out.cache_creation_input_tokens, 15);
     }
 
-    /// Thinking block 必须被包成 `<think>...</think>` 放在 Text 前面，与
-    /// ironclaw 下游 `strip_thinking_tags_regex` 的期望格式一致。
     #[test]
-    fn test_response_thinking_block_wrapped_before_text() {
+    fn test_response_thinking_block_is_structured_outside_text() {
         let resp = mk_resp(
             vec![
                 OutputContentBlock::Thinking {
@@ -902,21 +901,15 @@ mod tests {
             Usage::default(),
         );
         let out = map_message_response(resp);
-        let content = out.content.expect("content should be Some");
-        assert!(
-            content.starts_with("<think>user wants weather; I should call the tool</think>"),
-            "think tag must lead the content, got: {content}"
+        assert_eq!(
+            out.reasoning.as_deref(),
+            Some("user wants weather; I should call the tool")
         );
-        assert!(
-            content.contains("Let me check the weather."),
-            "visible text must be preserved, got: {content}"
-        );
+        assert_eq!(out.content.as_deref(), Some("Let me check the weather."));
     }
 
-    /// 只有 Thinking block、没有 Text 时，content 仍应是 `<think>...</think>`
-    /// 而不是空字符串——避免 agent loop 把空响应当作"沉默回复"。
     #[test]
-    fn test_response_thinking_only_still_produces_content() {
+    fn test_response_thinking_only_stays_out_of_content() {
         let resp = mk_resp(
             vec![OutputContentBlock::Thinking {
                 thinking: "reasoning in progress".into(),
@@ -926,10 +919,8 @@ mod tests {
             Usage::default(),
         );
         let out = map_message_response(resp);
-        assert_eq!(
-            out.content.as_deref(),
-            Some("<think>reasoning in progress</think>")
-        );
+        assert_eq!(out.reasoning.as_deref(), Some("reasoning in progress"));
+        assert_eq!(out.content.as_deref(), None);
     }
 
     /// 空 Thinking block 不应该生成空 `<think></think>`（会污染下游正则）。

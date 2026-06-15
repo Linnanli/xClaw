@@ -23,6 +23,7 @@ import type {
 import {
   type AssistantModelOption,
   assistantMessage,
+  assistantMessageWithContent,
   extractTextFromAppendMessage,
   initialAssistantMessages,
   modelOptionsFromProviderConfig,
@@ -132,11 +133,15 @@ export function useDasclawAssistantRuntime(): DasclawAssistantRuntime {
 
       try {
         const response = await runPromptTurn(prompt)
-        replacePendingAssistantMessage(
-          setMessages,
-          pendingId,
-          response.output || 'dasclaw-app-server 已完成本轮，但没有返回文本输出。'
-        )
+        if (response.content && response.content.length > 0) {
+          replacePendingAssistantMessageContent(setMessages, pendingId, response.content)
+        } else {
+          replacePendingAssistantMessage(
+            setMessages,
+            pendingId,
+            response.output || 'dasclaw-app-server 已完成本轮，但没有返回文本输出。'
+          )
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         replacePendingAssistantMessage(setMessages, pendingId, `请求失败：${message}`, {
@@ -227,6 +232,19 @@ function replacePendingAssistantMessage(
   setMessages((current) =>
     current.map((item) =>
       item.id === pendingId ? assistantMessage(pendingId, text, status) : item
+    )
+  )
+}
+
+function replacePendingAssistantMessageContent(
+  setMessages: Dispatch<SetStateAction<ThreadMessage[]>>,
+  pendingId: string,
+  content: Parameters<typeof assistantMessageWithContent>[1],
+  status?: Parameters<typeof assistantMessageWithContent>[2]
+): void {
+  setMessages((current) =>
+    current.map((item) =>
+      item.id === pendingId ? assistantMessageWithContent(pendingId, content, status) : item
     )
   )
 }

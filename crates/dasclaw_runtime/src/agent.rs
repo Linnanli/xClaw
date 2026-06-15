@@ -1294,9 +1294,10 @@ mod tests {
     async fn req_dasclaw_runtime_agent_b2_run_streaming_serializes_to_adjacent_tagged_json() {
         // Wire format guard: AgentEvent uses adjacent-tagged JSON so a
         // TypeScript discriminated union renders directly. Pin the
-        // four variants so we notice if anything reshapes the wire.
+        // public variants so we notice if anything reshapes the wire.
         let chunks = vec![
             AgentEvent::TextChunk("hi".into()),
+            AgentEvent::ReasoningSummaryChunk("scratch".into()),
             AgentEvent::ToolCallStart {
                 name: "echo".into(),
                 arguments: serde_json::json!({"x": 1}),
@@ -1313,17 +1314,21 @@ mod tests {
             .map(|c| serde_json::to_string(c).expect("serialize"))
             .collect();
         assert_eq!(json[0], r#"{"kind":"text_chunk","data":"hi"}"#);
-        assert!(
-            json[1].starts_with(r#"{"kind":"tool_call_start","data":{"name":"echo""#),
-            "got {}",
-            json[1]
+        assert_eq!(
+            json[1],
+            r#"{"kind":"reasoning_summary_chunk","data":"scratch"}"#
         );
         assert!(
-            json[2].contains(r#""kind":"tool_result""#) && json[2].contains(r#""is_error":false"#),
+            json[2].starts_with(r#"{"kind":"tool_call_start","data":{"name":"echo""#),
             "got {}",
             json[2]
         );
-        assert_eq!(json[3], r#"{"kind":"finish_reason","data":"stop"}"#);
+        assert!(
+            json[3].contains(r#""kind":"tool_result""#) && json[3].contains(r#""is_error":false"#),
+            "got {}",
+            json[3]
+        );
+        assert_eq!(json[4], r#"{"kind":"finish_reason","data":"stop"}"#);
 
         // Round-trip every variant.
         for original in chunks {

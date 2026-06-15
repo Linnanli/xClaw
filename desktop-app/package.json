@@ -23,7 +23,7 @@
     "build:linux": "npm run build && npm run build:dasclaw-app-server && electron-builder --linux"
   },
   "dependencies": {
-    "@assistant-ui/react": "^0.14.18",
+    "@assistant-ui/react": "0.14.18",
     "@assistant-ui/react-lexical": "^0.2.3",
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
@@ -37,6 +37,11 @@
     "tailwind-scrollbar": "^4.0.2",
     "tw-glass": "^0.0.5",
     "tw-shimmer": "^0.4.11"
+  },
+  "overrides": {
+    "@assistant-ui/core": "0.2.14",
+    "@assistant-ui/store": "0.2.16",
+    "@assistant-ui/tap": "0.7.1"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",
@@ -55,6 +60,7 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
+    "jsdom": "^29.1.1",
     "prettier": "^3.7.4",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",

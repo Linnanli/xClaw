@@ -415,6 +415,8 @@ impl ToolCompletionRequest {
 pub struct ToolCompletionResponse {
     /// Text content (may be empty if tool calls are present).
     pub content: Option<String>,
+    /// Structured model reasoning that must not be mixed into user-visible text.
+    pub reasoning: Option<String>,
     /// Tool calls requested by the model.
     pub tool_calls: Vec<ToolCall>,
     pub input_tokens: u32,

@@ -389,6 +389,7 @@ mod tests {
         ) -> Result<ToolCompletionResponse, LlmError> {
             Ok(ToolCompletionResponse {
                 content: Some("ok".into()),
+                reasoning: None,
                 tool_calls: vec![],
                 input_tokens: 1,
                 output_tokens: 1,

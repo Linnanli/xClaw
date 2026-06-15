@@ -2083,6 +2083,7 @@ impl LlmProvider for GeminiOauthProvider {
             } else {
                 Some(response.content)
             },
+            reasoning: None,
             finish_reason: response.finish_reason,
             input_tokens: response.input_tokens,
             output_tokens: response.output_tokens,

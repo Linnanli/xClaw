@@ -1,5 +1,6 @@
 import type {
   AppendMessage,
+  ThreadAssistantMessagePart,
   ThreadAssistantMessage,
   ThreadMessage,
   ThreadUserMessage
@@ -67,11 +68,19 @@ export function assistantMessage(
   text: string,
   status: ThreadAssistantMessage['status'] = { type: 'complete', reason: 'stop' }
 ): ThreadAssistantMessage {
+  return assistantMessageWithContent(id, [{ type: 'text', text }], status)
+}
+
+export function assistantMessageWithContent(
+  id: string,
+  content: readonly ThreadAssistantMessagePart[],
+  status: ThreadAssistantMessage['status'] = { type: 'complete', reason: 'stop' }
+): ThreadAssistantMessage {
   return {
     id,
     role: 'assistant',
     createdAt: new Date(),
-    content: [{ type: 'text', text }],
+    content,
     status,
     metadata: {
       unstable_state: null,

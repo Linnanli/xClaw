@@ -1472,6 +1472,16 @@ fn clean_response(text: &str) -> String {
     collapse_newlines(&result)
 }
 
+/// Return user-visible text after removing legacy model-internal markup.
+///
+/// This is intended for provider/runtime boundaries that still receive
+/// `<think>` / `<final>` text from legacy models. Native structured reasoning
+/// paths should emit their own reasoning events instead of round-tripping
+/// through these tags.
+pub fn clean_user_visible_response(text: &str) -> String {
+    clean_response(text)
+}
+
 /// Strip bracket-format inline tool calls produced by `flatten_tool_messages`.
 ///
 /// Removes patterns like `[Called tool `name` with arguments: {...}]` from text
@@ -3130,6 +3140,7 @@ That's my plan."#;
             ) -> Result<ToolCompletionResponse, crate::provider::LlmError> {
                 Ok(ToolCompletionResponse {
                     content: None,
+                    reasoning: None,
                     tool_calls: Vec::new(),
                     input_tokens: 0,
                     output_tokens: 0,
@@ -3475,6 +3486,7 @@ That's my plan."#;
         {
             Ok(crate::provider::ToolCompletionResponse {
                 content: Some("I'll write the report.".to_string()),
+                reasoning: None,
                 tool_calls: vec![ToolCall {
                     id: "call_1".to_string(),
                     name: "memory_write".to_string(),
@@ -3620,6 +3632,7 @@ That's my plan."#;
                 ) -> Result<ToolCompletionResponse, LlmError> {
                     Ok(ToolCompletionResponse {
                         content: Some("I'll search for that.".to_string()),
+                        reasoning: None,
                         tool_calls: vec![ToolCall {
                             id: "tc_1".to_string(),
                             name: "web_search".to_string(),

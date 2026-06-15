@@ -316,6 +316,7 @@ impl LlmProvider for OpenAiCodexProvider {
             } else {
                 Some(parsed.text_content)
             },
+            reasoning: None,
             tool_calls: parsed.tool_calls,
             input_tokens: parsed.input_tokens,
             output_tokens: parsed.output_tokens,

@@ -100,9 +100,13 @@ pub const TOOLS_NOT_SUPPORTED_REASON: &str = "headless-agent::tools-not-supporte
 ///
 /// One event per observable step in the agentic loop:
 ///
-/// - `TextChunk` — a fragment of model output as it arrives from the LLM.
-///   For providers without true token streaming the chunk arrives in a
-///   single piece; consumers should not depend on a particular chunk size.
+/// - `TextChunk` — a fragment of user-visible model output as it arrives
+///   from the LLM. For providers without true token streaming the chunk
+///   arrives in a single piece; consumers should not depend on a particular
+///   chunk size.
+/// - `ReasoningSummaryChunk` — a fragment of model reasoning summary.
+///   This is not assistant message text and must never be mirrored into
+///   user-visible delta streams.
 /// - `ToolCallStart` — the model asked to invoke a tool; emitted before
 ///   tool execution.
 /// - `ToolResult` — the tool finished; payload is the sanitized content
@@ -121,8 +125,10 @@ pub const TOOLS_NOT_SUPPORTED_REASON: &str = "headless-agent::tools-not-supporte
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum AgentEvent {
-    /// A fragment of model text output.
+    /// A fragment of user-visible model text output.
     TextChunk(String),
+    /// A fragment of model reasoning summary.
+    ReasoningSummaryChunk(String),
     /// The model requested a tool invocation.
     ToolCallStart {
         /// Tool name as emitted by the model.
@@ -208,9 +214,10 @@ pub trait AgentResponder: Send + Sync {
     ///
     /// `event_tx` is the same channel the agent loop forwards
     /// [`AgentEvent`]s on. Implementations emit one or more
-    /// [`AgentEvent::TextChunk`] events as the model produces text and
-    /// then return the final [`RespondOutput`] so the loop can dispatch
-    /// to tool execution or finish.
+    /// [`AgentEvent::TextChunk`] events as the model produces user-visible
+    /// text, optionally [`AgentEvent::ReasoningSummaryChunk`] for structured
+    /// reasoning, and then return the final [`RespondOutput`] so the loop can
+    /// dispatch to tool execution or finish.
     ///
     /// The default implementation calls [`Self::respond`] and forwards
     /// the final text (if any) as a single chunk, so every existing
@@ -219,8 +226,8 @@ pub trait AgentResponder: Send + Sync {
     /// token-level deltas as they arrive.
     ///
     /// `ToolCallStart`, `ToolResult` and `FinishReason` events are emitted
-    /// by the agent loop itself — implementations should only emit
-    /// [`AgentEvent::TextChunk`].
+    /// by the agent loop itself — implementations should only emit text or
+    /// reasoning chunks.
     async fn respond_streaming(
         &self,
         ctx: &mut ReasoningContext,

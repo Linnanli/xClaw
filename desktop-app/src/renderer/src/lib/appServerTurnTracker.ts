@@ -1,10 +1,15 @@
 import type { AppServerNotification } from '../../../shared/appServerApi'
 
+export type AppServerAssistantContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'reasoning'; text: string }
+
 export type TurnCompletion = {
   threadId: string
   turnId: string
   output?: string
   error?: string
+  content?: AppServerAssistantContentPart[]
 }
 
 type TurnTrackerOptions = {
@@ -29,6 +34,7 @@ export function createAppServerTurnTracker(options: TurnTrackerOptions = {}): Ap
   const timeoutMs = options.timeoutMs ?? DEFAULT_TURN_COMPLETION_TIMEOUT_MS
   const pendingTurns = new Map<string, PendingTurn>()
   const completedTurns = new Map<string, TurnCompletion>()
+  const turnContent = new Map<string, AppServerAssistantContentPart[]>()
 
   function waitForTurnCompletion(turnId: string): Promise<TurnCompletion> {
     const completed = completedTurns.get(turnId)
@@ -48,10 +54,21 @@ export function createAppServerTurnTracker(options: TurnTrackerOptions = {}): Ap
   }
 
   function handleNotification(notification: AppServerNotification): void {
+    const contentDelta = parseTurnContentDelta(notification)
+    if (contentDelta) {
+      appendTurnContentDelta(contentDelta.turnId, contentDelta.part)
+      return
+    }
+
     if (notification.method !== 'turn/completed' && notification.method !== 'turn/failed') return
 
     const completion = parseTurnCompletion(notification.params)
     if (!completion) return
+    const content = turnContent.get(completion.turnId)
+    if (content && content.length > 0) {
+      completion.content = content.map((part) => ({ ...part }))
+      turnContent.delete(completion.turnId)
+    }
 
     const pending = pendingTurns.get(completion.turnId)
     if (!pending) {
@@ -75,6 +92,13 @@ export function createAppServerTurnTracker(options: TurnTrackerOptions = {}): Ap
     }
     pendingTurns.clear()
     completedTurns.clear()
+    turnContent.clear()
+  }
+
+  function appendTurnContentDelta(turnId: string, part: AppServerAssistantContentPart): void {
+    const content = turnContent.get(turnId) ?? []
+    appendPart(content, part)
+    turnContent.set(turnId, content)
   }
 
   return {
@@ -95,6 +119,42 @@ function parseTurnCompletion(params: unknown): TurnCompletion | undefined {
     turnId: record.turnId,
     output: typeof record.output === 'string' ? record.output : undefined,
     error: typeof record.error === 'string' ? record.error : undefined
+  }
+}
+
+function parseTurnContentDelta(
+  notification: AppServerNotification
+): { turnId: string; part: AppServerAssistantContentPart } | undefined {
+  if (
+    notification.method !== 'item/agentMessage/delta' &&
+    notification.method !== 'item/reasoning/summaryTextDelta'
+  ) {
+    return undefined
+  }
+  if (!notification.params || typeof notification.params !== 'object') return undefined
+
+  const record = notification.params as Record<string, unknown>
+  if (typeof record.turnId !== 'string' || typeof record.delta !== 'string') return undefined
+
+  return {
+    turnId: record.turnId,
+    part: {
+      type: notification.method === 'item/reasoning/summaryTextDelta' ? 'reasoning' : 'text',
+      text: record.delta
+    }
+  }
+}
+
+function appendPart(
+  parts: AppServerAssistantContentPart[],
+  part: AppServerAssistantContentPart
+): void {
+  if (!part.text) return
+  const previous = parts.at(-1)
+  if (previous?.type === part.type) {
+    previous.text += part.text
+  } else {
+    parts.push({ ...part })
   }
 }
 

@@ -13,6 +13,7 @@ import {
   ThreadPrimitive,
   type Unstable_DirectiveFormatter,
   type QuoteMessagePartProps,
+  type ReasoningMessagePartProps,
   type TextMessagePartProps,
   type Unstable_SlashCommand,
   type Unstable_TriggerItem,
@@ -23,6 +24,7 @@ import {
   useAuiState
 } from '@assistant-ui/react'
 import { LexicalComposerInput, type DirectiveChipProps } from '@assistant-ui/react-lexical'
+import { MessageTiming } from '@/components/assistant-ui/message-timing'
 import {
   ActivityIcon,
   ArchiveIcon,
@@ -39,7 +41,6 @@ import {
   PencilIcon,
   PlusIcon,
   QuoteIcon,
-  RefreshCwIcon,
   SlashIcon,
   SquareIcon,
   TrashIcon,
@@ -490,7 +491,7 @@ function AssistantMessage(): React.JSX.Element {
         data-slot="aui_assistant-message-content"
         className="wrap-break-word px-2 leading-relaxed text-foreground whitespace-pre-wrap"
       >
-        <MessagePrimitive.Content />
+        <MessagePrimitive.Parts components={{ Reasoning: ReasoningPart }} />
         <MessagePrimitive.Error />
       </div>
       <div
@@ -601,6 +602,18 @@ function DirectiveText({ text }: TextMessagePartProps): React.JSX.Element {
   )
 }
 
+function ReasoningPart({ text }: ReasoningMessagePartProps): React.JSX.Element {
+  return (
+    <details
+      className="my-2 rounded-md border border-border/70 bg-muted/40 px-3 py-2 text-sm text-muted-foreground"
+      data-slot="aui_reasoning-part"
+    >
+      <summary className="cursor-pointer font-medium text-foreground">推理过程</summary>
+      <div className="mt-2 whitespace-pre-wrap">{text}</div>
+    </details>
+  )
+}
+
 function UserActionBar(): React.JSX.Element {
   return (
     <ActionBarPrimitive.Root
@@ -671,11 +684,7 @@ function AssistantActionBar(): React.JSX.Element {
           </AuiIf>
         </IconButton>
       </ActionBarPrimitive.Copy>
-      <ActionBarPrimitive.Reload asChild>
-        <IconButton label="重新生成" title="重新生成">
-          <RefreshCwIcon className="size-4" />
-        </IconButton>
-      </ActionBarPrimitive.Reload>
+      <MessageTiming />
     </ActionBarPrimitive.Root>
   )
 }

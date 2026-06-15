@@ -22,13 +22,14 @@ use dasclaw_app_server_protocol::{
     LifecycleChangedEvent, LifecycleReason, LifecycleSnapshot, LifecycleState,
     LifecycleStatusResponse, ModelProviderInitializeConfig, ModelProviderSelectForNextTurnParams,
     ModelProviderSelectForNextTurnResponse, NotificationQueuePolicy, NotificationsInitializedEvent,
-    ProtocolSchemaResponse, ProtocolVersion, ServerInfo, ServerNotification, ServiceHealth,
-    ServiceName, ShutdownParams, ShutdownReason, ShutdownResponse, ThreadCreateParams,
-    ThreadCreateResponse, ThreadCreatedEvent, ThreadListResponse, ThreadReadParams,
-    ThreadReadResponse, ThreadStartResponse, ThreadStartedEvent, ThreadSummary, TurnCancelParams,
-    TurnCancelResponse, TurnCancelledEvent, TurnCompletedEvent, TurnDeltaEvent, TurnFailedEvent,
-    TurnInterruptResponse, TurnListParams, TurnListResponse, TurnReadParams, TurnReadResponse,
-    TurnStartParams, TurnStartResponse, TurnStartedEvent, TurnStatus, TurnSummary,
+    ProtocolSchemaResponse, ProtocolVersion, ReasoningSummaryTextDeltaEvent, ServerInfo,
+    ServerNotification, ServiceHealth, ServiceName, ShutdownParams, ShutdownReason,
+    ShutdownResponse, ThreadCreateParams, ThreadCreateResponse, ThreadCreatedEvent,
+    ThreadListResponse, ThreadReadParams, ThreadReadResponse, ThreadStartResponse,
+    ThreadStartedEvent, ThreadSummary, TurnCancelParams, TurnCancelResponse, TurnCancelledEvent,
+    TurnCompletedEvent, TurnDeltaEvent, TurnFailedEvent, TurnInterruptResponse, TurnListParams,
+    TurnListResponse, TurnReadParams, TurnReadResponse, TurnStartParams, TurnStartResponse,
+    TurnStartedEvent, TurnStatus, TurnSummary,
 };
 use dasclaw_app_server_protocol::{JSON_RPC_VERSION, method};
 use dasclaw_llm_provider::provider::claw_code_provider::ClawCodeLlmProvider;
@@ -1025,6 +1026,26 @@ impl AppServer {
             });
     }
 
+    fn emit_codex_reasoning_summary_text_delta(
+        &mut self,
+        thread_id: String,
+        turn_id: String,
+        summary_index: i64,
+        delta: String,
+    ) {
+        if !self.codex_v2_compat_enabled {
+            return;
+        }
+        self.notifications
+            .emit_reasoning_summary_text_delta(ReasoningSummaryTextDeltaEvent {
+                thread_id,
+                item_id: format!("{turn_id}:reasoning"),
+                turn_id,
+                summary_index,
+                delta,
+            });
+    }
+
     fn emit_codex_item_completed(
         &mut self,
         thread_id: String,
@@ -1099,6 +1120,22 @@ impl AppServer {
                         self.emit_codex_agent_message_delta(
                             update.thread_id,
                             update.turn_id,
+                            delta,
+                        );
+                    }
+                }
+                RuntimeTurnOutcome::ReasoningSummaryDelta {
+                    delta,
+                    summary_index,
+                } => {
+                    if self
+                        .threads
+                        .turn_is_pending(&update.thread_id, &update.turn_id)
+                    {
+                        self.emit_codex_reasoning_summary_text_delta(
+                            update.thread_id,
+                            update.turn_id,
+                            summary_index,
                             delta,
                         );
                     }
@@ -1306,6 +1343,23 @@ impl RuntimeTurnUpdateSink {
         });
     }
 
+    pub fn reasoning_summary_delta(
+        &self,
+        thread_id: String,
+        turn_id: String,
+        summary_index: i64,
+        delta: String,
+    ) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::ReasoningSummaryDelta {
+                delta,
+                summary_index,
+            },
+        });
+    }
+
     fn drain(&self) -> Vec<RuntimeTurnUpdate> {
         self.updates
             .lock()
@@ -1330,6 +1384,7 @@ pub struct RuntimeTurnUpdate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeTurnOutcome {
     Delta { delta: String },
+    ReasoningSummaryDelta { delta: String, summary_index: i64 },
     Completed { output: String },
     Failed { error: String },
 }
@@ -1463,6 +1518,9 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
         let spawn_cleanup_turn_id = turn_id.clone();
         let prompt = request.prompt;
         let updates = request.updates;
+        let event_updates = updates.clone();
+        let event_thread_id = thread_id.clone();
+        let event_turn_id = turn_id.clone();
         thread::Builder::new()
             .name(format!("dasclaw-app-server-{turn_id}"))
             .spawn(move || {
@@ -1474,18 +1532,32 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
                     Ok(runtime) => {
                         let (event_tx, mut event_rx) =
                             tokio::sync::mpsc::channel::<dasclaw_runtime::AgentEvent>(64);
-                        let delta_updates = updates.clone();
-                        let delta_thread_id = thread_id.clone();
-                        let delta_turn_id = turn_id.clone();
                         runtime.block_on(async move {
                             let event_pump = async move {
                                 while let Some(event) = event_rx.recv().await {
-                                    if let dasclaw_runtime::AgentEvent::TextChunk(delta) = event {
-                                        delta_updates.delta(
-                                            delta_thread_id.clone(),
-                                            delta_turn_id.clone(),
+                                    match event {
+                                        dasclaw_runtime::AgentEvent::TextChunk(delta) => {
+                                            if !delta.is_empty() {
+                                                event_updates.delta(
+                                                    event_thread_id.clone(),
+                                                    event_turn_id.clone(),
+                                                    delta,
+                                                );
+                                            }
+                                        }
+                                        dasclaw_runtime::AgentEvent::ReasoningSummaryChunk(
                                             delta,
-                                        );
+                                        ) => {
+                                            if !delta.is_empty() {
+                                                event_updates.reasoning_summary_delta(
+                                                    event_thread_id.clone(),
+                                                    event_turn_id.clone(),
+                                                    0,
+                                                    delta,
+                                                );
+                                            }
+                                        }
+                                        _ => {}
                                     }
                                 }
                             };
@@ -1658,7 +1730,9 @@ impl SessionThreadHost {
         }
 
         match update.outcome {
-            RuntimeTurnOutcome::Delta { .. } => return None,
+            RuntimeTurnOutcome::Delta { .. } | RuntimeTurnOutcome::ReasoningSummaryDelta { .. } => {
+                return None;
+            }
             RuntimeTurnOutcome::Completed { output } => {
                 turn.status = TurnStatus::Completed;
                 turn.output = Some(output);
@@ -1866,6 +1940,10 @@ impl NotificationBus {
 
     pub fn emit_agent_message_delta(&mut self, event: AgentMessageDeltaEvent) {
         self.push(ServerNotification::agent_message_delta(event));
+    }
+
+    pub fn emit_reasoning_summary_text_delta(&mut self, event: ReasoningSummaryTextDeltaEvent) {
+        self.push(ServerNotification::reasoning_summary_text_delta(event));
     }
 
     pub fn emit_item_completed(&mut self, event: ItemCompletedEvent) {
@@ -4210,6 +4288,70 @@ mod tests {
     }
 
     #[test]
+    fn dasclaw_runtime_bridge_routes_reasoning_outside_agent_message_delta() {
+        let bridge = Arc::new(DasclawAgentRuntimeBridge::new(|token| {
+            dasclaw_runtime::Agent::builder()
+                .responder(ScriptedRuntimeResponder::new(
+                    [
+                        dasclaw_runtime::AgentEvent::ReasoningSummaryChunk(
+                            "private scratch".to_string(),
+                        ),
+                        dasclaw_runtime::AgentEvent::TextChunk("final answer".to_string()),
+                    ],
+                    "final answer",
+                ))
+                .cancellation_token(token)
+                .build()
+                .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+        }));
+        let mut server = initialized_codex_v2_server_with_bridge(bridge);
+        let thread = server
+            .thread_create(ThreadCreateParams {
+                title: Some("Draft".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread should be created");
+        let started = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id.clone(),
+                prompt: "hello".to_string(),
+            })
+            .expect("turn should start");
+
+        let notifications =
+            drain_until_method(&mut server, "turn/completed", Duration::from_secs(2));
+        let agent_deltas = notifications
+            .iter()
+            .filter(|notification| {
+                notification.method == "turn/delta"
+                    || notification.method == "item/agentMessage/delta"
+            })
+            .map(|notification| notification.params["delta"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(agent_deltas, vec!["final answer", "final answer"]);
+        assert!(
+            agent_deltas
+                .iter()
+                .all(|delta| !delta.contains("<think>") && !delta.contains("scratch"))
+        );
+
+        let reasoning_deltas = notifications
+            .iter()
+            .filter(|notification| notification.method == "item/reasoning/summaryTextDelta")
+            .map(|notification| notification.params["delta"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(reasoning_deltas, vec!["private scratch"]);
+
+        let read = server
+            .turn_read(TurnReadParams {
+                thread_id: thread.thread_id,
+                turn_id: started.turn_id,
+            })
+            .expect("turn/read should observe completed runtime result");
+        assert_eq!(read.turn.output.as_deref(), Some("final answer"));
+    }
+
+    #[test]
     fn app_server_runtime_responder_constructor_wires_real_agent_bridge() {
         let responder = Arc::new(ChunkedRuntimeResponder::new(["res", "ponder"]));
         let mut server = AppServer::with_runtime_responder(responder);
@@ -4773,6 +4915,20 @@ mod tests {
     }
 
     fn initialized_server_with_bridge(bridge: Arc<dyn RuntimeBridge>) -> AppServer {
+        initialized_server_with_bridge_and_capabilities(bridge, Vec::new())
+    }
+
+    fn initialized_codex_v2_server_with_bridge(bridge: Arc<dyn RuntimeBridge>) -> AppServer {
+        initialized_server_with_bridge_and_capabilities(
+            bridge,
+            vec![CompatibilityProfile::CODEX_APP_SERVER_V2_ID.to_string()],
+        )
+    }
+
+    fn initialized_server_with_bridge_and_capabilities(
+        bridge: Arc<dyn RuntimeBridge>,
+        requested_capabilities: Vec<String>,
+    ) -> AppServer {
         let mut server = AppServer::with_runtime_bridge(bridge);
         server
             .initialize(InitializeParams {
@@ -4783,7 +4939,7 @@ mod tests {
                 },
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
-                requested_capabilities: Vec::new(),
+                requested_capabilities,
                 model_provider: Some(test_model_provider_config()),
             })
             .expect("initialize should succeed");
@@ -4924,6 +5080,41 @@ mod tests {
         }
     }
 
+    struct ScriptedRuntimeResponder {
+        events: Vec<dasclaw_runtime::AgentEvent>,
+        output: String,
+    }
+
+    impl ScriptedRuntimeResponder {
+        fn new(
+            events: impl IntoIterator<Item = dasclaw_runtime::AgentEvent>,
+            output: impl Into<String>,
+        ) -> Self {
+            Self {
+                events: events.into_iter().collect(),
+                output: output.into(),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl dasclaw_runtime::AgentResponder for ScriptedRuntimeResponder {
+        async fn respond(&self, _ctx: &mut ReasoningContext) -> Result<RespondOutput, HostError> {
+            Ok(text_output(&self.output))
+        }
+
+        async fn respond_streaming(
+            &self,
+            _ctx: &mut ReasoningContext,
+            event_tx: mpsc::Sender<dasclaw_runtime::AgentEvent>,
+        ) -> Result<RespondOutput, HostError> {
+            for event in &self.events {
+                let _ = event_tx.send(event.clone()).await;
+            }
+            Ok(text_output(&self.output))
+        }
+    }
+
     struct CancelAwareRuntimeResponder {
         token: CancellationToken,
     }
@@ -5025,6 +5216,17 @@ mod tests {
                             delta.clone(),
                         );
                     }
+                    RuntimeTurnOutcome::ReasoningSummaryDelta {
+                        delta,
+                        summary_index,
+                    } => {
+                        request.updates.reasoning_summary_delta(
+                            request.thread_id.clone(),
+                            request.turn_id.clone(),
+                            *summary_index,
+                            delta.clone(),
+                        );
+                    }
                     RuntimeTurnOutcome::Completed { output } => {
                         request.updates.complete(
                             request.thread_id.clone(),
@@ -5081,6 +5283,17 @@ mod tests {
                                 delta,
                             );
                         }
+                        RuntimeTurnOutcome::ReasoningSummaryDelta {
+                            delta,
+                            summary_index,
+                        } => {
+                            request.updates.reasoning_summary_delta(
+                                request.thread_id.clone(),
+                                request.turn_id.clone(),
+                                summary_index,
+                                delta,
+                            );
+                        }
                         RuntimeTurnOutcome::Completed { output } => {
                             request.updates.complete(
                                 request.thread_id.clone(),
@@ -5119,6 +5332,17 @@ mod tests {
                         request.updates.delta(
                             request.thread_id.clone(),
                             request.turn_id.clone(),
+                            delta,
+                        );
+                    }
+                    RuntimeTurnOutcome::ReasoningSummaryDelta {
+                        delta,
+                        summary_index,
+                    } => {
+                        request.updates.reasoning_summary_delta(
+                            request.thread_id.clone(),
+                            request.turn_id.clone(),
+                            summary_index,
                             delta,
                         );
                     }

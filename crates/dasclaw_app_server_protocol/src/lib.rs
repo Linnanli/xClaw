@@ -48,6 +48,7 @@ pub mod event {
     pub const TURN_CANCELLED: &str = "turn/cancelled";
     pub const ITEM_STARTED: &str = "item/started";
     pub const ITEM_AGENT_MESSAGE_DELTA: &str = "item/agentMessage/delta";
+    pub const ITEM_REASONING_SUMMARY_TEXT_DELTA: &str = "item/reasoning/summaryTextDelta";
     pub const ITEM_COMPLETED: &str = "item/completed";
     pub const ERROR: &str = "error";
 }
@@ -449,6 +450,7 @@ impl CapabilityMatrix {
                     event::TURN_CANCELLED,
                     event::ITEM_STARTED,
                     event::ITEM_AGENT_MESSAGE_DELTA,
+                    event::ITEM_REASONING_SUMMARY_TEXT_DELTA,
                     event::ITEM_COMPLETED,
                     event::ERROR,
                 ],
@@ -584,6 +586,7 @@ const CODEX_APP_SERVER_V2_EVENTS: &[&str] = &[
     event::TURN_CANCELLED,
     event::ITEM_STARTED,
     event::ITEM_AGENT_MESSAGE_DELTA,
+    event::ITEM_REASONING_SUMMARY_TEXT_DELTA,
     event::ITEM_COMPLETED,
     event::ERROR,
 ];
@@ -856,6 +859,11 @@ fn phase_one_events() -> Vec<EventSchema> {
             event::ITEM_AGENT_MESSAGE_DELTA,
             "session",
             "AgentMessageDeltaEvent",
+        ),
+        EventSchema::new(
+            event::ITEM_REASONING_SUMMARY_TEXT_DELTA,
+            "session",
+            "ReasoningSummaryTextDeltaEvent",
         ),
         EventSchema::new(event::ITEM_COMPLETED, "session", "ItemCompletedEvent"),
         EventSchema::new(event::ERROR, "session", "ErrorEvent"),
@@ -1275,6 +1283,16 @@ pub struct AgentMessageDeltaEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ReasoningSummaryTextDeltaEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub summary_index: i64,
+    pub delta: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ItemCompletedEvent {
     pub thread_id: String,
     pub turn_id: String,
@@ -1433,6 +1451,12 @@ impl ServerNotification {
 
     pub fn agent_message_delta(event: AgentMessageDeltaEvent) -> Result<Self, serde_json::Error> {
         Self::new(event::ITEM_AGENT_MESSAGE_DELTA, event)
+    }
+
+    pub fn reasoning_summary_text_delta(
+        event: ReasoningSummaryTextDeltaEvent,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::ITEM_REASONING_SUMMARY_TEXT_DELTA, event)
     }
 
     pub fn item_completed(event: ItemCompletedEvent) -> Result<Self, serde_json::Error> {
@@ -2054,6 +2078,14 @@ mod tests {
                 delta: "hel".to_string(),
             })
             .expect("item delta fixture should serialize"),
+            ServerNotification::reasoning_summary_text_delta(ReasoningSummaryTextDeltaEvent {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                item_id: "turn_1:reasoning".to_string(),
+                summary_index: 0,
+                delta: "scratch".to_string(),
+            })
+            .expect("item/reasoning fixture should serialize"),
             ServerNotification::item_completed(ItemCompletedEvent {
                 thread_id: "thread_1".to_string(),
                 turn_id: "turn_1".to_string(),
@@ -2079,5 +2111,35 @@ mod tests {
         assert_eq!(events[0].params["eventQueue"]["overflow"], "lag_disconnect");
         assert_eq!(events[10].params["itemType"], "agent_message");
         assert_eq!(events[11].params["delta"], "hel");
+        assert_eq!(events[12].params["delta"], "scratch");
+    }
+
+    #[test]
+    fn codex_v2_contract_exposes_structured_reasoning_delta() {
+        let notification =
+            ServerNotification::reasoning_summary_text_delta(ReasoningSummaryTextDeltaEvent {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                item_id: "turn_1:reasoning".to_string(),
+                summary_index: 0,
+                delta: "private scratch".to_string(),
+            })
+            .expect("reasoning delta fixture should serialize");
+
+        assert_eq!(
+            notification.method,
+            event::ITEM_REASONING_SUMMARY_TEXT_DELTA
+        );
+        assert_eq!(notification.params["threadId"], "thread_1");
+        assert_eq!(notification.params["turnId"], "turn_1");
+        assert_eq!(notification.params["itemId"], "turn_1:reasoning");
+        assert_eq!(notification.params["summaryIndex"], 0);
+        assert_eq!(notification.params["delta"], "private scratch");
+        assert!(
+            !notification.params["delta"]
+                .as_str()
+                .expect("delta should be text")
+                .contains("<think>")
+        );
     }
 }

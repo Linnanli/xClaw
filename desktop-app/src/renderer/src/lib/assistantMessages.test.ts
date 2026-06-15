@@ -2,7 +2,7 @@
 
 import { act, createElement, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { AppendMessage, ModelContext } from '@assistant-ui/react'
+import type { AppendMessage, ModelContext, ThreadMessage } from '@assistant-ui/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AppServerNotification } from '../../../shared/appServerApi'
 import type { AppServerModelSelectorState } from '../hooks/useDasclawAssistantRuntime'
@@ -12,6 +12,8 @@ type ModelContextRegistration = {
 }
 
 type ExternalStoreAdapterCapture = {
+  messages?: readonly ThreadMessage[]
+  isRunning?: boolean
   onNew?: (message: AppendMessage) => Promise<void>
   onEdit?: unknown
 }
@@ -391,5 +393,70 @@ describe('useDasclawAssistantRuntime', () => {
       threadId: 'thread-1',
       input: [{ type: 'text', text: 'ping' }]
     })
+  })
+
+  it('maps app-server reasoning and agent text notifications to assistant-ui parts', async () => {
+    requestMock.mockImplementation(async (method: string) => {
+      if (method === 'thread/start') return { threadId: 'thread-1' }
+      if (method === 'turn/start') {
+        queueMicrotask(() => {
+          notificationListener?.({
+            hostId: 'local',
+            method: 'item/reasoning/summaryTextDelta',
+            params: {
+              threadId: 'thread-1',
+              turnId: 'turn-1',
+              itemId: 'turn-1:reasoning',
+              summaryIndex: 0,
+              delta: 'private scratch'
+            }
+          })
+          notificationListener?.({
+            hostId: 'local',
+            method: 'item/agentMessage/delta',
+            params: {
+              threadId: 'thread-1',
+              turnId: 'turn-1',
+              itemId: 'turn-1',
+              delta: 'final answer'
+            }
+          })
+          notificationListener?.({
+            hostId: 'local',
+            method: 'turn/completed',
+            params: {
+              threadId: 'thread-1',
+              turnId: 'turn-1',
+              output: 'final answer'
+            }
+          })
+        })
+        return { turnId: 'turn-1' }
+      }
+      throw new Error(`unexpected method ${method}`)
+    })
+    act(() => {
+      root.render(createElement(RuntimeProbe))
+    })
+
+    await act(async () => {
+      await runtimeAdapterCapture.latest?.onNew?.({
+        role: 'user',
+        content: [{ type: 'text', text: 'ping' }],
+        attachments: [],
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        parentId: null,
+        sourceId: null,
+        runConfig: undefined,
+        metadata: { custom: {} }
+      })
+    })
+
+    const assistant = runtimeAdapterCapture.latest?.messages?.at(-1)
+    expect(assistant?.role).toBe('assistant')
+    expect(assistant?.content).toEqual([
+      { type: 'reasoning', text: 'private scratch' },
+      { type: 'text', text: 'final answer' }
+    ])
   })
 })

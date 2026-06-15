@@ -441,6 +441,7 @@ mod tests {
                 }))),
                 tool_complete_result: Mutex::new(Some(Ok(ToolCompletionResponse {
                     content: Some(content.to_string()),
+                    reasoning: None,
                     tool_calls: vec![],
                     input_tokens: 10,
                     output_tokens: 5,
@@ -851,6 +852,7 @@ mod tests {
             }
             Ok(ToolCompletionResponse {
                 content: Some(format!("{} ok", self.name)),
+                reasoning: None,
                 tool_calls: vec![],
                 input_tokens: 10,
                 output_tokens: 5,

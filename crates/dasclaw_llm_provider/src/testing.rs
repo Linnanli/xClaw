@@ -139,6 +139,7 @@ impl LlmProvider for StubLlm {
         }
         Ok(ToolCompletionResponse {
             content: Some(self.response.clone()),
+            reasoning: None,
             tool_calls: Vec::new(),
             input_tokens: 10,
             output_tokens: 5,
