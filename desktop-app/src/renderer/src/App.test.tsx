@@ -6,14 +6,34 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
-const threadMessageState = vi.hoisted(() => ({
+type MockThreadMessageState = {
+  message: {
+    composer: {
+      isEditing: boolean
+    }
+    content: { type: 'text'; text: string }[]
+    role: 'assistant' | 'user'
+    status: { type: 'complete' } | { type: 'running' }
+  }
+}
+
+const threadMessageState = vi.hoisted<MockThreadMessageState>(() => ({
   message: {
     composer: {
       isEditing: false
     },
-    role: 'user'
+    content: [{ type: 'text', text: '正在思考' }],
+    role: 'user',
+    status: { type: 'complete' }
   }
 }))
+
+function resetThreadMessageState(): void {
+  threadMessageState.message.composer.isEditing = false
+  threadMessageState.message.content = [{ type: 'text', text: '正在思考' }]
+  threadMessageState.message.role = 'user'
+  threadMessageState.message.status = { type: 'complete' }
+}
 
 type PrimitiveProps = {
   children?: ReactNode | ((value: unknown) => ReactNode)
@@ -52,6 +72,7 @@ vi.mock('@assistant-ui/react', () => {
       isEmpty: true
     },
     message: {
+      ...threadMessageState.message,
       isCopied: false
     },
     thread: {
@@ -68,6 +89,14 @@ vi.mock('@assistant-ui/react', () => {
       threadItems: []
     }
   }
+
+  const currentAssistantState = (): typeof assistantState => ({
+    ...assistantState,
+    message: {
+      ...threadMessageState.message,
+      isCopied: false
+    }
+  })
 
   const renderChildren = (children: PrimitiveProps['children']): ReactNode => {
     if (typeof children === 'function') return children({ message: { role: 'assistant' } })
@@ -105,7 +134,8 @@ vi.mock('@assistant-ui/react', () => {
       unstable_Thumb: primitive('Attachment.Thumb')
     },
     AuiIf: ({ children, condition }: PrimitiveProps) => {
-      const visible = typeof condition === 'function' ? condition(assistantState) : condition
+      const visible =
+        typeof condition === 'function' ? condition(currentAssistantState()) : condition
       return visible ? <>{renderChildren(children)}</> : null
     },
     BranchPickerPrimitive: {
@@ -200,7 +230,9 @@ vi.mock('@assistant-ui/react', () => {
         getState: () => ({ isRunning: false })
       })
     }),
-    useAuiState: (selector: (state: typeof assistantState) => unknown) => selector(assistantState)
+    useMessageTiming: () => null,
+    useAuiState: (selector: (state: typeof assistantState) => unknown) =>
+      selector(currentAssistantState())
   }
 })
 
@@ -211,7 +243,7 @@ describe('App composer', () => {
   let root: Root
 
   beforeEach(() => {
-    threadMessageState.message.composer.isEditing = false
+    resetThreadMessageState()
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
@@ -283,5 +315,21 @@ describe('App composer', () => {
     expect(container.querySelector('[data-slot="aui_edit-composer-wrapper"]')).not.toBeNull()
     expect(container.querySelector('.aui-edit-composer-root')).not.toBeNull()
     expect(container.querySelector('.aui-user-message-content-wrapper')).toBeNull()
+  })
+
+  it('adds shimmer styling to the pending assistant thinking message', () => {
+    threadMessageState.message.role = 'assistant'
+    threadMessageState.message.status = { type: 'running' }
+
+    act(() => {
+      root.render(<App />)
+    })
+
+    const assistantContent = container.querySelector('[data-slot="aui_assistant-message-content"]')
+
+    expect(assistantContent?.className).toContain('shimmer')
+    expect(assistantContent?.className).toContain('text-foreground/60')
+    expect(assistantContent?.className).toContain('motion-reduce:animate-none')
+    expect(container.querySelector('[data-slot="aui_assistant-message-footer"]')).toBeNull()
   })
 })

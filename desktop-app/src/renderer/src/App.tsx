@@ -57,6 +57,7 @@ import {
 
 import { ModelSelector } from './components/assistant-ui'
 import { cn } from './lib/utils'
+import { isPendingAssistantMessageContent } from './lib/assistantMessages'
 import {
   useAppServerModelSelectorState,
   useDasclawAssistantRuntime
@@ -376,7 +377,7 @@ function ThreadWelcome(): React.JSX.Element {
   return (
     <section className="aui-thread-welcome-root mx-auto mb-6 flex w-full max-w-(--thread-max-width) flex-col items-center px-4 text-center">
       <h1 className="aui-thread-welcome-message-inner duration-200 animate-in fade-in slide-in-from-bottom-1 text-2xl font-semibold tracking-[-0.02em]">
-        今天想让 Dasclaw 做什么？
+        How can I help you today?
       </h1>
     </section>
   )
@@ -481,6 +482,12 @@ function ThreadScrollToBottom(): React.JSX.Element {
 }
 
 function AssistantMessage(): React.JSX.Element {
+  const isThinking = useAuiState(
+    (state) =>
+      state.message.status?.type === 'running' &&
+      isPendingAssistantMessageContent(state.message.content)
+  )
+
   return (
     <MessagePrimitive.Root
       data-slot="aui_assistant-message-root"
@@ -489,18 +496,23 @@ function AssistantMessage(): React.JSX.Element {
     >
       <div
         data-slot="aui_assistant-message-content"
-        className="wrap-break-word px-2 leading-relaxed text-foreground whitespace-pre-wrap"
+        className={cn(
+          'wrap-break-word px-2 leading-relaxed text-foreground whitespace-pre-wrap',
+          isThinking && 'shimmer text-foreground/60 motion-reduce:animate-none'
+        )}
       >
-        <MessagePrimitive.Parts components={{ Reasoning: ReasoningPart }} />
+        <MessagePrimitive.Parts components={{ Text: AssistantText, Reasoning: ReasoningPart }} />
         <MessagePrimitive.Error />
       </div>
-      <div
-        data-slot="aui_assistant-message-footer"
-        className="ml-2 flex min-h-7.5 items-center pt-1.5 -mb-7.5"
-      >
-        <BranchPicker />
-        <AssistantActionBar />
-      </div>
+      {isThinking ? null : (
+        <div
+          data-slot="aui_assistant-message-footer"
+          className="ml-2 flex min-h-7.5 items-center pt-1.5 -mb-7.5"
+        >
+          <BranchPicker />
+          <AssistantActionBar />
+        </div>
+      )}
     </MessagePrimitive.Root>
   )
 }
@@ -600,6 +612,11 @@ function DirectiveText({ text }: TextMessagePartProps): React.JSX.Element {
       })}
     </>
   )
+}
+
+function AssistantText({ text }: TextMessagePartProps): React.JSX.Element | null {
+  if (!text) return null
+  return <span className="whitespace-pre-wrap">{text}</span>
 }
 
 function ReasoningPart({ text }: ReasoningMessagePartProps): React.JSX.Element {

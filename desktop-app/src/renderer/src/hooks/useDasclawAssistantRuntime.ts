@@ -26,7 +26,9 @@ import {
   assistantMessageWithContent,
   extractTextFromAppendMessage,
   initialAssistantMessages,
+  isPendingAssistantMessageContent,
   modelOptionsFromProviderConfig,
+  pendingAssistantMessageText,
   userMessage
 } from '../lib/assistantMessages'
 import { createAppServerTurnTracker } from '../lib/appServerTurnTracker'
@@ -184,7 +186,7 @@ export function useDasclawAssistantRuntime(): DasclawAssistantRuntime {
       setMessages((current) => [
         ...current,
         userMessage(userId, prompt),
-        assistantMessage(pendingId, 'Dasclaw 正在处理...', { type: 'running' })
+        assistantMessage(pendingId, pendingAssistantMessageText, { type: 'running' })
       ])
       await resolvePendingPrompt(pendingId, prompt)
     },
@@ -205,7 +207,7 @@ export function useDasclawAssistantRuntime(): DasclawAssistantRuntime {
         return [
           ...current.slice(0, editedIndex),
           userMessage(editedMessageId, prompt),
-          assistantMessage(pendingId, 'Dasclaw 正在处理...', { type: 'running' })
+          assistantMessage(pendingId, pendingAssistantMessageText, { type: 'running' })
         ]
       })
       await resolvePendingPrompt(pendingId, prompt)
@@ -277,11 +279,7 @@ function appendPendingAssistantMessageContentDelta(
     current.map((item) => {
       if (item.id !== pendingId || item.role !== 'assistant') return item
       const content = item.content.slice()
-      const placeholder =
-        content.length === 1 &&
-        content[0]?.type === 'text' &&
-        content[0].text === 'Dasclaw 正在处理...'
-      if (placeholder) content.length = 0
+      if (isPendingAssistantMessageContent(content)) content.length = 0
       const previous = content.at(-1)
       if (previous?.type === part.type && 'text' in previous) {
         content[content.length - 1] = {
