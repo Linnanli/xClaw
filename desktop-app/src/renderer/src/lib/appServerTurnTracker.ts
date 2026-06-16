@@ -14,6 +14,7 @@ export type TurnCompletion = {
 
 type TurnTrackerOptions = {
   timeoutMs?: number
+  onContentDelta?: (turnId: string, part: AppServerAssistantContentPart) => void
 }
 
 type PendingTurn = {
@@ -24,6 +25,7 @@ type PendingTurn = {
 
 export type AppServerTurnTracker = {
   waitForTurnCompletion(turnId: string): Promise<TurnCompletion>
+  getTurnContent(turnId: string): readonly AppServerAssistantContentPart[]
   handleNotification(notification: AppServerNotification): void
   clear(error?: Error): void
 }
@@ -32,6 +34,7 @@ const DEFAULT_TURN_COMPLETION_TIMEOUT_MS = 120_000
 
 export function createAppServerTurnTracker(options: TurnTrackerOptions = {}): AppServerTurnTracker {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TURN_COMPLETION_TIMEOUT_MS
+  const onContentDelta = options.onContentDelta
   const pendingTurns = new Map<string, PendingTurn>()
   const completedTurns = new Map<string, TurnCompletion>()
   const turnContent = new Map<string, AppServerAssistantContentPart[]>()
@@ -57,6 +60,7 @@ export function createAppServerTurnTracker(options: TurnTrackerOptions = {}): Ap
     const contentDelta = parseTurnContentDelta(notification)
     if (contentDelta) {
       appendTurnContentDelta(contentDelta.turnId, contentDelta.part)
+      onContentDelta?.(contentDelta.turnId, contentDelta.part)
       return
     }
 
@@ -101,8 +105,13 @@ export function createAppServerTurnTracker(options: TurnTrackerOptions = {}): Ap
     turnContent.set(turnId, content)
   }
 
+  function getTurnContent(turnId: string): readonly AppServerAssistantContentPart[] {
+    return (turnContent.get(turnId) ?? []).map((part) => ({ ...part }))
+  }
+
   return {
     waitForTurnCompletion,
+    getTurnContent,
     handleNotification,
     clear
   }

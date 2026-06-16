@@ -8,7 +8,7 @@
 mod fixtures;
 
 use dasclaw_core::agentic_loop::AgenticLoopConfig;
-use dasclaw_runtime::{Agent, AgentError};
+use dasclaw_runtime::{Agent, AgentError, AgentRunOptions};
 use serde_json::json;
 
 use fixtures::{RecordingToolExecutor, ScriptedResponder, no_tool_defs, tool_call_turn};
@@ -40,7 +40,7 @@ async fn req_dasclaw_cli_loop_e21_max_iterations_3_exact_count() {
         .expect("agent builds");
 
     let err = agent
-        .run("spin forever")
+        .invoke("spin forever", AgentRunOptions::invoke())
         .await
         .expect_err("looped responder must trip the cap");
 

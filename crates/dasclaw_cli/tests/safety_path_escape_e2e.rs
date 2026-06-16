@@ -35,7 +35,7 @@ use async_trait::async_trait;
 use dasclaw_core::hooks::HookBundle;
 use dasclaw_core::messages::{Role, ToolCall, ToolResult};
 use dasclaw_core::traits::HostError;
-use dasclaw_runtime::{Agent, ToolExecutor};
+use dasclaw_runtime::{Agent, AgentRunOptions, ToolExecutor};
 use dasclaw_workspace_cap::{WorkspaceCapError, WorkspaceCapability};
 use tempfile::TempDir;
 
@@ -138,7 +138,11 @@ async fn req_dasclaw_cli_safety_e11_path_escape_returns_tool_error() {
         .build()
         .expect("build agent");
 
-    let reply = agent.run("read it").await.expect("agent loop completes");
+    let reply = agent
+        .invoke("read it", AgentRunOptions::invoke())
+        .await
+        .expect("agent loop completes")
+        .text;
     assert_eq!(
         reply, "declined: path outside workspace",
         "loop must complete normally with the model's follow-up turn"
@@ -183,7 +187,11 @@ async fn req_dasclaw_cli_safety_e11_path_inside_workspace_succeeds() {
         .build()
         .expect("build agent");
 
-    let reply = agent.run("read it").await.expect("agent loop completes");
+    let reply = agent
+        .invoke("read it", AgentRunOptions::invoke())
+        .await
+        .expect("agent loop completes")
+        .text;
     assert_eq!(
         reply, "file content read",
         "happy path must complete with the model's follow-up turn"

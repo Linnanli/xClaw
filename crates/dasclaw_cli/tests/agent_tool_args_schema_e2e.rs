@@ -30,7 +30,7 @@ use dasclaw_core::hooks::{
     AutoApproveGate, EgressDecision, EgressGate, EgressKind, HookBundle, InMemorySecrets,
     NoopSandboxExecutor, RedactionStats,
 };
-use dasclaw_runtime::Agent;
+use dasclaw_runtime::{Agent, AgentRunOptions};
 use dasclaw_safety::Validator;
 use serde_json::json;
 
@@ -202,9 +202,10 @@ async fn req_dasclaw_cli_loop_e24_invalid_schema_blocks_executor() {
         .expect("agent builds");
 
     let reply = agent
-        .run("read the report file")
+        .invoke("read the report file", AgentRunOptions::invoke())
         .await
-        .expect("loop must finish — Block on a tool call is non-fatal");
+        .expect("loop must finish — Block on a tool call is non-fatal")
+        .text;
 
     assert_eq!(reply, "declined: invalid params for read_file");
 
@@ -241,9 +242,10 @@ async fn req_dasclaw_cli_loop_e24_valid_schema_allows_executor() {
         .expect("agent builds");
 
     let reply = agent
-        .run("read the report file")
+        .invoke("read the report file", AgentRunOptions::invoke())
         .await
-        .expect("baseline must run");
+        .expect("baseline must run")
+        .text;
 
     assert_eq!(reply, "read complete");
 
@@ -284,9 +286,10 @@ async fn req_dasclaw_cli_loop_e24_schema_gate_scoped_to_target_tool() {
         .expect("agent builds");
 
     let reply = agent
-        .run("list files")
+        .invoke("list files", AgentRunOptions::invoke())
         .await
-        .expect("non-target tool must not be gated");
+        .expect("non-target tool must not be gated")
+        .text;
 
     assert_eq!(reply, "listing complete");
 

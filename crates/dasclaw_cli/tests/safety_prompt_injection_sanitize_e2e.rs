@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use dasclaw_core::hooks::HookBundle;
 use dasclaw_core::messages::Role;
-use dasclaw_runtime::Agent;
+use dasclaw_runtime::{Agent, AgentRunOptions};
 
 #[path = "fixtures/safety_fixtures.rs"]
 mod safety_fixtures;
@@ -60,7 +60,11 @@ async fn req_dasclaw_cli_safety_e15_tool_output_sanitized_before_next_llm_turn()
         .build()
         .expect("build agent");
 
-    let reply = agent.run("fetch please").await.expect("run");
+    let reply = agent
+        .invoke("fetch please", AgentRunOptions::invoke())
+        .await
+        .expect("run")
+        .text;
     assert_eq!(reply, "acknowledged");
 
     // Second LLM turn (index 1) is the one that sees the tool_result.

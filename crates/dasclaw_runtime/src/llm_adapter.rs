@@ -15,7 +15,10 @@
 //!     .responder(LlmProviderResponder::new(provider))
 //!     .system_prompt("You are a helpful assistant.")
 //!     .build()?;
-//! let text = agent.run("Hello!").await?;
+//! let text = agent
+//!     .invoke("Hello!", AgentRunOptions::invoke())
+//!     .await?
+//!     .text;
 //! ```
 //!
 //! ## Why a `Box<dyn LlmProvider>` is not exposed
@@ -29,14 +32,16 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use dasclaw_core::agentic_loop::{AgentCallPolicy, ModelCallMode};
 use dasclaw_core::messages::{
     ToolCompletionRequest, ToolCompletionResponse, sanitize_tool_messages,
 };
 use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
 use dasclaw_core::traits::HostError;
-use dasclaw_llm_provider::provider::provider::LlmProvider;
+use dasclaw_llm_provider::provider::provider::{LlmProvider, LlmStreamEvent};
 use dasclaw_llm_provider::provider::reasoning::clean_user_visible_response;
+use futures_util::StreamExt;
 use tokio::sync::mpsc;
 
 use crate::agent::{AgentEvent, AgentResponder};
@@ -65,8 +70,36 @@ impl<P: LlmProvider> LlmProviderResponder<P> {
 impl<P: LlmProvider + 'static> AgentResponder for LlmProviderResponder<P> {
     async fn respond(&self, ctx: &mut ReasoningContext) -> Result<RespondOutput, HostError> {
         let request = build_request(ctx);
-        let response = self.provider.complete_with_tools(request).await?;
+        let response = self.provider.invoke_with_tools(request).await?;
         Ok(clean_respond_output(map_to_respond_output(response)))
+    }
+
+    async fn respond_with_policy(
+        &self,
+        ctx: &mut ReasoningContext,
+        policy: AgentCallPolicy,
+    ) -> Result<RespondOutput, HostError> {
+        match policy.model_call_mode {
+            ModelCallMode::Invoke => {
+                let request = build_request(ctx);
+                let response = self.provider.invoke_with_tools(request).await?;
+                if let Some(event_tx) = policy.event_tx {
+                    send_response_events(
+                        &event_tx,
+                        response.reasoning.as_deref(),
+                        response.content.as_deref(),
+                    )
+                    .await;
+                }
+                Ok(clean_respond_output(map_to_respond_output(response)))
+            }
+            ModelCallMode::Stream => {
+                let event_tx = policy.event_tx;
+                let request = build_request(ctx);
+                let response = self.stream_provider_response(request, event_tx).await?;
+                Ok(clean_respond_output(map_to_respond_output(response)))
+            }
+        }
     }
 
     /// Forward token-level text deltas to `event_tx` while the
@@ -84,55 +117,69 @@ impl<P: LlmProvider + 'static> AgentResponder for LlmProviderResponder<P> {
         ctx: &mut ReasoningContext,
         event_tx: mpsc::Sender<AgentEvent>,
     ) -> Result<RespondOutput, HostError> {
-        let request = build_request(ctx);
-        if !self.provider.supports_streaming() {
-            let response = self.provider.complete_with_tools(request).await?;
-            send_response_events(
-                &event_tx,
-                response.reasoning.as_deref(),
-                response.content.as_deref(),
-            )
-            .await;
-            return Ok(clean_respond_output(map_to_respond_output(response)));
-        }
+        self.respond_with_policy(
+            ctx,
+            AgentCallPolicy {
+                model_call_mode: ModelCallMode::Stream,
+                event_tx: Some(event_tx),
+            },
+        )
+        .await
+    }
+}
 
-        let (chunk_tx, mut chunk_rx) = mpsc::unbounded_channel::<String>();
-        let reasoning_event_tx = event_tx.clone();
+impl<P: LlmProvider + 'static> LlmProviderResponder<P> {
+    async fn stream_provider_response(
+        &self,
+        request: ToolCompletionRequest,
+        event_tx: Option<mpsc::Sender<AgentEvent>>,
+    ) -> Result<ToolCompletionResponse, HostError> {
+        let mut provider_stream = self.provider.stream_with_tools(request).await?;
+        let mut legacy_stream = LegacyReasoningStream::default();
+        let mut completed = None;
 
-        // Forwarder runs concurrently with `complete_with_tools_stream`:
-        // the provider call won't return until it closes `chunk_tx`, at
-        // which point `chunk_rx` yields `None` and the forwarder exits.
-        let forwarder = tokio::spawn(async move {
-            let mut stream = LegacyReasoningStream::default();
-            while let Some(chunk) = chunk_rx.recv().await {
-                for event in stream.push(&chunk) {
-                    if event_tx.send(event).await.is_err() {
-                        // Consumer hung up — drain the rest silently so
-                        // the provider stream isn't back-pressured.
-                        while chunk_rx.recv().await.is_some() {}
-                        return;
+        while let Some(event) = provider_stream.next().await {
+            match event? {
+                LlmStreamEvent::TextDelta(delta) => {
+                    if let Some(event_tx) = event_tx.as_ref() {
+                        for event in legacy_stream.push(&delta) {
+                            if event_tx.send(event).await.is_err() {
+                                break;
+                            }
+                        }
                     }
                 }
+                LlmStreamEvent::ReasoningSummaryDelta(delta) => {
+                    if let Some(event_tx) = event_tx.as_ref() {
+                        if event_tx
+                            .send(AgentEvent::ReasoningSummaryChunk(delta))
+                            .await
+                            .is_err()
+                        {
+                            continue;
+                        }
+                    }
+                }
+                LlmStreamEvent::ToolCallInputDelta { .. } => {}
+                LlmStreamEvent::Completed(response) => {
+                    completed = Some(response);
+                }
             }
-            for event in stream.finish() {
+        }
+
+        if let Some(event_tx) = event_tx.as_ref() {
+            for event in legacy_stream.finish() {
                 if event_tx.send(event).await.is_err() {
                     break;
                 }
             }
-        });
-
-        let response = self
-            .provider
-            .complete_with_tools_stream(request, chunk_tx)
-            .await;
-        // Whether the call succeeded or failed, wait for the forwarder
-        // to drain so all already-sent chunks reach `event_tx` before
-        // the caller observes the FinishReason event in `call_llm`.
-        let _ = forwarder.await;
-        if let Ok(response) = &response {
-            send_reasoning_event(&reasoning_event_tx, response.reasoning.as_deref()).await;
         }
-        Ok(clean_respond_output(map_to_respond_output(response?)))
+
+        completed.ok_or_else(|| {
+            Box::new(crate::agent::StringHostError(
+                "provider stream ended without a completed response".to_string(),
+            )) as HostError
+        })
     }
 }
 
@@ -452,6 +499,7 @@ mod tests {
         ChatMessage, CompletionRequest, CompletionResponse, FinishReason, ToolCall, ToolDefinition,
     };
     use dasclaw_llm_provider::provider::error::LlmError;
+    use dasclaw_llm_provider::provider::provider::{LlmProviderCapabilities, LlmStream};
     use rust_decimal::Decimal;
     use std::sync::Mutex;
 
@@ -510,6 +558,148 @@ mod tests {
         }
     }
 
+    struct ModeProbeProvider {
+        calls: Mutex<Vec<&'static str>>,
+    }
+
+    impl ModeProbeProvider {
+        fn new() -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn calls(&self) -> Vec<&'static str> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl LlmProvider for ModeProbeProvider {
+        fn model_name(&self) -> &str {
+            "mode-probe"
+        }
+
+        fn cost_per_token(&self) -> (Decimal, Decimal) {
+            (Decimal::ZERO, Decimal::ZERO)
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, LlmError> {
+            unreachable!("agent loop only calls tool-aware paths")
+        }
+
+        async fn complete_with_tools(
+            &self,
+            _request: ToolCompletionRequest,
+        ) -> Result<ToolCompletionResponse, LlmError> {
+            self.calls.lock().unwrap().push("invoke");
+            Ok(text_response("invoke path"))
+        }
+
+        async fn stream_with_tools(
+            &self,
+            _request: ToolCompletionRequest,
+        ) -> Result<LlmStream, LlmError> {
+            self.calls.lock().unwrap().push("stream");
+            let (event_tx, event_rx) =
+                tokio::sync::mpsc::channel::<Result<LlmStreamEvent, LlmError>>(4);
+            event_tx
+                .send(Ok(LlmStreamEvent::Completed(text_response("stream path"))))
+                .await
+                .expect("event_rx alive");
+            Ok(LlmStream::new(event_rx))
+        }
+
+        fn capabilities(&self) -> LlmProviderCapabilities {
+            LlmProviderCapabilities {
+                native_streaming: true,
+            }
+        }
+    }
+
+    struct StreamStartErrorProvider;
+
+    #[async_trait]
+    impl LlmProvider for StreamStartErrorProvider {
+        fn model_name(&self) -> &str {
+            "stream-start-error"
+        }
+
+        fn cost_per_token(&self) -> (Decimal, Decimal) {
+            (Decimal::ZERO, Decimal::ZERO)
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, LlmError> {
+            unreachable!("stream mode must not invoke")
+        }
+
+        async fn complete_with_tools(
+            &self,
+            _request: ToolCompletionRequest,
+        ) -> Result<ToolCompletionResponse, LlmError> {
+            unreachable!("stream mode must not invoke")
+        }
+
+        async fn stream_with_tools(
+            &self,
+            _request: ToolCompletionRequest,
+        ) -> Result<LlmStream, LlmError> {
+            Err(LlmError::RequestFailed {
+                provider: self.model_name().to_string(),
+                reason: "stream start failed".to_string(),
+            })
+        }
+    }
+
+    struct MidStreamErrorProvider;
+
+    #[async_trait]
+    impl LlmProvider for MidStreamErrorProvider {
+        fn model_name(&self) -> &str {
+            "mid-stream-error"
+        }
+
+        fn cost_per_token(&self) -> (Decimal, Decimal) {
+            (Decimal::ZERO, Decimal::ZERO)
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, LlmError> {
+            unreachable!("stream mode must not invoke")
+        }
+
+        async fn complete_with_tools(
+            &self,
+            _request: ToolCompletionRequest,
+        ) -> Result<ToolCompletionResponse, LlmError> {
+            unreachable!("stream mode must not invoke")
+        }
+
+        async fn stream_with_tools(
+            &self,
+            _request: ToolCompletionRequest,
+        ) -> Result<LlmStream, LlmError> {
+            let (event_tx, event_rx) =
+                tokio::sync::mpsc::channel::<Result<LlmStreamEvent, LlmError>>(4);
+            event_tx
+                .send(Err(LlmError::RequestFailed {
+                    provider: self.model_name().to_string(),
+                    reason: "stream receive failed".to_string(),
+                }))
+                .await
+                .expect("event_rx alive");
+            Ok(LlmStream::new(event_rx))
+        }
+    }
+
     fn text_response(text: &str) -> ToolCompletionResponse {
         ToolCompletionResponse {
             content: Some(text.to_string()),
@@ -536,19 +726,6 @@ mod tests {
             input_tokens: 5,
             output_tokens: 7,
             finish_reason: FinishReason::ToolUse,
-            cache_read_input_tokens: 0,
-            cache_creation_input_tokens: 0,
-        }
-    }
-
-    fn text_response_with_reasoning(text: &str, reasoning: &str) -> ToolCompletionResponse {
-        ToolCompletionResponse {
-            content: Some(text.to_string()),
-            reasoning: Some(reasoning.to_string()),
-            tool_calls: Vec::new(),
-            input_tokens: 10,
-            output_tokens: 20,
-            finish_reason: FinishReason::Stop,
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
         }
@@ -621,11 +798,108 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn adapter_invoke_mode_uses_invoke_path_even_when_stream_is_supported() {
+        let provider = Arc::new(ModeProbeProvider::new());
+        let responder = LlmProviderResponder::new(Arc::clone(&provider));
+        let mut ctx = ReasoningContext::new();
+        ctx.messages.push(ChatMessage::user("hi"));
+
+        let output = responder
+            .respond_with_policy(
+                &mut ctx,
+                AgentCallPolicy {
+                    model_call_mode: ModelCallMode::Invoke,
+                    event_tx: None,
+                },
+            )
+            .await
+            .expect("invoke mode should complete");
+
+        assert_eq!(provider.calls(), vec!["invoke"]);
+        match output.result {
+            RespondResult::Text(text) => assert_eq!(text, "invoke path"),
+            other => panic!("expected text output, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn adapter_stream_mode_does_not_fallback_to_invoke_when_provider_stream_is_unsupported() {
+        let provider = Arc::new(MockProvider::new(text_response("must not be consumed")));
+        let responder = LlmProviderResponder::new(provider);
+        let mut ctx = ReasoningContext::new();
+        ctx.messages.push(ChatMessage::user("hi"));
+
+        let error = responder
+            .respond_with_policy(
+                &mut ctx,
+                AgentCallPolicy {
+                    model_call_mode: ModelCallMode::Stream,
+                    event_tx: None,
+                },
+            )
+            .await
+            .expect_err("stream mode should fail instead of invoking");
+
+        assert!(
+            error.to_string().contains("stream mode is not supported"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn adapter_stream_mode_returns_stream_start_error_from_outer_result() {
+        let provider = Arc::new(StreamStartErrorProvider);
+        let responder = LlmProviderResponder::new(provider);
+        let mut ctx = ReasoningContext::new();
+        ctx.messages.push(ChatMessage::user("hi"));
+
+        let error = responder
+            .respond_with_policy(
+                &mut ctx,
+                AgentCallPolicy {
+                    model_call_mode: ModelCallMode::Stream,
+                    event_tx: None,
+                },
+            )
+            .await
+            .expect_err("stream start should fail before any stream item");
+
+        assert!(
+            error.to_string().contains("stream start failed"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn adapter_stream_mode_returns_mid_stream_item_error() {
+        let provider = Arc::new(MidStreamErrorProvider);
+        let responder = LlmProviderResponder::new(provider);
+        let mut ctx = ReasoningContext::new();
+        ctx.messages.push(ChatMessage::user("hi"));
+
+        let error = responder
+            .respond_with_policy(
+                &mut ctx,
+                AgentCallPolicy {
+                    model_call_mode: ModelCallMode::Stream,
+                    event_tx: None,
+                },
+            )
+            .await
+            .expect_err("mid-stream error should propagate");
+
+        assert!(
+            error.to_string().contains("stream receive failed"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
     async fn adapter_streaming_routes_native_reasoning_outside_text() {
-        let provider = Arc::new(MockProvider::new(text_response_with_reasoning(
-            "final answer",
-            "private scratch",
-        )));
+        let provider = Arc::new(StreamingMockProvider {
+            chunks: vec!["final ".into(), "answer".into()],
+            reasoning_chunks: vec!["private ".into(), "scratch".into()],
+        });
         let responder = LlmProviderResponder::new(Arc::clone(&provider));
         let mut ctx = ReasoningContext::new();
         ctx.messages.push(ChatMessage::user("hi"));
@@ -657,6 +931,7 @@ mod tests {
     /// chunk on `event_tx` and still returns the full `RespondOutput`.
     struct StreamingMockProvider {
         chunks: Vec<String>,
+        reasoning_chunks: Vec<String>,
     }
 
     #[async_trait]
@@ -683,20 +958,31 @@ mod tests {
             unreachable!("streaming path should be exercised")
         }
 
-        fn supports_streaming(&self) -> bool {
-            true
-        }
-
-        async fn complete_with_tools_stream(
+        async fn stream_with_tools(
             &self,
             _request: ToolCompletionRequest,
-            chunk_tx: tokio::sync::mpsc::UnboundedSender<String>,
-        ) -> Result<ToolCompletionResponse, LlmError> {
-            for chunk in &self.chunks {
-                // A closed receiver shouldn't block real providers either.
-                let _ = chunk_tx.send(chunk.clone());
+        ) -> Result<LlmStream, LlmError> {
+            let (event_tx, event_rx) =
+                tokio::sync::mpsc::channel::<Result<LlmStreamEvent, LlmError>>(16);
+            for chunk in &self.reasoning_chunks {
+                let _ = event_tx
+                    .send(Ok(LlmStreamEvent::ReasoningSummaryDelta(chunk.clone())))
+                    .await;
             }
-            Ok(text_response(&self.chunks.concat()))
+            for chunk in &self.chunks {
+                let _ = event_tx
+                    .send(Ok(LlmStreamEvent::TextDelta(chunk.clone())))
+                    .await;
+            }
+            let mut completed = text_response(&self.chunks.concat());
+            let reasoning = self.reasoning_chunks.concat();
+            if !reasoning.is_empty() {
+                completed.reasoning = Some(reasoning);
+            }
+            let _ = event_tx
+                .send(Ok(LlmStreamEvent::Completed(completed)))
+                .await;
+            Ok(LlmStream::new(event_rx))
         }
     }
 
@@ -704,6 +990,7 @@ mod tests {
     async fn req_dasclaw_runtime_agent_b2_adapter_respond_streaming_forwards_chunks() {
         let provider = Arc::new(StreamingMockProvider {
             chunks: vec!["foo ".into(), "bar ".into(), "baz".into()],
+            reasoning_chunks: Vec::new(),
         });
         let responder = LlmProviderResponder::new(Arc::clone(&provider));
         let mut ctx = ReasoningContext::new();
@@ -737,6 +1024,7 @@ mod tests {
                 "nk>final ".into(),
                 "answer".into(),
             ],
+            reasoning_chunks: Vec::new(),
         });
         let responder = LlmProviderResponder::new(Arc::clone(&provider));
         let mut ctx = ReasoningContext::new();
@@ -771,6 +1059,7 @@ mod tests {
                 "nk>literal</think>\n```\n".into(),
                 "final".into(),
             ],
+            reasoning_chunks: Vec::new(),
         });
         let responder = LlmProviderResponder::new(Arc::clone(&provider));
         let mut ctx = ReasoningContext::new();

@@ -45,8 +45,8 @@
 //! |------------------|--------------|------|
 //! | `model_name() -> &str` | ✅ keep | 标识，零代价 |
 //! | `complete(req) -> Resp` | ⚠️ drop | 已被 `complete_with_tools` 覆盖；保留多一份 trait method 没必要 |
-//! | `complete_with_tools(req) -> Resp` | ✅ keep（核心） | agent loop 主入口 |
-//! | `complete_with_tools_stream(req, tx)` | ✅ keep | UI streaming 必须 |
+//! | `complete_with_tools(req) -> Resp` | ⚠️ rename | 收敛为 `invoke_with_tools`，明确是请求 / 响应路径 |
+//! | `complete_with_tools_stream(req, tx)` | ⚠️ rename | 收敛为 `stream_with_tools`，返回 provider 语义事件流 |
 //! | `list_models() -> Vec<String>` | ✅ keep | provider 配置/注册 UI 用 |
 //! | `model_metadata() -> ModelMetadata` | ✅ keep | context length 决策用 |
 //! | `effective_model_name(req)` | ✅ keep | 多模型 alias 路由 |
@@ -56,10 +56,11 @@
 //! | `calculate_cost(in, out) -> Decimal` | ❌ drop | 同上 |
 //! | `cache_write_multiplier()` | ❌ drop | 同上 |
 //! | `cache_read_discount()` | ❌ drop | 同上 |
-//! | `supports_streaming() -> bool` | ✅ keep | 调用方判定路径用 |
+//! | `supports_streaming() -> bool` | ❌ drop | 由 `capabilities().native_streaming` 表达能力，不参与自动路由 |
 //!
-//! 即：**11 个 method 中 7 个进 facade，3 个 cost 相关留在 fork/ironclaw
-//! 应用层，1 个合并**。
+//! 即：agent 主路径通过显式的 `invoke_with_tools` / `stream_with_tools`
+//! 选择 provider 调用方式；capability 只用于校验，不把 stream 静默
+//! fallback 成 invoke。
 //!
 //! ## 错误类型策略
 //!
@@ -69,12 +70,36 @@
 //! dyn。这样错误细节既能保留（downcast 取回），又不污染 dasclaw_core。
 
 use async_trait::async_trait;
+use std::pin::Pin;
 
 use crate::messages::{
     CompletionRequest, CompletionResponse, ModelMetadata, ToolCompletionRequest,
     ToolCompletionResponse,
 };
 use crate::traits::HostError;
+
+/// Provider capabilities used by callers to validate explicit call modes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LlmProviderCapabilities {
+    pub native_streaming: bool,
+}
+
+/// Events emitted by a native provider stream.
+#[derive(Debug)]
+pub enum LlmStreamEvent {
+    TextDelta(String),
+    ReasoningSummaryDelta(String),
+    ToolCallInputDelta {
+        id: String,
+        name: Option<String>,
+        delta: String,
+    },
+    Completed(ToolCompletionResponse),
+}
+
+/// Facade-level provider stream.
+pub type LlmStream =
+    Pin<Box<dyn futures_core::Stream<Item = Result<LlmStreamEvent, HostError>> + Send>>;
 
 /// LLM Provider 公共合同（W6 搬迁后 `dasclaw_core::llm::LlmProvider` 的形状）。
 ///
@@ -90,11 +115,10 @@ pub trait LlmProviderFacade: Send + Sync {
     /// 模型标识（注册时配置的名字，可能是 alias）。
     fn model_name(&self) -> &str;
 
-    /// 当前是否支持流式响应。返回 `false` 时
-    /// [`complete_with_tools_stream`](Self::complete_with_tools_stream)
-    /// 默认 fallback 到非流式路径。
-    fn supports_streaming(&self) -> bool {
-        false
+    /// Provider capabilities. This is validation metadata only; callers
+    /// choose `invoke_with_tools` or `stream_with_tools` explicitly.
+    fn capabilities(&self) -> LlmProviderCapabilities {
+        LlmProviderCapabilities::default()
     }
 
     /// 解析请求里 `model` 字段的最终值（处理 alias / 默认值）。
@@ -120,28 +144,18 @@ pub trait LlmProviderFacade: Send + Sync {
     /// [`complete_with_tools`](Self::complete_with_tools) 完全覆盖并 drop。
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, HostError>;
 
-    /// 带工具的 completion，agent loop 主入口。
-    async fn complete_with_tools(
+    /// 带工具的请求 / 响应调用，agent loop invoke path 主入口。
+    async fn invoke_with_tools(
         &self,
         request: ToolCompletionRequest,
     ) -> Result<ToolCompletionResponse, HostError>;
 
-    /// 流式带工具 completion。`chunk_tx` 接收增量文本片段，最终返回完整
-    /// 响应（含全部工具调用）。
-    ///
-    /// 默认实现 fallback 到非流式 + 整段一次性发送，保证不支持流式的
-    /// provider 不必单独实现。
-    async fn complete_with_tools_stream(
+    /// 带工具的 provider 原生流调用。建流失败在外层 `Result` 返回；
+    /// 建流后的事件 / 解码错误由 [`LlmStream`] 的 item 表达。
+    async fn stream_with_tools(
         &self,
         request: ToolCompletionRequest,
-        chunk_tx: tokio::sync::mpsc::UnboundedSender<String>,
-    ) -> Result<ToolCompletionResponse, HostError> {
-        let response = self.complete_with_tools(request).await?;
-        if let Some(ref content) = response.content {
-            let _ = chunk_tx.send(content.clone());
-        }
-        Ok(response)
-    }
+    ) -> Result<LlmStream, HostError>;
 }
 
 #[cfg(test)]
@@ -150,8 +164,71 @@ mod tests {
     //! 持有 `Arc<dyn LlmProviderFacade>` 是核心使用形态）。
 
     use super::*;
+    use crate::messages::FinishReason;
 
     fn _assert_object_safe(_: &dyn LlmProviderFacade) {}
+
+    struct StreamingFacade;
+
+    #[async_trait]
+    impl LlmProviderFacade for StreamingFacade {
+        fn model_name(&self) -> &str {
+            "streaming-facade"
+        }
+
+        fn capabilities(&self) -> LlmProviderCapabilities {
+            LlmProviderCapabilities {
+                native_streaming: true,
+            }
+        }
+
+        fn effective_model_name(&self, requested_model: Option<&str>) -> String {
+            requested_model
+                .unwrap_or_else(|| self.model_name())
+                .to_string()
+        }
+
+        fn set_model(&self, _model: &str) -> Result<(), HostError> {
+            Ok(())
+        }
+
+        async fn complete(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<CompletionResponse, HostError> {
+            Ok(CompletionResponse {
+                content: request.messages.len().to_string(),
+                input_tokens: 0,
+                output_tokens: 0,
+                finish_reason: FinishReason::Stop,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+            })
+        }
+
+        async fn invoke_with_tools(
+            &self,
+            _request: ToolCompletionRequest,
+        ) -> Result<ToolCompletionResponse, HostError> {
+            Ok(ToolCompletionResponse {
+                content: Some("ok".to_string()),
+                reasoning: None,
+                tool_calls: Vec::new(),
+                input_tokens: 0,
+                output_tokens: 0,
+                finish_reason: FinishReason::Stop,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+            })
+        }
+
+        async fn stream_with_tools(
+            &self,
+            _request: ToolCompletionRequest,
+        ) -> Result<LlmStream, HostError> {
+            Ok(Box::pin(futures_util::stream::empty()))
+        }
+    }
 
     #[test]
     fn trait_is_object_safe() {
@@ -160,5 +237,11 @@ mod tests {
         // 这里没有具体实现可塞，所以仅做 compile-time 验证。
         fn _check<T: LlmProviderFacade + ?Sized>() {}
         _check::<dyn LlmProviderFacade>();
+    }
+
+    #[tokio::test]
+    async fn facade_exposes_explicit_stream_capability_contract() {
+        let facade = StreamingFacade;
+        assert!(facade.capabilities().native_streaming);
     }
 }

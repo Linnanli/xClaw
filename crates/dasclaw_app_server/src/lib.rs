@@ -238,6 +238,7 @@ pub struct RuntimeModelProviderSnapshot {
     pub api_base_url: String,
     pub api_key: String,
     pub api_format: String,
+    pub model_call_mode: dasclaw_runtime::ModelCallMode,
 }
 
 impl std::fmt::Debug for RuntimeModelProviderSnapshot {
@@ -248,6 +249,7 @@ impl std::fmt::Debug for RuntimeModelProviderSnapshot {
             .field("api_base_url", &self.api_base_url)
             .field("api_key", &"<redacted>")
             .field("api_format", &self.api_format)
+            .field("model_call_mode", &self.model_call_mode)
             .finish()
     }
 }
@@ -272,6 +274,10 @@ impl RuntimeModelProviderSnapshot {
                 "apiFormat",
                 &model.model_id,
             )?,
+            model_call_mode: parse_model_call_mode(
+                model.model_call_mode.as_deref(),
+                &model.model_id,
+            )?,
         })
     }
 
@@ -287,6 +293,25 @@ impl RuntimeModelProviderSnapshot {
                 self.model_id
             ))),
         }
+    }
+}
+
+fn parse_model_call_mode(
+    value: Option<&str>,
+    model_id: &str,
+) -> Result<dasclaw_runtime::ModelCallMode, AppServerError> {
+    match value
+        .unwrap_or("stream")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "invoke" => Ok(dasclaw_runtime::ModelCallMode::Invoke),
+        "stream" => Ok(dasclaw_runtime::ModelCallMode::Stream),
+        other => Err(AppServerError::invalid_request(
+            "model_provider",
+            format!("selected model modelCallMode is invalid for modelId: {model_id}: {other}"),
+        )),
     }
 }
 
@@ -1521,6 +1546,7 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
         let event_updates = updates.clone();
         let event_thread_id = thread_id.clone();
         let event_turn_id = turn_id.clone();
+        let model_call_mode = request.model_provider.model_call_mode;
         thread::Builder::new()
             .name(format!("dasclaw-app-server-{turn_id}"))
             .spawn(move || {
@@ -1529,43 +1555,47 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
                     .build();
 
                 let result = match runtime {
-                    Ok(runtime) => {
-                        let (event_tx, mut event_rx) =
-                            tokio::sync::mpsc::channel::<dasclaw_runtime::AgentEvent>(64);
-                        runtime.block_on(async move {
-                            let event_pump = async move {
-                                while let Some(event) = event_rx.recv().await {
-                                    match event {
-                                        dasclaw_runtime::AgentEvent::TextChunk(delta) => {
-                                            if !delta.is_empty() {
-                                                event_updates.delta(
-                                                    event_thread_id.clone(),
-                                                    event_turn_id.clone(),
-                                                    delta,
-                                                );
-                                            }
-                                        }
-                                        dasclaw_runtime::AgentEvent::ReasoningSummaryChunk(
+                    Ok(runtime) => runtime.block_on(async move {
+                        use futures_util::StreamExt as _;
+
+                        let mut stream = std::sync::Arc::new(agent).stream(
+                            &prompt,
+                            dasclaw_runtime::AgentRunOptions { model_call_mode },
+                        );
+                        while let Some(event) = stream.next().await {
+                            match event {
+                                Ok(dasclaw_runtime::AgentEvent::TextChunk(delta)) => {
+                                    if !delta.is_empty() {
+                                        event_updates.delta(
+                                            event_thread_id.clone(),
+                                            event_turn_id.clone(),
                                             delta,
-                                        ) => {
-                                            if !delta.is_empty() {
-                                                event_updates.reasoning_summary_delta(
-                                                    event_thread_id.clone(),
-                                                    event_turn_id.clone(),
-                                                    0,
-                                                    delta,
-                                                );
-                                            }
-                                        }
-                                        _ => {}
+                                        );
                                     }
                                 }
-                            };
-                            let run = agent.run_streaming(&prompt, event_tx);
-                            let (result, ()) = tokio::join!(run, event_pump);
-                            result
-                        })
-                    }
+                                Ok(dasclaw_runtime::AgentEvent::ReasoningSummaryChunk(delta)) => {
+                                    if !delta.is_empty() {
+                                        event_updates.reasoning_summary_delta(
+                                            event_thread_id.clone(),
+                                            event_turn_id.clone(),
+                                            0,
+                                            delta,
+                                        );
+                                    }
+                                }
+                                Ok(dasclaw_runtime::AgentEvent::Completed(output)) => {
+                                    return Ok(output.text);
+                                }
+                                Ok(_) => {}
+                                Err(error) => {
+                                    return Err(error);
+                                }
+                            }
+                        }
+                        Err(dasclaw_runtime::AgentError::LoopFailure(
+                            "agent stream ended before completion".to_string(),
+                        ))
+                    }),
                     Err(error) => Err(dasclaw_runtime::AgentError::LoopFailure(format!(
                         "failed to create tokio runtime: {error}"
                     ))),
@@ -2330,6 +2360,40 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
+
+    struct InvokeOnlyResponder;
+
+    #[async_trait::async_trait]
+    impl dasclaw_runtime::AgentResponder for InvokeOnlyResponder {
+        async fn respond(&self, _ctx: &mut ReasoningContext) -> Result<RespondOutput, HostError> {
+            Ok(RespondOutput {
+                result: RespondResult::Text("invoke bridge path".to_string()),
+                usage: TokenUsage::default(),
+                finish_reason: FinishReason::Stop,
+                metadata: ResponseMetadata::default(),
+            })
+        }
+
+        async fn respond_streaming(
+            &self,
+            _ctx: &mut ReasoningContext,
+            _event_tx: mpsc::Sender<dasclaw_runtime::AgentEvent>,
+        ) -> Result<RespondOutput, HostError> {
+            Err("streaming path should not be used in invoke mode".into())
+        }
+    }
+
+    fn wait_for_runtime_updates(sink: &RuntimeTurnUpdateSink) -> Vec<RuntimeTurnUpdate> {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            let updates = sink.drain();
+            if !updates.is_empty() {
+                return updates;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        Vec::new()
+    }
 
     #[test]
     fn initialize_accepts_compatible_client_and_returns_minimal_capabilities() {
@@ -4171,6 +4235,7 @@ mod tests {
             api_base_url: "http://snapshot-host/v1".to_string(),
             api_key: "snapshot-api-key".to_string(),
             api_format: "anthropic".to_string(),
+            model_call_mode: dasclaw_runtime::ModelCallMode::Stream,
         };
 
         let config =
@@ -4182,6 +4247,49 @@ mod tests {
         assert_eq!(config.model, "snapshot-model");
         let api_key = config.api_key.expect("api key should come from snapshot");
         assert_eq!(api_key.expose_secret(), "snapshot-api-key");
+    }
+
+    #[test]
+    fn runtime_model_provider_snapshot_parses_model_call_mode() {
+        let mut model = test_model_config("gpt-test");
+        model.model_call_mode = Some("invoke".to_string());
+
+        let snapshot = RuntimeModelProviderSnapshot::from_client_model(&model)
+            .expect("modelCallMode=invoke should parse");
+
+        assert_eq!(
+            snapshot.model_call_mode,
+            dasclaw_runtime::ModelCallMode::Invoke
+        );
+    }
+
+    #[test]
+    fn dasclaw_runtime_bridge_uses_snapshot_model_call_mode() {
+        let bridge = DasclawAgentRuntimeBridge::from_responder(Arc::new(InvokeOnlyResponder));
+        let updates = RuntimeTurnUpdateSink::new();
+        let mut snapshot = test_runtime_model_snapshot();
+        snapshot.model_call_mode = dasclaw_runtime::ModelCallMode::Invoke;
+
+        bridge
+            .start_turn(RuntimeTurnStartRequest {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                prompt: "hello".to_string(),
+                model_provider: snapshot,
+                updates: updates.clone(),
+            })
+            .expect("turn should start");
+
+        let updates = wait_for_runtime_updates(&updates);
+        assert_eq!(updates.len(), 2, "expected delta + completion: {updates:?}");
+        assert!(matches!(
+            &updates[0].outcome,
+            RuntimeTurnOutcome::Delta { delta } if delta == "invoke bridge path"
+        ));
+        assert!(matches!(
+            &updates[1].outcome,
+            RuntimeTurnOutcome::Completed { output } if output == "invoke bridge path"
+        ));
     }
 
     #[test]
@@ -4963,6 +5071,7 @@ mod tests {
             api_base_url: Some("http://localhost:11434/v1".to_string()),
             api_key: Some("test-api-key".to_string()),
             api_format: Some("openai".to_string()),
+            model_call_mode: None,
             source: Some("test".to_string()),
             capabilities: Vec::new(),
         }
@@ -4975,6 +5084,7 @@ mod tests {
             api_base_url: "http://localhost:11434/v1".to_string(),
             api_key: "test-api-key".to_string(),
             api_format: "openai".to_string(),
+            model_call_mode: dasclaw_runtime::ModelCallMode::Stream,
         }
     }
 

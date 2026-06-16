@@ -18,6 +18,7 @@ path = "src/lib.rs"
 [dependencies]
 # Hook trait 层依赖。保持最小集，不拉 ironclaw/claw-code 业务代码。
 async-trait = "0.1"
+futures-core = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
@@ -48,3 +49,4 @@ tempfile = "3"
 # Snapshot tests pin the GUI/IPC JSON wire shape for serde derives added in
 # issue #909. Version centrally pinned via [workspace.dependencies] (PR #903).
 insta = { workspace = true }
+futures-util = "0.3"

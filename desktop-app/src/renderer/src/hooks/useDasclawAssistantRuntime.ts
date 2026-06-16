@@ -30,6 +30,7 @@ import {
   userMessage
 } from '../lib/assistantMessages'
 import { createAppServerTurnTracker } from '../lib/appServerTurnTracker'
+import type { AppServerAssistantContentPart } from '../lib/appServerTurnTracker'
 
 type DasclawAssistantRuntime = {
   runtime: AssistantRuntime
@@ -101,7 +102,16 @@ export function useDasclawAssistantRuntime(): DasclawAssistantRuntime {
   const [isRunning, setIsRunning] = useState(false)
   const [status, setStatus] = useState<AppServerStatus>()
   const threadIdRef = useRef<string | undefined>(undefined)
-  const turnTrackerRef = useRef(createAppServerTurnTracker())
+  const pendingTurnMessageIdsRef = useRef(new Map<string, string>())
+  const turnTrackerRef = useRef(
+    createAppServerTurnTracker({
+      onContentDelta: (turnId, part) => {
+        const pendingId = pendingTurnMessageIdsRef.current.get(turnId)
+        if (!pendingId) return
+        appendPendingAssistantMessageContentDelta(setMessages, pendingId, part)
+      }
+    })
+  )
 
   useEffect(() => {
     const turnTracker = turnTrackerRef.current
@@ -118,13 +128,21 @@ export function useDasclawAssistantRuntime(): DasclawAssistantRuntime {
     }
   }, [])
 
-  const runPromptTurn = useCallback(async (prompt: string) => {
+  const runPromptTurn = useCallback(async (pendingId: string, prompt: string) => {
     const threadId = await ensureThread(threadIdRef, prompt)
     const started = await window.desktopAppServer.request<{ turnId: string }>('turn/start', {
       threadId,
       input: [{ type: 'text', text: prompt }]
     })
-    return turnTrackerRef.current.waitForTurnCompletion(started.turnId)
+    pendingTurnMessageIdsRef.current.set(started.turnId, pendingId)
+    for (const part of turnTrackerRef.current.getTurnContent(started.turnId)) {
+      appendPendingAssistantMessageContentDelta(setMessages, pendingId, part)
+    }
+    try {
+      return await turnTrackerRef.current.waitForTurnCompletion(started.turnId)
+    } finally {
+      pendingTurnMessageIdsRef.current.delete(started.turnId)
+    }
   }, [])
 
   const resolvePendingPrompt = useCallback(
@@ -132,7 +150,7 @@ export function useDasclawAssistantRuntime(): DasclawAssistantRuntime {
       setIsRunning(true)
 
       try {
-        const response = await runPromptTurn(prompt)
+        const response = await runPromptTurn(pendingId, prompt)
         if (response.content && response.content.length > 0) {
           replacePendingAssistantMessageContent(setMessages, pendingId, response.content)
         } else {
@@ -246,6 +264,35 @@ function replacePendingAssistantMessageContent(
     current.map((item) =>
       item.id === pendingId ? assistantMessageWithContent(pendingId, content, status) : item
     )
+  )
+}
+
+function appendPendingAssistantMessageContentDelta(
+  setMessages: Dispatch<SetStateAction<ThreadMessage[]>>,
+  pendingId: string,
+  part: AppServerAssistantContentPart
+): void {
+  if (!part.text) return
+  setMessages((current) =>
+    current.map((item) => {
+      if (item.id !== pendingId || item.role !== 'assistant') return item
+      const content = item.content.slice()
+      const placeholder =
+        content.length === 1 &&
+        content[0]?.type === 'text' &&
+        content[0].text === 'Dasclaw 正在处理...'
+      if (placeholder) content.length = 0
+      const previous = content.at(-1)
+      if (previous?.type === part.type && 'text' in previous) {
+        content[content.length - 1] = {
+          ...previous,
+          text: `${previous.text}${part.text}`
+        }
+      } else {
+        content.push({ type: part.type, text: part.text } as (typeof content)[number])
+      }
+      return assistantMessageWithContent(pendingId, content, { type: 'running' })
+    })
   )
 }
 

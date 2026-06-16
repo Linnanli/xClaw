@@ -103,6 +103,7 @@ describe('assistant-ui message helpers', () => {
             provider: 'openai',
             apiBaseUrl: 'https://api.test/v1',
             apiFormat: 'openai',
+            modelCallMode: 'stream',
             source: 'admin',
             capabilities: ['chat'],
             apiKeyConfigured: false
@@ -458,5 +459,63 @@ describe('useDasclawAssistantRuntime', () => {
       { type: 'reasoning', text: 'private scratch' },
       { type: 'text', text: 'final answer' }
     ])
+  })
+
+  it('updates the pending assistant message before turn completion arrives', async () => {
+    requestMock.mockImplementation(async (method: string) => {
+      if (method === 'thread/start') return { threadId: 'thread-1' }
+      if (method === 'turn/start') {
+        queueMicrotask(() => {
+          notificationListener?.({
+            hostId: 'local',
+            method: 'item/agentMessage/delta',
+            params: {
+              threadId: 'thread-1',
+              turnId: 'turn-1',
+              itemId: 'turn-1',
+              delta: 'streamed'
+            }
+          })
+        })
+        return { turnId: 'turn-1' }
+      }
+      throw new Error(`unexpected method ${method}`)
+    })
+    act(() => {
+      root.render(createElement(RuntimeProbe))
+    })
+
+    let run: Promise<void> | undefined
+    await act(async () => {
+      run = runtimeAdapterCapture.latest?.onNew?.({
+        role: 'user',
+        content: [{ type: 'text', text: 'ping' }],
+        attachments: [],
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        parentId: null,
+        sourceId: null,
+        runConfig: undefined,
+        metadata: { custom: {} }
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const pendingAssistant = runtimeAdapterCapture.latest?.messages?.at(-1)
+    expect(pendingAssistant?.role).toBe('assistant')
+    expect(pendingAssistant?.content).toEqual([{ type: 'text', text: 'streamed' }])
+
+    await act(async () => {
+      notificationListener?.({
+        hostId: 'local',
+        method: 'turn/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          output: 'streamed'
+        }
+      })
+      await run
+    })
   })
 })

@@ -19,7 +19,7 @@ use dasclaw_core::messages::{ChatMessage, FinishReason};
 use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
 use dasclaw_core::traits::HostError;
-use dasclaw_runtime::{Agent, AgentResponder};
+use dasclaw_runtime::{Agent, AgentResponder, AgentRunOptions};
 use dasclaw_session::{
     InMemorySessionStore, SESSION_VERSION, Session, SessionSnapshot, SessionStore,
     generate_session_id,
@@ -115,7 +115,10 @@ async fn req_dasclaw_session_b2_session_snapshot_round_trip_preserves_history() 
     let mut session = Session::new(agent.clone()).with_model("scripted");
 
     let original_id = session.session_id().to_string();
-    let _ = session.run("2 + 2?").await.expect("run");
+    let _ = session
+        .invoke("2 + 2?", AgentRunOptions::invoke())
+        .await
+        .expect("invoke");
     assert_eq!(session.messages().len(), 2);
 
     let store = InMemorySessionStore::new();

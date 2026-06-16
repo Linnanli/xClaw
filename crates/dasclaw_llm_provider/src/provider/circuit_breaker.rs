@@ -21,8 +21,8 @@ use tokio::sync::Mutex;
 
 use crate::provider::error::LlmError;
 use crate::provider::provider::{
-    CompletionRequest, CompletionResponse, LlmProvider, ModelMetadata, ToolCompletionRequest,
-    ToolCompletionResponse,
+    CompletionRequest, CompletionResponse, LlmProvider, LlmProviderCapabilities, LlmStream,
+    ModelMetadata, ToolCompletionRequest, ToolCompletionResponse,
 };
 
 /// Configuration for the circuit breaker.
@@ -315,18 +315,15 @@ impl LlmProvider for CircuitBreakerProvider {
         self.inner.calculate_cost(input_tokens, output_tokens)
     }
 
-    fn supports_streaming(&self) -> bool {
-        self.inner.supports_streaming()
-    }
-
-    async fn complete_with_tools_stream(
+    async fn stream_with_tools(
         &self,
         request: ToolCompletionRequest,
-        chunk_tx: tokio::sync::mpsc::UnboundedSender<String>,
-    ) -> Result<ToolCompletionResponse, LlmError> {
-        self.inner
-            .complete_with_tools_stream(request, chunk_tx)
-            .await
+    ) -> Result<LlmStream, LlmError> {
+        self.inner.stream_with_tools(request).await
+    }
+
+    fn capabilities(&self) -> LlmProviderCapabilities {
+        self.inner.capabilities()
     }
 }
 

@@ -3,9 +3,9 @@
 //! Two behavioural contracts are covered here:
 //!
 //! 1. `Agent::cancel_handle()` — when the token is already cancelled,
-//!    `Agent::run` exits at the first signal check with
+//!    `Agent::invoke` exits at the first signal check with
 //!    [`AgentError::Stopped`] without ever calling the responder.
-//! 2. `Session::run` — running twice in a row carries the conversation
+//! 2. `Session::invoke` — running twice in a row carries the conversation
 //!    history into the second call, so the responder sees the prior user
 //!    and assistant turns in `ReasoningContext::messages`. External
 //!    cancel on a session also surfaces as [`AgentError::Stopped`].
@@ -29,7 +29,7 @@ use dasclaw_core::messages::{ChatMessage, FinishReason};
 use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
 use dasclaw_core::traits::HostError;
-use dasclaw_runtime::{Agent, AgentError, AgentResponder};
+use dasclaw_runtime::{Agent, AgentError, AgentResponder, AgentRunOptions};
 use dasclaw_session::Session;
 use tokio_util::sync::CancellationToken;
 
@@ -88,11 +88,17 @@ async fn req_dasclaw_runtime_session_b1_run_twice_carries_history() {
 
     let mut session = Session::new(agent);
 
-    let first = session.run("hello").await.expect("first run");
-    assert_eq!(first, "first reply");
+    let first = session
+        .invoke("hello", AgentRunOptions::invoke())
+        .await
+        .expect("first run");
+    assert_eq!(first.text, "first reply");
 
-    let second = session.run("again").await.expect("second run");
-    assert_eq!(second, "second reply");
+    let second = session
+        .invoke("again", AgentRunOptions::invoke())
+        .await
+        .expect("second run");
+    assert_eq!(second.text, "second reply");
 
     // Responder saw growing context across calls:
     //   call 1: [user("hello")]
@@ -130,7 +136,7 @@ async fn req_dasclaw_runtime_agent_b1_cancel_handle_stops_loop_before_responder(
     assert!(handle.is_cancelled(), "we just cancelled it");
 
     let err = agent
-        .run("please stop")
+        .invoke("please stop", AgentRunOptions::invoke())
         .await
         .expect_err("loop should stop, not produce a response");
     assert!(
@@ -168,9 +174,9 @@ async fn req_dasclaw_runtime_session_b1_external_cancel_stops_session_run() {
 
     let mut session = Session::new(agent);
     let err = session
-        .run("anything")
+        .invoke("anything", AgentRunOptions::invoke())
         .await
-        .expect_err("session.run must propagate Stopped");
+        .expect_err("session.invoke must propagate Stopped");
     assert!(
         matches!(err, AgentError::Stopped),
         "expected AgentError::Stopped, got {err:?}"

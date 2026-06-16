@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use dasclaw_core::hooks::{EgressDecision, EgressKind, HookBundle};
 use dasclaw_core::messages::Role;
-use dasclaw_runtime::Agent;
+use dasclaw_runtime::{Agent, AgentRunOptions};
 
 #[path = "fixtures/safety_fixtures.rs"]
 mod safety_fixtures;
@@ -64,9 +64,10 @@ async fn req_dasclaw_cli_safety_e9_tool_result_credential_redacted() {
         .expect("build agent");
 
     let reply = agent
-        .run("dump env")
+        .invoke("dump env", AgentRunOptions::invoke())
         .await
-        .expect("agent.run should succeed");
+        .expect("agent.invoke should succeed")
+        .text;
     assert_eq!(
         reply, FINAL_REPLY,
         "final reply should match scripted turn 2"

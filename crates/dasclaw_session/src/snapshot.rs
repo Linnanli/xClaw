@@ -123,7 +123,7 @@ pub struct SessionSnapshot {
     /// Unix milliseconds at session creation.
     pub created_at_ms: u64,
     /// Unix milliseconds of the last mutation. Updated by
-    /// [`crate::Session::run`] on successful completion.
+    /// [`crate::Session::invoke`] on successful completion.
     pub updated_at_ms: u64,
     /// Optional bound workspace; recorded for the UI / future
     /// concurrency guards. Not interpreted by the snapshot logic.

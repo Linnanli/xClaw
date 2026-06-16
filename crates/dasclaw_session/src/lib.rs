@@ -1,11 +1,11 @@
 //! Multi-turn `Session` facade for [`Agent`] + persistence boundary.
 //!
 //! This crate is the home of the conversation-level vocabulary on top
-//! of `dasclaw_runtime`'s one-shot [`Agent::run`]:
+//! of `dasclaw_runtime`'s one-shot [`Agent::invoke`]:
 //!
 //! - [`Session`] — stateful multi-turn handle around `Arc<Agent>`.
 //!   Carries a [`SessionSnapshot`] of metadata + messages across
-//!   `run()` calls so the responder always sees the prior turns.
+//!   `invoke()` calls so the responder always sees the prior turns.
 //! - [`SessionSnapshot`] — serializable view of everything a session
 //!   needs to survive a process restart. The wire format is locked by
 //!   an insta snapshot test.
@@ -18,7 +18,7 @@
 //!
 //! Cancellation is inherited from the agent: if the agent was built
 //! with [`dasclaw_runtime::AgentBuilder::cancellation_token`],
-//! cancelling the handle halts the in-flight [`Session::run`] with
+//! cancelling the handle halts the in-flight [`Session::invoke`] with
 //! [`AgentError::Stopped`] at the next loop signal check.
 //!
 //! ## Non-goals (phase 2)
@@ -67,8 +67,8 @@
 //!
 //! // Drive a conversation.
 //! let mut session = Session::new(agent.clone()).with_model("claude-opus");
-//! let _reply1 = session.run("what's 2 + 2?").await?;
-//! let _reply2 = session.run("and times 10?").await?;
+//! let _reply1 = session.invoke("what's 2 + 2?", AgentRunOptions::invoke()).await?;
+//! let _reply2 = session.invoke("and times 10?", AgentRunOptions::invoke()).await?;
 //!
 //! // Persist + resume.
 //! let store: Arc<dyn SessionStore> = Arc::new(InMemorySessionStore::new());
@@ -98,18 +98,76 @@ pub use snapshot::{
 };
 pub use store::{InMemorySessionStore, SessionStore};
 
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use dasclaw_core::messages::ChatMessage;
 use dasclaw_core::reasoning_ctx::ReasoningContext;
-use dasclaw_runtime::{Agent, AgentError, AgentEvent};
-use tokio::sync::mpsc;
+use dasclaw_runtime::{Agent, AgentError, AgentEvent, AgentRunOptions, AgentRunOutput};
+use tokio::sync::{mpsc, oneshot};
+
+/// Event stream returned by [`Session::stream`].
+pub struct SessionRunStream<'a> {
+    session: &'a mut Session,
+    event_rx: mpsc::Receiver<AgentEvent>,
+    result_rx: oneshot::Receiver<(ReasoningContext, Result<AgentRunOutput, AgentError>)>,
+    done: bool,
+}
+
+impl futures_core::Stream for SessionRunStream<'_> {
+    type Item = Result<AgentEvent, AgentError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if this.done {
+            return Poll::Ready(None);
+        }
+
+        match Pin::new(&mut this.event_rx).poll_recv(cx) {
+            Poll::Ready(Some(event)) => return Poll::Ready(Some(Ok(event))),
+            Poll::Ready(None) => {}
+            Poll::Pending => {
+                if let Poll::Ready(item) = poll_session_result(this, cx) {
+                    return Poll::Ready(item);
+                }
+                return Poll::Pending;
+            }
+        }
+
+        poll_session_result(this, cx)
+    }
+}
+
+fn poll_session_result(
+    stream: &mut SessionRunStream<'_>,
+    cx: &mut Context<'_>,
+) -> Poll<Option<Result<AgentEvent, AgentError>>> {
+    match Pin::new(&mut stream.result_rx).poll(cx) {
+        Poll::Ready(Ok((mut ctx, result))) => {
+            stream.session.state.messages = std::mem::take(&mut ctx.messages);
+            if result.is_ok() {
+                stream.session.state.touch();
+            }
+            stream.done = true;
+            Poll::Ready(Some(result.map(AgentEvent::Completed)))
+        }
+        Poll::Ready(Err(_)) => {
+            stream.done = true;
+            Poll::Ready(Some(Err(AgentError::LoopFailure(
+                "session stream producer task ended before completion".to_string(),
+            ))))
+        }
+        Poll::Pending => Poll::Pending,
+    }
+}
 
 /// Stateful, multi-turn conversation handle around an [`Agent`].
 ///
 /// Owns a [`SessionSnapshot`] (the persistable state) plus an
-/// `Arc<Agent>` (the live executor). Each [`Session::run`] builds a
+/// `Arc<Agent>` (the live executor). Each [`Session::invoke`] builds a
 /// fresh [`ReasoningContext`] for the agentic loop, replays the
 /// session's accumulated messages into it, appends the new prompt,
 /// runs to completion, and copies the resulting messages back into
@@ -178,7 +236,7 @@ impl Session {
         &self.state.messages
     }
 
-    /// Send a new user prompt and return the final text response.
+    /// Send a new user prompt and return the final output.
     ///
     /// On every call this method:
     ///
@@ -187,17 +245,24 @@ impl Session {
     ///    (system prompt, available tools, model override) is always
     ///    re-applied,
     /// 2. replays the snapshot's prior messages into the context,
-    /// 3. delegates to [`Agent::run_in_context`], which appends the
+    /// 3. delegates to [`Agent::invoke_in_context`], which appends the
     ///    user prompt and drives the agentic loop to completion,
     /// 4. copies the resulting messages back into the snapshot —
     ///    even on failure, so a partial conversation is preserved,
     /// 5. on success, advances [`SessionSnapshot::updated_at_ms`].
-    pub async fn run(&mut self, prompt: &str) -> Result<String, AgentError> {
+    pub async fn invoke(
+        &mut self,
+        prompt: &str,
+        options: AgentRunOptions,
+    ) -> Result<AgentRunOutput, AgentError> {
         let mut ctx = ReasoningContext::new();
         self.agent.seed_context(&mut ctx);
         ctx.messages = std::mem::take(&mut self.state.messages);
 
-        let result = self.agent.run_in_context(&mut ctx, prompt).await;
+        let result = self
+            .agent
+            .invoke_in_context(&mut ctx, prompt, options)
+            .await;
 
         self.state.messages = std::mem::take(&mut ctx.messages);
         if result.is_ok() {
@@ -206,33 +271,35 @@ impl Session {
         result
     }
 
-    /// Streaming variant of [`Session::run`] (issue #908, GUI blocker
-    /// B2). Replays the session's prior messages into a fresh
-    /// [`ReasoningContext`] and delegates to
-    /// [`Agent::run_in_context_streaming`], forwarding [`AgentEvent`]s
-    /// on `event_tx` as the agentic loop progresses. The final
-    /// assistant text is appended to the session snapshot on success,
-    /// matching [`Session::run`]'s history-shape contract so callers
-    /// can mix streaming and non-streaming turns freely.
-    pub async fn run_streaming(
-        &mut self,
-        prompt: &str,
-        event_tx: mpsc::Sender<AgentEvent>,
-    ) -> Result<String, AgentError> {
+    /// Stream a new user prompt through the session.
+    ///
+    /// The returned stream yields agent events and ends a successful turn
+    /// with [`AgentEvent::Completed`]. The session history is written back
+    /// when the producer task reaches a terminal result.
+    pub fn stream(&mut self, prompt: &str, options: AgentRunOptions) -> SessionRunStream<'_> {
         let mut ctx = ReasoningContext::new();
         self.agent.seed_context(&mut ctx);
-        ctx.messages = std::mem::take(&mut self.state.messages);
+        ctx.messages = self.state.messages.clone();
 
-        let result = self
-            .agent
-            .run_in_context_streaming(&mut ctx, prompt, event_tx)
-            .await;
+        let agent = Arc::clone(&self.agent);
+        let prompt = prompt.to_string();
+        let (event_tx, event_rx) = mpsc::channel::<AgentEvent>(64);
+        let (result_tx, result_rx) =
+            oneshot::channel::<(ReasoningContext, Result<AgentRunOutput, AgentError>)>();
 
-        self.state.messages = std::mem::take(&mut ctx.messages);
-        if result.is_ok() {
-            self.state.touch();
+        tokio::spawn(async move {
+            let result = agent
+                .stream_in_context(&mut ctx, &prompt, options, event_tx)
+                .await;
+            let _ = result_tx.send((ctx, result));
+        });
+
+        SessionRunStream {
+            session: self,
+            event_rx,
+            result_rx,
+            done: false,
         }
-        result
     }
 
     /// Compact the conversation by dropping the oldest `remove_count`

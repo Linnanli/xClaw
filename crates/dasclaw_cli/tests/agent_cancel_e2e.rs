@@ -1,10 +1,10 @@
 //! ADR-153 §1.1 B9 (e25): cancellation semantics.
 //!
-//! Verifies that wrapping [`Agent::run`] in `tokio::time::timeout`
+//! Verifies that wrapping [`Agent::invoke`] in `tokio::time::timeout`
 //! cleanly cancels a long-running tool call without panics or stale
 //! state. The contract has three legs:
 //!
-//!   1. **Timeout fires** — `timeout(short, agent.run(..))` returns
+//!   1. **Timeout fires** — `timeout(short, agent.invoke(..))` returns
 //!      `Err(Elapsed)` while a tool is mid-`sleep`. The inner future
 //!      is dropped at that point.
 //!   2. **No tool panic** — dropping the in-flight `sleep` future
@@ -31,7 +31,7 @@ use dasclaw_core::hooks::{
 };
 use dasclaw_core::messages::{ToolCall, ToolResult};
 use dasclaw_core::traits::HostError;
-use dasclaw_runtime::{Agent, ToolExecutor};
+use dasclaw_runtime::{Agent, AgentRunOptions, ToolExecutor};
 use serde_json::json;
 use tokio::time::timeout;
 
@@ -145,7 +145,11 @@ async fn req_dasclaw_cli_loop_e25_timeout_cancels_running_tool() {
         .build()
         .expect("agent builds");
 
-    let outcome = timeout(Duration::from_millis(50), agent.run("hold on")).await;
+    let outcome = timeout(
+        Duration::from_millis(50),
+        agent.invoke("hold on", AgentRunOptions::invoke()),
+    )
+    .await;
 
     assert!(
         outcome.is_err(),
@@ -197,7 +201,11 @@ async fn req_dasclaw_cli_loop_e25_cancel_does_not_leak_to_subsequent_run() {
         .build()
         .expect("first agent builds");
 
-    let _ = timeout(Duration::from_millis(50), cancel_agent.run("first")).await;
+    let _ = timeout(
+        Duration::from_millis(50),
+        cancel_agent.invoke("first", AgentRunOptions::invoke()),
+    )
+    .await;
     tokio::task::yield_now().await;
 
     // Drop the canceled agent to release its tool executor before
@@ -218,9 +226,10 @@ async fn req_dasclaw_cli_loop_e25_cancel_does_not_leak_to_subsequent_run() {
         .expect("second agent builds");
 
     let reply = fresh_agent
-        .run("second")
+        .invoke("second", AgentRunOptions::invoke())
         .await
-        .expect("subsequent run must complete normally after a cancel");
+        .expect("subsequent run must complete normally after a cancel")
+        .text;
 
     assert_eq!(reply, "recovered cleanly");
     assert_eq!(
@@ -252,7 +261,11 @@ async fn req_dasclaw_cli_loop_e25_timeout_does_not_panic_on_drop() {
         .expect("agent builds");
 
     let handle = tokio::spawn(async move {
-        let _ = timeout(Duration::from_millis(50), agent.run("hold")).await;
+        let _ = timeout(
+            Duration::from_millis(50),
+            agent.invoke("hold", AgentRunOptions::invoke()),
+        )
+        .await;
     });
 
     let join = handle.await;

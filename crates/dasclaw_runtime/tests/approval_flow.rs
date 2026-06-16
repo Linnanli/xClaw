@@ -20,8 +20,8 @@ use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
 use dasclaw_core::traits::HostError;
 use dasclaw_runtime::{
-    Agent, AgentError, AgentEvent, AgentResponder, ApprovalDecision, ApprovalDispatchError,
-    ApprovalPolicy, ApprovalRequest, ToolExecutor,
+    Agent, AgentError, AgentEvent, AgentResponder, AgentRunOptions, ApprovalDecision,
+    ApprovalDispatchError, ApprovalPolicy, ApprovalRequest, ToolExecutor,
 };
 use tokio::sync::{Mutex, mpsc};
 use uuid::Uuid;
@@ -172,10 +172,10 @@ async fn req_dasclaw_runtime_b4_approve_resumes_tool_execution() {
 
     let mut ctx = ReasoningContext::new();
     let outcome = agent
-        .run_in_context_streaming(&mut ctx, "hi", event_tx)
+        .stream_in_context(&mut ctx, "hi", AgentRunOptions::stream(), event_tx)
         .await
         .expect("run completes");
-    assert_eq!(outcome, "done");
+    assert_eq!(outcome.text, "done");
 
     let events = drain.await.expect("drain task joins");
     let approval_count = events
@@ -238,7 +238,7 @@ async fn req_dasclaw_runtime_b4_reject_returns_approval_rejected_error() {
 
     let mut ctx = ReasoningContext::new();
     let err = agent
-        .run_in_context_streaming(&mut ctx, "hi", event_tx)
+        .stream_in_context(&mut ctx, "hi", AgentRunOptions::stream(), event_tx)
         .await
         .expect_err("rejected approval must surface as error");
 
@@ -327,10 +327,10 @@ async fn req_dasclaw_runtime_b4_no_policy_no_approval_events() {
 
     let mut ctx = ReasoningContext::new();
     let outcome = agent
-        .run_in_context_streaming(&mut ctx, "hi", event_tx)
+        .stream_in_context(&mut ctx, "hi", AgentRunOptions::stream(), event_tx)
         .await
         .expect("run completes");
-    assert_eq!(outcome, "done");
+    assert_eq!(outcome.text, "done");
 
     // Allow drain to finish.
     let events = tokio::time::timeout(Duration::from_secs(2), drain)

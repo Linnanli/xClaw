@@ -24,11 +24,11 @@
 //! );
 //!
 //! let mut session = Session::new(agent.clone());
-//! let reply1 = session.run("what's 2 + 2?").await?;
-//! let reply2 = session.run("and times 10?").await?; // sees prior turn
+//! let reply1 = session.invoke("what's 2 + 2?", AgentRunOptions::invoke()).await?;
+//! let reply2 = session.invoke("and times 10?", AgentRunOptions::invoke()).await?; // sees prior turn
 //!
 //! // From the GUI thread:
-//! token.cancel();                                   // halts in-flight run
+//! token.cancel();                                   // halts in-flight invoke
 //! ```
 //!
 //! ## Modules
@@ -82,8 +82,9 @@ pub mod tool_dispatch;
 pub mod tool_to_executor_adapter;
 
 pub use agent::{
-    Agent, AgentBuilder, AgentConfig, AgentError, AgentEvent, AgentResponder, ToolExecutor,
-    ToolLifecycleEvent, ToolLifecycleObserver, ToolLifecycleStage, ToolOutputSanitizer,
+    Agent, AgentBuilder, AgentConfig, AgentError, AgentEvent, AgentResponder, AgentRunOptions,
+    AgentRunStream, ToolExecutor, ToolLifecycleEvent, ToolLifecycleObserver, ToolLifecycleStage,
+    ToolOutputSanitizer,
 };
 pub use agentic_loop::AgenticLoop;
 // W8.0: re-export the loop control vocabulary so AgentResponder impls
@@ -94,7 +95,9 @@ pub use approval::{
     ApprovalRequest, Approver, NoApprovalPolicy, PolicyApprover,
 };
 pub use composite_executor::{CompositeError, CompositeToolExecutor};
-pub use dasclaw_core::agentic_loop::{LoopOutcome, LoopSignal, TextAction};
+pub use dasclaw_core::agentic_loop::{
+    AgentRunOutput, LoopOutcome, LoopSignal, ModelCallMode, TextAction,
+};
 pub use error::ToolError;
 pub use feature_flags::{SharedFeatureFlags, ToolFeatureFlags};
 pub use job::{JobState, StateTransition, TokenBudgetExceeded};

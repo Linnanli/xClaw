@@ -37,7 +37,7 @@ use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
 use dasclaw_core::traits::HostError;
 use dasclaw_hooks::BashValidationHook;
-use dasclaw_runtime::{Agent, AgentResponder, ToolExecutor};
+use dasclaw_runtime::{Agent, AgentResponder, AgentRunOptions, ToolExecutor};
 use serde_json::json;
 
 /// A single entry in the demo's audit log.
@@ -349,9 +349,13 @@ pub async fn run_demo(workspace: &Path) -> Result<DemoOutcome> {
         .build()
         .map_err(|e| anyhow!("AgentBuilder::build failed: {e}"))?;
     let final_text = agent
-        .run("Use the tools to write 'world' into hello.txt, then say 'done'.")
+        .invoke(
+            "Use the tools to write 'world' into hello.txt, then say 'done'.",
+            AgentRunOptions::invoke(),
+        )
         .await
-        .map_err(|e| anyhow!("Agent::run failed: {e}"))?;
+        .map_err(|e| anyhow!("Agent::invoke failed: {e}"))?
+        .text;
     let hello_txt = std::fs::read_to_string(workspace.join("hello.txt"))
         .with_context(|| format!("reading hello.txt under {}", workspace.display()))?;
     let audit_log = log

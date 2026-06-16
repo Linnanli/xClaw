@@ -13,7 +13,7 @@
 mod fixtures;
 
 use dasclaw_core::agentic_loop::AgenticLoopConfig;
-use dasclaw_runtime::{Agent, AgentError};
+use dasclaw_runtime::{Agent, AgentError, AgentRunOptions};
 use serde_json::json;
 
 use fixtures::{
@@ -56,9 +56,10 @@ async fn req_dasclaw_cli_loop_e18_retry_recovers_after_enoent() {
         .expect("agent builds");
 
     let reply = agent
-        .run("read the report file")
+        .invoke("read the report file", AgentRunOptions::invoke())
         .await
-        .expect("retry path must surface as Ok(...) from the loop");
+        .expect("retry path must surface as Ok(...) from the loop")
+        .text;
 
     assert!(
         reply.contains("hello-from-disk"),
@@ -122,7 +123,7 @@ async fn req_dasclaw_cli_loop_e19_max_iterations_5_with_permanent_failure() {
         .expect("agent builds");
 
     let err = agent
-        .run("keep retrying the broken file")
+        .invoke("keep retrying the broken file", AgentRunOptions::invoke())
         .await
         .expect_err("permanent failure must reach the cap, not silently succeed");
 

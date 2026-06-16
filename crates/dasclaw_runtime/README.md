@@ -11,13 +11,16 @@ ADR reference: [ADR-153 §3](../../docs/plans/architecture-refactor/adr-153-head
 ## At a glance
 
 ```rust
-use dasclaw_runtime::{Agent, AgentResponder};
+use dasclaw_runtime::{Agent, AgentResponder, AgentRunOptions};
 
 let agent = Agent::builder()
     .responder(my_responder)              // anything that knows how to call an LLM
     .system_prompt("You are a helpful assistant.")
     .build()?;
-let text = agent.run("Hello!").await?;
+let text = agent
+    .invoke("Hello!", AgentRunOptions::invoke())
+    .await?
+    .text;
 ```
 
 That is the entire happy path. `my_responder` is anything that implements
@@ -32,6 +35,7 @@ Re-exported from `lib.rs` (the only types third-party code should depend on):
 | Symbol | Purpose |
 |---|---|
 | `Agent`, `AgentBuilder`, `AgentConfig` | Headless agent + fluent constructor. |
+| `AgentRunOptions`, `AgentRunOutput`, `AgentRunStream` | Explicit invoke/stream call-mode API. |
 | `AgentResponder` (trait) | Narrow LLM seam — `async fn respond(ctx) -> RespondOutput`. |
 | `ToolExecutor` (trait) | Narrow tool-dispatch seam — `async fn execute(call) -> ToolResult`. |
 | `AgentError` | Loop failure modes (`MissingResponder`, `MaxIterations`, `ToolsNotSupported`, …). |
@@ -78,7 +82,9 @@ dedicated `AgentResponder`.
 
 ## Failure modes
 
-`Agent::run` returns `Result<String, AgentError>`. The variants:
+`Agent::invoke` returns `Result<AgentRunOutput, AgentError>`.
+`Agent::stream` returns `AgentRunStream`, whose final successful item is
+`AgentEvent::Completed(AgentRunOutput)`. The error variants:
 
 | Variant | When |
 |---|---|
@@ -166,7 +172,7 @@ wire three pieces:
 
 1. `.approval_policy(Arc::new(MyPolicy))` on the builder — decides
    whether a given `ToolCall` needs human approval.
-2. `Agent::run_streaming(prompt, tx)` — the loop emits an
+2. `Arc<Agent>::stream(prompt, AgentRunOptions::stream())` — the loop emits an
    `AgentEvent::ApprovalNeeded { request_id, tool_name, … }` whenever
    the policy flags a call, then parks until a decision arrives.
 3. `Agent::respond_to_approval(request_id, ApprovalDecision::Approve)`
@@ -192,7 +198,7 @@ It shows both the approve path (final text `ok`) and the reject path
 ## Combine `Agent` with `Session` for replay and persistence
 
 `dasclaw_runtime::Agent` is stateless across turns by design — each
-`agent.run(prompt)` call is independent. When a host wants conversation
+`Agent::invoke` or `Agent::stream` call is independent. When a host wants conversation
 memory, snapshot/replay, or forks (e.g. branching a chat), wrap the
 agent in [`dasclaw_session::Session`](../dasclaw_session/src/lib.rs):
 

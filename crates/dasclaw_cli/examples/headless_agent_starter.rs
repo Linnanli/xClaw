@@ -29,11 +29,11 @@ use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
 use dasclaw_core::traits::HostError;
 use dasclaw_runtime::{
-    Agent, AgentBuilder, AgentError, AgentEvent, AgentResponder, ApprovalDecision, ApprovalPolicy,
-    ApprovalRequest, ToolExecutor,
+    Agent, AgentBuilder, AgentError, AgentEvent, AgentResponder, AgentRunOptions, ApprovalDecision,
+    ApprovalPolicy, ApprovalRequest, ToolExecutor,
 };
+use futures_util::StreamExt;
 use serde_json::json;
-use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -60,16 +60,14 @@ async fn main() -> Result<()> {
 /// Build the agent, spawn it, and drive the approval loop with `decision`.
 async fn run_demo(decision: ApprovalDecision) -> Result<String, AgentError> {
     let agent = Arc::new(build_agent()?);
-    let (tx, mut rx) = mpsc::channel::<AgentEvent>(16);
-
-    let agent_for_task = Arc::clone(&agent);
-    let join = tokio::spawn(async move { agent_for_task.run_streaming("compute 2+2", tx).await });
+    let mut stream = Arc::clone(&agent).stream("compute 2+2", AgentRunOptions::stream());
 
     // Pump events until the task finishes. The only event we *act* on
     // is `ApprovalNeeded`; the rest are just logged so the demo shows
     // what a GUI would render.
-    while let Some(event) = rx.recv().await {
-        match event {
+    while let Some(event) = stream.next().await {
+        match event? {
+            AgentEvent::Completed(output) => return Ok(output.text),
             AgentEvent::ApprovalNeeded {
                 request_id,
                 tool_name,
@@ -87,8 +85,9 @@ async fn run_demo(decision: ApprovalDecision) -> Result<String, AgentError> {
         }
     }
 
-    join.await
-        .map_err(|e| AgentError::Responder(host_err(format!("join: {e}"))))?
+    Err(AgentError::LoopFailure(
+        "agent stream ended before completion".to_string(),
+    ))
 }
 
 /// Wire the four headless pieces together via [`AgentBuilder`].

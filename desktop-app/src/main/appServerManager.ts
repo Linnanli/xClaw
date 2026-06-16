@@ -27,6 +27,7 @@ type AppServerManagerOptions = {
 const LOCAL_HOST_ID = 'local'
 const DEFAULT_ADMIN_BACKEND_URL = 'http://localhost:3000'
 const DEFAULT_MODEL_PROVIDER_FETCH_TIMEOUT_MS = 5000
+const DEFAULT_MODEL_CALL_MODE = 'stream'
 
 export type AdminClientModelConfig = {
   model_id: string
@@ -38,6 +39,7 @@ export type AdminClientModelConfig = {
   api_base_url?: string | null
   api_key?: string | null
   api_format?: string | null
+  model_call_mode?: string | null
   source?: string | null
 }
 
@@ -49,6 +51,7 @@ export type AppServerClientModelConfig = {
   apiBaseUrl: string
   apiKey: string
   apiFormat: string
+  modelCallMode: string
   source?: string
   capabilities: string[]
 }
@@ -408,6 +411,7 @@ function normalizeAdminClientModel(value: unknown, index: number): NormalizedAdm
   const apiBaseUrl = requiredString(raw.api_base_url, `model[${index}].api_base_url`)
   const apiKey = requiredString(raw.api_key, `model[${index}].api_key`)
   const apiFormat = optionalString(raw.api_format)?.trim() || 'openai'
+  const modelCallMode = optionalString(raw.model_call_mode)?.trim() || DEFAULT_MODEL_CALL_MODE
   const source = optionalString(raw.source)?.trim() || 'admin'
   const description = optionalString(raw.description)?.trim()
 
@@ -420,6 +424,7 @@ function normalizeAdminClientModel(value: unknown, index: number): NormalizedAdm
       apiBaseUrl,
       apiKey,
       apiFormat,
+      modelCallMode,
       source,
       capabilities: normalizeCapabilities(raw.capabilities)
     },
@@ -476,6 +481,7 @@ function toRendererClientModelConfig(model: AppServerClientModelConfig): Rendere
     provider: model.provider,
     apiBaseUrl: model.apiBaseUrl,
     apiFormat: model.apiFormat,
+    modelCallMode: model.modelCallMode,
     source: model.source ?? 'admin',
     capabilities: model.capabilities,
     apiKeyConfigured: model.apiKey.trim() !== ''

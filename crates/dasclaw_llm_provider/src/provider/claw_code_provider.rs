@@ -14,20 +14,23 @@
 //! - 编译期裁掉大量历史 rig 适配层的异构类型体操。
 
 use crate::{
-    AnthropicClient, ApiError, AuthSource, InputContentBlock, InputMessage, MessageRequest,
-    MessageResponse, OpenAiCompatClient, OpenAiCompatConfig, OutputContentBlock, ProviderClient,
-    SystemBlock, SystemPrompt, ToolChoice as ApiToolChoice, ToolDefinition as ApiToolDefinition,
-    ToolResultContentBlock,
+    AnthropicClient, ApiError, AuthSource, ContentBlockDelta, InputContentBlock, InputMessage,
+    MessageRequest, MessageResponse, OpenAiCompatClient, OpenAiCompatConfig, OutputContentBlock,
+    ProviderClient, StreamEvent, SystemBlock, SystemPrompt, ToolChoice as ApiToolChoice,
+    ToolDefinition as ApiToolDefinition, ToolResultContentBlock, Usage,
 };
 use async_trait::async_trait;
 use rust_decimal::Decimal;
 use secrecy::ExposeSecret;
+use std::collections::BTreeMap;
+use tokio::sync::mpsc;
 
 use crate::provider::config::{OAUTH_PLACEHOLDER, RegistryProviderConfig};
 use crate::provider::error::LlmError;
 use crate::provider::provider::{
     ChatMessage, CompletionRequest, CompletionResponse, ContentPart, FinishReason, LlmProvider,
-    Role, ToolCall, ToolCompletionRequest, ToolCompletionResponse, ToolDefinition,
+    LlmProviderCapabilities, LlmStream, LlmStreamEvent, Role, ToolCall, ToolCompletionRequest,
+    ToolCompletionResponse, ToolDefinition,
 };
 use crate::provider::registry::ProviderProtocol;
 
@@ -403,6 +406,232 @@ fn map_finish_reason(reason: Option<&str>) -> FinishReason {
     }
 }
 
+struct MessageStreamAccumulator {
+    id: String,
+    kind: String,
+    role: String,
+    model: String,
+    stop_reason: Option<String>,
+    stop_sequence: Option<String>,
+    usage: Usage,
+    blocks: BTreeMap<u32, OutputContentBlock>,
+    active: BTreeMap<u32, ActiveOutputBlock>,
+}
+
+impl MessageStreamAccumulator {
+    fn new(model: String) -> Self {
+        Self {
+            id: String::new(),
+            kind: "message".to_string(),
+            role: "assistant".to_string(),
+            model,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: Usage::default(),
+            blocks: BTreeMap::new(),
+            active: BTreeMap::new(),
+        }
+    }
+
+    fn ingest(&mut self, event: StreamEvent) -> Result<Vec<LlmStreamEvent>, LlmError> {
+        Ok(match event {
+            StreamEvent::MessageStart(event) => {
+                self.id = event.message.id;
+                self.kind = event.message.kind;
+                self.role = event.message.role;
+                self.model = event.message.model;
+                self.usage = event.message.usage;
+                self.stop_reason = event.message.stop_reason;
+                self.stop_sequence = event.message.stop_sequence;
+                for (index, block) in event.message.content.into_iter().enumerate() {
+                    self.blocks.insert(index as u32, block);
+                }
+                Vec::new()
+            }
+            StreamEvent::MessageDelta(event) => {
+                if event.delta.stop_reason.is_some() {
+                    self.stop_reason = event.delta.stop_reason;
+                }
+                if event.delta.stop_sequence.is_some() {
+                    self.stop_sequence = event.delta.stop_sequence;
+                }
+                self.usage = event.usage;
+                Vec::new()
+            }
+            StreamEvent::ContentBlockStart(event) => {
+                let deltas = match &event.content_block {
+                    OutputContentBlock::Text { text } if !text.is_empty() => {
+                        vec![LlmStreamEvent::TextDelta(text.clone())]
+                    }
+                    OutputContentBlock::Thinking { thinking, .. } if !thinking.is_empty() => {
+                        vec![LlmStreamEvent::ReasoningSummaryDelta(thinking.clone())]
+                    }
+                    _ => Vec::new(),
+                };
+                self.active
+                    .insert(event.index, ActiveOutputBlock::from(event.content_block));
+                deltas
+            }
+            StreamEvent::ContentBlockDelta(event) => {
+                let Some(active) = self.active.get_mut(&event.index) else {
+                    return Ok(Vec::new());
+                };
+                match event.delta {
+                    ContentBlockDelta::TextDelta { text } => {
+                        active.push_text(&text);
+                        vec![LlmStreamEvent::TextDelta(text)]
+                    }
+                    ContentBlockDelta::ThinkingDelta { thinking } => {
+                        active.push_thinking(&thinking);
+                        vec![LlmStreamEvent::ReasoningSummaryDelta(thinking)]
+                    }
+                    ContentBlockDelta::InputJsonDelta { partial_json } => {
+                        active.push_input_json(&partial_json);
+                        if let ActiveOutputBlock::ToolUse { id, name, .. } = active {
+                            vec![LlmStreamEvent::ToolCallInputDelta {
+                                id: id.clone(),
+                                name: Some(name.clone()),
+                                delta: partial_json,
+                            }]
+                        } else {
+                            Vec::new()
+                        }
+                    }
+                    ContentBlockDelta::SignatureDelta { signature } => {
+                        active.set_signature(signature);
+                        Vec::new()
+                    }
+                }
+            }
+            StreamEvent::ContentBlockStop(event) => {
+                if let Some(active) = self.active.remove(&event.index) {
+                    self.blocks
+                        .insert(event.index, active.into_output_block(event.index)?);
+                }
+                Vec::new()
+            }
+            StreamEvent::MessageStop(_) => Vec::new(),
+        })
+    }
+
+    fn finish(mut self) -> Result<MessageResponse, LlmError> {
+        for (index, block) in std::mem::take(&mut self.active) {
+            self.blocks.insert(index, block.into_output_block(index)?);
+        }
+        Ok(MessageResponse {
+            id: self.id,
+            kind: self.kind,
+            role: self.role,
+            content: self.blocks.into_values().collect(),
+            model: self.model,
+            stop_reason: self.stop_reason,
+            stop_sequence: self.stop_sequence,
+            usage: self.usage,
+            request_id: None,
+        })
+    }
+}
+
+enum ActiveOutputBlock {
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input_json: String,
+    },
+    Thinking {
+        thinking: String,
+        signature: Option<String>,
+    },
+    RedactedThinking {
+        data: serde_json::Value,
+    },
+}
+
+impl From<OutputContentBlock> for ActiveOutputBlock {
+    fn from(block: OutputContentBlock) -> Self {
+        match block {
+            OutputContentBlock::Text { text } => Self::Text { text },
+            OutputContentBlock::ToolUse { id, name, input } => Self::ToolUse {
+                id,
+                name,
+                input_json: if input == serde_json::json!({}) {
+                    String::new()
+                } else {
+                    input.to_string()
+                },
+            },
+            OutputContentBlock::Thinking {
+                thinking,
+                signature,
+            } => Self::Thinking {
+                thinking,
+                signature,
+            },
+            OutputContentBlock::RedactedThinking { data } => Self::RedactedThinking { data },
+        }
+    }
+}
+
+impl ActiveOutputBlock {
+    fn push_text(&mut self, delta: &str) {
+        if let Self::Text { text } = self {
+            text.push_str(delta);
+        }
+    }
+
+    fn push_thinking(&mut self, delta: &str) {
+        if let Self::Thinking { thinking, .. } = self {
+            thinking.push_str(delta);
+        }
+    }
+
+    fn push_input_json(&mut self, delta: &str) {
+        if let Self::ToolUse { input_json, .. } = self {
+            input_json.push_str(delta);
+        }
+    }
+
+    fn set_signature(&mut self, value: String) {
+        if let Self::Thinking { signature, .. } = self {
+            *signature = Some(value);
+        }
+    }
+
+    fn into_output_block(self, index: u32) -> Result<OutputContentBlock, LlmError> {
+        match self {
+            Self::Text { text } => Ok(OutputContentBlock::Text { text }),
+            Self::ToolUse {
+                id,
+                name,
+                input_json,
+            } => {
+                let input = if input_json.trim().is_empty() {
+                    serde_json::json!({})
+                } else {
+                    serde_json::from_str(&input_json).map_err(|err| LlmError::InvalidResponse {
+                        provider: "dasclaw_llm_provider".to_string(),
+                        reason: format!(
+                            "invalid streamed tool input JSON at content block {index}: {err}"
+                        ),
+                    })?
+                };
+                Ok(OutputContentBlock::ToolUse { id, name, input })
+            }
+            Self::Thinking {
+                thinking,
+                signature,
+            } => Ok(OutputContentBlock::Thinking {
+                thinking,
+                signature,
+            }),
+            Self::RedactedThinking { data } => Ok(OutputContentBlock::RedactedThinking { data }),
+        }
+    }
+}
+
 fn map_api_error(err: ApiError) -> LlmError {
     LlmError::RequestFailed {
         provider: "dasclaw_llm_provider".to_string(),
@@ -551,6 +780,67 @@ impl LlmProvider for ClawCodeLlmProvider {
             .await
             .map_err(map_api_error)?;
         Ok(map_message_response(resp))
+    }
+
+    async fn stream_with_tools(
+        &self,
+        request: ToolCompletionRequest,
+    ) -> Result<LlmStream, LlmError> {
+        let msg_req = build_tool_message_request(&request, &self.resolved_model);
+        let mut provider_stream = self
+            .client
+            .stream_message(&msg_req)
+            .await
+            .map_err(map_api_error)?;
+        let model = msg_req.model.clone();
+        let (event_tx, event_rx) = mpsc::channel::<Result<LlmStreamEvent, LlmError>>(64);
+
+        tokio::spawn(async move {
+            let mut accumulator = MessageStreamAccumulator::new(model);
+            loop {
+                match provider_stream.next_event().await {
+                    Ok(Some(event)) => match accumulator.ingest(event) {
+                        Ok(events) => {
+                            for event in events {
+                                if event_tx.send(Ok(event)).await.is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            let _ = event_tx.send(Err(error)).await;
+                            return;
+                        }
+                    },
+                    Ok(None) => {
+                        match accumulator.finish() {
+                            Ok(message) => {
+                                let completed = map_message_response(message);
+                                let _ = event_tx
+                                    .send(Ok(LlmStreamEvent::Completed(completed)))
+                                    .await;
+                            }
+                            Err(error) => {
+                                let _ = event_tx.send(Err(error)).await;
+                            }
+                        }
+                        return;
+                    }
+                    Err(error) => {
+                        let _ = event_tx.send(Err(map_api_error(error))).await;
+                        return;
+                    }
+                }
+            }
+        });
+
+        Ok(LlmStream::new(event_rx))
+    }
+
+    fn capabilities(&self) -> LlmProviderCapabilities {
+        LlmProviderCapabilities {
+            native_streaming: true,
+        }
     }
 
     async fn list_models(&self) -> Result<Vec<String>, LlmError> {
@@ -866,6 +1156,50 @@ mod tests {
         assert_eq!(out.tool_calls[0].name, "shell");
         assert_eq!(out.tool_calls[0].arguments["cmd"], "pwd");
         assert_eq!(out.finish_reason, FinishReason::ToolUse);
+    }
+
+    #[test]
+    fn test_stream_accumulator_rejects_malformed_tool_input_json() {
+        let mut accumulator = MessageStreamAccumulator::new("claude-sonnet".to_string());
+        accumulator
+            .ingest(StreamEvent::ContentBlockStart(
+                crate::ContentBlockStartEvent {
+                    index: 0,
+                    content_block: OutputContentBlock::ToolUse {
+                        id: "tc-x".into(),
+                        name: "shell".into(),
+                        input: json!({}),
+                    },
+                },
+            ))
+            .expect("tool block start should ingest");
+        let deltas = accumulator
+            .ingest(StreamEvent::ContentBlockDelta(
+                crate::ContentBlockDeltaEvent {
+                    index: 0,
+                    delta: ContentBlockDelta::InputJsonDelta {
+                        partial_json: r#"{"cmd""#.into(),
+                    },
+                },
+            ))
+            .expect("partial JSON should still stream as delta");
+        assert!(matches!(
+            deltas.as_slice(),
+            [LlmStreamEvent::ToolCallInputDelta { id, name: Some(name), delta }]
+                if id == "tc-x" && name == "shell" && delta == r#"{"cmd""#
+        ));
+
+        let error = accumulator
+            .ingest(StreamEvent::ContentBlockStop(
+                crate::ContentBlockStopEvent { index: 0 },
+            ))
+            .expect_err("malformed streamed tool input JSON must fail closed");
+        assert!(matches!(
+            error,
+            LlmError::InvalidResponse { provider, reason }
+                if provider == "dasclaw_llm_provider"
+                    && reason.contains("invalid streamed tool input JSON")
+        ));
     }
 
     #[test]

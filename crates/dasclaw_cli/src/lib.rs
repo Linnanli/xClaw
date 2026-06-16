@@ -59,7 +59,7 @@ use dasclaw_core::messages::{FinishReason, Role, ToolDefinition};
 use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
 use dasclaw_core::traits::HostError;
-use dasclaw_runtime::{Agent, AgentError, AgentResponder, ToolExecutor};
+use dasclaw_runtime::{Agent, AgentError, AgentResponder, AgentRunOptions, ToolExecutor};
 
 pub mod mcp;
 pub mod provider;
@@ -101,8 +101,8 @@ where
         .system_prompt(system_prompt)
         .build()
         .map_err(|e| CliError::Build(e.to_string()))?;
-    let reply = agent.run(user_prompt).await?;
-    Ok(reply)
+    let reply = agent.invoke(user_prompt, AgentRunOptions::invoke()).await?;
+    Ok(reply.text)
 }
 
 /// Variant of [`run`] that wires a [`ToolExecutor`] and advertises its
@@ -130,8 +130,8 @@ where
         .system_prompt(system_prompt)
         .build()
         .map_err(|e| CliError::Build(e.to_string()))?;
-    let reply = agent.run(user_prompt).await?;
-    Ok(reply)
+    let reply = agent.invoke(user_prompt, AgentRunOptions::invoke()).await?;
+    Ok(reply.text)
 }
 
 /// Variant of [`run_with_tools`] that also wires a [`HookBundle`].
@@ -168,8 +168,8 @@ where
         .system_prompt(system_prompt)
         .build()
         .map_err(|e| CliError::Build(e.to_string()))?;
-    let reply = agent.run(user_prompt).await?;
-    Ok(reply)
+    let reply = agent.invoke(user_prompt, AgentRunOptions::invoke()).await?;
+    Ok(reply.text)
 }
 
 /// Variant of [`run_with_tools`] that wires the default
@@ -206,8 +206,8 @@ where
         .system_prompt(system_prompt)
         .build()
         .map_err(|e| CliError::Build(e.to_string()))?;
-    let reply = agent.run(user_prompt).await?;
-    Ok(reply)
+    let reply = agent.invoke(user_prompt, AgentRunOptions::invoke()).await?;
+    Ok(reply.text)
 }
 
 /// Deterministic [`AgentResponder`] that replies `echo: <last user

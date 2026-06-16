@@ -19,6 +19,7 @@ const TEST_MODEL_PROVIDER_CONFIG: AppServerModelProviderConfig = {
       apiBaseUrl: 'https://api.test/v1',
       apiKey: 'test-api-key',
       apiFormat: 'openai',
+      modelCallMode: 'stream',
       source: 'test',
       capabilities: ['chat']
     }
@@ -30,6 +31,7 @@ const TEST_MODEL_PROVIDER_CONFIG: AppServerModelProviderConfig = {
     apiBaseUrl: 'https://api.test/v1',
     apiKey: 'test-api-key',
     apiFormat: 'openai',
+    modelCallMode: 'stream',
     source: 'test',
     capabilities: ['chat']
   }

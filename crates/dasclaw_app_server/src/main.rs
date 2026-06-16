@@ -272,6 +272,7 @@ fn self_check_model_config(model_id: &str) -> ClientModelConfig {
         api_base_url: Some("http://localhost/self-check/v1".to_string()),
         api_key: Some("self-check-api-key".to_string()),
         api_format: Some("openai".to_string()),
+        model_call_mode: None,
         source: Some("self_check".to_string()),
         capabilities: Vec::new(),
     }

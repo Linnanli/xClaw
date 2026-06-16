@@ -68,6 +68,7 @@ dasclaw_shell_tools = { path = "../dasclaw_shell_tools" }
 dasclaw_safety = { path = "../dasclaw_safety", features = ["egress-gate"] }
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
+futures-util = "0.3"
 secrecy = "0.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util"] }
 async-trait = "0.1"

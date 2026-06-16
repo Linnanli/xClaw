@@ -95,6 +95,30 @@ impl Default for AgenticLoopConfig {
 /// `dasclaw_runtime::AgentError`).
 pub const TOOLS_NOT_SUPPORTED_REASON: &str = "headless-agent::tools-not-supported";
 
+/// Final output returned by a completed agent run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentRunOutput {
+    /// User-visible assistant text.
+    pub text: String,
+}
+
+/// Provider call mode for the next model request.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelCallMode {
+    /// Request a whole response from the provider.
+    Invoke,
+    /// Request a native provider stream.
+    Stream,
+}
+
+/// Per-iteration responder policy.
+#[derive(Clone)]
+pub struct AgentCallPolicy {
+    pub model_call_mode: ModelCallMode,
+    pub event_tx: Option<mpsc::Sender<AgentEvent>>,
+}
+
 /// Streaming event emitted by the loop and forwarded to GUI / CLI hosts
 /// (issue #908, GUI blocker B2).
 ///
@@ -173,6 +197,8 @@ pub enum AgentEvent {
         /// affordance.
         allow_always: bool,
     },
+    /// The agent run completed successfully.
+    Completed(AgentRunOutput),
 }
 
 /// Best-effort emit; a closed receiver is not a loop-fatal error.
@@ -240,6 +266,33 @@ pub trait AgentResponder: Send + Sync {
             let _ = event_tx.send(AgentEvent::TextChunk(text.clone())).await;
         }
         Ok(out)
+    }
+
+    /// Respond according to the explicit model-call policy.
+    ///
+    /// The default keeps generic responders source-compatible: invoke
+    /// mode calls [`Self::respond`], while stream mode calls
+    /// [`Self::respond_streaming`] when an event channel exists. Provider
+    /// adapters override this method so native stream support is enforced
+    /// by [`ModelCallMode`] instead of inferred from the caller's event
+    /// channel.
+    async fn respond_with_policy(
+        &self,
+        ctx: &mut ReasoningContext,
+        policy: AgentCallPolicy,
+    ) -> Result<RespondOutput, HostError> {
+        match (policy.model_call_mode, policy.event_tx) {
+            (ModelCallMode::Invoke, Some(event_tx)) => {
+                let out = self.respond(ctx).await?;
+                if let RespondResult::Text(ref text) = out.result {
+                    let _ = event_tx.send(AgentEvent::TextChunk(text.clone())).await;
+                }
+                Ok(out)
+            }
+            (ModelCallMode::Invoke, None) => self.respond(ctx).await,
+            (ModelCallMode::Stream, Some(event_tx)) => self.respond_streaming(ctx, event_tx).await,
+            (ModelCallMode::Stream, None) => self.respond(ctx).await,
+        }
     }
 
     /// Per-iteration signal check.
@@ -357,6 +410,7 @@ pub async fn run_agentic_loop(
     responder: &dyn AgentResponder,
     dispatcher: Option<&dyn ToolDispatcher>,
     cancellation_token: Option<&CancellationToken>,
+    model_call_mode: ModelCallMode,
     event_tx: Option<&mpsc::Sender<AgentEvent>>,
     reason_ctx: &mut ReasoningContext,
     config: &AgenticLoopConfig,
@@ -413,10 +467,15 @@ pub async fn run_agentic_loop(
         // Call LLM (streaming when an event channel is wired, plain
         // otherwise). Forward the trailing `FinishReason` so a GUI knows
         // the iteration boundary even when the model emitted no text.
-        let mut output = match event_tx {
-            Some(tx) => responder.respond_streaming(reason_ctx, tx.clone()).await?,
-            None => responder.respond(reason_ctx).await?,
-        };
+        let mut output = responder
+            .respond_with_policy(
+                reason_ctx,
+                AgentCallPolicy {
+                    model_call_mode,
+                    event_tx: event_tx.cloned(),
+                },
+            )
+            .await?;
         emit_event(event_tx, AgentEvent::FinishReason(output.finish_reason)).await;
 
         // EgressGate (ADR-148 Layer B): scan / redact text completions
@@ -596,7 +655,17 @@ mod tests {
         config: &AgenticLoopConfig,
         hooks: &HookBundle,
     ) -> Result<LoopOutcome, HostError> {
-        run_agentic_loop(responder, None, None, None, ctx, config, hooks).await
+        run_agentic_loop(
+            responder,
+            None,
+            None,
+            ModelCallMode::Invoke,
+            None,
+            ctx,
+            config,
+            hooks,
+        )
+        .await
     }
 
     /// Configurable mock responder + dispatcher pair for driving
@@ -753,6 +822,7 @@ mod tests {
             &responder,
             Some(&dispatcher),
             None,
+            ModelCallMode::Invoke,
             None,
             &mut ctx,
             &config,
@@ -818,6 +888,7 @@ mod tests {
             &responder,
             None,
             Some(&token),
+            ModelCallMode::Invoke,
             None,
             &mut ctx,
             &config,
@@ -1019,6 +1090,7 @@ mod tests {
             &responder,
             Some(&dispatcher),
             None,
+            ModelCallMode::Invoke,
             None,
             &mut ctx,
             &config,
@@ -1076,6 +1148,7 @@ mod tests {
             &responder,
             Some(&dispatcher),
             None,
+            ModelCallMode::Invoke,
             None,
             &mut ctx,
             &config,

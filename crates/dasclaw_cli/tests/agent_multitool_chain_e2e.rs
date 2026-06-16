@@ -9,7 +9,7 @@
 #[path = "fixtures/agent_loop_fixtures.rs"]
 mod fixtures;
 
-use dasclaw_runtime::Agent;
+use dasclaw_runtime::{Agent, AgentRunOptions};
 use serde_json::json;
 
 use fixtures::{RecordingToolExecutor, ScriptedResponder, no_tool_defs, text_turn, tool_call_turn};
@@ -37,9 +37,13 @@ async fn req_dasclaw_cli_loop_e17_multitool_chain_completes() {
         .expect("agent builds");
 
     let reply = agent
-        .run("please list the dir and then read fileA")
+        .invoke(
+            "please list the dir and then read fileA",
+            AgentRunOptions::invoke(),
+        )
         .await
-        .expect("multi-tool chain succeeds");
+        .expect("multi-tool chain succeeds")
+        .text;
 
     assert!(
         reply.contains("fileA.txt") && reply.contains("contents-of-fileA"),

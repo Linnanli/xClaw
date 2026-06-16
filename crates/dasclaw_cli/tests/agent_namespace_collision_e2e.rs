@@ -9,7 +9,7 @@
 #[path = "fixtures/agent_loop_fixtures.rs"]
 mod fixtures;
 
-use dasclaw_runtime::Agent;
+use dasclaw_runtime::{Agent, AgentRunOptions};
 use serde_json::json;
 
 use fixtures::{RecordingToolExecutor, ScriptedResponder, no_tool_defs, text_turn, tool_call_turn};
@@ -44,9 +44,10 @@ async fn req_dasclaw_cli_loop_e20_namespace_collision_routes_to_b() {
         .expect("agent builds");
 
     let reply = agent
-        .run("look it up in b")
+        .invoke("look it up in b", AgentRunOptions::invoke())
         .await
-        .expect("routing the b-side tool must succeed");
+        .expect("routing the b-side tool must succeed")
+        .text;
 
     assert!(
         reply.contains("b-result-payload"),

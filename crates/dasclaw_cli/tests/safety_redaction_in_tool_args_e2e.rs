@@ -17,7 +17,7 @@
 use std::sync::Arc;
 
 use dasclaw_core::hooks::HookBundle;
-use dasclaw_runtime::Agent;
+use dasclaw_runtime::{Agent, AgentRunOptions};
 
 #[path = "fixtures/safety_fixtures.rs"]
 mod safety_fixtures;
@@ -63,7 +63,11 @@ async fn req_dasclaw_cli_safety_e8_tool_arg_block_skips_executor() {
         .build()
         .expect("build agent");
 
-    let reply = agent.run("please fetch").await.expect("run");
+    let reply = agent
+        .invoke("please fetch", AgentRunOptions::invoke())
+        .await
+        .expect("run")
+        .text;
 
     assert_eq!(
         executor_handle.call_count(),

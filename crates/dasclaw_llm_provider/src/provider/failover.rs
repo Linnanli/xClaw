@@ -19,8 +19,8 @@ use rust_decimal::Decimal;
 
 use crate::provider::error::LlmError;
 use crate::provider::provider::{
-    CompletionRequest, CompletionResponse, LlmProvider, ModelMetadata, ToolCompletionRequest,
-    ToolCompletionResponse,
+    CompletionRequest, CompletionResponse, LlmProvider, LlmProviderCapabilities, LlmStream,
+    ModelMetadata, ToolCompletionRequest, ToolCompletionResponse,
 };
 
 use crate::provider::retry::is_retryable;
@@ -380,28 +380,27 @@ impl LlmProvider for FailoverProvider {
         self.providers[self.last_used.load(Ordering::Relaxed)].effective_model_name(requested_model)
     }
 
-    fn supports_streaming(&self) -> bool {
-        self.providers
-            .first()
-            .is_some_and(|p| p.supports_streaming())
-    }
-
-    async fn complete_with_tools_stream(
+    async fn stream_with_tools(
         &self,
         request: ToolCompletionRequest,
-        chunk_tx: tokio::sync::mpsc::UnboundedSender<String>,
-    ) -> Result<ToolCompletionResponse, LlmError> {
-        // Streaming delegates to the first provider without failover.
-        // Retrying on a different provider after chunks have already been
-        // emitted would produce incoherent output.
+    ) -> Result<LlmStream, LlmError> {
+        // Streaming delegates to the first provider without failover. Retrying
+        // on a different provider after events have been emitted would produce
+        // incoherent output.
         if let Some(provider) = self.providers.first() {
-            provider.complete_with_tools_stream(request, chunk_tx).await
+            provider.stream_with_tools(request).await
         } else {
             Err(LlmError::RequestFailed {
                 provider: "failover".to_string(),
                 reason: "No providers configured".to_string(),
             })
         }
+    }
+
+    fn capabilities(&self) -> LlmProviderCapabilities {
+        self.providers
+            .first()
+            .map_or_else(LlmProviderCapabilities::default, |p| p.capabilities())
     }
 }
 

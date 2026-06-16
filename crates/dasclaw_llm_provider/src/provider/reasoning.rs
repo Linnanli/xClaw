@@ -10,11 +10,13 @@
 
 use std::sync::{Arc, LazyLock};
 
+use futures::StreamExt;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::provider::error::LlmError;
 
+use crate::provider::provider::LlmStreamEvent;
 use crate::provider::{
     ChatMessage, CompletionRequest, FinishReason, LlmProvider, Role, ToolCall,
     ToolCompletionRequest, ToolDefinition,
@@ -614,15 +616,9 @@ Respond in JSON format:
 
     /// Streaming variant of [`respond_with_tools`].
     ///
-    /// Text delta chunks from the LLM are forwarded to `chunk_tx` as they
-    /// arrive, enabling token-level streaming to the frontend. The final
-    /// [`RespondOutput`] is still returned with the complete result so the
-    /// agentic loop can decide next steps.
-    ///
-    /// This method is only called when [`LlmProvider::supports_streaming`]
-    /// returns `true`. Providers that embed tool calls as XML in text content
-    /// (Ollama/Qwen3/GLM-4) must NOT use this path — they should keep using
-    /// [`respond_with_tools`] which runs `recover_tool_calls_from_content`.
+    /// Text delta chunks from the native provider stream are forwarded to
+    /// `chunk_tx` as they arrive. The final [`RespondOutput`] is built from the
+    /// stream's required `Completed` event.
     pub async fn respond_with_tools_streaming(
         &self,
         context: &ReasoningContext,
@@ -658,10 +654,26 @@ Respond in JSON format:
                 request.model = Some(model.clone());
             }
 
-            let response = self
-                .llm
-                .complete_with_tools_stream(request, chunk_tx)
-                .await?;
+            let mut stream = self.llm.stream_with_tools(request).await?;
+            let mut completed = None;
+            while let Some(event) = stream.next().await {
+                match event? {
+                    LlmStreamEvent::TextDelta(delta) => {
+                        let _ = chunk_tx.send(delta);
+                    }
+                    LlmStreamEvent::ReasoningSummaryDelta(_)
+                    | LlmStreamEvent::ToolCallInputDelta { .. } => {}
+                    LlmStreamEvent::Completed(response) => {
+                        completed = Some(response);
+                        break;
+                    }
+                }
+            }
+
+            let response = completed.ok_or_else(|| LlmError::InvalidResponse {
+                provider: self.llm.model_name().to_string(),
+                reason: "stream ended without completion".to_string(),
+            })?;
 
             let usage = TokenUsage {
                 input_tokens: response.input_tokens,
@@ -3545,14 +3557,76 @@ That's my plan."#;
 
     mod streaming_tests {
         use super::*;
+        use crate::provider::ToolCompletionResponse;
+        use crate::provider::provider::{LlmProviderCapabilities, LlmStream, LlmStreamEvent};
         use crate::testing::StubLlm;
         use async_trait::async_trait;
+        use rust_decimal::Decimal;
 
         #[tokio::test]
-        async fn text_response_sends_chunk_via_tx() {
-            let llm = Arc::new(StubLlm::new("Hello from streaming"));
+        async fn text_response_sends_native_stream_chunk_via_tx() {
+            struct TextStreamLlm;
+
+            #[async_trait]
+            impl LlmProvider for TextStreamLlm {
+                fn model_name(&self) -> &str {
+                    "text-stream-llm"
+                }
+
+                fn cost_per_token(&self) -> (Decimal, Decimal) {
+                    (Decimal::ZERO, Decimal::ZERO)
+                }
+
+                async fn complete(
+                    &self,
+                    _req: crate::provider::CompletionRequest,
+                ) -> Result<crate::provider::CompletionResponse, LlmError> {
+                    unreachable!()
+                }
+
+                async fn complete_with_tools(
+                    &self,
+                    _req: ToolCompletionRequest,
+                ) -> Result<ToolCompletionResponse, LlmError> {
+                    unreachable!("streaming path should be exercised")
+                }
+
+                async fn stream_with_tools(
+                    &self,
+                    _request: ToolCompletionRequest,
+                ) -> Result<LlmStream, LlmError> {
+                    let (event_tx, event_rx) =
+                        tokio::sync::mpsc::channel::<Result<LlmStreamEvent, LlmError>>(8);
+                    let _ = event_tx
+                        .send(Ok(LlmStreamEvent::TextDelta(
+                            "Hello from streaming".to_string(),
+                        )))
+                        .await;
+                    let _ = event_tx
+                        .send(Ok(LlmStreamEvent::Completed(ToolCompletionResponse {
+                            content: Some("Hello from streaming".to_string()),
+                            reasoning: None,
+                            tool_calls: Vec::new(),
+                            input_tokens: 1,
+                            output_tokens: 2,
+                            finish_reason: FinishReason::Stop,
+                            cache_read_input_tokens: 0,
+                            cache_creation_input_tokens: 0,
+                        })))
+                        .await;
+                    Ok(LlmStream::new(event_rx))
+                }
+
+                fn capabilities(&self) -> LlmProviderCapabilities {
+                    LlmProviderCapabilities {
+                        native_streaming: true,
+                    }
+                }
+            }
+
+            let llm = Arc::new(TextStreamLlm);
             let reasoning = Reasoning::new(llm);
-            // Provide a tool so the streaming path (complete_with_tools_stream)
+            // Provide a tool so the streaming path (stream_with_tools)
             // is exercised instead of the no-tools fallback.
             let context = ReasoningContext::new()
                 .with_message(ChatMessage::user("Hi"))
@@ -3568,8 +3642,6 @@ That's my plan."#;
                 .await
                 .unwrap();
 
-            // The default complete_with_tools_stream falls back to non-streaming
-            // and sends the full text as a single chunk.
             let chunk = chunk_rx.try_recv().expect("should have received a chunk");
             assert_eq!(chunk, "Hello from streaming");
             assert!(chunk_rx.try_recv().is_err(), "should be no more chunks");
@@ -3608,14 +3680,12 @@ That's my plan."#;
             use crate::provider::{
                 LlmError, ToolCall, ToolCompletionRequest, ToolCompletionResponse,
             };
-            use rust_decimal::Decimal;
-
-            struct ToolCallLlm;
+            struct ToolCallStreamLlm;
 
             #[async_trait]
-            impl LlmProvider for ToolCallLlm {
+            impl LlmProvider for ToolCallStreamLlm {
                 fn model_name(&self) -> &str {
-                    "tool-call-llm"
+                    "tool-call-stream-llm"
                 }
                 fn cost_per_token(&self) -> (Decimal, Decimal) {
                     (Decimal::ZERO, Decimal::ZERO)
@@ -3630,25 +3700,48 @@ That's my plan."#;
                     &self,
                     _req: ToolCompletionRequest,
                 ) -> Result<ToolCompletionResponse, LlmError> {
-                    Ok(ToolCompletionResponse {
-                        content: Some("I'll search for that.".to_string()),
-                        reasoning: None,
-                        tool_calls: vec![ToolCall {
-                            id: "tc_1".to_string(),
-                            name: "web_search".to_string(),
-                            arguments: serde_json::json!({"q": "rust"}),
+                    unreachable!("streaming path should be exercised")
+                }
+
+                async fn stream_with_tools(
+                    &self,
+                    _request: ToolCompletionRequest,
+                ) -> Result<LlmStream, LlmError> {
+                    let (event_tx, event_rx) =
+                        tokio::sync::mpsc::channel::<Result<LlmStreamEvent, LlmError>>(8);
+                    let _ = event_tx
+                        .send(Ok(LlmStreamEvent::TextDelta(
+                            "I'll search for that.".to_string(),
+                        )))
+                        .await;
+                    let _ = event_tx
+                        .send(Ok(LlmStreamEvent::Completed(ToolCompletionResponse {
+                            content: Some("I'll search for that.".to_string()),
                             reasoning: None,
-                        }],
-                        input_tokens: 10,
-                        output_tokens: 5,
-                        finish_reason: FinishReason::ToolUse,
-                        cache_read_input_tokens: 0,
-                        cache_creation_input_tokens: 0,
-                    })
+                            tool_calls: vec![ToolCall {
+                                id: "tc_1".to_string(),
+                                name: "web_search".to_string(),
+                                arguments: serde_json::json!({"q": "rust"}),
+                                reasoning: None,
+                            }],
+                            input_tokens: 10,
+                            output_tokens: 5,
+                            finish_reason: FinishReason::ToolUse,
+                            cache_read_input_tokens: 0,
+                            cache_creation_input_tokens: 0,
+                        })))
+                        .await;
+                    Ok(LlmStream::new(event_rx))
+                }
+
+                fn capabilities(&self) -> LlmProviderCapabilities {
+                    LlmProviderCapabilities {
+                        native_streaming: true,
+                    }
                 }
             }
 
-            let llm = Arc::new(ToolCallLlm);
+            let llm = Arc::new(ToolCallStreamLlm);
             let reasoning = Reasoning::new(llm);
             let context = ReasoningContext::new()
                 .with_message(ChatMessage::user("search rust"))
@@ -3664,8 +3757,6 @@ That's my plan."#;
                 .await
                 .unwrap();
 
-            // Tool calls: the default complete_with_tools_stream sends full
-            // text as one chunk (narrative), then returns tool_calls.
             let _chunk = chunk_rx.try_recv().expect("narrative chunk expected");
 
             match output.result {
@@ -3678,9 +3769,9 @@ That's my plan."#;
         }
 
         #[tokio::test]
-        async fn supports_streaming_default_is_false() {
+        async fn capabilities_default_to_no_native_streaming() {
             let llm = StubLlm::new("test");
-            assert!(!llm.supports_streaming());
+            assert!(!llm.capabilities().native_streaming);
         }
     }
 }

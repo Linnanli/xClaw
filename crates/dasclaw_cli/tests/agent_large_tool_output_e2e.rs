@@ -20,7 +20,7 @@ use dasclaw_core::messages::{
 use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
 use dasclaw_core::traits::HostError;
-use dasclaw_runtime::{Agent, AgentResponder, ToolExecutor};
+use dasclaw_runtime::{Agent, AgentResponder, AgentRunOptions, ToolExecutor};
 use dasclaw_safety::{SafetyConfig, SafetyLayer};
 use serde_json::json;
 
@@ -155,9 +155,10 @@ async fn req_dasclaw_cli_loop_e22_tool_output_redacted_before_next_llm_call() {
         .expect("agent builds");
 
     let reply = agent
-        .run("scan for leaked credentials")
+        .invoke("scan for leaked credentials", AgentRunOptions::invoke())
         .await
-        .expect("loop must finish — redaction is non-fatal");
+        .expect("loop must finish — redaction is non-fatal")
+        .text;
     assert_eq!(reply, "done — credential surfaced and routed for rotation");
 
     let snapshots = responder.snapshots();
@@ -220,7 +221,10 @@ async fn req_dasclaw_cli_loop_e22_no_sanitizer_forwards_verbatim_baseline() {
         .build()
         .expect("agent builds");
 
-    agent.run("baseline").await.expect("baseline must run");
+    agent
+        .invoke("baseline", AgentRunOptions::invoke())
+        .await
+        .expect("baseline must run");
 
     let snapshots = responder.snapshots();
     assert_eq!(snapshots.len(), 2);

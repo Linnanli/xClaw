@@ -11,7 +11,8 @@
 use std::sync::Arc;
 
 use dasclaw_core::agentic_loop::{
-    AgentEvent, AgentResponder, AgenticLoopConfig, LoopOutcome, ToolDispatcher, run_agentic_loop,
+    AgentEvent, AgentResponder, AgenticLoopConfig, LoopOutcome, ModelCallMode, ToolDispatcher,
+    run_agentic_loop,
 };
 use dasclaw_core::hooks::HookBundle;
 use dasclaw_core::reasoning_ctx::ReasoningContext;
@@ -29,6 +30,7 @@ pub struct AgenticLoop {
     responder: Arc<dyn AgentResponder>,
     dispatcher: Option<Arc<dyn ToolDispatcher>>,
     cancellation_token: Option<CancellationToken>,
+    model_call_mode: ModelCallMode,
     event_tx: Option<mpsc::Sender<AgentEvent>>,
 }
 
@@ -44,12 +46,14 @@ impl AgenticLoop {
         responder: Arc<dyn AgentResponder>,
         dispatcher: Option<Arc<dyn ToolDispatcher>>,
         cancellation_token: Option<CancellationToken>,
+        model_call_mode: ModelCallMode,
         event_tx: Option<mpsc::Sender<AgentEvent>>,
     ) -> Self {
         Self {
             responder,
             dispatcher,
             cancellation_token,
+            model_call_mode,
             event_tx,
         }
     }
@@ -69,6 +73,7 @@ impl AgenticLoop {
             self.responder.as_ref(),
             self.dispatcher.as_deref(),
             self.cancellation_token.as_ref(),
+            self.model_call_mode,
             self.event_tx.as_ref(),
             ctx,
             loop_config,

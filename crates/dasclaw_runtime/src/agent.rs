@@ -11,7 +11,10 @@
 //!     .responder(my_responder)        // anything that knows how to call an LLM
 //!     .system_prompt("You are a helpful assistant.")
 //!     .build()?;
-//! let text = agent.run("Hello!").await?;
+//! let text = agent
+//!     .invoke("Hello!", AgentRunOptions::invoke())
+//!     .await?
+//!     .text;
 //! ```
 //!
 //! ## Scope (A1 + A2)
@@ -41,11 +44,15 @@
 //! single-method trait — adapter authors only ever need to implement
 //! `respond` (and optionally `respond_streaming` for token streaming).
 
-use std::sync::Arc;
+use std::{
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+};
 
 use async_trait::async_trait;
 pub(crate) use dasclaw_core::agentic_loop::TOOLS_NOT_SUPPORTED_REASON;
-pub use dasclaw_core::agentic_loop::{AgentEvent, AgentResponder};
+pub use dasclaw_core::agentic_loop::{AgentEvent, AgentResponder, AgentRunOutput, ModelCallMode};
 use dasclaw_core::agentic_loop::{AgenticLoopConfig, LoopOutcome};
 use dasclaw_core::hooks::HookBundle;
 use dasclaw_core::messages::{ChatMessage, ToolCall, ToolDefinition, ToolResult};
@@ -64,6 +71,48 @@ use crate::approval::{
 use crate::tool_dispatch::{
     APPROVAL_REJECTED_SENTINEL_PREFIX, RejectedPayload, SequentialDispatcher, ToolDispatcher,
 };
+
+/// Per-run options for [`Agent::invoke`] and [`Agent::stream`].
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentRunOptions {
+    pub model_call_mode: ModelCallMode,
+}
+
+impl AgentRunOptions {
+    #[must_use]
+    pub const fn invoke() -> Self {
+        Self {
+            model_call_mode: ModelCallMode::Invoke,
+        }
+    }
+
+    #[must_use]
+    pub const fn stream() -> Self {
+        Self {
+            model_call_mode: ModelCallMode::Stream,
+        }
+    }
+}
+
+/// Event stream returned by [`Agent::stream`].
+pub struct AgentRunStream {
+    rx_event: mpsc::Receiver<Result<AgentEvent, AgentError>>,
+}
+
+impl AgentRunStream {
+    fn new(rx_event: mpsc::Receiver<Result<AgentEvent, AgentError>>) -> Self {
+        Self { rx_event }
+    }
+}
+
+impl futures_core::Stream for AgentRunStream {
+    type Item = Result<AgentEvent, AgentError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        this.rx_event.poll_recv(cx)
+    }
+}
 
 /// Narrow tool-execution seam used by [`Agent`] (ADR-153 step 2 sub-step A2).
 ///
@@ -168,7 +217,7 @@ impl ToolLifecycleObserver for NoopToolLifecycleObserver {
     }
 }
 
-/// Errors surfaced by [`Agent::run`].
+/// Errors surfaced by [`Agent::invoke`] and [`Agent::stream`].
 ///
 /// Serialized via a private adjacent-tagged wire format
 /// (`{"kind": "...", "data": ...}`) so a GUI/IPC consumer can render a
@@ -392,7 +441,7 @@ impl Agent {
     /// Return a clone of the configured cancellation token, or `None` if
     /// the agent was built without one. Callers (typically a GUI "stop"
     /// button) cancel the returned handle to halt any in-flight
-    /// [`Agent::run`] or [`crate::Session::run`] at the next signal
+    /// [`Agent::invoke`] or [`crate::Session::invoke`] at the next signal
     /// check. See issue #907.
     #[must_use]
     pub fn cancel_handle(&self) -> Option<CancellationToken> {
@@ -419,14 +468,14 @@ impl Agent {
 
     /// Seed a fresh [`ReasoningContext`] with the agent's static
     /// configuration (system prompt, model override, advertised tools).
-    /// Shared by [`Agent::run`] and `dasclaw_session::Session::new` so
+    /// Shared by [`Agent::invoke`] and `dasclaw_session::Session::new` so
     /// the initialisation stays in one place.
     ///
     /// This is part of the support API consumed by the
     /// [`dasclaw_session`](https://docs.rs/dasclaw_session) crate; it is
     /// public so that crate can build a multi-turn facade without
     /// duplicating the seeding logic. End-host code should prefer
-    /// [`Agent::run`] or `dasclaw_session::Session`.
+    /// [`Agent::invoke`] or `dasclaw_session::Session`.
     pub fn seed_context(&self, ctx: &mut ReasoningContext) {
         if let Some(ref sp) = self.config.system_prompt {
             ctx.system_prompt = Some(sp.clone());
@@ -440,21 +489,22 @@ impl Agent {
     }
 
     /// Append `prompt` as a user message to `ctx` and drive the agentic
-    /// loop to completion. Called by [`Agent::run`] (after seeding a
-    /// fresh context) and by `dasclaw_session::Session::run` (carrying
+    /// loop to completion. Called by [`Agent::invoke`] (after seeding a
+    /// fresh context) and by `dasclaw_session::Session::invoke` (carrying
     /// the session's accumulated context across turns).
     ///
     /// Part of the same support API as [`Agent::seed_context`]; see
     /// that method's docs for the rationale.
-    pub async fn run_in_context(
+    pub async fn invoke_in_context(
         &self,
         ctx: &mut ReasoningContext,
         prompt: &str,
-    ) -> Result<String, AgentError> {
-        self.run_in_context_inner(ctx, prompt, None).await
+        options: AgentRunOptions,
+    ) -> Result<AgentRunOutput, AgentError> {
+        self.run_in_context_inner(ctx, prompt, options, None).await
     }
 
-    /// Streaming variant of [`Agent::run_in_context`] (issue #908).
+    /// Streaming variant of [`Agent::invoke_in_context`] (issue #908).
     ///
     /// Events are forwarded to `event_tx` in the order they happen:
     /// [`AgentEvent::TextChunk`] from the responder, then
@@ -466,13 +516,15 @@ impl Agent {
     /// non-streaming runs.
     ///
     /// Part of the same support API as [`Agent::seed_context`].
-    pub async fn run_in_context_streaming(
+    pub async fn stream_in_context(
         &self,
         ctx: &mut ReasoningContext,
         prompt: &str,
+        options: AgentRunOptions,
         event_tx: mpsc::Sender<AgentEvent>,
-    ) -> Result<String, AgentError> {
-        self.run_in_context_inner(ctx, prompt, Some(event_tx)).await
+    ) -> Result<AgentRunOutput, AgentError> {
+        self.run_in_context_inner(ctx, prompt, options, Some(event_tx))
+            .await
     }
 
     /// Shared loop driver for both streaming and non-streaming runs.
@@ -485,8 +537,9 @@ impl Agent {
         &self,
         ctx: &mut ReasoningContext,
         prompt: &str,
+        options: AgentRunOptions,
         event_tx: Option<mpsc::Sender<AgentEvent>>,
-    ) -> Result<String, AgentError> {
+    ) -> Result<AgentRunOutput, AgentError> {
         ctx.messages.push(ChatMessage::user(prompt));
 
         let loop_config = self
@@ -517,6 +570,7 @@ impl Agent {
             Arc::clone(&self.responder),
             dispatcher,
             self.cancellation_token.clone(),
+            options.model_call_mode,
             event_tx,
         );
 
@@ -530,35 +584,57 @@ impl Agent {
         // returning the response text, mirroring the push that
         // `SequentialDispatcher` already performs on the tool-call
         // branch. That keeps the next call in a multi-turn
-        // `Session::run` aware of what the model just said without
+        // `Session::invoke` aware of what the model just said without
         // requiring the caller to plumb usage out of `LoopOutcome`.
         map_outcome(outcome, loop_config.max_iterations)
     }
 
     /// Run a single user prompt through the loop and return the final
     /// text response.
-    pub async fn run(&self, prompt: &str) -> Result<String, AgentError> {
-        let mut ctx = ReasoningContext::new();
-        self.seed_context(&mut ctx);
-        self.run_in_context(&mut ctx, prompt).await
-    }
-
-    /// Streaming variant of [`Agent::run`] (issue #908, GUI blocker B2).
-    ///
-    /// Drives one user prompt through the loop while forwarding
-    /// [`AgentEvent`]s on `event_tx`. Returns the final assistant text
-    /// (the concatenation of every [`AgentEvent::TextChunk`] from the
-    /// last iteration), matching [`Agent::run`]'s contract so callers
-    /// can opt into streaming without changing their result handling.
-    pub async fn run_streaming(
+    pub async fn invoke(
         &self,
         prompt: &str,
-        event_tx: mpsc::Sender<AgentEvent>,
-    ) -> Result<String, AgentError> {
+        options: AgentRunOptions,
+    ) -> Result<AgentRunOutput, AgentError> {
         let mut ctx = ReasoningContext::new();
         self.seed_context(&mut ctx);
-        self.run_in_context_streaming(&mut ctx, prompt, event_tx)
-            .await
+        self.invoke_in_context(&mut ctx, prompt, options).await
+    }
+
+    /// Stream one prompt through the agent.
+    pub fn stream(self: Arc<Self>, prompt: &str, options: AgentRunOptions) -> AgentRunStream {
+        let prompt = prompt.to_string();
+        let (event_tx, mut event_rx) = mpsc::channel::<AgentEvent>(64);
+        let (result_tx, result_rx) = mpsc::channel::<Result<AgentEvent, AgentError>>(64);
+        let forward_tx = result_tx.clone();
+
+        tokio::spawn(async move {
+            let mut ctx = ReasoningContext::new();
+            self.seed_context(&mut ctx);
+
+            let forwarder = tokio::spawn(async move {
+                while let Some(event) = event_rx.recv().await {
+                    if forward_tx.send(Ok(event)).await.is_err() {
+                        break;
+                    }
+                }
+            });
+
+            let result = self
+                .stream_in_context(&mut ctx, &prompt, options, event_tx)
+                .await;
+            let _ = forwarder.await;
+            match result {
+                Ok(output) => {
+                    let _ = result_tx.send(Ok(AgentEvent::Completed(output))).await;
+                }
+                Err(error) => {
+                    let _ = result_tx.send(Err(error)).await;
+                }
+            }
+        });
+
+        AgentRunStream::new(result_rx)
     }
 }
 
@@ -693,7 +769,7 @@ impl AgentBuilder {
     /// Wire a [`CancellationToken`] that the headless delegate consults
     /// on each loop signal check. Cancelling the token from outside
     /// (typically via [`Agent::cancel_handle`]) halts an in-flight
-    /// [`Agent::run`] or [`crate::Session::run`] with
+    /// [`Agent::invoke`] or [`crate::Session::invoke`] with
     /// [`AgentError::Stopped`] at the next iteration boundary. See issue
     /// #907.
     #[must_use]
@@ -735,9 +811,9 @@ impl AgentBuilder {
     }
 }
 
-fn map_outcome(outcome: LoopOutcome, max_iterations: usize) -> Result<String, AgentError> {
+fn map_outcome(outcome: LoopOutcome, max_iterations: usize) -> Result<AgentRunOutput, AgentError> {
     match outcome {
-        LoopOutcome::Response(text) => Ok(text),
+        LoopOutcome::Response(text) => Ok(AgentRunOutput { text }),
         LoopOutcome::MaxIterations => Err(AgentError::MaxIterations(max_iterations)),
         LoopOutcome::Failure(reason) if reason == TOOLS_NOT_SUPPORTED_REASON => {
             Err(AgentError::ToolsNotSupported)
@@ -774,6 +850,7 @@ mod tests {
     use dasclaw_core::response_types::{
         RespondOutput, RespondResult, ResponseMetadata, TokenUsage,
     };
+    use futures_util::StreamExt;
 
     /// Mock responder driven by a fixed sequence of pre-built outputs.
     struct ScriptedResponder {
@@ -825,6 +902,30 @@ mod tests {
         }
     }
 
+    async fn invoke_text(agent: &Agent, prompt: &str) -> Result<String, AgentError> {
+        agent
+            .invoke(prompt, AgentRunOptions::invoke())
+            .await
+            .map(|output| output.text)
+    }
+
+    async fn collect_agent_stream(
+        agent: Agent,
+        prompt: &str,
+    ) -> Result<(Vec<AgentEvent>, String), AgentError> {
+        let mut stream = Arc::new(agent).stream(prompt, AgentRunOptions::stream());
+        let mut events = Vec::new();
+        while let Some(event) = stream.next().await {
+            match event? {
+                AgentEvent::Completed(output) => return Ok((events, output.text)),
+                event => events.push(event),
+            }
+        }
+        Err(AgentError::LoopFailure(
+            "agent stream ended before completion".to_string(),
+        ))
+    }
+
     #[tokio::test]
     async fn req_dasclaw_runtime_agent_a1_text_response_returns_final_string() {
         let responder = ScriptedResponder::new(vec![text_output("hello world")]);
@@ -832,7 +933,7 @@ mod tests {
             .responder(responder)
             .build()
             .expect("build agent");
-        let out = agent.run("hi").await.expect("run");
+        let out = invoke_text(&agent, "hi").await.expect("run");
         assert_eq!(out, "hello world");
     }
 
@@ -841,7 +942,7 @@ mod tests {
         // #929 step 2: the final assistant ChatMessage recorded on the
         // text branch of run_agentic_loop must carry the per-turn
         // TokenUsage from the LLM call that produced it, so multi-turn
-        // Session::run can persist real cost data.
+        // Session::invoke can persist real cost data.
         let usage = TokenUsage {
             input_tokens: 42,
             output_tokens: 7,
@@ -857,10 +958,10 @@ mod tests {
             .expect("build agent");
         let mut ctx = ReasoningContext::new();
         let out = agent
-            .run_in_context(&mut ctx, "ping")
+            .invoke_in_context(&mut ctx, "ping", AgentRunOptions::invoke())
             .await
-            .expect("run_in_context");
-        assert_eq!(out, "done");
+            .expect("invoke_in_context");
+        assert_eq!(out.text, "done");
         let last = ctx
             .messages
             .last()
@@ -885,7 +986,7 @@ mod tests {
             .responder(responder)
             .build()
             .expect("build");
-        let err = agent.run("call a tool please").await.unwrap_err();
+        let err = invoke_text(&agent, "call a tool please").await.unwrap_err();
         assert!(matches!(err, AgentError::ToolsNotSupported), "got {err:?}");
     }
 
@@ -896,7 +997,7 @@ mod tests {
             .responder(responder)
             .build()
             .expect("build");
-        let err = agent.run("ping").await.unwrap_err();
+        let err = invoke_text(&agent, "ping").await.unwrap_err();
         assert!(matches!(err, AgentError::Responder(_)), "got {err:?}");
     }
 
@@ -922,7 +1023,7 @@ mod tests {
             .model("test-model")
             .build()
             .expect("build");
-        let out = agent.run("hi").await.expect("run");
+        let out = invoke_text(&agent, "hi").await.expect("run");
         assert_eq!(out, "ok");
     }
 
@@ -1000,7 +1101,7 @@ mod tests {
             }])
             .build()
             .expect("build");
-        let out = agent.run("hi").await.expect("run");
+        let out = invoke_text(&agent, "hi").await.expect("run");
         assert_eq!(out, "done");
     }
 
@@ -1017,7 +1118,7 @@ mod tests {
             .tool_executor(executor)
             .build()
             .expect("build");
-        let out = agent.run("please call echo").await.expect("run");
+        let out = invoke_text(&agent, "please call echo").await.expect("run");
         assert_eq!(out, "all done");
     }
 
@@ -1087,7 +1188,7 @@ mod tests {
             .build()
             .expect("build");
 
-        let out = agent.run("please call echo").await.expect("run");
+        let out = invoke_text(&agent, "please call echo").await.expect("run");
         assert_eq!(out, "all done");
 
         let actual = calls.lock().await.clone();
@@ -1109,7 +1210,7 @@ mod tests {
             .tool_executor(ExplodingExecutor)
             .build()
             .expect("build");
-        let err = agent.run("hi").await.unwrap_err();
+        let err = invoke_text(&agent, "hi").await.unwrap_err();
         assert!(matches!(err, AgentError::Responder(_)), "got {err:?}");
     }
 
@@ -1122,12 +1223,12 @@ mod tests {
             .responder(responder)
             .build()
             .expect("build");
-        let err = agent.run("hi").await.unwrap_err();
+        let err = invoke_text(&agent, "hi").await.unwrap_err();
         assert!(matches!(err, AgentError::ToolsNotSupported), "got {err:?}");
     }
 
     // -----------------------------------------------------------------
-    // Issue #908 — Agent::run_streaming (GUI blocker B2)
+    // Issue #908 — Agent::stream (GUI blocker B2)
     // -----------------------------------------------------------------
 
     /// Responder that emits a fixed list of text chunks via
@@ -1160,7 +1261,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn req_dasclaw_runtime_agent_b2_run_streaming_orders_chunks_and_finish() {
+    async fn req_dasclaw_runtime_agent_b2_stream_orders_chunks_and_finish() {
         let responder = ChunkedResponder {
             chunks: ["Hel", "lo, ", "wor", "ld", "!"]
                 .into_iter()
@@ -1172,13 +1273,7 @@ mod tests {
             .build()
             .expect("build");
 
-        let (tx, mut rx) = mpsc::channel::<AgentEvent>(16);
-        let final_text = agent.run_streaming("hi", tx).await.expect("run");
-
-        let mut events = Vec::new();
-        while let Some(ev) = rx.recv().await {
-            events.push(ev);
-        }
+        let (events, final_text) = collect_agent_stream(agent, "hi").await.expect("run");
 
         assert_eq!(events.len(), 6, "5 TextChunk + 1 FinishReason: {events:?}");
         let chunks: Vec<&str> = events
@@ -1200,7 +1295,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn req_dasclaw_runtime_agent_b2_run_streaming_default_impl_falls_back_to_respond() {
+    async fn req_dasclaw_runtime_agent_b2_stream_default_impl_falls_back_to_respond() {
         // A responder that doesn't override `respond_streaming` must
         // still surface its final text as a single `TextChunk`
         // courtesy of the default trait impl. This is what guarantees
@@ -1211,13 +1306,7 @@ mod tests {
             .build()
             .expect("build");
 
-        let (tx, mut rx) = mpsc::channel::<AgentEvent>(4);
-        let final_text = agent.run_streaming("hi", tx).await.expect("run");
-
-        let mut events = Vec::new();
-        while let Some(ev) = rx.recv().await {
-            events.push(ev);
-        }
+        let (events, final_text) = collect_agent_stream(agent, "hi").await.expect("run");
         assert_eq!(
             events,
             vec![
@@ -1229,7 +1318,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn req_dasclaw_runtime_agent_b2_run_streaming_emits_tool_events_in_order() {
+    async fn req_dasclaw_runtime_agent_b2_stream_emits_tool_events_in_order() {
         // First iteration → tool call; second iteration → final text.
         // Expected event order:
         //   FinishReason::ToolUse        (iter 1 LLM)
@@ -1253,13 +1342,7 @@ mod tests {
             .build()
             .expect("build");
 
-        let (tx, mut rx) = mpsc::channel::<AgentEvent>(16);
-        let final_text = agent.run_streaming("call echo", tx).await.expect("run");
-
-        let mut events = Vec::new();
-        while let Some(ev) = rx.recv().await {
-            events.push(ev);
-        }
+        let (events, final_text) = collect_agent_stream(agent, "call echo").await.expect("run");
 
         assert!(
             matches!(
@@ -1291,7 +1374,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn req_dasclaw_runtime_agent_b2_run_streaming_serializes_to_adjacent_tagged_json() {
+    async fn req_dasclaw_runtime_agent_b2_stream_serializes_to_adjacent_tagged_json() {
         // Wire format guard: AgentEvent uses adjacent-tagged JSON so a
         // TypeScript discriminated union renders directly. Pin the
         // public variants so we notice if anything reshapes the wire.
@@ -1308,6 +1391,9 @@ mod tests {
                 is_error: false,
             },
             AgentEvent::FinishReason(FinishReason::Stop),
+            AgentEvent::Completed(AgentRunOutput {
+                text: "done".into(),
+            }),
         ];
         let json: Vec<String> = chunks
             .iter()
@@ -1329,6 +1415,7 @@ mod tests {
             json[3]
         );
         assert_eq!(json[4], r#"{"kind":"finish_reason","data":"stop"}"#);
+        assert_eq!(json[5], r#"{"kind":"completed","data":{"text":"done"}}"#);
 
         // Round-trip every variant.
         for original in chunks {

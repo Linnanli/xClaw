@@ -8,9 +8,10 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 # Provides `ChatMessage`, `ReasoningContext` — the conversation primitives.
 dasclaw_core = { path = "../dasclaw_core" }
-# Provides `Agent`, `AgentError`, and the `seed_context` / `run_in_context`
+# Provides `Agent`, `AgentError`, and the `seed_context` / `invoke_in_context`
 # support API that `Session` delegates to.
 dasclaw_runtime = { path = "../dasclaw_runtime" }
+futures-core = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
@@ -20,6 +21,7 @@ tokio = { version = "1", features = ["sync"] }
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
 tokio-util = "0.7"
+futures-util = "0.3"
 async-trait = "0.1"
 insta = { workspace = true }
 tempfile = "3.23.0"

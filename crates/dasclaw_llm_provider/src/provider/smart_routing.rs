@@ -26,8 +26,8 @@ use rust_decimal::Decimal;
 
 use crate::provider::error::LlmError;
 use crate::provider::provider::{
-    CompletionRequest, CompletionResponse, LlmProvider, ModelMetadata, Role, ToolCompletionRequest,
-    ToolCompletionResponse,
+    CompletionRequest, CompletionResponse, LlmProvider, LlmProviderCapabilities, LlmStream,
+    ModelMetadata, Role, ToolCompletionRequest, ToolCompletionResponse,
 };
 
 // ---------------------------------------------------------------------------
@@ -963,18 +963,15 @@ impl LlmProvider for SmartRoutingProvider {
         self.primary.calculate_cost(input_tokens, output_tokens)
     }
 
-    fn supports_streaming(&self) -> bool {
-        self.primary.supports_streaming()
-    }
-
-    async fn complete_with_tools_stream(
+    async fn stream_with_tools(
         &self,
         request: ToolCompletionRequest,
-        chunk_tx: tokio::sync::mpsc::UnboundedSender<String>,
-    ) -> Result<ToolCompletionResponse, LlmError> {
-        self.primary
-            .complete_with_tools_stream(request, chunk_tx)
-            .await
+    ) -> Result<LlmStream, LlmError> {
+        self.primary.stream_with_tools(request).await
+    }
+
+    fn capabilities(&self) -> LlmProviderCapabilities {
+        self.primary.capabilities()
     }
 }
 

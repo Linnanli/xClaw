@@ -36,8 +36,7 @@ assistant-ui组件可以使用assistant-ui mcp获取文档和示例信息
 
 | Skill | 触发时机 | 缺省后果 |
 |-------|---------|---------|
-| `code-quality-audit` | **写完一段非平凡实现后**（新函数/新模块/重构 > 50 LOC）、commit/push 前、用户说"审查/检查质量" | 会把补丁式代码、过长函数、unwrap/clone 滥用、重复造轮子的隐患合并进主线 |
-| `code-simplifier` | **`code-quality-audit` 之后**，对刚改完的代码做收敛（消嵌套/去重复/改命名）。**verbatim port 场景必须跳过**（任何"简化"都违反 ADR-129 §1.3） | 留下啰嗦/低可读代码，后续重构成本飙升 |
+| `code-simplifier` | 对刚改完的代码做收敛（消嵌套/去重复/改命名）。**verbatim port 场景必须跳过**（任何"简化"都违反 ADR-129 §1.3） | 留下啰嗦/低可读代码，后续重构成本飙升 |
 | `adr-compliance-check` | **触及 `crates/dasclaw_*` / `.github/workflows/code_style.yml` / `scripts/check_codex_*_drift.py` / starlark pin / `.ironclaw` 字面量新增或豁免** 的 PR push 前 | 漏掉 verbatim 纯度违规、drift guard 接线缺失、CI roll-up `failure-check` stanza 缺失、PR 描述漏 ADR/Issue cite 等架构纪律问题 |
 | `code-review-expert` | **PR 自审前**（push 之前）、PR 合并前、用户说"review/审查这次改动" | 漏掉 SOLID 违规、安全风险、依赖耦合等高阶问题 |
 

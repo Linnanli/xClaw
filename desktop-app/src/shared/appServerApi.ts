@@ -36,6 +36,7 @@ export type RendererClientModelConfig = {
   provider: string
   apiBaseUrl: string
   apiFormat: string
+  modelCallMode: string
   source: string
   capabilities: string[]
   apiKeyConfigured: boolean

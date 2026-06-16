@@ -204,6 +204,8 @@ pub struct ClientModelConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_format: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_call_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<String>,
@@ -218,6 +220,7 @@ impl fmt::Debug for ClientModelConfig {
             .field("api_base_url", &self.api_base_url)
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
             .field("api_format", &self.api_format)
+            .field("model_call_mode", &self.model_call_mode)
             .field("source", &self.source)
             .field("capabilities", &self.capabilities)
             .finish()
