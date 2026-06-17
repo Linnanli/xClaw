@@ -20,16 +20,16 @@ use dasclaw_app_server_protocol::{
     HealthCheckResponse, InitializeParams, InitializeResponse, ItemCompletedEvent,
     ItemStartedEvent, ItemType, JsonRpcError, JsonRpcRequest, JsonRpcResponse,
     LifecycleChangedEvent, LifecycleReason, LifecycleSnapshot, LifecycleState,
-    LifecycleStatusResponse, ModelProviderInitializeConfig, ModelProviderSelectForNextTurnParams,
-    ModelProviderSelectForNextTurnResponse, NotificationQueuePolicy, NotificationsInitializedEvent,
-    ProtocolSchemaResponse, ProtocolVersion, ReasoningSummaryTextDeltaEvent, ServerInfo,
-    ServerNotification, ServiceHealth, ServiceName, ShutdownParams, ShutdownReason,
-    ShutdownResponse, ThreadCreateParams, ThreadCreateResponse, ThreadCreatedEvent,
-    ThreadListResponse, ThreadReadParams, ThreadReadResponse, ThreadStartResponse,
-    ThreadStartedEvent, ThreadSummary, TurnCancelParams, TurnCancelResponse, TurnCancelledEvent,
-    TurnCompletedEvent, TurnDeltaEvent, TurnFailedEvent, TurnInterruptResponse, TurnListParams,
-    TurnListResponse, TurnReadParams, TurnReadResponse, TurnStartParams, TurnStartResponse,
-    TurnStartedEvent, TurnStatus, TurnSummary,
+    LifecycleStatusResponse, ModelListParams, ModelListResponse, ModelProviderInitializeConfig,
+    ModelProviderSelectForNextTurnParams, ModelProviderSelectForNextTurnResponse,
+    NotificationQueuePolicy, NotificationsInitializedEvent, ProtocolSchemaResponse,
+    ProtocolVersion, ReasoningSummaryTextDeltaEvent, ServerInfo, ServerNotification, ServiceHealth,
+    ServiceName, ShutdownParams, ShutdownReason, ShutdownResponse, ThreadCreateParams,
+    ThreadCreateResponse, ThreadCreatedEvent, ThreadListResponse, ThreadReadParams,
+    ThreadReadResponse, ThreadStartResponse, ThreadStartedEvent, ThreadSummary, TurnCancelParams,
+    TurnCancelResponse, TurnCancelledEvent, TurnCompletedEvent, TurnDeltaEvent, TurnFailedEvent,
+    TurnInterruptResponse, TurnListParams, TurnListResponse, TurnReadParams, TurnReadResponse,
+    TurnStartParams, TurnStartResponse, TurnStartedEvent, TurnStatus, TurnSummary,
 };
 use dasclaw_app_server_protocol::{JSON_RPC_VERSION, method};
 use dasclaw_core::messages::ReasoningSummary;
@@ -163,6 +163,35 @@ impl ModelProviderState {
         let selected_model_id = model_id.to_string();
         self.selected_model_id = Some(selected_model_id.clone());
         Ok(selected_model_id)
+    }
+
+    fn model_list_response(&self) -> Result<ModelListResponse, AppServerError> {
+        let selected_model_id = self.selected_model_id.as_deref().ok_or_else(|| {
+            AppServerError::invalid_request(
+                "model_provider",
+                "model provider config is required before listing models",
+            )
+        })?;
+        let mut models = self
+            .models
+            .values()
+            .map(|model| {
+                dasclaw_app_server_protocol::CodexModel::from_client_model(
+                    model,
+                    model.model_id == selected_model_id,
+                )
+            })
+            .collect::<Vec<_>>();
+        models.sort_by(|left, right| {
+            right
+                .is_default
+                .cmp(&left.is_default)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(ModelListResponse {
+            data: models,
+            next_cursor: None,
+        })
     }
 
     fn health(&self) -> ServiceHealth {
@@ -625,6 +654,14 @@ impl AppServer {
         Ok(ModelProviderSelectForNextTurnResponse { selected_model_id })
     }
 
+    pub fn model_list(
+        &self,
+        _params: ModelListParams,
+    ) -> Result<ModelListResponse, AppServerError> {
+        self.require_initialized("model_provider")?;
+        self.model_provider.model_list_response()
+    }
+
     pub fn turn_cancel(
         &mut self,
         params: TurnCancelParams,
@@ -879,6 +916,11 @@ impl AppServer {
             method::TURN_READ => {
                 route_with_params(request.id, request.params, |params: TurnReadParams| {
                     self.turn_read(params)
+                })
+            }
+            method::MODEL_LIST => {
+                route_with_optional_params(request.id, request.params, |params| {
+                    self.model_list(params)
                 })
             }
             method::MODEL_PROVIDER_SELECT_FOR_NEXT_TURN => route_with_params(
@@ -2346,6 +2388,7 @@ pub fn supported_methods() -> &'static [&'static str] {
         method::TURN_INTERRUPT,
         method::TURN_LIST,
         method::TURN_READ,
+        method::MODEL_LIST,
         method::MODEL_PROVIDER_SELECT_FOR_NEXT_TURN,
     ]
 }
@@ -2393,6 +2436,8 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
+
+    const TEST_MODEL_API_BASE_URL: &str = "https://api.test/v1";
 
     struct InvokeOnlyResponder;
 
@@ -2539,22 +2584,15 @@ mod tests {
             .iter()
             .find(|profile| profile.id == CompatibilityProfile::CODEX_APP_SERVER_V2_ID)
             .expect("initialize response should advertise the Codex v2 subset profile");
+        let expected_profile = CompatibilityProfile::codex_app_server_v2();
 
         assert!(response.unavailable_requested_capabilities.is_empty());
+        assert_eq!(profile.scope, expected_profile.scope);
         assert_eq!(
             profile.scope,
             dasclaw_app_server_protocol::CompatibilityProfileScope::ChatSessionSubset
         );
-        assert_eq!(
-            profile.methods,
-            vec![
-                method::INITIALIZE,
-                method::THREAD_START,
-                method::THREAD_READ,
-                method::TURN_START,
-                method::TURN_INTERRUPT,
-            ]
-        );
+        assert_eq!(profile.methods, expected_profile.methods);
     }
 
     #[test]
@@ -3192,6 +3230,57 @@ mod tests {
     }
 
     #[test]
+    fn json_rpc_model_list_returns_codex_shape_without_api_keys() {
+        let mut server = initialized_server();
+        let response = server
+            .handle_json_rpc(r#"{"jsonrpc":"2.0","id":"models","method":"model/list","params":{}}"#)
+            .expect("model/list should return a structured response");
+        let value: Value = serde_json::from_str(&response).expect("model/list response JSON");
+
+        assert_eq!(value["id"], "models");
+        assert_eq!(value["result"]["nextCursor"], serde_json::Value::Null);
+        assert_eq!(value["result"]["data"][0]["id"], "gpt-test");
+        assert_eq!(value["result"]["data"][0]["model"], "gpt-test");
+        assert_eq!(value["result"]["data"][0]["isDefault"], true);
+        assert_eq!(value["result"]["data"][1]["id"], "gpt-next");
+        assert_eq!(value["result"]["data"][1]["isDefault"], false);
+        assert!(!response.contains("test-api-key"));
+        assert!(!response.contains(TEST_MODEL_API_BASE_URL));
+        assert!(!response.contains("apiKey"));
+        assert!(!response.contains("apiBaseUrl"));
+    }
+
+    #[test]
+    fn json_rpc_model_list_without_params_returns_codex_shape() {
+        let mut server = initialized_server();
+        let response = server
+            .handle_json_rpc(r#"{"jsonrpc":"2.0","id":"models","method":"model/list"}"#)
+            .expect("model/list without params should return a structured response");
+        let value: Value = serde_json::from_str(&response).expect("model/list response JSON");
+
+        assert_eq!(value["id"], "models");
+        assert_eq!(value["result"]["nextCursor"], serde_json::Value::Null);
+        assert_eq!(value["result"]["data"][0]["id"], "gpt-test");
+        assert_eq!(value["result"]["data"][0]["isDefault"], true);
+        assert_eq!(value["result"]["data"][1]["id"], "gpt-next");
+        assert_eq!(value["result"]["data"][1]["isDefault"], false);
+    }
+
+    #[test]
+    fn json_rpc_model_list_requires_initialize() {
+        let mut server = AppServer::new();
+        let response = server
+            .handle_json_rpc(r#"{"jsonrpc":"2.0","id":"models","method":"model/list","params":{}}"#)
+            .expect("model/list should return a structured error");
+        let value: Value = serde_json::from_str(&response).expect("model/list error JSON");
+
+        assert_eq!(value["id"], "models");
+        assert_eq!(value["error"]["code"], -32003);
+        assert_eq!(value["error"]["data"]["code"], "NOT_INITIALIZED");
+        assert_eq!(value["error"]["data"]["capability"], "model_provider");
+    }
+
+    #[test]
     fn json_rpc_thread_create_returns_thread_id_after_initialize() {
         let mut server = AppServer::new();
         server
@@ -3399,7 +3488,7 @@ mod tests {
         assert_eq!(calls[0].model_provider.model_id, "gpt-test");
         assert_eq!(
             calls[0].model_provider.api_base_url,
-            "http://localhost:11434/v1"
+            TEST_MODEL_API_BASE_URL
         );
         assert_eq!(calls[0].model_provider.api_key, "test-api-key");
 
@@ -5166,7 +5255,7 @@ mod tests {
             model_id: model_id.to_string(),
             display_name: Some(model_id.to_string()),
             provider: Some("openai".to_string()),
-            api_base_url: Some("http://localhost:11434/v1".to_string()),
+            api_base_url: Some(TEST_MODEL_API_BASE_URL.to_string()),
             api_key: Some("test-api-key".to_string()),
             api_format: Some("openai".to_string()),
             model_call_mode: None,
