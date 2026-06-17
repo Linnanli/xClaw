@@ -1129,6 +1129,8 @@ pub struct ThreadCreateResponse {
 pub struct ThreadStartResponse {
     pub thread_id: String,
     pub lifecycle: LifecycleSnapshot,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<CodexThread>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1288,6 +1290,8 @@ pub struct TurnStartResponse {
     pub turn_id: String,
     pub status: TurnStatus,
     pub lifecycle: LifecycleSnapshot,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<CodexTurn>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1348,6 +1352,100 @@ pub struct TurnReadResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CodexThread {
+    pub id: String,
+    pub forked_from_id: Option<String>,
+    pub preview: String,
+    pub ephemeral: bool,
+    pub model_provider: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub status: CodexThreadStatus,
+    pub path: Option<String>,
+    pub cwd: String,
+    pub cli_version: String,
+    pub source: CodexSessionSource,
+    pub agent_nickname: Option<String>,
+    pub agent_role: Option<String>,
+    pub git_info: Option<CodexGitInfo>,
+    pub name: Option<String>,
+    pub turns: Vec<CodexTurn>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexTurn {
+    pub id: String,
+    pub items: Vec<serde_json::Value>,
+    pub status: CodexTurnStatus,
+    pub error: Option<CodexTurnError>,
+    pub started_at: Option<i64>,
+    pub completed_at: Option<i64>,
+    pub duration_ms: Option<i64>,
+}
+
+impl CodexTurn {
+    #[must_use]
+    pub fn in_progress(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            items: Vec::new(),
+            status: CodexTurnStatus::InProgress,
+            error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexTurnError {
+    pub message: String,
+    pub codex_error_info: Option<serde_json::Value>,
+    pub additional_details: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum CodexThreadStatus {
+    Idle,
+    Active { active_flags: Vec<String> },
+    SystemError,
+    NotLoaded,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CodexTurnStatus {
+    Completed,
+    Interrupted,
+    Failed,
+    InProgress,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CodexSessionSource {
+    AppServer,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexGitInfo {
+    pub sha: Option<String>,
+    pub branch: Option<String>,
+    pub origin_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ThreadCreatedEvent {
     pub thread_id: String,
 }
@@ -1356,6 +1454,8 @@ pub struct ThreadCreatedEvent {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadStartedEvent {
     pub thread_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<CodexThread>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1364,6 +1464,8 @@ pub struct TurnStartedEvent {
     pub thread_id: String,
     pub turn_id: String,
     pub status: TurnStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<CodexTurn>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1381,6 +1483,8 @@ pub struct TurnCompletedEvent {
     pub turn_id: String,
     pub status: TurnStatus,
     pub output: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<CodexTurn>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1390,6 +1494,8 @@ pub struct TurnFailedEvent {
     pub turn_id: String,
     pub status: TurnStatus,
     pub error: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<CodexTurn>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1724,6 +1830,89 @@ mod tests {
                 patch: 0,
             })
         );
+    }
+
+    #[test]
+    fn thread_and_turn_responses_can_carry_native_ids_and_codex_views() {
+        let lifecycle = LifecycleSnapshot {
+            state: LifecycleState::Ready,
+            reason: LifecycleReason::RuntimeReady,
+            message: None,
+            since: "0".to_string(),
+            degraded_services: Vec::new(),
+        };
+        let thread_response = ThreadStartResponse {
+            thread_id: "thread_1".to_string(),
+            lifecycle: lifecycle.clone(),
+            thread: Some(CodexThread {
+                id: "thread_1".to_string(),
+                forked_from_id: None,
+                preview: "hello".to_string(),
+                ephemeral: false,
+                model_provider: "openai".to_string(),
+                created_at: 1,
+                updated_at: 2,
+                status: CodexThreadStatus::Idle,
+                path: None,
+                cwd: "/workspace".to_string(),
+                cli_version: "0.0.0".to_string(),
+                source: CodexSessionSource::AppServer,
+                agent_nickname: None,
+                agent_role: None,
+                git_info: None,
+                name: None,
+                turns: Vec::new(),
+            }),
+        };
+        let turn_response = TurnStartResponse {
+            turn_id: "turn_1".to_string(),
+            status: TurnStatus::Pending,
+            lifecycle: lifecycle.clone(),
+            turn: Some(CodexTurn::in_progress("turn_1")),
+        };
+
+        let thread_value =
+            serde_json::to_value(thread_response).expect("thread/start response should serialize");
+        let turn_value =
+            serde_json::to_value(turn_response).expect("turn/start response should serialize");
+
+        assert_eq!(thread_value["threadId"], "thread_1");
+        assert_eq!(thread_value["thread"]["id"], "thread_1");
+        assert_eq!(thread_value["thread"]["status"]["type"], "idle");
+        assert_eq!(thread_value["thread"]["source"], "appServer");
+        assert_eq!(
+            serde_json::to_value(CodexThreadStatus::Active {
+                active_flags: Vec::new(),
+            })
+            .expect("active thread status should serialize"),
+            serde_json::json!({
+                "type": "active",
+                "activeFlags": [],
+            })
+        );
+        assert_eq!(turn_value["turnId"], "turn_1");
+        assert_eq!(turn_value["status"], "pending");
+        assert_eq!(turn_value["turn"]["id"], "turn_1");
+        assert_eq!(turn_value["turn"]["status"], "inProgress");
+
+        let native_thread_value = serde_json::to_value(ThreadStartResponse {
+            thread_id: "thread_2".to_string(),
+            lifecycle: lifecycle.clone(),
+            thread: None,
+        })
+        .expect("native thread/start response should serialize");
+        let native_turn_value = serde_json::to_value(TurnStartResponse {
+            turn_id: "turn_2".to_string(),
+            status: TurnStatus::Pending,
+            lifecycle,
+            turn: None,
+        })
+        .expect("native turn/start response should serialize");
+
+        assert_eq!(native_thread_value["threadId"], "thread_2");
+        assert!(native_thread_value.get("thread").is_none());
+        assert_eq!(native_turn_value["turnId"], "turn_2");
+        assert!(native_turn_value.get("turn").is_none());
     }
 
     #[test]
@@ -2273,12 +2462,14 @@ mod tests {
             .expect("thread/created fixture should serialize"),
             ServerNotification::thread_started(ThreadStartedEvent {
                 thread_id: "thread_1".to_string(),
+                thread: None,
             })
             .expect("thread/started fixture should serialize"),
             ServerNotification::turn_started(TurnStartedEvent {
                 thread_id: "thread_1".to_string(),
                 turn_id: "turn_1".to_string(),
                 status: TurnStatus::Pending,
+                turn: None,
             })
             .expect("turn/started fixture should serialize"),
             ServerNotification::turn_delta(TurnDeltaEvent {
@@ -2292,6 +2483,7 @@ mod tests {
                 turn_id: "turn_1".to_string(),
                 status: TurnStatus::Completed,
                 output: "hello".to_string(),
+                turn: None,
             })
             .expect("turn/completed fixture should serialize"),
             ServerNotification::turn_failed(TurnFailedEvent {
@@ -2299,6 +2491,7 @@ mod tests {
                 turn_id: "turn_1".to_string(),
                 status: TurnStatus::Failed,
                 error: "runtime failed".to_string(),
+                turn: None,
             })
             .expect("turn/failed fixture should serialize"),
             ServerNotification::turn_cancelled(TurnCancelledEvent {
@@ -2367,6 +2560,10 @@ mod tests {
 
         assert_eq!(event_names, CODEX_APP_SERVER_V2_EVENTS);
         assert_eq!(events[0].params["eventQueue"]["overflow"], "lag_disconnect");
+        assert!(events[4].params.get("thread").is_none());
+        assert!(events[5].params.get("turn").is_none());
+        assert!(events[7].params.get("turn").is_none());
+        assert!(events[8].params.get("turn").is_none());
         assert_eq!(events[10].params["itemType"], "agent_message");
         assert_eq!(events[11].params["delta"], "hel");
         assert_eq!(events[12].params["delta"], "scratch");

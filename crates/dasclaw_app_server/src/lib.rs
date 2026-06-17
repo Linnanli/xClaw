@@ -580,6 +580,7 @@ impl AppServer {
         Ok(ThreadStartResponse {
             thread_id: created.thread_id,
             lifecycle: created.lifecycle,
+            thread: None,
         })
     }
 
@@ -634,6 +635,7 @@ impl AppServer {
             thread_id: thread_id.clone(),
             turn_id: turn_id.clone(),
             status: TurnStatus::Pending,
+            turn: None,
         });
         self.emit_codex_item_started(thread_id, turn_id.clone());
 
@@ -641,6 +643,7 @@ impl AppServer {
             turn_id,
             status: TurnStatus::Pending,
             lifecycle: self.lifecycle.clone(),
+            turn: None,
         })
     }
 
@@ -1081,8 +1084,10 @@ impl AppServer {
         if !self.codex_v2_compat_enabled {
             return;
         }
-        self.notifications
-            .emit_thread_started(ThreadStartedEvent { thread_id });
+        self.notifications.emit_thread_started(ThreadStartedEvent {
+            thread_id,
+            thread: None,
+        });
     }
 
     fn emit_codex_item_started(&mut self, thread_id: String, turn_id: String) {
@@ -1245,6 +1250,7 @@ impl AppServer {
                                     turn_id: summary.turn_id,
                                     status: TurnStatus::Completed,
                                     output: summary.output.unwrap_or_default(),
+                                    turn: None,
                                 });
                             }
                             TurnStatus::Failed => {
@@ -1259,6 +1265,7 @@ impl AppServer {
                                     turn_id: summary.turn_id.clone(),
                                     status: TurnStatus::Failed,
                                     error: error.clone(),
+                                    turn: None,
                                 });
                                 self.emit_codex_error(summary.thread_id, summary.turn_id, error);
                             }
