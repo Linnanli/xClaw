@@ -66,6 +66,17 @@ class FakeRpcClient implements AppServerRpcClient {
       queueMicrotask(() => {
         this.notificationHandler?.({
           type: 'notification',
+          method: 'item/reasoning/summaryTextDelta',
+          params: {
+            threadId: 'thread-1',
+            turnId: 'turn-1',
+            itemId: 'turn-1:reasoning',
+            summaryIndex: 0,
+            delta: 'thinking'
+          }
+        })
+        this.notificationHandler?.({
+          type: 'notification',
           method: 'turn/delta',
           params: { threadId: 'thread-1', turnId: 'turn-1', delta: 'pong' }
         })
@@ -119,7 +130,8 @@ describe('AppServerManager', () => {
 
     const response = await manager.request('turn/start', {
       threadId: 'thread-1',
-      input: [{ type: 'text', text: 'ping' }]
+      input: [{ type: 'text', text: 'ping' }],
+      reasoningSummary: 'concise'
     })
 
     expect(manager.getStatus().state).toBe('ready')
@@ -134,7 +146,8 @@ describe('AppServerManager', () => {
     })
     expect(fake.requests.at(-1)?.params).toEqual({
       threadId: 'thread-1',
-      input: [{ type: 'text', text: 'ping' }]
+      input: [{ type: 'text', text: 'ping' }],
+      reasoningSummary: 'concise'
     })
   })
 
@@ -152,6 +165,7 @@ describe('AppServerManager', () => {
           provider: 'openai',
           apiBaseUrl: 'https://api.test/v1',
           apiFormat: 'openai',
+          modelCallMode: 'stream',
           source: 'test',
           capabilities: ['chat'],
           apiKeyConfigured: true
@@ -271,6 +285,17 @@ describe('AppServerManager', () => {
     expect(notifications).toEqual([
       {
         hostId: 'local',
+        method: 'item/reasoning/summaryTextDelta',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          itemId: 'turn-1:reasoning',
+          summaryIndex: 0,
+          delta: 'thinking'
+        }
+      },
+      {
+        hostId: 'local',
         method: 'turn/delta',
         params: { threadId: 'thread-1', turnId: 'turn-1', delta: 'pong' }
       },
@@ -343,7 +368,11 @@ describe('model provider config loading', () => {
   it('normalizes admin backend models into app-server initialize config', () => {
     expect(
       normalizeAdminClientModels([
-        adminModel({ model_id: 'gpt-a', is_default: false, api_key: 'secret-a' }),
+        adminModel({
+          model_id: 'gpt-a',
+          is_default: false,
+          api_key: 'secret-a'
+        }),
         adminModel({ model_id: 'gpt-b', is_default: true, api_key: 'secret-b' })
       ])
     ).toEqual({
@@ -355,6 +384,7 @@ describe('model provider config loading', () => {
           apiBaseUrl: 'https://api.test/v1',
           apiKey: 'secret-a',
           apiFormat: 'openai',
+          modelCallMode: 'stream',
           source: 'admin',
           capabilities: ['chat']
         },
@@ -365,6 +395,7 @@ describe('model provider config loading', () => {
           apiBaseUrl: 'https://api.test/v1',
           apiKey: 'secret-b',
           apiFormat: 'openai',
+          modelCallMode: 'stream',
           source: 'admin',
           capabilities: ['chat']
         }
@@ -376,6 +407,7 @@ describe('model provider config loading', () => {
         apiBaseUrl: 'https://api.test/v1',
         apiKey: 'secret-b',
         apiFormat: 'openai',
+        modelCallMode: 'stream',
         source: 'admin',
         capabilities: ['chat']
       }

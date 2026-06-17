@@ -115,6 +115,198 @@ async fn stream_text_chunks_yield_anthropic_event_sequence() {
 }
 
 #[tokio::test]
+async fn stream_reasoning_content_yields_thinking_delta_before_text() {
+    let server = MockServer::start().await;
+    let body = sse_body(&[
+        r#"{"id":"chatcmpl-1","model":"qwen-max","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"step 1"},"finish_reason":null}]}"#,
+        r#"{"id":"chatcmpl-1","model":"qwen-max","choices":[{"index":0,"delta":{"content":"answer"},"finish_reason":null}]}"#,
+        r#"{"id":"chatcmpl-1","model":"qwen-max","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#,
+    ]);
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", SSE_CONTENT_TYPE)
+                .set_body_string(body),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = build_client(server.uri()).expect("client constructible");
+    let events = drain_stream(&client, &sample_request())
+        .await
+        .expect("stream drains");
+
+    let thinking: String = events
+        .iter()
+        .filter_map(|e| match e {
+            StreamEvent::ContentBlockDelta(delta) => match &delta.delta {
+                ContentBlockDelta::ThinkingDelta { thinking } => Some(thinking.as_str()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(thinking, "step 1");
+
+    let text: String = events
+        .iter()
+        .filter_map(|e| match e {
+            StreamEvent::ContentBlockDelta(delta) => match &delta.delta {
+                ContentBlockDelta::TextDelta { text } => Some(text.as_str()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text, "answer");
+
+    assert!(events.iter().any(|e| matches!(
+        e,
+        StreamEvent::ContentBlockStart(start)
+            if start.index == 0
+                && matches!(start.content_block, OutputContentBlock::Thinking { .. })
+    )));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        StreamEvent::ContentBlockStart(start)
+            if start.index == 1 && matches!(start.content_block, OutputContentBlock::Text { .. })
+    )));
+}
+
+#[tokio::test]
+async fn stream_text_before_reasoning_uses_distinct_content_block_indexes() {
+    let server = MockServer::start().await;
+    let body = sse_body(&[
+        r#"{"id":"chatcmpl-2","model":"qwen-max","choices":[{"index":0,"delta":{"role":"assistant","content":"visible 1 "},"finish_reason":null}]}"#,
+        r#"{"id":"chatcmpl-2","model":"qwen-max","choices":[{"index":0,"delta":{"reasoning_content":"late thought"},"finish_reason":null}]}"#,
+        r#"{"id":"chatcmpl-2","model":"qwen-max","choices":[{"index":0,"delta":{"content":"visible 2"},"finish_reason":null}]}"#,
+        r#"{"id":"chatcmpl-2","model":"qwen-max","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#,
+    ]);
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", SSE_CONTENT_TYPE)
+                .set_body_string(body),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = build_client(server.uri()).expect("client constructible");
+    let events = drain_stream(&client, &sample_request())
+        .await
+        .expect("stream drains");
+
+    let text_start_index = events.iter().find_map(|e| match e {
+        StreamEvent::ContentBlockStart(start)
+            if matches!(start.content_block, OutputContentBlock::Text { .. }) =>
+        {
+            Some(start.index)
+        }
+        _ => None,
+    });
+    let thinking_start_index = events.iter().find_map(|e| match e {
+        StreamEvent::ContentBlockStart(start)
+            if matches!(start.content_block, OutputContentBlock::Thinking { .. }) =>
+        {
+            Some(start.index)
+        }
+        _ => None,
+    });
+
+    assert_eq!(text_start_index, Some(0));
+    assert_eq!(thinking_start_index, Some(1));
+
+    let text_delta_indexes = events
+        .iter()
+        .filter_map(|e| match e {
+            StreamEvent::ContentBlockDelta(delta) => match &delta.delta {
+                ContentBlockDelta::TextDelta { .. } => Some(delta.index),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(text_delta_indexes.iter().all(|index| *index == 0));
+    assert_eq!(text_delta_indexes.len(), 2);
+
+    let thinking_delta_index = events.iter().find_map(|e| match e {
+        StreamEvent::ContentBlockDelta(delta) => match &delta.delta {
+            ContentBlockDelta::ThinkingDelta { .. } => Some(delta.index),
+            _ => None,
+        },
+        _ => None,
+    });
+    assert_eq!(thinking_delta_index, Some(1));
+}
+
+#[tokio::test]
+async fn stream_tool_call_before_reasoning_uses_distinct_content_block_indexes() {
+    let server = MockServer::start().await;
+    let body = sse_body(&[
+        r#"{"id":"c-3","model":"qwen-max","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","function":{"name":"get_weather","arguments":"{}"}}]},"finish_reason":null}]}"#,
+        r#"{"id":"c-3","model":"qwen-max","choices":[{"index":0,"delta":{"reasoning_content":"checking tool result"},"finish_reason":null}]}"#,
+        r#"{"id":"c-3","model":"qwen-max","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":12,"completion_tokens":7}}"#,
+    ]);
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", SSE_CONTENT_TYPE)
+                .set_body_string(body),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = build_client(server.uri()).expect("client constructible");
+    let events = drain_stream(&client, &sample_request())
+        .await
+        .expect("stream drains");
+
+    let tool_start_index = events.iter().find_map(|e| match e {
+        StreamEvent::ContentBlockStart(start)
+            if matches!(start.content_block, OutputContentBlock::ToolUse { .. }) =>
+        {
+            Some(start.index)
+        }
+        _ => None,
+    });
+    let thinking_start_index = events.iter().find_map(|e| match e {
+        StreamEvent::ContentBlockStart(start)
+            if matches!(start.content_block, OutputContentBlock::Thinking { .. }) =>
+        {
+            Some(start.index)
+        }
+        _ => None,
+    });
+
+    assert_eq!(tool_start_index, Some(0));
+    assert_eq!(thinking_start_index, Some(1));
+
+    let tool_delta_index = events.iter().find_map(|e| match e {
+        StreamEvent::ContentBlockDelta(delta) => match &delta.delta {
+            ContentBlockDelta::InputJsonDelta { .. } => Some(delta.index),
+            _ => None,
+        },
+        _ => None,
+    });
+    let thinking_delta_index = events.iter().find_map(|e| match e {
+        StreamEvent::ContentBlockDelta(delta) => match &delta.delta {
+            ContentBlockDelta::ThinkingDelta { .. } => Some(delta.index),
+            _ => None,
+        },
+        _ => None,
+    });
+
+    assert_eq!(tool_delta_index, Some(0));
+    assert_eq!(thinking_delta_index, Some(1));
+}
+
+#[tokio::test]
 async fn stream_tool_call_accumulates_input_json_delta() {
     let server = MockServer::start().await;
     let body = sse_body(&[
@@ -168,12 +360,12 @@ async fn stream_tool_call_accumulates_input_json_delta() {
         .collect();
     assert_eq!(arguments, r#"{"location":"SH"}"#);
 
-    // ContentBlockStop with index = 1（block_index = openai_index + 1）
+    // ContentBlockStop with the allocated tool-use block index.
     let stop_idx = events.iter().rev().find_map(|e| match e {
         StreamEvent::ContentBlockStop(ev) => Some(ev.index),
         _ => None,
     });
-    assert_eq!(stop_idx, Some(1));
+    assert_eq!(stop_idx, Some(0));
 
     let stop_reason = events.iter().rev().find_map(|e| match e {
         StreamEvent::MessageDelta(ev) => ev.delta.stop_reason.clone(),

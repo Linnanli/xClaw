@@ -17,6 +17,11 @@ type TurnTrackerOptions = {
   onContentDelta?: (turnId: string, part: AppServerAssistantContentPart) => void
 }
 
+type TurnContentDelta = {
+  turnId: string
+  part: AppServerAssistantContentPart
+}
+
 type PendingTurn = {
   timeout: ReturnType<typeof setTimeout>
   resolve: (completion: TurnCompletion) => void
@@ -38,6 +43,7 @@ export function createAppServerTurnTracker(options: TurnTrackerOptions = {}): Ap
   const pendingTurns = new Map<string, PendingTurn>()
   const completedTurns = new Map<string, TurnCompletion>()
   const turnContent = new Map<string, AppServerAssistantContentPart[]>()
+  const pendingReasoningSectionBreaks = new Set<string>()
 
   function waitForTurnCompletion(turnId: string): Promise<TurnCompletion> {
     const completed = completedTurns.get(turnId)
@@ -61,6 +67,12 @@ export function createAppServerTurnTracker(options: TurnTrackerOptions = {}): Ap
     if (contentDelta) {
       appendTurnContentDelta(contentDelta.turnId, contentDelta.part)
       onContentDelta?.(contentDelta.turnId, contentDelta.part)
+      return
+    }
+
+    const reasoningSectionBreak = parseReasoningSectionBreak(notification)
+    if (reasoningSectionBreak) {
+      pendingReasoningSectionBreaks.add(reasoningSectionBreak.turnId)
       return
     }
 
@@ -97,11 +109,13 @@ export function createAppServerTurnTracker(options: TurnTrackerOptions = {}): Ap
     pendingTurns.clear()
     completedTurns.clear()
     turnContent.clear()
+    pendingReasoningSectionBreaks.clear()
   }
 
   function appendTurnContentDelta(turnId: string, part: AppServerAssistantContentPart): void {
     const content = turnContent.get(turnId) ?? []
-    appendPart(content, part)
+    const forceNewPart = part.type === 'reasoning' && pendingReasoningSectionBreaks.delete(turnId)
+    appendPart(content, part, forceNewPart)
     turnContent.set(turnId, content)
   }
 
@@ -133,10 +147,11 @@ function parseTurnCompletion(params: unknown): TurnCompletion | undefined {
 
 function parseTurnContentDelta(
   notification: AppServerNotification
-): { turnId: string; part: AppServerAssistantContentPart } | undefined {
+): TurnContentDelta | undefined {
   if (
     notification.method !== 'item/agentMessage/delta' &&
-    notification.method !== 'item/reasoning/summaryTextDelta'
+    notification.method !== 'item/reasoning/summaryTextDelta' &&
+    notification.method !== 'item/reasoning/textDelta'
   ) {
     return undefined
   }
@@ -148,19 +163,36 @@ function parseTurnContentDelta(
   return {
     turnId: record.turnId,
     part: {
-      type: notification.method === 'item/reasoning/summaryTextDelta' ? 'reasoning' : 'text',
+      type: isReasoningDeltaMethod(notification.method) ? 'reasoning' : 'text',
       text: record.delta
     }
   }
 }
 
+function parseReasoningSectionBreak(
+  notification: AppServerNotification
+): { turnId: string } | undefined {
+  if (notification.method !== 'item/reasoning/summaryPartAdded') return undefined
+  if (!notification.params || typeof notification.params !== 'object') return undefined
+
+  const record = notification.params as Record<string, unknown>
+  if (typeof record.turnId !== 'string') return undefined
+
+  return { turnId: record.turnId }
+}
+
+function isReasoningDeltaMethod(method: string): boolean {
+  return method === 'item/reasoning/summaryTextDelta' || method === 'item/reasoning/textDelta'
+}
+
 function appendPart(
   parts: AppServerAssistantContentPart[],
-  part: AppServerAssistantContentPart
+  part: AppServerAssistantContentPart,
+  forceNewPart = false
 ): void {
   if (!part.text) return
   const previous = parts.at(-1)
-  if (previous?.type === part.type) {
+  if (!forceNewPart && previous?.type === part.type) {
     previous.text += part.text
   } else {
     parts.push({ ...part })

@@ -11,7 +11,7 @@ type MockThreadMessageState = {
     composer: {
       isEditing: boolean
     }
-    content: { type: 'text'; text: string }[]
+    content: Array<{ type: 'reasoning' | 'text'; text: string }>
     role: 'assistant' | 'user'
     status: { type: 'complete' } | { type: 'running' }
   }
@@ -28,11 +28,18 @@ const threadMessageState = vi.hoisted<MockThreadMessageState>(() => ({
   }
 }))
 
+const streamdownPropsState = vi.hoisted<{
+  lastProps: Record<string, unknown> | null
+}>(() => ({
+  lastProps: null
+}))
+
 function resetThreadMessageState(): void {
   threadMessageState.message.composer.isEditing = false
   threadMessageState.message.content = [{ type: 'text', text: '正在思考' }]
   threadMessageState.message.role = 'user'
   threadMessageState.message.status = { type: 'complete' }
+  streamdownPropsState.lastProps = null
 }
 
 type PrimitiveProps = {
@@ -44,6 +51,19 @@ type PrimitiveProps = {
   placeholder?: string
   directiveChip?: unknown
   className?: string
+}
+
+function messagePartComponentFor(
+  part: { type: 'reasoning' | 'text' },
+  components: Record<string, unknown> | undefined
+): React.ComponentType<{ text: string }> | undefined {
+  if (part.type === 'reasoning' && typeof components?.Reasoning === 'function') {
+    return components.Reasoning as React.ComponentType<{ text: string }>
+  }
+  if (part.type === 'text' && typeof components?.Text === 'function') {
+    return components.Text as React.ComponentType<{ text: string }>
+  }
+  return undefined
 }
 
 vi.mock('./hooks/useDasclawAssistantRuntime', async (importOriginal) => {
@@ -63,6 +83,29 @@ vi.mock('@assistant-ui/react-lexical', () => ({
       data-testid="lexical-composer-input"
     />
   )
+}))
+
+vi.mock('@assistant-ui/react-streamdown', () => ({
+  StreamdownTextPrimitive: (props: Record<string, unknown>) => {
+    streamdownPropsState.lastProps = props
+    return <div data-testid="streamdown-text" />
+  }
+}))
+
+vi.mock('@streamdown/code', () => ({
+  code: { plugin: 'code' }
+}))
+
+vi.mock('@streamdown/math', () => ({
+  math: { plugin: 'math' }
+}))
+
+vi.mock('@streamdown/mermaid', () => ({
+  mermaid: { plugin: 'mermaid' }
+}))
+
+vi.mock('@streamdown/cjk', () => ({
+  cjk: { plugin: 'cjk' }
 }))
 
 vi.mock('@assistant-ui/react', () => {
@@ -182,7 +225,21 @@ vi.mock('@assistant-ui/react', () => {
       Attachments: primitive('Message.Attachments'),
       Content: primitive('Message.Content'),
       Error: primitive('Message.Error'),
-      Parts: primitive('Message.Parts'),
+      Parts: ({ components }: PrimitiveProps) => {
+        return (
+          <div data-primitive="Message.Parts">
+            {threadMessageState.message.content.map((part, index) => {
+              const Component = messagePartComponentFor(part, components)
+              return Component
+                ? createElement(Component, {
+                    ...part,
+                    key: index
+                  })
+                : null
+            })}
+          </div>
+        )
+      },
       Quote: primitive('Message.Quote'),
       Root: primitive('Message.Root')
     },
@@ -215,7 +272,9 @@ vi.mock('@assistant-ui/react', () => {
       Viewport: primitive('Thread.Viewport'),
       ViewportFooter: primitive('Thread.ViewportFooter')
     },
-    unstable_defaultDirectiveFormatter: {},
+    unstable_defaultDirectiveFormatter: {
+      parse: (text: string) => [{ kind: 'text', text }]
+    },
     unstable_useMentionAdapter: () => ({ adapter: {}, directive: {} }),
     unstable_useSlashCommandAdapter: () => ({ action: { onExecute: vi.fn() }, adapter: {} }),
     useAui: () => ({
@@ -331,5 +390,43 @@ describe('App composer', () => {
     expect(assistantContent?.className).toContain('text-foreground/60')
     expect(assistantContent?.className).toContain('motion-reduce:animate-none')
     expect(container.querySelector('[data-slot="aui_assistant-message-footer"]')).toBeNull()
+  })
+
+  it('renders assistant text with the streamdown markdown renderer', () => {
+    threadMessageState.message.role = 'assistant'
+    threadMessageState.message.content = [{ type: 'text', text: '# 标题\n\n- 条目' }]
+
+    act(() => {
+      root.render(<App />)
+    })
+
+    expect(container.querySelector('[data-testid="streamdown-text"]')).not.toBeNull()
+    expect(streamdownPropsState.lastProps).toMatchObject({
+      caret: 'block',
+      defer: true,
+      plugins: {
+        code: { plugin: 'code' },
+        math: { plugin: 'math' },
+        mermaid: { plugin: 'mermaid' },
+        cjk: { plugin: 'cjk' }
+      }
+    })
+  })
+
+  it('shows reasoning summary content instead of the thinking placeholder once reasoning streams', () => {
+    threadMessageState.message.role = 'assistant'
+    threadMessageState.message.status = { type: 'running' }
+    threadMessageState.message.content = [{ type: 'reasoning', text: '正在整理上下文' }]
+
+    act(() => {
+      root.render(<App />)
+    })
+
+    const assistantContent = container.querySelector('[data-slot="aui_assistant-message-content"]')
+    const reasoning = container.querySelector('[data-slot="aui_reasoning-part"]')
+
+    expect(assistantContent?.className).not.toContain('shimmer')
+    expect(reasoning?.textContent).toContain('推理摘要')
+    expect(reasoning?.textContent).toContain('正在整理上下文')
   })
 })

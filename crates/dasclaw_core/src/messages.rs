@@ -360,8 +360,35 @@ pub struct ToolCompletionRequest {
     pub stop_sequences: Option<Vec<String>>,
     /// How to handle tool use: "auto", "required", or "none".
     pub tool_choice: Option<String>,
+    /// Whether the provider should request and emit model reasoning summaries.
+    pub reasoning_summary: ReasoningSummary,
     /// Opaque metadata passed through to the provider (e.g. thread_id for chaining).
     pub metadata: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningSummary {
+    Auto,
+    Concise,
+    Detailed,
+    #[default]
+    None,
+}
+
+impl ReasoningSummary {
+    pub const fn should_emit(self) -> bool {
+        !matches!(self, Self::None)
+    }
+
+    pub const fn as_wire_value(self) -> Option<&'static str> {
+        match self {
+            Self::Auto => Some("auto"),
+            Self::Concise => Some("concise"),
+            Self::Detailed => Some("detailed"),
+            Self::None => None,
+        }
+    }
 }
 
 impl ToolCompletionRequest {
@@ -375,6 +402,7 @@ impl ToolCompletionRequest {
             temperature: None,
             stop_sequences: None,
             tool_choice: None,
+            reasoning_summary: ReasoningSummary::None,
             metadata: std::collections::HashMap::new(),
         }
     }
@@ -406,6 +434,12 @@ impl ToolCompletionRequest {
     /// Set tool choice mode.
     pub fn with_tool_choice(mut self, choice: impl Into<String>) -> Self {
         self.tool_choice = Some(choice.into());
+        self
+    }
+
+    /// Set reasoning summary request/emit mode.
+    pub fn with_reasoning_summary(mut self, summary: ReasoningSummary) -> Self {
+        self.reasoning_summary = summary;
         self
     }
 }

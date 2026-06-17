@@ -11,13 +11,14 @@ use dasclaw_app_server_protocol::{
     ErrorEvent, HealthChangedEvent, HealthCheckParams, HealthCheckResponse, InitializeParams,
     InitializeResponse, ItemCompletedEvent, ItemStartedEvent, JSON_RPC_VERSION, JsonRpcError,
     JsonRpcRequest, JsonRpcResponse, LifecycleChangedEvent, LifecycleStatusResponse, LogEntryEvent,
-    NotificationsInitializedEvent, ProtocolSchemaResponse, ReasoningSummaryTextDeltaEvent,
-    ServerNotification, ShutdownParams, ShutdownResponse, ThreadCreateParams, ThreadCreateResponse,
-    ThreadCreatedEvent, ThreadListResponse, ThreadReadParams, ThreadReadResponse,
-    ThreadStartResponse, ThreadStartedEvent, TurnCancelParams, TurnCancelResponse,
-    TurnCancelledEvent, TurnCompletedEvent, TurnDeltaEvent, TurnFailedEvent, TurnInterruptResponse,
-    TurnListParams, TurnListResponse, TurnReadParams, TurnReadResponse, TurnStartParams,
-    TurnStartResponse, TurnStartedEvent, WorkspaceInfo, event, method,
+    NotificationsInitializedEvent, ProtocolSchemaResponse, ReasoningSummaryPartAddedEvent,
+    ReasoningSummaryTextDeltaEvent, ReasoningTextDeltaEvent, ServerNotification, ShutdownParams,
+    ShutdownResponse, ThreadCreateParams, ThreadCreateResponse, ThreadCreatedEvent,
+    ThreadListResponse, ThreadReadParams, ThreadReadResponse, ThreadStartResponse,
+    ThreadStartedEvent, TurnCancelParams, TurnCancelResponse, TurnCancelledEvent,
+    TurnCompletedEvent, TurnDeltaEvent, TurnFailedEvent, TurnInterruptResponse, TurnListParams,
+    TurnListResponse, TurnReadParams, TurnReadResponse, TurnStartParams, TurnStartResponse,
+    TurnStartedEvent, WorkspaceInfo, event, method,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -76,6 +77,8 @@ pub enum AppServerNotification {
     ItemStarted(ItemStartedEvent),
     AgentMessageDelta(AgentMessageDeltaEvent),
     ReasoningSummaryTextDelta(ReasoningSummaryTextDeltaEvent),
+    ReasoningSummaryPartAdded(ReasoningSummaryPartAddedEvent),
+    ReasoningTextDelta(ReasoningTextDeltaEvent),
     ItemCompleted(ItemCompletedEvent),
     ProtocolError(ErrorEvent),
     Unknown(ServerNotification),
@@ -117,6 +120,12 @@ impl TryFrom<ServerNotification> for AppServerNotification {
             }
             event::ITEM_REASONING_SUMMARY_TEXT_DELTA => {
                 Self::ReasoningSummaryTextDelta(decode_notification_params(notification)?)
+            }
+            event::ITEM_REASONING_SUMMARY_PART_ADDED => {
+                Self::ReasoningSummaryPartAdded(decode_notification_params(notification)?)
+            }
+            event::ITEM_REASONING_TEXT_DELTA => {
+                Self::ReasoningTextDelta(decode_notification_params(notification)?)
             }
             event::ITEM_COMPLETED => Self::ItemCompleted(decode_notification_params(notification)?),
             event::ERROR => Self::ProtocolError(decode_notification_params(notification)?),
@@ -989,6 +998,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
                 prompt: "hello".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn/start should create a pending in-memory turn");
         let cancelled = client
@@ -1073,6 +1083,7 @@ mod tests {
             .turn_start_with_notifications(TurnStartParams {
                 thread_id: thread.result.thread_id,
                 prompt: "hello".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn/start should return a turn id");
 
@@ -1287,6 +1298,7 @@ mod tests {
             .turn_start_with_notifications(TurnStartParams {
                 thread_id: thread.result.thread_id,
                 prompt: "hello".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn/start should return a pending turn before failure notifications");
 
@@ -1351,6 +1363,7 @@ mod tests {
             .turn_start_with_notifications(TurnStartParams {
                 thread_id: thread.result.thread_id.clone(),
                 prompt: "hello".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn/start should create a pending turn");
         let interrupt = client
@@ -1435,6 +1448,8 @@ mod tests {
         let reader = Cursor::new(
             [
                 r#"{"jsonrpc":"2.0","method":"item/reasoning/summaryTextDelta","params":{"threadId":"thread_1","turnId":"turn_1","itemId":"turn_1:reasoning","summaryIndex":0,"delta":"private scratch"}}"#,
+                r#"{"jsonrpc":"2.0","method":"item/reasoning/summaryPartAdded","params":{"threadId":"thread_1","turnId":"turn_1","itemId":"turn_1:reasoning","summaryIndex":1}}"#,
+                r#"{"jsonrpc":"2.0","method":"item/reasoning/textDelta","params":{"threadId":"thread_1","turnId":"turn_1","itemId":"turn_1:reasoning","contentIndex":0,"delta":"raw scratch"}}"#,
                 r#"{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"thread_1","turnId":"turn_1","itemId":"turn_1","delta":"final answer"}}"#,
                 r#"{"jsonrpc":"2.0","id":1,"result":{"ok":true}}"#,
             ]
@@ -1449,7 +1464,7 @@ mod tests {
             .expect("line-delimited transport should decode reasoning notifications");
 
         assert_eq!(round_trip.result, json!({"ok": true}));
-        assert_eq!(round_trip.notifications.len(), 2);
+        assert_eq!(round_trip.notifications.len(), 4);
         assert!(matches!(
             round_trip.notifications[0],
             AppServerNotification::ReasoningSummaryTextDelta(
@@ -1458,6 +1473,19 @@ mod tests {
         ));
         assert!(matches!(
             round_trip.notifications[1],
+            AppServerNotification::ReasoningSummaryPartAdded(ReasoningSummaryPartAddedEvent {
+                summary_index: 1,
+                ..
+            })
+        ));
+        assert!(matches!(
+            round_trip.notifications[2],
+            AppServerNotification::ReasoningTextDelta(
+                ReasoningTextDeltaEvent { ref delta, content_index: 0, .. }
+            ) if delta == "raw scratch"
+        ));
+        assert!(matches!(
+            round_trip.notifications[3],
             AppServerNotification::AgentMessageDelta(AgentMessageDeltaEvent { ref delta, .. })
                 if delta == "final answer"
         ));
@@ -1667,6 +1695,7 @@ mod tests {
             .turn_start_with_notifications(TurnStartParams {
                 thread_id: thread.result.thread_id.clone(),
                 prompt: "hello".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn/start should return result and notification");
         let cancelled = client
@@ -2020,6 +2049,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id,
                 prompt: "overflow".to_string(),
+                reasoning_summary: None,
             })
             .expect_err("overflow from the real server transcript should force reconnect");
         let reuse = client
@@ -2118,6 +2148,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id,
                 prompt: "finish before health".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn/start should decode before terminal update");
         let health = client

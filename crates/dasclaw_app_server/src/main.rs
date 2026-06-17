@@ -219,6 +219,7 @@ fn self_check_report() -> Result<SelfCheckReport, dasclaw_app_server::AppServerE
     let turn_start = server.turn_start(TurnStartParams {
         thread_id: thread_create.thread_id.clone(),
         prompt: "self-check prompt exercises runtime bridge session bookkeeping".to_string(),
+        reasoning_summary: None,
     })?;
     let turn_cancel = server.turn_cancel(TurnCancelParams {
         thread_id: thread_create.thread_id.clone(),

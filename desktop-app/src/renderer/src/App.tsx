@@ -24,6 +24,11 @@ import {
   useAuiState
 } from '@assistant-ui/react'
 import { LexicalComposerInput, type DirectiveChipProps } from '@assistant-ui/react-lexical'
+import { StreamdownTextPrimitive } from '@assistant-ui/react-streamdown'
+import { cjk } from '@streamdown/cjk'
+import { code } from '@streamdown/code'
+import { math } from '@streamdown/math'
+import { mermaid } from '@streamdown/mermaid'
 import { MessageTiming } from '@/components/assistant-ui/message-timing'
 import {
   ActivityIcon,
@@ -143,6 +148,8 @@ const slashIconMap: Record<string, IconComponent> = {
   HelpCircle: HelpCircleIcon,
   Pencil: PencilIcon
 }
+
+const streamdownPlugins = { code, math, mermaid, cjk }
 
 function App(): React.JSX.Element {
   const { runtime } = useDasclawAssistantRuntime()
@@ -497,7 +504,7 @@ function AssistantMessage(): React.JSX.Element {
       <div
         data-slot="aui_assistant-message-content"
         className={cn(
-          'wrap-break-word px-2 leading-relaxed text-foreground whitespace-pre-wrap',
+          'wrap-break-word px-2 leading-relaxed text-foreground',
           isThinking && 'shimmer text-foreground/60 motion-reduce:animate-none'
         )}
       >
@@ -614,20 +621,19 @@ function DirectiveText({ text }: TextMessagePartProps): React.JSX.Element {
   )
 }
 
-function AssistantText({ text }: TextMessagePartProps): React.JSX.Element | null {
-  if (!text) return null
-  return <span className="whitespace-pre-wrap">{text}</span>
+function AssistantText(): React.JSX.Element {
+  return <StreamdownTextPrimitive caret="block" defer plugins={streamdownPlugins} />
 }
 
 function ReasoningPart({ text }: ReasoningMessagePartProps): React.JSX.Element {
   return (
-    <details
+    <section
       className="my-2 rounded-md border border-border/70 bg-muted/40 px-3 py-2 text-sm text-muted-foreground"
       data-slot="aui_reasoning-part"
     >
-      <summary className="cursor-pointer font-medium text-foreground">推理过程</summary>
+      <div className="font-medium text-foreground">推理摘要</div>
       <div className="mt-2 whitespace-pre-wrap">{text}</div>
-    </details>
+    </section>
   )
 }
 

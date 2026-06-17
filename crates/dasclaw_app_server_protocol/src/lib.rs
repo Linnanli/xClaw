@@ -49,6 +49,8 @@ pub mod event {
     pub const ITEM_STARTED: &str = "item/started";
     pub const ITEM_AGENT_MESSAGE_DELTA: &str = "item/agentMessage/delta";
     pub const ITEM_REASONING_SUMMARY_TEXT_DELTA: &str = "item/reasoning/summaryTextDelta";
+    pub const ITEM_REASONING_SUMMARY_PART_ADDED: &str = "item/reasoning/summaryPartAdded";
+    pub const ITEM_REASONING_TEXT_DELTA: &str = "item/reasoning/textDelta";
     pub const ITEM_COMPLETED: &str = "item/completed";
     pub const ERROR: &str = "error";
 }
@@ -590,6 +592,8 @@ const CODEX_APP_SERVER_V2_EVENTS: &[&str] = &[
     event::ITEM_STARTED,
     event::ITEM_AGENT_MESSAGE_DELTA,
     event::ITEM_REASONING_SUMMARY_TEXT_DELTA,
+    event::ITEM_REASONING_SUMMARY_PART_ADDED,
+    event::ITEM_REASONING_TEXT_DELTA,
     event::ITEM_COMPLETED,
     event::ERROR,
 ];
@@ -868,6 +872,16 @@ fn phase_one_events() -> Vec<EventSchema> {
             "session",
             "ReasoningSummaryTextDeltaEvent",
         ),
+        EventSchema::new(
+            event::ITEM_REASONING_SUMMARY_PART_ADDED,
+            "session",
+            "ReasoningSummaryPartAddedEvent",
+        ),
+        EventSchema::new(
+            event::ITEM_REASONING_TEXT_DELTA,
+            "session",
+            "ReasoningTextDeltaEvent",
+        ),
         EventSchema::new(event::ITEM_COMPLETED, "session", "ItemCompletedEvent"),
         EventSchema::new(event::ERROR, "session", "ErrorEvent"),
     ]
@@ -1033,6 +1047,8 @@ pub struct TurnStartParams {
     /// accepted only for text UserInput items and normalized into the legacy
     /// prompt string consumed by the current runtime.
     pub prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_summary: Option<String>,
 }
 
 impl TurnStartParams {
@@ -1041,6 +1057,7 @@ impl TurnStartParams {
         Self {
             thread_id: thread_id.into(),
             prompt: input.into(),
+            reasoning_summary: None,
         }
     }
 }
@@ -1058,6 +1075,8 @@ impl<'de> Deserialize<'de> for TurnStartParams {
             prompt: Option<String>,
             #[serde(default)]
             input: Option<serde_json::Value>,
+            #[serde(default)]
+            reasoning_summary: Option<String>,
         }
 
         let raw = RawTurnStartParams::deserialize(deserializer)?;
@@ -1080,6 +1099,7 @@ impl<'de> Deserialize<'de> for TurnStartParams {
         Ok(Self {
             thread_id: raw.thread_id,
             prompt,
+            reasoning_summary: raw.reasoning_summary,
         })
     }
 }
@@ -1296,6 +1316,25 @@ pub struct ReasoningSummaryTextDeltaEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ReasoningSummaryPartAddedEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub summary_index: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReasoningTextDeltaEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub content_index: i64,
+    pub delta: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ItemCompletedEvent {
     pub thread_id: String,
     pub turn_id: String,
@@ -1460,6 +1499,16 @@ impl ServerNotification {
         event: ReasoningSummaryTextDeltaEvent,
     ) -> Result<Self, serde_json::Error> {
         Self::new(event::ITEM_REASONING_SUMMARY_TEXT_DELTA, event)
+    }
+
+    pub fn reasoning_summary_part_added(
+        event: ReasoningSummaryPartAddedEvent,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::ITEM_REASONING_SUMMARY_PART_ADDED, event)
+    }
+
+    pub fn reasoning_text_delta(event: ReasoningTextDeltaEvent) -> Result<Self, serde_json::Error> {
+        Self::new(event::ITEM_REASONING_TEXT_DELTA, event)
     }
 
     pub fn item_completed(event: ItemCompletedEvent) -> Result<Self, serde_json::Error> {
@@ -1878,11 +1927,32 @@ mod tests {
 
         assert_eq!(from_input.prompt, "hello from input");
         assert_eq!(from_prompt.prompt, "hello from prompt");
+        assert_eq!(from_input.reasoning_summary, None);
         assert!(mismatch.to_string().contains("prompt and input must match"));
         assert_eq!(
             serde_json::to_value(TurnStartParams::from_input("thread_1", "hello"))
                 .expect("turn/start params should serialize"),
             serde_json::json!({"threadId": "thread_1", "prompt": "hello"})
+        );
+
+        let with_reasoning_summary: TurnStartParams = serde_json::from_value(serde_json::json!({
+            "threadId": "thread_1",
+            "input": "hello",
+            "reasoningSummary": "concise"
+        }))
+        .expect("turn/start should accept per-turn reasoningSummary");
+        assert_eq!(
+            with_reasoning_summary.reasoning_summary.as_deref(),
+            Some("concise")
+        );
+        assert_eq!(
+            serde_json::to_value(with_reasoning_summary)
+                .expect("turn/start params should serialize reasoningSummary"),
+            serde_json::json!({
+                "threadId": "thread_1",
+                "prompt": "hello",
+                "reasoningSummary": "concise"
+            })
         );
     }
 
@@ -2089,6 +2159,21 @@ mod tests {
                 delta: "scratch".to_string(),
             })
             .expect("item/reasoning fixture should serialize"),
+            ServerNotification::reasoning_summary_part_added(ReasoningSummaryPartAddedEvent {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                item_id: "turn_1:reasoning".to_string(),
+                summary_index: 1,
+            })
+            .expect("item/reasoning summary part fixture should serialize"),
+            ServerNotification::reasoning_text_delta(ReasoningTextDeltaEvent {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                item_id: "turn_1:reasoning".to_string(),
+                content_index: 0,
+                delta: "raw scratch".to_string(),
+            })
+            .expect("item/reasoning text fixture should serialize"),
             ServerNotification::item_completed(ItemCompletedEvent {
                 thread_id: "thread_1".to_string(),
                 turn_id: "turn_1".to_string(),
@@ -2115,6 +2200,11 @@ mod tests {
         assert_eq!(events[10].params["itemType"], "agent_message");
         assert_eq!(events[11].params["delta"], "hel");
         assert_eq!(events[12].params["delta"], "scratch");
+        assert_eq!(events[13].method, event::ITEM_REASONING_SUMMARY_PART_ADDED);
+        assert_eq!(events[13].params["summaryIndex"], 1);
+        assert_eq!(events[14].method, event::ITEM_REASONING_TEXT_DELTA);
+        assert_eq!(events[14].params["contentIndex"], 0);
+        assert_eq!(events[14].params["delta"], "raw scratch");
     }
 
     #[test]

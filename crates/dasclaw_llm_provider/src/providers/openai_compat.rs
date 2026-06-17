@@ -888,8 +888,11 @@ fn take_frame(buffer: &mut Vec<u8>) -> Option<String> {
 #[derive(Debug)]
 struct StreamState {
     model: String,
+    next_block_index: u32,
     message_started: bool,
-    text_started: bool,
+    reasoning_index: Option<u32>,
+    reasoning_finished: bool,
+    text_index: Option<u32>,
     text_finished: bool,
     finished: bool,
     stop_reason: Option<String>,
@@ -901,14 +904,41 @@ impl StreamState {
     fn new(model: String) -> Self {
         Self {
             model,
+            next_block_index: 0,
             message_started: false,
-            text_started: false,
+            reasoning_index: None,
+            reasoning_finished: false,
+            text_index: None,
             text_finished: false,
             finished: false,
             stop_reason: None,
             usage: None,
             tool_calls: BTreeMap::new(),
         }
+    }
+
+    fn allocate_block_index(&mut self) -> u32 {
+        let index = self.next_block_index;
+        self.next_block_index = self.next_block_index.saturating_add(1);
+        index
+    }
+
+    fn ensure_reasoning_index(&mut self) -> u32 {
+        if let Some(index) = self.reasoning_index {
+            return index;
+        }
+        let index = self.allocate_block_index();
+        self.reasoning_index = Some(index);
+        index
+    }
+
+    fn ensure_text_index(&mut self) -> u32 {
+        if let Some(index) = self.text_index {
+            return index;
+        }
+        let index = self.allocate_block_index();
+        self.text_index = Some(index);
+        index
     }
 
     fn ingest_chunk(&mut self, chunk: ChatCompletionChunk) -> Result<Vec<StreamEvent>, ApiError> {
@@ -935,35 +965,73 @@ impl StreamState {
         }
 
         for choice in chunk.choices {
-            if let Some(content) = choice.delta.content.filter(|value| !value.is_empty()) {
-                if !self.text_started {
-                    self.text_started = true;
+            if let Some(reasoning) = choice
+                .delta
+                .reasoning_content
+                .filter(|value| !value.is_empty())
+            {
+                let already_started = self.reasoning_index.is_some();
+                let index = self.ensure_reasoning_index();
+                if !already_started {
                     events.push(StreamEvent::ContentBlockStart(ContentBlockStartEvent {
-                        index: 0,
+                        index,
+                        content_block: OutputContentBlock::Thinking {
+                            thinking: String::new(),
+                            signature: None,
+                        },
+                    }));
+                }
+                events.push(StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
+                    index,
+                    delta: ContentBlockDelta::ThinkingDelta {
+                        thinking: reasoning,
+                    },
+                }));
+            }
+
+            if let Some(content) = choice.delta.content.filter(|value| !value.is_empty()) {
+                if let Some(reasoning_index) = self.reasoning_index
+                    && !self.reasoning_finished
+                {
+                    self.reasoning_finished = true;
+                    events.push(StreamEvent::ContentBlockStop(ContentBlockStopEvent {
+                        index: reasoning_index,
+                    }));
+                }
+                let already_started = self.text_index.is_some();
+                let index = self.ensure_text_index();
+                if !already_started {
+                    events.push(StreamEvent::ContentBlockStart(ContentBlockStartEvent {
+                        index,
                         content_block: OutputContentBlock::Text {
                             text: String::new(),
                         },
                     }));
                 }
                 events.push(StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
-                    index: 0,
+                    index,
                     delta: ContentBlockDelta::TextDelta { text: content },
                 }));
             }
 
             for tool_call in choice.delta.tool_calls {
+                let needs_index = self
+                    .tool_calls
+                    .get(&tool_call.index)
+                    .is_none_or(|state| state.block_index().is_none());
+                let allocated_index = needs_index.then(|| self.allocate_block_index());
                 let state = self.tool_calls.entry(tool_call.index).or_default();
                 state.apply(tool_call);
-                let block_index = state.block_index();
+                let block_index = state.ensure_block_index(allocated_index);
                 if !state.started {
-                    if let Some(start_event) = state.start_event() {
+                    if let Some(start_event) = state.start_event(block_index) {
                         state.started = true;
                         events.push(StreamEvent::ContentBlockStart(start_event));
                     } else {
                         continue;
                     }
                 }
-                if let Some(delta_event) = state.delta_event() {
+                if let Some(delta_event) = state.delta_event(block_index) {
                     events.push(StreamEvent::ContentBlockDelta(delta_event));
                 }
                 if choice.finish_reason.as_deref() == Some("tool_calls") && !state.stopped {
@@ -981,7 +1049,7 @@ impl StreamState {
                         if state.started && !state.stopped {
                             state.stopped = true;
                             events.push(StreamEvent::ContentBlockStop(ContentBlockStopEvent {
-                                index: state.block_index(),
+                                index: state.block_index().expect("started tool call has an index"),
                             }));
                         }
                     }
@@ -1001,27 +1069,51 @@ impl StreamState {
         self.finished = true;
 
         let mut events = Vec::new();
-        if self.text_started && !self.text_finished {
+        if let Some(reasoning_index) = self.reasoning_index
+            && !self.reasoning_finished
+        {
+            self.reasoning_finished = true;
+            events.push(StreamEvent::ContentBlockStop(ContentBlockStopEvent {
+                index: reasoning_index,
+            }));
+        }
+        if let Some(text_index) = self.text_index
+            && !self.text_finished
+        {
             self.text_finished = true;
             events.push(StreamEvent::ContentBlockStop(ContentBlockStopEvent {
-                index: 0,
+                index: text_index,
             }));
         }
 
+        let missing_tool_indices = self
+            .tool_calls
+            .iter()
+            .filter_map(|(openai_index, state)| {
+                state.block_index().is_none().then_some(*openai_index)
+            })
+            .collect::<Vec<_>>();
+        for openai_index in missing_tool_indices {
+            let block_index = self.allocate_block_index();
+            if let Some(state) = self.tool_calls.get_mut(&openai_index) {
+                state.ensure_block_index(Some(block_index));
+            }
+        }
         for state in self.tool_calls.values_mut() {
+            let block_index = state.block_index().expect("tool call has an index");
             if !state.started
-                && let Some(start_event) = state.start_event()
+                && let Some(start_event) = state.start_event(block_index)
             {
                 state.started = true;
                 events.push(StreamEvent::ContentBlockStart(start_event));
-                if let Some(delta_event) = state.delta_event() {
+                if let Some(delta_event) = state.delta_event(block_index) {
                     events.push(StreamEvent::ContentBlockDelta(delta_event));
                 }
             }
             if state.started && !state.stopped {
                 state.stopped = true;
                 events.push(StreamEvent::ContentBlockStop(ContentBlockStopEvent {
-                    index: state.block_index(),
+                    index: state.block_index().expect("started tool call has an index"),
                 }));
             }
         }
@@ -1047,11 +1139,12 @@ impl StreamState {
 /// 单个 OpenAI tool call 的累积状态。
 ///
 /// OpenAI 流式协议中，同一个 tool call 跨多个 chunk 切片：第一个 chunk 给出 `id` +
-/// `function.name`，后续 chunk 仅切片 `function.arguments`。`block_index` 取
-/// `openai_index + 1`，把索引 0 留给可能存在的 text content block。
+/// `function.name`，后续 chunk 仅切片 `function.arguments`。content block 索引由
+/// [`StreamState`] 在 block 首次出现时递增分配，避免与文本或推理块冲突。
 #[derive(Debug, Default)]
 struct ToolCallState {
     openai_index: u32,
+    block_index: Option<u32>,
     id: Option<String>,
     name: Option<String>,
     arguments: String,
@@ -1074,18 +1167,27 @@ impl ToolCallState {
         }
     }
 
-    const fn block_index(&self) -> u32 {
-        self.openai_index + 1
+    fn ensure_block_index(&mut self, allocated_index: Option<u32>) -> u32 {
+        if let Some(index) = self.block_index {
+            return index;
+        }
+        let index = allocated_index.expect("new tool call block receives an index");
+        self.block_index = Some(index);
+        index
     }
 
-    fn start_event(&self) -> Option<ContentBlockStartEvent> {
+    const fn block_index(&self) -> Option<u32> {
+        self.block_index
+    }
+
+    fn start_event(&self, block_index: u32) -> Option<ContentBlockStartEvent> {
         let name = self.name.clone()?;
         let id = self
             .id
             .clone()
             .unwrap_or_else(|| format!("tool_call_{}", self.openai_index));
         Some(ContentBlockStartEvent {
-            index: self.block_index(),
+            index: block_index,
             content_block: OutputContentBlock::ToolUse {
                 id,
                 name,
@@ -1094,14 +1196,14 @@ impl ToolCallState {
         })
     }
 
-    fn delta_event(&mut self) -> Option<ContentBlockDeltaEvent> {
+    fn delta_event(&mut self, block_index: u32) -> Option<ContentBlockDeltaEvent> {
         if self.emitted_len >= self.arguments.len() {
             return None;
         }
         let delta = self.arguments[self.emitted_len..].to_string();
         self.emitted_len = self.arguments.len();
         Some(ContentBlockDeltaEvent {
-            index: self.block_index(),
+            index: block_index,
             delta: ContentBlockDelta::InputJsonDelta {
                 partial_json: delta,
             },
@@ -1131,6 +1233,8 @@ struct ChunkChoice {
 struct ChunkDelta {
     #[serde(default)]
     content: Option<String>,
+    #[serde(default, alias = "reasoning")]
+    reasoning_content: Option<String>,
     #[serde(default, deserialize_with = "deserialize_null_as_empty_vec")]
     tool_calls: Vec<DeltaToolCall>,
 }
@@ -1374,5 +1478,74 @@ mod tests {
         assert_eq!(resp.stop_reason.as_deref(), Some("end_turn"));
         assert_eq!(resp.usage.input_tokens, 5);
         assert_eq!(resp.usage.output_tokens, 10);
+    }
+
+    #[test]
+    fn stream_state_promotes_reasoning_delta_to_thinking_block() {
+        let mut state = StreamState::new("qwen-max".to_string());
+        let reasoning_chunk: ChatCompletionChunk = serde_json::from_value(json!({
+            "id": "chatcmpl-1",
+            "model": "qwen-max",
+            "choices": [{
+                "delta": { "reasoning_content": "step 1" },
+                "finish_reason": null
+            }]
+        }))
+        .expect("reasoning chunk parses");
+
+        let events = state.ingest_chunk(reasoning_chunk).expect("ingests");
+        assert!(matches!(events[0], StreamEvent::MessageStart(_)));
+        assert!(matches!(
+            events[1],
+            StreamEvent::ContentBlockStart(ContentBlockStartEvent {
+                index: 0,
+                content_block: OutputContentBlock::Thinking { .. }
+            })
+        ));
+        assert!(matches!(
+            events[2],
+            StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
+                index: 0,
+                delta: ContentBlockDelta::ThinkingDelta { ref thinking }
+            }) if thinking == "step 1"
+        ));
+
+        let text_chunk: ChatCompletionChunk = serde_json::from_value(json!({
+            "id": "chatcmpl-1",
+            "model": "qwen-max",
+            "choices": [{
+                "delta": { "content": "answer" },
+                "finish_reason": "stop"
+            }]
+        }))
+        .expect("text chunk parses");
+
+        let events = state.ingest_chunk(text_chunk).expect("ingests");
+        assert!(matches!(
+            events[0],
+            StreamEvent::ContentBlockStop(ContentBlockStopEvent { index: 0 })
+        ));
+        assert!(matches!(
+            events[1],
+            StreamEvent::ContentBlockStart(ContentBlockStartEvent {
+                index: 1,
+                content_block: OutputContentBlock::Text { .. }
+            })
+        ));
+        assert!(matches!(
+            events[2],
+            StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
+                index: 1,
+                delta: ContentBlockDelta::TextDelta { ref text }
+            }) if text == "answer"
+        ));
+
+        let events = state.finish().expect("finishes");
+        assert!(matches!(
+            events[0],
+            StreamEvent::ContentBlockStop(ContentBlockStopEvent { index: 1 })
+        ));
+        assert!(matches!(events[1], StreamEvent::MessageDelta(_)));
+        assert!(matches!(events[2], StreamEvent::MessageStop(_)));
     }
 }

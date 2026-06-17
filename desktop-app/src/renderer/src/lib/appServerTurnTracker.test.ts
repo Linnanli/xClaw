@@ -99,6 +99,103 @@ describe('createAppServerTurnTracker', () => {
     })
   })
 
+  it('tracks reasoning section boundaries without creating visible text parts', async () => {
+    const tracker = createAppServerTurnTracker()
+    const completion = tracker.waitForTurnCompletion('turn-1')
+
+    tracker.handleNotification({
+      hostId: 'local',
+      method: 'item/reasoning/summaryTextDelta',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        itemId: 'turn-1:reasoning',
+        summaryIndex: 0,
+        delta: 'first section'
+      }
+    })
+    tracker.handleNotification({
+      hostId: 'local',
+      method: 'item/reasoning/summaryPartAdded',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        itemId: 'turn-1:reasoning',
+        summaryIndex: 1
+      }
+    })
+    tracker.handleNotification({
+      hostId: 'local',
+      method: 'item/reasoning/summaryTextDelta',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        itemId: 'turn-1:reasoning',
+        summaryIndex: 1,
+        delta: 'second section'
+      }
+    })
+    tracker.handleNotification({
+      hostId: 'local',
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        output: ''
+      }
+    })
+
+    await expect(completion).resolves.toMatchObject({
+      content: [
+        { type: 'reasoning', text: 'first section' },
+        { type: 'reasoning', text: 'second section' }
+      ]
+    })
+  })
+
+  it('maps raw reasoning text deltas to reasoning parts without polluting agent text', async () => {
+    const tracker = createAppServerTurnTracker()
+    const completion = tracker.waitForTurnCompletion('turn-1')
+
+    tracker.handleNotification({
+      hostId: 'local',
+      method: 'item/reasoning/textDelta',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        itemId: 'turn-1:reasoning',
+        contentIndex: 0,
+        delta: 'raw detail'
+      }
+    })
+    tracker.handleNotification({
+      hostId: 'local',
+      method: 'item/agentMessage/delta',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        itemId: 'turn-1',
+        delta: 'visible'
+      }
+    })
+    tracker.handleNotification({
+      hostId: 'local',
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        output: 'visible'
+      }
+    })
+
+    await expect(completion).resolves.toMatchObject({
+      content: [
+        { type: 'reasoning', text: 'raw detail' },
+        { type: 'text', text: 'visible' }
+      ]
+    })
+  })
+
   it('keeps early completion notifications until the renderer waits for that turn', async () => {
     const tracker = createAppServerTurnTracker()
 

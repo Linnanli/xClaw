@@ -562,6 +562,7 @@ mod tests {
             temperature: None,
             stop_sequences: None,
             tool_choice: None,
+            reasoning_summary: dasclaw_core::messages::ReasoningSummary::None,
             metadata: Default::default(),
         };
 

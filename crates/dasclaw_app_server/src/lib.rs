@@ -32,6 +32,7 @@ use dasclaw_app_server_protocol::{
     TurnStartedEvent, TurnStatus, TurnSummary,
 };
 use dasclaw_app_server_protocol::{JSON_RPC_VERSION, method};
+use dasclaw_core::messages::ReasoningSummary;
 use dasclaw_llm_provider::provider::claw_code_provider::ClawCodeLlmProvider;
 use dasclaw_llm_provider::provider::config::{CacheRetention, RegistryProviderConfig};
 use dasclaw_llm_provider::provider::registry::ProviderProtocol;
@@ -293,6 +294,22 @@ impl RuntimeModelProviderSnapshot {
                 self.model_id
             ))),
         }
+    }
+}
+
+fn parse_reasoning_summary(
+    value: Option<&str>,
+    model_id: &str,
+) -> Result<ReasoningSummary, AppServerError> {
+    match value.unwrap_or("none").trim().to_ascii_lowercase().as_str() {
+        "none" => Ok(ReasoningSummary::None),
+        "auto" => Ok(ReasoningSummary::Auto),
+        "concise" => Ok(ReasoningSummary::Concise),
+        "detailed" => Ok(ReasoningSummary::Detailed),
+        other => Err(AppServerError::invalid_request(
+            "turn/start",
+            format!("turn/start reasoningSummary is invalid for modelId: {model_id}: {other}"),
+        )),
     }
 }
 
@@ -561,6 +578,10 @@ impl AppServer {
         self.require_initialized("session")?;
         self.require_thread_exists(&params.thread_id)?;
         let model_provider = self.model_provider.selected_snapshot()?;
+        let reasoning_summary = parse_reasoning_summary(
+            params.reasoning_summary.as_deref(),
+            &model_provider.model_id,
+        )?;
         let turn_id = self.threads.next_turn_id();
         self.runtime_bridge
             .start_turn(RuntimeTurnStartRequest {
@@ -568,6 +589,7 @@ impl AppServer {
                 turn_id: turn_id.clone(),
                 prompt: params.prompt,
                 model_provider,
+                reasoning_summary,
                 updates: self.runtime_turn_updates.clone(),
             })
             .map_err(AppServerError::runtime_bridge)?;
@@ -1324,6 +1346,7 @@ pub struct RuntimeTurnStartRequest {
     pub turn_id: String,
     pub prompt: String,
     pub model_provider: RuntimeModelProviderSnapshot,
+    pub reasoning_summary: ReasoningSummary,
     pub updates: RuntimeTurnUpdateSink,
 }
 
@@ -1463,6 +1486,7 @@ pub struct DasclawAgentRuntimeBridge {
 type AgentFactory = dyn Fn(
         CancellationToken,
         RuntimeModelProviderSnapshot,
+        ReasoningSummary,
     ) -> Result<dasclaw_runtime::Agent, RuntimeBridgeError>
     + Send
     + Sync
@@ -1483,7 +1507,9 @@ impl DasclawAgentRuntimeBridge {
         + Sync
         + 'static,
     ) -> Self {
-        Self::new_with_model_provider(move |token, _snapshot| agent_factory(token))
+        Self::new_with_model_provider(move |token, _snapshot, _reasoning_summary| {
+            agent_factory(token)
+        })
     }
 
     #[must_use]
@@ -1491,6 +1517,7 @@ impl DasclawAgentRuntimeBridge {
         agent_factory: impl Fn(
             CancellationToken,
             RuntimeModelProviderSnapshot,
+            ReasoningSummary,
         ) -> Result<dasclaw_runtime::Agent, RuntimeBridgeError>
         + Send
         + Sync
@@ -1528,7 +1555,11 @@ impl DasclawAgentRuntimeBridge {
 impl RuntimeBridge for DasclawAgentRuntimeBridge {
     fn start_turn(&self, request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
         let token = CancellationToken::new();
-        let agent = (self.agent_factory)(token.clone(), request.model_provider.clone())?;
+        let agent = (self.agent_factory)(
+            token.clone(),
+            request.model_provider.clone(),
+            request.reasoning_summary,
+        )?;
         let mut in_flight = self
             .in_flight
             .lock()
@@ -1652,12 +1683,14 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
 fn agent_from_model_provider_snapshot(
     token: CancellationToken,
     snapshot: RuntimeModelProviderSnapshot,
+    reasoning_summary: ReasoningSummary,
 ) -> Result<dasclaw_runtime::Agent, RuntimeBridgeError> {
     let config = registry_config_from_snapshot(&snapshot)?;
     let provider = ClawCodeLlmProvider::from_registry_config(&config).map_err(|error| {
         RuntimeBridgeError::fatal(redact_snapshot_secret(&error.to_string(), &snapshot))
     })?;
-    let responder = LlmProviderResponder::new(Arc::new(provider));
+    let responder =
+        LlmProviderResponder::new(Arc::new(provider)).with_reasoning_summary(reasoning_summary);
 
     dasclaw_runtime::Agent::builder()
         .responder(responder)
@@ -2820,6 +2853,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
                 prompt: "hello".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn should start");
         let _ = server.drain_notifications();
@@ -3350,6 +3384,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
                 prompt: "hello runtime".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn should start through runtime bridge");
 
@@ -3360,6 +3395,7 @@ mod tests {
         assert_eq!(calls[0].thread_id, thread.thread_id);
         assert_eq!(calls[0].turn_id, "turn_1");
         assert_eq!(calls[0].prompt, "hello runtime");
+        assert_eq!(calls[0].reasoning_summary, ReasoningSummary::None);
         assert_eq!(calls[0].model_provider.model_id, "gpt-test");
         assert_eq!(
             calls[0].model_provider.api_base_url,
@@ -3374,6 +3410,30 @@ mod tests {
             .expect("turn/list should still use session bookkeeping");
         assert_eq!(turns.turns.len(), 1);
         assert_eq!(turns.turns[0].status, TurnStatus::Pending);
+    }
+
+    #[test]
+    fn turn_start_passes_reasoning_summary_to_runtime_request() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        let thread = server
+            .thread_create(ThreadCreateParams {
+                title: Some("Draft".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread should be created");
+
+        server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id,
+                prompt: "hello runtime".to_string(),
+                reasoning_summary: Some("concise".to_string()),
+            })
+            .expect("turn should start through runtime bridge");
+
+        let calls = bridge.calls.lock().expect("calls lock");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].reasoning_summary, ReasoningSummary::Concise);
     }
 
     #[test]
@@ -3405,6 +3465,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
                 prompt: "hello runtime".to_string(),
+                reasoning_summary: None,
             })
             .expect_err("missing model provider must fail safe before runtime");
 
@@ -3438,6 +3499,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
                 prompt: "first".to_string(),
+                reasoning_summary: None,
             })
             .expect("first turn should use initial model");
         let response = server
@@ -3449,6 +3511,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id,
                 prompt: "second".to_string(),
+                reasoning_summary: None,
             })
             .expect("second turn should use newly selected model");
 
@@ -3748,6 +3811,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
                 prompt: "hello".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn should start");
         let notifications = server.drain_notifications();
@@ -3792,6 +3856,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
                 prompt: "hello".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn should start");
         let notifications = server.drain_notifications();
@@ -3833,12 +3898,14 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
                 prompt: "first".to_string(),
+                reasoning_summary: None,
             })
             .expect("first turn should start");
         let second = server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
                 prompt: "second".to_string(),
+                reasoning_summary: None,
             })
             .expect("second turn should start");
         let _ = server.drain_notifications();
@@ -3904,6 +3971,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
                 prompt: "hello".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn should start");
         let _ = server.drain_notifications();
@@ -3938,6 +4006,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
                 prompt: "hello".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn should start");
         let _ = server.drain_notifications();
@@ -3977,6 +4046,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
                 prompt: "hello".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn should start");
         let _ = server.drain_notifications();
@@ -4019,6 +4089,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
                 prompt: "hello".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn should start");
         let notifications = server.drain_notifications();
@@ -4061,6 +4132,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id,
                 prompt: "hello".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn should start");
 
@@ -4094,6 +4166,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
                 prompt: "hello".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn should start");
         let _ = server.drain_notifications();
@@ -4128,6 +4201,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
                 prompt: "hello".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn should start");
         let _ = server.drain_notifications();
@@ -4175,6 +4249,7 @@ mod tests {
                     turn_id: turn_id.to_string(),
                     prompt: "hello".to_string(),
                     model_provider: test_runtime_model_snapshot(),
+                    reasoning_summary: ReasoningSummary::None,
                     updates: RuntimeTurnUpdateSink::new(),
                 })
                 .expect_err("test factory should stop before spawning");
@@ -4192,13 +4267,21 @@ mod tests {
     fn dasclaw_runtime_bridge_passes_model_snapshot_to_agent_factory() {
         let captured_snapshots = Arc::new(Mutex::new(Vec::new()));
         let factory_snapshots = Arc::clone(&captured_snapshots);
-        let bridge = DasclawAgentRuntimeBridge::new_with_model_provider(move |_token, snapshot| {
-            factory_snapshots
-                .lock()
-                .expect("factory snapshots lock")
-                .push(snapshot);
-            Err(RuntimeBridgeError::fatal("test factory stops before run"))
-        });
+        let captured_reasoning = Arc::new(Mutex::new(Vec::new()));
+        let factory_reasoning = Arc::clone(&captured_reasoning);
+        let bridge = DasclawAgentRuntimeBridge::new_with_model_provider(
+            move |_token, snapshot, reasoning_summary| {
+                factory_snapshots
+                    .lock()
+                    .expect("factory snapshots lock")
+                    .push(snapshot);
+                factory_reasoning
+                    .lock()
+                    .expect("factory reasoning lock")
+                    .push(reasoning_summary);
+                Err(RuntimeBridgeError::fatal("test factory stops before run"))
+            },
+        );
 
         let error = bridge
             .start_turn(RuntimeTurnStartRequest {
@@ -4206,6 +4289,7 @@ mod tests {
                 turn_id: "turn_1".to_string(),
                 prompt: "hello".to_string(),
                 model_provider: test_runtime_model_snapshot(),
+                reasoning_summary: ReasoningSummary::Concise,
                 updates: RuntimeTurnUpdateSink::new(),
             })
             .expect_err("test factory should stop before spawning");
@@ -4215,6 +4299,8 @@ mod tests {
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].model_id, "gpt-test");
         assert_eq!(snapshots[0].api_key, "test-api-key");
+        let reasoning = captured_reasoning.lock().expect("captured reasoning lock");
+        assert_eq!(reasoning.as_slice(), &[ReasoningSummary::Concise]);
     }
 
     #[test]
@@ -4276,6 +4362,7 @@ mod tests {
                 turn_id: "turn_1".to_string(),
                 prompt: "hello".to_string(),
                 model_provider: snapshot,
+                reasoning_summary: ReasoningSummary::None,
                 updates: updates.clone(),
             })
             .expect("turn should start");
@@ -4305,6 +4392,7 @@ mod tests {
                 turn_id: "turn_1".to_string(),
                 prompt: "hello".to_string(),
                 model_provider: snapshot,
+                reasoning_summary: ReasoningSummary::None,
                 updates: RuntimeTurnUpdateSink::new(),
             })
             .expect_err("unknown api format should be rejected before spawning");
@@ -4360,6 +4448,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
                 prompt: "hello".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn should start");
 
@@ -4423,6 +4512,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
                 prompt: "hello".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn should start");
 
@@ -4487,6 +4577,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
                 prompt: "hello".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn should start through runtime responder");
 
@@ -4535,6 +4626,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
                 prompt: "hello".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn should start");
         let _ = server.drain_notifications();
@@ -4593,6 +4685,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
                 prompt: "hello".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn should start");
         let _ = server.drain_notifications();
@@ -4639,6 +4732,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
                 prompt: "hello".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn should be started");
         let _ = server.turn_cancel(TurnCancelParams {
@@ -4839,6 +4933,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id,
                 prompt: "hello".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn should start");
         let notifications = server.drain_notifications();
@@ -4970,6 +5065,8 @@ mod tests {
         assert!(emitted_methods.contains(&"thread/started"));
         assert!(emitted_methods.contains(&"lifecycle/changed"));
         assert!(emitted_methods.contains(&"item/agentMessage/delta"));
+        assert!(advertised_events.contains("item/reasoning/summaryPartAdded"));
+        assert!(advertised_events.contains("item/reasoning/textDelta"));
         for method in emitted_methods {
             assert!(
                 advertised_events.contains(method),
@@ -4998,6 +5095,7 @@ mod tests {
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id,
                 prompt: "hello".to_string(),
+                reasoning_summary: None,
             })
             .expect("turn should start");
         let methods = server

@@ -7,6 +7,7 @@
 //! This mirrors OpenClaw's Responses API flow translated to Rust.
 
 use async_trait::async_trait;
+use dasclaw_core::messages::ReasoningSummary;
 use reqwest::Client;
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -123,6 +124,7 @@ impl OpenAiCodexProvider {
         &self,
         messages: &[ChatMessage],
         tools: Option<&[ToolDefinition]>,
+        reasoning_summary: ReasoningSummary,
     ) -> serde_json::Value {
         // Separate system messages into `instructions`
         let instructions: String = messages
@@ -162,6 +164,10 @@ impl OpenAiCodexProvider {
             body["tools"] = serde_json::Value::Array(tools_json);
             body["tool_choice"] = serde_json::Value::String("auto".to_string());
             body["parallel_tool_calls"] = serde_json::Value::Bool(true);
+        }
+
+        if let Some(summary) = reasoning_summary.as_wire_value() {
+            body["reasoning"] = serde_json::json!({ "summary": summary });
         }
 
         body
@@ -259,7 +265,7 @@ impl LlmProvider for OpenAiCodexProvider {
     }
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, LlmError> {
-        let body = self.build_request_body(&request.messages, None);
+        let body = self.build_request_body(&request.messages, None, ReasoningSummary::None);
         let parsed = self.send_request(body).await?;
 
         Ok(CompletionResponse {
@@ -291,7 +297,11 @@ impl LlmProvider for OpenAiCodexProvider {
             })
             .collect();
 
-        let body = self.build_request_body(&request.messages, Some(&request.tools));
+        let body = self.build_request_body(
+            &request.messages,
+            Some(&request.tools),
+            request.reasoning_summary,
+        );
         let mut parsed = self.send_request(body).await?;
 
         // Reverse-map sanitized tool names back to originals so the caller
@@ -1064,7 +1074,7 @@ data: {"type":"response.output_text.delta","delta":" ignored"}
             ChatMessage::user("Hello"),
         ];
 
-        let body = provider.build_request_body(&messages, None);
+        let body = provider.build_request_body(&messages, None, ReasoningSummary::None);
 
         assert_eq!(body["model"], "gpt-5.3-codex");
         assert_eq!(body["store"], false);
@@ -1076,6 +1086,7 @@ data: {"type":"response.output_text.delta","delta":" ignored"}
         assert_eq!(input[0]["role"], "user");
         // No tools
         assert!(body.get("tools").is_none());
+        assert!(body.get("reasoning").is_none());
     }
 
     #[test]
@@ -1096,7 +1107,7 @@ data: {"type":"response.output_text.delta","delta":" ignored"}
             parameters: serde_json::json!({"type": "object"}),
         }];
 
-        let body = provider.build_request_body(&messages, Some(&tools));
+        let body = provider.build_request_body(&messages, Some(&tools), ReasoningSummary::None);
 
         assert!(body.get("tools").is_some());
         let tools_arr = body["tools"].as_array().unwrap();
@@ -1104,6 +1115,23 @@ data: {"type":"response.output_text.delta","delta":" ignored"}
         assert_eq!(tools_arr[0]["type"], "function");
         assert_eq!(body["tool_choice"], "auto");
         assert_eq!(body["parallel_tool_calls"], true);
+    }
+
+    #[test]
+    fn test_build_request_body_with_reasoning_summary() {
+        let jwt = make_test_jwt("acct_test");
+        let provider = OpenAiCodexProvider::new(
+            "gpt-5.3-codex",
+            "https://chatgpt.com/backend-api/codex",
+            &jwt,
+            300,
+        )
+        .unwrap();
+
+        let messages = vec![ChatMessage::user("Think briefly")];
+        let body = provider.build_request_body(&messages, None, ReasoningSummary::Concise);
+
+        assert_eq!(body["reasoning"]["summary"], "concise");
     }
 
     #[test]

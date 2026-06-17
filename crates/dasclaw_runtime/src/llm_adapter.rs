@@ -34,7 +34,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use dasclaw_core::agentic_loop::{AgentCallPolicy, ModelCallMode};
 use dasclaw_core::messages::{
-    ToolCompletionRequest, ToolCompletionResponse, sanitize_tool_messages,
+    ReasoningSummary, ToolCompletionRequest, ToolCompletionResponse, sanitize_tool_messages,
 };
 use dasclaw_core::reasoning_ctx::ReasoningContext;
 use dasclaw_core::response_types::{RespondOutput, RespondResult, ResponseMetadata, TokenUsage};
@@ -57,19 +57,29 @@ use crate::agent::{AgentEvent, AgentResponder};
 /// of provider.
 pub struct LlmProviderResponder<P: LlmProvider> {
     provider: Arc<P>,
+    reasoning_summary: ReasoningSummary,
 }
 
 impl<P: LlmProvider> LlmProviderResponder<P> {
     /// Wrap a shared provider handle.
     pub fn new(provider: Arc<P>) -> Self {
-        Self { provider }
+        Self {
+            provider,
+            reasoning_summary: ReasoningSummary::None,
+        }
+    }
+
+    /// Configure whether reasoning summaries are requested and emitted.
+    pub fn with_reasoning_summary(mut self, reasoning_summary: ReasoningSummary) -> Self {
+        self.reasoning_summary = reasoning_summary;
+        self
     }
 }
 
 #[async_trait]
 impl<P: LlmProvider + 'static> AgentResponder for LlmProviderResponder<P> {
     async fn respond(&self, ctx: &mut ReasoningContext) -> Result<RespondOutput, HostError> {
-        let request = build_request(ctx);
+        let request = build_request(ctx, self.reasoning_summary);
         let response = self.provider.invoke_with_tools(request).await?;
         Ok(clean_respond_output(map_to_respond_output(response)))
     }
@@ -81,11 +91,13 @@ impl<P: LlmProvider + 'static> AgentResponder for LlmProviderResponder<P> {
     ) -> Result<RespondOutput, HostError> {
         match policy.model_call_mode {
             ModelCallMode::Invoke => {
-                let request = build_request(ctx);
+                let request = build_request(ctx, self.reasoning_summary);
+                let emit_reasoning = request.reasoning_summary.should_emit();
                 let response = self.provider.invoke_with_tools(request).await?;
                 if let Some(event_tx) = policy.event_tx {
                     send_response_events(
                         &event_tx,
+                        emit_reasoning,
                         response.reasoning.as_deref(),
                         response.content.as_deref(),
                     )
@@ -95,7 +107,7 @@ impl<P: LlmProvider + 'static> AgentResponder for LlmProviderResponder<P> {
             }
             ModelCallMode::Stream => {
                 let event_tx = policy.event_tx;
-                let request = build_request(ctx);
+                let request = build_request(ctx, self.reasoning_summary);
                 let response = self.stream_provider_response(request, event_tx).await?;
                 Ok(clean_respond_output(map_to_respond_output(response)))
             }
@@ -134,6 +146,7 @@ impl<P: LlmProvider + 'static> LlmProviderResponder<P> {
         request: ToolCompletionRequest,
         event_tx: Option<mpsc::Sender<AgentEvent>>,
     ) -> Result<ToolCompletionResponse, HostError> {
+        let emit_reasoning = request.reasoning_summary.should_emit();
         let mut provider_stream = self.provider.stream_with_tools(request).await?;
         let mut legacy_stream = LegacyReasoningStream::default();
         let mut completed = None;
@@ -143,14 +156,14 @@ impl<P: LlmProvider + 'static> LlmProviderResponder<P> {
                 LlmStreamEvent::TextDelta(delta) => {
                     if let Some(event_tx) = event_tx.as_ref() {
                         for event in legacy_stream.push(&delta) {
-                            if event_tx.send(event).await.is_err() {
+                            if !send_agent_event(event_tx, event, emit_reasoning).await {
                                 break;
                             }
                         }
                     }
                 }
                 LlmStreamEvent::ReasoningSummaryDelta(delta) => {
-                    if let Some(event_tx) = event_tx.as_ref() {
+                    if emit_reasoning && let Some(event_tx) = event_tx.as_ref() {
                         if event_tx
                             .send(AgentEvent::ReasoningSummaryChunk(delta))
                             .await
@@ -169,7 +182,7 @@ impl<P: LlmProvider + 'static> LlmProviderResponder<P> {
 
         if let Some(event_tx) = event_tx.as_ref() {
             for event in legacy_stream.finish() {
-                if event_tx.send(event).await.is_err() {
+                if !send_agent_event(event_tx, event, emit_reasoning).await {
                     break;
                 }
             }
@@ -185,20 +198,34 @@ impl<P: LlmProvider + 'static> LlmProviderResponder<P> {
 
 async fn send_response_events(
     event_tx: &mpsc::Sender<AgentEvent>,
+    emit_reasoning: bool,
     reasoning: Option<&str>,
     content: Option<&str>,
 ) {
-    send_reasoning_event(event_tx, reasoning).await;
+    if emit_reasoning {
+        send_reasoning_event(event_tx, reasoning).await;
+    }
 
     let Some(content) = content else {
         return;
     };
     let mut stream = LegacyReasoningStream::default();
     for event in stream.push(content).into_iter().chain(stream.finish()) {
-        if event_tx.send(event).await.is_err() {
+        if !send_agent_event(event_tx, event, emit_reasoning).await {
             break;
         }
     }
+}
+
+async fn send_agent_event(
+    event_tx: &mpsc::Sender<AgentEvent>,
+    event: AgentEvent,
+    emit_reasoning: bool,
+) -> bool {
+    if matches!(event, AgentEvent::ReasoningSummaryChunk(_)) && !emit_reasoning {
+        return true;
+    }
+    event_tx.send(event).await.is_ok()
 }
 
 async fn send_reasoning_event(event_tx: &mpsc::Sender<AgentEvent>, reasoning: Option<&str>) {
@@ -438,11 +465,15 @@ fn is_inside_markdown_code(input: &str, position: usize) -> bool {
 /// Extracted out of [`AgentResponder::respond`] so the streaming
 /// variant produces a byte-identical request — keeping the two paths in
 /// sync without duplicating the message-sanitisation rules.
-fn build_request(ctx: &ReasoningContext) -> ToolCompletionRequest {
+fn build_request(
+    ctx: &ReasoningContext,
+    reasoning_summary: ReasoningSummary,
+) -> ToolCompletionRequest {
     let mut messages = ctx.messages.clone();
     sanitize_tool_messages(&mut messages);
 
-    let mut request = ToolCompletionRequest::new(messages, ctx.available_tools.clone());
+    let mut request = ToolCompletionRequest::new(messages, ctx.available_tools.clone())
+        .with_reasoning_summary(reasoning_summary);
     if let Some(model) = ctx.model_override.as_ref() {
         request = request.with_model(model);
     }
@@ -768,10 +799,25 @@ mod tests {
         assert_eq!(request.tools.len(), 1);
         assert_eq!(request.tools[0].name, "calc");
         assert_eq!(request.model.as_deref(), Some("claude-opus-4"));
+        assert_eq!(request.reasoning_summary, ReasoningSummary::None);
         assert_eq!(
             request.metadata.get("thread_id").map(String::as_str),
             Some("abc-123")
         );
+    }
+
+    #[tokio::test]
+    async fn adapter_forwards_configured_reasoning_summary_to_provider() {
+        let provider = Arc::new(MockProvider::new(text_response("ok")));
+        let responder = LlmProviderResponder::new(Arc::clone(&provider))
+            .with_reasoning_summary(ReasoningSummary::Concise);
+        let mut ctx = ReasoningContext::new();
+        ctx.messages.push(ChatMessage::user("hi"));
+
+        responder.respond(&mut ctx).await.unwrap();
+
+        let request = provider.take_request();
+        assert_eq!(request.reasoning_summary, ReasoningSummary::Concise);
     }
 
     #[tokio::test]
@@ -900,7 +946,8 @@ mod tests {
             chunks: vec!["final ".into(), "answer".into()],
             reasoning_chunks: vec!["private ".into(), "scratch".into()],
         });
-        let responder = LlmProviderResponder::new(Arc::clone(&provider));
+        let responder = LlmProviderResponder::new(Arc::clone(&provider))
+            .with_reasoning_summary(ReasoningSummary::Auto);
         let mut ctx = ReasoningContext::new();
         ctx.messages.push(ChatMessage::user("hi"));
 
@@ -920,6 +967,37 @@ mod tests {
         assert_eq!(reasoning, "private scratch");
         assert_eq!(text, "final answer");
         assert!(!text.contains("<think>"));
+        match output.result {
+            RespondResult::Text(t) => assert_eq!(t, "final answer"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[tokio::test]
+    async fn adapter_streaming_suppresses_native_reasoning_by_default() {
+        let provider = Arc::new(StreamingMockProvider {
+            chunks: vec!["final ".into(), "answer".into()],
+            reasoning_chunks: vec!["private ".into(), "scratch".into()],
+        });
+        let responder = LlmProviderResponder::new(Arc::clone(&provider));
+        let mut ctx = ReasoningContext::new();
+        ctx.messages.push(ChatMessage::user("hi"));
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::AgentEvent>(16);
+        let output = responder.respond_streaming(&mut ctx, tx).await.unwrap();
+
+        let mut text = String::new();
+        while let Some(ev) = rx.recv().await {
+            match ev {
+                crate::AgentEvent::TextChunk(delta) => text.push_str(&delta),
+                crate::AgentEvent::ReasoningSummaryChunk(delta) => {
+                    panic!("reasoning should be suppressed by default: {delta:?}")
+                }
+                other => panic!("unexpected event from adapter: {other:?}"),
+            }
+        }
+
+        assert_eq!(text, "final answer");
         match output.result {
             RespondResult::Text(t) => assert_eq!(t, "final answer"),
             _ => panic!("expected Text"),
@@ -1026,7 +1104,8 @@ mod tests {
             ],
             reasoning_chunks: Vec::new(),
         });
-        let responder = LlmProviderResponder::new(Arc::clone(&provider));
+        let responder = LlmProviderResponder::new(Arc::clone(&provider))
+            .with_reasoning_summary(ReasoningSummary::Auto);
         let mut ctx = ReasoningContext::new();
         ctx.messages.push(ChatMessage::user("hi"));
 
