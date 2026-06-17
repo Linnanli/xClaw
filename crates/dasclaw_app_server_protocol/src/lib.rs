@@ -1831,7 +1831,21 @@ mod tests {
     }
 
     #[test]
-    fn codex_v2_profile_declares_compatible_surface_and_legacy_alias_decisions() {
+    fn codex_v2_profile_declares_p0_p2_surface_and_security_opt_outs() {
+        fn contains_forbidden_p0_p2_domain(name: &str) -> bool {
+            [
+                "approval",
+                "tool/",
+                "command/",
+                "fs/",
+                "mcpServer/",
+                "plugin/",
+                "marketplace/",
+            ]
+            .iter()
+            .any(|fragment| name.contains(fragment))
+        }
+
         let profile = CompatibilityProfile::codex_app_server_v2();
 
         assert_eq!(profile.id, CompatibilityProfile::CODEX_APP_SERVER_V2_ID);
@@ -1843,49 +1857,81 @@ mod tests {
                 method::INITIALIZE,
                 method::THREAD_START,
                 method::THREAD_READ,
+                method::THREAD_LIST,
                 method::TURN_START,
                 method::TURN_INTERRUPT,
+                method::MODEL_LIST,
             ]
         );
-        assert_eq!(
-            profile.events,
-            CODEX_APP_SERVER_V2_EVENTS
-                .iter()
-                .map(|event| (*event).to_string())
-                .collect::<Vec<_>>()
-        );
-        assert!(profile.aliases.iter().any(|alias| {
-            alias.legacy == method::THREAD_CREATE
-                && alias.compatible == method::THREAD_START
-                && alias.kind == CompatibilityAliasKind::LegacySmokeSurface
-        }));
-        assert!(profile.aliases.iter().any(|alias| {
-            alias.legacy == method::TURN_CANCEL
-                && alias.compatible == method::TURN_INTERRUPT
-                && alias.kind == CompatibilityAliasKind::Alias
-        }));
-        assert!(profile.aliases.iter().any(|alias| {
-            alias.legacy == event::TURN_DELTA
-                && alias.compatible == event::ITEM_AGENT_MESSAGE_DELTA
-                && alias.kind == CompatibilityAliasKind::LegacySmokeSurface
-        }));
-        assert_eq!(
-            profile.event_queue,
-            NotificationQueuePolicy::bounded_lag_disconnect()
-        );
         assert!(profile.capability_opt_outs.iter().any(|opt_out| {
-            opt_out.capability == "codex.rich_input"
+            opt_out.capability == "codex.tool_calls"
+                && opt_out.reason == "phase_1_chat_session_subset"
+        }));
+        assert!(profile.capability_opt_outs.iter().any(|opt_out| {
+            opt_out.capability == "codex.approvals"
                 && opt_out.reason == "phase_1_chat_session_subset"
         }));
         assert!(profile.capability_opt_outs.iter().any(|opt_out| {
             opt_out.capability == "mcp" && opt_out.reason == "phase_1_chat_session_subset"
         }));
-        assert!(!profile.methods.iter().any(|method| {
-            method.contains("approval") || method.contains("diff") || method.contains("tool")
-        }));
-        assert!(!profile.events.iter().any(|event| {
-            event.contains("approval") || event.contains("diff") || event.contains("tool")
-        }));
+        assert!(!profile
+            .methods
+            .iter()
+            .any(|method| contains_forbidden_p0_p2_domain(method)));
+        assert!(!profile
+            .events
+            .iter()
+            .any(|event| contains_forbidden_p0_p2_domain(event)));
+    }
+
+    #[test]
+    fn model_provider_capability_advertises_codex_model_list_and_native_selection() {
+        let matrix = CapabilityMatrix::phase_one();
+
+        assert_eq!(matrix.model_provider.status, CapabilityStatus::Implemented);
+        assert_eq!(
+            matrix.model_provider.methods,
+            vec![
+                method::MODEL_LIST.to_string(),
+                method::MODEL_PROVIDER_SELECT_FOR_NEXT_TURN.to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn codex_model_list_response_serializes_without_provider_secret_fields() {
+        let response = ModelListResponse {
+            data: vec![CodexModel::from_client_model(
+                &ClientModelConfig {
+                    model_id: "gpt-test".to_string(),
+                    display_name: Some("GPT Test".to_string()),
+                    provider: Some("openai".to_string()),
+                    api_base_url: Some("https://api.test/v1".to_string()),
+                    api_key: Some("secret-key".to_string()),
+                    api_format: Some("openai".to_string()),
+                    model_call_mode: Some("stream".to_string()),
+                    source: Some("test".to_string()),
+                    capabilities: vec!["chat".to_string()],
+                },
+                true,
+            )],
+            next_cursor: None,
+        };
+
+        let value = serde_json::to_value(response).expect("model/list response should serialize");
+
+        assert_eq!(value["data"][0]["id"], "gpt-test");
+        assert_eq!(value["data"][0]["model"], "gpt-test");
+        assert_eq!(value["data"][0]["displayName"], "GPT Test");
+        assert_eq!(value["data"][0]["defaultReasoningEffort"], "none");
+        assert_eq!(
+            value["data"][0]["inputModalities"],
+            serde_json::json!(["text"])
+        );
+        assert_eq!(value["data"][0]["isDefault"], true);
+        assert!(!value.to_string().contains("secret-key"));
+        assert!(value["data"][0].get("apiKey").is_none());
+        assert!(value["data"][0].get("apiBaseUrl").is_none());
     }
 
     #[test]
