@@ -30,6 +30,7 @@ pub mod method {
     pub const TURN_INTERRUPT: &str = "turn/interrupt";
     pub const TURN_LIST: &str = "turn/list";
     pub const TURN_READ: &str = "turn/read";
+    pub const MODEL_LIST: &str = "model/list";
     pub const MODEL_PROVIDER_SELECT_FOR_NEXT_TURN: &str = "modelProvider/selectForNextTurn";
 }
 
@@ -249,6 +250,113 @@ pub struct ModelProviderSelectForNextTurnResponse {
     pub selected_model_id: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelListParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_hidden: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelListResponse {
+    pub data: Vec<CodexModel>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexModel {
+    pub id: String,
+    pub model: String,
+    pub upgrade: Option<String>,
+    pub upgrade_info: Option<ModelUpgradeInfo>,
+    pub availability_nux: Option<ModelAvailabilityNux>,
+    pub display_name: String,
+    pub description: String,
+    pub hidden: bool,
+    pub supported_reasoning_efforts: Vec<CodexReasoningEffortOption>,
+    pub default_reasoning_effort: CodexReasoningEffort,
+    pub input_modalities: Vec<CodexInputModality>,
+    pub supports_personality: bool,
+    pub additional_speed_tiers: Vec<String>,
+    pub is_default: bool,
+}
+
+impl CodexModel {
+    #[must_use]
+    pub fn from_client_model(model: &ClientModelConfig, is_default: bool) -> Self {
+        let display_name = model
+            .display_name
+            .clone()
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| model.model_id.clone());
+        Self {
+            id: model.model_id.clone(),
+            model: model.model_id.clone(),
+            upgrade: None,
+            upgrade_info: None,
+            availability_nux: None,
+            display_name,
+            description: String::new(),
+            hidden: false,
+            supported_reasoning_efforts: vec![CodexReasoningEffortOption {
+                reasoning_effort: CodexReasoningEffort::None,
+                description: "No reasoning effort override".to_string(),
+            }],
+            default_reasoning_effort: CodexReasoningEffort::None,
+            input_modalities: vec![CodexInputModality::Text],
+            supports_personality: false,
+            additional_speed_tiers: Vec::new(),
+            is_default,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CodexInputModality {
+    Text,
+    Image,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CodexReasoningEffort {
+    None,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    Xhigh,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexReasoningEffortOption {
+    pub reasoning_effort: CodexReasoningEffort,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelAvailabilityNux {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelUpgradeInfo {
+    pub model: String,
+    pub upgrade_copy: Option<String>,
+    pub model_link: Option<String>,
+    pub migration_markdown: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceInfo {
@@ -464,7 +572,10 @@ impl CapabilityMatrix {
             dlp_policy: declared_future_capability("dlp_policy"),
             model_provider: Capability::implemented(
                 "model_provider",
-                &[method::MODEL_PROVIDER_SELECT_FOR_NEXT_TURN],
+                &[
+                    method::MODEL_LIST,
+                    method::MODEL_PROVIDER_SELECT_FOR_NEXT_TURN,
+                ],
                 &[],
             ),
             tools: declared_future_capability("tools"),
@@ -536,8 +647,10 @@ impl CompatibilityProfile {
                 method::INITIALIZE.to_string(),
                 method::THREAD_START.to_string(),
                 method::THREAD_READ.to_string(),
+                method::THREAD_LIST.to_string(),
                 method::TURN_START.to_string(),
                 method::TURN_INTERRUPT.to_string(),
+                method::MODEL_LIST.to_string(),
             ],
             events: CODEX_APP_SERVER_V2_EVENTS
                 .iter()
@@ -823,6 +936,13 @@ fn phase_one_methods() -> Vec<MethodSchema> {
             "session",
             Some("TurnReadParams"),
             "TurnReadResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::MODEL_LIST,
+            "model_provider",
+            Some("ModelListParams"),
+            "ModelListResponse",
             true,
         ),
         MethodSchema::new(
@@ -1874,14 +1994,18 @@ mod tests {
         assert!(profile.capability_opt_outs.iter().any(|opt_out| {
             opt_out.capability == "mcp" && opt_out.reason == "phase_1_chat_session_subset"
         }));
-        assert!(!profile
-            .methods
-            .iter()
-            .any(|method| contains_forbidden_p0_p2_domain(method)));
-        assert!(!profile
-            .events
-            .iter()
-            .any(|event| contains_forbidden_p0_p2_domain(event)));
+        assert!(
+            !profile
+                .methods
+                .iter()
+                .any(|method| contains_forbidden_p0_p2_domain(method))
+        );
+        assert!(
+            !profile
+                .events
+                .iter()
+                .any(|event| contains_forbidden_p0_p2_domain(event))
+        );
     }
 
     #[test]
