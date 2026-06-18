@@ -70,6 +70,7 @@ import {
 
 type AppServerSidebarProps = {
   collapsed: boolean
+  nativeBackdrop: boolean
 }
 
 type HeaderProps = {
@@ -151,9 +152,33 @@ const slashIconMap: Record<string, IconComponent> = {
 
 const streamdownPlugins = { code, math, mermaid, cjk }
 
+const sidebarBaseClass =
+  'hidden h-full shrink-0 flex-col overflow-hidden transition-all duration-200 md:flex'
+
+const nativeBackdropSurfaceClass =
+  'bg-background/50 bg-clip-padding backdrop-blur-xl [@media(prefers-reduced-transparency:reduce)]:bg-background [@media(prefers-reduced-transparency:reduce)]:backdrop-blur-none dark:bg-background/30'
+
+const sidebarGlassClass =
+  'shadow-[0_18px_60px_-48px_rgba(15,23,42,0.75)] dark:shadow-[0_18px_60px_-48px_rgba(0,0,0,0.95)]'
+
+const threadListNewButtonClass =
+  'inline-flex h-8 w-full items-center gap-2 rounded-md px-3 text-sm font-medium text-foreground transition-colors'
+
+const threadListNewButtonGlassClass = 'hover:bg-background/40 dark:hover:bg-foreground/8'
+
+const threadListItemClass = 'group flex min-h-8 items-center gap-1 rounded-md transition-colors'
+
+const threadListItemGlassClass =
+  'hover:bg-background/40 focus-visible:bg-background/40 data-[active]:bg-background/50 dark:hover:bg-foreground/8 dark:focus-visible:bg-foreground/8 dark:data-[active]:bg-foreground/10'
+
+function useNativeBackdrop(): boolean {
+  return window.electron?.process.platform === 'darwin'
+}
+
 function App(): React.JSX.Element {
   const { runtime } = useDasclawAssistantRuntime()
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const nativeBackdrop = useNativeBackdrop()
 
   const toggleSidebar = (): void => {
     setSidebarCollapsed((collapsed) => !collapsed)
@@ -161,11 +186,18 @@ function App(): React.JSX.Element {
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <main className="flex h-screen w-full bg-muted/30 text-foreground">
-        <AppServerSidebar collapsed={sidebarCollapsed} />
+      <main
+        className={cn(
+          'flex h-screen w-full text-foreground',
+          nativeBackdrop ? 'bg-background/10 dark:bg-background/10' : 'bg-muted/30'
+        )}
+      >
+        <AppServerSidebar collapsed={sidebarCollapsed} nativeBackdrop={nativeBackdrop} />
         <section
+          data-slot="app-main-section"
           className={cn(
             'flex min-w-0 flex-1 flex-col overflow-hidden p-2 transition-[padding] duration-200',
+            nativeBackdrop && nativeBackdropSurfaceClass,
             !sidebarCollapsed && 'md:pl-0'
           )}
         >
@@ -181,11 +213,14 @@ function App(): React.JSX.Element {
   )
 }
 
-function AppServerSidebar({ collapsed }: AppServerSidebarProps): React.JSX.Element {
+function AppServerSidebar({ collapsed, nativeBackdrop }: AppServerSidebarProps): React.JSX.Element {
   return (
     <aside
+      data-slot="app-server-sidebar"
       className={cn(
-        'hidden h-full shrink-0 flex-col overflow-hidden transition-all duration-200 md:flex',
+        sidebarBaseClass,
+        nativeBackdrop && nativeBackdropSurfaceClass,
+        nativeBackdrop && sidebarGlassClass,
         collapsed ? 'w-12' : 'w-65'
       )}
     >
@@ -206,7 +241,7 @@ function AppServerSidebar({ collapsed }: AppServerSidebarProps): React.JSX.Eleme
             <Logo />
           </div>
           <div className="relative min-h-0 flex-1 overflow-y-auto p-3">
-            <ThreadList />
+            <ThreadList nativeBackdrop={nativeBackdrop} />
           </div>
         </>
       )}
@@ -231,26 +266,38 @@ function BrandMark(): React.JSX.Element {
   )
 }
 
-function ThreadList(): React.JSX.Element {
+function ThreadList({ nativeBackdrop }: { nativeBackdrop: boolean }): React.JSX.Element {
   return (
     <ThreadListPrimitive.Root className="flex flex-col gap-1">
       <ThreadListPrimitive.New asChild>
         <button
-          className="inline-flex h-8 w-full items-center gap-2 rounded-md px-3 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+          className={cn(
+            threadListNewButtonClass,
+            nativeBackdrop ? threadListNewButtonGlassClass : 'hover:bg-muted'
+          )}
           type="button"
         >
           <PlusIcon className="size-4" />
           New thread
         </button>
       </ThreadListPrimitive.New>
-      <ThreadListPrimitive.Items>{() => <ThreadListItem />}</ThreadListPrimitive.Items>
+      <ThreadListPrimitive.Items>
+        {() => <ThreadListItem nativeBackdrop={nativeBackdrop} />}
+      </ThreadListPrimitive.Items>
     </ThreadListPrimitive.Root>
   )
 }
 
-function ThreadListItem(): React.JSX.Element {
+function ThreadListItem({ nativeBackdrop }: { nativeBackdrop: boolean }): React.JSX.Element {
   return (
-    <ThreadListItemPrimitive.Root className="group flex min-h-8 items-center gap-1 rounded-md transition-colors hover:bg-muted focus-visible:bg-muted data-[active]:bg-muted">
+    <ThreadListItemPrimitive.Root
+      className={cn(
+        threadListItemClass,
+        nativeBackdrop
+          ? threadListItemGlassClass
+          : 'hover:bg-muted focus-visible:bg-muted data-[active]:bg-muted'
+      )}
+    >
       <ThreadListItemPrimitive.Trigger className="flex min-w-0 flex-1 items-center px-3 text-left text-sm font-medium text-foreground outline-none">
         <span className="min-w-0 flex-1 truncate">
           <ThreadListItemPrimitive.Title fallback="New Chat" />

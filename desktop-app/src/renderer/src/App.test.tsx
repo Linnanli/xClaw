@@ -42,6 +42,17 @@ function resetThreadMessageState(): void {
   streamdownPropsState.lastProps = null
 }
 
+function setDesktopPlatform(platform: NodeJS.Platform): void {
+  Object.defineProperty(window, 'electron', {
+    configurable: true,
+    value: {
+      process: {
+        platform
+      }
+    }
+  })
+}
+
 type PrimitiveProps = {
   children?: ReactNode | ((value: unknown) => ReactNode)
   asChild?: boolean
@@ -303,6 +314,7 @@ describe('App composer', () => {
 
   beforeEach(() => {
     resetThreadMessageState()
+    setDesktopPlatform('darwin')
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
@@ -348,6 +360,56 @@ describe('App composer', () => {
     expect(container.querySelector('[data-primitive="ThreadListItemMore.Trigger"]')).not.toBeNull()
     expect(container.querySelector('[data-primitive="ThreadListItem.Archive"]')).not.toBeNull()
     expect(container.querySelector('[data-primitive="ThreadListItem.Delete"]')).not.toBeNull()
+  })
+
+  it('renders the sidebar with translucent glass styling', () => {
+    act(() => {
+      root.render(<App />)
+    })
+
+    const sidebar = container.querySelector('[data-slot="app-server-sidebar"]')
+    const mainSection = container.querySelector('[data-slot="app-main-section"]')
+    const newThread = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent?.trim() === 'New thread'
+    )
+    const threadItem = container.querySelector('[data-primitive="ThreadListItem.Root"]')
+
+    expect(sidebar?.className).toContain('bg-background/50')
+    expect(sidebar?.className).toContain('backdrop-blur-xl')
+    expect(mainSection?.className).toContain('bg-background/50')
+    expect(mainSection?.className).toContain('backdrop-blur-xl')
+    expect(sidebar?.className).not.toContain('border-r')
+    expect(sidebar?.className).toContain(
+      '[@media(prefers-reduced-transparency:reduce)]:backdrop-blur-none'
+    )
+    expect(newThread?.className).toContain('hover:bg-background/40')
+    expect(threadItem?.className).toContain('data-[active]:bg-background/50')
+  })
+
+  it('keeps the original opaque sidebar colors on Windows', () => {
+    setDesktopPlatform('win32')
+
+    act(() => {
+      root.render(<App />)
+    })
+
+    const appShell = container.querySelector('main')
+    const sidebar = container.querySelector('[data-slot="app-server-sidebar"]')
+    const mainSection = container.querySelector('[data-slot="app-main-section"]')
+    const newThread = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent?.trim() === 'New thread'
+    )
+    const threadItem = container.querySelector('[data-primitive="ThreadListItem.Root"]')
+
+    expect(appShell?.className).toContain('bg-muted/30')
+    expect(sidebar?.className).not.toContain('bg-background/50')
+    expect(sidebar?.className).not.toContain('backdrop-blur-xl')
+    expect(mainSection?.className).not.toContain('bg-background/50')
+    expect(mainSection?.className).not.toContain('backdrop-blur-xl')
+    expect(newThread?.className).toContain('hover:bg-muted')
+    expect(newThread?.className).not.toContain('hover:bg-background/40')
+    expect(threadItem?.className).toContain('data-[active]:bg-muted')
+    expect(threadItem?.className).not.toContain('data-[active]:bg-background/50')
   })
 
   it('renders user messages with the assistant-ui base message structure', () => {

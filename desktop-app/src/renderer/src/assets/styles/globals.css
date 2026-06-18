@@ -1,8 +1,8 @@
-@import "tailwindcss";
-@import "tw-animate-css";
-@import "tw-glass";
-@import "tw-shimmer";
-@import "./animate.css";
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'tw-glass';
+@import 'tw-shimmer';
+@import './animate.css';
 @plugin "tailwind-scrollbar";
 
 @source "../../../../../node_modules/streamdown/dist/*.js";
@@ -61,8 +61,7 @@
       background-position: -100% 0;
     }
   }
-  --animate-shimmer: shimmer-sweep var(--shimmer-duration, 1000ms) linear
-    infinite both;
+  --animate-shimmer: shimmer-sweep var(--shimmer-duration, 1000ms) linear infinite both;
 }
 
 :root {
@@ -145,6 +144,9 @@
   body {
     @apply bg-background text-foreground;
   }
+  html[data-native-backdrop='true'] body {
+    @apply bg-transparent;
+  }
 
   @supports not selector(::-webkit-scrollbar) {
     * {
@@ -152,12 +154,7 @@
       scrollbar-color: transparent transparent;
     }
     *:hover {
-      scrollbar-color: color-mix(
-          in srgb,
-          var(--muted-foreground) 35%,
-          transparent
-        )
-        transparent;
+      scrollbar-color: color-mix(in srgb, var(--muted-foreground) 35%, transparent) transparent;
     }
   }
   *::-webkit-scrollbar {
@@ -172,19 +169,11 @@
     border-radius: 9999px;
   }
   *:hover::-webkit-scrollbar-thumb {
-    background-color: color-mix(
-      in srgb,
-      var(--muted-foreground) 30%,
-      transparent
-    );
+    background-color: color-mix(in srgb, var(--muted-foreground) 30%, transparent);
   }
   *::-webkit-scrollbar-thumb:hover,
   *::-webkit-scrollbar-thumb:active {
-    background-color: color-mix(
-      in srgb,
-      var(--muted-foreground) 50%,
-      transparent
-    );
+    background-color: color-mix(in srgb, var(--muted-foreground) 50%, transparent);
   }
   *::-webkit-scrollbar-corner {
     background: transparent;
