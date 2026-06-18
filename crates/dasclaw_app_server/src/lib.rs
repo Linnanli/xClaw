@@ -31,6 +31,9 @@ use dasclaw_app_server_protocol::{
     TurnInterruptResponse, TurnListParams, TurnListResponse, TurnReadParams, TurnReadResponse,
     TurnStartParams, TurnStartResponse, TurnStartedEvent, TurnStatus, TurnSummary,
 };
+use dasclaw_app_server_protocol::{
+    CodexSessionSource, CodexThread, CodexThreadStatus, CodexTurn, CodexTurnError, CodexTurnStatus,
+};
 use dasclaw_app_server_protocol::{JSON_RPC_VERSION, method};
 use dasclaw_core::messages::ReasoningSummary;
 use dasclaw_llm_provider::provider::claw_code_provider::ClawCodeLlmProvider;
@@ -564,7 +567,7 @@ impl AppServer {
         self.notifications.emit_thread_created(ThreadCreatedEvent {
             thread_id: thread_id.clone(),
         });
-        self.emit_codex_thread_started(thread_id.clone());
+        self.emit_codex_thread_started(thread_id.clone())?;
 
         Ok(ThreadCreateResponse {
             thread_id,
@@ -577,10 +580,11 @@ impl AppServer {
         params: ThreadCreateParams,
     ) -> Result<ThreadStartResponse, AppServerError> {
         let created = self.thread_create(params)?;
+        let thread = self.codex_thread_view(&created.thread_id, true)?;
         Ok(ThreadStartResponse {
             thread_id: created.thread_id,
             lifecycle: created.lifecycle,
-            thread: None,
+            thread: Some(thread),
         })
     }
 
@@ -635,15 +639,16 @@ impl AppServer {
             thread_id: thread_id.clone(),
             turn_id: turn_id.clone(),
             status: TurnStatus::Pending,
-            turn: None,
+            turn: Some(CodexTurn::in_progress(turn_id.clone())),
         });
-        self.emit_codex_item_started(thread_id, turn_id.clone());
+        self.emit_codex_item_started(thread_id.clone(), turn_id.clone());
+        let turn = self.codex_turn_view(&thread_id, &turn_id)?;
 
         Ok(TurnStartResponse {
             turn_id,
             status: TurnStatus::Pending,
             lifecycle: self.lifecycle.clone(),
-            turn: None,
+            turn: Some(turn),
         })
     }
 
@@ -1080,14 +1085,69 @@ impl AppServer {
             })
     }
 
-    fn emit_codex_thread_started(&mut self, thread_id: String) {
+    fn emit_codex_thread_started(&mut self, thread_id: String) -> Result<(), AppServerError> {
         if !self.codex_v2_compat_enabled {
-            return;
+            return Ok(());
         }
-        self.notifications.emit_thread_started(ThreadStartedEvent {
-            thread_id,
-            thread: None,
-        });
+        let thread = Some(self.codex_thread_view(&thread_id, false)?);
+        self.notifications
+            .emit_thread_started(ThreadStartedEvent { thread_id, thread });
+        Ok(())
+    }
+
+    fn codex_thread_view(
+        &self,
+        thread_id: &str,
+        include_turns: bool,
+    ) -> Result<CodexThread, AppServerError> {
+        let summary = self.thread_summary_or_error(thread_id)?;
+        let turn_summaries = self.threads.list_turns(thread_id);
+        let has_pending_turn = turn_summaries
+            .iter()
+            .any(|turn| turn.status == TurnStatus::Pending);
+        let turns = if include_turns {
+            turn_summaries
+                .into_iter()
+                .map(codex_turn_from_summary)
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        Ok(CodexThread {
+            id: summary.thread_id,
+            forked_from_id: None,
+            preview: summary.title.clone().unwrap_or_default(),
+            ephemeral: true,
+            model_provider: self
+                .model_provider
+                .selected_model_id
+                .clone()
+                .unwrap_or_default(),
+            created_at: 0,
+            updated_at: 0,
+            status: if has_pending_turn {
+                CodexThreadStatus::Active {
+                    active_flags: Vec::new(),
+                }
+            } else {
+                CodexThreadStatus::Idle
+            },
+            path: None,
+            cwd: summary.workspace_root.unwrap_or_else(|| ".".to_string()),
+            cli_version: SERVER_VERSION.to_string(),
+            source: CodexSessionSource::AppServer,
+            agent_nickname: None,
+            agent_role: None,
+            git_info: None,
+            name: summary.title,
+            turns,
+        })
+    }
+
+    fn codex_turn_view(&self, thread_id: &str, turn_id: &str) -> Result<CodexTurn, AppServerError> {
+        let summary = self.turn_summary_or_error(thread_id, turn_id)?;
+        Ok(codex_turn_from_summary(summary))
     }
 
     fn emit_codex_item_started(&mut self, thread_id: String, turn_id: String) {
@@ -1246,15 +1306,15 @@ impl AppServer {
                                     TurnStatus::Completed,
                                 );
                                 self.notifications.emit_turn_completed(TurnCompletedEvent {
-                                    thread_id: summary.thread_id,
-                                    turn_id: summary.turn_id,
+                                    thread_id: summary.thread_id.clone(),
+                                    turn_id: summary.turn_id.clone(),
                                     status: TurnStatus::Completed,
-                                    output: summary.output.unwrap_or_default(),
-                                    turn: None,
+                                    output: summary.output.clone().unwrap_or_default(),
+                                    turn: Some(codex_turn_from_summary(summary)),
                                 });
                             }
                             TurnStatus::Failed => {
-                                let error = summary.error.unwrap_or_default();
+                                let error = summary.error.clone().unwrap_or_default();
                                 self.emit_codex_item_completed(
                                     summary.thread_id.clone(),
                                     summary.turn_id.clone(),
@@ -1265,7 +1325,7 @@ impl AppServer {
                                     turn_id: summary.turn_id.clone(),
                                     status: TurnStatus::Failed,
                                     error: error.clone(),
-                                    turn: None,
+                                    turn: Some(codex_turn_from_summary(summary.clone())),
                                 });
                                 self.emit_codex_error(summary.thread_id, summary.turn_id, error);
                             }
@@ -1968,6 +2028,27 @@ impl TurnRecord {
             output: self.output.clone(),
             error: self.error.clone(),
         }
+    }
+}
+
+fn codex_turn_from_summary(summary: TurnSummary) -> CodexTurn {
+    CodexTurn {
+        id: summary.turn_id,
+        items: Vec::new(),
+        status: match summary.status {
+            TurnStatus::Pending => CodexTurnStatus::InProgress,
+            TurnStatus::Completed => CodexTurnStatus::Completed,
+            TurnStatus::Failed => CodexTurnStatus::Failed,
+            TurnStatus::Cancelled => CodexTurnStatus::Interrupted,
+        },
+        error: summary.error.map(|message| CodexTurnError {
+            message,
+            codex_error_info: None,
+            additional_details: None,
+        }),
+        started_at: None,
+        completed_at: None,
+        duration_ms: None,
     }
 }
 
@@ -5074,6 +5155,101 @@ mod tests {
     }
 
     #[test]
+    fn codex_v2_thread_start_response_includes_thread_view_and_native_id() {
+        let mut server = initialized_codex_server();
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"title":"Draft"}}"#,
+            )
+            .expect("thread/start should return a response");
+        let value: Value = serde_json::from_str(&response).expect("thread/start response JSON");
+
+        assert_eq!(value["result"]["threadId"], "thread_1");
+        assert_eq!(value["result"]["thread"]["id"], "thread_1");
+        assert_eq!(value["result"]["thread"]["preview"], "Draft");
+        assert_eq!(value["result"]["thread"]["source"], "appServer");
+        assert_eq!(value["result"]["thread"]["status"]["type"], "idle");
+    }
+
+    #[test]
+    fn codex_v2_turn_start_and_completed_notifications_include_turn_view() {
+        let bridge = Arc::new(SequencedRuntimeBridge::new([
+            RuntimeTurnOutcome::Completed {
+                output: "hello".to_string(),
+            },
+        ]));
+        let mut server = initialized_codex_server_with_bridge(bridge);
+        let thread = server
+            .thread_start(ThreadCreateParams {
+                title: Some("Draft".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread/start should succeed");
+        let _ = server.drain_notifications();
+
+        let started = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id,
+                prompt: "hello".to_string(),
+                reasoning_summary: None,
+            })
+            .expect("turn/start should succeed");
+        let notifications = server.drain_notifications();
+
+        assert_eq!(started.turn_id, "turn_1");
+        assert_eq!(started.turn.as_ref().expect("turn view").id, "turn_1");
+        assert_eq!(
+            started.turn.as_ref().expect("turn view").status,
+            dasclaw_app_server_protocol::CodexTurnStatus::InProgress
+        );
+        let started_notification = notifications
+            .iter()
+            .find(|notification| notification.method == "turn/started")
+            .expect("turn/started should be emitted");
+        assert_eq!(started_notification.params["turn"]["id"], "turn_1");
+        assert_eq!(started_notification.params["turn"]["status"], "inProgress");
+        let completed = notifications
+            .iter()
+            .find(|notification| notification.method == "turn/completed")
+            .expect("turn/completed should be emitted");
+        assert_eq!(completed.params["turn"]["id"], "turn_1");
+        assert_eq!(completed.params["turn"]["status"], "completed");
+    }
+
+    #[test]
+    fn codex_v2_turn_failed_notification_includes_failed_turn_view() {
+        let bridge = Arc::new(SequencedRuntimeBridge::new([RuntimeTurnOutcome::Failed {
+            error: "runtime failed".to_string(),
+        }]));
+        let mut server = initialized_codex_server_with_bridge(bridge);
+        let thread = server
+            .thread_start(ThreadCreateParams {
+                title: Some("Draft".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread/start should succeed");
+        let _ = server.drain_notifications();
+
+        let started = server
+            .turn_start(TurnStartParams {
+                thread_id: thread.thread_id,
+                prompt: "hello".to_string(),
+                reasoning_summary: None,
+            })
+            .expect("turn/start should succeed");
+        let notifications = server.drain_notifications();
+
+        assert_eq!(started.turn_id, "turn_1");
+        let failed = notifications
+            .iter()
+            .find(|notification| notification.method == "turn/failed")
+            .expect("turn/failed should be emitted");
+        assert_eq!(failed.params["turn"]["id"], "turn_1");
+        assert_eq!(failed.params["turn"]["status"], "failed");
+        assert_eq!(failed.params["turn"]["error"]["message"], "runtime failed");
+    }
+
+    #[test]
     fn codex_v2_stdio_notifications_are_declared_by_advertised_profile() {
         let bridge = Arc::new(SequencedRuntimeBridge::new([
             RuntimeTurnOutcome::Delta {
@@ -5218,6 +5394,34 @@ mod tests {
 
     fn initialized_server_with_bridge(bridge: Arc<dyn RuntimeBridge>) -> AppServer {
         initialized_server_with_bridge_and_capabilities(bridge, Vec::new())
+    }
+
+    fn initialized_codex_server() -> AppServer {
+        initialized_codex_server_with_bridge(Arc::new(NoopRuntimeBridge))
+    }
+
+    fn initialized_codex_server_with_bridge(bridge: Arc<dyn RuntimeBridge>) -> AppServer {
+        let mut server = AppServer::with_runtime_bridge(bridge);
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "codex".to_string(),
+                    version: "2.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: Some(WorkspaceInfo {
+                    root: Some("/tmp/workspace".to_string()),
+                    trust: WorkspaceTrust::Unknown,
+                }),
+                requested_capabilities: vec![
+                    CompatibilityProfile::CODEX_APP_SERVER_V2_ID.to_string(),
+                ],
+                model_provider: Some(test_model_provider_config()),
+            })
+            .expect("codex server should initialize");
+        let _ = server.drain_notifications();
+        server
     }
 
     fn initialized_codex_v2_server_with_bridge(bridge: Arc<dyn RuntimeBridge>) -> AppServer {
