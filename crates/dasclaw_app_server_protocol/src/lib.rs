@@ -32,6 +32,16 @@ pub mod method {
     pub const TURN_READ: &str = "turn/read";
     pub const MODEL_LIST: &str = "model/list";
     pub const MODEL_PROVIDER_SELECT_FOR_NEXT_TURN: &str = "modelProvider/selectForNextTurn";
+    pub const APPROVAL_RESPOND: &str = "approval/respond";
+}
+
+pub mod server_request {
+    pub const ITEM_COMMAND_EXECUTION_REQUEST_APPROVAL: &str =
+        "item/commandExecution/requestApproval";
+    pub const ITEM_FILE_CHANGE_REQUEST_APPROVAL: &str = "item/fileChange/requestApproval";
+    pub const ITEM_PERMISSIONS_REQUEST_APPROVAL: &str = "item/permissions/requestApproval";
+    pub const ITEM_TOOL_REQUEST_USER_INPUT: &str = "item/tool/requestUserInput";
+    pub const ITEM_TOOL_CALL: &str = "item/tool/call";
 }
 
 pub mod event {
@@ -53,6 +63,12 @@ pub mod event {
     pub const ITEM_REASONING_SUMMARY_PART_ADDED: &str = "item/reasoning/summaryPartAdded";
     pub const ITEM_REASONING_TEXT_DELTA: &str = "item/reasoning/textDelta";
     pub const ITEM_COMPLETED: &str = "item/completed";
+    pub const SERVER_REQUEST_RESOLVED: &str = "serverRequest/resolved";
+    pub const ITEM_AUTO_APPROVAL_REVIEW_STARTED: &str = "item/autoApprovalReview/started";
+    pub const ITEM_AUTO_APPROVAL_REVIEW_COMPLETED: &str = "item/autoApprovalReview/completed";
+    pub const ITEM_COMMAND_EXECUTION_OUTPUT_DELTA: &str = "item/commandExecution/outputDelta";
+    pub const ITEM_COMMAND_EXECUTION_TERMINAL_INTERACTION: &str =
+        "item/commandExecution/terminalInteraction";
     pub const ERROR: &str = "error";
 }
 
@@ -108,6 +124,60 @@ impl JsonRpcResponse {
             error: Some(error),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JsonRpcClientResponse {
+    pub jsonrpc: String,
+    pub id: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<JsonRpcError>,
+}
+
+impl JsonRpcClientResponse {
+    pub fn ok(id: serde_json::Value, result: impl Serialize) -> Result<Self, serde_json::Error> {
+        Ok(Self {
+            jsonrpc: JSON_RPC_VERSION.to_string(),
+            id,
+            result: Some(serde_json::to_value(result)?),
+            error: None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JsonRpcServerRequest {
+    pub jsonrpc: String,
+    pub id: serde_json::Value,
+    pub method: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<serde_json::Value>,
+}
+
+impl JsonRpcServerRequest {
+    pub fn new(
+        id: impl Serialize,
+        method: impl Into<String>,
+        params: impl Serialize,
+    ) -> Result<Self, serde_json::Error> {
+        Ok(Self {
+            jsonrpc: JSON_RPC_VERSION.to_string(),
+            id: serde_json::to_value(id)?,
+            method: method.into(),
+            params: Some(serde_json::to_value(params)?),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum JsonRpcIncoming {
+    Request(JsonRpcRequest),
+    ClientResponse(JsonRpcClientResponse),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -585,6 +655,34 @@ impl CapabilityMatrix {
             sandbox: declared_future_capability("sandbox"),
         }
     }
+
+    #[must_use]
+    pub fn with_p3_approval_tool_sandbox(mut self) -> Self {
+        self.approval = Capability::implemented(
+            "approval",
+            &[method::APPROVAL_RESPOND],
+            &[
+                server_request::ITEM_COMMAND_EXECUTION_REQUEST_APPROVAL,
+                event::SERVER_REQUEST_RESOLVED,
+            ],
+        );
+        self.tools = Capability::implemented(
+            "tools",
+            &[],
+            &[
+                event::ITEM_COMMAND_EXECUTION_OUTPUT_DELTA,
+                event::ITEM_COMMAND_EXECUTION_TERMINAL_INTERACTION,
+            ],
+        );
+        self.sandbox = Capability::new(
+            "sandbox",
+            CapabilityStatus::Implemented,
+            &[],
+            &[],
+            Some("runtime bridge reports sandbox-ready execution".to_string()),
+        );
+        self
+    }
 }
 
 fn declared_future_capability(id: &'static str) -> Capability {
@@ -952,6 +1050,13 @@ fn phase_one_methods() -> Vec<MethodSchema> {
             "ModelProviderSelectForNextTurnResponse",
             true,
         ),
+        MethodSchema::new(
+            method::APPROVAL_RESPOND,
+            "approval",
+            Some("ApprovalResponsePayload"),
+            "ServerRequestResolvedEvent",
+            true,
+        ),
     ]
 }
 
@@ -1003,6 +1108,21 @@ fn phase_one_events() -> Vec<EventSchema> {
             "ReasoningTextDeltaEvent",
         ),
         EventSchema::new(event::ITEM_COMPLETED, "session", "ItemCompletedEvent"),
+        EventSchema::new(
+            event::SERVER_REQUEST_RESOLVED,
+            "approval",
+            "ServerRequestResolvedEvent",
+        ),
+        EventSchema::new(
+            event::ITEM_COMMAND_EXECUTION_OUTPUT_DELTA,
+            "tools",
+            "CommandExecutionOutputDeltaEvent",
+        ),
+        EventSchema::new(
+            event::ITEM_COMMAND_EXECUTION_TERMINAL_INTERACTION,
+            "tools",
+            "CommandExecutionTerminalInteractionEvent",
+        ),
         EventSchema::new(event::ERROR, "session", "ErrorEvent"),
     ]
 }
@@ -1444,6 +1564,92 @@ pub struct CodexGitInfo {
     pub origin_url: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandExecutionApprovalRequest {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    pub description: String,
+    pub display_parameters: serde_json::Value,
+    pub allow_always: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionsApprovalRequest {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub description: String,
+    pub display_parameters: serde_json::Value,
+    pub allow_always: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+pub enum AppServerApprovalDecision {
+    Approve,
+    Reject {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    ApproveAlways,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalResponsePayload {
+    pub decision: AppServerApprovalDecision,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServerRequestResolutionOutcome {
+    Approved,
+    Rejected,
+    TimedOut,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerRequestResolvedEvent {
+    pub request_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    pub outcome: ServerRequestResolutionOutcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandExecutionOutputDeltaEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub delta: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandExecutionTerminalInteractionEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub message: String,
+    pub is_error: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadCreatedEvent {
@@ -1739,6 +1945,24 @@ impl ServerNotification {
 
     pub fn item_completed(event: ItemCompletedEvent) -> Result<Self, serde_json::Error> {
         Self::new(event::ITEM_COMPLETED, event)
+    }
+
+    pub fn server_request_resolved(
+        event: ServerRequestResolvedEvent,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::SERVER_REQUEST_RESOLVED, event)
+    }
+
+    pub fn command_execution_output_delta(
+        event: CommandExecutionOutputDeltaEvent,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::ITEM_COMMAND_EXECUTION_OUTPUT_DELTA, event)
+    }
+
+    pub fn command_execution_terminal_interaction(
+        event: CommandExecutionTerminalInteractionEvent,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::ITEM_COMMAND_EXECUTION_TERMINAL_INTERACTION, event)
     }
 
     pub fn error(event: ErrorEvent) -> Result<Self, serde_json::Error> {
@@ -2137,6 +2361,43 @@ mod tests {
         assert_eq!(value["jsonrpc"], JSON_RPC_VERSION);
         assert_eq!(value["id"], "req_1");
         assert_eq!(value["error"]["data"]["code"], "UNKNOWN_METHOD");
+    }
+
+    #[test]
+    fn json_rpc_incoming_distinguishes_requests_from_client_responses() {
+        let request: JsonRpcIncoming = serde_json::from_value(serde_json::json!({
+            "jsonrpc": JSON_RPC_VERSION,
+            "id": "x",
+            "method": "health/check"
+        }))
+        .expect("request should deserialize as incoming JSON-RPC message");
+        let response: JsonRpcIncoming = serde_json::from_value(serde_json::json!({
+            "jsonrpc": JSON_RPC_VERSION,
+            "id": "approval_x",
+            "result": {
+                "decision": {"kind": "approve"}
+            }
+        }))
+        .expect("client response should deserialize as incoming JSON-RPC message");
+
+        match request {
+            JsonRpcIncoming::Request(request) => {
+                assert_eq!(request.method, "health/check");
+            }
+            JsonRpcIncoming::ClientResponse(_) => {
+                panic!("method-bearing incoming message should be a request");
+            }
+        }
+
+        match response {
+            JsonRpcIncoming::ClientResponse(response) => {
+                assert_eq!(response.id, serde_json::json!("approval_x"));
+                assert!(response.result.is_some());
+            }
+            JsonRpcIncoming::Request(_) => {
+                panic!("result-bearing incoming message should be a client response");
+            }
+        }
     }
 
     #[test]
@@ -2601,5 +2862,284 @@ mod tests {
                 .expect("delta should be text")
                 .contains("<think>")
         );
+    }
+
+    #[test]
+    fn p3_capability_helper_advertises_approval_tools_and_sandbox_contracts() {
+        let matrix = CapabilityMatrix::phase_one().with_p3_approval_tool_sandbox();
+        let schema = ProtocolSchemaResponse::phase_one(matrix.clone());
+        let supported_methods = schema
+            .methods
+            .iter()
+            .map(|method| method.method.as_str())
+            .collect::<Vec<_>>();
+        let supported_notifications = schema
+            .events
+            .iter()
+            .map(|event| event.event.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(matrix.approval.status, CapabilityStatus::Implemented);
+        assert_eq!(matrix.tools.status, CapabilityStatus::Implemented);
+        assert_eq!(matrix.sandbox.status, CapabilityStatus::Implemented);
+        assert_eq!(
+            matrix.approval.methods,
+            vec![method::APPROVAL_RESPOND.to_string()]
+        );
+        assert_eq!(
+            matrix.approval.events,
+            vec![
+                server_request::ITEM_COMMAND_EXECUTION_REQUEST_APPROVAL.to_string(),
+                event::SERVER_REQUEST_RESOLVED.to_string(),
+            ]
+        );
+        assert_eq!(matrix.tools.methods, Vec::<String>::new());
+        assert_eq!(
+            matrix.tools.events,
+            vec![
+                event::ITEM_COMMAND_EXECUTION_OUTPUT_DELTA.to_string(),
+                event::ITEM_COMMAND_EXECUTION_TERMINAL_INTERACTION.to_string(),
+            ]
+        );
+        assert!(
+            !matrix
+                .approval
+                .events
+                .contains(&server_request::ITEM_PERMISSIONS_REQUEST_APPROVAL.to_string())
+        );
+        assert!(
+            !matrix
+                .approval
+                .events
+                .contains(&event::ITEM_AUTO_APPROVAL_REVIEW_STARTED.to_string())
+        );
+        assert!(
+            !matrix
+                .tools
+                .events
+                .contains(&server_request::ITEM_TOOL_CALL.to_string())
+        );
+        assert!(
+            !matrix
+                .tools
+                .events
+                .contains(&server_request::ITEM_TOOL_REQUEST_USER_INPUT.to_string())
+        );
+        assert!(
+            matrix
+                .sandbox
+                .reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("runtime bridge reports sandbox-ready execution")
+        );
+        assert!(supported_methods.contains(&method::APPROVAL_RESPOND));
+        assert!(supported_notifications.contains(&event::ITEM_COMMAND_EXECUTION_OUTPUT_DELTA));
+        assert!(
+            supported_notifications.contains(&event::ITEM_COMMAND_EXECUTION_TERMINAL_INTERACTION)
+        );
+        assert!(supported_notifications.contains(&event::SERVER_REQUEST_RESOLVED));
+    }
+
+    #[test]
+    fn server_initiated_request_serializes_as_json_rpc_request_with_id() {
+        let request = JsonRpcServerRequest::new(
+            "approval_00000000-0000-0000-0000-000000000001",
+            server_request::ITEM_COMMAND_EXECUTION_REQUEST_APPROVAL,
+            CommandExecutionApprovalRequest {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                item_id: "turn_1:tool:bash".to_string(),
+                tool_call_id: "call_1".to_string(),
+                tool_name: "bash".to_string(),
+                command: Some("echo hello".to_string()),
+                description: "approve call to bash".to_string(),
+                display_parameters: serde_json::json!({"cmd": "echo hello"}),
+                allow_always: true,
+            },
+        )
+        .expect("server approval request should serialize");
+        let value =
+            serde_json::to_value(&request).expect("server approval request should serialize");
+        let round_trip: JsonRpcServerRequest =
+            serde_json::from_value(value.clone()).expect("server request should deserialize");
+
+        assert_eq!(value["jsonrpc"], JSON_RPC_VERSION);
+        assert_eq!(value["id"], "approval_00000000-0000-0000-0000-000000000001");
+        assert_eq!(
+            value["method"],
+            server_request::ITEM_COMMAND_EXECUTION_REQUEST_APPROVAL
+        );
+        assert_eq!(value["params"]["threadId"], "thread_1");
+        assert_eq!(value["params"]["displayParameters"]["cmd"], "echo hello");
+        assert!(value["params"].get("rawArguments").is_none());
+        assert!(
+            value.get("id").is_some(),
+            "server request must not be a notification"
+        );
+        assert_eq!(
+            round_trip.id,
+            serde_json::json!("approval_00000000-0000-0000-0000-000000000001")
+        );
+    }
+
+    #[test]
+    fn client_response_deserializes_approval_decision_payload() {
+        let approve_round_trip: JsonRpcClientResponse = serde_json::from_value(serde_json::json!({
+            "jsonrpc": JSON_RPC_VERSION,
+            "id": "approval_approve",
+            "result": {
+                "decision": {"kind": "approve"}
+            }
+        }))
+        .expect("approve response should deserialize from JSON wire shape");
+        let reject_round_trip: JsonRpcClientResponse = serde_json::from_value(serde_json::json!({
+            "jsonrpc": JSON_RPC_VERSION,
+            "id": "approval_reject",
+            "result": {
+                "decision": {
+                    "kind": "reject",
+                    "data": {"reason": "user denied command"}
+                }
+            }
+        }))
+        .expect("reject response should deserialize from JSON wire shape");
+        let failure_round_trip: JsonRpcClientResponse = serde_json::from_value(serde_json::json!({
+            "jsonrpc": JSON_RPC_VERSION,
+            "id": "approval_error",
+            "error": {
+                "code": -32000,
+                "message": "approval failed"
+            }
+        }))
+        .expect("error response should deserialize from JSON wire shape");
+        let approve: ApprovalResponsePayload = serde_json::from_value(
+            approve_round_trip
+                .result
+                .expect("approve response should contain result"),
+        )
+        .expect("approve payload should deserialize");
+        let reject: ApprovalResponsePayload = serde_json::from_value(
+            reject_round_trip
+                .result
+                .expect("reject response should contain result"),
+        )
+        .expect("reject payload should deserialize");
+
+        assert_eq!(approve_round_trip.id, serde_json::json!("approval_approve"));
+        assert_eq!(approve.decision, AppServerApprovalDecision::Approve);
+        assert_eq!(reject_round_trip.id, serde_json::json!("approval_reject"));
+        assert_eq!(
+            reject.decision,
+            AppServerApprovalDecision::Reject {
+                reason: Some("user denied command".to_string()),
+            }
+        );
+        assert_eq!(failure_round_trip.id, serde_json::json!("approval_error"));
+        assert_eq!(
+            failure_round_trip
+                .error
+                .expect("error response should contain error")
+                .message,
+            "approval failed"
+        );
+    }
+
+    #[test]
+    fn server_request_resolved_notification_hides_decision_reason_when_absent() {
+        let output_delta =
+            ServerNotification::command_execution_output_delta(CommandExecutionOutputDeltaEvent {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                item_id: "turn_1:tool:bash".to_string(),
+                delta: "hello\n".to_string(),
+            })
+            .expect("command output delta notification should serialize");
+        let terminal_interaction = ServerNotification::command_execution_terminal_interaction(
+            CommandExecutionTerminalInteractionEvent {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                item_id: "turn_1:tool:bash".to_string(),
+                message: "press enter to continue".to_string(),
+                is_error: false,
+            },
+        )
+        .expect("terminal interaction notification should serialize");
+        let resolved = ServerNotification::server_request_resolved(ServerRequestResolvedEvent {
+            request_id: "approval_00000000-0000-0000-0000-000000000001".to_string(),
+            thread_id: Some("thread_1".to_string()),
+            turn_id: Some("turn_1".to_string()),
+            outcome: ServerRequestResolutionOutcome::Approved,
+            reason: None,
+        })
+        .expect("server request resolved notification should serialize");
+
+        assert_eq!(
+            output_delta.method,
+            event::ITEM_COMMAND_EXECUTION_OUTPUT_DELTA
+        );
+        assert_eq!(output_delta.params["itemId"], "turn_1:tool:bash");
+        assert_eq!(output_delta.params["delta"], "hello\n");
+        assert_eq!(
+            terminal_interaction.method,
+            event::ITEM_COMMAND_EXECUTION_TERMINAL_INTERACTION
+        );
+        assert_eq!(
+            terminal_interaction.params["message"],
+            "press enter to continue"
+        );
+        assert_eq!(terminal_interaction.params["isError"], false);
+        assert_eq!(resolved.method, event::SERVER_REQUEST_RESOLVED);
+        assert_eq!(
+            resolved.params["requestId"],
+            "approval_00000000-0000-0000-0000-000000000001"
+        );
+        assert_eq!(resolved.params["outcome"], "approved");
+        assert!(resolved.params.get("reason").is_none());
+    }
+
+    #[test]
+    fn tool_lifecycle_server_requests_are_stable() {
+        let tool_call = JsonRpcServerRequest::new(
+            "tool_call_00000000-0000-0000-0000-000000000001",
+            server_request::ITEM_TOOL_CALL,
+            serde_json::json!({
+                "threadId": "thread_1",
+                "turnId": "turn_1",
+                "itemId": "turn_1:tool:bash",
+                "toolCallId": "call_1",
+                "toolName": "bash",
+                "displayParameters": {"cmd": "echo hello"}
+            }),
+        )
+        .expect("tool call server request should serialize");
+        let user_input = JsonRpcServerRequest::new(
+            "tool_input_00000000-0000-0000-0000-000000000001",
+            server_request::ITEM_TOOL_REQUEST_USER_INPUT,
+            serde_json::json!({
+                "threadId": "thread_1",
+                "turnId": "turn_1",
+                "itemId": "turn_1:tool:prompt",
+                "toolCallId": "call_2",
+                "toolName": "prompt",
+                "prompt": "continue?"
+            }),
+        )
+        .expect("tool user input server request should serialize");
+        let tool_call_params = tool_call
+            .params
+            .expect("tool call server request should include params");
+        let user_input_params = user_input
+            .params
+            .expect("tool user input server request should include params");
+
+        assert_eq!(tool_call.method, server_request::ITEM_TOOL_CALL);
+        assert_eq!(tool_call_params["toolName"], "bash");
+        assert_eq!(tool_call_params["displayParameters"]["cmd"], "echo hello");
+        assert_eq!(
+            user_input.method,
+            server_request::ITEM_TOOL_REQUEST_USER_INPUT
+        );
+        assert_eq!(user_input_params["prompt"], "continue?");
     }
 }

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   JsonRpcLineParser,
   buildJsonRpcRequestLine,
+  buildJsonRpcResponseLine,
   classifyJsonRpcMessage,
   resolveBundledAppServerBinary,
   resolveDefaultAppServerLaunchOptions
@@ -74,6 +75,50 @@ describe('app-server JSON-RPC helpers', () => {
         params: { delta: 'Hi' }
       }
     ])
+  })
+
+  it('classifies app-server JSON-RPC requests separately from notifications', () => {
+    const message = classifyJsonRpcMessage({
+      jsonrpc: '2.0',
+      id: 'approval_1',
+      method: 'item/commandExecution/requestApproval',
+      params: {
+        threadId: 'thread_1',
+        turnId: 'turn_1',
+        itemId: 'turn_1:tool:bash',
+        toolCallId: 'call_1',
+        toolName: 'bash',
+        description: 'approve call to bash',
+        displayParameters: { cmd: 'echo hello' },
+        allowAlways: true
+      }
+    })
+
+    expect(message).toEqual({
+      type: 'server-request',
+      id: 'approval_1',
+      method: 'item/commandExecution/requestApproval',
+      params: {
+        threadId: 'thread_1',
+        turnId: 'turn_1',
+        itemId: 'turn_1:tool:bash',
+        toolCallId: 'call_1',
+        toolName: 'bash',
+        description: 'approve call to bash',
+        displayParameters: { cmd: 'echo hello' },
+        allowAlways: true
+      }
+    })
+  })
+
+  it('builds app-server client response lines for approval decisions', () => {
+    expect(
+      buildJsonRpcResponseLine('approval_1', {
+        decision: { kind: 'reject', data: { reason: 'not allowed' } }
+      })
+    ).toBe(
+      '{"jsonrpc":"2.0","id":"approval_1","result":{"decision":{"kind":"reject","data":{"reason":"not allowed"}}}}\n'
+    )
   })
 })
 

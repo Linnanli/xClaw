@@ -16,6 +16,8 @@ import {
 } from '@assistant-ui/react'
 
 import type {
+  AppServerApprovalRequest,
+  AppServerNotification,
   AppServerStatus,
   ModelProviderSelectForNextTurnResponse,
   RendererModelProviderConfig
@@ -32,7 +34,10 @@ import {
   userMessage
 } from '../lib/assistantMessages'
 import { createAppServerTurnTracker } from '../lib/appServerTurnTracker'
-import type { AppServerAssistantContentPart } from '../lib/appServerTurnTracker'
+import type {
+  AppServerAssistantContentPart,
+  AppServerTurnTracker
+} from '../lib/appServerTurnTracker'
 
 type DasclawAssistantRuntime = {
   runtime: AssistantRuntime
@@ -105,21 +110,24 @@ export function useDasclawAssistantRuntime(): DasclawAssistantRuntime {
   const [status, setStatus] = useState<AppServerStatus>()
   const threadIdRef = useRef<string | undefined>(undefined)
   const pendingTurnMessageIdsRef = useRef(new Map<string, string>())
-  const turnTrackerRef = useRef(
-    createAppServerTurnTracker({
+  const turnTrackerRef = useRef<AppServerTurnTracker | undefined>(undefined)
+
+  useEffect(() => {
+    const turnTracker = createAppServerTurnTracker({
       onContentDelta: (turnId, part) => {
         const pendingId = pendingTurnMessageIdsRef.current.get(turnId)
         if (!pendingId) return
         appendPendingAssistantMessageContentDelta(setMessages, pendingId, part)
       }
     })
-  )
-
-  useEffect(() => {
-    const turnTracker = turnTrackerRef.current
+    turnTrackerRef.current = turnTracker
     void window.desktopAppServer.getStatus().then(setStatus)
     const removeStatusListener = window.desktopAppServer.onStatusChange(setStatus)
     const removeNotificationListener = window.desktopAppServer.onNotification((notification) => {
+      if (isApprovalRequest(notification)) {
+        rejectApprovalUntilUiExists(notification)
+        return
+      }
       turnTracker.handleNotification(notification)
     })
 
@@ -127,10 +135,12 @@ export function useDasclawAssistantRuntime(): DasclawAssistantRuntime {
       removeStatusListener()
       removeNotificationListener()
       turnTracker.clear()
+      turnTrackerRef.current = undefined
     }
   }, [])
 
   const runPromptTurn = useCallback(async (pendingId: string, prompt: string) => {
+    const turnTracker = requireTurnTracker(turnTrackerRef)
     const threadId = await ensureThread(threadIdRef, prompt)
     const started = await window.desktopAppServer.request<unknown>('turn/start', {
       threadId,
@@ -138,11 +148,11 @@ export function useDasclawAssistantRuntime(): DasclawAssistantRuntime {
     })
     const turnId = readTurnId(started)
     pendingTurnMessageIdsRef.current.set(turnId, pendingId)
-    for (const part of turnTrackerRef.current.getTurnContent(turnId)) {
+    for (const part of turnTracker.getTurnContent(turnId)) {
       appendPendingAssistantMessageContentDelta(setMessages, pendingId, part)
     }
     try {
-      return await turnTrackerRef.current.waitForTurnCompletion(turnId)
+      return await turnTracker.waitForTurnCompletion(turnId)
     } finally {
       pendingTurnMessageIdsRef.current.delete(turnId)
     }
@@ -238,6 +248,33 @@ function modelProviderUnavailableOption(message: string): AssistantModelOption {
     description: message,
     disabled: true
   }
+}
+
+function isApprovalRequest(
+  notification: AppServerNotification
+): notification is AppServerApprovalRequest {
+  return (
+    (notification.method === 'item/commandExecution/requestApproval' ||
+      notification.method === 'item/permissions/requestApproval') &&
+    'requestId' in notification
+  )
+}
+
+function rejectApprovalUntilUiExists(notification: AppServerApprovalRequest): void {
+  void window.desktopAppServer.request('approval/respond', {
+    requestId: notification.requestId,
+    decision: {
+      kind: 'reject',
+      data: { reason: 'renderer approval UI is not implemented' }
+    }
+  })
+}
+
+function requireTurnTracker(
+  turnTrackerRef: MutableRefObject<AppServerTurnTracker | undefined>
+): AppServerTurnTracker {
+  if (!turnTrackerRef.current) throw new Error('app-server turn tracker is not initialized')
+  return turnTrackerRef.current
 }
 
 function errorMessage(error: unknown): string {

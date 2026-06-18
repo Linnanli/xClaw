@@ -1,7 +1,7 @@
 # Dasclaw app-server 与 Codex app-server 协议缺口对照表
 
-> 日期：2026-06-17
-> 状态：能力补齐参考（删除线表示本轮 P0-P2 已完成）
+> 日期：2026-06-18
+> 状态：能力补齐参考（删除线表示本轮 P0-P3 已完成；未划掉项仍按后续计划处理）
 > 目标：列出 `codex-cli-main` app-server 的协议面，和当前 `dasclaw-app-server` 做逐域对照，区分“只差协议 shape”、“agent 框架 `crates` 已有底座但 app-server 未接线”和“产品能力本身未定义”。
 
 ## 0. 过程透明记录
@@ -21,7 +21,7 @@
 |---|---|---|
 | Level 1 语义层 | `semantic_search_nodes_tool` 查询 Codex app-server protocol / Dasclaw capability matrix / compatibility profile 等语义 | 对全仓查询曾退化为 keyword 且 0 命中；不把它作为否定结论的唯一依据。追加查询可命中 graph 但偏向旧 `desktop-client/ironclaw` capability 符号，不能替代精确 schema 对账 |
 | Level 2 符号层 | 当前 Codex App 工具面未暴露可调用的 `execute_lsp`；`tool_search` 未返回 LSP 执行工具 | 本文不伪装成 LSP 结论，改用生成 TypeScript union、Rust 常量、Rust router 行号和 `rg` 精确检索补强 |
-| Level 3 字面层 | Codex 生成协议 union：`codex-cli-main/codex-rs/app-server-protocol/schema/typescript/{ClientRequest,ServerNotification,ServerRequest,ClientNotification}.ts`；Dasclaw 常量、能力矩阵、router：`crates/dasclaw_app_server_protocol/src/lib.rs`、`crates/dasclaw_app_server/src/lib.rs` | Codex：74 个 `ClientRequest`、61 个 `ServerNotification`、9 个 `ServerRequest`、1 个 `ClientNotification`。Dasclaw 当前：17 个 method、19 个 event，且 router 只路由这些 method |
+| Level 3 字面层 | Codex 生成协议 union：`codex-cli-main/codex-rs/app-server-protocol/schema/typescript/{ClientRequest,ServerNotification,ServerRequest,ClientNotification}.ts`；Dasclaw 常量、能力矩阵、router：`crates/dasclaw_app_server_protocol/src/lib.rs`、`crates/dasclaw_app_server/src/lib.rs` | Codex：74 个 `ClientRequest`、61 个 `ServerNotification`、9 个 `ServerRequest`、1 个 `ClientNotification`。Dasclaw 当前：18 个 method、22 个 event，并新增 JSON-RPC `ServerRequest` response path；router 只路由这些 method |
 
 已检查 `dasclaw-app-server / codex app-server protocol gap matrix` 是否已有，结论：已有 `docs/plans/dasclaw-app-server-protocol-v0.md`、`docs/plans/dasclaw-app-server-ownership-matrix.md`、`docs/plans/dasclaw-codex-app-server-ai-sdk-compat-plan.md`，但未发现“Codex 全量 ClientRequest / ServerNotification / ServerRequest / ClientNotification 与 Dasclaw 当前协议逐域缺口”的对照表；本文补齐该空白。
 
@@ -39,26 +39,26 @@
 | `ServerNotification.ts:69` | Codex 服务端通知 union 一行列出 61 个 notification |
 | `ServerRequest.ts:18` | Codex 服务端发起请求 union 一行列出 9 个 request |
 | `ClientNotification.ts:5` | Codex 客户端 notification 只有 `initialized` |
-| `crates/dasclaw_app_server_protocol/src/lib.rs` | Dasclaw 当前常量定义 17 个 method、19 个 event；`model/list` 已进入 protocol schema |
-| `crates/dasclaw_app_server_protocol/src/lib.rs` | Dasclaw Phase 1 实现 `protocol`、`lifecycle`、`health`、`session`、`model_provider`；`approval`、`dlp_policy`、`tools`、`jobs`、`skills`、`mcp`、`sandbox`、`logs` 是 declared future |
-| `crates/dasclaw_app_server_protocol/src/lib.rs` | `codex_app_server_v2` profile 明确是 `ChatSessionSubset`，只列 `initialize`、`thread/start`、`thread/read`、`thread/list`、`turn/start`、`turn/interrupt`、`model/list` 并 opt out 多个 Codex 能力 |
-| `crates/dasclaw_app_server/src/lib.rs` | Dasclaw router 只实际路由当前 17 个 method，其他 method 会落到 `method_not_found` |
-| `crates/dasclaw_app_server/src/lib.rs:897-923` | 运行时健康状态明确显示 tools / sandbox / jobs / skills / mcp disabled，DLP policy unavailable fail-safe |
+| `crates/dasclaw_app_server_protocol/src/lib.rs` | Dasclaw 当前常量定义 18 个 method、22 个 event；`model/list` 与 `approval/respond` 已进入 protocol schema |
+| `crates/dasclaw_app_server_protocol/src/lib.rs` | Dasclaw Phase 1 实现 `protocol`、`lifecycle`、`health`、`session`、`model_provider`；P3 feature-gated runtime 下可启用 `approval` / `tools` / `sandbox` 子集；`dlp_policy`、`jobs`、`skills`、`mcp`、`logs` 仍是 declared future |
+| `crates/dasclaw_app_server_protocol/src/lib.rs` | `codex_app_server_v2` profile 明确是 `ChatSessionSubset`，只列 `initialize`、`thread/start`、`thread/read`、`thread/list`、`turn/start`、`turn/interrupt`、`model/list` 并 opt out 完整 tool / approval / sandbox 等 Codex 能力 |
+| `crates/dasclaw_app_server/src/lib.rs` | Dasclaw router 只实际路由当前 18 个 method，其他 method 会落到 `method_not_found` |
+| `crates/dasclaw_app_server/src/lib.rs` | 运行时健康状态按 bridge feature gate 呈现 tools / sandbox；jobs / skills / mcp disabled，DLP policy unavailable fail-safe |
 
 结论分三层：
 
 | 层级 | 判断 |
 |---|---|
-| 本轮已完成 | `model/list`；`thread/start` / `turn/start` 附带 Codex `thread` / `turn` view；`thread/started`、`turn/started`、`turn/completed`、`turn/failed` 附带 Codex-compatible view；`desktop-app` 已兼容 native 与 Codex shape |
+| 本轮已完成 | `model/list`；`thread/start` / `turn/start` 附带 Codex `thread` / `turn` view；`turn/interrupt` Codex params/empty response alias；`thread/started`、`turn/started`、`turn/completed`、`turn/failed` 附带 Codex-compatible view；`item/started`、`item/agentMessage/delta`、`item/reasoning/summaryTextDelta`、`item/completed` 已接 Codex v2 profile 下的 producer；P3 command approval server-request loop、`approval/respond`、tool output/result notification、timeout/cancel/shutdown fail-safe；`desktop-app` 已兼容 native 与 Codex shape |
 | 协议同名/近似可用 | `initialize`、`thread/start`、`thread/read`、`thread/list`、`turn/start`、`turn/interrupt`、若干 item/turn streaming notification |
-| 协议缺口但可通过 compatibility view 补 | `item/completed` payload shape、`thread/read` / `thread/list` 的完整 Codex `Thread` view、更多 item/turn 细粒度 payload shape |
-| agent 框架 `crates` 已有底座但 app-server 未接线 | approval / tool execution / sandbox primitives 已在 `crates` 下的 runtime/tool/sandbox 相关 crate 中存在；缺的是 app-server 暴露、订阅事件、决策回传、service health、capability gating 和 Codex-style request/notification view |
+| 协议缺口但可通过 compatibility view 补 | `thread/read` / `thread/list` 的完整 Codex `Thread` view、更多 item/turn 细粒度 payload shape |
+| agent 框架 `crates` 已有底座但 app-server 未完全接线 | approval / tool execution / sandbox primitives 已在 `crates` 下的 runtime/tool/sandbox 相关 crate 中存在；P3 已补 command approval request/response、tool lifecycle notification、service health 与 capability gating 子集；缺的是 standalone command/fs service、dynamic tool registry/call、permission/file-change approval producer、MCP elicitation 和更完整的审计面 |
 | 已有分散底座但 app-server 尚未成为 owner | MCP / skills / jobs / logs / filesystem / git / search / config 等在 `crates`、历史参考实现或 `desktop-app` manager 中有不同程度的实现；缺的是 app-server service owner、协议接线、能力健康状态和安全边界 |
 | 产品/服务能力尚未定义或未迁移 | account / plugin marketplace / app list / device key / external agent import / Codex review 等仍偏 Codex 产品域或需要先定义 Dasclaw 产品语义 |
 
 ## 2. Codex app-server 协议清单
 
-> 标记说明：删除线表示 Dasclaw 本轮 P0-P2 已补齐或已接入 Codex-compatible view；同一行里未划掉的协议仍按后续计划处理。
+> 标记说明：删除线表示 Dasclaw 本轮 P0-P3 已补齐、已接入 Codex-compatible view，或已有受测的协议/桥接子集；同一行里未划掉的协议仍按后续计划处理。
 
 ### 2.1 ClientRequest：74 个
 
@@ -68,7 +68,7 @@
 |---|---|
 | 初始化 | `initialize` |
 | Thread lifecycle / history | ~~`thread/start`~~、`thread/resume`、`thread/fork`、`thread/archive`、`thread/unsubscribe`、`thread/name/set`、`thread/metadata/update`、`thread/unarchive`、`thread/compact/start`、`thread/shellCommand`、`thread/approveGuardianDeniedAction`、`thread/rollback`、`thread/list`、`thread/loaded/list`、`thread/read`、`thread/turns/list`、`thread/inject_items` |
-| Turn lifecycle | ~~`turn/start`~~、`turn/steer`、`turn/interrupt` |
+| Turn lifecycle | ~~`turn/start`~~、`turn/steer`、~~`turn/interrupt`~~ |
 | Skills / plugins / marketplace / apps | `skills/list`、`skills/config/write`、`plugin/list`、`plugin/read`、`plugin/install`、`plugin/uninstall`、`marketplace/add`、`marketplace/remove`、`marketplace/upgrade`、`app/list` |
 | Device key | `device/key/create`、`device/key/public`、`device/key/sign` |
 | Filesystem | `fs/readFile`、`fs/writeFile`、`fs/createDirectory`、`fs/getMetadata`、`fs/readDirectory`、`fs/remove`、`fs/copy`、`fs/watch`、`fs/unwatch` |
@@ -89,8 +89,8 @@
 | Thread | ~~`thread/started`~~、`thread/status/changed`、`thread/archived`、`thread/unarchived`、`thread/closed`、`thread/name/updated`、`thread/goal/updated`、`thread/goal/cleared`、`thread/tokenUsage/updated`、`thread/compacted` |
 | Realtime | `thread/realtime/started`、`thread/realtime/itemAdded`、`thread/realtime/transcript/delta`、`thread/realtime/transcript/done`、`thread/realtime/outputAudio/delta`、`thread/realtime/sdp`、`thread/realtime/error`、`thread/realtime/closed` |
 | Turn | ~~`turn/started`~~、~~`turn/completed`~~、`turn/diff/updated`、`turn/plan/updated` |
-| Item streaming | `item/started`、`item/completed`、`rawResponseItem/completed`、`item/agentMessage/delta`、`item/plan/delta`、`item/reasoning/summaryTextDelta`、`item/reasoning/summaryPartAdded`、`item/reasoning/textDelta` |
-| Approval / command / file change | `item/autoApprovalReview/started`、`item/autoApprovalReview/completed`、`command/exec/outputDelta`、`item/commandExecution/outputDelta`、`item/commandExecution/terminalInteraction`、`item/fileChange/outputDelta`、`item/fileChange/patchUpdated`、`serverRequest/resolved` |
+| Item streaming | ~~`item/started`~~、~~`item/completed`~~、`rawResponseItem/completed`、~~`item/agentMessage/delta`~~、`item/plan/delta`、~~`item/reasoning/summaryTextDelta`~~、`item/reasoning/summaryPartAdded`、`item/reasoning/textDelta` |
+| Approval / command / file change | `item/autoApprovalReview/started`、`item/autoApprovalReview/completed`、`command/exec/outputDelta`、~~`item/commandExecution/outputDelta`~~、~~`item/commandExecution/terminalInteraction`~~、`item/fileChange/outputDelta`、`item/fileChange/patchUpdated`、~~`serverRequest/resolved`~~ |
 | MCP | `item/mcpToolCall/progress`、`mcpServer/oauthLogin/completed`、`mcpServer/startupStatus/updated` |
 | Account / app / skills | `account/updated`、`account/rateLimits/updated`、`account/login/completed`、`app/list/updated`、`skills/changed` |
 | External / fs / model / fuzzy / hooks / Windows | `externalAgentConfig/import/completed`、`fs/changed`、`model/rerouted`、`model/verification`、`fuzzyFileSearch/sessionUpdated`、`fuzzyFileSearch/sessionCompleted`、`hook/started`、`hook/completed`、`windows/worldWritableWarning`、`windowsSandbox/setupCompleted` |
@@ -101,7 +101,7 @@
 
 | 域 | Codex server-initiated request |
 |---|---|
-| Approval | `item/commandExecution/requestApproval`、`item/fileChange/requestApproval`、`item/permissions/requestApproval`、`applyPatchApproval`、`execCommandApproval` |
+| Approval | ~~`item/commandExecution/requestApproval`~~、`item/fileChange/requestApproval`、`item/permissions/requestApproval`、`applyPatchApproval`、`execCommandApproval` |
 | Tool / user input | `item/tool/requestUserInput`、`item/tool/call` |
 | MCP elicitation | `mcpServer/elicitation/request` |
 | Account token | `account/chatgptAuthTokens/refresh` |
@@ -116,7 +116,7 @@
 
 ## 3. Dasclaw 当前协议清单
 
-### 3.1 Method：17 个
+### 3.1 Method：18 个
 
 来源：`crates/dasclaw_app_server_protocol/src/lib.rs` 与 `phase_one_methods()`。
 
@@ -128,8 +128,9 @@
 | Session / thread | `thread/create`、`thread/start`、`thread/list`、`thread/read` |
 | Session / turn | `turn/start`、`turn/cancel`、`turn/interrupt`、`turn/list`、`turn/read` |
 | Model provider | ~~`model/list`~~、`modelProvider/selectForNextTurn` |
+| Approval | ~~`approval/respond`~~ |
 
-### 3.2 Event：19 个
+### 3.2 Event：22 个
 
 来源：`crates/dasclaw_app_server_protocol/src/lib.rs:36-56` 与 `phase_one_events()`。
 
@@ -138,7 +139,8 @@
 | Protocol | `notifications/initialized` |
 | Lifecycle / health / logs | `lifecycle/changed`、`health/changed`、`capabilities/changed`、`log/entry` |
 | Thread / turn | `thread/created`、~~`thread/started`~~、~~`turn/started`~~、`turn/delta`、~~`turn/completed`~~、~~`turn/failed`~~、`turn/cancelled` |
-| Item streaming | `item/started`、`item/agentMessage/delta`、`item/reasoning/summaryTextDelta`、`item/reasoning/summaryPartAdded`、`item/reasoning/textDelta`、`item/completed` |
+| Item streaming | ~~`item/started`~~、~~`item/agentMessage/delta`~~、~~`item/reasoning/summaryTextDelta`~~、`item/reasoning/summaryPartAdded`、`item/reasoning/textDelta`、~~`item/completed`~~ |
+| Approval / tool | ~~`serverRequest/resolved`~~、~~`item/commandExecution/outputDelta`~~、~~`item/commandExecution/terminalInteraction`~~ |
 | Error | `error` |
 
 ### 3.3 当前 desktop-app 消费面
@@ -168,9 +170,9 @@
 
 | 能力 | 已有底座证据 | app-server 当前缺口 |
 |---|---|---|
-| Approval | `crates/dasclaw_runtime/src/approval.rs` 已有 `ApprovalPolicy`、`ApprovalRequest`、`ApprovalDecision`、`ApprovalInbox`、`Approver`；`Agent::respond_to_approval` 可回填 GUI 决策 | `dasclaw_app_server_protocol` 仍把 `approval` 标成 declared future；app-server 没有 Codex `ServerRequest` 风格的 approval request/resolve loop |
-| Tool execution | `crates/dasclaw_runtime/src/agent.rs` 有 `ToolExecutor`；`AgentBuilder::tool_executor*` 可接 executor；`tool_dispatch.rs` 有 approval gate -> egress -> executor -> sanitizer 的顺序 pipeline | app-server service health 仍显示 `Tools` disabled；协议没有 tool registry/list/call、tool lifecycle notification、dynamic tool call response |
-| Sandbox | `crates/dasclaw_shell_tools`、`crates/dasclaw_sandbox*`、`crates/dasclaw_workspace_cap` 已有 shell sandbox、OS sandbox policy、Linux/Windows sandbox 相关实现 | app-server service health 仍显示 `Sandbox` disabled；协议没有 workspace-bound sandbox adapter、policy negotiation、command/fs/tool 沙箱执行入口 |
+| Approval | `crates/dasclaw_runtime/src/approval.rs` 已有 `ApprovalPolicy`、`ApprovalRequest`、`ApprovalDecision`、`ApprovalInbox`、`Approver`；`Agent::respond_to_approval` 可回填 GUI 决策 | ~~P3 已把 `AgentEvent::ApprovalNeeded` 接成 `item/commandExecution/requestApproval` -> `approval/respond` -> `Agent::respond_to_approval`，并补 `serverRequest/resolved`、timeout/cancel/shutdown fail-safe~~；file-change / permission approval service 仍未作为 app-server producer / owner 暴露 |
+| Tool execution | `crates/dasclaw_runtime/src/agent.rs` 有 `ToolExecutor`；`AgentBuilder::tool_executor*` 可接 executor；`tool_dispatch.rs` 有 approval gate -> egress -> executor -> sanitizer 的顺序 pipeline | ~~P3 已接 `ToolCallStart` / `ToolResult` 到 `item/commandExecution/outputDelta` 与 `item/commandExecution/terminalInteraction`~~；仍没有 tool registry/list/call、dynamic `item/tool/call` response |
+| Sandbox | `crates/dasclaw_shell_tools`、`crates/dasclaw_sandbox*`、`crates/dasclaw_workspace_cap` 已有 shell sandbox、OS sandbox policy、Linux/Windows sandbox 相关实现 | ~~P3 已把 sandbox readiness 放到 runtime bridge feature gate / service health / capability matrix~~；仍没有 standalone command/fs/tool 沙箱执行入口、policy negotiation 或 workspace-bound sandbox adapter |
 | MCP | `crates/dasclaw_mcp` 已有 MCP config/auth/session/transport/client/factory，并且 `McpToolExecutor` 可把 MCP tools 接到 `ToolExecutor` | app-server service health 仍显示 `Mcp` disabled；协议没有 `mcpServer/*` method、OAuth UI flow、resource read、server status、tool-call progress notification |
 | Filesystem / search | `crates/dasclaw_fs_tools` 已有 `ReadFileTool`、grep/glob search、path policy、file guard 等工具 | app-server 没有 Codex `fs/*` method，也没有 watch/unwatch、`fs/changed` notification 或 app-server-owned workspace permission model |
 | Git | `crates/dasclaw_git_tools` 已有 `git_diff`、`git_status`、`git_commit` 等工具 | app-server 没有 Codex `gitDiffToRemote` method，也没有 review/diff notification owner |
@@ -187,7 +189,7 @@
 | 初始化 | `initialize` | 有同名，但 params/response 与 Codex 不同；Dasclaw 要求 `protocolVersion`、`requestedCapabilities`、可带 `modelProvider` | A/B | 若要 Codex client 直连，需要 Codex initialize view；若只服务 desktop-app，保持 native shape 更清楚 |
 | Thread 核心 | ~~`thread/start`~~、`thread/read`、`thread/list` | ~~`thread/start` 已保留 native `threadId` 并附带 Codex `thread` view~~；`thread/read` / `thread/list` 仍需要完整 Codex `Thread` view 对齐 | A/B | `thread/start` 已完成最小 view；后续补 read/list 的完整状态字段、turn/item 容器 |
 | Thread 扩展 | `thread/resume`、`thread/fork`、`thread/archive`、`thread/unarchive`、`thread/unsubscribe`、`thread/name/set`、`thread/metadata/update`、`thread/compact/start`、`thread/shellCommand`、`thread/approveGuardianDeniedAction`、`thread/rollback`、`thread/loaded/list`、`thread/turns/list`、`thread/inject_items` | 当前 router 无这些 method；Dasclaw 只有 `thread/create/start/list/read` | C/D1/D2 | shell/approval/job 等底座部分存在，但还缺 app-server thread persistence、归档/恢复、压缩、inject item 等 owner |
-| Turn 核心 | ~~`turn/start`~~、`turn/interrupt` | ~~`turn/start` 已保留 native `turnId` 并附带 Codex `turn` view~~；`turn/interrupt` 仍复用 cancel params | A/B | `turn/start` 已完成 Codex text input 子集与 `Turn` object response；后续继续核对 interrupt terminal 状态映射 |
+| Turn 核心 | ~~`turn/start`~~、~~`turn/interrupt`~~ | ~~`turn/start` 已保留 native `turnId` 并附带 Codex `turn` view；`turn/interrupt` 已作为 Codex v2 alias 接收 `threadId` / `turnId` 并返回空对象~~ | A/B | `turn/start` 已完成 Codex text input 子集与 `Turn` object response；`turn/interrupt` 已完成当前 cancel/interrupt alias 子集，后续只需随更完整 terminal 状态语义继续校准 |
 | Turn steer | `turn/steer` | `crates/dasclaw_protocol` 有 `ActiveTurnNotSteerable` / `NonSteerableTurnKind` 这类 steer 错误语义；app-server 无 `turn/steer` method | C/D1/D2 | 需要把运行中 turn steer 控制能力接成 app-server owner，不能只补空 handler |
 | Model | ~~`model/list`~~ | ~~已由 app-server 路由并返回 Codex `ModelListResponse`；`desktop-app` 的 `modelProvider/list` 仅保留 renderer alias~~ | A | 已完成；后续若需要再补 pagination/hidden model 等更完整语义 |
 | Skills | `skills/list`、`skills/config/write` | `crates` 有 skill 词汇，历史客户端有参考实现但不是当前 `desktop-app` 目标；app-server capability matrix 标 `skills` declared future，service health disabled | D1/D2 | 需要把 native skills registry/service 明确迁到 app-server；不能直接依赖已废弃 `desktop-client` |
@@ -195,8 +197,8 @@
 | Filesystem | `fs/readFile`、`fs/writeFile`、`fs/createDirectory`、`fs/getMetadata`、`fs/readDirectory`、`fs/remove`、`fs/copy`、`fs/watch`、`fs/unwatch` | FS read/write/search 工具存在；app-server 无 `fs/*` method，sandbox disabled | D1/D2 | 已有文件工具底座，但 app-server 还缺 workspace root、权限、审计、watch/unwatch、`fs/changed`、sandbox/approval 边界 |
 | Command exec | `command/exec`、`command/exec/write`、`command/exec/terminate`、`command/exec/resize` | shell tool 和 sandbox executor 存在；app-server 仍无 command service，tools/sandbox disabled | D1 | 需要把 PTY/进程生命周期、approval、sandbox、output streaming 接成 app-server control-plane |
 | MCP | `mcpServer/oauth/login`、`config/mcpServer/reload`、`mcpServerStatus/list`、`mcpServer/resource/read`、`mcpServer/tool/call` | `crates/dasclaw_mcp` 有 config/auth/session/transport/client/executor；app-server `mcp` declared future，service health disabled | D1 | 需要把现有 MCP registry、OAuth、resource read、tool call、progress/event bridge 接入 app-server |
-| Approval / guardian | `thread/approveGuardianDeniedAction`，以及 ServerRequest 里的 approval 系列 | runtime approval primitive 存在；app-server `approval` declared future，DLP/policy unavailable fail-safe | D1 | 需要把 `AgentEvent::ApprovalNeeded` / `respond_to_approval` 接成 fail-safe app-server request/response loop |
-| Sandbox | `windowsSandbox/setupStart` | sandbox crates / shell sandbox 存在；app-server `sandbox` declared future 且 service health disabled | D1/E | Windows 特定 setup 可不照搬；但 Dasclaw 若要 command/fs/tool 能力，应把现有平台 sandbox 抽象接入 app-server |
+| Approval / guardian | `thread/approveGuardianDeniedAction`，以及 ServerRequest 里的 approval 系列 | ~~runtime command approval 已接成 fail-safe app-server request/response loop~~；guardian denied action、file-change approval、permission approval service 仍未接 | D1 | 下一步应补 guardian/file/permission 语义，而不是再补空 handler |
+| Sandbox | `windowsSandbox/setupStart` | sandbox crates / shell sandbox 存在；P3 runtime bridge 可把 app-server `sandbox` capability / service health 切到 implemented / ready，但仍无 Codex Windows setup method | D1/E | Windows 特定 setup 可不照搬；但 Dasclaw 若要 command/fs/tool 能力，应继续把现有平台 sandbox 抽象接入 app-server |
 | Account/auth/rate limit | `account/login/start`、`account/login/cancel`、`account/logout`、`account/rateLimits/read`、`account/sendAddCreditsNudgeEmail`、`account/read`、`getAuthStatus` | 无 | E | Codex/OpenAI 产品账户域，不属于 Dasclaw native app-server 必需能力 |
 | Config / experimental / feedback / external agent | `config/read`、`config/value/write`、`config/batchWrite`、`configRequirements/read`、`experimentalFeature/list`、`experimentalFeature/enablement/set`、`feedback/upload`、`externalAgentConfig/detect`、`externalAgentConfig/import` | config 数据类型和 provider config 底座存在；app-server 无等价 service surface；external agent import/feedback/experiment 仍偏产品域 | C/D1/E | config 可从现有类型与 desktop-app manager 上收；实验/反馈/external-agent import 需先定义 Dasclaw 产品 owner |
 | Device key | `device/key/create`、`device/key/public`、`device/key/sign` | 无 | E/C | 若 Dasclaw 需要本地设备身份，可另设安全设计；不建议直接借 Codex 名称 |
@@ -211,9 +213,9 @@
 | Thread 状态/历史 | `thread/status/changed`、`thread/archived`、`thread/unarchived`、`thread/closed`、`thread/name/updated`、`thread/goal/updated`、`thread/goal/cleared`、`thread/tokenUsage/updated`、`thread/compacted` | 无 | C/D | 需要 thread lifecycle、goal、usage、compaction 状态 |
 | Turn 核心 | ~~`turn/started`~~、~~`turn/completed`~~ | ~~有同名；Codex profile 下已附带 Codex `turn` view~~；Dasclaw 另有 ~~`turn/failed`~~、`turn/cancelled` | A/B | 已完成 started/completed 的 Codex-compatible 子集，且 native `turn/failed` 已附带 failed `turn` view；`turn/cancelled` 和 Codex 聚合 terminal 语义仍待后续核对 |
 | Turn plan/diff | `turn/diff/updated`、`turn/plan/updated` | `crates/dasclaw_protocol` 有 `PlanDeltaEvent`；app-server 无 Codex turn-level plan/diff notification | D1/D2 | 需要 diff/plan producer 与流式更新，并区分 item-level `PlanDelta` 与 turn-level plan/diff snapshot |
-| Item text/reasoning | `item/started`、`item/agentMessage/delta`、`item/reasoning/summaryTextDelta`、`item/reasoning/summaryPartAdded`、`item/reasoning/textDelta`、`item/completed` | 有同名或近似事件；payload shape 不完全一致 | A/B | 这是最适合先补 Codex-compatible view 的核心 streaming 面 |
-| Item plan/raw/tool/file/command | `rawResponseItem/completed`、`item/plan/delta`、`item/commandExecution/outputDelta`、`item/commandExecution/terminalInteraction`、`item/fileChange/outputDelta`、`item/fileChange/patchUpdated`、`command/exec/outputDelta` | tool/command/file primitives 分散存在，但 app-server 无这些通知面 | D1/D2 | 需要 raw response、plan、command、file change 能力和安全边界 |
-| Approval review | `item/autoApprovalReview/started`、`item/autoApprovalReview/completed`、`serverRequest/resolved` | runtime approval primitive 存在；app-server 无 server-request loop | D1 | 依赖 approval server-request loop |
+| Item text/reasoning | ~~`item/started`~~、~~`item/agentMessage/delta`~~、~~`item/reasoning/summaryTextDelta`~~、`item/reasoning/summaryPartAdded`、`item/reasoning/textDelta`、~~`item/completed`~~ | ~~P1 已把 item started / agent delta / reasoning summary text delta / item completed 接到 Codex v2 profile producer~~；summary part added 与 reasoning text delta 仍只是 schema/profile 面，尚未看到 app-server producer | A/B | 核心文本流已完成受测子集；后续补 reasoning part/text producer 与更完整 item payload shape |
+| Item plan/raw/tool/file/command | `rawResponseItem/completed`、`item/plan/delta`、~~`item/commandExecution/outputDelta`~~、~~`item/commandExecution/terminalInteraction`~~、`item/fileChange/outputDelta`、`item/fileChange/patchUpdated`、`command/exec/outputDelta` | ~~P3 已补 runtime tool output/result 到 commandExecution notification 的桥接~~；raw response、plan、file change、standalone command exec 仍未接 | D1/D2 | 后续需要 raw response、plan、command、file change 能力和安全边界 |
+| Approval review | `item/autoApprovalReview/started`、`item/autoApprovalReview/completed`、~~`serverRequest/resolved`~~ | ~~P3 已补 server-request loop 的 resolved 结果~~；auto approval review started/completed 仍未接 | D1 | 下一步依赖 auto-approval policy/review producer |
 | MCP | `item/mcpToolCall/progress`、`mcpServer/oauthLogin/completed`、`mcpServer/startupStatus/updated` | MCP crate 底座存在；app-server mcp disabled 且无这些 notification | D1 | 需要把 MCP registry / startup / progress event 接到 app-server notification bus |
 | Account/app/skills | `account/updated`、`account/rateLimits/updated`、`account/login/completed`、`app/list/updated`、`skills/changed` | account/app 偏 Codex 产品域；skills 有协议/legacy 参考但 app-server disabled | E/D1/D2 | skills 需要 Dasclaw native registry；account/app list 不应默认照搬 |
 | External/fs/model/fuzzy/hooks | `externalAgentConfig/import/completed`、`fs/changed`、`model/rerouted`、`model/verification`、`fuzzyFileSearch/sessionUpdated`、`fuzzyFileSearch/sessionCompleted`、`hook/started`、`hook/completed` | fs/model/search/hooks 底座分散存在；external agent import 与 Codex fuzzy session 未同构 | C/D1/D2/E | 需根据 Dasclaw 产品目标拆分：fs/model/hooks 可接线，fuzzy session/external agent 需另定协议 |
@@ -222,13 +224,13 @@
 
 ## 7. Codex ServerRequest 对 Dasclaw 缺口表
 
-Codex 的 9 个 `ServerRequest` 在 Dasclaw 当前 app-server 中都没有同构实现。它们不是普通 notification，而是服务端主动向客户端要决策/输入/令牌，因此必须有 request tracking、timeout、fail-safe、UI 决策回传和审计。
+Codex 的 9 个 `ServerRequest` 不是普通 notification，而是服务端主动向客户端要决策/输入/令牌，因此必须有 request tracking、timeout、fail-safe、UI 决策回传和审计。P3 已完成 command execution approval 的 server-request loop；其余 request 仍不能只补协议名。
 
 | Codex ServerRequest | Dasclaw 当前状态 | 分类 | 为什么不能只补协议 |
 |---|---|---|---|
-| `item/commandExecution/requestApproval` | approval / command / sandbox primitive 存在，但 app-server 无 request loop | D1 | 需要把 command execution、approval policy、client decision loop 接成 app-server 协议 |
+| ~~`item/commandExecution/requestApproval`~~ | ~~P3 已接 runtime approval needed -> JSON-RPC server request -> `approval/respond` / client response -> runtime decision；并覆盖 timeout、cancel、shutdown、malformed/error response fail-safe~~ | A/D1 | 后续仍需补审计与更完整 command/fs owner，但 request loop 已有 |
 | `item/fileChange/requestApproval` | 文件工具与 approval primitive 分散存在，但 app-server 无 diff/approval request | D1/D2 | 需要 file change detector、diff/patch model、approval |
-| `item/permissions/requestApproval` | approval primitive 存在，权限模型未作为 app-server service 暴露 | D1/D2 | 需要权限模型和拒绝/允许后的执行路径 |
+| `item/permissions/requestApproval` | 协议常量与 desktop-app 转发路径已存在；未进入 implemented capability，权限模型仍未作为 app-server service producer 暴露 | D1/D2 | 需要权限模型和拒绝/允许后的执行路径 |
 | `item/tool/requestUserInput` | tool execution primitive 存在，user-input suspension 未作为 app-server 协议暴露 | D1/D2 | 需要 tool/user-input suspension 和 resume |
 | `item/tool/call` | `ToolExecutor` / dispatcher 存在，但 app-server 无 dynamic tool call service | D1 | 需要 dynamic tool registry、tool call execution、result streaming |
 | `mcpServer/elicitation/request` | MCP crate 底座存在；未见 app-server elicitation request loop | D1/D2 | 需要 MCP elicitation support 和 client UI contract |
@@ -248,6 +250,7 @@ Codex 的 9 个 `ServerRequest` 在 Dasclaw 当前 app-server 中都没有同构
 | `thread/create` | method | Legacy smoke / native alias；compat profile 已声明可映射到 `thread/start` |
 | `turn/cancel` | method | Native alias；compat profile 映射到 `turn/interrupt` |
 | `turn/list`、`turn/read` | method | Dasclaw native turn-level read/list；Codex 用 `thread/turns/list` 等线程视角 |
+| ~~`approval/respond`~~ | method | P3 approval server-request 的客户端决策回传入口 |
 | `modelProvider/selectForNextTurn` | method | desktop-app / renderer-mediated model provider selection；Codex 有 `model/list` 但没有这个同名选择入口 |
 | `notifications/initialized` | event | Dasclaw 服务端通知；Codex 的 `initialized` 是 ClientNotification |
 | `lifecycle/changed`、`health/changed`、`capabilities/changed` | event | Native control-plane state |
@@ -255,6 +258,7 @@ Codex 的 9 个 `ServerRequest` 在 Dasclaw 当前 app-server 中都没有同构
 | `thread/created` | event | Native thread creation alias |
 | `turn/delta` | event | Legacy/smoke delta；Codex 核心文本流是 `item/agentMessage/delta` |
 | ~~`turn/failed`~~、`turn/cancelled` | event | ~~`turn/failed` 已补 Codex-compatible failed `turn` view~~；`turn/cancelled` 仍是 native terminal variant；Codex 聚合在 `turn/completed` 的 `turn.status` |
+| ~~`serverRequest/resolved`~~、~~`item/commandExecution/outputDelta`~~、~~`item/commandExecution/terminalInteraction`~~ | event | P3 新增的 approval/tool bridge 事件；名字与 Codex 对齐但仍受 runtime feature gate 控制 |
 
 ## 9. 能力补齐优先级
 
@@ -263,9 +267,9 @@ Codex 的 9 个 `ServerRequest` 在 Dasclaw 当前 app-server 中都没有同构
 | 优先级 | 目标 | 包含 | 原因 |
 |---|---|---|---|
 | P0 | 诚实的协议边界 | `codex_app_server_v2` 继续标成 chat-session subset；P3-P6 opt-out 保持显式 | 已由 capability/profile tests 约束 |
-| P1 | Chat-session compatibility view | ~~`thread/start`~~、~~`turn/start`~~、~~`thread/started`~~、~~`turn/started`~~、~~`turn/completed`~~ 保留 native fields 并附带 Codex `thread` / `turn` view | desktop-app 通过 normalization 同时兼容 native 与 Codex view |
+| P1 | Chat-session compatibility view | ~~`thread/start`~~、~~`turn/start`~~、~~`turn/interrupt`~~、~~`thread/started`~~、~~`turn/started`~~、~~`turn/completed`~~、~~`item/started`~~、~~`item/agentMessage/delta`~~、~~`item/reasoning/summaryTextDelta`~~、~~`item/completed`~~ 保留 native fields 并附带 Codex-compatible view / producer | desktop-app 通过 normalization 同时兼容 native 与 Codex view |
 | P2 | Model catalog/service | ~~`model/list`~~ 由 app-server 返回 Codex `ModelListResponse`；~~`modelProvider/list`~~ 仅作为 desktop-app renderer alias | app-server 成为模型列表 owner，主进程不再直接暴露 provider secrets |
-| P3 | Approval + tool + sandbox 三件套 | ServerRequest request tracking、approval decision、tool registry、sandbox adapter、fail-safe timeout | Codex 大量协议依赖这组能力，不能分开虚补 |
+| P3 | Approval + tool + sandbox 三件套 | ~~ServerRequest request tracking、approval decision、tool lifecycle notification、sandbox capability gate、fail-safe timeout~~；standalone `fs/*` / `command/exec*`、dynamic `item/tool/call`、file-change approval 仍留给 P5 或后续专项 | Codex 大量协议依赖这组能力；本轮先补安全控制闭环，避免后续 command/fs 绕过 approval/sandbox |
 | P4 | MCP / skills / logs / jobs | MCP registry/OAuth/resource/tool call；skills registry；logs source；job host | MCP、logs、jobs、skills 已有不同程度底座或 legacy 参考；重点是上收 app-server owner 与协议接线 |
 | P5 | Filesystem / command exec | `fs/*`、`command/exec*`、`fs/changed`、command output | 必须在 P3 安全边界之后做，否则风险大 |
 | P6 | Product-specific Codex domains | account、plugin、marketplace、app list、feedback、external agent import、Windows sandbox、realtime audio | 只有当 Dasclaw 明确要兼容未改 Codex client 或复刻相关产品能力时再做 |
@@ -275,4 +279,4 @@ Codex 的 9 个 `ServerRequest` 在 Dasclaw 当前 app-server 中都没有同构
 1. 不建议把 Dasclaw native protocol 改名伪装成完整 Codex app-server。当前证据显示它只覆盖 chat-session subset，硬伪装会让客户端在 tools/MCP/approval/fs/command/account 等域踩到 app-server 接线缺口或产品语义缺口。
 2. 可以新增 Codex-compatible profile/view，但要按 capability gating 输出，未实现域要明确 unsupported，而不是静默 no-op。
 3. 最短可交付路线是先补 P1：让同名 thread/turn/item streaming 在 Codex profile 下返回 Codex shape。这样既能服务 `desktop-app`/AI SDK transport，又不会承诺完整 Codex 产品控制面。
-4. 真正的能力补齐应从 P3 开始进入重活：approval、tool execution、sandbox 是一组安全边界，任何 `fs/*`、`command/exec*`、`item/tool/call` 都不应该绕过它们单独开放。
+4. P3 已先补 approval、tool lifecycle notification、sandbox gate 这组安全边界；下一步做 `fs/*`、`command/exec*`、`item/tool/call` 时仍不能绕过这条 request tracking / fail-safe / capability gating 路径。

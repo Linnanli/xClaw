@@ -2,10 +2,12 @@ import {
   ChildProcessAppServerRpcClient,
   type AppServerRpcClient,
   type JsonRpcNotification,
+  type JsonRpcServerRequest,
   resolveDefaultAppServerLaunchOptions
 } from './appServerRpc'
 import { app } from 'electron'
 import type {
+  AppServerApprovalRespondParams,
   AppServerNotification,
   AppServerRequestOptions,
   AppServerRunState,
@@ -88,6 +90,7 @@ export class AppServerManager {
   private client: AppServerRpcClient | undefined
   private startPromise: Promise<AppServerStatus> | undefined
   private unsubscribeNotifications: (() => void) | undefined
+  private unsubscribeServerRequests: (() => void) | undefined
   private status: AppServerStatus
   private readonly createClient: () => AppServerRpcClient
   private readonly loadModelProviderConfig: ModelProviderConfigLoader
@@ -160,6 +163,9 @@ export class AppServerManager {
       this.unsubscribeNotifications = this.client.onNotification((notification) =>
         this.handleNotification(notification)
       )
+      this.unsubscribeServerRequests = this.client.onServerRequest((request) =>
+        this.handleServerRequest(request)
+      )
       const modelProvider = await this.getModelProviderConfig()
       await this.client.request('initialize', {
         client: { name: 'desktop-app', version: '0.1.0', transport: 'stdio' },
@@ -181,9 +187,11 @@ export class AppServerManager {
       })
     } catch (error) {
       this.unsubscribeNotifications?.()
+      this.unsubscribeServerRequests?.()
       this.client?.dispose()
       this.client = undefined
       this.unsubscribeNotifications = undefined
+      this.unsubscribeServerRequests = undefined
       this.fail(error)
     }
 
@@ -214,6 +222,13 @@ export class AppServerManager {
       }
     }
 
+    if (method === 'approval/respond') {
+      await this.ensureReady()
+      const payload = params as AppServerApprovalRespondParams
+      this.requireClient().respond(payload.requestId, { decision: payload.decision })
+      return { accepted: true } as T
+    }
+
     await this.ensureReady()
     if (method === 'modelProvider/selectForNextTurn') {
       return this.selectModelForNextTurn(params) as Promise<T>
@@ -235,9 +250,11 @@ export class AppServerManager {
       // Shutdown is best-effort; dispose below still owns process cleanup.
     } finally {
       this.unsubscribeNotifications?.()
+      this.unsubscribeServerRequests?.()
       this.client.dispose()
       this.client = undefined
       this.unsubscribeNotifications = undefined
+      this.unsubscribeServerRequests = undefined
       this.setStatus({ state: 'stopped', pid: undefined })
     }
 
@@ -265,16 +282,41 @@ export class AppServerManager {
   }
 
   private handleNotification(notification: JsonRpcNotification): void {
-    const envelope: AppServerNotification = {
+    this.emitNotification({
       hostId: this.hostId,
       method: notification.method,
       params: notification.params
-    }
+    })
+  }
+
+  private emitNotification(envelope: AppServerNotification): void {
     this.setStatus({
       notificationCount: this.status.notificationCount + 1,
       lastNotification: envelope
     })
     for (const listener of this.notificationListeners) listener(envelope)
+  }
+
+  private handleServerRequest(request: JsonRpcServerRequest): void {
+    if (
+      request.method === 'item/commandExecution/requestApproval' ||
+      request.method === 'item/permissions/requestApproval'
+    ) {
+      this.emitNotification({
+        hostId: this.hostId,
+        requestId: request.id,
+        method: request.method,
+        params: approvalRequestParams(request.params)
+      })
+      return
+    }
+
+    this.requireClient().respond(request.id, {
+      decision: {
+        kind: 'reject',
+        data: { reason: `unsupported app-server request method: ${request.method}` }
+      }
+    })
   }
 
   private requireClient(): AppServerRpcClient {
@@ -461,6 +503,18 @@ function optionalString(value: unknown): string | undefined {
 function normalizeCapabilities(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   return value.filter((item): item is string => typeof item === 'string')
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function approvalRequestParams(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) return {}
+  const safeParams = { ...value }
+  delete safeParams.rawArguments
+  delete safeParams.requestId
+  return safeParams
 }
 
 function errorMessage(error: unknown): string {

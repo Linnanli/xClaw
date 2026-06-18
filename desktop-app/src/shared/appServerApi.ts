@@ -23,11 +23,40 @@ export type AppServerRequestOptions = {
   hostId?: string
 }
 
-export type AppServerNotification = {
+export type AppServerApprovalDecision =
+  | { kind: 'approve' }
+  | { kind: 'approve_always' }
+  | { kind: 'reject'; data?: { reason?: string } }
+
+export type AppServerApprovalRequest = {
+  requestId: string | number
+  hostId: string
+  method: 'item/commandExecution/requestApproval' | 'item/permissions/requestApproval'
+  params: {
+    threadId: string
+    turnId: string
+    itemId: string
+    toolCallId: string
+    toolName: string
+    command?: string
+    description: string
+    displayParameters: unknown
+    allowAlways: boolean
+  }
+}
+
+export type AppServerApprovalRespondParams = {
+  requestId: string | number
+  decision: AppServerApprovalDecision
+}
+
+export type AppServerGenericNotification = {
   hostId: string
   method: string
   params?: unknown
 }
+
+export type AppServerNotification = AppServerGenericNotification | AppServerApprovalRequest
 
 export type RendererClientModelConfig = {
   modelId: string

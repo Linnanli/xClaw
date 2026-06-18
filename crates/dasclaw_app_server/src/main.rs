@@ -307,13 +307,16 @@ struct SelfCheckSessionReport {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::io::Cursor;
     use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
 
     use dasclaw_app_server::{
-        RuntimeBridge, RuntimeBridgeError, RuntimeTurnCancelRequest, RuntimeTurnStartRequest,
+        RuntimeApprovalDecision, RuntimeApprovalRequest, RuntimeBridge, RuntimeBridgeError,
+        RuntimeBridgeFeatures, RuntimeCommandOutputDeltaUpdate, RuntimeToolResultUpdate,
+        RuntimeTurnCancelRequest, RuntimeTurnStartRequest,
     };
     use dasclaw_app_server_protocol::ProtocolVersion;
     use serde_json::Value;
@@ -795,6 +798,100 @@ mod tests {
     }
 
     #[test]
+    fn stdio_loop_round_trips_approval_server_request_and_approve_response() {
+        let initialize = initialize_request("open-cowork", []);
+        let create = r#"{"jsonrpc":"2.0","id":"thread","method":"thread/create","params":{"title":"Approval"}}"#;
+        let start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","prompt":"run shell"}}"#;
+        let approval_response = r#"{"jsonrpc":"2.0","id":"approval_00000000-0000-0000-0000-000000000001","result":{"decision":{"kind":"approve"}}}"#;
+        let mut output = Vec::new();
+        let server = dasclaw_app_server::AppServer::with_runtime_bridge(Arc::new(
+            StdioApprovalRuntimeBridge::default(),
+        ));
+
+        run_stdio_server_with_app_server(
+            server,
+            Cursor::new(format!(
+                "{initialize}\n{create}\n{start}\n{approval_response}\n"
+            )),
+            &mut output,
+        )
+        .expect("stdio loop should round-trip an approved server request");
+
+        let values = json_lines(output);
+        assert!(values.iter().any(|value| {
+            value["method"] == "item/commandExecution/requestApproval"
+                && value["id"] == "approval_00000000-0000-0000-0000-000000000001"
+                && value["params"]["itemId"] == "turn_1:tool:shell"
+                && value["params"]["command"] == "echo ok"
+        }));
+        assert!(values.iter().any(|value| {
+            value["method"] == "item/commandExecution/outputDelta"
+                && value["params"]["itemId"] == "turn_1:tool:shell"
+        }));
+        assert!(values.iter().any(|value| {
+            value["method"] == "serverRequest/resolved"
+                && value["params"]["requestId"] == "approval_00000000-0000-0000-0000-000000000001"
+                && value["params"]["outcome"] == "approved"
+        }));
+        assert!(values.iter().any(|value| {
+            value["method"] == "item/commandExecution/terminalInteraction"
+                && value["params"]["itemId"] == "turn_1:tool:shell"
+                && value["params"]["isError"] == false
+        }));
+        assert!(values.iter().any(|value| {
+            value["method"] == "turn/completed" && value["params"]["output"] == "approved shell"
+        }));
+    }
+
+    #[test]
+    fn stdio_loop_round_trips_approval_server_request_and_reject_response() {
+        let initialize = initialize_request("open-cowork", []);
+        let create = r#"{"jsonrpc":"2.0","id":"thread","method":"thread/create","params":{"title":"Approval reject"}}"#;
+        let start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","prompt":"run shell"}}"#;
+        let approval_response = r#"{"jsonrpc":"2.0","id":"approval_00000000-0000-0000-0000-000000000001","result":{"decision":{"kind":"reject","data":{"reason":"not now"}}}}"#;
+        let mut output = Vec::new();
+        let server = dasclaw_app_server::AppServer::with_runtime_bridge(Arc::new(
+            StdioApprovalRuntimeBridge::default(),
+        ));
+
+        run_stdio_server_with_app_server(
+            server,
+            Cursor::new(format!(
+                "{initialize}\n{create}\n{start}\n{approval_response}\n"
+            )),
+            &mut output,
+        )
+        .expect("stdio loop should round-trip a rejected server request");
+
+        let values = json_lines(output);
+        assert!(values.iter().any(|value| {
+            value["method"] == "item/commandExecution/requestApproval"
+                && value["id"] == "approval_00000000-0000-0000-0000-000000000001"
+        }));
+        assert!(values.iter().any(|value| {
+            value["method"] == "serverRequest/resolved"
+                && value["params"]["requestId"] == "approval_00000000-0000-0000-0000-000000000001"
+                && value["params"]["outcome"] == "rejected"
+        }));
+        assert!(values.iter().any(|value| {
+            value["method"] == "turn/failed"
+                && value["params"]["error"] == "approval rejected: not now"
+        }));
+        assert!(
+            !values
+                .iter()
+                .any(|value| value["method"] == "turn/completed")
+        );
+        assert!(
+            !values.iter().any(|value| {
+                value["method"] == "item/commandExecution/terminalInteraction"
+                    && value["params"]["isError"] == false
+            }),
+            "rejected approval must not execute the tool: {values:?}"
+        );
+    }
+
+    #[test]
     fn stdio_loop_disconnects_after_notification_queue_overflow() {
         let initialize = initialize_request("open-cowork", []);
         let create = r#"{"jsonrpc":"2.0","id":"thread","method":"thread/create","params":{"title":"overflow"}}"#;
@@ -947,6 +1044,14 @@ mod tests {
         assert_eq!(value["session"]["pendingNotifications"], 5);
     }
 
+    fn json_lines(output: Vec<u8>) -> Vec<Value> {
+        String::from_utf8(output)
+            .expect("response should be utf8")
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("line should be JSON"))
+            .collect()
+    }
+
     #[derive(Debug, Default)]
     struct CompletingRuntimeBridge {
         prompts: Mutex<Vec<String>>,
@@ -1023,6 +1128,108 @@ mod tests {
         }
 
         fn shutdown(&self) {}
+    }
+
+    const STDIO_APPROVAL_REQUEST_ID: &str = "00000000-0000-0000-0000-000000000001";
+
+    #[derive(Debug, Default)]
+    struct StdioApprovalRuntimeBridge {
+        pending: Mutex<HashMap<String, RuntimeTurnStartRequest>>,
+    }
+
+    impl RuntimeBridge for StdioApprovalRuntimeBridge {
+        fn features(&self) -> RuntimeBridgeFeatures {
+            RuntimeBridgeFeatures {
+                approval: true,
+                tools: true,
+                sandbox: true,
+            }
+        }
+
+        fn start_turn(&self, request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
+            request.updates.command_output_delta(
+                request.thread_id.clone(),
+                request.turn_id.clone(),
+                RuntimeCommandOutputDeltaUpdate {
+                    item_id: format!("{}:tool:shell", request.turn_id),
+                    delta: r#"{"cmd":"echo ok"}"#.to_string(),
+                },
+            );
+            request.updates.approval_requested(
+                request.thread_id.clone(),
+                request.turn_id.clone(),
+                RuntimeApprovalRequest {
+                    request_id: STDIO_APPROVAL_REQUEST_ID.to_string(),
+                    tool_call_id: "shell".to_string(),
+                    tool_name: "shell".to_string(),
+                    command: Some("echo ok".to_string()),
+                    description: "Run shell command".to_string(),
+                    display_parameters: serde_json::json!({"cmd":"echo ok"}),
+                    allow_always: true,
+                },
+            );
+            self.pending
+                .lock()
+                .expect("pending approval lock")
+                .insert(STDIO_APPROVAL_REQUEST_ID.to_string(), request);
+            Ok(())
+        }
+
+        fn cancel_turn(
+            &self,
+            _request: RuntimeTurnCancelRequest,
+        ) -> Result<(), RuntimeBridgeError> {
+            Ok(())
+        }
+
+        fn resolve_approval(
+            &self,
+            decision: RuntimeApprovalDecision,
+        ) -> Result<(), RuntimeBridgeError> {
+            let request = self
+                .pending
+                .lock()
+                .map_err(|_| RuntimeBridgeError::retryable("pending approval lock poisoned"))?
+                .remove(&decision.request_id)
+                .ok_or_else(|| RuntimeBridgeError::retryable("approval request is not pending"))?;
+
+            match decision.decision {
+                dasclaw_runtime::ApprovalDecision::Approve
+                | dasclaw_runtime::ApprovalDecision::ApproveAlways => {
+                    request.updates.tool_result(
+                        request.thread_id.clone(),
+                        request.turn_id.clone(),
+                        RuntimeToolResultUpdate {
+                            item_id: format!("{}:tool:shell", request.turn_id),
+                            content: "shell output".to_string(),
+                            is_error: false,
+                        },
+                    );
+                    request.updates.complete(
+                        request.thread_id,
+                        request.turn_id,
+                        "approved shell".to_string(),
+                    );
+                }
+                dasclaw_runtime::ApprovalDecision::Reject { reason } => {
+                    request.updates.fail(
+                        request.thread_id,
+                        request.turn_id,
+                        format!(
+                            "approval rejected: {}",
+                            reason.unwrap_or_else(|| "no reason".to_string())
+                        ),
+                    );
+                }
+            }
+            Ok(())
+        }
+
+        fn shutdown(&self) {
+            if let Ok(mut pending) = self.pending.lock() {
+                pending.clear();
+            }
+        }
     }
 
     #[derive(Debug)]

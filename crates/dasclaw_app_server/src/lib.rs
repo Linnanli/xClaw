@@ -14,16 +14,19 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use dasclaw_app_server_protocol::ClientModelConfig;
 use dasclaw_app_server_protocol::{
-    AgentMessageDeltaEvent, CapabilitiesChangedEvent, CapabilitiesChangedReason,
-    CapabilitiesListResponse, CapabilityMatrix, ClientInfo, CompatibilityProfile,
-    DEFAULT_MAX_PENDING_NOTIFICATIONS, ErrorCode, ErrorData, ErrorEvent, HealthCheckParams,
-    HealthCheckResponse, InitializeParams, InitializeResponse, ItemCompletedEvent,
-    ItemStartedEvent, ItemType, JsonRpcError, JsonRpcRequest, JsonRpcResponse,
-    LifecycleChangedEvent, LifecycleReason, LifecycleSnapshot, LifecycleState,
-    LifecycleStatusResponse, ModelListParams, ModelListResponse, ModelProviderInitializeConfig,
-    ModelProviderSelectForNextTurnParams, ModelProviderSelectForNextTurnResponse,
-    NotificationQueuePolicy, NotificationsInitializedEvent, ProtocolSchemaResponse,
-    ProtocolVersion, ReasoningSummaryTextDeltaEvent, ServerInfo, ServerNotification, ServiceHealth,
+    AgentMessageDeltaEvent, AppServerApprovalDecision, ApprovalResponsePayload,
+    CapabilitiesChangedEvent, CapabilitiesChangedReason, CapabilitiesListResponse,
+    CapabilityMatrix, ClientInfo, CommandExecutionApprovalRequest,
+    CommandExecutionOutputDeltaEvent, CommandExecutionTerminalInteractionEvent,
+    CompatibilityProfile, DEFAULT_MAX_PENDING_NOTIFICATIONS, ErrorCode, ErrorData, ErrorEvent,
+    HealthCheckParams, HealthCheckResponse, InitializeParams, InitializeResponse,
+    ItemCompletedEvent, ItemStartedEvent, ItemType, JsonRpcClientResponse, JsonRpcError,
+    JsonRpcRequest, JsonRpcResponse, JsonRpcServerRequest, LifecycleChangedEvent, LifecycleReason,
+    LifecycleSnapshot, LifecycleState, LifecycleStatusResponse, ModelListParams, ModelListResponse,
+    ModelProviderInitializeConfig, ModelProviderSelectForNextTurnParams,
+    ModelProviderSelectForNextTurnResponse, NotificationQueuePolicy, NotificationsInitializedEvent,
+    ProtocolSchemaResponse, ProtocolVersion, ReasoningSummaryTextDeltaEvent, ServerInfo,
+    ServerNotification, ServerRequestResolutionOutcome, ServerRequestResolvedEvent, ServiceHealth,
     ServiceName, ShutdownParams, ShutdownReason, ShutdownResponse, ThreadCreateParams,
     ThreadCreateResponse, ThreadCreatedEvent, ThreadListResponse, ThreadReadParams,
     ThreadReadResponse, ThreadStartResponse, ThreadStartedEvent, ThreadSummary, TurnCancelParams,
@@ -34,7 +37,7 @@ use dasclaw_app_server_protocol::{
 use dasclaw_app_server_protocol::{
     CodexSessionSource, CodexThread, CodexThreadStatus, CodexTurn, CodexTurnError, CodexTurnStatus,
 };
-use dasclaw_app_server_protocol::{JSON_RPC_VERSION, method};
+use dasclaw_app_server_protocol::{JSON_RPC_VERSION, method, server_request};
 use dasclaw_core::messages::ReasoningSummary;
 use dasclaw_llm_provider::provider::claw_code_provider::ClawCodeLlmProvider;
 use dasclaw_llm_provider::provider::config::{CacheRetention, RegistryProviderConfig};
@@ -49,6 +52,7 @@ pub const SERVER_NAME: &str = "dasclaw_app_server";
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const STDIO_NOTIFICATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
 pub const STDIO_EOF_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
+pub const SERVER_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone)]
 pub struct AppServer {
@@ -59,7 +63,9 @@ pub struct AppServer {
     notifications: NotificationBus,
     threads: SessionThreadHost,
     runtime_bridge: Arc<dyn RuntimeBridge>,
+    runtime_features: RuntimeBridgeFeatures,
     runtime_turn_updates: RuntimeTurnUpdateSink,
+    pending_server_requests: PendingServerRequestStore,
     model_provider: ModelProviderState,
     codex_v2_compat_enabled: bool,
 }
@@ -207,6 +213,90 @@ impl ModelProviderState {
             )
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct PendingServerRequest {
+    request_id: String,
+    runtime_request_id: String,
+    thread_id: String,
+    turn_id: String,
+    created_at: Instant,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PendingServerRequestStore {
+    requests: Vec<PendingServerRequest>,
+}
+
+impl PendingServerRequestStore {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn insert(&mut self, request: PendingServerRequest) {
+        self.requests
+            .retain(|existing| existing.request_id != request.request_id);
+        self.requests.push(request);
+    }
+
+    fn remove(&mut self, id: &Value) -> Option<PendingServerRequest> {
+        let request_id = json_rpc_id_to_request_id(id);
+        let index = self
+            .requests
+            .iter()
+            .position(|request| request.request_id == request_id)?;
+        Some(self.requests.remove(index))
+    }
+
+    fn drain_turn(&mut self, thread_id: &str, turn_id: &str) -> Vec<PendingServerRequest> {
+        let mut drained = Vec::new();
+        let mut retained = Vec::new();
+        for request in self.requests.drain(..) {
+            if request.thread_id == thread_id && request.turn_id == turn_id {
+                drained.push(request);
+            } else {
+                retained.push(request);
+            }
+        }
+        self.requests = retained;
+        drained
+    }
+
+    fn drain_all(&mut self) -> Vec<PendingServerRequest> {
+        std::mem::take(&mut self.requests)
+    }
+
+    fn expired(&mut self, timeout: Duration) -> Vec<PendingServerRequest> {
+        let now = Instant::now();
+        let mut expired = Vec::new();
+        let mut retained = Vec::new();
+        for request in self.requests.drain(..) {
+            if now.duration_since(request.created_at) >= timeout {
+                expired.push(request);
+            } else {
+                retained.push(request);
+            }
+        }
+        self.requests = retained;
+        expired
+    }
+
+    #[cfg(test)]
+    fn age_all(&mut self, age: Duration) {
+        for request in &mut self.requests {
+            request.created_at = request
+                .created_at
+                .checked_sub(age)
+                .unwrap_or(request.created_at);
+        }
+    }
+}
+
+fn json_rpc_id_to_request_id(id: &Value) -> String {
+    id.as_str()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| id.to_string())
 }
 
 fn validate_client_model(model: &ClientModelConfig, field: &str) -> Result<(), AppServerError> {
@@ -414,7 +504,9 @@ impl AppServer {
             notifications: NotificationBus::new(),
             threads: SessionThreadHost::new(),
             runtime_bridge: Arc::new(NoopRuntimeBridge),
+            runtime_features: RuntimeBridgeFeatures::default(),
             runtime_turn_updates: RuntimeTurnUpdateSink::new(),
+            pending_server_requests: PendingServerRequestStore::new(),
             model_provider: ModelProviderState::default(),
             codex_v2_compat_enabled: false,
         }
@@ -423,6 +515,11 @@ impl AppServer {
     #[must_use]
     pub fn with_runtime_bridge(runtime_bridge: Arc<dyn RuntimeBridge>) -> Self {
         let mut server = Self::new();
+        let features = runtime_bridge.features();
+        if features.approval && features.tools && features.sandbox {
+            server.capabilities = CapabilityMatrix::phase_one().with_p3_approval_tool_sandbox();
+        }
+        server.runtime_features = features;
         server.runtime_bridge = runtime_bridge;
         server
     }
@@ -523,6 +620,7 @@ impl AppServer {
     #[must_use]
     pub fn health_check(&mut self, params: HealthCheckParams) -> HealthCheckResponse {
         self.drain_runtime_turn_updates();
+        self.expire_pending_server_requests();
         let services = if params.include_details {
             self.service_health()
         } else {
@@ -702,6 +800,13 @@ impl AppServer {
                 )
             })?;
         if changed {
+            let pending_approvals = self
+                .pending_server_requests
+                .drain_turn(&params.thread_id, &params.turn_id);
+            self.emit_failed_pending_server_request_resolutions(
+                pending_approvals,
+                "turn cancelled",
+            );
             self.emit_codex_item_completed(
                 params.thread_id.clone(),
                 params.turn_id.clone(),
@@ -778,6 +883,8 @@ impl AppServer {
 
         self.drain_runtime_turn_updates();
         self.runtime_bridge.shutdown();
+        let pending_approvals = self.pending_server_requests.drain_all();
+        self.emit_failed_pending_server_request_resolutions(pending_approvals, "server shutdown");
         for turn in self.threads.cancel_pending_turns() {
             self.emit_codex_item_completed(
                 turn.thread_id.clone(),
@@ -809,6 +916,7 @@ impl AppServer {
 
     pub fn drain_notifications_with_policy(&mut self) -> NotificationDrain {
         self.drain_runtime_turn_updates();
+        self.expire_pending_server_requests();
         self.notifications.drain_with_policy()
     }
 
@@ -818,6 +926,7 @@ impl AppServer {
 
     pub fn drain_json_rpc_notifications_with_policy(&mut self) -> JsonRpcNotificationDrain {
         self.drain_runtime_turn_updates();
+        self.expire_pending_server_requests();
         self.notifications.drain_json_rpc_with_policy()
     }
 
@@ -831,6 +940,8 @@ impl AppServer {
     }
 
     pub fn handle_json_rpc(&mut self, input: &str) -> Option<String> {
+        self.drain_runtime_turn_updates();
+        self.expire_pending_server_requests();
         let response = match serde_json::from_str::<Value>(input) {
             Ok(Value::Array(_)) => Some(invalid_request_response(
                 None,
@@ -839,12 +950,33 @@ impl AppServer {
             Ok(value) => {
                 let id = value.get("id").cloned();
                 let is_notification = id.is_none();
-                match serde_json::from_value::<JsonRpcRequest>(value) {
-                    Ok(request) => self.route_json_rpc(request),
-                    Err(error) => response_for_request(
-                        invalid_request_response(id, error.to_string()),
-                        is_notification,
-                    ),
+                if value.get("method").is_some() {
+                    match serde_json::from_value::<JsonRpcRequest>(value) {
+                        Ok(request) => self.route_json_rpc(request),
+                        Err(error) => response_for_request(
+                            invalid_request_response(id, error.to_string()),
+                            is_notification,
+                        ),
+                    }
+                } else if value.get("result").is_some() || value.get("error").is_some() {
+                    match serde_json::from_value::<JsonRpcClientResponse>(value) {
+                        Ok(response) => {
+                            self.handle_client_response(response);
+                            None
+                        }
+                        Err(error) => response_for_request(
+                            invalid_request_response(id, error.to_string()),
+                            is_notification,
+                        ),
+                    }
+                } else {
+                    match serde_json::from_value::<JsonRpcRequest>(value) {
+                        Ok(request) => self.route_json_rpc(request),
+                        Err(error) => response_for_request(
+                            invalid_request_response(id, error.to_string()),
+                            is_notification,
+                        ),
+                    }
                 }
             }
             Err(error) => Some(parse_error_response(error.to_string())),
@@ -938,10 +1070,291 @@ impl AppServer {
                     self.model_provider_select_for_next_turn(params)
                 },
             ),
+            method::APPROVAL_RESPOND => {
+                let id = request.id.clone();
+                route_with_params(
+                    request.id,
+                    request.params,
+                    |params: ApprovalResponsePayload| {
+                        self.apply_approval_response_id(id.unwrap_or(Value::Null), params)
+                    },
+                )
+            }
             _ => method_not_found_response(request.id, request.method),
         };
 
         response_for_request(response, is_notification)
+    }
+
+    fn handle_client_response(&mut self, response: JsonRpcClientResponse) {
+        if response.jsonrpc != JSON_RPC_VERSION {
+            self.fail_pending_approval_response(response.id, "jsonrpc must be \"2.0\"".to_string());
+            return;
+        }
+
+        if let Some(error) = response.error {
+            self.fail_pending_approval_response(response.id, error.message);
+            return;
+        }
+
+        let Some(result) = response.result else {
+            self.fail_pending_approval_response(response.id, "missing result".to_string());
+            return;
+        };
+
+        match serde_json::from_value::<ApprovalResponsePayload>(result) {
+            Ok(payload) => {
+                let _ = self.apply_approval_response_id(response.id, payload);
+            }
+            Err(error) => {
+                self.fail_pending_approval_response(response.id, error.to_string());
+            }
+        }
+    }
+
+    fn apply_approval_response_id(
+        &mut self,
+        response_id: Value,
+        payload: ApprovalResponsePayload,
+    ) -> Result<(), AppServerError> {
+        let Some(pending) = self.pending_server_requests.remove(&response_id) else {
+            self.emit_failed_server_request_resolution(
+                response_id,
+                "unknown or expired server request".to_string(),
+            );
+            return Ok(());
+        };
+
+        self.apply_approval_decision(pending, payload.decision);
+        Ok(())
+    }
+
+    fn apply_approval_decision(
+        &mut self,
+        pending: PendingServerRequest,
+        decision: AppServerApprovalDecision,
+    ) {
+        let (runtime_decision, success_outcome, resolution_reason) = match decision {
+            AppServerApprovalDecision::Approve => (
+                dasclaw_runtime::ApprovalDecision::Approve,
+                ServerRequestResolutionOutcome::Approved,
+                None,
+            ),
+            AppServerApprovalDecision::ApproveAlways => (
+                dasclaw_runtime::ApprovalDecision::ApproveAlways,
+                ServerRequestResolutionOutcome::Approved,
+                None,
+            ),
+            AppServerApprovalDecision::Reject { reason } => {
+                let resolution_reason = reason.clone();
+                (
+                    dasclaw_runtime::ApprovalDecision::Reject { reason },
+                    ServerRequestResolutionOutcome::Rejected,
+                    resolution_reason,
+                )
+            }
+        };
+
+        let result = self
+            .runtime_bridge
+            .resolve_approval(RuntimeApprovalDecision {
+                request_id: pending.runtime_request_id.clone(),
+                decision: runtime_decision,
+            });
+
+        match result {
+            Ok(()) => {
+                self.notifications
+                    .emit_server_request_resolved(ServerRequestResolvedEvent {
+                        request_id: pending.request_id,
+                        thread_id: Some(pending.thread_id),
+                        turn_id: Some(pending.turn_id),
+                        outcome: success_outcome,
+                        reason: resolution_reason,
+                    });
+                if self.threads.has_pending_turns() {
+                    self.transition_lifecycle(
+                        LifecycleState::Running,
+                        LifecycleReason::RequestInProgress,
+                        Some("approval resolved; turn request is running".to_string()),
+                    );
+                }
+            }
+            Err(error) => {
+                let thread_id = pending.thread_id.clone();
+                let turn_id = pending.turn_id.clone();
+                let message = error.message;
+                self.notifications
+                    .emit_server_request_resolved(ServerRequestResolvedEvent {
+                        request_id: pending.request_id,
+                        thread_id: Some(thread_id.clone()),
+                        turn_id: Some(turn_id.clone()),
+                        outcome: ServerRequestResolutionOutcome::Failed,
+                        reason: Some(message.clone()),
+                    });
+                self.fail_pending_turn(thread_id, turn_id, message);
+            }
+        }
+    }
+
+    fn fail_pending_approval_response(&mut self, response_id: Value, reason: String) {
+        let Some(pending) = self.pending_server_requests.remove(&response_id) else {
+            self.emit_failed_server_request_resolution(response_id, reason);
+            return;
+        };
+
+        let runtime_reason = format!("approval response failed: {reason}");
+        let _ = self
+            .runtime_bridge
+            .resolve_approval(RuntimeApprovalDecision {
+                request_id: pending.runtime_request_id.clone(),
+                decision: dasclaw_runtime::ApprovalDecision::Reject {
+                    reason: Some(runtime_reason.clone()),
+                },
+            });
+        self.notifications
+            .emit_server_request_resolved(ServerRequestResolvedEvent {
+                request_id: pending.request_id,
+                thread_id: Some(pending.thread_id.clone()),
+                turn_id: Some(pending.turn_id.clone()),
+                outcome: ServerRequestResolutionOutcome::Failed,
+                reason: Some(reason),
+            });
+        self.fail_pending_turn(pending.thread_id, pending.turn_id, runtime_reason);
+    }
+
+    fn fail_pending_turn(&mut self, thread_id: String, turn_id: String, error: String) {
+        let update = RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::Failed { error },
+        };
+        let Some(summary) = self.threads.apply_runtime_turn_update(update) else {
+            return;
+        };
+        if summary.status != TurnStatus::Failed {
+            return;
+        }
+
+        let error = summary.error.clone().unwrap_or_default();
+        self.emit_codex_item_completed(
+            summary.thread_id.clone(),
+            summary.turn_id.clone(),
+            TurnStatus::Failed,
+        );
+        self.notifications.emit_turn_failed(TurnFailedEvent {
+            thread_id: summary.thread_id.clone(),
+            turn_id: summary.turn_id.clone(),
+            status: TurnStatus::Failed,
+            error: error.clone(),
+            turn: Some(codex_turn_from_summary(summary.clone())),
+        });
+        self.emit_codex_error(summary.thread_id, summary.turn_id, error);
+        self.transition_ready_if_no_pending_turns();
+    }
+
+    fn emit_failed_server_request_resolution(&mut self, response_id: Value, reason: String) {
+        let request_id = json_rpc_id_to_request_id(&response_id);
+        self.notifications
+            .emit_server_request_resolved(ServerRequestResolvedEvent {
+                request_id,
+                thread_id: None,
+                turn_id: None,
+                outcome: ServerRequestResolutionOutcome::Failed,
+                reason: Some(reason),
+            });
+    }
+
+    fn emit_failed_pending_server_request_resolutions(
+        &mut self,
+        pending: Vec<PendingServerRequest>,
+        reason: &str,
+    ) {
+        for request in pending {
+            self.notifications
+                .emit_server_request_resolved(ServerRequestResolvedEvent {
+                    request_id: request.request_id,
+                    thread_id: Some(request.thread_id),
+                    turn_id: Some(request.turn_id),
+                    outcome: ServerRequestResolutionOutcome::Failed,
+                    reason: Some(reason.to_string()),
+                });
+        }
+    }
+
+    fn emit_approval_server_request(
+        &mut self,
+        thread_id: String,
+        turn_id: String,
+        request: RuntimeApprovalRequest,
+    ) {
+        if !self.threads.turn_is_pending(&thread_id, &turn_id) {
+            return;
+        }
+
+        let request_id = format!("approval_{}", request.request_id);
+        let item_id = format!("{turn_id}:tool:{}", request.tool_call_id);
+        self.pending_server_requests.insert(PendingServerRequest {
+            request_id: request_id.clone(),
+            runtime_request_id: request.request_id.clone(),
+            thread_id: thread_id.clone(),
+            turn_id: turn_id.clone(),
+            created_at: Instant::now(),
+        });
+        self.transition_lifecycle(
+            LifecycleState::AwaitingApproval,
+            LifecycleReason::ApprovalPending,
+            Some("turn request is awaiting approval".to_string()),
+        );
+        self.notifications.emit_server_request(
+            JsonRpcServerRequest::new(
+                request_id,
+                server_request::ITEM_COMMAND_EXECUTION_REQUEST_APPROVAL,
+                CommandExecutionApprovalRequest {
+                    thread_id: thread_id.clone(),
+                    turn_id: turn_id.clone(),
+                    item_id,
+                    tool_call_id: request.tool_call_id,
+                    tool_name: request.tool_name,
+                    command: request.command,
+                    description: request.description,
+                    display_parameters: request.display_parameters,
+                    allow_always: request.allow_always,
+                },
+            )
+            .expect("approval server request should serialize"),
+        );
+    }
+
+    fn expire_pending_server_requests(&mut self) {
+        let expired = self.pending_server_requests.expired(SERVER_REQUEST_TIMEOUT);
+        for pending in expired {
+            let thread_id = pending.thread_id.clone();
+            let turn_id = pending.turn_id.clone();
+            let _ = self
+                .runtime_bridge
+                .resolve_approval(RuntimeApprovalDecision {
+                    request_id: pending.runtime_request_id.clone(),
+                    decision: dasclaw_runtime::ApprovalDecision::Reject {
+                        reason: Some("approval request timed out".to_string()),
+                    },
+                });
+            self.notifications
+                .emit_server_request_resolved(ServerRequestResolvedEvent {
+                    request_id: pending.request_id,
+                    thread_id: Some(thread_id.clone()),
+                    turn_id: Some(turn_id.clone()),
+                    outcome: ServerRequestResolutionOutcome::TimedOut,
+                    reason: Some("server request timed out".to_string()),
+                });
+            self.fail_pending_turn(thread_id, turn_id, "approval request timed out".to_string());
+        }
+    }
+
+    #[cfg(test)]
+    fn expire_pending_server_requests_for_tests(&mut self, age: Duration) {
+        self.pending_server_requests.age_all(age);
+        self.expire_pending_server_requests();
     }
 
     fn service_health(&self) -> Vec<ServiceHealth> {
@@ -959,11 +1372,8 @@ impl AppServer {
                 "DLP/policy service is declared but not migrated in Phase 1",
             ),
             self.model_provider.health(),
-            ServiceHealth::disabled(ServiceName::Tools, "tool registry is not wired in Phase 1"),
-            ServiceHealth::disabled(
-                ServiceName::Sandbox,
-                "sandbox adapter is not wired in Phase 1",
-            ),
+            self.tools_health(),
+            self.sandbox_health(),
             ServiceHealth::disabled(ServiceName::Jobs, "job host is not wired in Phase 1"),
             ServiceHealth::disabled(
                 ServiceName::Skills,
@@ -971,6 +1381,25 @@ impl AppServer {
             ),
             ServiceHealth::disabled(ServiceName::Mcp, "MCP registry is not wired in Phase 1"),
         ]
+    }
+
+    fn tools_health(&self) -> ServiceHealth {
+        if self.runtime_features.tools {
+            ServiceHealth::ready(ServiceName::Tools)
+        } else {
+            ServiceHealth::disabled(ServiceName::Tools, "tool registry is not wired in Phase 1")
+        }
+    }
+
+    fn sandbox_health(&self) -> ServiceHealth {
+        if self.runtime_features.sandbox {
+            ServiceHealth::ready(ServiceName::Sandbox)
+        } else {
+            ServiceHealth::disabled(
+                ServiceName::Sandbox,
+                "sandbox adapter is not wired in Phase 1",
+            )
+        }
     }
 
     fn emit_lifecycle_changed(&mut self, previous_state: LifecycleState) {
@@ -1045,7 +1474,10 @@ impl AppServer {
 
         if matches!(
             self.lifecycle.state,
-            LifecycleState::Ready | LifecycleState::Running | LifecycleState::Degraded
+            LifecycleState::Ready
+                | LifecycleState::Running
+                | LifecycleState::AwaitingApproval
+                | LifecycleState::Degraded
         ) {
             Ok(())
         } else {
@@ -1246,7 +1678,12 @@ impl AppServer {
     }
 
     fn transition_ready_if_no_pending_turns(&mut self) {
-        if self.lifecycle.state != LifecycleState::Running || self.threads.has_pending_turns() {
+        if self.threads.has_pending_turns()
+            || !matches!(
+                self.lifecycle.state,
+                LifecycleState::Running | LifecycleState::AwaitingApproval
+            )
+        {
             return;
         }
 
@@ -1291,6 +1728,43 @@ impl AppServer {
                             update.turn_id,
                             summary_index,
                             delta,
+                        );
+                    }
+                }
+                RuntimeTurnOutcome::ApprovalRequested { request } => {
+                    self.emit_approval_server_request(update.thread_id, update.turn_id, request);
+                }
+                RuntimeTurnOutcome::ToolResult {
+                    update: tool_result,
+                } => {
+                    if self
+                        .threads
+                        .turn_is_pending(&update.thread_id, &update.turn_id)
+                    {
+                        self.notifications
+                            .emit_command_execution_terminal_interaction(
+                                CommandExecutionTerminalInteractionEvent {
+                                    thread_id: update.thread_id,
+                                    turn_id: update.turn_id,
+                                    item_id: tool_result.item_id,
+                                    message: tool_result.content,
+                                    is_error: tool_result.is_error,
+                                },
+                            );
+                    }
+                }
+                RuntimeTurnOutcome::CommandOutputDelta { update: output } => {
+                    if self
+                        .threads
+                        .turn_is_pending(&update.thread_id, &update.turn_id)
+                    {
+                        self.notifications.emit_command_execution_output_delta(
+                            CommandExecutionOutputDeltaEvent {
+                                thread_id: update.thread_id,
+                                turn_id: update.turn_id,
+                                item_id: output.item_id,
+                                delta: output.delta,
+                            },
                         );
                     }
                 }
@@ -1444,9 +1918,28 @@ where
 }
 
 pub trait RuntimeBridge: std::fmt::Debug + Send + Sync {
+    fn features(&self) -> RuntimeBridgeFeatures {
+        RuntimeBridgeFeatures::default()
+    }
+
     fn start_turn(&self, request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError>;
     fn cancel_turn(&self, request: RuntimeTurnCancelRequest) -> Result<(), RuntimeBridgeError>;
+    fn resolve_approval(
+        &self,
+        _decision: RuntimeApprovalDecision,
+    ) -> Result<(), RuntimeBridgeError> {
+        Err(RuntimeBridgeError::fatal(
+            "runtime bridge does not support approval resolution",
+        ))
+    }
     fn shutdown(&self);
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RuntimeBridgeFeatures {
+    pub approval: bool,
+    pub tools: bool,
+    pub sandbox: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1463,6 +1956,36 @@ pub struct RuntimeTurnStartRequest {
 pub struct RuntimeTurnCancelRequest {
     pub thread_id: String,
     pub turn_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeApprovalRequest {
+    pub request_id: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub command: Option<String>,
+    pub description: String,
+    pub display_parameters: Value,
+    pub allow_always: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeApprovalDecision {
+    pub request_id: String,
+    pub decision: dasclaw_runtime::ApprovalDecision,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeToolResultUpdate {
+    pub item_id: String,
+    pub content: String,
+    pub is_error: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeCommandOutputDeltaUpdate {
+    pub item_id: String,
+    pub delta: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1517,6 +2040,40 @@ impl RuntimeTurnUpdateSink {
         });
     }
 
+    pub fn approval_requested(
+        &self,
+        thread_id: String,
+        turn_id: String,
+        request: RuntimeApprovalRequest,
+    ) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::ApprovalRequested { request },
+        });
+    }
+
+    pub fn tool_result(&self, thread_id: String, turn_id: String, update: RuntimeToolResultUpdate) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::ToolResult { update },
+        });
+    }
+
+    pub fn command_output_delta(
+        &self,
+        thread_id: String,
+        turn_id: String,
+        update: RuntimeCommandOutputDeltaUpdate,
+    ) {
+        self.push(RuntimeTurnUpdate {
+            thread_id,
+            turn_id,
+            outcome: RuntimeTurnOutcome::CommandOutputDelta { update },
+        });
+    }
+
     fn drain(&self) -> Vec<RuntimeTurnUpdate> {
         self.updates
             .lock()
@@ -1540,10 +2097,28 @@ pub struct RuntimeTurnUpdate {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeTurnOutcome {
-    Delta { delta: String },
-    ReasoningSummaryDelta { delta: String, summary_index: i64 },
-    Completed { output: String },
-    Failed { error: String },
+    Delta {
+        delta: String,
+    },
+    ReasoningSummaryDelta {
+        delta: String,
+        summary_index: i64,
+    },
+    ApprovalRequested {
+        request: RuntimeApprovalRequest,
+    },
+    ToolResult {
+        update: RuntimeToolResultUpdate,
+    },
+    CommandOutputDelta {
+        update: RuntimeCommandOutputDeltaUpdate,
+    },
+    Completed {
+        output: String,
+    },
+    Failed {
+        error: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -1590,6 +2165,9 @@ impl RuntimeBridge for NoopRuntimeBridge {
 pub struct DasclawAgentRuntimeBridge {
     agent_factory: Arc<AgentFactory>,
     in_flight: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    active_agents: Arc<Mutex<HashMap<String, Arc<dasclaw_runtime::Agent>>>>,
+    pending_approvals: Arc<Mutex<HashMap<String, Arc<dasclaw_runtime::Agent>>>>,
+    features: RuntimeBridgeFeatures,
 }
 
 type AgentFactory = dyn Fn(
@@ -1635,7 +2213,31 @@ impl DasclawAgentRuntimeBridge {
         Self {
             agent_factory: Arc::new(agent_factory),
             in_flight: Arc::new(Mutex::new(HashMap::new())),
+            active_agents: Arc::new(Mutex::new(HashMap::new())),
+            pending_approvals: Arc::new(Mutex::new(HashMap::new())),
+            features: RuntimeBridgeFeatures {
+                approval: true,
+                tools: true,
+                sandbox: false,
+            },
         }
+    }
+
+    #[must_use]
+    pub fn new_with_model_provider_and_features(
+        agent_factory: impl Fn(
+            CancellationToken,
+            RuntimeModelProviderSnapshot,
+            ReasoningSummary,
+        ) -> Result<dasclaw_runtime::Agent, RuntimeBridgeError>
+        + Send
+        + Sync
+        + 'static,
+        features: RuntimeBridgeFeatures,
+    ) -> Self {
+        let mut bridge = Self::new_with_model_provider(agent_factory);
+        bridge.features = features;
+        bridge
     }
 
     #[must_use]
@@ -1659,34 +2261,58 @@ impl DasclawAgentRuntimeBridge {
             in_flight.remove(turn_id);
         }
     }
+
+    fn cleanup_runtime_turn(&self, turn_id: &str, agent: &Arc<dasclaw_runtime::Agent>) {
+        self.remove_in_flight_turn(turn_id);
+        if let Ok(mut active_agents) = self.active_agents.lock() {
+            active_agents.remove(turn_id);
+        }
+        if let Ok(mut pending_approvals) = self.pending_approvals.lock() {
+            pending_approvals.retain(|_, pending_agent| !Arc::ptr_eq(pending_agent, agent));
+        }
+    }
 }
 
 impl RuntimeBridge for DasclawAgentRuntimeBridge {
+    fn features(&self) -> RuntimeBridgeFeatures {
+        self.features
+    }
+
     fn start_turn(&self, request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
         let token = CancellationToken::new();
-        let agent = (self.agent_factory)(
+        let agent = Arc::new((self.agent_factory)(
             token.clone(),
             request.model_provider.clone(),
             request.reasoning_summary,
-        )?;
+        )?);
         let mut in_flight = self
             .in_flight
             .lock()
             .map_err(|_| RuntimeBridgeError::retryable("runtime turn registry lock poisoned"))?;
         in_flight.insert(request.turn_id.clone(), token);
         drop(in_flight);
+        let mut active_agents = self
+            .active_agents
+            .lock()
+            .map_err(|_| RuntimeBridgeError::retryable("runtime agent registry lock poisoned"))?;
+        active_agents.insert(request.turn_id.clone(), Arc::clone(&agent));
+        drop(active_agents);
 
         let bridge = self.clone();
         let thread_id = request.thread_id;
         let turn_id = request.turn_id;
         let runtime_cleanup_turn_id = turn_id.clone();
         let spawn_cleanup_turn_id = turn_id.clone();
+        let spawn_cleanup_agent = Arc::clone(&agent);
+        let runtime_cleanup_agent = Arc::clone(&agent);
+        let stream_agent = Arc::clone(&agent);
         let prompt = request.prompt;
         let updates = request.updates;
         let event_updates = updates.clone();
         let event_thread_id = thread_id.clone();
         let event_turn_id = turn_id.clone();
         let model_call_mode = request.model_provider.model_call_mode;
+        let event_bridge = bridge.clone();
         thread::Builder::new()
             .name(format!("dasclaw-app-server-{turn_id}"))
             .spawn(move || {
@@ -1698,10 +2324,11 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
                     Ok(runtime) => runtime.block_on(async move {
                         use futures_util::StreamExt as _;
 
-                        let mut stream = std::sync::Arc::new(agent).stream(
+                        let mut stream = Arc::clone(&stream_agent).stream(
                             &prompt,
                             dasclaw_runtime::AgentRunOptions { model_call_mode },
                         );
+                        let mut tool_item_keys_by_name = HashMap::<String, String>::new();
                         while let Some(event) = stream.next().await {
                             match event {
                                 Ok(dasclaw_runtime::AgentEvent::TextChunk(delta)) => {
@@ -1726,6 +2353,77 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
                                 Ok(dasclaw_runtime::AgentEvent::Completed(output)) => {
                                     return Ok(output.text);
                                 }
+                                Ok(dasclaw_runtime::AgentEvent::ApprovalNeeded {
+                                    request_id,
+                                    tool_name,
+                                    tool_arguments,
+                                    description,
+                                    display_parameters,
+                                    allow_always,
+                                }) => {
+                                    let request_id = request_id.to_string();
+                                    let tool_call_id = tool_call_id_from_arguments(&tool_arguments)
+                                        .unwrap_or_else(|| tool_name.clone());
+                                    if let Ok(mut pending_approvals) =
+                                        event_bridge.pending_approvals.lock()
+                                    {
+                                        pending_approvals
+                                            .insert(request_id.clone(), Arc::clone(&stream_agent));
+                                    }
+                                    event_updates.approval_requested(
+                                        event_thread_id.clone(),
+                                        event_turn_id.clone(),
+                                        RuntimeApprovalRequest {
+                                            request_id: request_id.clone(),
+                                            tool_call_id,
+                                            tool_name,
+                                            command: command_from_arguments(&tool_arguments),
+                                            description,
+                                            display_parameters,
+                                            allow_always,
+                                        },
+                                    );
+                                }
+                                Ok(dasclaw_runtime::AgentEvent::ToolCallStart {
+                                    name,
+                                    arguments,
+                                }) => {
+                                    let item_key = tool_call_id_from_arguments(&arguments)
+                                        .unwrap_or_else(|| name.clone());
+                                    tool_item_keys_by_name.insert(name.clone(), item_key.clone());
+                                    event_updates.command_output_delta(
+                                        event_thread_id.clone(),
+                                        event_turn_id.clone(),
+                                        RuntimeCommandOutputDeltaUpdate {
+                                            item_id: runtime_tool_item_id(
+                                                &event_turn_id,
+                                                &item_key,
+                                            ),
+                                            delta: tool_call_started_delta(&name),
+                                        },
+                                    );
+                                }
+                                Ok(dasclaw_runtime::AgentEvent::ToolResult {
+                                    name,
+                                    content,
+                                    is_error,
+                                }) => {
+                                    let item_key = tool_item_keys_by_name
+                                        .remove(&name)
+                                        .unwrap_or_else(|| name.clone());
+                                    event_updates.tool_result(
+                                        event_thread_id.clone(),
+                                        event_turn_id.clone(),
+                                        RuntimeToolResultUpdate {
+                                            item_id: runtime_tool_item_id(
+                                                &event_turn_id,
+                                                &item_key,
+                                            ),
+                                            content,
+                                            is_error,
+                                        },
+                                    );
+                                }
                                 Ok(_) => {}
                                 Err(error) => {
                                     return Err(error);
@@ -1741,14 +2439,14 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
                     ))),
                 };
 
-                bridge.remove_in_flight_turn(&runtime_cleanup_turn_id);
+                bridge.cleanup_runtime_turn(&runtime_cleanup_turn_id, &runtime_cleanup_agent);
                 match result {
                     Ok(output) => updates.complete(thread_id, turn_id, output),
                     Err(error) => updates.fail(thread_id, turn_id, error.to_string()),
                 }
             })
             .map_err(|error| {
-                self.remove_in_flight_turn(&spawn_cleanup_turn_id);
+                self.cleanup_runtime_turn(&spawn_cleanup_turn_id, &spawn_cleanup_agent);
                 RuntimeBridgeError::retryable(format!(
                     "failed to start dasclaw runtime turn: {error}"
                 ))
@@ -1772,6 +2470,29 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
         Ok(())
     }
 
+    fn resolve_approval(
+        &self,
+        decision: RuntimeApprovalDecision,
+    ) -> Result<(), RuntimeBridgeError> {
+        let request_id = uuid::Uuid::parse_str(&decision.request_id).map_err(|error| {
+            RuntimeBridgeError::fatal(format!("invalid approval request id: {error}"))
+        })?;
+        let agent = self
+            .pending_approvals
+            .lock()
+            .map_err(|_| RuntimeBridgeError::retryable("runtime approval registry lock poisoned"))?
+            .remove(&decision.request_id)
+            .ok_or_else(|| {
+                RuntimeBridgeError::retryable(format!(
+                    "runtime approval request is not pending: {}",
+                    decision.request_id
+                ))
+            })?;
+        agent
+            .respond_to_approval(request_id, decision.decision)
+            .map_err(|error| RuntimeBridgeError::retryable(error.to_string()))
+    }
+
     fn shutdown(&self) {
         let tokens = self
             .in_flight
@@ -1786,7 +2507,33 @@ impl RuntimeBridge for DasclawAgentRuntimeBridge {
         for token in tokens {
             token.cancel();
         }
+        if let Ok(mut active_agents) = self.active_agents.lock() {
+            active_agents.clear();
+        }
+        if let Ok(mut pending_approvals) = self.pending_approvals.lock() {
+            pending_approvals.clear();
+        }
     }
+}
+
+fn runtime_tool_item_id(turn_id: &str, tool_name: &str) -> String {
+    format!("{turn_id}:tool:{tool_name}")
+}
+
+fn tool_call_started_delta(tool_name: &str) -> String {
+    format!("tool call started: {tool_name}")
+}
+
+fn string_field(value: &Value, field: &str) -> Option<String> {
+    value.get(field).and_then(Value::as_str).map(str::to_string)
+}
+
+fn tool_call_id_from_arguments(arguments: &Value) -> Option<String> {
+    string_field(arguments, "id").or_else(|| string_field(arguments, "tool_call_id"))
+}
+
+fn command_from_arguments(arguments: &Value) -> Option<String> {
+    string_field(arguments, "cmd").or_else(|| string_field(arguments, "command"))
 }
 
 fn agent_from_model_provider_snapshot(
@@ -1902,9 +2649,11 @@ impl SessionThreadHost {
         }
 
         match update.outcome {
-            RuntimeTurnOutcome::Delta { .. } | RuntimeTurnOutcome::ReasoningSummaryDelta { .. } => {
-                return None;
-            }
+            RuntimeTurnOutcome::Delta { .. }
+            | RuntimeTurnOutcome::ReasoningSummaryDelta { .. }
+            | RuntimeTurnOutcome::ApprovalRequested { .. }
+            | RuntimeTurnOutcome::ToolResult { .. }
+            | RuntimeTurnOutcome::CommandOutputDelta { .. } => return None,
             RuntimeTurnOutcome::Completed { output } => {
                 turn.status = TurnStatus::Completed;
                 turn.output = Some(output);
@@ -2066,6 +2815,7 @@ fn response_for_request(
 #[derive(Debug, Clone, Default)]
 pub struct NotificationBus {
     pending: Vec<ServerNotification>,
+    pending_server_requests: Vec<JsonRpcServerRequest>,
     lag_disconnect_signaled: bool,
 }
 
@@ -2143,6 +2893,46 @@ impl NotificationBus {
         self.push(ServerNotification::item_completed(event));
     }
 
+    pub fn emit_server_request_resolved(&mut self, event: ServerRequestResolvedEvent) {
+        self.push(ServerNotification::server_request_resolved(event));
+    }
+
+    pub fn emit_command_execution_output_delta(&mut self, event: CommandExecutionOutputDeltaEvent) {
+        self.push(ServerNotification::command_execution_output_delta(event));
+    }
+
+    pub fn emit_command_execution_terminal_interaction(
+        &mut self,
+        event: CommandExecutionTerminalInteractionEvent,
+    ) {
+        self.push(ServerNotification::command_execution_terminal_interaction(
+            event,
+        ));
+    }
+
+    pub fn emit_server_request(&mut self, request: JsonRpcServerRequest) {
+        if self.lag_disconnect_signaled {
+            return;
+        }
+        if self.total_pending_len() >= DEFAULT_MAX_PENDING_NOTIFICATIONS as usize {
+            self.pending.clear();
+            self.pending_server_requests.clear();
+            if let Ok(error) = ServerNotification::error(ErrorEvent {
+                code: ErrorCode::NotificationQueueOverflow,
+                message: "client notification queue exceeded bounded capacity; reconnect required"
+                    .to_string(),
+                thread_id: None,
+                turn_id: None,
+                retryable: true,
+            }) {
+                self.pending.push(error);
+            }
+            self.lag_disconnect_signaled = true;
+            return;
+        }
+        self.pending_server_requests.push(request);
+    }
+
     pub fn emit_error(&mut self, event: ErrorEvent) {
         self.push(ServerNotification::error(event));
     }
@@ -2162,12 +2952,19 @@ impl NotificationBus {
 
     pub fn drain_json_rpc_with_policy(&mut self) -> JsonRpcNotificationDrain {
         let drain = self.drain_with_policy();
-        JsonRpcNotificationDrain {
-            lines: drain
+        let server_requests = std::mem::take(&mut self.pending_server_requests);
+        let mut lines = server_requests
+            .into_iter()
+            .filter_map(|request| serde_json::to_string(&request).ok())
+            .collect::<Vec<_>>();
+        lines.extend(
+            drain
                 .notifications
                 .into_iter()
-                .filter_map(|notification| serde_json::to_string(&notification).ok())
-                .collect(),
+                .filter_map(|notification| serde_json::to_string(&notification).ok()),
+        );
+        JsonRpcNotificationDrain {
+            lines,
             should_disconnect: drain.should_disconnect,
         }
     }
@@ -2181,8 +2978,9 @@ impl NotificationBus {
             return;
         }
         if let Ok(notification) = notification {
-            if self.pending.len() >= DEFAULT_MAX_PENDING_NOTIFICATIONS as usize {
+            if self.total_pending_len() >= DEFAULT_MAX_PENDING_NOTIFICATIONS as usize {
                 self.pending.clear();
+                self.pending_server_requests.clear();
                 if let Ok(error) = ServerNotification::error(ErrorEvent {
                     code: ErrorCode::NotificationQueueOverflow,
                     message:
@@ -2199,6 +2997,10 @@ impl NotificationBus {
             }
             self.pending.push(notification);
         }
+    }
+
+    fn total_pending_len(&self) -> usize {
+        self.pending.len() + self.pending_server_requests.len()
     }
 }
 
@@ -2478,6 +3280,7 @@ pub fn supported_methods() -> &'static [&'static str] {
         method::TURN_READ,
         method::MODEL_LIST,
         method::MODEL_PROVIDER_SELECT_FOR_NEXT_TURN,
+        method::APPROVAL_RESPOND,
     ]
 }
 
@@ -2514,7 +3317,7 @@ mod tests {
     use dasclaw_app_server_protocol::{
         CapabilityStatus, ServiceStatus, TransportKind, WorkspaceInfo, WorkspaceTrust,
     };
-    use dasclaw_core::messages::FinishReason;
+    use dasclaw_core::messages::{FinishReason, ToolCall, ToolDefinition, ToolResult};
     use dasclaw_core::reasoning_ctx::ReasoningContext;
     use dasclaw_core::response_types::{
         RespondOutput, RespondResult, ResponseMetadata, TokenUsage,
@@ -2559,6 +3362,22 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         Vec::new()
+    }
+
+    fn collect_runtime_updates_until(
+        sink: &RuntimeTurnUpdateSink,
+        matches_target: impl Fn(&[RuntimeTurnUpdate]) -> bool,
+    ) -> Vec<RuntimeTurnUpdate> {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut collected = Vec::new();
+        while Instant::now() < deadline {
+            collected.extend(sink.drain());
+            if matches_target(&collected) {
+                return collected;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        collected
     }
 
     #[test]
@@ -3042,6 +3861,494 @@ mod tests {
     }
 
     #[test]
+    fn json_rpc_client_response_without_method_is_not_treated_as_invalid_request() {
+        let bridge = Arc::new(ManualApprovalBridge::default());
+        let mut server = initialized_server_with_bridge(bridge);
+
+        let response = server.handle_json_rpc(
+            r#"{"jsonrpc":"2.0","id":"approval_missing","result":{"decision":{"kind":"approve"}}}"#,
+        );
+
+        assert!(response.is_none());
+        let notifications = server.drain_notifications();
+        assert!(
+            notifications.iter().any(|notification| {
+                notification.method == "serverRequest/resolved"
+                    && notification.params["outcome"] == "failed"
+            }),
+            "unknown client response should emit failed serverRequest/resolved: {notifications:?}"
+        );
+    }
+
+    #[test]
+    fn protocol_schema_methods_are_all_routable_after_p3() {
+        let bridge = Arc::new(ManualApprovalBridge::default());
+        let server = initialized_server_with_bridge(bridge);
+        assert_eq!(
+            server.capabilities.approval.status,
+            CapabilityStatus::Implemented
+        );
+        assert_eq!(
+            server.capabilities.tools.status,
+            CapabilityStatus::Implemented
+        );
+        assert_eq!(
+            server.capabilities.sandbox.status,
+            CapabilityStatus::Implemented
+        );
+        let health = server.clone().health_check(HealthCheckParams {
+            include_details: true,
+        });
+        assert!(health.services.iter().any(|service| {
+            service.service == ServiceName::Tools && service.status == ServiceStatus::Ready
+        }));
+        assert!(health.services.iter().any(|service| {
+            service.service == ServiceName::Sandbox && service.status == ServiceStatus::Ready
+        }));
+
+        for method in server.protocol_schema().methods {
+            assert!(
+                supported_methods().contains(&method.method.as_str()),
+                "protocol/schema advertised an unroutable method after P3: {}",
+                method.method
+            );
+        }
+    }
+
+    #[test]
+    fn approval_response_records_runtime_decision_and_emits_resolved_notification() {
+        let bridge = Arc::new(ManualApprovalBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        let thread_id = server
+            .thread_create(ThreadCreateParams {
+                title: Some("Approval".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread should be created")
+            .thread_id;
+        let turn = server
+            .turn_start(TurnStartParams {
+                thread_id,
+                prompt: "run command".to_string(),
+                reasoning_summary: None,
+            })
+            .expect("turn should start");
+        assert_eq!(turn.status, TurnStatus::Pending);
+
+        let outputs = json_rpc_values(server.drain_json_rpc_notifications());
+        let server_request = outputs
+            .iter()
+            .find(|value| value["method"] == "item/commandExecution/requestApproval")
+            .expect("approval server request should be emitted");
+        let request_id = server_request["id"]
+            .as_str()
+            .expect("approval server request id should be a string")
+            .to_string();
+        assert_eq!(
+            server_request["params"]["itemId"],
+            serde_json::json!("turn_1:tool:tool_1")
+        );
+
+        let response = server.handle_json_rpc(&format!(
+            r#"{{"jsonrpc":"2.0","id":{request_id:?},"result":{{"decision":{{"kind":"approve"}}}}}}"#
+        ));
+
+        assert!(response.is_none());
+        assert_eq!(
+            bridge.decisions(),
+            vec![(
+                "00000000-0000-0000-0000-000000000001".to_string(),
+                dasclaw_runtime::ApprovalDecision::Approve
+            )]
+        );
+        let notifications = server.drain_notifications();
+        assert!(
+            notifications.iter().any(|notification| {
+                notification.method == "serverRequest/resolved"
+                    && notification.params["requestId"] == request_id
+                    && notification.params["outcome"] == "approved"
+            }),
+            "approval response should emit approved serverRequest/resolved: {notifications:?}"
+        );
+    }
+
+    #[test]
+    fn approval_reject_response_preserves_reason_in_resolved_notification() {
+        let bridge = Arc::new(ManualApprovalBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        let thread_id = server
+            .thread_create(ThreadCreateParams {
+                title: Some("Approval reject".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread should be created")
+            .thread_id;
+        let _turn = server
+            .turn_start(TurnStartParams {
+                thread_id,
+                prompt: "run command".to_string(),
+                reasoning_summary: None,
+            })
+            .expect("turn should start");
+        let outputs = json_rpc_values(server.drain_json_rpc_notifications());
+        let request_id = outputs
+            .iter()
+            .find(|value| value["method"] == "item/commandExecution/requestApproval")
+            .and_then(|value| value["id"].as_str())
+            .expect("approval server request should be emitted")
+            .to_string();
+
+        let response = server.handle_json_rpc(&format!(
+            r#"{{"jsonrpc":"2.0","id":{request_id:?},"result":{{"decision":{{"kind":"reject","data":{{"reason":"not allowed"}}}}}}}}"#
+        ));
+
+        assert!(response.is_none());
+        assert_eq!(
+            bridge.decisions(),
+            vec![(
+                "00000000-0000-0000-0000-000000000001".to_string(),
+                dasclaw_runtime::ApprovalDecision::Reject {
+                    reason: Some("not allowed".to_string())
+                }
+            )]
+        );
+        let notifications = server.drain_notifications();
+        assert!(
+            notifications.iter().any(|notification| {
+                notification.method == "serverRequest/resolved"
+                    && notification.params["requestId"] == request_id
+                    && notification.params["outcome"] == "rejected"
+                    && notification.params["reason"] == "not allowed"
+            }),
+            "approval reject should preserve reason in serverRequest/resolved: {notifications:?}"
+        );
+    }
+
+    #[test]
+    fn expired_approval_request_rejects_fail_safe_and_late_response_is_unknown() {
+        let bridge = Arc::new(ManualApprovalBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        let thread_id = server
+            .thread_create(ThreadCreateParams {
+                title: Some("Approval timeout".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread should be created")
+            .thread_id;
+        let turn = server
+            .turn_start(TurnStartParams {
+                thread_id: thread_id.clone(),
+                prompt: "run command".to_string(),
+                reasoning_summary: None,
+            })
+            .expect("turn should start");
+        let outputs = json_rpc_values(server.drain_json_rpc_notifications());
+        let request_id = outputs
+            .iter()
+            .find(|value| value["method"] == "item/commandExecution/requestApproval")
+            .and_then(|value| value["id"].as_str())
+            .expect("approval server request should be emitted")
+            .to_string();
+
+        server.expire_pending_server_requests_for_tests(Duration::from_secs(301));
+        assert_turn_status_and_ready(&mut server, &thread_id, &turn.turn_id, TurnStatus::Failed);
+        assert_eq!(
+            bridge.decisions(),
+            vec![(
+                "00000000-0000-0000-0000-000000000001".to_string(),
+                dasclaw_runtime::ApprovalDecision::Reject {
+                    reason: Some("approval request timed out".to_string())
+                }
+            )]
+        );
+
+        let late = server.handle_json_rpc(&format!(
+            r#"{{"jsonrpc":"2.0","id":{request_id:?},"result":{{"decision":{{"kind":"approve"}}}}}}"#
+        ));
+
+        assert!(late.is_none());
+        let notifications = server.drain_notifications();
+        assert!(
+            notifications.iter().any(|notification| {
+                notification.method == "serverRequest/resolved"
+                    && notification.params["requestId"] == request_id
+                    && notification.params["outcome"] == "timed_out"
+            }),
+            "expired request should emit timed_out serverRequest/resolved: {notifications:?}"
+        );
+        assert!(
+            notifications.iter().any(|notification| {
+                notification.method == "serverRequest/resolved"
+                    && notification.params["requestId"] == request_id
+                    && notification.params["outcome"] == "failed"
+            }),
+            "late response should emit failed serverRequest/resolved: {notifications:?}"
+        );
+        assert!(
+            notifications.iter().any(|notification| {
+                notification.method == "turn/failed"
+                    && notification.params["threadId"] == thread_id
+                    && notification.params["turnId"] == turn.turn_id
+            }),
+            "timeout should fail the owning turn: {notifications:?}"
+        );
+    }
+
+    #[test]
+    fn approval_error_response_rejects_runtime_and_clears_pending_request() {
+        let bridge = Arc::new(ManualApprovalBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        let thread_id = server
+            .thread_create(ThreadCreateParams {
+                title: Some("Approval client error".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread should be created")
+            .thread_id;
+        let turn = server
+            .turn_start(TurnStartParams {
+                thread_id: thread_id.clone(),
+                prompt: "run command".to_string(),
+                reasoning_summary: None,
+            })
+            .expect("turn should start");
+        let outputs = json_rpc_values(server.drain_json_rpc_notifications());
+        let request_id = outputs
+            .iter()
+            .find(|value| value["method"] == "item/commandExecution/requestApproval")
+            .and_then(|value| value["id"].as_str())
+            .expect("approval server request should be emitted")
+            .to_string();
+
+        let response = server.handle_json_rpc(&format!(
+            r#"{{"jsonrpc":"2.0","id":{request_id:?},"error":{{"code":-32000,"message":"client rejected response"}}}}"#
+        ));
+
+        assert!(response.is_none());
+        assert_eq!(
+            bridge.decisions(),
+            vec![(
+                "00000000-0000-0000-0000-000000000001".to_string(),
+                dasclaw_runtime::ApprovalDecision::Reject {
+                    reason: Some("approval response failed: client rejected response".to_string())
+                }
+            )]
+        );
+        let notifications = server.drain_notifications();
+        assert_turn_status_and_ready(&mut server, &thread_id, &turn.turn_id, TurnStatus::Failed);
+        assert!(
+            notifications.iter().any(|notification| {
+                notification.method == "serverRequest/resolved"
+                    && notification.params["requestId"] == request_id
+                    && notification.params["outcome"] == "failed"
+                    && notification.params["reason"] == "client rejected response"
+            }),
+            "client error response should resolve pending request as failed: {notifications:?}"
+        );
+        assert!(
+            notifications.iter().any(|notification| {
+                notification.method == "turn/failed"
+                    && notification.params["threadId"] == thread_id
+                    && notification.params["turnId"] == turn.turn_id
+            }),
+            "client error response should fail the owning turn: {notifications:?}"
+        );
+
+        server.expire_pending_server_requests_for_tests(Duration::from_secs(301));
+        let timeout_notifications = server.drain_notifications();
+        assert!(
+            !timeout_notifications.iter().any(|notification| {
+                notification.method == "serverRequest/resolved"
+                    && notification.params["requestId"] == request_id
+            }),
+            "cleared request must not resolve again on timeout: {timeout_notifications:?}"
+        );
+    }
+
+    #[test]
+    fn malformed_approval_response_rejects_runtime_and_clears_pending_request() {
+        let bridge = Arc::new(ManualApprovalBridge::default());
+        let mut server = initialized_server_with_bridge(bridge.clone());
+        let thread_id = server
+            .thread_create(ThreadCreateParams {
+                title: Some("Malformed approval".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread should be created")
+            .thread_id;
+        let turn = server
+            .turn_start(TurnStartParams {
+                thread_id: thread_id.clone(),
+                prompt: "run command".to_string(),
+                reasoning_summary: None,
+            })
+            .expect("turn should start");
+        let outputs = json_rpc_values(server.drain_json_rpc_notifications());
+        let request_id = outputs
+            .iter()
+            .find(|value| value["method"] == "item/commandExecution/requestApproval")
+            .and_then(|value| value["id"].as_str())
+            .expect("approval server request should be emitted")
+            .to_string();
+
+        let response = server.handle_json_rpc(&format!(
+            r#"{{"jsonrpc":"2.0","id":{request_id:?},"result":{{"unexpected":true}}}}"#
+        ));
+
+        assert!(response.is_none());
+        assert!(matches!(
+            bridge.decisions().as_slice(),
+            [(
+                id,
+                dasclaw_runtime::ApprovalDecision::Reject {
+                    reason: Some(reason)
+                }
+            )] if id == "00000000-0000-0000-0000-000000000001"
+                && reason.starts_with("approval response failed:")
+        ));
+        let notifications = server.drain_notifications();
+        assert_turn_status_and_ready(&mut server, &thread_id, &turn.turn_id, TurnStatus::Failed);
+        assert!(
+            notifications.iter().any(|notification| {
+                notification.method == "serverRequest/resolved"
+                    && notification.params["requestId"] == request_id
+                    && notification.params["outcome"] == "failed"
+            }),
+            "malformed response should resolve pending request as failed: {notifications:?}"
+        );
+
+        server.expire_pending_server_requests_for_tests(Duration::from_secs(301));
+        let timeout_notifications = server.drain_notifications();
+        assert!(
+            !timeout_notifications.iter().any(|notification| {
+                notification.method == "serverRequest/resolved"
+                    && notification.params["requestId"] == request_id
+            }),
+            "cleared malformed response request must not timeout later: {timeout_notifications:?}"
+        );
+    }
+
+    #[test]
+    fn turn_cancel_resolves_pending_approval_server_request_as_failed() {
+        let bridge = Arc::new(ManualApprovalBridge::default());
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread_id = server
+            .thread_create(ThreadCreateParams {
+                title: Some("Approval cancel".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread should be created")
+            .thread_id;
+        let turn = server
+            .turn_start(TurnStartParams {
+                thread_id: thread_id.clone(),
+                prompt: "run command".to_string(),
+                reasoning_summary: None,
+            })
+            .expect("turn should start");
+        let outputs = json_rpc_values(server.drain_json_rpc_notifications());
+        let request_id = outputs
+            .iter()
+            .find(|value| value["method"] == "item/commandExecution/requestApproval")
+            .and_then(|value| value["id"].as_str())
+            .expect("approval server request should be emitted")
+            .to_string();
+
+        server
+            .turn_cancel(TurnCancelParams {
+                thread_id: thread_id.clone(),
+                turn_id: turn.turn_id.clone(),
+            })
+            .expect("turn cancel should succeed");
+
+        let notifications = server.drain_notifications();
+        assert_turn_status_and_ready(
+            &mut server,
+            &thread_id,
+            &turn.turn_id,
+            TurnStatus::Cancelled,
+        );
+        assert!(
+            notifications.iter().any(|notification| {
+                notification.method == "serverRequest/resolved"
+                    && notification.params["requestId"] == request_id
+                    && notification.params["outcome"] == "failed"
+                    && notification.params["reason"] == "turn cancelled"
+            }),
+            "turn cancel should resolve pending approval request: {notifications:?}"
+        );
+        let late = server.handle_json_rpc(&format!(
+            r#"{{"jsonrpc":"2.0","id":{request_id:?},"result":{{"decision":{{"kind":"approve"}}}}}}"#
+        ));
+        assert!(late.is_none());
+        let late_notifications = server.drain_notifications();
+        assert!(
+            late_notifications.iter().any(|notification| {
+                notification.method == "serverRequest/resolved"
+                    && notification.params["requestId"] == request_id
+                    && notification.params["outcome"] == "failed"
+            }),
+            "late response should be unknown after cancel cleanup: {late_notifications:?}"
+        );
+    }
+
+    #[test]
+    fn shutdown_resolves_pending_approval_server_request_as_failed() {
+        let bridge = Arc::new(ManualApprovalBridge::default());
+        let mut server = initialized_server_with_bridge(bridge);
+        let thread_id = server
+            .thread_create(ThreadCreateParams {
+                title: Some("Approval shutdown".to_string()),
+                workspace_root: None,
+            })
+            .expect("thread should be created")
+            .thread_id;
+        let _turn = server
+            .turn_start(TurnStartParams {
+                thread_id,
+                prompt: "run command".to_string(),
+                reasoning_summary: None,
+            })
+            .expect("turn should start");
+        let outputs = json_rpc_values(server.drain_json_rpc_notifications());
+        let request_id = outputs
+            .iter()
+            .find(|value| value["method"] == "item/commandExecution/requestApproval")
+            .and_then(|value| value["id"].as_str())
+            .expect("approval server request should be emitted")
+            .to_string();
+
+        let _shutdown = server.shutdown(ShutdownParams {
+            reason: Some(ShutdownReason::ClientExit),
+            timeout_ms: None,
+        });
+
+        let notifications = server.drain_notifications();
+        assert!(
+            notifications.iter().any(|notification| {
+                notification.method == "serverRequest/resolved"
+                    && notification.params["requestId"] == request_id
+                    && notification.params["outcome"] == "failed"
+                    && notification.params["reason"] == "server shutdown"
+            }),
+            "shutdown should resolve pending approval request: {notifications:?}"
+        );
+        let late = server.handle_json_rpc(&format!(
+            r#"{{"jsonrpc":"2.0","id":{request_id:?},"result":{{"decision":{{"kind":"approve"}}}}}}"#
+        ));
+        assert!(late.is_none());
+        let late_notifications = server.drain_notifications();
+        assert!(
+            late_notifications.iter().any(|notification| {
+                notification.method == "serverRequest/resolved"
+                    && notification.params["requestId"] == request_id
+                    && notification.params["outcome"] == "failed"
+            }),
+            "late response should be unknown after shutdown cleanup: {late_notifications:?}"
+        );
+    }
+
+    #[test]
     fn initialize_queues_lifecycle_and_capability_notifications() {
         let mut server = AppServer::new();
         server
@@ -3137,6 +4444,40 @@ mod tests {
         assert_eq!(value["jsonrpc"], "2.0");
         assert_eq!(value["method"], "lifecycle/changed");
         assert!(bus.drain_json_rpc().is_empty());
+    }
+
+    #[test]
+    fn notification_bus_plain_drain_preserves_pending_server_requests_for_json_rpc_drain() {
+        let mut bus = NotificationBus::new();
+        bus.emit_server_request(
+            JsonRpcServerRequest::new(
+                "approval_1",
+                server_request::ITEM_COMMAND_EXECUTION_REQUEST_APPROVAL,
+                serde_json::json!({"threadId":"thread_1"}),
+            )
+            .expect("server request should serialize"),
+        );
+        bus.emit_turn_delta(TurnDeltaEvent {
+            thread_id: "thread_1".to_string(),
+            turn_id: "turn_1".to_string(),
+            delta: "hello".to_string(),
+        });
+
+        let plain_drain = bus.drain_with_policy();
+        assert!(!plain_drain.should_disconnect);
+        assert_eq!(plain_drain.notifications.len(), 1);
+        assert_eq!(plain_drain.notifications[0].method, "turn/delta");
+
+        let json_rpc_drain = bus.drain_json_rpc_with_policy();
+        assert!(!json_rpc_drain.should_disconnect);
+        assert_eq!(json_rpc_drain.lines.len(), 1);
+        let request: Value =
+            serde_json::from_str(&json_rpc_drain.lines[0]).expect("server request should be JSON");
+        assert_eq!(request["id"], "approval_1");
+        assert_eq!(
+            request["method"],
+            server_request::ITEM_COMMAND_EXECUTION_REQUEST_APPROVAL
+        );
     }
 
     #[test]
@@ -4557,6 +5898,108 @@ mod tests {
     }
 
     #[test]
+    fn agent_runtime_bridge_maps_approval_needed_and_tool_result_to_runtime_updates() {
+        let executor = Arc::new(CountingExecutor::new());
+        let factory_executor = Arc::clone(&executor);
+        let bridge = DasclawAgentRuntimeBridge::new_with_model_provider_and_features(
+            move |token, _snapshot, _reasoning_summary| {
+                dasclaw_runtime::Agent::builder()
+                    .responder(ScriptedResponder::new(vec![
+                        tool_call_output("bash", "call_1"),
+                        text_output("done"),
+                    ]))
+                    .tool_executor(
+                        Arc::clone(&factory_executor) as Arc<dyn dasclaw_runtime::ToolExecutor>
+                    )
+                    .tools(vec![dummy_tool("bash")])
+                    .approval_policy(Arc::new(AlwaysApprovePolicy))
+                    .cancellation_token(token)
+                    .build()
+                    .map_err(|error| RuntimeBridgeError::fatal(error.to_string()))
+            },
+            RuntimeBridgeFeatures {
+                approval: true,
+                tools: true,
+                sandbox: true,
+            },
+        );
+        let updates = RuntimeTurnUpdateSink::new();
+
+        bridge
+            .start_turn(RuntimeTurnStartRequest {
+                thread_id: "thread_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                prompt: "run tool".to_string(),
+                model_provider: test_runtime_model_snapshot(),
+                reasoning_summary: ReasoningSummary::None,
+                updates: updates.clone(),
+            })
+            .expect("turn should start");
+
+        let before_approval = collect_runtime_updates_until(&updates, |updates| {
+            updates.iter().any(|update| {
+                matches!(update.outcome, RuntimeTurnOutcome::ApprovalRequested { .. })
+            })
+        });
+        let approval_id = before_approval
+            .iter()
+            .find_map(|update| match &update.outcome {
+                RuntimeTurnOutcome::ApprovalRequested { request } => {
+                    assert_eq!(request.tool_name, "bash");
+                    assert_eq!(request.tool_call_id, "call_1");
+                    Some(request.request_id.clone())
+                }
+                _ => None,
+            })
+            .expect("approval request update should be emitted");
+        let output_delta = before_approval
+            .iter()
+            .find_map(|update| match &update.outcome {
+                RuntimeTurnOutcome::CommandOutputDelta { update } => Some(update),
+                _ => None,
+            })
+            .expect("command output delta should be emitted before approval");
+        assert_eq!(output_delta.item_id, "turn_1:tool:call_1");
+        assert_eq!(output_delta.delta, "tool call started: bash");
+        assert!(!output_delta.delta.contains("secret-token"));
+        assert!(!output_delta.delta.contains("/tmp/x"));
+        assert!(!output_delta.delta.contains("tool_call_id"));
+
+        bridge
+            .resolve_approval(RuntimeApprovalDecision {
+                request_id: approval_id,
+                decision: dasclaw_runtime::ApprovalDecision::Approve,
+            })
+            .expect("approval should resume the runtime turn");
+
+        let after_approval = collect_runtime_updates_until(&updates, |updates| {
+            updates
+                .iter()
+                .any(|update| matches!(update.outcome, RuntimeTurnOutcome::Completed { .. }))
+        });
+        let tool_result = after_approval
+            .iter()
+            .find_map(|update| match &update.outcome {
+                RuntimeTurnOutcome::ToolResult { update } => Some(update),
+                _ => None,
+            })
+            .expect("tool result update should be emitted after approval");
+        assert_eq!(tool_result.item_id, "turn_1:tool:call_1");
+        assert!(tool_result.content.contains("ran bash"));
+        assert!(!tool_result.is_error);
+        assert!(
+            after_approval.iter().any(|update| {
+                matches!(
+                    &update.outcome,
+                    RuntimeTurnOutcome::Completed { output } if output == "done"
+                )
+            }),
+            "runtime should complete after approved tool execution: {after_approval:?}"
+        );
+        assert_eq!(executor.call_count_blocking(), 1);
+    }
+
+    #[test]
     fn snapshot_runtime_bridge_rejects_unknown_api_format_without_leaking_key() {
         let bridge = DasclawAgentRuntimeBridge::from_model_provider_snapshot();
         let mut snapshot = test_runtime_model_snapshot();
@@ -5348,6 +6791,166 @@ mod tests {
     }
 
     #[test]
+    fn p3_stdio_e2e_approval_approve_unblocks_tool_execution() {
+        let bridge = Arc::new(ManualApprovalBridge::default());
+        let server = AppServer::with_runtime_bridge(bridge.clone());
+        let input = [
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "initialize",
+                "method": "initialize",
+                "params": {
+                    "client": {"name": "codex", "version": "2.0.0", "transport": "stdio"},
+                    "protocolVersion": ProtocolVersion::current(),
+                    "requestedCapabilities": [
+                        CompatibilityProfile::CODEX_APP_SERVER_V2_ID,
+                        "approval",
+                        "tools",
+                        "sandbox"
+                    ],
+                    "modelProvider": test_model_provider_config()
+                }
+            }),
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "thread",
+                "method": "thread/create",
+                "params": {"title": "P3 approval"}
+            }),
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "turn",
+                "method": "turn/start",
+                "params": {"threadId": "thread_1", "prompt": "run echo"}
+            }),
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "approval_00000000-0000-0000-0000-000000000001",
+                "result": {"decision": {"kind": "approve"}}
+            }),
+        ]
+        .into_iter()
+        .map(|request| serde_json::to_string(&request).expect("request should serialize"))
+        .collect::<Vec<_>>()
+        .join("\n")
+            + "\n";
+        let mut stdout = Vec::new();
+
+        run_stdio_server_with_app_server(
+            server,
+            std::io::BufReader::new(Cursor::new(input)),
+            &mut stdout,
+        )
+        .expect("stdio loop should complete");
+
+        let values = String::from_utf8(stdout)
+            .expect("stdio output should be UTF-8")
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("stdio line should be JSON"))
+            .collect::<Vec<_>>();
+        let emitted_methods = values
+            .iter()
+            .filter_map(|value| value.get("method").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+
+        assert!(emitted_methods.contains(&"item/commandExecution/requestApproval"));
+        assert!(emitted_methods.contains(&"serverRequest/resolved"));
+        assert!(emitted_methods.contains(&"item/commandExecution/terminalInteraction"));
+        assert!(values.iter().any(|value| {
+            value["method"] == "serverRequest/resolved" && value["params"]["outcome"] == "approved"
+        }));
+        assert_eq!(
+            bridge.decisions(),
+            vec![(
+                "00000000-0000-0000-0000-000000000001".to_string(),
+                dasclaw_runtime::ApprovalDecision::Approve
+            )]
+        );
+    }
+
+    #[test]
+    fn p3_stdio_e2e_approval_reject_fails_safe_without_tool_output() {
+        let bridge = Arc::new(ManualApprovalBridge::default());
+        let server = AppServer::with_runtime_bridge(bridge.clone());
+        let input = [
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "initialize",
+                "method": "initialize",
+                "params": {
+                    "client": {"name": "codex", "version": "2.0.0", "transport": "stdio"},
+                    "protocolVersion": ProtocolVersion::current(),
+                    "requestedCapabilities": [
+                        CompatibilityProfile::CODEX_APP_SERVER_V2_ID,
+                        "approval",
+                        "tools",
+                        "sandbox"
+                    ],
+                    "modelProvider": test_model_provider_config()
+                }
+            }),
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "thread",
+                "method": "thread/create",
+                "params": {"title": "P3 rejection"}
+            }),
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "turn",
+                "method": "turn/start",
+                "params": {"threadId": "thread_1", "prompt": "run echo"}
+            }),
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "approval_00000000-0000-0000-0000-000000000001",
+                "result": {"decision": {"kind": "reject", "data": {"reason": "not allowed"}}}
+            }),
+        ]
+        .into_iter()
+        .map(|request| serde_json::to_string(&request).expect("request should serialize"))
+        .collect::<Vec<_>>()
+        .join("\n")
+            + "\n";
+        let mut stdout = Vec::new();
+
+        run_stdio_server_with_app_server(
+            server,
+            std::io::BufReader::new(Cursor::new(input)),
+            &mut stdout,
+        )
+        .expect("stdio loop should complete");
+
+        let values = String::from_utf8(stdout)
+            .expect("stdio output should be UTF-8")
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("stdio line should be JSON"))
+            .collect::<Vec<_>>();
+
+        assert!(values.iter().any(|value| {
+            value["method"] == "serverRequest/resolved"
+                && value["params"]["outcome"] == "rejected"
+                && value["params"]["reason"] == "not allowed"
+        }));
+        assert!(
+            !values.iter().any(|value| {
+                value["method"] == "item/commandExecution/terminalInteraction"
+                    && value["params"]["isError"] == false
+            }),
+            "reject path must not emit successful tool output"
+        );
+        assert!(matches!(
+            bridge.decisions().as_slice(),
+            [(
+                id,
+                dasclaw_runtime::ApprovalDecision::Reject {
+                    reason: Some(reason)
+                }
+            )] if id == "00000000-0000-0000-0000-000000000001" && reason == "not allowed"
+        ));
+    }
+
+    #[test]
     fn legacy_profile_does_not_emit_codex_v2_item_notifications() {
         let bridge = Arc::new(RecordingRuntimeBridge::with_completion(
             RuntimeTurnOutcome::Completed {
@@ -5496,6 +7099,25 @@ mod tests {
 
     fn json_rpc_values(lines: Vec<String>) -> Vec<Value> {
         lines.into_iter().map(json_rpc_value).collect()
+    }
+
+    fn assert_turn_status_and_ready(
+        server: &mut AppServer,
+        thread_id: &str,
+        turn_id: &str,
+        expected_status: TurnStatus,
+    ) {
+        let turn = server
+            .turn_read(TurnReadParams {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+            })
+            .expect("turn should be readable after terminal approval path");
+        assert_eq!(turn.turn.status, expected_status);
+        assert_eq!(
+            server.lifecycle_status().lifecycle.state,
+            LifecycleState::Ready
+        );
     }
 
     fn methods_from_values(values: &[Value]) -> Vec<&str> {
@@ -5659,6 +7281,100 @@ mod tests {
         }
     }
 
+    struct ScriptedResponder {
+        script: tokio::sync::Mutex<Vec<RespondOutput>>,
+    }
+
+    impl ScriptedResponder {
+        fn new(script: Vec<RespondOutput>) -> Self {
+            Self {
+                script: tokio::sync::Mutex::new(script),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl dasclaw_runtime::AgentResponder for ScriptedResponder {
+        async fn respond(&self, _ctx: &mut ReasoningContext) -> Result<RespondOutput, HostError> {
+            let mut script = self.script.lock().await;
+            if script.is_empty() {
+                return Err("script exhausted".into());
+            }
+            Ok(script.remove(0))
+        }
+    }
+
+    struct CountingExecutor {
+        calls: tokio::sync::Mutex<Vec<ToolCall>>,
+    }
+
+    impl CountingExecutor {
+        fn new() -> Self {
+            Self {
+                calls: tokio::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn call_count_blocking(&self) -> usize {
+            self.calls.blocking_lock().len()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl dasclaw_runtime::ToolExecutor for CountingExecutor {
+        async fn execute(&self, call: &ToolCall) -> Result<ToolResult, HostError> {
+            self.calls.lock().await.push(call.clone());
+            Ok(ToolResult {
+                tool_call_id: call.id.clone(),
+                name: call.name.clone(),
+                content: format!("ran {}", call.name),
+                is_error: false,
+            })
+        }
+    }
+
+    struct AlwaysApprovePolicy;
+
+    #[async_trait::async_trait]
+    impl dasclaw_runtime::ApprovalPolicy for AlwaysApprovePolicy {
+        async fn evaluate(&self, call: &ToolCall) -> Option<dasclaw_runtime::ApprovalRequest> {
+            Some(dasclaw_runtime::ApprovalRequest {
+                description: format!("approve call to {}", call.name),
+                display_parameters: call.arguments.clone(),
+                allow_always: true,
+            })
+        }
+    }
+
+    fn tool_call_output(name: &str, id: &str) -> RespondOutput {
+        RespondOutput {
+            result: RespondResult::ToolCalls {
+                tool_calls: vec![ToolCall {
+                    id: id.into(),
+                    name: name.into(),
+                    arguments: serde_json::json!({
+                        "path": "/tmp/x",
+                        "tool_call_id": id,
+                        "api_key": "secret-token",
+                    }),
+                    reasoning: None,
+                }],
+                content: None,
+            },
+            usage: TokenUsage::default(),
+            finish_reason: FinishReason::ToolUse,
+            metadata: ResponseMetadata::default(),
+        }
+    }
+
+    fn dummy_tool(name: &str) -> ToolDefinition {
+        ToolDefinition {
+            name: name.into(),
+            description: "test tool".into(),
+            parameters: serde_json::json!({"type": "object"}),
+        }
+    }
+
     #[derive(Debug, Default)]
     struct RecordingRuntimeBridge {
         calls: Mutex<Vec<RuntimeTurnStartRequest>>,
@@ -5716,40 +7432,7 @@ mod tests {
     impl RuntimeBridge for SequencedRuntimeBridge {
         fn start_turn(&self, request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
             for outcome in &self.outcomes {
-                match outcome {
-                    RuntimeTurnOutcome::Delta { delta } => {
-                        request.updates.delta(
-                            request.thread_id.clone(),
-                            request.turn_id.clone(),
-                            delta.clone(),
-                        );
-                    }
-                    RuntimeTurnOutcome::ReasoningSummaryDelta {
-                        delta,
-                        summary_index,
-                    } => {
-                        request.updates.reasoning_summary_delta(
-                            request.thread_id.clone(),
-                            request.turn_id.clone(),
-                            *summary_index,
-                            delta.clone(),
-                        );
-                    }
-                    RuntimeTurnOutcome::Completed { output } => {
-                        request.updates.complete(
-                            request.thread_id.clone(),
-                            request.turn_id.clone(),
-                            output.clone(),
-                        );
-                    }
-                    RuntimeTurnOutcome::Failed { error } => {
-                        request.updates.fail(
-                            request.thread_id.clone(),
-                            request.turn_id.clone(),
-                            error.clone(),
-                        );
-                    }
-                }
+                push_test_runtime_outcome(&request, outcome.clone());
             }
             Ok(())
         }
@@ -5783,40 +7466,7 @@ mod tests {
             thread::spawn(move || {
                 thread::sleep(Duration::from_millis(25));
                 for outcome in outcomes {
-                    match outcome {
-                        RuntimeTurnOutcome::Delta { delta } => {
-                            request.updates.delta(
-                                request.thread_id.clone(),
-                                request.turn_id.clone(),
-                                delta,
-                            );
-                        }
-                        RuntimeTurnOutcome::ReasoningSummaryDelta {
-                            delta,
-                            summary_index,
-                        } => {
-                            request.updates.reasoning_summary_delta(
-                                request.thread_id.clone(),
-                                request.turn_id.clone(),
-                                summary_index,
-                                delta,
-                            );
-                        }
-                        RuntimeTurnOutcome::Completed { output } => {
-                            request.updates.complete(
-                                request.thread_id.clone(),
-                                request.turn_id.clone(),
-                                output,
-                            );
-                        }
-                        RuntimeTurnOutcome::Failed { error } => {
-                            request.updates.fail(
-                                request.thread_id.clone(),
-                                request.turn_id.clone(),
-                                error,
-                            );
-                        }
-                    }
+                    push_test_runtime_outcome(&request, outcome);
                 }
             });
             Ok(())
@@ -5835,40 +7485,7 @@ mod tests {
     impl RuntimeBridge for RecordingRuntimeBridge {
         fn start_turn(&self, request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
             if let Some(completion) = self.completion.lock().expect("completion lock").clone() {
-                match completion {
-                    RuntimeTurnOutcome::Delta { delta } => {
-                        request.updates.delta(
-                            request.thread_id.clone(),
-                            request.turn_id.clone(),
-                            delta,
-                        );
-                    }
-                    RuntimeTurnOutcome::ReasoningSummaryDelta {
-                        delta,
-                        summary_index,
-                    } => {
-                        request.updates.reasoning_summary_delta(
-                            request.thread_id.clone(),
-                            request.turn_id.clone(),
-                            summary_index,
-                            delta,
-                        );
-                    }
-                    RuntimeTurnOutcome::Completed { output } => {
-                        request.updates.complete(
-                            request.thread_id.clone(),
-                            request.turn_id.clone(),
-                            output,
-                        );
-                    }
-                    RuntimeTurnOutcome::Failed { error } => {
-                        request.updates.fail(
-                            request.thread_id.clone(),
-                            request.turn_id.clone(),
-                            error,
-                        );
-                    }
-                }
+                push_test_runtime_outcome(&request, completion);
             }
             self.calls.lock().expect("calls lock").push(request);
             self.result
@@ -5891,6 +7508,165 @@ mod tests {
         }
 
         fn shutdown(&self) {}
+    }
+
+    fn push_test_runtime_outcome(request: &RuntimeTurnStartRequest, outcome: RuntimeTurnOutcome) {
+        match outcome {
+            RuntimeTurnOutcome::Delta { delta } => {
+                request
+                    .updates
+                    .delta(request.thread_id.clone(), request.turn_id.clone(), delta);
+            }
+            RuntimeTurnOutcome::ReasoningSummaryDelta {
+                delta,
+                summary_index,
+            } => {
+                request.updates.reasoning_summary_delta(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    summary_index,
+                    delta,
+                );
+            }
+            RuntimeTurnOutcome::ApprovalRequested { request: approval } => {
+                request.updates.approval_requested(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    approval,
+                );
+            }
+            RuntimeTurnOutcome::ToolResult { update } => {
+                request.updates.tool_result(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    update,
+                );
+            }
+            RuntimeTurnOutcome::CommandOutputDelta { update } => {
+                request.updates.command_output_delta(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    update,
+                );
+            }
+            RuntimeTurnOutcome::Completed { output } => {
+                request.updates.complete(
+                    request.thread_id.clone(),
+                    request.turn_id.clone(),
+                    output,
+                );
+            }
+            RuntimeTurnOutcome::Failed { error } => {
+                request
+                    .updates
+                    .fail(request.thread_id.clone(), request.turn_id.clone(), error);
+            }
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct ManualApprovalBridge {
+        decisions: Mutex<Vec<(String, dasclaw_runtime::ApprovalDecision)>>,
+        active: Mutex<Option<ManualActiveTurn>>,
+    }
+
+    #[derive(Debug, Clone)]
+    struct ManualActiveTurn {
+        thread_id: String,
+        turn_id: String,
+        updates: RuntimeTurnUpdateSink,
+    }
+
+    impl ManualApprovalBridge {
+        fn decisions(&self) -> Vec<(String, dasclaw_runtime::ApprovalDecision)> {
+            self.decisions.lock().expect("decisions lock").clone()
+        }
+    }
+
+    impl RuntimeBridge for ManualApprovalBridge {
+        fn features(&self) -> RuntimeBridgeFeatures {
+            RuntimeBridgeFeatures {
+                approval: true,
+                tools: true,
+                sandbox: true,
+            }
+        }
+
+        fn start_turn(&self, request: RuntimeTurnStartRequest) -> Result<(), RuntimeBridgeError> {
+            let active = ManualActiveTurn {
+                thread_id: request.thread_id.clone(),
+                turn_id: request.turn_id.clone(),
+                updates: request.updates.clone(),
+            };
+            *self.active.lock().expect("active lock") = Some(active);
+            request.updates.approval_requested(
+                request.thread_id,
+                request.turn_id,
+                RuntimeApprovalRequest {
+                    request_id: "00000000-0000-0000-0000-000000000001".to_string(),
+                    tool_call_id: "tool_1".to_string(),
+                    tool_name: "shell".to_string(),
+                    command: Some("echo ok".to_string()),
+                    description: "Run shell command".to_string(),
+                    display_parameters: serde_json::json!({"cmd":"echo ok"}),
+                    allow_always: true,
+                },
+            );
+            Ok(())
+        }
+
+        fn cancel_turn(
+            &self,
+            _request: RuntimeTurnCancelRequest,
+        ) -> Result<(), RuntimeBridgeError> {
+            Ok(())
+        }
+
+        fn resolve_approval(
+            &self,
+            decision: RuntimeApprovalDecision,
+        ) -> Result<(), RuntimeBridgeError> {
+            let request_id = decision.request_id.clone();
+            let runtime_decision = decision.decision.clone();
+            self.decisions
+                .lock()
+                .expect("decisions lock")
+                .push((request_id, runtime_decision.clone()));
+            let active = self.active.lock().expect("active lock").clone();
+            if let Some(active) = active {
+                match runtime_decision {
+                    dasclaw_runtime::ApprovalDecision::Approve
+                    | dasclaw_runtime::ApprovalDecision::ApproveAlways => {
+                        active.updates.tool_result(
+                            active.thread_id.clone(),
+                            active.turn_id.clone(),
+                            RuntimeToolResultUpdate {
+                                item_id: format!("{}:tool:tool_1", active.turn_id),
+                                content: "hello from sandbox".to_string(),
+                                is_error: false,
+                            },
+                        );
+                        active.updates.complete(
+                            active.thread_id,
+                            active.turn_id,
+                            "done".to_string(),
+                        );
+                    }
+                    dasclaw_runtime::ApprovalDecision::Reject { reason } => {
+                        active.updates.fail(
+                            active.thread_id,
+                            active.turn_id,
+                            reason.unwrap_or_else(|| "approval rejected".to_string()),
+                        );
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        fn shutdown(&self) {
+            *self.active.lock().expect("active lock") = None;
+        }
     }
 
     #[test]

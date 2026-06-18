@@ -7,8 +7,14 @@ import {
   createModelProviderConfigLoader,
   normalizeAdminClientModels
 } from './appServerManager'
-import type { AppServerRpcClient, JsonRpcNotification } from './appServerRpc'
+import type {
+  AppServerRpcClient,
+  JsonRpcId,
+  JsonRpcNotification,
+  JsonRpcServerRequest
+} from './appServerRpc'
 import type { AppServerModelProviderConfig } from './appServerManager'
+import type { AppServerApprovalRequest } from '../shared/appServerApi'
 
 const TEST_MODEL_PROVIDER_CONFIG: AppServerModelProviderConfig = {
   models: [
@@ -47,8 +53,10 @@ function createManager(fake: AppServerRpcClient): AppServerManager {
 
 class FakeRpcClient implements AppServerRpcClient {
   readonly requests: Array<{ method: string; params?: unknown }> = []
+  readonly responses: Array<{ id: JsonRpcId; result: unknown }> = []
   disposed = false
   private notificationHandler: ((notification: JsonRpcNotification) => void) | undefined
+  private serverRequestHandler: ((request: JsonRpcServerRequest) => void) | undefined
 
   async request<T>(method: string, params?: unknown): Promise<T> {
     this.requests.push({ method, params })
@@ -133,6 +141,21 @@ class FakeRpcClient implements AppServerRpcClient {
     return () => {
       this.notificationHandler = undefined
     }
+  }
+
+  onServerRequest(handler: (request: JsonRpcServerRequest) => void): () => void {
+    this.serverRequestHandler = handler
+    return () => {
+      this.serverRequestHandler = undefined
+    }
+  }
+
+  emitServerRequest(request: JsonRpcServerRequest): void {
+    this.serverRequestHandler?.(request)
+  }
+
+  respond(id: JsonRpcId, result: unknown): void {
+    this.responses.push({ id, result })
   }
 
   dispose(): void {
@@ -338,6 +361,68 @@ describe('AppServerManager', () => {
           status: 'completed',
           output: 'pong'
         }
+      }
+    ])
+  })
+
+  it('forwards app-server approval requests and writes renderer decisions back', async () => {
+    const fake = new FakeRpcClient()
+    const manager = createManager(fake)
+    const approvals: AppServerApprovalRequest[] = []
+    manager.onNotification((notification) => {
+      if (
+        notification.method === 'item/commandExecution/requestApproval' &&
+        'requestId' in notification
+      ) {
+        approvals.push(notification)
+      }
+    })
+
+    await manager.start()
+    fake.emitServerRequest({
+      type: 'server-request',
+      id: 'approval_1',
+      method: 'item/commandExecution/requestApproval',
+      params: {
+        threadId: 'thread_1',
+        turnId: 'turn_1',
+        itemId: 'turn_1:tool:bash',
+        toolCallId: 'call_1',
+        toolName: 'bash',
+        description: 'approve call to bash',
+        displayParameters: { cmd: 'echo hello' },
+        rawArguments: { apiKey: 'secret-token' },
+        allowAlways: true
+      }
+    })
+
+    expect(approvals).toEqual([
+      {
+        hostId: 'local',
+        requestId: 'approval_1',
+        method: 'item/commandExecution/requestApproval',
+        params: {
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          itemId: 'turn_1:tool:bash',
+          toolCallId: 'call_1',
+          toolName: 'bash',
+          description: 'approve call to bash',
+          displayParameters: { cmd: 'echo hello' },
+          allowAlways: true
+        }
+      }
+    ])
+
+    await manager.request('approval/respond', {
+      requestId: 'approval_1',
+      decision: { kind: 'approve' }
+    })
+
+    expect(fake.responses).toEqual([
+      {
+        id: 'approval_1',
+        result: { decision: { kind: 'approve' } }
       }
     ])
   })

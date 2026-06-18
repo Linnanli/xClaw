@@ -18,11 +18,20 @@ export type JsonRpcNotification = {
   params?: unknown
 }
 
-export type JsonRpcMessage = JsonRpcResponse | JsonRpcNotification
+export type JsonRpcServerRequest = {
+  type: 'server-request'
+  id: JsonRpcId
+  method: string
+  params?: unknown
+}
+
+export type JsonRpcMessage = JsonRpcResponse | JsonRpcNotification | JsonRpcServerRequest
 
 export type AppServerRpcClient = {
   request<T>(method: string, params?: unknown): Promise<T>
   onNotification(handler: (notification: JsonRpcNotification) => void): () => void
+  onServerRequest(handler: (request: JsonRpcServerRequest) => void): () => void
+  respond(id: JsonRpcId, result: unknown): void
   dispose(): void
 }
 
@@ -129,6 +138,10 @@ export function buildJsonRpcRequestLine(id: JsonRpcId, method: string, params?: 
   return `${JSON.stringify(request)}\n`
 }
 
+export function buildJsonRpcResponseLine(id: JsonRpcId, result: unknown): string {
+  return `${JSON.stringify({ jsonrpc: '2.0', id, result })}\n`
+}
+
 export function classifyJsonRpcMessage(raw: unknown): JsonRpcMessage {
   if (!raw || typeof raw !== 'object') {
     throw new Error('app-server emitted a non-object JSON-RPC message')
@@ -136,6 +149,15 @@ export function classifyJsonRpcMessage(raw: unknown): JsonRpcMessage {
 
   const message = raw as Record<string, unknown>
   if (typeof message.method === 'string') {
+    if (typeof message.id === 'string' || typeof message.id === 'number') {
+      return {
+        type: 'server-request',
+        id: message.id,
+        method: message.method,
+        params: message.params
+      }
+    }
+
     return {
       type: 'notification',
       method: message.method,
@@ -172,6 +194,7 @@ export class ChildProcessAppServerRpcClient implements AppServerRpcClient {
   private nextId = 1
   private readonly pending = new Map<JsonRpcId, PendingRequest>()
   private readonly notificationHandlers = new Set<(notification: JsonRpcNotification) => void>()
+  private readonly serverRequestHandlers = new Set<(request: JsonRpcServerRequest) => void>()
   private readonly child: ChildProcessWithoutNullStreams
   private stderr = ''
 
@@ -232,6 +255,15 @@ export class ChildProcessAppServerRpcClient implements AppServerRpcClient {
     return () => this.notificationHandlers.delete(handler)
   }
 
+  onServerRequest(handler: (request: JsonRpcServerRequest) => void): () => void {
+    this.serverRequestHandlers.add(handler)
+    return () => this.serverRequestHandlers.delete(handler)
+  }
+
+  respond(id: JsonRpcId, result: unknown): void {
+    this.child.stdin.write(buildJsonRpcResponseLine(id, result), 'utf8')
+  }
+
   dispose(): void {
     this.child.stdin.destroy()
     this.child.kill()
@@ -241,6 +273,11 @@ export class ChildProcessAppServerRpcClient implements AppServerRpcClient {
     const message = classifyJsonRpcMessage(JSON.parse(line))
     if (message.type === 'notification') {
       for (const handler of this.notificationHandlers) handler(message)
+      return
+    }
+
+    if (message.type === 'server-request') {
+      for (const handler of this.serverRequestHandlers) handler(message)
       return
     }
 

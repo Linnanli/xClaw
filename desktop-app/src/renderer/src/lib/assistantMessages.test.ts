@@ -354,6 +354,7 @@ describe('useDasclawAssistantRuntime', () => {
     removeNotificationListener = vi.fn()
     notificationListener = undefined
     requestMock = vi.fn(async (method: string) => {
+      if (method === 'approval/respond') return { accepted: true }
       if (method === 'thread/start') return { thread: { id: 'thread-1' } }
       if (method === 'turn/start') {
         queueMicrotask(() => {
@@ -428,6 +429,39 @@ describe('useDasclawAssistantRuntime', () => {
     expect(requestMock.mock.calls[1][1]).toEqual({
       threadId: 'thread-1',
       input: [{ type: 'text', text: 'ping' }]
+    })
+  })
+
+  it('fail-safe rejects approval requests until the renderer approval UI is implemented', async () => {
+    act(() => {
+      root.render(createElement(RuntimeProbe))
+    })
+
+    await act(async () => {
+      notificationListener?.({
+        hostId: 'local',
+        requestId: 'approval_1',
+        method: 'item/commandExecution/requestApproval',
+        params: {
+          threadId: 'thread_1',
+          turnId: 'turn_1',
+          itemId: 'turn_1:tool:bash',
+          toolCallId: 'call_1',
+          toolName: 'bash',
+          description: 'approve call to bash',
+          displayParameters: { cmd: 'echo hello' },
+          allowAlways: true
+        }
+      })
+      await Promise.resolve()
+    })
+
+    expect(requestMock).toHaveBeenCalledWith('approval/respond', {
+      requestId: 'approval_1',
+      decision: {
+        kind: 'reject',
+        data: { reason: 'renderer approval UI is not implemented' }
+      }
     })
   })
 
