@@ -121,6 +121,34 @@ describe('assistant-ui message helpers', () => {
       }
     ])
   })
+
+  it('keeps app-server owned models selectable when availability is server-owned', () => {
+    expect(
+      modelOptionsFromProviderConfig({
+        models: [
+          {
+            modelId: 'gpt-test',
+            displayName: 'GPT Test',
+            provider: 'app-server',
+            apiBaseUrl: '',
+            apiFormat: 'app-server',
+            modelCallMode: 'stream',
+            source: 'app-server',
+            capabilities: ['text'],
+            apiKeyConfigured: true
+          }
+        ],
+        selectedModelId: 'gpt-test'
+      })
+    ).toEqual([
+      {
+        id: 'gpt-test',
+        name: 'GPT Test',
+        description: undefined,
+        keywords: ['app-server', 'app-server']
+      }
+    ])
+  })
 })
 
 describe('ModelSelector', () => {
@@ -326,7 +354,7 @@ describe('useDasclawAssistantRuntime', () => {
     removeNotificationListener = vi.fn()
     notificationListener = undefined
     requestMock = vi.fn(async (method: string) => {
-      if (method === 'thread/start') return { threadId: 'thread-1' }
+      if (method === 'thread/start') return { thread: { id: 'thread-1' } }
       if (method === 'turn/start') {
         queueMicrotask(() => {
           notificationListener?.({
@@ -334,12 +362,19 @@ describe('useDasclawAssistantRuntime', () => {
             method: 'turn/completed',
             params: {
               threadId: 'thread-1',
-              turnId: 'turn-1',
-              output: 'ok'
+              turn: {
+                id: 'turn-1',
+                status: 'completed',
+                items: [],
+                error: null,
+                startedAt: null,
+                completedAt: null,
+                durationMs: null
+              }
             }
           })
         })
-        return { turnId: 'turn-1' }
+        return { turn: { id: 'turn-1', status: 'inProgress', items: [] } }
       }
       throw new Error(`unexpected method ${method}`)
     })

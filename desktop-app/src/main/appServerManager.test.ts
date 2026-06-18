@@ -59,6 +59,31 @@ class FakeRpcClient implements AppServerRpcClient {
     if (method === 'health/check') {
       return { ok: true, lifecycle: { state: 'ready' }, services: [] } as T
     }
+    if (method === 'model/list') {
+      return {
+        data: [
+          {
+            id: 'gpt-test',
+            model: 'gpt-test',
+            displayName: 'GPT Test',
+            description: '',
+            hidden: false,
+            supportedReasoningEfforts: [
+              { reasoningEffort: 'none', description: 'No reasoning effort override' }
+            ],
+            defaultReasoningEffort: 'none',
+            inputModalities: ['text'],
+            supportsPersonality: false,
+            additionalSpeedTiers: [],
+            isDefault: true,
+            upgrade: null,
+            upgradeInfo: null,
+            availabilityNux: null
+          }
+        ],
+        nextCursor: null
+      } as T
+    }
     if (method === 'thread/start') {
       return { threadId: 'thread-1' } as T
     }
@@ -162,18 +187,23 @@ describe('AppServerManager', () => {
         {
           modelId: 'gpt-test',
           displayName: 'GPT Test',
-          provider: 'openai',
-          apiBaseUrl: 'https://api.test/v1',
-          apiFormat: 'openai',
+          provider: 'app-server',
+          apiBaseUrl: '',
+          apiFormat: 'app-server',
           modelCallMode: 'stream',
-          source: 'test',
-          capabilities: ['chat'],
+          source: 'app-server',
+          capabilities: ['text'],
           apiKeyConfigured: true
         }
       ],
       selectedModelId: 'gpt-test'
     })
     expect(JSON.stringify(response)).not.toContain('test-api-key')
+    expect(fake.requests.map((request) => request.method)).toEqual([
+      'initialize',
+      'health/check',
+      'model/list'
+    ])
   })
 
   it('returns a renderer-safe unavailable state when the model config source is down', async () => {

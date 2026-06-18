@@ -24,6 +24,25 @@ describe('createAppServerTurnTracker', () => {
     })
   })
 
+  it('resolves a pending turn from Codex nested completion notifications', async () => {
+    const tracker = createAppServerTurnTracker()
+    const completion = tracker.waitForTurnCompletion('turn-1')
+
+    tracker.handleNotification({
+      hostId: 'local',
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-1',
+        turn: { id: 'turn-1' }
+      }
+    })
+
+    await expect(completion).resolves.toEqual({
+      threadId: 'thread-1',
+      turnId: 'turn-1'
+    })
+  })
+
   it('resolves structured reasoning and agent text as separate assistant parts', async () => {
     const tracker = createAppServerTurnTracker()
     const completion = tracker.waitForTurnCompletion('turn-1')
@@ -227,6 +246,25 @@ describe('createAppServerTurnTracker', () => {
         threadId: 'thread-1',
         turnId: 'turn-1',
         error: 'tool failed'
+      }
+    })
+
+    await expect(completion).rejects.toThrow('tool failed')
+  })
+
+  it('rejects waiting turns when Codex nested failure notifications include an error message', async () => {
+    const tracker = createAppServerTurnTracker()
+    const completion = tracker.waitForTurnCompletion('turn-1')
+
+    tracker.handleNotification({
+      hostId: 'local',
+      method: 'turn/failed',
+      params: {
+        threadId: 'thread-1',
+        turn: {
+          id: 'turn-1',
+          error: { message: 'tool failed' }
+        }
       }
     })
 

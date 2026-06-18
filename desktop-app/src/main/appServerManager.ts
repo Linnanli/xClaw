@@ -11,7 +11,6 @@ import type {
   AppServerRunState,
   AppServerStatus,
   ModelProviderSelectForNextTurnResponse,
-  RendererClientModelConfig,
   RendererModelProviderConfig
 } from '../shared/appServerApi'
 
@@ -59,6 +58,21 @@ export type AppServerClientModelConfig = {
 export type AppServerModelProviderConfig = {
   models: AppServerClientModelConfig[]
   selectedModel: AppServerClientModelConfig
+}
+
+type CodexModelListResponse = {
+  data: CodexModel[]
+  nextCursor: string | null
+}
+
+type CodexModel = {
+  id: string
+  model: string
+  displayName: string
+  description: string
+  hidden: boolean
+  inputModalities: string[]
+  isDefault: boolean
 }
 
 export type ModelProviderConfigLoader = () => Promise<AppServerModelProviderConfig>
@@ -185,7 +199,19 @@ export class AppServerManager {
     if (!method.trim()) throw new Error('app-server request method is required')
 
     if (method === 'modelProvider/list') {
-      return this.getRendererModelProviderConfig() as Promise<T>
+      try {
+        await this.ensureReady()
+        const response = await this.requireClient().request<CodexModelListResponse>(
+          'model/list',
+          {}
+        )
+        return toRendererModelProviderConfigFromCodex(response) as T
+      } catch (error) {
+        return {
+          models: [],
+          unavailableReason: errorMessage(error)
+        } as T
+      }
     }
 
     await this.ensureReady()
@@ -280,17 +306,6 @@ export class AppServerManager {
       this.modelProviderConfig = await this.loadModelProviderConfig()
     }
     return this.modelProviderConfig
-  }
-
-  private async getRendererModelProviderConfig(): Promise<RendererModelProviderConfig> {
-    try {
-      return toRendererModelProviderConfig(await this.getModelProviderConfig())
-    } catch (error) {
-      return {
-        models: [],
-        unavailableReason: errorMessage(error)
-      }
-    }
   }
 
   private async selectModelForNextTurn(
@@ -464,26 +479,23 @@ function readRequestedModelId(params: unknown): string {
   return modelId.trim()
 }
 
-function toRendererModelProviderConfig(
-  config: AppServerModelProviderConfig
+function toRendererModelProviderConfigFromCodex(
+  response: CodexModelListResponse
 ): RendererModelProviderConfig {
+  const visibleModels = response.data.filter((model) => !model.hidden)
   return {
-    models: config.models.map(toRendererClientModelConfig),
-    selectedModelId: config.selectedModel.modelId
-  }
-}
-
-function toRendererClientModelConfig(model: AppServerClientModelConfig): RendererClientModelConfig {
-  return {
-    modelId: model.modelId,
-    displayName: model.displayName ?? model.modelId,
-    ...(model.description ? { description: model.description } : {}),
-    provider: model.provider,
-    apiBaseUrl: model.apiBaseUrl,
-    apiFormat: model.apiFormat,
-    modelCallMode: model.modelCallMode,
-    source: model.source ?? 'admin',
-    capabilities: model.capabilities,
-    apiKeyConfigured: model.apiKey.trim() !== ''
+    models: visibleModels.map((model) => ({
+      modelId: model.id,
+      displayName: model.displayName || model.model || model.id,
+      ...(model.description ? { description: model.description } : {}),
+      provider: 'app-server',
+      apiBaseUrl: '',
+      apiFormat: 'app-server',
+      modelCallMode: 'stream',
+      source: 'app-server',
+      capabilities: model.inputModalities,
+      apiKeyConfigured: true
+    })),
+    selectedModelId: visibleModels.find((model) => model.isDefault)?.id ?? visibleModels[0]?.id
   }
 }

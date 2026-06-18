@@ -135,19 +135,32 @@ function parseTurnCompletion(params: unknown): TurnCompletion | undefined {
   if (!params || typeof params !== 'object') return undefined
 
   const record = params as Record<string, unknown>
-  if (typeof record.threadId !== 'string' || typeof record.turnId !== 'string') return undefined
+  const threadId = typeof record.threadId === 'string' ? record.threadId : undefined
+  const nativeTurnId = typeof record.turnId === 'string' ? record.turnId : undefined
+  const output = typeof record.output === 'string' ? record.output : undefined
+  const nativeError = typeof record.error === 'string' ? record.error : undefined
+  const turn =
+    record.turn && typeof record.turn === 'object'
+      ? (record.turn as Record<string, unknown>)
+      : undefined
+  const turnId = nativeTurnId ?? (typeof turn?.id === 'string' ? turn.id : undefined)
+  const codexError =
+    turn?.error && typeof turn.error === 'object'
+      ? (turn.error as { message?: unknown }).message
+      : undefined
+  const error = nativeError ?? (typeof codexError === 'string' ? codexError : undefined)
+
+  if (!threadId || !turnId) return undefined
 
   return {
-    threadId: record.threadId,
-    turnId: record.turnId,
-    output: typeof record.output === 'string' ? record.output : undefined,
-    error: typeof record.error === 'string' ? record.error : undefined
+    threadId,
+    turnId,
+    output,
+    error
   }
 }
 
-function parseTurnContentDelta(
-  notification: AppServerNotification
-): TurnContentDelta | undefined {
+function parseTurnContentDelta(notification: AppServerNotification): TurnContentDelta | undefined {
   if (
     notification.method !== 'item/agentMessage/delta' &&
     notification.method !== 'item/reasoning/summaryTextDelta' &&
