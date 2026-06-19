@@ -20,22 +20,22 @@ use dasclaw_app_server_protocol::{
     CommandExecutionOutputDeltaEvent, CommandExecutionTerminalInteractionEvent,
     CompatibilityProfile, DEFAULT_MAX_PENDING_NOTIFICATIONS, ErrorCode, ErrorData, ErrorEvent,
     HealthCheckParams, HealthCheckResponse, InitializeParams, InitializeResponse,
-    ItemCompletedEvent, ItemStartedEvent, ItemType, JsonRpcClientResponse, JsonRpcError,
-    JsonRpcRequest, JsonRpcResponse, JsonRpcServerRequest, LifecycleChangedEvent, LifecycleReason,
+    ItemCompletedEvent, ItemStartedEvent, JsonRpcClientResponse, JsonRpcError, JsonRpcRequest,
+    JsonRpcResponse, JsonRpcServerRequest, LifecycleChangedEvent, LifecycleReason,
     LifecycleSnapshot, LifecycleState, LifecycleStatusResponse, ModelListParams, ModelListResponse,
     ModelProviderInitializeConfig, ModelProviderSelectForNextTurnParams,
     ModelProviderSelectForNextTurnResponse, NotificationQueuePolicy, NotificationsInitializedEvent,
     ProtocolSchemaResponse, ProtocolVersion, ReasoningSummaryTextDeltaEvent, ServerInfo,
     ServerNotification, ServerRequestResolutionOutcome, ServerRequestResolvedEvent, ServiceHealth,
-    ServiceName, ShutdownParams, ShutdownReason, ShutdownResponse, ThreadCreateParams,
-    ThreadCreateResponse, ThreadCreatedEvent, ThreadListResponse, ThreadReadParams,
-    ThreadReadResponse, ThreadStartResponse, ThreadStartedEvent, ThreadSummary, TurnCancelParams,
-    TurnCancelResponse, TurnCancelledEvent, TurnCompletedEvent, TurnDeltaEvent, TurnFailedEvent,
-    TurnInterruptResponse, TurnListParams, TurnListResponse, TurnReadParams, TurnReadResponse,
-    TurnStartParams, TurnStartResponse, TurnStartedEvent, TurnStatus, TurnSummary,
+    ServiceName, ShutdownParams, ShutdownReason, ShutdownResponse, ThreadListParams,
+    ThreadListResponse, ThreadReadParams, ThreadReadResponse, ThreadStartParams,
+    ThreadStartResponse, ThreadStartedEvent, ThreadTurnsListParams, ThreadTurnsListResponse,
+    TurnCompletedEvent, TurnInterruptParams, TurnInterruptResponse, TurnReadParams,
+    TurnReadResponse, TurnStartParams, TurnStartResponse, TurnStartedEvent, TurnStatus,
 };
 use dasclaw_app_server_protocol::{
-    CodexSessionSource, CodexThread, CodexThreadStatus, CodexTurn, CodexTurnError, CodexTurnStatus,
+    CodexSessionSource, CodexThread, CodexThreadItem, CodexThreadStatus, CodexTurn, CodexTurnError,
+    CodexTurnStatus,
 };
 use dasclaw_app_server_protocol::{JSON_RPC_VERSION, method, server_request};
 use dasclaw_core::messages::ReasoningSummary;
@@ -67,7 +67,6 @@ pub struct AppServer {
     runtime_turn_updates: RuntimeTurnUpdateSink,
     pending_server_requests: PendingServerRequestStore,
     model_provider: ModelProviderState,
-    codex_v2_compat_enabled: bool,
 }
 
 impl Default for AppServer {
@@ -144,6 +143,14 @@ impl ModelProviderState {
         })?;
 
         RuntimeModelProviderSnapshot::from_client_model(model)
+    }
+
+    fn selected_provider_id(&self) -> String {
+        self.selected_model_id
+            .as_deref()
+            .and_then(|selected_model_id| self.models.get(selected_model_id))
+            .and_then(|model| model.provider.clone())
+            .unwrap_or_default()
     }
 
     fn select_for_next_turn(&mut self, model_id: String) -> Result<String, AppServerError> {
@@ -508,7 +515,6 @@ impl AppServer {
             runtime_turn_updates: RuntimeTurnUpdateSink::new(),
             pending_server_requests: PendingServerRequestStore::new(),
             model_provider: ModelProviderState::default(),
-            codex_v2_compat_enabled: false,
         }
     }
 
@@ -554,10 +560,6 @@ impl AppServer {
             return Err(AppServerError::server_stopped(self.lifecycle.clone()));
         }
 
-        let codex_v2_compat_requested = params
-            .requested_capabilities
-            .iter()
-            .any(|capability| capability == CompatibilityProfile::CODEX_APP_SERVER_V2_ID);
         let unavailable_requested_capabilities =
             self.unavailable_requested_capabilities(&params.requested_capabilities);
         let model_provider = params
@@ -572,13 +574,12 @@ impl AppServer {
             if let Some(model_provider) = model_provider {
                 self.model_provider = model_provider;
             }
-            self.codex_v2_compat_enabled = codex_v2_compat_requested;
             self.client = Some(params.client);
             return Ok(InitializeResponse {
                 server: self.server.clone(),
                 lifecycle: self.lifecycle.clone(),
                 capabilities: self.capabilities.clone(),
-                compatibility_profiles: vec![CompatibilityProfile::codex_app_server_v2()],
+                compatibility_profiles: compatibility_profiles(),
                 unavailable_requested_capabilities,
             });
         }
@@ -592,7 +593,6 @@ impl AppServer {
         );
         self.emit_lifecycle_changed(previous_state);
 
-        self.codex_v2_compat_enabled = codex_v2_compat_requested;
         if let Some(model_provider) = model_provider {
             self.model_provider = model_provider;
         }
@@ -612,7 +612,7 @@ impl AppServer {
             server: self.server.clone(),
             lifecycle: self.lifecycle.clone(),
             capabilities: self.capabilities.clone(),
-            compatibility_profiles: vec![CompatibilityProfile::codex_app_server_v2()],
+            compatibility_profiles: compatibility_profiles(),
             unavailable_requested_capabilities,
         })
     }
@@ -643,7 +643,7 @@ impl AppServer {
         self.drain_runtime_turn_updates();
         CapabilitiesListResponse {
             capabilities: self.capabilities.clone(),
-            compatibility_profiles: vec![CompatibilityProfile::codex_app_server_v2()],
+            compatibility_profiles: compatibility_profiles(),
         }
     }
 
@@ -652,21 +652,29 @@ impl AppServer {
         ProtocolSchemaResponse::phase_one(self.capabilities.clone())
     }
 
-    pub fn thread_create(
+    fn create_thread_record(
         &mut self,
-        params: ThreadCreateParams,
-    ) -> Result<ThreadCreateResponse, AppServerError> {
+        params: ThreadStartParams,
+    ) -> Result<String, AppServerError> {
         if self.lifecycle.state == LifecycleState::Stopped {
             return Err(AppServerError::server_stopped(self.lifecycle.clone()));
         }
         self.require_initialized("session")?;
 
         let thread_id = self.threads.create(params);
-        self.notifications.emit_thread_created(ThreadCreatedEvent {
-            thread_id: thread_id.clone(),
-        });
         self.emit_codex_thread_started(thread_id.clone())?;
 
+        Ok(thread_id)
+    }
+
+    #[cfg(test)]
+    fn thread_create(
+        &mut self,
+        params: ThreadCreateParams,
+    ) -> Result<ThreadCreateResponse, AppServerError> {
+        let thread_id = self.create_thread_record(ThreadStartParams {
+            cwd: params.workspace_root,
+        })?;
         Ok(ThreadCreateResponse {
             thread_id,
             lifecycle: self.lifecycle.clone(),
@@ -675,21 +683,37 @@ impl AppServer {
 
     pub fn thread_start(
         &mut self,
-        params: ThreadCreateParams,
+        params: ThreadStartParams,
     ) -> Result<ThreadStartResponse, AppServerError> {
-        let created = self.thread_create(params)?;
-        let thread = self.codex_thread_view(&created.thread_id, true)?;
+        let selected_model = self.model_provider.selected_snapshot()?;
+        let thread_id = self.create_thread_record(params)?;
+        let thread = self.codex_thread_view(&thread_id, true)?;
+        let model = selected_model.model_id;
+        let model_provider = selected_model.provider;
+        let cwd = thread.cwd.clone();
         Ok(ThreadStartResponse {
-            thread_id: created.thread_id,
-            lifecycle: created.lifecycle,
-            thread: Some(thread),
+            thread,
+            model,
+            model_provider,
+            cwd,
         })
     }
 
-    pub fn thread_list(&self) -> Result<ThreadListResponse, AppServerError> {
+    pub fn thread_list(
+        &self,
+        _params: ThreadListParams,
+    ) -> Result<ThreadListResponse, AppServerError> {
         self.require_initialized("session")?;
+        let data = self
+            .threads
+            .list()
+            .into_iter()
+            .map(|thread| self.codex_thread_view(&thread.thread_id, true))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(ThreadListResponse {
-            threads: self.threads.list(),
+            data,
+            next_cursor: None,
+            backwards_cursor: None,
         })
     }
 
@@ -699,7 +723,7 @@ impl AppServer {
     ) -> Result<ThreadReadResponse, AppServerError> {
         self.require_initialized("session")?;
         Ok(ThreadReadResponse {
-            thread: self.thread_summary_or_error(&params.thread_id)?,
+            thread: self.codex_thread_view(&params.thread_id, true)?,
         })
     }
 
@@ -710,16 +734,21 @@ impl AppServer {
         self.require_initialized("session")?;
         self.require_thread_exists(&params.thread_id)?;
         let model_provider = self.model_provider.selected_snapshot()?;
-        let reasoning_summary = parse_reasoning_summary(
-            params.reasoning_summary.as_deref(),
-            &model_provider.model_id,
-        )?;
+        let prompt = params.prompt_text();
+        if prompt.trim().is_empty() {
+            return Err(AppServerError::invalid_request(
+                "turn/start",
+                "turn/start input must include at least one text item",
+            ));
+        }
+        let reasoning_summary =
+            parse_reasoning_summary(params.summary.as_deref(), &model_provider.model_id)?;
         let turn_id = self.threads.next_turn_id();
         self.runtime_bridge
             .start_turn(RuntimeTurnStartRequest {
                 thread_id: params.thread_id.clone(),
                 turn_id: turn_id.clone(),
-                prompt: params.prompt,
+                prompt,
                 model_provider,
                 reasoning_summary,
                 updates: self.runtime_turn_updates.clone(),
@@ -733,21 +762,14 @@ impl AppServer {
             Some("turn request is running".to_string()),
         );
         let thread_id = params.thread_id;
+        let turn = self.codex_turn_view(&thread_id, &turn_id)?;
         self.notifications.emit_turn_started(TurnStartedEvent {
             thread_id: thread_id.clone(),
-            turn_id: turn_id.clone(),
-            status: TurnStatus::Pending,
-            turn: Some(CodexTurn::in_progress(turn_id.clone())),
+            turn: turn.clone(),
         });
         self.emit_codex_item_started(thread_id.clone(), turn_id.clone());
-        let turn = self.codex_turn_view(&thread_id, &turn_id)?;
 
-        Ok(TurnStartResponse {
-            turn_id,
-            status: TurnStatus::Pending,
-            lifecycle: self.lifecycle.clone(),
-            turn: Some(turn),
-        })
+        Ok(TurnStartResponse { turn })
     }
 
     pub fn model_provider_select_for_next_turn(
@@ -768,10 +790,7 @@ impl AppServer {
         self.model_provider.model_list_response()
     }
 
-    pub fn turn_cancel(
-        &mut self,
-        params: TurnCancelParams,
-    ) -> Result<TurnCancelResponse, AppServerError> {
+    fn cancel_turn_record(&mut self, params: TurnInterruptParams) -> Result<(), AppServerError> {
         self.require_initialized("session")?;
         self.drain_runtime_turn_updates();
         self.require_thread_exists(&params.thread_id)?;
@@ -807,19 +826,27 @@ impl AppServer {
                 pending_approvals,
                 "turn cancelled",
             );
-            self.emit_codex_item_completed(
-                params.thread_id.clone(),
-                params.turn_id.clone(),
-                TurnStatus::Cancelled,
-            );
-            self.notifications.emit_turn_cancelled(TurnCancelledEvent {
-                thread_id: params.thread_id,
-                turn_id: params.turn_id,
-                status: TurnStatus::Cancelled,
+            self.emit_codex_item_completed(params.thread_id.clone(), params.turn_id.clone(), None);
+            let turn = self.codex_turn_view(&params.thread_id, &params.turn_id)?;
+            self.notifications.emit_turn_completed(TurnCompletedEvent {
+                thread_id: params.thread_id.clone(),
+                turn,
             });
             self.transition_ready_if_no_pending_turns();
         }
 
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn turn_cancel(
+        &mut self,
+        params: TurnCancelParams,
+    ) -> Result<TurnCancelResponse, AppServerError> {
+        self.cancel_turn_record(TurnInterruptParams {
+            thread_id: params.thread_id,
+            turn_id: params.turn_id,
+        })?;
         Ok(TurnCancelResponse {
             accepted: true,
             status: TurnStatus::Cancelled,
@@ -829,16 +856,33 @@ impl AppServer {
 
     pub fn turn_interrupt(
         &mut self,
-        params: TurnCancelParams,
+        params: TurnInterruptParams,
     ) -> Result<TurnInterruptResponse, AppServerError> {
-        let _ = self.turn_cancel(params)?;
+        self.cancel_turn_record(params)?;
         Ok(TurnInterruptResponse {})
     }
 
-    pub fn turn_list(
+    pub fn thread_turns_list(
         &mut self,
-        params: TurnListParams,
-    ) -> Result<TurnListResponse, AppServerError> {
+        params: ThreadTurnsListParams,
+    ) -> Result<ThreadTurnsListResponse, AppServerError> {
+        self.require_initialized("session")?;
+        self.drain_runtime_turn_updates();
+        self.require_thread_exists(&params.thread_id)?;
+        Ok(ThreadTurnsListResponse {
+            data: self
+                .threads
+                .list_turns(&params.thread_id)
+                .into_iter()
+                .map(codex_turn_from_summary)
+                .collect(),
+            next_cursor: None,
+            backwards_cursor: None,
+        })
+    }
+
+    #[cfg(test)]
+    fn turn_list(&mut self, params: TurnListParams) -> Result<TurnListResponse, AppServerError> {
         self.require_initialized("session")?;
         self.drain_runtime_turn_updates();
         self.require_thread_exists(&params.thread_id)?;
@@ -855,7 +899,7 @@ impl AppServer {
         self.drain_runtime_turn_updates();
         self.require_thread_exists(&params.thread_id)?;
         Ok(TurnReadResponse {
-            turn: self.turn_summary_or_error(&params.thread_id, &params.turn_id)?,
+            turn: self.codex_turn_view(&params.thread_id, &params.turn_id)?,
         })
     }
 
@@ -886,15 +930,10 @@ impl AppServer {
         let pending_approvals = self.pending_server_requests.drain_all();
         self.emit_failed_pending_server_request_resolutions(pending_approvals, "server shutdown");
         for turn in self.threads.cancel_pending_turns() {
-            self.emit_codex_item_completed(
-                turn.thread_id.clone(),
-                turn.turn_id.clone(),
-                TurnStatus::Cancelled,
-            );
-            self.notifications.emit_turn_cancelled(TurnCancelledEvent {
-                thread_id: turn.thread_id,
-                turn_id: turn.turn_id,
-                status: TurnStatus::Cancelled,
+            self.emit_codex_item_completed(turn.thread_id.clone(), turn.turn_id.clone(), None);
+            self.notifications.emit_turn_completed(TurnCompletedEvent {
+                thread_id: turn.thread_id.clone(),
+                turn: codex_turn_from_summary(turn.clone()),
             });
         }
 
@@ -1015,18 +1054,16 @@ impl AppServer {
             method::SHUTDOWN => route_with_optional_params(request.id, request.params, |params| {
                 Ok(self.shutdown(params))
             }),
-            method::THREAD_CREATE => {
-                route_with_params(request.id, request.params, |params: ThreadCreateParams| {
-                    self.thread_create(params)
-                })
-            }
             method::THREAD_START => {
-                route_with_params(request.id, request.params, |params: ThreadCreateParams| {
+                route_with_params(request.id, request.params, |params: ThreadStartParams| {
                     self.thread_start(params)
                 })
             }
             method::THREAD_LIST => {
-                route_with_no_params_result(request.id, request.params, || self.thread_list())
+                let params = request
+                    .params
+                    .unwrap_or_else(|| Value::Object(Default::default()));
+                route_with_params(request.id, Some(params), |params| self.thread_list(params))
             }
             method::THREAD_READ => {
                 route_with_params(request.id, request.params, |params: ThreadReadParams| {
@@ -1038,21 +1075,16 @@ impl AppServer {
                     self.turn_start(params)
                 })
             }
-            method::TURN_CANCEL => {
-                route_with_params(request.id, request.params, |params: TurnCancelParams| {
-                    self.turn_cancel(params)
-                })
-            }
             method::TURN_INTERRUPT => {
-                route_with_params(request.id, request.params, |params: TurnCancelParams| {
+                route_with_params(request.id, request.params, |params: TurnInterruptParams| {
                     self.turn_interrupt(params)
                 })
             }
-            method::TURN_LIST => {
-                route_with_params(request.id, request.params, |params: TurnListParams| {
-                    self.turn_list(params)
-                })
-            }
+            method::THREAD_TURNS_LIST => route_with_params(
+                request.id,
+                request.params,
+                |params: ThreadTurnsListParams| self.thread_turns_list(params),
+            ),
             method::TURN_READ => {
                 route_with_params(request.id, request.params, |params: TurnReadParams| {
                     self.turn_read(params)
@@ -1237,17 +1269,10 @@ impl AppServer {
         }
 
         let error = summary.error.clone().unwrap_or_default();
-        self.emit_codex_item_completed(
-            summary.thread_id.clone(),
-            summary.turn_id.clone(),
-            TurnStatus::Failed,
-        );
-        self.notifications.emit_turn_failed(TurnFailedEvent {
+        self.emit_codex_item_completed(summary.thread_id.clone(), summary.turn_id.clone(), None);
+        self.notifications.emit_turn_completed(TurnCompletedEvent {
             thread_id: summary.thread_id.clone(),
-            turn_id: summary.turn_id.clone(),
-            status: TurnStatus::Failed,
-            error: error.clone(),
-            turn: Some(codex_turn_from_summary(summary.clone())),
+            turn: codex_turn_from_summary(summary.clone()),
         });
         self.emit_codex_error(summary.thread_id, summary.turn_id, error);
         self.transition_ready_if_no_pending_turns();
@@ -1293,10 +1318,42 @@ impl AppServer {
         }
 
         let request_id = format!("approval_{}", request.request_id);
+        let runtime_request_id = request.request_id.clone();
         let item_id = format!("{turn_id}:tool:{}", request.tool_call_id);
+        let server_request = match JsonRpcServerRequest::new(
+            request_id.clone(),
+            server_request::ITEM_COMMAND_EXECUTION_REQUEST_APPROVAL,
+            CommandExecutionApprovalRequest {
+                thread_id: thread_id.clone(),
+                turn_id: turn_id.clone(),
+                item_id,
+                tool_call_id: request.tool_call_id,
+                tool_name: request.tool_name,
+                command: request.command,
+                description: request.description,
+                display_parameters: request.display_parameters,
+                allow_always: request.allow_always,
+            },
+        ) {
+            Ok(request) => request,
+            Err(error) => {
+                let message = format!("failed to serialize approval server request: {error}");
+                let _ = self
+                    .runtime_bridge
+                    .resolve_approval(RuntimeApprovalDecision {
+                        request_id: runtime_request_id,
+                        decision: dasclaw_runtime::ApprovalDecision::Reject {
+                            reason: Some(message.clone()),
+                        },
+                    });
+                self.fail_pending_turn(thread_id, turn_id, message);
+                return;
+            }
+        };
+
         self.pending_server_requests.insert(PendingServerRequest {
             request_id: request_id.clone(),
-            runtime_request_id: request.request_id.clone(),
+            runtime_request_id,
             thread_id: thread_id.clone(),
             turn_id: turn_id.clone(),
             created_at: Instant::now(),
@@ -1306,24 +1363,7 @@ impl AppServer {
             LifecycleReason::ApprovalPending,
             Some("turn request is awaiting approval".to_string()),
         );
-        self.notifications.emit_server_request(
-            JsonRpcServerRequest::new(
-                request_id,
-                server_request::ITEM_COMMAND_EXECUTION_REQUEST_APPROVAL,
-                CommandExecutionApprovalRequest {
-                    thread_id: thread_id.clone(),
-                    turn_id: turn_id.clone(),
-                    item_id,
-                    tool_call_id: request.tool_call_id,
-                    tool_name: request.tool_name,
-                    command: request.command,
-                    description: request.description,
-                    display_parameters: request.display_parameters,
-                    allow_always: request.allow_always,
-                },
-            )
-            .expect("approval server request should serialize"),
-        );
+        self.notifications.emit_server_request(server_request);
     }
 
     fn expire_pending_server_requests(&mut self) {
@@ -1422,13 +1462,12 @@ impl AppServer {
         &mut self,
         unavailable_requested_capabilities: Vec<String>,
     ) {
-        if !self.codex_v2_compat_enabled {
-            return;
-        }
         self.notifications
             .emit_notifications_initialized(NotificationsInitializedEvent {
                 lifecycle: self.lifecycle.clone(),
-                compatibility_profiles: vec![CompatibilityProfile::codex_app_server_v2()],
+                compatibility_profiles: vec![
+                    CompatibilityProfile::codex_app_server_v2_chat_session_subset(),
+                ],
                 unavailable_requested_capabilities,
                 event_queue: NotificationQueuePolicy::bounded_lag_disconnect(),
             });
@@ -1437,7 +1476,7 @@ impl AppServer {
     fn unavailable_requested_capabilities(&self, requested: &[String]) -> Vec<String> {
         let mut unavailable = Vec::new();
         for capability in requested {
-            if capability == CompatibilityProfile::CODEX_APP_SERVER_V2_ID {
+            if capability == CompatibilityProfile::CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_ID {
                 continue;
             }
             if !self.is_capability_implemented(capability) && !unavailable.contains(capability) {
@@ -1518,12 +1557,9 @@ impl AppServer {
     }
 
     fn emit_codex_thread_started(&mut self, thread_id: String) -> Result<(), AppServerError> {
-        if !self.codex_v2_compat_enabled {
-            return Ok(());
-        }
-        let thread = Some(self.codex_thread_view(&thread_id, false)?);
+        let thread = self.codex_thread_view(&thread_id, false)?;
         self.notifications
-            .emit_thread_started(ThreadStartedEvent { thread_id, thread });
+            .emit_thread_started(ThreadStartedEvent { thread });
         Ok(())
     }
 
@@ -1551,11 +1587,7 @@ impl AppServer {
             forked_from_id: None,
             preview: summary.title.clone().unwrap_or_default(),
             ephemeral: true,
-            model_provider: self
-                .model_provider
-                .selected_model_id
-                .clone()
-                .unwrap_or_default(),
+            model_provider: self.model_provider.selected_provider_id(),
             created_at: 0,
             updated_at: 0,
             status: if has_pending_turn {
@@ -1583,14 +1615,10 @@ impl AppServer {
     }
 
     fn emit_codex_item_started(&mut self, thread_id: String, turn_id: String) {
-        if !self.codex_v2_compat_enabled {
-            return;
-        }
         self.notifications.emit_item_started(ItemStartedEvent {
             thread_id,
-            item_id: turn_id.clone(),
-            turn_id,
-            item_type: ItemType::AgentMessage,
+            turn_id: turn_id.clone(),
+            item: CodexThreadItem::started_agent_message(turn_id),
         });
     }
 
@@ -1600,9 +1628,6 @@ impl AppServer {
         turn_id: String,
         delta: String,
     ) {
-        if !self.codex_v2_compat_enabled {
-            return;
-        }
         self.notifications
             .emit_agent_message_delta(AgentMessageDeltaEvent {
                 thread_id,
@@ -1619,9 +1644,6 @@ impl AppServer {
         summary_index: i64,
         delta: String,
     ) {
-        if !self.codex_v2_compat_enabled {
-            return;
-        }
         self.notifications
             .emit_reasoning_summary_text_delta(ReasoningSummaryTextDeltaEvent {
                 thread_id,
@@ -1636,23 +1658,16 @@ impl AppServer {
         &mut self,
         thread_id: String,
         turn_id: String,
-        status: TurnStatus,
+        text: Option<String>,
     ) {
-        if !self.codex_v2_compat_enabled {
-            return;
-        }
         self.notifications.emit_item_completed(ItemCompletedEvent {
             thread_id,
-            item_id: turn_id.clone(),
-            turn_id,
-            status,
+            turn_id: turn_id.clone(),
+            item: CodexThreadItem::completed_agent_message(turn_id, text.unwrap_or_default()),
         });
     }
 
     fn emit_codex_error(&mut self, thread_id: String, turn_id: String, message: String) {
-        if !self.codex_v2_compat_enabled {
-            return;
-        }
         self.notifications.emit_error(ErrorEvent {
             code: ErrorCode::ServiceDegraded,
             message,
@@ -1703,11 +1718,6 @@ impl AppServer {
                         .threads
                         .turn_is_pending(&update.thread_id, &update.turn_id)
                     {
-                        self.notifications.emit_turn_delta(TurnDeltaEvent {
-                            thread_id: update.thread_id.clone(),
-                            turn_id: update.turn_id.clone(),
-                            delta: delta.clone(),
-                        });
                         self.emit_codex_agent_message_delta(
                             update.thread_id,
                             update.turn_id,
@@ -1777,14 +1787,11 @@ impl AppServer {
                                 self.emit_codex_item_completed(
                                     summary.thread_id.clone(),
                                     summary.turn_id.clone(),
-                                    TurnStatus::Completed,
+                                    summary.output.clone(),
                                 );
                                 self.notifications.emit_turn_completed(TurnCompletedEvent {
                                     thread_id: summary.thread_id.clone(),
-                                    turn_id: summary.turn_id.clone(),
-                                    status: TurnStatus::Completed,
-                                    output: summary.output.clone().unwrap_or_default(),
-                                    turn: Some(codex_turn_from_summary(summary)),
+                                    turn: codex_turn_from_summary(summary.clone()),
                                 });
                             }
                             TurnStatus::Failed => {
@@ -1792,14 +1799,11 @@ impl AppServer {
                                 self.emit_codex_item_completed(
                                     summary.thread_id.clone(),
                                     summary.turn_id.clone(),
-                                    TurnStatus::Failed,
+                                    None,
                                 );
-                                self.notifications.emit_turn_failed(TurnFailedEvent {
+                                self.notifications.emit_turn_completed(TurnCompletedEvent {
                                     thread_id: summary.thread_id.clone(),
-                                    turn_id: summary.turn_id.clone(),
-                                    status: TurnStatus::Failed,
-                                    error: error.clone(),
-                                    turn: Some(codex_turn_from_summary(summary.clone())),
+                                    turn: codex_turn_from_summary(summary.clone()),
                                 });
                                 self.emit_codex_error(summary.thread_id, summary.turn_id, error);
                             }
@@ -2602,13 +2606,13 @@ impl SessionThreadHost {
         }
     }
 
-    fn create(&mut self, params: ThreadCreateParams) -> String {
+    fn create(&mut self, params: ThreadStartParams) -> String {
         let thread_id = format!("thread_{}", self.next_thread_id);
         self.next_thread_id += 1;
         self.threads.push(ThreadRecord {
             thread_id: thread_id.clone(),
-            title: params.title,
-            workspace_root: params.workspace_root,
+            title: None,
+            workspace_root: params.cwd,
         });
         thread_id
     }
@@ -2644,7 +2648,7 @@ impl SessionThreadHost {
             .turns
             .iter_mut()
             .find(|turn| turn.thread_id == update.thread_id && turn.turn_id == update.turn_id)?;
-        if turn.status == TurnStatus::Cancelled {
+        if turn.status != TurnStatus::Pending {
             return None;
         }
 
@@ -2749,6 +2753,27 @@ pub struct ThreadRecord {
     pub workspace_root: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadSummary {
+    pub thread_id: String,
+    pub title: Option<String>,
+    pub workspace_root: Option<String>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ThreadCreateParams {
+    title: Option<String>,
+    workspace_root: Option<String>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ThreadCreateResponse {
+    thread_id: String,
+    lifecycle: LifecycleSnapshot,
+}
+
 impl ThreadRecord {
     fn to_summary(&self) -> ThreadSummary {
         ThreadSummary {
@@ -2768,6 +2793,42 @@ pub struct TurnRecord {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnSummary {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub status: TurnStatus,
+    pub output: Option<String>,
+    pub error: Option<String>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TurnCancelParams {
+    thread_id: String,
+    turn_id: String,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TurnCancelResponse {
+    accepted: bool,
+    status: TurnStatus,
+    lifecycle: LifecycleSnapshot,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TurnListParams {
+    thread_id: String,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TurnListResponse {
+    turns: Vec<TurnSummary>,
+}
+
 impl TurnRecord {
     fn to_summary(&self) -> TurnSummary {
         TurnSummary {
@@ -2781,9 +2842,24 @@ impl TurnRecord {
 }
 
 fn codex_turn_from_summary(summary: TurnSummary) -> CodexTurn {
+    let items = match summary.status {
+        TurnStatus::Pending => vec![CodexThreadItem::started_agent_message(
+            summary.turn_id.clone(),
+        )],
+        TurnStatus::Completed => vec![CodexThreadItem::completed_agent_message(
+            summary.turn_id.clone(),
+            summary.output.clone().unwrap_or_default(),
+        )],
+        TurnStatus::Failed | TurnStatus::Cancelled => {
+            vec![CodexThreadItem::completed_agent_message(
+                summary.turn_id.clone(),
+                summary.output.clone().unwrap_or_default(),
+            )]
+        }
+    };
     CodexTurn {
         id: summary.turn_id,
-        items: Vec::new(),
+        items,
         status: match summary.status {
             TurnStatus::Pending => CodexTurnStatus::InProgress,
             TurnStatus::Completed => CodexTurnStatus::Completed,
@@ -2849,10 +2925,6 @@ impl NotificationBus {
         self.push(ServerNotification::capabilities_changed(event));
     }
 
-    pub fn emit_thread_created(&mut self, event: ThreadCreatedEvent) {
-        self.push(ServerNotification::thread_created(event));
-    }
-
     pub fn emit_thread_started(&mut self, event: ThreadStartedEvent) {
         self.push(ServerNotification::thread_started(event));
     }
@@ -2861,20 +2933,8 @@ impl NotificationBus {
         self.push(ServerNotification::turn_started(event));
     }
 
-    pub fn emit_turn_delta(&mut self, event: TurnDeltaEvent) {
-        self.push(ServerNotification::turn_delta(event));
-    }
-
     pub fn emit_turn_completed(&mut self, event: TurnCompletedEvent) {
         self.push(ServerNotification::turn_completed(event));
-    }
-
-    pub fn emit_turn_failed(&mut self, event: TurnFailedEvent) {
-        self.push(ServerNotification::turn_failed(event));
-    }
-
-    pub fn emit_turn_cancelled(&mut self, event: TurnCancelledEvent) {
-        self.push(ServerNotification::turn_cancelled(event));
     }
 
     pub fn emit_item_started(&mut self, event: ItemStartedEvent) {
@@ -3147,25 +3207,6 @@ where
     json_rpc_ok(id, handler())
 }
 
-fn route_with_no_params_result<R, F>(
-    id: Option<Value>,
-    params: Option<Value>,
-    handler: F,
-) -> JsonRpcResponse
-where
-    R: Serialize,
-    F: FnOnce() -> Result<R, AppServerError>,
-{
-    if has_non_empty_params(params) {
-        return invalid_params_response(id, "method does not accept params".to_string());
-    }
-
-    match handler() {
-        Ok(result) => json_rpc_ok(id, result),
-        Err(error) => app_error_response(id, error),
-    }
-}
-
 fn has_non_empty_params(params: Option<Value>) -> bool {
     match params {
         None | Some(Value::Null) => false,
@@ -3261,6 +3302,10 @@ impl AppServerError {
     }
 }
 
+fn compatibility_profiles() -> Vec<CompatibilityProfile> {
+    vec![CompatibilityProfile::codex_app_server_v2_chat_session_subset()]
+}
+
 pub fn supported_methods() -> &'static [&'static str] {
     &[
         method::INITIALIZE,
@@ -3269,14 +3314,12 @@ pub fn supported_methods() -> &'static [&'static str] {
         method::CAPABILITIES_LIST,
         method::LIFECYCLE_STATUS,
         method::SHUTDOWN,
-        method::THREAD_CREATE,
         method::THREAD_START,
         method::THREAD_LIST,
         method::THREAD_READ,
         method::TURN_START,
-        method::TURN_CANCEL,
         method::TURN_INTERRUPT,
-        method::TURN_LIST,
+        method::THREAD_TURNS_LIST,
         method::TURN_READ,
         method::MODEL_LIST,
         method::MODEL_PROVIDER_SELECT_FOR_NEXT_TURN,
@@ -3481,7 +3524,7 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: vec![
-                    CompatibilityProfile::CODEX_APP_SERVER_V2_ID.to_string(),
+                    CompatibilityProfile::CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_ID.to_string(),
                 ],
                 model_provider: None,
             })
@@ -3489,9 +3532,11 @@ mod tests {
         let profile = response
             .compatibility_profiles
             .iter()
-            .find(|profile| profile.id == CompatibilityProfile::CODEX_APP_SERVER_V2_ID)
+            .find(|profile| {
+                profile.id == CompatibilityProfile::CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_ID
+            })
             .expect("initialize response should advertise the Codex v2 subset profile");
-        let expected_profile = CompatibilityProfile::codex_app_server_v2();
+        let expected_profile = CompatibilityProfile::codex_app_server_v2_chat_session_subset();
 
         assert!(response.unavailable_requested_capabilities.is_empty());
         assert_eq!(profile.scope, expected_profile.scope);
@@ -3509,7 +3554,9 @@ mod tests {
         let profile = response
             .compatibility_profiles
             .iter()
-            .find(|profile| profile.id == CompatibilityProfile::CODEX_APP_SERVER_V2_ID)
+            .find(|profile| {
+                profile.id == CompatibilityProfile::CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_ID
+            })
             .expect("capabilities/list should advertise the Codex v2 subset profile");
 
         assert_eq!(
@@ -3537,7 +3584,7 @@ mod tests {
             .initialize(params.clone())
             .expect("first initialize should succeed");
         assert_eq!(first.lifecycle.state, LifecycleState::Ready);
-        assert_eq!(server.drain_notifications().len(), 3);
+        assert_eq!(server.drain_notifications().len(), 4);
 
         let second = server
             .initialize(params)
@@ -3797,8 +3844,10 @@ mod tests {
         let started = server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start");
         let _ = server.drain_notifications();
@@ -3810,11 +3859,13 @@ mod tests {
         assert_eq!(shutdown.lifecycle.state, LifecycleState::Stopped);
 
         let notifications = server.drain_notifications();
-        assert_eq!(notifications.len(), 2);
-        assert_eq!(notifications[0].method, "turn/cancelled");
-        assert_eq!(notifications[0].params["turnId"], started.turn_id);
-        assert_eq!(notifications[1].method, "lifecycle/changed");
-        assert_eq!(notifications[1].params["lifecycle"]["state"], "stopped");
+        assert_eq!(notifications.len(), 3);
+        assert_eq!(notifications[0].method, "item/completed");
+        assert_eq!(notifications[0].params["turnId"], started.turn.id);
+        assert_eq!(notifications[1].method, "turn/completed");
+        assert_eq!(notifications[1].params["turn"]["status"], "interrupted");
+        assert_eq!(notifications[2].method, "lifecycle/changed");
+        assert_eq!(notifications[2].params["lifecycle"]["state"], "stopped");
     }
 
     #[test]
@@ -3929,11 +3980,16 @@ mod tests {
         let turn = server
             .turn_start(TurnStartParams {
                 thread_id,
-                prompt: "run command".to_string(),
-                reasoning_summary: None,
+                input: text_input("run command".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start");
-        assert_eq!(turn.status, TurnStatus::Pending);
+        assert_eq!(
+            turn.turn.status,
+            codex_status_from_turn_status(TurnStatus::Pending)
+        );
 
         let outputs = json_rpc_values(server.drain_json_rpc_notifications());
         let server_request = outputs
@@ -3986,8 +4042,10 @@ mod tests {
         let _turn = server
             .turn_start(TurnStartParams {
                 thread_id,
-                prompt: "run command".to_string(),
-                reasoning_summary: None,
+                input: text_input("run command".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start");
         let outputs = json_rpc_values(server.drain_json_rpc_notifications());
@@ -4038,8 +4096,10 @@ mod tests {
         let turn = server
             .turn_start(TurnStartParams {
                 thread_id: thread_id.clone(),
-                prompt: "run command".to_string(),
-                reasoning_summary: None,
+                input: text_input("run command".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start");
         let outputs = json_rpc_values(server.drain_json_rpc_notifications());
@@ -4051,7 +4111,7 @@ mod tests {
             .to_string();
 
         server.expire_pending_server_requests_for_tests(Duration::from_secs(301));
-        assert_turn_status_and_ready(&mut server, &thread_id, &turn.turn_id, TurnStatus::Failed);
+        assert_turn_status_and_ready(&mut server, &thread_id, &turn.turn.id, TurnStatus::Failed);
         assert_eq!(
             bridge.decisions(),
             vec![(
@@ -4086,9 +4146,10 @@ mod tests {
         );
         assert!(
             notifications.iter().any(|notification| {
-                notification.method == "turn/failed"
+                notification.method == "turn/completed"
                     && notification.params["threadId"] == thread_id
-                    && notification.params["turnId"] == turn.turn_id
+                    && notification.params["turn"]["id"] == turn.turn.id
+                    && notification.params["turn"]["status"] == "failed"
             }),
             "timeout should fail the owning turn: {notifications:?}"
         );
@@ -4108,8 +4169,10 @@ mod tests {
         let turn = server
             .turn_start(TurnStartParams {
                 thread_id: thread_id.clone(),
-                prompt: "run command".to_string(),
-                reasoning_summary: None,
+                input: text_input("run command".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start");
         let outputs = json_rpc_values(server.drain_json_rpc_notifications());
@@ -4135,7 +4198,7 @@ mod tests {
             )]
         );
         let notifications = server.drain_notifications();
-        assert_turn_status_and_ready(&mut server, &thread_id, &turn.turn_id, TurnStatus::Failed);
+        assert_turn_status_and_ready(&mut server, &thread_id, &turn.turn.id, TurnStatus::Failed);
         assert!(
             notifications.iter().any(|notification| {
                 notification.method == "serverRequest/resolved"
@@ -4147,9 +4210,10 @@ mod tests {
         );
         assert!(
             notifications.iter().any(|notification| {
-                notification.method == "turn/failed"
+                notification.method == "turn/completed"
                     && notification.params["threadId"] == thread_id
-                    && notification.params["turnId"] == turn.turn_id
+                    && notification.params["turn"]["id"] == turn.turn.id
+                    && notification.params["turn"]["status"] == "failed"
             }),
             "client error response should fail the owning turn: {notifications:?}"
         );
@@ -4179,8 +4243,10 @@ mod tests {
         let turn = server
             .turn_start(TurnStartParams {
                 thread_id: thread_id.clone(),
-                prompt: "run command".to_string(),
-                reasoning_summary: None,
+                input: text_input("run command".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start");
         let outputs = json_rpc_values(server.drain_json_rpc_notifications());
@@ -4207,7 +4273,7 @@ mod tests {
                 && reason.starts_with("approval response failed:")
         ));
         let notifications = server.drain_notifications();
-        assert_turn_status_and_ready(&mut server, &thread_id, &turn.turn_id, TurnStatus::Failed);
+        assert_turn_status_and_ready(&mut server, &thread_id, &turn.turn.id, TurnStatus::Failed);
         assert!(
             notifications.iter().any(|notification| {
                 notification.method == "serverRequest/resolved"
@@ -4242,8 +4308,10 @@ mod tests {
         let turn = server
             .turn_start(TurnStartParams {
                 thread_id: thread_id.clone(),
-                prompt: "run command".to_string(),
-                reasoning_summary: None,
+                input: text_input("run command".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start");
         let outputs = json_rpc_values(server.drain_json_rpc_notifications());
@@ -4257,7 +4325,7 @@ mod tests {
         server
             .turn_cancel(TurnCancelParams {
                 thread_id: thread_id.clone(),
-                turn_id: turn.turn_id.clone(),
+                turn_id: turn.turn.id.clone(),
             })
             .expect("turn cancel should succeed");
 
@@ -4265,7 +4333,7 @@ mod tests {
         assert_turn_status_and_ready(
             &mut server,
             &thread_id,
-            &turn.turn_id,
+            &turn.turn.id,
             TurnStatus::Cancelled,
         );
         assert!(
@@ -4306,8 +4374,10 @@ mod tests {
         let _turn = server
             .turn_start(TurnStartParams {
                 thread_id,
-                prompt: "run command".to_string(),
-                reasoning_summary: None,
+                input: text_input("run command".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start");
         let outputs = json_rpc_values(server.drain_json_rpc_notifications());
@@ -4366,10 +4436,11 @@ mod tests {
             .expect("server should initialize");
 
         let notifications = server.drain_notifications();
-        assert_eq!(notifications.len(), 3);
+        assert_eq!(notifications.len(), 4);
         assert_eq!(notifications[0].method, "lifecycle/changed");
         assert_eq!(notifications[1].method, "lifecycle/changed");
         assert_eq!(notifications[2].method, "capabilities/changed");
+        assert_eq!(notifications[3].method, "notifications/initialized");
     }
 
     #[test]
@@ -4385,7 +4456,7 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: vec![
-                    CompatibilityProfile::CODEX_APP_SERVER_V2_ID.to_string(),
+                    CompatibilityProfile::CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_ID.to_string(),
                     "mcp".to_string(),
                 ],
                 model_provider: None,
@@ -4400,7 +4471,7 @@ mod tests {
         assert_eq!(notifications[3].method, "notifications/initialized");
         assert_eq!(
             notifications[3].params["compatibilityProfiles"][0]["id"],
-            CompatibilityProfile::CODEX_APP_SERVER_V2_ID
+            CompatibilityProfile::CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_ID
         );
         assert_eq!(
             notifications[3].params["unavailableRequestedCapabilities"],
@@ -4457,16 +4528,20 @@ mod tests {
             )
             .expect("server request should serialize"),
         );
-        bus.emit_turn_delta(TurnDeltaEvent {
+        bus.emit_agent_message_delta(AgentMessageDeltaEvent {
             thread_id: "thread_1".to_string(),
             turn_id: "turn_1".to_string(),
+            item_id: "turn_1".to_string(),
             delta: "hello".to_string(),
         });
 
         let plain_drain = bus.drain_with_policy();
         assert!(!plain_drain.should_disconnect);
         assert_eq!(plain_drain.notifications.len(), 1);
-        assert_eq!(plain_drain.notifications[0].method, "turn/delta");
+        assert_eq!(
+            plain_drain.notifications[0].method,
+            "item/agentMessage/delta"
+        );
 
         let json_rpc_drain = bus.drain_json_rpc_with_policy();
         assert!(!json_rpc_drain.should_disconnect);
@@ -4484,15 +4559,18 @@ mod tests {
     fn notification_bus_signals_lag_disconnect_when_queue_is_full() {
         let mut bus = NotificationBus::new();
         for _ in 0..DEFAULT_MAX_PENDING_NOTIFICATIONS {
-            bus.emit_thread_created(ThreadCreatedEvent {
-                thread_id: "thread_1".to_string(),
+            bus.emit_capabilities_changed(CapabilitiesChangedEvent {
+                capabilities: CapabilityMatrix::phase_one(),
+                reason: CapabilitiesChangedReason::Initialize,
             });
         }
-        bus.emit_thread_created(ThreadCreatedEvent {
-            thread_id: "thread_overflow".to_string(),
+        bus.emit_capabilities_changed(CapabilitiesChangedEvent {
+            capabilities: CapabilityMatrix::phase_one(),
+            reason: CapabilitiesChangedReason::Initialize,
         });
-        bus.emit_thread_created(ThreadCreatedEvent {
-            thread_id: "ignored_after_overflow".to_string(),
+        bus.emit_capabilities_changed(CapabilitiesChangedEvent {
+            capabilities: CapabilityMatrix::phase_one(),
+            reason: CapabilitiesChangedReason::Initialize,
         });
 
         let drain = bus.drain_with_policy();
@@ -4512,8 +4590,9 @@ mod tests {
     fn json_rpc_notification_drain_preserves_lag_disconnect_policy() {
         let mut bus = NotificationBus::new();
         for _ in 0..=DEFAULT_MAX_PENDING_NOTIFICATIONS {
-            bus.emit_thread_created(ThreadCreatedEvent {
-                thread_id: "thread_1".to_string(),
+            bus.emit_capabilities_changed(CapabilitiesChangedEvent {
+                capabilities: CapabilityMatrix::phase_one(),
+                reason: CapabilitiesChangedReason::Initialize,
             });
         }
 
@@ -4628,7 +4707,7 @@ mod tests {
     }
 
     #[test]
-    fn json_rpc_thread_create_requires_initialize() {
+    fn json_rpc_thread_create_is_not_a_public_method_before_initialize() {
         let mut server = AppServer::new();
         let response = server
             .handle_json_rpc(
@@ -4638,10 +4717,8 @@ mod tests {
         let value: Value = serde_json::from_str(&response).expect("response should be JSON");
 
         assert_eq!(value["id"], "thread");
-        assert_eq!(value["error"]["code"], -32003);
-        assert_eq!(value["error"]["data"]["code"], "NOT_INITIALIZED");
-        assert_eq!(value["error"]["data"]["capability"], "session");
-        assert_eq!(value["error"]["data"]["retryable"], true);
+        assert_eq!(value["error"]["code"], -32601);
+        assert_eq!(value["error"]["data"]["code"], "UNKNOWN_METHOD");
     }
 
     #[test]
@@ -4710,7 +4787,7 @@ mod tests {
     }
 
     #[test]
-    fn json_rpc_thread_create_returns_thread_id_after_initialize() {
+    fn json_rpc_thread_start_returns_thread_view_after_initialize() {
         let mut server = AppServer::new();
         server
             .initialize(InitializeParams {
@@ -4729,17 +4806,62 @@ mod tests {
 
         let response = server
             .handle_json_rpc(
-                r#"{"jsonrpc":"2.0","id":"thread","method":"thread/create","params":{"title":"Draft"}}"#,
+                r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"/tmp/workspace"}}"#,
             )
-            .expect("thread/create should return a structured response");
+            .expect("thread/start should return a structured response");
         let value: Value = serde_json::from_str(&response).expect("response should be JSON");
 
         assert_eq!(value["id"], "thread");
-        assert_eq!(value["result"]["threadId"], "thread_1");
-        assert_eq!(value["result"]["lifecycle"]["state"], "ready");
+        assert_eq!(value["result"]["thread"]["id"], "thread_1");
+        assert_eq!(value["result"]["thread"]["cwd"], "/tmp/workspace");
+        assert_eq!(value["result"]["thread"]["modelProvider"], "openai");
+        assert!(value["result"].get("threadId").is_none());
         let notifications = server.drain_notifications();
         assert_eq!(notifications.len(), 1);
-        assert_eq!(notifications[0].method, "thread/created");
+        assert_eq!(notifications[0].method, "thread/started");
+    }
+
+    #[test]
+    fn json_rpc_thread_start_requires_model_provider_for_truthful_metadata() {
+        let mut server = AppServer::new();
+        server
+            .initialize(InitializeParams {
+                client: ClientInfo {
+                    name: "open-cowork".to_string(),
+                    version: "0.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                protocol_version: ProtocolVersion::current(),
+                workspace: None,
+                requested_capabilities: Vec::new(),
+                model_provider: None,
+            })
+            .expect("initialize should succeed without model provider");
+        let _ = server.drain_notifications();
+
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"/tmp/workspace"}}"#,
+            )
+            .expect("thread/start should return a structured error");
+        let value: Value = serde_json::from_str(&response).expect("response should be JSON");
+
+        assert_eq!(value["id"], "thread");
+        assert_eq!(value["error"]["code"], -32602);
+        assert_eq!(value["error"]["data"]["code"], "INVALID_PARAMS");
+        assert_eq!(value["error"]["data"]["capability"], "model_provider");
+        assert!(server.drain_notifications().is_empty());
+        assert!(
+            server
+                .thread_list(ThreadListParams {
+                    cursor: None,
+                    limit: None,
+                    sort_direction: None,
+                })
+                .expect("thread/list should still work")
+                .data
+                .is_empty()
+        );
     }
 
     #[test]
@@ -4758,15 +4880,13 @@ mod tests {
     fn json_rpc_thread_list_and_read_return_in_memory_threads() {
         let mut server = initialized_server();
         let first = server
-            .thread_create(ThreadCreateParams {
-                title: Some("First".to_string()),
-                workspace_root: Some("/tmp/workspace".to_string()),
+            .thread_start(ThreadStartParams {
+                cwd: Some("/tmp/workspace".to_string()),
             })
             .expect("first thread should be created");
         let _second = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Second".to_string()),
-                workspace_root: None,
+            .thread_start(ThreadStartParams {
+                cwd: Some("/tmp/second".to_string()),
             })
             .expect("second thread should be created");
 
@@ -4776,25 +4896,21 @@ mod tests {
         let read = server
             .handle_json_rpc(&format!(
                 r#"{{"jsonrpc":"2.0","id":"thread","method":"thread/read","params":{{"threadId":"{}"}}}}"#,
-                first.thread_id
+                first.thread.id
             ))
             .expect("thread/read should return a response");
         let list_value: Value = serde_json::from_str(&list).expect("list response JSON");
         let read_value: Value = serde_json::from_str(&read).expect("read response JSON");
 
         assert_eq!(
-            list_value["result"]["threads"]
+            list_value["result"]["data"]
                 .as_array()
-                .expect("threads should be an array")
+                .expect("data should be an array")
                 .len(),
             2
         );
-        assert_eq!(read_value["result"]["thread"]["threadId"], "thread_1");
-        assert_eq!(read_value["result"]["thread"]["title"], "First");
-        assert_eq!(
-            read_value["result"]["thread"]["workspaceRoot"],
-            "/tmp/workspace"
-        );
+        assert_eq!(read_value["result"]["thread"]["id"], "thread_1");
+        assert_eq!(read_value["result"]["thread"]["cwd"], "/tmp/workspace");
     }
 
     #[test]
@@ -4817,7 +4933,7 @@ mod tests {
         let mut server = AppServer::new();
         let start = server
             .handle_json_rpc(
-                r#"{"jsonrpc":"2.0","id":"turn-start","method":"turn/start","params":{"threadId":"thread_1","prompt":"hello"}}"#,
+                r#"{"jsonrpc":"2.0","id":"turn-start","method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"hello","text_elements":[]}]}}"#,
             )
             .expect("turn/start should return a structured response");
         let start_value: Value = serde_json::from_str(&start).expect("start response JSON");
@@ -4831,7 +4947,7 @@ mod tests {
         let mut server = initialized_server();
         let start = server
             .handle_json_rpc(
-                r#"{"jsonrpc":"2.0","id":"turn-start","method":"turn/start","params":{"threadId":"missing","prompt":"hello"}}"#,
+                r#"{"jsonrpc":"2.0","id":"turn-start","method":"turn/start","params":{"threadId":"missing","input":[{"type":"text","text":"hello","text_elements":[]}]}}"#,
             )
             .expect("turn/start should return a structured response");
         let start_value: Value = serde_json::from_str(&start).expect("start response JSON");
@@ -4842,49 +4958,49 @@ mod tests {
     }
 
     #[test]
-    fn json_rpc_turn_start_and_cancel_manage_pending_in_memory_turns() {
+    fn json_rpc_turn_start_and_interrupt_manage_pending_in_memory_turns() {
         let mut server = initialized_server();
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
+            .thread_start(ThreadStartParams {
+                cwd: Some("Draft".to_string()),
             })
             .expect("thread should be created");
         let _ = server.drain_notifications();
 
         let start = server
             .handle_json_rpc(&format!(
-                r#"{{"jsonrpc":"2.0","id":"turn-start","method":"turn/start","params":{{"threadId":"{}","prompt":"hello"}}}}"#,
-                thread.thread_id
+                r#"{{"jsonrpc":"2.0","id":"turn-start","method":"turn/start","params":{{"threadId":"{}","input":[{{"type":"text","text":"hello","text_elements":[]}}]}}}}"#,
+                thread.thread.id
             ))
             .expect("turn/start should return a structured response");
         let start_value: Value = serde_json::from_str(&start).expect("start response JSON");
 
-        assert_eq!(start_value["result"]["turnId"], "turn_1");
-        assert_eq!(start_value["result"]["status"], "pending");
-        assert_eq!(start_value["result"]["lifecycle"]["state"], "running");
+        assert_eq!(start_value["result"]["turn"]["id"], "turn_1");
+        assert_eq!(start_value["result"]["turn"]["status"], "inProgress");
         let started = server.drain_notifications();
-        assert_eq!(started.len(), 2);
+        assert_eq!(started.len(), 3);
         assert_eq!(started[0].method, "lifecycle/changed");
         assert_eq!(started[0].params["lifecycle"]["state"], "running");
         assert_eq!(started[1].method, "turn/started");
+        assert_eq!(started[2].method, "item/started");
 
-        let cancel = server
+        let interrupt = server
             .handle_json_rpc(&format!(
-                r#"{{"jsonrpc":"2.0","id":"turn-cancel","method":"turn/cancel","params":{{"threadId":"{}","turnId":"turn_1"}}}}"#,
-                thread.thread_id
+                r#"{{"jsonrpc":"2.0","id":"turn-interrupt","method":"turn/interrupt","params":{{"threadId":"{}","turnId":"turn_1"}}}}"#,
+                thread.thread.id
             ))
-            .expect("turn/cancel should return a structured response");
-        let cancel_value: Value = serde_json::from_str(&cancel).expect("cancel response JSON");
+            .expect("turn/interrupt should return a structured response");
+        let interrupt_value: Value =
+            serde_json::from_str(&interrupt).expect("interrupt response JSON");
 
-        assert_eq!(cancel_value["result"]["accepted"], true);
-        assert_eq!(cancel_value["result"]["status"], "cancelled");
-        assert_eq!(cancel_value["result"]["lifecycle"]["state"], "ready");
+        assert_eq!(interrupt_value["result"], serde_json::json!({}));
         let cancelled = server.drain_notifications();
-        assert_eq!(cancelled.len(), 2);
-        assert_eq!(cancelled[0].method, "turn/cancelled");
-        assert_eq!(cancelled[1].method, "lifecycle/changed");
-        assert_eq!(cancelled[1].params["lifecycle"]["state"], "ready");
+        assert_eq!(cancelled.len(), 3);
+        assert_eq!(cancelled[0].method, "item/completed");
+        assert_eq!(cancelled[1].method, "turn/completed");
+        assert_eq!(cancelled[1].params["turn"]["status"], "interrupted");
+        assert_eq!(cancelled[2].method, "lifecycle/changed");
+        assert_eq!(cancelled[2].params["lifecycle"]["state"], "ready");
     }
 
     #[test]
@@ -4901,13 +5017,18 @@ mod tests {
         let start = server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
-                prompt: "hello runtime".to_string(),
-                reasoning_summary: None,
+                input: text_input("hello runtime".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start through runtime bridge");
 
-        assert_eq!(start.turn_id, "turn_1");
-        assert_eq!(start.status, TurnStatus::Pending);
+        assert_eq!(start.turn.id, "turn_1");
+        assert_eq!(
+            start.turn.status,
+            codex_status_from_turn_status(TurnStatus::Pending)
+        );
         let calls = bridge.calls.lock().expect("calls lock");
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].thread_id, thread.thread_id);
@@ -4944,8 +5065,10 @@ mod tests {
         server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id,
-                prompt: "hello runtime".to_string(),
-                reasoning_summary: Some("concise".to_string()),
+                input: text_input("hello runtime".to_string()),
+                cwd: None,
+                model: None,
+                summary: Some("concise".to_string()),
             })
             .expect("turn should start through runtime bridge");
 
@@ -4982,8 +5105,10 @@ mod tests {
         let error = server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
-                prompt: "hello runtime".to_string(),
-                reasoning_summary: None,
+                input: text_input("hello runtime".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect_err("missing model provider must fail safe before runtime");
 
@@ -5016,8 +5141,10 @@ mod tests {
         let first = server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
-                prompt: "first".to_string(),
-                reasoning_summary: None,
+                input: text_input("first".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("first turn should use initial model");
         let response = server
@@ -5028,14 +5155,16 @@ mod tests {
         let second = server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id,
-                prompt: "second".to_string(),
-                reasoning_summary: None,
+                input: text_input("second".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("second turn should use newly selected model");
 
         assert_eq!(response.selected_model_id, "gpt-next");
-        assert_eq!(first.turn_id, "turn_1");
-        assert_eq!(second.turn_id, "turn_2");
+        assert_eq!(first.turn.id, "turn_1");
+        assert_eq!(second.turn.id, "turn_2");
         let calls = bridge.calls.lock().expect("calls lock");
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].model_provider.model_id, "gpt-test");
@@ -5058,7 +5187,7 @@ mod tests {
 
         let response = server
             .handle_json_rpc(&format!(
-                r#"{{"jsonrpc":"2.0","id":"turn-start","method":"turn/start","params":{{"threadId":"{}","prompt":"hello"}}}}"#,
+                r#"{{"jsonrpc":"2.0","id":"turn-start","method":"turn/start","params":{{"threadId":"{}","input":[{{"type":"text","text":"hello","text_elements":[]}}]}}}}"#,
                 thread.thread_id
             ))
             .expect("turn/start should return a structured runtime error");
@@ -5104,44 +5233,45 @@ mod tests {
             vec![
                 "lifecycle/changed",
                 "lifecycle/changed",
-                "capabilities/changed"
+                "capabilities/changed",
+                "notifications/initialized"
             ]
         );
 
         let thread = json_rpc_value(
             server
                 .handle_json_rpc(
-                    r#"{"jsonrpc":"2.0","id":"thread","method":"thread/create","params":{"title":"Draft"}}"#,
+                    r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"Draft"}}"#,
                 )
-                .expect("thread/create should return a JSON-RPC response"),
+                .expect("thread/start should return a JSON-RPC response"),
         );
-        let thread_id = thread["result"]["threadId"]
+        let thread_id = thread["result"]["thread"]["id"]
             .as_str()
-            .expect("threadId should be returned")
+            .expect("thread id should be returned")
             .to_string();
         let thread_notifications = json_rpc_values(server.drain_json_rpc_notifications());
         assert_eq!(
             methods_from_values(&thread_notifications),
-            vec!["thread/created"]
+            vec!["thread/started"]
         );
 
         let turn = json_rpc_value(
             server
                 .handle_json_rpc(&format!(
-                    r#"{{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{{"threadId":"{thread_id}","input":"hello"}}}}"#
+                    r#"{{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{{"threadId":"{thread_id}","input":[{{"type":"text","text":"hello","text_elements":[]}}]}}}}"#
                 ))
                 .expect("turn/start should return a JSON-RPC response"),
         );
-        let turn_id = turn["result"]["turnId"]
+        let turn_id = turn["result"]["turn"]["id"]
             .as_str()
-            .expect("turnId should be returned")
+            .expect("turn id should be returned")
             .to_string();
-        assert_eq!(turn["result"]["status"], "pending");
+        assert_eq!(turn["result"]["turn"]["status"], "inProgress");
 
         let immediate_notifications = json_rpc_values(server.drain_json_rpc_notifications());
         assert_eq!(
             methods_from_values(&immediate_notifications),
-            vec!["lifecycle/changed", "turn/started"],
+            vec!["lifecycle/changed", "turn/started", "item/started"],
             "turn/start must return pending before delayed runtime terminal notifications"
         );
         assert_eq!(
@@ -5154,17 +5284,22 @@ mod tests {
         assert_eq!(
             methods_from_values(&turn_notifications),
             vec![
-                "turn/delta",
-                "turn/delta",
+                "item/agentMessage/delta",
+                "item/agentMessage/delta",
+                "item/completed",
                 "turn/completed",
                 "lifecycle/changed"
             ]
         );
         assert_eq!(turn_notifications[0]["params"]["delta"], "Hel");
         assert_eq!(turn_notifications[1]["params"]["delta"], "lo");
-        assert_eq!(turn_notifications[2]["params"]["output"], "Hello");
+        assert_eq!(turn_notifications[2]["params"]["item"]["text"], "Hello");
         assert_eq!(
-            turn_notifications[3]["params"]["lifecycle"]["state"],
+            turn_notifications[3]["params"]["turn"]["status"],
+            "completed"
+        );
+        assert_eq!(
+            turn_notifications[4]["params"]["lifecycle"]["state"],
             "ready"
         );
 
@@ -5176,7 +5311,7 @@ mod tests {
                 .expect("turn/read should return a JSON-RPC response"),
         );
         assert_eq!(read["result"]["turn"]["status"], "completed");
-        assert_eq!(read["result"]["turn"]["output"], "Hello");
+        assert_eq!(read["result"]["turn"]["items"][0]["text"], "Hello");
         assert!(server.drain_json_rpc_notifications().is_empty());
     }
 
@@ -5195,27 +5330,27 @@ mod tests {
         let thread = json_rpc_value(
             server
                 .handle_json_rpc(
-                    r#"{"jsonrpc":"2.0","id":"thread","method":"thread/create","params":{"title":"Draft"}}"#,
+                    r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"Draft"}}"#,
                 )
-                .expect("thread/create should return a JSON-RPC response"),
+                .expect("thread/start should return a JSON-RPC response"),
         );
-        let thread_id = thread["result"]["threadId"]
+        let thread_id = thread["result"]["thread"]["id"]
             .as_str()
-            .expect("threadId should be returned")
+            .expect("thread id should be returned")
             .to_string();
         let _ = server.drain_json_rpc_notifications();
 
         let turn = json_rpc_value(
             server
                 .handle_json_rpc(&format!(
-                    r#"{{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{{"threadId":"{}","prompt":"hello"}}}}"#,
+                    r#"{{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{{"threadId":"{}","input":[{{"type":"text","text":"hello","text_elements":[]}}]}}}}"#,
                     thread_id
                 ))
                 .expect("turn/start should return a JSON-RPC response"),
         );
-        let turn_id = turn["result"]["turnId"]
+        let turn_id = turn["result"]["turn"]["id"]
             .as_str()
-            .expect("turnId should be returned")
+            .expect("turn id should be returned")
             .to_string();
 
         let notifications = json_rpc_values(server.drain_json_rpc_notifications());
@@ -5224,13 +5359,21 @@ mod tests {
             vec![
                 "lifecycle/changed",
                 "turn/started",
-                "turn/failed",
+                "item/started",
+                "item/completed",
+                "turn/completed",
+                "error",
                 "lifecycle/changed"
             ]
         );
         assert_eq!(notifications[0]["params"]["lifecycle"]["state"], "running");
-        assert_eq!(notifications[2]["params"]["error"], "runtime failed");
-        assert_eq!(notifications[3]["params"]["lifecycle"]["state"], "ready");
+        assert_eq!(notifications[4]["params"]["turn"]["status"], "failed");
+        assert_eq!(
+            notifications[4]["params"]["turn"]["error"]["message"],
+            "runtime failed"
+        );
+        assert_eq!(notifications[5]["params"]["message"], "runtime failed");
+        assert_eq!(notifications[6]["params"]["lifecycle"]["state"], "ready");
 
         let read = server
             .handle_json_rpc(&format!(
@@ -5239,7 +5382,7 @@ mod tests {
             .expect("turn/read should return a JSON-RPC response");
         let read = json_rpc_value(read);
         assert_eq!(read["result"]["turn"]["status"], "failed");
-        assert_eq!(read["result"]["turn"]["error"], "runtime failed");
+        assert_eq!(read["result"]["turn"]["error"]["message"], "runtime failed");
     }
 
     #[test]
@@ -5255,45 +5398,44 @@ mod tests {
         let thread = json_rpc_value(
             server
                 .handle_json_rpc(
-                    r#"{"jsonrpc":"2.0","id":"thread","method":"thread/create","params":{"title":"Draft"}}"#,
+                    r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"Draft"}}"#,
                 )
-                .expect("thread/create should return a JSON-RPC response"),
+                .expect("thread/start should return a JSON-RPC response"),
         );
-        let thread_id = thread["result"]["threadId"]
+        let thread_id = thread["result"]["thread"]["id"]
             .as_str()
-            .expect("threadId should be returned")
+            .expect("thread id should be returned")
             .to_string();
         let _ = server.drain_json_rpc_notifications();
 
         let turn = json_rpc_value(
             server
                 .handle_json_rpc(&format!(
-                    r#"{{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{{"threadId":"{}","prompt":"hello"}}}}"#,
+                    r#"{{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{{"threadId":"{}","input":[{{"type":"text","text":"hello","text_elements":[]}}]}}}}"#,
                     thread_id
                 ))
                 .expect("turn/start should return a JSON-RPC response"),
         );
-        let turn_id = turn["result"]["turnId"]
+        let turn_id = turn["result"]["turn"]["id"]
             .as_str()
-            .expect("turnId should be returned")
+            .expect("turn id should be returned")
             .to_string();
         assert_eq!(
             methods_from_values(&json_rpc_values(server.drain_json_rpc_notifications())),
-            vec!["lifecycle/changed", "turn/started"]
+            vec!["lifecycle/changed", "turn/started", "item/started"]
         );
 
-        let cancel = json_rpc_value(
+        let interrupt = json_rpc_value(
             server
                 .handle_json_rpc(&format!(
-                    r#"{{"jsonrpc":"2.0","id":"cancel","method":"turn/cancel","params":{{"threadId":"{thread_id}","turnId":"{turn_id}"}}}}"#
+                    r#"{{"jsonrpc":"2.0","id":"interrupt","method":"turn/interrupt","params":{{"threadId":"{thread_id}","turnId":"{turn_id}"}}}}"#
                 ))
-                .expect("turn/cancel should return a JSON-RPC response"),
+                .expect("turn/interrupt should return a JSON-RPC response"),
         );
-        assert_eq!(cancel["result"]["accepted"], true);
-        assert_eq!(cancel["result"]["status"], "cancelled");
+        assert_eq!(interrupt["result"], serde_json::json!({}));
         assert_eq!(
             methods_from_values(&json_rpc_values(server.drain_json_rpc_notifications())),
-            vec!["turn/cancelled", "lifecycle/changed"]
+            vec!["item/completed", "turn/completed", "lifecycle/changed"]
         );
 
         let cancel_calls = bridge.cancel_calls.lock().expect("cancel calls lock");
@@ -5308,7 +5450,7 @@ mod tests {
                 ))
                 .expect("turn/read should return a JSON-RPC response"),
         );
-        assert_eq!(read["result"]["turn"]["status"], "cancelled");
+        assert_eq!(read["result"]["turn"]["status"], "interrupted");
     }
 
     #[test]
@@ -5328,30 +5470,41 @@ mod tests {
         let start = server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start");
         let notifications = server.drain_notifications();
-        assert_eq!(notifications.len(), 5);
-        assert_eq!(notifications[0].method, "thread/created");
+        assert_eq!(notifications.len(), 7);
+        assert_eq!(notifications[0].method, "thread/started");
         assert_eq!(notifications[1].method, "lifecycle/changed");
         assert_eq!(notifications[1].params["lifecycle"]["state"], "running");
         assert_eq!(notifications[2].method, "turn/started");
-        assert_eq!(notifications[3].method, "turn/completed");
-        assert_eq!(notifications[3].params["output"], "hello from runtime");
-        assert_eq!(notifications[4].method, "lifecycle/changed");
-        assert_eq!(notifications[4].params["lifecycle"]["state"], "ready");
+        assert_eq!(notifications[3].method, "item/started");
+        assert_eq!(notifications[4].method, "item/completed");
+        assert_eq!(
+            notifications[4].params["item"]["text"],
+            "hello from runtime"
+        );
+        assert_eq!(notifications[5].method, "turn/completed");
+        assert_eq!(notifications[5].params["turn"]["status"], "completed");
+        assert_eq!(notifications[6].method, "lifecycle/changed");
+        assert_eq!(notifications[6].params["lifecycle"]["state"], "ready");
 
         let read = server
             .turn_read(TurnReadParams {
                 thread_id: thread.thread_id,
-                turn_id: start.turn_id,
+                turn_id: start.turn.id,
             })
             .expect("turn/read should apply completion update");
 
-        assert_eq!(read.turn.status, TurnStatus::Completed);
-        assert_eq!(read.turn.output.as_deref(), Some("hello from runtime"));
+        assert_eq!(
+            read.turn.status,
+            codex_status_from_turn_status(TurnStatus::Completed)
+        );
+        assert_eq!(turn_text(&read.turn).as_deref(), Some("hello from runtime"));
         assert_eq!(read.turn.error, None);
         assert!(server.drain_notifications().is_empty());
     }
@@ -5373,20 +5526,30 @@ mod tests {
         let start = server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start");
         let notifications = server.drain_notifications();
-        assert_eq!(notifications.len(), 5);
-        assert_eq!(notifications[0].method, "thread/created");
+        assert_eq!(notifications.len(), 8);
+        assert_eq!(notifications[0].method, "thread/started");
         assert_eq!(notifications[1].method, "lifecycle/changed");
         assert_eq!(notifications[1].params["lifecycle"]["state"], "running");
         assert_eq!(notifications[2].method, "turn/started");
-        assert_eq!(notifications[3].method, "turn/failed");
-        assert_eq!(notifications[3].params["error"], "runtime failed");
-        assert_eq!(notifications[4].method, "lifecycle/changed");
-        assert_eq!(notifications[4].params["lifecycle"]["state"], "ready");
+        assert_eq!(notifications[3].method, "item/started");
+        assert_eq!(notifications[4].method, "item/completed");
+        assert_eq!(notifications[5].method, "turn/completed");
+        assert_eq!(notifications[5].params["turn"]["status"], "failed");
+        assert_eq!(
+            notifications[5].params["turn"]["error"]["message"],
+            "runtime failed"
+        );
+        assert_eq!(notifications[6].method, "error");
+        assert_eq!(notifications[6].params["message"], "runtime failed");
+        assert_eq!(notifications[7].method, "lifecycle/changed");
+        assert_eq!(notifications[7].params["lifecycle"]["state"], "ready");
 
         let list = server
             .turn_list(TurnListParams {
@@ -5395,7 +5558,7 @@ mod tests {
             .expect("turn/list should apply failure update");
 
         assert_eq!(list.turns.len(), 1);
-        assert_eq!(list.turns[0].turn_id, start.turn_id);
+        assert_eq!(list.turns[0].turn_id, start.turn.id);
         assert_eq!(list.turns[0].status, TurnStatus::Failed);
         assert_eq!(list.turns[0].output, None);
         assert_eq!(list.turns[0].error.as_deref(), Some("runtime failed"));
@@ -5415,22 +5578,26 @@ mod tests {
         let first = server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
-                prompt: "first".to_string(),
-                reasoning_summary: None,
+                input: text_input("first".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("first turn should start");
         let second = server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
-                prompt: "second".to_string(),
-                reasoning_summary: None,
+                input: text_input("second".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("second turn should start");
         let _ = server.drain_notifications();
 
         server.runtime_turn_updates.complete(
             thread.thread_id.clone(),
-            first.turn_id,
+            first.turn.id,
             "first done".to_string(),
         );
         let _after_first = server
@@ -5446,12 +5613,12 @@ mod tests {
                 .iter()
                 .map(|notification| notification.method.as_str())
                 .collect::<Vec<_>>(),
-            vec!["turn/completed"]
+            vec!["item/completed", "turn/completed"]
         );
 
         server.runtime_turn_updates.complete(
             thread.thread_id.clone(),
-            second.turn_id,
+            second.turn.id,
             "second done".to_string(),
         );
         let _after_second = server
@@ -5467,10 +5634,10 @@ mod tests {
                 .iter()
                 .map(|notification| notification.method.as_str())
                 .collect::<Vec<_>>(),
-            vec!["turn/completed", "lifecycle/changed"]
+            vec!["item/completed", "turn/completed", "lifecycle/changed"]
         );
         assert_eq!(
-            second_notifications[1].params["lifecycle"]["state"],
+            second_notifications[2].params["lifecycle"]["state"],
             "ready"
         );
     }
@@ -5488,15 +5655,17 @@ mod tests {
         let turn = server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start");
         let _ = server.drain_notifications();
 
         server
             .runtime_turn_updates
-            .complete(thread.thread_id, turn.turn_id, "done".to_string());
+            .complete(thread.thread_id, turn.turn.id, "done".to_string());
         let status = server.lifecycle_status();
         let notifications = server.drain_notifications();
 
@@ -5506,7 +5675,7 @@ mod tests {
                 .iter()
                 .map(|notification| notification.method.as_str())
                 .collect::<Vec<_>>(),
-            vec!["turn/completed", "lifecycle/changed"]
+            vec!["item/completed", "turn/completed", "lifecycle/changed"]
         );
     }
 
@@ -5523,15 +5692,17 @@ mod tests {
         let turn = server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start");
         let _ = server.drain_notifications();
 
         server.runtime_turn_updates.fail(
             thread.thread_id,
-            turn.turn_id,
+            turn.turn.id,
             "runtime failed".to_string(),
         );
         let health = server.health_check(HealthCheckParams {
@@ -5546,7 +5717,12 @@ mod tests {
                 .iter()
                 .map(|notification| notification.method.as_str())
                 .collect::<Vec<_>>(),
-            vec!["turn/failed", "lifecycle/changed"]
+            vec![
+                "item/completed",
+                "turn/completed",
+                "error",
+                "lifecycle/changed"
+            ]
         );
     }
 
@@ -5563,15 +5739,17 @@ mod tests {
         let turn = server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start");
         let _ = server.drain_notifications();
 
         server
             .runtime_turn_updates
-            .complete(thread.thread_id, turn.turn_id, "done".to_string());
+            .complete(thread.thread_id, turn.turn.id, "done".to_string());
         let capabilities = server.capabilities();
         let notifications = server.drain_notifications();
 
@@ -5584,9 +5762,9 @@ mod tests {
                 .iter()
                 .map(|notification| notification.method.as_str())
                 .collect::<Vec<_>>(),
-            vec!["turn/completed", "lifecycle/changed"]
+            vec!["item/completed", "turn/completed", "lifecycle/changed"]
         );
-        assert_eq!(notifications[1].params["lifecycle"]["state"], "ready");
+        assert_eq!(notifications[2].params["lifecycle"]["state"], "ready");
     }
 
     #[test]
@@ -5606,28 +5784,34 @@ mod tests {
         let start = server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start");
         let notifications = server.drain_notifications();
-        assert_eq!(notifications.len(), 4);
-        assert_eq!(notifications[0].method, "thread/created");
+        assert_eq!(notifications.len(), 5);
+        assert_eq!(notifications[0].method, "thread/started");
         assert_eq!(notifications[1].method, "lifecycle/changed");
         assert_eq!(notifications[1].params["lifecycle"]["state"], "running");
         assert_eq!(notifications[2].method, "turn/started");
-        assert_eq!(notifications[3].method, "turn/delta");
-        assert_eq!(notifications[3].params["delta"], "hel");
+        assert_eq!(notifications[3].method, "item/started");
+        assert_eq!(notifications[4].method, "item/agentMessage/delta");
+        assert_eq!(notifications[4].params["delta"], "hel");
 
         let read = server
             .turn_read(TurnReadParams {
                 thread_id: thread.thread_id,
-                turn_id: start.turn_id,
+                turn_id: start.turn.id,
             })
             .expect("turn/read should apply delta update");
 
-        assert_eq!(read.turn.status, TurnStatus::Pending);
-        assert_eq!(read.turn.output, None);
+        assert_eq!(
+            read.turn.status,
+            codex_status_from_turn_status(TurnStatus::Pending)
+        );
+        assert_eq!(turn_text(&read.turn), None);
         assert_eq!(read.turn.error, None);
         assert!(server.drain_notifications().is_empty());
     }
@@ -5649,25 +5833,30 @@ mod tests {
         let _start = server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id,
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start");
 
         let lines = server.drain_json_rpc_notifications();
-        assert_eq!(lines.len(), 5);
+        assert_eq!(lines.len(), 7);
         let values = lines
             .iter()
             .map(|line| serde_json::from_str::<Value>(line).expect("notification JSON"))
             .collect::<Vec<_>>();
-        assert_eq!(values[0]["method"], "thread/created");
+        assert_eq!(values[0]["method"], "thread/started");
         assert_eq!(values[1]["method"], "lifecycle/changed");
         assert_eq!(values[1]["params"]["lifecycle"]["state"], "running");
         assert_eq!(values[2]["method"], "turn/started");
-        assert_eq!(values[3]["method"], "turn/completed");
-        assert_eq!(values[3]["params"]["output"], "json rpc output");
-        assert_eq!(values[4]["method"], "lifecycle/changed");
-        assert_eq!(values[4]["params"]["lifecycle"]["state"], "ready");
+        assert_eq!(values[3]["method"], "item/started");
+        assert_eq!(values[4]["method"], "item/completed");
+        assert_eq!(values[4]["params"]["item"]["text"], "json rpc output");
+        assert_eq!(values[5]["method"], "turn/completed");
+        assert_eq!(values[5]["params"]["turn"]["status"], "completed");
+        assert_eq!(values[6]["method"], "lifecycle/changed");
+        assert_eq!(values[6]["params"]["lifecycle"]["state"], "ready");
     }
 
     #[test]
@@ -5683,8 +5872,10 @@ mod tests {
         let start = server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start");
         let _ = server.drain_notifications();
@@ -5692,15 +5883,15 @@ mod tests {
         let cancelled = server
             .turn_cancel(TurnCancelParams {
                 thread_id: thread.thread_id.clone(),
-                turn_id: start.turn_id.clone(),
+                turn_id: start.turn.id.clone(),
             })
-            .expect("turn/cancel should call runtime bridge first");
+            .expect("runtime cancellation should call runtime bridge first");
 
         assert_eq!(cancelled.status, TurnStatus::Cancelled);
         let cancel_calls = bridge.cancel_calls.lock().expect("cancel calls lock");
         assert_eq!(cancel_calls.len(), 1);
         assert_eq!(cancel_calls[0].thread_id, thread.thread_id);
-        assert_eq!(cancel_calls[0].turn_id, start.turn_id);
+        assert_eq!(cancel_calls[0].turn_id, start.turn.id);
     }
 
     #[test]
@@ -5718,8 +5909,10 @@ mod tests {
         let start = server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start");
         let _ = server.drain_notifications();
@@ -5727,7 +5920,7 @@ mod tests {
         let error = server
             .turn_cancel(TurnCancelParams {
                 thread_id: thread.thread_id.clone(),
-                turn_id: start.turn_id.clone(),
+                turn_id: start.turn.id.clone(),
             })
             .expect_err("runtime cancel failure should surface");
         match error {
@@ -5741,10 +5934,13 @@ mod tests {
         let read = server
             .turn_read(TurnReadParams {
                 thread_id: thread.thread_id,
-                turn_id: start.turn_id,
+                turn_id: start.turn.id,
             })
             .expect("turn/read should still find the pending turn");
-        assert_eq!(read.turn.status, TurnStatus::Pending);
+        assert_eq!(
+            read.turn.status,
+            codex_status_from_turn_status(TurnStatus::Pending)
+        );
         assert!(server.drain_notifications().is_empty());
     }
 
@@ -6067,8 +6263,10 @@ mod tests {
         let started = server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start");
 
@@ -6078,13 +6276,13 @@ mod tests {
             .iter()
             .map(|notification| notification.method.as_str())
             .collect::<Vec<_>>();
-        assert!(methods.contains(&"thread/created"));
+        assert!(methods.contains(&"thread/started"));
         assert!(methods.contains(&"turn/started"));
-        assert!(methods.contains(&"turn/delta"));
+        assert!(methods.contains(&"item/agentMessage/delta"));
         assert!(methods.contains(&"turn/completed"));
         let deltas = notifications
             .iter()
-            .filter(|notification| notification.method == "turn/delta")
+            .filter(|notification| notification.method == "item/agentMessage/delta")
             .map(|notification| notification.params["delta"].as_str().unwrap_or_default())
             .collect::<Vec<_>>();
         assert_eq!(deltas, vec!["Hel", "lo"]);
@@ -6093,15 +6291,18 @@ mod tests {
             .iter()
             .find(|notification| notification.method == "turn/completed")
             .expect("completion notification should be emitted");
-        assert_eq!(completed.params["output"], "Hello");
+        assert_eq!(completed.params["turn"]["status"], "completed");
         let read = server
             .turn_read(TurnReadParams {
                 thread_id: thread.thread_id,
-                turn_id: started.turn_id,
+                turn_id: started.turn.id,
             })
             .expect("turn/read should observe completed runtime result");
-        assert_eq!(read.turn.status, TurnStatus::Completed);
-        assert_eq!(read.turn.output.as_deref(), Some("Hello"));
+        assert_eq!(
+            read.turn.status,
+            codex_status_from_turn_status(TurnStatus::Completed)
+        );
+        assert_eq!(turn_text(&read.turn).as_deref(), Some("Hello"));
     }
 
     #[test]
@@ -6131,8 +6332,10 @@ mod tests {
         let started = server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start");
 
@@ -6140,13 +6343,10 @@ mod tests {
             drain_until_method(&mut server, "turn/completed", Duration::from_secs(2));
         let agent_deltas = notifications
             .iter()
-            .filter(|notification| {
-                notification.method == "turn/delta"
-                    || notification.method == "item/agentMessage/delta"
-            })
+            .filter(|notification| notification.method == "item/agentMessage/delta")
             .map(|notification| notification.params["delta"].as_str().unwrap_or_default())
             .collect::<Vec<_>>();
-        assert_eq!(agent_deltas, vec!["final answer", "final answer"]);
+        assert_eq!(agent_deltas, vec!["final answer"]);
         assert!(
             agent_deltas
                 .iter()
@@ -6163,10 +6363,10 @@ mod tests {
         let read = server
             .turn_read(TurnReadParams {
                 thread_id: thread.thread_id,
-                turn_id: started.turn_id,
+                turn_id: started.turn.id,
             })
             .expect("turn/read should observe completed runtime result");
-        assert_eq!(read.turn.output.as_deref(), Some("final answer"));
+        assert_eq!(turn_text(&read.turn).as_deref(), Some("final answer"));
     }
 
     #[test]
@@ -6196,8 +6396,10 @@ mod tests {
         let started = server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start through runtime responder");
 
@@ -6206,7 +6408,7 @@ mod tests {
         assert!(
             notifications
                 .iter()
-                .any(|notification| notification.method == "turn/delta"),
+                .any(|notification| notification.method == "item/agentMessage/delta"),
             "runtime responder should stream deltas: {notifications:?}"
         );
         assert!(
@@ -6219,11 +6421,14 @@ mod tests {
         let read = server
             .turn_read(TurnReadParams {
                 thread_id: thread.thread_id,
-                turn_id: started.turn_id,
+                turn_id: started.turn.id,
             })
             .expect("turn/read should observe runtime responder result");
-        assert_eq!(read.turn.status, TurnStatus::Completed);
-        assert_eq!(read.turn.output.as_deref(), Some("responder"));
+        assert_eq!(
+            read.turn.status,
+            codex_status_from_turn_status(TurnStatus::Completed)
+        );
+        assert_eq!(turn_text(&read.turn).as_deref(), Some("responder"));
     }
 
     #[test]
@@ -6245,8 +6450,10 @@ mod tests {
         let started = server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start");
         let _ = server.drain_notifications();
@@ -6254,9 +6461,9 @@ mod tests {
         let cancelled = server
             .turn_cancel(TurnCancelParams {
                 thread_id: thread.thread_id.clone(),
-                turn_id: started.turn_id.clone(),
+                turn_id: started.turn.id.clone(),
             })
-            .expect("turn/cancel should cancel runtime token");
+            .expect("runtime cancellation should cancel runtime token");
         assert!(cancelled.accepted);
         assert_eq!(cancelled.status, TurnStatus::Cancelled);
 
@@ -6264,24 +6471,28 @@ mod tests {
         assert!(
             notifications
                 .iter()
-                .any(|notification| notification.method == "turn/cancelled"),
-            "cancel notification should be emitted: {notifications:?}"
+                .any(|notification| notification.method == "turn/completed"
+                    && notification.params["turn"]["status"] == "interrupted"),
+            "interrupted completion notification should be emitted: {notifications:?}"
         );
         assert!(
             notifications
                 .iter()
-                .all(|notification| notification.method != "turn/failed"),
+                .all(|notification| notification.method != "error"),
             "runtime stopped update must not override cancellation: {notifications:?}"
         );
 
         let read = server
             .turn_read(TurnReadParams {
                 thread_id: thread.thread_id,
-                turn_id: started.turn_id,
+                turn_id: started.turn.id,
             })
             .expect("turn/read should keep cancelled status");
-        assert_eq!(read.turn.status, TurnStatus::Cancelled);
-        assert_eq!(read.turn.output, None);
+        assert_eq!(
+            read.turn.status,
+            codex_status_from_turn_status(TurnStatus::Cancelled)
+        );
+        assert_eq!(turn_text(&read.turn), None);
         assert_eq!(read.turn.error, None);
     }
 
@@ -6304,8 +6515,10 @@ mod tests {
         let started = server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start");
         let _ = server.drain_notifications();
@@ -6320,19 +6533,20 @@ mod tests {
         assert!(
             notifications
                 .iter()
-                .any(|notification| notification.method == "turn/cancelled"),
-            "shutdown should cancel pending runtime turn: {notifications:?}"
+                .any(|notification| notification.method == "turn/completed"
+                    && notification.params["turn"]["status"] == "interrupted"),
+            "shutdown should interrupt pending runtime turn: {notifications:?}"
         );
         assert!(
             notifications
                 .iter()
-                .all(|notification| notification.method != "turn/failed"),
+                .all(|notification| notification.method != "error"),
             "runtime stopped update must not emit failure after shutdown: {notifications:?}"
         );
 
         let read = server
             .threads
-            .turn_summary(&thread.thread_id, &started.turn_id);
+            .turn_summary(&thread.thread_id, &started.turn.id);
         assert_eq!(
             read.expect("turn should still be recorded").status,
             TurnStatus::Cancelled
@@ -6351,39 +6565,41 @@ mod tests {
         let start = server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id.clone(),
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should be started");
         let _ = server.turn_cancel(TurnCancelParams {
             thread_id: thread.thread_id.clone(),
-            turn_id: start.turn_id.clone(),
+            turn_id: start.turn.id.clone(),
         });
 
         let list = server
             .handle_json_rpc(&format!(
-                r#"{{"jsonrpc":"2.0","id":"turns","method":"turn/list","params":{{"threadId":"{}"}}}}"#,
+                r#"{{"jsonrpc":"2.0","id":"turns","method":"thread/turns/list","params":{{"threadId":"{}"}}}}"#,
                 thread.thread_id
             ))
-            .expect("turn/list should return a response");
+            .expect("thread/turns/list should return a response");
         let read = server
             .handle_json_rpc(&format!(
                 r#"{{"jsonrpc":"2.0","id":"turn","method":"turn/read","params":{{"threadId":"{}","turnId":"{}"}}}}"#,
-                thread.thread_id, start.turn_id
+                thread.thread_id, start.turn.id
             ))
             .expect("turn/read should return a response");
         let list_value: Value = serde_json::from_str(&list).expect("list response JSON");
         let read_value: Value = serde_json::from_str(&read).expect("read response JSON");
 
         assert_eq!(
-            list_value["result"]["turns"]
+            list_value["result"]["data"]
                 .as_array()
-                .expect("turns should be an array")
+                .expect("data should be an array")
                 .len(),
             1
         );
-        assert_eq!(read_value["result"]["turn"]["turnId"], "turn_1");
-        assert_eq!(read_value["result"]["turn"]["status"], "cancelled");
+        assert_eq!(read_value["result"]["turn"]["id"], "turn_1");
+        assert_eq!(read_value["result"]["turn"]["status"], "interrupted");
     }
 
     #[test]
@@ -6428,7 +6644,7 @@ mod tests {
     }
 
     #[test]
-    fn json_rpc_turn_cancel_rejects_unknown_turn_after_thread_exists() {
+    fn json_rpc_turn_interrupt_rejects_unknown_turn_after_thread_exists() {
         let mut server = initialized_server();
         let thread = server
             .thread_create(ThreadCreateParams {
@@ -6438,11 +6654,11 @@ mod tests {
             .expect("thread should be created");
         let response = server
             .handle_json_rpc(&format!(
-                r#"{{"jsonrpc":"2.0","id":"turn-cancel","method":"turn/cancel","params":{{"threadId":"{}","turnId":"missing"}}}}"#,
+                r#"{{"jsonrpc":"2.0","id":"turn-interrupt","method":"turn/interrupt","params":{{"threadId":"{}","turnId":"missing"}}}}"#,
                 thread.thread_id
             ))
-            .expect("turn/cancel should return a structured response");
-        let value: Value = serde_json::from_str(&response).expect("cancel response JSON");
+            .expect("turn/interrupt should return a structured response");
+        let value: Value = serde_json::from_str(&response).expect("interrupt response JSON");
 
         assert_eq!(value["error"]["code"], -32602);
         assert_eq!(value["error"]["data"]["code"], "INVALID_PARAMS");
@@ -6450,7 +6666,7 @@ mod tests {
     }
 
     #[test]
-    fn json_rpc_turn_start_accepts_codex_v2_input_alias() {
+    fn json_rpc_turn_start_accepts_codex_v2_input_items() {
         let bridge = Arc::new(RecordingRuntimeBridge::with_completion(
             RuntimeTurnOutcome::Completed {
                 output: "hello from runtime".to_string(),
@@ -6473,20 +6689,20 @@ mod tests {
         let value: Value = serde_json::from_str(&response).expect("turn response JSON");
         let calls = bridge.calls.lock().expect("calls lock");
 
-        assert_eq!(value["result"]["turnId"], "turn_1");
+        assert_eq!(value["result"]["turn"]["id"], "turn_1");
         assert_eq!(calls[0].prompt, "hello input");
     }
 
     #[test]
-    fn json_rpc_accepts_codex_v2_thread_start_and_turn_interrupt_aliases() {
+    fn json_rpc_accepts_codex_v2_thread_start_and_turn_interrupt() {
         let mut server = initialized_server();
         let thread_response = server
             .handle_json_rpc(
-                r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"title":"Draft"}}"#,
+                r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"Draft"}}"#,
             )
             .expect("thread/start should return a JSON-RPC response");
         let thread: Value = serde_json::from_str(&thread_response).expect("thread response JSON");
-        let thread_id = thread["result"]["threadId"]
+        let thread_id = thread["result"]["thread"]["id"]
             .as_str()
             .expect("thread id should be present")
             .to_string();
@@ -6498,7 +6714,7 @@ mod tests {
             ))
             .expect("turn/start should return a JSON-RPC response");
         let turn: Value = serde_json::from_str(&turn_response).expect("turn response JSON");
-        let turn_id = turn["result"]["turnId"]
+        let turn_id = turn["result"]["turn"]["id"]
             .as_str()
             .expect("turn id should be present")
             .to_string();
@@ -6515,7 +6731,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_v2_requested_profile_emits_item_notifications_without_replacing_legacy_events() {
+    fn codex_v2_requested_profile_emits_item_notifications() {
         let bridge = Arc::new(SequencedRuntimeBridge::new([
             RuntimeTurnOutcome::Delta {
                 delta: "hel".to_string(),
@@ -6535,25 +6751,26 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: vec![
-                    CompatibilityProfile::CODEX_APP_SERVER_V2_ID.to_string(),
+                    CompatibilityProfile::CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_ID.to_string(),
                 ],
                 model_provider: Some(test_model_provider_config()),
             })
             .expect("initialize should succeed");
         let initialize_notifications = server.drain_notifications();
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
+            .thread_start(ThreadStartParams {
+                cwd: Some("Draft".to_string()),
             })
             .expect("thread should be created");
         let thread_notifications = server.drain_notifications();
 
         let started = server
             .turn_start(TurnStartParams {
-                thread_id: thread.thread_id,
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                thread_id: thread.thread.id,
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start");
         let notifications = server.drain_notifications();
@@ -6562,17 +6779,15 @@ mod tests {
             .map(|notification| notification.method.as_str())
             .collect::<Vec<_>>();
 
-        assert_eq!(thread_notifications.len(), 2);
-        assert_eq!(thread_notifications[0].method, "thread/created");
-        assert_eq!(thread_notifications[1].method, "thread/started");
-        assert_eq!(started.turn_id, "turn_1");
+        assert_eq!(thread_notifications.len(), 1);
+        assert_eq!(thread_notifications[0].method, "thread/started");
+        assert_eq!(started.turn.id, "turn_1");
         assert_eq!(
             methods,
             [
                 "lifecycle/changed",
                 "turn/started",
                 "item/started",
-                "turn/delta",
                 "item/agentMessage/delta",
                 "item/completed",
                 "turn/completed",
@@ -6580,9 +6795,9 @@ mod tests {
             ]
         );
         assert_eq!(notifications[0].params["lifecycle"]["state"], "running");
-        assert_eq!(notifications[7].params["lifecycle"]["state"], "ready");
+        assert_eq!(notifications[6].params["lifecycle"]["state"], "ready");
 
-        let profile = CompatibilityProfile::codex_app_server_v2();
+        let profile = CompatibilityProfile::codex_app_server_v2_chat_session_subset();
         let emitted_methods = initialize_notifications
             .iter()
             .chain(thread_notifications.iter())
@@ -6592,26 +6807,205 @@ mod tests {
         for method in emitted_methods {
             assert!(
                 profile.events.iter().any(|event| event == method),
-                "codex_app_server_v2 profile did not declare emitted event: {method}"
+                "chat-session subset profile did not declare emitted event: {method}"
             );
         }
     }
 
     #[test]
-    fn codex_v2_thread_start_response_includes_thread_view_and_native_id() {
+    fn codex_v2_thread_start_response_includes_thread_view_without_legacy_aliases() {
         let mut server = initialized_codex_server();
         let response = server
             .handle_json_rpc(
-                r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"title":"Draft"}}"#,
+                r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"Draft"}}"#,
             )
             .expect("thread/start should return a response");
         let value: Value = serde_json::from_str(&response).expect("thread/start response JSON");
 
-        assert_eq!(value["result"]["threadId"], "thread_1");
         assert_eq!(value["result"]["thread"]["id"], "thread_1");
-        assert_eq!(value["result"]["thread"]["preview"], "Draft");
+        assert_eq!(value["result"]["thread"]["cwd"], "Draft");
+        assert_eq!(value["result"]["thread"]["modelProvider"], "openai");
         assert_eq!(value["result"]["thread"]["source"], "appServer");
         assert_eq!(value["result"]["thread"]["status"]["type"], "idle");
+        assert!(value["result"].get("threadId").is_none());
+    }
+
+    #[test]
+    fn thread_start_json_rpc_returns_v2_shaped_thread_without_legacy_aliases() {
+        let mut server = initialized_server();
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":1,"method":"thread/start","params":{"cwd":"/workspace"}}"#,
+            )
+            .expect("thread/start should return a response");
+        let value: serde_json::Value =
+            serde_json::from_str(&response).expect("response should be valid JSON");
+
+        assert_eq!(value["result"]["thread"]["id"], "thread_1");
+        assert_eq!(value["result"]["thread"]["cwd"], "/workspace");
+        assert_eq!(value["result"]["thread"]["modelProvider"], "openai");
+        assert_eq!(value["result"]["modelProvider"], "openai");
+        assert!(value["result"].get("threadId").is_none());
+        assert!(value["result"].get("lifecycle").is_none());
+
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+        assert!(notifications.iter().any(|line| {
+            line["method"] == "thread/started" && line["params"]["thread"]["id"] == "thread_1"
+        }));
+        assert!(
+            !notifications
+                .iter()
+                .any(|line| line["method"] == "thread/created")
+        );
+    }
+
+    #[test]
+    fn thread_create_json_rpc_is_not_a_public_method() {
+        let mut server = initialized_server();
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":1,"method":"thread/create","params":{"title":"hello"}}"#,
+            )
+            .expect("unknown method should return an error response");
+        let value: serde_json::Value =
+            serde_json::from_str(&response).expect("response should be valid JSON");
+
+        assert_eq!(value["error"]["code"], -32601);
+        assert_eq!(value["error"]["data"]["code"], "UNKNOWN_METHOD");
+    }
+
+    #[test]
+    fn turn_start_json_rpc_returns_v2_shaped_turn_and_events() {
+        let mut server = initialized_server();
+        server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":1,"method":"thread/start","params":{"cwd":"/workspace"}}"#,
+            )
+            .expect("thread/start should return a response");
+        server.drain_json_rpc_notifications();
+
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":2,"method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"hi"}]}}"#,
+            )
+            .expect("turn/start should return a response");
+        let value: serde_json::Value =
+            serde_json::from_str(&response).expect("response should be valid JSON");
+
+        assert_eq!(value["result"]["turn"]["id"], "turn_1");
+        assert_eq!(value["result"]["turn"]["status"], "inProgress");
+        assert!(value["result"].get("turnId").is_none());
+        assert!(value["result"].get("status").is_none());
+        assert!(value["result"].get("lifecycle").is_none());
+
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+        assert!(notifications.iter().any(|line| {
+            line["method"] == "turn/started"
+                && line["params"]["threadId"] == "thread_1"
+                && line["params"]["turn"]["id"] == "turn_1"
+        }));
+        assert!(notifications.iter().any(|line| {
+            line["method"] == "item/started"
+                && line["params"]["item"]["type"] == "agentMessage"
+                && line["params"]["item"]["id"] == "turn_1"
+        }));
+        assert!(
+            !notifications
+                .iter()
+                .any(|line| line["method"] == "turn/delta")
+        );
+    }
+
+    #[test]
+    fn list_json_rpc_methods_return_codex_paged_data_shapes() {
+        let mut server = initialized_server();
+        server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":1,"method":"thread/start","params":{"cwd":"/workspace"}}"#,
+            )
+            .expect("thread/start should return a response");
+        server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":2,"method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"hi"}]}}"#,
+            )
+            .expect("turn/start should return a response");
+
+        let thread_list_response = server
+            .handle_json_rpc(r#"{"jsonrpc":"2.0","id":3,"method":"thread/list","params":{}}"#)
+            .expect("thread/list should return a response");
+        let thread_list_value: serde_json::Value =
+            serde_json::from_str(&thread_list_response).expect("response should be valid JSON");
+        assert_eq!(thread_list_value["result"]["data"][0]["id"], "thread_1");
+        assert!(thread_list_value["result"].get("threads").is_none());
+        assert!(thread_list_value["result"]["nextCursor"].is_null());
+        assert!(thread_list_value["result"]["backwardsCursor"].is_null());
+
+        let turn_list_response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":4,"method":"thread/turns/list","params":{"threadId":"thread_1"}}"#,
+            )
+            .expect("thread/turns/list should return a response");
+        let turn_list_value: serde_json::Value =
+            serde_json::from_str(&turn_list_response).expect("response should be valid JSON");
+        assert_eq!(turn_list_value["result"]["data"][0]["id"], "turn_1");
+        assert!(turn_list_value["result"].get("turns").is_none());
+        assert!(turn_list_value["result"]["nextCursor"].is_null());
+        assert!(turn_list_value["result"]["backwardsCursor"].is_null());
+
+        let legacy_turn_list_response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":5,"method":"turn/list","params":{"threadId":"thread_1"}}"#,
+            )
+            .expect("unknown legacy method should return an error");
+        let legacy_turn_list_value: serde_json::Value =
+            serde_json::from_str(&legacy_turn_list_response)
+                .expect("response should be valid JSON");
+        assert_eq!(legacy_turn_list_value["error"]["code"], -32601);
+        assert_eq!(
+            legacy_turn_list_value["error"]["data"]["code"],
+            "UNKNOWN_METHOD"
+        );
+    }
+
+    #[test]
+    fn turn_interrupt_replaces_turn_cancel_as_public_cancel_method() {
+        let mut server = initialized_server();
+        server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":1,"method":"thread/start","params":{"cwd":"/workspace"}}"#,
+            )
+            .expect("thread/start should return a response");
+        server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":2,"method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"hi"}]}}"#,
+            )
+            .expect("turn/start should return a response");
+
+        let legacy_response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":3,"method":"turn/cancel","params":{"threadId":"thread_1","turnId":"turn_1"}}"#,
+            )
+            .expect("unknown legacy method should return an error");
+        let legacy_value: serde_json::Value =
+            serde_json::from_str(&legacy_response).expect("response should be valid JSON");
+        assert_eq!(legacy_value["error"]["code"], -32601);
+        assert_eq!(legacy_value["error"]["data"]["code"], "UNKNOWN_METHOD");
+
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":4,"method":"turn/interrupt","params":{"threadId":"thread_1","turnId":"turn_1"}}"#,
+            )
+            .expect("turn/interrupt should return a response");
+        let value: serde_json::Value =
+            serde_json::from_str(&response).expect("response should be valid JSON");
+        assert_eq!(value["result"], serde_json::json!({}));
+        let notifications = json_rpc_values(server.drain_json_rpc_notifications());
+        assert!(notifications.iter().any(|line| {
+            line["method"] == "turn/completed"
+                && line["params"]["threadId"] == "thread_1"
+                && line["params"]["turn"]["id"] == "turn_1"
+                && line["params"]["turn"]["status"] == "interrupted"
+        }));
     }
 
     #[test]
@@ -6623,28 +7017,23 @@ mod tests {
         ]));
         let mut server = initialized_codex_server_with_bridge(bridge);
         let thread = server
-            .thread_start(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .thread_start(ThreadStartParams { cwd: None })
             .expect("thread/start should succeed");
         let _ = server.drain_notifications();
 
         let started = server
             .turn_start(TurnStartParams {
-                thread_id: thread.thread_id,
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                thread_id: thread.thread.id,
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn/start should succeed");
         let notifications = server.drain_notifications();
 
-        assert_eq!(started.turn_id, "turn_1");
-        assert_eq!(started.turn.as_ref().expect("turn view").id, "turn_1");
-        assert_eq!(
-            started.turn.as_ref().expect("turn view").status,
-            dasclaw_app_server_protocol::CodexTurnStatus::InProgress
-        );
+        assert_eq!(started.turn.id, "turn_1");
+        assert_eq!(started.turn.status, CodexTurnStatus::InProgress);
         let started_notification = notifications
             .iter()
             .find(|notification| notification.method == "turn/started")
@@ -6666,27 +7055,26 @@ mod tests {
         }]));
         let mut server = initialized_codex_server_with_bridge(bridge);
         let thread = server
-            .thread_start(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .thread_start(ThreadStartParams { cwd: None })
             .expect("thread/start should succeed");
         let _ = server.drain_notifications();
 
         let started = server
             .turn_start(TurnStartParams {
-                thread_id: thread.thread_id,
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                thread_id: thread.thread.id,
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn/start should succeed");
         let notifications = server.drain_notifications();
 
-        assert_eq!(started.turn_id, "turn_1");
+        assert_eq!(started.turn.id, "turn_1");
         let failed = notifications
             .iter()
-            .find(|notification| notification.method == "turn/failed")
-            .expect("turn/failed should be emitted");
+            .find(|notification| notification.method == "turn/completed")
+            .expect("turn/completed should be emitted");
         assert_eq!(failed.params["turn"]["id"], "turn_1");
         assert_eq!(failed.params["turn"]["status"], "failed");
         assert_eq!(failed.params["turn"]["error"]["message"], "runtime failed");
@@ -6715,21 +7103,21 @@ mod tests {
                         "transport": "stdio"
                     },
                     "protocolVersion": ProtocolVersion::current(),
-                    "requestedCapabilities": [CompatibilityProfile::CODEX_APP_SERVER_V2_ID],
+                    "requestedCapabilities": [CompatibilityProfile::CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_ID],
                     "modelProvider": test_model_provider_config()
                 }
             }),
             serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": "thread",
-                "method": "thread/create",
-                "params": {"title": "Draft"}
+                "method": "thread/start",
+                "params": {"cwd": "Draft"}
             }),
             serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": "turn",
                 "method": "turn/start",
-                "params": {"threadId": "thread_1", "prompt": "hello"}
+                "params": {"threadId": "thread_1", "input": [{"type": "text", "text": "hello", "text_elements": []}]}
             }),
         ]
         .into_iter()
@@ -6760,7 +7148,8 @@ mod tests {
             .expect("initialize response should advertise compatibility profiles")
             .iter()
             .find(|profile| {
-                profile["id"].as_str() == Some(CompatibilityProfile::CODEX_APP_SERVER_V2_ID)
+                profile["id"].as_str()
+                    == Some(CompatibilityProfile::CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_ID)
             })
             .expect("codex v2 compatibility profile should be advertised")["events"]
             .as_array()
@@ -6776,7 +7165,6 @@ mod tests {
 
         assert!(emitted_methods.contains(&"notifications/initialized"));
         assert!(emitted_methods.contains(&"capabilities/changed"));
-        assert!(emitted_methods.contains(&"thread/created"));
         assert!(emitted_methods.contains(&"thread/started"));
         assert!(emitted_methods.contains(&"lifecycle/changed"));
         assert!(emitted_methods.contains(&"item/agentMessage/delta"));
@@ -6785,7 +7173,7 @@ mod tests {
         for method in emitted_methods {
             assert!(
                 advertised_events.contains(method),
-                "stdio emitted notification not declared by advertised codex_app_server_v2 profile: {method}"
+                "stdio emitted notification not declared by advertised chat-session subset profile: {method}"
             );
         }
     }
@@ -6803,7 +7191,7 @@ mod tests {
                     "client": {"name": "codex", "version": "2.0.0", "transport": "stdio"},
                     "protocolVersion": ProtocolVersion::current(),
                     "requestedCapabilities": [
-                        CompatibilityProfile::CODEX_APP_SERVER_V2_ID,
+                        CompatibilityProfile::CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_ID,
                         "approval",
                         "tools",
                         "sandbox"
@@ -6814,14 +7202,14 @@ mod tests {
             serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": "thread",
-                "method": "thread/create",
-                "params": {"title": "P3 approval"}
+                "method": "thread/start",
+                "params": {"cwd": "P3 approval"}
             }),
             serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": "turn",
                 "method": "turn/start",
-                "params": {"threadId": "thread_1", "prompt": "run echo"}
+                "params": {"threadId": "thread_1", "input": [{"type": "text", "text": "run echo", "text_elements": []}]}
             }),
             serde_json::json!({
                 "jsonrpc": "2.0",
@@ -6881,7 +7269,7 @@ mod tests {
                     "client": {"name": "codex", "version": "2.0.0", "transport": "stdio"},
                     "protocolVersion": ProtocolVersion::current(),
                     "requestedCapabilities": [
-                        CompatibilityProfile::CODEX_APP_SERVER_V2_ID,
+                        CompatibilityProfile::CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_ID,
                         "approval",
                         "tools",
                         "sandbox"
@@ -6892,14 +7280,14 @@ mod tests {
             serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": "thread",
-                "method": "thread/create",
-                "params": {"title": "P3 rejection"}
+                "method": "thread/start",
+                "params": {"cwd": "P3 rejection"}
             }),
             serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": "turn",
                 "method": "turn/start",
-                "params": {"threadId": "thread_1", "prompt": "run echo"}
+                "params": {"threadId": "thread_1", "input": [{"type": "text", "text": "run echo", "text_elements": []}]}
             }),
             serde_json::json!({
                 "jsonrpc": "2.0",
@@ -6951,7 +7339,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_profile_does_not_emit_codex_v2_item_notifications() {
+    fn default_profile_emits_v2_item_notifications() {
         let bridge = Arc::new(RecordingRuntimeBridge::with_completion(
             RuntimeTurnOutcome::Completed {
                 output: "hello from runtime".to_string(),
@@ -6969,8 +7357,10 @@ mod tests {
         let started = server
             .turn_start(TurnStartParams {
                 thread_id: thread.thread_id,
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                input: text_input("hello".to_string()),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn should start");
         let methods = server
@@ -6979,12 +7369,14 @@ mod tests {
             .map(|notification| notification.method)
             .collect::<Vec<_>>();
 
-        assert_eq!(started.turn_id, "turn_1");
+        assert_eq!(started.turn.id, "turn_1");
         assert_eq!(
             methods,
             vec![
                 "lifecycle/changed",
                 "turn/started",
+                "item/started",
+                "item/completed",
                 "turn/completed",
                 "lifecycle/changed"
             ]
@@ -7018,7 +7410,7 @@ mod tests {
                     trust: WorkspaceTrust::Unknown,
                 }),
                 requested_capabilities: vec![
-                    CompatibilityProfile::CODEX_APP_SERVER_V2_ID.to_string(),
+                    CompatibilityProfile::CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_ID.to_string(),
                 ],
                 model_provider: Some(test_model_provider_config()),
             })
@@ -7030,7 +7422,7 @@ mod tests {
     fn initialized_codex_v2_server_with_bridge(bridge: Arc<dyn RuntimeBridge>) -> AppServer {
         initialized_server_with_bridge_and_capabilities(
             bridge,
-            vec![CompatibilityProfile::CODEX_APP_SERVER_V2_ID.to_string()],
+            vec![CompatibilityProfile::CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_ID.to_string()],
         )
     }
 
@@ -7101,6 +7493,13 @@ mod tests {
         lines.into_iter().map(json_rpc_value).collect()
     }
 
+    fn text_input(text: impl Into<String>) -> Vec<dasclaw_app_server_protocol::UserInput> {
+        vec![dasclaw_app_server_protocol::UserInput::Text {
+            text: text.into(),
+            text_elements: Vec::new(),
+        }]
+    }
+
     fn assert_turn_status_and_ready(
         server: &mut AppServer,
         thread_id: &str,
@@ -7113,11 +7512,31 @@ mod tests {
                 turn_id: turn_id.to_string(),
             })
             .expect("turn should be readable after terminal approval path");
-        assert_eq!(turn.turn.status, expected_status);
+        assert_eq!(
+            turn.turn.status,
+            codex_status_from_turn_status(expected_status)
+        );
         assert_eq!(
             server.lifecycle_status().lifecycle.state,
             LifecycleState::Ready
         );
+    }
+
+    fn codex_status_from_turn_status(status: TurnStatus) -> CodexTurnStatus {
+        match status {
+            TurnStatus::Pending => CodexTurnStatus::InProgress,
+            TurnStatus::Completed => CodexTurnStatus::Completed,
+            TurnStatus::Failed => CodexTurnStatus::Failed,
+            TurnStatus::Cancelled => CodexTurnStatus::Interrupted,
+        }
+    }
+
+    fn turn_text(turn: &CodexTurn) -> Option<String> {
+        turn.items.iter().find_map(|item| match item {
+            CodexThreadItem::AgentMessage { text, .. } if !text.is_empty() => Some(text.clone()),
+            CodexThreadItem::AgentMessage { .. } => None,
+            CodexThreadItem::Reasoning { .. } => None,
+        })
     }
 
     fn methods_from_values(values: &[Value]) -> Vec<&str> {

@@ -11,14 +11,13 @@ use dasclaw_app_server_protocol::{
     ErrorEvent, HealthChangedEvent, HealthCheckParams, HealthCheckResponse, InitializeParams,
     InitializeResponse, ItemCompletedEvent, ItemStartedEvent, JSON_RPC_VERSION, JsonRpcError,
     JsonRpcRequest, JsonRpcResponse, LifecycleChangedEvent, LifecycleStatusResponse, LogEntryEvent,
-    NotificationsInitializedEvent, ProtocolSchemaResponse, ReasoningSummaryPartAddedEvent,
-    ReasoningSummaryTextDeltaEvent, ReasoningTextDeltaEvent, ServerNotification, ShutdownParams,
-    ShutdownResponse, ThreadCreateParams, ThreadCreateResponse, ThreadCreatedEvent,
-    ThreadListResponse, ThreadReadParams, ThreadReadResponse, ThreadStartResponse,
-    ThreadStartedEvent, TurnCancelParams, TurnCancelResponse, TurnCancelledEvent,
-    TurnCompletedEvent, TurnDeltaEvent, TurnFailedEvent, TurnInterruptResponse, TurnListParams,
-    TurnListResponse, TurnReadParams, TurnReadResponse, TurnStartParams, TurnStartResponse,
-    TurnStartedEvent, WorkspaceInfo, event, method,
+    ModelProviderInitializeConfig, NotificationsInitializedEvent, ProtocolSchemaResponse,
+    ReasoningSummaryPartAddedEvent, ReasoningSummaryTextDeltaEvent, ReasoningTextDeltaEvent,
+    ServerNotification, ShutdownParams, ShutdownResponse, ThreadListParams, ThreadListResponse,
+    ThreadReadParams, ThreadReadResponse, ThreadStartParams, ThreadStartResponse,
+    ThreadStartedEvent, ThreadTurnsListParams, ThreadTurnsListResponse, TurnCompletedEvent,
+    TurnInterruptParams, TurnInterruptResponse, TurnReadParams, TurnReadResponse, TurnStartParams,
+    TurnStartResponse, TurnStartedEvent, UserInput, WorkspaceInfo, event, method,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -67,13 +66,9 @@ pub enum AppServerNotification {
     HealthChanged(HealthChangedEvent),
     CapabilitiesChanged(Box<CapabilitiesChangedEvent>),
     LogEntry(LogEntryEvent),
-    ThreadCreated(ThreadCreatedEvent),
     ThreadStarted(ThreadStartedEvent),
     TurnStarted(TurnStartedEvent),
-    TurnDelta(TurnDeltaEvent),
     TurnCompleted(TurnCompletedEvent),
-    TurnFailed(TurnFailedEvent),
-    TurnCancelled(TurnCancelledEvent),
     ItemStarted(ItemStartedEvent),
     AgentMessageDelta(AgentMessageDeltaEvent),
     ReasoningSummaryTextDelta(ReasoningSummaryTextDeltaEvent),
@@ -107,13 +102,9 @@ impl TryFrom<ServerNotification> for AppServerNotification {
                 Self::CapabilitiesChanged(Box::new(decode_notification_params(notification)?))
             }
             event::LOG_ENTRY => Self::LogEntry(decode_notification_params(notification)?),
-            event::THREAD_CREATED => Self::ThreadCreated(decode_notification_params(notification)?),
             event::THREAD_STARTED => Self::ThreadStarted(decode_notification_params(notification)?),
             event::TURN_STARTED => Self::TurnStarted(decode_notification_params(notification)?),
-            event::TURN_DELTA => Self::TurnDelta(decode_notification_params(notification)?),
             event::TURN_COMPLETED => Self::TurnCompleted(decode_notification_params(notification)?),
-            event::TURN_FAILED => Self::TurnFailed(decode_notification_params(notification)?),
-            event::TURN_CANCELLED => Self::TurnCancelled(decode_notification_params(notification)?),
             event::ITEM_STARTED => Self::ItemStarted(decode_notification_params(notification)?),
             event::ITEM_AGENT_MESSAGE_DELTA => {
                 Self::AgentMessageDelta(decode_notification_params(notification)?)
@@ -168,6 +159,34 @@ where
         self.initialize_with_notifications(codex_v2_chat_subset_initialize_params(
             client, workspace,
         ))
+    }
+
+    pub fn initialize_codex_v2_chat_subset_with_model_provider(
+        &mut self,
+        client: dasclaw_app_server_protocol::ClientInfo,
+        workspace: Option<WorkspaceInfo>,
+        model_provider: ModelProviderInitializeConfig,
+    ) -> Result<InitializeResponse, AppServerClientError> {
+        self.initialize(codex_v2_chat_subset_initialize_params_with_model_provider(
+            client,
+            workspace,
+            Some(model_provider),
+        ))
+    }
+
+    pub fn initialize_codex_v2_chat_subset_with_model_provider_and_notifications(
+        &mut self,
+        client: dasclaw_app_server_protocol::ClientInfo,
+        workspace: Option<WorkspaceInfo>,
+        model_provider: ModelProviderInitializeConfig,
+    ) -> Result<AppServerClientRoundTrip<InitializeResponse>, AppServerClientError> {
+        self.initialize_with_notifications(
+            codex_v2_chat_subset_initialize_params_with_model_provider(
+                client,
+                workspace,
+                Some(model_provider),
+            ),
+        )
     }
 
     pub fn health_check(
@@ -234,42 +253,32 @@ where
         self.request_with_notifications(method::SHUTDOWN, Some(params))
     }
 
-    pub fn thread_create(
-        &mut self,
-        params: ThreadCreateParams,
-    ) -> Result<ThreadCreateResponse, AppServerClientError> {
-        self.request(method::THREAD_CREATE, Some(params))
-    }
-
-    pub fn thread_create_with_notifications(
-        &mut self,
-        params: ThreadCreateParams,
-    ) -> Result<AppServerClientRoundTrip<ThreadCreateResponse>, AppServerClientError> {
-        self.request_with_notifications(method::THREAD_CREATE, Some(params))
-    }
-
     pub fn thread_start(
         &mut self,
-        params: ThreadCreateParams,
+        params: ThreadStartParams,
     ) -> Result<ThreadStartResponse, AppServerClientError> {
         self.request(method::THREAD_START, Some(params))
     }
 
     pub fn thread_start_with_notifications(
         &mut self,
-        params: ThreadCreateParams,
+        params: ThreadStartParams,
     ) -> Result<AppServerClientRoundTrip<ThreadStartResponse>, AppServerClientError> {
         self.request_with_notifications(method::THREAD_START, Some(params))
     }
 
-    pub fn thread_list(&mut self) -> Result<ThreadListResponse, AppServerClientError> {
-        self.request::<(), ThreadListResponse>(method::THREAD_LIST, None)
+    pub fn thread_list(
+        &mut self,
+        params: ThreadListParams,
+    ) -> Result<ThreadListResponse, AppServerClientError> {
+        self.request(method::THREAD_LIST, Some(params))
     }
 
     pub fn thread_list_with_notifications(
         &mut self,
+        params: ThreadListParams,
     ) -> Result<AppServerClientRoundTrip<ThreadListResponse>, AppServerClientError> {
-        self.request_with_notifications::<(), ThreadListResponse>(method::THREAD_LIST, None)
+        self.request_with_notifications(method::THREAD_LIST, Some(params))
     }
 
     pub fn thread_read(
@@ -322,46 +331,32 @@ where
         )
     }
 
-    pub fn turn_cancel(
-        &mut self,
-        params: TurnCancelParams,
-    ) -> Result<TurnCancelResponse, AppServerClientError> {
-        self.request(method::TURN_CANCEL, Some(params))
-    }
-
-    pub fn turn_cancel_with_notifications(
-        &mut self,
-        params: TurnCancelParams,
-    ) -> Result<AppServerClientRoundTrip<TurnCancelResponse>, AppServerClientError> {
-        self.request_with_notifications(method::TURN_CANCEL, Some(params))
-    }
-
     pub fn turn_interrupt(
         &mut self,
-        params: TurnCancelParams,
+        params: TurnInterruptParams,
     ) -> Result<TurnInterruptResponse, AppServerClientError> {
         self.request(method::TURN_INTERRUPT, Some(params))
     }
 
     pub fn turn_interrupt_with_notifications(
         &mut self,
-        params: TurnCancelParams,
+        params: TurnInterruptParams,
     ) -> Result<AppServerClientRoundTrip<TurnInterruptResponse>, AppServerClientError> {
         self.request_with_notifications(method::TURN_INTERRUPT, Some(params))
     }
 
-    pub fn turn_list(
+    pub fn thread_turns_list(
         &mut self,
-        params: TurnListParams,
-    ) -> Result<TurnListResponse, AppServerClientError> {
-        self.request(method::TURN_LIST, Some(params))
+        params: ThreadTurnsListParams,
+    ) -> Result<ThreadTurnsListResponse, AppServerClientError> {
+        self.request(method::THREAD_TURNS_LIST, Some(params))
     }
 
-    pub fn turn_list_with_notifications(
+    pub fn thread_turns_list_with_notifications(
         &mut self,
-        params: TurnListParams,
-    ) -> Result<AppServerClientRoundTrip<TurnListResponse>, AppServerClientError> {
-        self.request_with_notifications(method::TURN_LIST, Some(params))
+        params: ThreadTurnsListParams,
+    ) -> Result<AppServerClientRoundTrip<ThreadTurnsListResponse>, AppServerClientError> {
+        self.request_with_notifications(method::THREAD_TURNS_LIST, Some(params))
     }
 
     pub fn turn_read(
@@ -846,14 +841,17 @@ where
 #[serde(rename_all = "camelCase")]
 struct TurnStartInputParams {
     thread_id: String,
-    input: String,
+    input: Vec<UserInput>,
 }
 
 impl TurnStartInputParams {
     fn new(thread_id: impl Into<String>, input: impl Into<String>) -> Self {
         Self {
             thread_id: thread_id.into(),
-            input: input.into(),
+            input: vec![UserInput::Text {
+                text: input.into(),
+                text_elements: Vec::new(),
+            }],
         }
     }
 }
@@ -862,20 +860,30 @@ fn codex_v2_chat_subset_initialize_params(
     client: dasclaw_app_server_protocol::ClientInfo,
     workspace: Option<WorkspaceInfo>,
 ) -> InitializeParams {
+    codex_v2_chat_subset_initialize_params_with_model_provider(client, workspace, None)
+}
+
+fn codex_v2_chat_subset_initialize_params_with_model_provider(
+    client: dasclaw_app_server_protocol::ClientInfo,
+    workspace: Option<WorkspaceInfo>,
+    model_provider: Option<ModelProviderInitializeConfig>,
+) -> InitializeParams {
     InitializeParams {
         client,
         protocol_version: dasclaw_app_server_protocol::ProtocolVersion::current(),
         workspace,
         requested_capabilities: vec![
-            dasclaw_app_server_protocol::CompatibilityProfile::CODEX_APP_SERVER_V2_ID.to_string(),
+            dasclaw_app_server_protocol::CompatibilityProfile::CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_ID.to_string(),
         ],
-        model_provider: None,
+        model_provider,
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::io::{Cursor, Read};
+    use std::rc::Rc;
     use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
@@ -885,12 +893,49 @@ mod tests {
         RuntimeTurnStartRequest, run_stdio_server_with_app_server,
     };
     use dasclaw_app_server_protocol::{
-        ClientInfo, CompatibilityProfile, LifecycleState, ProtocolVersion, ShutdownReason,
-        TransportKind,
+        ClientInfo, ClientModelConfig, CompatibilityProfile, LifecycleState,
+        ModelProviderInitializeConfig, ProtocolVersion, ShutdownReason, TransportKind,
     };
     use serde_json::json;
 
     use super::*;
+
+    fn test_model_provider_config() -> ModelProviderInitializeConfig {
+        let selected_model = test_model_config("gpt-test");
+        ModelProviderInitializeConfig {
+            models: vec![selected_model.clone()],
+            selected_model,
+        }
+    }
+
+    fn test_model_config(model_id: &str) -> ClientModelConfig {
+        ClientModelConfig {
+            model_id: model_id.to_string(),
+            display_name: Some(model_id.to_string()),
+            provider: Some("openai".to_string()),
+            api_base_url: Some("http://localhost:11434/v1".to_string()),
+            api_key: Some("test-api-key".to_string()),
+            api_format: Some("openai".to_string()),
+            model_call_mode: None,
+            source: Some("test".to_string()),
+            capabilities: Vec::new(),
+        }
+    }
+
+    fn default_thread_list_params() -> ThreadListParams {
+        ThreadListParams {
+            cursor: None,
+            limit: None,
+            sort_direction: None,
+        }
+    }
+
+    fn text_input(text: impl Into<String>) -> Vec<UserInput> {
+        vec![UserInput::Text {
+            text: text.into(),
+            text_elements: Vec::new(),
+        }]
+    }
 
     #[test]
     fn in_process_client_initializes_and_reads_schema() {
@@ -923,7 +968,7 @@ mod tests {
     }
 
     #[test]
-    fn client_creates_in_process_threads() {
+    fn client_starts_in_process_threads() {
         let mut server = AppServer::new();
         let transport = InProcessTransport::new(|line: &str| {
             let response = server.handle_json_rpc(line);
@@ -944,28 +989,30 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: Vec::new(),
-                model_provider: None,
+                model_provider: Some(test_model_provider_config()),
             })
             .expect("initialize should succeed before session methods");
         let _ = client.drain_notifications();
 
         let response = client
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
+            .thread_start(ThreadStartParams {
+                cwd: Some("Draft".to_string()),
             })
-            .expect("thread/create should return a thread id");
-        let list = client.thread_list().expect("thread/list should decode");
+            .expect("thread/start should return a thread view");
+        let list = client
+            .thread_list(default_thread_list_params())
+            .expect("thread/list should decode");
         let read = client
             .thread_read(ThreadReadParams {
-                thread_id: response.thread_id.clone(),
+                thread_id: response.thread.id.clone(),
             })
             .expect("thread/read should decode");
 
-        assert_eq!(response.thread_id, "thread_1");
-        assert_eq!(list.threads.len(), 1);
-        assert_eq!(read.thread.thread_id, "thread_1");
-        assert_eq!(read.thread.title.as_deref(), Some("Draft"));
+        assert_eq!(response.thread.id, "thread_1");
+        assert_eq!(response.model_provider, "openai");
+        assert_eq!(list.data.len(), 1);
+        assert_eq!(read.thread.id, "thread_1");
+        assert_eq!(read.thread.cwd, "Draft");
     }
 
     #[test]
@@ -984,55 +1031,59 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: Vec::new(),
-                model_provider: None,
+                model_provider: Some(test_model_provider_config()),
             })
             .expect("initialize should succeed before session methods");
         let thread = client
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
+            .thread_start(ThreadStartParams {
+                cwd: Some("Draft".to_string()),
             })
-            .expect("thread/create should return a thread id");
+            .expect("thread/start should return a thread view");
 
         let started = client
             .turn_start(TurnStartParams {
-                thread_id: thread.thread_id.clone(),
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                thread_id: thread.thread.id.clone(),
+                input: text_input("hello"),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn/start should create a pending in-memory turn");
-        let cancelled = client
-            .turn_cancel(TurnCancelParams {
-                thread_id: thread.thread_id.clone(),
-                turn_id: started.turn_id.clone(),
+        let interrupted = client
+            .turn_interrupt(TurnInterruptParams {
+                thread_id: thread.thread.id.clone(),
+                turn_id: started.turn.id.clone(),
             })
-            .expect("turn/cancel should cancel a pending in-memory turn");
+            .expect("turn/interrupt should interrupt a pending in-memory turn");
         let turns = client
-            .turn_list(TurnListParams {
-                thread_id: thread.thread_id.clone(),
+            .thread_turns_list(ThreadTurnsListParams {
+                thread_id: thread.thread.id.clone(),
+                cursor: None,
+                limit: None,
+                sort_direction: None,
             })
-            .expect("turn/list should decode");
+            .expect("thread/turns/list should decode");
         let read = client
             .turn_read(TurnReadParams {
-                thread_id: thread.thread_id,
-                turn_id: started.turn_id.clone(),
+                thread_id: thread.thread.id,
+                turn_id: started.turn.id.clone(),
             })
             .expect("turn/read should decode");
 
-        assert_eq!(started.turn_id, "turn_1");
+        assert_eq!(started.turn.id, "turn_1");
         assert_eq!(
-            started.status,
-            dasclaw_app_server_protocol::TurnStatus::Pending
+            started.turn.status,
+            dasclaw_app_server_protocol::CodexTurnStatus::InProgress
         );
-        assert!(cancelled.accepted);
+        assert_eq!(interrupted, TurnInterruptResponse {});
         assert_eq!(
-            cancelled.status,
-            dasclaw_app_server_protocol::TurnStatus::Cancelled
+            turns.data[0].status,
+            dasclaw_app_server_protocol::CodexTurnStatus::Interrupted
         );
-        assert_eq!(turns.turns.len(), 1);
+        assert_eq!(turns.data.len(), 1);
         assert_eq!(
             read.turn.status,
-            dasclaw_app_server_protocol::TurnStatus::Cancelled
+            dasclaw_app_server_protocol::CodexTurnStatus::Interrupted
         );
     }
 
@@ -1059,11 +1110,11 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: Vec::new(),
-                model_provider: None,
+                model_provider: Some(test_model_provider_config()),
             })
             .expect("initialize should succeed");
         let initialize_notifications = initialize.notifications;
-        assert_eq!(initialize_notifications.len(), 3);
+        assert_eq!(initialize_notifications.len(), 4);
         assert!(matches!(
             initialize_notifications[0],
             AppServerNotification::LifecycleChanged(_)
@@ -1072,27 +1123,32 @@ mod tests {
             initialize_notifications[2],
             AppServerNotification::CapabilitiesChanged(_)
         ));
+        assert!(matches!(
+            initialize_notifications[3],
+            AppServerNotification::NotificationsInitialized(_)
+        ));
 
         let thread = client
-            .thread_create_with_notifications(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
+            .thread_start_with_notifications(ThreadStartParams {
+                cwd: Some("Draft".to_string()),
             })
-            .expect("thread/create should return a thread id");
+            .expect("thread/start should return a thread view");
         let started = client
             .turn_start_with_notifications(TurnStartParams {
-                thread_id: thread.result.thread_id,
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                thread_id: thread.result.thread.id,
+                input: text_input("hello"),
+                cwd: None,
+                model: None,
+                summary: None,
             })
-            .expect("turn/start should return a turn id");
+            .expect("turn/start should return a turn view");
 
-        assert_eq!(started.result.turn_id, "turn_1");
+        assert_eq!(started.result.turn.id, "turn_1");
         assert_eq!(thread.notifications.len(), 1);
-        assert_eq!(started.notifications.len(), 2);
+        assert_eq!(started.notifications.len(), 3);
         assert!(matches!(
             thread.notifications[0],
-            AppServerNotification::ThreadCreated(_)
+            AppServerNotification::ThreadStarted(_)
         ));
         assert!(matches!(
             started.notifications[0],
@@ -1101,6 +1157,10 @@ mod tests {
         assert!(matches!(
             started.notifications[1],
             AppServerNotification::TurnStarted(_)
+        ));
+        assert!(matches!(
+            started.notifications[2],
+            AppServerNotification::ItemStarted(_)
         ));
     }
 
@@ -1120,27 +1180,25 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: vec![
-                    dasclaw_app_server_protocol::CompatibilityProfile::CODEX_APP_SERVER_V2_ID
-                        .to_string(),
+                    dasclaw_app_server_protocol::CompatibilityProfile::CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_ID.to_string(),
                 ],
-                model_provider: None,
+                model_provider: Some(test_model_provider_config()),
             })
             .expect("initialize should succeed");
         let thread = client
-            .thread_start(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
+            .thread_start(ThreadStartParams {
+                cwd: Some("Draft".to_string()),
             })
-            .expect("thread/start should return a thread id");
+            .expect("thread/start should return a thread view");
         let started = client
-            .turn_start_input(thread.thread_id.clone(), "hello")
-            .expect("turn/start input helper should return a turn id");
+            .turn_start_input(thread.thread.id.clone(), "hello")
+            .expect("turn/start input helper should return a turn view");
         let interrupted = client
-            .turn_interrupt(TurnCancelParams {
-                thread_id: thread.thread_id,
-                turn_id: started.turn_id,
+            .turn_interrupt(TurnInterruptParams {
+                thread_id: thread.thread.id,
+                turn_id: started.turn.id,
             })
-            .expect("turn/interrupt should cancel a pending turn");
+            .expect("turn/interrupt should interrupt a pending turn");
 
         assert_eq!(interrupted, TurnInterruptResponse {});
     }
@@ -1164,7 +1222,9 @@ mod tests {
         let profile = initialize
             .compatibility_profiles
             .iter()
-            .find(|profile| profile.id == CompatibilityProfile::CODEX_APP_SERVER_V2_ID)
+            .find(|profile| {
+                profile.id == CompatibilityProfile::CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_ID
+            })
             .expect("helper should request the Codex v2 chat subset profile");
 
         assert!(initialize.unavailable_requested_capabilities.is_empty());
@@ -1176,11 +1236,44 @@ mod tests {
             .capabilities()
             .expect("capabilities/list should decode after initialize");
 
-        assert!(
-            capabilities
-                .compatibility_profiles
-                .iter()
-                .any(|profile| profile.id == CompatibilityProfile::CODEX_APP_SERVER_V2_ID)
+        assert!(capabilities.compatibility_profiles.iter().any(|profile| {
+            profile.id == CompatibilityProfile::CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_ID
+        }));
+    }
+
+    #[test]
+    fn codex_v2_helper_with_model_provider_writes_explicit_provider_config() {
+        let mut server = AppServer::new();
+        let captured_request = Rc::new(RefCell::new(String::new()));
+        let captured_for_transport = Rc::clone(&captured_request);
+        let transport = InProcessTransport::new(move |line: &str| {
+            *captured_for_transport.borrow_mut() = line.to_string();
+            server.handle_json_rpc(line)
+        });
+        let mut client = AppServerClient::new(transport);
+
+        let initialize = client
+            .initialize_codex_v2_chat_subset_with_model_provider(
+                ClientInfo {
+                    name: "codex".to_string(),
+                    version: "2.0.0".to_string(),
+                    transport: TransportKind::Stdio,
+                },
+                None,
+                test_model_provider_config(),
+            )
+            .expect("helper should initialize with an explicit model provider");
+        let request = serde_json::from_str::<serde_json::Value>(&captured_request.borrow())
+            .expect("written request should be JSON-RPC");
+
+        assert_eq!(initialize.lifecycle.state, LifecycleState::Ready);
+        assert_eq!(
+            request["params"]["modelProvider"]["selectedModel"]["modelId"],
+            "gpt-test"
+        );
+        assert_eq!(
+            request["params"]["modelProvider"]["selectedModel"]["apiKey"],
+            "test-api-key"
         );
     }
 
@@ -1198,13 +1291,14 @@ mod tests {
         let mut client = AppServerClient::new(transport);
 
         let initialize = client
-            .initialize_codex_v2_chat_subset_with_notifications(
+            .initialize_codex_v2_chat_subset_with_model_provider_and_notifications(
                 ClientInfo {
                     name: "codex".to_string(),
                     version: "2.0.0".to_string(),
                     transport: TransportKind::Stdio,
                 },
                 None,
+                test_model_provider_config(),
             )
             .expect("initialize should negotiate the Codex v2 chat subset");
         assert!(matches!(
@@ -1217,20 +1311,16 @@ mod tests {
             ]
         ));
         let thread = client
-            .thread_start_with_notifications(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
+            .thread_start_with_notifications(ThreadStartParams {
+                cwd: Some("Draft".to_string()),
             })
             .expect("thread/start should create a thread through the v2 helper");
         assert!(matches!(
             thread.notifications.as_slice(),
-            [
-                AppServerNotification::ThreadCreated(_),
-                AppServerNotification::ThreadStarted(_)
-            ]
+            [AppServerNotification::ThreadStarted(_)]
         ));
         let turn = client
-            .turn_start_input_with_notifications(thread.result.thread_id, "hello")
+            .turn_start_input_with_notifications(thread.result.thread.id, "hello")
             .expect("turn/start input helper should stream item events through the v2 profile");
         let item_methods = turn
             .notifications
@@ -1251,9 +1341,11 @@ mod tests {
                 .result
                 .compatibility_profiles
                 .iter()
-                .any(|profile| profile.id == CompatibilityProfile::CODEX_APP_SERVER_V2_ID)
+                .any(|profile| {
+                    profile.id == CompatibilityProfile::CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_ID
+                })
         );
-        assert_eq!(turn.result.turn_id, "turn_1");
+        assert_eq!(turn.result.turn.id, "turn_1");
         assert_eq!(
             item_methods,
             vec![
@@ -1279,41 +1371,47 @@ mod tests {
         let mut client = AppServerClient::new(transport);
 
         client
-            .initialize_codex_v2_chat_subset_with_notifications(
+            .initialize_codex_v2_chat_subset_with_model_provider_and_notifications(
                 ClientInfo {
                     name: "codex".to_string(),
                     version: "2.0.0".to_string(),
                     transport: TransportKind::Stdio,
                 },
                 None,
+                test_model_provider_config(),
             )
             .expect("initialize should negotiate the Codex v2 chat subset");
         let thread = client
-            .thread_start_with_notifications(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
+            .thread_start_with_notifications(ThreadStartParams {
+                cwd: Some("Draft".to_string()),
             })
             .expect("thread/start should create a thread");
         let turn = client
             .turn_start_with_notifications(TurnStartParams {
-                thread_id: thread.result.thread_id,
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                thread_id: thread.result.thread.id,
+                input: text_input("hello"),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn/start should return a pending turn before failure notifications");
 
-        assert_eq!(turn.result.turn_id, "turn_1");
+        assert_eq!(turn.result.turn.id, "turn_1");
         let terminal_events = turn
             .notifications
             .iter()
             .filter_map(|notification| match notification {
-                AppServerNotification::ItemCompleted(event)
-                    if event.status == dasclaw_app_server_protocol::TurnStatus::Failed =>
+                AppServerNotification::ItemCompleted(_) => Some(event::ITEM_COMPLETED),
+                AppServerNotification::TurnCompleted(event)
+                    if event.turn.status
+                        == dasclaw_app_server_protocol::CodexTurnStatus::Failed
+                        && event
+                            .turn
+                            .error
+                            .as_ref()
+                            .is_some_and(|error| error.message == "runtime failed") =>
                 {
-                    Some(event::ITEM_COMPLETED)
-                }
-                AppServerNotification::TurnFailed(event) if event.error == "runtime failed" => {
-                    Some(event::TURN_FAILED)
+                    Some(event::TURN_COMPLETED)
                 }
                 AppServerNotification::ProtocolError(event)
                     if event.message == "runtime failed" =>
@@ -1326,7 +1424,7 @@ mod tests {
 
         assert_eq!(
             terminal_events,
-            vec![event::ITEM_COMPLETED, event::TURN_FAILED, event::ERROR]
+            vec![event::ITEM_COMPLETED, event::TURN_COMPLETED, event::ERROR]
         );
     }
 
@@ -1344,49 +1442,48 @@ mod tests {
         let mut client = AppServerClient::new(transport);
 
         client
-            .initialize_codex_v2_chat_subset_with_notifications(
+            .initialize_codex_v2_chat_subset_with_model_provider_and_notifications(
                 ClientInfo {
                     name: "codex".to_string(),
                     version: "2.0.0".to_string(),
                     transport: TransportKind::Stdio,
                 },
                 None,
+                test_model_provider_config(),
             )
             .expect("initialize should negotiate the Codex v2 chat subset");
         let thread = client
-            .thread_start_with_notifications(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
+            .thread_start_with_notifications(ThreadStartParams {
+                cwd: Some("Draft".to_string()),
             })
             .expect("thread/start should create a thread");
         let turn = client
             .turn_start_with_notifications(TurnStartParams {
-                thread_id: thread.result.thread_id.clone(),
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                thread_id: thread.result.thread.id.clone(),
+                input: text_input("hello"),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn/start should create a pending turn");
         let interrupt = client
-            .turn_interrupt_with_notifications(TurnCancelParams {
-                thread_id: thread.result.thread_id,
-                turn_id: turn.result.turn_id,
+            .turn_interrupt_with_notifications(TurnInterruptParams {
+                thread_id: thread.result.thread.id,
+                turn_id: turn.result.turn.id,
             })
-            .expect("turn/interrupt should cancel the pending turn");
+            .expect("turn/interrupt should interrupt the pending turn");
 
         assert_eq!(interrupt.result, TurnInterruptResponse {});
         let terminal_events = interrupt
             .notifications
             .iter()
             .filter_map(|notification| match notification {
-                AppServerNotification::ItemCompleted(event)
-                    if event.status == dasclaw_app_server_protocol::TurnStatus::Cancelled =>
+                AppServerNotification::ItemCompleted(_) => Some(event::ITEM_COMPLETED),
+                AppServerNotification::TurnCompleted(event)
+                    if event.turn.status
+                        == dasclaw_app_server_protocol::CodexTurnStatus::Interrupted =>
                 {
-                    Some(event::ITEM_COMPLETED)
-                }
-                AppServerNotification::TurnCancelled(event)
-                    if event.status == dasclaw_app_server_protocol::TurnStatus::Cancelled =>
-                {
-                    Some(event::TURN_CANCELLED)
+                    Some(event::TURN_COMPLETED)
                 }
                 _ => None,
             })
@@ -1394,7 +1491,7 @@ mod tests {
 
         assert_eq!(
             terminal_events,
-            vec![event::ITEM_COMPLETED, event::TURN_CANCELLED]
+            vec![event::ITEM_COMPLETED, event::TURN_COMPLETED]
         );
     }
 
@@ -1402,11 +1499,11 @@ mod tests {
     fn line_delimited_transport_preserves_raw_notification_order_before_response() {
         let reader = Cursor::new(
             [
-                r#"{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thread_1","turnId":"turn_1","status":"pending"}}"#,
-                r#"{"jsonrpc":"2.0","method":"item/started","params":{"threadId":"thread_1","turnId":"turn_1","itemId":"turn_1","itemType":"agent_message"}}"#,
+                r#"{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thread_1","turn":{"id":"turn_1","items":[],"status":"inProgress","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}"#,
+                r#"{"jsonrpc":"2.0","method":"item/started","params":{"threadId":"thread_1","turnId":"turn_1","item":{"type":"agentMessage","id":"turn_1","text":""}}}"#,
                 r#"{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"thread_1","turnId":"turn_1","itemId":"turn_1","delta":"hel"}}"#,
-                r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread_1","turnId":"turn_1","status":"completed","output":"hello"}}"#,
-                r#"{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thread_1","turnId":"turn_1","itemId":"turn_1","status":"completed"}}"#,
+                r#"{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thread_1","turnId":"turn_1","item":{"type":"agentMessage","id":"turn_1","text":"hello"}}}"#,
+                r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread_1","turn":{"id":"turn_1","items":[{"type":"agentMessage","id":"turn_1","text":"hello"}],"status":"completed","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}"#,
                 r#"{"jsonrpc":"2.0","id":1,"result":{"ok":true}}"#,
             ]
             .join("\n"),
@@ -1435,11 +1532,11 @@ mod tests {
         ));
         assert!(matches!(
             round_trip.notifications[3],
-            AppServerNotification::TurnCompleted(_)
+            AppServerNotification::ItemCompleted(_)
         ));
         assert!(matches!(
             round_trip.notifications[4],
-            AppServerNotification::ItemCompleted(_)
+            AppServerNotification::TurnCompleted(_)
         ));
     }
 
@@ -1492,15 +1589,14 @@ mod tests {
     }
 
     #[test]
-    fn plain_request_preserves_raw_legacy_and_codex_notification_order_for_later_drain() {
+    fn plain_request_preserves_raw_codex_notification_order_for_later_drain() {
         let reader = Cursor::new(
             [
-                r#"{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thread_1","turnId":"turn_1","status":"pending"}}"#,
-                r#"{"jsonrpc":"2.0","method":"item/started","params":{"threadId":"thread_1","turnId":"turn_1","itemId":"turn_1","itemType":"agent_message"}}"#,
-                r#"{"jsonrpc":"2.0","method":"turn/delta","params":{"threadId":"thread_1","turnId":"turn_1","delta":"hel"}}"#,
+                r#"{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thread_1","turn":{"id":"turn_1","items":[],"status":"inProgress","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}"#,
+                r#"{"jsonrpc":"2.0","method":"item/started","params":{"threadId":"thread_1","turnId":"turn_1","item":{"type":"agentMessage","id":"turn_1","text":""}}}"#,
                 r#"{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"thread_1","turnId":"turn_1","itemId":"turn_1","delta":"hel"}}"#,
-                r#"{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thread_1","turnId":"turn_1","itemId":"turn_1","status":"completed"}}"#,
-                r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread_1","turnId":"turn_1","status":"completed","output":"hello"}}"#,
+                r#"{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thread_1","turnId":"turn_1","item":{"type":"agentMessage","id":"turn_1","text":"hello"}}}"#,
+                r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread_1","turn":{"id":"turn_1","items":[{"type":"agentMessage","id":"turn_1","text":"hello"}],"status":"completed","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}"#,
                 r#"{"jsonrpc":"2.0","id":1,"result":{"ok":true}}"#,
             ]
             .join("\n"),
@@ -1524,7 +1620,6 @@ mod tests {
             vec![
                 event::TURN_STARTED,
                 event::ITEM_STARTED,
-                event::TURN_DELTA,
                 event::ITEM_AGENT_MESSAGE_DELTA,
                 event::ITEM_COMPLETED,
                 event::TURN_COMPLETED,
@@ -1609,7 +1704,7 @@ mod tests {
             .expect("initialize should return result and notifications");
 
         assert_eq!(initialize.result.lifecycle.state, LifecycleState::Ready);
-        assert_eq!(initialize.notifications.len(), 3);
+        assert_eq!(initialize.notifications.len(), 4);
         assert!(matches!(
             initialize.notifications[0],
             AppServerNotification::LifecycleChanged(_)
@@ -1652,7 +1747,7 @@ mod tests {
         let notifications = client
             .drain_typed_notifications()
             .expect("plain request notifications should decode");
-        assert_eq!(notifications.len(), 3);
+        assert_eq!(notifications.len(), 4);
         assert!(matches!(
             notifications[0],
             AppServerNotification::LifecycleChanged(_)
@@ -1660,7 +1755,7 @@ mod tests {
     }
 
     #[test]
-    fn typed_with_notifications_methods_cover_thread_and_turn_lifecycle() {
+    fn typed_with_notifications_methods_cover_v2_thread_and_turn_lifecycle() {
         let mut server = AppServer::new();
         let transport = |line: &str, _response_id: Option<&Value>| {
             let response = server.handle_json_rpc(line);
@@ -1682,48 +1777,65 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: Vec::new(),
-                model_provider: None,
+                model_provider: Some(test_model_provider_config()),
             })
             .expect("initialize should succeed");
         let thread = client
-            .thread_create_with_notifications(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
+            .thread_start_with_notifications(ThreadStartParams {
+                cwd: Some("Draft".to_string()),
             })
-            .expect("thread/create should return result and notification");
+            .expect("thread/start should return result and notification");
         let started = client
             .turn_start_with_notifications(TurnStartParams {
-                thread_id: thread.result.thread_id.clone(),
-                prompt: "hello".to_string(),
-                reasoning_summary: None,
+                thread_id: thread.result.thread.id.clone(),
+                input: text_input("hello"),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn/start should return result and notification");
-        let cancelled = client
-            .turn_cancel_with_notifications(TurnCancelParams {
-                thread_id: thread.result.thread_id,
-                turn_id: started.result.turn_id,
+        let interrupted = client
+            .turn_interrupt_with_notifications(TurnInterruptParams {
+                thread_id: thread.result.thread.id,
+                turn_id: started.result.turn.id,
             })
-            .expect("turn/cancel should return result and notification");
+            .expect("turn/interrupt should return result and notification");
 
         assert!(matches!(
             thread.notifications.as_slice(),
-            [AppServerNotification::ThreadCreated(_)]
+            [AppServerNotification::ThreadStarted(_)]
         ));
-        assert!(matches!(
-            started.notifications.as_slice(),
-            [
-                AppServerNotification::LifecycleChanged(_),
-                AppServerNotification::TurnStarted(_)
-            ]
-        ));
-        assert!(cancelled.result.accepted);
-        assert!(matches!(
-            cancelled.notifications.as_slice(),
-            [
-                AppServerNotification::TurnCancelled(_),
-                AppServerNotification::LifecycleChanged(_)
-            ]
-        ));
+        assert!(started.notifications.iter().any(|notification| {
+            matches!(notification, AppServerNotification::LifecycleChanged(_))
+        }));
+        assert!(
+            started
+                .notifications
+                .iter()
+                .any(|notification| matches!(notification, AppServerNotification::TurnStarted(_)))
+        );
+        assert!(
+            started
+                .notifications
+                .iter()
+                .any(|notification| matches!(notification, AppServerNotification::ItemStarted(_)))
+        );
+        assert_eq!(interrupted.result, TurnInterruptResponse {});
+        assert!(interrupted.notifications.iter().any(|notification| {
+            matches!(
+                notification,
+                AppServerNotification::TurnCompleted(event)
+                    if event.turn.status
+                        == dasclaw_app_server_protocol::CodexTurnStatus::Interrupted
+            )
+        }));
+        assert!(interrupted.notifications.iter().any(|notification| {
+            matches!(
+                notification,
+                AppServerNotification::LifecycleChanged(event)
+                    if event.lifecycle.state == LifecycleState::Ready
+            )
+        }));
     }
 
     #[test]
@@ -1748,13 +1860,13 @@ mod tests {
     #[test]
     fn line_delimited_transport_decodes_turn_notifications_before_matching_response() {
         let input = concat!(
-            r#"{"jsonrpc":"2.0","method":"turn/delta","params":{"threadId":"thread_1","turnId":"turn_1","delta":"hel"}}"#,
+            r#"{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"thread_1","turnId":"turn_1","itemId":"turn_1","delta":"hel"}}"#,
             "\n",
-            r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread_1","turnId":"turn_1","status":"completed","output":"hello"}}"#,
+            r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread_1","turn":{"id":"turn_1","items":[{"type":"agentMessage","id":"turn_1","text":"hello"}],"status":"completed","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}"#,
             "\n",
-            r#"{"jsonrpc":"2.0","method":"turn/cancelled","params":{"threadId":"thread_2","turnId":"turn_2","status":"cancelled"}}"#,
+            r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread_2","turn":{"id":"turn_2","items":[{"type":"agentMessage","id":"turn_2","text":""}],"status":"interrupted","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}"#,
             "\n",
-            r#"{"jsonrpc":"2.0","id":1,"result":{"turnId":"turn_1","status":"pending"}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":{"turn":{"id":"turn_1","items":[],"status":"inProgress","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}"#,
             "\n"
         );
         let transport = LineDelimitedTransport::new(Cursor::new(input), Vec::new());
@@ -1763,27 +1875,33 @@ mod tests {
         let value = client
             .request_value(
                 "turn/start",
-                Some(json!({"threadId": "thread_1", "prompt": "hi"})),
+                Some(json!({"threadId": "thread_1", "input": [{"type": "text", "text": "hi", "text_elements": []}]})),
             )
             .expect("matching response should decode");
         let notifications = client
             .drain_typed_notifications()
             .expect("turn notifications should decode");
 
-        assert_eq!(value["turnId"], "turn_1");
+        assert_eq!(value["turn"]["id"], "turn_1");
         assert_eq!(notifications.len(), 3);
         assert!(matches!(
             notifications[0],
-            AppServerNotification::TurnDelta(TurnDeltaEvent { ref delta, .. }) if delta == "hel"
+            AppServerNotification::AgentMessageDelta(AgentMessageDeltaEvent { ref delta, .. }) if delta == "hel"
         ));
         assert!(matches!(
             notifications[1],
-            AppServerNotification::TurnCompleted(TurnCompletedEvent { ref output, .. }) if output == "hello"
+            AppServerNotification::TurnCompleted(TurnCompletedEvent { ref turn, .. })
+                if turn.status == dasclaw_app_server_protocol::CodexTurnStatus::Completed
+                    && matches!(
+                        turn.items.as_slice(),
+                        [dasclaw_app_server_protocol::CodexThreadItem::AgentMessage { text, .. }]
+                            if text == "hello"
+                    )
         ));
         assert!(matches!(
-            notifications[2],
-            AppServerNotification::TurnCancelled(TurnCancelledEvent { status, .. })
-                if status == dasclaw_app_server_protocol::TurnStatus::Cancelled
+            &notifications[2],
+            AppServerNotification::TurnCompleted(TurnCompletedEvent { turn, .. })
+                if turn.status == dasclaw_app_server_protocol::CodexTurnStatus::Interrupted
         ));
     }
 
@@ -1811,9 +1929,9 @@ mod tests {
     #[test]
     fn line_delimited_transport_reads_notification_after_matching_response() {
         let input = concat!(
-            r#"{"jsonrpc":"2.0","id":1,"result":{"turnId":"turn_1","status":"pending"}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":{"turn":{"id":"turn_1","items":[],"status":"inProgress","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}"#,
             "\n",
-            r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread_1","turnId":"turn_1","status":"completed","output":"hello after response"}}"#,
+            r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread_1","turn":{"id":"turn_1","items":[{"type":"agentMessage","id":"turn_1","text":"hello after response"}],"status":"completed","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}"#,
             "\n"
         );
         let transport = LineDelimitedTransport::new(Cursor::new(input), Vec::new());
@@ -1822,7 +1940,7 @@ mod tests {
         let value = client
             .request_value(
                 "turn/start",
-                Some(json!({"threadId": "thread_1", "prompt": "hi"})),
+                Some(json!({"threadId": "thread_1", "input": [{"type": "text", "text": "hi", "text_elements": []}]})),
             )
             .expect("matching response should decode");
         let notification = client
@@ -1830,20 +1948,24 @@ mod tests {
             .expect("post-response notification line should decode")
             .expect("post-response notification should be available");
 
-        assert_eq!(value["turnId"], "turn_1");
+        assert_eq!(value["turn"]["id"], "turn_1");
         assert!(matches!(
             notification,
-            AppServerNotification::TurnCompleted(TurnCompletedEvent { ref output, .. })
-                if output == "hello after response"
+            AppServerNotification::TurnCompleted(TurnCompletedEvent { ref turn, .. })
+                if matches!(
+                    turn.items.as_slice(),
+                    [dasclaw_app_server_protocol::CodexThreadItem::AgentMessage { text, .. }]
+                        if text == "hello after response"
+                )
         ));
     }
 
     #[test]
     fn line_delimited_transport_reads_failed_notification_after_matching_response() {
         let input = concat!(
-            r#"{"jsonrpc":"2.0","id":1,"result":{"turnId":"turn_1","status":"pending"}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":{"turn":{"id":"turn_1","items":[],"status":"inProgress","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}"#,
             "\n",
-            r#"{"jsonrpc":"2.0","method":"turn/failed","params":{"threadId":"thread_1","turnId":"turn_1","status":"failed","error":"runtime failed after response"}}"#,
+            r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread_1","turn":{"id":"turn_1","items":[],"status":"failed","error":{"message":"runtime failed after response","codexErrorInfo":null,"additionalDetails":null},"startedAt":null,"completedAt":null,"durationMs":null}}}"#,
             "\n"
         );
         let transport = LineDelimitedTransport::new(Cursor::new(input), Vec::new());
@@ -1852,7 +1974,7 @@ mod tests {
         let value = client
             .request_value(
                 "turn/start",
-                Some(json!({"threadId": "thread_1", "prompt": "hi"})),
+                Some(json!({"threadId": "thread_1", "input": [{"type": "text", "text": "hi", "text_elements": []}]})),
             )
             .expect("matching response should decode");
         let notification = client
@@ -1860,20 +1982,25 @@ mod tests {
             .expect("post-response failed notification line should decode")
             .expect("post-response failed notification should be available");
 
-        assert_eq!(value["turnId"], "turn_1");
+        assert_eq!(value["turn"]["id"], "turn_1");
         assert!(matches!(
             notification,
-            AppServerNotification::TurnFailed(TurnFailedEvent { ref error, .. })
-                if error == "runtime failed after response"
+            AppServerNotification::TurnCompleted(TurnCompletedEvent { ref turn, .. })
+                if turn.status == dasclaw_app_server_protocol::CodexTurnStatus::Failed
+                    && turn.items.is_empty()
+                    && turn
+                        .error
+                        .as_ref()
+                        .is_some_and(|error| error.message == "runtime failed after response")
         ));
     }
 
     #[test]
-    fn line_delimited_transport_reads_cancelled_notification_after_matching_response() {
+    fn line_delimited_transport_reads_interrupted_notification_after_matching_response() {
         let input = concat!(
-            r#"{"jsonrpc":"2.0","id":1,"result":{"turnId":"turn_1","status":"pending"}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":{"turn":{"id":"turn_1","items":[],"status":"inProgress","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}"#,
             "\n",
-            r#"{"jsonrpc":"2.0","method":"turn/cancelled","params":{"threadId":"thread_1","turnId":"turn_1","status":"cancelled"}}"#,
+            r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread_1","turn":{"id":"turn_1","items":[{"type":"agentMessage","id":"turn_1","text":""}],"status":"interrupted","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}"#,
             "\n"
         );
         let transport = LineDelimitedTransport::new(Cursor::new(input), Vec::new());
@@ -1882,7 +2009,7 @@ mod tests {
         let value = client
             .request_value(
                 "turn/start",
-                Some(json!({"threadId": "thread_1", "prompt": "hi"})),
+                Some(json!({"threadId": "thread_1", "input": [{"type": "text", "text": "hi", "text_elements": []}]})),
             )
             .expect("matching response should decode");
         let notification = client
@@ -1890,11 +2017,11 @@ mod tests {
             .expect("post-response cancelled notification line should decode")
             .expect("post-response cancelled notification should be available");
 
-        assert_eq!(value["turnId"], "turn_1");
+        assert_eq!(value["turn"]["id"], "turn_1");
         assert!(matches!(
             notification,
-            AppServerNotification::TurnCancelled(TurnCancelledEvent { status, .. })
-                if status == dasclaw_app_server_protocol::TurnStatus::Cancelled
+            AppServerNotification::TurnCompleted(TurnCompletedEvent { turn, .. })
+                if turn.status == dasclaw_app_server_protocol::CodexTurnStatus::Interrupted
         ));
     }
 
@@ -1930,7 +2057,7 @@ mod tests {
         let error = client
             .request_value(
                 "turn/start",
-                Some(json!({"threadId": "thread_1", "prompt": "hi"})),
+                Some(json!({"threadId": "thread_1", "input": [{"type": "text", "text": "hi", "text_elements": []}]})),
             )
             .expect_err("overflow notification should force an explicit reconnect error");
 
@@ -1948,7 +2075,7 @@ mod tests {
         let input = concat!(
             r#"{"jsonrpc":"2.0","method":"error","params":{"code":"NOTIFICATION_QUEUE_OVERFLOW","message":"client notification queue exceeded bounded capacity; reconnect required","retryable":true}}"#,
             "\n",
-            r#"{"jsonrpc":"2.0","id":1,"result":{"turnId":"turn_1","status":"pending"}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":{"turn":{"id":"turn_1","items":[],"status":"inProgress","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}"#,
             "\n"
         );
         let transport = LineDelimitedTransport::new(Cursor::new(input), Vec::new());
@@ -1957,7 +2084,7 @@ mod tests {
         let first_error = client
             .request_value(
                 "turn/start",
-                Some(json!({"threadId": "thread_1", "prompt": "hi"})),
+                Some(json!({"threadId": "thread_1", "input": [{"type": "text", "text": "hi", "text_elements": []}]})),
             )
             .expect_err("first request should observe the overflow notification");
         let second_error = client
@@ -1992,20 +2119,21 @@ mod tests {
                         "transport": "stdio"
                     },
                     "protocolVersion": ProtocolVersion::current(),
-                    "requestedCapabilities": []
+                    "requestedCapabilities": [],
+                    "modelProvider": test_model_provider_config()
                 }
             }),
             json!({
                 "jsonrpc": "2.0",
                 "id": 2,
-                "method": "thread/create",
-                "params": {"title": "overflow"}
+                "method": "thread/start",
+                "params": {"cwd": "overflow"}
             }),
             json!({
                 "jsonrpc": "2.0",
                 "id": 3,
                 "method": "turn/start",
-                "params": {"threadId": "thread_1", "prompt": "overflow"}
+                "params": {"threadId": "thread_1", "input": [{"type": "text", "text": "overflow", "text_elements": []}]}
             }),
             json!({
                 "jsonrpc": "2.0",
@@ -2036,20 +2164,21 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: Vec::new(),
-                model_provider: None,
+                model_provider: Some(test_model_provider_config()),
             })
             .expect("initialize should consume the real server response");
         let thread = client
-            .thread_create(ThreadCreateParams {
-                title: Some("overflow".to_string()),
-                workspace_root: None,
+            .thread_start(ThreadStartParams {
+                cwd: Some("overflow".to_string()),
             })
-            .expect("thread/create should consume the real server response");
+            .expect("thread/start should consume the real server response");
         let overflow = client
             .turn_start(TurnStartParams {
-                thread_id: thread.thread_id,
-                prompt: "overflow".to_string(),
-                reasoning_summary: None,
+                thread_id: thread.thread.id,
+                input: text_input("overflow"),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect_err("overflow from the real server transcript should force reconnect");
         let reuse = client
@@ -2084,20 +2213,21 @@ mod tests {
                         "transport": "stdio"
                     },
                     "protocolVersion": ProtocolVersion::current(),
-                    "requestedCapabilities": []
+                    "requestedCapabilities": [],
+                    "modelProvider": test_model_provider_config()
                 }
             }),
             json!({
                 "jsonrpc": "2.0",
                 "id": 2,
-                "method": "thread/create",
-                "params": {"title": "health poll"}
+                "method": "thread/start",
+                "params": {"cwd": "health poll"}
             }),
             json!({
                 "jsonrpc": "2.0",
                 "id": 3,
                 "method": "turn/start",
-                "params": {"threadId": "thread_1", "prompt": "finish before health"}
+                "params": {"threadId": "thread_1", "input": [{"type": "text", "text": "finish before health", "text_elements": []}]}
             }),
         ]
         .into_iter()
@@ -2135,20 +2265,21 @@ mod tests {
                 protocol_version: ProtocolVersion::current(),
                 workspace: None,
                 requested_capabilities: Vec::new(),
-                model_provider: None,
+                model_provider: Some(test_model_provider_config()),
             })
             .expect("initialize should decode");
         let thread = client
-            .thread_create(ThreadCreateParams {
-                title: Some("health poll".to_string()),
-                workspace_root: None,
+            .thread_start(ThreadStartParams {
+                cwd: Some("health poll".to_string()),
             })
-            .expect("thread/create should decode");
+            .expect("thread/start should decode");
         let turn = client
             .turn_start(TurnStartParams {
-                thread_id: thread.thread_id,
-                prompt: "finish before health".to_string(),
-                reasoning_summary: None,
+                thread_id: thread.thread.id,
+                input: text_input("finish before health"),
+                cwd: None,
+                model: None,
+                summary: None,
             })
             .expect("turn/start should decode before terminal update");
         let health = client
@@ -2158,8 +2289,8 @@ mod tests {
             .expect("health/check should collect terminal notifications before response");
 
         assert_eq!(
-            turn.status,
-            dasclaw_app_server_protocol::TurnStatus::Pending
+            turn.turn.status,
+            dasclaw_app_server_protocol::CodexTurnStatus::InProgress
         );
         assert_eq!(health.result.lifecycle.state, LifecycleState::Ready);
         assert!(health.notifications.iter().any(|notification| {
@@ -2199,11 +2330,11 @@ mod tests {
     #[test]
     fn request_value_with_notifications_returns_line_delimited_turn_events() {
         let input = concat!(
-            r#"{"jsonrpc":"2.0","method":"turn/delta","params":{"threadId":"thread_1","turnId":"turn_1","delta":"hel"}}"#,
+            r#"{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"thread_1","turnId":"turn_1","itemId":"turn_1","delta":"hel"}}"#,
             "\n",
-            r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread_1","turnId":"turn_1","status":"completed","output":"hello"}}"#,
+            r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread_1","turn":{"id":"turn_1","items":[{"type":"agentMessage","id":"turn_1","text":"hello"}],"status":"completed","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}"#,
             "\n",
-            r#"{"jsonrpc":"2.0","id":1,"result":{"turnId":"turn_1","status":"pending"}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":{"turn":{"id":"turn_1","items":[],"status":"inProgress","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}"#,
             "\n"
         );
         let transport = LineDelimitedTransport::new(Cursor::new(input), Vec::new());
@@ -2212,19 +2343,24 @@ mod tests {
         let round_trip = client
             .request_value_with_notifications(
                 "turn/start",
-                Some(json!({"threadId": "thread_1", "prompt": "hi"})),
+                Some(json!({"threadId": "thread_1", "input": [{"type": "text", "text": "hi", "text_elements": []}]})),
             )
             .expect("round trip should decode");
 
-        assert_eq!(round_trip.result["turnId"], "turn_1");
+        assert_eq!(round_trip.result["turn"]["id"], "turn_1");
         assert_eq!(round_trip.notifications.len(), 2);
         assert!(matches!(
             round_trip.notifications[0],
-            AppServerNotification::TurnDelta(TurnDeltaEvent { ref delta, .. }) if delta == "hel"
+            AppServerNotification::AgentMessageDelta(AgentMessageDeltaEvent { ref delta, .. }) if delta == "hel"
         ));
         assert!(matches!(
             round_trip.notifications[1],
-            AppServerNotification::TurnCompleted(TurnCompletedEvent { ref output, .. }) if output == "hello"
+            AppServerNotification::TurnCompleted(TurnCompletedEvent { ref turn, .. })
+                if matches!(
+                    turn.items.as_slice(),
+                    [dasclaw_app_server_protocol::CodexThreadItem::AgentMessage { text, .. }]
+                        if text == "hello"
+                )
         ));
         assert!(
             client
@@ -2236,7 +2372,7 @@ mod tests {
 
     #[test]
     fn turn_start_input_helper_writes_codex_input_field() {
-        let input = r#"{"jsonrpc":"2.0","id":1,"result":{"turnId":"turn_1","status":"pending","lifecycle":{"state":"running","reason":"request_in_progress","since":"1"}}}"#
+        let input = r#"{"jsonrpc":"2.0","id":1,"result":{"turn":{"id":"turn_1","items":[],"status":"inProgress","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}"#
             .to_string()
             + "\n";
         let transport = LineDelimitedTransport::new(Cursor::new(input), Vec::new());
@@ -2250,11 +2386,11 @@ mod tests {
         let request = serde_json::from_str::<serde_json::Value>(&output)
             .expect("written request should be JSON-RPC");
 
-        assert_eq!(started.turn_id, "turn_1");
+        assert_eq!(started.turn.id, "turn_1");
         assert_eq!(request["method"], method::TURN_START);
         assert_eq!(
             request["params"],
-            json!({"threadId": "thread_1", "input": "hi"})
+            json!({"threadId": "thread_1", "input": [{"type": "text", "text": "hi", "text_elements": []}]})
         );
         assert!(
             request["params"].get("prompt").is_none(),

@@ -174,8 +174,7 @@ export class AppServerManager {
           'protocol',
           'lifecycle',
           'health',
-          'session',
-          'codex_app_server_v2'
+          'session'
         ],
         modelProvider
       })

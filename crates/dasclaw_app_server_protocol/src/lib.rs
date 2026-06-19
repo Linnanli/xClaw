@@ -1182,16 +1182,10 @@ pub struct CapabilitiesListResponse {
     pub compatibility_profiles: Vec<CompatibilityProfile>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadStartParams {
     pub cwd: Option<String>,
-}
-
-impl Default for ThreadStartParams {
-    fn default() -> Self {
-        Self { cwd: None }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

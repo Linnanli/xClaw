@@ -60,7 +60,7 @@ describe('app-server JSON-RPC helpers', () => {
     expect(parser.push('{"jsonrpc":"2.0","id":1,"result":{"ok":')).toEqual([])
 
     const messages = parser.push(
-      'true}}\n{"jsonrpc":"2.0","method":"turn/delta","params":{"delta":"Hi"}}\n'
+      'true}}\n{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"delta":"Hi"}}\n'
     )
 
     expect(messages.map(classifyJsonRpcMessage)).toEqual([
@@ -71,7 +71,7 @@ describe('app-server JSON-RPC helpers', () => {
       },
       {
         type: 'notification',
-        method: 'turn/delta',
+        method: 'item/agentMessage/delta',
         params: { delta: 'Hi' }
       }
     ])

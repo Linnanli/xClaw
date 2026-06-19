@@ -141,10 +141,10 @@ export function useDasclawAssistantRuntime(): DasclawAssistantRuntime {
 
   const runPromptTurn = useCallback(async (pendingId: string, prompt: string) => {
     const turnTracker = requireTurnTracker(turnTrackerRef)
-    const threadId = await ensureThread(threadIdRef, prompt)
+    const threadId = await ensureThread(threadIdRef)
     const started = await window.desktopAppServer.request<unknown>('turn/start', {
       threadId,
-      input: [{ type: 'text', text: prompt }]
+      input: [{ type: 'text', text: prompt, textElements: [] }]
     })
     const turnId = readTurnId(started)
     pendingTurnMessageIdsRef.current.set(turnId, pendingId)
@@ -332,16 +332,10 @@ function appendPendingAssistantMessageContentDelta(
   )
 }
 
-async function ensureThread(
-  threadIdRef: MutableRefObject<string | undefined>,
-  prompt: string
-): Promise<string> {
+async function ensureThread(threadIdRef: MutableRefObject<string | undefined>): Promise<string> {
   if (threadIdRef.current) return threadIdRef.current
 
-  const title = prompt.length > 48 ? `${prompt.slice(0, 45)}...` : prompt
-  const response = await window.desktopAppServer.request<unknown>('thread/start', {
-    title
-  })
+  const response = await window.desktopAppServer.request<unknown>('thread/start', {})
   const threadId = readThreadId(response)
   threadIdRef.current = threadId
   return threadId
@@ -352,13 +346,12 @@ function readThreadId(response: unknown): string {
     throw new Error('thread/start returned an invalid response')
   }
   const record = response as Record<string, unknown>
-  if (typeof record.threadId === 'string' && record.threadId.trim()) return record.threadId
   const thread = record.thread
   if (thread && typeof thread === 'object') {
     const threadId = (thread as { id?: unknown }).id
     if (typeof threadId === 'string' && threadId.trim()) return threadId
   }
-  throw new Error('thread/start response did not include a thread id')
+  throw new Error('thread/start response did not include thread.id')
 }
 
 function readTurnId(response: unknown): string {
@@ -366,11 +359,10 @@ function readTurnId(response: unknown): string {
     throw new Error('turn/start returned an invalid response')
   }
   const record = response as Record<string, unknown>
-  if (typeof record.turnId === 'string' && record.turnId.trim()) return record.turnId
   const turn = record.turn
   if (turn && typeof turn === 'object') {
     const turnId = (turn as { id?: unknown }).id
     if (typeof turnId === 'string' && turnId.trim()) return turnId
   }
-  throw new Error('turn/start response did not include a turn id')
+  throw new Error('turn/start response did not include turn.id')
 }

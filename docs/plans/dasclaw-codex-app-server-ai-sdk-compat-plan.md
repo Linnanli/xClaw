@@ -29,9 +29,11 @@
 
 ## 1. 结论
 
-当前 `dasclaw-app-server` 和 `codex-cli-main` app-server 协议不一致。
+当前 `dasclaw-app-server` 和完整 `codex-cli-main` app-server 协议不一致。
 
-更准确地说：Dasclaw 当前实现的是一个名为 `codex_app_server_v2` 的 chat-session subset 兼容 profile，而不是 Codex app-server v2 的协议同构实现。这个结论有直接源码证据：`CompatibilityProfile::codex_app_server_v2()` 的 `scope` 是 `ChatSessionSubset`，只声明 `initialize`、`thread/start`、`thread/read`、`turn/start`、`turn/interrupt`，并显式 opt out `codex.rich_input`、`codex.tool_calls`、`codex.approvals`、`codex.diff`、`codex.plan`、`mcp`、`sandbox` 等能力。
+更准确地说：Dasclaw 当前暴露一套 native app-server protocol；已实现的 chat-session surface 被塑造成 truthful Codex app-server v2-shaped subset，而不是完整 Codex app-server v2 的协议同构实现。`codex_app_server_v2_chat_session_subset` profile 只是这套 native surface 的描述性 metadata，不是第二套 wire layer，也不提供历史 smoke 名称。这个结论有直接源码证据：`CompatibilityProfile::codex_app_server_v2_chat_session_subset()` 的 `scope` 是 `ChatSessionSubset`，只声明 `initialize`、`thread/start`、`thread/read`、`thread/list`、`thread/turns/list`、`turn/start`、`turn/interrupt`、`turn/read`、`model/list`，并显式 opt out 完整 tool / approval / sandbox / MCP 等能力。
+
+For AI SDK integration, consume the Dasclaw app-server native protocol as a Codex app-server v2-shaped chat-session subset. Do not rely on historical smoke names or response-level `threadId` / `turnId`; read `thread.id` and `turn.id`.
 
 但这不等于不能接 AI SDK。当前 Dasclaw 已经具备可剥离的事件映射基础：
 
@@ -41,8 +43,8 @@
 
 推荐方向：
 
-1. 短期先做 `DasclawChatTransport`：消费当前 Dasclaw app-server notification，转换为 AI SDK / assistant-ui 需要的 UI stream chunk。
-2. 中期再补 Codex-compatible shim：只在明确要让未修改的 `ai-sdk-provider-codex-app-server` 或 Codex-compatible client 直接连 Dasclaw 时，才把响应 shape、notification shape、wire envelope 补齐。
+1. 短期先做 `DasclawChatTransport`：消费当前 native v2-shaped Dasclaw app-server notification，转换为 AI SDK / assistant-ui 需要的 UI stream chunk。
+2. 中期再补缺失能力：只在明确要让未修改的 `ai-sdk-provider-codex-app-server` 或完整 Codex-compatible client 直接连 Dasclaw 时，才补齐 wire envelope、initialize shape、tools / approval / sandbox / MCP 等尚未实现的能力。
 3. 不建议为了接 assistant-ui 把 Dasclaw 后端协议直接改成 AI SDK wire protocol。AI SDK 属于 UI transport adapter 边界，app-server 仍应保留自有 typed protocol。
 
 ## 2. 协议差异矩阵
@@ -50,20 +52,20 @@
 | 面向 | Codex app-server / provider 期望 | Dasclaw 当前实现 | 兼容判断 | 需要调整 |
 |---|---|---|---|---|
 | wire envelope | Codex README 明确 JSON-RPC 2.0 但 wire 上省略 `"jsonrpc":"2.0"`；provider `sendRequest()` 发送 `{ id, method, params }` | Dasclaw `JsonRpcRequest` / `JsonRpcResponse` / `ServerNotification` 都包含 `jsonrpc`，`ServerNotification::new()` 总是写入 `"2.0"` | 不一致 | 若要未改 provider 直连，需要 stdio/client 层接受省略 `jsonrpc` 的请求，并可选择发送省略 header 的响应 / notification |
-| initialize params | Codex `InitializeParams { clientInfo, capabilities }`；连接初始化后客户端还会发 `initialized` notification | Dasclaw `InitializeParams { client, protocolVersion, workspace, requestedCapabilities, modelProvider }`；通过 `requestedCapabilities: ["codex_app_server_v2"]` 打开兼容事件 | 不一致 | 增加 Codex initialize 反序列化入口；把 `capabilities.optOutNotificationMethods` 映射到 notification filter；把客户端 `initialized` notification 设为 no-op 或真实连接状态 |
+| initialize params | Codex `InitializeParams { clientInfo, capabilities }`；连接初始化后客户端还会发 `initialized` notification | Dasclaw `InitializeParams { client, protocolVersion, workspace, requestedCapabilities, modelProvider }`；`codex_app_server_v2_chat_session_subset` 只描述当前 native chat-session subset | 不一致 | AI SDK adapter 使用 Dasclaw native initialize；只有 full Codex-compatible client 才需要新增 Codex initialize 反序列化入口 |
 | initialize response | Codex 返回 `userAgent`、`codexHome`、`platformFamily`、`platformOs` | Dasclaw 返回 `server`、`lifecycle`、`capabilities`、`compatibilityProfiles`、`unavailableRequestedCapabilities` | 不一致 | Codex profile 下返回 Codex shape，或在外层 bridge/provider 适配 |
-| compatibility 描述 | Codex 走 capabilities 与 schema generation，不返回 Dasclaw-style profile | Dasclaw 返回 `codex_app_server_v2` compatibility profile，且 scope 是 `chat_session_subset` | 有意扩展 | 保留 Dasclaw profile，但不要把它当作完整 Codex v2 等价证明 |
-| `thread/start` params | Codex `ThreadStartParams` 支持 model、cwd、approval、sandbox、instructions、dynamic tools、ephemeral 等 | Dasclaw `thread/start` 复用 `ThreadCreateParams`，主要是 title/workspaceRoot | 不一致 | Codex profile 下新增/兼容 Codex params，并把暂不支持字段记录为 ignored / opt-out / warning |
-| `thread/start` response | Codex `ThreadStartResponse { thread: Thread, model, modelProvider, cwd, ... }`；provider 直接读取 `threadResult.thread.id` | Dasclaw `ThreadStartResponse { threadId, lifecycle }` | 不一致，provider 直连会失败 | 返回最小 `Thread` object view，至少提供 `thread.id`、`status`、`createdAt`、`updatedAt`、`items/turns` 相关空值 |
-| `turn/start` params | Codex `TurnStartParams { threadId, input: Vec<UserInput>, cwd, approvalPolicy, sandboxPolicy, model, effort, outputSchema, ... }` | Dasclaw `TurnStartParams { threadId, prompt }`，兼容读取 text-only `input` 并拼接成 prompt；runtime bridge 仍只接收 prompt/modelProvider | 部分兼容 | 短期维持 text-only；如果接 provider，明确 reject/ignore 非 text input、attachments、tool directives、schema 等 |
-| `turn/start` response | Codex `TurnStartResponse { turn: Turn }`；provider 直接读取 `turnResult.turn.id` | Dasclaw `TurnStartResponse { turnId, status, lifecycle }`，status 是 `pending` | 不一致，provider 直连会失败 | Codex profile 下返回最小 `Turn { id, items, status, error, startedAt, completedAt, durationMs }`，状态映射为 `inProgress` |
+| compatibility 描述 | Codex 走 capabilities 与 schema generation，不返回 Dasclaw-style profile | Dasclaw 返回 `codex_app_server_v2_chat_session_subset` compatibility profile，且 scope 是 `chat_session_subset` | 有意扩展 | 保留 Dasclaw profile，但不要把它当作完整 Codex v2 等价证明，也不要把它当作第二套 wire layer |
+| `thread/start` params | Codex `ThreadStartParams` 支持 model、cwd、approval、sandbox、instructions、dynamic tools、ephemeral 等 | Dasclaw `thread/start` 当前 truthful 子集只支持 optional `cwd` | 部分兼容 | AI SDK adapter 只发送支持字段；完整 Codex client 所需字段仍按缺口处理 |
+| `thread/start` response | Codex `ThreadStartResponse { thread: Thread, model, modelProvider, cwd, ... }`；provider 直接读取 `threadResult.thread.id` | Dasclaw 返回 nested `thread`、`model`、`modelProvider`、`cwd` | 子集兼容 | 读取 `thread.id`，不要使用 response-level `threadId` |
+| `turn/start` params | Codex `TurnStartParams { threadId, input: Vec<UserInput>, cwd, approvalPolicy, sandboxPolicy, model, effort, outputSchema, ... }` | Dasclaw `TurnStartParams { threadId, input, cwd, model, summary }`，当前支持 text-only `input` 并拼接成 prompt；runtime bridge 仍只接收 prompt/modelProvider | 部分兼容 | 短期维持 text-only；明确 reject/ignore 非 text input、attachments、tool directives、schema 等 |
+| `turn/start` response | Codex `TurnStartResponse { turn: Turn }`；provider 直接读取 `turnResult.turn.id` | Dasclaw 返回 nested `turn`，状态为 `inProgress` | 子集兼容 | 读取 `turn.id`，不要使用 response-level `turnId` |
 | `model/list` | Codex protocol 有 `model/list`，返回 `ModelListResponse { data, nextCursor }` | Dasclaw app-server 暴露 `modelProvider/selectForNextTurn`；desktop-app 还通过 renderer bridge 调 `modelProvider/list` | 不一致 | 若接 provider/direct Codex client，补 `model/list` 到 app-server protocol；内部可复用现有 model provider config |
-| text delta notification | Codex `item/agentMessage/delta { threadId, turnId, itemId, delta }` | Dasclaw 同名事件字段一致 | 可复用 | `DasclawChatTransport` 可直接映射为 AI SDK text chunk；同时继续支持 legacy `turn/delta` 仅作兜底 |
+| text delta notification | Codex `item/agentMessage/delta { threadId, turnId, itemId, delta }` | Dasclaw 同名事件字段一致 | 可复用 | `DasclawChatTransport` 可直接映射为 AI SDK text chunk；不要依赖 legacy `turn/delta` |
 | reasoning delta notification | Codex `item/reasoning/summaryTextDelta`、`summaryPartAdded`、`textDelta` | Dasclaw 同名事件字段基本一致 | 可复用 | mapper 保留 summary 与 raw reasoning 的分流；`summaryPartAdded` 作为 reasoning part boundary |
-| `item/started` payload | Codex `ItemStartedNotification { item: ThreadItem, threadId, turnId }` | Dasclaw `ItemStartedEvent { threadId, turnId, itemId, itemType }`，`ItemType` 当前只有 `AgentMessage` | 不一致 | Codex shim 下发完整 `ThreadItem::AgentMessage` / `ThreadItem::Reasoning`；mapper-first 可暂不依赖该事件 |
-| `item/completed` payload | Codex `ItemCompletedNotification { item: ThreadItem, threadId, turnId }`；provider 会访问 `p.item.type` | Dasclaw `ItemCompletedEvent { threadId, turnId, itemId, status }` | 不一致，provider handler 可能在 `p.item` 缺失时报错 | Codex shim 下必须带完整 `item`；mapper-first 可只把它当作 item end 信号 |
-| `turn/completed` payload | Codex `TurnCompletedNotification { threadId, turn: Turn }`；provider 检查 `p.turn.id` 并用 `p.turn.status/error` finish | Dasclaw `TurnCompletedEvent { threadId, turnId, status, output }`，失败另发 `turn/failed` | 不一致，provider 不会按预期 finish | Codex shim 下统一发 `turn/completed { threadId, turn }`；失败用 `turn.status=failed` 与 `turn.error`，Dasclaw legacy `turn/failed` 可保留为扩展 |
-| status vocabulary | Codex `TurnStatus` 是 `completed`、`interrupted`、`failed`、`inProgress` | Dasclaw `TurnStatus` 是 `pending`、`completed`、`failed`、`cancelled` | 不一致 | Codex view 做状态映射：`pending -> inProgress`、`cancelled -> interrupted` |
+| `item/started` payload | Codex `ItemStartedNotification { item: ThreadItem, threadId, turnId }` | Dasclaw `ItemStartedEvent { item, threadId, turnId }`，当前 truthful 子集以 agent message 为主 | 子集兼容 | mapper-first 可暂不依赖该事件；完整 item taxonomy 仍是后续能力 |
+| `item/completed` payload | Codex `ItemCompletedNotification { item: ThreadItem, threadId, turnId }`；provider 会访问 `p.item.type` | Dasclaw `ItemCompletedEvent { item, threadId, turnId }` | 子集兼容 | mapper-first 可把它当作 item end 信号；完整 item taxonomy 仍是后续能力 |
+| `turn/completed` payload | Codex `TurnCompletedNotification { threadId, turn: Turn }`；provider 检查 `p.turn.id` 并用 `p.turn.status/error` finish | Dasclaw 同名事件使用 nested `turn`；失败和中断也通过 `turn.status` / `turn.error` 表达 | 子集兼容 | mapper 只消费 nested `turn`，不要监听 legacy `turn/failed` / `turn/cancelled` |
+| status vocabulary | Codex `TurnStatus` 是 `completed`、`interrupted`、`failed`、`inProgress` | Dasclaw nested `CodexTurnStatus` 使用 `completed`、`interrupted`、`failed`、`inProgress` | 子集兼容 | 内部 runtime 状态可继续自有；public view 使用 Codex vocabulary |
 | tools / approval / diff / MCP / sandbox | Codex v2 protocol 有丰富 item 与 approval/tool notifications | Dasclaw compatibility profile 明确 phase one opt-out | 有意缺口 | 不是 mapper-first 范围；只有做 full Codex-compatible client 时才逐项补 contract |
 
 ## 3. 对 `ai-sdk-provider-codex-app-server` 的直接影响
@@ -105,7 +107,7 @@ item/agentMessage/delta              -> { type: "text", text: delta }
 item/reasoning/summaryTextDelta      -> { type: "reasoning", text: delta }
 item/reasoning/textDelta             -> { type: "reasoning", text: delta }
 item/reasoning/summaryPartAdded      -> 下一段 reasoning 强制新 part
-turn/completed / turn/failed         -> resolve / reject pending turn
+turn/completed                       -> resolve / reject pending turn from nested turn.status/error
 ```
 
 新的 `DasclawChatTransport` 应该把这个 tracker 的“聚合成 assistant-ui ThreadMessage”的职责下沉为“输出 UI stream chunk”。这样 UI 可以改走 `@assistant-ui/react-ai-sdk` 或 AI SDK `ChatTransport`，而 app-server protocol 不必被迫改成 AI SDK wire。
@@ -150,8 +152,8 @@ desktop-app renderer
 | `item/reasoning/summaryPartAdded` | 结束当前 reasoning section 或设置下一段 reasoning boundary |
 | `item/completed` | 若当前 item 有打开的 text/reasoning part，补 end；不要依赖 Dasclaw 当前 payload 的 `item` |
 | `turn/completed` | 补齐所有 open part end，发 finish，关闭 stream |
-| `turn/failed` / `error` | 发 error chunk 或 reject stream；补 cleanup |
-| `turn/cancelled` | 映射为 abort/interrupted finish，关闭 stream |
+| `turn/completed` with `turn.status = "failed"` / `error` | 发 error chunk 或 reject stream；补 cleanup |
+| `turn/completed` with `turn.status = "interrupted"` | 映射为 abort/interrupted finish，关闭 stream |
 
 ### 4.4 必补测试
 
@@ -162,7 +164,7 @@ Mapper 单测：
 3. summary reasoning 与 raw reasoning 都不会落进 assistant text。
 4. `summaryPartAdded` 会形成新的 reasoning boundary。
 5. `turn/completed` 在没有显式 `item/completed` 时也会补齐 end/finish。
-6. `turn/failed` 会关闭 open part 并输出 error。
+6. failed `turn/completed` 会关闭 open part 并输出 error。
 7. notification 早于 `turn/start` response 到达时，transport 能缓存或重放，不能丢 delta。
 
 Transport 集成测试：
@@ -175,7 +177,7 @@ Transport 集成测试：
 
 ## 5. Codex-compatible shim 计划
 
-如果目标是让未修改的 `ai-sdk-provider-codex-app-server` 直接连 Dasclaw，则需要新增一个 Codex profile response/notification view。建议不要直接替换 Dasclaw 现有 v0 shape，而是在 `codex_app_server_v2` profile 下做双栈输出。
+如果目标是让未修改的 `ai-sdk-provider-codex-app-server` 直接连 Dasclaw，则需要补的是完整 Codex client 仍要求、但 Dasclaw native subset 尚未支持的能力和 wire envelope 差异。不要新增 legacy/native 双栈输出；已有 chat-session response/notification shape 应继续作为单一 native v2-shaped surface。
 
 ### Phase B0：合同夹具
 
@@ -186,7 +188,7 @@ Transport 集成测试：
    - item delta notifications
    - item completed notification
    - turn completed notification
-2. fixture 必须同时覆盖 Dasclaw legacy shape，防止破坏现有 desktop bridge。
+2. fixture 必须覆盖 Dasclaw native v2-shaped shape，防止 response-level `threadId` / `turnId` 或 legacy terminal events 回流。
 3. 增加 provider smoke fixture：用 `ai-sdk-provider-codex-app-server@1.1.7` 期待的最小 shape 作为测试输入/输出参考，但不要把 npm dist vendoring 到源码。
 
 ### Phase B1：wire envelope 兼容
@@ -206,9 +208,9 @@ Transport 集成测试：
 
 ### Phase B3：notification shape 兼容
 
-1. `item/started` / `item/completed` 在 Codex profile 下带完整 `item: ThreadItem`。
-2. 成功和失败都发 Codex-style `turn/completed { threadId, turn }`。
-3. Dasclaw legacy `turn/failed`、`turn/delta` 可以保留，但应通过 profile / capabilities 控制，避免 Codex client 收到未预期事件。
+1. `item/started` / `item/completed` 继续带完整 `item: ThreadItem`。
+2. 成功、失败和中断都发 `turn/completed { threadId, turn }`，其中 `turn.status` 区分 `completed` / `failed` / `interrupted`。
+3. 历史 smoke 事件名 `turn/failed`、`turn/delta`、`turn/cancelled` 不应作为 public native chat-session surface 回流；缺失能力通过显式 gap 和 capability opt-out 表达。
 4. 将 queue overflow、runtime degraded 等 Dasclaw-specific error 映射到 Codex `error` notification 或 JSON-RPC error。
 
 ### Phase B4：端到端验证
@@ -273,4 +275,3 @@ Track B 完成标准：
 2. 本计划不把 app-server protocol 改成 AI SDK UI stream protocol。
 3. 本计划不 vendoring 第三方 npm provider 源码。
 4. 本计划不删除现有 `useExternalStoreRuntime` 路径；迁移到 `@assistant-ui/react-ai-sdk` 应作为后续可回滚切片。
-

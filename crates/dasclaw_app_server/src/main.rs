@@ -12,10 +12,11 @@ use dasclaw_app_server::{AppServer, DasclawAgentRuntimeBridge, run_stdio_server_
 use dasclaw_app_server_protocol::{
     CapabilitiesListResponse, ClientInfo, ClientModelConfig, HealthCheckParams,
     HealthCheckResponse, InitializeParams, InitializeResponse, LifecycleStatusResponse,
-    ModelProviderInitializeConfig, ProtocolSchemaResponse, ProtocolVersion, ThreadCreateParams,
-    ThreadCreateResponse, ThreadListResponse, ThreadReadParams, ThreadReadResponse, TransportKind,
-    TurnCancelParams, TurnCancelResponse, TurnListParams, TurnListResponse, TurnReadParams,
-    TurnReadResponse, TurnStartParams, TurnStartResponse,
+    ModelProviderInitializeConfig, ProtocolSchemaResponse, ProtocolVersion, ThreadListParams,
+    ThreadListResponse, ThreadReadParams, ThreadReadResponse, ThreadStartParams,
+    ThreadStartResponse, ThreadTurnsListParams, ThreadTurnsListResponse, TransportKind,
+    TurnInterruptParams, TurnInterruptResponse, TurnReadParams, TurnReadResponse, TurnStartParams,
+    TurnStartResponse, UserInput,
 };
 use dasclaw_core::agentic_loop::AgentResponder;
 use dasclaw_core::messages::{FinishReason, Role};
@@ -208,30 +209,40 @@ fn self_check_report() -> Result<SelfCheckReport, dasclaw_app_server::AppServerE
         model_provider: Some(self_check_model_provider_config()),
     })?;
     let pending_notifications = server.drain_notifications().len();
-    let thread_create = server.thread_create(ThreadCreateParams {
-        title: Some("self-check".to_string()),
-        workspace_root: None,
+    let thread_start = server.thread_start(ThreadStartParams {
+        cwd: Some("self-check".to_string()),
     })?;
-    let thread_list = server.thread_list()?;
+    let thread_id = thread_start.thread.id.clone();
+    let thread_list = server.thread_list(ThreadListParams {
+        cursor: None,
+        limit: None,
+        sort_direction: None,
+    })?;
     let thread_read = server.thread_read(ThreadReadParams {
-        thread_id: thread_create.thread_id.clone(),
+        thread_id: thread_id.clone(),
     })?;
     let turn_start = server.turn_start(TurnStartParams {
-        thread_id: thread_create.thread_id.clone(),
-        prompt: "self-check prompt exercises runtime bridge session bookkeeping".to_string(),
-        reasoning_summary: None,
+        thread_id: thread_id.clone(),
+        input: vec![UserInput::Text {
+            text: "self-check prompt exercises runtime bridge session bookkeeping".to_string(),
+            text_elements: Vec::new(),
+        }],
+        cwd: None,
+        model: None,
+        summary: None,
     })?;
-    let turn_cancel = server.turn_cancel(TurnCancelParams {
-        thread_id: thread_create.thread_id.clone(),
-        turn_id: turn_start.turn_id.clone(),
+    let turn_id = turn_start.turn.id.clone();
+    let turn_interrupt = server.turn_interrupt(TurnInterruptParams {
+        thread_id: thread_id.clone(),
+        turn_id: turn_id.clone(),
     })?;
-    let turn_list = server.turn_list(TurnListParams {
-        thread_id: thread_create.thread_id.clone(),
+    let turn_list = server.thread_turns_list(ThreadTurnsListParams {
+        thread_id: thread_id.clone(),
+        cursor: None,
+        limit: None,
+        sort_direction: None,
     })?;
-    let turn_read = server.turn_read(TurnReadParams {
-        thread_id: thread_create.thread_id.clone(),
-        turn_id: turn_start.turn_id.clone(),
-    })?;
+    let turn_read = server.turn_read(TurnReadParams { thread_id, turn_id })?;
     let session_notifications = server.drain_notifications().len();
 
     Ok(SelfCheckReport {
@@ -245,11 +256,11 @@ fn self_check_report() -> Result<SelfCheckReport, dasclaw_app_server::AppServerE
         schema: server.protocol_schema(),
         pending_notifications,
         session: SelfCheckSessionReport {
-            thread_create,
+            thread_start,
             thread_list,
             thread_read,
             turn_start,
-            turn_cancel,
+            turn_interrupt,
             turn_list,
             turn_read,
             pending_notifications: session_notifications,
@@ -295,12 +306,12 @@ struct SelfCheckReport {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SelfCheckSessionReport {
-    thread_create: ThreadCreateResponse,
+    thread_start: ThreadStartResponse,
     thread_list: ThreadListResponse,
     thread_read: ThreadReadResponse,
     turn_start: TurnStartResponse,
-    turn_cancel: TurnCancelResponse,
-    turn_list: TurnListResponse,
+    turn_interrupt: TurnInterruptResponse,
+    turn_list: ThreadTurnsListResponse,
     turn_read: TurnReadResponse,
     pending_notifications: usize,
 }
@@ -391,7 +402,7 @@ mod tests {
 
         let response = String::from_utf8(output).expect("response should be utf8");
         let lines = response.lines().collect::<Vec<_>>();
-        assert_eq!(lines.len(), 4);
+        assert_eq!(lines.len(), 5);
 
         let initializing: Value =
             serde_json::from_str(lines[0]).expect("initializing notification should be JSON");
@@ -399,13 +410,20 @@ mod tests {
             serde_json::from_str(lines[1]).expect("ready notification should be JSON");
         let capabilities: Value =
             serde_json::from_str(lines[2]).expect("capability notification should be JSON");
-        let response: Value = serde_json::from_str(lines[3]).expect("response should be JSON");
+        let initialized: Value =
+            serde_json::from_str(lines[3]).expect("initialized notification should be JSON");
+        let response: Value = serde_json::from_str(lines[4]).expect("response should be JSON");
 
         assert_eq!(initializing["method"], "lifecycle/changed");
         assert_eq!(initializing["params"]["lifecycle"]["state"], "initializing");
         assert_eq!(ready["method"], "lifecycle/changed");
         assert_eq!(ready["params"]["lifecycle"]["state"], "ready");
         assert_eq!(capabilities["method"], "capabilities/changed");
+        assert_eq!(initialized["method"], "notifications/initialized");
+        assert_eq!(
+            initialized["params"]["compatibilityProfiles"][0]["id"],
+            "codex_app_server_v2_chat_session_subset"
+        );
         assert_eq!(response["result"]["lifecycle"]["state"], "ready");
     }
 
@@ -423,10 +441,10 @@ mod tests {
 
         let response = String::from_utf8(output).expect("response should be utf8");
         let lines = response.lines().collect::<Vec<_>>();
-        assert_eq!(lines.len(), 5);
+        assert_eq!(lines.len(), 6);
 
-        let init_response: Value = serde_json::from_str(lines[3]).expect("init response JSON");
-        let health_response: Value = serde_json::from_str(lines[4]).expect("health response JSON");
+        let init_response: Value = serde_json::from_str(lines[4]).expect("init response JSON");
+        let health_response: Value = serde_json::from_str(lines[5]).expect("health response JSON");
 
         assert_eq!(init_response["result"]["lifecycle"]["state"], "ready");
         assert_eq!(health_response["id"], "health");
@@ -437,8 +455,9 @@ mod tests {
     #[test]
     fn stdio_loop_can_run_with_injected_app_server_runtime_bridge() {
         let initialize = initialize_request("open-cowork", []);
-        let create = r#"{"jsonrpc":"2.0","id":"thread","method":"thread/create","params":{"title":"Draft"}}"#;
-        let start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","prompt":"hello"}}"#;
+        let create =
+            r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"Draft"}}"#;
+        let start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"hello","text_elements":[]}]}}"#;
         let mut output = Vec::new();
         let bridge = Arc::new(CompletingRuntimeBridge::default());
         let server = dasclaw_app_server::AppServer::with_runtime_bridge(bridge);
@@ -461,18 +480,16 @@ mod tests {
                 .iter()
                 .any(|value| value["method"] == "turn/completed")
         );
-        assert!(
-            values
-                .iter()
-                .any(|value| { value["id"] == "turn" && value["result"]["status"] == "pending" })
-        );
+        assert!(values.iter().any(|value| {
+            value["id"] == "turn" && value["result"]["turn"]["status"] == "inProgress"
+        }));
     }
 
     #[test]
     fn stdio_loop_supports_codex_v2_chat_subset_transcript() {
         let initialize = initialize_request("codex", ["codex_app_server_v2"]);
         let thread_start =
-            r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"title":"Draft"}}"#;
+            r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"Draft"}}"#;
         let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"hello","text_elements":[]}]}}"#;
         let mut output = Vec::new();
         let bridge = Arc::new(CompletingRuntimeBridge::default());
@@ -498,7 +515,7 @@ mod tests {
             .as_array()
             .expect("compatibility profiles should be an array")
             .iter()
-            .find(|profile| profile["id"] == "codex_app_server_v2")
+            .find(|profile| profile["id"] == "codex_app_server_v2_chat_session_subset")
             .expect("Codex v2 profile should be advertised");
         let methods = values
             .iter()
@@ -506,15 +523,13 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(profile["scope"], "chat_session_subset");
+        assert!(values.iter().any(|value| {
+            value["id"] == "thread" && value["result"]["thread"]["id"] == "thread_1"
+        }));
         assert!(
             values.iter().any(|value| {
-                value["id"] == "thread" && value["result"]["threadId"] == "thread_1"
+                value["id"] == "turn" && value["result"]["turn"]["id"] == "turn_1"
             })
-        );
-        assert!(
-            values
-                .iter()
-                .any(|value| { value["id"] == "turn" && value["result"]["turnId"] == "turn_1" })
         );
         assert!(methods.contains(&"notifications/initialized"));
         assert!(methods.contains(&"item/started"));
@@ -536,7 +551,7 @@ mod tests {
     fn echo_runtime_mode_streams_real_runtime_completion_over_stdio() {
         let initialize = initialize_request("open-cowork", ["codex_app_server_v2"]);
         let thread_start =
-            r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"title":"Draft"}}"#;
+            r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"Draft"}}"#;
         let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"hello echo","text_elements":[]}]}}"#;
         let mut output = Vec::new();
         let server = app_server_for_runtime_mode(Some("echo")).expect("echo mode should build");
@@ -559,7 +574,11 @@ mod tests {
                 && value["params"]["delta"] == "echo: hello echo"
         }));
         assert!(values.iter().any(|value| {
-            value["method"] == "turn/completed" && value["params"]["output"] == "echo: hello echo"
+            value["method"] == "item/completed"
+                && value["params"]["item"]["text"] == "echo: hello echo"
+        }));
+        assert!(values.iter().any(|value| {
+            value["method"] == "turn/completed" && value["params"]["turn"]["status"] == "completed"
         }));
     }
 
@@ -574,7 +593,7 @@ mod tests {
             }),
         );
         let thread_start =
-            r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"title":"Draft"}}"#;
+            r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"Draft"}}"#;
         let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"hello","text_elements":[]}]}}"#;
         let mut output = Vec::new();
         let server = app_server_for_runtime_mode(None).expect("default runtime mode should build");
@@ -600,7 +619,7 @@ mod tests {
             .find(|value| value["id"] == "thread")
             .expect("thread response should be present");
 
-        assert_eq!(thread_response["result"]["threadId"], "thread_1");
+        assert_eq!(thread_response["result"]["thread"]["id"], "thread_1");
         assert!(turn_response.get("error").is_some());
         assert!(turn_response.get("result").is_none());
     }
@@ -670,7 +689,7 @@ mod tests {
     fn stdio_loop_emits_codex_v2_failure_item_terminal_and_error_events() {
         let initialize = initialize_request("codex", ["codex_app_server_v2"]);
         let thread_start =
-            r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"title":"Draft"}}"#;
+            r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"Draft"}}"#;
         let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"hello","text_elements":[]}]}}"#;
         let mut output = Vec::new();
         let bridge = Arc::new(FailingRuntimeBridge);
@@ -689,9 +708,11 @@ mod tests {
             .map(|line| serde_json::from_str::<Value>(line).expect("line should be JSON"))
             .collect::<Vec<_>>();
 
-        assert!(values.iter().any(|value| value["method"] == "turn/failed"));
         assert!(values.iter().any(|value| {
-            value["method"] == "item/completed" && value["params"]["status"] == "failed"
+            value["method"] == "turn/completed" && value["params"]["turn"]["status"] == "failed"
+        }));
+        assert!(values.iter().any(|value| {
+            value["method"] == "item/completed" && value["params"]["item"]["type"] == "agentMessage"
         }));
         assert!(values.iter().any(|value| {
             value["method"] == "error" && value["params"]["message"] == "runtime failed"
@@ -700,23 +721,23 @@ mod tests {
             .iter()
             .position(|value| value["method"] == "item/completed")
             .expect("item/completed should be present");
-        let turn_failed_position = values
+        let turn_completed_position = values
             .iter()
-            .position(|value| value["method"] == "turn/failed")
-            .expect("turn/failed should be present");
+            .position(|value| value["method"] == "turn/completed")
+            .expect("turn/completed should be present");
         let error_position = values
             .iter()
             .position(|value| value["method"] == "error")
             .expect("error should be present");
-        assert!(item_completed_position < turn_failed_position);
-        assert!(turn_failed_position < error_position);
+        assert!(item_completed_position < turn_completed_position);
+        assert!(turn_completed_position < error_position);
     }
 
     #[test]
     fn stdio_loop_emits_codex_v2_interrupt_item_terminal_events() {
         let initialize = initialize_request("codex", ["codex_app_server_v2"]);
         let thread_start =
-            r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"title":"Draft"}}"#;
+            r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"Draft"}}"#;
         let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"hello","text_elements":[]}]}}"#;
         let interrupt = r#"{"jsonrpc":"2.0","id":"interrupt","method":"turn/interrupt","params":{"threadId":"thread_1","turnId":"turn_1"}}"#;
         let mut output = Vec::new();
@@ -736,38 +757,33 @@ mod tests {
             .map(|line| serde_json::from_str::<Value>(line).expect("line should be JSON"))
             .collect::<Vec<_>>();
 
-        assert!(
-            values
-                .iter()
-                .any(|value| value["method"] == "turn/cancelled")
-        );
         assert!(values.iter().any(|value| {
-            value["method"] == "item/completed" && value["params"]["status"] == "cancelled"
+            value["method"] == "turn/completed"
+                && value["params"]["turn"]["status"] == "interrupted"
+        }));
+        assert!(values.iter().any(|value| {
+            value["method"] == "item/completed" && value["params"]["item"]["type"] == "agentMessage"
         }));
         assert!(values.iter().any(|value| {
             value["id"] == "interrupt" && value["result"] == serde_json::json!({})
         }));
-        assert!(
-            !values
-                .iter()
-                .any(|value| value["method"] == "turn/completed")
-        );
         let item_completed_position = values
             .iter()
             .position(|value| value["method"] == "item/completed")
             .expect("item/completed should be present");
-        let turn_cancelled_position = values
+        let turn_completed_position = values
             .iter()
-            .position(|value| value["method"] == "turn/cancelled")
-            .expect("turn/cancelled should be present");
-        assert!(item_completed_position < turn_cancelled_position);
+            .position(|value| value["method"] == "turn/completed")
+            .expect("turn/completed should be present");
+        assert!(item_completed_position < turn_completed_position);
     }
 
     #[test]
     fn stdio_loop_streams_runtime_notifications_after_response_without_another_request() {
         let initialize = initialize_request("open-cowork", []);
-        let create = r#"{"jsonrpc":"2.0","id":"thread","method":"thread/create","params":{"title":"Draft"}}"#;
-        let start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","prompt":"hello"}}"#;
+        let create =
+            r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"Draft"}}"#;
+        let start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"hello","text_elements":[]}]}}"#;
         let mut output = Vec::new();
         let bridge = Arc::new(DelayedCompletingRuntimeBridge);
         let server = dasclaw_app_server::AppServer::with_runtime_bridge(bridge);
@@ -787,7 +803,9 @@ mod tests {
 
         let turn_response_position = values
             .iter()
-            .position(|value| value["id"] == "turn" && value["result"]["status"] == "pending")
+            .position(|value| {
+                value["id"] == "turn" && value["result"]["turn"]["status"] == "inProgress"
+            })
             .expect("turn/start response should be written");
         let completed_position = values
             .iter()
@@ -800,8 +818,8 @@ mod tests {
     #[test]
     fn stdio_loop_round_trips_approval_server_request_and_approve_response() {
         let initialize = initialize_request("open-cowork", []);
-        let create = r#"{"jsonrpc":"2.0","id":"thread","method":"thread/create","params":{"title":"Approval"}}"#;
-        let start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","prompt":"run shell"}}"#;
+        let create = r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"Approval"}}"#;
+        let start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"run shell","text_elements":[]}]}}"#;
         let approval_response = r#"{"jsonrpc":"2.0","id":"approval_00000000-0000-0000-0000-000000000001","result":{"decision":{"kind":"approve"}}}"#;
         let mut output = Vec::new();
         let server = dasclaw_app_server::AppServer::with_runtime_bridge(Arc::new(
@@ -839,15 +857,19 @@ mod tests {
                 && value["params"]["isError"] == false
         }));
         assert!(values.iter().any(|value| {
-            value["method"] == "turn/completed" && value["params"]["output"] == "approved shell"
+            value["method"] == "item/completed"
+                && value["params"]["item"]["text"] == "approved shell"
+        }));
+        assert!(values.iter().any(|value| {
+            value["method"] == "turn/completed" && value["params"]["turn"]["status"] == "completed"
         }));
     }
 
     #[test]
     fn stdio_loop_round_trips_approval_server_request_and_reject_response() {
         let initialize = initialize_request("open-cowork", []);
-        let create = r#"{"jsonrpc":"2.0","id":"thread","method":"thread/create","params":{"title":"Approval reject"}}"#;
-        let start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","prompt":"run shell"}}"#;
+        let create = r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"Approval reject"}}"#;
+        let start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"run shell","text_elements":[]}]}}"#;
         let approval_response = r#"{"jsonrpc":"2.0","id":"approval_00000000-0000-0000-0000-000000000001","result":{"decision":{"kind":"reject","data":{"reason":"not now"}}}}"#;
         let mut output = Vec::new();
         let server = dasclaw_app_server::AppServer::with_runtime_bridge(Arc::new(
@@ -874,13 +896,15 @@ mod tests {
                 && value["params"]["outcome"] == "rejected"
         }));
         assert!(values.iter().any(|value| {
-            value["method"] == "turn/failed"
-                && value["params"]["error"] == "approval rejected: not now"
+            value["method"] == "turn/completed"
+                && value["params"]["turn"]["status"] == "failed"
+                && value["params"]["turn"]["error"]["message"] == "approval rejected: not now"
         }));
         assert!(
             !values
                 .iter()
-                .any(|value| value["method"] == "turn/completed")
+                .any(|value| value["method"] == "turn/completed"
+                    && value["params"]["turn"]["status"] == "completed")
         );
         assert!(
             !values.iter().any(|value| {
@@ -894,8 +918,8 @@ mod tests {
     #[test]
     fn stdio_loop_disconnects_after_notification_queue_overflow() {
         let initialize = initialize_request("open-cowork", []);
-        let create = r#"{"jsonrpc":"2.0","id":"thread","method":"thread/create","params":{"title":"overflow"}}"#;
-        let start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","prompt":"overflow"}}"#;
+        let create = r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"overflow"}}"#;
+        let start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"overflow","text_elements":[]}]}}"#;
         let after_overflow =
             r#"{"jsonrpc":"2.0","id":"after_overflow","method":"lifecycle/status"}"#;
         let mut output = Vec::new();
@@ -1017,31 +1041,31 @@ mod tests {
         assert_eq!(value["initialize"]["lifecycle"]["state"], "ready");
         assert_eq!(value["lifecycle"]["lifecycle"]["state"], "ready");
         assert_eq!(value["health"]["ok"], true);
-        assert_eq!(value["pendingNotifications"], 3);
+        assert_eq!(value["pendingNotifications"], 4);
         assert!(value["schema"]["methods"].is_array());
-        assert_eq!(value["session"]["threadCreate"]["threadId"], "thread_1");
+        assert_eq!(value["session"]["threadStart"]["thread"]["id"], "thread_1");
         assert_eq!(
-            value["session"]["threadList"]["threads"]
+            value["session"]["threadList"]["data"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(value["session"]["threadRead"]["thread"]["id"], "thread_1");
+        assert_eq!(value["session"]["turnStart"]["turn"]["id"], "turn_1");
+        assert_eq!(value["session"]["turnInterrupt"], serde_json::json!({}));
+        assert_eq!(
+            value["session"]["turnList"]["data"]
                 .as_array()
                 .unwrap()
                 .len(),
             1
         );
         assert_eq!(
-            value["session"]["threadRead"]["thread"]["threadId"],
-            "thread_1"
+            value["session"]["turnRead"]["turn"]["status"],
+            "interrupted"
         );
-        assert_eq!(value["session"]["turnStart"]["turnId"], "turn_1");
-        assert_eq!(value["session"]["turnCancel"]["status"], "cancelled");
-        assert_eq!(
-            value["session"]["turnList"]["turns"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
-        assert_eq!(value["session"]["turnRead"]["turn"]["status"], "cancelled");
-        assert_eq!(value["session"]["pendingNotifications"], 5);
+        assert_eq!(value["session"]["pendingNotifications"], 7);
     }
 
     fn json_lines(output: Vec<u8>) -> Vec<Value> {

@@ -76,7 +76,7 @@ export function createAppServerTurnTracker(options: TurnTrackerOptions = {}): Ap
       return
     }
 
-    if (notification.method !== 'turn/completed' && notification.method !== 'turn/failed') return
+    if (notification.method !== 'turn/completed') return
 
     const completion = parseTurnCompletion(notification.params)
     if (!completion) return
@@ -136,19 +136,17 @@ function parseTurnCompletion(params: unknown): TurnCompletion | undefined {
 
   const record = params as Record<string, unknown>
   const threadId = typeof record.threadId === 'string' ? record.threadId : undefined
-  const nativeTurnId = typeof record.turnId === 'string' ? record.turnId : undefined
-  const output = typeof record.output === 'string' ? record.output : undefined
-  const nativeError = typeof record.error === 'string' ? record.error : undefined
   const turn =
     record.turn && typeof record.turn === 'object'
       ? (record.turn as Record<string, unknown>)
       : undefined
-  const turnId = nativeTurnId ?? (typeof turn?.id === 'string' ? turn.id : undefined)
-  const codexError =
+  const turnId = typeof turn?.id === 'string' ? turn.id : undefined
+  const errorRecord =
     turn?.error && typeof turn.error === 'object'
-      ? (turn.error as { message?: unknown }).message
+      ? (turn.error as { message?: unknown })
       : undefined
-  const error = nativeError ?? (typeof codexError === 'string' ? codexError : undefined)
+  const error = typeof errorRecord?.message === 'string' ? errorRecord.message : undefined
+  const output = readAgentMessageOutput(turn?.items)
 
   if (!threadId || !turnId) return undefined
 
@@ -158,6 +156,18 @@ function parseTurnCompletion(params: unknown): TurnCompletion | undefined {
     output,
     error
   }
+}
+
+function readAgentMessageOutput(items: unknown): string | undefined {
+  if (!Array.isArray(items)) return undefined
+  const text = items
+    .map((item) => {
+      if (!item || typeof item !== 'object') return ''
+      const record = item as { type?: unknown; text?: unknown }
+      return record.type === 'agentMessage' && typeof record.text === 'string' ? record.text : ''
+    })
+    .join('')
+  return text.length > 0 ? text : undefined
 }
 
 function parseTurnContentDelta(notification: AppServerNotification): TurnContentDelta | undefined {

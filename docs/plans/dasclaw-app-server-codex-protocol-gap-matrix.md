@@ -29,7 +29,9 @@
 
 ## 1. 总结
 
-当前 `dasclaw-app-server` 不是完整 Codex app-server v2 实现，而是一个 Dasclaw native app-server 加上 `codex_app_server_v2` 的 chat-session subset compatibility profile。
+当前 `dasclaw-app-server` 不是完整 Codex app-server v2 实现，而是一个 Dasclaw native app-server，其已实现的 chat-session surface 使用 Codex app-server v2-shaped method/event/payload。`codex_app_server_v2_chat_session_subset` compatibility profile 是该子集的描述性 metadata，不是第二套 wire layer，也不增加 alias。
+
+Protocol-shape consolidation belongs before capability expansion. The first implementation phase should remove dev-stage aliases and make the existing native chat-session surface v2-shaped. Missing Codex app-server capabilities remain explicit gaps; they are not unlocked by a translation layer.
 
 直接证据：
 
@@ -41,7 +43,7 @@
 | `ClientNotification.ts:5` | Codex 客户端 notification 只有 `initialized` |
 | `crates/dasclaw_app_server_protocol/src/lib.rs` | Dasclaw 当前常量定义 18 个 method、22 个 event；`model/list` 与 `approval/respond` 已进入 protocol schema |
 | `crates/dasclaw_app_server_protocol/src/lib.rs` | Dasclaw Phase 1 实现 `protocol`、`lifecycle`、`health`、`session`、`model_provider`；P3 feature-gated runtime 下可启用 `approval` / `tools` / `sandbox` 子集；`dlp_policy`、`jobs`、`skills`、`mcp`、`logs` 仍是 declared future |
-| `crates/dasclaw_app_server_protocol/src/lib.rs` | `codex_app_server_v2` profile 明确是 `ChatSessionSubset`，只列 `initialize`、`thread/start`、`thread/read`、`thread/list`、`turn/start`、`turn/interrupt`、`model/list` 并 opt out 完整 tool / approval / sandbox 等 Codex 能力 |
+| `crates/dasclaw_app_server_protocol/src/lib.rs` | `codex_app_server_v2_chat_session_subset` profile 明确是 `ChatSessionSubset`，只列 `initialize`、`thread/start`、`thread/read`、`thread/list`、`thread/turns/list`、`turn/start`、`turn/interrupt`、`turn/read`、`model/list` 并 opt out 完整 tool / approval / sandbox 等 Codex 能力 |
 | `crates/dasclaw_app_server/src/lib.rs` | Dasclaw router 只实际路由当前 18 个 method，其他 method 会落到 `method_not_found` |
 | `crates/dasclaw_app_server/src/lib.rs` | 运行时健康状态按 bridge feature gate 呈现 tools / sandbox；jobs / skills / mcp disabled，DLP policy unavailable fail-safe |
 
@@ -49,7 +51,7 @@
 
 | 层级 | 判断 |
 |---|---|
-| 本轮已完成 | `model/list`；`thread/start` / `turn/start` 附带 Codex `thread` / `turn` view；`turn/interrupt` Codex params/empty response alias；`thread/started`、`turn/started`、`turn/completed`、`turn/failed` 附带 Codex-compatible view；`item/started`、`item/agentMessage/delta`、`item/reasoning/summaryTextDelta`、`item/completed` 已接 Codex v2 profile 下的 producer；P3 command approval server-request loop、`approval/respond`、tool output/result notification、timeout/cancel/shutdown fail-safe；`desktop-app` 已兼容 native 与 Codex shape |
+| 本轮已完成 | `model/list`；`thread/start` / `turn/start` 返回 nested Codex `thread` / `turn` view；`turn/interrupt` 使用 Codex params/empty response；`thread/started`、`turn/started`、`turn/completed` 使用 v2-shaped nested view；失败和中断都通过 `turn/completed.turn.status` 表达；`item/started`、`item/agentMessage/delta`、`item/reasoning/summaryTextDelta`、`item/completed` 已接 v2-shaped producer；P3 command approval server-request loop、`approval/respond`、tool output/result notification、timeout/interrupt/shutdown fail-safe；`desktop-app` 已消费单一 native v2-shaped surface |
 | 协议同名/近似可用 | `initialize`、`thread/start`、`thread/read`、`thread/list`、`turn/start`、`turn/interrupt`、若干 item/turn streaming notification |
 | 协议缺口但可通过 compatibility view 补 | `thread/read` / `thread/list` 的完整 Codex `Thread` view、更多 item/turn 细粒度 payload shape |
 | agent 框架 `crates` 已有底座但 app-server 未完全接线 | approval / tool execution / sandbox primitives 已在 `crates` 下的 runtime/tool/sandbox 相关 crate 中存在；P3 已补 command approval request/response、tool lifecycle notification、service health 与 capability gating 子集；缺的是 standalone command/fs service、dynamic tool registry/call、permission/file-change approval producer、MCP elicitation 和更完整的审计面 |
@@ -125,8 +127,8 @@
 | Protocol | `initialize`、`protocol/schema` |
 | Health | `health/check`、`capabilities/list` |
 | Lifecycle | `lifecycle/status`、`shutdown` |
-| Session / thread | `thread/create`、`thread/start`、`thread/list`、`thread/read` |
-| Session / turn | `turn/start`、`turn/cancel`、`turn/interrupt`、`turn/list`、`turn/read` |
+| Session / thread | `thread/start`、`thread/list`、`thread/read`、`thread/turns/list` |
+| Session / turn | `turn/start`、`turn/interrupt`、`turn/read` |
 | Model provider | ~~`model/list`~~、`modelProvider/selectForNextTurn` |
 | Approval | ~~`approval/respond`~~ |
 
@@ -138,7 +140,7 @@
 |---|---|
 | Protocol | `notifications/initialized` |
 | Lifecycle / health / logs | `lifecycle/changed`、`health/changed`、`capabilities/changed`、`log/entry` |
-| Thread / turn | `thread/created`、~~`thread/started`~~、~~`turn/started`~~、`turn/delta`、~~`turn/completed`~~、~~`turn/failed`~~、`turn/cancelled` |
+| Thread / turn | ~~`thread/started`~~、~~`turn/started`~~、~~`turn/completed`~~ |
 | Item streaming | ~~`item/started`~~、~~`item/agentMessage/delta`~~、~~`item/reasoning/summaryTextDelta`~~、`item/reasoning/summaryPartAdded`、`item/reasoning/textDelta`、~~`item/completed`~~ |
 | Approval / tool | ~~`serverRequest/resolved`~~、~~`item/commandExecution/outputDelta`~~、~~`item/commandExecution/terminalInteraction`~~ |
 | Error | `error` |
@@ -149,9 +151,9 @@
 
 | 证据 | 说明 |
 |---|---|
-| `desktop-app/src/main/appServerManager.ts` | 初始化发送 `requestedCapabilities: ["protocol", "lifecycle", "health", "session", "codex_app_server_v2"]` |
+| `desktop-app/src/main/appServerManager.ts` | 初始化发送 native capability 请求，并附带 model provider config；chat-session wire shape 本身已经是 v2-shaped，不再通过 alias profile 切换 |
 | `desktop-app/src/main/appServerManager.ts` | ~~`modelProvider/list`~~ 仍是客户端 renderer alias，但内部已转发到 app-server ~~`model/list`~~；`modelProvider/selectForNextTurn` 仍由 manager 侧特殊处理 |
-| `desktop-app/src/renderer/src/lib/appServerTurnTracker.ts` | renderer 聚合 content / reasoning delta，并已兼容 ~~`turn/completed`~~ / ~~`turn/failed`~~ 的 native 与 Codex nested `turn` shape |
+| `desktop-app/src/renderer/src/lib/appServerTurnTracker.ts` | renderer 聚合 item content / reasoning delta，并只从 nested ~~`turn/completed`~~ 读取 terminal state |
 
 这说明当前消费者不要求 Codex 全量协议，但如果目标改成“让 Dasclaw app-server 具备接近 Codex app-server 的完整能力”，需要补的是服务能力，不只是 provider/transport 适配。
 
@@ -187,9 +189,9 @@
 | Codex 域 | Codex method | Dasclaw 当前状态 | 分类 | 补齐含义 |
 |---|---|---|---|---|
 | 初始化 | `initialize` | 有同名，但 params/response 与 Codex 不同；Dasclaw 要求 `protocolVersion`、`requestedCapabilities`、可带 `modelProvider` | A/B | 若要 Codex client 直连，需要 Codex initialize view；若只服务 desktop-app，保持 native shape 更清楚 |
-| Thread 核心 | ~~`thread/start`~~、`thread/read`、`thread/list` | ~~`thread/start` 已保留 native `threadId` 并附带 Codex `thread` view~~；`thread/read` / `thread/list` 仍需要完整 Codex `Thread` view 对齐 | A/B | `thread/start` 已完成最小 view；后续补 read/list 的完整状态字段、turn/item 容器 |
-| Thread 扩展 | `thread/resume`、`thread/fork`、`thread/archive`、`thread/unarchive`、`thread/unsubscribe`、`thread/name/set`、`thread/metadata/update`、`thread/compact/start`、`thread/shellCommand`、`thread/approveGuardianDeniedAction`、`thread/rollback`、`thread/loaded/list`、`thread/turns/list`、`thread/inject_items` | 当前 router 无这些 method；Dasclaw 只有 `thread/create/start/list/read` | C/D1/D2 | shell/approval/job 等底座部分存在，但还缺 app-server thread persistence、归档/恢复、压缩、inject item 等 owner |
-| Turn 核心 | ~~`turn/start`~~、~~`turn/interrupt`~~ | ~~`turn/start` 已保留 native `turnId` 并附带 Codex `turn` view；`turn/interrupt` 已作为 Codex v2 alias 接收 `threadId` / `turnId` 并返回空对象~~ | A/B | `turn/start` 已完成 Codex text input 子集与 `Turn` object response；`turn/interrupt` 已完成当前 cancel/interrupt alias 子集，后续只需随更完整 terminal 状态语义继续校准 |
+| Thread 核心 | ~~`thread/start`~~、`thread/read`、`thread/list`、`thread/turns/list` | `thread/start` 返回嵌套 `thread` object 与真实 `model` / `modelProvider` / `cwd` metadata；`thread/read`、`thread/list`、`thread/turns/list` 仍是 chat-session subset，需要后续补完整 Codex `Thread` history / lifecycle 字段 | A/B | `thread/start` 已完成最小 v2-shaped view；后续补 read/list 的完整状态字段、turn/item 容器 |
+| Thread 扩展 | `thread/resume`、`thread/fork`、`thread/archive`、`thread/unarchive`、`thread/unsubscribe`、`thread/name/set`、`thread/metadata/update`、`thread/compact/start`、`thread/shellCommand`、`thread/approveGuardianDeniedAction`、`thread/rollback`、`thread/loaded/list`、`thread/inject_items` | 当前 public router 无这些 method；历史 `thread/create` smoke 名称不属于 native contract | C/D1/D2 | shell/approval/job 等底座部分存在，但还缺 app-server thread persistence、归档/恢复、压缩、inject item 等 owner |
+| Turn 核心 | ~~`turn/start`~~、~~`turn/interrupt`~~、`turn/read` | `turn/start` 返回嵌套 `turn` object，接受 text-only `input: UserInput[]`；`turn/interrupt` 接收 `threadId` / `turnId` 并返回空对象；terminal 结果统一通过 `turn/completed` 的 nested `turn.status` 表达 | A/B | `turn/start` 已完成 text input 子集与 `Turn` object response；`turn/interrupt` 已完成当前 interrupt 子集，后续只需随更完整 terminal 状态语义继续校准 |
 | Turn steer | `turn/steer` | `crates/dasclaw_protocol` 有 `ActiveTurnNotSteerable` / `NonSteerableTurnKind` 这类 steer 错误语义；app-server 无 `turn/steer` method | C/D1/D2 | 需要把运行中 turn steer 控制能力接成 app-server owner，不能只补空 handler |
 | Model | ~~`model/list`~~ | ~~已由 app-server 路由并返回 Codex `ModelListResponse`；`desktop-app` 的 `modelProvider/list` 仅保留 renderer alias~~ | A | 已完成；后续若需要再补 pagination/hidden model 等更完整语义 |
 | Skills | `skills/list`、`skills/config/write` | `crates` 有 skill 词汇，历史客户端有参考实现但不是当前 `desktop-app` 目标；app-server capability matrix 标 `skills` declared future，service health disabled | D1/D2 | 需要把 native skills registry/service 明确迁到 app-server；不能直接依赖已废弃 `desktop-client` |
@@ -209,9 +211,9 @@
 | Codex 域 | Codex notification | Dasclaw 当前状态 | 分类 | 补齐含义 |
 |---|---|---|---|---|
 | Error | `error` | 有同名 | A | 需核对 payload shape |
-| Thread 核心 | ~~`thread/started`~~ | ~~有同名；Codex profile 下已附带 Codex `thread` view~~；另有 Dasclaw-only `thread/created` | A | 已完成 Codex-compatible `ThreadStartedNotification` 子集 |
+| Thread 核心 | ~~`thread/started`~~ | 有同名，payload 带 nested `thread` view；历史 `thread/created` smoke event 不属于 public native chat-session surface | A | 已完成 v2-shaped `ThreadStartedNotification` 子集 |
 | Thread 状态/历史 | `thread/status/changed`、`thread/archived`、`thread/unarchived`、`thread/closed`、`thread/name/updated`、`thread/goal/updated`、`thread/goal/cleared`、`thread/tokenUsage/updated`、`thread/compacted` | 无 | C/D | 需要 thread lifecycle、goal、usage、compaction 状态 |
-| Turn 核心 | ~~`turn/started`~~、~~`turn/completed`~~ | ~~有同名；Codex profile 下已附带 Codex `turn` view~~；Dasclaw 另有 ~~`turn/failed`~~、`turn/cancelled` | A/B | 已完成 started/completed 的 Codex-compatible 子集，且 native `turn/failed` 已附带 failed `turn` view；`turn/cancelled` 和 Codex 聚合 terminal 语义仍待后续核对 |
+| Turn 核心 | ~~`turn/started`~~、~~`turn/completed`~~ | 有同名，payload 带 nested `turn` view；成功、失败、中断都聚合到 `turn/completed`，由 `turn.status` 和 `turn.error` 区分 | A/B | 已完成 started/completed 的 v2-shaped 子集；历史 `turn/failed` / `turn/cancelled` 不再作为 public terminal event |
 | Turn plan/diff | `turn/diff/updated`、`turn/plan/updated` | `crates/dasclaw_protocol` 有 `PlanDeltaEvent`；app-server 无 Codex turn-level plan/diff notification | D1/D2 | 需要 diff/plan producer 与流式更新，并区分 item-level `PlanDelta` 与 turn-level plan/diff snapshot |
 | Item text/reasoning | ~~`item/started`~~、~~`item/agentMessage/delta`~~、~~`item/reasoning/summaryTextDelta`~~、`item/reasoning/summaryPartAdded`、`item/reasoning/textDelta`、~~`item/completed`~~ | ~~P1 已把 item started / agent delta / reasoning summary text delta / item completed 接到 Codex v2 profile producer~~；summary part added 与 reasoning text delta 仍只是 schema/profile 面，尚未看到 app-server producer | A/B | 核心文本流已完成受测子集；后续补 reasoning part/text producer 与更完整 item payload shape |
 | Item plan/raw/tool/file/command | `rawResponseItem/completed`、`item/plan/delta`、~~`item/commandExecution/outputDelta`~~、~~`item/commandExecution/terminalInteraction`~~、`item/fileChange/outputDelta`、`item/fileChange/patchUpdated`、`command/exec/outputDelta` | ~~P3 已补 runtime tool output/result 到 commandExecution notification 的桥接~~；raw response、plan、file change、standalone command exec 仍未接 | D1/D2 | 后续需要 raw response、plan、command、file change 能力和安全边界 |
@@ -247,17 +249,18 @@ Codex 的 9 个 `ServerRequest` 不是普通 notification，而是服务端主�
 | `protocol/schema` | method | Dasclaw native 协议发现；Codex 依赖生成 schema，不走 runtime schema 方法 |
 | `health/check`、`capabilities/list` | method | 明确让 GUI 按 capability matrix/health gating，而不是猜后端能力 |
 | `lifecycle/status`、`shutdown` | method | 本地 sidecar lifecycle 控制面 |
-| `thread/create` | method | Legacy smoke / native alias；compat profile 已声明可映射到 `thread/start` |
-| `turn/cancel` | method | Native alias；compat profile 映射到 `turn/interrupt` |
-| `turn/list`、`turn/read` | method | Dasclaw native turn-level read/list；Codex 用 `thread/turns/list` 等线程视角 |
+| `thread/create` | method | Legacy Dasclaw smoke-surface alias，当前 public native contract intentionally unsupported；公开名称是 `thread/start` |
+| `turn/cancel` | method | Legacy Dasclaw smoke-surface alias，当前 public native contract intentionally unsupported；公开名称是 `turn/interrupt` |
+| `turn/list` | method | Legacy Dasclaw turn-level list alias，当前 public native contract intentionally unsupported；公开名称是 `thread/turns/list` |
+| `turn/read` | method | Dasclaw native turn-level read；当前仍保留为已支持的 turn detail 读取入口 |
 | ~~`approval/respond`~~ | method | P3 approval server-request 的客户端决策回传入口 |
 | `modelProvider/selectForNextTurn` | method | desktop-app / renderer-mediated model provider selection；Codex 有 `model/list` 但没有这个同名选择入口 |
 | `notifications/initialized` | event | Dasclaw 服务端通知；Codex 的 `initialized` 是 ClientNotification |
 | `lifecycle/changed`、`health/changed`、`capabilities/changed` | event | Native control-plane state |
 | `log/entry` | event | 已声明但 Phase 1 未接线的 logs event |
-| `thread/created` | event | Native thread creation alias |
-| `turn/delta` | event | Legacy/smoke delta；Codex 核心文本流是 `item/agentMessage/delta` |
-| ~~`turn/failed`~~、`turn/cancelled` | event | ~~`turn/failed` 已补 Codex-compatible failed `turn` view~~；`turn/cancelled` 仍是 native terminal variant；Codex 聚合在 `turn/completed` 的 `turn.status` |
+| `thread/created` | event | Legacy Dasclaw smoke-surface alias，当前 public native contract intentionally unsupported；公开名称是 `thread/started` |
+| `turn/delta` | event | Legacy/smoke delta，当前 public native contract intentionally unsupported；Codex 核心文本流是 `item/agentMessage/delta` |
+| `turn/failed`、`turn/cancelled` | event | Legacy terminal variants，当前 public native contract intentionally unsupported；失败/中断都聚合在 `turn/completed` 的 `turn.status` 与 `turn.error` |
 | ~~`serverRequest/resolved`~~、~~`item/commandExecution/outputDelta`~~、~~`item/commandExecution/terminalInteraction`~~ | event | P3 新增的 approval/tool bridge 事件；名字与 Codex 对齐但仍受 runtime feature gate 控制 |
 
 ## 9. 能力补齐优先级
@@ -266,8 +269,8 @@ Codex 的 9 个 `ServerRequest` 不是普通 notification，而是服务端主�
 
 | 优先级 | 目标 | 包含 | 原因 |
 |---|---|---|---|
-| P0 | 诚实的协议边界 | `codex_app_server_v2` 继续标成 chat-session subset；P3-P6 opt-out 保持显式 | 已由 capability/profile tests 约束 |
-| P1 | Chat-session compatibility view | ~~`thread/start`~~、~~`turn/start`~~、~~`turn/interrupt`~~、~~`thread/started`~~、~~`turn/started`~~、~~`turn/completed`~~、~~`item/started`~~、~~`item/agentMessage/delta`~~、~~`item/reasoning/summaryTextDelta`~~、~~`item/completed`~~ 保留 native fields 并附带 Codex-compatible view / producer | desktop-app 通过 normalization 同时兼容 native 与 Codex view |
+| P0 | 诚实的协议边界 | `codex_app_server_v2_chat_session_subset` 继续标成 chat-session subset；P3-P6 opt-out 保持显式 | 已由 capability/profile tests 约束 |
+| P1 | Chat-session compatibility view | ~~`thread/start`~~、~~`turn/start`~~、~~`turn/interrupt`~~、~~`thread/started`~~、~~`turn/started`~~、~~`turn/completed`~~、~~`item/started`~~、~~`item/agentMessage/delta`~~、~~`item/reasoning/summaryTextDelta`~~、~~`item/completed`~~ 使用单一 v2-shaped native view / producer | desktop-app 直接消费 nested thread/turn/item shape，不再通过 response-level fallback normalize |
 | P2 | Model catalog/service | ~~`model/list`~~ 由 app-server 返回 Codex `ModelListResponse`；~~`modelProvider/list`~~ 仅作为 desktop-app renderer alias | app-server 成为模型列表 owner，主进程不再直接暴露 provider secrets |
 | P3 | Approval + tool + sandbox 三件套 | ~~ServerRequest request tracking、approval decision、tool lifecycle notification、sandbox capability gate、fail-safe timeout~~；standalone `fs/*` / `command/exec*`、dynamic `item/tool/call`、file-change approval 仍留给 P5 或后续专项 | Codex 大量协议依赖这组能力；本轮先补安全控制闭环，避免后续 command/fs 绕过 approval/sandbox |
 | P4 | MCP / skills / logs / jobs | MCP registry/OAuth/resource/tool call；skills registry；logs source；job host | MCP、logs、jobs、skills 已有不同程度底座或 legacy 参考；重点是上收 app-server owner 与协议接线 |
@@ -277,6 +280,6 @@ Codex 的 9 个 `ServerRequest` 不是普通 notification，而是服务端主�
 ## 10. 决策建议
 
 1. 不建议把 Dasclaw native protocol 改名伪装成完整 Codex app-server。当前证据显示它只覆盖 chat-session subset，硬伪装会让客户端在 tools/MCP/approval/fs/command/account 等域踩到 app-server 接线缺口或产品语义缺口。
-2. 可以新增 Codex-compatible profile/view，但要按 capability gating 输出，未实现域要明确 unsupported，而不是静默 no-op。
-3. 最短可交付路线是先补 P1：让同名 thread/turn/item streaming 在 Codex profile 下返回 Codex shape。这样既能服务 `desktop-app`/AI SDK transport，又不会承诺完整 Codex 产品控制面。
+2. 可以保留 Codex-compatible profile 描述，但它只是 capability/profile metadata；wire shape 仍是 Dasclaw native v2-shaped contract，未实现域要明确 unsupported，而不是静默 no-op。
+3. 最短可交付路线是先补 P1：让同名 thread/turn/item streaming 返回 nested Codex-style objects。这样既能服务 `desktop-app`/AI SDK transport，又不会承诺完整 Codex 产品控制面。
 4. P3 已先补 approval、tool lifecycle notification、sandbox gate 这组安全边界；下一步做 `fs/*`、`command/exec*`、`item/tool/call` 时仍不能绕过这条 request tracking / fail-safe / capability gating 路径。

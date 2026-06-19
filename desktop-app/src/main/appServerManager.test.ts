@@ -51,6 +51,30 @@ function createManager(fake: AppServerRpcClient): AppServerManager {
   })
 }
 
+function inProgressTurn(id: string): Record<string, unknown> {
+  return {
+    id,
+    items: [],
+    status: 'inProgress',
+    error: null,
+    startedAt: null,
+    completedAt: null,
+    durationMs: null
+  }
+}
+
+function completedTurn(id: string, text = ''): Record<string, unknown> {
+  return {
+    id,
+    items: text ? [{ type: 'agentMessage', id, text }] : [],
+    status: 'completed',
+    error: null,
+    startedAt: null,
+    completedAt: null,
+    durationMs: null
+  }
+}
+
 class FakeRpcClient implements AppServerRpcClient {
   readonly requests: Array<{ method: string; params?: unknown }> = []
   readonly responses: Array<{ id: JsonRpcId; result: unknown }> = []
@@ -93,7 +117,7 @@ class FakeRpcClient implements AppServerRpcClient {
       } as T
     }
     if (method === 'thread/start') {
-      return { threadId: 'thread-1' } as T
+      return { thread: { id: 'thread-1' } } as T
     }
     if (method === 'turn/start') {
       queueMicrotask(() => {
@@ -110,21 +134,24 @@ class FakeRpcClient implements AppServerRpcClient {
         })
         this.notificationHandler?.({
           type: 'notification',
-          method: 'turn/delta',
-          params: { threadId: 'thread-1', turnId: 'turn-1', delta: 'pong' }
+          method: 'item/agentMessage/delta',
+          params: {
+            threadId: 'thread-1',
+            turnId: 'turn-1',
+            itemId: 'turn-1',
+            delta: 'pong'
+          }
         })
         this.notificationHandler?.({
           type: 'notification',
           method: 'turn/completed',
           params: {
             threadId: 'thread-1',
-            turnId: 'turn-1',
-            status: 'completed',
-            output: 'pong'
+            turn: completedTurn('turn-1', 'pong')
           }
         })
       })
-      return { turnId: 'turn-1', status: 'pending' } as T
+      return { turn: inProgressTurn('turn-1') } as T
     }
     if (method === 'modelProvider/selectForNextTurn') {
       return { selectedModelId: (params as { modelId: string }).modelId } as T
@@ -178,23 +205,26 @@ describe('AppServerManager', () => {
 
     const response = await manager.request('turn/start', {
       threadId: 'thread-1',
-      input: [{ type: 'text', text: 'ping' }],
+      input: [{ type: 'text', text: 'ping', textElements: [] }],
       reasoningSummary: 'concise'
     })
 
     expect(manager.getStatus().state).toBe('ready')
-    expect(response).toEqual({ turnId: 'turn-1', status: 'pending' })
+    expect(response).toEqual({ turn: inProgressTurn('turn-1') })
     expect(fake.requests.map((request) => request.method)).toEqual([
       'initialize',
       'health/check',
       'turn/start'
     ])
-    expect(fake.requests[0].params).toMatchObject({
+    expect(fake.requests[0].params).toEqual({
+      client: { name: 'desktop-app', version: '0.1.0', transport: 'stdio' },
+      protocolVersion: { major: 0, minor: 1, patch: 0 },
+      requestedCapabilities: ['protocol', 'lifecycle', 'health', 'session'],
       modelProvider: TEST_MODEL_PROVIDER_CONFIG
     })
     expect(fake.requests.at(-1)?.params).toEqual({
       threadId: 'thread-1',
-      input: [{ type: 'text', text: 'ping' }],
+      input: [{ type: 'text', text: 'ping', textElements: [] }],
       reasoningSummary: 'concise'
     })
   })
@@ -331,7 +361,7 @@ describe('AppServerManager', () => {
 
     await manager.request('turn/start', {
       threadId: 'thread-1',
-      input: [{ type: 'text', text: 'ping' }]
+      input: [{ type: 'text', text: 'ping', textElements: [] }]
     })
     await new Promise<void>((resolve) => queueMicrotask(() => resolve()))
 
@@ -349,17 +379,20 @@ describe('AppServerManager', () => {
       },
       {
         hostId: 'local',
-        method: 'turn/delta',
-        params: { threadId: 'thread-1', turnId: 'turn-1', delta: 'pong' }
+        method: 'item/agentMessage/delta',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          itemId: 'turn-1',
+          delta: 'pong'
+        }
       },
       {
         hostId: 'local',
         method: 'turn/completed',
         params: {
           threadId: 'thread-1',
-          turnId: 'turn-1',
-          status: 'completed',
-          output: 'pong'
+          turn: completedTurn('turn-1', 'pong')
         }
       }
     ])

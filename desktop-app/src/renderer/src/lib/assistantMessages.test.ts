@@ -375,7 +375,7 @@ describe('useDasclawAssistantRuntime', () => {
             }
           })
         })
-        return { turn: { id: 'turn-1', status: 'inProgress', items: [] } }
+        return { turn: inProgressTurn('turn-1') }
       }
       throw new Error(`unexpected method ${method}`)
     })
@@ -428,7 +428,7 @@ describe('useDasclawAssistantRuntime', () => {
     expect(requestMock.mock.calls.map(([method]) => method)).toEqual(['thread/start', 'turn/start'])
     expect(requestMock.mock.calls[1][1]).toEqual({
       threadId: 'thread-1',
-      input: [{ type: 'text', text: 'ping' }]
+      input: [{ type: 'text', text: 'ping', textElements: [] }]
     })
   })
 
@@ -467,7 +467,7 @@ describe('useDasclawAssistantRuntime', () => {
 
   it('maps app-server reasoning and agent text notifications to assistant-ui parts', async () => {
     requestMock.mockImplementation(async (method: string) => {
-      if (method === 'thread/start') return { threadId: 'thread-1' }
+      if (method === 'thread/start') return { thread: { id: 'thread-1' } }
       if (method === 'turn/start') {
         queueMicrotask(() => {
           notificationListener?.({
@@ -496,12 +496,11 @@ describe('useDasclawAssistantRuntime', () => {
             method: 'turn/completed',
             params: {
               threadId: 'thread-1',
-              turnId: 'turn-1',
-              output: 'final answer'
+              turn: completedTurn('turn-1', 'final answer')
             }
           })
         })
-        return { turnId: 'turn-1' }
+        return { turn: inProgressTurn('turn-1') }
       }
       throw new Error(`unexpected method ${method}`)
     })
@@ -532,7 +531,7 @@ describe('useDasclawAssistantRuntime', () => {
 
   it('updates the pending assistant message before turn completion arrives', async () => {
     requestMock.mockImplementation(async (method: string) => {
-      if (method === 'thread/start') return { threadId: 'thread-1' }
+      if (method === 'thread/start') return { thread: { id: 'thread-1' } }
       if (method === 'turn/start') {
         queueMicrotask(() => {
           notificationListener?.({
@@ -546,7 +545,7 @@ describe('useDasclawAssistantRuntime', () => {
             }
           })
         })
-        return { turnId: 'turn-1' }
+        return { turn: inProgressTurn('turn-1') }
       }
       throw new Error(`unexpected method ${method}`)
     })
@@ -580,11 +579,34 @@ describe('useDasclawAssistantRuntime', () => {
         method: 'turn/completed',
         params: {
           threadId: 'thread-1',
-          turnId: 'turn-1',
-          output: 'streamed'
+          turn: completedTurn('turn-1', 'streamed')
         }
       })
       await run
     })
   })
 })
+
+function inProgressTurn(id: string): Record<string, unknown> {
+  return {
+    id,
+    items: [],
+    status: 'inProgress',
+    error: null,
+    startedAt: null,
+    completedAt: null,
+    durationMs: null
+  }
+}
+
+function completedTurn(id: string, text = ''): Record<string, unknown> {
+  return {
+    id,
+    items: text ? [{ type: 'agentMessage', id, text }] : [],
+    status: 'completed',
+    error: null,
+    startedAt: null,
+    completedAt: null,
+    durationMs: null
+  }
+}

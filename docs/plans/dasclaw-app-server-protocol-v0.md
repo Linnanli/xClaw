@@ -1,7 +1,7 @@
 # Dasclaw App Server Protocol v0
 
-> 状态：更新至 Phase 1.6 runtime bridge / Codex v2 lifecycle compatibility / sidecar diagnostics / legacy desktop chat adapter removal
-> 日期：2026-06-09
+> 状态：更新至 native v2-shaped chat-session protocol consolidation / runtime bridge / sidecar diagnostics / legacy desktop chat adapter removal
+> 日期：2026-06-19
 > 目标：定义 Electron / open-cowork shell 可消费的第一版 dasclaw app-server method、event、capability schema。
 
 ## 0. Design constraints
@@ -15,6 +15,8 @@
 | 优先兼容 Codex app-server v2 | open-cowork 后续客户端基座会消费 Codex app-server 能力，因此 dasclaw app-server 后续 contract 应先对齐 Codex v2 Thread / Turn / Item 原语，再保留必要的 dasclaw runtime 适配 |
 | capability matrix 一等公民 | `initialize` 必须返回能力矩阵，GUI 不能猜后端能力 |
 | failure is explicit | degraded、failed、version_mismatch、policy_unavailable 等状态必须结构化 |
+
+Dasclaw app-server exposes one native protocol. For the implemented chat-session surface, that native protocol intentionally uses Codex app-server v2-shaped method names, event names, and payload fields where Dasclaw can support the semantics truthfully. The compatibility profile is descriptive metadata for this subset; it is not a second wire layer and does not add aliases.
 
 ### 0.1 Codex app-server v2 compatibility finding (2026-06-08)
 
@@ -30,11 +32,11 @@ Compatibility implication:
 
 | Area | Current dasclaw v0 | Codex app-server v2 reference | Next direction |
 |---|---|---|---|
-| Thread creation | `thread/create` + `thread/created` | `thread/start` + `thread/started` | Add a compatibility decision/test slice before new client work; prefer Codex method names for new client-facing APIs, keep current v0 helpers only as transitional aliases if needed. |
-| Turn cancellation | `turn/cancel` + `turn/cancelled` | `turn/interrupt` returns `{}` while dasclaw keeps internal cancellation status as `cancelled` | Compatibility mapping implemented for the chat-session subset; richer interrupted status can wait until the runtime distinguishes interrupt from cancel. |
-| Streaming text | `turn/delta` | `item/agentMessage/delta` with `item/started` / `item/completed` | Promote item-level events for new client compatibility; keep `turn/delta` as legacy smoke/diagnostic bridge until consumers move. |
-| Terminal event | `turn/completed` / `turn/failed` / `turn/cancelled` | `turn/completed` with `Turn.status` and optional error | Collapse terminal variants behind Codex-style turn status for compatibility fixtures, while preserving explicit internal runtime updates. |
-| Initialize handshake | `initialize` request; Codex v2 profile additionally emits `notifications/initialized` | `initialize` request followed by `notifications/initialized` client notification | Implemented for the chat-session subset when `codex_app_server_v2` is requested; legacy initialization keeps the existing lifecycle/capability notifications only. |
+| Thread creation | `thread/start` + `thread/started` | `thread/start` + `thread/started` | Public chat-session creation uses the v2-shaped native name and nested `thread` response. Legacy `thread/create` is intentionally unsupported on the public surface. |
+| Turn cancellation | `turn/interrupt` returns `{}` and terminal state is represented through `turn/completed.turn.status="interrupted"` | `turn/interrupt` returns `{}` | Public cancellation uses the v2-shaped interrupt request. Legacy `turn/cancel` is intentionally unsupported on the public surface. |
+| Streaming text | `item/agentMessage/delta` with `item/started` / `item/completed` | `item/agentMessage/delta` with `item/started` / `item/completed` | Item-level events are the native text stream. Legacy `turn/delta` is historical only. |
+| Terminal event | `turn/completed` with nested `Turn.status` and optional `Turn.error` | `turn/completed` with `Turn.status` and optional error | Success, failure, and interrupt all converge on `turn/completed { threadId, turn }`. Legacy `turn/failed` / `turn/cancelled` are historical only. |
+| Initialize handshake | `initialize` request returns descriptive `codex_app_server_v2_chat_session_subset` metadata and emits `notifications/initialized` | `initialize` request followed by `notifications/initialized` client notification | The profile describes the native chat-session subset; it does not enable a separate compatibility wire layer. |
 | Schema discipline | `protocol/schema` custom discovery | generated TypeScript/JSON Schema from typed protocol | Future compatibility work should add generated fixture or golden schema tests instead of inventing UI-only shape. |
 
 Non-goals preserved: DLP, jobs, skills, MCP, sandbox, approval orchestration, and tool-call UI contract are still not migrated in this stage.
@@ -67,13 +69,13 @@ For the future open-cowork client path, protocol confidence should come from app
 
 | Test family | Required coverage |
 |---|---|
-| Session/turn lifecycle | current v0 `initialize`, `thread/create`, `turn/start`, `turn/cancel`, `shutdown`; compatibility slice covers Codex-style `thread/start`, `thread/read`, `turn/start` string `input`, and `turn/interrupt` |
-| Streaming | response-time notifications plus delayed post-response `turn/delta` and terminal turn notifications; compatibility slice covers `notifications/initialized`, `thread/started`, `item/started`, `item/agentMessage/delta`, `item/completed`, `turn/completed`, bounded notification queues, and overflow signaling |
+| Session/turn lifecycle | native `initialize`, `thread/start`, `thread/list`, `thread/read`, `thread/turns/list`, `turn/start`, `turn/interrupt`, `turn/read`, `shutdown`; legacy smoke aliases are not part of the public chat-session contract |
+| Streaming | response-time notifications plus delayed post-response item-level deltas and nested terminal turn notifications; coverage includes `notifications/initialized`, `thread/started`, `item/started`, `item/agentMessage/delta`, `item/completed`, `turn/completed`, bounded notification queues, and overflow signaling |
 | Runtime bridge | fake/test runtime bridge emits completed, failed, cancelled, and multi-delta turns |
 | Transport | in-process and line-delimited stdio clients, unexpected response ids, JSON-RPC errors, protocol errors, timeouts |
 | Supervisor boundary | lifecycle restart/backoff covers sidecar health; no desktop chat command replay or UI-stream bridge is part of the compatibility surface |
 
-Current coverage note: the direct app-server JSON-RPC integration slice now covers multi-delta completion, runtime failure, pending-turn cancellation, Codex v2 `notifications/initialized`, item-level streaming, and queue overflow signaling. The line-delimited client also covers response-first `turn/completed`, `turn/failed`, and `turn/cancelled` typed notifications. Remaining protocol-first work should expand Codex app-server compatibility coverage rather than deepening the legacy desktop UI adapter.
+Current coverage note: the direct app-server JSON-RPC integration slice now covers multi-delta completion, runtime failure, pending-turn interruption, `notifications/initialized`, item-level streaming, and queue overflow signaling. The line-delimited client also covers response-first nested `turn/completed` typed notifications for completed, failed, and interrupted turns. Remaining protocol-first work should expand truthful Codex app-server capability coverage rather than deepening historical smoke names.
 
 JSON-RPC envelope 使用稳定字段：
 
@@ -212,7 +214,7 @@ Phase 1 default matrix:
 | `lifecycle` | implemented | `lifecycle/status`、`shutdown` | `lifecycle/changed` |
 | `health` | implemented | `health/check`、`capabilities/list` | `health/changed`、`capabilities/changed` |
 | `logs` | declared | none | `log/entry` |
-| `session` | implemented | `thread/create`、`thread/start`、`thread/list`、`thread/read`、`turn/start`、`turn/cancel`、`turn/interrupt`、`turn/list`、`turn/read` | `thread/created`、`thread/started`、`turn/started`、`turn/delta`、`turn/completed`、`turn/failed`、`turn/cancelled`、`item/started`、`item/agentMessage/delta`、`item/completed`、`error` |
+| `session` | implemented | `thread/start`、`thread/list`、`thread/read`、`thread/turns/list`、`turn/start`、`turn/interrupt`、`turn/read` | `thread/started`、`turn/started`、`turn/completed`、`item/started`、`item/agentMessage/delta`、`item/reasoning/summaryTextDelta`、`item/reasoning/summaryPartAdded`、`item/reasoning/textDelta`、`item/completed`、`error` |
 | `approval` | declared | none | none |
 | `dlpPolicy` | declared | none | none |
 | `modelProvider` | declared | none | none |
@@ -253,7 +255,7 @@ type InitializeResponse = {
 };
 
 type CompatibilityProfile = {
-  id: "codex_app_server_v2" | string;
+  id: "codex_app_server_v2_chat_session_subset" | string;
   version: string;
   scope: "chat_session_subset";
   description: string;
@@ -429,27 +431,34 @@ Shutdown rule:
 | running operation | request cancellation first; Phase 1 may reject with `OPERATION_IN_PROGRESS` |
 | awaiting approval | default deny/cancel before shutdown in later approval slice |
 
-### 5.7 `thread/create` skeleton
+### 5.7 `thread/start` skeleton
 
 ```ts
-type ThreadCreateParams = {
-  title?: string;
-  workspaceRoot?: string;
+type ThreadStartParams = {
+  cwd?: string;
 };
 
-type ThreadCreateResponse = {
-  threadId: string;
-  lifecycle: LifecycleSnapshot;
+type ThreadStartResponse = {
+  thread: {
+    id: string;
+    status: "inProgress" | "completed" | "failed" | "interrupted";
+    createdAt: string;
+    updatedAt: string;
+  };
+  model: string;
+  modelProvider: string;
+  cwd: string;
 };
 ```
 
-Phase 1.6 behavior: after `initialize`, app-server creates an in-memory thread id and emits legacy `thread/created`. When the Codex v2 compatibility profile is requested, the same creation also emits `thread/started`; before `initialize`, it returns `NOT_INITIALIZED` with `retryable=true`. The session capability is now `implemented`; thread creation itself does not require a runtime adapter.
+Current behavior: after `initialize`, app-server creates an in-memory thread id and emits `thread/started` with nested `thread`. The response does not expose response-level `threadId`; consumers must read `result.thread.id`. The response also includes truthful `model`, `modelProvider`, and `cwd` metadata derived from selected model-provider state. Before `initialize`, it returns `NOT_INITIALIZED` with `retryable=true`; if no model provider has been selected, it returns a fail-safe error instead of inventing provider metadata.
 
 ### 5.8 `thread/list` skeleton
 
 ```ts
 type ThreadSummary = {
-  threadId: string;
+  id: string;
+  status: "inProgress" | "completed" | "failed" | "interrupted";
   title?: string;
   workspaceRoot?: string;
 };
@@ -480,67 +489,62 @@ Phase 1.5 behavior: after `initialize`, app-server returns the in-memory thread 
 ```ts
 type TurnStartParams = {
   threadId: string;
-  // Legacy dasclaw shape. Still accepted for v0 smoke/client helpers.
-  prompt?: string;
-  // Codex v2 compatibility alias for the minimal chat subset.
-  // This slice accepts string input only; rich input items, attachments,
+  // This slice accepts text input only; rich input items, attachments,
   // approvals, tool calls, MCP, skills, DLP, jobs, and sandbox remain out of scope.
-  input?: string;
+  input: Array<{
+    type: "text";
+    text: string;
+    textElements?: unknown[];
+  }>;
 };
 
 type TurnStartResponse = {
-  turnId: string;
-  status: "pending" | "completed" | "failed" | "cancelled";
-  lifecycle: LifecycleSnapshot;
+  turn: {
+    id: string;
+    threadId: string;
+    status: "inProgress" | "completed" | "failed" | "interrupted";
+    items: ThreadItem[];
+    error?: { message: string };
+  };
 };
 ```
 
-Phase 1.6 behavior: app-server first enforces `initialize` and validates that `threadId` exists. If both pass, it allocates a pending turn, invokes `RuntimeBridge::start_turn`, and emits `turn/started`. The immediate response remains `pending`; streamed `turn/delta`, `turn/completed`, and `turn/failed` notifications are delivered asynchronously as runtime updates arrive. The stdio loop drains same-round-trip notifications before the matching response and continues draining runtime notifications after the response while the transport remains alive or is in its EOF/idle drain window.
+Current behavior: app-server first enforces `initialize` and validates that `threadId` exists. If both pass, it allocates an in-progress turn, invokes `RuntimeBridge::start_turn`, emits `turn/started`, and returns a nested `turn` object. The response does not expose response-level `turnId`; consumers must read `result.turn.id`. Streamed item notifications and the terminal `turn/completed` notification are delivered asynchronously as runtime updates arrive. The stdio loop drains same-round-trip notifications before the matching response and continues draining runtime notifications after the response while the transport remains alive or is in its EOF/idle drain window.
 
-Codex v2 compatibility behavior: `turn/start` accepts a string `input` alias and normalizes it to the same runtime prompt boundary as `prompt`. If both `prompt` and `input` are present they must match, so the server does not silently choose one conflicting client contract over another.
-
-### 5.11 `turn/cancel` skeleton
+### 5.11 `turn/interrupt` skeleton
 
 ```ts
-type TurnCancelParams = {
+type TurnInterruptParams = {
   threadId: string;
   turnId: string;
-};
-
-type TurnCancelResponse = {
-  accepted: boolean;
-  status: "pending" | "completed" | "failed" | "cancelled";
-  lifecycle: LifecycleSnapshot;
 };
 
 type TurnInterruptResponse = {};
 ```
 
-Phase 1.6 behavior: app-server first enforces `initialize`, validates that `threadId` exists, drains pending runtime updates, and routes cancellation through `RuntimeBridge::cancel_turn`. Known non-terminal turns are marked `cancelled` and emit `turn/cancelled`; unknown turns return `INVALID_PARAMS`, and already terminal turns are rejected as invalid requests.
+Current behavior: app-server first enforces `initialize`, validates that `threadId` exists, drains pending runtime updates, and routes interruption through `RuntimeBridge::cancel_turn`. Known non-terminal turns are marked `interrupted` and the terminal notification stream remains explicit through `item/completed` and `turn/completed`; unknown turns return `INVALID_PARAMS`, and already terminal turns are rejected as invalid requests.
 
-Codex v2 compatibility behavior: `turn/interrupt` uses the same fail-safe runtime cancellation path as `turn/cancel`, but returns an empty `{}` result to match the Codex-style request/response surface consumed by new clients. The terminal notification stream remains explicit through `item/completed` and `turn/cancelled`; dasclaw does not claim a separate `interrupted` runtime status until the underlying runtime models it distinctly.
-
-### 5.12 `turn/list` skeleton
+### 5.12 `thread/turns/list` skeleton
 
 ```ts
 type TurnSummary = {
   threadId: string;
-  turnId: string;
-  status: "pending" | "completed" | "failed" | "cancelled";
+  id: string;
+  status: "inProgress" | "completed" | "failed" | "interrupted";
   output?: string;
   error?: string;
 };
 
-type TurnListParams = {
+type ThreadTurnsListParams = {
   threadId: string;
 };
 
-type TurnListResponse = {
+type ThreadTurnsListResponse = {
   turns: TurnSummary[];
 };
 ```
 
-Phase 1.6 behavior: after `initialize`, app-server validates `threadId`, drains pending runtime updates, and returns turn summaries for that thread. Unknown threads return `INVALID_PARAMS`. Prompt history is not exposed; completed/failed turns may include output or error strings populated by the runtime bridge.
+Current behavior: after `initialize`, app-server validates `threadId`, drains pending runtime updates, and returns turn summaries for that thread. Unknown threads return `INVALID_PARAMS`. Prompt history is not exposed; completed/failed/interrupted turns may include items or error details populated by the runtime bridge.
 
 ### 5.13 `turn/read` skeleton
 
@@ -555,7 +559,7 @@ type TurnReadResponse = {
 };
 ```
 
-Phase 1.6 behavior: after `initialize`, app-server validates `threadId`, drains pending runtime updates, and returns one turn summary. Unknown turns return `INVALID_PARAMS`. Runtime execution output is exposed only as `output` / `error` fields on completed or failed turns; raw prompt history is not returned.
+Current behavior: after `initialize`, app-server validates `threadId`, drains pending runtime updates, and returns one nested turn summary. Unknown turns return `INVALID_PARAMS`. Runtime execution output is exposed through turn items and optional error details; raw prompt history is not returned.
 
 ## 6. Events v0
 
@@ -570,7 +574,7 @@ type NotificationsInitializedEvent = {
 };
 ```
 
-Codex v2 compatibility behavior: emitted after `capabilities/changed` only when the client requested `codex_app_server_v2`. The profile advertises the current chat-session subset, explicit Phase 1 opt-outs, and the bounded notification queue policy. On queue overflow, the server clears pending notifications and emits a single `error` notification with `NOTIFICATION_QUEUE_OVERFLOW` and `retryable=true`; stdio clients should treat this as a lag-disconnect signal and reconnect.
+Codex v2 compatibility behavior: emitted after `capabilities/changed` when the client requests `codex_app_server_v2_chat_session_subset`. The profile advertises the current chat-session subset, explicit Phase 1 opt-outs, and the bounded notification queue policy. On queue overflow, the server clears pending notifications and emits a single `error` notification with `NOTIFICATION_QUEUE_OVERFLOW` and `retryable=true`; stdio clients should treat this as a lag-disconnect signal and reconnect.
 
 ### 6.2 `lifecycle/changed`
 
@@ -618,44 +622,49 @@ Log rule: no raw secrets, no raw user prompt, no raw policy payload.
 ### 6.6 Session skeleton events
 
 ```ts
-type ThreadCreatedEvent = {
-  threadId: string;
+type ThreadStartedEvent = {
+  thread: {
+    id: string;
+    status: "inProgress" | "completed" | "failed" | "interrupted";
+  };
 };
 
 type TurnStartedEvent = {
   threadId: string;
-  turnId: string;
-  status: "pending" | "completed" | "failed" | "cancelled";
+  turn: {
+    id: string;
+    threadId: string;
+    status: "inProgress" | "completed" | "failed" | "interrupted";
+    items: ThreadItem[];
+  };
 };
 
-type TurnDeltaEvent = {
+type ItemAgentMessageDeltaEvent = {
   threadId: string;
   turnId: string;
+  itemId: string;
   delta: string;
+};
+
+type ItemCompletedEvent = {
+  threadId: string;
+  turnId: string;
+  item: ThreadItem;
 };
 
 type TurnCompletedEvent = {
   threadId: string;
-  turnId: string;
-  status: "pending" | "completed" | "failed" | "cancelled";
-  output: string;
-};
-
-type TurnFailedEvent = {
-  threadId: string;
-  turnId: string;
-  status: "pending" | "completed" | "failed" | "cancelled";
-  error: string;
-};
-
-type TurnCancelledEvent = {
-  threadId: string;
-  turnId: string;
-  status: "pending" | "completed" | "failed" | "cancelled";
+  turn: {
+    id: string;
+    threadId: string;
+    status: "completed" | "failed" | "interrupted";
+    items: ThreadItem[];
+    error?: { message: string };
+  };
 };
 ```
 
-Phase 1.6 behavior: app-server emits `thread/created` for legacy in-memory thread creation, `thread/started` when the Codex v2 compatibility profile is active, `turn/started` when a runtime-backed turn begins, `turn/delta` for streamed text chunks, `turn/completed` or `turn/failed` for terminal outcomes, and `turn/cancelled` for cancellation. Codex item-level compatibility adds `item/started`, `item/agentMessage/delta`, `item/completed`, and `error` where applicable. These events reflect the app-server host boundary; they still do not imply DLP, approval, jobs, MCP, or sandbox migration.
+Current behavior: app-server emits the v2-shaped native chat-session events `thread/started`, `turn/started`, `item/started`, item delta events, `item/completed`, and `turn/completed` with nested `turn`. Completed, failed, and interrupted turns are distinguished by `turn.status` and optional `turn.error`. Historical smoke-surface event names (`thread/created`, `turn/delta`, `turn/failed`, `turn/cancelled`) are intentionally unsupported in the current public contract. These events reflect the app-server host boundary; they still do not imply DLP, approval, jobs, MCP, or sandbox migration.
 
 ## 7. Error schema
 
@@ -710,7 +719,7 @@ These are intentionally out of Phase 1 implementation but reserved in the capabi
 
 | Area | Future methods/events |
 |---|---|
-| session/thread | Codex-compatible `thread/start`、`thread/resume`、`thread/read`、`thread/turns/list` plus transitional v0 aliases where needed |
+| session/thread | Native v2-shaped `thread/start`、`thread/resume`、`thread/read`、`thread/turns/list` |
 | approval | `approval/respond`、`approval/requested`、`approval/resolved` |
 | chat stream | `thread/started`、`item/started`、`item/agentMessage/delta`、`item/completed`、`turn/completed` |
 | tools | Codex-compatible `item/commandExecution/*` / tool-call item events when tool UI migration starts |

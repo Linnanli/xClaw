@@ -12,8 +12,7 @@ describe('createAppServerTurnTracker', () => {
       method: 'turn/completed',
       params: {
         threadId: 'thread-1',
-        turnId: 'turn-1',
-        output: 'pong'
+        turn: completedTurn('turn-1', 'pong')
       }
     })
 
@@ -33,7 +32,7 @@ describe('createAppServerTurnTracker', () => {
       method: 'turn/completed',
       params: {
         threadId: 'thread-1',
-        turn: { id: 'turn-1' }
+        turn: completedTurn('turn-1')
       }
     })
 
@@ -73,8 +72,7 @@ describe('createAppServerTurnTracker', () => {
       method: 'turn/completed',
       params: {
         threadId: 'thread-1',
-        turnId: 'turn-1',
-        output: 'final answer'
+        turn: completedTurn('turn-1', 'final answer')
       }
     })
 
@@ -108,8 +106,7 @@ describe('createAppServerTurnTracker', () => {
       method: 'turn/completed',
       params: {
         threadId: 'thread-1',
-        turnId: 'turn-1',
-        output: '<think>backend bug</think>visible'
+        turn: completedTurn('turn-1', '<think>backend bug</think>visible')
       }
     })
 
@@ -159,8 +156,7 @@ describe('createAppServerTurnTracker', () => {
       method: 'turn/completed',
       params: {
         threadId: 'thread-1',
-        turnId: 'turn-1',
-        output: ''
+        turn: completedTurn('turn-1')
       }
     })
 
@@ -202,8 +198,7 @@ describe('createAppServerTurnTracker', () => {
       method: 'turn/completed',
       params: {
         threadId: 'thread-1',
-        turnId: 'turn-1',
-        output: 'visible'
+        turn: completedTurn('turn-1', 'visible')
       }
     })
 
@@ -223,8 +218,7 @@ describe('createAppServerTurnTracker', () => {
       method: 'turn/completed',
       params: {
         threadId: 'thread-1',
-        turnId: 'turn-1',
-        output: 'pong'
+        turn: completedTurn('turn-1', 'pong')
       }
     })
 
@@ -235,40 +229,35 @@ describe('createAppServerTurnTracker', () => {
     })
   })
 
-  it('rejects waiting turns when the app-server reports failure', async () => {
+  it('rejects waiting turns when completed turn notifications include an error message', async () => {
     const tracker = createAppServerTurnTracker()
     const completion = tracker.waitForTurnCompletion('turn-1')
 
     tracker.handleNotification({
       hostId: 'local',
-      method: 'turn/failed',
+      method: 'turn/completed',
       params: {
         threadId: 'thread-1',
-        turnId: 'turn-1',
-        error: 'tool failed'
+        turn: failedTurn('turn-1', 'tool failed')
       }
     })
 
     await expect(completion).rejects.toThrow('tool failed')
   })
 
-  it('rejects waiting turns when Codex nested failure notifications include an error message', async () => {
+  it('keeps early failure notifications until the renderer waits for that turn', async () => {
     const tracker = createAppServerTurnTracker()
-    const completion = tracker.waitForTurnCompletion('turn-1')
 
     tracker.handleNotification({
       hostId: 'local',
-      method: 'turn/failed',
+      method: 'turn/completed',
       params: {
         threadId: 'thread-1',
-        turn: {
-          id: 'turn-1',
-          error: { message: 'tool failed' }
-        }
+        turn: failedTurn('turn-1', 'tool failed')
       }
     })
 
-    await expect(completion).rejects.toThrow('tool failed')
+    await expect(tracker.waitForTurnCompletion('turn-1')).rejects.toThrow('tool failed')
   })
 
   it('times out when no terminal notification arrives', async () => {
@@ -283,3 +272,31 @@ describe('createAppServerTurnTracker', () => {
     vi.useRealTimers()
   })
 })
+
+function completedTurn(id: string, text = ''): Record<string, unknown> {
+  return {
+    id,
+    items: text ? [{ type: 'agentMessage', id, text }] : [],
+    status: 'completed',
+    error: null,
+    startedAt: null,
+    completedAt: null,
+    durationMs: null
+  }
+}
+
+function failedTurn(id: string, message: string): Record<string, unknown> {
+  return {
+    id,
+    items: [],
+    status: 'failed',
+    error: {
+      message,
+      codexErrorInfo: null,
+      additionalDetails: null
+    },
+    startedAt: null,
+    completedAt: null,
+    durationMs: null
+  }
+}
