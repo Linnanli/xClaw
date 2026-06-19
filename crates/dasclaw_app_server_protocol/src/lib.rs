@@ -6,7 +6,6 @@
 
 use std::fmt;
 
-use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL_MAJOR: u16 = 0;
@@ -21,14 +20,12 @@ pub mod method {
     pub const CAPABILITIES_LIST: &str = "capabilities/list";
     pub const LIFECYCLE_STATUS: &str = "lifecycle/status";
     pub const SHUTDOWN: &str = "shutdown";
-    pub const THREAD_CREATE: &str = "thread/create";
     pub const THREAD_START: &str = "thread/start";
     pub const THREAD_LIST: &str = "thread/list";
     pub const THREAD_READ: &str = "thread/read";
+    pub const THREAD_TURNS_LIST: &str = "thread/turns/list";
     pub const TURN_START: &str = "turn/start";
-    pub const TURN_CANCEL: &str = "turn/cancel";
     pub const TURN_INTERRUPT: &str = "turn/interrupt";
-    pub const TURN_LIST: &str = "turn/list";
     pub const TURN_READ: &str = "turn/read";
     pub const MODEL_LIST: &str = "model/list";
     pub const MODEL_PROVIDER_SELECT_FOR_NEXT_TURN: &str = "modelProvider/selectForNextTurn";
@@ -50,19 +47,19 @@ pub mod event {
     pub const HEALTH_CHANGED: &str = "health/changed";
     pub const CAPABILITIES_CHANGED: &str = "capabilities/changed";
     pub const LOG_ENTRY: &str = "log/entry";
-    pub const THREAD_CREATED: &str = "thread/created";
     pub const THREAD_STARTED: &str = "thread/started";
     pub const TURN_STARTED: &str = "turn/started";
-    pub const TURN_DELTA: &str = "turn/delta";
     pub const TURN_COMPLETED: &str = "turn/completed";
-    pub const TURN_FAILED: &str = "turn/failed";
-    pub const TURN_CANCELLED: &str = "turn/cancelled";
     pub const ITEM_STARTED: &str = "item/started";
     pub const ITEM_AGENT_MESSAGE_DELTA: &str = "item/agentMessage/delta";
     pub const ITEM_REASONING_SUMMARY_TEXT_DELTA: &str = "item/reasoning/summaryTextDelta";
     pub const ITEM_REASONING_SUMMARY_PART_ADDED: &str = "item/reasoning/summaryPartAdded";
     pub const ITEM_REASONING_TEXT_DELTA: &str = "item/reasoning/textDelta";
     pub const ITEM_COMPLETED: &str = "item/completed";
+    pub const ITEM_COMMAND_EXECUTION_REQUEST_APPROVAL: &str =
+        "item/commandExecution/requestApproval";
+    pub const ITEM_COMMAND_EXECUTION_APPROVAL_SUBMITTED: &str =
+        "item/commandExecution/approvalSubmitted";
     pub const SERVER_REQUEST_RESOLVED: &str = "serverRequest/resolved";
     pub const ITEM_AUTO_APPROVAL_REVIEW_STARTED: &str = "item/autoApprovalReview/started";
     pub const ITEM_AUTO_APPROVAL_REVIEW_COMPLETED: &str = "item/autoApprovalReview/completed";
@@ -613,27 +610,23 @@ impl CapabilityMatrix {
             session: Capability::implemented(
                 "session",
                 &[
-                    method::THREAD_CREATE,
                     method::THREAD_START,
                     method::THREAD_LIST,
                     method::THREAD_READ,
+                    method::THREAD_TURNS_LIST,
                     method::TURN_START,
-                    method::TURN_CANCEL,
                     method::TURN_INTERRUPT,
-                    method::TURN_LIST,
                     method::TURN_READ,
                 ],
                 &[
-                    event::THREAD_CREATED,
                     event::THREAD_STARTED,
                     event::TURN_STARTED,
-                    event::TURN_DELTA,
                     event::TURN_COMPLETED,
-                    event::TURN_FAILED,
-                    event::TURN_CANCELLED,
                     event::ITEM_STARTED,
                     event::ITEM_AGENT_MESSAGE_DELTA,
                     event::ITEM_REASONING_SUMMARY_TEXT_DELTA,
+                    event::ITEM_REASONING_SUMMARY_PART_ADDED,
+                    event::ITEM_REASONING_TEXT_DELTA,
                     event::ITEM_COMPLETED,
                     event::ERROR,
                 ],
@@ -711,7 +704,9 @@ impl ProtocolSchemaResponse {
             methods: phase_one_methods(),
             events: phase_one_events(),
             capabilities,
-            compatibility_profiles: vec![CompatibilityProfile::codex_app_server_v2()],
+            compatibility_profiles: vec![
+                CompatibilityProfile::codex_app_server_v2_chat_session_subset(),
+            ],
         }
     }
 }
@@ -732,49 +727,35 @@ pub struct CompatibilityProfile {
 }
 
 impl CompatibilityProfile {
-    pub const CODEX_APP_SERVER_V2_ID: &'static str = "codex_app_server_v2";
+    pub const CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_ID: &'static str =
+        "codex_app_server_v2_chat_session_subset";
 
     #[must_use]
-    pub fn codex_app_server_v2() -> Self {
+    pub fn codex_app_server_v2_chat_session_subset() -> Self {
         Self {
-            id: Self::CODEX_APP_SERVER_V2_ID.to_string(),
-            version: "2.0.0-compat".to_string(),
+            id: Self::CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_ID.to_string(),
+            version: "2.0.0-chat-session-subset".to_string(),
             scope: CompatibilityProfileScope::ChatSessionSubset,
-            description: "Codex app-server v2 compatibility profile for initialize/thread/turn chat session streaming only".to_string(),
+            description: "Dasclaw native app-server protocol shaped as a truthful Codex app-server v2 chat-session subset".to_string(),
             methods: vec![
                 method::INITIALIZE.to_string(),
                 method::THREAD_START.to_string(),
                 method::THREAD_READ.to_string(),
                 method::THREAD_LIST.to_string(),
+                method::THREAD_TURNS_LIST.to_string(),
                 method::TURN_START.to_string(),
                 method::TURN_INTERRUPT.to_string(),
+                method::TURN_READ.to_string(),
                 method::MODEL_LIST.to_string(),
             ],
-            events: CODEX_APP_SERVER_V2_EVENTS
+            events: CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_EVENTS
                 .iter()
                 .map(|event| (*event).to_string())
                 .collect(),
-            aliases: vec![
-                CompatibilityAlias::new(
-                    method::THREAD_CREATE,
-                    method::THREAD_START,
-                    CompatibilityAliasKind::LegacySmokeSurface,
-                ),
-                CompatibilityAlias::new(
-                    method::TURN_CANCEL,
-                    method::TURN_INTERRUPT,
-                    CompatibilityAliasKind::Alias,
-                ),
-                CompatibilityAlias::new(
-                    event::TURN_DELTA,
-                    event::ITEM_AGENT_MESSAGE_DELTA,
-                    CompatibilityAliasKind::LegacySmokeSurface,
-                ),
-            ],
+            aliases: Vec::new(),
             capability_opt_outs: vec![
                 CapabilityOptOut::phase_one("codex.rich_input"),
                 CapabilityOptOut::phase_one("codex.tool_calls"),
-                CapabilityOptOut::phase_one("codex.approvals"),
                 CapabilityOptOut::phase_one("codex.diff"),
                 CapabilityOptOut::phase_one("codex.plan"),
                 CapabilityOptOut::phase_one("tools"),
@@ -783,23 +764,24 @@ impl CompatibilityProfile {
                 CapabilityOptOut::phase_one("dlp_policy"),
                 CapabilityOptOut::phase_one("jobs"),
                 CapabilityOptOut::phase_one("sandbox"),
+                CapabilityOptOut::phase_one("thread.fork"),
+                CapabilityOptOut::phase_one("thread.archive"),
+                CapabilityOptOut::phase_one("thread.resume"),
+                CapabilityOptOut::phase_one("thread.compact"),
+                CapabilityOptOut::phase_one("thread.rollback"),
             ],
             event_queue: NotificationQueuePolicy::bounded_lag_disconnect(),
         }
     }
 }
 
-const CODEX_APP_SERVER_V2_EVENTS: &[&str] = &[
+const CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_EVENTS: &[&str] = &[
     event::NOTIFICATIONS_INITIALIZED,
     event::LIFECYCLE_CHANGED,
     event::CAPABILITIES_CHANGED,
-    event::THREAD_CREATED,
     event::THREAD_STARTED,
     event::TURN_STARTED,
-    event::TURN_DELTA,
     event::TURN_COMPLETED,
-    event::TURN_FAILED,
-    event::TURN_CANCELLED,
     event::ITEM_STARTED,
     event::ITEM_AGENT_MESSAGE_DELTA,
     event::ITEM_REASONING_SUMMARY_TEXT_DELTA,
@@ -821,16 +803,6 @@ pub struct CompatibilityAlias {
     pub legacy: String,
     pub compatible: String,
     pub kind: CompatibilityAliasKind,
-}
-
-impl CompatibilityAlias {
-    fn new(legacy: &'static str, compatible: &'static str, kind: CompatibilityAliasKind) -> Self {
-        Self {
-            legacy: legacy.to_string(),
-            compatible: compatible.to_string(),
-            kind,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -974,23 +946,16 @@ fn phase_one_methods() -> Vec<MethodSchema> {
             false,
         ),
         MethodSchema::new(
-            method::THREAD_CREATE,
-            "session",
-            Some("ThreadCreateParams"),
-            "ThreadCreateResponse",
-            true,
-        ),
-        MethodSchema::new(
             method::THREAD_START,
             "session",
-            Some("ThreadCreateParams"),
+            Some("ThreadStartParams"),
             "ThreadStartResponse",
             true,
         ),
         MethodSchema::new(
             method::THREAD_LIST,
             "session",
-            None,
+            Some("ThreadListParams"),
             "ThreadListResponse",
             true,
         ),
@@ -1009,24 +974,17 @@ fn phase_one_methods() -> Vec<MethodSchema> {
             true,
         ),
         MethodSchema::new(
-            method::TURN_CANCEL,
-            "session",
-            Some("TurnCancelParams"),
-            "TurnCancelResponse",
-            true,
-        ),
-        MethodSchema::new(
             method::TURN_INTERRUPT,
             "session",
-            Some("TurnCancelParams"),
+            Some("TurnInterruptParams"),
             "TurnInterruptResponse",
             true,
         ),
         MethodSchema::new(
-            method::TURN_LIST,
+            method::THREAD_TURNS_LIST,
             "session",
-            Some("TurnListParams"),
-            "TurnListResponse",
+            Some("ThreadTurnsListParams"),
+            "ThreadTurnsListResponse",
             true,
         ),
         MethodSchema::new(
@@ -1079,13 +1037,9 @@ fn phase_one_events() -> Vec<EventSchema> {
             "CapabilitiesChangedEvent",
         ),
         EventSchema::new(event::LOG_ENTRY, "logs", "LogEntryEvent"),
-        EventSchema::new(event::THREAD_CREATED, "session", "ThreadCreatedEvent"),
         EventSchema::new(event::THREAD_STARTED, "session", "ThreadStartedEvent"),
         EventSchema::new(event::TURN_STARTED, "session", "TurnStartedEvent"),
-        EventSchema::new(event::TURN_DELTA, "session", "TurnDeltaEvent"),
         EventSchema::new(event::TURN_COMPLETED, "session", "TurnCompletedEvent"),
-        EventSchema::new(event::TURN_FAILED, "session", "TurnFailedEvent"),
-        EventSchema::new(event::TURN_CANCELLED, "session", "TurnCancelledEvent"),
         EventSchema::new(event::ITEM_STARTED, "session", "ItemStartedEvent"),
         EventSchema::new(
             event::ITEM_AGENT_MESSAGE_DELTA,
@@ -1230,43 +1184,46 @@ pub struct CapabilitiesListResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ThreadCreateParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workspace_root: Option<String>,
+pub struct ThreadStartParams {
+    pub cwd: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ThreadCreateResponse {
-    pub thread_id: String,
-    pub lifecycle: LifecycleSnapshot,
+impl Default for ThreadStartParams {
+    fn default() -> Self {
+        Self { cwd: None }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadStartResponse {
-    pub thread_id: String,
-    pub lifecycle: LifecycleSnapshot,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thread: Option<CodexThread>,
+    pub thread: CodexThread,
+    pub model: String,
+    pub model_provider: String,
+    pub cwd: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ThreadSummary {
-    pub thread_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workspace_root: Option<String>,
+pub enum SortDirection {
+    Asc,
+    Desc,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadListParams {
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
+    pub sort_direction: Option<SortDirection>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadListResponse {
-    pub threads: Vec<ThreadSummary>,
+    pub data: Vec<CodexThread>,
+    pub next_cursor: Option<String>,
+    pub backwards_cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1278,121 +1235,44 @@ pub struct ThreadReadParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadReadResponse {
-    pub thread: ThreadSummary,
+    pub thread: CodexThread,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnStartParams {
     pub thread_id: String,
-    /// Phase-one compatibility boundary: canonical Codex `input` arrays are
-    /// accepted only for text UserInput items and normalized into the legacy
-    /// prompt string consumed by the current runtime.
-    pub prompt: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning_summary: Option<String>,
+    pub input: Vec<UserInput>,
+    pub cwd: Option<String>,
+    pub model: Option<String>,
+    pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum UserInput {
+    Text {
+        text: String,
+        #[serde(default)]
+        text_elements: Vec<serde_json::Value>,
+    },
+    Image {
+        url: String,
+    },
 }
 
 impl TurnStartParams {
     #[must_use]
-    pub fn from_input(thread_id: impl Into<String>, input: impl Into<String>) -> Self {
-        Self {
-            thread_id: thread_id.into(),
-            prompt: input.into(),
-            reasoning_summary: None,
-        }
+    pub fn prompt_text(&self) -> String {
+        self.input
+            .iter()
+            .filter_map(|input| match input {
+                UserInput::Text { text, .. } => Some(text.as_str()),
+                UserInput::Image { .. } => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
-}
-
-impl<'de> Deserialize<'de> for TurnStartParams {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct RawTurnStartParams {
-            thread_id: String,
-            #[serde(default)]
-            prompt: Option<String>,
-            #[serde(default)]
-            input: Option<serde_json::Value>,
-            #[serde(default)]
-            reasoning_summary: Option<String>,
-        }
-
-        let raw = RawTurnStartParams::deserialize(deserializer)?;
-        let input_prompt = raw
-            .input
-            .map(codex_turn_input_to_prompt::<D::Error>)
-            .transpose()?;
-        let prompt = match (raw.prompt, input_prompt) {
-            (Some(prompt), Some(input)) if prompt != input => {
-                return Err(de::Error::custom(
-                    "turn/start prompt and input must match when both are provided",
-                ));
-            }
-            (Some(prompt), _) | (None, Some(prompt)) => prompt,
-            (None, None) => {
-                return Err(de::Error::missing_field("prompt or input"));
-            }
-        };
-
-        Ok(Self {
-            thread_id: raw.thread_id,
-            prompt,
-            reasoning_summary: raw.reasoning_summary,
-        })
-    }
-}
-
-fn codex_turn_input_to_prompt<E>(input: serde_json::Value) -> Result<String, E>
-where
-    E: de::Error,
-{
-    match input {
-        serde_json::Value::String(prompt) => Ok(prompt),
-        serde_json::Value::Array(items) => codex_text_only_items_to_prompt::<E>(items),
-        _ => Err(de::Error::custom(
-            "turn/start input must be a string or an array of Codex UserInput text items",
-        )),
-    }
-}
-
-fn codex_text_only_items_to_prompt<E>(items: Vec<serde_json::Value>) -> Result<String, E>
-where
-    E: de::Error,
-{
-    if items.is_empty() {
-        return Err(de::Error::custom(
-            "turn/start text-only input array must contain at least one text item",
-        ));
-    }
-
-    let mut text_parts = Vec::new();
-    for item in items {
-        let object = item.as_object().ok_or_else(|| {
-            de::Error::custom("turn/start text-only input items must be Codex UserInput objects")
-        })?;
-        let item_type = object
-            .get("type")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| de::Error::custom("turn/start text-only input item is missing type"))?;
-
-        if item_type != "text" {
-            return Err(de::Error::custom(format!(
-                "unsupported turn/start text-only input item type: {item_type}"
-            )));
-        }
-
-        let text = object
-            .get("text")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| de::Error::custom("turn/start text-only input item is missing text"))?;
-        text_parts.push(text.to_string());
-    }
-
-    Ok(text_parts.join("\n"))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1407,54 +1287,35 @@ pub enum TurnStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnStartResponse {
-    pub turn_id: String,
-    pub status: TurnStatus,
-    pub lifecycle: LifecycleSnapshot,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn: Option<CodexTurn>,
+    pub turn: CodexTurn,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TurnCancelParams {
+pub struct TurnInterruptParams {
     pub thread_id: String,
     pub turn_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TurnCancelResponse {
-    pub accepted: bool,
-    pub status: TurnStatus,
-    pub lifecycle: LifecycleSnapshot,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnInterruptResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TurnSummary {
+pub struct ThreadTurnsListParams {
     pub thread_id: String,
-    pub turn_id: String,
-    pub status: TurnStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
+    pub sort_direction: Option<SortDirection>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TurnListParams {
-    pub thread_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TurnListResponse {
-    pub turns: Vec<TurnSummary>,
+pub struct ThreadTurnsListResponse {
+    pub data: Vec<CodexTurn>,
+    pub next_cursor: Option<String>,
+    pub backwards_cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1467,7 +1328,7 @@ pub struct TurnReadParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnReadResponse {
-    pub turn: TurnSummary,
+    pub turn: CodexTurn,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1496,7 +1357,7 @@ pub struct CodexThread {
 #[serde(rename_all = "camelCase")]
 pub struct CodexTurn {
     pub id: String,
-    pub items: Vec<serde_json::Value>,
+    pub items: Vec<CodexThreadItem>,
     pub status: CodexTurnStatus,
     pub error: Option<CodexTurnError>,
     pub started_at: Option<i64>,
@@ -1515,6 +1376,39 @@ impl CodexTurn {
             started_at: None,
             completed_at: None,
             duration_ms: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum CodexThreadItem {
+    #[serde(rename_all = "camelCase")]
+    AgentMessage { id: String, text: String },
+    #[serde(rename_all = "camelCase")]
+    Reasoning {
+        id: String,
+        #[serde(default)]
+        summary: Vec<String>,
+        #[serde(default)]
+        content: Vec<String>,
+    },
+}
+
+impl CodexThreadItem {
+    #[must_use]
+    pub fn started_agent_message(id: impl Into<String>) -> Self {
+        Self::AgentMessage {
+            id: id.into(),
+            text: String::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn completed_agent_message(id: impl Into<String>, text: impl Into<String>) -> Self {
+        Self::AgentMessage {
+            id: id.into(),
+            text: text.into(),
         }
     }
 }
@@ -1652,70 +1546,22 @@ pub struct CommandExecutionTerminalInteractionEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ThreadCreatedEvent {
-    pub thread_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ThreadStartedEvent {
-    pub thread_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thread: Option<CodexThread>,
+    pub thread: CodexThread,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnStartedEvent {
     pub thread_id: String,
-    pub turn_id: String,
-    pub status: TurnStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn: Option<CodexTurn>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TurnDeltaEvent {
-    pub thread_id: String,
-    pub turn_id: String,
-    pub delta: String,
+    pub turn: CodexTurn,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnCompletedEvent {
     pub thread_id: String,
-    pub turn_id: String,
-    pub status: TurnStatus,
-    pub output: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn: Option<CodexTurn>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TurnFailedEvent {
-    pub thread_id: String,
-    pub turn_id: String,
-    pub status: TurnStatus,
-    pub error: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn: Option<CodexTurn>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TurnCancelledEvent {
-    pub thread_id: String,
-    pub turn_id: String,
-    pub status: TurnStatus,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ItemType {
-    AgentMessage,
+    pub turn: CodexTurn,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1723,8 +1569,7 @@ pub enum ItemType {
 pub struct ItemStartedEvent {
     pub thread_id: String,
     pub turn_id: String,
-    pub item_id: String,
-    pub item_type: ItemType,
+    pub item: CodexThreadItem,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1770,8 +1615,7 @@ pub struct ReasoningTextDeltaEvent {
 pub struct ItemCompletedEvent {
     pub thread_id: String,
     pub turn_id: String,
-    pub item_id: String,
-    pub status: TurnStatus,
+    pub item: CodexThreadItem,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1891,10 +1735,6 @@ impl ServerNotification {
         Self::new(event::LOG_ENTRY, event)
     }
 
-    pub fn thread_created(event: ThreadCreatedEvent) -> Result<Self, serde_json::Error> {
-        Self::new(event::THREAD_CREATED, event)
-    }
-
     pub fn thread_started(event: ThreadStartedEvent) -> Result<Self, serde_json::Error> {
         Self::new(event::THREAD_STARTED, event)
     }
@@ -1903,20 +1743,8 @@ impl ServerNotification {
         Self::new(event::TURN_STARTED, event)
     }
 
-    pub fn turn_delta(event: TurnDeltaEvent) -> Result<Self, serde_json::Error> {
-        Self::new(event::TURN_DELTA, event)
-    }
-
     pub fn turn_completed(event: TurnCompletedEvent) -> Result<Self, serde_json::Error> {
         Self::new(event::TURN_COMPLETED, event)
-    }
-
-    pub fn turn_failed(event: TurnFailedEvent) -> Result<Self, serde_json::Error> {
-        Self::new(event::TURN_FAILED, event)
-    }
-
-    pub fn turn_cancelled(event: TurnCancelledEvent) -> Result<Self, serde_json::Error> {
-        Self::new(event::TURN_CANCELLED, event)
     }
 
     pub fn item_started(event: ItemStartedEvent) -> Result<Self, serde_json::Error> {
@@ -2056,43 +1884,38 @@ mod tests {
         );
     }
 
+    fn codex_thread_fixture() -> CodexThread {
+        CodexThread {
+            id: "thread_1".to_string(),
+            forked_from_id: None,
+            preview: "hello".to_string(),
+            ephemeral: false,
+            model_provider: "openai".to_string(),
+            created_at: 1,
+            updated_at: 2,
+            status: CodexThreadStatus::Idle,
+            path: None,
+            cwd: "/workspace".to_string(),
+            cli_version: "0.0.0".to_string(),
+            source: CodexSessionSource::AppServer,
+            agent_nickname: None,
+            agent_role: None,
+            git_info: None,
+            name: None,
+            turns: vec![CodexTurn::in_progress("turn_1")],
+        }
+    }
+
     #[test]
-    fn thread_and_turn_responses_can_carry_native_ids_and_codex_views() {
-        let lifecycle = LifecycleSnapshot {
-            state: LifecycleState::Ready,
-            reason: LifecycleReason::RuntimeReady,
-            message: None,
-            since: "0".to_string(),
-            degraded_services: Vec::new(),
-        };
+    fn thread_and_turn_responses_are_v2_shaped_without_legacy_id_aliases() {
         let thread_response = ThreadStartResponse {
-            thread_id: "thread_1".to_string(),
-            lifecycle: lifecycle.clone(),
-            thread: Some(CodexThread {
-                id: "thread_1".to_string(),
-                forked_from_id: None,
-                preview: "hello".to_string(),
-                ephemeral: false,
-                model_provider: "openai".to_string(),
-                created_at: 1,
-                updated_at: 2,
-                status: CodexThreadStatus::Idle,
-                path: None,
-                cwd: "/workspace".to_string(),
-                cli_version: "0.0.0".to_string(),
-                source: CodexSessionSource::AppServer,
-                agent_nickname: None,
-                agent_role: None,
-                git_info: None,
-                name: None,
-                turns: Vec::new(),
-            }),
+            thread: codex_thread_fixture(),
+            model: "gpt-5".to_string(),
+            model_provider: "openai".to_string(),
+            cwd: "/workspace".to_string(),
         };
         let turn_response = TurnStartResponse {
-            turn_id: "turn_1".to_string(),
-            status: TurnStatus::Pending,
-            lifecycle: lifecycle.clone(),
-            turn: Some(CodexTurn::in_progress("turn_1")),
+            turn: CodexTurn::in_progress("turn_1"),
         };
 
         let thread_value =
@@ -2100,7 +1923,6 @@ mod tests {
         let turn_value =
             serde_json::to_value(turn_response).expect("turn/start response should serialize");
 
-        assert_eq!(thread_value["threadId"], "thread_1");
         assert_eq!(thread_value["thread"]["id"], "thread_1");
         assert_eq!(thread_value["thread"]["status"]["type"], "idle");
         assert_eq!(thread_value["thread"]["source"], "appServer");
@@ -2114,29 +1936,17 @@ mod tests {
                 "activeFlags": [],
             })
         );
-        assert_eq!(turn_value["turnId"], "turn_1");
-        assert_eq!(turn_value["status"], "pending");
+        assert_eq!(thread_value["model"], "gpt-5");
+        assert_eq!(thread_value["modelProvider"], "openai");
+        assert_eq!(thread_value["cwd"], "/workspace");
+        assert!(thread_value.get("threadId").is_none());
+        assert!(thread_value.get("lifecycle").is_none());
+
         assert_eq!(turn_value["turn"]["id"], "turn_1");
         assert_eq!(turn_value["turn"]["status"], "inProgress");
-
-        let native_thread_value = serde_json::to_value(ThreadStartResponse {
-            thread_id: "thread_2".to_string(),
-            lifecycle: lifecycle.clone(),
-            thread: None,
-        })
-        .expect("native thread/start response should serialize");
-        let native_turn_value = serde_json::to_value(TurnStartResponse {
-            turn_id: "turn_2".to_string(),
-            status: TurnStatus::Pending,
-            lifecycle,
-            turn: None,
-        })
-        .expect("native turn/start response should serialize");
-
-        assert_eq!(native_thread_value["threadId"], "thread_2");
-        assert!(native_thread_value.get("thread").is_none());
-        assert_eq!(native_turn_value["turnId"], "turn_2");
-        assert!(native_turn_value.get("turn").is_none());
+        assert!(turn_value.get("turnId").is_none());
+        assert!(turn_value.get("status").is_none());
+        assert!(turn_value.get("lifecycle").is_none());
     }
 
     #[test]
@@ -2158,7 +1968,7 @@ mod tests {
             matrix
                 .session
                 .methods
-                .contains(&method::THREAD_CREATE.to_string())
+                .contains(&method::THREAD_START.to_string())
         );
         assert!(
             matrix
@@ -2176,19 +1986,19 @@ mod tests {
             matrix
                 .session
                 .methods
+                .contains(&method::THREAD_TURNS_LIST.to_string())
+        );
+        assert!(
+            matrix
+                .session
+                .methods
                 .contains(&method::TURN_START.to_string())
         );
         assert!(
             matrix
                 .session
                 .methods
-                .contains(&method::TURN_CANCEL.to_string())
-        );
-        assert!(
-            matrix
-                .session
-                .methods
-                .contains(&method::TURN_LIST.to_string())
+                .contains(&method::TURN_INTERRUPT.to_string())
         );
         assert!(
             matrix
@@ -2200,19 +2010,7 @@ mod tests {
             matrix
                 .session
                 .events
-                .contains(&event::TURN_DELTA.to_string())
-        );
-        assert!(
-            matrix
-                .session
-                .events
                 .contains(&event::TURN_COMPLETED.to_string())
-        );
-        assert!(
-            matrix
-                .session
-                .events
-                .contains(&event::TURN_FAILED.to_string())
         );
         assert_eq!(matrix.approval.status, CapabilityStatus::Declared);
         assert_eq!(matrix.dlp_policy.status, CapabilityStatus::Declared);
@@ -2243,21 +2041,103 @@ mod tests {
         assert!(method_names.contains(&method::INITIALIZE));
         assert!(method_names.contains(&method::PROTOCOL_SCHEMA));
         assert!(method_names.contains(&method::HEALTH_CHECK));
-        assert!(method_names.contains(&method::THREAD_CREATE));
+        assert!(method_names.contains(&method::THREAD_START));
         assert!(method_names.contains(&method::THREAD_LIST));
         assert!(method_names.contains(&method::THREAD_READ));
+        assert!(method_names.contains(&method::THREAD_TURNS_LIST));
         assert!(method_names.contains(&method::TURN_START));
-        assert!(method_names.contains(&method::TURN_CANCEL));
-        assert!(method_names.contains(&method::TURN_LIST));
+        assert!(method_names.contains(&method::TURN_INTERRUPT));
         assert!(method_names.contains(&method::TURN_READ));
+        assert!(method_names.contains(&method::MODEL_LIST));
         assert!(method_names.contains(&method::MODEL_PROVIDER_SELECT_FOR_NEXT_TURN));
+
+        assert!(!method_names.contains(&"thread/create"));
+        assert!(!method_names.contains(&"turn/cancel"));
+        assert!(!method_names.contains(&"turns/list"));
+        assert!(!method_names.contains(&"turn/list"));
+
         assert!(event_names.contains(&event::LIFECYCLE_CHANGED));
         assert!(event_names.contains(&event::CAPABILITIES_CHANGED));
-        assert!(event_names.contains(&event::THREAD_CREATED));
-        assert!(event_names.contains(&event::TURN_DELTA));
+        assert!(event_names.contains(&event::THREAD_STARTED));
+        assert!(event_names.contains(&event::TURN_STARTED));
         assert!(event_names.contains(&event::TURN_COMPLETED));
-        assert!(event_names.contains(&event::TURN_FAILED));
+        assert!(event_names.contains(&event::ITEM_STARTED));
+        assert!(event_names.contains(&event::ITEM_AGENT_MESSAGE_DELTA));
+        assert!(event_names.contains(&event::ITEM_COMPLETED));
+
+        assert!(!event_names.contains(&"thread/created"));
+        assert!(!event_names.contains(&"turn/delta"));
+        assert!(!event_names.contains(&"turn/failed"));
+        assert!(!event_names.contains(&"turn/cancelled"));
         assert_eq!(schema.capabilities.logs.status, CapabilityStatus::Declared);
+    }
+
+    #[test]
+    fn compatibility_profile_is_descriptive_subset_without_aliases() {
+        let schema = ProtocolSchemaResponse::phase_one(CapabilityMatrix::phase_one());
+        let profile = schema
+            .compatibility_profiles
+            .iter()
+            .find(|profile| {
+                profile.id == CompatibilityProfile::CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_ID
+            })
+            .expect("schema should describe the Codex v2-shaped chat-session subset");
+
+        assert_eq!(profile.scope, CompatibilityProfileScope::ChatSessionSubset);
+        assert!(profile.aliases.is_empty());
+        assert!(profile.methods.contains(&method::THREAD_START.to_string()));
+        assert!(profile.methods.contains(&method::THREAD_LIST.to_string()));
+        assert!(
+            profile
+                .methods
+                .contains(&method::THREAD_TURNS_LIST.to_string())
+        );
+        assert!(profile.methods.contains(&method::TURN_START.to_string()));
+        assert!(
+            profile
+                .methods
+                .contains(&method::TURN_INTERRUPT.to_string())
+        );
+        assert!(!profile.methods.contains(&"thread/create".to_string()));
+        assert!(!profile.methods.contains(&"turn/cancel".to_string()));
+        assert!(!profile.methods.contains(&"turns/list".to_string()));
+        assert!(!profile.methods.contains(&"turn/list".to_string()));
+        assert!(profile.events.contains(&event::THREAD_STARTED.to_string()));
+        assert!(profile.events.contains(&event::TURN_COMPLETED.to_string()));
+        assert!(!profile.events.contains(&"turn/delta".to_string()));
+    }
+
+    #[test]
+    fn interrupt_and_list_responses_match_codex_v2_shapes() {
+        let interrupt_response = TurnInterruptResponse {};
+        let thread_list_response = ThreadListResponse {
+            data: vec![codex_thread_fixture()],
+            next_cursor: None,
+            backwards_cursor: None,
+        };
+        let turn_list_response = ThreadTurnsListResponse {
+            data: vec![CodexTurn::in_progress("turn_1")],
+            next_cursor: None,
+            backwards_cursor: None,
+        };
+
+        let interrupt_value = serde_json::to_value(interrupt_response)
+            .expect("turn/interrupt response should serialize");
+        let thread_list_value = serde_json::to_value(thread_list_response)
+            .expect("thread/list response should serialize");
+        let turn_list_value = serde_json::to_value(turn_list_response)
+            .expect("thread/turns/list response should serialize");
+
+        assert_eq!(interrupt_value, serde_json::json!({}));
+        assert!(interrupt_value.get("turn").is_none());
+        assert_eq!(thread_list_value["data"][0]["id"], "thread_1");
+        assert!(thread_list_value["nextCursor"].is_null());
+        assert!(thread_list_value["backwardsCursor"].is_null());
+        assert!(thread_list_value.get("threads").is_none());
+        assert_eq!(turn_list_value["data"][0]["id"], "turn_1");
+        assert!(turn_list_value["nextCursor"].is_null());
+        assert!(turn_list_value["backwardsCursor"].is_null());
+        assert!(turn_list_value.get("turns").is_none());
     }
 
     #[test]
@@ -2401,7 +2281,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_v2_profile_declares_p0_p2_surface_and_security_opt_outs() {
+    fn codex_v2_profile_declares_chat_session_subset_and_security_opt_outs() {
         fn contains_forbidden_p0_p2_domain(name: &str) -> bool {
             [
                 "approval",
@@ -2416,11 +2296,14 @@ mod tests {
             .any(|fragment| name.contains(fragment))
         }
 
-        let profile = CompatibilityProfile::codex_app_server_v2();
+        let profile = CompatibilityProfile::codex_app_server_v2_chat_session_subset();
 
-        assert_eq!(profile.id, CompatibilityProfile::CODEX_APP_SERVER_V2_ID);
+        assert_eq!(
+            profile.id,
+            CompatibilityProfile::CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_ID
+        );
         assert_eq!(profile.scope, CompatibilityProfileScope::ChatSessionSubset);
-        assert!(profile.description.contains("chat session streaming"));
+        assert!(profile.description.contains("chat-session subset"));
         assert_eq!(
             profile.methods,
             vec![
@@ -2428,8 +2311,10 @@ mod tests {
                 method::THREAD_START,
                 method::THREAD_READ,
                 method::THREAD_LIST,
+                method::THREAD_TURNS_LIST,
                 method::TURN_START,
                 method::TURN_INTERRUPT,
+                method::TURN_READ,
                 method::MODEL_LIST,
             ]
         );
@@ -2438,12 +2323,9 @@ mod tests {
                 && opt_out.reason == "phase_1_chat_session_subset"
         }));
         assert!(profile.capability_opt_outs.iter().any(|opt_out| {
-            opt_out.capability == "codex.approvals"
-                && opt_out.reason == "phase_1_chat_session_subset"
-        }));
-        assert!(profile.capability_opt_outs.iter().any(|opt_out| {
             opt_out.capability == "mcp" && opt_out.reason == "phase_1_chat_session_subset"
         }));
+        assert!(profile.aliases.is_empty());
         assert!(
             !profile
                 .methods
@@ -2512,13 +2394,15 @@ mod tests {
     fn capabilities_response_can_advertise_compatibility_profiles() {
         let response = CapabilitiesListResponse {
             capabilities: CapabilityMatrix::phase_one(),
-            compatibility_profiles: vec![CompatibilityProfile::codex_app_server_v2()],
+            compatibility_profiles: vec![
+                CompatibilityProfile::codex_app_server_v2_chat_session_subset(),
+            ],
         };
         let value = serde_json::to_value(response).expect("capabilities should serialize");
 
         assert_eq!(
             value["compatibilityProfiles"][0]["id"],
-            CompatibilityProfile::CODEX_APP_SERVER_V2_ID
+            CompatibilityProfile::CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_ID
         );
         assert_eq!(
             value["compatibilityProfiles"][0]["scope"],
@@ -2527,51 +2411,28 @@ mod tests {
     }
 
     #[test]
-    fn turn_start_params_accept_string_input_and_prompt_aliases_without_changing_legacy_shape() {
-        let from_input: TurnStartParams = serde_json::from_value(serde_json::json!({
+    fn turn_start_params_use_codex_v2_input_shape() {
+        let params: TurnStartParams = serde_json::from_value(serde_json::json!({
             "threadId": "thread_1",
-            "input": "hello from input"
+            "input": [{"type": "text", "text": "hello", "text_elements": []}],
+            "cwd": "/workspace",
+            "model": "gpt-5",
+            "summary": "concise"
         }))
-        .expect("turn/start should accept Codex-style input string");
-        let from_prompt: TurnStartParams = serde_json::from_value(serde_json::json!({
-            "threadId": "thread_1",
-            "prompt": "hello from prompt"
-        }))
-        .expect("turn/start should keep accepting legacy prompt");
-        let mismatch = serde_json::from_value::<TurnStartParams>(serde_json::json!({
-            "threadId": "thread_1",
-            "prompt": "legacy",
-            "input": "codex"
-        }))
-        .expect_err("conflicting prompt/input fields should not be silently normalized");
+        .expect("turn/start should accept Codex v2 input arrays");
 
-        assert_eq!(from_input.prompt, "hello from input");
-        assert_eq!(from_prompt.prompt, "hello from prompt");
-        assert_eq!(from_input.reasoning_summary, None);
-        assert!(mismatch.to_string().contains("prompt and input must match"));
+        assert_eq!(params.prompt_text(), "hello");
+        assert_eq!(params.cwd.as_deref(), Some("/workspace"));
+        assert_eq!(params.model.as_deref(), Some("gpt-5"));
+        assert_eq!(params.summary.as_deref(), Some("concise"));
         assert_eq!(
-            serde_json::to_value(TurnStartParams::from_input("thread_1", "hello"))
-                .expect("turn/start params should serialize"),
-            serde_json::json!({"threadId": "thread_1", "prompt": "hello"})
-        );
-
-        let with_reasoning_summary: TurnStartParams = serde_json::from_value(serde_json::json!({
-            "threadId": "thread_1",
-            "input": "hello",
-            "reasoningSummary": "concise"
-        }))
-        .expect("turn/start should accept per-turn reasoningSummary");
-        assert_eq!(
-            with_reasoning_summary.reasoning_summary.as_deref(),
-            Some("concise")
-        );
-        assert_eq!(
-            serde_json::to_value(with_reasoning_summary)
-                .expect("turn/start params should serialize reasoningSummary"),
+            serde_json::to_value(params).expect("turn/start params should serialize"),
             serde_json::json!({
                 "threadId": "thread_1",
-                "prompt": "hello",
-                "reasoningSummary": "concise"
+                "input": [{"type": "text", "text": "hello", "text_elements": []}],
+                "cwd": "/workspace",
+                "model": "gpt-5",
+                "summary": "concise"
             })
         );
     }
@@ -2586,43 +2447,36 @@ mod tests {
             ]
         }))
         .expect("turn/start should accept Codex v2 UserInput text arrays");
-        let matching_prompt: TurnStartParams = serde_json::from_value(serde_json::json!({
-            "threadId": "thread_1",
-            "prompt": "hello\nworld",
-            "input": [
-                {"type": "text", "text": "hello", "text_elements": []},
-                {"type": "text", "text": "world", "text_elements": []}
-            ]
-        }))
-        .expect("matching prompt and Codex input array should deserialize");
 
-        assert_eq!(from_array.prompt, "hello\nworld");
-        assert_eq!(matching_prompt.prompt, "hello\nworld");
+        assert_eq!(from_array.prompt_text(), "hello\nworld");
     }
 
     #[test]
-    fn turn_start_params_reject_unsupported_codex_user_input_items() {
-        let unsupported = serde_json::from_value::<TurnStartParams>(serde_json::json!({
+    fn turn_start_prompt_text_skips_codex_v2_image_inputs() {
+        let mixed = serde_json::from_value::<TurnStartParams>(serde_json::json!({
             "threadId": "thread_1",
-            "input": [{"type": "image", "url": "file:///tmp/image.png"}]
+            "input": [
+                {"type": "text", "text": "hello", "text_elements": []},
+                {"type": "image", "url": "file:///tmp/image.png"},
+                {"type": "text", "text": "world", "text_elements": []}
+            ]
         }))
-        .expect_err("non-text Codex input variants are not silently dropped");
-        let empty = serde_json::from_value::<TurnStartParams>(serde_json::json!({
-            "threadId": "thread_1",
-            "input": []
-        }))
-        .expect_err("empty Codex input arrays should not produce an empty prompt");
+        .expect("turn/start should deserialize text and image inputs");
 
-        assert!(
-            unsupported
-                .to_string()
-                .contains("unsupported turn/start text-only input item type: image")
-        );
-        assert!(
-            empty
-                .to_string()
-                .contains("text-only input array must contain at least one text item")
-        );
+        assert_eq!(mixed.prompt_text(), "hello\nworld");
+    }
+
+    #[test]
+    fn turn_start_prompt_text_is_empty_without_text_inputs() {
+        let image_only = serde_json::from_value::<TurnStartParams>(serde_json::json!({
+            "threadId": "thread_1",
+            "input": [
+                {"type": "image", "url": "file:///tmp/image.png"}
+            ]
+        }))
+        .expect("turn/start should deserialize the declared UserInput subset");
+
+        assert_eq!(image_only.prompt_text(), "");
     }
 
     #[test]
@@ -2635,14 +2489,14 @@ mod tests {
                 params: Some(serde_json::json!({
                     "client": {"name": "codex", "version": "2.0.0", "transport": "stdio"},
                     "protocolVersion": {"major": 0, "minor": 1, "patch": 0},
-                    "requestedCapabilities": [CompatibilityProfile::CODEX_APP_SERVER_V2_ID]
+                    "requestedCapabilities": [CompatibilityProfile::CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_ID]
                 })),
             },
             JsonRpcRequest {
                 jsonrpc: JSON_RPC_VERSION.to_string(),
                 id: Some(serde_json::json!("thread")),
                 method: method::THREAD_START.to_string(),
-                params: Some(serde_json::json!({"title": "Draft"})),
+                params: Some(serde_json::json!({"cwd": "/workspace"})),
             },
             JsonRpcRequest {
                 jsonrpc: JSON_RPC_VERSION.to_string(),
@@ -2696,7 +2550,9 @@ mod tests {
                     since: "0".to_string(),
                     degraded_services: Vec::new(),
                 },
-                compatibility_profiles: vec![CompatibilityProfile::codex_app_server_v2()],
+                compatibility_profiles: vec![
+                    CompatibilityProfile::codex_app_server_v2_chat_session_subset(),
+                ],
                 unavailable_requested_capabilities: Vec::new(),
                 event_queue: NotificationQueuePolicy::bounded_lag_disconnect(),
             })
@@ -2717,55 +2573,32 @@ mod tests {
                 reason: CapabilitiesChangedReason::Initialize,
             })
             .expect("capabilities/changed fixture should serialize"),
-            ServerNotification::thread_created(ThreadCreatedEvent {
-                thread_id: "thread_1".to_string(),
-            })
-            .expect("thread/created fixture should serialize"),
             ServerNotification::thread_started(ThreadStartedEvent {
-                thread_id: "thread_1".to_string(),
-                thread: None,
+                thread: codex_thread_fixture(),
             })
             .expect("thread/started fixture should serialize"),
             ServerNotification::turn_started(TurnStartedEvent {
                 thread_id: "thread_1".to_string(),
-                turn_id: "turn_1".to_string(),
-                status: TurnStatus::Pending,
-                turn: None,
+                turn: CodexTurn::in_progress("turn_1"),
             })
             .expect("turn/started fixture should serialize"),
-            ServerNotification::turn_delta(TurnDeltaEvent {
-                thread_id: "thread_1".to_string(),
-                turn_id: "turn_1".to_string(),
-                delta: "hel".to_string(),
-            })
-            .expect("turn/delta fixture should serialize"),
             ServerNotification::turn_completed(TurnCompletedEvent {
                 thread_id: "thread_1".to_string(),
-                turn_id: "turn_1".to_string(),
-                status: TurnStatus::Completed,
-                output: "hello".to_string(),
-                turn: None,
+                turn: CodexTurn {
+                    id: "turn_1".to_string(),
+                    items: vec![CodexThreadItem::completed_agent_message("turn_1", "hello")],
+                    status: CodexTurnStatus::Completed,
+                    error: None,
+                    started_at: None,
+                    completed_at: Some(2),
+                    duration_ms: Some(1),
+                },
             })
             .expect("turn/completed fixture should serialize"),
-            ServerNotification::turn_failed(TurnFailedEvent {
-                thread_id: "thread_1".to_string(),
-                turn_id: "turn_1".to_string(),
-                status: TurnStatus::Failed,
-                error: "runtime failed".to_string(),
-                turn: None,
-            })
-            .expect("turn/failed fixture should serialize"),
-            ServerNotification::turn_cancelled(TurnCancelledEvent {
-                thread_id: "thread_1".to_string(),
-                turn_id: "turn_1".to_string(),
-                status: TurnStatus::Cancelled,
-            })
-            .expect("turn/cancelled fixture should serialize"),
             ServerNotification::item_started(ItemStartedEvent {
                 thread_id: "thread_1".to_string(),
                 turn_id: "turn_1".to_string(),
-                item_id: "turn_1".to_string(),
-                item_type: ItemType::AgentMessage,
+                item: CodexThreadItem::started_agent_message("turn_1"),
             })
             .expect("item/started fixture should serialize"),
             ServerNotification::agent_message_delta(AgentMessageDeltaEvent {
@@ -2801,8 +2634,7 @@ mod tests {
             ServerNotification::item_completed(ItemCompletedEvent {
                 thread_id: "thread_1".to_string(),
                 turn_id: "turn_1".to_string(),
-                item_id: "turn_1".to_string(),
-                status: TurnStatus::Completed,
+                item: CodexThreadItem::completed_agent_message("turn_1", "hello"),
             })
             .expect("item/completed fixture should serialize"),
             ServerNotification::error(ErrorEvent {
@@ -2819,20 +2651,19 @@ mod tests {
             .map(|event| event.method.as_str())
             .collect::<Vec<_>>();
 
-        assert_eq!(event_names, CODEX_APP_SERVER_V2_EVENTS);
+        assert_eq!(event_names, CODEX_APP_SERVER_V2_CHAT_SESSION_SUBSET_EVENTS);
         assert_eq!(events[0].params["eventQueue"]["overflow"], "lag_disconnect");
-        assert!(events[4].params.get("thread").is_none());
-        assert!(events[5].params.get("turn").is_none());
-        assert!(events[7].params.get("turn").is_none());
-        assert!(events[8].params.get("turn").is_none());
-        assert_eq!(events[10].params["itemType"], "agent_message");
-        assert_eq!(events[11].params["delta"], "hel");
-        assert_eq!(events[12].params["delta"], "scratch");
-        assert_eq!(events[13].method, event::ITEM_REASONING_SUMMARY_PART_ADDED);
-        assert_eq!(events[13].params["summaryIndex"], 1);
-        assert_eq!(events[14].method, event::ITEM_REASONING_TEXT_DELTA);
-        assert_eq!(events[14].params["contentIndex"], 0);
-        assert_eq!(events[14].params["delta"], "raw scratch");
+        assert_eq!(events[3].params["thread"]["id"], "thread_1");
+        assert_eq!(events[4].params["turn"]["id"], "turn_1");
+        assert_eq!(events[5].params["turn"]["status"], "completed");
+        assert_eq!(events[6].params["item"]["type"], "agentMessage");
+        assert_eq!(events[7].params["delta"], "hel");
+        assert_eq!(events[8].params["delta"], "scratch");
+        assert_eq!(events[9].method, event::ITEM_REASONING_SUMMARY_PART_ADDED);
+        assert_eq!(events[9].params["summaryIndex"], 1);
+        assert_eq!(events[10].method, event::ITEM_REASONING_TEXT_DELTA);
+        assert_eq!(events[10].params["contentIndex"], 0);
+        assert_eq!(events[10].params["delta"], "raw scratch");
     }
 
     #[test]
