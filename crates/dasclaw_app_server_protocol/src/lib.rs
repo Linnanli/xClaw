@@ -1183,7 +1183,7 @@ pub struct CapabilitiesListResponse {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ThreadStartParams {
     pub cwd: Option<String>,
 }

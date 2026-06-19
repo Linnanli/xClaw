@@ -464,7 +464,9 @@ type ThreadSummary = {
 };
 
 type ThreadListResponse = {
-  threads: ThreadSummary[];
+  data: ThreadSummary[];
+  nextCursor?: string;
+  backwardsCursor?: string;
 };
 ```
 
@@ -540,7 +542,9 @@ type ThreadTurnsListParams = {
 };
 
 type ThreadTurnsListResponse = {
-  turns: TurnSummary[];
+  data: TurnSummary[];
+  nextCursor?: string;
+  backwardsCursor?: string;
 };
 ```
 

@@ -668,14 +668,12 @@ impl AppServer {
     }
 
     #[cfg(test)]
-    fn thread_create(
+    fn create_thread_for_test(
         &mut self,
-        params: ThreadCreateParams,
-    ) -> Result<ThreadCreateResponse, AppServerError> {
-        let thread_id = self.create_thread_record(ThreadStartParams {
-            cwd: params.workspace_root,
-        })?;
-        Ok(ThreadCreateResponse {
+        params: TestThreadParams,
+    ) -> Result<TestThreadHandle, AppServerError> {
+        let thread_id = self.create_thread_record(ThreadStartParams { cwd: params.cwd })?;
+        Ok(TestThreadHandle {
             thread_id,
             lifecycle: self.lifecycle.clone(),
         })
@@ -839,15 +837,15 @@ impl AppServer {
     }
 
     #[cfg(test)]
-    fn turn_cancel(
+    fn interrupt_turn_for_test(
         &mut self,
-        params: TurnCancelParams,
-    ) -> Result<TurnCancelResponse, AppServerError> {
+        params: TestTurnInterruptParams,
+    ) -> Result<TestTurnInterruptResult, AppServerError> {
         self.cancel_turn_record(TurnInterruptParams {
             thread_id: params.thread_id,
             turn_id: params.turn_id,
         })?;
-        Ok(TurnCancelResponse {
+        Ok(TestTurnInterruptResult {
             accepted: true,
             status: TurnStatus::Cancelled,
             lifecycle: self.lifecycle.clone(),
@@ -882,11 +880,14 @@ impl AppServer {
     }
 
     #[cfg(test)]
-    fn turn_list(&mut self, params: TurnListParams) -> Result<TurnListResponse, AppServerError> {
+    fn list_turns_for_test(
+        &mut self,
+        params: TestTurnsSnapshotParams,
+    ) -> Result<TestTurnsSnapshot, AppServerError> {
         self.require_initialized("session")?;
         self.drain_runtime_turn_updates();
         self.require_thread_exists(&params.thread_id)?;
-        Ok(TurnListResponse {
+        Ok(TestTurnsSnapshot {
             turns: self.threads.list_turns(&params.thread_id),
         })
     }
@@ -2762,14 +2763,13 @@ pub struct ThreadSummary {
 
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ThreadCreateParams {
-    title: Option<String>,
-    workspace_root: Option<String>,
+struct TestThreadParams {
+    cwd: Option<String>,
 }
 
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ThreadCreateResponse {
+struct TestThreadHandle {
     thread_id: String,
     lifecycle: LifecycleSnapshot,
 }
@@ -2804,14 +2804,14 @@ pub struct TurnSummary {
 
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct TurnCancelParams {
+struct TestTurnInterruptParams {
     thread_id: String,
     turn_id: String,
 }
 
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct TurnCancelResponse {
+struct TestTurnInterruptResult {
     accepted: bool,
     status: TurnStatus,
     lifecycle: LifecycleSnapshot,
@@ -2819,13 +2819,13 @@ struct TurnCancelResponse {
 
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct TurnListParams {
+struct TestTurnsSnapshotParams {
     thread_id: String,
 }
 
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct TurnListResponse {
+struct TestTurnsSnapshot {
     turns: Vec<TurnSummary>,
 }
 
@@ -3836,10 +3836,7 @@ mod tests {
     fn shutdown_cancels_pending_session_turns() {
         let mut server = initialized_server();
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
         let started = server
             .turn_start(TurnStartParams {
@@ -3971,10 +3968,7 @@ mod tests {
         let bridge = Arc::new(ManualApprovalBridge::default());
         let mut server = initialized_server_with_bridge(bridge.clone());
         let thread_id = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Approval".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created")
             .thread_id;
         let turn = server
@@ -4033,10 +4027,7 @@ mod tests {
         let bridge = Arc::new(ManualApprovalBridge::default());
         let mut server = initialized_server_with_bridge(bridge.clone());
         let thread_id = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Approval reject".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created")
             .thread_id;
         let _turn = server
@@ -4087,10 +4078,7 @@ mod tests {
         let bridge = Arc::new(ManualApprovalBridge::default());
         let mut server = initialized_server_with_bridge(bridge.clone());
         let thread_id = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Approval timeout".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created")
             .thread_id;
         let turn = server
@@ -4160,10 +4148,7 @@ mod tests {
         let bridge = Arc::new(ManualApprovalBridge::default());
         let mut server = initialized_server_with_bridge(bridge.clone());
         let thread_id = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Approval client error".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created")
             .thread_id;
         let turn = server
@@ -4234,10 +4219,7 @@ mod tests {
         let bridge = Arc::new(ManualApprovalBridge::default());
         let mut server = initialized_server_with_bridge(bridge.clone());
         let thread_id = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Malformed approval".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created")
             .thread_id;
         let turn = server
@@ -4295,14 +4277,11 @@ mod tests {
     }
 
     #[test]
-    fn turn_cancel_resolves_pending_approval_server_request_as_failed() {
+    fn interrupt_turn_resolves_pending_approval_server_request_as_failed() {
         let bridge = Arc::new(ManualApprovalBridge::default());
         let mut server = initialized_server_with_bridge(bridge);
         let thread_id = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Approval cancel".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created")
             .thread_id;
         let turn = server
@@ -4323,7 +4302,7 @@ mod tests {
             .to_string();
 
         server
-            .turn_cancel(TurnCancelParams {
+            .interrupt_turn_for_test(TestTurnInterruptParams {
                 thread_id: thread_id.clone(),
                 turn_id: turn.turn.id.clone(),
             })
@@ -4365,10 +4344,7 @@ mod tests {
         let bridge = Arc::new(ManualApprovalBridge::default());
         let mut server = initialized_server_with_bridge(bridge);
         let thread_id = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Approval shutdown".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created")
             .thread_id;
         let _turn = server
@@ -5008,10 +4984,7 @@ mod tests {
         let bridge = Arc::new(RecordingRuntimeBridge::default());
         let mut server = initialized_server_with_bridge(bridge.clone());
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
 
         let start = server
@@ -5043,7 +5016,7 @@ mod tests {
         assert_eq!(calls[0].model_provider.api_key, "test-api-key");
 
         let turns = server
-            .turn_list(TurnListParams {
+            .list_turns_for_test(TestTurnsSnapshotParams {
                 thread_id: calls[0].thread_id.clone(),
             })
             .expect("turn/list should still use session bookkeeping");
@@ -5056,10 +5029,7 @@ mod tests {
         let bridge = Arc::new(RecordingRuntimeBridge::default());
         let mut server = initialized_server_with_bridge(bridge.clone());
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
 
         server
@@ -5096,10 +5066,7 @@ mod tests {
             .expect("initialize may complete before turns are started");
         let _ = server.drain_notifications();
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created before model selection is needed");
 
         let error = server
@@ -5120,7 +5087,7 @@ mod tests {
         }
         assert!(bridge.calls.lock().expect("calls lock").is_empty());
         let turns = server
-            .turn_list(TurnListParams {
+            .list_turns_for_test(TestTurnsSnapshotParams {
                 thread_id: thread.thread_id,
             })
             .expect("turn/list should still work after fail-safe rejection");
@@ -5132,10 +5099,7 @@ mod tests {
         let bridge = Arc::new(RecordingRuntimeBridge::default());
         let mut server = initialized_server_with_bridge(bridge.clone());
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
 
         let first = server
@@ -5178,10 +5142,7 @@ mod tests {
         )));
         let mut server = initialized_server_with_bridge(bridge);
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
         let _ = server.drain_notifications();
 
@@ -5198,7 +5159,7 @@ mod tests {
         assert_eq!(value["error"]["data"]["capability"], "runtime");
         assert_eq!(value["error"]["data"]["retryable"], true);
         let turns = server
-            .turn_list(TurnListParams {
+            .list_turns_for_test(TestTurnsSnapshotParams {
                 thread_id: thread.thread_id,
             })
             .expect("turn/list should still work after bridge error");
@@ -5462,10 +5423,7 @@ mod tests {
         ));
         let mut server = initialized_server_with_bridge(bridge);
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
         let start = server
             .turn_start(TurnStartParams {
@@ -5518,10 +5476,7 @@ mod tests {
         ));
         let mut server = initialized_server_with_bridge(bridge);
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
         let start = server
             .turn_start(TurnStartParams {
@@ -5552,7 +5507,7 @@ mod tests {
         assert_eq!(notifications[7].params["lifecycle"]["state"], "ready");
 
         let list = server
-            .turn_list(TurnListParams {
+            .list_turns_for_test(TestTurnsSnapshotParams {
                 thread_id: thread.thread_id,
             })
             .expect("turn/list should apply failure update");
@@ -5570,10 +5525,7 @@ mod tests {
         let bridge = Arc::new(RecordingRuntimeBridge::default());
         let mut server = initialized_server_with_bridge(bridge);
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
         let first = server
             .turn_start(TurnStartParams {
@@ -5601,7 +5553,7 @@ mod tests {
             "first done".to_string(),
         );
         let _after_first = server
-            .turn_list(TurnListParams {
+            .list_turns_for_test(TestTurnsSnapshotParams {
                 thread_id: thread.thread_id.clone(),
             })
             .expect("turn/list should apply first completion");
@@ -5622,7 +5574,7 @@ mod tests {
             "second done".to_string(),
         );
         let _after_second = server
-            .turn_list(TurnListParams {
+            .list_turns_for_test(TestTurnsSnapshotParams {
                 thread_id: thread.thread_id,
             })
             .expect("turn/list should apply second completion");
@@ -5647,10 +5599,7 @@ mod tests {
         let bridge = Arc::new(RecordingRuntimeBridge::default());
         let mut server = initialized_server_with_bridge(bridge);
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
         let turn = server
             .turn_start(TurnStartParams {
@@ -5684,10 +5633,7 @@ mod tests {
         let bridge = Arc::new(RecordingRuntimeBridge::default());
         let mut server = initialized_server_with_bridge(bridge);
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
         let turn = server
             .turn_start(TurnStartParams {
@@ -5731,10 +5677,7 @@ mod tests {
         let bridge = Arc::new(RecordingRuntimeBridge::default());
         let mut server = initialized_server_with_bridge(bridge);
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
         let turn = server
             .turn_start(TurnStartParams {
@@ -5776,10 +5719,7 @@ mod tests {
         ));
         let mut server = initialized_server_with_bridge(bridge);
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
         let start = server
             .turn_start(TurnStartParams {
@@ -5825,10 +5765,7 @@ mod tests {
         ));
         let mut server = initialized_server_with_bridge(bridge);
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
         let _start = server
             .turn_start(TurnStartParams {
@@ -5860,14 +5797,11 @@ mod tests {
     }
 
     #[test]
-    fn turn_cancel_invokes_runtime_bridge_before_recording_cancelled_turn() {
+    fn interrupt_turn_invokes_runtime_bridge_before_recording_interrupted_turn() {
         let bridge = Arc::new(RecordingRuntimeBridge::default());
         let mut server = initialized_server_with_bridge(bridge.clone());
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
         let start = server
             .turn_start(TurnStartParams {
@@ -5881,7 +5815,7 @@ mod tests {
         let _ = server.drain_notifications();
 
         let cancelled = server
-            .turn_cancel(TurnCancelParams {
+            .interrupt_turn_for_test(TestTurnInterruptParams {
                 thread_id: thread.thread_id.clone(),
                 turn_id: start.turn.id.clone(),
             })
@@ -5895,16 +5829,13 @@ mod tests {
     }
 
     #[test]
-    fn turn_cancel_runtime_bridge_error_does_not_record_cancelled_turn() {
+    fn interrupt_turn_runtime_bridge_error_does_not_record_interrupted_turn() {
         let bridge = Arc::new(RecordingRuntimeBridge::with_cancel_result(Err(
             RuntimeBridgeError::retryable("cancel unavailable"),
         )));
         let mut server = initialized_server_with_bridge(bridge);
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
         let start = server
             .turn_start(TurnStartParams {
@@ -5918,7 +5849,7 @@ mod tests {
         let _ = server.drain_notifications();
 
         let error = server
-            .turn_cancel(TurnCancelParams {
+            .interrupt_turn_for_test(TestTurnInterruptParams {
                 thread_id: thread.thread_id.clone(),
                 turn_id: start.turn.id.clone(),
             })
@@ -6255,10 +6186,7 @@ mod tests {
         }));
         let mut server = initialized_server_with_bridge(bridge);
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
         let started = server
             .turn_start(TurnStartParams {
@@ -6324,10 +6252,7 @@ mod tests {
         }));
         let mut server = initialized_codex_v2_server_with_bridge(bridge);
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
         let started = server
             .turn_start(TurnStartParams {
@@ -6388,10 +6313,7 @@ mod tests {
             .expect("initialize should succeed");
         let _ = server.drain_notifications();
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
         let started = server
             .turn_start(TurnStartParams {
@@ -6442,10 +6364,7 @@ mod tests {
         }));
         let mut server = initialized_server_with_bridge(bridge);
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
         let started = server
             .turn_start(TurnStartParams {
@@ -6459,7 +6378,7 @@ mod tests {
         let _ = server.drain_notifications();
 
         let cancelled = server
-            .turn_cancel(TurnCancelParams {
+            .interrupt_turn_for_test(TestTurnInterruptParams {
                 thread_id: thread.thread_id.clone(),
                 turn_id: started.turn.id.clone(),
             })
@@ -6507,10 +6426,7 @@ mod tests {
         }));
         let mut server = initialized_server_with_bridge(bridge);
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
         let started = server
             .turn_start(TurnStartParams {
@@ -6557,10 +6473,7 @@ mod tests {
     fn json_rpc_turn_list_and_read_return_in_memory_turn_status() {
         let mut server = initialized_server();
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
         let start = server
             .turn_start(TurnStartParams {
@@ -6571,7 +6484,7 @@ mod tests {
                 summary: None,
             })
             .expect("turn should be started");
-        let _ = server.turn_cancel(TurnCancelParams {
+        let _ = server.interrupt_turn_for_test(TestTurnInterruptParams {
             thread_id: thread.thread_id.clone(),
             turn_id: start.turn.id.clone(),
         });
@@ -6606,10 +6519,7 @@ mod tests {
     fn json_rpc_turn_read_rejects_unknown_turn() {
         let mut server = initialized_server();
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
         let response = server
             .handle_json_rpc(&format!(
@@ -6647,10 +6557,7 @@ mod tests {
     fn json_rpc_turn_interrupt_rejects_unknown_turn_after_thread_exists() {
         let mut server = initialized_server();
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
         let response = server
             .handle_json_rpc(&format!(
@@ -6674,10 +6581,7 @@ mod tests {
         ));
         let mut server = initialized_server_with_bridge(bridge.clone());
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
 
         let response = server
@@ -6857,6 +6761,27 @@ mod tests {
                 .iter()
                 .any(|line| line["method"] == "thread/created")
         );
+    }
+
+    #[test]
+    fn thread_start_json_rpc_rejects_legacy_thread_create_fields() {
+        for params in [
+            r#"{"title":"legacy title"}"#,
+            r#"{"workspaceRoot":"/legacy/workspace"}"#,
+        ] {
+            let mut server = initialized_server();
+            let response = server
+                .handle_json_rpc(&format!(
+                    r#"{{"jsonrpc":"2.0","id":1,"method":"thread/start","params":{params}}}"#
+                ))
+                .expect("thread/start should return a structured error response");
+            let value: serde_json::Value =
+                serde_json::from_str(&response).expect("response should be valid JSON");
+
+            assert_eq!(value["error"]["code"], -32602);
+            assert_eq!(value["error"]["data"]["code"], "INVALID_PARAMS");
+            assert!(server.drain_notifications().is_empty());
+        }
     }
 
     #[test]
@@ -7347,10 +7272,7 @@ mod tests {
         ));
         let mut server = initialized_server_with_bridge(bridge);
         let thread = server
-            .thread_create(ThreadCreateParams {
-                title: Some("Draft".to_string()),
-                workspace_root: None,
-            })
+            .create_thread_for_test(TestThreadParams { cwd: None })
             .expect("thread should be created");
         let _ = server.drain_notifications();
 

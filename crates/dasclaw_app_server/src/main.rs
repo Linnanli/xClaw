@@ -487,7 +487,7 @@ mod tests {
 
     #[test]
     fn stdio_loop_supports_codex_v2_chat_subset_transcript() {
-        let initialize = initialize_request("codex", ["codex_app_server_v2"]);
+        let initialize = initialize_request("codex", ["codex_app_server_v2_chat_session_subset"]);
         let thread_start =
             r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"Draft"}}"#;
         let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"hello","text_elements":[]}]}}"#;
@@ -549,7 +549,8 @@ mod tests {
 
     #[test]
     fn echo_runtime_mode_streams_real_runtime_completion_over_stdio() {
-        let initialize = initialize_request("open-cowork", ["codex_app_server_v2"]);
+        let initialize =
+            initialize_request("open-cowork", ["codex_app_server_v2_chat_session_subset"]);
         let thread_start =
             r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"Draft"}}"#;
         let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"hello echo","text_elements":[]}]}}"#;
@@ -687,7 +688,7 @@ mod tests {
 
     #[test]
     fn stdio_loop_emits_codex_v2_failure_item_terminal_and_error_events() {
-        let initialize = initialize_request("codex", ["codex_app_server_v2"]);
+        let initialize = initialize_request("codex", ["codex_app_server_v2_chat_session_subset"]);
         let thread_start =
             r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"Draft"}}"#;
         let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"hello","text_elements":[]}]}}"#;
@@ -735,7 +736,7 @@ mod tests {
 
     #[test]
     fn stdio_loop_emits_codex_v2_interrupt_item_terminal_events() {
-        let initialize = initialize_request("codex", ["codex_app_server_v2"]);
+        let initialize = initialize_request("codex", ["codex_app_server_v2_chat_session_subset"]);
         let thread_start =
             r#"{"jsonrpc":"2.0","id":"thread","method":"thread/start","params":{"cwd":"Draft"}}"#;
         let turn_start = r#"{"jsonrpc":"2.0","id":"turn","method":"turn/start","params":{"threadId":"thread_1","input":[{"type":"text","text":"hello","text_elements":[]}]}}"#;
