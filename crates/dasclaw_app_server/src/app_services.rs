@@ -2,13 +2,13 @@ use std::fmt;
 use std::sync::Arc;
 
 use dasclaw_app_server_protocol::{
-    AppServerServiceAvailability, JobListParams, JobListResponse, JobReadParams, JobReadResponse,
-    ListMcpServerStatusParams, ListMcpServerStatusResponse, LogEntryEvent, McpResourceReadParams,
-    McpResourceReadResponse, McpServerOauthLoginParams, McpServerOauthLoginResponse,
-    McpServerReloadParams, McpServerReloadResponse, McpServerToolCallParams,
-    McpServerToolCallResponse, McpServiceAvailability, McpToolCallProgressNotification,
-    ServiceHealth, ServiceName, ServiceStatus, SkillsConfigWriteParams, SkillsConfigWriteResponse,
-    SkillsListParams, SkillsListResponse,
+    AppServerP5Availability, AppServerServiceAvailability, JobListParams, JobListResponse,
+    JobReadParams, JobReadResponse, ListMcpServerStatusParams, ListMcpServerStatusResponse,
+    LogEntryEvent, McpResourceReadParams, McpResourceReadResponse, McpServerOauthLoginParams,
+    McpServerOauthLoginResponse, McpServerReloadParams, McpServerReloadResponse,
+    McpServerToolCallParams, McpServerToolCallResponse, McpServiceAvailability,
+    McpToolCallProgressNotification, ServiceHealth, ServiceName, ServiceStatus,
+    SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse,
 };
 use dasclaw_runtime::context::ContextManager;
 
@@ -151,6 +151,7 @@ impl AppServerServices {
             } else {
                 McpServiceAvailability::default()
             },
+            p5: AppServerP5Availability::default(),
         }
     }
 

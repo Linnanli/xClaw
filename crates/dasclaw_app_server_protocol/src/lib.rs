@@ -929,6 +929,8 @@ impl CompatibilityProfile {
                 CapabilityOptOut::phase_one("tools"),
                 CapabilityOptOut::phase_one("mcp"),
                 CapabilityOptOut::phase_one("skills"),
+                CapabilityOptOut::phase_one("filesystem"),
+                CapabilityOptOut::phase_one("command_exec"),
                 CapabilityOptOut::phase_one("dlp_policy"),
                 CapabilityOptOut::phase_one("jobs"),
                 CapabilityOptOut::phase_one("sandbox"),
@@ -3360,6 +3362,12 @@ mod tests {
         assert!(profile.capability_opt_outs.iter().any(|opt_out| {
             opt_out.capability == "mcp" && opt_out.reason == "phase_1_chat_session_subset"
         }));
+        assert!(profile.capability_opt_outs.iter().any(|opt_out| {
+            opt_out.capability == "filesystem" && opt_out.reason == "phase_1_chat_session_subset"
+        }));
+        assert!(profile.capability_opt_outs.iter().any(|opt_out| {
+            opt_out.capability == "command_exec" && opt_out.reason == "phase_1_chat_session_subset"
+        }));
         assert!(profile.aliases.is_empty());
         assert!(
             !profile
@@ -4449,37 +4457,33 @@ mod tests {
             });
 
         assert_eq!(matrix.filesystem.status, CapabilityStatus::Implemented);
-        assert!(
-            matrix
-                .filesystem
-                .methods
-                .contains(&method::FS_READ_FILE.to_string())
+        assert_eq!(
+            matrix.filesystem.methods,
+            vec![
+                method::FS_READ_FILE.to_string(),
+                method::FS_WRITE_FILE.to_string(),
+                method::FS_CREATE_DIRECTORY.to_string(),
+                method::FS_GET_METADATA.to_string(),
+                method::FS_READ_DIRECTORY.to_string(),
+                method::FS_REMOVE.to_string(),
+                method::FS_COPY.to_string(),
+                method::FS_WATCH.to_string(),
+                method::FS_UNWATCH.to_string(),
+            ]
         );
-        assert!(
-            matrix
-                .filesystem
-                .methods
-                .contains(&method::FS_WRITE_FILE.to_string())
-        );
-        assert!(
-            matrix
-                .filesystem
-                .methods
-                .contains(&method::FS_WATCH.to_string())
-        );
-        assert!(
-            matrix
-                .filesystem
-                .events
-                .contains(&event::FS_CHANGED.to_string())
+        assert_eq!(
+            matrix.filesystem.events,
+            vec![event::FS_CHANGED.to_string()]
         );
 
         assert_eq!(matrix.command_exec.status, CapabilityStatus::Implemented);
-        assert!(
-            matrix
-                .command_exec
-                .methods
-                .contains(&method::COMMAND_EXEC.to_string())
+        assert_eq!(
+            matrix.command_exec.methods,
+            vec![method::COMMAND_EXEC.to_string()]
+        );
+        assert_eq!(
+            matrix.command_exec.events,
+            vec![event::COMMAND_EXEC_OUTPUT_DELTA.to_string()]
         );
         assert!(
             !matrix
@@ -4488,11 +4492,30 @@ mod tests {
                 .contains(&method::COMMAND_EXEC_WRITE.to_string())
         );
         assert!(
-            matrix
+            !matrix
                 .command_exec
-                .events
-                .contains(&event::COMMAND_EXEC_OUTPUT_DELTA.to_string())
+                .methods
+                .contains(&method::COMMAND_EXEC_TERMINATE.to_string())
         );
+        assert!(
+            !matrix
+                .command_exec
+                .methods
+                .contains(&method::COMMAND_EXEC_RESIZE.to_string())
+        );
+    }
+
+    #[test]
+    fn p5_protocol_default_availability_keeps_capabilities_declared() {
+        let matrix = CapabilityMatrix::phase_one()
+            .with_p5_filesystem_command(AppServerP5Availability::default());
+
+        assert_eq!(matrix.filesystem.status, CapabilityStatus::Declared);
+        assert!(matrix.filesystem.methods.is_empty());
+        assert!(matrix.filesystem.events.is_empty());
+        assert_eq!(matrix.command_exec.status, CapabilityStatus::Declared);
+        assert!(matrix.command_exec.methods.is_empty());
+        assert!(matrix.command_exec.events.is_empty());
     }
 
     #[test]
