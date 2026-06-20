@@ -2,9 +2,17 @@ use std::fmt;
 use std::sync::Arc;
 
 use dasclaw_app_server_protocol::{
-    AppServerP5Availability, AppServerServiceAvailability, JobListParams, JobListResponse,
-    JobReadParams, JobReadResponse, ListMcpServerStatusParams, ListMcpServerStatusResponse,
-    LogEntryEvent, McpResourceReadParams, McpResourceReadResponse, McpServerOauthLoginParams,
+    AppServerP5Availability, AppServerServiceAvailability, CommandExecAvailability,
+    CommandExecOutputDeltaNotification, CommandExecParams, CommandExecResizeParams,
+    CommandExecResizeResponse, CommandExecResponse, CommandExecTerminateParams,
+    CommandExecTerminateResponse, CommandExecWriteParams, CommandExecWriteResponse,
+    FsChangedNotification, FsCopyParams, FsCopyResponse, FsCreateDirectoryParams,
+    FsCreateDirectoryResponse, FsGetMetadataParams, FsGetMetadataResponse, FsReadDirectoryParams,
+    FsReadDirectoryResponse, FsReadFileParams, FsReadFileResponse, FsRemoveParams,
+    FsRemoveResponse, FsUnwatchParams, FsUnwatchResponse, FsWatchParams, FsWatchResponse,
+    FsWriteFileParams, FsWriteFileResponse, JobListParams, JobListResponse, JobReadParams,
+    JobReadResponse, ListMcpServerStatusParams, ListMcpServerStatusResponse, LogEntryEvent,
+    McpResourceReadParams, McpResourceReadResponse, McpServerOauthLoginParams,
     McpServerOauthLoginResponse, McpServerReloadParams, McpServerReloadResponse,
     McpServerToolCallParams, McpServerToolCallResponse, McpServiceAvailability,
     McpToolCallProgressNotification, ServiceHealth, ServiceName, ServiceStatus,
@@ -85,12 +93,73 @@ pub trait McpService: Send + Sync {
     }
 }
 
+pub trait FsService: Send + Sync {
+    fn health(&self) -> ServiceHealth;
+    fn read_file(&self, params: FsReadFileParams) -> Result<FsReadFileResponse, AppServerError>;
+    fn write_file(&self, params: FsWriteFileParams) -> Result<FsWriteFileResponse, AppServerError>;
+    fn create_directory(
+        &self,
+        params: FsCreateDirectoryParams,
+    ) -> Result<FsCreateDirectoryResponse, AppServerError>;
+    fn get_metadata(
+        &self,
+        params: FsGetMetadataParams,
+    ) -> Result<FsGetMetadataResponse, AppServerError>;
+    fn read_directory(
+        &self,
+        params: FsReadDirectoryParams,
+    ) -> Result<FsReadDirectoryResponse, AppServerError>;
+    fn remove(&self, params: FsRemoveParams) -> Result<FsRemoveResponse, AppServerError>;
+    fn copy(&self, params: FsCopyParams) -> Result<FsCopyResponse, AppServerError>;
+    fn watch(&self, params: FsWatchParams) -> Result<FsWatchResponse, AppServerError>;
+    fn unwatch(&self, params: FsUnwatchParams) -> Result<FsUnwatchResponse, AppServerError>;
+
+    fn drain_changed_events(&self) -> Vec<FsChangedNotification> {
+        Vec::new()
+    }
+
+    fn is_ready(&self) -> bool {
+        self.health().status == ServiceStatus::Ready
+    }
+}
+
+pub trait CommandExecService: Send + Sync {
+    fn health(&self) -> ServiceHealth;
+    fn exec(&self, params: CommandExecParams) -> Result<CommandExecResponse, AppServerError>;
+    fn write(
+        &self,
+        params: CommandExecWriteParams,
+    ) -> Result<CommandExecWriteResponse, AppServerError>;
+    fn terminate(
+        &self,
+        params: CommandExecTerminateParams,
+    ) -> Result<CommandExecTerminateResponse, AppServerError>;
+    fn resize(
+        &self,
+        params: CommandExecResizeParams,
+    ) -> Result<CommandExecResizeResponse, AppServerError>;
+
+    fn drain_output_delta_events(&self) -> Vec<CommandExecOutputDeltaNotification> {
+        Vec::new()
+    }
+
+    fn availability(&self) -> CommandExecAvailability {
+        CommandExecAvailability::default()
+    }
+
+    fn is_ready(&self) -> bool {
+        self.health().status == ServiceStatus::Ready
+    }
+}
+
 #[derive(Clone)]
 pub struct AppServerServices {
     pub logs: Arc<dyn LogService>,
     pub jobs: Arc<dyn JobService>,
     pub skills: Arc<dyn SkillsService>,
     pub mcp: Arc<dyn McpService>,
+    pub filesystem: Arc<dyn FsService>,
+    pub command: Arc<dyn CommandExecService>,
 }
 
 impl fmt::Debug for AppServerServices {
@@ -108,6 +177,8 @@ impl Default for AppServerServices {
             jobs: Arc::new(NoopJobService),
             skills: Arc::new(NoopSkillsService),
             mcp: Arc::new(NoopMcpService),
+            filesystem: Arc::new(NoopFsService),
+            command: Arc::new(NoopCommandExecService),
         }
     }
 }
@@ -121,6 +192,8 @@ impl AppServerServices {
             jobs: Arc::new(AppServerJobService::new(manager)),
             skills: Arc::new(AppServerSkillsService::new()),
             mcp: Arc::new(AppServerMcpService::default()),
+            filesystem: Arc::new(NoopFsService),
+            command: Arc::new(NoopCommandExecService),
         }
     }
 
@@ -130,6 +203,8 @@ impl AppServerServices {
             self.jobs.health(),
             self.skills.health(),
             self.mcp.health(),
+            self.filesystem.health(),
+            self.command.health(),
         ]
     }
 
@@ -141,7 +216,23 @@ impl AppServerServices {
         self.mcp.drain_tool_call_progress_events()
     }
 
+    pub fn drain_fs_changed_events(&self) -> Vec<FsChangedNotification> {
+        self.filesystem.drain_changed_events()
+    }
+
+    pub fn drain_command_exec_output_delta_events(
+        &self,
+    ) -> Vec<CommandExecOutputDeltaNotification> {
+        self.command.drain_output_delta_events()
+    }
+
     pub fn availability(&self) -> AppServerServiceAvailability {
+        let command = if self.command.is_ready() {
+            self.command.availability()
+        } else {
+            CommandExecAvailability::default()
+        };
+
         AppServerServiceAvailability {
             logs: self.logs.is_ready(),
             jobs: self.jobs.is_ready(),
@@ -151,7 +242,10 @@ impl AppServerServices {
             } else {
                 McpServiceAvailability::default()
             },
-            p5: AppServerP5Availability::default(),
+            p5: AppServerP5Availability {
+                filesystem: self.filesystem.is_ready(),
+                command,
+            },
         }
     }
 
@@ -161,12 +255,16 @@ impl AppServerServices {
         jobs: impl JobService + 'static,
         skills: impl SkillsService + 'static,
         mcp: impl McpService + 'static,
+        filesystem: impl FsService + 'static,
+        command: impl CommandExecService + 'static,
     ) -> Self {
         Self {
             logs: Arc::new(logs),
             jobs: Arc::new(jobs),
             skills: Arc::new(skills),
             mcp: Arc::new(mcp),
+            filesystem: Arc::new(filesystem),
+            command: Arc::new(command),
         }
     }
 }
@@ -175,6 +273,8 @@ struct NoopLogService;
 struct NoopJobService;
 struct NoopSkillsService;
 struct NoopMcpService;
+struct NoopFsService;
+struct NoopCommandExecService;
 
 impl LogService for NoopLogService {
     fn health(&self) -> ServiceHealth {
@@ -285,14 +385,151 @@ impl McpService for NoopMcpService {
     }
 }
 
+impl FsService for NoopFsService {
+    fn health(&self) -> ServiceHealth {
+        ServiceHealth::disabled(ServiceName::Filesystem, "filesystem service is not wired")
+    }
+
+    fn read_file(&self, _params: FsReadFileParams) -> Result<FsReadFileResponse, AppServerError> {
+        Err(AppServerError::capability_unavailable(
+            "filesystem",
+            "filesystem service is not wired",
+        ))
+    }
+
+    fn write_file(
+        &self,
+        _params: FsWriteFileParams,
+    ) -> Result<FsWriteFileResponse, AppServerError> {
+        Err(AppServerError::capability_unavailable(
+            "filesystem",
+            "filesystem service is not wired",
+        ))
+    }
+
+    fn create_directory(
+        &self,
+        _params: FsCreateDirectoryParams,
+    ) -> Result<FsCreateDirectoryResponse, AppServerError> {
+        Err(AppServerError::capability_unavailable(
+            "filesystem",
+            "filesystem service is not wired",
+        ))
+    }
+
+    fn get_metadata(
+        &self,
+        _params: FsGetMetadataParams,
+    ) -> Result<FsGetMetadataResponse, AppServerError> {
+        Err(AppServerError::capability_unavailable(
+            "filesystem",
+            "filesystem service is not wired",
+        ))
+    }
+
+    fn read_directory(
+        &self,
+        _params: FsReadDirectoryParams,
+    ) -> Result<FsReadDirectoryResponse, AppServerError> {
+        Err(AppServerError::capability_unavailable(
+            "filesystem",
+            "filesystem service is not wired",
+        ))
+    }
+
+    fn remove(&self, _params: FsRemoveParams) -> Result<FsRemoveResponse, AppServerError> {
+        Err(AppServerError::capability_unavailable(
+            "filesystem",
+            "filesystem service is not wired",
+        ))
+    }
+
+    fn copy(&self, _params: FsCopyParams) -> Result<FsCopyResponse, AppServerError> {
+        Err(AppServerError::capability_unavailable(
+            "filesystem",
+            "filesystem service is not wired",
+        ))
+    }
+
+    fn watch(&self, _params: FsWatchParams) -> Result<FsWatchResponse, AppServerError> {
+        Err(AppServerError::capability_unavailable(
+            "filesystem",
+            "filesystem service is not wired",
+        ))
+    }
+
+    fn unwatch(&self, _params: FsUnwatchParams) -> Result<FsUnwatchResponse, AppServerError> {
+        Err(AppServerError::capability_unavailable(
+            "filesystem",
+            "filesystem service is not wired",
+        ))
+    }
+}
+
+impl CommandExecService for NoopCommandExecService {
+    fn health(&self) -> ServiceHealth {
+        ServiceHealth::disabled(
+            ServiceName::CommandExec,
+            "command execution service is not wired",
+        )
+    }
+
+    fn exec(&self, _params: CommandExecParams) -> Result<CommandExecResponse, AppServerError> {
+        Err(AppServerError::capability_unavailable(
+            "command_exec",
+            "command execution service is not wired",
+        ))
+    }
+
+    fn write(
+        &self,
+        _params: CommandExecWriteParams,
+    ) -> Result<CommandExecWriteResponse, AppServerError> {
+        Err(AppServerError::capability_unavailable(
+            "command_exec",
+            "command execution service is not wired",
+        ))
+    }
+
+    fn terminate(
+        &self,
+        _params: CommandExecTerminateParams,
+    ) -> Result<CommandExecTerminateResponse, AppServerError> {
+        Err(AppServerError::capability_unavailable(
+            "command_exec",
+            "command execution service is not wired",
+        ))
+    }
+
+    fn resize(
+        &self,
+        _params: CommandExecResizeParams,
+    ) -> Result<CommandExecResizeResponse, AppServerError> {
+        Err(AppServerError::capability_unavailable(
+            "command_exec",
+            "command execution service is not wired",
+        ))
+    }
+}
+
 #[cfg(test)]
-pub use test_fakes::{TestJobService, TestLogService, TestMcpService, TestSkillsService};
+pub use test_fakes::{
+    TestCommandExecService, TestFsService, TestJobService, TestLogService, TestMcpService,
+    TestSkillsService,
+};
 
 #[cfg(test)]
 mod test_fakes {
     use std::sync::{Arc, Mutex};
 
     use dasclaw_app_server_protocol::{
+        CommandExecAvailability, CommandExecParams, CommandExecResizeParams,
+        CommandExecResizeResponse, CommandExecResponse, CommandExecTerminateParams,
+        CommandExecTerminateResponse, CommandExecWriteParams, CommandExecWriteResponse,
+        FsCopyParams, FsCopyResponse, FsCreateDirectoryParams, FsCreateDirectoryResponse,
+        FsGetMetadataParams, FsGetMetadataResponse, FsReadDirectoryParams, FsReadDirectoryResponse,
+        FsReadFileParams, FsReadFileResponse, FsRemoveParams, FsRemoveResponse, FsUnwatchParams,
+        FsUnwatchResponse, FsWatchParams, FsWatchResponse, FsWriteFileParams, FsWriteFileResponse,
         JobListParams, JobListResponse, JobReadParams, JobReadResponse, JobSnapshot,
         ListMcpServerStatusParams, ListMcpServerStatusResponse, LogEntryEvent,
         McpResourceReadParams, McpResourceReadResponse, McpServerOauthLoginParams,
@@ -302,7 +539,7 @@ mod test_fakes {
         SkillsConfigWriteResponse, SkillsListEntry, SkillsListParams, SkillsListResponse,
     };
 
-    use super::{JobService, LogService, McpService, SkillsService};
+    use super::{CommandExecService, FsService, JobService, LogService, McpService, SkillsService};
     use crate::AppServerError;
 
     #[derive(Clone)]
@@ -526,12 +763,176 @@ mod test_fakes {
             }
         }
     }
+
+    #[derive(Clone)]
+    pub struct TestFsService {
+        ready: bool,
+    }
+
+    impl TestFsService {
+        pub fn ready() -> Self {
+            Self { ready: true }
+        }
+
+        pub fn disabled() -> Self {
+            Self { ready: false }
+        }
+    }
+
+    impl FsService for TestFsService {
+        fn health(&self) -> ServiceHealth {
+            if self.ready {
+                ServiceHealth::ready(ServiceName::Filesystem)
+            } else {
+                ServiceHealth::disabled(ServiceName::Filesystem, "test filesystem service disabled")
+            }
+        }
+
+        fn read_file(
+            &self,
+            _params: FsReadFileParams,
+        ) -> Result<FsReadFileResponse, AppServerError> {
+            Ok(FsReadFileResponse {
+                data_base64: "dGVzdA==".to_string(),
+            })
+        }
+
+        fn write_file(
+            &self,
+            _params: FsWriteFileParams,
+        ) -> Result<FsWriteFileResponse, AppServerError> {
+            Ok(FsWriteFileResponse {})
+        }
+
+        fn create_directory(
+            &self,
+            _params: FsCreateDirectoryParams,
+        ) -> Result<FsCreateDirectoryResponse, AppServerError> {
+            Ok(FsCreateDirectoryResponse {})
+        }
+
+        fn get_metadata(
+            &self,
+            _params: FsGetMetadataParams,
+        ) -> Result<FsGetMetadataResponse, AppServerError> {
+            Ok(FsGetMetadataResponse {
+                is_file: true,
+                is_directory: false,
+                is_symlink: false,
+                created_at_ms: 0,
+                modified_at_ms: 0,
+            })
+        }
+
+        fn read_directory(
+            &self,
+            _params: FsReadDirectoryParams,
+        ) -> Result<FsReadDirectoryResponse, AppServerError> {
+            Ok(FsReadDirectoryResponse { entries: vec![] })
+        }
+
+        fn remove(&self, _params: FsRemoveParams) -> Result<FsRemoveResponse, AppServerError> {
+            Ok(FsRemoveResponse {})
+        }
+
+        fn copy(&self, _params: FsCopyParams) -> Result<FsCopyResponse, AppServerError> {
+            Ok(FsCopyResponse {})
+        }
+
+        fn watch(&self, params: FsWatchParams) -> Result<FsWatchResponse, AppServerError> {
+            Ok(FsWatchResponse { path: params.path })
+        }
+
+        fn unwatch(&self, _params: FsUnwatchParams) -> Result<FsUnwatchResponse, AppServerError> {
+            Ok(FsUnwatchResponse {})
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct TestCommandExecService {
+        availability: CommandExecAvailability,
+    }
+
+    impl TestCommandExecService {
+        pub fn ready_buffered() -> Self {
+            Self {
+                availability: CommandExecAvailability {
+                    exec: true,
+                    ..CommandExecAvailability::default()
+                },
+            }
+        }
+
+        pub fn disabled() -> Self {
+            Self {
+                availability: CommandExecAvailability::default(),
+            }
+        }
+    }
+
+    impl CommandExecService for TestCommandExecService {
+        fn health(&self) -> ServiceHealth {
+            if self.availability != CommandExecAvailability::default() {
+                ServiceHealth::ready(ServiceName::CommandExec)
+            } else {
+                ServiceHealth::disabled(
+                    ServiceName::CommandExec,
+                    "test command execution service disabled",
+                )
+            }
+        }
+
+        fn exec(&self, _params: CommandExecParams) -> Result<CommandExecResponse, AppServerError> {
+            Ok(CommandExecResponse {
+                exit_code: 0,
+                stdout: "test".to_string(),
+                stderr: String::new(),
+            })
+        }
+
+        fn write(
+            &self,
+            _params: CommandExecWriteParams,
+        ) -> Result<CommandExecWriteResponse, AppServerError> {
+            Err(AppServerError::capability_unavailable(
+                "command_exec",
+                "command stdin streaming is not available in this test service",
+            ))
+        }
+
+        fn terminate(
+            &self,
+            _params: CommandExecTerminateParams,
+        ) -> Result<CommandExecTerminateResponse, AppServerError> {
+            Err(AppServerError::capability_unavailable(
+                "command_exec",
+                "command termination is not available in this test service",
+            ))
+        }
+
+        fn resize(
+            &self,
+            _params: CommandExecResizeParams,
+        ) -> Result<CommandExecResizeResponse, AppServerError> {
+            Err(AppServerError::capability_unavailable(
+                "command_exec",
+                "command resize is not available in this test service",
+            ))
+        }
+
+        fn availability(&self) -> CommandExecAvailability {
+            self.availability
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::AppServerServices;
-    use super::test_fakes::{TestJobService, TestLogService, TestMcpService, TestSkillsService};
+    use super::test_fakes::{
+        TestCommandExecService, TestFsService, TestJobService, TestLogService, TestMcpService,
+        TestSkillsService,
+    };
     use dasclaw_app_server_protocol::McpServiceAvailability;
 
     #[test]
@@ -541,11 +942,48 @@ mod tests {
             TestJobService::ready(vec![]),
             TestSkillsService::ready(vec![]),
             TestMcpService::disabled_with_advertised_methods(vec![]),
+            TestFsService::disabled(),
+            TestCommandExecService::disabled(),
         );
 
         assert_eq!(
             services.availability().mcp,
             McpServiceAvailability::default()
         );
+    }
+
+    #[test]
+    fn app_server_p5_availability_requires_ready_health() {
+        let services = AppServerServices::for_tests(
+            TestLogService::ready(),
+            TestJobService::ready(vec![]),
+            TestSkillsService::ready(vec![]),
+            TestMcpService::ready(vec![]),
+            TestFsService::disabled(),
+            TestCommandExecService::disabled(),
+        );
+
+        let availability = services.availability();
+        assert!(!availability.p5.filesystem);
+        assert!(!availability.p5.command.exec);
+    }
+
+    #[test]
+    fn app_server_p5_availability_reports_ready_service_methods() {
+        let services = AppServerServices::for_tests(
+            TestLogService::ready(),
+            TestJobService::ready(vec![]),
+            TestSkillsService::ready(vec![]),
+            TestMcpService::ready(vec![]),
+            TestFsService::ready(),
+            TestCommandExecService::ready_buffered(),
+        );
+
+        let availability = services.availability();
+        assert!(availability.p5.filesystem);
+        assert!(availability.p5.command.exec);
+        assert!(!availability.p5.command.output_delta_events);
+        assert!(!availability.p5.command.write);
+        assert!(!availability.p5.command.resize);
     }
 }

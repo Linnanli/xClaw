@@ -3814,6 +3814,8 @@ mod tests {
             app_services::TestJobService::ready(vec![]),
             app_services::TestSkillsService::ready(vec![]),
             app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            app_services::TestCommandExecService::disabled(),
         );
         let mut server = AppServer::new().with_app_services(services);
 
@@ -3900,6 +3902,8 @@ mod tests {
                 errors: vec![],
             }]),
             app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            app_services::TestCommandExecService::disabled(),
         );
         let mut server = AppServer::new().with_app_services(services);
         server
@@ -3961,6 +3965,8 @@ mod tests {
             job_service::AppServerJobService::new(Arc::clone(&manager)),
             app_services::TestSkillsService::ready(vec![]),
             app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            app_services::TestCommandExecService::disabled(),
         );
         let mut server = AppServer::new().with_app_services(services);
         server
@@ -4002,6 +4008,8 @@ mod tests {
             job_service::AppServerJobService::new(manager),
             app_services::TestSkillsService::ready(vec![]),
             app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            app_services::TestCommandExecService::disabled(),
         );
         let mut server = AppServer::new().with_app_services(services);
         server
@@ -4039,6 +4047,8 @@ mod tests {
             app_services::TestJobService::ready(vec![]),
             app_services::TestSkillsService::ready(vec![]),
             app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            app_services::TestCommandExecService::disabled(),
         );
         let services = app_services::AppServerServices {
             skills: Arc::new(skills_service::AppServerSkillsService::new()),
@@ -4101,6 +4111,8 @@ mod tests {
             app_services::TestJobService::ready(vec![]),
             skills_service::AppServerSkillsService::new(),
             app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            app_services::TestCommandExecService::disabled(),
         );
         let mut server = AppServer::new().with_app_services(services);
         server
@@ -4144,6 +4156,8 @@ mod tests {
             app_services::TestJobService::ready(vec![]),
             app_services::TestSkillsService::ready(vec![]),
             mcp_service::AppServerMcpService::from_servers(vec![bearer]),
+            app_services::TestFsService::disabled(),
+            app_services::TestCommandExecService::disabled(),
         );
         let mut server = AppServer::new().with_app_services(services);
         server
@@ -4213,6 +4227,8 @@ mod tests {
             app_services::TestJobService::ready(vec![]),
             app_services::TestSkillsService::ready(vec![]),
             service,
+            app_services::TestFsService::disabled(),
+            app_services::TestCommandExecService::disabled(),
         );
         let mut server = AppServer::new().with_app_services(services);
 
@@ -4251,6 +4267,8 @@ mod tests {
             mcp_service::AppServerMcpService::from_servers(vec![
                 dasclaw_mcp::McpServerConfig::new("github", "https://github.example/mcp"),
             ]),
+            app_services::TestFsService::disabled(),
+            app_services::TestCommandExecService::disabled(),
         );
         let mut server = AppServer::new().with_app_services(services);
         server
@@ -4285,6 +4303,8 @@ mod tests {
             app_services::TestJobService::ready(vec![]),
             app_services::TestSkillsService::ready(vec![]),
             mcp_service::AppServerMcpService::from_servers(vec![github]),
+            app_services::TestFsService::disabled(),
+            app_services::TestCommandExecService::disabled(),
         );
         let mut server = AppServer::new().with_app_services(services);
         server
@@ -4316,6 +4336,8 @@ mod tests {
             app_services::TestJobService::ready(vec![]),
             app_services::TestSkillsService::ready(vec![]),
             app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            app_services::TestCommandExecService::disabled(),
         );
         let mut server = AppServer::new().with_app_services(services);
 

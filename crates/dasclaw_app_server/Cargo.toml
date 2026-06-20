@@ -15,13 +15,18 @@ path = "src/main.rs"
 
 [dependencies]
 async-trait = "0.1"
+base64 = "0.22"
 dasclaw_core = { path = "../dasclaw_core" }
 dasclaw_app_server_protocol = { path = "../dasclaw_app_server_protocol" }
+dasclaw_fs_tools = { path = "../dasclaw_fs_tools" }
 dasclaw_llm_provider = { path = "../dasclaw_llm_provider" }
 dasclaw_mcp = { path = "../dasclaw_mcp" }
 dasclaw_observability = { path = "../dasclaw_observability" }
+dasclaw_pty = { path = "../dasclaw_pty" }
 dasclaw_runtime = { path = "../dasclaw_runtime" }
+dasclaw_shell_tools = { path = "../dasclaw_shell_tools" }
 dasclaw_tool = { path = "../dasclaw_tool" }
+dasclaw_workspace_cap = { path = "../dasclaw_workspace_cap" }
 futures-util = "0.3"
 secrecy = "0.10"
 serde = { version = "1", features = ["derive"] }
@@ -30,3 +35,6 @@ thiserror = "1"
 tokio = { version = "1", features = ["rt", "sync"] }
 tokio-util = "0.7"
 uuid = "1"
+
+[dev-dependencies]
+tempfile = "3"
