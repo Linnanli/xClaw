@@ -4113,17 +4113,25 @@ mod tests {
         let mut server = AppServer::new().with_app_services(services);
 
         let notifications = server.drain_notifications();
+        let fs_changed = notifications
+            .iter()
+            .filter(|notification| notification.method == event::FS_CHANGED)
+            .collect::<Vec<_>>();
+        let output_delta = notifications
+            .iter()
+            .filter(|notification| notification.method == event::COMMAND_EXEC_OUTPUT_DELTA)
+            .collect::<Vec<_>>();
 
-        assert!(
-            notifications
-                .iter()
-                .any(|notification| notification.method == event::FS_CHANGED)
-        );
-        assert!(
-            notifications
-                .iter()
-                .any(|notification| notification.method == event::COMMAND_EXEC_OUTPUT_DELTA)
-        );
+        assert_eq!(notifications.len(), 2);
+        assert_eq!(fs_changed.len(), 1);
+        assert_eq!(fs_changed[0].params["watchId"], "watch_1");
+        assert_eq!(fs_changed[0].params["path"], "/tmp/example.txt");
+        assert_eq!(fs_changed[0].params["kind"], "modified");
+        assert_eq!(output_delta.len(), 1);
+        assert_eq!(output_delta[0].params["processId"], "proc_1");
+        assert_eq!(output_delta[0].params["stream"], "stdout");
+        assert_eq!(output_delta[0].params["deltaBase64"], "dGVzdA==");
+        assert_eq!(output_delta[0].params["capReached"], false);
         assert!(server.drain_notifications().is_empty());
     }
 

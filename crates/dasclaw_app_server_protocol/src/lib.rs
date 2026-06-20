@@ -4579,12 +4579,40 @@ mod tests {
 
     #[test]
     fn p5_protocol_serializes_fs_and_command_payloads() {
+        let read_params = FsReadFileParams {
+            path: "/tmp/example.txt".to_string(),
+            offset: Some(2),
+            length: Some(4),
+        };
+        assert_eq!(
+            serde_json::to_value(read_params).expect("serialize read params"),
+            serde_json::json!({
+                "path": "/tmp/example.txt",
+                "offset": 2,
+                "length": 4
+            })
+        );
+
         let read = FsReadFileResponse {
             data_base64: "aGVsbG8=".to_string(),
         };
         assert_eq!(
             serde_json::to_value(read).expect("serialize read response"),
             serde_json::json!({"dataBase64": "aGVsbG8="})
+        );
+
+        let write = FsWriteFileParams {
+            path: "/tmp/example.txt".to_string(),
+            data_base64: "aGVsbG8=".to_string(),
+            mode: Some(FsWriteMode::Append),
+        };
+        assert_eq!(
+            serde_json::to_value(write).expect("serialize write params"),
+            serde_json::json!({
+                "path": "/tmp/example.txt",
+                "dataBase64": "aGVsbG8=",
+                "mode": "append"
+            })
         );
 
         let exec = CommandExecParams {
@@ -4597,7 +4625,7 @@ mod tests {
             timeout_ms: Some(5_000),
             disable_timeout: None,
             output_bytes_cap: Some(1024),
-            disable_output_cap: None,
+            disable_output_cap: Some(true),
             env: Default::default(),
             process_id: Some("proc_1".to_string()),
             sandbox_policy: None,
@@ -4613,6 +4641,7 @@ mod tests {
                 "cwd": "/tmp",
                 "timeoutMs": 5000,
                 "outputBytesCap": 1024,
+                "disableOutputCap": true,
                 "processId": "proc_1",
                 "streamStdoutStderr": true
             })
