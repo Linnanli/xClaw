@@ -7,6 +7,7 @@
 //! DLP, jobs, skills, MCP, and sandbox execution stay outside this crate.
 
 pub mod app_services;
+pub mod fs_service;
 pub mod job_service;
 pub mod log_service;
 pub mod mcp_service;

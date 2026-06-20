@@ -1893,6 +1893,10 @@ pub struct CommandExecutionTerminalInteractionEvent {
 #[serde(rename_all = "camelCase")]
 pub struct FsReadFileParams {
     pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1906,6 +1910,17 @@ pub struct FsReadFileResponse {
 pub struct FsWriteFileParams {
     pub path: String,
     pub data_base64: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<FsWriteMode>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FsWriteMode {
+    Create,
+    #[default]
+    Overwrite,
+    Append,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
