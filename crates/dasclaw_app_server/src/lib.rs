@@ -24,24 +24,31 @@ use dasclaw_app_server_protocol::ClientModelConfig;
 use dasclaw_app_server_protocol::{
     AgentMessageDeltaEvent, AppServerApprovalDecision, ApprovalResponsePayload,
     CapabilitiesChangedEvent, CapabilitiesChangedReason, CapabilitiesListResponse,
-    CapabilityMatrix, ClientInfo, CommandExecutionApprovalRequest,
-    CommandExecutionOutputDeltaEvent, CommandExecutionTerminalInteractionEvent,
-    CompatibilityProfile, DEFAULT_MAX_PENDING_NOTIFICATIONS, ErrorCode, ErrorData, ErrorEvent,
-    HealthCheckParams, HealthCheckResponse, InitializeParams, InitializeResponse,
-    ItemCompletedEvent, ItemStartedEvent, JobListParams, JobListResponse, JobReadParams,
-    JobReadResponse, JsonRpcClientResponse, JsonRpcError, JsonRpcRequest, JsonRpcResponse,
-    JsonRpcServerRequest, LifecycleChangedEvent, LifecycleReason, LifecycleSnapshot,
-    LifecycleState, LifecycleStatusResponse, ListMcpServerStatusParams,
-    ListMcpServerStatusResponse, LogEntryEvent, McpResourceReadParams, McpResourceReadResponse,
-    McpServerOauthLoginCompletedNotification, McpServerOauthLoginParams,
-    McpServerOauthLoginResponse, McpServerReloadParams, McpServerReloadResponse,
-    McpServerStartupState, McpServerStatusUpdatedNotification, McpServerToolCallParams,
-    McpServerToolCallResponse, McpToolCallProgressNotification, ModelListParams, ModelListResponse,
-    ModelProviderInitializeConfig, ModelProviderSelectForNextTurnParams,
-    ModelProviderSelectForNextTurnResponse, NotificationQueuePolicy, NotificationsInitializedEvent,
-    ProtocolSchemaResponse, ProtocolVersion, ReasoningSummaryTextDeltaEvent, ServerInfo,
-    ServerNotification, ServerRequestResolutionOutcome, ServerRequestResolvedEvent, ServiceHealth,
-    ServiceName, ShutdownParams, ShutdownReason, ShutdownResponse, SkillsChangedNotification,
+    CapabilityMatrix, ClientInfo, CommandExecParams, CommandExecResizeParams,
+    CommandExecResizeResponse, CommandExecResponse, CommandExecTerminateParams,
+    CommandExecTerminateResponse, CommandExecWriteParams, CommandExecWriteResponse,
+    CommandExecutionApprovalRequest, CommandExecutionOutputDeltaEvent,
+    CommandExecutionTerminalInteractionEvent, CompatibilityProfile,
+    DEFAULT_MAX_PENDING_NOTIFICATIONS, ErrorCode, ErrorData, ErrorEvent, FsCopyParams,
+    FsCopyResponse, FsCreateDirectoryParams, FsCreateDirectoryResponse, FsGetMetadataParams,
+    FsGetMetadataResponse, FsReadDirectoryParams, FsReadDirectoryResponse, FsReadFileParams,
+    FsReadFileResponse, FsRemoveParams, FsRemoveResponse, FsUnwatchParams, FsUnwatchResponse,
+    FsWatchParams, FsWatchResponse, FsWriteFileParams, FsWriteFileResponse, HealthCheckParams,
+    HealthCheckResponse, InitializeParams, InitializeResponse, ItemCompletedEvent,
+    ItemStartedEvent, JobListParams, JobListResponse, JobReadParams, JobReadResponse,
+    JsonRpcClientResponse, JsonRpcError, JsonRpcRequest, JsonRpcResponse, JsonRpcServerRequest,
+    LifecycleChangedEvent, LifecycleReason, LifecycleSnapshot, LifecycleState,
+    LifecycleStatusResponse, ListMcpServerStatusParams, ListMcpServerStatusResponse, LogEntryEvent,
+    McpResourceReadParams, McpResourceReadResponse, McpServerOauthLoginCompletedNotification,
+    McpServerOauthLoginParams, McpServerOauthLoginResponse, McpServerReloadParams,
+    McpServerReloadResponse, McpServerStartupState, McpServerStatusUpdatedNotification,
+    McpServerToolCallParams, McpServerToolCallResponse, McpToolCallProgressNotification,
+    ModelListParams, ModelListResponse, ModelProviderInitializeConfig,
+    ModelProviderSelectForNextTurnParams, ModelProviderSelectForNextTurnResponse,
+    NotificationQueuePolicy, NotificationsInitializedEvent, ProtocolSchemaResponse,
+    ProtocolVersion, ReasoningSummaryTextDeltaEvent, ServerInfo, ServerNotification,
+    ServerRequestResolutionOutcome, ServerRequestResolvedEvent, ServiceHealth, ServiceName,
+    ShutdownParams, ShutdownReason, ShutdownResponse, SkillsChangedNotification,
     SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse,
     ThreadListParams, ThreadListResponse, ThreadReadParams, ThreadReadResponse, ThreadStartParams,
     ThreadStartResponse, ThreadStartedEvent, ThreadTurnsListParams, ThreadTurnsListResponse,
@@ -814,6 +821,20 @@ impl AppServer {
         self.model_provider.model_list_response()
     }
 
+    fn filesystem_unavailable<T, R>(&self, _params: T) -> Result<R, AppServerError> {
+        Err(AppServerError::capability_unavailable(
+            "filesystem",
+            "filesystem service is not wired",
+        ))
+    }
+
+    fn command_exec_unavailable<T, R>(&self, _params: T) -> Result<R, AppServerError> {
+        Err(AppServerError::capability_unavailable(
+            "command_exec",
+            "command execution service is not wired",
+        ))
+    }
+
     pub fn jobs_list(&self, params: JobListParams) -> Result<JobListResponse, AppServerError> {
         self.require_initialized("jobs")?;
         self.app_services.jobs.list(params)
@@ -1293,6 +1314,97 @@ impl AppServer {
                 request.params,
                 |params: McpServerOauthLoginParams| self.mcp_server_oauth_login(params),
             ),
+            method::FS_READ_FILE => {
+                route_with_params(request.id, request.params, |params: FsReadFileParams| {
+                    self.filesystem_unavailable::<FsReadFileParams, FsReadFileResponse>(params)
+                })
+            }
+            method::FS_WRITE_FILE => {
+                route_with_params(request.id, request.params, |params: FsWriteFileParams| {
+                    self.filesystem_unavailable::<FsWriteFileParams, FsWriteFileResponse>(params)
+                })
+            }
+            method::FS_CREATE_DIRECTORY => route_with_params(
+                request.id,
+                request.params,
+                |params: FsCreateDirectoryParams| {
+                    self.filesystem_unavailable::<
+                        FsCreateDirectoryParams,
+                        FsCreateDirectoryResponse,
+                    >(params)
+                },
+            ),
+            method::FS_GET_METADATA => {
+                route_with_params(request.id, request.params, |params: FsGetMetadataParams| {
+                    self.filesystem_unavailable::<FsGetMetadataParams, FsGetMetadataResponse>(
+                        params,
+                    )
+                })
+            }
+            method::FS_READ_DIRECTORY => route_with_params(
+                request.id,
+                request.params,
+                |params: FsReadDirectoryParams| {
+                    self.filesystem_unavailable::<FsReadDirectoryParams, FsReadDirectoryResponse>(
+                        params,
+                    )
+                },
+            ),
+            method::FS_REMOVE => {
+                route_with_params(request.id, request.params, |params: FsRemoveParams| {
+                    self.filesystem_unavailable::<FsRemoveParams, FsRemoveResponse>(params)
+                })
+            }
+            method::FS_COPY => {
+                route_with_params(request.id, request.params, |params: FsCopyParams| {
+                    self.filesystem_unavailable::<FsCopyParams, FsCopyResponse>(params)
+                })
+            }
+            method::FS_WATCH => {
+                route_with_params(request.id, request.params, |params: FsWatchParams| {
+                    self.filesystem_unavailable::<FsWatchParams, FsWatchResponse>(params)
+                })
+            }
+            method::FS_UNWATCH => {
+                route_with_params(request.id, request.params, |params: FsUnwatchParams| {
+                    self.filesystem_unavailable::<FsUnwatchParams, FsUnwatchResponse>(params)
+                })
+            }
+            method::COMMAND_EXEC => {
+                route_with_params(request.id, request.params, |params: CommandExecParams| {
+                    self.command_exec_unavailable::<CommandExecParams, CommandExecResponse>(params)
+                })
+            }
+            method::COMMAND_EXEC_WRITE => route_with_params(
+                request.id,
+                request.params,
+                |params: CommandExecWriteParams| {
+                    self.command_exec_unavailable::<
+                        CommandExecWriteParams,
+                        CommandExecWriteResponse,
+                    >(params)
+                },
+            ),
+            method::COMMAND_EXEC_TERMINATE => route_with_params(
+                request.id,
+                request.params,
+                |params: CommandExecTerminateParams| {
+                    self.command_exec_unavailable::<
+                        CommandExecTerminateParams,
+                        CommandExecTerminateResponse,
+                    >(params)
+                },
+            ),
+            method::COMMAND_EXEC_RESIZE => route_with_params(
+                request.id,
+                request.params,
+                |params: CommandExecResizeParams| {
+                    self.command_exec_unavailable::<
+                        CommandExecResizeParams,
+                        CommandExecResizeResponse,
+                    >(params)
+                },
+            ),
             method::APPROVAL_RESPOND => {
                 let id = request.id.clone();
                 route_with_params(
@@ -1710,6 +1822,8 @@ impl AppServer {
             "mcp" => self.capabilities.mcp.status,
             "sandbox" => self.capabilities.sandbox.status,
             "logs" => self.capabilities.logs.status,
+            "filesystem" => self.capabilities.filesystem.status,
+            "command_exec" => self.capabilities.command_exec.status,
             _ => return false,
         };
         status == dasclaw_app_server_protocol::CapabilityStatus::Implemented
@@ -3589,6 +3703,19 @@ pub fn supported_methods() -> &'static [&'static str] {
         method::MCP_SERVER_STATUS_LIST,
         method::MCP_SERVER_RESOURCE_READ,
         method::MCP_SERVER_TOOL_CALL,
+        method::FS_READ_FILE,
+        method::FS_WRITE_FILE,
+        method::FS_CREATE_DIRECTORY,
+        method::FS_GET_METADATA,
+        method::FS_READ_DIRECTORY,
+        method::FS_REMOVE,
+        method::FS_COPY,
+        method::FS_WATCH,
+        method::FS_UNWATCH,
+        method::COMMAND_EXEC,
+        method::COMMAND_EXEC_WRITE,
+        method::COMMAND_EXEC_TERMINATE,
+        method::COMMAND_EXEC_RESIZE,
         method::APPROVAL_RESPOND,
     ]
 }
@@ -3735,6 +3862,22 @@ mod tests {
         assert_ne!(value["error"]["data"]["code"], "UNKNOWN_METHOD");
         assert_eq!(value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
         assert_eq!(value["error"]["data"]["capability"], "jobs");
+    }
+
+    #[test]
+    fn app_server_p5_json_rpc_routes_return_capability_unavailable() {
+        let mut server = initialized_server();
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"fs-read","method":"fs/readFile","params":{"path":"/tmp/missing.txt"}}"#,
+            )
+            .expect("fs/readFile should return a structured response");
+        let value: Value = serde_json::from_str(&response).expect("fs/readFile response JSON");
+
+        assert_eq!(value["id"], "fs-read");
+        assert_ne!(value["error"]["data"]["code"], "UNKNOWN_METHOD");
+        assert_eq!(value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
+        assert_eq!(value["error"]["data"]["capability"], "filesystem");
     }
 
     #[test]

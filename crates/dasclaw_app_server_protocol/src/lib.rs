@@ -735,6 +735,9 @@ impl CapabilityMatrix {
 
     #[must_use]
     pub fn with_p5_filesystem_command(mut self, availability: AppServerP5Availability) -> Self {
+        self.filesystem = declared_future_capability("filesystem");
+        self.command_exec = declared_future_capability("command_exec");
+
         if availability.filesystem {
             self.filesystem = Capability::implemented(
                 "filesystem",
@@ -4508,6 +4511,16 @@ mod tests {
     #[test]
     fn p5_protocol_default_availability_keeps_capabilities_declared() {
         let matrix = CapabilityMatrix::phase_one()
+            .with_p5_filesystem_command(AppServerP5Availability {
+                filesystem: true,
+                command: CommandExecAvailability {
+                    exec: true,
+                    output_delta_events: true,
+                    terminate: true,
+                    write: true,
+                    resize: true,
+                },
+            })
             .with_p5_filesystem_command(AppServerP5Availability::default());
 
         assert_eq!(matrix.filesystem.status, CapabilityStatus::Declared);
@@ -4516,6 +4529,37 @@ mod tests {
         assert_eq!(matrix.command_exec.status, CapabilityStatus::Declared);
         assert!(matrix.command_exec.methods.is_empty());
         assert!(matrix.command_exec.events.is_empty());
+    }
+
+    #[test]
+    fn p5_protocol_declares_all_command_methods_when_enabled() {
+        let matrix =
+            CapabilityMatrix::phase_one().with_p5_filesystem_command(AppServerP5Availability {
+                filesystem: false,
+                command: CommandExecAvailability {
+                    exec: true,
+                    output_delta_events: true,
+                    terminate: true,
+                    write: true,
+                    resize: true,
+                },
+            });
+
+        assert_eq!(matrix.filesystem.status, CapabilityStatus::Declared);
+        assert_eq!(matrix.command_exec.status, CapabilityStatus::Implemented);
+        assert_eq!(
+            matrix.command_exec.methods,
+            vec![
+                method::COMMAND_EXEC.to_string(),
+                method::COMMAND_EXEC_WRITE.to_string(),
+                method::COMMAND_EXEC_TERMINATE.to_string(),
+                method::COMMAND_EXEC_RESIZE.to_string(),
+            ]
+        );
+        assert_eq!(
+            matrix.command_exec.events,
+            vec![event::COMMAND_EXEC_OUTPUT_DELTA.to_string()]
+        );
     }
 
     #[test]
