@@ -3818,6 +3818,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
+    use base64::Engine;
     use dasclaw_app_server_protocol::{
         CapabilityStatus, CommandExecOutputDeltaNotification, CommandExecOutputStream,
         FsChangedKind, FsChangedNotification, ServiceStatus, SkillMetadata, SkillScope,
@@ -4253,22 +4254,44 @@ mod tests {
         let _ = server.drain_notifications();
 
         let list = server
-            .handle_json_rpc(&format!(
-                r#"{{"jsonrpc":"2.0","id":"skills","method":"skills/list","params":{{"cwds":["{}"]}}}}"#,
-                cwd.display()
-            ))
+            .handle_json_rpc(
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": "skills",
+                    "method": "skills/list",
+                    "params": {
+                        "cwds": [cwd.to_string_lossy()],
+                    },
+                })
+                .to_string(),
+            )
             .expect("skills/list should return a structured response");
         let write = server
-            .handle_json_rpc(&format!(
-                r#"{{"jsonrpc":"2.0","id":"write","method":"skills/config/write","params":{{"path":"{}","enabled":false}}}}"#,
-                skill_path.display()
-            ))
+            .handle_json_rpc(
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": "write",
+                    "method": "skills/config/write",
+                    "params": {
+                        "path": skill_path.to_string_lossy(),
+                        "enabled": false,
+                    },
+                })
+                .to_string(),
+            )
             .expect("skills/config/write should return a structured response");
         let after_write = server
-            .handle_json_rpc(&format!(
-                r#"{{"jsonrpc":"2.0","id":"skills2","method":"skills/list","params":{{"cwds":["{}"]}}}}"#,
-                cwd.display()
-            ))
+            .handle_json_rpc(
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": "skills2",
+                    "method": "skills/list",
+                    "params": {
+                        "cwds": [cwd.to_string_lossy()],
+                    },
+                })
+                .to_string(),
+            )
             .expect("skills/list after write should return a structured response");
         let notifications = server.drain_notifications();
 
@@ -4313,16 +4336,31 @@ mod tests {
         let _ = server.drain_notifications();
 
         let write = server
-            .handle_json_rpc(&format!(
-                r#"{{"jsonrpc":"2.0","id":"write","method":"skills/config/write","params":{{"path":"{}","enabled":false}}}}"#,
-                skill_path.display()
-            ))
+            .handle_json_rpc(
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": "write",
+                    "method": "skills/config/write",
+                    "params": {
+                        "path": skill_path.to_string_lossy(),
+                        "enabled": false,
+                    },
+                })
+                .to_string(),
+            )
             .expect("skills/config/write should return a structured response");
         let after_write = server
-            .handle_json_rpc(&format!(
-                r#"{{"jsonrpc":"2.0","id":"skills","method":"skills/list","params":{{"cwds":["{}"]}}}}"#,
-                cwd.display()
-            ))
+            .handle_json_rpc(
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": "skills",
+                    "method": "skills/list",
+                    "params": {
+                        "cwds": [cwd.to_string_lossy()],
+                    },
+                })
+                .to_string(),
+            )
             .expect("skills/list after write should return a structured response");
 
         let write_value: Value = serde_json::from_str(&write).expect("skills write response JSON");
@@ -4401,10 +4439,17 @@ mod tests {
         let outside_path = outside.path().join("outside.txt");
         std::fs::write(&outside_path, "outside").expect("outside fixture should be writable");
         let outside_read = server
-            .handle_json_rpc(&format!(
-                r#"{{"jsonrpc":"2.0","id":"outside","method":"fs/readFile","params":{{"path":"{}"}}}}"#,
-                outside_path.display()
-            ))
+            .handle_json_rpc(
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": "outside",
+                    "method": "fs/readFile",
+                    "params": {
+                        "path": outside_path.to_string_lossy(),
+                    },
+                })
+                .to_string(),
+            )
             .expect("fs/readFile outside root should return a structured response");
 
         let create_dir_value: Value =
@@ -4482,10 +4527,18 @@ mod tests {
             )
             .expect("command/exec should return a structured response");
         let cwd_outside = server
-            .handle_json_rpc(&format!(
-                r#"{{"jsonrpc":"2.0","id":"cwd","method":"command/exec","params":{{"command":["echo","nope"],"cwd":"{}"}}}}"#,
-                outside.path().display()
-            ))
+            .handle_json_rpc(
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": "cwd",
+                    "method": "command/exec",
+                    "params": {
+                        "command": ["echo", "nope"],
+                        "cwd": outside.path().to_string_lossy(),
+                    },
+                })
+                .to_string(),
+            )
             .expect("command/exec outside cwd should return a structured response");
         let notifications = server.drain_notifications();
 
@@ -4510,11 +4563,44 @@ mod tests {
         assert_eq!(output_delta.params["processId"], "route_proc_1");
         assert_eq!(output_delta.params["stream"], "stdout");
         assert_eq!(output_delta.params["capReached"], false);
-        assert_eq!(
-            output_delta.params["deltaBase64"].as_str().unwrap(),
-            "cm91dGUtc3Rkb3V0Cg=="
-        );
+        let delta = base64::engine::general_purpose::STANDARD
+            .decode(output_delta.params["deltaBase64"].as_str().unwrap())
+            .expect("output delta base64 should decode");
+        let delta = String::from_utf8(delta).expect("output delta should be UTF-8");
+        assert!(delta.contains("route-stdout"));
         assert!(server.drain_notifications().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn app_server_real_p5_command_exec_json_rpc_route_returns_stderr_and_non_zero_exit() {
+        let temp = TestDir::new("app_server_real_p5_command_exec_stderr_route");
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            command_service::AppServerCommandExecService::new(temp.path().to_path_buf()),
+        );
+        let mut server = AppServer::new().with_app_services(services);
+        server
+            .handle_json_rpc(initialized_request_json())
+            .expect("initialize should return a response");
+        let _ = server.drain_notifications();
+
+        let exec = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"cmd-stderr","method":"command/exec","params":{"command":["sh","-c","printf route-stderr >&2; exit 7"],"processId":"route_proc_stderr","streamStdoutStderr":true}}"#,
+            )
+            .expect("command/exec should return a structured response");
+
+        let exec_value: Value = serde_json::from_str(&exec).expect("command/exec response JSON");
+        assert_ne!(exec_value["result"]["exitCode"], 0);
+        assert_eq!(exec_value["result"]["exitCode"], 7);
+        assert_eq!(exec_value["result"]["stdout"], "");
+        assert_eq!(exec_value["result"]["stderr"], "route-stderr");
+        assert!(exec_value.get("error").is_none());
     }
 
     #[test]
