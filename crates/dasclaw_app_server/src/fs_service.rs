@@ -56,45 +56,98 @@ impl AppServerFsService {
         }
     }
 
-    fn resolve_existing(&self, raw: &str) -> Result<PathBuf, AppServerError> {
+    fn resolve_existing(&self, raw: &str) -> Result<ResolvedPath, ResolveError> {
         self.resolve(raw, PathExpectation::MustExist)
     }
 
-    fn resolve_for_create(&self, raw: &str) -> Result<PathBuf, AppServerError> {
+    fn resolve_for_create(&self, raw: &str) -> Result<PathBuf, ResolveError> {
         self.resolve(raw, PathExpectation::MayCreateLeaf)
+            .map(|resolved| resolved.canonical)
     }
 
-    fn resolve(&self, raw: &str, expectation: PathExpectation) -> Result<PathBuf, AppServerError> {
-        reject_unsafe_relative_path(raw)?;
+    fn resolve_for_recursive_create(&self, raw: &str) -> Result<PathBuf, ResolveError> {
+        reject_unsafe_path(raw)?;
         let resolved = validate_path(raw, Some(&self.root))
-            .map_err(|error| filesystem_unavailable(error.to_string()))?;
+            .map_err(|error| ResolveError::security(error.to_string()))?;
+        let mut ancestor = resolved.as_path();
+        let mut tail_parts = Vec::new();
+
+        while !ancestor.exists() {
+            let file_name = ancestor
+                .file_name()
+                .ok_or_else(|| ResolveError::security("filesystem path has no file name"))?;
+            tail_parts.push(file_name.to_os_string());
+            ancestor = ancestor
+                .parent()
+                .ok_or_else(|| ResolveError::security("filesystem path has no existing parent"))?;
+        }
+
+        let canonical_ancestor = ancestor
+            .canonicalize()
+            .map_err(|error| ResolveError::io(error.to_string()))?;
+        if !canonical_ancestor.starts_with(&self.root) {
+            return Err(ResolveError::security(
+                "filesystem path is outside service root",
+            ));
+        }
+
+        let mut guarded = canonical_ancestor;
+        for part in tail_parts.iter().rev() {
+            guarded.push(part);
+        }
+        Ok(guarded)
+    }
+
+    fn resolve(
+        &self,
+        raw: &str,
+        expectation: PathExpectation,
+    ) -> Result<ResolvedPath, ResolveError> {
+        reject_unsafe_path(raw)?;
+        let original = self.original_path(raw);
+        let resolved = validate_path(raw, Some(&self.root))
+            .map_err(|error| ResolveError::security(error.to_string()))?;
 
         let guarded = if resolved.exists() {
             resolved
                 .canonicalize()
-                .map_err(|error| filesystem_unavailable(error.to_string()))?
+                .map_err(|error| ResolveError::io(error.to_string()))?
         } else if expectation == PathExpectation::MayCreateLeaf {
             let parent = resolved
                 .parent()
-                .ok_or_else(|| filesystem_unavailable("filesystem path has no parent"))?;
+                .ok_or_else(|| ResolveError::security("filesystem path has no parent"))?;
             let parent = parent
                 .canonicalize()
-                .map_err(|error| filesystem_unavailable(error.to_string()))?;
+                .map_err(|error| ResolveError::io(error.to_string()))?;
             parent.join(
                 resolved
                     .file_name()
-                    .ok_or_else(|| filesystem_unavailable("filesystem path has no file name"))?,
+                    .ok_or_else(|| ResolveError::security("filesystem path has no file name"))?,
             )
         } else {
-            return Err(filesystem_unavailable("filesystem path does not exist"));
+            return Err(ResolveError::NotFound(
+                "filesystem path does not exist".to_string(),
+            ));
         };
 
         if !guarded.starts_with(&self.root) {
-            return Err(filesystem_unavailable(
+            return Err(ResolveError::security(
                 "filesystem path is outside service root",
             ));
         }
-        Ok(guarded)
+        Ok(ResolvedPath {
+            original,
+            canonical: guarded,
+        })
+    }
+
+    fn original_path(&self, raw: &str) -> PathBuf {
+        let path = PathBuf::from(raw);
+        if path.is_absolute() {
+            path
+        } else {
+            self.root.join(path)
+        }
     }
 
     fn metadata_state(path: &Path) -> WatchState {
@@ -150,6 +203,37 @@ enum PathExpectation {
     MayCreateLeaf,
 }
 
+#[derive(Debug, Clone)]
+struct ResolvedPath {
+    original: PathBuf,
+    canonical: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ResolveError {
+    Security(String),
+    NotFound(String),
+    Io(String),
+}
+
+impl ResolveError {
+    fn security(message: impl Into<String>) -> Self {
+        Self::Security(message.into())
+    }
+
+    fn io(message: impl Into<String>) -> Self {
+        Self::Io(message.into())
+    }
+
+    fn into_app_error(self) -> AppServerError {
+        match self {
+            Self::Security(message) | Self::NotFound(message) | Self::Io(message) => {
+                filesystem_unavailable(message)
+            }
+        }
+    }
+}
+
 impl FsService for AppServerFsService {
     fn health(&self) -> ServiceHealth {
         let mut health = ServiceHealth::ready(ServiceName::Filesystem);
@@ -161,8 +245,11 @@ impl FsService for AppServerFsService {
     }
 
     fn read_file(&self, params: FsReadFileParams) -> Result<FsReadFileResponse, AppServerError> {
-        let path = self.resolve_existing(&params.path)?;
-        let bytes = fs::read(path).map_err(|error| filesystem_unavailable(error.to_string()))?;
+        let path = self
+            .resolve_existing(&params.path)
+            .map_err(ResolveError::into_app_error)?;
+        let bytes =
+            fs::read(path.canonical).map_err(|error| filesystem_unavailable(error.to_string()))?;
         let start = params.offset.unwrap_or(0).min(bytes.len());
         let end = params
             .length
@@ -175,7 +262,9 @@ impl FsService for AppServerFsService {
     }
 
     fn write_file(&self, params: FsWriteFileParams) -> Result<FsWriteFileResponse, AppServerError> {
-        let path = self.resolve_for_create(&params.path)?;
+        let path = self
+            .resolve_for_create(&params.path)
+            .map_err(ResolveError::into_app_error)?;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(params.data_base64)
             .map_err(|error| filesystem_unavailable(error.to_string()))?;
@@ -208,10 +297,15 @@ impl FsService for AppServerFsService {
         &self,
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, AppServerError> {
-        let path = self.resolve_for_create(&params.path)?;
         if params.recursive.unwrap_or(false) {
+            let path = self
+                .resolve_for_recursive_create(&params.path)
+                .map_err(ResolveError::into_app_error)?;
             fs::create_dir_all(path)
         } else {
+            let path = self
+                .resolve_for_create(&params.path)
+                .map_err(ResolveError::into_app_error)?;
             fs::create_dir(path)
         }
         .map_err(|error| filesystem_unavailable(error.to_string()))?;
@@ -223,8 +317,10 @@ impl FsService for AppServerFsService {
         &self,
         params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, AppServerError> {
-        let path = self.resolve_existing(&params.path)?;
-        let metadata = fs::symlink_metadata(path)
+        let path = self
+            .resolve_existing(&params.path)
+            .map_err(ResolveError::into_app_error)?;
+        let metadata = fs::symlink_metadata(path.original)
             .map_err(|error| filesystem_unavailable(error.to_string()))?;
         Ok(FsGetMetadataResponse {
             is_file: metadata.is_file(),
@@ -239,14 +335,15 @@ impl FsService for AppServerFsService {
         &self,
         params: FsReadDirectoryParams,
     ) -> Result<FsReadDirectoryResponse, AppServerError> {
-        let path = self.resolve_existing(&params.path)?;
+        let path = self
+            .resolve_existing(&params.path)
+            .map_err(ResolveError::into_app_error)?;
         let mut entries = Vec::new();
-        for entry in
-            fs::read_dir(path).map_err(|error| filesystem_unavailable(error.to_string()))?
+        for entry in fs::read_dir(path.canonical)
+            .map_err(|error| filesystem_unavailable(error.to_string()))?
         {
             let entry = entry.map_err(|error| filesystem_unavailable(error.to_string()))?;
-            let metadata = entry
-                .metadata()
+            let metadata = fs::symlink_metadata(entry.path())
                 .map_err(|error| filesystem_unavailable(error.to_string()))?;
             entries.push(FsReadDirectoryEntry {
                 file_name: entry.file_name().to_string_lossy().to_string(),
@@ -261,23 +358,20 @@ impl FsService for AppServerFsService {
     fn remove(&self, params: FsRemoveParams) -> Result<FsRemoveResponse, AppServerError> {
         let path = match self.resolve_existing(&params.path) {
             Ok(path) => path,
-            Err(error) if params.force.unwrap_or(false) => {
-                if matches_capability_unavailable(&error) {
-                    return Ok(FsRemoveResponse {});
-                }
-                return Err(error);
+            Err(ResolveError::NotFound(_)) if params.force.unwrap_or(false) => {
+                return Ok(FsRemoveResponse {});
             }
-            Err(error) => return Err(error),
+            Err(error) => return Err(error.into_app_error()),
         };
 
-        if path.is_dir() {
+        if path.canonical.is_dir() {
             if params.recursive.unwrap_or(false) {
-                fs::remove_dir_all(path)
+                fs::remove_dir_all(path.canonical)
             } else {
-                fs::remove_dir(path)
+                fs::remove_dir(path.canonical)
             }
         } else {
-            fs::remove_file(path)
+            fs::remove_file(path.canonical)
         }
         .map_err(|error| filesystem_unavailable(error.to_string()))?;
         self.poll_watches();
@@ -285,18 +379,22 @@ impl FsService for AppServerFsService {
     }
 
     fn copy(&self, params: FsCopyParams) -> Result<FsCopyResponse, AppServerError> {
-        let source = self.resolve_existing(&params.source_path)?;
-        let destination = self.resolve_for_create(&params.destination_path)?;
+        let source = self
+            .resolve_existing(&params.source_path)
+            .map_err(ResolveError::into_app_error)?;
+        let destination = self
+            .resolve_for_create(&params.destination_path)
+            .map_err(ResolveError::into_app_error)?;
 
-        if source.is_dir() {
+        if source.canonical.is_dir() {
             if !params.recursive.unwrap_or(false) {
                 return Err(filesystem_unavailable(
                     "recursive=true is required for directory copies",
                 ));
             }
-            copy_dir_recursive(&source, &destination)?;
+            copy_dir_recursive(&source.canonical, &destination)?;
         } else {
-            fs::copy(source, destination)
+            fs::copy(source.canonical, destination)
                 .map_err(|error| filesystem_unavailable(error.to_string()))?;
         }
         self.poll_watches();
@@ -304,11 +402,13 @@ impl FsService for AppServerFsService {
     }
 
     fn watch(&self, params: FsWatchParams) -> Result<FsWatchResponse, AppServerError> {
-        let path = self.resolve_existing(&params.path)?;
+        let path = self
+            .resolve_existing(&params.path)
+            .map_err(ResolveError::into_app_error)?;
         let watch = FsWatch {
             display_path: params.path.clone(),
-            last_state: Self::metadata_state(&path),
-            path,
+            last_state: Self::metadata_state(&path.canonical),
+            path: path.canonical,
         };
         self.watches
             .lock()
@@ -335,27 +435,19 @@ impl FsService for AppServerFsService {
     }
 }
 
-fn reject_unsafe_relative_path(raw: &str) -> Result<(), AppServerError> {
+fn reject_unsafe_path(raw: &str) -> Result<(), ResolveError> {
     if raw.as_bytes().contains(&0) {
-        return Err(filesystem_unavailable(
+        return Err(ResolveError::security(
             "filesystem path contains a null byte",
         ));
     }
 
     let path = Path::new(raw);
-    if path.is_absolute() {
-        return Err(filesystem_unavailable(
-            "absolute filesystem paths are not allowed",
-        ));
-    }
-
-    if path.components().any(|component| {
-        matches!(
-            component,
-            Component::ParentDir | Component::Prefix(_) | Component::RootDir
-        )
-    }) {
-        return Err(filesystem_unavailable(
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(ResolveError::security(
             "filesystem path traversal is not allowed",
         ));
     }
@@ -395,14 +487,6 @@ fn system_time_ms(time: SystemTime) -> u64 {
 
 fn filesystem_unavailable(message: impl Into<String>) -> AppServerError {
     AppServerError::capability_unavailable("filesystem", message)
-}
-
-fn matches_capability_unavailable(error: &AppServerError) -> bool {
-    matches!(
-        error,
-        AppServerError::Protocol { data }
-            if data.code == dasclaw_app_server_protocol::ErrorCode::CapabilityUnavailable
-    )
 }
 
 #[cfg(test)]
@@ -548,6 +632,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn fs_service_allows_absolute_paths_inside_root() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerFsService::new(temp.path().to_path_buf());
+        let file = temp.path().join("absolute.txt");
+        let file = file.to_string_lossy();
+
+        service
+            .write_file(write_params(&file, b"absolute", None))
+            .expect("write absolute path inside root");
+        let read = service
+            .read_file(read_params(&file))
+            .expect("read absolute path inside root");
+
+        assert_eq!(read.data_base64, b64(b"absolute"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn fs_service_rejects_symlink_escape() {
@@ -561,6 +662,113 @@ mod tests {
 
         let service = AppServerFsService::new(temp.path().to_path_buf());
         assert!(service.read_file(read_params("link.txt")).is_err());
+    }
+
+    #[test]
+    fn fs_service_recursive_create_directory_creates_missing_parent_tree() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerFsService::new(temp.path().to_path_buf());
+
+        service
+            .create_directory(FsCreateDirectoryParams {
+                path: "a/b/c".to_string(),
+                recursive: Some(true),
+            })
+            .expect("recursive mkdir");
+
+        assert!(temp.path().join("a/b/c").is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fs_service_recursive_create_directory_rejects_symlink_parent_escape() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        symlink(outside.path(), temp.path().join("link")).expect("symlink");
+        let service = AppServerFsService::new(temp.path().to_path_buf());
+
+        assert!(
+            service
+                .create_directory(FsCreateDirectoryParams {
+                    path: "link/a/b".to_string(),
+                    recursive: Some(true),
+                })
+                .is_err()
+        );
+        assert!(!outside.path().join("a").exists());
+    }
+
+    #[test]
+    fn fs_service_remove_force_only_ignores_missing_inside_root() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerFsService::new(temp.path().to_path_buf());
+
+        service
+            .remove(FsRemoveParams {
+                path: "missing.txt".to_string(),
+                recursive: None,
+                force: Some(true),
+            })
+            .expect("force remove missing root path");
+        assert!(
+            service
+                .remove(FsRemoveParams {
+                    path: "../secret.txt".to_string(),
+                    recursive: None,
+                    force: Some(true),
+                })
+                .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fs_service_list_directory_does_not_follow_symlink_entries() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let outside_file = outside.path().join("secret.txt");
+        fs::write(&outside_file, b"secret").expect("write outside file");
+        symlink(&outside_file, temp.path().join("link.txt")).expect("symlink");
+        let service = AppServerFsService::new(temp.path().to_path_buf());
+
+        let listing = service
+            .read_directory(FsReadDirectoryParams {
+                path: ".".to_string(),
+            })
+            .expect("list root");
+        let link = listing
+            .entries
+            .iter()
+            .find(|entry| entry.file_name == "link.txt")
+            .expect("link entry");
+
+        assert!(!link.is_file);
+        assert!(!link.is_directory);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fs_service_stat_preserves_symlink_identity_for_inside_target() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::write(temp.path().join("target.txt"), b"target").expect("write target");
+        symlink(temp.path().join("target.txt"), temp.path().join("link.txt")).expect("symlink");
+        let service = AppServerFsService::new(temp.path().to_path_buf());
+
+        let metadata = service
+            .get_metadata(FsGetMetadataParams {
+                path: "link.txt".to_string(),
+            })
+            .expect("metadata");
+
+        assert!(metadata.is_symlink);
+        assert!(!metadata.is_file);
+        assert!(!metadata.is_directory);
     }
 
     #[test]
