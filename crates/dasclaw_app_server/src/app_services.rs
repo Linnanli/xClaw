@@ -1060,7 +1060,7 @@ mod tests {
         let availability = services.availability();
         assert!(availability.p5.filesystem);
         assert!(availability.p5.command.exec);
-        assert!(availability.p5.command.output_delta_events);
+        assert!(!availability.p5.command.output_delta_events);
         assert!(!availability.p5.command.write);
         assert!(!availability.p5.command.terminate);
         assert!(!availability.p5.command.resize);

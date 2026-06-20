@@ -3818,7 +3818,6 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
-    use base64::Engine;
     use dasclaw_app_server_protocol::{
         CapabilityStatus, CommandExecOutputDeltaNotification, CommandExecOutputStream,
         FsChangedKind, FsChangedNotification, ServiceStatus, SkillMetadata, SkillScope,
@@ -4504,7 +4503,7 @@ mod tests {
     }
 
     #[test]
-    fn app_server_real_p5_command_exec_json_rpc_route_returns_stdout_and_delta() {
+    fn app_server_real_p5_command_exec_json_rpc_route_returns_buffered_stdout() {
         let temp = TestDir::new("app_server_real_p5_command_exec_routes");
         let outside = TestDir::new("app_server_real_p5_command_exec_outside");
         let services = app_services::AppServerServices::for_tests(
@@ -4523,9 +4522,56 @@ mod tests {
 
         let exec = server
             .handle_json_rpc(
-                r#"{"jsonrpc":"2.0","id":"cmd","method":"command/exec","params":{"command":["echo","route-stdout"],"processId":"route_proc_1","streamStdoutStderr":true}}"#,
+                r#"{"jsonrpc":"2.0","id":"cmd","method":"command/exec","params":{"command":["echo","route-stdout"],"processId":"route_proc_1"}}"#,
             )
             .expect("command/exec should return a structured response");
+        let unsupported_options = [
+            (
+                "stream",
+                serde_json::json!({
+                    "command": ["echo", "nope"],
+                    "processId": "route_proc_stream",
+                    "streamStdoutStderr": true,
+                }),
+            ),
+            (
+                "sandbox",
+                serde_json::json!({
+                    "command": ["echo", "nope"],
+                    "processId": "route_proc_sandbox",
+                    "sandboxPolicy": {"mode": "unrestricted"},
+                }),
+            ),
+            (
+                "timeout",
+                serde_json::json!({
+                    "command": ["echo", "nope"],
+                    "processId": "route_proc_timeout",
+                    "disableTimeout": true,
+                }),
+            ),
+            (
+                "size",
+                serde_json::json!({
+                    "command": ["echo", "nope"],
+                    "processId": "route_proc_size",
+                    "size": {"cols": 80, "rows": 24},
+                }),
+            ),
+        ];
+        let unsupported = unsupported_options.map(|(id, params)| {
+            server
+                .handle_json_rpc(
+                    &serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "method": "command/exec",
+                        "params": params,
+                    })
+                    .to_string(),
+                )
+                .expect("unsupported command/exec option should return a structured error")
+        });
         let cwd_outside = server
             .handle_json_rpc(
                 &serde_json::json!({
@@ -4543,6 +4589,10 @@ mod tests {
         let notifications = server.drain_notifications();
 
         let exec_value: Value = serde_json::from_str(&exec).expect("command/exec response JSON");
+        let unsupported_values = unsupported.map(|response| {
+            serde_json::from_str::<Value>(&response)
+                .expect("unsupported command/exec response JSON")
+        });
         let cwd_value: Value =
             serde_json::from_str(&cwd_outside).expect("outside cwd response JSON");
         assert_eq!(exec_value["result"]["exitCode"], 0);
@@ -4553,21 +4603,17 @@ mod tests {
                 .contains("route-stdout")
         );
         assert_eq!(exec_value["result"]["stderr"], "");
+        for value in unsupported_values {
+            assert_eq!(value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
+            assert_eq!(value["error"]["data"]["capability"], "command_exec");
+        }
         assert_eq!(cwd_value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
         assert_eq!(cwd_value["error"]["data"]["capability"], "command_exec");
-
-        let output_delta = notifications
-            .iter()
-            .find(|notification| notification.method == event::COMMAND_EXEC_OUTPUT_DELTA)
-            .expect("command/exec output delta notification should drain");
-        assert_eq!(output_delta.params["processId"], "route_proc_1");
-        assert_eq!(output_delta.params["stream"], "stdout");
-        assert_eq!(output_delta.params["capReached"], false);
-        let delta = base64::engine::general_purpose::STANDARD
-            .decode(output_delta.params["deltaBase64"].as_str().unwrap())
-            .expect("output delta base64 should decode");
-        let delta = String::from_utf8(delta).expect("output delta should be UTF-8");
-        assert!(delta.contains("route-stdout"));
+        assert!(
+            !notifications
+                .iter()
+                .any(|notification| notification.method == event::COMMAND_EXEC_OUTPUT_DELTA)
+        );
         assert!(server.drain_notifications().is_empty());
     }
 
@@ -4591,7 +4637,7 @@ mod tests {
 
         let exec = server
             .handle_json_rpc(
-                r#"{"jsonrpc":"2.0","id":"cmd-stderr","method":"command/exec","params":{"command":["sh","-c","printf route-stderr >&2; exit 7"],"processId":"route_proc_stderr","streamStdoutStderr":true}}"#,
+                r#"{"jsonrpc":"2.0","id":"cmd-stderr","method":"command/exec","params":{"command":["sh","-c","printf route-stderr >&2; exit 7"],"processId":"route_proc_stderr"}}"#,
             )
             .expect("command/exec should return a structured response");
 

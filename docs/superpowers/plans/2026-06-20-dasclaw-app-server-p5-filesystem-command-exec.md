@@ -34,7 +34,7 @@ Scope:
 - Implement default app-server P5 filesystem methods and `fs/changed` using polling watches.
 - Implement `command/exec` buffered execution through existing shell/sandbox primitives.
 - Add honest command capability availability. `command/exec/write` and `command/exec/resize` must stay declared/unavailable unless the implementing worker also lands a sandboxed PTY service in the same PR and proves it with tests. `command/exec/terminate` is available only for streamed processes.
-- Preserve P3 item-level command notifications: `item/commandExecution/outputDelta` remains for agent/tool item output; P5 standalone command streaming uses `command/exec/outputDelta`.
+- Preserve P3 item-level command notifications: `item/commandExecution/outputDelta` remains for agent/tool item output; P5 standalone command streaming reserves `command/exec/outputDelta` for a future streaming owner and the buffered-only service must not advertise it.
 - Do not implement dynamic `item/tool/call`, file-change approval UI, account/plugin/marketplace/product domains, fuzzy file search, hooks, or Windows sandbox setup in this plan.
 
 Commit message discipline for this task family:
@@ -48,7 +48,7 @@ Commit message discipline for this task family:
 - Modify: `crates/dasclaw_app_server_protocol/src/lib.rs`
   - Add P5 method/event constants.
   - Add FS params/responses.
-  - Add command params/responses and standalone `command/exec/outputDelta`.
+  - Add command params/responses and schema-declared standalone `command/exec/outputDelta` for a future streaming owner.
   - Extend `CapabilityMatrix` and `AppServerServiceAvailability`.
 
 - Modify: `crates/dasclaw_app_server/Cargo.toml`
@@ -72,8 +72,8 @@ Commit message discipline for this task family:
 - Modify: `crates/dasclaw_app_server/src/lib.rs`
   - Import new DTOs.
   - Route P5 JSON-RPC methods.
-  - Drain `fs/changed` and `command/exec/outputDelta` events into the notification bus.
-  - Add app-server unit and stdio-style tests.
+  - Drain `fs/changed` into the notification bus; keep `command/exec/outputDelta` unadvertised and unemitted by the buffered-only service.
+  - Add app-server unit and JSON-RPC route tests.
 
 - Inspect: `crates/dasclaw_app_server/src/main.rs`
   - Ensure default sidecar already uses `AppServerServices::real()` with P5 services.
@@ -100,7 +100,7 @@ fn p5_protocol_declares_fs_and_command_methods() {
             filesystem: true,
             command: CommandExecAvailability {
                 exec: true,
-                output_delta_events: true,
+                output_delta_events: false,
                 terminate: false,
                 write: false,
                 resize: false,
@@ -117,7 +117,7 @@ fn p5_protocol_declares_fs_and_command_methods() {
     assert_eq!(matrix.command_exec.status, CapabilityStatus::Implemented);
     assert!(matrix.command_exec.methods.contains(&method::COMMAND_EXEC.to_string()));
     assert!(!matrix.command_exec.methods.contains(&method::COMMAND_EXEC_WRITE.to_string()));
-    assert!(matrix.command_exec.events.contains(&event::COMMAND_EXEC_OUTPUT_DELTA.to_string()));
+    assert!(!matrix.command_exec.events.contains(&event::COMMAND_EXEC_OUTPUT_DELTA.to_string()));
 }
 
 #[test]
@@ -142,7 +142,7 @@ fn p5_protocol_serializes_fs_and_command_payloads() {
         sandbox_policy: None,
         size: None,
         stream_stdin: None,
-        stream_stdout_stderr: Some(true),
+        stream_stdout_stderr: None,
         tty: None,
     };
     assert_eq!(
@@ -152,8 +152,7 @@ fn p5_protocol_serializes_fs_and_command_payloads() {
             "cwd": "/tmp",
             "timeoutMs": 5000,
             "outputBytesCap": 1024,
-            "processId": "proc_1",
-            "streamStdoutStderr": true
+            "processId": "proc_1"
         })
     );
 
@@ -2248,14 +2247,12 @@ Add match arms in `route_json_rpc` before `method::APPROVAL_RESPOND`:
 
 - [ ] **Step 6: Drain P5 notifications**
 
-In `drain_service_updates()`, add loops matching the existing log/MCP drain pattern:
+In `drain_service_updates()`, add `fs/changed` matching the existing log/MCP drain pattern.
+Do not drain `command/exec/outputDelta` for the buffered-only command service; that hook stays reserved for a future streaming owner:
 
 ```rust
         for event in self.app_services.drain_fs_changed_events() {
             self.notifications.emit_fs_changed(event);
-        }
-        for event in self.app_services.drain_command_exec_output_delta_events() {
-            self.notifications.emit_command_exec_output_delta(event);
         }
 ```
 
@@ -2467,7 +2464,7 @@ Change the P5 row from:
 to:
 
 ```markdown
-| P5 | Filesystem / command exec | ~~`fs/readFile`、`fs/writeFile`、`fs/createDirectory`、`fs/getMetadata`、`fs/readDirectory`、`fs/remove`、`fs/copy`、`fs/watch`、`fs/unwatch`、`fs/changed`、`command/exec`~~；`command/exec/write`、`command/exec/terminate`、`command/exec/resize` 仍需 sandboxed PTY service 才能进入 implemented capability | P5a 已接 app-server-owned filesystem 与 buffered command exec；PTY follow-up methods 保持 honest unavailable，避免绕过 P3/P5 sandbox 边界 |
+| P5 | Filesystem / command exec | ~~Dasclaw-native `fs/readFile`、`fs/writeFile`、`fs/createDirectory`、`fs/getMetadata`、`fs/readDirectory`、`fs/remove`、`fs/copy`、`fs/watch`、`fs/unwatch`、`fs/changed` subset~~、~~buffered `command/exec`~~；`command/exec/outputDelta`、`command/exec/write`、`command/exec/terminate`、`command/exec/resize` 仍需 streaming / sandboxed PTY service 才能进入 implemented capability | P5a 已接 app-server-owned filesystem 与 buffered command exec；Codex FS parity 与 command streaming/PTY follow-up methods 保持 honest unavailable，避免绕过 P3/P5 sandbox 边界 |
 ```
 
 - [ ] **Step 2: Update the current status summary**
@@ -2475,7 +2472,7 @@ to:
 In the “本轮已完成” summary near the top, add this sentence fragment after P4:
 
 ```markdown
-；P5a `fs/*` filesystem owner、`fs/changed` polling watcher、buffered `command/exec` 已通过 app-server real service 与 stdio smoke 覆盖
+；P5a Dasclaw-native `fs/*` filesystem owner、`fs/changed` polling watcher、buffered `command/exec` 已通过 app-server real service / JSON-RPC route tests 覆盖；Codex FS parity 与 command streaming/outputDelta 保持后续项
 ```
 
 - [ ] **Step 3: Keep unsupported methods visible**

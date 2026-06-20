@@ -3,10 +3,9 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use base64::Engine;
 use dasclaw_app_server_protocol::{
-    CommandExecAvailability, CommandExecOutputDeltaNotification, CommandExecOutputStream,
-    CommandExecParams, CommandExecResizeParams, CommandExecResizeResponse, CommandExecResponse,
+    CommandExecAvailability, CommandExecOutputDeltaNotification, CommandExecParams,
+    CommandExecResizeParams, CommandExecResizeResponse, CommandExecResponse,
     CommandExecTerminateParams, CommandExecTerminateResponse, CommandExecWriteParams,
     CommandExecWriteResponse, ServiceHealth, ServiceName,
 };
@@ -176,58 +175,58 @@ impl AppServerCommandExecService {
             .collect()
     }
 
-    fn push_delta_events(
-        &self,
-        process_id: &str,
-        response: &CommandExecResponse,
-        cap_reached: bool,
-    ) {
-        let mut events = Vec::new();
-        if !response.stdout.is_empty() {
-            events.push(output_delta(
-                process_id,
-                CommandExecOutputStream::Stdout,
-                &response.stdout,
-                cap_reached,
-            ));
-        }
-        if !response.stderr.is_empty() {
-            events.push(output_delta(
-                process_id,
-                CommandExecOutputStream::Stderr,
-                &response.stderr,
-                cap_reached,
-            ));
-        }
-        if !events.is_empty() {
-            self.output_delta_events
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
-                .extend(events);
-        }
-    }
-
     fn apply_output_cap(
         output_bytes_cap: Option<usize>,
         response: CommandExecResponse,
-        executor_cap_reached: bool,
-    ) -> (CommandExecResponse, bool) {
+    ) -> CommandExecResponse {
         let Some(cap) = output_bytes_cap else {
-            return (response, executor_cap_reached);
+            return response;
         };
 
         let mut stdout = response.stdout;
         let mut stderr = response.stderr;
-        let stdout_truncated = truncate_to_byte_cap(&mut stdout, cap);
-        let stderr_truncated = truncate_to_byte_cap(&mut stderr, cap);
-        (
-            CommandExecResponse {
-                exit_code: response.exit_code,
-                stdout,
-                stderr,
-            },
-            executor_cap_reached || stdout_truncated || stderr_truncated,
-        )
+        truncate_to_byte_cap(&mut stdout, cap);
+        truncate_to_byte_cap(&mut stderr, cap);
+        CommandExecResponse {
+            exit_code: response.exit_code,
+            stdout,
+            stderr,
+        }
+    }
+
+    fn reject_unsupported_exec_options(params: &CommandExecParams) -> Result<(), AppServerError> {
+        if params.tty.unwrap_or(false) {
+            return Err(command_unavailable("tty requires sandboxed PTY support"));
+        }
+        if params.stream_stdin.unwrap_or(false) {
+            return Err(command_unavailable(
+                "streamStdin requires streaming command support",
+            ));
+        }
+        if params.stream_stdout_stderr.unwrap_or(false) {
+            return Err(command_unavailable(
+                "streamStdoutStderr requires streaming command support",
+            ));
+        }
+        if params.size.is_some() {
+            return Err(command_unavailable("size requires tty support"));
+        }
+        if params.sandbox_policy.is_some() {
+            return Err(command_unavailable(
+                "sandboxPolicy is not supported by the buffered sandbox executor",
+            ));
+        }
+        if params.disable_timeout.unwrap_or(false) {
+            return Err(command_unavailable(
+                "disableTimeout is not supported by the buffered sandbox executor",
+            ));
+        }
+        if params.disable_output_cap.unwrap_or(false) {
+            return Err(command_unavailable(
+                "disableOutputCap is not supported by the buffered sandbox executor",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -255,50 +254,31 @@ impl CommandExecService for AppServerCommandExecService {
                 "workspace capability unavailable: {message}"
             )));
         }
-        if params.tty.unwrap_or(false) || params.stream_stdin.unwrap_or(false) {
-            return Err(command_unavailable(
-                "interactive command execution requires PTY support",
-            ));
-        }
-
-        if params.disable_output_cap.unwrap_or(false) {
-            return Err(command_unavailable(
-                "disableOutputCap is not supported by the buffered sandbox executor",
-            ));
-        }
+        Self::reject_unsupported_exec_options(&params)?;
 
         let cwd = self.resolve_cwd(params.cwd.as_deref())?;
         let process_id = Self::process_id(&params);
         let command = Self::command_line(&params.command)?;
         let output_bytes_cap = params.output_bytes_cap;
         let env = Self::env(params.env);
-        let timeout = if params.disable_timeout.unwrap_or(false) {
-            Duration::from_secs(24 * 60 * 60)
-        } else {
-            params
-                .timeout_ms
-                .map(Duration::from_millis)
-                .unwrap_or(DEFAULT_TIMEOUT)
-        };
+        let timeout = params
+            .timeout_ms
+            .map(Duration::from_millis)
+            .unwrap_or(DEFAULT_TIMEOUT);
 
-        let (response, executor_cap_reached) =
-            self.runtime()?.block_on("command/exec", async move {
-                let executor = SandboxedShellExecutor::new(timeout, false, None);
-                let output = executor
-                    .execute(&command, &cwd, SandboxPolicy::new_read_only_policy(), env)
-                    .await
-                    .map_err(map_exec_error)?;
-                Ok((
-                    CommandExecResponse {
-                        exit_code: output.exit_code as i32,
-                        stdout: output.stdout,
-                        stderr: output.stderr,
-                    },
-                    output.truncated,
-                ))
-            })?;
-        let (response, cap_reached) =
-            Self::apply_output_cap(output_bytes_cap, response, executor_cap_reached);
+        let response = self.runtime()?.block_on("command/exec", async move {
+            let executor = SandboxedShellExecutor::new(timeout, false, None);
+            let output = executor
+                .execute(&command, &cwd, SandboxPolicy::new_read_only_policy(), env)
+                .await
+                .map_err(map_exec_error)?;
+            Ok(CommandExecResponse {
+                exit_code: output.exit_code as i32,
+                stdout: output.stdout,
+                stderr: output.stderr,
+            })
+        })?;
+        let response = Self::apply_output_cap(output_bytes_cap, response);
 
         self.completed
             .lock()
@@ -309,7 +289,6 @@ impl CommandExecService for AppServerCommandExecService {
                     response: response.clone(),
                 },
             );
-        self.push_delta_events(&process_id, &response, cap_reached);
         Ok(response)
     }
 
@@ -360,7 +339,7 @@ impl CommandExecService for AppServerCommandExecService {
         }
         CommandExecAvailability {
             exec: true,
-            output_delta_events: true,
+            output_delta_events: false,
             terminate: false,
             write: false,
             resize: false,
@@ -402,20 +381,6 @@ fn truncate_to_byte_cap(value: &mut String, cap: usize) -> bool {
     let end = value.floor_char_boundary(cap);
     value.truncate(end);
     true
-}
-
-fn output_delta(
-    process_id: &str,
-    stream: CommandExecOutputStream,
-    delta: &str,
-    cap_reached: bool,
-) -> CommandExecOutputDeltaNotification {
-    CommandExecOutputDeltaNotification {
-        process_id: process_id.to_string(),
-        stream,
-        delta_base64: base64::engine::general_purpose::STANDARD.encode(delta.as_bytes()),
-        cap_reached,
-    }
 }
 
 fn completed_or_unknown_process_error(
@@ -475,13 +440,13 @@ mod tests {
             sandbox_policy: None,
             size: None,
             stream_stdin: None,
-            stream_stdout_stderr: Some(true),
+            stream_stdout_stderr: None,
             tty: None,
         }
     }
 
     #[test]
-    fn command_service_exec_captures_stdout_and_single_delta() {
+    fn command_service_exec_captures_stdout_without_streaming_delta() {
         let temp = tempfile::tempdir().expect("tempdir");
         let service = AppServerCommandExecService::new(temp.path().to_path_buf());
 
@@ -492,15 +457,25 @@ mod tests {
         assert_eq!(response.exit_code, 0);
         assert!(response.stdout.contains("hello"));
         assert_eq!(response.stderr, "");
+        assert!(service.drain_output_delta_events().is_empty());
+    }
 
-        let events = service.drain_output_delta_events();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].stream, CommandExecOutputStream::Stdout);
-        assert!(!events[0].cap_reached);
-        let delta = base64::engine::general_purpose::STANDARD
-            .decode(&events[0].delta_base64)
-            .expect("delta decodes");
-        assert_eq!(delta, response.stdout.as_bytes());
+    #[test]
+    fn command_service_rejects_stream_stdout_stderr_without_streaming_owner() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+        let mut params = exec_params(vec!["echo", "hello"]);
+        params.stream_stdout_stderr = Some(true);
+
+        let error = service
+            .exec(params)
+            .expect_err("streaming stdout/stderr unsupported");
+
+        assert!(
+            error
+                .to_string()
+                .contains("streamStdoutStderr requires streaming command support")
+        );
         assert!(service.drain_output_delta_events().is_empty());
     }
 
@@ -548,7 +523,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn command_service_output_cap_truncates_response_and_delta() {
+    fn command_service_output_cap_truncates_buffered_response() {
         let temp = tempfile::tempdir().expect("tempdir");
         let service = AppServerCommandExecService::new(temp.path().to_path_buf());
         let mut params = exec_params(vec!["printf", "abcdef"]);
@@ -558,13 +533,7 @@ mod tests {
         let response = service.exec(params).expect("exec succeeds");
 
         assert_eq!(response.stdout, "abc");
-        let events = service.drain_output_delta_events();
-        assert_eq!(events.len(), 1);
-        assert!(events[0].cap_reached);
-        let delta = base64::engine::general_purpose::STANDARD
-            .decode(&events[0].delta_base64)
-            .expect("delta decodes");
-        assert_eq!(delta, b"abc");
+        assert!(service.drain_output_delta_events().is_empty());
     }
 
     #[test]
@@ -581,6 +550,37 @@ mod tests {
                 .to_string()
                 .contains("disableOutputCap is not supported")
         );
+    }
+
+    #[test]
+    fn command_service_rejects_unsupported_exec_semantics() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+
+        let mut sandbox_policy = exec_params(vec!["rustc", "--version"]);
+        sandbox_policy.sandbox_policy = Some(serde_json::json!({"mode": "unrestricted"}));
+        let error = service
+            .exec(sandbox_policy)
+            .expect_err("sandbox policy override unsupported");
+        assert!(error.to_string().contains("sandboxPolicy is not supported"));
+
+        let mut disable_timeout = exec_params(vec!["rustc", "--version"]);
+        disable_timeout.disable_timeout = Some(true);
+        let error = service
+            .exec(disable_timeout)
+            .expect_err("disable timeout unsupported");
+        assert!(
+            error
+                .to_string()
+                .contains("disableTimeout is not supported")
+        );
+
+        let mut size_without_tty = exec_params(vec!["rustc", "--version"]);
+        size_without_tty.size = Some(CommandExecTerminalSize { cols: 80, rows: 24 });
+        let error = service
+            .exec(size_without_tty)
+            .expect_err("terminal size requires tty");
+        assert!(error.to_string().contains("size requires tty support"));
     }
 
     #[cfg(unix)]
