@@ -394,78 +394,51 @@ impl FsService for NoopFsService {
     }
 
     fn read_file(&self, _params: FsReadFileParams) -> Result<FsReadFileResponse, AppServerError> {
-        Err(AppServerError::capability_unavailable(
-            "filesystem",
-            "filesystem service is not wired",
-        ))
+        filesystem_not_wired()
     }
 
     fn write_file(
         &self,
         _params: FsWriteFileParams,
     ) -> Result<FsWriteFileResponse, AppServerError> {
-        Err(AppServerError::capability_unavailable(
-            "filesystem",
-            "filesystem service is not wired",
-        ))
+        filesystem_not_wired()
     }
 
     fn create_directory(
         &self,
         _params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, AppServerError> {
-        Err(AppServerError::capability_unavailable(
-            "filesystem",
-            "filesystem service is not wired",
-        ))
+        filesystem_not_wired()
     }
 
     fn get_metadata(
         &self,
         _params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, AppServerError> {
-        Err(AppServerError::capability_unavailable(
-            "filesystem",
-            "filesystem service is not wired",
-        ))
+        filesystem_not_wired()
     }
 
     fn read_directory(
         &self,
         _params: FsReadDirectoryParams,
     ) -> Result<FsReadDirectoryResponse, AppServerError> {
-        Err(AppServerError::capability_unavailable(
-            "filesystem",
-            "filesystem service is not wired",
-        ))
+        filesystem_not_wired()
     }
 
     fn remove(&self, _params: FsRemoveParams) -> Result<FsRemoveResponse, AppServerError> {
-        Err(AppServerError::capability_unavailable(
-            "filesystem",
-            "filesystem service is not wired",
-        ))
+        filesystem_not_wired()
     }
 
     fn copy(&self, _params: FsCopyParams) -> Result<FsCopyResponse, AppServerError> {
-        Err(AppServerError::capability_unavailable(
-            "filesystem",
-            "filesystem service is not wired",
-        ))
+        filesystem_not_wired()
     }
 
     fn watch(&self, _params: FsWatchParams) -> Result<FsWatchResponse, AppServerError> {
-        Err(AppServerError::capability_unavailable(
-            "filesystem",
-            "filesystem service is not wired",
-        ))
+        filesystem_not_wired()
     }
 
     fn unwatch(&self, _params: FsUnwatchParams) -> Result<FsUnwatchResponse, AppServerError> {
-        Err(AppServerError::capability_unavailable(
-            "filesystem",
-            "filesystem service is not wired",
-        ))
+        filesystem_not_wired()
     }
 }
 
@@ -478,41 +451,43 @@ impl CommandExecService for NoopCommandExecService {
     }
 
     fn exec(&self, _params: CommandExecParams) -> Result<CommandExecResponse, AppServerError> {
-        Err(AppServerError::capability_unavailable(
-            "command_exec",
-            "command execution service is not wired",
-        ))
+        command_exec_not_wired()
     }
 
     fn write(
         &self,
         _params: CommandExecWriteParams,
     ) -> Result<CommandExecWriteResponse, AppServerError> {
-        Err(AppServerError::capability_unavailable(
-            "command_exec",
-            "command execution service is not wired",
-        ))
+        command_exec_not_wired()
     }
 
     fn terminate(
         &self,
         _params: CommandExecTerminateParams,
     ) -> Result<CommandExecTerminateResponse, AppServerError> {
-        Err(AppServerError::capability_unavailable(
-            "command_exec",
-            "command execution service is not wired",
-        ))
+        command_exec_not_wired()
     }
 
     fn resize(
         &self,
         _params: CommandExecResizeParams,
     ) -> Result<CommandExecResizeResponse, AppServerError> {
-        Err(AppServerError::capability_unavailable(
-            "command_exec",
-            "command execution service is not wired",
-        ))
+        command_exec_not_wired()
     }
+}
+
+fn filesystem_not_wired<T>() -> Result<T, AppServerError> {
+    Err(AppServerError::capability_unavailable(
+        "filesystem",
+        "filesystem service is not wired",
+    ))
+}
+
+fn command_exec_not_wired<T>() -> Result<T, AppServerError> {
+    Err(AppServerError::capability_unavailable(
+        "command_exec",
+        "command execution service is not wired",
+    ))
 }
 
 #[cfg(test)]
@@ -795,6 +770,14 @@ mod test_fakes {
                 changed_events: Arc::new(Mutex::new(events)),
             }
         }
+
+        fn require_ready(&self) -> Result<(), AppServerError> {
+            if self.ready {
+                Ok(())
+            } else {
+                test_fs_disabled()
+            }
+        }
     }
 
     impl FsService for TestFsService {
@@ -810,9 +793,7 @@ mod test_fakes {
             &self,
             _params: FsReadFileParams,
         ) -> Result<FsReadFileResponse, AppServerError> {
-            if !self.ready {
-                return test_fs_disabled();
-            }
+            self.require_ready()?;
             Ok(FsReadFileResponse {
                 data_base64: "dGVzdA==".to_string(),
             })
@@ -822,9 +803,7 @@ mod test_fakes {
             &self,
             _params: FsWriteFileParams,
         ) -> Result<FsWriteFileResponse, AppServerError> {
-            if !self.ready {
-                return test_fs_disabled();
-            }
+            self.require_ready()?;
             Ok(FsWriteFileResponse {})
         }
 
@@ -832,9 +811,7 @@ mod test_fakes {
             &self,
             _params: FsCreateDirectoryParams,
         ) -> Result<FsCreateDirectoryResponse, AppServerError> {
-            if !self.ready {
-                return test_fs_disabled();
-            }
+            self.require_ready()?;
             Ok(FsCreateDirectoryResponse {})
         }
 
@@ -842,9 +819,7 @@ mod test_fakes {
             &self,
             _params: FsGetMetadataParams,
         ) -> Result<FsGetMetadataResponse, AppServerError> {
-            if !self.ready {
-                return test_fs_disabled();
-            }
+            self.require_ready()?;
             Ok(FsGetMetadataResponse {
                 is_file: true,
                 is_directory: false,
@@ -858,37 +833,27 @@ mod test_fakes {
             &self,
             _params: FsReadDirectoryParams,
         ) -> Result<FsReadDirectoryResponse, AppServerError> {
-            if !self.ready {
-                return test_fs_disabled();
-            }
+            self.require_ready()?;
             Ok(FsReadDirectoryResponse { entries: vec![] })
         }
 
         fn remove(&self, _params: FsRemoveParams) -> Result<FsRemoveResponse, AppServerError> {
-            if !self.ready {
-                return test_fs_disabled();
-            }
+            self.require_ready()?;
             Ok(FsRemoveResponse {})
         }
 
         fn copy(&self, _params: FsCopyParams) -> Result<FsCopyResponse, AppServerError> {
-            if !self.ready {
-                return test_fs_disabled();
-            }
+            self.require_ready()?;
             Ok(FsCopyResponse {})
         }
 
         fn watch(&self, params: FsWatchParams) -> Result<FsWatchResponse, AppServerError> {
-            if !self.ready {
-                return test_fs_disabled();
-            }
+            self.require_ready()?;
             Ok(FsWatchResponse { path: params.path })
         }
 
         fn unwatch(&self, _params: FsUnwatchParams) -> Result<FsUnwatchResponse, AppServerError> {
-            if !self.ready {
-                return test_fs_disabled();
-            }
+            self.require_ready()?;
             Ok(FsUnwatchResponse {})
         }
 
@@ -936,6 +901,14 @@ mod test_fakes {
                 output_delta_events: Arc::new(Mutex::new(events)),
             }
         }
+
+        fn require_ready(&self) -> Result<(), AppServerError> {
+            if self.availability != CommandExecAvailability::default() {
+                Ok(())
+            } else {
+                test_command_exec_disabled()
+            }
+        }
     }
 
     impl CommandExecService for TestCommandExecService {
@@ -951,9 +924,7 @@ mod test_fakes {
         }
 
         fn exec(&self, _params: CommandExecParams) -> Result<CommandExecResponse, AppServerError> {
-            if self.availability == CommandExecAvailability::default() {
-                return test_command_exec_disabled();
-            }
+            self.require_ready()?;
             Ok(CommandExecResponse {
                 exit_code: 0,
                 stdout: "test".to_string(),
@@ -965,9 +936,7 @@ mod test_fakes {
             &self,
             _params: CommandExecWriteParams,
         ) -> Result<CommandExecWriteResponse, AppServerError> {
-            if self.availability == CommandExecAvailability::default() {
-                return test_command_exec_disabled();
-            }
+            self.require_ready()?;
             Err(AppServerError::capability_unavailable(
                 "command_exec",
                 "command stdin streaming is not available in this test service",
@@ -978,9 +947,7 @@ mod test_fakes {
             &self,
             _params: CommandExecTerminateParams,
         ) -> Result<CommandExecTerminateResponse, AppServerError> {
-            if self.availability == CommandExecAvailability::default() {
-                return test_command_exec_disabled();
-            }
+            self.require_ready()?;
             Err(AppServerError::capability_unavailable(
                 "command_exec",
                 "command termination is not available in this test service",
@@ -991,9 +958,7 @@ mod test_fakes {
             &self,
             _params: CommandExecResizeParams,
         ) -> Result<CommandExecResizeResponse, AppServerError> {
-            if self.availability == CommandExecAvailability::default() {
-                return test_command_exec_disabled();
-            }
+            self.require_ready()?;
             Err(AppServerError::capability_unavailable(
                 "command_exec",
                 "command resize is not available in this test service",

@@ -97,6 +97,18 @@ pub mod event {
     pub const ERROR: &str = "error";
 }
 
+const FILESYSTEM_METHODS: &[&str] = &[
+    method::FS_READ_FILE,
+    method::FS_WRITE_FILE,
+    method::FS_CREATE_DIRECTORY,
+    method::FS_GET_METADATA,
+    method::FS_READ_DIRECTORY,
+    method::FS_REMOVE,
+    method::FS_COPY,
+    method::FS_WATCH,
+    method::FS_UNWATCH,
+];
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonRpcRequest {
@@ -739,42 +751,12 @@ impl CapabilityMatrix {
         self.command_exec = declared_future_capability("command_exec");
 
         if availability.filesystem {
-            self.filesystem = Capability::implemented(
-                "filesystem",
-                &[
-                    method::FS_READ_FILE,
-                    method::FS_WRITE_FILE,
-                    method::FS_CREATE_DIRECTORY,
-                    method::FS_GET_METADATA,
-                    method::FS_READ_DIRECTORY,
-                    method::FS_REMOVE,
-                    method::FS_COPY,
-                    method::FS_WATCH,
-                    method::FS_UNWATCH,
-                ],
-                &[event::FS_CHANGED],
-            );
+            self.filesystem =
+                Capability::implemented("filesystem", FILESYSTEM_METHODS, &[event::FS_CHANGED]);
         }
 
-        let mut command_methods = Vec::new();
-        if availability.command.exec {
-            command_methods.push(method::COMMAND_EXEC);
-        }
-        if availability.command.write {
-            command_methods.push(method::COMMAND_EXEC_WRITE);
-        }
-        if availability.command.terminate {
-            command_methods.push(method::COMMAND_EXEC_TERMINATE);
-        }
-        if availability.command.resize {
-            command_methods.push(method::COMMAND_EXEC_RESIZE);
-        }
-
-        let command_events = if availability.command.output_delta_events {
-            vec![event::COMMAND_EXEC_OUTPUT_DELTA]
-        } else {
-            Vec::new()
-        };
+        let command_methods = availability.command.methods();
+        let command_events = availability.command.events();
         if !command_methods.is_empty() || !command_events.is_empty() {
             self.command_exec =
                 Capability::implemented("command_exec", &command_methods, &command_events);
@@ -812,6 +794,35 @@ pub struct CommandExecAvailability {
     pub terminate: bool,
     pub write: bool,
     pub resize: bool,
+}
+
+impl CommandExecAvailability {
+    #[must_use]
+    pub fn methods(&self) -> Vec<&'static str> {
+        let mut methods = Vec::new();
+        if self.exec {
+            methods.push(method::COMMAND_EXEC);
+        }
+        if self.write {
+            methods.push(method::COMMAND_EXEC_WRITE);
+        }
+        if self.terminate {
+            methods.push(method::COMMAND_EXEC_TERMINATE);
+        }
+        if self.resize {
+            methods.push(method::COMMAND_EXEC_RESIZE);
+        }
+        methods
+    }
+
+    #[must_use]
+    pub fn events(&self) -> Vec<&'static str> {
+        if self.output_delta_events {
+            vec![event::COMMAND_EXEC_OUTPUT_DELTA]
+        } else {
+            Vec::new()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

@@ -211,23 +211,23 @@ impl AppServerCommandExecService {
         output_bytes_cap: Option<usize>,
         response: CommandExecResponse,
         executor_cap_reached: bool,
-    ) -> Result<(CommandExecResponse, bool), AppServerError> {
+    ) -> (CommandExecResponse, bool) {
         let Some(cap) = output_bytes_cap else {
-            return Ok((response, executor_cap_reached));
+            return (response, executor_cap_reached);
         };
 
         let mut stdout = response.stdout;
         let mut stderr = response.stderr;
         let stdout_truncated = truncate_to_byte_cap(&mut stdout, cap);
         let stderr_truncated = truncate_to_byte_cap(&mut stderr, cap);
-        Ok((
+        (
             CommandExecResponse {
                 exit_code: response.exit_code,
                 stdout,
                 stderr,
             },
             executor_cap_reached || stdout_truncated || stderr_truncated,
-        ))
+        )
     }
 }
 
@@ -298,7 +298,7 @@ impl CommandExecService for AppServerCommandExecService {
                 ))
             })?;
         let (response, cap_reached) =
-            Self::apply_output_cap(output_bytes_cap, response, executor_cap_reached)?;
+            Self::apply_output_cap(output_bytes_cap, response, executor_cap_reached);
 
         self.completed
             .lock()
@@ -372,10 +372,7 @@ fn shell_quote(arg: &str) -> String {
     if arg.is_empty() {
         return "''".to_string();
     }
-    if arg
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '/' | '.' | ':' | '='))
-    {
+    if is_unquoted_shell_arg(arg) {
         return arg.to_string();
     }
     format!("'{}'", arg.replace('\'', "'\\''"))
@@ -390,10 +387,12 @@ fn current_shell_kind() -> ShellKind {
 }
 
 fn is_safe_cmd_arg(arg: &str) -> bool {
-    !arg.is_empty()
-        && arg
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '/' | '.' | ':' | '='))
+    !arg.is_empty() && is_unquoted_shell_arg(arg)
+}
+
+fn is_unquoted_shell_arg(arg: &str) -> bool {
+    arg.chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '/' | '.' | ':' | '='))
 }
 
 fn truncate_to_byte_cap(value: &mut String, cap: usize) -> bool {
