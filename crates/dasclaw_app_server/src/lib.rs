@@ -25,12 +25,15 @@ use dasclaw_app_server_protocol::{
     AgentMessageDeltaEvent, AppServerApprovalDecision, ApprovalResponsePayload,
     CapabilitiesChangedEvent, CapabilitiesChangedReason, CapabilitiesListResponse,
     CapabilityMatrix, ClientInfo, CommandExecOutputDeltaNotification, CommandExecParams,
-    CommandExecResizeParams, CommandExecTerminateParams, CommandExecWriteParams,
-    CommandExecutionApprovalRequest, CommandExecutionOutputDeltaEvent,
+    CommandExecResizeParams, CommandExecResizeResponse, CommandExecResponse,
+    CommandExecTerminateParams, CommandExecTerminateResponse, CommandExecWriteParams,
+    CommandExecWriteResponse, CommandExecutionApprovalRequest, CommandExecutionOutputDeltaEvent,
     CommandExecutionTerminalInteractionEvent, CompatibilityProfile,
     DEFAULT_MAX_PENDING_NOTIFICATIONS, ErrorCode, ErrorData, ErrorEvent, FsChangedNotification,
-    FsCopyParams, FsCreateDirectoryParams, FsGetMetadataParams, FsReadDirectoryParams,
-    FsReadFileParams, FsRemoveParams, FsUnwatchParams, FsWatchParams, FsWriteFileParams,
+    FsCopyParams, FsCopyResponse, FsCreateDirectoryParams, FsCreateDirectoryResponse,
+    FsGetMetadataParams, FsGetMetadataResponse, FsReadDirectoryParams, FsReadDirectoryResponse,
+    FsReadFileParams, FsReadFileResponse, FsRemoveParams, FsRemoveResponse, FsUnwatchParams,
+    FsUnwatchResponse, FsWatchParams, FsWatchResponse, FsWriteFileParams, FsWriteFileResponse,
     HealthCheckParams, HealthCheckResponse, InitializeParams, InitializeResponse,
     ItemCompletedEvent, ItemStartedEvent, JobListParams, JobListResponse, JobReadParams,
     JobReadResponse, JsonRpcClientResponse, JsonRpcError, JsonRpcRequest, JsonRpcResponse,
@@ -818,6 +821,98 @@ impl AppServer {
         self.model_provider.model_list_response()
     }
 
+    pub fn fs_read_file(
+        &self,
+        params: FsReadFileParams,
+    ) -> Result<FsReadFileResponse, AppServerError> {
+        self.require_initialized("filesystem")?;
+        self.app_services.filesystem.read_file(params)
+    }
+
+    pub fn fs_write_file(
+        &self,
+        params: FsWriteFileParams,
+    ) -> Result<FsWriteFileResponse, AppServerError> {
+        self.require_initialized("filesystem")?;
+        self.app_services.filesystem.write_file(params)
+    }
+
+    pub fn fs_create_directory(
+        &self,
+        params: FsCreateDirectoryParams,
+    ) -> Result<FsCreateDirectoryResponse, AppServerError> {
+        self.require_initialized("filesystem")?;
+        self.app_services.filesystem.create_directory(params)
+    }
+
+    pub fn fs_get_metadata(
+        &self,
+        params: FsGetMetadataParams,
+    ) -> Result<FsGetMetadataResponse, AppServerError> {
+        self.require_initialized("filesystem")?;
+        self.app_services.filesystem.get_metadata(params)
+    }
+
+    pub fn fs_read_directory(
+        &self,
+        params: FsReadDirectoryParams,
+    ) -> Result<FsReadDirectoryResponse, AppServerError> {
+        self.require_initialized("filesystem")?;
+        self.app_services.filesystem.read_directory(params)
+    }
+
+    pub fn fs_remove(&self, params: FsRemoveParams) -> Result<FsRemoveResponse, AppServerError> {
+        self.require_initialized("filesystem")?;
+        self.app_services.filesystem.remove(params)
+    }
+
+    pub fn fs_copy(&self, params: FsCopyParams) -> Result<FsCopyResponse, AppServerError> {
+        self.require_initialized("filesystem")?;
+        self.app_services.filesystem.copy(params)
+    }
+
+    pub fn fs_watch(&self, params: FsWatchParams) -> Result<FsWatchResponse, AppServerError> {
+        self.require_initialized("filesystem")?;
+        self.app_services.filesystem.watch(params)
+    }
+
+    pub fn fs_unwatch(&self, params: FsUnwatchParams) -> Result<FsUnwatchResponse, AppServerError> {
+        self.require_initialized("filesystem")?;
+        self.app_services.filesystem.unwatch(params)
+    }
+
+    pub fn command_exec(
+        &self,
+        params: CommandExecParams,
+    ) -> Result<CommandExecResponse, AppServerError> {
+        self.require_initialized("command_exec")?;
+        self.app_services.command.exec(params)
+    }
+
+    pub fn command_exec_write(
+        &self,
+        params: CommandExecWriteParams,
+    ) -> Result<CommandExecWriteResponse, AppServerError> {
+        self.require_initialized("command_exec")?;
+        self.app_services.command.write(params)
+    }
+
+    pub fn command_exec_terminate(
+        &self,
+        params: CommandExecTerminateParams,
+    ) -> Result<CommandExecTerminateResponse, AppServerError> {
+        self.require_initialized("command_exec")?;
+        self.app_services.command.terminate(params)
+    }
+
+    pub fn command_exec_resize(
+        &self,
+        params: CommandExecResizeParams,
+    ) -> Result<CommandExecResizeResponse, AppServerError> {
+        self.require_initialized("command_exec")?;
+        self.app_services.command.resize(params)
+    }
+
     pub fn jobs_list(&self, params: JobListParams) -> Result<JobListResponse, AppServerError> {
         self.require_initialized("jobs")?;
         self.app_services.jobs.list(params)
@@ -1299,70 +1394,68 @@ impl AppServer {
             ),
             method::FS_READ_FILE => {
                 route_with_params(request.id, request.params, |params: FsReadFileParams| {
-                    self.app_services.filesystem.read_file(params)
+                    self.fs_read_file(params)
                 })
             }
             method::FS_WRITE_FILE => {
                 route_with_params(request.id, request.params, |params: FsWriteFileParams| {
-                    self.app_services.filesystem.write_file(params)
+                    self.fs_write_file(params)
                 })
             }
             method::FS_CREATE_DIRECTORY => route_with_params(
                 request.id,
                 request.params,
-                |params: FsCreateDirectoryParams| {
-                    self.app_services.filesystem.create_directory(params)
-                },
+                |params: FsCreateDirectoryParams| self.fs_create_directory(params),
             ),
             method::FS_GET_METADATA => {
                 route_with_params(request.id, request.params, |params: FsGetMetadataParams| {
-                    self.app_services.filesystem.get_metadata(params)
+                    self.fs_get_metadata(params)
                 })
             }
             method::FS_READ_DIRECTORY => route_with_params(
                 request.id,
                 request.params,
-                |params: FsReadDirectoryParams| self.app_services.filesystem.read_directory(params),
+                |params: FsReadDirectoryParams| self.fs_read_directory(params),
             ),
             method::FS_REMOVE => {
                 route_with_params(request.id, request.params, |params: FsRemoveParams| {
-                    self.app_services.filesystem.remove(params)
+                    self.fs_remove(params)
                 })
             }
             method::FS_COPY => {
                 route_with_params(request.id, request.params, |params: FsCopyParams| {
-                    self.app_services.filesystem.copy(params)
+                    self.fs_copy(params)
                 })
             }
             method::FS_WATCH => {
                 route_with_params(request.id, request.params, |params: FsWatchParams| {
-                    self.app_services.filesystem.watch(params)
+                    self.fs_watch(params)
                 })
             }
             method::FS_UNWATCH => {
                 route_with_params(request.id, request.params, |params: FsUnwatchParams| {
-                    self.app_services.filesystem.unwatch(params)
+                    self.fs_unwatch(params)
                 })
             }
             method::COMMAND_EXEC => {
                 route_with_params(request.id, request.params, |params: CommandExecParams| {
-                    self.app_services.command.exec(params)
+                    self.command_exec(params)
                 })
             }
             method::COMMAND_EXEC_WRITE => route_with_params(
                 request.id,
                 request.params,
-                |params: CommandExecWriteParams| self.app_services.command.write(params),
+                |params: CommandExecWriteParams| self.command_exec_write(params),
             ),
             method::COMMAND_EXEC_TERMINATE => route_with_params(
                 request.id,
                 request.params,
-                |params: CommandExecTerminateParams| self.app_services.command.terminate(params),
+                |params: CommandExecTerminateParams| self.command_exec_terminate(params),
             ),
             method::COMMAND_EXEC_RESIZE => route_with_params(
                 request.id,
                 request.params,
-                |params: CommandExecResizeParams| self.app_services.command.resize(params),
+                |params: CommandExecResizeParams| self.command_exec_resize(params),
             ),
             method::APPROVAL_RESPOND => {
                 let id = request.id.clone();
@@ -3962,6 +4055,39 @@ mod tests {
     }
 
     #[test]
+    fn app_server_ready_p5_routes_require_initialize_before_service_owner() {
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::ready(),
+            app_services::TestCommandExecService::ready_buffered(),
+        );
+        let mut server = AppServer::new().with_app_services(services);
+
+        let read = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"fs-read","method":"fs/readFile","params":{"path":"/tmp/example.txt"}}"#,
+            )
+            .expect("fs/readFile should return a structured response");
+        let exec = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"cmd","method":"command/exec","params":{"command":["printf","test"]}}"#,
+            )
+            .expect("command/exec should return a structured response");
+
+        let read_value: Value = serde_json::from_str(&read).expect("fs/readFile response JSON");
+        let exec_value: Value = serde_json::from_str(&exec).expect("command/exec response JSON");
+        assert_eq!(read_value["error"]["data"]["code"], "NOT_INITIALIZED");
+        assert_eq!(exec_value["error"]["data"]["code"], "NOT_INITIALIZED");
+        assert!(read_value.get("result").is_none());
+        assert!(exec_value.get("result").is_none());
+        assert_ne!(read_value["result"]["dataBase64"], "dGVzdA==");
+        assert_ne!(exec_value["result"]["stdout"], "test");
+    }
+
+    #[test]
     fn app_server_p5_service_events_drain_to_notifications() {
         let services = app_services::AppServerServices::for_tests(
             app_services::TestLogService::ready(),
@@ -3996,6 +4122,7 @@ mod tests {
                 .iter()
                 .any(|notification| notification.method == event::COMMAND_EXEC_OUTPUT_DELTA)
         );
+        assert!(server.drain_notifications().is_empty());
     }
 
     #[test]
