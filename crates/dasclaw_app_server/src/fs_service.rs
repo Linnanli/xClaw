@@ -22,6 +22,7 @@ use crate::app_services::FsService;
 #[derive(Debug)]
 pub struct AppServerFsService {
     root: PathBuf,
+    lexical_root: PathBuf,
     watches: Mutex<HashMap<String, FsWatch>>,
     events: Mutex<Vec<FsChangedNotification>>,
 }
@@ -46,11 +47,11 @@ enum WatchState {
 impl AppServerFsService {
     #[must_use]
     pub fn new(root: PathBuf) -> Self {
-        let root = root
-            .canonicalize()
-            .unwrap_or_else(|_| normalize_lexical(&root));
+        let lexical_root = normalize_lexical(&root);
+        let root = root.canonicalize().unwrap_or_else(|_| lexical_root.clone());
         Self {
             root,
+            lexical_root,
             watches: Mutex::new(HashMap::new()),
             events: Mutex::new(Vec::new()),
         }
@@ -66,7 +67,7 @@ impl AppServerFsService {
     }
 
     fn resolve_for_recursive_create(&self, raw: &str) -> Result<PathBuf, ResolveError> {
-        reject_unsafe_path(raw)?;
+        self.reject_unsafe_path(raw)?;
         let resolved = validate_path(raw, Some(&self.root))
             .map_err(|error| ResolveError::security(error.to_string()))?;
         let mut ancestor = resolved.as_path();
@@ -103,7 +104,7 @@ impl AppServerFsService {
         raw: &str,
         expectation: PathExpectation,
     ) -> Result<ResolvedPath, ResolveError> {
-        reject_unsafe_path(raw)?;
+        self.reject_unsafe_path(raw)?;
         let original = self.original_path(raw);
         let resolved = validate_path(raw, Some(&self.root))
             .map_err(|error| ResolveError::security(error.to_string()))?;
@@ -148,6 +149,35 @@ impl AppServerFsService {
         } else {
             self.root.join(path)
         }
+    }
+
+    fn reject_unsafe_path(&self, raw: &str) -> Result<(), ResolveError> {
+        if raw.as_bytes().contains(&0) {
+            return Err(ResolveError::security(
+                "filesystem path contains a null byte",
+            ));
+        }
+
+        let path = Path::new(raw);
+        if path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+        {
+            return Err(ResolveError::security(
+                "filesystem path traversal is not allowed",
+            ));
+        }
+
+        if path.is_absolute() {
+            let lexical = normalize_lexical(path);
+            if !lexical.starts_with(&self.root) && !lexical.starts_with(&self.lexical_root) {
+                return Err(ResolveError::security(
+                    "absolute filesystem path is outside service root",
+                ));
+            }
+        }
+
+        Ok(())
     }
 
     fn metadata_state(path: &Path) -> WatchState {
@@ -435,26 +465,6 @@ impl FsService for AppServerFsService {
     }
 }
 
-fn reject_unsafe_path(raw: &str) -> Result<(), ResolveError> {
-    if raw.as_bytes().contains(&0) {
-        return Err(ResolveError::security(
-            "filesystem path contains a null byte",
-        ));
-    }
-
-    let path = Path::new(raw);
-    if path
-        .components()
-        .any(|component| matches!(component, Component::ParentDir))
-    {
-        return Err(ResolveError::security(
-            "filesystem path traversal is not allowed",
-        ));
-    }
-
-    Ok(())
-}
-
 fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<(), AppServerError> {
     fs::create_dir(destination).map_err(|error| filesystem_unavailable(error.to_string()))?;
     for entry in fs::read_dir(source).map_err(|error| filesystem_unavailable(error.to_string()))? {
@@ -662,6 +672,65 @@ mod tests {
 
         let service = AppServerFsService::new(temp.path().to_path_buf());
         assert!(service.read_file(read_params("link.txt")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fs_service_rejects_outside_absolute_symlink_to_inside_root() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let inside_file = temp.path().join("inside.txt");
+        fs::write(&inside_file, b"inside").expect("write inside file");
+        let outside_link = outside.path().join("link_to_inside.txt");
+        symlink(&inside_file, &outside_link).expect("symlink");
+        let outside_link = outside_link.to_string_lossy();
+        let service = AppServerFsService::new(temp.path().to_path_buf());
+
+        assert!(service.read_file(read_params(&outside_link)).is_err());
+        assert!(
+            service
+                .get_metadata(FsGetMetadataParams {
+                    path: outside_link.to_string(),
+                })
+                .is_err()
+        );
+        assert!(
+            service
+                .remove(FsRemoveParams {
+                    path: outside_link.to_string(),
+                    recursive: None,
+                    force: Some(true),
+                })
+                .is_err()
+        );
+        assert!(
+            service
+                .watch(FsWatchParams {
+                    path: outside_link.to_string(),
+                    watch_id: "outside_link".to_string(),
+                })
+                .is_err()
+        );
+        assert!(
+            service
+                .copy(FsCopyParams {
+                    source_path: outside_link.to_string(),
+                    destination_path: "copy.txt".to_string(),
+                    recursive: None,
+                })
+                .is_err()
+        );
+        assert!(
+            service
+                .write_file(write_params(&outside_link, b"overwrite", None))
+                .is_err()
+        );
+        assert_eq!(
+            fs::read(&inside_file).expect("inside file should remain unchanged"),
+            b"inside"
+        );
     }
 
     #[test]
