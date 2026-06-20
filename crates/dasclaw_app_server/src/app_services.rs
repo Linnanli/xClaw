@@ -523,20 +523,21 @@ mod test_fakes {
     use std::sync::{Arc, Mutex};
 
     use dasclaw_app_server_protocol::{
-        CommandExecAvailability, CommandExecParams, CommandExecResizeParams,
-        CommandExecResizeResponse, CommandExecResponse, CommandExecTerminateParams,
-        CommandExecTerminateResponse, CommandExecWriteParams, CommandExecWriteResponse,
-        FsCopyParams, FsCopyResponse, FsCreateDirectoryParams, FsCreateDirectoryResponse,
-        FsGetMetadataParams, FsGetMetadataResponse, FsReadDirectoryParams, FsReadDirectoryResponse,
-        FsReadFileParams, FsReadFileResponse, FsRemoveParams, FsRemoveResponse, FsUnwatchParams,
-        FsUnwatchResponse, FsWatchParams, FsWatchResponse, FsWriteFileParams, FsWriteFileResponse,
-        JobListParams, JobListResponse, JobReadParams, JobReadResponse, JobSnapshot,
-        ListMcpServerStatusParams, ListMcpServerStatusResponse, LogEntryEvent,
-        McpResourceReadParams, McpResourceReadResponse, McpServerOauthLoginParams,
-        McpServerOauthLoginResponse, McpServerReloadParams, McpServerReloadResponse,
-        McpServerStatus, McpServerToolCallParams, McpServerToolCallResponse,
-        McpServiceAvailability, ServiceHealth, ServiceName, SkillsConfigWriteParams,
-        SkillsConfigWriteResponse, SkillsListEntry, SkillsListParams, SkillsListResponse,
+        CommandExecAvailability, CommandExecOutputDeltaNotification, CommandExecParams,
+        CommandExecResizeParams, CommandExecResizeResponse, CommandExecResponse,
+        CommandExecTerminateParams, CommandExecTerminateResponse, CommandExecWriteParams,
+        CommandExecWriteResponse, FsChangedNotification, FsCopyParams, FsCopyResponse,
+        FsCreateDirectoryParams, FsCreateDirectoryResponse, FsGetMetadataParams,
+        FsGetMetadataResponse, FsReadDirectoryParams, FsReadDirectoryResponse, FsReadFileParams,
+        FsReadFileResponse, FsRemoveParams, FsRemoveResponse, FsUnwatchParams, FsUnwatchResponse,
+        FsWatchParams, FsWatchResponse, FsWriteFileParams, FsWriteFileResponse, JobListParams,
+        JobListResponse, JobReadParams, JobReadResponse, JobSnapshot, ListMcpServerStatusParams,
+        ListMcpServerStatusResponse, LogEntryEvent, McpResourceReadParams, McpResourceReadResponse,
+        McpServerOauthLoginParams, McpServerOauthLoginResponse, McpServerReloadParams,
+        McpServerReloadResponse, McpServerStatus, McpServerToolCallParams,
+        McpServerToolCallResponse, McpServiceAvailability, ServiceHealth, ServiceName,
+        SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListEntry, SkillsListParams,
+        SkillsListResponse,
     };
 
     use super::{CommandExecService, FsService, JobService, LogService, McpService, SkillsService};
@@ -767,15 +768,29 @@ mod test_fakes {
     #[derive(Clone)]
     pub struct TestFsService {
         ready: bool,
+        changed_events: Arc<Mutex<Vec<FsChangedNotification>>>,
     }
 
     impl TestFsService {
         pub fn ready() -> Self {
-            Self { ready: true }
+            Self {
+                ready: true,
+                changed_events: Arc::new(Mutex::new(Vec::new())),
+            }
         }
 
         pub fn disabled() -> Self {
-            Self { ready: false }
+            Self {
+                ready: false,
+                changed_events: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        pub fn ready_with_changed_events(events: Vec<FsChangedNotification>) -> Self {
+            Self {
+                ready: true,
+                changed_events: Arc::new(Mutex::new(events)),
+            }
         }
     }
 
@@ -792,6 +807,9 @@ mod test_fakes {
             &self,
             _params: FsReadFileParams,
         ) -> Result<FsReadFileResponse, AppServerError> {
+            if !self.ready {
+                return test_fs_disabled();
+            }
             Ok(FsReadFileResponse {
                 data_base64: "dGVzdA==".to_string(),
             })
@@ -801,6 +819,9 @@ mod test_fakes {
             &self,
             _params: FsWriteFileParams,
         ) -> Result<FsWriteFileResponse, AppServerError> {
+            if !self.ready {
+                return test_fs_disabled();
+            }
             Ok(FsWriteFileResponse {})
         }
 
@@ -808,6 +829,9 @@ mod test_fakes {
             &self,
             _params: FsCreateDirectoryParams,
         ) -> Result<FsCreateDirectoryResponse, AppServerError> {
+            if !self.ready {
+                return test_fs_disabled();
+            }
             Ok(FsCreateDirectoryResponse {})
         }
 
@@ -815,6 +839,9 @@ mod test_fakes {
             &self,
             _params: FsGetMetadataParams,
         ) -> Result<FsGetMetadataResponse, AppServerError> {
+            if !self.ready {
+                return test_fs_disabled();
+            }
             Ok(FsGetMetadataResponse {
                 is_file: true,
                 is_directory: false,
@@ -828,29 +855,52 @@ mod test_fakes {
             &self,
             _params: FsReadDirectoryParams,
         ) -> Result<FsReadDirectoryResponse, AppServerError> {
+            if !self.ready {
+                return test_fs_disabled();
+            }
             Ok(FsReadDirectoryResponse { entries: vec![] })
         }
 
         fn remove(&self, _params: FsRemoveParams) -> Result<FsRemoveResponse, AppServerError> {
+            if !self.ready {
+                return test_fs_disabled();
+            }
             Ok(FsRemoveResponse {})
         }
 
         fn copy(&self, _params: FsCopyParams) -> Result<FsCopyResponse, AppServerError> {
+            if !self.ready {
+                return test_fs_disabled();
+            }
             Ok(FsCopyResponse {})
         }
 
         fn watch(&self, params: FsWatchParams) -> Result<FsWatchResponse, AppServerError> {
+            if !self.ready {
+                return test_fs_disabled();
+            }
             Ok(FsWatchResponse { path: params.path })
         }
 
         fn unwatch(&self, _params: FsUnwatchParams) -> Result<FsUnwatchResponse, AppServerError> {
+            if !self.ready {
+                return test_fs_disabled();
+            }
             Ok(FsUnwatchResponse {})
+        }
+
+        fn drain_changed_events(&self) -> Vec<FsChangedNotification> {
+            self.changed_events
+                .lock()
+                .map(|mut events| std::mem::take(&mut *events))
+                .unwrap_or_default()
         }
     }
 
     #[derive(Clone)]
     pub struct TestCommandExecService {
         availability: CommandExecAvailability,
+        output_delta_events: Arc<Mutex<Vec<CommandExecOutputDeltaNotification>>>,
     }
 
     impl TestCommandExecService {
@@ -860,12 +910,27 @@ mod test_fakes {
                     exec: true,
                     ..CommandExecAvailability::default()
                 },
+                output_delta_events: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
         pub fn disabled() -> Self {
             Self {
                 availability: CommandExecAvailability::default(),
+                output_delta_events: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        pub fn ready_with_output_delta_events(
+            events: Vec<CommandExecOutputDeltaNotification>,
+        ) -> Self {
+            Self {
+                availability: CommandExecAvailability {
+                    exec: true,
+                    output_delta_events: true,
+                    ..CommandExecAvailability::default()
+                },
+                output_delta_events: Arc::new(Mutex::new(events)),
             }
         }
     }
@@ -883,6 +948,9 @@ mod test_fakes {
         }
 
         fn exec(&self, _params: CommandExecParams) -> Result<CommandExecResponse, AppServerError> {
+            if self.availability == CommandExecAvailability::default() {
+                return test_command_exec_disabled();
+            }
             Ok(CommandExecResponse {
                 exit_code: 0,
                 stdout: "test".to_string(),
@@ -894,6 +962,9 @@ mod test_fakes {
             &self,
             _params: CommandExecWriteParams,
         ) -> Result<CommandExecWriteResponse, AppServerError> {
+            if self.availability == CommandExecAvailability::default() {
+                return test_command_exec_disabled();
+            }
             Err(AppServerError::capability_unavailable(
                 "command_exec",
                 "command stdin streaming is not available in this test service",
@@ -904,6 +975,9 @@ mod test_fakes {
             &self,
             _params: CommandExecTerminateParams,
         ) -> Result<CommandExecTerminateResponse, AppServerError> {
+            if self.availability == CommandExecAvailability::default() {
+                return test_command_exec_disabled();
+            }
             Err(AppServerError::capability_unavailable(
                 "command_exec",
                 "command termination is not available in this test service",
@@ -914,6 +988,9 @@ mod test_fakes {
             &self,
             _params: CommandExecResizeParams,
         ) -> Result<CommandExecResizeResponse, AppServerError> {
+            if self.availability == CommandExecAvailability::default() {
+                return test_command_exec_disabled();
+            }
             Err(AppServerError::capability_unavailable(
                 "command_exec",
                 "command resize is not available in this test service",
@@ -923,6 +1000,27 @@ mod test_fakes {
         fn availability(&self) -> CommandExecAvailability {
             self.availability
         }
+
+        fn drain_output_delta_events(&self) -> Vec<CommandExecOutputDeltaNotification> {
+            self.output_delta_events
+                .lock()
+                .map(|mut events| std::mem::take(&mut *events))
+                .unwrap_or_default()
+        }
+    }
+
+    fn test_fs_disabled<T>() -> Result<T, AppServerError> {
+        Err(AppServerError::capability_unavailable(
+            "filesystem",
+            "test filesystem disabled",
+        ))
+    }
+
+    fn test_command_exec_disabled<T>() -> Result<T, AppServerError> {
+        Err(AppServerError::capability_unavailable(
+            "command_exec",
+            "test command exec disabled",
+        ))
     }
 }
 

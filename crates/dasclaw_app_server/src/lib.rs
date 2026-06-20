@@ -24,31 +24,28 @@ use dasclaw_app_server_protocol::ClientModelConfig;
 use dasclaw_app_server_protocol::{
     AgentMessageDeltaEvent, AppServerApprovalDecision, ApprovalResponsePayload,
     CapabilitiesChangedEvent, CapabilitiesChangedReason, CapabilitiesListResponse,
-    CapabilityMatrix, ClientInfo, CommandExecParams, CommandExecResizeParams,
-    CommandExecResizeResponse, CommandExecResponse, CommandExecTerminateParams,
-    CommandExecTerminateResponse, CommandExecWriteParams, CommandExecWriteResponse,
+    CapabilityMatrix, ClientInfo, CommandExecOutputDeltaNotification, CommandExecParams,
+    CommandExecResizeParams, CommandExecTerminateParams, CommandExecWriteParams,
     CommandExecutionApprovalRequest, CommandExecutionOutputDeltaEvent,
     CommandExecutionTerminalInteractionEvent, CompatibilityProfile,
-    DEFAULT_MAX_PENDING_NOTIFICATIONS, ErrorCode, ErrorData, ErrorEvent, FsCopyParams,
-    FsCopyResponse, FsCreateDirectoryParams, FsCreateDirectoryResponse, FsGetMetadataParams,
-    FsGetMetadataResponse, FsReadDirectoryParams, FsReadDirectoryResponse, FsReadFileParams,
-    FsReadFileResponse, FsRemoveParams, FsRemoveResponse, FsUnwatchParams, FsUnwatchResponse,
-    FsWatchParams, FsWatchResponse, FsWriteFileParams, FsWriteFileResponse, HealthCheckParams,
-    HealthCheckResponse, InitializeParams, InitializeResponse, ItemCompletedEvent,
-    ItemStartedEvent, JobListParams, JobListResponse, JobReadParams, JobReadResponse,
-    JsonRpcClientResponse, JsonRpcError, JsonRpcRequest, JsonRpcResponse, JsonRpcServerRequest,
-    LifecycleChangedEvent, LifecycleReason, LifecycleSnapshot, LifecycleState,
-    LifecycleStatusResponse, ListMcpServerStatusParams, ListMcpServerStatusResponse, LogEntryEvent,
-    McpResourceReadParams, McpResourceReadResponse, McpServerOauthLoginCompletedNotification,
-    McpServerOauthLoginParams, McpServerOauthLoginResponse, McpServerReloadParams,
-    McpServerReloadResponse, McpServerStartupState, McpServerStatusUpdatedNotification,
-    McpServerToolCallParams, McpServerToolCallResponse, McpToolCallProgressNotification,
-    ModelListParams, ModelListResponse, ModelProviderInitializeConfig,
-    ModelProviderSelectForNextTurnParams, ModelProviderSelectForNextTurnResponse,
-    NotificationQueuePolicy, NotificationsInitializedEvent, ProtocolSchemaResponse,
-    ProtocolVersion, ReasoningSummaryTextDeltaEvent, ServerInfo, ServerNotification,
-    ServerRequestResolutionOutcome, ServerRequestResolvedEvent, ServiceHealth, ServiceName,
-    ShutdownParams, ShutdownReason, ShutdownResponse, SkillsChangedNotification,
+    DEFAULT_MAX_PENDING_NOTIFICATIONS, ErrorCode, ErrorData, ErrorEvent, FsChangedNotification,
+    FsCopyParams, FsCreateDirectoryParams, FsGetMetadataParams, FsReadDirectoryParams,
+    FsReadFileParams, FsRemoveParams, FsUnwatchParams, FsWatchParams, FsWriteFileParams,
+    HealthCheckParams, HealthCheckResponse, InitializeParams, InitializeResponse,
+    ItemCompletedEvent, ItemStartedEvent, JobListParams, JobListResponse, JobReadParams,
+    JobReadResponse, JsonRpcClientResponse, JsonRpcError, JsonRpcRequest, JsonRpcResponse,
+    JsonRpcServerRequest, LifecycleChangedEvent, LifecycleReason, LifecycleSnapshot,
+    LifecycleState, LifecycleStatusResponse, ListMcpServerStatusParams,
+    ListMcpServerStatusResponse, LogEntryEvent, McpResourceReadParams, McpResourceReadResponse,
+    McpServerOauthLoginCompletedNotification, McpServerOauthLoginParams,
+    McpServerOauthLoginResponse, McpServerReloadParams, McpServerReloadResponse,
+    McpServerStartupState, McpServerStatusUpdatedNotification, McpServerToolCallParams,
+    McpServerToolCallResponse, McpToolCallProgressNotification, ModelListParams, ModelListResponse,
+    ModelProviderInitializeConfig, ModelProviderSelectForNextTurnParams,
+    ModelProviderSelectForNextTurnResponse, NotificationQueuePolicy, NotificationsInitializedEvent,
+    ProtocolSchemaResponse, ProtocolVersion, ReasoningSummaryTextDeltaEvent, ServerInfo,
+    ServerNotification, ServerRequestResolutionOutcome, ServerRequestResolvedEvent, ServiceHealth,
+    ServiceName, ShutdownParams, ShutdownReason, ShutdownResponse, SkillsChangedNotification,
     SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse,
     ThreadListParams, ThreadListResponse, ThreadReadParams, ThreadReadResponse, ThreadStartParams,
     ThreadStartResponse, ThreadStartedEvent, ThreadTurnsListParams, ThreadTurnsListResponse,
@@ -821,20 +818,6 @@ impl AppServer {
         self.model_provider.model_list_response()
     }
 
-    fn filesystem_unavailable<T, R>(&self, _params: T) -> Result<R, AppServerError> {
-        Err(AppServerError::capability_unavailable(
-            "filesystem",
-            "filesystem service is not wired",
-        ))
-    }
-
-    fn command_exec_unavailable<T, R>(&self, _params: T) -> Result<R, AppServerError> {
-        Err(AppServerError::capability_unavailable(
-            "command_exec",
-            "command execution service is not wired",
-        ))
-    }
-
     pub fn jobs_list(&self, params: JobListParams) -> Result<JobListResponse, AppServerError> {
         self.require_initialized("jobs")?;
         self.app_services.jobs.list(params)
@@ -1316,94 +1299,70 @@ impl AppServer {
             ),
             method::FS_READ_FILE => {
                 route_with_params(request.id, request.params, |params: FsReadFileParams| {
-                    self.filesystem_unavailable::<FsReadFileParams, FsReadFileResponse>(params)
+                    self.app_services.filesystem.read_file(params)
                 })
             }
             method::FS_WRITE_FILE => {
                 route_with_params(request.id, request.params, |params: FsWriteFileParams| {
-                    self.filesystem_unavailable::<FsWriteFileParams, FsWriteFileResponse>(params)
+                    self.app_services.filesystem.write_file(params)
                 })
             }
             method::FS_CREATE_DIRECTORY => route_with_params(
                 request.id,
                 request.params,
                 |params: FsCreateDirectoryParams| {
-                    self.filesystem_unavailable::<
-                        FsCreateDirectoryParams,
-                        FsCreateDirectoryResponse,
-                    >(params)
+                    self.app_services.filesystem.create_directory(params)
                 },
             ),
             method::FS_GET_METADATA => {
                 route_with_params(request.id, request.params, |params: FsGetMetadataParams| {
-                    self.filesystem_unavailable::<FsGetMetadataParams, FsGetMetadataResponse>(
-                        params,
-                    )
+                    self.app_services.filesystem.get_metadata(params)
                 })
             }
             method::FS_READ_DIRECTORY => route_with_params(
                 request.id,
                 request.params,
-                |params: FsReadDirectoryParams| {
-                    self.filesystem_unavailable::<FsReadDirectoryParams, FsReadDirectoryResponse>(
-                        params,
-                    )
-                },
+                |params: FsReadDirectoryParams| self.app_services.filesystem.read_directory(params),
             ),
             method::FS_REMOVE => {
                 route_with_params(request.id, request.params, |params: FsRemoveParams| {
-                    self.filesystem_unavailable::<FsRemoveParams, FsRemoveResponse>(params)
+                    self.app_services.filesystem.remove(params)
                 })
             }
             method::FS_COPY => {
                 route_with_params(request.id, request.params, |params: FsCopyParams| {
-                    self.filesystem_unavailable::<FsCopyParams, FsCopyResponse>(params)
+                    self.app_services.filesystem.copy(params)
                 })
             }
             method::FS_WATCH => {
                 route_with_params(request.id, request.params, |params: FsWatchParams| {
-                    self.filesystem_unavailable::<FsWatchParams, FsWatchResponse>(params)
+                    self.app_services.filesystem.watch(params)
                 })
             }
             method::FS_UNWATCH => {
                 route_with_params(request.id, request.params, |params: FsUnwatchParams| {
-                    self.filesystem_unavailable::<FsUnwatchParams, FsUnwatchResponse>(params)
+                    self.app_services.filesystem.unwatch(params)
                 })
             }
             method::COMMAND_EXEC => {
                 route_with_params(request.id, request.params, |params: CommandExecParams| {
-                    self.command_exec_unavailable::<CommandExecParams, CommandExecResponse>(params)
+                    self.app_services.command.exec(params)
                 })
             }
             method::COMMAND_EXEC_WRITE => route_with_params(
                 request.id,
                 request.params,
-                |params: CommandExecWriteParams| {
-                    self.command_exec_unavailable::<
-                        CommandExecWriteParams,
-                        CommandExecWriteResponse,
-                    >(params)
-                },
+                |params: CommandExecWriteParams| self.app_services.command.write(params),
             ),
             method::COMMAND_EXEC_TERMINATE => route_with_params(
                 request.id,
                 request.params,
-                |params: CommandExecTerminateParams| {
-                    self.command_exec_unavailable::<
-                        CommandExecTerminateParams,
-                        CommandExecTerminateResponse,
-                    >(params)
-                },
+                |params: CommandExecTerminateParams| self.app_services.command.terminate(params),
             ),
             method::COMMAND_EXEC_RESIZE => route_with_params(
                 request.id,
                 request.params,
-                |params: CommandExecResizeParams| {
-                    self.command_exec_unavailable::<
-                        CommandExecResizeParams,
-                        CommandExecResizeResponse,
-                    >(params)
-                },
+                |params: CommandExecResizeParams| self.app_services.command.resize(params),
             ),
             method::APPROVAL_RESPOND => {
                 let id = request.id.clone();
@@ -1727,6 +1686,12 @@ impl AppServer {
         }
         for event in self.app_services.drain_mcp_tool_call_progress_events() {
             self.notifications.emit_mcp_tool_call_progress(event);
+        }
+        for event in self.app_services.drain_fs_changed_events() {
+            self.notifications.emit_fs_changed(event);
+        }
+        for event in self.app_services.drain_command_exec_output_delta_events() {
+            self.notifications.emit_command_exec_output_delta(event);
         }
     }
 
@@ -3311,6 +3276,14 @@ impl NotificationBus {
         self.push(ServerNotification::mcp_tool_call_progress(event));
     }
 
+    pub fn emit_fs_changed(&mut self, event: FsChangedNotification) {
+        self.push(ServerNotification::fs_changed(event));
+    }
+
+    pub fn emit_command_exec_output_delta(&mut self, event: CommandExecOutputDeltaNotification) {
+        self.push(ServerNotification::command_exec_output_delta(event));
+    }
+
     pub fn emit_mcp_startup_status_updated(&mut self, event: McpServerStatusUpdatedNotification) {
         self.push(ServerNotification::mcp_server_startup_status_updated(event));
     }
@@ -3751,8 +3724,9 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use dasclaw_app_server_protocol::{
-        CapabilityStatus, ServiceStatus, SkillMetadata, SkillScope, SkillsListEntry, TransportKind,
-        WorkspaceInfo, WorkspaceTrust, event,
+        CapabilityStatus, CommandExecOutputDeltaNotification, CommandExecOutputStream,
+        FsChangedKind, FsChangedNotification, ServiceStatus, SkillMetadata, SkillScope,
+        SkillsListEntry, TransportKind, WorkspaceInfo, WorkspaceTrust, event,
     };
     use dasclaw_core::messages::{FinishReason, ToolCall, ToolDefinition, ToolResult};
     use dasclaw_core::reasoning_ctx::ReasoningContext;
@@ -3940,6 +3914,87 @@ mod tests {
             notifications
                 .iter()
                 .any(|notification| notification.method == event::SKILLS_CHANGED)
+        );
+    }
+
+    #[test]
+    fn app_server_ready_p5_routes_reach_service_owners() {
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::ready(),
+            app_services::TestCommandExecService::ready_buffered(),
+        );
+        let mut server = AppServer::new().with_app_services(services);
+
+        let capabilities = server.capabilities();
+        assert_eq!(
+            capabilities.capabilities.filesystem.status,
+            CapabilityStatus::Implemented
+        );
+        assert_eq!(
+            capabilities.capabilities.command_exec.status,
+            CapabilityStatus::Implemented
+        );
+
+        server
+            .handle_json_rpc(initialized_request_json())
+            .expect("initialize should return a response");
+        let _ = server.drain_notifications();
+
+        let read = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"fs-read","method":"fs/readFile","params":{"path":"/tmp/example.txt"}}"#,
+            )
+            .expect("fs/readFile should return a structured response");
+        let exec = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"cmd","method":"command/exec","params":{"command":["printf","test"]}}"#,
+            )
+            .expect("command/exec should return a structured response");
+
+        let read_value: Value = serde_json::from_str(&read).expect("fs/readFile response JSON");
+        let exec_value: Value = serde_json::from_str(&exec).expect("command/exec response JSON");
+        assert_eq!(read_value["result"]["dataBase64"], "dGVzdA==");
+        assert_eq!(exec_value["result"]["stdout"], "test");
+    }
+
+    #[test]
+    fn app_server_p5_service_events_drain_to_notifications() {
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::ready_with_changed_events(vec![FsChangedNotification {
+                watch_id: "watch_1".to_string(),
+                path: "/tmp/example.txt".to_string(),
+                kind: FsChangedKind::Modified,
+            }]),
+            app_services::TestCommandExecService::ready_with_output_delta_events(vec![
+                CommandExecOutputDeltaNotification {
+                    process_id: "proc_1".to_string(),
+                    stream: CommandExecOutputStream::Stdout,
+                    delta_base64: "dGVzdA==".to_string(),
+                    cap_reached: false,
+                },
+            ]),
+        );
+        let mut server = AppServer::new().with_app_services(services);
+
+        let notifications = server.drain_notifications();
+
+        assert!(
+            notifications
+                .iter()
+                .any(|notification| notification.method == event::FS_CHANGED)
+        );
+        assert!(
+            notifications
+                .iter()
+                .any(|notification| notification.method == event::COMMAND_EXEC_OUTPUT_DELTA)
         );
     }
 
