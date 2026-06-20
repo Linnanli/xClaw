@@ -30,6 +30,15 @@ pub mod method {
     pub const MODEL_LIST: &str = "model/list";
     pub const MODEL_PROVIDER_SELECT_FOR_NEXT_TURN: &str = "modelProvider/selectForNextTurn";
     pub const APPROVAL_RESPOND: &str = "approval/respond";
+    pub const JOBS_LIST: &str = "jobs/list";
+    pub const JOBS_READ: &str = "jobs/read";
+    pub const SKILLS_LIST: &str = "skills/list";
+    pub const SKILLS_CONFIG_WRITE: &str = "skills/config/write";
+    pub const MCP_SERVER_OAUTH_LOGIN: &str = "mcpServer/oauth/login";
+    pub const CONFIG_MCP_SERVER_RELOAD: &str = "config/mcpServer/reload";
+    pub const MCP_SERVER_STATUS_LIST: &str = "mcpServerStatus/list";
+    pub const MCP_SERVER_RESOURCE_READ: &str = "mcpServer/resource/read";
+    pub const MCP_SERVER_TOOL_CALL: &str = "mcpServer/tool/call";
 }
 
 pub mod server_request {
@@ -66,6 +75,10 @@ pub mod event {
     pub const ITEM_COMMAND_EXECUTION_OUTPUT_DELTA: &str = "item/commandExecution/outputDelta";
     pub const ITEM_COMMAND_EXECUTION_TERMINAL_INTERACTION: &str =
         "item/commandExecution/terminalInteraction";
+    pub const SKILLS_CHANGED: &str = "skills/changed";
+    pub const ITEM_MCP_TOOL_CALL_PROGRESS: &str = "item/mcpToolCall/progress";
+    pub const MCP_SERVER_OAUTH_LOGIN_COMPLETED: &str = "mcpServer/oauthLogin/completed";
+    pub const MCP_SERVER_STARTUP_STATUS_UPDATED: &str = "mcpServer/startupStatus/updated";
     pub const ERROR: &str = "error";
 }
 
@@ -676,6 +689,30 @@ impl CapabilityMatrix {
         );
         self
     }
+
+    #[must_use]
+    pub fn with_app_services(mut self, availability: AppServerServiceAvailability) -> Self {
+        if availability.logs {
+            self.logs = Capability::implemented("logs", &[], &[event::LOG_ENTRY]);
+        }
+        if availability.jobs {
+            self.jobs =
+                Capability::implemented("jobs", &[method::JOBS_LIST, method::JOBS_READ], &[]);
+        }
+        if availability.skills {
+            self.skills = Capability::implemented(
+                "skills",
+                &[method::SKILLS_LIST, method::SKILLS_CONFIG_WRITE],
+                &[event::SKILLS_CHANGED],
+            );
+        }
+        let mcp_methods = availability.mcp.methods();
+        let mcp_events = availability.mcp.events();
+        if !mcp_methods.is_empty() || !mcp_events.is_empty() {
+            self.mcp = Capability::implemented("mcp", &mcp_methods, &mcp_events);
+        }
+        self
+    }
 }
 
 fn declared_future_capability(id: &'static str) -> Capability {
@@ -683,6 +720,56 @@ fn declared_future_capability(id: &'static str) -> Capability {
         id,
         "declared for protocol compatibility; not implemented in Phase 1",
     )
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AppServerServiceAvailability {
+    pub logs: bool,
+    pub jobs: bool,
+    pub skills: bool,
+    pub mcp: McpServiceAvailability,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct McpServiceAvailability {
+    pub status_list: bool,
+    pub reload: bool,
+    pub tool_call: bool,
+    pub resource_read: bool,
+    pub tool_call_progress_events: bool,
+    pub startup_status_events: bool,
+}
+
+impl McpServiceAvailability {
+    #[must_use]
+    pub fn methods(&self) -> Vec<&'static str> {
+        let mut methods = Vec::new();
+        if self.reload {
+            methods.push(method::CONFIG_MCP_SERVER_RELOAD);
+        }
+        if self.status_list {
+            methods.push(method::MCP_SERVER_STATUS_LIST);
+        }
+        if self.resource_read {
+            methods.push(method::MCP_SERVER_RESOURCE_READ);
+        }
+        if self.tool_call {
+            methods.push(method::MCP_SERVER_TOOL_CALL);
+        }
+        methods
+    }
+
+    #[must_use]
+    pub fn events(&self) -> Vec<&'static str> {
+        let mut events = Vec::new();
+        if self.tool_call_progress_events {
+            events.push(event::ITEM_MCP_TOOL_CALL_PROGRESS);
+        }
+        if self.startup_status_events {
+            events.push(event::MCP_SERVER_STARTUP_STATUS_UPDATED);
+        }
+        events
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1015,6 +1102,69 @@ fn phase_one_methods() -> Vec<MethodSchema> {
             "ServerRequestResolvedEvent",
             true,
         ),
+        MethodSchema::new(
+            method::JOBS_LIST,
+            "jobs",
+            Some("JobListParams"),
+            "JobListResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::JOBS_READ,
+            "jobs",
+            Some("JobReadParams"),
+            "JobReadResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::SKILLS_LIST,
+            "skills",
+            Some("SkillsListParams"),
+            "SkillsListResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::SKILLS_CONFIG_WRITE,
+            "skills",
+            Some("SkillsConfigWriteParams"),
+            "SkillsConfigWriteResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::MCP_SERVER_OAUTH_LOGIN,
+            "mcp",
+            Some("McpServerOauthLoginParams"),
+            "McpServerOauthLoginResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::CONFIG_MCP_SERVER_RELOAD,
+            "mcp",
+            Some("McpServerReloadParams"),
+            "McpServerReloadResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::MCP_SERVER_STATUS_LIST,
+            "mcp",
+            Some("ListMcpServerStatusParams"),
+            "ListMcpServerStatusResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::MCP_SERVER_RESOURCE_READ,
+            "mcp",
+            Some("McpResourceReadParams"),
+            "McpResourceReadResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::MCP_SERVER_TOOL_CALL,
+            "mcp",
+            Some("McpServerToolCallParams"),
+            "McpServerToolCallResponse",
+            true,
+        ),
     ]
 }
 
@@ -1076,6 +1226,22 @@ fn phase_one_events() -> Vec<EventSchema> {
             event::ITEM_COMMAND_EXECUTION_TERMINAL_INTERACTION,
             "tools",
             "CommandExecutionTerminalInteractionEvent",
+        ),
+        EventSchema::new(event::SKILLS_CHANGED, "skills", "SkillsChangedNotification"),
+        EventSchema::new(
+            event::ITEM_MCP_TOOL_CALL_PROGRESS,
+            "mcp",
+            "McpToolCallProgressNotification",
+        ),
+        EventSchema::new(
+            event::MCP_SERVER_OAUTH_LOGIN_COMPLETED,
+            "mcp",
+            "McpServerOauthLoginCompletedNotification",
+        ),
+        EventSchema::new(
+            event::MCP_SERVER_STARTUP_STATUS_UPDATED,
+            "mcp",
+            "McpServerStatusUpdatedNotification",
         ),
         EventSchema::new(event::ERROR, "session", "ErrorEvent"),
     ]
@@ -1787,6 +1953,28 @@ impl ServerNotification {
         Self::new(event::ITEM_COMMAND_EXECUTION_TERMINAL_INTERACTION, event)
     }
 
+    pub fn skills_changed(event: SkillsChangedNotification) -> Result<Self, serde_json::Error> {
+        Self::new(event::SKILLS_CHANGED, event)
+    }
+
+    pub fn mcp_tool_call_progress(
+        event: McpToolCallProgressNotification,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::ITEM_MCP_TOOL_CALL_PROGRESS, event)
+    }
+
+    pub fn mcp_server_oauth_login_completed(
+        event: McpServerOauthLoginCompletedNotification,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::MCP_SERVER_OAUTH_LOGIN_COMPLETED, event)
+    }
+
+    pub fn mcp_server_startup_status_updated(
+        event: McpServerStatusUpdatedNotification,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::MCP_SERVER_STARTUP_STATUS_UPDATED, event)
+    }
+
     pub fn error(event: ErrorEvent) -> Result<Self, serde_json::Error> {
         Self::new(event::ERROR, event)
     }
@@ -1819,6 +2007,436 @@ pub struct LogEntryEvent {
     pub time: String,
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub fields: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillsListParams {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cwds: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force_reload: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per_cwd_extra_user_roots: Option<Vec<SkillsListExtraRootsForCwd>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillsListExtraRootsForCwd {
+    pub cwd: String,
+    pub extra_user_roots: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillsListResponse {
+    pub data: Vec<SkillsListEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillsListEntry {
+    pub cwd: String,
+    pub skills: Vec<SkillMetadata>,
+    pub errors: Vec<SkillErrorInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillErrorInfo {
+    pub path: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillMetadata {
+    pub name: String,
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub short_description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interface: Option<SkillInterface>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependencies: Option<SkillDependencies>,
+    pub path: String,
+    pub scope: SkillScope,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillInterface {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub short_description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_small: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_large: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brand_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillDependencies {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<SkillToolDependency>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillToolDependency {
+    #[serde(rename = "type")]
+    pub dependency_type: String,
+    pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transport: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SkillScope {
+    User,
+    Repo,
+    System,
+    Admin,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillsConfigWriteParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillsConfigWriteResponse {
+    pub effective_enabled: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillsChangedNotification {}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobListParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobReadParams {
+    pub job_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobListResponse {
+    pub data: Vec<JobSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobReadResponse {
+    pub job: JobSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobSnapshot {
+    pub job_id: String,
+    pub title: String,
+    pub description: String,
+    pub state: JobSnapshotState,
+    pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JobSnapshotState {
+    Queued,
+    Pending,
+    InProgress,
+    Completed,
+    Submitted,
+    Accepted,
+    Failed,
+    Stuck,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListMcpServerStatusParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<McpServerStatusDetail>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum McpServerStatusDetail {
+    #[serde(rename = "full")]
+    Full,
+    #[serde(rename = "toolsAndAuthOnly")]
+    ToolsAndAuthOnly,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListMcpServerStatusResponse {
+    pub data: Vec<McpServerStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerStatus {
+    pub name: String,
+    #[serde(default)]
+    pub tools: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<Resource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_templates: Vec<ResourceTemplate>,
+    pub auth_status: McpAuthStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Resource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub uri: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub icons: Vec<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
+    pub meta: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceTemplate {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<serde_json::Value>,
+    pub uri_template: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Tool {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub input_schema: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub icons: Vec<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
+    pub meta: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum McpAuthStatus {
+    #[serde(rename = "unsupported")]
+    Unsupported,
+    #[serde(rename = "notLoggedIn")]
+    NotLoggedIn,
+    #[serde(rename = "bearerToken")]
+    BearerToken,
+    #[serde(rename = "oAuth")]
+    OAuth,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerReloadParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerReloadResponse {
+    pub reloaded: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerToolCallParams {
+    pub thread_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<String>,
+    pub server: String,
+    pub tool: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
+    pub meta: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpToolProgressIdentity {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+}
+
+impl McpServerToolCallParams {
+    #[must_use]
+    pub fn progress_identity(&self) -> Option<McpToolProgressIdentity> {
+        Some(McpToolProgressIdentity {
+            thread_id: self.thread_id.clone(),
+            turn_id: self.turn_id.clone()?,
+            item_id: self.item_id.clone()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerToolCallResponse {
+    pub content: Vec<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_content: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_error: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
+    pub meta: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpResourceReadParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    pub server: String,
+    pub uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpResourceReadResponse {
+    pub contents: Vec<McpResourceContent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpResourceContent {
+    pub uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blob: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
+    pub meta: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerOauthLoginParams {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scopes: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerOauthLoginResponse {
+    pub authorization_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerOauthLoginCompletedNotification {
+    pub name: String,
+    pub success: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum McpServerStartupState {
+    #[serde(rename = "starting")]
+    Starting,
+    #[serde(rename = "ready")]
+    Ready,
+    #[serde(rename = "failed")]
+    Failed,
+    #[serde(rename = "cancelled")]
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerStatusUpdatedNotification {
+    pub name: String,
+    pub status: McpServerStartupState,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpToolCallProgressNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
@@ -2966,5 +3584,429 @@ mod tests {
             server_request::ITEM_TOOL_REQUEST_USER_INPUT
         );
         assert_eq!(user_input_params["prompt"], "continue?");
+    }
+
+    #[test]
+    fn app_server_phase_one_keeps_services_declared_until_owner_is_wired() {
+        let matrix = CapabilityMatrix::phase_one();
+
+        assert_eq!(matrix.logs.status, CapabilityStatus::Declared);
+        assert_eq!(matrix.jobs.status, CapabilityStatus::Declared);
+        assert_eq!(matrix.skills.status, CapabilityStatus::Declared);
+        assert_eq!(matrix.mcp.status, CapabilityStatus::Declared);
+    }
+
+    #[test]
+    fn app_server_capability_helper_advertises_only_ready_services() {
+        let matrix =
+            CapabilityMatrix::phase_one().with_app_services(AppServerServiceAvailability {
+                logs: true,
+                jobs: true,
+                skills: false,
+                mcp: McpServiceAvailability {
+                    status_list: true,
+                    reload: true,
+                    tool_call: true,
+                    resource_read: true,
+                    tool_call_progress_events: true,
+                    startup_status_events: true,
+                },
+            });
+
+        assert_eq!(matrix.logs.status, CapabilityStatus::Implemented);
+        assert_eq!(matrix.logs.events, vec![event::LOG_ENTRY.to_string()]);
+        assert_eq!(matrix.jobs.status, CapabilityStatus::Implemented);
+        assert_eq!(
+            matrix.jobs.methods,
+            vec![method::JOBS_LIST.to_string(), method::JOBS_READ.to_string()]
+        );
+        assert_eq!(matrix.skills.status, CapabilityStatus::Declared);
+        assert_eq!(matrix.mcp.status, CapabilityStatus::Implemented);
+        assert_eq!(
+            matrix.mcp.methods,
+            vec![
+                method::CONFIG_MCP_SERVER_RELOAD.to_string(),
+                method::MCP_SERVER_STATUS_LIST.to_string(),
+                method::MCP_SERVER_RESOURCE_READ.to_string(),
+                method::MCP_SERVER_TOOL_CALL.to_string(),
+            ]
+        );
+        assert_eq!(
+            matrix.mcp.events,
+            vec![
+                event::ITEM_MCP_TOOL_CALL_PROGRESS.to_string(),
+                event::MCP_SERVER_STARTUP_STATUS_UPDATED.to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn app_server_capability_helper_does_not_advertise_unwired_mcp_effectful_routes() {
+        let matrix =
+            CapabilityMatrix::phase_one().with_app_services(AppServerServiceAvailability {
+                mcp: McpServiceAvailability {
+                    status_list: true,
+                    reload: true,
+                    startup_status_events: true,
+                    ..McpServiceAvailability::default()
+                },
+                ..AppServerServiceAvailability::default()
+            });
+
+        assert_eq!(matrix.mcp.status, CapabilityStatus::Implemented);
+        assert_eq!(
+            matrix.mcp.methods,
+            vec![
+                method::CONFIG_MCP_SERVER_RELOAD.to_string(),
+                method::MCP_SERVER_STATUS_LIST.to_string(),
+            ]
+        );
+        assert_eq!(
+            matrix.mcp.events,
+            vec![event::MCP_SERVER_STARTUP_STATUS_UPDATED.to_string()]
+        );
+        assert!(
+            !matrix
+                .mcp
+                .methods
+                .contains(&method::MCP_SERVER_TOOL_CALL.to_string())
+        );
+        assert!(
+            !matrix
+                .mcp
+                .methods
+                .contains(&method::MCP_SERVER_RESOURCE_READ.to_string())
+        );
+        assert!(
+            !matrix
+                .mcp
+                .methods
+                .contains(&method::MCP_SERVER_OAUTH_LOGIN.to_string())
+        );
+    }
+
+    #[test]
+    fn skills_list_response_serializes_codex_shape() {
+        let params = SkillsListParams {
+            cwds: vec!["/repo".into()],
+            force_reload: true,
+            per_cwd_extra_user_roots: Some(vec![SkillsListExtraRootsForCwd {
+                cwd: "/repo".into(),
+                extra_user_roots: vec!["/repo/.codex/skills".into()],
+            }]),
+        };
+        let response = SkillsListResponse {
+            data: vec![SkillsListEntry {
+                cwd: "/repo".into(),
+                skills: vec![SkillMetadata {
+                    name: "review".into(),
+                    description: "Review local code".into(),
+                    short_description: Some("Code review".into()),
+                    interface: Some(SkillInterface {
+                        display_name: Some("Review".into()),
+                        short_description: Some("Code review".into()),
+                        icon_small: None,
+                        icon_large: None,
+                        brand_color: None,
+                        default_prompt: None,
+                    }),
+                    dependencies: Some(SkillDependencies {
+                        tools: vec![SkillToolDependency {
+                            dependency_type: "mcp".into(),
+                            value: "github".into(),
+                            description: Some("GitHub MCP".into()),
+                            transport: Some("stdio".into()),
+                            command: Some("github-mcp".into()),
+                            url: None,
+                        }],
+                    }),
+                    path: "/repo/.codex/skills/review/SKILL.json".into(),
+                    scope: SkillScope::Repo,
+                    enabled: true,
+                }],
+                errors: vec![SkillErrorInfo {
+                    path: "/repo/.codex/skills/bad/SKILL.md".into(),
+                    message: "invalid frontmatter".into(),
+                }],
+            }],
+        };
+        let write_params = SkillsConfigWriteParams {
+            path: Some("/repo/.codex/skills/review/SKILL.json".into()),
+            name: None,
+            enabled: false,
+        };
+        let write_response = SkillsConfigWriteResponse {
+            effective_enabled: false,
+        };
+        let changed = SkillsChangedNotification {};
+
+        let params_value = serde_json::to_value(params).expect("skills/list params serialize");
+        let value = serde_json::to_value(response).expect("skills/list response serializes");
+        let write_params_value =
+            serde_json::to_value(write_params).expect("skills/config/write params serialize");
+        let write_response_value =
+            serde_json::to_value(write_response).expect("skills/config/write response serialize");
+        let changed_value =
+            serde_json::to_value(changed).expect("skills/changed notification serializes");
+
+        assert_eq!(params_value["cwds"][0], "/repo");
+        assert_eq!(params_value["forceReload"], true);
+        assert_eq!(
+            params_value["perCwdExtraUserRoots"][0]["extraUserRoots"][0],
+            "/repo/.codex/skills"
+        );
+        assert_eq!(value["data"][0]["cwd"], "/repo");
+        assert_eq!(value["data"][0]["skills"][0]["name"], "review");
+        assert_eq!(
+            value["data"][0]["skills"][0]["shortDescription"],
+            "Code review"
+        );
+        assert_eq!(value["data"][0]["skills"][0]["scope"], "repo");
+        assert_eq!(value["data"][0]["skills"][0]["enabled"], true);
+        assert_eq!(
+            value["data"][0]["skills"][0]["dependencies"]["tools"][0]["type"],
+            "mcp"
+        );
+        assert_eq!(
+            value["data"][0]["errors"][0]["message"],
+            "invalid frontmatter"
+        );
+        assert_eq!(
+            write_params_value["path"],
+            "/repo/.codex/skills/review/SKILL.json"
+        );
+        assert!(write_params_value["name"].is_null());
+        assert_eq!(write_params_value["enabled"], false);
+        assert_eq!(write_response_value["effectiveEnabled"], false);
+        assert_eq!(changed_value, serde_json::json!({}));
+    }
+
+    #[test]
+    fn mcp_status_response_serializes_codex_shape() {
+        let response = ListMcpServerStatusResponse {
+            data: vec![McpServerStatus {
+                name: "github".into(),
+                tools: serde_json::json!({
+                    "list_issues": {
+                        "name": "list_issues",
+                        "description": "List issues",
+                        "inputSchema": {"type": "object"}
+                    }
+                }),
+                resources: vec![],
+                resource_templates: vec![],
+                auth_status: McpAuthStatus::NotLoggedIn,
+            }],
+            next_cursor: None,
+        };
+
+        let value = serde_json::to_value(response).expect("mcp status response serializes");
+        assert_eq!(value["data"][0]["name"], "github");
+        assert_eq!(value["data"][0]["authStatus"], "notLoggedIn");
+        assert_eq!(
+            value["data"][0]["tools"]["list_issues"]["name"],
+            "list_issues"
+        );
+        assert!(value["nextCursor"].is_null());
+    }
+
+    #[test]
+    fn mcp_tool_oauth_and_resource_shapes_match_codex_schema() {
+        let tool_params = McpServerToolCallParams {
+            thread_id: "thread_1".into(),
+            turn_id: Some("turn_1".into()),
+            item_id: Some("item_1".into()),
+            server: "github".into(),
+            tool: "list_issues".into(),
+            arguments: Some(serde_json::json!({"owner": "openai"})),
+            meta: Some(serde_json::json!({"request": "abc"})),
+        };
+        let tool_response = McpServerToolCallResponse {
+            content: vec![serde_json::json!({"type": "text", "text": "ok"})],
+            structured_content: Some(serde_json::json!({"issues": []})),
+            is_error: Some(false),
+            meta: Some(serde_json::json!({"server": "github"})),
+        };
+        let oauth_params = McpServerOauthLoginParams {
+            name: "github".into(),
+            scopes: Some(vec!["repo".into()]),
+            timeout_secs: Some(60),
+        };
+        let oauth_response = McpServerOauthLoginResponse {
+            authorization_url: "https://auth.example.test/oauth".into(),
+        };
+        let read_params = McpResourceReadParams {
+            thread_id: Some("thread_1".into()),
+            server: "github".into(),
+            uri: "repo://openai/codex".into(),
+        };
+        let read_response = McpResourceReadResponse {
+            contents: vec![McpResourceContent {
+                uri: "repo://openai/codex".into(),
+                mime_type: Some("text/plain".into()),
+                text: Some("content".into()),
+                blob: None,
+                meta: Some(serde_json::json!({"etag": "1"})),
+            }],
+        };
+        let oauth_completed = McpServerOauthLoginCompletedNotification {
+            name: "github".into(),
+            success: true,
+            error: None,
+        };
+        let status_updated = McpServerStatusUpdatedNotification {
+            name: "github".into(),
+            status: McpServerStartupState::Ready,
+            error: None,
+        };
+        let progress = McpToolCallProgressNotification {
+            thread_id: "thread_1".into(),
+            turn_id: "turn_1".into(),
+            item_id: "item_1".into(),
+            message: "running list_issues".into(),
+        };
+
+        let tool_params_value =
+            serde_json::to_value(tool_params).expect("mcp tool params serialize");
+        let tool_response_value =
+            serde_json::to_value(tool_response).expect("mcp tool response serialize");
+        let oauth_params_value =
+            serde_json::to_value(oauth_params).expect("mcp oauth params serialize");
+        let oauth_response_value =
+            serde_json::to_value(oauth_response).expect("mcp oauth response serialize");
+        let read_params_value =
+            serde_json::to_value(read_params).expect("mcp resource params serialize");
+        let read_response_value =
+            serde_json::to_value(read_response).expect("mcp resource response serialize");
+        let oauth_completed_value =
+            serde_json::to_value(oauth_completed).expect("mcp oauth notification serialize");
+        let status_updated_value =
+            serde_json::to_value(status_updated).expect("mcp status notification serialize");
+        let progress_value =
+            serde_json::to_value(progress).expect("mcp progress notification serialize");
+
+        assert_eq!(tool_params_value["threadId"], "thread_1");
+        assert_eq!(tool_params_value["turnId"], "turn_1");
+        assert_eq!(tool_params_value["itemId"], "item_1");
+        assert_eq!(tool_params_value["server"], "github");
+        assert_eq!(tool_params_value["tool"], "list_issues");
+        assert_eq!(tool_params_value["_meta"]["request"], "abc");
+        assert_eq!(tool_response_value["content"][0]["text"], "ok");
+        assert_eq!(
+            tool_response_value["structuredContent"]["issues"],
+            serde_json::json!([])
+        );
+        assert_eq!(tool_response_value["isError"], false);
+        assert_eq!(tool_response_value["_meta"]["server"], "github");
+        assert_eq!(oauth_params_value["name"], "github");
+        assert_eq!(oauth_params_value["scopes"][0], "repo");
+        assert_eq!(oauth_params_value["timeoutSecs"], 60);
+        assert_eq!(
+            oauth_response_value["authorizationUrl"],
+            "https://auth.example.test/oauth"
+        );
+        assert_eq!(read_params_value["threadId"], "thread_1");
+        assert_eq!(read_params_value["server"], "github");
+        assert_eq!(read_response_value["contents"][0]["text"], "content");
+        assert_eq!(read_response_value["contents"][0]["_meta"]["etag"], "1");
+        assert_eq!(oauth_completed_value["name"], "github");
+        assert_eq!(oauth_completed_value["success"], true);
+        assert!(oauth_completed_value["error"].is_null());
+        assert_eq!(status_updated_value["name"], "github");
+        assert_eq!(status_updated_value["status"], "ready");
+        assert!(status_updated_value["error"].is_null());
+        assert_eq!(progress_value["threadId"], "thread_1");
+        assert_eq!(progress_value["turnId"], "turn_1");
+        assert_eq!(progress_value["itemId"], "item_1");
+        assert_eq!(progress_value["message"], "running list_issues");
+    }
+
+    #[test]
+    fn mcp_tool_call_params_deserialize_legacy_and_progress_identity_requires_full_ids() {
+        let legacy: McpServerToolCallParams = serde_json::from_value(serde_json::json!({
+            "threadId": "thread_1",
+            "server": "github",
+            "tool": "list_issues",
+            "arguments": {"owner": "openai"}
+        }))
+        .expect("legacy tool call params should deserialize");
+
+        assert_eq!(legacy.thread_id, "thread_1");
+        assert_eq!(legacy.server, "github");
+        assert_eq!(legacy.tool, "list_issues");
+        assert_eq!(
+            legacy.arguments,
+            Some(serde_json::json!({"owner": "openai"}))
+        );
+        assert!(legacy.turn_id.is_none());
+        assert!(legacy.item_id.is_none());
+        assert!(legacy.progress_identity().is_none());
+
+        let missing_item: McpServerToolCallParams = serde_json::from_value(serde_json::json!({
+            "threadId": "thread_1",
+            "turnId": "turn_1",
+            "server": "github",
+            "tool": "list_issues"
+        }))
+        .expect("tool call params with only turnId should deserialize");
+        assert!(missing_item.progress_identity().is_none());
+
+        let current: McpServerToolCallParams = serde_json::from_value(serde_json::json!({
+            "threadId": "thread_1",
+            "turnId": "turn_1",
+            "itemId": "item_1",
+            "server": "github",
+            "tool": "list_issues",
+            "_meta": {"request": "abc"}
+        }))
+        .expect("current tool call params should deserialize");
+
+        assert_eq!(
+            current.progress_identity(),
+            Some(McpToolProgressIdentity {
+                thread_id: "thread_1".into(),
+                turn_id: "turn_1".into(),
+                item_id: "item_1".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn native_job_list_response_serializes_snake_case_states() {
+        let response = JobListResponse {
+            data: vec![JobSnapshot {
+                job_id: "job_1".into(),
+                title: "Run audit".into(),
+                description: "Audit repository".into(),
+                state: JobSnapshotState::InProgress,
+                created_at: "2026-06-19T00:00:00Z".into(),
+                updated_at: Some("2026-06-19T00:01:00Z".into()),
+                thread_id: Some("thread_1".into()),
+            }],
+            next_cursor: None,
+        };
+
+        let value = serde_json::to_value(response).expect("job list response serializes");
+        assert_eq!(value["data"][0]["jobId"], "job_1");
+        assert_eq!(value["data"][0]["state"], "in_progress");
+    }
+
+    #[test]
+    fn native_job_snapshot_states_cover_dasclaw_runtime_state_machine() {
+        let states = [
+            (JobSnapshotState::Pending, "pending"),
+            (JobSnapshotState::InProgress, "in_progress"),
+            (JobSnapshotState::Completed, "completed"),
+            (JobSnapshotState::Submitted, "submitted"),
+            (JobSnapshotState::Accepted, "accepted"),
+            (JobSnapshotState::Failed, "failed"),
+            (JobSnapshotState::Stuck, "stuck"),
+            (JobSnapshotState::Cancelled, "cancelled"),
+        ];
+
+        for (state, expected) in states {
+            let value = serde_json::to_value(state).expect("job state serializes");
+            assert_eq!(value, expected);
+        }
     }
 }

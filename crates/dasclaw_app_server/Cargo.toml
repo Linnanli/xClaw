@@ -18,7 +18,10 @@ async-trait = "0.1"
 dasclaw_core = { path = "../dasclaw_core" }
 dasclaw_app_server_protocol = { path = "../dasclaw_app_server_protocol" }
 dasclaw_llm_provider = { path = "../dasclaw_llm_provider" }
+dasclaw_mcp = { path = "../dasclaw_mcp" }
+dasclaw_observability = { path = "../dasclaw_observability" }
 dasclaw_runtime = { path = "../dasclaw_runtime" }
+dasclaw_tool = { path = "../dasclaw_tool" }
 futures-util = "0.3"
 secrecy = "0.10"
 serde = { version = "1", features = ["derive"] }

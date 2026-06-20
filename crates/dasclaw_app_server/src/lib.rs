@@ -6,6 +6,14 @@
 //! [`DasclawAgentRuntimeBridge`] delegates to `dasclaw_runtime::Agent`.
 //! DLP, jobs, skills, MCP, and sandbox execution stay outside this crate.
 
+pub mod app_services;
+pub mod job_service;
+pub mod log_service;
+pub mod mcp_service;
+pub mod skills_service;
+
+mod blocking_runtime;
+
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 use std::sync::{Arc, Mutex, mpsc};
@@ -20,15 +28,22 @@ use dasclaw_app_server_protocol::{
     CommandExecutionOutputDeltaEvent, CommandExecutionTerminalInteractionEvent,
     CompatibilityProfile, DEFAULT_MAX_PENDING_NOTIFICATIONS, ErrorCode, ErrorData, ErrorEvent,
     HealthCheckParams, HealthCheckResponse, InitializeParams, InitializeResponse,
-    ItemCompletedEvent, ItemStartedEvent, JsonRpcClientResponse, JsonRpcError, JsonRpcRequest,
-    JsonRpcResponse, JsonRpcServerRequest, LifecycleChangedEvent, LifecycleReason,
-    LifecycleSnapshot, LifecycleState, LifecycleStatusResponse, ModelListParams, ModelListResponse,
+    ItemCompletedEvent, ItemStartedEvent, JobListParams, JobListResponse, JobReadParams,
+    JobReadResponse, JsonRpcClientResponse, JsonRpcError, JsonRpcRequest, JsonRpcResponse,
+    JsonRpcServerRequest, LifecycleChangedEvent, LifecycleReason, LifecycleSnapshot,
+    LifecycleState, LifecycleStatusResponse, ListMcpServerStatusParams,
+    ListMcpServerStatusResponse, LogEntryEvent, McpResourceReadParams, McpResourceReadResponse,
+    McpServerOauthLoginCompletedNotification, McpServerOauthLoginParams,
+    McpServerOauthLoginResponse, McpServerReloadParams, McpServerReloadResponse,
+    McpServerStartupState, McpServerStatusUpdatedNotification, McpServerToolCallParams,
+    McpServerToolCallResponse, McpToolCallProgressNotification, ModelListParams, ModelListResponse,
     ModelProviderInitializeConfig, ModelProviderSelectForNextTurnParams,
     ModelProviderSelectForNextTurnResponse, NotificationQueuePolicy, NotificationsInitializedEvent,
     ProtocolSchemaResponse, ProtocolVersion, ReasoningSummaryTextDeltaEvent, ServerInfo,
     ServerNotification, ServerRequestResolutionOutcome, ServerRequestResolvedEvent, ServiceHealth,
-    ServiceName, ShutdownParams, ShutdownReason, ShutdownResponse, ThreadListParams,
-    ThreadListResponse, ThreadReadParams, ThreadReadResponse, ThreadStartParams,
+    ServiceName, ShutdownParams, ShutdownReason, ShutdownResponse, SkillsChangedNotification,
+    SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse,
+    ThreadListParams, ThreadListResponse, ThreadReadParams, ThreadReadResponse, ThreadStartParams,
     ThreadStartResponse, ThreadStartedEvent, ThreadTurnsListParams, ThreadTurnsListResponse,
     TurnCompletedEvent, TurnInterruptParams, TurnInterruptResponse, TurnReadParams,
     TurnReadResponse, TurnStartParams, TurnStartResponse, TurnStartedEvent, TurnStatus,
@@ -67,6 +82,7 @@ pub struct AppServer {
     runtime_turn_updates: RuntimeTurnUpdateSink,
     pending_server_requests: PendingServerRequestStore,
     model_provider: ModelProviderState,
+    app_services: app_services::AppServerServices,
 }
 
 impl Default for AppServer {
@@ -515,6 +531,7 @@ impl AppServer {
             runtime_turn_updates: RuntimeTurnUpdateSink::new(),
             pending_server_requests: PendingServerRequestStore::new(),
             model_provider: ModelProviderState::default(),
+            app_services: app_services::AppServerServices::default(),
         }
     }
 
@@ -531,6 +548,13 @@ impl AppServer {
     }
 
     #[must_use]
+    pub fn with_app_services(mut self, services: app_services::AppServerServices) -> Self {
+        self.app_services = services;
+        self.refresh_service_capabilities();
+        self
+    }
+
+    #[must_use]
     pub fn with_runtime_responder(responder: Arc<dyn dasclaw_runtime::AgentResponder>) -> Self {
         let bridge = DasclawAgentRuntimeBridge::from_responder(responder);
         Self::with_runtime_bridge(Arc::new(bridge))
@@ -540,6 +564,7 @@ impl AppServer {
         &mut self,
         params: InitializeParams,
     ) -> Result<InitializeResponse, AppServerError> {
+        self.refresh_service_capabilities();
         if !self
             .server
             .protocol_version
@@ -641,6 +666,7 @@ impl AppServer {
     #[must_use]
     pub fn capabilities(&mut self) -> CapabilitiesListResponse {
         self.drain_runtime_turn_updates();
+        self.refresh_service_capabilities();
         CapabilitiesListResponse {
             capabilities: self.capabilities.clone(),
             compatibility_profiles: compatibility_profiles(),
@@ -649,7 +675,7 @@ impl AppServer {
 
     #[must_use]
     pub fn protocol_schema(&self) -> ProtocolSchemaResponse {
-        ProtocolSchemaResponse::phase_one(self.capabilities.clone())
+        ProtocolSchemaResponse::phase_one(self.service_capability_snapshot())
     }
 
     fn create_thread_record(
@@ -786,6 +812,123 @@ impl AppServer {
     ) -> Result<ModelListResponse, AppServerError> {
         self.require_initialized("model_provider")?;
         self.model_provider.model_list_response()
+    }
+
+    pub fn jobs_list(&self, params: JobListParams) -> Result<JobListResponse, AppServerError> {
+        self.require_initialized("jobs")?;
+        self.app_services.jobs.list(params)
+    }
+
+    pub fn jobs_read(&self, params: JobReadParams) -> Result<JobReadResponse, AppServerError> {
+        self.require_initialized("jobs")?;
+        self.app_services.jobs.read(params)
+    }
+
+    pub fn skills_list(
+        &self,
+        params: SkillsListParams,
+    ) -> Result<SkillsListResponse, AppServerError> {
+        self.require_initialized("skills")?;
+        self.app_services.skills.list(params)
+    }
+
+    pub fn skills_config_write(
+        &mut self,
+        params: SkillsConfigWriteParams,
+    ) -> Result<SkillsConfigWriteResponse, AppServerError> {
+        self.require_initialized("skills")?;
+        let response = self.app_services.skills.write_config(params)?;
+        self.notifications
+            .emit_skills_changed(SkillsChangedNotification {});
+        Ok(response)
+    }
+
+    pub fn mcp_server_status_list(
+        &self,
+        params: ListMcpServerStatusParams,
+    ) -> Result<ListMcpServerStatusResponse, AppServerError> {
+        self.require_initialized("mcp")?;
+        self.app_services.mcp.list_status(params)
+    }
+
+    pub fn mcp_server_reload(
+        &mut self,
+        params: McpServerReloadParams,
+    ) -> Result<McpServerReloadResponse, AppServerError> {
+        self.require_initialized("mcp")?;
+        let requested = params.name.clone();
+        match self.app_services.mcp.reload(params) {
+            Ok(response) => {
+                for name in &response.reloaded {
+                    self.notifications.emit_mcp_startup_status_updated(
+                        McpServerStatusUpdatedNotification {
+                            name: name.clone(),
+                            status: McpServerStartupState::Ready,
+                            error: None,
+                        },
+                    );
+                }
+                Ok(response)
+            }
+            Err(error) => {
+                if let Some(name) = requested {
+                    self.notifications.emit_mcp_startup_status_updated(
+                        McpServerStatusUpdatedNotification {
+                            name,
+                            status: McpServerStartupState::Failed,
+                            error: Some(error.public_message().to_string()),
+                        },
+                    );
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub fn mcp_server_tool_call(
+        &self,
+        params: McpServerToolCallParams,
+    ) -> Result<McpServerToolCallResponse, AppServerError> {
+        self.require_initialized("mcp")?;
+        self.app_services.mcp.call_tool(params)
+    }
+
+    pub fn mcp_server_resource_read(
+        &self,
+        params: McpResourceReadParams,
+    ) -> Result<McpResourceReadResponse, AppServerError> {
+        self.require_initialized("mcp")?;
+        self.app_services.mcp.read_resource(params)
+    }
+
+    pub fn mcp_server_oauth_login(
+        &mut self,
+        params: McpServerOauthLoginParams,
+    ) -> Result<McpServerOauthLoginResponse, AppServerError> {
+        self.require_initialized("mcp")?;
+        let name = params.name.clone();
+        match self.app_services.mcp.oauth_login(params) {
+            Ok(response) => {
+                self.notifications.emit_mcp_oauth_login_completed(
+                    McpServerOauthLoginCompletedNotification {
+                        name,
+                        success: true,
+                        error: None,
+                    },
+                );
+                Ok(response)
+            }
+            Err(error) => {
+                self.notifications.emit_mcp_oauth_login_completed(
+                    McpServerOauthLoginCompletedNotification {
+                        name,
+                        success: false,
+                        error: Some(error.public_message().to_string()),
+                    },
+                );
+                Err(error)
+            }
+        }
     }
 
     fn cancel_turn_record(&mut self, params: TurnInterruptParams) -> Result<(), AppServerError> {
@@ -955,6 +1098,7 @@ impl AppServer {
     }
 
     pub fn drain_notifications_with_policy(&mut self) -> NotificationDrain {
+        self.drain_service_updates();
         self.drain_runtime_turn_updates();
         self.expire_pending_server_requests();
         self.notifications.drain_with_policy()
@@ -965,6 +1109,7 @@ impl AppServer {
     }
 
     pub fn drain_json_rpc_notifications_with_policy(&mut self) -> JsonRpcNotificationDrain {
+        self.drain_service_updates();
         self.drain_runtime_turn_updates();
         self.expire_pending_server_requests();
         self.notifications.drain_json_rpc_with_policy()
@@ -1102,6 +1247,51 @@ impl AppServer {
                 |params: ModelProviderSelectForNextTurnParams| {
                     self.model_provider_select_for_next_turn(params)
                 },
+            ),
+            method::JOBS_LIST => {
+                route_with_optional_params(request.id, request.params, |params: JobListParams| {
+                    self.jobs_list(params)
+                })
+            }
+            method::JOBS_READ => {
+                route_with_params(request.id, request.params, |params: JobReadParams| {
+                    self.jobs_read(params)
+                })
+            }
+            method::SKILLS_LIST => route_with_optional_params(
+                request.id,
+                request.params,
+                |params: SkillsListParams| self.skills_list(params),
+            ),
+            method::SKILLS_CONFIG_WRITE => route_with_params(
+                request.id,
+                request.params,
+                |params: SkillsConfigWriteParams| self.skills_config_write(params),
+            ),
+            method::MCP_SERVER_STATUS_LIST => route_with_optional_params(
+                request.id,
+                request.params,
+                |params: ListMcpServerStatusParams| self.mcp_server_status_list(params),
+            ),
+            method::CONFIG_MCP_SERVER_RELOAD => route_with_optional_params(
+                request.id,
+                request.params,
+                |params: McpServerReloadParams| self.mcp_server_reload(params),
+            ),
+            method::MCP_SERVER_TOOL_CALL => route_with_params(
+                request.id,
+                request.params,
+                |params: McpServerToolCallParams| self.mcp_server_tool_call(params),
+            ),
+            method::MCP_SERVER_RESOURCE_READ => route_with_params(
+                request.id,
+                request.params,
+                |params: McpResourceReadParams| self.mcp_server_resource_read(params),
+            ),
+            method::MCP_SERVER_OAUTH_LOGIN => route_with_params(
+                request.id,
+                request.params,
+                |params: McpServerOauthLoginParams| self.mcp_server_oauth_login(params),
             ),
             method::APPROVAL_RESPOND => {
                 let id = request.id.clone();
@@ -1399,11 +1589,10 @@ impl AppServer {
     }
 
     fn service_health(&self) -> Vec<ServiceHealth> {
-        vec![
+        let mut services = vec![
             ServiceHealth::ready(ServiceName::Protocol),
             ServiceHealth::ready(ServiceName::Lifecycle),
             ServiceHealth::ready(ServiceName::Session),
-            ServiceHealth::disabled(ServiceName::Logs, "log source is not wired in Phase 1"),
             ServiceHealth::degraded(
                 ServiceName::Runtime,
                 "runtime bridge boundary is available; default host requires a runtime adapter",
@@ -1415,13 +1604,32 @@ impl AppServer {
             self.model_provider.health(),
             self.tools_health(),
             self.sandbox_health(),
-            ServiceHealth::disabled(ServiceName::Jobs, "job host is not wired in Phase 1"),
-            ServiceHealth::disabled(
-                ServiceName::Skills,
-                "skills registry is not wired in Phase 1",
-            ),
-            ServiceHealth::disabled(ServiceName::Mcp, "MCP registry is not wired in Phase 1"),
-        ]
+        ];
+        services.extend(self.app_services.health());
+        services
+    }
+
+    fn drain_service_updates(&mut self) {
+        for entry in self.app_services.drain_log_entries() {
+            self.notifications.emit_log_entry(entry);
+        }
+        for event in self.app_services.drain_mcp_tool_call_progress_events() {
+            self.notifications.emit_mcp_tool_call_progress(event);
+        }
+    }
+
+    fn refresh_service_capabilities(&mut self) {
+        self.capabilities = self.service_capability_snapshot();
+    }
+
+    fn service_capability_snapshot(&self) -> CapabilityMatrix {
+        let mut capabilities = self.capabilities.clone();
+        let service_baseline = CapabilityMatrix::phase_one();
+        capabilities.logs = service_baseline.logs;
+        capabilities.jobs = service_baseline.jobs;
+        capabilities.skills = service_baseline.skills;
+        capabilities.mcp = service_baseline.mcp;
+        capabilities.with_app_services(self.app_services.availability())
     }
 
     fn tools_health(&self) -> ServiceHealth {
@@ -2970,6 +3178,29 @@ impl NotificationBus {
         ));
     }
 
+    pub fn emit_log_entry(&mut self, event: LogEntryEvent) {
+        self.push(ServerNotification::log_entry(event));
+    }
+
+    pub fn emit_skills_changed(&mut self, event: SkillsChangedNotification) {
+        self.push(ServerNotification::skills_changed(event));
+    }
+
+    pub fn emit_mcp_oauth_login_completed(
+        &mut self,
+        event: McpServerOauthLoginCompletedNotification,
+    ) {
+        self.push(ServerNotification::mcp_server_oauth_login_completed(event));
+    }
+
+    pub fn emit_mcp_tool_call_progress(&mut self, event: McpToolCallProgressNotification) {
+        self.push(ServerNotification::mcp_tool_call_progress(event));
+    }
+
+    pub fn emit_mcp_startup_status_updated(&mut self, event: McpServerStatusUpdatedNotification) {
+        self.push(ServerNotification::mcp_server_startup_status_updated(event));
+    }
+
     pub fn emit_server_request(&mut self, request: JsonRpcServerRequest) {
         if self.lag_disconnect_signaled {
             return;
@@ -3291,6 +3522,32 @@ impl AppServerError {
         })
     }
 
+    fn capability_unavailable(capability: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::protocol(ErrorData {
+            code: ErrorCode::CapabilityUnavailable,
+            message: message.into(),
+            lifecycle: None,
+            capability: Some(capability.into()),
+            retryable: false,
+        })
+    }
+
+    fn service_degraded(capability: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::protocol(ErrorData {
+            code: ErrorCode::ServiceDegraded,
+            message: message.into(),
+            lifecycle: None,
+            capability: Some(capability.into()),
+            retryable: false,
+        })
+    }
+
+    fn public_message(&self) -> &str {
+        match self {
+            Self::Protocol { data } => &data.message,
+        }
+    }
+
     fn runtime_bridge(error: RuntimeBridgeError) -> Self {
         Self::protocol(ErrorData {
             code: ErrorCode::ServiceDegraded,
@@ -3323,6 +3580,15 @@ pub fn supported_methods() -> &'static [&'static str] {
         method::TURN_READ,
         method::MODEL_LIST,
         method::MODEL_PROVIDER_SELECT_FOR_NEXT_TURN,
+        method::JOBS_LIST,
+        method::JOBS_READ,
+        method::SKILLS_LIST,
+        method::SKILLS_CONFIG_WRITE,
+        method::MCP_SERVER_OAUTH_LOGIN,
+        method::CONFIG_MCP_SERVER_RELOAD,
+        method::MCP_SERVER_STATUS_LIST,
+        method::MCP_SERVER_RESOURCE_READ,
+        method::MCP_SERVER_TOOL_CALL,
         method::APPROVAL_RESPOND,
     ]
 }
@@ -3354,11 +3620,12 @@ fn unix_timestamp_string() -> String {
 mod tests {
     use std::collections::BTreeSet;
     use std::io::Cursor;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
     use dasclaw_app_server_protocol::{
-        CapabilityStatus, ServiceStatus, TransportKind, WorkspaceInfo, WorkspaceTrust,
+        CapabilityStatus, ServiceStatus, SkillMetadata, SkillScope, SkillsListEntry, TransportKind,
+        WorkspaceInfo, WorkspaceTrust, event,
     };
     use dasclaw_core::messages::{FinishReason, ToolCall, ToolDefinition, ToolResult};
     use dasclaw_core::reasoning_ctx::ReasoningContext;
@@ -3366,12 +3633,563 @@ mod tests {
         RespondOutput, RespondResult, ResponseMetadata, TokenUsage,
     };
     use dasclaw_core::traits::HostError;
+    use dasclaw_observability::{Observer, ObserverEvent};
     use secrecy::ExposeSecret;
     use tokio::sync::mpsc;
 
     use super::*;
 
     const TEST_MODEL_API_BASE_URL: &str = "https://api.test/v1";
+
+    #[test]
+    fn app_server_noop_services_remain_disabled_and_declared() {
+        let mut server = AppServer::new();
+
+        let capabilities = server.capabilities();
+        assert_eq!(
+            capabilities.capabilities.logs.status,
+            CapabilityStatus::Declared
+        );
+        assert_eq!(
+            capabilities.capabilities.jobs.status,
+            CapabilityStatus::Declared
+        );
+        assert_eq!(
+            capabilities.capabilities.skills.status,
+            CapabilityStatus::Declared
+        );
+        assert_eq!(
+            capabilities.capabilities.mcp.status,
+            CapabilityStatus::Declared
+        );
+
+        let health = server.health_check(HealthCheckParams {
+            include_details: true,
+        });
+        assert!(health.services.iter().any(|service| {
+            service.service == ServiceName::Logs && service.status == ServiceStatus::Disabled
+        }));
+        assert!(health.services.iter().any(|service| {
+            service.service == ServiceName::Jobs && service.status == ServiceStatus::Disabled
+        }));
+        assert!(health.services.iter().any(|service| {
+            service.service == ServiceName::Skills && service.status == ServiceStatus::Disabled
+        }));
+        assert!(health.services.iter().any(|service| {
+            service.service == ServiceName::Mcp && service.status == ServiceStatus::Disabled
+        }));
+    }
+
+    #[test]
+    fn app_server_ready_services_drive_capabilities_and_health_together() {
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+        );
+        let mut server = AppServer::new().with_app_services(services);
+
+        let capabilities = server.capabilities();
+        assert_eq!(
+            capabilities.capabilities.logs.status,
+            CapabilityStatus::Implemented
+        );
+        assert_eq!(
+            capabilities.capabilities.jobs.status,
+            CapabilityStatus::Implemented
+        );
+        assert_eq!(
+            capabilities.capabilities.skills.status,
+            CapabilityStatus::Implemented
+        );
+        assert_eq!(
+            capabilities.capabilities.mcp.status,
+            CapabilityStatus::Implemented
+        );
+
+        let health = server.health_check(HealthCheckParams {
+            include_details: true,
+        });
+        for service_name in [
+            ServiceName::Logs,
+            ServiceName::Jobs,
+            ServiceName::Skills,
+            ServiceName::Mcp,
+        ] {
+            assert!(health.services.iter().any(|service| {
+                service.service == service_name && service.status == ServiceStatus::Ready
+            }));
+        }
+    }
+
+    #[test]
+    fn app_server_noop_json_rpc_routes_return_capability_unavailable() {
+        let mut server = initialized_server();
+        let response = server
+            .handle_json_rpc(r#"{"jsonrpc":"2.0","id":"jobs","method":"jobs/list","params":{}}"#)
+            .expect("jobs/list should return a structured response");
+        let value: Value = serde_json::from_str(&response).expect("jobs/list response JSON");
+
+        assert_eq!(value["id"], "jobs");
+        assert_ne!(value["error"]["data"]["code"], "UNKNOWN_METHOD");
+        assert_eq!(value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
+        assert_eq!(value["error"]["data"]["capability"], "jobs");
+    }
+
+    #[test]
+    fn app_server_ready_json_rpc_routes_reach_service_owner() {
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![SkillsListEntry {
+                cwd: "/workspace".into(),
+                skills: vec![SkillMetadata {
+                    name: "review".into(),
+                    description: "Review local code".into(),
+                    short_description: None,
+                    interface: None,
+                    dependencies: None,
+                    path: "/workspace/.codex/skills/review/SKILL.md".into(),
+                    scope: SkillScope::Repo,
+                    enabled: true,
+                }],
+                errors: vec![],
+            }]),
+            app_services::TestMcpService::ready(vec![]),
+        );
+        let mut server = AppServer::new().with_app_services(services);
+        server
+            .handle_json_rpc(initialized_request_json())
+            .expect("initialize should return a response");
+        let _ = server.drain_notifications();
+
+        let jobs = server
+            .handle_json_rpc(r#"{"jsonrpc":"2.0","id":"jobs","method":"jobs/list","params":{}}"#)
+            .expect("jobs/list should return a structured response");
+        let skills = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"skills","method":"skills/list","params":{"cwds":["/workspace"]}}"#,
+            )
+            .expect("skills/list should return a structured response");
+        let write = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"write","method":"skills/config/write","params":{"name":"review","enabled":false}}"#,
+            )
+            .expect("skills/config/write should return a structured response");
+        let notifications = server.drain_notifications();
+
+        let jobs_value: Value = serde_json::from_str(&jobs).expect("jobs/list response JSON");
+        let skills_value: Value = serde_json::from_str(&skills).expect("skills/list response JSON");
+        let write_value: Value = serde_json::from_str(&write).expect("skills write response JSON");
+
+        assert_eq!(jobs_value["result"]["data"], serde_json::json!([]));
+        assert_eq!(
+            skills_value["result"]["data"][0]["skills"][0]["name"],
+            "review"
+        );
+        assert_eq!(write_value["result"]["effectiveEnabled"], false);
+        assert!(
+            notifications
+                .iter()
+                .any(|notification| notification.method == event::SKILLS_CHANGED)
+        );
+    }
+
+    #[test]
+    fn app_server_real_job_service_json_rpc_routes_runtime_contexts() {
+        let manager = Arc::new(dasclaw_runtime::context::ContextManager::new(4));
+        let job_id = run_async_test(async {
+            let job_id = manager
+                .create_job("Audit protocol", "Verify app-server JSON-RPC")
+                .await
+                .unwrap();
+            manager
+                .update_context(job_id, |ctx| {
+                    ctx.transition_to(dasclaw_runtime::JobState::InProgress, None)
+                })
+                .await
+                .unwrap()
+                .unwrap();
+            job_id
+        });
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            job_service::AppServerJobService::new(Arc::clone(&manager)),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+        );
+        let mut server = AppServer::new().with_app_services(services);
+        server
+            .handle_json_rpc(initialized_request_json())
+            .expect("initialize should return a response");
+        let _ = server.drain_notifications();
+
+        let list = server
+            .handle_json_rpc(r#"{"jsonrpc":"2.0","id":"jobs","method":"jobs/list","params":{}}"#)
+            .expect("jobs/list should return a structured response");
+        let read = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"read","method":"jobs/read","params":{{"jobId":"{job_id}"}}}}"#
+            ))
+            .expect("jobs/read should return a structured response");
+
+        let list_value: Value = serde_json::from_str(&list).expect("jobs/list response JSON");
+        let read_value: Value = serde_json::from_str(&read).expect("jobs/read response JSON");
+        assert_eq!(list_value["result"]["data"][0]["jobId"], job_id.to_string());
+        assert_eq!(list_value["result"]["data"][0]["state"], "in_progress");
+        assert_eq!(read_value["result"]["job"]["title"], "Audit protocol");
+        assert_eq!(
+            read_value["result"]["job"]["description"],
+            "Verify app-server JSON-RPC"
+        );
+    }
+
+    #[test]
+    fn app_server_real_job_service_json_rpc_rejects_invalid_pagination() {
+        let manager = Arc::new(dasclaw_runtime::context::ContextManager::new(4));
+        run_async_test(async {
+            manager
+                .create_job("Audit protocol", "Verify app-server JSON-RPC")
+                .await
+                .unwrap();
+        });
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            job_service::AppServerJobService::new(manager),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+        );
+        let mut server = AppServer::new().with_app_services(services);
+        server
+            .handle_json_rpc(initialized_request_json())
+            .expect("initialize should return a response");
+        let _ = server.drain_notifications();
+
+        let bad_cursor = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"bad-cursor","method":"jobs/list","params":{"cursor":"not-a-number"}}"#,
+            )
+            .expect("jobs/list should return a structured response");
+        let zero_limit = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"zero-limit","method":"jobs/list","params":{"limit":0}}"#,
+            )
+            .expect("jobs/list should return a structured response");
+
+        let bad_cursor_value: Value =
+            serde_json::from_str(&bad_cursor).expect("bad cursor response JSON");
+        let zero_limit_value: Value =
+            serde_json::from_str(&zero_limit).expect("zero limit response JSON");
+        assert_eq!(bad_cursor_value["error"]["data"]["code"], "INVALID_PARAMS");
+        assert_eq!(zero_limit_value["error"]["data"]["code"], "INVALID_PARAMS");
+    }
+
+    #[test]
+    fn app_server_real_skills_service_json_rpc_lists_writes_and_notifies() {
+        let temp = TestDir::new("app_server_real_skills_json_rpc");
+        let cwd = temp.path().join("repo");
+        let skill_path = cwd.join(".codex/skills/review/SKILL.md");
+        write_skill_md(&skill_path, "review", "Review local code");
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+        );
+        let services = app_services::AppServerServices {
+            skills: Arc::new(skills_service::AppServerSkillsService::new()),
+            ..services
+        };
+        let mut server = AppServer::new().with_app_services(services);
+        server
+            .handle_json_rpc(initialized_request_json())
+            .expect("initialize should return a response");
+        let _ = server.drain_notifications();
+
+        let list = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"skills","method":"skills/list","params":{{"cwds":["{}"]}}}}"#,
+                cwd.display()
+            ))
+            .expect("skills/list should return a structured response");
+        let write = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"write","method":"skills/config/write","params":{{"path":"{}","enabled":false}}}}"#,
+                skill_path.display()
+            ))
+            .expect("skills/config/write should return a structured response");
+        let after_write = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"skills2","method":"skills/list","params":{{"cwds":["{}"]}}}}"#,
+                cwd.display()
+            ))
+            .expect("skills/list after write should return a structured response");
+        let notifications = server.drain_notifications();
+
+        let list_value: Value = serde_json::from_str(&list).expect("skills/list response JSON");
+        let write_value: Value = serde_json::from_str(&write).expect("skills write response JSON");
+        let after_value: Value =
+            serde_json::from_str(&after_write).expect("skills/list after write response JSON");
+        assert_eq!(
+            list_value["result"]["data"][0]["skills"][0]["name"],
+            "review"
+        );
+        assert_eq!(write_value["result"]["effectiveEnabled"], false);
+        assert_eq!(
+            after_value["result"]["data"][0]["skills"][0]["enabled"],
+            false
+        );
+        assert!(
+            notifications
+                .iter()
+                .any(|notification| notification.method == event::SKILLS_CHANGED)
+        );
+    }
+
+    #[test]
+    fn app_server_real_skills_config_write_by_path_does_not_require_prior_list() {
+        let temp = TestDir::new("app_server_real_skills_write_without_list");
+        let cwd = temp.path().join("repo");
+        let skill_path = cwd.join(".codex/skills/review/SKILL.md");
+        write_skill_md(&skill_path, "review", "Review local code");
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            skills_service::AppServerSkillsService::new(),
+            app_services::TestMcpService::ready(vec![]),
+        );
+        let mut server = AppServer::new().with_app_services(services);
+        server
+            .handle_json_rpc(initialized_request_json())
+            .expect("initialize should return a response");
+        let _ = server.drain_notifications();
+
+        let write = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"write","method":"skills/config/write","params":{{"path":"{}","enabled":false}}}}"#,
+                skill_path.display()
+            ))
+            .expect("skills/config/write should return a structured response");
+        let after_write = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"skills","method":"skills/list","params":{{"cwds":["{}"]}}}}"#,
+                cwd.display()
+            ))
+            .expect("skills/list after write should return a structured response");
+
+        let write_value: Value = serde_json::from_str(&write).expect("skills write response JSON");
+        let after_value: Value =
+            serde_json::from_str(&after_write).expect("skills/list after write response JSON");
+        assert_eq!(write_value["result"]["effectiveEnabled"], false);
+        assert_eq!(
+            after_value["result"]["data"][0]["skills"][0]["enabled"],
+            false
+        );
+    }
+
+    #[test]
+    fn app_server_real_mcp_service_json_rpc_status_reload_and_tool_call() {
+        let test_mcp = mcp_service::test_support::TestMcpHttpServer::start(9);
+        let mut bearer = dasclaw_mcp::McpServerConfig::new("bearer", &test_mcp.url);
+        bearer.headers.insert(
+            "Authorization".to_string(),
+            "Bearer secret-token".to_string(),
+        );
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            mcp_service::AppServerMcpService::from_servers(vec![bearer]),
+        );
+        let mut server = AppServer::new().with_app_services(services);
+        server
+            .handle_json_rpc(initialized_request_json())
+            .expect("initialize should return a response");
+        let _ = server.drain_notifications();
+
+        let status = server
+            .handle_json_rpc(r#"{"jsonrpc":"2.0","id":"mcp-status","method":"mcpServerStatus/list","params":{}}"#)
+            .expect("mcpServerStatus/list should return a structured response");
+        let reload = server
+            .handle_json_rpc(r#"{"jsonrpc":"2.0","id":"mcp-reload","method":"config/mcpServer/reload","params":{"name":"bearer"}}"#)
+            .expect("config/mcpServer/reload should return a structured response");
+        let reload_notifications = server.drain_notifications();
+        let tool_call = server
+            .handle_json_rpc(r#"{"jsonrpc":"2.0","id":"mcp-tool","method":"mcpServer/tool/call","params":{"threadId":"thread_1","server":"bearer","tool":"search","arguments":{}}}"#)
+            .expect("mcpServer/tool/call should return a structured response");
+        let bad_cursor = server
+            .handle_json_rpc(r#"{"jsonrpc":"2.0","id":"mcp-bad-cursor","method":"mcpServerStatus/list","params":{"cursor":"bad"}}"#)
+            .expect("mcpServerStatus/list should return a structured response");
+
+        let status_value: Value = serde_json::from_str(&status).expect("mcp status JSON");
+        let reload_value: Value = serde_json::from_str(&reload).expect("mcp reload JSON");
+        let tool_value: Value = serde_json::from_str(&tool_call).expect("mcp tool JSON");
+        let bad_cursor_value: Value =
+            serde_json::from_str(&bad_cursor).expect("mcp bad cursor JSON");
+        assert_eq!(status_value["result"]["data"][0]["name"], "bearer");
+        assert_eq!(
+            status_value["result"]["data"][0]["authStatus"],
+            "bearerToken"
+        );
+        assert!(
+            !status_value.to_string().contains("secret-token"),
+            "MCP status must not leak authorization headers"
+        );
+        assert_eq!(reload_value["result"]["reloaded"][0], "bearer");
+        assert!(reload_notifications.iter().any(|notification| {
+            notification.method == event::MCP_SERVER_STARTUP_STATUS_UPDATED
+                && notification.params["name"] == "bearer"
+                && notification.params["status"] == "ready"
+        }));
+        assert_eq!(tool_value["result"]["content"][0]["text"], "ok");
+        assert_eq!(
+            tool_value["result"]["structuredContent"],
+            serde_json::json!({"echoed": true})
+        );
+        assert_eq!(
+            tool_value["result"]["_meta"],
+            serde_json::json!({"trace": "abc"})
+        );
+        assert_eq!(bad_cursor_value["error"]["data"]["code"], "INVALID_PARAMS");
+        assert!(
+            test_mcp
+                .methods()
+                .iter()
+                .any(|method| method == "tools/call")
+        );
+    }
+
+    #[test]
+    fn app_server_real_mcp_service_advertises_real_tool_resource_and_progress_methods() {
+        let service = mcp_service::AppServerMcpService::from_servers(vec![
+            dasclaw_mcp::McpServerConfig::new("github", "https://github.example/mcp"),
+        ]);
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            service,
+        );
+        let mut server = AppServer::new().with_app_services(services);
+
+        let capabilities = server.capabilities();
+        assert_eq!(
+            capabilities.capabilities.mcp.methods,
+            vec![
+                method::CONFIG_MCP_SERVER_RELOAD.to_string(),
+                method::MCP_SERVER_STATUS_LIST.to_string(),
+                method::MCP_SERVER_RESOURCE_READ.to_string(),
+                method::MCP_SERVER_TOOL_CALL.to_string(),
+            ]
+        );
+        assert_eq!(
+            capabilities.capabilities.mcp.events,
+            vec![
+                event::ITEM_MCP_TOOL_CALL_PROGRESS.to_string(),
+                event::MCP_SERVER_STARTUP_STATUS_UPDATED.to_string(),
+            ]
+        );
+        assert!(
+            !capabilities
+                .capabilities
+                .mcp
+                .methods
+                .contains(&method::MCP_SERVER_OAUTH_LOGIN.to_string())
+        );
+    }
+
+    #[test]
+    fn app_server_mcp_resource_read_fail_safe_error_redacts_uri_secrets() {
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            mcp_service::AppServerMcpService::from_servers(vec![
+                dasclaw_mcp::McpServerConfig::new("github", "https://github.example/mcp"),
+            ]),
+        );
+        let mut server = AppServer::new().with_app_services(services);
+        server
+            .handle_json_rpc(initialized_request_json())
+            .expect("initialize should return a response");
+        let _ = server.drain_notifications();
+
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"resource","method":"mcpServer/resource/read","params":{"server":"github","uri":"https://repo.example/private?access_token=secret-token"}}"#,
+            )
+            .expect("mcpServer/resource/read should return a structured response");
+
+        let value: Value = serde_json::from_str(&response).expect("resource read response JSON");
+        assert_eq!(value["error"]["data"]["code"], "SERVICE_DEGRADED");
+        assert!(
+            !value.to_string().contains("secret-token"),
+            "resource-read errors must not echo URI secrets"
+        );
+        assert!(
+            !value.to_string().contains("access_token"),
+            "resource-read errors must not echo sensitive URI query keys"
+        );
+    }
+
+    #[test]
+    fn app_server_mcp_oauth_login_fails_safe_and_emits_completion_notification() {
+        let github = dasclaw_mcp::McpServerConfig::new("github", "http://127.0.0.1:9/mcp")
+            .with_oauth(dasclaw_mcp::OAuthConfig::new("client-id"));
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            mcp_service::AppServerMcpService::from_servers(vec![github]),
+        );
+        let mut server = AppServer::new().with_app_services(services);
+        server
+            .handle_json_rpc(initialized_request_json())
+            .expect("initialize should return a response");
+        let _ = server.drain_notifications();
+
+        let response = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"oauth","method":"mcpServer/oauth/login","params":{"name":"github","scopes":["repo"],"timeoutSecs":30}}"#,
+            )
+            .expect("mcpServer/oauth/login should return a structured response");
+        let notifications = server.drain_notifications();
+        let value: Value = serde_json::from_str(&response).expect("oauth response JSON");
+
+        assert_eq!(value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
+        assert!(notifications.iter().any(|notification| {
+            notification.method == event::MCP_SERVER_OAUTH_LOGIN_COMPLETED
+                && notification.params["name"] == "github"
+                && notification.params["success"] == false
+        }));
+    }
+
+    #[test]
+    fn app_server_log_service_emits_log_entry_notification() {
+        let log_service = log_service::AppServerLogService::new();
+        let services = app_services::AppServerServices::for_tests(
+            log_service.clone(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+        );
+        let mut server = AppServer::new().with_app_services(services);
+
+        log_service.record_event(&ObserverEvent::Error {
+            component: "app_server.tests".to_string(),
+            message: "test log message".to_string(),
+        });
+
+        let notifications = server.drain_notifications();
+        assert!(notifications.iter().any(|notification| {
+            notification.method == event::LOG_ENTRY
+                && notification.params["level"] == "warn"
+                && notification.params["target"] == "observability.error"
+                && notification.params["message"] == "test log message"
+                && notification.params["fields"]["component"] == "app_server.tests"
+        }));
+    }
 
     struct InvokeOnlyResponder;
 
@@ -3421,6 +4239,48 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         collected
+    }
+
+    fn run_async_test<T>(future: impl std::future::Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(future)
+    }
+
+    fn write_skill_md(path: &std::path::Path, name: &str, description: &str) {
+        std::fs::create_dir_all(path.parent().expect("skill path should have parent")).unwrap();
+        std::fs::write(
+            path,
+            format!("---\nname: {name}\ndescription: {description}\n---\nUse {name}.\n"),
+        )
+        .unwrap();
+    }
+
+    struct TestDir {
+        path: std::path::PathBuf,
+    }
+
+    impl TestDir {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "dasclaw_app_server_{name}_{}",
+                uuid::Uuid::new_v4()
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self { path }
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
     }
 
     #[test]

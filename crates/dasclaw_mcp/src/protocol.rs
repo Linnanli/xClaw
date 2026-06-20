@@ -198,6 +198,27 @@ impl McpRequest {
             })),
         )
     }
+
+    /// Create a resources/list request.
+    pub fn list_resources(id: u64) -> Self {
+        Self::new(id, "resources/list", None)
+    }
+
+    /// Create a resources/templates/list request.
+    pub fn list_resource_templates(id: u64) -> Self {
+        Self::new(id, "resources/templates/list", None)
+    }
+
+    /// Create a resources/read request.
+    pub fn read_resource(id: u64, uri: &str) -> Self {
+        Self::new(
+            id,
+            "resources/read",
+            Some(serde_json::json!({
+                "uri": uri
+            })),
+        )
+    }
 }
 
 /// Response from an MCP server.
@@ -311,12 +332,90 @@ pub struct ListToolsResult {
     pub tools: Vec<McpTool>,
 }
 
+/// An MCP resource definition.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct McpResource {
+    pub uri: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub mime_type: Option<String>,
+    #[serde(default)]
+    pub size: Option<u64>,
+    #[serde(default)]
+    pub annotations: Option<serde_json::Value>,
+    #[serde(default, rename = "_meta")]
+    pub meta: Option<serde_json::Value>,
+}
+
+/// An MCP resource template definition.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct McpResourceTemplate {
+    pub uri_template: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub mime_type: Option<String>,
+    #[serde(default)]
+    pub annotations: Option<serde_json::Value>,
+    #[serde(default, rename = "_meta")]
+    pub meta: Option<serde_json::Value>,
+}
+
+/// Result of listing resources.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListResourcesResult {
+    pub resources: Vec<McpResource>,
+}
+
+/// Result of listing resource templates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListResourceTemplatesResult {
+    pub resource_templates: Vec<McpResourceTemplate>,
+}
+
+/// Result of reading a resource.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadResourceResult {
+    pub contents: Vec<ResourceContent>,
+}
+
+/// Content returned by resources/read.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceContent {
+    pub uri: String,
+    #[serde(default)]
+    pub mime_type: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub blob: Option<String>,
+    #[serde(default, rename = "_meta")]
+    pub meta: Option<serde_json::Value>,
+}
+
 /// Result of calling a tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CallToolResult {
     pub content: Vec<ContentBlock>,
+    #[serde(
+        default,
+        rename = "structuredContent",
+        alias = "structured_content",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub structured_content: Option<serde_json::Value>,
     #[serde(default)]
     pub is_error: bool,
+    #[serde(default, rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<serde_json::Value>,
 }
 
 /// Content block in a tool result.
@@ -434,6 +533,74 @@ mod tests {
     }
 
     #[test]
+    fn test_resource_request_methods_and_params() {
+        let list = McpRequest::list_resources(8);
+        assert_eq!(list.id, Some(8));
+        assert_eq!(list.method, "resources/list");
+        assert!(list.params.is_none());
+
+        let templates = McpRequest::list_resource_templates(9);
+        assert_eq!(templates.id, Some(9));
+        assert_eq!(templates.method, "resources/templates/list");
+        assert!(templates.params.is_none());
+
+        let read = McpRequest::read_resource(10, "file:///tmp/a.txt");
+        assert_eq!(read.id, Some(10));
+        assert_eq!(read.method, "resources/read");
+        assert_eq!(
+            read.params.expect("read_resource params"),
+            serde_json::json!({"uri": "file:///tmp/a.txt"})
+        );
+    }
+
+    #[test]
+    fn test_resource_results_deserialize_spec_shapes() {
+        let resources: ListResourcesResult = serde_json::from_value(serde_json::json!({
+            "resources": [{
+                "uri": "file:///tmp/a.txt",
+                "name": "a.txt",
+                "description": "A text file",
+                "mimeType": "text/plain"
+            }]
+        }))
+        .expect("resources/list result should deserialize");
+        assert_eq!(resources.resources[0].uri, "file:///tmp/a.txt");
+        assert_eq!(resources.resources[0].name, "a.txt");
+        assert_eq!(
+            resources.resources[0].mime_type.as_deref(),
+            Some("text/plain")
+        );
+
+        let templates: ListResourceTemplatesResult = serde_json::from_value(serde_json::json!({
+            "resourceTemplates": [{
+                "uriTemplate": "repo://{owner}/{repo}",
+                "name": "repo",
+                "description": "Repository",
+                "mimeType": "application/json"
+            }]
+        }))
+        .expect("resources/templates/list result should deserialize");
+        assert_eq!(
+            templates.resource_templates[0].uri_template,
+            "repo://{owner}/{repo}"
+        );
+        assert_eq!(templates.resource_templates[0].name, "repo");
+
+        let read: ReadResourceResult = serde_json::from_value(serde_json::json!({
+            "contents": [{
+                "uri": "file:///tmp/a.txt",
+                "mimeType": "text/plain",
+                "text": "hello"
+            }]
+        }))
+        .expect("resources/read result should deserialize");
+        assert_eq!(read.contents[0].uri, "file:///tmp/a.txt");
+        assert_eq!(read.contents[0].mime_type.as_deref(), Some("text/plain"));
+        assert_eq!(read.contents[0].text.as_deref(), Some("hello"));
+        assert!(read.contents[0].blob.is_none());
+    }
+
+    #[test]
     fn test_mcp_response_deserialize_success() {
         let json = serde_json::json!({
             "jsonrpc": "2.0", "id": 1, "result": { "tools": [] }
@@ -547,9 +714,18 @@ mod tests {
 
     #[test]
     fn test_call_tool_result_is_error_defaults_false() {
-        let result: CallToolResult =
-            serde_json::from_value(serde_json::json!({"content": []})).expect("deserialize");
+        let result: CallToolResult = serde_json::from_value(serde_json::json!({
+            "content": [],
+            "structuredContent": {"ok": true},
+            "_meta": {"trace": "abc"}
+        }))
+        .expect("deserialize");
         assert!(!result.is_error);
+        assert_eq!(
+            result.structured_content,
+            Some(serde_json::json!({"ok": true}))
+        );
+        assert_eq!(result.meta, Some(serde_json::json!({"trace": "abc"})));
     }
 
     #[test]

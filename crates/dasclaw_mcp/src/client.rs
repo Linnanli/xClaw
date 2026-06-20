@@ -27,7 +27,9 @@ use tokio::sync::RwLock;
 use crate::config::McpServerConfig;
 use crate::http_transport::HttpMcpTransport;
 use crate::protocol::{
-    CallToolResult, InitializeResult, ListToolsResult, McpRequest, McpResponse, McpTool,
+    CallToolResult, InitializeResult, ListResourceTemplatesResult, ListResourcesResult,
+    ListToolsResult, McpRequest, McpResource, McpResourceTemplate, McpResponse, McpTool,
+    ReadResourceResult,
 };
 use crate::session::McpSessionManager;
 use crate::transport::McpTransport;
@@ -626,6 +628,95 @@ impl McpClient {
             })
     }
 
+    /// List available resources from the MCP server.
+    pub async fn list_resources(&self) -> Result<Vec<McpResource>, ToolError> {
+        if !self.supports_resources().await? {
+            return Ok(Vec::new());
+        }
+
+        let request = McpRequest::list_resources(self.next_request_id());
+        let response = self.send_request(request).await?;
+
+        if let Some(error) = response.error {
+            return Err(ToolError::ExternalService(format!(
+                "MCP error: {} (code {})",
+                error.message, error.code
+            )));
+        }
+
+        let result: ListResourcesResult = response
+            .result
+            .ok_or_else(|| ToolError::ExternalService("No result in MCP response".to_string()))
+            .and_then(|r| {
+                serde_json::from_value(r).map_err(|e| {
+                    ToolError::ExternalService(format!("Invalid resources list: {}", e))
+                })
+            })?;
+
+        Ok(result.resources)
+    }
+
+    /// List available resource templates from the MCP server.
+    pub async fn list_resource_templates(&self) -> Result<Vec<McpResourceTemplate>, ToolError> {
+        if !self.supports_resources().await? {
+            return Ok(Vec::new());
+        }
+
+        let request = McpRequest::list_resource_templates(self.next_request_id());
+        let response = self.send_request(request).await?;
+
+        if let Some(error) = response.error {
+            return Err(ToolError::ExternalService(format!(
+                "MCP error: {} (code {})",
+                error.message, error.code
+            )));
+        }
+
+        let result: ListResourceTemplatesResult = response
+            .result
+            .ok_or_else(|| ToolError::ExternalService("No result in MCP response".to_string()))
+            .and_then(|r| {
+                serde_json::from_value(r).map_err(|e| {
+                    ToolError::ExternalService(format!("Invalid resource templates list: {}", e))
+                })
+            })?;
+
+        Ok(result.resource_templates)
+    }
+
+    /// Read a resource from the MCP server.
+    pub async fn read_resource(&self, uri: &str) -> Result<ReadResourceResult, ToolError> {
+        if !self.supports_resources().await? {
+            return Err(ToolError::InvalidParameters(
+                "MCP server did not advertise resources capability".to_string(),
+            ));
+        }
+
+        let request = McpRequest::read_resource(self.next_request_id(), uri);
+        let response = self.send_request(request).await?;
+
+        if let Some(error) = response.error {
+            return Err(ToolError::ExternalService(format!(
+                "MCP error: {} (code {})",
+                error.message, error.code
+            )));
+        }
+
+        response
+            .result
+            .ok_or_else(|| ToolError::ExternalService("No result in MCP response".to_string()))
+            .and_then(|r| {
+                serde_json::from_value(r).map_err(|e| {
+                    ToolError::ExternalService(format!("Invalid resource read result: {}", e))
+                })
+            })
+    }
+
+    /// Whether the initialized server advertised resource support.
+    pub async fn supports_resources(&self) -> Result<bool, ToolError> {
+        Ok(self.initialize().await?.capabilities.resources.is_some())
+    }
+
     /// Clear the tools cache.
     pub async fn clear_cache(&self) {
         *self.tools_cache.write().await = None;
@@ -898,6 +989,7 @@ mod tests {
         supports_http: bool,
         responses: std::sync::Mutex<Vec<McpResponse>>,
         recorded_headers: std::sync::Mutex<Vec<HashMap<String, String>>>,
+        recorded_requests: std::sync::Mutex<Vec<McpRequest>>,
     }
 
     impl MockTransport {
@@ -906,10 +998,14 @@ mod tests {
                 supports_http,
                 responses: std::sync::Mutex::new(responses),
                 recorded_headers: std::sync::Mutex::new(Vec::new()),
+                recorded_requests: std::sync::Mutex::new(Vec::new()),
             }
         }
         fn recorded_headers(&self) -> Vec<HashMap<String, String>> {
             self.recorded_headers.lock().unwrap().clone()
+        }
+        fn recorded_requests(&self) -> Vec<McpRequest> {
+            self.recorded_requests.lock().unwrap().clone()
         }
     }
 
@@ -917,10 +1013,11 @@ mod tests {
     impl McpTransport for MockTransport {
         async fn send(
             &self,
-            _request: &McpRequest,
+            request: &McpRequest,
             headers: &HashMap<String, String>,
         ) -> Result<McpResponse, ToolError> {
             self.recorded_headers.lock().unwrap().push(headers.clone());
+            self.recorded_requests.lock().unwrap().push(request.clone());
             let mut responses = self.responses.lock().unwrap();
             if responses.is_empty() {
                 return Err(ToolError::ExternalService(
@@ -935,6 +1032,235 @@ mod tests {
         fn supports_http_features(&self) -> bool {
             self.supports_http
         }
+    }
+
+    fn initialize_response() -> McpResponse {
+        McpResponse {
+            jsonrpc: "2.0".to_string(),
+            id: Some(1),
+            result: Some(serde_json::json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": {
+                    "tools": {},
+                    "resources": {"listChanged": false}
+                },
+                "serverInfo": {"name": "test", "version": "1.0"}
+            })),
+            error: None,
+        }
+    }
+
+    fn initialize_response_without_resources() -> McpResponse {
+        McpResponse {
+            jsonrpc: "2.0".to_string(),
+            id: Some(1),
+            result: Some(serde_json::json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "test", "version": "1.0"}
+            })),
+            error: None,
+        }
+    }
+
+    fn notification_ack() -> McpResponse {
+        McpResponse {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            result: None,
+            error: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_client_list_resources_sends_method_and_parses_response() {
+        let list_response = McpResponse {
+            jsonrpc: "2.0".to_string(),
+            id: Some(2),
+            result: Some(serde_json::json!({
+                "resources": [{
+                    "uri": "file:///tmp/a.txt",
+                    "name": "a.txt",
+                    "mimeType": "text/plain"
+                }]
+            })),
+            error: None,
+        };
+        let transport = Arc::new(MockTransport::new(
+            false,
+            vec![initialize_response(), notification_ack(), list_response],
+        ));
+        let client = McpClient::new_with_transport(
+            "test-stdio",
+            transport.clone(),
+            None,
+            None,
+            "default",
+            None,
+        );
+
+        let resources = client
+            .list_resources()
+            .await
+            .expect("resources/list should succeed");
+
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].uri, "file:///tmp/a.txt");
+        assert_eq!(resources[0].name, "a.txt");
+        assert_eq!(resources[0].mime_type.as_deref(), Some("text/plain"));
+        let requests = transport.recorded_requests();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[0].method, "initialize");
+        assert_eq!(requests[1].method, "notifications/initialized");
+        assert_eq!(requests[2].method, "resources/list");
+        assert_eq!(requests[2].id, Some(2));
+        assert!(requests[2].params.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_client_list_resources_skips_request_when_capability_absent() {
+        let transport = Arc::new(MockTransport::new(
+            false,
+            vec![initialize_response_without_resources(), notification_ack()],
+        ));
+        let client = McpClient::new_with_transport(
+            "test-stdio",
+            transport.clone(),
+            None,
+            None,
+            "default",
+            None,
+        );
+
+        let resources = client
+            .list_resources()
+            .await
+            .expect("resources/list should be skipped");
+
+        assert!(resources.is_empty());
+        let requests = transport.recorded_requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].method, "initialize");
+        assert_eq!(requests[1].method, "notifications/initialized");
+    }
+
+    #[tokio::test]
+    async fn test_client_list_resource_templates_sends_method_and_parses_response() {
+        let templates_response = McpResponse {
+            jsonrpc: "2.0".to_string(),
+            id: Some(2),
+            result: Some(serde_json::json!({
+                "resourceTemplates": [{
+                    "uriTemplate": "repo://{owner}/{repo}",
+                    "name": "repo",
+                    "description": "Repository"
+                }]
+            })),
+            error: None,
+        };
+        let transport = Arc::new(MockTransport::new(
+            false,
+            vec![
+                initialize_response(),
+                notification_ack(),
+                templates_response,
+            ],
+        ));
+        let client = McpClient::new_with_transport(
+            "test-stdio",
+            transport.clone(),
+            None,
+            None,
+            "default",
+            None,
+        );
+
+        let templates = client
+            .list_resource_templates()
+            .await
+            .expect("resources/templates/list should succeed");
+
+        assert_eq!(templates.len(), 1);
+        assert_eq!(templates[0].uri_template, "repo://{owner}/{repo}");
+        assert_eq!(templates[0].name, "repo");
+        assert_eq!(templates[0].description.as_deref(), Some("Repository"));
+        let requests = transport.recorded_requests();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[2].method, "resources/templates/list");
+        assert_eq!(requests[2].id, Some(2));
+        assert!(requests[2].params.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_client_read_resource_sends_uri_and_parses_response() {
+        let read_response = McpResponse {
+            jsonrpc: "2.0".to_string(),
+            id: Some(2),
+            result: Some(serde_json::json!({
+                "contents": [{
+                    "uri": "file:///tmp/a.txt",
+                    "mimeType": "text/plain",
+                    "text": "hello"
+                }]
+            })),
+            error: None,
+        };
+        let transport = Arc::new(MockTransport::new(
+            false,
+            vec![initialize_response(), notification_ack(), read_response],
+        ));
+        let client = McpClient::new_with_transport(
+            "test-stdio",
+            transport.clone(),
+            None,
+            None,
+            "default",
+            None,
+        );
+
+        let result = client
+            .read_resource("file:///tmp/a.txt")
+            .await
+            .expect("resources/read should succeed");
+
+        assert_eq!(result.contents.len(), 1);
+        assert_eq!(result.contents[0].uri, "file:///tmp/a.txt");
+        assert_eq!(result.contents[0].text.as_deref(), Some("hello"));
+        let requests = transport.recorded_requests();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[2].method, "resources/read");
+        assert_eq!(requests[2].id, Some(2));
+        assert_eq!(
+            requests[2].params,
+            Some(serde_json::json!({"uri": "file:///tmp/a.txt"}))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_client_read_resource_fails_before_request_when_capability_absent() {
+        let transport = Arc::new(MockTransport::new(
+            false,
+            vec![initialize_response_without_resources(), notification_ack()],
+        ));
+        let client = McpClient::new_with_transport(
+            "test-stdio",
+            transport.clone(),
+            None,
+            None,
+            "default",
+            None,
+        );
+
+        let error = client
+            .read_resource("file:///tmp/a.txt")
+            .await
+            .expect_err("resources/read should not be sent without capability");
+
+        assert!(error.to_string().contains("did not advertise resources"));
+        let requests = transport.recorded_requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].method, "initialize");
+        assert_eq!(requests[1].method, "notifications/initialized");
     }
 
     /// Mock transport that can return errors and successful responses in a

@@ -8,7 +8,10 @@ use std::io;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use dasclaw_app_server::{AppServer, DasclawAgentRuntimeBridge, run_stdio_server_with_app_server};
+use dasclaw_app_server::{
+    AppServer, DasclawAgentRuntimeBridge, app_services::AppServerServices,
+    run_stdio_server_with_app_server,
+};
 use dasclaw_app_server_protocol::{
     CapabilitiesListResponse, ClientInfo, ClientModelConfig, HealthCheckParams,
     HealthCheckResponse, InitializeParams, InitializeResponse, LifecycleStatusResponse,
@@ -89,20 +92,31 @@ fn usage() -> &'static str {
 }
 
 fn build_stdio_app_server() -> Result<AppServer, String> {
-    app_server_for_runtime_mode(std::env::var("DASCLAW_APP_SERVER_RUNTIME").ok().as_deref())
+    app_server_for_env_runtime_mode()
+}
+
+fn app_server_for_env_runtime_mode() -> Result<AppServer, String> {
+    let mode = std::env::var("DASCLAW_APP_SERVER_RUNTIME").ok();
+    app_server_for_runtime_mode(mode.as_deref())
 }
 
 fn app_server_for_runtime_mode(mode: Option<&str>) -> Result<AppServer, String> {
     match mode {
-        None => Ok(AppServer::with_runtime_bridge(Arc::new(
-            DasclawAgentRuntimeBridge::from_model_provider_snapshot(),
-        ))),
-        Some("echo") => Ok(AppServer::with_runtime_responder(Arc::new(EchoResponder))),
+        None => Ok(default_app_server()),
+        Some("echo") => Ok(AppServer::with_runtime_responder(Arc::new(EchoResponder))
+            .with_app_services(AppServerServices::real())),
         Some("noop") => Ok(AppServer::new()),
         Some(other) => Err(format!(
             "unknown DASCLAW_APP_SERVER_RUNTIME: {other}; expected echo or noop"
         )),
     }
+}
+
+fn default_app_server() -> AppServer {
+    AppServer::with_runtime_bridge(Arc::new(
+        DasclawAgentRuntimeBridge::from_model_provider_snapshot(),
+    ))
+    .with_app_services(AppServerServices::real())
 }
 
 #[derive(Debug)]
@@ -140,43 +154,48 @@ fn print_version_json() {
 }
 
 fn print_health_once() {
-    let mut server = AppServer::new();
-    let health = server.health_check(HealthCheckParams {
-        include_details: true,
-    });
-    match serde_json::to_string(&health) {
+    match health_once_response_for_env_runtime_mode().and_then(|health| {
+        serde_json::to_string(&health)
+            .map_err(|error| format!("dasclaw-app-server failed to serialize health: {error}"))
+    }) {
         Ok(line) => println!("{line}"),
         Err(error) => {
-            eprintln!("dasclaw-app-server failed to serialize health: {error}");
+            eprintln!("{error}");
             std::process::exit(1);
         }
     }
 }
 
 fn print_capabilities_once() {
-    let mut server = AppServer::new();
-    match serde_json::to_string(&server.capabilities()) {
+    match capabilities_once_response_for_env_runtime_mode().and_then(|capabilities| {
+        serde_json::to_string(&capabilities).map_err(|error| {
+            format!("dasclaw-app-server failed to serialize capabilities: {error}")
+        })
+    }) {
         Ok(line) => println!("{line}"),
         Err(error) => {
-            eprintln!("dasclaw-app-server failed to serialize capabilities: {error}");
+            eprintln!("{error}");
             std::process::exit(1);
         }
     }
 }
 
 fn print_schema_once() {
-    let server = AppServer::new();
-    match serde_json::to_string(&server.protocol_schema()) {
+    match schema_once_response_for_env_runtime_mode().and_then(|schema| {
+        serde_json::to_string(&schema).map_err(|error| {
+            format!("dasclaw-app-server failed to serialize protocol schema: {error}")
+        })
+    }) {
         Ok(line) => println!("{line}"),
         Err(error) => {
-            eprintln!("dasclaw-app-server failed to serialize protocol schema: {error}");
+            eprintln!("{error}");
             std::process::exit(1);
         }
     }
 }
 
 fn print_self_check() {
-    match self_check_report() {
+    match self_check_report_for_env_runtime_mode() {
         Ok(report) => match serde_json::to_string(&report) {
             Ok(line) => println!("{line}"),
             Err(error) => {
@@ -191,8 +210,65 @@ fn print_self_check() {
     }
 }
 
-fn self_check_report() -> Result<SelfCheckReport, dasclaw_app_server::AppServerError> {
-    let mut server = AppServer::new();
+fn health_once_response_for_env_runtime_mode() -> Result<HealthCheckResponse, String> {
+    let mode = std::env::var("DASCLAW_APP_SERVER_RUNTIME").ok();
+    health_once_response_for_runtime_mode(mode.as_deref())
+}
+
+fn health_once_response_for_runtime_mode(
+    mode: Option<&str>,
+) -> Result<HealthCheckResponse, String> {
+    let mut server = app_server_for_runtime_mode(mode)?;
+    Ok(server.health_check(HealthCheckParams {
+        include_details: true,
+    }))
+}
+
+fn capabilities_once_response_for_env_runtime_mode() -> Result<CapabilitiesListResponse, String> {
+    let mode = std::env::var("DASCLAW_APP_SERVER_RUNTIME").ok();
+    capabilities_once_response_for_runtime_mode(mode.as_deref())
+}
+
+fn capabilities_once_response_for_runtime_mode(
+    mode: Option<&str>,
+) -> Result<CapabilitiesListResponse, String> {
+    let mut server = app_server_for_runtime_mode(mode)?;
+    Ok(server.capabilities())
+}
+
+fn schema_once_response_for_env_runtime_mode() -> Result<ProtocolSchemaResponse, String> {
+    let mode = std::env::var("DASCLAW_APP_SERVER_RUNTIME").ok();
+    schema_once_response_for_runtime_mode(mode.as_deref())
+}
+
+fn schema_once_response_for_runtime_mode(
+    mode: Option<&str>,
+) -> Result<ProtocolSchemaResponse, String> {
+    let server = app_server_for_runtime_mode(mode)?;
+    Ok(server.protocol_schema())
+}
+
+fn self_check_report_for_env_runtime_mode() -> Result<SelfCheckReport, String> {
+    let mode = std::env::var("DASCLAW_APP_SERVER_RUNTIME").ok();
+    self_check_report_for_runtime_mode(mode.as_deref())
+}
+
+fn self_check_report_for_runtime_mode(mode: Option<&str>) -> Result<SelfCheckReport, String> {
+    let server = self_check_app_server_for_runtime_mode(mode)?;
+    self_check_report_with_server(server).map_err(|error| error.to_string())
+}
+
+fn self_check_app_server_for_runtime_mode(mode: Option<&str>) -> Result<AppServer, String> {
+    match mode {
+        None => Ok(AppServer::with_runtime_responder(Arc::new(EchoResponder))
+            .with_app_services(AppServerServices::real())),
+        Some(_) => app_server_for_runtime_mode(mode),
+    }
+}
+
+fn self_check_report_with_server(
+    mut server: AppServer,
+) -> Result<SelfCheckReport, dasclaw_app_server::AppServerError> {
     let initialize = server.initialize(InitializeParams {
         client: ClientInfo {
             name: "dasclaw-app-server-self-check".to_string(),
@@ -989,15 +1065,17 @@ mod tests {
 
     #[test]
     fn health_once_shape_is_serializable() {
-        let mut server = dasclaw_app_server::AppServer::new();
-        let health = server.health_check(dasclaw_app_server_protocol::HealthCheckParams {
-            include_details: true,
-        });
+        let health = super::health_once_response_for_runtime_mode(None)
+            .expect("default health-once should build");
         let value = serde_json::to_value(health).expect("health response should serialize");
 
         assert_eq!(value["ok"], false);
         assert_eq!(value["lifecycle"]["state"], "starting");
         assert!(value["services"].is_array());
+        assert_service_status(&value, "logs", "ready");
+        assert_service_status(&value, "jobs", "ready");
+        assert_service_status(&value, "skills", "ready");
+        assert_service_status(&value, "mcp", "ready");
     }
 
     #[test]
@@ -1012,30 +1090,114 @@ mod tests {
 
     #[test]
     fn capabilities_once_shape_is_serializable() {
-        let mut server = dasclaw_app_server::AppServer::new();
-        let value =
-            serde_json::to_value(server.capabilities()).expect("capabilities should serialize");
+        let capabilities = super::capabilities_once_response_for_runtime_mode(None)
+            .expect("default capabilities-once should build");
+        let value = serde_json::to_value(capabilities).expect("capabilities should serialize");
 
         assert_eq!(value["capabilities"]["protocol"]["status"], "implemented");
-        assert_eq!(value["capabilities"]["logs"]["status"], "declared");
+        assert_eq!(value["capabilities"]["logs"]["status"], "implemented");
+        assert_eq!(value["capabilities"]["jobs"]["status"], "implemented");
+        assert_eq!(value["capabilities"]["skills"]["status"], "implemented");
+        assert_eq!(value["capabilities"]["mcp"]["status"], "implemented");
         assert_eq!(value["capabilities"]["dlpPolicy"]["status"], "declared");
+        assert!(
+            !value["capabilities"]["mcp"]["methods"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|method| method == "mcpServer/oauth/login")
+        );
+        assert!(
+            !value["capabilities"]["mcp"]["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|event| event == "mcpServer/oauthLogin/completed")
+        );
     }
 
     #[test]
     fn schema_once_shape_is_serializable() {
-        let server = dasclaw_app_server::AppServer::new();
-        let value =
-            serde_json::to_value(server.protocol_schema()).expect("schema should serialize");
+        let schema = super::schema_once_response_for_runtime_mode(None)
+            .expect("default schema should build");
+        let value = serde_json::to_value(schema).expect("schema should serialize");
 
         assert_eq!(value["protocolVersion"]["major"], 0);
         assert!(value["methods"].is_array());
         assert!(value["events"].is_array());
         assert_eq!(value["capabilities"]["protocol"]["status"], "implemented");
+        assert_eq!(value["capabilities"]["logs"]["status"], "implemented");
+        assert_eq!(value["capabilities"]["jobs"]["status"], "implemented");
+        assert_eq!(value["capabilities"]["skills"]["status"], "implemented");
+        assert_eq!(value["capabilities"]["mcp"]["status"], "implemented");
+    }
+
+    #[test]
+    fn noop_runtime_mode_keeps_interactive_services_declared_and_disabled() {
+        let mut server = app_server_for_runtime_mode(Some("noop")).expect("noop mode should build");
+
+        let capabilities =
+            serde_json::to_value(server.capabilities()).expect("capabilities should serialize");
+        assert_eq!(capabilities["capabilities"]["logs"]["status"], "declared");
+        assert_eq!(capabilities["capabilities"]["jobs"]["status"], "declared");
+        assert_eq!(capabilities["capabilities"]["skills"]["status"], "declared");
+        assert_eq!(capabilities["capabilities"]["mcp"]["status"], "declared");
+
+        let health = serde_json::to_value(server.health_check(
+            dasclaw_app_server_protocol::HealthCheckParams {
+                include_details: true,
+            },
+        ))
+        .expect("health should serialize");
+        assert_service_status(&health, "logs", "disabled");
+        assert_service_status(&health, "jobs", "disabled");
+        assert_service_status(&health, "skills", "disabled");
+        assert_service_status(&health, "mcp", "disabled");
+    }
+
+    #[test]
+    fn noop_one_shot_capabilities_keep_services_declared() {
+        let capabilities = super::capabilities_once_response_for_runtime_mode(Some("noop"))
+            .expect("noop capabilities-once should build");
+        let value = serde_json::to_value(capabilities).expect("capabilities should serialize");
+
+        assert_eq!(value["capabilities"]["logs"]["status"], "declared");
+        assert_eq!(value["capabilities"]["jobs"]["status"], "declared");
+        assert_eq!(value["capabilities"]["skills"]["status"], "declared");
+        assert_eq!(value["capabilities"]["mcp"]["status"], "declared");
+    }
+
+    #[test]
+    fn noop_one_shot_health_keeps_services_disabled() {
+        let health = super::health_once_response_for_runtime_mode(Some("noop"))
+            .expect("noop health-once should build");
+        let value = serde_json::to_value(health).expect("health should serialize");
+
+        assert_service_status(&value, "logs", "disabled");
+        assert_service_status(&value, "jobs", "disabled");
+        assert_service_status(&value, "skills", "disabled");
+        assert_service_status(&value, "mcp", "disabled");
+    }
+
+    fn assert_service_status(value: &Value, service_name: &str, status: &str) {
+        assert!(
+            value["services"]
+                .as_array()
+                .expect("services should be an array")
+                .iter()
+                .any(|service| {
+                    service["service"] == service_name && service["status"] == status
+                }),
+            "{service_name} should be {status}"
+        );
     }
 
     #[test]
     fn self_check_shape_is_serializable_and_initializes_server() {
-        let report = super::self_check_report().expect("self-check should pass");
+        let report =
+            super::self_check_report_for_runtime_mode(None).expect("self-check should pass");
+        let serialized = serde_json::to_string(&report).expect("self-check should serialize");
+        assert!(!serialized.contains("self-check-api-key"));
         let value = serde_json::to_value(report).expect("self-check should serialize");
 
         assert_eq!(value["ok"], true);

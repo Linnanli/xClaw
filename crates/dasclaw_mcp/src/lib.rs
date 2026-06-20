@@ -58,9 +58,11 @@ pub use factory::{McpFactoryError, create_client_from_config};
 pub use http_transport::HttpMcpTransport;
 pub use process::{McpProcessManager, StdioSpawnConfig};
 pub use protocol::{
-    CallToolResult, ContentBlock, ExecutionTimeHint, InitializeResult, ListToolsResult, McpError,
-    McpRequest, McpResponse, McpTool, McpToolAnnotations, PROTOCOL_VERSION, PromptsCapability,
-    ResourcesCapability, ServerCapabilities, ServerInfo, ToolsCapability,
+    CallToolResult, ContentBlock, ExecutionTimeHint, InitializeResult, ListResourceTemplatesResult,
+    ListResourcesResult, ListToolsResult, McpError, McpRequest, McpResource, McpResourceTemplate,
+    McpResponse, McpTool, McpToolAnnotations, PROTOCOL_VERSION, PromptsCapability,
+    ReadResourceResult, ResourceContent, ResourcesCapability, ServerCapabilities, ServerInfo,
+    ToolsCapability,
 };
 pub use server_name::{McpServerName, McpServerNameError};
 pub use session::{McpSession, McpSessionManager};
