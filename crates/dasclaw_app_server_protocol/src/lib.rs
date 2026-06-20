@@ -39,6 +39,19 @@ pub mod method {
     pub const MCP_SERVER_STATUS_LIST: &str = "mcpServerStatus/list";
     pub const MCP_SERVER_RESOURCE_READ: &str = "mcpServer/resource/read";
     pub const MCP_SERVER_TOOL_CALL: &str = "mcpServer/tool/call";
+    pub const FS_READ_FILE: &str = "fs/readFile";
+    pub const FS_WRITE_FILE: &str = "fs/writeFile";
+    pub const FS_CREATE_DIRECTORY: &str = "fs/createDirectory";
+    pub const FS_GET_METADATA: &str = "fs/getMetadata";
+    pub const FS_READ_DIRECTORY: &str = "fs/readDirectory";
+    pub const FS_REMOVE: &str = "fs/remove";
+    pub const FS_COPY: &str = "fs/copy";
+    pub const FS_WATCH: &str = "fs/watch";
+    pub const FS_UNWATCH: &str = "fs/unwatch";
+    pub const COMMAND_EXEC: &str = "command/exec";
+    pub const COMMAND_EXEC_WRITE: &str = "command/exec/write";
+    pub const COMMAND_EXEC_TERMINATE: &str = "command/exec/terminate";
+    pub const COMMAND_EXEC_RESIZE: &str = "command/exec/resize";
 }
 
 pub mod server_request {
@@ -79,6 +92,8 @@ pub mod event {
     pub const ITEM_MCP_TOOL_CALL_PROGRESS: &str = "item/mcpToolCall/progress";
     pub const MCP_SERVER_OAUTH_LOGIN_COMPLETED: &str = "mcpServer/oauthLogin/completed";
     pub const MCP_SERVER_STARTUP_STATUS_UPDATED: &str = "mcpServer/startupStatus/updated";
+    pub const FS_CHANGED: &str = "fs/changed";
+    pub const COMMAND_EXEC_OUTPUT_DELTA: &str = "command/exec/outputDelta";
     pub const ERROR: &str = "error";
 }
 
@@ -598,6 +613,8 @@ pub struct CapabilityMatrix {
     pub mcp: Capability,
     pub sandbox: Capability,
     pub logs: Capability,
+    pub filesystem: Capability,
+    pub command_exec: Capability,
 }
 
 impl CapabilityMatrix {
@@ -659,6 +676,8 @@ impl CapabilityMatrix {
             skills: declared_future_capability("skills"),
             mcp: declared_future_capability("mcp"),
             sandbox: declared_future_capability("sandbox"),
+            filesystem: declared_future_capability("filesystem"),
+            command_exec: declared_future_capability("command_exec"),
         }
     }
 
@@ -711,6 +730,52 @@ impl CapabilityMatrix {
         if !mcp_methods.is_empty() || !mcp_events.is_empty() {
             self.mcp = Capability::implemented("mcp", &mcp_methods, &mcp_events);
         }
+        self.with_p5_filesystem_command(availability.p5)
+    }
+
+    #[must_use]
+    pub fn with_p5_filesystem_command(mut self, availability: AppServerP5Availability) -> Self {
+        if availability.filesystem {
+            self.filesystem = Capability::implemented(
+                "filesystem",
+                &[
+                    method::FS_READ_FILE,
+                    method::FS_WRITE_FILE,
+                    method::FS_CREATE_DIRECTORY,
+                    method::FS_GET_METADATA,
+                    method::FS_READ_DIRECTORY,
+                    method::FS_REMOVE,
+                    method::FS_COPY,
+                    method::FS_WATCH,
+                    method::FS_UNWATCH,
+                ],
+                &[event::FS_CHANGED],
+            );
+        }
+
+        let mut command_methods = Vec::new();
+        if availability.command.exec {
+            command_methods.push(method::COMMAND_EXEC);
+        }
+        if availability.command.write {
+            command_methods.push(method::COMMAND_EXEC_WRITE);
+        }
+        if availability.command.terminate {
+            command_methods.push(method::COMMAND_EXEC_TERMINATE);
+        }
+        if availability.command.resize {
+            command_methods.push(method::COMMAND_EXEC_RESIZE);
+        }
+
+        let command_events = if availability.command.output_delta_events {
+            vec![event::COMMAND_EXEC_OUTPUT_DELTA]
+        } else {
+            Vec::new()
+        };
+        if !command_methods.is_empty() || !command_events.is_empty() {
+            self.command_exec =
+                Capability::implemented("command_exec", &command_methods, &command_events);
+        }
         self
     }
 }
@@ -728,6 +793,22 @@ pub struct AppServerServiceAvailability {
     pub jobs: bool,
     pub skills: bool,
     pub mcp: McpServiceAvailability,
+    pub p5: AppServerP5Availability,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AppServerP5Availability {
+    pub filesystem: bool,
+    pub command: CommandExecAvailability,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CommandExecAvailability {
+    pub exec: bool,
+    pub output_delta_events: bool,
+    pub terminate: bool,
+    pub write: bool,
+    pub resize: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1165,6 +1246,97 @@ fn phase_one_methods() -> Vec<MethodSchema> {
             "McpServerToolCallResponse",
             true,
         ),
+        MethodSchema::new(
+            method::FS_READ_FILE,
+            "filesystem",
+            Some("FsReadFileParams"),
+            "FsReadFileResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::FS_WRITE_FILE,
+            "filesystem",
+            Some("FsWriteFileParams"),
+            "FsWriteFileResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::FS_CREATE_DIRECTORY,
+            "filesystem",
+            Some("FsCreateDirectoryParams"),
+            "FsCreateDirectoryResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::FS_GET_METADATA,
+            "filesystem",
+            Some("FsGetMetadataParams"),
+            "FsGetMetadataResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::FS_READ_DIRECTORY,
+            "filesystem",
+            Some("FsReadDirectoryParams"),
+            "FsReadDirectoryResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::FS_REMOVE,
+            "filesystem",
+            Some("FsRemoveParams"),
+            "FsRemoveResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::FS_COPY,
+            "filesystem",
+            Some("FsCopyParams"),
+            "FsCopyResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::FS_WATCH,
+            "filesystem",
+            Some("FsWatchParams"),
+            "FsWatchResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::FS_UNWATCH,
+            "filesystem",
+            Some("FsUnwatchParams"),
+            "FsUnwatchResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::COMMAND_EXEC,
+            "command_exec",
+            Some("CommandExecParams"),
+            "CommandExecResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::COMMAND_EXEC_WRITE,
+            "command_exec",
+            Some("CommandExecWriteParams"),
+            "CommandExecWriteResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::COMMAND_EXEC_TERMINATE,
+            "command_exec",
+            Some("CommandExecTerminateParams"),
+            "CommandExecTerminateResponse",
+            true,
+        ),
+        MethodSchema::new(
+            method::COMMAND_EXEC_RESIZE,
+            "command_exec",
+            Some("CommandExecResizeParams"),
+            "CommandExecResizeResponse",
+            true,
+        ),
     ]
 }
 
@@ -1243,6 +1415,12 @@ fn phase_one_events() -> Vec<EventSchema> {
             "mcp",
             "McpServerStatusUpdatedNotification",
         ),
+        EventSchema::new(event::FS_CHANGED, "filesystem", "FsChangedNotification"),
+        EventSchema::new(
+            event::COMMAND_EXEC_OUTPUT_DELTA,
+            "command_exec",
+            "CommandExecOutputDeltaNotification",
+        ),
         EventSchema::new(event::ERROR, "session", "ErrorEvent"),
     ]
 }
@@ -1262,6 +1440,8 @@ pub enum ServiceName {
     Skills,
     Mcp,
     Logs,
+    Filesystem,
+    CommandExec,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1706,6 +1886,239 @@ pub struct CommandExecutionTerminalInteractionEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FsReadFileParams {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsReadFileResponse {
+    pub data_base64: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsWriteFileParams {
+    pub path: String,
+    pub data_base64: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsWriteFileResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsCreateDirectoryParams {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recursive: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsCreateDirectoryResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsGetMetadataParams {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsGetMetadataResponse {
+    pub is_file: bool,
+    pub is_directory: bool,
+    pub is_symlink: bool,
+    pub created_at_ms: u64,
+    pub modified_at_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsReadDirectoryParams {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsReadDirectoryEntry {
+    pub file_name: String,
+    pub is_file: bool,
+    pub is_directory: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsReadDirectoryResponse {
+    pub entries: Vec<FsReadDirectoryEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsRemoveParams {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recursive: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub force: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsRemoveResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsCopyParams {
+    pub source_path: String,
+    pub destination_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recursive: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsCopyResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsWatchParams {
+    pub path: String,
+    pub watch_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsWatchResponse {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsUnwatchParams {
+    pub watch_id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsUnwatchResponse {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FsChangedKind {
+    Created,
+    Modified,
+    Removed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsChangedNotification {
+    pub watch_id: String,
+    pub path: String,
+    pub kind: FsChangedKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CommandExecOutputStream {
+    Stdout,
+    Stderr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandExecTerminalSize {
+    pub cols: u16,
+    pub rows: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandExecParams {
+    pub command: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disable_timeout: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_bytes_cap: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disable_output_cap: Option<bool>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub env: std::collections::BTreeMap<String, Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_policy: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<CommandExecTerminalSize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_stdin: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_stdout_stderr: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tty: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandExecResponse {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandExecOutputDeltaNotification {
+    pub process_id: String,
+    pub stream: CommandExecOutputStream,
+    pub delta_base64: String,
+    pub cap_reached: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandExecWriteParams {
+    pub process_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delta_base64: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close_stdin: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandExecWriteResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandExecTerminateParams {
+    pub process_id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandExecTerminateResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandExecResizeParams {
+    pub process_id: String,
+    pub size: CommandExecTerminalSize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandExecResizeResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ThreadStartedEvent {
     pub thread: CodexThread,
 }
@@ -1973,6 +2386,16 @@ impl ServerNotification {
         event: McpServerStatusUpdatedNotification,
     ) -> Result<Self, serde_json::Error> {
         Self::new(event::MCP_SERVER_STARTUP_STATUS_UPDATED, event)
+    }
+
+    pub fn fs_changed(event: FsChangedNotification) -> Result<Self, serde_json::Error> {
+        Self::new(event::FS_CHANGED, event)
+    }
+
+    pub fn command_exec_output_delta(
+        event: CommandExecOutputDeltaNotification,
+    ) -> Result<Self, serde_json::Error> {
+        Self::new(event::COMMAND_EXEC_OUTPUT_DELTA, event)
     }
 
     pub fn error(event: ErrorEvent) -> Result<Self, serde_json::Error> {
@@ -3611,6 +4034,7 @@ mod tests {
                     tool_call_progress_events: true,
                     startup_status_events: true,
                 },
+                p5: AppServerP5Availability::default(),
             });
 
         assert_eq!(matrix.logs.status, CapabilityStatus::Implemented);
@@ -4008,5 +4432,116 @@ mod tests {
             let value = serde_json::to_value(state).expect("job state serializes");
             assert_eq!(value, expected);
         }
+    }
+
+    #[test]
+    fn p5_protocol_declares_fs_and_command_methods() {
+        let matrix =
+            CapabilityMatrix::phase_one().with_p5_filesystem_command(AppServerP5Availability {
+                filesystem: true,
+                command: CommandExecAvailability {
+                    exec: true,
+                    output_delta_events: true,
+                    terminate: false,
+                    write: false,
+                    resize: false,
+                },
+            });
+
+        assert_eq!(matrix.filesystem.status, CapabilityStatus::Implemented);
+        assert!(
+            matrix
+                .filesystem
+                .methods
+                .contains(&method::FS_READ_FILE.to_string())
+        );
+        assert!(
+            matrix
+                .filesystem
+                .methods
+                .contains(&method::FS_WRITE_FILE.to_string())
+        );
+        assert!(
+            matrix
+                .filesystem
+                .methods
+                .contains(&method::FS_WATCH.to_string())
+        );
+        assert!(
+            matrix
+                .filesystem
+                .events
+                .contains(&event::FS_CHANGED.to_string())
+        );
+
+        assert_eq!(matrix.command_exec.status, CapabilityStatus::Implemented);
+        assert!(
+            matrix
+                .command_exec
+                .methods
+                .contains(&method::COMMAND_EXEC.to_string())
+        );
+        assert!(
+            !matrix
+                .command_exec
+                .methods
+                .contains(&method::COMMAND_EXEC_WRITE.to_string())
+        );
+        assert!(
+            matrix
+                .command_exec
+                .events
+                .contains(&event::COMMAND_EXEC_OUTPUT_DELTA.to_string())
+        );
+    }
+
+    #[test]
+    fn p5_protocol_serializes_fs_and_command_payloads() {
+        let read = FsReadFileResponse {
+            data_base64: "aGVsbG8=".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(read).expect("serialize read response"),
+            serde_json::json!({"dataBase64": "aGVsbG8="})
+        );
+
+        let exec = CommandExecParams {
+            command: vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "printf hello".to_string(),
+            ],
+            cwd: Some("/tmp".to_string()),
+            timeout_ms: Some(5_000),
+            disable_timeout: None,
+            output_bytes_cap: Some(1024),
+            disable_output_cap: None,
+            env: Default::default(),
+            process_id: Some("proc_1".to_string()),
+            sandbox_policy: None,
+            size: None,
+            stream_stdin: None,
+            stream_stdout_stderr: Some(true),
+            tty: None,
+        };
+        assert_eq!(
+            serde_json::to_value(exec).expect("serialize exec params"),
+            serde_json::json!({
+                "command": ["sh", "-c", "printf hello"],
+                "cwd": "/tmp",
+                "timeoutMs": 5000,
+                "outputBytesCap": 1024,
+                "processId": "proc_1",
+                "streamStdoutStderr": true
+            })
+        );
+
+        let changed = ServerNotification::fs_changed(FsChangedNotification {
+            watch_id: "watch_1".to_string(),
+            path: "/tmp/example.txt".to_string(),
+            kind: FsChangedKind::Modified,
+        })
+        .expect("fs changed notification should serialize");
+        assert_eq!(changed.method, event::FS_CHANGED);
     }
 }
