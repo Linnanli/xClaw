@@ -4336,6 +4336,188 @@ mod tests {
     }
 
     #[test]
+    fn app_server_real_p5_filesystem_json_rpc_routes_read_write_and_containment() {
+        let temp = TestDir::new("app_server_real_p5_filesystem_routes");
+        let outside = TestDir::new("app_server_real_p5_filesystem_outside");
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+            fs_service::AppServerFsService::new(temp.path().to_path_buf()),
+            app_services::TestCommandExecService::disabled(),
+        );
+        let mut server = AppServer::new().with_app_services(services);
+        server
+            .handle_json_rpc(initialized_request_json())
+            .expect("initialize should return a response");
+        let _ = server.drain_notifications();
+
+        let create_dir = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"mkdir","method":"fs/createDirectory","params":{"path":"dir"}}"#,
+            )
+            .expect("fs/createDirectory should return a structured response");
+        let write = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"write","method":"fs/writeFile","params":{"path":"dir/source.txt","dataBase64":"cm91dGUtZmlsZQ=="}}"#,
+            )
+            .expect("fs/writeFile should return a structured response");
+        let read = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"read","method":"fs/readFile","params":{"path":"dir/source.txt"}}"#,
+            )
+            .expect("fs/readFile should return a structured response");
+        let list_before_copy = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"list","method":"fs/readDirectory","params":{"path":"dir"}}"#,
+            )
+            .expect("fs/readDirectory should return a structured response");
+        let metadata = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"stat","method":"fs/getMetadata","params":{"path":"dir/source.txt"}}"#,
+            )
+            .expect("fs/getMetadata should return a structured response");
+        let copy = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"copy","method":"fs/copy","params":{"sourcePath":"dir/source.txt","destinationPath":"dir/copied.txt"}}"#,
+            )
+            .expect("fs/copy should return a structured response");
+        let remove = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"remove","method":"fs/remove","params":{"path":"dir/source.txt"}}"#,
+            )
+            .expect("fs/remove should return a structured response");
+        let list_after_remove = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"list2","method":"fs/readDirectory","params":{"path":"dir"}}"#,
+            )
+            .expect("fs/readDirectory after remove should return a structured response");
+        let traversal = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"traversal","method":"fs/readFile","params":{"path":"../escape.txt"}}"#,
+            )
+            .expect("fs/readFile traversal should return a structured response");
+        let outside_path = outside.path().join("outside.txt");
+        std::fs::write(&outside_path, "outside").expect("outside fixture should be writable");
+        let outside_read = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"outside","method":"fs/readFile","params":{{"path":"{}"}}}}"#,
+                outside_path.display()
+            ))
+            .expect("fs/readFile outside root should return a structured response");
+
+        let create_dir_value: Value =
+            serde_json::from_str(&create_dir).expect("mkdir response JSON");
+        let write_value: Value = serde_json::from_str(&write).expect("write response JSON");
+        let read_value: Value = serde_json::from_str(&read).expect("read response JSON");
+        let list_before_value: Value =
+            serde_json::from_str(&list_before_copy).expect("list response JSON");
+        let metadata_value: Value =
+            serde_json::from_str(&metadata).expect("metadata response JSON");
+        let copy_value: Value = serde_json::from_str(&copy).expect("copy response JSON");
+        let remove_value: Value = serde_json::from_str(&remove).expect("remove response JSON");
+        let list_after_value: Value =
+            serde_json::from_str(&list_after_remove).expect("list after remove response JSON");
+        let traversal_value: Value =
+            serde_json::from_str(&traversal).expect("traversal response JSON");
+        let outside_value: Value =
+            serde_json::from_str(&outside_read).expect("outside response JSON");
+
+        assert!(create_dir_value.get("error").is_none());
+        assert!(write_value.get("error").is_none());
+        assert_eq!(read_value["result"]["dataBase64"], "cm91dGUtZmlsZQ==");
+        assert_eq!(
+            list_before_value["result"]["entries"][0]["fileName"],
+            "source.txt"
+        );
+        assert_eq!(metadata_value["result"]["isFile"], true);
+        assert_eq!(metadata_value["result"]["isDirectory"], false);
+        assert!(copy_value.get("error").is_none());
+        assert!(remove_value.get("error").is_none());
+        assert_eq!(
+            list_after_value["result"]["entries"][0]["fileName"],
+            "copied.txt"
+        );
+        assert_eq!(
+            list_after_value["result"]["entries"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            traversal_value["error"]["data"]["code"],
+            "CAPABILITY_UNAVAILABLE"
+        );
+        assert_eq!(traversal_value["error"]["data"]["capability"], "filesystem");
+        assert_eq!(
+            outside_value["error"]["data"]["code"],
+            "CAPABILITY_UNAVAILABLE"
+        );
+        assert_eq!(outside_value["error"]["data"]["capability"], "filesystem");
+    }
+
+    #[test]
+    fn app_server_real_p5_command_exec_json_rpc_route_returns_stdout_and_delta() {
+        let temp = TestDir::new("app_server_real_p5_command_exec_routes");
+        let outside = TestDir::new("app_server_real_p5_command_exec_outside");
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            command_service::AppServerCommandExecService::new(temp.path().to_path_buf()),
+        );
+        let mut server = AppServer::new().with_app_services(services);
+        server
+            .handle_json_rpc(initialized_request_json())
+            .expect("initialize should return a response");
+        let _ = server.drain_notifications();
+
+        let exec = server
+            .handle_json_rpc(
+                r#"{"jsonrpc":"2.0","id":"cmd","method":"command/exec","params":{"command":["echo","route-stdout"],"processId":"route_proc_1","streamStdoutStderr":true}}"#,
+            )
+            .expect("command/exec should return a structured response");
+        let cwd_outside = server
+            .handle_json_rpc(&format!(
+                r#"{{"jsonrpc":"2.0","id":"cwd","method":"command/exec","params":{{"command":["echo","nope"],"cwd":"{}"}}}}"#,
+                outside.path().display()
+            ))
+            .expect("command/exec outside cwd should return a structured response");
+        let notifications = server.drain_notifications();
+
+        let exec_value: Value = serde_json::from_str(&exec).expect("command/exec response JSON");
+        let cwd_value: Value =
+            serde_json::from_str(&cwd_outside).expect("outside cwd response JSON");
+        assert_eq!(exec_value["result"]["exitCode"], 0);
+        assert!(
+            exec_value["result"]["stdout"]
+                .as_str()
+                .unwrap()
+                .contains("route-stdout")
+        );
+        assert_eq!(exec_value["result"]["stderr"], "");
+        assert_eq!(cwd_value["error"]["data"]["code"], "CAPABILITY_UNAVAILABLE");
+        assert_eq!(cwd_value["error"]["data"]["capability"], "command_exec");
+
+        let output_delta = notifications
+            .iter()
+            .find(|notification| notification.method == event::COMMAND_EXEC_OUTPUT_DELTA)
+            .expect("command/exec output delta notification should drain");
+        assert_eq!(output_delta.params["processId"], "route_proc_1");
+        assert_eq!(output_delta.params["stream"], "stdout");
+        assert_eq!(output_delta.params["capReached"], false);
+        assert_eq!(
+            output_delta.params["deltaBase64"].as_str().unwrap(),
+            "cm91dGUtc3Rkb3V0Cg=="
+        );
+        assert!(server.drain_notifications().is_empty());
+    }
+
+    #[test]
     fn app_server_real_mcp_service_json_rpc_status_reload_and_tool_call() {
         let test_mcp = mcp_service::test_support::TestMcpHttpServer::start(9);
         let mut bearer = dasclaw_mcp::McpServerConfig::new("bearer", &test_mcp.url);
