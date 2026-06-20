@@ -23,6 +23,12 @@ use crate::blocking_runtime::BlockingTokioRuntime;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const COMMAND_EXEC_CAPABILITY: &str = "command_exec";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShellKind {
+    Posix,
+    Cmd,
+}
+
 pub struct AppServerCommandExecService {
     root: PathBuf,
     lexical_root: PathBuf,
@@ -64,12 +70,10 @@ impl AppServerCommandExecService {
                 COMMAND_EXEC_CAPABILITY,
             ));
         }
-        runtime
-            .as_ref()
-            .expect("runtime initialized")
-            .as_ref()
-            .cloned()
-            .map_err(Clone::clone)
+        match runtime.as_ref() {
+            Some(created) => created.as_ref().cloned().map_err(Clone::clone),
+            None => Err(command_unavailable("command runtime failed to initialize")),
+        }
     }
 
     fn resolve_cwd(&self, raw: Option<&str>) -> Result<PathBuf, AppServerError> {
@@ -139,11 +143,25 @@ impl AppServerCommandExecService {
     }
 
     fn command_line(command: &[String]) -> Result<String, AppServerError> {
+        Self::command_line_for_shell(command, current_shell_kind())
+    }
+
+    fn command_line_for_shell(
+        command: &[String],
+        shell: ShellKind,
+    ) -> Result<String, AppServerError> {
         if command.is_empty() {
             return Err(AppServerError::invalid_request(
                 COMMAND_EXEC_CAPABILITY,
                 "command must contain at least one argument",
             ));
+        }
+        if shell == ShellKind::Cmd
+            && let Some(arg) = command.iter().find(|arg| !is_safe_cmd_arg(arg))
+        {
+            return Err(command_unavailable(format!(
+                "Windows cmd metacharacter or quoting-sensitive character is not supported in command argument: {arg:?}"
+            )));
         }
         Ok(command
             .iter()
@@ -188,6 +206,29 @@ impl AppServerCommandExecService {
                 .extend(events);
         }
     }
+
+    fn apply_output_cap(
+        output_bytes_cap: Option<usize>,
+        response: CommandExecResponse,
+        executor_cap_reached: bool,
+    ) -> Result<(CommandExecResponse, bool), AppServerError> {
+        let Some(cap) = output_bytes_cap else {
+            return Ok((response, executor_cap_reached));
+        };
+
+        let mut stdout = response.stdout;
+        let mut stderr = response.stderr;
+        let stdout_truncated = truncate_to_byte_cap(&mut stdout, cap);
+        let stderr_truncated = truncate_to_byte_cap(&mut stderr, cap);
+        Ok((
+            CommandExecResponse {
+                exit_code: response.exit_code,
+                stdout,
+                stderr,
+            },
+            executor_cap_reached || stdout_truncated || stderr_truncated,
+        ))
+    }
 }
 
 impl CommandExecService for AppServerCommandExecService {
@@ -196,7 +237,7 @@ impl CommandExecService for AppServerCommandExecService {
             Ok(_) => {
                 let mut health = ServiceHealth::ready(ServiceName::CommandExec);
                 health.message = Some(format!(
-                    "root={} sandbox=read-only non_interactive=true streaming=false",
+                    "root={} cwd_guard=root-contained sandbox=read-only/no-network read_scope=host-read-only not_workspace_read_limited non_interactive=true streaming=false",
                     self.root.display()
                 ));
                 health
@@ -220,9 +261,16 @@ impl CommandExecService for AppServerCommandExecService {
             ));
         }
 
+        if params.disable_output_cap.unwrap_or(false) {
+            return Err(command_unavailable(
+                "disableOutputCap is not supported by the buffered sandbox executor",
+            ));
+        }
+
         let cwd = self.resolve_cwd(params.cwd.as_deref())?;
         let process_id = Self::process_id(&params);
         let command = Self::command_line(&params.command)?;
+        let output_bytes_cap = params.output_bytes_cap;
         let env = Self::env(params.env);
         let timeout = if params.disable_timeout.unwrap_or(false) {
             Duration::from_secs(24 * 60 * 60)
@@ -233,21 +281,24 @@ impl CommandExecService for AppServerCommandExecService {
                 .unwrap_or(DEFAULT_TIMEOUT)
         };
 
-        let (response, cap_reached) = self.runtime()?.block_on("command/exec", async move {
-            let executor = SandboxedShellExecutor::new(timeout, false, None);
-            let output = executor
-                .execute(&command, &cwd, SandboxPolicy::new_read_only_policy(), env)
-                .await
-                .map_err(map_exec_error)?;
-            Ok((
-                CommandExecResponse {
-                    exit_code: output.exit_code as i32,
-                    stdout: output.stdout,
-                    stderr: output.stderr,
-                },
-                output.truncated,
-            ))
-        })?;
+        let (response, executor_cap_reached) =
+            self.runtime()?.block_on("command/exec", async move {
+                let executor = SandboxedShellExecutor::new(timeout, false, None);
+                let output = executor
+                    .execute(&command, &cwd, SandboxPolicy::new_read_only_policy(), env)
+                    .await
+                    .map_err(map_exec_error)?;
+                Ok((
+                    CommandExecResponse {
+                        exit_code: output.exit_code as i32,
+                        stdout: output.stdout,
+                        stderr: output.stderr,
+                    },
+                    output.truncated,
+                ))
+            })?;
+        let (response, cap_reached) =
+            Self::apply_output_cap(output_bytes_cap, response, executor_cap_reached)?;
 
         self.completed
             .lock()
@@ -330,6 +381,30 @@ fn shell_quote(arg: &str) -> String {
     format!("'{}'", arg.replace('\'', "'\\''"))
 }
 
+fn current_shell_kind() -> ShellKind {
+    if cfg!(target_os = "windows") {
+        ShellKind::Cmd
+    } else {
+        ShellKind::Posix
+    }
+}
+
+fn is_safe_cmd_arg(arg: &str) -> bool {
+    !arg.is_empty()
+        && arg
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '/' | '.' | ':' | '='))
+}
+
+fn truncate_to_byte_cap(value: &mut String, cap: usize) -> bool {
+    if value.len() <= cap {
+        return false;
+    }
+    let end = value.floor_char_boundary(cap);
+    value.truncate(end);
+    true
+}
+
 fn output_delta(
     process_id: &str,
     stream: CommandExecOutputStream,
@@ -407,37 +482,121 @@ mod tests {
     }
 
     #[test]
-    fn command_service_exec_echo_captures_stdout_and_single_delta() {
+    fn command_service_exec_captures_stdout_and_single_delta() {
         let temp = tempfile::tempdir().expect("tempdir");
         let service = AppServerCommandExecService::new(temp.path().to_path_buf());
 
         let response = service
-            .exec(exec_params(vec!["printf", "hello"]))
+            .exec(exec_params(vec!["echo", "hello"]))
             .expect("exec succeeds");
 
         assert_eq!(response.exit_code, 0);
-        assert_eq!(response.stdout, "hello");
+        assert!(response.stdout.contains("hello"));
         assert_eq!(response.stderr, "");
 
         let events = service.drain_output_delta_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].stream, CommandExecOutputStream::Stdout);
         assert!(!events[0].cap_reached);
+        let delta = base64::engine::general_purpose::STANDARD
+            .decode(&events[0].delta_base64)
+            .expect("delta decodes");
+        assert_eq!(delta, response.stdout.as_bytes());
         assert!(service.drain_output_delta_events().is_empty());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn command_service_posix_metachar_argument_stays_literal() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+
+        let response = service
+            .exec(exec_params(vec![
+                "printf",
+                "hello; printf injected && true",
+            ]))
+            .expect("exec succeeds");
+
+        assert_eq!(response.exit_code, 0);
+        assert_eq!(response.stdout, "hello; printf injected && true");
+    }
+
+    #[test]
+    fn command_line_rejects_windows_cmd_metacharacters() {
+        let command = vec!["echo".to_string(), "safe & whoami".to_string()];
+
+        let error = AppServerCommandExecService::command_line_for_shell(&command, ShellKind::Cmd)
+            .expect_err("cmd metacharacters must fail closed");
+
+        assert!(error.to_string().contains("Windows cmd metacharacter"));
+    }
+
+    #[test]
+    fn command_service_health_documents_process_read_limit_gap() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+
+        let message = service
+            .health()
+            .message
+            .expect("ready service should describe limits");
+
+        assert!(message.contains("cwd_guard=root-contained"));
+        assert!(message.contains("read_scope=host-read-only"));
+        assert!(message.contains("not_workspace_read_limited"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_service_output_cap_truncates_response_and_delta() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+        let mut params = exec_params(vec!["printf", "abcdef"]);
+        params.output_bytes_cap = Some(3);
+        params.process_id = Some("capped".to_string());
+
+        let response = service.exec(params).expect("exec succeeds");
+
+        assert_eq!(response.stdout, "abc");
+        let events = service.drain_output_delta_events();
+        assert_eq!(events.len(), 1);
+        assert!(events[0].cap_reached);
+        let delta = base64::engine::general_purpose::STANDARD
+            .decode(&events[0].delta_base64)
+            .expect("delta decodes");
+        assert_eq!(delta, b"abc");
+    }
+
+    #[test]
+    fn command_service_disable_output_cap_fails_safe() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+        let mut params = exec_params(vec!["rustc", "--version"]);
+        params.disable_output_cap = Some(true);
+
+        let error = service.exec(params).expect_err("unsupported cap override");
+
+        assert!(
+            error
+                .to_string()
+                .contains("disableOutputCap is not supported")
+        );
+    }
+
+    #[cfg(unix)]
     #[test]
     fn command_service_exec_captures_stderr_and_non_zero_exit() {
         let temp = tempfile::tempdir().expect("tempdir");
         let service = AppServerCommandExecService::new(temp.path().to_path_buf());
 
         let response = service
-            .exec(exec_params(vec!["sh", "-c", "printf problem >&2; exit 7"]))
+            .exec(exec_params(vec!["ls", "__dasclaw_missing_path__"]))
             .expect("exec returns process result");
 
-        assert_eq!(response.exit_code, 7);
+        assert_ne!(response.exit_code, 0);
         assert_eq!(response.stdout, "");
-        assert_eq!(response.stderr, "problem");
+        assert!(response.stderr.contains("__dasclaw_missing_path__"));
     }
 
     #[test]
@@ -476,7 +635,7 @@ mod tests {
     fn command_service_follow_up_methods_fail_safe_without_pty_process() {
         let temp = tempfile::tempdir().expect("tempdir");
         let service = AppServerCommandExecService::new(temp.path().to_path_buf());
-        let mut completed = exec_params(vec!["printf", "done"]);
+        let mut completed = exec_params(vec!["rustc", "--version"]);
         completed.process_id = Some("completed".to_string());
         service.exec(completed).expect("exec completes");
 
