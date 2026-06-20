@@ -21,6 +21,7 @@ use dasclaw_app_server_protocol::{
 use dasclaw_runtime::context::ContextManager;
 
 use crate::AppServerError;
+use crate::command_service::AppServerCommandExecService;
 use crate::fs_service::AppServerFsService;
 use crate::job_service::AppServerJobService;
 use crate::log_service::AppServerLogService;
@@ -188,15 +189,14 @@ impl AppServerServices {
     #[must_use]
     pub fn real() -> Self {
         let manager = Arc::new(ContextManager::default());
+        let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         Self {
             logs: Arc::new(AppServerLogService::new()),
             jobs: Arc::new(AppServerJobService::new(manager)),
             skills: Arc::new(AppServerSkillsService::new()),
             mcp: Arc::new(AppServerMcpService::default()),
-            filesystem: Arc::new(AppServerFsService::new(
-                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-            )),
-            command: Arc::new(NoopCommandExecService),
+            filesystem: Arc::new(AppServerFsService::new(root.clone())),
+            command: Arc::new(AppServerCommandExecService::new(root)),
         }
     }
 
@@ -1089,13 +1089,13 @@ mod tests {
     }
 
     #[test]
-    fn app_server_real_wires_filesystem_but_keeps_command_unavailable() {
+    fn app_server_real_wires_filesystem_and_command_exec() {
         let services = AppServerServices::real();
 
         let availability = services.availability();
         assert!(availability.p5.filesystem);
-        assert!(!availability.p5.command.exec);
-        assert!(!availability.p5.command.output_delta_events);
+        assert!(availability.p5.command.exec);
+        assert!(availability.p5.command.output_delta_events);
         assert!(!availability.p5.command.write);
         assert!(!availability.p5.command.terminate);
         assert!(!availability.p5.command.resize);

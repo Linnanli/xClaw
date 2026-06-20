@@ -23,7 +23,9 @@ dasclaw_llm_provider = { path = "../dasclaw_llm_provider" }
 dasclaw_mcp = { path = "../dasclaw_mcp" }
 dasclaw_observability = { path = "../dasclaw_observability" }
 dasclaw_runtime = { path = "../dasclaw_runtime" }
+dasclaw_shell_tools = { path = "../dasclaw_shell_tools" }
 dasclaw_tool = { path = "../dasclaw_tool" }
+dasclaw_workspace_cap = { path = "../dasclaw_workspace_cap" }
 futures-util = "0.3"
 secrecy = "0.10"
 serde = { version = "1", features = ["derive"] }
