@@ -1,5 +1,5 @@
 use std::collections::hash_map::Entry;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
@@ -27,6 +27,7 @@ use crate::blocking_runtime::BlockingTokioRuntime;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const COMMAND_EXEC_CAPABILITY: &str = "command_exec";
+const MAX_COMPLETED_COMMANDS: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShellKind {
@@ -39,7 +40,7 @@ pub struct AppServerCommandExecService {
     lexical_root: PathBuf,
     workspace: Result<WorkspaceCapability, String>,
     runtime: Mutex<Option<Result<BlockingTokioRuntime, AppServerError>>>,
-    completed: Arc<Mutex<HashMap<String, CompletedCommand>>>,
+    completed: Arc<Mutex<CompletedCommands>>,
     running: Arc<Mutex<HashMap<String, RunningProcess>>>,
     output_delta_events: Arc<Mutex<Vec<CommandExecOutputDeltaNotification>>>,
 }
@@ -49,9 +50,46 @@ struct CompletedCommand {
     response: CommandExecResponse,
 }
 
+#[derive(Debug, Default)]
+struct CompletedCommands {
+    by_process_id: HashMap<String, CompletedCommand>,
+    order: VecDeque<String>,
+}
+
+impl CompletedCommands {
+    fn insert(&mut self, process_id: String, command: CompletedCommand) {
+        if !self.by_process_id.contains_key(&process_id) {
+            self.order.push_back(process_id.clone());
+        }
+        self.by_process_id.insert(process_id, command);
+
+        while self.by_process_id.len() > MAX_COMPLETED_COMMANDS {
+            let Some(expired) = self.order.pop_front() else {
+                break;
+            };
+            self.by_process_id.remove(&expired);
+        }
+    }
+
+    fn get(&self, process_id: &str) -> Option<&CompletedCommand> {
+        self.by_process_id.get(process_id)
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.by_process_id.len()
+    }
+
+    #[cfg(test)]
+    fn contains_key(&self, process_id: &str) -> bool {
+        self.by_process_id.contains_key(process_id)
+    }
+}
+
 struct RunningCommand {
     control_tx: mpsc::Sender<CommandControl>,
     tty: bool,
+    stream_stdin: bool,
 }
 
 enum RunningProcess {
@@ -79,7 +117,7 @@ impl AppServerCommandExecService {
             lexical_root,
             workspace,
             runtime: Mutex::new(None),
-            completed: Arc::new(Mutex::new(HashMap::new())),
+            completed: Arc::new(Mutex::new(CompletedCommands::default())),
             running: Arc::new(Mutex::new(HashMap::new())),
             output_delta_events: Arc::new(Mutex::new(Vec::new())),
         }
@@ -273,17 +311,24 @@ impl AppServerCommandExecService {
                 "command must contain at least one argument",
             ));
         }
-        let process_id = params
-            .process_id
-            .as_ref()
-            .map(|process_id| process_id.trim())
-            .filter(|process_id| !process_id.is_empty())
-            .ok_or_else(|| {
-                AppServerError::invalid_request(
-                    COMMAND_EXEC_CAPABILITY,
-                    "streaming command exec requires a non-empty client processId",
-                )
-            })?;
+        let process_id = params.process_id.as_ref().ok_or_else(|| {
+            AppServerError::invalid_request(
+                COMMAND_EXEC_CAPABILITY,
+                "streaming command exec requires a non-empty client processId",
+            )
+        })?;
+        if process_id.trim().is_empty() {
+            return Err(AppServerError::invalid_request(
+                COMMAND_EXEC_CAPABILITY,
+                "streaming command exec requires a non-empty client processId",
+            ));
+        }
+        if process_id.trim() != process_id {
+            return Err(AppServerError::invalid_request(
+                COMMAND_EXEC_CAPABILITY,
+                "streaming command exec processId must not contain leading or trailing whitespace",
+            ));
+        }
         if !params.tty.unwrap_or(false)
             && (params.stream_stdin.unwrap_or(false)
                 || params.stream_stdout_stderr.unwrap_or(false))
@@ -302,7 +347,7 @@ impl AppServerCommandExecService {
                 "disableOutputCap is not supported by PTY streaming command exec",
             ));
         }
-        Ok(process_id.to_string())
+        Ok(process_id.clone())
     }
 
     fn exec_streaming(
@@ -312,6 +357,7 @@ impl AppServerCommandExecService {
         let process_id = Self::validate_streaming_exec_options(&params)?;
         let cwd = self.resolve_cwd(params.cwd.as_deref())?;
         let env = Self::env(params.env);
+        let stream_stdin = params.stream_stdin.unwrap_or(params.tty.unwrap_or(false));
         let size = params
             .size
             .unwrap_or(CommandExecTerminalSize { cols: 80, rows: 24 });
@@ -372,6 +418,7 @@ impl AppServerCommandExecService {
                 RunningProcess::Active(RunningCommand {
                     control_tx,
                     tty: true,
+                    stream_stdin,
                 }),
             );
 
@@ -406,14 +453,21 @@ impl AppServerCommandExecService {
         Ok(response)
     }
 
-    fn running_command(&self, process_id: &str) -> Option<(mpsc::Sender<CommandControl>, bool)> {
+    fn running_command(
+        &self,
+        process_id: &str,
+    ) -> Option<(mpsc::Sender<CommandControl>, bool, bool)> {
         self.running
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .get(process_id)
             .and_then(|running| match running {
                 RunningProcess::Reserved => None,
-                RunningProcess::Active(running) => Some((running.control_tx.clone(), running.tty)),
+                RunningProcess::Active(running) => Some((
+                    running.control_tx.clone(),
+                    running.tty,
+                    running.stream_stdin,
+                )),
             })
     }
 }
@@ -495,13 +549,18 @@ impl CommandExecService for AppServerCommandExecService {
             ));
         }
 
-        let Some((sender, _tty)) = self.running_command(&params.process_id) else {
+        let Some((sender, _tty, stream_stdin)) = self.running_command(&params.process_id) else {
             return Err(completed_or_unknown_process_error(
                 &self.completed,
                 &params.process_id,
                 "command stdin streaming is unavailable for completed non-interactive executions",
             ));
         };
+        if !stream_stdin {
+            return Err(command_unavailable(
+                "command stdin write requires streamStdin=true for the active process",
+            ));
+        }
 
         if let Some(delta_base64) = params.delta_base64 {
             let decoded = BASE64_STANDARD.decode(delta_base64).map_err(|_| {
@@ -526,7 +585,7 @@ impl CommandExecService for AppServerCommandExecService {
         &self,
         params: CommandExecTerminateParams,
     ) -> Result<CommandExecTerminateResponse, AppServerError> {
-        let Some((sender, _tty)) = self.running_command(&params.process_id) else {
+        let Some((sender, _tty, _stream_stdin)) = self.running_command(&params.process_id) else {
             return Err(completed_or_unknown_process_error(
                 &self.completed,
                 &params.process_id,
@@ -550,7 +609,7 @@ impl CommandExecService for AppServerCommandExecService {
             ));
         }
 
-        let Some((sender, tty)) = self.running_command(&params.process_id) else {
+        let Some((sender, tty, _stream_stdin)) = self.running_command(&params.process_id) else {
             return Err(completed_or_unknown_process_error(
                 &self.completed,
                 &params.process_id,
@@ -762,7 +821,7 @@ fn truncate_to_byte_cap(value: &mut String, cap: usize) -> bool {
 }
 
 fn completed_or_unknown_process_error(
-    completed: &Mutex<HashMap<String, CompletedCommand>>,
+    completed: &Mutex<CompletedCommands>,
     process_id: &str,
     completed_message: &'static str,
 ) -> AppServerError {
@@ -934,6 +993,55 @@ mod tests {
         assert!(availability.write);
         assert!(availability.terminate);
         assert!(availability.resize);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_service_streaming_pty_rejects_write_when_stdin_stream_disabled() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = Arc::new(AppServerCommandExecService::new(temp.path().to_path_buf()));
+        let process_id = "pty_stdout_only_session";
+        let mut params = exec_params(vec!["sh", "-c", "printf ready; sleep 30"]);
+        params.process_id = Some(process_id.to_string());
+        params.tty = Some(true);
+        params.stream_stdin = Some(false);
+        params.stream_stdout_stderr = Some(true);
+        params.disable_timeout = Some(true);
+
+        let exec_service = Arc::clone(&service);
+        let exec_thread = std::thread::spawn(move || exec_service.exec(params));
+
+        wait_for_output_delta(&service, process_id, "ready");
+
+        let error = service
+            .write(CommandExecWriteParams {
+                process_id: process_id.to_string(),
+                delta_base64: Some(BASE64_STANDARD.encode("unexpected\n")),
+                close_stdin: None,
+            })
+            .expect_err("stdin write must require streamStdin=true");
+        assert!(error.to_string().contains("streamStdin"));
+
+        let error = service
+            .write(CommandExecWriteParams {
+                process_id: process_id.to_string(),
+                delta_base64: None,
+                close_stdin: Some(true),
+            })
+            .expect_err("closeStdin must require streamStdin=true");
+        assert!(error.to_string().contains("streamStdin"));
+
+        service
+            .terminate(CommandExecTerminateParams {
+                process_id: process_id.to_string(),
+            })
+            .expect("terminate active process");
+        let response = exec_thread
+            .join()
+            .expect("exec thread should not panic")
+            .expect("streaming exec returns terminated result");
+
+        assert_ne!(response.exit_code, 0);
     }
 
     #[cfg(unix)]
@@ -1234,6 +1342,42 @@ mod tests {
             .expect_err("non-empty processId required");
 
         assert!(error.to_string().contains("processId"));
+    }
+
+    #[test]
+    fn command_service_streaming_rejects_process_id_with_outer_whitespace() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+        let mut params = exec_params(vec!["printf", "hello"]);
+        params.tty = Some(true);
+        params.process_id = Some(" proc ".to_string());
+
+        let error = service
+            .exec(params)
+            .expect_err("processId with outer whitespace must be rejected");
+
+        assert!(error.to_string().contains("processId"));
+        assert!(error.to_string().contains("whitespace"));
+    }
+
+    #[test]
+    fn command_service_completed_process_cache_is_bounded() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+
+        for index in 0..=MAX_COMPLETED_COMMANDS {
+            let mut params = exec_params(vec!["printf", "done"]);
+            params.process_id = Some(format!("completed_{index}"));
+            service.exec(params).expect("buffered exec succeeds");
+        }
+
+        let completed = service
+            .completed
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        assert_eq!(completed.len(), MAX_COMPLETED_COMMANDS);
+        assert!(!completed.contains_key("completed_0"));
+        assert!(completed.contains_key(&format!("completed_{MAX_COMPLETED_COMMANDS}")));
     }
 
     #[test]
