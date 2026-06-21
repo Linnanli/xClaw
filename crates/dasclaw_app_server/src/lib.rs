@@ -4866,12 +4866,12 @@ mod tests {
             stream_stdout_stderr: Some(true),
             tty: Some(true),
         };
-        let exec_thread = thread::spawn(move || service.exec(params).expect("exec response"));
         let mut server = AppServer::new().with_app_services(services);
         server
             .handle_json_rpc(initialized_request_json())
             .expect("initialize should return a response");
         let _ = server.drain_notifications();
+        let exec_thread = thread::spawn(move || service.exec(params).expect("exec response"));
         wait_for_command_service_output_delta(
             &*readiness_service,
             "route_stream_terminate",
@@ -4925,12 +4925,12 @@ mod tests {
             stream_stdout_stderr: Some(true),
             tty: Some(true),
         };
-        let exec_thread = thread::spawn(move || service.exec(params).expect("exec response"));
         let mut server = AppServer::new().with_app_services(services);
         server
             .handle_json_rpc(initialized_request_json())
             .expect("initialize should return a response");
         let _ = server.drain_notifications();
+        let exec_thread = thread::spawn(move || service.exec(params).expect("exec response"));
         wait_for_command_service_output_delta(&*readiness_service, "route_stream_resize", "ready");
 
         let resize = server
