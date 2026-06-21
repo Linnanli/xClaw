@@ -1,15 +1,20 @@
 use std::collections::{BTreeMap, HashMap};
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::sync::Mutex;
-use std::time::Duration;
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
+use std::time::{Duration, Instant};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use dasclaw_app_server_protocol::{
-    CommandExecAvailability, CommandExecOutputDeltaNotification, CommandExecParams,
-    CommandExecResizeParams, CommandExecResizeResponse, CommandExecResponse,
-    CommandExecTerminateParams, CommandExecTerminateResponse, CommandExecWriteParams,
-    CommandExecWriteResponse, ServiceHealth, ServiceName,
+    CommandExecAvailability, CommandExecOutputDeltaNotification, CommandExecOutputStream,
+    CommandExecParams, CommandExecResizeParams, CommandExecResizeResponse, CommandExecResponse,
+    CommandExecTerminalSize, CommandExecTerminateParams, CommandExecTerminateResponse,
+    CommandExecWriteParams, CommandExecWriteResponse, ServiceHealth, ServiceName,
 };
 use dasclaw_fs_tools::path_utils::{normalize_lexical, validate_path};
+use dasclaw_pty::{PtyExitStatus, PtySize, PtySpawnOptions, StreamingPty};
 use dasclaw_shell_tools::{SandboxedShellExecutor, ShellExecError};
 use dasclaw_workspace_cap::WorkspaceCapability;
 use dasclaw_workspace_cap::policy::SandboxPolicy;
@@ -33,13 +38,26 @@ pub struct AppServerCommandExecService {
     lexical_root: PathBuf,
     workspace: Result<WorkspaceCapability, String>,
     runtime: Mutex<Option<Result<BlockingTokioRuntime, AppServerError>>>,
-    completed: Mutex<HashMap<String, CompletedCommand>>,
-    output_delta_events: Mutex<Vec<CommandExecOutputDeltaNotification>>,
+    completed: Arc<Mutex<HashMap<String, CompletedCommand>>>,
+    running: Arc<Mutex<HashMap<String, RunningCommand>>>,
+    output_delta_events: Arc<Mutex<Vec<CommandExecOutputDeltaNotification>>>,
 }
 
 #[derive(Debug, Clone)]
 struct CompletedCommand {
     response: CommandExecResponse,
+}
+
+struct RunningCommand {
+    control_tx: mpsc::Sender<CommandControl>,
+    tty: bool,
+}
+
+enum CommandControl {
+    Write(Vec<u8>),
+    CloseStdin,
+    Terminate,
+    Resize(CommandExecTerminalSize),
 }
 
 impl AppServerCommandExecService {
@@ -53,8 +71,9 @@ impl AppServerCommandExecService {
             lexical_root,
             workspace,
             runtime: Mutex::new(None),
-            completed: Mutex::new(HashMap::new()),
-            output_delta_events: Mutex::new(Vec::new()),
+            completed: Arc::new(Mutex::new(HashMap::new())),
+            running: Arc::new(Mutex::new(HashMap::new())),
+            output_delta_events: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -194,7 +213,15 @@ impl AppServerCommandExecService {
         }
     }
 
-    fn reject_unsupported_exec_options(params: &CommandExecParams) -> Result<(), AppServerError> {
+    fn streaming_requested(params: &CommandExecParams) -> bool {
+        params.tty.unwrap_or(false)
+            || params.stream_stdin.unwrap_or(false)
+            || params.stream_stdout_stderr.unwrap_or(false)
+    }
+
+    fn reject_unsupported_buffered_exec_options(
+        params: &CommandExecParams,
+    ) -> Result<(), AppServerError> {
         if params.tty.unwrap_or(false) {
             return Err(command_unavailable("tty requires sandboxed PTY support"));
         }
@@ -228,6 +255,138 @@ impl AppServerCommandExecService {
         }
         Ok(())
     }
+
+    fn validate_streaming_exec_options(
+        params: &CommandExecParams,
+    ) -> Result<String, AppServerError> {
+        if params.command.is_empty() {
+            return Err(AppServerError::invalid_request(
+                COMMAND_EXEC_CAPABILITY,
+                "command must contain at least one argument",
+            ));
+        }
+        let process_id = params
+            .process_id
+            .as_ref()
+            .map(|process_id| process_id.trim())
+            .filter(|process_id| !process_id.is_empty())
+            .ok_or_else(|| {
+                AppServerError::invalid_request(
+                    COMMAND_EXEC_CAPABILITY,
+                    "streaming command exec requires a non-empty client processId",
+                )
+            })?;
+        if !params.tty.unwrap_or(false)
+            && (params.stream_stdin.unwrap_or(false)
+                || params.stream_stdout_stderr.unwrap_or(false))
+        {
+            return Err(command_unavailable(
+                "non-tty command streaming requires a streaming pipe backend",
+            ));
+        }
+        if params.sandbox_policy.is_some() {
+            return Err(command_unavailable(
+                "sandboxPolicy is not supported by PTY streaming command exec",
+            ));
+        }
+        if params.disable_output_cap.unwrap_or(false) {
+            return Err(command_unavailable(
+                "disableOutputCap is not supported by PTY streaming command exec",
+            ));
+        }
+        Ok(process_id.to_string())
+    }
+
+    fn exec_streaming(
+        &self,
+        params: CommandExecParams,
+    ) -> Result<CommandExecResponse, AppServerError> {
+        let process_id = Self::validate_streaming_exec_options(&params)?;
+        let cwd = self.resolve_cwd(params.cwd.as_deref())?;
+        let env = Self::env(params.env);
+        let size = params
+            .size
+            .unwrap_or(CommandExecTerminalSize { cols: 80, rows: 24 });
+        let timeout = if params.disable_timeout.unwrap_or(false) {
+            None
+        } else {
+            Some(
+                params
+                    .timeout_ms
+                    .map(Duration::from_millis)
+                    .unwrap_or(DEFAULT_TIMEOUT),
+            )
+        };
+
+        {
+            let running = self
+                .running
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            if running.contains_key(&process_id) {
+                return Err(command_unavailable(format!(
+                    "command process is already running: {process_id}"
+                )));
+            }
+        }
+
+        let process = dasclaw_pty::default_backend()
+            .spawn_process(PtySpawnOptions {
+                program: params.command[0].clone(),
+                args: params.command[1..].to_vec(),
+                cwd: Some(cwd),
+                env,
+                size: PtySize {
+                    rows: size.rows,
+                    cols: size.cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                },
+            })
+            .map_err(|error| command_unavailable(error.to_string()))?;
+
+        let (control_tx, control_rx) = mpsc::channel();
+        self.running
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .insert(
+                process_id.clone(),
+                RunningCommand {
+                    control_tx,
+                    tty: true,
+                },
+            );
+
+        spawn_pty_reader(
+            process_id.clone(),
+            process.reader,
+            Arc::clone(&self.output_delta_events),
+            params.output_bytes_cap,
+        );
+        spawn_pty_driver(
+            process_id,
+            process.writer,
+            process.control,
+            control_rx,
+            Arc::clone(&self.running),
+            Arc::clone(&self.completed),
+            timeout,
+        );
+
+        Ok(CommandExecResponse {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        })
+    }
+
+    fn running_command(&self, process_id: &str) -> Option<(mpsc::Sender<CommandControl>, bool)> {
+        self.running
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .get(process_id)
+            .map(|running| (running.control_tx.clone(), running.tty))
+    }
 }
 
 impl CommandExecService for AppServerCommandExecService {
@@ -236,7 +395,7 @@ impl CommandExecService for AppServerCommandExecService {
             Ok(_) => {
                 let mut health = ServiceHealth::ready(ServiceName::CommandExec);
                 health.message = Some(format!(
-                    "root={} cwd_guard=root-contained sandbox=read-only/no-network read_scope=host-read-only not_workspace_read_limited non_interactive=true streaming=false",
+                    "root={} cwd_guard=root-contained sandbox=read-only/no-network read_scope=host-read-only not_workspace_read_limited non_interactive=true streaming=pty tty=true non_tty_streaming=false",
                     self.root.display()
                 ));
                 health
@@ -254,7 +413,10 @@ impl CommandExecService for AppServerCommandExecService {
                 "workspace capability unavailable: {message}"
             )));
         }
-        Self::reject_unsupported_exec_options(&params)?;
+        if Self::streaming_requested(&params) {
+            return self.exec_streaming(params);
+        }
+        Self::reject_unsupported_buffered_exec_options(&params)?;
 
         let cwd = self.resolve_cwd(params.cwd.as_deref())?;
         let process_id = Self::process_id(&params);
@@ -296,33 +458,68 @@ impl CommandExecService for AppServerCommandExecService {
         &self,
         params: CommandExecWriteParams,
     ) -> Result<CommandExecWriteResponse, AppServerError> {
-        Err(completed_or_unknown_process_error(
-            &self.completed,
-            &params.process_id,
-            "command stdin streaming is unavailable for completed non-interactive executions",
-        ))
+        let Some((sender, _tty)) = self.running_command(&params.process_id) else {
+            return Err(completed_or_unknown_process_error(
+                &self.completed,
+                &params.process_id,
+                "command stdin streaming is unavailable for completed non-interactive executions",
+            ));
+        };
+
+        if let Some(delta_base64) = params.delta_base64 {
+            let decoded = BASE64_STANDARD.decode(delta_base64).map_err(|_| {
+                AppServerError::invalid_request(
+                    COMMAND_EXEC_CAPABILITY,
+                    "deltaBase64 must be valid base64",
+                )
+            })?;
+            sender
+                .send(CommandControl::Write(decoded))
+                .map_err(|_| command_unavailable("command process is no longer writable"))?;
+        }
+        if params.close_stdin.unwrap_or(false) {
+            let _ = sender.send(CommandControl::CloseStdin);
+        }
+        Ok(CommandExecWriteResponse::default())
     }
 
     fn terminate(
         &self,
         params: CommandExecTerminateParams,
     ) -> Result<CommandExecTerminateResponse, AppServerError> {
-        Err(completed_or_unknown_process_error(
-            &self.completed,
-            &params.process_id,
-            "command termination is unavailable for completed non-interactive executions",
-        ))
+        let Some((sender, _tty)) = self.running_command(&params.process_id) else {
+            return Err(completed_or_unknown_process_error(
+                &self.completed,
+                &params.process_id,
+                "command termination is unavailable for completed non-interactive executions",
+            ));
+        };
+        sender
+            .send(CommandControl::Terminate)
+            .map_err(|_| command_unavailable("command process is no longer running"))?;
+        Ok(CommandExecTerminateResponse::default())
     }
 
     fn resize(
         &self,
         params: CommandExecResizeParams,
     ) -> Result<CommandExecResizeResponse, AppServerError> {
-        Err(completed_or_unknown_process_error(
-            &self.completed,
-            &params.process_id,
-            "command resize is unavailable without PTY support",
-        ))
+        let Some((sender, tty)) = self.running_command(&params.process_id) else {
+            return Err(completed_or_unknown_process_error(
+                &self.completed,
+                &params.process_id,
+                "command resize is unavailable without an active PTY session",
+            ));
+        };
+        if !tty {
+            return Err(command_unavailable(
+                "command resize is unavailable without an active PTY session",
+            ));
+        }
+        sender
+            .send(CommandControl::Resize(params.size))
+            .map_err(|_| command_unavailable("command PTY session is no longer active"))?;
+        Ok(CommandExecResizeResponse::default())
     }
 
     fn drain_output_delta_events(&self) -> Vec<CommandExecOutputDeltaNotification> {
@@ -339,12 +536,148 @@ impl CommandExecService for AppServerCommandExecService {
         }
         CommandExecAvailability {
             exec: true,
-            output_delta_events: false,
-            terminate: false,
-            write: false,
-            resize: false,
+            output_delta_events: true,
+            terminate: true,
+            write: true,
+            resize: true,
         }
     }
+}
+
+fn spawn_pty_reader(
+    process_id: String,
+    mut reader: Box<dyn Read + Send>,
+    output_delta_events: Arc<Mutex<Vec<CommandExecOutputDeltaNotification>>>,
+    output_bytes_cap: Option<usize>,
+) {
+    thread::spawn(move || {
+        let mut buf = [0_u8; 8192];
+        let mut emitted = 0_usize;
+
+        loop {
+            let read = match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(_) => break,
+            };
+
+            let chunk = &buf[..read];
+            let (emit, cap_reached) = match output_bytes_cap {
+                Some(cap) if emitted >= cap => (&[][..], false),
+                Some(cap) => {
+                    let remaining = cap - emitted;
+                    if chunk.len() > remaining {
+                        (&chunk[..remaining], true)
+                    } else {
+                        (chunk, false)
+                    }
+                }
+                None => (chunk, false),
+            };
+
+            if emit.is_empty() {
+                continue;
+            }
+
+            emitted += emit.len();
+            let event = CommandExecOutputDeltaNotification {
+                process_id: process_id.clone(),
+                stream: CommandExecOutputStream::Stdout,
+                delta_base64: BASE64_STANDARD.encode(emit),
+                cap_reached,
+            };
+            output_delta_events
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .push(event);
+        }
+    });
+}
+
+fn spawn_pty_driver(
+    process_id: String,
+    writer: Box<dyn Write + Send>,
+    mut control: Box<dyn dasclaw_pty::PtyProcessControl>,
+    control_rx: mpsc::Receiver<CommandControl>,
+    running: Arc<Mutex<HashMap<String, RunningCommand>>>,
+    completed: Arc<Mutex<HashMap<String, CompletedCommand>>>,
+    timeout: Option<Duration>,
+) {
+    thread::spawn(move || {
+        let started = Instant::now();
+        let mut writer = Some(writer);
+        let exit_status = 'driver: loop {
+            while let Ok(command) = control_rx.try_recv() {
+                match command {
+                    CommandControl::Write(bytes) => {
+                        let Some(writer) = writer.as_mut() else {
+                            continue;
+                        };
+                        if writer.write_all(&bytes).is_err() {
+                            break 'driver control.try_wait().unwrap_or(PtyExitStatus::Signaled);
+                        }
+                    }
+                    CommandControl::CloseStdin => {
+                        if let Some(mut writer) = writer.take() {
+                            let _ = writer.flush();
+                        }
+                    }
+                    CommandControl::Terminate => {
+                        let _ = control.kill();
+                    }
+                    CommandControl::Resize(size) => {
+                        let _ = control.resize(PtySize {
+                            rows: size.rows,
+                            cols: size.cols,
+                            pixel_width: 0,
+                            pixel_height: 0,
+                        });
+                    }
+                }
+            }
+
+            match control.try_wait() {
+                Ok(status) if status.is_finished() => {
+                    break status;
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    break PtyExitStatus::Signaled;
+                }
+            }
+
+            if let Some(timeout) = timeout
+                && started.elapsed() >= timeout
+            {
+                let _ = control.kill();
+                break control.try_wait().unwrap_or(PtyExitStatus::Signaled);
+            }
+
+            thread::sleep(Duration::from_millis(25));
+        };
+
+        let exit_code = match exit_status {
+            PtyExitStatus::Exited(code) => code,
+            PtyExitStatus::Signaled | PtyExitStatus::Running => -1,
+        };
+        running
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(&process_id);
+        completed
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .insert(
+                process_id,
+                CompletedCommand {
+                    response: CommandExecResponse {
+                        exit_code,
+                        stdout: String::new(),
+                        stderr: String::new(),
+                    },
+                },
+            );
+    });
 }
 
 fn shell_quote(arg: &str) -> String {
@@ -419,10 +752,13 @@ fn command_unavailable(message: impl Into<String>) -> AppServerError {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    #[cfg(unix)]
+    use std::time::{Duration, Instant};
 
     use dasclaw_app_server_protocol::{
-        CommandExecParams, CommandExecResizeParams, CommandExecTerminalSize,
-        CommandExecTerminateParams, CommandExecWriteParams,
+        CommandExecOutputDeltaNotification, CommandExecOutputStream, CommandExecParams,
+        CommandExecResizeParams, CommandExecTerminalSize, CommandExecTerminateParams,
+        CommandExecWriteParams,
     };
 
     use super::*;
@@ -445,6 +781,35 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    fn wait_for_output_delta(
+        service: &AppServerCommandExecService,
+        process_id: &str,
+        needle: &str,
+    ) -> CommandExecOutputDeltaNotification {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            for event in service.drain_output_delta_events() {
+                if event.process_id != process_id {
+                    continue;
+                }
+                let decoded = BASE64_STANDARD
+                    .decode(&event.delta_base64)
+                    .expect("valid delta base64");
+                let text = String::from_utf8_lossy(&decoded);
+                if text.contains(needle) {
+                    return event;
+                }
+            }
+
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for output delta containing {needle:?}"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
     #[test]
     fn command_service_exec_captures_stdout_without_streaming_delta() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -461,22 +826,164 @@ mod tests {
     }
 
     #[test]
-    fn command_service_rejects_stream_stdout_stderr_without_streaming_owner() {
+    fn command_service_rejects_stream_stdout_stderr_without_tty_backend() {
         let temp = tempfile::tempdir().expect("tempdir");
         let service = AppServerCommandExecService::new(temp.path().to_path_buf());
         let mut params = exec_params(vec!["echo", "hello"]);
+        params.process_id = Some("non_tty_stdout".to_string());
         params.stream_stdout_stderr = Some(true);
 
         let error = service
             .exec(params)
-            .expect_err("streaming stdout/stderr unsupported");
+            .expect_err("non-tty streaming stdout/stderr unsupported");
 
-        assert!(
-            error
-                .to_string()
-                .contains("streamStdoutStderr requires streaming command support")
-        );
+        assert!(error.to_string().contains("streaming pipe backend"));
         assert!(service.drain_output_delta_events().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_service_streaming_pty_emits_output_delta_and_accepts_write() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+        let process_id = "pty_echo_session";
+        let mut params = exec_params(vec!["cat"]);
+        params.process_id = Some(process_id.to_string());
+        params.tty = Some(true);
+        params.stream_stdin = Some(true);
+        params.stream_stdout_stderr = Some(true);
+
+        service.exec(params).expect("streaming exec starts");
+        service
+            .write(CommandExecWriteParams {
+                process_id: process_id.to_string(),
+                delta_base64: Some(BASE64_STANDARD.encode("hello from stdin\n")),
+                close_stdin: None,
+            })
+            .expect("write succeeds");
+
+        let event = wait_for_output_delta(&service, process_id, "hello from stdin");
+
+        assert_eq!(event.stream, CommandExecOutputStream::Stdout);
+        service
+            .terminate(CommandExecTerminateParams {
+                process_id: process_id.to_string(),
+            })
+            .expect("terminate succeeds");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_service_streaming_pty_terminate_stops_running_process() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+        let process_id = "pty_sleep_session";
+        let mut params = exec_params(vec!["sh", "-c", "printf ready; sleep 30"]);
+        params.process_id = Some(process_id.to_string());
+        params.tty = Some(true);
+        params.stream_stdout_stderr = Some(true);
+        params.disable_timeout = Some(true);
+
+        service.exec(params).expect("streaming exec starts");
+        wait_for_output_delta(&service, process_id, "ready");
+
+        service
+            .terminate(CommandExecTerminateParams {
+                process_id: process_id.to_string(),
+            })
+            .expect("terminate active process");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match service.terminate(CommandExecTerminateParams {
+                process_id: process_id.to_string(),
+            }) {
+                Ok(_) => {}
+                Err(error) if error.to_string().contains("process already exited") => break,
+                Err(error) => panic!("unexpected terminate error: {error}"),
+            }
+            assert!(Instant::now() < deadline, "process did not stop");
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_service_streaming_pty_resize_accepts_active_session() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+        let process_id = "pty_resize_session";
+        let mut params = exec_params(vec!["sh", "-c", "printf ready; sleep 30"]);
+        params.process_id = Some(process_id.to_string());
+        params.tty = Some(true);
+        params.stream_stdout_stderr = Some(true);
+        params.size = Some(CommandExecTerminalSize { cols: 80, rows: 24 });
+        params.disable_timeout = Some(true);
+
+        service.exec(params).expect("streaming exec starts");
+        wait_for_output_delta(&service, process_id, "ready");
+
+        service
+            .resize(CommandExecResizeParams {
+                process_id: process_id.to_string(),
+                size: CommandExecTerminalSize {
+                    cols: 100,
+                    rows: 30,
+                },
+            })
+            .expect("resize active pty session");
+        service
+            .terminate(CommandExecTerminateParams {
+                process_id: process_id.to_string(),
+            })
+            .expect("terminate succeeds");
+    }
+
+    #[test]
+    fn command_service_streaming_requires_client_process_id() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+        let mut missing = exec_params(vec!["printf", "hello"]);
+        missing.tty = Some(true);
+
+        let error = service.exec(missing).expect_err("processId required");
+
+        assert!(error.to_string().contains("processId"));
+
+        let mut blank = exec_params(vec!["printf", "hello"]);
+        blank.tty = Some(true);
+        blank.process_id = Some("  ".to_string());
+
+        let error = service
+            .exec(blank)
+            .expect_err("non-empty processId required");
+
+        assert!(error.to_string().contains("processId"));
+    }
+
+    #[test]
+    fn command_service_non_tty_streaming_fails_safe_until_pipe_backend_exists() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+        let mut stdout = exec_params(vec!["printf", "hello"]);
+        stdout.process_id = Some("pipe_stdout".to_string());
+        stdout.stream_stdout_stderr = Some(true);
+
+        let error = service
+            .exec(stdout)
+            .expect_err("non-tty output streaming needs pipe backend");
+
+        assert!(error.to_string().contains("streaming pipe backend"));
+
+        let mut stdin = exec_params(vec!["cat"]);
+        stdin.process_id = Some("pipe_stdin".to_string());
+        stdin.stream_stdin = Some(true);
+
+        let error = service
+            .exec(stdin)
+            .expect_err("non-tty stdin streaming needs pipe backend");
+
+        assert!(error.to_string().contains("streaming pipe backend"));
     }
 
     #[cfg(unix)]
