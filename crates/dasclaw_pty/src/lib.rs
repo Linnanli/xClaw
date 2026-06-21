@@ -41,6 +41,7 @@ mod tests;
 pub use portable::PortablePtyBackend;
 
 use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -188,6 +189,42 @@ impl PtyExitStatus {
 pub trait Pty: Send + Sync {
     /// 启动一个进程，attach 到 PTY，返回可控的 child handle。
     fn spawn(&self, options: PtySpawnOptions) -> Result<Box<dyn PtyChild>, PtyError>;
+}
+
+/// 拆分后的 PTY process 句柄。
+///
+/// `reader` / `writer` 可被移动到不同线程；`control` 独立负责 resize、kill、
+/// wait 等进程控制动作。
+pub struct PtyProcess {
+    /// PTY master 的读端。
+    pub reader: Box<dyn Read + Send>,
+    /// PTY master 的写端。
+    pub writer: Box<dyn Write + Send>,
+    /// PTY child 控制端。
+    pub control: Box<dyn PtyProcessControl>,
+}
+
+/// 拆分后的 PTY child 控制句柄。
+pub trait PtyProcessControl: Send {
+    /// 调整终端尺寸。子进程通常会收到 SIGWINCH（Unix）。
+    fn resize(&mut self, size: PtySize) -> Result<(), PtyError>;
+
+    /// 强制 kill child（SIGKILL on Unix / TerminateProcess on Windows）。
+    /// 如果 child 已退出，**返回 Ok(())**（幂等）。
+    fn kill(&mut self) -> Result<(), PtyError>;
+
+    /// 非阻塞查询 child 当前状态。
+    fn try_wait(&mut self) -> Result<PtyExitStatus, PtyError>;
+
+    /// 阻塞等待 child 退出，最多 `timeout`。`None` = 无限等。
+    /// 超时时**不**自动 kill；调用方决定是否 kill 后再等。
+    fn wait_for_exit(&mut self, timeout: Option<Duration>) -> Result<PtyExitStatus, PtyError>;
+}
+
+/// 支持拆分读、写、控制句柄的 PTY 后端 trait。
+pub trait StreamingPty: Pty {
+    /// 启动一个进程，attach 到 PTY，返回拆分后的 process 句柄。
+    fn spawn_process(&self, options: PtySpawnOptions) -> Result<PtyProcess, PtyError>;
 }
 
 /// 已 spawn 的 PTY child 控制句柄。

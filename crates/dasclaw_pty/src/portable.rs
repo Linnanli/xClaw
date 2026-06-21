@@ -12,7 +12,10 @@ use std::time::{Duration, Instant};
 
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtyPair, PtySystem};
 
-use crate::{Pty, PtyChild, PtyError, PtyExitStatus, PtySize, PtySpawnOptions};
+use crate::{
+    Pty, PtyChild, PtyError, PtyExitStatus, PtyProcess, PtyProcessControl, PtySize,
+    PtySpawnOptions, StreamingPty,
+};
 
 /// 默认实装：基于 `portable-pty`。
 ///
@@ -29,6 +32,17 @@ impl PortablePtyBackend {
 
 impl Pty for PortablePtyBackend {
     fn spawn(&self, options: PtySpawnOptions) -> Result<Box<dyn PtyChild>, PtyError> {
+        let process = self.spawn_process(options)?;
+        Ok(Box::new(PortablePtyChild {
+            reader: process.reader,
+            writer: process.writer,
+            control: process.control,
+        }))
+    }
+}
+
+impl StreamingPty for PortablePtyBackend {
+    fn spawn_process(&self, options: PtySpawnOptions) -> Result<PtyProcess, PtyError> {
         let pty_system: Box<dyn PtySystem> = native_pty_system();
         let pair: PtyPair = pty_system
             .openpty(to_portable_size(options.size))
@@ -65,19 +79,25 @@ impl Pty for PortablePtyBackend {
         // 持有 master 用于 resize；slave 显式 drop 以释放 fd（child 已 fork）。
         drop(pair.slave);
 
-        Ok(Box::new(PortablePtyChild {
-            master: pair.master,
+        Ok(PtyProcess {
             reader,
             writer,
-            child,
-        }))
+            control: Box::new(PortablePtyControl {
+                master: pair.master,
+                child,
+            }),
+        })
     }
 }
 
 struct PortablePtyChild {
-    master: Box<dyn MasterPty + Send>,
     reader: Box<dyn Read + Send>,
     writer: Box<dyn Write + Send>,
+    control: Box<dyn PtyProcessControl>,
+}
+
+struct PortablePtyControl {
+    master: Box<dyn MasterPty + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
 }
 
@@ -90,6 +110,24 @@ impl PtyChild for PortablePtyChild {
         self.reader.read(buf).map_err(PtyError::Read)
     }
 
+    fn resize(&mut self, size: PtySize) -> Result<(), PtyError> {
+        self.control.resize(size)
+    }
+
+    fn kill(&mut self) -> Result<(), PtyError> {
+        self.control.kill()
+    }
+
+    fn try_wait(&mut self) -> Result<PtyExitStatus, PtyError> {
+        self.control.try_wait()
+    }
+
+    fn wait_for_exit(&mut self, timeout: Option<Duration>) -> Result<PtyExitStatus, PtyError> {
+        self.control.wait_for_exit(timeout)
+    }
+}
+
+impl PtyProcessControl for PortablePtyControl {
     fn resize(&mut self, size: PtySize) -> Result<(), PtyError> {
         self.master
             .resize(to_portable_size(size))
@@ -121,25 +159,32 @@ impl PtyChild for PortablePtyChild {
     }
 
     fn wait_for_exit(&mut self, timeout: Option<Duration>) -> Result<PtyExitStatus, PtyError> {
-        // portable-pty 没有原生 timeout wait API；用 try_wait + 轮询模拟。
-        // 轮询间隔 25ms 在交互响应（< 一帧）和 CPU 占用间取中庸值。
-        const POLL_INTERVAL: Duration = Duration::from_millis(25);
-        let deadline = timeout.map(|t| (Instant::now() + t, t));
+        wait_for_exit_by_polling(timeout, || self.try_wait())
+    }
+}
 
-        loop {
-            match self.try_wait()? {
-                PtyExitStatus::Running => {}
-                done => return Ok(done),
-            }
+fn wait_for_exit_by_polling(
+    timeout: Option<Duration>,
+    mut try_wait: impl FnMut() -> Result<PtyExitStatus, PtyError>,
+) -> Result<PtyExitStatus, PtyError> {
+    // portable-pty 没有原生 timeout wait API；用 try_wait + 轮询模拟。
+    // 轮询间隔 25ms 在交互响应（< 一帧）和 CPU 占用间取中庸值。
+    const POLL_INTERVAL: Duration = Duration::from_millis(25);
+    let deadline = timeout.map(|t| (Instant::now() + t, t));
 
-            if let Some((deadline, total)) = deadline {
-                if Instant::now() >= deadline {
-                    return Err(PtyError::WaitTimeout(total));
-                }
-            }
-
-            thread::sleep(POLL_INTERVAL);
+    loop {
+        match try_wait()? {
+            PtyExitStatus::Running => {}
+            done => return Ok(done),
         }
+
+        if let Some((deadline, total)) = deadline {
+            if Instant::now() >= deadline {
+                return Err(PtyError::WaitTimeout(total));
+            }
+        }
+
+        thread::sleep(POLL_INTERVAL);
     }
 }
 

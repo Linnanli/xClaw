@@ -5,9 +5,12 @@
 //! 验证编译与构造路径，不验真实 spawn — 等 W2.4 Windows sandbox 成型后
 //! 一起补 ConPTY smoke 测试。
 
+use std::io::{Read, Write};
 use std::time::Duration;
 
-use crate::{default_backend, PortablePtyBackend, Pty, PtyExitStatus, PtySize, PtySpawnOptions};
+use crate::{
+    default_backend, PortablePtyBackend, Pty, PtyExitStatus, PtySize, PtySpawnOptions, StreamingPty,
+};
 
 #[test]
 fn pty_size_default_is_24x80() {
@@ -153,6 +156,54 @@ fn write_to_cat_is_echoed_back() {
     assert!(
         observed.contains("sentinel"),
         "expected sentinel echoed back, got {observed:?}",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn split_process_allows_read_write_and_wait_without_shared_child_lock() {
+    let backend = PortablePtyBackend::new();
+    let process = backend
+        .spawn_process(
+            PtySpawnOptions::new("/bin/sh")
+                .with_args(["-c", "printf ready; read line; printf \"got:$line\""]),
+        )
+        .expect("spawn split process");
+
+    let mut reader = process.reader;
+    let mut writer = process.writer;
+    let mut control = process.control;
+
+    let reader_thread = std::thread::spawn(move || {
+        let mut buf = [0u8; 256];
+        let mut collected = Vec::new();
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => collected.extend_from_slice(&buf[..n]),
+                Err(_) => break,
+            }
+        }
+        collected
+    });
+
+    writer.write_all(b"hello\n").expect("write to split writer");
+    drop(writer);
+
+    let status = control
+        .wait_for_exit(Some(Duration::from_secs(5)))
+        .expect("split process exits");
+    let output = reader_thread.join().expect("reader thread joins");
+    let output = String::from_utf8_lossy(&output);
+
+    assert!(status.is_success(), "expected success, got {status:?}");
+    assert!(
+        output.contains("ready"),
+        "expected ready in PTY output, got {output:?}",
+    );
+    assert!(
+        output.contains("got:hello"),
+        "expected got:hello in PTY output, got {output:?}",
     );
 }
 
