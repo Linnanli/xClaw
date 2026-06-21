@@ -1285,6 +1285,9 @@ impl AppServer {
         if incoming.method != method::COMMAND_EXEC {
             return DetachedCommandExecDispatch::NotDetached;
         }
+        if incoming.jsonrpc != JSON_RPC_VERSION {
+            return DetachedCommandExecDispatch::NotDetached;
+        }
         let Some(params_value) = incoming.params.clone() else {
             return DetachedCommandExecDispatch::NotDetached;
         };
@@ -9105,6 +9108,60 @@ mod tests {
                 .iter()
                 .any(|value| value.get("id").is_some_and(|id| id == "cmd")),
             "command/exec notification must not emit a response: {text}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stdio_streaming_command_exec_invalid_jsonrpc_version_does_not_spawn() {
+        let temp = TestDir::new("stdio_streaming_command_exec_bad_version");
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            command_service::AppServerCommandExecService::new(temp.path().to_path_buf()),
+        );
+        let server = AppServer::new().with_app_services(services);
+        let initialize = initialized_request_json();
+        let exec = serde_json::json!({
+            "jsonrpc": "1.0",
+            "id": "bad-stream",
+            "method": "command/exec",
+            "params": {
+                "command": ["sh", "-c", "printf should-not-run"],
+                "processId": "stdio_bad_version_proc",
+                "tty": true,
+                "streamStdoutStderr": true
+            }
+        });
+
+        let input = format!("{initialize}\n{exec}\n");
+        let mut output = Vec::new();
+        run_stdio_server_with_app_server(
+            server,
+            std::io::BufReader::new(Cursor::new(input)),
+            &mut output,
+        )
+        .expect("stdio server should complete");
+
+        let text = String::from_utf8(output).expect("stdio output utf8");
+        let values = text
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("json line"))
+            .collect::<Vec<_>>();
+
+        let response = values
+            .iter()
+            .find(|value| value["id"] == "bad-stream")
+            .expect("invalid JSON-RPC version should return a response");
+        assert_eq!(response["error"]["data"]["code"], "INVALID_PARAMS");
+        assert!(
+            !values
+                .iter()
+                .any(|value| value["method"] == event::COMMAND_EXEC_OUTPUT_DELTA),
+            "invalid JSON-RPC version must not spawn command exec: {text}"
         );
     }
 
