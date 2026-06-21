@@ -882,6 +882,19 @@ mod test_fakes {
             }
         }
 
+        pub fn ready_streaming() -> Self {
+            Self {
+                availability: CommandExecAvailability {
+                    exec: true,
+                    output_delta_events: true,
+                    terminate: true,
+                    write: true,
+                    resize: true,
+                },
+                output_delta_events: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
         pub fn disabled() -> Self {
             Self {
                 availability: CommandExecAvailability::default(),

@@ -4057,6 +4057,44 @@ mod tests {
     }
 
     #[test]
+    fn app_server_ready_p5_streaming_command_capabilities_are_advertised() {
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            app_services::TestCommandExecService::ready_streaming(),
+        );
+        let mut server = AppServer::new().with_app_services(services);
+
+        let command = server.capabilities().capabilities.command_exec;
+
+        assert_eq!(command.status, CapabilityStatus::Implemented);
+        assert!(command.methods.contains(&method::COMMAND_EXEC.to_string()));
+        assert!(
+            command
+                .methods
+                .contains(&method::COMMAND_EXEC_WRITE.to_string())
+        );
+        assert!(
+            command
+                .methods
+                .contains(&method::COMMAND_EXEC_TERMINATE.to_string())
+        );
+        assert!(
+            command
+                .methods
+                .contains(&method::COMMAND_EXEC_RESIZE.to_string())
+        );
+        assert!(
+            command
+                .events
+                .contains(&event::COMMAND_EXEC_OUTPUT_DELTA.to_string())
+        );
+    }
+
+    #[test]
     fn app_server_ready_p5_routes_require_initialize_before_service_owner() {
         let services = app_services::AppServerServices::for_tests(
             app_services::TestLogService::ready(),
