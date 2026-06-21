@@ -59,11 +59,13 @@ enum RunningProcess {
     Active(RunningCommand),
 }
 
+type ControlAck = mpsc::Sender<Result<(), String>>;
+
 enum CommandControl {
     Write(Vec<u8>),
     CloseStdin,
     Terminate,
-    Resize(CommandExecTerminalSize),
+    Resize(CommandExecTerminalSize, ControlAck),
 }
 
 impl AppServerCommandExecService {
@@ -485,6 +487,14 @@ impl CommandExecService for AppServerCommandExecService {
         &self,
         params: CommandExecWriteParams,
     ) -> Result<CommandExecWriteResponse, AppServerError> {
+        let close_stdin = params.close_stdin.unwrap_or(false);
+        if params.delta_base64.is_none() && !close_stdin {
+            return Err(AppServerError::invalid_request(
+                COMMAND_EXEC_CAPABILITY,
+                "command write requires deltaBase64 or closeStdin=true",
+            ));
+        }
+
         let Some((sender, _tty)) = self.running_command(&params.process_id) else {
             return Err(completed_or_unknown_process_error(
                 &self.completed,
@@ -504,8 +514,10 @@ impl CommandExecService for AppServerCommandExecService {
                 .send(CommandControl::Write(decoded))
                 .map_err(|_| command_unavailable("command process is no longer writable"))?;
         }
-        if params.close_stdin.unwrap_or(false) {
-            let _ = sender.send(CommandControl::CloseStdin);
+        if close_stdin {
+            sender
+                .send(CommandControl::CloseStdin)
+                .map_err(|_| command_unavailable("command process is no longer writable"))?;
         }
         Ok(CommandExecWriteResponse::default())
     }
@@ -531,6 +543,13 @@ impl CommandExecService for AppServerCommandExecService {
         &self,
         params: CommandExecResizeParams,
     ) -> Result<CommandExecResizeResponse, AppServerError> {
+        if params.size.rows == 0 || params.size.cols == 0 {
+            return Err(AppServerError::invalid_request(
+                COMMAND_EXEC_CAPABILITY,
+                "command resize rows and cols must be greater than zero",
+            ));
+        }
+
         let Some((sender, tty)) = self.running_command(&params.process_id) else {
             return Err(completed_or_unknown_process_error(
                 &self.completed,
@@ -543,9 +562,14 @@ impl CommandExecService for AppServerCommandExecService {
                 "command resize is unavailable without an active PTY session",
             ));
         }
+        let (ack_tx, ack_rx) = mpsc::channel();
         sender
-            .send(CommandControl::Resize(params.size))
+            .send(CommandControl::Resize(params.size, ack_tx))
             .map_err(|_| command_unavailable("command PTY session is no longer active"))?;
+        ack_rx
+            .recv()
+            .map_err(|_| command_unavailable("command PTY session is no longer active"))?
+            .map_err(command_unavailable)?;
         Ok(CommandExecResizeResponse::default())
     }
 
@@ -593,7 +617,7 @@ fn spawn_pty_reader(
                 Some(cap) if emitted >= cap => (&[][..], false),
                 Some(cap) => {
                     let remaining = cap - emitted;
-                    if chunk.len() > remaining {
+                    if chunk.len() >= remaining {
                         (&chunk[..remaining], true)
                     } else {
                         (chunk, false)
@@ -649,13 +673,16 @@ fn drive_pty_process(
                     let _ = control.kill();
                     break 'driver wait_after_kill(&mut *control);
                 }
-                CommandControl::Resize(size) => {
-                    let _ = control.resize(PtySize {
-                        rows: size.rows,
-                        cols: size.cols,
-                        pixel_width: 0,
-                        pixel_height: 0,
-                    });
+                CommandControl::Resize(size, ack_tx) => {
+                    let result = control
+                        .resize(PtySize {
+                            rows: size.rows,
+                            cols: size.cols,
+                            pixel_width: 0,
+                            pixel_height: 0,
+                        })
+                        .map_err(|error| error.to_string());
+                    let _ = ack_tx.send(result);
                 }
             }
         }
@@ -985,6 +1012,157 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn command_service_write_rejects_empty_stdin_control() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = Arc::new(AppServerCommandExecService::new(temp.path().to_path_buf()));
+        let process_id = "pty_empty_write_session";
+        let mut params = exec_params(vec!["sh", "-c", "printf ready; IFS= read -r line"]);
+        params.process_id = Some(process_id.to_string());
+        params.tty = Some(true);
+        params.stream_stdin = Some(true);
+        params.stream_stdout_stderr = Some(true);
+        params.disable_timeout = Some(true);
+
+        let exec_service = Arc::clone(&service);
+        let exec_thread = std::thread::spawn(move || exec_service.exec(params));
+
+        wait_for_output_delta(&service, process_id, "ready");
+
+        let error = service
+            .write(CommandExecWriteParams {
+                process_id: process_id.to_string(),
+                delta_base64: None,
+                close_stdin: None,
+            })
+            .expect_err("empty stdin control must be rejected");
+        assert!(error.to_string().contains("deltaBase64 or closeStdin"));
+
+        service
+            .write(CommandExecWriteParams {
+                process_id: process_id.to_string(),
+                delta_base64: Some(BASE64_STANDARD.encode("\n")),
+                close_stdin: None,
+            })
+            .expect("write newline to finish process");
+        let response = exec_thread
+            .join()
+            .expect("exec thread should not panic")
+            .expect("streaming exec succeeds");
+
+        assert_eq!(response.exit_code, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_service_write_accepts_close_only_control() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = Arc::new(AppServerCommandExecService::new(temp.path().to_path_buf()));
+        let process_id = "pty_close_only_session";
+        let mut params = exec_params(vec!["sh", "-c", "printf ready; sleep 30"]);
+        params.process_id = Some(process_id.to_string());
+        params.tty = Some(true);
+        params.stream_stdin = Some(true);
+        params.stream_stdout_stderr = Some(true);
+        params.disable_timeout = Some(true);
+
+        let exec_service = Arc::clone(&service);
+        let exec_thread = std::thread::spawn(move || exec_service.exec(params));
+
+        wait_for_output_delta(&service, process_id, "ready");
+
+        service
+            .write(CommandExecWriteParams {
+                process_id: process_id.to_string(),
+                delta_base64: None,
+                close_stdin: Some(true),
+            })
+            .expect("close-only control succeeds");
+        service
+            .terminate(CommandExecTerminateParams {
+                process_id: process_id.to_string(),
+            })
+            .expect("terminate active process");
+        let response = exec_thread
+            .join()
+            .expect("exec thread should not panic")
+            .expect("streaming exec returns terminated result");
+
+        assert_ne!(response.exit_code, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_service_resize_rejects_zero_terminal_size() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = Arc::new(AppServerCommandExecService::new(temp.path().to_path_buf()));
+        let process_id = "pty_zero_resize_session";
+        let mut params = exec_params(vec!["sh", "-c", "printf ready; IFS= read -r line"]);
+        params.process_id = Some(process_id.to_string());
+        params.tty = Some(true);
+        params.stream_stdin = Some(true);
+        params.stream_stdout_stderr = Some(true);
+        params.disable_timeout = Some(true);
+
+        let exec_service = Arc::clone(&service);
+        let exec_thread = std::thread::spawn(move || exec_service.exec(params));
+
+        wait_for_output_delta(&service, process_id, "ready");
+
+        for size in [
+            CommandExecTerminalSize { cols: 0, rows: 24 },
+            CommandExecTerminalSize { cols: 80, rows: 0 },
+        ] {
+            let error = service
+                .resize(CommandExecResizeParams {
+                    process_id: process_id.to_string(),
+                    size,
+                })
+                .expect_err("zero terminal dimension must be rejected");
+            assert!(error.to_string().contains("greater than zero"));
+        }
+
+        service
+            .write(CommandExecWriteParams {
+                process_id: process_id.to_string(),
+                delta_base64: Some(BASE64_STANDARD.encode("\n")),
+                close_stdin: None,
+            })
+            .expect("write newline to finish process");
+        let response = exec_thread
+            .join()
+            .expect("exec thread should not panic")
+            .expect("streaming exec succeeds");
+
+        assert_eq!(response.exit_code, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_service_streaming_output_cap_reports_cap_reached() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let service = AppServerCommandExecService::new(temp.path().to_path_buf());
+        let mut params = exec_params(vec!["sh", "-c", "printf abc"]);
+        params.process_id = Some("pty_exact_cap_session".to_string());
+        params.tty = Some(true);
+        params.stream_stdout_stderr = Some(true);
+        params.output_bytes_cap = Some(3);
+
+        let response = service.exec(params).expect("streaming exec succeeds");
+        let events = service.drain_output_delta_events();
+        let capped_event = events
+            .iter()
+            .find(|event| event.cap_reached)
+            .expect("exact cap should report capReached=true");
+        let decoded = BASE64_STANDARD
+            .decode(&capped_event.delta_base64)
+            .expect("valid delta base64");
+
+        assert_eq!(response.exit_code, 0);
+        assert_eq!(decoded, b"abc");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn command_service_streaming_rejects_duplicate_active_process_id() {
         let temp = tempfile::tempdir().expect("tempdir");
         let service = Arc::new(AppServerCommandExecService::new(temp.path().to_path_buf()));
@@ -1268,6 +1446,15 @@ mod tests {
             service
                 .terminate(CommandExecTerminateParams {
                     process_id: "completed".to_string(),
+                })
+                .is_err()
+        );
+        assert!(
+            service
+                .write(CommandExecWriteParams {
+                    process_id: "completed".to_string(),
+                    delta_base64: None,
+                    close_stdin: Some(true),
                 })
                 .is_err()
         );
