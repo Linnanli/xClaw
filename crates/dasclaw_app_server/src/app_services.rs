@@ -145,6 +145,10 @@ pub trait CommandExecService: Send + Sync {
         Vec::new()
     }
 
+    fn has_active_process(&self, _process_id: &str) -> bool {
+        false
+    }
+
     fn availability(&self) -> CommandExecAvailability {
         CommandExecAvailability::default()
     }

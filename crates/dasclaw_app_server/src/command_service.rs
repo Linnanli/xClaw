@@ -581,6 +581,10 @@ impl CommandExecService for AppServerCommandExecService {
             .collect()
     }
 
+    fn has_active_process(&self, process_id: &str) -> bool {
+        self.running_command(process_id).is_some()
+    }
+
     fn availability(&self) -> CommandExecAvailability {
         if self.workspace.is_err() {
             return CommandExecAvailability::default();

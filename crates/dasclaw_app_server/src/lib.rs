@@ -38,9 +38,9 @@ use dasclaw_app_server_protocol::{
     FsUnwatchResponse, FsWatchParams, FsWatchResponse, FsWriteFileParams, FsWriteFileResponse,
     HealthCheckParams, HealthCheckResponse, InitializeParams, InitializeResponse,
     ItemCompletedEvent, ItemStartedEvent, JobListParams, JobListResponse, JobReadParams,
-    JobReadResponse, JsonRpcClientResponse, JsonRpcError, JsonRpcRequest, JsonRpcResponse,
-    JsonRpcServerRequest, LifecycleChangedEvent, LifecycleReason, LifecycleSnapshot,
-    LifecycleState, LifecycleStatusResponse, ListMcpServerStatusParams,
+    JobReadResponse, JsonRpcClientResponse, JsonRpcError, JsonRpcIncoming, JsonRpcRequest,
+    JsonRpcResponse, JsonRpcServerRequest, LifecycleChangedEvent, LifecycleReason,
+    LifecycleSnapshot, LifecycleState, LifecycleStatusResponse, ListMcpServerStatusParams,
     ListMcpServerStatusResponse, LogEntryEvent, McpResourceReadParams, McpResourceReadResponse,
     McpServerOauthLoginCompletedNotification, McpServerOauthLoginParams,
     McpServerOauthLoginResponse, McpServerReloadParams, McpServerReloadResponse,
@@ -1271,6 +1271,61 @@ impl AppServer {
         response.map(|response| serialize_response(&response))
     }
 
+    fn try_spawn_detached_command_exec(
+        &self,
+        input: &str,
+        response_sender: mpsc::Sender<DetachedResponse>,
+    ) -> DetachedCommandExecDispatch {
+        let incoming = match serde_json::from_str::<JsonRpcIncoming>(input) {
+            Ok(JsonRpcIncoming::Request(request)) => request,
+            Ok(JsonRpcIncoming::ClientResponse(_)) | Err(_) => {
+                return DetachedCommandExecDispatch::NotDetached;
+            }
+        };
+        if incoming.method != method::COMMAND_EXEC {
+            return DetachedCommandExecDispatch::NotDetached;
+        }
+        let Some(params_value) = incoming.params.clone() else {
+            return DetachedCommandExecDispatch::NotDetached;
+        };
+        let params = match serde_json::from_value::<CommandExecParams>(params_value) {
+            Ok(params) => params,
+            Err(_) => return DetachedCommandExecDispatch::NotDetached,
+        };
+        let streaming = params.tty.unwrap_or(false)
+            || params.stream_stdin.unwrap_or(false)
+            || params.stream_stdout_stderr.unwrap_or(false);
+        if !streaming {
+            return DetachedCommandExecDispatch::NotDetached;
+        }
+
+        let is_notification = incoming.id.is_none();
+        let process_id = params.process_id.clone();
+        if let Err(error) = self.require_initialized("command_exec") {
+            if is_notification {
+                return DetachedCommandExecDispatch::NotDetached;
+            }
+            return DetachedCommandExecDispatch::ImmediateResponse(serialize_response(
+                &app_error_response(incoming.id, error),
+            ));
+        }
+
+        let id = incoming.id;
+        let command = Arc::clone(&self.app_services.command);
+        thread::spawn(move || {
+            let response = match command.exec(params) {
+                Ok(result) => json_rpc_ok(id.clone(), result),
+                Err(error) => app_error_response(id.clone(), error),
+            };
+            if !is_notification {
+                let _ = response_sender.send(DetachedResponse {
+                    json: serialize_response(&response),
+                });
+            }
+        });
+        DetachedCommandExecDispatch::Spawned { process_id }
+    }
+
     fn route_json_rpc(&mut self, request: JsonRpcRequest) -> Option<JsonRpcResponse> {
         let is_notification = request.id.is_none();
         if request.jsonrpc != JSON_RPC_VERSION {
@@ -2220,6 +2275,8 @@ where
     W: Write,
 {
     let (line_sender, line_receiver) = mpsc::channel();
+    let (detached_response_sender, detached_response_receiver) =
+        mpsc::channel::<DetachedResponse>();
     let _reader_thread = std::thread::spawn(move || {
         for line in reader.lines() {
             if line_sender.send(line).is_err() {
@@ -2229,13 +2286,36 @@ where
     });
 
     let mut input_closed_at = None;
+    let mut detached_inflight = 0_usize;
     loop {
         match line_receiver.recv_timeout(STDIO_NOTIFICATION_POLL_INTERVAL) {
             Ok(Ok(line)) => {
                 input_closed_at = None;
                 if !line.trim().is_empty() {
-                    let response = server.handle_json_rpc(&line);
+                    let response = match server
+                        .try_spawn_detached_command_exec(&line, detached_response_sender.clone())
+                    {
+                        DetachedCommandExecDispatch::Spawned { process_id } => {
+                            detached_inflight += 1;
+                            if let Some(process_id) = process_id {
+                                let detached_written = wait_for_detached_command_process(
+                                    &server,
+                                    &process_id,
+                                    &detached_response_receiver,
+                                    &mut writer,
+                                )?;
+                                detached_inflight =
+                                    detached_inflight.saturating_sub(detached_written);
+                            }
+                            None
+                        }
+                        DetachedCommandExecDispatch::ImmediateResponse(response) => Some(response),
+                        DetachedCommandExecDispatch::NotDetached => server.handle_json_rpc(&line),
+                    };
                     let notification_write = write_pending_notifications(&mut server, &mut writer)?;
+                    let detached_written =
+                        write_detached_responses(&detached_response_receiver, &mut writer)?;
+                    detached_inflight = detached_inflight.saturating_sub(detached_written);
                     if notification_write.should_disconnect {
                         writer.flush()?;
                         break;
@@ -2257,7 +2337,9 @@ where
         }
 
         let notification_write = write_pending_notifications(&mut server, &mut writer)?;
-        if notification_write.wrote {
+        let detached_written = write_detached_responses(&detached_response_receiver, &mut writer)?;
+        detached_inflight = detached_inflight.saturating_sub(detached_written);
+        if notification_write.wrote || detached_written > 0 {
             writer.flush()?;
             if input_closed_at.is_some() {
                 input_closed_at = Some(Instant::now());
@@ -2269,14 +2351,28 @@ where
         if server.is_stopped() {
             break;
         }
-        if input_closed_at.is_some_and(|closed_at| closed_at.elapsed() >= STDIO_EOF_DRAIN_TIMEOUT) {
+        if detached_inflight == 0
+            && input_closed_at
+                .is_some_and(|closed_at| closed_at.elapsed() >= STDIO_EOF_DRAIN_TIMEOUT)
+        {
             break;
         }
     }
 
     let _ = write_pending_notifications(&mut server, &mut writer)?;
+    let _ = write_detached_responses(&detached_response_receiver, &mut writer)?;
     writer.flush()?;
     Ok(())
+}
+
+struct DetachedResponse {
+    json: String,
+}
+
+enum DetachedCommandExecDispatch {
+    NotDetached,
+    Spawned { process_id: Option<String> },
+    ImmediateResponse(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2302,6 +2398,46 @@ where
         wrote,
         should_disconnect: drain.should_disconnect,
     })
+}
+
+fn write_detached_responses<W>(
+    receiver: &mpsc::Receiver<DetachedResponse>,
+    writer: &mut W,
+) -> io::Result<usize>
+where
+    W: Write,
+{
+    let mut wrote = 0_usize;
+    while let Ok(response) = receiver.try_recv() {
+        writeln!(writer, "{}", response.json)?;
+        wrote += 1;
+    }
+    Ok(wrote)
+}
+
+fn wait_for_detached_command_process<W>(
+    server: &AppServer,
+    process_id: &str,
+    detached_response_receiver: &mpsc::Receiver<DetachedResponse>,
+    writer: &mut W,
+) -> io::Result<usize>
+where
+    W: Write,
+{
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let mut detached_written = 0_usize;
+    while Instant::now() < deadline {
+        if server.app_services.command.has_active_process(process_id) {
+            break;
+        }
+        let written = write_detached_responses(detached_response_receiver, writer)?;
+        detached_written += written;
+        if written > 0 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    Ok(detached_written)
 }
 
 pub trait RuntimeBridge: std::fmt::Debug + Send + Sync {
@@ -8830,6 +8966,83 @@ mod tests {
                 }
             )] if id == "00000000-0000-0000-0000-000000000001" && reason == "not allowed"
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stdio_streaming_command_exec_accepts_write_before_final_exec_response() {
+        use base64::Engine as _;
+
+        let temp = TestDir::new("stdio_streaming_command_exec_accepts_write");
+        let services = app_services::AppServerServices::for_tests(
+            app_services::TestLogService::ready(),
+            app_services::TestJobService::ready(vec![]),
+            app_services::TestSkillsService::ready(vec![]),
+            app_services::TestMcpService::ready(vec![]),
+            app_services::TestFsService::disabled(),
+            command_service::AppServerCommandExecService::new(temp.path().to_path_buf()),
+        );
+        let server = AppServer::new().with_app_services(services);
+        let initialize = initialized_request_json();
+        let exec = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "cmd",
+            "method": "command/exec",
+            "params": {
+                "command": ["sh", "-c", "printf ready; IFS= read -r line; printf 'got:%s' \"$line\""],
+                "processId": "stdio_proc",
+                "tty": true,
+                "streamStdin": true,
+                "streamStdoutStderr": true,
+                "timeoutMs": 500
+            }
+        });
+        let write = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "write",
+            "method": "command/exec/write",
+            "params": {
+                "processId": "stdio_proc",
+                "deltaBase64": base64::engine::general_purpose::STANDARD.encode("hello\n")
+            }
+        });
+
+        let input = format!("{initialize}\n{exec}\n{write}\n");
+        let mut output = Vec::new();
+        run_stdio_server_with_app_server(
+            server,
+            std::io::BufReader::new(Cursor::new(input)),
+            &mut output,
+        )
+        .expect("stdio server should complete");
+
+        let text = String::from_utf8(output).expect("stdio output utf8");
+        let values = text
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("json line"))
+            .collect::<Vec<_>>();
+
+        assert!(
+            values.iter().any(|value| {
+                value["method"] == event::COMMAND_EXEC_OUTPUT_DELTA
+                    && value["params"]["processId"] == "stdio_proc"
+            }),
+            "expected outputDelta notification in stdio output: {text}"
+        );
+        assert!(
+            values
+                .iter()
+                .any(|value| value["id"] == "write" && value["result"].is_object()),
+            "expected successful write response in stdio output: {text}"
+        );
+        assert!(
+            values.iter().any(|value| {
+                value["id"] == "cmd"
+                    && value["result"]["exitCode"] == 0
+                    && value["result"]["stdout"] == ""
+            }),
+            "expected final successful command response in stdio output: {text}"
+        );
     }
 
     #[test]
