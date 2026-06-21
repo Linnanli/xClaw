@@ -4803,6 +4803,37 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn wait_for_command_service_output_delta(
+        service: &dyn app_services::CommandExecService,
+        process_id: &str,
+        needle: &str,
+    ) {
+        use base64::Engine as _;
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            for event in service.drain_output_delta_events() {
+                if event.process_id != process_id {
+                    continue;
+                }
+                let decoded = base64::engine::general_purpose::STANDARD
+                    .decode(&event.delta_base64)
+                    .expect("valid command output delta base64");
+                let text = String::from_utf8_lossy(&decoded);
+                if text.contains(needle) {
+                    return;
+                }
+            }
+
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for command output delta {needle:?} from {process_id}"
+            );
+            thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    #[cfg(unix)]
     #[test]
     fn app_server_real_p5_streaming_command_exec_route_terminate_completes_process() {
         let temp = TestDir::new("app_server_real_p5_streaming_terminate");
@@ -4815,6 +4846,7 @@ mod tests {
             command_service::AppServerCommandExecService::new(temp.path().to_path_buf()),
         );
         let service = Arc::clone(&services.command);
+        let readiness_service = Arc::clone(&services.command);
         let params = CommandExecParams {
             command: vec![
                 "sh".to_string(),
@@ -4840,7 +4872,11 @@ mod tests {
             .handle_json_rpc(initialized_request_json())
             .expect("initialize should return a response");
         let _ = server.drain_notifications();
-        thread::sleep(Duration::from_millis(100));
+        wait_for_command_service_output_delta(
+            &*readiness_service,
+            "route_stream_terminate",
+            "ready",
+        );
 
         let terminate = server
             .handle_json_rpc(
@@ -4869,6 +4905,7 @@ mod tests {
             command_service::AppServerCommandExecService::new(temp.path().to_path_buf()),
         );
         let service = Arc::clone(&services.command);
+        let readiness_service = Arc::clone(&services.command);
         let params = CommandExecParams {
             command: vec![
                 "sh".to_string(),
@@ -4894,7 +4931,7 @@ mod tests {
             .handle_json_rpc(initialized_request_json())
             .expect("initialize should return a response");
         let _ = server.drain_notifications();
-        thread::sleep(Duration::from_millis(100));
+        wait_for_command_service_output_delta(&*readiness_service, "route_stream_resize", "ready");
 
         let resize = server
             .handle_json_rpc(
